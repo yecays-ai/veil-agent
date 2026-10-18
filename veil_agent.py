@@ -104,6 +104,7 @@ class Character:
     history_rounds: int
     max_output_tokens: int
     provider: dict
+    provider_name: str
 
 
 def positive_int(value):
@@ -148,7 +149,7 @@ def load_character(root, character_id):
         provider['max_input_tokens'] = positive_int(provider['max_input_tokens'])
         return Character(character_id, str(cfg['name']), persona,
                          positive_int(cfg.get('history_rounds', 20)),
-                         positive_int(cfg.get('max_output_tokens', 1024)), provider)
+                         positive_int(cfg.get('max_output_tokens', 1024)), provider, cfg['provider'])
     except UserError:
         raise
     except (OSError, KeyError, ValueError, TypeError, ArithmeticError) as exc:
@@ -159,8 +160,8 @@ class Budget:
     def __init__(self, store, daily=Decimal('10'), monthly=Decimal('300'), clock=now):
         self.store, self.daily, self.monthly, self.clock = store, daily, monthly, clock
 
-    def totals(self):
-        stamp = self.clock()
+    def totals(self, stamp=None):
+        stamp = stamp or self.clock()
         reservations, settlements = {}, {}
         try:
             for event in self.store.read('costs.jsonl'):
@@ -214,9 +215,32 @@ class Budget:
                           'amount': str(amount), 'prompt_tokens': prompt,
                           'completion_tokens': completion, 'cached_tokens': cached})
 
-    def display(self):
-        day, month, pending = self.totals()
-        return f'今天 ¥{day:.6f} / 10；本月 ¥{month:.6f} / 300；待核对预留 ¥{pending:.6f}'
+    def display(self, stamp=None):
+        day, month, pending = self.totals(stamp)
+        return (f'今天 ¥{day:.6f} / {self.daily}；本月 ¥{month:.6f} / {self.monthly}；'
+                f'待核对预留 ¥{pending:.6f}')
+
+
+def build_self_description(cfg, budget):
+    # Keep the facts about implemented capabilities together as they evolve.
+    stamp = budget.clock()
+    local_time = datetime.fromisoformat(stamp)
+    weekday = ('Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday')[local_time.weekday()]
+    return (
+        'SYSTEM FACTS (program-generated each request, not user-authored). '
+        'Use these over conflicting persona/history; keep your character\'s voice.\n'
+        f'You are an AI companion: {json.dumps(cfg.name, ensure_ascii=False)}; '
+        f'provider {json.dumps(cfg.provider_name, ensure_ascii=False)}; '
+        f'model {json.dumps(cfg.provider["model"], ensure_ascii=False)}.\n'
+        f'Local time: {stamp} ({weekday}).\n'
+        f'Available: terminal text chat; up to {cfg.history_rounds} recent rounds included verbatim '
+        'per request; full chat logs saved locally.\n'
+        'You have no long-term memory; after restart you know only restored recent rounds. '
+        'You have no tools (cannot open files/folders or run scripts). You have no voice. '
+        'Unlisted abilities are unavailable. Do not invent memories, actions or tool results.\n'
+        f'Pre-request ledger (CNY, excludes this reply): {budget.display(stamp)}\n'
+        'Quote its cutoff when asked about spending; /cost includes new usage after this reply.'
+    )
 
 
 class Chat:
@@ -224,6 +248,7 @@ class Chat:
         self.cfg, self.store, self.budget, self.model = cfg, store, budget, model
         self.path = f'{cfg.id}/chat.jsonl'
         self.history, self.rounds = self.recent()
+        self.last_self = None
 
     def recent(self):
         groups = []
@@ -243,7 +268,9 @@ class Chat:
         return [m for group in groups for m in group], sum(any(m['role'] == 'assistant' for m in g) for g in groups)
 
     def send(self, text):
-        messages = [{'role': 'system', 'content': self.cfg.persona}, *self.history,
+        description = build_self_description(self.cfg, self.budget)
+        messages = [{'role': 'system', 'content': self.cfg.persona},
+                    {'role': 'system', 'content': description}, *self.history,
                     {'role': 'user', 'content': text}]
         # UTF-8 byte count is deliberately conservative, with ample chat framing
         # overhead. Reserve the entire configured input limit, not an average.
@@ -254,6 +281,7 @@ class Chat:
             request_id, _ = self.budget.reserve(self.cfg)
             self.store.append(self.path, {'role': 'user', 'content': text, 'request_id': request_id})
         try:
+            self.last_self = description
             reply, prompt, completion, cached = self.model(messages)
         except (KeyboardInterrupt, EOFError):
             raise
@@ -312,7 +340,7 @@ def drop_typeahead():
 
 
 def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead):
-    output(f'接上了 {chat.rounds} 轮。输入 /cost 查花费，/quit 退出。')
+    output(f'接上了 {chat.rounds} 轮。输入 /cost 查花费，/self 看当前说明，/quit 退出。')
     try:
         while True:
             text = input_fn('你: ').strip()
@@ -320,6 +348,12 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead):
                 break
             if text == '/cost':
                 output(chat.budget.display())
+            elif text == '/self':
+                if chat.last_self is None:
+                    output('（尚未发送消息：这是当前说明的预览，发送前会刷新。）')
+                    output(build_self_description(chat.cfg, chat.budget))
+                else:
+                    output(chat.last_self)
             elif text:
                 # Storage and accounting errors stop the session rather than
                 # permitting a subsequent request on uncertain local state.

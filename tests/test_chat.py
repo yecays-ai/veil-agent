@@ -9,7 +9,7 @@ from decimal import Decimal
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from veil_agent import Chat, Budget, Store, load_character, make_model, run_chat, UserError
+from veil_agent import Chat, Budget, Store, build_self_description, load_character, make_model, run_chat, UserError
 
 
 class ChatTests(unittest.TestCase):
@@ -29,7 +29,7 @@ max_output_tokens = 50
 model = "fake-model"
 base_url = "https://example.invalid/v1"
 api_key_env = "FAKE_KEY"
-max_input_tokens = 2000
+max_input_tokens = 6000
 input_cny_per_million = "2"
 cached_input_cny_per_million = "1"
 output_cny_per_million = "8"
@@ -46,7 +46,7 @@ output_cny_per_million = "8"
         self.assertEqual(reopened.rounds, 1)
         reopened.send('Continue')
         messages = self.model.call_args.args[0]
-        self.assertEqual([m['content'] for m in messages[1:]], ['虚构的中文消息', 'A fictional reply', 'Continue'])
+        self.assertEqual([m['content'] for m in messages[2:]], ['虚构的中文消息', 'A fictional reply', 'Continue'])
         rows = self.store.read('test/chat.jsonl')
         self.assertEqual([r['role'] for r in rows], ['user', 'assistant', 'user', 'assistant'])
         self.assertTrue(all(r['time'] for r in rows))
@@ -204,6 +204,9 @@ output_cny_per_million = "8"
             chat = Chat(self.cfg, self.store, self.budget, model)
             self.assertEqual(chat.send('中文输入'), '模拟回复')
             self.assertEqual(requests[0]['messages'][-1]['content'], '中文输入')
+            self.assertEqual([m['role'] for m in requests[0]['messages']], ['system', 'system', 'user'])
+            self.assertEqual(requests[0]['messages'][0]['content'], self.cfg.persona)
+            self.assertEqual(requests[0]['messages'][1]['content'], chat.last_self)
             self.assertEqual(requests[0]['max_tokens'], 50)
             self.assertFalse(requests[0]['stream'])
             self.assertEqual(requests[0]['thinking'], {'type': 'disabled'})
@@ -231,6 +234,127 @@ output_cny_per_million = "8"
         with self.assertRaises(UserError):
             Chat(self.cfg, self.store, budget, self.model).send('hello')
         self.model.assert_not_called()
+
+    def test_self_facts_follow_persona_and_use_selected_role_and_model(self):
+        config = self.root / 'characters' / 'test' / 'character.toml'
+        config.write_text(config.read_text(encoding='utf-8').replace('name = "Test"', 'name = "Lumen"')
+                          .replace('fake', 'alternate'), encoding='utf-8')
+        cfg = load_character(self.root, 'test')
+        chat = Chat(cfg, self.store, self.budget, self.model)
+        self.budget.clock = lambda: '2026-10-19T09:10:00+08:00'
+        chat.send('Who are you?')
+        messages = self.model.call_args.args[0]
+        self.assertEqual(messages[0], {'role': 'system', 'content': cfg.persona})
+        facts = messages[1]
+        self.assertEqual(facts['role'], 'system')
+        for value in ['program-generated', 'not user-authored', 'AI companion', 'Lumen', 'alternate',
+                      'alternate-model', '2026-10-19T09:10:00+08:00', 'Monday', '20 recent rounds',
+                      'no long-term memory', 'no tools', 'no voice', 'Unlisted abilities are unavailable']:
+            self.assertIn(value, facts['content'])
+
+    def test_self_uses_same_cost_source_and_actual_budget_limits(self):
+        self.budget = Budget(self.store, daily=Decimal('3'), monthly=Decimal('80'))
+        request_id, _ = self.budget.reserve(self.cfg)
+        self.budget.settle(request_id, self.cfg, 100, 20, 10)
+        self.budget.reserve(self.cfg)  # An unresolved earlier request must also be visible.
+        expected_cost = self.budget.display()
+        self.assertIn('/ 3', expected_cost)
+        self.assertIn('/ 80', expected_cost)
+        chat = Chat(self.cfg, self.store, self.budget, self.model)
+        chat.send('What have we spent?')
+        facts = self.model.call_args.args[0][1]['content']
+        self.assertIn(expected_cost, facts)
+        self.assertIn('excludes this reply', facts)
+        self.assertNotEqual(self.budget.display(), expected_cost)
+
+    def test_self_command_shows_exact_last_sent_facts_without_new_request(self):
+        self.budget.clock = lambda: '2026-10-19T09:10:00+08:00'
+        self.chat.send('hello')
+        sent = self.model.call_args.args[0][1]['content']
+        before_rows = self.store.read('test/chat.jsonl')
+        before_costs = self.store.read('costs.jsonl')
+        self.budget.clock = lambda: '2026-10-20T09:10:00+08:00'
+        output = []
+        run_chat(self.chat, Mock(side_effect=['/self', '/cost', '/self', '/quit']), output.append)
+        self.assertEqual(output[1], sent)
+        self.assertEqual(output[2], self.budget.display())
+        self.assertEqual(output[3], sent)
+        self.assertEqual(self.model.call_count, 1)
+        self.assertEqual(self.store.read('test/chat.jsonl'), before_rows)
+        self.assertEqual(self.store.read('costs.jsonl'), before_costs)
+
+    def test_self_before_first_request_is_labeled_as_preview_and_costs_nothing(self):
+        output = []
+        run_chat(self.chat, Mock(side_effect=['/self', '/quit']), output.append)
+        self.assertIn('预览', output[1])
+        self.assertIn('Test', output[2])
+        self.model.assert_not_called()
+        self.assertEqual(self.store.read('costs.jsonl'), [])
+        self.assertEqual(self.store.read('test/chat.jsonl'), [])
+
+    def test_self_refreshes_each_request_and_never_enters_chat_ledger(self):
+        self.budget.clock = lambda: '2026-10-19T09:10:00+08:00'
+        self.chat.send('first')
+        first = self.model.call_args.args[0][1]['content']
+        self.budget.clock = lambda: '2026-10-20T09:10:00+08:00'
+        self.cfg.history_rounds = 3
+        self.chat.send('second')
+        messages = self.model.call_args.args[0]
+        second = messages[1]['content']
+        self.assertNotEqual(first, second)
+        self.assertIn('Tuesday', second)
+        self.assertIn('3 recent rounds', second)
+        self.assertEqual(sum(m['role'] == 'system' for m in messages), 2)
+        self.assertEqual([r['role'] for r in self.store.read('test/chat.jsonl')],
+                         ['user', 'assistant', 'user', 'assistant'])
+
+    def test_self_excludes_keys_paths_persona_and_api_config(self):
+        self.cfg.persona = 'A private fictional persona that must not be repeated in /self'
+        self.cfg.provider['api_key'] = 'FAKE-KEY-NEVER-REAL'
+        (self.root / '.env').write_text('FAKE_KEY=another-fake-key\n', encoding='utf-8')
+        self.chat.send('hello')
+        facts = self.model.call_args.args[0][1]['content']
+        for private in [self.cfg.persona, str(self.root), self.cfg.provider['base_url'],
+                        self.cfg.provider['api_key_env'], 'FAKE-KEY-NEVER-REAL', 'another-fake-key']:
+            self.assertNotIn(private, facts)
+
+    def test_input_budget_includes_self_facts_before_any_request(self):
+        self.chat.send('hello')
+        messages = self.model.call_args.args[0]
+        self.assertEqual(messages[1]['role'], 'system')
+        old_messages = [messages[0], messages[-1]]
+        old_bound = sum(len(m['content'].encode('utf-8')) + 256 for m in old_messages) + 256
+        self.cfg.provider['max_input_tokens'] = old_bound
+        self.model.reset_mock()
+        rows, costs = self.store.read('test/chat.jsonl'), self.store.read('costs.jsonl')
+        reopened = Chat(self.cfg, self.store, self.budget, self.model)
+        reopened.history = []  # Isolate the added facts from prior conversation length.
+        with self.assertRaises(UserError):
+            reopened.send('hello')
+        self.model.assert_not_called()
+        self.assertEqual(self.store.read('test/chat.jsonl'), rows)
+        self.assertEqual(self.store.read('costs.jsonl'), costs)
+
+    def test_self_clock_and_costs_use_one_local_date_at_midnight(self):
+        self.budget.clock = lambda: '2026-10-19T23:59:00+08:00'
+        request_id, _ = self.budget.reserve(self.cfg)
+        self.budget.settle(request_id, self.cfg, 100, 20, 10)
+        expected = self.budget.display()
+        clock = Mock(side_effect=['2026-10-19T23:59:59+08:00', '2026-10-20T00:00:00+08:00'])
+        self.budget.clock = clock
+        facts = build_self_description(self.cfg, self.budget)
+        self.assertIn('2026-10-19T23:59:59+08:00', facts)
+        self.assertIn(expected, facts)
+        self.assertEqual(clock.call_count, 1)
+
+    def test_rejected_request_keeps_last_actually_sent_self(self):
+        self.chat.send('first')
+        sent = self.model.call_args.args[0][1]['content']
+        self.budget.daily = Decimal('0.000001')
+        with self.assertRaises(UserError):
+            self.chat.send('not sent')
+        self.assertEqual(self.chat.last_self, sent)
+        self.assertEqual(self.model.call_count, 1)
 
 
 if __name__ == '__main__':
