@@ -9,6 +9,7 @@ memory/
 logs/
 *.log
 # Python
+.local-tmp/
 __pycache__/
 *.py[cod]
 .venv/

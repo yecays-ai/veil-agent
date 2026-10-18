@@ -1,19 +1,23 @@
 # 交接
 
-新窗口或新 agent：按顺序读 `AGENTS.md` → `STATUS.md` → 本文件，然后接着做 `STATUS.md` 里的“下一步”。
+新窗口或新 agent：按顺序读 `AGENTS.md` → `STATUS.md` → 本文件。
 
 ## 上一位停在哪
 
-- 2026-10-18，Claude：协作文件已合并（PR #1，工单 001）。
-- 工单 002 写在分支 `ticket/002-text-chat` 上，还没开始实现，也还没开 PR。下一位从这个分支接着做，实现完开 PR。
+- 2026-10-19，Codex：在既有分支 `ticket/002-text-chat` 实现工单 002，交付 PR 评审；尚未合并、尚未完成 lan 的真实聊天验收。
+- 主程序 `veil_agent.py`；配置 `characters/peter/character.toml`；安装/启动 `setup.bat` / `start.bat`；安装与使用说明 `README.md`。
+- Windows Python 3.12 离线测试 20 项通过。测试只用假人设、假数据、假模型及官方 SDK 模拟传输。启动检查确认缺失人设会停止，`--cost` 无需人设或密钥。
+- 已配置 Windows/Linux × Python 3.11/3.12 CI；远程执行结果与 CodeRabbit 是否完成须看 PR，不能用本机通过代替。
+- 没有设置真实人设/密钥，没有调用付费接口；英文回复、翻译及真实模型重启衔接未验证。
 
-## 背景（只写仍然成立的）
+## 下一个窗口第一步
 
-- 旧 veil-agent 仓库已删除重建，旧代码不再使用；需要时只把思路当参考。
-- 记忆用 Ombre Brain（MIT）；语音用 Wyzer 的语音模块（openWakeWord、faster-whisper、Kokoro，MIT）；桌面形象用 ARPA avatar（MIT）。依据见 [参考仓库调查](https://claude.ai/code/artifact/25befcb0-c4db-4927-a29b-cc459951d1ba)。
-- fount 不用：公开协议只允许阅读，运行和修改需要作者书面授权。
-- Ombre 的“每轮自动想起”接口：`breath_search(mode="automatic")`；对话开场用无参 `breath()`。
+查看此分支 PR 的最新提交、CI 和 CodeRabbit 评审，按 `pr-review` skill 处理功能/安全问题。未通过评审和 CI 不合并。交给 lan 前按 `README.md` 完成本机私有设置，再按 `STATUS.md` 体验验收。
 
-## 注意
+## 背景与注意
 
-- CodeRabbit 是否已在新仓库启用，以 PR 上有没有它的评论为准。
+- 旧仓库代码不使用；本工单只做文字聊天，不接入 Ombre Brain、语音、avatar 或工具。
+- 角色由配置选择；历史按角色分开，费用总账和进程锁共用。真实人设、密钥、聊天、账本只留本机，禁止提交。
+- 预算先预留本次上限，接口返回用量后结算；失败或中断的预留额跨重启/跨日保留。费用是配置单价核算，默认 DeepSeek 以高峰价保守计算，须定期核对价格。不要通过删账本解决预留占用。
+- 程序、依赖和数据支持放在其他盘；虚拟环境移动后需重建，保留私有配置和数据。
+- Git 直连在本窗口不可用，已通过 GitHub 连接读取固定提交、恢复准确的浅检出并提交；继续同步前先核对远程分支头，不能覆盖别人新提交。

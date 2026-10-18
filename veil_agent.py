@@ -1,0 +1,350 @@
+"""Local terminal chat. Private state stays beside this file."""
+import argparse
+import json
+import os
+import re
+import signal
+import sys
+import tomllib
+import uuid
+from contextlib import contextmanager
+from dataclasses import dataclass
+from datetime import datetime
+from decimal import Decimal
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+MILLION = Decimal(1_000_000)
+
+
+class UserError(Exception):
+    pass
+
+
+def now():
+    return datetime.now().astimezone().isoformat()
+
+
+@contextmanager
+def saving():
+    # Once a reply is available, finish saving before honoring Ctrl+C.
+    interrupted = []
+    previous = signal.signal(signal.SIGINT, lambda *_: interrupted.append(True))
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGINT, previous)
+    if interrupted:
+        raise KeyboardInterrupt
+
+
+class Store:
+    def __init__(self, root):
+        self.root = Path(root)
+        self.root.mkdir(parents=True, exist_ok=True)
+
+    def read(self, name):
+        path = self.root / name
+        if not path.exists():
+            return []
+        try:
+            with path.open(encoding='utf-8') as handle:
+                return [json.loads(line) for line in handle if line.strip()]
+        except (ValueError, UnicodeError) as exc:
+            raise UserError('本机账本损坏，已停止；请保留 data 文件夹，不要删除记录。') from exc
+
+    def append(self, name, event):
+        path = self.root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # Refuse to append to a torn final record rather than hiding corruption.
+        if path.exists() and path.stat().st_size:
+            with path.open('rb') as handle:
+                handle.seek(-1, os.SEEK_END)
+                if handle.read(1) != b'\n':
+                    raise UserError('账本末行不完整，已停止；请保留 data 文件夹。')
+        data = (json.dumps({'time': now(), **event}, ensure_ascii=False) + '\n').encode('utf-8')
+        with path.open('ab', buffering=0) as handle:
+            if handle.write(data) != len(data):
+                raise UserError('记录未完整保存，已停止。')
+            os.fsync(handle.fileno())
+
+    @contextmanager
+    def lock(self):
+        # OS advisory lock is released even after a crash; shared by all roles.
+        with (self.root / 'session.lock').open('a+b') as handle:
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write(b'0')
+                handle.flush()
+            handle.seek(0)
+            try:
+                if os.name == 'nt':
+                    import msvcrt
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as exc:
+                raise UserError('已有聊天窗口在运行，请先关闭那个窗口。') from exc
+            try:
+                yield
+            finally:
+                handle.seek(0)
+                if os.name == 'nt':
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+@dataclass
+class Character:
+    id: str
+    name: str
+    persona: str
+    history_rounds: int
+    max_output_tokens: int
+    provider: dict
+
+
+def positive_int(value):
+    if type(value) is not int or value <= 0:
+        raise ValueError('positive integer required')
+    return value
+
+
+def price(value):
+    result = Decimal(str(value))
+    if not result.is_finite() or result <= 0:
+        raise ValueError('positive finite price required')
+    return result
+
+
+def load_character(root, character_id):
+    if not re.fullmatch(r'[a-z0-9][a-z0-9_-]*', character_id):
+        raise UserError('角色编号只能用小写英文、数字、下划线和短横线。')
+    root = Path(root).resolve()
+    try:
+        with (root / 'characters' / character_id / 'character.toml').open('rb') as handle:
+            cfg = tomllib.load(handle)
+        persona_path = (root / cfg['persona']).resolve()
+        if not persona_path.is_relative_to(root / 'persona'):
+            raise ValueError('persona must stay in persona directory')
+        try:
+            persona = persona_path.read_text(encoding='utf-8-sig').strip()
+        except OSError as exc:
+            raise UserError('读不到人设：请按 README 在 persona 文件夹放好本机人设后重开。') from exc
+        if not persona:
+            raise UserError('人设文件为空，请填写后重开。')
+        provider = dict(cfg['providers'][cfg['provider']])
+        for key in ('model', 'base_url', 'api_key_env'):
+            if not isinstance(provider[key], str) or not provider[key].strip():
+                raise ValueError(key)
+        if not provider['base_url'].startswith('https://'):
+            raise ValueError('HTTPS required')
+        for key in ('input_cny_per_million', 'cached_input_cny_per_million', 'output_cny_per_million'):
+            provider[key] = price(provider[key])
+        if provider['cached_input_cny_per_million'] > provider['input_cny_per_million']:
+            raise ValueError('cached rate exceeds regular rate')
+        provider['max_input_tokens'] = positive_int(provider['max_input_tokens'])
+        return Character(character_id, str(cfg['name']), persona,
+                         positive_int(cfg.get('history_rounds', 20)),
+                         positive_int(cfg.get('max_output_tokens', 1024)), provider)
+    except UserError:
+        raise
+    except (OSError, KeyError, ValueError, TypeError, ArithmeticError) as exc:
+        raise UserError('角色配置无法读取或字段无效，请检查 character.toml。') from exc
+
+
+class Budget:
+    def __init__(self, store, daily=Decimal('10'), monthly=Decimal('300'), clock=now):
+        self.store, self.daily, self.monthly, self.clock = store, daily, monthly, clock
+
+    def totals(self):
+        stamp = self.clock()
+        reservations, settlements = {}, {}
+        try:
+            for event in self.store.read('costs.jsonl'):
+                if event['type'] == 'reserve':
+                    reservations[event['id']] = event
+                elif event['type'] == 'settle':
+                    settlements[event['id']] = event
+                else:
+                    raise ValueError('unknown cost event')
+            day = month = pending = Decimal(0)
+            for key, event in reservations.items():
+                settled = settlements.get(key)
+                amount = Decimal((settled or event)['amount'])
+                if not amount.is_finite() or amount < 0:
+                    raise ValueError('invalid amount')
+                if settled is None:
+                    # Uncertain requests remain reserved, including after midnight.
+                    pending += amount
+                else:
+                    if event['period'][:10] == stamp[:10]:
+                        day += amount
+                    if event['period'][:7] == stamp[:7]:
+                        month += amount
+            return day, month, pending
+        except (KeyError, ValueError, TypeError, ArithmeticError) as exc:
+            raise UserError('花费账本无法核对，已停止；请保留 data 文件夹。') from exc
+
+    def reserve(self, cfg):
+        p = cfg.provider
+        amount = (p['max_input_tokens'] * p['input_cny_per_million']
+                  + cfg.max_output_tokens * p['output_cny_per_million']) / MILLION
+        day, month, pending = self.totals()
+        if day + pending + amount > self.daily or month + pending + amount > self.monthly:
+            raise UserError('本次费用上限会超过 ¥10/天或 ¥300/月，未发送。输入 /cost 查看。')
+        request_id = uuid.uuid4().hex
+        self.store.append('costs.jsonl', {'type': 'reserve', 'id': request_id,
+                          'period': self.clock(), 'amount': str(amount),
+                          'character': cfg.id, 'model': p['model']})
+        return request_id, amount
+
+    def settle(self, request_id, cfg, prompt, completion, cached):
+        if any(type(n) is not int or n < 0 for n in (prompt, completion, cached)) or cached > prompt:
+            raise UserError('接口未返回有效用量；本次保留预留费用。')
+        p = cfg.provider
+        if prompt > p['max_input_tokens'] or completion > cfg.max_output_tokens:
+            raise UserError('接口用量超过配置边界；已停止并保留预留费用，请核对供应商。')
+        amount = ((prompt - cached) * p['input_cny_per_million']
+                  + cached * p['cached_input_cny_per_million']
+                  + completion * p['output_cny_per_million']) / MILLION
+        self.store.append('costs.jsonl', {'type': 'settle', 'id': request_id,
+                          'amount': str(amount), 'prompt_tokens': prompt,
+                          'completion_tokens': completion, 'cached_tokens': cached})
+
+    def display(self):
+        day, month, pending = self.totals()
+        return f'今天 ¥{day:.6f} / 10；本月 ¥{month:.6f} / 300；待核对预留 ¥{pending:.6f}'
+
+
+class Chat:
+    def __init__(self, cfg, store, budget, model):
+        self.cfg, self.store, self.budget, self.model = cfg, store, budget, model
+        self.path = f'{cfg.id}/chat.jsonl'
+        self.history, self.rounds = self.recent()
+
+    def recent(self):
+        groups = []
+        try:
+            for event in self.store.read(self.path):
+                role, content = event['role'], event['content']
+                if role not in ('user', 'assistant') or not isinstance(content, str):
+                    raise ValueError('invalid chat record')
+                if role == 'user':
+                    groups.append([])
+                if not groups:
+                    raise ValueError('missing user record')
+                groups[-1].append({'role': role, 'content': content})
+        except (KeyError, ValueError, TypeError) as exc:
+            raise UserError('聊天记录无法读取，已停止；请保留 data 文件夹。') from exc
+        groups = groups[-self.cfg.history_rounds:]
+        return [m for group in groups for m in group], sum(any(m['role'] == 'assistant' for m in g) for g in groups)
+
+    def send(self, text):
+        messages = [{'role': 'system', 'content': self.cfg.persona}, *self.history,
+                    {'role': 'user', 'content': text}]
+        # UTF-8 byte count is deliberately conservative, with ample chat framing
+        # overhead. Reserve the entire configured input limit, not an average.
+        bound = sum(len(m['content'].encode('utf-8')) + 256 for m in messages) + 256
+        if bound > self.cfg.provider['max_input_tokens']:
+            raise UserError('本次上下文太长，未发送；请减少 history_rounds 或缩短输入。')
+        with saving():
+            request_id, _ = self.budget.reserve(self.cfg)
+            self.store.append(self.path, {'role': 'user', 'content': text, 'request_id': request_id})
+        try:
+            reply, prompt, completion, cached = self.model(messages)
+        except (KeyboardInterrupt, EOFError):
+            raise
+        except Exception as exc:
+            # Provider errors may contain credentials, URLs or private prompts.
+            raise UserError('请求失败，未自动重试；输入已保存，本次保留预留费用。') from exc
+        with saving():
+            if not isinstance(reply, str) or not reply.strip():
+                raise UserError('接口没有返回文字回复；本次保留预留费用。')
+            self.store.append(self.path, {'role': 'assistant', 'content': reply, 'request_id': request_id})
+            self.budget.settle(request_id, self.cfg, prompt, completion, cached)
+        self.history, self.rounds = self.recent()
+        return reply
+
+
+def make_model(root, cfg):
+    from dotenv import dotenv_values
+    from openai import OpenAI
+    # No environment fallback or interpolation: key comes only from this file.
+    values = dotenv_values(Path(root) / '.env', interpolate=False, encoding='utf-8-sig')
+    key = values.get(cfg.provider['api_key_env'])
+    if not key or not key.strip():
+        raise UserError('本机 .env 缺少所选接口的 API Key，请按 README 填写。')
+    client = OpenAI(api_key=key, base_url=cfg.provider['base_url'], max_retries=0, timeout=60)
+
+    def call(messages):
+        extra = {}
+        if cfg.provider.get('thinking') == 'disabled':
+            extra['extra_body'] = {'thinking': {'type': 'disabled'}}
+        response = client.chat.completions.create(model=cfg.provider['model'], messages=messages,
+                                                  max_tokens=cfg.max_output_tokens, stream=False, **extra)
+        usage = response.usage
+        if usage is None:
+            raise UserError('接口未返回用量；本次保留预留费用。')
+        details = getattr(usage, 'prompt_tokens_details', None)
+        cached = getattr(usage, 'prompt_cache_hit_tokens', None)
+        if cached is None:
+            cached = getattr(details, 'cached_tokens', 0) or 0
+        return response.choices[0].message.content, usage.prompt_tokens, usage.completion_tokens, cached
+
+    return client, call
+
+
+def run_chat(chat, input_fn=input, output=print):
+    output(f'接上了 {chat.rounds} 轮。输入 /cost 查花费，/quit 退出。')
+    try:
+        while True:
+            text = input_fn('你: ').strip()
+            if text == '/quit':
+                break
+            if text == '/cost':
+                output(chat.budget.display())
+            elif text:
+                # Storage and accounting errors stop the session rather than
+                # permitting a subsequent request on uncertain local state.
+                output(f'{chat.cfg.name}: {chat.send(text)}')
+    except (KeyboardInterrupt, EOFError):
+        output('\n已退出，已保存的记录仍在；未完成请求的预留额可用 /cost 查看。')
+
+
+def main():
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        if hasattr(stream, 'reconfigure'):
+            stream.reconfigure(encoding='utf-8')
+    parser = argparse.ArgumentParser(description='VEIL 本机文字聊天')
+    parser.add_argument('--character', default='peter')
+    parser.add_argument('--cost', action='store_true')
+    args = parser.parse_args()
+    try:
+        store = Store(ROOT / 'data')
+        with store.lock():
+            budget = Budget(store)
+            if args.cost:
+                print(budget.display())
+                return 0
+            cfg = load_character(ROOT, args.character)
+            client, model = make_model(ROOT, cfg)
+            with client:
+                run_chat(Chat(cfg, store, budget, model))
+        return 0
+    except UserError as exc:
+        print(str(exc))
+    except ImportError:
+        print('缺少运行依赖，请先按 README 完成安装。')
+    except (OSError, UnicodeError):
+        print('本机文件无法读写，已停止；请检查磁盘空间和文件权限。')
+    except (KeyboardInterrupt, EOFError):
+        print('\n已退出。')
+        return 0
+    return 1
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

@@ -8,7 +8,10 @@ lan 在 Windows 上双击启动，和 Peter 用中文文字聊天；关掉再打
 
 ## 当前状态
 
-- 仓库只有协作文件，没有程序代码。
+- `ticket/002-text-chat` 已实现终端聊天、角色配置、只追加 JSONL、最近 20 轮读回、预算预留与用量结算、Windows 双击启动。
+- 复用结论：直接依赖官方 `openai` Python SDK（Apache-2.0，3.35.1），配合 `python-dotenv` 读取本机配置；不复制第三方源码，不引入多供应商框架。SDK 支持 Windows，源码已核对 `OpenAI.__init__` 的接口地址、超时及 `max_retries`，以及 `Completions.create` 的消息、输出上限和非流式调用：固定提交 [553703e](https://github.com/openai/openai-python/tree/553703e2d3db379a83e3ead9e40436b7a66f639e/src/openai)。Ombre/语音/avatar 按本工单范围暂不接入。
+- 配置中的 DeepSeek 模型和单价依据 [官方模型价格](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)，使用高峰单价保守核算。英文/翻译规则在人设示例中；真实回复体验待 lan 放好本机人设、密钥后验收。
+- 20 项离线测试通过，只用假模型、假数据及 SDK 模拟传输，不调用付费接口。真实模型聊天尚未验收。
 - 已定：Python；Peter 先用 DeepSeek（OpenAI 兼容接口，配置里一行可换 GPT）；花费上限 ¥10/天、¥300/月，不设请求次数上限。
 
 ## 范围
@@ -31,3 +34,5 @@ lan 在 Windows 上双击启动，和 Peter 用中文文字聊天；关掉再打
 1. 双击 `start.bat`，用中文和 Peter 聊几句，随口提一件自己的事；他用英文回。说“翻译一下”，他给出中文。
 2. 关掉窗口，再双击打开，屏幕显示接上了几轮。
 3. 问“我们刚才聊到哪了”，他能说对；输入查花费的命令，能看到今天花了多少。
+
+查花费命令：`/cost`；首次安装和本机人设/密钥设置见 `README.md`。

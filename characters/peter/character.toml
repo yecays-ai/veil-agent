@@ -1,0 +1,28 @@
+name = "Peter"
+# Change this one line to "gpt" to select the complete alternate profile.
+provider = "deepseek"
+persona = "persona/peter.md"
+history_rounds = 20
+max_output_tokens = 1024
+
+[providers.deepseek]
+model = "deepseek-flash"
+thinking = "disabled"
+base_url = "https://api.deepseek.com"
+api_key_env = "DEEPSEEK_API_KEY"
+max_input_tokens = 32768
+# CNY per million tokens, peak rates; off-peak savings are not assumed.
+# Verify against https://api-docs.deepseek.com/zh-cn/quick_start/pricing/
+input_cny_per_million = "2"
+cached_input_cny_per_million = "0.04"
+output_cny_per_million = "8"
+
+[providers.gpt]
+model = "gpt-4.1-mini"
+base_url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
+max_input_tokens = 32768
+# Conservative local CNY rates, not a live exchange-rate quotation.
+input_cny_per_million = "4"
+cached_input_cny_per_million = "1"
+output_cny_per_million = "16"
