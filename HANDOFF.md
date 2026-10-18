@@ -6,7 +6,7 @@
 
 - 2026-10-18，Codex 实现、Claude 评审并合并工单 002（[PR #2](https://github.com/yecays-ai/veil-agent/pull/2)）；lan 已验收通过。
 - 2026-10-18，Claude：工单 003 修等回复时打字插进回复显示的问题（`drop_typeahead`），已合并（PR #3），lan 验收通过。
-- 2026-10-18，Codex：在 `ticket/004-identity` 按工单 004 实现当前事实 system 说明及 `/self`，进入 PR 评审；尚未合并、未完成 lan 的真实聊天验收。
+- 2026-10-18，Codex：在 `ticket/004-identity` 按工单 004 实现当前事实 system 说明及 `/self`，Claude 评审后合并（PR #4）；待 lan 真实聊天验收。
 - 主程序 `veil_agent.py`；配置 `characters/peter/character.toml`；安装/启动 `setup.bat` / `start.bat`；安装与使用说明 `README.md`。
 - Windows Python 3.12 离线测试 30 项通过。测试只用假人设、假数据、假模型及官方 SDK 模拟传输；工单 004 尚未进行真实模型验收。
 - 004 的 CI 和 CodeRabbit 结果以当前 PR 为准，002/003 的通过结果不能代替本次。仓库保持公开。
@@ -14,7 +14,7 @@
 
 ## 下一个窗口第一步
 
-评审方（Claude）：审 `ticket/004-identity` 的 PR，重点核对当前事实说明的生成、系统消息顺序、费用快照时点和 `/self` 原样展示；确认最新 CI 与小兔子评审，修复功能/安全问题后再合并。合并后请 lan 按 `STATUS.md` 验收；模型口吻及是否遵从说明不能由假模型测试代替。
+等 lan 验收工单 004 的反馈；有问题开新工单修，通过后写大块 3（自己记、自己想起）的工单。
 
 ## 背景与注意
 
