@@ -4,7 +4,8 @@
 
 ## 上一位停在哪
 
-- 2026-10-18，Codex 实现、Claude 评审并合并工单 002（[PR #2](https://github.com/yecays-ai/veil-agent/pull/2)）；尚未完成 lan 的真实聊天验收。
+- 2026-10-18，Codex 实现、Claude 评审并合并工单 002（[PR #2](https://github.com/yecays-ai/veil-agent/pull/2)）；lan 已验收通过。
+- 2026-10-18，Claude：工单 003 修等回复时打字插进回复显示的问题（`drop_typeahead`），分支 `ticket/003-typeahead`。
 - 主程序 `veil_agent.py`；配置 `characters/peter/character.toml`；安装/启动 `setup.bat` / `start.bat`；安装与使用说明 `README.md`。
 - Windows Python 3.12 离线测试 20 项通过。测试只用假人设、假数据、假模型及官方 SDK 模拟传输。启动检查确认缺失人设会停止，`--cost` 无需人设或密钥。
 - Windows/Linux × Python 3.11/3.12 CI 全部通过。仓库曾是私有，CI 拿不到运行机器（`runner_id=0`、零步骤）；lan 改为公开后正常。仓库保持公开。
@@ -12,7 +13,7 @@
 
 ## 下一个窗口第一步
 
-等 lan 按 `STATUS.md` 验收工单 002 的反馈；有问题开新工单修，通过后开始大块 2（身份）。
+确认工单 003 已合并、lan 验收；然后开始大块 2（身份）。
 
 ## 背景与注意
 

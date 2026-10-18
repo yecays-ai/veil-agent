@@ -91,6 +91,16 @@ output_cny_per_million = "8"
         self.assertIn('Test: A fictional reply', output)
         self.assertEqual(self.store.read('test/chat.jsonl')[-1]['content'], 'A fictional reply')
 
+    def test_keys_typed_while_waiting_are_dropped_with_notice(self):
+        output = []
+        inputs = Mock(side_effect=['hello', '/quit'])
+        run_chat(self.chat, inputs, output.append, drop=lambda: True)
+        self.assertEqual(output[1:], ['Test: A fictional reply', '（等回复时打的字没有收到，请重新输入。）'])
+        output.clear()
+        inputs = Mock(side_effect=['hello', '/quit'])
+        run_chat(self.chat, inputs, output.append, drop=lambda: False)
+        self.assertEqual(output[1:], ['Test: A fictional reply'])
+
     def test_failed_request_not_retried_and_budget_survives_restart(self):
         self.model.side_effect = RuntimeError('secret must not be displayed')
         with self.assertRaises(UserError):

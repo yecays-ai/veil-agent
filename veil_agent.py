@@ -297,7 +297,21 @@ def make_model(root, cfg):
     return client, call
 
 
-def run_chat(chat, input_fn=input, output=print):
+def drop_typeahead():
+    # Keys typed while waiting for a reply get echoed into the reply on the
+    # Windows console, so discard them before the next prompt.
+    try:
+        import msvcrt
+    except ImportError:
+        return False
+    dropped = False
+    while msvcrt.kbhit():
+        msvcrt.getwch()
+        dropped = True
+    return dropped
+
+
+def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead):
     output(f'接上了 {chat.rounds} 轮。输入 /cost 查花费，/quit 退出。')
     try:
         while True:
@@ -310,6 +324,8 @@ def run_chat(chat, input_fn=input, output=print):
                 # Storage and accounting errors stop the session rather than
                 # permitting a subsequent request on uncertain local state.
                 output(f'{chat.cfg.name}: {chat.send(text)}')
+                if drop():
+                    output('（等回复时打的字没有收到，请重新输入。）')
     except (KeyboardInterrupt, EOFError):
         output('\n已退出，已保存的记录仍在；未完成请求的预留额可用 /cost 查看。')
 
