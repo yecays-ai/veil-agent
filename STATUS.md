@@ -19,7 +19,7 @@
 
 ## 下一步
 
-lan 按下面步骤验收工单 004；通过后开始大块 3（自己记、自己想起）。
+lan 按下面步骤验收工单 004。大块 3（自己记、自己想起）第一部分：工单 `docs/tickets/005-auto-memory.md` 已写好，分支 `ticket/005-auto-memory`，交给 Codex 实现。
 
 ## 验收步骤（lan 在 Windows 上做，工单 004）
 
