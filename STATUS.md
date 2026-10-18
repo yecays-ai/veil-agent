@@ -1,6 +1,6 @@
 # 当前状态
 
-更新：2026-10-18 21:52 UTC · Claude
+更新：2026-10-18 22:02 UTC · Claude
 
 ## 当前目标
 
@@ -8,7 +8,8 @@
 
 ## 现状
 
-- 仓库刚重建，只有协作文件（本 PR）。还没有任何程序代码。
+- 协作文件已合并（PR #1）。还没有任何程序代码。
+- 工单 002 已写好：`docs/tickets/002-text-chat.md`，在分支 `ticket/002-text-chat` 上，等实现。
 - 路线：[重建计划](https://claude.ai/code/artifact/0c29eb8c-d095-4575-9449-18e3f0efdd00)。复用依据：[参考仓库调查](https://claude.ai/code/artifact/25befcb0-c4db-4927-a29b-cc459951d1ba)。
 
 ## 已定（lan 2026-10-18）
@@ -19,7 +20,7 @@
 
 ## 下一步
 
-写工单 `docs/tickets/002-text-chat.md`，开分支 `ticket/002-text-chat`。
+在分支 `ticket/002-text-chat` 上按工单 002 实现，开 PR；小兔子审完后合并，再请 lan 按下面的步骤验收。
 
 ## 大块 1 的验收步骤（lan 在 Windows 上做）
 
