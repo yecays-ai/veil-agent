@@ -4,10 +4,10 @@
 
 ## 上一位停在哪
 
-- 2026-10-19，Codex：在既有分支 `ticket/002-text-chat` 实现工单 002，交付 PR 评审；尚未合并、尚未完成 lan 的真实聊天验收。
+- 2026-10-19，Codex：在既有分支 `ticket/002-text-chat` 实现工单 002，[PR #2](https://github.com/yecays-ai/veil-agent/pull/2) 已开；尚未合并、尚未完成 lan 的真实聊天验收。
 - 主程序 `veil_agent.py`；配置 `characters/peter/character.toml`；安装/启动 `setup.bat` / `start.bat`；安装与使用说明 `README.md`。
 - Windows Python 3.12 离线测试 20 项通过。测试只用假人设、假数据、假模型及官方 SDK 模拟传输。启动检查确认缺失人设会停止，`--cost` 无需人设或密钥。
-- 已配置 Windows/Linux × Python 3.11/3.12 CI；远程执行结果与 CodeRabbit 是否完成须看 PR，不能用本机通过代替。
+- 已配置 Windows/Linux × Python 3.11/3.12 CI；代码提交 `d7676c6` 的首次运行在分配 runner 前失败/取消（`runner_id=0`、零步骤、日志 BlobNotFound），远程测试未运行，原因未确认。CodeRabbit 已开始评审，完成情况须看 PR。
 - 没有设置真实人设/密钥，没有调用付费接口；英文回复、翻译及真实模型重启衔接未验证。
 
 ## 下一个窗口第一步
