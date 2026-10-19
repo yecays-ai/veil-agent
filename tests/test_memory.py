@@ -181,6 +181,9 @@ class MemoryTests(unittest.TestCase):
         self.assertIn('没能确认', self.memory.command(f'/delete {key} 确认'))
         self.assertEqual(self.memory.visible([(key, 'x')]), [])
         self.assertNotIn(key, self.memory.command('/memory'))
+        self.backend.fail = False
+        self.assertIn('已删除', self.memory.command(f'/delete {key}'))
+        self.assertIn('没有这个记忆编号', self.memory.command(f'/delete {key} 确认'))
 
     def test_delete_unknown_number_changes_nothing(self):
         self.assertIn('没有这个记忆编号', self.memory.command('/delete nope 确认'))

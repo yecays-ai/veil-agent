@@ -565,10 +565,11 @@ class Memory:
             if command == '/delete' and key.endswith(' 确认'):
                 key, confirmed = key[:-3].strip(), True
             entry = self.state['entries'].get(key)
-            if entry is None or entry.get('deleted'):
+            retry = bool(entry and entry.get('deleted') and entry.get('delete_pending') and command == '/delete')
+            if entry is None or (entry.get('deleted') and not retry):
                 return '没有这个记忆编号；输入 /memory 查看。'
             if command == '/delete':
-                return self.delete(key, entry, confirmed)
+                return self.delete(key, entry, confirmed or retry)
             hidden = command == '/forget'
             if hidden:
                 self.state['entries'][key]['hidden'] = True
@@ -586,11 +587,13 @@ class Memory:
         if not confirmed:
             return (f'要删除这条记忆吗：{key} | {title}\n'
                     f'确认请输入：/delete {key} 确认。删除后它不再出现在 /memory 里，也不再被想起。')
-        entry['hidden'] = entry['deleted'] = True
+        entry['hidden'] = entry['deleted'] = entry['delete_pending'] = True
         self.persist()  # Fail closed: it is already out of recall even if Ombre's answer is lost.
         try:
             self.call('trace', {'bucket_id': key, 'delete': True})
         except Exception:
-            return '这次没能确认 Ombre 的删除；这条已不会被想起，可稍后再试 /delete。'
+            return f'这次没能确认 Ombre 的删除；这条已不会被想起，可稍后再输入 /delete {key} 重试。'
+        entry.pop('delete_pending', None)
+        self.persist()
         self.messages.put(f'🗑 {self.cfg.name} 的记忆已删除：{title[:40]}')
         return f'已删除：{title}'
