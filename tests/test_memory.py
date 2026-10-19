@@ -120,14 +120,14 @@ class MemoryTests(unittest.TestCase):
         self.turns(4, 4)
 
         def update(messages, *, json_output, **extra):
-            item = dict(entry('fact 4'), op='update', target=key, zh='喜欢蓝色，因为名字的读音。',
-                        en='Likes blue because of how the name sounds.')
+            item = dict(entry('fact 4'), op='update', target=key, zh='喜欢示例颜色，因为一个示例原因。',
+                        en='Likes the example color for an example reason.')
             return json.dumps({'batches': [{'id': 4, 'memories': [item]}]}), 200, 100, 0
         self.model.side_effect = update
         self.memory.supplement()
         self.assertEqual(len(self.backend.rows), 1)
-        self.assertIn('因为名字的读音', self.backend.rows[key]['content'])
-        self.assertEqual(self.memory.state['entries'][key]['text'], '喜欢蓝色，因为名字的读音。')
+        self.assertIn('因为一个示例原因', self.backend.rows[key]['content'])
+        self.assertEqual(self.memory.state['entries'][key]['text'], '喜欢示例颜色，因为一个示例原因。')
         self.assertTrue(any('补充了记忆' in n for n in self.memory.notices()))
 
     def test_update_of_unknown_or_hidden_target_is_dropped_and_listed_locally(self):
