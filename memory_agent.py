@@ -274,6 +274,7 @@ class Memory:
         self.diagnostics = f'{cfg.id}/memory/_agent/diagnostics.jsonl'
         self.dropped_path = f'{cfg.id}/memory/_agent/dropped.jsonl'
         self.last_tool = None
+        self.delete_asked = None  # number shown by /delete, waiting for its 确认
         states = store.read(self.path)
         try:
             self.state = states[-1]['state'] if states else {
@@ -548,6 +549,10 @@ class Memory:
             self.state['entries'][memory_id] = {'title': item['title'][:100],
                 'time': self.budget.clock(), 'signature': signature,
                 'hidden': bool(previous.get('hidden')), 'text': item['zh'][:600]}
+            if previous.get('deleted'):
+                self.state['entries'][memory_id]['deleted'] = True
+                if previous.get('delete_pending'):
+                    self.state['entries'][memory_id]['delete_pending'] = True
             self.persist()
         self.messages.put(f'📝 {self.cfg.name} 记下了：{item["title"][:40]}')
         return 'saved'
@@ -586,7 +591,8 @@ class Memory:
     def command(self, text):
         with self.mutex:
             if text == '/memory':
-                rows = sorted(self.state['entries'].items(), key=lambda row: row[1]['time'], reverse=True)[:20]
+                rows = sorted(((k, v) for k, v in self.state['entries'].items() if not v.get('deleted')),
+                              key=lambda row: row[1]['time'], reverse=True)[:20]
                 lines = [f'{k} | {v["time"]} | {v["title"]}'
                          + ('（已隐藏）' if v.get('hidden') else '') for k, v in rows]
                 if not rows:
@@ -600,12 +606,20 @@ class Memory:
                     lost = []
                 for row in lost:
                     lines.append(f'被丢弃的候选：{row["time"]} 「{row["title"]}」{row["why"]}')
-                lines.append('隐藏：/forget 编号；恢复：/restore 编号。隐藏不会擦掉最近聊天原文。')
+                lines.append('隐藏：/forget 编号；恢复：/restore 编号；删除：/delete 编号。隐藏和删除都不会擦掉最近聊天原文。')
                 return '\n'.join(lines)
             command, _, key = text.partition(' ')
             key = key.strip()
-            if key not in self.state['entries']:
+            confirmed = False
+            if command == '/delete' and key.endswith(' 确认'):
+                key = key[:-3].strip()
+                confirmed = key == self.delete_asked
+            entry = self.state['entries'].get(key)
+            retry = bool(entry and entry.get('deleted') and entry.get('delete_pending') and command == '/delete')
+            if entry is None or (entry.get('deleted') and not retry):
                 return '没有这个记忆编号；输入 /memory 查看。'
+            if command == '/delete':
+                return self.delete(key, entry, confirmed or retry)
             hidden = command == '/forget'
             if hidden:
                 self.state['entries'][key]['hidden'] = True
@@ -617,3 +631,21 @@ class Memory:
             self.state['entries'][key]['hidden'] = hidden
             self.persist()
             return '已隐藏；可用 /restore 编号 恢复。' if hidden else '已恢复。'
+
+    def delete(self, key, entry, confirmed):
+        title = entry['title']
+        if not confirmed:
+            self.delete_asked = key
+            return (f'要删除这条记忆吗：{key} | {title}\n'
+                    f'确认请输入：/delete {key} 确认。删除后它不再出现在 /memory 里，也不再被想起。')
+        self.delete_asked = None
+        entry['hidden'] = entry['deleted'] = entry['delete_pending'] = True
+        self.persist()  # Fail closed: it is already out of recall even if Ombre's answer is lost.
+        try:
+            self.call('trace', {'bucket_id': key, 'delete': True})
+        except Exception:
+            return f'这次没能确认 Ombre 的删除；这条已不会被想起，可稍后再输入 /delete {key} 重试。'
+        entry.pop('delete_pending', None)
+        self.persist()
+        self.messages.put(f'🗑 {self.cfg.name} 的记忆已删除：{title[:40]}')
+        return f'已删除：{title}'

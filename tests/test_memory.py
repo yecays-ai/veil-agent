@@ -33,7 +33,9 @@ class Backend:
             self.rows[key] = dict(args)
             return ('feel→' if args.get('feel') else '新建→') + key
         if name == 'trace':
-            if 'content' in args:
+            if args.get('delete'):
+                self.rows[args['bucket_id']]['deleted'] = True
+            elif 'content' in args:
                 self.rows[args['bucket_id']]['content'] = args['content']
             else:
                 self.rows[args['bucket_id']]['hidden'] = bool(args['dont_surface'])
@@ -153,6 +155,49 @@ class MemoryTests(unittest.TestCase):
         system = self.model.call_args.args[0][0]['content']
         self.assertIn('fictional persona', system)
         self.assertIn('One event is one memory', system)
+
+    def test_delete_needs_confirmation_then_removes_the_memory_from_list_recall_and_extractor(self):
+        self.turns(4)
+        self.memory.supplement()
+        key = next(iter(self.memory.state['entries']))
+        asked = self.memory.command(f'/delete {key}')
+        self.assertIn(f'/delete {key} 确认', asked)
+        self.assertNotIn('deleted', self.backend.rows[key])
+        self.assertIn('已删除', self.memory.command(f'/delete {key} 确认'))
+        self.assertTrue(self.backend.rows[key]['deleted'])
+        self.assertNotIn(key, self.memory.command('/memory'))
+        self.assertEqual(self.memory.visible([(key, 'x')]), [])
+        self.turns(4, 4)
+        self.memory.supplement()
+        sent = json.loads(self.model.call_args.args[0][1]['content'])
+        self.assertNotIn(key, [e['id'] for e in sent['existing']])
+        self.assertIn('没有这个记忆编号', self.memory.command(f'/restore {key}'))
+        self.assertIn('没有这个记忆编号', self.memory.command(f'/delete {key} 确认'))
+
+    def test_delete_stays_out_of_recall_even_if_ombre_does_not_confirm(self):
+        self.turns(4)
+        self.memory.supplement()
+        key = next(iter(self.memory.state['entries']))
+        self.backend.fail = True
+        self.memory.command(f'/delete {key}')
+        self.assertIn('没能确认', self.memory.command(f'/delete {key} 确认'))
+        self.assertEqual(self.memory.visible([(key, 'x')]), [])
+        self.assertNotIn(key, self.memory.command('/memory'))
+        self.backend.fail = False
+        self.assertIn('已删除', self.memory.command(f'/delete {key}'))
+        self.assertIn('没有这个记忆编号', self.memory.command(f'/delete {key} 确认'))
+
+    def test_delete_confirm_without_asking_first_only_shows_the_memory(self):
+        self.turns(4)
+        self.memory.supplement()
+        key = next(iter(self.memory.state['entries']))
+        self.assertIn(f'/delete {key} 确认', self.memory.command(f'/delete {key} 确认'))
+        self.assertNotIn('deleted', self.memory.state['entries'][key])
+        self.assertIn('已删除', self.memory.command(f'/delete {key} 确认'))
+
+    def test_delete_unknown_number_changes_nothing(self):
+        self.assertIn('没有这个记忆编号', self.memory.command('/delete nope 确认'))
+        self.assertEqual(self.backend.calls[-1][0], 'breath')
 
     def test_ombre_model_calls_are_estimated_into_the_shared_ledger(self):
         self.memory.call('hold', {'content': '下周有安排。' * 40})
