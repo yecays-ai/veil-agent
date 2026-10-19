@@ -577,6 +577,8 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead):
     output(f'接上了 {chat.rounds} 轮。输入 /cost 查花费，/self 看当前说明，/quit 退出。')
     if getattr(chat.tools, 'startup_notice', None):
         output(chat.tools.startup_notice)
+    if chat.pending_capability_event:
+        output(chat.pending_capability_event)
     try:
         while True:
             if chat.memory:
@@ -590,7 +592,7 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead):
             elif text == '/self':
                 if chat.last_self is None:
                     output('（尚未发送消息：这是当前说明的预览，发送前会刷新。）')
-                    output(build_self_description(chat.cfg, chat.budget, bool(chat.memory)))
+                    output(build_self_description(chat.cfg, chat.budget, bool(chat.memory), chat.tools))
                 else:
                     output(chat.last_self)
             elif text == '/memory' or text.startswith(('/forget ', '/restore ', '/delete ')):

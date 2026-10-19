@@ -10,7 +10,7 @@ from unittest.mock import Mock
 
 from tools_agent import (ALLOW, ASK, DENY, FilesystemTools, checked_path,
                          permitted_tools, tool_policy)
-from veil_agent import Budget, Chat, Store, load_character
+from veil_agent import Budget, Chat, Store, load_character, run_chat
 
 
 class ToolPolicyTests(unittest.TestCase):
@@ -195,6 +195,19 @@ max_result_bytes = 200
 
     def tool_call(self, name, args, call_id):
         return SimpleNamespace(id=call_id, function=SimpleNamespace(name=name, arguments=args))
+
+    def test_first_self_preview_shows_tools_and_capability_notice(self):
+        tools = SimpleNamespace(
+            tools=[SimpleNamespace(name='read_text_file', description='Read', inputSchema={})],
+            capability_event='你的能力有变化：现在可读测试文件夹。',
+            description='You can read files in workspace.')
+        model = Mock()
+        chat = Chat(self.cfg, self.store, self.budget, model, tools=tools)
+        output = []
+        run_chat(chat, Mock(side_effect=['/self', '/quit']), output.append)
+        self.assertIn('你的能力有变化', output[1])
+        self.assertIn('You can read files in workspace.', output[3])
+        model.assert_not_called()
 
     def test_multi_step_parallel_calls_and_chat_log_roles(self):
         first = self.message([

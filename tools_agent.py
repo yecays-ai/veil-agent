@@ -283,7 +283,8 @@ class _McpWorker:
         self.thread = threading.Thread(target=self._serve, daemon=True)
         self.thread.start()
         try:
-            self.ready.result(timeout=45)
+            # A fresh npx cache may need to download the pinned server first.
+            self.ready.result(timeout=120)
         except Exception:
             self.close()
             raise
