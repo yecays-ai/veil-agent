@@ -278,6 +278,15 @@ max_result_bytes = 200
         model.assert_called_once()
         self.assertTrue(any('输出上限' in line for line in output))
 
+    def test_length_finish_keeps_text_when_no_tool_was_called(self):
+        model = Mock(return_value=(self.message(content='A partial answer.'), 100, 50, 0, 'length'))
+        tools = Mock()
+        tools.tools = [SimpleNamespace(name='write_file', description='Write', inputSchema={})]
+        tools.capability_event = None
+        chat = Chat(self.cfg, self.store, self.budget, model, tools=tools)
+        self.assertEqual(chat.send('explain this'), 'A partial answer.')
+        tools.invoke.assert_not_called()
+
     def test_chat_permission_still_needs_terminal_y_and_shows_refusal(self):
         tools = FilesystemTools.__new__(FilesystemTools)
         tools.workspace = self.root / 'workspace'

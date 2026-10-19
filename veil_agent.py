@@ -506,7 +506,7 @@ class Chat:
             if isinstance(prompt, int) and prompt > 0:
                 calibration = max(0.5, min(1.0, prompt / sent_bytes))
             self.budget.settle(reservation, step_cfg, prompt, completion, cached)
-            if finish and finish[0] == 'length':
+            if finish and finish[0] == 'length' and message.tool_calls:
                 final = '模型达到输出上限，工具未执行；请缩短要写入的内容后重试。'
                 self.output(final)
                 break
