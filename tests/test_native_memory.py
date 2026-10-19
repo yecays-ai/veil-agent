@@ -248,3 +248,36 @@ class SearchThenSaveTests(unittest.TestCase):
 
 class EnglishSearchThenSaveTests(SearchThenSaveTests):
     language = 'en'
+
+
+class DegradedNoticeTests(unittest.TestCase):
+    """The screen line appears only for Ombre's own notice, never for ordinary memory text."""
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        provider = {'model': 'fake', 'max_input_tokens': 20000, 'input_cny_per_million': Decimal(2),
+                    'output_cny_per_million': Decimal(8), 'cached_input_cny_per_million': Decimal(1)}
+        cfg = Character('fake', 'Example', 'fictional persona', 20, 1024, provider, 'fake',
+            {'model': 'fake-embedding', 'input_cny_per_million': '0.07', 'mode': 'native'},
+            {'enabled': False, 'folder': 'data/fake/workspace', 'max_steps': 4, 'max_result_bytes': 200})
+        self.backend = Backend()
+        self.memory = Memory(cfg, Store(Path(self.temp.name) / 'data'), Budget(Store(Path(self.temp.name) / 'b')),
+                             Mock(), self.backend)
+        self.addCleanup(self.memory.__exit__, None, None, None)
+
+    def search(self, text):
+        self.backend.call = lambda name, args: text
+        self.memory.call('breath_search', {'query': 'q'})
+        return self.memory.notices()
+
+    def test_ombre_notice_shows_the_line_with_tool_and_log_hint(self):
+        lines = self.search('[检索降级：语义索引暂不可用，本次仅使用关键词/BM25。]\n[bucket_id:a] x')
+        self.assertEqual(len(lines), 1)
+        self.assertIn('记忆检索降级为关键词', lines[0])
+        self.assertIn('breath_search', lines[0])
+        self.assertIn('server.log', lines[0])
+
+    def test_ordinary_text_with_loose_words_does_not_warn(self):
+        text = ('[语义关联] [bucket_id:a] The vector search failed twice last week and the semantic index '
+                'was 不可用 for a while; we fixed it and 降级 never came back.')
+        self.assertEqual(self.search(text), [])

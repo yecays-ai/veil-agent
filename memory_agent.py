@@ -87,6 +87,10 @@ class MCP:
             raise RuntimeError('Ombre did not stop')
 
 
+# The exact line Ombre appends to a search result when the vector query was unavailable or failed.
+DEGRADED_NOTICE = '[检索降级：语义索引暂不可用'
+
+
 def ombre_model_on(cfg):
     return bool((cfg.memory or {}).get('ombre_model', True))
 
@@ -101,7 +105,7 @@ def ombre_config(cfg, vault):
         if 'deepseek' in cfg.provider['base_url']:
             dehydration['extra_body'] = {'thinking': {'type': 'disabled'}}
     return {'transport': 'stdio', 'buckets_dir': str(vault), 'ai_name': cfg.name,
-            'dehydration': dehydration, 'github': {'enabled': False}, 'log_level': 'CRITICAL',
+            'dehydration': dehydration, 'github': {'enabled': False}, 'log_level': 'WARNING',
             'embedding': {'enabled': True, 'background_indexing': False, 'api_key': '',
                 'backend': 'api', 'model': settings['model'], 'base_url': settings['base_url'],
                 'dim': int(settings.get('dimensions', 1024)), 'timeout_seconds': 20}}
@@ -348,9 +352,9 @@ class Memory:
             self.budget.settle_estimate(reservation)
         if model_reservation is not None:
             self.budget.settle_estimate(model_reservation, accounting='ombre-model-estimate')
-        if ('检索降级' in result or (any(word in result for word in ('向量', '语义'))
-                and any(word in result for word in ('降级', '不可用', '失败', '暂不可')))):
-            self.messages.put('记忆检索降级为关键词')
+        # Only Ombre's own notice counts; matching loose words misfired on ordinary memory text.
+        if DEGRADED_NOTICE in result:
+            self.messages.put(f'记忆检索降级为关键词（{name}；原因见记忆库 _agent/server.log）')
         return result
 
     def visible(self, candidates):
