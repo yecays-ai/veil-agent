@@ -309,6 +309,26 @@ class Budget:
                           'amount': str(amount), 'prompt_tokens': prompt,
                           'completion_tokens': completion, 'cached_tokens': cached})
 
+    @synchronized
+    def cache_display(self, stamp=None):
+        """Today's share of chat-model input tokens the provider served from its cache."""
+        stamp = stamp or self.clock()
+        try:
+            periods, prompt, cached = {}, 0, 0
+            for event in self.store.read('costs.jsonl'):
+                if event['type'] == 'reserve':
+                    periods[event['id']] = event['period']
+                elif event['type'] == 'settle' and 'prompt_tokens' in event:
+                    if periods.get(event['id'], '')[:10] == stamp[:10]:
+                        prompt += event['prompt_tokens']
+                        cached += event['cached_tokens']
+        except (KeyError, TypeError) as exc:
+            raise UserError('花费账本无法核对，已停止；请保留 data 文件夹。') from exc
+        if not prompt:
+            return '今天还没有聊天模型的用量记录，缓存命中率暂无。'
+        return (f'今天聊天缓存命中 {cached * 100 / prompt:.0f}%（命中 {cached} / 输入 {prompt} tokens；'
+                '只统计聊天模型，不含记忆打标和向量）')
+
     def display(self, stamp=None):
         day, month, pending = self.totals(stamp)
         return (f'今天 ¥{day:.6f} / {self.daily}；本月 ¥{month:.6f} / {self.monthly}；'
@@ -319,18 +339,18 @@ def memory_mode(memory):
     return ('native' if getattr(memory, 'native', False) else True) if memory else False
 
 
-def build_self_description(cfg, budget, memory=False, capabilities=None):
-    # Keep the facts about implemented capabilities together as they evolve.
+def self_facts(cfg, budget, memory=False, capabilities=None):
+    """(stable, changing): the stable part is identical every request so the provider can cache it;
+    the changing part (time, spending ledger) is sent after the chat history."""
     stamp = budget.clock()
     local_time = datetime.fromisoformat(stamp)
     weekday = ('Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday')[local_time.weekday()]
-    return (
+    stable = (
         'SYSTEM FACTS (program-generated each request, not user-authored). '
         'Use these over conflicting persona/history; keep your character\'s voice.\n'
         f'You are an AI companion: {json.dumps(cfg.name, ensure_ascii=False)}; '
         f'provider {json.dumps(cfg.provider_name, ensure_ascii=False)}; '
         f'model {json.dumps(cfg.provider["model"], ensure_ascii=False)}.\n'
-        f'Local time: {stamp} ({weekday}).\n'
         f'Available: terminal text chat; up to {cfg.history_rounds} recent rounds included verbatim '
         'per request; full chat logs saved locally.\n'
         + (('Long-term memory: you decide what to save and call the hold tool yourself (the user need not say '
@@ -346,10 +366,27 @@ def build_self_description(cfg, budget, memory=False, capabilities=None):
           if not cfg.tools or not cfg.tools.get('enabled', True)
           else 'Tools are currently unavailable. '))
         + 'You have no voice. '
-        'Unlisted abilities are unavailable. Do not invent memories, actions or tool results.\n'
-        f'Pre-request ledger (CNY, excludes this reply): {budget.display(stamp)}\n'
-        'Quote its cutoff when asked about spending; /cost includes new usage after this reply.'
+        'Unlisted abilities are unavailable. Do not invent memories, actions or tool results.'
     )
+    changing = (f'Local time: {stamp} ({weekday}).\n'
+                f'Pre-request ledger (CNY, excludes this reply): {budget.display(stamp)}\n'
+                'Quote its cutoff when asked about spending; /cost includes new usage after this reply.')
+    return stable, changing
+
+
+def build_self_description(cfg, budget, memory=False, capabilities=None):
+    stable, changing = self_facts(cfg, budget, memory, capabilities)
+    return stable + '\n' + changing
+
+
+def history_keep(total, limit):
+    """How many recent rounds to send. Once the window is full, dropping one old round per message moves
+    the start of every request and the provider's prefix cache never hits. So drop a chunk of rounds at
+    once and grow back: the start stays put for several messages. Never more than `limit` rounds."""
+    chunk = limit // 4
+    if chunk < 2 or total <= limit:
+        return min(total, limit)
+    return limit - chunk + 1 + (total - limit - 1) % chunk
 
 
 class Chat:
@@ -378,14 +415,23 @@ class Chat:
                 groups[-1].append({'role': role, 'content': content})
         except (KeyError, ValueError, TypeError) as exc:
             raise UserError('聊天记录无法读取，已停止；请保留 data 文件夹。') from exc
-        groups = groups[-self.cfg.history_rounds:]
+        groups = groups[-history_keep(len(groups), self.cfg.history_rounds):]
         return [m for group in groups for m in group], sum(any(m['role'] == 'assistant' for m in g) for g in groups)
 
     def send(self, text):
         recalled = self.memory.context(text) if self.memory else []
-        description = build_self_description(self.cfg, self.budget, memory_mode(self.memory), self.tools)
+        stable, changing = self_facts(self.cfg, self.budget, memory_mode(self.memory), self.tools)
+        description = stable + '\n' + changing
+        # Order matters for the provider's prefix cache: everything that stays the same between requests
+        # comes first, then the chat history, then what changes every request (recalled memories,
+        # capability notice, time and ledger) right before the user's message.
         head = [{'role': 'system', 'content': self.cfg.persona},
-                {'role': 'system', 'content': description}, *recalled]
+                {'role': 'system', 'content': stable}]
+        tail = [*recalled]
+        if self.pending_capability_event:
+            tail.append({'role': 'system', 'content':
+                '（程序生成的能力变化记录）' + self.pending_capability_event})
+        tail.append({'role': 'system', 'content': changing})
         user = {'role': 'user', 'content': text}
         tool_schema = []
         if self.tools and self.tools.tools and self.cfg.tools['max_steps'] > 1:
@@ -394,7 +440,7 @@ class Chat:
         # UTF-8 byte count is deliberately conservative, with ample chat framing
         # overhead. Reserve the entire configured input limit, not an average.
         def bound(history):
-            return (sum(len(m['content'].encode('utf-8')) + 256 for m in [*head, *history, user])
+            return (sum(len(m['content'].encode('utf-8')) + 256 for m in [*head, *history, *tail, user])
                     + len(json.dumps(tool_schema, ensure_ascii=False).encode('utf-8')) + 256)
         limit = self.cfg.provider['max_input_tokens']
         history = list(self.history)
@@ -412,10 +458,7 @@ class Chat:
             self.trim_noted = True
             self.trim_note = (f'（为了不超出长度上限，这次只带了最近 {kept} 轮原文；'
                               '更早的聊天仍保存在本机，长期记忆不受影响。）')
-        messages = [*head, *history, user]
-        if self.pending_capability_event:
-            messages.insert(2, {'role': 'system', 'content':
-                '（程序生成的能力变化记录）' + self.pending_capability_event})
+        messages = [*head, *history, *tail, user]
         tool_summaries = []
         with saving():
             tool_cfg = (replace(self.cfg, max_output_tokens=self.cfg.tools.get('max_output_tokens', self.cfg.max_output_tokens))
@@ -430,7 +473,7 @@ class Chat:
         try:
             self.last_self = description
             if self.tools and self.tools.tools:
-                reply, tool_summaries = self._tool_chat(messages, request_id, len(history))
+                reply, tool_summaries = self._tool_chat(messages, request_id, len(history), len(head))
             else:
                 reply, prompt, completion, cached = self.model(messages)
         except (KeyboardInterrupt, EOFError):
@@ -451,11 +494,12 @@ class Chat:
             self.memory.completed()
         return reply
 
-    def _tool_chat(self, messages, request_id, history_count):
+    def _tool_chat(self, messages, request_id, history_count, history_start=None):
         from tools_agent import display_call, permitted_tools
         summaries = []
         loop_messages = list(messages)
-        history_start = len(messages) - history_count - 1
+        if history_start is None:
+            history_start = len(messages) - history_count - 1
         final = ''
         next_reservation = None
 
@@ -680,6 +724,7 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead):
                 break
             if text == '/cost':
                 output(chat.budget.display())
+                output(chat.budget.cache_display())
             elif text == '/self':
                 if chat.last_self is None:
                     output('（尚未发送消息：这是当前说明的预览，发送前会刷新。）')
@@ -722,6 +767,7 @@ def main():
             budget = Budget(store)
             if args.cost:
                 print(budget.display())
+                print(budget.cache_display())
                 return 0
             cfg = load_character(ROOT, args.character)
             client, model = make_model(ROOT, cfg)

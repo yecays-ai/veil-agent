@@ -24,3 +24,5 @@
 - 更新/启动环境的版本一致性必须可核实，不再要求用户无目的重复拉取 main。
 
 - 记忆板块收尾审计（2026-10-19）已写入 `STATUS.md`：结论是可先暂停；007c/007d 记录在该节补回；重开条件和未验证项（向量检索是否真失败、新旧对比、预检仍按字节）见同一节。
+
+- 012（缓存）：`veil_agent.py` 的 `self_facts` 把说明拆成固定/变化两段，`Chat.send` 按 [人设, 固定说明, 历史, 召回, 能力变化, 时间账本, 输入] 排列；`history_keep` 成块裁剪；`Budget.cache_display` 给 `/cost`。动发送顺序或 `_tool_chat` 的 `history_start` 之前先读 `docs/tickets/012-cache-friendly-prompt.md`。前端工单 013 不得改这几处。

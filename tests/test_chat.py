@@ -12,6 +12,11 @@ from unittest.mock import Mock, patch
 from veil_agent import Chat, Budget, Store, build_self_description, load_character, make_model, run_chat, UserError
 
 
+def sent_facts(messages):
+    # The stable facts follow the persona; the per-request part (time, ledger) is the last system message.
+    return messages[1]['content'] + '\n' + messages[-2]['content']
+
+
 class ChatTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -46,7 +51,9 @@ output_cny_per_million = "8"
         self.assertEqual(reopened.rounds, 1)
         reopened.send('Continue')
         messages = self.model.call_args.args[0]
-        self.assertEqual([m['content'] for m in messages[2:]], ['虚构的中文消息', 'A fictional reply', 'Continue'])
+        self.assertEqual([m['content'] for m in messages[2:-2]], ['虚构的中文消息', 'A fictional reply'])
+        self.assertEqual(messages[-2]['role'], 'system')
+        self.assertEqual(messages[-1]['content'], 'Continue')
         rows = self.store.read('test/chat.jsonl')
         self.assertEqual([r['role'] for r in rows], ['user', 'assistant', 'user', 'assistant'])
         self.assertTrue(all(r['time'] for r in rows))
@@ -212,9 +219,9 @@ output_cny_per_million = "8"
             chat = Chat(self.cfg, self.store, self.budget, model)
             self.assertEqual(chat.send('中文输入'), '模拟回复')
             self.assertEqual(requests[0]['messages'][-1]['content'], '中文输入')
-            self.assertEqual([m['role'] for m in requests[0]['messages']], ['system', 'system', 'user'])
+            self.assertEqual([m['role'] for m in requests[0]['messages']], ['system', 'system', 'system', 'user'])
             self.assertEqual(requests[0]['messages'][0]['content'], self.cfg.persona)
-            self.assertEqual(requests[0]['messages'][1]['content'], chat.last_self)
+            self.assertEqual(sent_facts(requests[0]['messages']), chat.last_self)
             self.assertEqual(requests[0]['max_tokens'], 50)
             self.assertFalse(requests[0]['stream'])
             self.assertEqual(requests[0]['thinking'], {'type': 'disabled'})
@@ -265,7 +272,7 @@ output_cny_per_million = "8"
         chat.send('Who are you?')
         messages = self.model.call_args.args[0]
         self.assertEqual(messages[0], {'role': 'system', 'content': cfg.persona})
-        facts = messages[1]
+        facts = {'role': messages[1]['role'], 'content': sent_facts(messages)}
         self.assertEqual(facts['role'], 'system')
         for value in ['program-generated', 'not user-authored', 'AI companion', 'Lumen', 'alternate',
                       'alternate-model', '2026-10-19T09:10:00+08:00', 'Monday', '20 recent rounds',
@@ -282,7 +289,7 @@ output_cny_per_million = "8"
         self.assertIn('/ 80', expected_cost)
         chat = Chat(self.cfg, self.store, self.budget, self.model)
         chat.send('What have we spent?')
-        facts = self.model.call_args.args[0][1]['content']
+        facts = sent_facts(self.model.call_args.args[0])
         self.assertIn(expected_cost, facts)
         self.assertIn('excludes this reply', facts)
         self.assertNotEqual(self.budget.display(), expected_cost)
@@ -290,7 +297,7 @@ output_cny_per_million = "8"
     def test_self_command_shows_exact_last_sent_facts_without_new_request(self):
         self.budget.clock = lambda: '2026-10-19T09:10:00+08:00'
         self.chat.send('hello')
-        sent = self.model.call_args.args[0][1]['content']
+        sent = sent_facts(self.model.call_args.args[0])
         before_rows = self.store.read('test/chat.jsonl')
         before_costs = self.store.read('costs.jsonl')
         self.budget.clock = lambda: '2026-10-20T09:10:00+08:00'
@@ -298,7 +305,8 @@ output_cny_per_million = "8"
         run_chat(self.chat, Mock(side_effect=['/self', '/cost', '/self', '/quit']), output.append)
         self.assertEqual(output[1], sent)
         self.assertEqual(output[2], self.budget.display())
-        self.assertEqual(output[3], sent)
+        self.assertEqual(output[3], self.budget.cache_display())
+        self.assertEqual(output[4], sent)
         self.assertEqual(self.model.call_count, 1)
         self.assertEqual(self.store.read('test/chat.jsonl'), before_rows)
         self.assertEqual(self.store.read('costs.jsonl'), before_costs)
@@ -315,16 +323,16 @@ output_cny_per_million = "8"
     def test_self_refreshes_each_request_and_never_enters_chat_ledger(self):
         self.budget.clock = lambda: '2026-10-19T09:10:00+08:00'
         self.chat.send('first')
-        first = self.model.call_args.args[0][1]['content']
+        first = sent_facts(self.model.call_args.args[0])
         self.budget.clock = lambda: '2026-10-20T09:10:00+08:00'
         self.cfg.history_rounds = 3
         self.chat.send('second')
         messages = self.model.call_args.args[0]
-        second = messages[1]['content']
+        second = sent_facts(messages)
         self.assertNotEqual(first, second)
         self.assertIn('Tuesday', second)
         self.assertIn('3 recent rounds', second)
-        self.assertEqual(sum(m['role'] == 'system' for m in messages), 2)
+        self.assertEqual(sum(m['role'] == 'system' for m in messages), 3)
         self.assertEqual([r['role'] for r in self.store.read('test/chat.jsonl')],
                          ['user', 'assistant', 'user', 'assistant'])
 
@@ -333,7 +341,7 @@ output_cny_per_million = "8"
         self.cfg.provider['api_key'] = 'FAKE-KEY-NEVER-REAL'
         (self.root / '.env').write_text('FAKE_KEY=another-fake-key\n', encoding='utf-8')
         self.chat.send('hello')
-        facts = self.model.call_args.args[0][1]['content']
+        facts = sent_facts(self.model.call_args.args[0])
         for private in [self.cfg.persona, str(self.root), self.cfg.provider['base_url'],
                         self.cfg.provider['api_key_env'], 'FAKE-KEY-NEVER-REAL', 'another-fake-key']:
             self.assertNotIn(private, facts)
@@ -354,7 +362,7 @@ output_cny_per_million = "8"
         self.assertEqual(roles[0], 'system')
         self.assertEqual(roles[-1], 'user')
         self.assertEqual(sent[-1]['content'], 'continue')
-        history = [m for m in sent[2:-1]]
+        history = [m for m in sent[2:-2]]
         self.assertTrue(history and history[0]['role'] == 'user')  # Whole rounds only.
         self.assertTrue(history[-1]['content'].startswith('a19'))  # Newest kept.
         self.assertLessEqual(sum(len(m['content'].encode()) + 256 for m in sent) + 256,
@@ -405,7 +413,7 @@ output_cny_per_million = "8"
 
     def test_rejected_request_keeps_last_actually_sent_self(self):
         self.chat.send('first')
-        sent = self.model.call_args.args[0][1]['content']
+        sent = sent_facts(self.model.call_args.args[0])
         self.budget.daily = Decimal('0.000001')
         with self.assertRaises(UserError):
             self.chat.send('not sent')
