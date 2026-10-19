@@ -109,14 +109,13 @@ output_cny_per_million = "8"
             self.assertTrue(self.wait(lambda: self.call('/api/events')[1]['busy'] is False))
             self.call('/api/send', {'text': '/cost'})
             self.assertTrue(self.wait(lambda: any('今天' in e['text'] for e in self.call('/api/events')[1]['events'])))
-            self.call('/api/send', {'text': '/quit'})
-            result['events'] = self.call('/api/events')[1]['events']
+            self.assertEqual(self.call('/api/send', {'text': '/quit'})[0], 200)   # ends the loop normally
 
-        events = self.run_loop(scenario)['events']
-        kinds = [(e['kind'], e['text']) for e in events]
+        self.run_loop(scenario)
+        kinds = [(e['kind'], e['text']) for e in self.hub.events]
         self.assertIn(('user', '你好 hello'), kinds)
         self.assertIn(('assistant', 'A fictional reply'), kinds)
-        self.assertTrue(any(k == 'notice' and '网页版没有退出命令' in t for k, t in kinds))
+        self.assertTrue(any(k == 'notice' and '正在保存并退出' in t for k, t in kinds))
         self.assertEqual(self.model.call_count, 1)
         saved = self.store.read('test/chat.jsonl')
         self.assertEqual([m['content'] for m in saved], ['你好 hello', 'A fictional reply'])
@@ -147,12 +146,28 @@ output_cny_per_million = "8"
             thread.start()
             self.assertTrue(self.wait(lambda: any(e['kind'] == 'approval' and name in e['text']
                                                   for e in self.hub.events)))
-            self.assertEqual(self.call('/api/approve', {'answer': button})[0], 200)
+            pending = self.call('/api/events')[1]['pending']
+            self.assertEqual(self.call('/api/approve', {'answer': button, 'id': pending})[0], 200)
+            self.assertEqual(self.call('/api/approve', {'answer': 'y', 'id': pending})[0], 409)  # once only
             thread.join(5)
         self.assertEqual(answers, {'yes': 'y', 'no': 'n'})
         shown = [e['text'] for e in self.hub.events if e['kind'] == 'approval']
         self.assertEqual(shown[0], 'Peter 想把内容写到 yes.txt（新文件）。同意吗？y/N ')
         self.assertEqual(self.call('/api/approve', {'answer': 'maybe'})[0], 400)
+
+    def test_stale_or_unasked_approval_answers_are_refused(self):
+        # No approval pending: a stray click must not be remembered for the next one.
+        self.assertEqual(self.call('/api/approve', {'answer': 'y', 'id': 1})[0], 409)
+        self.assertEqual(self.call('/api/approve', {'answer': 'y'})[0], 409)
+        result = {}
+        thread = threading.Thread(target=lambda: result.update(a=self.hub.approval('Peter 想把内容写到 b.txt（新文件）。同意吗？y/N ')))
+        thread.start()
+        self.assertTrue(self.wait(lambda: self.hub.pending is not None))
+        current = self.hub.pending
+        self.assertEqual(self.call('/api/approve', {'answer': 'y', 'id': current + 1})[0], 409)  # wrong card
+        self.assertEqual(self.call('/api/approve', {'answer': 'n', 'id': current})[0], 200)
+        thread.join(5)
+        self.assertEqual(result['a'], 'n')
 
     def test_history_is_shown_on_open(self):
         self.store.append('test/chat.jsonl', {'role': 'user', 'content': 'earlier'})

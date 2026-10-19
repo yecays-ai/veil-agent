@@ -35,10 +35,13 @@ class Hub:
         self.cond = threading.Condition()
         self.inbox = queue.Queue()
         self.answers = queue.Queue()
+        self.pending = None       # event id of the approval being asked, else None
 
     def push(self, kind, text):
         with self.cond:
-            self.events.append({'id': len(self.events) + 1, 'kind': kind, 'text': text})
+            event_id = len(self.events) + 1
+            self.events.append({'id': event_id, 'kind': kind, 'text': text})
+            return event_id
 
     def output(self, text):
         text = str(text)
@@ -64,23 +67,37 @@ class Hub:
 
     def approval(self, prompt):
         # Same sentence the terminal shows; the page offers two buttons for y/N.
-        while not self.answers.empty():
-            self.answers.get_nowait()
-        self.push('approval', prompt)
+        with self.cond:
+            while not self.answers.empty():
+                self.answers.get_nowait()
+            self.pending = self.push('approval', prompt)
         while True:
             try:
                 answer = self.answers.get(timeout=0.5)
             except queue.Empty:
                 if self.stopped:
+                    with self.cond:
+                        self.pending = None
                     return 'n'
                 continue
-            self.push('notice', '已同意。' if answer == 'y' else '已拒绝。')
+            with self.cond:
+                self.pending = None
+                self.push('notice', '已同意。' if answer == 'y' else '已拒绝。')
             return answer
+
+    def answer(self, approval_id, answer):
+        # Only the approval currently being asked can be answered, once.
+        with self.cond:
+            if approval_id is None or approval_id != self.pending:
+                return False
+            self.pending = None
+            self.answers.put(answer)
+            return True
 
     def snapshot(self, after):
         with self.cond:
             return {'events': self.events[after:], 'busy': self.busy, 'stopped': self.stopped,
-                    'name': self.name}
+                    'name': self.name, 'pending': self.pending}
 
 
 def make_handler(hub, token, port):
@@ -149,23 +166,23 @@ def make_handler(hub, token, port):
                 text = body.get('text')
                 if not isinstance(text, str) or not text.strip():
                     self._send(400, {'error': 'empty'})
-                elif text.strip() == '/quit':
-                    hub.push('notice', '网页版没有退出命令：关掉命令行窗口即可退出。')
-                    self._send(200, {'ok': True})
                 elif hub.busy:
                     self._send(409, {'error': 'busy'})
                 else:
                     text = text.strip()
                     hub.busy = True
                     hub.push('user', text)
+                    if text == '/quit':
+                        hub.push('notice', '正在保存并退出，稍等几秒，然后可以关掉这个页面。')
                     hub.inbox.put(text)
                     self._send(200, {'ok': True})
             elif url.path == '/api/approve':
                 answer = body.get('answer')
                 if answer not in ('y', 'n'):
                     self._send(400, {'error': 'answer'})
+                elif not hub.answer(body.get('id'), answer):
+                    self._send(409, {'error': 'no such pending approval'})
                 else:
-                    hub.answers.put(answer)
                     self._send(200, {'ok': True})
             else:
                 self._send(404, {'error': 'not found'})

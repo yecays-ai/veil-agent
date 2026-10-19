@@ -40,7 +40,8 @@ textarea:focus{border-color:var(--accent)}
 </style>
 </head>
 <body>
-<div id="offline">和本机程序断开了：命令行窗口可能已关闭。要继续请重新双击 start-web.bat。</div>
+<div id="ended" style="display:none;text-align:center;padding:6px;font-size:14px;background:var(--me)">Peter 已退出，可以关掉这个页面了。要再聊请重新双击 start-web.bat。</div>
+<div id="offline">和本机程序断开了：命令行窗口可能已关闭（直接关窗口可能来不及保存记忆，下次请在输入框里输入 /quit 退出）。要继续请重新双击 start-web.bat。</div>
 <header>
   <h1 id="title">VEIL</h1>
   <button data-cmd="/cost" title="今天和本月的花费">花费</button>
@@ -67,15 +68,15 @@ function render(text){
   return parts.map((p,i)=>i%2?'<pre><code>'+p.replace(/^[^\n]*\n/,'').replace(/\n$/,'')+'</code></pre>'
     :p.replace(i>0?/^\n/:/^$/,'').replace(i<parts.length-1?/\n$/:/^$/,'').replace(/`([^`\n]+)`/g,'<code>$1</code>').replace(/\*\*([^*\n]+)\*\*/g,'<b>$1</b>')).join('');
 }
-function add(kind,text){
+function add(kind,text,id){
   const d=document.createElement('div');
   if(kind==='user'||kind==='assistant'){d.className='msg '+kind;d.innerHTML=render(text)}
   else if(kind==='approval'){
-    d.className='approval';
+    d.className='approval';d.dataset.id=id;
     const p=document.createElement('p');p.textContent=text;d.appendChild(p);
     for(const [label,ans,cls] of [['同意','y','yes'],['拒绝','n','']]){
       const b=document.createElement('button');b.textContent=label;b.className=cls;
-      b.onclick=()=>{d.classList.add('done');api('/api/approve',{answer:ans})};d.appendChild(b);
+      b.onclick=()=>{d.classList.add('done');api('/api/approve',{answer:ans,id})};d.appendChild(b);
     }
   } else {d.className=kind==='error'?'error':'notice';d.textContent=text}
   if(typing)col.insertBefore(d,typing);else col.appendChild(d);
@@ -94,10 +95,12 @@ async function poll(){
     const r=await api('/api/events?after='+after);
     if(!r.ok)throw new Error(r.status);
     const s=await r.json();
-    $('offline').style.display='none';
+    $('offline').style.display='none';$('ended').style.display=s.stopped?'block':'none';
     document.title=s.name;$('title').textContent=s.name;
     const stick=log.scrollHeight-log.scrollTop-log.clientHeight<80;
-    for(const e of s.events){add(e.kind,e.text);after=e.id}
+    for(const e of s.events){add(e.kind,e.text,e.id);after=e.id}
+    // Only the approval being asked right now can be clicked; older cards are inert.
+    document.querySelectorAll('.approval').forEach(c=>{if(Number(c.dataset.id)!==s.pending)c.classList.add('done')});
     stopped=s.stopped;setBusy(s.busy);
     if(s.events.length&&stick)log.scrollTop=log.scrollHeight;
   }catch(e){$('offline').style.display='block'}
