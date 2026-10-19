@@ -146,6 +146,13 @@ class MemoryTests(unittest.TestCase):
         self.assertIn('被丢弃的候选', self.memory.command('/memory'))
         self.assertIn('Hidden target', self.memory.command('/memory'))
 
+    def test_extraction_request_carries_local_persona_text(self):
+        self.turns(4)
+        self.memory.supplement()
+        system = self.model.call_args.args[0][0]['content']
+        self.assertIn('fictional persona', system)
+        self.assertIn('One event is one memory', system)
+
     def test_false_quote_discards_whole_memory(self):
         self.turns(4)
         self.model.side_effect = None
