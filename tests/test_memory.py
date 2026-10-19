@@ -33,7 +33,10 @@ class Backend:
             self.rows[key] = dict(args)
             return ('feel→' if args.get('feel') else '新建→') + key
         if name == 'trace':
-            self.rows[args['bucket_id']]['hidden'] = bool(args['dont_surface'])
+            if 'content' in args:
+                self.rows[args['bucket_id']]['content'] = args['content']
+            else:
+                self.rows[args['bucket_id']]['hidden'] = bool(args['dont_surface'])
             return 'updated'
         if name == 'feel':
             # Simulate the upstream feel route ignoring dont_surface.
@@ -68,7 +71,7 @@ class MemoryTests(unittest.TestCase):
     def extract(self, messages, *, json_output, **extra):
         self.assertTrue(json_output)
         self.assertGreater(self.budget.totals()[2], 0)
-        raw = json.loads(messages[1]['content'])
+        raw = json.loads(messages[1]['content'])['batches']
         batches = [{'id': b['id'], 'memories': [entry(b['turns'][0][0]['content'])]} for b in raw]
         return json.dumps({'batches': batches}), 200, 100, 0
 
@@ -94,6 +97,54 @@ class MemoryTests(unittest.TestCase):
         self.assertEqual(len([c for c in costs if c['type'] == 'reserve']), 2)
         self.assertTrue(any(c.get('accounting') == 'embedding-estimate' for c in costs))
         self.assertEqual(self.budget.totals()[2], 0)
+
+    def test_extractor_sees_existing_memories_but_not_hidden_ones(self):
+        self.turns(4)
+        self.memory.supplement()
+        key = next(iter(self.memory.state['entries']))
+        self.turns(4, 4)
+        self.memory.supplement()
+        sent = json.loads(self.model.call_args.args[0][1]['content'])
+        self.assertEqual([e['id'] for e in sent['existing']], [key])
+        self.assertEqual(sent['existing'][0]['text'], '下周有安排。')
+        self.memory.command(f'/forget {key}')
+        self.turns(4, 8)
+        self.memory.supplement()
+        sent = json.loads(self.model.call_args.args[0][1]['content'])
+        self.assertNotIn(key, [e['id'] for e in sent['existing']])
+
+    def test_update_rewrites_existing_memory_instead_of_adding_another(self):
+        self.turns(4)
+        self.memory.supplement()
+        key = next(iter(self.memory.state['entries']))
+        self.turns(4, 4)
+
+        def update(messages, *, json_output, **extra):
+            item = dict(entry('fact 4'), op='update', target=key, zh='喜欢蓝色，因为名字的读音。',
+                        en='Likes blue because of how the name sounds.')
+            return json.dumps({'batches': [{'id': 4, 'memories': [item]}]}), 200, 100, 0
+        self.model.side_effect = update
+        self.memory.supplement()
+        self.assertEqual(len(self.backend.rows), 1)
+        self.assertIn('因为名字的读音', self.backend.rows[key]['content'])
+        self.assertEqual(self.memory.state['entries'][key]['text'], '喜欢蓝色，因为名字的读音。')
+        self.assertTrue(any('补充了记忆' in n for n in self.memory.notices()))
+
+    def test_update_of_unknown_or_hidden_target_is_dropped_and_listed_locally(self):
+        self.turns(4)
+        self.memory.supplement()
+        key = next(iter(self.memory.state['entries']))
+        self.memory.command(f'/forget {key}')
+        self.turns(4, 4)
+
+        def update(messages, *, json_output, **extra):
+            item = dict(entry('fact 4'), op='update', target=key, title='Hidden target')
+            return json.dumps({'batches': [{'id': 4, 'memories': [item]}]}), 200, 100, 0
+        self.model.side_effect = update
+        self.memory.supplement()
+        self.assertEqual(len(self.backend.rows), 1)
+        self.assertIn('被丢弃的候选', self.memory.command('/memory'))
+        self.assertIn('Hidden target', self.memory.command('/memory'))
 
     def test_false_quote_discards_whole_memory(self):
         self.turns(4)
@@ -121,7 +172,7 @@ class MemoryTests(unittest.TestCase):
         self.assertEqual([b['id'] for b in reopened.state['pending']], [4])
         self.turns(4, 8)
         reopened.supplement()
-        request = json.loads(self.model.call_args.args[0][1]['content'])
+        request = json.loads(self.model.call_args.args[0][1]['content'])['batches']
         self.assertEqual([b['id'] for b in request], [4, 8])
 
     def test_restart_keeps_partial_group_and_does_not_backfill_old_chats(self):
