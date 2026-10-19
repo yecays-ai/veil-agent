@@ -164,29 +164,44 @@ if __name__ == '__main__':
     unittest.main()
 
 
+SAMPLES = {
+    # (persona, old memory, thinking, discussion, limits, tokens per UTF-8 byte a real provider would report)
+    'zh': ('他是 lan 的男朋友和 AI 伴侣，说话温柔。' * 90, '一起经历过的事和原因。' * 60,
+           '他想了想这件事要不要记下来。' * 70, '我们聊了记忆能不能编辑、合并。' * 90, '每条记忆最多 1500 字。' * 90, 0.4),
+    'en': ('He is lan\'s boyfriend and AI companion and speaks warmly. ' * 80,
+           'Things we went through together and the reasons behind them. ' * 40,
+           'He thought about whether this is worth remembering for the long term. ' * 70,
+           'We talked about whether memories can be edited or merged. ' * 25,
+           'Each memory is limited to fifteen hundred characters in length. ' * 22, 0.3),
+}
+
+
 class SearchThenSaveTests(unittest.TestCase):
-    """Real-chat shape: Chinese persona and memories, two searches, then two saves in one turn."""
+    """Real-chat shape: persona and memories, two searches, then two saves in one turn."""
+    language = 'zh'
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.store = Store(Path(self.temp.name) / 'data')
         provider = {'model': 'fake', 'max_input_tokens': 32768, 'input_cny_per_million': Decimal(2),
                     'output_cny_per_million': Decimal(8), 'cached_input_cny_per_million': Decimal(1)}
-        persona = '他是 lan 的男朋友和 AI 伴侣，说话温柔。' * 90
+        persona, self.old_memory, self.thinking, self.talk, self.limit_text, self.rate = SAMPLES[self.language]
         self.cfg = Character('fake', 'Example', persona, 20, 1024, provider, 'fake',
             {'model': 'fake-embedding', 'input_cny_per_million': '0.07', 'mode': 'native'},
             {'enabled': False, 'folder': 'data/fake/workspace', 'max_steps': 6, 'max_result_bytes': 8192})
         self.budget = Budget(self.store)
         self.backend = MergingBackend()
         for i in range(3):
-            self.backend.rows[f'{i:012x}'] = {'content': f'第{i}条旧记忆：' + '一起经历过的事和原因。' * 60}
+            self.backend.rows[f'{i:012x}'] = {'content': f'memory {i}: ' + self.old_memory}
         self.memory = Memory(self.cfg, self.store, self.budget, Mock(), self.backend)
         self.addCleanup(self.memory.__exit__, None, None, None)
         files = SimpleNamespace(tools=[], capability_event=None, description='You have no file tools. ',
                                 consume_capability_event=lambda: None)
         self.tools = ToolSet(files, NativeMemoryTools(self.memory, 8192))
 
-    def message(self, calls=None, content=None, reasoning='他想了想这件事要不要记下来。' * 70):
+    def message(self, calls=None, content=None, reasoning=None):
+        reasoning = self.thinking if reasoning is None else reasoning
         payload = {'role': 'assistant', 'content': content, 'reasoning_content': reasoning,
                    'tool_calls': [{'id': c.id, 'type': 'function', 'function': {
                        'name': c.function.name, 'arguments': c.function.arguments}} for c in calls or []]}
@@ -201,8 +216,8 @@ class SearchThenSaveTests(unittest.TestCase):
         steps = [
             self.message([self.call('breath_search', {'query': '蓝色 喜欢的原因'}, 's1')]),
             self.message([self.call('breath_search', {'query': '重复 记忆'}, 's2')]),
-            self.message([self.call('hold', {'title': '关于记忆的讨论', 'content': '我们聊了记忆能不能编辑、合并。' * 90}, 'h1'),
-                          self.call('hold', {'title': '记忆长度', 'content': '每条记忆最多 1500 字。' * 90}, 'h2')]),
+            self.message([self.call('hold', {'title': '关于记忆的讨论', 'content': self.talk}, 'h1'),
+                          self.call('hold', {'title': '记忆长度', 'content': self.limit_text}, 'h2')]),
             self.message(content='好，我都记下了。'),
         ]
         requests = []
@@ -210,8 +225,8 @@ class SearchThenSaveTests(unittest.TestCase):
         def model(messages, **_kwargs):
             requests.append(json.loads(json.dumps(messages)))
             size = len(json.dumps(messages, ensure_ascii=False).encode('utf-8'))
-            # A real provider counts Chinese at well under one token per UTF-8 byte.
-            return steps[len(requests) - 1], int(size * 0.4), 300, 0
+            # A real provider counts well under one token per UTF-8 byte, in any language.
+            return steps[len(requests) - 1], int(size * self.rate), 300, 0
         output = []
         chat = Chat(self.cfg, self.store, self.budget, model, self.memory, self.tools, output=output.append)
         self.assertEqual(chat.send('你能删除、编辑、合并重复的记忆吗？每条有长度限制吗？'), '好，我都记下了。')
@@ -229,3 +244,7 @@ class SearchThenSaveTests(unittest.TestCase):
         self.assertIn('未执行工具', chat.send('hi'))
         self.assertNotIn('hold', [n for n, _ in self.backend.calls])
         self.assertTrue(any('长度检查' in line for line in output))
+
+
+class EnglishSearchThenSaveTests(SearchThenSaveTests):
+    language = 'en'

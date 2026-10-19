@@ -449,12 +449,10 @@ class Chat:
         final = ''
         next_reservation = None
 
-        # max_input_tokens is a TOKEN limit, but request bytes overcount tokens (about 3 bytes per Chinese
-        # character is roughly 1 token). After each response the provider reports the real prompt size, so
-        # content that was already sent is scaled by that measured ratio (never below 0.5, a 2x margin).
-        # Content added since the last response (the tool-call record and results) stays counted in bytes.
+        # max_input_tokens is a TOKEN limit, but request bytes overcount tokens (roughly 3-4 bytes per token
+        # in any language). After each response the provider reports the real prompt size, so later estimates
+        # scale the bytes by that measured ratio, never below 0.5 (still a 2x margin over a typical text).
         calibration = 1.0
-        fresh = set()
 
         def message_bytes(m):
             return len(json.dumps(m, ensure_ascii=False).encode('utf-8')) + 256
@@ -464,8 +462,7 @@ class Chat:
 
         def request_size(offered):
             # Count each message once, including tool-call arguments and reasoning.
-            return int(sum(message_bytes(m) * (1 if id(m) in fresh else calibration) for m in loop_messages)
-                       + schema_bytes(offered))
+            return int(calibration * (sum(message_bytes(m) for m in loop_messages) + schema_bytes(offered)))
 
         def fit_history(offered):
             nonlocal history_count
@@ -502,7 +499,6 @@ class Chat:
             message, prompt, completion, cached = response
             if isinstance(prompt, int) and prompt > 0:
                 calibration = max(0.5, min(1.0, prompt / sent_bytes))
-            fresh.clear()
             self.budget.settle(reservation, self.cfg, prompt, completion, cached)
             if not message.tool_calls:
                 final = message.content or ''
@@ -534,20 +530,18 @@ class Chat:
                 if reasoning is not None:
                     assistant_record['reasoning_content'] = reasoning
                 loop_messages.append(assistant_record)
-                fresh.add(id(assistant_record))
                 next_offered = (None if step + 1 == self.cfg.tools['max_steps'] - 1
                                 else permitted_tools(self.tools.tools))
                 too_long_result = '工具结果超过本轮请求长度上限，未提供给模型。'
                 placeholders = [{'role': 'tool', 'tool_call_id': call.id, 'content': too_long_result}
                                 for call in message.tool_calls]
                 loop_messages.extend(placeholders)
-                fresh.update(id(m) for m in placeholders)
                 fit_history(next_offered)
                 can_report_results = request_size(next_offered) <= self.cfg.provider['max_input_tokens']
                 del loop_messages[-len(placeholders):]
                 if not can_report_results:
                     self.output(f'（长度检查：估算 {request_size(next_offered)}，上限 {self.cfg.provider["max_input_tokens"]}，'
-                                f'已发送内容按实测比例 {calibration:.2f} 折算。）')
+                                f'按实测比例 {calibration:.2f} 折算。）')
                     for call in message.tool_calls:
                         try:
                             summary = self.tools.preview_summary(call.function.name, json.loads(call.function.arguments))
@@ -571,7 +565,6 @@ class Chat:
                         result, state, summary = '程序拒绝：工具参数不是合法 JSON 对象。', '被拒绝', call.function.name
                     tool_message = {'role': 'tool', 'tool_call_id': call.id, 'content': result}
                     loop_messages.append(tool_message)
-                    fresh.add(id(tool_message))
                     history_bytes = calibration * sum(message_bytes(m)
                         for m in loop_messages[history_start:history_start + history_count])
                     if request_size(next_offered) - history_bytes > self.cfg.provider['max_input_tokens']:
