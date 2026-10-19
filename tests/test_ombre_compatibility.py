@@ -1,8 +1,10 @@
-"""Offline prerequisite gate for ticket 005; never connects to a model.
+"""Prerequisite gate for ticket 005; no chat/completion model calls.
 
 Set OMBRE_SOURCE to the unmodified 115d831 checkout and OMBRE_PYTHON to
 its Python executable. Run this file using a Python with the official mcp SDK.
-The normal suite skips this optional external-dependency test.
+The normal suite skips this optional external-dependency test. Explicitly setting
+OMBRE_VECTOR_GATE=1 enables user-authorized real SiliconFlow embeddings, reads
+the local EMBED_API_KEY, and records estimated calls in the shared cost ledger.
 """
 
 import asyncio
@@ -13,6 +15,7 @@ import re
 import subprocess
 import tempfile
 import unittest
+import sys
 
 
 # Synthetic source conversations and synthetic bilingual extractor output.
@@ -79,11 +82,51 @@ def hit_ids(text):
                      "optional: set OMBRE_SOURCE and OMBRE_PYTHON")
 class OmbreCompatibility(unittest.TestCase):
     def test_offline_recall_gate(self):
-        asyncio.run(self.exercise())
+        if os.environ.get("OMBRE_VECTOR_GATE") == "1":
+            sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+            from veil_agent import Store, ROOT
+            with Store(ROOT / "data").lock():
+                asyncio.run(self.exercise())
+        else:
+            asyncio.run(self.exercise())
 
     async def exercise(self):
         from mcp import ClientSession, StdioServerParameters
         from mcp.client.stdio import stdio_client
+
+        vector_gate = os.environ.get("OMBRE_VECTOR_GATE") == "1"
+        key = ""
+        if vector_gate:
+            # Explicit opt-in for the user-authorized live embedding gate.
+            # Normal tests never read local credentials or call this service.
+            sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+            from dotenv import dotenv_values
+            from veil_agent import Budget, Store, ROOT
+            from decimal import Decimal
+            from types import SimpleNamespace
+            key = (dotenv_values(ROOT / ".env").get("EMBED_API_KEY") or "").strip()
+            self.assertTrue(key, "EMBED_API_KEY is not configured locally")
+            budget = Budget(Store(ROOT / "data"))
+
+        async def call(session, name, args):
+            cfg = None
+            if vector_gate and name in {"hold", "breath_search", "feel"}:
+                # Conservative UTF-8 bound, including upstream SDK's default
+                # initial attempt + two retries. Current official BAAI/bge-m3
+                # price is zero; never switch to Pro or another paid model.
+                tokens = 3 * (len(json.dumps(args, ensure_ascii=False).encode("utf-8")) + 1024)
+                cfg = SimpleNamespace(id="memory-validation", max_output_tokens=1,
+                    provider={"model": "BAAI/bge-m3 [estimated embedding gate]",
+                              "max_input_tokens": tokens,
+                              "input_cny_per_million": Decimal(0),
+                              "cached_input_cny_per_million": Decimal(0),
+                              "output_cny_per_million": Decimal(0)})
+                request_id, _ = budget.reserve(cfg)
+            result = await session.call_tool(name, args)
+            if cfg is not None:
+                # This is estimated accounting, NOT supplier-reported token usage.
+                budget.settle(request_id, cfg, cfg.provider["max_input_tokens"], 0, 0)
+            return result
 
         source = Path(os.environ["OMBRE_SOURCE"]).resolve()
         child = str(Path(os.environ["OMBRE_PYTHON"]).resolve())
@@ -96,7 +139,10 @@ class OmbreCompatibility(unittest.TestCase):
             config.write_text(json.dumps({
                 "transport": "stdio", "buckets_dir": str(vault), "ai_name": "Test",
                 "dehydration": {"api_key": ""},
-                "embedding": {"enabled": False, "api_key": ""},
+                "embedding": {"enabled": vector_gate, "api_key": "",
+                    "background_indexing": False, "backend": "api",
+                    "model": "BAAI/bge-m3", "dim": 1024,
+                    "base_url": "https://api.siliconflow.cn/v1", "timeout_seconds": 20},
                 "github": {"enabled": False}, "log_level": "ERROR",
             }), encoding="utf-8")
             env = {key: value for key, value in os.environ.items()
@@ -104,15 +150,17 @@ class OmbreCompatibility(unittest.TestCase):
             env.update(PYTHONUTF8="1", PYTHONIOENCODING="utf-8",
                        OMBRE_CONFIG_PATH=str(config), OMBRE_VAULT_DIR=str(vault),
                        OMBRE_LOG_DIR=temp, OMBRE_HOOK_SKIP="1", OMBRE_TRANSPORT="stdio")
+            if vector_gate:
+                env["OMBRE_EMBED_API_KEY"] = key
             params = StdioServerParameters(command=child,
                 args=[str(source / "src/server.py")], env=env, cwd=temp)
             ids = {}
             with (Path(temp) / "stderr.log").open("w", encoding="utf-8") as log:
-                async with asyncio.timeout(120):
+                async with asyncio.timeout(600 if vector_gate else 120):
                     async with stdio_client(params, errlog=log) as (read, write):
                         async with ClientSession(read, write) as session:
                             await session.initialize()
-                            result_text(await session.call_tool("breath", {}))
+                            result_text(await call(session, "breath", {}))
                             for key, title, quote, body, keywords, feel in FACTS:
                                 parent = ""
                                 if feel:
@@ -120,12 +168,12 @@ class OmbreCompatibility(unittest.TestCase):
                                     # for feel=True. Keep that source linguistically
                                     # distinct, so a source hit cannot count as an
                                     # emotional bucket hit.
-                                    original = result_text(await session.call_tool("hold", {
+                                    original = result_text(await call(session, "hold", {
                                         "content": quote, "title": "Source " + title,
                                         "source_content": "user: " + quote,
                                     }))
                                     parent = re.search(r"新建→([a-f0-9]{12})", original).group(1)
-                                text = result_text(await session.call_tool("hold", {
+                                text = result_text(await call(session, "hold", {
                                     "title": title, "content": body + "\n检索词：" + keywords,
                                     "feel": feel, "quotes": [{"text": quote, "speaker": "user"}],
                                     "source_bucket": parent,
@@ -143,17 +191,23 @@ class OmbreCompatibility(unittest.TestCase):
                             # First search starts upstream's background BM25 build.
                             # Wait for this tiny fixture index, then measure warm
                             # retrieval so cold start cannot explain missed hits.
-                            result_text(await session.call_tool("breath_search", {
+                            result_text(await call(session, "breath_search", {
                                 "query": "warmup", "mode": "automatic", "with_ids": True,
                                 "max_results": 3}))
                             await asyncio.sleep(3)
                             results = []
                             for category, query, expected in CASES:
-                                text = result_text(await session.call_tool("breath_search", {
+                                text = result_text(await call(session, "breath_search", {
                                     "query": query, "mode": "automatic", "with_ids": True,
                                     "max_results": 3,
                                 }))
                                 hits = hit_ids(text)
+                                if vector_gate:
+                                    emotional = result_text(await call(session, "feel", {"query": query}))
+                                    feel_hits = re.findall(r"\[bucket_id:([\w-]+)\]", emotional)
+                                    hits = list(dict.fromkeys(hits[:1] + feel_hits[:1] + hits[1:] + feel_hits[1:]))[:3]
+                                    if "降级" in text + emotional:
+                                        print("记忆检索降级为关键词", flush=True)
                                 passed = ids[expected] in hits
                                 results.append(passed)
                                 print(json.dumps({"category": category, "query": query,
@@ -162,30 +216,38 @@ class OmbreCompatibility(unittest.TestCase):
                             for query, expected in [("interview", "interview"),
                                                     ("jasmine tea", "tea"),
                                                     ("pottery", "pottery")]:
-                                control = result_text(await session.call_tool("breath_search", {
+                                control = result_text(await call(session, "breath_search", {
                                     "query": query, "mode": "automatic", "with_ids": True,
                                     "max_results": 3}))
                                 self.assertIn(ids[expected], hit_ids(control))
-                            negative = result_text(await session.call_tool("breath_search", {
+                            negative = result_text(await call(session, "breath_search", {
                                 "query": "volcano submarine", "mode": "automatic",
                                 "with_ids": True, "max_results": 3}))
                             self.assertEqual([], hit_ids(negative))
+                            if vector_gate:
+                                negative_feel = result_text(await call(session, "feel", {
+                                    "query": "volcano submarine"}))
+                                self.assertNotRegex(negative_feel, r"\[bucket_id:")
                             # Native reversible suppression, with a lexical query rather
                             # than direct ID lookup (which follows a different policy).
-                            result_text(await session.call_tool("trace", {
+                            result_text(await call(session, "trace", {
                                 "bucket_id": ids["tea"], "dont_surface": 1}))
-                            hidden = result_text(await session.call_tool("breath_search", {
+                            hidden = result_text(await call(session, "breath_search", {
                                 "query": "jasmine tea", "mode": "automatic",
                                 "with_ids": True, "max_results": 3}))
                             self.assertNotIn(ids["tea"], hit_ids(hidden))
-                            result_text(await session.call_tool("trace", {
+                            result_text(await call(session, "trace", {
                                 "bucket_id": ids["tea"], "dont_surface": 0}))
-                            restored = result_text(await session.call_tool("breath_search", {
+                            restored = result_text(await call(session, "breath_search", {
                                 "query": "jasmine tea", "mode": "automatic",
                                 "with_ids": True, "max_results": 3}))
                             self.assertIn(ids["tea"], hit_ids(restored))
                             print(f"Recall@3: {sum(results)}/{len(results)}", flush=True)
-        self.assertTrue(all(results), "Ticket 005 recall gate failed")
+        if vector_gate:
+            self.assertGreaterEqual(sum(results), 9, "Ticket 005 vector recall gate failed")
+            self.assertTrue(all(results[-2:]), "Both emotional cases must be retrieved")
+        else:
+            self.assertTrue(all(results), "Ticket 005 recall gate failed")
 
 
 if __name__ == "__main__":
