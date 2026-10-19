@@ -27,6 +27,7 @@
 
 005d、005f 合并后由 lan 在 Windows 验收（005f：聊几轮后 /cost 多出记忆模型的估算费用，/memory 的记忆有主题标签）：聊一件带原因的事（例如喜欢某样东西的原因）几轮，看 /memory 是否更新原条目而不是新增、是否带原因。005c 的重启召回和隐藏不召回也仍待她验收。
 005c 已合并，仍待 lan 在 Windows 继续验收：重启后召回、隐藏的记忆不被召回，以及连续长聊不再报“太长”。工单 006（工具调用）已写好：`docs/tickets/006-tools.md`，lan 2026-10-19 让 Codex 去做；Claude 评审。
+工单 007（记忆改为 Peter 自主调用 Ombre 原生工具）已写好：`docs/tickets/007-ombre-native-memory.md`，只是准备，未实施；前提是 006 合并并经 lan 验收。
 
 ## 验收步骤（合并后，lan 在 Windows 上做）
 

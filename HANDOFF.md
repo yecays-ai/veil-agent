@@ -12,6 +12,7 @@
 ## 下一个窗口第一步
 
 等 lan 对 005c–005g 的验收反馈（验收单见项目文件 peter-companion/acceptance-005d-005g.md）；Codex 做 006 时，Claude 按 `pr-review` skill 评审。
+工单 007（记忆改为自主调用 Ombre 原生工具）已写入 `docs/tickets/007-ombre-native-memory.md`，未实施，等 006 验收后由 lan 决定。
 
 ## 接入结构和注意
 
