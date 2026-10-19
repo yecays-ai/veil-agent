@@ -102,30 +102,22 @@ class OmbreCompatibility(unittest.TestCase):
             sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
             from dotenv import dotenv_values
             from veil_agent import Budget, Store, ROOT
-            from decimal import Decimal
-            from types import SimpleNamespace
-            key = (dotenv_values(ROOT / ".env").get("EMBED_API_KEY") or "").strip()
+            key = (dotenv_values(ROOT / ".env", interpolate=False, encoding="utf-8-sig").get("EMBED_API_KEY") or "").strip()
             self.assertTrue(key, "EMBED_API_KEY is not configured locally")
             budget = Budget(Store(ROOT / "data"))
 
         async def call(session, name, args):
-            cfg = None
+            reservation = None
             if vector_gate and name in {"hold", "breath_search", "feel"}:
                 # Conservative UTF-8 bound, including upstream SDK's default
                 # initial attempt + two retries. Current official BAAI/bge-m3
                 # price is zero; never switch to Pro or another paid model.
                 tokens = 3 * (len(json.dumps(args, ensure_ascii=False).encode("utf-8")) + 1024)
-                cfg = SimpleNamespace(id="memory-validation", max_output_tokens=1,
-                    provider={"model": "BAAI/bge-m3 [estimated embedding gate]",
-                              "max_input_tokens": tokens,
-                              "input_cny_per_million": Decimal(0),
-                              "cached_input_cny_per_million": Decimal(0),
-                              "output_cny_per_million": Decimal(0)})
-                request_id, _ = budget.reserve(cfg)
+                reservation = budget.estimate("memory-validation", "BAAI/bge-m3", tokens, "0")
             result = await session.call_tool(name, args)
-            if cfg is not None:
+            if reservation is not None:
                 # This is estimated accounting, NOT supplier-reported token usage.
-                budget.settle(request_id, cfg, cfg.provider["max_input_tokens"], 0, 0)
+                budget.settle_estimate(reservation)
             return result
 
         source = Path(os.environ["OMBRE_SOURCE"]).resolve()

@@ -210,11 +210,13 @@ output_cny_per_million = "8"
             self.assertEqual(requests[0]['max_tokens'], 50)
             self.assertFalse(requests[0]['stream'])
             self.assertEqual(requests[0]['thinking'], {'type': 'disabled'})
+            model([{'role': 'user', 'content': 'Return JSON'}], json_output=True)
+            self.assertEqual(requests[1]['response_format'], {'type': 'json_object'})
             fail.append(True)
             with self.assertRaises(UserError) as result:
                 chat.send('not retried')
             self.assertNotIn('secret', str(result.exception))
-        self.assertEqual(len(requests), 2)
+        self.assertEqual(len(requests), 3)
 
     def test_system_environment_key_is_not_used(self):
         with patch.dict('os.environ', {'FAKE_KEY': 'fake-env-only'}):

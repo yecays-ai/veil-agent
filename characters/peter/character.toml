@@ -26,3 +26,12 @@ max_input_tokens = 32768
 input_cny_per_million = "4"
 cached_input_cny_per_million = "1"
 output_cny_per_million = "16"
+
+[memory]
+enabled = true
+model = "BAAI/bge-m3"
+base_url = "https://api.siliconflow.cn/v1"
+dimensions = 1024
+# Official price checked 2026-10-19: https://siliconflow.cn/pricing
+# This is the free model, NOT Pro/BAAI/bge-m3. Update together when switching.
+input_cny_per_million = "0"

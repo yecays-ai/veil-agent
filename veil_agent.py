@@ -7,6 +7,8 @@ import signal
 import sys
 import tomllib
 import uuid
+import threading
+from functools import wraps
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -15,6 +17,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 MILLION = Decimal(1_000_000)
+
+
+def synchronized(fn):
+    @wraps(fn)
+    def locked(self, *args, **kwargs):
+        with self.mutex:
+            return fn(self, *args, **kwargs)
+    return locked
 
 
 class UserError(Exception):
@@ -40,9 +50,11 @@ def saving():
 
 class Store:
     def __init__(self, root):
+        self.mutex = threading.RLock()
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
 
+    @synchronized
     def read(self, name):
         path = self.root / name
         if not path.exists():
@@ -53,6 +65,7 @@ class Store:
         except (ValueError, UnicodeError) as exc:
             raise UserError('本机账本损坏，已停止；请保留 data 文件夹，不要删除记录。') from exc
 
+    @synchronized
     def append(self, name, event):
         path = self.root / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -105,6 +118,7 @@ class Character:
     max_output_tokens: int
     provider: dict
     provider_name: str
+    memory: dict = None
 
 
 def positive_int(value):
@@ -149,7 +163,7 @@ def load_character(root, character_id):
         provider['max_input_tokens'] = positive_int(provider['max_input_tokens'])
         return Character(character_id, str(cfg['name']), persona,
                          positive_int(cfg.get('history_rounds', 20)),
-                         positive_int(cfg.get('max_output_tokens', 1024)), provider, cfg['provider'])
+                         positive_int(cfg.get('max_output_tokens', 1024)), provider, cfg['provider'], cfg.get('memory'))
     except UserError:
         raise
     except (OSError, KeyError, ValueError, TypeError, ArithmeticError) as exc:
@@ -158,8 +172,10 @@ def load_character(root, character_id):
 
 class Budget:
     def __init__(self, store, daily=Decimal('10'), monthly=Decimal('300'), clock=now):
+        self.mutex = threading.RLock()
         self.store, self.daily, self.monthly, self.clock = store, daily, monthly, clock
 
+    @synchronized
     def totals(self, stamp=None):
         stamp = stamp or self.clock()
         reservations, settlements = {}, {}
@@ -189,6 +205,7 @@ class Budget:
         except (KeyError, ValueError, TypeError, ArithmeticError) as exc:
             raise UserError('花费账本无法核对，已停止；请保留 data 文件夹。') from exc
 
+    @synchronized
     def reserve(self, cfg):
         p = cfg.provider
         amount = (p['max_input_tokens'] * p['input_cny_per_million']
@@ -202,6 +219,28 @@ class Budget:
                           'character': cfg.id, 'model': p['model']})
         return request_id, amount
 
+    @synchronized
+    def estimate(self, character, model, tokens, rate):
+        rate = Decimal(str(rate))
+        if type(tokens) is not int or tokens < 0 or not rate.is_finite() or rate < 0:
+            raise UserError('向量费用配置无效。')
+        amount = tokens * rate / MILLION
+        day, month, pending = self.totals()
+        if day + pending + amount > self.daily or month + pending + amount > self.monthly:
+            raise UserError('向量请求超过共享预算，未发送。')
+        request_id = uuid.uuid4().hex
+        self.store.append('costs.jsonl', {'type': 'reserve', 'id': request_id,
+            'period': self.clock(), 'amount': str(amount), 'character': character,
+            'model': model, 'accounting': 'embedding-estimate', 'estimated_tokens': tokens})
+        return request_id, amount
+
+    @synchronized
+    def settle_estimate(self, reservation):
+        request_id, amount = reservation
+        self.store.append('costs.jsonl', {'type': 'settle', 'id': request_id,
+            'amount': str(amount), 'accounting': 'embedding-estimate'})
+
+    @synchronized
     def settle(self, request_id, cfg, prompt, completion, cached):
         if any(type(n) is not int or n < 0 for n in (prompt, completion, cached)) or cached > prompt:
             raise UserError('接口未返回有效用量；本次保留预留费用。')
@@ -221,7 +260,7 @@ class Budget:
                 f'待核对预留 ¥{pending:.6f}')
 
 
-def build_self_description(cfg, budget):
+def build_self_description(cfg, budget, memory=False):
     # Keep the facts about implemented capabilities together as they evolve.
     stamp = budget.clock()
     local_time = datetime.fromisoformat(stamp)
@@ -235,7 +274,10 @@ def build_self_description(cfg, budget):
         f'Local time: {stamp} ({weekday}).\n'
         f'Available: terminal text chat; up to {cfg.history_rounds} recent rounds included verbatim '
         'per request; full chat logs saved locally.\n'
-        'You have no long-term memory; after restart you know only restored recent rounds. '
+        + ('Long-term memory: automatic saving every four completed rounds, automatic recall; '
+         'the user can list, suppress and restore memories with /memory, /forget, /restore. '
+         if memory else 'You have no long-term memory; after restart you know only restored recent rounds. ')
+        +
         'You have no tools (cannot open files/folders or run scripts). You have no voice. '
         'Unlisted abilities are unavailable. Do not invent memories, actions or tool results.\n'
         f'Pre-request ledger (CNY, excludes this reply): {budget.display(stamp)}\n'
@@ -244,11 +286,12 @@ def build_self_description(cfg, budget):
 
 
 class Chat:
-    def __init__(self, cfg, store, budget, model):
+    def __init__(self, cfg, store, budget, model, memory=None):
         self.cfg, self.store, self.budget, self.model = cfg, store, budget, model
         self.path = f'{cfg.id}/chat.jsonl'
         self.history, self.rounds = self.recent()
         self.last_self = None
+        self.memory = memory
 
     def recent(self):
         groups = []
@@ -268,9 +311,10 @@ class Chat:
         return [m for group in groups for m in group], sum(any(m['role'] == 'assistant' for m in g) for g in groups)
 
     def send(self, text):
-        description = build_self_description(self.cfg, self.budget)
+        recalled = self.memory.context(text) if self.memory else []
+        description = build_self_description(self.cfg, self.budget, bool(self.memory))
         messages = [{'role': 'system', 'content': self.cfg.persona},
-                    {'role': 'system', 'content': description}, *self.history,
+                    {'role': 'system', 'content': description}, *recalled, *self.history,
                     {'role': 'user', 'content': text}]
         # UTF-8 byte count is deliberately conservative, with ample chat framing
         # overhead. Reserve the entire configured input limit, not an average.
@@ -294,6 +338,8 @@ class Chat:
             self.store.append(self.path, {'role': 'assistant', 'content': reply, 'request_id': request_id})
             self.budget.settle(request_id, self.cfg, prompt, completion, cached)
         self.history, self.rounds = self.recent()
+        if self.memory:
+            self.memory.completed()
         return reply
 
 
@@ -307,10 +353,12 @@ def make_model(root, cfg):
         raise UserError('本机 .env 缺少所选接口的 API Key，请按 README 填写。')
     client = OpenAI(api_key=key, base_url=cfg.provider['base_url'], max_retries=0, timeout=60)
 
-    def call(messages):
+    def call(messages, *, json_output=False):
         extra = {}
         if cfg.provider.get('thinking') == 'disabled':
             extra['extra_body'] = {'thinking': {'type': 'disabled'}}
+        if json_output:
+            extra['response_format'] = {'type': 'json_object'}
         response = client.chat.completions.create(model=cfg.provider['model'], messages=messages,
                                                   max_tokens=cfg.max_output_tokens, stream=False, **extra)
         usage = response.usage
@@ -343,6 +391,9 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead):
     output(f'接上了 {chat.rounds} 轮。输入 /cost 查花费，/self 看当前说明，/quit 退出。')
     try:
         while True:
+            if chat.memory:
+                for notice in chat.memory.notices():
+                    output(notice)
             text = input_fn('你: ').strip()
             if text == '/quit':
                 break
@@ -351,9 +402,14 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead):
             elif text == '/self':
                 if chat.last_self is None:
                     output('（尚未发送消息：这是当前说明的预览，发送前会刷新。）')
-                    output(build_self_description(chat.cfg, chat.budget))
+                    output(build_self_description(chat.cfg, chat.budget, bool(chat.memory)))
                 else:
                     output(chat.last_self)
+            elif text == '/memory' or text.startswith(('/forget ', '/restore ')):
+                if chat.memory:
+                    output(chat.memory.command(text))
+                else:
+                    output('当前没有接入长期记忆。')
             elif text:
                 # Storage and accounting errors stop the session rather than
                 # permitting a subsequent request on uncertain local state.
@@ -382,7 +438,15 @@ def main():
             cfg = load_character(ROOT, args.character)
             client, model = make_model(ROOT, cfg)
             with client:
-                run_chat(Chat(cfg, store, budget, model))
+                if cfg.memory and cfg.memory.get('enabled'):
+                    from memory_agent import Memory, open_ombre
+                    with open_ombre(ROOT, cfg) as backend:
+                        with Memory(cfg, store, budget, model, backend) as memory:
+                            run_chat(Chat(cfg, store, budget, model, memory))
+                        for notice in memory.notices():
+                            print(notice)
+                else:
+                    run_chat(Chat(cfg, store, budget, model))
         return 0
     except UserError as exc:
         print(str(exc))
@@ -397,4 +461,5 @@ def main():
 
 
 if __name__ == '__main__':
+    sys.modules.setdefault('veil_agent', sys.modules[__name__])
     raise SystemExit(main())
