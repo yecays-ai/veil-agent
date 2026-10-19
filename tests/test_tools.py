@@ -366,10 +366,11 @@ max_result_bytes = 200
         first = self.message([self.tool_call('read_text_file', '{"path":"test.txt"}', 'read')])
         final = self.message(content='The file has test data.')
         requests = []
-        responses = [(first, 100, 20, 0), (final, 120, 20, 0)]
+        responses = [first, final]
         def model(messages, **_kwargs):
             requests.append(json.loads(json.dumps(messages)))
-            return responses[len(requests) - 1]
+            # Report a prompt size that matches the request, as a real provider would.
+            return responses[len(requests) - 1], len(json.dumps(messages, ensure_ascii=False).encode('utf-8')), 20, 0
         tools = Mock()
         tools.tools = [SimpleNamespace(name='read_text_file', description='Read', inputSchema={})]
         tools.capability_event = None
