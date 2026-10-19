@@ -6,6 +6,14 @@ set PYTHONUTF8=1
 if not exist ".local-tmp" mkdir ".local-tmp"
 set "TEMP=%CD%\.local-tmp"
 set "TMP=%TEMP%"
+where node >nul 2>&1
+if errorlevel 1 goto no_node
+where npx >nul 2>&1
+if errorlevel 1 goto no_node
+goto node_checked
+:no_node
+echo Node.js LTS with npm/npx not found. Peter will chat normally without file tools; install Node.js LTS to enable them.
+:node_checked
 if exist ".venv\Scripts\python.exe" goto install
 py -3 -c "import sys; assert sys.version_info >= (3, 11)" >nul 2>&1
 if errorlevel 1 goto no_python

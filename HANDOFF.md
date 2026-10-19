@@ -4,6 +4,9 @@
 
 ## 上一位停在哪
 
+- main 已快进到 `54eaf84`；工单 006 已开始，当前在 `ticket/006-tools`。实现已接入工具循环、filesystem MCP 1.0.0、权限与路径闸门、逐步预算、工具侧车日志、能力清单及文档。离线套件通过；Codex 环境能找到 Node 但找不到 npx，因此真实服务器和 Windows 联接点验收未跑。
+- 当前余项：完成最终代码/差异复核和全套件，提交并 push，开 PR，按 `.agents/skills/pr-review/SKILL.md` 处理评审与 CI。不要把 `characters/peter/character.toml` 的本机 `thinking="enabled"` 试验提交；这是 lan 的本地设置。本分支新增的 `[tools]` 配置需提交。
+- PR 合并后让 lan 按 `STATUS.md` 验收：目录读取、同意/拒绝新建、既有文件绝不覆盖、目录外拒绝、重启后的能力与记忆说明。DeepSeek 思考模式和真实聊天效果仍需她体验。
 - 005 / 005b 已合并（main 5971317）。lan 验收：自动保存、/memory、/forget、/restore 通过；随后聊久了出现“上下文太长”并退出。Claude 在 `ticket/005c-long-context` 修复：超出时只丢这次请求里最旧的整轮原文并提示一次；输入本身太长才拒绝，不退出。
 - 005c 已合并（main 83b19f8）。lan 验收反馈记忆质量差；Claude 在 `ticket/005d-memory-quality` 把 veil 仓库的维护提示词设计移植到提取层（见 docs/tickets/005d-memory-quality.md）。
 - 005d、005f、005g 已合并；AGENTS.md 产品理念（八条）已由 lan 确认。下一张工单 006（工具调用）已写好 `docs/tickets/006-tools.md`，由 Codex 实现，Claude 评审。
@@ -11,7 +14,7 @@
 
 ## 下一个窗口第一步
 
-等 lan 对 005c–005g 的验收反馈（验收单见项目文件 peter-companion/acceptance-005d-005g.md）；Codex 做 006 时，Claude 按 `pr-review` skill 评审。
+先检查 `ticket/006-tools` 的完整 diff 与 `git status`，确认个人 `thinking="enabled"` 差异未被暂存；再重跑离线套件。随后按 ticket / pr-review 流程 push 并提交 PR，等待评审和 CI。lan 仍待验收 005c–005g。
 
 ## 接入结构和注意
 

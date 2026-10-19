@@ -101,6 +101,24 @@ class MemoryTests(unittest.TestCase):
         self.assertTrue(any(c.get('accounting') == 'ombre-model-estimate' for c in costs))
         self.assertEqual(self.budget.totals()[2], 0)
 
+    def test_tool_summaries_reach_memory_without_file_contents(self):
+        for i in range(4):
+            request_id = f'request-{i}'
+            self.store.append('fake/chat.jsonl', {'role': 'user', 'content': f'fact {i}',
+                                                  'request_id': request_id})
+            self.store.append('fake/chat.jsonl', {'role': 'assistant', 'content': f'reply {i}',
+                                                  'request_id': request_id})
+        self.store.append('fake/tools.jsonl', {'request_id': 'request-0', 'kind': 'capability',
+            'text': '你的能力有变化：可读 workspace。'})
+        self.store.append('fake/tools.jsonl', {'request_id': 'request-0', 'tool': 'read_text_file',
+            'path': 'notes.txt', 'state': '成功'})
+        self.memory.supplement()
+        raw = json.loads(self.model.call_args.args[0][1]['content'])['batches'][0]
+        self.assertEqual(raw['tool_events'], ['你的能力有变化：可读 workspace。', 'read_text_file：notes.txt（成功）'])
+        self.assertIn('回复正文未提供给补记', raw['turns'][0][1]['content'])
+        self.assertNotEqual(raw['turns'][0][1]['content'], 'reply 0')
+        self.assertNotIn('file body', json.dumps(raw, ensure_ascii=False))
+
     def test_extractor_sees_existing_memories_but_not_hidden_ones(self):
         self.turns(4)
         self.memory.supplement()

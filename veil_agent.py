@@ -35,6 +35,10 @@ class TooLong(UserError):
     """Nothing was saved or sent; the session can carry on."""
 
 
+class BudgetExceeded(UserError):
+    """A request was refused before sending because of the configured limit."""
+
+
 def now():
     return datetime.now().astimezone().isoformat()
 
@@ -123,6 +127,7 @@ class Character:
     provider: dict
     provider_name: str
     memory: dict = None
+    tools: dict = None
 
 
 def positive_int(value):
@@ -165,9 +170,25 @@ def load_character(root, character_id):
         if provider['cached_input_cny_per_million'] > provider['input_cny_per_million']:
             raise ValueError('cached rate exceeds regular rate')
         provider['max_input_tokens'] = positive_int(provider['max_input_tokens'])
+        tools = dict(cfg.get('tools', {}))
+        if tools:
+            enabled = tools.get('enabled', True)
+            if type(enabled) is not bool:
+                raise ValueError('tools.enabled must be boolean')
+            tools = {
+                'enabled': enabled,
+                'folder': str(tools.get('folder', f'data/{character_id}/workspace')),
+                'max_steps': positive_int(tools.get('max_steps', 6)),
+                'max_result_bytes': positive_int(tools.get('max_result_bytes', 8192)),
+            }
+            if tools['max_steps'] < 2:
+                raise ValueError('tools.max_steps must allow a tool call and a final response')
+            folder = Path(tools['folder'])
+            if folder.is_absolute() or '..' in folder.parts:
+                raise ValueError('tools folder must be a safe relative path')
         return Character(character_id, str(cfg['name']), persona,
                          positive_int(cfg.get('history_rounds', 20)),
-                         positive_int(cfg.get('max_output_tokens', 1024)), provider, cfg['provider'], cfg.get('memory'))
+                         positive_int(cfg.get('max_output_tokens', 1024)), provider, cfg['provider'], cfg.get('memory'), tools)
     except UserError:
         raise
     except (OSError, KeyError, ValueError, TypeError, ArithmeticError) as exc:
@@ -216,7 +237,7 @@ class Budget:
                   + cfg.max_output_tokens * p['output_cny_per_million']) / MILLION
         day, month, pending = self.totals()
         if day + pending + amount > self.daily or month + pending + amount > self.monthly:
-            raise UserError('本次费用上限会超过 ¥10/天或 ¥300/月，未发送。输入 /cost 查看。')
+            raise BudgetExceeded('本次费用上限会超过 ¥10/天或 ¥300/月，未发送。输入 /cost 查看。')
         request_id = uuid.uuid4().hex
         self.store.append('costs.jsonl', {'type': 'reserve', 'id': request_id,
                           'period': self.clock(), 'amount': str(amount),
@@ -282,7 +303,7 @@ class Budget:
                 f'待核对预留 ¥{pending:.6f}')
 
 
-def build_self_description(cfg, budget, memory=False):
+def build_self_description(cfg, budget, memory=False, capabilities=None):
     # Keep the facts about implemented capabilities together as they evolve.
     stamp = budget.clock()
     local_time = datetime.fromisoformat(stamp)
@@ -300,7 +321,12 @@ def build_self_description(cfg, budget, memory=False):
          'the user can list, suppress, restore and delete memories with /memory, /forget, /restore, /delete. '
          if memory else 'You have no long-term memory; after restart you know only restored recent rounds. ')
         +
-        'You have no tools (cannot open files/folders or run scripts). You have no voice. '
+        ((capabilities.description if isinstance(getattr(capabilities, 'description', None), str)
+          else 'Tools are currently unavailable. ') if capabilities else
+         ('You have no tools (cannot open files/folders or run scripts). '
+          if not cfg.tools or not cfg.tools.get('enabled', True)
+          else 'Tools are currently unavailable. '))
+        + 'You have no voice. '
         'Unlisted abilities are unavailable. Do not invent memories, actions or tool results.\n'
         f'Pre-request ledger (CNY, excludes this reply): {budget.display(stamp)}\n'
         'Quote its cutoff when asked about spending; /cost includes new usage after this reply.'
@@ -308,7 +334,7 @@ def build_self_description(cfg, budget, memory=False):
 
 
 class Chat:
-    def __init__(self, cfg, store, budget, model, memory=None):
+    def __init__(self, cfg, store, budget, model, memory=None, tools=None, approval=input, output=print):
         self.cfg, self.store, self.budget, self.model = cfg, store, budget, model
         self.path = f'{cfg.id}/chat.jsonl'
         self.history, self.rounds = self.recent()
@@ -316,6 +342,8 @@ class Chat:
         self.trim_note = None
         self.trim_noted = False
         self.memory = memory
+        self.tools, self.approval, self.output = tools, approval, output
+        self.pending_capability_event = tools.capability_event if tools else None
 
     def recent(self):
         groups = []
@@ -336,14 +364,19 @@ class Chat:
 
     def send(self, text):
         recalled = self.memory.context(text) if self.memory else []
-        description = build_self_description(self.cfg, self.budget, bool(self.memory))
+        description = build_self_description(self.cfg, self.budget, bool(self.memory), self.tools)
         head = [{'role': 'system', 'content': self.cfg.persona},
                 {'role': 'system', 'content': description}, *recalled]
         user = {'role': 'user', 'content': text}
+        tool_schema = []
+        if self.tools and self.tools.tools and self.cfg.tools['max_steps'] > 1:
+            from tools_agent import permitted_tools
+            tool_schema = permitted_tools(self.tools.tools)
         # UTF-8 byte count is deliberately conservative, with ample chat framing
         # overhead. Reserve the entire configured input limit, not an average.
         def bound(history):
-            return sum(len(m['content'].encode('utf-8')) + 256 for m in [*head, *history, user]) + 256
+            return (sum(len(m['content'].encode('utf-8')) + 256 for m in [*head, *history, user])
+                    + len(json.dumps(tool_schema, ensure_ascii=False).encode('utf-8')) + 256)
         limit = self.cfg.provider['max_input_tokens']
         history = list(self.history)
         # Long replies make the window outgrow the limit. Drop the oldest whole
@@ -361,13 +394,27 @@ class Chat:
             self.trim_note = (f'（为了不超出长度上限，这次只带了最近 {kept} 轮原文；'
                               '更早的聊天仍保存在本机，长期记忆不受影响。）')
         messages = [*head, *history, user]
+        if self.pending_capability_event:
+            messages.insert(2, {'role': 'system', 'content':
+                '（程序生成的能力变化记录）' + self.pending_capability_event})
+        tool_summaries = []
         with saving():
             request_id, _ = self.budget.reserve(self.cfg)
             self.store.append(self.path, {'role': 'user', 'content': text, 'request_id': request_id})
+            if self.pending_capability_event:
+                self.store.append(f'{self.cfg.id}/tools.jsonl', {'request_id': request_id,
+                    'kind': 'capability', 'text': self.pending_capability_event})
+                self.tools.consume_capability_event()
+                self.pending_capability_event = None
         try:
             self.last_self = description
-            reply, prompt, completion, cached = self.model(messages)
+            if self.tools and self.tools.tools:
+                reply, tool_summaries = self._tool_chat(messages, request_id)
+            else:
+                reply, prompt, completion, cached = self.model(messages)
         except (KeyboardInterrupt, EOFError):
+            raise
+        except TooLong:
             raise
         except Exception as exc:
             # Provider errors may contain credentials, URLs or private prompts.
@@ -376,11 +423,98 @@ class Chat:
             if not isinstance(reply, str) or not reply.strip():
                 raise UserError('接口没有返回文字回复；本次保留预留费用。')
             self.store.append(self.path, {'role': 'assistant', 'content': reply, 'request_id': request_id})
-            self.budget.settle(request_id, self.cfg, prompt, completion, cached)
+            if not (self.tools and self.tools.tools):
+                self.budget.settle(request_id, self.cfg, prompt, completion, cached)
         self.history, self.rounds = self.recent()
         if self.memory:
             self.memory.completed()
         return reply
+
+    def _tool_chat(self, messages, request_id):
+        from tools_agent import display_call, permitted_tools
+        summaries = []
+        loop_messages = list(messages)
+        final = ''
+        next_reservation = None
+        for step in range(self.cfg.tools['max_steps']):
+            offered = None if step == self.cfg.tools['max_steps'] - 1 else permitted_tools(self.tools.tools)
+            bound = (sum(len((m.get('content') or '').encode('utf-8')) + 256 for m in loop_messages)
+                     + len(json.dumps(offered or [], ensure_ascii=False).encode('utf-8')) + 256)
+            if bound > self.cfg.provider['max_input_tokens']:
+                if step == 0:
+                    self.budget.settle(request_id, self.cfg, 0, 0, 0)
+                    raise TooLong('工具说明和本轮上下文超过长度上限，未调用工具；请缩短输入后再试。')
+                if next_reservation:
+                    self.budget.settle(next_reservation, self.cfg, 0, 0, 0)
+                break
+            reservation = request_id if step == 0 else next_reservation
+            try:
+                response = self.model(loop_messages, tools=offered)
+            except Exception:
+                raise
+            message, prompt, completion, cached = response
+            self.budget.settle(reservation, self.cfg, prompt, completion, cached)
+            if not message.tool_calls:
+                final = message.content or ''
+                if step == self.cfg.tools['max_steps'] - 1 and summaries:
+                    self.output('这次工具步骤用完了。')
+                break
+            if offered is None:
+                final = '这次工具步骤用完了。'
+                self.output(final)
+                break
+            try:
+                next_reservation = self.budget.reserve(self.cfg)[0]
+            except BudgetExceeded:
+                for call in message.tool_calls:
+                    try:
+                        args = json.loads(call.function.arguments)
+                        summary = self.tools.preview_summary(call.function.name, args)
+                    except (ValueError, TypeError):
+                        summary = call.function.name
+                    self.output(display_call(call.function.name, summary, '被拒绝'))
+                    self.store.append(f'{self.cfg.id}/tools.jsonl', {'request_id': request_id,
+                        'tool': call.function.name, 'path': summary, 'state': '被拒绝'})
+                self.output('这次工具步骤用完了。继续整理会超过当前费用上限。')
+                final = '这次工具步骤用完了。'
+                break
+            try:
+                assistant_record = message.model_dump(exclude_none=True)
+                reasoning = getattr(message, 'reasoning_content', None)
+                if reasoning is not None:
+                    assistant_record['reasoning_content'] = reasoning
+                loop_messages.append(assistant_record)
+                next_offered = (None if step + 1 == self.cfg.tools['max_steps'] - 1
+                                else permitted_tools(self.tools.tools))
+                projected = (sum(len((m.get('content') or '').encode('utf-8')) + 256 for m in loop_messages)
+                             + len(json.dumps(next_offered or [], ensure_ascii=False).encode('utf-8')) + 256
+                             + len(json.dumps(assistant_record, ensure_ascii=False).encode('utf-8'))
+                             + len(message.tool_calls) * (self.cfg.tools['max_result_bytes'] + 512))
+                over_bound = projected > self.cfg.provider['max_input_tokens']
+                for call in message.tool_calls:
+                    try:
+                        args = json.loads(call.function.arguments)
+                        if not isinstance(args, dict):
+                            raise ValueError('arguments must be an object')
+                        if over_bound:
+                            result, state, summary = ('程序未执行：工具结果可能使请求超过长度上限。',
+                                                      '被拒绝', self.tools.preview_summary(call.function.name, args))
+                        else:
+                            result, state, summary = self.tools.invoke(call.function.name, args, self.approval)
+                    except (ValueError, TypeError):
+                        result, state, summary = '程序拒绝：工具参数不是合法 JSON 对象。', '被拒绝', call.function.name
+                    self.output(display_call(call.function.name, summary, state))
+                    summaries.append({'tool': call.function.name, 'path': summary, 'state': state})
+                    self.store.append(f'{self.cfg.id}/tools.jsonl', {'request_id': request_id,
+                        'tool': call.function.name, 'path': summary, 'state': state})
+                    loop_messages.append({'role': 'tool', 'tool_call_id': call.id, 'content': result})
+            except BaseException:
+                self.budget.settle(next_reservation, self.cfg, 0, 0, 0)
+                raise
+        if not final:
+            final = '这次工具步骤用完了。'
+            self.output(final)
+        return final, summaries
 
 
 def make_model(root, cfg):
@@ -393,15 +527,17 @@ def make_model(root, cfg):
         raise UserError('本机 .env 缺少所选接口的 API Key，请按 README 填写。')
     client = OpenAI(api_key=key, base_url=cfg.provider['base_url'], max_retries=0, timeout=60)
 
-    def call(messages, *, json_output=False, max_tokens=None, thinking=None, detail=False):
+    def call(messages, *, json_output=False, max_tokens=None, thinking=None, detail=False, tools=None):
         extra = {}
         if (thinking or cfg.provider.get('thinking')) == 'disabled':
             extra['extra_body'] = {'thinking': {'type': 'disabled'}}
         if json_output:
             extra['response_format'] = {'type': 'json_object'}
-        response = client.chat.completions.create(model=cfg.provider['model'], messages=messages,
-                                                  max_tokens=max_tokens or cfg.max_output_tokens,
-                                                  stream=False, **extra)
+        request = {'model': cfg.provider['model'], 'messages': messages,
+                   'max_tokens': max_tokens or cfg.max_output_tokens, 'stream': False, **extra}
+        if tools is not None:
+            request['tools'] = tools
+        response = client.chat.completions.create(**request)
         usage = response.usage
         if usage is None:
             raise UserError('接口未返回用量；本次保留预留费用。')
@@ -410,6 +546,13 @@ def make_model(root, cfg):
         if cached is None:
             cached = getattr(details, 'cached_tokens', 0) or 0
         choice = response.choices[0]
+        if tools is not None:
+            message = choice.message.model_dump(exclude_none=True)
+            reasoning = getattr(choice.message, 'reasoning_content', None)
+            if reasoning is not None:
+                message['reasoning_content'] = reasoning
+            # Keep raw OpenAI-shaped message object for the tool loop.
+            return (choice.message, usage.prompt_tokens, usage.completion_tokens, cached)
         result = (choice.message.content, usage.prompt_tokens, usage.completion_tokens, cached)
         return result + (choice.finish_reason,) if detail else result
 
@@ -432,6 +575,8 @@ def drop_typeahead():
 
 def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead):
     output(f'接上了 {chat.rounds} 轮。输入 /cost 查花费，/self 看当前说明，/quit 退出。')
+    if getattr(chat.tools, 'startup_notice', None):
+        output(chat.tools.startup_notice)
     try:
         while True:
             if chat.memory:
@@ -488,15 +633,17 @@ def main():
             cfg = load_character(ROOT, args.character)
             client, model = make_model(ROOT, cfg)
             with client:
-                if cfg.memory and cfg.memory.get('enabled'):
-                    from memory_agent import Memory, open_ombre
-                    with open_ombre(ROOT, cfg) as backend:
-                        with Memory(cfg, store, budget, model, backend) as memory:
-                            run_chat(Chat(cfg, store, budget, model, memory))
-                        for notice in memory.notices():
-                            print(notice)
-                else:
-                    run_chat(Chat(cfg, store, budget, model))
+                from tools_agent import FilesystemTools
+                with FilesystemTools(ROOT, cfg, store) as tools:
+                    if cfg.memory and cfg.memory.get('enabled'):
+                        from memory_agent import Memory, open_ombre
+                        with open_ombre(ROOT, cfg) as backend:
+                            with Memory(cfg, store, budget, model, backend) as memory:
+                                run_chat(Chat(cfg, store, budget, model, memory, tools))
+                            for notice in memory.notices():
+                                print(notice)
+                    else:
+                        run_chat(Chat(cfg, store, budget, model, tools=tools))
         return 0
     except UserError as exc:
         print(str(exc))

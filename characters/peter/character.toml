@@ -37,3 +37,9 @@ dimensions = 1024
 # Official price checked 2026-10-19: https://siliconflow.cn/pricing
 # This is the free model, NOT Pro/BAAI/bge-m3. Update together when switching.
 input_cny_per_million = "0"
+
+[tools]
+enabled = true
+folder = "data/peter/workspace"
+max_steps = 6
+max_result_bytes = 8192
