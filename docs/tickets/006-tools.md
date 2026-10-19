@@ -24,7 +24,7 @@ lan 对 Peter 说“看看测试文件夹里有什么”“读一下那份文件
 
 - **工具循环自己写，约 100 行**，不引入 agent 框架：预算预留/结算、人设、记忆注入、DeepSeek 接口都已有。流程：预留预算 → 带 `tools` 调 `chat.completions.create` → 结算 → 若返回 `tool_calls`，过权限闸门，用 MCP `session.call_tool` 执行，把 `tool` 消息追加回去再循环；回复是普通文本或到 `max_steps` 就停。
 - **本地文件工具复用官方 filesystem MCP server**（`@modelcontextprotocol/server-filesystem`，Node，已读它的路径校验：限定目录、真实路径二次校验挡符号链接）。我们已依赖 `mcp` SDK 的 `ClientSession`（Ombre 就是这么接的）。
-- 重新核实了官方 `src/filesystem/lib.ts` 的 `validatePath` / `resolveUnicodeEquivalentPath` 和 `src/filesystem/index.ts` 的启动入口，以及 `package.json` 的固定版本 `1.0.0`；源码在执行前检查允许目录、解析真实路径并拒绝越界符号链接。官方 README 明确 Windows 用 `cmd /c npx` 启动。决定仍是直接复用，不复制上游代码；应用层另做路径检查。上游 `write_file` 会覆盖目标，因此权限闸门改用 Python 独占新建，确保文件已存在时系统调用也拒绝。当前 Codex 环境没有 `npx`，未能实跑 Windows MCP 子进程。
+- 重新核实了官方 `src/filesystem/lib.ts` 的 `validatePath` / `resolveUnicodeEquivalentPath` 和 `src/filesystem/index.ts` 的启动入口，以及 `package.json` 的固定版本 `1.0.0`；源码在执行前检查允许目录、解析真实路径并拒绝越界符号链接。官方 README 明确 Windows 用 `cmd /c npx` 启动。决定仍是直接复用，不复制上游代码；应用层另做路径检查。上游 `write_file` 会覆盖目标，因此权限闸门改用 Python 独占新建，确保文件已存在时系统调用也拒绝。当前 Codex 本机环境没有 `npx`；GitHub Windows Python 3.11/3.12 CI 已实跑 MCP 子进程与假文件读取。
 - **权限闸门自己写**。MCP 的 `readOnlyHint` / `destructiveHint` 只是建议，不能信；按**工具名白名单**。
 - 动手前按 `reuse-first` 再查一遍；发现 Windows 上跑不起来或要改它的代码，先停下在 PR 里说明，不要硬改。
 - 需要 Node：lan 的电脑要多装一个 Node（LTS）。`setup.bat` 检测不到就提示一行安装方法，不自动装；Node 没装时 Peter 照常聊天，只是没有工具，屏幕提示一行。
