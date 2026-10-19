@@ -42,6 +42,7 @@ dimensions = 1024
 input_cny_per_million = "0"
 
 [tools]
+max_output_tokens = 4096
 enabled = true
 folder = "data/peter/workspace"
 max_steps = 6

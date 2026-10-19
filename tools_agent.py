@@ -85,8 +85,9 @@ def _summary(root, path):
         return path.name or 'workspace'
 
 
-def display_call(name, summary, state):
-    return f'🔧 Peter 用了 {name}：{summary}（{state}）'
+def display_call(name, summary, state, reason=None):
+    line = f'🔧 Peter 用了 {name}：{summary}（{state}）'
+    return f'{line}：{reason}' if reason else line
 
 
 class FilesystemTools:

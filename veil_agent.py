@@ -6,6 +6,7 @@ import re
 import signal
 import sys
 import tomllib
+from dataclasses import replace
 import uuid
 import threading
 from functools import wraps
@@ -180,6 +181,7 @@ def load_character(root, character_id):
                 'folder': str(tools.get('folder', f'data/{character_id}/workspace')),
                 'max_steps': positive_int(tools.get('max_steps', 6)),
                 'max_result_bytes': positive_int(tools.get('max_result_bytes', 8192)),
+                'max_output_tokens': positive_int(tools.get('max_output_tokens', cfg.get('max_output_tokens', 1024))),
             }
             if tools['max_steps'] < 2:
                 raise ValueError('tools.max_steps must allow a tool call and a final response')
@@ -410,7 +412,9 @@ class Chat:
                 '（程序生成的能力变化记录）' + self.pending_capability_event})
         tool_summaries = []
         with saving():
-            request_id, _ = self.budget.reserve(self.cfg)
+            tool_cfg = (replace(self.cfg, max_output_tokens=self.cfg.tools.get('max_output_tokens', self.cfg.max_output_tokens))
+                        if self.tools and self.tools.tools else self.cfg)
+            request_id, _ = self.budget.reserve(tool_cfg)
             self.store.append(self.path, {'role': 'user', 'content': text, 'request_id': request_id})
             if self.pending_capability_event:
                 self.store.append(f'{self.cfg.id}/tools.jsonl', {'request_id': request_id,
@@ -482,24 +486,30 @@ class Chat:
 
         for step in range(self.cfg.tools['max_steps']):
             offered = None if step == self.cfg.tools['max_steps'] - 1 else permitted_tools(self.tools.tools)
+            step_cfg = replace(self.cfg, max_output_tokens=self.cfg.tools.get('max_output_tokens', self.cfg.max_output_tokens)) if offered is not None else self.cfg
             fit_history(offered)
             if request_size(offered) > self.cfg.provider['max_input_tokens']:
                 if step == 0:
-                    self.budget.settle(request_id, self.cfg, 0, 0, 0)
+                    self.budget.settle(request_id, step_cfg, 0, 0, 0)
                     raise TooLong('工具说明和本轮上下文超过长度上限，未调用工具；请缩短输入后再试。')
                 if next_reservation:
-                    self.budget.settle(next_reservation, self.cfg, 0, 0, 0)
+                    self.budget.settle(next_reservation, step_cfg, 0, 0, 0)
                 break
             reservation = request_id if step == 0 else next_reservation
             sent_bytes = sum(message_bytes(m) for m in loop_messages) + schema_bytes(offered)
             try:
-                response = self.model(loop_messages, tools=offered, message_output=True)
+                response = self.model(loop_messages, tools=offered, message_output=True,
+                                      max_tokens=step_cfg.max_output_tokens, detail=True)
             except Exception:
                 raise
-            message, prompt, completion, cached = response
+            message, prompt, completion, cached, *finish = response
             if isinstance(prompt, int) and prompt > 0:
                 calibration = max(0.5, min(1.0, prompt / sent_bytes))
-            self.budget.settle(reservation, self.cfg, prompt, completion, cached)
+            self.budget.settle(reservation, step_cfg, prompt, completion, cached)
+            if finish and finish[0] == 'length':
+                final = '模型达到输出上限，工具未执行；请缩短要写入的内容后重试。'
+                self.output(final)
+                break
             if not message.tool_calls:
                 final = message.content or ''
                 if step == self.cfg.tools['max_steps'] - 1 and summaries:
@@ -510,7 +520,9 @@ class Chat:
                 self.output(final)
                 break
             try:
-                next_reservation = self.budget.reserve(self.cfg)[0]
+                next_cfg = (self.cfg if step + 1 == self.cfg.tools['max_steps'] - 1 else
+                            replace(self.cfg, max_output_tokens=self.cfg.tools.get('max_output_tokens', self.cfg.max_output_tokens)))
+                next_reservation = self.budget.reserve(next_cfg)[0]
             except BudgetExceeded:
                 for call in message.tool_calls:
                     try:
@@ -518,7 +530,7 @@ class Chat:
                         summary = self.tools.preview_summary(call.function.name, args)
                     except (ValueError, TypeError):
                         summary = call.function.name
-                    self.output(display_call(call.function.name, summary, '被拒绝'))
+                    self.output(display_call(call.function.name, summary, '被拒绝', '继续处理会超过费用上限'))
                     self.store.append(f'{self.cfg.id}/tools.jsonl', {'request_id': request_id,
                         'tool': call.function.name, 'path': summary, 'state': '被拒绝'})
                 self.output('这次工具步骤用完了。继续整理会超过当前费用上限。')
@@ -548,11 +560,11 @@ class Chat:
                         except (ValueError, TypeError, AttributeError):
                             summary = None
                         summary = summary if isinstance(summary, str) else call.function.name
-                        self.output(display_call(call.function.name, summary, '被拒绝'))
+                        self.output(display_call(call.function.name, summary, '被拒绝', '工具调用记录超过长度上限'))
                         summaries.append({'tool': call.function.name, 'path': summary, 'state': '被拒绝'})
                         self.store.append(f'{self.cfg.id}/tools.jsonl', {'request_id': request_id,
                             'tool': call.function.name, 'path': summary, 'state': '被拒绝'})
-                    self.budget.settle(next_reservation, self.cfg, 0, 0, 0)
+                    self.budget.settle(next_reservation, next_cfg, 0, 0, 0)
                     final = '工具调用记录超过长度上限，未执行工具。'
                     break
                 for call in message.tool_calls:
@@ -574,12 +586,13 @@ class Chat:
                     if request_size(next_offered) > self.cfg.provider['max_input_tokens']:
                         tool_message['content'] = too_long_result
                         state = '结果过长'
-                    self.output(display_call(call.function.name, summary, state))
+                    self.output(display_call(call.function.name, summary, state,
+                                             tool_message['content'] if state != '成功' else None))
                     summaries.append({'tool': call.function.name, 'path': summary, 'state': state})
                     self.store.append(f'{self.cfg.id}/tools.jsonl', {'request_id': request_id,
                         'tool': call.function.name, 'path': summary, 'state': state})
             except BaseException:
-                self.budget.settle(next_reservation, self.cfg, 0, 0, 0)
+                self.budget.settle(next_reservation, next_cfg, 0, 0, 0)
                 raise
         if not final:
             final = '这次工具步骤用完了。'
@@ -623,7 +636,8 @@ def make_model(root, cfg):
             if reasoning is not None:
                 message['reasoning_content'] = reasoning
             # Keep raw OpenAI-shaped message object for the tool loop.
-            return (choice.message, usage.prompt_tokens, usage.completion_tokens, cached)
+            result = (choice.message, usage.prompt_tokens, usage.completion_tokens, cached)
+            return result + (choice.finish_reason,) if detail else result
         result = (choice.message.content, usage.prompt_tokens, usage.completion_tokens, cached)
         return result + (choice.finish_reason,) if detail else result
 

@@ -239,10 +239,83 @@ max_result_bytes = 200
         tools = Mock()
         tools.tools = [SimpleNamespace(name='read_text_file', description='Read', inputSchema={})]
         tools.capability_event = None
-        chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=lambda _: None)
+        output = []
+        chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=output.append)
         self.assertEqual(chat.send('read it'), 'I could not read it.')
         tools.invoke.assert_not_called()
         self.assertIn('参数不是合法 JSON', model.call_args_list[1].args[0][-1]['content'])
+        self.assertTrue(any('参数不是合法 JSON' in line for line in output))
+
+    def test_tool_output_limit_is_reserved_sent_and_settled_without_raising_daily_cap(self):
+        self.cfg.tools['max_output_tokens'] = 4096
+        self.cfg.tools['max_steps'] = 2
+        first = self.message([self.tool_call('write_file',
+            '{"path":"journal.md","content":"hello"}', 'write')])
+        final = self.message(content='Created journal.md.')
+        model = Mock(side_effect=[(first, 100, 2048, 0), (final, 120, 20, 0)])
+        tools = Mock()
+        tools.tools = [SimpleNamespace(name='write_file', description='Write', inputSchema={})]
+        tools.capability_event = None
+        tools.invoke.return_value = ('新文件已创建。', '成功', 'journal.md')
+        chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=lambda _: None)
+        self.assertEqual(chat.send('create journal.md'), 'Created journal.md.')
+        self.assertEqual([call.kwargs['max_tokens'] for call in model.call_args_list], [4096, 50])
+        reserves = [row for row in self.store.read('costs.jsonl') if row['type'] == 'reserve']
+        self.assertEqual(Decimal(reserves[0]['amount']), Decimal('0.044768'))
+        self.assertEqual(self.budget.totals()[2], 0)
+
+    def test_length_finish_refuses_partial_write_without_repeating_model_call(self):
+        first = self.message([self.tool_call('write_file',
+            '{"path":"journal.md","content":"partial"}', 'write')])
+        model = Mock(return_value=(first, 100, 50, 0, 'length'))
+        tools = Mock()
+        tools.tools = [SimpleNamespace(name='write_file', description='Write', inputSchema={})]
+        tools.capability_event = None
+        output = []
+        chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=output.append)
+        self.assertIn('输出上限', chat.send('create journal.md'))
+        tools.invoke.assert_not_called()
+        model.assert_called_once()
+        self.assertTrue(any('输出上限' in line for line in output))
+
+    def test_chat_permission_still_needs_terminal_y_and_shows_refusal(self):
+        tools = FilesystemTools.__new__(FilesystemTools)
+        tools.workspace = self.root / 'workspace'
+        tools.workspace.mkdir()
+        tools.tools = [SimpleNamespace(name='write_file', description='Write', inputSchema={})]
+        tools.capability_event = None
+        tools.cfg = self.cfg
+        call = self.message([self.tool_call('write_file',
+            '{"path":"growth-journal.md","content":"fictional entry"}', 'write')])
+        for approval, expected_state in [('n', '被拒绝'), ('y', '成功')]:
+            with self.subTest(approval=approval):
+                model = Mock(side_effect=[(call, 100, 40, 0),
+                                          (self.message(content='done'), 120, 20, 0)])
+                output = []
+                chat = Chat(self.cfg, self.store, self.budget, model, tools=tools,
+                            approval=Mock(return_value=approval), output=output.append)
+                chat.send('I agree to create the journal')
+                self.assertTrue(any(expected_state in line for line in output))
+                self.assertEqual((tools.workspace / 'growth-journal.md').exists(), approval == 'y')
+                if approval == 'n':
+                    self.assertTrue(any('未同意写入' in line for line in output))
+                else:
+                    self.assertEqual((tools.workspace / 'growth-journal.md').read_text(encoding='utf-8'),
+                                     'fictional entry')
+
+    def test_larger_tool_reservation_still_obeys_daily_cap(self):
+        self.cfg.tools['max_output_tokens'] = 4096
+        self.budget.daily = Decimal('0.02')
+        tools = Mock()
+        tools.tools = [SimpleNamespace(name='write_file', description='Write', inputSchema={})]
+        tools.capability_event = None
+        model = Mock()
+        chat = Chat(self.cfg, self.store, self.budget, model, tools=tools)
+        from veil_agent import BudgetExceeded
+        with self.assertRaises(BudgetExceeded):
+            chat.send('create a journal')
+        model.assert_not_called()
+        tools.invoke.assert_not_called()
 
     def test_max_steps_stops_without_another_model_request(self):
         self.cfg.tools['max_steps'] = 2
