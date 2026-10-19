@@ -43,6 +43,7 @@ input_cny_per_million = "0"
 
 [tools]
 max_output_tokens = 4096
+persistent_append_file = "growth-journal.md"
 enabled = true
 folder = "data/peter/workspace"
 max_steps = 6

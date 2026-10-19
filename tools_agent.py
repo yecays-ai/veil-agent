@@ -7,6 +7,7 @@ import subprocess
 import threading
 from concurrent.futures import Future
 from pathlib import Path
+from types import SimpleNamespace
 
 
 VERSION = 1
@@ -14,7 +15,7 @@ ALLOW = {
     'list_directory', 'directory_tree', 'read_text_file', 'read_multiple_files',
     'get_file_info', 'search_files', 'list_directory_with_sizes',
 }
-ASK = {'write_file'}
+ASK = {'write_file', 'append_file', 'grant_append'}
 DENY = {'edit_file', 'move_file', 'create_directory'}
 # Memory tools (ticket 007) are offered by memory_native.ToolSet, never by the filesystem server.
 NATIVE = {'hold', 'breath_search'}
@@ -85,6 +86,10 @@ def _summary(root, path):
         return path.name or 'workspace'
 
 
+def _file_identity(info):
+    return (info.st_dev, info.st_ino, info.st_ctime_ns, info.st_size)
+
+
 def display_call(name, summary, state, reason=None):
     line = f'🔧 Peter 用了 {name}：{summary}（{state}）'
     return f'{line}：{reason}' if reason else line
@@ -120,6 +125,7 @@ class FilesystemTools:
         self.workspace = configured
         self.workspace.mkdir(parents=True, exist_ok=True)
         self.cap_path = Path(store.root) / cfg.id / 'capabilities.json'
+        self.grant_path = Path(store.root) / cfg.id / 'append-grant.json'
         self.tools = []
         self.client = None
         self.capability_event = None
@@ -140,7 +146,21 @@ class FilesystemTools:
             self.startup_notice = '文件工具服务没有启动；聊天和记忆仍可使用，请检查 Node.js 与网络。'
             self._record_capabilities([])
             return
-        self.tools = [tool for tool in self.client.tools if tool_policy(tool.name) != 'deny']
+        self.tools = [tool for tool in self.client.tools
+                      if tool_policy(tool.name) != 'deny'
+                      and tool.name not in ('append_file', 'grant_append')]
+        self.tools.append(SimpleNamespace(name='append_file',
+            description='Append text to an existing workspace file without changing old content. '
+                        'Requires terminal consent unless this exact file has a persistent grant.',
+            inputSchema={'type': 'object', 'properties': {
+                'path': {'type': 'string'}, 'content': {'type': 'string'}},
+                'required': ['path', 'content']}))
+        if settings.get('persistent_append_file'):
+            self.tools.append(SimpleNamespace(name='grant_append',
+                description='Ask lan at the terminal to authorize future append_file calls '
+                            'for the configured journal file across restarts.',
+                inputSchema={'type': 'object', 'properties': {'path': {'type': 'string'}},
+                             'required': ['path']}))
         names = sorted(tool.name for tool in self.tools if tool_policy(tool.name) != 'deny')
         self._record_capabilities(names)
         if names:
@@ -225,6 +245,8 @@ class FilesystemTools:
                     safe_args[key][index] = safe_value
             paths = [_summary(self.workspace, path) for path in resolved.values()]
             summary = ', '.join(paths)
+            if name in ('append_file', 'grant_append'):
+                return self._invoke_append(name, next(iter(resolved.values())), summary, args, approval)
             if policy == 'ask':
                 target = next(iter(resolved.values()))
                 exists = target.exists()
@@ -261,6 +283,73 @@ class FilesystemTools:
         except Exception:
             value = args.get('path', name)
             return '工具执行出错。', '出错', Path(str(value)).name or name
+
+    def _invoke_append(self, name, target, summary, args, approval):
+        if not target.is_file():
+            return '程序拒绝：追加目标必须是已存在的普通文件。', '被拒绝', summary
+        identity = _file_identity(target.stat())
+        if name == 'grant_append':
+            allowed = self.cfg.tools.get('persistent_append_file')
+            if not allowed or _path_key(target) != _path_key(checked_path(self.workspace, allowed)):
+                return '程序拒绝：持续追加授权仅限配置的成长日记。', '被拒绝', summary
+            if approval(f'允许 Peter 今后持续追加到 {summary} 吗？本次输入 y 后重启仍有效。y/N ').strip().casefold() != 'y':
+                return '程序拒绝：lan 未同意持续追加授权。', '被拒绝', summary
+            if _file_identity(target.stat()) != identity:
+                return '程序拒绝：确认期间目标文件已变化，请重新授权。', '被拒绝', summary
+            try:
+                self._save_append_grant(summary, identity)
+            except OSError:
+                return '持续追加授权无法保存，未授权；请检查角色数据目录。', '出错', summary
+            return '已保存此文件的持续追加授权。', '成功', summary
+        content = args.get('content')
+        if not isinstance(content, str) or not content:
+            return '程序拒绝：追加内容必须是非空文字。', '被拒绝', summary
+        try:
+            grant = (json.loads(self.grant_path.read_text(encoding='utf-8'))
+                     if self.grant_path.exists() else None)
+        except (OSError, ValueError, UnicodeError):
+            return '程序拒绝：持续追加授权记录无法读取，请检查角色数据目录。', '被拒绝', summary
+        allowed = self.cfg.tools.get('persistent_append_file')
+        granted = (bool(allowed) and isinstance(grant, dict) and grant.get('version') == 1
+                   and grant.get('path') == summary
+                   and grant.get('device') == identity[0]
+                   and grant.get('inode') == identity[1]
+                   and grant.get('ctime_ns') == identity[2]
+                   and grant.get('size') == identity[3]
+                   and _path_key(target) == _path_key(checked_path(self.workspace, allowed)))
+        if not granted and approval(f'Peter 想追加内容到 {summary}。同意这一次吗？y/N ').strip().casefold() != 'y':
+            return '程序拒绝：lan 未同意本次追加。', '被拒绝', summary
+        try:
+            # O_APPEND never seeks into old content; omitting O_CREAT refuses missing files.
+            fd = os.open(target, os.O_WRONLY | os.O_APPEND | getattr(os, 'O_BINARY', 0))
+            with os.fdopen(fd, 'ab', buffering=0) as handle:
+                opened = os.fstat(handle.fileno())
+                if ((opened.st_dev, opened.st_ino, opened.st_size) !=
+                    (identity[0], identity[1], identity[3]) or
+                    _file_identity(target.stat()) != identity):
+                    return '程序拒绝：目标文件在确认后变化，未追加。', '被拒绝', summary
+                data = content.encode('utf-8')
+                if handle.write(data) != len(data):
+                    return '追加未完整写入；请先读取文件再决定是否重试。', '出错', summary
+                os.fsync(handle.fileno())
+                latest = _file_identity(target.stat())
+                if latest[:2] != identity[:2] or latest[3] != identity[3] + len(data):
+                    return '文件在追加期间变化；请先读取文件再决定是否重试。', '出错', summary
+            if granted:
+                self._save_append_grant(summary, latest)
+            return '已追加到文件末尾。', '成功', summary
+        except OSError:
+            return '追加失败，可能已有部分内容写入；请先读取文件再决定是否重试。', '出错', summary
+
+    def _save_append_grant(self, summary, identity):
+        self.grant_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.grant_path.with_suffix('.json.tmp')
+        with temporary.open('w', encoding='utf-8') as handle:
+            json.dump({'version': 1, 'path': summary, 'device': identity[0],
+                       'inode': identity[1], 'ctime_ns': identity[2], 'size': identity[3]}, handle)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, self.grant_path)
 
     def preview_summary(self, name, args):
         try:

@@ -182,12 +182,18 @@ def load_character(root, character_id):
                 'max_steps': positive_int(tools.get('max_steps', 6)),
                 'max_result_bytes': positive_int(tools.get('max_result_bytes', 8192)),
                 'max_output_tokens': positive_int(tools.get('max_output_tokens', cfg.get('max_output_tokens', 1024))),
+                'persistent_append_file': tools.get('persistent_append_file'),
             }
             if tools['max_steps'] < 2:
                 raise ValueError('tools.max_steps must allow a tool call and a final response')
             folder = Path(tools['folder'])
             if folder.is_absolute() or '..' in folder.parts:
                 raise ValueError('tools folder must be a safe relative path')
+            grant_file = tools['persistent_append_file']
+            if grant_file is not None and (not isinstance(grant_file, str) or
+                                          Path(grant_file).name != grant_file or
+                                          grant_file in ('', '.', '..')):
+                raise ValueError('persistent append file must be a filename')
         if tools is None and (cfg.get('memory') or {}).get('mode') == 'native':
             # Native memory runs on the tool loop; files stay off unless [tools] says otherwise.
             tools = {'enabled': False, 'folder': f'data/{character_id}/workspace',
