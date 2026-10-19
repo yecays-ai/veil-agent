@@ -65,7 +65,7 @@ class MemoryTests(unittest.TestCase):
         self.addCleanup(memory.__exit__, None, None, None)
         return memory
 
-    def extract(self, messages, *, json_output):
+    def extract(self, messages, *, json_output, **extra):
         self.assertTrue(json_output)
         self.assertGreater(self.budget.totals()[2], 0)
         raw = json.loads(messages[1]['content'])
@@ -200,6 +200,70 @@ class MemoryTests(unittest.TestCase):
         self.memory.save_item(entry('fact 1'), self.memory.turns(), 0)
         self.assertTrue(self.memory.state['entries'][key]['hidden'])
         self.assertNotIn(key, '\n'.join(m['content'] for m in self.memory.context('plan')))
+
+    def diagnostics_text(self):
+        return (Path(self.temp.name) / 'data/fake/memory/_agent/diagnostics.jsonl').read_text(encoding='utf-8')
+
+    def test_extraction_uses_its_own_cap_without_reasoning(self):
+        self.turns(4)
+        self.memory.supplement()
+        kwargs = self.model.call_args.kwargs
+        self.assertEqual(kwargs['max_tokens'], 4096)
+        self.assertEqual(kwargs['thinking'], 'disabled')
+        self.assertTrue(kwargs['detail'])
+        reserved = [c for c in self.store.read('costs.jsonl') if c['type'] == 'reserve'
+                    and 'accounting' not in c]
+        self.assertEqual(Decimal(reserved[0]['amount']), (10000 * Decimal(2) + 4096 * Decimal(8)) / 1_000_000)
+
+    def test_truncated_reply_is_diagnosed_without_chat_text(self):
+        self.turns(4)
+        self.model.side_effect = None
+        self.model.return_value = ('{"batches":[{"id":0,"memories":[{"title":"fact 0 secret', 200, 4096, 0, 'length')
+        self.memory.supplement()
+        notice = ' '.join(self.memory.notices())
+        self.assertIn('截断', notice)
+        self.assertIn('4096/4096', notice)
+        row = json.loads(self.diagnostics_text().splitlines()[-1])
+        self.assertEqual((row['code'], row['finish'], row['completion'], row['cap']),
+                         ('truncated', 'length', 4096, 4096))
+        self.assertNotIn('fact 0', self.diagnostics_text())
+        self.assertNotIn('secret', self.diagnostics_text())
+        listing = self.memory.command('/memory')
+        self.assertIn('还没有保存任何记忆', listing)
+        self.assertIn('截断', listing)
+
+    def test_invalid_json_empty_and_api_errors_have_specific_codes(self):
+        class ProviderError(Exception):
+            status_code = 429
+        cases = [(('not json at all', 200, 20, 0, 'stop'), 'not_json'),
+                 ((None, 200, 0, 0, 'stop'), 'empty'),
+                 (('{"nope":1}', 200, 5, 0, 'stop'), 'shape'),
+                 (('{"batches":[{"id":7,"memories":[]}]}', 200, 5, 0, 'stop'), 'batch_ids')]
+        self.turns(4)
+        for number, (reply, code) in enumerate(cases):
+            self.model.side_effect = None
+            self.model.return_value = reply
+            self.state_reset()
+            self.memory.supplement()
+            self.assertEqual(json.loads(self.diagnostics_text().splitlines()[-1])['code'], code)
+        self.state_reset()
+        self.model.side_effect = ProviderError('contains fact 0')
+        self.memory.supplement()
+        row = json.loads(self.diagnostics_text().splitlines()[-1])
+        self.assertEqual((row['code'], row['error'], row['status']), ('api', 'ProviderError', 429))
+        self.assertNotIn('fact 0', self.diagnostics_text())
+
+    def state_reset(self):
+        self.memory.state['cursor'] = 0
+        self.memory.state['pending'] = []
+
+    def test_mismatched_quotes_are_reported_not_silent(self):
+        self.turns(4)
+        self.model.side_effect = None
+        self.model.return_value = (json.dumps({'batches': [{'id': 0, 'memories': [entry('invented quote')]}]}), 200, 100, 0, 'stop')
+        self.memory.supplement()
+        self.assertIn('原话对不上', ' '.join(self.memory.notices()))
+        self.assertEqual(self.backend.rows, {})
 
     def test_partial_save_retries_only_unsaved_quotes(self):
         self.turns(4)

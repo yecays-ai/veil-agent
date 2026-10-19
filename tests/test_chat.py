@@ -212,11 +212,17 @@ output_cny_per_million = "8"
             self.assertEqual(requests[0]['thinking'], {'type': 'disabled'})
             model([{'role': 'user', 'content': 'Return JSON'}], json_output=True)
             self.assertEqual(requests[1]['response_format'], {'type': 'json_object'})
+            self.cfg.provider['thinking'] = 'enabled'
+            answer = model([{'role': 'user', 'content': 'Return JSON'}], json_output=True,
+                           max_tokens=777, thinking='disabled', detail=True)
+            self.assertEqual(requests[2]['max_tokens'], 777)
+            self.assertEqual(requests[2]['thinking'], {'type': 'disabled'})
+            self.assertEqual((len(answer), answer[4]), (5, 'stop'))
             fail.append(True)
             with self.assertRaises(UserError) as result:
                 chat.send('not retried')
             self.assertNotIn('secret', str(result.exception))
-        self.assertEqual(len(requests), 3)
+        self.assertEqual(len(requests), 4)
 
     def test_system_environment_key_is_not_used(self):
         with patch.dict('os.environ', {'FAKE_KEY': 'fake-env-only'}):

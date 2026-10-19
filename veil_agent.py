@@ -353,14 +353,15 @@ def make_model(root, cfg):
         raise UserError('本机 .env 缺少所选接口的 API Key，请按 README 填写。')
     client = OpenAI(api_key=key, base_url=cfg.provider['base_url'], max_retries=0, timeout=60)
 
-    def call(messages, *, json_output=False):
+    def call(messages, *, json_output=False, max_tokens=None, thinking=None, detail=False):
         extra = {}
-        if cfg.provider.get('thinking') == 'disabled':
+        if (thinking or cfg.provider.get('thinking')) == 'disabled':
             extra['extra_body'] = {'thinking': {'type': 'disabled'}}
         if json_output:
             extra['response_format'] = {'type': 'json_object'}
         response = client.chat.completions.create(model=cfg.provider['model'], messages=messages,
-                                                  max_tokens=cfg.max_output_tokens, stream=False, **extra)
+                                                  max_tokens=max_tokens or cfg.max_output_tokens,
+                                                  stream=False, **extra)
         usage = response.usage
         if usage is None:
             raise UserError('接口未返回用量；本次保留预留费用。')
@@ -368,7 +369,9 @@ def make_model(root, cfg):
         cached = getattr(usage, 'prompt_cache_hit_tokens', None)
         if cached is None:
             cached = getattr(details, 'cached_tokens', 0) or 0
-        return response.choices[0].message.content, usage.prompt_tokens, usage.completion_tokens, cached
+        choice = response.choices[0]
+        result = (choice.message.content, usage.prompt_tokens, usage.completion_tokens, cached)
+        return result + (choice.finish_reason,) if detail else result
 
     return client, call
 

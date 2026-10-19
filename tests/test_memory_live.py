@@ -20,7 +20,7 @@ class LiveAdapter(unittest.TestCase):
             {'enabled': True, 'model': 'BAAI/bge-m3', 'dimensions': 1024,
              'base_url': 'https://api.siliconflow.cn/v1', 'input_cny_per_million': '0'})
 
-        def fake_model(messages, *, json_output=False):
+        def fake_model(messages, *, json_output=False, **extra):
             if json_output:
                 reply = json.dumps({'batches': [{'id': 0, 'memories': [{
                     'title': 'Job interview', 'zh': '下周四有一场工作面试。',
