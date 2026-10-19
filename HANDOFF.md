@@ -6,6 +6,7 @@
 
 - 005 / 005b 已合并（main 5971317）。lan 验收：自动保存、/memory、/forget、/restore 通过；随后聊久了出现“上下文太长”并退出。Claude 在 `ticket/005c-long-context` 修复：超出时只丢这次请求里最旧的整轮原文并提示一次；输入本身太长才拒绝，不退出。
 - 005c 已合并（main 83b19f8）。lan 验收反馈记忆质量差；Claude 在 `ticket/005d-memory-quality` 把 veil 仓库的维护提示词设计移植到提取层（见 docs/tickets/005d-memory-quality.md）。
+- 005g（`/delete`）在 `ticket/005g-delete`。
 - 006（工具调用）lan 说先不做，在和另一个 chat 讨论方向。调研文档是 Claude Doc「下一阶段可复用组件调查」。
 
 ## 下一个窗口第一步

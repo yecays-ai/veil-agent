@@ -279,7 +279,7 @@ def build_self_description(cfg, budget, memory=False):
         f'Available: terminal text chat; up to {cfg.history_rounds} recent rounds included verbatim '
         'per request; full chat logs saved locally.\n'
         + ('Long-term memory: automatic saving every four completed rounds, automatic recall; '
-         'the user can list, suppress and restore memories with /memory, /forget, /restore. '
+         'the user can list, suppress, restore and delete memories with /memory, /forget, /restore, /delete. '
          if memory else 'You have no long-term memory; after restart you know only restored recent rounds. ')
         +
         'You have no tools (cannot open files/folders or run scripts). You have no voice. '
@@ -430,7 +430,7 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead):
                     output(build_self_description(chat.cfg, chat.budget, bool(chat.memory)))
                 else:
                     output(chat.last_self)
-            elif text == '/memory' or text.startswith(('/forget ', '/restore ')):
+            elif text == '/memory' or text.startswith(('/forget ', '/restore ', '/delete ')):
                 if chat.memory:
                     output(chat.memory.command(text))
                 else:
