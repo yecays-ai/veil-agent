@@ -352,8 +352,8 @@ class Memory:
             self.budget.settle_estimate(reservation)
         if model_reservation is not None:
             self.budget.settle_estimate(model_reservation, accounting='ombre-model-estimate')
-        # Only Ombre's own notice counts; matching loose words misfired on ordinary memory text.
-        if DEGRADED_NOTICE in result:
+        # Only Ombre's own notice counts, and Ombre always puts it on the first line, ahead of any memory text.
+        if result.lstrip().startswith(DEGRADED_NOTICE):
             self.messages.put(f'记忆检索降级为关键词（{name}；原因见记忆库 _agent/server.log）')
         return result
 

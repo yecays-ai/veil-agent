@@ -281,3 +281,8 @@ class DegradedNoticeTests(unittest.TestCase):
         text = ('[语义关联] [bucket_id:a] The vector search failed twice last week and the semantic index '
                 'was 不可用 for a while; we fixed it and 降级 never came back.')
         self.assertEqual(self.search(text), [])
+
+    def test_notice_text_inside_a_memory_body_does_not_warn(self):
+        body = '[bucket_id:a] 头部\n[检索降级：语义索引暂不可用，本次仅使用关键词/BM25。] 这是记忆正文里抄的一句话。'
+        self.assertEqual(self.search(body), [])
+        self.assertEqual(self.search(''), [])
