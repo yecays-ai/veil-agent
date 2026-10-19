@@ -170,8 +170,8 @@ def load_character(root, character_id):
         if provider['cached_input_cny_per_million'] > provider['input_cny_per_million']:
             raise ValueError('cached rate exceeds regular rate')
         provider['max_input_tokens'] = positive_int(provider['max_input_tokens'])
-        tools = dict(cfg.get('tools', {}))
-        if tools:
+        tools = dict(cfg['tools']) if 'tools' in cfg else None
+        if tools is not None:
             enabled = tools.get('enabled', True)
             if type(enabled) is not bool:
                 raise ValueError('tools.enabled must be boolean')
@@ -449,7 +449,7 @@ class Chat:
                 break
             reservation = request_id if step == 0 else next_reservation
             try:
-                response = self.model(loop_messages, tools=offered)
+                response = self.model(loop_messages, tools=offered, message_output=True)
             except Exception:
                 raise
             message, prompt, completion, cached = response
@@ -527,7 +527,8 @@ def make_model(root, cfg):
         raise UserError('本机 .env 缺少所选接口的 API Key，请按 README 填写。')
     client = OpenAI(api_key=key, base_url=cfg.provider['base_url'], max_retries=0, timeout=60)
 
-    def call(messages, *, json_output=False, max_tokens=None, thinking=None, detail=False, tools=None):
+    def call(messages, *, json_output=False, max_tokens=None, thinking=None, detail=False,
+             tools=None, message_output=False):
         extra = {}
         if (thinking or cfg.provider.get('thinking')) == 'disabled':
             extra['extra_body'] = {'thinking': {'type': 'disabled'}}
@@ -546,7 +547,7 @@ def make_model(root, cfg):
         if cached is None:
             cached = getattr(details, 'cached_tokens', 0) or 0
         choice = response.choices[0]
-        if tools is not None:
+        if tools is not None or message_output:
             message = choice.message.model_dump(exclude_none=True)
             reasoning = getattr(choice.message, 'reasoning_content', None)
             if reasoning is not None:

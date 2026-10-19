@@ -77,6 +77,14 @@ output_cny_per_million = "8"
             load_character(self.root, 'test')
         self.model.assert_not_called()
 
+    def test_missing_tools_table_does_not_start_filesystem_server(self):
+        from tools_agent import FilesystemTools
+        self.assertIsNone(self.cfg.tools)
+        with patch('tools_agent._McpWorker') as worker:
+            tools = FilesystemTools(self.root, self.cfg, self.store)
+        self.assertEqual(tools.tools, [])
+        worker.assert_not_called()
+
     def test_interrupt_during_request_keeps_input_and_reservation(self):
         self.model.side_effect = KeyboardInterrupt
         with self.assertRaises(KeyboardInterrupt):
@@ -218,11 +226,15 @@ output_cny_per_million = "8"
             self.assertEqual(requests[2]['max_tokens'], 777)
             self.assertEqual(requests[2]['thinking'], {'type': 'disabled'})
             self.assertEqual((len(answer), answer[4]), (5, 'stop'))
+            final = model([{'role': 'user', 'content': 'Finish without tools'}],
+                          message_output=True)
+            self.assertEqual(final[0].content, '模拟回复')
+            self.assertNotIn('tools', requests[3])
             fail.append(True)
             with self.assertRaises(UserError) as result:
                 chat.send('not retried')
             self.assertNotIn('secret', str(result.exception))
-        self.assertEqual(len(requests), 4)
+        self.assertEqual(len(requests), 5)
 
     def test_system_environment_key_is_not_used(self):
         with patch.dict('os.environ', {'FAKE_KEY': 'fake-env-only'}):

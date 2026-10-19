@@ -106,7 +106,8 @@ class MemoryTests(unittest.TestCase):
             request_id = f'request-{i}'
             self.store.append('fake/chat.jsonl', {'role': 'user', 'content': f'fact {i}',
                                                   'request_id': request_id})
-            self.store.append('fake/chat.jsonl', {'role': 'assistant', 'content': f'reply {i}',
+            self.store.append('fake/chat.jsonl', {'role': 'assistant',
+                                                  'content': 'file body secret' if i == 0 else f'reply {i}',
                                                   'request_id': request_id})
         self.store.append('fake/tools.jsonl', {'request_id': 'request-0', 'kind': 'capability',
             'text': '你的能力有变化：可读 workspace。'})
@@ -116,8 +117,11 @@ class MemoryTests(unittest.TestCase):
         raw = json.loads(self.model.call_args.args[0][1]['content'])['batches'][0]
         self.assertEqual(raw['tool_events'], ['你的能力有变化：可读 workspace。', 'read_text_file：notes.txt（成功）'])
         self.assertIn('回复正文未提供给补记', raw['turns'][0][1]['content'])
-        self.assertNotEqual(raw['turns'][0][1]['content'], 'reply 0')
+        self.assertNotEqual(raw['turns'][0][1]['content'], 'file body secret')
         self.assertNotIn('file body', json.dumps(raw, ensure_ascii=False))
+        self.assertTrue(self.backend.rows)
+        self.assertTrue(all('file body secret' not in row.get('source_content', '')
+                            for row in self.backend.rows.values()))
 
     def test_extractor_sees_existing_memories_but_not_hidden_ones(self):
         self.turns(4)

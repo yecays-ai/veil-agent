@@ -429,6 +429,7 @@ class Memory:
                 summary = (event.get('text') if event.get('kind') == 'capability' else
                            f"{event.get('tool')}：{event.get('path')}（{event.get('state')}）")
                 tool_events.setdefault(event['request_id'], []).append(summary)
+        safe_turns = [list(turn) for turn in turns]
         raw = []
         for batch in batches:
             start, end = batch['id'], batch['id'] + 4
@@ -440,6 +441,7 @@ class Memory:
                     conversation[offset] = [*conversation[offset][:-1], {
                         'role': 'assistant',
                         'content': '（本轮使用了文件读取工具，回复正文未提供给补记。）'}]
+            safe_turns[start:end] = conversation
             raw.append({'id': batch['id'], 'turns': conversation, 'tool_events': events})
         with self.mutex:
             known = [{'id': k, 'title': v['title'], 'text': v.get('text', '')[:300]}
@@ -452,7 +454,7 @@ class Memory:
         extract_cfg = replace(self.cfg, max_output_tokens=cap)
         facts = {'batches': len(batches), 'cap': cap}
         try:
-            self.extract(batches, turns, messages, extract_cfg, facts)
+            self.extract(batches, safe_turns, messages, extract_cfg, facts)
         except Failure as failure:
             self.report(failure.code, {**facts, **failure.facts})
         except Exception as exc:
