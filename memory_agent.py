@@ -274,6 +274,7 @@ class Memory:
         self.diagnostics = f'{cfg.id}/memory/_agent/diagnostics.jsonl'
         self.dropped_path = f'{cfg.id}/memory/_agent/dropped.jsonl'
         self.last_tool = None
+        self.delete_asked = None  # number shown by /delete, waiting for its 确认
         states = store.read(self.path)
         try:
             self.state = states[-1]['state'] if states else {
@@ -550,6 +551,8 @@ class Memory:
                 'hidden': bool(previous.get('hidden')), 'text': item['zh'][:600]}
             if previous.get('deleted'):
                 self.state['entries'][memory_id]['deleted'] = True
+                if previous.get('delete_pending'):
+                    self.state['entries'][memory_id]['delete_pending'] = True
             self.persist()
         self.messages.put(f'📝 {self.cfg.name} 记下了：{item["title"][:40]}')
         return 'saved'
@@ -609,7 +612,8 @@ class Memory:
             key = key.strip()
             confirmed = False
             if command == '/delete' and key.endswith(' 确认'):
-                key, confirmed = key[:-3].strip(), True
+                key = key[:-3].strip()
+                confirmed = key == self.delete_asked
             entry = self.state['entries'].get(key)
             retry = bool(entry and entry.get('deleted') and entry.get('delete_pending') and command == '/delete')
             if entry is None or (entry.get('deleted') and not retry):
@@ -631,8 +635,10 @@ class Memory:
     def delete(self, key, entry, confirmed):
         title = entry['title']
         if not confirmed:
+            self.delete_asked = key
             return (f'要删除这条记忆吗：{key} | {title}\n'
                     f'确认请输入：/delete {key} 确认。删除后它不再出现在 /memory 里，也不再被想起。')
+        self.delete_asked = None
         entry['hidden'] = entry['deleted'] = entry['delete_pending'] = True
         self.persist()  # Fail closed: it is already out of recall even if Ombre's answer is lost.
         try:
