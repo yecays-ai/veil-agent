@@ -25,7 +25,7 @@
 - 工单 006 已由 lan 合并（PR #13，main `df1b243`），但 Windows 真实 DeepSeek 验收失败：`list_directory`、`read_text_file`、`get_file_info` 都在执行前报告结果可能超过长度上限，没有读到文件。工单 008 定位为 `veil_agent.py` 用每个结果的最大字节数预估下一次请求，并重复计入工具调用；已改成按实际结果长度计数、必要时裁去最旧整轮聊天。CodeRabbit 提出的长结果转短提示前不应多删旧聊天也已修复。单结果的原有字节上限、目录隔离、写入确认/禁止覆盖、模型请求预算均保留。假模型离线套件 92 项通过、4 项按条件跳过；Codex 本机没有 npx，尚未跑本机真实 MCP 或付费 DeepSeek，需 PR 的 Windows CI 和 lan 的真实体验验收。
 - 工单 006 的 Windows 验收失败已由 008（PR #15）修复并合并；lan 2026-10-19 确认 006 六项验收全部通过（列目录、读文件、授权创建、拒绝后不写、禁止覆盖、禁止越界）。
 - 工单 007：新增 `memory_native.py`。`[memory] mode = "native"`（Peter 的默认）时，Peter 通过 006 的工具循环自己调用 Ombre 的 `hold`（保存/同一事件合并）和 `breath_search`（查找）；程序不再做每四轮后台补记。`trace`/删除不给模型，`/delete` 仍归 lan。`mode = "extract"` 切回旧补记层，两套并存、一行配置切换。旧补记代码、测试、文档**一行没删**，等 lan 对照验收达标后再移除。
-- 007 的保留项：角色记忆隔离、`/memory` `/forget` `/restore` `/delete`（对 Peter 自己存的条目同样有效）、预算和 `/cost`、每轮自动召回、长对话裁剪。Peter 自己存的每一条在屏幕上有一行 `🔧 Peter 用了 hold：新建/合并：标题（成功）`，也写入 `tools.jsonl`。
+- 007 的保留项：角色记忆隔离、`/memory` `/forget` `/restore` `/delete`（对 Peter 自己存的条目同样有效）、预算和 `/cost`、每轮自动召回、长对话裁剪。Peter 的 `hold` 不提供 `feel` 参数（Ombre 要求情感记忆先有来源桶，模型直接传会存不进去；情绪由 Ombre 自己打标）。Peter 自己存的每一条在屏幕上有一行 `🔧 Peter 用了 hold：新建/合并：标题（成功）`，也写入 `tools.jsonl`。
 - 007 未验证：真实 DeepSeek（lan 本机开着思考模式）的多步工具调用是否稳定；Peter 会不会该记时记、不该记时忽略；一次 `hold` 的实际花费（每次含一次工具步骤的聊天请求 + Ombre 打标/合并的估算）与旧方案每四轮一次补记相比谁高谁低。以上都只用假后端/假模型测过，必须 lan 用真实对话对照。费用相关取舍（例如限制每轮保存次数）没有做，先问 lan。
 
 ## 下一步

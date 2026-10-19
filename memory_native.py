@@ -18,7 +18,6 @@ HOLD = SimpleNamespace(name='hold', inputSchema={
             'moment behind it. Several sentences are fine; a bare label is not.'},
         'title': {'type': 'string', 'description': 'Short title.'},
         'why_remembered': {'type': 'string', 'description': 'Optional: why this matters to you, first person.'},
-        'feel': {'type': 'boolean', 'description': 'true for an emotional moment.'},
     }}, description=(
         'Save one long-term memory when YOU judge it worth keeping; the user does not need to say "remember". '
         'Worth keeping: facts with their reason, shared experiences, the relationship growing, decisions you '
@@ -57,13 +56,13 @@ class NativeMemoryTools:
     def _hold(self, args):
         summary = self.preview_summary('hold', args)
         content, title = args.get('content'), args.get('title')
-        why, feel = args.get('why_remembered', ''), args.get('feel', False)
+        why = args.get('why_remembered', '')
         if (not isinstance(content, str) or not content.strip() or not isinstance(title, str)
-                or not title.strip() or not isinstance(why, str) or type(feel) is not bool):
+                or not title.strip() or not isinstance(why, str)):
             return '程序拒绝：content 和 title 必须是非空文字。', '被拒绝', summary
         if len(content) > CONTENT_LIMIT or len(title) > TITLE_LIMIT or len(why) > WHY_LIMIT:
             return f'程序拒绝：太长（正文最多 {CONTENT_LIMIT} 字）。请写成更短的一条再存。', '被拒绝', summary
-        ombre_args = {'content': content.strip(), 'title': title.strip(), 'feel': feel}
+        ombre_args = {'content': content.strip(), 'title': title.strip()}
         if why.strip():
             ombre_args['why_remembered'] = why.strip()
         text = self.memory.call('hold', ombre_args)

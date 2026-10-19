@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import Mock
 
 from memory_agent import Memory
-from memory_native import NativeMemoryTools, ToolSet
+from memory_native import HOLD, NativeMemoryTools, ToolSet
 from test_memory import Backend
 from tools_agent import permitted_tools
 from veil_agent import Budget, Character, Chat, Store, build_self_description, memory_mode
@@ -72,7 +72,7 @@ class NativeMemoryTests(unittest.TestCase):
         self.assertEqual(chat.send('I love this blue lamp, my sister gave it to me'), 'I will remember that.')
         self.assertEqual([c[0] for c in self.backend.calls if c[0] == 'hold'], ['hold'])
         args = next(a for n, a in self.backend.calls if n == 'hold')
-        self.assertEqual(set(args), {'content', 'title', 'feel'})
+        self.assertEqual(set(args), {'content', 'title'})
         self.assertIn('Blue lamp', self.memory.command('/memory'))
         self.assertTrue(any('hold' in line and '新建：Blue lamp' in line and '成功' in line
                             for line in self.output))
@@ -103,11 +103,15 @@ class NativeMemoryTests(unittest.TestCase):
 
     def test_invalid_or_oversized_save_never_reaches_ombre(self):
         for args in ({'title': 'x', 'content': '  '}, {'title': '', 'content': 'a'},
-                     {'title': 'x', 'content': 'a', 'feel': 'yes'},
                      {'title': 'x', 'content': 'a' * 1501}, {'content': 'no title'}):
             result, state, _ = self.tools.invoke('hold', args)
             self.assertEqual(state, '被拒绝', args)
         self.assertNotIn('hold', [n for n, _ in self.backend.calls])
+
+    def test_feel_is_not_offered_because_ombre_needs_a_source_bucket_for_it(self):
+        self.assertNotIn('feel', HOLD.inputSchema['properties'])
+        self.tools.invoke('hold', {'title': 't', 'content': 'c', 'feel': True})
+        self.assertNotIn('feel', next(a for n, a in self.backend.calls if n == 'hold'))
 
     def test_failed_save_is_reported_to_the_model_and_not_tracked(self):
         self.backend.fail = True
