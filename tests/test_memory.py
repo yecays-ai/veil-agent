@@ -6,7 +6,7 @@ import threading
 import unittest
 from unittest.mock import Mock
 
-from memory_agent import Memory, ordinary_hits, vault_path
+from memory_agent import Memory, ombre_config, ordinary_hits, vault_path
 from veil_agent import Budget, Character, Chat, Store, UserError, build_self_description
 
 
@@ -94,8 +94,9 @@ class MemoryTests(unittest.TestCase):
         self.assertTrue(saved['source_content'].startswith('user: fact 0'))
         self.assertIn('📝 Example 记下了：Fictional plan', self.memory.notices())
         costs = self.store.read('costs.jsonl')
-        self.assertEqual(len([c for c in costs if c['type'] == 'reserve']), 2)
+        self.assertEqual(len([c for c in costs if c['type'] == 'reserve']), 3)
         self.assertTrue(any(c.get('accounting') == 'embedding-estimate' for c in costs))
+        self.assertTrue(any(c.get('accounting') == 'ombre-model-estimate' for c in costs))
         self.assertEqual(self.budget.totals()[2], 0)
 
     def test_extractor_sees_existing_memories_but_not_hidden_ones(self):
@@ -152,6 +153,38 @@ class MemoryTests(unittest.TestCase):
         system = self.model.call_args.args[0][0]['content']
         self.assertIn('fictional persona', system)
         self.assertIn('One event is one memory', system)
+
+    def test_ombre_model_calls_are_estimated_into_the_shared_ledger(self):
+        self.memory.call('hold', {'content': '下周有安排。' * 40})
+        costs = self.store.read('costs.jsonl')
+        modelled = [c for c in costs if c.get('accounting') == 'ombre-model-estimate']
+        self.assertEqual(len(modelled), 2)  # reserve + settle
+        self.assertGreater(Decimal(modelled[0]['amount']), 0)
+        self.assertEqual(self.budget.totals()[2], 0)
+
+    def test_ombre_model_can_be_switched_off(self):
+        self.cfg.memory.update(ombre_model=False, base_url='https://example.invalid/v1')
+        self.memory.call('hold', {'content': 'x'})
+        costs = self.store.read('costs.jsonl')
+        self.assertFalse(any(c.get('accounting') == 'ombre-model-estimate' for c in costs))
+        self.assertEqual(ombre_config(self.cfg, Path('v'))['dehydration'], {'api_key': ''})
+
+    def test_ombre_config_uses_chat_model_without_a_key_in_the_file(self):
+        self.cfg.memory['base_url'] = 'https://example.invalid/v1'
+        self.cfg.provider['base_url'] = 'https://api.deepseek.com'
+        dehydration = ombre_config(self.cfg, Path('v'))['dehydration']
+        self.assertEqual(dehydration['model'], 'fake')
+        self.assertEqual(dehydration['api_key'], '')
+        self.assertEqual(dehydration['extra_body'], {'thinking': {'type': 'disabled'}})
+        self.cfg.provider['base_url'] = 'https://api.openai.com/v1'
+        self.assertNotIn('extra_body', ombre_config(self.cfg, Path('v'))['dehydration'])
+
+    def test_ombre_model_budget_blocks_before_the_backend(self):
+        self.budget.daily = Decimal('0.0000001')
+        before = len(self.backend.calls)
+        with self.assertRaises(UserError):
+            self.memory.call('hold', {'content': 'x'})
+        self.assertEqual(len(self.backend.calls), before)
 
     def test_false_quote_discards_whole_memory(self):
         self.turns(4)
