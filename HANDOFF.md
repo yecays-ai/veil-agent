@@ -5,7 +5,7 @@
 ## 上一位停在哪
 
 - main 已快进到 `54eaf84`；工单 006 已开始，当前在 `ticket/006-tools`。实现已接入工具循环、filesystem MCP 1.0.0、权限与路径闸门、逐步预算、工具侧车日志、能力清单及文档。离线套件通过；Codex 环境能找到 Node 但找不到 npx，因此真实服务器和 Windows 联接点验收未跑。
-- 当前余项：PR #13 已通过本机 Git 凭据和 GitHub API 创建；Codex GitHub 连接器曾在传输层失败。Windows 3.11/3.12 CI 均跑通真实 MCP。CodeRabbit 的 3 条阻断意见（补记来源泄露文件回复、未配置工具误启动、最终工具步骤丢回复）已在 `e4f2702` 修复并逐条回复；最新 CI 与复审待完成。离线全套件 87 项通过、4 项跳过。按 `.agents/skills/pr-review/SKILL.md` 等最终 CI 和复审完成再合并。不要把 `characters/peter/character.toml` 的本机 `thinking="enabled"` 试验提交；这是 lan 的本地设置。
+- 当前余项：PR #13 已通过本机 Git 凭据和 GitHub API 创建；Codex GitHub 连接器曾在传输层失败。Windows 3.11/3.12 CI 均跑通真实 MCP。CodeRabbit 前 3 条阻断意见已在 `e4f2702` 修复并回复；第 4 条指出旧聊天无 request_id 会让文件读取脱敏错位，已用旧/新混合聊天先复现再修复，待提交、CI 与复审。离线全套件 88 项通过、4 项跳过。文件回复泄漏是同一问题的第二次修补；若再次复现，按 AGENTS.md 停下报告，不做第三次。按 `.agents/skills/pr-review/SKILL.md` 等最终 CI 和复审完成再合并。不要把 `characters/peter/character.toml` 的本机 `thinking="enabled"` 试验提交；这是 lan 的本地设置。
 - PR 合并后让 lan 按 `STATUS.md` 验收：目录读取、同意/拒绝新建、既有文件绝不覆盖、目录外拒绝、重启后的能力与记忆说明。DeepSeek 思考模式和真实聊天效果仍需她体验。
 - 005 / 005b 已合并（main 5971317）。lan 验收：自动保存、/memory、/forget、/restore 通过；随后聊久了出现“上下文太长”并退出。Claude 在 `ticket/005c-long-context` 修复：超出时只丢这次请求里最旧的整轮原文并提示一次；输入本身太长才拒绝，不退出。
 - 005c 已合并（main 83b19f8）。lan 验收反馈记忆质量差；Claude 在 `ticket/005d-memory-quality` 把 veil 仓库的维护提示词设计移植到提取层（见 docs/tickets/005d-memory-quality.md）。

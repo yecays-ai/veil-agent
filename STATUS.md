@@ -22,7 +22,7 @@
 - 工单 005f：打开 Ombre 自带模型（每条记忆的打标签、同一事件合并判断），用聊天同一个模型和 key；调用在 Ombre 子进程内，按输入字节数估算记进共享账本（`ombre-model-estimate`，是估算不是实际用量）并受 ¥10/天、¥300/月限制；`[memory] ombre_model = false` 可关。估算每条记忆约 ¥0.01~0.02。假后端测试通过，未用真实 Ombre/DeepSeek 验证。
 - 工单 005g：新增 `/delete 编号`（再输入 `/delete 编号 确认` 才执行，一次一条）。先在本机标记删除并不再被想起，再调 Ombre 软删除；不批量删、不自动清理。假后端测试通过，未用真实 Ombre 验证。
 - AGENTS.md 增加“产品理念（开发原则）”八条（lan 2026-10-19 确认后合并）。
-- 工单 006：PR #13 已开放，接入官方 filesystem MCP server 1.0.0、程序工具白名单、目录/链接路径复核、每次模型步骤的预算、写入前询问和独占新建、能力清单及补记工具摘要。CodeRabbit 提出的 3 项功能/隐私问题已在分支修复，离线套件 87 项通过、4 项按条件跳过；前一提交的 Ubuntu/Windows Python 3.11/3.12 CI 全绿，Windows 真实 MCP 子进程测试通过。DeepSeek 思考模式及 lan 的聊天验收未完成。
+- 工单 006：PR #13 已开放，接入官方 filesystem MCP server 1.0.0、程序工具白名单、目录/链接路径复核、每次模型步骤的预算、写入前询问和独占新建、能力清单及补记工具摘要。CodeRabbit 的 4 项功能/隐私意见已在分支处理；旧聊天缺少 request_id 造成脱敏错位已先复现再修复。离线套件 88 项通过、4 项按条件跳过；前一提交的 Ubuntu/Windows Python 3.11/3.12 CI 全绿，Windows 真实 MCP 子进程测试通过。DeepSeek 思考模式及 lan 的聊天验收未完成。
 - 工单 007（Peter 自主调用 Ombre 原生记忆工具）仅已写入 `docs/tickets/007-ombre-native-memory.md`，尚未实施；待 006 合并且 lan 验收后再决定。
 
 ## 下一步

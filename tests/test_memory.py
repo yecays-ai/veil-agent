@@ -123,6 +123,25 @@ class MemoryTests(unittest.TestCase):
         self.assertTrue(all('file body secret' not in row.get('source_content', '')
                             for row in self.backend.rows.values()))
 
+    def test_legacy_rounds_do_not_shift_file_read_redaction(self):
+        for i in range(4):
+            request_id = f'request-{i}' if i >= 2 else None
+            for role, content in [('user', f'fact {i}'),
+                                  ('assistant', 'file body secret' if i == 2 else f'reply {i}')]:
+                row = {'role': role, 'content': content}
+                if request_id:
+                    row['request_id'] = request_id
+                self.store.append('fake/chat.jsonl', row)
+        self.store.append('fake/tools.jsonl', {'request_id': 'request-2',
+            'tool': 'read_text_file', 'path': 'notes.txt', 'state': '成功'})
+        self.memory.supplement()
+        raw = json.loads(self.model.call_args.args[0][1]['content'])['batches'][0]
+        self.assertEqual(raw['turns'][0][1]['content'], 'reply 0')
+        self.assertIn('回复正文未提供给补记', raw['turns'][2][1]['content'])
+        self.assertNotIn('file body secret', json.dumps(raw, ensure_ascii=False))
+        self.assertTrue(all('file body secret' not in row.get('source_content', '')
+                            for row in self.backend.rows.values()))
+
     def test_extractor_sees_existing_memories_but_not_hidden_ones(self):
         self.turns(4)
         self.memory.supplement()

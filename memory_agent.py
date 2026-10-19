@@ -414,11 +414,14 @@ class Memory:
         chat_rows = self.store.read(f'{self.cfg.id}/chat.jsonl')
         request_ids = []
         current = None
+        has_user = False
         for row in chat_rows:
             if row['role'] == 'user':
                 current = row.get('request_id')
-            elif row['role'] == 'assistant' and current:
+                has_user = True
+            elif row['role'] == 'assistant' and has_user:
                 request_ids.append(current)
+                has_user = False
                 current = None
         tool_events = {}
         file_read_requests = set()
