@@ -87,6 +87,39 @@ class MCP:
             raise RuntimeError('Ombre did not stop')
 
 
+def ombre_model_on(cfg):
+    return bool((cfg.memory or {}).get('ombre_model', True))
+
+
+def ombre_config(cfg, vault):
+    settings = cfg.memory
+    dehydration = {'api_key': ''}
+    if ombre_model_on(cfg):
+        # Ombre tags each memory and judges "same event" with the chat provider's model.
+        dehydration = {'api_key': '', 'model': cfg.provider['model'], 'base_url': cfg.provider['base_url'],
+                       'max_tokens': 1024, 'temperature': 0.1, 'timeout_seconds': 30}
+        if 'deepseek' in cfg.provider['base_url']:
+            dehydration['extra_body'] = {'thinking': {'type': 'disabled'}}
+    return {'transport': 'stdio', 'buckets_dir': str(vault), 'ai_name': cfg.name,
+            'dehydration': dehydration, 'github': {'enabled': False}, 'log_level': 'CRITICAL',
+            'embedding': {'enabled': True, 'background_indexing': False, 'api_key': '',
+                'backend': 'api', 'model': settings['model'], 'base_url': settings['base_url'],
+                'dim': int(settings.get('dimensions', 1024)), 'timeout_seconds': 20}}
+
+
+# Ombre's own prompts (tagging and same-event judging) and their input limits, in UTF-8 bytes.
+OMBRE_ANALYZE_PROMPT_BYTES, OMBRE_JUDGE_PROMPT_BYTES = 3200, 1000
+OMBRE_OLD_MEMORY_BYTES, OMBRE_OUTPUT_TOKENS = 5400, 800
+
+
+def ombre_model_tokens(content):
+    """Estimated (input, output) tokens of Ombre's two model calls for one hold; about 2 bytes per token."""
+    size = len(content.encode('utf-8'))
+    data = (OMBRE_ANALYZE_PROMPT_BYTES + min(size, 6000) + OMBRE_JUDGE_PROMPT_BYTES
+            + min(size, 5400) + OMBRE_OLD_MEMORY_BYTES)
+    return data // 2, OMBRE_OUTPUT_TOKENS
+
+
 @contextmanager
 def open_ombre(root, cfg, *, data_root=None):
     from dotenv import dotenv_values
@@ -112,11 +145,13 @@ def open_ombre(root, cfg, *, data_root=None):
         executable = dep / 'venv' / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
         subprocess.run([str(executable), '-c', 'import jieba, rank_bm25'],
                        check=True, capture_output=True, timeout=20)
-        config = {'transport': 'stdio', 'buckets_dir': str(vault), 'ai_name': cfg.name,
-            'dehydration': {'api_key': ''}, 'github': {'enabled': False}, 'log_level': 'CRITICAL',
-            'embedding': {'enabled': True, 'background_indexing': False, 'api_key': '',
-                'backend': 'api', 'model': settings['model'], 'base_url': settings['base_url'],
-                'dim': int(settings.get('dimensions', 1024)), 'timeout_seconds': 20}}
+        config = ombre_config(cfg, vault)
+        model_key = None
+        if ombre_model_on(cfg):
+            model_key = dotenv_values(root / '.env', interpolate=False,
+                                      encoding='utf-8-sig').get(cfg.provider['api_key_env'])
+            if not model_key or not model_key.strip():
+                raise UserError('本机 .env 缺少聊天模型的 API Key（记忆打标和合并要用），请填写后重开。')
         config_path = private / 'config.json'
         config_path.write_text(json.dumps(config, ensure_ascii=False), encoding='utf-8')
         env = {k: v for k, v in os.environ.items()
@@ -124,6 +159,8 @@ def open_ombre(root, cfg, *, data_root=None):
         env.update(PYTHONUTF8='1', PYTHONIOENCODING='utf-8', OMBRE_CONFIG_PATH=str(config_path),
             OMBRE_VAULT_DIR=str(vault), OMBRE_LOG_DIR=str(private), OMBRE_HOOK_SKIP='1',
             OMBRE_TRANSPORT='stdio', OMBRE_EMBED_API_KEY=key.strip())
+        if model_key:
+            env['OMBRE_COMPRESS_API_KEY'] = model_key.strip()
         (private / 'tmp').mkdir(exist_ok=True)
         env['TEMP'] = env['TMP'] = str(private / 'tmp')
         params = StdioServerParameters(command=str(executable),
@@ -293,9 +330,18 @@ class Memory:
             tokens = 12 * max(8192, len(json.dumps(args, ensure_ascii=False).encode('utf-8')) + 2048)
             reservation = self.budget.estimate(self.cfg.id, self.cfg.memory['model'], tokens,
                                               self.cfg.memory['input_cny_per_million'])
+        model_reservation = None
+        if name == 'hold' and ombre_model_on(self.cfg):
+            tokens_in, tokens_out = ombre_model_tokens(str(args.get('content', '')))
+            p = self.cfg.provider
+            model_reservation = self.budget.estimate_model(
+                self.cfg.id, p['model'], tokens_in, tokens_out,
+                p['input_cny_per_million'], p['output_cny_per_million'])
         result = self.backend.call(name, args)
         if reservation is not None:
             self.budget.settle_estimate(reservation)
+        if model_reservation is not None:
+            self.budget.settle_estimate(model_reservation, accounting='ombre-model-estimate')
         if ('检索降级' in result or (any(word in result for word in ('向量', '语义'))
                 and any(word in result for word in ('降级', '不可用', '失败', '暂不可')))):
             self.messages.put('记忆检索降级为关键词')

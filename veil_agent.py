@@ -239,10 +239,28 @@ class Budget:
         return request_id, amount
 
     @synchronized
-    def settle_estimate(self, reservation):
+    def estimate_model(self, character, model, tokens_in, tokens_out, in_rate, out_rate):
+        # Ombre's own model calls happen inside the child process, so they are estimated here.
+        in_rate, out_rate = Decimal(str(in_rate)), Decimal(str(out_rate))
+        if (type(tokens_in) is not int or type(tokens_out) is not int or tokens_in < 0 or tokens_out < 0
+                or not in_rate.is_finite() or not out_rate.is_finite() or in_rate < 0 or out_rate < 0):
+            raise UserError('记忆模型费用配置无效。')
+        amount = (tokens_in * in_rate + tokens_out * out_rate) / MILLION
+        day, month, pending = self.totals()
+        if day + pending + amount > self.daily or month + pending + amount > self.monthly:
+            raise UserError('记忆模型请求超过共享预算，未发送。')
+        request_id = uuid.uuid4().hex
+        self.store.append('costs.jsonl', {'type': 'reserve', 'id': request_id,
+            'period': self.clock(), 'amount': str(amount), 'character': character,
+            'model': model, 'accounting': 'ombre-model-estimate',
+            'estimated_tokens': tokens_in + tokens_out})
+        return request_id, amount
+
+    @synchronized
+    def settle_estimate(self, reservation, accounting='embedding-estimate'):
         request_id, amount = reservation
         self.store.append('costs.jsonl', {'type': 'settle', 'id': request_id,
-            'amount': str(amount), 'accounting': 'embedding-estimate'})
+            'amount': str(amount), 'accounting': accounting})
 
     @synchronized
     def settle(self, request_id, cfg, prompt, completion, cached):
