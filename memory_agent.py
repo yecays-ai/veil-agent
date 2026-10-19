@@ -362,8 +362,11 @@ class Memory:
         text = self.call('hold', args)
         memory_id = self.created_id(text)
         with self.mutex:
+            # Ombre may merge into an existing bucket; keep a /forget in force.
+            previous = self.state['entries'].get(memory_id, {})
             self.state['entries'][memory_id] = {'title': item['title'][:100],
-                'time': self.budget.clock(), 'signature': signature, 'hidden': False}
+                'time': self.budget.clock(), 'signature': signature,
+                'hidden': bool(previous.get('hidden'))}
             self.persist()
         self.messages.put(f'📝 {self.cfg.name} 记下了：{item["title"][:40]}')
 

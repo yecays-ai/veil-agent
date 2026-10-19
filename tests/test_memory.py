@@ -190,6 +190,17 @@ class MemoryTests(unittest.TestCase):
         reopened = self.open()
         self.assertNotIn(key, '\n'.join(m['content'] for m in reopened.context('plan')))
 
+    def test_merge_into_hidden_memory_keeps_it_hidden(self):
+        self.turns(4)
+        self.memory.save_item(entry(), self.memory.turns(), 0)
+        key = next(iter(self.memory.state['entries']))
+        self.memory.command('/forget ' + key)
+        original = self.backend.call
+        self.backend.call = lambda name, args: '合并→' + key if name == 'hold' else original(name, args)
+        self.memory.save_item(entry('fact 1'), self.memory.turns(), 0)
+        self.assertTrue(self.memory.state['entries'][key]['hidden'])
+        self.assertNotIn(key, '\n'.join(m['content'] for m in self.memory.context('plan')))
+
     def test_partial_save_retries_only_unsaved_quotes(self):
         self.turns(4)
         self.memory.save_item(entry(), self.memory.turns(), 0)
