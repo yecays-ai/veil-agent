@@ -106,7 +106,10 @@ class FilesystemTools:
         self.folder_name = Path(settings.get('folder', f'data/{cfg.id}/workspace')).name
         role_path = Path(store.root) / cfg.id
         role_root = role_path.resolve()
-        if _path_key(role_path.absolute()) != _path_key(role_root) or not role_root.is_relative_to(self.root):
+        # Resolve the parent first: Windows temp roots can have an alias, while
+        # resolving the role itself must still reveal a redirected role folder.
+        expected_role = role_path.parent.resolve() / cfg.id
+        if _path_key(expected_role) != _path_key(role_root) or not role_root.is_relative_to(self.root):
             raise UserError('角色数据目录被重定向，文件工具已停止。')
         configured = (self.root / settings.get('folder', f'data/{cfg.id}/workspace')).resolve()
         if not configured.is_relative_to(role_root):

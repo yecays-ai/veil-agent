@@ -93,7 +93,7 @@ class ToolPolicyTests(unittest.TestCase):
         target = self.workspace / 'summary.txt'
         original_open = Path.open
         def racing_open(path, mode='r', *args, **kwargs):
-            if path == target and mode == 'x':
+            if mode == 'x' and path.name == target.name:
                 with original_open(path, 'w', encoding='utf-8') as handle:
                     handle.write('racing content')
             return original_open(path, mode, *args, **kwargs)
