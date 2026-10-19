@@ -24,6 +24,10 @@
 - 不进入聊天查花费：在项目目录运行 `.venv\Scripts\python.exe veil_agent.py --cost`。
 - 另一个角色：建立 `characters/<id>/character.toml` 和自己的本机人设，然后运行 `start.bat --character <id>`。人设、历史按角色分开；费用共用一个总账，只能同时开一个聊天窗口。
 
+## 网页聊天（工单 013）
+
+双击 `start-web.bat`（需先完成 `setup.bat`）会在本机启动聊天服务并自动打开浏览器；浏览器没打开时，复制命令行里显示的地址（带一次性令牌）。页面浅色，右上角可切深色。聊天、记忆、花费、`/memory` 等命令和终端版共用同一套代码；需要同意的操作（新建文件、追加授权）变成页面里的“同意/拒绝”按钮。服务只监听 `127.0.0.1`，没有令牌的请求会被拒绝。网页版和终端版共用聊天锁，同一时间只能开一个；关掉命令行窗口即退出（网页里的 `/quit` 不会退出）。`--port` 可换端口，`--no-browser` 不自动开浏览器。
+
 ## 配置与预算
 
 `characters/peter/character.toml` 的 `provider = "deepseek"` 改为 `provider = "gpt"`，就会同时切换模型、接口、密钥名称和价格配置。GPT 需在本机 `.env` 填 `OPENAI_API_KEY`。密钥只读取项目 `.env`，不读取系统环境变量，也不把密钥写进记录。

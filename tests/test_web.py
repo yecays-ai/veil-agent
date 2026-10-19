@@ -1,0 +1,171 @@
+import json
+import socket
+import tempfile
+import threading
+import unittest
+import urllib.error
+import urllib.request
+from pathlib import Path
+from unittest.mock import Mock
+
+from veil_agent import Budget, Chat, Store, load_character, run_chat
+from web_agent import Hub, serve_chat, start_server
+
+TOKEN = 'test-token'
+
+
+def free_port():
+    with socket.socket() as s:
+        s.bind(('127.0.0.1', 0))
+        return s.getsockname()[1]
+
+
+class WebTests(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        (root / 'characters' / 'test').mkdir(parents=True)
+        (root / 'persona').mkdir()
+        (root / 'persona' / 'test.md').write_text('Fictional test persona', encoding='utf-8')
+        (root / 'characters' / 'test' / 'character.toml').write_text('''name = "Test"
+provider = "fake"
+persona = "persona/test.md"
+max_output_tokens = 50
+[providers.fake]
+model = "fake-model"
+base_url = "https://example.invalid/v1"
+api_key_env = "FAKE_KEY"
+max_input_tokens = 6000
+input_cny_per_million = "2"
+cached_input_cny_per_million = "1"
+output_cny_per_million = "8"
+''', encoding='utf-8')
+        self.cfg = load_character(root, 'test')
+        self.store = Store(root / 'data')
+        self.model = Mock(return_value=('A fictional reply', 100, 20, 10))
+        self.hub = Hub('Test')
+        self.port = free_port()
+        self.server = start_server(self.hub, TOKEN, self.port)
+        self.addCleanup(self.server.server_close)
+        self.addCleanup(self.server.shutdown)
+
+    def call(self, path, body=None, token=TOKEN, host=None, origin=None):
+        headers = {'X-Token': token, 'Content-Type': 'application/json'}
+        if host:
+            headers['Host'] = host
+        if origin:
+            headers['Origin'] = origin
+        req = urllib.request.Request(f'http://127.0.0.1:{self.port}{path}', headers=headers,
+                                     data=None if body is None else json.dumps(body).encode())
+        try:
+            with urllib.request.urlopen(req, timeout=5) as r:
+                return r.status, json.loads(r.read() or b'{}')
+        except urllib.error.HTTPError as exc:
+            return exc.code, None
+
+    def wait(self, predicate, seconds=5):
+        end = threading.Event()
+        for _ in range(int(seconds * 50)):
+            if predicate():
+                return True
+            end.wait(0.02)
+        return False
+
+    def run_loop(self, scenario):
+        chat = Chat(self.cfg, self.store, Budget(self.store), self.model,
+                    approval=self.hub.approval, output=self.hub.output)
+        result = {}
+
+        def client():
+            try:
+                scenario(result)
+            except BaseException as exc:  # reported in the main thread
+                result['error'] = repr(exc)
+            finally:
+                self.hub.stopped = True
+
+        thread = threading.Thread(target=client)
+        thread.start()
+        serve_chat(chat, self.hub)   # main thread: the chat loop uses signal handlers
+        thread.join()
+        self.assertNotIn('error', result, result.get('error'))
+        return result
+
+    def test_rejects_wrong_token_host_and_origin(self):
+        self.assertEqual(self.call('/api/events', token='wrong')[0], 403)
+        self.assertEqual(self.call('/api/events', host='evil.example')[0], 403)
+        self.assertEqual(self.call('/api/events', origin='http://evil.example')[0], 403)
+        self.assertEqual(self.call('/api/send', {'text': 'x'}, token='wrong')[0], 403)
+        self.assertEqual(self.call('/api/events')[0], 200)
+        self.model.assert_not_called()
+
+    def test_message_round_trip_and_commands(self):
+        def scenario(result):
+            self.assertTrue(self.wait(lambda: self.call('/api/events')[1]['busy'] is False))
+            self.assertEqual(self.call('/api/send', {'text': '你好 hello'})[0], 200)
+            self.assertTrue(self.wait(lambda: any(e['kind'] == 'assistant'
+                                                  for e in self.call('/api/events')[1]['events'])))
+            self.assertTrue(self.wait(lambda: self.call('/api/events')[1]['busy'] is False))
+            self.call('/api/send', {'text': '/cost'})
+            self.assertTrue(self.wait(lambda: any('今天' in e['text'] for e in self.call('/api/events')[1]['events'])))
+            self.call('/api/send', {'text': '/quit'})
+            result['events'] = self.call('/api/events')[1]['events']
+
+        events = self.run_loop(scenario)['events']
+        kinds = [(e['kind'], e['text']) for e in events]
+        self.assertIn(('user', '你好 hello'), kinds)
+        self.assertIn(('assistant', 'A fictional reply'), kinds)
+        self.assertTrue(any(k == 'notice' and '网页版没有退出命令' in t for k, t in kinds))
+        self.assertEqual(self.model.call_count, 1)
+        saved = self.store.read('test/chat.jsonl')
+        self.assertEqual([m['content'] for m in saved], ['你好 hello', 'A fictional reply'])
+
+    def test_second_message_while_busy_is_refused(self):
+        gate = threading.Event()
+        self.model.side_effect = lambda *a, **k: (gate.wait(5), ('slow', 10, 5, 0))[1]
+
+        def scenario(result):
+            self.assertTrue(self.wait(lambda: self.call('/api/events')[1]['busy'] is False))
+            self.assertEqual(self.call('/api/send', {'text': 'one'})[0], 200)
+            result['second'] = self.call('/api/send', {'text': 'two'})[0]
+            gate.set()
+            self.assertTrue(self.wait(lambda: any(e['kind'] == 'assistant'
+                                                  for e in self.call('/api/events')[1]['events'])))
+
+        self.assertEqual(self.run_loop(scenario)['second'], 409)
+        self.assertEqual(self.model.call_count, 1)
+
+    def test_approval_buttons_map_to_y_and_n(self):
+        answers = {}
+
+        def ask(name, prompt):
+            answers[name] = self.hub.approval(prompt)
+
+        for name, button in (('yes', 'y'), ('no', 'n')):
+            thread = threading.Thread(target=ask, args=(name, f'Peter 想把内容写到 {name}.txt（新文件）。同意吗？y/N '))
+            thread.start()
+            self.assertTrue(self.wait(lambda: any(e['kind'] == 'approval' and name in e['text']
+                                                  for e in self.hub.events)))
+            self.assertEqual(self.call('/api/approve', {'answer': button})[0], 200)
+            thread.join(5)
+        self.assertEqual(answers, {'yes': 'y', 'no': 'n'})
+        shown = [e['text'] for e in self.hub.events if e['kind'] == 'approval']
+        self.assertEqual(shown[0], 'Peter 想把内容写到 yes.txt（新文件）。同意吗？y/N ')
+        self.assertEqual(self.call('/api/approve', {'answer': 'maybe'})[0], 400)
+
+    def test_history_is_shown_on_open(self):
+        self.store.append('test/chat.jsonl', {'role': 'user', 'content': 'earlier'})
+        self.store.append('test/chat.jsonl', {'role': 'assistant', 'content': 'earlier reply'})
+
+        def scenario(result):
+            self.assertTrue(self.wait(lambda: self.call('/api/events')[1]['busy'] is False))
+            result['events'] = self.call('/api/events')[1]['events']
+
+        events = self.run_loop(scenario)['events']
+        self.assertEqual([(e['kind'], e['text']) for e in events[:2]],
+                         [('user', 'earlier'), ('assistant', 'earlier reply')])
+
+
+if __name__ == '__main__':
+    unittest.main()
