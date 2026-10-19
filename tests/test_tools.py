@@ -343,6 +343,8 @@ max_result_bytes = 200
 
     def test_real_result_over_limit_is_not_sent_to_model(self):
         self.cfg.tools['max_result_bytes'] = 6000
+        self.store.append('test/chat.jsonl', {'role': 'user', 'content': 'old ' + 'x' * 2100})
+        self.store.append('test/chat.jsonl', {'role': 'assistant', 'content': 'old answer'})
         first = self.message([self.tool_call('read_text_file', '{"path":"large.txt"}', 'read')])
         final = self.message(content='The result was too long.')
         model = Mock(side_effect=[(first, 100, 20, 0), (final, 120, 20, 0)])
@@ -355,6 +357,7 @@ max_result_bytes = 200
         forwarded = model.call_args_list[1].args[0][-1]['content']
         self.assertIn('超过本轮请求长度上限', forwarded)
         self.assertNotIn('secret', forwarded)
+        self.assertTrue(any((m.get('content') or '').startswith('old ') for m in model.call_args_list[1].args[0]))
 
     def test_tool_result_drops_oldest_history_round_before_reply(self):
         self.cfg.tools['max_result_bytes'] = 6000

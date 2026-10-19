@@ -536,6 +536,11 @@ class Chat:
                         result, state, summary = '程序拒绝：工具参数不是合法 JSON 对象。', '被拒绝', call.function.name
                     tool_message = {'role': 'tool', 'tool_call_id': call.id, 'content': result}
                     loop_messages.append(tool_message)
+                    history_bytes = sum(len(json.dumps(m, ensure_ascii=False).encode('utf-8')) + 256
+                                        for m in loop_messages[history_start:history_start + history_count])
+                    if request_size(next_offered) - history_bytes > self.cfg.provider['max_input_tokens']:
+                        tool_message['content'] = too_long_result
+                        state = '结果过长'
                     fit_history(next_offered)
                     if request_size(next_offered) > self.cfg.provider['max_input_tokens']:
                         tool_message['content'] = too_long_result

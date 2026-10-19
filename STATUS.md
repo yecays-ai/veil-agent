@@ -22,7 +22,7 @@
 - 工单 005f：打开 Ombre 自带模型（每条记忆的打标签、同一事件合并判断），用聊天同一个模型和 key；调用在 Ombre 子进程内，按输入字节数估算记进共享账本（`ombre-model-estimate`，是估算不是实际用量）并受 ¥10/天、¥300/月限制；`[memory] ombre_model = false` 可关。估算每条记忆约 ¥0.01~0.02。假后端测试通过，未用真实 Ombre/DeepSeek 验证。
 - 工单 005g：新增 `/delete 编号`（再输入 `/delete 编号 确认` 才执行，一次一条）。先在本机标记删除并不再被想起，再调 Ombre 软删除；不批量删、不自动清理。假后端测试通过，未用真实 Ombre 验证。
 - AGENTS.md 增加“产品理念（开发原则）”八条（lan 2026-10-19 确认后合并）。
-- 工单 006 已由 lan 合并（PR #13，main `df1b243`），但 Windows 真实 DeepSeek 验收失败：`list_directory`、`read_text_file`、`get_file_info` 都在执行前报告结果可能超过长度上限，没有读到文件。工单 008 定位为 `veil_agent.py` 用每个结果的最大字节数预估下一次请求，并重复计入工具调用；已改成按实际结果长度计数、必要时裁去最旧整轮聊天。单结果的原有字节上限、目录隔离、写入确认/禁止覆盖、模型请求预算均保留。假模型离线套件 92 项通过、4 项按条件跳过；Codex 本机没有 npx，尚未跑本机真实 MCP 或付费 DeepSeek，需 PR 的 Windows CI 和 lan 的真实体验验收。
+- 工单 006 已由 lan 合并（PR #13，main `df1b243`），但 Windows 真实 DeepSeek 验收失败：`list_directory`、`read_text_file`、`get_file_info` 都在执行前报告结果可能超过长度上限，没有读到文件。工单 008 定位为 `veil_agent.py` 用每个结果的最大字节数预估下一次请求，并重复计入工具调用；已改成按实际结果长度计数、必要时裁去最旧整轮聊天。CodeRabbit 提出的长结果转短提示前不应多删旧聊天也已修复。单结果的原有字节上限、目录隔离、写入确认/禁止覆盖、模型请求预算均保留。假模型离线套件 92 项通过、4 项按条件跳过；Codex 本机没有 npx，尚未跑本机真实 MCP 或付费 DeepSeek，需 PR 的 Windows CI 和 lan 的真实体验验收。
 - 工单 007（Peter 自主调用 Ombre 原生记忆工具）仅已写入 `docs/tickets/007-ombre-native-memory.md`，尚未实施；待 006 合并且 lan 验收后再决定。
 
 ## 下一步
