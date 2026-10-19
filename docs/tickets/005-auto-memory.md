@@ -17,6 +17,18 @@ lan 随口聊天，不说“记住”。Peter 自己把值得留下的事记进�
 - 客户端用官方 `mcp` Python SDK 连 Ombre，不自己写协议。
 - 实现前先确认 Ombre 在 Windows + Python 3.11/3.12 上能装能跑。装不上或要改它的代码，先停下在 PR 里说明，不要硬改。
 
+## 检索方案修订（2026-10-19，Claude，依据 `docs/ombre-005-compatibility.md`）
+
+前置验收证明：没有向量时，Ombre 对整句问法过不了它的融合门槛（`fuzzy_threshold` 50），11 句只中 2 句；情感记忆不走 `breath_search`，只能通过 `feel(query)` 找回，而 `feel` 的检索本身就是向量优先。Ombre 是按“有向量”设计的。所以改为：
+
+1. **开 Ombre 自带的向量检索**（`embedding.enabled=true`，`backend: api`，OpenAI 兼容接口）。用哪家接口、key 由 lan 定，key 只放本机 `.env`，由程序传给 Ombre 子进程，不进仓库、不进日志。不改 Ombre 代码，不调低它的门槛。
+2. **向量花费计入预算**：Ombre 自己发向量请求，我们的账本看不到。按“每次写入 1 次、每轮召回 1–2 次、每次按输入长度估 token”在请求前预留、在账本里记一笔（单价写在配置里）。向量服务失败时 Ombre 会退回关键词，程序在屏幕上提示一行“记忆检索降级为关键词”，不重试。
+3. **每轮召回走两条入口**：`breath_search(mode="automatic", with_ids=True, max_results=3)` 找普通记忆，`feel(query)` 找情感记忆；合并后最多 3 条放进本轮。Ombre 不给逐条相关度，按它返回的结构化命中取，不拿“联想浮现”区凑数。
+4. **情感记忆写入**：`hold(feel=True)` 需要已存在的 `source_bucket`，先把这几轮原文存成普通来源桶，再写情感桶（前置验收已验证这个顺序）。
+5. **`/forget`**：用 `trace(bucket_id, dont_surface=1)`，可撤回（前置验收已验证）；`/memory` 里给出恢复命令。
+6. **双语正文和中英检索词保留**，关键词通道仍是向量不可用时的退路。
+7. **前置门槛改成可达标的**：同一组 11 句固定样例重跑，至少 9/11 命中，其中 2 句情感都要中，无关查询（volcano submarine）不能命中。达标后再做产品接入；不达标就停下，在 PR 里贴结果。
+
 ## 范围
 
 1. **每个角色一个记忆库**：Peter 的记忆放在 `data/<角色 id>/memory/`（`data/` 已在 `.gitignore`）。整个聊天期间只开一个 Ombre 进程，退出时关掉。程序不让一个角色读另一个角色的目录。
