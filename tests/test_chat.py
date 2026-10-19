@@ -326,6 +326,42 @@ output_cny_per_million = "8"
                         self.cfg.provider['api_key_env'], 'FAKE-KEY-NEVER-REAL', 'another-fake-key']:
             self.assertNotIn(private, facts)
 
+    def fill_history(self, rounds, size):
+        for i in range(rounds):
+            self.store.append('test/chat.jsonl', {'role': 'user', 'content': f'u{i} ' + 'x' * size})
+            self.store.append('test/chat.jsonl', {'role': 'assistant', 'content': f'a{i} ' + 'y' * size})
+
+    def test_long_history_drops_oldest_rounds_instead_of_stopping(self):
+        self.cfg.history_rounds = 20
+        self.fill_history(20, 600)  # About 24 KB of history against a 6000-byte limit.
+        chat = Chat(self.cfg, self.store, self.budget, self.model)
+        output = []
+        run_chat(chat, Mock(side_effect=['continue', 'again', '/quit']), output.append, drop=lambda: False)
+        sent = self.model.call_args_list[0].args[0]
+        roles = [m['role'] for m in sent]
+        self.assertEqual(roles[0], 'system')
+        self.assertEqual(roles[-1], 'user')
+        self.assertEqual(sent[-1]['content'], 'continue')
+        history = [m for m in sent[2:-1]]
+        self.assertTrue(history and history[0]['role'] == 'user')  # Whole rounds only.
+        self.assertTrue(history[-1]['content'].startswith('a19'))  # Newest kept.
+        self.assertLessEqual(sum(len(m['content'].encode()) + 256 for m in sent) + 256,
+                             self.cfg.provider['max_input_tokens'])
+        self.assertEqual(len([o for o in output if '这次只带了最近' in o]), 1)
+        self.assertEqual(self.model.call_count, 2)
+        self.assertEqual(len(self.store.read('test/chat.jsonl')), 40 + 4)  # Nothing erased.
+
+    def test_oversized_input_is_not_fatal_and_is_not_saved(self):
+        output = []
+        before = self.store.read('test/chat.jsonl')
+        run_chat(self.chat, Mock(side_effect=['z' * 7000, 'short', '/quit']), output.append, drop=lambda: False)
+        self.assertTrue(any('太长' in o for o in output))
+        self.assertEqual(self.model.call_count, 1)
+        self.assertEqual(self.model.call_args.args[0][-1]['content'], 'short')
+        rows = self.store.read('test/chat.jsonl')
+        self.assertNotIn('z' * 7000, [r['content'] for r in rows])
+        self.assertEqual(len(rows), len(before) + 2)
+
     def test_input_budget_includes_self_facts_before_any_request(self):
         self.chat.send('hello')
         messages = self.model.call_args.args[0]

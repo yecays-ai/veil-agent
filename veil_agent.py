@@ -31,6 +31,10 @@ class UserError(Exception):
     pass
 
 
+class TooLong(UserError):
+    """Nothing was saved or sent; the session can carry on."""
+
+
 def now():
     return datetime.now().astimezone().isoformat()
 
@@ -291,6 +295,8 @@ class Chat:
         self.path = f'{cfg.id}/chat.jsonl'
         self.history, self.rounds = self.recent()
         self.last_self = None
+        self.trim_note = None
+        self.trim_noted = False
         self.memory = memory
 
     def recent(self):
@@ -313,14 +319,30 @@ class Chat:
     def send(self, text):
         recalled = self.memory.context(text) if self.memory else []
         description = build_self_description(self.cfg, self.budget, bool(self.memory))
-        messages = [{'role': 'system', 'content': self.cfg.persona},
-                    {'role': 'system', 'content': description}, *recalled, *self.history,
-                    {'role': 'user', 'content': text}]
+        head = [{'role': 'system', 'content': self.cfg.persona},
+                {'role': 'system', 'content': description}, *recalled]
+        user = {'role': 'user', 'content': text}
         # UTF-8 byte count is deliberately conservative, with ample chat framing
         # overhead. Reserve the entire configured input limit, not an average.
-        bound = sum(len(m['content'].encode('utf-8')) + 256 for m in messages) + 256
-        if bound > self.cfg.provider['max_input_tokens']:
-            raise UserError('本次上下文太长，未发送；请减少 history_rounds 或缩短输入。')
+        def bound(history):
+            return sum(len(m['content'].encode('utf-8')) + 256 for m in [*head, *history, user]) + 256
+        limit = self.cfg.provider['max_input_tokens']
+        history = list(self.history)
+        # Long replies make the window outgrow the limit. Drop the oldest whole
+        # rounds from this request only; chat.jsonl keeps everything.
+        while history and bound(history) > limit:
+            history.pop(0)
+            while history and history[0]['role'] != 'user':
+                history.pop(0)
+        if bound(history) > limit:
+            raise TooLong('这条输入加上人设和记忆太长，未发送；请缩短输入后再发。')
+        kept = sum(m['role'] == 'user' for m in history)
+        self.trim_note = None
+        if len(history) < len(self.history) and not self.trim_noted:
+            self.trim_noted = True
+            self.trim_note = (f'（为了不超出长度上限，这次只带了最近 {kept} 轮原文；'
+                              '更早的聊天仍保存在本机，长期记忆不受影响。）')
+        messages = [*head, *history, user]
         with saving():
             request_id, _ = self.budget.reserve(self.cfg)
             self.store.append(self.path, {'role': 'user', 'content': text, 'request_id': request_id})
@@ -416,7 +438,14 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead):
             elif text:
                 # Storage and accounting errors stop the session rather than
                 # permitting a subsequent request on uncertain local state.
-                output(f'{chat.cfg.name}: {chat.send(text)}')
+                try:
+                    reply = chat.send(text)
+                except TooLong as exc:
+                    output(str(exc))
+                    continue
+                if chat.trim_note:
+                    output(chat.trim_note)
+                output(f'{chat.cfg.name}: {reply}')
                 if drop():
                     output('（等回复时打的字没有收到，请重新输入。）')
     except (KeyboardInterrupt, EOFError):
