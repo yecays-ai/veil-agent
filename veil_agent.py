@@ -409,7 +409,7 @@ class Chat:
         try:
             self.last_self = description
             if self.tools and self.tools.tools:
-                reply, tool_summaries = self._tool_chat(messages, request_id)
+                reply, tool_summaries = self._tool_chat(messages, request_id, len(history))
             else:
                 reply, prompt, completion, cached = self.model(messages)
         except (KeyboardInterrupt, EOFError):
@@ -430,17 +430,40 @@ class Chat:
             self.memory.completed()
         return reply
 
-    def _tool_chat(self, messages, request_id):
+    def _tool_chat(self, messages, request_id, history_count):
         from tools_agent import display_call, permitted_tools
         summaries = []
         loop_messages = list(messages)
+        history_start = len(messages) - history_count - 1
         final = ''
         next_reservation = None
+
+        def request_size(offered):
+            # Count each message once, including tool-call arguments and reasoning.
+            return (sum(len(json.dumps(m, ensure_ascii=False).encode('utf-8')) + 256
+                        for m in loop_messages)
+                    + len(json.dumps(offered or [], ensure_ascii=False).encode('utf-8')) + 256)
+
+        def fit_history(offered):
+            nonlocal history_count
+            removed = False
+            while history_count and request_size(offered) > self.cfg.provider['max_input_tokens']:
+                end = history_start + 1
+                while end < history_start + history_count and loop_messages[end]['role'] != 'user':
+                    end += 1
+                del loop_messages[history_start:end]
+                history_count -= end - history_start
+                removed = True
+            if removed and not self.trim_noted:
+                self.trim_noted = True
+                kept = sum(m['role'] == 'user' for m in loop_messages[history_start:history_start + history_count])
+                self.trim_note = (f'（为了不超出长度上限，这次只带了最近 {kept} 轮原文；'
+                                  '更早的聊天仍保存在本机，长期记忆不受影响。）')
+
         for step in range(self.cfg.tools['max_steps']):
             offered = None if step == self.cfg.tools['max_steps'] - 1 else permitted_tools(self.tools.tools)
-            bound = (sum(len((m.get('content') or '').encode('utf-8')) + 256 for m in loop_messages)
-                     + len(json.dumps(offered or [], ensure_ascii=False).encode('utf-8')) + 256)
-            if bound > self.cfg.provider['max_input_tokens']:
+            fit_history(offered)
+            if request_size(offered) > self.cfg.provider['max_input_tokens']:
                 if step == 0:
                     self.budget.settle(request_id, self.cfg, 0, 0, 0)
                     raise TooLong('工具说明和本轮上下文超过长度上限，未调用工具；请缩短输入后再试。')
@@ -486,28 +509,41 @@ class Chat:
                 loop_messages.append(assistant_record)
                 next_offered = (None if step + 1 == self.cfg.tools['max_steps'] - 1
                                 else permitted_tools(self.tools.tools))
-                projected = (sum(len((m.get('content') or '').encode('utf-8')) + 256 for m in loop_messages)
-                             + len(json.dumps(next_offered or [], ensure_ascii=False).encode('utf-8')) + 256
-                             + len(json.dumps(assistant_record, ensure_ascii=False).encode('utf-8'))
-                             + len(message.tool_calls) * (self.cfg.tools['max_result_bytes'] + 512))
-                over_bound = projected > self.cfg.provider['max_input_tokens']
+                too_long_result = '工具结果超过本轮请求长度上限，未提供给模型。'
+                placeholders = [{'role': 'tool', 'tool_call_id': call.id, 'content': too_long_result}
+                                for call in message.tool_calls]
+                loop_messages.extend(placeholders)
+                fit_history(next_offered)
+                can_report_results = request_size(next_offered) <= self.cfg.provider['max_input_tokens']
+                del loop_messages[-len(placeholders):]
+                if not can_report_results:
+                    for call in message.tool_calls:
+                        summary = call.function.name
+                        self.output(display_call(call.function.name, summary, '被拒绝'))
+                        summaries.append({'tool': call.function.name, 'path': summary, 'state': '被拒绝'})
+                        self.store.append(f'{self.cfg.id}/tools.jsonl', {'request_id': request_id,
+                            'tool': call.function.name, 'path': summary, 'state': '被拒绝'})
+                    self.budget.settle(next_reservation, self.cfg, 0, 0, 0)
+                    final = '工具调用记录超过长度上限，未执行工具。'
+                    break
                 for call in message.tool_calls:
                     try:
                         args = json.loads(call.function.arguments)
                         if not isinstance(args, dict):
                             raise ValueError('arguments must be an object')
-                        if over_bound:
-                            result, state, summary = ('程序未执行：工具结果可能使请求超过长度上限。',
-                                                      '被拒绝', self.tools.preview_summary(call.function.name, args))
-                        else:
-                            result, state, summary = self.tools.invoke(call.function.name, args, self.approval)
+                        result, state, summary = self.tools.invoke(call.function.name, args, self.approval)
                     except (ValueError, TypeError):
                         result, state, summary = '程序拒绝：工具参数不是合法 JSON 对象。', '被拒绝', call.function.name
+                    tool_message = {'role': 'tool', 'tool_call_id': call.id, 'content': result}
+                    loop_messages.append(tool_message)
+                    fit_history(next_offered)
+                    if request_size(next_offered) > self.cfg.provider['max_input_tokens']:
+                        tool_message['content'] = too_long_result
+                        state = '结果过长'
                     self.output(display_call(call.function.name, summary, state))
                     summaries.append({'tool': call.function.name, 'path': summary, 'state': state})
                     self.store.append(f'{self.cfg.id}/tools.jsonl', {'request_id': request_id,
                         'tool': call.function.name, 'path': summary, 'state': state})
-                    loop_messages.append({'role': 'tool', 'tool_call_id': call.id, 'content': result})
             except BaseException:
                 self.budget.settle(next_reservation, self.cfg, 0, 0, 0)
                 raise

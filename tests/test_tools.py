@@ -298,20 +298,86 @@ max_result_bytes = 200
         logs = self.store.read('test/tools.jsonl')
         self.assertEqual(logs[0]['state'], '被拒绝')
 
-    def test_result_that_could_overflow_next_request_is_not_read(self):
+    def test_short_result_runs_even_when_maximum_result_could_overflow(self):
         self.cfg.tools['max_result_bytes'] = 6000
         first = self.message([self.tool_call('read_text_file', '{"path":"large.txt"}', 'read')])
-        final = self.message(content='The result would exceed the limit.')
+        final = self.message(content='The file says hello.')
         model = Mock(side_effect=[(first, 100, 20, 0), (final, 120, 20, 0)])
         tools = Mock()
         tools.tools = [SimpleNamespace(name='read_text_file', description='Read', inputSchema={})]
         tools.capability_event = None
         tools.preview_summary.return_value = 'large.txt'
+        tools.invoke.return_value = ('hello', '成功', 'large.txt')
         output = []
         chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=output.append)
-        chat.send('read it')
+        self.assertEqual(chat.send('read it'), 'The file says hello.')
+        tools.invoke.assert_called_once()
+        self.assertEqual(model.call_args_list[1].args[0][-1]['content'], 'hello')
+
+    def test_windows_reported_read_tools_all_run_for_short_results(self):
+        self.cfg.tools['max_result_bytes'] = 6000
+        names = ('list_directory', 'get_file_info', 'read_text_file')
+        first = self.message([self.tool_call(name, '{"path":"test.txt"}', name) for name in names])
+        final = self.message(content='test.txt contains hello')
+        model = Mock(side_effect=[(first, 100, 20, 0), (final, 120, 20, 0)])
+        tools = Mock()
+        tools.tools = [SimpleNamespace(name=name, description=name, inputSchema={}) for name in names]
+        tools.capability_event = None
+        tools.invoke.side_effect = [(name + ': hello', '成功', 'test.txt') for name in names]
+        chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=lambda _: None)
+        self.assertEqual(chat.send('inspect test.txt'), 'test.txt contains hello')
+        self.assertEqual([call.args[0] for call in tools.invoke.call_args_list], list(names))
+        self.assertEqual([row['content'] for row in model.call_args_list[1].args[0][-3:]],
+                         [name + ': hello' for name in names])
+
+    def test_oversized_tool_call_record_refuses_write_before_approval(self):
+        first = self.message([self.tool_call('write_file',
+            '{"path":"new.txt","content":"hello"}', 'write')], reasoning='x' * 6000)
+        model = Mock(return_value=(first, 100, 20, 0))
+        tools = Mock()
+        tools.tools = [SimpleNamespace(name='write_file', description='Write', inputSchema={})]
+        tools.capability_event = None
+        chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=lambda _: None)
+        self.assertIn('未执行工具', chat.send('write it'))
         tools.invoke.assert_not_called()
-        self.assertIn('工具结果可能使请求超过长度上限', model.call_args_list[1].args[0][-1]['content'])
+
+    def test_real_result_over_limit_is_not_sent_to_model(self):
+        self.cfg.tools['max_result_bytes'] = 6000
+        first = self.message([self.tool_call('read_text_file', '{"path":"large.txt"}', 'read')])
+        final = self.message(content='The result was too long.')
+        model = Mock(side_effect=[(first, 100, 20, 0), (final, 120, 20, 0)])
+        tools = Mock()
+        tools.tools = [SimpleNamespace(name='read_text_file', description='Read', inputSchema={})]
+        tools.capability_event = None
+        tools.invoke.return_value = ('secret' * 1000, '成功', 'large.txt')
+        chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=lambda _: None)
+        self.assertEqual(chat.send('read it'), 'The result was too long.')
+        forwarded = model.call_args_list[1].args[0][-1]['content']
+        self.assertIn('超过本轮请求长度上限', forwarded)
+        self.assertNotIn('secret', forwarded)
+
+    def test_tool_result_drops_oldest_history_round_before_reply(self):
+        self.cfg.tools['max_result_bytes'] = 6000
+        self.store.append('test/chat.jsonl', {'role': 'user', 'content': 'old ' + 'x' * 2100})
+        self.store.append('test/chat.jsonl', {'role': 'assistant', 'content': 'old answer'})
+        first = self.message([self.tool_call('read_text_file', '{"path":"test.txt"}', 'read')])
+        final = self.message(content='The file has test data.')
+        requests = []
+        responses = [(first, 100, 20, 0), (final, 120, 20, 0)]
+        def model(messages, **_kwargs):
+            requests.append(json.loads(json.dumps(messages)))
+            return responses[len(requests) - 1]
+        tools = Mock()
+        tools.tools = [SimpleNamespace(name='read_text_file', description='Read', inputSchema={})]
+        tools.capability_event = None
+        tools.invoke.return_value = ('test data ' * 220, '成功', 'test.txt')
+        chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=lambda _: None)
+        self.assertEqual(chat.send('read test.txt'), 'The file has test data.')
+        first_request, second_request = requests
+        self.assertTrue(any((m.get('content') or '').startswith('old ') for m in first_request))
+        self.assertFalse(any((m.get('content') or '').startswith('old ') for m in second_request))
+        self.assertEqual(second_request[-1]['content'], 'test data ' * 220)
+        self.assertIsNotNone(chat.trim_note)
 
 
 @unittest.skipUnless(shutil.which('node') and shutil.which('npx'),
