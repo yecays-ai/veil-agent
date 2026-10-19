@@ -21,7 +21,7 @@ lan 随口聊天，不说“记住”。Peter 自己把值得留下的事记进�
 
 前置验收证明：没有向量时，Ombre 对整句问法过不了它的融合门槛（`fuzzy_threshold` 50），11 句只中 2 句；情感记忆不走 `breath_search`，只能通过 `feel(query)` 找回，而 `feel` 的检索本身就是向量优先。Ombre 是按“有向量”设计的。所以改为：
 
-1. **开 Ombre 自带的向量检索**（`embedding.enabled=true`，`backend: api`，OpenAI 兼容接口）。用哪家接口、key 由 lan 定，key 只放本机 `.env`，由程序传给 Ombre 子进程，不进仓库、不进日志。不改 Ombre 代码，不调低它的门槛。
+1. **开 Ombre 自带的向量检索**（`embedding.enabled=true`，`backend: api`，OpenAI 兼容接口）。lan 2026-10-19 选定加向量服务。默认用硅基流动 `BAAI/bge-m3`（`base_url: https://api.siliconflow.cn/v1`，多语言，1024 维），模型名和地址写在角色配置里可换。key 放本机 `.env` 的 `EMBED_API_KEY=`（`.env.example` 加这一行），由程序传给 Ombre 子进程的 `OMBRE_EMBED_API_KEY`，不进仓库、不进日志。单价按官网写进配置。不改 Ombre 代码，不调低它的门槛。
 2. **向量花费计入预算**：Ombre 自己发向量请求，我们的账本看不到。按“每次写入 1 次、每轮召回 1–2 次、每次按输入长度估 token”在请求前预留、在账本里记一笔（单价写在配置里）。向量服务失败时 Ombre 会退回关键词，程序在屏幕上提示一行“记忆检索降级为关键词”，不重试。
 3. **每轮召回走两条入口**：`breath_search(mode="automatic", with_ids=True, max_results=3)` 找普通记忆，`feel(query)` 找情感记忆；合并后最多 3 条放进本轮。Ombre 不给逐条相关度，按它返回的结构化命中取，不拿“联想浮现”区凑数。
 4. **情感记忆写入**：`hold(feel=True)` 需要已存在的 `source_bucket`，先把这几轮原文存成普通来源桶，再写情感桶（前置验收已验证这个顺序）。
