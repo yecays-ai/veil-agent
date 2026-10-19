@@ -16,13 +16,15 @@ ALLOW = {
 }
 ASK = {'write_file'}
 DENY = {'edit_file', 'move_file', 'create_directory'}
+# Memory tools (ticket 007) are offered by memory_native.ToolSet, never by the filesystem server.
+NATIVE = {'hold', 'breath_search'}
 
 
 def permitted_tools(server_tools):
     """Convert only application-allowlisted MCP tools to OpenAI tool schemas."""
     result = []
     for tool in server_tools:
-        if tool.name not in ALLOW | ASK:
+        if tool.name not in ALLOW | ASK | NATIVE:
             continue
         result.append({'type': 'function', 'function': {
             'name': tool.name, 'description': tool.description or tool.name,

@@ -186,6 +186,10 @@ def load_character(root, character_id):
             folder = Path(tools['folder'])
             if folder.is_absolute() or '..' in folder.parts:
                 raise ValueError('tools folder must be a safe relative path')
+        if tools is None and (cfg.get('memory') or {}).get('mode') == 'native':
+            # Native memory runs on the tool loop; files stay off unless [tools] says otherwise.
+            tools = {'enabled': False, 'folder': f'data/{character_id}/workspace',
+                     'max_steps': 6, 'max_result_bytes': 8192}
         return Character(character_id, str(cfg['name']), persona,
                          positive_int(cfg.get('history_rounds', 20)),
                          positive_int(cfg.get('max_output_tokens', 1024)), provider, cfg['provider'], cfg.get('memory'), tools)
@@ -303,6 +307,10 @@ class Budget:
                 f'待核对预留 ¥{pending:.6f}')
 
 
+def memory_mode(memory):
+    return ('native' if getattr(memory, 'native', False) else True) if memory else False
+
+
 def build_self_description(cfg, budget, memory=False, capabilities=None):
     # Keep the facts about implemented capabilities together as they evolve.
     stamp = budget.clock()
@@ -317,8 +325,11 @@ def build_self_description(cfg, budget, memory=False, capabilities=None):
         f'Local time: {stamp} ({weekday}).\n'
         f'Available: terminal text chat; up to {cfg.history_rounds} recent rounds included verbatim '
         'per request; full chat logs saved locally.\n'
-        + ('Long-term memory: automatic saving every four completed rounds, automatic recall; '
-         'the user can list, suppress, restore and delete memories with /memory, /forget, /restore, /delete. '
+        + (('Long-term memory: you decide what to save and call the hold tool yourself (the user need not say '
+            '"remember"); relevant memories are also recalled automatically each turn; '
+            if memory == 'native' else
+            'Long-term memory: automatic saving every four completed rounds, automatic recall; ')
+         + 'the user can list, suppress, restore and delete memories with /memory, /forget, /restore, /delete. '
          if memory else 'You have no long-term memory; after restart you know only restored recent rounds. ')
         +
         ((capabilities.description if isinstance(getattr(capabilities, 'description', None), str)
@@ -364,7 +375,7 @@ class Chat:
 
     def send(self, text):
         recalled = self.memory.context(text) if self.memory else []
-        description = build_self_description(self.cfg, self.budget, bool(self.memory), self.tools)
+        description = build_self_description(self.cfg, self.budget, memory_mode(self.memory), self.tools)
         head = [{'role': 'system', 'content': self.cfg.persona},
                 {'role': 'system', 'content': description}, *recalled]
         user = {'role': 'user', 'content': text}
@@ -634,7 +645,7 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead):
             elif text == '/self':
                 if chat.last_self is None:
                     output('（尚未发送消息：这是当前说明的预览，发送前会刷新。）')
-                    output(build_self_description(chat.cfg, chat.budget, bool(chat.memory), chat.tools))
+                    output(build_self_description(chat.cfg, chat.budget, memory_mode(chat.memory), chat.tools))
                 else:
                     output(chat.last_self)
             elif text == '/memory' or text.startswith(('/forget ', '/restore ', '/delete ')):
@@ -683,6 +694,10 @@ def main():
                         from memory_agent import Memory, open_ombre
                         with open_ombre(ROOT, cfg) as backend:
                             with Memory(cfg, store, budget, model, backend) as memory:
+                                if memory.native:
+                                    from memory_native import NativeMemoryTools, ToolSet
+                                    tools = ToolSet(tools, NativeMemoryTools(
+                                        memory, cfg.tools['max_result_bytes']))
                                 run_chat(Chat(cfg, store, budget, model, memory, tools))
                             for notice in memory.notices():
                                 print(notice)
