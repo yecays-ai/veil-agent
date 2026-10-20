@@ -20,7 +20,7 @@ Peter 自己决定一次回几条消息：一条消息像发短信一样只说�
 - 分支 `ticket/019-multi-message`，基于 main `38b8826`。`veil_agent.py` 增加应用自身的 `send_message` 工具，纯消息步骤立即结束，不预留下一次请求；混合工具保持原有预算、审批、长度检查和步数上限。每条消息先保存再输出，最终相同文字不重复保存或显示。
 - `Chat.recent()` 兼容 assistant 开头和旧记录，保留独立消息；网页历史使用保存时间，刷新/重启直接显示。`web/index.html` 仅排队显示，不切分文字；按 Unicode 字符计数分档，并按 15 分钟间隔分组。
 - 复用结论：沿用工单已有 Letta/AstrBot 设计审计；施工时在 GitHub 检索并重新读取 [旧 VEIL 固定提交源码](https://github.com/yecays-ai/veil/blob/4509108/lib/chat/bubble-pacing.ts)，确认 `bubbleDelayMs`、`sameVisualMessageGroup` 的条件。只借设计，在现有 Python 工具循环和原生网页上实现，无新依赖，不复制上游代码。
-- Windows 离线全量测试 170 项通过（3 项可选集成跳过），含假模型多语言独立保存/重启、混合工具及去重、本机 HTTP 消息事件与 `/cost`，以及实际页面脚本的虚拟时钟/DOM 节奏、分组、刷新测试。真实 DeepSeek 的多条回复习惯及连续 assistant 历史兼容性待体验确认；未为此调用真实模型或付费接口。若接口实际拒收连续 assistant，按本单约定只在请求层兼容，不合并本地记录。
+- [PR #41](https://github.com/yecays-ai/veil-agent/pull/41)：Windows 离线全量测试 170 项，167 项通过、3 项可选集成跳过，含假模型多语言独立保存/重启、混合工具及去重、本机 HTTP 消息事件与 `/cost`，以及实际页面脚本的虚拟时钟/DOM 节奏、分组、刷新测试。实现提交 `0cb0ec8` 的 GitHub CI 四项通过，CodeRabbit 完成评审，无可操作评论。真实 DeepSeek 的多条回复习惯及连续 assistant 历史兼容性待体验确认；未为此调用真实模型或付费接口。若接口实际拒收连续 assistant，按本单约定只在请求层兼容，不合并本地记录。
 
 ## 要做的事
 
