@@ -1,25 +1,22 @@
 # 交接
 
-更新：2026-10-20 13:06 UTC · Codex · 工单 021 的两条 CodeRabbit 功能评论已修复并确认解决，最新 CI 通过
+更新：2026-10-20 · Codex · 工单 022 修复实现中
 
 ## 做到哪
 
-- 当前分支：`ticket/021-minimal-autonomy`，修复提交 `67b1878`；PR：https://github.com/yecays-ai/veil-agent/pull/48。
-- 按 `docs/tickets/021-minimal-autonomy.md` 实现：常驻网页服务空闲时按配置唤醒；默认暂停、每 3 小时、每天最多 6 次；后台预算池默认 ¥2/日，仍受原 ¥10/日、¥300/月总预算约束。
-- 后台沿用现有 Chat 工具循环；最多 12 个工具步骤、10 分钟；单一主循环避免并发模型/工具；聊天、暂停或退出在当前调用/工具步骤后让位；后台审批明确拒绝；`send_message` 不会发给 lan。
-- `data/<角色>/autonomy.jsonl` 记录决定、原因、工具、lab 变化、结果、关注点/下一步和费用；异常中断标记可阻止重启后自动重试。页面显示下次唤醒与上次结果，新增 `/autonomy`，首次开启能力变化只提示一次。
-- 复用调查已记录在 021 工单：检查 APScheduler，选择标准库与现有服务主循环，不增加调度框架依赖。
-- `py_compile` 通过；完整现有测试 184 项通过，3 项可选集成跳过。测试用假模型和临时数据；没有真实模型调用或 Windows 用户体验验收。
-- CodeRabbit 两条评论均确认会影响实际使用并已修复：无文件工具角色开启自主活动不再抛错；聊天与后台唤醒同时到达时，聊天优先且启动前的中断信号不会被清掉。新增 3 条定向回归，均通过。
+- 当前分支：`ticket/022-node-path`，基于已通过 GitHub API 核对的最新 main `6b44de6`。普通 GitHub fetch 因网络连接失败；GitHub 最新提交结果与本地 `main`、`origin/main` 完全一致。
+- 根因已确认：运行环境里的 `shutil.which('node')` 命中 Codex 自带 Node，但 `npx` 未命中；Windows 注册表系统 PATH 包含 `E:\Program Files\`，其中 node.exe 与 npx.cmd 均存在。网页告警由这项误判触发。
+- `web_launcher.py` 为分离服务进程合并当前系统/用户注册表 PATH 与继承 PATH，保留现有路径且去重；当前已有定向回归覆盖合并行为。
+- 复用调查及许可证判断见 `docs/tickets/022-windows-node-path.md`；只借鉴标准库注册表 PATH 读取，不引入依赖。
+- 定向单测通过；使用本机合并后的 Windows 环境确认 `node` 和 `npx` 均可定位，并运行 `cmd /c npx --version` 成功（11.19.1）。`py_compile` 和 `git diff --check` 通过；未运行全量测试或真实网页验收。
 
 ## 下一步
 
-1. PR #48 已满足 CodeRabbit 与 CI 条件，按仓库规则合并。
-2. 合并后同步本地 main，并请 lan 完成 Windows 体验验收。
-3. 合并后请 lan 按 `STATUS.md` 和 021 工单的 Windows 体验步骤验收；不得把自动化测试写成用户验收通过。
+1. 检查改动范围，提交并推送 PR，等待 CodeRabbit 与 CI；只处理影响功能/安全的评论。
+3. 合并后请 lan 按 `STATUS.md` 的 022 步骤验收。升级后需先退出当前已运行服务一次再重新双击，以确保旧服务进程环境被替换；没有 Windows 体验验收前不能标记完成。
 
 ## 注意
 
-- `STATUS.md` 与 `HANDOFF.md` 已在本分支更新，PR 必须一并包含。
-- 不读取或改写真实聊天、记忆、人设正文或费用账本；只新增角色配置默认值，不调整模型和总预算。
-- 原启动目录之前未提交内容留在本地 stash，没有纳入此分支或提交。
+- 每个 PR 同步更新 `STATUS.md` 和 `HANDOFF.md`。
+- 不读取或修改真实聊天、记忆、人设或费用账本，不更改模型和预算。
+- 当前没有证据表明模型调用或费用记录受影响；错误发生在工具启动前的 Node/npx 能力检测。
