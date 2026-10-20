@@ -1,12 +1,15 @@
 """Bounded MCP filesystem access and application-enforced tool policy."""
 import asyncio
+import hashlib
 import json
 import os
+import re
 import shutil
+import stat
 import subprocess
 import threading
 from concurrent.futures import Future
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from types import SimpleNamespace
 
 
@@ -16,7 +19,8 @@ ALLOW = {
     'get_file_info', 'search_files', 'list_directory_with_sizes',
 }
 ASK = {'write_file', 'append_file', 'grant_append'}
-DENY = {'edit_file', 'move_file', 'create_directory'}
+DENY = {'edit_file', 'move_file'}
+LAB_ONLY = {'create_directory'}
 # Memory tools (ticket 007) are offered by memory_native.ToolSet, never by the filesystem server.
 NATIVE = {'hold', 'breath_search'}
 
@@ -25,7 +29,7 @@ def permitted_tools(server_tools):
     """Convert only application-allowlisted MCP tools to OpenAI tool schemas."""
     result = []
     for tool in server_tools:
-        if tool.name not in ALLOW | ASK | NATIVE:
+        if tool.name not in ALLOW | ASK | NATIVE | LAB_ONLY:
             continue
         result.append({'type': 'function', 'function': {
             'name': tool.name, 'description': tool.description or tool.name,
@@ -35,9 +39,29 @@ def permitted_tools(server_tools):
 
 
 def tool_policy(name):
+    if name in LAB_ONLY:
+        return 'lab'
     if name in DENY or name not in ALLOW | ASK:
         return 'deny'
     return 'ask' if name in ASK else 'allow'
+
+
+def lab_name_problem(name):
+    """Use Windows filename rules on every platform, including config names."""
+    if not isinstance(name, str) or not name or name in ('.', '..'):
+        return '名称必须是单级文件或文件夹名'
+    if any(ord(c) < 32 or c in '<>:"|?*/\\' for c in name) or name.endswith((' ', '.')):
+        return '名称含 Windows 非法字符或以空格、点结尾'
+    stem = name.split('.')[0].upper()
+    if stem in {'CON', 'PRN', 'AUX', 'NUL', 'CONIN$', 'CONOUT$'} or re.fullmatch(r'(COM|LPT)[1-9¹²³]', stem):
+        return '名称是 Windows 保留名'
+    return None
+
+
+def _redirected(path):
+    info = path.lstat()
+    return stat.S_ISLNK(info.st_mode) or bool(
+        getattr(info, 'st_file_attributes', 0) & getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0x400))
 
 
 def _path_key(path):
@@ -100,6 +124,7 @@ class FilesystemTools:
         from veil_agent import UserError
         self.root = Path(root).resolve()
         self.cfg, self.store = cfg, store
+        self.lab = None
         settings = cfg.tools or {}
         if cfg.tools is None:
             self.enabled = False
@@ -148,10 +173,18 @@ class FilesystemTools:
             return
         self.tools = [tool for tool in self.client.tools
                       if tool_policy(tool.name) != 'deny'
-                      and tool.name not in ('append_file', 'grant_append')]
+                      and tool.name not in ('append_file', 'grant_append', 'create_directory')]
+        self._open_lab(settings)
+        if self.lab:
+            self.tools.append(SimpleNamespace(name='create_directory',
+                description='Create folders only inside your lab, e.g. lab/research. '
+                            'No confirmation needed. Directories outside lab are forbidden.',
+                inputSchema={'type': 'object', 'properties': {'path': {'type': 'string'}},
+                             'required': ['path']}))
         self.tools.append(SimpleNamespace(name='append_file',
             description='Append text to an existing workspace file without changing old content. '
-                        'Requires terminal consent unless this exact file has a persistent grant.',
+                        'Inside lab no confirmation is needed. Outside lab requires consent '
+                        'unless this exact file has a persistent grant.',
             inputSchema={'type': 'object', 'properties': {
                 'path': {'type': 'string'}, 'content': {'type': 'string'}},
                 'required': ['path', 'content']}))
@@ -169,10 +202,36 @@ class FilesystemTools:
             self.description = 'You currently have no supported filesystem tools. '
             self.startup_notice = '文件工具服务没有可用的只读工具；Peter 将继续正常聊天。'
 
+    def _open_lab(self, settings):
+        name = settings.get('lab', 'lab')
+        if name is False:
+            return
+        from veil_agent import UserError
+        journal = settings.get('persistent_append_file')
+        if (lab_name_problem(name) or
+                (isinstance(journal, str) and name.casefold() == journal.casefold())):
+            raise UserError('实验室配置无效：必须是与成长日记不同的单级文件夹名。')
+        self.lab_max_write_bytes = settings.get('lab_max_write_bytes', 200000)
+        if type(self.lab_max_write_bytes) is not int or self.lab_max_write_bytes <= 0:
+            raise UserError('实验室单次写入上限必须是正整数。')
+        folder = self.workspace / name
+        try:
+            if folder.exists() or folder.is_symlink():
+                if _redirected(folder) or not folder.is_dir():
+                    raise ValueError('redirected lab')
+            folder.mkdir(exist_ok=True)
+            if _redirected(folder) or folder.resolve() != folder:
+                raise ValueError('redirected lab')
+            self.lab = folder
+        except (OSError, ValueError):
+            self.startup_notice = '实验室不可用：目录不是普通文件夹或存在链接重定向；实验室免确认权限已关闭。'
+
     def _record_capabilities(self, names=None):
         names = names or []
         core = {'version': VERSION, 'folder': self.folder_name, 'tools': {
-            name: ('ask' if name in ASK else 'allow') for name in names}}
+            name: tool_policy(name) for name in names},
+            'lab': ({'folder': self.lab.name, 'max_write_bytes': self.lab_max_write_bytes}
+                    if getattr(self, 'lab', None) else False)}
         try:
             previous = json.loads(self.cap_path.read_text(encoding='utf-8')) if self.cap_path.exists() else None
             if previous and {k: previous.get(k) for k in core} == core:
@@ -189,12 +248,18 @@ class FilesystemTools:
                     before, after = old.get(name), core['tools'].get(name)
                     if before != after:
                         verb = '新增' if before is None else '移除' if after is None else '权限调整'
-                        level = {'allow': '可直接读取', 'ask': '需要先问你同意'}
+                        level = {'allow': '可直接读取', 'ask': 'lab 外需要先问你同意', 'lab': '仅限实验室，可直接做'}
                         changes.append(f'{verb}{name}' + (f'（{level[after]}）' if after else ''))
                 if previous is None:
                     changes = ([f'{name}（{ "需要先问你同意" if level == "ask" else "可直接读取"}）'
                                 for name, level in sorted(core['tools'].items())]
                                or ['当前没有可用工具'])
+                old_lab = previous.get('lab', False) if previous else False
+                if core['lab'] and core['lab'] != old_lab:
+                    changes.append(f'你自己的实验室 `{self.lab.name}/` 开放了：里面放什么由你决定；'
+                                   '可直接建文件夹、新建和追加，不能覆盖、删除或执行脚本；日记授权独立')
+                elif old_lab and not core['lab']:
+                    changes.append('实验室免确认权限已关闭')
                 detail = '、'.join(changes) or '工具能力清单已初始化'
                 self.capability_event = f'你的能力有变化：文件夹“{self.folder_name}”中的工具为{detail}。'
             row = {**core, 'pending_event': self.capability_event}
@@ -225,7 +290,23 @@ class FilesystemTools:
         if not names:
             return 'You currently have no tools. '
         entries = [f'{name}（{ "先问 lan 同意" if name in ASK else "可直接做"}）' for name in names]
-        return f'You can use tools only in the “{self.folder_name}” folder: ' + '、'.join(entries) + '. '
+        description = f'You can use tools only in the “{self.folder_name}” folder: ' + '、'.join(entries) + '. '
+        if getattr(self, 'lab', None):
+            lab = self.lab.name
+            description += (
+                f'Your own lab is open at {lab}/, relative to the workspace tool root; '
+                f'use paths such as {lab}/research/v1.md, never workspace/{lab}/. '
+                'Choose its contents yourself. Within lab you may create directories and new files '
+                'and append to existing files without asking. Never overwrite, edit in place, delete, '
+                'move files, or execute scripts (the script allowlist is empty). Use plan B: '
+                'keep long documents as v1.md, v2.md, v3.md in your own folders, and short pieces '
+                'as dated files. Before saving a new version, fully read the previous version; '
+                'if truncated, use read_text_file head/tail in sections. Check the returned version '
+                f'byte counts for omissions. Each write/append is limited to {self.lab_max_write_bytes} '
+                'UTF-8 bytes; split larger work into files or append chunks. '
+                'Outside lab the existing approval rules apply. The growth journal stays outside lab '
+                'and has its own independent file-identity-bound append grant; lab grants no access to it. ')
+        return description
 
     def invoke(self, name, args, approval=input):
         policy = tool_policy(name)
@@ -245,6 +326,16 @@ class FilesystemTools:
                     safe_args[key][index] = safe_value
             paths = [_summary(self.workspace, path) for path in resolved.values()]
             summary = ', '.join(paths)
+            if name in ('write_file', 'append_file', 'create_directory'):
+                target = next(iter(resolved.values()))
+                lab = getattr(self, 'lab', None)
+                raw = args['path']
+                parts = PureWindowsPath(raw).parts
+                lab_spelling = bool(lab and parts and parts[0].casefold() == lab.name.casefold())
+                if lab and (lab_spelling or target.is_relative_to(lab)):
+                    return self._invoke_lab(name, raw, args, summary)
+                if name == 'create_directory':
+                    return '程序拒绝：只能在实验室内新建文件夹。', '被拒绝', summary
             if name in ('append_file', 'grant_append'):
                 return self._invoke_append(name, next(iter(resolved.values())), summary, args, approval)
             if policy == 'ask':
@@ -283,6 +374,103 @@ class FilesystemTools:
         except Exception:
             value = args.get('path', name)
             return '工具执行出错。', '出错', Path(str(value)).name or name
+
+    def _checked_lab_path(self, raw):
+        windows = PureWindowsPath(raw)
+        parts = re.split(r'[/\\]', raw)
+        if (windows.drive or windows.root or Path(raw).is_absolute() or
+                any(lab_name_problem(part) for part in parts) or
+                parts[0].casefold() != self.lab.name.casefold()):
+            raise ValueError('use a safe relative lab path')
+        if _redirected(self.lab) or self.lab.resolve() != self.lab:
+            raise ValueError('lab was redirected')
+        target = self.lab
+        for part in parts[1:]:
+            # Windows treats case variants as the same file. Enforce that rule
+            # in Linux CI too, rather than allowing two competing versions.
+            matches = ([p for p in target.iterdir() if p.name.casefold() == part.casefold()]
+                       if target.is_dir() else [])
+            if len(matches) > 1:
+                raise ValueError('ambiguous case-insensitive name')
+            target = matches[0] if matches else target / part
+            if (target.exists() or target.is_symlink()) and _redirected(target):
+                raise ValueError('lab links are not writable')
+        if len(str(target)) > 240:
+            raise ValueError('lab path exceeds 240 characters')
+        resolved = checked_path(self.workspace, str(target))
+        if not resolved.is_relative_to(self.lab):
+            raise ValueError('outside lab')
+        return resolved
+
+    def _invoke_lab(self, name, raw, args, summary):
+        try:
+            target = self._checked_lab_path(raw)
+            if name == 'create_directory':
+                target.mkdir(parents=True, exist_ok=True)
+                self._checked_lab_path(raw)
+                return '实验室文件夹已创建。', '成功', summary
+            content = args.get('content')
+            if not isinstance(content, str) or (name == 'append_file' and not content):
+                return '程序拒绝：内容必须是文字，追加内容不能为空；没有写入任何内容。', '被拒绝', summary
+            data = content.encode('utf-8')
+            if len(data) > self.lab_max_write_bytes:
+                return (f'程序拒绝：本次 {len(data)} 字节，超过实验室单次上限 '
+                        f'{self.lab_max_write_bytes} 字节；没有写入任何内容。请拆成多个文件或分段追加。',
+                        '被拒绝', summary)
+            if name == 'write_file':
+                with target.open('xb') as handle:
+                    self._checked_lab_path(raw)
+                    if handle.write(data) != len(data):
+                        raise OSError('short write')
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                self._checked_lab_path(raw)
+                if hashlib.sha256(target.read_bytes()).digest() != hashlib.sha256(data).digest():
+                    raise OSError('write verification failed')
+                note = ''
+                version = re.fullmatch(r'v([1-9][0-9]*)\.md', target.name, re.IGNORECASE)
+                if version and int(version[1]) > 1:
+                    prior_name = f'v{int(version[1]) - 1}.md'
+                    prior = next((p for p in target.parent.iterdir()
+                                  if p.name.casefold() == prior_name), None)
+                    if prior and prior.is_file():
+                        note = (f' 上一版 {prior.name}：{prior.stat().st_size} 字节；'
+                                f'本版 {target.name}：{len(data)} 字节。请核对是否漏掉上一版内容。')
+                return f'实验室新文件已创建并通过 SHA-256 核对（{len(data)} 字节）。{note}', '成功', summary
+            if not target.is_file():
+                return '程序拒绝：追加目标必须是已存在的普通文件；没有写入任何内容。', '被拒绝', summary
+            info = target.stat()
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                return '程序拒绝：实验室不能追加链接文件；没有写入任何内容。', '被拒绝', summary
+            identity = _file_identity(info)
+            flags = os.O_WRONLY | os.O_APPEND | getattr(os, 'O_BINARY', 0) | getattr(os, 'O_NOFOLLOW', 0)
+            with os.fdopen(os.open(target, flags), 'ab', buffering=0) as handle:
+                self._checked_lab_path(raw)
+                opened = os.fstat(handle.fileno())
+                if ((opened.st_dev, opened.st_ino, opened.st_size) !=
+                        (identity[0], identity[1], identity[3]) or opened.st_nlink != 1 or
+                        _file_identity(target.stat()) != identity):
+                    return '程序拒绝：实验室文件在打开时变化；没有写入任何内容。', '被拒绝', summary
+                if handle.write(data) != len(data):
+                    raise OSError('short append')
+                os.fsync(handle.fileno())
+            self._checked_lab_path(raw)
+            latest = target.stat()
+            if ((latest.st_dev, latest.st_ino) != identity[:2] or
+                    latest.st_size != identity[3] + len(data)):
+                raise OSError('append target changed')
+            with target.open('rb') as handle:
+                handle.seek(identity[3])
+                written = handle.read()
+            if hashlib.sha256(written).digest() != hashlib.sha256(data).digest():
+                raise OSError('append verification failed')
+            return f'已追加 {len(data)} 字节并通过 SHA-256 核对，原内容保留。', '成功', summary
+        except FileExistsError:
+            return '程序拒绝：目标已存在，不允许覆盖；没有写入任何内容。', '被拒绝', summary
+        except ValueError:
+            return '程序拒绝：实验室路径非法、过长或存在链接重定向；没有写入任何内容。', '被拒绝', summary
+        except (OSError, UnicodeError):
+            return '实验室操作失败或写后核对失败，不能确认完整保存；请先读取文件再决定是否重试。', '出错', summary
 
     def _invoke_append(self, name, target, summary, args, approval):
         if not target.is_file():

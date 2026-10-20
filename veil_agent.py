@@ -187,6 +187,8 @@ def load_character(root, character_id):
                 'max_result_bytes': positive_int(tools.get('max_result_bytes', 8192)),
                 'max_output_tokens': positive_int(tools.get('max_output_tokens', cfg.get('max_output_tokens', 1024))),
                 'persistent_append_file': tools.get('persistent_append_file'),
+                'lab': tools.get('lab', 'lab'),
+                'lab_max_write_bytes': positive_int(tools.get('lab_max_write_bytes', 200000)),
             }
             if tools['max_steps'] < 2:
                 raise ValueError('tools.max_steps must allow a tool call and a final response')
@@ -198,6 +200,11 @@ def load_character(root, character_id):
                                           Path(grant_file).name != grant_file or
                                           grant_file in ('', '.', '..')):
                 raise ValueError('persistent append file must be a filename')
+            from tools_agent import lab_name_problem
+            lab = tools['lab']
+            if lab is not False and (lab_name_problem(lab) or
+                    (isinstance(grant_file, str) and lab.casefold() == grant_file.casefold())):
+                raise ValueError('lab must be a safe folder name distinct from the journal')
         if tools is None and (cfg.get('memory') or {}).get('mode') == 'native':
             # Native memory runs on the tool loop; files stay off unless [tools] says otherwise.
             tools = {'enabled': False, 'folder': f'data/{character_id}/workspace',

@@ -9,7 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from tools_agent import (ALLOW, ASK, DENY, FilesystemTools, checked_path,
+from tools_agent import (ALLOW, ASK, DENY, LAB_ONLY, FilesystemTools, checked_path,
                          permitted_tools, tool_policy)
 from veil_agent import Budget, Chat, Store, load_character, run_chat
 
@@ -32,10 +32,10 @@ class ToolPolicyTests(unittest.TestCase):
 
     def test_only_explicitly_allowed_tools_are_offered_to_model(self):
         server = [SimpleNamespace(name=name, description='desc', inputSchema={})
-                  for name in sorted(ALLOW | ASK | DENY | {'unknown'})]
+                  for name in sorted(ALLOW | ASK | DENY | LAB_ONLY | {'unknown'})]
         result = permitted_tools(server)
         names = {item['function']['name'] for item in result}
-        self.assertEqual(names, ALLOW | ASK)
+        self.assertEqual(names, ALLOW | ASK | LAB_ONLY)
         self.assertEqual(tool_policy('write_file'), 'ask')
         self.assertEqual(tool_policy('edit_file'), 'deny')
         self.assertEqual(tool_policy('unknown'), 'deny')
@@ -162,7 +162,7 @@ class ToolPolicyTests(unittest.TestCase):
              patch('tools_agent._McpWorker', return_value=worker):
             manager = FilesystemTools(self.root, cfg, store)
         names = {tool.name for tool in manager.tools}
-        self.assertEqual(names, {'write_file', 'append_file', 'grant_append'})
+        self.assertEqual(names, {'write_file', 'append_file', 'grant_append', 'create_directory'})
         self.assertEqual({item['function']['name'] for item in permitted_tools(manager.tools)}, names)
         self.assertEqual(manager.grant_path, self.root / 'data/test/append-grant.json')
 
@@ -618,6 +618,17 @@ class FilesystemServerTests(unittest.TestCase):
             (manager.workspace / 'fiction.txt').write_text('fictional', encoding='utf-8')
             result, state, summary = manager.invoke('list_directory',
                 {'path': str(manager.workspace)})
+            no_prompt = Mock(side_effect=AssertionError('lab should not ask'))
+            self.assertEqual(manager.invoke('create_directory', {'path': 'lab/research'}, no_prompt)[1], '成功')
+            self.assertEqual(manager.invoke('write_file',
+                {'path': 'lab/research/v1.md', 'content': 'original'}, no_prompt)[1], '成功')
+            self.assertEqual(manager.invoke('append_file',
+                {'path': 'lab/research/v1.md', 'content': '\naddition'}, no_prompt)[1], '成功')
+            read, read_state, _ = manager.invoke('read_text_file', {'path': 'lab/research/v1.md'})
+            self.assertEqual(read_state, '成功')
+            self.assertEqual(read, 'original\naddition')
+            self.assertEqual(manager.invoke('write_file',
+                {'path': 'lab/research/v1.md', 'content': 'overwrite'}, no_prompt)[1], '被拒绝')
         self.assertEqual((state, summary), ('成功', '.'))
         self.assertIn('fiction.txt', result)
 
