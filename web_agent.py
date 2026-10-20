@@ -97,7 +97,6 @@ class Hub:
                 self.submissions.popitem(last=False)
             self.inbox.put(text)
             return 'accepted'
-
     def approval(self, prompt):
         # Same sentence the terminal shows; the page offers two buttons for y/N.
         with self.cond:
@@ -134,10 +133,7 @@ class Hub:
                     'activity_enabled': self.activity.enabled()}
 
 
-def make_handler(hub, token, port):
-    allowed_hosts = {f'127.0.0.1:{port}', f'localhost:{port}'}
-    allowed_origins = {f'http://{h}' for h in allowed_hosts}
-
+def make_handler(hub, token):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_):
             pass  # never log requests: URLs carry the token
@@ -154,6 +150,9 @@ def make_handler(hub, token, port):
             self.wfile.write(data)
 
         def _guard(self, supplied):
+            port = self.server.server_address[1]
+            allowed_hosts = {f'127.0.0.1:{port}', f'localhost:{port}'}
+            allowed_origins = {f'http://{h}' for h in allowed_hosts}
             if self.headers.get('Host') not in allowed_hosts:
                 self._send(403, {'error': 'host'})
                 return False
@@ -239,7 +238,7 @@ def make_handler(hub, token, port):
 
 
 def start_server(hub, token, port):
-    server = ThreadingHTTPServer(('127.0.0.1', port), make_handler(hub, token, port))
+    server = ThreadingHTTPServer(('127.0.0.1', port), make_handler(hub, token))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server
 
