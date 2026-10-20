@@ -323,7 +323,7 @@ class FilesystemTools:
             if row.get('autonomy_announced'):
                 return
             event = ('自主活动已开启：你会按配置被定时唤醒，可以自行决定做什么或暂不行动；'
-                     '本阶段不能主动给 lan 发消息。')
+                     '如果本次工具清单提供 send_message，你可以给 lan 留下最多三条聊天消息，也可以不发。')
             previous_event = row.get('pending_event')
             if isinstance(previous_event, str) and previous_event and event not in previous_event:
                 event = previous_event + '\n' + event

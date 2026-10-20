@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 
 ROOT = Path(__file__).resolve().parent
 MILLION = Decimal(1_000_000)
@@ -583,6 +583,9 @@ class Chat:
         self.reply_displayed = False
         self.autonomy_mode = False
         self.autonomy_should_yield = None
+        self.autonomy_run_id = None
+        self.autonomy_message_output = None
+        self.autonomy_message_lock = None
         self.autonomy_step_limited = False
         self.autonomy_budget_limited = False
         self.last_tool_summaries = []
@@ -598,9 +601,7 @@ class Chat:
                                         or (self.tools and self.tools.tools)) else []
         return [*existing_tools, *task_tools, *messaging]
 
-    def send_message(self, arguments, request_id):
-        if self.autonomy_mode:
-            return '本工单不能主动给 lan 发消息；请把想法留在自主活动记录里。', '被拒绝', 'send_message'
+    def send_message(self, arguments, request_id, tool_call_id=None):
         try:
             args = json.loads(arguments)
         except (ValueError, TypeError):
@@ -609,11 +610,39 @@ class Chat:
                 not isinstance(args['text'], str) or not args['text'].strip()):
             return '程序拒绝：send_message 需要非空 text 文字。', '被拒绝', 'send_message'
         text = args['text']
-        with saving():
-            self.store.append(self.path, {'role': 'assistant', 'content': text,
-                'request_id': request_id, 'origin': 'reply'})
-            self.sent_messages.append(text)
-            self.output(f'{self.cfg.name}: {text}')
+        autonomy = self.autonomy_mode
+        gate = self.autonomy_message_lock if autonomy else None
+        with gate if gate is not None else nullcontext():
+            if autonomy and self.autonomy_should_yield and self.autonomy_should_yield():
+                self.autonomy_interrupted = True
+                return '自主活动已让位；这条消息未发送。', '被拒绝', 'send_message'
+            rows = self.store.read(self.path) if autonomy else []
+            run_id = self.autonomy_run_id if autonomy else None
+            if autonomy and (not isinstance(run_id, str) or not run_id or
+                             not isinstance(tool_call_id, str) or not tool_call_id):
+                return '程序拒绝：缺少本次自主唤醒或工具调用标识，消息未发送。', '被拒绝', 'send_message'
+            if autonomy:
+                existing = next((row for row in rows
+                                 if row.get('autonomy_run_id') == run_id
+                                 and row.get('autonomy_tool_call_id') == tool_call_id), None)
+                if existing:
+                    self.history, self.rounds = self.recent()
+                    return '这条消息已保存，不会重复发送。', '已存在', 'send_message'
+                sent_this_wake = sum(1 for row in rows if row.get('autonomy_run_id') == run_id)
+                if sent_this_wake >= 3:
+                    return '本次自主唤醒最多主动发送 3 条消息；本条未发送。', '被拒绝', 'send_message'
+            event = {'role': 'assistant', 'content': text,
+                     'request_id': request_id, 'origin': 'reply'}
+            if autonomy:
+                event.update({'autonomy_run_id': run_id,
+                              'autonomy_tool_call_id': tool_call_id})
+            with saving():
+                self.store.append(self.path, event)
+                self.sent_messages.append(text)
+                if autonomy:
+                    self.history, self.rounds = self.recent()
+                output = self.autonomy_message_output if autonomy else None
+                (output or self.output)(f'{self.cfg.name}: {text}')
         return '已发送。', '成功', 'send_message'
 
     def recent(self):
@@ -855,14 +884,19 @@ class Chat:
             # These calls finish in this response: no follow-up request or reservation.
             if all(call.function.name == 'send_message' for call in message.tool_calls):
                 errors = []
-                for call in message.tool_calls:
+                for call_index, call in enumerate(message.tool_calls):
                     if autonomy and autonomy_tool_steps >= 12:
                         self.autonomy_step_limited = True
                         final = '自主活动达到每次 12 个工具步骤上限。'
                         break
+                    if autonomy and self.autonomy_interrupted:
+                        final = '自主活动已让位给聊天或控制操作。'
+                        break
                     if autonomy:
                         autonomy_tool_steps += 1
-                    result, state, summary = self.send_message(call.function.arguments, request_id)
+                    result, state, summary = self.send_message(
+                        call.function.arguments, request_id,
+                        f'{step}:{getattr(call, "id", None) or call_index}')
                     self.store.append(f'{self.cfg.id}/tools.jsonl', {'request_id': request_id,
                         'tool': 'send_message', 'path': summary, 'state': state})
                     if state != '成功':
@@ -922,7 +956,7 @@ class Chat:
                     self.budget.settle(next_reservation, next_cfg, 0, 0, 0)
                     final = '工具调用记录超过长度上限，未执行工具。'
                     break
-                for call in message.tool_calls:
+                for call_index, call in enumerate(message.tool_calls):
                     if autonomy and autonomy_tool_steps >= 12:
                         self.autonomy_step_limited = True
                         final = '自主活动达到每次 12 个工具步骤上限。'
@@ -932,7 +966,9 @@ class Chat:
                         autonomy_tool_steps += 1
                     try:
                         if call.function.name == 'send_message':
-                            result, state, summary = self.send_message(call.function.arguments, request_id)
+                            result, state, summary = self.send_message(
+                                call.function.arguments, request_id,
+                                f'{step}:{getattr(call, "id", None) or call_index}')
                         else:
                             args = json.loads(call.function.arguments)
                             if not isinstance(args, dict):

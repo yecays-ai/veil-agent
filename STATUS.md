@@ -1,10 +1,11 @@
 # 当前状态
 
-更新：2026-10-21 · Codex · 工单 029 施工中，基于 main `15ede99`；Windows 真实语音可行性已通过，完整体验待验收
+更新：2026-10-21 · Codex · 工单 030 施工中，分支 `ticket/030-autonomous-messages`，基于 main `74f59b8`；PR 待创建
 
 ## 当前目标
 
-- **工单 029：网页中文/英文语音转文字施工中。** 开工时从 main `a7ab987` 独立创建 `ticket/029-web-speech-input`；PR #59 后续合并后当前 main 为 `15ede99`，本 PR 将以当前 main 为基线。Lan 已在 Windows Chrome 演示页实测工单中英文例句均识别出文字。Node 页面行为模拟覆盖追加去重、手动停止、权限/无语音错误、刷新恢复和显式发送并通过；完整 VEIL 网页体验仍待 Lan 验收。当前环境没有可运行的 Python runtime，Python web suite 未运行，CI 待 PR 检查。浏览器语音识别可能依赖在线服务，不保证离线或本地处理。无新费用、无新增 API/后端依赖。
+- **工单 030：自主唤醒可选择发送聊天消息，施工中。** 分支 `ticket/030-autonomous-messages` 基于 main `74f59b8`；在现有 `send_message` 与网页聊天历史上加入自主发送、单次最多三条、逐唤醒去重及让位同步保护。PR 待创建。Lan 的安全唤醒、刷新/重启、选择不发、限额和聊天/审批回归待 Windows 验收。
+- **工单 029：PR [#60](https://github.com/yecays-ai/veil-agent/pull/60) 已合并至 main `74f59b8`。** 网页中英文语音转文字已由 Lan 在 Chrome 演示页实测；完整 VEIL 网页 A–E 体验仍待验收。
 - **工单 028：PR [#59](https://github.com/yecays-ai/veil-agent/pull/59) 已合并至 main `15ede99`。** 跨自主唤醒长期任务、任务状态与副作用检查点已进入 main；PR 中记录的定向自动化测试通过。Windows 网页体验尚未由 Lan 验收。
 - **工单 027：PR [#58](https://github.com/yecays-ai/veil-agent/pull/58) 已合并至 main `a7ab987`。** 收尾 025 记忆工具验收反馈与留痕：人工批准删除后回执明确说明 lan 已批准；`hold(target_id)` 追加前留存完整 Markdown 快照；`trace` 区分正文、meaning 元数据、记忆缘由与本次操作原因。拒绝和待审批结果保持明确。`dream` 1/3/48 小时窗口、计划 active 状态、标题文字不构成授权及分类/重复行为已核查；未发现其他需要改动实现的问题。定向测试与固定 Ombre 时间窗口假数据核对通过。Windows 部分验收仍待 lan 按下方步骤进行。
 - **工单 024 Ombre 完整版常驻（4B-3）：PR [#53](https://github.com/yecays-ai/veil-agent/pull/53) 已合并；lan 2026-10-21 报告真实 Windows 验收通过。** Ombre 使用每角色本机 HTTP 常驻进程、MCP Token、目录互斥锁和首次启动备份；网页可打开 Ombre 面板，能力变化只提示一次。详见 `docs/tickets/024-ombre-resident.md`。
@@ -14,6 +15,12 @@
 - **工单 022：PR #49 已合并（main `59c0b20`，CodeRabbit 限流，由 Claude 代审）；Windows 体验待验收。** 修复网页服务继承旧 PATH 导致 npx 检测失败。合并后需退出当前服务再重启，按工单步骤确认文件工具和审批正常。
 - **工单 021 最小自主（4B-2）：代码已合并至 main `6b44de6`。** 184 项自动化测试通过（3 项可选集成跳过），CodeRabbit 两条功能评论已修复并确认解决，3 条定向回归与 GitHub CI 通过；Windows 真实体验待验收。已接入定时唤醒、单独后台费用池、12 工具步骤/10 分钟上限、聊天让位、持久记录、`/autonomy` 和能力变化提示；默认暂停，¥10/日与 ¥300/月总预算不变。详见 `docs/tickets/021-minimal-autonomy.md`。
 - **020 常驻服务（4B-1）：PR #44、#45 已合并（main `a18618f`），lan 2026-10-20 真实 Windows 验收通过。** 无持续黑窗口、同一服务回连、页面退出入口及双状态/持久暂停；本单不运行自主任务。
+
+## 工单 030 验收步骤（Windows）
+
+1. 在安全的自主唤醒中，让 Peter 自行选择发送一条留言；确认网页显示普通 assistant 气泡，并可先完成 lab 工作再留言；另一次确认他选择只做事或不行动时没有额外气泡。
+2. 刷新网页并退出、重启服务，确认留言保留且只出现一份；正常聊天提交、暂停或退出后，后台不再发送新消息。
+3. 让测试唤醒尝试四条消息，确认仅三条进入历史且第四条明确拒绝；回归检查 `/cost`、记忆和文件审批。
 
 ## 工单 026 验收步骤（Windows）
 

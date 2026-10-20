@@ -107,9 +107,10 @@ class Hub:
             self.cond.notify_all()
 
     def set_activity(self, enabled):
-        if enabled and not self.activity.enabled() and self.autonomy is not None:
-            self.autonomy.announce_autonomy()
-        return self.activity.set(enabled)
+        with self.cond:
+            if enabled and not self.activity.enabled() and self.autonomy is not None:
+                self.autonomy.announce_autonomy()
+            return self.activity.set(enabled)
 
     def submit(self, text, request_id):
         text_digest = hashlib.sha256(text.encode('utf-8')).digest()

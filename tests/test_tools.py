@@ -281,7 +281,9 @@ class ToolPolicyTests(unittest.TestCase):
         manager._record_capabilities(['read_text_file'])
         manager.consume_capability_event()
         manager.announce_autonomy()
-        self.assertIn('不能主动给 lan 发消息', manager.capability_event)
+        self.assertIn('send_message', manager.capability_event)
+        self.assertIn('最多三条', manager.capability_event)
+        self.assertIn('也可以不发', manager.capability_event)
         manager.consume_capability_event()
         reopened = FilesystemTools.__new__(FilesystemTools)
         reopened.cfg, reopened.store, reopened.folder_name = manager.cfg, store, 'workspace'

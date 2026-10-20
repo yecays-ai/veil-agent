@@ -1,25 +1,22 @@
 # 交接
 
-更新：2026-10-21 · Codex · 工单 029 `ticket/029-web-speech-input` 施工中
+更新：2026-10-21 · Codex · 工单 030 `ticket/030-autonomous-messages` 施工中
 
 ## 做到哪
 
-- 初始从当时最新 main `a7ab98718875ac1ecd8b6c1bd855b1beba14465c` 建立隔离 worktree；PR #59 后续已合并，当前 GitHub main 为 `15ede99be00c07b1645a7359262e944ad3acb359`。直接 Git fetch 连接 GitHub 超时；通过 GitHub API 核对 PR 状态、当前 main SHA 和文件内容。
-- Lan 已在 Windows Chrome 的原生语音演示页实测工单 A、B 的中文、英文例句均识别出文字；浏览器版本未确认。`SpeechRecognition` 可行性前置条件通过。
-- 复用调查记录在 `docs/tickets/029-web-speech-input.md`：使用浏览器原生接口；annyang 3.1.1 在固定提交 `616fb0e9c4b7355ede19d5909cbcf7b6c9783cac` 下是 MIT 轻量语音命令路由库，不适配本单自由转写输入，因此不引入。
-- 已在 `web/index.html` 加入语言选择、麦克风控制、语音状态、识别文本暂存/最终结果合并、键盘/发送防误触、失败提示，以及语音草稿的 sessionStorage 临时恢复。
-- `node tests/web_pacing.cjs` 通过，覆盖原页面节奏及语音追加去重、停止、权限拒绝、无语音、刷新恢复和显式发送；`node --check tests/web_pacing.cjs` 与 `git diff --check` 通过。Python web suite 未运行：此环境没有可启动的 Python runtime（WindowsApps python alias 无法执行）；CI 待 PR 检查。
-- `STATUS.md` 已记录 028 PR #59 实际合并至 main `15ede99`、029 当前状态、验证分层和 Windows 验收步骤。
+- 已从 GitHub 核实最新 main `74f59b8b93d8b5cd65537e6e6a070208118891fb`；工单 028 PR #59 和工单 029 PR #60 均已合并。施工分支从该最新 main 建立，独立于已合并的 029 语音改动。
+- 复用调查记录在 `docs/tickets/030-autonomous-messages.md`。Fount 的 wake scheduler 用运行中标记和序号避免并发/漏触发，async-task registry 用任务 ID 与 generation ID 管理任务归属；仅参考并发和幂等思路，不复制代码或引入依赖。
+- 实现自主调用现有 `send_message`，写入角色现有 `chat.jsonl` 并通过现有网页 assistant 事件显示；最终自主总结仍只写自主活动记录。每条消息保存唤醒 ID 和工具调用 ID，持久计数限制每次最多三条；消息持久化、用户提交、暂停与退出通过 Hub 同一同步门排序。
+- 定向验证：`test_autonomy.py`、`test_tools.py`、`test_chat.py` 合计 94 项通过（2 项可选集成跳过），并通过 `py_compile`。`test_web.py` 本环境未能跑通：沙箱拒绝本机回环 socket，现有 HTTP 用例均受影响。Windows 网页体验未验收。
 
 ## 下一步
 
-1. 完成当前 diff 自审并提交；远端 Git fetch 超时，使用 GitHub API 在最新 main `15ede99` 上建立同名远端分支并提交文件。
-2. 开 PR，等待 CI 与 CodeRabbit 检查；只修复功能或安全问题。
-3. 合并后请 Lan 按 `STATUS.md` 的 Windows A–E 步骤验收；代码检查不等于真实 VEIL 体验验收。
+1. 完成变更自审与 `git diff --check`，将实现、工单和状态文档提交至 `ticket/030-autonomous-messages` 并创建一个 PR。
+2. 按用户要求把 PR 交 Claude 审查，不扩展功能或自行合并。
+3. Lan 按 `STATUS.md` 的工单 030 步骤完成真实 Windows 验收；自动化检查不替代网页体验验收。
 
 ## 注意
 
-- 浏览器语音识别可能把音频交给在线服务，未承诺离线或本地处理；没有新增 API、付费服务或包依赖。
-- 未改动 `autonomy.py`、`long_tasks.py`、Ombre、记忆或任务工具；未读取真实聊天、记忆或人设。
-- 原工单 028 工作区里的 `STATUS.md`、`HANDOFF.md` 未提交修改未触碰；029 在独立 worktree 施工。
+- 未新增手机推送、通知、新队列、定时器、模型请求、权限或预算；未改长期任务规则、Ombre、记忆、lab 权限和网页界面。
+- 只在虚构数据和假模型中验证；未读取或修改真实聊天、记忆、人设、lab 或账本。
 
