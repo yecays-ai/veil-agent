@@ -497,7 +497,7 @@ class Memory:
         for line in lines[1:end]:
             key, sep, value = line.partition(':')
             if sep and key.strip() == 'deleted_at':
-                return value.strip().strip("'\\\"").casefold() not in ('', 'null', 'none', 'false')
+                return value.strip().strip(chr(39) + chr(34)).casefold() not in ('', 'null', 'none', 'false')
         return False
 
     def hidden_ids(self):
