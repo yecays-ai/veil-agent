@@ -1,11 +1,11 @@
 # 交接
 
-更新：2026-10-20 19:11 +08:00 · Codex · 工单 020 PR #44 待审查与 Windows 验收
+更新：2026-10-20 19:20 +08:00 · Codex · 工单 020 PR #44 待审查与 Windows 验收
 
 ## 做到哪
 
 - 工单 020：`ticket/020-resident-service`，PR #44。已实现分离启动进程、端点复用和过期 endpoint 自恢复；网页显示双状态、持久暂停/恢复与确认退出。实现未引入托盘、开机自启或自主任务。
-- PR #44 定向网页测试 15 项通过（假模型、临时数据）。CodeRabbit 首轮提出两条功能评论，动态端口校验和文件同步截断均已修复、回复并解决线程；增量审查/CI 待完成。GitHub 拒绝将 `claude` 作为 reviewer（非仓库协作者），所以 Claude 专项审查尚未提交。Windows 真实体验未执行。原工作目录中 017 的未提交内容保持不变，施工在 `.local-tmp/020-worktree` 隔离目录。
+- PR #44 定向网页测试 15 项通过（假模型、临时数据）；最新 CI 四项全通过。CodeRabbit 首轮两条功能评论已修复、回复并解决线程。已在 PR 评论请求 Claude 和 CodeRabbit 增量审查，目前无后续回复；GitHub 拒绝将 `claude` 作为 reviewer（非仓库协作者）。Windows 真实体验未执行。原工作目录中 017 的未提交内容保持不变，施工在 `.local-tmp/020-worktree` 隔离目录。
 - 019 补充：`tools_agent.py` 的能力清单新增 `messaging`，send_message 上线或关闭时触发一次能力变化记录；新增测试 `test_existing_manifest_announces_send_message_once`。
 
 - 工单 `docs/tickets/019-multi-message.md`；独立 worktree 分支 `ticket/019-multi-message`，基于 main `38b8826`。用户明确要求旧目录及全部未提交改动原样保留，不覆盖、清理、stash 或提交；后续继续在本 worktree 操作。
@@ -21,8 +21,8 @@
 
 ## 下一步
 
-1. 检查 PR #44 最新 CI 和 CodeRabbit 增量审查，只处理功能或安全问题。Claude reviewer 请求因非仓库协作者被 GitHub 拒绝。
-2. CI 与审查满足项目规则后按流程处理合并；随后请 lan 按 `STATUS.md` 的 020 三步做真实 Windows 验收。自动化结果不等同于验收通过。
+1. 等待 PR #44 对 Claude/CodeRabbit 增量审查请求的回复。Claude reviewer 指派因 `claude` 非仓库协作者被 GitHub 拒绝；请求评论已留在 PR。
+2. CodeRabbit 首轮功能问题已全部修复并解决，CI 四项通过。按审查结果处理合并；合并后请 lan 按 `STATUS.md` 做真实 Windows 验收，不能以 CI 代替。
 
 ## 注意
 
