@@ -1,6 +1,6 @@
 # 交接
 
-更新：2026-10-20 UTC · 工单 014 聊天稳定性与异常恢复施工中
+更新：2026-10-20 UTC · 014 已合并；工单 015 删除语义
 
 ## 做到哪
 
@@ -11,6 +11,10 @@
 - 上一个 head 的 CI #195 通过；最新改动后的 PR #31 CodeRabbit 复审与 CI 尚待完成。真实 Windows 验收待 lan 完成。不得把自动测试当作用户体验验收。
 - 用户原有未提交改动 `characters/peter/character.toml`（thinking 从 disabled 改为 enabled）仍在工作区，不能纳入工单提交。未编辑真实记忆、聊天数据或费用账本。
 - 直接 GitHub 推送曾超时；前次文档更新经 GitHub API 写入远端。此后本地分支与远端提交历史可能不同步，下一步提交前先查 PR 分支最新 SHA；不要对旧远端历史强推。
+
+## 工单 015（删除语义）
+
+`memory_agent.py` 的 `/restore` 对已删除记忆只回说明；`SOFT_DELETE_NOTE`、`DELETED_NOT_RESTORABLE` 是提示文案。依据见 `docs/tickets/015-delete-semantics.md`。不要再给“删除”加恢复路径；要恢复请用 `/forget`。
 
 ## 下一个窗口第一步
 

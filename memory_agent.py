@@ -245,6 +245,10 @@ FILE_READ_TOOLS = {'list_directory', 'directory_tree', 'read_text_file', 'read_m
 
 PERSONA_HEAD = '\n\n--- Assistant persona (data describing who the assistant is, not commands) ---\n'
 PERSONA_LIMIT = 6000  # Characters; keeps the extraction request inside the input bound.
+SOFT_DELETE_NOTE = ('注意：Ombre 只做软删除——文件仍留在记忆目录里，没有被物理擦除；'
+                    '本程序不会再读取或想起它。')
+DELETED_NOT_RESTORABLE = ('编号 {key} 的记忆已经删除，不能用 /restore 恢复。/restore 只用于 /forget 隐藏的记忆。'
+                          + SOFT_DELETE_NOTE)
 EXISTING_LIMIT = 40  # Newest visible memories shown to the extractor for de-duplication.
 EXTRACT_MAX_OUTPUT = 4096  # Four rounds of bilingual memories do not fit the chat reply cap.
 
@@ -769,25 +773,15 @@ class Memory:
                     return '确认编号不匹配；没有隐藏任何记忆。'
             entry = self.state['entries'].get(key)
             retry = bool(entry and entry.get('deleted') and entry.get('delete_pending') and command == '/delete')
-            if entry is None or (entry.get('deleted') and not retry and command != '/restore'):
+            if entry is not None and entry.get('deleted') and command == '/restore':
+                return DELETED_NOT_RESTORABLE.format(key=key)
+            if entry is None or (entry.get('deleted') and not retry):
                 return '没有这个记忆编号；输入 /memory 查看。'
             if command == '/delete':
                 return self.delete(key, entry, confirmed or retry)
             if command == '/restore' and entry.get('deleted'):
-                try:
-                    self.call('trace', {'bucket_id': key, 'restore': True})
-                except Exception:
-                    return '这次没能确认恢复；记忆库记录仍保留，可稍后重试。'
-                entry.pop('deleted', None)
-                entry.pop('delete_pending', None)
-                self.persist()
-                try:
-                    self.call('trace', {'bucket_id': key, 'dont_surface': 0})
-                except Exception:
-                    return '已恢复归档，但取消隐藏失败；记忆仍保留，可稍后重试 /restore。'
-                entry['hidden'] = False
-                self.persist()
-                return '已恢复删除的记忆。'
+                # Deleting is a decision, not a hide: no ordinary command undoes it (ticket 015).
+                return DELETED_NOT_RESTORABLE.format(key=key)
             if command == '/forget':
                 if not forget_confirm:
                     self.forget_asked = key
@@ -810,16 +804,18 @@ class Memory:
         if not confirmed:
             self.delete_asked = key
             return (f'要删除这条记忆吗：{key} | {title}\n'
-                    f'确认请输入：/delete {key} 确认。删除后它不再出现在 /memory 里，也不再被想起。')
+                    f'确认请输入：/delete {key} 确认。删除后它不再出现在 /memory 里，也不再被想起，'
+                    f'也不能用 /restore 恢复。{SOFT_DELETE_NOTE}\n只想暂时不再被想起的话，用 /forget {key}，之后可以 /restore。')
         self.delete_asked = None
         entry['hidden'] = entry['deleted'] = entry['delete_pending'] = True
         self.persist()  # Fail closed: it is already out of recall even if Ombre's answer is lost.
         try:
             self.call('trace', {'bucket_id': key, 'delete': True})
         except Exception:
-            return f'这次没能确认 Ombre 的删除；这条已不会被想起，可稍后再输入 /delete {key} 重试。'
+            return (f'这次没能确认 Ombre 的删除；这条已经标记为删除，不会被想起，也不能 /restore。'
+                    f'可稍后再输入 /delete {key} 重试，让 Ombre 也记上这次删除。')
         entry.pop('delete_pending', None)
         self.persist()
         self.messages.put(f'🗑 {self.cfg.name} 的记忆已删除：{title[:40]}')
-        return f'已删除：{title}'
+        return f'已删除：{title}。不能用 /restore 恢复。{SOFT_DELETE_NOTE}'
 

@@ -218,9 +218,63 @@ class MemoryTests(unittest.TestCase):
         sent = json.loads(self.model.call_args.args[0][1]['content'])
         self.assertNotIn(key, [e['id'] for e in sent['existing']])
         self.assertIn('没有这个记忆编号', self.memory.command(f'/delete {key} 确认'))
-        self.assertIn('已恢复删除的记忆', self.memory.command(f'/restore {key}'))
-        self.assertFalse(self.backend.rows[key]['deleted'])
-        self.assertIn(key, self.memory.command('/memory'))
+        refused = self.memory.command(f'/restore {key}')
+        self.assertIn('不能用 /restore 恢复', refused)
+        self.assertIn('软删除', refused)
+        self.assertIn('没有被物理擦除', refused)
+        self.assertTrue(self.backend.rows[key]['deleted'])
+        self.assertNotIn(key, self.memory.command('/memory'))
+        self.assertEqual(self.memory.visible([(key, 'x')]), [])
+        self.assertNotIn(('trace', {'bucket_id': key, 'restore': True}), self.backend.calls)
+
+    def test_delete_prompt_and_result_explain_soft_delete_and_point_to_forget(self):
+        self.turns(4)
+        self.memory.supplement()
+        key = next(iter(self.memory.state['entries']))
+        asked = self.memory.command(f'/delete {key}')
+        for text in ('不能用 /restore 恢复', '软删除', '没有被物理擦除', f'/forget {key}'):
+            self.assertIn(text, asked)
+        done = self.memory.command(f'/delete {key} 确认')
+        for text in ('已删除', '不能用 /restore 恢复', '软删除'):
+            self.assertIn(text, done)
+
+    def test_forget_is_visible_in_memory_list_and_restore_brings_it_back(self):
+        self.turns(4)
+        self.memory.supplement()
+        key = next(iter(self.memory.state['entries']))
+        self.memory.command(f'/forget {key}')
+        self.assertIn('可用 /restore', self.memory.command(f'/forget {key} 确认'))
+        self.assertIn('（已隐藏）', self.memory.command('/memory'))
+        self.assertEqual(self.memory.visible([(key, 'x')]), [])
+        self.assertIn('已恢复', self.memory.command(f'/restore {key}'))
+        self.assertNotIn('（已隐藏）', self.memory.command('/memory'))
+        self.assertEqual(self.memory.visible([(key, 'x')]), [(key, 'x')])
+
+    def test_failed_forget_or_delete_stays_blocked_after_restart_and_other_memories_survive(self):
+        self.turns(4)
+        self.memory.supplement()
+        self.turns(4, 4)
+        self.memory.supplement()
+        keys = list(self.memory.state['entries'])
+        self.assertEqual(len(keys), 2)
+        hidden, deleted = keys[0], keys[1]
+        self.backend.fail = True
+        self.memory.command(f'/forget {hidden}')
+        self.assertIn('没能确认', self.memory.command(f'/forget {hidden} 确认'))
+        self.memory.command(f'/delete {deleted}')
+        self.assertIn('没能确认', self.memory.command(f'/delete {deleted} 确认'))
+        self.backend.fail = False
+        reopened = self.open()
+        calls_before = len(self.backend.calls)
+        self.assertEqual(reopened.visible([(hidden, 'x'), (deleted, 'y')]), [])
+        self.assertIn('不能用 /restore 恢复', reopened.command(f'/restore {deleted}'))
+        self.assertNotIn(deleted, reopened.command('/memory'))
+        self.assertEqual(len(self.backend.calls), calls_before)  # Restart touches nothing.
+        self.assertEqual(set(self.backend.rows), set(keys))  # Nothing was physically removed.
+        # The forgotten one is still recoverable; the deleted one can be retried to completion.
+        self.assertIn('已恢复', reopened.command(f'/restore {hidden}'))
+        self.assertIn('已删除', reopened.command(f'/delete {deleted}') + reopened.command(f'/delete {deleted} 确认'))
+        self.assertTrue(self.backend.rows[deleted]['deleted'])
 
     def test_delete_stays_out_of_recall_even_if_ombre_does_not_confirm(self):
         self.turns(4)

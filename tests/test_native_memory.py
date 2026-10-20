@@ -164,15 +164,24 @@ class NativeMemoryTests(unittest.TestCase):
         self.assertIn('已恢复', self.memory.command(f'/restore {key}'))
         self.assertIn('确认请输入', self.memory.command(f'/delete {key}'))
         self.assertIn('已删除', self.memory.command(f'/delete {key} 确认'))
-        self.assertIn('已恢复删除的记忆', self.memory.command(f'/restore {key}'))
+        self.assertIn('不能用 /restore 恢复', self.memory.command(f'/restore {key}'))
+        self.assertEqual(self.memory.visible([(key, 'lamp')]), [])
 
-    def test_restore_keeps_hidden_state_until_ombre_unhides_the_archived_memory(self):
+    def test_deleted_memory_is_not_searchable_or_updatable_by_peter(self):
+        self.tools.invoke('hold', {'title': 'Blue lamp', 'content': 'A gift lamp.'})
+        key = next(iter(self.memory.state['entries']))
+        self.memory.command(f'/delete {key}')
+        self.memory.command(f'/delete {key} 确认')
+        self.assertNotIn(key, self.tools.invoke('breath_search', {'query': 'lamp'})[0])
+        text, state, _ = self.tools.invoke('hold', {'title': 'Blue lamp', 'content': 'More.', 'target_id': key})
+        self.assertNotEqual(state, '成功')
+        self.assertTrue(self.memory.state['entries'][key]['deleted'])
+
+    def test_restore_keeps_hidden_state_until_ombre_unhides_the_forgotten_memory(self):
         self.tools.invoke('hold', {'title': 'Blue lamp', 'content': 'A gift lamp.'})
         key = next(iter(self.memory.state['entries']))
         self.memory.command(f'/forget {key}')
         self.memory.command(f'/forget {key} 确认')
-        self.memory.command(f'/delete {key}')
-        self.memory.command(f'/delete {key} 确认')
         original_call = self.backend.call
         fail_unhide = True
 
@@ -182,8 +191,7 @@ class NativeMemoryTests(unittest.TestCase):
             return original_call(name, args)
 
         self.backend.call = fail_unhide_once
-        self.assertIn('取消隐藏失败', self.memory.command(f'/restore {key}'))
-        self.assertFalse(self.backend.rows[key]['deleted'])
+        self.assertIn('没能确认', self.memory.command(f'/restore {key}'))
         self.assertTrue(self.memory.state['entries'][key]['hidden'])
         self.assertEqual(self.memory.visible([(key, 'lamp')]), [])
 
