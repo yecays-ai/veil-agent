@@ -5,7 +5,7 @@
 ## 当前目标
 
 - **工单 024 Ombre 完整版常驻（4B-3）：PR [#53](https://github.com/yecays-ai/veil-agent/pull/53) 已合并；lan 2026-10-21 报告真实 Windows 验收通过。** Ombre 使用每角色本机 HTTP 常驻进程、MCP Token、目录互斥锁和首次启动备份；网页可打开 Ombre 面板，能力变化只提示一次。详见 `docs/tickets/024-ombre-resident.md`。
-- **工单 025 Peter 用上 Ombre 更多记忆工具：已开工，基于 main `b07612c`。** 024 Windows 验收已通过。 Peter 自选的 trace、dream、信、anchor、plan、pulse；删除需 lan 在页面同意；独处时的删除申请进入待删除栏目，lan 回来后处理；Peter 改记忆前程序自动保存旧版本（lan 2026-10-20 决定）。详见 `docs/tickets/025-ombre-more-tools.md`。
+- **工单 025 Peter 用上 Ombre 更多记忆工具：实现已推送到 `ticket/025-ombre-more-tools`，基于 main `b07612c`。** 已接入工单指定的 Ombre 工具、页面删除审批、自主待删除队列、隐藏过滤和完整旧版本查询；向量调用计入现有预算。定向记忆测试 28 项、记忆回归 38 项、自主活动回归 10 项通过。网页 HTTP 测试受当前沙箱 localhost 限制，Windows 实际体验待 lan 验收。详见 `docs/tickets/025-ombre-more-tools.md`。
 - **工单 023：PR #50 已合并（main `18ce081`，CodeRabbit 限流，由 Claude 代审）；Windows 体验待验收。** 后续聊天带入当前角色最近一次自主活动摘要，`/cost` 按当前角色统计自主费用。详见 `docs/tickets/023-autonomy-chat-context.md`。
 - **工单 022：PR #49 已合并（main `59c0b20`，CodeRabbit 限流，由 Claude 代审）；Windows 体验待验收。** 修复网页服务继承旧 PATH 导致 npx 检测失败。合并后需退出当前服务再重启，按工单步骤确认文件工具和审批正常。
 - **工单 021 最小自主（4B-2）：代码已合并至 main `6b44de6`。** 184 项自动化测试通过（3 项可选集成跳过），CodeRabbit 两条功能评论已修复并确认解决，3 条定向回归与 GitHub CI 通过；Windows 真实体验待验收。已接入定时唤醒、单独后台费用池、12 工具步骤/10 分钟上限、聊天让位、持久记录、`/autonomy` 和能力变化提示；默认暂停，¥10/日与 ¥300/月总预算不变。详见 `docs/tickets/021-minimal-autonomy.md`。
