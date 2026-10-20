@@ -7,7 +7,8 @@
 - 本窗口基线 main `aafc12139abefc76f057956ec96689923e0a7fcf`（PR #35 已合并）。015 未验收；014 待验收；013 网页已验收。权威状态与体验记录见 `STATUS.md`。
 - 016 / 4A 真实 Windows 体验已由 lan 报告通过：重启后可读、可创建文件和目录、覆盖和越界拒绝、v1/v2 完整、成长日记已自主追加、无脚本执行入口。开发端没有独立证据核对具体路径/提示、文件全文和字节、日记逐字节变化或脚本拒绝提示，见 `STATUS.md`。
 - 写后 SHA-256 核对、Windows 保留名/非法字符/大小写重名/路径长度检查、符号链接与 junction 隔离、硬链接追加拒绝、超限零写入和 `vN.md` 两版字节数提示已实现。能力变化复用 capabilities.json 和既有提示机制。
-- PR #35 已由 GitHub CI 通过并由 CodeRabbit 完成评审（无可操作评论），已合并，merge commit `aafc12139abefc76f057956ec96689923e0a7fcf`。4D Windows 网页真实体验仍待 lan 验收。\n- 本窗口 018 独立分支 `ticket/018-peter-tool-budget`：Peter 的 `max_steps` 设为 12；未执行的 raw DSML 工具标记改为明确提示。预算硬上限及现有工具调用安全路径不变。变更细节见 `docs/tickets/018-peter-tool-budget.md`。
+- PR #35 已由 GitHub CI 通过并由 CodeRabbit 完成评审（无可操作评论），已合并，merge commit `aafc12139abefc76f057956ec96689923e0a7fcf`。4D Windows 网页真实体验仍待 lan 验收。
+- 本窗口 018 独立分支 `ticket/018-peter-tool-budget`：Peter 的 `max_steps` 设为 12；未执行的 raw DSML 工具标记改为明确提示。预算硬上限及现有工具调用安全路径不变。变更细节见 `docs/tickets/018-peter-tool-budget.md`。
 - 当前工作目录是只读项目镜像，没有本机检出目录；未新增或运行自动化测试。PR #36 CI 与 CodeRabbit 状态待 GitHub 检查；自动检查不等同于 Windows 体验验收。
 - 当前正常启动工作区的本机配置修改未纳入本工单；施工使用隔离工作树，避免打断本机聊天。
 
