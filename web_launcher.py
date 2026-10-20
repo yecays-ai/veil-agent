@@ -14,6 +14,8 @@ import webbrowser
 
 ROOT = Path(__file__).resolve().parent
 ENDPOINT = ROOT / 'data' / 'web_service.json'
+STARTUP_ERROR = ROOT / 'data' / 'web_service_error.txt'
+FAILED = 'Peter 网页服务没有启动。请检查安装状态后重新双击 start-web.bat。'
 STARTUP_WAIT = 25
 
 
@@ -65,11 +67,20 @@ def read_endpoint():
         return None
 
 
+def startup_error():
+    # The service writes why it stopped (for example the terminal chat is open).
+    try:
+        message = STARTUP_ERROR.read_text(encoding='utf-8').strip()
+    except (OSError, UnicodeError):
+        message = ''
+    return f'{FAILED}\n\n{message}' if message else FAILED
+
+
 def start_service(character, port):
     pythonw = Path(sys.executable).with_name('pythonw.exe')
     executable = str(pythonw if pythonw.exists() else Path(sys.executable))
     flags = getattr(subprocess, 'DETACHED_PROCESS', 0) | getattr(subprocess, 'CREATE_NO_WINDOW', 0)
-    subprocess.Popen([executable, str(ROOT / 'web_agent.py'), '--character', character,
+    return subprocess.Popen([executable, str(ROOT / 'web_agent.py'), '--character', character,
                       '--port', str(port), '--no-browser'],
                      cwd=ROOT, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                      stderr=subprocess.DEVNULL, close_fds=True, creationflags=flags)
@@ -85,21 +96,22 @@ def main():
         with StartupMutex():
             url = read_endpoint()
             if url is None:
-                start_service(args.character, args.port)
+                STARTUP_ERROR.unlink(missing_ok=True)
+                process = start_service(args.character, args.port)
                 deadline = time.monotonic() + STARTUP_WAIT
                 while time.monotonic() < deadline:
                     time.sleep(0.2)
                     url = read_endpoint()
-                    if url:
+                    if url or process.poll() is not None:
                         break
                 if not url:
-                    report_error('Peter 网页服务没有启动。请检查安装状态后重新双击 start-web.bat。')
+                    report_error(startup_error())
                     return 1
         if not args.no_browser:
             webbrowser.open(url)
         return 0
     except Exception:
-        report_error('Peter 网页服务没有启动。请检查安装状态后重新双击 start-web.bat。')
+        report_error(FAILED)
         return 1
 
 

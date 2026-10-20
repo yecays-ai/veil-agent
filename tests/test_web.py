@@ -335,5 +335,21 @@ class PacingTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
+class StartupErrorTests(unittest.TestCase):
+    def test_detached_service_leaves_startup_reason_for_launcher(self):
+        import web_agent
+        import web_launcher
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch.object(web_agent, 'ROOT', root):
+                self.assertEqual(web_agent.main(['--character', 'missing', '--no-browser']), 1)
+            error = root / 'data' / 'web_service_error.txt'
+            self.assertTrue(error.read_text(encoding='utf-8').strip())
+            with patch.object(web_launcher, 'STARTUP_ERROR', error):
+                message = web_launcher.startup_error()
+            self.assertIn(error.read_text(encoding='utf-8').strip(), message)
+            self.assertTrue(message.startswith(web_launcher.FAILED))
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -1,9 +1,10 @@
 # 交接
 
-更新：2026-10-20 19:20 +08:00 · Codex · 工单 020 PR #44 待审查与 Windows 验收
+更新：2026-10-20 19:29 +08:00 · Claude · 020 审查补充启动失败提示
 
 ## 做到哪
 
+- Claude 审查（PR #44）：补充启动失败原因弹窗（`web_service_error.txt`，启动器 `startup_error()`）和测试 `test_detached_service_leaves_startup_reason_for_launcher`。
 - 工单 020：`ticket/020-resident-service`，PR #44。已实现分离启动进程、端点复用和过期 endpoint 自恢复；网页显示双状态、持久暂停/恢复与确认退出。实现未引入托盘、开机自启或自主任务。
 - PR #44 定向网页测试 15 项通过（假模型、临时数据）；最新 CI 四项全通过。CodeRabbit 首轮两条功能评论已修复、回复并解决线程。已在 PR 评论请求 Claude 和 CodeRabbit 增量审查，目前无后续回复；GitHub 拒绝将 `claude` 作为 reviewer（非仓库协作者）。Windows 真实体验未执行。
 - PR 远端分支通过 GitHub API 更新；本机 `.local-tmp/020-worktree` 仍基于较早的 `origin/main` 且有未提交改动。后续先以 PR 当前 head 同步/继续，勿把本地旧分支直接推到远端。原工作目录中 017 的未提交内容保持不变，施工在 `.local-tmp/020-worktree` 隔离目录。

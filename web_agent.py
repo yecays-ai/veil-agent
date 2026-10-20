@@ -266,6 +266,15 @@ def clear_endpoint(path, token):
         pass
 
 
+def save_startup_error(path, message):
+    # The detached service has no console; the launcher shows this text instead.
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(message, encoding='utf-8')
+    except OSError:
+        pass
+
+
 def main(argv=None):
     for stream in (sys.stdin, sys.stdout, sys.stderr):
         if hasattr(stream, 'reconfigure'):
@@ -279,6 +288,7 @@ def main(argv=None):
     token = None
     server = None
     endpoint_path = ROOT / 'data' / 'web_service.json'
+    error_path = ROOT / 'data' / 'web_service_error.txt'
     try:
         store = Store(ROOT / 'data')
         with store.lock():
@@ -330,10 +340,14 @@ def main(argv=None):
             time.sleep(1.5)
         if token:
             clear_endpoint(endpoint_path, token)
+        print(str(exc))
+        save_startup_error(error_path, str(exc))
     except ImportError:
-        pass
+        print('缺少运行依赖，请先按 README 完成安装。')
+        save_startup_error(error_path, '缺少运行依赖，请先按 README 完成安装。')
     except (OSError, UnicodeError):
-        pass
+        print('本机文件无法读写，已停止；请检查磁盘空间和文件权限。')
+        save_startup_error(error_path, '本机文件无法读写，已停止；请检查磁盘空间和文件权限。')
     except (KeyboardInterrupt, EOFError):
         if hub:
             hub.stop()
