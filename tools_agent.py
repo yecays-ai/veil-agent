@@ -231,7 +231,9 @@ class FilesystemTools:
         core = {'version': VERSION, 'folder': self.folder_name, 'tools': {
             name: tool_policy(name) for name in names},
             'lab': ({'folder': self.lab.name, 'max_write_bytes': self.lab_max_write_bytes}
-                    if getattr(self, 'lab', None) else False)}
+                    if getattr(self, 'lab', None) else False),
+            # send_message lives in veil_agent but is offered whenever tools are enabled.
+            'messaging': bool(getattr(self, 'enabled', False))}
         try:
             previous = json.loads(self.cap_path.read_text(encoding='utf-8')) if self.cap_path.exists() else None
             if previous and {k: previous.get(k) for k in core} == core:
@@ -260,8 +262,20 @@ class FilesystemTools:
                                    '可直接建文件夹、新建和追加，不能覆盖、删除或执行脚本；日记授权独立')
                 elif old_lab and not core['lab']:
                     changes.append('实验室免确认权限已关闭')
-                detail = '、'.join(changes) or '工具能力清单已初始化'
-                self.capability_event = f'你的能力有变化：文件夹“{self.folder_name}”中的工具为{detail}。'
+                old_messaging = previous.get('messaging', False) if previous else False
+                messaging = None
+                if core['messaging'] and not old_messaging:
+                    messaging = ('新增 send_message：你可以把想说的话分成几条独立短消息连着发，像发短信一样，'
+                                 '每条单独保存、逐条出现；也可以只发一条。')
+                elif old_messaging and not core['messaging']:
+                    messaging = 'send_message 已关闭，一次只能回一条消息。'
+                if changes or not messaging:
+                    detail = '、'.join(changes) or '工具能力清单已初始化'
+                    self.capability_event = f'你的能力有变化：文件夹“{self.folder_name}”中的工具为{detail}。'
+                    if messaging:
+                        self.capability_event += messaging
+                else:
+                    self.capability_event = '你的能力有变化：' + messaging
             row = {**core, 'pending_event': self.capability_event}
             if previous != row:
                 self.cap_path.parent.mkdir(parents=True, exist_ok=True)

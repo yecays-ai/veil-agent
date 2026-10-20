@@ -1,8 +1,10 @@
 # 交接
 
-更新：2026-10-20 09:56 UTC · Codex · 工单 019 实现与自动验证完成，待真实验收
+更新：2026-10-20 18:27 +08:00 · Claude · 019 补充 send_message 能力变化提示
 
 ## 做到哪
+
+- 019 补充：`tools_agent.py` 的能力清单新增 `messaging`，send_message 上线或关闭时触发一次能力变化记录；新增测试 `test_existing_manifest_announces_send_message_once`。
 
 - 工单 `docs/tickets/019-multi-message.md`；独立 worktree 分支 `ticket/019-multi-message`，基于 main `38b8826`。用户明确要求旧目录及全部未提交改动原样保留，不覆盖、清理、stash 或提交；后续继续在本 worktree 操作。
 - 已实现应用自有 `send_message`、纯消息步骤不追加请求、混合工具继续原有流程、最终文字去重、assistant 开头的历史兼容，以及网页 Unicode 字数节奏和 15 分钟分组。中文、英文及混合语言均适用；不改人设、不按句子拆分原文、不新增主动消息调度。

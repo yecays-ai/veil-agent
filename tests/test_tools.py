@@ -252,6 +252,26 @@ class ToolPolicyTests(unittest.TestCase):
         reopened._record_capabilities(['read_text_file', 'write_file'])
         self.assertIsNone(reopened.capability_event)
 
+    def test_existing_manifest_announces_send_message_once(self):
+        store = Store(self.root / 'data')
+        def manager():
+            m = FilesystemTools.__new__(FilesystemTools)
+            m.cfg, m.store, m.folder_name = SimpleNamespace(id='test'), store, 'workspace'
+            m.cap_path = self.root / 'data' / 'test' / 'capabilities.json'
+            m.capability_event, m.enabled = None, True
+            return m
+        m = manager()
+        m.cap_path.parent.mkdir(parents=True, exist_ok=True)
+        m.cap_path.write_text(json.dumps({'version': 1, 'folder': 'workspace',
+            'tools': {'read_text_file': 'allow'}, 'lab': False, 'pending_event': None}), encoding='utf-8')
+        m._record_capabilities(['read_text_file'])
+        self.assertTrue(m.capability_event.startswith('你的能力有变化：新增 send_message'))
+        self.assertTrue(json.loads(m.cap_path.read_text(encoding='utf-8'))['messaging'])
+        m.consume_capability_event()
+        again = manager()
+        again._record_capabilities(['read_text_file'])
+        self.assertIsNone(again.capability_event)
+
     def test_missing_node_disables_tools_without_blocking_chat_startup(self):
         store = Store(self.root / 'data')
         cfg = SimpleNamespace(id='test', tools={'enabled': True, 'folder': 'data/test/workspace',
