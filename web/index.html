@@ -40,17 +40,27 @@ textarea:focus{border-color:var(--accent)}
 #send{font:inherit;border:0;border-radius:12px;padding:9px 20px;background:var(--accent);color:#fff;cursor:pointer}
 #send:disabled{opacity:.45;cursor:default}
 #offline{display:none;background:#b3402f;color:#fff;text-align:center;padding:6px;font-size:14px}
+#runtime{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:7px 16px;border-bottom:1px solid var(--line);background:var(--panel);font-size:14px}
+#runtime .label{color:var(--muted)}
+#runtime button{font:inherit;padding:4px 10px;border:1px solid var(--line);border-radius:7px;background:var(--bg);color:var(--text);cursor:pointer}
+#runtime button:disabled{opacity:.45;cursor:default}
 </style>
 </head>
 <body>
-<div id="ended" style="display:none;text-align:center;padding:6px;font-size:14px;background:var(--me)">Peter 已退出，可以关掉这个页面了。要再聊请重新双击 start-web.bat。</div>
-<div id="offline">和本机程序断开了：命令行窗口可能已关闭（直接关窗口可能来不及保存记忆，下次请在输入框里输入 /quit 退出）。要继续请重新双击 start-web.bat。</div>
+<div id="ended" style="display:none;text-align:center;padding:6px;font-size:14px;background:var(--me)">服务已退出，可以关掉这个页面；下次双击 start-web.bat 可重新启动。</div>
+<div id="offline">和 Peter 本机服务断开了：服务可能仍在后台运行。请重新双击 start-web.bat 回到同一聊天。</div>
 <header>
   <h1 id="title">VEIL</h1>
   <button data-cmd="/cost" title="今天和本月的花费">花费</button>
   <button data-cmd="/memory" title="最近的记忆">记忆</button>
   <button id="theme">深色</button>
 </header>
+<div id="runtime">
+  <span class="label" id="service-status">服务运行状态：正在连接…</span>
+  <span class="label" id="activity-status">自主活动状态：正在读取…</span>
+  <button id="activity-toggle" disabled>读取中…</button>
+  <button id="exit-service" disabled>退出服务</button>
+</div>
 <div id="log"><div class="col" id="col"></div></div>
 <footer><div class="bar">
   <textarea id="box" rows="1" placeholder="说点什么…（Enter 发送，Shift+Enter 换行）"></textarea>
@@ -64,7 +74,7 @@ if(params.has('t'))history.replaceState(null,'',location.pathname);
 const $=id=>document.getElementById(id), col=$('col'), log=$('log'), box=$('box'), sendBtn=$('send');
 let after=0, busy=true, stopped=false, typing=null, sending=false, draftId=null, draftText=null;
 let revealQueue=[], revealTimer=null, roundStartedAt=0, roundHasReply=false, previousMessage=null;
-let pendingApproval=null;
+let pendingApproval=null, activityEnabled=false, exiting=false;
 const GROUP_GAP=15*60*1000;
 function bubbleDelay(text){const n=Array.from(text).length;return n<=60?1200:n<=200?2400:3600}
 function scrollIfFollowing(action){
@@ -176,6 +186,12 @@ async function poll(){
     if(!r.ok)throw new Error(r.status);
     const s=await r.json();
     $('offline').style.display='none';$('ended').style.display=s.stopped?'block':'none';
+    $('service-status').textContent='服务运行状态：'+(s.stopped?'已退出':'运行中');
+    activityEnabled=s.activity_enabled===true;
+    $('activity-status').textContent='自主活动状态：'+(activityEnabled?'已开启（当前版本暂无自主任务）':'已暂停');
+    $('activity-toggle').textContent=activityEnabled?'暂停自主活动':'开启自主活动';
+    $('activity-toggle').disabled=s.stopped||exiting;
+    $('exit-service').disabled=s.stopped||exiting;
     document.title=s.name;$('title').textContent=s.name;
     const stick=log.scrollHeight-log.scrollTop-log.clientHeight<80;
     const initial=after===0;pendingApproval=s.pending;
@@ -190,7 +206,7 @@ async function poll(){
     });
     stopped=s.stopped;setBusy(s.busy);
     if(s.events.length&&stick)log.scrollTop=log.scrollHeight;
-  }catch(e){$('offline').style.display='block'}
+  }catch(e){$('offline').style.display='block';$('service-status').textContent='服务运行状态：连接中断';$('activity-toggle').disabled=true;$('exit-service').disabled=true}
   setTimeout(poll,600);
 }
 async function send(text){
@@ -223,6 +239,27 @@ box.addEventListener('keydown',e=>{
 });
 box.addEventListener('input',()=>{box.style.height='auto';box.style.height=Math.min(box.scrollHeight,200)+'px'});
 document.querySelectorAll('[data-cmd]').forEach(b=>b.onclick=()=>send(b.dataset.cmd));
+$('activity-toggle').onclick=async()=>{
+  $('activity-toggle').disabled=true;
+  try{
+    const r=await api('/api/activity',{enabled:!activityEnabled});
+    if(!r.ok)throw new Error(r.status);
+    activityEnabled=!activityEnabled;
+    $('activity-status').textContent='自主活动状态：'+(activityEnabled?'已开启（当前版本暂无自主任务）':'已暂停');
+    $('activity-toggle').textContent=activityEnabled?'暂停自主活动':'开启自主活动';
+  }catch(e){add('error','自主活动状态保存失败，请检查连接后重试。')}
+  finally{$('activity-toggle').disabled=stopped||exiting}
+};
+$('exit-service').onclick=async()=>{
+  if(exiting||stopped||!confirm('确定退出 Peter 网页服务吗？'))return;
+  exiting=true;$('exit-service').disabled=true;$('activity-toggle').disabled=true;
+  $('service-status').textContent='服务运行状态：正在退出…';
+  try{
+    const r=await api('/api/exit',{});
+    if(!r.ok)throw new Error(r.status);
+    $('ended').style.display='block';$('service-status').textContent='服务运行状态：正在关闭';
+  }catch(e){exiting=false;$('service-status').textContent='服务运行状态：运行中';add('error','退出请求未确认，服务仍在运行；可以再次点击退出。')}
+};
 function theme(t){
   if(t)document.documentElement.setAttribute('data-theme',t);else document.documentElement.removeAttribute('data-theme');
   const dark=t==='dark';
@@ -237,3 +274,4 @@ setBusy(true);poll();box.focus();
 </script>
 </body>
 </html>
+
