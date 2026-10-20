@@ -486,6 +486,20 @@ class Memory:
             return result
         return []
 
+    def deleted_for(self, memory_id):
+        raw = self.raw_content_for(memory_id)
+        if raw is None:
+            return False
+        lines = raw.splitlines()
+        if not lines or lines[0].strip() != '---':
+            return False
+        end = next((i for i, line in enumerate(lines[1:], 1) if line.strip() == '---'), len(lines))
+        for line in lines[1:end]:
+            key, sep, value = line.partition(':')
+            if sep and key.strip() == 'deleted_at':
+                return value.strip().strip("'\\\"").casefold() not in ('', 'null', 'none', 'false')
+        return False
+
     def hidden_ids(self):
         with self.mutex:
             hidden = {key for key, row in self.state['entries'].items() if row.get('hidden')}
