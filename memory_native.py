@@ -1,13 +1,17 @@
-"""Peter saves and looks up memories himself through two Ombre tools (ticket 007).
+"""Native Ombre memory tools exposed through the shared chat tool loop.
 
 The model decides what is worth keeping; Ombre does the tagging and same-event merge.
 Deleting is not offered to the model: /delete stays with the user.
 """
 from types import SimpleNamespace
+import json
+import uuid
 
 from memory_agent import ordinary_hits
 
-NATIVE_TOOLS = ('hold', 'breath_search')
+OMBRE_TOOLS = ('trace', 'dream', 'letter_write', 'letter_read', 'letter_lock_update',
+                'anchor', 'release', 'plan', 'pulse')
+NATIVE_TOOLS = ('hold', 'breath_search', *OMBRE_TOOLS, 'memory_history')
 CONTENT_LIMIT, TITLE_LIMIT, WHY_LIMIT = 1500, 100, 500
 MERGED_MEMORY_LIMIT_BYTES = 48 * 1024
 
@@ -42,16 +46,54 @@ SEARCH = SimpleNamespace(name='breath_search', inputSchema={
     'properties': {'query': {'type': 'string', 'description': 'What to look for.'}}},
     description='Look up your saved memories when the automatic recall did not bring up what you need.')
 
-DESCRIPTION = ('Memory tools, separate from the file tools and always available: you keep long-term memory '
-               'yourself, calling hold to save what is worth keeping and breath_search to look something up. ')
+DESCRIPTION = ('Memory tools are separate from file access. Use hold to save lasting experience and '
+               'breath_search to find a known memory; use the listed Ombre tools for edits, reflection, '
+               'letters, anchors, plans and library status. Every hidden memory is blocked by the program. ')
+MEMORY_HISTORY = SimpleNamespace(name='memory_history', inputSchema={
+    'type': 'object', 'required': ['memory_id'], 'additionalProperties': False,
+    'properties': {'memory_id': {'type': 'string', 'description':
+        'Stable memory ID from breath_search.'}}},
+    description='Read the exact previous versions VEIL saved before your trace edits. Hidden memories are unavailable.' )
 
 
 class NativeMemoryTools:
     def __init__(self, memory, max_result_bytes=8192):
         self.memory, self.max_result_bytes = memory, max_result_bytes
         self.search_results = {}
-        self.tools = [HOLD, SEARCH]
+        available = {tool.name: tool for tool in memory.backend.list_tools()} \
+            if hasattr(memory.backend, 'list_tools') else {}
+        missing = set(OMBRE_TOOLS) - set(available) if hasattr(memory.backend, 'list_tools') else set()
+        if missing:
+            from veil_agent import UserError
+            raise UserError('Ombre 缺少本工单要求的工具：' + '、'.join(sorted(missing)))
+        self.ombre_tools = {name: available[name] for name in OMBRE_TOOLS if name in available}
+        self.tools = [HOLD, SEARCH, *self.ombre_tools.values(), MEMORY_HISTORY]
         self.description = DESCRIPTION
+        self.autonomy_mode = False
+
+    def bind_capabilities(self, files):
+        path = self.memory.store.root / self.memory.cfg.id / 'capabilities.json'
+        try:
+            row = json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
+            current = sorted(tool.name for tool in self.tools)
+            previous = row.get('memory_tools')
+            if previous != current:
+                names = ', '.join(name for name in current if name in self.ombre_tools or name in ('hold', 'breath_search'))
+                event = (f'{self.memory.cfg.name} 新增记忆能力：' + names +
+                         '。trace 删除必须先经页面审批；自主活动中的删除会进入待删除栏目。')
+                old = row.get('pending_event')
+                if not isinstance(old, str) or event not in old:
+                    row['pending_event'] = (old + '\n' + event).strip() if old else event
+                row['memory_tools'] = current
+                path.parent.mkdir(parents=True, exist_ok=True)
+                temporary = path.with_suffix('.json.tmp')
+                temporary.write_text(json.dumps(row, ensure_ascii=False, indent=2), encoding='utf-8')
+                temporary.replace(path)
+            if hasattr(files, 'capability_event'):
+                files.capability_event = row.get('pending_event')
+        except Exception as exc:
+            from veil_agent import UserError
+            raise UserError('记忆能力清单无法安全保存，记忆工具已停止。') from exc
 
     def handles(self, name):
         return name in NATIVE_TOOLS
@@ -65,9 +107,206 @@ class NativeMemoryTools:
 
     def invoke(self, name, args, approval=None):
         try:
-            return self._hold(args) if name == 'hold' else self._search(args)
+            if name == 'hold':
+                return self._hold(args)
+            if name == 'breath_search':
+                return self._search(args)
+            if name == 'memory_history':
+                return self._history(args)
+            return self._ombre(name, args, approval)
         except Exception:
             return '记忆工具出错，没有完成。', '出错', self.preview_summary(name, args)
+
+    def _history(self, args):
+        memory_id = args.get('memory_id')
+        summary = self.memory.title_for(memory_id) if isinstance(memory_id, str) else None
+        if not summary or self.memory.is_hidden(memory_id):
+            return '程序拒绝：这条记忆不存在或已隐藏。', '被拒绝', str(memory_id or 'memory_history')
+        rows = [row for row in self.memory.store.read(f'{self.memory.cfg.id}/memory-versions.jsonl')
+                if row.get('memory_id') == memory_id]
+        if not rows:
+            return '这条记忆还没有由 Peter 改动过的旧版本。', '成功', f'历史：{summary}'
+        rendered = '\n\n---\n\n'.join(
+            f"时间：{row['time']}\n改动字段：{', '.join(row['fields']) or '未记录'}\n"
+            f"理由：{row.get('reason') or '未提供'}\n改动前的完整记忆：\n{row['old_content']}"
+            for row in rows)
+        return self._bounded(rendered), '成功', f'历史：{summary}（{len(rows)} 个旧版本）'
+
+    def _bounded(self, result):
+        raw = result.encode('utf-8')
+        if len(raw) <= self.max_result_bytes:
+            return result
+        return raw[:self.max_result_bytes].decode('utf-8', errors='ignore') + '\n[已截断]'
+
+    def _ombre(self, name, args, approval):
+        summary = self.preview_summary(name, args)
+        if name not in OMBRE_TOOLS or name not in self.ombre_tools:
+            return '程序拒绝：此工具没有授权。', '被拒绝', summary
+        if not isinstance(args, dict):
+            return '程序拒绝：工具参数必须是对象。', '被拒绝', summary
+        if name == 'trace':
+            return self._trace(args, approval)
+        if name in ('anchor', 'release'):
+            memory_id = args.get('bucket_id')
+            if not isinstance(memory_id, str) or self.memory.is_hidden(memory_id):
+                return '程序拒绝：目标记忆不存在或已隐藏。', '被拒绝', summary
+        if name == 'plan':
+            related = args.get('related_bucket')
+            if related and self.memory.is_hidden(related):
+                return '程序拒绝：关联目标记忆已隐藏。', '被拒绝', summary
+        try:
+            result = self.memory.call(name, args)
+        except Exception:
+            return '记忆工具出错，没有完成。', '出错', summary
+        if name in ('dream', 'pulse'):
+            result = self._filter_hidden_result(result)
+        return self._bounded(result), '成功', summary
+
+    def _trace(self, args, approval):
+        memory_id = args.get('bucket_id')
+        summary = self.memory.title_for(memory_id) if isinstance(memory_id, str) else None
+        banned = ('hard_delete', 'deletion_request_id', 'deletion_decision')
+        if any(args.get(key) not in (None, False, '', [], {}) for key in banned):
+            return '程序拒绝：这类删除参数不开放。', '被拒绝', str(summary or 'trace')
+        if not summary or self.memory.is_hidden(memory_id):
+            return '程序拒绝：目标记忆不存在或已隐藏。', '被拒绝', str(memory_id or 'trace')
+        delete = args.get('delete') is True
+        if args.get('delete') not in (None, False, True):
+            return '程序拒绝：delete 必须是布尔值。', '被拒绝', summary
+        reason = args.get('delete_reason', '')
+        if delete and (not isinstance(reason, str) or not reason.strip() or len(reason) > WHY_LIMIT):
+            return f'程序拒绝：删除申请必须提供不超过 {WHY_LIMIT} 字的理由。', '被拒绝', summary
+        old = self.memory.raw_content_for(memory_id)
+        if old is None:
+            return '程序拒绝：无法读取目标记忆原文，未做修改。', '被拒绝', summary
+        if delete and self.autonomy_mode:
+            return self._queue_delete(memory_id, summary, args, old)
+        if delete and (approval is None or approval(
+                f"Peter 想删除记忆 #{memory_id}：{summary}\n理由：{str(args.get('delete_reason') or '未提供')[:WHY_LIMIT]}。同意吗？y/N ").strip().casefold() != 'y'):
+            return 'lan 没有同意；这条记忆仍保留。', '被拒绝', summary
+        if not self._save_version(memory_id, args, old):
+            return '程序拒绝：旧版本未能安全保存，本次修改未执行。', '出错', summary
+        if delete:
+            failure = self._delete(memory_id, summary)
+            if failure:
+                return failure, '出错', summary
+            return '已删除；旧版本已留档。', '成功', f'{summary}（旧版本已留档）'
+        try:
+            safe_args = {key: value for key, value in args.items() if key not in banned}
+            result = self.memory.call('trace', safe_args)
+        except Exception:
+            return '记忆修改失败；旧版本已留档。', '出错', summary
+        self.memory.bucket_details_cache.pop(memory_id, None)
+        updated = self.memory.content_for(memory_id, refresh=True)
+        if updated is not None:
+            self.memory.record_native_update(memory_id, updated)
+        return self._bounded(result), '成功', f'{summary}（旧版本已留档）'
+
+    def _save_version(self, memory_id, args, old):
+        try:
+            fields = sorted(key for key in args if key not in {'bucket_id', 'delete_reason'})
+            self.memory.store.append(f'{self.memory.cfg.id}/memory-versions.jsonl', {
+                'memory_id': memory_id, 'fields': fields,
+                'reason': str(args.get('why_remembered') or args.get('delete_reason') or '')[:WHY_LIMIT],
+                'old_content': old,
+            })
+            return True
+        except Exception:
+            return False
+
+    def _queue_delete(self, memory_id, summary, args, old):
+        reason = args.get('delete_reason', '')
+        if not isinstance(reason, str) or len(reason) > WHY_LIMIT:
+            return '程序拒绝：delete_reason 必须是 500 字以内的文字。', '被拒绝', summary
+        if not self._save_version(memory_id, args, old):
+            return '程序拒绝：旧版本未能安全保存，删除申请未创建。', '出错', summary
+        request_id = uuid.uuid4().hex
+        tags = self.memory.tags_for(memory_id)
+        if '待删除' not in tags:
+            tags.append('待删除')
+        path = f'{self.memory.cfg.id}/delete-requests.jsonl'
+        request = {'request_id': request_id, 'memory_id': memory_id, 'title': summary,
+                   'reason': reason.strip(), 'status': 'pending'}
+        try:
+            self.memory.store.append(path, request)
+            self.memory.call('trace', {'bucket_id': memory_id, 'tags': ','.join(tags) or ' '})
+        except Exception:
+            try:
+                self.memory.store.append(path, {**request, 'status': 'failed'})
+            except Exception:
+                pass
+            return '待删除申请未能安全保存；记忆没有被删除，请稍后重试。', '出错', summary
+        self.memory.messages.put(f'待处理的删除申请：记忆 #{memory_id}「{summary}」，理由：{reason or "未提供"}。')
+        return '已放进待删除栏目，等 lan 回来处理。', '成功', summary
+
+    def process_pending_deletions(self, approval):
+        path = f'{self.memory.cfg.id}/delete-requests.jsonl'
+        latest = {}
+        for row in self.memory.store.read(path):
+            latest[row.get('request_id')] = row
+        notes = []
+        for row in latest.values():
+            if row.get('status') != 'pending':
+                continue
+            memory_id, title = row.get('memory_id'), row.get('title')
+            if not isinstance(memory_id, str) or self.memory.is_hidden(memory_id):
+                self.memory.store.append(path, {**row, 'status': 'rejected',
+                                                'decision_reason': '目标记忆不可用'})
+                continue
+            prompt = (f"Peter 的自主删除申请：记忆 #{memory_id}「{title}」\n"
+                      f"理由：{row.get('reason') or '未提供'}。同意删除吗？y/N ")
+            accepted = approval is not None and approval(prompt).strip().casefold() == 'y'
+            old = self.memory.raw_content_for(memory_id)
+            if old is None or not self._save_version(memory_id, {'delete': accepted}, old):
+                self.memory.messages.put(f'删除申请 #{memory_id} 未处理：旧版本无法安全留档。')
+                continue
+            if accepted:
+                failure = self._delete(memory_id, title)
+                if failure:
+                    self.memory.messages.put(f'删除申请 #{memory_id} 未完成：{failure}')
+                    continue
+                status = 'approved'
+                note = (f'已同意并删除自主申请的记忆 #{memory_id}「{title}」。'
+                        f' Peter 的理由：{row.get("reason") or "未提供"}')
+            else:
+                tags = [tag for tag in self.memory.tags_for(memory_id) if tag != '待删除']
+                self.memory.call('trace', {'bucket_id': memory_id, 'tags': ','.join(tags) or ' '})
+                status = 'rejected'
+                note = (f'未同意删除记忆 #{memory_id}「{title}」；已移除待删除标记。'
+                        f' Peter 的理由：{row.get("reason") or "未提供"}')
+            self.memory.store.append(path, {**row, 'status': status})
+            self.memory.messages.put(note)
+            notes.append(note)
+        return notes
+
+    def _delete(self, memory_id, title):
+        entry = self.memory.state['entries'].setdefault(memory_id, {'title': title})
+        entry.update(hidden=True, deleted=True, delete_pending=True)
+        self.memory.persist()
+        try:
+            self.memory.call('trace', {'bucket_id': memory_id, 'delete': True})
+        except Exception:
+            return 'Ombre 删除未确认；这条已隐藏，可通过 /delete 重试。'
+        entry.pop('delete_pending', None)
+        self.memory.persist()
+        return None
+
+    def _filter_hidden_result(self, result):
+        hidden = self.memory.hidden_ids()
+        if not hidden:
+            return result
+        # Ombre emits each dream record as a separate block and each pulse entry
+        # as a line containing its stable ID. Drop hidden records before they
+        # reach the chat model; aggregate counts remain system-level metadata.
+        pieces = result.split('\n---\n')
+        if len(pieces) > 1:
+            pieces = [piece for piece in pieces if not any(
+                f'ID: {key}' in piece or f'[{key}]' in piece for key in hidden)]
+            result = '\n---\n'.join(pieces)
+        lines = result.splitlines()
+        result = '\n'.join(line for line in lines if not any(
+            f'[{key}]' in line or f'ID: {key}' in line for key in hidden))
+        return result
 
     def _hold(self, args):
         summary = self.preview_summary('hold', args)
@@ -175,6 +414,7 @@ class ToolSet:
     """Files (006) and memory (007) behind the one interface Chat already uses."""
     def __init__(self, files, native):
         self.files, self.native = files, native
+        self.native.bind_capabilities(files)
 
     @property
     def tools(self):
@@ -193,7 +433,12 @@ class ToolSet:
         return getattr(self.files, 'startup_notice', None)
 
     def consume_capability_event(self):
-        self.files.consume_capability_event()
+        consume = getattr(self.files, 'consume_capability_event', None)
+        if consume:
+            consume()
+
+    def set_autonomy(self, enabled):
+        self.native.autonomy_mode = bool(enabled)
 
     def announce_autonomy(self):
         self.files.announce_autonomy()
@@ -207,4 +452,5 @@ class ToolSet:
         if self.native.handles(name):
             return self.native.preview_summary(name, args)
         return self.files.preview_summary(name, args)
+
 
