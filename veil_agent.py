@@ -471,10 +471,11 @@ class Budget:
         return (f'今天聊天缓存命中 {cached * 100 / prompt:.0f}%（命中 {cached} / 输入 {prompt} tokens；'
                 '只统计聊天模型，不含记忆打标和向量）')
 
-    def display(self, stamp=None):
+    def display(self, stamp=None, character=None):
         day, month, pending = self.totals(stamp)
-        autonomy, _ = self.category_totals(None, stamp)
-        chat = day - autonomy
+        all_autonomy, _ = self.category_totals(None, stamp)
+        autonomy = all_autonomy if character is None else self.category_totals(character, stamp)[0]
+        chat = day - all_autonomy
         return (f'今天 ¥{day:.6f} / {self.daily}；本月 ¥{month:.6f} / {self.monthly}；'
                 f'待核对预留 ¥{pending:.6f}；其中聊天 ¥{chat:.6f}，自主 ¥{autonomy:.6f} / '
                 f'{self.autonomy_daily}/日（自主是上限，不是消费目标）')
@@ -514,7 +515,7 @@ def self_facts(cfg, budget, memory=False, capabilities=None):
         'Unlisted abilities are unavailable. Do not invent memories, actions or tool results.'
     )
     changing = (f'Local time: {stamp} ({weekday}).\n'
-                f'Pre-request ledger (CNY, excludes this reply): {budget.display(stamp)}\n'
+                f'Pre-request ledger (CNY, excludes this reply): {budget.display(stamp, cfg.id)}\n'
                 'Quote its cutoff when asked about spending; /cost includes new usage after this reply.')
     return stable, changing
 
@@ -1034,7 +1035,7 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead, activity=N
                                      f"{row.get('result')}：{row.get('result_reason')} | ¥{row.get('cost_cny')}"
                                      for row in reversed(rows)) or '还没有自主活动记录。')
             elif text == '/cost':
-                output(chat.budget.display())
+                output(chat.budget.display(character=chat.cfg.id))
                 output(chat.budget.cache_display())
             elif text == '/self':
                 if chat.last_self is None:
@@ -1080,12 +1081,12 @@ def main():
         store = Store(ROOT / 'data')
         with store.lock():
             budget = Budget(store)
-            if args.cost:
-                print(budget.display())
-                print(budget.cache_display())
-                return 0
             cfg = load_character(ROOT, args.character)
             budget.autonomy_daily = cfg.autonomy['daily_budget_cny']
+            if args.cost:
+                print(budget.display(character=cfg.id))
+                print(budget.cache_display())
+                return 0
             client, model = make_model(ROOT, cfg)
             with client:
                 from tools_agent import FilesystemTools

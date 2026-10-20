@@ -88,9 +88,14 @@ daily_budget_cny = "2"
                 request_id, _ = self.budget.reserve(cfg)
                 self.budget.settle(request_id, cfg, 100, 20, 0)
 
+        peter_autonomy, _ = self.budget.category_totals('peter')
+        ghost_autonomy, _ = self.budget.category_totals('ghost')
         total_autonomy, _ = self.budget.category_totals(None)
-        self.assertGreater(total_autonomy, 0)
-        self.assertIn(f'自主 ¥{total_autonomy:.6f}', self.budget.display())
+        self.assertGreater(total_autonomy, peter_autonomy)
+        self.assertGreater(total_autonomy, ghost_autonomy)
+        self.assertIn(f'自主 ¥{peter_autonomy:.6f}', self.budget.display(character='peter'))
+        self.assertIn(f'自主 ¥{ghost_autonomy:.6f}', self.budget.display(character='ghost'))
+        self.assertNotIn(f'自主 ¥{total_autonomy:.6f}', self.budget.display(character='ghost'))
 
     def test_autonomy_budget_blocks_before_model_request(self):
         with self.budget.autonomous('test', Decimal('0.000001')):
