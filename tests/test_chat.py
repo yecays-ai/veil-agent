@@ -468,7 +468,8 @@ output_cny_per_million = "8"
 
         self.assertEqual(reply, 'A fictional reply')
         chat._tool_chat.assert_called_once()
-        self.assertEqual(len(chat.tool_schemas()) - 1, len(names))
+        # send_message plus the two long-task tools are offered beside the authorized ones.
+        self.assertEqual(len(chat.tool_schemas()) - 3, len(names))
         rows, costs = self.store.read('test/chat.jsonl'), self.store.read('costs.jsonl')
         chat._tool_chat.reset_mock()
         with self.assertRaises(UserError):
