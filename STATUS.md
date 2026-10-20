@@ -1,15 +1,21 @@
 # 当前状态
 
-更新：2026-10-21 · Codex · 024 PR #53 已合并，lan 的 Windows 验收已通过
+更新：2026-10-21 · Codex · 工单 026 PR #57 已提交；等待 lan/Claude 审查与 Windows 体验验收
 
 ## 当前目标
 
 - **工单 024 Ombre 完整版常驻（4B-3）：PR [#53](https://github.com/yecays-ai/veil-agent/pull/53) 已合并；lan 2026-10-21 报告真实 Windows 验收通过。** Ombre 使用每角色本机 HTTP 常驻进程、MCP Token、目录互斥锁和首次启动备份；网页可打开 Ombre 面板，能力变化只提示一次。详见 `docs/tickets/024-ombre-resident.md`。
-- **工单 025 Peter 用上 Ombre 更多记忆工具：PR [#56](https://github.com/yecays-ai/veil-agent/pull/56) 已提交，基于 main `b07612c`。** 已接入工单指定的 Ombre 工具、页面删除审批、自主待删除队列、隐藏过滤和完整旧版本查询；向量调用计入现有预算。定向记忆测试 30 项、记忆回归 38 项、自主活动回归 10 项通过。GitHub Actions 当前排队；CodeRabbit 返回“Review skipped: manual review required”，尚无正式评审。网页 HTTP 测试受沙箱 localhost 限制，Windows 实际体验待 lan 验收。详见工单 025。
+- **工单 025 Peter 用上 Ombre 更多记忆工具：PR [#56](https://github.com/yecays-ai/veil-agent/pull/56) 已合并至 main `95f466e`；Windows 真实体验尚未记录。** Ombre 指定工具、删除审批与自主待删除队列、隐藏过滤、完整旧版本查询及向量费用预留已上线。详见工单 025。
+- **工单 026 修复聊天长度预检：PR [#57](https://github.com/yecays-ai/veil-agent/pull/57) 已提交，基于 main `95f466e`。** 发送前估算复用工具循环的保守 token 估算并在真实用量后校准；完整保留人设、记忆、历史和授权工具，只裁剪本次请求中的最旧整轮聊天。`test_chat.py` 39 项、`test_tools.py` 41 项通过（2 项可选集成跳过）；Windows 真实 DeepSeek 体验待 lan 验收。
 - **工单 023：PR #50 已合并（main `18ce081`，CodeRabbit 限流，由 Claude 代审）；Windows 体验待验收。** 后续聊天带入当前角色最近一次自主活动摘要，`/cost` 按当前角色统计自主费用。详见 `docs/tickets/023-autonomy-chat-context.md`。
 - **工单 022：PR #49 已合并（main `59c0b20`，CodeRabbit 限流，由 Claude 代审）；Windows 体验待验收。** 修复网页服务继承旧 PATH 导致 npx 检测失败。合并后需退出当前服务再重启，按工单步骤确认文件工具和审批正常。
 - **工单 021 最小自主（4B-2）：代码已合并至 main `6b44de6`。** 184 项自动化测试通过（3 项可选集成跳过），CodeRabbit 两条功能评论已修复并确认解决，3 条定向回归与 GitHub CI 通过；Windows 真实体验待验收。已接入定时唤醒、单独后台费用池、12 工具步骤/10 分钟上限、聊天让位、持久记录、`/autonomy` 和能力变化提示；默认暂停，¥10/日与 ¥300/月总预算不变。详见 `docs/tickets/021-minimal-autonomy.md`。
 - **020 常驻服务（4B-1）：PR #44、#45 已合并（main `a18618f`），lan 2026-10-20 真实 Windows 验收通过。** 无持续黑窗口、同一服务回连、页面退出入口及双状态/持久暂停；本单不运行自主任务。
+
+## 工单 026 验收步骤（Windows）
+
+1. 使用现有 Peter 数据和工具，发送一段普通英文长消息并收到正常回复；确认记忆、历史与工具仍可用。
+2. 输入明显超过上下文上限的长消息，确认程序提示未发送且本机聊天/记忆保留；缩短后能继续聊天。
 
 ## 工单 020 验收步骤（Windows）
 
