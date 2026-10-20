@@ -19,7 +19,6 @@ header button:hover{color:var(--text)}
 .msg{max-width:88%;padding:10px 14px;border-radius:14px;white-space:pre-wrap;word-break:break-word;border:1px solid var(--line);background:var(--panel)}
 .msg.user{align-self:flex-end;background:var(--me);border-color:transparent}
 .msg.assistant{align-self:flex-start}
-.msg.assistant.bubble-part-following{margin-top:-8px;border-top-left-radius:6px}
 .msg code{font-family:Consolas,monospace;font-size:.92em;background:rgba(127,127,127,.15);padding:1px 5px;border-radius:4px}
 .msg pre{margin:6px 0;padding:10px;background:rgba(127,127,127,.12);border-radius:8px;overflow-x:auto;white-space:pre}
 .msg pre code{background:none;padding:0}
@@ -70,27 +69,9 @@ function render(text){
   return parts.map((p,i)=>i%2?'<pre><code>'+p.replace(/^[^\n]*\n/,'').replace(/\n$/,'')+'</code></pre>'
     :p.replace(i>0?/^\n/:/^$/,'').replace(i<parts.length-1?/\n$/:/^$/,'').replace(/`([^`\n]+)`/g,'<code>$1</code>').replace(/\*\*([^*\n]+)\*\*/g,'<b>$1</b>')).join('');
 }
-function splitAssistantBubbles(text){
-  // Keep English-only and Markdown-heavy replies as one stable message. The UI
-  // only splits plain Chinese prose; the saved chat event is never changed.
-  if(!/[\p{Script=Han}]/u.test(text) || /[`*_~]|\[[^\]]+\]\([^)]+\)|^\s*(?:#{1,6}|>|[-*+]|\d+[.)])\s/m.test(text)) return [text];
-  if(typeof Intl.Segmenter !== 'function') return [text];
-  const parts=Array.from(new Intl.Segmenter('zh-CN',{granularity:'sentence'}).segment(text),part=>part.segment);
-  return parts.length > 1 && parts.every(part=>part.trim()) ? parts : [text];
-}
 function add(kind,text,id){
   const d=document.createElement('div');
-  if(kind==='user'){d.className='msg user';d.innerHTML=render(text)}
-  else if(kind==='assistant'){
-    const parts=splitAssistantBubbles(text);
-    parts.forEach((part,index)=>{
-      const bubble=document.createElement('div');
-      bubble.className='msg assistant'+(parts.length>1?' bubble-part'+(index?' bubble-part-following':''):'');
-      bubble.innerHTML=render(part);
-      if(typing)col.insertBefore(bubble,typing);else col.appendChild(bubble);
-    });
-    return;
-  }
+  if(kind==='user'||kind==='assistant'){d.className='msg '+kind;d.innerHTML=render(text)}
   else if(kind==='approval'){
     d.className='approval';d.dataset.id=id;
     const p=document.createElement('p');p.textContent=text;d.appendChild(p);
