@@ -327,11 +327,16 @@ class OmbreToolGuardTests(unittest.TestCase):
 
     def test_dream_and_pulse_do_not_forward_hidden_memory_blocks(self):
         self.memory.state['entries']['mem001'] = {'title': 'Old title', 'hidden': True}
-        self.backend.result = ('=== Dreaming ===\nID: mem001\nhidden body\n---\n'
+        self.backend.result = ('=== Dreaming · 过去 48 小时全量记忆（2 个桶）===\nID: mem001\nhidden body\n---\n'
                               'ID: visible\nvisible body')
-        self.assertNotIn('hidden body', self.call('dream', {})[0])
-        self.backend.result = '=== 记忆列表 ===\n💭 [mem001] secret\n💭 [visible] shown'
-        self.assertNotIn('secret', self.call('pulse', {})[0])
+        dream = self.call('dream', {})[0]
+        self.assertNotIn('hidden body', dream)
+        self.assertIn('（1 个桶）', dream)
+        self.backend.result = ('固化桶: 7 个\n=== 记忆列表 ===\n💭 [mem001] secret\n'
+                               '💭 [visible] shown')
+        pulse = self.call('pulse', {})[0]
+        self.assertNotIn('secret', pulse)
+        self.assertNotIn('固化桶: 7 个', pulse)
 
     def test_upstream_schemas_are_selected_by_name(self):
         names = {tool.name for tool in self.tools.native.tools}
