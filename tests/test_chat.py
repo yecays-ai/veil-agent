@@ -133,7 +133,18 @@ output_cny_per_million = "8"
         self.assertEqual(self.model.call_count, 2)  # one call per explicit user message
         saved = self.store.read('test/chat.jsonl')
         self.assertEqual([m['content'] for m in saved if m['role'] == 'user'], ['first', 'second'])
+        self.assertEqual([m['content'] for m in self.chat.history if m['role'] == 'user'],
+                         ['first', 'second'])
         self.assertGreater(Budget(Store(self.root / 'data')).totals()[2], 0)
+
+    def test_provider_failure_drops_terminal_typeahead_before_next_input(self):
+        self.model.side_effect = RuntimeError('private provider detail')
+        output = []
+        drop = Mock(return_value=True)
+        run_chat(self.chat, Mock(side_effect=['first', '/quit']), output.append, drop=drop)
+        self.assertIn('（等回复时打的字没有收到，请重新输入。）', output)
+        drop.assert_called_once_with()
+        self.assertEqual(self.model.call_count, 1)
 
     def test_corrupt_ledger_still_stops_the_chat_loop(self):
         self.store.append('costs.jsonl', {'type': 'reserve'})

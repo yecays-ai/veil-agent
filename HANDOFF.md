@@ -4,23 +4,22 @@
 
 ## 做到哪
 
-- 最新 `main` 基线 `b1d8555`；当前分支 `ticket/014-chat-stability`；提交 `0de320b` 已推送，PR #31 已创建并指向 `main`。
-- 已确认 012 代码合并、真实缓存效果待验收；013 代码合并、真实 Windows 网页已验收。权威进度见 `STATUS.md`。
-- 014 已改 `veil_agent.py`、`web_agent.py`、`web/index.html`，并新增针对普通模型错误恢复、请求去重和并发提交的测试；新增 `docs/tickets/014-chat-stability.md`。`STATUS.md` 已标记三项工单状态。
-- 通过：`python -m unittest tests.test_chat tests.test_web`（43 项）；全量 `python -m unittest discover -s tests`（137 项，3 项可选集成跳过）。本机网页测试需 loopback 权限；未调用真实模型、供应商接口或付费 API。
-- GitHub 当前状态：PR 可合并；CodeRabbit pending，Tests workflow in progress；尚无评审意见或 CI 结论。真实 Windows 用户验收待 lan 完成。
-- 保留了原有未提交的人设配置改动 `characters/peter/character.toml`（thinking 从 disabled 改为 enabled）；不要纳入工单提交。未编辑真实记忆、聊天数据或费用账本。
+- 最新 `main` 基线 `b1d8555`；当前分支 `ticket/014-chat-stability`；PR #31 指向 `main`。
+- 012：代码已合并，真实缓存效果待验收。013：代码已合并，真实 Windows 网页已验收。014：当前稳定性修复开发中。权威进度和验收步骤见 `STATUS.md`。
+- CodeRabbit 首轮 4 条行为意见已修复：失败后刷新当前聊天历史；模型失败时清理终端输入缓冲；同一 request id 不同正文返回冲突；网页成功后清理旧草稿 id，同时保留用户在请求期间新输入的内容。
+- 本机全量假数据测试通过：138 项，3 项可选集成跳过；网页内联脚本 `node --check` 与 `git diff --check` 通过。网页服务测试需本机 loopback 权限。未调用真实模型、供应商接口或付费 API。
+- PR #31 更新后 CodeRabbit 复审与新 CI 尚待完成；真实 Windows 验收待 lan 完成。不得把自动测试当作用户体验验收。
+- 用户原有未提交改动 `characters/peter/character.toml`（thinking 从 disabled 改为 enabled）仍在工作区，不能纳入工单提交。未编辑真实记忆、聊天数据或费用账本。
+- 直接 GitHub 推送曾超时；前次文档更新经 GitHub API 写入远端。此后本地分支与远端提交历史可能不同步，下一步提交前先查 PR 分支最新 SHA；不要对旧远端历史强推。
 
 ## 下一个窗口第一步
 
-先读 `AGENTS.md`、`STATUS.md`、本文件和 `docs/tickets/014-chat-stability.md`，查看 PR #31 的 CodeRabbit 与 CI 最新结果；只处理会影响功能或安全的问题。满足仓库评审和 CI 条件后按规则合并，再请 lan 做真实 Windows 验收。确认 `characters/peter/character.toml` 仍为独立未提交用户改动，不要纳入 PR。
+先查看 PR #31 最新 head、CI 和 CodeRabbit 复审状态；对照本地工作区，确认新增修复与 `STATUS.md`、本文件都在同一 PR 内容中。只处理会影响功能或安全的问题。CI 和评审满足规则后合并，再请 lan 按 `STATUS.md` 做真实 Windows 验收；完成前不要宣布工单完全验收。
 
 ## 背景和注意
 
 - 聊天共用 `veil_agent.run_chat`；网页只接入 Hub 输入、输出、审批和 HTTP 服务。终端流程必须保持原样。
-- 费用请求在发起模型请求前已预留并写入用户消息。结果不确定时必须保留预留，不自动重试。
-- 网页 `/api/send` 现在要求 `request_id`；前端对同一草稿重试会复用该 ID，服务器已接收过的 ID 不可再入队。
-- `Hub.busy` 的检查与入队必须持同一把条件锁；审批仅在当前 pending id 有效时接受，页面需等服务器响应后报告已收到。
-- 工具、账本或本地持久化异常不能被归类为可恢复的模型网络故障。
-- `reuse-first` 结论：沿用 Python 标准库 HTTP 服务和既有聊天/审批/预算组件；不接入 Open WebUI、LobeChat 等需要另行装配后端的整套产品，也不加依赖。
-- 012 真实缓存收益仍未验收；011 跨重启授权与路径边界仍未完成真实 Windows 验收。不要把自动测试当成用户体验验收。
+- 费用请求在发起模型请求前已预留并写入用户消息。结果不确定时保留预留，不自动重试；账本、工具或本地持久化异常继续安全停止。
+- 网页 `/api/send` 使用 `request_id` 去重；同 id 同正文视为重复，同 id 不同正文冲突。`Hub.busy` 检查和入队持同一把条件锁。审批仅在当前 pending id 有效时接受，页面等服务器响应后报告结果。
+- `reuse-first` 结论：沿用 Python 标准库 HTTP 服务及既有聊天、审批、预算组件，不引入整套聊天框架或新依赖。
+- 012 真实缓存效果仍待验收；011 跨重启授权与路径边界仍待真实 Windows 验收。

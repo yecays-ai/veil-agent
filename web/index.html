@@ -160,7 +160,10 @@ async function send(text){
         ?'Peter 正在处理上一条消息；这条没有发送，输入已保留。'
         :'发送未成功，输入已保留；可以稍后重新操作。');
     }else{
-      if(fromBox&&box.value.trim()===text){box.value='';box.style.height='auto';draftId=null;draftText=null}
+      if(fromBox){
+        if(box.value.trim()===text){box.value='';box.style.height='auto'}
+        draftId=null;draftText=null;
+      }
       if(result.duplicate)add('notice','这条消息此前已提交，没有重复发送。');
     }
   }catch(e){add('error','发送结果未确认，输入已保留；页面不会自动重发。')}

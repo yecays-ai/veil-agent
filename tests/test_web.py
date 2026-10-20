@@ -132,6 +132,7 @@ output_cny_per_million = "8"
             self.assertTrue(self.wait(lambda: self.call('/api/events')[1]['busy'] is False))
             result['first'] = self.call('/api/send', {'text': 'one', 'request_id': 'one'})[0]
             result['duplicate'] = self.call('/api/send', {'text': 'one', 'request_id': 'one'})[0]
+            result['conflict'] = self.call('/api/send', {'text': 'different', 'request_id': 'one'})[0]
             result['second'] = self.call('/api/send', {'text': 'two', 'request_id': 'two'})[0]
             gate.set()
             self.assertTrue(self.wait(lambda: self.call('/api/events')[1]['busy'] is False))
@@ -141,8 +142,8 @@ output_cny_per_million = "8"
                                                   for e in self.call('/api/events')[1]['events']) == 2))
 
         result = self.run_loop(scenario)
-        self.assertEqual((result['first'], result['duplicate'], result['second'],
-                          result['late_duplicate'], result['retry']), (200, 200, 409, 200, 200))
+        self.assertEqual((result['first'], result['duplicate'], result['conflict'], result['second'],
+                          result['late_duplicate'], result['retry']), (200, 200, 409, 409, 200, 200))
         self.assertEqual(self.model.call_count, 2)
         self.assertEqual([m['content'] for m in self.store.read('test/chat.jsonl')
                           if m['role'] == 'user'], ['one', 'two'])

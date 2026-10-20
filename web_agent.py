@@ -36,7 +36,7 @@ class Hub:
         self.inbox = queue.Queue()
         self.answers = queue.Queue()
         self.pending = None       # event id of the approval being asked, else None
-        self.submissions = {}      # accepted request ids prevent ambiguous retries duplicating a turn
+        self.submissions = {}      # request id -> accepted normalized text
 
     def push(self, kind, text):
         with self.cond:
@@ -74,14 +74,14 @@ class Hub:
         # Check busy and register the accepted request atomically for all handlers.
         with self.cond:
             if request_id in self.submissions:
-                return 'duplicate'
+                return 'duplicate' if self.submissions[request_id] == text else 'conflict'
             if self.stopped:
                 return 'stopped'
             if self.busy:
                 return 'busy'
             self.busy = True
             self.push('user', text)
-            self.submissions[request_id] = True
+            self.submissions[request_id] = text
             self.inbox.put(text)
             return 'accepted'
 

@@ -488,6 +488,10 @@ class Chat:
         except (KeyboardInterrupt, EOFError):
             raise
         except (TooLong, RequestFailed):
+            # The failed message may already be persisted (provider failure or a
+            # tool-mode length failure). Keep this live session aligned with a
+            # reopened one; recent() also fails closed on corrupt chat records.
+            self.history, self.rounds = self.recent()
             raise
         with saving():
             if not isinstance(reply, str) or not reply.strip():
@@ -722,6 +726,11 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead):
         output(chat.tools.startup_notice)
     if chat.pending_capability_event:
         output(chat.pending_capability_event)
+
+    def notify_dropped():
+        if drop():
+            output('（等回复时打的字没有收到，请重新输入。）')
+
     try:
         while True:
             if chat.memory:
@@ -754,12 +763,12 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead):
                     continue
                 except RequestFailed as exc:
                     output(str(exc))
+                    notify_dropped()
                     continue
                 if chat.trim_note:
                     output(chat.trim_note)
                 output(f'{chat.cfg.name}: {reply}')
-                if drop():
-                    output('（等回复时打的字没有收到，请重新输入。）')
+                notify_dropped()
     except (KeyboardInterrupt, EOFError):
         output('\n已退出，已保存的记录仍在；未完成请求的预留额可用 /cost 查看。')
 
