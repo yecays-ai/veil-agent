@@ -1,9 +1,11 @@
 # 当前状态
 
-更新：2026-10-20 18:27 +08:00 · Claude · 019 补充 send_message 能力变化提示
+更新：2026-10-20 18:38 +08:00 · Claude · 写好 020 常驻服务工单
 
 ## 当前目标
 
+- **下一单 020 常驻服务（4B-1）：工单已写，交给 Codex 施工。** 见 `docs/tickets/020-resident-service.md`：关网页后再双击 `start-web.bat` 回到同一服务，页面显示服务和后台状态，`/pause` `/resume` 默认暂停且跨重启保留；本单不跑任何后台活动。
+- 019 补充 PR #42 已合并（main `82e7df7`）。
 - **019 补充：Peter 能感知到 send_message 这项新能力。** 019 只加了工具本身，没有写入能力清单，所以没有触发「你的能力有变化」提示。现在 `capabilities.json` 记录 `messaging`；已有清单升级后，Peter 下一次聊天会收到一次「新增 send_message」的能力变化记录，只提示一次。
 
 工单 019：所有语言通用的独立短消息与网页逐条显示。实现见 [PR #41](https://github.com/yecays-ai/veil-agent/pull/41)，分支 `ticket/019-multi-message` 基于 main `38b8826`；Windows 真实体验待验收，主动消息调度仍属于后续 4C-2。
