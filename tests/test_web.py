@@ -119,6 +119,16 @@ output_cny_per_million = "8"
         self.assertEqual(self.call('/api/events')[0], 200)
         self.model.assert_not_called()
 
+    def test_ephemeral_port_uses_actual_port_for_host_validation(self):
+        server = start_server(self.hub, TOKEN, 0)
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        port = server.server_address[1]
+        req = urllib.request.Request(f'http://127.0.0.1:{port}/api/events',
+                                     headers={'X-Token': TOKEN})
+        with urllib.request.urlopen(req, timeout=5) as response:
+            self.assertEqual(response.status, 200)
+
     def test_activity_toggle_is_authorized_persistent_and_task_free(self):
         status, state = self.call('/api/events')
         self.assertEqual(status, 200)
@@ -197,6 +207,7 @@ output_cny_per_million = "8"
         self.assertEqual(self.model.call_count, 2)
         self.assertEqual([m['content'] for m in self.store.read('test/chat.jsonl')
                           if m['role'] == 'user'], ['one', 'two'])
+
     def test_provider_failure_does_not_stop_web_chat_or_retry(self):
         self.model.side_effect = [RuntimeError('private provider detail'),
                                   ('A fictional reply', 100, 20, 10)]
@@ -326,4 +337,3 @@ class PacingTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
-
