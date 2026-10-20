@@ -6,7 +6,7 @@
 
 ## 当前状态
 
-基于 main `74f59b8b93d8b5cd65537e6e6a070208118891fb`。实现沿用现有 `send_message`：消息写入角色 `chat.jsonl`，`Hub.output` 将普通 assistant 消息推到网页事件流；唤醒上下文明确这是可选能力。最终自主总结仍只写自主活动记录。
+基于 main `74f59b8b93d8b5cd65537e6e6a070208118891fb`。实现沿用现有 `send_message`：消息写入角色 `chat.jsonl`，`Hub.output` 将普通 assistant 消息推到网页事件流；唤醒上下文明确这是可选能力。最终自主总结仍只写自主活动记录。PR [#61](https://github.com/yecays-ai/veil-agent/pull/61) 已创建，等待 Claude 审查，尚未合并。
 
 复用调查：Fount 的 [wakeScheduler](https://github.com/steve02081504/fount/blob/6d70452ddbc335efbda1867a2e79f9191f95cb64/src/public/parts/shells/chat/src/reply/wakeScheduler.mjs) 用运行标记和序号处理并发唤醒，[async-task registry](https://github.com/steve02081504/fount/blob/82af83ba298146b1da844584f53012cb768cb064/src/public/parts/plugins/async-task/registry.mjs) 用任务 ID 与 generation ID 标记执行归属。只借鉴并发保护与稳定身份思路，沿用 VEIL 现有聊天存储和自主调度，不复制代码或增加依赖。仓库约 693 stars；LICENSE 文件存在但接口未能解码校验，因此不复制其代码。
 

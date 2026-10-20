@@ -1,10 +1,10 @@
 # 当前状态
 
-更新：2026-10-21 · Codex · 工单 030 施工中，分支 `ticket/030-autonomous-messages`，基于 main `74f59b8`；PR 待创建
+更新：2026-10-21 · Codex · 工单 030 PR [#61](https://github.com/yecays-ai/veil-agent/pull/61) 已创建，等待 Claude 审查；尚未合并
 
 ## 当前目标
 
-- **工单 030：自主唤醒可选择发送聊天消息，施工中。** 分支 `ticket/030-autonomous-messages` 基于 main `74f59b8`；在现有 `send_message` 与网页聊天历史上加入自主发送、单次最多三条、逐唤醒去重及让位同步保护。PR 待创建。Lan 的安全唤醒、刷新/重启、选择不发、限额和聊天/审批回归待 Windows 验收。
+- **工单 030：自主唤醒可选择发送聊天消息。** PR [#61](https://github.com/yecays-ai/veil-agent/pull/61) 基于 main `74f59b8`，等待 Claude 审查；尚未合并。实现沿用现有 `send_message` 与网页聊天历史，单次最多三条，并有逐唤醒去重和让位同步保护。Lan 的安全唤醒、刷新/重启、选择不发、限额和聊天/审批回归待 Windows 验收。
 - **工单 029：PR [#60](https://github.com/yecays-ai/veil-agent/pull/60) 已合并至 main `74f59b8`。** 网页中英文语音转文字已由 Lan 在 Chrome 演示页实测；完整 VEIL 网页 A–E 体验仍待验收。
 - **工单 028：PR [#59](https://github.com/yecays-ai/veil-agent/pull/59) 已合并至 main `15ede99`。** 跨自主唤醒长期任务、任务状态与副作用检查点已进入 main；PR 中记录的定向自动化测试通过。Windows 网页体验尚未由 Lan 验收。
 - **工单 027：PR [#58](https://github.com/yecays-ai/veil-agent/pull/58) 已合并至 main `a7ab987`。** 收尾 025 记忆工具验收反馈与留痕：人工批准删除后回执明确说明 lan 已批准；`hold(target_id)` 追加前留存完整 Markdown 快照；`trace` 区分正文、meaning 元数据、记忆缘由与本次操作原因。拒绝和待审批结果保持明确。`dream` 1/3/48 小时窗口、计划 active 状态、标题文字不构成授权及分类/重复行为已核查；未发现其他需要改动实现的问题。定向测试与固定 Ombre 时间窗口假数据核对通过。Windows 部分验收仍待 lan 按下方步骤进行。
