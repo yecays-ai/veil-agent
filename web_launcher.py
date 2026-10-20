@@ -78,6 +78,51 @@ def startup_error():
     return f'{FAILED}\n\n{message}' if message else FAILED
 
 
+def _service_environment(environment=None, platform_name=None):
+    """Include the current Windows PATH when a GUI launcher inherited a stale one."""
+    env = dict(os.environ if environment is None else environment)
+    is_windows = (platform_name or os.name) == 'nt'
+    if not is_windows:
+        return env
+    path_separator = ';'
+
+    registry_paths = []
+    try:
+        import winreg
+    except ImportError:
+        winreg = None
+    if winreg is not None:
+        locations = (
+            (winreg.HKEY_LOCAL_MACHINE,
+             r'SYSTEM\CurrentControlSet\Control\Session Manager\Environment'),
+            (winreg.HKEY_CURRENT_USER, r'Environment'),
+        )
+        for hive, subkey in locations:
+            try:
+                with winreg.OpenKey(hive, subkey) as key:
+                    value, _ = winreg.QueryValueEx(key, 'Path')
+                if isinstance(value, str):
+                    registry_paths.extend(os.path.expandvars(value).split(path_separator))
+            except OSError:
+                continue
+
+    # Keep inherited entries after the registered system and user entries. This
+    # preserves per-process additions while allowing Start Web to see newly
+    # installed tools even when Explorer has an older environment snapshot.
+    merged = []
+    seen = set()
+    for entry in registry_paths + env.get('PATH', '').split(path_separator):
+        entry = entry.strip().strip('"')
+        if not entry:
+            continue
+        key = os.path.normcase(os.path.normpath(entry))
+        if key not in seen:
+            seen.add(key)
+            merged.append(entry)
+    env['PATH'] = path_separator.join(merged)
+    return env
+
+
 def start_service(character, port):
     pythonw = Path(sys.executable).with_name('pythonw.exe')
     executable = str(pythonw if pythonw.exists() else Path(sys.executable))
@@ -85,7 +130,8 @@ def start_service(character, port):
     return subprocess.Popen([executable, str(ROOT / 'web_agent.py'), '--character', character,
                       '--port', str(port), '--no-browser'],
                      cwd=ROOT, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                     stderr=subprocess.DEVNULL, close_fds=True, creationflags=flags)
+                     stderr=subprocess.DEVNULL, close_fds=True, creationflags=flags,
+                     env=_service_environment())
 
 
 def main():

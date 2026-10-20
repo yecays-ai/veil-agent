@@ -2,8 +2,10 @@ import json
 import shutil
 import socket
 import subprocess
+import sys
 import tempfile
 import threading
+from types import SimpleNamespace
 import unittest
 import urllib.error
 import urllib.request
@@ -336,6 +338,36 @@ class PacingTests(unittest.TestCase):
 
 
 class StartupErrorTests(unittest.TestCase):
+    def test_service_environment_refreshes_stale_windows_path(self):
+        import web_launcher
+
+        class RegistryKey:
+            def __init__(self, path):
+                self.path = path
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                return False
+
+        values = {
+            ('machine', r'SYSTEM\CurrentControlSet\Control\Session Manager\Environment'):
+                r'C:\Windows\System32;E:\Program Files',
+            ('user', r'Environment'): r'C:\Users\test\AppData\Roaming\npm',
+        }
+        registry = SimpleNamespace(
+            HKEY_LOCAL_MACHINE='machine', HKEY_CURRENT_USER='user',
+            OpenKey=lambda hive, subkey: RegistryKey(values[(hive, subkey)]),
+            QueryValueEx=lambda key, name: (key.path, 1),
+        )
+        with patch.dict(sys.modules, {'winreg': registry}):
+            result = web_launcher._service_environment(
+                {'PATH': r'C:\stale;E:\Program Files'}, platform_name='nt')
+
+        self.assertEqual(result['PATH'],
+                         r'C:\Windows\System32;E:\Program Files;C:\Users\test\AppData\Roaming\npm;C:\stale')
+
     def test_launcher_waits_until_chat_loop_is_ready(self):
         import web_launcher
         with tempfile.TemporaryDirectory() as tmp:
