@@ -195,6 +195,9 @@ class ToolSet:
     def consume_capability_event(self):
         self.files.consume_capability_event()
 
+    def announce_autonomy(self):
+        self.files.announce_autonomy()
+
     def invoke(self, name, args, approval=input):
         if self.native.handles(name):
             return self.native.invoke(name, args, approval)

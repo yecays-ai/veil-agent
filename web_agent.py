@@ -19,8 +19,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from veil_agent import (ROOT, ActivityState, Budget, Chat, Store, UserError,
+from veil_agent import (ROOT, AUTONOMY_WAKE, ActivityState, Budget, Chat, Store, UserError,
                         load_character, now, make_model, run_chat)
+from autonomy import AutonomyController
 
 PAGE = Path(__file__).resolve().parent / 'web' / 'index.html'
 MAX_BODY = 200_000
@@ -42,6 +43,9 @@ class Hub:
         self.answers = queue.Queue()
         self.pending = None       # event id of the approval being asked, else None
         self.submissions = OrderedDict()  # recent request ids -> normalized text digest
+        self.autonomy = None
+        self.autonomy_busy = False
+        self.autonomy_interrupted = threading.Event()
 
     def push(self, kind, text, **metadata):
         with self.cond:
@@ -68,6 +72,23 @@ class Hub:
             self.ready = True
         while True:
             try:
+                text = self.inbox.get_nowait()
+            except queue.Empty:
+                text = None
+            if text is not None:
+                with self.cond:
+                    self.busy = True
+                return text
+            if self.stopped:
+                raise EOFError
+            if self.autonomy is not None and self.autonomy.due():
+                with self.cond:
+                    if not self.stopped and self.activity.enabled():
+                        self.autonomy_busy = True
+                        self.busy = True
+                        self.autonomy_interrupted.clear()
+                        return AUTONOMY_WAKE
+            try:
                 text = self.inbox.get(timeout=0.5)
             except queue.Empty:
                 if self.stopped:
@@ -80,7 +101,13 @@ class Hub:
     def stop(self):
         with self.cond:
             self.stopped = True
+            self.autonomy_interrupted.set()
             self.cond.notify_all()
+
+    def set_activity(self, enabled):
+        if enabled and not self.activity.enabled() and self.autonomy is not None:
+            self.autonomy.announce_autonomy()
+        return self.activity.set(enabled)
 
     def submit(self, text, request_id):
         text_digest = hashlib.sha256(text.encode('utf-8')).digest()
@@ -90,6 +117,16 @@ class Hub:
                 return 'duplicate' if self.submissions[request_id] == text_digest else 'conflict'
             if self.stopped:
                 return 'stopped'
+            if self.autonomy_busy:
+                if not self.inbox.empty():
+                    return 'busy'
+                self.push('user', text)
+                self.submissions[request_id] = text_digest
+                if len(self.submissions) > MAX_SUBMISSIONS:
+                    self.submissions.popitem(last=False)
+                self.inbox.put(text)
+                self.autonomy_interrupted.set()
+                return 'accepted'
             if self.busy:
                 return 'busy'
             self.busy = True
@@ -130,9 +167,10 @@ class Hub:
 
     def snapshot(self, after):
         with self.cond:
-            return {'events': self.events[after:], 'busy': self.busy, 'stopped': self.stopped,
+            autonomy = self.autonomy.status() if self.autonomy else {}
+            return {'events': self.events[after:], 'busy': self.busy and not self.autonomy_busy, 'stopped': self.stopped,
                     'name': self.name, 'pending': self.pending, 'ready': self.ready,
-                    'activity_enabled': self.activity.enabled()}
+                    'activity_enabled': self.activity.enabled(), **autonomy}
 
 
 def make_handler(hub, token):
@@ -226,8 +264,11 @@ def make_handler(hub, token):
                 if not isinstance(enabled, bool):
                     self._send(400, {'error': 'enabled'})
                 else:
-                    hub.activity.set(enabled)
-                    self._send(200, {'ok': True, 'enabled': enabled})
+                    try:
+                        hub.set_activity(enabled)
+                        self._send(200, {'ok': True, 'enabled': enabled})
+                    except UserError as exc:
+                        self._send(500, {'error': str(exc)})
             elif url.path == '/api/exit':
                 try:
                     self._send(200, {'ok': True})
@@ -248,8 +289,9 @@ def start_server(hub, token, port):
 def serve_chat(chat, hub):
     for message in chat.history_events:
         hub.push(message['role'], message['content'], time=message['time'], history=True)
+    hub.autonomy = AutonomyController(chat, hub)
     run_chat(chat, input_fn=hub.input_fn, output=hub.output, drop=lambda: False,
-             activity=hub.activity)
+             activity=hub.activity, autonomy=hub.autonomy)
 
 
 def save_endpoint(path, port, token):
@@ -296,6 +338,7 @@ def main(argv=None):
         with store.lock():
             budget = Budget(store)
             cfg = load_character(ROOT, args.character)
+            budget.autonomy_daily = cfg.autonomy['daily_budget_cny']
             client, model = make_model(ROOT, cfg)
             activity = ActivityState(store.root / cfg.id / 'resident-state.json')
             hub = Hub(cfg.name, activity)

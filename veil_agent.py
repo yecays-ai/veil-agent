@@ -10,16 +10,17 @@ from dataclasses import replace
 import uuid
 import threading
 from functools import wraps
-from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
+from contextlib import contextmanager
 
 ROOT = Path(__file__).resolve().parent
 MILLION = Decimal(1_000_000)
 
 RAW_DSML_TOOL_CALL = re.compile(r'<[|｜]DSML[|｜](?:tool_calls|function_calls|invoke)\b', re.IGNORECASE)
+AUTONOMY_WAKE = object()
 
 SEND_MESSAGE = {'type': 'function', 'function': {
     'name': 'send_message',
@@ -146,6 +147,7 @@ class Character:
     provider_name: str
     memory: dict = None
     tools: dict = None
+    autonomy: dict = None
 
 
 def positive_int(value):
@@ -222,9 +224,16 @@ def load_character(root, character_id):
             # Native memory runs on the tool loop; files stay off unless [tools] says otherwise.
             tools = {'enabled': False, 'folder': f'data/{character_id}/workspace',
                      'max_steps': 6, 'max_result_bytes': 8192}
+        autonomy = dict(cfg.get('autonomy', {}))
+        interval = positive_int(autonomy.get('interval_minutes', 180))
+        daily_runs = positive_int(autonomy.get('daily_max_runs', 6))
+        autonomy_daily = price(autonomy.get('daily_budget_cny', '2'))
+        autonomy = {'interval_minutes': interval, 'daily_max_runs': daily_runs,
+                    'daily_budget_cny': autonomy_daily}
         return Character(character_id, str(cfg['name']), persona,
                          positive_int(cfg.get('history_rounds', 20)),
-                         positive_int(cfg.get('max_output_tokens', 1024)), provider, cfg['provider'], cfg.get('memory'), tools)
+                         positive_int(cfg.get('max_output_tokens', 1024)), provider, cfg['provider'],
+                         cfg.get('memory'), tools, autonomy)
     except UserError:
         raise
     except (OSError, KeyError, ValueError, TypeError, ArithmeticError) as exc:
@@ -248,22 +257,80 @@ class ActivityState:
             except (ValueError, UnicodeError, AttributeError):
                 return False
 
+    def snapshot(self):
+        with self.lock:
+            try:
+                value = json.loads(self.path.read_text(encoding='utf-8'))
+                return {'enabled': value.get('enabled') is True,
+                        'enabled_at': value.get('enabled_at')}
+            except FileNotFoundError:
+                return {'enabled': False, 'enabled_at': None}
+            except (ValueError, UnicodeError, AttributeError):
+                return {'enabled': False, 'enabled_at': None}
+
     def set(self, enabled):
         with self.lock:
+            previous = self.snapshot()
+            enabled = bool(enabled)
             self.path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self.path.with_suffix(self.path.suffix + '.tmp')
             with tmp.open('w', encoding='utf-8', newline='\n') as handle:
-                handle.write(json.dumps({'enabled': bool(enabled)}) + '\n')
+                stamp = now() if enabled and not previous['enabled'] else previous['enabled_at']
+                handle.write(json.dumps({'enabled': enabled, 'enabled_at': stamp}) + '\n')
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(tmp, self.path)
-            return bool(enabled)
+            return enabled
 
 
 class Budget:
-    def __init__(self, store, daily=Decimal('10'), monthly=Decimal('300'), clock=now):
+    def __init__(self, store, daily=Decimal('10'), monthly=Decimal('300'), clock=now,
+                 autonomy_daily=Decimal('2')):
         self.mutex = threading.RLock()
         self.store, self.daily, self.monthly, self.clock = store, daily, monthly, clock
+        self.autonomy_daily = Decimal(str(autonomy_daily))
+        self.local = threading.local()
+
+    @contextmanager
+    def autonomous(self, character, daily=None):
+        previous = getattr(self.local, 'autonomy', None)
+        if daily is not None:
+            self.autonomy_daily = Decimal(str(daily))
+        self.local.autonomy = character
+        try:
+            yield
+        finally:
+            self.local.autonomy = previous
+
+    @synchronized
+    def category_totals(self, character, stamp=None):
+        stamp = stamp or self.clock()
+        reservations, settlements = {}, {}
+        try:
+            for event in self.store.read('costs.jsonl'):
+                if event['type'] == 'reserve':
+                    reservations[event['id']] = event
+                elif event['type'] == 'settle':
+                    settlements[event['id']] = event
+            day = pending = Decimal(0)
+            for key, event in reservations.items():
+                if event.get('category') != 'autonomy' or event.get('character') != character:
+                    continue
+                settled = settlements.get(key)
+                amount = Decimal((settled or event)['amount'])
+                if not amount.is_finite() or amount < 0:
+                    raise ValueError('invalid amount')
+                if settled is None:
+                    pending += amount
+                elif event['period'][:10] == stamp[:10]:
+                    day += amount
+            return day, pending
+        except (KeyError, ValueError, TypeError, ArithmeticError) as exc:
+            raise UserError('花费账本无法核对，已停止；请保留 data 文件夹。') from exc
+
+    def _reserve_category(self, amount):
+        character = getattr(self.local, 'autonomy', None)
+        return ('autonomy' if character else 'chat', character)
 
     @synchronized
     def totals(self, stamp=None):
@@ -301,12 +368,17 @@ class Budget:
         amount = (p['max_input_tokens'] * p['input_cny_per_million']
                   + cfg.max_output_tokens * p['output_cny_per_million']) / MILLION
         day, month, pending = self.totals()
+        category, character = self._reserve_category(amount)
+        if category == 'autonomy':
+            auto_day, auto_pending = self.category_totals(character)
+            if auto_day + auto_pending + amount > self.autonomy_daily:
+                raise BudgetExceeded(f'自主活动已达到 ¥{self.autonomy_daily}/日上限，聊天不受影响。')
         if day + pending + amount > self.daily or month + pending + amount > self.monthly:
             raise BudgetExceeded('本次费用上限会超过 ¥10/天或 ¥300/月，未发送。输入 /cost 查看。')
         request_id = uuid.uuid4().hex
         self.store.append('costs.jsonl', {'type': 'reserve', 'id': request_id,
                           'period': self.clock(), 'amount': str(amount),
-                          'character': cfg.id, 'model': p['model']})
+                          'character': cfg.id, 'model': p['model'], 'category': category})
         return request_id, amount
 
     @synchronized
@@ -316,12 +388,18 @@ class Budget:
             raise UserError('向量费用配置无效。')
         amount = tokens * rate / MILLION
         day, month, pending = self.totals()
+        category, active_character = self._reserve_category(amount)
+        if category == 'autonomy':
+            auto_day, auto_pending = self.category_totals(active_character)
+            if auto_day + auto_pending + amount > self.autonomy_daily:
+                raise UserError(f'自主活动已达到 ¥{self.autonomy_daily}/日上限。')
         if day + pending + amount > self.daily or month + pending + amount > self.monthly:
             raise UserError('向量请求超过共享预算，未发送。')
         request_id = uuid.uuid4().hex
         self.store.append('costs.jsonl', {'type': 'reserve', 'id': request_id,
             'period': self.clock(), 'amount': str(amount), 'character': character,
-            'model': model, 'accounting': 'embedding-estimate', 'estimated_tokens': tokens})
+            'model': model, 'accounting': 'embedding-estimate', 'estimated_tokens': tokens,
+            'category': category})
         return request_id, amount
 
     @synchronized
@@ -333,13 +411,18 @@ class Budget:
             raise UserError('记忆模型费用配置无效。')
         amount = (tokens_in * in_rate + tokens_out * out_rate) / MILLION
         day, month, pending = self.totals()
+        category, active_character = self._reserve_category(amount)
+        if category == 'autonomy':
+            auto_day, auto_pending = self.category_totals(active_character)
+            if auto_day + auto_pending + amount > self.autonomy_daily:
+                raise UserError(f'自主活动已达到 ¥{self.autonomy_daily}/日上限。')
         if day + pending + amount > self.daily or month + pending + amount > self.monthly:
             raise UserError('记忆模型请求超过共享预算，未发送。')
         request_id = uuid.uuid4().hex
         self.store.append('costs.jsonl', {'type': 'reserve', 'id': request_id,
             'period': self.clock(), 'amount': str(amount), 'character': character,
             'model': model, 'accounting': 'ombre-model-estimate',
-            'estimated_tokens': tokens_in + tokens_out})
+            'estimated_tokens': tokens_in + tokens_out, 'category': category})
         return request_id, amount
 
     @synchronized
@@ -370,9 +453,10 @@ class Budget:
             periods, prompt, cached = {}, 0, 0
             for event in self.store.read('costs.jsonl'):
                 if event['type'] == 'reserve':
-                    periods[event['id']] = event['period']
+                    periods[event['id']] = (event['period'], event.get('category', 'chat'))
                 elif event['type'] == 'settle' and 'prompt_tokens' in event:
-                    if periods.get(event['id'], '')[:10] == stamp[:10]:
+                    period, category = periods.get(event['id'], ('', 'chat'))
+                    if category != 'autonomy' and period[:10] == stamp[:10]:
                         prompt += event['prompt_tokens']
                         cached += event['cached_tokens']
         except (KeyError, TypeError) as exc:
@@ -384,8 +468,11 @@ class Budget:
 
     def display(self, stamp=None):
         day, month, pending = self.totals(stamp)
+        autonomy, _ = self.category_totals('peter', stamp)
+        chat = day - autonomy
         return (f'今天 ¥{day:.6f} / {self.daily}；本月 ¥{month:.6f} / {self.monthly}；'
-                f'待核对预留 ¥{pending:.6f}')
+                f'待核对预留 ¥{pending:.6f}；其中聊天 ¥{chat:.6f}，自主 ¥{autonomy:.6f} / '
+                f'{self.autonomy_daily}/日（自主是上限，不是消费目标）')
 
 
 def memory_mode(memory):
@@ -456,12 +543,20 @@ class Chat:
         self.tool_mode = bool((cfg.tools and cfg.tools.get('enabled', True)) or (tools and tools.tools))
         self.sent_messages = []
         self.reply_displayed = False
+        self.autonomy_mode = False
+        self.autonomy_should_yield = None
+        self.autonomy_step_limited = False
+        self.autonomy_budget_limited = False
+        self.last_tool_summaries = []
+        self.autonomy_interrupted = False
 
     def tool_schemas(self):
         from tools_agent import permitted_tools
         return [*permitted_tools(self.tools.tools if self.tools else []), SEND_MESSAGE]
 
     def send_message(self, arguments, request_id):
+        if self.autonomy_mode:
+            return '本工单不能主动给 lan 发消息；请把想法留在自主活动记录里。', '被拒绝', 'send_message'
         try:
             args = json.loads(arguments)
         except (ValueError, TypeError):
@@ -495,9 +590,15 @@ class Chat:
         self.history_events = [{**m, 'origin': m.get('origin', 'reply')} for group in groups for m in group]
         return [{'role': m['role'], 'content': m['content']} for m in self.history_events], sum(any(m['role'] == 'assistant' for m in g) for g in groups)
 
-    def send(self, text):
+    def send(self, text, *, autonomy=False, extra_context=None):
         self.sent_messages = []
         self.reply_displayed = False
+        self.autonomy_mode = autonomy
+        self.autonomy_interrupted = False
+        self.autonomy_step_limited = False
+        self.autonomy_budget_limited = False
+        if not self.pending_capability_event and self.tools:
+            self.pending_capability_event = self.tools.capability_event
         recalled = self.memory.context(text) if self.memory else []
         stable, changing = self_facts(self.cfg, self.budget, memory_mode(self.memory), self.tools)
         description = stable + '\n' + changing
@@ -507,7 +608,9 @@ class Chat:
         head = [{'role': 'system', 'content': self.cfg.persona},
                 {'role': 'system', 'content': stable}]
         tail = [*recalled]
-        if self.pending_capability_event:
+        if extra_context:
+            tail.append({'role': 'system', 'content': extra_context})
+        if self.pending_capability_event and not autonomy:
             tail.append({'role': 'system', 'content':
                 '（程序生成的能力变化记录）' + self.pending_capability_event})
         tail.append({'role': 'system', 'content': changing})
@@ -542,8 +645,9 @@ class Chat:
             tool_cfg = (replace(self.cfg, max_output_tokens=self.cfg.tools.get('max_output_tokens', self.cfg.max_output_tokens))
                         if self.tool_mode else self.cfg)
             request_id, _ = self.budget.reserve(tool_cfg)
-            self.store.append(self.path, {'role': 'user', 'content': text, 'request_id': request_id})
-            if self.pending_capability_event:
+            if not autonomy:
+                self.store.append(self.path, {'role': 'user', 'content': text, 'request_id': request_id})
+            if self.pending_capability_event and not autonomy:
                 self.store.append(f'{self.cfg.id}/tools.jsonl', {'request_id': request_id,
                     'kind': 'capability', 'text': self.pending_capability_event})
                 self.tools.consume_capability_event()
@@ -551,7 +655,8 @@ class Chat:
         try:
             self.last_self = description
             if self.tool_mode:
-                reply, tool_summaries = self._tool_chat(messages, request_id, len(history), len(head))
+                reply, tool_summaries = self._tool_chat(messages, request_id, len(history), len(head),
+                                                        autonomy=autonomy)
             else:
                 try:
                     reply, prompt, completion, cached = self.model(messages)
@@ -569,21 +674,26 @@ class Chat:
             # reopened one; recent() also fails closed on corrupt chat records.
             self.history, self.rounds = self.recent()
             raise
+        if autonomy and self.autonomy_should_yield and self.autonomy_should_yield():
+            self.autonomy_interrupted = True
         with saving():
             if not isinstance(reply, str) or not reply.strip():
                 raise UserError('接口没有返回文字回复；本次保留预留费用。')
+            self.last_tool_summaries = tool_summaries
             self.reply_displayed = reply in self.sent_messages
-            if not self.reply_displayed:
+            if not autonomy and not self.reply_displayed:
                 self.store.append(self.path, {'role': 'assistant', 'content': reply,
                     'request_id': request_id, 'origin': 'reply'})
             if not self.tool_mode:
                 self.budget.settle(request_id, self.cfg, prompt, completion, cached)
-        self.history, self.rounds = self.recent()
+        if not autonomy:
+            self.history, self.rounds = self.recent()
         if self.memory:
             self.memory.completed()
+        self.autonomy_mode = False
         return reply
 
-    def _tool_chat(self, messages, request_id, history_count, history_start=None):
+    def _tool_chat(self, messages, request_id, history_count, history_start=None, autonomy=False):
         from tools_agent import display_call
         summaries = []
         loop_messages = list(messages)
@@ -591,6 +701,7 @@ class Chat:
             history_start = len(messages) - history_count - 1
         final = ''
         next_reservation = None
+        autonomy_tool_steps = 0
 
         # max_input_tokens is a TOKEN limit, but request bytes overcount tokens (roughly 3-4 bytes per token
         # in any language). After each response the provider reports the real prompt size, so later estimates
@@ -623,8 +734,26 @@ class Chat:
                 self.trim_note = (f'（为了不超出长度上限，这次只带了最近 {kept} 轮原文；'
                                   '更早的聊天仍保存在本机，长期记忆不受影响。）')
 
-        for step in range(self.cfg.tools['max_steps']):
-            offered = None if step == self.cfg.tools['max_steps'] - 1 else self.tool_schemas()
+        max_steps = min(self.cfg.tools['max_steps'], 12) if autonomy else self.cfg.tools['max_steps']
+        for step in range(max_steps):
+            if autonomy and autonomy_tool_steps >= 12:
+                self.autonomy_step_limited = True
+                final = '自主活动达到每次 12 个工具步骤上限。'
+                if next_reservation:
+                    pending_cfg = self.cfg if step == max_steps - 1 else replace(
+                        self.cfg, max_output_tokens=self.cfg.tools.get('max_output_tokens', self.cfg.max_output_tokens))
+                    self.budget.settle(next_reservation, pending_cfg, 0, 0, 0)
+                break
+            if autonomy and self.autonomy_should_yield and self.autonomy_should_yield():
+                self.autonomy_interrupted = True
+                final = '自主活动在本步前停止。'
+                pending_reservation = request_id if step == 0 else next_reservation
+                if pending_reservation:
+                    pending_cfg = self.cfg if step == max_steps - 1 else replace(
+                        self.cfg, max_output_tokens=self.cfg.tools.get('max_output_tokens', self.cfg.max_output_tokens))
+                    self.budget.settle(pending_reservation, pending_cfg, 0, 0, 0)
+                break
+            offered = None if step == max_steps - 1 else self.tool_schemas()
             step_cfg = replace(self.cfg, max_output_tokens=self.cfg.tools.get('max_output_tokens', self.cfg.max_output_tokens)) if offered is not None else self.cfg
             fit_history(offered)
             if request_size(offered) > self.cfg.provider['max_input_tokens']:
@@ -649,6 +778,10 @@ class Chat:
             if isinstance(prompt, int) and prompt > 0:
                 calibration = max(0.5, min(1.0, prompt / sent_bytes))
             self.budget.settle(reservation, step_cfg, prompt, completion, cached)
+            if autonomy and self.autonomy_should_yield and self.autonomy_should_yield():
+                self.autonomy_interrupted = True
+                final = '自主活动在模型请求结束后让位给聊天或控制操作。'
+                break
             if finish and finish[0] == 'length' and message.tool_calls:
                 final = '模型达到输出上限，工具未执行；请缩短要写入的内容后重试。'
                 self.output(final)
@@ -662,7 +795,7 @@ class Chat:
                     final = '模型返回了未执行的工具调用文本；程序没有执行任何工具，请查看 /cost 后重试。'
                 else:
                     final = content
-                if step == self.cfg.tools['max_steps'] - 1 and summaries:
+                if step == max_steps - 1 and summaries:
                     self.output('这次工具步骤用完了。')
                 break
             if offered is None:
@@ -673,19 +806,28 @@ class Chat:
             if all(call.function.name == 'send_message' for call in message.tool_calls):
                 errors = []
                 for call in message.tool_calls:
+                    if autonomy and autonomy_tool_steps >= 12:
+                        self.autonomy_step_limited = True
+                        final = '自主活动达到每次 12 个工具步骤上限。'
+                        break
+                    if autonomy:
+                        autonomy_tool_steps += 1
                     result, state, summary = self.send_message(call.function.arguments, request_id)
                     self.store.append(f'{self.cfg.id}/tools.jsonl', {'request_id': request_id,
                         'tool': 'send_message', 'path': summary, 'state': state})
                     if state != '成功':
                         errors.append(result)
-                final = ('\n'.join(errors) if errors else
-                         message.content or self.sent_messages[-1])
+                if not final:
+                    final = ('\n'.join(errors) if errors else
+                             message.content or (self.sent_messages[-1] if self.sent_messages else '已完成。'))
                 break
             try:
-                next_cfg = (self.cfg if step + 1 == self.cfg.tools['max_steps'] - 1 else
+                next_cfg = (self.cfg if step + 1 == max_steps - 1 else
                             replace(self.cfg, max_output_tokens=self.cfg.tools.get('max_output_tokens', self.cfg.max_output_tokens)))
                 next_reservation = self.budget.reserve(next_cfg)[0]
             except BudgetExceeded:
+                if autonomy:
+                    self.autonomy_budget_limited = True
                 for call in message.tool_calls:
                     try:
                         args = json.loads(call.function.arguments)
@@ -705,7 +847,7 @@ class Chat:
                 if reasoning is not None:
                     assistant_record['reasoning_content'] = reasoning
                 loop_messages.append(assistant_record)
-                next_offered = (None if step + 1 == self.cfg.tools['max_steps'] - 1
+                next_offered = (None if step + 1 == max_steps - 1
                                 else self.tool_schemas())
                 too_long_result = '工具结果超过本轮请求长度上限，未提供给模型。'
                 placeholders = [{'role': 'tool', 'tool_call_id': call.id, 'content': too_long_result}
@@ -731,6 +873,13 @@ class Chat:
                     final = '工具调用记录超过长度上限，未执行工具。'
                     break
                 for call in message.tool_calls:
+                    if autonomy and autonomy_tool_steps >= 12:
+                        self.autonomy_step_limited = True
+                        final = '自主活动达到每次 12 个工具步骤上限。'
+                        self.budget.settle(next_reservation, next_cfg, 0, 0, 0)
+                        break
+                    if autonomy:
+                        autonomy_tool_steps += 1
                     try:
                         if call.function.name == 'send_message':
                             result, state, summary = self.send_message(call.function.arguments, request_id)
@@ -761,6 +910,13 @@ class Chat:
                     summaries.append({'tool': call.function.name, 'path': summary, 'state': state})
                     self.store.append(f'{self.cfg.id}/tools.jsonl', {'request_id': request_id,
                         'tool': call.function.name, 'path': summary, 'state': state})
+                    if autonomy and self.autonomy_should_yield and self.autonomy_should_yield():
+                        self.autonomy_interrupted = True
+                        self.budget.settle(next_reservation, next_cfg, 0, 0, 0)
+                        final = '自主活动在本步后让位给聊天或控制操作。'
+                        break
+                if self.autonomy_interrupted or self.autonomy_step_limited:
+                    break
             except BaseException:
                 self.budget.settle(next_reservation, next_cfg, 0, 0, 0)
                 raise
@@ -828,9 +984,10 @@ def drop_typeahead():
     return dropped
 
 
-def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead, activity=None):
+def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead, activity=None, autonomy=None):
     activity = activity or ActivityState(chat.store.root / chat.cfg.id / 'resident-state.json')
-    output(f'接上了 {chat.rounds} 轮。输入 /cost 查花费，/self 看当前说明，/pause 或 /resume 切换自主活动，/quit 退出。')
+    output(f'接上了 {chat.rounds} 轮。输入 /cost 查花费，/autonomy 查自主记录，/self 看当前说明，'
+           '/pause 或 /resume 切换自主活动，/quit 退出。')
     if getattr(chat.tools, 'startup_notice', None):
         output(chat.tools.startup_notice)
     if chat.pending_capability_event:
@@ -845,15 +1002,29 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead, activity=N
             if chat.memory:
                 for notice in chat.memory.notices():
                     output(notice)
-            text = input_fn('你: ').strip()
+            raw_text = input_fn('你: ')
+            if autonomy is not None and raw_text is AUTONOMY_WAKE:
+                autonomy.run()
+                continue
+            text = raw_text.strip()
             if text == '/quit':
                 break
             if text == '/pause':
                 activity.set(False)
                 output('自主活动已暂停。')
             elif text == '/resume':
+                if autonomy is not None:
+                    autonomy.announce_autonomy()
                 activity.set(True)
-                output('自主活动已开启；当前版本不会运行自主任务。')
+                output('自主活动已开启；常驻网页服务运行时按角色配置的间隔唤醒。')
+            elif text == '/autonomy':
+                if autonomy:
+                    output(autonomy.command())
+                else:
+                    rows = chat.store.read(f'{chat.cfg.id}/autonomy.jsonl')[-10:]
+                    output('\n'.join(f"{row.get('started_at')} | {row.get('decision') or '未留下决定'} | "
+                                     f"{row.get('result')}：{row.get('result_reason')} | ¥{row.get('cost_cny')}"
+                                     for row in reversed(rows)) or '还没有自主活动记录。')
             elif text == '/cost':
                 output(chat.budget.display())
                 output(chat.budget.cache_display())
@@ -906,6 +1077,7 @@ def main():
                 print(budget.cache_display())
                 return 0
             cfg = load_character(ROOT, args.character)
+            budget.autonomy_daily = cfg.autonomy['daily_budget_cny']
             client, model = make_model(ROOT, cfg)
             with client:
                 from tools_agent import FilesystemTools

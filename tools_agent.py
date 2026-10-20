@@ -276,7 +276,8 @@ class FilesystemTools:
                         self.capability_event += messaging
                 else:
                     self.capability_event = '你的能力有变化：' + messaging
-            row = {**core, 'pending_event': self.capability_event}
+            row = {**core, 'pending_event': self.capability_event,
+                   'autonomy_announced': bool(previous and previous.get('autonomy_announced'))}
             if previous != row:
                 self.cap_path.parent.mkdir(parents=True, exist_ok=True)
                 temporary = self.cap_path.with_suffix('.json.tmp')
@@ -295,10 +296,32 @@ class FilesystemTools:
             temporary = self.cap_path.with_suffix('.json.tmp')
             temporary.write_text(json.dumps(row, ensure_ascii=False, indent=2), encoding='utf-8')
             os.replace(temporary, self.cap_path)
+            self.capability_event = None
         except Exception:
             self.enabled = False
             from veil_agent import UserError
             raise UserError('能力清单无法更新，文件工具已停止；请保留 data 文件夹。')
+
+    def announce_autonomy(self):
+        try:
+            row = json.loads(self.cap_path.read_text(encoding='utf-8'))
+            if row.get('autonomy_announced'):
+                return
+            event = ('自主活动已开启：你会按配置被定时唤醒，可以自行决定做什么或暂不行动；'
+                     '本阶段不能主动给 lan 发消息。')
+            previous_event = row.get('pending_event')
+            if isinstance(previous_event, str) and previous_event and event not in previous_event:
+                event = previous_event + '\n' + event
+            row['autonomy_announced'] = True
+            row['pending_event'] = event
+            temporary = self.cap_path.with_suffix('.json.tmp')
+            temporary.write_text(json.dumps(row, ensure_ascii=False, indent=2), encoding='utf-8')
+            os.replace(temporary, self.cap_path)
+            self.capability_event = event
+        except Exception as exc:
+            self.enabled = False
+            from veil_agent import UserError
+            raise UserError('能力清单无法更新，未开启自主活动；请保留 data 文件夹。') from exc
 
     def _description(self, names):
         if not names:

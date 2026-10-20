@@ -272,6 +272,25 @@ class ToolPolicyTests(unittest.TestCase):
         again._record_capabilities(['read_text_file'])
         self.assertIsNone(again.capability_event)
 
+    def test_autonomy_capability_is_announced_once_and_survives_reopen(self):
+        store = Store(self.root / 'data')
+        manager = FilesystemTools.__new__(FilesystemTools)
+        manager.cfg, manager.store, manager.folder_name = SimpleNamespace(id='test'), store, 'workspace'
+        manager.cap_path = self.root / 'data' / 'test' / 'capabilities.json'
+        manager.capability_event, manager.enabled = None, True
+        manager._record_capabilities(['read_text_file'])
+        manager.consume_capability_event()
+        manager.announce_autonomy()
+        self.assertIn('不能主动给 lan 发消息', manager.capability_event)
+        manager.consume_capability_event()
+        reopened = FilesystemTools.__new__(FilesystemTools)
+        reopened.cfg, reopened.store, reopened.folder_name = manager.cfg, store, 'workspace'
+        reopened.cap_path, reopened.capability_event, reopened.enabled = manager.cap_path, None, True
+        reopened._record_capabilities(['read_text_file'])
+        self.assertTrue(json.loads(reopened.cap_path.read_text(encoding='utf-8'))['autonomy_announced'])
+        reopened.announce_autonomy()
+        self.assertIsNone(reopened.capability_event)
+
     def test_missing_node_disables_tools_without_blocking_chat_startup(self):
         store = Store(self.root / 'data')
         cfg = SimpleNamespace(id='test', tools={'enabled': True, 'folder': 'data/test/workspace',
