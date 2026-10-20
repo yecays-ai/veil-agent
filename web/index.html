@@ -73,7 +73,7 @@ function render(text){
 function splitAssistantBubbles(text){
   // Keep English-only and Markdown-heavy replies as one stable message. The UI
   // only splits plain Chinese prose; the saved chat event is never changed.
-  if(!/[\\p{Script=Han}]/u.test(text) || /[`*_~]|\\[[^\\]]+\\]\\([^)]+\\)|^\\s*(?:#{1,6}|>|[-*+]|\\d+[.)])\\s/m.test(text)) return [text];
+  if(!/[\p{Script=Han}]/u.test(text) || /[`*_~]|\[[^\]]+\]\([^)]+\)|^\s*(?:#{1,6}|>|[-*+]|\d+[.)])\s/m.test(text)) return [text];
   if(typeof Intl.Segmenter !== 'function') return [text];
   const parts=Array.from(new Intl.Segmenter('zh-CN',{granularity:'sentence'}).segment(text),part=>part.segment);
   return parts.length > 1 && parts.every(part=>part.trim()) ? parts : [text];
