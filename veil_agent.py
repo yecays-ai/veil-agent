@@ -21,6 +21,17 @@ MILLION = Decimal(1_000_000)
 
 RAW_DSML_TOOL_CALL = re.compile(r'<[|｜]DSML[|｜](?:tool_calls|function_calls|invoke)\b', re.IGNORECASE)
 
+SEND_MESSAGE = {'type': 'function', 'function': {
+    'name': 'send_message',
+    'description': ('Send one independent chat message to the user immediately. In any language, '
+                    'write like texting: one sentence or short thought per message; call this '
+                    'tool multiple times in the same step when you have more to say. You may '
+                    'send just one. Code or a long list may stay in one longer message. '
+                    'A step containing only send_message calls ends the turn.'),
+    'parameters': {'type': 'object', 'properties': {'text': {'type': 'string'}},
+                   'required': ['text'], 'additionalProperties': False},
+}}
+
 
 def synchronized(fn):
     @wraps(fn)
@@ -413,6 +424,29 @@ class Chat:
         self.memory = memory
         self.tools, self.approval, self.output = tools, approval, output
         self.pending_capability_event = tools.capability_event if tools else None
+        self.tool_mode = bool((cfg.tools and cfg.tools.get('enabled', True)) or (tools and tools.tools))
+        self.sent_messages = []
+        self.reply_displayed = False
+
+    def tool_schemas(self):
+        from tools_agent import permitted_tools
+        return [*permitted_tools(self.tools.tools if self.tools else []), SEND_MESSAGE]
+
+    def send_message(self, arguments, request_id):
+        try:
+            args = json.loads(arguments)
+        except (ValueError, TypeError):
+            args = None
+        if (not isinstance(args, dict) or set(args) != {'text'} or
+                not isinstance(args['text'], str) or not args['text'].strip()):
+            return '程序拒绝：send_message 需要非空 text 文字。', '被拒绝', 'send_message'
+        text = args['text']
+        with saving():
+            self.store.append(self.path, {'role': 'assistant', 'content': text,
+                'request_id': request_id, 'origin': 'reply'})
+            self.sent_messages.append(text)
+            self.output(f'{self.cfg.name}: {text}')
+        return '已发送。', '成功', 'send_message'
 
     def recent(self):
         groups = []
@@ -424,14 +458,17 @@ class Chat:
                 if role == 'user':
                     groups.append([])
                 if not groups:
-                    raise ValueError('missing user record')
-                groups[-1].append({'role': role, 'content': content})
+                    groups.append([])
+                groups[-1].append(event)
         except (KeyError, ValueError, TypeError) as exc:
             raise UserError('聊天记录无法读取，已停止；请保留 data 文件夹。') from exc
         groups = groups[-history_keep(len(groups), self.cfg.history_rounds):]
-        return [m for group in groups for m in group], sum(any(m['role'] == 'assistant' for m in g) for g in groups)
+        self.history_events = [{**m, 'origin': m.get('origin', 'reply')} for group in groups for m in group]
+        return [{'role': m['role'], 'content': m['content']} for m in self.history_events], sum(any(m['role'] == 'assistant' for m in g) for g in groups)
 
     def send(self, text):
+        self.sent_messages = []
+        self.reply_displayed = False
         recalled = self.memory.context(text) if self.memory else []
         stable, changing = self_facts(self.cfg, self.budget, memory_mode(self.memory), self.tools)
         description = stable + '\n' + changing
@@ -447,9 +484,8 @@ class Chat:
         tail.append({'role': 'system', 'content': changing})
         user = {'role': 'user', 'content': text}
         tool_schema = []
-        if self.tools and self.tools.tools and self.cfg.tools['max_steps'] > 1:
-            from tools_agent import permitted_tools
-            tool_schema = permitted_tools(self.tools.tools)
+        if self.tool_mode and self.cfg.tools['max_steps'] > 1:
+            tool_schema = self.tool_schemas()
         # UTF-8 byte count is deliberately conservative, with ample chat framing
         # overhead. Reserve the entire configured input limit, not an average.
         def bound(history):
@@ -475,7 +511,7 @@ class Chat:
         tool_summaries = []
         with saving():
             tool_cfg = (replace(self.cfg, max_output_tokens=self.cfg.tools.get('max_output_tokens', self.cfg.max_output_tokens))
-                        if self.tools and self.tools.tools else self.cfg)
+                        if self.tool_mode else self.cfg)
             request_id, _ = self.budget.reserve(tool_cfg)
             self.store.append(self.path, {'role': 'user', 'content': text, 'request_id': request_id})
             if self.pending_capability_event:
@@ -485,7 +521,7 @@ class Chat:
                 self.pending_capability_event = None
         try:
             self.last_self = description
-            if self.tools and self.tools.tools:
+            if self.tool_mode:
                 reply, tool_summaries = self._tool_chat(messages, request_id, len(history), len(head))
             else:
                 try:
@@ -507,8 +543,11 @@ class Chat:
         with saving():
             if not isinstance(reply, str) or not reply.strip():
                 raise UserError('接口没有返回文字回复；本次保留预留费用。')
-            self.store.append(self.path, {'role': 'assistant', 'content': reply, 'request_id': request_id})
-            if not (self.tools and self.tools.tools):
+            self.reply_displayed = reply in self.sent_messages
+            if not self.reply_displayed:
+                self.store.append(self.path, {'role': 'assistant', 'content': reply,
+                    'request_id': request_id, 'origin': 'reply'})
+            if not self.tool_mode:
                 self.budget.settle(request_id, self.cfg, prompt, completion, cached)
         self.history, self.rounds = self.recent()
         if self.memory:
@@ -516,7 +555,7 @@ class Chat:
         return reply
 
     def _tool_chat(self, messages, request_id, history_count, history_start=None):
-        from tools_agent import display_call, permitted_tools
+        from tools_agent import display_call
         summaries = []
         loop_messages = list(messages)
         if history_start is None:
@@ -556,7 +595,7 @@ class Chat:
                                   '更早的聊天仍保存在本机，长期记忆不受影响。）')
 
         for step in range(self.cfg.tools['max_steps']):
-            offered = None if step == self.cfg.tools['max_steps'] - 1 else permitted_tools(self.tools.tools)
+            offered = None if step == self.cfg.tools['max_steps'] - 1 else self.tool_schemas()
             step_cfg = replace(self.cfg, max_output_tokens=self.cfg.tools.get('max_output_tokens', self.cfg.max_output_tokens)) if offered is not None else self.cfg
             fit_history(offered)
             if request_size(offered) > self.cfg.provider['max_input_tokens']:
@@ -601,6 +640,18 @@ class Chat:
                 final = '这次工具步骤用完了。'
                 self.output(final)
                 break
+            # These calls finish in this response: no follow-up request or reservation.
+            if all(call.function.name == 'send_message' for call in message.tool_calls):
+                errors = []
+                for call in message.tool_calls:
+                    result, state, summary = self.send_message(call.function.arguments, request_id)
+                    self.store.append(f'{self.cfg.id}/tools.jsonl', {'request_id': request_id,
+                        'tool': 'send_message', 'path': summary, 'state': state})
+                    if state != '成功':
+                        errors.append(result)
+                final = ('\n'.join(errors) if errors else
+                         message.content or self.sent_messages[-1])
+                break
             try:
                 next_cfg = (self.cfg if step + 1 == self.cfg.tools['max_steps'] - 1 else
                             replace(self.cfg, max_output_tokens=self.cfg.tools.get('max_output_tokens', self.cfg.max_output_tokens)))
@@ -609,7 +660,8 @@ class Chat:
                 for call in message.tool_calls:
                     try:
                         args = json.loads(call.function.arguments)
-                        summary = self.tools.preview_summary(call.function.name, args)
+                        summary = (self.tools.preview_summary(call.function.name, args)
+                                   if self.tools and call.function.name != 'send_message' else call.function.name)
                     except (ValueError, TypeError):
                         summary = call.function.name
                     self.output(display_call(call.function.name, summary, '被拒绝', '继续处理会超过费用上限'))
@@ -625,7 +677,7 @@ class Chat:
                     assistant_record['reasoning_content'] = reasoning
                 loop_messages.append(assistant_record)
                 next_offered = (None if step + 1 == self.cfg.tools['max_steps'] - 1
-                                else permitted_tools(self.tools.tools))
+                                else self.tool_schemas())
                 too_long_result = '工具结果超过本轮请求长度上限，未提供给模型。'
                 placeholders = [{'role': 'tool', 'tool_call_id': call.id, 'content': too_long_result}
                                 for call in message.tool_calls]
@@ -651,10 +703,16 @@ class Chat:
                     break
                 for call in message.tool_calls:
                     try:
-                        args = json.loads(call.function.arguments)
-                        if not isinstance(args, dict):
-                            raise ValueError('arguments must be an object')
-                        result, state, summary = self.tools.invoke(call.function.name, args, self.approval)
+                        if call.function.name == 'send_message':
+                            result, state, summary = self.send_message(call.function.arguments, request_id)
+                        else:
+                            args = json.loads(call.function.arguments)
+                            if not isinstance(args, dict):
+                                raise ValueError('arguments must be an object')
+                            if self.tools:
+                                result, state, summary = self.tools.invoke(call.function.name, args, self.approval)
+                            else:
+                                result, state, summary = '程序拒绝：工具未开放。', '被拒绝', call.function.name
                     except (ValueError, TypeError):
                         result, state, summary = '程序拒绝：工具参数不是合法 JSON 对象。', '被拒绝', call.function.name
                     tool_message = {'role': 'tool', 'tool_call_id': call.id, 'content': result}
@@ -668,8 +726,9 @@ class Chat:
                     if request_size(next_offered) > self.cfg.provider['max_input_tokens']:
                         tool_message['content'] = too_long_result
                         state = '结果过长'
-                    self.output(display_call(call.function.name, summary, state,
-                                             tool_message['content'] if state != '成功' else None))
+                    if call.function.name != 'send_message' or state != '成功':
+                        self.output(display_call(call.function.name, summary, state,
+                                                 tool_message['content'] if state != '成功' else None))
                     summaries.append({'tool': call.function.name, 'path': summary, 'state': state})
                     self.store.append(f'{self.cfg.id}/tools.jsonl', {'request_id': request_id,
                         'tool': call.function.name, 'path': summary, 'state': state})
@@ -787,7 +846,8 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead):
                     continue
                 if chat.trim_note:
                     output(chat.trim_note)
-                output(f'{chat.cfg.name}: {reply}')
+                if not chat.reply_displayed:
+                    output(f'{chat.cfg.name}: {reply}')
                 notify_dropped()
     except (KeyboardInterrupt, EOFError):
         output('\n已退出，已保存的记录仍在；未完成请求的预留额可用 /cost 查看。')

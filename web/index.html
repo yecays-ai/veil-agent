@@ -19,6 +19,8 @@ header button:hover{color:var(--text)}
 .msg{max-width:88%;padding:10px 14px;border-radius:14px;white-space:pre-wrap;word-break:break-word;border:1px solid var(--line);background:var(--panel)}
 .msg.user{align-self:flex-end;background:var(--me);border-color:transparent}
 .msg.assistant{align-self:flex-start}
+.msg.grouped{margin-top:-8px}
+.timestamp{align-self:center;color:var(--muted);font-size:12px}
 .msg code{font-family:Consolas,monospace;font-size:.92em;background:rgba(127,127,127,.15);padding:1px 5px;border-radius:4px}
 .msg pre{margin:6px 0;padding:10px;background:rgba(127,127,127,.12);border-radius:8px;overflow-x:auto;white-space:pre}
 .msg pre code{background:none;padding:0}
@@ -61,6 +63,41 @@ try{if(token)sessionStorage.setItem('veil-t',token);else token=sessionStorage.ge
 if(params.has('t'))history.replaceState(null,'',location.pathname);
 const $=id=>document.getElementById(id), col=$('col'), log=$('log'), box=$('box'), sendBtn=$('send');
 let after=0, busy=true, stopped=false, typing=null, sending=false, draftId=null, draftText=null;
+let revealQueue=[], revealTimer=null, roundStartedAt=0, roundHasReply=false, previousMessage=null;
+let pendingApproval=null;
+const GROUP_GAP=15*60*1000;
+function bubbleDelay(text){const n=Array.from(text).length;return n<=60?1200:n<=200?2400:3600}
+function scrollIfFollowing(action){
+  const stick=log.scrollHeight-log.scrollTop-log.clientHeight<80;
+  action();if(stick)log.scrollTop=log.scrollHeight;
+}
+function showEvent(e){
+  scrollIfFollowing(()=>add(e.kind,e.text,e.id,e.time));
+  if(e.kind==='approval'&&e.id!==pendingApproval){
+    const card=col.querySelector('.approval[data-id="'+e.id+'"]');
+    card.classList.add('done');card.querySelector('.status').textContent='审批已结束，请看后续聊天提示。';
+  }
+}
+function revealNext(){
+  if(revealTimer!==null||!revealQueue.length)return;
+  const e=revealQueue[0];
+  let delay=0;
+  if(e.kind==='assistant')delay=Math.max(0,bubbleDelay(e.text)-(roundHasReply?0:Math.max(0,Date.now()-roundStartedAt)));
+  const reveal=()=>{
+    revealTimer=null;revealQueue.shift();
+    if(e.kind==='user'){roundStartedAt=Date.parse(e.time)||Date.now();roundHasReply=false}
+    if(e.kind==='assistant')roundHasReply=true;
+    showEvent(e);setBusy(busy);revealNext();
+  };
+  if(delay)revealTimer=setTimeout(reveal,delay);else reveal();
+}
+function receiveEvent(e,initial){
+  if(initial||e.history){
+    if(e.kind==='user'){roundStartedAt=Date.parse(e.time)||Date.now();roundHasReply=false}
+    if(e.kind==='assistant')roundHasReply=true;
+    showEvent(e);
+  }else{revealQueue.push(e);revealNext()}
+}
 
 function esc(s){return s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
 function render(text){
@@ -69,9 +106,19 @@ function render(text){
   return parts.map((p,i)=>i%2?'<pre><code>'+p.replace(/^[^\n]*\n/,'').replace(/\n$/,'')+'</code></pre>'
     :p.replace(i>0?/^\n/:/^$/,'').replace(i<parts.length-1?/\n$/:/^$/,'').replace(/`([^`\n]+)`/g,'<code>$1</code>').replace(/\*\*([^*\n]+)\*\*/g,'<b>$1</b>')).join('');
 }
-function add(kind,text,id){
+function add(kind,text,id,time){
   const d=document.createElement('div');
-  if(kind==='user'||kind==='assistant'){d.className='msg '+kind;d.innerHTML=render(text)}
+  if(kind==='user'||kind==='assistant'){
+    const stamp=Date.parse(time)||Date.now();
+    if(!previousMessage||stamp-previousMessage.time>=GROUP_GAP){
+      const label=document.createElement('div');label.className='timestamp';
+      label.textContent=new Date(stamp).toLocaleString();
+      if(typing)col.insertBefore(label,typing);else col.appendChild(label);
+    }
+    const grouped=previousMessage&&previousMessage.kind===kind&&Math.abs(stamp-previousMessage.time)<GROUP_GAP;
+    d.className='msg '+kind+(grouped?' grouped':'');d.innerHTML=render(text);
+    previousMessage={kind,time:stamp};
+  }
   else if(kind==='approval'){
     d.className='approval';d.dataset.id=id;
     const p=document.createElement('p');p.textContent=text;d.appendChild(p);
@@ -84,9 +131,9 @@ function add(kind,text,id){
   if(typing)col.insertBefore(d,typing);else col.appendChild(d);
 }
 function setBusy(b){
-  busy=b;sendBtn.disabled=b||sending||stopped;
-  if(b&&!typing&&!stopped){typing=document.createElement('div');typing.id='typing';typing.textContent=($('title').textContent||'')+' 正在回复…';col.appendChild(typing)}
-  if(!b&&typing){typing.remove();typing=null}
+  busy=b;const waiting=b||revealQueue.length>0;sendBtn.disabled=waiting||sending||stopped;
+  if(waiting&&!typing&&!stopped){typing=document.createElement('div');typing.id='typing';typing.textContent=($('title').textContent||'')+' 正在回复…';col.appendChild(typing)}
+  if((!waiting||stopped)&&typing){typing.remove();typing=null}
 }
 async function api(path,body){
   const r=await fetch(path,{method:body?'POST':'GET',headers:{'X-Token':token||'','Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});
@@ -131,7 +178,8 @@ async function poll(){
     $('offline').style.display='none';$('ended').style.display=s.stopped?'block':'none';
     document.title=s.name;$('title').textContent=s.name;
     const stick=log.scrollHeight-log.scrollTop-log.clientHeight<80;
-    for(const e of s.events){add(e.kind,e.text,e.id);after=e.id}
+    const initial=after===0;pendingApproval=s.pending;
+    for(const e of s.events){receiveEvent(e,initial);after=e.id}
     // Only the approval being asked right now can be clicked; older cards are inert.
     document.querySelectorAll('.approval').forEach(c=>{
       if(Number(c.dataset.id)!==s.pending){
@@ -148,7 +196,7 @@ async function poll(){
 async function send(text){
   const fromBox=!text;
   text=(text||box.value).trim();
-  if(!text||busy||stopped||sending)return;
+  if(!text||busy||revealQueue.length||stopped||sending)return;
   if(fromBox&&draftText!==text){draftText=text;draftId=crypto.randomUUID()}
   const requestId=fromBox?draftId:crypto.randomUUID();
   sending=true;setBusy(true);

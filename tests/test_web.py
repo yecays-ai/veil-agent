@@ -1,11 +1,14 @@
 import json
+import shutil
 import socket
+import subprocess
 import tempfile
 import threading
 import unittest
 import urllib.error
 import urllib.request
 from pathlib import Path
+from dataclasses import replace
 from unittest.mock import Mock, patch
 
 from veil_agent import Budget, Chat, Store, load_character, run_chat
@@ -254,6 +257,37 @@ output_cny_per_million = "8"
         events = self.run_loop(scenario)['events']
         self.assertEqual([(e['kind'], e['text']) for e in events[:2]],
                          [('user', 'earlier'), ('assistant', 'earlier reply')])
+        self.assertTrue(all(e['history'] and e['time'] for e in events[:2]))
+
+    def test_multi_message_http_events_match_persisted_history(self):
+        from tests.test_tools import ToolLoopTests
+        fixture = ToolLoopTests()
+        texts = ['Hello.', '你好。', 'See you，明天见。']
+        calls = [fixture.tool_call('send_message', json.dumps({'text': text}), str(i))
+                 for i, text in enumerate(texts)]
+        self.cfg = replace(self.cfg, tools={'enabled': True, 'max_steps': 3})
+        self.model.return_value = (fixture.message(calls), 100, 30, 0)
+
+        def scenario(result):
+            self.assertTrue(self.wait(lambda: not self.call('/api/events')[1]['busy']))
+            self.assertEqual(self.call('/api/send', {'text': 'hello'})[0], 200)
+            self.assertTrue(self.wait(lambda: not self.call('/api/events')[1]['busy']))
+            result['messages'] = [e['text'] for e in self.call('/api/events')[1]['events'] if e['kind'] == 'assistant']
+            self.call('/api/send', {'text': '/cost'})
+            self.assertTrue(self.wait(lambda: not self.call('/api/events')[1]['busy']))
+            self.call('/api/send', {'text': '/quit'})
+
+        self.assertEqual(self.run_loop(scenario)['messages'], texts)
+        self.assertEqual([m['content'] for m in self.store.read('test/chat.jsonl')][1:], texts)
+        self.model.assert_called_once()
+
+
+class PacingTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which('node'), 'Node required for page behavior test')
+    def test_page_pacing_grouping_and_refresh(self):
+        result = subprocess.run([shutil.which('node'), str(Path(__file__).with_name('web_pacing.cjs'))],
+                                capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
 if __name__ == '__main__':

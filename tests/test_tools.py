@@ -603,6 +603,87 @@ max_result_bytes = 200
         self.assertIsNotNone(chat.trim_note)
 
 
+class MultiMessageTests(unittest.TestCase):
+    setUp = ToolLoopTests.setUp
+    message = ToolLoopTests.message
+    tool_call = ToolLoopTests.tool_call
+    def test_messages_in_all_languages_use_one_request_and_survive_restart(self):
+        texts = ['Good morning.', '早上好。今天想去走走。', 'Bonjour 👋', '一会儿见，see you!']
+        calls = [self.tool_call('send_message', json.dumps({'text': text}), str(i))
+                 for i, text in enumerate(texts)]
+        model = Mock(return_value=(self.message(calls), 100, 40, 0))
+        output = []
+        chat = Chat(self.cfg, self.store, self.budget, model, output=output.append)
+        run_chat(chat, Mock(side_effect=['hello', '/quit']), output.append)
+        self.assertEqual([s for s in output if s.startswith('Peter: ')], ['Peter: ' + t for t in texts])
+        model.assert_called_once()
+        rows = self.store.read('test/chat.jsonl')
+        self.assertEqual([r['content'] for r in rows], ['hello', *texts])
+        self.assertTrue(all(r['origin'] == 'reply' for r in rows[1:]))
+        self.assertEqual(len({r['request_id'] for r in rows}), 1)
+        reopened = Chat(self.cfg, self.store, self.budget, model)
+        self.assertEqual([m['content'] for m in reopened.history], ['hello', *texts])
+        costs = self.store.read('costs.jsonl')
+        self.assertEqual(sum(r['type'] == 'reserve' for r in costs), 1)
+        self.assertEqual(self.budget.totals()[2], 0)
+
+    def test_mixed_tools_continue_and_final_duplicate_is_not_displayed_or_saved(self):
+        first = self.message([self.tool_call('send_message', '{"text":"先看一下。"}', 'say'),
+                              self.tool_call('read_text_file', '{"path":"lab/a.md"}', 'read')])
+        model = Mock(side_effect=[(first, 100, 30, 0), (self.message(content='先看一下。'), 120, 20, 0)])
+        tools = Mock()
+        tools.capability_event = None
+        tools.tools = [SimpleNamespace(name='read_text_file', description='Read', inputSchema={})]
+        tools.invoke.return_value = ('fictional lab', '成功', 'lab/a.md')
+        output = []
+        chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=output.append)
+        run_chat(chat, Mock(side_effect=['read', '/quit']), output.append)
+        self.assertEqual(model.call_count, 2)
+        tools.invoke.assert_called_once()
+        self.assertEqual(output.count('Peter: 先看一下。'), 1)
+        self.assertEqual([r['content'] for r in self.store.read('test/chat.jsonl')], ['read', '先看一下。'])
+        self.assertEqual([m['role'] for m in model.call_args.args[0][-2:]], ['tool', 'tool'])
+
+    def test_pure_message_with_distinct_final_keeps_both(self):
+        model = Mock(return_value=(self.message([
+            self.tool_call('send_message', '{"text":"Hi."}', 'one')], content='See you.'), 100, 20, 0))
+        chat = Chat(self.cfg, self.store, self.budget, model, output=lambda _: None)
+        self.assertEqual(chat.send('hello'), 'See you.')
+        self.assertFalse(chat.reply_displayed)
+        self.assertEqual([r['content'] for r in self.store.read('test/chat.jsonl')], ['hello', 'Hi.', 'See you.'])
+
+    def test_pure_messages_need_no_followup_budget_and_complete_memory_once(self):
+        self.budget.daily = Decimal('0.0125')  # Enough for this request, not a second reservation.
+        model = Mock(return_value=(self.message([
+            self.tool_call('send_message', '{"text":"Hello."}', 'one')]), 100, 20, 0))
+        memory = Mock()
+        memory.native = False
+        memory.context.return_value = []
+        chat = Chat(self.cfg, self.store, self.budget, model, memory=memory, output=lambda _: None)
+        self.assertEqual(chat.send('hello'), 'Hello.')
+        model.assert_called_once()
+        memory.completed.assert_called_once_with()
+        self.assertEqual(self.budget.totals()[2], 0)
+
+    def test_invalid_message_arguments_do_not_send_or_request_again(self):
+        for arguments in ('{bad', '[]', '{"text":" "}', '{"text":7}', '{"text":"hi","path":"x"}'):
+            model = Mock(return_value=(self.message([
+                self.tool_call('send_message', arguments, 'invalid')]), 100, 20, 0))
+            chat = Chat(self.cfg, self.store, self.budget, model, output=lambda _: None)
+            self.assertIn('程序拒绝', chat.send('hello'))
+            self.assertEqual(chat.sent_messages, [])
+            model.assert_called_once()
+
+    def test_assistant_first_old_history_is_read_without_rewriting(self):
+        self.store.append('test/chat.jsonl', {'role': 'assistant', 'content': 'I can start.'})
+        self.store.append('test/chat.jsonl', {'role': 'assistant', 'content': '你好。', 'origin': 'proactive'})
+        before = (self.root / 'data/test/chat.jsonl').read_bytes()
+        chat = Chat(self.cfg, self.store, self.budget, Mock())
+        self.assertEqual([m['content'] for m in chat.history], ['I can start.', '你好。'])
+        self.assertEqual([m['origin'] for m in chat.history_events], ['reply', 'proactive'])
+        self.assertEqual((self.root / 'data/test/chat.jsonl').read_bytes(), before)
+
+
 @unittest.skipUnless(shutil.which('node') and shutil.which('npx'),
                      'optional filesystem MCP integration requires Node.js LTS with npm/npx')
 class FilesystemServerTests(unittest.TestCase):

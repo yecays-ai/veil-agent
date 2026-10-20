@@ -19,7 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from veil_agent import (ROOT, Budget, Chat, Store, UserError, load_character,
+from veil_agent import (ROOT, Budget, Chat, Store, UserError, load_character, now,
                         make_model, run_chat)
 
 PAGE = Path(__file__).resolve().parent / 'web' / 'index.html'
@@ -41,10 +41,11 @@ class Hub:
         self.pending = None       # event id of the approval being asked, else None
         self.submissions = OrderedDict()  # recent request ids -> normalized text digest
 
-    def push(self, kind, text):
+    def push(self, kind, text, **metadata):
         with self.cond:
             event_id = len(self.events) + 1
-            self.events.append({'id': event_id, 'kind': kind, 'text': text})
+            self.events.append({'id': event_id, 'kind': kind, 'text': text,
+                                'time': now(), **metadata})
             return event_id
 
     def output(self, text):
@@ -225,8 +226,8 @@ def start_server(hub, token, port):
 
 
 def serve_chat(chat, hub):
-    for message in chat.history:
-        hub.push(message['role'], message['content'])
+    for message in chat.history_events:
+        hub.push(message['role'], message['content'], time=message['time'], history=True)
     run_chat(chat, input_fn=hub.input_fn, output=hub.output, drop=lambda: False)
 
 
