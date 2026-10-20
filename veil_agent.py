@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 14850)
-Total output lines: 1139
-
 """Local terminal chat. Private state stays beside this file."""
 import argparse
 import json
@@ -507,7 +504,202 @@ def self_facts(cfg, budget, memory=False, capabilities=None):
         f'provider {json.dumps(cfg.provider_name, ensure_ascii=False)}; '
         f'model {json.dumps(cfg.provider["model"], ensure_ascii=False)}.\n'
         f'Available: terminal text chat; up to {cfg.history_rounds} recent rounds included verbatim '
-        'per request; full chat logs saved locally.…2850 tokens truncated…               self.store.append(self.path, {'role': 'assistant', 'content': reply,
+        'per request; full chat logs saved locally.\n'
+        + (('Long-term memory: you decide what to save and call the hold tool yourself (the user need not say '
+            '"remember"); relevant memories are also recalled automatically each turn; '
+            if memory == 'native' else
+            'Long-term memory: automatic saving every four completed rounds, automatic recall; ')
+         + 'the user can list, suppress, restore and delete memories with /memory, /forget, /restore, /delete. '
+         if memory else 'You have no long-term memory; after restart you know only restored recent rounds. ')
+        +
+        ((capabilities.description if isinstance(getattr(capabilities, 'description', None), str)
+          else 'Tools are currently unavailable. ') if capabilities else
+         ('You have no tools (cannot open files/folders or run scripts). '
+          if not cfg.tools or not cfg.tools.get('enabled', True)
+          else 'Tools are currently unavailable. '))
+        + 'You have no voice. '
+        'Unlisted abilities are unavailable. Do not invent memories, actions or tool results.'
+    )
+    changing = (f'Local time: {stamp} ({weekday}).\n'
+                f'Pre-request ledger (CNY, excludes this reply): {budget.display(stamp, cfg.id)}\n'
+                'Quote its cutoff when asked about spending; /cost includes new usage after this reply.')
+    return stable, changing
+
+
+def build_self_description(cfg, budget, memory=False, capabilities=None):
+    stable, changing = self_facts(cfg, budget, memory, capabilities)
+    return stable + '\n' + changing
+
+
+def history_keep(total, limit):
+    """How many recent rounds to send. Once the window is full, dropping one old round per message moves
+    the start of every request and the provider's prefix cache never hits. So drop a chunk of rounds at
+    once and grow back: the start stays put for several messages. Never more than `limit` rounds."""
+    chunk = limit // 4
+    if chunk < 2 or total <= limit:
+        return min(total, limit)
+    return limit - chunk + 1 + (total - limit - 1) % chunk
+
+
+class Chat:
+    def __init__(self, cfg, store, budget, model, memory=None, tools=None, approval=input, output=print):
+        self.cfg, self.store, self.budget, self.model = cfg, store, budget, model
+        self.path = f'{cfg.id}/chat.jsonl'
+        self.history, self.rounds = self.recent()
+        self.last_self = None
+        self.trim_note = None
+        self.trim_noted = False
+        self.memory = memory
+        self.tools, self.approval, self.output = tools, approval, output
+        self.pending_capability_event = tools.capability_event if tools else None
+        self.tool_mode = bool((cfg.tools and cfg.tools.get('enabled', True)) or (tools and tools.tools))
+        self.sent_messages = []
+        self.reply_displayed = False
+        self.autonomy_mode = False
+        self.autonomy_should_yield = None
+        self.autonomy_step_limited = False
+        self.autonomy_budget_limited = False
+        self.last_tool_summaries = []
+        self.autonomy_interrupted = False
+
+    def tool_schemas(self):
+        from tools_agent import permitted_tools
+        return [*permitted_tools(self.tools.tools if self.tools else []), SEND_MESSAGE]
+
+    def send_message(self, arguments, request_id):
+        if self.autonomy_mode:
+            return '本工单不能主动给 lan 发消息；请把想法留在自主活动记录里。', '被拒绝', 'send_message'
+        try:
+            args = json.loads(arguments)
+        except (ValueError, TypeError):
+            args = None
+        if (not isinstance(args, dict) or set(args) != {'text'} or
+                not isinstance(args['text'], str) or not args['text'].strip()):
+            return '程序拒绝：send_message 需要非空 text 文字。', '被拒绝', 'send_message'
+        text = args['text']
+        with saving():
+            self.store.append(self.path, {'role': 'assistant', 'content': text,
+                'request_id': request_id, 'origin': 'reply'})
+            self.sent_messages.append(text)
+            self.output(f'{self.cfg.name}: {text}')
+        return '已发送。', '成功', 'send_message'
+
+    def recent(self):
+        groups = []
+        try:
+            for event in self.store.read(self.path):
+                role, content = event['role'], event['content']
+                if role not in ('user', 'assistant') or not isinstance(content, str):
+                    raise ValueError('invalid chat record')
+                if role == 'user':
+                    groups.append([])
+                if not groups:
+                    groups.append([])
+                groups[-1].append(event)
+        except (KeyError, ValueError, TypeError) as exc:
+            raise UserError('聊天记录无法读取，已停止；请保留 data 文件夹。') from exc
+        groups = groups[-history_keep(len(groups), self.cfg.history_rounds):]
+        self.history_events = [{**m, 'origin': m.get('origin', 'reply')} for group in groups for m in group]
+        return [{'role': m['role'], 'content': m['content']} for m in self.history_events], sum(any(m['role'] == 'assistant' for m in g) for g in groups)
+
+    def send(self, text, *, autonomy=False, extra_context=None):
+        self.sent_messages = []
+        self.reply_displayed = False
+        self.autonomy_mode = autonomy
+        if self.tools and hasattr(self.tools, 'set_autonomy'):
+            self.tools.set_autonomy(autonomy)
+        self.autonomy_interrupted = False
+        self.autonomy_step_limited = False
+        self.autonomy_budget_limited = False
+        if not self.pending_capability_event and self.tools:
+            self.pending_capability_event = self.tools.capability_event
+        recalled = self.memory.context(text) if self.memory else []
+        if not autonomy and extra_context is None:
+            from autonomy import recent_chat_context
+            extra_context = recent_chat_context(self.store, self.cfg)
+        stable, changing = self_facts(self.cfg, self.budget, memory_mode(self.memory), self.tools)
+        description = stable + '\n' + changing
+        # Order matters for the provider's prefix cache: everything that stays the same between requests
+        # comes first, then the chat history, then what changes every request (recalled memories,
+        # capability notice, time and ledger) right before the user's message.
+        head = [{'role': 'system', 'content': self.cfg.persona},
+                {'role': 'system', 'content': stable}]
+        tail = [*recalled]
+        if extra_context:
+            tail.append({'role': 'system', 'content': extra_context})
+        if self.pending_capability_event and not autonomy:
+            tail.append({'role': 'system', 'content':
+                '（程序生成的能力变化记录）' + self.pending_capability_event})
+        tail.append({'role': 'system', 'content': changing})
+        user = {'role': 'user', 'content': text}
+        tool_schema = []
+        if self.tool_mode and self.cfg.tools['max_steps'] > 1:
+            tool_schema = self.tool_schemas()
+        # UTF-8 byte count is deliberately conservative, with ample chat framing
+        # overhead. Reserve the entire configured input limit, not an average.
+        def bound(history):
+            return (sum(len(m['content'].encode('utf-8')) + 256 for m in [*head, *history, *tail, user])
+                    + len(json.dumps(tool_schema, ensure_ascii=False).encode('utf-8')) + 256)
+        limit = self.cfg.provider['max_input_tokens']
+        history = list(self.history)
+        # Long replies make the window outgrow the limit. Drop the oldest whole
+        # rounds from this request only; chat.jsonl keeps everything.
+        while history and bound(history) > limit:
+            history.pop(0)
+            while history and history[0]['role'] != 'user':
+                history.pop(0)
+        if bound(history) > limit:
+            raise TooLong('这条输入加上人设和记忆太长，未发送；请缩短输入后再发。')
+        kept = sum(m['role'] == 'user' for m in history)
+        self.trim_note = None
+        if len(history) < len(self.history) and not self.trim_noted:
+            self.trim_noted = True
+            self.trim_note = (f'（为了不超出长度上限，这次只带了最近 {kept} 轮原文；'
+                              '更早的聊天仍保存在本机，长期记忆不受影响。）')
+        messages = [*head, *history, *tail, user]
+        tool_summaries = []
+        with saving():
+            tool_cfg = (replace(self.cfg, max_output_tokens=self.cfg.tools.get('max_output_tokens', self.cfg.max_output_tokens))
+                        if self.tool_mode else self.cfg)
+            request_id, _ = self.budget.reserve(tool_cfg)
+            if not autonomy:
+                self.store.append(self.path, {'role': 'user', 'content': text, 'request_id': request_id})
+            if self.pending_capability_event and not autonomy:
+                self.store.append(f'{self.cfg.id}/tools.jsonl', {'request_id': request_id,
+                    'kind': 'capability', 'text': self.pending_capability_event})
+                self.tools.consume_capability_event()
+                self.pending_capability_event = None
+        try:
+            self.last_self = description
+            if self.tool_mode:
+                reply, tool_summaries = self._tool_chat(messages, request_id, len(history), len(head),
+                                                        autonomy=autonomy)
+            else:
+                try:
+                    reply, prompt, completion, cached = self.model(messages)
+                except UserError:
+                    raise
+                except Exception as exc:
+                    # Keep the reservation pending: the provider may have received
+                    # the request even when its response was lost.
+                    raise RequestFailed('请求失败，未自动重试；输入已保存，本次保留预留费用。') from exc
+        except (KeyboardInterrupt, EOFError):
+            raise
+        except (TooLong, RequestFailed):
+            # The failed message may already be persisted (provider failure or a
+            # tool-mode length failure). Keep this live session aligned with a
+            # reopened one; recent() also fails closed on corrupt chat records.
+            self.history, self.rounds = self.recent()
+            raise
+        if autonomy and self.autonomy_should_yield and self.autonomy_should_yield():
+            self.autonomy_interrupted = True
+        with saving():
+            if not isinstance(reply, str) or not reply.strip():
+                raise UserError('接口没有返回文字回复；本次保留预留费用。')
+            self.last_tool_summaries = tool_summaries
+            self.reply_displayed = reply in self.sent_messages
+            if not autonomy and not self.reply_displayed:
+                self.store.append(self.path, {'role': 'assistant', 'content': reply,
                     'request_id': request_id, 'origin': 'reply'})
             if not self.tool_mode:
                 self.budget.settle(request_id, self.cfg, prompt, completion, cached)
@@ -936,4 +1128,3 @@ def main():
 if __name__ == '__main__':
     sys.modules.setdefault('veil_agent', sys.modules[__name__])
     raise SystemExit(main())
-
