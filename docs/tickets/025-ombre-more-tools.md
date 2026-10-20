@@ -22,8 +22,8 @@ Peter 不再只能存（`hold`）和搜（`breath_search`）。记错的能改�
 
 ## 当前进度
 
-- 实现已推送到 `ticket/025-ombre-more-tools`，包含指定 Ombre 工具、程序删除审批、自主待删除队列、改前完整版本保存与 `memory_history`、隐藏过滤、一次性能力提示和向量费用预留。
-- 定向记忆测试 28 项、记忆回归 38 项、自主活动回归 10 项通过。网页 HTTP 套件因沙箱禁止 localhost socket 未能验证；Windows 真实体验待 lan 按验收步骤确认。
+- PR [#56](https://github.com/yecays-ai/veil-agent/pull/56) 已提交，分支 `ticket/025-ombre-more-tools`，基于 main `b07612c`。实现包含指定 Ombre 工具、程序删除审批、自主待删除队列、改前完整版本保存与 `memory_history`、隐藏过滤、一次性能力提示和向量费用预留。
+- 定向记忆测试 30 项、记忆回归 38 项、自主活动回归 10 项通过。网页 HTTP 套件因沙箱禁止 localhost socket 未能验证；GitHub Actions 当前排队，CodeRabbit 返回“Review skipped: manual review required”，暂无正式评审；Windows 真实体验待 lan 按验收步骤确认。
 
 ## 成本核对
 
