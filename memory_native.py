@@ -5,6 +5,7 @@ Deleting is not offered to the model: /delete stays with the user.
 """
 from types import SimpleNamespace
 import json
+import re
 import uuid
 
 from memory_agent import ordinary_hits
@@ -125,7 +126,7 @@ class NativeMemoryTools:
         rows = [row for row in self.memory.store.read(f'{self.memory.cfg.id}/memory-versions.jsonl')
                 if row.get('memory_id') == memory_id]
         if not rows:
-            return '这条记忆还没有由 Peter 改动过的旧版本。', '成功', f'历史：{summary}'
+            return '这条记忆还没有由你改动过的旧版本。', '成功', f'历史：{summary}'
         rendered = '\n\n---\n\n'.join(
             f"时间：{row['time']}\n改动字段：{', '.join(row['fields']) or '未记录'}\n"
             f"理由：{row.get('reason') or '未提供'}\n改动前的完整记忆：\n{row['old_content']}"
@@ -159,7 +160,7 @@ class NativeMemoryTools:
         except Exception:
             return '记忆工具出错，没有完成。', '出错', summary
         if name in ('dream', 'pulse'):
-            result = self._filter_hidden_result(result)
+            result = self._filter_hidden_result(result, name)
         return self._bounded(result), '成功', summary
 
     def _trace(self, args, approval):
@@ -182,7 +183,7 @@ class NativeMemoryTools:
         if delete and self.autonomy_mode:
             return self._queue_delete(memory_id, summary, args, old)
         if delete and (approval is None or approval(
-                f"Peter 想删除记忆 #{memory_id}：{summary}\n理由：{str(args.get('delete_reason') or '未提供')[:WHY_LIMIT]}。同意吗？y/N ").strip().casefold() != 'y'):
+                f"{self.memory.cfg.name} 想删除记忆 #{memory_id}：{summary}\n理由：{str(args.get('delete_reason') or '未提供')[:WHY_LIMIT]}。同意吗？y/N ").strip().casefold() != 'y'):
             return 'lan 没有同意；这条记忆仍保留。', '被拒绝', summary
         if not self._save_version(memory_id, args, old):
             return '程序拒绝：旧版本未能安全保存，本次修改未执行。', '出错', summary
@@ -253,7 +254,7 @@ class NativeMemoryTools:
                 self.memory.store.append(path, {**row, 'status': 'rejected',
                                                 'decision_reason': '目标记忆不可用'})
                 continue
-            prompt = (f"Peter 的自主删除申请：记忆 #{memory_id}「{title}」\n"
+            prompt = (f"{self.memory.cfg.name} 的自主删除申请：记忆 #{memory_id}「{title}」\n"
                       f"理由：{row.get('reason') or '未提供'}。同意删除吗？y/N ")
             accepted = approval is not None and approval(prompt).strip().casefold() == 'y'
             old = self.memory.raw_content_for(memory_id)
@@ -267,13 +268,13 @@ class NativeMemoryTools:
                     continue
                 status = 'approved'
                 note = (f'已同意并删除自主申请的记忆 #{memory_id}「{title}」。'
-                        f' Peter 的理由：{row.get("reason") or "未提供"}')
+                        f' {self.memory.cfg.name} 的理由：{row.get("reason") or "未提供"}')
             else:
                 tags = [tag for tag in self.memory.tags_for(memory_id) if tag != '待删除']
                 self.memory.call('trace', {'bucket_id': memory_id, 'tags': ','.join(tags) or ' '})
                 status = 'rejected'
                 note = (f'未同意删除记忆 #{memory_id}「{title}」；已移除待删除标记。'
-                        f' Peter 的理由：{row.get("reason") or "未提供"}')
+                        f' {self.memory.cfg.name} 的理由：{row.get("reason") or "未提供"}')
             self.memory.store.append(path, {**row, 'status': status})
             self.memory.messages.put(note)
             notes.append(note)
@@ -291,21 +292,47 @@ class NativeMemoryTools:
         self.memory.persist()
         return None
 
-    def _filter_hidden_result(self, result):
+    def _filter_hidden_result(self, result, name):
         hidden = self.memory.hidden_ids()
         if not hidden:
             return result
+        hidden_titles = {title for key in hidden if (title := self.memory.title_for(key))}
         # Ombre emits each dream record as a separate block and each pulse entry
-        # as a line containing its stable ID. Drop hidden records before they
-        # reach the chat model; aggregate counts remain system-level metadata.
+        # as a line containing its stable ID. Remove those records and aggregate
+        # counts before the result reaches the chat model.
         pieces = result.split('\n---\n')
-        if len(pieces) > 1:
-            pieces = [piece for piece in pieces if not any(
-                f'ID: {key}' in piece or f'[{key}]' in piece for key in hidden)]
-            result = '\n---\n'.join(pieces)
+        if name == 'dream':
+            first, *blocks = pieces
+            first_id = re.search(r'(?m)^ID: ([A-Za-z0-9_-]+)\s*$', first)
+            visible_count = 0
+            if first_id:
+                title_hidden = any(title in first for title in hidden_titles)
+                id_hidden = first_id.group(1) in hidden
+                if id_hidden or title_hidden:
+                    separator = first.rfind('\n\n', 0, first_id.start())
+                    first = first[:separator] if separator >= 0 else first[:first_id.start()]
+                else:
+                    visible_count += 1
+            visible = []
+            for piece in blocks:
+                match = re.search(r'(?m)^ID: ([A-Za-z0-9_-]+)\s*$', piece)
+                if (match and match.group(1) in hidden) or any(title in piece for title in hidden_titles):
+                    continue
+                visible.append(piece)
+                if match:
+                    visible_count += 1
+            first = re.sub(r'（\d+ 个桶）', f'（{visible_count} 个桶）', first, count=1)
+            result = '\n---\n'.join([first, *visible])
         lines = result.splitlines()
-        result = '\n'.join(line for line in lines if not any(
-            f'[{key}]' in line or f'ID: {key}' in line for key in hidden))
+        if name == 'pulse':
+            aggregate = ('固化桶:', '动态桶:', '归档桶:', 'feel 桶:', 'plan 桶:', 'letter 桶:',
+                         '总占用:', '向量索引队列:', '⚠️ 索引漂移:')
+            lines = [line for line in lines if not line.startswith(aggregate)
+                     and not re.match(r'^=== (计划|feel|信件)（\d+', line)]
+        result = '\n'.join(line for line in lines if not any(key in line for key in hidden)
+                            and not any(title in line for title in hidden_titles))
+        if name == 'pulse':
+            result += '\n\n（包含隐藏记忆的统计与条目已隐藏。）'
         return result
 
     def _hold(self, args):
