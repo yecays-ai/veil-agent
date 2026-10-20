@@ -1,10 +1,10 @@
 # 交接
 
-更新：2026-10-20 13:00 UTC · Codex · 工单 021 的两条 CodeRabbit 功能评论已修复，等待新 CI
+更新：2026-10-20 13:06 UTC · Codex · 工单 021 的两条 CodeRabbit 功能评论已修复并确认解决，最新 CI 通过
 
 ## 做到哪
 
-- 当前分支：`ticket/021-minimal-autonomy`，已同步到 PR #48 的 `cd4bead` 后继续修复；PR：https://github.com/yecays-ai/veil-agent/pull/48。
+- 当前分支：`ticket/021-minimal-autonomy`，修复提交 `67b1878`；PR：https://github.com/yecays-ai/veil-agent/pull/48。
 - 按 `docs/tickets/021-minimal-autonomy.md` 实现：常驻网页服务空闲时按配置唤醒；默认暂停、每 3 小时、每天最多 6 次；后台预算池默认 ¥2/日，仍受原 ¥10/日、¥300/月总预算约束。
 - 后台沿用现有 Chat 工具循环；最多 12 个工具步骤、10 分钟；单一主循环避免并发模型/工具；聊天、暂停或退出在当前调用/工具步骤后让位；后台审批明确拒绝；`send_message` 不会发给 lan。
 - `data/<角色>/autonomy.jsonl` 记录决定、原因、工具、lab 变化、结果、关注点/下一步和费用；异常中断标记可阻止重启后自动重试。页面显示下次唤醒与上次结果，新增 `/autonomy`，首次开启能力变化只提示一次。
@@ -14,8 +14,8 @@
 
 ## 下一步
 
-1. 推送本次修复并确认 PR #48 新 CI 通过、两条 CodeRabbit 线程已解决。
-2. 满足评审与 CI 条件后按仓库规则合并。
+1. PR #48 已满足 CodeRabbit 与 CI 条件，按仓库规则合并。
+2. 合并后同步本地 main，并请 lan 完成 Windows 体验验收。
 3. 合并后请 lan 按 `STATUS.md` 和 021 工单的 Windows 体验步骤验收；不得把自动化测试写成用户验收通过。
 
 ## 注意
