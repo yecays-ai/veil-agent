@@ -38,7 +38,7 @@ class StartupMutex:
             kernel.ReleaseMutex.argtypes = (wintypes.HANDLE,)
             kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
             self.handle = kernel.CreateMutexW(None, False, 'Local\\VEILAgentWebStartup')
-            result = kernel.WaitForSingleObject(self.handle, 30000)
+            result = kernel.WaitForSingleObject(self.handle, (STARTUP_WAIT + 10) * 1000)
             if result not in (0, 0x80):
                 raise RuntimeError('启动协调超时')
         return self
@@ -96,15 +96,17 @@ def main():
         parser.add_argument('--no-browser', action='store_true')
         args = parser.parse_args()
         with StartupMutex():
-            url = read_endpoint()
+            url = read_endpoint(require_ready=True)
             if url is None:
-                STARTUP_ERROR.unlink(missing_ok=True)
-                process = start_service(args.character, args.port)
+                process = None
+                if read_endpoint() is None:   # nothing running; a starting service is waited for
+                    STARTUP_ERROR.unlink(missing_ok=True)
+                    process = start_service(args.character, args.port)
                 deadline = time.monotonic() + STARTUP_WAIT
                 while time.monotonic() < deadline:
                     time.sleep(0.2)
                     url = read_endpoint(require_ready=True)
-                    if url or process.poll() is not None:
+                    if url or (process is not None and process.poll() is not None):
                         break
                 if not url:
                     report_error(startup_error())
