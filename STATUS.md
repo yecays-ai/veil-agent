@@ -1,10 +1,10 @@
 # 当前状态
 
-更新：2026-10-21 · Codex · 工单 027 记忆工具验收收尾；分支 ticket/027-memory-tools-closeout
+更新：2026-10-21 · Codex · 工单 027 PR #58 已提交；Windows 部分验收待 lan 完成
 
 ## 当前目标
 
-- **工单 027：收尾 025 记忆工具验收反馈与留痕。** 已确认并修复：人工批准删除后回执明确说明 lan 已批准；`hold(target_id)` 追加前留存完整 Markdown 快照；`trace` 区分正文、meaning 元数据、记忆缘由与本次操作原因。拒绝和待审批结果保持明确。`dream` 1/3/48 小时窗口、计划 active 状态、标题文字不构成授权及分类/重复行为已核查；未发现其他需要改动实现的问题。`test_native_memory.py` 35 项、`test_memory.py` 38 项通过；Ombre 固定版本的时间筛选假数据核对通过。Windows 部分验收仍待 lan 按下方步骤进行。
+- **工单 027：PR [#58](https://github.com/yecays-ai/veil-agent/pull/58) 已提交。** 收尾 025 记忆工具验收反馈与留痕：人工批准删除后回执明确说明 lan 已批准；`hold(target_id)` 追加前留存完整 Markdown 快照；`trace` 区分正文、meaning 元数据、记忆缘由与本次操作原因。拒绝和待审批结果保持明确。`dream` 1/3/48 小时窗口、计划 active 状态、标题文字不构成授权及分类/重复行为已核查；未发现其他需要改动实现的问题。`test_native_memory.py` 35 项、`test_memory.py` 38 项通过；Ombre 固定版本的时间筛选假数据核对通过。Windows 部分验收仍待 lan 按下方步骤进行。
 - **工单 024 Ombre 完整版常驻（4B-3）：PR [#53](https://github.com/yecays-ai/veil-agent/pull/53) 已合并；lan 2026-10-21 报告真实 Windows 验收通过。** Ombre 使用每角色本机 HTTP 常驻进程、MCP Token、目录互斥锁和首次启动备份；网页可打开 Ombre 面板，能力变化只提示一次。详见 `docs/tickets/024-ombre-resident.md`。
 - **工单 025 Peter 用上 Ombre 更多记忆工具：PR [#56](https://github.com/yecays-ai/veil-agent/pull/56) 已合并至 main `95f466e`。** lan 报告 trace 修改与 memory_history、dream/pulse、信件、计划及普通聊天删除批准场景已实际跑通；自主待删除拒绝、隐藏保护、anchor/release、信件锁定等仍待 Windows 验收。本次 027 只修复确认的反馈/留痕/字段说明缺口。
 - **工单 026 修复聊天长度预检：PR [#57](https://github.com/yecays-ai/veil-agent/pull/57) 已合并至 main `f0da606`。** 发送前估算复用工具循环的保守 token 估算并在真实用量后校准；完整保留人设、记忆、历史和授权工具，只裁剪本次请求中的最旧整轮聊天。定向测试和 GitHub Actions 通过；Windows 真实 DeepSeek 体验待 lan 验收。
