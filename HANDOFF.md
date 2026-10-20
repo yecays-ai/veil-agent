@@ -16,6 +16,10 @@
 
 先查看 PR #31 最新 head、CI 和 CodeRabbit 复审状态；对照本地工作区，确认新增修复与 `STATUS.md`、本文件都在同一 PR 内容中。只处理会影响功能或安全的问题。CI 和评审满足规则后合并，再请 lan 按 `STATUS.md` 做真实 Windows 验收；完成前不要宣布工单完全验收。
 
+## 之后的工单
+
+实验室（4A）工单已写好：`docs/tickets/016-lab.md`，草稿补丁 `/mnt/project-files/lab-ticket/016-lab-draft.patch`（未评审，仅供参考）；计划见 STATUS.md 的链接。lan 让 Codex 施工；开工前读工单、STATUS、新计划。
+
 ## 背景和注意
 
 - 聊天共用 `veil_agent.run_chat`；网页只接入 Hub 输入、输出、审批和 HTTP 服务。终端流程必须保持原样。
