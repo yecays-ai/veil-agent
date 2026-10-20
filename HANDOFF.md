@@ -5,15 +5,15 @@
 ## 做到哪
 
 - 基线 main `096344c`，015 已通过 PR #33 合并，暂未验收；014 已合并待验收，013 网页已验收。权威状态与各项体验步骤见 `STATUS.md`。
-- 016 位于独立分支 `ticket/016-lab`：lab 内 `write_file` 独占新建、`append_file` 末尾追加、`create_directory` 建目录均免确认；lab 外保留原权限。lab 默认 `lab`，可配置关闭或设置单次写入字节上限。
+- 016 实现见 PR #34（独立分支 `ticket/016-lab`）：lab 内 `write_file` 独占新建、`append_file` 末尾追加、`create_directory` 建目录均免确认；lab 外保留原权限。lab 默认 `lab`，可配置关闭或设置单次写入字节上限。
 - 写后 SHA-256 核对、Windows 保留名/非法字符/大小写重名/路径长度检查、符号链接与 junction 隔离、硬链接追加拒绝、超限零写入和 `vN.md` 两版字节数提示已实现。能力变化复用 capabilities.json 和既有提示机制。
 - 未更改日记的持续授权实现、记忆、发送顺序/缓存、web_agent.py 或网页界面。真实日记和聊天未用于测试。
-- Windows 全量 162 项测试通过，2 项可选集成跳过；含真实 filesystem MCP 新建/追加/读取、junction 隔离和假模型最终工具列表。尚未做 lan 的真实聊天验收。
+- Windows 全量 162 项测试通过，2 项可选集成跳过；含真实 filesystem MCP 新建/追加/读取、junction 隔离和假模型最终工具列表。代码提交 `960bee1` 的 Windows/Linux、Python 3.11/3.12 四项 CI 均通过。尚未做 lan 的真实聊天验收。
 - 当前正常启动工作区的本机配置修改未纳入本工单；施工使用隔离工作树，避免打断本机聊天。
 
 ## 下一步
 
-提交 016 的代码、STATUS 与本交接，创建同一 PR；检查 CI 与 CodeRabbit，只处理功能和安全问题，满足条件后合并并更新正常启动目录。然后请 lan 按 `STATUS.md` 验收实验室。
+确认 PR #34 满足 CI、评审及合并条件并同步正常启动目录；请 lan 按 `STATUS.md` 验收实验室。只有功能和安全问题需要修复；真实聊天未通过前不认定工单完成。
 
 ## 注意
 
