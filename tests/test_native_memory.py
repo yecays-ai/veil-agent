@@ -324,7 +324,7 @@ class OmbreToolGuardTests(unittest.TestCase):
         self.tools.set_autonomy(True)
         self.call('trace', {'bucket_id': 'mem001', 'delete': True, 'delete_reason': 'duplicate'})
         self.path.write_text(self.path.read_text(encoding='utf-8').replace(
-            'tags: ["keep", "待删除"]', 'tags: ["keep", "待删除"]\\ndeleted_at: 2026-10-21'),
+            'tags: ["keep", "待删除"]', 'tags: ["keep", "待删除"]\ndeleted_at: 2026-10-21'),
             encoding='utf-8')
         prompts = []
         self.backend.calls.clear()
