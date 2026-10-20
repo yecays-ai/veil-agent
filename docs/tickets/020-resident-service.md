@@ -11,7 +11,7 @@
 - 页面分别显示「服务运行状态」和「自主活动状态」。自主活动默认暂停；用户手动开启/暂停后状态跨重启保留。开启只显示状态，本单绝不运行自主任务或发起额外模型请求。
 - 异常退出后可以直接再次启动；过期地址/token 文件不能阻止启动或使新服务复用错误凭据。token 只保存在本机受限数据目录，不进入仓库、普通日志或未经授权的网页/API 响应；保护所有现有 API 权限、审批、预算和记忆完整性边界。
 - 保留现有共享 `Store.lock()`、`run_chat`、网页服务、聊天/记忆/费用/工具审批行为，不重建运行系统。
-- 复用调查：沿用本项目已有 `start-web.bat`、Python 网页服务和标准库启动能力，不新增运行框架。`mhammond/pywin32` 的 README（main）说明这是较大的 Win32 API 扩展，Windows service 通常需要全局安装/安装脚本；README 标出 PSF-2.0，但源码包含多种许可。其 `win32/Demos/service/serviceEvents.py`（提交 `2b1a83143b2ea34d29d1f99f8a220d72e7e589ab`）使用 `ServiceFramework`，定位为 SCM 服务，不适合交互式双击启动与浏览器回连；不引入依赖或复制代码。托盘、开机自启与 4B-2 自主活动不属于本单。
+- 复用调查：沿用本项目已有 `start-web.bat`、Python 网页服务和标准库启动能力，不新增运行框架。`mhammond/pywin32`（约 5.6k stars；调查时 main 最新提交为 2026-10-07 的 `2b1a83143b2ea34d29d1f99f8a220d72e7e589ab`）是活跃的 Win32 API 扩展；README 说明 Windows service 通常需全局安装/安装脚本，README 虽标 PSF-2.0，仓库源码许可不止一种。该提交的 `win32/Demos/service/serviceEvents.py` 使用 `ServiceFramework`，面向 Windows SCM 而非交互式双击与浏览器回连；不引入依赖或复制代码。托盘、开机自启与 4B-2 自主活动不属于本单。
 - 当前缺少跨浏览器关闭后的服务回连、重复启动协调、可确认退出、双状态/持久暂停和上述 Windows 生命周期验收。
 
 ## 验收步骤（Windows）
