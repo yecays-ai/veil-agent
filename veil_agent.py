@@ -19,6 +19,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 MILLION = Decimal(1_000_000)
 
+RAW_DSML_TOOL_CALL = re.compile(r'<[|｜]DSML[|｜](?:tool_calls|function_calls|invoke)\\b', re.IGNORECASE)
+
 
 def synchronized(fn):
     @wraps(fn)
@@ -584,7 +586,14 @@ class Chat:
                 self.output(final)
                 break
             if not message.tool_calls:
-                final = message.content or ''
+                content = message.content or ''
+                if isinstance(content, str) and RAW_DSML_TOOL_CALL.search(content):
+                    # Never display provider-internal tool syntax as a reply or feed
+                    # it to another parser. Only structured, allowlisted tool_calls
+                    # reach the existing permission and budget checks above.
+                    final = '模型返回了未执行的工具调用文本；程序没有执行任何工具，请查看 /cost 后重试。'
+                else:
+                    final = content
                 if step == self.cfg.tools['max_steps'] - 1 and summaries:
                     self.output('这次工具步骤用完了。')
                 break
