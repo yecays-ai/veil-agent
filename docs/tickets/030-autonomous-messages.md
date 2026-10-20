@@ -10,7 +10,7 @@
 
 复用调查：Fount 的 [wakeScheduler](https://github.com/steve02081504/fount/blob/6d70452ddbc335efbda1867a2e79f9191f95cb64/src/public/parts/shells/chat/src/reply/wakeScheduler.mjs) 用运行标记和序号处理并发唤醒，[async-task registry](https://github.com/steve02081504/fount/blob/82af83ba298146b1da844584f53012cb768cb064/src/public/parts/plugins/async-task/registry.mjs) 用任务 ID 与 generation ID 标记执行归属。只借鉴并发保护与稳定身份思路，沿用 VEIL 现有聊天存储和自主调度，不复制代码或增加依赖。仓库约 693 stars；LICENSE 文件存在但接口未能解码校验，因此不复制其代码。
 
-实现已加入逐唤醒/工具调用标识、持久三条上限、网页事件输出及让位同步保护，并沿用 `capabilities.json` 一次性通知。定向测试 `test_autonomy.py`、`test_tools.py`、`test_chat.py` 合计 94 项通过（2 项可选集成跳过），并通过 `py_compile`。HTTP 网页套件因当前沙箱禁止本机回环 socket 未能验证；Windows 真实体验待 Lan 验收。
+实现已加入逐唤醒/工具调用标识、持久三条上限、网页事件输出及让位同步保护，并沿用 `capabilities.json` 一次性通知。定向测试 `test_autonomy.py`、`test_tools.py`、`test_chat.py` 合计运行 94 项，92 项通过、2 项可选集成跳过，并通过 `py_compile`。HTTP 网页套件因当前沙箱禁止本机回环 socket 未能验证；Windows 真实体验待 Lan 验收。
 
 ## 验收步骤
 
