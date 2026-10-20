@@ -1,30 +1,26 @@
 # 交接
 
-更新：2026-10-19 · 工单 013 网页前端 + 009/010/011 验收收尾
+更新：2026-10-20 UTC · 工单 014 聊天稳定性与异常恢复施工中
 
 ## 做到哪
 
-- **工单 013 网页前端**（分支 `ticket/013-web-ui`）：`web_agent.py`、`web/index.html`、`start-web.bat`、`tests/test_web.py`；未改 `veil_agent.py`。PR #29 已合并；第一步：请 lan 按 `docs/tickets/013-web-ui.md` 验收，有问题开新工单修。注意 `web_agent.main` 复制了 `veil_agent.main` 的装配（约 20 行），以后改后者的装配时要同步改。
+- 最新 `main` 已核实为 `b1d8555`；当前分支 `ticket/014-chat-stability`。尚未提交或创建 PR。
+- 已确认 012 代码合并、真实缓存效果待验收；013 代码合并、真实 Windows 网页已验收。权威进度见 `STATUS.md`。
+- 014 已改 `veil_agent.py`、`web_agent.py`、`web/index.html`，并新增针对普通模型错误恢复、请求去重和并发提交的测试；新增 `docs/tickets/014-chat-stability.md`。`STATUS.md` 已标记三项工单状态。
+- 通过：`python -m unittest tests.test_chat tests.test_web`（43 项）；全量 `python -m unittest discover -s tests`（137 项，3 项可选集成跳过）。本机网页测试需 loopback 权限；未调用真实模型、供应商接口或付费 API。
+- 尚未完成最终代码复核、PR、CodeRabbit/CI 或真实 Windows 用户验收。
+- 保留了原有未提交的人设配置改动 `characters/peter/character.toml`（thinking 从 disabled 改为 enabled）；不要纳入工单提交。未编辑真实记忆、聊天数据或费用账本。
 
-- 以 main 为准：009 PR #20、010 PR #21、011 PR #22 已合并。最新验收详情见 `STATUS.md`。
-- **009 核心真实聊天验收通过**：恢复后的记忆 `d1cc70a9507c` 可由 Peter 两次检索读回，编号、标题、原文保持；整合目标 `a8bc13c98033` 含 IBIS-9925，来源原文保留；用户此前已实测追加、整合、隐藏/删除二次确认与恢复。保留 extract 旧方案及所有旧数据。
-- **010 已实测**：Peter 创建并读取 `growth-journal.md` 成功。
-- **011 核心真实聊天验收通过**：用户对 `grant_append` 输入一次 `y`，Peter 随后成功调用 `append_file`；日记由 2264 增至 3403 字节，重新读取旧内容保持。该次没有使用 `write_file` 覆盖。
-- 011 曾因实际启动目录仍在旧 009 分支而看不到新工具；开发端已切换到 main `1255fc0`，真实聊天已能调用新工具。更新脚本与实际启动版本不一致的风险需要避免再次发生。
-- **011 尚未全部验收**：跨重启免再次授权、其他文件独立确认、工作区外拒绝尚无用户真实 Windows 验收结果。勿将单元测试通过等同于真实验收。
+## 下一个窗口第一步
 
-## 下一步
+先读 `AGENTS.md`、`STATUS.md`、本文件和 `docs/tickets/014-chat-stability.md`，检查最终差异并确认 `characters/peter/character.toml` 仍保持为未提交的独立用户改动；若无新问题，提交并推送本分支、创建 PR，之后处理 CodeRabbit 和 CI。不要把自动测试通过等同于真实 Windows 验收。
 
-- 不重复已经通过的 009、010、011 首次追加场景。011 余下场景在下次正常使用时验证；失败才开针对性修复。
-- 下一项开发为 **012 缓存优化**，然后推进 Windows 聊天前端。开工前拉取最新 main，阅读本文件与 `STATUS.md`，先核实目标、最简单替代做法和用户体验验收方式。
-- 文档状态修正与验收记录放在同一个 PR，不另起重复文档工单。
+## 背景和注意
 
-## 注意
-
-- 不删除或自动迁移旧记忆及 extract 方案。
-- `growth-journal.md` 的持续授权仅限指定文件；不得因已通过首次追加就推断其他路径授权及跨重启场景已通过。
-- 更新/启动环境的版本一致性必须可核实，不再要求用户无目的重复拉取 main。
-
-- 记忆板块收尾审计（2026-10-19）已写入 `STATUS.md`：结论是可先暂停；007c/007d 记录在该节补回；重开条件和未验证项（向量检索是否真失败、新旧对比、预检仍按字节）见同一节。
-
-- 012（缓存）：`veil_agent.py` 的 `self_facts` 把说明拆成固定/变化两段，`Chat.send` 按 [人设, 固定说明, 历史, 召回, 能力变化, 时间账本, 输入] 排列；`history_keep` 成块裁剪；`Budget.cache_display` 给 `/cost`。动发送顺序或 `_tool_chat` 的 `history_start` 之前先读 `docs/tickets/012-cache-friendly-prompt.md`。前端工单 013 不得改这几处。
+- 聊天共用 `veil_agent.run_chat`；网页只接入 Hub 输入、输出、审批和 HTTP 服务。终端流程必须保持原样。
+- 费用请求在发起模型请求前已预留并写入用户消息。结果不确定时必须保留预留，不自动重试。
+- 网页 `/api/send` 现在要求 `request_id`；前端对同一草稿重试会复用该 ID，服务器已接收过的 ID 不可再入队。
+- `Hub.busy` 的检查与入队必须持同一把条件锁；审批仅在当前 pending id 有效时接受，页面需等服务器响应后报告已收到。
+- 工具、账本或本地持久化异常不能被归类为可恢复的模型网络故障。
+- `reuse-first` 结论：沿用 Python 标准库 HTTP 服务和既有聊天/审批/预算组件；不接入 Open WebUI、LobeChat 等需要另行装配后端的整套产品，也不加依赖。
+- 012 真实缓存收益仍未验收；011 跨重启授权与路径边界仍未完成真实 Windows 验收。不要把自动测试当成用户体验验收。

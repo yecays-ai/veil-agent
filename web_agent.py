@@ -36,6 +36,7 @@ class Hub:
         self.inbox = queue.Queue()
         self.answers = queue.Queue()
         self.pending = None       # event id of the approval being asked, else None
+        self.submissions = {}      # accepted request ids prevent ambiguous retries duplicating a turn
 
     def push(self, kind, text):
         with self.cond:
@@ -48,13 +49,16 @@ class Hub:
         prefix = f'{self.name}: '
         if text.startswith(prefix):
             self.push('assistant', text[len(prefix):])
+        elif text.startswith('请求失败，未自动重试'):
+            self.push('error', text)
         elif text.startswith('接上了'):
             self.push('notice', text.split('。')[0] + '。')   # drop the terminal-only command hints
         else:
             self.push('notice', text)
 
     def input_fn(self, _prompt=''):
-        self.busy = False
+        with self.cond:
+            self.busy = False
         while True:
             try:
                 text = self.inbox.get(timeout=0.5)
@@ -62,8 +66,24 @@ class Hub:
                 if self.stopped:
                     raise EOFError
                 continue
-            self.busy = True
+            with self.cond:
+                self.busy = True
             return text
+
+    def submit(self, text, request_id):
+        # Check busy and register the accepted request atomically for all handlers.
+        with self.cond:
+            if request_id in self.submissions:
+                return 'duplicate'
+            if self.stopped:
+                return 'stopped'
+            if self.busy:
+                return 'busy'
+            self.busy = True
+            self.push('user', text)
+            self.submissions[request_id] = True
+            self.inbox.put(text)
+            return 'accepted'
 
     def approval(self, prompt):
         # Same sentence the terminal shows; the page offers two buttons for y/N.
@@ -164,18 +184,20 @@ def make_handler(hub, token, port):
                 return
             if url.path == '/api/send':
                 text = body.get('text')
+                request_id = body.get('request_id')
                 if not isinstance(text, str) or not text.strip():
                     self._send(400, {'error': 'empty'})
-                elif hub.busy:
-                    self._send(409, {'error': 'busy'})
+                elif not isinstance(request_id, str) or not request_id or len(request_id) > 100:
+                    self._send(400, {'error': 'request_id'})
                 else:
                     text = text.strip()
-                    hub.busy = True
-                    hub.push('user', text)
-                    if text == '/quit':
-                        hub.push('notice', '正在保存并退出，稍等几秒，然后可以关掉这个页面。')
-                    hub.inbox.put(text)
-                    self._send(200, {'ok': True})
+                    result = hub.submit(text, request_id)
+                    if result in ('accepted', 'duplicate'):
+                        if result == 'accepted' and text == '/quit':
+                            hub.push('notice', '正在保存并退出，稍等几秒，然后可以关掉这个页面。')
+                        self._send(200, {'ok': True, 'duplicate': result == 'duplicate'})
+                    else:
+                        self._send(409, {'error': result})
             elif url.path == '/api/approve':
                 answer = body.get('answer')
                 if answer not in ('y', 'n'):

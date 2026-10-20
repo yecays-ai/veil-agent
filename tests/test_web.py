@@ -45,12 +45,16 @@ output_cny_per_million = "8"
         self.store = Store(root / 'data')
         self.model = Mock(return_value=('A fictional reply', 100, 20, 10))
         self.hub = Hub('Test')
+        self.request_number = 0
         self.port = free_port()
         self.server = start_server(self.hub, TOKEN, self.port)
         self.addCleanup(self.server.server_close)
         self.addCleanup(self.server.shutdown)
 
     def call(self, path, body=None, token=TOKEN, host=None, origin=None):
+        if path == '/api/send' and body is not None:
+            self.request_number += 1
+            body.setdefault('request_id', f'test-request-{self.request_number}')
         headers = {'X-Token': token, 'Content-Type': 'application/json'}
         if host:
             headers['Host'] = host
@@ -126,13 +130,70 @@ output_cny_per_million = "8"
 
         def scenario(result):
             self.assertTrue(self.wait(lambda: self.call('/api/events')[1]['busy'] is False))
-            self.assertEqual(self.call('/api/send', {'text': 'one'})[0], 200)
-            result['second'] = self.call('/api/send', {'text': 'two'})[0]
+            result['first'] = self.call('/api/send', {'text': 'one', 'request_id': 'one'})[0]
+            result['duplicate'] = self.call('/api/send', {'text': 'one', 'request_id': 'one'})[0]
+            result['second'] = self.call('/api/send', {'text': 'two', 'request_id': 'two'})[0]
+            gate.set()
+            self.assertTrue(self.wait(lambda: self.call('/api/events')[1]['busy'] is False))
+            result['late_duplicate'] = self.call('/api/send', {'text': 'one', 'request_id': 'one'})[0]
+            result['retry'] = self.call('/api/send', {'text': 'two', 'request_id': 'two'})[0]
+            self.assertTrue(self.wait(lambda: sum(e['kind'] == 'assistant'
+                                                  for e in self.call('/api/events')[1]['events']) == 2))
+
+        result = self.run_loop(scenario)
+        self.assertEqual((result['first'], result['duplicate'], result['second'],
+                          result['late_duplicate'], result['retry']), (200, 200, 409, 200, 200))
+        self.assertEqual(self.model.call_count, 2)
+        self.assertEqual([m['content'] for m in self.store.read('test/chat.jsonl')
+                          if m['role'] == 'user'], ['one', 'two'])
+
+    def test_provider_failure_does_not_stop_web_chat_or_retry(self):
+        self.model.side_effect = [RuntimeError('private provider detail'),
+                                  ('A fictional reply', 100, 20, 10)]
+
+        def scenario(result):
+            self.assertTrue(self.wait(lambda: self.call('/api/events')[1]['busy'] is False))
+            self.assertEqual(self.call('/api/send', {'text': 'first', 'request_id': 'first'})[0], 200)
+            self.assertTrue(self.wait(lambda: any(e['kind'] == 'error'
+                                                  for e in self.call('/api/events')[1]['events'])))
+            self.assertTrue(self.wait(lambda: self.call('/api/events')[1]['busy'] is False))
+            result['second'] = self.call('/api/send', {'text': 'second', 'request_id': 'second'})[0]
+            self.assertTrue(self.wait(lambda: any(e['text'] == 'A fictional reply'
+                                                  for e in self.call('/api/events')[1]['events'])))
+
+        self.assertEqual(self.run_loop(scenario)['second'], 200)
+        self.assertEqual(self.model.call_count, 2)
+        self.assertEqual([m['content'] for m in self.store.read('test/chat.jsonl')
+                          if m['role'] == 'user'], ['first', 'second'])
+        self.assertGreater(Budget(self.store).totals()[2], 0)
+
+    def test_concurrent_distinct_sends_have_one_atomic_winner(self):
+        gate = threading.Event()
+        self.model.side_effect = lambda *a, **k: (gate.wait(5), ('slow', 10, 5, 0))[1]
+
+        def scenario(result):
+            self.assertTrue(self.wait(lambda: self.call('/api/events')[1]['busy'] is False))
+            barrier = threading.Barrier(3)
+            statuses = []
+
+            def send(text, request_id):
+                barrier.wait()
+                statuses.append(self.call('/api/send', {'text': text, 'request_id': request_id})[0])
+
+            threads = [threading.Thread(target=send, args=('one', 'race-one')),
+                       threading.Thread(target=send, args=('two', 'race-two'))]
+            for thread in threads:
+                thread.start()
+            barrier.wait()
+            for thread in threads:
+                thread.join(5)
+            result['statuses'] = statuses
             gate.set()
             self.assertTrue(self.wait(lambda: any(e['kind'] == 'assistant'
                                                   for e in self.call('/api/events')[1]['events'])))
 
-        self.assertEqual(self.run_loop(scenario)['second'], 409)
+        result = self.run_loop(scenario)
+        self.assertEqual(sorted(result['statuses']), [200, 409])
         self.assertEqual(self.model.call_count, 1)
 
     def test_approval_buttons_map_to_y_and_n(self):

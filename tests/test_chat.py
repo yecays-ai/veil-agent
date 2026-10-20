@@ -123,6 +123,24 @@ output_cny_per_million = "8"
         self.assertEqual(self.model.call_count, 1)
         self.assertGreater(Budget(Store(self.root / 'data')).totals()[2], 0)
 
+    def test_provider_failure_is_reported_and_chat_loop_continues_without_retry(self):
+        self.model.side_effect = [RuntimeError('private provider detail'),
+                                  ('A fictional reply', 100, 20, 10)]
+        output = []
+        run_chat(self.chat, Mock(side_effect=['first', 'second', '/quit']), output.append)
+        self.assertTrue(any('请求失败，未自动重试' in line for line in output))
+        self.assertIn('Test: A fictional reply', output)
+        self.assertEqual(self.model.call_count, 2)  # one call per explicit user message
+        saved = self.store.read('test/chat.jsonl')
+        self.assertEqual([m['content'] for m in saved if m['role'] == 'user'], ['first', 'second'])
+        self.assertGreater(Budget(Store(self.root / 'data')).totals()[2], 0)
+
+    def test_corrupt_ledger_still_stops_the_chat_loop(self):
+        self.store.append('costs.jsonl', {'type': 'reserve'})
+        with self.assertRaises(UserError):
+            run_chat(self.chat, Mock(side_effect=['hello']), lambda _: None)
+        self.model.assert_not_called()
+
     def test_roles_use_separate_history_but_share_budget(self):
         self.chat.send('private test')
         self.assertEqual(self.store.read('other/chat.jsonl'), [])

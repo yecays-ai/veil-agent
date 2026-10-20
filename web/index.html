@@ -29,6 +29,7 @@ header button:hover{color:var(--text)}
 .approval button{font:inherit;padding:6px 18px;border-radius:8px;border:1px solid var(--line);cursor:pointer;margin-right:8px;background:var(--panel);color:var(--text)}
 .approval button.yes{background:var(--accent);color:#fff;border-color:var(--accent)}
 .approval.done button{display:none}
+.approval .status{font-size:14px;color:var(--muted)}
 #typing{align-self:flex-start;color:var(--muted);font-size:14px;padding-left:6px}
 footer{padding:10px 16px 14px;border-top:1px solid var(--line);background:var(--panel)}
 .bar{max-width:780px;margin:0 auto;display:flex;gap:8px;align-items:flex-end}
@@ -59,7 +60,7 @@ let token=params.get('t');
 try{if(token)sessionStorage.setItem('veil-t',token);else token=sessionStorage.getItem('veil-t')}catch(e){}
 if(params.has('t'))history.replaceState(null,'',location.pathname);
 const $=id=>document.getElementById(id), col=$('col'), log=$('log'), box=$('box'), sendBtn=$('send');
-let after=0, busy=true, stopped=false, typing=null;
+let after=0, busy=true, stopped=false, typing=null, sending=false, draftId=null, draftText=null;
 
 function esc(s){return s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
 function render(text){
@@ -74,21 +75,53 @@ function add(kind,text,id){
   else if(kind==='approval'){
     d.className='approval';d.dataset.id=id;
     const p=document.createElement('p');p.textContent=text;d.appendChild(p);
+    const status=document.createElement('div');status.className='status';status.setAttribute('aria-live','polite');d.appendChild(status);
     for(const [label,ans,cls] of [['同意','y','yes'],['拒绝','n','']]){
       const b=document.createElement('button');b.textContent=label;b.className=cls;
-      b.onclick=()=>{d.classList.add('done');api('/api/approve',{answer:ans,id})};d.appendChild(b);
+      b.onclick=()=>approve(d,status,ans,id);d.appendChild(b);
     }
   } else {d.className=kind==='error'?'error':'notice';d.textContent=text}
   if(typing)col.insertBefore(d,typing);else col.appendChild(d);
 }
 function setBusy(b){
-  busy=b;sendBtn.disabled=b||stopped;
+  busy=b;sendBtn.disabled=b||sending||stopped;
   if(b&&!typing&&!stopped){typing=document.createElement('div');typing.id='typing';typing.textContent=($('title').textContent||'')+' 正在回复…';col.appendChild(typing)}
   if(!b&&typing){typing.remove();typing=null}
 }
 async function api(path,body){
   const r=await fetch(path,{method:body?'POST':'GET',headers:{'X-Token':token||'','Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});
   return r;
+}
+async function approve(card,status,answer,id){
+  if(card.dataset.sending==='true'||card.classList.contains('done'))return;
+  card.dataset.sending='true';
+  card.querySelectorAll('button').forEach(b=>b.disabled=true);
+  status.textContent='正在提交…';
+  try{
+    const r=await api('/api/approve',{answer,id});
+    if(!r.ok){
+      if(r.status===409){card.classList.add('done');status.textContent='这项审批已失效，未重复执行。'}
+      else throw new Error(r.status);
+      return;
+    }
+    card.classList.add('done');
+    status.textContent=answer==='y'?'服务器已收到同意。':'服务器已收到拒绝。';
+  }catch(e){
+    status.textContent='没有收到服务器确认；正在核对审批状态。';
+    try{
+      const r=await api('/api/events?after='+after),s=await r.json();
+      if(s.pending===Number(id)){
+        card.querySelectorAll('button').forEach(b=>b.disabled=false);
+        status.textContent='服务器仍在等待选择，可以重新提交。';
+      }else{
+        card.classList.add('done');
+        status.textContent='页面没有收到确认；请看后续聊天提示。';
+      }
+    }catch(_){
+      card.querySelectorAll('button').forEach(b=>b.disabled=false);
+      status.textContent='暂时无法确认；审批仍可重试，重复操作会被服务器拒绝。';
+    }
+  }finally{card.dataset.sending='false'}
 }
 async function poll(){
   try{
@@ -100,19 +133,38 @@ async function poll(){
     const stick=log.scrollHeight-log.scrollTop-log.clientHeight<80;
     for(const e of s.events){add(e.kind,e.text,e.id);after=e.id}
     // Only the approval being asked right now can be clicked; older cards are inert.
-    document.querySelectorAll('.approval').forEach(c=>{if(Number(c.dataset.id)!==s.pending)c.classList.add('done')});
+    document.querySelectorAll('.approval').forEach(c=>{
+      if(Number(c.dataset.id)!==s.pending){
+        c.classList.add('done');
+        const status=c.querySelector('.status');
+        if(status&&!status.textContent)status.textContent='审批已结束，请看后续聊天提示。';
+      }
+    });
     stopped=s.stopped;setBusy(s.busy);
     if(s.events.length&&stick)log.scrollTop=log.scrollHeight;
   }catch(e){$('offline').style.display='block'}
   setTimeout(poll,600);
 }
 async function send(text){
+  const fromBox=!text;
   text=(text||box.value).trim();
-  if(!text||busy||stopped)return;
-  box.value='';box.style.height='auto';setBusy(true);
-  const r=await api('/api/send',{text});
-  if(!r.ok&&r.status!==409){add('error','没发出去，请重试。')}
-  log.scrollTop=log.scrollHeight;
+  if(!text||busy||stopped||sending)return;
+  if(fromBox&&draftText!==text){draftText=text;draftId=crypto.randomUUID()}
+  const requestId=fromBox?draftId:crypto.randomUUID();
+  sending=true;setBusy(true);
+  try{
+    const r=await api('/api/send',{text,request_id:requestId});
+    let result={};try{result=await r.json()}catch(e){}
+    if(!r.ok){
+      add('error',r.status===409&&result.error==='busy'
+        ?'Peter 正在处理上一条消息；这条没有发送，输入已保留。'
+        :'发送未成功，输入已保留；可以稍后重新操作。');
+    }else{
+      if(fromBox&&box.value.trim()===text){box.value='';box.style.height='auto';draftId=null;draftText=null}
+      if(result.duplicate)add('notice','这条消息此前已提交，没有重复发送。');
+    }
+  }catch(e){add('error','发送结果未确认，输入已保留；页面不会自动重发。')}
+  finally{sending=false;log.scrollTop=log.scrollHeight}
 }
 sendBtn.onclick=()=>send();
 box.addEventListener('keydown',e=>{
