@@ -26,9 +26,9 @@ def vault_path(root, character):
 
 
 class MCP:
-    """One child, one async owner task; synchronous callers share its queue."""
-    def __init__(self, params, log):
-        self.params, self.log = params, log
+    """One HTTP session, one async owner task; synchronous callers share its queue."""
+    def __init__(self, url, token):
+        self.url, self.token = url, token
         self.ready = Future()
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()
@@ -52,10 +52,11 @@ class MCP:
 
     async def _serve(self):
         from mcp import ClientSession
-        from mcp.client.stdio import stdio_client
+        from mcp.client.streamable_http import streamablehttp_client
         self.loop = asyncio.get_running_loop()
         self.requests = asyncio.Queue()
-        async with stdio_client(self.params, errlog=self.log) as (read, write):
+        headers = {'Authorization': f'Bearer {self.token}'}
+        async with streamablehttp_client(self.url, headers=headers) as (read, write, _):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 self.ready.set_result(True)
@@ -96,22 +97,6 @@ def ombre_model_on(cfg):
     return bool((cfg.memory or {}).get('ombre_model', True))
 
 
-def ombre_config(cfg, vault):
-    settings = cfg.memory
-    dehydration = {'api_key': ''}
-    if ombre_model_on(cfg):
-        # Ombre tags each memory and judges "same event" with the chat provider's model.
-        dehydration = {'api_key': '', 'model': cfg.provider['model'], 'base_url': cfg.provider['base_url'],
-                       'max_tokens': 1024, 'temperature': 0.1, 'timeout_seconds': 30}
-        if 'deepseek' in cfg.provider['base_url']:
-            dehydration['extra_body'] = {'thinking': {'type': 'disabled'}}
-    return {'transport': 'stdio', 'buckets_dir': str(vault), 'ai_name': cfg.name,
-            'dehydration': dehydration, 'github': {'enabled': False}, 'log_level': 'WARNING',
-            'embedding': {'enabled': True, 'background_indexing': False, 'api_key': '',
-                'backend': 'api', 'model': settings['model'], 'base_url': settings['base_url'],
-                'dim': int(settings.get('dimensions', 1024)), 'timeout_seconds': 20}}
-
-
 # Ombre's own prompts (tagging and same-event judging) and their input limits, in UTF-8 bytes.
 OMBRE_ANALYZE_PROMPT_BYTES, OMBRE_JUDGE_PROMPT_BYTES = 3200, 1000
 OMBRE_OLD_MEMORY_BYTES, OMBRE_OUTPUT_TOKENS = 5400, 800
@@ -128,9 +113,11 @@ def ombre_model_tokens(content):
 @contextmanager
 def open_ombre(root, cfg, *, data_root=None):
     from dotenv import dotenv_values
-    from mcp import StdioServerParameters
     from veil_agent import UserError
+    from ombre_resident import mark_ready, start_or_connect
     root = Path(root)
+    resident = None
+    backend = None
     try:
         settings = cfg.memory
         if not settings['base_url'].startswith('https://'):
@@ -142,50 +129,47 @@ def open_ombre(root, cfg, *, data_root=None):
         if not key or not key.strip():
             raise UserError('本机 .env 缺少 EMBED_API_KEY，请填写后重开。')
         vault = vault_path(data_root if data_root is not None else root / 'data', cfg.id)
-        private = vault / '_agent'
-        private.mkdir(parents=True, exist_ok=True)
-        if private.resolve() != private or (private / 'config.json').is_symlink():
-            raise ValueError('private directory redirected')
         dep = root / '.deps' / 'ombre'
         executable = dep / 'venv' / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
-        subprocess.run([str(executable), '-c', 'import jieba, rank_bm25'],
+        subprocess.run([str(executable), '-c',
+                        'import jieba, rank_bm25; from mcp.client.streamable_http import streamablehttp_client'],
                        check=True, capture_output=True, timeout=20)
-        config = ombre_config(cfg, vault)
-        model_key = None
         if ombre_model_on(cfg):
             model_key = dotenv_values(root / '.env', interpolate=False,
                                       encoding='utf-8-sig').get(cfg.provider['api_key_env'])
             if not model_key or not model_key.strip():
                 raise UserError('本机 .env 缺少聊天模型的 API Key（记忆打标和合并要用），请填写后重开。')
-        config_path = private / 'config.json'
-        config_path.write_text(json.dumps(config, ensure_ascii=False), encoding='utf-8')
-        env = {k: v for k, v in os.environ.items()
-               if k.upper() in {'SYSTEMROOT', 'WINDIR', 'PATH', 'TEMP', 'TMP'}}
-        env.update(PYTHONUTF8='1', PYTHONIOENCODING='utf-8', OMBRE_CONFIG_PATH=str(config_path),
-            OMBRE_VAULT_DIR=str(vault), OMBRE_LOG_DIR=str(private), OMBRE_HOOK_SKIP='1',
-            OMBRE_TRANSPORT='stdio', OMBRE_EMBED_API_KEY=key.strip())
-        if model_key:
-            env['OMBRE_COMPRESS_API_KEY'] = model_key.strip()
-        (private / 'tmp').mkdir(exist_ok=True)
-        env['TEMP'] = env['TMP'] = str(private / 'tmp')
-        params = StdioServerParameters(command=str(executable),
-            args=[str(dep / 'source/src/server.py')], env=env, cwd=str(private))
+        port, token, resident = start_or_connect(root, cfg, data_root=data_root)
     except UserError:
         raise
     except (OSError, ValueError, KeyError, subprocess.SubprocessError) as exc:
         raise UserError('记忆依赖或配置缺失（含 jieba / rank-bm25），请先重新运行 setup.bat。') from exc
-    with (private / 'process.log').open('a', encoding='utf-8') as log:
-        try:
-            backend = MCP(params, log)
-        except Exception as exc:
-            raise UserError('记忆进程启动失败，请重新运行 setup.bat；本机记录仍保留。') from exc
-        try:
-            yield backend
-        finally:
+    except Exception as exc:
+        raise UserError('记忆进程启动失败，请重新运行 setup.bat；本机记录仍保留。') from exc
+    try:
+        backend = MCP(f'http://127.0.0.1:{port}/mcp', token)
+        private = vault / '_agent'
+        mark_ready(private)
+        yield backend
+    except Exception as exc:
+        raise UserError('记忆进程启动失败，请重新运行 setup.bat；本机记录仍保留。') from exc
+    finally:
+        close_error = None
+        if backend:
             try:
                 backend.close()
             except Exception as exc:
-                raise UserError('记忆进程未能正常退出，请保留记忆库后关闭窗口。') from exc
+                close_error = UserError('记忆连接未能正常退出，请保留记忆库后关闭窗口。')
+                close_error.__cause__ = exc
+        if resident:
+            try:
+                resident.close()
+            except Exception as exc:
+                if close_error is None:
+                    close_error = UserError('记忆进程未能正常退出，请保留记忆库后关闭窗口。')
+                    close_error.__cause__ = exc
+        if close_error:
+            raise close_error
 
 
 def signature_of(item, batch_id):

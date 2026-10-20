@@ -1,10 +1,10 @@
 # 当前状态
 
-更新：2026-10-20 22:45 +08:00 · Claude · 023 已合并；写好 024 Ombre 完整版常驻工单
+更新：2026-10-20 23:48 +08:00 · Codex · 024 实现与定向验证完成，真实 Windows 流程未验证
 
 ## 当前目标
 
-- **下一张工单 024 Ombre 完整版常驻（4B-3）：已写好，待 Codex 施工。** Ombre 改为本机常驻 HTTP 方式启动，开放记忆面板和自然衰减；Peter 的记忆工具不变。详见 `docs/tickets/024-ombre-resident.md`。
+- **工单 024 Ombre 完整版常驻（4B-3）：实现已在 `ticket/024-ombre-resident`，尚未提交或开 PR。** Ombre 使用每角色本机 HTTP 常驻进程、MCP Token、目录互斥锁和首次启动备份；网页可打开 Ombre 面板，能力变化只提示一次。87 项定向测试通过、2 项可选集成跳过。全量离线套件受 Windows 沙箱目录和 localhost 限制，真实 Windows 启动/聊天/面板/退出流程尚未验证。详见 `docs/tickets/024-ombre-resident.md`。
 - **工单 023：PR #50 已合并（main `18ce081`，CodeRabbit 限流，由 Claude 代审）；Windows 体验待验收。** 后续聊天带入当前角色最近一次自主活动摘要，`/cost` 按当前角色统计自主费用。详见 `docs/tickets/023-autonomy-chat-context.md`。
 - **工单 022：PR #49 已合并（main `59c0b20`，CodeRabbit 限流，由 Claude 代审）；Windows 体验待验收。** 修复网页服务继承旧 PATH 导致 npx 检测失败。合并后需退出当前服务再重启，按工单步骤确认文件工具和审批正常。
 - **工单 021 最小自主（4B-2）：代码已合并至 main `6b44de6`。** 184 项自动化测试通过（3 项可选集成跳过），CodeRabbit 两条功能评论已修复并确认解决，3 条定向回归与 GitHub CI 通过；Windows 真实体验待验收。已接入定时唤醒、单独后台费用池、12 工具步骤/10 分钟上限、聊天让位、持久记录、`/autonomy` 和能力变化提示；默认暂停，¥10/日与 ¥300/月总预算不变。详见 `docs/tickets/021-minimal-autonomy.md`。
@@ -27,6 +27,12 @@
 1. 等 Peter 完成一次自主活动后，在后续聊天问“下午做了什么”；确认回答依据自主活动决定、工具或 Lab 产出。
 2. 分别让 Peter 和 Ghost 产生自主费用后查看各自 `/cost`；确认只显示当前角色的自主费用，不串入另一角色的自主支出。
 3. 确认 Peter/Ghost 的记录与身份隔离，普通聊天、`/memory`、文件审批和预算仍正常。
+
+## 工单 024 验收步骤（Windows）
+
+1. 更新后退出旧服务，再双击 `start-web.bat`；确认聊天正常且 `data/peter/memory` 旁生成带时间戳的备份。
+2. 打开「记忆面板」，确认现有记忆可见；让 Peter 记一件新事，在面板查看并置顶，刷新确认置顶保存。
+3. 点「退出服务」后再启动；确认聊天、面板密码、记忆、lab、文件审批、自主活动和 `/cost` 可用，Peter 只收到一次自然衰减能力提示。
 
 ## 工单 022 验收步骤（Windows）
 

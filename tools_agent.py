@@ -230,13 +230,17 @@ class FilesystemTools:
         names = names or []
         core = {'version': VERSION, 'folder': self.folder_name, 'tools': {
             name: tool_policy(name) for name in names},
+            'resident_memory': bool((getattr(self.cfg, 'memory', None) or {}).get('enabled')),
             'lab': ({'folder': self.lab.name, 'max_write_bytes': self.lab_max_write_bytes}
                     if getattr(self, 'lab', None) else False),
             # send_message lives in veil_agent but is offered whenever tools are enabled.
             'messaging': bool(getattr(self, 'enabled', False))}
         try:
             previous = json.loads(self.cap_path.read_text(encoding='utf-8')) if self.cap_path.exists() else None
-            if previous and {k: previous.get(k) for k in core} == core:
+            previous_core = {k: previous.get(k) for k in core} if previous else None
+            if previous_core is not None:
+                previous_core['resident_memory'] = bool(previous.get('resident_memory', False))
+            if previous and previous_core == core:
                 self.capability_event = previous.get('pending_event')
                 return
             if previous != core:
@@ -256,6 +260,8 @@ class FilesystemTools:
                     changes = ([f'{name}（{ "需要先问你同意" if level == "ask" else "可直接读取"}）'
                                 for name, level in sorted(core['tools'].items())]
                                or ['当前没有可用工具'])
+                memory_announcement = (core['resident_memory'] and previous is not None
+                                       and not previous.get('resident_memory', False))
                 old_lab = previous.get('lab', False) if previous else False
                 if core['lab'] and core['lab'] != old_lab:
                     changes.append(f'你自己的实验室 `{self.lab.name}/` 开放了：里面放什么由你决定；'
@@ -276,6 +282,10 @@ class FilesystemTools:
                         self.capability_event += messaging
                 else:
                     self.capability_event = '你的能力有变化：' + messaging
+                if core['resident_memory'] and (previous is None or memory_announcement):
+                    message = '你的记忆现在会随时间自然淡去；你可以在记忆面板查看、置顶和归档。'
+                    self.capability_event = (self.capability_event + '\n' + message
+                                             if self.capability_event else message)
             row = {**core, 'pending_event': self.capability_event,
                    'autonomy_announced': bool(previous and previous.get('autonomy_announced'))}
             if previous != row:

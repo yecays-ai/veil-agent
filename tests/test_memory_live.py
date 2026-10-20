@@ -17,7 +17,7 @@ class LiveAdapter(unittest.TestCase):
             {'model': 'offline-fixture', 'max_input_tokens': 10000,
              'input_cny_per_million': Decimal(0), 'output_cny_per_million': Decimal(0),
              'cached_input_cny_per_million': Decimal(0)}, 'fake',
-            {'enabled': True, 'model': 'BAAI/bge-m3', 'dimensions': 1024,
+            {'enabled': True, 'ombre_port': 18912, 'model': 'BAAI/bge-m3', 'dimensions': 1024,
              'base_url': 'https://api.siliconflow.cn/v1', 'input_cny_per_million': '0'})
 
         def fake_model(messages, *, json_output=False, **extra):

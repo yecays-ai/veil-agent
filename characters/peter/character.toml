@@ -34,6 +34,8 @@ enabled = true
 mode = "native"
 # Ombre's own tagging and same-event merge use the chat model and key; false keeps default tags only.
 ombre_model = true
+# Role-local Ombre HTTP listener; future roles must choose a distinct port.
+ombre_port = 18011
 model = "BAAI/bge-m3"
 base_url = "https://api.siliconflow.cn/v1"
 dimensions = 1024

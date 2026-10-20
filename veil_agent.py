@@ -230,10 +230,16 @@ def load_character(root, character_id):
         autonomy_daily = price(autonomy.get('daily_budget_cny', '2'))
         autonomy = {'interval_minutes': interval, 'daily_max_runs': daily_runs,
                     'daily_budget_cny': autonomy_daily}
+        memory = dict(cfg.get('memory') or {})
+        if memory.get('enabled', False):
+            memory_port = positive_int(memory.get('ombre_port'))
+            if not 1024 <= memory_port <= 65535:
+                raise ValueError('memory.ombre_port must be an available TCP port')
+            memory['ombre_port'] = memory_port
         return Character(character_id, str(cfg['name']), persona,
                          positive_int(cfg.get('history_rounds', 20)),
                          positive_int(cfg.get('max_output_tokens', 1024)), provider, cfg['provider'],
-                         cfg.get('memory'), tools, autonomy)
+                         memory, tools, autonomy)
     except UserError:
         raise
     except (OSError, KeyError, ValueError, TypeError, ArithmeticError) as exc:

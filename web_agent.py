@@ -31,9 +31,10 @@ MAX_SUBMISSIONS = 1024
 class Hub:
     """Message list shared by the chat loop (main thread) and HTTP handlers."""
 
-    def __init__(self, name, activity):
+    def __init__(self, name, activity, memory_port=None):
         self.name = name
         self.activity = activity
+        self.memory_url = f'http://127.0.0.1:{memory_port}/dashboard' if memory_port else None
         self.events = []
         self.busy = True          # true until the loop is waiting for input
         self.stopped = False
@@ -171,7 +172,8 @@ class Hub:
             autonomy = self.autonomy.status() if self.autonomy else {}
             return {'events': self.events[after:], 'busy': self.busy and not self.autonomy_busy, 'stopped': self.stopped,
                     'name': self.name, 'pending': self.pending, 'ready': self.ready,
-                    'activity_enabled': self.activity.enabled(), **autonomy}
+                    'activity_enabled': self.activity.enabled(),
+                    'memory_panel_url': self.memory_url, **autonomy}
 
 
 def make_handler(hub, token):
@@ -342,7 +344,8 @@ def main(argv=None):
             budget.autonomy_daily = cfg.autonomy['daily_budget_cny']
             client, model = make_model(ROOT, cfg)
             activity = ActivityState(store.root / cfg.id / 'resident-state.json')
-            hub = Hub(cfg.name, activity)
+            memory_port = (cfg.memory or {}).get('ombre_port') if (cfg.memory or {}).get('enabled') else None
+            hub = Hub(cfg.name, activity, memory_port)
             token = secrets.token_urlsafe(24)
             try:
                 server = start_server(hub, token, args.port)

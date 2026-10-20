@@ -6,7 +6,8 @@ import threading
 import unittest
 from unittest.mock import Mock
 
-from memory_agent import Memory, ombre_config, ordinary_hits, vault_path
+from memory_agent import Memory, ordinary_hits, vault_path
+from ombre_resident import resident_config
 from veil_agent import Budget, Character, Chat, Store, UserError, build_self_description
 
 
@@ -60,9 +61,11 @@ class MemoryTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.store = Store(Path(self.temp.name) / 'data')
         self.cfg = Character('fake', 'Example', 'fictional persona', 20, 1024,
-            {'model': 'fake', 'max_input_tokens': 10000, 'input_cny_per_million': Decimal(2),
+            {'model': 'fake', 'base_url': 'https://example.invalid/v1',
+             'max_input_tokens': 10000, 'input_cny_per_million': Decimal(2),
              'output_cny_per_million': Decimal(8), 'cached_input_cny_per_million': Decimal(1)}, 'fake',
-            {'model': 'fake-embedding', 'input_cny_per_million': '0.07'})
+            {'model': 'fake-embedding', 'base_url': 'https://example.invalid/v1',
+             'dimensions': 3, 'input_cny_per_million': '0.07'})
         self.budget = Budget(self.store)
         self.backend = Backend()
         self.model = Mock(side_effect=self.extract)
@@ -314,17 +317,17 @@ class MemoryTests(unittest.TestCase):
         self.memory.call('hold', {'content': 'x'})
         costs = self.store.read('costs.jsonl')
         self.assertFalse(any(c.get('accounting') == 'ombre-model-estimate' for c in costs))
-        self.assertEqual(ombre_config(self.cfg, Path('v'))['dehydration'], {'api_key': ''})
+        self.assertEqual(resident_config(self.cfg, Path('v'), 'x' * 64)['dehydration'], {'api_key': ''})
 
     def test_ombre_config_uses_chat_model_without_a_key_in_the_file(self):
         self.cfg.memory['base_url'] = 'https://example.invalid/v1'
         self.cfg.provider['base_url'] = 'https://api.deepseek.com'
-        dehydration = ombre_config(self.cfg, Path('v'))['dehydration']
+        dehydration = resident_config(self.cfg, Path('v'), 'x' * 64)['dehydration']
         self.assertEqual(dehydration['model'], 'fake')
         self.assertEqual(dehydration['api_key'], '')
         self.assertEqual(dehydration['extra_body'], {'thinking': {'type': 'disabled'}})
         self.cfg.provider['base_url'] = 'https://api.openai.com/v1'
-        self.assertNotIn('extra_body', ombre_config(self.cfg, Path('v'))['dehydration'])
+        self.assertNotIn('extra_body', resident_config(self.cfg, Path('v'), 'x' * 64)['dehydration'])
 
     def test_ombre_model_budget_blocks_before_the_backend(self):
         self.budget.daily = Decimal('0.0000001')

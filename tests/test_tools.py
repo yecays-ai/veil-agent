@@ -291,6 +291,23 @@ class ToolPolicyTests(unittest.TestCase):
         reopened.announce_autonomy()
         self.assertIsNone(reopened.capability_event)
 
+    def test_resident_memory_capability_is_announced_once(self):
+        store = Store(self.root / 'data')
+        def manager():
+            m = FilesystemTools.__new__(FilesystemTools)
+            m.cfg, m.store, m.folder_name = SimpleNamespace(id='test', memory={'enabled': True}), store, 'workspace'
+            m.cap_path = self.root / 'data' / 'test' / 'capabilities.json'
+            m.capability_event, m.enabled = None, True
+            return m
+        first = manager()
+        first._record_capabilities(['read_text_file'])
+        self.assertIn('自然淡去', first.capability_event)
+        self.assertTrue(json.loads(first.cap_path.read_text(encoding='utf-8'))['resident_memory'])
+        first.consume_capability_event()
+        second = manager()
+        second._record_capabilities(['read_text_file'])
+        self.assertIsNone(second.capability_event)
+
     def test_autonomy_announcement_is_noop_without_file_tools(self):
         store = Store(self.root / 'data')
         manager = FilesystemTools(self.root, SimpleNamespace(id='test', tools=None), store)

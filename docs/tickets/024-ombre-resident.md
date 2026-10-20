@@ -8,13 +8,19 @@ Peter 的记忆服务 Ombre 改成完整版常驻启动：lan 能打开 Ombre �
 
 依据：[重建计划](https://claude.ai/code/artifact/85533c78-6925-4ad3-842c-4fe446685695) 4B-3「Ombre 完整版」（lan 2026-10-20 定在自主活动之后）。
 
-## 当前状态（main `18ce081`，读源码确认）
+## 当前状态（main `695c58a`，读源码确认）
 
 - `memory_agent.py:166` 用 stdio 方式启动 Ombre（锁定版本 `115d831`，`setup_memory.py:11`）。每次聊天进程启动时开一个 Ombre 子进程，结束就关。
 - Ombre 在 stdio 模式下**不启动记忆面板，也不跑衰减**：`src/server.py` 只有 `streamable-http` 分支会把 `decay_engine` 交给 `RuntimeLifecycle` 并用 uvicorn 起 HTTP 服务；stdio 分支只起向量队列。
 - Ombre 完整版（`transport: streamable-http`）在同一个端口提供：`/mcp`（记忆工具）、`/dashboard`（面板，首次打开设密码，或用 `OMBRE_DASHBOARD_PASSWORD`）、`/health`。端口来自 `OMBRE_PORT`（默认 18001），监听地址来自 `OMBRE_BIND_HOST`（默认 `0.0.0.0`）。`/mcp` 鉴权由 `mcp_require_auth` / `mcp_auth_mode` 决定，支持静态 Token（`auth_mode = "token"`）。
 - 衰减引擎（`decay_engine.py`）按 `decay.check_interval_hours` 定时跑；会顺带补算缺失的向量（调用 SiliconFlow 向量接口，有少量费用）。
 - 常驻网页服务（020）已有：无窗口后台进程、启动互斥、`data/web_service.json` 记地址、「退出服务」。
+
+## 复用与面板费用核对
+
+- 复用已安装的 [Ombre-Brain `115d831`](https://github.com/P0luz/Ombre-Brain/tree/115d831d979bf67efc7150f976e2cb34c333c935)：MIT 许可，仓库通过固定提交和归档哈希安装；该版本已有 Streamable HTTP、`/dashboard`、衰减生命周期和 MCP Token 鉴权。本单不复制或改写 Ombre 实现，只用其 MCP HTTP 客户端和运行入口。
+- Ombre 面板的历史导入/需要模型标注的导入、脱水模型连通性测试、向量连通性测试，以及编辑记忆正文后重建向量，可能直接请求模型或向量服务；这些调用不进入 veil-agent `/cost`。普通浏览、置顶、归档不调用模型。VEIL 嵌入方式禁用模型配置和外部服务开关，保留首次设置/修改 Ombre 面板密码。
+- 补缺失向量仍按本工单预计每天不到 ¥0.01；没有在本机真实记忆上启动服务或测量实际调用，具体用量待 Windows 体验确认。
 
 ## 要做的事
 

@@ -53,6 +53,7 @@ textarea:focus{border-color:var(--accent)}
   <h1 id="title">VEIL</h1>
   <button data-cmd="/cost" title="今天和本月的花费">花费</button>
   <button data-cmd="/memory" title="最近的记忆">记忆</button>
+  <button id="memory-panel" hidden>记忆面板</button>
   <button id="theme">深色</button>
 </header>
 <div id="runtime">
@@ -195,6 +196,9 @@ async function poll(){
     $('activity-toggle').disabled=s.stopped||exiting;
     $('exit-service').disabled=s.stopped||exiting;
     document.title=s.name;$('title').textContent=s.name;
+    const memoryPanel=$('memory-panel');
+    memoryPanel.hidden=!s.memory_panel_url;
+    memoryPanel.onclick=()=>{if(s.memory_panel_url)window.open(s.memory_panel_url,'_blank','noopener')};
     const stick=log.scrollHeight-log.scrollTop-log.clientHeight<80;
     const initial=after===0;pendingApproval=s.pending;
     for(const e of s.events){receiveEvent(e,initial);after=e.id}
