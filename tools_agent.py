@@ -22,7 +22,8 @@ ASK = {'write_file', 'append_file', 'grant_append'}
 DENY = {'edit_file', 'move_file'}
 LAB_ONLY = {'create_directory'}
 # Memory tools (ticket 007) are offered by memory_native.ToolSet, never by the filesystem server.
-NATIVE = {'hold', 'breath_search'}
+NATIVE = {'hold', 'breath_search', 'trace', 'dream', 'letter_write', 'letter_read',
+          'letter_lock_update', 'anchor', 'release', 'plan', 'pulse', 'memory_history'}
 
 
 def permitted_tools(server_tools):
@@ -287,6 +288,7 @@ class FilesystemTools:
                     self.capability_event = (self.capability_event + '\n' + message
                                              if self.capability_event else message)
             row = {**core, 'pending_event': self.capability_event,
+                   'memory_tools': previous.get('memory_tools', []) if previous else [],
                    'autonomy_announced': bool(previous and previous.get('autonomy_announced'))}
             if previous != row:
                 self.cap_path.parent.mkdir(parents=True, exist_ok=True)
@@ -674,3 +676,4 @@ class _McpWorker:
         if self.thread.is_alive() and self.requests is not None:
             self.loop.call_soon_threadsafe(self.requests.put_nowait, None)
             self.thread.join(timeout=10)
+
