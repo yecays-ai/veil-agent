@@ -250,11 +250,34 @@ class NativeMemoryTools:
             if row.get('status') != 'pending':
                 continue
             memory_id, title = row.get('memory_id'), row.get('title')
-            if not isinstance(memory_id, str) or self.memory.is_hidden(memory_id):
+            if not isinstance(memory_id, str):
                 self.memory.store.append(path, {**row, 'status': 'rejected',
-                                                'decision_reason': '目标记忆不可用'})
+                                                'decision_reason': '请求记录无效'})
                 continue
-            prompt = (f"{self.memory.cfg.name} 的自主删除申请：记忆 #{memory_id}「{title}」\n"
+            if self.memory.deleted_for(memory_id):
+                note = f'记忆 #{memory_id}「{title}」已在记忆面板处理；没有重复删除。'
+                self.memory.store.append(path, {**row, 'status': 'approved_external'})
+                self.memory.messages.put(note)
+                notes.append(note)
+                continue
+            if self.memory.is_hidden(memory_id):
+                tags = [tag for tag in self.memory.tags_for(memory_id) if tag != '待删除']
+                old = self.memory.raw_content_for(memory_id)
+                if old is not None and '待删除' in self.memory.tags_for(memory_id):
+                    if not self._save_version(memory_id, {'tags': '待删除 removed'}, old):
+                        continue
+                    self.memory.call('trace', {'bucket_id': memory_id, 'tags': ','.join(tags) or ' '})
+                self.memory.store.append(path, {**row, 'status': 'rejected',
+                                                'decision_reason': '目标记忆已隐藏'})
+                continue
+            if '待删除' not in self.memory.tags_for(memory_id):
+                note = f'记忆 #{memory_id}「{title}」的待删除标记已移除；申请已结束。'
+                self.memory.store.append(path, {**row, 'status': 'rejected',
+                                                'decision_reason': '待删除标记已移除'})
+                self.memory.messages.put(note)
+                notes.append(note)
+                continue
+            prompt = (f"{self.memory.cfg.name} 的自主删除申请：记忆 #{memory_id}「{title}」\\n"
                       f"理由：{row.get('reason') or '未提供'}。同意删除吗？y/N ")
             accepted = approval is not None and approval(prompt).strip().casefold() == 'y'
             old = self.memory.raw_content_for(memory_id)
