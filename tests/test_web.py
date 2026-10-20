@@ -116,6 +116,8 @@ output_cny_per_million = "8"
         self.assertEqual(self.call('/api/events', host='evil.example')[0], 403)
         self.assertEqual(self.call('/api/events', origin='http://evil.example')[0], 403)
         self.assertEqual(self.call('/api/send', {'text': 'x'}, token='wrong')[0], 403)
+        self.assertEqual(self.call('/api/events')[0], 200)
+        self.model.assert_not_called()
 
     def test_activity_toggle_is_authorized_persistent_and_task_free(self):
         status, state = self.call('/api/events')
@@ -150,8 +152,6 @@ output_cny_per_million = "8"
 
         self.run_loop(scenario)
         self.assertTrue(results['paused'])
-        self.model.assert_not_called()
-        self.assertEqual(self.call('/api/events')[0], 200)
         self.model.assert_not_called()
 
     def test_message_round_trip_and_commands(self):
@@ -197,7 +197,6 @@ output_cny_per_million = "8"
         self.assertEqual(self.model.call_count, 2)
         self.assertEqual([m['content'] for m in self.store.read('test/chat.jsonl')
                           if m['role'] == 'user'], ['one', 'two'])
-
     def test_provider_failure_does_not_stop_web_chat_or_retry(self):
         self.model.side_effect = [RuntimeError('private provider detail'),
                                   ('A fictional reply', 100, 20, 10)]
