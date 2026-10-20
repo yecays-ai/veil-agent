@@ -48,5 +48,5 @@ lab = "lab"
 lab_max_write_bytes = 200000
 enabled = true
 folder = "data/peter/workspace"
-max_steps = 6
+max_steps = 12
 max_result_bytes = 8192
