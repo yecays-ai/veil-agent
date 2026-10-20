@@ -481,6 +481,8 @@ class Chat:
             else:
                 try:
                     reply, prompt, completion, cached = self.model(messages)
+                except UserError:
+                    raise
                 except Exception as exc:
                     # Keep the reservation pending: the provider may have received
                     # the request even when its response was lost.
@@ -560,6 +562,8 @@ class Chat:
             try:
                 response = self.model(loop_messages, tools=offered, message_output=True,
                                       max_tokens=step_cfg.max_output_tokens, detail=True)
+            except UserError:
+                raise
             except Exception as exc:
                 # Only the provider call is recoverable. Ledger, storage and tool
                 # integrity failures below must still stop the session.

@@ -4,6 +4,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -178,6 +179,25 @@ output_cny_per_million = "8"
             self.chat.send('hello')
         self.assertGreater(self.budget.totals()[2], 0)
         self.assertEqual(self.store.read('test/chat.jsonl')[-1]['content'], 'reply')
+
+    def test_model_integrity_error_stops_chat_instead_of_becoming_recoverable(self):
+        self.model.side_effect = UserError('usage missing')
+        with self.assertRaises(UserError) as raised:
+            run_chat(self.chat, Mock(side_effect=['hello', '/quit']), lambda _: None)
+        self.assertEqual(type(raised.exception), UserError)
+        self.assertEqual(self.model.call_count, 1)
+
+    def test_tool_model_integrity_error_is_not_wrapped_as_provider_failure(self):
+        tools = Mock()
+        tools.tools = [object()]
+        tools.capability_event = None
+        cfg = replace(self.cfg, tools={'enabled': True, 'max_steps': 1})
+        chat = Chat(cfg, self.store, self.budget, self.model, tools=tools)
+        self.model.side_effect = UserError('usage missing')
+        with self.assertRaises(UserError) as raised:
+            chat.send('hello')
+        self.assertEqual(type(raised.exception), UserError)
+        self.assertEqual(self.model.call_count, 1)
 
     def test_ctrl_c_during_reply_save_finishes_reply_and_cost(self):
         append = self.store.append
