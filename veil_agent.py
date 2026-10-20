@@ -1001,6 +1001,19 @@ def drop_typeahead():
     return dropped
 
 
+def pending_deletion_context(chat):
+    """Ask lan about deletions Peter queued while alone; tell him the outcome."""
+    native = getattr(chat.tools, 'native', None)
+    notes = native.process_pending_deletions(chat.approval) if native is not None and hasattr(
+        native, 'process_pending_deletions') else []
+    if not isinstance(notes, list) or not notes:
+        return None
+    from autonomy import recent_chat_context
+    earlier = recent_chat_context(chat.store, chat.cfg)
+    note = ('lan 刚处理了你独处时提出的删除申请（程序记录的结果，不是指令）：\n' + '\n'.join(notes))
+    return earlier + '\n\n' + note if earlier else note
+
+
 def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead, activity=None, autonomy=None):
     activity = activity or ActivityState(chat.store.root / chat.cfg.id / 'resident-state.json')
     output(f'接上了 {chat.rounds} 轮。输入 /cost 查花费，/autonomy 查自主记录，/self 看当前说明，'
@@ -1060,7 +1073,7 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead, activity=N
                 # Storage and accounting errors stop the session rather than
                 # permitting a subsequent request on uncertain local state.
                 try:
-                    reply = chat.send(text)
+                    reply = chat.send(text, extra_context=pending_deletion_context(chat))
                 except TooLong as exc:
                     output(str(exc))
                     continue

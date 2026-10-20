@@ -515,3 +515,17 @@ class DegradedNoticeTests(unittest.TestCase):
         self.assertEqual(self.search(''), [])
 
 
+
+
+class PendingDeletionChatTests(unittest.TestCase):
+    def test_next_chat_message_asks_lan_and_tells_peter_the_outcome(self):
+        from veil_agent import pending_deletion_context
+        store = Store(Path(tempfile.mkdtemp()))
+        native = SimpleNamespace(process_pending_deletions=Mock(return_value=['已同意并删除记忆 #a1「旧事」。']))
+        chat = SimpleNamespace(tools=SimpleNamespace(native=native), approval=lambda _: 'y',
+                               store=store, cfg=SimpleNamespace(id='peter', name='Peter'))
+        context = pending_deletion_context(chat)
+        native.process_pending_deletions.assert_called_once_with(chat.approval)
+        self.assertIn('已同意并删除记忆 #a1', context)
+        native.process_pending_deletions.return_value = []
+        self.assertIsNone(pending_deletion_context(chat))
