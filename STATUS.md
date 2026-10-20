@@ -1,10 +1,10 @@
 # 当前状态
 
-更新：2026-10-21 · Codex · 工单 028 施工中，分支 `ticket/028-long-task-resume`；PR 待创建
+更新：2026-10-21 · Codex · 工单 028 PR [#59](https://github.com/yecays-ai/veil-agent/pull/59) 已创建，等待 Claude 审查；Windows 体验验收待完成
 
 ## 当前目标
 
-- **工单 028：跨自主唤醒长期任务续做，施工中。** 在 `ticket/028-long-task-resume` 从 main `a7ab987` 开工；新增每角色原子任务状态、创建/更新工具、自主唤醒上下文、逐副作用检查点、`/autonomy` 摘要和一次性能力通知。`test_long_tasks.py` 8 项、`test_autonomy.py` 11 项、`test_tools.py` 44 项通过（2 项可选集成跳过），相关文件编译通过。下一步自审改动并创建 PR；PR 与评审状态随后补入。真实 Windows 网页流程尚未验收。
+- **工单 028：跨自主唤醒长期任务续做，PR [#59](https://github.com/yecays-ai/veil-agent/pull/59) 已创建，基于 main `a7ab987`，当前未合并。** 分支 `ticket/028-long-task-resume` 新增每角色原子任务状态、创建/更新工具、自主唤醒上下文、逐副作用检查点、`/autonomy` 摘要和一次性能力通知。`test_long_tasks.py` 8 项、`test_autonomy.py` 11 项、`test_tools.py` 44 项通过（2 项可选集成跳过），相关文件编译及 diff 检查通过。下一步由 Claude 审查；真实 Windows 网页流程尚未验收。
 - **工单 027：PR [#58](https://github.com/yecays-ai/veil-agent/pull/58) 已合并至 main `a7ab987`。** 收尾 025 记忆工具反馈与留痕：人工批准删除后回执明确说明 lan 已批准；`hold(target_id)` 追加前留存完整旧版；`trace` 区分正文、meaning 元数据、记忆缘由和本次操作原因。拒绝和待审批结果明确；dream 窗口、计划 active、标题文字不构成授权及分类/重复行为已核查。定向测试和固定 Ombre 时间窗口假数据核对通过。该单 Windows 验收状态未记录，需按下方步骤确认。
 - **工单 024 Ombre 完整版常驻（4B-3）：PR [#53](https://github.com/yecays-ai/veil-agent/pull/53) 已合并；lan 2026-10-21 报告真实 Windows 验收通过。** Ombre 使用每角色本机 HTTP 常驻进程、MCP Token、目录互斥锁和首次启动备份；网页可打开 Ombre 面板，能力变化只提示一次。详见 `docs/tickets/024-ombre-resident.md`。
 - **工单 025 Peter 用上 Ombre 更多记忆工具：PR [#56](https://github.com/yecays-ai/veil-agent/pull/56) 已合并至 main `95f466e`。** lan 报告 trace 修改与 memory_history、dream/pulse、信件、计划及普通聊天删除批准场景已实际跑通；自主待删除拒绝、隐藏保护、anchor/release、信件锁定等仍待 Windows 验收。本次 027 只修复确认的反馈/留痕/字段说明缺口。
@@ -144,3 +144,4 @@
 1. 在网页输入长消息后断网或模拟发送失败，检查原文仍在输入框、错误提示清楚，并确认结果不确定时没有自动重发。
 2. 模拟一次模型超时，确认 Peter 显示失败提示且聊天可继续；再测试连点发送、同意和拒绝，确认没有重复模型或工具执行，页面只在服务器确认后更新审批状态。
 3. 正常使用 `/memory`、`/cost`、文件审批和 `/quit`；确认原有聊天、长期记忆及费用记录可用。账本/本地数据完整性错误仍应安全停止。
+

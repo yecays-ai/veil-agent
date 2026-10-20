@@ -1,6 +1,6 @@
 # 交接
 
-更新：2026-10-21 · Codex · 工单 028 分支 `ticket/028-long-task-resume`；PR 待创建
+更新：2026-10-21 · Codex · 工单 028 PR [#59](https://github.com/yecays-ai/veil-agent/pull/59) 已创建；等待 Claude 审查与 Windows 体验验收
 
 ## 做到哪
 
@@ -12,7 +12,7 @@
 
 ## 下一步
 
-- 自审完整改动，创建提交、推送并开一个 PR；在同一 PR 更新本文件内 PR 地址与状态。
+- PR [#59](https://github.com/yecays-ai/veil-agent/pull/59) 已基于 main `a7ab987` 创建，尚未合并；STATUS.md 和本文件已同步更新。
 - 依用户指示不等待 CodeRabbit；用户会安排 Claude 审查。PR 不代表 Lan 已完成 Windows 体验验收。
 - Lan 验收按 `STATUS.md` 的工单 028 步骤 A–E：三阶段任务、首次暂停、服务重启续做、最终完成与后续不重复、聊天让位/权限/费用。
 
@@ -20,3 +20,4 @@
 
 - 只处理工单 028；没有提高工具步骤、唤醒次数或预算，没有新增权限、依赖或任务服务。
 - 未读取或修改真实聊天、记忆、人设、lab 内容或费用账本；测试使用虚构数据和假工具/假模型。
+
