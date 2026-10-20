@@ -7,9 +7,9 @@
 ## 当前状态
 
 - main 为 `95f466eb5cd438490f136fb4003ddfa3b057e9ef`（025 已合并）。Windows 真实使用中，普通英文消息被误报为“输入加上人设和记忆太长，未发送”。
-- `veil_agent.py` 的 `Chat.send()` 把 UTF-8 字节数（含全部工具 schema）直接当 token 数；同文件 `_tool_chat()` 已有根据供应商实际 `prompt_tokens` 校准的保守估算与历史整轮裁剪，但首轮从 1.0 字节/token 开始，未能复用到发送前检查。
-- 仓库没有适用的 Python tokenizer 依赖。检查了 DeepSeek 官方 `deepseek-harness` 的 token-meter（TypeScript 固定字符估算，不适合本地 Python 入口）；本单复用现有请求用量校准，不引入依赖或改费用/上下文上限。
-- 只改长度估算及对应回归；不删记忆、人设、历史或工具，不改变模型配置。
+- `Chat.send()` 将 UTF-8 字节数（含全部工具 schema）直接当 token 数；`_tool_chat()` 也从 1.0 字节/token 起步，虽会在首次模型响应后按供应商的 `prompt_tokens` 校准，但首轮估算可能先被拒绝。
+- 复用本项目已有校准流程，改为统一请求字节统计和保守 0.5 字节/token 初估；供应商返回用量后继续校准。完整工具 schema 保留；只有较早整轮聊天历史会在本次请求裁剪；固定上下文和新输入仍超限时不发送、不保存。
+- 未引入依赖：仓库的 Python requirements 无 tokenizer；检查了 DeepSeek 官方 `deepseek-harness` token-meter（TypeScript、固定字符启发式，README 建议精确用量使用 provider tokenizer），不适用于本地 Python 入口。
 
 ## 验收步骤（Windows）
 
