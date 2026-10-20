@@ -1,6 +1,7 @@
 """Local terminal chat. Private state stays beside this file."""
 import argparse
 import json
+import math
 import os
 import re
 import signal
@@ -541,6 +542,24 @@ def history_keep(total, limit):
     return limit - chunk + 1 + (total - limit - 1) % chunk
 
 
+
+def message_request_bytes(message):
+    return len(json.dumps(message, ensure_ascii=False).encode('utf-8')) + 256
+
+
+def request_byte_size(messages, tools=None):
+    """Approximate the bytes the provider tokenizes, including per-item framing."""
+    message_bytes = sum(message_request_bytes(message) for message in messages)
+    schema_bytes = len(json.dumps(tools or [], ensure_ascii=False).encode('utf-8')) + 256
+    return message_bytes + schema_bytes
+
+
+def estimate_request_tokens(messages, tools=None, calibration=0.5):
+    """Conservative preflight estimate; tool-loop usage calibrates it after a real request."""
+    ratio = max(0.5, min(1.0, calibration))
+    return math.ceil(request_byte_size(messages, tools) * ratio)
+
+
 class Chat:
     def __init__(self, cfg, store, budget, model, memory=None, tools=None, approval=input, output=print):
         self.cfg, self.store, self.budget, self.model = cfg, store, budget, model
@@ -635,11 +654,11 @@ class Chat:
         tool_schema = []
         if self.tool_mode and self.cfg.tools['max_steps'] > 1:
             tool_schema = self.tool_schemas()
-        # UTF-8 byte count is deliberately conservative, with ample chat framing
-        # overhead. Reserve the entire configured input limit, not an average.
+        # The input limit is in tokens, not UTF-8 bytes. Start with the same
+        # conservative byte-to-token floor used by the tool loop; schema bytes
+        # are included but must not be counted one-for-one as tokens.
         def bound(history):
-            return (sum(len(m['content'].encode('utf-8')) + 256 for m in [*head, *history, *tail, user])
-                    + len(json.dumps(tool_schema, ensure_ascii=False).encode('utf-8')) + 256)
+            return estimate_request_tokens([*head, *history, *tail, user], tool_schema)
         limit = self.cfg.provider['max_input_tokens']
         history = list(self.history)
         # Long replies make the window outgrow the limit. Drop the oldest whole
@@ -720,20 +739,16 @@ class Chat:
         next_reservation = None
         autonomy_tool_steps = 0
 
-        # max_input_tokens is a TOKEN limit, but request bytes overcount tokens (roughly 3-4 bytes per token
-        # in any language). After each response the provider reports the real prompt size, so later estimates
-        # scale the bytes by that measured ratio, never below 0.5 (still a 2x margin over a typical text).
-        calibration = 1.0
+        # Start at the same conservative floor used by Chat.send. After the first
+        # response, provider-reported usage calibrates subsequent tool-loop estimates.
+        calibration = 0.5
 
-        def message_bytes(m):
-            return len(json.dumps(m, ensure_ascii=False).encode('utf-8')) + 256
-
-        def schema_bytes(offered):
-            return len(json.dumps(offered or [], ensure_ascii=False).encode('utf-8')) + 256
+        def request_bytes(offered):
+            # Count each message once, including tool-call arguments and reasoning.
+            return request_byte_size(loop_messages, offered)
 
         def request_size(offered):
-            # Count each message once, including tool-call arguments and reasoning.
-            return int(calibration * (sum(message_bytes(m) for m in loop_messages) + schema_bytes(offered)))
+            return math.ceil(calibration * request_bytes(offered))
 
         def fit_history(offered):
             nonlocal history_count
@@ -781,7 +796,7 @@ class Chat:
                     self.budget.settle(next_reservation, step_cfg, 0, 0, 0)
                 break
             reservation = request_id if step == 0 else next_reservation
-            sent_bytes = sum(message_bytes(m) for m in loop_messages) + schema_bytes(offered)
+            sent_bytes = request_bytes(offered)
             try:
                 response = self.model(loop_messages, tools=offered, message_output=True,
                                       max_tokens=step_cfg.max_output_tokens, detail=True)
@@ -912,7 +927,7 @@ class Chat:
                         result, state, summary = '程序拒绝：工具参数不是合法 JSON 对象。', '被拒绝', call.function.name
                     tool_message = {'role': 'tool', 'tool_call_id': call.id, 'content': result}
                     loop_messages.append(tool_message)
-                    history_bytes = calibration * sum(message_bytes(m)
+                    history_bytes = calibration * sum(message_request_bytes(m)
                         for m in loop_messages[history_start:history_start + history_count])
                     if request_size(next_offered) - history_bytes > self.cfg.provider['max_input_tokens']:
                         tool_message['content'] = too_long_result
