@@ -51,8 +51,11 @@ daily_budget_cny = "2"
 
     def autonomous_message_chat(self, calls):
         cfg = replace(self.cfg, tools={'enabled': True, 'max_steps': 8, 'max_output_tokens': 50})
-        response = SimpleNamespace(tool_calls=calls, content='独立活动总结：继续整理实验室。')
-        model = Mock(return_value=(response, 100, 30, 0))
+        first = SimpleNamespace(tool_calls=calls, content='独立活动总结：继续整理实验室。',
+                                model_dump=lambda **_: {'role': 'assistant', 'tool_calls': []})
+        final = SimpleNamespace(tool_calls=[], content=(
+            '决定：发消息告诉 lan\n原因：想分享实验室进展。\n当前关注：实验室整理\n下一步：等 lan 回复。'))
+        model = Mock(side_effect=[(first, 100, 30, 0), (final, 100, 20, 0)])
         return Chat(cfg, self.store, self.budget, model, output=self.hub.output), model
 
     @staticmethod
@@ -77,7 +80,9 @@ daily_budget_cny = "2"
                          [('assistant', text)])
         self.assertEqual([message['content'] for message in chat.history], [text])
         self.assertEqual(len(self.store.read('test/autonomy.jsonl')), 1)
-        self.assertEqual(model.call_count, 1)
+        self.assertEqual(model.call_count, 2)
+        self.assertEqual(controller.rows[-1]['current_focus'], '实验室整理')
+        self.assertEqual(controller.rows[-1]['next_step'], '等 lan 回复。')
         self.assertEqual(self.store.read('test/tools.jsonl')[-1]['state'], '成功')
 
     def test_autonomous_wake_stops_at_three_messages_and_rejects_the_fourth(self):
@@ -93,8 +98,8 @@ daily_budget_cny = "2"
         self.assertEqual(len(self.hub.snapshot(0)['events']), 3)
         tool_rows = self.store.read('test/tools.jsonl')
         self.assertEqual([row['state'] for row in tool_rows], ['成功', '成功', '成功', '被拒绝'])
-        self.assertEqual(model.call_count, 1)
-        self.assertIn('最多主动发送 3 条', controller.rows[-1]['reason'])
+        self.assertEqual(model.call_count, 2)
+        self.assertEqual(controller.rows[-1]['next_step'], '等 lan 回复。')
 
     def test_autonomy_can_do_tool_work_and_send_a_message_in_the_same_wake(self):
         self.activity.set(True)

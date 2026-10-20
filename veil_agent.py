@@ -882,7 +882,9 @@ class Chat:
                 self.output(final)
                 break
             # These calls finish in this response: no follow-up request or reservation.
-            if all(call.function.name == 'send_message' for call in message.tool_calls):
+            # In autonomy the loop continues so Peter can still write the four-line record
+            # (decision, reason, focus, next step) that the next wake is built from.
+            if not autonomy and all(call.function.name == 'send_message' for call in message.tool_calls):
                 errors = []
                 for call_index, call in enumerate(message.tool_calls):
                     if autonomy and autonomy_tool_steps >= 12:
