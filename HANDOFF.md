@@ -1,6 +1,6 @@
 # 交接
 
-更新：2026-10-20 19:35 +08:00 · Claude · 020 合并后补充启动就绪检查
+更新：2026-10-20 19:48 +08:00 · Claude · 020 验收通过；021 工单已写
 
 ## 做到哪
 
@@ -24,8 +24,7 @@
 
 ## 下一步
 
-1. 等待 PR #44 对 Claude/CodeRabbit 增量审查请求的回复。Claude reviewer 指派因 `claude` 非仓库协作者被 GitHub 拒绝；请求评论已留在 PR。
-2. CodeRabbit 首轮功能问题已全部修复并解决，CI 四项通过。按审查结果处理合并；合并后请 lan 按 `STATUS.md` 做真实 Windows 验收，不能以 CI 代替。
+按 `docs/tickets/021-minimal-autonomy.md` 施工 021 最小自主（4B-2），分支 `ticket/021-minimal-autonomy`，基于 main `a18618f`。020 已合并并通过 lan 的 Windows 验收；`.local-tmp/020-worktree` 已过时，不要从那里推送。
 
 ## 注意
 
