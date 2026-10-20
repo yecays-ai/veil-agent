@@ -6,26 +6,42 @@ const vm = require('node:vm');
 const script = fs.readFileSync(path.join(__dirname, '../web/index.html'), 'utf8')
   .split('<script>')[1].split('</script>')[0].replace('setBusy(true);poll();box.focus();', '');
 
-function page() {
+function page(options = {}) {
   let clock = Date.parse('2026-01-01T12:00:00Z'), nextId = 0;
   const timers = new Map();
+  const listeners = new Map();
+  const storage = options.storage || new Map();
+  const recognizers = [];
+  class FakeSpeechRecognition {
+    constructor() { this.lang = ''; this.results = []; recognizers.push(this); }
+    start() { this.onstart?.(); }
+    stop() { this.onend?.(); }
+    abort() { this.onend?.(); }
+  }
   class Element {
-    constructor() { this.children = []; this.dataset = {}; this.style = {}; this.textContent = ''; }
+    constructor(id = '') { this.id = id; this.children = []; this.dataset = {}; this.style = {}; this.textContent = ''; this.value = id === 'speech-language' ? 'zh-CN' : ''; this.scrollHeight = 0; this.attributes = {}; this.handlers = {}; }
     appendChild(e) { e.parent = this; this.children.push(e); }
     insertBefore(e, target) { e.parent = this; this.children.splice(this.children.indexOf(target), 0, e); }
     remove() { this.parent.children.splice(this.parent.children.indexOf(this), 1); }
-    addEventListener() {}
-    setAttribute() {}
+    addEventListener(name, fn) { this.handlers[name] = fn; }
+    setAttribute(name, value) { this.attributes[name] = value; }
+    focus() {}
   }
   const elements = new Map();
   const document = {
-    getElementById(id) { if (!elements.has(id)) elements.set(id, new Element()); return elements.get(id); },
+    getElementById(id) { if (!elements.has(id)) elements.set(id, new Element(id)); return elements.get(id); },
     createElement() { return new Element(); }, querySelectorAll() { return []; },
     documentElement: { setAttribute() {}, removeAttribute() {} },
   };
+  let fetchCount = 0;
   const context = vm.createContext({ document, URLSearchParams,
     location: { search: '', pathname: '/' }, history: {},
     localStorage: { getItem() { return null; } },
+    sessionStorage: { getItem(key) { return storage.has(key) ? storage.get(key) : null; }, setItem(key, value) { storage.set(key, String(value)); }, removeItem(key) { storage.delete(key); } },
+    window: { SpeechRecognition: options.speechSupported === false ? undefined : FakeSpeechRecognition,
+      addEventListener(name, fn) { listeners.set(name, fn); } },
+    fetch() { fetchCount++; return Promise.resolve({ ok: true, json: async () => ({}) }); },
+    crypto: { randomUUID() { return 'fake-request-id'; } },
     Date: class extends Date { static now() { return clock; } },
     setTimeout(fn, delay) { const id = ++nextId; timers.set(id, { at: clock + delay, fn }); return id; },
     clearTimeout(id) { timers.delete(id); },
@@ -33,7 +49,8 @@ function page() {
   vm.runInContext(script, context);
   const run = code => vm.runInContext(code, context);
   return {
-    run, elements, timers,
+    run, elements, timers, storage, recognizers, listeners,
+    fetchCount: () => fetchCount,
     event(kind, text, initial = false, ago = 0) {
       context.event = { kind, text, id: ++nextId, time: new Date(clock - ago).toISOString() };
       run(`receiveEvent(event,${initial})`);
@@ -90,4 +107,69 @@ slow.event('user', 'hello', false, 5000);
 slow.event('assistant', 'already waited');
 assert.equal(slow.messages().length, 2);
 assert.equal(slow.timers.size, 0);
-console.log('Page pacing, Unicode, grouping, order and refresh passed.');
+
+const voice = page();
+voice.run('setBusy(false)');
+voice.elements.get('box').value = 'Peter,';
+voice.elements.get('speech-language').value = 'en-US';
+voice.elements.get('speech-toggle').onclick();
+const recognition = voice.recognizers[0];
+assert.equal(recognition.lang, 'en-US');
+assert.equal(voice.elements.get('box').disabled, true);
+assert.equal(voice.elements.get('speech-language').disabled, true);
+assert.equal(voice.elements.get('send').disabled, true);
+const result = (text, isFinal) => Object.assign([{ transcript: text }], { isFinal });
+recognition.onresult({ results: [result('I wanted to tell you something.', false)] });
+assert.equal(voice.elements.get('box').value, 'Peter, I wanted to tell you something.');
+voice.run('send()');
+assert.equal(voice.fetchCount(), 0, 'recognition must never submit a message');
+recognition.onresult({ results: [result('I wanted to tell you something.', false)] });
+assert.equal(voice.elements.get('box').value, 'Peter, I wanted to tell you something.', 'repeated interim events must not duplicate text');
+recognition.onresult({ results: [result('I wanted to tell you something.', true)] });
+assert.equal(voice.elements.get('box').value, 'Peter, I wanted to tell you something.');
+voice.elements.get('speech-toggle').onclick();
+assert.equal(voice.elements.get('box').disabled, false);
+assert.equal(voice.elements.get('speech-status').textContent, '识别完成，可编辑后发送。');
+assert.equal(voice.elements.get('send').disabled, false);
+assert.equal(voice.storage.get('veil-speech-draft'), 'Peter, I wanted to tell you something.');
+const restored = page({ storage: voice.storage, speechSupported: false });
+assert.equal(restored.elements.get('box').value, 'Peter, I wanted to tell you something.', 'confirmed voice text should survive refresh');
+assert.equal(restored.elements.get('speech-toggle').disabled, true);
+assert.match(restored.elements.get('speech-status').textContent, /不支持/);
+
+const chinese = page();
+chinese.run('setBusy(false)');
+chinese.elements.get('box').value = '你好，';
+chinese.elements.get('speech-language').value = 'zh-CN';
+chinese.elements.get('speech-toggle').onclick();
+chinese.recognizers[0].onresult({ results: [result('今天晚上我准备早点睡觉。', true)] });
+assert.equal(chinese.elements.get('box').value, '你好，今天晚上我准备早点睡觉。');
+chinese.elements.get('speech-toggle').onclick();
+assert.equal(chinese.elements.get('box').value, '你好，今天晚上我准备早点睡觉。', 'final results must append once and keep Chinese order');
+
+const denied = page();
+denied.run('setBusy(false)');
+denied.elements.get('box').value = '已有文字';
+denied.elements.get('speech-toggle').onclick();
+denied.recognizers[0].onerror({ error: 'not-allowed' });
+denied.recognizers[0].onend();
+assert.match(denied.elements.get('speech-status').textContent, /权限被拒绝/);
+assert.equal(denied.elements.get('box').value, '已有文字');
+assert.equal(denied.recognizers.length, 1, 'recognition errors must not auto-retry');
+assert.equal(denied.fetchCount(), 0);
+
+const noSpeech = page();
+noSpeech.run('setBusy(false)');
+noSpeech.elements.get('speech-toggle').onclick();
+noSpeech.recognizers[0].onerror({ error: 'no-speech' });
+noSpeech.recognizers[0].onend();
+assert.match(noSpeech.elements.get('speech-status').textContent, /没有检测到语音/);
+
+(async () => {
+  await voice.run('send()');
+  assert.equal(voice.fetchCount(), 1, 'the existing send path submits only after explicit send');
+  assert.equal(voice.elements.get('box').value, '');
+  assert.equal(voice.storage.has('veil-speech-draft'), false);
+  console.log('Page pacing and speech-input lifecycle, append, error, refresh, and explicit-send checks passed.');
+})().catch(error => { console.error(error); process.exitCode = 1; });
+

@@ -34,8 +34,15 @@ header button:hover{color:var(--text)}
 .approval .status{font-size:14px;color:var(--muted)}
 #typing{align-self:flex-start;color:var(--muted);font-size:14px;padding-left:6px}
 footer{padding:10px 16px 14px;border-top:1px solid var(--line);background:var(--panel)}
-.bar{max-width:780px;margin:0 auto;display:flex;gap:8px;align-items:flex-end}
-textarea{flex:1;font:inherit;resize:none;border:1px solid var(--line);border-radius:12px;padding:9px 12px;background:var(--bg);color:var(--text);max-height:200px;outline:none}
+.bar{max-width:780px;margin:0 auto;display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end}
+.speech-tools{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.speech-tools select,.speech-tools button{font:inherit;font-size:14px;border:1px solid var(--line);border-radius:9px;padding:7px 9px;background:var(--bg);color:var(--text);cursor:pointer}
+.speech-tools button[aria-pressed="true"]{background:var(--warn);border-color:var(--accent)}
+.speech-tools button:disabled,.speech-tools select:disabled{opacity:.55;cursor:default}
+#speech-status{font-size:12px;color:var(--muted);min-width:8em}
+#speech-status[data-state="listening"],#speech-status[data-state="processing"]{color:var(--accent)}
+#speech-status[data-state="error"]{color:#b3402f}
+textarea{flex:1;min-width:0;font:inherit;resize:none;border:1px solid var(--line);border-radius:12px;padding:9px 12px;background:var(--bg);color:var(--text);max-height:200px;outline:none}
 textarea:focus{border-color:var(--accent)}
 #send{font:inherit;border:0;border-radius:12px;padding:9px 20px;background:var(--accent);color:#fff;cursor:pointer}
 #send:disabled{opacity:.45;cursor:default}
@@ -64,6 +71,11 @@ textarea:focus{border-color:var(--accent)}
 </div>
 <div id="log"><div class="col" id="col"></div></div>
 <footer><div class="bar">
+  <div class="speech-tools">
+    <select id="speech-language" aria-label="语音识别语言" aria-describedby="speech-status"><option value="zh-CN">中文</option><option value="en-US">English</option></select>
+    <button id="speech-toggle" type="button" aria-label="开始语音识别" aria-describedby="speech-status" aria-pressed="false" title="开始语音识别">🎙</button>
+    <span id="speech-status" role="status" aria-live="polite" title="浏览器可能将语音发送到在线识别服务；识别结果不会自动发送">语音输入就绪</span>
+  </div>
   <textarea id="box" rows="1" placeholder="说点什么…（Enter 发送，Shift+Enter 换行）"></textarea>
   <button id="send">发送</button>
 </div></footer>
@@ -73,10 +85,103 @@ let token=params.get('t');
 try{if(token)sessionStorage.setItem('veil-t',token);else token=sessionStorage.getItem('veil-t')}catch(e){}
 if(params.has('t'))history.replaceState(null,'',location.pathname);
 const $=id=>document.getElementById(id), col=$('col'), log=$('log'), box=$('box'), sendBtn=$('send');
+const speechButton=$('speech-toggle'), speechLanguage=$('speech-language'), speechStatus=$('speech-status');
+const SpeechRecognition=window.SpeechRecognition||window.webkitSpeechRecognition;
+const speechDraftKey='veil-speech-draft';
+let speechRecognition=null, speechSession=null, speechState='idle', speechStopRequested=false, speechErrorMessage='', speechDraftActive=false;
 let after=0, busy=true, stopped=false, typing=null, sending=false, draftId=null, draftText=null;
 let revealQueue=[], revealTimer=null, roundStartedAt=0, roundHasReply=false, previousMessage=null;
 let pendingApproval=null, activityEnabled=false, exiting=false;
 const GROUP_GAP=15*60*1000;
+function speechIsActive(){return speechState==='listening'||speechState==='processing'||!!speechRecognition}
+function saveSpeechDraft(value){try{sessionStorage.setItem(speechDraftKey,value)}catch(e){}}
+function resizeBox(){box.style.height='auto';box.style.height=Math.min(box.scrollHeight,200)+'px'}
+function renderSpeechText(finalText,interimText=''){
+  const prefix=speechSession.base;
+  const spoken=finalText+interimText;
+  const separator=prefix&&spoken&&speechSession.language==='en-US'&&!/\s$/.test(prefix)?' ':'';
+  box.value=prefix+separator+spoken;
+  resizeBox();
+  if(finalText)saveSpeechDraft(prefix+(prefix&&finalText&&speechSession.language==='en-US'&&!/\s$/.test(prefix)?' ':'')+finalText);
+}
+function setSpeechStatus(state,message){
+  speechState=state;speechStatus.dataset.state=state;speechStatus.textContent=message;
+  const active=speechIsActive();
+  speechButton.setAttribute('aria-pressed',String(active));
+  speechButton.setAttribute('aria-label',active?'停止语音识别':'开始语音识别');
+  speechButton.title=active?'停止语音识别':'开始语音识别';
+  speechLanguage.disabled=active||!SpeechRecognition;
+  box.disabled=active;
+  sendBtn.disabled=busy||revealQueue.length>0||sending||stopped||active;
+}
+try{
+  const savedSpeechDraft=sessionStorage.getItem(speechDraftKey);
+  if(savedSpeechDraft!==null){box.value=savedSpeechDraft;speechDraftActive=true;resizeBox()}
+}catch(e){}
+if(!SpeechRecognition){speechButton.disabled=true;speechLanguage.disabled=true;setSpeechStatus('error','当前浏览器不支持语音识别，可继续键盘输入。')}
+speechButton.onclick=()=>{
+  if(speechRecognition){
+    speechStopRequested=true;
+    setSpeechStatus('processing','正在处理识别结果…');
+    try{speechRecognition.stop()}catch(e){speechRecognition.abort()}
+    return;
+  }
+  if(!SpeechRecognition)return;
+  speechDraftActive=true;saveSpeechDraft(box.value);
+  speechSession={base:box.value,language:speechLanguage.value,finalText:''};
+  speechStopRequested=false;speechErrorMessage='';
+  const recognition=new SpeechRecognition();speechRecognition=recognition;
+  recognition.lang=speechSession.language;recognition.continuous=true;recognition.interimResults=true;
+  recognition.onstart=()=>setSpeechStatus('listening','正在监听…再次点击可停止。');
+  recognition.onresult=event=>{
+    let finalText='',interimText='';
+    for(let i=0;i<event.results.length;i++){
+      const result=event.results[i],transcript=result[0]?.transcript||'';
+      if(result.isFinal)finalText+=transcript;else interimText+=transcript;
+    }
+    speechSession.finalText=finalText;
+    setSpeechStatus('processing','正在处理识别结果…');
+    renderSpeechText(finalText,interimText);
+    if(!speechStopRequested)setSpeechStatus('listening','正在监听…再次点击可停止。');
+  };
+  recognition.onerror=event=>{
+    const messages={
+      'not-allowed':'麦克风权限被拒绝，请在浏览器设置中允许后再试。',
+      'service-not-allowed':'浏览器语音识别服务不可用。',
+      'no-speech':'没有检测到语音，可以继续打字或重试。',
+      'network':'语音识别网络连接失败，可以继续打字。',
+      'audio-capture':'没有可用麦克风，请检查设备设置。',
+      'language-not-supported':'当前浏览器不支持所选识别语言。',
+      'aborted':'语音识别已停止。'
+    };
+    speechErrorMessage=messages[event.error]||'语音识别失败，可以继续打字或重试。';
+    if(event.error==='aborted'&&speechStopRequested)speechErrorMessage='语音识别已停止，可检查文字。';
+    setSpeechStatus('error',speechErrorMessage);
+  };
+  recognition.onend=()=>{
+    const finalText=speechSession?.finalText||'';
+    if(speechSession){renderSpeechText(finalText);if(finalText)saveSpeechDraft(box.value)}
+    speechRecognition=null;speechSession=null;
+    if(speechErrorMessage)setSpeechStatus('error',speechErrorMessage);
+    else if(finalText)setSpeechStatus('idle','识别完成，可编辑后发送。');
+    else if(speechStopRequested)setSpeechStatus('idle','已停止，没有识别到文字。');
+    else setSpeechStatus('idle','没有检测到语音，可以继续打字或重试。');
+  };
+  setSpeechStatus('processing','正在启动语音识别…');
+  try{recognition.start()}catch(e){
+    speechRecognition=null;speechSession=null;
+    setSpeechStatus('error','无法启动语音识别，请检查麦克风权限或稍后重试。');
+  }
+};
+window.addEventListener('pagehide',()=>{
+  if(speechSession){
+    const finalText=speechSession.finalText||'';
+    const prefix=speechSession.base,language=speechSession.language;
+    const separator=prefix&&finalText&&language==='en-US'&&!/\s$/.test(prefix)?' ':'';
+    saveSpeechDraft(prefix+separator+finalText);
+    try{speechRecognition?.abort()}catch(e){}
+  }
+});
 function bubbleDelay(text){const n=Array.from(text).length;return n<=60?1200:n<=200?2400:3600}
 function scrollIfFollowing(action){
   const stick=log.scrollHeight-log.scrollTop-log.clientHeight<80;
@@ -142,7 +247,7 @@ function add(kind,text,id,time){
   if(typing)col.insertBefore(d,typing);else col.appendChild(d);
 }
 function setBusy(b){
-  busy=b;const waiting=b||revealQueue.length>0;sendBtn.disabled=waiting||sending||stopped;
+  busy=b;const waiting=b||revealQueue.length>0;sendBtn.disabled=waiting||sending||stopped||speechIsActive();
   if(waiting&&!typing&&!stopped){typing=document.createElement('div');typing.id='typing';typing.textContent=($('title').textContent||'')+' 正在回复…';col.appendChild(typing)}
   if((!waiting||stopped)&&typing){typing.remove();typing=null}
 }
@@ -218,7 +323,7 @@ async function poll(){
 async function send(text){
   const fromBox=!text;
   text=(text||box.value).trim();
-  if(!text||busy||revealQueue.length||stopped||sending)return;
+  if(!text||busy||revealQueue.length||stopped||sending||speechIsActive())return;
   if(fromBox&&draftText!==text){draftText=text;draftId=crypto.randomUUID()}
   const requestId=fromBox?draftId:crypto.randomUUID();
   sending=true;setBusy(true);
@@ -231,7 +336,11 @@ async function send(text){
         :'发送未成功，输入已保留；可以稍后重新操作。');
     }else{
       if(fromBox){
-        if(box.value.trim()===text){box.value='';box.style.height='auto'}
+        if(box.value.trim()===text){
+          box.value='';resizeBox();
+          try{sessionStorage.removeItem(speechDraftKey)}catch(e){}
+          speechDraftActive=false;
+        }
         draftId=null;draftText=null;
       }
       if(result.duplicate)add('notice','这条消息此前已提交，没有重复发送。');
@@ -241,9 +350,9 @@ async function send(text){
 }
 sendBtn.onclick=()=>send();
 box.addEventListener('keydown',e=>{
-  if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing&&e.keyCode!==229){e.preventDefault();send()}
+  if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing&&e.keyCode!==229){e.preventDefault();if(!speechIsActive())send()}
 });
-box.addEventListener('input',()=>{box.style.height='auto';box.style.height=Math.min(box.scrollHeight,200)+'px'});
+box.addEventListener('input',()=>{resizeBox();if(speechDraftActive)saveSpeechDraft(box.value)});
 document.querySelectorAll('[data-cmd]').forEach(b=>b.onclick=()=>send(b.dataset.cmd));
 $('activity-toggle').onclick=async()=>{
   $('activity-toggle').disabled=true;
@@ -280,4 +389,5 @@ setBusy(true);poll();box.focus();
 </script>
 </body>
 </html>
+
 

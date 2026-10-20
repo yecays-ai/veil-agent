@@ -1,23 +1,25 @@
 # 交接
 
-更新：2026-10-21 · Codex · 工单 028 PR [#59](https://github.com/yecays-ai/veil-agent/pull/59) 已创建；等待 Claude 审查与 Windows 体验验收
+更新：2026-10-21 · Codex · 工单 029 `ticket/029-web-speech-input` 施工中
 
 ## 做到哪
 
-- 已从最新 main `a7ab98718875ac1ecd8b6c1bd855b1beba14465c` 开分支，开工时工作区干净。
-- 已实现 `long_tasks.py` 角色隔离的原子任务状态、只读状态工具、创建/更新工具；`autonomy.py` 跨唤醒注入和 `/autonomy` 摘要；`Chat` 工具循环中的副作用预检查点；能力通知沿用 `capabilities.json`。
-- 任务写入出现不确定中断时保存 pending 操作；自主副作用成功后仍须读取匹配目标，并在后续模型步骤提交证据，才可清除 pending。已有任务状态不会授予文件或记忆权限。
-- 更新了工单 028、`STATUS.md` 和本文件。复用调查记录在工单。
-- 假数据定向验证：`test_long_tasks.py` 8 项、`test_autonomy.py` 11 项、`test_tools.py` 44 项通过（2 项可选集成跳过）；相关模块编译及 `git diff --check` 通过。未做 Windows 网页/真实模型验收。
+- 初始从当时最新 main `a7ab98718875ac1ecd8b6c1bd855b1beba14465c` 建立隔离 worktree；PR #59 后续已合并，当前 GitHub main 为 `15ede99be00c07b1645a7359262e944ad3acb359`。直接 Git fetch 连接 GitHub 超时；通过 GitHub API 核对 PR 状态、当前 main SHA 和文件内容。
+- Lan 已在 Windows Chrome 的原生语音演示页实测工单 A、B 的中文、英文例句均识别出文字；浏览器版本未确认。`SpeechRecognition` 可行性前置条件通过。
+- 复用调查记录在 `docs/tickets/029-web-speech-input.md`：使用浏览器原生接口；annyang 3.1.1 在固定提交 `616fb0e9c4b7355ede19d5909cbcf7b6c9783cac` 下是 MIT 轻量语音命令路由库，不适配本单自由转写输入，因此不引入。
+- 已在 `web/index.html` 加入语言选择、麦克风控制、语音状态、识别文本暂存/最终结果合并、键盘/发送防误触、失败提示，以及语音草稿的 sessionStorage 临时恢复。
+- `node tests/web_pacing.cjs` 通过，覆盖原页面节奏及语音追加去重、停止、权限拒绝、无语音、刷新恢复和显式发送；`node --check tests/web_pacing.cjs` 与 `git diff --check` 通过。Python web suite 未运行：此环境没有可启动的 Python runtime（WindowsApps python alias 无法执行）；CI 待 PR 检查。
+- `STATUS.md` 已记录 028 PR #59 实际合并至 main `15ede99`、029 当前状态、验证分层和 Windows 验收步骤。
 
 ## 下一步
 
-- PR [#59](https://github.com/yecays-ai/veil-agent/pull/59) 已基于 main `a7ab987` 创建，尚未合并；STATUS.md 和本文件已同步更新。
-- 依用户指示不等待 CodeRabbit；用户会安排 Claude 审查。PR 不代表 Lan 已完成 Windows 体验验收。
-- Lan 验收按 `STATUS.md` 的工单 028 步骤 A–E：三阶段任务、首次暂停、服务重启续做、最终完成与后续不重复、聊天让位/权限/费用。
+1. 完成当前 diff 自审并提交；远端 Git fetch 超时，使用 GitHub API 在最新 main `15ede99` 上建立同名远端分支并提交文件。
+2. 开 PR，等待 CI 与 CodeRabbit 检查；只修复功能或安全问题。
+3. 合并后请 Lan 按 `STATUS.md` 的 Windows A–E 步骤验收；代码检查不等于真实 VEIL 体验验收。
 
 ## 注意
 
-- 只处理工单 028；没有提高工具步骤、唤醒次数或预算，没有新增权限、依赖或任务服务。
-- 未读取或修改真实聊天、记忆、人设、lab 内容或费用账本；测试使用虚构数据和假工具/假模型。
+- 浏览器语音识别可能把音频交给在线服务，未承诺离线或本地处理；没有新增 API、付费服务或包依赖。
+- 未改动 `autonomy.py`、`long_tasks.py`、Ombre、记忆或任务工具；未读取真实聊天、记忆或人设。
+- 原工单 028 工作区里的 `STATUS.md`、`HANDOFF.md` 未提交修改未触碰；029 在独立 worktree 施工。
 
