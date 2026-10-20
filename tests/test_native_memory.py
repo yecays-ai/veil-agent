@@ -320,6 +320,33 @@ class OmbreToolGuardTests(unittest.TestCase):
         self.assertNotIn('待删除', self.memory.tags_for('mem001'))
         self.assertEqual(self.store.read('fake/delete-requests.jsonl')[-1]['status'], 'rejected')
 
+    def test_autonomous_delete_recognizes_manual_ombre_deletion(self):
+        self.tools.set_autonomy(True)
+        self.call('trace', {'bucket_id': 'mem001', 'delete': True, 'delete_reason': 'duplicate'})
+        self.path.write_text(self.path.read_text(encoding='utf-8').replace(
+            'tags: ["keep", "待删除"]', 'tags: ["keep", "待删除"]\\ndeleted_at: 2026-10-21'),
+            encoding='utf-8')
+        prompts = []
+        self.backend.calls.clear()
+        self.tools.native.process_pending_deletions(lambda prompt: prompts.append(prompt) or 'y')
+        rows = self.store.read('fake/delete-requests.jsonl')
+        self.assertEqual(rows[-1]['status'], 'approved_external')
+        self.assertEqual(prompts, [])
+        self.assertEqual(self.backend.calls, [])
+
+    def test_autonomous_delete_stops_if_pending_tag_was_removed_in_ombre(self):
+        self.tools.set_autonomy(True)
+        self.call('trace', {'bucket_id': 'mem001', 'delete': True, 'delete_reason': 'duplicate'})
+        self.backend.call('trace', {'bucket_id': 'mem001', 'tags': 'keep'})
+        prompts = []
+        self.backend.calls.clear()
+        notes = self.tools.native.process_pending_deletions(lambda prompt: prompts.append(prompt) or 'y')
+        rows = self.store.read('fake/delete-requests.jsonl')
+        self.assertEqual(rows[-1]['status'], 'rejected')
+        self.assertEqual(prompts, [])
+        self.assertEqual(self.backend.calls, [])
+        self.assertTrue(any('标记已移除' in note for note in notes))
+
     def test_disallowed_ombre_delete_parameters_never_reach_server(self):
         result, state, _ = self.call('trace', {'bucket_id': 'mem001', 'hard_delete': True})
         self.assertEqual(state, '被拒绝')
