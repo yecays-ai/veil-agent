@@ -6,7 +6,7 @@ import unittest
 import urllib.error
 import urllib.request
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from veil_agent import Budget, Chat, Store, load_character, run_chat
 from web_agent import Hub, serve_chat, start_server
@@ -67,6 +67,18 @@ output_cny_per_million = "8"
                 return r.status, json.loads(r.read() or b'{}')
         except urllib.error.HTTPError as exc:
             return exc.code, None
+
+    def test_submission_deduplication_window_is_bounded(self):
+        hub = Hub('Test')
+        with patch('web_agent.MAX_SUBMISSIONS', 2):
+            for text, request_id in (('one', 'one'), ('two', 'two')):
+                hub.busy = False
+                self.assertEqual(hub.submit(text, request_id), 'accepted')
+            self.assertEqual(hub.submit('one', 'one'), 'duplicate')
+            hub.busy = False
+            self.assertEqual(hub.submit('three', 'three'), 'accepted')
+            self.assertEqual(len(hub.submissions), 2)
+            self.assertNotIn('one', hub.submissions)
 
     def wait(self, predicate, seconds=5):
         end = threading.Event()
