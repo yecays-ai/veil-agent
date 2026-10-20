@@ -469,6 +469,13 @@ output_cny_per_million = "8"
         self.assertEqual(reply, 'A fictional reply')
         chat._tool_chat.assert_called_once()
         self.assertEqual(len(chat.tool_schemas()) - 1, len(names))
+        rows, costs = self.store.read('test/chat.jsonl'), self.store.read('costs.jsonl')
+        chat._tool_chat.reset_mock()
+        with self.assertRaises(UserError):
+            chat.send('Please analyze this unusually large report. ' * 1500)
+        chat._tool_chat.assert_not_called()
+        self.assertEqual(self.store.read('test/chat.jsonl'), rows)
+        self.assertEqual(self.store.read('costs.jsonl'), costs)
 
     def test_self_clock_and_costs_use_one_local_date_at_midnight(self):
         self.budget.clock = lambda: '2026-10-19T23:59:00+08:00'
