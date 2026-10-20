@@ -1,9 +1,11 @@
 # 交接
 
-更新：2026-10-20 18:38 +08:00 · Claude · 写好 020 常驻服务工单
+更新：2026-10-20 19:06 +08:00 · Codex · 工单 020 PR #44 待审查与 Windows 验收
 
 ## 做到哪
 
+- 工单 020：`ticket/020-resident-service`，PR #44。已实现分离启动进程、端点复用和过期 endpoint 自恢复；网页显示双状态、持久暂停/恢复与确认退出。实现未引入托盘、开机自启或自主任务。
+- PR #44 定向网页测试 14 项通过（假模型、临时数据）；Windows 真实体验未执行。原工作目录中 017 的未提交内容保持不变，施工在 `.local-tmp/020-worktree` 隔离目录。
 - 019 补充：`tools_agent.py` 的能力清单新增 `messaging`，send_message 上线或关闭时触发一次能力变化记录；新增测试 `test_existing_manifest_announces_send_message_once`。
 
 - 工单 `docs/tickets/019-multi-message.md`；独立 worktree 分支 `ticket/019-multi-message`，基于 main `38b8826`。用户明确要求旧目录及全部未提交改动原样保留，不覆盖、清理、stash 或提交；后续继续在本 worktree 操作。
@@ -19,9 +21,8 @@
 
 ## 下一步
 
-按 `docs/tickets/020-resident-service.md` 施工 020 常驻服务，分支 `ticket/020-resident-service`，基于 main。只做服务、状态和暂停开关，不加任何会自己运行的后台任务；托盘/开机自启动只调查。
-
-先核对 PR #41 的合并状态；合并后按 `STATUS.md` 的 019 步骤安排体验。旧启动目录尚未切到 019，不得切换或覆盖旧目录；启用新版本时仍需保留旧目录和用户文件。
+1. 检查 PR #44 的 Claude/CodeRabbit 评审与 CI，只修会影响功能或安全的问题。
+2. 评审完成且 CI 通过后按仓库流程处理合并；随后请 lan 按 `STATUS.md` 的 020 三步做真实 Windows 验收。自动化结果不等同于验收通过。
 
 ## 注意
 
