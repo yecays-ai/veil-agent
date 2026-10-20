@@ -4,7 +4,7 @@
 
 ## 当前目标
 
-- **工单 031：全仓库只读审计，报告已形成，待 Claude 独立复核及文档 PR 评审。** 基准 main `bbfaa5c392c6e643214f4decc1fcf729f2b2ce24`，GitHub 核实 029/#60、030/#61 与补丁 #62 均已合并。报告见 `docs/reports/031-repository-audit.md`，包含模块/链路、备份恢复、安全维护及 032 最小建议；普通证据见 `docs/reports/031-audit-evidence.md`。确认 12 个根因（P0 1、P1 6、P2 5），**均未修复**；P0 已私下告知，触发细节只保留本机私密附件，不进公共 PR。应先修授权、重启、隐藏与费用边界，再扩展高权限能力。主离线套件 228 项：224 通过、1 项退出时序失败、3 跳过；独立实验代理 8 项通过。完整虚构冷复制恢复包装层状态通过，真实 Ombre 索引/Windows 迁机未验证。未读或修改真实数据、未调用收费模型、未修改功能或测试逻辑。
+- **工单 031：全仓库只读审计，报告已由文档 PR [#63](https://github.com/yecays-ai/veil-agent/pull/63) 提交，待 Claude 独立复核及 PR 评审。** 基准 main `bbfaa5c392c6e643214f4decc1fcf729f2b2ce24`，GitHub 核实 029/#60、030/#61 与补丁 #62 均已合并。报告见 `docs/reports/031-repository-audit.md`，包含模块/链路、备份恢复、安全维护及 032 最小建议；普通证据见 `docs/reports/031-audit-evidence.md`。确认 12 个根因（P0 1、P1 6、P2 5），**均未修复**；P0 已私下告知，触发细节只保留本机私密附件，不进公共 PR。应先修授权、重启、隐藏与费用边界，再扩展高权限能力。主离线套件 228 项：224 通过、1 项退出时序失败、3 跳过；独立实验代理 8 项通过。完整虚构冷复制恢复包装层状态通过，真实 Ombre 索引/Windows 迁机未验证。未读或修改真实数据、未调用收费模型、未修改功能或测试逻辑。
 - **工单 030：自主唤醒可选择发送聊天消息。** PR [#61](https://github.com/yecays-ai/veil-agent/pull/61) 已合并至 main `2ed49e8`；补丁：自主唤醒里发完消息后不再直接结束，多一次模型请求（约 ¥0.01–0.03/次发消息的唤醒）让 Peter 写四行总结，下次唤醒才接得上。实现沿用现有 `send_message` 与网页聊天历史，单次最多三条，并有逐唤醒去重和让位同步保护。Lan 的安全唤醒、刷新/重启、选择不发、限额和聊天/审批回归待 Windows 验收。
 - **工单 029：PR [#60](https://github.com/yecays-ai/veil-agent/pull/60) 已合并至 main `74f59b8`。** 网页中英文语音转文字已由 Lan 在 Chrome 演示页实测；完整 VEIL 网页 A–E 体验仍待验收。
 - **工单 028：PR [#59](https://github.com/yecays-ai/veil-agent/pull/59) 已合并至 main `15ede99`。** 跨自主唤醒长期任务、任务状态与副作用检查点已进入 main；PR 中记录的定向自动化测试通过。Windows 网页体验尚未由 Lan 验收。

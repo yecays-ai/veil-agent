@@ -4,7 +4,7 @@
 
 ## 做到哪
 
-- 分支 `ticket/031-repository-audit`；审计基准 `main bbfaa5c392c6e643214f4decc1fcf729f2b2ce24`。GitHub 已核实 029/#60、030/#61、补丁 #62 合并；Git 直连拉取失败，但接口 main 与本地 HEAD 相同。
+- 文档 PR [#63](https://github.com/yecays-ai/veil-agent/pull/63)，分支 `ticket/031-repository-audit`；审计基准 `main bbfaa5c392c6e643214f4decc1fcf729f2b2ce24`。GitHub 已核实 029/#60、030/#61、补丁 #62 合并；Git 直连拉取失败，但接口 main 与本地 HEAD 相同。
 - `docs/reports/031-repository-audit.md` 为唯一完整报告，包含原工单及新增安全/备份/长期维护范围；普通证据附件 `docs/reports/031-audit-evidence.md`。92 个跟踪文件纳入覆盖、30 个 Python 静态分析；核心链路深读及虚构探针已完成。
 - 12 个确认根因：P0 1、P1 6、P2 5。P0 已私下报告；本机私密附件名为 `031-private-security-evidence.md`，通过本聊天的本地文件链接交付，不在仓库中，禁止复制到公共 PR。**没有修复任何发现。**
 - 主离线测试 228 项：224 通过、1 失败、3 跳过；退出接口返回 200 后 stopped 尚未置位，单项复跑仍失败。假数据预算代理 8/8。Ruff/Bandit/Vulture 已人工复核；Gitleaks 本地全 refs 125 个提交无命中，不代表所有隐私或远端隐藏历史安全。
