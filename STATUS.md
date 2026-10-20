@@ -1,12 +1,13 @@
 # 当前状态
 
-更新：2026-10-21 · Codex · 工单 026 PR #57 已提交；等待 lan/Claude 审查与 Windows 体验验收
+更新：2026-10-21 · Codex · 工单 027 记忆工具验收收尾；分支 ticket/027-memory-tools-closeout
 
 ## 当前目标
 
+- **工单 027：收尾 025 记忆工具验收反馈与留痕。** 已确认并修复：人工批准删除后回执明确说明 lan 已批准；`hold(target_id)` 追加前留存完整 Markdown 快照；`trace` 区分正文、meaning 元数据、记忆缘由与本次操作原因。拒绝和待审批结果保持明确。`dream` 1/3/48 小时窗口、计划 active 状态、标题文字不构成授权及分类/重复行为已核查；未发现其他需要改动实现的问题。`test_native_memory.py` 35 项、`test_memory.py` 38 项通过；Ombre 固定版本的时间筛选假数据核对通过。Windows 部分验收仍待 lan 按下方步骤进行。
 - **工单 024 Ombre 完整版常驻（4B-3）：PR [#53](https://github.com/yecays-ai/veil-agent/pull/53) 已合并；lan 2026-10-21 报告真实 Windows 验收通过。** Ombre 使用每角色本机 HTTP 常驻进程、MCP Token、目录互斥锁和首次启动备份；网页可打开 Ombre 面板，能力变化只提示一次。详见 `docs/tickets/024-ombre-resident.md`。
-- **工单 025 Peter 用上 Ombre 更多记忆工具：PR [#56](https://github.com/yecays-ai/veil-agent/pull/56) 已合并至 main `95f466e`；Windows 真实体验尚未记录。** Ombre 指定工具、删除审批与自主待删除队列、隐藏过滤、完整旧版本查询及向量费用预留已上线。详见工单 025。
-- **工单 026 修复聊天长度预检：PR [#57](https://github.com/yecays-ai/veil-agent/pull/57) 已提交，基于 main `95f466e`。** 发送前估算复用工具循环的保守 token 估算并在真实用量后校准；完整保留人设、记忆、历史和授权工具，只裁剪本次请求中的最旧整轮聊天。`test_chat.py` 39 项、`test_tools.py` 41 项通过（2 项可选集成跳过）；Windows 真实 DeepSeek 体验待 lan 验收。
+- **工单 025 Peter 用上 Ombre 更多记忆工具：PR [#56](https://github.com/yecays-ai/veil-agent/pull/56) 已合并至 main `95f466e`。** lan 报告 trace 修改与 memory_history、dream/pulse、信件、计划及普通聊天删除批准场景已实际跑通；自主待删除拒绝、隐藏保护、anchor/release、信件锁定等仍待 Windows 验收。本次 027 只修复确认的反馈/留痕/字段说明缺口。
+- **工单 026 修复聊天长度预检：PR [#57](https://github.com/yecays-ai/veil-agent/pull/57) 已合并至 main `f0da606`。** 发送前估算复用工具循环的保守 token 估算并在真实用量后校准；完整保留人设、记忆、历史和授权工具，只裁剪本次请求中的最旧整轮聊天。定向测试和 GitHub Actions 通过；Windows 真实 DeepSeek 体验待 lan 验收。
 - **工单 023：PR #50 已合并（main `18ce081`，CodeRabbit 限流，由 Claude 代审）；Windows 体验待验收。** 后续聊天带入当前角色最近一次自主活动摘要，`/cost` 按当前角色统计自主费用。详见 `docs/tickets/023-autonomy-chat-context.md`。
 - **工单 022：PR #49 已合并（main `59c0b20`，CodeRabbit 限流，由 Claude 代审）；Windows 体验待验收。** 修复网页服务继承旧 PATH 导致 npx 检测失败。合并后需退出当前服务再重启，按工单步骤确认文件工具和审批正常。
 - **工单 021 最小自主（4B-2）：代码已合并至 main `6b44de6`。** 184 项自动化测试通过（3 项可选集成跳过），CodeRabbit 两条功能评论已修复并确认解决，3 条定向回归与 GitHub CI 通过；Windows 真实体验待验收。已接入定时唤醒、单独后台费用池、12 工具步骤/10 分钟上限、聊天让位、持久记录、`/autonomy` 和能力变化提示；默认暂停，¥10/日与 ¥300/月总预算不变。详见 `docs/tickets/021-minimal-autonomy.md`。
@@ -16,6 +17,12 @@
 
 1. 使用现有 Peter 数据和工具，发送一段普通英文长消息并收到正常回复；确认记忆、历史与工具仍可用。
 2. 输入明显超过上下文上限的长消息，确认程序提示未发送且本机聊天/记忆保留；缩短后能继续聊天。
+
+## 工单 027 验收步骤（Windows）
+
+1. 用临时测试记忆分别拒绝和批准删除：Peter 收到不同、明确的结果；批准回执说明 lan 已批准，拒绝后记忆保留。自主待审批时确认尚未删除。
+2. 用测试记忆通过 `trace` 和 `hold(target_id)` 修改，再用 `memory_history` 检查完整旧正文及 meaning 元数据、操作原因、why_remembered 是否分开显示。
+3. 按 025 验收剩余项检查隐藏保护、待删除拒绝、`anchor/release`、信件锁定、已关闭计划；用已知创建/活动时间的测试记忆确认 dream 窗口，并检查聊天、lab、审批、预算和 `/cost`。
 
 ## 工单 020 验收步骤（Windows）
 

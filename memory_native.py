@@ -54,7 +54,22 @@ MEMORY_HISTORY = SimpleNamespace(name='memory_history', inputSchema={
     'type': 'object', 'required': ['memory_id'], 'additionalProperties': False,
     'properties': {'memory_id': {'type': 'string', 'description':
         'Stable memory ID from breath_search.'}}},
-    description='Read the exact previous versions VEIL saved before your trace edits. Hidden memories are unavailable.' )
+    description='Read the exact previous versions VEIL saved before trace edits or hold(target_id) additions. '
+                'Hidden memories are unavailable.' )
+
+
+def trace_tool_for_model(tool):
+    """Keep Ombre's schema while adding VEIL-only history context."""
+    schema = json.loads(json.dumps(tool.inputSchema))
+    schema.setdefault('properties', {})['edit_reason'] = {
+        'type': 'string',
+        'description': 'Optional: why you are making this change now. Saved only in VEIL history; not sent to Ombre.',
+    }
+    description = (tool.description.rstrip() + '\n\n'
+        'VEIL fields: content changes the memory body; meaning_append/meaning_replace change its meaning metadata. '
+        'why_remembered says why the memory matters, while edit_reason says why you are changing it now. '
+        'Use edit_reason for the change history; it is stored locally and not sent to Ombre.')
+    return SimpleNamespace(name=tool.name, inputSchema=schema, description=description)
 
 
 class NativeMemoryTools:
@@ -68,7 +83,9 @@ class NativeMemoryTools:
             from veil_agent import UserError
             raise UserError('Ombre 缺少本工单要求的工具：' + '、'.join(sorted(missing)))
         self.ombre_tools = {name: available[name] for name in OMBRE_TOOLS if name in available}
-        self.tools = [HOLD, SEARCH, *self.ombre_tools.values(), MEMORY_HISTORY]
+        model_tools = [trace_tool_for_model(tool) if name == 'trace' else tool
+                       for name, tool in self.ombre_tools.items()]
+        self.tools = [HOLD, SEARCH, *model_tools, MEMORY_HISTORY]
         self.description = DESCRIPTION
         self.autonomy_mode = False
 
@@ -129,7 +146,10 @@ class NativeMemoryTools:
             return '这条记忆还没有由你改动过的旧版本。', '成功', f'历史：{summary}'
         rendered = '\n\n---\n\n'.join(
             f"时间：{row['time']}\n改动字段：{', '.join(row['fields']) or '未记录'}\n"
-            f"理由：{row.get('reason') or '未提供'}\n改动前的完整记忆：\n{row['old_content']}"
+            f"本次操作原因：{row.get('operation_reason') or '未提供'}\n"
+            f"记忆缘由（why_remembered）：{row.get('why_remembered') or '未提供'}\n"
+            + (f"旧版未区分类型的原因字段：{row['reason']}\n" if row.get('reason') else '')
+            + f"改动前的完整记忆：\n{row['old_content']}"
             for row in rows)
         return self._bounded(rendered), '成功', f'历史：{summary}（{len(rows)} 个旧版本）'
 
@@ -174,6 +194,9 @@ class NativeMemoryTools:
         delete = args.get('delete') is True
         if args.get('delete') not in (None, False, True):
             return '程序拒绝：delete 必须是布尔值。', '被拒绝', summary
+        edit_reason = args.get('edit_reason', '')
+        if not isinstance(edit_reason, str) or len(edit_reason) > WHY_LIMIT:
+            return f'程序拒绝：edit_reason 必须是不超过 {WHY_LIMIT} 字的文字。', '被拒绝', summary
         reason = args.get('delete_reason', '')
         if delete and (not isinstance(reason, str) or not reason.strip() or len(reason) > WHY_LIMIT):
             return f'程序拒绝：删除申请必须提供不超过 {WHY_LIMIT} 字的理由。', '被拒绝', summary
@@ -191,9 +214,10 @@ class NativeMemoryTools:
             failure = self._delete(memory_id, summary)
             if failure:
                 return failure, '出错', summary
-            return '已删除；旧版本已留档。', '成功', f'{summary}（旧版本已留档）'
+            return '已获 lan 人工批准并完成删除；旧版本已留档。', '成功', f'{summary}（旧版本已留档）'
         try:
-            safe_args = {key: value for key, value in args.items() if key not in banned}
+            safe_args = {key: value for key, value in args.items()
+                         if key not in (*banned, 'edit_reason')}
             result = self.memory.call('trace', safe_args)
         except Exception:
             return '记忆修改失败；旧版本已留档。', '出错', summary
@@ -201,14 +225,20 @@ class NativeMemoryTools:
         updated = self.memory.content_for(memory_id, refresh=True)
         if updated is not None:
             self.memory.record_native_update(memory_id, updated)
-        return self._bounded(result), '成功', f'{summary}（旧版本已留档）'
+        feedback = (f'{result}\n修改前完整版本（含元数据）已留档；本次操作原因：'
+                    f'{edit_reason.strip() or "未提供"}。正文 content 与含义元数据 meaning_append/meaning_replace 是不同字段。')
+        return self._bounded(feedback), '成功', f'{summary}（旧版本已留档）'
 
-    def _save_version(self, memory_id, args, old):
+    def _save_version(self, memory_id, args, old, *, operation_reason=None):
         try:
-            fields = sorted(key for key in args if key not in {'bucket_id', 'delete_reason'})
+            fields = sorted(key for key in args if key not in {'bucket_id', 'delete_reason', 'edit_reason'})
+            reason = operation_reason
+            if reason is None:
+                reason = args.get('edit_reason') or args.get('delete_reason') or ''
             self.memory.store.append(f'{self.memory.cfg.id}/memory-versions.jsonl', {
                 'memory_id': memory_id, 'fields': fields,
-                'reason': str(args.get('why_remembered') or args.get('delete_reason') or '')[:WHY_LIMIT],
+                'operation_reason': str(reason)[:WHY_LIMIT],
+                'why_remembered': str(args.get('why_remembered') or '')[:WHY_LIMIT],
                 'old_content': old,
             })
             return True
@@ -281,7 +311,9 @@ class NativeMemoryTools:
                       f"理由：{row.get('reason') or '未提供'}。同意删除吗？y/N ")
             accepted = approval is not None and approval(prompt).strip().casefold() == 'y'
             old = self.memory.raw_content_for(memory_id)
-            if old is None or not self._save_version(memory_id, {'delete': accepted}, old):
+            decision_reason = f'自主删除申请：{"同意" if accepted else "拒绝"}'
+            if old is None or not self._save_version(
+                    memory_id, {'delete': accepted}, old, operation_reason=decision_reason):
                 self.memory.messages.put(f'删除申请 #{memory_id} 未处理：旧版本无法安全留档。')
                 continue
             if accepted:
@@ -415,6 +447,12 @@ class NativeMemoryTools:
             updated = merged
             if len(updated.encode('utf-8')) > MERGED_MEMORY_LIMIT_BYTES:
                 return '程序拒绝：合并后超过 Ombre 单条记忆安全上限；原记忆未改动。', '被拒绝', summary
+            old_document = self.memory.raw_content_for(target_id)
+            if old_document is None:
+                return '程序拒绝：无法读取目标记忆的完整原文，未做追加。', '被拒绝', summary
+            if not self._save_version(target_id, {'content': addition, 'why_remembered': why},
+                                      old_document, operation_reason='hold(target_id) 追加'):
+                return '程序拒绝：修改前的完整旧版本无法安全留档，未做追加。', '出错', summary
             text = self.memory.call('trace', {'bucket_id': target_id, 'content': updated})
             stored = self.memory.content_for(target_id, refresh=True)
             preserved = [previous, *(self.search_results[key] for key in source_ids), addition]
@@ -424,7 +462,8 @@ class NativeMemoryTools:
             self.memory.record_native_update(target_id, stored)
             self.search_results[target_id] = stored
             merged_note = f'，并整合 {len(source_ids)} 条相关记忆' if source_ids else ''
-            return '已追加到这条记忆；原文和标题均保留。', '成功', f'更新：{summary}（{target_id}）{merged_note}'
+            return ('已追加到这条记忆；原文和标题均保留，改动前完整版本（含元数据）已留档。',
+                    '成功', f'更新：{summary}（{target_id}）{merged_note}')
         ombre_args = {'content': content.strip(), 'title': title.strip()}
         if why.strip():
             ombre_args['why_remembered'] = why.strip()

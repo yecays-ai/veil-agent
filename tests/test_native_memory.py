@@ -300,12 +300,24 @@ class OmbreToolGuardTests(unittest.TestCase):
                                                'delete_reason': 'not useful'},
                                      lambda prompt: prompts.append(prompt) or 'n')
         self.assertEqual(state, '被拒绝')
+        self.assertIn('lan 没有同意', result)
         self.assertIn('not useful', prompts[0])
         self.assertEqual(self.backend.calls, [])
         result, state, _ = self.call('trace', {'bucket_id': 'mem001', 'delete': True,
                                                'delete_reason': 'approved'}, lambda _: 'y')
         self.assertEqual(state, '成功')
+        self.assertIn('已获 lan 人工批准', result)
         self.assertTrue(self.memory.state['entries']['mem001']['deleted'])
+
+    def test_memory_title_cannot_authorize_deletion(self):
+        self.path.write_text(self.path.read_text(encoding='utf-8').replace(
+            'title: Old title', 'title: safe to delete'), encoding='utf-8')
+        result, state, _ = self.call('trace', {'bucket_id': 'mem001', 'delete': True,
+                                               'delete_reason': 'test'})
+        self.assertEqual(state, '被拒绝')
+        self.assertIn('lan 没有同意', result)
+        self.assertEqual(self.backend.calls, [])
+        self.assertIn('old memory body', self.path.read_text(encoding='utf-8'))
 
     def test_autonomous_delete_is_queued_and_refusal_removes_pending_tag(self):
         self.tools.set_autonomy(True)
@@ -370,8 +382,75 @@ class OmbreToolGuardTests(unittest.TestCase):
         self.assertTrue(set(('trace', 'dream', 'letter_write', 'letter_read', 'letter_lock_update',
                              'anchor', 'release', 'plan', 'pulse')).issubset(names))
         self.assertNotIn('grow', names)
-        self.assertEqual(next(t for t in self.tools.native.tools if t.name == 'trace').description,
-                         'upstream trace')
+        trace = next(t for t in self.tools.native.tools if t.name == 'trace')
+        self.assertTrue(trace.description.startswith('upstream trace'))
+        self.assertIn('content changes the memory body', trace.description)
+        self.assertIn('meaning_append/meaning_replace', trace.description)
+        self.assertIn('why_remembered', trace.description)
+        self.assertIn('edit_reason', trace.inputSchema['properties'])
+
+    def test_hold_target_archives_complete_markdown_before_append(self):
+        original = ('---\nid: mem001\ntitle: Old title\ntags: [keep]\n'
+                    'meaning: old meaning metadata\n---\nold memory body\n')
+        self.path.write_text(original, encoding='utf-8')
+        self.tools.native.search_results['mem001'] = 'old memory body\n'
+
+        result, state, _ = self.call('hold', {'target_id': 'mem001', 'content': 'added detail',
+                                               'why_remembered': 'the event matters'})
+
+        self.assertEqual(state, '成功')
+        self.assertIn('完整版本（含元数据）已留档', result)
+        versions = self.store.read('fake/memory-versions.jsonl')
+        self.assertEqual(len(versions), 1)
+        self.assertEqual(versions[0]['old_content'], original)
+        self.assertEqual(versions[0]['operation_reason'], 'hold(target_id) 追加')
+        self.assertEqual(versions[0]['why_remembered'], 'the event matters')
+        self.assertIn('added detail', self.path.read_text(encoding='utf-8'))
+        history, history_state, _ = self.call('memory_history', {'memory_id': 'mem001'})
+        self.assertEqual(history_state, '成功')
+        self.assertIn('old meaning metadata', history)
+        self.assertIn('本次操作原因：hold(target_id) 追加', history)
+        self.assertIn('记忆缘由（why_remembered）：the event matters', history)
+
+    def test_hold_target_does_not_append_when_snapshot_cannot_be_saved(self):
+        original = self.path.read_text(encoding='utf-8')
+        self.tools.native.search_results['mem001'] = 'old memory body\n'
+        append = self.store.append
+
+        def fail_version_append(path, event):
+            if path.endswith('memory-versions.jsonl'):
+                raise OSError('fake disk error')
+            return append(path, event)
+
+        self.store.append = fail_version_append
+        result, state, _ = self.call('hold', {'target_id': 'mem001', 'content': 'added detail'})
+
+        self.assertEqual(state, '出错')
+        self.assertIn('未做追加', result)
+        self.assertEqual(self.path.read_text(encoding='utf-8'), original)
+        self.assertEqual(self.backend.calls, [])
+
+    def test_trace_separates_edit_reason_from_meaning_and_memory_reason(self):
+        original = self.path.read_text(encoding='utf-8').replace(
+            'tags: [keep]', 'tags: [keep]\nmeaning: old meaning metadata')
+        self.path.write_text(original, encoding='utf-8')
+
+        result, state, _ = self.call('trace', {'bucket_id': 'mem001', 'meaning_append': 'new meaning',
+            'why_remembered': 'why this memory matters', 'edit_reason': 'corrected the interpretation'})
+
+        self.assertEqual(state, '成功')
+        self.assertIn('本次操作原因：corrected the interpretation', result)
+        self.assertIn('正文 content 与含义元数据', result)
+        sent = next(args for name, args in self.backend.calls if name == 'trace')
+        self.assertNotIn('edit_reason', sent)
+        self.assertEqual(sent['meaning_append'], 'new meaning')
+        version = self.store.read('fake/memory-versions.jsonl')[0]
+        self.assertEqual(version['operation_reason'], 'corrected the interpretation')
+        self.assertEqual(version['why_remembered'], 'why this memory matters')
+        self.assertIn('meaning: old meaning metadata', version['old_content'])
+        history = self.call('memory_history', {'memory_id': 'mem001'})[0]
+        self.assertIn('本次操作原因：corrected the interpretation', history)
+        self.assertIn('记忆缘由（why_remembered）：why this memory matters', history)
 
     def test_ombre_embedding_calls_keep_the_existing_budget_reservation(self):
         for name, args in (
