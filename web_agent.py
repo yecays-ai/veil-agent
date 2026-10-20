@@ -36,6 +36,7 @@ class Hub:
         self.events = []
         self.busy = True          # true until the loop is waiting for input
         self.stopped = False
+        self.ready = False        # true once the chat loop first waits for input
         self.cond = threading.Condition()
         self.inbox = queue.Queue()
         self.answers = queue.Queue()
@@ -64,6 +65,7 @@ class Hub:
     def input_fn(self, _prompt=''):
         with self.cond:
             self.busy = False
+            self.ready = True
         while True:
             try:
                 text = self.inbox.get(timeout=0.5)
@@ -129,7 +131,7 @@ class Hub:
     def snapshot(self, after):
         with self.cond:
             return {'events': self.events[after:], 'busy': self.busy, 'stopped': self.stopped,
-                    'name': self.name, 'pending': self.pending,
+                    'name': self.name, 'pending': self.pending, 'ready': self.ready,
                     'activity_enabled': self.activity.enabled()}
 
 
@@ -329,6 +331,7 @@ def main(argv=None):
                                             approval=hub.approval, output=hub.output), hub)
             except UserError as exc:
                 hub.push('error', str(exc))
+                save_startup_error(error_path, str(exc))
                 failed = True
             finally:
                 hub.stop()

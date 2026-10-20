@@ -1,9 +1,10 @@
 # 交接
 
-更新：2026-10-20 19:29 +08:00 · Claude · 020 审查补充启动失败提示
+更新：2026-10-20 19:35 +08:00 · Claude · 020 合并后补充启动就绪检查
 
 ## 做到哪
 
+- 020 补充：`Hub.ready`（首次等待输入时置位），启动器新起服务时用 `read_endpoint(require_ready=True)`；内层 UserError 也写 `web_service_error.txt`。未修：用其他角色启动时会复用正在运行的 Peter 服务。
 - Claude 审查（PR #44）：补充启动失败原因弹窗（`web_service_error.txt`，启动器 `startup_error()`）和测试 `test_detached_service_leaves_startup_reason_for_launcher`。
 - 工单 020：`ticket/020-resident-service`，PR #44。已实现分离启动进程、端点复用和过期 endpoint 自恢复；网页显示双状态、持久暂停/恢复与确认退出。实现未引入托盘、开机自启或自主任务。
 - PR #44 定向网页测试 15 项通过（假模型、临时数据）；最新 CI 四项全通过。CodeRabbit 首轮两条功能评论已修复、回复并解决线程。已在 PR 评论请求 Claude 和 CodeRabbit 增量审查，目前无后续回复；GitHub 拒绝将 `claude` 作为 reviewer（非仓库协作者）。Windows 真实体验未执行。

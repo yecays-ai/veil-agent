@@ -336,6 +336,35 @@ class PacingTests(unittest.TestCase):
 
 
 class StartupErrorTests(unittest.TestCase):
+    def test_launcher_waits_until_chat_loop_is_ready(self):
+        import web_launcher
+        with tempfile.TemporaryDirectory() as tmp:
+            hub = Hub('Test', ActivityState(Path(tmp) / 'state.json'))
+            port = free_port()
+            server = start_server(hub, TOKEN, port)
+            self.addCleanup(server.server_close)
+            self.addCleanup(server.shutdown)
+            endpoint = Path(tmp) / 'web_service.json'
+            endpoint.write_text(json.dumps({'port': port, 'token': TOKEN}), encoding='utf-8')
+            with patch.object(web_launcher, 'ENDPOINT', endpoint):
+                self.assertIsNone(web_launcher.read_endpoint(require_ready=True))
+                self.assertIsNotNone(web_launcher.read_endpoint())
+                waiter = threading.Thread(target=lambda: self.assertRaises(EOFError, hub.input_fn))
+                waiter.start()
+                self.assertTrue(self.wait_for(lambda: hub.snapshot(0)['ready']))
+                self.assertIsNotNone(web_launcher.read_endpoint(require_ready=True))
+                hub.stop()
+                waiter.join(5)
+
+    def wait_for(self, condition):
+        import time
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if condition():
+                return True
+            time.sleep(0.05)
+        return False
+
     def test_detached_service_leaves_startup_reason_for_launcher(self):
         import web_agent
         import web_launcher
