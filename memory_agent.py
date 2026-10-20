@@ -59,6 +59,7 @@ class MCP:
         async with streamablehttp_client(self.url, headers=headers) as (read, write, _):
             async with ClientSession(read, write) as session:
                 await session.initialize()
+                self.tool_specs = (await session.list_tools()).tools
                 self.ready.set_result(True)
                 while True:
                     job = await self.requests.get()
@@ -80,6 +81,9 @@ class MCP:
         result = Future()
         self.loop.call_soon_threadsafe(self.requests.put_nowait, (name, args, result))
         return result.result(timeout=90)
+
+    def list_tools(self):
+        return tuple(getattr(self, 'tool_specs', ()))
 
     def close(self):
         if self.thread.is_alive():
@@ -326,8 +330,14 @@ class Memory:
     def call(self, name, args):
         self.last_tool = name
         reservation = None
-        if name in {'hold', 'breath_search', 'feel'} or (name == 'trace' and args.get('content') is not None):
-            # Memory writes and searches may embed content; reserve conservatively
+        if (name in {'hold', 'breath_search', 'feel'}
+                or (name == 'trace' and args.get('content') not in (None, ''))
+                or (name == 'trace' and any(args.get(key) for key in
+                    ('old_str', 'new_str', 'meaning_append', 'meaning_replace')))
+                or (name == 'plan' and args.get('content'))
+                or (name == 'letter_write' and args.get('content'))
+                or (name == 'letter_read' and args.get('query'))):
+            # Ombre writes and semantic searches may embed content; reserve conservatively
             # for the upstream SDK's initial attempt plus two internal retries.
             tokens = 12 * max(8192, len(json.dumps(args, ensure_ascii=False).encode('utf-8')) + 2048)
             reservation = self.budget.estimate(self.cfg.id, self.cfg.memory['model'], tokens,
@@ -415,6 +425,74 @@ class Memory:
         """Return exact stored content, never a rendered search snippet."""
         _, content = self.bucket_details(memory_id, refresh=refresh)
         return content
+
+    def raw_content_for(self, memory_id):
+        """Return the complete role-local Markdown file for an exact memory ID."""
+        if not isinstance(memory_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', memory_id):
+            return None
+        vault = (self.store.root / self.cfg.id / 'memory').resolve()
+        try:
+            candidates = sorted(vault.rglob('*.md'), key=lambda path: (
+                0 if path.stem == memory_id or path.stem.endswith('_' + memory_id) else 1,
+                path.as_posix()))
+            for path in candidates:
+                if path.is_symlink() or not path.resolve().is_relative_to(vault):
+                    continue
+                raw = path.read_text(encoding='utf-8')
+                lines = raw.splitlines()
+                if not lines or lines[0].strip() != '---':
+                    continue
+                end = next((i for i, line in enumerate(lines[1:], 1) if line.strip() == '---'), len(lines))
+                metadata = {}
+                for line in lines[1:end]:
+                    key, sep, value = line.partition(':')
+                    if sep and key.strip() in {'id', 'title', 'name'}:
+                        metadata[key.strip()] = self._frontmatter_scalar(value)
+                if metadata.get('id') == memory_id or (not metadata.get('id') and
+                        (path.stem == memory_id or path.stem.endswith('_' + memory_id))):
+                    return raw
+        except OSError:
+            return None
+        return None
+
+    def tags_for(self, memory_id):
+        raw = self.raw_content_for(memory_id)
+        if raw is None:
+            return []
+        lines = raw.splitlines()
+        end = next((i for i, line in enumerate(lines[1:], 1) if line.strip() == '---'), len(lines)) \
+            if lines and lines[0].strip() == '---' else 0
+        for index, line in enumerate(lines[1:end], start=1):
+            key, sep, value = line.partition(':')
+            if not sep or key.strip() != 'tags':
+                continue
+            value = value.strip()
+            if value:
+                try:
+                    parsed = ast.literal_eval(value)
+                    if isinstance(parsed, (list, tuple)):
+                        return [str(tag) for tag in parsed if str(tag).strip()]
+                except (SyntaxError, ValueError):
+                    pass
+                return [tag.strip().strip("'\"") for tag in value.strip('[]').split(',') if tag.strip()]
+            result = []
+            for item in lines[index + 1:end]:
+                if not item.strip():
+                    continue
+                match = re.match(r'^\s+-\s*(.+?)\s*$', item)
+                if not match:
+                    break
+                result.append(match.group(1).strip("'\""))
+            return result
+        return []
+
+    def hidden_ids(self):
+        with self.mutex:
+            hidden = {key for key, row in self.state['entries'].items() if row.get('hidden')}
+            return hidden | set(self.state['sources'].values())
+
+    def is_hidden(self, memory_id):
+        return memory_id in self.hidden_ids()
 
     def record_native_update(self, memory_id, content):
         """Keep the local command index in step with a lossless native update."""
@@ -803,4 +881,5 @@ class Memory:
         self.persist()
         self.messages.put(f'🗑 {self.cfg.name} 的记忆已删除：{title[:40]}')
         return f'已删除：{title}。不能用 /restore 恢复。{SOFT_DELETE_NOTE}'
+
 
