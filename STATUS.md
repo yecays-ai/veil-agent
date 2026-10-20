@@ -1,10 +1,11 @@
 # 当前状态
 
-更新：2026-10-21 · Codex · 工单 027 PR #58 已提交；Windows 部分验收待 lan 完成
+更新：2026-10-21 · Codex · 工单 028 施工中，分支 `ticket/028-long-task-resume`；PR 待创建
 
 ## 当前目标
 
-- **工单 027：PR [#58](https://github.com/yecays-ai/veil-agent/pull/58) 已提交。** 收尾 025 记忆工具验收反馈与留痕：人工批准删除后回执明确说明 lan 已批准；`hold(target_id)` 追加前留存完整 Markdown 快照；`trace` 区分正文、meaning 元数据、记忆缘由与本次操作原因。拒绝和待审批结果保持明确。`dream` 1/3/48 小时窗口、计划 active 状态、标题文字不构成授权及分类/重复行为已核查；未发现其他需要改动实现的问题。`test_native_memory.py` 35 项、`test_memory.py` 38 项通过；Ombre 固定版本的时间筛选假数据核对通过。Windows 部分验收仍待 lan 按下方步骤进行。
+- **工单 028：跨自主唤醒长期任务续做，施工中。** 在 `ticket/028-long-task-resume` 从 main `a7ab987` 开工；新增每角色原子任务状态、创建/更新工具、自主唤醒上下文、逐副作用检查点、`/autonomy` 摘要和一次性能力通知。`test_long_tasks.py` 8 项、`test_autonomy.py` 11 项、`test_tools.py` 44 项通过（2 项可选集成跳过），相关文件编译通过。下一步自审改动并创建 PR；PR 与评审状态随后补入。真实 Windows 网页流程尚未验收。
+- **工单 027：PR [#58](https://github.com/yecays-ai/veil-agent/pull/58) 已合并至 main `a7ab987`。** 收尾 025 记忆工具反馈与留痕：人工批准删除后回执明确说明 lan 已批准；`hold(target_id)` 追加前留存完整旧版；`trace` 区分正文、meaning 元数据、记忆缘由和本次操作原因。拒绝和待审批结果明确；dream 窗口、计划 active、标题文字不构成授权及分类/重复行为已核查。定向测试和固定 Ombre 时间窗口假数据核对通过。该单 Windows 验收状态未记录，需按下方步骤确认。
 - **工单 024 Ombre 完整版常驻（4B-3）：PR [#53](https://github.com/yecays-ai/veil-agent/pull/53) 已合并；lan 2026-10-21 报告真实 Windows 验收通过。** Ombre 使用每角色本机 HTTP 常驻进程、MCP Token、目录互斥锁和首次启动备份；网页可打开 Ombre 面板，能力变化只提示一次。详见 `docs/tickets/024-ombre-resident.md`。
 - **工单 025 Peter 用上 Ombre 更多记忆工具：PR [#56](https://github.com/yecays-ai/veil-agent/pull/56) 已合并至 main `95f466e`。** lan 报告 trace 修改与 memory_history、dream/pulse、信件、计划及普通聊天删除批准场景已实际跑通；自主待删除拒绝、隐藏保护、anchor/release、信件锁定等仍待 Windows 验收。本次 027 只修复确认的反馈/留痕/字段说明缺口。
 - **工单 026 修复聊天长度预检：PR [#57](https://github.com/yecays-ai/veil-agent/pull/57) 已合并至 main `f0da606`。** 发送前估算复用工具循环的保守 token 估算并在真实用量后校准；完整保留人设、记忆、历史和授权工具，只裁剪本次请求中的最旧整轮聊天。定向测试和 GitHub Actions 通过；Windows 真实 DeepSeek 体验待 lan 验收。
@@ -12,6 +13,12 @@
 - **工单 022：PR #49 已合并（main `59c0b20`，CodeRabbit 限流，由 Claude 代审）；Windows 体验待验收。** 修复网页服务继承旧 PATH 导致 npx 检测失败。合并后需退出当前服务再重启，按工单步骤确认文件工具和审批正常。
 - **工单 021 最小自主（4B-2）：代码已合并至 main `6b44de6`。** 184 项自动化测试通过（3 项可选集成跳过），CodeRabbit 两条功能评论已修复并确认解决，3 条定向回归与 GitHub CI 通过；Windows 真实体验待验收。已接入定时唤醒、单独后台费用池、12 工具步骤/10 分钟上限、聊天让位、持久记录、`/autonomy` 和能力变化提示；默认暂停，¥10/日与 ¥300/月总预算不变。详见 `docs/tickets/021-minimal-autonomy.md`。
 - **020 常驻服务（4B-1）：PR #44、#45 已合并（main `a18618f`），lan 2026-10-20 真实 Windows 验收通过。** 无持续黑窗口、同一服务回连、页面退出入口及双状态/持久暂停；本单不运行自主任务。
+
+## 工单 028 验收步骤（Windows）
+
+1. 在网页让 Peter 建立三部分 lab 学习任务，查看 `/autonomy` 的名称、状态、已完成工作和下一步；第一次自主活动只完成第一部分，确认任务仍为 active。
+2. 正常退出并重启服务；确认任务和第一部分仍在。让之后的自主活动完成第二、第三部分，核对没有重复写入，任务为 completed，后续唤醒不再继续此任务。
+3. 任务进行中发聊天消息并暂停/恢复自主活动，确认聊天和进度正常；检查 `/cost`、文件权限、记忆审批及 Peter/Ghost 任务隔离。
 
 ## 工单 026 验收步骤（Windows）
 

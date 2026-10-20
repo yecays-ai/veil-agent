@@ -80,6 +80,31 @@ daily_budget_cny = "2"
         self.assertIn('等待新信息', context)
         self.assertIn('不是用户消息', context)
 
+    def test_long_task_survives_controller_restart_and_is_in_autonomy_status(self):
+        _, state, _ = self.chat.long_tasks.invoke('long_task_update', {
+            'action': 'create', 'title': 'Three-part study', 'goal': 'Write three parts across wakes.'})
+        self.assertEqual(state, '成功')
+        task_id = self.chat.long_tasks.read()['task_id']
+        _, state, _ = self.chat.long_tasks.invoke('long_task_update', {
+            'action': 'update', 'task_id': task_id,
+            'progress_update': 'Part one is saved in lab/part-one.md.',
+            'next_step': 'Write part two.'})
+        self.assertEqual(state, '成功')
+
+        restarted = AutonomyController(self.chat, self.hub)
+        context = restarted._context()
+        self.assertIn(task_id, context)
+        self.assertIn('Part one is saved in lab/part-one.md.', context)
+        self.assertIn('Write part two.', context)
+        shown = restarted.command()
+        self.assertIn('长期任务：Three-part study（active）', shown)
+        self.assertIn('下一步：Write part two.', shown)
+
+        self.chat.long_tasks.invoke('long_task_update', {
+            'action': 'update', 'task_id': task_id, 'status': 'completed',
+            'progress_update': 'All three verified parts are present in lab/part-one.md through part-three.md.'})
+        self.assertNotIn(task_id, restarted._context())
+
     def test_cost_display_counts_autonomy_for_every_character(self):
         peter = replace(self.cfg, id='peter', name='Peter')
         ghost = replace(self.cfg, id='ghost', name='Ghost')

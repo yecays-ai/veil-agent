@@ -571,7 +571,14 @@ class Chat:
         self.memory = memory
         self.tools, self.approval, self.output = tools, approval, output
         self.pending_capability_event = tools.capability_event if tools else None
-        self.tool_mode = bool((cfg.tools and cfg.tools.get('enabled', True)) or (tools and tools.tools))
+        from long_tasks import LongTaskStore
+        self.long_tasks = LongTaskStore(store, cfg.id)
+        self.task_tools_enabled = bool(cfg.tools and cfg.tools.get('max_steps', 1) > 1)
+        self.tool_mode = bool((cfg.tools and cfg.tools.get('enabled', True)) or (tools and tools.tools)
+                              or self.task_tools_enabled)
+        if self.task_tools_enabled and tools and hasattr(tools, 'announce_long_tasks'):
+            tools.announce_long_tasks()
+            self.pending_capability_event = tools.capability_event
         self.sent_messages = []
         self.reply_displayed = False
         self.autonomy_mode = False
@@ -583,7 +590,13 @@ class Chat:
 
     def tool_schemas(self):
         from tools_agent import permitted_tools
-        return [*permitted_tools(self.tools.tools if self.tools else []), SEND_MESSAGE]
+        task_tools = [{'type': 'function', 'function': {
+            'name': tool.name, 'description': tool.description, 'parameters': tool.inputSchema}}
+            for tool in self.long_tasks.tools] if self.task_tools_enabled else []
+        existing_tools = permitted_tools(self.tools.tools if self.tools else [])
+        messaging = [SEND_MESSAGE] if ((self.cfg.tools and self.cfg.tools.get('enabled', True))
+                                        or (self.tools and self.tools.tools)) else []
+        return [*existing_tools, *task_tools, *messaging]
 
     def send_message(self, arguments, request_id):
         if self.autonomy_mode:
@@ -630,6 +643,7 @@ class Chat:
         self.autonomy_interrupted = False
         self.autonomy_step_limited = False
         self.autonomy_budget_limited = False
+        self.long_tasks.begin_tool_run()
         if not self.pending_capability_event and self.tools:
             self.pending_capability_event = self.tools.capability_event
         recalled = self.memory.context(text) if self.memory else []
@@ -652,7 +666,8 @@ class Chat:
         tail.append({'role': 'system', 'content': changing})
         user = {'role': 'user', 'content': text}
         tool_schema = []
-        if self.tool_mode and self.cfg.tools['max_steps'] > 1:
+        tool_config = self.cfg.tools or {}
+        if self.tool_mode and tool_config.get('max_steps', 1) > 1:
             tool_schema = self.tool_schemas()
         # The input limit is in tokens, not UTF-8 bytes. Start with the same
         # conservative byte-to-token floor used by the tool loop; schema bytes
@@ -678,7 +693,8 @@ class Chat:
         messages = [*head, *history, *tail, user]
         tool_summaries = []
         with saving():
-            tool_cfg = (replace(self.cfg, max_output_tokens=self.cfg.tools.get('max_output_tokens', self.cfg.max_output_tokens))
+            tool_cfg = (replace(self.cfg, max_output_tokens=(self.cfg.tools or {}).get(
+                            'max_output_tokens', self.cfg.max_output_tokens))
                         if self.tool_mode else self.cfg)
             request_id, _ = self.budget.reserve(tool_cfg)
             if not autonomy:
@@ -766,8 +782,10 @@ class Chat:
                 self.trim_note = (f'（为了不超出长度上限，这次只带了最近 {kept} 轮原文；'
                                   '更早的聊天仍保存在本机，长期记忆不受影响。）')
 
-        max_steps = min(self.cfg.tools['max_steps'], 12) if autonomy else self.cfg.tools['max_steps']
+        configured_steps = (self.cfg.tools or {}).get('max_steps', 1)
+        max_steps = min(configured_steps, 12) if autonomy else configured_steps
         for step in range(max_steps):
+            self.long_tasks.set_tool_step(step)
             if autonomy and autonomy_tool_steps >= 12:
                 self.autonomy_step_limited = True
                 final = '自主活动达到每次 12 个工具步骤上限。'
@@ -919,8 +937,27 @@ class Chat:
                             args = json.loads(call.function.arguments)
                             if not isinstance(args, dict):
                                 raise ValueError('arguments must be an object')
-                            if self.tools:
-                                result, state, summary = self.tools.invoke(call.function.name, args, self.approval)
+                            if self.long_tasks.handles(call.function.name):
+                                result, state, summary = self.long_tasks.invoke(call.function.name, args,
+                                                                                self.approval)
+                            elif self.tools:
+                                summary = (self.tools.preview_summary(call.function.name, args)
+                                           if hasattr(self.tools, 'preview_summary') else call.function.name)
+                                checkpoint = None
+                                blocked = None
+                                if self.long_tasks.is_side_effect(call.function.name):
+                                    blocked, checkpoint_started = self.long_tasks.before_tool(
+                                        call.function.name, summary, autonomy)
+                                    if checkpoint_started:
+                                        checkpoint = summary
+                                if blocked:
+                                    result, state = blocked, '被拒绝'
+                                else:
+                                    result, state, summary = self.tools.invoke(call.function.name, args,
+                                                                               self.approval)
+                                    if checkpoint is not None:
+                                        self.long_tasks.finish_tool(call.function.name, summary, state)
+                                self.long_tasks.observe_tool_result(call.function.name, summary, state)
                             else:
                                 result, state, summary = '程序拒绝：工具未开放。', '被拒绝', call.function.name
                     except (ValueError, TypeError):

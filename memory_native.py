@@ -532,6 +532,11 @@ class ToolSet:
     def announce_autonomy(self):
         self.files.announce_autonomy()
 
+    def announce_long_tasks(self):
+        announce = getattr(self.files, 'announce_long_tasks', None)
+        if announce:
+            announce()
+
     def invoke(self, name, args, approval=input):
         if self.native.handles(name):
             return self.native.invoke(name, args, approval)

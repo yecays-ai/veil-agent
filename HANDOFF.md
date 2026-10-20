@@ -1,21 +1,22 @@
 # 交接
 
-更新：2026-10-21 · Codex · 工单 027 PR #58 已提交
+更新：2026-10-21 · Codex · 工单 028 分支 `ticket/028-long-task-resume`；PR 待创建
 
 ## 做到哪
 
-- 最新 main 已通过 GitHub 与本地 `origin/main` 核实为 `f0da606ac9b36b68ffeaf94b55d6a79c048c8068`；施工分支 `ticket/027-memory-tools-closeout` 从该提交创建。直接 fetch 因 GitHub 连接重置失败，未改写现有分支。
-- 工单 027 PR [#58](https://github.com/yecays-ai/veil-agent/pull/58) 修复人工批准删除回执；`hold(target_id)` 覆盖前先追加保存完整 Markdown 旧版本；trace 工具说明和历史分开记录正文、meaning 元数据、why_remembered 与本次操作原因。
-- 已核查 Ombre 固定提交 `115d831`：dream 普通近期桶看 `created` 或 `last_active`，默认 48 小时并把输入范围限制在 1–336 小时；plan、固定准则和特定候选有单独返回规则。计划列表只含 `status=active`。未发现窗口/计划筛选错误。
-- 标题/正文文字不能批准删除；分类与重复识别由 Ombre 负责，VEIL 不自动删除或整合真实记忆。
-- 本地验证：`test_native_memory.py` 35 项、`test_memory.py` 38 项通过；Ombre 窗口 helper 对 1/3/48 小时假时间样例通过；编译及 diff 检查通过。第一次测试因沙箱默认临时目录不可写，改用仓库内临时位置后通过。
+- 已从最新 main `a7ab98718875ac1ecd8b6c1bd855b1beba14465c` 开分支，开工时工作区干净。
+- 已实现 `long_tasks.py` 角色隔离的原子任务状态、只读状态工具、创建/更新工具；`autonomy.py` 跨唤醒注入和 `/autonomy` 摘要；`Chat` 工具循环中的副作用预检查点；能力通知沿用 `capabilities.json`。
+- 任务写入出现不确定中断时保存 pending 操作；自主副作用成功后仍须读取匹配目标，并在后续模型步骤提交证据，才可清除 pending。已有任务状态不会授予文件或记忆权限。
+- 更新了工单 028、`STATUS.md` 和本文件。复用调查记录在工单。
+- 假数据定向验证：`test_long_tasks.py` 8 项、`test_autonomy.py` 11 项、`test_tools.py` 44 项通过（2 项可选集成跳过）；相关模块编译及 `git diff --check` 通过。未做 Windows 网页/真实模型验收。
 
 ## 下一步
 
-- 核对 PR #58 的最新 CI 与评论；功能和安全问题修完且 CI 通过后按授权合并。
-- 合并后请 lan 按 STATUS 的 Windows 步骤完成体验验收。真实 Windows 网页、用户数据和付费模型未在本环境验收。
+- 自审完整改动，创建提交、推送并开一个 PR；在同一 PR 更新本文件内 PR 地址与状态。
+- 依用户指示不等待 CodeRabbit；用户会安排 Claude 审查。PR 不代表 Lan 已完成 Windows 体验验收。
+- Lan 验收按 `STATUS.md` 的工单 028 步骤 A–E：三阶段任务、首次暂停、服务重启续做、最终完成与后续不重复、聊天让位/权限/费用。
 
 ## 注意
 
-- 未读取或改写真实记忆、聊天、人设或账本；所有新增测试均使用临时假数据与假后端。
-- 修改不增加模型调用、工具权限或费用。
+- 只处理工单 028；没有提高工具步骤、唤醒次数或预算，没有新增权限、依赖或任务服务。
+- 未读取或修改真实聊天、记忆、人设、lab 内容或费用账本；测试使用虚构数据和假工具/假模型。

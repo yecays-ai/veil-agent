@@ -291,6 +291,26 @@ class ToolPolicyTests(unittest.TestCase):
         reopened.announce_autonomy()
         self.assertIsNone(reopened.capability_event)
 
+    def test_long_task_capability_is_announced_once_and_survives_capability_refresh(self):
+        store = Store(self.root / 'data')
+        manager = FilesystemTools.__new__(FilesystemTools)
+        manager.cfg, manager.store, manager.folder_name = SimpleNamespace(id='test'), store, 'workspace'
+        manager.cap_path = self.root / 'data' / 'test' / 'capabilities.json'
+        manager.capability_event, manager.enabled = None, True
+        manager._record_capabilities(['read_text_file'])
+        manager.consume_capability_event()
+        manager.announce_long_tasks()
+        self.assertIn('新增长期任务能力', manager.capability_event)
+        manager.consume_capability_event()
+
+        reopened = FilesystemTools.__new__(FilesystemTools)
+        reopened.cfg, reopened.store, reopened.folder_name = manager.cfg, store, 'workspace'
+        reopened.cap_path, reopened.capability_event, reopened.enabled = manager.cap_path, None, True
+        reopened._record_capabilities(['read_text_file'])
+        self.assertTrue(json.loads(reopened.cap_path.read_text(encoding='utf-8'))['long_tasks_announced'])
+        reopened.announce_long_tasks()
+        self.assertIsNone(reopened.capability_event)
+
     def test_resident_memory_capability_is_announced_once(self):
         store = Store(self.root / 'data')
         def manager():

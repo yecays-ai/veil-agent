@@ -289,7 +289,8 @@ class FilesystemTools:
                                              if self.capability_event else message)
             row = {**core, 'pending_event': self.capability_event,
                    'memory_tools': previous.get('memory_tools', []) if previous else [],
-                   'autonomy_announced': bool(previous and previous.get('autonomy_announced'))}
+                   'autonomy_announced': bool(previous and previous.get('autonomy_announced')),
+                   'long_tasks_announced': bool(previous and previous.get('long_tasks_announced'))}
             if previous != row:
                 self.cap_path.parent.mkdir(parents=True, exist_ok=True)
                 temporary = self.cap_path.with_suffix('.json.tmp')
@@ -336,6 +337,33 @@ class FilesystemTools:
             self.enabled = False
             from veil_agent import UserError
             raise UserError('能力清单无法更新，未开启自主活动；请保留 data 文件夹。') from exc
+
+    def announce_long_tasks(self):
+        if getattr(self, 'cap_path', None) is None:
+            return
+        try:
+            row = json.loads(self.cap_path.read_text(encoding='utf-8')) if self.cap_path.exists() else {}
+            if row.get('long_tasks_announced'):
+                self.capability_event = row.get('pending_event')
+                return
+            event = ('新增长期任务能力：你可以保存一项当前任务，记录已确认进度与下一步，'
+                     '并在后续自主活动或服务重启后继续；原有预算、工具权限与审批不变。')
+            previous_event = row.get('pending_event')
+            if isinstance(previous_event, str) and previous_event and event not in previous_event:
+                event = previous_event + '\n' + event
+            row['long_tasks_announced'] = True
+            row['pending_event'] = event
+            temporary = self.cap_path.with_suffix('.json.tmp')
+            with temporary.open('w', encoding='utf-8', newline='\n') as handle:
+                handle.write(json.dumps(row, ensure_ascii=False, indent=2))
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, self.cap_path)
+            self.capability_event = event
+        except Exception as exc:
+            self.enabled = False
+            from veil_agent import UserError
+            raise UserError('长期任务能力通知无法安全保存，工具已停止；请保留 data 文件夹。') from exc
 
     def _description(self, names):
         if not names:
