@@ -8,9 +8,11 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from veil_agent import Chat, Budget, Store, build_self_description, load_character, make_model, run_chat, UserError
+from veil_agent import (Chat, Budget, Store, build_self_description, estimate_request_tokens,
+                        load_character, make_model, run_chat, UserError)
 
 
 def sent_facts(messages):
@@ -414,7 +416,7 @@ output_cny_per_million = "8"
         history = [m for m in sent[2:-2]]
         self.assertTrue(history and history[0]['role'] == 'user')  # Whole rounds only.
         self.assertTrue(history[-1]['content'].startswith('a19'))  # Newest kept.
-        self.assertLessEqual(sum(len(m['content'].encode()) + 256 for m in sent) + 256,
+        self.assertLessEqual(estimate_request_tokens(sent, []),
                              self.cfg.provider['max_input_tokens'])
         self.assertEqual(len([o for o in output if '这次只带了最近' in o]), 1)
         self.assertEqual(self.model.call_count, 2)
@@ -423,12 +425,12 @@ output_cny_per_million = "8"
     def test_oversized_input_is_not_fatal_and_is_not_saved(self):
         output = []
         before = self.store.read('test/chat.jsonl')
-        run_chat(self.chat, Mock(side_effect=['z' * 7000, 'short', '/quit']), output.append, drop=lambda: False)
+        run_chat(self.chat, Mock(side_effect=['z' * 14000, 'short', '/quit']), output.append, drop=lambda: False)
         self.assertTrue(any('太长' in o for o in output))
         self.assertEqual(self.model.call_count, 1)
         self.assertEqual(self.model.call_args.args[0][-1]['content'], 'short')
         rows = self.store.read('test/chat.jsonl')
-        self.assertNotIn('z' * 7000, [r['content'] for r in rows])
+        self.assertNotIn('z' * 14000, [r['content'] for r in rows])
         self.assertEqual(len(rows), len(before) + 2)
 
     def test_input_budget_includes_self_facts_before_any_request(self):
@@ -447,6 +449,26 @@ output_cny_per_million = "8"
         self.model.assert_not_called()
         self.assertEqual(self.store.read('test/chat.jsonl'), rows)
         self.assertEqual(self.store.read('costs.jsonl'), costs)
+
+    def test_english_long_message_fits_with_large_authorized_tool_schemas(self):
+        self.cfg.provider['max_input_tokens'] = 32768
+        self.cfg.tools = {'enabled': True, 'max_steps': 6, 'max_output_tokens': 50}
+        names = ['list_directory', 'directory_tree', 'read_text_file', 'read_multiple_files',
+                 'get_file_info', 'search_files', 'list_directory_with_sizes', 'hold',
+                 'breath_search', 'trace', 'dream', 'letter_write', 'letter_read', 'plan']
+        schema = {'type': 'object', 'properties': {'query': {'type': 'string'}}}
+        tools = SimpleNamespace(
+            tools=[SimpleNamespace(name=name, description='Search the selected memory and return useful results. ' * 42,
+                                   inputSchema=schema) for name in names],
+            capability_event=None, description='Authorized tools are available. ')
+        chat = Chat(self.cfg, self.store, self.budget, self.model, tools=tools)
+        chat._tool_chat = Mock(return_value=('A fictional reply', []))
+
+        reply = chat.send('Please review the available information and explain the likely cause. ' * 40)
+
+        self.assertEqual(reply, 'A fictional reply')
+        chat._tool_chat.assert_called_once()
+        self.assertEqual(len(chat.tool_schemas()) - 1, len(names))
 
     def test_self_clock_and_costs_use_one_local_date_at_midnight(self):
         self.budget.clock = lambda: '2026-10-19T23:59:00+08:00'
