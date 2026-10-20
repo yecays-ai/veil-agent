@@ -201,7 +201,6 @@ class AutonomyController:
         started_at = now()
         self.active = True
         self.deadline = time.monotonic() + MAX_RUNTIME_SECONDS
-        self.hub.autonomy_interrupted.clear()
         before = sum(self.chat.budget.category_totals(self.chat.cfg.id))
         record = {'started_at': started_at, 'finished_at': None, 'decision': '', 'reason': '',
                   'tools': [], 'lab_files_changed': [], 'result': '失败', 'result_reason': '',

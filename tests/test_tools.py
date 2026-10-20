@@ -291,6 +291,12 @@ class ToolPolicyTests(unittest.TestCase):
         reopened.announce_autonomy()
         self.assertIsNone(reopened.capability_event)
 
+    def test_autonomy_announcement_is_noop_without_file_tools(self):
+        store = Store(self.root / 'data')
+        manager = FilesystemTools(self.root, SimpleNamespace(id='test', tools=None), store)
+        manager.announce_autonomy()
+        self.assertIsNone(manager.capability_event)
+
     def test_missing_node_disables_tools_without_blocking_chat_startup(self):
         store = Store(self.root / 'data')
         cfg = SimpleNamespace(id='test', tools={'enabled': True, 'folder': 'data/test/workspace',

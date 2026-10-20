@@ -83,7 +83,8 @@ class Hub:
                 raise EOFError
             if self.autonomy is not None and self.autonomy.due():
                 with self.cond:
-                    if not self.stopped and self.activity.enabled():
+                    if (not self.stopped and self.activity.enabled()
+                            and self.inbox.empty()):
                         self.autonomy_busy = True
                         self.busy = True
                         self.autonomy_interrupted.clear()

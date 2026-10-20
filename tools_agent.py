@@ -303,6 +303,8 @@ class FilesystemTools:
             raise UserError('能力清单无法更新，文件工具已停止；请保留 data 文件夹。')
 
     def announce_autonomy(self):
+        if getattr(self, 'cap_path', None) is None:
+            return
         try:
             row = json.loads(self.cap_path.read_text(encoding='utf-8'))
             if row.get('autonomy_announced'):

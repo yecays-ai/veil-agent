@@ -99,6 +99,24 @@ daily_budget_cny = "2"
         self.assertFalse(self.hub.snapshot(0)['busy'])
         self.assertEqual(self.hub.inbox.get_nowait(), 'continue chat')
 
+    def test_chat_queued_during_due_check_wins_over_autonomy_wake(self):
+        self.activity.set(True)
+        self.hub.autonomy = self.controller
+
+        def due_with_chat():
+            self.hub.inbox.put('continue chat')
+            return True
+        self.controller.due = due_with_chat
+        self.assertEqual(self.hub.input_fn(), 'continue chat')
+        self.assertFalse(self.hub.autonomy_busy)
+
+    def test_interrupt_arriving_before_run_is_not_cleared(self):
+        self.activity.set(True)
+        self.hub.autonomy_interrupted.set()
+        self.controller.run()
+        row = self.store.read('test/autonomy.jsonl')[-1]
+        self.assertEqual(row['result'], '被打断')
+
 
 if __name__ == '__main__':
     unittest.main()
