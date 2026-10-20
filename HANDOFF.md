@@ -11,9 +11,9 @@
 
 ## 下一步
 
-1. 核对分支差异并创建一个 025 PR。
-2. 查看 CI 和 CodeRabbit；只处理功能错误或安全风险。
-3. 合并后请 lan 按 STATUS 的 Windows 步骤验收；当前没有 025 的用户体验验收记录。
+- lan 将安排 Claude 审查 PR #56；本轮不等待 CodeRabbit，也不合并。
+- 当前本地定向验证已完成。GitHub Actions 仍排队，后续由 lan/Claude 需要时查看。
+- Claude 若发现功能或安全问题，再按审查意见处理；Windows 真实体验仍待 lan 按 STATUS 的步骤验收。
 
 ## 注意
 
