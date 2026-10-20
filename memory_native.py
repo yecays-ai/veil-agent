@@ -277,7 +277,7 @@ class NativeMemoryTools:
                 self.memory.messages.put(note)
                 notes.append(note)
                 continue
-            prompt = (f"{self.memory.cfg.name} 的自主删除申请：记忆 #{memory_id}「{title}」\\n"
+            prompt = (f"{self.memory.cfg.name} 的自主删除申请：记忆 #{memory_id}「{title}」\n"
                       f"理由：{row.get('reason') or '未提供'}。同意删除吗？y/N ")
             accepted = approval is not None and approval(prompt).strip().casefold() == 'y'
             old = self.memory.raw_content_for(memory_id)
