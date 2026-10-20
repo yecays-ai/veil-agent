@@ -103,6 +103,22 @@ ombre_port = 18913
         self.assertEqual(state['memory_panel_url'], 'http://127.0.0.1:18913/dashboard')
         self.assertNotIn('token', state['memory_panel_url'])
 
+    def test_session_errors_keep_their_own_message(self):
+        from unittest import mock
+        import memory_agent
+        root = Path(tempfile.mkdtemp())
+        (root / '.env').write_text('EMBED_API_KEY=fake\n', encoding='utf-8')
+        cfg = SimpleNamespace(id='fixture', memory={'base_url': 'https://embed.example/v1',
+            'input_cny_per_million': '0', 'ombre_model': False})
+        closed = SimpleNamespace(close=lambda: None)
+        with mock.patch('memory_agent.subprocess.run'), \
+             mock.patch('ombre_resident.start_or_connect', return_value=(18011, 't', closed)), \
+             mock.patch('ombre_resident.mark_ready'), \
+             mock.patch('memory_agent.MCP', return_value=closed):
+            with self.assertRaisesRegex(UserError, '预算已用完'):
+                with memory_agent.open_ombre(root, cfg):
+                    raise UserError('预算已用完')
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -147,12 +147,13 @@ def open_ombre(root, cfg, *, data_root=None):
     except Exception as exc:
         raise UserError('记忆进程启动失败，请重新运行 setup.bat；本机记录仍保留。') from exc
     try:
-        backend = MCP(f'http://127.0.0.1:{port}/mcp', token)
-        private = vault / '_agent'
-        mark_ready(private)
+        try:
+            backend = MCP(f'http://127.0.0.1:{port}/mcp', token)
+            mark_ready(vault / '_agent')
+        except Exception as exc:
+            raise UserError('记忆进程启动失败，请重新运行 setup.bat；本机记录仍保留。') from exc
+        # Errors raised by the chat session itself keep their own message.
         yield backend
-    except Exception as exc:
-        raise UserError('记忆进程启动失败，请重新运行 setup.bat；本机记录仍保留。') from exc
     finally:
         close_error = None
         if backend:
