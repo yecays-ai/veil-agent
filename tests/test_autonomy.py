@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from datetime import datetime, timedelta
+from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 from unittest.mock import Mock
@@ -64,7 +65,32 @@ daily_budget_cny = "2"
         self.assertEqual(rows[0]['next_step'], '等待新信息。')
         self.assertEqual(self.store.read('test/chat.jsonl'), [])
         self.assertEqual(self.budget.category_totals('test')[0], Decimal('0.000420'))
-        self.assertEqual(self.controller.command().split(' | ')[2], '搁置：按 Peter 本次决定结束。')
+        self.assertEqual(self.controller.command().split(' | ')[2], '搁置：按 Test 本次决定结束。')
+
+    def test_followup_chat_receives_latest_autonomy_record(self):
+        self.controller.run()
+        self.model.reset_mock()
+
+        self.chat.send('你下午做了什么？')
+
+        messages = self.model.call_args.args[0]
+        context = '\n'.join(message['content'] for message in messages if message['role'] == 'system')
+        self.assertIn('最近一次自主活动记录', context)
+        self.assertIn('实验室整理', context)
+        self.assertIn('等待新信息', context)
+        self.assertIn('不是用户消息', context)
+
+    def test_cost_display_counts_autonomy_for_every_character(self):
+        peter = replace(self.cfg, id='peter', name='Peter')
+        ghost = replace(self.cfg, id='ghost', name='Ghost')
+        for cfg in (peter, ghost):
+            with self.budget.autonomous(cfg.id):
+                request_id, _ = self.budget.reserve(cfg)
+                self.budget.settle(request_id, cfg, 100, 20, 0)
+
+        total_autonomy, _ = self.budget.category_totals(None)
+        self.assertGreater(total_autonomy, 0)
+        self.assertIn(f'自主 ¥{total_autonomy:.6f}', self.budget.display())
 
     def test_autonomy_budget_blocks_before_model_request(self):
         with self.budget.autonomous('test', Decimal('0.000001')):

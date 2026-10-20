@@ -303,7 +303,7 @@ class Budget:
             self.local.autonomy = previous
 
     @synchronized
-    def category_totals(self, character, stamp=None):
+    def category_totals(self, character=None, stamp=None):
         stamp = stamp or self.clock()
         reservations, settlements = {}, {}
         try:
@@ -314,7 +314,12 @@ class Budget:
                     settlements[event['id']] = event
             day = pending = Decimal(0)
             for key, event in reservations.items():
-                if event.get('category') != 'autonomy' or event.get('character') != character:
+                if event.get('category') != 'autonomy':
+                    continue
+                active_character = event.get('character')
+                if not isinstance(active_character, str) or not active_character:
+                    raise ValueError('invalid autonomy character')
+                if character is not None and active_character != character:
                     continue
                 settled = settlements.get(key)
                 amount = Decimal((settled or event)['amount'])
@@ -468,7 +473,7 @@ class Budget:
 
     def display(self, stamp=None):
         day, month, pending = self.totals(stamp)
-        autonomy, _ = self.category_totals('peter', stamp)
+        autonomy, _ = self.category_totals(None, stamp)
         chat = day - autonomy
         return (f'今天 ¥{day:.6f} / {self.daily}；本月 ¥{month:.6f} / {self.monthly}；'
                 f'待核对预留 ¥{pending:.6f}；其中聊天 ¥{chat:.6f}，自主 ¥{autonomy:.6f} / '
@@ -600,6 +605,9 @@ class Chat:
         if not self.pending_capability_event and self.tools:
             self.pending_capability_event = self.tools.capability_event
         recalled = self.memory.context(text) if self.memory else []
+        if not autonomy and extra_context is None:
+            from autonomy import recent_chat_context
+            extra_context = recent_chat_context(self.store, self.cfg)
         stable, changing = self_facts(self.cfg, self.budget, memory_mode(self.memory), self.tools)
         description = stable + '\n' + changing
         # Order matters for the provider's prefix cache: everything that stays the same between requests
