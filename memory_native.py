@@ -5,6 +5,7 @@ Deleting is not offered to the model: /delete stays with the user.
 """
 from types import SimpleNamespace
 import json
+import hashlib
 import re
 import uuid
 
@@ -12,7 +13,7 @@ from memory_agent import ordinary_hits, MemoryToolError
 
 OMBRE_TOOLS = ('trace', 'dream', 'letter_write', 'letter_read', 'letter_lock_update',
                 'anchor', 'release', 'plan', 'pulse')
-NATIVE_TOOLS = ('hold', 'breath_search', *OMBRE_TOOLS, 'memory_history')
+NATIVE_TOOLS = ('hold', 'breath_search', *OMBRE_TOOLS, 'memory_history', 'memory_catalog', 'memory_read')
 CONTENT_LIMIT, TITLE_LIMIT, WHY_LIMIT = 1500, 100, 500
 MERGED_MEMORY_LIMIT_BYTES = 48 * 1024
 
@@ -58,6 +59,21 @@ MEMORY_HISTORY = SimpleNamespace(name='memory_history', inputSchema={
                 'Hidden memories are unavailable.' )
 
 
+MEMORY_CATALOG = SimpleNamespace(name='memory_catalog', description=(
+    'List current visible memory IDs and titles in stable ID order, five per page. '
+    'Pass next_after as after to continue; an empty next_after means done. '
+    'This reads local metadata without embeddings or a model. Use memory_read for current text; '
+    'memory_history contains only older versions, and dream has no historical offset.'), inputSchema={
+        'type': 'object', 'properties': {'after': {'type': 'string'}}, 'additionalProperties': False})
+MEMORY_READ = SimpleNamespace(name='memory_read', description=(
+    'Read an exact slice of a current visible memory, including its metadata. '
+    'Pass its memory_id from memory_catalog and next_offset as offset until next_offset is null. '
+    'Offsets count Unicode characters; pass the returned version on subsequent pages; restart if changed. '
+    'This is read only and does not call embeddings or a model.'), inputSchema={
+        'type': 'object', 'required': ['memory_id'], 'additionalProperties': False,
+        'properties': {'memory_id': {'type': 'string'}, 'offset': {'type': 'integer', 'minimum': 0}, 'version': {'type': 'string'}}})
+
+
 def trace_tool_for_model(tool):
     """Keep Ombre's schema while adding VEIL-only history context."""
     schema = json.loads(json.dumps(tool.inputSchema))
@@ -85,7 +101,7 @@ class NativeMemoryTools:
         self.ombre_tools = {name: available[name] for name in OMBRE_TOOLS if name in available}
         model_tools = [trace_tool_for_model(tool) if name == 'trace' else tool
                        for name, tool in self.ombre_tools.items()]
-        self.tools = [HOLD, SEARCH, *model_tools, MEMORY_HISTORY]
+        self.tools = [HOLD, SEARCH, *model_tools, MEMORY_HISTORY, MEMORY_CATALOG, MEMORY_READ]
         self.description = DESCRIPTION
         self.autonomy_mode = False
 
@@ -96,7 +112,7 @@ class NativeMemoryTools:
             current = sorted(tool.name for tool in self.tools)
             previous = row.get('memory_tools')
             if previous != current:
-                names = ', '.join(name for name in current if name in self.ombre_tools or name in ('hold', 'breath_search'))
+                names = ', '.join(name for name in current if name in NATIVE_TOOLS)
                 event = (f'{self.memory.cfg.name} 新增记忆能力：' + names +
                          '。trace 删除必须先经页面审批；自主活动中的删除会进入待删除栏目。')
                 old = row.get('pending_event')
@@ -129,6 +145,10 @@ class NativeMemoryTools:
                 return self._hold(args)
             if name == 'breath_search':
                 return self._search(args)
+            if name == 'memory_catalog':
+                return self._catalog(args)
+            if name == 'memory_read':
+                return self._read(args)
             if name == 'memory_history':
                 return self._history(args)
             return self._ombre(name, args, approval)
@@ -136,6 +156,89 @@ class NativeMemoryTools:
             return str(exc), '出错', self.preview_summary(name, args)
         except Exception:
             return '记忆工具出错，没有完成。', '出错', self.preview_summary(name, args)
+
+    def _visible_records(self):
+        # Read only actual bucket folders, never letters, plans, sources or private files.
+        vault_path = self.memory.store.root / self.memory.cfg.id / 'memory'
+        hidden = self.memory.hidden_ids()
+        from tools_agent import _redirected
+        if not vault_path.exists():
+            return {}
+        if _redirected(vault_path):
+            raise ValueError('redirected vault')
+        vault = vault_path.resolve()
+        records = {}
+        for folder in ('dynamic', 'permanent', 'feel', 'archive'):
+            for path in (vault / folder).rglob('*.md'):
+                if (not path.resolve().is_relative_to(vault) or _redirected(path)
+                        or any(_redirected(parent) for parent in path.parents if parent.is_relative_to(vault))):
+                    continue
+                raw = path.read_text(encoding='utf-8')
+                lines = raw.splitlines()
+                if not lines or lines[0].strip() != '---':
+                    continue
+                end = next((i for i, line in enumerate(lines[1:], 1) if line.strip() == '---'), None)
+                if end is None:
+                    continue
+                meta = {}
+                for line in lines[1:end]:
+                    key, sep, value = line.partition(':')
+                    if sep:
+                        meta[key.strip()] = self.memory._frontmatter_scalar(value)
+                key = meta.get('id', '')
+                if not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', key) or key in hidden:
+                    continue
+                if meta.get('deleted_at', '').casefold() not in ('', 'null', 'none', 'false'):
+                    continue
+                if meta.get('dont_surface', '').casefold() not in ('', '0', 'false', 'null', 'none'):
+                    continue
+                if self.memory.state['entries'].get(key, {}).get('deleted'):
+                    continue
+                if key in records:
+                    raise ValueError('ambiguous memory ID')
+                records[key] = (meta.get('title') or meta.get('name') or key, raw)
+        return records
+
+    def _catalog(self, args):
+        after = args.get('after', '')
+        if not isinstance(after, str) or (after and not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', after)):
+            return '程序拒绝：目录游标无效。', '被拒绝', 'memory_catalog'
+        records = self._visible_records()
+        keys = sorted(key for key in records if key > after)
+        page = []
+        for key in keys[:5]:
+            candidate = page + [{'memory_id': key, 'title': records[key][0][:80]}]
+            result = json.dumps({'items': candidate, 'next_after': key if len(keys) > len(candidate) else ''}, ensure_ascii=False)
+            if len(result.encode('utf-8')) > self.max_result_bytes:
+                break
+            page = candidate
+        if keys and not page:
+            return '目录结果额度不足，无法提供一项完整记录。', '出错', 'memory_catalog'
+        cursor = page[-1]['memory_id'] if len(keys) > len(page) else ''
+        return json.dumps({'items': page, 'next_after': cursor}, ensure_ascii=False), '成功', '记忆目录'
+
+    def _read(self, args):
+        key, offset = args.get('memory_id'), args.get('offset', 0)
+        if not isinstance(key, str) or type(offset) is not int or offset < 0:
+            return '程序拒绝：记忆编号或正文位置无效。', '被拒绝', 'memory_read'
+        record = self._visible_records().get(key)
+        if record is None:
+            return '程序拒绝：这条记忆不存在或不可读。', '被拒绝', 'memory_read'
+        title, raw = record
+        version = hashlib.sha256(raw.encode('utf-8')).hexdigest()
+        if (offset and args.get('version') != version) or (args.get('version') and args['version'] != version):
+            return '程序拒绝：记忆已变化或缺少版本，请从 offset=0 重新读取。', '被拒绝', 'memory_read'
+        if offset > len(raw):
+            return '程序拒绝：正文位置已超出当前记忆。', '被拒绝', 'memory_read'
+        end = min(len(raw), offset + 1000)
+        while True:
+            result = json.dumps({'memory_id': key, 'offset': offset, 'text': raw[offset:end],
+                                 'next_offset': end if end < len(raw) else None, 'version': version}, ensure_ascii=False)
+            if len(result.encode('utf-8')) <= self.max_result_bytes:
+                return result, '成功', f'读取记忆：{title[:80]}'
+            if end <= offset:
+                return '正文结果额度不足。', '出错', 'memory_read'
+            end = offset + (end - offset) // 2
 
     def _history(self, args):
         memory_id = args.get('memory_id')

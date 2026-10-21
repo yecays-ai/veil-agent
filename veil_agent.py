@@ -600,7 +600,17 @@ class Chat:
         existing_tools = permitted_tools(self.tools.tools if self.tools else [])
         messaging = [SEND_MESSAGE] if ((self.cfg.tools and self.cfg.tools.get('enabled', True))
                                         or (self.tools and self.tools.tools)) else []
-        return [*existing_tools, *task_tools, *messaging]
+        schemas = [*existing_tools, *task_tools, *messaging]
+        for schema in schemas:
+            function = schema['function']
+            if function['name'] in ('write_file', 'append_file', 'long_task_update', 'hold', 'trace', 'letter_write'):
+                function = dict(function)
+                function['description'] += (
+                    f' Output budget: {(self.cfg.tools or {}).get("max_output_tokens", self.cfg.max_output_tokens)} tokens. '
+                    'Keep new text under 1500 characters per call; persist one verified slice at a time. '
+                    'Do not reproduce whole files or inventories in arguments.')
+                schema['function'] = function
+        return schemas
 
     def send_message(self, arguments, request_id, tool_call_id=None):
         try:
@@ -787,6 +797,8 @@ class Chat:
         final = ''
         next_reservation = None
         autonomy_tool_steps = 0
+        output_recovered = False
+
 
         def log_tool(name, path, state, **metadata):
             row = {'request_id': request_id, 'tool': name, 'path': path, 'state': state}
@@ -887,7 +899,34 @@ class Chat:
             if finish and finish[0] == 'length':
                 self.tool_stop_reason = '模型回复达到输出上限，结果不完整。'
             if finish and finish[0] == 'length' and message.tool_calls:
-                final = '模型达到输出上限，工具未执行；请缩短要写入的内容后重试。'
+                final = '本步模型达到输出上限，本步工具未执行；此前已确认的操作保留。'
+                if not output_recovered and step + 1 < max_steps:
+                    try:
+                        next_cfg = (self.cfg if step + 1 == max_steps - 1 else replace(
+                            self.cfg, max_output_tokens=self.cfg.tools.get('max_output_tokens', self.cfg.max_output_tokens)))
+                        next_reservation = self.budget.reserve(next_cfg)[0]
+                    except BudgetExceeded:
+                        self.autonomy_budget_limited = autonomy
+                    else:
+                        output_recovered = True
+                        self.tool_stop_reason = ''
+                        final = ''
+                        # Never replay or submit the truncated assistant/tool-call JSON.
+                        # Earlier complete assistant/tool pairs remain in loop_messages.
+                        loop_messages.append({'role': 'system', 'content': (
+                            'Your last response hit the output token limit. NONE of the tool calls '
+                            'in that response ran, even if their arguments looked complete. Earlier '
+                            'confirmed tools remain executed: do not repeat them. This is your only '
+                            'recovery attempt. Choose one small next action; keep new written text '
+                            'under 1000 characters. Do not regenerate a whole file or inventory. '
+                            'If tools are unavailable, explain the confirmed progress and next step.'
+                        )})
+                        self.store.append(f'{self.cfg.id}/memory/_agent/diagnostics.jsonl', {
+                            'code': 'tool_output_recovery', 'attempt': 1,
+                            'prompt_tokens': prompt, 'completion_tokens': completion,
+                            'tool_count': len(message.tool_calls)})
+                        self.output('本步输出过长，工具尚未执行；正在缩小操作，最多恢复一次。')
+                        continue
                 self.tool_stop_reason = final
                 self.output(final)
                 break

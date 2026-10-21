@@ -23,7 +23,7 @@ DENY = {'edit_file', 'move_file'}
 LAB_ONLY = {'create_directory'}
 # Memory tools (ticket 007) are offered by memory_native.ToolSet, never by the filesystem server.
 NATIVE = {'hold', 'breath_search', 'trace', 'dream', 'letter_write', 'letter_read',
-          'letter_lock_update', 'anchor', 'release', 'plan', 'pulse', 'memory_history'}
+          'letter_lock_update', 'anchor', 'release', 'plan', 'pulse', 'memory_history', 'memory_catalog', 'memory_read'}
 
 
 def permitted_tools(server_tools):

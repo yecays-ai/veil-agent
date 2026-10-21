@@ -48,6 +48,77 @@ class NativeMemoryTests(unittest.TestCase):
         self.tools = ToolSet(files, NativeMemoryTools(self.memory, 200))
         self.output = []
 
+    def test_catalog_pages_and_exact_read_preserve_current_unicode_text(self):
+        native = self.tools.native
+        native.max_result_bytes = 800
+        vault = self.store.root / self.cfg.id / 'memory' / 'dynamic'
+        vault.mkdir(parents=True, exist_ok=True)
+        originals = {}
+        for i in range(8):
+            key = f'm{i:03}'
+            raw = f'---\nid: {key}\ntitle: 示例 {i}\n---\n' + '中文🙂 exact\n' * 220
+            (vault / f'{key}.md').write_text(raw, encoding='utf-8')
+            originals[key] = raw
+        cursor, ids = '', []
+        while True:
+            text, state, _ = native.invoke('memory_catalog', {'after': cursor})
+            self.assertEqual(state, '成功')
+            self.assertLessEqual(len(text.encode('utf-8')), 800)
+            page = json.loads(text)
+            ids.extend(row['memory_id'] for row in page['items'])
+            cursor = page['next_after']
+            if not cursor:
+                break
+        self.assertEqual(ids, sorted(originals))
+        offset, parts, version = 0, [], None
+        while True:
+            args = {'memory_id': ids[0], 'offset': offset}
+            if version:
+                args['version'] = version
+            text, state, _ = native.invoke('memory_read', args)
+            self.assertEqual(state, '成功')
+            self.assertLessEqual(len(text.encode('utf-8')), 800)
+            page = json.loads(text)
+            parts.append(page['text'])
+            offset, version = page['next_offset'], page['version']
+            if offset is None:
+                break
+        self.assertEqual(''.join(parts), originals[ids[0]])
+        self.backend.calls.clear()
+        native.invoke('memory_catalog', {})
+        native.invoke('memory_read', {'memory_id': ids[0]})
+        self.assertEqual(self.backend.calls, [])
+
+    def test_catalog_and_read_block_hidden_deleted_private_and_cross_role(self):
+        native = self.tools.native
+        native.max_result_bytes = 8192
+        vault = self.store.root / self.cfg.id / 'memory'
+        for folder, key, metadata in [('dynamic', 'visible', ''), ('dynamic', 'secret', 'dont_surface: true\n'),
+                                      ('dynamic', 'deleted', 'deleted_at: 2026-01-01\n'),
+                                      ('letters', 'letter', ''), ('_sources', 'source', '')]:
+            path = vault / folder / f'{key}.md'
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(f'---\nid: {key}\ntitle: {key}\n{metadata}---\nprivate', encoding='utf-8')
+        self.memory.state['entries']['visible'] = {'hidden': True}
+        self.assertEqual(json.loads(native.invoke('memory_catalog', {})[0])['items'], [])
+        for key in ('visible', 'secret', 'deleted', 'letter', 'source', '../other'):
+            self.assertEqual(native.invoke('memory_read', {'memory_id': key})[1], '被拒绝')
+        outside = self.store.root / 'other' / 'memory' / 'dynamic'
+        outside.mkdir(parents=True)
+        (outside / 'other.md').write_text('---\nid: other\ntitle: other\n---\nsecret', encoding='utf-8')
+        self.assertEqual(native.invoke('memory_read', {'memory_id': 'other'})[1], '被拒绝')
+
+    def test_memory_read_rejects_changed_page_version(self):
+        native = self.tools.native
+        native.max_result_bytes = 8192
+        path = self.store.root / self.cfg.id / 'memory' / 'dynamic' / 'current.md'
+        path.parent.mkdir(parents=True)
+        path.write_text('---\nid: current\ntitle: Current\n---\n' + 'a' * 2000, encoding='utf-8')
+        page = json.loads(native.invoke('memory_read', {'memory_id': 'current'})[0])
+        path.write_text('---\nid: current\ntitle: Current\n---\nchanged', encoding='utf-8')
+        self.assertEqual(native.invoke('memory_read', {'memory_id': 'current', 'offset': 1,
+                         'version': page['version']})[1], '被拒绝')
+
     def call(self, name, args, call_id='c'):
         return SimpleNamespace(id=call_id, function=SimpleNamespace(
             name=name, arguments=json.dumps(args, ensure_ascii=False)))
@@ -206,7 +277,7 @@ class NativeMemoryTests(unittest.TestCase):
 
     def test_only_the_two_memory_tools_are_offered_and_delete_is_not_one_of_them(self):
         self.assertEqual({t['function']['name'] for t in permitted_tools(self.tools.tools)},
-                         {'hold', 'breath_search', 'memory_history'})
+                         {'hold', 'breath_search', 'memory_history', 'memory_catalog', 'memory_read'})
         result, state, _ = self.tools.invoke('trace', {'bucket_id': 'x', 'delete': True})
         self.assertEqual(state, '被拒绝')
 
