@@ -9,7 +9,7 @@ import hashlib
 import re
 import uuid
 
-from memory_agent import ordinary_hits, MemoryToolError
+from memory_agent import ordinary_hits, MemoryToolError, vault_path as role_vault_path
 
 OMBRE_TOOLS = ('trace', 'dream', 'letter_write', 'letter_read', 'letter_lock_update',
                 'anchor', 'release', 'plan', 'pulse')
@@ -159,7 +159,7 @@ class NativeMemoryTools:
 
     def _visible_records(self):
         # Read only actual bucket folders, never letters, plans, sources or private files.
-        vault_path = self.memory.store.root / self.memory.cfg.id / 'memory'
+        vault_path = role_vault_path(self.memory.store.root, self.memory.cfg.id)
         hidden = self.memory.hidden_ids()
         from tools_agent import _redirected
         if not vault_path.exists():
@@ -168,7 +168,7 @@ class NativeMemoryTools:
             raise ValueError('redirected vault')
         vault = vault_path.resolve()
         records = {}
-        for folder in ('dynamic', 'permanent', 'feel', 'archive'):
+        for folder in ('dynamic', 'permanent', 'feel'):
             for path in (vault / folder).rglob('*.md'):
                 if (not path.resolve().is_relative_to(vault) or _redirected(path)
                         or any(_redirected(parent) for parent in path.parents if parent.is_relative_to(vault))):
@@ -185,6 +185,10 @@ class NativeMemoryTools:
                     key, sep, value = line.partition(':')
                     if sep:
                         meta[key.strip()] = self.memory._frontmatter_scalar(value)
+                if meta.get('type', folder).casefold() not in ('dynamic', 'permanent', 'feel'):
+                    continue
+                if meta.get('source_tool', '').casefold() == 'letter' or '__letter__' in '\n'.join(lines[1:end]):
+                    continue
                 key = meta.get('id', '')
                 if not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', key) or key in hidden:
                     continue
@@ -232,10 +236,12 @@ class NativeMemoryTools:
             return '程序拒绝：正文位置已超出当前记忆。', '被拒绝', 'memory_read'
         end = min(len(raw), offset + 1000)
         while True:
+            if end == offset and offset < len(raw):
+                return '正文结果额度不足，无法提供至少一个字符。', '出错', 'memory_read'
             result = json.dumps({'memory_id': key, 'offset': offset, 'text': raw[offset:end],
                                  'next_offset': end if end < len(raw) else None, 'version': version}, ensure_ascii=False)
             if len(result.encode('utf-8')) <= self.max_result_bytes:
-                return result, '成功', f'读取记忆：{title[:80]}'
+                return result, '成功', f'{title[:80]}（{key}）'
             if end <= offset:
                 return '正文结果额度不足。', '出错', 'memory_read'
             end = offset + (end - offset) // 2

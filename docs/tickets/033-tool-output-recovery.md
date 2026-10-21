@@ -9,7 +9,7 @@ Peter 在工具调用输出截断后能缩小操作恢复一次，并能分页�
 - 从 main `44fd77c` 独立施工，分支 `ticket/033-tool-output-recovery`。复用现有模型工具循环、预算、记忆目录和角色权限，无新增依赖。
 - 截断响应的整批工具均不执行、不加入请求历史；同轮最多一次恢复，保留之前成功的工具对，继续受原步骤、时间、预算和让位限制。第二次截断明确停止，不循环重试、不提高额度。
 - Lan 已授权恢复的一次额外模型请求，按观察用量估计约 ¥0.04/次失败，10 次/日约 ¥0.40；实际按供应商用量结算，现有总预算不变。目录和正文分页本身纯本地读取，不调用模型或 embedding；后续聊天仍按原价。
-- 新增 `memory_catalog`（稳定 ID 顺序、五项内分页）与 `memory_read`（当前原文按字符分页，版本变化拒绝续页）。只读当前角色的记忆桶；隐藏、删除、源记录、信件、计划、跨角色及目录重定向不开放。`memory_history` 保留原来的旧版历史语义。
+- 新增 `memory_catalog`（稳定 ID 顺序、五项内分页）与 `memory_read`（当前原文按字符分页，版本变化拒绝续页）。只读当前角色的记忆桶；只允许 dynamic/permanent/feel 逻辑类型；隐藏、删除、归档、私有 i/self 桶、源记录、信件、计划、跨角色及目录重定向不开放。结果额度放不下一字符则明确报错，不返回停滞游标。`memory_history` 保留原来的旧版历史语义。
 - 复用调查：查过 GitHub 英文 `finish_reason length tool_calls` 与中文“工具调用 输出 截断”；阅读 OpenAI Python v1.109.1 的 `src/openai/types/chat/chat_completion.py::Choice`（Apache-2.0），它明确标记输出截断，但没有适合 VEIL 审批、预算和长期任务的自动恢复策略，因此只借接口语义，不复制代码、不引入框架。固定版本来源：https://github.com/openai/openai-python/blob/v1.109.1/src/openai/types/chat/chat_completion.py 。既有 Ombre `dream(window_hours)` 只有最近窗口；当前正文访问复用 VEIL 本地文件与元数据规则，不改 Ombre。
 - 原始聊天、记忆、人设和任务文件不修改；不发真实模型请求。开发检查与 Windows 真实整理验收分开记录。
 

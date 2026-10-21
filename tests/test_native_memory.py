@@ -108,6 +108,37 @@ class NativeMemoryTests(unittest.TestCase):
         (outside / 'other.md').write_text('---\nid: other\ntitle: other\n---\nsecret', encoding='utf-8')
         self.assertEqual(native.invoke('memory_read', {'memory_id': 'other'})[1], '被拒绝')
 
+    def test_catalog_blocks_private_types_even_in_public_or_archive_folders(self):
+        native = self.tools.native
+        native.max_result_bytes = 8192
+        vault = self.store.root / self.cfg.id / 'memory'
+        for i, (folder, kind, extra) in enumerate([
+                ('dynamic', 'i', ''), ('dynamic', 'self', ''), ('permanent', 'letter', ''),
+                ('archive', 'archived', 'original_type: self\n'),
+                ('dynamic', 'plan', ''), ('dynamic', 'unknown', ''),
+                ('dynamic', 'permanent', 'source_tool: letter\n'),
+                ('dynamic', 'permanent', 'tags: [__letter__]\n')]):
+            path = vault / folder / f'private{i}.md'
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(f'---\nid: private{i}\ntitle: Private\ntype: {kind}\n{extra}---\nsecret', encoding='utf-8')
+            self.assertEqual(native.invoke('memory_read', {'memory_id': f'private{i}'})[1], '被拒绝')
+        self.assertEqual(json.loads(native.invoke('memory_catalog', {})[0])['items'], [])
+
+    def test_memory_read_tiny_budget_never_returns_a_stuck_success_cursor(self):
+        native = self.tools.native
+        native.max_result_bytes = 239
+        key = 'a' * 100
+        path = self.store.root / self.cfg.id / 'memory' / 'dynamic' / f'{key}.md'
+        path.parent.mkdir(parents=True)
+        path.write_text(f'---\nid: {key}\ntitle: Current\ntype: dynamic\n---\n中文', encoding='utf-8')
+        result, state, _ = native.invoke('memory_read', {'memory_id': key})
+        if state == '成功':
+            page = json.loads(result)
+            self.assertTrue(page['text'])
+            self.assertGreater(page['next_offset'], 0)
+        else:
+            self.assertEqual(state, '出错')
+
     def test_memory_read_rejects_changed_page_version(self):
         native = self.tools.native
         native.max_result_bytes = 8192
