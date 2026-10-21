@@ -6,12 +6,38 @@ from types import SimpleNamespace
 
 from ombre_entry import RestrictedHTTPApp
 from ombre_host import acquire, release
-from ombre_resident import PINNED_OMBRE, _copy_first_backup, resident_config
+from ombre_resident import PINNED_OMBRE, _copy_first_backup, _environment, resident_config
 from veil_agent import UserError, load_character
 from web_agent import Hub
 
 
 class OmbreResidentTests(unittest.TestCase):
+    def test_environment_key_overrides_are_scoped_and_default_keeps_dotenv_keys(self):
+        from unittest import mock
+
+        cfg = SimpleNamespace(memory={'ombre_model': True},
+            provider={'api_key_env': 'CHAT_API_KEY'})
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            private = root / '_agent'
+            private.mkdir()
+            config_path = private / 'config.yaml'
+            dotenv = {'EMBED_API_KEY': 'fixture-embed-value',
+                      'CHAT_API_KEY': 'fixture-chat-value'}
+            with mock.patch('dotenv.dotenv_values', return_value=dotenv):
+                default_env = _environment(root, cfg, root / 'memory', private,
+                    config_path, 'fixture-token', 18913)
+                isolated_env = _environment(root, cfg, root / 'memory', private,
+                    config_path, 'fixture-token', 18913, api_key_overrides={
+                        'OMBRE_COMPRESS_API_KEY': 'proxy-dummy',
+                        'OMBRE_EMBED_API_KEY': 'proxy-dummy',
+                    })
+
+        self.assertEqual(default_env['OMBRE_COMPRESS_API_KEY'], 'fixture-chat-value')
+        self.assertEqual(default_env['OMBRE_EMBED_API_KEY'], 'fixture-embed-value')
+        self.assertEqual(isolated_env['OMBRE_COMPRESS_API_KEY'], 'proxy-dummy')
+        self.assertEqual(isolated_env['OMBRE_EMBED_API_KEY'], 'proxy-dummy')
+
     def test_config_requires_local_http_auth_and_disables_side_services(self):
         cfg = SimpleNamespace(id='fixture', name='Example',
             memory={'model': 'fake-embed', 'base_url': 'https://embed.example/v1',

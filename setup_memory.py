@@ -10,7 +10,6 @@ import zipfile
 
 COMMIT = '115d831d979bf67efc7150f976e2cb34c333c935'
 ARCHIVE_SHA256 = 'a4226e051e39c6bbe434b36951a9b24a74ff708577e2bd91a5502dd507737e43'
-REQUIREMENTS_SHA256 = '45c5d35fb466a41b2c0a0e3988a222e1450f613ce1b9aaa188925c49afc322e0'
 ROOT = Path(__file__).resolve().parent
 
 
@@ -23,12 +22,18 @@ def download(url, digest):
 
 
 def main():
+    if sys.version_info[:2] not in {(3, 11), (3, 12)}:
+        raise RuntimeError('Python 3.11 or 3.12 is required.')
     dep = ROOT / '.deps' / 'ombre'
     dep.mkdir(parents=True, exist_ok=True)
+    req = ROOT / ('requirements.ombre-py311.lock.txt'
+                  if sys.version_info[:2] == (3, 11)
+                  else 'requirements.ombre-py312.lock.txt')
     marker = dep / 'installed'
+    marker_value = COMMIT + ':' + hashlib.sha256(req.read_bytes()).hexdigest()
     python = dep / 'venv' / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
     # Install is explicit and idempotent; runtime never downloads dependencies.
-    if marker.exists() and marker.read_text() == COMMIT:
+    if marker.exists() and marker.read_text() == marker_value:
         try:
             check = subprocess.run([str(python), '-c', 'import jieba, rank_bm25, mcp'],
                                    capture_output=True, timeout=20)
@@ -53,18 +58,13 @@ def main():
                 raise ValueError('Unsafe dependency archive path')
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(bundle.read(item))
-    requirements = dep / 'requirements.txt'
-    requirements.write_bytes(download(
-        f'https://raw.githubusercontent.com/P0luz/Ombre-Brain/{COMMIT}/requirements.txt',
-        REQUIREMENTS_SHA256))
     environment = dep / 'venv'
     if not environment.exists():
         venv.EnvBuilder(with_pip=True).create(environment)
     python = environment / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
-    req = source / 'requirements.lock.txt' if sys.version_info[:2] == (3, 12) else requirements
     subprocess.run([str(python), '-m', 'pip', 'install', '--no-cache-dir', '-r', str(req)], check=True)
     subprocess.run([str(python), '-c', 'import jieba, rank_bm25, mcp'], check=True)
-    marker.write_text(COMMIT)
+    marker.write_text(marker_value)
     print('Pinned Ombre installed. No model requests were made.')
 
 

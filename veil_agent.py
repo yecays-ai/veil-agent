@@ -393,7 +393,7 @@ class Budget:
             raise UserError('花费账本无法核对，已停止；请保留 data 文件夹。') from exc
 
     @synchronized
-    def reserve(self, cfg):
+    def reserve(self, cfg, *, accounting=None):
         p = cfg.provider
         amount = (p['max_input_tokens'] * p['input_cny_per_million']
                   + cfg.max_output_tokens * p['output_cny_per_million']) / MILLION
@@ -406,9 +406,12 @@ class Budget:
         if day + pending + amount > self.daily or month + pending + amount > self.monthly:
             raise BudgetExceeded('本次费用上限会超过 ¥10/天或 ¥300/月，未发送。输入 /cost 查看。')
         request_id = uuid.uuid4().hex
-        self.store.append('costs.jsonl', {'type': 'reserve', 'id': request_id,
+        event = {'type': 'reserve', 'id': request_id,
                           'period': self.clock(), 'amount': str(amount),
-                          'character': cfg.id, 'model': p['model'], 'category': category})
+                          'character': cfg.id, 'model': p['model'], 'category': category}
+        if accounting:
+            event['accounting'] = accounting
+        self.store.append('costs.jsonl', event)
         return request_id, amount
 
     @synchronized
@@ -456,10 +459,56 @@ class Budget:
         return request_id, amount
 
     @synchronized
-    def settle_estimate(self, reservation, accounting='embedding-estimate'):
-        request_id, amount = reservation
+    def settle_estimate(self, reservation, accounting='embedding-estimate', *, settled_amount=None):
+        request_id, reserved_amount = reservation
+        rows = self.store.read('costs.jsonl')
+        reserve = next((row for row in rows if row.get('type') == 'reserve'
+                        and row.get('id') == request_id), None)
+        if reserve is None or Decimal(reserve['amount']) != Decimal(reserved_amount):
+            raise UserError('预算预留无法核对，已停止；请保留 data 文件夹。')
+        if any(row.get('type') == 'settle' and row.get('id') == request_id for row in rows):
+            return False
+        settled = Decimal(reserved_amount if settled_amount is None else settled_amount)
+        if (not settled.is_finite() or settled < 0 or settled > Decimal(reserved_amount)):
+            raise UserError('预算结算金额超过预留或无效，已停止；请保留 data 文件夹。')
         self.store.append('costs.jsonl', {'type': 'settle', 'id': request_id,
-            'amount': str(amount), 'accounting': accounting})
+            'amount': str(settled), 'reserved_amount': str(reserved_amount),
+            'released_amount': str(Decimal(reserved_amount) - settled),
+            'accounting': accounting})
+        return True
+
+    @synchronized
+    def release_estimate(self, reservation, accounting='preflight-cancelled'):
+        """Release only when the external call was never entered."""
+        request_id, amount = reservation
+        rows = self.store.read('costs.jsonl')
+        reserve = next((row for row in rows if row.get('type') == 'reserve'
+                        and row.get('id') == request_id), None)
+        if reserve is None or Decimal(reserve['amount']) != Decimal(amount):
+            raise UserError('预算预留无法核对，已停止；请保留 data 文件夹。')
+        if any(row.get('type') == 'settle' and row.get('id') == request_id for row in rows):
+            return False
+        self.store.append('costs.jsonl', {'type': 'settle', 'id': request_id,
+            'amount': '0', 'accounting': accounting})
+        return True
+
+    @synchronized
+    def reconcile_unsettled(self, accountings):
+        """Convert interrupted memory reservations to their full conservative charge.
+
+        Unknown outcomes are never released: after restart the reserved upper
+        estimate becomes settled spend, so it cannot permanently occupy pending.
+        """
+        self.totals()  # Validate the full ledger before recovering any entry.
+        rows = self.store.read('costs.jsonl')
+        settled = {row.get('id') for row in rows if row.get('type') == 'settle'}
+        for row in rows:
+            if (row.get('type') == 'reserve' and row.get('accounting') in accountings
+                    and row.get('id') not in settled):
+                self.settle_estimate((row['id'], Decimal(row['amount'])),
+                                     accounting=f"{row['accounting']}-recovered")
+        return len([row for row in rows if row.get('type') == 'reserve'
+                    and row.get('accounting') in accountings and row.get('id') not in settled])
 
     @synchronized
     def settle(self, request_id, cfg, prompt, completion, cached):
@@ -471,9 +520,13 @@ class Budget:
         amount = ((prompt - cached) * p['input_cny_per_million']
                   + cached * p['cached_input_cny_per_million']
                   + completion * p['output_cny_per_million']) / MILLION
+        rows = self.store.read('costs.jsonl')
+        if any(row.get('type') == 'settle' and row.get('id') == request_id for row in rows):
+            return False
         self.store.append('costs.jsonl', {'type': 'settle', 'id': request_id,
                           'amount': str(amount), 'prompt_tokens': prompt,
                           'completion_tokens': completion, 'cached_tokens': cached})
+        return True
 
     @synchronized
     def cache_display(self, stamp=None):

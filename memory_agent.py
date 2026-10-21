@@ -191,17 +191,29 @@ def ombre_model_on(cfg):
     return bool((cfg.memory or {}).get('ombre_model', True))
 
 
-# Ombre's own prompts (tagging and same-event judging) and their input limits, in UTF-8 bytes.
+# Pinned Ombre 115d831d uses analyze(max_tokens=4096), judge_same_event(max_tokens=1024),
+# and retries transient provider errors up to three total attempts. VEIL reserves this
+# upper estimate before MCP entry, then settles the normal estimate on confirmed success.
 OMBRE_ANALYZE_PROMPT_BYTES, OMBRE_JUDGE_PROMPT_BYTES = 3200, 1000
-OMBRE_OLD_MEMORY_BYTES, OMBRE_OUTPUT_TOKENS = 5400, 800
+OMBRE_OLD_MEMORY_BYTES = 5400
+OMBRE_ANALYZE_OUTPUT_TOKENS, OMBRE_JUDGE_OUTPUT_TOKENS = 4096, 1024
+OMBRE_MODEL_ATTEMPTS = 3
+OMBRE_OUTPUT_TOKENS = 800
 
 
-def ombre_model_tokens(content):
-    """Estimated (input, output) tokens of Ombre's two model calls for one hold; about 2 bytes per token."""
+def ombre_model_tokens(content, *, worst_case=False):
+    """Return normal or maximum estimated tokens for one hold's synchronous model work.
+
+    The reserve covers pinned retries and output caps. It is still an estimate,
+    not a hard limit on Ombre's asynchronous plan-resolution requests.
+    """
     size = len(content.encode('utf-8'))
     data = (OMBRE_ANALYZE_PROMPT_BYTES + min(size, 6000) + OMBRE_JUDGE_PROMPT_BYTES
             + min(size, 5400) + OMBRE_OLD_MEMORY_BYTES)
-    return data // 2, OMBRE_OUTPUT_TOKENS
+    attempts = OMBRE_MODEL_ATTEMPTS if worst_case else 1
+    output = (OMBRE_ANALYZE_OUTPUT_TOKENS + OMBRE_JUDGE_OUTPUT_TOKENS
+              if worst_case else OMBRE_OUTPUT_TOKENS)
+    return (data // 2) * attempts, output * attempts
 
 
 @contextmanager
@@ -371,6 +383,8 @@ class Memory:
         self.last_tool = None
         self.delete_asked = None  # number shown by /delete, waiting for its 确认
         states = store.read(self.path)
+        budget.reconcile_unsettled({'ombre-model-estimate', 'embedding-estimate',
+                                    'memory-extraction'})
         try:
             self.state = states[-1]['state'] if states else {
                 'cursor': len(self.turns()), 'pending': [], 'entries': {}, 'sources': {}}
@@ -424,30 +438,61 @@ class Memory:
     def call(self, name, args):
         self.last_tool = name
         reservation = None
-        if (name in {'hold', 'breath_search', 'feel'}
-                or (name == 'trace' and args.get('content') not in (None, ''))
-                or (name == 'trace' and any(args.get(key) for key in
-                    ('old_str', 'new_str', 'meaning_append', 'meaning_replace')))
-                or (name == 'plan' and args.get('content'))
-                or (name == 'letter_write' and args.get('content'))
-                or (name == 'letter_read' and args.get('query'))):
-            # Ombre writes and semantic searches may embed content; reserve conservatively
-            # for the upstream SDK's initial attempt plus two internal retries.
-            tokens = 12 * max(8192, len(json.dumps(args, ensure_ascii=False).encode('utf-8')) + 2048)
-            reservation = self.budget.estimate(self.cfg.id, self.cfg.memory['model'], tokens,
-                                              self.cfg.memory['input_cny_per_million'])
         model_reservation = None
-        if name == 'hold' and ombre_model_on(self.cfg):
-            tokens_in, tokens_out = ombre_model_tokens(str(args.get('content', '')))
-            p = self.cfg.provider
-            model_reservation = self.budget.estimate_model(
-                self.cfg.id, p['model'], tokens_in, tokens_out,
-                p['input_cny_per_million'], p['output_cny_per_million'])
-        result = self.backend.call(name, args)
+        normal_embedding_amount = None
+        normal_model_amount = None
+        try:
+            if (name in {'hold', 'breath_search', 'feel', 'dream', 'pulse', 'anchor',
+                         'release', 'letter_read', 'letter_write'}
+                    or (name == 'trace' and args.get('content') not in (None, ''))
+                    or (name == 'trace' and any(args.get(key) for key in
+                        ('old_str', 'new_str', 'meaning_append', 'meaning_replace')))
+                    or (name == 'plan' and args.get('content'))
+                    or (name == 'letter_write' and args.get('content'))
+                    or (name == 'letter_read' and args.get('query'))):
+                normal_tokens = max(
+                    8192, len(json.dumps(args, ensure_ascii=False).encode('utf-8')) + 2048)
+                reserve_tokens = 12 * normal_tokens
+                rate = Decimal(str(self.cfg.memory['input_cny_per_million']))
+                reservation = self.budget.estimate(
+                    self.cfg.id, self.cfg.memory['model'], reserve_tokens, rate)
+                normal_embedding_amount = Decimal(normal_tokens) * rate / Decimal(1_000_000)
+            if name == 'hold' and ombre_model_on(self.cfg):
+                content = str(args.get('content', ''))
+                tokens_in, tokens_out = ombre_model_tokens(content, worst_case=True)
+                normal_in, normal_out = ombre_model_tokens(content)
+                p = self.cfg.provider
+                model_reservation = self.budget.estimate_model(
+                    self.cfg.id, p['model'], tokens_in, tokens_out,
+                    p['input_cny_per_million'], p['output_cny_per_million'])
+                normal_model_amount = (
+                    Decimal(normal_in) * p['input_cny_per_million']
+                    + Decimal(normal_out) * p['output_cny_per_million']
+                ) / Decimal(1_000_000)
+        except Exception:
+            # If a later preflight rejects, earlier reservations are known not to
+            # have reached the child process and can safely be released.
+            if reservation is not None:
+                self.budget.release_estimate(reservation)
+            raise
+        try:
+            result = self.backend.call(name, args)
+        except Exception:
+            # A child-process timeout or disconnect can happen after the provider
+            # accepted a request. Keep the full conservative estimate as spent.
+            if reservation is not None:
+                self.budget.settle_estimate(reservation, accounting='embedding-estimate')
+            if model_reservation is not None:
+                self.budget.settle_estimate(model_reservation, accounting='ombre-model-estimate')
+            raise
         if reservation is not None:
-            self.budget.settle_estimate(reservation)
+            self.budget.settle_estimate(
+                reservation, accounting='embedding-estimate',
+                settled_amount=normal_embedding_amount)
         if model_reservation is not None:
-            self.budget.settle_estimate(model_reservation, accounting='ombre-model-estimate')
+            self.budget.settle_estimate(
+                model_reservation, accounting='ombre-model-estimate',
+                settled_amount=normal_model_amount)
         # Only Ombre's own notice counts, and Ombre always puts it on the first line, ahead of any memory text.
         if result.lstrip().startswith(DEGRADED_NOTICE):
             self._notice_once('degraded-search', f'Memory search is using keyword fallback ({name}); see memory/_agent/server.log for the cause.')
@@ -493,7 +538,7 @@ class Memory:
                 values = {}
                 for line in header:
                     key, sep, value = line.partition(':')
-                    if sep and key.strip() in {'id', 'title', 'name'}:
+                    if sep and not line[:1].isspace() and key.strip() in {'id', 'title', 'name'}:
                         values[key.strip()] = self._frontmatter_scalar(value)
                 if values.get('id') and values['id'] != memory_id:
                     continue
@@ -541,7 +586,7 @@ class Memory:
                 metadata = {}
                 for line in lines[1:end]:
                     key, sep, value = line.partition(':')
-                    if sep and key.strip() in {'id', 'title', 'name'}:
+                    if sep and not line[:1].isspace() and key.strip() in {'id', 'title', 'name'}:
                         metadata[key.strip()] = self._frontmatter_scalar(value)
                 if metadata.get('id') == memory_id or (not metadata.get('id') and
                         (path.stem == memory_id or path.stem.endswith('_' + memory_id))):
@@ -591,7 +636,7 @@ class Memory:
         end = next((i for i, line in enumerate(lines[1:], 1) if line.strip() == '---'), len(lines))
         for line in lines[1:end]:
             key, sep, value = line.partition(':')
-            if sep and key.strip() == 'deleted_at':
+            if sep and not line[:1].isspace() and key.strip() == 'deleted_at':
                 return value.strip().strip(chr(39) + chr(34)).casefold() not in ('', 'null', 'none', 'false')
         return False
 
@@ -620,7 +665,7 @@ class Memory:
                 metadata = {}
                 for line in lines[1:end]:
                     key, sep, value = line.partition(':')
-                    if sep and key.strip() in {'dont_surface', 'tombstone', 'deleted_at', 'type'}:
+                    if sep and not line[:1].isspace() and key.strip() in {'dont_surface', 'tombstone', 'deleted_at', 'type'}:
                         key = key.strip()
                         if key in metadata:
                             break  # Ambiguous metadata cannot authorize cached content.
@@ -696,7 +741,8 @@ class Memory:
 
     def completed(self):
         if not self.native:
-            self.jobs.put(True)
+            category = getattr(self.budget.local, 'autonomy', None)
+            self.jobs.put(('completed', category))
 
     def notices(self):
         result = []
@@ -710,7 +756,11 @@ class Memory:
             try:
                 if job is None:
                     return
-                self.supplement()
+                if isinstance(job, tuple) and len(job) == 2 and job[0] == 'completed':
+                    with self.budget.autonomous(job[1]):
+                        self.supplement()
+                else:  # Keep compatibility with an already queued in-process signal.
+                    self.supplement()
             except Exception:
                 self.messages.put('这次没记成（本机记忆状态异常），请保留记忆库并重新启动。')
             finally:
@@ -786,7 +836,8 @@ class Memory:
         if bound > self.cfg.provider['max_input_tokens']:
             raise Failure('input_too_long')
         try:
-            request_id, _ = self.budget.reserve(extract_cfg)
+            request_id, reserved_amount = self.budget.reserve(
+                extract_cfg, accounting='memory-extraction')
         except UserError as exc:
             raise Failure('budget') from exc
         try:
@@ -794,6 +845,8 @@ class Memory:
             answer = self.model(messages, json_output=True, detail=True, thinking='disabled',
                                 max_tokens=extract_cfg.max_output_tokens)
         except Exception as exc:
+            self.budget.settle_estimate((request_id, reserved_amount),
+                                        accounting='memory-extraction-failed')
             raise Failure('api', error=type(exc).__name__,
                           status=getattr(exc, 'status_code', None)) from exc
         reply, prompt, completion, cached, *rest = answer
@@ -801,6 +854,8 @@ class Memory:
         try:
             self.budget.settle(request_id, extract_cfg, prompt, completion, cached)
         except UserError as exc:
+            self.budget.settle_estimate((request_id, reserved_amount),
+                                        accounting='memory-extraction-unverified')
             raise Failure('usage') from exc
         facts.update(finish=finish, completion=completion, chars=len(reply or ''))
         if finish == 'length':

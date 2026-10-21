@@ -8,6 +8,7 @@ import argparse
 import os
 from pathlib import Path
 import shutil
+import socket
 import sys
 import time
 from decimal import Decimal
@@ -248,10 +249,10 @@ def model_call(client, model, messages, *, json_output=False, max_tokens=1200):
 
 def ombre_context(proxy, character, transcripts=None):
     sys.path.insert(0, str(ROOT))
-    from memory_agent import MCP, Memory, ombre_config
+    from memory_agent import MCP, Memory
+    from ombre_resident import start_or_connect
     from veil_agent import Budget, Character, Store
     from openai import OpenAI
-    from mcp import StdioServerParameters
 
     home = require_isolation(RUN / "ombre" / character)
     vault = require_isolation(home / "data" / character / "memory")
@@ -261,39 +262,35 @@ def ombre_context(proxy, character, transcripts=None):
     model_url = proxy.base + "/ombre_extract/deepseek/v1"
     internal_url = proxy.base + "/ombre_internal/deepseek/v1"
     embed_url = proxy.base + "/ombre_embedding/siliconflow/v1"
-    provider = {"model": "deepseek-flash", "base_url": model_url,
+    with socket.socket() as port_socket:
+        port_socket.bind((PROXY_HOST, 0))
+        ombre_port = port_socket.getsockname()[1]
+    provider = {"model": "deepseek-flash", "base_url": internal_url,
                 "api_key_env": "LOCAL_PROXY_DUMMY", "input_cny_per_million": Decimal("2"),
                 "cached_input_cny_per_million": Decimal("0.04"),
                 "output_cny_per_million": Decimal("8"), "max_input_tokens": 12000}
     memory_cfg = {"model": "BAAI/bge-m3", "base_url": embed_url,
                   "input_cny_per_million": Decimal("0"), "dimensions": 1024,
-                  "mode": "extract", "extract_max_output_tokens": 1200}
+                  "mode": "extract", "extract_max_output_tokens": 1200,
+                  "ombre_port": ombre_port}
     cfg = Character(character, character.title(),
                     "只按当前消息和被提供的记忆回答；没有依据时明确说不确定。",
                     20, 1200, provider, "experiment", memory_cfg, None)
-    config = ombre_config(cfg, vault)
-    # Rebuild the native Ombre child configuration so every provider path is local.
-    config["dehydration"]["base_url"] = internal_url
-    config["dehydration"]["model"] = "deepseek-flash"
-    config["embedding"]["base_url"] = embed_url
-    config_path = private / "config.json"
-    config_path.write_text(json.dumps(config, ensure_ascii=False), encoding="utf-8")
-    (private / "tmp").mkdir(exist_ok=True)
-    executable = ROOT / ".deps" / "ombre" / "venv" / "Scripts" / "python.exe"
-    server_script = ROOT / ".deps" / "ombre" / "source" / "src" / "server.py"
-    if not executable.is_file() or not server_script.is_file():
-        raise RuntimeError("the pinned local Ombre runtime is not installed")
-    child_env = {key: os.environ[key] for key in ("SYSTEMROOT", "WINDIR", "PATH", "TEMP", "TMP") if key in os.environ}
-    child_env.update({"PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8",
-                      "OMBRE_CONFIG_PATH": str(config_path), "OMBRE_VAULT_DIR": str(vault),
-                      "OMBRE_LOG_DIR": str(private), "OMBRE_HOOK_SKIP": "1",
-                      "OMBRE_TRANSPORT": "stdio", "OMBRE_EMBED_API_KEY": "proxy-dummy",
-                      "OMBRE_COMPRESS_API_KEY": "proxy-dummy",
-                      "TEMP": str(private / "tmp"), "TMP": str(private / "tmp")})
-    params = StdioServerParameters(command=str(executable), args=[str(server_script)],
-                                   env=child_env, cwd=str(private))
-    log = (private / "process.log").open("a", encoding="utf-8")
-    backend = MCP(params, log)
+    try:
+        port, token, resident = start_or_connect(
+            ROOT, cfg, data_root=home / "data",
+            api_key_overrides={
+                "OMBRE_COMPRESS_API_KEY": "proxy-dummy",
+                "OMBRE_EMBED_API_KEY": "proxy-dummy",
+            },
+        )
+    except Exception as exc:
+        raise RuntimeError("isolated Ombre HTTP server failed to start; check the pinned local runtime") from exc
+    try:
+        backend = MCP(f"http://{PROXY_HOST}:{port}/mcp", token)
+    except Exception as exc:
+        resident.close()
+        raise RuntimeError("isolated Ombre HTTP MCP connection failed; no experiment tool call was submitted") from exc
     client = OpenAI(api_key="proxy-dummy", base_url=model_url, max_retries=0, timeout=120)
     answer_client = OpenAI(api_key="proxy-dummy",
         base_url=proxy.base + "/ombre_answer/deepseek/v1", max_retries=0, timeout=120)
@@ -335,22 +332,25 @@ def ombre_context(proxy, character, transcripts=None):
         return {"home": home, "store": store, "cfg": cfg, "budget": budget,
                 "memories": saved, "batches": records, "memory": memory,
                 "backend": backend, "client": client, "answer_client": answer_client,
-                "log": log}
+                "resident": resident, "closed": False}
     except BaseException:
         if memory is not None:
             memory.__exit__(None, None, None)
         backend.close()
-        log.close()
+        resident.close()
         answer_client.close()
         raise
 
 
 def close_ombre(runtime):
+    if runtime.get("closed"):
+        return
     runtime["memory"].__exit__(None, None, None)
     runtime["backend"].close()
+    runtime["resident"].close()
     runtime["client"].close()
     runtime["answer_client"].close()
-    runtime["log"].close()
+    runtime["closed"] = True
 
 
 def query_ombre(runtime, question):
@@ -519,4 +519,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
