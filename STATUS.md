@@ -4,7 +4,7 @@
 
 ## 当前目标与现状
 
-- **044 记忆诊断刷屏与工具拒绝原因丢失：** 基于 main `a48f13dec08d89ea2d1667ff550ae2e4cbe6baca`，PR #81，分支 `ticket/044-memory-diagnostics-tool-errors`，当前提交 `6ab8a03492babfcb08ea139caa3efcc4b10a58cf`。每轮同类记忆诊断最多显示一次；虚构数据的实际模型请求确认可见记忆仍进入上下文、隐藏和未知记忆仍被过滤。工具拒绝原因以同一条英文内容显示给 Lan 并送模型，权限/审批和参数限制未放宽。Windows/Linux × Python 3.11/3.12 CI 全绿。Claude 独立审查尚未完成：两次 `@claude review` 未获回复，GitHub reviewer 请求因 Claude 不是仓库协作者被 422 拒绝；PR 暂不合并。下一步需完成 Claude 独立审查并处理必要功能/安全意见，再合并；合并后由 Lan 做 Windows 虚构数据聊天验收。截图中收到提示的候选当轮确实被过滤；真实记忆库未读取，无法推断所有候选的运行状态。
+- **044 记忆诊断刷屏与工具拒绝原因丢失：** 基于 main `a48f13dec08d89ea2d1667ff550ae2e4cbe6baca`，PR #81，分支 `ticket/044-memory-diagnostics-tool-errors`，生产与回归代码提交 `2a1b227c354b30025d01d25a34fc93b34191ea15`。每轮同类记忆诊断最多显示一次；虚构数据的实际模型请求确认可见记忆仍进入上下文、隐藏和未知记忆仍被过滤。工具拒绝原因以同一条英文内容显示给 Lan 并送模型，权限/审批和参数限制未放宽。Windows/Linux × Python 3.11/3.12 CI 全绿。Claude 独立审查尚未完成：两次 `@claude review` 未获回复，GitHub reviewer 请求因 Claude 不是仓库协作者被 422 拒绝；PR 暂不合并。下一步需完成 Claude 独立审查并处理必要功能/安全意见，再合并；合并后由 Lan 做 Windows 虚构数据聊天验收。截图中收到提示的候选当轮确实被过滤；真实记忆库未读取，无法推断所有候选的运行状态。
 
 - **042 自主活动摘要一次性交接：** 从最新 main `14cbe535039d80cc865f605420d2ec42dd58e48d` 同步，分支 `ticket/042-autonomy-handoff-once`，PR #77 已合并。成功普通聊天后持久记录活动 ID，后续聊天和重启不再重复；模型失败保留交接机会；原始活动记录不改。四平台 CI 已通过代码测试；同步 main 后将由 CI 再验证。CodeRabbit 三次触发均被额度限制，正式审查未完成；Lan 体验待验收。
 - **040 长期任务 40 条进度后无法完成（031-05）：** PR #76 已合并，施工基线为 main `8d71b06d52efaa65ee1dc4a535bc62fc5fef632a`。PR #78 保留全部 40 条历史，并在进度已满时将最终完成证据写入独立字段；兼容旧任务快照，状态和上下文可展示该证据。重复完成请求不能覆盖首次证据。测试检查真实 JSON、重开恢复、后续新任务及保存失败保护。GitHub CI 的 Ubuntu/Windows × Python 3.11/3.12 全部通过；CodeRabbit 正式评审完成，唯一阻断意见已修复并解决。Windows 体验待 Lan 验收。
