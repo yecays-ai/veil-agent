@@ -169,6 +169,9 @@ class ColdBackupTests(unittest.TestCase):
         old_memory.parent.mkdir(parents=True)
         old_memory.write_bytes(b"fictional memory created after backup\n")
         (self.target / "data" / "session.lock").write_bytes(b"0")
+        old_ombre_lock = self.target / "data" / "fixture" / "memory" / "_agent" / "ombre.lock"
+        old_ombre_lock.parent.mkdir(parents=True)
+        old_ombre_lock.write_bytes(b"0")
         old_character = self.target / "characters" / "fixture" / "extra.txt"
         old_character.parent.mkdir(parents=True)
         old_character.write_bytes(b"old character data\n")
@@ -186,6 +189,7 @@ class ColdBackupTests(unittest.TestCase):
             b"fictional memory created after backup\n",
         )
         self.assertTrue((safety / "data" / "session.lock").exists())
+        self.assertTrue((safety / "data" / "fixture" / "memory" / "_agent" / "ombre.lock").exists())
         self.assertEqual((safety / "characters" / "fixture" / "extra.txt").read_bytes(), b"old character data\n")
         self.assertEqual((safety / "persona" / "extra.md").read_bytes(), b"old persona data\n")
         self.assertFalse((self.target / "data" / "fixture" / "memory" / "added-after-backup.md").exists())
@@ -201,6 +205,9 @@ class ColdBackupTests(unittest.TestCase):
         old_memory.parent.mkdir(parents=True)
         old_memory.write_bytes(b"old memory\n")
         (self.target / "data" / "session.lock").write_bytes(b"0")
+        old_ombre_lock = self.target / "data" / "fixture" / "memory" / "_agent" / "ombre.lock"
+        old_ombre_lock.parent.mkdir(parents=True)
+        old_ombre_lock.write_bytes(b"0")
         old_character = self.target / "characters" / "fixture" / "keep.txt"
         old_character.parent.mkdir(parents=True)
         old_character.write_bytes(b"old character\n")
@@ -224,6 +231,7 @@ class ColdBackupTests(unittest.TestCase):
         self.assertEqual(existing.read_bytes(), b"OLD=keep\n")
         self.assertEqual(old_memory.read_bytes(), b"old memory\n")
         self.assertTrue((self.target / "data" / "session.lock").exists())
+        self.assertTrue(old_ombre_lock.exists())
         self.assertEqual(old_character.read_bytes(), b"old character\n")
         self.assertEqual(len(list(self.base.glob("restored-project.before-restore-*"))), 0)
 
