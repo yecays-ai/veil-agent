@@ -78,7 +78,30 @@ Ombre 自带模型默认打开：每存一条记忆会用聊天同一个模型�
 
 ## 私有文件和备份
 
-`.env`、本机人设、`data/`、日志、虚拟环境均已忽略。仓库只包含示例人设和空密钥模板。聊天发送时，人设与最近上下文会交给你选择的模型供应商。不要提交或公开私有文件。备份时关闭程序，完整复制 `data/`、`persona/`、`.env`，妥善保管密钥。账本不完整时程序停止，不会自动删行或覆盖原记录。
+`.env`、本机人设、`data/`、日志、虚拟环境均已忽略。仓库只包含示例人设和空密钥模板。聊天发送时，人设与最近上下文会交给你选择的模型供应商。不要提交或公开私有文件。
+
+### 手动冷备份
+
+先用 `/quit` 退出并等待窗口关闭。备份程序会再检查聊天和每个 Ombre 服务的写入锁；若仍在运行会停止，不创建备份。备份根目录必须在项目目录之外，建议选择另一块启用 BitLocker 的本地磁盘。备份包含 `.env`、`characters/`、`persona/` 和完整 `data/`：包括聊天、费用账本、Ombre 记忆及索引、长期任务、授权、工具记录和 workspace。清单记录文件相对路径、大小和 SHA-256，不记录文件内容或项目本机路径。
+
+```powershell
+.venv\Scripts\python.exe backup_restore.py create --destination "X:\VEIL-backups"
+```
+
+成功时屏幕会显示新备份的完整保存位置。备份包含明文人设、记忆和可能含 API 密钥的 `.env`；程序不加密、不上传，也不打印其内容。只把备份放在加密的本地磁盘或受访问控制的离线介质上，不放云同步目录，也不要提交到 GitHub 或发给第三方。虚拟环境、Ombre 安装依赖、临时文件、进程锁/标志和运行日志会重新生成，因此不备份。
+
+### 校验与恢复
+
+先进入已安装好 VEIL 代码和依赖的项目目录；校验命令只读备份。恢复必须给出明确的项目根目录：默认遇到同名文件就拒绝且不更改目标；只有加 `--replace` 并输入 `RESTORE` 才会继续，目标中的 `data/`、`characters/`、`persona/`、`.env` 会整体移到目标旁的 `*.before-restore-*` 安全副本，再恢复干净备份。恢复前会验证格式/数据布局版本、角色配置和每个文件的校验值，任何不匹配都会停止。
+
+```powershell
+$backup = "X:\VEIL-backups\VEIL-Agent-Backup-实际时间戳"
+$target = "D:\VEIL-recovery"
+.venv\Scripts\python.exe backup_restore.py verify --backup $backup
+.venv\Scripts\python.exe backup_restore.py restore --backup $backup --target $target --replace
+```
+
+只在确认目标是要恢复的项目目录时使用 `--replace`。安全副本位置会在成功时显示；失败时程序会将整套原有角色数据移回目标；若文件系统错误阻止回滚，安全副本会留在原处。每个备份记录来源代码提交和数据布局版本；当前程序只接受明确支持的布局版本。
 
 ## 离线验证
 

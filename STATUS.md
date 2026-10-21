@@ -1,14 +1,16 @@
 # 当前状态
 
-更新：2026-10-21 14:46 UTC · 工单 045（PR #83 施工中）；044、043、041、042、040 已交付
+更新：2026-10-21 · 045（PR #83）与 046（PR #82）由 Claude 审查后合入；044、043、041、042、040 已合入
 
 ## 当前目标与现状
 
 - **045 Ombre 后台调用预算（031-04）：** 基于 GitHub 最新 main `29f2379ae7aace048001991d75628deb2e038fda`，独立分支 `ticket/045-ombre-budget`，PR #83。已补齐 Ombre 内部模型调用估算常量；VEIL 可见的 embedding 与 `hold` 模型路径在 MCP 请求前按估算上限预留共享 `Budget`，确认成功后按单次正常估算结算并释放差额；失败或重启后结果不明时按预留上限结算，结算幂等。Extract 后台调用仍使用共享账本。上游 hold 后异步计划判断和 HTTP 维护入口仍未有逐请求共享硬闸门，不能称为完整费用硬限制。GitHub Actions run 740 的 Windows/Linux × Python 3.11/3.12 全部通过（293 项测试，4 项跳过）。CodeRabbit 未提交审查，Claude 独立审查未完成；按 Lan 指示暂停后续评审与合并，Windows 体验仍另待验收。
 
-- **044 记忆诊断刷屏与工具拒绝原因丢失：** PR #81 `ticket/044-memory-diagnostics-tool-errors` 已合入 main `29f2379ae7aace048001991d75628deb2e038fda`（合并提交 `29f2379ae7aace048001991d75628deb2e038fda`）。工具失败原因已在 `long_tasks.py`、`memory_native.py`、`tools_agent.py`、`veil_agent.py`、`memory_agent.py` 源头改为英文；`model_tool_result()` 对失败原因原样传递，网页与 Peter 收到相同文本。AST 回归扫描上述源文件的失败结果，并检查 `MemoryToolError` 诊断不含中文。GitHub Actions run 692 的 Windows/Linux × Python 3.11/3.12 全部通过。Claude 独立审查待 Lan 安排；Windows 虚构数据聊天验收仍待完成。截图所示未知可见性候选保持失败关闭；真实记忆未访问，截图不能证明其他记忆也持续失效。
+- **044 记忆诊断刷屏与工具拒绝原因丢失：** PR #81 `ticket/044-memory-diagnostics-tool-errors` 已合入 main `29f2379ae7aace048001991d75628deb2e038fda`（合并提交 `29f2379ae7aace048001991d75628deb2e038fda`）。工具失败原因已在 `long_tasks.py`、`memory_native.py`、`tools_agent.py`、`veil_agent.py`、`memory_agent.py` 源头改为英文；`model_tool_result()` 对失败原因原样传递，网页与 Peter 收到相同文本。AST 回归扫描上述源文件的失败结果，并检查 `MemoryToolError` 诊断不含中文。GitHub Actions run 692 的 Windows/Linux × Python 3.11/3.12 全部通过。Claude 已审查合入；Windows 虚构数据聊天验收仍待完成。截图所示未知可见性候选保持失败关闭；真实记忆未访问，截图不能证明其他记忆也持续失效。
 
-- **043 长期任务副作用安全确认（031-06）：** 从 main `a48f13dec08d89ea2d1667ff550ae2e4cbe6baca` 建立独立分支 `ticket/043-long-task-side-effect-verification`。在 `long_tasks.py` 持久化操作 ID、规范目标与文件效果摘要；仅精确路径读回且内容匹配才记录核实。`veil_agent.py` 将工具参数和真实读取结果交给检查点；虚构文件回归已补；代码 head `92323e82906633457b967101f50c7ca16f7dbed4` 的 Ubuntu/Windows × Python 3.11/3.12 CI 全绿。CodeRabbit 发现的非文件 pending 卡死已修复；Claude 独立审查未收到响应，Windows 体验待 Lan 验收。范围不含 044。
+- **046 完整冷备份与恢复（031-09）：** 基于最新 main `29f2379`，独立分支 `ticket/046-cold-backup`，PR #82。手动备份覆盖 `data/`、`characters/`、`persona/` 与 `.env`，提供逐文件 SHA-256 清单、版本/布局校验、活动写入锁拒绝、显式目标恢复、冲突保护和失败回滚。`--replace` 先将现有四个角色数据组件整体移动到安全副本，再恢复干净备份；失败时移回原组件。清单校验会拒绝根项目符号链接。11 项虚构数据回归、语法编译和 diff 检查通过；Windows 无建链权限时，符号链接拒绝测试模拟链接状态。PR #82 经 Claude 审查后合入 main `858839e`。Windows 备份/恢复 A–E 体验待 Lan 验收，未以自动测试替代。备份含明文密钥和个人数据，需保存到加密本地磁盘/受保护介质；不上传云端或第三方。
+
+- **043 长期任务副作用安全确认（031-06）：** PR #80 已合入 main `8df2099`。在 `long_tasks.py` 持久化操作 ID、规范目标与文件效果摘要；仅精确路径读回且内容匹配才记录核实。`veil_agent.py` 将工具参数和真实读取结果交给检查点；虚构文件回归已补；合并前代码 head `92323e82906633457b967101f50c7ca16f7dbed4` 的 Ubuntu/Windows × Python 3.11/3.12 CI 全绿。CodeRabbit 发现的非文件 pending 卡死已修复；Claude 审查未收到响应；Windows 体验待 Lan 验收。范围不含 044。
 
 - **042 自主活动摘要一次性交接：** 从最新 main `14cbe535039d80cc865f605420d2ec42dd58e48d` 同步，分支 `ticket/042-autonomy-handoff-once`，PR #77 已合并。成功普通聊天后持久记录活动 ID，后续聊天和重启不再重复；模型失败保留交接机会；原始活动记录不改。四平台 CI 已通过代码测试；同步 main 后将由 CI 再验证。CodeRabbit 三次触发均被额度限制，正式审查未完成；Lan 体验待验收。
 - **040 长期任务 40 条进度后无法完成（031-05）：** PR #76 已合并，施工基线为 main `8d71b06d52efaa65ee1dc4a535bc62fc5fef632a`。PR #78 保留全部 40 条历史，并在进度已满时将最终完成证据写入独立字段；兼容旧任务快照，状态和上下文可展示该证据。重复完成请求不能覆盖首次证据。测试检查真实 JSON、重开恢复、后续新任务及保存失败保护。GitHub CI 的 Ubuntu/Windows × Python 3.11/3.12 全部通过；CodeRabbit 正式评审完成，唯一阻断意见已修复并解决。Windows 体验待 Lan 验收。
@@ -17,11 +19,14 @@
 
 ## 下一步
 
-等待 Lan 指示是否继续评审；不要在 CodeRabbit 未提交审查时推进合并。Windows 体验另由 Lan 按本页 045 步骤验收。
+045 与 046 已由 Claude 审查合入；Lan 按下方 045、046 步骤做 Windows 验收。
 
 ## Windows 验收
 
 - **045：** 用虚构角色和假模型确认预算充足时保存/检索有账本 reserve/settle；预算不足时后端调用次数不增加；请求失败和重启后预留仅结算一次、无 pending。上游异步计划判断及 HTTP 绕行路径仍未通过体验验收，不标记为已受硬控。
+
+- **046：** 按工单 A–E，关闭服务后备份到源目录外的位置；在独立测试项目恢复虚构角色并检查聊天、记忆、人设和长期任务；损坏备份后确认校验失败且目标不变；含文件目标默认拒绝覆盖，显式替换前检查安全副本；确认备份可从独立磁盘恢复。此项必须 Lan 实际验收，自动测试不能代替。
+
 - **044：** 用虚构记忆进行多轮正常聊天，确认每轮最多显示一条英文可见性提示；确认可见记忆能被正确回忆、隐藏和未知记忆不进入回答；使用无效 target_id 后按英文提示重新搜索本轮可见 ID 并成功重试。不要使用真实记忆。
 - **043：** 依工单 A–E：写入虚构文件并正确读回后继续；模拟结果不明时先检查且不重复写；读取相似路径不能解除确认；重启后 pending 保留并需重新核实；同一任务达 40 条进度后完成、重启并创建下一任务。未完成 Lan 体验前不标记通过。
 - **042：** 用专用虚构测试角色完成一次自主活动；首次成功普通聊天收到摘要，之后聊天及重启后不再重复；新活动可再次交接。让一次模型请求失败后重试，确认机会保留；`/autonomy`、网页详情和原始活动记录仍完整。
