@@ -1,5 +1,7 @@
 # 交接
 
+- 2026-10-21 Claude：新增工单 035（给模型看的系统提示全改英文）`docs/tickets/035-english-model-context.md`，等 lan 交给 Codex；PR #66 的 033 编号与 main 上的 033 冲突，应改为 034。
+
 工单 032-1，分支 `ticket/032-1-memory-delete-auth`，基准 main `c58b12835f41d3e1743624ceafd29311789ca6cb`。
 
 ## 做到哪
