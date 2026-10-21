@@ -174,7 +174,7 @@ class LongTaskStore:
                                                'next_step', 'waiting_for',
                                                'created_at', 'updated_at')}
         self._localize_model_state(summary)
-        summary['pending_action'] = self._pending_view(task['pending_action'])
+        summary['pending_action'] = self._pending_view(task['pending_action'], task['task_id'])
         summary['completion_evidence'] = task.get('completion_evidence', '')
         summary['progress'] = task['progress'][-8:]
         summary['tool_events'] = [self._model_event(event) for event in task['tool_events'][-8:]]
@@ -187,7 +187,7 @@ class LongTaskStore:
         summary = {key: task[key] for key in ('task_id', 'title', 'goal', 'status',
                                                'next_step', 'waiting_for')}
         self._localize_model_state(summary)
-        summary['pending_action'] = self._pending_view(task['pending_action'])
+        summary['pending_action'] = self._pending_view(task['pending_action'], task['task_id'])
         summary['completion_evidence'] = task.get('completion_evidence', '')
         summary['progress'] = task['progress'][-3:]
         summary['tool_events'] = [self._model_event(event) for event in task['tool_events'][-4:]]
@@ -210,11 +210,20 @@ class LongTaskStore:
         return event
 
     @staticmethod
-    def _pending_view(pending):
+    def _operation_id(task_id, pending):
+        operation_id = pending.get('operation_id')
+        if operation_id:
+            return operation_id
+        legacy = '\\x1f'.join((task_id, pending['started_at'], pending['tool'], pending['target']))
+        return hashlib.sha256(legacy.encode('utf-8')).hexdigest()[:32]
+
+    @staticmethod
+    def _pending_view(pending, task_id):
         if not pending:
             return None
         result = {key: pending[key] for key in ('operation_id', 'started_at', 'tool', 'target', 'state')
                   if key in pending}
+        result['operation_id'] = LongTaskStore._operation_id(task_id, pending)
         labels = {'成功，需核实': 'succeeded; verification required', '被拒绝': 'rejected',
                   '结果不确定': 'outcome uncertain'}
         if result.get('state') in labels:
@@ -282,7 +291,7 @@ class LongTaskStore:
                 return '程序拒绝：任务已完成，不能覆盖已保存的完成证据。', '被拒绝', task['title']
             if resolve and (task['pending_action'] is None or not progress):
                 return '程序拒绝：没有可核实的待处理操作，或缺少核实证据。', '被拒绝', task['title']
-            if resolve and args.get('pending_operation_id') != task['pending_action'].get('operation_id'):
+            if resolve and args.get('pending_operation_id') != self._operation_id(task['task_id'], task['pending_action']):
                 return '程序拒绝：待确认操作 ID 不匹配。', '被拒绝', task['title']
             if resolve and (task['pending_action'].get('verified_in_step') is None
                             or self.current_tool_step <= task['pending_action']['verified_in_step']):
@@ -301,7 +310,8 @@ class LongTaskStore:
                     task['progress'].append({'time': now(), 'text': progress.strip()})
             if resolve:
                 pending = task['pending_action']
-                task['tool_events'].append({'time': now(), 'operation_id': pending['operation_id'],
+                task['tool_events'].append({'time': now(),
+                    'operation_id': self._operation_id(task['task_id'], pending),
                     'tool': pending['tool'], 'target': pending['target'], 'state': '经检查确认',
                     'evidence': f"operation {pending['operation_id']} verified by "
                                 f"{pending['verified_by']} ({pending['verified_sha256'][:16]})"})
@@ -373,7 +383,8 @@ class LongTaskStore:
             if self._normalized_target(target) != (pending.get('normalized_target') or
                                                      self._normalized_target(pending['target'])):
                 raise UserError('长期任务副作用目标与已持久化检查点不一致，操作仍待核实。')
-            task['tool_events'].append({'time': now(), 'operation_id': pending.get('operation_id', ''),
+            task['tool_events'].append({'time': now(),
+                                        'operation_id': self._operation_id(task['task_id'], pending),
                                         'tool': name, 'target': str(target)[:240],
                                         'state': state[:40],
                                         'evidence': f'工具返回状态：{state[:40]}'})
