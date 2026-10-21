@@ -564,6 +564,9 @@ class Chat:
     def __init__(self, cfg, store, budget, model, memory=None, tools=None, approval=input, output=print):
         self.cfg, self.store, self.budget, self.model = cfg, store, budget, model
         self.path = f'{cfg.id}/chat.jsonl'
+        self.session_path = store.root / cfg.id / 'chat-session.json'
+        self.reply_language = 'auto'
+        self.session_start = 0
         self.history, self.rounds = self.recent()
         self.last_self = None
         self.trim_note = None
@@ -646,10 +649,44 @@ class Chat:
                 (output or self.output)(f'{self.cfg.name}: {text}')
         return '已发送。', '成功', 'send_message'
 
+    def start_new_conversation(self, language='auto'):
+        if language not in ('auto', 'en'):
+            raise UserError('不支持的对话语言设置。')
+        # Cursor only: old messages stay on disk.
+        start = len(self.store.read(self.path))
+        path = self.session_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix('.tmp')
+        try:
+            with tmp.open('w', encoding='utf-8', newline='\n') as handle:
+                json.dump({'start': start, 'language': language}, handle)
+                handle.write('\n')
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp, path)
+        finally:
+            tmp.unlink(missing_ok=True)
+        self.history, self.rounds = self.recent()
+        self.last_self = None
+        self.trim_note = None
+        self.trim_noted = False
+
     def recent(self):
         groups = []
+        events = self.store.read(self.path)
         try:
-            for event in self.store.read(self.path):
+            try:
+                state = json.loads(self.session_path.read_text(encoding='utf-8'))
+            except FileNotFoundError:
+                state = {'start': 0, 'language': 'auto'}
+            start, language = state['start'], state['language']
+            if type(start) is not int or not 0 <= start <= len(events) or language not in ('auto', 'en'):
+                raise ValueError('invalid session cursor')
+            self.session_start, self.reply_language = start, language
+        except (OSError, ValueError, UnicodeError, TypeError, KeyError) as exc:
+            raise UserError('新对话状态无法读取，已停止；请保留 data 文件夹。') from exc
+        try:
+            for event in events[start:]:
                 role, content = event['role'], event['content']
                 if role not in ('user', 'assistant') or not isinstance(content, str):
                     raise ValueError('invalid chat record')
@@ -679,7 +716,7 @@ class Chat:
         if not self.pending_capability_event and self.tools:
             self.pending_capability_event = self.tools.capability_event
         recalled = self.memory.context(text) if self.memory else []
-        if not autonomy and extra_context is None:
+        if not autonomy and extra_context is None and not self.session_start:
             from autonomy import recent_chat_context
             extra_context = recent_chat_context(self.store, self.cfg)
         stable, changing = self_facts(self.cfg, self.budget, memory_mode(self.memory), self.tools)
@@ -692,6 +729,13 @@ class Chat:
         tail = [*recalled]
         if extra_context:
             tail.append({'role': 'system', 'content': extra_context})
+        if not autonomy and self.reply_language == 'en':
+            tail.append({'role': 'system', 'content':
+                         'The user chose English for this conversation. Reply in natural English '
+                         'even to punctuation-only messages or messages in another language, '
+                         'unless the user explicitly asks for translation or another language. '
+                         'Respond directly; avoid repetitive apologies and status memos. '
+                         'Only claim actions that tools actually completed.'})
         if self.pending_capability_event and not autonomy:
             tail.append({'role': 'system', 'content':
                 '（程序生成的能力变化记录）' + self.pending_capability_event})
@@ -1158,6 +1202,10 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead, activity=N
             text = raw_text.strip()
             if text == '/quit':
                 break
+            if text in ('/new', '/new-en'):
+                chat.start_new_conversation('en' if text == '/new-en' else 'auto')
+                output('新对话已开始；旧聊天保留在本机，长期记忆与实验室未改动。')
+                continue
             if text == '/pause':
                 activity.set(False)
                 output('自主活动已暂停。')
