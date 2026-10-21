@@ -48,6 +48,108 @@ class NativeMemoryTests(unittest.TestCase):
         self.tools = ToolSet(files, NativeMemoryTools(self.memory, 200))
         self.output = []
 
+    def test_catalog_pages_and_exact_read_preserve_current_unicode_text(self):
+        native = self.tools.native
+        native.max_result_bytes = 800
+        vault = self.store.root / self.cfg.id / 'memory' / 'dynamic'
+        vault.mkdir(parents=True, exist_ok=True)
+        originals = {}
+        for i in range(8):
+            key = f'm{i:03}'
+            raw = f'---\nid: {key}\ntitle: 示例 {i}\n---\n' + '中文🙂 exact\n' * 220
+            (vault / f'{key}.md').write_text(raw, encoding='utf-8')
+            originals[key] = raw
+        cursor, ids = '', []
+        while True:
+            text, state, _ = native.invoke('memory_catalog', {'after': cursor})
+            self.assertEqual(state, '成功')
+            self.assertLessEqual(len(text.encode('utf-8')), 800)
+            page = json.loads(text)
+            ids.extend(row['memory_id'] for row in page['items'])
+            cursor = page['next_after']
+            if not cursor:
+                break
+        self.assertEqual(ids, sorted(originals))
+        offset, parts, version = 0, [], None
+        while True:
+            args = {'memory_id': ids[0], 'offset': offset}
+            if version:
+                args['version'] = version
+            text, state, _ = native.invoke('memory_read', args)
+            self.assertEqual(state, '成功')
+            self.assertLessEqual(len(text.encode('utf-8')), 800)
+            page = json.loads(text)
+            parts.append(page['text'])
+            offset, version = page['next_offset'], page['version']
+            if offset is None:
+                break
+        self.assertEqual(''.join(parts), originals[ids[0]])
+        self.backend.calls.clear()
+        native.invoke('memory_catalog', {})
+        native.invoke('memory_read', {'memory_id': ids[0]})
+        self.assertEqual(self.backend.calls, [])
+
+    def test_catalog_and_read_block_hidden_deleted_private_and_cross_role(self):
+        native = self.tools.native
+        native.max_result_bytes = 8192
+        vault = self.store.root / self.cfg.id / 'memory'
+        for folder, key, metadata in [('dynamic', 'visible', ''), ('dynamic', 'secret', 'dont_surface: true\n'),
+                                      ('dynamic', 'deleted', 'deleted_at: 2026-01-01\n'),
+                                      ('letters', 'letter', ''), ('_sources', 'source', '')]:
+            path = vault / folder / f'{key}.md'
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(f'---\nid: {key}\ntitle: {key}\n{metadata}---\nprivate', encoding='utf-8')
+        self.memory.state['entries']['visible'] = {'hidden': True}
+        self.assertEqual(json.loads(native.invoke('memory_catalog', {})[0])['items'], [])
+        for key in ('visible', 'secret', 'deleted', 'letter', 'source', '../other'):
+            self.assertEqual(native.invoke('memory_read', {'memory_id': key})[1], '被拒绝')
+        outside = self.store.root / 'other' / 'memory' / 'dynamic'
+        outside.mkdir(parents=True)
+        (outside / 'other.md').write_text('---\nid: other\ntitle: other\n---\nsecret', encoding='utf-8')
+        self.assertEqual(native.invoke('memory_read', {'memory_id': 'other'})[1], '被拒绝')
+
+    def test_catalog_blocks_private_types_even_in_public_or_archive_folders(self):
+        native = self.tools.native
+        native.max_result_bytes = 8192
+        vault = self.store.root / self.cfg.id / 'memory'
+        for i, (folder, kind, extra) in enumerate([
+                ('dynamic', 'i', ''), ('dynamic', 'self', ''), ('permanent', 'letter', ''),
+                ('archive', 'archived', 'original_type: self\n'),
+                ('dynamic', 'plan', ''), ('dynamic', 'unknown', ''),
+                ('dynamic', 'permanent', 'source_tool: letter\n'),
+                ('dynamic', 'permanent', 'tags: [__letter__]\n')]):
+            path = vault / folder / f'private{i}.md'
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(f'---\nid: private{i}\ntitle: Private\ntype: {kind}\n{extra}---\nsecret', encoding='utf-8')
+            self.assertEqual(native.invoke('memory_read', {'memory_id': f'private{i}'})[1], '被拒绝')
+        self.assertEqual(json.loads(native.invoke('memory_catalog', {})[0])['items'], [])
+
+    def test_memory_read_tiny_budget_never_returns_a_stuck_success_cursor(self):
+        native = self.tools.native
+        native.max_result_bytes = 239
+        key = 'a' * 100
+        path = self.store.root / self.cfg.id / 'memory' / 'dynamic' / f'{key}.md'
+        path.parent.mkdir(parents=True)
+        path.write_text(f'---\nid: {key}\ntitle: Current\ntype: dynamic\n---\n中文', encoding='utf-8')
+        result, state, _ = native.invoke('memory_read', {'memory_id': key})
+        if state == '成功':
+            page = json.loads(result)
+            self.assertTrue(page['text'])
+            self.assertGreater(page['next_offset'], 0)
+        else:
+            self.assertEqual(state, '出错')
+
+    def test_memory_read_rejects_changed_page_version(self):
+        native = self.tools.native
+        native.max_result_bytes = 8192
+        path = self.store.root / self.cfg.id / 'memory' / 'dynamic' / 'current.md'
+        path.parent.mkdir(parents=True)
+        path.write_text('---\nid: current\ntitle: Current\n---\n' + 'a' * 2000, encoding='utf-8')
+        page = json.loads(native.invoke('memory_read', {'memory_id': 'current'})[0])
+        path.write_text('---\nid: current\ntitle: Current\n---\nchanged', encoding='utf-8')
+        self.assertEqual(native.invoke('memory_read', {'memory_id': 'current', 'offset': 1,
+                         'version': page['version']})[1], '被拒绝')
+
     def call(self, name, args, call_id='c'):
         return SimpleNamespace(id=call_id, function=SimpleNamespace(
             name=name, arguments=json.dumps(args, ensure_ascii=False)))
@@ -206,7 +308,7 @@ class NativeMemoryTests(unittest.TestCase):
 
     def test_only_the_two_memory_tools_are_offered_and_delete_is_not_one_of_them(self):
         self.assertEqual({t['function']['name'] for t in permitted_tools(self.tools.tools)},
-                         {'hold', 'breath_search', 'memory_history'})
+                         {'hold', 'breath_search', 'memory_history', 'memory_catalog', 'memory_read'})
         result, state, _ = self.tools.invoke('trace', {'bucket_id': 'x', 'delete': True})
         self.assertEqual(state, '被拒绝')
 
@@ -319,6 +421,27 @@ class OmbreToolGuardTests(unittest.TestCase):
         self.assertEqual(self.backend.calls, [])
         self.assertIn('old memory body', self.path.read_text(encoding='utf-8'))
 
+    def test_approved_delete_forwards_only_the_approved_target_and_operation(self):
+        approval = Mock(return_value='y')
+        self.assertEqual(self.call('trace', {'bucket_id': 'mem001', 'delete': True,
+            'delete_reason': 'synthetic request', 'content': 'unrelated edit'}, approval)[1], '成功')
+        approval.assert_called_once()
+        self.assertEqual(self.backend.calls, [('trace', {'bucket_id': 'mem001', 'delete': True})])
+        self.backend.calls.clear()
+        self.assertEqual(self.call('trace', {'bucket_id': 'another', 'delete': True,
+            'delete_reason': 'synthetic request'})[1], '被拒绝')
+        self.assertEqual(self.backend.calls, [])
+
+    def test_autonomous_pending_delete_executes_only_after_explicit_approval(self):
+        self.tools.set_autonomy(True)
+        self.call('trace', {'bucket_id': 'mem001', 'delete': True, 'delete_reason': 'synthetic'})
+        self.assertFalse(any(args.get('delete') for _, args in self.backend.calls))
+        self.backend.calls.clear()
+        self.tools.native.process_pending_deletions(lambda _: 'y')
+        self.assertEqual([args for _, args in self.backend.calls if args.get('delete')],
+                         [{'bucket_id': 'mem001', 'delete': True}])
+        self.assertEqual(self.store.read('fake/delete-requests.jsonl')[-1]['status'], 'approved')
+
     def test_autonomous_delete_is_queued_and_refusal_removes_pending_tag(self):
         self.tools.set_autonomy(True)
         result, state, _ = self.call('trace', {'bucket_id': 'mem001', 'delete': True,
@@ -363,6 +486,30 @@ class OmbreToolGuardTests(unittest.TestCase):
         result, state, _ = self.call('trace', {'bucket_id': 'mem001', 'hard_delete': True})
         self.assertEqual(state, '被拒绝')
         self.assertEqual(self.backend.calls, [])
+
+    def test_trace_rejects_non_boolean_delete_before_any_side_effect(self):
+        original = self.path.read_bytes()
+        for autonomous in (False, True):
+            self.tools.set_autonomy(autonomous)
+            for value in (None, '', 'invalid', [], {}):
+                with self.subTest(autonomous=autonomous, kind=type(value).__name__):
+                    approval = Mock(return_value='y')
+                    result, state, _ = self.call('trace', {
+                        'bucket_id': 'mem001', 'delete': value,
+                        'delete_reason': 'synthetic request'}, approval)
+                    self.assertEqual(state, '被拒绝')
+                    approval.assert_not_called()
+                    self.assertEqual(self.backend.calls, [])
+                    self.assertEqual(self.path.read_bytes(), original)
+                    self.assertEqual(self.store.read('fake/memory-versions.jsonl'), [])
+                    self.assertEqual(self.store.read('fake/delete-requests.jsonl'), [])
+
+    def test_trace_edit_forwards_only_canonical_non_delete_flag(self):
+        approval = Mock(side_effect=AssertionError('edits need no deletion approval'))
+        for extra in ({}, {'delete': False}):
+            self.assertEqual(self.call('trace', {
+                'bucket_id': 'mem001', 'content': 'safe edit', **extra}, approval)[1], '成功')
+            self.assertIs(self.backend.calls[-1][1]['delete'], False)
 
     def test_dream_and_pulse_do_not_forward_hidden_memory_blocks(self):
         self.memory.state['entries']['mem001'] = {'title': 'Old title', 'hidden': True}
