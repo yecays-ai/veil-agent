@@ -61,6 +61,34 @@ output_cny_per_million = "8"
         self.assertEqual([r['role'] for r in rows], ['user', 'assistant', 'user', 'assistant'])
         self.assertTrue(all(r['time'] for r in rows))
 
+    def test_fresh_english_chat_keeps_old_data_but_excludes_old_prompt(self):
+        self.chat.send('old conversation')
+        before = self.store.read('test/chat.jsonl')
+        calls = self.model.call_count
+        self.chat.start_new_conversation('en')
+        self.assertEqual(self.model.call_count, calls)
+        self.assertEqual(self.store.read('test/chat.jsonl'), before)
+        self.assertEqual(self.chat.rounds, 0)
+        self.assertEqual(self.chat.history, [])
+        reopened = Chat(self.cfg, self.store, self.budget, self.model)
+        self.assertEqual(reopened.reply_language, 'en')
+        self.assertEqual(reopened.history, [])
+        reopened.send('...')
+        prompt = self.model.call_args.args[0]
+        self.assertNotIn('old conversation', str(prompt))
+        self.assertTrue(any(m['role'] == 'system' and 'natural English' in m['content']
+                            for m in prompt))
+        self.assertEqual(len(self.store.read('test/chat.jsonl')), len(before) + 2)
+
+    def test_invalid_new_chat_cursor_fails_without_erasing_history(self):
+        self.chat.send('important history')
+        before = self.store.read('test/chat.jsonl')
+        path = self.store.root / 'test' / 'chat-session.json'
+        path.write_text('{"start":999999,"language":"en"}', encoding='utf-8')
+        with self.assertRaises(UserError):
+            Chat(self.cfg, self.store, self.budget, self.model)
+        self.assertEqual(self.store.read('test/chat.jsonl'), before)
+
     def test_capability_notice_keeps_chinese_terminal_copy_and_english_model_copy(self):
         tools = SimpleNamespace(tools=[], description='Tools. ',
             capability_event='你的能力有变化：本机测试通知。',

@@ -1,5 +1,5 @@
 # 交接
 
-- 工单 035：实现及针对性回归测试已准备；本机 Python 无法启动，离线测试未运行。已获 Lan 授权继续完成本单。
-- 下一步：以最新 main 创建独立分支和 PR，等待 CI 与功能/安全评审；若通过则按仓库规则合并。
-- Windows 验收：按 `docs/tickets/035-english-model-context.md` 检查中英文对话、自主记录新旧格式、记忆、审批和界面文字。
+- 工单 034：Issue [#69](https://github.com/yecays-ai/veil-agent/issues/69)，继续既有 PR [#66](https://github.com/yecays-ai/veil-agent/pull/66)，分支名保留 `ticket/033-fresh-english-chat`。新会话游标、网页入口、重启恢复及旧聊天留存已实现；待确认最新 CI 与评审。Windows 体验待 Lan 验收。
+- 工单 035：PR [#70](https://github.com/yecays-ai/veil-agent/pull/70) 已合并至 main `31d546b69e74dea3e77c27e0f059ae95ab67198c`；GitHub Actions 全量测试通过，CodeRabbit 功能意见已处理。本机 Python 无法启动，Windows 体验待 Lan 验收。
+- 下一步：完成并合并 #66；保留两单 Windows 用户体验未验收状态。

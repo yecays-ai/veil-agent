@@ -58,7 +58,9 @@ class Hub:
     def output(self, text):
         text = str(text)
         prefix = f'{self.name}: '
-        if text.startswith(prefix):
+        if text.startswith('新对话已开始；'):
+            self.push('reset', text)
+        elif text.startswith(prefix):
             self.push('assistant', text[len(prefix):])
         elif text.startswith('请求失败，未自动重试'):
             self.push('error', text)
@@ -416,4 +418,5 @@ def main(argv=None):
 
 if __name__ == '__main__':
     raise SystemExit(main())
+
 
