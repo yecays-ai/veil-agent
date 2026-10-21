@@ -189,7 +189,9 @@ class NativeMemoryTools:
                 meta = {}
                 for line in lines[1:end]:
                     key, sep, value = line.partition(':')
-                    if sep:
+                    # Match Memory.refresh_visibility(): relation_links may contain
+                    # nested YAML keys such as ``type`` which are not bucket metadata.
+                    if sep and not line[:1].isspace():
                         meta[key.strip()] = self.memory._frontmatter_scalar(value)
                 if meta.get('type', folder).casefold() not in ('dynamic', 'permanent', 'feel'):
                     continue
@@ -254,9 +256,16 @@ class NativeMemoryTools:
 
     def _history(self, args):
         memory_id = args.get('memory_id')
-        summary = self.memory.title_for(memory_id) if isinstance(memory_id, str) else None
-        if not summary or self.memory.is_hidden(memory_id):
+        # Do not authorize historical text from an older cached visibility result.
+        # The current record is the authority, the same as automatic recall.
+        if (not isinstance(memory_id, str)
+                or self.memory.state['entries'].get(memory_id, {}).get('hidden')
+                or memory_id in self.memory.state['sources'].values()
+                or not self.memory.refresh_visibility(memory_id)):
             return 'This memory does not exist or is hidden.', '被拒绝', str(memory_id or 'memory_history')
+        summary = self.memory.title_for(memory_id)
+        if not summary:
+            return 'This memory does not exist or is hidden.', '被拒绝', memory_id
         rows = [row for row in self.memory.store.read(f'{self.memory.cfg.id}/memory-versions.jsonl')
                 if row.get('memory_id') == memory_id]
         if not rows:

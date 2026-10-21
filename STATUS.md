@@ -1,10 +1,12 @@
 # 当前状态
 
-更新：2026-10-22 · 工单 054（长期任务检查点与 40 条进度核实）进行中；052（PR #89）、051（PR #88）、047 Windows 桌面版 0.1（PR #84）、050（PR #86，原撞号 047）、048（PR #87）及 049、045、046、044、043、041、042、040 均已合入
+更新：2026-10-22 · 054（PR #91）与 053（PR #90）经 Claude 审查后合入；052（PR #89）、051（PR #88）、047 Windows 桌面版 0.1（PR #84）、050（PR #86，原撞号 047）、048（PR #87）及 049、045、046、044、043、041、042、040 均已合入
 
 ## 当前目标与现状
 
-- **054 长期任务检查点与 40 条进度核实：** 基于 main `d331c134e0670816d8a72e6d29e357815ae5e0d7`，分支 `ticket/054-long-task-checkpoint-recovery`，PR #91。`trace` 检查点前后均使用稳定 memory ID，不依赖执行后会变化的展示标题；带正文的 `trace` 仅在 `memory_read` 返回同 ID、完整且哈希匹配的正文后才可核实。40 条进度已满时，已有程序读回证据可直接记录核实、解除 pending，既有进度和完成证据不覆盖。修复提交 `8da093b` 的 Tests run 824 已在 Ubuntu/Windows × Python 3.11/3.12 全部通过完整 unittest，Dependency security run 17 也通过；本机无可执行 Python，未把本地命令冒充通过。未改 `_tool_chat` 架构、记忆权限或真实数据；由 Lan 安排审查和合并，Codex 不合并。
+- **054 长期任务检查点与 40 条进度核实：** 基于 main `d331c134e0670816d8a72e6d29e357815ae5e0d7`，分支 `ticket/054-long-task-checkpoint-recovery`，PR #91 已合入。`trace` 检查点前后均使用稳定 memory ID，不依赖执行后会变化的展示标题；带正文的 `trace` 仅在 `memory_read` 返回同 ID、完整且哈希匹配的正文后才可核实。40 条进度已满时，已有程序读回证据可直接记录核实、解除 pending，既有进度和完成证据不覆盖。修复提交 `8da093b` 的 Tests run 824 已在 Ubuntu/Windows × Python 3.11/3.12 全部通过完整 unittest，Dependency security run 17 也通过；本机无可执行 Python，未把本地命令冒充通过。未改 `_tool_chat` 架构、记忆权限或真实数据；由 Lan 安排审查和合并，Codex 不合并。
+
+- **053 隐藏历史与关联记忆工具一致性：** PR #90 已合入 main `41a3578`，分支 `ticket/053-memory-visibility-tools`。`memory_history` 现在在返回旧版本正文前同时保留程序隐藏/来源保护，并复用自动检索的 `refresh_visibility()` 读取当前 frontmatter；因此外部已隐藏/归档状态不再因旧缓存泄漏历史。目录的 frontmatter 解析与 049 一致，只读顶层键，`relation_links` 内的缩进 `type: same_event` 不再把正常可见记忆错判为非公开类型，`memory_read` 继续复用同一目录记录。虚构跨工具回归和完整 `python -m unittest discover -s tests` 已通过（315 项，2 项跳过）；尚待 CI 与 Lan Windows 体验。未访问真实记忆或发送付费请求。
 
 - **052 最近一次自主活动持续上下文：** PR #89 已合入 main `d331c13`。普通聊天和后续自主唤醒均获取最新已结束记录，并以英文 `System record | Last autonomous activity | Occurred at:` 标记为历史事实；Windows 虚构角色体验仍待 Lan 验收。
 
@@ -33,9 +35,11 @@
 
 ## 下一步
 
-完成 054 完整 unittest 与 PR CI 后，由 Lan 安排审查及合并；Codex 不申请 Claude 审查、不自行合并。合并后按下方 054 验收步骤用虚构角色体验，不使用真实记忆或付费模型。
+053 与 054 已由 Claude 审查合入；Lan 按下方 053、054 验收步骤用虚构角色体验，不使用真实记忆或付费模型。
 
 ## Windows 验收
+
+- **053：** ① 用虚构记忆先修改一次，再在面板隐藏它；让 Peter 查询这条记忆的历史，确认他不能说出修改前正文。② 用含 `relation_links` 的虚构正常记忆打开记忆目录，确认能看到它，Peter 可读取正文并在正常聊天中想起它。③ 取消隐藏第一条虚构记忆后再次让 Peter 查历史，确认合法历史恢复可读。
 
 - **047：** ① 完整解压后双击 VEIL.exe，确认透明原图、拖动、大小切换、空白点击穿透和聊天收放/缩放。② 选择原 Agent 文件夹，确认旧聊天保留，正常聊天一次并拒绝一次原有需审批操作；收放不重复发送；Memory / Ombre、Lab 不可用且有清楚说明。③ 退出重开确认记录和位置大小保留，停止后台服务后用右键“重新连接聊天”恢复。真实敏感数据与额外模型消费不用于验收；自动窗口测试不代表本项通过。
 
