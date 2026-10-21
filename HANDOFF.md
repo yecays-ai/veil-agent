@@ -1,7 +1,7 @@
 - 2026-10-21 Codex：工单 043 从 main `a48f13dec08d89ea2d1667ff550ae2e4cbe6baca` 建立分支 `ticket/043-long-task-side-effect-verification`，PR #80。修复 031-06：稳定操作 ID、规范目标、文件内容效果摘要与真实读回；非文件操作及旧非文件 checkpoint 需精确目标的成功只读回读，旧操作 ID 稳定派生。CodeRabbit 指出的非文件 pending 卡死已修复并回帖；当前代码 head `92323e82906633457b967101f50c7ca16f7dbed4` 的 Ubuntu/Windows × Python 3.11/3.12 CI 全绿。Claude 评论请求尚无回复，GitHub reviewer API 不允许请求 `claude`（非协作者）；未把其他审查冒充 Claude。下一步是获得 Claude 独立审查、确认最终文档 head CI 后再合并。Lan 的 A–E Windows 体验仍待验收；040 行为保留，044 不在范围。
 # 交接
 
-- 2026-10-21 Codex：工单 044 继续在 PR #81 `ticket/044-memory-diagnostics-tool-errors`。已把 main `8df2099c90bd6681ebfeab4f0302e7390a992e52` 作为第二父提交合入，合并提交 `6eb3e36b724ab043721f6d571fb5d1d79bdbeab5`，以 main 为底保留 043/040 的实现与状态记录。当前代码/测试提交 `ac6a40cbfba39c5b27c074da640f7232f0c8e6e3` 将 `long_tasks.py`、`memory_native.py`、`tools_agent.py`、`veil_agent.py`、`memory_agent.py` 的工具失败原因改为英文；失败结果由 `model_tool_result()` 原样传递；回归扫描失败结果文本及安全诊断；页面和模型显示同一句。Actions run 692 的 Windows/Linux × Python 3.11/3.12 全绿。Claude 独立审查待 Lan 手动安排；收到意见后处理必要的功能/安全问题并复核 CI，再合并。真实数据未读取；Lan 的 Windows 虚构记忆聊天验收待合并后进行。
+- 2026-10-21 Codex：工单 045 从 GitHub 最新 main `8df2099c90bd6681ebfeab4f0302e7390a992e52`（PR #81/044 已合并）建立独立分支 `ticket/045-ombre-budget`。因共享 `.git` 目录只读，不能建立本地 worktree；在 `.worktrees/045-source` 使用该 main SHA 的归档副本施工，分支和提交经 GitHub connector 管理，未动 046 根目录文件。已改 `memory_agent.py`、`veil_agent.py` 和 `tests/test_memory.py`：Ombre hold 模型预留按固定版本 4096+1024 输出上限及每个模型请求最多 3 次尝试估算；调用失败保守结算，后续预算预检拒绝时释放未发送预留；结算幂等；重启把 Ombre/Extract 未结算预留转成同额保守费用；Extract 请求失败也结算预留。补了工单 045 及 STATUS。静态核对已完成，自动测试尚未能在本机运行（WindowsApps 的 `python.exe` 不可执行），需依赖 PR CI 验证。固定 Ombre 的异步 `check_plan_resolution`、可能的 Dashboard/HTTP 维护调用没有逐请求预算闸门；不能把此实现称为完整硬性费用限制。下一步先修复/验证所有测试与文档，推送单一原子 PR；随后查 Claude 审查入口和 4 平台 CI。未请求 Claude 或 CodeRabbit review，未合并、未触及 046。
 
 - 2026-10-21 Claude：PR #77（042）与 PR #79（041）因小兔子限流由 Claude 审查，CI 全绿后合并；两单 Windows 体验待 Lan 验收。
 - 2026-10-21 11:48 UTC Codex：工单 042 基于最新 main `14cbe535039d80cc865f605420d2ec42dd58e48d`，分支 `ticket/042-autonomy-handoff-once`，PR #77 开放。保留 040 最新合并记录；本次 main 仅增加 040 的长期任务实现与文档，和 042 的代码文件无重叠。042 的代码测试曾在 Windows/Linux × Python 3.11/3.12 CI 全部通过；本地 Python 与 GitHub HTTPS 克隆不可用，未建立本地 Git worktree。CodeRabbit 三次手动审查触发均被免费额度限流，正式审查未完成，不合并。下一个窗口先查看 PR #77 当前 CI 与 CodeRabbit 评论；额度恢复后触发正式审查，处理必要功能/安全意见；满足门槛后合并。之后 Lan 用专用虚构测试角色验收 042；不要以 CI 替代聊天体验。
@@ -18,3 +18,4 @@
 - 2026-10-21 Claude：工单 036 Peter 身份分层。身份与行动方式都在本机 persona/peter.md（v3 在项目共享文件夹 peter-companion/peter-identity-v3.md，不进公开仓库）；权限仍由程序给出，成长经历留给 Ombre。代码只改了程序事实里的 “terminal text chat”。Ombre 工具定义的 token 占用未测（本机装不上 Ombre）。Windows 体验待 Lan 验收。
 - 2026-10-21 Claude：去掉「新对话」写死的英文提示，按钮改发 /new；/new-en 仍可输入但等同 /new。
 - 工单 034（PR #66）、035（PR #70）已合并；Windows 体验待 Lan 验收。
+
