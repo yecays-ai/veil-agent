@@ -33,8 +33,9 @@ TASK_UPDATE_TOOL = SimpleNamespace(name='long_task_update', description=(
     'an unfinished task cannot be overwritten. Use action=update with its exact task_id to append '
     'confirmed progress and evidence, set the next step, pause, mark a blocker, or mark the whole goal '
     'completed. A session ending or reaching a tool limit is not task completion. If pending_action exists, '
-    'first inspect the target using existing read tools; only resolve it with evidence that establishes '
-    'what happened. If the effect cannot be confirmed, mark the task blocked and do not repeat it. '
+    'first inspect the exact target using read_text_file; for file writes the program checks actual content against '
+    'the saved operation effect. Resolve only with the pending operation_id shown by long_task_status and after '
+    'the program records a matching read. If the effect cannot be confirmed, mark the task blocked and do not repeat it. '
     'This state does not grant file or memory permissions.'), inputSchema={
         'type': 'object', 'additionalProperties': False,
         'properties': {
