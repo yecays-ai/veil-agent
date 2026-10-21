@@ -5,7 +5,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
-import time
+import threading
 import unittest
 
 import backup_restore
@@ -35,13 +35,15 @@ def _project(root, label):
 def _child_code():
     return r'''
 import json, os, sys, time
+import traceback
 from pathlib import Path
 import backup_restore
 from long_tasks import LongTaskStore
 from veil_agent import Store
 
-mode = sys.argv[1]
-if mode == "long-write":
+try:
+  mode = sys.argv[1]
+  if mode == "long-write":
     root = Path(sys.argv[2]); target = root / "workspace" / "effect.txt"
     tasks = LongTaskStore(Store(root / "data"), "peter")
     _, state, _ = tasks.invoke("long_task_update", {"action":"create", "title":"fixture", "goal":"write once"})
@@ -52,15 +54,14 @@ if mode == "long-write":
     (root / "workspace" / "executions.jsonl").write_text('{"operation":"write-once"}\n', encoding="utf-8")
     print("READY-FOR-KILL", flush=True)
     time.sleep(30)
-elif mode == "long-state":
+  elif mode == "long-state":
     root = Path(sys.argv[2]); tasks = LongTaskStore(Store(root / "data"), "peter")
     print(json.dumps(tasks.read(), ensure_ascii=False), flush=True)
-elif mode == "restore":
+  elif mode == "restore":
     backup, target, boundary = map(Path, sys.argv[2:5])
     original = backup_restore.os.replace
     installed = 0
     def interrupt(source, destination):
-        nonlocal_installed = None
         global installed
         result = original(source, destination)
         if source.parent == target and destination.parent.name.startswith(target.name + ".before-restore-"):
@@ -73,6 +74,9 @@ elif mode == "restore":
         return result
     backup_restore.os.replace = interrupt
     backup_restore.restore_backup(backup, target, replace=True, confirm=lambda _: "RESTORE")
+except BaseException:
+  traceback.print_exc(file=sys.stderr)
+  raise
 '''
 
 
@@ -88,14 +92,39 @@ class ProcessRecoveryTests(unittest.TestCase):
         return subprocess.Popen([sys.executable, "-c", _child_code(), *map(str, args)], cwd=REPO,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
-    def _kill_at_boundary(self, process):
-        self.assertEqual(process.stdout.readline().strip(), READY)
+    def _wait_ready(self, process, *, timeout=10):
+        received = []
+        finished = threading.Event()
+
+        def read_ready():
+            received.append(process.stdout.readline())
+            finished.set()
+
+        threading.Thread(target=read_ready, daemon=True).start()
+        if finished.wait(timeout):
+            return received[0].strip()
         process.kill()
-        process.wait(timeout=10)
-        self.assertNotEqual(process.returncode, 0)
-        stderr = process.stderr.read()
-        process.stdout.close(); process.stderr.close()
-        return stderr
+        stdout, stderr = process.communicate(timeout=10)
+        self.fail(f"child did not reach interruption boundary within {timeout}s; "
+                  f"returncode={process.returncode}; stdout={stdout!r}; stderr={stderr!r}")
+
+    def _kill_at_boundary(self, process):
+        try:
+            boundary = self._wait_ready(process)
+            if boundary != READY:
+                if process.poll() is None:
+                    process.kill()
+                stdout, stderr = process.communicate(timeout=10)
+                self.fail(f"child stopped before interruption boundary; returncode={process.returncode}; "
+                          f"boundary={boundary!r}; stdout={stdout!r}; stderr={stderr!r}")
+            process.kill()
+            stdout, stderr = process.communicate(timeout=10)
+            self.assertNotEqual(process.returncode, 0)
+            return stderr
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.communicate(timeout=10)
 
     def test_real_process_kill_after_effect_keeps_pending_and_never_replays(self):
         state = self.root / "task-state"
@@ -106,7 +135,9 @@ class ProcessRecoveryTests(unittest.TestCase):
         self.assertEqual((state / "workspace" / "executions.jsonl").read_text().count("write-once"), 1)
 
         restarted = subprocess.run([sys.executable, "-c", _child_code(), "long-state", str(state)],
-                                  cwd=REPO, capture_output=True, text=True, timeout=10, check=True)
+                                  cwd=REPO, capture_output=True, text=True, timeout=10, check=False)
+        self.assertEqual(restarted.returncode, 0,
+                         f"long-state child failed; stdout={restarted.stdout!r}; stderr={restarted.stderr!r}")
         pending = json.loads(restarted.stdout)["pending_action"]
         self.assertEqual(pending["tool"], "write_file")
         # The new process saw a real persisted checkpoint; readback, not replay, resolves it.

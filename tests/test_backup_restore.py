@@ -182,6 +182,7 @@ class ColdBackupTests(unittest.TestCase):
             backup, self.target, replace=True, confirm=lambda _: "RESTORE"
         )
         self.assertGreater(count, 0)
+        self.assertFalse((self.target / backup_restore.RECOVERY_MARKER_NAME).exists())
         self.assertEqual(existing.read_bytes(), b"FAKE_API_KEY=fiction-only\n")
         self.assertEqual((safety / ".env").read_bytes(), b"OLD_SECRET=fake\n")
         self.assertEqual(
@@ -234,6 +235,7 @@ class ColdBackupTests(unittest.TestCase):
         self.assertTrue(old_ombre_lock.exists())
         self.assertEqual(old_character.read_bytes(), b"old character\n")
         self.assertEqual(len(list(self.base.glob("restored-project.before-restore-*"))), 0)
+        self.assertFalse((self.target / backup_restore.RECOVERY_MARKER_NAME).exists())
 
     def test_failed_restore_to_new_target_removes_partial_target(self):
         backup = self._create()
