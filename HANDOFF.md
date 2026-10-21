@@ -1,3 +1,5 @@
+- 2026-10-21 Codex：工单 048 基于远端最新 main `c0f4553c0e6ad4c4855e23f6b458d0f0252e0700`，独立分支 `ticket/048-ombre-http-adapter`；已保留其后的 049 状态记录。确认实验 017 入口为 `experiments/memory-quality-017/run_experiment.py`，原代码导入已移除的 `ombre_config` 并使用 stdio MCP 参数；已改为复用隔离 `start_or_connect()` 与 `MCP(url, token)`，provider 路由仍走原预算代理。模拟连接回归 2/2、语法编译和 diff 检查通过；完整 unittest discover 两次均出现错误输出后长时间无进度/汇总，已停止重复尝试，等待 PR CI 同套件复核。未运行真实 Peter/Ghost 数据或付费模型。下一步检查 CI 与有效功能/安全审查意见，再交 PR 给 Lan；Codex 不申请 Claude、不等待 Claude、不合并。
+
 - 2026-10-21 Codex：工单 043 从 main `a48f13dec08d89ea2d1667ff550ae2e4cbe6baca` 建立分支 `ticket/043-long-task-side-effect-verification`，PR #80。修复 031-06：稳定操作 ID、规范目标、文件内容效果摘要与真实读回；非文件操作及旧非文件 checkpoint 需精确目标的成功只读回读，旧操作 ID 稳定派生。CodeRabbit 指出的非文件 pending 卡死已修复并回帖；当前代码 head `92323e82906633457b967101f50c7ca16f7dbed4` 的 Ubuntu/Windows × Python 3.11/3.12 CI 全绿。Claude 评论请求尚无回复，GitHub reviewer API 不允许请求 `claude`（非协作者）；未把其他审查冒充 Claude。下一步是获得 Claude 独立审查、确认最终文档 head CI 后再合并。Lan 的 A–E Windows 体验仍待验收；040 行为保留，044 不在范围。
 # 交接
 
@@ -24,3 +26,4 @@
 - 2026-10-21 Claude：工单 036 Peter 身份分层。身份与行动方式都在本机 persona/peter.md（v3 在项目共享文件夹 peter-companion/peter-identity-v3.md，不进公开仓库）；权限仍由程序给出，成长经历留给 Ombre。代码只改了程序事实里的 “terminal text chat”。Ombre 工具定义的 token 占用未测（本机装不上 Ombre）。Windows 体验待 Lan 验收。
 - 2026-10-21 Claude：去掉「新对话」写死的英文提示，按钮改发 /new；/new-en 仍可输入但等同 /new。
 - 工单 034（PR #66）、035（PR #70）已合并；Windows 体验待 Lan 验收。
+
