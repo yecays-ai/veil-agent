@@ -11,7 +11,7 @@ VEIL 关闭后可把必要的本机角色数据完整备份到独立位置，并
 - Ombre vault 内与记忆内容及索引相关的文件须原样保留；仅排除 `_agent` 的 `process.log`、进程/停止/锁/ready 标志和临时目录。
 - 复用调查：restic/restic（BSD-2-Clause，约 36.7k stars、约 9.9k commits；2026-10-18 最新提交 `dd09b6bd01af220b1d5d95c0d4d7d472e05e05c4`）。源码 `cmd/restic/cmd_backup.go` 的 `runBackup` 只有在扫描和 `archiver.Snapshot` 成功后才报告快照成功；文档提供加密、校验、恢复和 Windows/Linux 安装。结论：借鉴完整性/失败即不成功原则；本单用 Python 标准库实现固定本地目录的冷备份，因为 restic 还需用户安装、密码仓库管理和额外 CLI 步骤，超出本单的简易单次快照需求。未复制第三方代码。
 - 备份包含 `.env` 与个人记忆，为明文本地副本；程序不联网、不上传、不打印文件内容。用户必须选择加密的本地磁盘/受保护介质保存，避免云同步目录。
-- 实现与回归：`backup_restore.py` 提供手动备份、完整性/版本验证和显式目标恢复；10 项虚构数据定向回归通过。Windows 实际 A–E 验收仍待 Lan 完成。
+- 实现与回归：`backup_restore.py` 提供手动备份、完整性/版本验证和显式目标恢复；`--replace` 将现有角色数据整体移到安全副本并提供整套回滚，manifest 根项目拒绝符号链接。定向虚构数据回归 11/11 通过。Windows 实际 A–E 验收仍待 Lan 完成。
 
 ## 验收步骤
 
