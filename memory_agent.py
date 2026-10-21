@@ -191,23 +191,29 @@ def ombre_model_on(cfg):
     return bool((cfg.memory or {}).get('ombre_model', True))
 
 
-# Ombre's own prompts (tagging and same-event judging) and their input limits, in UTF-8 bytes.
+# Pinned Ombre 115d831d uses analyze(max_tokens=4096), judge_same_event(max_tokens=1024),
+# and retries transient provider errors up to three total attempts. VEIL reserves this
+# upper estimate before MCP entry, then settles the normal estimate on confirmed success.
 OMBRE_ANALYZE_PROMPT_BYTES, OMBRE_JUDGE_PROMPT_BYTES = 3200, 1000
-OMBRE_OLD_MEMORY_BYTES, OMBRE_OUTPUT_TOKENS = 5400, 800
+OMBRE_OLD_MEMORY_BYTES = 5400
+OMBRE_ANALYZE_OUTPUT_TOKENS, OMBRE_JUDGE_OUTPUT_TOKENS = 4096, 1024
+OMBRE_MODEL_ATTEMPTS = 3
+OMBRE_OUTPUT_TOKENS = 800
 
 
-def ombre_model_tokens(content):
-    """Estimate a hold's tagging and same-event LLM calls, including pinned retries.
+def ombre_model_tokens(content, *, worst_case=False):
+    """Return normal or maximum estimated tokens for one hold's synchronous model work.
 
-    This does not include Ombre's asynchronous plan-resolution work and is not
-    a per-request hard limit; those upstream calls are documented separately.
+    The reserve covers pinned retries and output caps. It is still an estimate,
+    not a hard limit on Ombre's asynchronous plan-resolution requests.
     """
     size = len(content.encode('utf-8'))
     data = (OMBRE_ANALYZE_PROMPT_BYTES + min(size, 6000) + OMBRE_JUDGE_PROMPT_BYTES
             + min(size, 5400) + OMBRE_OLD_MEMORY_BYTES)
-    tokens_in = (data // 2) * OMBRE_MODEL_ATTEMPTS
-    tokens_out = (OMBRE_ANALYZE_OUTPUT_TOKENS + OMBRE_JUDGE_OUTPUT_TOKENS) * OMBRE_MODEL_ATTEMPTS
-    return tokens_in, tokens_out
+    attempts = OMBRE_MODEL_ATTEMPTS if worst_case else 1
+    output = (OMBRE_ANALYZE_OUTPUT_TOKENS + OMBRE_JUDGE_OUTPUT_TOKENS
+              if worst_case else OMBRE_OUTPUT_TOKENS)
+    return (data // 2) * attempts, output * attempts
 
 
 @contextmanager
@@ -433,6 +439,8 @@ class Memory:
         self.last_tool = name
         reservation = None
         model_reservation = None
+        normal_embedding_amount = None
+        normal_model_amount = None
         try:
             if (name in {'hold', 'breath_search', 'feel', 'dream', 'pulse', 'anchor',
                          'release', 'letter_read', 'letter_write'}
@@ -442,16 +450,25 @@ class Memory:
                     or (name == 'plan' and args.get('content'))
                     or (name == 'letter_write' and args.get('content'))
                     or (name == 'letter_read' and args.get('query'))):
-                # This is an estimate for the bounded vector work in this tool operation.
-                tokens = 12 * max(8192, len(json.dumps(args, ensure_ascii=False).encode('utf-8')) + 2048)
-                reservation = self.budget.estimate(self.cfg.id, self.cfg.memory['model'], tokens,
-                                                  self.cfg.memory['input_cny_per_million'])
+                normal_tokens = max(
+                    8192, len(json.dumps(args, ensure_ascii=False).encode('utf-8')) + 2048)
+                reserve_tokens = 12 * normal_tokens
+                rate = Decimal(str(self.cfg.memory['input_cny_per_million']))
+                reservation = self.budget.estimate(
+                    self.cfg.id, self.cfg.memory['model'], reserve_tokens, rate)
+                normal_embedding_amount = Decimal(normal_tokens) * rate / Decimal(1_000_000)
             if name == 'hold' and ombre_model_on(self.cfg):
-                tokens_in, tokens_out = ombre_model_tokens(str(args.get('content', '')))
+                content = str(args.get('content', ''))
+                tokens_in, tokens_out = ombre_model_tokens(content, worst_case=True)
+                normal_in, normal_out = ombre_model_tokens(content)
                 p = self.cfg.provider
                 model_reservation = self.budget.estimate_model(
                     self.cfg.id, p['model'], tokens_in, tokens_out,
                     p['input_cny_per_million'], p['output_cny_per_million'])
+                normal_model_amount = (
+                    Decimal(normal_in) * p['input_cny_per_million']
+                    + Decimal(normal_out) * p['output_cny_per_million']
+                ) / Decimal(1_000_000)
         except Exception:
             # If a later preflight rejects, earlier reservations are known not to
             # have reached the child process and can safely be released.
@@ -469,9 +486,13 @@ class Memory:
                 self.budget.settle_estimate(model_reservation, accounting='ombre-model-estimate')
             raise
         if reservation is not None:
-            self.budget.settle_estimate(reservation, accounting='embedding-estimate')
+            self.budget.settle_estimate(
+                reservation, accounting='embedding-estimate',
+                settled_amount=normal_embedding_amount)
         if model_reservation is not None:
-            self.budget.settle_estimate(model_reservation, accounting='ombre-model-estimate')
+            self.budget.settle_estimate(
+                model_reservation, accounting='ombre-model-estimate',
+                settled_amount=normal_model_amount)
         # Only Ombre's own notice counts, and Ombre always puts it on the first line, ahead of any memory text.
         if result.lstrip().startswith(DEGRADED_NOTICE):
             self._notice_once('degraded-search', f'Memory search is using keyword fallback ({name}); see memory/_agent/server.log for the cause.')
