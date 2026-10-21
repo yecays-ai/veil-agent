@@ -7,6 +7,7 @@ from unittest.mock import Mock
 from unittest.mock import patch
 
 from long_tasks import LongTaskStore
+from tools_agent import FilesystemTools
 from veil_agent import Budget, Chat, Store, UserError, load_character
 
 
@@ -408,6 +409,113 @@ max_result_bytes = 4096
         self.assertEqual(self.tasks.read(), previous)
         self.assertEqual(self.tasks.read()['status'], 'active')
         self.assertEqual(self.tasks.read().get('completion_evidence', ''), '')
+
+    def test_dispatch_recovers_real_file_effect_after_model_failure_at_progress_limit(self):
+        """The fake model chooses calls; checkpointing and file I/O stay real."""
+        root = self.store.root.parent
+        (root / 'characters' / 'peter').mkdir(parents=True)
+        (root / 'persona').mkdir()
+        (root / 'persona' / 'peter.md').write_text('Fictional persona', encoding='utf-8')
+        (root / 'characters' / 'peter' / 'character.toml').write_text('''name = "Peter"
+provider = "fake"
+persona = "persona/peter.md"
+max_output_tokens = 80
+[providers.fake]
+model = "fake-model"
+base_url = "https://example.invalid/v1"
+api_key_env = "FAKE_KEY"
+max_input_tokens = 6000
+input_cny_per_million = "2"
+cached_input_cny_per_million = "1"
+output_cny_per_million = "8"
+[tools]
+enabled = true
+max_steps = 6
+max_output_tokens = 80
+max_result_bytes = 4096
+''', encoding='utf-8')
+        cfg = load_character(root, 'peter')
+        workspace = self.store.root / 'peter' / 'workspace'
+        workspace.mkdir(parents=True)
+        files = FilesystemTools.__new__(FilesystemTools)
+        files.workspace, files.cfg, files.lab = workspace, cfg, None
+        files.tools = [
+            SimpleNamespace(name='write_file', description='Write a fictional file.', inputSchema={}),
+            SimpleNamespace(name='read_text_file', description='Read a fictional file.', inputSchema={}),
+        ]
+        files.client = Mock()
+        files.client.call.side_effect = lambda name, args: Path(args['path']).read_text(encoding='utf-8')
+        files.capability_event = None
+
+        def call(name, args, call_id):
+            return SimpleNamespace(id=call_id, function=SimpleNamespace(
+                name=name, arguments=json.dumps(args)))
+
+        class Message:
+            def __init__(self, calls=(), content=None):
+                self.tool_calls, self.content = list(calls), content
+
+            def model_dump(self, exclude_none=True):
+                return {'role': 'assistant', 'content': self.content, 'tool_calls': [
+                    {'id': item.id, 'type': 'function', 'function': {
+                        'name': item.function.name, 'arguments': item.function.arguments}}
+                    for item in self.tool_calls]}
+
+        budget = Budget(self.store)
+        first_model = Mock(side_effect=[
+            (Message([call('write_file', {'path': 'checkpoint.txt', 'content': 'FICTIONAL_EFFECT'}, 'write')]), 100, 10, 0),
+            RuntimeError('fictional provider disconnect'),
+        ])
+        chat = Chat(cfg, self.store, budget, first_model, tools=files, approval=lambda _prompt: 'y', output=lambda *_: None)
+        task_id = chat.long_tasks.invoke('long_task_update', {
+            'action': 'create', 'title': 'Fictional recovery', 'goal': 'Verify exactly once.'})[2]
+        task_id = chat.long_tasks.read()['task_id']
+        for index in range(40):
+            self.assertEqual(chat.long_tasks.invoke('long_task_update', {
+                'action': 'update', 'task_id': task_id,
+                'progress_update': f'Fictional prior progress {index + 1}.'})[1], '成功')
+        request_id, _ = budget.reserve(cfg)
+        with self.assertRaises(Exception):
+            chat._tool_chat([{'role': 'user', 'content': 'Run fictional task.'}], request_id, 0,
+                            history_start=0, autonomy=True)
+        self.assertEqual((workspace / 'checkpoint.txt').read_text(encoding='utf-8'), 'FICTIONAL_EFFECT')
+        pending = chat.long_tasks.read()['pending_action']
+        self.assertEqual(pending['state'], '成功，需核实')
+
+        resumed = Chat(cfg, self.store, budget, None, tools=files, approval=lambda _prompt: 'y', output=lambda *_: None)
+        readbacks = iter(['WRONG_FICTIONAL_EFFECT', 'FICTIONAL_EFFECT'])
+        files.client.call.side_effect = lambda _name, _args: next(readbacks)
+        def resume_model(*_args, **_kwargs):
+            step = resume_model.step
+            resume_model.step += 1
+            operation_id = resumed.long_tasks.read()['pending_action']['operation_id'] if step in (1, 3) else None
+            responses = [
+                Message([call('read_text_file', {'path': 'checkpoint.txt'}, 'read')]),
+                Message([call('long_task_update', {'action': 'update', 'task_id': task_id,
+                    'resolve_pending': True, 'pending_operation_id': operation_id}, 'reject-bad-readback')]),
+                Message([call('read_text_file', {'path': 'checkpoint.txt'}, 'read-again')]),
+                Message([call('long_task_update', {'action': 'update', 'task_id': task_id,
+                    'resolve_pending': True, 'pending_operation_id': operation_id}, 'resolve')]),
+                Message([call('long_task_update', {'action': 'update', 'task_id': task_id, 'status': 'completed',
+                    'progress_update': 'The existing fictional file was read back exactly.'}, 'complete')]),
+                Message(content='Fictional task completed after verification.'),
+            ]
+            return responses[step], 100, 10, 0
+        resume_model.step = 0
+        resumed.model = resume_model
+        request_id, _ = budget.reserve(cfg)
+        reply, _ = resumed._tool_chat([{'role': 'user', 'content': 'Resume safely.'}], request_id, 0,
+                                      history_start=0, autonomy=True)
+        saved = resumed.long_tasks.read()
+        self.assertEqual(reply, 'Fictional task completed after verification.')
+        self.assertEqual(len(saved['progress']), 40)
+        self.assertEqual(saved['completion_evidence'], 'The existing fictional file was read back exactly.')
+        self.assertIsNone(saved['pending_action'])
+        self.assertEqual(files.client.call.call_count, 2)
+        reopened = LongTaskStore(self.store, 'peter')
+        self.assertEqual(reopened.read(), saved)
+        self.assertEqual(reopened.invoke('long_task_update', {
+            'action': 'create', 'title': 'Next fictional task', 'goal': 'Not blocked by the completed one.'})[1], '成功')
 
     def test_completed_task_does_not_disable_other_autonomous_work(self):
         task_id = self.create()
