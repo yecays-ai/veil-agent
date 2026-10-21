@@ -421,6 +421,27 @@ class OmbreToolGuardTests(unittest.TestCase):
         self.assertEqual(self.backend.calls, [])
         self.assertIn('old memory body', self.path.read_text(encoding='utf-8'))
 
+    def test_approved_delete_forwards_only_the_approved_target_and_operation(self):
+        approval = Mock(return_value='y')
+        self.assertEqual(self.call('trace', {'bucket_id': 'mem001', 'delete': True,
+            'delete_reason': 'synthetic request', 'content': 'unrelated edit'}, approval)[1], '成功')
+        approval.assert_called_once()
+        self.assertEqual(self.backend.calls, [('trace', {'bucket_id': 'mem001', 'delete': True})])
+        self.backend.calls.clear()
+        self.assertEqual(self.call('trace', {'bucket_id': 'another', 'delete': True,
+            'delete_reason': 'synthetic request'})[1], '被拒绝')
+        self.assertEqual(self.backend.calls, [])
+
+    def test_autonomous_pending_delete_executes_only_after_explicit_approval(self):
+        self.tools.set_autonomy(True)
+        self.call('trace', {'bucket_id': 'mem001', 'delete': True, 'delete_reason': 'synthetic'})
+        self.assertFalse(any(args.get('delete') for _, args in self.backend.calls))
+        self.backend.calls.clear()
+        self.tools.native.process_pending_deletions(lambda _: 'y')
+        self.assertEqual([args for _, args in self.backend.calls if args.get('delete')],
+                         [{'bucket_id': 'mem001', 'delete': True}])
+        self.assertEqual(self.store.read('fake/delete-requests.jsonl')[-1]['status'], 'approved')
+
     def test_autonomous_delete_is_queued_and_refusal_removes_pending_tag(self):
         self.tools.set_autonomy(True)
         result, state, _ = self.call('trace', {'bucket_id': 'mem001', 'delete': True,
@@ -465,6 +486,30 @@ class OmbreToolGuardTests(unittest.TestCase):
         result, state, _ = self.call('trace', {'bucket_id': 'mem001', 'hard_delete': True})
         self.assertEqual(state, '被拒绝')
         self.assertEqual(self.backend.calls, [])
+
+    def test_trace_rejects_non_boolean_delete_before_any_side_effect(self):
+        original = self.path.read_bytes()
+        for autonomous in (False, True):
+            self.tools.set_autonomy(autonomous)
+            for value in (None, '', 'invalid', [], {}):
+                with self.subTest(autonomous=autonomous, kind=type(value).__name__):
+                    approval = Mock(return_value='y')
+                    result, state, _ = self.call('trace', {
+                        'bucket_id': 'mem001', 'delete': value,
+                        'delete_reason': 'synthetic request'}, approval)
+                    self.assertEqual(state, '被拒绝')
+                    approval.assert_not_called()
+                    self.assertEqual(self.backend.calls, [])
+                    self.assertEqual(self.path.read_bytes(), original)
+                    self.assertEqual(self.store.read('fake/memory-versions.jsonl'), [])
+                    self.assertEqual(self.store.read('fake/delete-requests.jsonl'), [])
+
+    def test_trace_edit_forwards_only_canonical_non_delete_flag(self):
+        approval = Mock(side_effect=AssertionError('edits need no deletion approval'))
+        for extra in ({}, {'delete': False}):
+            self.assertEqual(self.call('trace', {
+                'bucket_id': 'mem001', 'content': 'safe edit', **extra}, approval)[1], '成功')
+            self.assertIs(self.backend.calls[-1][1]['delete'], False)
 
     def test_dream_and_pulse_do_not_forward_hidden_memory_blocks(self):
         self.memory.state['entries']['mem001'] = {'title': 'Old title', 'hidden': True}
