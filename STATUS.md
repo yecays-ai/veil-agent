@@ -4,7 +4,7 @@
 
 ## 当前目标与现状
 
-- **053 隐藏历史与关联记忆工具一致性：** 基于 main `d331c13`，分支 `ticket/053-memory-visibility-tools`。`memory_history` 现在在返回旧版本正文前同时保留程序隐藏/来源保护，并复用自动检索的 `refresh_visibility()` 读取当前 frontmatter；因此外部已隐藏/归档状态不再因旧缓存泄漏历史。目录的 frontmatter 解析与 049 一致，只读顶层键，`relation_links` 内的缩进 `type: same_event` 不再把正常可见记忆错判为非公开类型，`memory_read` 继续复用同一目录记录。虚构跨工具回归和完整 `python -m unittest discover -s tests` 已通过（315 项，2 项跳过）；尚待提交、推送 PR、CI 与 Lan Windows 体验。未访问真实记忆或发送付费请求。
+- **053 隐藏历史与关联记忆工具一致性：** PR #90，基于 main `d331c13`，分支 `ticket/053-memory-visibility-tools`。`memory_history` 现在在返回旧版本正文前同时保留程序隐藏/来源保护，并复用自动检索的 `refresh_visibility()` 读取当前 frontmatter；因此外部已隐藏/归档状态不再因旧缓存泄漏历史。目录的 frontmatter 解析与 049 一致，只读顶层键，`relation_links` 内的缩进 `type: same_event` 不再把正常可见记忆错判为非公开类型，`memory_read` 继续复用同一目录记录。虚构跨工具回归和完整 `python -m unittest discover -s tests` 已通过（315 项，2 项跳过）；尚待 CI 与 Lan Windows 体验。未访问真实记忆或发送付费请求。
 
 - **052 最近一次自主活动持续上下文：** 基于 main `04fd7d89fe0e502319e4cbbab1b40d6285bf21e4`，分支 `ticket/052-last-autonomy-context`。复用页面详情对应的角色隔离 `autonomy.jsonl`；普通聊天和后续自主唤醒均获取最新已结束记录，并以英文 `System record | Last autonomous activity | Occurred at:` 标记为历史事实。042 的首次交接确认保留，但不再移除记录。虚构记录回归及完整 `python -m unittest discover -s tests` 已通过（313 项，2 项跳过）；尚待推送 PR、CI 与 Lan 体验验收。未改调度、权限、Ombre 记忆或私人数据。
 
@@ -33,7 +33,7 @@
 
 ## 下一步
 
-推送 053 并开 PR；由 Lan 自行安排 Claude 审查与合并。053 合并后按下方 053 验收步骤用虚构角色体验，不使用真实记忆或付费模型。
+等待 PR #90 CI；由 Lan 自行安排 Claude 审查与合并。053 合并后按下方 053 验收步骤用虚构角色体验，不使用真实记忆或付费模型。
 
 ## Windows 验收
 
