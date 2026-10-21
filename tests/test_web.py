@@ -110,11 +110,12 @@ output_cny_per_million = "8"
             except BaseException as exc:  # reported in the main thread
                 result['error'] = repr(exc)
             finally:
-                self.hub.stopped = True
+                self.hub.request_stop()
 
         thread = threading.Thread(target=client)
         thread.start()
         serve_chat(chat, self.hub)   # main thread: the chat loop uses signal handlers
+        self.hub.stop()              # the loop and its chat writes have completed
         thread.join()
         self.assertNotIn('error', result, result.get('error'))
         return result
@@ -124,6 +125,8 @@ output_cny_per_million = "8"
         self.assertEqual(self.call('/api/events', host='evil.example')[0], 403)
         self.assertEqual(self.call('/api/events', origin='http://evil.example')[0], 403)
         self.assertEqual(self.call('/api/send', {'text': 'x'}, token='wrong')[0], 403)
+        self.assertEqual(self.call('/api/exit', {}, token='wrong')[0], 403)
+        self.assertFalse(self.hub.stopping)
         self.assertEqual(self.call('/api/events')[0], 200)
         self.model.assert_not_called()
 
@@ -150,10 +153,45 @@ output_cny_per_million = "8"
         self.assertEqual(self.call('/api/activity', {'enabled': False})[0], 200)
         self.assertFalse(reopened.enabled())
 
-    def test_explicit_exit_stops_new_submissions(self):
-        self.assertEqual(self.call('/api/exit', {})[0], 200)
-        self.assertTrue(self.hub.stopped)
-        self.assertEqual(self.call('/api/send', {'text': 'not sent'})[0], 409)
+    def test_exit_is_accepted_before_shutdown_and_completes_after_saved_chat(self):
+        gate = threading.Event()
+        model_started = threading.Event()
+
+        def slow_model(*_args, **_kwargs):
+            model_started.set()
+            gate.wait(5)
+            return ('A fictional reply', 100, 20, 10)
+
+        self.model.side_effect = slow_model
+        result = {}
+
+        def scenario(_):
+            self.assertTrue(self.wait(lambda: not self.call('/api/events')[1]['busy']))
+            self.assertEqual(self.call('/api/send', {'text': 'keep this message'})[0], 200)
+            self.assertTrue(model_started.wait(5))
+
+            result['first_exit'] = self.call('/api/exit', {})
+            result['during'] = self.call('/api/events')[1]
+            result['repeat_exit'] = self.call('/api/exit', {})
+            result['send_while_stopping'] = self.call('/api/send', {'text': 'not sent'})
+            result['activity_while_stopping'] = self.call('/api/activity', {'enabled': True})
+            gate.set()
+            self.assertTrue(self.wait(lambda: self.hub.stopped))
+
+        self.run_loop(scenario)
+        self.assertEqual((result['first_exit'][0], result['first_exit'][1]['state']),
+                         (202, 'accepted'))
+        self.assertTrue(result['during']['stopping'])
+        self.assertFalse(result['during']['stopped'])
+        self.assertEqual((result['repeat_exit'][0], result['repeat_exit'][1]['state']),
+                         (202, 'stopping'))
+        self.assertEqual(result['send_while_stopping'][0], 409)
+        self.assertEqual(result['activity_while_stopping'][0], 409)
+        self.assertFalse(self.hub.activity.enabled())
+        self.assertTrue(self.hub.snapshot(0)['stopped'])
+        self.assertEqual(self.call('/api/exit', {}), (200, {'ok': True, 'state': 'stopped'}))
+        self.assertEqual([m['content'] for m in self.store.read('test/chat.jsonl')],
+                         ['keep this message', 'A fictional reply'])
 
     def test_terminal_pause_commands_are_persisted_without_model_calls(self):
         results = {}

@@ -40,7 +40,8 @@ function page(options = {}) {
     sessionStorage: { getItem(key) { return storage.has(key) ? storage.get(key) : null; }, setItem(key, value) { storage.set(key, String(value)); }, removeItem(key) { storage.delete(key); } },
     window: { SpeechRecognition: options.speechSupported === false ? undefined : FakeSpeechRecognition,
       addEventListener(name, fn) { listeners.set(name, fn); } },
-    fetch() { fetchCount++; return Promise.resolve({ ok: true, json: async () => ({}) }); },
+    fetch(...args) { fetchCount++; return Promise.resolve(options.fetch ? options.fetch(...args) : { ok: true, json: async () => ({}) }); },
+    confirm() { return options.confirm ? options.confirm() : true; },
     crypto: { randomUUID() { return 'fake-request-id'; } },
     Date: class extends Date { static now() { return clock; } },
     setTimeout(fn, delay) { const id = ++nextId; timers.set(id, { at: clock + delay, fn }); return id; },
@@ -177,6 +178,27 @@ noSpeech.recognizers[0].onend();
 assert.match(noSpeech.elements.get('speech-status').textContent, /没有检测到语音/);
 
 (async () => {
+  let exitSnapshot = {events:[],busy:false,stopping:true,stopped:false,name:'Test',pending:null,
+    activity_enabled:false,memory_panel_url:null};
+  const exitPage = page({
+    confirm: () => true,
+    fetch: async path => path === '/api/exit'
+      ? {ok:true,status:200,json:async()=>({ok:true,state:'accepted'})}
+      : {ok:true,status:200,json:async()=>exitSnapshot},
+  });
+  await exitPage.elements.get('exit-service').onclick();
+  assert.equal(exitPage.elements.get('ended').style.display, 'none',
+    'HTTP 200 acknowledgement alone must not claim the service has stopped');
+  assert.match(exitPage.elements.get('service-status').textContent, /请求已收到，正在保存并关闭/);
+  await exitPage.run('poll()');
+  assert.equal(exitPage.elements.get('ended').style.display, 'none');
+  assert.match(exitPage.elements.get('service-status').textContent, /正在保存并关闭/);
+  exitSnapshot = {...exitSnapshot, stopping:false, stopped:true};
+  await exitPage.run('poll()');
+  assert.equal(exitPage.elements.get('ended').style.display, 'block',
+    'only the backend stopped state may show the completion banner');
+  assert.match(exitPage.elements.get('service-status').textContent, /已停止/);
+
   await voice.run('send()');
   assert.equal(voice.fetchCount(), 1, 'the existing send path submits only after explicit send');
   assert.equal(voice.elements.get('box').value, '');
