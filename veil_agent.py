@@ -1096,6 +1096,10 @@ class Chat:
                     except (ValueError, TypeError):
                         result, state, summary = 'The program rejected this call because the arguments are not a valid JSON object.', '被拒绝', call.function.name
                     display_result = result
+                    if result == 'The program rejected this call because the tool is unavailable.':
+                        display_result = '程序拒绝：工具未开放。'
+                    elif result == 'The program rejected this call because the arguments are not a valid JSON object.':
+                        display_result = '程序拒绝：工具参数不是合法 JSON 对象。'
                     display_detail = display_result
                     tool_message = {'role': 'tool', 'tool_call_id': call.id,
                                     'content': model_tool_result(call.function.name, result, state)}
