@@ -133,6 +133,7 @@ class FilesystemTools:
             self.client = None
             self.tools = []
             self.capability_event = None
+            self.capability_event_model = None
             return
         if type(settings.get('enabled', True)) is not bool:
             raise UserError('文件工具配置无效，请检查 character.toml。')
@@ -155,6 +156,7 @@ class FilesystemTools:
         self.tools = []
         self.client = None
         self.capability_event = None
+        self.capability_event_model = None
         self.startup_notice = None
         if not self.enabled:
             self.description = 'You have no tools; tools are disabled by this character configuration. '
@@ -243,6 +245,12 @@ class FilesystemTools:
                 previous_core['resident_memory'] = bool(previous.get('resident_memory', False))
             if previous and previous_core == core:
                 self.capability_event = previous.get('pending_event')
+                self.capability_event_model = previous.get('pending_event_model')
+                if self.capability_event and not self.capability_event_model:
+                    names = ', '.join(sorted(core['tools'])) or 'no filesystem tools'
+                    self.capability_event_model = (
+                        f'Current capability update: the available filesystem tools are {names}. '
+                        'Follow the listed permissions and approval limits.')
                 return
             if previous != core:
                 old = previous.get('tools', {}) if previous else {}
@@ -287,7 +295,12 @@ class FilesystemTools:
                     message = '你的记忆现在会随时间自然淡去；你可以在记忆面板查看、置顶和归档。'
                     self.capability_event = (self.capability_event + '\n' + message
                                              if self.capability_event else message)
+            names = ', '.join(sorted(core['tools'])) or 'no filesystem tools'
+            self.capability_event_model = (
+                f'Current capability update: tools in {self.folder_name} are {names}. '
+                'Follow the listed permissions and approval limits.') if self.capability_event else None
             row = {**core, 'pending_event': self.capability_event,
+                   'pending_event_model': self.capability_event_model,
                    'memory_tools': previous.get('memory_tools', []) if previous else [],
                    'autonomy_announced': bool(previous and previous.get('autonomy_announced')),
                    'long_tasks_announced': bool(previous and previous.get('long_tasks_announced'))}
@@ -306,10 +319,12 @@ class FilesystemTools:
         try:
             row = json.loads(self.cap_path.read_text(encoding='utf-8'))
             row['pending_event'] = None
+            row['pending_event_model'] = None
             temporary = self.cap_path.with_suffix('.json.tmp')
             temporary.write_text(json.dumps(row, ensure_ascii=False, indent=2), encoding='utf-8')
             os.replace(temporary, self.cap_path)
             self.capability_event = None
+            self.capability_event_model = None
         except Exception:
             self.enabled = False
             from veil_agent import UserError
@@ -329,10 +344,15 @@ class FilesystemTools:
                 event = previous_event + '\n' + event
             row['autonomy_announced'] = True
             row['pending_event'] = event
+            prior_model = row.get('pending_event_model') or ''
+            row['pending_event_model'] = (prior_model + '\n' if prior_model else '') + (
+                'Autonomous activity is enabled. You may choose whether to act; if send_message is available, '
+                'you may send up to three chat messages per wake, or none.')
             temporary = self.cap_path.with_suffix('.json.tmp')
             temporary.write_text(json.dumps(row, ensure_ascii=False, indent=2), encoding='utf-8')
             os.replace(temporary, self.cap_path)
             self.capability_event = event
+            self.capability_event_model = row['pending_event_model']
         except Exception as exc:
             self.enabled = False
             from veil_agent import UserError
@@ -345,6 +365,7 @@ class FilesystemTools:
             row = json.loads(self.cap_path.read_text(encoding='utf-8')) if self.cap_path.exists() else {}
             if row.get('long_tasks_announced'):
                 self.capability_event = row.get('pending_event')
+                self.capability_event_model = row.get('pending_event_model')
                 return
             event = ('新增长期任务能力：你可以保存一项当前任务，记录已确认进度与下一步，'
                      '并在后续自主活动或服务重启后继续；原有预算、工具权限与审批不变。')
@@ -353,6 +374,11 @@ class FilesystemTools:
                 event = previous_event + '\n' + event
             row['long_tasks_announced'] = True
             row['pending_event'] = event
+            prior_model = row.get('pending_event_model') or ''
+            row['pending_event_model'] = (prior_model + '\n' if prior_model else '') + (
+                'Long-task tools are available to save one active task, record confirmed progress and next steps, '
+                'and continue after later autonomous activity or a service restart. Existing budgets, tool '
+                'permissions, and approval rules still apply.')
             temporary = self.cap_path.with_suffix('.json.tmp')
             with temporary.open('w', encoding='utf-8', newline='\n') as handle:
                 handle.write(json.dumps(row, ensure_ascii=False, indent=2))
@@ -360,6 +386,7 @@ class FilesystemTools:
                 os.fsync(handle.fileno())
             os.replace(temporary, self.cap_path)
             self.capability_event = event
+            self.capability_event_model = row['pending_event_model']
         except Exception as exc:
             self.enabled = False
             from veil_agent import UserError
@@ -368,8 +395,8 @@ class FilesystemTools:
     def _description(self, names):
         if not names:
             return 'You currently have no tools. '
-        entries = [f'{name}（{ "先问 lan 同意" if name in ASK else "可直接做"}）' for name in names]
-        description = f'You can use tools only in the “{self.folder_name}” folder: ' + '、'.join(entries) + '. '
+        entries = [f'{name} (ask lan first)' if name in ASK else f'{name} (direct use)' for name in names]
+        description = f'You can use tools only in the "{self.folder_name}" folder: ' + ', '.join(entries) + '. '
         if getattr(self, 'lab', None):
             lab = self.lab.name
             description += (

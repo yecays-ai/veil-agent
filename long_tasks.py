@@ -154,13 +154,14 @@ class LongTaskStore:
     def status_text(self):
         task = self.read()
         if not task:
-            return '当前没有长期任务。'
+            return 'There is no active long-term task.'
         summary = {key: task[key] for key in ('task_id', 'title', 'goal', 'status',
                                                'next_step', 'waiting_for',
                                                'created_at', 'updated_at')}
+        self._localize_model_state(summary)
         summary['pending_action'] = self._pending_view(task['pending_action'])
         summary['progress'] = task['progress'][-8:]
-        summary['tool_events'] = task['tool_events'][-8:]
+        summary['tool_events'] = [self._model_event(event) for event in task['tool_events'][-8:]]
         return json.dumps(summary, ensure_ascii=False, separators=(',', ':'))
 
     def context_text(self, task=None):
@@ -169,17 +170,39 @@ class LongTaskStore:
             return ''
         summary = {key: task[key] for key in ('task_id', 'title', 'goal', 'status',
                                                'next_step', 'waiting_for')}
+        self._localize_model_state(summary)
         summary['pending_action'] = self._pending_view(task['pending_action'])
         summary['progress'] = task['progress'][-3:]
-        summary['tool_events'] = task['tool_events'][-4:]
+        summary['tool_events'] = [self._model_event(event) for event in task['tool_events'][-4:]]
         return json.dumps(summary, ensure_ascii=False, separators=(',', ':'))
+
+    @staticmethod
+    def _localize_model_state(summary):
+        if summary.get('next_step') == '拆分并开始第一项可验证工作。':
+            summary['next_step'] = 'Break the task into steps and begin with the first verifiable item.'
+
+    @staticmethod
+    def _model_event(event):
+        event = dict(event)
+        labels = {'经检查确认': 'verified by inspection', '被拒绝': 'rejected',
+                  '成功，需核实': 'succeeded; verification required', '结果不确定': 'outcome uncertain'}
+        if event.get('state') in labels:
+            event['state'] = labels[event['state']]
+        if event.get('evidence', '').startswith('工具返回状态：'):
+            event['evidence'] = event['evidence'].replace('工具返回状态：', 'Tool returned state: ', 1)
+        return event
 
     @staticmethod
     def _pending_view(pending):
         if not pending:
             return None
-        return {key: pending[key] for key in ('started_at', 'tool', 'target', 'state')
-                if key in pending}
+        result = {key: pending[key] for key in ('started_at', 'tool', 'target', 'state')
+                  if key in pending}
+        labels = {'成功，需核实': 'succeeded; verification required', '被拒绝': 'rejected',
+                  '结果不确定': 'outcome uncertain'}
+        if result.get('state') in labels:
+            result['state'] = labels[result['state']]
+        return result
 
     def invoke(self, name, args, approval=None):
         if name == 'long_task_status':

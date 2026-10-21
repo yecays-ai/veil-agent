@@ -244,6 +244,8 @@ class ToolPolicyTests(unittest.TestCase):
         self.assertEqual(manifest['tools'], {'read_text_file': 'allow', 'write_file': 'ask'})
         self.assertNotIn(str(self.root), json.dumps(manifest))
         self.assertIn('你的能力有变化', manager.capability_event)
+        self.assertNotRegex(manager.capability_event_model, r'[\u3400-\u9fff]')
+        self.assertIn('ask lan first', FilesystemTools._description(manager, ['write_file']))
         manager.consume_capability_event()
         reopened = FilesystemTools.__new__(FilesystemTools)
         reopened.cfg, reopened.store = manager.cfg, store
@@ -284,6 +286,7 @@ class ToolPolicyTests(unittest.TestCase):
         self.assertIn('send_message', manager.capability_event)
         self.assertIn('最多三条', manager.capability_event)
         self.assertIn('也可以不发', manager.capability_event)
+        self.assertNotRegex(manager.capability_event_model, r'[\u3400-\u9fff]')
         manager.consume_capability_event()
         reopened = FilesystemTools.__new__(FilesystemTools)
         reopened.cfg, reopened.store, reopened.folder_name = manager.cfg, store, 'workspace'
@@ -303,6 +306,7 @@ class ToolPolicyTests(unittest.TestCase):
         manager.consume_capability_event()
         manager.announce_long_tasks()
         self.assertIn('新增长期任务能力', manager.capability_event)
+        self.assertNotRegex(manager.capability_event_model, r'[\u3400-\u9fff]')
         manager.consume_capability_event()
 
         reopened = FilesystemTools.__new__(FilesystemTools)

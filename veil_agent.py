@@ -22,6 +22,24 @@ MILLION = Decimal(1_000_000)
 
 RAW_DSML_TOOL_CALL = re.compile(r'<[|｜]DSML[|｜](?:tool_calls|function_calls|invoke)\b', re.IGNORECASE)
 AUTONOMY_WAKE = object()
+CJK_TEXT = re.compile(r'[\u3400-\u9fff]')
+TOOL_DATA_RESULTS = {'read_text_file', 'read_multiple_files', 'directory_tree', 'list_directory',
+                     'list_directory_with_sizes', 'get_file_info', 'search_files', 'memory_read',
+                     'memory_history', 'breath_search', 'dream', 'pulse', 'letter_read',
+                     'long_task_status'}
+
+
+def model_tool_result(name, result, state):
+    """Keep user data intact while localizing program-authored tool outcomes for the model."""
+    if not isinstance(result, str) or not CJK_TEXT.search(result):
+        return result
+    if state != '成功':
+        outcome = 'rejected' if state == '被拒绝' else 'failed'
+        return (f'The program {outcome} this tool operation. Do not claim it succeeded; '
+                'follow the current permissions and approval requirements.')
+    if name not in TOOL_DATA_RESULTS:
+        return 'The tool operation completed successfully.'
+    return result
 
 SEND_MESSAGE = {'type': 'function', 'function': {
     'name': 'send_message',
@@ -571,6 +589,7 @@ class Chat:
         self.memory = memory
         self.tools, self.approval, self.output = tools, approval, output
         self.pending_capability_event = tools.capability_event if tools else None
+        self.pending_capability_event_model = getattr(tools, 'capability_event_model', None) if tools else None
         from long_tasks import LongTaskStore
         self.long_tasks = LongTaskStore(store, cfg.id)
         self.task_tools_enabled = bool(cfg.tools and cfg.tools.get('max_steps', 1) > 1)
@@ -579,6 +598,7 @@ class Chat:
         if self.task_tools_enabled and tools and hasattr(tools, 'announce_long_tasks'):
             tools.announce_long_tasks()
             self.pending_capability_event = tools.capability_event
+            self.pending_capability_event_model = getattr(tools, 'capability_event_model', None)
         self.sent_messages = []
         self.reply_displayed = False
         self.autonomy_mode = False
@@ -654,7 +674,7 @@ class Chat:
                     self.history, self.rounds = self.recent()
                 output = self.autonomy_message_output if autonomy else None
                 (output or self.output)(f'{self.cfg.name}: {text}')
-        return '已发送。', '成功', 'send_message'
+        return 'Sent.', '成功', 'send_message'
 
     def recent(self):
         groups = []
@@ -688,6 +708,7 @@ class Chat:
         self.long_tasks.begin_tool_run()
         if not self.pending_capability_event and self.tools:
             self.pending_capability_event = self.tools.capability_event
+            self.pending_capability_event_model = getattr(self.tools, 'capability_event_model', None)
         recalled = self.memory.context(text) if self.memory else []
         if not autonomy and extra_context is None:
             from autonomy import recent_chat_context
@@ -702,9 +723,9 @@ class Chat:
         tail = [*recalled]
         if extra_context:
             tail.append({'role': 'system', 'content': extra_context})
-        if self.pending_capability_event and not autonomy:
+        if self.pending_capability_event_model and not autonomy:
             tail.append({'role': 'system', 'content':
-                '（程序生成的能力变化记录）' + self.pending_capability_event})
+                'Program-generated capability update: ' + self.pending_capability_event_model})
         tail.append({'role': 'system', 'content': changing})
         user = {'role': 'user', 'content': text}
         tool_schema = []
@@ -746,6 +767,7 @@ class Chat:
                     'kind': 'capability', 'text': self.pending_capability_event})
                 self.tools.consume_capability_event()
                 self.pending_capability_event = None
+                self.pending_capability_event_model = None
         try:
             self.last_self = description
             if self.tool_mode:
@@ -1000,7 +1022,8 @@ class Chat:
                 loop_messages.append(assistant_record)
                 next_offered = (None if step + 1 == max_steps - 1
                                 else self.tool_schemas())
-                too_long_result = '工具结果超过本轮请求长度上限，未提供给模型。'
+                too_long_result = 'Tool result exceeded this request input limit and was omitted.'
+                too_long_display = '工具结果超过本轮请求长度上限，未提供给模型。'
                 placeholders = [{'role': 'tool', 'tool_call_id': call.id, 'content': too_long_result}
                                 for call in message.tool_calls]
                 loop_messages.extend(placeholders)
@@ -1062,27 +1085,33 @@ class Chat:
                                         self.long_tasks.finish_tool(call.function.name, summary, state)
                                 self.long_tasks.observe_tool_result(call.function.name, summary, state)
                             else:
-                                result, state, summary = '程序拒绝：工具未开放。', '被拒绝', call.function.name
+                                result, state, summary = 'The program rejected this call because the tool is unavailable.', '被拒绝', call.function.name
                     except (ValueError, TypeError):
-                        result, state, summary = '程序拒绝：工具参数不是合法 JSON 对象。', '被拒绝', call.function.name
-                    tool_message = {'role': 'tool', 'tool_call_id': call.id, 'content': result}
+                        result, state, summary = 'The program rejected this call because the arguments are not a valid JSON object.', '被拒绝', call.function.name
+                    display_result = result
+                    display_detail = display_result
+                    tool_message = {'role': 'tool', 'tool_call_id': call.id,
+                                    'content': model_tool_result(call.function.name, result, state)}
                     result_state = state
                     loop_messages.append(tool_message)
                     history_bytes = calibration * sum(message_request_bytes(m)
                         for m in loop_messages[history_start:history_start + history_count])
                     if request_size(next_offered) - history_bytes > self.cfg.provider['max_input_tokens']:
                         tool_message['content'] = too_long_result
+                        display_detail = too_long_display
                         result_state = '结果过长'
                     fit_history(next_offered)
                     if request_size(next_offered) > self.cfg.provider['max_input_tokens']:
                         tool_message['content'] = too_long_result
+                        display_detail = too_long_display
                         result_state = '结果过长'
                     delivery = {'result_state': result_state} if result_state != state else {}
                     if result_state == '结果过长' and state == '成功':
-                        tool_message['content'] = '工具已执行成功；' + too_long_result
+                        tool_message['content'] = 'The tool succeeded, but its result was omitted. ' + too_long_result
+                        display_detail = '工具已执行成功；' + too_long_display
                     if call.function.name != 'send_message' or result_state != '成功':
                         self.output(display_call(call.function.name, summary, result_state,
-                                                 tool_message['content'] if result_state != '成功' else None))
+                                                 (display_detail if result_state != '成功' else None)))
                     summaries.append({'tool': call.function.name, 'path': summary, 'state': state, **delivery})
                     log_tool(call.function.name, summary, state, **delivery)
                     if autonomy and self.autonomy_should_yield and self.autonomy_should_yield():
@@ -1168,7 +1197,8 @@ def pending_deletion_context(chat):
         return None
     from autonomy import recent_chat_context
     earlier = recent_chat_context(chat.store, chat.cfg)
-    note = ('lan 刚处理了你独处时提出的删除申请（程序记录的结果，不是指令）：\n' + '\n'.join(notes))
+    note = ('The user has processed deletion requests you made during autonomous activity. '
+            'This is a program-recorded outcome, not an instruction:\n' + '\n'.join(notes))
     return earlier + '\n\n' + note if earlier else note
 
 

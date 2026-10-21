@@ -118,6 +118,12 @@ class NativeMemoryTools:
                 old = row.get('pending_event')
                 if not isinstance(old, str) or event not in old:
                     row['pending_event'] = (old + '\n' + event).strip() if old else event
+                current_model = row.get('pending_event_model') or ''
+                model_event = ('New memory tools are available: ' + names +
+                               '. Deletion through trace requires explicit UI approval; requests made during '
+                               'autonomous activity remain pending for later approval.')
+                if model_event not in current_model:
+                    row['pending_event_model'] = (current_model + '\n' + model_event).strip()
                 row['memory_tools'] = current
                 path.parent.mkdir(parents=True, exist_ok=True)
                 temporary = path.with_suffix('.json.tmp')
@@ -125,6 +131,7 @@ class NativeMemoryTools:
                 temporary.replace(path)
             if hasattr(files, 'capability_event'):
                 files.capability_event = row.get('pending_event')
+                files.capability_event_model = row.get('pending_event_model')
         except Exception as exc:
             from veil_agent import UserError
             raise UserError('记忆能力清单无法安全保存，记忆工具已停止。') from exc
@@ -256,11 +263,11 @@ class NativeMemoryTools:
         if not rows:
             return '这条记忆还没有由你改动过的旧版本。', '成功', f'历史：{summary}'
         rendered = '\n\n---\n\n'.join(
-            f"时间：{row['time']}\n改动字段：{', '.join(row['fields']) or '未记录'}\n"
-            f"本次操作原因：{row.get('operation_reason') or '未提供'}\n"
-            f"记忆缘由（why_remembered）：{row.get('why_remembered') or '未提供'}\n"
-            + (f"旧版未区分类型的原因字段：{row['reason']}\n" if row.get('reason') else '')
-            + f"改动前的完整记忆：\n{row['old_content']}"
+            f"Time: {row['time']}\nChanged fields: {', '.join(row['fields']) or 'not recorded'}\n"
+            f"Reason for this operation: {row.get('operation_reason') or 'not provided'}\n"
+            f"Why this memory matters (why_remembered): {row.get('why_remembered') or 'not provided'}\n"
+            + (f"Legacy undifferentiated reason field: {row['reason']}\n" if row.get('reason') else '')
+            + f"Complete memory before the change:\n{row['old_content']}"
             for row in rows)
         return self._bounded(rendered), '成功', f'历史：{summary}（{len(rows)} 个旧版本）'
 
@@ -405,7 +412,8 @@ class NativeMemoryTools:
                 note = f'记忆 #{memory_id}「{title}」已在记忆面板处理；没有重复删除。'
                 self.memory.store.append(path, {**row, 'status': 'approved_external'})
                 self.memory.messages.put(note)
-                notes.append(note)
+                notes.append(f'Memory {memory_id} ({title}) was already handled in the memory panel; '
+                             'no duplicate deletion was performed.')
                 continue
             if self.memory.is_hidden(memory_id):
                 tags = [tag for tag in self.memory.tags_for(memory_id) if tag != '待删除']
@@ -422,7 +430,8 @@ class NativeMemoryTools:
                 self.memory.store.append(path, {**row, 'status': 'rejected',
                                                 'decision_reason': '待删除标记已移除'})
                 self.memory.messages.put(note)
-                notes.append(note)
+                notes.append(f'The pending deletion marker for memory {memory_id} ({title}) was removed; '
+                             'the request is closed.')
                 continue
             prompt = (f"{self.memory.cfg.name} 的自主删除申请：记忆 #{memory_id}「{title}」\n"
                       f"理由：{row.get('reason') or '未提供'}。同意删除吗？y/N ")
@@ -449,7 +458,9 @@ class NativeMemoryTools:
                         f' {self.memory.cfg.name} 的理由：{row.get("reason") or "未提供"}')
             self.memory.store.append(path, {**row, 'status': status})
             self.memory.messages.put(note)
-            notes.append(note)
+            outcome = 'was approved and deleted' if accepted else 'was not approved; its pending marker was removed'
+            notes.append(f'The pending deletion request for memory {memory_id} ({title}) {outcome}. '
+                         f'Request reason: {row.get("reason") or "not provided"}.')
         return notes
 
     def _delete(self, memory_id, title):
@@ -605,11 +616,11 @@ class NativeMemoryTools:
             exact_content = self.memory.content_for(key)
             if exact_content is not None:
                 self.search_results[key] = exact_content
-                rendered.append(f'[记忆编号: {key} | 标题: {title}]\n{exact_content}')
+                rendered.append(f'[Memory ID: {key} | Title: {title}]\n{exact_content}')
             else:
                 display = body.removeprefix(f'[bucket_id:{key}]').strip()
-                rendered.append(f'[记忆编号: {key} | 标题: {title} | 本地原文未定位，不能更新]\n{display}')
-        result = '\n---\n'.join(rendered) or '没有找到相关记忆。'
+                rendered.append(f'[Memory ID: {key} | Title: {title} | exact local text unavailable; cannot update]\n{display}')
+        result = '\n---\n'.join(rendered) or 'No relevant memories were found.'
         raw = result.encode('utf-8')
         if len(raw) > self.max_result_bytes:
             result = raw[:self.max_result_bytes].decode('utf-8', errors='ignore') + '\n[已截断]'
@@ -633,6 +644,10 @@ class ToolSet:
     @property
     def capability_event(self):
         return self.files.capability_event
+
+    @property
+    def capability_event_model(self):
+        return getattr(self.files, 'capability_event_model', None)
 
     @property
     def startup_notice(self):

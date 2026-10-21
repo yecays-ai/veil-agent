@@ -347,7 +347,10 @@ daily_budget_cny = "2"
         self.assertEqual(self.store.read('test/autonomy.jsonl'), original)
 
     def test_english_summary_keeps_focus_and_next_step(self):
-        self.model.return_value = ('Decided: wait\nReason: safe\nCurrently focused on: fixture\nNext: resume',
+        prompt = self.controller._context()
+        self.assertIn('Decision: ...\nReason: ...\nFocus: ...\nNext step: ...', prompt)
+        self.assertNotRegex(prompt, r'[\u3400-\u9fff]')
+        self.model.return_value = ('Decision: wait\nReason: safe\nFocus: fixture\nNext step: resume',
                                    100, 20, 0)
         self.controller.run()
         self.assertEqual(self.controller.rows[-1]['current_focus'], 'fixture')
@@ -395,7 +398,7 @@ daily_budget_cny = "2"
         self.assertNotIn('LAB_TEXT', text)
         self.assertIn('lab/已保存.md', text)
         self.assertIn('步' * 300, text)
-        self.assertIn('最后用四行简短说明', text)
+        self.assertIn('end with exactly four concise lines', text)
         self.assertLessEqual(len(text.encode('utf-8')), 12 * 1024)
 
     def test_oversized_state_stops_without_sending_a_truncated_wake(self):

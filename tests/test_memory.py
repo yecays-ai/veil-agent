@@ -381,8 +381,9 @@ class MemoryTests(unittest.TestCase):
 
     def test_top_three_provenance_and_nohit(self):
         empty = self.memory.context('something new')
-        self.assertIn('不要假装记得', empty[-1]['content'])
-        self.assertIn('不是 lan 刚说的', empty[-1]['content'])
+        self.assertIn('do not claim to remember', empty[-1]['content'])
+        self.assertIn('not newly said by the user', empty[-1]['content'])
+        self.assertNotRegex('\n'.join(item['content'] for item in empty), r'[\u3400-\u9fff]')
         for i in range(5):
             self.backend.rows[str(i)] = {'content': f'body {i}'}
         text = self.memory.context('plan')[-1]['content']

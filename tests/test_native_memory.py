@@ -248,7 +248,7 @@ class NativeMemoryTests(unittest.TestCase):
         self.backend.call = persist_fake_trace
         text, state, _ = self.tools.invoke('breath_search', {'query': 'lamp'})
         self.assertIn('lamp memory', text)
-        self.assertIn(f'记忆编号: {key}', text)
+        self.assertIn(f'Memory ID: {key}', text)
         self.assertIn('标题: a', text)
         self.tools.invoke('hold', {'target_id': key, 'content': 'It was a gift from her sister.'})
         self.assertEqual(len(self.backend.rows), 1)
@@ -480,7 +480,7 @@ class OmbreToolGuardTests(unittest.TestCase):
         self.assertEqual(rows[-1]['status'], 'rejected')
         self.assertEqual(prompts, [])
         self.assertEqual(self.backend.calls, [])
-        self.assertTrue(any('标记已移除' in note for note in notes))
+        self.assertTrue(any('pending deletion marker' in note for note in notes))
 
     def test_disallowed_ombre_delete_parameters_never_reach_server(self):
         result, state, _ = self.call('trace', {'bucket_id': 'mem001', 'hard_delete': True})
@@ -754,11 +754,13 @@ class PendingDeletionChatTests(unittest.TestCase):
     def test_next_chat_message_asks_lan_and_tells_peter_the_outcome(self):
         from veil_agent import pending_deletion_context
         store = Store(Path(tempfile.mkdtemp()))
-        native = SimpleNamespace(process_pending_deletions=Mock(return_value=['已同意并删除记忆 #a1「旧事」。']))
+        native = SimpleNamespace(process_pending_deletions=Mock(return_value=[
+            'The deletion request for memory a1 was approved and executed.']))
         chat = SimpleNamespace(tools=SimpleNamespace(native=native), approval=lambda _: 'y',
                                store=store, cfg=SimpleNamespace(id='peter', name='Peter'))
         context = pending_deletion_context(chat)
         native.process_pending_deletions.assert_called_once_with(chat.approval)
-        self.assertIn('已同意并删除记忆 #a1', context)
+        self.assertIn('The user has processed deletion requests', context)
+        self.assertNotRegex(context, r'[\u3400-\u9fff]')
         native.process_pending_deletions.return_value = []
         self.assertIsNone(pending_deletion_context(chat))

@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from veil_agent import (Chat, Budget, Store, build_self_description, estimate_request_tokens,
-                        load_character, make_model, run_chat, UserError)
+                        load_character, make_model, model_tool_result, run_chat, UserError)
 
 
 def sent_facts(messages):
@@ -60,6 +60,28 @@ output_cny_per_million = "8"
         rows = self.store.read('test/chat.jsonl')
         self.assertEqual([r['role'] for r in rows], ['user', 'assistant', 'user', 'assistant'])
         self.assertTrue(all(r['time'] for r in rows))
+
+    def test_capability_notice_keeps_chinese_terminal_copy_and_english_model_copy(self):
+        tools = SimpleNamespace(tools=[], description='Tools. ',
+            capability_event='你的能力有变化：本机测试通知。',
+            capability_event_model='Current capability update: fixture tools are available.',
+            consume_capability_event=Mock())
+        chat = Chat(self.cfg, self.store, self.budget, self.model, tools=tools)
+        chat.send('hello')
+        messages = self.model.call_args.args[0]
+        notice = next(item['content'] for item in messages
+                      if item['role'] == 'system' and 'Current capability update:' in item['content'])
+        self.assertNotRegex(notice, r'[\u3400-\u9fff]')
+        self.assertEqual(self.store.read('test/tools.jsonl')[0]['text'], tools.capability_event)
+
+    def test_program_tool_results_are_english_while_memory_data_is_preserved(self):
+        rejected = model_tool_result('long_task_update', '程序拒绝：任务状态无效。', '被拒绝')
+        self.assertNotRegex(rejected, r'[\u3400-\u9fff]')
+        self.assertIn('rejected', rejected)
+        self.assertEqual(model_tool_result('memory_read', '这是一条虚构记忆。', '成功'),
+                         '这是一条虚构记忆。')
+        self.assertEqual(model_tool_result('send_message', '已发送。', '成功'),
+                         'The tool operation completed successfully.')
 
     def test_budget_reserves_before_network_and_settles_actual_usage(self):
         def reply(messages):
