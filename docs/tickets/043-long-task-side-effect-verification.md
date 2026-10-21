@@ -6,7 +6,7 @@ Peter 执行长期任务时，能依据精确操作标识、规范化目标和�
 
 ## 当前状态
 
-从 main `a48f13dec08d89ea2d1667ff550ae2e4cbe6baca` 建立独立分支 `ticket/043-long-task-side-effect-verification`。031-06 证据确认旧实现用路径子串与只读工具目标字符串解除 pending；现有测试没有真实文件终态。GitHub 搜索未找到可直接复用的长期任务确认实现；复用本仓库文件工具已有的 SHA-256 写后核对方式。当前在 `long_tasks.py` 和 `veil_agent.py` 增加持久操作 ID、精确目标、文件内容摘要核对，并补虚构文件回归；CI、独立审查及 Windows 体验尚未完成。
+从 main `a48f13dec08d89ea2d1667ff550ae2e4cbe6baca` 建立独立分支 `ticket/043-long-task-side-effect-verification`。031-06 证据确认旧实现用路径子串与只读工具目标字符串解除 pending；现有测试没有真实文件终态。GitHub 搜索未找到可直接复用的长期任务确认实现；复用本仓库文件工具已有的 SHA-256 写后核对方式。当前在 `long_tasks.py` 和 `veil_agent.py` 增加持久操作 ID、精确目标、文件内容摘要核对，并补虚构文件回归；代码 head `835b6ff57f1eb7d0773115ba507164fb050f942a` 的 Ubuntu/Windows × Python 3.11/3.12 CI 全绿；CodeRabbit 正式审查仍处理中，Claude 独立审查未收到响应；Windows 体验待 Lan 验收。
 
 ## 验收步骤
 
