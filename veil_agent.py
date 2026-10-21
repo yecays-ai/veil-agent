@@ -98,6 +98,11 @@ class Store:
     def __init__(self, root):
         self.mutex = threading.RLock()
         self.root = Path(root)
+        marker = self.root.parent / '.veil-restore-incomplete.json'
+        if marker.exists():
+            raise UserError(
+                '检测到未完成的备份恢复，已停止使用此数据目录；请保留目标与安全副本，并用备份恢复工具完成恢复。'
+            )
         self.root.mkdir(parents=True, exist_ok=True)
 
     @synchronized

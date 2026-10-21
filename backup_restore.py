@@ -26,10 +26,40 @@ OMBRE_RUNTIME_FILES = {
 MANIFEST_NAME = "manifest.json"
 MANIFEST_HASH_NAME = "manifest.sha256"
 README_NAME = "README.txt"
+RECOVERY_MARKER_NAME = ".veil-restore-incomplete.json"
 
 
 class BackupError(Exception):
     """A safe, user-displayable backup or restore failure."""
+
+
+def _recovery_marker(target):
+    return target / RECOVERY_MARKER_NAME
+
+
+def _write_recovery_marker(target, backup, safety=None):
+    """Persist a fail-closed marker before changing a restore target.
+
+    This is deliberately a target-root file rather than data/ content: replace
+    restores move data/ aside, while the marker must survive every switch
+    boundary and be visible to the normal Store startup path.
+    """
+    marker = _recovery_marker(target)
+    temporary = marker.with_name(marker.name + f".{uuid.uuid4().hex}.tmp")
+    payload = {
+        "status": "restore-incomplete",
+        "backup": str(backup),
+        "safety_copy": str(safety) if safety else None,
+    }
+    with temporary.open("w", encoding="utf-8", newline="\n") as handle:
+        handle.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary, marker)
+
+
+def _clear_recovery_marker(target):
+    _recovery_marker(target).unlink(missing_ok=True)
 
 
 def _utc_stamp():
@@ -441,6 +471,7 @@ def restore_backup(backup, target, *, replace=False, confirm=input):
     created_dirs = []
     written = []
     safety = None
+    marker_written = False
     try:
         with _cold_lock(target) as locks:
             source_payload = backup / "payload"
@@ -487,6 +518,8 @@ def restore_backup(backup, target, *, replace=False, confirm=input):
                     try:
                         if not target.exists():
                             target.mkdir()
+                        _write_recovery_marker(target, backup, safety)
+                        marker_written = True
                         for name in existing_components:
                             component = target / name
                             saved = safety / name
@@ -521,6 +554,8 @@ def restore_backup(backup, target, *, replace=False, confirm=input):
                             ) from failure
                         if safety is not None:
                             shutil.rmtree(safety, ignore_errors=True)
+                        if marker_written:
+                            _clear_recovery_marker(target)
                         raise
                 finally:
                     data = target / "data"
@@ -540,6 +575,8 @@ def restore_backup(backup, target, *, replace=False, confirm=input):
                     )
                 if not target.exists():
                     target.mkdir()
+                _write_recovery_marker(target, backup)
+                marker_written = True
                 all_directories = set(manifest["directories"])
                 for relative in sorted(all_directories, key=lambda value: (len(PurePosixPath(value).parts), value)):
                     destination = target / Path(*PurePosixPath(relative).parts[1:])
@@ -564,7 +601,11 @@ def restore_backup(backup, target, *, replace=False, confirm=input):
                             directory.rmdir()
                         except OSError:
                             pass
+                    if marker_written:
+                        _clear_recovery_marker(target)
                     raise
+            if marker_written:
+                _clear_recovery_marker(target)
         return len(manifest["files"]), safety
     except Exception:
         if target_created and target.exists() and not target.is_symlink():
