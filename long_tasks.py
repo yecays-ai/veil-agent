@@ -390,7 +390,7 @@ class LongTaskStore:
             self._save(task)
 
     def observe_tool_result(self, name, target, state, result=None):
-        if name != 'read_text_file' or state != '成功' or self.current_tool_step < 0:
+        if name not in READ_ONLY_TOOLS or state != '成功' or self.current_tool_step < 0:
             return
         if not isinstance(result, str):
             return
@@ -401,19 +401,25 @@ class LongTaskStore:
             pending = task['pending_action']
             expected = pending.get('normalized_target') or self._normalized_target(pending['target'])
             observed = self._normalized_target(target)
-            effect = pending.get('expected_effect')
-            if not expected or observed != expected or not effect:
-                return
-            if effect['kind'] == 'suffix' and pending.get('state') != '成功，需核实':
+            if not expected or observed != expected:
                 return
             content = result.encode('utf-8')
-            length = effect['byte_length']
-            if len(content) < length:
-                return
-            actual = content if effect['kind'] == 'exact' else content[-length:] if length else b''
-            digest = hashlib.sha256(actual).hexdigest()
-            if (effect['kind'] == 'exact' and len(content) != length) or digest != effect['sha256']:
-                return
+            effect = pending.get('expected_effect')
+            if effect is None:
+                if pending['tool'] in ('write_file', 'append_file'):
+                    return
+            else:
+                if name != 'read_text_file':
+                    return
+                if effect['kind'] == 'suffix' and pending.get('state') != '成功，需核实':
+                    return
+                length = effect['byte_length']
+                if len(content) < length:
+                    return
+                actual = content if effect['kind'] == 'exact' else content[-length:] if length else b''
+                digest = hashlib.sha256(actual).hexdigest()
+                if (effect['kind'] == 'exact' and len(content) != length) or digest != effect['sha256']:
+                    return
             pending['verified_in_step'] = self.current_tool_step
             pending['verified_by'] = name
             pending['verified_sha256'] = hashlib.sha256(content).hexdigest()
