@@ -404,6 +404,8 @@ class LongTaskStore:
             effect = pending.get('expected_effect')
             if not expected or observed != expected or not effect:
                 return
+            if effect['kind'] == 'suffix' and pending.get('state') != '成功，需核实':
+                return
             content = result.encode('utf-8')
             length = effect['byte_length']
             if len(content) < length:
