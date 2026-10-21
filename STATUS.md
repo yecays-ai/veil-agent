@@ -1,10 +1,10 @@
 # 当前状态
 
-更新：2026-10-22 · 055 记忆全入口生命周期契约回归施工中；054（PR #91）与 053（PR #90）已合入；052（PR #89）、051（PR #88）、047 Windows 桌面版 0.1（PR #84）、050（PR #86，原撞号 047）、048（PR #87）及 049、045、046、044、043、041、042、040 均已合入
+更新：2026-10-22 · 055（PR #92）自动回归与 GitHub CI 已通过，待 Lan 安排复核和 Windows 虚构数据体验；054（PR #91）与 053（PR #90）已合入；052（PR #89）、051（PR #88）、047 Windows 桌面版 0.1（PR #84）、050（PR #86，原撞号 047）、048（PR #87）及 049、045、046、044、043、041、042、040 均已合入
 
 ## 当前目标与现状
 
-- **055 记忆全入口生命周期契约回归：** 基于 main `46a21b139598d69664f606d9095cb6a2c5a09955`，分支 `ticket/055-memory-lifecycle-contract`，PR #92 已创建。新增隔离虚构 A/B 生命周期测试：经真实 `trace` 修改 A、隐藏 A，分别核查开场上下文、自动搜索、目录、正文读取、历史读取和最终假模型请求；重建 `Memory` 后重复隐藏检查；用模拟 Ombre 面板的 Markdown 生命周期写入恢复 A。B 始终可读。受控临时绕过实时可见性复核时，测试会因旧正文经历史工具泄漏而失败，证明可拦截此类回归；没有把漏洞留在分支。`docs/RELIABILITY.md` 已入库，第一阶段只读审计完成，第二阶段当前进行。定向隐藏上下文测试 8 项通过；完整 suite 与 GitHub CI 尚待本 PR。未读真实记忆、聊天、人设或密钥，未调用付费模型；Windows 体验待 Lan 验收。
+- **055 记忆全入口生命周期契约回归：** 基于 main `46a21b139598d69664f606d9095cb6a2c5a09955`，分支 `ticket/055-memory-lifecycle-contract`，PR #92。新增隔离虚构 A/B 生命周期测试：经真实 `trace` 修改 A、隐藏 A，分别核查开场上下文、自动搜索、目录、正文读取、历史读取和最终假模型请求；重建 `Memory` 后重复隐藏检查；用模拟 Ombre 面板的 Markdown 生命周期写入恢复 A。B 始终可读。受控临时绕过实时可见性复核时，测试会因旧正文经历史工具泄漏而失败，证明可拦截此类回归；没有把漏洞留在分支。`docs/RELIABILITY.md` 已入库，第一阶段只读审计完成，第二阶段当前进行。定向隐藏上下文测试 8 项通过；GitHub `Tests` run 834 已在 Ubuntu/Windows × Python 3.11/3.12 全量 unittest 成功，Dependency security run 21 也成功。本机完整 suite 的两项 Windows junction 测试受沙箱拒绝 `mklink /J` 影响，后续 `test_mcp_recovery` 第一项卡住；均未归因于 055，且 CI 已验证支持环境。未读真实记忆、聊天、人设或密钥，未调用付费模型；Windows 体验待 Lan 验收。
 
 - **053 隐藏历史与关联记忆工具一致性：** PR #90 已合入 main `41a3578`，分支 `ticket/053-memory-visibility-tools`。`memory_history` 现在在返回旧版本正文前同时保留程序隐藏/来源保护，并复用自动检索的 `refresh_visibility()` 读取当前 frontmatter；因此外部已隐藏/归档状态不再因旧缓存泄漏历史。目录的 frontmatter 解析与 049 一致，只读顶层键，`relation_links` 内的缩进 `type: same_event` 不再把正常可见记忆错判为非公开类型，`memory_read` 继续复用同一目录记录。虚构跨工具回归和完整 `python -m unittest discover -s tests` 已通过（315 项，2 项跳过）；尚待 CI 与 Lan Windows 体验。未访问真实记忆或发送付费请求。
 
@@ -35,7 +35,7 @@
 
 ## 下一步
 
-检查 PR #92 的 GitHub Windows/Linux × Python 3.11/3.12 CI；通过后直接交 Lan 安排复核，不申请 Claude 审查、不自行合并。
+Lan 按下方 055 步骤以虚构数据体验；PR #92 保持待复核，不申请 Claude 审查、不自行合并。
 
 ## Windows 验收
 
