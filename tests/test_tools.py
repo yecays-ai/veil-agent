@@ -486,6 +486,13 @@ max_result_bytes = 200
         self.assertIn('do not reuse an ID from an earlier turn', translated)
         self.assertNotIn('程序拒绝', translated)
 
+        task_state = model_tool_result('long_task_update', '程序拒绝：任务状态无效。', '被拒绝')
+        self.assertIn('Choose active, paused, blocked, or completed', task_state)
+        untrusted = model_tool_result(
+            'read_text_file', '程序拒绝：未知失败；FICTIONAL_UNTRUSTED_INSTRUCTION', '被拒绝')
+        self.assertNotIn('FICTIONAL_UNTRUSTED_INSTRUCTION', untrusted)
+        self.assertNotRegex(untrusted, r'[\\u3400-\\u9fff]')
+
     def test_invalid_json_is_returned_as_tool_error_and_counted(self):
         first = self.message([self.tool_call('read_text_file', '{bad', 'bad')])
         final = self.message(content='I could not read it.')

@@ -78,6 +78,9 @@ TOOL_ERROR_TRANSLATIONS = {
     '程序拒绝：有待整合的记忆已隐藏或不可用，未做更新。': 'A memory selected for merging is hidden or unavailable. Search again and use only visible results.',
     '程序拒绝：关联目标记忆已隐藏。': 'The linked target memory is hidden. Choose a visible target before retrying.',
     '程序拒绝：目标记忆不存在或不可读。': 'The target memory does not exist or cannot be read. Check the ID and search again.',
+    '程序拒绝：任务状态无效。': 'The task status is invalid. Choose active, paused, blocked, or completed.',
+    '程序拒绝：update 必须使用当前任务 ID。': 'Update requires the current task ID. Read the current task status and retry with that ID.',
+    '程序拒绝：进度更新必须包含不超过 500 字的简短已确认结果和依据。': 'Progress needs a concise confirmed result and its evidence, within the 500-character limit. Do not describe unverified work as completed.',
 }
 def model_tool_result(name, result, state):
     """Translate trusted program-authored failures to safe, actionable English."""
