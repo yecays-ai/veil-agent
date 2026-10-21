@@ -1,10 +1,10 @@
 # 当前状态
 
-更新：2026-10-21 14:20 UTC · 工单 045（PR #83 施工中）；044、043、041、042、040 已交付
+更新：2026-10-21 14:46 UTC · 工单 045（PR #83 施工中）；044、043、041、042、040 已交付
 
 ## 当前目标与现状
 
-- **045 Ombre 后台调用预算（031-04）：** 基于 GitHub 最新 main `29f2379ae7aace048001991d75628deb2e038fda`，独立分支 `ticket/045-ombre-budget`，PR #83。已补齐 Ombre 内部模型调用估算常量；VEIL 可见的 embedding 与 `hold` 模型路径在 MCP 请求前按估算上限预留共享 `Budget`，确认成功后按单次正常估算结算并释放差额；失败或重启后结果不明时按预留上限结算，结算幂等。Extract 后台调用仍使用共享账本。上游 hold 后异步计划判断和 HTTP 维护入口仍未有逐请求共享硬闸门，不能称为完整费用硬限制。新 head 已补齐常量且新增结算用例通过；CI 暴露一处旧 Extract 账本断言未匹配其明确的 `memory-extraction` 标记，现已修正并等待重跑。Claude 独立审查未完成；Windows 体验另待 Lan 验收。
+- **045 Ombre 后台调用预算（031-04）：** 基于 GitHub 最新 main `29f2379ae7aace048001991d75628deb2e038fda`，独立分支 `ticket/045-ombre-budget`，PR #83。已补齐 Ombre 内部模型调用估算常量；VEIL 可见的 embedding 与 `hold` 模型路径在 MCP 请求前按估算上限预留共享 `Budget`，确认成功后按单次正常估算结算并释放差额；失败或重启后结果不明时按预留上限结算，结算幂等。Extract 后台调用仍使用共享账本。上游 hold 后异步计划判断和 HTTP 维护入口仍未有逐请求共享硬闸门，不能称为完整费用硬限制。GitHub Actions run 740 的 Windows/Linux × Python 3.11/3.12 全部通过（293 项测试，4 项跳过）。CodeRabbit 未提交审查，Claude 独立审查未完成；按 Lan 指示暂停后续评审与合并，Windows 体验仍另待验收。
 
 - **044 记忆诊断刷屏与工具拒绝原因丢失：** PR #81 `ticket/044-memory-diagnostics-tool-errors` 已合入 main `29f2379ae7aace048001991d75628deb2e038fda`（合并提交 `29f2379ae7aace048001991d75628deb2e038fda`）。工具失败原因已在 `long_tasks.py`、`memory_native.py`、`tools_agent.py`、`veil_agent.py`、`memory_agent.py` 源头改为英文；`model_tool_result()` 对失败原因原样传递，网页与 Peter 收到相同文本。AST 回归扫描上述源文件的失败结果，并检查 `MemoryToolError` 诊断不含中文。GitHub Actions run 692 的 Windows/Linux × Python 3.11/3.12 全部通过。Claude 独立审查待 Lan 安排；Windows 虚构数据聊天验收仍待完成。截图所示未知可见性候选保持失败关闭；真实记忆未访问，截图不能证明其他记忆也持续失效。
 
@@ -17,7 +17,7 @@
 
 ## 下一步
 
-完成 PR #83 最新 head 的虚构数据回归与 Windows/Linux CI，取得 Claude 独立审查并只处理功能/安全阻断；明确保留未受共享硬闸门控制的 Ombre 内部异步调用和 HTTP 路径，满足交付条件后再合并。随后由 Lan 按本页 045 步骤做 Windows 体验验收。
+等待 Lan 指示是否继续评审；不要在 CodeRabbit 未提交审查时推进合并。Windows 体验另由 Lan 按本页 045 步骤验收。
 
 ## Windows 验收
 
