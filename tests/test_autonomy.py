@@ -192,7 +192,7 @@ daily_budget_cny = "2"
 
         messages = self.model.call_args.args[0]
         context = '\n'.join(message['content'] for message in messages if message['role'] == 'system')
-        self.assertIn('最近一次自主活动记录', context)
+        self.assertIn('most recent autonomous activity record', context)
         self.assertIn('实验室整理', context)
         self.assertIn('等待新信息', context)
         self.assertIn('不是用户消息', context)
@@ -450,3 +450,4 @@ daily_budget_cny = "2"
 
 if __name__ == '__main__':
     unittest.main()
+

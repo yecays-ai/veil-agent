@@ -29,6 +29,10 @@ TOOL_DATA_RESULTS = {'read_text_file', 'read_multiple_files', 'directory_tree', 
                      'long_task_status'}
 
 
+def capability_model_notice(tools):
+    event = getattr(tools, 'capability_event_model', None) if tools else None
+    return event if isinstance(event, str) else None
+
 def model_tool_result(name, result, state):
     """Keep user data intact while localizing program-authored tool outcomes for the model."""
     if not isinstance(result, str) or not CJK_TEXT.search(result):
@@ -589,7 +593,7 @@ class Chat:
         self.memory = memory
         self.tools, self.approval, self.output = tools, approval, output
         self.pending_capability_event = tools.capability_event if tools else None
-        self.pending_capability_event_model = getattr(tools, 'capability_event_model', None) if tools else None
+        self.pending_capability_event_model = capability_model_notice(tools)
         from long_tasks import LongTaskStore
         self.long_tasks = LongTaskStore(store, cfg.id)
         self.task_tools_enabled = bool(cfg.tools and cfg.tools.get('max_steps', 1) > 1)
@@ -598,7 +602,7 @@ class Chat:
         if self.task_tools_enabled and tools and hasattr(tools, 'announce_long_tasks'):
             tools.announce_long_tasks()
             self.pending_capability_event = tools.capability_event
-            self.pending_capability_event_model = getattr(tools, 'capability_event_model', None)
+            self.pending_capability_event_model = capability_model_notice(tools)
         self.sent_messages = []
         self.reply_displayed = False
         self.autonomy_mode = False
@@ -708,7 +712,7 @@ class Chat:
         self.long_tasks.begin_tool_run()
         if not self.pending_capability_event and self.tools:
             self.pending_capability_event = self.tools.capability_event
-            self.pending_capability_event_model = getattr(self.tools, 'capability_event_model', None)
+            self.pending_capability_event_model = capability_model_notice(self.tools)
         recalled = self.memory.context(text) if self.memory else []
         if not autonomy and extra_context is None:
             from autonomy import recent_chat_context
@@ -723,7 +727,7 @@ class Chat:
         tail = [*recalled]
         if extra_context:
             tail.append({'role': 'system', 'content': extra_context})
-        if self.pending_capability_event_model and not autonomy:
+        if isinstance(self.pending_capability_event_model, str) and self.pending_capability_event_model and not autonomy:
             tail.append({'role': 'system', 'content':
                 'Program-generated capability update: ' + self.pending_capability_event_model})
         tail.append({'role': 'system', 'content': changing})

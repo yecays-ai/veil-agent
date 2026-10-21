@@ -275,7 +275,7 @@ class NativeMemoryTools:
         raw = result.encode('utf-8')
         if len(raw) <= self.max_result_bytes:
             return result
-        return raw[:self.max_result_bytes].decode('utf-8', errors='ignore') + '\n[已截断]'
+        return raw[:self.max_result_bytes].decode('utf-8', errors='ignore') + '\n[truncated]'
 
     def _ombre(self, name, args, approval):
         summary = self.preview_summary(name, args)
@@ -349,8 +349,9 @@ class NativeMemoryTools:
         updated = self.memory.content_for(memory_id, refresh=True)
         if updated is not None:
             self.memory.record_native_update(memory_id, updated)
-        feedback = (f'{result}\n修改前完整版本（含元数据）已留档；本次操作原因：'
-                    f'{edit_reason.strip() or "未提供"}。正文 content 与含义元数据 meaning_append/meaning_replace 是不同字段。')
+        feedback = (f'{result}\nComplete memory before the change (including metadata) has been saved. '
+                    f'Reason for this operation: {edit_reason.strip() or "not provided"}. '
+                    'The content field and meaning_append/meaning_replace metadata are separate fields.')
         return self._bounded(feedback), '成功', f'{summary}（旧版本已留档）'
 
     def _save_version(self, memory_id, args, old, *, operation_reason=None):

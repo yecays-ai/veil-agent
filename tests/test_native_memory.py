@@ -249,7 +249,7 @@ class NativeMemoryTests(unittest.TestCase):
         text, state, _ = self.tools.invoke('breath_search', {'query': 'lamp'})
         self.assertIn('lamp memory', text)
         self.assertIn(f'Memory ID: {key}', text)
-        self.assertIn('标题: a', text)
+        self.assertIn('Title: a', text)
         self.tools.invoke('hold', {'target_id': key, 'content': 'It was a gift from her sister.'})
         self.assertEqual(len(self.backend.rows), 1)
         self.assertIn('lamp memory', self.backend.rows[key]['content'])
@@ -553,7 +553,7 @@ class OmbreToolGuardTests(unittest.TestCase):
                                                'why_remembered': 'the event matters'})
 
         self.assertEqual(state, '成功')
-        self.assertIn('完整版本（含元数据）已留档', result)
+        self.assertIn('Complete memory before the change', result)
         versions = self.store.read('fake/memory-versions.jsonl')
         self.assertEqual(len(versions), 1)
         self.assertEqual(versions[0]['old_content'], original)
@@ -563,8 +563,8 @@ class OmbreToolGuardTests(unittest.TestCase):
         history, history_state, _ = self.call('memory_history', {'memory_id': 'mem001'})
         self.assertEqual(history_state, '成功')
         self.assertIn('old meaning metadata', history)
-        self.assertIn('本次操作原因：hold(target_id) 追加', history)
-        self.assertIn('记忆缘由（why_remembered）：the event matters', history)
+        self.assertIn('Reason for this operation: hold(target_id) 追加', history)
+        self.assertIn('Why this memory matters (why_remembered): the event matters', history)
 
     def test_hold_target_does_not_append_when_snapshot_cannot_be_saved(self):
         original = self.path.read_text(encoding='utf-8')
@@ -593,7 +593,7 @@ class OmbreToolGuardTests(unittest.TestCase):
             'why_remembered': 'why this memory matters', 'edit_reason': 'corrected the interpretation'})
 
         self.assertEqual(state, '成功')
-        self.assertIn('本次操作原因：corrected the interpretation', result)
+        self.assertIn('Reason for this operation: corrected the interpretation', result)
         self.assertIn('正文 content 与含义元数据', result)
         sent = next(args for name, args in self.backend.calls if name == 'trace')
         self.assertNotIn('edit_reason', sent)
@@ -603,8 +603,8 @@ class OmbreToolGuardTests(unittest.TestCase):
         self.assertEqual(version['why_remembered'], 'why this memory matters')
         self.assertIn('meaning: old meaning metadata', version['old_content'])
         history = self.call('memory_history', {'memory_id': 'mem001'})[0]
-        self.assertIn('本次操作原因：corrected the interpretation', history)
-        self.assertIn('记忆缘由（why_remembered）：why this memory matters', history)
+        self.assertIn('Reason for this operation: corrected the interpretation', history)
+        self.assertIn('Why this memory matters (why_remembered): why this memory matters', history)
 
     def test_ombre_embedding_calls_keep_the_existing_budget_reservation(self):
         for name, args in (

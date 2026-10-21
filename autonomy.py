@@ -233,8 +233,8 @@ class AutonomyController:
         if announce:
             announce()
             self.chat.pending_capability_event = self.chat.tools.capability_event
-            self.chat.pending_capability_event_model = getattr(
-                self.chat.tools, 'capability_event_model', None)
+            event = getattr(self.chat.tools, 'capability_event_model', None)
+            self.chat.pending_capability_event_model = event if isinstance(event, str) else None
 
     def _lab_context(self):
         files = getattr(self.chat.tools, 'files', self.chat.tools)
