@@ -353,6 +353,59 @@ daily_budget_cny = "2"
         self.assertEqual(self.controller.rows[-1]['current_focus'], 'fixture')
         self.assertEqual(self.controller.rows[-1]['next_step'], 'resume')
 
+    def test_crash_recovery_restores_only_this_wakes_confirmed_tools_and_cost(self):
+        run_id = self.budget.clock()
+        with self.budget.autonomous('test'):
+            request_id, _ = self.budget.reserve(self.cfg)
+            self.budget.settle(request_id, self.cfg, 100, 20, 0)
+        self.store.append('test/tools.jsonl', {'request_id': request_id, 'autonomy_run_id': run_id,
+            'tool': 'append_file', 'path': 'lab/saved.md', 'state': '成功'})
+        self.store.append('test/tools.jsonl', {'request_id': 'other', 'autonomy_run_id': 'old-wake',
+            'tool': 'write_file', 'path': 'lab/unrelated.md', 'state': '成功'})
+        self.controller.active_path.parent.mkdir(parents=True, exist_ok=True)
+        self.controller.active_path.write_text(json.dumps({'started_at': run_id}), encoding='utf-8')
+        recovered = AutonomyController(self.chat, self.hub)
+        row = recovered.rows[-1]
+        self.assertEqual(row['result'], '部分完成')
+        self.assertEqual(row['lab_files_changed'], ['lab/saved.md'])
+        self.assertEqual(len(row['tools']), 1)
+        self.assertEqual(Decimal(row['cost_cny']), self.budget.category_totals('test')[0])
+        self.assertIn('lab/saved.md', recovered._context())
+        self.model.assert_not_called()
+
+    def test_failed_tools_only_are_not_reported_as_a_completed_activity(self):
+        final = SimpleNamespace(tool_calls=[], content='决定：结束\n原因：工具不可用')
+        controller, model, tools = self.progress_chat((final, 100, 20, 0))
+        tools.invoke.return_value = ('fixture service failed', '出错', 'lab/progress.md')
+        controller.run()
+        row = controller.rows[-1]
+        self.assertEqual(row['result'], '失败')
+        self.assertEqual(row['lab_files_changed'], [])
+        self.assertIn('append_file（出错）', row['result_reason'])
+
+    def test_full_lab_does_not_cut_previous_progress_or_final_format(self):
+        self.controller.run()
+        row = self.controller.rows[-1]
+        row.update(decision='决' * 300, reason='因' * 500, current_focus='关' * 300,
+                   next_step='步' * 300, result='部分完成', result_reason='错' * 400,
+                   tools=[{'tool': 'append_file', 'path': 'lab/已保存.md', 'state': '成功'}] * 3,
+                   lab_files_changed=['lab/已保存.md'])
+        self.controller._lab_context = Mock(return_value='LAB_TEXT' + 'x' * 5990)
+        text = self.controller._context()
+        self.assertNotIn('LAB_TEXT', text)
+        self.assertIn('lab/已保存.md', text)
+        self.assertIn('步' * 300, text)
+        self.assertIn('最后用四行简短说明', text)
+        self.assertLessEqual(len(text.encode('utf-8')), 12 * 1024)
+
+    def test_oversized_state_stops_without_sending_a_truncated_wake(self):
+        self.controller.run()
+        self.controller.rows[-1]['decision'] = '不可丢失的状态' * 3000
+        self.model.reset_mock()
+        with self.assertRaisesRegex(UserError, '活动记录仍保存在'):
+            self.controller._context()
+        self.model.assert_not_called()
+
 
 if __name__ == '__main__':
     unittest.main()

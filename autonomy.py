@@ -143,11 +143,27 @@ class AutonomyController:
         if any(row.get('started_at') == active['started_at'] for row in self.rows):
             self.active_path.unlink(missing_ok=True)
             return
+        tools = []
+        for row in self.chat.store.read(f'{self.chat.cfg.id}/tools.jsonl'):
+            if row.get('autonomy_run_id') == active['started_at']:
+                if not all(isinstance(row.get(key), str) for key in ('tool', 'path', 'state')):
+                    raise UserError('中断任务的工具记录损坏，请保留 data 文件夹。')
+                tools.append({key: row[key] for key in ('tool', 'path', 'state')})
+        files = list(dict.fromkeys(item['path'] for item in tools if item['state'] == '成功'
+                     and item['tool'] in ('write_file', 'append_file', 'create_directory')))
+        events = self.chat.store.read('costs.jsonl')
+        run_ids = {event['id'] for event in events if event.get('type') == 'reserve'
+                   and event.get('category') == 'autonomy' and event.get('character') == self.chat.cfg.id
+                   and datetime.fromisoformat(event['time']) >= datetime.fromisoformat(active['started_at'])}
+        settled = {event['id']: Decimal(event['amount']) for event in events
+                   if event.get('type') == 'settle' and event.get('id') in run_ids}
         self._append({'started_at': active['started_at'], 'finished_at': now(),
                       'decision': '服务异常停止，本次不会自动重试。', 'reason': '',
-                      'tools': [], 'lab_files_changed': [], 'result': '失败',
+                      'tools': tools, 'lab_files_changed': files,
+                      'result': '部分完成' if any(item['state'] == '成功' for item in tools) else '失败',
                       'result_reason': '后台任务中断；如有未确认的请求费用，仍按账本预留保留。',
-                      'current_focus': '', 'next_step': '', 'cost_cny': '0'})
+                      'current_focus': '', 'next_step': '先核实已留存文件和未确认操作，再继续，勿重复写入。',
+                      'cost_cny': str(sum(settled.values(), Decimal(0)))})
         self.active_path.unlink(missing_ok=True)
 
     def _today(self, stamp=None):
@@ -277,13 +293,10 @@ class AutonomyController:
             '完成或决定暂不行动时，最后用四行简短说明，格式为“决定：…\n原因：…\n当前关注：…\n下一步：…”；'
             '不用为了产出而勉强做事。')
         if len(text.encode('utf-8')) > MAX_CONTEXT_BYTES:
-            if task_text:
-                text = text.replace(lab_context,
-                    '实验室近期产出：为保留长期任务状态，本次请用现有只读工具按需查看。')
-                if len(text.encode('utf-8')) > MAX_CONTEXT_BYTES:
-                    raise UserError('长期任务上下文超过安全限制，已停止；任务状态仍保存在 data 文件夹。')
-            else:
-                text = text[:MAX_CONTEXT_BYTES // 4] + '\n上下文已安全截短。'
+            text = text.replace(lab_context,
+                '实验室近期产出：为保留任务与上次活动状态，本次请用现有只读工具按需查看。')
+            if len(text.encode('utf-8')) > MAX_CONTEXT_BYTES:
+                raise UserError('自主活动上下文超过安全限制，已停止；任务与活动记录仍保存在 data 文件夹。')
         return text
 
     def should_yield(self):

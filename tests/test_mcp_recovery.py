@@ -67,13 +67,13 @@ class MCPRecoveryTests(unittest.TestCase):
     def test_bounded_read_failure_does_not_poison_next_call(self):
         client = self.backend([ConnectionError(), ConnectionError(), 'recovered'])
         with self.assertRaises(MemoryToolError) as failed:
-            client.call('breath_search', {'query': 'synthetic'})
+            client.call('pulse', {})
         self.assertEqual(failed.exception.code, 'connection')
         self.assertEqual(len(client.calls), 2)
         self.assertEqual(client.call('pulse', {}), 'recovered')
 
     def test_uncertain_mutation_is_never_replayed(self):
-        for name in ('hold', 'trace', 'dream', 'plan', 'letter_write'):
+        for name in ('hold', 'trace', 'dream', 'plan', 'letter_write', 'breath_search'):
             with self.subTest(name=name):
                 client = self.backend([ConnectionError('lost reply')])
                 with self.assertRaises(MemoryToolError) as failed:

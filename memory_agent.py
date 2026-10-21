@@ -41,7 +41,8 @@ class MemoryToolError(RuntimeError):
 
 class MCP:
     """One async owner; each operation gets a fresh, bounded HTTP connection."""
-    RETRYABLE_READS = frozenset({'pulse', 'breath_search'})
+    # Search can invoke a metered embedding provider; do not replay it.
+    RETRYABLE_READS = frozenset({'pulse'})
 
     def __init__(self, url, token):
         self.url, self.token = url, token

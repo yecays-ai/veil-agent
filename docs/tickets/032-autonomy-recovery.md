@@ -6,11 +6,13 @@
 
 ## 当前状态
 
-从最新 main `bbfaa5c392c6e643214f4decc1fcf729f2b2ce24` 独立开发；仅修用户确认的三项故障：记忆连接恢复、实测用量校准、部分进度与失败显示。无需改电源、预算、角色配置或真实数据。
+从最新 main `bbfaa5c392c6e643214f4decc1fcf729f2b2ce24` 独立开发，交付 PR [#64](https://github.com/yecays-ai/veil-agent/pull/64)；仅修用户确认的三项故障：记忆连接恢复、实测用量校准、部分进度与失败显示。无需改电源、预算、角色配置或真实数据。
 
-复用调查：沿用已安装的官方 [MCP Python SDK v1.30.0 Streamable HTTP](https://github.com/modelcontextprotocol/python-sdk/blob/v1.30.0/src/mcp/client/streamable_http.py) 及 `ClientSession` 生命周期；源码中的流恢复只在有事件 ID 时恢复响应，不能替代 VEIL 的工具副作用核实。该 SDK 为 [MIT](https://github.com/modelcontextprotocol/python-sdk/blob/v1.30.0/LICENSE) 许可，现有项目已在 Windows 使用；直接复用连接上下文，不复制源码、不增依赖。每次工具调用用新连接；只有 `pulse`、`breath_search` 的传输异常最多重试一次，其他工具及服务拒绝不重放。脱敏诊断仅保存工具名、次数和异常类型，不保存参数、返回正文或凭据。
+复用调查：沿用已安装的官方 [MCP Python SDK v1.30.0 Streamable HTTP](https://github.com/modelcontextprotocol/python-sdk/blob/v1.30.0/src/mcp/client/streamable_http.py) 及 `ClientSession` 生命周期；源码中的流恢复只在有事件 ID 时恢复响应，不能替代 VEIL 的工具副作用核实。该 SDK 为 [MIT](https://github.com/modelcontextprotocol/python-sdk/blob/v1.30.0/LICENSE) 许可，现有项目已在 Windows 使用；直接复用连接上下文，不复制源码、不增依赖。每次工具调用用新连接；只有不调用模型的 `pulse` 状态读取在传输异常时最多重试一次。检索可能产生 embedding 费用，与写入、服务拒绝一样不自动重放。脱敏诊断仅保存工具名、次数和异常类型，不保存参数、返回正文或凭据。
 
 长度检查保留首次保守估算；后续用真实 prompt token 为基准，仅对新增内容保守估算并保留余量。原有上下文和输出硬上限、逐请求预算与审批继续有效。活动记录保留已成功工具和文件，区分完成、部分完成、失败与被打断；旧误标记录只修正展示，不改写原始证据。网页可展开实际工具、产出和下一步。
+
+异常重启按唤醒编号恢复已确认工具、文件和已结算费用，不执行动作；未确认费用继续留在账本预留。长上下文先省略可重读的 Lab 正文，保留进度和格式要求；仍超限则明确停止，不发送被截断的状态。最终完整离线回归 245 项运行、242 通过、3 可选集成跳过；真实 SDK 对本机服务两次只读状态查询及关闭通过。Windows 真实睡眠恢复和隔夜产出仍待 Lan 验收。
 
 ## 验收步骤
 

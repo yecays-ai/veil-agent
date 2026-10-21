@@ -788,6 +788,12 @@ class Chat:
         next_reservation = None
         autonomy_tool_steps = 0
 
+        def log_tool(name, path, state):
+            row = {'request_id': request_id, 'tool': name, 'path': path, 'state': state}
+            if autonomy:
+                row['autonomy_run_id'] = self.autonomy_run_id
+            self.store.append(f'{self.cfg.id}/tools.jsonl', row)
+
         # Start at the same conservative floor used by Chat.send. After the first
         # response, provider-reported usage calibrates subsequent tool-loop estimates.
         calibration = 0.5
@@ -920,8 +926,7 @@ class Chat:
                     result, state, summary = self.send_message(
                         call.function.arguments, request_id,
                         f'{step}:{getattr(call, "id", None) or call_index}')
-                    self.store.append(f'{self.cfg.id}/tools.jsonl', {'request_id': request_id,
-                        'tool': 'send_message', 'path': summary, 'state': state})
+                    log_tool('send_message', summary, state)
                     if state != '成功':
                         errors.append(result)
                 if not final:
@@ -943,8 +948,7 @@ class Chat:
                     except (ValueError, TypeError):
                         summary = call.function.name
                     self.output(display_call(call.function.name, summary, '被拒绝', '继续处理会超过费用上限'))
-                    self.store.append(f'{self.cfg.id}/tools.jsonl', {'request_id': request_id,
-                        'tool': call.function.name, 'path': summary, 'state': '被拒绝'})
+                    log_tool(call.function.name, summary, '被拒绝')
                 self.output('这次工具步骤用完了。继续整理会超过当前费用上限。')
                 final = '这次工具步骤用完了。'
                 break
@@ -974,8 +978,7 @@ class Chat:
                         summary = summary if isinstance(summary, str) else call.function.name
                         self.output(display_call(call.function.name, summary, '被拒绝', '工具调用记录超过长度上限'))
                         summaries.append({'tool': call.function.name, 'path': summary, 'state': '被拒绝'})
-                        self.store.append(f'{self.cfg.id}/tools.jsonl', {'request_id': request_id,
-                            'tool': call.function.name, 'path': summary, 'state': '被拒绝'})
+                        log_tool(call.function.name, summary, '被拒绝')
                     self.budget.settle(next_reservation, next_cfg, 0, 0, 0)
                     final = '工具调用记录超过长度上限，未执行工具。'
                     self.tool_stop_reason = final
@@ -1037,8 +1040,7 @@ class Chat:
                         self.output(display_call(call.function.name, summary, state,
                                                  tool_message['content'] if state != '成功' else None))
                     summaries.append({'tool': call.function.name, 'path': summary, 'state': state})
-                    self.store.append(f'{self.cfg.id}/tools.jsonl', {'request_id': request_id,
-                        'tool': call.function.name, 'path': summary, 'state': state})
+                    log_tool(call.function.name, summary, state)
                     if autonomy and self.autonomy_should_yield and self.autonomy_should_yield():
                         self.autonomy_interrupted = True
                         self.budget.settle(next_reservation, next_cfg, 0, 0, 0)
