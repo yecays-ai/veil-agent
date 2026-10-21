@@ -110,6 +110,16 @@ class HiddenMemoryContextTests(unittest.TestCase):
             self.assertNotIn('FICTIONAL_UNCONFIRMED_unknown_a', sent)
             self.assertNotIn('FICTIONAL_UNCONFIRMED_unknown_b', sent)
 
+    def test_nested_relation_type_does_not_make_visibility_unknown(self):
+        raw = ('---\nid: linked\ntype: dynamic\nrelation_links:\n- auto: true\n'
+               "  label: ''\n  type: same_event\n  target_bucket_id: normal\n---\nFICTIONAL_LINKED\n")
+        with patch.object(self.memory, 'raw_content_for', return_value=raw):
+            self.assertTrue(self.memory.refresh_visibility('linked'))
+        self.assertEqual(self.memory.notices(), [])
+        archived = raw.replace('type: dynamic', 'type: archived')
+        with patch.object(self.memory, 'raw_content_for', return_value=archived):
+            self.assertFalse(self.memory.refresh_visibility('linked'))
+
     def test_backend_failure_does_not_reuse_opening_cache(self):
         self.backend.fail = True
         self.assertNotIn('FICTIONAL_HIDDEN_MARKER', self.context())

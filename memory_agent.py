@@ -538,7 +538,7 @@ class Memory:
                 values = {}
                 for line in header:
                     key, sep, value = line.partition(':')
-                    if sep and key.strip() in {'id', 'title', 'name'}:
+                    if sep and not line[:1].isspace() and key.strip() in {'id', 'title', 'name'}:
                         values[key.strip()] = self._frontmatter_scalar(value)
                 if values.get('id') and values['id'] != memory_id:
                     continue
@@ -586,7 +586,7 @@ class Memory:
                 metadata = {}
                 for line in lines[1:end]:
                     key, sep, value = line.partition(':')
-                    if sep and key.strip() in {'id', 'title', 'name'}:
+                    if sep and not line[:1].isspace() and key.strip() in {'id', 'title', 'name'}:
                         metadata[key.strip()] = self._frontmatter_scalar(value)
                 if metadata.get('id') == memory_id or (not metadata.get('id') and
                         (path.stem == memory_id or path.stem.endswith('_' + memory_id))):
@@ -636,7 +636,7 @@ class Memory:
         end = next((i for i, line in enumerate(lines[1:], 1) if line.strip() == '---'), len(lines))
         for line in lines[1:end]:
             key, sep, value = line.partition(':')
-            if sep and key.strip() == 'deleted_at':
+            if sep and not line[:1].isspace() and key.strip() == 'deleted_at':
                 return value.strip().strip(chr(39) + chr(34)).casefold() not in ('', 'null', 'none', 'false')
         return False
 
@@ -665,7 +665,7 @@ class Memory:
                 metadata = {}
                 for line in lines[1:end]:
                     key, sep, value = line.partition(':')
-                    if sep and key.strip() in {'dont_surface', 'tombstone', 'deleted_at', 'type'}:
+                    if sep and not line[:1].isspace() and key.strip() in {'dont_surface', 'tombstone', 'deleted_at', 'type'}:
                         key = key.strip()
                         if key in metadata:
                             break  # Ambiguous metadata cannot authorize cached content.
