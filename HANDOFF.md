@@ -1,3 +1,4 @@
+- 2026-10-21 Codex：工单 043 从最新 main `a48f13dec08d89ea2d1667ff550ae2e4cbe6baca` 建立独立分支 `ticket/043-long-task-side-effect-verification`。031-06 复现点是目标路径子串匹配且不检查读回内容。已在 `long_tasks.py` 持久化操作 UUID、规范目标及 write/append 的 SHA-256 效果摘要；只接受相同目标 `read_text_file` 的实际内容匹配，并用操作 ID 和后续工具步骤解除 pending。`veil_agent.py` 现将参数及读取结果传给检查点。虚构文件写入/追加、错路径、错内容、重启恢复测试已补；STATUS、工单文档已更新。下一步检查分支差异并开 PR，依据 GitHub CI 修正回归问题，交 Claude 独立审查；合并后 Lan 按 STATUS 做 A–E Windows 体验。040 行为与验收保留；044 不在本单范围。
 # 交接
 
 - 2026-10-21 Claude：PR #77（042）与 PR #79（041）因小兔子限流由 Claude 审查，CI 全绿后合并；两单 Windows 体验待 Lan 验收。
