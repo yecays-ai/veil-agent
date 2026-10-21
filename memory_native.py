@@ -295,7 +295,7 @@ class NativeMemoryTools:
         try:
             result = self.memory.call(name, args)
         except MemoryToolError as exc:
-            return 'The memory operation failed. Check the current memory state before retrying.', '出错', summary
+            return str(exc), '出错', summary
         except Exception:
             return 'The memory tool failed. Check the current memory state before retrying.', '出错', summary
         if name in ('dream', 'pulse'):
@@ -341,7 +341,7 @@ class NativeMemoryTools:
             safe_args['delete'] = False
             result = self.memory.call('trace', safe_args)
         except MemoryToolError as exc:
-            return 'The memory update failed; the previous version was archived.', '出错', summary
+            return f'{exc} The previous version was archived.', '出错', summary
         except Exception:
             return 'The memory update failed; the previous version was archived.', '出错', summary
         self.memory.bucket_details_cache.pop(memory_id, None)

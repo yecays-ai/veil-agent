@@ -108,7 +108,7 @@ persistent_append_file = "growth-journal.md"
         self.tools.lab_max_write_bytes = 4
         result = self.call('write_file', 'lab/large.md', '你好')
         self.assertEqual(result[1], '被拒绝')
-        self.assertIn('没有写入任何内容', result[0])
+        self.assertIn('no content was written', result[0])
         self.assertFalse((self.lab / 'large.md').exists())
         self.assertEqual(self.call('write_file', 'lab/small.md', 'old')[1], '成功')
         result = self.call('append_file', 'lab/small.md', '你好')
