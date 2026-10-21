@@ -55,7 +55,9 @@ class UnusedProxy:
 
 class Experiment017OmbreHTTPTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[1] / ".local-tmp")
+        runtime_root = Path(__file__).resolve().parents[1] / ".local-tmp"
+        runtime_root.mkdir(parents=True, exist_ok=True)
+        self.temp = tempfile.TemporaryDirectory(dir=runtime_root)
         self.addCleanup(patch.stopall)
         self.addCleanup(self.temp.cleanup)
 
@@ -103,4 +105,3 @@ class Experiment017OmbreHTTPTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
