@@ -1,20 +1,20 @@
 # 当前状态
 
-更新：2026-10-22 · 047 Windows 桌面版 0.1（PR #84）、050（PR #86，原撞号 047）与 048（PR #87）经 Claude 审查后合入；049、045、046、044、043、041、042、040 已合入
+更新：2026-10-22 · 工单 051（031-12 文档与实际功能一致性）进行中；047 Windows 桌面版 0.1（PR #84）、050（PR #86，原撞号 047）、048（PR #87）及 049、045、046、044、043、041、042、040 均已合入
 
 ## 当前目标与现状
 
-- **047 验证证据：** PR #84 代码提交 `516d1eb50758418d5012387c5e1da1fd38719494` 的 Windows desktop 构建/虚构窗口检查及 Tests 的 Windows/Linux × Python 3.11/3.12 均通过。已请求 CodeRabbit 正式审查，当前未收到结果，未合并；不把 CI 当作 Lan 真实体验验收。后续文档收尾不改代码，最终 PR head 状态另以 GitHub 为准。
+- **051 文档与实际功能一致性（031-12）：** 基于 main `7a882aff857ddc1036b87d827cf8b91e7a50808b`，分支 `ticket/051-docs-actual-functionality`。只核对并修正 README、当前状态和有效交接说明；不改生产逻辑。已确认 PR #84、#86、#87 都已合入，且仍把自动检查和 Windows 体验验收分开记录。
 
-- **047 Windows 桌面版 0.1：** 从最新 main `29f2379ae7aace048001991d75628deb2e038fda` 建立 `ticket/047-windows-desktop`。复用 MIT Electron，直接使用 Lan 提供的透明 PNG；支持拖动、五档大小、位置保存、单实例和真实聊天窗口收放。连接/启动原 Python 网页服务，继续使用原记录、权限、记忆和预算；原网页、Agent 核心和私人数据不修改。Memory / Ombre、Lab 的桌面入口禁用并标记 Coming Soon。Windows x64 运行文件夹已生成，需选择已有可用 Agent 安装；未捆绑 Python Agent。2 项本机 HTTP 接入测试、原网页检查和虚构服务的真实 Electron 窗口自动检查通过。GitHub CI/审查以本单 PR 为准；Lan 的 Windows 真实体验尚未验收。
+- **047 Windows 桌面版 0.1：** PR #84 已合入 main `7a882af`。复用 MIT Electron，直接使用 Lan 提供的透明 PNG；支持拖动、五档大小、位置保存、单实例和真实聊天窗口收放。连接/启动原 Python 网页服务，继续使用原记录、权限、记忆和预算；原网页、Agent 核心和私人数据不修改。Memory / Ombre、Lab 的桌面入口禁用并标记 Coming Soon。Windows x64 运行文件夹需选择已有可用 Agent 安装，未捆绑 Python Agent。虚构 HTTP、网页和 Electron 窗口检查通过；Lan 的 Windows 真实体验尚未验收。
 
-- **050 依赖可复现安装与安全维护检查（031-10）：** 基于 main `c0f4553c0e6ad4c4855e23f6b458d0f0252e0700`，分支 `ticket/047-dependency-repro`，PR #86。主程序新增 exact-version requirements 锁；Windows 安装器与测试 CI 共用锁并限制 Python 3.11/3.12。Ombre 3.11 使用固定提交派生的精确锁（NumPy 2.4.6），3.12 使用仓库精确锁；固定 Ombre 源码归档由 SHA-256 校验。每周、手动及 PR 触发的 pip-audit 分别检查主程序、Ombre 3.11、Ombre 3.12 锁，并用虚构漏洞样本核验报告。首轮 CI 确认漏洞样本报告可行动，同时发现 3.11 上游 NumPy/SciPy 版本限制，并检出 Certifi 2026.10.18 的 PYSEC-2026-4320；现已将 Python 3.11 Ombre 锁固定为 NumPy 2.4.6、SciPy 1.17.1；两份应用锁的 Certifi 更新到 2026.10.19；两版 Ombre 锁的 mcp / PyJWT 固定为 1.30.0 / 2.15.1。GitHub Actions Tests run 39631176073 与 39631189237 在 Windows/Linux × Python 3.11/3.12 完成干净依赖安装、Ombre 安装、关键启动检查和完整 unittest，全部通过。Dependency security run 39631189197 的主程序、两版 Ombre 锁审计和虚构漏洞报告 smoke 全部通过。当前本机完整 unittest 未取得结束摘要；Windows 真人体验仍待 Lan 验收。安全扫描只报告，不自动升级依赖。原与 PR #84 撞号的 047 已改为 050（分支名保留 `ticket/047-dependency-repro`）。
+- **050 依赖可复现安装与安全维护检查（031-10）：** PR #86 已合入 main `0530aac`。主程序新增 exact-version requirements 锁；Windows 安装器与测试 CI 共用锁并限制 Python 3.11/3.12。Ombre 3.11 使用固定提交派生的精确锁（NumPy 2.4.6），3.12 使用仓库精确锁；固定 Ombre 源码归档由 SHA-256 校验。每周、手动及 PR 触发的 pip-audit 分别检查主程序、Ombre 3.11、Ombre 3.12 锁，并用虚构漏洞样本核验报告。两份应用锁的 Certifi 固定为 2026.10.19；两版 Ombre 锁的 mcp / PyJWT 固定为 1.30.0 / 2.15.1。合入前 Tests run 39631970121 在 Windows/Linux × Python 3.11/3.12 完成干净依赖安装、Ombre 安装、关键启动检查和完整 unittest，全部通过；Dependency security run 39631979346 的三份锁扫描及虚构漏洞报告 smoke 通过。安全扫描只报告，不自动升级依赖；Windows 真人体验仍待 Lan 验收。原与 PR #84 撞号的 047 已改为 050（分支名保留 `ticket/047-dependency-repro`）。
 
-- **048 实验 017 适配新版 Ombre HTTP 接口（031-11）：** 分支 `ticket/048-ombre-http-adapter`，PR #87。实验入口复用隔离 Streamable HTTP 实例和 `memory_agent.MCP`；实验启动时明确将 `proxy-dummy` 传给 Ombre 脱水及 embedding key，预算代理原有凭据和转发路径不变。新增回归覆盖模拟 `.env` 下占位 key 覆盖与默认启动行为；本次补丁的定向/完整 CI 待确认。此前 Actions run 793 的 Windows/Linux × Python 3.11/3.12 四个任务通过（各 307 项测试，4 项可选跳过）。真实角色记忆与供应商请求未触碰；完整质量复跑会产生真实模型费用，不纳入本单回归。
+- **048 实验 017 适配新版 Ombre HTTP 接口（031-11）：** PR #87 已合入 main `0a6832a`。实验入口复用隔离 Streamable HTTP 实例和 `memory_agent.MCP`；实验启动时明确将 `proxy-dummy` 传给 Ombre 脱水及 embedding key，预算代理原有凭据和转发路径不变。模拟 `.env` 占位 key 覆盖与默认启动行为已有回归；合入前最新 head `e6d23bc` 的 Actions run 801 在 Windows/Linux × Python 3.11/3.12 全套测试通过。真实角色记忆与供应商请求未触碰；完整质量复跑会产生真实模型费用，不纳入本单回归。
 
 - **049 记忆可见性误判（Claude 修复）：** 记忆文件里 `relation_links` 下的缩进 `type: same_event` 被当成顶层 `type`，重复键导致“可见性无法确认”，有关联的记忆每轮都被拦下并提示。现在只读顶层键。Windows 验收：pull 后聊几句，那条英文提示不应每轮出现，Peter 能想起有关联的记忆。
 
-- **045 Ombre 后台调用预算（031-04）：** 基于 GitHub 最新 main `29f2379ae7aace048001991d75628deb2e038fda`，独立分支 `ticket/045-ombre-budget`，PR #83。已补齐 Ombre 内部模型调用估算常量；VEIL 可见的 embedding 与 `hold` 模型路径在 MCP 请求前按估算上限预留共享 `Budget`，确认成功后按单次正常估算结算并释放差额；失败或重启后结果不明时按预留上限结算，结算幂等。Extract 后台调用仍使用共享账本。上游 hold 后异步计划判断和 HTTP 维护入口仍未有逐请求共享硬闸门，不能称为完整费用硬限制。GitHub Actions run 740 的 Windows/Linux × Python 3.11/3.12 全部通过（293 项测试，4 项跳过）。CodeRabbit 未提交审查，Claude 独立审查未完成；按 Lan 指示暂停后续评审与合并，Windows 体验仍另待验收。
+- **045 Ombre 后台调用预算（031-04）：** PR #83 已合入 main `d7d1994`。已补齐 Ombre 内部模型调用估算常量；VEIL 可见的 embedding 与 `hold` 模型路径在 MCP 请求前按估算上限预留共享 `Budget`，确认成功后按单次正常估算结算并释放差额；失败或重启后结果不明时按预留上限结算，结算幂等。Extract 后台调用仍使用共享账本。上游 hold 后异步计划判断和 HTTP 维护入口仍未有逐请求共享硬闸门，不能称为完整费用硬限制。GitHub Actions run 740 的 Windows/Linux × Python 3.11/3.12 全部通过（293 项测试，4 项跳过）；Windows 体验仍另待验收。
 
 - **044 记忆诊断刷屏与工具拒绝原因丢失：** PR #81 `ticket/044-memory-diagnostics-tool-errors` 已合入 main `29f2379ae7aace048001991d75628deb2e038fda`（合并提交 `29f2379ae7aace048001991d75628deb2e038fda`）。工具失败原因已在 `long_tasks.py`、`memory_native.py`、`tools_agent.py`、`veil_agent.py`、`memory_agent.py` 源头改为英文；`model_tool_result()` 对失败原因原样传递，网页与 Peter 收到相同文本。AST 回归扫描上述源文件的失败结果，并检查 `MemoryToolError` 诊断不含中文。GitHub Actions run 692 的 Windows/Linux × Python 3.11/3.12 全部通过。Claude 已审查合入；Windows 虚构数据聊天验收仍待完成。截图所示未知可见性候选保持失败关闭；真实记忆未访问，截图不能证明其他记忆也持续失效。
 
@@ -29,7 +29,7 @@
 
 ## 下一步
 
-047、050 与 048 已由 Claude 审查合入；Lan 按下方 047、050、048 步骤做 Windows 验收（048 只需 `--preflight-ombre`，不需付费复跑）。
+051 的文档核对已完成；隔离工作区没有 `.venv`，本地完整离线测试无法启动，开 PR 后由 GitHub CI 运行同一完整套件。Lan 安排审查及合并后，再按下方 047、050、048 步骤做 Windows 验收（048 只需 `--preflight-ombre`，不需付费复跑）。
 
 ## Windows 验收
 
