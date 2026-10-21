@@ -4,7 +4,7 @@
 
 ## 当前目标与现状
 
-- **044 记忆诊断刷屏与工具拒绝原因丢失：** PR #81 `ticket/044-memory-diagnostics-tool-errors` 已先合入 main `8df2099c90bd6681ebfeab4f0302e7390a992e52`（合并提交 `6eb3e36b724ab043721f6d571fb5d1d79bdbeab5`），保留 043 的 `long_tasks.py`、测试与状态记录。工具失败原因已在 `long_tasks.py`、`memory_native.py`、`tools_agent.py`、`veil_agent.py` 和 `memory_agent.py` 源头改为英文；`model_tool_result()` 原样传递失败原因，网页与 Peter 收到相同文本。新增 AST 回归扫描这些源文件中的失败结果字符串并拒绝中文。代码和测试提交 `49d9ec40d98a23197459095d777b8675d45fd4dc`；GitHub Actions run 682 正在执行。Claude 独立审查待 Lan 手动安排；Windows 虚构数据聊天验收待 CI/审查完成并合并后进行。截图对应的可见性未知候选仍失败关闭；真实记忆未访问，截图不能证明其他记忆检索也持续失效。
+- **044 记忆诊断刷屏与工具拒绝原因丢失：** PR #81 `ticket/044-memory-diagnostics-tool-errors` 已合入 main `8df2099c90bd6681ebfeab4f0302e7390a992e52`（分支合并提交 `6eb3e36b724ab043721f6d571fb5d1d79bdbeab5`），保留 043 的 `long_tasks.py`、测试和有效状态记录。工具失败原因已在 `long_tasks.py`、`memory_native.py`、`tools_agent.py`、`veil_agent.py`、`memory_agent.py` 源头改为英文；`model_tool_result()` 对失败原因原样传递，网页与 Peter 收到相同文本。AST 回归扫描上述源文件的失败结果，并检查 `MemoryToolError` 诊断不含中文。最新代码/测试提交 `ac6a40cbfba39c5b27c074da640f7232f0c8e6e3` 在 GitHub Actions run 692 的 Windows/Linux × Python 3.11/3.12 全部通过。Claude 独立审查待 Lan 手动安排；合并和 Windows 虚构数据聊天验收仍待审查后完成。截图所示未知可见性候选保持失败关闭；真实记忆未访问，截图不能证明其他记忆也持续失效。
 
 - **043 长期任务副作用安全确认（031-06）：** 从 main `a48f13dec08d89ea2d1667ff550ae2e4cbe6baca` 建立独立分支 `ticket/043-long-task-side-effect-verification`。在 `long_tasks.py` 持久化操作 ID、规范目标与文件效果摘要；仅精确路径读回且内容匹配才记录核实。`veil_agent.py` 将工具参数和真实读取结果交给检查点；虚构文件回归已补；代码 head `92323e82906633457b967101f50c7ca16f7dbed4` 的 Ubuntu/Windows × Python 3.11/3.12 CI 全绿。CodeRabbit 发现的非文件 pending 卡死已修复；Claude 独立审查未收到响应，Windows 体验待 Lan 验收。范围不含 044。
 
@@ -15,7 +15,7 @@
 
 ## 下一步
 
-检查 GitHub Actions run 682；通过后等待 Claude 独立审查（由 Lan 手动安排）并处理必要问题。合并后由 Lan 用虚构记忆验收提示去重、正常召回及隐藏过滤。
+请 Lan 手动安排 Claude 独立审查；收到意见后仅处理功能/安全问题并复核更新 head 的 CI。审查满足要求后再合并；合并后由 Lan 用虚构记忆验收提示去重、正常召回及隐藏过滤。
 
 
 ## Windows 验收
