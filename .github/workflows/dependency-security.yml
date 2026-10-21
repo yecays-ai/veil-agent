@@ -1,0 +1,38 @@
+name: Dependency security
+on:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 7 * * 1'
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --no-cache-dir -r requirements.lock.txt
+      - run: python setup_memory.py
+      - uses: pypa/gh-action-pip-audit@1220774d901786e6f652ae159f7b6bc8fea6d266 # v1.1.0
+        with:
+          inputs: requirements.lock.txt .deps/ombre/source/requirements.lock.txt
+  scanner-report-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --no-cache-dir pip-audit==2.10.1
+      - name: Confirm a vulnerable sample produces an actionable report
+        shell: bash
+        run: |
+          report="$RUNNER_TEMP/pip-audit-sample.json"
+          status=0
+          python -m pip_audit -r tests/fixtures/vulnerable-requirements.txt --format json --output "$report" || status=$?
+          test "$status" -eq 1
+          python -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); findings=[(dep["name"], dep["version"], vuln) for dep in data["dependencies"] for vuln in dep["vulns"]]; assert any(name == "idna" and version == "2.5" and vuln["id"] and vuln["fix_versions"] for name, version, vuln in findings), findings; print("Sample report includes package, installed version, advisory ID, and fixed version.")' "$report"
+          cat "$report" >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,2 @@
+# Synthetic scanner smoke sample only. Never installed by setup.bat or CI tests.
+idna==2.5
