@@ -157,8 +157,7 @@ class _FileLock:
         self.handle = None
 
 
-@contextmanager
-def _cold_lock(root, *, create_session=False):
+def _acquire_cold_locks(root, *, create_session=False):
     locks = []
     try:
         data = root / "data"
@@ -173,6 +172,18 @@ def _cold_lock(root, *, create_session=False):
                 if candidate.is_symlink():
                     raise BackupError("Ombre 服务锁路径含符号链接，已停止。")
             locks.append(_FileLock(path, create=False))
+        return locks
+    except Exception:
+        for lock in reversed(locks):
+            lock.close()
+        raise
+
+
+@contextmanager
+def _cold_lock(root, *, create_session=False):
+    locks = []
+    try:
+        locks.extend(_acquire_cold_locks(root, create_session=create_session))
         yield locks
     finally:
         for lock in reversed(locks):
@@ -469,10 +480,9 @@ def restore_backup(backup, target, *, replace=False, confirm=input):
 
                 moved = []
                 installed = []
-                session_lock = locks[0]
-                relock_session = session_lock.handle is not None
-                if relock_session:
-                    session_lock.close()
+                for lock in reversed(locks):
+                    lock.close()
+                locks.clear()
                 try:
                     try:
                         if not target.exists():
@@ -513,12 +523,13 @@ def restore_backup(backup, target, *, replace=False, confirm=input):
                             shutil.rmtree(safety, ignore_errors=True)
                         raise
                 finally:
-                    if relock_session and (target / "data").is_dir():
+                    data = target / "data"
+                    if data.is_dir() and not data.is_symlink():
                         try:
-                            locks[0] = _FileLock(target / "data" / "session.lock", create=True)
-                        except OSError as exc:
+                            locks.extend(_acquire_cold_locks(target, create_session=True))
+                        except (OSError, BackupError) as exc:
                             raise BackupError(
-                                f"恢复后无法重新锁定 data/；原有数据安全副本位于：{safety}"
+                                f"恢复后无法重新锁定 data/；原有数据安全副本位置：{safety}"
                             ) from exc
             else:
                 conflicts = _validate_target_paths(target, manifest) if target.exists() else []
