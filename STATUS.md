@@ -4,7 +4,7 @@
 
 ## 当前目标与现状
 
-- **043 长期任务副作用安全确认（031-06）：** 从 main `a48f13dec08d89ea2d1667ff550ae2e4cbe6baca` 建立独立分支 `ticket/043-long-task-side-effect-verification`。在 `long_tasks.py` 持久化操作 ID、规范目标与文件效果摘要；仅精确路径读回且内容匹配才记录核实。`veil_agent.py` 将工具参数和真实读取结果交给检查点；虚构文件回归已补；代码 head `835b6ff57f1eb7d0773115ba507164fb050f942a` 的 Ubuntu/Windows × Python 3.11/3.12 CI 全绿；Claude 独立审查未收到响应，Windows 体验待 Lan 验收。范围不含 044。
+- **043 长期任务副作用安全确认（031-06）：** 从 main `a48f13dec08d89ea2d1667ff550ae2e4cbe6baca` 建立独立分支 `ticket/043-long-task-side-effect-verification`。在 `long_tasks.py` 持久化操作 ID、规范目标与文件效果摘要；仅精确路径读回且内容匹配才记录核实。`veil_agent.py` 将工具参数和真实读取结果交给检查点；虚构文件回归已补；代码 head `92323e82906633457b967101f50c7ca16f7dbed4` 的 Ubuntu/Windows × Python 3.11/3.12 CI 全绿。CodeRabbit 发现的非文件 pending 卡死已修复；Claude 独立审查未收到响应，Windows 体验待 Lan 验收。范围不含 044。
 
 - **042 自主活动摘要一次性交接：** 从最新 main `14cbe535039d80cc865f605420d2ec42dd58e48d` 同步，分支 `ticket/042-autonomy-handoff-once`，PR #77 已合并。成功普通聊天后持久记录活动 ID，后续聊天和重启不再重复；模型失败保留交接机会；原始活动记录不改。四平台 CI 已通过代码测试；同步 main 后将由 CI 再验证。CodeRabbit 三次触发均被额度限制，正式审查未完成；Lan 体验待验收。
 - **040 长期任务 40 条进度后无法完成（031-05）：** PR #76 已合并，施工基线为 main `8d71b06d52efaa65ee1dc4a535bc62fc5fef632a`。PR #78 保留全部 40 条历史，并在进度已满时将最终完成证据写入独立字段；兼容旧任务快照，状态和上下文可展示该证据。重复完成请求不能覆盖首次证据。测试检查真实 JSON、重开恢复、后续新任务及保存失败保护。GitHub CI 的 Ubuntu/Windows × Python 3.11/3.12 全部通过；CodeRabbit 正式评审完成，唯一阻断意见已修复并解决。Windows 体验待 Lan 验收。
@@ -13,7 +13,7 @@
 
 ## 下一步
 
-完成 043 的独立审查并处理真实功能/安全阻断；最终文档 head 的 CI 验证后再按仓库规则合并。之后 Lan 按下方步骤验收 043，并继续验收 040、041、042。
+取得 Claude 独立审查并处理真实功能/安全阻断；最终文档 head 的 CI 通过后再按仓库规则合并。之后 Lan 按下方步骤验收 043，并继续验收 040、041、042。
 
 ## Windows 验收
 
