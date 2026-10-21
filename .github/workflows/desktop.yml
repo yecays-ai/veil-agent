@@ -1,0 +1,37 @@
+name: Windows desktop
+on:
+  push:
+    paths: ['desktop/**', '.github/workflows/desktop.yml']
+  pull_request:
+    paths: ['desktop/**', '.github/workflows/desktop.yml']
+permissions:
+  contents: read
+jobs:
+  desktop:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: node node_modules/electron/install.js
+      - run: npm test
+      - run: npm run test:windows
+      - run: npm run package
+      - run: Copy-Item README.md dist/VEIL-win32-x64/使用说明.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VEIL-Windows-0.1
+          path: desktop/dist/VEIL-win32-x64/
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: desktop-smoke-screenshots
+          path: desktop/test-output/

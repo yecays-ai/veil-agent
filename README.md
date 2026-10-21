@@ -1,5 +1,7 @@
 # VEIL Agent：本机文字聊天
 
+Windows 桌面版 0.1：透明 Peter 可拖动、调整大小，点击收放原 Agent 的真实聊天。打包版完整解压后双击 `VEIL.exe`，首次选择已有 Agent 文件夹；源码版运行 `setup-desktop.bat` 后用 `start-desktop.bat` 启动。安装、数据边界和体验步骤见 [桌面版说明](desktop/README.md)。Memory / Ombre、Lab 桌面入口尚未接通；真实 Windows 体验待验收。
+
 双击启动文字聊天，关掉再开接上最近对话。工单 005 增加后台补记和长期记忆；工单 006 让 Peter 在自己的测试文件夹里读文件，并在你同意后新建文件。
 
 ## 放在 E 盘
@@ -87,3 +89,5 @@ Ombre 自带模型默认打开：每存一条记忆会用聊天同一个模型�
 ```
 
 测试只用假人设、假消息、假模型或本机模拟 HTTP，不读真实密钥、不访问付费接口。CI 在 Windows/Linux、Python 3.11/3.12 运行同一套测试；这些检查不代替 lan 的真实聊天验收。
+
+
