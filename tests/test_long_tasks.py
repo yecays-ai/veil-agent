@@ -169,12 +169,71 @@ max_result_bytes = 4096
         self.assertEqual(saved['tool_events'][-1]['state'], '成功')
         self.assertEqual(saved['tool_events'][-1]['target'], 'lab/part-one.md')
 
+    def test_completion_at_progress_limit_persists_evidence_and_allows_next_task(self):
+        task_id = self.create()
+        for index in range(40):
+            _, state, _ = self.tasks.invoke('long_task_update', {
+                'action': 'update', 'task_id': task_id,
+                'progress_update': f'Fictional verified step {index + 1}.'})
+            self.assertEqual(state, '成功')
+
+        final_evidence = 'All 40 fictional steps are verified; final artifact is lab/final.md.'
+        _, state, _ = self.tasks.invoke('long_task_update', {
+            'action': 'update', 'task_id': task_id, 'status': 'completed',
+            'progress_update': final_evidence})
+        self.assertEqual(state, '成功')
+
+        stored = json.loads(self.tasks.path.read_text(encoding='utf-8'))
+        self.assertEqual(stored['status'], 'completed')
+        self.assertEqual(len(stored['progress']), 40)
+        self.assertEqual([row['text'] for row in stored['progress']],
+                         [f'Fictional verified step {index + 1}.' for index in range(40)])
+        self.assertEqual(stored['completion_evidence'], final_evidence)
+
+        reopened = LongTaskStore(self.store, 'peter')
+        self.assertEqual(reopened.read(), stored)
+        status = json.loads(reopened.status_text())
+        self.assertEqual(status['completion_evidence'], final_evidence)
+        _, state, _ = reopened.invoke('long_task_update', {
+            'action': 'update', 'task_id': task_id, 'status': 'completed',
+            'progress_update': 'Replacement evidence must not overwrite the first result.'})
+        self.assertEqual(state, '被拒绝')
+        self.assertEqual(reopened.read(), stored)
+
+        _, state, _ = reopened.invoke('long_task_update', {
+            'action': 'create', 'title': 'Next fictional task', 'goal': 'Verify a separate result.'})
+        self.assertEqual(state, '成功')
+        self.assertEqual(reopened.read()['title'], 'Next fictional task')
+
+    def test_completion_save_failure_keeps_full_active_snapshot(self):
+        task_id = self.create()
+        for index in range(40):
+            _, state, _ = self.tasks.invoke('long_task_update', {
+                'action': 'update', 'task_id': task_id,
+                'progress_update': f'Fictional verified step {index + 1}.'})
+            self.assertEqual(state, '成功')
+
+        before = self.tasks.path.read_bytes()
+        previous = self.tasks.read()
+        with patch('long_tasks.os.replace', side_effect=OSError('simulated interruption')):
+            with self.assertRaises(UserError):
+                self.tasks.invoke('long_task_update', {
+                    'action': 'update', 'task_id': task_id, 'status': 'completed',
+                    'progress_update': 'Fictional completion evidence.'})
+        self.assertEqual(self.tasks.path.read_bytes(), before)
+        self.assertEqual(self.tasks.read(), previous)
+        self.assertEqual(self.tasks.read()['status'], 'active')
+        self.assertEqual(self.tasks.read().get('completion_evidence', ''), '')
+
     def test_completed_task_does_not_disable_other_autonomous_work(self):
         task_id = self.create()
         _, state, _ = self.tasks.invoke('long_task_update', {
             'action': 'update', 'task_id': task_id, 'status': 'completed',
             'progress_update': 'All three verified sections are in the lab.'})
         self.assertEqual(state, '成功')
+        saved = self.tasks.read()
+        self.assertEqual(saved['completion_evidence'], '')
+        self.assertEqual(saved['progress'][-1]['text'], 'All three verified sections are in the lab.')
         self.assertEqual(self.tasks.before_tool('append_file', 'lab/new-note.md', autonomy=True),
                          (None, False))
 
