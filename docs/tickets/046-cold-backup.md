@@ -6,7 +6,7 @@ VEIL 关闭后可把必要的本机角色数据完整备份到独立位置，并
 
 ## 当前状态
 
-- 基线：最新 main `29f2379`；独立分支 `ticket/046-cold-backup`；PR #82 已创建，等待 CI 与 Claude 独立审查。
+- 基线：最新 main `29f2379`；独立分支 `ticket/046-cold-backup`；PR #82 已创建。CodeRabbit 指出的运行文件排除范围问题已修复并加回归；修复版等待 CI、CodeRabbit 和 Claude 独立审查。
 - 持久数据范围来自当前代码：`data/`（共享费用账本、各角色聊天、Ombre vault 与 `_agent` 状态、能力/追加授权、长期任务、自主活动、工具记录、workspace）；`characters/`（角色配置）；`persona/`（私人人设）；`.env`（模型密钥）。`config.toml` 当前没有被程序读取；`.venv/`、`.deps/`、`.local-tmp/` 是可重新安装/生成内容；服务进程日志、锁和运行标志可重新生成，需排除。
 - Ombre vault 内与记忆内容及索引相关的文件须原样保留；仅排除 `_agent` 的 `process.log`、进程/停止/锁/ready 标志和临时目录。
 - 复用调查：restic/restic（BSD-2-Clause，约 36.7k stars、约 9.9k commits；2026-10-18 最新提交 `dd09b6bd01af220b1d5d95c0d4d7d472e05e05c4`）。源码 `cmd/restic/cmd_backup.go` 的 `runBackup` 只有在扫描和 `archiver.Snapshot` 成功后才报告快照成功；文档提供加密、校验、恢复和 Windows/Linux 安装。结论：借鉴完整性/失败即不成功原则；本单用 Python 标准库实现固定本地目录的冷备份，因为 restic 还需用户安装、密码仓库管理和额外 CLI 步骤，超出本单的简易单次快照需求。未复制第三方代码。

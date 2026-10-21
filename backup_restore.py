@@ -55,11 +55,14 @@ def _sha256(path):
 def _entry_is_excluded(relative):
     parts = PurePosixPath(relative).parts
     name = parts[-1]
-    if name in OMBRE_RUNTIME_FILES or name.endswith(".tmp"):
-        return True
     if relative == "data/session.lock":
         return True
-    return "_agent" in parts and "tmp" in parts[parts.index("_agent") + 1:]
+    if "_agent" not in parts:
+        return False
+    after = parts[parts.index("_agent") + 1:]
+    if len(after) == 1 and (name in OMBRE_RUNTIME_FILES or name.endswith(".tmp")):
+        return True
+    return "tmp" in after
 
 
 def _payload_entries(root):

@@ -48,13 +48,23 @@ class ColdBackupTests(unittest.TestCase):
         (root / "data" / "fixture" / "append-grant.json").write_bytes(b'{"path":"fake.txt"}\n')
         (root / "data" / "fixture" / "long-tasks.json").write_bytes(b'{"task":"fiction"}\n')
         (root / "data" / "fixture" / "workspace" / "fiction.txt").write_bytes(b"workspace data")
+        (root / "data" / "fixture" / "workspace" / "process.log").write_bytes(b"user data")
+        (root / "data" / "fixture" / "workspace" / "ordinary.tmp").write_bytes(b"user temp")
+        (root / "data" / "fixture" / "memory" / "_agent" / "nested").mkdir()
+        (root / "data" / "fixture" / "memory" / "_agent" / "nested" / "process.log").write_bytes(
+            b"persistent nested data"
+        )
+        (root / "data" / "fixture" / "memory" / "_agent" / "tmp").mkdir()
+        (root / "data" / "fixture" / "memory" / "_agent" / "tmp" / "cache.json").write_bytes(
+            b"runtime cache"
+        )
 
     def _create(self):
         return backup_restore.create_backup(self.source, self.backups)[0]
 
     def test_create_manifest_covers_local_state_and_omits_only_runtime_files(self):
         backup, count = backup_restore.create_backup(self.source, self.backups)
-        self.assertEqual(count, 10)
+        self.assertEqual(count, 13)
         manifest = backup_restore.verify_backup(backup)
         paths = {entry["path"] for entry in manifest["files"]}
         self.assertIn("payload/.env", paths)
@@ -65,9 +75,13 @@ class ColdBackupTests(unittest.TestCase):
         self.assertIn("payload/data/fixture/append-grant.json", paths)
         self.assertIn("payload/data/fixture/long-tasks.json", paths)
         self.assertIn("payload/data/fixture/workspace/fiction.txt", paths)
+        self.assertIn("payload/data/fixture/workspace/process.log", paths)
+        self.assertIn("payload/data/fixture/workspace/ordinary.tmp", paths)
+        self.assertIn("payload/data/fixture/memory/_agent/nested/process.log", paths)
         self.assertNotIn("payload/data/fixture/memory/_agent/process.log", paths)
         self.assertNotIn("payload/data/fixture/memory/_agent/ombre.lock", paths)
         self.assertNotIn("payload/data/fixture/memory/_agent/temporary.tmp", paths)
+        self.assertNotIn("payload/data/fixture/memory/_agent/tmp/cache.json", paths)
         self.assertEqual(
             (backup / "payload/data/fixture/memory/fiction.md").read_bytes(), b"synthetic memory\n"
         )
