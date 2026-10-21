@@ -38,4 +38,4 @@
 
 ## 当前状态
 
-PR #81 已先合并 main `8df2099c90bd6681ebfeab4f0302e7390a992e52`，保留 043 的长期任务实现及状态记录。英文源头改写、模型原样传递及静态扫描回归已提交至 PR；GitHub CI 与 Claude 独立审查待确认。Windows 实际聊天验收由 Lan 合并后完成。
+PR #81 已先合并 main `8df2099c90bd6681ebfeab4f0302e7390a992e52`（merge commit `6eb3e36b724ab043721f6d571fb5d1d79bdbeab5`），保留 043 的长期任务实现及状态记录。英文源头改写、模型原样传递及静态扫描回归提交 `49d9ec40d98a23197459095d777b8675d45fd4dc`；GitHub Actions run 682 正在执行。Claude 独立审查待 Lan 手动安排。Windows 实际聊天验收由 Lan 合并后完成。
