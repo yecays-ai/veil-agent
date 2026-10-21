@@ -344,6 +344,10 @@ class LongTaskStore:
             memory_id = args.get('bucket_id') or args.get('target_id')
             if isinstance(memory_id, str) and memory_id.strip():
                 return memory_id
+        if name == 'memory_read' and isinstance(args, dict):
+            memory_id = args.get('memory_id')
+            if isinstance(memory_id, str) and memory_id.strip():
+                return memory_id
         return fallback
 
     @staticmethod

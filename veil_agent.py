@@ -1181,8 +1181,10 @@ class Chat:
                                     result, state, summary = self.tools.invoke(call.function.name, args,
                                                                                self.approval)
                                     if checkpoint is not None:
-                                        self.long_tasks.finish_tool(call.function.name, summary, state)
-                                self.long_tasks.observe_tool_result(call.function.name, summary, state, result)
+                                        self.long_tasks.finish_tool(call.function.name, checkpoint, state)
+                                result_target = self.long_tasks.checkpoint_target(
+                                    call.function.name, args, summary)
+                                self.long_tasks.observe_tool_result(call.function.name, result_target, state, result)
                             else:
                                 result, state, summary = 'The program rejected this call because the tool is unavailable.', '被拒绝', call.function.name
                     except (ValueError, TypeError):
