@@ -1,3 +1,4 @@
+import ast
 import json
 import os
 import shutil
@@ -11,7 +12,7 @@ from unittest.mock import Mock
 
 from tools_agent import (ALLOW, ASK, DENY, LAB_ONLY, FilesystemTools, checked_path,
                          permitted_tools, tool_policy)
-from veil_agent import Budget, Chat, Store, load_character, run_chat
+from veil_agent import Budget, Chat, Store, load_character, model_tool_result, run_chat
 
 
 class ToolPolicyTests(unittest.TestCase):
@@ -62,7 +63,7 @@ class ToolPolicyTests(unittest.TestCase):
         asked = Mock(return_value='n')
         result, state, path = manager.invoke('write_file',
             {'path': 'summary.txt', 'content': 'fictional'}, asked)
-        self.assertIn('拒绝', result)
+        self.assertIn('Lan did not approve', result)
         self.assertEqual(state, '被拒绝')
         manager.client.call.assert_not_called()
         asked.assert_called_once()
@@ -120,7 +121,7 @@ class ToolPolicyTests(unittest.TestCase):
         result, state, _ = manager.invoke('append_file',
             {'path': 'other.md', 'content': 'new'}, lambda _: 'n')
         self.assertEqual(state, '被拒绝')
-        self.assertIn('未同意', result)
+        self.assertIn('Lan did not approve', result)
         self.assertEqual(other.read_text(encoding='utf-8'), 'old')
         result, state, _ = manager.invoke('append_file',
             {'path': 'other.md', 'content': 'new'}, lambda _: 'y')
@@ -194,7 +195,7 @@ class ToolPolicyTests(unittest.TestCase):
         result, state, _ = manager.invoke('write_file',
             {'path': 'summary.txt', 'content': 'new content'}, approve)
         self.assertEqual(state, '被拒绝')
-        self.assertIn('目标已存在', result)
+        self.assertIn('target already exists', result)
         self.assertEqual(target.read_text(encoding='utf-8'), 'racing content')
 
     def test_exclusive_create_does_not_overwrite_at_the_open_boundary(self):
@@ -210,7 +211,7 @@ class ToolPolicyTests(unittest.TestCase):
             result, state, _ = manager.invoke('write_file',
                 {'path': 'summary.txt', 'content': 'new content'}, lambda _: 'y')
         self.assertEqual(state, '被拒绝')
-        self.assertIn('目标已存在', result)
+        self.assertIn('target already exists', result)
         self.assertEqual(target.read_text(encoding='utf-8'), 'racing content')
 
     def test_denied_tools_and_traversal_never_reach_server(self):
@@ -457,6 +458,37 @@ max_result_bytes = 200
         self.assertEqual(len(output), 2)
         self.assertGreater(self.budget.totals()[0], 0)
 
+
+    def test_program_tool_failures_are_actionable_english_for_model_and_user(self):
+        first = self.message([self.tool_call('write_file',
+            '{"path":"report.md","content":"fictional"}', 'write')])
+        final = self.message(content='I will ask before trying again.')
+        model = Mock(side_effect=[(first, 100, 20, 0), (final, 120, 20, 0)])
+        tools = Mock()
+        tools.tools = [SimpleNamespace(name='write_file', description='Write', inputSchema={})]
+        tools.capability_event = None
+        tools.invoke.return_value = ('Lan did not approve this write, so the file was not changed; request approval before retrying.', '被拒绝', 'report.md')
+        output = []
+        chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=output.append)
+
+        self.assertEqual(chat.send('create a fictional report'), 'I will ask before trying again.')
+        tool_result = model.call_args_list[1].args[0][-1]['content']
+        expected = 'Lan did not approve this write, so the file was not changed; request approval before retrying.'
+        self.assertEqual(tool_result, expected)
+        self.assertTrue(any(tool_result in line for line in output))
+
+    def test_memory_target_id_error_is_source_authored_english_and_passed_through(self):
+        source = 'target_id must be an exact visible result from breath_search in this turn; search again and use its ID.'
+        translated = model_tool_result('trace', source, '被拒绝')
+        self.assertEqual(translated, source)
+        self.assertIn('breath_search in this turn', translated)
+        self.assertIn('use its ID', translated)
+
+        task_state = 'The task status is invalid; choose active, paused, blocked, or completed.'
+        self.assertEqual(model_tool_result('long_task_update', task_state, '被拒绝'), task_state)
+        failure = 'The fictional file target is not available; choose a permitted path.'
+        self.assertEqual(model_tool_result('read_text_file', failure, '被拒绝'), failure)
+
     def test_invalid_json_is_returned_as_tool_error_and_counted(self):
         first = self.message([self.tool_call('read_text_file', '{bad', 'bad')])
         final = self.message(content='I could not read it.')
@@ -469,7 +501,7 @@ max_result_bytes = 200
         self.assertEqual(chat.send('read it'), 'I could not read it.')
         tools.invoke.assert_not_called()
         self.assertIn('arguments are not a valid JSON object', model.call_args_list[1].args[0][-1]['content'])
-        self.assertTrue(any('参数不是合法 JSON' in line for line in output))
+        self.assertTrue(any('arguments are not a valid JSON object' in line for line in output))
 
     def test_tool_output_limit_is_reserved_sent_and_settled_without_raising_daily_cap(self):
         self.cfg.tools['max_output_tokens'] = 4096
@@ -498,10 +530,10 @@ max_result_bytes = 200
         tools.capability_event = None
         output = []
         chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=output.append)
-        self.assertIn('输出上限', chat.send('create journal.md'))
+        self.assertIn('output limit', chat.send('create journal.md'))
         tools.invoke.assert_not_called()
         self.assertEqual(model.call_count, 2)
-        self.assertTrue(any('输出上限' in line for line in output))
+        self.assertTrue(any('output limit' in line for line in output))
 
     def test_output_recovery_keeps_confirmed_write_and_discards_truncated_json(self):
         self.cfg.tools['max_steps'] = 5
@@ -536,7 +568,7 @@ max_result_bytes = 200
         tools = Mock(tools=[SimpleNamespace(name='write_file', description='Write', inputSchema={})],
                      capability_event=None)
         chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=lambda _: None)
-        self.assertIn('本步工具未执行', chat.send('continue'))
+        self.assertIn('this step did not run', chat.send('continue'))
         model.assert_called_once()
         tools.invoke.assert_not_called()
         self.assertEqual(self.budget.totals()[2], 0)
@@ -570,7 +602,7 @@ max_result_bytes = 200
                 self.assertTrue(any(expected_state in line for line in output))
                 self.assertEqual((tools.workspace / 'growth-journal.md').exists(), approval == 'y')
                 if approval == 'n':
-                    self.assertTrue(any('未同意写入' in line for line in output))
+                    self.assertTrue(any('Lan did not approve this write' in line for line in output))
                 else:
                     self.assertEqual((tools.workspace / 'growth-journal.md').read_text(encoding='utf-8'),
                                      'fictional entry')
@@ -600,10 +632,10 @@ max_result_bytes = 200
         tools.invoke.return_value = ('contents', '成功', 'one.txt')
         output = []
         chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=output.append)
-        self.assertEqual(chat.send('read it'), '这次工具步骤用完了。')
+        self.assertEqual(chat.send('read it'), 'The tool-step limit for this request has been reached.')
         self.assertEqual(model.call_count, 2)
         self.assertEqual(tools.invoke.call_count, 1)
-        self.assertIn('这次工具步骤用完了。', output)
+        self.assertIn('The tool-step limit for this request has been reached.', output)
 
     def test_final_step_uses_existing_tool_results_without_offering_more_tools(self):
         self.cfg.tools['max_steps'] = 2
@@ -620,7 +652,7 @@ max_result_bytes = 200
         self.assertEqual(model.call_count, 2)
         self.assertIsNotNone(model.call_args_list[0].kwargs['tools'])
         self.assertIsNone(model.call_args_list[1].kwargs['tools'])
-        self.assertIn('这次工具步骤用完了。', output)
+        self.assertIn('The tool-step limit for this request has been reached.', output)
         costs = self.store.read('costs.jsonl')
         self.assertEqual(len([row for row in costs if row['type'] == 'reserve']), 2)
         self.assertEqual(len([row for row in costs if row['type'] == 'settle']), 2)
@@ -636,10 +668,10 @@ max_result_bytes = 200
         tools.preview_summary.return_value = 'summary.txt'
         output = []
         chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=output.append)
-        self.assertEqual(chat.send('write it'), '这次工具步骤用完了。')
+        self.assertEqual(chat.send('write it'), 'The tool-step limit for this request has been reached.')
         tools.invoke.assert_not_called()
         self.assertEqual(model.call_count, 1)
-        self.assertTrue(any('费用上限' in line for line in output))
+        self.assertTrue(any('spending limit' in line for line in output))
         logs = self.store.read('test/tools.jsonl')
         self.assertEqual(logs[0]['state'], '被拒绝')
 
@@ -683,7 +715,7 @@ max_result_bytes = 200
         tools.tools = [SimpleNamespace(name='write_file', description='Write', inputSchema={})]
         tools.capability_event = None
         chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=lambda _: None)
-        self.assertIn('未执行工具', chat.send('write it'))
+        self.assertIn('tool was not executed', chat.send('write it'))
         tools.invoke.assert_not_called()
 
     def test_measured_prompt_baseline_keeps_room_for_next_tool_record(self):
@@ -809,7 +841,7 @@ class MultiMessageTests(unittest.TestCase):
             model = Mock(return_value=(self.message([
                 self.tool_call('send_message', arguments, 'invalid')]), 100, 20, 0))
             chat = Chat(self.cfg, self.store, self.budget, model, output=lambda _: None)
-            self.assertIn('程序拒绝', chat.send('hello'))
+            self.assertIn('send_message requires non-empty text', chat.send('hello'))
             self.assertEqual(chat.sent_messages, [])
             model.assert_called_once()
 
@@ -851,6 +883,48 @@ class FilesystemServerTests(unittest.TestCase):
                 {'path': 'lab/research/v1.md', 'content': 'overwrite'}, no_prompt)[1], '被拒绝')
         self.assertEqual((state, summary), ('成功', '.'))
         self.assertIn('fiction.txt', result)
+
+
+    def test_tool_failure_source_strings_are_english(self):
+        root = Path(__file__).resolve().parents[1]
+        paths = ('long_tasks.py', 'memory_native.py', 'tools_agent.py', 'veil_agent.py', 'memory_agent.py')
+        failure_states = {'被拒绝', '出错', False}
+        found = 0
+
+        def literal_text(node):
+            parts = []
+            for child in ast.walk(node):
+                if isinstance(child, ast.Constant) and isinstance(child.value, str):
+                    parts.append(child.value)
+            return ''.join(parts)
+
+        for relative_path in paths:
+            source = (root / relative_path).read_text(encoding='utf-8')
+            tree = ast.parse(source, filename=relative_path)
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Return) or not isinstance(node.value, ast.Tuple):
+                    continue
+                if len(node.value.elts) < 2:
+                    continue
+                state = node.value.elts[1]
+                if not isinstance(state, ast.Constant) or state.value not in failure_states:
+                    continue
+                found += 1
+                reason = literal_text(node.value.elts[0])
+                self.assertNotRegex(
+                    reason, r'[\u3400-\u9fff]',
+                    f'{relative_path}:{node.lineno} has a non-English tool failure reason')
+            if relative_path == 'memory_agent.py':
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.ClassDef) and node.name == 'MemoryToolError':
+                        diagnostics = ''.join(
+                            child.value for child in ast.walk(node)
+                            if isinstance(child, ast.Constant) and isinstance(child.value, str))
+                        self.assertNotRegex(
+                            diagnostics, r'[\u3400-\u9fff]',
+                            'MemoryToolError diagnostics must be authored in English')
+
+        self.assertGreater(found, 0, 'the scan must inspect tool failure returns')
 
 
 if __name__ == '__main__':

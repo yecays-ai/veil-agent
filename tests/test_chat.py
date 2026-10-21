@@ -101,14 +101,11 @@ output_cny_per_million = "8"
         self.assertNotRegex(notice, r'[\u3400-\u9fff]')
         self.assertEqual(self.store.read('test/tools.jsonl')[0]['text'], tools.capability_event)
 
-    def test_program_tool_results_are_english_while_memory_data_is_preserved(self):
-        rejected = model_tool_result('long_task_update', '程序拒绝：任务状态无效。', '被拒绝')
-        self.assertNotRegex(rejected, r'[\u3400-\u9fff]')
-        self.assertIn('rejected', rejected)
-        recovery = model_tool_result(
-            'memory_read', '程序拒绝：记忆已变化或缺少版本，请从 offset=0 重新读取。', '被拒绝')
-        self.assertIn('Re-read it from offset=0.', recovery)
-        self.assertNotRegex(recovery, r'[\u3400-\u9fff]')
+    def test_tool_failures_pass_through_while_memory_data_is_preserved(self):
+        rejected = 'The task status is invalid; choose active, paused, blocked, or completed.'
+        self.assertEqual(model_tool_result('long_task_update', rejected, '被拒绝'), rejected)
+        recovery = 'The memory changed; re-read it from offset=0 before retrying.'
+        self.assertEqual(model_tool_result('memory_read', recovery, '被拒绝'), recovery)
         self.assertEqual(model_tool_result('memory_read', '这是一条虚构记忆。', '成功'),
                          '这是一条虚构记忆。')
         self.assertEqual(model_tool_result('send_message', '已发送。', '成功'),

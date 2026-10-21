@@ -380,7 +380,7 @@ daily_budget_cny = "2"
         row = controller.rows[-1]
         self.assertEqual(row['result'], '部分完成')
         self.assertIn('程序限制', row['decision'])
-        self.assertIn('长度上限', row['result_reason'])
+        self.assertIn('size limit', row['result_reason'])
         self.assertEqual(row['lab_files_changed'], ['lab/progress.md'])
         self.assertEqual(tools.invoke.call_count, 1)
         self.assertIn('lab/progress.md', controller.command())

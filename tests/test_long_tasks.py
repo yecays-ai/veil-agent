@@ -125,7 +125,7 @@ class LongTaskTests(unittest.TestCase):
         pending = reopened.read()['pending_action']
         self.assertEqual(pending['operation_id'], operation_id)
         self.assertEqual(pending['target'], 'lab/test-a.txt')
-        self.assertIn('结果仍待核实', reopened.before_tool(
+        self.assertIn('is still unverified', reopened.before_tool(
             'write_file', 'lab/test-a.txt', autonomy=False)[0])
 
         reopened.set_tool_step(1)
@@ -196,7 +196,7 @@ class LongTaskTests(unittest.TestCase):
         _, state, _ = self.tasks.invoke('long_task_update', {
             'action': 'update', 'task_id': task_id, 'status': 'paused'})
         self.assertEqual(state, '成功')
-        self.assertIn('结果仍待核实', self.tasks.begin_tool('write_file', 'lab/part-two.md'))
+        self.assertIn('is still unverified', self.tasks.begin_tool('write_file', 'lab/part-two.md'))
 
     def test_status_tool_returns_only_current_role_state(self):
         self.create()
@@ -264,7 +264,7 @@ max_result_bytes = 4096
         saved = chat.long_tasks.read()
         self.assertEqual(result, 'Saved the first part.')
         self.assertEqual(saved['pending_action']['state'], '成功，需核实')
-        self.assertIn('结果仍待核实', chat.long_tasks.begin_tool('append_file', 'lab/part-one.md'))
+        self.assertIn('is still unverified', chat.long_tasks.begin_tool('append_file', 'lab/part-one.md'))
         self.assertEqual(saved['tool_events'][-1]['tool'], 'append_file')
         self.assertEqual(saved['tool_events'][-1]['state'], '成功')
         self.assertEqual(saved['tool_events'][-1]['target'], 'lab/part-one.md')

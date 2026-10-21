@@ -77,6 +77,39 @@ class HiddenMemoryContextTests(unittest.TestCase):
             self.assertNotIn('FICTIONAL_VISIBLE_MARKER', self.context())
         self.assertTrue(self.memory.notices())
 
+    def test_visibility_diagnostic_is_once_per_turn_and_valid_memory_still_reaches_model(self):
+        self.backend.rows['secret']['hidden'] = True
+        self.backend.write_row('secret')
+        for key in ('unknown_a', 'unknown_b'):
+            self.backend.rows[key] = {'content': f'FICTIONAL_UNCONFIRMED_{key}'}
+            self.backend.write_row(key)
+
+        original = self.memory.raw_content_for
+        def unknown_metadata(memory_id):
+            if memory_id in {'unknown_a', 'unknown_b'}:
+                return None
+            return original(memory_id)
+
+        chat_store = Store(Path(self.temp.name) / 'visibility-chat-copy')
+        model = Mock(return_value=('fictional reply', 100, 20, 0))
+        chat = Chat(self.cfg, chat_store, Budget(chat_store), model, self.memory)
+        with patch.object(self.memory, 'raw_content_for', side_effect=unknown_metadata):
+            chat.send('fictional first query')
+            first_sent = '\\n'.join(row['content'] for row in model.call_args.args[0])
+            first_notices = self.memory.notices()
+            chat.send('fictional second query')
+            second_sent = '\\n'.join(row['content'] for row in model.call_args.args[0])
+            second_notices = self.memory.notices()
+
+        self.assertEqual(first_notices, [
+            'Memory visibility could not be confirmed; affected memories were withheld this turn.'])
+        self.assertEqual(second_notices, first_notices)
+        for sent in (first_sent, second_sent):
+            self.assertIn('FICTIONAL_VISIBLE_MARKER', sent)
+            self.assertNotIn('FICTIONAL_HIDDEN_MARKER', sent)
+            self.assertNotIn('FICTIONAL_UNCONFIRMED_unknown_a', sent)
+            self.assertNotIn('FICTIONAL_UNCONFIRMED_unknown_b', sent)
+
     def test_backend_failure_does_not_reuse_opening_cache(self):
         self.backend.fail = True
         self.assertNotIn('FICTIONAL_HIDDEN_MARKER', self.context())

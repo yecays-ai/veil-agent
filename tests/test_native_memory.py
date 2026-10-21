@@ -43,7 +43,7 @@ class NativeMemoryTests(unittest.TestCase):
         self.addCleanup(self.memory.__exit__, None, None, None)
         files = SimpleNamespace(tools=[], capability_event=None, description='You have no file tools. ',
                                 consume_capability_event=lambda: None,
-                                invoke=lambda n, a, ap: ('程序拒绝：此工具没有授权。', '被拒绝', n),
+                                invoke=lambda n, a, ap: ('This tool is not authorized for the current role.', '被拒绝', n),
                                 preview_summary=lambda n, a: n)
         self.tools = ToolSet(files, NativeMemoryTools(self.memory, 200))
         self.output = []
@@ -229,7 +229,7 @@ class NativeMemoryTests(unittest.TestCase):
         self.backend.call = lambda name, args: '没有返回保存编号'
         result, state, _ = self.tools.invoke('hold', {'title': 't', 'content': 'c'})
         self.assertEqual(state, '出错')
-        self.assertIn('不要说已经记住', result)
+        self.assertIn('Do not claim the memory was saved', result)
 
     def test_search_hides_forgotten_memories_and_truncates(self):
         self.tools.invoke('hold', {'title': 'a', 'content': 'lamp memory'})
@@ -402,7 +402,7 @@ class OmbreToolGuardTests(unittest.TestCase):
                                                'delete_reason': 'not useful'},
                                      lambda prompt: prompts.append(prompt) or 'n')
         self.assertEqual(state, '被拒绝')
-        self.assertIn('lan 没有同意', result)
+        self.assertIn('Lan did not approve the deletion', result)
         self.assertIn('not useful', prompts[0])
         self.assertEqual(self.backend.calls, [])
         result, state, _ = self.call('trace', {'bucket_id': 'mem001', 'delete': True,
@@ -417,7 +417,7 @@ class OmbreToolGuardTests(unittest.TestCase):
         result, state, _ = self.call('trace', {'bucket_id': 'mem001', 'delete': True,
                                                'delete_reason': 'test'})
         self.assertEqual(state, '被拒绝')
-        self.assertIn('lan 没有同意', result)
+        self.assertIn('Lan did not approve the deletion', result)
         self.assertEqual(self.backend.calls, [])
         self.assertIn('old memory body', self.path.read_text(encoding='utf-8'))
 
@@ -528,7 +528,7 @@ class OmbreToolGuardTests(unittest.TestCase):
         self.backend.call = Mock(side_effect=MemoryToolError('connection'))
         result, state, _ = self.call('pulse', {})
         self.assertEqual(state, '出错')
-        self.assertIn('安全读取重连后仍失败', result)
+        self.assertIn('The memory connection is unavailable', result)
         self.assertEqual(self.backend.call.call_count, 1)
 
     def test_upstream_schemas_are_selected_by_name(self):
@@ -580,7 +580,7 @@ class OmbreToolGuardTests(unittest.TestCase):
         result, state, _ = self.call('hold', {'target_id': 'mem001', 'content': 'added detail'})
 
         self.assertEqual(state, '出错')
-        self.assertIn('未做追加', result)
+        self.assertIn('no content was added', result)
         self.assertEqual(self.path.read_text(encoding='utf-8'), original)
         self.assertEqual(self.backend.calls, [])
 
@@ -704,7 +704,7 @@ class SearchThenSaveTests(unittest.TestCase):
         # The provider reports a prompt as large as the bytes, so no calibration discount applies.
         chat = Chat(self.cfg, self.store, self.budget, lambda messages, **_: (huge, 30000, 300, 0),
                     self.memory, self.tools, output=output.append)
-        self.assertIn('未执行工具', chat.send('hi'))
+        self.assertIn('tool was not executed', chat.send('hi'))
         self.assertNotIn('hold', [n for n, _ in self.backend.calls])
         self.assertTrue(any('长度检查' in line for line in output))
 
@@ -736,7 +736,7 @@ class DegradedNoticeTests(unittest.TestCase):
     def test_ombre_notice_shows_the_line_with_tool_and_log_hint(self):
         lines = self.search('[检索降级：语义索引暂不可用，本次仅使用关键词/BM25。]\n[bucket_id:a] x')
         self.assertEqual(len(lines), 1)
-        self.assertIn('记忆检索降级为关键词', lines[0])
+        self.assertIn('Memory search is using keyword fallback', lines[0])
         self.assertIn('breath_search', lines[0])
         self.assertIn('server.log', lines[0])
 

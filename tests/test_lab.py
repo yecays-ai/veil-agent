@@ -108,7 +108,7 @@ persistent_append_file = "growth-journal.md"
         self.tools.lab_max_write_bytes = 4
         result = self.call('write_file', 'lab/large.md', '你好')
         self.assertEqual(result[1], '被拒绝')
-        self.assertIn('没有写入任何内容', result[0])
+        self.assertIn('no content was written', result[0])
         self.assertFalse((self.lab / 'large.md').exists())
         self.assertEqual(self.call('write_file', 'lab/small.md', 'old')[1], '成功')
         result = self.call('append_file', 'lab/small.md', '你好')
@@ -134,7 +134,7 @@ persistent_append_file = "growth-journal.md"
         with patch.object(Path, 'read_bytes', wrong_read):
             result = self.call('write_file', 'lab/hash.md', 'expected')
         self.assertEqual(result[1], '出错')
-        self.assertIn('不能确认完整保存', result[0])
+        self.assertIn('complete save cannot be confirmed', result[0])
 
     def test_journal_grant_is_independent_and_outside_permissions_are_unchanged(self):
         journal = self.tools.workspace / 'growth-journal.md'

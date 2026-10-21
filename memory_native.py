@@ -133,7 +133,7 @@ class NativeMemoryTools:
                     files.capability_event_model = row.get('pending_event_model')
             except Exception as exc:
                 from veil_agent import UserError
-                raise UserError('记忆能力清单无法安全保存，记忆工具已停止。') from exc
+                raise UserError('The memory capability manifest could not be saved safely, so memory tools were stopped.') from exc
 
     def handles(self, name):
         return name in NATIVE_TOOLS
@@ -161,7 +161,7 @@ class NativeMemoryTools:
         except MemoryToolError as exc:
             return str(exc), '出错', self.preview_summary(name, args)
         except Exception:
-            return '记忆工具出错，没有完成。', '出错', self.preview_summary(name, args)
+            return 'The memory tool failed. Check the current memory state before retrying.', '出错', self.preview_summary(name, args)
 
     def _visible_records(self):
         # Read only actual bucket folders, never letters, plans, sources or private files.
@@ -212,7 +212,7 @@ class NativeMemoryTools:
     def _catalog(self, args):
         after = args.get('after', '')
         if not isinstance(after, str) or (after and not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', after)):
-            return '程序拒绝：目录游标无效。', '被拒绝', 'memory_catalog'
+            return 'The memory catalog cursor is invalid. Restart the listing without a cursor.', '被拒绝', 'memory_catalog'
         records = self._visible_records()
         keys = sorted(key for key in records if key > after)
         page = []
@@ -223,40 +223,40 @@ class NativeMemoryTools:
                 break
             page = candidate
         if keys and not page:
-            return '目录结果额度不足，无法提供一项完整记录。', '出错', 'memory_catalog'
+            return 'The result limit is too small to return one complete catalog entry.', '出错', 'memory_catalog'
         cursor = page[-1]['memory_id'] if len(keys) > len(page) else ''
         return json.dumps({'items': page, 'next_after': cursor}, ensure_ascii=False), '成功', '记忆目录'
 
     def _read(self, args):
         key, offset = args.get('memory_id'), args.get('offset', 0)
         if not isinstance(key, str) or type(offset) is not int or offset < 0:
-            return '程序拒绝：记忆编号或正文位置无效。', '被拒绝', 'memory_read'
+            return 'The memory ID or content offset is invalid.', '被拒绝', 'memory_read'
         record = self._visible_records().get(key)
         if record is None:
-            return '程序拒绝：这条记忆不存在或不可读。', '被拒绝', 'memory_read'
+            return 'This memory does not exist or cannot be read.', '被拒绝', 'memory_read'
         title, raw = record
         version = hashlib.sha256(raw.encode('utf-8')).hexdigest()
         if (offset and args.get('version') != version) or (args.get('version') and args['version'] != version):
-            return '程序拒绝：记忆已变化或缺少版本，请从 offset=0 重新读取。', '被拒绝', 'memory_read'
+            return 'The memory changed or its version is missing. Re-read it from offset=0, then retry.', '被拒绝', 'memory_read'
         if offset > len(raw):
-            return '程序拒绝：正文位置已超出当前记忆。', '被拒绝', 'memory_read'
+            return 'The requested offset is beyond the current memory length. Re-read it from offset=0.', '被拒绝', 'memory_read'
         end = min(len(raw), offset + 1000)
         while True:
             if end == offset and offset < len(raw):
-                return '正文结果额度不足，无法提供至少一个字符。', '出错', 'memory_read'
+                return 'The result limit is too small to return any memory text.', '出错', 'memory_read'
             result = json.dumps({'memory_id': key, 'offset': offset, 'text': raw[offset:end],
                                  'next_offset': end if end < len(raw) else None, 'version': version}, ensure_ascii=False)
             if len(result.encode('utf-8')) <= self.max_result_bytes:
                 return result, '成功', f'{title[:80]}（{key}）'
             if end <= offset:
-                return '正文结果额度不足。', '出错', 'memory_read'
+                return 'The result limit is too small to return the requested memory content.', '出错', 'memory_read'
             end = offset + (end - offset) // 2
 
     def _history(self, args):
         memory_id = args.get('memory_id')
         summary = self.memory.title_for(memory_id) if isinstance(memory_id, str) else None
         if not summary or self.memory.is_hidden(memory_id):
-            return '程序拒绝：这条记忆不存在或已隐藏。', '被拒绝', str(memory_id or 'memory_history')
+            return 'This memory does not exist or is hidden.', '被拒绝', str(memory_id or 'memory_history')
         rows = [row for row in self.memory.store.read(f'{self.memory.cfg.id}/memory-versions.jsonl')
                 if row.get('memory_id') == memory_id]
         if not rows:
@@ -279,25 +279,25 @@ class NativeMemoryTools:
     def _ombre(self, name, args, approval):
         summary = self.preview_summary(name, args)
         if name not in OMBRE_TOOLS or name not in self.ombre_tools:
-            return '程序拒绝：此工具没有授权。', '被拒绝', summary
+            return 'This tool is not authorized for the current role. Choose an available tool; permissions cannot be bypassed.', '被拒绝', summary
         if not isinstance(args, dict):
-            return '程序拒绝：工具参数必须是对象。', '被拒绝', summary
+            return 'Tool arguments must be a JSON object.', '被拒绝', summary
         if name == 'trace':
             return self._trace(args, approval)
         if name in ('anchor', 'release'):
             memory_id = args.get('bucket_id')
             if not isinstance(memory_id, str) or self.memory.is_hidden(memory_id):
-                return '程序拒绝：目标记忆不存在或已隐藏。', '被拒绝', summary
+                return 'The target memory does not exist or is hidden.', '被拒绝', summary
         if name == 'plan':
             related = args.get('related_bucket')
             if related and self.memory.is_hidden(related):
-                return '程序拒绝：关联目标记忆已隐藏。', '被拒绝', summary
+                return 'The linked target memory is hidden.', '被拒绝', summary
         try:
             result = self.memory.call(name, args)
         except MemoryToolError as exc:
             return str(exc), '出错', summary
         except Exception:
-            return '记忆工具出错，没有完成。', '出错', summary
+            return 'The memory tool failed. Check the current memory state before retrying.', '出错', summary
         if name in ('dream', 'pulse'):
             result = self._filter_hidden_result(result, name)
         return self._bounded(result), '成功', summary
@@ -307,32 +307,32 @@ class NativeMemoryTools:
         summary = self.memory.title_for(memory_id) if isinstance(memory_id, str) else None
         banned = ('hard_delete', 'deletion_request_id', 'deletion_decision')
         if any(args.get(key) not in (None, False, '', [], {}) for key in banned):
-            return '程序拒绝：这类删除参数不开放。', '被拒绝', str(summary or 'trace')
+            return 'This delete operation or argument combination is not available. Use the supported delete flow and its required confirmation.', '被拒绝', str(summary or 'trace')
         if not summary or self.memory.is_hidden(memory_id):
-            return '程序拒绝：目标记忆不存在或已隐藏。', '被拒绝', str(memory_id or 'trace')
+            return 'The target memory does not exist or is hidden.', '被拒绝', str(memory_id or 'trace')
         delete = args.get('delete', False)
         if type(delete) is not bool:
-            return '程序拒绝：delete 必须是布尔值。', '被拒绝', summary
+            return 'delete must be a Boolean.', '被拒绝', summary
         edit_reason = args.get('edit_reason', '')
         if not isinstance(edit_reason, str) or len(edit_reason) > WHY_LIMIT:
-            return f'程序拒绝：edit_reason 必须是不超过 {WHY_LIMIT} 字的文字。', '被拒绝', summary
+            return f'edit_reason must be text within the {WHY_LIMIT}-character limit.', '被拒绝', summary
         reason = args.get('delete_reason', '')
         if delete and (not isinstance(reason, str) or not reason.strip() or len(reason) > WHY_LIMIT):
-            return f'程序拒绝：删除申请必须提供不超过 {WHY_LIMIT} 字的理由。', '被拒绝', summary
+            return f'A delete request must include a reason within the {WHY_LIMIT}-character limit.', '被拒绝', summary
         old = self.memory.raw_content_for(memory_id)
         if old is None:
-            return '程序拒绝：无法读取目标记忆原文，未做修改。', '被拒绝', summary
+            return 'The target memory could not be read, so it was not changed.', '被拒绝', summary
         if delete and self.autonomy_mode:
             return self._queue_delete(memory_id, summary, args, old)
         if delete and (approval is None or approval(
                 f"{self.memory.cfg.name} 想删除记忆 #{memory_id}：{summary}\n理由：{str(args.get('delete_reason') or '未提供')[:WHY_LIMIT]}。同意吗？y/N ").strip().casefold() != 'y'):
-            return 'lan 没有同意；这条记忆仍保留。', '被拒绝', summary
+            return 'Lan did not approve the deletion; the memory remains.', '被拒绝', summary
         if not self._save_version(memory_id, args, old):
-            return '程序拒绝：旧版本未能安全保存，本次修改未执行。', '出错', summary
+            return 'The previous version could not be archived safely, so this change was not made.', '出错', summary
         if delete:
             failure = self._delete(memory_id, summary)
             if failure:
-                return failure, '出错', summary
+                return 'Deletion was not confirmed. Check the memory state before retrying.', '出错', summary
             return '已获 lan 人工批准并完成删除；旧版本已留档。', '成功', f'{summary}（旧版本已留档）'
         try:
             safe_args = {key: value for key, value in args.items()
@@ -341,9 +341,9 @@ class NativeMemoryTools:
             safe_args['delete'] = False
             result = self.memory.call('trace', safe_args)
         except MemoryToolError as exc:
-            return f'{exc} 修改前旧版本已留档。', '出错', summary
+            return f'{exc} The previous version was archived.', '出错', summary
         except Exception:
-            return '记忆修改失败；旧版本已留档。', '出错', summary
+            return 'The memory update failed; the previous version was archived.', '出错', summary
         self.memory.bucket_details_cache.pop(memory_id, None)
         updated = self.memory.content_for(memory_id, refresh=True)
         if updated is not None:
@@ -373,9 +373,9 @@ class NativeMemoryTools:
     def _queue_delete(self, memory_id, summary, args, old):
         reason = args.get('delete_reason', '')
         if not isinstance(reason, str) or len(reason) > WHY_LIMIT:
-            return '程序拒绝：delete_reason 必须是 500 字以内的文字。', '被拒绝', summary
+            return 'delete_reason must be text within the 500-character limit.', '被拒绝', summary
         if not self._save_version(memory_id, args, old):
-            return '程序拒绝：旧版本未能安全保存，删除申请未创建。', '出错', summary
+            return 'The previous version could not be archived safely, so no delete request was created.', '出错', summary
         request_id = uuid.uuid4().hex
         tags = self.memory.tags_for(memory_id)
         if '待删除' not in tags:
@@ -391,7 +391,7 @@ class NativeMemoryTools:
                 self.memory.store.append(path, {**request, 'status': 'failed'})
             except Exception:
                 pass
-            return '待删除申请未能安全保存；记忆没有被删除，请稍后重试。', '出错', summary
+            return 'The pending deletion request could not be saved safely; the memory was not deleted. Retry later.', '出错', summary
         self.memory.messages.put(f'待处理的删除申请：记忆 #{memory_id}「{summary}」，理由：{reason or "未提供"}。')
         return '已放进待删除栏目，等 lan 回来处理。', '成功', summary
 
@@ -446,7 +446,7 @@ class NativeMemoryTools:
             if accepted:
                 failure = self._delete(memory_id, title)
                 if failure:
-                    self.memory.messages.put(f'删除申请 #{memory_id} 未完成：{failure}')
+                    self.memory.messages.put(f'Deletion request #{memory_id} was not completed; check its state before retrying.')
                     continue
                 status = 'approved'
                 note = (f'已同意并删除自主申请的记忆 #{memory_id}「{title}」。'
@@ -471,7 +471,7 @@ class NativeMemoryTools:
         try:
             self.memory.call('trace', {'bucket_id': memory_id, 'delete': True})
         except Exception:
-            return 'Ombre 删除未确认；这条已隐藏，可通过 /delete 重试。'
+            return 'The deletion was not confirmed; this memory remains hidden. Check its state before retrying with /delete.'
         entry.pop('delete_pending', None)
         self.memory.persist()
         return None
@@ -526,41 +526,41 @@ class NativeMemoryTools:
         why = args.get('why_remembered', '')
         if (not isinstance(content, str) or not content.strip() or not isinstance(why, str)
                 or (target_id is None and (not isinstance(title, str) or not title.strip()))):
-            return '程序拒绝：新建记忆需提供 content 和 title，更新需提供 content。', '被拒绝', summary
+            return 'To create a memory, provide content and title. To update one, provide content.', '被拒绝', summary
         if target_id is None and args.get('merge_ids'):
-            return '程序拒绝：只有指定 target_id 时才能整合检索到的记忆。', '被拒绝', summary
+            return 'Retrieved memories can be merged only when target_id is explicitly specified.', '被拒绝', summary
         if (len(content) > CONTENT_LIMIT or len(why) > WHY_LIMIT
                 or (isinstance(title, str) and len(title) > TITLE_LIMIT)):
-            return f'程序拒绝：太长（正文最多 {CONTENT_LIMIT} 字）。请写成更短的一条再存。', '被拒绝', summary
+            return f'The content exceeds the {CONTENT_LIMIT}-character limit. Shorten it and save again.', '被拒绝', summary
         if target_id is not None:
             if not isinstance(target_id, str) or target_id not in self.search_results:
-                return '程序拒绝：target_id 必须来自本轮 breath_search 的可见结果。', '被拒绝', summary
+                return 'target_id must be an exact visible result from breath_search in this turn. Search again and use its ID.', '被拒绝', summary
             previous = self.search_results[target_id]
             if not self.memory.visible([(target_id, previous)]):
-                return '程序拒绝：这条记忆已隐藏或不可用，未做更新。', '被拒绝', summary
+                return 'This memory is hidden or unavailable; no update was made.', '被拒绝', summary
             merge_ids = args.get('merge_ids', [])
             if (not isinstance(merge_ids, list) or any(not isinstance(key, str) for key in merge_ids)
                     or len(set(merge_ids)) != len(merge_ids)):
-                return '程序拒绝：merge_ids 必须是本轮检索结果中的不重复编号列表。', '被拒绝', summary
+                return 'merge_ids must be a list of distinct IDs returned by breath_search during this turn. Search again and use only those IDs.', '被拒绝', summary
             source_ids = [key for key in merge_ids if key != target_id]
             if any(key not in self.search_results for key in source_ids):
-                return '程序拒绝：每个 merge_id 都必须来自本轮 breath_search 的结果。', '被拒绝', summary
+                return 'Every merge_id must come from breath_search results returned during this turn. Search again before retrying.', '被拒绝', summary
             if (source_ids
                     and not self.memory.visible([(key, self.search_results[key]) for key in source_ids])):
-                return '程序拒绝：有待整合的记忆已隐藏或不可用，未做更新。', '被拒绝', summary
+                return 'A memory selected for merging is hidden or unavailable; no update was made.', '被拒绝', summary
             current = self.memory.content_for(target_id, refresh=True)
             if current != previous:
                 self.search_results = {}
-                return '程序拒绝：目标记忆在检索后发生变化，请重新 breath_search；本次未更新。', '被拒绝', summary
+                return 'The target changed after search, so it was not updated. Run breath_search again before retrying.', '被拒绝', summary
             for source_id in source_ids:
                 if self.memory.content_for(source_id, refresh=True) != self.search_results[source_id]:
                     self.search_results = {}
-                    return '程序拒绝：来源记忆在检索后发生变化，请重新 breath_search；本次未更新。', '被拒绝', summary
+                    return 'A source memory changed after search, so nothing was updated. Run breath_search again before retrying.', '被拒绝', summary
             addition = content.strip()
             if why.strip() and why.strip() not in addition:
                 addition = f'{addition}\n补充原因：{why.strip()}'
             if not addition:
-                return '程序拒绝：补充内容不能为空。', '被拒绝', summary
+                return 'The additional memory content cannot be empty.', '被拒绝', summary
             merged = previous
             changed = False
             for source_id in source_ids:
@@ -575,19 +575,19 @@ class NativeMemoryTools:
                 return '这段内容已在该记忆中，没有重复写入。', '成功', f'已存在：{summary}'
             updated = merged
             if len(updated.encode('utf-8')) > MERGED_MEMORY_LIMIT_BYTES:
-                return '程序拒绝：合并后超过 Ombre 单条记忆安全上限；原记忆未改动。', '被拒绝', summary
+                return "The merged memory would exceed Ombre's safe per-memory size limit; the original was not changed. Shorten the addition and retry.", '被拒绝', summary
             old_document = self.memory.raw_content_for(target_id)
             if old_document is None:
-                return '程序拒绝：无法读取目标记忆的完整原文，未做追加。', '被拒绝', summary
+                return 'The complete target memory could not be read, so no content was added.', '被拒绝', summary
             if not self._save_version(target_id, {'content': addition, 'why_remembered': why},
                                       old_document, operation_reason='hold(target_id) 追加'):
-                return '程序拒绝：修改前的完整旧版本无法安全留档，未做追加。', '出错', summary
+                return 'The complete previous version could not be safely archived, so no content was added.', '出错', summary
             text = self.memory.call('trace', {'bucket_id': target_id, 'content': updated})
             stored = self.memory.content_for(target_id, refresh=True)
             preserved = [previous, *(self.search_results[key] for key in source_ids), addition]
             if stored is None or any(part and part not in stored for part in preserved):
                 self.search_results = {}
-                return '没有核对到完整保存结果；请检查这条记忆后再继续。', '出错', summary
+                return 'A complete saved result could not be verified. Check this memory before continuing.', '出错', summary
             self.memory.record_native_update(target_id, stored)
             self.search_results[target_id] = stored
             merged_note = f'，并整合 {len(source_ids)} 条相关记忆' if source_ids else ''
@@ -600,13 +600,13 @@ class NativeMemoryTools:
         try:
             kind = self.memory.record_native(ombre_args, text)
         except ValueError:
-            return '没有确认保存成功，请不要说已经记住。', '出错', summary
+            return 'The save could not be confirmed. Do not claim the memory was saved; inspect the result before continuing.', '出错', summary
         return ('已合并进已有记忆。' if kind == '合并' else '已保存。'), '成功', f'{kind}：{summary}'
 
     def _search(self, args):
         query = args.get('query')
         if not isinstance(query, str) or not query.strip():
-            return '程序拒绝：query 必须是非空文字。', '被拒绝', 'breath_search'
+            return 'The search query must be non-empty text.', '被拒绝', 'breath_search'
         text = self.memory.call('breath_search', {
             'query': query.strip(), 'mode': 'automatic', 'with_ids': True, 'max_results': 3})
         found = self.memory.visible(ordinary_hits(text))
