@@ -165,37 +165,67 @@ class ColdBackupTests(unittest.TestCase):
         self.target.mkdir()
         existing = self.target / ".env"
         existing.write_bytes(b"OLD_SECRET=fake\n")
+        old_memory = self.target / "data" / "fixture" / "memory" / "added-after-backup.md"
+        old_memory.parent.mkdir(parents=True)
+        old_memory.write_bytes(b"fictional memory created after backup\n")
+        (self.target / "data" / "session.lock").write_bytes(b"0")
+        old_character = self.target / "characters" / "fixture" / "extra.txt"
+        old_character.parent.mkdir(parents=True)
+        old_character.write_bytes(b"old character data\n")
+        old_persona = self.target / "persona" / "extra.md"
+        old_persona.parent.mkdir(parents=True)
+        old_persona.write_bytes(b"old persona data\n")
         count, safety = backup_restore.restore_backup(
             backup, self.target, replace=True, confirm=lambda _: "RESTORE"
         )
         self.assertGreater(count, 0)
         self.assertEqual(existing.read_bytes(), b"FAKE_API_KEY=fiction-only\n")
         self.assertEqual((safety / ".env").read_bytes(), b"OLD_SECRET=fake\n")
-        self.assertTrue(safety.is_dir())
+        self.assertEqual(
+            (safety / "data" / "fixture" / "memory" / "added-after-backup.md").read_bytes(),
+            b"fictional memory created after backup\n",
+        )
+        self.assertTrue((safety / "data" / "session.lock").exists())
+        self.assertEqual((safety / "characters" / "fixture" / "extra.txt").read_bytes(), b"old character data\n")
+        self.assertEqual((safety / "persona" / "extra.md").read_bytes(), b"old persona data\n")
+        self.assertFalse((self.target / "data" / "fixture" / "memory" / "added-after-backup.md").exists())
+        self.assertFalse((self.target / "characters" / "fixture" / "extra.txt").exists())
+        self.assertFalse((self.target / "persona" / "extra.md").exists())
 
-    def test_failed_commit_rolls_back_replacements_and_new_files(self):
+    def test_failed_replace_moves_original_components_back_as_a_unit(self):
         backup = self._create()
         self.target.mkdir()
         existing = self.target / ".env"
         existing.write_bytes(b"OLD=keep\n")
-        original = backup_restore._copy_atomic
-        calls = 0
+        old_memory = self.target / "data" / "fixture" / "memory" / "preserve.md"
+        old_memory.parent.mkdir(parents=True)
+        old_memory.write_bytes(b"old memory\n")
+        (self.target / "data" / "session.lock").write_bytes(b"0")
+        old_character = self.target / "characters" / "fixture" / "keep.txt"
+        old_character.parent.mkdir(parents=True)
+        old_character.write_bytes(b"old character\n")
+        original = backup_restore.os.replace
+        failed = False
 
-        def fail_second(source, destination):
-            nonlocal calls
-            calls += 1
-            if calls == 2:
+        def fail_first_install(source, destination):
+            nonlocal failed
+            source = Path(source)
+            destination = Path(destination)
+            if not failed and source.parent.name.startswith(".veil-restore-stage-"):
+                failed = True
                 raise OSError("simulated destination failure")
             return original(source, destination)
 
-        with mock.patch.object(backup_restore, "_copy_atomic", side_effect=fail_second):
+        with mock.patch.object(backup_restore.os, "replace", side_effect=fail_first_install):
             with self.assertRaisesRegex(OSError, "simulated destination failure"):
                 backup_restore.restore_backup(
                     backup, self.target, replace=True, confirm=lambda _: "RESTORE"
                 )
         self.assertEqual(existing.read_bytes(), b"OLD=keep\n")
-        self.assertEqual([path.name for path in self.target.iterdir()], [".env"])
-        self.assertEqual(len(list(self.base.glob("restored-project.before-restore-*"))), 1)
+        self.assertEqual(old_memory.read_bytes(), b"old memory\n")
+        self.assertTrue((self.target / "data" / "session.lock").exists())
+        self.assertEqual(old_character.read_bytes(), b"old character\n")
+        self.assertEqual(len(list(self.base.glob("restored-project.before-restore-*"))), 0)
 
     def test_failed_restore_to_new_target_removes_partial_target(self):
         backup = self._create()
@@ -220,6 +250,28 @@ class ColdBackupTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(backup_restore.BackupError, "不受当前程序支持"):
             backup_restore.verify_backup(backup)
+
+    def test_manifest_symlink_is_rejected(self):
+        backup = self._create()
+        manifest = backup / backup_restore.MANIFEST_NAME
+        target = self.base / "manifest-target.json"
+        target.write_bytes(manifest.read_bytes())
+        manifest.unlink()
+        try:
+            manifest.symlink_to(target)
+        except (OSError, NotImplementedError):
+            manifest.write_bytes(target.read_bytes())
+            original_is_symlink = Path.is_symlink
+
+            def is_manifest_symlink(path):
+                return path == manifest or original_is_symlink(path)
+
+            with mock.patch.object(Path, "is_symlink", is_manifest_symlink):
+                with self.assertRaisesRegex(backup_restore.BackupError, "备份缺少必要项目"):
+                    backup_restore.verify_backup(backup)
+        else:
+            with self.assertRaisesRegex(backup_restore.BackupError, "备份缺少必要项目"):
+                backup_restore.verify_backup(backup)
 
 
 if __name__ == "__main__":
