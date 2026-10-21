@@ -348,6 +348,7 @@ class NativeMemoryTools:
         updated = self.memory.content_for(memory_id, refresh=True)
         if updated is not None:
             self.memory.record_native_update(memory_id, updated)
+        self.memory.refresh_visibility(memory_id)
         feedback = (f'{result}\nComplete memory before the change (including metadata) has been saved. '
                     f'Reason for this operation: {edit_reason.strip() or "not provided"}. '
                     'The content field and meaning_append/meaning_replace metadata are separate fields.')

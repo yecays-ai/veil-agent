@@ -18,10 +18,22 @@ def entry(quote='fact 0', feel=False):
 
 
 class Backend:
-    def __init__(self):
+    def __init__(self, vault=None):
+        self.vault = vault
         self.rows = {}
         self.calls = []
         self.fail = False
+
+    def write_row(self, key):
+        if self.vault is None:
+            return
+        row = self.rows[key]
+        self.vault.mkdir(parents=True, exist_ok=True)
+        (self.vault / f'{key}.md').write_text(
+            f'---\nid: {key}\ntitle: Fictional memory\n'
+            f'dont_surface: {str(bool(row.get("hidden"))).lower()}\n'
+            f'type: {"archived" if row.get("deleted") else "dynamic"}\n---\n{row["content"]}',
+            encoding='utf-8')
 
     def call(self, name, args):
         self.calls.append((name, args))
@@ -32,6 +44,7 @@ class Backend:
         if name == 'hold':
             key = 'feel_' + str(len(self.rows)) if args.get('feel') else f'{len(self.rows):012x}'
             self.rows[key] = dict(args)
+            self.write_row(key)
             return ('feel→' if args.get('feel') else '新建→') + key
         if name == 'trace':
             if args.get('delete'):
@@ -42,6 +55,7 @@ class Backend:
                 self.rows[args['bucket_id']]['content'] = args['content']
             else:
                 self.rows[args['bucket_id']]['hidden'] = bool(args['dont_surface'])
+            self.write_row(args['bucket_id'])
             return 'updated'
         if name == 'feel':
             # Simulate the upstream feel route ignoring dont_surface.
@@ -67,7 +81,7 @@ class MemoryTests(unittest.TestCase):
             {'model': 'fake-embedding', 'base_url': 'https://example.invalid/v1',
              'dimensions': 3, 'input_cny_per_million': '0.07'})
         self.budget = Budget(self.store)
-        self.backend = Backend()
+        self.backend = Backend(self.store.root / 'fake' / 'memory' / 'dynamic')
         self.model = Mock(side_effect=self.extract)
         self.memory = self.open()
 
@@ -432,6 +446,7 @@ class MemoryTests(unittest.TestCase):
         self.assertNotRegex('\n'.join(item['content'] for item in empty), r'[\u3400-\u9fff]')
         for i in range(5):
             self.backend.rows[str(i)] = {'content': f'body {i}'}
+            self.backend.write_row(str(i))
         text = self.memory.context('plan')[-1]['content']
         self.assertEqual(text.count('[bucket_id:'), 3)
         self.assertNotIn('body 4', text)
@@ -604,4 +619,5 @@ class MemoryTests(unittest.TestCase):
         for t in threads:
             t.join()
         self.assertEqual(sorted(results), [False, True])
+
 

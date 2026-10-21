@@ -652,6 +652,9 @@ class SearchThenSaveTests(unittest.TestCase):
         self.backend = MergingBackend()
         for i in range(3):
             self.backend.rows[f'{i:012x}'] = {'content': f'memory {i}: ' + self.old_memory}
+        self.backend.vault = self.store.root / 'fake' / 'memory' / 'dynamic'
+        for key in self.backend.rows:
+            self.backend.write_row(key)
         self.memory = Memory(self.cfg, self.store, self.budget, Mock(), self.backend)
         self.addCleanup(self.memory.__exit__, None, None, None)
         files = SimpleNamespace(tools=[], capability_event=None, description='You have no file tools. ',
@@ -764,3 +767,4 @@ class PendingDeletionChatTests(unittest.TestCase):
         self.assertNotRegex(context, r'[\u3400-\u9fff]')
         native.process_pending_deletions.return_value = []
         self.assertIsNone(pending_deletion_context(chat))
+
