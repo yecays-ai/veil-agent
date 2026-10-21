@@ -6,7 +6,7 @@ Peter 的记忆保存、检索和后台整理，在共享日/月预算不足时�
 
 ## 当前状态
 
-- 基线：main `8df2099c90bd6681ebfeab4f0302e7390a992e52`，已包含 PR #81（044）；独立分支 `ticket/045-ombre-budget`。
+- 基线：GitHub main `29f2379ae7aace048001991d75628deb2e038fda`（PR #81 / 044 合并提交；保留其 `memory_agent.py` 与失败诊断修复），已包含 PR #81（044）；独立分支 `ticket/045-ombre-budget`。
 - 已查复用：LiteLLM（MIT，约 61.7k stars；截至 2026-10-21 最新 main 提交 `3f93350411ddb50b1beb413665df4d0eb5a065de`）在 `litellm/proxy/spend_tracking/budget_reservation.py` 与 `budget_reservation_release_middleware.py` 按请求预留、结算并防止无 owner 的预留残留。它是大型网关，不适合引入本地单机 VEIL；只借鉴明确的预留/结算/恢复生命周期，继续使用现有共享 `Budget`，未复制代码。参考固定源码：[reservation reconciliation](https://github.com/BerriAI/litellm/blob/9d8fe1ddb51c0cb4c3190aa51274fbdde98eb05f/litellm/proxy/spend_tracking/budget_reservation.py)、[release middleware](https://github.com/BerriAI/litellm/blob/9d8fe1ddb51c0cb4c3190aa51274fbdde98eb05f/litellm/proxy/middleware/budget_reservation_release_middleware.py)。
 - 固定 Ombre 版本 `115d831d979bf67efc7150f976e2cb34c333c935`（仓库 README 声明 MIT）源码核对：[dehydrator.py](https://github.com/P0luz/Ombre-Brain/blob/115d831d979bf67efc7150f976e2cb34c333c935/src/dehydrator.py)、[hold/core.py](https://github.com/P0luz/Ombre-Brain/blob/115d831d979bf67efc7150f976e2cb34c333c935/src/tools/hold/core.py)、[_common.py](https://github.com/P0luz/Ombre-Brain/blob/115d831d979bf67efc7150f976e2cb34c333c935/src/tools/_common.py)、[embedding outbox](https://github.com/P0luz/Ombre-Brain/blob/115d831d979bf67efc7150f976e2cb34c333c935/src/ombrebrain/storage/embedding_outbox.py)。
 
