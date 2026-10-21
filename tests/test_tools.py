@@ -498,7 +498,7 @@ max_result_bytes = 200
         self.assertEqual(chat.send('read it'), 'I could not read it.')
         tools.invoke.assert_not_called()
         self.assertIn('arguments are not a valid JSON object', model.call_args_list[1].args[0][-1]['content'])
-        self.assertTrue(any('参数不是合法 JSON' in line for line in output))
+        self.assertTrue(any('arguments are not a valid JSON object' in line for line in output))
 
     def test_tool_output_limit_is_reserved_sent_and_settled_without_raising_daily_cap(self):
         self.cfg.tools['max_output_tokens'] = 4096
@@ -599,7 +599,7 @@ max_result_bytes = 200
                 self.assertTrue(any(expected_state in line for line in output))
                 self.assertEqual((tools.workspace / 'growth-journal.md').exists(), approval == 'y')
                 if approval == 'n':
-                    self.assertTrue(any('未同意写入' in line for line in output))
+                    self.assertTrue(any('Lan did not approve this write' in line for line in output))
                 else:
                     self.assertEqual((tools.workspace / 'growth-journal.md').read_text(encoding='utf-8'),
                                      'fictional entry')

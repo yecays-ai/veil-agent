@@ -736,7 +736,7 @@ class DegradedNoticeTests(unittest.TestCase):
     def test_ombre_notice_shows_the_line_with_tool_and_log_hint(self):
         lines = self.search('[检索降级：语义索引暂不可用，本次仅使用关键词/BM25。]\n[bucket_id:a] x')
         self.assertEqual(len(lines), 1)
-        self.assertIn('记忆检索降级为关键词', lines[0])
+        self.assertIn('Memory search is using keyword fallback', lines[0])
         self.assertIn('breath_search', lines[0])
         self.assertIn('server.log', lines[0])
 

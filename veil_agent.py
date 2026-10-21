@@ -44,7 +44,7 @@ TOOL_ERROR_TRANSLATIONS = {
     '程序拒绝：这条记忆不存在或已隐藏。': 'This memory does not exist or is hidden, so it cannot be read.',
     '程序拒绝：目标记忆不存在或已隐藏。': 'The target memory does not exist or is hidden. Search for a visible memory and use its current-turn ID.',
     '程序拒绝：这条记忆已隐藏或不可用，未做更新。': 'This memory is hidden or unavailable. No update was made; search for a visible target before retrying.',
-    '程序拒绝：记忆已变化或缺少版本，请从 offset=0 重新读取。': 'The memory changed or its version is missing. Re-read it from offset=0 before retrying.',
+    '程序拒绝：记忆已变化或缺少版本，请从 offset=0 重新读取。': 'The memory changed or its version is missing. Re-read it from offset=0. Then retry.',
     '程序拒绝：目标已存在，不允许覆盖。': 'The target already exists and overwriting is not allowed. Choose a new filename or use an authorized append operation.',
     '程序拒绝：lan 未同意写入。': 'Lan did not approve this write, so the file was not changed. Ask for approval if the write is still needed.',
     '程序拒绝：lan 未同意本次追加。': 'Lan did not approve this append, so no content was added. Ask for approval if the append is still needed.',
