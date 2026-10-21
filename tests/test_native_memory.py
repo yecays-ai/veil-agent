@@ -9,6 +9,7 @@ from unittest.mock import Mock
 
 from memory_agent import Memory, MemoryToolError
 from memory_native import HOLD, NativeMemoryTools, ToolSet
+from long_tasks import LongTaskStore
 from test_memory import Backend
 from tools_agent import permitted_tools
 from veil_agent import Budget, Character, Chat, Store, build_self_description, memory_mode
@@ -388,6 +389,46 @@ class OmbreToolGuardTests(unittest.TestCase):
         self.assertEqual(history_state, '成功')
         self.assertIn('old memory body', history)
         self.assertEqual([name for name, _ in self.backend.calls], ['trace'])
+
+    def test_trace_wrapper_readback_resolves_full_progress_task_without_extra_progress(self):
+        tasks = LongTaskStore(self.store, 'fake')
+        _, state, _ = tasks.invoke('long_task_update', {
+            'action': 'create', 'title': 'Correct fictional memory', 'goal': 'Verify the correction.'})
+        self.assertEqual(state, '成功')
+        task_id = tasks.read()['task_id']
+        for index in range(40):
+            _, state, _ = tasks.invoke('long_task_update', {
+                'action': 'update', 'task_id': task_id,
+                'progress_update': f'Fictional verified step {index + 1}.'})
+            self.assertEqual(state, '成功')
+        args = {'bucket_id': 'mem001', 'content': 'corrected memory'}
+        target = tasks.checkpoint_target('trace', args, self.tools.preview_summary('trace', args))
+        self.assertEqual(target, 'mem001')
+        self.assertEqual(tasks.before_tool('trace', target, autonomy=True, args=args), (None, True))
+        operation_id = tasks.read()['pending_action']['operation_id']
+        result, state, changed_title = self.call('trace', args)
+        self.assertEqual(state, '成功', result)
+        self.assertIn('旧版本已留档', changed_title)
+        tasks.finish_tool('trace', target, state)
+
+        tasks.set_tool_step(1)
+        tasks.observe_tool_result('memory_read', target, '成功',
+                                  '{"memory_id":"mem001","text":"wrong","next_offset":null}')
+        self.assertIsNone(tasks.read()['pending_action']['verified_in_step'])
+        readback, read_state, _ = self.call('memory_read', {'memory_id': 'mem001'})
+        self.assertEqual(read_state, '成功', readback)
+        tasks.observe_tool_result('memory_read', target, read_state, readback)
+        tasks.set_tool_step(2)
+        _, state, _ = tasks.invoke('long_task_update', {
+            'action': 'update', 'task_id': task_id, 'resolve_pending': True,
+            'pending_operation_id': operation_id})
+        self.assertEqual(state, '成功')
+        reopened = LongTaskStore(self.store, 'fake')
+        saved = reopened.read()
+        self.assertEqual(len(saved['progress']), 40)
+        self.assertIsNone(saved['pending_action'])
+        self.assertEqual(saved['tool_events'][-1]['target'], 'mem001')
+        self.assertEqual(saved['tool_events'][-1]['state'], '经检查确认')
 
     def test_hidden_memory_cannot_be_traced_or_read_from_history(self):
         self.memory.state['entries']['mem001'] = {'title': 'Old title', 'hidden': True}

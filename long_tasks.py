@@ -126,7 +126,7 @@ class LongTaskStore:
                     or ('normalized_target' in pending and not isinstance(pending['normalized_target'], str))
                     or ('expected_effect' in pending and pending['expected_effect'] is not None and
                         (not isinstance(pending['expected_effect'], dict) or
-                         pending['expected_effect'].get('kind') not in ('exact', 'suffix') or
+                         pending['expected_effect'].get('kind') not in ('exact', 'suffix', 'memory_body') or
                          not isinstance(pending['expected_effect'].get('sha256'), str) or
                          type(pending['expected_effect'].get('byte_length')) is not int or
                          pending['expected_effect']['byte_length'] < 0))
@@ -289,8 +289,8 @@ class LongTaskStore:
                 return 'The current task does not exist or the task ID does not match.', '被拒绝', '长期任务'
             if task['status'] == 'completed' and status == 'completed' and progress:
                 return 'The task is already complete; its saved completion evidence cannot be replaced.', '被拒绝', task['title']
-            if resolve and (task['pending_action'] is None or not progress):
-                return 'There is no pending operation to verify, or verification evidence is missing.', '被拒绝', task['title']
+            if resolve and task['pending_action'] is None:
+                return 'There is no pending operation to verify.', '被拒绝', task['title']
             if resolve and args.get('pending_operation_id') != self._operation_id(task['task_id'], task['pending_action']):
                 return 'The pending operation ID does not match.', '被拒绝', task['title']
             if resolve and (task['pending_action'].get('verified_in_step') is None
@@ -333,13 +333,30 @@ class LongTaskStore:
         return value.replace('\\', '/').casefold().rstrip('/')
 
     @staticmethod
+    def checkpoint_target(name, args, fallback):
+        """Return the stable business target used by a side-effect checkpoint.
+
+        Tool summaries are for people and can change after a successful action
+        (for example, trace adds an archive note to a memory title).  A memory
+        ID is the durable target for native memory operations instead.
+        """
+        if name in {'hold', 'trace', 'anchor', 'release'} and isinstance(args, dict):
+            memory_id = args.get('bucket_id') or args.get('target_id')
+            if isinstance(memory_id, str) and memory_id.strip():
+                return memory_id
+        return fallback
+
+    @staticmethod
     def _expected_effect(name, args):
-        if name not in ('write_file', 'append_file') or not isinstance(args, dict):
+        if name not in ('write_file', 'append_file', 'trace') or not isinstance(args, dict):
             return None
         content = args.get('content')
         if not isinstance(content, str):
             return None
         encoded = content.encode('utf-8')
+        if name == 'trace':
+            return {'kind': 'memory_body', 'sha256': hashlib.sha256(encoded).hexdigest(),
+                    'byte_length': len(encoded)}
         return {'kind': 'exact' if name == 'write_file' else 'suffix',
                 'sha256': hashlib.sha256(encoded).hexdigest(), 'byte_length': len(encoded)}
 
@@ -420,17 +437,37 @@ class LongTaskStore:
                 if pending['tool'] in ('write_file', 'append_file') or not result.strip():
                     return
             else:
-                if name != 'read_text_file':
-                    return
-                if effect['kind'] == 'suffix' and pending.get('state') != '成功，需核实':
-                    return
-                length = effect['byte_length']
-                if len(content) < length:
-                    return
-                actual = content if effect['kind'] == 'exact' else content[-length:] if length else b''
-                digest = hashlib.sha256(actual).hexdigest()
-                if (effect['kind'] == 'exact' and len(content) != length) or digest != effect['sha256']:
-                    return
+                if effect['kind'] == 'memory_body':
+                    if name != 'memory_read':
+                        return
+                    try:
+                        readback = json.loads(result)
+                        if (self._normalized_target(readback.get('memory_id', '')) != expected
+                                or readback.get('next_offset') is not None
+                                or not isinstance(readback.get('text'), str)):
+                            return
+                        lines = readback['text'].splitlines()
+                        end = next((index for index, line in enumerate(lines[1:], 1)
+                                    if line.strip() == '---'), None)
+                        if not lines or lines[0].strip() != '---' or end is None:
+                            return
+                        actual = '\n'.join(lines[end + 1:]).encode('utf-8')
+                    except (TypeError, ValueError):
+                        return
+                    if hashlib.sha256(actual).hexdigest() != effect['sha256']:
+                        return
+                else:
+                    if name != 'read_text_file':
+                        return
+                    if effect['kind'] == 'suffix' and pending.get('state') != '成功，需核实':
+                        return
+                    length = effect['byte_length']
+                    if len(content) < length:
+                        return
+                    actual = content if effect['kind'] == 'exact' else content[-length:] if length else b''
+                    digest = hashlib.sha256(actual).hexdigest()
+                    if (effect['kind'] == 'exact' and len(content) != length) or digest != effect['sha256']:
+                        return
             pending['verified_in_step'] = self.current_tool_step
             pending['verified_by'] = name
             pending['verified_sha256'] = hashlib.sha256(content).hexdigest()

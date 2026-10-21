@@ -1169,10 +1169,12 @@ class Chat:
                                 checkpoint = None
                                 blocked = None
                                 if self.long_tasks.is_side_effect(call.function.name):
+                                    checkpoint_target = self.long_tasks.checkpoint_target(
+                                        call.function.name, args, summary)
                                     blocked, checkpoint_started = self.long_tasks.before_tool(
-                                        call.function.name, summary, autonomy, args)
+                                        call.function.name, checkpoint_target, autonomy, args)
                                     if checkpoint_started:
-                                        checkpoint = summary
+                                        checkpoint = checkpoint_target
                                 if blocked:
                                     result, state = blocked, '被拒绝'
                                 else:

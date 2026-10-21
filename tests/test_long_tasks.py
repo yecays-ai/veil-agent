@@ -269,6 +269,65 @@ max_result_bytes = 4096
         self.assertEqual(saved['tool_events'][-1]['state'], '成功')
         self.assertEqual(saved['tool_events'][-1]['target'], 'lab/part-one.md')
 
+    def test_autonomous_trace_checkpoints_the_memory_id_not_changed_display_title(self):
+        (self.store.root.parent / 'characters' / 'peter').mkdir(parents=True)
+        (self.store.root.parent / 'persona').mkdir()
+        (self.store.root.parent / 'persona' / 'peter.md').write_text('Fictional persona', encoding='utf-8')
+        character = self.store.root.parent / 'characters' / 'peter' / 'character.toml'
+        character.write_text('''name = "Peter"
+provider = "fake"
+persona = "persona/peter.md"
+max_output_tokens = 80
+[providers.fake]
+model = "fake-model"
+base_url = "https://example.invalid/v1"
+api_key_env = "FAKE_KEY"
+max_input_tokens = 6000
+input_cny_per_million = "2"
+cached_input_cny_per_million = "1"
+output_cny_per_million = "8"
+[tools]
+enabled = true
+max_steps = 3
+max_output_tokens = 80
+max_result_bytes = 4096
+''', encoding='utf-8')
+        cfg = load_character(self.store.root.parent, 'peter')
+        fake_tools = SimpleNamespace(
+            tools=[SimpleNamespace(name='trace', description='edit memory', inputSchema={
+                'type': 'object', 'properties': {'bucket_id': {'type': 'string'}, 'content': {'type': 'string'}}})],
+            capability_event=None,
+            preview_summary=lambda name, args: 'Fictional old title',
+            invoke=lambda name, args, approval: ('Memory changed.', '成功', 'Fictional new title（旧版本已留档）'))
+        calls = [SimpleNamespace(id='trace-one', function=SimpleNamespace(
+            name='trace', arguments=json.dumps({'bucket_id': 'memory-001', 'content': 'Corrected fictional memory.'}))),]
+
+        class FakeMessage:
+            def __init__(self, tool_calls, content):
+                self.tool_calls, self.content = tool_calls, content
+
+            def model_dump(self, exclude_none=True):
+                return {'role': 'assistant', 'content': self.content, 'tool_calls': [
+                    {'id': call.id, 'type': 'function', 'function': {
+                        'name': call.function.name, 'arguments': call.function.arguments}}
+                    for call in self.tool_calls]}
+
+        model = Mock(side_effect=[(FakeMessage(calls, None), 100, 10, 0),
+                                  (FakeMessage([], 'Memory updated.'), 100, 10, 0)])
+        budget = Budget(self.store)
+        chat = Chat(cfg, self.store, budget, model, tools=fake_tools, output=lambda *_: None)
+        self.create()
+        request_id, _ = budget.reserve(cfg)
+
+        result, _ = chat._tool_chat([{'role': 'user', 'content': 'Correct the memory.'}],
+                                    request_id, 0, history_start=0, autonomy=True)
+
+        saved = chat.long_tasks.read()
+        self.assertEqual(result, 'Memory updated.')
+        self.assertEqual(saved['pending_action']['target'], 'memory-001')
+        self.assertEqual(saved['tool_events'][-1]['target'], 'memory-001')
+        self.assertEqual(saved['pending_action']['state'], '成功，需核实')
+
     def test_completion_at_progress_limit_persists_evidence_and_allows_next_task(self):
         task_id = self.create()
         for index in range(40):
@@ -304,6 +363,31 @@ max_result_bytes = 4096
             'action': 'create', 'title': 'Next fictional task', 'goal': 'Verify a separate result.'})
         self.assertEqual(state, '成功')
         self.assertEqual(reopened.read()['title'], 'Next fictional task')
+
+    def test_verification_at_progress_limit_records_existing_readback_without_41st_progress(self):
+        task_id = self.create()
+        for index in range(40):
+            _, state, _ = self.tasks.invoke('long_task_update', {
+                'action': 'update', 'task_id': task_id,
+                'progress_update': f'Fictional verified step {index + 1}.'})
+            self.assertEqual(state, '成功')
+        self.assertEqual(self.tasks.before_tool(
+            'trace', 'memory-001', autonomy=True, args={'bucket_id': 'memory-001'}), (None, True))
+        operation_id = self.tasks.read()['pending_action']['operation_id']
+        self.tasks.finish_tool('trace', 'memory-001', '成功')
+        reopened = LongTaskStore(self.store, 'peter')
+        reopened.set_tool_step(1)
+        reopened.observe_tool_result('memory_read', 'memory-001', '成功',
+                                     '{"memory_id":"memory-001","text":"corrected"}')
+        reopened.set_tool_step(2)
+        _, state, _ = reopened.invoke('long_task_update', {
+            'action': 'update', 'task_id': task_id, 'resolve_pending': True,
+            'pending_operation_id': operation_id})
+        self.assertEqual(state, '成功')
+        saved = reopened.read()
+        self.assertEqual(len(saved['progress']), 40)
+        self.assertIsNone(saved['pending_action'])
+        self.assertEqual(saved['tool_events'][-1]['state'], '经检查确认')
 
     def test_completion_save_failure_keeps_full_active_snapshot(self):
         task_id = self.create()
