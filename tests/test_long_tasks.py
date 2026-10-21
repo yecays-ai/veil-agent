@@ -67,6 +67,9 @@ class LongTaskTests(unittest.TestCase):
             'write_file', 'lab/test-a.txt', autonomy=True, args={'content': requested}), (None, True))
         operation_id = self.tasks.read()['pending_action']['operation_id']
         target.write_text(requested, encoding='utf-8')
+        with self.assertRaises(UserError):
+            self.tasks.finish_tool('write_file', 'lab/test-a-copy.txt', '成功')
+        self.assertEqual(self.tasks.read()['pending_action']['operation_id'], operation_id)
         self.tasks.finish_tool('write_file', 'lab/test-a.txt', '成功')
 
         reopened = LongTaskStore(self.store, 'peter')
