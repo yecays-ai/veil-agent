@@ -1,4 +1,4 @@
-- 2026-10-21 Codex：工单 043 从最新 main `a48f13dec08d89ea2d1667ff550ae2e4cbe6baca` 建立独立分支 `ticket/043-long-task-side-effect-verification`。031-06 复现点是目标路径子串匹配且不检查读回内容。已在 `long_tasks.py` 持久化操作 UUID、规范目标及 write/append 的 SHA-256 效果摘要；只接受相同目标 `read_text_file` 的实际内容匹配，并用操作 ID 和后续工具步骤解除 pending。`veil_agent.py` 现将参数及读取结果传给检查点。虚构文件写入/追加、错路径、错内容、重启恢复测试已补；STATUS、工单文档已更新。下一步检查分支差异并开 PR，依据 GitHub CI 修正回归问题，交 Claude 独立审查；合并后 Lan 按 STATUS 做 A–E Windows 体验。040 行为与验收保留；044 不在本单范围。
+- 2026-10-21 Codex：工单 043 从 main `a48f13dec08d89ea2d1667ff550ae2e4cbe6baca` 建立分支 `ticket/043-long-task-side-effect-verification`，PR #80。031-06 复现点为路径子串匹配且不检查读回内容；改为持久操作 UUID、规范目标、write/append 效果摘要与精确路径实际读回；目标漂移及无法证明的 append 保留 pending。测试覆盖虚构文件、错路径/错内容、重启和 040；代码 head `835b6ff57f1eb7d0773115ba507164fb050f942a` 的 Ubuntu/Windows × Python 3.11/3.12 CI 全绿。CodeRabbit 正在审查；已通过 PR 评论请求 Claude 独立审查，但暂未收到响应，GitHub reviewer API 拒绝 `claude`（不是协作者）。下一步取得独立审查结果、处理真实功能/安全问题并确认最新 head CI；之后再按要求合并。Lan 的 A–E Windows 体验待验收。040 保留，044 不在范围。
 # 交接
 
 - 2026-10-21 Claude：PR #77（042）与 PR #79（041）因小兔子限流由 Claude 审查，CI 全绿后合并；两单 Windows 体验待 Lan 验收。
