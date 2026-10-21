@@ -526,7 +526,7 @@ class MemoryTests(unittest.TestCase):
         self.assertEqual(kwargs['thinking'], 'disabled')
         self.assertTrue(kwargs['detail'])
         reserved = [c for c in self.store.read('costs.jsonl') if c['type'] == 'reserve'
-                    and 'accounting' not in c]
+                    and c.get('accounting') == 'memory-extraction']
         self.assertEqual(Decimal(reserved[0]['amount']), (10000 * Decimal(2) + 4096 * Decimal(8)) / 1_000_000)
 
     def test_truncated_reply_is_diagnosed_without_chat_text(self):
