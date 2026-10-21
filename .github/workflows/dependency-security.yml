@@ -33,7 +33,7 @@ jobs:
         continue-on-error: true
         uses: pypa/gh-action-pip-audit@1220774d901786e6f652ae159f7b6bc8fea6d266 # v1.1.0
         with:
-          inputs: .deps/ombre/source/requirements.lock.txt
+          inputs: requirements.ombre-py312.lock.txt
       - name: Fail if any audit found a vulnerability
         if: always()
         shell: bash

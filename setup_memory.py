@@ -26,10 +26,14 @@ def main():
         raise RuntimeError('Python 3.11 or 3.12 is required.')
     dep = ROOT / '.deps' / 'ombre'
     dep.mkdir(parents=True, exist_ok=True)
+    req = ROOT / ('requirements.ombre-py311.lock.txt'
+                  if sys.version_info[:2] == (3, 11)
+                  else 'requirements.ombre-py312.lock.txt')
     marker = dep / 'installed'
+    marker_value = COMMIT + ':' + hashlib.sha256(req.read_bytes()).hexdigest()
     python = dep / 'venv' / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
     # Install is explicit and idempotent; runtime never downloads dependencies.
-    if marker.exists() and marker.read_text() == COMMIT:
+    if marker.exists() and marker.read_text() == marker_value:
         try:
             check = subprocess.run([str(python), '-c', 'import jieba, rank_bm25, mcp'],
                                    capture_output=True, timeout=20)
@@ -58,11 +62,9 @@ def main():
     if not environment.exists():
         venv.EnvBuilder(with_pip=True).create(environment)
     python = environment / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
-    req = (ROOT / 'requirements.ombre-py311.lock.txt'
-           if sys.version_info[:2] == (3, 11) else source / 'requirements.lock.txt')
     subprocess.run([str(python), '-m', 'pip', 'install', '--no-cache-dir', '-r', str(req)], check=True)
     subprocess.run([str(python), '-c', 'import jieba, rank_bm25, mcp'], check=True)
-    marker.write_text(COMMIT)
+    marker.write_text(marker_value)
     print('Pinned Ombre installed. No model requests were made.')
 
 

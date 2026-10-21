@@ -37,11 +37,15 @@ class DependencyLockTests(unittest.TestCase):
 
     def test_ombre_installer_uses_the_archive_locked_requirements(self):
         installer = (ROOT / "setup_memory.py").read_text(encoding="utf-8")
-        self.assertIn("source / 'requirements.lock.txt'", installer)
+        self.assertIn("requirements.ombre-py312.lock.txt", installer)
         self.assertIn("requirements.ombre-py311.lock.txt", installer)
         self.assertIn("ARCHIVE_SHA256", installer)
         py311_lock = (ROOT / "requirements.ombre-py311.lock.txt").read_text(encoding="utf-8")
         self.assertIn("numpy==2.4.6", py311_lock)
+        py312_lock = (ROOT / "requirements.ombre-py312.lock.txt").read_text(encoding="utf-8")
+        self.assertIn("mcp==1.30.0", py312_lock)
+        self.assertIn("pyjwt==2.15.1", py312_lock)
+        self.assertIn("hashlib.sha256(req.read_bytes())", installer)
 
     def test_security_workflow_is_manual_scheduled_and_report_only(self):
         workflow = (ROOT / ".github" / "workflows" / "dependency-security.yml").read_text(encoding="utf-8")
@@ -52,7 +56,7 @@ class DependencyLockTests(unittest.TestCase):
         self.assertIn("pip-audit", workflow)
         self.assertIn("inputs: requirements.lock.txt", workflow)
         self.assertIn("inputs: requirements.ombre-py311.lock.txt", workflow)
-        self.assertIn("inputs: .deps/ombre/source/requirements.lock.txt", workflow)
+        self.assertIn("inputs: requirements.ombre-py312.lock.txt", workflow)
         self.assertNotIn("--fix", workflow)
         self.assertIn("idna==2.5", sample)
         self.assertNotIn("idna==2.5", production_lock)
