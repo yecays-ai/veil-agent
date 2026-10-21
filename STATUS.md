@@ -4,6 +4,8 @@
 
 ## 当前目标与现状
 
+- **047 验证证据：** PR #84 代码提交 `516d1eb50758418d5012387c5e1da1fd38719494` 的 Windows desktop 构建/虚构窗口检查及 Tests 的 Windows/Linux × Python 3.11/3.12 均通过。已请求 CodeRabbit 正式审查，当前未收到结果，未合并；不把 CI 当作 Lan 真实体验验收。后续文档收尾不改代码，最终 PR head 状态另以 GitHub 为准。
+
 - **047 Windows 桌面版 0.1：** 从最新 main `29f2379ae7aace048001991d75628deb2e038fda` 建立 `ticket/047-windows-desktop`。复用 MIT Electron，直接使用 Lan 提供的透明 PNG；支持拖动、五档大小、位置保存、单实例和真实聊天窗口收放。连接/启动原 Python 网页服务，继续使用原记录、权限、记忆和预算；原网页、Agent 核心和私人数据不修改。Memory / Ombre、Lab 的桌面入口禁用并标记 Coming Soon。Windows x64 运行文件夹已生成，需选择已有可用 Agent 安装；未捆绑 Python Agent。2 项本机 HTTP 接入测试、原网页检查和虚构服务的真实 Electron 窗口自动检查通过。GitHub CI/审查以本单 PR 为准；Lan 的 Windows 真实体验尚未验收。
 
 - **044 记忆诊断刷屏与工具拒绝原因丢失：** PR #81 `ticket/044-memory-diagnostics-tool-errors` 已合入 main `8df2099c90bd6681ebfeab4f0302e7390a992e52`（分支合并提交 `6eb3e36b724ab043721f6d571fb5d1d79bdbeab5`），保留 043 的 `long_tasks.py`、测试和有效状态记录。工具失败原因已在 `long_tasks.py`、`memory_native.py`、`tools_agent.py`、`veil_agent.py`、`memory_agent.py` 源头改为英文；`model_tool_result()` 对失败原因原样传递，网页与 Peter 收到相同文本。AST 回归扫描上述源文件的失败结果，并检查 `MemoryToolError` 诊断不含中文。最新代码/测试提交 `ac6a40cbfba39c5b27c074da640f7232f0c8e6e3` 在 GitHub Actions run 692 的 Windows/Linux × Python 3.11/3.12 全部通过。Claude 独立审查待 Lan 手动安排；合并和 Windows 虚构数据聊天验收仍待审查后完成。截图所示未知可见性候选保持失败关闭；真实记忆未访问，截图不能证明其他记忆也持续失效。
