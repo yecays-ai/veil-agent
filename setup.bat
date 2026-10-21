@@ -14,19 +14,15 @@ goto node_checked
 :no_node
 echo Node.js LTS with npm/npx not found. Peter will chat normally without file tools; install Node.js LTS to enable them.
 :node_checked
-if exist ".venv\Scripts\python.exe" goto check_existing_python
-py -3 -c "import sys; assert (3, 11) <= sys.version_info[:2] < (3, 13)" >nul 2>&1
+if exist ".venv\Scripts\python.exe" goto install
+py -3 -c "import sys; assert sys.version_info >= (3, 11)" >nul 2>&1
 if errorlevel 1 goto no_python
 py -3 -m venv .venv
 if errorlevel 1 goto failed
-goto install
-:check_existing_python
-".venv\Scripts\python.exe" -c "import sys; assert (3, 11) <= sys.version_info[:2] < (3, 13)" >nul 2>&1
-if errorlevel 1 goto no_python
 :install
 ".venv\Scripts\python.exe" -m ensurepip --upgrade
 if errorlevel 1 goto failed
-".venv\Scripts\python.exe" -m pip install --no-cache-dir -r requirements.lock.txt
+".venv\Scripts\python.exe" -m pip install --no-cache-dir -r requirements.txt
 if errorlevel 1 goto failed
 ".venv\Scripts\python.exe" setup_memory.py
 if errorlevel 1 goto failed
@@ -34,7 +30,7 @@ echo Installed. Follow README.md to add your local persona and .env, then open s
 pause
 exit /b 0
 :no_python
-echo Python 3.11 or 3.12 is required. See README.md; install Python on your preferred drive.
+echo Python 3.11+ is required. See README.md; install Python on your preferred drive.
 pause
 exit /b 1
 :failed

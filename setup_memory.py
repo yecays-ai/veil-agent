@@ -3,6 +3,7 @@ import hashlib
 import os
 from pathlib import Path
 import subprocess
+import sys
 import urllib.request
 import venv
 import zipfile
@@ -21,6 +22,8 @@ def download(url, digest):
 
 
 def main():
+    if sys.version_info[:2] not in {(3, 11), (3, 12)}:
+        raise RuntimeError('Python 3.11 or 3.12 is required.')
     dep = ROOT / '.deps' / 'ombre'
     dep.mkdir(parents=True, exist_ok=True)
     marker = dep / 'installed'
@@ -55,7 +58,8 @@ def main():
     if not environment.exists():
         venv.EnvBuilder(with_pip=True).create(environment)
     python = environment / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
-    req = source / 'requirements.lock.txt'
+    req = (ROOT / 'requirements.ombre-py311.lock.txt'
+           if sys.version_info[:2] == (3, 11) else source / 'requirements.lock.txt')
     subprocess.run([str(python), '-m', 'pip', 'install', '--no-cache-dir', '-r', str(req)], check=True)
     subprocess.run([str(python), '-c', 'import jieba, rank_bm25, mcp'], check=True)
     marker.write_text(COMMIT)
