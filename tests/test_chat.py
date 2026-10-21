@@ -65,19 +65,18 @@ output_cny_per_million = "8"
         self.chat.send('old conversation')
         before = self.store.read('test/chat.jsonl')
         calls = self.model.call_count
-        self.chat.start_new_conversation('en')
+        self.chat.start_new_conversation('auto')
         self.assertEqual(self.model.call_count, calls)
         self.assertEqual(self.store.read('test/chat.jsonl'), before)
         self.assertEqual(self.chat.rounds, 0)
         self.assertEqual(self.chat.history, [])
         reopened = Chat(self.cfg, self.store, self.budget, self.model)
-        self.assertEqual(reopened.reply_language, 'en')
+        self.assertEqual(reopened.reply_language, 'auto')
         self.assertEqual(reopened.history, [])
         reopened.send('...')
         prompt = self.model.call_args.args[0]
         self.assertNotIn('old conversation', str(prompt))
-        self.assertTrue(any(m['role'] == 'system' and 'natural English' in m['content']
-                            for m in prompt))
+        self.assertFalse(any('natural English' in str(m['content']) for m in prompt))
         self.assertEqual(len(self.store.read('test/chat.jsonl')), len(before) + 2)
 
     def test_invalid_new_chat_cursor_fails_without_erasing_history(self):

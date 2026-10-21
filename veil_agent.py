@@ -768,13 +768,6 @@ class Chat:
         tail = [*recalled]
         if extra_context:
             tail.append({'role': 'system', 'content': extra_context})
-        if not autonomy and self.reply_language == 'en':
-            tail.append({'role': 'system', 'content':
-                         'The user chose English for this conversation. Reply in natural English '
-                         'even to punctuation-only messages or messages in another language, '
-                         'unless the user explicitly asks for translation or another language. '
-                         'Respond directly; avoid repetitive apologies and status memos. '
-                         'Only claim actions that tools actually completed.'})
         if isinstance(self.pending_capability_event_model, str) and self.pending_capability_event_model and not autonomy:
             tail.append({'role': 'system', 'content':
                 'Program-generated capability update: ' + self.pending_capability_event_model})
@@ -1284,7 +1277,7 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead, activity=N
             if text == '/quit':
                 break
             if text in ('/new', '/new-en'):
-                chat.start_new_conversation('en' if text == '/new-en' else 'auto')
+                chat.start_new_conversation('auto')
                 output('新对话已开始；旧聊天保留在本机，长期记忆与实验室未改动。')
                 continue
             if text == '/pause':

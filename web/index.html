@@ -58,7 +58,7 @@ textarea:focus{border-color:var(--accent)}
 <div id="offline">和 Peter 本机服务断开了：服务可能仍在后台运行。请重新双击 start-web.bat 回到同一聊天。</div>
 <header>
   <h1 id="title">VEIL</h1>
-  <button id="new-chat" title="保留旧聊天，开始一段不继承旧对话的英文聊天">新对话</button>
+  <button id="new-chat" title="保留旧聊天，开始一段不继承旧对话的新聊天">新对话</button>
   <button data-cmd="/cost" title="今天和本月的花费">花费</button>
   <button data-cmd="/memory" title="最近的记忆">记忆</button>
   <button id="memory-panel" hidden>记忆面板</button>
@@ -374,7 +374,7 @@ async function send(text){
 }
 $('new-chat').onclick=()=>{
   if(busy||sending||stopped||revealQueue.length||speechIsActive())return;
-  if(confirm('开始新英文对话？旧聊天仍保存在本机，记忆和实验室文件不会清除。'))send('/new-en');
+  if(confirm('开始新对话？旧聊天仍保存在本机，记忆和实验室文件不会清除。'))send('/new');
 };
 sendBtn.onclick=()=>send();
 box.addEventListener('keydown',e=>{
