@@ -1122,7 +1122,7 @@ class Chat:
                                 blocked = None
                                 if self.long_tasks.is_side_effect(call.function.name):
                                     blocked, checkpoint_started = self.long_tasks.before_tool(
-                                        call.function.name, summary, autonomy)
+                                        call.function.name, summary, autonomy, args)
                                     if checkpoint_started:
                                         checkpoint = summary
                                 if blocked:
@@ -1132,7 +1132,7 @@ class Chat:
                                                                                self.approval)
                                     if checkpoint is not None:
                                         self.long_tasks.finish_tool(call.function.name, summary, state)
-                                self.long_tasks.observe_tool_result(call.function.name, summary, state)
+                                self.long_tasks.observe_tool_result(call.function.name, summary, state, result)
                             else:
                                 result, state, summary = 'The program rejected this call because the tool is unavailable.', '被拒绝', call.function.name
                     except (ValueError, TypeError):
