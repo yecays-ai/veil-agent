@@ -644,6 +644,19 @@ max_result_bytes = 200
         self.assertIn('未执行工具', chat.send('write it'))
         tools.invoke.assert_not_called()
 
+    def test_measured_prompt_baseline_keeps_room_for_next_tool_record(self):
+        first = self.message([self.tool_call('write_file',
+            '{"path":"lab/new.md","content":"hello"}', 'write')], reasoning='x' * 8000)
+        model = Mock(side_effect=[(first, 200, 20, 0), (self.message(content='Saved.'), 2400, 20, 0)])
+        tools = Mock()
+        tools.tools = [SimpleNamespace(name='write_file', description='Write', inputSchema={})]
+        tools.capability_event = None
+        tools.invoke.return_value = ('saved', '成功', 'lab/new.md')
+        chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=lambda _: None)
+        self.assertEqual(chat.send('write it'), 'Saved.')
+        self.assertEqual(tools.invoke.call_count, 1)
+        self.assertEqual(model.call_count, 2)
+
     def test_real_result_over_limit_is_not_sent_to_model(self):
         self.cfg.tools['max_result_bytes'] = 6000
         self.store.append('test/chat.jsonl', {'role': 'user', 'content': 'old ' + 'x' * 2100})

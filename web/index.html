@@ -69,6 +69,10 @@ textarea:focus{border-color:var(--accent)}
   <button id="activity-toggle" disabled>读取中…</button>
   <button id="exit-service" disabled>退出服务</button>
 </div>
+<details id="activity-details" hidden style="padding:0 16px 8px">
+  <summary>上次自主活动详情</summary>
+  <pre id="activity-record" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>
+</details>
 <div id="log"><div class="col" id="col"></div></div>
 <footer><div class="bar">
   <div class="speech-tools">
@@ -286,6 +290,18 @@ async function approve(card,status,answer,id){
     }
   }finally{card.dataset.sending='false'}
 }
+function renderActivity(record){
+  $('activity-details').hidden=!record;
+  if(!record){$('activity-record').textContent='';return}
+  const lines=[record.started_at+' → '+record.finished_at,
+    '结果：'+record.result+'；'+record.result_reason,
+    '决定/结束信息：'+record.decision,
+    '已留存文件：'+((record.lab_files_changed||[]).join('、')||'无')];
+  for(const item of record.tools||[])lines.push(item.tool+' | '+item.path+' | '+item.state);
+  if(record.next_step)lines.push('下一步：'+record.next_step);
+  lines.push('本次费用：¥'+record.cost_cny);
+  $('activity-record').textContent=lines.join('\n');
+}
 async function poll(){
   try{
     const r=await api('/api/events?after='+after);
@@ -297,6 +313,7 @@ async function poll(){
     const next=s.next_wake_at?new Date(s.next_wake_at).toLocaleString():'今日次数已用完或尚未排期';
     const last=s.last_result?'；上次：'+s.last_result:'';
     $('activity-status').textContent='自主活动状态：'+(!activityEnabled?'已暂停':(s.autonomy_busy?'正在活动':'已开启'))+'；下次唤醒：'+next+last;
+    renderActivity(s.last_activity);
     $('activity-toggle').textContent=activityEnabled?'暂停自主活动':'开启自主活动';
     $('activity-toggle').disabled=s.stopped||exiting;
     $('exit-service').disabled=s.stopped||exiting;

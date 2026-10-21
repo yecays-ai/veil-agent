@@ -588,6 +588,7 @@ class Chat:
         self.autonomy_message_lock = None
         self.autonomy_step_limited = False
         self.autonomy_budget_limited = False
+        self.tool_stop_reason = ''
         self.last_tool_summaries = []
         self.autonomy_interrupted = False
 
@@ -672,6 +673,8 @@ class Chat:
         self.autonomy_interrupted = False
         self.autonomy_step_limited = False
         self.autonomy_budget_limited = False
+        self.tool_stop_reason = ''
+        self.last_tool_summaries = []
         self.long_tasks.begin_tool_run()
         if not self.pending_capability_event and self.tools:
             self.pending_capability_event = self.tools.capability_event
@@ -777,6 +780,7 @@ class Chat:
     def _tool_chat(self, messages, request_id, history_count, history_start=None, autonomy=False):
         from tools_agent import display_call
         summaries = []
+        self.last_tool_summaries = summaries
         loop_messages = list(messages)
         if history_start is None:
             history_start = len(messages) - history_count - 1
@@ -787,13 +791,22 @@ class Chat:
         # Start at the same conservative floor used by Chat.send. After the first
         # response, provider-reported usage calibrates subsequent tool-loop estimates.
         calibration = 0.5
+        measured_tokens = None
+        measured_bytes = 0
 
         def request_bytes(offered):
             # Count each message once, including tool-call arguments and reasoning.
             return request_byte_size(loop_messages, offered)
 
         def request_size(offered):
-            return math.ceil(calibration * request_bytes(offered))
+            size = request_bytes(offered)
+            if measured_tokens is None:
+                return math.ceil(0.5 * size)
+            # Preserve the measured baseline; only new bytes need the initial
+            # conservative estimate. Removed history uses the measured ratio.
+            delta = size - measured_bytes
+            rate = 0.5 if delta >= 0 else min(0.5, calibration)
+            return math.ceil(max(0, measured_tokens + delta * rate) * 1.05)
 
         def fit_history(offered):
             nonlocal history_count
@@ -841,6 +854,8 @@ class Chat:
                     raise TooLong('工具说明和本轮上下文超过长度上限，未调用工具；请缩短输入后再试。')
                 if next_reservation:
                     self.budget.settle(next_reservation, step_cfg, 0, 0, 0)
+                self.tool_stop_reason = '本轮上下文达到长度上限，已停止后续步骤。'
+                final = self.tool_stop_reason
                 break
             reservation = request_id if step == 0 else next_reservation
             sent_bytes = request_bytes(offered)
@@ -855,14 +870,18 @@ class Chat:
                 raise RequestFailed('请求失败，未自动重试；输入已保存，本次保留预留费用。') from exc
             message, prompt, completion, cached, *finish = response
             if isinstance(prompt, int) and prompt > 0:
-                calibration = max(0.5, min(1.0, prompt / sent_bytes))
+                calibration = min(1.0, prompt / sent_bytes)
+                measured_tokens, measured_bytes = prompt, sent_bytes
             self.budget.settle(reservation, step_cfg, prompt, completion, cached)
             if autonomy and self.autonomy_should_yield and self.autonomy_should_yield():
                 self.autonomy_interrupted = True
                 final = '自主活动在模型请求结束后让位给聊天或控制操作。'
                 break
+            if finish and finish[0] == 'length':
+                self.tool_stop_reason = '模型回复达到输出上限，结果不完整。'
             if finish and finish[0] == 'length' and message.tool_calls:
                 final = '模型达到输出上限，工具未执行；请缩短要写入的内容后重试。'
+                self.tool_stop_reason = final
                 self.output(final)
                 break
             if not message.tool_calls:
@@ -872,6 +891,7 @@ class Chat:
                     # it to another parser. Only structured, allowlisted tool_calls
                     # reach the existing permission and budget checks above.
                     final = '模型返回了未执行的工具调用文本；程序没有执行任何工具，请查看 /cost 后重试。'
+                    self.tool_stop_reason = final
                 else:
                     final = content
                 if step == max_steps - 1 and summaries:
@@ -879,6 +899,7 @@ class Chat:
                 break
             if offered is None:
                 final = '这次工具步骤用完了。'
+                self.tool_stop_reason = final
                 self.output(final)
                 break
             # These calls finish in this response: no follow-up request or reservation.
@@ -957,6 +978,7 @@ class Chat:
                             'tool': call.function.name, 'path': summary, 'state': '被拒绝'})
                     self.budget.settle(next_reservation, next_cfg, 0, 0, 0)
                     final = '工具调用记录超过长度上限，未执行工具。'
+                    self.tool_stop_reason = final
                     break
                 for call_index, call in enumerate(message.tool_calls):
                     if autonomy and autonomy_tool_steps >= 12:

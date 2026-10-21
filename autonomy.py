@@ -13,6 +13,23 @@ MAX_CONTEXT_BYTES = 12 * 1024
 MAX_CHAT_CONTEXT_BYTES = 1500
 
 
+def activity_view(row):
+    """Present older misleading success rows accurately without rewriting evidence."""
+    row = dict(row)
+    tools = row.get('tools', [])
+    failed = [item for item in tools if item.get('state') != '成功']
+    if row.get('result') == '完成' and failed:
+        row['result'] = '部分完成' if any(item.get('state') == '成功' for item in tools) else '失败'
+        row['result_reason'] = '存在未成功的工具操作：' + '、'.join(
+            item['tool'] + '（' + item['state'] + '）' for item in failed)
+        if str(row.get('decision', '')).startswith(('工具调用记录超过', '模型达到输出上限')):
+            row['result_reason'] += '；' + row['decision']
+    row['lab_files_changed'] = list(dict.fromkeys(row.get('lab_files_changed', [])))
+    if row.get('result') in ('失败', '部分完成') and not row.get('next_step'):
+        row['next_step'] = '先核实本次已成功的操作与留存文件，再处理阻塞原因；不要重复写入。'
+    return row
+
+
 def _short_context_value(value, limit=180):
     text = ' '.join(str(value or '').split())
     raw = text.encode('utf-8')
@@ -29,7 +46,7 @@ def recent_chat_context(store, cfg):
     required = ('started_at', 'decision', 'reason', 'tools', 'lab_files_changed',
                 'result', 'result_reason', 'current_focus', 'next_step')
     if (not isinstance(row, dict) or any(key not in row for key in required)
-            or row['result'] not in ('完成', '搁置', '失败', '被打断')
+            or row['result'] not in ('完成', '部分完成', '搁置', '失败', '被打断')
             or not isinstance(row['tools'], list)
             or not isinstance(row['lab_files_changed'], list)
             or not all(isinstance(row[key], str) for key in
@@ -40,6 +57,7 @@ def recent_chat_context(store, cfg):
         datetime.fromisoformat(row['started_at'])
     except (TypeError, ValueError) as exc:
         raise UserError('自主活动记录时间损坏，已停止；请保留 data 文件夹。') from exc
+    row = activity_view(row)
 
     actions = []
     for item in row['tools'][:2]:
@@ -90,7 +108,7 @@ class AutonomyController:
         for row in self.rows:
             try:
                 if (not isinstance(row, dict) or any(key not in row for key in required)
-                        or row['result'] not in ('完成', '搁置', '失败', '被打断')
+                        or row['result'] not in ('完成', '部分完成', '搁置', '失败', '被打断')
                         or not isinstance(row['tools'], list)
                         or not all(isinstance(item, dict) and all(isinstance(item.get(key), str)
                                                                   for key in ('tool', 'path', 'state'))
@@ -167,13 +185,14 @@ class AutonomyController:
 
     def status(self):
         next_at = self.next_wake()
-        last = self.rows[-1] if self.rows else None
+        last = activity_view(self.rows[-1]) if self.rows else None
         result = ''
         if last:
-            result = (str(last.get('decision') or '') + '；' + str(last.get('result_reason') or '')).strip('；')
+            result = last['result'] + '：' + last['result_reason']
         return {
             'next_wake_at': next_at.isoformat() if next_at else None,
             'last_result': result[:180],
+            'last_activity': last,
             'autonomy_busy': self.active,
         }
 
@@ -222,13 +241,15 @@ class AutonomyController:
                     raise UserError('聊天时间记录损坏，已停止自主活动；请保留 data 文件夹。') from exc
                 break
         elapsed = '还没有聊天记录' if last_chat is None else str(stamp - last_chat).split('.')[0]
-        previous = self.rows[-1] if self.rows else None
+        previous = activity_view(self.rows[-1]) if self.rows else None
         auto_day, auto_pending = self.chat.budget.category_totals(self.chat.cfg.id)
         remaining = max(self.daily_budget - auto_day - auto_pending, 0)
         previous_text = ('还没有上次活动记录。' if previous is None else json.dumps({
             '决定': previous.get('decision'), '原因': previous.get('reason'),
             '当前关注': previous.get('current_focus'), '下一步': previous.get('next_step'),
-            '结果': previous.get('result'), '结果原因': previous.get('result_reason')},
+            '结果': previous.get('result'), '结果原因': previous.get('result_reason'),
+            '已成功工具': [item for item in previous.get('tools', []) if item.get('state') == '成功'],
+            '已留存文件': previous.get('lab_files_changed', [])},
             ensure_ascii=False))
         task = self.chat.long_tasks.read()
         task_text = ''
@@ -272,6 +293,8 @@ class AutonomyController:
 
     def run(self):
         started_at = now()
+        self.chat.last_tool_summaries = []
+        self.chat.tool_stop_reason = ''
         self.active = True
         self.deadline = time.monotonic() + MAX_RUNTIME_SECONDS
         before = sum(self.chat.budget.category_totals(self.chat.cfg.id))
@@ -306,13 +329,14 @@ class AutonomyController:
                 key, separator, value = line.partition('：')
                 if not separator:
                     key, separator, value = line.partition(':')
-                if separator and key.strip() == '决定':
+                key = key.strip().casefold()
+                if separator and key in ('决定', 'decided', 'decision'):
                     record['decision'] = value.strip()[:300]
-                elif separator and key.strip() in ('当前关注', '关注'):
+                elif separator and key in ('当前关注', '关注', 'currently focused on', 'current focus'):
                     record['current_focus'] = value.strip()[:300]
-                elif separator and key.strip() in ('下一步', '下一步计划'):
+                elif separator and key in ('下一步', '下一步计划', 'next', 'next step'):
                     record['next_step'] = value.strip()[:300]
-                elif separator and key.strip() == '原因':
+                elif separator and key in ('原因', 'reason'):
                     record['reason'] = value.strip()[:500]
             record['tools'] = self.chat.last_tool_summaries
             record['lab_files_changed'] = [item.get('path') for item in record['tools']
@@ -334,7 +358,7 @@ class AutonomyController:
                 record['result'] = '被打断'
                 record['result_reason'] = '自主活动已暂停。'
             else:
-                record['result'] = '完成' if record['tools'] else '搁置'
+                record['result'] = '完成' if any(item.get('state') == '成功' for item in record['tools']) else '搁置'
                 record['result_reason'] = f'按 {self.chat.cfg.name} 本次决定结束。'
             if not record['decision']:
                 record['decision'] = '本次没有采取行动。'
@@ -351,6 +375,27 @@ class AutonomyController:
             record['result_reason'] = str(exc)
             raise
         finally:
+            # Chat keeps this list live, even if a later model request fails.
+            record['tools'] = self.chat.last_tool_summaries
+            record['lab_files_changed'] = list(dict.fromkeys(
+                item['path'] for item in record['tools'] if item.get('state') == '成功'
+                and item.get('tool') in ('write_file', 'append_file', 'create_directory')))
+            successful = any(item.get('state') == '成功' for item in record['tools'])
+            failures = [item for item in record['tools'] if item.get('state') != '成功']
+            stop = self.chat.tool_stop_reason
+            if stop and record['result'] not in ('被打断',):
+                record['result'] = '部分完成' if successful else '失败'
+                record['result_reason'] = stop
+                record['decision'] = '本次因程序限制中断。'
+                record['program_stop_reason'] = stop
+            elif record['result'] == '失败' and successful:
+                record['result'] = '部分完成'
+            elif record['result'] in ('完成', '搁置') and failures:
+                record['result'] = '部分完成' if successful else '失败'
+                record['result_reason'] = '未成功的工具操作：' + '、'.join(
+                    item['tool'] + '（' + item['state'] + '）' for item in failures)
+            if record['result'] in ('失败', '部分完成') and not record['next_step']:
+                record['next_step'] = '先核实本次已成功的操作与留存文件，再处理阻塞原因；不要重复写入。'
             after = sum(self.chat.budget.category_totals(self.chat.cfg.id))
             record['finished_at'] = now()
             record['cost_cny'] = str(max(after - before, 0))
@@ -381,7 +426,14 @@ class AutonomyController:
         if not self.rows:
             return task_line + ('还没有自主活动记录。' if not task_line else '')
         lines = []
-        for row in reversed(self.rows[-10:]):
+        for saved in reversed(self.rows[-10:]):
+            row = activity_view(saved)
             lines.append(f"{row['started_at']} | {row['decision'] or '未留下决定'} | "
                          f"{row['result']}：{row['result_reason']} | ¥{row['cost_cny']}")
+            if row['lab_files_changed']:
+                lines.append('已留存文件：' + '、'.join(row['lab_files_changed']))
+            for item in row['tools']:
+                lines.append(f"工具：{item['tool']} | {item['path']} | {item['state']}")
+            if row['next_step']:
+                lines.append('下一步：' + row['next_step'])
         return task_line + '\n'.join(lines)

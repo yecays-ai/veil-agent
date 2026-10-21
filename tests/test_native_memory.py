@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import Mock
 
-from memory_agent import Memory
+from memory_agent import Memory, MemoryToolError
 from memory_native import HOLD, NativeMemoryTools, ToolSet
 from test_memory import Backend
 from tools_agent import permitted_tools
@@ -376,6 +376,13 @@ class OmbreToolGuardTests(unittest.TestCase):
         pulse = self.call('pulse', {})[0]
         self.assertNotIn('secret', pulse)
         self.assertNotIn('固化桶: 7 个', pulse)
+
+    def test_connection_failure_reaches_model_as_safe_actionable_message(self):
+        self.backend.call = Mock(side_effect=MemoryToolError('connection'))
+        result, state, _ = self.call('pulse', {})
+        self.assertEqual(state, '出错')
+        self.assertIn('安全读取重连后仍失败', result)
+        self.assertEqual(self.backend.call.call_count, 1)
 
     def test_upstream_schemas_are_selected_by_name(self):
         names = {tool.name for tool in self.tools.native.tools}

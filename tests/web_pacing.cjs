@@ -70,6 +70,15 @@ function page(options = {}) {
 }
 
 const p = page();
+p.run(`renderActivity({started_at:'start',finished_at:'end',result:'部分完成',
+  result_reason:'记忆连接不可用',decision:'本次中断',lab_files_changed:['lab/progress.md'],
+  tools:[{tool:'pulse',path:'<script>fixture</script>',state:'出错'}],next_step:'核实后继续',cost_cny:'0.1'})`);
+assert.equal(p.elements.get('activity-details').hidden, false);
+assert.match(p.elements.get('activity-record').textContent, /部分完成.*记忆连接不可用/);
+assert.match(p.elements.get('activity-record').textContent, /lab\/progress.md/);
+assert.match(p.elements.get('activity-record').textContent, /<script>fixture<\/script>/);
+p.run('renderActivity(null)');
+assert.equal(p.elements.get('activity-details').hidden, true);
 assert.equal(p.run('bubbleDelay("😀".repeat(60))'), 1200);
 assert.equal(p.run('bubbleDelay("中".repeat(61))'), 2400);
 assert.equal(p.run('bubbleDelay("a".repeat(200))'), 2400);

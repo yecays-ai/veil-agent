@@ -8,7 +8,7 @@ import json
 import re
 import uuid
 
-from memory_agent import ordinary_hits
+from memory_agent import ordinary_hits, MemoryToolError
 
 OMBRE_TOOLS = ('trace', 'dream', 'letter_write', 'letter_read', 'letter_lock_update',
                 'anchor', 'release', 'plan', 'pulse')
@@ -132,6 +132,8 @@ class NativeMemoryTools:
             if name == 'memory_history':
                 return self._history(args)
             return self._ombre(name, args, approval)
+        except MemoryToolError as exc:
+            return str(exc), '出错', self.preview_summary(name, args)
         except Exception:
             return '记忆工具出错，没有完成。', '出错', self.preview_summary(name, args)
 
@@ -177,6 +179,8 @@ class NativeMemoryTools:
                 return '程序拒绝：关联目标记忆已隐藏。', '被拒绝', summary
         try:
             result = self.memory.call(name, args)
+        except MemoryToolError as exc:
+            return str(exc), '出错', summary
         except Exception:
             return '记忆工具出错，没有完成。', '出错', summary
         if name in ('dream', 'pulse'):
@@ -219,6 +223,8 @@ class NativeMemoryTools:
             safe_args = {key: value for key, value in args.items()
                          if key not in (*banned, 'edit_reason')}
             result = self.memory.call('trace', safe_args)
+        except MemoryToolError as exc:
+            return f'{exc} 修改前旧版本已留档。', '出错', summary
         except Exception:
             return '记忆修改失败；旧版本已留档。', '出错', summary
         self.memory.bucket_details_cache.pop(memory_id, None)
