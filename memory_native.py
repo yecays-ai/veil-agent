@@ -159,7 +159,7 @@ class NativeMemoryTools:
                 return self._history(args)
             return self._ombre(name, args, approval)
         except MemoryToolError as exc:
-            return 'The memory tool failed while processing the request. Check its current state before retrying.', '出错', self.preview_summary(name, args)
+            return str(exc), '出错', self.preview_summary(name, args)
         except Exception:
             return 'The memory tool failed. Check the current memory state before retrying.', '出错', self.preview_summary(name, args)
 

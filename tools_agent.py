@@ -514,8 +514,8 @@ class FilesystemTools:
                 return 'Content must be text, and appended content cannot be empty. No content was written.', '被拒绝', summary
             data = content.encode('utf-8')
             if len(data) > self.lab_max_write_bytes:
-                return (f'This operation contains {len(data)} bytes, exceeding the lab per-operation limit of '
-                        f'{self.lab_max_write_bytes} 字节；没有写入任何内容。请拆成多个文件或分段追加。',
+                return (f'This operation contains {len(data)} bytes and exceeds the lab per-operation limit of '
+                        f'{self.lab_max_write_bytes} bytes; no content was written, so split it into smaller files or append smaller chunks.',
                         '被拒绝', summary)
             if name == 'write_file':
                 with target.open('xb') as handle:

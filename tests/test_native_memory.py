@@ -229,7 +229,7 @@ class NativeMemoryTests(unittest.TestCase):
         self.backend.call = lambda name, args: '没有返回保存编号'
         result, state, _ = self.tools.invoke('hold', {'title': 't', 'content': 'c'})
         self.assertEqual(state, '出错')
-        self.assertIn('不要说已经记住', result)
+        self.assertIn('Do not claim the memory was saved', result)
 
     def test_search_hides_forgotten_memories_and_truncates(self):
         self.tools.invoke('hold', {'title': 'a', 'content': 'lamp memory'})
@@ -417,7 +417,7 @@ class OmbreToolGuardTests(unittest.TestCase):
         result, state, _ = self.call('trace', {'bucket_id': 'mem001', 'delete': True,
                                                'delete_reason': 'test'})
         self.assertEqual(state, '被拒绝')
-        self.assertIn('lan 没有同意', result)
+        self.assertIn('Lan did not approve the deletion', result)
         self.assertEqual(self.backend.calls, [])
         self.assertIn('old memory body', self.path.read_text(encoding='utf-8'))
 
@@ -528,7 +528,7 @@ class OmbreToolGuardTests(unittest.TestCase):
         self.backend.call = Mock(side_effect=MemoryToolError('connection'))
         result, state, _ = self.call('pulse', {})
         self.assertEqual(state, '出错')
-        self.assertIn('safe read still failed after reconnect', result)
+        self.assertIn('The memory connection is unavailable', result)
         self.assertEqual(self.backend.call.call_count, 1)
 
     def test_upstream_schemas_are_selected_by_name(self):
@@ -580,7 +580,7 @@ class OmbreToolGuardTests(unittest.TestCase):
         result, state, _ = self.call('hold', {'target_id': 'mem001', 'content': 'added detail'})
 
         self.assertEqual(state, '出错')
-        self.assertIn('未做追加', result)
+        self.assertIn('no content was added', result)
         self.assertEqual(self.path.read_text(encoding='utf-8'), original)
         self.assertEqual(self.backend.calls, [])
 
@@ -704,7 +704,7 @@ class SearchThenSaveTests(unittest.TestCase):
         # The provider reports a prompt as large as the bytes, so no calibration discount applies.
         chat = Chat(self.cfg, self.store, self.budget, lambda messages, **_: (huge, 30000, 300, 0),
                     self.memory, self.tools, output=output.append)
-        self.assertIn('未执行工具', chat.send('hi'))
+        self.assertIn('tool was not executed', chat.send('hi'))
         self.assertNotIn('hold', [n for n, _ in self.backend.calls])
         self.assertTrue(any('长度检查' in line for line in output))
 
