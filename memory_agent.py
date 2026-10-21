@@ -415,7 +415,7 @@ class Memory:
         for row in self.store.read(f'{self.cfg.id}/chat.jsonl'):
             if row['role'] == 'user':
                 groups.append([{'role': 'user', 'content': row['content']}])
-            elif groups and row['role'] == 'assistant':
+            elif groups and len(groups[-1]) == 1 and row['role'] == 'assistant':
                 groups[-1].append({'role': 'assistant', 'content': row['content']})
         return [g for g in groups if len(g) == 2]
 
