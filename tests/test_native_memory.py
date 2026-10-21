@@ -108,6 +108,25 @@ class NativeMemoryTests(unittest.TestCase):
         (outside / 'other.md').write_text('---\nid: other\ntitle: other\n---\nsecret', encoding='utf-8')
         self.assertEqual(native.invoke('memory_read', {'memory_id': 'other'})[1], '被拒绝')
 
+    def test_catalog_and_read_keep_visible_related_memory(self):
+        native = self.tools.native
+        native.max_result_bytes = 8192
+        path = self.store.root / self.cfg.id / 'memory' / 'dynamic' / 'linked.md'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        raw = ('---\nid: linked\ntitle: Linked fiction\ntype: dynamic\nrelation_links:\n'
+               '- auto: true\n  type: same_event\n  target_bucket_id: normal\n---\n'
+               'FICTIONAL_RELATED_MEMORY\n')
+        path.write_text(raw, encoding='utf-8')
+
+        catalog, state, _ = native.invoke('memory_catalog', {})
+        self.assertEqual(state, '成功')
+        self.assertEqual(json.loads(catalog)['items'], [{'memory_id': 'linked', 'title': 'Linked fiction'}])
+        read, state, _ = native.invoke('memory_read', {'memory_id': 'linked'})
+        self.assertEqual(state, '成功')
+        self.assertIn('FICTIONAL_RELATED_MEMORY', json.loads(read)['text'])
+        self.assertEqual(self.memory.context_visible([('linked', 'FICTIONAL_RELATED_MEMORY')]),
+                         [('linked', 'FICTIONAL_RELATED_MEMORY')])
+
     def test_catalog_blocks_private_types_even_in_public_or_archive_folders(self):
         native = self.tools.native
         native.max_result_bytes = 8192
@@ -395,6 +414,25 @@ class OmbreToolGuardTests(unittest.TestCase):
         self.assertEqual(state, '被拒绝')
         self.assertEqual(self.call('memory_history', {'memory_id': 'mem001'})[1], '被拒绝')
         self.assertEqual(self.backend.calls, [])
+
+    def test_history_rechecks_live_visibility_before_returning_old_text(self):
+        self.store.append('fake/memory-versions.jsonl', {
+            'time': '2026-10-22T00:00:00Z', 'memory_id': 'mem001', 'fields': ['content'],
+            'old_content': 'FICTIONAL_HIDDEN_HISTORY', 'operation_reason': 'fictional edit',
+            'why_remembered': 'fictional reason',
+        })
+        self.path.write_text(self.path.read_text(encoding='utf-8').replace(
+            'tags: [keep]', 'tags: [keep]\ndont_surface: true'), encoding='utf-8')
+
+        hidden, state, _ = self.call('memory_history', {'memory_id': 'mem001'})
+        self.assertEqual(state, '被拒绝')
+        self.assertNotIn('FICTIONAL_HIDDEN_HISTORY', hidden)
+
+        self.path.write_text(self.path.read_text(encoding='utf-8').replace('dont_surface: true\n', ''),
+                             encoding='utf-8')
+        restored, state, _ = self.call('memory_history', {'memory_id': 'mem001'})
+        self.assertEqual(state, '成功')
+        self.assertIn('FICTIONAL_HIDDEN_HISTORY', restored)
 
     def test_live_delete_requires_ui_approval_and_rejection_does_not_mutate(self):
         prompts = []
