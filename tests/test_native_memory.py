@@ -43,7 +43,7 @@ class NativeMemoryTests(unittest.TestCase):
         self.addCleanup(self.memory.__exit__, None, None, None)
         files = SimpleNamespace(tools=[], capability_event=None, description='You have no file tools. ',
                                 consume_capability_event=lambda: None,
-                                invoke=lambda n, a, ap: ('程序拒绝：此工具没有授权。', '被拒绝', n),
+                                invoke=lambda n, a, ap: ('This tool is not authorized for the current role.', '被拒绝', n),
                                 preview_summary=lambda n, a: n)
         self.tools = ToolSet(files, NativeMemoryTools(self.memory, 200))
         self.output = []
@@ -402,7 +402,7 @@ class OmbreToolGuardTests(unittest.TestCase):
                                                'delete_reason': 'not useful'},
                                      lambda prompt: prompts.append(prompt) or 'n')
         self.assertEqual(state, '被拒绝')
-        self.assertIn('lan 没有同意', result)
+        self.assertIn('Lan did not approve the deletion', result)
         self.assertIn('not useful', prompts[0])
         self.assertEqual(self.backend.calls, [])
         result, state, _ = self.call('trace', {'bucket_id': 'mem001', 'delete': True,
@@ -528,7 +528,7 @@ class OmbreToolGuardTests(unittest.TestCase):
         self.backend.call = Mock(side_effect=MemoryToolError('connection'))
         result, state, _ = self.call('pulse', {})
         self.assertEqual(state, '出错')
-        self.assertIn('安全读取重连后仍失败', result)
+        self.assertIn('safe read still failed after reconnect', result)
         self.assertEqual(self.backend.call.call_count, 1)
 
     def test_upstream_schemas_are_selected_by_name(self):

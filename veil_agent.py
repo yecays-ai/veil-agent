@@ -22,7 +22,6 @@ MILLION = Decimal(1_000_000)
 
 RAW_DSML_TOOL_CALL = re.compile(r'<[|｜]DSML[|｜](?:tool_calls|function_calls|invoke)\b', re.IGNORECASE)
 AUTONOMY_WAKE = object()
-CJK_TEXT = re.compile(r'[\u3400-\u9fff]')
 TOOL_DATA_RESULTS = {'read_text_file', 'read_multiple_files', 'directory_tree', 'list_directory',
                      'list_directory_with_sizes', 'get_file_info', 'search_files', 'memory_read',
                      'memory_history', 'breath_search', 'dream', 'pulse', 'letter_read',
@@ -33,80 +32,13 @@ def capability_model_notice(tools):
     event = getattr(tools, 'capability_event_model', None) if tools else None
     return event if isinstance(event, str) else None
 
-TOOL_ERROR_TRANSLATIONS = {
-    '程序拒绝：此工具没有授权。': 'This tool is not authorized for the current role. Choose an available tool; permissions cannot be bypassed.',
-    '程序拒绝：工具参数必须是对象。': 'The tool arguments must be a JSON object. Correct the arguments and retry.',
-    '程序拒绝：target_id 必须来自本轮 breath_search 的可见结果。': 'This target_id is not valid for the current turn. Run breath_search now and use an exact visible ID from its results; do not reuse an ID from an earlier turn.',
-    '程序拒绝：merge_ids 必须是本轮检索结果中的不重复编号列表。': 'merge_ids must be a list of distinct IDs returned by breath_search during this turn. Search again and use only those IDs.',
-    '程序拒绝：每个 merge_id 都必须来自本轮 breath_search 的结果。': 'Every merge_id must come from breath_search results returned during this turn. Search again before retrying.',
-    '程序拒绝：query 必须是非空文字。': 'The search query must be non-empty text. Provide a short query and retry.',
-    '程序拒绝：新建记忆需提供 content 和 title，更新需提供 content。': 'To create a memory, provide both content and title. To update one, provide content and a valid current-turn target_id.',
-    '程序拒绝：这条记忆不存在或已隐藏。': 'This memory does not exist or is hidden, so it cannot be read.',
-    '程序拒绝：目标记忆不存在或已隐藏。': 'The target memory does not exist or is hidden. Search for a visible memory and use its current-turn ID.',
-    '程序拒绝：这条记忆已隐藏或不可用，未做更新。': 'This memory is hidden or unavailable. No update was made; search for a visible target before retrying.',
-    '程序拒绝：记忆已变化或缺少版本，请从 offset=0 重新读取。': 'The memory changed or its version is missing. Re-read it from offset=0. Then retry.',
-    '程序拒绝：目标已存在，不允许覆盖。': 'The target already exists and overwriting is not allowed. Choose a new filename or use an authorized append operation.',
-    '程序拒绝：lan 未同意写入。': 'Lan did not approve this write, so the file was not changed. Ask for approval if the write is still needed.',
-    '程序拒绝：lan 未同意本次追加。': 'Lan did not approve this append, so no content was added. Ask for approval if the append is still needed.',
-    '程序拒绝：lan 未同意持续追加授权。': 'Lan did not approve persistent append access. Request authorization before using this operation.',
-    '程序拒绝：只能在实验室内新建文件夹。': 'Directories can only be created inside the configured lab folder. Choose a path within that folder.',
-    '程序拒绝：目标文件在确认后变化，未追加。': 'The target file changed after confirmation, so nothing was appended. Re-read it and request approval again.',
-    '程序拒绝：确认期间目标文件已变化，请重新授权。': 'The target file changed while authorization was being confirmed. Request authorization again for the current file.',
-    '程序拒绝：持续追加授权仅限配置的成长日记。': 'Persistent append authorization is limited to the configured growth journal. Use one-time approval for other files.',
-    '程序拒绝：追加目标必须是已存在的普通文件。': 'The append target must be an existing regular file. Choose an existing file; this tool cannot create one.',
-    '程序拒绝：追加内容必须是非空文字。': 'Append content must be non-empty text. Provide the text to add and retry.',
-    '程序拒绝：路径超出测试文件夹或无法安全解析。': 'The path is outside the configured workspace or cannot be resolved safely. Use a permitted path inside the workspace.',
-    '程序拒绝：这类删除参数不开放。': 'This delete operation or argument combination is not available. Use the supported delete flow and its required confirmation.',
-    '程序拒绝：delete 必须是布尔值。': 'The delete argument must be true or false. Correct it and retry.',
-    '程序拒绝：补充内容不能为空。': 'The additional memory content cannot be empty. Provide the text to add and retry.',
-    '程序拒绝：合并后超过 Ombre 单条记忆安全上限；原记忆未改动。': 'The merged memory would exceed the safe per-memory size limit. The original was not changed; shorten the addition and retry.',
-    '程序拒绝：目标记忆在检索后发生变化，请重新 breath_search；本次未更新。': 'The target changed after search, so it was not updated. Run breath_search again and retry using its current result.',
-    '程序拒绝：来源记忆在检索后发生变化，请重新 breath_search；本次未更新。': 'A source memory changed after search, so nothing was updated. Run breath_search again and retry using current results.',
-    '程序拒绝：无法读取目标记忆的完整原文，未做追加。': 'The complete target memory could not be read, so no update was made. Re-read it before retrying.',
-    '程序拒绝：旧版本未能安全保存，本次修改未执行。': 'The previous version could not be safely archived, so this change was not made. Keep the memory unchanged and retry later.',
-    '程序拒绝：旧版本未能安全保存，删除申请未创建。': 'The previous version could not be safely archived, so no delete request was created. Keep the memory unchanged and retry later.',
-    '没有确认保存成功，请不要说已经记住。': 'The save could not be confirmed. Do not claim the memory was saved; inspect the result before retrying.',
-    '程序拒绝：目录游标无效。': 'The memory catalog cursor is invalid. Restart the catalog listing without a cursor.',
-    '程序拒绝：正文位置已超出当前记忆。': 'The requested offset is beyond the current memory length. Re-read it from offset=0.',
-    '程序拒绝：新文件内容必须是文字。': 'New file content must be text. Provide a text value and retry.',
-    '程序拒绝：内容必须是文字，追加内容不能为空；没有写入任何内容。': 'The content must be text, and append content cannot be empty. No content was written.',
-    '程序拒绝：实验室不能追加链接文件；没有写入任何内容。': 'Appending to links is not allowed in the lab. Choose a regular file.',
-    '程序拒绝：实验室文件在打开时变化；没有写入任何内容。': 'The lab file changed while it was being opened, so nothing was written. Re-read the file before retrying.',
-    '程序拒绝：实验室路径非法、过长或存在链接重定向；没有写入任何内容。': 'The lab path is invalid, too long, or redirected through a link. Choose a short, regular path inside the lab.',
-    '程序拒绝：无法读取目标记忆原文，未做修改。': 'The target memory could not be read, so it was not modified. Search again and use an available memory.',
-    '程序拒绝：修改前的完整旧版本无法安全留档，未做追加。': 'The complete previous version could not be safely archived, so no addition was made.',
-    '程序拒绝：有待整合的记忆已隐藏或不可用，未做更新。': 'A memory selected for merging is hidden or unavailable. Search again and use only visible results.',
-    '程序拒绝：关联目标记忆已隐藏。': 'The linked target memory is hidden. Choose a visible target before retrying.',
-    '程序拒绝：目标记忆不存在或不可读。': 'The target memory does not exist or cannot be read. Check the ID and search again.',
-    '程序拒绝：任务状态无效。': 'The task status is invalid. Choose active, paused, blocked, or completed.',
-    '程序拒绝：update 必须使用当前任务 ID。': 'Update requires the current task ID. Read the current task status and retry with that ID.',
-    '程序拒绝：进度更新必须包含不超过 500 字的简短已确认结果和依据。': 'Progress needs a concise confirmed result and its evidence, within the 500-character limit. Do not describe unverified work as completed.',
-}
 def model_tool_result(name, result, state):
-    """Translate trusted program-authored failures to safe, actionable English."""
-    if not isinstance(result, str):
+    """Pass failures through unchanged; preserve the existing successful-data safeguard."""
+    if not isinstance(result, str) or state != '成功':
         return result
-    if state == '成功':
-        if CJK_TEXT.search(result) and name not in TOOL_DATA_RESULTS:
-            return 'The tool operation completed successfully.'
-        return result
-    if not CJK_TEXT.search(result):
-        return result
-    translated = TOOL_ERROR_TRANSLATIONS.get(result)
-    if translated:
-        return translated
-    if 'edit_reason 必须是' in result:
-        return 'edit_reason must be concise text within the tool limit. Shorten it and retry.'
-    if '删除申请必须提供' in result:
-        return 'A delete request needs a short reason within the tool limit. Provide the reason and retry.'
-    if '超过实验室单次上限' in result:
-        return ('The write exceeds the lab per-operation byte limit. No content was written; split it into '
-                'smaller files or append in smaller chunks.')
-    if state == '被拒绝':
-        return ('The program rejected this operation. Correct the arguments and retry within the available '
-                'permissions and approval requirements.')
-    return ('The program could not confirm this operation. Do not claim it succeeded; inspect its state '
-            'before retrying to avoid duplicate changes.')
+    if CJK_TEXT.search(result) and name not in TOOL_DATA_RESULTS:
+        return 'The tool operation completed successfully.'
+    return result
 
 SEND_MESSAGE = {'type': 'function', 'function': {
     'name': 'send_message',
@@ -709,29 +641,29 @@ class Chat:
             args = None
         if (not isinstance(args, dict) or set(args) != {'text'} or
                 not isinstance(args['text'], str) or not args['text'].strip()):
-            return '程序拒绝：send_message 需要非空 text 文字。', '被拒绝', 'send_message'
+            return 'send_message requires non-empty text.', '被拒绝', 'send_message'
         text = args['text']
         autonomy = self.autonomy_mode
         gate = self.autonomy_message_lock if autonomy else None
         with gate if gate is not None else nullcontext():
             if autonomy and self.autonomy_should_yield and self.autonomy_should_yield():
                 self.autonomy_interrupted = True
-                return '自主活动已让位；这条消息未发送。', '被拒绝', 'send_message'
+                return 'Autonomous activity yielded before sending this message; nothing was sent.', '被拒绝', 'send_message'
             rows = self.store.read(self.path) if autonomy else []
             run_id = self.autonomy_run_id if autonomy else None
             if autonomy and (not isinstance(run_id, str) or not run_id or
                              not isinstance(tool_call_id, str) or not tool_call_id):
-                return '程序拒绝：缺少本次自主唤醒或工具调用标识，消息未发送。', '被拒绝', 'send_message'
+                return 'The current autonomous wake or tool-call identifier is missing; nothing was sent.', '被拒绝', 'send_message'
             if autonomy:
                 existing = next((row for row in rows
                                  if row.get('autonomy_run_id') == run_id
                                  and row.get('autonomy_tool_call_id') == tool_call_id), None)
                 if existing:
                     self.history, self.rounds = self.recent()
-                    return '这条消息已保存，不会重复发送。', '已存在', 'send_message'
+                    return 'This message was already saved and will not be sent again.', '已存在', 'send_message'
                 sent_this_wake = sum(1 for row in rows if row.get('autonomy_run_id') == run_id)
                 if sent_this_wake >= 3:
-                    return '本次自主唤醒最多主动发送 3 条消息；本条未发送。', '被拒绝', 'send_message'
+                    return 'An autonomous wake may send at most three messages. This message was not sent.', '被拒绝', 'send_message'
             event = {'role': 'assistant', 'content': text,
                      'request_id': request_id, 'origin': 'reply'}
             if autonomy:
@@ -980,7 +912,7 @@ class Chat:
             self.long_tasks.set_tool_step(step)
             if autonomy and autonomy_tool_steps >= 12:
                 self.autonomy_step_limited = True
-                final = '自主活动达到每次 12 个工具步骤上限。'
+                final = 'Autonomous activity reached the 12-tool-step limit for this run.'
                 if next_reservation:
                     pending_cfg = self.cfg if step == max_steps - 1 else replace(
                         self.cfg, max_output_tokens=self.cfg.tools.get('max_output_tokens', self.cfg.max_output_tokens))
@@ -988,7 +920,7 @@ class Chat:
                 break
             if autonomy and self.autonomy_should_yield and self.autonomy_should_yield():
                 self.autonomy_interrupted = True
-                final = '自主活动在本步前停止。'
+                final = 'Autonomous activity stopped before this tool step.'
                 pending_reservation = request_id if step == 0 else next_reservation
                 if pending_reservation:
                     pending_cfg = self.cfg if step == max_steps - 1 else replace(
@@ -1025,12 +957,12 @@ class Chat:
             self.budget.settle(reservation, step_cfg, prompt, completion, cached)
             if autonomy and self.autonomy_should_yield and self.autonomy_should_yield():
                 self.autonomy_interrupted = True
-                final = '自主活动在模型请求结束后让位给聊天或控制操作。'
+                final = 'Autonomous activity yielded after the model request to let chat or a control action proceed.'
                 break
             if finish and finish[0] == 'length':
                 self.tool_stop_reason = '模型回复达到输出上限，结果不完整。'
             if finish and finish[0] == 'length' and message.tool_calls:
-                final = '本步模型达到输出上限，本步工具未执行；此前已确认的操作保留。'
+                final = 'The model reached its output limit, so this step did not run; previously confirmed operations were preserved.'
                 if not output_recovered and step + 1 < max_steps:
                     try:
                         next_cfg = (self.cfg if step + 1 == max_steps - 1 else replace(
@@ -1056,7 +988,7 @@ class Chat:
                             'code': 'tool_output_recovery', 'attempt': 1,
                             'prompt_tokens': prompt, 'completion_tokens': completion,
                             'tool_count': len(message.tool_calls)})
-                        self.output('本步输出过长，工具尚未执行；正在缩小操作，最多恢复一次。')
+                        self.output('This step was too long, so no tool ran; the request is being shortened for one retry.')
                         continue
                 self.tool_stop_reason = final
                 self.output(final)
@@ -1067,15 +999,15 @@ class Chat:
                     # Never display provider-internal tool syntax as a reply or feed
                     # it to another parser. Only structured, allowlisted tool_calls
                     # reach the existing permission and budget checks above.
-                    final = '模型返回了未执行的工具调用文本；程序没有执行任何工具，请查看 /cost 后重试。'
+                    final = 'The model returned tool-call text that was not executed; no tools ran. Check /cost before retrying.'
                     self.tool_stop_reason = final
                 else:
                     final = content
                 if step == max_steps - 1 and summaries:
-                    self.output('这次工具步骤用完了。')
+                    self.output('The tool-step limit for this request has been reached.')
                 break
             if offered is None:
-                final = '这次工具步骤用完了。'
+                final = 'The tool-step limit for this request has been reached.'
                 self.tool_stop_reason = final
                 self.output(final)
                 break
@@ -1087,10 +1019,10 @@ class Chat:
                 for call_index, call in enumerate(message.tool_calls):
                     if autonomy and autonomy_tool_steps >= 12:
                         self.autonomy_step_limited = True
-                        final = '自主活动达到每次 12 个工具步骤上限。'
+                        final = 'Autonomous activity reached the 12-tool-step limit for this run.'
                         break
                     if autonomy and self.autonomy_interrupted:
-                        final = '自主活动已让位给聊天或控制操作。'
+                        final = 'Autonomous activity yielded to let chat or a control action proceed.'
                         break
                     if autonomy:
                         autonomy_tool_steps += 1
@@ -1118,10 +1050,10 @@ class Chat:
                                    if self.tools and call.function.name != 'send_message' else call.function.name)
                     except (ValueError, TypeError):
                         summary = call.function.name
-                    self.output(display_call(call.function.name, summary, '被拒绝', '继续处理会超过费用上限'))
+                    self.output(display_call(call.function.name, summary, '被拒绝', 'Continuing would exceed the spending limit.'))
                     log_tool(call.function.name, summary, '被拒绝')
-                self.output('这次工具步骤用完了。继续整理会超过当前费用上限。')
-                final = '这次工具步骤用完了。'
+                self.output('The tool-step limit for this request has been reached; continuing would exceed the current spending limit.')
+                final = 'The tool-step limit for this request has been reached.'
                 break
             try:
                 assistant_record = message.model_dump(exclude_none=True)
@@ -1148,17 +1080,17 @@ class Chat:
                         except (ValueError, TypeError, AttributeError):
                             summary = None
                         summary = summary if isinstance(summary, str) else call.function.name
-                        self.output(display_call(call.function.name, summary, '被拒绝', '工具调用记录超过长度上限'))
+                        self.output(display_call(call.function.name, summary, '被拒绝', 'The tool call history exceeded its size limit.'))
                         summaries.append({'tool': call.function.name, 'path': summary, 'state': '被拒绝'})
                         log_tool(call.function.name, summary, '被拒绝')
                     self.budget.settle(next_reservation, next_cfg, 0, 0, 0)
-                    final = '工具调用记录超过长度上限，未执行工具。'
+                    final = 'The tool call history exceeded its size limit; the tool was not executed.'
                     self.tool_stop_reason = final
                     break
                 for call_index, call in enumerate(message.tool_calls):
                     if autonomy and autonomy_tool_steps >= 12:
                         self.autonomy_step_limited = True
-                        final = '自主活动达到每次 12 个工具步骤上限。'
+                        final = 'Autonomous activity reached the 12-tool-step limit for this run.'
                         self.budget.settle(next_reservation, next_cfg, 0, 0, 0)
                         break
                     if autonomy:
@@ -1225,7 +1157,7 @@ class Chat:
                     if autonomy and self.autonomy_should_yield and self.autonomy_should_yield():
                         self.autonomy_interrupted = True
                         self.budget.settle(next_reservation, next_cfg, 0, 0, 0)
-                        final = '自主活动在本步后让位给聊天或控制操作。'
+                        final = 'Autonomous activity yielded after this step to let chat or a control action proceed.'
                         break
                 if self.autonomy_interrupted or self.autonomy_step_limited:
                     break
@@ -1233,7 +1165,7 @@ class Chat:
                 self.budget.settle(next_reservation, next_cfg, 0, 0, 0)
                 raise
         if not final:
-            final = '这次工具步骤用完了。'
+            final = 'The tool-step limit for this request has been reached.'
             self.output(final)
         return final, summaries
 

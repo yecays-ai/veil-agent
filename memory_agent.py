@@ -30,11 +30,11 @@ class MemoryToolError(RuntimeError):
     def __init__(self, code):
         self.code = code
         messages = {
-            'connection': '记忆连接不可用；安全读取重连后仍失败，请稍后再试。',
-            'tool': '记忆服务拒绝了本次工具调用；未自动重试。',
-            'unknown': '记忆操作结果未确认；未自动重试，请先核实结果，避免重复修改。',
-            'timeout': '记忆调用超时，结果未确认；请先核实结果。',
-            'closed': '记忆连接已关闭，本次未提交。',
+            'connection': 'The memory connection is unavailable; the safe read still failed after reconnect, so try again later.',
+            'tool': 'The memory service rejected this tool call; it was not retried.',
+            'unknown': 'The memory operation outcome is unconfirmed; it was not retried, so verify its state before repeating changes.',
+            'timeout': 'The memory call timed out with an unconfirmed result; check its state before retrying.',
+            'closed': 'The memory connection is closed; this operation was not submitted.',
         }
         super().__init__(messages[code])
 

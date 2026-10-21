@@ -52,12 +52,12 @@ def tool_policy(name):
 def lab_name_problem(name):
     """Use Windows filename rules on every platform, including config names."""
     if not isinstance(name, str) or not name or name in ('.', '..'):
-        return '名称必须是单级文件或文件夹名'
+        return 'Names must be a single file or folder name.'
     if any(ord(c) < 32 or c in '<>:"|?*/\\' for c in name) or name.endswith((' ', '.')):
-        return '名称含 Windows 非法字符或以空格、点结尾'
+        return 'Names cannot contain Windows-invalid characters or end with a space or period.'
     stem = name.split('.')[0].upper()
     if stem in {'CON', 'PRN', 'AUX', 'NUL', 'CONIN$', 'CONOUT$'} or re.fullmatch(r'(COM|LPT)[1-9¹²³]', stem):
-        return '名称是 Windows 保留名'
+        return 'This is a reserved Windows name.'
     return None
 
 
@@ -411,7 +411,7 @@ class FilesystemTools:
     def invoke(self, name, args, approval=input):
         policy = tool_policy(name)
         if policy == 'deny' or name not in {tool.name for tool in self.tools}:
-            return '程序拒绝：此工具没有授权。', '被拒绝', name
+            return 'This tool is not authorized for the current role. Choose an available tool; permissions cannot be bypassed.', '被拒绝', name
         try:
             resolved = {}
             for key, index, value in _path_arguments(name, args):
@@ -435,24 +435,24 @@ class FilesystemTools:
                 if lab and (lab_spelling or target.is_relative_to(lab)):
                     return self._invoke_lab(name, raw, args, summary)
                 if name == 'create_directory':
-                    return '程序拒绝：只能在实验室内新建文件夹。', '被拒绝', summary
+                    return 'Directories can only be created inside the configured lab folder.', '被拒绝', summary
             if name in ('append_file', 'grant_append'):
                 return self._invoke_append(name, next(iter(resolved.values())), summary, args, approval)
             if policy == 'ask':
                 target = next(iter(resolved.values()))
                 exists = target.exists()
                 if exists:
-                    return '程序拒绝：目标已存在，不允许覆盖。', '被拒绝', summary
+                    return 'The target already exists and overwriting is not allowed. Choose a new filename or use an authorized append operation.', '被拒绝', summary
                 action = approval(f'Peter 想把内容写到 {summary}（新文件）。同意吗？y/N ')
                 if action.strip().casefold() != 'y':
-                    return '程序拒绝：lan 未同意写入。', '被拒绝', summary
+                    return 'Lan did not approve this write, so the file was not changed. Ask for approval if it is still needed.', '被拒绝', summary
                 # Check again after the user has had time to answer.
                 target = checked_path(self.workspace, str(target))
                 if target.exists():
-                    return '程序拒绝：目标已存在，不允许覆盖。', '被拒绝', summary
+                    return 'The target already exists and overwriting is not allowed. Choose a new filename or use an authorized append operation.', '被拒绝', summary
                 content = args.get('content')
                 if not isinstance(content, str):
-                    return '程序拒绝：新文件内容必须是文字。', '被拒绝', summary
+                    return 'New file content must be text.', '被拒绝', summary
                 # Exclusive creation closes the final exists/open race: the OS
                 # refuses the operation if another file appeared meanwhile.
                 with target.open('x', encoding='utf-8', newline='') as handle:
@@ -467,13 +467,13 @@ class FilesystemTools:
                     result = raw.decode('utf-8', errors='ignore') + f'\n[已截断，共 {size} 字节]'
             return result, '成功', summary
         except FileExistsError:
-            return '程序拒绝：目标已存在，不允许覆盖。', '被拒绝', summary
+            return 'The target already exists and overwriting is not allowed. Choose a new filename or use an authorized append operation.', '被拒绝', summary
         except ValueError:
             value = args.get('path', name)
-            return '程序拒绝：路径超出测试文件夹或无法安全解析。', '被拒绝', Path(str(value)).name or name
+            return 'The path is outside the configured workspace or cannot be resolved safely. Use a permitted path inside the workspace.', '被拒绝', Path(str(value)).name or name
         except Exception:
             value = args.get('path', name)
-            return '工具执行出错。', '出错', Path(str(value)).name or name
+            return 'The tool failed. Check the target state before retrying.', '出错', Path(str(value)).name or name
 
     def _checked_lab_path(self, raw):
         windows = PureWindowsPath(raw)
@@ -511,10 +511,10 @@ class FilesystemTools:
                 return '实验室文件夹已创建。', '成功', summary
             content = args.get('content')
             if not isinstance(content, str) or (name == 'append_file' and not content):
-                return '程序拒绝：内容必须是文字，追加内容不能为空；没有写入任何内容。', '被拒绝', summary
+                return 'Content must be text, and appended content cannot be empty. No content was written.', '被拒绝', summary
             data = content.encode('utf-8')
             if len(data) > self.lab_max_write_bytes:
-                return (f'程序拒绝：本次 {len(data)} 字节，超过实验室单次上限 '
+                return (f'This operation contains {len(data)} bytes, exceeding the lab per-operation limit of '
                         f'{self.lab_max_write_bytes} 字节；没有写入任何内容。请拆成多个文件或分段追加。',
                         '被拒绝', summary)
             if name == 'write_file':
@@ -538,10 +538,10 @@ class FilesystemTools:
                                 f'本版 {target.name}：{len(data)} 字节。请核对是否漏掉上一版内容。')
                 return f'实验室新文件已创建并通过 SHA-256 核对（{len(data)} 字节）。{note}', '成功', summary
             if not target.is_file():
-                return '程序拒绝：追加目标必须是已存在的普通文件；没有写入任何内容。', '被拒绝', summary
+                return 'The append target must be an existing regular file. No content was written.', '被拒绝', summary
             info = target.stat()
             if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
-                return '程序拒绝：实验室不能追加链接文件；没有写入任何内容。', '被拒绝', summary
+                return 'Appending to links is not allowed in the lab. Choose a regular file.', '被拒绝', summary
             identity = _file_identity(info)
             flags = os.O_WRONLY | os.O_APPEND | getattr(os, 'O_BINARY', 0) | getattr(os, 'O_NOFOLLOW', 0)
             with os.fdopen(os.open(target, flags), 'ab', buffering=0) as handle:
@@ -550,7 +550,7 @@ class FilesystemTools:
                 if ((opened.st_dev, opened.st_ino, opened.st_size) !=
                         (identity[0], identity[1], identity[3]) or opened.st_nlink != 1 or
                         _file_identity(target.stat()) != identity):
-                    return '程序拒绝：实验室文件在打开时变化；没有写入任何内容。', '被拒绝', summary
+                    return 'The lab file changed while it was being opened. No content was written; re-read it before retrying.', '被拒绝', summary
                 if handle.write(data) != len(data):
                     raise OSError('short append')
                 os.fsync(handle.fileno())
@@ -566,37 +566,37 @@ class FilesystemTools:
                 raise OSError('append verification failed')
             return f'已追加 {len(data)} 字节并通过 SHA-256 核对，原内容保留。', '成功', summary
         except FileExistsError:
-            return '程序拒绝：目标已存在，不允许覆盖；没有写入任何内容。', '被拒绝', summary
+            return 'The target already exists and overwriting is not allowed. No content was written; choose a new filename.', '被拒绝', summary
         except ValueError:
-            return '程序拒绝：实验室路径非法、过长或存在链接重定向；没有写入任何内容。', '被拒绝', summary
+            return 'The lab path is invalid, too long, or redirected through a link. No content was written; choose a valid short path inside the lab.', '被拒绝', summary
         except (OSError, UnicodeError):
-            return '实验室操作失败或写后核对失败，不能确认完整保存；请先读取文件再决定是否重试。', '出错', summary
+            return 'The lab operation or its post-write verification failed, so a complete save cannot be confirmed. Read the file before deciding whether to retry.', '出错', summary
 
     def _invoke_append(self, name, target, summary, args, approval):
         if not target.is_file():
-            return '程序拒绝：追加目标必须是已存在的普通文件。', '被拒绝', summary
+            return 'The append target must be an existing regular file.', '被拒绝', summary
         identity = _file_identity(target.stat())
         if name == 'grant_append':
             allowed = self.cfg.tools.get('persistent_append_file')
             if not allowed or _path_key(target) != _path_key(checked_path(self.workspace, allowed)):
-                return '程序拒绝：持续追加授权仅限配置的成长日记。', '被拒绝', summary
+                return 'Persistent append authorization is limited to the configured growth journal. Use one-time approval for other files.', '被拒绝', summary
             if approval(f'允许 Peter 今后持续追加到 {summary} 吗？本次输入 y 后重启仍有效。y/N ').strip().casefold() != 'y':
-                return '程序拒绝：lan 未同意持续追加授权。', '被拒绝', summary
+                return 'Lan did not approve persistent append access. Request authorization before using it.', '被拒绝', summary
             if _file_identity(target.stat()) != identity:
-                return '程序拒绝：确认期间目标文件已变化，请重新授权。', '被拒绝', summary
+                return 'The target file changed while authorization was being confirmed. Request authorization again for the current file.', '被拒绝', summary
             try:
                 self._save_append_grant(summary, identity)
             except OSError:
-                return '持续追加授权无法保存，未授权；请检查角色数据目录。', '出错', summary
+                return 'Persistent append authorization could not be saved, so it was not granted. Check the character data folder.', '出错', summary
             return '已保存此文件的持续追加授权。', '成功', summary
         content = args.get('content')
         if not isinstance(content, str) or not content:
-            return '程序拒绝：追加内容必须是非空文字。', '被拒绝', summary
+            return 'Append content must be non-empty text.', '被拒绝', summary
         try:
             grant = (json.loads(self.grant_path.read_text(encoding='utf-8'))
                      if self.grant_path.exists() else None)
         except (OSError, ValueError, UnicodeError):
-            return '程序拒绝：持续追加授权记录无法读取，请检查角色数据目录。', '被拒绝', summary
+            return 'The persistent append authorization record could not be read. Check the character data folder.', '被拒绝', summary
         allowed = self.cfg.tools.get('persistent_append_file')
         granted = (bool(allowed) and isinstance(grant, dict) and grant.get('version') == 1
                    and grant.get('path') == summary
@@ -606,7 +606,7 @@ class FilesystemTools:
                    and grant.get('size') == identity[3]
                    and _path_key(target) == _path_key(checked_path(self.workspace, allowed)))
         if not granted and approval(f'Peter 想追加内容到 {summary}。同意这一次吗？y/N ').strip().casefold() != 'y':
-            return '程序拒绝：lan 未同意本次追加。', '被拒绝', summary
+            return 'Lan did not approve this append, so no content was added. Ask for approval if it is still needed.', '被拒绝', summary
         try:
             # O_APPEND never seeks into old content; omitting O_CREAT refuses missing files.
             fd = os.open(target, os.O_WRONLY | os.O_APPEND | getattr(os, 'O_BINARY', 0))
@@ -615,19 +615,19 @@ class FilesystemTools:
                 if ((opened.st_dev, opened.st_ino, opened.st_size) !=
                     (identity[0], identity[1], identity[3]) or
                     _file_identity(target.stat()) != identity):
-                    return '程序拒绝：目标文件在确认后变化，未追加。', '被拒绝', summary
+                    return 'The target file changed after confirmation, so nothing was appended. Re-read it and request approval again.', '被拒绝', summary
                 data = content.encode('utf-8')
                 if handle.write(data) != len(data):
-                    return '追加未完整写入；请先读取文件再决定是否重试。', '出错', summary
+                    return 'The append did not complete. Read the file before deciding whether to retry.', '出错', summary
                 os.fsync(handle.fileno())
                 latest = _file_identity(target.stat())
                 if latest[:2] != identity[:2] or latest[3] != identity[3] + len(data):
-                    return '文件在追加期间变化；请先读取文件再决定是否重试。', '出错', summary
+                    return 'The file changed during the append. Read the file before deciding whether to retry.', '出错', summary
             if granted:
                 self._save_append_grant(summary, latest)
             return '已追加到文件末尾。', '成功', summary
         except OSError:
-            return '追加失败，可能已有部分内容写入；请先读取文件再决定是否重试。', '出错', summary
+            return 'The append failed and may have written partial content. Read the file before deciding whether to retry.', '出错', summary
 
     def _save_append_grant(self, summary, identity):
         self.grant_path.parent.mkdir(parents=True, exist_ok=True)
