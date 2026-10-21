@@ -88,6 +88,52 @@ class MemoryTests(unittest.TestCase):
             for role, text in [('user', f'fact {i}'), ('assistant', f'reply {i}')]:
                 self.store.append('fake/chat.jsonl', {'role': role, 'content': text})
 
+
+    def test_restart_preserves_memory_cursor_after_multiple_and_proactive_replies(self):
+        for mode in ('extract', 'native'):
+            with self.subTest(mode=mode):
+                root = Path(self.temp.name) / mode
+                store = Store(root)
+                cfg = Character(mode, 'Example', 'fictional persona', 20, 1024,
+                    {'model': 'fake', 'base_url': 'https://example.invalid/v1',
+                     'max_input_tokens': 10000, 'input_cny_per_million': Decimal(2),
+                     'output_cny_per_million': Decimal(8), 'cached_input_cny_per_million': Decimal(1)},
+                    'fake', {'model': 'fake-embedding', 'base_url': 'https://example.invalid/v1',
+                     'dimensions': 3, 'input_cny_per_million': '0.07', 'mode': mode})
+                for i in range(2):
+                    store.append(f'{mode}/chat.jsonl', {'role': 'user', 'content': f'fictional user {i}'})
+                    store.append(f'{mode}/chat.jsonl', {'role': 'assistant', 'content': f'fictional reply {i}'})
+                first = Memory(cfg, store, Budget(store), Mock(), Backend())
+                self.assertEqual(first.state['cursor'], 2)
+                first.__exit__(None, None, None)
+
+                # A second independent reply and a proactive message follow the last saved turn.
+                store.append(f'{mode}/chat.jsonl', {'role': 'assistant', 'content': 'fictional second reply'})
+                store.append(f'{mode}/chat.jsonl', {'role': 'assistant', 'content': 'fictional proactive message',
+                                                    'origin': 'proactive'})
+                history_path = root / mode / 'chat.jsonl'
+                history_before_restart = history_path.read_bytes()
+                persisted_before_restart = store.read(f'{mode}/memory/_agent/state.jsonl')[-1]['state']
+
+                reopened = Memory(cfg, store, Budget(store), Mock(), Backend())
+                try:
+                    self.assertEqual(reopened.state['cursor'], 2)
+                    self.assertEqual(reopened.state['entries'], persisted_before_restart['entries'])
+                    self.assertEqual(reopened.state['pending'], persisted_before_restart['pending'])
+                    self.assertEqual(history_path.read_bytes(), history_before_restart)
+                    self.assertEqual(store.read(f'{mode}/chat.jsonl')[-1]['content'], 'fictional proactive message')
+                    self.assertEqual(store.read('costs.jsonl'), [])
+                finally:
+                    reopened.__exit__(None, None, None)
+
+    def test_assistant_only_proactive_chat_keeps_legacy_zero_cursor_on_restart(self):
+        self.store.append('fake/chat.jsonl', {'role': 'assistant', 'content': 'fictional proactive opening',
+                                              'origin': 'proactive'})
+        history_before_restart = (self.store.root / 'fake/chat.jsonl').read_bytes()
+        reopened = self.open()
+        self.assertEqual(reopened.state['cursor'], 0)
+        self.assertEqual((self.store.root / 'fake/chat.jsonl').read_bytes(), history_before_restart)
+
     def test_four_rounds_background_budget_and_notice(self):
         self.turns(3)
         self.memory.supplement()
