@@ -304,8 +304,8 @@ class NativeMemoryTools:
             return '程序拒绝：这类删除参数不开放。', '被拒绝', str(summary or 'trace')
         if not summary or self.memory.is_hidden(memory_id):
             return '程序拒绝：目标记忆不存在或已隐藏。', '被拒绝', str(memory_id or 'trace')
-        delete = args.get('delete') is True
-        if args.get('delete') not in (None, False, True):
+        delete = args.get('delete', False)
+        if type(delete) is not bool:
             return '程序拒绝：delete 必须是布尔值。', '被拒绝', summary
         edit_reason = args.get('edit_reason', '')
         if not isinstance(edit_reason, str) or len(edit_reason) > WHY_LIMIT:
@@ -330,7 +330,9 @@ class NativeMemoryTools:
             return '已获 lan 人工批准并完成删除；旧版本已留档。', '成功', f'{summary}（旧版本已留档）'
         try:
             safe_args = {key: value for key, value in args.items()
-                         if key not in (*banned, 'edit_reason')}
+                         if key not in (*banned, 'edit_reason', 'delete')}
+            # The authorized edit path must remain an edit after MCP conversion.
+            safe_args['delete'] = False
             result = self.memory.call('trace', safe_args)
         except MemoryToolError as exc:
             return f'{exc} 修改前旧版本已留档。', '出错', summary
