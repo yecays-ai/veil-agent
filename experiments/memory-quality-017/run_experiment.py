@@ -277,7 +277,13 @@ def ombre_context(proxy, character, transcripts=None):
                     "只按当前消息和被提供的记忆回答；没有依据时明确说不确定。",
                     20, 1200, provider, "experiment", memory_cfg, None)
     try:
-        port, token, resident = start_or_connect(ROOT, cfg, data_root=home / "data")
+        port, token, resident = start_or_connect(
+            ROOT, cfg, data_root=home / "data",
+            api_key_overrides={
+                "OMBRE_COMPRESS_API_KEY": "proxy-dummy",
+                "OMBRE_EMBED_API_KEY": "proxy-dummy",
+            },
+        )
     except Exception as exc:
         raise RuntimeError("isolated Ombre HTTP server failed to start; check the pinned local runtime") from exc
     try:

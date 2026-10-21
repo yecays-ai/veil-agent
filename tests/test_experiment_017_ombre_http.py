@@ -66,9 +66,10 @@ class Experiment017OmbreHTTPTests(unittest.TestCase):
         backend = FakeBackend()
         seen = {}
 
-        def start(_root, cfg, *, data_root):
+        def start(_root, cfg, *, data_root, api_key_overrides):
             seen["data_root"] = Path(data_root)
             seen["port"] = cfg.memory["ombre_port"]
+            seen["api_key_overrides"] = api_key_overrides
             return 49123, "fictional-test-token", resident
 
         patches = [
@@ -84,6 +85,10 @@ class Experiment017OmbreHTTPTests(unittest.TestCase):
         self.assertEqual(seen["url"], "http://127.0.0.1:49123/mcp")
         self.assertEqual(seen["token"], "fictional-test-token")
         self.assertEqual(seen["data_root"], Path(self.temp.name) / "ombre" / "peter" / "data")
+        self.assertEqual(seen["api_key_overrides"], {
+            "OMBRE_COMPRESS_API_KEY": "proxy-dummy",
+            "OMBRE_EMBED_API_KEY": "proxy-dummy",
+        })
         self.assertGreater(seen["port"], 0)
         experiment.close_ombre(runtime)
         self.assertTrue(resident.closed)

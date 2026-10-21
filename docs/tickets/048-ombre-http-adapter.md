@@ -6,7 +6,7 @@
 
 ## 当前状态
 
-031-11 已确认 `experiments/memory-quality-017/run_experiment.py` 仍存在，但其 Ombre 入口导入已删除的 `ombre_config`，并用旧 stdio 参数构造 `MCP`；当前 `memory_agent.MCP` 接受 token 鉴权的 Streamable HTTP URL。复用仓库 `ombre_resident.start_or_connect()` 的隔离启动和 `memory_agent.MCP` 客户端，不复制 Ombre/MCP 实现。回归仅用临时 vault、虚构 token 和假连接器，不读取 `.env`、不发真实模型请求；完整质量复跑仍经过原本地预算代理并会产生真实费用。
+031-11 已确认 `experiments/memory-quality-017/run_experiment.py` 仍存在，但其 Ombre 入口导入已删除的 `ombre_config`，并用旧 stdio 参数构造 `MCP`；当前 `memory_agent.MCP` 接受 token 鉴权的 Streamable HTTP URL。复用仓库 `ombre_resident.start_or_connect()` 的隔离启动和 `memory_agent.MCP` 客户端，不复制 Ombre/MCP 实现。实验只给 Ombre 子进程的脱水与 embedding key 显式设置 `proxy-dummy`，避免空 key 禁用模型功能，也避免将 `.env` 供应商 key 传入 Ombre；预算代理继续按原路径读取凭据并转发请求。回归使用临时 vault、虚构 token、模拟 `.env` 值和假连接器，不发真实模型请求；完整质量复跑仍经过原本地预算代理并会产生真实费用。
 
 ## 验收步骤
 

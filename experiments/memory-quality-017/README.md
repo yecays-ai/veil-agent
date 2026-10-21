@@ -10,7 +10,7 @@
 
 Ombre 使用 VEIL 当前的 `ombre_resident.start_or_connect()` 在实验专用 vault 下启动，
 再由 `memory_agent.MCP` 连接 `http://127.0.0.1:<随机端口>/mcp`。端口只监听回环，
-每次启动使用独立 Bearer token，不连接 Peter/Ghost 的正式常驻实例。
+每次启动使用独立 Bearer token，不连接 Peter/Ghost 的正式常驻实例。实验向 Ombre\n子进程的脱水与 embedding 配置都传入 `proxy-dummy`；代理仍按实验配置从 `.env` 读取\n供应商凭据，仅在转发模型请求时使用。这样 Ombre 不会因空 key 禁用模型功能，也不会\n直接继承本机供应商 key。
 
 ## 样例覆盖
 
