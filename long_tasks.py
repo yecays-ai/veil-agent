@@ -406,7 +406,7 @@ class LongTaskStore:
             content = result.encode('utf-8')
             effect = pending.get('expected_effect')
             if effect is None:
-                if pending['tool'] in ('write_file', 'append_file'):
+                if pending['tool'] in ('write_file', 'append_file') or not result.strip():
                     return
             else:
                 if name != 'read_text_file':
