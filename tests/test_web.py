@@ -73,6 +73,12 @@ output_cny_per_million = "8"
         except urllib.error.HTTPError as exc:
             return exc.code, None
 
+    def test_new_conversation_emits_reset_event(self):
+        self.hub.output('新对话已开始；旧聊天保留在本机，长期记忆与实验室未改动。')
+        event = self.hub.snapshot(0)['events'][-1]
+        self.assertEqual(event['kind'], 'reset')
+        self.assertIn('旧聊天保留', event['text'])
+
     def test_submission_deduplication_window_is_bounded(self):
         hub = Hub('Test', ActivityState(self.store.root / 'test' / 'other-state.json'))
         with patch('web_agent.MAX_SUBMISSIONS', 2):
