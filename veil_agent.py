@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parent
 MILLION = Decimal(1_000_000)
 
 RAW_DSML_TOOL_CALL = re.compile(r'<[|｜]DSML[|｜](?:tool_calls|function_calls|invoke)\b', re.IGNORECASE)
+CJK_TEXT = re.compile(r'[\u3400-\u9fff]')
 AUTONOMY_WAKE = object()
 TOOL_DATA_RESULTS = {'read_text_file', 'read_multiple_files', 'directory_tree', 'list_directory',
                      'list_directory_with_sizes', 'get_file_info', 'search_files', 'memory_read',

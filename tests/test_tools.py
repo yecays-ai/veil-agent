@@ -121,7 +121,7 @@ class ToolPolicyTests(unittest.TestCase):
         result, state, _ = manager.invoke('append_file',
             {'path': 'other.md', 'content': 'new'}, lambda _: 'n')
         self.assertEqual(state, '被拒绝')
-        self.assertIn('未同意', result)
+        self.assertIn('Lan did not approve', result)
         self.assertEqual(other.read_text(encoding='utf-8'), 'old')
         result, state, _ = manager.invoke('append_file',
             {'path': 'other.md', 'content': 'new'}, lambda _: 'y')
@@ -195,7 +195,7 @@ class ToolPolicyTests(unittest.TestCase):
         result, state, _ = manager.invoke('write_file',
             {'path': 'summary.txt', 'content': 'new content'}, approve)
         self.assertEqual(state, '被拒绝')
-        self.assertIn('目标已存在', result)
+        self.assertIn('target already exists', result)
         self.assertEqual(target.read_text(encoding='utf-8'), 'racing content')
 
     def test_exclusive_create_does_not_overwrite_at_the_open_boundary(self):
@@ -568,7 +568,7 @@ max_result_bytes = 200
         tools = Mock(tools=[SimpleNamespace(name='write_file', description='Write', inputSchema={})],
                      capability_event=None)
         chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=lambda _: None)
-        self.assertIn('本步工具未执行', chat.send('continue'))
+        self.assertIn('this step did not run', chat.send('continue'))
         model.assert_called_once()
         tools.invoke.assert_not_called()
         self.assertEqual(self.budget.totals()[2], 0)
@@ -715,7 +715,7 @@ max_result_bytes = 200
         tools.tools = [SimpleNamespace(name='write_file', description='Write', inputSchema={})]
         tools.capability_event = None
         chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=lambda _: None)
-        self.assertIn('未执行工具', chat.send('write it'))
+        self.assertIn('tool was not executed', chat.send('write it'))
         tools.invoke.assert_not_called()
 
     def test_measured_prompt_baseline_keeps_room_for_next_tool_record(self):
