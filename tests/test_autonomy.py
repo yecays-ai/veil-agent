@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 from autonomy import AutonomyController
-from veil_agent import ActivityState, Budget, BudgetExceeded, Chat, Store, UserError, load_character
+from veil_agent import ActivityState, Budget, BudgetExceeded, Chat, RequestFailed, Store, UserError, load_character
 from web_agent import Hub
 
 
@@ -184,18 +184,71 @@ daily_budget_cny = "2"
         self.assertEqual(self.budget.category_totals('test')[0], Decimal('0.000420'))
         self.assertEqual(self.controller.command().split(' | ')[2], '搁置：按 Test 本次决定结束。')
 
-    def test_followup_chat_receives_latest_autonomy_record(self):
+    def test_followup_chat_hands_off_each_autonomy_record_once_across_restart(self):
         self.controller.run()
+        activity_bytes = (self.store.root / 'test' / 'autonomy.jsonl').read_bytes()
         self.model.reset_mock()
 
         self.chat.send('你下午做了什么？')
-
         messages = self.model.call_args.args[0]
         context = '\n'.join(message['content'] for message in messages if message['role'] == 'system')
         self.assertIn('most recent autonomous activity record', context)
         self.assertIn('实验室整理', context)
         self.assertIn('等待新信息', context)
         self.assertIn('not a user message', context)
+
+        self.model.reset_mock()
+        self.chat.send('我们接着聊别的。')
+        messages = self.model.call_args.args[0]
+        context = '\n'.join(message['content'] for message in messages if message['role'] == 'system')
+        self.assertNotIn('most recent autonomous activity record', context)
+        self.assertEqual((self.store.root / 'test' / 'autonomy.jsonl').read_bytes(), activity_bytes)
+
+        restarted_model = Mock(return_value=('Fictional reply after restart', 100, 20, 0))
+        restarted_chat = Chat(self.cfg, self.store, self.budget, restarted_model)
+        restarted_chat.send('重启后继续聊天。')
+        messages = restarted_model.call_args.args[0]
+        context = '\n'.join(message['content'] for message in messages if message['role'] == 'system')
+        self.assertNotIn('most recent autonomous activity record', context)
+
+        self.store.append('test/autonomy.jsonl', {
+            'started_at': '2099-01-01T00:00:00+00:00', 'decision': '继续整理',
+            'reason': '出现了新的虚构活动。', 'tools': [], 'lab_files_changed': [],
+            'result': '完成', 'result_reason': '已完成虚构步骤。',
+            'current_focus': '新活动', 'next_step': '等待后续。',
+        })
+        new_activity_model = Mock(return_value=('Fictional reply to new activity', 100, 20, 0))
+        new_activity_chat = Chat(self.cfg, self.store, self.budget, new_activity_model)
+        new_activity_chat.send('新活动做了什么？')
+        messages = new_activity_model.call_args.args[0]
+        context = '\n'.join(message['content'] for message in messages if message['role'] == 'system')
+        self.assertIn('新活动', context)
+        self.assertIn('most recent autonomous activity record', context)
+
+    def test_failed_chat_request_keeps_autonomy_handoff_pending(self):
+        self.controller.run()
+        self.model.side_effect = RequestFailed('synthetic provider failure')
+
+        with self.assertRaises(RequestFailed):
+            self.chat.send('第一次尝试。')
+
+        failed_messages = self.model.call_args.args[0]
+        failed_context = '\n'.join(message['content'] for message in failed_messages
+                                   if message['role'] == 'system')
+        self.assertIn('most recent autonomous activity record', failed_context)
+
+        self.model.side_effect = None
+        self.model.reset_mock()
+        self.chat.send('重试。')
+        messages = self.model.call_args.args[0]
+        context = '\n'.join(message['content'] for message in messages if message['role'] == 'system')
+        self.assertIn('most recent autonomous activity record', context)
+
+        self.model.reset_mock()
+        self.chat.send('后续聊天。')
+        messages = self.model.call_args.args[0]
+        context = '\n'.join(message['content'] for message in messages if message['role'] == 'system')
+        self.assertNotIn('most recent autonomous activity record', context)
 
     def test_long_task_survives_controller_restart_and_is_in_autonomy_status(self):
         _, state, _ = self.chat.long_tasks.invoke('long_task_update', {
