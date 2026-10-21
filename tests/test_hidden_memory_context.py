@@ -1,6 +1,7 @@
 """Final model-context checks against fresh, fictional Ombre Markdown state."""
 import tempfile
 import unittest
+import json
 from decimal import Decimal
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -139,3 +140,102 @@ class HiddenMemoryContextTests(unittest.TestCase):
         sent = '\n'.join(row['content'] for row in model.call_args.args[0])
         self.assertNotIn('FICTIONAL_HIDDEN_MARKER', sent)
         self.assertIn('FICTIONAL_VISIBLE_MARKER', sent)
+
+    def test_memory_lifecycle_keeps_every_entry_and_model_context_in_sync(self):
+        """One fictional A/B flow through native tools, panel metadata, restart, and Chat."""
+        native = NativeMemoryTools(self.memory, 8192)
+        # The fictional Backend has no remote tool manifest; expose only the real trace route.
+        native.ombre_tools['trace'] = object()
+        current_a = 'FICTIONAL_A_CURRENT_AFTER_EDIT'
+        old_a = 'FICTIONAL_HIDDEN_MARKER'
+        visible_b = 'FICTIONAL_VISIBLE_MARKER'
+
+        def read(memory, key):
+            result, state, _ = NativeMemoryTools(memory, 8192).invoke('memory_read', {'memory_id': key})
+            self.assertEqual(state, '成功', result)
+            return json.loads(result)['text']
+
+        def catalog(memory):
+            result, state, _ = NativeMemoryTools(memory, 8192).invoke('memory_catalog', {})
+            self.assertEqual(state, '成功', result)
+            return {row['memory_id'] for row in json.loads(result)['items']}
+
+        def assert_model_context(memory, absent=(), present=()):
+            model = Mock(return_value=('fictional reply', 100, 20, 0))
+            chat = Chat(self.cfg, Store(Path(self.temp.name) / 'lifecycle-chat'),
+                        Budget(Store(Path(self.temp.name) / 'lifecycle-budget')), model, memory)
+            chat.send('fictional lifecycle query')
+            sent = '\n'.join(row['content'] for row in model.call_args.args[0])
+            for marker in absent:
+                self.assertNotIn(marker, sent)
+            for marker in present:
+                self.assertIn(marker, sent)
+            return sent
+
+        # A and B are both initially readable through context, automatic search, catalog, read, and model input.
+        self.assertIn(old_a, self.context())
+        self.assertIn(visible_b, self.context())
+        self.assertIn(old_a, native.invoke('breath_search', {'query': 'fictional'})[0])
+        self.assertEqual(catalog(self.memory), {'secret', 'normal'})
+        self.assertIn(old_a, read(self.memory, 'secret'))
+        self.assertIn(visible_b, read(self.memory, 'normal'))
+        assert_model_context(self.memory, present=(old_a, visible_b))
+
+        # Native trace is the actual edit route: it archives A's old full text and refreshes the live record.
+        changed, state, _ = native.invoke('trace', {'bucket_id': 'secret', 'content': current_a,
+                                                    'edit_reason': 'fictional correction'})
+        self.assertEqual(state, '成功', changed)
+        self.assertIn(current_a, read(self.memory, 'secret'))
+        history, state, _ = native.invoke('memory_history', {'memory_id': 'secret'})
+        self.assertEqual(state, '成功', history)
+        self.assertIn(old_a, history)
+
+        # Native trace is also the supported hide route.  Do not fake a cache-only hidden flag.
+        hidden, state, _ = native.invoke('trace', {'bucket_id': 'secret', 'dont_surface': True,
+                                                   'edit_reason': 'fictional hide'})
+        self.assertEqual(state, '成功', hidden)
+
+        def assert_hidden_everywhere(memory):
+            context = '\n'.join(row['content'] for row in memory.context('fictional'))
+            search, search_state, _ = NativeMemoryTools(memory, 8192).invoke('breath_search', {'query': 'fictional'})
+            self.assertEqual(search_state, '成功', search)
+            self.assertNotIn('secret', catalog(memory))
+            for name, args in (('memory_read', {'memory_id': 'secret'}),
+                               ('memory_history', {'memory_id': 'secret'})):
+                result, result_state, _ = NativeMemoryTools(memory, 8192).invoke(name, args)
+                self.assertEqual(result_state, '被拒绝', result)
+                self.assertNotIn(old_a, result)
+                self.assertNotIn(current_a, result)
+            self.assertNotIn(old_a, context)
+            self.assertNotIn(current_a, context)
+            self.assertNotIn(old_a, search)
+            self.assertNotIn(current_a, search)
+            self.assertIn(visible_b, context)
+            self.assertIn(visible_b, search)
+            self.assertIn(visible_b, read(memory, 'normal'))
+            assert_model_context(memory, absent=(old_a, current_a), present=(visible_b,))
+
+        assert_hidden_everywhere(self.memory)
+
+        # A fresh Memory instance reads persisted Markdown/state, not the first instance's caches.
+        restarted = self.open()
+        assert_hidden_everywhere(restarted)
+
+        # The Ombre panel is the valid external unhide route for an already hidden memory.
+        self.backend.call('trace', {'bucket_id': 'secret', 'dont_surface': False})
+        self.assertTrue(restarted.refresh_visibility('secret'))
+        self.assertIn(current_a, read(restarted, 'secret'))
+        history, state, _ = NativeMemoryTools(restarted, 8192).invoke('memory_history', {'memory_id': 'secret'})
+        self.assertEqual(state, '成功', history)
+        self.assertIn(old_a, history)
+        assert_model_context(restarted, present=(current_a, visible_b))
+
+        # Controlled regression proof: bypassing the live visibility recheck would leak A into model context.
+        def unsafe_visibility(memory_id):
+            self.memory.native_hidden.discard(memory_id)
+            restarted.native_hidden.discard(memory_id)
+            return True
+        self.backend.call('trace', {'bucket_id': 'secret', 'dont_surface': True})
+        with patch.object(Memory, 'refresh_visibility', side_effect=unsafe_visibility):
+            with self.assertRaises(AssertionError):
+                assert_hidden_everywhere(restarted)
