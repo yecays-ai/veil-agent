@@ -531,7 +531,7 @@ max_result_bytes = 200
         model = Mock(return_value=(partial, 100, 50, 0, 'length'))
         tools = Mock(tools=[SimpleNamespace(name='write_file', description='Write', inputSchema={})],
                      capability_event=None)
-        chat = Chat(self.cfg, self.store, self.budget, model, tools=tools)
+        chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=lambda _: None)
         self.assertIn('本步工具未执行', chat.send('continue'))
         model.assert_called_once()
         tools.invoke.assert_not_called()
