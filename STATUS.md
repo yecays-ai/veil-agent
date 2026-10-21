@@ -4,7 +4,7 @@
 
 ## 当前目标与现状
 
-- **045 Ombre 后台调用预算（031-04）：** 基于 GitHub 最新 main `29f2379ae7aace048001991d75628deb2e038fda`，独立分支 `ticket/045-ombre-budget`，PR #83。为 VEIL 可见的 Ombre embedding 操作与 `hold` 内部打标/同事件模型调用，在发出 MCP 请求前向现有共享 `Budget` 预留；对固定 Ombre 的 4096/1024 输出上限与每次最多 3 次尝试作保守估算。失败按预留额结算，后续预检拒绝只释放确定未发送的预留；settle 幂等，重启恢复未结算预留；Extract 后台失败/自治分类沿用现有共享账本。上游 hold 后异步计划判断和 HTTP 维护入口仍未有逐请求共享硬闸门，不能称为完整费用硬限制。虚构回归、最新 PR CI 与 Claude 独立审查待完成；Windows 体验另待 Lan 验收。
+- **045 Ombre 后台调用预算（031-04）：** 基于 GitHub 最新 main `29f2379ae7aace048001991d75628deb2e038fda`，独立分支 `ticket/045-ombre-budget`，PR #83。已补齐 Ombre 内部模型调用估算常量；VEIL 可见的 embedding 与 `hold` 模型路径在 MCP 请求前按估算上限预留共享 `Budget`，确认成功后按单次正常估算结算并释放差额；失败或重启后结果不明时按预留上限结算，结算幂等。Extract 后台调用仍使用共享账本。上游 hold 后异步计划判断和 HTTP 维护入口仍未有逐请求共享硬闸门，不能称为完整费用硬限制。此前 head 的 CI 因未定义常量而失败；修复已加入新 head，等待更新后的虚构回归与 CI。Claude 独立审查未完成；Windows 体验另待 Lan 验收。
 
 - **044 记忆诊断刷屏与工具拒绝原因丢失：** PR #81 `ticket/044-memory-diagnostics-tool-errors` 已合入 main `29f2379ae7aace048001991d75628deb2e038fda`（合并提交 `29f2379ae7aace048001991d75628deb2e038fda`）。工具失败原因已在 `long_tasks.py`、`memory_native.py`、`tools_agent.py`、`veil_agent.py`、`memory_agent.py` 源头改为英文；`model_tool_result()` 对失败原因原样传递，网页与 Peter 收到相同文本。AST 回归扫描上述源文件的失败结果，并检查 `MemoryToolError` 诊断不含中文。GitHub Actions run 692 的 Windows/Linux × Python 3.11/3.12 全部通过。Claude 独立审查待 Lan 安排；Windows 虚构数据聊天验收仍待完成。截图所示未知可见性候选保持失败关闭；真实记忆未访问，截图不能证明其他记忆也持续失效。
 
