@@ -75,7 +75,7 @@ def _health(port):
         return False
 
 
-def _environment(root, cfg, vault, private, config_path, token, port):
+def _environment(root, cfg, vault, private, config_path, token, port, api_key_overrides=None):
     from dotenv import dotenv_values
 
     raw = dotenv_values(Path(root) / '.env', interpolate=False, encoding='utf-8-sig')
@@ -83,6 +83,7 @@ def _environment(root, cfg, vault, private, config_path, token, port):
            if key.upper() in {'PATH', 'SYSTEMROOT', 'WINDIR', 'TEMP', 'TMP', 'USERPROFILE'}}
     temp = private / 'tmp'
     temp.mkdir(exist_ok=True)
+    api_key_overrides = api_key_overrides or {}
     env.update(
         PYTHONUTF8='1', PYTHONIOENCODING='utf-8',
         OMBRE_CONFIG_PATH=str(config_path), OMBRE_VAULT_DIR=str(vault),
@@ -91,11 +92,13 @@ def _environment(root, cfg, vault, private, config_path, token, port):
         OMBRE_MCP_REQUIRE_AUTH='true', OMBRE_MCP_AUTH_MODE='token',
         OMBRE_MCP_TOKEN=token, OMBRE_HOOK_SKIP='true',
         VEIL_OMBRE_STOP_PATH=str(private / 'ombre.stop'),
-        OMBRE_EMBED_API_KEY=(raw.get('EMBED_API_KEY') or '').strip(),
+        OMBRE_EMBED_API_KEY=(api_key_overrides.get('OMBRE_EMBED_API_KEY',
+                                                   raw.get('EMBED_API_KEY')) or '').strip(),
         TEMP=str(temp), TMP=str(temp),
     )
     if cfg.memory.get('ombre_model', True):
-        env['OMBRE_COMPRESS_API_KEY'] = (raw.get(cfg.provider['api_key_env']) or '').strip()
+        env['OMBRE_COMPRESS_API_KEY'] = (api_key_overrides.get(
+            'OMBRE_COMPRESS_API_KEY', raw.get(cfg.provider['api_key_env'])) or '').strip()
     else:
         env['OMBRE_COMPRESS_API_KEY'] = ''
     return env
@@ -160,7 +163,7 @@ class ResidentProcess:
         self.stop_path.unlink(missing_ok=True)
 
 
-def start_or_connect(root, cfg, *, data_root=None):
+def start_or_connect(root, cfg, *, data_root=None, api_key_overrides=None):
     """Return (port, token, owned_process), starting Ombre only when needed."""
     root = Path(root).resolve()
     vault = (Path(data_root) if data_root is not None else root / 'data') / cfg.id / 'memory'
@@ -200,7 +203,8 @@ def start_or_connect(root, cfg, *, data_root=None):
         raise ValueError('private Ombre file redirected')
     config_temp.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding='utf-8')
     os.replace(config_temp, config_path)
-    env = _environment(root, cfg, vault, private, config_path, token, port)
+    env = _environment(root, cfg, vault, private, config_path, token, port,
+                       api_key_overrides=api_key_overrides)
 
     owned = None
     if not _health(port):
