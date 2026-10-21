@@ -56,7 +56,9 @@ try:
     time.sleep(30)
   elif mode == "long-state":
     root = Path(sys.argv[2]); tasks = LongTaskStore(Store(root / "data"), "peter")
-    print(json.dumps(tasks.read(), ensure_ascii=False), flush=True)
+    # Child stdout inherits the Windows console encoding in CI; keep the
+    # cross-process protocol ASCII so persisted Chinese state is still readable.
+    print(json.dumps(tasks.read()), flush=True)
   elif mode == "restore":
     backup, target, boundary = map(Path, sys.argv[2:5])
     original = backup_restore.os.replace
