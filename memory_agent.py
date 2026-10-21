@@ -2,7 +2,7 @@
 import asyncio
 import ast
 from concurrent.futures import Future
-from contextlib import contextmanager
+from contextlib import contextmanager, asynccontextmanager
 from dataclasses import replace
 from decimal import Decimal
 import hashlib
@@ -25,10 +25,31 @@ def vault_path(root, character):
     return vault
 
 
+class MemoryToolError(RuntimeError):
+    """Safe diagnostic codes, never server text, credentials or memory contents."""
+    def __init__(self, code):
+        self.code = code
+        messages = {
+            'connection': '记忆连接不可用；安全读取重连后仍失败，请稍后再试。',
+            'tool': '记忆服务拒绝了本次工具调用；未自动重试。',
+            'unknown': '记忆操作结果未确认；未自动重试，请先核实结果，避免重复修改。',
+            'timeout': '记忆调用超时，结果未确认；请先核实结果。',
+            'closed': '记忆连接已关闭，本次未提交。',
+        }
+        super().__init__(messages[code])
+
+
 class MCP:
-    """One HTTP session, one async owner task; synchronous callers share its queue."""
+    """One async owner; each operation gets a fresh, bounded HTTP connection."""
+    # Search can invoke a metered embedding provider; do not replay it.
+    RETRYABLE_READS = frozenset({'pulse'})
+
     def __init__(self, url, token):
         self.url, self.token = url, token
+        self.diagnostic = None
+        self.closed = False
+        self.state_lock = threading.Lock()
+        self.current_result = None
         self.ready = Future()
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()
@@ -42,52 +63,121 @@ class MCP:
         try:
             asyncio.run(self._serve())
         except BaseException as exc:
+            with self.state_lock:
+                self.closed = True
+            self._diagnose('connection', exc, 0)
             if not self.ready.done():
                 self.ready.set_exception(RuntimeError('Ombre startup failed'))
             if hasattr(self, 'requests'):
+                if self.current_result is not None and not self.current_result.done():
+                    self.current_result.set_exception(MemoryToolError('unknown'))
                 while not self.requests.empty():
                     job = self.requests.get_nowait()
                     if job is not None and not job[2].done():
-                        job[2].set_exception(RuntimeError('Ombre stopped'))
+                        job[2].set_exception(MemoryToolError('closed'))
 
-    async def _serve(self):
+    @asynccontextmanager
+    async def _session(self):
         from mcp import ClientSession
         from mcp.client.streamable_http import streamablehttp_client
-        self.loop = asyncio.get_running_loop()
-        self.requests = asyncio.Queue()
         headers = {'Authorization': f'Bearer {self.token}'}
         async with streamablehttp_client(self.url, headers=headers) as (read, write, _):
             async with ClientSession(read, write) as session:
                 await session.initialize()
+                yield session
+
+    def _diagnose(self, name, exc, attempt):
+        kinds = []
+        def visit(error):
+            kinds.append(type(error).__name__)
+            for child in getattr(error, 'exceptions', ()):
+                visit(child)
+        visit(exc)
+        if self.diagnostic:
+            try:
+                self.diagnostic({'code': 'mcp_call', 'tool': name, 'attempt': attempt,
+                                 'error_types': sorted(set(kinds))[:8]})
+            except Exception:
+                pass  # Logging must not mask the tool's safe failure message.
+
+    async def _perform(self, name, args):
+        response = None
+        try:
+            async with self._session() as session:
+                response = await session.call_tool(name, args)
+        except Exception as exc:
+            if response is None:
+                raise
+            # A confirmed reply remains evidence even if closing HTTP fails.
+            self._diagnose(name, exc, 0)
+        if response.isError:
+            raise MemoryToolError('tool')
+        return '\n'.join(c.text for c in response.content if hasattr(c, 'text'))
+
+    async def _serve(self):
+        self.loop = asyncio.get_running_loop()
+        self.requests = asyncio.Queue()
+        async with asyncio.timeout(85):
+            async with self._session() as session:
                 self.tool_specs = (await session.list_tools()).tools
-                self.ready.set_result(True)
-                while True:
-                    job = await self.requests.get()
-                    if job is None:
-                        return
-                    name, args, result = job
-                    try:
-                        async with asyncio.timeout(85):
-                            response = await session.call_tool(name, args)
-                        if response.isError:
-                            raise RuntimeError('memory tool failed')
-                        result.set_result('\n'.join(c.text for c in response.content if hasattr(c, 'text')))
-                    except Exception:
-                        result.set_exception(RuntimeError('memory tool failed'))
+        self.ready.set_result(True)
+        while True:
+            job = await self.requests.get()
+            if job is None:
+                return
+            name, args, result = job
+            if not result.set_running_or_notify_cancel():
+                continue
+            self.current_result = result
+            try:
+                async with asyncio.timeout(85):
+                    attempts = 2 if name in self.RETRYABLE_READS else 1
+                    for attempt in range(1, attempts + 1):
+                        try:
+                            async with asyncio.timeout(40 if attempts == 2 else 85):
+                                text = await self._perform(name, args)
+                            break
+                        except MemoryToolError:
+                            raise
+                        except Exception as exc:
+                            self._diagnose(name, exc, attempt)
+                            if attempt == attempts:
+                                raise MemoryToolError('connection' if attempts == 2 else 'unknown') from exc
+                    result.set_result(text)
+            except TimeoutError as exc:
+                self._diagnose(name, exc, 0)
+                result.set_exception(MemoryToolError('timeout'))
+            except MemoryToolError as exc:
+                self._diagnose(name, exc, 0)
+                # Do not hand another thread a live coroutine traceback (or its
+                # private transport cause). Consumers may clear its frames.
+                result.set_exception(MemoryToolError(exc.code))
+            finally:
+                self.current_result = None
 
     def call(self, name, args):
-        if not self.thread.is_alive():
-            raise RuntimeError('Ombre stopped')
         result = Future()
-        self.loop.call_soon_threadsafe(self.requests.put_nowait, (name, args, result))
-        return result.result(timeout=90)
+        with self.state_lock:
+            if self.closed or not self.thread.is_alive():
+                raise MemoryToolError('closed')
+            try:
+                self.loop.call_soon_threadsafe(self.requests.put_nowait, (name, args, result))
+            except RuntimeError as exc:
+                raise MemoryToolError('closed') from exc
+        try:
+            return result.result(timeout=90)
+        except TimeoutError as exc:
+            raise MemoryToolError('closed' if result.cancel() else 'timeout') from exc
 
     def list_tools(self):
         return tuple(getattr(self, 'tool_specs', ()))
 
     def close(self):
+        with self.state_lock:
+            self.closed = True
+            if self.thread.is_alive() and hasattr(self, 'loop') and not self.loop.is_closed():
+                self.loop.call_soon_threadsafe(self.requests.put_nowait, None)
         if self.thread.is_alive():
-            self.loop.call_soon_threadsafe(self.requests.put_nowait, None)
             self.thread.join(timeout=95)
         if self.thread.is_alive():
             raise RuntimeError('Ombre did not stop')
@@ -275,6 +365,8 @@ class Memory:
         vault_path(store.root, cfg.id)
         self.path = f'{cfg.id}/memory/_agent/state.jsonl'
         self.diagnostics = f'{cfg.id}/memory/_agent/diagnostics.jsonl'
+        if isinstance(backend, MCP):
+            backend.diagnostic = lambda facts: self.store.append(self.diagnostics, facts)
         self.dropped_path = f'{cfg.id}/memory/_agent/dropped.jsonl'
         self.last_tool = None
         self.delete_asked = None  # number shown by /delete, waiting for its 确认

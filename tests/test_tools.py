@@ -485,7 +485,7 @@ max_result_bytes = 200
         self.assertEqual(Decimal(reserves[0]['amount']), Decimal('0.044768'))
         self.assertEqual(self.budget.totals()[2], 0)
 
-    def test_length_finish_refuses_partial_write_without_repeating_model_call(self):
+    def test_length_finish_refuses_partial_write_and_recovers_at_most_once(self):
         first = self.message([self.tool_call('write_file',
             '{"path":"journal.md","content":"partial"}', 'write')])
         model = Mock(return_value=(first, 100, 50, 0, 'length'))
@@ -496,8 +496,46 @@ max_result_bytes = 200
         chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=output.append)
         self.assertIn('输出上限', chat.send('create journal.md'))
         tools.invoke.assert_not_called()
-        model.assert_called_once()
+        self.assertEqual(model.call_count, 2)
         self.assertTrue(any('输出上限' in line for line in output))
+
+    def test_output_recovery_keeps_confirmed_write_and_discards_truncated_json(self):
+        self.cfg.tools['max_steps'] = 5
+        self.cfg.tools['max_output_tokens'] = 1024
+        first = self.message([self.tool_call('append_file', '{"path":"one","content":"kept"}', 'ok')])
+        partial = self.message([self.tool_call('append_file', '{"path":"two","content":"BROKEN', 'bad')])
+        recovered = self.message([self.tool_call('append_file', '{"path":"two","content":"small"}', 'new')])
+        snapshots = []
+        replies = iter([(first, 100, 20, 0), (partial, 120, 1024, 0, 'length'),
+                        (recovered, 140, 20, 0), (self.message(content='done'), 160, 20, 0)])
+        def model(messages, **kwargs):
+            snapshots.append(json.loads(json.dumps(messages)))
+            return next(replies)
+        tools = Mock()
+        tools.tools = [SimpleNamespace(name='append_file', description='Append', inputSchema={})]
+        tools.capability_event = None
+        tools.invoke.side_effect = [('kept', '成功', 'one'), ('small', '成功', 'two')]
+        chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=lambda _: None)
+        self.assertEqual(chat.send('continue'), 'done')
+        self.assertEqual(tools.invoke.call_count, 2)
+        serialized = json.dumps(snapshots[2])
+        self.assertNotIn('BROKEN', serialized)
+        self.assertIn('kept', serialized)
+        self.assertEqual(chat.tool_stop_reason, '')
+        self.assertEqual([r['state'] for r in self.store.read('test/tools.jsonl')], ['成功', '成功'])
+        self.assertEqual(self.budget.totals()[2], 0)
+
+    def test_output_recovery_respects_remaining_steps(self):
+        self.cfg.tools['max_steps'] = 1
+        partial = self.message([self.tool_call('write_file', '{', 'bad')])
+        model = Mock(return_value=(partial, 100, 50, 0, 'length'))
+        tools = Mock(tools=[SimpleNamespace(name='write_file', description='Write', inputSchema={})],
+                     capability_event=None)
+        chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=lambda _: None)
+        self.assertIn('本步工具未执行', chat.send('continue'))
+        model.assert_called_once()
+        tools.invoke.assert_not_called()
+        self.assertEqual(self.budget.totals()[2], 0)
 
     def test_length_finish_keeps_text_when_no_tool_was_called(self):
         model = Mock(return_value=(self.message(content='A partial answer.'), 100, 50, 0, 'length'))
@@ -643,6 +681,19 @@ max_result_bytes = 200
         chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=lambda _: None)
         self.assertIn('未执行工具', chat.send('write it'))
         tools.invoke.assert_not_called()
+
+    def test_measured_prompt_baseline_keeps_room_for_next_tool_record(self):
+        first = self.message([self.tool_call('write_file',
+            '{"path":"lab/new.md","content":"hello"}', 'write')], reasoning='x' * 8000)
+        model = Mock(side_effect=[(first, 200, 20, 0), (self.message(content='Saved.'), 2400, 20, 0)])
+        tools = Mock()
+        tools.tools = [SimpleNamespace(name='write_file', description='Write', inputSchema={})]
+        tools.capability_event = None
+        tools.invoke.return_value = ('saved', '成功', 'lab/new.md')
+        chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=lambda _: None)
+        self.assertEqual(chat.send('write it'), 'Saved.')
+        self.assertEqual(tools.invoke.call_count, 1)
+        self.assertEqual(model.call_count, 2)
 
     def test_real_result_over_limit_is_not_sent_to_model(self):
         self.cfg.tools['max_result_bytes'] = 6000

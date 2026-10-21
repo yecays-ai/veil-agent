@@ -290,6 +290,160 @@ daily_budget_cny = "2"
         row = self.store.read('test/autonomy.jsonl')[-1]
         self.assertEqual(row['result'], '被打断')
 
+    def progress_chat(self, followup):
+        from test_tools import ToolLoopTests
+        helper = ToolLoopTests()
+        cfg = replace(self.cfg, tools={'enabled': True, 'max_steps': 4, 'max_output_tokens': 50})
+        call = helper.tool_call('append_file', '{"path":"lab/progress.md","content":"fixture"}', 'a')
+        model = Mock(side_effect=[(helper.message([call]), 100, 20, 0), followup])
+        tools = Mock()
+        tools.tools = [SimpleNamespace(name='append_file', description='Append', inputSchema={})]
+        tools.capability_event = None
+        tools.invoke.return_value = ('saved', '成功', 'lab/progress.md')
+        self.activity.set(True)
+        chat = Chat(cfg, self.store, self.budget, model, tools=tools)
+        return AutonomyController(chat, self.hub), model, tools
+
+    def test_later_provider_failure_keeps_progress_and_next_wake_evidence(self):
+        controller, model, tools = self.progress_chat(RuntimeError('fixture transport failed'))
+        controller.run()
+        row = controller.rows[-1]
+        self.assertEqual(row['result'], '部分完成')
+        self.assertEqual(row['lab_files_changed'], ['lab/progress.md'])
+        self.assertEqual(row['tools'][0]['state'], '成功')
+        self.assertIn('核实', row['next_step'])
+        restarted = AutonomyController(controller.chat, self.hub)
+        self.assertIn('lab/progress.md', restarted._context())
+        self.assertEqual(restarted.status()['last_activity']['result'], '部分完成')
+        self.assertEqual(tools.invoke.call_count, 1)
+
+    def test_length_stop_keeps_saved_file_and_is_not_a_personal_decision(self):
+        from test_tools import ToolLoopTests
+        helper = ToolLoopTests()
+        denied = helper.message([helper.tool_call('append_file',
+            '{"path":"lab/next.md","content":"fixture"}', 'b')], reasoning='x' * 14000)
+        controller, model, tools = self.progress_chat((denied, 120, 20, 0))
+        controller.run()
+        row = controller.rows[-1]
+        self.assertEqual(row['result'], '部分完成')
+        self.assertIn('程序限制', row['decision'])
+        self.assertIn('长度上限', row['result_reason'])
+        self.assertEqual(row['lab_files_changed'], ['lab/progress.md'])
+        self.assertEqual(tools.invoke.call_count, 1)
+        self.assertIn('lab/progress.md', controller.command())
+
+    def test_legacy_false_success_is_corrected_for_display_without_rewriting_file(self):
+        self.controller.run()
+        row = self.controller.rows[-1]
+        row.update(result='完成', decision='工具调用记录超过长度上限，未执行工具。', tools=[
+            {'tool': 'append_file', 'path': 'lab/progress.md', 'state': '成功'},
+            {'tool': 'pulse', 'path': 'pulse', 'state': '出错'}],
+            lab_files_changed=['lab/progress.md', 'lab/progress.md'])
+        original = self.store.read('test/autonomy.jsonl')
+        shown = self.controller.status()['last_activity']
+        self.assertEqual(shown['result'], '部分完成')
+        self.assertNotIn('本次决定结束', self.controller.status()['last_result'])
+        self.assertEqual(shown['lab_files_changed'], ['lab/progress.md'])
+        self.assertEqual(self.store.read('test/autonomy.jsonl'), original)
+
+    def test_english_summary_keeps_focus_and_next_step(self):
+        self.model.return_value = ('Decided: wait\nReason: safe\nCurrently focused on: fixture\nNext: resume',
+                                   100, 20, 0)
+        self.controller.run()
+        self.assertEqual(self.controller.rows[-1]['current_focus'], 'fixture')
+        self.assertEqual(self.controller.rows[-1]['next_step'], 'resume')
+
+    def test_crash_recovery_restores_only_this_wakes_confirmed_tools_and_cost(self):
+        run_id = self.budget.clock()
+        with self.budget.autonomous('test'):
+            request_id, _ = self.budget.reserve(self.cfg)
+            self.budget.settle(request_id, self.cfg, 100, 20, 0)
+        self.store.append('test/tools.jsonl', {'request_id': request_id, 'autonomy_run_id': run_id,
+            'tool': 'append_file', 'path': 'lab/saved.md', 'state': '成功'})
+        self.store.append('test/tools.jsonl', {'request_id': 'other', 'autonomy_run_id': 'old-wake',
+            'tool': 'write_file', 'path': 'lab/unrelated.md', 'state': '成功'})
+        self.controller.active_path.parent.mkdir(parents=True, exist_ok=True)
+        self.controller.active_path.write_text(json.dumps({'started_at': run_id}), encoding='utf-8')
+        recovered = AutonomyController(self.chat, self.hub)
+        row = recovered.rows[-1]
+        self.assertEqual(row['result'], '部分完成')
+        self.assertEqual(row['lab_files_changed'], ['lab/saved.md'])
+        self.assertEqual(len(row['tools']), 1)
+        self.assertEqual(Decimal(row['cost_cny']), self.budget.category_totals('test')[0])
+        self.assertIn('lab/saved.md', recovered._context())
+        self.model.assert_not_called()
+
+    def test_failed_tools_only_are_not_reported_as_a_completed_activity(self):
+        final = SimpleNamespace(tool_calls=[], content='决定：结束\n原因：工具不可用')
+        controller, model, tools = self.progress_chat((final, 100, 20, 0))
+        tools.invoke.return_value = ('fixture service failed', '出错', 'lab/progress.md')
+        controller.run()
+        row = controller.rows[-1]
+        self.assertEqual(row['result'], '失败')
+        self.assertEqual(row['lab_files_changed'], [])
+        self.assertIn('append_file（出错）', row['result_reason'])
+
+    def test_full_lab_does_not_cut_previous_progress_or_final_format(self):
+        self.controller.run()
+        row = self.controller.rows[-1]
+        row.update(decision='决' * 300, reason='因' * 500, current_focus='关' * 300,
+                   next_step='步' * 300, result='部分完成', result_reason='错' * 400,
+                   tools=[{'tool': 'append_file', 'path': 'lab/已保存.md', 'state': '成功'}] * 3,
+                   lab_files_changed=['lab/已保存.md'])
+        self.controller._lab_context = Mock(return_value='LAB_TEXT' + 'x' * 5990)
+        text = self.controller._context()
+        self.assertNotIn('LAB_TEXT', text)
+        self.assertIn('lab/已保存.md', text)
+        self.assertIn('步' * 300, text)
+        self.assertIn('最后用四行简短说明', text)
+        self.assertLessEqual(len(text.encode('utf-8')), 12 * 1024)
+
+    def test_oversized_state_stops_without_sending_a_truncated_wake(self):
+        self.controller.run()
+        self.controller.rows[-1]['decision'] = '不可丢失的状态' * 3000
+        self.model.reset_mock()
+        with self.assertRaisesRegex(UserError, '活动记录仍保存在'):
+            self.controller._context()
+        self.model.assert_not_called()
+
+    def test_large_receipt_cannot_erase_confirmed_write_when_recovering(self):
+        from test_tools import ToolLoopTests
+        from veil_agent import RequestFailed
+        helper = ToolLoopTests()
+        cfg = replace(self.cfg, tools={'enabled': True, 'max_steps': 4, 'max_output_tokens': 50})
+        calls = [helper.tool_call('read_text_file', '{"path":"lab/source.md"}', 'read'),
+                 helper.tool_call('append_file', '{"path":"lab/progress.md","content":"confirmed"}', 'write')]
+        model = Mock(side_effect=[(helper.message(calls), 100, 20, 0), RuntimeError('fixture lost reply')])
+        target = self.root / 'confirmed-progress.md'
+        def invoke(name, args, approval):
+            if name == 'read_text_file':
+                return 'x' * 6000, '成功', 'lab/source.md'
+            with target.open('a', encoding='utf-8') as stream:
+                stream.write('confirmed\n')
+            return 'receipt' * 1800, '成功', 'lab/progress.md'
+        tools = Mock()
+        tools.tools = [SimpleNamespace(name=name, description=name, inputSchema={})
+                       for name in ('read_text_file', 'append_file')]
+        tools.capability_event = None
+        tools.invoke.side_effect = invoke
+        chat = Chat(cfg, self.store, self.budget, model, tools=tools, output=lambda _: None)
+        controller = AutonomyController(chat, self.hub)
+        run_id = self.budget.clock()
+        chat.autonomy_run_id = run_id
+        controller.active_path.parent.mkdir(parents=True, exist_ok=True)
+        controller.active_path.write_text(json.dumps({'started_at': run_id}), encoding='utf-8')
+        with self.assertRaises(RequestFailed):
+            chat.send('synthetic read and append', autonomy=True)
+        row = self.store.read('test/tools.jsonl')[-1]
+        self.assertEqual(row['state'], '成功')
+        self.assertEqual(row['result_state'], '结果过长')
+        recovered = AutonomyController(chat, self.hub)
+        self.assertEqual(recovered.rows[-1]['lab_files_changed'], ['lab/progress.md'])
+        self.assertEqual(recovered.rows[-1]['tools'][-1]['state'], '成功')
+        self.assertEqual(recovered.rows[-1]['tools'][-1]['result_state'], '结果过长')
+        self.assertEqual(target.read_text(encoding='utf-8'), 'confirmed\n')
+        self.assertEqual(tools.invoke.call_count, 2)
+
 
 if __name__ == '__main__':
     unittest.main()

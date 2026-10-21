@@ -588,6 +588,7 @@ class Chat:
         self.autonomy_message_lock = None
         self.autonomy_step_limited = False
         self.autonomy_budget_limited = False
+        self.tool_stop_reason = ''
         self.last_tool_summaries = []
         self.autonomy_interrupted = False
 
@@ -599,7 +600,17 @@ class Chat:
         existing_tools = permitted_tools(self.tools.tools if self.tools else [])
         messaging = [SEND_MESSAGE] if ((self.cfg.tools and self.cfg.tools.get('enabled', True))
                                         or (self.tools and self.tools.tools)) else []
-        return [*existing_tools, *task_tools, *messaging]
+        schemas = [*existing_tools, *task_tools, *messaging]
+        for schema in schemas:
+            function = schema['function']
+            if function['name'] in ('write_file', 'append_file', 'long_task_update', 'hold', 'trace', 'letter_write'):
+                function = dict(function)
+                function['description'] += (
+                    f' Output budget: {(self.cfg.tools or {}).get("max_output_tokens", self.cfg.max_output_tokens)} tokens. '
+                    'Keep new text under 1500 characters per call; persist one verified slice at a time. '
+                    'Do not reproduce whole files or inventories in arguments.')
+                schema['function'] = function
+        return schemas
 
     def send_message(self, arguments, request_id, tool_call_id=None):
         try:
@@ -672,6 +683,8 @@ class Chat:
         self.autonomy_interrupted = False
         self.autonomy_step_limited = False
         self.autonomy_budget_limited = False
+        self.tool_stop_reason = ''
+        self.last_tool_summaries = []
         self.long_tasks.begin_tool_run()
         if not self.pending_capability_event and self.tools:
             self.pending_capability_event = self.tools.capability_event
@@ -777,23 +790,42 @@ class Chat:
     def _tool_chat(self, messages, request_id, history_count, history_start=None, autonomy=False):
         from tools_agent import display_call
         summaries = []
+        self.last_tool_summaries = summaries
         loop_messages = list(messages)
         if history_start is None:
             history_start = len(messages) - history_count - 1
         final = ''
         next_reservation = None
         autonomy_tool_steps = 0
+        output_recovered = False
+
+
+        def log_tool(name, path, state, **metadata):
+            row = {'request_id': request_id, 'tool': name, 'path': path, 'state': state}
+            row.update(metadata)
+            if autonomy:
+                row['autonomy_run_id'] = self.autonomy_run_id
+            self.store.append(f'{self.cfg.id}/tools.jsonl', row)
 
         # Start at the same conservative floor used by Chat.send. After the first
         # response, provider-reported usage calibrates subsequent tool-loop estimates.
         calibration = 0.5
+        measured_tokens = None
+        measured_bytes = 0
 
         def request_bytes(offered):
             # Count each message once, including tool-call arguments and reasoning.
             return request_byte_size(loop_messages, offered)
 
         def request_size(offered):
-            return math.ceil(calibration * request_bytes(offered))
+            size = request_bytes(offered)
+            if measured_tokens is None:
+                return math.ceil(0.5 * size)
+            # Preserve the measured baseline; only new bytes need the initial
+            # conservative estimate. Removed history uses the measured ratio.
+            delta = size - measured_bytes
+            rate = 0.5 if delta >= 0 else min(0.5, calibration)
+            return math.ceil(max(0, measured_tokens + delta * rate) * 1.05)
 
         def fit_history(offered):
             nonlocal history_count
@@ -841,6 +873,8 @@ class Chat:
                     raise TooLong('工具说明和本轮上下文超过长度上限，未调用工具；请缩短输入后再试。')
                 if next_reservation:
                     self.budget.settle(next_reservation, step_cfg, 0, 0, 0)
+                self.tool_stop_reason = '本轮上下文达到长度上限，已停止后续步骤。'
+                final = self.tool_stop_reason
                 break
             reservation = request_id if step == 0 else next_reservation
             sent_bytes = request_bytes(offered)
@@ -855,14 +889,45 @@ class Chat:
                 raise RequestFailed('请求失败，未自动重试；输入已保存，本次保留预留费用。') from exc
             message, prompt, completion, cached, *finish = response
             if isinstance(prompt, int) and prompt > 0:
-                calibration = max(0.5, min(1.0, prompt / sent_bytes))
+                calibration = min(1.0, prompt / sent_bytes)
+                measured_tokens, measured_bytes = prompt, sent_bytes
             self.budget.settle(reservation, step_cfg, prompt, completion, cached)
             if autonomy and self.autonomy_should_yield and self.autonomy_should_yield():
                 self.autonomy_interrupted = True
                 final = '自主活动在模型请求结束后让位给聊天或控制操作。'
                 break
+            if finish and finish[0] == 'length':
+                self.tool_stop_reason = '模型回复达到输出上限，结果不完整。'
             if finish and finish[0] == 'length' and message.tool_calls:
-                final = '模型达到输出上限，工具未执行；请缩短要写入的内容后重试。'
+                final = '本步模型达到输出上限，本步工具未执行；此前已确认的操作保留。'
+                if not output_recovered and step + 1 < max_steps:
+                    try:
+                        next_cfg = (self.cfg if step + 1 == max_steps - 1 else replace(
+                            self.cfg, max_output_tokens=self.cfg.tools.get('max_output_tokens', self.cfg.max_output_tokens)))
+                        next_reservation = self.budget.reserve(next_cfg)[0]
+                    except BudgetExceeded:
+                        self.autonomy_budget_limited = autonomy
+                    else:
+                        output_recovered = True
+                        self.tool_stop_reason = ''
+                        final = ''
+                        # Never replay or submit the truncated assistant/tool-call JSON.
+                        # Earlier complete assistant/tool pairs remain in loop_messages.
+                        loop_messages.append({'role': 'system', 'content': (
+                            'Your last response hit the output token limit. NONE of the tool calls '
+                            'in that response ran, even if their arguments looked complete. Earlier '
+                            'confirmed tools remain executed: do not repeat them. This is your only '
+                            'recovery attempt. Choose one small next action; keep new written text '
+                            'under 1000 characters. Do not regenerate a whole file or inventory. '
+                            'If tools are unavailable, explain the confirmed progress and next step.'
+                        )})
+                        self.store.append(f'{self.cfg.id}/memory/_agent/diagnostics.jsonl', {
+                            'code': 'tool_output_recovery', 'attempt': 1,
+                            'prompt_tokens': prompt, 'completion_tokens': completion,
+                            'tool_count': len(message.tool_calls)})
+                        self.output('本步输出过长，工具尚未执行；正在缩小操作，最多恢复一次。')
+                        continue
+                self.tool_stop_reason = final
                 self.output(final)
                 break
             if not message.tool_calls:
@@ -872,6 +937,7 @@ class Chat:
                     # it to another parser. Only structured, allowlisted tool_calls
                     # reach the existing permission and budget checks above.
                     final = '模型返回了未执行的工具调用文本；程序没有执行任何工具，请查看 /cost 后重试。'
+                    self.tool_stop_reason = final
                 else:
                     final = content
                 if step == max_steps - 1 and summaries:
@@ -879,6 +945,7 @@ class Chat:
                 break
             if offered is None:
                 final = '这次工具步骤用完了。'
+                self.tool_stop_reason = final
                 self.output(final)
                 break
             # These calls finish in this response: no follow-up request or reservation.
@@ -899,8 +966,7 @@ class Chat:
                     result, state, summary = self.send_message(
                         call.function.arguments, request_id,
                         f'{step}:{getattr(call, "id", None) or call_index}')
-                    self.store.append(f'{self.cfg.id}/tools.jsonl', {'request_id': request_id,
-                        'tool': 'send_message', 'path': summary, 'state': state})
+                    log_tool('send_message', summary, state)
                     if state != '成功':
                         errors.append(result)
                 if not final:
@@ -922,8 +988,7 @@ class Chat:
                     except (ValueError, TypeError):
                         summary = call.function.name
                     self.output(display_call(call.function.name, summary, '被拒绝', '继续处理会超过费用上限'))
-                    self.store.append(f'{self.cfg.id}/tools.jsonl', {'request_id': request_id,
-                        'tool': call.function.name, 'path': summary, 'state': '被拒绝'})
+                    log_tool(call.function.name, summary, '被拒绝')
                 self.output('这次工具步骤用完了。继续整理会超过当前费用上限。')
                 final = '这次工具步骤用完了。'
                 break
@@ -953,10 +1018,10 @@ class Chat:
                         summary = summary if isinstance(summary, str) else call.function.name
                         self.output(display_call(call.function.name, summary, '被拒绝', '工具调用记录超过长度上限'))
                         summaries.append({'tool': call.function.name, 'path': summary, 'state': '被拒绝'})
-                        self.store.append(f'{self.cfg.id}/tools.jsonl', {'request_id': request_id,
-                            'tool': call.function.name, 'path': summary, 'state': '被拒绝'})
+                        log_tool(call.function.name, summary, '被拒绝')
                     self.budget.settle(next_reservation, next_cfg, 0, 0, 0)
                     final = '工具调用记录超过长度上限，未执行工具。'
+                    self.tool_stop_reason = final
                     break
                 for call_index, call in enumerate(message.tool_calls):
                     if autonomy and autonomy_tool_steps >= 12:
@@ -1001,22 +1066,25 @@ class Chat:
                     except (ValueError, TypeError):
                         result, state, summary = '程序拒绝：工具参数不是合法 JSON 对象。', '被拒绝', call.function.name
                     tool_message = {'role': 'tool', 'tool_call_id': call.id, 'content': result}
+                    result_state = state
                     loop_messages.append(tool_message)
                     history_bytes = calibration * sum(message_request_bytes(m)
                         for m in loop_messages[history_start:history_start + history_count])
                     if request_size(next_offered) - history_bytes > self.cfg.provider['max_input_tokens']:
                         tool_message['content'] = too_long_result
-                        state = '结果过长'
+                        result_state = '结果过长'
                     fit_history(next_offered)
                     if request_size(next_offered) > self.cfg.provider['max_input_tokens']:
                         tool_message['content'] = too_long_result
-                        state = '结果过长'
-                    if call.function.name != 'send_message' or state != '成功':
-                        self.output(display_call(call.function.name, summary, state,
-                                                 tool_message['content'] if state != '成功' else None))
-                    summaries.append({'tool': call.function.name, 'path': summary, 'state': state})
-                    self.store.append(f'{self.cfg.id}/tools.jsonl', {'request_id': request_id,
-                        'tool': call.function.name, 'path': summary, 'state': state})
+                        result_state = '结果过长'
+                    delivery = {'result_state': result_state} if result_state != state else {}
+                    if result_state == '结果过长' and state == '成功':
+                        tool_message['content'] = '工具已执行成功；' + too_long_result
+                    if call.function.name != 'send_message' or result_state != '成功':
+                        self.output(display_call(call.function.name, summary, result_state,
+                                                 tool_message['content'] if result_state != '成功' else None))
+                    summaries.append({'tool': call.function.name, 'path': summary, 'state': state, **delivery})
+                    log_tool(call.function.name, summary, state, **delivery)
                     if autonomy and self.autonomy_should_yield and self.autonomy_should_yield():
                         self.autonomy_interrupted = True
                         self.budget.settle(next_reservation, next_cfg, 0, 0, 0)
