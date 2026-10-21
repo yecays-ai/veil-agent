@@ -755,9 +755,10 @@ class Chat:
             self.pending_capability_event = self.tools.capability_event
             self.pending_capability_event_model = capability_model_notice(self.tools)
         recalled = self.memory.context(text) if self.memory else []
+        autonomy_handoff_id = None
         if not autonomy and extra_context is None:
-            from autonomy import recent_chat_context
-            extra_context = recent_chat_context(self.store, self.cfg)
+            from autonomy import recent_chat_handoff
+            autonomy_handoff_id, extra_context = recent_chat_handoff(self.store, self.cfg)
         stable, changing = self_facts(self.cfg, self.budget, memory_mode(self.memory), self.tools)
         description = stable + '\n' + changing
         # Order matters for the provider's prefix cache: everything that stays the same between requests
@@ -849,6 +850,9 @@ class Chat:
                 self.budget.settle(request_id, self.cfg, prompt, completion, cached)
         if not autonomy:
             self.history, self.rounds = self.recent()
+            if autonomy_handoff_id is not None:
+                from autonomy import acknowledge_chat_handoff
+                acknowledge_chat_handoff(self.store, self.cfg, autonomy_handoff_id)
         if self.memory:
             self.memory.completed()
         self.autonomy_mode = False

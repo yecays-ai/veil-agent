@@ -1,5 +1,7 @@
 # 交接
 
+- 2026-10-21 Claude：PR #77（042）与 PR #79（041）因小兔子限流由 Claude 审查，CI 全绿后合并；两单 Windows 体验待 Lan 验收。
+- 2026-10-21 11:48 UTC Codex：工单 042 基于最新 main `14cbe535039d80cc865f605420d2ec42dd58e48d`，分支 `ticket/042-autonomy-handoff-once`，PR #77 开放。保留 040 最新合并记录；本次 main 仅增加 040 的长期任务实现与文档，和 042 的代码文件无重叠。042 的代码测试曾在 Windows/Linux × Python 3.11/3.12 CI 全部通过；本地 Python 与 GitHub HTTPS 克隆不可用，未建立本地 Git worktree。CodeRabbit 三次手动审查触发均被免费额度限流，正式审查未完成，不合并。下一个窗口先查看 PR #77 当前 CI 与 CodeRabbit 评论；额度恢复后触发正式审查，处理必要功能/安全意见；满足门槛后合并。之后 Lan 用专用虚构测试角色验收 042；不要以 CI 替代聊天体验。
 - 工单 041 已基于最新 main `14cbe535039d80cc865f605420d2ec42dd58e48d`（含 PR #78/040）同步到独立分支 `ticket/041-web-exit-state`，PR #79。退出状态修复完成；本地隔离 6 项定向验证通过；原生产代码提交 `a9119bf` 以及同步提交 `af81952` 的 GitHub CI Windows/Linux × Python 3.11/3.12 四项全部通过。
 - CodeRabbit 正式审查因免费配额限制未执行；恢复后再触发。按仓库规则审查完成前不合并；下一步完成审查、必要修复和合并，然后请 Lan 按 STATUS 验收 041。040 的合并状态与验收继续按 STATUS 记录。
 
