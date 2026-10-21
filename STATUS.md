@@ -1,10 +1,10 @@
 # 当前状态
 
-更新：2026-10-22 00:06 CST · 工单 047 依赖可复现安装与安全检查代码和 CI 已完成，Windows 真人体验待 Lan 验收；049、045、046 经 Claude 审查后合入；044、043、041、042、040 已合入
+更新：2026-10-22 00:06 CST · 工单 050 依赖可复现安装与安全检查代码和 CI 已完成，Windows 真人体验待 Lan 验收；049、045、046 经 Claude 审查后合入；044、043、041、042、040 已合入
 
 ## 当前目标与现状
 
-- **047 依赖可复现安装与安全维护检查（031-10）：** 基于 main `c0f4553c0e6ad4c4855e23f6b458d0f0252e0700`，分支 `ticket/047-dependency-repro`，PR #86。主程序新增 exact-version requirements 锁；Windows 安装器与测试 CI 共用锁并限制 Python 3.11/3.12。Ombre 3.11 使用固定提交派生的精确锁（NumPy 2.4.6），3.12 使用仓库精确锁；固定 Ombre 源码归档由 SHA-256 校验。每周、手动及 PR 触发的 pip-audit 分别检查主程序、Ombre 3.11、Ombre 3.12 锁，并用虚构漏洞样本核验报告。首轮 CI 确认漏洞样本报告可行动，同时发现 3.11 上游 NumPy/SciPy 版本限制，并检出 Certifi 2026.10.18 的 PYSEC-2026-4320；现已将 Python 3.11 Ombre 锁固定为 NumPy 2.4.6、SciPy 1.17.1；两份应用锁的 Certifi 更新到 2026.10.19；两版 Ombre 锁的 mcp / PyJWT 固定为 1.30.0 / 2.15.1。GitHub Actions Tests run 39631176073 与 39631189237 在 Windows/Linux × Python 3.11/3.12 完成干净依赖安装、Ombre 安装、关键启动检查和完整 unittest，全部通过。Dependency security run 39631189197 的主程序、两版 Ombre 锁审计和虚构漏洞报告 smoke 全部通过。当前本机完整 unittest 未取得结束摘要；Windows 真人体验仍待 Lan 验收。安全扫描只报告，不自动升级依赖。GitHub PR #84 也使用 047 编号处理桌面壳；本分支目标独立，但共享 README、STATUS、HANDOFF，合并前需同步。
+- **050 依赖可复现安装与安全维护检查（031-10）：** 基于 main `c0f4553c0e6ad4c4855e23f6b458d0f0252e0700`，分支 `ticket/047-dependency-repro`，PR #86。主程序新增 exact-version requirements 锁；Windows 安装器与测试 CI 共用锁并限制 Python 3.11/3.12。Ombre 3.11 使用固定提交派生的精确锁（NumPy 2.4.6），3.12 使用仓库精确锁；固定 Ombre 源码归档由 SHA-256 校验。每周、手动及 PR 触发的 pip-audit 分别检查主程序、Ombre 3.11、Ombre 3.12 锁，并用虚构漏洞样本核验报告。首轮 CI 确认漏洞样本报告可行动，同时发现 3.11 上游 NumPy/SciPy 版本限制，并检出 Certifi 2026.10.18 的 PYSEC-2026-4320；现已将 Python 3.11 Ombre 锁固定为 NumPy 2.4.6、SciPy 1.17.1；两份应用锁的 Certifi 更新到 2026.10.19；两版 Ombre 锁的 mcp / PyJWT 固定为 1.30.0 / 2.15.1。GitHub Actions Tests run 39631176073 与 39631189237 在 Windows/Linux × Python 3.11/3.12 完成干净依赖安装、Ombre 安装、关键启动检查和完整 unittest，全部通过。Dependency security run 39631189197 的主程序、两版 Ombre 锁审计和虚构漏洞报告 smoke 全部通过。当前本机完整 unittest 未取得结束摘要；Windows 真人体验仍待 Lan 验收。安全扫描只报告，不自动升级依赖。原与 PR #84 撞号的 047 已改为 050（分支名保留 `ticket/047-dependency-repro`）。
 
 - **049 记忆可见性误判（Claude 修复）：** 记忆文件里 `relation_links` 下的缩进 `type: same_event` 被当成顶层 `type`，重复键导致“可见性无法确认”，有关联的记忆每轮都被拦下并提示。现在只读顶层键。Windows 验收：pull 后聊几句，那条英文提示不应每轮出现，Peter 能想起有关联的记忆。
 
@@ -23,11 +23,11 @@
 
 ## 下一步
 
-PR #86 代码与 CI 已完成，交由 Lan 自行安排 Claude 审查与合并；合并后按本页 047 步骤进行真实 Windows 体验验收。
+PR #86 代码与 CI 已完成，交由 Lan 自行安排 Claude 审查与合并；合并后按本页 050 步骤进行真实 Windows 体验验收。
 
 ## Windows 验收
 
-- **047：** 在新建的虚构测试目录按 README 安装并重复运行 setup，确认版本一致、关键模块可导入和启动帮助检查正常；不填真实密钥、不启动真实聊天。手动运行 GitHub Actions 的 Dependency security，检查主程序与 Ombre 3.11/3.12 三份报告及虚构漏洞样本中的包、版本、风险编号和修复版本；真实 Windows 使用验收待 Lan 完成。
+- **050：** 在新建的虚构测试目录按 README 安装并重复运行 setup，确认版本一致、关键模块可导入和启动帮助检查正常；不填真实密钥、不启动真实聊天。手动运行 GitHub Actions 的 Dependency security，检查主程序与 Ombre 3.11/3.12 三份报告及虚构漏洞样本中的包、版本、风险编号和修复版本；真实 Windows 使用验收待 Lan 完成。
 
 - **045：** 用虚构角色和假模型确认预算充足时保存/检索有账本 reserve/settle；预算不足时后端调用次数不增加；请求失败和重启后预留仅结算一次、无 pending。上游异步计划判断及 HTTP 绕行路径仍未通过体验验收，不标记为已受硬控。
 
