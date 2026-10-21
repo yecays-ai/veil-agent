@@ -115,7 +115,7 @@ class LongTaskTests(unittest.TestCase):
         self.assertEqual(self.tasks.before_tool(
             'append_file', 'lab/notes.txt', autonomy=True, args={'content': chunk}), (None, True))
         target.write_text(target.read_text(encoding='utf-8') + chunk, encoding='utf-8')
-        self.tasks.finish_tool('append_file', 'lab/notes.txt', '出错')
+        self.tasks.finish_tool('append_file', 'lab/notes.txt', '成功')
         reopened = LongTaskStore(self.store, 'peter')
         reopened.set_tool_step(1)
         reopened.observe_tool_result('read_text_file', 'lab/notes.txt', '成功',
@@ -123,6 +123,21 @@ class LongTaskTests(unittest.TestCase):
         self.assertEqual(reopened.read()['pending_action']['verified_in_step'], 1)
         reopened.observe_tool_result('read_text_file', 'lab/notes.txt', '成功', 'Existing\n')
         self.assertEqual(reopened.read()['pending_action']['verified_in_step'], 1)
+
+    def test_ambiguous_append_with_preexisting_matching_suffix_stays_pending(self):
+        self.create()
+        lab = Path(self.temp.name) / 'lab'
+        lab.mkdir()
+        target = lab / 'notes.txt'
+        chunk = 'Already present\n'
+        target.write_text(chunk, encoding='utf-8')
+        self.assertEqual(self.tasks.before_tool(
+            'append_file', 'lab/notes.txt', autonomy=True, args={'content': chunk}), (None, True))
+        self.tasks.finish_tool('append_file', 'lab/notes.txt', '出错')
+        self.tasks.set_tool_step(1)
+        self.tasks.observe_tool_result('read_text_file', 'lab/notes.txt', '成功',
+                                       target.read_text(encoding='utf-8'))
+        self.assertIsNone(self.tasks.read()['pending_action']['verified_in_step'])
 
     def test_pending_effect_prevents_completion_and_paused_tasks_stop_side_effects(self):
         task_id = self.create()
