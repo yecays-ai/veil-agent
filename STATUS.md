@@ -1,10 +1,10 @@
 # 当前状态
 
-更新：2026-10-21 15:42 UTC · 工单 047 依赖可复现安装与安全检查施工中；049、045、046 经 Claude 审查后合入；044、043、041、042、040 已合入
+更新：2026-10-22 00:06 CST · 工单 047 依赖可复现安装与安全检查代码和 CI 已完成，Windows 真人体验待 Lan 验收；049、045、046 经 Claude 审查后合入；044、043、041、042、040 已合入
 
 ## 当前目标与现状
 
-- **047 依赖可复现安装与安全维护检查（031-10）：** 基于 main `c0f4553c0e6ad4c4855e23f6b458d0f0252e0700`，分支 `ticket/047-dependency-repro`，PR #86。主程序新增 exact-version requirements 锁；Windows 安装器与测试 CI 共用锁并限制 Python 3.11/3.12。Ombre 3.11 使用固定提交派生的精确锁（NumPy 2.4.6），3.12 使用仓库精确锁，源码归档仍由 SHA-256 校验 SHA-256 覆盖的上游锁。每周、手动及 PR 触发的 pip-audit 分别检查主程序、Ombre 3.11、Ombre 3.12 锁，并用虚构漏洞样本核验报告。首轮 CI 确认漏洞样本报告可行动，同时发现 3.11 上游 NumPy/SciPy 版本限制，并检出 Certifi 2026.10.18 的 PYSEC-2026-4320；现已将 Python 3.11 Ombre 锁固定为 NumPy 2.4.6、SciPy 1.17.1，将两份应用锁的 Certifi 更新到 2026.10.19，并让三项审计都输出报告后统一判定失败。新一轮安全扫描确认 Ombre 两个 Python 锁均含受影响 mcp 1.29.0、PyJWT 2.13.0；现已固定为 mcp 1.30.0、PyJWT 2.15.1，3.12 扫描已通过，最新 head 的四平台安装、完整测试和安全扫描待复核。Windows Python 3.12 本机导入、锁文件 dry-run、pip check 和本单回归 4/4 通过；本机完整 unittest 未取得完成结果，干净环境待 CI。安全扫描只报告，不自动升级依赖。GitHub PR #84 也使用 047 编号处理桌面壳；本分支目标独立，但共享 README、STATUS、HANDOFF，合并前需同步。
+- **047 依赖可复现安装与安全维护检查（031-10）：** 基于 main `c0f4553c0e6ad4c4855e23f6b458d0f0252e0700`，分支 `ticket/047-dependency-repro`，PR #86。主程序新增 exact-version requirements 锁；Windows 安装器与测试 CI 共用锁并限制 Python 3.11/3.12。Ombre 3.11 使用固定提交派生的精确锁（NumPy 2.4.6），3.12 使用仓库精确锁；固定 Ombre 源码归档由 SHA-256 校验。每周、手动及 PR 触发的 pip-audit 分别检查主程序、Ombre 3.11、Ombre 3.12 锁，并用虚构漏洞样本核验报告。首轮 CI 确认漏洞样本报告可行动，同时发现 3.11 上游 NumPy/SciPy 版本限制，并检出 Certifi 2026.10.18 的 PYSEC-2026-4320；现已将 Python 3.11 Ombre 锁固定为 NumPy 2.4.6、SciPy 1.17.1；两份应用锁的 Certifi 更新到 2026.10.19；两版 Ombre 锁的 mcp / PyJWT 固定为 1.30.0 / 2.15.1。GitHub Actions Tests run 39631176073 与 39631189237 在 Windows/Linux × Python 3.11/3.12 完成干净依赖安装、Ombre 安装、关键启动检查和完整 unittest，全部通过。Dependency security run 39631189197 的主程序、两版 Ombre 锁审计和虚构漏洞报告 smoke 全部通过。当前本机完整 unittest 未取得结束摘要；Windows 真人体验仍待 Lan 验收。安全扫描只报告，不自动升级依赖。GitHub PR #84 也使用 047 编号处理桌面壳；本分支目标独立，但共享 README、STATUS、HANDOFF，合并前需同步。
 
 - **049 记忆可见性误判（Claude 修复）：** 记忆文件里 `relation_links` 下的缩进 `type: same_event` 被当成顶层 `type`，重复键导致“可见性无法确认”，有关联的记忆每轮都被拦下并提示。现在只读顶层键。Windows 验收：pull 后聊几句，那条英文提示不应每轮出现，Peter 能想起有关联的记忆。
 
@@ -23,7 +23,7 @@
 
 ## 下一步
 
-等待 PR #86 最新 head 的 Windows/Linux × Python 3.11/3.12 锁安装、完整 unittest、关键启动检查、三份依赖安全扫描及虚构漏洞样本报告检查完成；有功能或安全问题时修复后复核。CI 完成后交由 Lan 自行安排审查与合并，再按本页 047 步骤体验验收。
+PR #86 代码与 CI 已完成，交由 Lan 自行安排 Claude 审查与合并；合并后按本页 047 步骤进行真实 Windows 体验验收。
 
 ## Windows 验收
 
