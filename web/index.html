@@ -94,7 +94,7 @@ const speechButton=$('speech-toggle'), speechLanguage=$('speech-language'), spee
 const SpeechRecognition=window.SpeechRecognition||window.webkitSpeechRecognition;
 const speechDraftKey='veil-speech-draft';
 let speechRecognition=null, speechSession=null, speechState='idle', speechStopRequested=false, speechErrorMessage='', speechDraftActive=false;
-let after=0, busy=true, stopped=false, typing=null, sending=false, draftId=null, draftText=null;
+let after=0, busy=true, stopping=false, stopped=false, typing=null, sending=false, draftId=null, draftText=null;
 let revealQueue=[], revealTimer=null, roundStartedAt=0, roundHasReply=false, previousMessage=null;
 let pendingApproval=null, activityEnabled=false, exiting=false;
 const GROUP_GAP=15*60*1000;
@@ -117,7 +117,7 @@ function setSpeechStatus(state,message){
   speechButton.title=active?'停止语音识别':'开始语音识别';
   speechLanguage.disabled=active||!SpeechRecognition;
   box.disabled=active;
-  sendBtn.disabled=busy||revealQueue.length>0||sending||stopped||active;
+  sendBtn.disabled=busy||revealQueue.length>0||sending||stopping||stopped||active;
 }
 try{
   const savedSpeechDraft=sessionStorage.getItem(speechDraftKey);
@@ -257,7 +257,7 @@ function add(kind,text,id,time){
   if(typing)col.insertBefore(d,typing);else col.appendChild(d);
 }
 function setBusy(b){
-  busy=b;const waiting=b||revealQueue.length>0;sendBtn.disabled=waiting||sending||stopped||speechIsActive();
+  busy=b;const waiting=b||revealQueue.length>0;sendBtn.disabled=waiting||sending||stopping||stopped||speechIsActive();
   if(waiting&&!typing&&!stopped){typing=document.createElement('div');typing.id='typing';typing.textContent=($('title').textContent||'')+' 正在回复…';col.appendChild(typing)}
   if((!waiting||stopped)&&typing){typing.remove();typing=null}
 }
@@ -314,16 +314,18 @@ async function poll(){
     const r=await api('/api/events?after='+after);
     if(!r.ok)throw new Error(r.status);
     const s=await r.json();
-    $('offline').style.display='none';$('ended').style.display=s.stopped?'block':'none';
-    $('service-status').textContent='服务运行状态：'+(s.stopped?'已退出':'运行中');
+    $('offline').style.display='none';
+    stopping=s.stopping===true&&!s.stopped;stopped=s.stopped===true;
+    $('ended').style.display=stopped?'block':'none';
+    $('service-status').textContent='服务运行状态：'+(stopped?'已停止':stopping?'退出请求已收到，正在保存并关闭':'运行中');
     activityEnabled=s.activity_enabled===true;
     const next=s.next_wake_at?new Date(s.next_wake_at).toLocaleString():'今日次数已用完或尚未排期';
     const last=s.last_result?'；上次：'+s.last_result:'';
     $('activity-status').textContent='自主活动状态：'+(!activityEnabled?'已暂停':(s.autonomy_busy?'正在活动':'已开启'))+'；下次唤醒：'+next+last;
     renderActivity(s.last_activity);
     $('activity-toggle').textContent=activityEnabled?'暂停自主活动':'开启自主活动';
-    $('activity-toggle').disabled=s.stopped||exiting;
-    $('exit-service').disabled=s.stopped||exiting;
+    $('activity-toggle').disabled=stopping||stopped||exiting;
+    $('exit-service').disabled=stopping||stopped||exiting;
     document.title=s.name;$('title').textContent=s.name;
     const memoryPanel=$('memory-panel');
     memoryPanel.hidden=!s.memory_panel_url;
@@ -339,7 +341,7 @@ async function poll(){
         if(status&&!status.textContent)status.textContent='审批已结束，请看后续聊天提示。';
       }
     });
-    stopped=s.stopped;setBusy(s.busy);
+    setBusy(s.busy);
     if(s.events.length&&stick)log.scrollTop=log.scrollHeight;
   }catch(e){$('offline').style.display='block';$('service-status').textContent='服务运行状态：连接中断';$('activity-toggle').disabled=true;$('exit-service').disabled=true}
   setTimeout(poll,600);
@@ -347,7 +349,7 @@ async function poll(){
 async function send(text){
   const fromBox=!text;
   text=(text||box.value).trim();
-  if(!text||busy||revealQueue.length||stopped||sending||speechIsActive())return;
+  if(!text||busy||revealQueue.length||stopping||stopped||sending||speechIsActive())return;
   if(fromBox&&draftText!==text){draftText=text;draftId=crypto.randomUUID()}
   const requestId=fromBox?draftId:crypto.randomUUID();
   sending=true;setBusy(true);
@@ -373,7 +375,7 @@ async function send(text){
   finally{sending=false;log.scrollTop=log.scrollHeight}
 }
 $('new-chat').onclick=()=>{
-  if(busy||sending||stopped||revealQueue.length||speechIsActive())return;
+  if(busy||sending||stopping||stopped||revealQueue.length||speechIsActive())return;
   if(confirm('开始新对话？旧聊天仍保存在本机，记忆和实验室文件不会清除。'))send('/new');
 };
 sendBtn.onclick=()=>send();
@@ -391,7 +393,7 @@ $('activity-toggle').onclick=async()=>{
     $('activity-status').textContent='自主活动状态：'+(activityEnabled?'已开启':'已暂停');
     $('activity-toggle').textContent=activityEnabled?'暂停自主活动':'开启自主活动';
   }catch(e){add('error','自主活动状态保存失败，请检查连接后重试。')}
-  finally{$('activity-toggle').disabled=stopped||exiting}
+  finally{$('activity-toggle').disabled=stopping||stopped||exiting}
 };
 $('exit-service').onclick=async()=>{
   if(exiting||stopped||!confirm('确定退出 Peter 网页服务吗？'))return;
@@ -399,9 +401,23 @@ $('exit-service').onclick=async()=>{
   $('service-status').textContent='服务运行状态：正在退出…';
   try{
     const r=await api('/api/exit',{});
-    if(!r.ok)throw new Error(r.status);
-    $('ended').style.display='block';$('service-status').textContent='服务运行状态：正在关闭';
-  }catch(e){exiting=false;$('service-status').textContent='服务运行状态：运行中';add('error','退出请求未确认，服务仍在运行；可以再次点击退出。')}
+    let result={};try{result=await r.json()}catch(e){}
+    if(!r.ok||!result.ok)throw new Error(r.status);
+    if(result.state==='stopped'){
+      stopping=false;stopped=true;
+      $('ended').style.display='block';$('service-status').textContent='服务运行状态：已停止';
+      sendBtn.disabled=true;$('activity-toggle').disabled=true;$('exit-service').disabled=true;
+    }else if(result.state==='accepted'||result.state==='stopping'){
+      exiting=false;stopping=true;
+      $('ended').style.display='none';
+      $('service-status').textContent='服务运行状态：退出请求已收到，正在保存并关闭';
+      sendBtn.disabled=true;$('activity-toggle').disabled=true;$('exit-service').disabled=true;
+    }else throw new Error('invalid exit response');
+  }catch(e){
+    exiting=false;
+    $('service-status').textContent='服务运行状态：退出结果未确认，正在核对';
+    add('error','没有收到退出确认；页面会继续核对服务状态，请不要重复启动。');
+  }
 };
 function theme(t){
   if(t)document.documentElement.setAttribute('data-theme',t);else document.documentElement.removeAttribute('data-theme');
