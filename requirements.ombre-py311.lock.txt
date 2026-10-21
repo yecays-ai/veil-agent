@@ -19,7 +19,7 @@ jiter==0.16.0
 joblib==1.5.3
 jsonschema==4.26.0
 jsonschema-specifications==2025.9.1
-mcp==1.29.0
+mcp==1.30.0
 narwhals==2.24.0
 numpy==2.4.6
 openai==2.52.0
@@ -27,7 +27,7 @@ pycparser==3.0 ; implementation_name != 'PyPy' and platform_python_implementatio
 pydantic==2.13.4
 pydantic-core==2.46.4
 pydantic-settings==2.14.2
-pyjwt==2.13.0
+pyjwt==2.15.1
 python-dotenv==1.2.2
 python-frontmatter==1.3.0
 python-multipart==0.0.32

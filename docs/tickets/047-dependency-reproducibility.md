@@ -6,7 +6,7 @@
 
 ## 当前状态
 
-main 的 `requirements.txt` 固定了三项直接依赖，但传递依赖可变；`setup_memory.py` 原来在 Python 3.11 使用范围版本、3.12 才用 Ombre 上游锁文件。安装、测试和安全扫描没有共同使用主依赖锁。复用 pip 兼容 requirements 锁定格式，保持现有 `.bat` 与 pip 安装路径；复用 Ombre 固定提交的 MIT 源码和精确依赖锁，为 Python 3.11 固定兼容的 NumPy 2.4.6 与 SciPy 1.17.1；安全扫描发现风险后，将 Certifi 固定到 2026.10.19，并将 Python 3.12 Ombre 的 mcp 与 PyJWT 固定到扫描器给出的修复版本；复用 MIT 的 [pip-audit](https://github.com/pypa/pip-audit) 及其官方 GitHub Action 检查依赖，不复制包管理器或漏洞库。锁文件和漏洞报告仅包含公开依赖名/版本，不上传 `.env`、聊天或记忆。
+main 的 `requirements.txt` 固定了三项直接依赖，但传递依赖可变；`setup_memory.py` 原来在 Python 3.11 使用范围版本、3.12 才用 Ombre 上游锁文件。安装、测试和安全扫描没有共同使用主依赖锁。复用 pip 兼容 requirements 锁定格式，保持现有 `.bat` 与 pip 安装路径；复用 Ombre 固定提交的 MIT 源码和精确依赖锁，为 Python 3.11 固定兼容的 NumPy 2.4.6 与 SciPy 1.17.1；安全扫描发现风险后，将 Certifi 固定到 2026.10.19，并将 Python 3.11/3.12 Ombre 的 mcp 与 PyJWT 固定到扫描器给出的修复版本；复用 MIT 的 [pip-audit](https://github.com/pypa/pip-audit) 及其官方 GitHub Action 检查依赖，不复制包管理器或漏洞库。锁文件和漏洞报告仅包含公开依赖名/版本，不上传 `.env`、聊天或记忆。
 
 ## 验收步骤
 

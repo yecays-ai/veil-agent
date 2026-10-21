@@ -42,6 +42,8 @@ class DependencyLockTests(unittest.TestCase):
         self.assertIn("ARCHIVE_SHA256", installer)
         py311_lock = (ROOT / "requirements.ombre-py311.lock.txt").read_text(encoding="utf-8")
         self.assertIn("numpy==2.4.6", py311_lock)
+        self.assertIn("mcp==1.30.0", py311_lock)
+        self.assertIn("pyjwt==2.15.1", py311_lock)
         py312_lock = (ROOT / "requirements.ombre-py312.lock.txt").read_text(encoding="utf-8")
         self.assertIn("mcp==1.30.0", py312_lock)
         self.assertIn("pyjwt==2.15.1", py312_lock)
