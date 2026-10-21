@@ -12,7 +12,7 @@ Peter 的记忆保存、检索和后台整理，在共享日/月预算不足时�
 
 | 付费路径 | 当前约束 | 本单结论 |
 |---|---|---|
-| `Memory.call`: `hold`、`breath_search`、`feel`、`dream`、`pulse`、`anchor`、`release`、`letter_read`、`letter_write`、正文/语义 `trace`、有内容的 `plan` | 调用前向共享账本预留 embedding 估算，按 12 × 最大估算输入；只有 `hold` 且 `ombre_model=true` 时预留模型估算 | 已修正 hold 模型预留：固定 Ombre 的 `analyze` 输出上限为 4096、同事件判断为 1024，瞬时失败最多 3 次尝试；费用仍为聚合估算，不是逐次实际用量或硬闸门。部分 Ombre 路径在 VEIL 可见入口里未证明一定发出请求，保守预留只用于避免已识别 embedding 路径漏账 |
+| `Memory.call`: `hold`、`breath_search`、`feel`、`dream`、`pulse`、`anchor`、`release`、`letter_read`、`letter_write`、正文/语义 `trace`、有内容的 `plan` | 调用前向共享账本预留 embedding 估算，按 12 × 最大估算输入；只有 `hold` 且 `ombre_model=true` 时预留模型估算 | 已修正 hold 模型预留：固定 Ombre 的 `analyze` 输出上限为 4096、同事件判断为 1024，最多 3 次尝试；成功后按原单次正常估算（`OMBRE_OUTPUT_TOKENS=800`）结算并释放差额，失败按预留上限结算。embedding 同样按 12×正常估算预留、成功按正常估算结算，失败按上限结算。费用仍为聚合估算，不是逐次实际用量或上游逐请求硬闸门。部分 Ombre 路径在 VEIL 可见入口里未证明一定发出请求，保守预留只用于避免已识别 embedding 路径漏账 |
 | Ombre `hold` 后的后台计划完成判断 | 子进程 `asyncio.create_task(check_plan_resolution)`；向量检索后可能对最多 20 个候选调用模型 | 未进入 VEIL 共享账本预留；无法通过 `Memory.call` 成功返回后的预留证明这些延迟调用仍受限 |
 | Ombre 后台重复候选检测 | `hold` 新建后 fire-and-forget，使用向量服务 | 单次 `hold` 的 embedding 估算尝试覆盖范围有限；逐请求未独立进入共享账本 |
 | Ombre embedding 持久 outbox 重试 | 上游可无限退避重试；VEIL 生成的 Ombre 配置明确 `background_indexing=false` | 当前正常配置下不启用；若 Ombre 配置被外部更改或未来版本路径改变，不能宣称受控 |
@@ -21,7 +21,7 @@ Peter 的记忆保存、检索和后台整理，在共享日/月预算不足时�
 | `memory_catalog`、`memory_read`、`memory_history` 及 `/memory` 元数据读取 | 本地文件/账本读取 | 不触发付费请求 |
 | Ombre 本机 Dashboard / 其他上游 HTTP 维护入口 | `ombre_entry.py` 只封锁配置、更新、隧道和本地模型安装等路由；其余上游入口仍由 Ombre 自行处理 | 未证明所有可产生向量/模型调用的 HTTP 路由都经过共享账本；保持未受硬控状态 |
 
-已实现的账本修正：Ombre 预留在调用失败后以估算上限结算；后续预检拒绝时只释放确定未发送的预留；成功/失败结算幂等；重启时将未结算 Ombre 估算转成同额保守支出，不误释放，也不永久挂在 pending。Extract 后台模型失败同样结算预留上限。**这些修改改善 VEIL 可见的账本生命周期，但未给 Ombre 子进程的每个上游请求加共享预算硬闸门。**
+账本结算规则：预留额仅用于执行前占用共享预算。调用确认成功后，embedding 与 Ombre `hold` 模型分别按一次正常估算（模型输出按 `OMBRE_OUTPUT_TOKENS=800`）结算，差额释放；调用失败、结果不明或重启恢复未结算预留时，按完整预留上限结算，避免不确定情况下释放预算。后续预检拒绝只释放确定尚未发送的请求预留；结算幂等。Extract 后台模型失败或重启遗留预留仍按预留上限结算。**这些修改改善 VEIL 可见的账本生命周期，但未给 Ombre 子进程的每个上游请求加共享预算硬闸门。**
 
 ## 验收步骤
 
