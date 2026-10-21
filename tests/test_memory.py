@@ -365,11 +365,19 @@ class MemoryTests(unittest.TestCase):
         self.assertEqual(self.backend.calls[-1][0], 'breath')
 
     def test_ombre_model_calls_are_estimated_into_the_shared_ledger(self):
-        self.memory.call('hold', {'content': '下周有安排。' * 40})
+        from memory_agent import ombre_model_tokens
+        content = '下周有安排。' * 40
+        normal_in, normal_out = ombre_model_tokens(content)
+        expected = (Decimal(normal_in) * Decimal('2')
+                    + Decimal(normal_out) * Decimal('8')) / 1_000_000
+        self.memory.call('hold', {'content': content})
         costs = self.store.read('costs.jsonl')
         modelled = [c for c in costs if c.get('accounting') == 'ombre-model-estimate']
         self.assertEqual(len(modelled), 2)  # reserve + settle
-        self.assertGreater(Decimal(modelled[0]['amount']), 0)
+        self.assertGreater(Decimal(modelled[0]['amount']), Decimal(modelled[1]['amount']))
+        self.assertEqual(Decimal(modelled[1]['amount']), expected)
+        self.assertGreater(Decimal(modelled[1]['amount']), 0)
+        self.assertGreater(Decimal(modelled[0]['amount'])-Decimal(modelled[1]['amount']), 0)
         self.assertEqual(self.budget.totals()[2], 0)
 
     def test_ombre_model_can_be_switched_off(self):
@@ -622,27 +630,37 @@ class MemoryTests(unittest.TestCase):
 
     def test_ombre_model_estimate_covers_pinned_output_caps_and_retries(self):
         from memory_agent import ombre_model_tokens
-        tokens_in, tokens_out = ombre_model_tokens('fictional memory')
+        tokens_in, tokens_out = ombre_model_tokens('fictional memory', worst_case=True)
+        normal_in, normal_out = ombre_model_tokens('fictional memory')
         self.assertGreaterEqual(tokens_in, 3 * ((3200 + 16 + 1000 + 16 + 5400) // 2))
         self.assertEqual(tokens_out, 3 * (4096 + 1024))
+        self.assertEqual(normal_in, (3200 + 16 + 1000 + 16 + 5400) // 2)
+        self.assertEqual(normal_out, 800)
 
     def test_three_fake_child_retries_are_inside_the_shared_reservation(self):
         from memory_agent import ombre_model_tokens
-        tokens_in, tokens_out = ombre_model_tokens('fictional memory')
-        expected = (Decimal(tokens_in) * Decimal('2') + Decimal(tokens_out) * Decimal('8')) / 1_000_000
+        tokens_in, tokens_out = ombre_model_tokens('fictional memory', worst_case=True)
+        normal_in, normal_out = ombre_model_tokens('fictional memory')
+        maximum = (Decimal(tokens_in) * Decimal('2') + Decimal(tokens_out) * Decimal('8')) / 1_000_000
+        normal = (Decimal(normal_in) * Decimal('2') + Decimal(normal_out) * Decimal('8')) / 1_000_000
         attempts = []
 
         def fake_child_call(name, args):
-            model_reserve = next(row for row in self.store.read('costs.jsonl')
-                                 if row.get('type') == 'reserve'
-                                 and row.get('accounting') == 'ombre-model-estimate')
-            self.assertGreaterEqual(Decimal(model_reserve['amount']), expected)
+            reserve = next(row for row in self.store.read('costs.jsonl')
+                           if row.get('type') == 'reserve'
+                           and row.get('accounting') == 'ombre-model-estimate')
+            self.assertGreaterEqual(Decimal(reserve['amount']), maximum)
             attempts.extend([1, 2, 3])
             return 'fictional success after retries'
 
         self.backend.call = Mock(side_effect=fake_child_call)
         self.memory.call('hold', {'content': 'fictional memory'})
         self.assertEqual(attempts, [1, 2, 3])
+        rows = self.store.read('costs.jsonl')
+        model_reserve = next(r for r in rows if r['type'] == 'reserve' and r.get('accounting') == 'ombre-model-estimate')
+        model_settle = next(r for r in rows if r['type'] == 'settle' and r.get('id') == model_reserve['id'])
+        self.assertEqual(Decimal(model_settle['amount']), normal)
+        self.assertEqual(Decimal(model_settle['released_amount']), Decimal(model_reserve['amount'])-normal)
         self.assertEqual(self.budget.totals()[2], 0)
 
     def test_failed_ombre_call_settles_conservative_reservations(self):
@@ -655,8 +673,28 @@ class MemoryTests(unittest.TestCase):
         reservations = [row for row in rows if row['type'] == 'reserve']
         settlements = [row for row in rows if row['type'] == 'settle']
         self.assertEqual(len(reservations), 2)
-        self.assertEqual({row['id'] for row in reservations}, {row['id'] for row in settlements})
+        by_id = {row['id']: row for row in reservations}
+        self.assertEqual(set(by_id), {row['id'] for row in settlements})
+        for settlement in settlements:
+            self.assertEqual(Decimal(settlement['amount']), Decimal(by_id[settlement['id']]['amount']))
+            self.assertEqual(Decimal(settlement['released_amount']), Decimal('0'))
         self.backend.call = original
+
+    def test_successful_embedding_settles_normal_estimate_and_releases_difference(self):
+        args = {'query': 'fictional recall'}
+        normal_tokens = max(8192, len(json.dumps(args, ensure_ascii=False).encode('utf-8')) + 2048)
+        rate = Decimal(str(self.cfg.memory['input_cny_per_million']))
+        self.backend.call = Mock(return_value='fictional result')
+        self.memory.call('breath_search', args)
+        rows = self.store.read('costs.jsonl')
+        reserve = next(r for r in rows if r['type'] == 'reserve' and r.get('accounting') == 'embedding-estimate')
+        settle = next(r for r in rows if r['type'] == 'settle' and r['id'] == reserve['id'])
+        normal_amount = Decimal(normal_tokens) * rate / Decimal(1_000_000)
+        self.assertGreater(Decimal(reserve['amount']), normal_amount)
+        self.assertEqual(Decimal(settle['amount']), normal_amount)
+        self.assertEqual(Decimal(settle['released_amount']),
+                         Decimal(reserve['amount']) - normal_amount)
+        self.assertEqual(self.budget.totals()[2], 0)
 
     def test_later_preflight_rejection_releases_only_unsent_reservation(self):
         original = self.backend.call
