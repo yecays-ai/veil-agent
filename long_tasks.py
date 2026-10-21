@@ -313,7 +313,7 @@ class LongTaskStore:
                 task['tool_events'].append({'time': now(),
                     'operation_id': self._operation_id(task['task_id'], pending),
                     'tool': pending['tool'], 'target': pending['target'], 'state': '经检查确认',
-                    'evidence': f"operation {pending['operation_id']} verified by "
+                    'evidence': f"operation {self._operation_id(task['task_id'], pending)} verified by "
                                 f"{pending['verified_by']} ({pending['verified_sha256'][:16]})"})
                 task['pending_action'] = None
                 task['tool_events'] = task['tool_events'][-MAX_TOOL_EVENTS:]
