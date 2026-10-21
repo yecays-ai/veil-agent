@@ -1,5 +1,6 @@
 # 交接
 
+- 2026-10-21 Codex：工单 044 基于最新 main `a48f13dec08d89ea2d1667ff550ae2e4cbe6baca` 建立分支 `ticket/044-memory-diagnostics-tool-errors`。截图所示提示由 `Memory.refresh_visibility()` 对每个未知可见性候选分别入队；此状态会过滤这些候选，但不能据此推断所有记忆检索均失效。正在改为每聊天轮次最多一条英文诊断，并增加虚构数据端到端测试：已知可见记忆须进入模型请求，隐藏/未知记忆须排除，下一轮可以再提示。工具拒绝原因由固定英文映射同时送模型与网页；无效 target_id 必须继续遵循本轮 breath_search 规则。下一步完成代码与回归，提交 PR，跟踪 Windows/Linux × Python 3.11/3.12 CI 和 Claude 独立审查；只修复功能/安全问题，审查与 CI 满足后合并，再请 Lan 按 STATUS 用虚构记忆做 Windows 聊天验收。不要读取真实聊天、记忆或费用数据；不要修改 043 长期任务副作用确认逻辑。
 - 2026-10-21 Claude：PR #77（042）与 PR #79（041）因小兔子限流由 Claude 审查，CI 全绿后合并；两单 Windows 体验待 Lan 验收。
 - 2026-10-21 11:48 UTC Codex：工单 042 基于最新 main `14cbe535039d80cc865f605420d2ec42dd58e48d`，分支 `ticket/042-autonomy-handoff-once`，PR #77 开放。保留 040 最新合并记录；本次 main 仅增加 040 的长期任务实现与文档，和 042 的代码文件无重叠。042 的代码测试曾在 Windows/Linux × Python 3.11/3.12 CI 全部通过；本地 Python 与 GitHub HTTPS 克隆不可用，未建立本地 Git worktree。CodeRabbit 三次手动审查触发均被免费额度限流，正式审查未完成，不合并。下一个窗口先查看 PR #77 当前 CI 与 CodeRabbit 评论；额度恢复后触发正式审查，处理必要功能/安全意见；满足门槛后合并。之后 Lan 用专用虚构测试角色验收 042；不要以 CI 替代聊天体验。
 - 工单 041 已基于最新 main `14cbe535039d80cc865f605420d2ec42dd58e48d`（含 PR #78/040）同步到独立分支 `ticket/041-web-exit-state`，PR #79。退出状态修复完成；本地隔离 6 项定向验证通过；原生产代码提交 `a9119bf` 以及同步提交 `af81952` 的 GitHub CI Windows/Linux × Python 3.11/3.12 四项全部通过。

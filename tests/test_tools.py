@@ -11,7 +11,7 @@ from unittest.mock import Mock
 
 from tools_agent import (ALLOW, ASK, DENY, LAB_ONLY, FilesystemTools, checked_path,
                          permitted_tools, tool_policy)
-from veil_agent import Budget, Chat, Store, load_character, run_chat
+from veil_agent import Budget, Chat, Store, load_character, model_tool_result, run_chat
 
 
 class ToolPolicyTests(unittest.TestCase):
@@ -456,6 +456,35 @@ max_result_bytes = 200
         self.assertEqual([row['role'] for row in second_messages[-2:]], ['tool', 'tool'])
         self.assertEqual(len(output), 2)
         self.assertGreater(self.budget.totals()[0], 0)
+
+
+    def test_program_tool_failures_are_actionable_english_for_model_and_user(self):
+        first = self.message([self.tool_call('write_file',
+            '{"path":"report.md","content":"fictional"}', 'write')])
+        final = self.message(content='I will ask before trying again.')
+        model = Mock(side_effect=[(first, 100, 20, 0), (final, 120, 20, 0)])
+        tools = Mock()
+        tools.tools = [SimpleNamespace(name='write_file', description='Write', inputSchema={})]
+        tools.capability_event = None
+        tools.invoke.return_value = ('程序拒绝：lan 未同意写入。', '被拒绝', 'report.md')
+        output = []
+        chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=output.append)
+
+        self.assertEqual(chat.send('create a fictional report'), 'I will ask before trying again.')
+        tool_result = model.call_args_list[1].args[0][-1]['content']
+        expected = ('Lan did not approve this write, so the file was not changed. '
+                    'Ask for approval if the write is still needed.')
+        self.assertEqual(tool_result, expected)
+        self.assertTrue(any(tool_result in line for line in output))
+        self.assertNotIn('程序拒绝', tool_result)
+
+    def test_memory_target_id_error_translation_preserves_current_turn_rule(self):
+        source = '程序拒绝：target_id 必须来自本轮 breath_search 的可见结果。'
+        translated = model_tool_result('trace', source, '被拒绝')
+        self.assertIn('Run breath_search now', translated)
+        self.assertIn('exact visible ID', translated)
+        self.assertIn('do not reuse an ID from an earlier turn', translated)
+        self.assertNotIn('程序拒绝', translated)
 
     def test_invalid_json_is_returned_as_tool_error_and_counted(self):
         first = self.message([self.tool_call('read_text_file', '{bad', 'bad')])

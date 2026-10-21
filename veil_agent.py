@@ -33,20 +33,77 @@ def capability_model_notice(tools):
     event = getattr(tools, 'capability_event_model', None) if tools else None
     return event if isinstance(event, str) else None
 
+TOOL_ERROR_TRANSLATIONS = {
+    '程序拒绝：此工具没有授权。': 'This tool is not authorized for the current role. Choose an available tool; permissions cannot be bypassed.',
+    '程序拒绝：工具参数必须是对象。': 'The tool arguments must be a JSON object. Correct the arguments and retry.',
+    '程序拒绝：target_id 必须来自本轮 breath_search 的可见结果。': 'This target_id is not valid for the current turn. Run breath_search now and use an exact visible ID from its results; do not reuse an ID from an earlier turn.',
+    '程序拒绝：merge_ids 必须是本轮检索结果中的不重复编号列表。': 'merge_ids must be a list of distinct IDs returned by breath_search during this turn. Search again and use only those IDs.',
+    '程序拒绝：每个 merge_id 都必须来自本轮 breath_search 的结果。': 'Every merge_id must come from breath_search results returned during this turn. Search again before retrying.',
+    '程序拒绝：query 必须是非空文字。': 'The search query must be non-empty text. Provide a short query and retry.',
+    '程序拒绝：新建记忆需提供 content 和 title，更新需提供 content。': 'To create a memory, provide both content and title. To update one, provide content and a valid current-turn target_id.',
+    '程序拒绝：这条记忆不存在或已隐藏。': 'This memory does not exist or is hidden, so it cannot be read.',
+    '程序拒绝：目标记忆不存在或已隐藏。': 'The target memory does not exist or is hidden. Search for a visible memory and use its current-turn ID.',
+    '程序拒绝：这条记忆已隐藏或不可用，未做更新。': 'This memory is hidden or unavailable. No update was made; search for a visible target before retrying.',
+    '程序拒绝：记忆已变化或缺少版本，请从 offset=0 重新读取。': 'The memory changed or its version is missing. Re-read it from offset=0 before retrying.',
+    '程序拒绝：目标已存在，不允许覆盖。': 'The target already exists and overwriting is not allowed. Choose a new filename or use an authorized append operation.',
+    '程序拒绝：lan 未同意写入。': 'Lan did not approve this write, so the file was not changed. Ask for approval if the write is still needed.',
+    '程序拒绝：lan 未同意本次追加。': 'Lan did not approve this append, so no content was added. Ask for approval if the append is still needed.',
+    '程序拒绝：lan 未同意持续追加授权。': 'Lan did not approve persistent append access. Request authorization before using this operation.',
+    '程序拒绝：只能在实验室内新建文件夹。': 'Directories can only be created inside the configured lab folder. Choose a path within that folder.',
+    '程序拒绝：目标文件在确认后变化，未追加。': 'The target file changed after confirmation, so nothing was appended. Re-read it and request approval again.',
+    '程序拒绝：确认期间目标文件已变化，请重新授权。': 'The target file changed while authorization was being confirmed. Request authorization again for the current file.',
+    '程序拒绝：持续追加授权仅限配置的成长日记。': 'Persistent append authorization is limited to the configured growth journal. Use one-time approval for other files.',
+    '程序拒绝：追加目标必须是已存在的普通文件。': 'The append target must be an existing regular file. Choose an existing file; this tool cannot create one.',
+    '程序拒绝：追加内容必须是非空文字。': 'Append content must be non-empty text. Provide the text to add and retry.',
+    '程序拒绝：路径超出测试文件夹或无法安全解析。': 'The path is outside the configured workspace or cannot be resolved safely. Use a permitted path inside the workspace.',
+    '程序拒绝：这类删除参数不开放。': 'This delete operation or argument combination is not available. Use the supported delete flow and its required confirmation.',
+    '程序拒绝：delete 必须是布尔值。': 'The delete argument must be true or false. Correct it and retry.',
+    '程序拒绝：补充内容不能为空。': 'The additional memory content cannot be empty. Provide the text to add and retry.',
+    '程序拒绝：合并后超过 Ombre 单条记忆安全上限；原记忆未改动。': 'The merged memory would exceed the safe per-memory size limit. The original was not changed; shorten the addition and retry.',
+    '程序拒绝：目标记忆在检索后发生变化，请重新 breath_search；本次未更新。': 'The target changed after search, so it was not updated. Run breath_search again and retry using its current result.',
+    '程序拒绝：来源记忆在检索后发生变化，请重新 breath_search；本次未更新。': 'A source memory changed after search, so nothing was updated. Run breath_search again and retry using current results.',
+    '程序拒绝：无法读取目标记忆的完整原文，未做追加。': 'The complete target memory could not be read, so no update was made. Re-read it before retrying.',
+    '程序拒绝：旧版本未能安全保存，本次修改未执行。': 'The previous version could not be safely archived, so this change was not made. Keep the memory unchanged and retry later.',
+    '程序拒绝：旧版本未能安全保存，删除申请未创建。': 'The previous version could not be safely archived, so no delete request was created. Keep the memory unchanged and retry later.',
+    '没有确认保存成功，请不要说已经记住。': 'The save could not be confirmed. Do not claim the memory was saved; inspect the result before retrying.',
+    '程序拒绝：目录游标无效。': 'The memory catalog cursor is invalid. Restart the catalog listing without a cursor.',
+    '程序拒绝：正文位置已超出当前记忆。': 'The requested offset is beyond the current memory length. Re-read it from offset=0.',
+    '程序拒绝：新文件内容必须是文字。': 'New file content must be text. Provide a text value and retry.',
+    '程序拒绝：内容必须是文字，追加内容不能为空；没有写入任何内容。': 'The content must be text, and append content cannot be empty. No content was written.',
+    '程序拒绝：实验室不能追加链接文件；没有写入任何内容。': 'Appending to links is not allowed in the lab. Choose a regular file.',
+    '程序拒绝：实验室文件在打开时变化；没有写入任何内容。': 'The lab file changed while it was being opened, so nothing was written. Re-read the file before retrying.',
+    '程序拒绝：实验室路径非法、过长或存在链接重定向；没有写入任何内容。': 'The lab path is invalid, too long, or redirected through a link. Choose a short, regular path inside the lab.',
+    '程序拒绝：无法读取目标记忆原文，未做修改。': 'The target memory could not be read, so it was not modified. Search again and use an available memory.',
+    '程序拒绝：修改前的完整旧版本无法安全留档，未做追加。': 'The complete previous version could not be safely archived, so no addition was made.',
+    '程序拒绝：有待整合的记忆已隐藏或不可用，未做更新。': 'A memory selected for merging is hidden or unavailable. Search again and use only visible results.',
+    '程序拒绝：关联目标记忆已隐藏。': 'The linked target memory is hidden. Choose a visible target before retrying.',
+    '程序拒绝：目标记忆不存在或不可读。': 'The target memory does not exist or cannot be read. Check the ID and search again.',
+}
 def model_tool_result(name, result, state):
-    """Keep user data intact while localizing program-authored tool outcomes for the model."""
-    if not isinstance(result, str) or not CJK_TEXT.search(result):
+    """Translate trusted program-authored failures to safe, actionable English."""
+    if not isinstance(result, str):
         return result
-    if state != '成功':
-        if name == 'memory_read' and result == '程序拒绝：记忆已变化或缺少版本，请从 offset=0 重新读取。':
-            return ('The program rejected this tool operation because the memory changed or the version is missing. '
-                    'Re-read it from offset=0.')
-        outcome = 'rejected' if state == '被拒绝' else 'failed'
-        return (f'The program {outcome} this tool operation. Do not claim it succeeded; '
-                'follow the current permissions and approval requirements.')
-    if name not in TOOL_DATA_RESULTS:
-        return 'The tool operation completed successfully.'
-    return result
+    if state == '成功':
+        if CJK_TEXT.search(result) and name not in TOOL_DATA_RESULTS:
+            return 'The tool operation completed successfully.'
+        return result
+    if not CJK_TEXT.search(result):
+        return result
+    translated = TOOL_ERROR_TRANSLATIONS.get(result)
+    if translated:
+        return translated
+    if 'edit_reason 必须是' in result:
+        return 'edit_reason must be concise text within the tool limit. Shorten it and retry.'
+    if '删除申请必须提供' in result:
+        return 'A delete request needs a short reason within the tool limit. Provide the reason and retry.'
+    if '超过实验室单次上限' in result:
+        return ('The write exceeds the lab per-operation byte limit. No content was written; split it into '
+                'smaller files or append in smaller chunks.')
+    if state == '被拒绝':
+        return ('The program rejected this operation. Correct the arguments and retry within the available '
+                'permissions and approval requirements.')
+    return ('The program could not confirm this operation. Do not claim it succeeded; inspect its state '
+            'before retrying to avoid duplicate changes.')
 
 SEND_MESSAGE = {'type': 'function', 'function': {
     'name': 'send_message',
@@ -1072,7 +1129,7 @@ class Chat:
                 next_offered = (None if step + 1 == max_steps - 1
                                 else self.tool_schemas())
                 too_long_result = 'Tool result exceeded this request input limit and was omitted.'
-                too_long_display = '工具结果超过本轮请求长度上限，未提供给模型。'
+                too_long_display = 'The tool result exceeded this request limit and was omitted from the model context.'
                 placeholders = [{'role': 'tool', 'tool_call_id': call.id, 'content': too_long_result}
                                 for call in message.tool_calls]
                 loop_messages.extend(placeholders)
@@ -1137,14 +1194,9 @@ class Chat:
                                 result, state, summary = 'The program rejected this call because the tool is unavailable.', '被拒绝', call.function.name
                     except (ValueError, TypeError):
                         result, state, summary = 'The program rejected this call because the arguments are not a valid JSON object.', '被拒绝', call.function.name
-                    display_result = result
-                    if result == 'The program rejected this call because the tool is unavailable.':
-                        display_result = '程序拒绝：工具未开放。'
-                    elif result == 'The program rejected this call because the arguments are not a valid JSON object.':
-                        display_result = '程序拒绝：工具参数不是合法 JSON 对象。'
-                    display_detail = display_result
+                    display_detail = model_tool_result(call.function.name, result, state)
                     tool_message = {'role': 'tool', 'tool_call_id': call.id,
-                                    'content': model_tool_result(call.function.name, result, state)}
+                                    'content': display_detail}
                     result_state = state
                     loop_messages.append(tool_message)
                     history_bytes = calibration * sum(message_request_bytes(m)
