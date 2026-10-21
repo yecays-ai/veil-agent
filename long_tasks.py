@@ -1,6 +1,8 @@
 """Single, role-local durable long task state for autonomous activities."""
 from datetime import datetime
+import hashlib
 import json
+import ntpath
 import os
 from pathlib import Path
 from types import SimpleNamespace
@@ -31,8 +33,9 @@ TASK_UPDATE_TOOL = SimpleNamespace(name='long_task_update', description=(
     'an unfinished task cannot be overwritten. Use action=update with its exact task_id to append '
     'confirmed progress and evidence, set the next step, pause, mark a blocker, or mark the whole goal '
     'completed. A session ending or reaching a tool limit is not task completion. If pending_action exists, '
-    'first inspect the target using existing read tools; only resolve it with evidence that establishes '
-    'what happened. If the effect cannot be confirmed, mark the task blocked and do not repeat it. '
+    'first inspect the exact target using read_text_file; for file writes the program checks actual content against '
+    'the saved operation effect. Resolve only with the pending operation_id shown by long_task_status and after '
+    'the program records a matching read. If the effect cannot be confirmed, mark the task blocked and do not repeat it. '
     'This state does not grant file or memory permissions.'), inputSchema={
         'type': 'object', 'additionalProperties': False,
         'properties': {
@@ -45,7 +48,8 @@ TASK_UPDATE_TOOL = SimpleNamespace(name='long_task_update', description=(
             'progress_update': {'type': 'string', 'description': 'Append a concise confirmed result with evidence such as file paths or IDs. Do not copy full chat, file, memory, or tool output.'},
             'next_step': {'type': 'string', 'description': 'The next small action, or empty when none.'},
             'waiting_for': {'type': 'string', 'description': 'Question or approval awaited, or empty when none.'},
-            'resolve_pending': {'type': 'boolean', 'description': 'Set true only after inspecting and documenting the pending operation outcome.'},
+            'resolve_pending': {'type': 'boolean', 'description': 'Set true only after the program verified the exact pending operation ID against actual target state.'},
+            'pending_operation_id': {'type': 'string', 'description': 'Required with resolve_pending: exact operation_id shown by long_task_status.'},
         }, 'required': ['action']})
 
 
@@ -118,6 +122,16 @@ class LongTaskStore:
             if (not isinstance(pending, dict)
                     or not all(isinstance(pending.get(key), str)
                                for key in ('started_at', 'tool', 'target'))
+                    or ('operation_id' in pending and not isinstance(pending['operation_id'], str))
+                    or ('normalized_target' in pending and not isinstance(pending['normalized_target'], str))
+                    or ('expected_effect' in pending and pending['expected_effect'] is not None and
+                        (not isinstance(pending['expected_effect'], dict) or
+                         pending['expected_effect'].get('kind') not in ('exact', 'suffix') or
+                         not isinstance(pending['expected_effect'].get('sha256'), str) or
+                         type(pending['expected_effect'].get('byte_length')) is not int or
+                         pending['expected_effect']['byte_length'] < 0))
+                    or ('verified_by' in pending and not isinstance(pending['verified_by'], str))
+                    or ('verified_sha256' in pending and not isinstance(pending['verified_sha256'], str))
                     or ('state' in pending and not isinstance(pending['state'], str))
                     or ('verified_in_step' in pending and pending['verified_in_step'] is not None
                         and (type(pending['verified_in_step']) is not int
@@ -160,7 +174,7 @@ class LongTaskStore:
                                                'next_step', 'waiting_for',
                                                'created_at', 'updated_at')}
         self._localize_model_state(summary)
-        summary['pending_action'] = self._pending_view(task['pending_action'])
+        summary['pending_action'] = self._pending_view(task['pending_action'], task['task_id'])
         summary['completion_evidence'] = task.get('completion_evidence', '')
         summary['progress'] = task['progress'][-8:]
         summary['tool_events'] = [self._model_event(event) for event in task['tool_events'][-8:]]
@@ -173,7 +187,7 @@ class LongTaskStore:
         summary = {key: task[key] for key in ('task_id', 'title', 'goal', 'status',
                                                'next_step', 'waiting_for')}
         self._localize_model_state(summary)
-        summary['pending_action'] = self._pending_view(task['pending_action'])
+        summary['pending_action'] = self._pending_view(task['pending_action'], task['task_id'])
         summary['completion_evidence'] = task.get('completion_evidence', '')
         summary['progress'] = task['progress'][-3:]
         summary['tool_events'] = [self._model_event(event) for event in task['tool_events'][-4:]]
@@ -196,11 +210,20 @@ class LongTaskStore:
         return event
 
     @staticmethod
-    def _pending_view(pending):
+    def _operation_id(task_id, pending):
+        operation_id = pending.get('operation_id')
+        if operation_id:
+            return operation_id
+        legacy = '\\x1f'.join((task_id, pending['started_at'], pending['tool'], pending['target']))
+        return hashlib.sha256(legacy.encode('utf-8')).hexdigest()[:32]
+
+    @staticmethod
+    def _pending_view(pending, task_id):
         if not pending:
             return None
-        result = {key: pending[key] for key in ('started_at', 'tool', 'target', 'state')
+        result = {key: pending[key] for key in ('operation_id', 'started_at', 'tool', 'target', 'state')
                   if key in pending}
+        result['operation_id'] = LongTaskStore._operation_id(task_id, pending)
         labels = {'成功，需核实': 'succeeded; verification required', '被拒绝': 'rejected',
                   '结果不确定': 'outcome uncertain'}
         if result.get('state') in labels:
@@ -243,7 +266,7 @@ class LongTaskStore:
 
     def _update(self, args):
         allowed = {'action', 'task_id', 'status', 'progress_update', 'next_step',
-                   'waiting_for', 'resolve_pending'}
+                   'waiting_for', 'resolve_pending', 'pending_operation_id'}
         if set(args) - allowed or not isinstance(args.get('task_id'), str):
             return '程序拒绝：update 必须使用当前任务 ID。', '被拒绝', '长期任务'
         status = args.get('status')
@@ -268,6 +291,8 @@ class LongTaskStore:
                 return '程序拒绝：任务已完成，不能覆盖已保存的完成证据。', '被拒绝', task['title']
             if resolve and (task['pending_action'] is None or not progress):
                 return '程序拒绝：没有可核实的待处理操作，或缺少核实证据。', '被拒绝', task['title']
+            if resolve and args.get('pending_operation_id') != self._operation_id(task['task_id'], task['pending_action']):
+                return '程序拒绝：待确认操作 ID 不匹配。', '被拒绝', task['title']
             if resolve and (task['pending_action'].get('verified_in_step') is None
                             or self.current_tool_step <= task['pending_action']['verified_in_step']):
                 return ('程序拒绝：先用只读工具检查与待处理操作匹配的目标，再在后续工具步骤中'
@@ -285,9 +310,11 @@ class LongTaskStore:
                     task['progress'].append({'time': now(), 'text': progress.strip()})
             if resolve:
                 pending = task['pending_action']
-                task['tool_events'].append({'time': now(), 'tool': pending['tool'],
-                    'target': pending['target'], 'state': '经检查确认',
-                    'evidence': progress.strip()[:500]})
+                task['tool_events'].append({'time': now(),
+                    'operation_id': self._operation_id(task['task_id'], pending),
+                    'tool': pending['tool'], 'target': pending['target'], 'state': '经检查确认',
+                    'evidence': f"operation {self._operation_id(task['task_id'], pending)} verified by "
+                                f"{pending['verified_by']} ({pending['verified_sha256'][:16]})"})
                 task['pending_action'] = None
                 task['tool_events'] = task['tool_events'][-MAX_TOOL_EVENTS:]
             if status is not None:
@@ -300,16 +327,32 @@ class LongTaskStore:
             self._save(task)
         return f"长期任务已更新：{task['status']}。", '成功', task['title']
 
-    def before_tool(self, name, target, autonomy):
+    @staticmethod
+    def _normalized_target(target):
+        value = ntpath.normcase(ntpath.normpath(str(target).strip()))
+        return value.replace('\\', '/').casefold().rstrip('/')
+
+    @staticmethod
+    def _expected_effect(name, args):
+        if name not in ('write_file', 'append_file') or not isinstance(args, dict):
+            return None
+        content = args.get('content')
+        if not isinstance(content, str):
+            return None
+        encoded = content.encode('utf-8')
+        return {'kind': 'exact' if name == 'write_file' else 'suffix',
+                'sha256': hashlib.sha256(encoded).hexdigest(), 'byte_length': len(encoded)}
+
+    def before_tool(self, name, target, autonomy, args=None):
         with self.store.mutex:
             task = self._read_file()
             if not task:
                 return None, False
             if task['pending_action']:
                 pending = task['pending_action']
-                expected = pending['target'].casefold().replace('\\', '/')
-                proposed = str(target).casefold().replace('\\', '/')
-                same_target = bool(expected and (expected in proposed or proposed in expected))
+                expected = pending.get('normalized_target') or self._normalized_target(pending['target'])
+                proposed = self._normalized_target(target)
+                same_target = bool(expected and expected == proposed)
                 if autonomy or same_target:
                     return (f"程序阻止副作用：上次操作 {pending['tool']}（{pending['target']}）"
                             '结果仍待核实。请先读取目标并用 long_task_update 提交证据，无法确认时标记 blocked。',
@@ -317,7 +360,9 @@ class LongTaskStore:
                 return None, False
             if not autonomy or task['status'] != 'active':
                 return None, False
-            task['pending_action'] = {'started_at': now(), 'tool': name, 'target': str(target)[:240]}
+            task['pending_action'] = {'operation_id': uuid.uuid4().hex, 'started_at': now(),
+                'tool': name, 'target': str(target)[:240], 'normalized_target': self._normalized_target(target),
+                'expected_effect': self._expected_effect(name, args)}
             task['updated_at'] = now()
             self._save(task)
             return None, True
@@ -335,7 +380,12 @@ class LongTaskStore:
             pending = task['pending_action']
             if not pending or pending['tool'] != name:
                 raise UserError('长期任务副作用检查点不匹配，已停止后续工具。')
-            task['tool_events'].append({'time': now(), 'tool': name, 'target': str(target)[:240],
+            if self._normalized_target(target) != (pending.get('normalized_target') or
+                                                     self._normalized_target(pending['target'])):
+                raise UserError('长期任务副作用目标与已持久化检查点不一致，操作仍待核实。')
+            task['tool_events'].append({'time': now(),
+                                        'operation_id': self._operation_id(task['task_id'], pending),
+                                        'tool': name, 'target': str(target)[:240],
                                         'state': state[:40],
                                         'evidence': f'工具返回状态：{state[:40]}'})
             task['tool_events'] = task['tool_events'][-MAX_TOOL_EVENTS:]
@@ -350,19 +400,42 @@ class LongTaskStore:
             task['updated_at'] = now()
             self._save(task)
 
-    def observe_tool_result(self, name, target, state):
+    def observe_tool_result(self, name, target, state, result=None):
         if name not in READ_ONLY_TOOLS or state != '成功' or self.current_tool_step < 0:
+            return
+        if not isinstance(result, str):
             return
         with self.store.mutex:
             task = self._read_file()
             if not task or not task['pending_action']:
                 return
-            expected = task['pending_action']['target'].casefold().replace('\\', '/')
-            observed = str(target).casefold().replace('\\', '/')
-            if expected and (expected in observed or observed in expected):
-                task['pending_action']['verified_in_step'] = self.current_tool_step
-                task['updated_at'] = now()
-                self._save(task)
+            pending = task['pending_action']
+            expected = pending.get('normalized_target') or self._normalized_target(pending['target'])
+            observed = self._normalized_target(target)
+            if not expected or observed != expected:
+                return
+            content = result.encode('utf-8')
+            effect = pending.get('expected_effect')
+            if effect is None:
+                if pending['tool'] in ('write_file', 'append_file') or not result.strip():
+                    return
+            else:
+                if name != 'read_text_file':
+                    return
+                if effect['kind'] == 'suffix' and pending.get('state') != '成功，需核实':
+                    return
+                length = effect['byte_length']
+                if len(content) < length:
+                    return
+                actual = content if effect['kind'] == 'exact' else content[-length:] if length else b''
+                digest = hashlib.sha256(actual).hexdigest()
+                if (effect['kind'] == 'exact' and len(content) != length) or digest != effect['sha256']:
+                    return
+            pending['verified_in_step'] = self.current_tool_step
+            pending['verified_by'] = name
+            pending['verified_sha256'] = hashlib.sha256(content).hexdigest()
+            task['updated_at'] = now()
+            self._save(task)
 
     def summary(self):
         task = self.read()

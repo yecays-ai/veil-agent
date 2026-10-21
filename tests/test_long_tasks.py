@@ -56,36 +56,136 @@ class LongTaskTests(unittest.TestCase):
                                     'progress_update': 'This update cannot be committed.'})
         self.assertEqual(self.tasks.read(), previous)
 
-    def test_unconfirmed_side_effect_survives_restart_and_blocks_repeat(self):
-        self.create()
-        self.assertIsNone(self.tasks.begin_tool('append_file', 'lab/part-one.md'))
-        self.tasks.finish_tool('append_file', 'lab/part-one.md', '出错')
+    def test_nonfile_effect_can_be_verified_by_exact_target_readback(self):
+        task_id = self.create()
+        directory = Path(self.temp.name) / 'lab' / 'new-folder'
+        self.assertEqual(self.tasks.before_tool(
+            'create_directory', 'lab/new-folder', autonomy=True, args={}), (None, True))
+        operation_id = self.tasks.read()['pending_action']['operation_id']
+        directory.mkdir(parents=True)
+        self.tasks.finish_tool('create_directory', 'lab/new-folder', '成功')
+
+        self.tasks.set_tool_step(1)
+        self.tasks.observe_tool_result('get_file_info', 'lab/new-folder-copy', '成功',
+                                       '{"type":"directory"}')
+        self.assertIsNone(self.tasks.read()['pending_action']['verified_in_step'])
+        self.tasks.observe_tool_result('get_file_info', 'lab/new-folder', '成功',
+                                       '{"type":"directory"}')
+        self.assertEqual(self.tasks.read()['pending_action']['verified_in_step'], 1)
+        self.tasks.set_tool_step(2)
+        _, state, _ = self.tasks.invoke('long_task_update', {
+            'action': 'update', 'task_id': task_id, 'resolve_pending': True,
+            'pending_operation_id': operation_id, 'progress_update': 'The folder exists.'})
+        self.assertEqual(state, '成功')
+        self.assertIsNone(self.tasks.read()['pending_action'])
+
+    def test_legacy_nonfile_pending_remains_recoverable_with_stable_id(self):
+        task_id = self.create()
+        self.assertEqual(self.tasks.before_tool(
+            'create_directory', 'lab/archive', autonomy=True, args={}), (None, True))
+        directory = Path(self.temp.name) / 'lab' / 'archive'
+        directory.mkdir(parents=True)
+        self.tasks.finish_tool('create_directory', 'lab/archive', '成功')
+        saved = self.tasks.read()
+        for key in ('operation_id', 'normalized_target', 'expected_effect'):
+            saved['pending_action'].pop(key, None)
+        self.tasks._save(saved)
 
         reopened = LongTaskStore(self.store, 'peter')
-        pending = reopened.read()['pending_action']
-        self.assertEqual(pending['target'], 'lab/part-one.md')
-        self.assertIn('结果仍待核实', reopened.begin_tool('append_file', 'lab/part-one.md'))
-        blocked, checkpoint = reopened.before_tool('append_file', 'lab/part-one.md', autonomy=False)
-        self.assertIn('结果仍待核实', blocked)
-        self.assertFalse(checkpoint)
-        self.assertEqual(reopened.before_tool('append_file', 'lab/unrelated.md', autonomy=False),
-                         (None, False))
-
+        pending = json.loads(reopened.status_text())['pending_action']
+        operation_id = pending['operation_id']
         reopened.set_tool_step(1)
-        reopened.observe_tool_result('read_text_file', 'lab/part-one.md', '成功')
-        _, state, _ = reopened.invoke('long_task_update', {
-            'action': 'update', 'task_id': reopened.read()['task_id'], 'status': 'active',
-            'resolve_pending': True,
-            'progress_update': 'Read lab/part-one.md; the requested section is already present.'})
-        self.assertEqual(state, '被拒绝')
+        reopened.observe_tool_result('get_file_info', 'lab/archive', '成功',
+                                     '{"type":"directory"}')
         reopened.set_tool_step(2)
         _, state, _ = reopened.invoke('long_task_update', {
-            'action': 'update', 'task_id': reopened.read()['task_id'], 'status': 'active',
-            'resolve_pending': True,
-            'progress_update': 'Read lab/part-one.md; the requested section is already present.'})
+            'action': 'update', 'task_id': task_id, 'resolve_pending': True,
+            'pending_operation_id': operation_id, 'progress_update': 'The directory exists.'})
         self.assertEqual(state, '成功')
         self.assertIsNone(reopened.read()['pending_action'])
-        self.assertEqual(reopened.read()['tool_events'][-1]['state'], '经检查确认')
+
+    def test_pending_file_write_requires_exact_path_and_actual_contents_after_restart(self):
+        self.create()
+        task_id = self.tasks.read()['task_id']
+        lab = Path(self.temp.name) / 'lab'
+        lab.mkdir()
+        target = lab / 'test-a.txt'
+        requested = 'Fictional verified content.'
+        self.assertEqual(self.tasks.before_tool(
+            'write_file', 'lab/test-a.txt', autonomy=True, args={'content': requested}), (None, True))
+        operation_id = self.tasks.read()['pending_action']['operation_id']
+        target.write_text(requested, encoding='utf-8')
+        with self.assertRaises(UserError):
+            self.tasks.finish_tool('write_file', 'lab/test-a-copy.txt', '成功')
+        self.assertEqual(self.tasks.read()['pending_action']['operation_id'], operation_id)
+        self.tasks.finish_tool('write_file', 'lab/test-a.txt', '成功')
+
+        reopened = LongTaskStore(self.store, 'peter')
+        reopened.begin_tool_run()
+        pending = reopened.read()['pending_action']
+        self.assertEqual(pending['operation_id'], operation_id)
+        self.assertEqual(pending['target'], 'lab/test-a.txt')
+        self.assertIn('结果仍待核实', reopened.before_tool(
+            'write_file', 'lab/test-a.txt', autonomy=False)[0])
+
+        reopened.set_tool_step(1)
+        reopened.observe_tool_result('read_text_file', 'lab/test-a-copy.txt', '成功', target.read_text())
+        reopened.observe_tool_result('read_multiple_files', 'lab/test-a.txt', '成功', target.read_text())
+        reopened.observe_tool_result('read_text_file', 'lab/test-a.txt', '成功', 'Wrong contents.')
+        self.assertIsNone(reopened.read()['pending_action']['verified_in_step'])
+
+        reopened.observe_tool_result('read_text_file', 'lab/test-a.txt', '成功', target.read_text(encoding='utf-8'))
+        self.assertEqual(reopened.read()['pending_action']['verified_in_step'], 1)
+        self.assertEqual(reopened.read()['pending_action']['verified_by'], 'read_text_file')
+        reopened.set_tool_step(2)
+        _, state, _ = reopened.invoke('long_task_update', {
+            'action': 'update', 'task_id': task_id, 'status': 'active',
+            'resolve_pending': True, 'pending_operation_id': 'wrong-id',
+            'progress_update': 'The stored file has the requested content.'})
+        self.assertEqual(state, '被拒绝')
+        _, state, _ = reopened.invoke('long_task_update', {
+            'action': 'update', 'task_id': task_id, 'status': 'active',
+            'resolve_pending': True, 'pending_operation_id': operation_id,
+            'progress_update': 'The stored file has the requested content.'})
+        self.assertEqual(state, '成功')
+        self.assertIsNone(reopened.read()['pending_action'])
+        event = reopened.read()['tool_events'][-1]
+        self.assertEqual(event['state'], '经检查确认')
+        self.assertIn(operation_id, event['evidence'])
+
+    def test_append_verification_checks_the_written_suffix(self):
+        self.create()
+        lab = Path(self.temp.name) / 'lab'
+        lab.mkdir()
+        target = lab / 'notes.txt'
+        target.write_text('Existing\n', encoding='utf-8')
+        chunk = 'Appended section\n'
+        self.assertEqual(self.tasks.before_tool(
+            'append_file', 'lab/notes.txt', autonomy=True, args={'content': chunk}), (None, True))
+        target.write_text(target.read_text(encoding='utf-8') + chunk, encoding='utf-8')
+        self.tasks.finish_tool('append_file', 'lab/notes.txt', '成功')
+        reopened = LongTaskStore(self.store, 'peter')
+        reopened.set_tool_step(1)
+        reopened.observe_tool_result('read_text_file', 'lab/notes.txt', '成功',
+                                     target.read_text(encoding='utf-8'))
+        self.assertEqual(reopened.read()['pending_action']['verified_in_step'], 1)
+        reopened.observe_tool_result('read_text_file', 'lab/notes.txt', '成功', 'Existing\n')
+        self.assertEqual(reopened.read()['pending_action']['verified_in_step'], 1)
+
+    def test_ambiguous_append_with_preexisting_matching_suffix_stays_pending(self):
+        self.create()
+        lab = Path(self.temp.name) / 'lab'
+        lab.mkdir()
+        target = lab / 'notes.txt'
+        chunk = 'Already present\n'
+        target.write_text(chunk, encoding='utf-8')
+        self.assertEqual(self.tasks.before_tool(
+            'append_file', 'lab/notes.txt', autonomy=True, args={'content': chunk}), (None, True))
+        self.tasks.finish_tool('append_file', 'lab/notes.txt', '出错')
+        self.tasks.set_tool_step(1)
+        self.tasks.observe_tool_result('read_text_file', 'lab/notes.txt', '成功',
+                                       target.read_text(encoding='utf-8'))
+        self.assertIsNone(self.tasks.read()['pending_action']['verified_in_step'])
 
     def test_pending_effect_prevents_completion_and_paused_tasks_stop_side_effects(self):
         task_id = self.create()
@@ -131,12 +231,12 @@ max_result_bytes = 4096
         cfg = load_character(self.store.root.parent, 'peter')
         fake_tools = SimpleNamespace(
             tools=[SimpleNamespace(name='append_file', description='append in lab', inputSchema={
-                'type': 'object', 'properties': {'path': {'type': 'string'}}})],
+                'type': 'object', 'properties': {'path': {'type': 'string'}, 'content': {'type': 'string'}}})],
             capability_event=None,
             preview_summary=lambda name, args: args['path'],
             invoke=lambda name, args, approval: ('Append completed.', '成功', args['path']))
         calls = [SimpleNamespace(id='call-one', function=SimpleNamespace(
-            name='append_file', arguments=json.dumps({'path': 'lab/part-one.md'}))),]
+            name='append_file', arguments=json.dumps({'path': 'lab/part-one.md', 'content': 'Fictional first section.'}))),]
         class FakeMessage:
             def __init__(self, tool_calls, content):
                 self.tool_calls, self.content = tool_calls, content
