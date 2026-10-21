@@ -21,8 +21,8 @@ ROOT = Path(__file__).resolve().parent
 MILLION = Decimal(1_000_000)
 
 RAW_DSML_TOOL_CALL = re.compile(r'<[|｜]DSML[|｜](?:tool_calls|function_calls|invoke)\b', re.IGNORECASE)
-AUTONOMY_WAKE = object()
 CJK_TEXT = re.compile(r'[\u3400-\u9fff]')
+AUTONOMY_WAKE = object()
 TOOL_DATA_RESULTS = {'read_text_file', 'read_multiple_files', 'directory_tree', 'list_directory',
                      'list_directory_with_sizes', 'get_file_info', 'search_files', 'memory_read',
                      'memory_history', 'breath_search', 'dream', 'pulse', 'letter_read',
@@ -34,17 +34,10 @@ def capability_model_notice(tools):
     return event if isinstance(event, str) else None
 
 def model_tool_result(name, result, state):
-    """Keep user data intact while localizing program-authored tool outcomes for the model."""
-    if not isinstance(result, str) or not CJK_TEXT.search(result):
+    """Pass failures through unchanged; preserve the existing successful-data safeguard."""
+    if not isinstance(result, str) or state != '成功':
         return result
-    if state != '成功':
-        if name == 'memory_read' and result == '程序拒绝：记忆已变化或缺少版本，请从 offset=0 重新读取。':
-            return ('The program rejected this tool operation because the memory changed or the version is missing. '
-                    'Re-read it from offset=0.')
-        outcome = 'rejected' if state == '被拒绝' else 'failed'
-        return (f'The program {outcome} this tool operation. Do not claim it succeeded; '
-                'follow the current permissions and approval requirements.')
-    if name not in TOOL_DATA_RESULTS:
+    if CJK_TEXT.search(result) and name not in TOOL_DATA_RESULTS:
         return 'The tool operation completed successfully.'
     return result
 
@@ -697,29 +690,29 @@ class Chat:
             args = None
         if (not isinstance(args, dict) or set(args) != {'text'} or
                 not isinstance(args['text'], str) or not args['text'].strip()):
-            return '程序拒绝：send_message 需要非空 text 文字。', '被拒绝', 'send_message'
+            return 'send_message requires non-empty text.', '被拒绝', 'send_message'
         text = args['text']
         autonomy = self.autonomy_mode
         gate = self.autonomy_message_lock if autonomy else None
         with gate if gate is not None else nullcontext():
             if autonomy and self.autonomy_should_yield and self.autonomy_should_yield():
                 self.autonomy_interrupted = True
-                return '自主活动已让位；这条消息未发送。', '被拒绝', 'send_message'
+                return 'Autonomous activity yielded before sending this message; nothing was sent.', '被拒绝', 'send_message'
             rows = self.store.read(self.path) if autonomy else []
             run_id = self.autonomy_run_id if autonomy else None
             if autonomy and (not isinstance(run_id, str) or not run_id or
                              not isinstance(tool_call_id, str) or not tool_call_id):
-                return '程序拒绝：缺少本次自主唤醒或工具调用标识，消息未发送。', '被拒绝', 'send_message'
+                return 'The current autonomous wake or tool-call identifier is missing; nothing was sent.', '被拒绝', 'send_message'
             if autonomy:
                 existing = next((row for row in rows
                                  if row.get('autonomy_run_id') == run_id
                                  and row.get('autonomy_tool_call_id') == tool_call_id), None)
                 if existing:
                     self.history, self.rounds = self.recent()
-                    return '这条消息已保存，不会重复发送。', '已存在', 'send_message'
+                    return 'This message was already saved and will not be sent again.', '已存在', 'send_message'
                 sent_this_wake = sum(1 for row in rows if row.get('autonomy_run_id') == run_id)
                 if sent_this_wake >= 3:
-                    return '本次自主唤醒最多主动发送 3 条消息；本条未发送。', '被拒绝', 'send_message'
+                    return 'An autonomous wake may send at most three messages. This message was not sent.', '被拒绝', 'send_message'
             event = {'role': 'assistant', 'content': text,
                      'request_id': request_id, 'origin': 'reply'}
             if autonomy:
@@ -968,7 +961,7 @@ class Chat:
             self.long_tasks.set_tool_step(step)
             if autonomy and autonomy_tool_steps >= 12:
                 self.autonomy_step_limited = True
-                final = '自主活动达到每次 12 个工具步骤上限。'
+                final = 'Autonomous activity reached the 12-tool-step limit for this run.'
                 if next_reservation:
                     pending_cfg = self.cfg if step == max_steps - 1 else replace(
                         self.cfg, max_output_tokens=self.cfg.tools.get('max_output_tokens', self.cfg.max_output_tokens))
@@ -976,7 +969,7 @@ class Chat:
                 break
             if autonomy and self.autonomy_should_yield and self.autonomy_should_yield():
                 self.autonomy_interrupted = True
-                final = '自主活动在本步前停止。'
+                final = 'Autonomous activity stopped before this tool step.'
                 pending_reservation = request_id if step == 0 else next_reservation
                 if pending_reservation:
                     pending_cfg = self.cfg if step == max_steps - 1 else replace(
@@ -1013,12 +1006,12 @@ class Chat:
             self.budget.settle(reservation, step_cfg, prompt, completion, cached)
             if autonomy and self.autonomy_should_yield and self.autonomy_should_yield():
                 self.autonomy_interrupted = True
-                final = '自主活动在模型请求结束后让位给聊天或控制操作。'
+                final = 'Autonomous activity yielded after the model request to let chat or a control action proceed.'
                 break
             if finish and finish[0] == 'length':
                 self.tool_stop_reason = '模型回复达到输出上限，结果不完整。'
             if finish and finish[0] == 'length' and message.tool_calls:
-                final = '本步模型达到输出上限，本步工具未执行；此前已确认的操作保留。'
+                final = 'The model reached its output limit, so this step did not run; previously confirmed operations were preserved.'
                 if not output_recovered and step + 1 < max_steps:
                     try:
                         next_cfg = (self.cfg if step + 1 == max_steps - 1 else replace(
@@ -1044,7 +1037,7 @@ class Chat:
                             'code': 'tool_output_recovery', 'attempt': 1,
                             'prompt_tokens': prompt, 'completion_tokens': completion,
                             'tool_count': len(message.tool_calls)})
-                        self.output('本步输出过长，工具尚未执行；正在缩小操作，最多恢复一次。')
+                        self.output('This step was too long, so no tool ran; the request is being shortened for one retry.')
                         continue
                 self.tool_stop_reason = final
                 self.output(final)
@@ -1055,15 +1048,15 @@ class Chat:
                     # Never display provider-internal tool syntax as a reply or feed
                     # it to another parser. Only structured, allowlisted tool_calls
                     # reach the existing permission and budget checks above.
-                    final = '模型返回了未执行的工具调用文本；程序没有执行任何工具，请查看 /cost 后重试。'
+                    final = 'The model returned tool-call text that was not executed; no tools ran. Check /cost before retrying.'
                     self.tool_stop_reason = final
                 else:
                     final = content
                 if step == max_steps - 1 and summaries:
-                    self.output('这次工具步骤用完了。')
+                    self.output('The tool-step limit for this request has been reached.')
                 break
             if offered is None:
-                final = '这次工具步骤用完了。'
+                final = 'The tool-step limit for this request has been reached.'
                 self.tool_stop_reason = final
                 self.output(final)
                 break
@@ -1075,10 +1068,10 @@ class Chat:
                 for call_index, call in enumerate(message.tool_calls):
                     if autonomy and autonomy_tool_steps >= 12:
                         self.autonomy_step_limited = True
-                        final = '自主活动达到每次 12 个工具步骤上限。'
+                        final = 'Autonomous activity reached the 12-tool-step limit for this run.'
                         break
                     if autonomy and self.autonomy_interrupted:
-                        final = '自主活动已让位给聊天或控制操作。'
+                        final = 'Autonomous activity yielded to let chat or a control action proceed.'
                         break
                     if autonomy:
                         autonomy_tool_steps += 1
@@ -1106,10 +1099,10 @@ class Chat:
                                    if self.tools and call.function.name != 'send_message' else call.function.name)
                     except (ValueError, TypeError):
                         summary = call.function.name
-                    self.output(display_call(call.function.name, summary, '被拒绝', '继续处理会超过费用上限'))
+                    self.output(display_call(call.function.name, summary, '被拒绝', 'Continuing would exceed the spending limit.'))
                     log_tool(call.function.name, summary, '被拒绝')
-                self.output('这次工具步骤用完了。继续整理会超过当前费用上限。')
-                final = '这次工具步骤用完了。'
+                self.output('The tool-step limit for this request has been reached; continuing would exceed the current spending limit.')
+                final = 'The tool-step limit for this request has been reached.'
                 break
             try:
                 assistant_record = message.model_dump(exclude_none=True)
@@ -1120,7 +1113,7 @@ class Chat:
                 next_offered = (None if step + 1 == max_steps - 1
                                 else self.tool_schemas())
                 too_long_result = 'Tool result exceeded this request input limit and was omitted.'
-                too_long_display = '工具结果超过本轮请求长度上限，未提供给模型。'
+                too_long_display = 'The tool result exceeded this request limit and was omitted from the model context.'
                 placeholders = [{'role': 'tool', 'tool_call_id': call.id, 'content': too_long_result}
                                 for call in message.tool_calls]
                 loop_messages.extend(placeholders)
@@ -1136,17 +1129,17 @@ class Chat:
                         except (ValueError, TypeError, AttributeError):
                             summary = None
                         summary = summary if isinstance(summary, str) else call.function.name
-                        self.output(display_call(call.function.name, summary, '被拒绝', '工具调用记录超过长度上限'))
+                        self.output(display_call(call.function.name, summary, '被拒绝', 'The tool call history exceeded its size limit.'))
                         summaries.append({'tool': call.function.name, 'path': summary, 'state': '被拒绝'})
                         log_tool(call.function.name, summary, '被拒绝')
                     self.budget.settle(next_reservation, next_cfg, 0, 0, 0)
-                    final = '工具调用记录超过长度上限，未执行工具。'
+                    final = 'The tool call history exceeded its size limit; the tool was not executed.'
                     self.tool_stop_reason = final
                     break
                 for call_index, call in enumerate(message.tool_calls):
                     if autonomy and autonomy_tool_steps >= 12:
                         self.autonomy_step_limited = True
-                        final = '自主活动达到每次 12 个工具步骤上限。'
+                        final = 'Autonomous activity reached the 12-tool-step limit for this run.'
                         self.budget.settle(next_reservation, next_cfg, 0, 0, 0)
                         break
                     if autonomy:
@@ -1185,14 +1178,9 @@ class Chat:
                                 result, state, summary = 'The program rejected this call because the tool is unavailable.', '被拒绝', call.function.name
                     except (ValueError, TypeError):
                         result, state, summary = 'The program rejected this call because the arguments are not a valid JSON object.', '被拒绝', call.function.name
-                    display_result = result
-                    if result == 'The program rejected this call because the tool is unavailable.':
-                        display_result = '程序拒绝：工具未开放。'
-                    elif result == 'The program rejected this call because the arguments are not a valid JSON object.':
-                        display_result = '程序拒绝：工具参数不是合法 JSON 对象。'
-                    display_detail = display_result
+                    display_detail = model_tool_result(call.function.name, result, state)
                     tool_message = {'role': 'tool', 'tool_call_id': call.id,
-                                    'content': model_tool_result(call.function.name, result, state)}
+                                    'content': display_detail}
                     result_state = state
                     loop_messages.append(tool_message)
                     history_bytes = calibration * sum(message_request_bytes(m)
@@ -1218,7 +1206,7 @@ class Chat:
                     if autonomy and self.autonomy_should_yield and self.autonomy_should_yield():
                         self.autonomy_interrupted = True
                         self.budget.settle(next_reservation, next_cfg, 0, 0, 0)
-                        final = '自主活动在本步后让位给聊天或控制操作。'
+                        final = 'Autonomous activity yielded after this step to let chat or a control action proceed.'
                         break
                 if self.autonomy_interrupted or self.autonomy_step_limited:
                     break
@@ -1226,7 +1214,7 @@ class Chat:
                 self.budget.settle(next_reservation, next_cfg, 0, 0, 0)
                 raise
         if not final:
-            final = '这次工具步骤用完了。'
+            final = 'The tool-step limit for this request has been reached.'
             self.output(final)
         return final, summaries
 
@@ -1434,4 +1422,3 @@ def main():
 if __name__ == '__main__':
     sys.modules.setdefault('veil_agent', sys.modules[__name__])
     raise SystemExit(main())
-
