@@ -459,17 +459,22 @@ class Budget:
         return request_id, amount
 
     @synchronized
-    def settle_estimate(self, reservation, accounting='embedding-estimate'):
-        request_id, amount = reservation
+    def settle_estimate(self, reservation, accounting='embedding-estimate', *, settled_amount=None):
+        request_id, reserved_amount = reservation
         rows = self.store.read('costs.jsonl')
         reserve = next((row for row in rows if row.get('type') == 'reserve'
                         and row.get('id') == request_id), None)
-        if reserve is None or Decimal(reserve['amount']) != Decimal(amount):
+        if reserve is None or Decimal(reserve['amount']) != Decimal(reserved_amount):
             raise UserError('预算预留无法核对，已停止；请保留 data 文件夹。')
         if any(row.get('type') == 'settle' and row.get('id') == request_id for row in rows):
             return False
+        settled = Decimal(reserved_amount if settled_amount is None else settled_amount)
+        if (not settled.is_finite() or settled < 0 or settled > Decimal(reserved_amount)):
+            raise UserError('预算结算金额超过预留或无效，已停止；请保留 data 文件夹。')
         self.store.append('costs.jsonl', {'type': 'settle', 'id': request_id,
-            'amount': str(amount), 'accounting': accounting})
+            'amount': str(settled), 'reserved_amount': str(reserved_amount),
+            'released_amount': str(Decimal(reserved_amount) - settled),
+            'accounting': accounting})
         return True
 
     @synchronized
