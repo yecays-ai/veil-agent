@@ -71,6 +71,7 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   assert.equal(await chat.webContents.executeJavaScript('typeof window.companion'), 'undefined');
   assert.equal(await chat.webContents.executeJavaScript('typeof require'), 'undefined');
   assert.equal(await chat.webContents.executeJavaScript('document.querySelector("#memory-panel").disabled'), true);
+  assert.ok(await chat.webContents.executeJavaScript('document.querySelector("#box").getBoundingClientRect().width >= 300'), 'desktop input too narrow');
   await wait(() => chat.webContents.executeJavaScript('!document.querySelector("#send").disabled'), 'send disabled');
   await chat.webContents.executeJavaScript('document.querySelector("#box").value="fictional hello"; document.querySelector("#send").click()');
   await wait(() => sends === 1, 'message not delivered');

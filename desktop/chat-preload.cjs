@@ -4,6 +4,10 @@ window.addEventListener('DOMContentLoaded', () => {
   const header = document.querySelector('header');
   const memory = document.querySelector('#memory-panel');
   if (header) header.style.flexWrap = 'wrap';
+  const heading = header?.querySelector('h1');
+  if (heading) heading.style.flexBasis = '100%';
+  const speechTools = document.querySelector('.speech-tools');
+  if (speechTools) speechTools.style.flexBasis = '100%';
   if (memory) {
     memory.hidden = false; memory.disabled = true;
     memory.textContent = 'Memory / Ombre · Coming Soon';
