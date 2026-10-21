@@ -1,6 +1,6 @@
 # 交接
 
-- 2026-10-21 11:05 UTC Codex：工单 042 基于最新 main `8d71b06d52efaa65ee1dc4a535bc62fc5fef632a`，分支 `ticket/042-autonomy-handoff-once`。修复与虚构数据回归在分支；普通聊天只在成功后追加活动 ID 确认，模型请求失败时保留重试，原始自主记录不改。当前容器无法解析 GitHub HTTPS，且没有可启动的 Python；因此没有本地 Git worktree 或本地测试结果。代码通过 GitHub 分支 API 更新；下一步查看 PR CI 与必要审查，按门槛合并；随后 Lan 用专用虚构测试角色验收一次性交接、重启、新活动与失败重试。不要把 CI 当作 Windows 聊天体验验收。
+- 2026-10-21 11:05 UTC Codex：工单 042 基于最新 main `8d71b06d52efaa65ee1dc4a535bc62fc5fef632a`，分支 `ticket/042-autonomy-handoff-once`，PR #77 开放。修复与虚构数据回归在分支；普通聊天只在成功后追加活动 ID 确认，模型请求失败时保留重试，原始自主记录不改。当前容器无法解析 GitHub HTTPS，且没有可启动的 Python；因此没有本地 Git worktree 或本地测试结果。代码通过 GitHub 分支 API 更新；PR #77 下一步检查 CI 与必要审查，满足门槛后合并；随后 Lan 用专用虚构测试角色验收一次性交接、重启、新活动与失败重试。不要把 CI 当作 Windows 聊天体验验收。
 - 2026-10-21 10:22 UTC Codex：工单 039 从 main `fb6211e` 开始，分支 `ticket/039-hidden-memory-context`，只修 031-03。旧版虚构数据已复现隐藏后开场正文仍进入最终模型上下文。仅在 memory_agent.py 增加原生生命周期重新校验和失败保守过滤，memory_native.py 成功修改后同步有效可见性；未改审批、预算、调度或上游。直接记忆回归 90 项全部通过，含假模型真实请求断言；原始虚构聊天字节未变。PR #76 代码提交 `a75a5e5` 的完整 Windows/Linux × Python 3.11/3.12 CI 全部通过，正式小兔子 full review 完成、无须处理的意见。收尾仅更新状态文档，生产代码与回归未变；最终检查及合并状态以 PR #76 为准。未跑付费模型、未访问私人数据。下一步 Lan 按 STATUS 验收；Windows 体验未验收。本单停止，不自行领取下一单。
 - 工单 038：PR #75 已合并为 main `fb6211e`，此前暂停/等待审查记录已不适用。能力状态事务代码保留；Windows 体验待 Lan 验收。
 
