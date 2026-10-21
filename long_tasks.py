@@ -301,8 +301,8 @@ class LongTaskStore:
                     task['progress'].append({'time': now(), 'text': progress.strip()})
             if resolve:
                 pending = task['pending_action']
-                task['tool_events'].append({'time': now(), 'tool': pending['tool'],
-                    'target': pending['target'], 'state': '经检查确认',
+                task['tool_events'].append({'time': now(), 'operation_id': pending['operation_id'],
+                    'tool': pending['tool'], 'target': pending['target'], 'state': '经检查确认',
                     'evidence': f"operation {pending['operation_id']} verified by "
                                 f"{pending['verified_by']} ({pending['verified_sha256'][:16]})"})
                 task['pending_action'] = None
@@ -370,7 +370,11 @@ class LongTaskStore:
             pending = task['pending_action']
             if not pending or pending['tool'] != name:
                 raise UserError('长期任务副作用检查点不匹配，已停止后续工具。')
-            task['tool_events'].append({'time': now(), 'tool': name, 'target': str(target)[:240],
+            if self._normalized_target(target) != (pending.get('normalized_target') or
+                                                     self._normalized_target(pending['target'])):
+                raise UserError('长期任务副作用目标与已持久化检查点不一致，操作仍待核实。')
+            task['tool_events'].append({'time': now(), 'operation_id': pending.get('operation_id', ''),
+                                        'tool': name, 'target': str(target)[:240],
                                         'state': state[:40],
                                         'evidence': f'工具返回状态：{state[:40]}'})
             task['tool_events'] = task['tool_events'][-MAX_TOOL_EVENTS:]
