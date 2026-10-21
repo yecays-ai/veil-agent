@@ -56,6 +56,29 @@ class LongTaskTests(unittest.TestCase):
                                     'progress_update': 'This update cannot be committed.'})
         self.assertEqual(self.tasks.read(), previous)
 
+    def test_nonfile_effect_can_be_verified_by_exact_target_readback(self):
+        task_id = self.create()
+        directory = Path(self.temp.name) / 'lab' / 'new-folder'
+        self.assertEqual(self.tasks.before_tool(
+            'create_directory', 'lab/new-folder', autonomy=True, args={}), (None, True))
+        operation_id = self.tasks.read()['pending_action']['operation_id']
+        directory.mkdir(parents=True)
+        self.tasks.finish_tool('create_directory', 'lab/new-folder', '成功')
+
+        self.tasks.set_tool_step(1)
+        self.tasks.observe_tool_result('get_file_info', 'lab/new-folder-copy', '成功',
+                                       '{"type":"directory"}')
+        self.assertIsNone(self.tasks.read()['pending_action']['verified_in_step'])
+        self.tasks.observe_tool_result('get_file_info', 'lab/new-folder', '成功',
+                                       '{"type":"directory"}')
+        self.assertEqual(self.tasks.read()['pending_action']['verified_in_step'], 1)
+        self.tasks.set_tool_step(2)
+        _, state, _ = self.tasks.invoke('long_task_update', {
+            'action': 'update', 'task_id': task_id, 'resolve_pending': True,
+            'pending_operation_id': operation_id, 'progress_update': 'The folder exists.'})
+        self.assertEqual(state, '成功')
+        self.assertIsNone(self.tasks.read()['pending_action'])
+
     def test_pending_file_write_requires_exact_path_and_actual_contents_after_restart(self):
         self.create()
         task_id = self.tasks.read()['task_id']
