@@ -1,6 +1,6 @@
 # 交接
 
-- 工单 041 已基于最新 main `14cbe535039d80cc865f605420d2ec42dd58e48d`（含 PR #78/040）同步到独立分支 `ticket/041-web-exit-state`，PR #79。退出状态修复完成；本地隔离 6 项定向验证通过；原生产代码提交 `a9119bf` 的 GitHub CI Windows/Linux × Python 3.11/3.12 四项全部通过，同步后的合并提交需重新验证。
+- 工单 041 已基于最新 main `14cbe535039d80cc865f605420d2ec42dd58e48d`（含 PR #78/040）同步到独立分支 `ticket/041-web-exit-state`，PR #79。退出状态修复完成；本地隔离 6 项定向验证通过；原生产代码提交 `a9119bf` 以及同步提交 `af81952` 的 GitHub CI Windows/Linux × Python 3.11/3.12 四项全部通过。
 - CodeRabbit 正式审查因免费配额限制未执行；恢复后再触发。按仓库规则审查完成前不合并；下一步完成审查、必要修复和合并，然后请 Lan 按 STATUS 验收 041。040 的合并状态与验收继续按 STATUS 记录。
 
 - 2026-10-21 Codex：工单 040 的 PR #78 已完成代码修改、回归与评审。最新 main 基线 8d71b06d52efaa65ee1dc4a535bc62fc5fef632a；独立分支 ticket/040-long-task-progress。完成路径保留 40 条原进度，在容量已满时单独持久化最终证据；兼容旧快照；重复完成更新被拒绝以保留首次证据。假数据回归检查实际 JSON、重启、状态展示、后续新任务及 os.replace 失败保护。GitHub Actions 最新 Windows/Linux × Python 3.11/3.12 全绿；CodeRabbit 正式评审中的唯一功能意见已修复、确认并解决。因本地项目没有安全切换分支的 Git 工作区，未在旧 checkout 运行测试；以 PR CI 为验证依据。下一步 Lan 按 STATUS 验收；无真实任务数据或付费模型参与。
