@@ -4,7 +4,7 @@
 
 ## 当前目标与现状
 
-- **054 长期任务检查点与 40 条进度核实：** 基于 main `d331c134e0670816d8a72e6d29e357815ae5e0d7`，分支 `ticket/054-long-task-checkpoint-recovery`。`trace` 检查点改用稳定 memory ID，不依赖执行后会变化的展示标题；带正文的 `trace` 仅在 `memory_read` 返回同 ID、完整且哈希匹配的正文后才可核实。40 条进度已满时，已有程序读回证据可直接记录核实、解除 pending，既有进度和完成证据不覆盖。新增自主包装层与真实原生记忆工具组合回归；本机没有可执行 Python，完整 unittest 待 PR CI 验证。未改 `_tool_chat` 架构、记忆权限或真实数据。
+- **054 长期任务检查点与 40 条进度核实：** 基于 main `d331c134e0670816d8a72e6d29e357815ae5e0d7`，分支 `ticket/054-long-task-checkpoint-recovery`，PR #91。`trace` 检查点前后均使用稳定 memory ID，不依赖执行后会变化的展示标题；带正文的 `trace` 仅在 `memory_read` 返回同 ID、完整且哈希匹配的正文后才可核实。40 条进度已满时，已有程序读回证据可直接记录核实、解除 pending，既有进度和完成证据不覆盖。修复提交 `8da093b` 的 Tests run 824 已在 Ubuntu/Windows × Python 3.11/3.12 全部通过完整 unittest，Dependency security run 17 也通过；本机无可执行 Python，未把本地命令冒充通过。未改 `_tool_chat` 架构、记忆权限或真实数据；由 Lan 安排审查和合并，Codex 不合并。
 
 - **052 最近一次自主活动持续上下文：** PR #89 已合入 main `d331c13`。普通聊天和后续自主唤醒均获取最新已结束记录，并以英文 `System record | Last autonomous activity | Occurred at:` 标记为历史事实；Windows 虚构角色体验仍待 Lan 验收。
 
