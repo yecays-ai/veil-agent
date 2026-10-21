@@ -257,7 +257,7 @@ class NativeMemoryTests(unittest.TestCase):
         self.memory.command(f'/forget {key}')
         self.memory.command(f'/forget {key} 确认')
         text, _, _ = self.tools.invoke('breath_search', {'query': 'lamp'})
-        self.assertEqual(text, '没有找到相关记忆。')
+        self.assertEqual(text, 'No relevant memories were found.')
         self.tools.invoke('hold', {'title': 'b', 'content': 'long ' * 200})
         text, _, _ = self.tools.invoke('breath_search', {'query': 'long'})
         self.assertIn('[已截断]', text)
@@ -553,7 +553,7 @@ class OmbreToolGuardTests(unittest.TestCase):
                                                'why_remembered': 'the event matters'})
 
         self.assertEqual(state, '成功')
-        self.assertIn('Complete memory before the change', result)
+        self.assertIn('改动前完整版本（含元数据）已留档', result)
         versions = self.store.read('fake/memory-versions.jsonl')
         self.assertEqual(len(versions), 1)
         self.assertEqual(versions[0]['old_content'], original)
@@ -594,7 +594,7 @@ class OmbreToolGuardTests(unittest.TestCase):
 
         self.assertEqual(state, '成功')
         self.assertIn('Reason for this operation: corrected the interpretation', result)
-        self.assertIn('正文 content 与含义元数据', result)
+        self.assertIn('content field and meaning_append/meaning_replace metadata are separate fields', result)
         sent = next(args for name, args in self.backend.calls if name == 'trace')
         self.assertNotIn('edit_reason', sent)
         self.assertEqual(sent['meaning_append'], 'new meaning')

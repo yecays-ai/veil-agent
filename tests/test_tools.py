@@ -468,7 +468,7 @@ max_result_bytes = 200
         chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=output.append)
         self.assertEqual(chat.send('read it'), 'I could not read it.')
         tools.invoke.assert_not_called()
-        self.assertIn('参数不是合法 JSON', model.call_args_list[1].args[0][-1]['content'])
+        self.assertIn('arguments are not a valid JSON object', model.call_args_list[1].args[0][-1]['content'])
         self.assertTrue(any('参数不是合法 JSON' in line for line in output))
 
     def test_tool_output_limit_is_reserved_sent_and_settled_without_raising_daily_cap(self):
@@ -713,7 +713,7 @@ max_result_bytes = 200
         chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=lambda _: None)
         self.assertEqual(chat.send('read it'), 'The result was too long.')
         forwarded = model.call_args_list[1].args[0][-1]['content']
-        self.assertIn('超过本轮请求长度上限', forwarded)
+        self.assertIn('exceeded this request input limit', forwarded)
         self.assertNotIn('secret', forwarded)
         self.assertTrue(any((m.get('content') or '').startswith('old ') for m in model.call_args_list[1].args[0]))
 
