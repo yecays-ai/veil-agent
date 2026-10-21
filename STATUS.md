@@ -4,7 +4,7 @@
 
 ## 当前目标与现状
 
-- **034 新对话：** 继续使用既有 PR [#66](https://github.com/yecays-ai/veil-agent/pull/66)，隔离旧聊天轮次并保留记忆、身份、权限和数据。合并后自动化测试与评审进行中；Windows 用户体验尚未验收。
+- **034 新对话：** 继续使用既有 PR [#66](https://github.com/yecays-ai/veil-agent/pull/66)，隔离旧聊天轮次并保留记忆、身份、权限和数据。GitHub Actions 全量测试通过；CodeRabbit 受限流影响未完成评审。Windows 用户体验尚未验收。
 - **035 英文模型上下文：** PR [#70](https://github.com/yecays-ai/veil-agent/pull/70) 已合并，GitHub Actions 全量测试通过；模型侧文案英文化，中文界面保持原样。Windows 用户体验尚未验收。
 
 ## 下一步
