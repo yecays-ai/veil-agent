@@ -37,4 +37,4 @@
 
 ## 当前状态
 
-实现、针对性测试与 PR 正在进行；Windows 实际聊天验收待合并后由 Lan 完成。
+实现与针对性测试完成，PR #81 当前 head `2a1b227c354b30025d01d25a34fc93b34191ea15`；CI 四平台全绿。Claude 独立审查待完成，当前没有可用的 GitHub Claude reviewer（请求返回 422，@claude 未回复），因此暂不合并。Windows 实际聊天验收待合并后由 Lan 完成。
