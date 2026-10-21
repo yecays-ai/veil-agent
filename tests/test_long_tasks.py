@@ -79,6 +79,31 @@ class LongTaskTests(unittest.TestCase):
         self.assertEqual(state, '成功')
         self.assertIsNone(self.tasks.read()['pending_action'])
 
+    def test_legacy_nonfile_pending_remains_recoverable_with_stable_id(self):
+        task_id = self.create()
+        self.assertEqual(self.tasks.before_tool(
+            'create_directory', 'lab/archive', autonomy=True, args={}), (None, True))
+        directory = Path(self.temp.name) / 'lab' / 'archive'
+        directory.mkdir(parents=True)
+        self.tasks.finish_tool('create_directory', 'lab/archive', '成功')
+        saved = self.tasks.read()
+        for key in ('operation_id', 'normalized_target', 'expected_effect'):
+            saved['pending_action'].pop(key, None)
+        self.tasks._save(saved)
+
+        reopened = LongTaskStore(self.store, 'peter')
+        pending = json.loads(reopened.status_text())['pending_action']
+        operation_id = pending['operation_id']
+        reopened.set_tool_step(1)
+        reopened.observe_tool_result('get_file_info', 'lab/archive', '成功',
+                                     '{"type":"directory"}')
+        reopened.set_tool_step(2)
+        _, state, _ = reopened.invoke('long_task_update', {
+            'action': 'update', 'task_id': task_id, 'resolve_pending': True,
+            'pending_operation_id': operation_id, 'progress_update': 'The directory exists.'})
+        self.assertEqual(state, '成功')
+        self.assertIsNone(reopened.read()['pending_action'])
+
     def test_pending_file_write_requires_exact_path_and_actual_contents_after_restart(self):
         self.create()
         task_id = self.tasks.read()['task_id']
