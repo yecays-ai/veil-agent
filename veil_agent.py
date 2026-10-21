@@ -38,6 +38,9 @@ def model_tool_result(name, result, state):
     if not isinstance(result, str) or not CJK_TEXT.search(result):
         return result
     if state != '成功':
+        if name == 'memory_read' and result == '程序拒绝：记忆已变化或缺少版本，请从 offset=0 重新读取。':
+            return ('The program rejected this tool operation because the memory changed or the version is missing. '
+                    'Re-read it from offset=0.')
         outcome = 'rejected' if state == '被拒绝' else 'failed'
         return (f'The program {outcome} this tool operation. Do not claim it succeeded; '
                 'follow the current permissions and approval requirements.')

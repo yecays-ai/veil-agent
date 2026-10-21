@@ -78,6 +78,10 @@ output_cny_per_million = "8"
         rejected = model_tool_result('long_task_update', '程序拒绝：任务状态无效。', '被拒绝')
         self.assertNotRegex(rejected, r'[\u3400-\u9fff]')
         self.assertIn('rejected', rejected)
+        recovery = model_tool_result(
+            'memory_read', '程序拒绝：记忆已变化或缺少版本，请从 offset=0 重新读取。', '被拒绝')
+        self.assertIn('Re-read it from offset=0.', recovery)
+        self.assertNotRegex(recovery, r'[\u3400-\u9fff]')
         self.assertEqual(model_tool_result('memory_read', '这是一条虚构记忆。', '成功'),
                          '这是一条虚构记忆。')
         self.assertEqual(model_tool_result('send_message', '已发送。', '成功'),

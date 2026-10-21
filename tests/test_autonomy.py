@@ -195,7 +195,7 @@ daily_budget_cny = "2"
         self.assertIn('most recent autonomous activity record', context)
         self.assertIn('实验室整理', context)
         self.assertIn('等待新信息', context)
-        self.assertIn('不是用户消息', context)
+        self.assertIn('not a user message', context)
 
     def test_long_task_survives_controller_restart_and_is_in_autonomy_status(self):
         _, state, _ = self.chat.long_tasks.invoke('long_task_update', {
@@ -450,4 +450,3 @@ daily_budget_cny = "2"
 
 if __name__ == '__main__':
     unittest.main()
-
