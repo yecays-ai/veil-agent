@@ -1,10 +1,10 @@
 # 当前状态
 
-更新：2026-10-21 · 工单 048（PR #87，CI 修复后复跑中）；049 已合入；045（PR #83）与 046（PR #82）已合入；044、043、041、042、040 已合入
+更新：2026-10-21 · 工单 048（PR #87，CI 全绿）；049 已合入；045（PR #83）与 046（PR #82）已合入；044、043、041、042、040 已合入
 
 ## 当前目标与现状
 
-- **048 实验 017 适配新版 Ombre HTTP 接口（031-11）：** 基于最新 main `c0f4553c0e6ad4c4855e23f6b458d0f0252e0700`，分支 `ticket/048-ombre-http-adapter`，PR #87。实验入口原来导入已移除的 `ombre_config` 并按 stdio 参数构造 MCP；现已改为复用 `ombre_resident.start_or_connect()` 的隔离 Streamable HTTP 实例和 `memory_agent.MCP`。新增虚构 token/假连接器回归 2 项通过，语法编译和 diff 检查通过；完整本地测试未能结束并输出汇总，Actions run 787 的 Ubuntu Python 3.11 已指出新增测试未创建 `.local-tmp`；已修复，等待新 head 完整 CI。真实角色记忆与供应商请求未触碰。完整质量复跑会产生真实模型费用，不纳入本单回归。
+- **048 实验 017 适配新版 Ombre HTTP 接口（031-11）：** 基于最新 main `c0f4553c0e6ad4c4855e23f6b458d0f0252e0700`，分支 `ticket/048-ombre-http-adapter`，PR #87。实验入口原来导入已移除的 `ombre_config` 并按 stdio 参数构造 MCP；现已改为复用 `ombre_resident.start_or_connect()` 的隔离 Streamable HTTP 实例和 `memory_agent.MCP`。新增虚构 token/假连接器回归 2 项通过，语法编译和 diff 检查通过；完整本地测试未能结束并输出汇总，GitHub Actions run 789 的 Windows/Linux × Python 3.11/3.12 共 4 个矩阵任务全部通过，各运行 307 项测试；4 个可选外部测试按配置跳过。真实角色记忆与供应商请求未触碰。完整质量复跑会产生真实模型费用，不纳入本单回归。
 
 - **049 记忆可见性误判（Claude 修复）：** 记忆文件里 `relation_links` 下的缩进 `type: same_event` 被当成顶层 `type`，重复键导致“可见性无法确认”，有关联的记忆每轮都被拦下并提示。现在只读顶层键。Windows 验收：pull 后聊几句，那条英文提示不应每轮出现，Peter 能想起有关联的记忆。
 
@@ -23,7 +23,7 @@
 
 ## 下一步
 
-等待 PR #87 的 Windows/Linux × Python 3.11/3.12 完整 CI 结果；只处理 CodeRabbit 有效功能/安全意见。之后将 PR 交给 Lan 安排 Claude 审查与合并，不由 Codex 合并。Lan 可按本页 048 预检步骤用空隔离库确认 HTTP/MCP 握手；完整质量复跑会产生费用。
+PR #87 的完整 CI 已通过，未收到 CodeRabbit 评论；将 PR 交给 Lan 安排 Claude 审查与合并，不由 Codex 合并。Lan 可按本页 048 预检步骤用空隔离库确认 HTTP/MCP 握手；完整质量复跑会产生费用。
 
 ## Windows 验收
 
