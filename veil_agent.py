@@ -695,9 +695,9 @@ class Chat:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix('.tmp')
         try:
-            with tmp.open('w', encoding='utf-8', newline='\\n') as handle:
+            with tmp.open('w', encoding='utf-8', newline='\n') as handle:
                 json.dump({'start': start, 'language': language}, handle)
-                handle.write('\\n')
+                handle.write('\n')
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(tmp, path)
