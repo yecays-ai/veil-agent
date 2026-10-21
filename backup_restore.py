@@ -173,7 +173,7 @@ def _cold_lock(root, *, create_session=False):
                 if candidate.is_symlink():
                     raise BackupError("Ombre 服务锁路径含符号链接，已停止。")
             locks.append(_FileLock(path, create=False))
-        yield
+        yield locks
     finally:
         for lock in reversed(locks):
             lock.close()
@@ -295,10 +295,10 @@ def verify_backup(backup):
         raise BackupError("备份根目录含缺失或未登记的项目。")
     for name in (MANIFEST_NAME, MANIFEST_HASH_NAME, README_NAME, "payload"):
         path = backup / name
-    if not path.exists() or path.is_symlink():
+        if not path.exists() or path.is_symlink():
             raise BackupError(f"备份缺少必要项目：{name}")
-    if name == "payload" and not path.is_dir():
-        raise BackupError("备份 payload 必须是目录。")
+        if name == "payload" and not path.is_dir():
+            raise BackupError("备份 payload 必须是目录。")
     raw = (backup / MANIFEST_NAME).read_bytes()
     recorded = (backup / MANIFEST_HASH_NAME).read_text(encoding="ascii").split()
     if len(recorded) != 2 or recorded[1] != MANIFEST_NAME or not hmac.compare_digest(
@@ -356,7 +356,7 @@ def verify_backup(backup):
         for name in list(dirnames):
             path = current_path / name
             if path.is_symlink():
-                raise BackupError("備份含符号链接，拒绝恢复。")
+                raise BackupError("备份含符号链接，拒绝恢复。")
             actual_dirs.add(path.relative_to(backup).as_posix())
         for name in filenames:
             path = current_path / name
@@ -430,9 +430,8 @@ def restore_backup(backup, target, *, replace=False, confirm=input):
     created_dirs = []
     written = []
     safety = None
-    safety_complete = False
     try:
-        with _cold_lock(target):
+        with _cold_lock(target) as locks:
             source_payload = backup / "payload"
             for relative in manifest["directories"]:
                 _safe_manifest_path(relative)
@@ -445,66 +444,122 @@ def restore_backup(backup, target, *, replace=False, confirm=input):
                 if staged.stat().st_size != entry["size"] or _sha256(staged) != entry["sha256"]:
                     raise BackupError("备份在校验后发生变化，恢复已取消。")
 
-            conflicts = _validate_target_paths(target, manifest) if target.exists() else []
-            if conflicts and not replace:
-                raise BackupError(
-                    f"恢复目标已有 {len(conflicts)} 个同名数据文件；未覆盖任何内容。"
-                    "若确认覆盖，请使用 --replace 并在提示时输入 RESTORE。"
-                )
-            if conflicts:
-                answer = confirm(
-                    f"将先把 {len(conflicts)} 个目标文件复制到独立安全副本，再覆盖。输入 RESTORE 确认："
-                )
-                if answer != "RESTORE":
-                    raise BackupError("未确认覆盖，目标目录未改动。")
-                safety = target.parent / f"{target.name}.before-restore-{_utc_stamp()}-{uuid.uuid4().hex[:8]}"
-                safety.mkdir()
-                for relative, existing in conflicts:
-                    saved = safety / Path(*PurePosixPath(relative).parts[1:])
-                    saved.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(existing, saved)
-                    if saved.stat().st_size != existing.stat().st_size or _sha256(saved) != _sha256(existing):
-                        raise BackupError("恢复前安全副本校验失败，目标未被覆盖。")
-                safety_complete = True
+            if replace:
+                existing_components = []
+                if target.exists():
+                    for name in PAYLOAD_ROOTS:
+                        component = target / name
+                        if component.is_symlink():
+                            raise BackupError(f"恢复目标的 {name} 不能是符号链接。")
+                        if component.exists():
+                            existing_components.append(name)
+                if existing_components:
+                    answer = confirm(
+                        "将把目标现有的 data/、characters/、persona/ 和 .env 整体移入安全副本，"
+                        "再恢复干净备份。输入 RESTORE 确认："
+                    )
+                    if answer != "RESTORE":
+                        raise BackupError("未确认替换，目标目录未改动。")
+                    safety = target.parent / f"{target.name}.before-restore-{_utc_stamp()}-{uuid.uuid4().hex[:8]}"
+                    safety.mkdir()
+                else:
+                    conflicts = _validate_target_paths(target, manifest) if target.exists() else []
+                    if conflicts:
+                        raise BackupError("恢复目标已有冲突数据；未改动目标目录。")
 
-            if not target.exists():
-                target.mkdir()
-            all_directories = set(manifest["directories"])
-            for relative in sorted(all_directories, key=lambda value: (len(PurePosixPath(value).parts), value)):
-                destination = target / Path(*PurePosixPath(relative).parts[1:])
-                if not destination.exists():
-                    destination.mkdir()
-                    created_dirs.append(destination)
-            try:
-                for entry in manifest["files"]:
-                    relative = entry["path"]
-                    source = stage / Path(*PurePosixPath(relative).parts[1:])
-                    destination = target / Path(*PurePosixPath(relative).parts[1:])
-                    _copy_atomic(source, destination)
-                    written.append((relative, destination, any(r == relative for r, _ in conflicts)))
-                for entry in manifest["files"]:
-                    destination = target / Path(*PurePosixPath(entry["path"]).parts[1:])
-                    if destination.stat().st_size != entry["size"] or _sha256(destination) != entry["sha256"]:
-                        raise BackupError("恢复后完整性复核失败，正在回滚目标文件。")
-            except Exception:
-                for relative, destination, existed in reversed(written):
-                    if existed and safety_complete:
-                        saved = safety / Path(*PurePosixPath(relative).parts[1:])
-                        _copy_atomic(saved, destination)
-                    else:
-                        destination.unlink(missing_ok=True)
-                for directory in reversed(created_dirs):
+                moved = []
+                installed = []
+                session_lock = locks[0]
+                relock_session = session_lock.handle is not None
+                if relock_session:
+                    session_lock.close()
+                try:
                     try:
-                        directory.rmdir()
-                    except OSError:
-                        pass
-                raise
+                        if not target.exists():
+                            target.mkdir()
+                        for name in existing_components:
+                            component = target / name
+                            saved = safety / name
+                            os.replace(component, saved)
+                            moved.append((component, saved))
+                        for name in PAYLOAD_ROOTS:
+                            staged_component = stage / name
+                            if staged_component.exists():
+                                destination = target / name
+                                os.replace(staged_component, destination)
+                                installed.append((destination, staged_component))
+                        for entry in manifest["files"]:
+                            destination = target / Path(*PurePosixPath(entry["path"]).parts[1:])
+                            if destination.stat().st_size != entry["size"] or _sha256(destination) != entry["sha256"]:
+                                raise BackupError("恢复后完整性复核失败，正在回滚整个目标数据集。")
+                    except Exception as failure:
+                        rollback_errors = []
+                        for destination, staged_component in reversed(installed):
+                            try:
+                                os.replace(destination, staged_component)
+                            except OSError as exc:
+                                rollback_errors.append(exc)
+                        for original_path, saved_path in reversed(moved):
+                            try:
+                                if not original_path.exists() and not original_path.is_symlink():
+                                    os.replace(saved_path, original_path)
+                            except OSError as exc:
+                                rollback_errors.append(exc)
+                        if rollback_errors:
+                            raise BackupError(
+                                f"恢复失败且回滚未能全部完成；原有数据安全副本保留在：{safety}"
+                            ) from failure
+                        if safety is not None:
+                            shutil.rmtree(safety, ignore_errors=True)
+                        raise
+                finally:
+                    if relock_session and (target / "data").is_dir():
+                        try:
+                            locks[0] = _FileLock(target / "data" / "session.lock", create=True)
+                        except OSError as exc:
+                            raise BackupError(
+                                f"恢复后无法重新锁定 data/；原有数据安全副本位于：{safety}"
+                            ) from exc
+            else:
+                conflicts = _validate_target_paths(target, manifest) if target.exists() else []
+                if conflicts:
+                    raise BackupError(
+                        f"恢复目标已有 {len(conflicts)} 个同名数据文件；未覆盖任何内容。"
+                        "若确认覆盖，请使用 --replace 并在提示时输入 RESTORE。"
+                    )
+                if not target.exists():
+                    target.mkdir()
+                all_directories = set(manifest["directories"])
+                for relative in sorted(all_directories, key=lambda value: (len(PurePosixPath(value).parts), value)):
+                    destination = target / Path(*PurePosixPath(relative).parts[1:])
+                    if not destination.exists():
+                        destination.mkdir()
+                        created_dirs.append(destination)
+                try:
+                    for entry in manifest["files"]:
+                        source = stage / Path(*PurePosixPath(entry["path"]).parts[1:])
+                        destination = target / Path(*PurePosixPath(entry["path"]).parts[1:])
+                        _copy_atomic(source, destination)
+                        written.append(destination)
+                    for entry in manifest["files"]:
+                        destination = target / Path(*PurePosixPath(entry["path"]).parts[1:])
+                        if destination.stat().st_size != entry["size"] or _sha256(destination) != entry["sha256"]:
+                            raise BackupError("恢复后完整性复核失败，正在回滚目标文件。")
+                except Exception:
+                    for destination in reversed(written):
+                        destination.unlink(missing_ok=True)
+                    for directory in reversed(created_dirs):
+                        try:
+                            directory.rmdir()
+                        except OSError:
+                            pass
+                    raise
         return len(manifest["files"]), safety
     except Exception:
         if target_created and target.exists() and not target.is_symlink():
             shutil.rmtree(target, ignore_errors=True)
-        if safety is not None and safety.exists() and not safety_complete:
-            shutil.rmtree(safety, ignore_errors=True)
+        if safety is not None and safety.exists() and not any(safety.iterdir()):
+            safety.rmdir()
         raise
     finally:
         if stage.exists():
@@ -521,7 +576,7 @@ def _parser():
     restore = sub.add_parser("restore", help="校验并恢复至明确指定的目录")
     restore.add_argument("--backup", required=True, help="备份目录")
     restore.add_argument("--target", required=True, help="明确指定的项目根目录")
-    restore.add_argument("--replace", action="store_true", help="允许交互确认后覆盖同名文件；先保留安全副本")
+    restore.add_argument("--replace", action="store_true", help="确认后先整体保存现有角色数据，再恢复干净备份")
     return parser
 
 
@@ -540,7 +595,7 @@ def main(argv=None):
             count, safety = restore_backup(args.backup, args.target, replace=args.replace)
             print(f"恢复成功：{args.target}（{count} 个文件）")
             if safety:
-                print(f"被替换的原有文件安全副本：{safety}")
+                print(f"原有角色数据安全副本：{safety}")
     except (BackupError, OSError) as exc:
         print(f"操作失败：{exc}", file=sys.stderr)
         return 1
