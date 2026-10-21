@@ -529,7 +529,7 @@ def self_facts(cfg, budget, memory=False, capabilities=None):
         f'You are an AI companion: {json.dumps(cfg.name, ensure_ascii=False)}; '
         f'provider {json.dumps(cfg.provider_name, ensure_ascii=False)}; '
         f'model {json.dumps(cfg.provider["model"], ensure_ascii=False)}.\n'
-        f'Available: terminal text chat; up to {cfg.history_rounds} recent rounds included verbatim '
+        f'Available: text chat (web page or terminal); up to {cfg.history_rounds} recent rounds included verbatim '
         'per request; full chat logs saved locally.\n'
         + (('Long-term memory: you decide what to save and call the hold tool yourself (the user need not say '
             '"remember"); relevant memories are also recalled automatically each turn; '
