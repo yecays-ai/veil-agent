@@ -297,7 +297,8 @@ function renderActivity(record){
     '结果：'+record.result+'；'+record.result_reason,
     '决定/结束信息：'+record.decision,
     '已留存文件：'+((record.lab_files_changed||[]).join('、')||'无')];
-  for(const item of record.tools||[])lines.push(item.tool+' | '+item.path+' | '+item.state);
+  for(const item of record.tools||[])lines.push(item.tool+' | '+item.path+' | '+item.state+
+    (item.result_state==='结果过长'?'；结果过长，未提供给模型':''));
   if(record.next_step)lines.push('下一步：'+record.next_step);
   lines.push('本次费用：¥'+record.cost_cny);
   $('activity-record').textContent=lines.join('\n');

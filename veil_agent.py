@@ -788,8 +788,9 @@ class Chat:
         next_reservation = None
         autonomy_tool_steps = 0
 
-        def log_tool(name, path, state):
+        def log_tool(name, path, state, **metadata):
             row = {'request_id': request_id, 'tool': name, 'path': path, 'state': state}
+            row.update(metadata)
             if autonomy:
                 row['autonomy_run_id'] = self.autonomy_run_id
             self.store.append(f'{self.cfg.id}/tools.jsonl', row)
@@ -1026,21 +1027,25 @@ class Chat:
                     except (ValueError, TypeError):
                         result, state, summary = '程序拒绝：工具参数不是合法 JSON 对象。', '被拒绝', call.function.name
                     tool_message = {'role': 'tool', 'tool_call_id': call.id, 'content': result}
+                    result_state = state
                     loop_messages.append(tool_message)
                     history_bytes = calibration * sum(message_request_bytes(m)
                         for m in loop_messages[history_start:history_start + history_count])
                     if request_size(next_offered) - history_bytes > self.cfg.provider['max_input_tokens']:
                         tool_message['content'] = too_long_result
-                        state = '结果过长'
+                        result_state = '结果过长'
                     fit_history(next_offered)
                     if request_size(next_offered) > self.cfg.provider['max_input_tokens']:
                         tool_message['content'] = too_long_result
-                        state = '结果过长'
-                    if call.function.name != 'send_message' or state != '成功':
-                        self.output(display_call(call.function.name, summary, state,
-                                                 tool_message['content'] if state != '成功' else None))
-                    summaries.append({'tool': call.function.name, 'path': summary, 'state': state})
-                    log_tool(call.function.name, summary, state)
+                        result_state = '结果过长'
+                    delivery = {'result_state': result_state} if result_state != state else {}
+                    if result_state == '结果过长' and state == '成功':
+                        tool_message['content'] = '工具已执行成功；' + too_long_result
+                    if call.function.name != 'send_message' or result_state != '成功':
+                        self.output(display_call(call.function.name, summary, result_state,
+                                                 tool_message['content'] if result_state != '成功' else None))
+                    summaries.append({'tool': call.function.name, 'path': summary, 'state': state, **delivery})
+                    log_tool(call.function.name, summary, state, **delivery)
                     if autonomy and self.autonomy_should_yield and self.autonomy_should_yield():
                         self.autonomy_interrupted = True
                         self.budget.settle(next_reservation, next_cfg, 0, 0, 0)

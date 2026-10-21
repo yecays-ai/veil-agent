@@ -72,11 +72,13 @@ function page(options = {}) {
 const p = page();
 p.run(`renderActivity({started_at:'start',finished_at:'end',result:'部分完成',
   result_reason:'记忆连接不可用',decision:'本次中断',lab_files_changed:['lab/progress.md'],
-  tools:[{tool:'pulse',path:'<script>fixture</script>',state:'出错'}],next_step:'核实后继续',cost_cny:'0.1'})`);
+  tools:[{tool:'pulse',path:'<script>fixture</script>',state:'出错'},
+    {tool:'append_file',path:'lab/progress.md',state:'成功',result_state:'结果过长'}],next_step:'核实后继续',cost_cny:'0.1'})`);
 assert.equal(p.elements.get('activity-details').hidden, false);
 assert.match(p.elements.get('activity-record').textContent, /部分完成.*记忆连接不可用/);
 assert.match(p.elements.get('activity-record').textContent, /lab\/progress.md/);
 assert.match(p.elements.get('activity-record').textContent, /<script>fixture<\/script>/);
+assert.match(p.elements.get('activity-record').textContent, /成功；结果过长，未提供给模型/);
 p.run('renderActivity(null)');
 assert.equal(p.elements.get('activity-details').hidden, true);
 assert.equal(p.run('bubbleDelay("😀".repeat(60))'), 1200);

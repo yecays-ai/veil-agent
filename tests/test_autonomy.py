@@ -406,6 +406,44 @@ daily_budget_cny = "2"
             self.controller._context()
         self.model.assert_not_called()
 
+    def test_large_receipt_cannot_erase_confirmed_write_when_recovering(self):
+        from test_tools import ToolLoopTests
+        from veil_agent import RequestFailed
+        helper = ToolLoopTests()
+        cfg = replace(self.cfg, tools={'enabled': True, 'max_steps': 4, 'max_output_tokens': 50})
+        calls = [helper.tool_call('read_text_file', '{"path":"lab/source.md"}', 'read'),
+                 helper.tool_call('append_file', '{"path":"lab/progress.md","content":"confirmed"}', 'write')]
+        model = Mock(side_effect=[(helper.message(calls), 100, 20, 0), RuntimeError('fixture lost reply')])
+        target = self.root / 'confirmed-progress.md'
+        def invoke(name, args, approval):
+            if name == 'read_text_file':
+                return 'x' * 6000, '成功', 'lab/source.md'
+            with target.open('a', encoding='utf-8') as stream:
+                stream.write('confirmed\n')
+            return 'receipt' * 1800, '成功', 'lab/progress.md'
+        tools = Mock()
+        tools.tools = [SimpleNamespace(name=name, description=name, inputSchema={})
+                       for name in ('read_text_file', 'append_file')]
+        tools.capability_event = None
+        tools.invoke.side_effect = invoke
+        chat = Chat(cfg, self.store, self.budget, model, tools=tools, output=lambda _: None)
+        controller = AutonomyController(chat, self.hub)
+        run_id = self.budget.clock()
+        chat.autonomy_run_id = run_id
+        controller.active_path.parent.mkdir(parents=True, exist_ok=True)
+        controller.active_path.write_text(json.dumps({'started_at': run_id}), encoding='utf-8')
+        with self.assertRaises(RequestFailed):
+            chat.send('synthetic read and append', autonomy=True)
+        row = self.store.read('test/tools.jsonl')[-1]
+        self.assertEqual(row['state'], '成功')
+        self.assertEqual(row['result_state'], '结果过长')
+        recovered = AutonomyController(chat, self.hub)
+        self.assertEqual(recovered.rows[-1]['lab_files_changed'], ['lab/progress.md'])
+        self.assertEqual(recovered.rows[-1]['tools'][-1]['state'], '成功')
+        self.assertEqual(recovered.rows[-1]['tools'][-1]['result_state'], '结果过长')
+        self.assertEqual(target.read_text(encoding='utf-8'), 'confirmed\n')
+        self.assertEqual(tools.invoke.call_count, 2)
+
 
 if __name__ == '__main__':
     unittest.main()

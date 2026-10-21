@@ -13,15 +13,23 @@ MAX_CONTEXT_BYTES = 12 * 1024
 MAX_CHAT_CONTEXT_BYTES = 1500
 
 
+def tool_failed(item):
+    return item.get('state') != '成功' or item.get('result_state') == '结果过长'
+
+
+def tool_state(item):
+    return item['state'] + ('；结果过长，未提供给模型' if item.get('result_state') == '结果过长' else '')
+
+
 def activity_view(row):
     """Present older misleading success rows accurately without rewriting evidence."""
     row = dict(row)
     tools = row.get('tools', [])
-    failed = [item for item in tools if item.get('state') != '成功']
+    failed = [item for item in tools if tool_failed(item)]
     if row.get('result') == '完成' and failed:
         row['result'] = '部分完成' if any(item.get('state') == '成功' for item in tools) else '失败'
         row['result_reason'] = '存在未成功的工具操作：' + '、'.join(
-            item['tool'] + '（' + item['state'] + '）' for item in failed)
+            item['tool'] + '（' + tool_state(item) + '）' for item in failed)
         if str(row.get('decision', '')).startswith(('工具调用记录超过', '模型达到输出上限')):
             row['result_reason'] += '；' + row['decision']
     row['lab_files_changed'] = list(dict.fromkeys(row.get('lab_files_changed', [])))
@@ -149,6 +157,8 @@ class AutonomyController:
                 if not all(isinstance(row.get(key), str) for key in ('tool', 'path', 'state')):
                     raise UserError('中断任务的工具记录损坏，请保留 data 文件夹。')
                 tools.append({key: row[key] for key in ('tool', 'path', 'state')})
+                if row.get('result_state') == '结果过长':
+                    tools[-1]['result_state'] = '结果过长'
         files = list(dict.fromkeys(item['path'] for item in tools if item['state'] == '成功'
                      and item['tool'] in ('write_file', 'append_file', 'create_directory')))
         events = self.chat.store.read('costs.jsonl')
@@ -394,7 +404,7 @@ class AutonomyController:
                 item['path'] for item in record['tools'] if item.get('state') == '成功'
                 and item.get('tool') in ('write_file', 'append_file', 'create_directory')))
             successful = any(item.get('state') == '成功' for item in record['tools'])
-            failures = [item for item in record['tools'] if item.get('state') != '成功']
+            failures = [item for item in record['tools'] if tool_failed(item)]
             stop = self.chat.tool_stop_reason
             if stop and record['result'] not in ('被打断',):
                 record['result'] = '部分完成' if successful else '失败'
@@ -405,8 +415,8 @@ class AutonomyController:
                 record['result'] = '部分完成'
             elif record['result'] in ('完成', '搁置') and failures:
                 record['result'] = '部分完成' if successful else '失败'
-                record['result_reason'] = '未成功的工具操作：' + '、'.join(
-                    item['tool'] + '（' + item['state'] + '）' for item in failures)
+                record['result_reason'] = '未成功或结果不可用的工具操作：' + '、'.join(
+                    item['tool'] + '（' + tool_state(item) + '）' for item in failures)
             if record['result'] in ('失败', '部分完成') and not record['next_step']:
                 record['next_step'] = '先核实本次已成功的操作与留存文件，再处理阻塞原因；不要重复写入。'
             after = sum(self.chat.budget.category_totals(self.chat.cfg.id))
@@ -446,7 +456,7 @@ class AutonomyController:
             if row['lab_files_changed']:
                 lines.append('已留存文件：' + '、'.join(row['lab_files_changed']))
             for item in row['tools']:
-                lines.append(f"工具：{item['tool']} | {item['path']} | {item['state']}")
+                lines.append(f"工具：{item['tool']} | {item['path']} | {tool_state(item)}")
             if row['next_step']:
                 lines.append('下一步：' + row['next_step'])
         return task_line + '\n'.join(lines)
