@@ -12,6 +12,8 @@ from concurrent.futures import Future
 from pathlib import Path, PureWindowsPath
 from types import SimpleNamespace
 
+from capability_state import capability_transaction, save_capabilities
+
 
 VERSION = 1
 ALLOW = {
@@ -229,6 +231,7 @@ class FilesystemTools:
         except (OSError, ValueError):
             self.startup_notice = '实验室不可用：目录不是普通文件夹或存在链接重定向；实验室免确认权限已关闭。'
 
+    @capability_transaction
     def _record_capabilities(self, names=None):
         names = names or []
         core = {'version': VERSION, 'folder': self.folder_name, 'tools': {
@@ -305,24 +308,20 @@ class FilesystemTools:
                    'autonomy_announced': bool(previous and previous.get('autonomy_announced')),
                    'long_tasks_announced': bool(previous and previous.get('long_tasks_announced'))}
             if previous != row:
-                self.cap_path.parent.mkdir(parents=True, exist_ok=True)
-                temporary = self.cap_path.with_suffix('.json.tmp')
-                temporary.write_text(json.dumps(row, ensure_ascii=False, indent=2), encoding='utf-8')
-                os.replace(temporary, self.cap_path)
+                save_capabilities(self.cap_path, row)
         except Exception:
             # Never permit tools if capability state cannot be durably recorded.
             self.enabled = False
             from veil_agent import UserError
             raise UserError('能力清单无法读取或保存，文件工具已停止；请保留 data 文件夹。')
 
+    @capability_transaction
     def consume_capability_event(self):
         try:
             row = json.loads(self.cap_path.read_text(encoding='utf-8'))
             row['pending_event'] = None
             row['pending_event_model'] = None
-            temporary = self.cap_path.with_suffix('.json.tmp')
-            temporary.write_text(json.dumps(row, ensure_ascii=False, indent=2), encoding='utf-8')
-            os.replace(temporary, self.cap_path)
+            save_capabilities(self.cap_path, row)
             self.capability_event = None
             self.capability_event_model = None
         except Exception:
@@ -330,6 +329,7 @@ class FilesystemTools:
             from veil_agent import UserError
             raise UserError('能力清单无法更新，文件工具已停止；请保留 data 文件夹。')
 
+    @capability_transaction
     def announce_autonomy(self):
         if getattr(self, 'cap_path', None) is None:
             return
@@ -348,9 +348,7 @@ class FilesystemTools:
             row['pending_event_model'] = (prior_model + '\n' if prior_model else '') + (
                 'Autonomous activity is enabled. You may choose whether to act; if send_message is available, '
                 'you may send up to three chat messages per wake, or none.')
-            temporary = self.cap_path.with_suffix('.json.tmp')
-            temporary.write_text(json.dumps(row, ensure_ascii=False, indent=2), encoding='utf-8')
-            os.replace(temporary, self.cap_path)
+            save_capabilities(self.cap_path, row)
             self.capability_event = event
             self.capability_event_model = row['pending_event_model']
         except Exception as exc:
@@ -358,6 +356,7 @@ class FilesystemTools:
             from veil_agent import UserError
             raise UserError('能力清单无法更新，未开启自主活动；请保留 data 文件夹。') from exc
 
+    @capability_transaction
     def announce_long_tasks(self):
         if getattr(self, 'cap_path', None) is None:
             return
@@ -379,12 +378,7 @@ class FilesystemTools:
                 'Long-task tools are available to save one active task, record confirmed progress and next steps, '
                 'and continue after later autonomous activity or a service restart. Existing budgets, tool '
                 'permissions, and approval rules still apply.')
-            temporary = self.cap_path.with_suffix('.json.tmp')
-            with temporary.open('w', encoding='utf-8', newline='\n') as handle:
-                handle.write(json.dumps(row, ensure_ascii=False, indent=2))
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary, self.cap_path)
+            save_capabilities(self.cap_path, row)
             self.capability_event = event
             self.capability_event_model = row['pending_event_model']
         except Exception as exc:
@@ -731,4 +725,5 @@ class _McpWorker:
         if self.thread.is_alive() and self.requests is not None:
             self.loop.call_soon_threadsafe(self.requests.put_nowait, None)
             self.thread.join(timeout=10)
+
 

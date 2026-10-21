@@ -9,6 +9,7 @@ import hashlib
 import re
 import uuid
 
+from capability_state import capability_lock, save_capabilities
 from memory_agent import ordinary_hits, MemoryToolError, vault_path as role_vault_path
 
 OMBRE_TOOLS = ('trace', 'dream', 'letter_write', 'letter_read', 'letter_lock_update',
@@ -107,34 +108,32 @@ class NativeMemoryTools:
 
     def bind_capabilities(self, files):
         path = self.memory.store.root / self.memory.cfg.id / 'capabilities.json'
-        try:
-            row = json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
-            current = sorted(tool.name for tool in self.tools)
-            previous = row.get('memory_tools')
-            if previous != current:
-                names = ', '.join(name for name in current if name in NATIVE_TOOLS)
-                event = (f'{self.memory.cfg.name} 新增记忆能力：' + names +
-                         '。trace 删除必须先经页面审批；自主活动中的删除会进入待删除栏目。')
-                old = row.get('pending_event')
-                if not isinstance(old, str) or event not in old:
-                    row['pending_event'] = (old + '\n' + event).strip() if old else event
-                current_model = row.get('pending_event_model') or ''
-                model_event = ('New memory tools are available: ' + names +
-                               '. Deletion through trace requires explicit UI approval; requests made during '
-                               'autonomous activity remain pending for later approval.')
-                if model_event not in current_model:
-                    row['pending_event_model'] = (current_model + '\n' + model_event).strip()
-                row['memory_tools'] = current
-                path.parent.mkdir(parents=True, exist_ok=True)
-                temporary = path.with_suffix('.json.tmp')
-                temporary.write_text(json.dumps(row, ensure_ascii=False, indent=2), encoding='utf-8')
-                temporary.replace(path)
-            if hasattr(files, 'capability_event'):
-                files.capability_event = row.get('pending_event')
-                files.capability_event_model = row.get('pending_event_model')
-        except Exception as exc:
-            from veil_agent import UserError
-            raise UserError('记忆能力清单无法安全保存，记忆工具已停止。') from exc
+        with capability_lock(path):
+            try:
+                row = json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
+                current = sorted(tool.name for tool in self.tools)
+                previous = row.get('memory_tools')
+                if previous != current:
+                    names = ', '.join(name for name in current if name in NATIVE_TOOLS)
+                    event = (f'{self.memory.cfg.name} 新增记忆能力：' + names +
+                             '。trace 删除必须先经页面审批；自主活动中的删除会进入待删除栏目。')
+                    old = row.get('pending_event')
+                    if not isinstance(old, str) or event not in old:
+                        row['pending_event'] = (old + '\n' + event).strip() if old else event
+                    current_model = row.get('pending_event_model') or ''
+                    model_event = ('New memory tools are available: ' + names +
+                                   '. Deletion through trace requires explicit UI approval; requests made during '
+                                   'autonomous activity remain pending for later approval.')
+                    if model_event not in current_model:
+                        row['pending_event_model'] = (current_model + '\n' + model_event).strip()
+                    row['memory_tools'] = current
+                    save_capabilities(path, row)
+                if hasattr(files, 'capability_event'):
+                    files.capability_event = row.get('pending_event')
+                    files.capability_event_model = row.get('pending_event_model')
+            except Exception as exc:
+                from veil_agent import UserError
+                raise UserError('记忆能力清单无法安全保存，记忆工具已停止。') from exc
 
     def handles(self, name):
         return name in NATIVE_TOOLS
@@ -679,5 +678,6 @@ class ToolSet:
         if self.native.handles(name):
             return self.native.preview_summary(name, args)
         return self.files.preview_summary(name, args)
+
 
 
