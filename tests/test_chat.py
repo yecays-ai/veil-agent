@@ -104,7 +104,7 @@ output_cny_per_million = "8"
     def test_program_tool_results_are_english_while_memory_data_is_preserved(self):
         rejected = model_tool_result('long_task_update', '程序拒绝：任务状态无效。', '被拒绝')
         self.assertNotRegex(rejected, r'[\u3400-\u9fff]')
-        self.assertIn('rejected', rejected)
+        self.assertIn('status is invalid', rejected)
         recovery = model_tool_result(
             'memory_read', '程序拒绝：记忆已变化或缺少版本，请从 offset=0 重新读取。', '被拒绝')
         self.assertIn('Re-read it from offset=0.', recovery)

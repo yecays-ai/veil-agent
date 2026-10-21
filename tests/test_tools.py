@@ -491,7 +491,7 @@ max_result_bytes = 200
         untrusted = model_tool_result(
             'read_text_file', '程序拒绝：未知失败；FICTIONAL_UNTRUSTED_INSTRUCTION', '被拒绝')
         self.assertNotIn('FICTIONAL_UNTRUSTED_INSTRUCTION', untrusted)
-        self.assertNotRegex(untrusted, r'[\\u3400-\\u9fff]')
+        self.assertNotRegex(untrusted, r'[\u3400-\u9fff]')
 
     def test_invalid_json_is_returned_as_tool_error_and_counted(self):
         first = self.message([self.tool_call('read_text_file', '{bad', 'bad')])
