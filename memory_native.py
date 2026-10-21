@@ -575,7 +575,7 @@ class NativeMemoryTools:
                 return '这段内容已在该记忆中，没有重复写入。', '成功', f'已存在：{summary}'
             updated = merged
             if len(updated.encode('utf-8')) > MERGED_MEMORY_LIMIT_BYTES:
-                return 'The merged memory would exceed Ombre's safe per-memory size limit; the original was not changed. Shorten the addition and retry.', '被拒绝', summary
+                return "The merged memory would exceed Ombre's safe per-memory size limit; the original was not changed. Shorten the addition and retry.", '被拒绝', summary
             old_document = self.memory.raw_content_for(target_id)
             if old_document is None:
                 return 'The complete target memory could not be read, so no content was added.', '被拒绝', summary

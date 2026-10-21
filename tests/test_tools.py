@@ -211,7 +211,7 @@ class ToolPolicyTests(unittest.TestCase):
             result, state, _ = manager.invoke('write_file',
                 {'path': 'summary.txt', 'content': 'new content'}, lambda _: 'y')
         self.assertEqual(state, '被拒绝')
-        self.assertIn('目标已存在', result)
+        self.assertIn('target already exists', result)
         self.assertEqual(target.read_text(encoding='utf-8'), 'racing content')
 
     def test_denied_tools_and_traversal_never_reach_server(self):
@@ -632,10 +632,10 @@ max_result_bytes = 200
         tools.invoke.return_value = ('contents', '成功', 'one.txt')
         output = []
         chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=output.append)
-        self.assertEqual(chat.send('read it'), '这次工具步骤用完了。')
+        self.assertEqual(chat.send('read it'), 'The tool-step limit for this request has been reached.')
         self.assertEqual(model.call_count, 2)
         self.assertEqual(tools.invoke.call_count, 1)
-        self.assertIn('这次工具步骤用完了。', output)
+        self.assertIn('The tool-step limit for this request has been reached.', output)
 
     def test_final_step_uses_existing_tool_results_without_offering_more_tools(self):
         self.cfg.tools['max_steps'] = 2
@@ -652,7 +652,7 @@ max_result_bytes = 200
         self.assertEqual(model.call_count, 2)
         self.assertIsNotNone(model.call_args_list[0].kwargs['tools'])
         self.assertIsNone(model.call_args_list[1].kwargs['tools'])
-        self.assertIn('这次工具步骤用完了。', output)
+        self.assertIn('The tool-step limit for this request has been reached.', output)
         costs = self.store.read('costs.jsonl')
         self.assertEqual(len([row for row in costs if row['type'] == 'reserve']), 2)
         self.assertEqual(len([row for row in costs if row['type'] == 'settle']), 2)
