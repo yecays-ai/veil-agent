@@ -372,73 +372,6 @@ class MemoryTests(unittest.TestCase):
         self.assertGreater(Decimal(modelled[0]['amount']), 0)
         self.assertEqual(self.budget.totals()[2], 0)
 
-    def test_ombre_model_estimate_covers_pinned_output_caps_and_retries(self):
-        from memory_agent import ombre_model_tokens
-        tokens_in, tokens_out = ombre_model_tokens('fictional memory')
-        self.assertGreaterEqual(tokens_in, 3 * ((3200 + 16 + 1000 + 16 + 5400) // 2))
-        self.assertEqual(tokens_out, 3 * (4096 + 1024))
-
-    def test_three_fake_child_retries_are_inside_the_shared_reservation(self):
-        from memory_agent import ombre_model_tokens
-        tokens_in, tokens_out = ombre_model_tokens('fictional memory')
-        expected = (Decimal(tokens_in) * Decimal('2') + Decimal(tokens_out) * Decimal('8')) / 1_000_000
-        attempts = []
-
-        def fake_child_call(name, args):
-            model_reserve = next(row for row in self.store.read('costs.jsonl')
-                                 if row.get('type') == 'reserve'
-                                 and row.get('accounting') == 'ombre-model-estimate')
-            self.assertGreaterEqual(Decimal(model_reserve['amount']), expected)
-            attempts.extend([1, 2, 3])
-            return 'fictional success after retries'
-
-        self.backend.call = Mock(side_effect=fake_child_call)
-        self.memory.call('hold', {'content': 'fictional memory'})
-        self.assertEqual(attempts, [1, 2, 3])
-        self.assertEqual(self.budget.totals()[2], 0)
-
-    def test_failed_ombre_call_settles_conservative_reservations(self):
-        original = self.backend.call
-        self.backend.call = Mock(side_effect=RuntimeError('fictional timeout'))
-        with self.assertRaises(RuntimeError):
-            self.memory.call('hold', {'content': 'fictional memory'})
-        self.assertEqual(self.budget.totals()[2], 0)
-        rows = self.store.read('costs.jsonl')
-        reservations = [row for row in rows if row['type'] == 'reserve']
-        settlements = [row for row in rows if row['type'] == 'settle']
-        self.assertEqual(len(reservations), 2)
-        self.assertEqual({row['id'] for row in reservations}, {row['id'] for row in settlements})
-        self.backend.call = original
-
-    def test_later_preflight_rejection_releases_only_unsent_reservation(self):
-        original = self.backend.call
-        self.budget.estimate_model = Mock(side_effect=UserError('fictional budget limit'))
-        with self.assertRaises(UserError):
-            self.memory.call('hold', {'content': 'fictional memory'})
-        self.backend.call = original
-        self.assertEqual(self.backend.calls, [('breath', {})])
-        rows = self.store.read('costs.jsonl')
-        reserves = [row for row in rows if row['type'] == 'reserve']
-        settlements = [row for row in rows if row['type'] == 'settle']
-        self.assertEqual(len(reserves), 1)
-        self.assertEqual(len(settlements), 1)
-        self.assertEqual(settlements[0]['amount'], '0')
-        self.assertEqual(self.budget.totals()[2], 0)
-
-    def test_recovered_ombre_reservation_is_settled_once_after_restart(self):
-        pending = self.budget.estimate_model('fake', 'fake-chat', 100, 50, '1', '2')
-        self.memory.__exit__(None, None, None)
-        reopened = self.open()
-        self.assertEqual(self.budget.totals()[2], 0)
-        rows = self.store.read('costs.jsonl')
-        settles = [row for row in rows if row['type'] == 'settle' and row['id'] == pending[0]]
-        self.assertEqual(len(settles), 1)
-        self.assertEqual(settles[0]['amount'], str(pending[1]))
-        self.assertEqual(self.budget.settle_estimate(pending, 'duplicate-recovery'), False)
-        self.assertEqual(len([row for row in self.store.read('costs.jsonl')
-                              if row['type'] == 'settle' and row['id'] == pending[0]]), 1)
-        reopened.__exit__(None, None, None)
-
     def test_ombre_model_can_be_switched_off(self):
         self.cfg.memory.update(ombre_model=False, base_url='https://example.invalid/v1')
         self.memory.call('hold', {'content': 'x'})
@@ -638,27 +571,6 @@ class MemoryTests(unittest.TestCase):
         self.assertIn('原话对不上', ' '.join(self.memory.notices()))
         self.assertEqual(self.backend.rows, {})
 
-    def test_failed_background_extraction_settles_reservation(self):
-        self.turns(4)
-        self.model.side_effect = RuntimeError('fictional provider timeout')
-        self.memory.supplement()
-        rows = self.store.read('costs.jsonl')
-        reserves = [row for row in rows if row.get('accounting') == 'memory-extraction']
-        settled_ids = {row['id'] for row in rows if row['type'] == 'settle'}
-        self.assertEqual(len(reserves), 1)
-        self.assertIn(reserves[0]['id'], settled_ids)
-        self.assertEqual(self.budget.totals()[2], 0)
-
-    def test_background_extraction_keeps_autonomy_budget_category(self):
-        self.turns(4)
-        self.budget.autonomy_daily = Decimal('0.000001')
-        with self.budget.autonomous('fake'):
-            self.memory.completed()
-        self.memory.jobs.join()
-        self.model.assert_not_called()
-        self.assertIn('共享预算上限', ' '.join(self.memory.notices()))
-        self.assertEqual(self.budget.category_totals('fake')[0], 0)
-
     def test_partial_save_retries_only_unsaved_quotes(self):
         self.turns(4)
         self.memory.save_item(entry(), self.memory.turns(), 0)
@@ -708,5 +620,90 @@ class MemoryTests(unittest.TestCase):
             t.join()
         self.assertEqual(sorted(results), [False, True])
 
+    def test_ombre_model_estimate_covers_pinned_output_caps_and_retries(self):
+        from memory_agent import ombre_model_tokens
+        tokens_in, tokens_out = ombre_model_tokens('fictional memory')
+        self.assertGreaterEqual(tokens_in, 3 * ((3200 + 16 + 1000 + 16 + 5400) // 2))
+        self.assertEqual(tokens_out, 3 * (4096 + 1024))
 
+    def test_three_fake_child_retries_are_inside_the_shared_reservation(self):
+        from memory_agent import ombre_model_tokens
+        tokens_in, tokens_out = ombre_model_tokens('fictional memory')
+        expected = (Decimal(tokens_in) * Decimal('2') + Decimal(tokens_out) * Decimal('8')) / 1_000_000
+        attempts = []
 
+        def fake_child_call(name, args):
+            model_reserve = next(row for row in self.store.read('costs.jsonl')
+                                 if row.get('type') == 'reserve'
+                                 and row.get('accounting') == 'ombre-model-estimate')
+            self.assertGreaterEqual(Decimal(model_reserve['amount']), expected)
+            attempts.extend([1, 2, 3])
+            return 'fictional success after retries'
+
+        self.backend.call = Mock(side_effect=fake_child_call)
+        self.memory.call('hold', {'content': 'fictional memory'})
+        self.assertEqual(attempts, [1, 2, 3])
+        self.assertEqual(self.budget.totals()[2], 0)
+
+    def test_failed_ombre_call_settles_conservative_reservations(self):
+        original = self.backend.call
+        self.backend.call = Mock(side_effect=RuntimeError('fictional timeout'))
+        with self.assertRaises(RuntimeError):
+            self.memory.call('hold', {'content': 'fictional memory'})
+        self.assertEqual(self.budget.totals()[2], 0)
+        rows = self.store.read('costs.jsonl')
+        reservations = [row for row in rows if row['type'] == 'reserve']
+        settlements = [row for row in rows if row['type'] == 'settle']
+        self.assertEqual(len(reservations), 2)
+        self.assertEqual({row['id'] for row in reservations}, {row['id'] for row in settlements})
+        self.backend.call = original
+
+    def test_later_preflight_rejection_releases_only_unsent_reservation(self):
+        original = self.backend.call
+        self.budget.estimate_model = Mock(side_effect=UserError('fictional budget limit'))
+        with self.assertRaises(UserError):
+            self.memory.call('hold', {'content': 'fictional memory'})
+        self.backend.call = original
+        self.assertEqual(self.backend.calls, [('breath', {})])
+        rows = self.store.read('costs.jsonl')
+        reserves = [row for row in rows if row['type'] == 'reserve']
+        settlements = [row for row in rows if row['type'] == 'settle']
+        self.assertEqual(len(reserves), 1)
+        self.assertEqual(len(settlements), 1)
+        self.assertEqual(settlements[0]['amount'], '0')
+        self.assertEqual(self.budget.totals()[2], 0)
+
+    def test_recovered_ombre_reservation_is_settled_once_after_restart(self):
+        pending = self.budget.estimate_model('fake', 'fake-chat', 100, 50, '1', '2')
+        self.memory.__exit__(None, None, None)
+        reopened = self.open()
+        self.assertEqual(self.budget.totals()[2], 0)
+        rows = self.store.read('costs.jsonl')
+        settles = [row for row in rows if row['type'] == 'settle' and row['id'] == pending[0]]
+        self.assertEqual(len(settles), 1)
+        self.assertEqual(settles[0]['amount'], str(pending[1]))
+        self.assertEqual(self.budget.settle_estimate(pending, 'duplicate-recovery'), False)
+        self.assertEqual(len([row for row in self.store.read('costs.jsonl')
+                              if row['type'] == 'settle' and row['id'] == pending[0]]), 1)
+        reopened.__exit__(None, None, None)
+
+    def test_failed_background_extraction_settles_reservation(self):
+        self.turns(4)
+        self.model.side_effect = RuntimeError('fictional provider timeout')
+        self.memory.supplement()
+        rows = self.store.read('costs.jsonl')
+        reserves = [row for row in rows if row.get('accounting') == 'memory-extraction']
+        settled_ids = {row['id'] for row in rows if row['type'] == 'settle'}
+        self.assertEqual(len(reserves), 1)
+        self.assertIn(reserves[0]['id'], settled_ids)
+        self.assertEqual(self.budget.totals()[2], 0)
+
+    def test_background_extraction_keeps_autonomy_budget_category(self):
+        self.turns(4)
+        self.budget.autonomy_daily = Decimal('0.000001')
+        with self.budget.autonomous('fake'):
+            self.memory.completed()
+        self.memory.jobs.join()
+        self.model.assert_not_called()
+        self.assertIn('共享预算上限', ' '.join(self.memory.notices()))
+        self.assertEqual(self.budget.category_totals('fake')[0], 0)
