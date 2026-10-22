@@ -5,6 +5,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+from datetime import datetime
 from types import SimpleNamespace
 import unittest
 import urllib.error
@@ -84,6 +85,17 @@ output_cny_per_million = "8"
         self.hub.capability_record = lambda: record
         self.assertEqual(self.hub.snapshot(0)['capability_record'], record)
 
+    def test_snapshot_exposes_current_capabilities_from_the_same_generator_as_chat(self):
+        chat = Chat(self.cfg, self.store, Budget(self.store), self.model)
+        def fake_loop(actual_chat, **_kwargs):
+            actual_chat.send('fictional capability question')
+        with patch('web_agent.run_chat', side_effect=fake_loop):
+            serve_chat(chat, self.hub)
+        model_messages = self.model.call_args.args[0]
+        sent = next(item['content'] for item in model_messages if item['role'] == 'system'
+                    and item['content'].startswith('CURRENT CAPABILITIES'))
+        self.assertEqual(self.hub.snapshot(0)['current_capabilities'], sent)
+
     def test_submission_deduplication_window_is_bounded(self):
         hub = Hub('Test', ActivityState(self.store.root / 'test' / 'other-state.json'))
         with patch('web_agent.MAX_SUBMISSIONS', 2):
@@ -157,6 +169,25 @@ output_cny_per_million = "8"
         self.assertTrue(reopened.enabled())
         self.assertEqual(self.call('/api/activity', {'enabled': False})[0], 200)
         self.assertFalse(reopened.enabled())
+
+    def test_activity_availability_transitions_are_dated_in_capability_history(self):
+        from tools_agent import FilesystemTools
+        manager = FilesystemTools.__new__(FilesystemTools)
+        manager.cap_path = self.store.root / 'test' / 'capabilities.json'
+        toolset = SimpleNamespace(tools=[], files=manager, description='Fictional tools.',
+            capability_event=None, capability_event_model=None, capability_record=None)
+        chat = Chat(self.cfg, self.store, Budget(self.store), self.model, tools=toolset)
+        self.hub.activity_transition = lambda enabled: chat.set_activity_enabled(self.hub.activity, enabled)
+        self.assertTrue(self.hub.set_activity(True))
+        self.assertTrue(self.hub.set_activity(True))  # No event without a state transition.
+        self.assertTrue(self.hub.set_activity(False))
+        row = json.loads(manager.cap_path.read_text(encoding='utf-8'))
+        updates = row['capability_updates']
+        self.assertEqual(len(updates), 2)
+        self.assertIn('was enabled', updates[0]['text'])
+        self.assertIn('was paused', updates[1]['text'])
+        self.assertTrue(all(datetime.fromisoformat(item['at']).utcoffset().total_seconds() == 0
+                            for item in updates))
 
     def test_exit_is_accepted_before_shutdown_and_completes_after_saved_chat(self):
         gate = threading.Event()

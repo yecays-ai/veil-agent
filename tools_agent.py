@@ -147,6 +147,15 @@ class FilesystemTools:
         from veil_agent import UserError
         self.root = Path(root).resolve()
         self.cfg, self.store = cfg, store
+        role_path = Path(store.root) / cfg.id
+        role_root = role_path.resolve()
+        # Activity transitions write capability history even when file tools
+        # are absent from the role configuration. Validate the role boundary
+        # before exposing that persistent capability path in every branch.
+        expected_role = role_path.parent.resolve() / cfg.id
+        if _path_key(expected_role) != _path_key(role_root) or not role_root.is_relative_to(self.root):
+            raise UserError('角色数据目录被重定向，文件工具已停止。')
+        self.cap_path = role_path / 'capabilities.json'
         self.lab = None
         settings = cfg.tools or {}
         if cfg.tools is None:
@@ -161,19 +170,13 @@ class FilesystemTools:
             raise UserError('文件工具配置无效，请检查 character.toml。')
         self.enabled = settings.get('enabled', True)
         self.folder_name = Path(settings.get('folder', f'data/{cfg.id}/workspace')).name
-        role_path = Path(store.root) / cfg.id
-        role_root = role_path.resolve()
         # Resolve the parent first: Windows temp roots can have an alias, while
         # resolving the role itself must still reveal a redirected role folder.
-        expected_role = role_path.parent.resolve() / cfg.id
-        if _path_key(expected_role) != _path_key(role_root) or not role_root.is_relative_to(self.root):
-            raise UserError('角色数据目录被重定向，文件工具已停止。')
         configured = (self.root / settings.get('folder', f'data/{cfg.id}/workspace')).resolve()
         if not configured.is_relative_to(role_root):
             raise UserError('文件工具文件夹必须位于该角色自己的 data 目录。')
         self.workspace = configured
         self.workspace.mkdir(parents=True, exist_ok=True)
-        self.cap_path = Path(store.root) / cfg.id / 'capabilities.json'
         self.grant_path = Path(store.root) / cfg.id / 'append-grant.json'
         self.tools = []
         self.client = None
@@ -409,6 +412,19 @@ class FilesystemTools:
         row['capability_updates'] = updates
 
     @capability_transaction
+    def record_capability_change(self, event):
+        """Persist a dated runtime ability change in the existing role history."""
+        try:
+            row = json.loads(self.cap_path.read_text(encoding='utf-8')) if self.cap_path.exists() else {}
+            if not isinstance(row, dict):
+                raise ValueError('invalid capability record')
+            self._record_update(row, event)
+            save_capabilities(self.cap_path, row)
+        except Exception as exc:
+            from veil_agent import UserError
+            raise UserError('能力清单无法更新，未切换自主活动状态；请保留 data 文件夹。') from exc
+
+    @capability_transaction
     def consume_capability_event(self, delivered_event=None):
         try:
             row = json.loads(self.cap_path.read_text(encoding='utf-8'))
@@ -432,7 +448,9 @@ class FilesystemTools:
         if getattr(self, 'cap_path', None) is None:
             return
         try:
-            row = json.loads(self.cap_path.read_text(encoding='utf-8'))
+            row = json.loads(self.cap_path.read_text(encoding='utf-8')) if self.cap_path.exists() else {}
+            if not isinstance(row, dict):
+                raise ValueError('invalid capability record')
             if row.get('autonomy_announced'):
                 return
             event = ('Capability update: autonomous activity is enabled: you will wake on the configured schedule and may act or '

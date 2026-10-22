@@ -12,7 +12,7 @@ import uuid
 import threading
 from functools import wraps
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from contextlib import contextmanager, nullcontext
@@ -670,6 +670,9 @@ class Chat:
         self.sent_messages = []
         self.reply_displayed = False
         self.autonomy_mode = False
+        self.activity_enabled = lambda: False
+        self._capability_request_active = False
+        self._active_capability_schemas = None
         self.autonomy_should_yield = None
         self.autonomy_run_id = None
         self.autonomy_message_output = None
@@ -699,6 +702,127 @@ class Chat:
                     'Do not reproduce whole files or inventories in arguments.')
                 schema['function'] = function
         return schemas
+
+    def current_request_tool_schemas(self):
+        config = self.cfg.tools or {}
+        if self.tool_mode and config.get('max_steps', 1) > 1:
+            return self.tool_schemas()
+        return []
+
+    def current_capability_snapshot(self, schemas=None):
+        """Describe only abilities the program will actually offer on this request."""
+        from tools_agent import tool_policy
+        if schemas is None:
+            schemas = (self._active_capability_schemas if self._capability_request_active
+                       else self.current_request_tool_schemas())
+        rows = []
+        for schema in schemas:
+            function = schema.get('function', {})
+            name = function.get('name')
+            if not isinstance(name, str):
+                continue
+            description = function.get('description', '').strip()
+            description = re.sub(r'(?i)\b[a-z]:\\[^\s<>"\']+', '[configured location]', description)
+            policy = tool_policy(name)
+            if policy == 'allow':
+                permission = 'Direct use.'
+            elif policy == 'ask':
+                permission = 'Requires Lan\'s approval where policy requires it.'
+            elif policy == 'lab':
+                permission = 'Lab only; no overwrite, deletion, or scripts.'
+            elif name == 'trace':
+                permission = 'Deletion requires explicit user approval; autonomous requests wait for later approval.'
+            else:
+                permission = 'Available only within the limits described below.'
+            rows.append(f'- {name}: {description} {permission}'.strip())
+        files = getattr(self.tools, 'files', None) if self.tools else None
+        if not isinstance(getattr(files, 'tools', None), (list, tuple)):
+            files = self.tools
+        if not rows:
+            notice = getattr(files, 'startup_notice', None)
+            if notice or getattr(files, 'client', None) is None and getattr(files, 'enabled', None) is True:
+                rows.append('- File tools: currently unavailable because the filesystem service is not running.')
+            elif self.tools and getattr(files, 'enabled', True) is False:
+                rows.append('- File tools: disabled by this role configuration.')
+            else:
+                rows.append('- No callable tools are currently offered to the model.')
+        file_tools = getattr(files, 'tools', [])
+        if not isinstance(file_tools, (list, tuple)):
+            file_tools = []
+        offered_file_tools = {getattr(tool, 'name', None) for tool in file_tools}
+        if not offered_file_tools:
+            if getattr(files, 'startup_notice', None):
+                rows.append('- File tools: currently unavailable because the filesystem service is not running.')
+            elif self.tools and getattr(files, 'enabled', True) is False:
+                rows.append('- File tools: disabled by this role configuration.')
+        activity = (True if self.autonomy_mode else
+                    self.activity_enabled() if callable(self.activity_enabled) else False)
+        rows.append(f'- Autonomous activity: {"enabled" if activity else "paused or unavailable"}.')
+        rows.append('- VEIL enforces permissions; this list grants none.')
+        return 'CURRENT CAPABILITIES (live runtime):\n' + '\n'.join(rows)
+
+    @property
+    def capability_history_record(self):
+        record = capability_record(self.tools)
+        if record:
+            return record
+        path = self.store.root / self.cfg.id / 'capabilities.json'
+        try:
+            row = json.loads(path.read_text(encoding='utf-8'))
+            updates = row.get('capability_updates', [])
+            lines = [f'{item["at"]}: {item["text"]}' for item in updates
+                     if isinstance(item, dict) and isinstance(item.get('at'), str)
+                     and isinstance(item.get('text'), str)]
+            return ('CAPABILITY RECORD (program-maintained; use it when asked what changed, do not claim an '
+                    'unlisted permission).\n' + '\n'.join(lines)) if lines else None
+        except (OSError, ValueError, TypeError, KeyError):
+            return None
+
+    def record_capability_change(self, event):
+        files = getattr(self.tools, 'files', None) if self.tools else None
+        if files is None:
+            files = self.tools
+        recorder = getattr(files, 'record_capability_change', None) if files else None
+        if callable(recorder):
+            return recorder(event)
+        from capability_state import capability_lock, save_capabilities
+        path = self.store.root / self.cfg.id / 'capabilities.json'
+        with capability_lock(path):
+            try:
+                row = json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
+                if not isinstance(row, dict):
+                    raise ValueError('invalid capability record')
+                updates = row.get('capability_updates')
+                updates = updates if isinstance(updates, list) else []
+                if not updates or not isinstance(updates[-1], dict) or updates[-1].get('text') != event:
+                    updates = [*updates[-20:], {'at': datetime.now(timezone.utc).isoformat(), 'text': event}]
+                row['capability_updates'] = updates
+                save_capabilities(path, row)
+            except Exception as exc:
+                raise UserError('能力记录无法保存，未切换自主活动状态；请保留 data 文件夹。') from exc
+
+    def set_activity_enabled(self, activity, enabled):
+        previous = activity.enabled()
+        if previous == enabled:
+            return False
+        activity.set(enabled)
+        try:
+            state = 'enabled' if enabled else 'paused'
+            self.record_capability_change(
+                f'Autonomous activity was {state} by Lan; scheduled autonomous tool use is '
+                f'{"available" if enabled else "not available"} while this state remains in effect.')
+        except Exception:
+            activity.set(previous)
+            raise
+        return True
+
+    def _refresh_request_capabilities(self, messages, schemas):
+        self._active_capability_schemas = schemas or []
+        snapshot = self.current_capability_snapshot(self._active_capability_schemas)
+        for message in messages:
+            if message.get('role') == 'system' and message.get('content', '').startswith('CURRENT CAPABILITIES'):
+                message['content'] = snapshot
+                break
 
     def send_message(self, arguments, request_id, tool_call_id=None):
         try:
@@ -826,7 +950,10 @@ class Chat:
         # capability notice, time and ledger) right before the user's message.
         head = [{'role': 'system', 'content': self.cfg.persona},
                 {'role': 'system', 'content': stable}]
-        record = capability_record(self.tools)
+        tool_schema = self.current_request_tool_schemas()
+        self._active_capability_schemas = tool_schema
+        head.append({'role': 'system', 'content': self.current_capability_snapshot(tool_schema)})
+        record = self.capability_history_record
         if record:
             head.append({'role': 'system', 'content': record})
         tail = [*recalled]
@@ -837,10 +964,6 @@ class Chat:
                 'Program-generated capability update: ' + self.pending_capability_event_model})
         tail.append({'role': 'system', 'content': changing})
         user = {'role': 'user', 'content': text}
-        tool_schema = []
-        tool_config = self.cfg.tools or {}
-        if self.tool_mode and tool_config.get('max_steps', 1) > 1:
-            tool_schema = self.tool_schemas()
         # The input limit is in tokens, not UTF-8 bytes. Start with the same
         # conservative byte-to-token floor used by the tool loop; schema bytes
         # are included but must not be counted one-for-one as tokens.
@@ -872,6 +995,7 @@ class Chat:
             if not autonomy:
                 self.store.append(self.path, {'role': 'user', 'content': text, 'request_id': request_id})
         try:
+            self._capability_request_active = True
             self.last_self = description
             if self.tool_mode:
                 reply, tool_summaries = self._tool_chat(messages, request_id, len(history), len(head),
@@ -886,13 +1010,19 @@ class Chat:
                     # the request even when its response was lost.
                     raise RequestFailed('请求失败，未自动重试；输入已保存，本次保留预留费用。') from exc
         except (KeyboardInterrupt, EOFError):
+            self._capability_request_active = False
             raise
         except (TooLong, RequestFailed):
+            self._capability_request_active = False
             # The failed message may already be persisted (provider failure or a
             # tool-mode length failure). Keep this live session aligned with a
             # reopened one; recent() also fails closed on corrupt chat records.
             self.history, self.rounds = self.recent()
             raise
+        except BaseException:
+            self._capability_request_active = False
+            raise
+        self._capability_request_active = False
         if autonomy and self.autonomy_should_yield and self.autonomy_should_yield():
             self.autonomy_interrupted = True
         with saving():
@@ -1005,6 +1135,7 @@ class Chat:
                     self.budget.settle(pending_reservation, pending_cfg, 0, 0, 0)
                 break
             offered = None if step == max_steps - 1 else self.tool_schemas()
+            self._refresh_request_capabilities(loop_messages, offered)
             step_cfg = replace(self.cfg, max_output_tokens=self.cfg.tools.get('max_output_tokens', self.cfg.max_output_tokens)) if offered is not None else self.cfg
             fit_history(offered)
             if request_size(offered) > self.cfg.provider['max_input_tokens']:
@@ -1325,6 +1456,7 @@ def pending_deletion_context(chat):
 
 def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead, activity=None, autonomy=None):
     activity = activity or ActivityState(chat.store.root / chat.cfg.id / 'resident-state.json')
+    chat.activity_enabled = activity.enabled
     output(f'接上了 {chat.rounds} 轮。输入 /cost 查花费，/autonomy 查自主记录，/self 看当前说明，'
            '/pause 或 /resume 切换自主活动，/quit 退出。')
     if getattr(chat.tools, 'startup_notice', None):
@@ -1351,12 +1483,12 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead, activity=N
                 output('新对话已开始；旧聊天保留在本机，长期记忆与实验室未改动。')
                 continue
             if text == '/pause':
-                activity.set(False)
+                chat.set_activity_enabled(activity, False)
                 output('自主活动已暂停。')
             elif text == '/resume':
                 if autonomy is not None:
                     autonomy.announce_autonomy()
-                activity.set(True)
+                chat.set_activity_enabled(activity, True)
                 output('自主活动已开启；常驻网页服务运行时按角色配置的间隔唤醒。')
             elif text == '/autonomy':
                 if autonomy:

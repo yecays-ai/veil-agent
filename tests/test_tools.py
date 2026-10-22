@@ -57,6 +57,20 @@ class ToolPolicyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             checked_path(self.workspace, str(link / 'secret.txt'))
 
+    def test_role_directory_redirection_is_rejected_without_tools_config(self):
+        data = self.root / 'data'
+        data.mkdir()
+        other_role = data / 'other'
+        other_role.mkdir()
+        try:
+            (data / 'test').symlink_to(other_role, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest('directory symlinks are unavailable for this account')
+
+        from veil_agent import UserError
+        with self.assertRaisesRegex(UserError, '角色数据目录被重定向'):
+            FilesystemTools(self.root, SimpleNamespace(id='test', tools=None), Store(data))
+
     def test_write_requires_consent_and_never_overwrites(self):
         manager = self.manager()
         manager.client.call.return_value = 'written'
@@ -397,11 +411,14 @@ class ToolPolicyTests(unittest.TestCase):
         second._record_capabilities(['read_text_file'])
         self.assertIsNone(second.capability_event)
 
-    def test_autonomy_announcement_is_noop_without_file_tools(self):
+    def test_autonomy_announcement_is_recorded_without_file_tools(self):
         store = Store(self.root / 'data')
         manager = FilesystemTools(self.root, SimpleNamespace(id='test', tools=None), store)
         manager.announce_autonomy()
-        self.assertIsNone(manager.capability_event)
+        self.assertIn('autonomous activity is enabled', manager.capability_event)
+        row = json.loads(manager.cap_path.read_text(encoding='utf-8'))
+        self.assertTrue(row['autonomy_announced'])
+        self.assertEqual(row['capability_updates'][-1]['text'], manager.capability_event)
 
     def test_missing_node_disables_tools_without_blocking_chat_startup(self):
         store = Store(self.root / 'data')
@@ -828,13 +845,13 @@ max_result_bytes = 200
         tools = Mock()
         tools.tools = [SimpleNamespace(name='read_text_file', description='Read', inputSchema={})]
         tools.capability_event = None
-        tools.invoke.return_value = ('test data ' * 220, '成功', 'test.txt')
+        tools.invoke.return_value = ('test data ' * 80, '成功', 'test.txt')
         chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=lambda _: None)
         self.assertEqual(chat.send('read test.txt'), 'The file has test data.')
         first_request, second_request = requests
         self.assertTrue(any((m.get('content') or '').startswith('old ') for m in first_request))
         self.assertFalse(any((m.get('content') or '').startswith('old ') for m in second_request))
-        self.assertEqual(second_request[-1]['content'], 'test data ' * 220)
+        self.assertEqual(second_request[-1]['content'], 'test data ' * 80)
         self.assertIsNotNone(chat.trim_note)
 
 
