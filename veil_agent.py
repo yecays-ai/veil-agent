@@ -733,7 +733,7 @@ class Chat:
             if policy == 'allow':
                 label = 'Direct use'
             elif policy == 'ask':
-                label = "Needs Lan's approval"
+                label = "Needs Lan's approval where policy requires it"
             elif policy == 'lab':
                 label = 'Lab only (no overwrite, deletion, or scripts)'
             elif name == 'trace':
