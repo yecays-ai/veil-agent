@@ -447,6 +447,8 @@ class Memory:
             self.state = states[-1]['state'] if states else {
                 'cursor': len(self.turns()), 'pending': [], 'entries': {}, 'sources': {},
                 'pending_writes': []}
+            if not isinstance(self.state, dict):
+                raise ValueError('invalid memory state')
             self.state.setdefault('pending_writes', [])
             if (type(self.state['cursor']) is not int or not 0 <= self.state['cursor'] <= len(self.turns())
                     or not isinstance(self.state['pending'], list)
@@ -461,12 +463,14 @@ class Memory:
             for write in self.state['pending_writes']:
                 if (not isinstance(write, dict)
                         or not re.fullmatch(r'[0-9a-f]{32}', str(write.get('operation_id', '')))
-                        or not re.fullmatch(r'[0-9a-f]{64}', str(write.get('fingerprint', '')))):
+                        or not re.fullmatch(r'[0-9a-f]{64}', str(write.get('fingerprint', '')))
+                        or (write.get('submitted', True) is not True and write.get('submitted') is not False)):
                     raise ValueError('invalid pending write')
         except (ValueError, TypeError, KeyError) as exc:
             from veil_agent import UserError
             raise UserError('记忆调度记录损坏，已停止；请保留记忆库，不要删记录。') from exc
         self.mutex = threading.RLock()
+        self._reconcile_pending_writes()
         self.messages = queue.Queue()
         self._turn_notice_local = threading.local()
         self.jobs = queue.Queue()
@@ -498,6 +502,32 @@ class Memory:
         payload = json.dumps(args, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
         return hashlib.sha256(payload.encode('utf-8')).hexdigest()
 
+    def _reconcile_pending_writes(self):
+        """Repair only local guards from the append-only operation ledger.
+
+        A claim is made durable before the request can be dispatched.  A
+        claim with no submitted event therefore proves that no request was
+        sent and may be discarded after a restart.  Conversely, an event that
+        says submitted is deliberately treated as unknown until a terminal
+        Ombre result is recorded.
+        """
+        rows = self.store.read(self.write_reconciliation)
+        submitted = {row.get('operation_id') for row in rows if row.get('status') == 'submitted'}
+        terminal = {row.get('operation_id') for row in rows
+                    if row.get('status') in {'confirmed', 'not_submitted'}}
+        before = self.state['pending_writes']
+        pending = []
+        for row in before:
+            operation_id = row['operation_id']
+            if operation_id in terminal:
+                continue
+            if row.get('submitted', True) is False and operation_id not in submitted:
+                continue
+            pending.append({**row, 'submitted': True})
+        if pending != before:
+            self.state['pending_writes'] = pending
+            self.persist()
+
     def begin_write(self, args):
         """Durably claim one local hold attempt before it reaches Ombre."""
         fingerprint = self.write_fingerprint(args)
@@ -508,21 +538,21 @@ class Memory:
                 return None, prior['operation_id']
             operation_id = uuid.uuid4().hex
             self.state['pending_writes'].append({'operation_id': operation_id,
-                                                 'fingerprint': fingerprint})
+                                                 'fingerprint': fingerprint, 'submitted': False})
             self.persist()
-        self.store.append(self.write_reconciliation, {
-            'operation_id': operation_id, 'status': 'submitted'})
+            # Do not call Ombre until this durable event has been recorded.
+            # If the process dies before it, the false claim is safe to clear
+            # on restart; if it dies after it, fail closed as unconfirmed.
+            self.store.append(self.write_reconciliation, {
+                'operation_id': operation_id, 'status': 'submitted'})
+            self.state['pending_writes'][-1]['submitted'] = True
+            self.persist()
         return operation_id, None
 
     def finish_write(self, operation_id, status, *, memory_id=None, error=None):
         """Close only proven outcomes; unknown results intentionally stay pending."""
         if status not in {'confirmed', 'not_submitted', 'unconfirmed'}:
             raise ValueError('invalid write status')
-        with self.mutex:
-            if status in {'confirmed', 'not_submitted'}:
-                self.state['pending_writes'] = [row for row in self.state['pending_writes']
-                                                if row['operation_id'] != operation_id]
-                self.persist()
         row = {'operation_id': operation_id, 'status': status}
         if memory_id is not None:
             row['memory_id'] = memory_id
@@ -530,12 +560,22 @@ class Memory:
             row['error_type'] = self.safe_error_type(error)
             if error_code := self.safe_error_code(error):
                 row['error_code'] = error_code
+        # The terminal ledger event comes first.  A crash before the local
+        # guard is removed is repaired from that event at next startup; doing
+        # it in the opposite order could replay a committed write.
         self.store.append(self.write_reconciliation, row)
+        if status in {'confirmed', 'not_submitted'}:
+            with self.mutex:
+                self.state['pending_writes'] = [row for row in self.state['pending_writes']
+                                                if row['operation_id'] != operation_id]
+                self.persist()
 
     def write_failure(self, operation_id, exc):
-        # MCP.closed means the client rejected before queueing; every other
-        # transport/service failure can be after Ombre committed the write.
-        status = 'not_submitted' if getattr(exc, 'code', None) == 'closed' else 'unconfirmed'
+        # These two MCP codes mean a request did not enter its operation
+        # queue.  Every other transport/service failure can be after Ombre
+        # committed the write.
+        status = ('not_submitted' if getattr(exc, 'code', None) in {'closed', 'connection'}
+                  else 'unconfirmed')
         self.finish_write(operation_id, status, error=exc)
         return status
 
@@ -603,6 +643,18 @@ class Memory:
             if name in {'hold', 'trace'} and write_operation is not None:
                 self.write_failure(write_operation, exc)
             raise
+        if name in {'hold', 'trace'} and write_operation is not None:
+            # This is the earliest point at which Ombre's own response is
+            # available.  Do not let a later cache/index failure turn a
+            # confirmed server result back into a replayable pending write.
+            try:
+                memory_id = args.get('bucket_id') if name == 'trace' else self.created_id(result)
+            except ValueError:
+                # A malformed hold reply does not identify the resulting
+                # memory, so it is not sufficient evidence of this operation.
+                self.finish_write(write_operation, 'unconfirmed')
+                raise MemoryToolError('unknown')
+            self.finish_write(write_operation, 'confirmed', memory_id=memory_id)
         if reservation is not None:
             self.budget.settle_estimate(
                 reservation, accounting='embedding-estimate',
@@ -1130,13 +1182,20 @@ class Memory:
             with self.mutex:
                 parent = self.state['sources'].get(key)
             if not parent:
-                text = self.call('hold', {'content': source, 'title': '原文来源', 'source_content': source})
+                source_args = {'content': source, 'title': '原文来源', 'source_content': source}
+                operation_id, duplicate = self.begin_write(source_args)
+                if duplicate is not None:
+                    raise MemoryToolError('unknown')
+                text = self.call('hold', source_args, write_operation=operation_id)
                 parent = self.created_id(text)
                 with self.mutex:
                     self.state['sources'][key] = parent
                     self.persist()
             args['source_bucket'] = parent
-        text = self.call('hold', args)
+        operation_id, duplicate = self.begin_write(args)
+        if duplicate is not None:
+            raise MemoryToolError('unknown')
+        text = self.call('hold', args, write_operation=operation_id)
         memory_id = self.created_id(text)
         with self.mutex:
             # Ombre may merge into an existing bucket; keep a /forget in force.
@@ -1178,7 +1237,11 @@ class Memory:
         if not entry or entry.get('hidden'):
             item['_why'] = '要更新的记忆编号不存在或已隐藏'
             return 'dropped'
-        self.call('trace', {'bucket_id': target, 'content': content})
+        args = {'bucket_id': target, 'content': content}
+        operation_id, duplicate = self.begin_write(args)
+        if duplicate is not None:
+            raise MemoryToolError('unknown')
+        self.call('trace', args, write_operation=operation_id)
         with self.mutex:
             entry.update(signature=signature, text=item['zh'][:600], updated=self.budget.clock())
             self.persist()

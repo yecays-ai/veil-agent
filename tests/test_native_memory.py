@@ -680,6 +680,15 @@ class OmbreToolGuardTests(unittest.TestCase):
         self.assertEqual(state, '成功')
         self.assertIn('fictional-id', self.memory.state['entries'])
 
+    def test_connection_before_dispatch_is_not_left_pending(self):
+        self.backend.call = Mock(side_effect=MemoryToolError('connection'))
+        result, state, _ = self.call('hold', {'title': 'Pre-dispatch', 'content': 'FICTIONAL_NO_QUEUE'})
+        self.assertEqual(state, '出错')
+        self.assertIn('before this save was submitted', result)
+        self.assertEqual(self.memory.state['pending_writes'], [])
+        journal = self.store.read('fake/memory/_agent/write-reconciliation.jsonl')
+        self.assertEqual([row['status'] for row in journal[-2:]], ['submitted', 'not_submitted'])
+
     def test_upstream_schemas_are_selected_by_name(self):
         names = {tool.name for tool in self.tools.native.tools}
         self.assertTrue(set(('trace', 'dream', 'letter_write', 'letter_read', 'letter_lock_update',
