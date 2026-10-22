@@ -135,6 +135,24 @@ class MCPRecoveryTests(unittest.TestCase):
         self.assertEqual(len(attempts), 2)
         self.assertEqual(client.recovery_count, 2)
 
+    def test_refused_connection_is_sent_once_after_verified_restart(self):
+        for name in ('breath_search', 'hold'):
+            with self.subTest(name=name):
+                recovered = []
+                client = self.backend([ExceptionGroup('wrapped', [ConnectionRefusedError()]), 'after restart'])
+                client.recovery = lambda: recovered.append('verified')
+                self.assertEqual(client.call(name, {}), 'after restart')
+                self.assertEqual(client.calls, [name, name])
+                self.assertEqual(recovered, ['verified'])
+                self.assertEqual(client.recovery_count, 0)
+
+    def test_refused_connection_without_restart_is_not_resent(self):
+        client = self.backend([ConnectionRefusedError()])
+        client.recovery = lambda: (_ for _ in ()).throw(RuntimeError('synthetic'))
+        with self.assertRaises(MemoryToolError):
+            client.call('hold', {})
+        self.assertEqual(client.calls, ['hold'])
+
     def test_uncertain_mutation_is_never_replayed(self):
         for name in ('hold', 'trace', 'dream', 'plan', 'letter_write', 'breath_search'):
             with self.subTest(name=name):
