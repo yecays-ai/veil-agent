@@ -529,6 +529,35 @@ class FilesystemTools:
         except Exception:
             return False
 
+    @capability_transaction
+    def announce_voice_input(self):
+        if getattr(self, 'cap_path', None) is None:
+            return
+        try:
+            row = json.loads(self.cap_path.read_text(encoding='utf-8')) if self.cap_path.exists() else {}
+            if not isinstance(row, dict):
+                raise ValueError('invalid capability record')
+            if row.get('voice_input_announced'):
+                self.capability_event = row.get('pending_event')
+                self.capability_event_model = row.get('pending_event_model')
+                return
+            event = ('Capability update: Lan can now send you voice messages; you receive them as '
+                     '[voice message] followed by the transcript.')
+            previous_event = row.get('pending_event')
+            if isinstance(previous_event, str) and previous_event and event not in previous_event:
+                event = previous_event + '\n' + event
+            row['voice_input_announced'] = True
+            row['pending_event'] = event
+            row['pending_event_model'] = event
+            self._record_update(row, event)
+            save_capabilities(self.cap_path, row)
+            self.capability_event = event
+            self.capability_event_model = event
+            return True
+        except Exception as exc:
+            self.voice_notice_error = str(exc)
+            return False
+
     def _description(self, names):
         if not names:
             return 'You currently have no tools. '

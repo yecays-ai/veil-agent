@@ -5,6 +5,7 @@ const fs = require('node:fs/promises');
 const { pathToFileURL } = require('node:url');
 const { connect, validRoot } = require('./backend.cjs');
 let pet, chat, connecting = false, quitting = false, drag;
+let chatOrigin = null;
 let settings = { size: 320 };
 const petURL = pathToFileURL(path.join(__dirname, 'pet.html')).href;
 const settingsPath = () => path.join(app.getPath('userData'), 'desktop.json');
@@ -74,6 +75,7 @@ async function toggleChat() {
     if (!root) root = await selectRoot();
     if (!root) return;
     const endpoint = await connect(root);
+    chatOrigin = endpoint.origin;
     if (quitting) return;
     chat = new BrowserWindow({ width: 640, height: 780, minWidth: 420, minHeight: 480,
       title: 'VEIL · 聊天', show: false,
@@ -143,9 +145,21 @@ else {
   app.on('second-instance', () => { if (pet) pet.show(); });
   app.whenReady().then(async () => {
     try { Object.assign(settings, JSON.parse(await fs.readFile(settingsPath(), 'utf8'))); } catch {}
-    // No remote renderer receives Electron/Node APIs, microphone, or device permissions.
+    // The local authenticated chat origin may use audio input; every other
+    // device permission (including camera/video) remains denied.
     const { session } = require('electron');
-    session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+    const mayUseMicrophone = (contents, permission, details = {}) => {
+      if (permission !== 'media' || !chat || chat.isDestroyed() || contents !== chat.webContents) return false;
+      try {
+        const origin = new URL(details.requestingUrl || contents.getURL()).origin;
+        const types = details.mediaTypes || (details.mediaType ? [details.mediaType] : []);
+        return origin === chatOrigin && types.includes('audio') && !types.includes('video');
+      } catch { return false; }
+    };
+    session.defaultSession.setPermissionCheckHandler((contents, permission, requestingOrigin, details) =>
+      mayUseMicrophone(contents, permission, { ...details, requestingUrl: requestingOrigin }));
+    session.defaultSession.setPermissionRequestHandler((contents, permission, callback, details) =>
+      callback(mayUseMicrophone(contents, permission, details)));
     createPet();
   });
   app.on('before-quit', () => { quitting = true; });

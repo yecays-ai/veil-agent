@@ -1,6 +1,8 @@
 # 交接
 
-- 071（发图片）、072（发语音）工单已在 main：Lan 要能感受到的新功能，优先于加固类工单。图片直接用 Peter 当前模型看（不另接描述模型）；语音识别复用 `EMBED_API_KEY` 的硅基流动 key。参考实现在 Lan 的旧项目 `yecays-ai/veil`。073 Peter 说语音用 Lan 在 MiniMax 克隆好的音色（与小手机同一套 key/voice_id/区域，放本地 .env），费用 Lan 已同意。
+- 072 正在本地分支 `ticket/072-voice-messages`、独立 worktree `E:\Peter-Agent\VEIL\worktrees\072-voice-messages` 施工；已变基到 PR #113 当前最新 head `b60912d`，不开 PR、不 push，等 #113 合并后再同步最终 main、解决差异、完整复测并集中 push。
+- 072 首轮链路已完成：MediaRecorder 最长 120 秒/10 MB；音频先持久化再调用 SenseVoiceSmall；成功后模型收到且聊天保存精确的 `[voice message] <转写>`，失败不发模型、保留录音并手动重试；历史重开可回放。Electron 只允许当前本机认证聊天窗口申请 audio，video、宠物页和外部来源拒绝。变基后 389 项 Python（3 项约定跳过）、网页节奏、Electron 单测、隔离 smoke 通过；真实麦克风和真实转写尚未验收。
+- 旧 071 Codex worktree 已从 Git 移除，未提交脏改动和备份均已删除，本地旧分支也已删除；旧外部路径只剩被进程占用的空目录。不得从 #112 或该目录恢复任何内容。
 - PR #112 的 071 初版只做本机图片气泡，没有把图交给模型，并被审出发送崩溃、busy 卡死、异步串图、孤儿上传等问题；不要合并。Codex 在 `ticket/071-image-upload-rebuild` 基于 main `55d7df6` 接管，复用其 UI 外壳但重建上传提交边界和真实多模态消息。Fount 只借“await 前冻结附件快照”的契约，不复制其 JS 多标签页结构。
 - 2026-10-22 Claude：PR #105（068 能力认知）与 PR #104（068 Windows 运行验证）已合并，main `becf0e5`。两个 PR 都编号 068 是并行工单撞号；下一个新工单从 070 起，开工前先查 main 和打开的 PR 里已用的编号。
 - PR #108（fork）指出 #104 的验收步骤依赖开发端忽略目录 `.local-tmp/ticket-067-runtime`，Lan 的仓库里没有。本次已把 STATUS 和 `docs/tickets/068-windows-runtime-validation.md` 的验收改为现有 Peter 正常入口；#108 本身因整段覆盖 STATUS/HANDOFF 会丢掉 #105 的内容，未合并。
@@ -13,4 +15,4 @@
 
 ## 下一个窗口第一步
 
-检查 PR #113 最新提交的 CI 和 Cubic 复审，不用旧提交的绿灯或线程关闭状态代替新结果。本轮补全发送的 finally 收尾（保存失败前/后分别报告是否已持久化）、历史媒体 MIME 与 5 MB 读取边界、慢磁盘下的提交预留；事件锁不再包住磁盘操作，预留失败自动释放，避免并发重复入队。新增保存失败、损坏历史、文件增大和慢磁盘并发测试。Windows 实际体验尚未验收；合并后关闭被替代的 #112，再请 Lan 按 `docs/tickets/071-send-photos.md` 验收。
+先核对 PR #113 是否已合并；未合并就继续在当前临时底座做只与 072 有关的本地审查，已合并则同步最终 main、解决差异并重跑完整验证。不要从旧 #112 分支或旧 worktree cherry-pick。
