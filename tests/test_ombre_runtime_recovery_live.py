@@ -89,7 +89,7 @@ class OmbreRuntimeRecoveryLive(unittest.TestCase):
                 self.assertIn('unconfirmed', result)
                 self.assertEqual(calls, ['hold'])
                 backend._perform = actual_perform
-                self.assertEqual(len(memory.state['pending_writes']), 1)
+                self.assertEqual(len(memory.pending_writes), 1)
                 journal = store.read('fixture/memory/_agent/write-reconciliation.jsonl')
                 self.assertEqual([row['status'] for row in journal[-2:]], ['submitted', 'unconfirmed'])
                 self.assertNotIn('Synthetic runtime recovery memory.', json.dumps(journal))
