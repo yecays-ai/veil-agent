@@ -146,7 +146,8 @@ class Hub:
                     continue
                 media_id, suffix = match.groups()
                 mime = voice_mimes.get('.' + suffix)
-                if mime:
+                marker = self.media_root / ('.' + media_id + '.voice-pending')
+                if mime and marker.is_file() and not marker.is_symlink():
                     if candidate.is_symlink():
                         continue
                     self.media_index[media_id] = {
@@ -155,10 +156,12 @@ class Hub:
                         'transcript': '',
                         'transcription_error': '上次保存中断，录音已恢复；可以重试识别。'}
                     recovered_voice = True
-                else:
+                elif not mime:
                     candidate.unlink(missing_ok=True)
             if recovered_voice:
                 self._rewrite_media_index(index)
+            for marker in self.media_root.glob('.' + ('[0-9a-f]' * 32) + '.voice-pending'):
+                marker.unlink(missing_ok=True)
 
     def media_info(self, media_id):
         with self.media_lock:
@@ -227,9 +230,16 @@ class Hub:
                'transcript': '', 'transcription_error': ''}
         target = self.media_root / filename
         index = self.media_root / 'index.jsonl'
+        marker = self.media_root / ('.' + media_id + '.voice-pending')
         with self.media_lock:
             try:
                 import os
+                with marker.open('xb', buffering=0) as handle:
+                    payload = json.dumps({'id': media_id, 'mime': mime, 'name': row['name']}).encode('utf-8')
+                    if handle.write(payload) != len(payload):
+                        raise OSError('short voice recovery marker write')
+                    handle.flush()
+                    os.fsync(handle.fileno())
                 with target.open('wb', buffering=0) as handle:
                     if handle.write(raw) != len(raw):
                         raise OSError('short voice write')
@@ -237,9 +247,11 @@ class Hub:
                     os.fsync(handle.fileno())
                 self.media_index[media_id] = row
                 self._rewrite_media_index(index)
+                marker.unlink(missing_ok=True)
             except OSError:
                 self.media_index.pop(media_id, None)
                 target.unlink(missing_ok=True)
+                marker.unlink(missing_ok=True)
                 raise
         return dict(row)
 
@@ -324,6 +336,7 @@ class Hub:
                 return
             row['request_id'] = 'voice-' + row['id']
             row.pop('submission_digest', None)
+            row.pop('delivery_pending', None)
             row['delivery_error'] = error
             self.submissions.pop(media.get('request_id'), None)
             self._rewrite_media_index()
@@ -340,6 +353,7 @@ class Hub:
                 if existing.get('kind') == 'voice' and existing.get('request_id', '').startswith('voice-'):
                     existing['request_id'] = request_id
                     existing['submission_digest'] = submission_digest.hex()
+                    existing['delivery_pending'] = True
                     existing.pop('delivery_error', None)
                     self._rewrite_media_index()
                     return dict(existing)
@@ -349,6 +363,8 @@ class Hub:
                 return None
             row = {**pending, 'request_id': request_id,
                    'submission_digest': submission_digest.hex()}
+            if row.get('kind') == 'voice':
+                row['delivery_pending'] = True
             source = self.upload_root / row['filename']
             target = self.media_root / row['filename']
             index = self.media_root / 'index.jsonl'
@@ -416,6 +432,15 @@ class Hub:
     def finish_media_submission(self, committed, text, media, request_id):
         if not committed:
             self.mark_voice_unsent(media)
+        elif isinstance(media, dict) and media.get('kind') == 'voice':
+            with self.media_lock:
+                row = self.media_index.get(media.get('id'))
+                if row and row.get('delivery_pending'):
+                    row.pop('delivery_pending', None)
+                    try:
+                        self._rewrite_media_index()
+                    except OSError:
+                        row['delivery_pending'] = True
         with self.cond:
             if committed:
                 self.push('user', text, media=media, request_id=request_id)
@@ -835,7 +860,7 @@ def serve_chat(chat, hub):
                            if isinstance(message.get('media'), dict)}
     for media in hub.media_index.values():
         if (media.get('kind') == 'voice' and media['id'] not in completed_voice_ids
-                and media.get('request_id', '').startswith('voice-')):
+                and (media.get('request_id', '').startswith('voice-') or media.get('delivery_pending'))):
             hub.push('user', media.get('transcript') or '', time=now(), history=True, media=dict(media))
     hub.autonomy = AutonomyController(chat, hub)
     hub.capability_record = lambda: chat.capability_history_record

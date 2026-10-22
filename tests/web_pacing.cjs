@@ -12,6 +12,7 @@ function page(options = {}) {
   const listeners = new Map();
   const storage = options.storage || new Map();
   const recognizers = [];
+  const recorders = [];
   class FakeSpeechRecognition {
     constructor() { this.lang = ''; this.results = []; recognizers.push(this); }
     start() { this.onstart?.(); }
@@ -35,9 +36,10 @@ function page(options = {}) {
   };
   let fetchCount = 0;
   const context = vm.createContext({ document, URLSearchParams,
+    Blob: class { constructor() { this.size = 0; } },
     location: { search: '', pathname: '/' }, history: {},
     navigator: { mediaDevices: { getUserMedia: options.getUserMedia || (() => Promise.reject(new Error('no microphone fixture'))) } },
-    MediaRecorder: class { static isTypeSupported() { return true; } start() {} stop() { this.onstop?.(); } get state() { return 'recording'; } },
+    MediaRecorder: class { constructor() { recorders.push(this); this.state = 'inactive'; } static isTypeSupported() { return true; } start() { this.state = 'recording'; } stop() { this.state = 'inactive'; this.onstop?.(); } },
     localStorage: { getItem() { return null; } },
     sessionStorage: { getItem(key) { return storage.has(key) ? storage.get(key) : null; }, setItem(key, value) { storage.set(key, String(value)); }, removeItem(key) { storage.delete(key); } },
     window: { SpeechRecognition: options.speechSupported === false ? undefined : FakeSpeechRecognition,
@@ -48,13 +50,13 @@ function page(options = {}) {
     Date: class extends Date { static now() { return clock; } },
     setTimeout(fn, delay) { const id = ++nextId; timers.set(id, { at: clock + delay, fn }); return id; },
     clearTimeout(id) { timers.delete(id); },
-    setInterval(fn, delay) { const id = ++nextId; timers.set(id, { at: clock + delay, fn }); return id; },
+    setInterval(fn, delay) { const id = ++nextId; timers.set(id, { at: clock + delay, fn, interval: delay }); return id; },
     clearInterval(id) { timers.delete(id); },
   });
   vm.runInContext(script, context);
   const run = code => vm.runInContext(code, context);
   return {
-    run, elements, timers, storage, recognizers, listeners,
+    run, elements, timers, storage, recognizers, recorders, listeners,
     fetchCount: () => fetchCount,
     event(kind, text, initial = false, ago = 0) {
       context.event = { kind, text, id: ++nextId, time: new Date(clock - ago).toISOString() };
@@ -65,7 +67,10 @@ function page(options = {}) {
       while (true) {
         const next = [...timers].sort((a, b) => a[1].at - b[1].at)[0];
         if (!next || next[1].at > end) break;
-        clock = next[1].at; timers.delete(next[0]); next[1].fn();
+        clock = next[1].at;
+        if (next[1].interval) next[1].at += next[1].interval;
+        else timers.delete(next[0]);
+        next[1].fn();
       }
       clock = end;
     },
@@ -193,6 +198,15 @@ assert.match(noSpeech.elements.get('speech-status').textContent, /没有检测�
   assert.equal(stoppedPromptTracks, 1, 'releasing during permission prompt must stop the granted stream');
   assert.equal(permissionPrompt.run('voiceRecorder'), null, 'cancelled permission must never start recording');
   assert.equal(permissionPrompt.fetchCount(), 0, 'cancelled permission must never upload audio');
+
+  const autoStop = page({getUserMedia: async () => ({getTracks: () => [{stop(){}}]})});
+  autoStop.run('setBusy(false)');
+  autoStop.elements.get('voice-hold').handlers.pointerdown({button:0,preventDefault(){}});
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(autoStop.recorders.length, 1);
+  autoStop.advance(120000);
+  assert.equal(autoStop.run('voiceRecorder'), null, 'recording must auto-stop at 120 seconds');
+  assert.equal(autoStop.recorders[0].state, 'inactive');
 
   let submittedVoiceBody;
   const voiceDelivery = page({fetch: async (_path, request) => { submittedVoiceBody=JSON.parse(request.body);return {ok:true,status:200,json:async()=>({ok:true})}; }});

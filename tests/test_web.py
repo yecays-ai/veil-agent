@@ -1,5 +1,6 @@
 import json
 import base64
+import hashlib
 import shutil
 import socket
 import subprocess
@@ -227,18 +228,44 @@ output_cny_per_million = "8"
         media_id = 'c' * 32
         orphan = media_root / (media_id + '.webm')
         orphan.write_bytes(b'\x1a\x45\xdf\xa3fictional audio')
+        (media_root / ('.' + media_id + '.voice-pending')).write_text(
+            json.dumps({'id': media_id, 'mime': 'audio/webm', 'name': 'voice'}))
         reopened = Hub('Test', ActivityState(self.store.root / 'test' / 'voice-recovery-state.json'),
                        media_root=media_root)
         recovered = reopened.media_info(media_id)
         self.assertEqual(recovered['request_id'], 'voice-' + media_id)
         self.assertIn('已恢复', recovered['transcription_error'])
         self.assertTrue((media_root / 'index.jsonl').exists())
+        self.assertFalse((media_root / ('.' + media_id + '.voice-pending')).exists())
+
+    def test_restart_does_not_adopt_unmarked_audio_in_character_media(self):
+        media_root = self.store.root / 'test' / 'unmarked-voice'
+        media_root.mkdir(parents=True)
+        media_id = 'd' * 32
+        audio = media_root / (media_id + '.webm')
+        audio.write_bytes(b'\x1a\x45\xdf\xa3unrelated audio')
+        reopened = Hub('Test', ActivityState(self.store.root / 'test' / 'unmarked-state.json'),
+                       media_root=media_root)
+        self.assertIsNone(reopened.media_info(media_id))
+        self.assertTrue(audio.exists())
 
     def test_voice_bytes_are_fsynced_before_index_commit(self):
         with patch('os.fsync') as sync, patch.object(
                 self.hub, '_rewrite_media_index', side_effect=lambda index=None: self.assertTrue(sync.called)):
             media = self.hub.save_voice('audio/webm', b'\x1a\x45\xdf\xa3fictional audio')
         self.assertIsNotNone(media)
+
+    def test_committed_voice_stays_recoverable_until_chat_event_is_durable(self):
+        media = self.hub.save_voice('audio/webm', b'\x1a\x45\xdf\xa3fictional audio')
+        request_id = 'request-voice-fixture'
+        committed = self.hub.commit_media(media['id'], request_id, hashlib.sha256(b'hello').digest())
+        self.assertTrue(committed['delivery_pending'])
+        reopened = Hub('Test', ActivityState(self.store.root / 'test' / 'voice-pending-state.json'),
+                       media_root=self.store.root / 'test' / 'media')
+        recovered = reopened.media_info(media['id'])
+        self.assertTrue(recovered['delivery_pending'])
+        reopened.finish_media_submission(True, 'hello', recovered, request_id)
+        self.assertNotIn('delivery_pending', reopened.media_info(media['id']))
 
     def test_snapshot_exposes_the_same_capability_record_used_by_peter(self):
         record = 'CAPABILITY RECORD\n2026-10-22T00:00:00+00:00: Capability update: added fictional_tool.'

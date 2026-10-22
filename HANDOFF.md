@@ -1,6 +1,6 @@
 # 交接
 
-- 072 当前在分支 `ticket/072-voice-messages`、PR #114；基于已合并 #113 的 main `81af94f`。Cubic 报告的 13 项意见已处理并解决线程，修复提交 `41d5c6b` 已 push；本地 Python 394 项（3 项约定跳过）、网页节奏、Electron 2 项单测和隔离 smoke 通过。远端仅报告 CodeRabbit success，6 项必需 GitHub Actions 检查尚无运行记录；真实麦克风和真实转写也未验收。
+- 072 当前在分支 `ticket/072-voice-messages`、PR #114；基于已合并 #113 的 main `81af94f`。新增的语音恢复/投递耐久测试和网页节奏测试通过；全量 Python 测试受当前解释器缺少 `dotenv`、`openai`、`mcp` 依赖及本机角色/工具环境限制，不能作为完整通过。真实麦克风和真实转写也未验收。
 - 072 功能范围：MediaRecorder 最长 120 秒/10 MB；音频持久化后调用 SenseVoiceSmall；成功后模型收到精确的 `[voice message] <转写>`，失败不发模型、保留录音并手动重试。Electron 只允许当前本机认证聊天窗口申请 audio，video、宠物页和外部来源拒绝。
 - 旧 071 Codex worktree 已从 Git 移除，未提交脏改动和备份均已删除，本地旧分支也已删除；旧外部路径只剩被进程占用的空目录。不得从 #112 或该目录恢复任何内容。
 - PR #112 的 071 初版只做本机图片气泡，没有把图交给模型，并被审出发送崩溃、busy 卡死、异步串图、孤儿上传等问题；不要合并。Codex 在 `ticket/071-image-upload-rebuild` 基于 main `55d7df6` 接管，复用其 UI 外壳但重建上传提交边界和真实多模态消息。Fount 只借“await 前冻结附件快照”的契约，不复制其 JS 多标签页结构。
