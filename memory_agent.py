@@ -6,6 +6,7 @@ from contextlib import contextmanager, asynccontextmanager
 from dataclasses import replace
 from decimal import Decimal
 import hashlib
+import hmac
 import json
 import os
 from pathlib import Path
@@ -435,6 +436,8 @@ class Memory:
         # pinned hold API has no caller-supplied idempotency key or result
         # lookup, so an unresolved local operation must remain unresolved.
         self.write_reconciliation = f'{cfg.id}/memory/_agent/write-reconciliation.jsonl'
+        self.write_fingerprint_key = vault_path(store.root, cfg.id) / '_agent' / 'write-reconciliation.key'
+        self._fingerprint_key = self._load_fingerprint_key()
         if isinstance(backend, MCP):
             backend.diagnostic = lambda facts: self.store.append(self.diagnostics, facts)
         self.dropped_path = f'{cfg.id}/memory/_agent/dropped.jsonl'
@@ -496,11 +499,30 @@ class Memory:
     def persist(self):
         self.store.append(self.path, {'state': self.state})
 
-    @staticmethod
-    def write_fingerprint(args):
+    def _load_fingerprint_key(self):
+        """Keep the dedupe secret out of the readable operation ledger."""
+        self.write_fingerprint_key.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            key = self.write_fingerprint_key.read_bytes()
+        except FileNotFoundError:
+            key = os.urandom(32)
+            try:
+                with self.write_fingerprint_key.open('xb') as handle:
+                    handle.write(key)
+                try:
+                    os.chmod(self.write_fingerprint_key, 0o600)
+                except OSError:
+                    pass
+            except FileExistsError:
+                key = self.write_fingerprint_key.read_bytes()
+        if len(key) != 32:
+            raise ValueError('invalid write reconciliation key')
+        return key
+
+    def write_fingerprint(self, args):
         """Local duplicate guard only; it is never presented as Ombre evidence."""
         payload = json.dumps(args, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
-        return hashlib.sha256(payload.encode('utf-8')).hexdigest()
+        return hmac.new(self._fingerprint_key, payload.encode('utf-8'), hashlib.sha256).hexdigest()
 
     def _reconcile_pending_writes(self):
         """Repair only local guards from the append-only operation ledger.
