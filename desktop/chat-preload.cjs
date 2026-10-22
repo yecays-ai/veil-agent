@@ -25,5 +25,5 @@ window.addEventListener('DOMContentLoaded', () => {
     if (control) control.disabled = true;
   }
   const status = document.getElementById('speech-status');
-  if (status) status.textContent = '桌面 0.1 暂不支持语音输入，可继续键盘输入。';
+  if (status) status.textContent = '桌面听写暂不可用；可用“按住说话”发送语音消息。';
 });

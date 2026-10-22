@@ -953,11 +953,15 @@ class Chat:
         self.history_events = [{**m, 'origin': m.get('origin', 'reply')} for group in groups for m in group]
         latest_photo = next((index for index in range(len(self.history_events) - 1, -1, -1)
                              if self.history_events[index]['role'] == 'user'
-                             and isinstance(self.history_events[index].get('media'), dict)), None)
+                             and isinstance(self.history_events[index].get('media'), dict)
+                             and self.history_events[index]['media'].get('kind') != 'voice'), None)
         model_history = []
         for index, message in enumerate(self.history_events):
             content = message['content']
             if message['role'] == 'user' and isinstance(message.get('media'), dict):
+                if message['media'].get('kind') == 'voice':
+                    model_history.append({'role': message['role'], 'content': content})
+                    continue
                 fallback = PHOTO_PLACEHOLDER + (('\n' + content) if content != '[图片]' else '')
                 if index == latest_photo:
                     try:
@@ -973,6 +977,8 @@ class Chat:
 
     def _photo_content(self, text, media):
         if not isinstance(media, dict):
+            return text
+        if media.get('kind') == 'voice':
             return text
         filename, mime = media.get('filename'), media.get('mime')
         if (not isinstance(filename, str) or Path(filename).name != filename
@@ -1052,7 +1058,7 @@ class Chat:
         # collapse_latest_photo mutates message dictionaries; keep the durable
         # in-memory history intact while preparing this request's model view.
         history = [dict(message) for message in self.history]
-        if isinstance(media, dict):
+        if isinstance(media, dict) and media.get('kind') != 'voice':
             collapse_latest_photo(history)
         # Long replies make the window outgrow the limit. Drop the oldest whole
         # rounds from this request only; chat.jsonl keeps everything.
@@ -1078,7 +1084,7 @@ class Chat:
             if not autonomy:
                 event = {'role': 'user', 'content': text, 'request_id': request_id}
                 if isinstance(media, dict):
-                    event['media'] = {key: media[key] for key in ('id', 'filename', 'mime', 'name')
+                    event['media'] = {key: media[key] for key in ('id', 'filename', 'mime', 'name', 'kind', 'transcript')
                                      if isinstance(media.get(key), str)}
                 self.store.append(self.path, event)
                 self.last_send_persisted = True

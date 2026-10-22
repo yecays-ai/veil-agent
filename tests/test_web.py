@@ -1,5 +1,6 @@
 import json
 import base64
+import hashlib
 import shutil
 import socket
 import subprocess
@@ -221,6 +222,51 @@ output_cny_per_million = "8"
             media_root=media_root)
         self.assertFalse(orphan.exists())
 
+    def test_restart_recovers_unindexed_voice_recording_for_retry(self):
+        media_root = self.store.root / 'test' / 'orphan-voice'
+        media_root.mkdir(parents=True)
+        media_id = 'c' * 32
+        orphan = media_root / (media_id + '.webm')
+        orphan.write_bytes(b'\x1a\x45\xdf\xa3fictional audio')
+        (media_root / ('.' + media_id + '.voice-pending')).write_text(
+            json.dumps({'id': media_id, 'mime': 'audio/webm', 'name': 'voice'}))
+        reopened = Hub('Test', ActivityState(self.store.root / 'test' / 'voice-recovery-state.json'),
+                       media_root=media_root)
+        recovered = reopened.media_info(media_id)
+        self.assertEqual(recovered['request_id'], 'voice-' + media_id)
+        self.assertIn('已恢复', recovered['transcription_error'])
+        self.assertTrue((media_root / 'index.jsonl').exists())
+        self.assertFalse((media_root / ('.' + media_id + '.voice-pending')).exists())
+
+    def test_restart_does_not_adopt_unmarked_audio_in_character_media(self):
+        media_root = self.store.root / 'test' / 'unmarked-voice'
+        media_root.mkdir(parents=True)
+        media_id = 'd' * 32
+        audio = media_root / (media_id + '.webm')
+        audio.write_bytes(b'\x1a\x45\xdf\xa3unrelated audio')
+        reopened = Hub('Test', ActivityState(self.store.root / 'test' / 'unmarked-state.json'),
+                       media_root=media_root)
+        self.assertIsNone(reopened.media_info(media_id))
+        self.assertTrue(audio.exists())
+
+    def test_voice_bytes_are_fsynced_before_index_commit(self):
+        with patch('os.fsync') as sync, patch.object(
+                self.hub, '_rewrite_media_index', side_effect=lambda index=None: self.assertTrue(sync.called)):
+            media = self.hub.save_voice('audio/webm', b'\x1a\x45\xdf\xa3fictional audio')
+        self.assertIsNotNone(media)
+
+    def test_committed_voice_stays_recoverable_until_chat_event_is_durable(self):
+        media = self.hub.save_voice('audio/webm', b'\x1a\x45\xdf\xa3fictional audio')
+        request_id = 'request-voice-fixture'
+        committed = self.hub.commit_media(media['id'], request_id, hashlib.sha256(b'hello').digest())
+        self.assertTrue(committed['delivery_pending'])
+        reopened = Hub('Test', ActivityState(self.store.root / 'test' / 'voice-pending-state.json'),
+                       media_root=self.store.root / 'test' / 'media')
+        recovered = reopened.media_info(media['id'])
+        self.assertTrue(recovered['delivery_pending'])
+        reopened.finish_media_submission(True, 'hello', recovered, request_id)
+        self.assertNotIn('delivery_pending', reopened.media_info(media['id']))
+
     def test_snapshot_exposes_the_same_capability_record_used_by_peter(self):
         record = 'CAPABILITY RECORD\n2026-10-22T00:00:00+00:00: Capability update: added fictional_tool.'
         self.hub.capability_record = lambda: record
@@ -248,6 +294,141 @@ output_cny_per_million = "8"
         with patch('tools_agent.save_capabilities', side_effect=OSError('fictional')):
             self.assertFalse(manager.announce_photo_input())
         self.assertTrue(manager.enabled)
+
+    def test_voice_is_saved_transcribed_and_reaches_model_as_voice_text(self):
+        raw = b'\x1a\x45\xdf\xa3fictional webm audio'
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self, *_): return False
+            def read(self): return b'{"text":"hello Peter"}'
+
+        def scenario(result):
+            self.assertTrue(self.wait(lambda: self.hub.ready and not self.hub.busy))
+            body = {'mime': 'audio/webm', 'name': 'voice.webm',
+                    'data': base64.b64encode(raw).decode()}
+            with patch('dotenv.dotenv_values', return_value={'EMBED_API_KEY': 'fictional'}), patch('web_agent.urlopen', return_value=Response()):
+                status, uploaded = self.call('/api/voice', body)
+            self.assertEqual(status, 200)
+            self.assertEqual(uploaded['transcript'], 'hello Peter')
+            media = uploaded['media']; result['media'] = media
+            status, _ = self.call('/api/send', {'text': '[voice message] hello Peter',
+                                                 'media': {'id': media['id']}})
+            self.assertEqual(status, 200)
+            self.assertTrue(self.wait(lambda: any(event['kind'] == 'assistant'
+                                                 for event in self.hub.snapshot(0)['events'])))
+
+        result = self.run_loop(scenario)
+        media = result['media']
+        self.assertEqual((self.store.root / 'test' / 'media' / media['filename']).read_bytes(), raw)
+        saved = next(row for row in reversed(self.store.read('test/chat.jsonl')) if row['role'] == 'user')
+        self.assertEqual(saved['content'], '[voice message] hello Peter')
+        self.assertEqual(saved['media']['kind'], 'voice')
+        sent = next(item for item in self.model.call_args.args[0] if item['role'] == 'user')
+        self.assertEqual(sent['content'], '[voice message] hello Peter')
+
+    def test_failed_voice_transcription_is_durable_and_retryable_without_sending(self):
+        raw = b'\x1a\x45\xdf\xa3fictional webm audio'
+        media = self.hub.save_voice('audio/webm', raw, 'voice.webm')
+        with patch('dotenv.dotenv_values', return_value={'EMBED_API_KEY': 'fictional'}), patch(
+                'web_agent.urlopen', side_effect=urllib.error.URLError('offline')):
+            transcript, error = self.hub.transcribe_voice(media['id'])
+        self.assertIsNone(transcript)
+        self.assertIn('网络连接失败', error)
+        self.assertEqual(self.store.read('test/chat.jsonl'), [])
+        reopened = Hub('Test', ActivityState(self.store.root / 'test' / 'reopened-state.json'),
+                       media_root=self.store.root / 'test' / 'media')
+        retained = reopened.media_info(media['id'])
+        self.assertEqual(retained['transcription_error'], error)
+        self.assertEqual((reopened.media_root / retained['filename']).read_bytes(), raw)
+
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self, *_): return False
+            def read(self): return b'{"text":"hello after retry"}'
+
+        with patch('dotenv.dotenv_values', return_value={'EMBED_API_KEY': 'fictional'}), patch(
+                'web_agent.urlopen', return_value=Response()):
+            status, result = self.call('/api/voice/retry', {'media_id': media['id']})
+        self.assertEqual(status, 200)
+        self.assertEqual(result['transcript'], 'hello after retry')
+        self.assertEqual(result['media']['transcript'], 'hello after retry')
+        self.assertEqual(result['media']['transcription_error'], '')
+
+    def test_failed_chat_save_restores_voice_as_retryable_and_never_claims_delivery(self):
+        raw = b'\x1a\x45\xdf\xa3fictional webm audio'
+        media = self.hub.save_voice('audio/webm', raw, 'voice.webm')
+        self.hub._record_voice_result(media['id'], 'hello Peter', '')
+        digest = b'1' * 32
+        committed = self.hub.commit_media(media['id'], 'fictional-request', digest)
+        self.hub.finish_media_submission(False, '[voice message] hello Peter', committed,
+                                         'fictional-request')
+        retained = self.hub.media_info(media['id'])
+        self.assertEqual(retained['request_id'], 'voice-' + media['id'])
+        self.assertNotIn('submission_digest', retained)
+        self.assertIn('没有交给 Peter', retained['delivery_error'])
+        self.assertFalse(any(event['kind'] == 'user' for event in self.hub.snapshot(0)['events']))
+
+    def test_busy_voice_send_remains_retryable_with_same_idempotency_key(self):
+        media = self.hub.save_voice('audio/webm', b'\x1a\x45\xdf\xa3fictional audio', 'voice.webm')
+        self.hub._record_voice_result(media['id'], 'hello Peter', '')
+        self.hub.busy = True
+        request_id = 'voice-send-' + media['id']
+        status, _ = self.call('/api/send', {'text': '[voice message] hello Peter',
+                                            'request_id': request_id, 'media': {'id': media['id']}})
+        self.assertEqual(status, 409)
+        retained = self.hub.media_info(media['id'])
+        self.assertEqual(retained['transcript'], 'hello Peter')
+        self.assertIn('可以重试发送', retained['delivery_error'])
+        self.assertTrue(retained['request_id'].startswith('voice-'))
+
+        def scenario(_result):
+            self.assertTrue(self.wait(lambda: self.hub.ready and not self.hub.busy))
+            status, _ = self.call('/api/send', {'text': '[voice message] hello Peter',
+                                                'request_id': request_id, 'media': {'id': media['id']}})
+            self.assertEqual(status, 200)
+            duplicate, _ = self.call('/api/send', {'text': '[voice message] hello Peter',
+                                                   'request_id': request_id, 'media': {'id': media['id']}})
+            self.assertEqual(duplicate, 200)
+            self.assertTrue(self.wait(lambda: not self.hub.busy))
+
+        self.run_loop(scenario)
+        rows = [row for row in self.store.read('test/chat.jsonl') if row['role'] == 'user']
+        self.assertEqual([row['content'] for row in rows].count('[voice message] hello Peter'), 1)
+        self.assertNotIn('delivery_error', self.hub.media_info(media['id']))
+
+    def test_voice_capability_notice_is_persistent_and_announced_once(self):
+        manager = object.__new__(FilesystemTools)
+        manager.cap_path = self.store.root / 'test' / 'capabilities.json'
+        manager.capability_event = manager.capability_event_model = None
+        manager.enabled = True
+        manager.announce_voice_input()
+        first = manager.capability_event
+        self.assertIn('send you voice messages', first)
+        manager.announce_voice_input()
+        row = json.loads(manager.cap_path.read_text())
+        matching = [item for item in row['capability_updates'] if 'send you voice messages' in item['text']]
+        self.assertEqual(len(matching), 1)
+
+    def test_voice_notice_flag_survives_capability_manifest_rebuild(self):
+        manager = object.__new__(FilesystemTools)
+        manager.cfg, manager.folder_name, manager.enabled = SimpleNamespace(memory=None), 'workspace', True
+        manager.cap_path = self.store.root / 'test' / 'capabilities.json'
+        manager.capability_event = manager.capability_event_model = None
+        manager._record_capabilities(['read_text_file'])
+        manager.announce_voice_input()
+        manager._record_capabilities(['read_text_file', 'write_file'])
+        row = json.loads(manager.cap_path.read_text())
+        self.assertTrue(row['voice_input_announced'])
+
+        reopened = object.__new__(FilesystemTools)
+        reopened.cfg, reopened.folder_name, reopened.enabled = manager.cfg, 'workspace', True
+        reopened.cap_path = manager.cap_path
+        reopened.capability_event = reopened.capability_event_model = None
+        reopened._record_capabilities(['read_text_file', 'write_file'])
+        reopened.announce_voice_input()
+        row = json.loads(reopened.cap_path.read_text())
+        matching = [item for item in row['capability_updates'] if 'send you voice messages' in item['text']]
+        self.assertEqual(len(matching), 1)
 
     def test_photo_is_budgeted_as_vision_tokens_and_collapsed_after_first_request(self):
         messages = [{'role': 'user', 'content': [
