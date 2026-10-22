@@ -25,7 +25,7 @@ from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 
 from veil_agent import (ROOT, AUTONOMY_WAKE, MAX_PHOTO_BYTES, ActivityState, Budget, Chat, Store, UserError,
-                        load_character, now, make_model, run_chat)
+                        load_character, now, make_model, make_voice, run_chat)
 from autonomy import AutonomyController
 
 PAGE = Path(__file__).resolve().parent / 'web' / 'index.html'
@@ -48,6 +48,8 @@ VOICE_TYPES = {
     'audio/mp4': '.m4a',
     'audio/wav': '.wav',
 }
+VOICE_MIME = 'audio/mpeg'
+MAX_VOICE_BYTES = 25 * 1024 * 1024
 
 
 def valid_media_row(row):
@@ -167,6 +169,18 @@ class Hub:
         with self.media_lock:
             row = self.media_index.get(media_id)
             return dict(row) if row else None
+
+    def register_voice_media(self, media):
+        if not isinstance(media, dict) or media.get('mime') != VOICE_MIME:
+            return None
+        media_id, filename = media.get('id'), media.get('filename')
+        if (not isinstance(media_id, str) or MEDIA_ID_PATTERN.fullmatch(media_id) is None
+                or filename != media_id + '.mp3'):
+            return None
+        row = {key: media[key] for key in ('id', 'filename', 'path', 'mime', 'name') if key in media}
+        with self.media_lock:
+            self.media_index[media_id] = row
+        return dict(row)
 
     def media_for_request(self, request_id):
         with self.media_lock:
@@ -409,12 +423,14 @@ class Hub:
             return event_id
 
     def _publish_output(self, text):
+        media = getattr(text, 'media', None)
         text = str(text)
         prefix = f'{self.name}: '
         if text.startswith('新对话已开始；'):
             self.push('reset', text)
         elif text.startswith(prefix):
-            self.push('assistant', text[len(prefix):])
+            voice = self.register_voice_media(media)
+            self.push('assistant', text[len(prefix):], **({'media': voice} if voice else {}))
         elif text.startswith('请求失败，未自动重试'):
             self.push('error', text)
         elif text.startswith('接上了'):
@@ -425,7 +441,7 @@ class Hub:
     def output(self, text):
         with self.cond:
             if self.defer_outputs:
-                self.deferred_outputs.append(str(text))
+                self.deferred_outputs.append(text)
                 return
         self._publish_output(text)
 
@@ -674,7 +690,14 @@ def make_handler(hub, token):
                     self._send(404, {'error': 'not found'})
                     return
                 try:
-                    data = (hub.media_root / media['filename']).read_bytes()
+                    path = hub.media_root / media['filename']
+                    limit = MAX_VOICE_BYTES if media.get('mime') == VOICE_MIME else MAX_MEDIA_BYTES
+                    if path.stat().st_size > limit:
+                        raise OSError('media too large')
+                    with path.open('rb') as handle:
+                        data = handle.read(limit + 1)
+                    if len(data) > limit:
+                        raise OSError('media too large')
                 except OSError:
                     self._send(404, {'error': 'not found'})
                 else:
@@ -845,15 +868,23 @@ def serve_chat(chat, hub):
             hub.output('图片能力通知暂时无法保存；聊天仍可使用，下次启动会重试。')
         chat.pending_capability_event = getattr(chat.tools, 'capability_event', None)
         chat.pending_capability_event_model = chat.pending_capability_event
-    announce_voice = getattr(files, 'announce_voice_input', None)
-    if callable(announce_voice):
-        if announce_voice() is False:
+    announce_voice_input = getattr(files, 'announce_voice_input', None)
+    if callable(announce_voice_input):
+        if announce_voice_input() is False:
             hub.output('语音能力通知暂时无法保存；聊天仍可使用，下次启动会重试。')
         chat.pending_capability_event = getattr(chat.tools, 'capability_event', None)
         chat.pending_capability_event_model = getattr(chat.tools, 'capability_event_model', None)
+    announce_voice = getattr(files, 'announce_voice_output', None)
+    if chat.voice is not None and callable(announce_voice):
+        if announce_voice() is False:
+            hub.output('语音能力通知暂时无法保存；聊天仍可使用，下次启动会重试。')
+        chat.pending_capability_event = getattr(chat.tools, 'capability_event', None)
+        chat.pending_capability_event_model = chat.pending_capability_event
     for message in chat.history_events:
         media = message.get('media') or (hub.media_for_request(message.get('request_id'))
                                          if message['role'] == 'user' else None)
+        if message['role'] == 'assistant' and isinstance(media, dict):
+            media = hub.register_voice_media(media)
         hub.push(message['role'], message['content'], time=message['time'], history=True,
                  **({'media': media} if media else {}))
     completed_voice_ids = {message.get('media', {}).get('id') for message in chat.history_events
@@ -920,6 +951,7 @@ def main(argv=None):
             cfg = load_character(ROOT, args.character)
             budget.autonomy_daily = cfg.autonomy['daily_budget_cny']
             client, model = make_model(ROOT, cfg)
+            voice = make_voice(ROOT, cfg, store, budget)
             activity = ActivityState(store.root / cfg.id / 'resident-state.json')
             memory_port = (cfg.memory or {}).get('ombre_port') if (cfg.memory or {}).get('enabled') else None
             hub = Hub(cfg.name, activity, memory_port, store.root / cfg.id / 'media')
@@ -947,12 +979,14 @@ def main(argv=None):
                                         tools = ToolSet(tools, NativeMemoryTools(
                                             memory, cfg.tools['max_result_bytes']))
                                     serve_chat(Chat(cfg, store, budget, model, memory, tools,
-                                                    approval=hub.approval, output=hub.output), hub)
+                                                    approval=hub.approval, output=hub.output,
+                                                    voice=voice), hub)
                                 for notice in memory.notices():
                                     hub.output(notice)
                         else:
                             serve_chat(Chat(cfg, store, budget, model, tools=tools,
-                                            approval=hub.approval, output=hub.output), hub)
+                                            approval=hub.approval, output=hub.output,
+                                            voice=voice), hub)
             except UserError as exc:
                 hub.push('error', str(exc))
                 save_startup_error(error_path, str(exc))

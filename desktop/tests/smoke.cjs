@@ -17,7 +17,12 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   temp = await fs.mkdtemp(path.join(os.tmpdir(), 'veil-ui-smoke-'));
   app.setPath('userData', temp);
   await fs.writeFile(path.join(temp, 'desktop.json'), JSON.stringify({ root: temp, size: 320 }));
-  const events = [{ id: 1, kind: 'assistant', text: 'Fictional saved history', history: true, time: new Date().toISOString() }];
+  const events = [
+    { id: 1, kind: 'assistant', text: 'Fictional saved history', history: true, time: new Date().toISOString() },
+    { id: 2, kind: 'assistant', text: 'Fictional saved voice', history: true,
+      media: { id: 'fictional-voice', filename: 'fictional-voice.mp3', mime: 'audio/mpeg', name: 'voice message' },
+      time: new Date().toISOString() },
+  ];
   let sends = 0, imageUploads = 0, imageAttempts = 0, imageSends = 0, approvals = 0, pending = null;
   const token = 'fictional_token_123456789';
   const validPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
@@ -30,6 +35,10 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
     if (url.pathname === '/media/fictional-image.png') {
       assert.equal(url.searchParams.get('t'), token);
       res.setHeader('Content-Type', 'image/png'); res.end(validPng); return;
+    }
+    if (url.pathname === '/media/fictional-voice.mp3') {
+      assert.equal(url.searchParams.get('t'), token);
+      res.setHeader('Content-Type', 'audio/mpeg'); res.end(Buffer.from('ID3fictional')); return;
     }
     assert.equal(req.headers['x-token'], token);
     res.setHeader('Content-Type', 'application/json');
@@ -50,17 +59,17 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
         imageAttempts++; assert.equal(body.text, '[图片]');
         if (imageAttempts === 1) { res.statusCode = 409; res.end(JSON.stringify({ error: 'busy' })); return; }
         imageSends++;
-        events.push({ id: 4, kind: 'user', text: '[图片]', request_id: body.request_id, media: { id: 'fictional-image', filename: 'fictional-image.png', mime: 'image/png', name: 'fictional.png' }, time: new Date().toISOString() });
+        events.push({ id: 5, kind: 'user', text: '[图片]', request_id: body.request_id, media: { id: 'fictional-image', filename: 'fictional-image.png', mime: 'image/png', name: 'fictional.png' }, time: new Date().toISOString() });
       } else {
         sends++;
         assert.equal(body.text, 'fictional hello');
-        events.push({ id: 2, kind: 'user', text: body.text, time: new Date().toISOString() });
-        pending = 3; events.push({ id: 3, kind: 'approval', text: 'Fictional permission request', time: new Date().toISOString() });
+        events.push({ id: 3, kind: 'user', text: body.text, time: new Date().toISOString() });
+        pending = 4; events.push({ id: 4, kind: 'approval', text: 'Fictional permission request', time: new Date().toISOString() });
       }
       res.end('{}');
     } else if (url.pathname === '/api/approve') {
       let raw = ''; for await (const chunk of req) raw += chunk;
-      const body = JSON.parse(raw); assert.equal(body.answer, 'n'); assert.equal(body.id, 3);
+      const body = JSON.parse(raw); assert.equal(body.answer, 'n'); assert.equal(body.id, 4);
       approvals++; pending = null; res.end('{}');
     } else { res.statusCode = 404; res.end('{}'); }
   });
@@ -101,6 +110,8 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   assert.equal(await ask(pet.webContents, ['audio']), false, 'pet renderer must not get microphone');
   assert.equal(await ask(chat.webContents, ['audio'], 'https://example.invalid/'), false, 'foreign origin must not get microphone');
   assert.equal(permissionCheck(chat.webContents, 'media', origin, { mediaType: 'audio' }), true);
+  assert.equal(await chat.webContents.executeJavaScript('document.querySelector(".msg-voice audio")?.controls'), true);
+  assert.equal(await chat.webContents.executeJavaScript('document.querySelector(".msg-voice details div")?.textContent'), 'Fictional saved voice');
   assert.equal(await chat.webContents.executeJavaScript('typeof window.companion'), 'undefined');
   assert.equal(await chat.webContents.executeJavaScript('typeof require'), 'undefined');
   assert.equal(await chat.webContents.executeJavaScript('document.querySelector("#image-file").accept'), 'image/png,image/jpeg,image/gif,image/webp');
@@ -132,6 +143,7 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   chat.webContents.reload();
   await reloaded;
   await wait(() => chat.webContents.executeJavaScript('(() => { const i=document.querySelector(".msg.user .msg-image"); return !!i && i.complete && i.naturalWidth > 0; })()'), 'image history missing after reload');
+  assert.equal(await chat.webContents.executeJavaScript('document.querySelector(".msg-voice audio")?.controls'), true);
   await toggle(); await wait(() => !chat.isVisible(), 'chat did not hide');
   await pet.webContents.executeJavaScript('window.companion.menu()');
   await wait(() => !!menu, 'menu missing'); activeMenu.closePopup();
@@ -143,7 +155,7 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   assert.equal(pet.getBounds().width, 420);
   chat.show();
   await fs.writeFile(path.join(__dirname, '../test-output/chat.png'), (await chat.webContents.capturePage()).toPNG());
-  console.log('SMOKE PASS: photo flow, chat-only microphone permission, camera/foreign renderer denial, hide/reopen, reload, resize, sandbox');
+  console.log('SMOKE PASS: original PNG, saved text/image/voice history, voice controls/transcript, image preview/upload/bubble, permission refusal, hide/reopen, reload, resize, sandbox, disabled entries');
   clearTimeout(failSafe);
   server.close(); app.exit(0);
 })().catch(error => { console.error(error); clearTimeout(failSafe); server?.close(); app.exit(1); });

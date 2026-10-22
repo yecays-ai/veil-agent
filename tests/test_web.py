@@ -272,6 +272,24 @@ output_cny_per_million = "8"
         self.hub.capability_record = lambda: record
         self.assertEqual(self.hub.snapshot(0)['capability_record'], record)
 
+    def test_voice_media_is_served_and_page_has_audio_with_expandable_text(self):
+        media_id = 'c' * 32
+        media = {'id': media_id, 'filename': media_id + '.mp3',
+                 'path': 'media/' + media_id + '.mp3', 'mime': 'audio/mpeg',
+                 'name': 'voice message'}
+        audio = b'ID3fictional'
+        (self.store.root / 'test' / 'media' / media['filename']).write_bytes(audio)
+        self.assertEqual(self.hub.register_voice_media(media), media)
+        request = urllib.request.Request(
+            f'http://127.0.0.1:{self.port}/media/{media["filename"]}?t={TOKEN}')
+        with urllib.request.urlopen(request, timeout=5) as response:
+            self.assertEqual((response.headers['Content-Type'], response.read()),
+                             ('audio/mpeg', audio))
+        page = (Path(__file__).parents[1] / 'web' / 'index.html').read_text(encoding='utf-8')
+        self.assertIn("media.mime==='audio/mpeg'", page)
+        self.assertIn("audio.controls=true", page)
+        self.assertIn("summary.textContent='展开文字'", page)
+
     def test_photo_capability_notice_is_persistent_and_announced_once(self):
         manager = object.__new__(FilesystemTools)
         manager.cap_path = self.store.root / 'test' / 'capabilities.json'
@@ -283,6 +301,21 @@ output_cny_per_million = "8"
         manager.announce_photo_input()
         row = json.loads(manager.cap_path.read_text())
         matching = [item for item in row['capability_updates'] if 'send you photos' in item['text']]
+        self.assertEqual(len(matching), 1)
+        self.assertEqual(row['pending_event'], first)
+
+    def test_voice_capability_notice_is_persistent_and_announced_once(self):
+        manager = object.__new__(FilesystemTools)
+        manager.cap_path = self.store.root / 'test' / 'capabilities.json'
+        manager.capability_event = manager.capability_event_model = None
+        manager.enabled = True
+        manager.announce_voice_output()
+        first = manager.capability_event
+        self.assertIn('send_message with voice: true', first)
+        manager.announce_voice_output()
+        row = json.loads(manager.cap_path.read_text())
+        matching = [item for item in row['capability_updates']
+                    if 'send_message with voice: true' in item['text']]
         self.assertEqual(len(matching), 1)
         self.assertEqual(row['pending_event'], first)
 

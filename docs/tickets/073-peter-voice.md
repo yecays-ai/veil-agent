@@ -14,6 +14,8 @@ Peter 自己决定某条消息用语音发：网页里出现一条语音气泡�
 - 价格（MiniMax 官方定价页 https://platform.minimax.cn/docs/pricing/overview ）：speech-2.8-hd ¥3.5/万字符，turbo ¥2/万字符；中文一个字算 2 个字符，英文一个字母算 1 个。Peter 一条英文语音约 300 字符 ≈ ¥0.1；一天 20 条 ≈ ¥2。Lan 已同意费用，要求声音与小手机一致，所以模型、voice_id、区域都用她小手机里的同一套。
 - 配置：仓库是公开的。`MINIMAX_API_KEY`、`MINIMAX_VOICE_ID`、`MINIMAX_MODEL`、`MINIMAX_REGION`（`cn` 或 `global`）放在本地 `.env`，`.env.example` 只加空键名。四项不全时语音功能不出现，不报错。
 - Peter 现有 `send_message` 工具（`veil_agent.py:52`）只有 `text`。
+- 复用调查：核对了小手机 `yecays-ai/veil` 的 MiniMax 实现，也核对了 MIT 许可的 `harry0703/MoneyPrinterTurbo` 固定提交 `33dde166` 中的 Python 双区域、Bearer、hex MP3 与响应上限实现。结论是少量改写复用请求与边界契约；不复制其大型 TTS 框架，不引入新依赖。
+- `ticket/073-peter-voice` 已从 PR #113 最新 head `b60912d` 独立实现 Peter 输出语音；未改 072 的录音输入、麦克风或 SenseVoice。虚构 MiniMax、错误 key、网页媒体、刷新历史和 Electron 场景已通过；真实 MiniMax 音色、真实费用和服务重启仍必须按本工单验收步骤由 Lan 在本机确认。
 
 ## 要做的行为
 
