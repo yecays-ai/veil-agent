@@ -715,26 +715,25 @@ class Chat:
         if schemas is None:
             schemas = (self._active_capability_schemas if self._capability_request_active
                        else self.current_request_tool_schemas())
-        rows = []
+        # Names only: each tool's own definition already tells the model how to use it.
+        groups = {}
         for schema in schemas:
-            function = schema.get('function', {})
-            name = function.get('name')
+            name = schema.get('function', {}).get('name')
             if not isinstance(name, str):
                 continue
-            description = function.get('description', '').strip()
-            description = re.sub(r'(?i)\b[a-z]:\\[^\s<>"\']+', '[configured location]', description)
             policy = tool_policy(name)
             if policy == 'allow':
-                permission = 'Direct use.'
+                label = 'Direct use'
             elif policy == 'ask':
-                permission = 'Requires Lan\'s approval where policy requires it.'
+                label = "Needs Lan's approval"
             elif policy == 'lab':
-                permission = 'Lab only; no overwrite, deletion, or scripts.'
+                label = 'Lab only (no overwrite, deletion, or scripts)'
             elif name == 'trace':
-                permission = 'Deletion requires explicit user approval; autonomous requests wait for later approval.'
+                label = "Deletion needs Lan's approval"
             else:
-                permission = 'Available only within the limits described below.'
-            rows.append(f'- {name}: {description} {permission}'.strip())
+                label = 'Available'
+            groups.setdefault(label, []).append(name)
+        rows = [f'- {label}: {", ".join(names)}.' for label, names in groups.items()]
         files = getattr(self.tools, 'files', None) if self.tools else None
         if not isinstance(getattr(files, 'tools', None), (list, tuple)):
             files = self.tools
@@ -770,7 +769,7 @@ class Chat:
         try:
             row = json.loads(path.read_text(encoding='utf-8'))
             updates = row.get('capability_updates', [])
-            lines = [f'{item["at"]}: {item["text"]}' for item in updates
+            lines = [f'{item["at"][:10]}: {item["text"]}' for item in updates
                      if isinstance(item, dict) and isinstance(item.get('at'), str)
                      and isinstance(item.get('text'), str)]
             return ('CAPABILITY RECORD (program-maintained; use it when asked what changed, do not claim an '

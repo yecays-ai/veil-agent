@@ -153,6 +153,8 @@ output_cny_per_million = "8"
                     self.store, self.budget, self.model, tools=tools)
         current = chat.current_capability_snapshot()
         self.assertIn('search_files', current)
+        # The tool definition already carries the description; the snapshot only names it.
+        self.assertNotIn('Search configured folder.', current)
         final_step_chat = Chat(replace(self.cfg, tools={'enabled': True, 'max_steps': 1}),
                               self.store, self.budget, self.model, tools=tools)
         self.assertNotIn('search_files', final_step_chat.current_capability_snapshot())
