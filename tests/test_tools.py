@@ -290,6 +290,7 @@ class ToolPolicyTests(unittest.TestCase):
         legacy['pending_event_model'] = 'Current capability update: fixture tools are available.'
         legacy['autonomy_announced'] = True
         legacy['long_tasks_announced'] = True
+        legacy['memory_tools'] = ['hold']
         first.cap_path.write_text(json.dumps(legacy), encoding='utf-8')
         migrated = manager()
         migrated._record_capabilities(['lab_file_digest', 'move_lab_file'])
@@ -297,6 +298,8 @@ class ToolPolicyTests(unittest.TestCase):
         self.assertIn('lab_file_digest', migrated.capability_event)
         self.assertIn('Autonomous activity remains enabled', migrated.capability_event)
         self.assertIn('Long-task tools remain available', migrated.capability_event)
+        self.assertIn('Memory tools are available: hold.', migrated.capability_event)
+        self.assertIn('Deletion through trace requires explicit UI approval', migrated.capability_event)
         self.assertEqual(migrated.capability_event_model, migrated.capability_event)
         persisted = json.loads(first.cap_path.read_text(encoding='utf-8'))
         self.assertEqual(persisted['pending_event_model'], migrated.capability_event)

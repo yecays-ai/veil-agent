@@ -378,7 +378,9 @@ class FilesystemTools:
             changes.append('Long-task tools remain available to save one active task and continue it after restart.')
         memory_tools = previous.get('memory_tools')
         if isinstance(memory_tools, list) and memory_tools:
-            changes.append('Current memory tools: ' + ', '.join(str(name) for name in memory_tools) + '.')
+            changes.append('Memory tools are available: ' + ', '.join(str(name) for name in memory_tools) +
+                           '. Deletion through trace requires explicit UI approval; requests made during '
+                           'autonomous activity remain pending for later approval.')
         return self._capability_event(core, changes)
 
     @property

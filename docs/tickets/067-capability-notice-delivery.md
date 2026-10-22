@@ -6,7 +6,7 @@
 
 ## 当前状态
 
-`tools_agent.py` 同时保存中文 `pending_event` 和英文简略 `pending_event_model`，而 `Chat.send()` 又在模型请求成功前清除通知；因此 Peter 会收到缩水内容或在失败后收不到。已按 reuse-first 检索 GitHub，未找到能直接用于本地 Python 聊天与 capabilities.json 持久化链路的成熟组件，本单将在现有事务机制内修复。
+已修复：`pending_event` 与 `pending_event_model` 现使用同一完整英文正文；正常聊天仅在收到有效回复后才消费通知，失败和重启仍保留待发状态。旧版未送达的文件、记忆、自主活动和长期任务通知会合并为同一完整英文事件；能力记录按 UTC 日期持久化。当前等待 PR 的自动检查、Cubic 审查与 Lan 的 Windows 体验验收。
 
 ## 验收步骤
 
