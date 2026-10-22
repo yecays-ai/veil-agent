@@ -1,8 +1,11 @@
 # 当前状态
 
-更新：2026-10-22 13:30 UTC · Claude。
+更新：2026-10-23 · Codex。
 
 ## 当前目标与现状
+
+- **071（施工中，分支 `ticket/071-electron-image`）：** 网页和现有 Electron 聊天共用图片选择、粘贴、拖入、预览、上传和历史显示；媒体统一进入 `data/<character>/media/`，不开放 Node API。
+- 已补：本机 token 鉴权的图片上传/读取、媒体历史引用、网页原生图片交互、Electron smoke 的上传与刷新历史检查。Python web 回归 23/23、页面节奏回归、Electron smoke 和 desktop backend 回归均通过。
 
 - **main `becf0e5`：** 067（PR #102）、068 能力认知（PR #105）、068 Windows 运行验证（PR #104）、069 记忆调用恢复（PR #106、#107）均已合并，GitHub CI 通过。以上都还没有经过 Lan 的 Windows 真人验收。
 - **068 能力认知（#105）：** 每轮请求带一份由实际开放工具 schema、授权策略和运行状态生成的英文 `CURRENT CAPABILITIES` 快照；能力面板与模型读同一来源，自主活动启停写入带日期的历史。PR #109 按 Lan 要求改回最初设计：每轮不再附带能力清单或变化记录（工具定义本身已告诉模型能用什么）；能力变化仍以一次性英文通知交给 Peter；Peter 需要时自己调用只读工具 `capability_history` 查带时间戳的变化记录。能力面板仍显示快照与记录。Lan 本机记录已按 GitHub 合并时间补 7 条（标明是 VEIL 上线日期），原文件备份为 `data/peter/capabilities.backup-2026-10-22.json`。
@@ -12,9 +15,13 @@
 
 ## 下一步
 
+集中提交并 push，随后按验收步骤做 Windows 体验验收；不在本单中复制桌面图片系统或改 Agent 核心。
+
 等 Lan 按下面步骤验收；根据结果另开最小工单覆盖自主活动、长期任务与备份恢复。
 
 ## Lan 的体验验收
+
+071 合并后按 `docs/tickets/071-electron-image-upload.md` 验收网页和 Electron 的选择、粘贴/拖入、取消、图片气泡及重开后的历史。
 
 更新方式：在聊天中“退出服务”，在仓库文件夹运行 `git pull --ff-only`，再双击 `start-web.bat`。
 

@@ -18,7 +18,7 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   app.setPath('userData', temp);
   await fs.writeFile(path.join(temp, 'desktop.json'), JSON.stringify({ root: temp, size: 320 }));
   const events = [{ id: 1, kind: 'assistant', text: 'Fictional saved history', history: true, time: new Date().toISOString() }];
-  let sends = 0, approvals = 0, pending = null;
+  let sends = 0, imageSends = 0, approvals = 0, pending = null;
   const token = 'fictional_token_123456789';
   server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
@@ -26,18 +26,32 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
       res.end(await fs.readFile(path.join(__dirname, '../../web/index.html'))); return;
     }
+    if (url.pathname === '/media/fictional-image.png') {
+      assert.equal(url.searchParams.get('t'), token);
+      res.setHeader('Content-Type', 'image/png'); res.end(Buffer.from('89504e470d0a1a0a', 'hex')); return;
+    }
     assert.equal(req.headers['x-token'], token);
     res.setHeader('Content-Type', 'application/json');
     if (url.pathname === '/api/events') {
       res.end(JSON.stringify({ name: 'Fictional Agent', events: events.filter(e => e.id > Number(url.searchParams.get('after') || 0)),
         busy: false, ready: true, stopped: false, stopping: false, pending,
         memory_panel_url: 'http://127.0.0.1:1/dashboard' }));
+    } else if (url.pathname === '/api/media') {
+      let raw = ''; for await (const chunk of req) raw += chunk;
+      const body = JSON.parse(raw); assert.equal(body.mime, 'image/png');
+      res.statusCode = 201; res.end(JSON.stringify({ ok: true, media: { id: 'fictional-image', filename: 'fictional-image.png', mime: 'image/png', name: 'fictional.png' } }));
     } else if (url.pathname === '/api/send') {
       let raw = ''; for await (const chunk of req) raw += chunk;
-      const body = JSON.parse(raw); assert.equal(body.text, 'fictional hello');
-      sends++;
-      events.push({ id: 2, kind: 'user', text: body.text, time: new Date().toISOString() });
-      pending = 3; events.push({ id: 3, kind: 'approval', text: 'Fictional permission request', time: new Date().toISOString() });
+      const body = JSON.parse(raw);
+      if (body.media?.id === 'fictional-image') {
+        imageSends++; assert.equal(body.text, '[图片]');
+        events.push({ id: 4, kind: 'user', text: '[图片]', media: { id: 'fictional-image', filename: 'fictional-image.png', mime: 'image/png', name: 'fictional.png' }, time: new Date().toISOString() });
+      } else {
+        sends++;
+        assert.equal(body.text, 'fictional hello');
+        events.push({ id: 2, kind: 'user', text: body.text, time: new Date().toISOString() });
+        pending = 3; events.push({ id: 3, kind: 'approval', text: 'Fictional permission request', time: new Date().toISOString() });
+      }
       res.end('{}');
     } else if (url.pathname === '/api/approve') {
       let raw = ''; for await (const chunk of req) raw += chunk;
@@ -70,6 +84,7 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   await wait(() => chat.webContents.executeJavaScript('document.body.textContent.includes("Fictional saved history")'), 'history missing');
   assert.equal(await chat.webContents.executeJavaScript('typeof window.companion'), 'undefined');
   assert.equal(await chat.webContents.executeJavaScript('typeof require'), 'undefined');
+  assert.equal(await chat.webContents.executeJavaScript('document.querySelector("#image-file").accept'), 'image/png,image/jpeg,image/gif,image/webp');
   assert.equal(await chat.webContents.executeJavaScript('document.querySelector("#memory-panel").disabled'), true);
   assert.ok(await chat.webContents.executeJavaScript('document.querySelector("#box").getBoundingClientRect().width >= 300'), 'desktop input too narrow');
   await wait(() => chat.webContents.executeJavaScript('!document.querySelector("#send").disabled'), 'send disabled');
@@ -78,9 +93,16 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   await wait(() => chat.webContents.executeJavaScript('!!document.querySelector(".approval button:not(.yes)")'), 'approval missing');
   await chat.webContents.executeJavaScript('document.querySelector(".approval button:not(.yes)").click()');
   await wait(() => approvals === 1, 'permission decision missing');
+  await chat.webContents.executeJavaScript(`(() => { const input=document.querySelector('#image-file'); const file=new File([Uint8Array.from([137,80,78,71,13,10,26,10])], 'fictional.png', {type:'image/png'}); const dt=new DataTransfer(); dt.items.add(file); Object.defineProperty(input, 'files', {value:dt.files}); input.dispatchEvent(new Event('change')); })()`);
+  await wait(() => chat.webContents.executeJavaScript('!document.querySelector("#image-preview").hidden'), 'image preview missing');
+  await chat.webContents.executeJavaScript('document.querySelector("#send").click()');
+  await wait(() => imageSends === 1, 'image not delivered');
+  await wait(() => chat.webContents.executeJavaScript('!!document.querySelector(".msg.user .msg-image")'), 'image bubble missing');
   chat.close(); assert.equal(chat.isDestroyed(), false); assert.equal(chat.isVisible(), false);
   await toggle(); await wait(() => chat.isVisible(), 'chat did not reopen');
   assert.equal(sends, 1); assert.equal(approvals, 1);
+  await chat.webContents.reload();
+  await wait(() => chat.webContents.executeJavaScript('!!document.querySelector(".msg.user .msg-image")'), 'image history missing after reload');
   await toggle(); await wait(() => !chat.isVisible(), 'chat did not hide');
   await pet.webContents.executeJavaScript('window.companion.menu()');
   await wait(() => !!menu, 'menu missing'); activeMenu.closePopup();
@@ -92,7 +114,7 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   assert.equal(pet.getBounds().width, 420);
   chat.show();
   await fs.writeFile(path.join(__dirname, '../test-output/chat.png'), (await chat.webContents.capturePage()).toPNG());
-  console.log('SMOKE PASS: original PNG, real windows, saved history, send once, permission refusal, hide/reopen, resize, sandbox, disabled entries');
+  console.log('SMOKE PASS: original PNG, saved text and image history, image preview/upload/bubble, permission refusal, hide/reopen, reload, resize, sandbox, disabled entries');
   clearTimeout(failSafe);
   server.close(); app.exit(0);
 })().catch(error => { console.error(error); clearTimeout(failSafe); server?.close(); app.exit(1); });

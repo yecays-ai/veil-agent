@@ -928,7 +928,7 @@ class Chat:
         self.history_events = [{**m, 'origin': m.get('origin', 'reply')} for group in groups for m in group]
         return [{'role': m['role'], 'content': m['content']} for m in self.history_events], sum(any(m['role'] == 'assistant' for m in g) for g in groups)
 
-    def send(self, text, *, autonomy=False, extra_context=None):
+    def send(self, text, *, autonomy=False, extra_context=None, media=None):
         self.sent_messages = []
         self.reply_displayed = False
         self.autonomy_mode = autonomy
@@ -998,7 +998,11 @@ class Chat:
                         if self.tool_mode else self.cfg)
             request_id, _ = self.budget.reserve(tool_cfg)
             if not autonomy:
-                self.store.append(self.path, {'role': 'user', 'content': text, 'request_id': request_id})
+                event = {'role': 'user', 'content': text, 'request_id': request_id}
+                if isinstance(media, dict):
+                    event['media'] = {key: media[key] for key in ('id', 'filename', 'mime', 'name')
+                                     if isinstance(media.get(key), str)}
+                self.store.append(self.path, event)
         try:
             self._capability_request_active = True
             self.last_self = description
@@ -1480,6 +1484,7 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead, activity=N
                 for notice in chat.memory.notices():
                     output(notice)
             raw_text = input_fn('你: ')
+            media = getattr(raw_text, 'media', None)
             if autonomy is not None and raw_text is AUTONOMY_WAKE:
                 autonomy.run()
                 continue
@@ -1524,7 +1529,7 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead, activity=N
                 # Storage and accounting errors stop the session rather than
                 # permitting a subsequent request on uncertain local state.
                 try:
-                    reply = chat.send(text, extra_context=pending_deletion_context(chat))
+                    reply = chat.send(text, extra_context=pending_deletion_context(chat), media=media)
                 except TooLong as exc:
                     output(str(exc))
                     continue

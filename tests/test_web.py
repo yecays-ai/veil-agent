@@ -1,4 +1,5 @@
 import json
+import base64
 import shutil
 import socket
 import subprocess
@@ -50,7 +51,8 @@ output_cny_per_million = "8"
         self.cfg = load_character(root, 'test')
         self.store = Store(root / 'data')
         self.model = Mock(return_value=('A fictional reply', 100, 20, 10))
-        self.hub = Hub('Test', ActivityState(self.store.root / 'test' / 'resident-state.json'))
+        self.hub = Hub('Test', ActivityState(self.store.root / 'test' / 'resident-state.json'),
+                       media_root=self.store.root / 'test' / 'media')
         self.request_number = 0
         self.port = free_port()
         self.server = start_server(self.hub, TOKEN, self.port)
@@ -79,6 +81,33 @@ output_cny_per_million = "8"
         event = self.hub.snapshot(0)['events'][-1]
         self.assertEqual(event['kind'], 'reset')
         self.assertIn('旧聊天保留', event['text'])
+
+    def test_image_upload_is_token_bound_persisted_and_shown_as_one_chat_event(self):
+        self.hub.busy = False
+        png = b'\x89PNG\r\n\x1a\nfictional'
+        body = {'mime': 'image/png', 'name': 'fictional.png',
+                'data': base64.b64encode(png).decode()}
+        status, result = self.call('/api/media', body)
+        self.assertEqual(status, 201)
+        media = result['media']
+        self.assertEqual((self.store.root / 'test' / 'media' / media['filename']).read_bytes(), png)
+        status, result = self.call('/api/send', {'text': '[图片]', 'media': {'id': media['id']}})
+        self.assertEqual(status, 200)
+        event = self.hub.snapshot(0)['events'][-1]
+        self.assertEqual(event['media']['id'], media['id'])
+        url = f'/media/{media["filename"]}?t={TOKEN}'
+        request = urllib.request.Request(f'http://127.0.0.1:{self.port}{url}')
+        with urllib.request.urlopen(request, timeout=5) as response:
+            self.assertEqual(response.read(), png)
+        chat = Chat(self.cfg, self.store, Budget(self.store), self.model)
+        chat.send('[图片]', media=media)
+        saved = next(row for row in reversed(self.store.read('test/chat.jsonl')) if row['role'] == 'user')
+        self.assertEqual(saved['media']['id'], media['id'])
+        history = Chat(self.cfg, self.store, Budget(self.store), self.model).history_events
+        self.assertEqual(next(row for row in reversed(history) if row['role'] == 'user')['media']['id'], media['id'])
+        reopened = Hub('Test', ActivityState(self.store.root / 'test' / 'other-state.json'),
+                       media_root=self.store.root / 'test' / 'media')
+        self.assertEqual(reopened.media_for_request('test-request-1')['id'], media['id'])
 
     def test_snapshot_exposes_the_same_capability_record_used_by_peter(self):
         record = 'CAPABILITY RECORD\n2026-10-22T00:00:00+00:00: Capability update: added fictional_tool.'
