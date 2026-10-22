@@ -1,7 +1,7 @@
 # 交接
 
-- 072 正在本地分支 `ticket/072-voice-messages`、独立 worktree `E:\Peter-Agent\VEIL\worktrees\072-voice-messages` 施工；已变基到 PR #113 当前最新 head `b60912d`，不开 PR、不 push，等 #113 合并后再同步最终 main、解决差异、完整复测并集中 push。
-- 072 首轮链路已完成：MediaRecorder 最长 120 秒/10 MB；音频先持久化再调用 SenseVoiceSmall；成功后模型收到且聊天保存精确的 `[voice message] <转写>`，失败不发模型、保留录音并手动重试；历史重开可回放。Electron 只允许当前本机认证聊天窗口申请 audio，video、宠物页和外部来源拒绝。变基后 389 项 Python（3 项约定跳过）、网页节奏、Electron 单测、隔离 smoke 通过；真实麦克风和真实转写尚未验收。
+- 072 当前在分支 `ticket/072-voice-messages`、PR #114；基于已合并 #113 的 main `81af94f`。Cubic 报告的 13 项意见已处理并解决线程，修复提交 `41d5c6b` 已 push；本地 Python 394 项（3 项约定跳过）、网页节奏、Electron 2 项单测和隔离 smoke 通过。远端仅报告 CodeRabbit success，6 项必需 GitHub Actions 检查尚无运行记录；真实麦克风和真实转写也未验收。
+- 072 功能范围：MediaRecorder 最长 120 秒/10 MB；音频持久化后调用 SenseVoiceSmall；成功后模型收到精确的 `[voice message] <转写>`，失败不发模型、保留录音并手动重试。Electron 只允许当前本机认证聊天窗口申请 audio，video、宠物页和外部来源拒绝。
 - 旧 071 Codex worktree 已从 Git 移除，未提交脏改动和备份均已删除，本地旧分支也已删除；旧外部路径只剩被进程占用的空目录。不得从 #112 或该目录恢复任何内容。
 - PR #112 的 071 初版只做本机图片气泡，没有把图交给模型，并被审出发送崩溃、busy 卡死、异步串图、孤儿上传等问题；不要合并。Codex 在 `ticket/071-image-upload-rebuild` 基于 main `55d7df6` 接管，复用其 UI 外壳但重建上传提交边界和真实多模态消息。Fount 只借“await 前冻结附件快照”的契约，不复制其 JS 多标签页结构。
 - 2026-10-22 Claude：PR #105（068 能力认知）与 PR #104（068 Windows 运行验证）已合并，main `becf0e5`。两个 PR 都编号 068 是并行工单撞号；下一个新工单从 070 起，开工前先查 main 和打开的 PR 里已用的编号。
@@ -15,4 +15,4 @@
 
 ## 下一个窗口第一步
 
-先核对 PR #113 是否已合并；未合并就继续在当前临时底座做只与 072 有关的本地审查，已合并则同步最终 main、解决差异并重跑完整验证。不要从旧 #112 分支或旧 worktree cherry-pick。
+先检查 PR #114 的最新 6 项必需 CI 检查是否已开始并全部通过；若仍无运行记录，查明触发状态后再交接。不要从旧 #112 分支或旧 worktree cherry-pick。

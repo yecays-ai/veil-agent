@@ -125,7 +125,7 @@ let after=0, busy=true, stopping=false, stopped=false, typing=null, sending=fals
 let revealQueue=[], revealTimer=null, roundStartedAt=0, roundHasReply=false, previousMessage=null;
 let pendingApproval=null, activityEnabled=false, exiting=false;
 let selectedImage=null;const awaitingImages=new Map();
-let voiceRecorder=null,voiceStream=null,voiceChunks=[],voiceStarted=0,voiceTimer=null,voiceCancelled=false,voiceSending=false;
+let voiceRecorder=null,voiceStream=null,voiceChunks=[],voiceStarted=0,voiceTimer=null,voiceCancelled=false,voiceSending=false,voicePermissionPending=false;
 let imageChoice=0;
 const draftRequests=new Map();
 const IMAGE_TYPES=new Set(['image/png','image/jpeg','image/gif','image/webp']);
@@ -230,6 +230,10 @@ function showEvent(e){
     scrollIfFollowing(()=>add('notice',e.text,e.id,e.time));
     return;
   }
+  if(e.kind==='user'&&e.media?.kind==='voice'){
+    const pending=[...col.querySelectorAll('.msg')].find(node=>node.dataset.mediaId===e.media.id);
+    if(pending)pending.remove();
+  }
   scrollIfFollowing(()=>add(e.kind,e.text,e.id,e.time,e.media));
   if(e.kind==='approval'&&e.id!==pendingApproval){
     const card=col.querySelector('.approval[data-id="'+e.id+'"]');
@@ -278,11 +282,13 @@ function add(kind,text,id,time,media){
     const grouped=previousMessage&&previousMessage.kind===kind&&Math.abs(stamp-previousMessage.time)<GROUP_GAP;
     d.className='msg '+kind+(grouped?' grouped':'');
     if(media&&media.kind==='voice'){
+      d.dataset.mediaId=media.id;
       const wrap=document.createElement('div');wrap.className='msg-voice';
       const audio=document.createElement('audio');audio.controls=true;audio.preload='metadata';audio.src='/media/'+encodeURIComponent(media.filename)+'?t='+encodeURIComponent(token||'');wrap.appendChild(audio);
       const transcript=(media.transcript||text||'').replace(/^\[voice message\]\s*/, '');
       if(transcript){const line=document.createElement('div');line.textContent=transcript;wrap.appendChild(line)}
-      if(media.transcription_error){const error=document.createElement('div');error.className='voice-error';error.textContent=media.transcription_error;wrap.appendChild(error);const retry=document.createElement('button');retry.type='button';retry.textContent='重试识别';retry.onclick=()=>retryVoice(media,retry,wrap);wrap.appendChild(retry)}
+      const voiceError=media.delivery_error||media.transcription_error;
+      if(voiceError){const error=document.createElement('div');error.className='voice-error';error.textContent=voiceError;wrap.appendChild(error);const retry=document.createElement('button');retry.type='button';retry.textContent=media.delivery_error?'重试发送':'重试识别';retry.onclick=()=>retryVoice(media,retry,wrap);wrap.appendChild(retry)}
       d.appendChild(wrap);
     }else if(media&&media.id){
       const image=document.createElement('img');image.className='msg-image';image.src='/media/'+encodeURIComponent(media.filename)+'?t='+encodeURIComponent(token||'');image.alt=media.name||'图片';image.loading='lazy';d.appendChild(image);
@@ -464,20 +470,22 @@ function voiceMime(){
 function stopVoiceTracks(){if(voiceStream){voiceStream.getTracks().forEach(track=>track.stop());voiceStream=null}}
 function resetVoiceButton(){clearInterval(voiceTimer);voiceTimer=null;voiceHold.dataset.recording='false';voiceHold.textContent='按住说话'}
 async function startVoice(){
-  if(voiceRecorder||voiceSending||busy||sending||stopping||stopped||speechIsActive())return;
+  if(voiceRecorder||voicePermissionPending||voiceSending||busy||sending||stopping||stopped||speechIsActive())return;
   if(!navigator.mediaDevices?.getUserMedia||typeof MediaRecorder==='undefined'){add('error','当前环境不支持录音。');return}
-  voiceCancelled=false;voiceChunks=[];
+  voiceCancelled=false;voicePermissionPending=true;voiceChunks=[];
   try{
-    voiceStream=await navigator.mediaDevices.getUserMedia({audio:true});
+    const stream=await navigator.mediaDevices.getUserMedia({audio:true});voicePermissionPending=false;
+    if(voiceCancelled){stream.getTracks().forEach(track=>track.stop());voiceCancelled=false;resetVoiceButton();return}
+    voiceStream=stream;
     const mime=voiceMime();voiceRecorder=new MediaRecorder(voiceStream,mime?{mimeType:mime}:undefined);voiceStarted=Date.now();
     voiceRecorder.ondataavailable=e=>{if(e.data?.size)voiceChunks.push(e.data)};
     voiceRecorder.onstop=finishVoice;
     voiceRecorder.start(500);voiceHold.dataset.recording='true';voiceHold.textContent='松开发送 · 0:00';
     voiceTimer=setInterval(()=>{const seconds=Math.floor((Date.now()-voiceStarted)/1000);voiceHold.textContent='松开发送 · '+Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0');if(seconds>=120)stopVoice(false)},250);
-  }catch(e){stopVoiceTracks();voiceRecorder=null;resetVoiceButton();add('error','无法使用麦克风，请在系统或浏览器设置中允许后重试。')}
+  }catch(e){voicePermissionPending=false;stopVoiceTracks();voiceRecorder=null;resetVoiceButton();if(!voiceCancelled)add('error','无法使用麦克风，请在系统或浏览器设置中允许后重试。');voiceCancelled=false}
 }
 function stopVoice(cancel){
-  if(!voiceRecorder)return;voiceCancelled=voiceCancelled||cancel;resetVoiceButton();
+  if(!voiceRecorder){if(voicePermissionPending)voiceCancelled=true;return}voiceCancelled=voiceCancelled||cancel;resetVoiceButton();
   if(voiceRecorder.state!=='inactive')voiceRecorder.stop();
 }
 async function finishVoice(){
@@ -488,35 +496,40 @@ async function finishVoice(){
   if(!blob.size){add('error','没有录到声音，请重试。');return}
   if(blob.size>10*1024*1024){add('error','录音超过 10 MB，未保存；请缩短后重试。');return}
   voiceSending=true;setBusy(busy);voiceHold.textContent='正在识别…';
+  let savedMedia=null;
   try{
     const dataUrl=await fileAsDataUrl(blob),comma=dataUrl.indexOf(',');
     const r=await api('/api/voice',{mime,name:'voice-'+Date.now(),data:dataUrl.slice(comma+1)},60000);let result={};try{result=await r.json()}catch(e){}
     if(!r.ok||!result.media)throw new Error('upload');
-    if(result.transcript)await sendVoice(result.media,result.transcript);
-    else add('user','',undefined,new Date().toISOString(),result.media);
-  }catch(e){add('error','录音未能保存，请检查连接后重试。')}
+    savedMedia=result.media;
+    if(result.transcript){savedMedia.transcript=result.transcript;await sendVoice(savedMedia,result.transcript)}
+    else add('user','',undefined,new Date().toISOString(),savedMedia);
+  }catch(e){if(savedMedia){if(!savedMedia.delivery_error)savedMedia.delivery_error='发送结果未确认；录音和识别文字已保留，可以重试发送。';add('user','',undefined,new Date().toISOString(),savedMedia)}else add('error','录音未能保存，请检查连接后重试。')}
   finally{voiceSending=false;resetVoiceButton();setBusy(busy)}
 }
 async function sendVoice(media,transcript){
-  const text='[voice message] '+transcript.trim(),requestId=crypto.randomUUID();
+  const text='[voice message] '+transcript.trim(),requestId='voice-send-'+media.id;
   const r=await api('/api/send',{text,request_id:requestId,media:{id:media.id}});let result={};try{result=await r.json()}catch(e){}
-  if(!r.ok)throw new Error(result.error||'send');
+  if(result.media)Object.assign(media,result.media);
+  if(!r.ok){const error=new Error(result.error||'send');error.media=media;throw error}
 }
 async function retryVoice(media,button,wrap){
-  button.disabled=true;button.textContent='正在识别…';
+  button.disabled=true;button.textContent=media.delivery_error?'正在发送…':'正在识别…';
   try{
-    const r=await api('/api/voice/retry',{media_id:media.id});const result=await r.json();
+    if(media.delivery_error&&media.transcript){await sendVoice(media,media.transcript);wrap.closest('.msg')?.remove();return}
+    const r=await api('/api/voice/retry',{media_id:media.id},60000);const result=await r.json();
     if(!r.ok)throw new Error('retry');
     Object.assign(media,result.media||{});
-    if(result.transcript){await sendVoice(media,result.transcript);wrap.closest('.msg')?.remove()}
+    if(result.transcript){media.transcript=result.transcript;await sendVoice(media,result.transcript);wrap.closest('.msg')?.remove()}
     else{const error=wrap.querySelector('.voice-error');if(error)error.textContent=result.transcription_error||'没有识别出文字，可以重试。';button.disabled=false;button.textContent='重试识别'}
-  }catch(e){button.disabled=false;button.textContent='重试识别';const error=wrap.querySelector('.voice-error');if(error)error.textContent='重试失败，录音仍在本机。'}
+  }catch(e){if(e.media)Object.assign(media,e.media);else if(media.transcript)media.delivery_error='发送结果未确认；录音和识别文字已保留，可以重试发送。';button.disabled=false;button.textContent=media.delivery_error?'重试发送':'重试识别';const error=wrap.querySelector('.voice-error');if(error)error.textContent=media.delivery_error||'重试失败，录音仍在本机。'}
 }
 voiceHold.addEventListener('pointerdown',e=>{if(e.button!==undefined&&e.button!==0)return;e.preventDefault();startVoice()});
 voiceHold.addEventListener('pointerup',e=>{e.preventDefault();stopVoice(false)});
-voiceHold.addEventListener('pointerleave',()=>{if(voiceRecorder)stopVoice(true)});
+voiceHold.addEventListener('pointerleave',()=>{if(voiceRecorder||voicePermissionPending)stopVoice(true)});
 voiceHold.addEventListener('keydown',e=>{if(e.code==='Space'&&!e.repeat){e.preventDefault();startVoice()}});
-voiceHold.addEventListener('keyup',e=>{if(e.code==='Space'){e.preventDefault();stopVoice(false)}});
+window.addEventListener('keyup',e=>{if(e.code==='Space'&&(voiceRecorder||voicePermissionPending)){e.preventDefault();stopVoice(false)}});
+window.addEventListener('blur',()=>{if(voiceRecorder||voicePermissionPending)stopVoice(true)});
 async function uploadImage(image){
   if(!image)return null;
   if(image.media)return image.media;

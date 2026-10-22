@@ -135,11 +135,30 @@ class Hub:
                 pass
             except (OSError, ValueError, UnicodeError) as exc:
                 raise UserError('媒体索引无法读取，已停止；请保留 data 文件夹。') from exc
+            recovered_voice = False
+            voice_mimes = {suffix: mime for mime, suffix in VOICE_TYPES.items()}
             indexed = {row['filename'] for row in self.media_index.values()}
             for candidate in self.media_root.iterdir():
-                if (candidate.is_file() and candidate.name not in indexed
-                        and re.fullmatch(r'[0-9a-f]{32}\.(?:png|jpg|gif|webp|webm|ogg|m4a|wav)', candidate.name)):
+                if not candidate.is_file() or candidate.name in indexed:
+                    continue
+                match = re.fullmatch(r'([0-9a-f]{32})\.(png|jpg|gif|webp|webm|ogg|m4a|wav)', candidate.name)
+                if not match:
+                    continue
+                media_id, suffix = match.groups()
+                mime = voice_mimes.get('.' + suffix)
+                if mime:
+                    if candidate.is_symlink():
+                        continue
+                    self.media_index[media_id] = {
+                        'id': media_id, 'filename': candidate.name, 'mime': mime,
+                        'kind': 'voice', 'name': 'voice', 'request_id': 'voice-' + media_id,
+                        'transcript': '',
+                        'transcription_error': '上次保存中断，录音已恢复；可以重试识别。'}
+                    recovered_voice = True
+                else:
                     candidate.unlink(missing_ok=True)
+            if recovered_voice:
+                self._rewrite_media_index(index)
 
     def media_info(self, media_id):
         with self.media_lock:
@@ -210,7 +229,12 @@ class Hub:
         index = self.media_root / 'index.jsonl'
         with self.media_lock:
             try:
-                target.write_bytes(raw)
+                import os
+                with target.open('wb', buffering=0) as handle:
+                    if handle.write(raw) != len(raw):
+                        raise OSError('short voice write')
+                    handle.flush()
+                    os.fsync(handle.fileno())
                 self.media_index[media_id] = row
                 self._rewrite_media_index(index)
             except OSError:
@@ -242,7 +266,9 @@ class Hub:
                 return None, '录音不存在或已损坏。'
             path = self.media_root / row['filename']
             mime, name = row['mime'], row['filename']
-        key = os.getenv('EMBED_API_KEY', '').strip()
+        from dotenv import dotenv_values
+        key = (dotenv_values(Path(ROOT) / '.env', interpolate=False, encoding='utf-8-sig')
+               .get('EMBED_API_KEY') or '').strip()
         if not key:
             error = '语音识别密钥未配置。'
             self._record_voice_result(media_id, '', error)
@@ -298,7 +324,7 @@ class Hub:
                 return
             row['request_id'] = 'voice-' + row['id']
             row.pop('submission_digest', None)
-            row['transcription_error'] = error
+            row['delivery_error'] = error
             self.submissions.pop(media.get('request_id'), None)
             self._rewrite_media_index()
 
@@ -314,6 +340,7 @@ class Hub:
                 if existing.get('kind') == 'voice' and existing.get('request_id', '').startswith('voice-'):
                     existing['request_id'] = request_id
                     existing['submission_digest'] = submission_digest.hex()
+                    existing.pop('delivery_error', None)
                     self._rewrite_media_index()
                     return dict(existing)
                 return None
@@ -716,9 +743,22 @@ def make_handler(hub, token):
                     elif result == 'media_command':
                         self._send(400, {'error': 'media cannot be sent with a command'})
                     elif result == 'media_storage':
-                        self._send(500, {'error': 'image storage failed'})
+                        response = {'error': 'media_storage'}
+                        if (isinstance(supplied_media, dict) and isinstance(media_id, str)
+                                and hub.media_info(media_id)
+                                and hub.media_info(media_id).get('kind') == 'voice'):
+                            response['media'] = hub.media_info(media_id)
+                        self._send(500, response)
                     else:
-                        self._send(409, {'error': result})
+                        response = {'error': result}
+                        if (isinstance(supplied_media, dict) and isinstance(media_id, str)
+                                and hub.media_info(media_id)
+                                and hub.media_info(media_id).get('kind') == 'voice'):
+                            hub.mark_voice_unsent(
+                                hub.media_info(media_id),
+                                'Peter 正在回复或暂时不可用；录音和识别文字已保留，可以重试发送。')
+                            response['media'] = hub.media_info(media_id)
+                        self._send(409, response)
             elif url.path == '/api/voice/retry':
                 media_id = body.get('media_id')
                 if not isinstance(media_id, str) or not MEDIA_ID_PATTERN.fullmatch(media_id):
@@ -794,7 +834,8 @@ def serve_chat(chat, hub):
     completed_voice_ids = {message.get('media', {}).get('id') for message in chat.history_events
                            if isinstance(message.get('media'), dict)}
     for media in hub.media_index.values():
-        if media.get('kind') == 'voice' and media['id'] not in completed_voice_ids:
+        if (media.get('kind') == 'voice' and media['id'] not in completed_voice_ids
+                and media.get('request_id', '').startswith('voice-')):
             hub.push('user', media.get('transcript') or '', time=now(), history=True, media=dict(media))
     hub.autonomy = AutonomyController(chat, hub)
     hub.capability_record = lambda: chat.capability_history_record

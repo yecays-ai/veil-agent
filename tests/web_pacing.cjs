@@ -36,6 +36,8 @@ function page(options = {}) {
   let fetchCount = 0;
   const context = vm.createContext({ document, URLSearchParams,
     location: { search: '', pathname: '/' }, history: {},
+    navigator: { mediaDevices: { getUserMedia: options.getUserMedia || (() => Promise.reject(new Error('no microphone fixture'))) } },
+    MediaRecorder: class { static isTypeSupported() { return true; } start() {} stop() { this.onstop?.(); } get state() { return 'recording'; } },
     localStorage: { getItem() { return null; } },
     sessionStorage: { getItem(key) { return storage.has(key) ? storage.get(key) : null; }, setItem(key, value) { storage.set(key, String(value)); }, removeItem(key) { storage.delete(key); } },
     window: { SpeechRecognition: options.speechSupported === false ? undefined : FakeSpeechRecognition,
@@ -46,6 +48,8 @@ function page(options = {}) {
     Date: class extends Date { static now() { return clock; } },
     setTimeout(fn, delay) { const id = ++nextId; timers.set(id, { at: clock + delay, fn }); return id; },
     clearTimeout(id) { timers.delete(id); },
+    setInterval(fn, delay) { const id = ++nextId; timers.set(id, { at: clock + delay, fn }); return id; },
+    clearInterval(id) { timers.delete(id); },
   });
   vm.runInContext(script, context);
   const run = code => vm.runInContext(code, context);
@@ -178,6 +182,24 @@ noSpeech.recognizers[0].onend();
 assert.match(noSpeech.elements.get('speech-status').textContent, /没有检测到语音/);
 
 (async () => {
+  let grantPermission, stoppedPromptTracks = 0;
+  const permissionPrompt = page({getUserMedia: () => new Promise(resolve => { grantPermission = resolve; })});
+  permissionPrompt.run('setBusy(false)');
+  permissionPrompt.elements.get('voice-hold').handlers.pointerdown({button:0,preventDefault(){}});
+  assert.equal(permissionPrompt.run('voicePermissionPending'), true);
+  permissionPrompt.elements.get('voice-hold').handlers.pointerup({preventDefault(){}});
+  grantPermission({getTracks: () => [{stop(){stoppedPromptTracks++;}}]});
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(stoppedPromptTracks, 1, 'releasing during permission prompt must stop the granted stream');
+  assert.equal(permissionPrompt.run('voiceRecorder'), null, 'cancelled permission must never start recording');
+  assert.equal(permissionPrompt.fetchCount(), 0, 'cancelled permission must never upload audio');
+
+  let submittedVoiceBody;
+  const voiceDelivery = page({fetch: async (_path, request) => { submittedVoiceBody=JSON.parse(request.body);return {ok:true,status:200,json:async()=>({ok:true})}; }});
+  await voiceDelivery.run(`sendVoice({id:'${'d'.repeat(32)}'},'hello Peter')`);
+  assert.equal(submittedVoiceBody.request_id, 'voice-send-' + 'd'.repeat(32),
+    'voice retries must reuse a media-scoped idempotency key');
+
   let exitSnapshot = {events:[],busy:false,stopping:true,stopped:false,name:'Test',pending:null,
     activity_enabled:false,memory_panel_url:null};
   const exitPage = page({
