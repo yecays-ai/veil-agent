@@ -348,11 +348,16 @@ class NativeMemoryTools:
                          if key not in (*banned, 'edit_reason', 'delete')}
             # The authorized edit path must remain an edit after MCP conversion.
             safe_args['delete'] = False
-            result = self.memory.call('trace', safe_args)
+            operation_id, duplicate_operation = self.memory.begin_write(safe_args)
+            if duplicate_operation is not None:
+                return ('This memory update is still unconfirmed after its earlier connection failure. '
+                        'It was not sent again; check the memory service before another edit.'), '出错', summary
+            result = self.memory.call('trace', safe_args, write_operation=operation_id)
         except MemoryToolError as exc:
             return f'{exc} The previous version was archived.', '出错', summary
         except Exception:
             return 'The memory update failed; the previous version was archived.', '出错', summary
+        self.memory.finish_write(operation_id, 'confirmed', memory_id=memory_id)
         self.memory.bucket_details_cache.pop(memory_id, None)
         updated = self.memory.content_for(memory_id, refresh=True)
         if updated is not None:
@@ -605,11 +610,25 @@ class NativeMemoryTools:
         ombre_args = {'content': content.strip(), 'title': title.strip()}
         if why.strip():
             ombre_args['why_remembered'] = why.strip()
-        text = self.memory.call('hold', ombre_args)
+        operation_id, duplicate_operation = self.memory.begin_write(ombre_args)
+        if duplicate_operation is not None:
+            return ('This save is still unconfirmed after its earlier connection failure. '
+                    'It was not sent again; check the memory service before creating a new save.'), '出错', summary
+        try:
+            text = self.memory.call('hold', ombre_args, write_operation=operation_id)
+        except MemoryToolError as exc:
+            if exc.code == 'closed':
+                return ('The memory service was closed before this save was submitted. '
+                        'No memory was saved; retry only under the existing rules.'), '出错', summary
+            return ('The save result is unconfirmed. It was not sent again and will remain pending for safe '
+                    'review after recovery.'), '出错', summary
         try:
             kind = self.memory.record_native(ombre_args, text)
         except ValueError:
+            self.memory.finish_write(operation_id, 'unconfirmed')
             return 'The save could not be confirmed. Do not claim the memory was saved; inspect the result before continuing.', '出错', summary
+        memory_id = self.memory.created_id(text)
+        self.memory.finish_write(operation_id, 'confirmed', memory_id=memory_id)
         return ('已合并进已有记忆。' if kind == '合并' else '已保存。'), '成功', f'{kind}：{summary}'
 
     def _search(self, args):

@@ -13,6 +13,7 @@ import queue
 import re
 import subprocess
 import threading
+import uuid
 
 
 def vault_path(root, character):
@@ -430,6 +431,10 @@ class Memory:
         vault_path(store.root, cfg.id)
         self.path = f'{cfg.id}/memory/_agent/state.jsonl'
         self.diagnostics = f'{cfg.id}/memory/_agent/diagnostics.jsonl'
+        # This is an operation ledger, not a copy of memory text.  Ombre's
+        # pinned hold API has no caller-supplied idempotency key or result
+        # lookup, so an unresolved local operation must remain unresolved.
+        self.write_reconciliation = f'{cfg.id}/memory/_agent/write-reconciliation.jsonl'
         if isinstance(backend, MCP):
             backend.diagnostic = lambda facts: self.store.append(self.diagnostics, facts)
         self.dropped_path = f'{cfg.id}/memory/_agent/dropped.jsonl'
@@ -440,16 +445,24 @@ class Memory:
                                     'memory-extraction'})
         try:
             self.state = states[-1]['state'] if states else {
-                'cursor': len(self.turns()), 'pending': [], 'entries': {}, 'sources': {}}
+                'cursor': len(self.turns()), 'pending': [], 'entries': {}, 'sources': {},
+                'pending_writes': []}
+            self.state.setdefault('pending_writes', [])
             if (type(self.state['cursor']) is not int or not 0 <= self.state['cursor'] <= len(self.turns())
                     or not isinstance(self.state['pending'], list)
                     or not isinstance(self.state['entries'], dict)
-                    or not isinstance(self.state['sources'], dict)):
+                    or not isinstance(self.state['sources'], dict)
+                    or not isinstance(self.state['pending_writes'], list)):
                 raise ValueError('invalid memory state')
             for batch in self.state['pending']:
                 if (type(batch['id']) is not int or not 0 <= batch['id'] < self.state['cursor']
                         or batch['attempts'] != 1):
                     raise ValueError('invalid pending batch')
+            for write in self.state['pending_writes']:
+                if (not isinstance(write, dict)
+                        or not re.fullmatch(r'[0-9a-f]{32}', str(write.get('operation_id', '')))
+                        or not re.fullmatch(r'[0-9a-f]{64}', str(write.get('fingerprint', '')))):
+                    raise ValueError('invalid pending write')
         except (ValueError, TypeError, KeyError) as exc:
             from veil_agent import UserError
             raise UserError('记忆调度记录损坏，已停止；请保留记忆库，不要删记录。') from exc
@@ -479,6 +492,53 @@ class Memory:
     def persist(self):
         self.store.append(self.path, {'state': self.state})
 
+    @staticmethod
+    def write_fingerprint(args):
+        """Local duplicate guard only; it is never presented as Ombre evidence."""
+        payload = json.dumps(args, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+        return hashlib.sha256(payload.encode('utf-8')).hexdigest()
+
+    def begin_write(self, args):
+        """Durably claim one local hold attempt before it reaches Ombre."""
+        fingerprint = self.write_fingerprint(args)
+        with self.mutex:
+            prior = next((row for row in self.state['pending_writes']
+                          if row['fingerprint'] == fingerprint), None)
+            if prior:
+                return None, prior['operation_id']
+            operation_id = uuid.uuid4().hex
+            self.state['pending_writes'].append({'operation_id': operation_id,
+                                                 'fingerprint': fingerprint})
+            self.persist()
+        self.store.append(self.write_reconciliation, {
+            'operation_id': operation_id, 'status': 'submitted'})
+        return operation_id, None
+
+    def finish_write(self, operation_id, status, *, memory_id=None, error=None):
+        """Close only proven outcomes; unknown results intentionally stay pending."""
+        if status not in {'confirmed', 'not_submitted', 'unconfirmed'}:
+            raise ValueError('invalid write status')
+        with self.mutex:
+            if status in {'confirmed', 'not_submitted'}:
+                self.state['pending_writes'] = [row for row in self.state['pending_writes']
+                                                if row['operation_id'] != operation_id]
+                self.persist()
+        row = {'operation_id': operation_id, 'status': status}
+        if memory_id is not None:
+            row['memory_id'] = memory_id
+        if error is not None:
+            row['error_type'] = self.safe_error_type(error)
+            if error_code := self.safe_error_code(error):
+                row['error_code'] = error_code
+        self.store.append(self.write_reconciliation, row)
+
+    def write_failure(self, operation_id, exc):
+        # MCP.closed means the client rejected before queueing; every other
+        # transport/service failure can be after Ombre committed the write.
+        status = 'not_submitted' if getattr(exc, 'code', None) == 'closed' else 'unconfirmed'
+        self.finish_write(operation_id, status, error=exc)
+        return status
+
     def turns(self):
         groups = []
         for row in self.store.read(f'{self.cfg.id}/chat.jsonl'):
@@ -488,7 +548,7 @@ class Memory:
                 groups[-1].append({'role': 'assistant', 'content': row['content']})
         return [g for g in groups if len(g) == 2]
 
-    def call(self, name, args):
+    def call(self, name, args, *, write_operation=None):
         self.last_tool = name
         reservation = None
         model_reservation = None
@@ -527,6 +587,8 @@ class Memory:
             # have reached the child process and can safely be released.
             if reservation is not None:
                 self.budget.release_estimate(reservation)
+            if name in {'hold', 'trace'} and write_operation is not None:
+                self.finish_write(write_operation, 'not_submitted')
             raise
         try:
             result = self.backend.call(name, args)
@@ -538,6 +600,8 @@ class Memory:
             if model_reservation is not None:
                 self.budget.settle_estimate(model_reservation, accounting='ombre-model-estimate')
             self.tool_failure(name, exc)
+            if name in {'hold', 'trace'} and write_operation is not None:
+                self.write_failure(write_operation, exc)
             raise
         if reservation is not None:
             self.budget.settle_estimate(

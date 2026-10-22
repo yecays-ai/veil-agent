@@ -610,6 +610,76 @@ class OmbreToolGuardTests(unittest.TestCase):
         self.assertIn('The memory connection is unavailable', result)
         self.assertEqual(self.backend.call.call_count, 1)
 
+    def test_lost_hold_reply_is_persisted_and_never_replayed_after_restart(self):
+        original_call = self.backend.call
+        committed = []
+
+        def commit_then_lose_reply(name, args):
+            if name == 'hold':
+                committed.append(dict(args))  # The fictional Ombre side effect happened.
+                raise MemoryToolError('unknown')
+            return original_call(name, args)
+
+        self.backend.call = commit_then_lose_reply
+        result, state, _ = self.call('hold', {'title': 'Lost reply', 'content': 'FICTIONAL_ONCE'})
+        self.assertEqual(state, '出错')
+        self.assertIn('unconfirmed', result)
+        self.assertEqual(len(committed), 1)
+        pending = self.memory.state['pending_writes']
+        self.assertEqual(len(pending), 1)
+        self.assertNotIn('FICTIONAL_ONCE', json.dumps(pending))
+        journal = self.store.read('fake/memory/_agent/write-reconciliation.jsonl')
+        self.assertEqual([row['status'] for row in journal[-2:]], ['submitted', 'unconfirmed'])
+        self.assertNotIn('FICTIONAL_ONCE', json.dumps(journal))
+
+        self.memory.__exit__(None, None, None)
+        reopened = Memory(self.cfg, self.store, self.memory.budget, Mock(), self.backend)
+        self.addCleanup(reopened.__exit__, None, None, None)
+        native = NativeMemoryTools(reopened, 200)
+        result, state, _ = native.invoke('hold', {'title': 'Lost reply', 'content': 'FICTIONAL_ONCE'})
+        self.assertEqual(state, '出错')
+        self.assertIn('not sent again', result)
+        self.assertEqual(len(committed), 1)
+
+    def test_lost_trace_reply_stays_pending_and_is_not_sent_twice(self):
+        original_call = self.backend.call
+        calls = []
+
+        def commit_then_lose_reply(name, args):
+            if name == 'trace':
+                calls.append(dict(args))
+                self.path.write_text(self.path.read_text(encoding='utf-8').replace(
+                    'old memory body', 'FICTIONAL_TRACE_RESULT'), encoding='utf-8')
+                raise MemoryToolError('unknown')
+            return original_call(name, args)
+
+        self.backend.call = commit_then_lose_reply
+        args = {'bucket_id': 'mem001', 'content': 'FICTIONAL_TRACE_RESULT'}
+        result, state, _ = self.call('trace', args)
+        self.assertEqual(state, '出错')
+        self.assertIn('previous version was archived', result)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(self.memory.state['pending_writes']), 1)
+        result, state, _ = self.call('trace', args)
+        self.assertEqual(state, '出错')
+        self.assertIn('not sent again', result)
+        self.assertEqual(len(calls), 1)
+
+    def test_closed_hold_is_recorded_as_not_submitted_and_can_retry(self):
+        original_call = self.backend.call
+        self.backend.call = Mock(side_effect=MemoryToolError('closed'))
+        result, state, _ = self.call('hold', {'title': 'Closed', 'content': 'FICTIONAL_NO_SEND'})
+        self.assertEqual(state, '出错')
+        self.assertIn('before this save was submitted', result)
+        self.assertEqual(self.memory.state['pending_writes'], [])
+        journal = self.store.read('fake/memory/_agent/write-reconciliation.jsonl')
+        self.assertEqual([row['status'] for row in journal[-2:]], ['submitted', 'not_submitted'])
+
+        self.backend.call = lambda name, args: '新建→fictional-id' if name == 'hold' else original_call(name, args)
+        result, state, _ = self.call('hold', {'title': 'Closed', 'content': 'FICTIONAL_NO_SEND'})
+        self.assertEqual(state, '成功')
+        self.assertIn('fictional-id', self.memory.state['entries'])
+
     def test_upstream_schemas_are_selected_by_name(self):
         names = {tool.name for tool in self.tools.native.tools}
         self.assertTrue(set(('trace', 'dream', 'letter_write', 'letter_read', 'letter_lock_update',

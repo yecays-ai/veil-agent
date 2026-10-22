@@ -11,8 +11,10 @@ from concurrent.futures import ThreadPoolExecutor
 import unittest
 from types import SimpleNamespace
 
-from memory_agent import MemoryToolError, open_ombre
+from memory_agent import Memory, MemoryToolError, open_ombre
+from memory_native import NativeMemoryTools
 from ombre_resident import PINNED_OMBRE, _lock_held, _pid_alive
+from veil_agent import Budget, Store
 
 
 @unittest.skipUnless(os.environ.get('OMBRE_RUNTIME_GATE') == '1',
@@ -76,12 +78,30 @@ class OmbreRuntimeRecoveryLive(unittest.TestCase):
                     return result
 
                 backend._perform = lose_hold_reply
-                with self.assertRaises(MemoryToolError) as failed:
-                    backend.call('hold', {'content': 'Synthetic runtime recovery memory.',
-                        'title': 'Synthetic uncertain write'})
-                self.assertEqual(failed.exception.code, 'unknown')
+                store = Store(data_root)
+                memory = Memory(cfg, store, Budget(store), object(), backend)
+                self.addCleanup(memory.__exit__, None, None, None)
+                native = NativeMemoryTools(memory)
+                result, status, _ = native.invoke('hold', {
+                    'content': 'Synthetic runtime recovery memory.',
+                    'title': 'Synthetic uncertain write'})
+                self.assertEqual(status, '出错')
+                self.assertIn('unconfirmed', result)
                 self.assertEqual(calls, ['hold'])
                 backend._perform = actual_perform
+                self.assertEqual(len(memory.state['pending_writes']), 1)
+                journal = store.read('fixture/memory/_agent/write-reconciliation.jsonl')
+                self.assertEqual([row['status'] for row in journal[-2:]], ['submitted', 'unconfirmed'])
+                self.assertNotIn('Synthetic runtime recovery memory.', json.dumps(journal))
+
+                memory.__exit__(None, None, None)
+                reopened = Memory(cfg, store, Budget(store), object(), backend)
+                self.addCleanup(reopened.__exit__, None, None, None)
+                result, status, _ = NativeMemoryTools(reopened).invoke('hold', {
+                    'content': 'Synthetic runtime recovery memory.',
+                    'title': 'Synthetic uncertain write'})
+                self.assertEqual(status, '出错')
+                self.assertIn('not sent again', result)
                 pulse = backend.call('pulse', {})
                 self.assertEqual(pulse.count('Synthetic uncertain write'), 1)
 
