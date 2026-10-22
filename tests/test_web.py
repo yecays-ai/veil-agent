@@ -1,4 +1,5 @@
 import json
+import base64
 import shutil
 import socket
 import subprocess
@@ -14,8 +15,10 @@ from pathlib import Path
 from dataclasses import replace
 from unittest.mock import Mock, patch
 
-from veil_agent import ActivityState, Budget, Chat, Store, load_character, run_chat
+from veil_agent import (ActivityState, Budget, Chat, Store, UserError, collapse_latest_photo,
+                        estimate_request_tokens, load_character, run_chat)
 from web_agent import Hub, serve_chat, start_server
+from tools_agent import FilesystemTools
 
 TOKEN = 'test-token'
 
@@ -50,7 +53,8 @@ output_cny_per_million = "8"
         self.cfg = load_character(root, 'test')
         self.store = Store(root / 'data')
         self.model = Mock(return_value=('A fictional reply', 100, 20, 10))
-        self.hub = Hub('Test', ActivityState(self.store.root / 'test' / 'resident-state.json'))
+        self.hub = Hub('Test', ActivityState(self.store.root / 'test' / 'resident-state.json'),
+                       media_root=self.store.root / 'test' / 'media')
         self.request_number = 0
         self.port = free_port()
         self.server = start_server(self.hub, TOKEN, self.port)
@@ -80,10 +84,181 @@ output_cny_per_million = "8"
         self.assertEqual(event['kind'], 'reset')
         self.assertIn('旧聊天保留', event['text'])
 
+    def test_image_upload_is_token_bound_persisted_and_shown_as_one_chat_event(self):
+        png = b'\x89PNG\r\n\x1a\nfictional'
+        body = {'mime': 'image/png', 'name': 'fictional.png',
+                'data': base64.b64encode(png).decode()}
+        self.assertEqual(self.call('/api/media', body, token='wrong')[0], 403)
+
+        def scenario(result):
+            self.assertTrue(self.wait(lambda: self.hub.ready and not self.hub.busy))
+            status, uploaded = self.call('/api/media', body)
+            self.assertEqual(status, 201)
+            media = uploaded['media']
+            result['media'] = media
+            self.assertTrue((self.store.root / 'test' / 'media' / '.uploads' /
+                             media['filename']).exists())
+            status, _ = self.call('/api/send', {'text': '[图片]', 'media': {'id': media['id']}})
+            self.assertEqual(status, 200)
+            self.assertTrue(self.wait(lambda: any(event['kind'] == 'assistant'
+                                                 for event in self.hub.snapshot(0)['events'])))
+
+        result = self.run_loop(scenario)
+        media = result['media']
+        self.assertEqual((self.store.root / 'test' / 'media' / media['filename']).read_bytes(), png)
+        event = self.hub.snapshot(0)['events'][-1]
+        events = self.hub.snapshot(0)['events']
+        user_event = next(row for row in events if row['kind'] == 'user')
+        self.assertLess(events.index(user_event), next(i for i, row in enumerate(events)
+                                                      if row['kind'] == 'assistant'))
+        self.assertEqual(user_event['media']['id'], media['id'])
+        url = f'/media/{media["filename"]}?t={TOKEN}'
+        for bad_url in (f'/media/{media["filename"]}', f'/media/{media["filename"]}?t=wrong'):
+            with self.assertRaises(urllib.error.HTTPError) as denied:
+                urllib.request.urlopen(f'http://127.0.0.1:{self.port}{bad_url}', timeout=5)
+            self.assertEqual(denied.exception.code, 403)
+        request = urllib.request.Request(f'http://127.0.0.1:{self.port}{url}')
+        with urllib.request.urlopen(request, timeout=5) as response:
+            self.assertEqual(response.read(), png)
+        saved = next(row for row in reversed(self.store.read('test/chat.jsonl')) if row['role'] == 'user')
+        self.assertEqual(saved['media']['id'], media['id'])
+        self.assertEqual(saved['content'], '[图片]')
+        self.assertNotIn('base64', json.dumps(saved))
+        sent_user = next(item for item in self.model.call_args.args[0] if item['role'] == 'user')
+        self.assertIsInstance(sent_user['content'], list)
+        self.assertEqual(sent_user['content'][1], {
+            'type': 'image_url', 'image_url': {
+                'url': 'data:image/png;base64,' + base64.b64encode(png).decode()}})
+        reopened_chat = Chat(self.cfg, self.store, Budget(self.store), self.model)
+        self.assertEqual(next(row for row in reversed(reopened_chat.history_events)
+                             if row['role'] == 'user')['media']['id'], media['id'])
+        reopened_user = next(row for row in reversed(reopened_chat.history) if row['role'] == 'user')
+        self.assertIsInstance(reopened_user['content'], list)
+        self.assertEqual(reopened_user['content'][1], sent_user['content'][1])
+        reopened = Hub('Test', ActivityState(self.store.root / 'test' / 'other-state.json'),
+                       media_root=self.store.root / 'test' / 'media')
+        self.assertEqual(reopened.media_for_request('test-request-1')['id'], media['id'])
+        self.assertEqual(reopened.submit('[图片]', 'test-request-1', media['id']), 'duplicate')
+
+        # Losing an old photo must degrade that turn to a placeholder instead
+        # of making the entire conversation impossible to reopen.
+        (self.store.root / 'test' / 'media' / media['filename']).unlink()
+        degraded = Chat(self.cfg, self.store, Budget(self.store), self.model)
+        degraded_user = next(row for row in reversed(degraded.history) if row['role'] == 'user')
+        self.assertEqual(degraded_user['content'], '[Lan sent a photo]')
+
+    def test_expired_pending_upload_is_reclaimed_before_capacity_check(self):
+        media_root = self.store.root / 'test' / 'expiring-media'
+        hub = Hub('Test', ActivityState(self.store.root / 'test' / 'expiring-state.json'),
+                  media_root=media_root)
+        png = b'\x89PNG\r\n\x1a\nfictional'
+        with patch('web_agent.MAX_PENDING_MEDIA', 1), patch('web_agent.time.monotonic') as clock:
+            clock.return_value = 10
+            first = hub.save_media('image/png', png, 'first.png')
+            self.assertIsNotNone(first)
+            clock.return_value = 10 + 60 * 60 + 1
+            second = hub.save_media('image/png', png, 'second.png')
+        self.assertIsNotNone(second)
+        self.assertIsNone(hub.pending_media_info(first['id']))
+        self.assertFalse((media_root / '.uploads' / first['filename']).exists())
+
+    def test_invalid_replacement_does_not_clear_selected_photo_first(self):
+        page = (Path(__file__).resolve().parents[1] / 'web' / 'index.html').read_text(encoding='utf-8')
+        choose = page[page.index('async function chooseImage'):page.index('imageButton.onclick')]
+        self.assertGreater(choose.index('clearImage(false)'), choose.index('prepareImage(file,mime)'))
+
+    def test_image_request_rejects_bad_metadata_and_commands(self):
+        self.hub.busy = False
+        png = base64.b64encode(b'\x89PNG\r\n\x1a\nfictional').decode()
+        status, _ = self.call('/api/media', {'mime': 'image/png', 'name': 42, 'data': png})
+        self.assertEqual(status, 400)
+        status, _ = self.call('/api/send', {'text': 'hello', 'media': {'id': 'not-a-media-id'}})
+        self.assertEqual(status, 400)
+        self.assertFalse(self.hub.busy)
+        status, _ = self.call('/api/send', {'text': 'hello', 'media': {'id': ''}})
+        self.assertEqual(status, 400)
+        self.assertFalse(self.hub.busy)
+        status, _ = self.call('/api/send', {'text': 'hello', 'media': {}})
+        self.assertEqual(status, 400)
+        self.assertFalse(self.hub.busy)
+        status, result = self.call('/api/media', {'mime': 'image/png', 'name': 'fictional.png', 'data': png})
+        self.assertEqual(status, 201)
+        self.hub.busy = False
+        status, _ = self.call('/api/send', {'text': '/quit', 'media': {'id': result['media']['id']}})
+        self.assertEqual(status, 400)
+        self.assertFalse(self.hub.busy)
+
+    def test_busy_send_does_not_commit_a_pending_upload(self):
+        png = base64.b64encode(b'\x89PNG\r\n\x1a\nfictional').decode()
+        status, result = self.call('/api/media', {
+            'mime': 'image/png', 'name': 'fictional.png', 'data': png})
+        self.assertEqual(status, 201)
+        media = result['media']
+        self.hub.busy = True
+        status, _ = self.call('/api/send', {'text': 'hello', 'media': {'id': media['id']}})
+        self.assertEqual(status, 409)
+        self.assertIsNone(self.hub.media_info(media['id']))
+        self.assertIsNotNone(self.hub.pending_media_info(media['id']))
+
+    def test_torn_final_media_index_row_keeps_completed_history(self):
+        media_root = self.store.root / 'test' / 'torn-media'
+        media_root.mkdir(parents=True)
+        first = {'id': 'a' * 32, 'filename': ('a' * 32) + '.png', 'mime': 'image/png',
+                 'name': 'first.png', 'request_id': 'first'}
+        (media_root / 'index.jsonl').write_bytes(
+            (json.dumps(first) + '\n' + '{"id":"torn').encode())
+        reopened = Hub('Test', ActivityState(self.store.root / 'test' / 'torn-state.json'),
+                       media_root=media_root)
+        self.assertEqual(reopened.media_info(first['id'])['request_id'], 'first')
+        self.assertEqual((media_root / 'index.jsonl').read_text(), json.dumps(first) + '\n')
+
+    def test_restart_removes_unindexed_final_media_from_interrupted_commit(self):
+        media_root = self.store.root / 'test' / 'orphan-media'
+        media_root.mkdir(parents=True)
+        orphan = media_root / (('b' * 32) + '.jpg')
+        orphan.write_bytes(b'orphan')
+        Hub('Test', ActivityState(self.store.root / 'test' / 'orphan-state.json'),
+            media_root=media_root)
+        self.assertFalse(orphan.exists())
+
     def test_snapshot_exposes_the_same_capability_record_used_by_peter(self):
         record = 'CAPABILITY RECORD\n2026-10-22T00:00:00+00:00: Capability update: added fictional_tool.'
         self.hub.capability_record = lambda: record
         self.assertEqual(self.hub.snapshot(0)['capability_record'], record)
+
+    def test_photo_capability_notice_is_persistent_and_announced_once(self):
+        manager = object.__new__(FilesystemTools)
+        manager.cap_path = self.store.root / 'test' / 'capabilities.json'
+        manager.capability_event = manager.capability_event_model = None
+        manager.enabled = True
+        manager.announce_photo_input()
+        first = manager.capability_event
+        self.assertIn('send you photos', first)
+        manager.announce_photo_input()
+        row = json.loads(manager.cap_path.read_text())
+        matching = [item for item in row['capability_updates'] if 'send you photos' in item['text']]
+        self.assertEqual(len(matching), 1)
+        self.assertEqual(row['pending_event'], first)
+
+    def test_photo_notice_save_failure_does_not_disable_chat_tools(self):
+        manager = object.__new__(FilesystemTools)
+        manager.cap_path = self.store.root / 'test' / 'capabilities.json'
+        manager.capability_event = manager.capability_event_model = None
+        manager.enabled = True
+        with patch('tools_agent.save_capabilities', side_effect=OSError('fictional')):
+            self.assertFalse(manager.announce_photo_input())
+        self.assertTrue(manager.enabled)
+
+    def test_photo_is_budgeted_as_vision_tokens_and_collapsed_after_first_request(self):
+        messages = [{'role': 'user', 'content': [
+            {'type': 'text', 'text': 'fictional caption'},
+            {'type': 'image_url', 'image_url': {'url': 'data:image/jpeg;base64,' + 'A' * 5_000_000}},
+        ]}]
+        estimated = estimate_request_tokens(messages)
+        self.assertGreaterEqual(estimated, 4096)
+        self.assertLess(estimated, 5000)
+        collapse_latest_photo(messages)
+        self.assertEqual(messages[0]['content'], '[Lan sent a photo]\nfictional caption')
 
     def test_panel_shows_current_capabilities_without_adding_them_to_chat(self):
         chat = Chat(self.cfg, self.store, Budget(self.store), self.model)
@@ -94,6 +269,74 @@ output_cny_per_million = "8"
         model_messages = self.model.call_args.args[0]
         self.assertFalse(any(item['content'].startswith('CURRENT CAPABILITIES') for item in model_messages))
         self.assertEqual(self.hub.snapshot(0)['current_capabilities'], chat.current_capability_snapshot())
+
+    def test_chat_append_failure_releases_photo_output_buffer_and_stops_service(self):
+        hub = self.hub
+        hub.busy = False
+        media = hub.save_media('image/png', b'\x89PNG\r\n\x1a\nfictional')
+        self.assertEqual(hub.submit('photo', 'failed-append', media['id']), 'accepted')
+        chat = Chat(self.cfg, self.store, Budget(self.store), self.model)
+        append = self.store.append
+        def fail_chat_row(path, row):
+            if path == chat.path:
+                hub.output('buffered diagnostic')
+                raise UserError('fictional disk failure')
+            return append(path, row)
+        with patch.object(self.store, 'append', side_effect=fail_chat_row):
+            with self.assertRaises(UserError):
+                serve_chat(chat, hub)
+        self.assertTrue(hub.stopping)
+        self.assertFalse(hub.defer_outputs)
+        self.assertEqual(hub.deferred_outputs, [])
+        self.assertFalse(any(e['kind'] == 'user' for e in hub.events))
+        self.assertTrue(any(e['text'] == 'buffered diagnostic' for e in hub.events))
+        self.model.assert_not_called()
+
+    def test_slow_media_commit_does_not_block_events_or_other_handlers(self):
+        hub = self.hub
+        hub.busy = False
+        media = hub.save_media('image/png', b'\x89PNG\r\n\x1a\nfictional')
+        entered, release = threading.Event(), threading.Event()
+        commit = hub.commit_media
+        results = []
+        def slow_commit(*args):
+            entered.set()
+            if not release.wait(5):
+                raise OSError('test timed out')
+            return commit(*args)
+        with patch.object(hub, 'commit_media', side_effect=slow_commit):
+            worker = threading.Thread(target=lambda: results.append(
+                hub.submit('photo', 'slow', media['id'])))
+            worker.start()
+            try:
+                self.assertTrue(entered.wait(2))
+                self.assertTrue(hub.cond.acquire(timeout=1), 'storage held the event lock')
+                try:
+                    hub.push('notice', 'responsive')
+                    self.assertEqual(hub.submit('other', 'other'), 'busy')
+                    self.assertEqual(hub.submit('photo', 'slow', media['id']), 'busy')
+                    self.assertTrue(hub.inbox.empty())
+                finally:
+                    hub.cond.release()
+            finally:
+                release.set()
+                worker.join(5)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(results, ['accepted'])
+        self.assertFalse(hub.submission_pending)
+        self.assertEqual(hub.submit('photo', 'slow', media['id']), 'duplicate')
+        self.assertEqual(hub.inbox.qsize(), 1)
+
+    def test_failed_media_commit_releases_admission_for_retry(self):
+        hub = self.hub
+        hub.busy = False
+        media = hub.save_media('image/png', b'\x89PNG\r\n\x1a\nfictional')
+        with patch.object(hub, 'commit_media', side_effect=OSError('fictional')):
+            self.assertEqual(hub.submit('photo', 'retry', media['id']), 'media_storage')
+        self.assertFalse(hub.submission_pending)
+        self.assertFalse(hub.busy)
+        self.assertNotIn('retry', hub.submissions)
+        self.assertEqual(hub.submit('photo', 'retry', media['id']), 'accepted')
 
     def test_submission_deduplication_window_is_bounded(self):
         hub = Hub('Test', ActivityState(self.store.root / 'test' / 'other-state.json'))

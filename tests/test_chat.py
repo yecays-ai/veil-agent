@@ -12,7 +12,8 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from veil_agent import (Chat, Budget, Store, build_self_description, estimate_request_tokens,
-                        load_character, make_model, model_tool_result, run_chat, UserError, RequestFailed)
+                        load_character, make_model, model_tool_result, run_chat, UserError,
+                        RequestFailed, TooLong)
 
 
 def sent_facts(messages):
@@ -397,6 +398,72 @@ output_cny_per_million = "8"
             self.chat.send('keep me')
         self.assertEqual(self.store.read('test/chat.jsonl')[0]['content'], 'keep me')
         self.assertGreater(Budget(self.store).totals()[2], 0)
+
+    def test_send_reports_whether_too_long_happened_before_or_after_persistence(self):
+        self.cfg.provider['max_input_tokens'] = 1
+        with self.assertRaises(TooLong):
+            self.chat.send('too large before append')
+        self.assertFalse(self.chat.last_send_persisted)
+        self.assertEqual(self.store.read('test/chat.jsonl'), [])
+
+        self.cfg.provider['max_input_tokens'] = 6000
+        self.chat.tool_mode = True
+        with patch.object(self.chat, '_tool_chat', side_effect=TooLong('tool result too large')):
+            with self.assertRaises(TooLong):
+                self.chat.send('saved before tool overflow')
+        self.assertTrue(self.chat.last_send_persisted)
+        self.assertEqual(self.store.read('test/chat.jsonl')[-1]['content'],
+                         'saved before tool overflow')
+
+    def test_media_completion_runs_once_on_storage_failures(self):
+        from web_agent import ChatInput
+        append = self.store.append
+        for role, persisted in (('user', False), ('assistant', True)):
+            with self.subTest(role=role):
+                complete = Mock()
+                def fail_row(path, row):
+                    if path == self.chat.path and row.get('role') == role:
+                        raise UserError('fictional disk failure')
+                    return append(path, row)
+                with patch.object(self.store, 'append', side_effect=fail_row):
+                    with self.assertRaises(UserError):
+                        run_chat(self.chat, Mock(return_value=ChatInput('hello', None, complete)),
+                                 lambda _: None)
+                complete.assert_called_once_with(persisted)
+
+    def test_invalid_photo_history_falls_back_without_blocking_text_chat(self):
+        from veil_agent import PHOTO_PLACEHOLDER
+        for mime in ([], {}, None, 42, 'unsupported/type'):
+            with self.subTest(mime=mime):
+                self.store.append(self.chat.path, {'role': 'user', 'content': 'caption',
+                    'media': {'filename': 'fictional.png', 'mime': mime}})
+                reopened = Chat(self.cfg, self.store, self.budget, self.model)
+                self.assertEqual(reopened.history[-1]['content'], PHOTO_PLACEHOLDER + '\ncaption')
+                reopened.send('continue with text')
+
+    def test_photo_file_limit_checked_before_read_and_read_is_bounded(self):
+        from veil_agent import MAX_PHOTO_BYTES, PHOTO_PLACEHOLDER
+        folder = self.store.root / self.cfg.id / 'media'
+        folder.mkdir(parents=True)
+        image = folder / 'fictional.png'
+        media = {'filename': image.name, 'mime': 'image/png'}
+        with image.open('wb') as handle:
+            handle.truncate(MAX_PHOTO_BYTES + 1)
+        with patch.object(Path, 'open') as opened:
+            opened.return_value.__enter__.return_value.read = Mock()
+            with self.assertRaises(UserError):
+                self.chat._photo_content('caption', media)
+            opened.return_value.__enter__.return_value.read.assert_not_called()
+        self.store.append(self.chat.path, {'role': 'user', 'content': 'caption', 'media': media})
+        reopened = Chat(self.cfg, self.store, self.budget, self.model)
+        self.assertEqual(reopened.history[-1]['content'], PHOTO_PLACEHOLDER + '\ncaption')
+        # Simulate a file growing between stat and read.
+        with patch.object(Path, 'stat', return_value=SimpleNamespace(st_size=1)):
+            with self.assertRaises(UserError):
+                self.chat._photo_content('caption', media)
+        with patch('veil_agent.MAX_PHOTO_BYTES', 8):
+            image.write_bytes(b'12345678')
+            self.assertIsInstance(self.chat._photo_content('caption', media), list)
 
     def test_ctrl_c_at_prompt_keeps_displayed_reply(self):
         output = []

@@ -5,10 +5,12 @@ file only supplies its input/output/approval functions and a small HTTP server
 bound to 127.0.0.1.
 """
 import argparse
+import base64
 import hashlib
 import hmac
 import json
 import queue
+import re
 import secrets
 import sys
 import threading
@@ -19,19 +21,50 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from veil_agent import (ROOT, AUTONOMY_WAKE, ActivityState, Budget, Chat, Store, UserError,
+from veil_agent import (ROOT, AUTONOMY_WAKE, MAX_PHOTO_BYTES, ActivityState, Budget, Chat, Store, UserError,
                         load_character, now, make_model, run_chat)
 from autonomy import AutonomyController
 
 PAGE = Path(__file__).resolve().parent / 'web' / 'index.html'
 MAX_BODY = 200_000
+MAX_MEDIA_BYTES = MAX_PHOTO_BYTES
+MAX_PENDING_MEDIA = 32
+PENDING_MEDIA_TTL = 60 * 60
 MAX_SUBMISSIONS = 1024
+MEDIA_ID_PATTERN = re.compile(r'^[0-9a-f]{32}$')
+MEDIA_TYPES = {
+    'image/png': ('.png', b'\x89PNG\r\n\x1a\n'),
+    'image/jpeg': ('.jpg', b'\xff\xd8\xff'),
+    'image/gif': ('.gif', b'GIF8'),
+    'image/webp': ('.webp', b'RIFF'),
+}
+
+
+def valid_media_row(row):
+    if not isinstance(row, dict):
+        return False
+    media_id, filename, mime = row.get('id'), row.get('filename'), row.get('mime')
+    return (isinstance(media_id, str) and MEDIA_ID_PATTERN.fullmatch(media_id) is not None
+            and isinstance(mime, str) and mime in MEDIA_TYPES
+            and filename == media_id + MEDIA_TYPES[mime][0]
+            and isinstance(row.get('name'), str) and isinstance(row.get('request_id'), str)
+            and (row.get('submission_digest') is None or
+                 (isinstance(row.get('submission_digest'), str)
+                  and re.fullmatch(r'[0-9a-f]{64}', row['submission_digest']) is not None)))
+
+
+class ChatInput(str):
+    def __new__(cls, text, media, complete=None):
+        value = super().__new__(cls, text)
+        value.media = media
+        value.complete = complete or (lambda _committed: None)
+        return value
 
 
 class Hub:
     """Message list shared by the chat loop (main thread) and HTTP handlers."""
 
-    def __init__(self, name, activity, memory_port=None):
+    def __init__(self, name, activity, memory_port=None, media_root=None):
         self.name = name
         self.activity = activity
         self.memory_url = f'http://127.0.0.1:{memory_port}/dashboard' if memory_port else None
@@ -45,12 +78,155 @@ class Hub:
         self.answers = queue.Queue()
         self.pending = None       # event id of the approval being asked, else None
         self.submissions = OrderedDict()  # recent request ids -> normalized text digest
+        self.submission_pending = False  # admission reserved while media storage runs
         self.autonomy = None
         self.capability_record = lambda: None
+        self.defer_outputs = False
+        self.deferred_outputs = []
         self.current_capabilities = lambda: 'Current capabilities are not available.'
         self.activity_transition = lambda enabled: self.activity.set(enabled)
         self.autonomy_busy = False
         self.autonomy_interrupted = threading.Event()
+        self.media_root = Path(media_root) if media_root else None
+        self.media_index = {}
+        self.pending_media = OrderedDict()
+        self.pending_media_times = {}
+        self.media_lock = threading.RLock()
+        if self.media_root:
+            self.media_root.mkdir(parents=True, exist_ok=True)
+            self.upload_root = self.media_root / '.uploads'
+            self.upload_root.mkdir(exist_ok=True)
+            for upload in self.upload_root.iterdir():
+                if upload.is_file():
+                    upload.unlink(missing_ok=True)
+            index = self.media_root / 'index.jsonl'
+            try:
+                raw_index = index.read_bytes()
+                lines = raw_index.splitlines(keepends=True)
+                if lines and not lines[-1].endswith((b'\n', b'\r')):
+                    lines.pop()  # an interrupted final append was never committed
+                    repaired = index.with_suffix('.repair')
+                    repaired.write_bytes(b''.join(lines))
+                    repaired.replace(index)
+                for raw_line in lines:
+                    if not raw_line.strip():
+                        continue
+                    row = json.loads(raw_line.decode('utf-8'))
+                    if not valid_media_row(row):
+                        raise ValueError('invalid media index row')
+                    self.media_index[row['id']] = row
+                    digest = row.get('submission_digest')
+                    if digest:
+                        self.submissions[row['request_id']] = bytes.fromhex(digest)
+                        if len(self.submissions) > MAX_SUBMISSIONS:
+                            self.submissions.popitem(last=False)
+            except FileNotFoundError:
+                pass
+            except (OSError, ValueError, UnicodeError) as exc:
+                raise UserError('图片索引无法读取，已停止；请保留 data 文件夹。') from exc
+            indexed = {row['filename'] for row in self.media_index.values()}
+            for candidate in self.media_root.iterdir():
+                if (candidate.is_file() and candidate.name not in indexed
+                        and re.fullmatch(r'[0-9a-f]{32}\.(?:png|jpg|gif|webp)', candidate.name)):
+                    candidate.unlink(missing_ok=True)
+
+    def media_info(self, media_id):
+        with self.media_lock:
+            row = self.media_index.get(media_id)
+            return dict(row) if row else None
+
+    def media_for_request(self, request_id):
+        with self.media_lock:
+            for row in reversed(list(self.media_index.values())):
+                if row.get('request_id') == request_id:
+                    return dict(row)
+        return None
+
+    def pending_media_info(self, media_id):
+        with self.media_lock:
+            row = self.pending_media.get(media_id)
+            return dict(row) if row else None
+
+    def save_media(self, mime, raw, original_name='image'):
+        if (self.media_root is None or mime not in MEDIA_TYPES or not isinstance(original_name, str)
+                or not raw or len(raw) > MAX_MEDIA_BYTES):
+            return None
+        suffix, signature = MEDIA_TYPES[mime]
+        if not raw.startswith(signature) or (mime == 'image/webp' and raw[8:12] != b'WEBP'):
+            return None
+        media_id = secrets.token_hex(16)
+        filename = media_id + suffix
+        row = {'id': media_id, 'filename': filename, 'mime': mime,
+               'name': Path(original_name).name[:120] or 'image'}
+        with self.media_lock:
+            cutoff = time.monotonic() - PENDING_MEDIA_TTL
+            expired = [media_id for media_id, created in self.pending_media_times.items()
+                       if created <= cutoff]
+            for expired_id in expired:
+                expired_row = self.pending_media.pop(expired_id, None)
+                self.pending_media_times.pop(expired_id, None)
+                if expired_row:
+                    (self.upload_root / expired_row['filename']).unlink(missing_ok=True)
+            if len(self.pending_media) >= MAX_PENDING_MEDIA:
+                return None
+            pending_path = self.upload_root / filename
+            try:
+                pending_path.write_bytes(raw)
+            except OSError:
+                pending_path.unlink(missing_ok=True)
+                raise
+            self.pending_media[media_id] = row
+            self.pending_media_times[media_id] = time.monotonic()
+        return dict(row)
+
+    def commit_media(self, media_id, request_id, submission_digest):
+        """Move one uploaded image into durable history, or return an existing commit."""
+        if media_id is None:
+            return None
+        with self.media_lock:
+            existing = self.media_index.get(media_id)
+            if existing:
+                return dict(existing) if existing.get('request_id') == request_id else None
+            pending = self.pending_media.get(media_id)
+            if not pending:
+                return None
+            row = {**pending, 'request_id': request_id,
+                   'submission_digest': submission_digest.hex()}
+            source = self.upload_root / row['filename']
+            target = self.media_root / row['filename']
+            index = self.media_root / 'index.jsonl'
+            replacement = index.with_suffix('.tmp')
+            moved = False
+            try:
+                import os
+                with source.open('rb+') as image_handle:
+                    os.fsync(image_handle.fileno())
+                source.replace(target)
+                moved = True
+                data = (json.dumps(row, ensure_ascii=False) + '\n').encode('utf-8')
+                previous = index.read_bytes() if index.exists() else b''
+                with replacement.open('wb', buffering=0) as handle:
+                    combined = previous + data
+                    if handle.write(combined) != len(combined):
+                        raise OSError('short media index write')
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                replacement.replace(index)
+            except OSError:
+                try:
+                    replacement.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                if moved:
+                    try:
+                        target.replace(source)
+                    except OSError:
+                        pass
+                raise
+            self.pending_media.pop(media_id, None)
+            self.pending_media_times.pop(media_id, None)
+            self.media_index[media_id] = row
+            return dict(row)
 
     def push(self, kind, text, **metadata):
         with self.cond:
@@ -59,7 +235,7 @@ class Hub:
                                 'time': now(), **metadata})
             return event_id
 
-    def output(self, text):
+    def _publish_output(self, text):
         text = str(text)
         prefix = f'{self.name}: '
         if text.startswith('新对话已开始；'):
@@ -73,6 +249,23 @@ class Hub:
         else:
             self.push('notice', text)
 
+    def output(self, text):
+        with self.cond:
+            if self.defer_outputs:
+                self.deferred_outputs.append(str(text))
+                return
+        self._publish_output(text)
+
+    def finish_media_submission(self, committed, text, media, request_id):
+        with self.cond:
+            if committed:
+                self.push('user', text, media=media, request_id=request_id)
+            buffered = self.deferred_outputs
+            self.deferred_outputs = []
+            self.defer_outputs = False
+        for output in buffered:
+            self._publish_output(output)
+
     def input_fn(self, _prompt=''):
         with self.cond:
             self.busy = False
@@ -85,13 +278,18 @@ class Hub:
             if text is not None:
                 with self.cond:
                     self.busy = True
+                if isinstance(text, tuple):
+                    with self.cond:
+                        self.defer_outputs = True
+                        self.deferred_outputs = []
+                    return ChatInput(text[0], text[1], text[2] if len(text) > 2 else None)
                 return text
             if self.stopping or self.stopped:
                 raise EOFError
             if self.autonomy is not None and self.autonomy.due():
                 with self.cond:
                     if (not self.stopping and not self.stopped and self.activity.enabled()
-                            and self.inbox.empty()):
+                            and self.inbox.empty() and not self.submission_pending):
                         self.autonomy_busy = True
                         self.busy = True
                         self.autonomy_interrupted.clear()
@@ -104,6 +302,11 @@ class Hub:
                 continue
             with self.cond:
                 self.busy = True
+            if isinstance(text, tuple):
+                with self.cond:
+                    self.defer_outputs = True
+                    self.deferred_outputs = []
+                return ChatInput(text[0], text[1], text[2] if len(text) > 2 else None)
             return text
 
     def request_stop(self):
@@ -140,33 +343,58 @@ class Hub:
             self.activity_transition(enabled)
             return True
 
-    def submit(self, text, request_id):
-        text_digest = hashlib.sha256(text.encode('utf-8')).digest()
+    def submit(self, text, request_id, media_id=None):
+        digest_input = text.encode('utf-8') + b'\0' + (media_id.encode() if isinstance(media_id, str) else b'')
+        text_digest = hashlib.sha256(digest_input).digest()
+        if media_id is not None and (
+                not isinstance(media_id, str) or not MEDIA_ID_PATTERN.fullmatch(media_id)):
+            return 'media'
+        if media_id is not None and text.lstrip().startswith('/'):
+            return 'media_command'
         # Check busy and register the accepted request atomically for all handlers.
         with self.cond:
             if request_id in self.submissions:
                 return 'duplicate' if self.submissions[request_id] == text_digest else 'conflict'
             if self.stopping or self.stopped:
                 return 'stopped'
+            if self.submission_pending:
+                return 'busy'
             if self.autonomy_busy:
                 if not self.inbox.empty():
                     return 'busy'
-                self.push('user', text)
+            elif self.busy:
+                return 'busy'
+            self.submission_pending = True
+        # Disk writes must not hold the event/approval condition. The reservation
+        # excludes concurrent submissions and new autonomy work until publication.
+        try:
+            try:
+                media = self.commit_media(media_id, request_id, text_digest)
+            except OSError:
+                return 'media_storage'
+            if media_id is not None and not media:
+                return 'media'
+            with self.cond:
+                if self.stopping or self.stopped:
+                    return 'stopped'
+                def complete(committed):
+                    self.finish_media_submission(committed, text, media, request_id)
+                if not media:
+                    self.push('user', text, request_id=request_id)
                 self.submissions[request_id] = text_digest
                 if len(self.submissions) > MAX_SUBMISSIONS:
                     self.submissions.popitem(last=False)
-                self.inbox.put(text)
-                self.autonomy_interrupted.set()
+                self.inbox.put((text, media, complete) if media else text)
+                if self.autonomy_busy:
+                    self.autonomy_interrupted.set()
+                else:
+                    self.busy = True
                 return 'accepted'
-            if self.busy:
-                return 'busy'
-            self.busy = True
-            self.push('user', text)
-            self.submissions[request_id] = text_digest
-            if len(self.submissions) > MAX_SUBMISSIONS:
-                self.submissions.popitem(last=False)
-            self.inbox.put(text)
-            return 'accepted'
+        finally:
+            with self.cond:
+                self.submission_pending = False
+                self.cond.notify_all()
+
     def approval(self, prompt):
         # Same sentence the terminal shows; the page offers two buttons for y/N.
         with self.cond:
@@ -253,12 +481,49 @@ def make_handler(hub, token):
                     except ValueError:
                         after = 0
                     self._send(200, hub.snapshot(after))
+            elif url.path.startswith('/media/'):
+                if not self._guard((query.get('t') or [''])[0]):
+                    return
+                media_id = url.path.rsplit('/', 1)[-1].split('.', 1)[0]
+                media = hub.media_info(media_id)
+                if not media:
+                    self._send(404, {'error': 'not found'})
+                    return
+                try:
+                    data = (hub.media_root / media['filename']).read_bytes()
+                except OSError:
+                    self._send(404, {'error': 'not found'})
+                else:
+                    self._send(200, data, media['mime'])
             else:
                 self._send(404, {'error': 'not found'})
 
         def do_POST(self):
             url = urlparse(self.path)
             if not self._guard(self.headers.get('X-Token')):
+                return
+            if url.path == '/api/media':
+                try:
+                    length = int(self.headers.get('Content-Length') or 0)
+                    if not 0 < length <= MAX_MEDIA_BYTES * 2:
+                        raise ValueError
+                    body = json.loads(self.rfile.read(length))
+                    if not isinstance(body, dict):
+                        raise ValueError
+                    mime = body.get('mime')
+                    encoded = body.get('data')
+                    if not isinstance(mime, str) or not isinstance(encoded, str):
+                        raise ValueError
+                    raw = base64.b64decode(encoded, validate=True)
+                    media = hub.save_media(mime, raw, body.get('name', 'image'))
+                    if not media:
+                        raise ValueError
+                except (ValueError, base64.binascii.Error):
+                    self._send(400, {'error': 'invalid image'})
+                except OSError:
+                    self._send(500, {'error': 'image storage failed'})
+                else:
+                    self._send(201, {'ok': True, 'media': media})
                 return
             try:
                 length = int(self.headers.get('Content-Length') or 0)
@@ -279,11 +544,23 @@ def make_handler(hub, token):
                     self._send(400, {'error': 'request_id'})
                 else:
                     text = text.strip()
-                    result = hub.submit(text, request_id)
+                    supplied_media = body.get('media') if 'media' in body else None
+                    if (supplied_media is not None and
+                            (not isinstance(supplied_media, dict) or supplied_media.get('id') is None)):
+                        result = 'media'
+                    else:
+                        media_id = supplied_media.get('id') if supplied_media is not None else None
+                        result = hub.submit(text, request_id, media_id)
                     if result in ('accepted', 'duplicate'):
                         if result == 'accepted' and text == '/quit':
                             hub.push('notice', '正在保存并退出，稍等几秒，然后可以关掉这个页面。')
                         self._send(200, {'ok': True, 'duplicate': result == 'duplicate'})
+                    elif result == 'media':
+                        self._send(400, {'error': 'invalid media'})
+                    elif result == 'media_command':
+                        self._send(400, {'error': 'image cannot be sent with a command'})
+                    elif result == 'media_storage':
+                        self._send(500, {'error': 'image storage failed'})
                     else:
                         self._send(409, {'error': result})
             elif url.path == '/api/approve':
@@ -327,8 +604,19 @@ def start_server(hub, token, port):
 
 
 def serve_chat(chat, hub):
+    files = getattr(chat.tools, 'files', None) if chat.tools else None
+    files = files or chat.tools
+    announce_photo = getattr(files, 'announce_photo_input', None)
+    if callable(announce_photo):
+        if announce_photo() is False:
+            hub.output('图片能力通知暂时无法保存；聊天仍可使用，下次启动会重试。')
+        chat.pending_capability_event = getattr(chat.tools, 'capability_event', None)
+        chat.pending_capability_event_model = chat.pending_capability_event
     for message in chat.history_events:
-        hub.push(message['role'], message['content'], time=message['time'], history=True)
+        media = message.get('media') or (hub.media_for_request(message.get('request_id'))
+                                         if message['role'] == 'user' else None)
+        hub.push(message['role'], message['content'], time=message['time'], history=True,
+                 **({'media': media} if media else {}))
     hub.autonomy = AutonomyController(chat, hub)
     hub.capability_record = lambda: chat.capability_history_record
     hub.activity_transition = lambda enabled: chat.set_activity_enabled(hub.activity, enabled)
@@ -389,7 +677,7 @@ def main(argv=None):
             client, model = make_model(ROOT, cfg)
             activity = ActivityState(store.root / cfg.id / 'resident-state.json')
             memory_port = (cfg.memory or {}).get('ombre_port') if (cfg.memory or {}).get('enabled') else None
-            hub = Hub(cfg.name, activity, memory_port)
+            hub = Hub(cfg.name, activity, memory_port, store.root / cfg.id / 'media')
             token = secrets.token_urlsafe(24)
             try:
                 server = start_server(hub, token, args.port)

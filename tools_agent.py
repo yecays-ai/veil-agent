@@ -350,7 +350,8 @@ class FilesystemTools:
                    'memory_tools': previous.get('memory_tools', []) if previous else [],
                    'capability_updates': previous.get('capability_updates', []) if previous else [],
                    'autonomy_announced': bool(previous and previous.get('autonomy_announced')),
-                   'long_tasks_announced': bool(previous and previous.get('long_tasks_announced'))}
+                   'long_tasks_announced': bool(previous and previous.get('long_tasks_announced')),
+                   'photo_input_announced': bool(previous and previous.get('photo_input_announced'))}
             self._record_update(row, self.capability_event)
             if previous != row:
                 save_capabilities(self.cap_path, row)
@@ -379,6 +380,8 @@ class FilesystemTools:
             changes.append('Autonomous activity remains enabled; you may act or choose not to on each scheduled wake.')
         if previous.get('long_tasks_announced'):
             changes.append('Long-task tools remain available to save one active task and continue it after restart.')
+        if previous.get('photo_input_announced'):
+            changes.append('Photo input remains available; the newest photo is visible directly and older photos use placeholders.')
         memory_tools = previous.get('memory_tools')
         if isinstance(memory_tools, list) and memory_tools:
             changes.append('Memory tools are available: ' + ', '.join(str(name) for name in memory_tools) +
@@ -497,6 +500,34 @@ class FilesystemTools:
             self.enabled = False
             from veil_agent import UserError
             raise UserError('长期任务能力通知无法安全保存，工具已停止；请保留 data 文件夹。') from exc
+
+    @capability_transaction
+    def announce_photo_input(self):
+        if getattr(self, 'cap_path', None) is None:
+            return
+        try:
+            row = json.loads(self.cap_path.read_text(encoding='utf-8')) if self.cap_path.exists() else {}
+            if not isinstance(row, dict):
+                raise ValueError('invalid capability record')
+            if row.get('photo_input_announced'):
+                self.capability_event = row.get('pending_event')
+                self.capability_event_model = row.get('pending_event_model')
+                return
+            event = ('Capability update: Lan can now send you photos in chat; you see the newest one '
+                     'directly. Older photos appear as [Lan sent a photo].')
+            previous_event = row.get('pending_event')
+            if isinstance(previous_event, str) and previous_event and event not in previous_event:
+                event = previous_event + '\n' + event
+            row['photo_input_announced'] = True
+            row['pending_event'] = event
+            row['pending_event_model'] = event
+            self._record_update(row, event)
+            save_capabilities(self.cap_path, row)
+            self.capability_event = event
+            self.capability_event_model = event
+            return True
+        except Exception:
+            return False
 
     def _description(self, names):
         if not names:

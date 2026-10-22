@@ -1,5 +1,6 @@
 """Local terminal chat. Private state stays beside this file."""
 import argparse
+import base64
 import json
 import math
 import os
@@ -19,6 +20,9 @@ from contextlib import contextmanager, nullcontext
 
 ROOT = Path(__file__).resolve().parent
 MILLION = Decimal(1_000_000)
+PHOTO_PLACEHOLDER = '[Lan sent a photo]'
+PHOTO_MIME_TYPES = {'image/png', 'image/jpeg', 'image/gif', 'image/webp'}
+MAX_PHOTO_BYTES = 5 * 1024 * 1024
 
 RAW_DSML_TOOL_CALL = re.compile(r'<[|｜]DSML[|｜](?:tool_calls|function_calls|invoke)\b', re.IGNORECASE)
 CJK_TEXT = re.compile(r'[\u3400-\u9fff]')
@@ -634,7 +638,17 @@ def history_keep(total, limit):
 
 
 def message_request_bytes(message):
-    return len(json.dumps(message, ensure_ascii=False).encode('utf-8')) + 256
+    # Do not count base64 as text. Reserve 4096 tokens per image: this is deliberately
+    # above the supported providers' resized-image charges and keeps preflight portable.
+    sized = message
+    content = message.get('content') if isinstance(message, dict) else None
+    if isinstance(content, list):
+        sized = {**message, 'content': [
+            ({**part, 'image_url': {'url': 'x' * 8192}}
+             if isinstance(part, dict) and part.get('type') == 'image_url' else part)
+            for part in content
+        ]}
+    return len(json.dumps(sized, ensure_ascii=False).encode('utf-8')) + 256
 
 
 def request_byte_size(messages, tools=None):
@@ -648,6 +662,17 @@ def estimate_request_tokens(messages, tools=None, calibration=0.5):
     """Conservative preflight estimate; tool-loop usage calibrates it after a real request."""
     ratio = max(0.5, min(1.0, calibration))
     return math.ceil(request_byte_size(messages, tools) * ratio)
+
+
+def collapse_latest_photo(messages):
+    """Replace the newest real photo with its durable text placeholder."""
+    for message in reversed(messages):
+        content = message.get('content') if isinstance(message, dict) else None
+        if message.get('role') == 'user' and isinstance(content, list):
+            text = next((part.get('text') for part in content
+                         if isinstance(part, dict) and part.get('type') == 'text'), '')
+            message['content'] = PHOTO_PLACEHOLDER + (('\n' + text) if text else '')
+            return
 
 
 class Chat:
@@ -926,9 +951,58 @@ class Chat:
             raise UserError('聊天记录无法读取，已停止；请保留 data 文件夹。') from exc
         groups = groups[-history_keep(len(groups), self.cfg.history_rounds):]
         self.history_events = [{**m, 'origin': m.get('origin', 'reply')} for group in groups for m in group]
-        return [{'role': m['role'], 'content': m['content']} for m in self.history_events], sum(any(m['role'] == 'assistant' for m in g) for g in groups)
+        latest_photo = next((index for index in range(len(self.history_events) - 1, -1, -1)
+                             if self.history_events[index]['role'] == 'user'
+                             and isinstance(self.history_events[index].get('media'), dict)), None)
+        model_history = []
+        for index, message in enumerate(self.history_events):
+            content = message['content']
+            if message['role'] == 'user' and isinstance(message.get('media'), dict):
+                fallback = PHOTO_PLACEHOLDER + (('\n' + content) if content != '[图片]' else '')
+                if index == latest_photo:
+                    try:
+                        content = self._photo_content(content, message['media'])
+                    except UserError:
+                        # A missing historical file must not make the whole
+                        # conversation (including text-only turns) unusable.
+                        content = fallback
+                else:
+                    content = fallback
+            model_history.append({'role': message['role'], 'content': content})
+        return model_history, sum(any(m['role'] == 'assistant' for m in g) for g in groups)
 
-    def send(self, text, *, autonomy=False, extra_context=None):
+    def _photo_content(self, text, media):
+        if not isinstance(media, dict):
+            return text
+        filename, mime = media.get('filename'), media.get('mime')
+        if (not isinstance(filename, str) or Path(filename).name != filename
+                or not isinstance(mime, str) or mime not in PHOTO_MIME_TYPES):
+            raise UserError('图片记录无效，已停止；请保留 data 文件夹。')
+        path = self.store.root / self.cfg.id / 'media' / filename
+        try:
+            with path.open('rb') as handle:
+                if path.stat().st_size > MAX_PHOTO_BYTES:
+                    raise UserError('图片文件超过 5 MB，未发送。')
+                # Bound the read too: the file can grow after the size check.
+                raw = handle.read(MAX_PHOTO_BYTES + 1)
+        except OSError as exc:
+            raise UserError('图片文件无法读取，已停止；请保留 data 文件夹。') from exc
+        if len(raw) > MAX_PHOTO_BYTES:
+            raise UserError('图片文件超过 5 MB，未发送。')
+        if not raw:
+            raise UserError('图片文件为空，已停止；请保留 data 文件夹。')
+        caption = text if text != '[图片]' else 'What do you see in this photo?'
+        return [
+            {'type': 'text', 'text': caption},
+            {'type': 'image_url', 'image_url': {
+                'url': f'data:{mime};base64,{base64.b64encode(raw).decode("ascii")}'
+            }},
+        ]
+
+    def send(self, text, *, autonomy=False, extra_context=None, media=None):
+        # Per-call durability fact used by UI adapters when failures can occur
+        # both before and after the user row is appended.
+        self.last_send_persisted = False
         self.sent_messages = []
         self.reply_displayed = False
         self.autonomy_mode = autonomy
@@ -968,14 +1042,18 @@ class Chat:
             tail.append({'role': 'system', 'content':
                 'Program-generated capability update: ' + self.pending_capability_event_model})
         tail.append({'role': 'system', 'content': changing})
-        user = {'role': 'user', 'content': text}
+        user = {'role': 'user', 'content': self._photo_content(text, media)}
         # The input limit is in tokens, not UTF-8 bytes. Start with the same
         # conservative byte-to-token floor used by the tool loop; schema bytes
         # are included but must not be counted one-for-one as tokens.
         def bound(history):
             return estimate_request_tokens([*head, *history, *tail, user], tool_schema)
         limit = self.cfg.provider['max_input_tokens']
-        history = list(self.history)
+        # collapse_latest_photo mutates message dictionaries; keep the durable
+        # in-memory history intact while preparing this request's model view.
+        history = [dict(message) for message in self.history]
+        if isinstance(media, dict):
+            collapse_latest_photo(history)
         # Long replies make the window outgrow the limit. Drop the oldest whole
         # rounds from this request only; chat.jsonl keeps everything.
         while history and bound(history) > limit:
@@ -998,7 +1076,12 @@ class Chat:
                         if self.tool_mode else self.cfg)
             request_id, _ = self.budget.reserve(tool_cfg)
             if not autonomy:
-                self.store.append(self.path, {'role': 'user', 'content': text, 'request_id': request_id})
+                event = {'role': 'user', 'content': text, 'request_id': request_id}
+                if isinstance(media, dict):
+                    event['media'] = {key: media[key] for key in ('id', 'filename', 'mime', 'name')
+                                     if isinstance(media.get(key), str)}
+                self.store.append(self.path, event)
+                self.last_send_persisted = True
         try:
             self._capability_request_active = True
             self.last_self = description
@@ -1480,6 +1563,7 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead, activity=N
                 for notice in chat.memory.notices():
                     output(notice)
             raw_text = input_fn('你: ')
+            media = getattr(raw_text, 'media', None)
             if autonomy is not None and raw_text is AUTONOMY_WAKE:
                 autonomy.run()
                 continue
@@ -1524,7 +1608,15 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead, activity=N
                 # Storage and accounting errors stop the session rather than
                 # permitting a subsequent request on uncertain local state.
                 try:
-                    reply = chat.send(text, extra_context=pending_deletion_context(chat))
+                    chat.last_send_persisted = False
+                    try:
+                        reply = chat.send(text, extra_context=pending_deletion_context(chat), media=media)
+                    finally:
+                        # Every exit (including storage errors and interrupts)
+                        # releases the adapter's transaction exactly once.
+                        complete = getattr(raw_text, 'complete', None)
+                        if callable(complete):
+                            complete(chat.last_send_persisted)
                 except TooLong as exc:
                     output(str(exc))
                     continue
