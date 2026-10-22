@@ -26,7 +26,7 @@ AUTONOMY_WAKE = object()
 TOOL_DATA_RESULTS = {'read_text_file', 'read_multiple_files', 'directory_tree', 'list_directory',
                      'list_directory_with_sizes', 'get_file_info', 'search_files', 'memory_read',
                      'memory_history', 'breath_search', 'dream', 'pulse', 'letter_read', 'lab_file_digest',
-                     'long_task_status'}
+                     'long_task_status', 'capability_history'}
 
 
 def capability_model_notice(tools):
@@ -57,6 +57,13 @@ SEND_MESSAGE = {'type': 'function', 'function': {
                     'A step containing only send_message calls ends the turn.'),
     'parameters': {'type': 'object', 'properties': {'text': {'type': 'string'}},
                    'required': ['text'], 'additionalProperties': False},
+}}
+
+CAPABILITY_HISTORY = {'type': 'function', 'function': {
+    'name': 'capability_history',
+    'description': ('Look up the dated record of when your abilities were added or changed. '
+                    'Read-only; it grants nothing.'),
+    'parameters': {'type': 'object', 'properties': {}, 'additionalProperties': False},
 }}
 
 
@@ -691,7 +698,8 @@ class Chat:
         existing_tools = permitted_tools(self.tools.tools if self.tools else [])
         messaging = [SEND_MESSAGE] if ((self.cfg.tools and self.cfg.tools.get('enabled', True))
                                         or (self.tools and self.tools.tools)) else []
-        schemas = [*existing_tools, *task_tools, *messaging]
+        history = [CAPABILITY_HISTORY] if messaging else []
+        schemas = [*existing_tools, *task_tools, *messaging, *history]
         for schema in schemas:
             function = schema['function']
             if function['name'] in ('write_file', 'append_file', 'long_task_update', 'hold', 'trace', 'letter_write'):
@@ -769,7 +777,7 @@ class Chat:
         try:
             row = json.loads(path.read_text(encoding='utf-8'))
             updates = row.get('capability_updates', [])
-            lines = [f'{item["at"][:10]}: {item["text"]}' for item in updates
+            lines = [f'{item["at"]}: {item["text"]}' for item in updates
                      if isinstance(item, dict) and isinstance(item.get('at'), str)
                      and isinstance(item.get('text'), str)]
             return ('CAPABILITY RECORD (program-maintained; use it when asked what changed, do not claim an '
@@ -951,10 +959,8 @@ class Chat:
                 {'role': 'system', 'content': stable}]
         tool_schema = self.current_request_tool_schemas()
         self._active_capability_schemas = tool_schema
-        head.append({'role': 'system', 'content': self.current_capability_snapshot(tool_schema)})
-        record = self.capability_history_record
-        if record:
-            head.append({'role': 'system', 'content': record})
+        # Tool definitions already tell the model what it can use. Peter gets the one-time update
+        # notice below and reads the dated record himself through capability_history.
         tail = [*recalled]
         if extra_context:
             tail.append({'role': 'system', 'content': extra_context})
@@ -1307,6 +1313,9 @@ class Chat:
                             result, state, summary = self.send_message(
                                 call.function.arguments, request_id,
                                 f'{step}:{getattr(call, "id", None) or call_index}')
+                        elif call.function.name == 'capability_history':
+                            result = self.capability_history_record or 'No capability changes are recorded yet.'
+                            state, summary = '成功', 'capability_history'
                         else:
                             args = json.loads(call.function.arguments)
                             if not isinstance(args, dict):
