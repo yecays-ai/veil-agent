@@ -4,6 +4,7 @@ The model decides what is worth keeping; Ombre does the tagging and same-event m
 Deleting is not offered to the model: /delete stays with the user.
 """
 from types import SimpleNamespace
+import inspect
 import json
 from datetime import datetime, timezone
 import hashlib
@@ -693,7 +694,18 @@ class ToolSet:
     def consume_capability_event(self, delivered_event=None):
         consume = getattr(self.files, 'consume_capability_event', None)
         if consume:
-            return consume(delivered_event)
+            # Older file-tool adapters only expose the original no-argument
+            # acknowledgement hook.  Keep them usable while the persistent
+            # Filesystem implementation receives the delivered snapshot.
+            try:
+                parameters = inspect.signature(consume).parameters.values()
+            except (TypeError, ValueError):
+                return consume(delivered_event)
+            accepts_event = any(parameter.kind == parameter.VAR_POSITIONAL or
+                                parameter.kind in (parameter.POSITIONAL_ONLY,
+                                                   parameter.POSITIONAL_OR_KEYWORD)
+                                for parameter in parameters)
+            return consume(delivered_event) if accepts_event else consume()
         return False
 
     def set_autonomy(self, enabled):
