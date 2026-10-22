@@ -5,7 +5,7 @@
 ## 当前目标与现状
 
 - **071（施工中，分支 `ticket/071-electron-image`）：** 网页和现有 Electron 聊天共用图片选择、粘贴、拖入、预览、上传和历史显示；媒体统一进入 `data/<character>/media/`，不开放 Node API。
-- 已补：本机 token 鉴权的图片上传/读取、媒体历史引用、网页原生图片交互、Electron smoke 的上传与刷新历史检查。Python web 回归 23/23、页面节奏回归、Electron smoke 和 desktop backend 回归均通过。
+- 已补：本机 token 鉴权的图片上传/读取、媒体历史引用、网页原生图片交互、失败重试复用上传、错误媒体元数据拒绝、命令混发拒绝和损坏索引安全失败。Python web 回归 24/24、页面节奏回归、Electron smoke 和 desktop backend 回归均通过。
 
 - **main `becf0e5`：** 067（PR #102）、068 能力认知（PR #105）、068 Windows 运行验证（PR #104）、069 记忆调用恢复（PR #106、#107）均已合并，GitHub CI 通过。以上都还没有经过 Lan 的 Windows 真人验收。
 - **068 能力认知（#105）：** 每轮请求带一份由实际开放工具 schema、授权策略和运行状态生成的英文 `CURRENT CAPABILITIES` 快照；能力面板与模型读同一来源，自主活动启停写入带日期的历史。PR #109 按 Lan 要求改回最初设计：每轮不再附带能力清单或变化记录（工具定义本身已告诉模型能用什么）；能力变化仍以一次性英文通知交给 Peter；Peter 需要时自己调用只读工具 `capability_history` 查带时间戳的变化记录。能力面板仍显示快照与记录。Lan 本机记录已按 GitHub 合并时间补 7 条（标明是 VEIL 上线日期），原文件备份为 `data/peter/capabilities.backup-2026-10-22.json`。

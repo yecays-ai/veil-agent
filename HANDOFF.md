@@ -1,6 +1,6 @@
 # 交接
 
-- 2026-10-23 Codex：071 已在 `ticket/071-electron-image` 完成施工和本地回归。网页和 Electron 仍加载同一个 `web/index.html`；媒体接口和文件落盘在 `web_agent.py`，图片元数据随既有 `chat.jsonl` 保存，Electron 回归在 `desktop/tests/smoke.cjs`。Python web 23/23、页面节奏、Electron smoke、desktop backend 均通过；下一步是集中 commit/push，再交 Lan 做 Windows 体验验收。
+- 2026-10-23 Codex：071 第二轮复核已修复失败重试重复上传、错误媒体元数据、命令混发、损坏索引静默丢历史和前端放行不支持 MIME 五类问题；图片上传重试由 Electron smoke 实际覆盖。Python web 24/24、页面节奏、Electron smoke、desktop backend 均通过；下一步是集中 commit/push，再交 Lan 做 Windows 体验验收。
 
 - 2026-10-22 Claude：PR #105（068 能力认知）与 PR #104（068 Windows 运行验证）已合并，main `becf0e5`。两个 PR 都编号 068 是并行工单撞号；下一个新工单从 070 起，开工前先查 main 和打开的 PR 里已用的编号。
 - PR #108（fork）指出 #104 的验收步骤依赖开发端忽略目录 `.local-tmp/ticket-067-runtime`，Lan 的仓库里没有。本次已把 STATUS 和 `docs/tickets/068-windows-runtime-validation.md` 的验收改为现有 Peter 正常入口；#108 本身因整段覆盖 STATUS/HANDOFF 会丢掉 #105 的内容，未合并。

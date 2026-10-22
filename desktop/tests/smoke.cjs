@@ -18,7 +18,7 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   app.setPath('userData', temp);
   await fs.writeFile(path.join(temp, 'desktop.json'), JSON.stringify({ root: temp, size: 320 }));
   const events = [{ id: 1, kind: 'assistant', text: 'Fictional saved history', history: true, time: new Date().toISOString() }];
-  let sends = 0, imageSends = 0, approvals = 0, pending = null;
+  let sends = 0, imageUploads = 0, imageAttempts = 0, imageSends = 0, approvals = 0, pending = null;
   const token = 'fictional_token_123456789';
   server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
@@ -38,13 +38,15 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
         memory_panel_url: 'http://127.0.0.1:1/dashboard' }));
     } else if (url.pathname === '/api/media') {
       let raw = ''; for await (const chunk of req) raw += chunk;
-      const body = JSON.parse(raw); assert.equal(body.mime, 'image/png');
+      const body = JSON.parse(raw); assert.equal(body.mime, 'image/png'); imageUploads++;
       res.statusCode = 201; res.end(JSON.stringify({ ok: true, media: { id: 'fictional-image', filename: 'fictional-image.png', mime: 'image/png', name: 'fictional.png' } }));
     } else if (url.pathname === '/api/send') {
       let raw = ''; for await (const chunk of req) raw += chunk;
       const body = JSON.parse(raw);
       if (body.media?.id === 'fictional-image') {
-        imageSends++; assert.equal(body.text, '[图片]');
+        imageAttempts++; assert.equal(body.text, '[图片]');
+        if (imageAttempts === 1) { res.statusCode = 409; res.end(JSON.stringify({ error: 'busy' })); return; }
+        imageSends++;
         events.push({ id: 4, kind: 'user', text: '[图片]', media: { id: 'fictional-image', filename: 'fictional-image.png', mime: 'image/png', name: 'fictional.png' }, time: new Date().toISOString() });
       } else {
         sends++;
@@ -96,7 +98,12 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   await chat.webContents.executeJavaScript(`(() => { const input=document.querySelector('#image-file'); const file=new File([Uint8Array.from([137,80,78,71,13,10,26,10])], 'fictional.png', {type:'image/png'}); const dt=new DataTransfer(); dt.items.add(file); Object.defineProperty(input, 'files', {value:dt.files}); input.dispatchEvent(new Event('change')); })()`);
   await wait(() => chat.webContents.executeJavaScript('!document.querySelector("#image-preview").hidden'), 'image preview missing');
   await chat.webContents.executeJavaScript('document.querySelector("#send").click()');
+  await wait(() => imageAttempts === 1, 'image retry was not exercised');
+  await wait(() => chat.webContents.executeJavaScript('!document.querySelector("#image-preview").hidden'), 'image was not retained for retry');
+  await wait(() => chat.webContents.executeJavaScript('!document.querySelector("#send").disabled'), 'image retry button not enabled');
+  await chat.webContents.executeJavaScript('document.querySelector("#send").click()');
   await wait(() => imageSends === 1, 'image not delivered');
+  assert.equal(imageUploads, 1);
   await wait(() => chat.webContents.executeJavaScript('!!document.querySelector(".msg.user .msg-image")'), 'image bubble missing');
   chat.close(); assert.equal(chat.isDestroyed(), false); assert.equal(chat.isVisible(), false);
   await toggle(); await wait(() => chat.isVisible(), 'chat did not reopen');

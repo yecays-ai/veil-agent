@@ -10,6 +10,7 @@ import hashlib
 import hmac
 import json
 import queue
+import re
 import secrets
 import sys
 import threading
@@ -28,6 +29,7 @@ PAGE = Path(__file__).resolve().parent / 'web' / 'index.html'
 MAX_BODY = 200_000
 MAX_MEDIA_BYTES = 8 * 1024 * 1024
 MAX_SUBMISSIONS = 1024
+MEDIA_ID_PATTERN = re.compile(r'^[0-9a-f]{32}$')
 MEDIA_TYPES = {
     'image/png': ('.png', b'\x89PNG\r\n\x1a\n'),
     'image/jpeg': ('.jpg', b'\xff\xd8\xff'),
@@ -77,8 +79,10 @@ class Hub:
                     row = json.loads(line)
                     if isinstance(row, dict) and isinstance(row.get('id'), str):
                         self.media_index[row['id']] = row
-            except (OSError, ValueError, UnicodeError):
-                self.media_index = {}
+            except FileNotFoundError:
+                pass
+            except (OSError, ValueError, UnicodeError) as exc:
+                raise UserError('图片索引无法读取，已停止；请保留 data 文件夹。') from exc
 
     def media_info(self, media_id):
         with self.media_lock:
@@ -93,10 +97,11 @@ class Hub:
         return None
 
     def save_media(self, mime, raw, original_name='image'):
-        if self.media_root is None or mime not in MEDIA_TYPES or not raw or len(raw) > MAX_MEDIA_BYTES:
+        if (self.media_root is None or mime not in MEDIA_TYPES or not isinstance(original_name, str)
+                or not raw or len(raw) > MAX_MEDIA_BYTES):
             return None
         suffix, signature = MEDIA_TYPES[mime]
-        if not raw.startswith(signature):
+        if not raw.startswith(signature) or (mime == 'image/webp' and raw[8:12] != b'WEBP'):
             return None
         media_id = secrets.token_hex(16)
         filename = media_id + suffix
@@ -199,6 +204,10 @@ class Hub:
 
     def submit(self, text, request_id, media_id=None):
         text_digest = hashlib.sha256(text.encode('utf-8')).digest()
+        if media_id and (not isinstance(media_id, str) or not MEDIA_ID_PATTERN.fullmatch(media_id)):
+            return 'media'
+        if media_id and text.lstrip().startswith('/'):
+            return 'media_command'
         # Check busy and register the accepted request atomically for all handlers.
         with self.cond:
             if request_id in self.submissions:
@@ -402,6 +411,8 @@ def make_handler(hub, token):
                         self._send(200, {'ok': True, 'duplicate': result == 'duplicate'})
                     elif result == 'media':
                         self._send(400, {'error': 'invalid media'})
+                    elif result == 'media_command':
+                        self._send(400, {'error': 'image cannot be sent with a command'})
                     else:
                         self._send(409, {'error': result})
             elif url.path == '/api/approve':

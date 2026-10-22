@@ -109,6 +109,19 @@ output_cny_per_million = "8"
                        media_root=self.store.root / 'test' / 'media')
         self.assertEqual(reopened.media_for_request('test-request-1')['id'], media['id'])
 
+    def test_image_request_rejects_bad_metadata_and_commands(self):
+        self.hub.busy = False
+        png = base64.b64encode(b'\x89PNG\r\n\x1a\nfictional').decode()
+        status, _ = self.call('/api/media', {'mime': 'image/png', 'name': 42, 'data': png})
+        self.assertEqual(status, 400)
+        status, _ = self.call('/api/send', {'text': 'hello', 'media': {'id': 'not-a-media-id'}})
+        self.assertEqual(status, 400)
+        status, result = self.call('/api/media', {'mime': 'image/png', 'name': 'fictional.png', 'data': png})
+        self.assertEqual(status, 201)
+        self.hub.busy = False
+        status, _ = self.call('/api/send', {'text': '/quit', 'media': {'id': result['media']['id']}})
+        self.assertEqual(status, 400)
+
     def test_snapshot_exposes_the_same_capability_record_used_by_peter(self):
         record = 'CAPABILITY RECORD\n2026-10-22T00:00:00+00:00: Capability update: added fictional_tool.'
         self.hub.capability_record = lambda: record
