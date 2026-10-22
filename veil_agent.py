@@ -698,7 +698,7 @@ class Chat:
         existing_tools = permitted_tools(self.tools.tools if self.tools else [])
         messaging = [SEND_MESSAGE] if ((self.cfg.tools and self.cfg.tools.get('enabled', True))
                                         or (self.tools and self.tools.tools)) else []
-        history = [CAPABILITY_HISTORY] if messaging else []
+        history = [CAPABILITY_HISTORY] if existing_tools or task_tools or messaging else []
         schemas = [*existing_tools, *task_tools, *messaging, *history]
         for schema in schemas:
             function = schema['function']
