@@ -448,22 +448,21 @@ class Memory:
                                     'memory-extraction'})
         try:
             self.state = states[-1]['state'] if states else {
-                'cursor': len(self.turns()), 'pending': [], 'entries': {}, 'sources': {},
-                'pending_writes': []}
+                'cursor': len(self.turns()), 'pending': [], 'entries': {}, 'sources': {}}
             if not isinstance(self.state, dict):
                 raise ValueError('invalid memory state')
-            self.state.setdefault('pending_writes', [])
+            legacy_pending_writes = self.state.pop('pending_writes', [])
             if (type(self.state['cursor']) is not int or not 0 <= self.state['cursor'] <= len(self.turns())
                     or not isinstance(self.state['pending'], list)
                     or not isinstance(self.state['entries'], dict)
                     or not isinstance(self.state['sources'], dict)
-                    or not isinstance(self.state['pending_writes'], list)):
+                    or not isinstance(legacy_pending_writes, list)):
                 raise ValueError('invalid memory state')
             for batch in self.state['pending']:
                 if (type(batch['id']) is not int or not 0 <= batch['id'] < self.state['cursor']
                         or batch['attempts'] != 1):
                     raise ValueError('invalid pending batch')
-            for write in self.state['pending_writes']:
+            for write in legacy_pending_writes:
                 if (not isinstance(write, dict)
                         or not re.fullmatch(r'[0-9a-f]{32}', str(write.get('operation_id', '')))
                         or not re.fullmatch(r'[0-9a-f]{64}', str(write.get('fingerprint', '')))
@@ -473,6 +472,7 @@ class Memory:
             from veil_agent import UserError
             raise UserError('记忆调度记录损坏，已停止；请保留记忆库，不要删记录。') from exc
         self.mutex = threading.RLock()
+        self.pending_writes = legacy_pending_writes
         self._reconcile_pending_writes()
         self.messages = queue.Queue()
         self._turn_notice_local = threading.local()
@@ -537,38 +537,39 @@ class Memory:
         submitted = {row.get('operation_id') for row in rows if row.get('status') == 'submitted'}
         terminal = {row.get('operation_id') for row in rows
                     if row.get('status') in {'confirmed', 'not_submitted'}}
-        before = self.state['pending_writes']
-        pending = []
-        for row in before:
-            operation_id = row['operation_id']
-            if operation_id in terminal:
-                continue
-            if row.get('submitted', True) is False and operation_id not in submitted:
-                continue
-            pending.append({**row, 'submitted': True})
-        if pending != before:
-            self.state['pending_writes'] = pending
+        pending = {row['operation_id']: row for row in self.pending_writes
+                   if row.get('submitted', True) or row['operation_id'] in submitted}
+        for row in rows:
+            operation_id = row.get('operation_id')
+            if row.get('status') == 'submitted' and isinstance(row.get('fingerprint'), str):
+                pending[operation_id] = {'operation_id': operation_id,
+                                         'fingerprint': row['fingerprint'], 'submitted': True}
+            elif row.get('status') in {'confirmed', 'not_submitted'}:
+                pending.pop(operation_id, None)
+        self.pending_writes = list(pending.values())
+        # Remove the old embedded guard once.  Future state snapshots stay
+        # bounded; the append-only operation ledger is its sole durable home.
+        if 'pending_writes' in self.state:
+            self.state.pop('pending_writes', None)
             self.persist()
 
     def begin_write(self, args):
         """Durably claim one local hold attempt before it reaches Ombre."""
         fingerprint = self.write_fingerprint(args)
         with self.mutex:
-            prior = next((row for row in self.state['pending_writes']
+            prior = next((row for row in self.pending_writes
                           if row['fingerprint'] == fingerprint), None)
             if prior:
                 return None, prior['operation_id']
             operation_id = uuid.uuid4().hex
-            self.state['pending_writes'].append({'operation_id': operation_id,
-                                                 'fingerprint': fingerprint, 'submitted': False})
-            self.persist()
+            self.pending_writes.append({'operation_id': operation_id,
+                                        'fingerprint': fingerprint, 'submitted': False})
             # Do not call Ombre until this durable event has been recorded.
             # If the process dies before it, the false claim is safe to clear
             # on restart; if it dies after it, fail closed as unconfirmed.
             self.store.append(self.write_reconciliation, {
-                'operation_id': operation_id, 'status': 'submitted'})
-            self.state['pending_writes'][-1]['submitted'] = True
-            self.persist()
+                'operation_id': operation_id, 'fingerprint': fingerprint, 'status': 'submitted'})
+            self.pending_writes[-1]['submitted'] = True
         return operation_id, None
 
     def finish_write(self, operation_id, status, *, memory_id=None, error=None):
@@ -588,9 +589,8 @@ class Memory:
         self.store.append(self.write_reconciliation, row)
         if status in {'confirmed', 'not_submitted'}:
             with self.mutex:
-                self.state['pending_writes'] = [row for row in self.state['pending_writes']
-                                                if row['operation_id'] != operation_id]
-                self.persist()
+                self.pending_writes = [row for row in self.pending_writes
+                                       if row['operation_id'] != operation_id]
 
     def write_failure(self, operation_id, exc):
         # These two MCP codes mean a request did not enter its operation

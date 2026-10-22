@@ -625,8 +625,9 @@ class OmbreToolGuardTests(unittest.TestCase):
         self.assertEqual(state, '出错')
         self.assertIn('unconfirmed', result)
         self.assertEqual(len(committed), 1)
-        pending = self.memory.state['pending_writes']
+        pending = self.memory.pending_writes
         self.assertEqual(len(pending), 1)
+        self.assertNotIn('pending_writes', self.memory.state)
         self.assertNotIn('FICTIONAL_ONCE', json.dumps(pending))
         journal = self.store.read('fake/memory/_agent/write-reconciliation.jsonl')
         self.assertEqual([row['status'] for row in journal[-2:]], ['submitted', 'unconfirmed'])
@@ -659,7 +660,7 @@ class OmbreToolGuardTests(unittest.TestCase):
         self.assertEqual(state, '出错')
         self.assertIn('previous version was archived', result)
         self.assertEqual(len(calls), 1)
-        self.assertEqual(len(self.memory.state['pending_writes']), 1)
+        self.assertEqual(len(self.memory.pending_writes), 1)
         result, state, _ = self.call('trace', args)
         self.assertEqual(state, '出错')
         self.assertIn('not sent again', result)
@@ -671,7 +672,7 @@ class OmbreToolGuardTests(unittest.TestCase):
         result, state, _ = self.call('hold', {'title': 'Closed', 'content': 'FICTIONAL_NO_SEND'})
         self.assertEqual(state, '出错')
         self.assertIn('before this save was submitted', result)
-        self.assertEqual(self.memory.state['pending_writes'], [])
+        self.assertEqual(self.memory.pending_writes, [])
         journal = self.store.read('fake/memory/_agent/write-reconciliation.jsonl')
         self.assertEqual([row['status'] for row in journal[-2:]], ['submitted', 'not_submitted'])
 
@@ -685,7 +686,7 @@ class OmbreToolGuardTests(unittest.TestCase):
         result, state, _ = self.call('hold', {'title': 'Pre-dispatch', 'content': 'FICTIONAL_NO_QUEUE'})
         self.assertEqual(state, '出错')
         self.assertIn('before this save was submitted', result)
-        self.assertEqual(self.memory.state['pending_writes'], [])
+        self.assertEqual(self.memory.pending_writes, [])
         journal = self.store.read('fake/memory/_agent/write-reconciliation.jsonl')
         self.assertEqual([row['status'] for row in journal[-2:]], ['submitted', 'not_submitted'])
 
