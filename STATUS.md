@@ -4,7 +4,7 @@
 
 ## 当前目标与现状
 
-- **062 记忆写入结果核对与稳定性专项收尾：** 分支 `ticket/062-memory-write-reconciliation`，基于 main `e06d891`。锁定 Ombre 3.6.14 的 `hold` 回执含 bucket ID，但接口没有调用方操作 ID、幂等键或按本次操作查结果的能力；相同标题、正文或搜索命中不能作为证据。现以角色隔离、仅含操作 ID/请求指纹/状态/安全错误类别的持久账本保护 `hold` 和非删除 `trace`：成功回执才确认；MCP 在提交前明确关闭记为未提交；其他断线、超时或服务错误保持待核实并阻止同一请求重启后再次发送。账本不保存记忆正文、标题、查询、密钥或服务器原始返回。虚构故障回归 51 项和基础记忆回归 50 项通过。本机完整套件卡在 fake MCP 创建 Windows event loop 的 `socketpair()`，尚未进入 transport、恢复或 Ombre；切换 Selector 后同样卡住，说明是本沙箱的回环 socket 限制，不是恢复机制证据。真实 Ombre 临时 vault gate 随后只到启动阶段 `http_unavailable` 并被同类 Windows 文件锁阻断，未进入 062 断线断言；两者均交由 GitHub Windows runner 验证。由于上游缺少可验证的本次操作查询，062 不宣称能从回执丢失中确认服务端已写入；该状态会保守保留为待核实。
+- **062 记忆写入结果核对与稳定性专项收尾：** 分支 `ticket/062-memory-write-reconciliation`，PR #98，基于 main `e06d891`。锁定 Ombre 3.6.14 的 `hold` 回执含 bucket ID，但接口没有调用方操作 ID、幂等键或按本次操作查结果的能力；相同标题、正文或搜索命中不能作为证据。现以角色隔离、仅含操作 ID/请求指纹/状态/安全错误类别的持久账本保护 `hold` 和非删除 `trace`：成功回执才确认；MCP 在提交前明确关闭记为未提交；其他断线、超时或服务错误保持待核实并阻止同一请求重启后再次发送。账本不保存记忆正文、标题、查询、密钥或服务器原始返回。虚构故障回归 51 项和基础记忆回归 50 项通过。本机完整套件卡在 fake MCP 创建 Windows event loop 的 `socketpair()`，尚未进入 transport、恢复或 Ombre；切换 Selector 后同样卡住，说明是本沙箱的回环 socket 限制，不是恢复机制证据。真实 Ombre 临时 vault gate 随后只到启动阶段 `http_unavailable` 并被同类 Windows 文件锁阻断，未进入 062 断线断言；两者均交由 GitHub Windows runner 验证。由于上游缺少可验证的本次操作查询，062 不宣称能从回执丢失中确认服务端已写入；该状态会保守保留为待核实。
 
 - **060 Ombre 运行期生命周期与安全恢复：** PR #96 已合入。恢复成功不等于先前写入已成功；非只读写入不自动重放。Lan 的 Windows 体验验收仍待进行。
 
@@ -12,7 +12,7 @@
 
 ## 下一步
 
-完成 062 的真实 Ombre 临时 vault 回归和完整本地 unittest；提交、推送、创建 PR，请求 Cubic 审查并核对最新 GitHub Tests 与 Dependency security。不得自行合并。
+核对 PR #98 最新提交的 GitHub Tests 与 Dependency security，并处理 Cubic 的有效功能、数据完整性、隐私或安全意见。不得自行合并。
 
 ## Windows 验收
 
