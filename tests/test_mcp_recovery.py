@@ -153,6 +153,20 @@ class MCPRecoveryTests(unittest.TestCase):
             client.call('hold', {})
         self.assertEqual(client.calls, ['hold'])
 
+    def test_failed_resend_stays_unknown_and_mixed_group_is_not_resent(self):
+        client = self.backend([ConnectionRefusedError(), ConnectionError('lost reply')])
+        client.recovery = lambda: None
+        with self.assertRaises(MemoryToolError) as failed:
+            client.call('hold', {})
+        self.assertEqual(failed.exception.code, 'unknown')
+        self.assertEqual(client.calls, ['hold', 'hold'])
+
+        client = self.backend([ExceptionGroup('mixed', [ConnectionRefusedError(), ConnectionError('lost')])])
+        client.recovery = lambda: None
+        with self.assertRaises(MemoryToolError):
+            client.call('hold', {})
+        self.assertEqual(client.calls, ['hold'])
+
     def test_uncertain_mutation_is_never_replayed(self):
         for name in ('hold', 'trace', 'dream', 'plan', 'letter_write', 'breath_search'):
             with self.subTest(name=name):

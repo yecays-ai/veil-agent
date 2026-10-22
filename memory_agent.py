@@ -129,8 +129,11 @@ class MCP:
             seen.add(id(error))
             if isinstance(error, ConnectionRefusedError) or type(error).__name__ == 'ConnectError':
                 return True
-            return (any(refused(child) for child in getattr(error, 'exceptions', ()))
-                    or refused(error.__cause__) or refused(error.__context__))
+            children = getattr(error, 'exceptions', ())
+            if children:
+                # Every grouped failure must prove non-delivery; a mixed group is uncertain.
+                return all(refused(child) for child in children)
+            return refused(error.__cause__) or refused(error.__context__)
         return refused(exc)
 
     def _diagnose(self, name, exc, attempt):
@@ -230,6 +233,7 @@ class MCP:
                 async with asyncio.timeout(200):
                     attempts = 2 if name in self.RETRYABLE_READS else 1
                     attempt = 0
+                    resent = False
                     while attempt < attempts:
                         attempt += 1
                         try:
@@ -248,10 +252,12 @@ class MCP:
                                 # Ombre refused the connection, so this call never
                                 # reached it; after a verified restart it is safe to send once.
                                 attempts = 2
+                                resent = True
                                 continue
                             if attempt == attempts:
+                                # A failed resend may have reached Ombre, so its outcome stays unknown.
                                 raise MemoryToolError(
-                                    'connection' if attempts == 2 else 'unknown',
+                                    'connection' if attempts == 2 and not resent else 'unknown',
                                     stage=('recovery' if self.recovery is not None and not restored
                                            else getattr(exc, 'stage', None))) from exc
                             if self.recovery is not None and not restored:
