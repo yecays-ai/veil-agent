@@ -108,7 +108,7 @@ output_cny_per_million = "8"
                   'inside the lab folder; they cannot overwrite, delete, or run scripts.')
         tools = SimpleNamespace(tools=[], description='Tools. ', capability_event=notice,
                                 consume_capability_event=None)
-        tools.consume_capability_event = Mock(side_effect=lambda: setattr(tools, 'capability_event', None))
+        tools.consume_capability_event = Mock(side_effect=lambda _event: setattr(tools, 'capability_event', None))
         failing = Mock(side_effect=RuntimeError('fictional provider outage'))
         chat = Chat(self.cfg, self.store, self.budget, failing, tools=tools)
         with self.assertRaises(RequestFailed):
@@ -123,19 +123,19 @@ output_cny_per_million = "8"
         prompt = delivered.call_args.args[0]
         self.assertIn(notice, [item['content'].removeprefix('Program-generated capability update: ')
                                for item in prompt if item['role'] == 'system'])
-        tools.consume_capability_event.assert_called_once_with()
+        tools.consume_capability_event.assert_called_once_with(notice)
         self.assertEqual(self.store.read('test/tools.jsonl'), [])
 
         chat.send('later fictional request')
         later = delivered.call_args.args[0]
         self.assertNotIn(notice, [item['content'] for item in later])
-        tools.consume_capability_event.assert_called_once_with()
+        tools.consume_capability_event.assert_called_once_with(notice)
 
     def test_autonomous_activity_does_not_consume_normal_chat_capability_event(self):
         notice = 'Capability update: added lab_file_digest (direct use only inside the lab folder).'
         tools = SimpleNamespace(tools=[], description='Tools. ', capability_event=notice,
                                 consume_capability_event=None)
-        tools.consume_capability_event = Mock(side_effect=lambda: setattr(tools, 'capability_event', None))
+        tools.consume_capability_event = Mock(side_effect=lambda _event: setattr(tools, 'capability_event', None))
         model = Mock(return_value=('Fictional reply', 100, 20, 0))
         chat = Chat(self.cfg, self.store, self.budget, model, tools=tools)
         chat.send('fictional autonomous wake', autonomy=True)
@@ -146,7 +146,7 @@ output_cny_per_million = "8"
         prompt = model.call_args.args[0]
         self.assertIn(notice, [item['content'].removeprefix('Program-generated capability update: ')
                                for item in prompt if item['role'] == 'system'])
-        tools.consume_capability_event.assert_called_once_with()
+        tools.consume_capability_event.assert_called_once_with(notice)
 
     def test_pending_capability_event_survives_restart_and_reaches_model(self):
         from tools_agent import FilesystemTools
@@ -174,6 +174,32 @@ output_cny_per_million = "8"
                             and 'lab_file_digest' in item['content'] and 'move_lab_file' in item['content']
                             for item in prompt if item['role'] == 'system'))
         self.assertIsNone(reopened_tools.capability_event)
+
+    def test_new_capability_event_created_during_request_is_not_consumed_by_old_request(self):
+        old = 'Capability update: added fictional_old_tool (direct use in the configured folder).'
+        newer = 'Capability update: added fictional_new_tool (Lan approval is required).'
+        tools = SimpleNamespace(tools=[], description='Tools. ', capability_event=old,
+                                consume_capability_event=Mock(return_value=False))
+
+        def first_request(messages):
+            tools.capability_event = newer
+            return 'Fictional reply', 100, 20, 0
+
+        calls = [0]
+        def model_request(messages):
+            if calls[0] == 0:
+                calls[0] += 1
+                return first_request(messages)
+            return 'Second fictional reply', 100, 20, 0
+        model = Mock(side_effect=model_request)
+        chat = Chat(self.cfg, self.store, self.budget, model, tools=tools)
+        chat.send('first fictional request')
+        tools.consume_capability_event.assert_called_once_with(old)
+        self.assertEqual(chat.pending_capability_event, newer)
+        chat.send('second fictional request')
+        second_prompt = model.call_args.args[0]
+        self.assertIn(newer, [item['content'].removeprefix('Program-generated capability update: ')
+                              for item in second_prompt if item['role'] == 'system'])
 
     def test_tool_failures_pass_through_while_memory_data_is_preserved(self):
         rejected = 'The task status is invalid; choose active, paused, blocked, or completed.'

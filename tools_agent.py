@@ -287,11 +287,9 @@ class FilesystemTools:
                 # English model summary.  An undelivered event is not chat history,
                 # so replace it with one complete English body before delivery.
                 if self.capability_event and not self.capability_event.startswith('Capability update:'):
-                    self.capability_event = self._capability_event(
-                        core, [f'Current {name} permission: {self._permission_text(level)}.'
-                               for name, level in sorted(core['tools'].items())]
-                        or ['No file tools are currently available.'])
-                    previous = {**previous, 'pending_event': self.capability_event}
+                    self.capability_event = self._legacy_capability_event(core, previous)
+                    previous = {**previous, 'pending_event': self.capability_event,
+                                'pending_event_model': self.capability_event}
                     self._record_update(previous, self.capability_event)
                     save_capabilities(self.cap_path, previous)
                 self.capability_event_model = self.capability_event
@@ -370,6 +368,19 @@ class FilesystemTools:
     def _capability_event(self, core, changes):
         return (f'Capability update: in the "{core["folder"]}" folder, ' + ' '.join(changes))
 
+    def _legacy_capability_event(self, core, previous):
+        changes = ([f'Current {name} permission: {self._permission_text(level)}.'
+                    for name, level in sorted(core['tools'].items())]
+                   or ['No file tools are currently available.'])
+        if previous.get('autonomy_announced'):
+            changes.append('Autonomous activity remains enabled; you may act or choose not to on each scheduled wake.')
+        if previous.get('long_tasks_announced'):
+            changes.append('Long-task tools remain available to save one active task and continue it after restart.')
+        memory_tools = previous.get('memory_tools')
+        if isinstance(memory_tools, list) and memory_tools:
+            changes.append('Current memory tools: ' + ', '.join(str(name) for name in memory_tools) + '.')
+        return self._capability_event(core, changes)
+
     @property
     def capability_record(self):
         try:
@@ -396,14 +407,19 @@ class FilesystemTools:
         row['capability_updates'] = updates
 
     @capability_transaction
-    def consume_capability_event(self):
+    def consume_capability_event(self, delivered_event=None):
         try:
             row = json.loads(self.cap_path.read_text(encoding='utf-8'))
+            if delivered_event is not None and row.get('pending_event') != delivered_event:
+                self.capability_event = row.get('pending_event')
+                self.capability_event_model = self.capability_event
+                return False
             row['pending_event'] = None
             row['pending_event_model'] = None
             save_capabilities(self.cap_path, row)
             self.capability_event = None
             self.capability_event_model = None
+            return True
         except Exception:
             self.enabled = False
             from veil_agent import UserError

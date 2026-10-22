@@ -288,12 +288,18 @@ class ToolPolicyTests(unittest.TestCase):
         legacy = json.loads(first.cap_path.read_text(encoding='utf-8'))
         legacy['pending_event'] = '你的能力有变化：旧版未送达通知。'
         legacy['pending_event_model'] = 'Current capability update: fixture tools are available.'
+        legacy['autonomy_announced'] = True
+        legacy['long_tasks_announced'] = True
         first.cap_path.write_text(json.dumps(legacy), encoding='utf-8')
         migrated = manager()
         migrated._record_capabilities(['lab_file_digest', 'move_lab_file'])
         self.assertTrue(migrated.capability_event.startswith('Capability update:'))
         self.assertIn('lab_file_digest', migrated.capability_event)
+        self.assertIn('Autonomous activity remains enabled', migrated.capability_event)
+        self.assertIn('Long-task tools remain available', migrated.capability_event)
         self.assertEqual(migrated.capability_event_model, migrated.capability_event)
+        persisted = json.loads(first.cap_path.read_text(encoding='utf-8'))
+        self.assertEqual(persisted['pending_event_model'], migrated.capability_event)
 
         reopened.consume_capability_event()
         changed = manager()

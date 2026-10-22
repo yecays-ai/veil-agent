@@ -690,10 +690,11 @@ class ToolSet:
     def startup_notice(self):
         return getattr(self.files, 'startup_notice', None)
 
-    def consume_capability_event(self):
+    def consume_capability_event(self, delivered_event=None):
         consume = getattr(self.files, 'consume_capability_event', None)
         if consume:
-            consume()
+            return consume(delivered_event)
+        return False
 
     def set_autonomy(self, enabled):
         self.native.autonomy_mode = bool(enabled)

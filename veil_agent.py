@@ -909,9 +909,14 @@ class Chat:
             # Do not mark it delivered before the provider returns usable text:
             # failed requests must leave the durable pending event for a retry.
             if self.pending_capability_event and not autonomy:
-                self.tools.consume_capability_event()
-                self.pending_capability_event = None
-                self.pending_capability_event_model = None
+                delivered_event = self.pending_capability_event
+                consumed = self.tools.consume_capability_event(delivered_event)
+                if consumed is False:
+                    self.pending_capability_event = getattr(self.tools, 'capability_event', None)
+                    self.pending_capability_event_model = capability_model_notice(self.tools)
+                else:
+                    self.pending_capability_event = None
+                    self.pending_capability_event_model = None
         if not autonomy:
             self.history, self.rounds = self.recent()
             if autonomy_handoff_id is not None:
