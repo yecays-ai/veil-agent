@@ -10,6 +10,7 @@ import shutil
 import stat
 import subprocess
 import threading
+from datetime import datetime, timezone
 from concurrent.futures import Future
 from pathlib import Path, PureWindowsPath
 from types import SimpleNamespace
@@ -282,66 +283,74 @@ class FilesystemTools:
                 previous_core['resident_memory'] = bool(previous.get('resident_memory', False))
             if previous and previous_core == core:
                 self.capability_event = previous.get('pending_event')
-                self.capability_event_model = previous.get('pending_event_model')
-                if self.capability_event and not self.capability_event_model:
-                    names = ', '.join(sorted(core['tools'])) or 'no filesystem tools'
-                    self.capability_event_model = (
-                        f'Current capability update: the available filesystem tools are {names}. '
-                        'Follow the listed permissions and approval limits.')
+                # Older manifests stored a Chinese display event and an incomplete
+                # English model summary.  An undelivered event is not chat history,
+                # so replace it with one complete English body before delivery.
+                if self.capability_event and not self.capability_event.startswith('Capability update:'):
+                    self.capability_event = self._capability_event(
+                        core, [f'Current {name} permission: {self._permission_text(level)}.'
+                               for name, level in sorted(core['tools'].items())]
+                        or ['No file tools are currently available.'])
+                    previous = {**previous, 'pending_event': self.capability_event}
+                    self._record_update(previous, self.capability_event)
+                    save_capabilities(self.cap_path, previous)
+                self.capability_event_model = self.capability_event
                 return
             if previous != core:
                 old = previous.get('tools', {}) if previous else {}
                 changes = []
                 if previous and previous.get('folder') != core['folder']:
-                    changes.append(f'文件夹改为“{core["folder"]}”')
+                    changes.append(f'The configured folder changed to "{core["folder"]}".')
                 if previous and previous.get('version') != core['version']:
-                    changes.append('能力清单版本更新')
+                    changes.append('The capability manifest version changed.')
                 for name in sorted(set(old) | set(core['tools'])):
                     before, after = old.get(name), core['tools'].get(name)
                     if before != after:
-                        verb = '新增' if before is None else '移除' if after is None else '权限调整'
-                        level = {'allow': '可直接读取', 'ask': 'lab 外需要先问你同意', 'lab': '仅限实验室，可直接做'}
-                        changes.append(f'{verb}{name}' + (f'（{level[after]}）' if after else ''))
+                        if before is None:
+                            changes.append(f'Added {name} ({self._permission_text(after)}).')
+                        elif after is None:
+                            changes.append(f'Removed {name}; it is no longer available.')
+                        else:
+                            changes.append(f'Changed {name} from {self._permission_text(before)} '
+                                           f'to {self._permission_text(after)}.')
                 if previous is None:
-                    changes = ([f'{name}（{ "需要先问你同意" if level == "ask" else "可直接读取"}）'
+                    changes = ([f'Added {name} ({self._permission_text(level)}).'
                                 for name, level in sorted(core['tools'].items())]
-                               or ['当前没有可用工具'])
+                               or ['No file tools are currently available.'])
                 memory_announcement = (core['resident_memory'] and previous is not None
                                        and not previous.get('resident_memory', False))
                 old_lab = previous.get('lab', False) if previous else False
                 if core['lab'] and core['lab'] != old_lab:
-                    changes.append(f'你自己的实验室 `{self.lab.name}/` 开放了：里面放什么由你决定；'
-                                   '可直接建文件夹、新建和追加，也可在普通目录与 archive/ 之间移动单个文件；'
-                                   '不能覆盖、删除或执行脚本；日记授权独立')
+                    changes.append(f'Your lab folder "{self.lab.name}/" is available: you may create folders, '
+                                   'create or append files, and move one file between ordinary folders and archive. '
+                                   'You may not overwrite, delete, or run scripts; journal permission is separate.')
                 elif old_lab and not core['lab']:
-                    changes.append('实验室免确认权限已关闭')
+                    changes.append('Direct-use lab permission is no longer available.')
                 old_messaging = previous.get('messaging', False) if previous else False
                 messaging = None
                 if core['messaging'] and not old_messaging:
-                    messaging = ('新增 send_message：你可以把想说的话分成几条独立短消息连着发，像发短信一样，'
-                                 '每条单独保存、逐条出现；也可以只发一条。')
+                    messaging = ('Added send_message: you may send up to three separate short messages in one '
+                                 'turn, or send only one; each is saved and displayed separately.')
                 elif old_messaging and not core['messaging']:
-                    messaging = 'send_message 已关闭，一次只能回一条消息。'
+                    messaging = 'Removed send_message: you may send only one reply at a time.'
                 if changes or not messaging:
-                    detail = '、'.join(changes) or '工具能力清单已初始化'
-                    self.capability_event = f'你的能力有变化：文件夹“{self.folder_name}”中的工具为{detail}。'
+                    self.capability_event = self._capability_event(core, changes or ['The capability manifest was initialized.'])
                     if messaging:
-                        self.capability_event += messaging
+                        self.capability_event += ' ' + messaging
                 else:
-                    self.capability_event = '你的能力有变化：' + messaging
+                    self.capability_event = 'Capability update: ' + messaging
                 if core['resident_memory'] and (previous is None or memory_announcement):
-                    message = '你的记忆现在会随时间自然淡去；你可以在记忆面板查看、置顶和归档。'
+                    message = 'Your memories now fade naturally over time; you can review, pin, and archive them in the memory panel.'
                     self.capability_event = (self.capability_event + '\n' + message
                                              if self.capability_event else message)
-            names = ', '.join(sorted(core['tools'])) or 'no filesystem tools'
-            self.capability_event_model = (
-                f'Current capability update: tools in {self.folder_name} are {names}. '
-                'Follow the listed permissions and approval limits.') if self.capability_event else None
+            self.capability_event_model = self.capability_event
             row = {**core, 'pending_event': self.capability_event,
                    'pending_event_model': self.capability_event_model,
                    'memory_tools': previous.get('memory_tools', []) if previous else [],
+                   'capability_updates': previous.get('capability_updates', []) if previous else [],
                    'autonomy_announced': bool(previous and previous.get('autonomy_announced')),
                    'long_tasks_announced': bool(previous and previous.get('long_tasks_announced'))}
+            self._record_update(row, self.capability_event)
             if previous != row:
                 save_capabilities(self.cap_path, row)
         except Exception:
@@ -349,6 +358,42 @@ class FilesystemTools:
             self.enabled = False
             from veil_agent import UserError
             raise UserError('能力清单无法读取或保存，文件工具已停止；请保留 data 文件夹。')
+
+    @staticmethod
+    def _permission_text(level):
+        return {
+            'allow': 'direct use in the configured folder',
+            'ask': "Lan's approval before use outside the lab folder",
+            'lab': 'direct use only inside the lab folder; no overwrite, deletion, or scripts',
+        }.get(level, 'not available')
+
+    def _capability_event(self, core, changes):
+        return (f'Capability update: in the "{core["folder"]}" folder, ' + ' '.join(changes))
+
+    @property
+    def capability_record(self):
+        try:
+            row = json.loads(self.cap_path.read_text(encoding='utf-8'))
+            updates = row.get('capability_updates', [])
+            if not isinstance(updates, list):
+                return None
+            lines = [f'{item["at"]}: {item["text"]}' for item in updates
+                     if isinstance(item, dict) and isinstance(item.get('at'), str)
+                     and isinstance(item.get('text'), str)]
+            return ('CAPABILITY RECORD (program-maintained; use it when asked what changed, do not claim an '
+                    'unlisted permission).\n' + '\n'.join(lines)) if lines else None
+        except (OSError, ValueError, TypeError, KeyError):
+            return None
+
+    @staticmethod
+    def _record_update(row, event):
+        if not isinstance(event, str) or not event:
+            return
+        updates = row.get('capability_updates')
+        updates = updates if isinstance(updates, list) else []
+        if not updates or not isinstance(updates[-1], dict) or updates[-1].get('text') != event:
+            updates = [*updates[-20:], {'at': datetime.now(timezone.utc).isoformat(), 'text': event}]
+        row['capability_updates'] = updates
 
     @capability_transaction
     def consume_capability_event(self):
@@ -372,17 +417,15 @@ class FilesystemTools:
             row = json.loads(self.cap_path.read_text(encoding='utf-8'))
             if row.get('autonomy_announced'):
                 return
-            event = ('自主活动已开启：你会按配置被定时唤醒，可以自行决定做什么或暂不行动；'
-                     '如果本次工具清单提供 send_message，你可以给 lan 留下最多三条聊天消息，也可以不发。')
+            event = ('Capability update: autonomous activity is enabled: you will wake on the configured schedule and may act or '
+                     'choose not to. If send_message is available, you may send up to three chat messages per wake, or none.')
             previous_event = row.get('pending_event')
             if isinstance(previous_event, str) and previous_event and event not in previous_event:
                 event = previous_event + '\n' + event
             row['autonomy_announced'] = True
             row['pending_event'] = event
-            prior_model = row.get('pending_event_model') or ''
-            row['pending_event_model'] = (prior_model + '\n' if prior_model else '') + (
-                'Autonomous activity is enabled. You may choose whether to act; if send_message is available, '
-                'you may send up to three chat messages per wake, or none.')
+            row['pending_event_model'] = event
+            self._record_update(row, event)
             save_capabilities(self.cap_path, row)
             self.capability_event = event
             self.capability_event_model = row['pending_event_model']
@@ -401,18 +444,16 @@ class FilesystemTools:
                 self.capability_event = row.get('pending_event')
                 self.capability_event_model = row.get('pending_event_model')
                 return
-            event = ('新增长期任务能力：你可以保存一项当前任务，记录已确认进度与下一步，'
-                     '并在后续自主活动或服务重启后继续；原有预算、工具权限与审批不变。')
+            event = ('Capability update: long-task tools are available to save one active task, record confirmed '
+                     'progress and next steps, and continue after autonomous activity or a service restart. '
+                     'Existing budgets, tool permissions, and approval rules still apply.')
             previous_event = row.get('pending_event')
             if isinstance(previous_event, str) and previous_event and event not in previous_event:
                 event = previous_event + '\n' + event
             row['long_tasks_announced'] = True
             row['pending_event'] = event
-            prior_model = row.get('pending_event_model') or ''
-            row['pending_event_model'] = (prior_model + '\n' if prior_model else '') + (
-                'Long-task tools are available to save one active task, record confirmed progress and next steps, '
-                'and continue after later autonomous activity or a service restart. Existing budgets, tool '
-                'permissions, and approval rules still apply.')
+            row['pending_event_model'] = event
+            self._record_update(row, event)
             save_capabilities(self.cap_path, row)
             self.capability_event = event
             self.capability_event_model = row['pending_event_model']

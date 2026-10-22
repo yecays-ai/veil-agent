@@ -61,9 +61,14 @@ textarea:focus{border-color:var(--accent)}
   <button id="new-chat" title="保留旧聊天，开始一段不继承旧对话的新聊天">新对话</button>
   <button data-cmd="/cost" title="今天和本月的花费">花费</button>
   <button data-cmd="/memory" title="最近的记忆">记忆</button>
+  <button id="capability-record" title="查看 Peter 的能力更新记录">能力记录</button>
   <button id="memory-panel" hidden>记忆面板</button>
   <button id="theme">深色</button>
 </header>
+<details id="capability-details" style="padding:0 16px 8px">
+  <summary>Peter 的能力更新记录</summary>
+  <pre id="capability-record-text" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>
+</details>
 <div id="runtime">
   <span class="label" id="service-status">服务运行状态：正在连接…</span>
   <span class="label" id="activity-status">自主活动状态：正在读取…</span>
@@ -327,6 +332,7 @@ async function poll(){
     $('activity-toggle').disabled=stopping||stopped||exiting;
     $('exit-service').disabled=stopping||stopped||exiting;
     document.title=s.name;$('title').textContent=s.name;
+    $('capability-record-text').textContent=s.capability_record||'No capability updates recorded yet.';
     const memoryPanel=$('memory-panel');
     memoryPanel.hidden=!s.memory_panel_url;
     memoryPanel.onclick=()=>{if(s.memory_panel_url)window.open(s.memory_panel_url,'_blank','noopener')};
@@ -378,6 +384,7 @@ $('new-chat').onclick=()=>{
   if(busy||sending||stopping||stopped||revealQueue.length||speechIsActive())return;
   if(confirm('开始新对话？旧聊天仍保存在本机，记忆和实验室文件不会清除。'))send('/new');
 };
+$('capability-record').onclick=()=>{$('capability-details').open=!$('capability-details').open};
 sendBtn.onclick=()=>send();
 box.addEventListener('keydown',e=>{
   if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing&&e.keyCode!==229){e.preventDefault();if(!speechIsActive())send()}

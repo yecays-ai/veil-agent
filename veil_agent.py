@@ -30,8 +30,15 @@ TOOL_DATA_RESULTS = {'read_text_file', 'read_multiple_files', 'directory_tree', 
 
 
 def capability_model_notice(tools):
-    event = getattr(tools, 'capability_event_model', None) if tools else None
+    # A capability update is one program-generated event.  The display and the
+    # model must receive the same body; never substitute a short model summary.
+    event = getattr(tools, 'capability_event', None) if tools else None
     return event if isinstance(event, str) else None
+
+
+def capability_record(tools):
+    record = getattr(tools, 'capability_record', None) if tools else None
+    return record if isinstance(record, str) else None
 
 def model_tool_result(name, result, state):
     """Pass failures through unchanged; preserve the existing successful-data safeguard."""
@@ -819,6 +826,9 @@ class Chat:
         # capability notice, time and ledger) right before the user's message.
         head = [{'role': 'system', 'content': self.cfg.persona},
                 {'role': 'system', 'content': stable}]
+        record = capability_record(self.tools)
+        if record:
+            head.append({'role': 'system', 'content': record})
         tail = [*recalled]
         if extra_context:
             tail.append({'role': 'system', 'content': extra_context})
@@ -861,12 +871,6 @@ class Chat:
             request_id, _ = self.budget.reserve(tool_cfg)
             if not autonomy:
                 self.store.append(self.path, {'role': 'user', 'content': text, 'request_id': request_id})
-            if self.pending_capability_event and not autonomy:
-                self.store.append(f'{self.cfg.id}/tools.jsonl', {'request_id': request_id,
-                    'kind': 'capability', 'text': self.pending_capability_event})
-                self.tools.consume_capability_event()
-                self.pending_capability_event = None
-                self.pending_capability_event_model = None
         try:
             self.last_self = description
             if self.tool_mode:
@@ -901,6 +905,13 @@ class Chat:
                     'request_id': request_id, 'origin': 'reply'})
             if not self.tool_mode:
                 self.budget.settle(request_id, self.cfg, prompt, completion, cached)
+            # The event was included in the successful normal-chat request above.
+            # Do not mark it delivered before the provider returns usable text:
+            # failed requests must leave the durable pending event for a retry.
+            if self.pending_capability_event and not autonomy:
+                self.tools.consume_capability_event()
+                self.pending_capability_event = None
+                self.pending_capability_event_model = None
         if not autonomy:
             self.history, self.rounds = self.recent()
             if autonomy_handoff_id is not None:
@@ -1313,8 +1324,6 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead, activity=N
            '/pause 或 /resume 切换自主活动，/quit 退出。')
     if getattr(chat.tools, 'startup_notice', None):
         output(chat.tools.startup_notice)
-    if chat.pending_capability_event:
-        output(chat.pending_capability_event)
 
     def notify_dropped():
         if drop():

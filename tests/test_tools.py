@@ -245,8 +245,8 @@ class ToolPolicyTests(unittest.TestCase):
         self.assertEqual(manifest['folder'], 'workspace')
         self.assertEqual(manifest['tools'], {'read_text_file': 'allow', 'write_file': 'ask'})
         self.assertNotIn(str(self.root), json.dumps(manifest))
-        self.assertIn('你的能力有变化', manager.capability_event)
-        self.assertNotRegex(manager.capability_event_model, r'[\u3400-\u9fff]')
+        self.assertTrue(manager.capability_event.startswith('Capability update:'))
+        self.assertEqual(manager.capability_event_model, manager.capability_event)
         self.assertIn('ask lan first', FilesystemTools._description(manager, ['write_file']))
         manager.consume_capability_event()
         reopened = FilesystemTools.__new__(FilesystemTools)
@@ -255,6 +255,58 @@ class ToolPolicyTests(unittest.TestCase):
         reopened.capability_event = None
         reopened._record_capabilities(['read_text_file', 'write_file'])
         self.assertIsNone(reopened.capability_event)
+
+    def test_lab_capability_notice_is_english_complete_and_survives_reopen(self):
+        store = Store(self.root / 'data')
+
+        def manager():
+            result = FilesystemTools.__new__(FilesystemTools)
+            result.cfg = SimpleNamespace(id='fictional', memory=None)
+            result.store, result.folder_name = store, 'fictional_lab'
+            result.cap_path = self.root / 'data' / 'fictional' / 'capabilities.json'
+            result.capability_event = result.capability_event_model = None
+            result.enabled, result.tools, result.description = True, [], 'Tools. '
+            return result
+
+        first = manager()
+        first._record_capabilities(['lab_file_digest', 'move_lab_file'])
+        event = first.capability_event
+        manifest = json.loads(first.cap_path.read_text(encoding='utf-8'))
+        self.assertTrue(event.startswith('Capability update:'))
+        self.assertNotRegex(event, r'[\u3400-\u9fff]')
+        self.assertIn('lab_file_digest', event)
+        self.assertIn('move_lab_file', event)
+        self.assertIn('direct use only inside the lab folder', event)
+        self.assertEqual(manifest['pending_event'], event)
+        self.assertEqual(manifest['pending_event_model'], event)
+
+        reopened = manager()
+        reopened._record_capabilities(['lab_file_digest', 'move_lab_file'])
+        self.assertEqual(reopened.capability_event, event)
+        self.assertEqual(reopened.capability_event_model, event)
+
+        legacy = json.loads(first.cap_path.read_text(encoding='utf-8'))
+        legacy['pending_event'] = '你的能力有变化：旧版未送达通知。'
+        legacy['pending_event_model'] = 'Current capability update: fixture tools are available.'
+        first.cap_path.write_text(json.dumps(legacy), encoding='utf-8')
+        migrated = manager()
+        migrated._record_capabilities(['lab_file_digest', 'move_lab_file'])
+        self.assertTrue(migrated.capability_event.startswith('Capability update:'))
+        self.assertIn('lab_file_digest', migrated.capability_event)
+        self.assertEqual(migrated.capability_event_model, migrated.capability_event)
+
+        reopened.consume_capability_event()
+        changed = manager()
+        changed._record_capabilities(['lab_file_digest'])
+        self.assertIn('Removed move_lab_file', changed.capability_event)
+
+        manifest = json.loads(changed.cap_path.read_text(encoding='utf-8'))
+        manifest['tools']['lab_file_digest'] = 'ask'
+        manifest['pending_event'] = manifest['pending_event_model'] = None
+        changed.cap_path.write_text(json.dumps(manifest), encoding='utf-8')
+        permission_changed = manager()
+        permission_changed._record_capabilities(['lab_file_digest'])
+        self.assertIn('Changed lab_file_digest', permission_changed.capability_event)
 
     def test_existing_manifest_announces_send_message_once(self):
         store = Store(self.root / 'data')
@@ -269,7 +321,7 @@ class ToolPolicyTests(unittest.TestCase):
         m.cap_path.write_text(json.dumps({'version': 1, 'folder': 'workspace',
             'tools': {'read_text_file': 'allow'}, 'lab': False, 'pending_event': None}), encoding='utf-8')
         m._record_capabilities(['read_text_file'])
-        self.assertTrue(m.capability_event.startswith('你的能力有变化：新增 send_message'))
+        self.assertIn('Added send_message', m.capability_event)
         self.assertTrue(json.loads(m.cap_path.read_text(encoding='utf-8'))['messaging'])
         m.consume_capability_event()
         again = manager()
@@ -286,9 +338,9 @@ class ToolPolicyTests(unittest.TestCase):
         manager.consume_capability_event()
         manager.announce_autonomy()
         self.assertIn('send_message', manager.capability_event)
-        self.assertIn('最多三条', manager.capability_event)
-        self.assertIn('也可以不发', manager.capability_event)
-        self.assertNotRegex(manager.capability_event_model, r'[\u3400-\u9fff]')
+        self.assertIn('up to three chat messages per wake', manager.capability_event)
+        self.assertIn('or none', manager.capability_event)
+        self.assertEqual(manager.capability_event_model, manager.capability_event)
         manager.consume_capability_event()
         reopened = FilesystemTools.__new__(FilesystemTools)
         reopened.cfg, reopened.store, reopened.folder_name = manager.cfg, store, 'workspace'
@@ -307,8 +359,8 @@ class ToolPolicyTests(unittest.TestCase):
         manager._record_capabilities(['read_text_file'])
         manager.consume_capability_event()
         manager.announce_long_tasks()
-        self.assertIn('新增长期任务能力', manager.capability_event)
-        self.assertNotRegex(manager.capability_event_model, r'[\u3400-\u9fff]')
+        self.assertIn('long-task tools are available', manager.capability_event)
+        self.assertEqual(manager.capability_event_model, manager.capability_event)
         manager.consume_capability_event()
 
         reopened = FilesystemTools.__new__(FilesystemTools)
@@ -329,7 +381,7 @@ class ToolPolicyTests(unittest.TestCase):
             return m
         first = manager()
         first._record_capabilities(['read_text_file'])
-        self.assertIn('自然淡去', first.capability_event)
+        self.assertIn('memories now fade naturally', first.capability_event)
         self.assertTrue(json.loads(first.cap_path.read_text(encoding='utf-8'))['resident_memory'])
         first.consume_capability_event()
         second = manager()
@@ -426,14 +478,14 @@ max_result_bytes = 200
     def test_first_self_preview_shows_tools_and_capability_notice(self):
         tools = SimpleNamespace(
             tools=[SimpleNamespace(name='read_text_file', description='Read', inputSchema={})],
-            capability_event='你的能力有变化：现在可读测试文件夹。',
+            capability_event='Capability update: read access is available in the fictional test folder.',
             description='You can read files in workspace.')
         model = Mock()
         chat = Chat(self.cfg, self.store, self.budget, model, tools=tools)
         output = []
         run_chat(chat, Mock(side_effect=['/self', '/quit']), output.append)
-        self.assertIn('你的能力有变化', output[1])
-        self.assertIn('You can read files in workspace.', output[3])
+        self.assertNotIn('Capability update:', '\n'.join(output))
+        self.assertIn('You can read files in workspace.', '\n'.join(output))
         model.assert_not_called()
 
     def test_multi_step_parallel_calls_and_chat_log_roles(self):

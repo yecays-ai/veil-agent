@@ -5,6 +5,7 @@ Deleting is not offered to the model: /delete stays with the user.
 """
 from types import SimpleNamespace
 import json
+from datetime import datetime, timezone
 import hashlib
 import re
 import uuid
@@ -115,17 +116,18 @@ class NativeMemoryTools:
                 previous = row.get('memory_tools')
                 if previous != current:
                     names = ', '.join(name for name in current if name in NATIVE_TOOLS)
-                    event = (f'{self.memory.cfg.name} 新增记忆能力：' + names +
-                             '。trace 删除必须先经页面审批；自主活动中的删除会进入待删除栏目。')
+                    event = ('Capability update: new memory tools are available: ' + names +
+                             '. Deletion through trace requires explicit UI approval; requests made during '
+                             'autonomous activity remain pending for later approval.')
                     old = row.get('pending_event')
                     if not isinstance(old, str) or event not in old:
                         row['pending_event'] = (old + '\n' + event).strip() if old else event
-                    current_model = row.get('pending_event_model') or ''
-                    model_event = ('New memory tools are available: ' + names +
-                                   '. Deletion through trace requires explicit UI approval; requests made during '
-                                   'autonomous activity remain pending for later approval.')
-                    if model_event not in current_model:
-                        row['pending_event_model'] = (current_model + '\n' + model_event).strip()
+                    row['pending_event_model'] = row['pending_event']
+                    updates = row.get('capability_updates')
+                    updates = updates if isinstance(updates, list) else []
+                    if not updates or not isinstance(updates[-1], dict) or updates[-1].get('text') != event:
+                        row['capability_updates'] = [*updates[-20:], {
+                            'at': datetime.now(timezone.utc).isoformat(), 'text': event}]
                     row['memory_tools'] = current
                     save_capabilities(path, row)
                 if hasattr(files, 'capability_event'):
@@ -679,6 +681,10 @@ class ToolSet:
     @property
     def capability_event_model(self):
         return getattr(self.files, 'capability_event_model', None)
+
+    @property
+    def capability_record(self):
+        return getattr(self.files, 'capability_record', None)
 
     @property
     def startup_notice(self):

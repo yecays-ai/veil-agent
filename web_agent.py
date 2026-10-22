@@ -46,6 +46,7 @@ class Hub:
         self.pending = None       # event id of the approval being asked, else None
         self.submissions = OrderedDict()  # recent request ids -> normalized text digest
         self.autonomy = None
+        self.capability_record = lambda: None
         self.autonomy_busy = False
         self.autonomy_interrupted = threading.Event()
 
@@ -197,6 +198,7 @@ class Hub:
                     'stopping': self.stopping and not self.stopped, 'stopped': self.stopped,
                     'name': self.name, 'pending': self.pending, 'ready': self.ready,
                     'activity_enabled': self.activity.enabled(),
+                    'capability_record': self.capability_record(),
                     'memory_panel_url': self.memory_url, **autonomy}
 
 
@@ -322,6 +324,7 @@ def serve_chat(chat, hub):
     for message in chat.history_events:
         hub.push(message['role'], message['content'], time=message['time'], history=True)
     hub.autonomy = AutonomyController(chat, hub)
+    hub.capability_record = lambda: getattr(chat.tools, 'capability_record', None)
     try:
         run_chat(chat, input_fn=hub.input_fn, output=hub.output, drop=lambda: False,
                  activity=hub.activity, autonomy=hub.autonomy)

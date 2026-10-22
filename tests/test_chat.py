@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from veil_agent import (Chat, Budget, Store, build_self_description, estimate_request_tokens,
-                        load_character, make_model, model_tool_result, run_chat, UserError)
+                        load_character, make_model, model_tool_result, run_chat, UserError, RequestFailed)
 
 
 def sent_facts(messages):
@@ -88,18 +88,92 @@ output_cny_per_million = "8"
             Chat(self.cfg, self.store, self.budget, self.model)
         self.assertEqual(self.store.read('test/chat.jsonl'), before)
 
-    def test_capability_notice_keeps_chinese_terminal_copy_and_english_model_copy(self):
+    def test_capability_notice_uses_the_same_english_event_for_model_and_persistent_record(self):
         tools = SimpleNamespace(tools=[], description='Tools. ',
-            capability_event='你的能力有变化：本机测试通知。',
+            capability_event=('Capability update: added lab_file_digest and move_lab_file. '
+                              'Both tools are limited to the lab folder and cannot overwrite or delete files.'),
             capability_event_model='Current capability update: fixture tools are available.',
             consume_capability_event=Mock())
         chat = Chat(self.cfg, self.store, self.budget, self.model, tools=tools)
         chat.send('hello')
         messages = self.model.call_args.args[0]
-        notice = next(item['content'] for item in messages
-                      if item['role'] == 'system' and 'Current capability update:' in item['content'])
-        self.assertNotRegex(notice, r'[\u3400-\u9fff]')
-        self.assertEqual(self.store.read('test/tools.jsonl')[0]['text'], tools.capability_event)
+        notice = next(item['content'].removeprefix('Program-generated capability update: ')
+                      for item in messages if item['role'] == 'system'
+                      and item['content'].startswith('Program-generated capability update: '))
+        self.assertEqual(notice, tools.capability_event)
+        self.assertEqual(self.store.read('test/tools.jsonl'), [])
+
+    def test_failed_capability_delivery_stays_pending_then_delivers_once(self):
+        notice = ('Capability update: added lab_file_digest and move_lab_file. Both are direct-use only '
+                  'inside the lab folder; they cannot overwrite, delete, or run scripts.')
+        tools = SimpleNamespace(tools=[], description='Tools. ', capability_event=notice,
+                                consume_capability_event=None)
+        tools.consume_capability_event = Mock(side_effect=lambda: setattr(tools, 'capability_event', None))
+        failing = Mock(side_effect=RuntimeError('fictional provider outage'))
+        chat = Chat(self.cfg, self.store, self.budget, failing, tools=tools)
+        with self.assertRaises(RequestFailed):
+            chat.send('first fictional request')
+        self.assertEqual(tools.capability_event, notice)
+        tools.consume_capability_event.assert_not_called()
+        self.assertEqual(self.store.read('test/tools.jsonl'), [])
+
+        delivered = Mock(return_value=('Fictional reply', 100, 20, 0))
+        chat.model = delivered
+        chat.send('retry fictional request')
+        prompt = delivered.call_args.args[0]
+        self.assertIn(notice, [item['content'].removeprefix('Program-generated capability update: ')
+                               for item in prompt if item['role'] == 'system'])
+        tools.consume_capability_event.assert_called_once_with()
+        self.assertEqual(self.store.read('test/tools.jsonl'), [])
+
+        chat.send('later fictional request')
+        later = delivered.call_args.args[0]
+        self.assertNotIn(notice, [item['content'] for item in later])
+        tools.consume_capability_event.assert_called_once_with()
+
+    def test_autonomous_activity_does_not_consume_normal_chat_capability_event(self):
+        notice = 'Capability update: added lab_file_digest (direct use only inside the lab folder).'
+        tools = SimpleNamespace(tools=[], description='Tools. ', capability_event=notice,
+                                consume_capability_event=None)
+        tools.consume_capability_event = Mock(side_effect=lambda: setattr(tools, 'capability_event', None))
+        model = Mock(return_value=('Fictional reply', 100, 20, 0))
+        chat = Chat(self.cfg, self.store, self.budget, model, tools=tools)
+        chat.send('fictional autonomous wake', autonomy=True)
+        tools.consume_capability_event.assert_not_called()
+        self.assertEqual(self.store.read('test/tools.jsonl'), [])
+
+        chat.send('fictional normal chat')
+        prompt = model.call_args.args[0]
+        self.assertIn(notice, [item['content'].removeprefix('Program-generated capability update: ')
+                               for item in prompt if item['role'] == 'system'])
+        tools.consume_capability_event.assert_called_once_with()
+
+    def test_pending_capability_event_survives_restart_and_reaches_model(self):
+        from tools_agent import FilesystemTools
+
+        def tools_after_startup():
+            tools = FilesystemTools.__new__(FilesystemTools)
+            tools.cfg, tools.store, tools.folder_name = self.cfg, self.store, 'fictional_lab'
+            tools.cap_path = self.store.root / self.cfg.id / 'capabilities.json'
+            tools.capability_event = tools.capability_event_model = None
+            tools.enabled, tools.tools, tools.description = True, [], 'Tools. '
+            tools._record_capabilities(['lab_file_digest', 'move_lab_file'])
+            return tools
+
+        tools_after_startup()  # The event is saved before the simulated process restart.
+        reopened_tools = tools_after_startup()
+        model = Mock(return_value=('Fictional reply after restart', 100, 20, 0))
+        Chat(self.cfg, self.store, self.budget, model, tools=reopened_tools).send('fictional first chat after restart')
+        prompt = model.call_args.args[0]
+        notice = next(item['content'].removeprefix('Program-generated capability update: ')
+                      for item in prompt if item['role'] == 'system'
+                      and item['content'].startswith('Program-generated capability update: '))
+        self.assertIn('lab_file_digest', notice)
+        self.assertIn('move_lab_file', notice)
+        self.assertTrue(any(item['content'].startswith('CAPABILITY RECORD')
+                            and 'lab_file_digest' in item['content'] and 'move_lab_file' in item['content']
+                            for item in prompt if item['role'] == 'system'))
+        self.assertIsNone(reopened_tools.capability_event)
 
     def test_tool_failures_pass_through_while_memory_data_is_preserved(self):
         rejected = 'The task status is invalid; choose active, paused, blocked, or completed.'

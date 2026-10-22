@@ -79,6 +79,11 @@ output_cny_per_million = "8"
         self.assertEqual(event['kind'], 'reset')
         self.assertIn('旧聊天保留', event['text'])
 
+    def test_snapshot_exposes_the_same_capability_record_used_by_peter(self):
+        record = 'CAPABILITY RECORD\n2026-10-22T00:00:00+00:00: Capability update: added fictional_tool.'
+        self.hub.capability_record = lambda: record
+        self.assertEqual(self.hub.snapshot(0)['capability_record'], record)
+
     def test_submission_deduplication_window_is_bounded(self):
         hub = Hub('Test', ActivityState(self.store.root / 'test' / 'other-state.json'))
         with patch('web_agent.MAX_SUBMISSIONS', 2):

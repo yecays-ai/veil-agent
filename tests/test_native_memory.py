@@ -203,7 +203,7 @@ class NativeMemoryTests(unittest.TestCase):
         hold_event = next(row for row in rows if row.get('tool') == 'hold')
         self.assertEqual((hold_event['tool'], hold_event['state']), ('hold', '成功'))
         capability_events = [row for row in rows if row.get('kind') == 'capability']
-        self.assertEqual(len(capability_events), 1)
+        self.assertEqual(capability_events, [])
         costs = self.store.read('costs.jsonl')
         self.assertTrue(any(c.get('accounting') == 'ombre-model-estimate' for c in costs))
         self.assertTrue(any(c.get('accounting') == 'embedding-estimate' for c in costs))

@@ -96,8 +96,8 @@ class CapabilityTransactionTests(unittest.TestCase):
         row = self.read()
         self.assertTrue(row['autonomy_announced'])
         self.assertTrue(row['long_tasks_announced'])
-        self.assertIn('自主活动', row['pending_event'])
-        self.assertIn('长期任务', row['pending_event'])
+        self.assertIn('autonomous activity', row['pending_event'])
+        self.assertIn('long-task tools', row['pending_event'])
         self.assertTrue(other.enabled)
 
     def test_web_activity_toggle_and_chat_notice_do_not_deadlock(self):
@@ -127,7 +127,9 @@ class CapabilityTransactionTests(unittest.TestCase):
         row = self.read()
         self.assertEqual(row['memory_tools'], ['hold'])
         self.assertEqual(row['tools']['write_file'], 'ask')
-        self.assertIn('新增记忆能力', row['pending_event'])
+        self.assertIn('new memory tools are available', row['pending_event'])
+        self.assertTrue(any('new memory tools are available' in update.get('text', '')
+                            for update in row['capability_updates']))
         self.assertEqual(self.manager.capability_event, row['pending_event'])
 
     def test_failed_replace_keeps_original_and_stops_tools(self):

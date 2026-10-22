@@ -360,7 +360,7 @@ persistent_append_file = "growth-journal.md"
     def test_capability_open_notice_is_delivered_once_and_instructions_are_complete(self):
         cap = json.loads(self.tools.cap_path.read_text(encoding='utf-8'))
         self.assertEqual(cap['lab'], {'folder': 'lab', 'max_write_bytes': 200000})
-        self.assertIn('你自己的实验室 `lab/` 开放了', self.tools.capability_event)
+        self.assertIn('Your lab folder "lab/" is available', self.tools.capability_event)
         self.tools.consume_capability_event()
         self.assertIsNone(self.open_tools().capability_event)
         for text in ('lab/research/v1.md', 'plan B', 'fully read', 'head/tail', 'independent', 'script allowlist is empty'):
