@@ -1,7 +1,8 @@
 # 交接
 
-- 2026-10-22 Claude：069 `memory_agent.MCP._serve` 对连接被拒（未发送）的调用在验证重启后补发一次，只在所有失败都证明未送达时补发，补发失败仍记为结果不明；成功后清零 `recovery_streak`（`recovery_count` 仍为累计次数）；测试在 `tests/test_mcp_recovery.py`。注意 lan 机器上 Ombre 运行在 Codex 运行时的 Python（`.cache\codex-runtimes\...`）上，Codex 更新或清理运行时可能让 Ombre 起不来。
-- 2026-10-22 Codex：工单 069 分支 `ticket/069-breath-search-diagnostics`，基于 main `12fdb3586f91614cb38a0144344aebedda04d513`。本单为 `breath_search` 的 `MemoryToolError/unknown` 补充安全失败阶段诊断；Ombre 根因尚未证明，未读取任何私人诊断、记忆或密钥。
-- `memory_agent.MCP` 现在把固定阶段 `http_session`、`mcp_session`、`mcp_initialize`、`mcp_tool` 通过原因链保留到 `MemoryToolError`；`Memory.retrieval_failure()` 同步将其写入角色私有 `diagnostics.jsonl` 并显示安全提示。未知检索仍只恢复底层服务，不重放；写入账本与 062 的结果不明保护未改。
-- 已用假数据验证：MCP 工具执行故障保留 `mcp_tool`，检索侧 MCP 初始化故障保留 `mcp_initialize`，64 项 `test_mcp_recovery` + `test_memory` 通过。下一窗口第一步：运行完整离线套件，审阅差异后提交、推 PR、请求 Cubic 并核对最新 CI。
-- 注意：当前 main 上 068 的真实 Windows 验证 PR #104 仍打开，不能混入或修改；本单只处理 `breath_search` 的安全阶段诊断。
+- 当前目标：处理 069 Ombre 重启后自动记忆检索仍失败。PR #107 由诊断阶段和故障表现定位到恢复后没有补发确定未送达的调用；未把私人聊天或记忆内容写入仓库。
+- PR #107 在 `ticket/069-retry-unsent-memory-calls`。代码仅在连接被拒且 Ombre 重启经验证成功后补发一次；异常组的所有成员都必须证明未送达。可能已到达服务的调用不重放，补发失败仍返回 `unknown` 以保留结果不明写入保护。健康回复清零连续恢复计数，累计计数保留。
+- Cubic 的两项实质意见已在代码提交 `7fe426a` 修复，内联线程已解决。STATUS/HANDOFF 文档更新后会产生新 head；CI 需按最新 head 重新核对。
+- CI 工作流覆盖 Windows/Ubuntu、Python 3.11/3.12，运行隔离 Ombre 生命周期恢复及完整离线测试。当前执行结果以最新 PR head 的 GitHub 检查为准。
+- 本机一次 MCP 测试在测试构造阶段因当前受限运行时无法创建 Windows asyncio Proactor socketpair 而卡住；这不是 Ombre 检索的产品结果，也不能替代 CI。不要重复跑这个受阻路径。
+- 下一步：确认最新 head 的必需 CI、Cubic 实质意见和实际分支保护；全部通过后合并 PR #107。合并后只请 Lan 做正常聊天、已存记忆回忆、重启后继续聊天的体验验收，不要求她制造故障或传聊天/记忆正文。
