@@ -58,6 +58,7 @@ class MCP:
         self.url, self.token = url, token
         self.recovery = recovery
         self.recovery_count = 0
+        self.recovery_streak = 0  # recoveries since the last healthy reply
         self.diagnostic = None
         self.closed = False
         self.state_lock = threading.Lock()
@@ -181,9 +182,10 @@ class MCP:
         return '\n'.join(c.text for c in response.content if hasattr(c, 'text'))
 
     async def _recover(self, name, attempt):
-        if self.recovery is None or self.recovery_count >= 2:
+        if self.recovery is None or self.recovery_streak >= 2:
             return False
         self.recovery_count += 1
+        self.recovery_streak += 1
         try:
             recovery_result = await asyncio.to_thread(self.recovery)
         except Exception as exc:
@@ -254,7 +256,7 @@ class MCP:
                                            else getattr(exc, 'stage', None))) from exc
                             if self.recovery is not None and not restored:
                                 raise MemoryToolError('connection', stage='recovery') from exc
-                    self.recovery_count = 0  # A healthy reply restores the recovery allowance.
+                    self.recovery_streak = 0  # A healthy reply restores the recovery allowance.
                     result.set_result(text)
             except TimeoutError as exc:
                 self._diagnose(name, exc, 0)
