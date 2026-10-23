@@ -146,7 +146,7 @@ const fromChat = event => chat && !chat.isDestroyed() && event.sender === chat.w
 function allowedChatRequest(pathname, method) {
   if (method === 'GET') return /^\/api\/events\?after=\d+$/.test(pathname);
   return method === 'POST' && ['/api/send', '/api/media', '/api/voice', '/api/voice/retry',
-    '/api/approve', '/api/activity', '/api/exit'].includes(pathname);
+    '/api/transcribe', '/api/approve', '/api/activity', '/api/exit'].includes(pathname);
 }
 ipcMain.handle('chat:request', async (event, pathname, body, timeoutMs) => {
   if (!fromChat(event) || typeof pathname !== 'string' || !allowedChatRequest(pathname, body ? 'POST' : 'GET'))

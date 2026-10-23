@@ -9,10 +9,13 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import os
 import queue
 import re
 import secrets
+import socket
+import ssl
 import sys
 import threading
 import time
@@ -21,7 +24,7 @@ from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
-from urllib.request import Request, urlopen
+from urllib.request import Request, getproxies, urlopen
 from urllib.error import HTTPError, URLError
 
 from veil_agent import (ROOT, AUTONOMY_WAKE, MAX_PHOTO_BYTES, ActivityState, Budget, Chat, Store, UserError,
@@ -51,6 +54,38 @@ VOICE_TYPES = {
 }
 VOICE_MIME = 'audio/mpeg'
 MAX_GENERATED_VOICE_BYTES = 25 * 1024 * 1024
+VOICE_TRANSPORT_ERRORS = {
+    'dns': '语音识别 DNS 解析失败（socket.gaierror），请检查本机网络或 DNS。',
+    'tls_certificate': '语音识别 TLS 证书验证失败，请检查系统证书或 HTTPS 检查代理。',
+    'tls': '语音识别 TLS 握手失败，请检查系统时间、证书或 HTTPS 代理。',
+    'proxy': '语音识别代理连接失败，请检查代理设置。',
+    'timeout': '语音识别请求超时，录音已保留；可以稍后重试。',
+    'connection_refused': '语音识别连接被拒绝，请检查网络或代理。',
+    'socket': '语音识别 socket 连接失败，请检查本机网络。',
+    'transport': '语音识别传输失败，请查看 Agent 日志中的异常类型。',
+}
+logger = logging.getLogger(__name__)
+
+
+def voice_transport_category(exc):
+    """Classify urllib's wrapped transport exception without exposing credentials."""
+    reason = exc.reason if isinstance(exc, URLError) else exc
+    detail = str(reason).lower()
+    if isinstance(reason, ssl.SSLCertVerificationError):
+        return 'tls_certificate', reason
+    if isinstance(reason, ssl.SSLError):
+        return 'tls', reason
+    if 'proxy' in detail or 'tunnel' in detail or (getproxies().get('https') and isinstance(reason, OSError)):
+        return 'proxy', reason
+    if isinstance(reason, socket.gaierror):
+        return 'dns', reason
+    if isinstance(reason, (TimeoutError, socket.timeout)):
+        return 'timeout', reason
+    if isinstance(reason, ConnectionRefusedError) or getattr(reason, 'winerror', None) == 10061:
+        return 'connection_refused', reason
+    if isinstance(reason, OSError):
+        return 'socket', reason
+    return 'transport', reason
 
 
 def valid_media_row(row):
@@ -299,15 +334,27 @@ class Hub:
                 return None, '录音不存在或已损坏。'
             path = self.media_root / row['filename']
             mime, name = row['mime'], row['filename']
+        try:
+            raw = path.read_bytes()
+        except OSError:
+            error = '录音文件无法读取，录音已保留；可以重试识别。'
+            self._record_voice_result(media_id, '', error)
+            return None, error
+        transcript, error = self._transcribe_voice_bytes(raw, mime, name)
+        self._record_voice_result(media_id, transcript or '', error or '')
+        return transcript, error
+
+    def transcribe_voice_bytes(self, raw, mime, name='dictation'):
+        """Transcribe an in-memory dictation without retaining it as a voice message."""
+        return self._transcribe_voice_bytes(raw, mime, name)
+
+    def _transcribe_voice_bytes(self, raw, mime, name):
         from dotenv import dotenv_values
         key = (dotenv_values(Path(ROOT) / '.env', interpolate=False, encoding='utf-8-sig')
                .get('EMBED_API_KEY') or '').strip()
         if not key:
-            error = '语音识别密钥未配置。'
-            self._record_voice_result(media_id, '', error)
-            return None, error
+            return None, '语音识别密钥未配置。'
         try:
-            raw = path.read_bytes()
             boundary = '----veil-' + secrets.token_hex(12)
             body = bytearray()
             def field(label, value):
@@ -325,18 +372,23 @@ class Hub:
             if not transcript:
                 raise ValueError('empty transcript')
         except HTTPError as exc:
-            error = '语音识别服务拒绝了请求，请检查密钥后重试。' if exc.code in (401, 403) else '语音识别服务暂时不可用，请稍后重试。'
-            self._record_voice_result(media_id, '', error)
+            logger.warning('SenseVoice HTTP failure: category=%s status=%s',
+                           'proxy' if exc.code == 407 else 'http', exc.code)
+            error = ('语音识别代理认证失败（HTTP 407），请检查代理设置。' if exc.code == 407 else
+                     f'语音识别服务返回 HTTP {exc.code}，请检查密钥或服务权限。'
+                     if exc.code in (401, 403) else f'语音识别服务返回 HTTP {exc.code}，请稍后重试。')
             return None, error
-        except (URLError, TimeoutError):
-            error = '网络连接失败，录音已保留；联网后可以重试识别。'
-            self._record_voice_result(media_id, '', error)
+        except (URLError, TimeoutError, socket.timeout) as exc:
+            category, reason = voice_transport_category(exc)
+            logger.warning('SenseVoice transport failure: category=%s exception=%s errno=%s winerror=%s',
+                           category, type(reason).__name__, getattr(reason, 'errno', None),
+                           getattr(reason, 'winerror', None))
+            error = VOICE_TRANSPORT_ERRORS[category]
             return None, error
-        except (OSError, ValueError, UnicodeError, json.JSONDecodeError):
-            error = '没有识别出文字，录音已保留；可以重试识别。'
-            self._record_voice_result(media_id, '', error)
+        except (OSError, ValueError, UnicodeError, json.JSONDecodeError) as exc:
+            logger.warning('SenseVoice response failure: exception=%s', type(exc).__name__)
+            error = 'SenseVoice 返回内容无法解析或没有文字，录音已保留；可以重试识别。'
             return None, error
-        self._record_voice_result(media_id, transcript, '')
         return transcript, None
 
     def start_voice_transcription(self, media_id):
@@ -863,6 +915,27 @@ def make_handler(hub, token):
                     self._send(500, {'error': 'image storage failed'})
                 else:
                     self._send(201, {'ok': True, 'media': media})
+                return
+            if url.path == '/api/transcribe':
+                try:
+                    length = int(self.headers.get('Content-Length') or 0)
+                    if not 0 < length <= MAX_VOICE_UPLOAD_BYTES * 2:
+                        raise ValueError
+                    body = json.loads(self.rfile.read(length))
+                    if not isinstance(body, dict):
+                        raise ValueError
+                    mime, encoded = body.get('mime'), body.get('data')
+                    if not isinstance(mime, str) or mime not in VOICE_TYPES or not isinstance(encoded, str):
+                        raise ValueError
+                    raw = base64.b64decode(encoded, validate=True)
+                    if not raw or len(raw) > MAX_VOICE_UPLOAD_BYTES:
+                        raise ValueError
+                except (ValueError, TypeError, base64.binascii.Error):
+                    self._send(400, {'error': 'invalid voice'})
+                    return
+                transcript, error = hub.transcribe_voice_bytes(raw, mime, 'dictation' + VOICE_TYPES[mime])
+                self._send(200, {'ok': True, 'transcript': transcript or '',
+                                 'transcription_error': error or ''})
                 return
             if url.path == '/api/voice':
                 try:
