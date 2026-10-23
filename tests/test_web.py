@@ -339,27 +339,39 @@ output_cny_per_million = "8"
             self.assertFalse(manager.announce_photo_input())
         self.assertTrue(manager.enabled)
 
-    def test_voice_is_saved_transcribed_and_reaches_model_as_voice_text(self):
+    def test_voice_is_sent_before_background_transcription_and_reaches_model_as_voice_text(self):
         raw = b'\x1a\x45\xdf\xa3fictional webm audio'
+        started, release = threading.Event(), threading.Event()
         class Response:
             def __enter__(self): return self
             def __exit__(self, *_): return False
             def read(self): return b'{"text":"hello Peter"}'
+        def transcribe(*_args, **_kwargs):
+            started.set()
+            if not release.wait(5):
+                raise TimeoutError('fictional transcription gate timed out')
+            return Response()
 
         def scenario(result):
             self.assertTrue(self.wait(lambda: self.hub.ready and not self.hub.busy))
             body = {'mime': 'audio/webm', 'name': 'voice.webm',
-                    'data': base64.b64encode(raw).decode()}
-            with patch('dotenv.dotenv_values', return_value={'EMBED_API_KEY': 'fictional'}), patch('web_agent.urlopen', return_value=Response()):
+                    'data': base64.b64encode(raw).decode(), 'send_first': True}
+            with patch('dotenv.dotenv_values', return_value={'EMBED_API_KEY': 'fictional'}), patch('web_agent.urlopen', side_effect=transcribe):
                 status, uploaded = self.call('/api/voice', body)
-            self.assertEqual(status, 200)
-            self.assertEqual(uploaded['transcript'], 'hello Peter')
+                self.assertEqual(status, 202)
+                self.assertEqual(uploaded['media']['transcript'], '')
+                self.assertNotIn('transcript', uploaded)
+                self.assertTrue(started.wait(2), 'background transcription did not start')
+                status, _ = self.call('/api/send', {'text': '[voice message]',
+                                                    'request_id': 'voice-send-' + uploaded['media']['id'],
+                                                    'media': {'id': uploaded['media']['id']}})
+                self.assertEqual(status, 200)
+                self.assertTrue(self.wait(lambda: self.hub.snapshot(0)['transcribing_voice']))
+                release.set()
+                self.assertTrue(self.wait(lambda: any(event['kind'] == 'assistant'
+                                                     for event in self.hub.snapshot(0)['events'])))
             media = uploaded['media']; result['media'] = media
-            status, _ = self.call('/api/send', {'text': '[voice message] hello Peter',
-                                                 'media': {'id': media['id']}})
-            self.assertEqual(status, 200)
-            self.assertTrue(self.wait(lambda: any(event['kind'] == 'assistant'
-                                                 for event in self.hub.snapshot(0)['events'])))
+            self.assertTrue(self.wait(lambda: not self.hub.busy))
 
         result = self.run_loop(scenario)
         media = result['media']
@@ -369,6 +381,21 @@ output_cny_per_million = "8"
         self.assertEqual(saved['media']['kind'], 'voice')
         sent = next(item for item in self.model.call_args.args[0] if item['role'] == 'user')
         self.assertEqual(sent['content'], '[voice message] hello Peter')
+
+    def test_voice_upload_keeps_the_existing_synchronous_web_response_by_default(self):
+        raw = b'\x1a\x45\xdf\xa3fictional webm audio'
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self, *_): return False
+            def read(self): return b'{"text":"web transcript"}'
+        with patch('dotenv.dotenv_values', return_value={'EMBED_API_KEY': 'fictional'}), patch(
+                'web_agent.urlopen', return_value=Response()):
+            status, result = self.call('/api/voice', {
+                'mime': 'audio/webm', 'name': 'voice.webm',
+                'data': base64.b64encode(raw).decode()})
+        self.assertEqual(status, 200)
+        self.assertEqual(result['transcript'], 'web transcript')
+        self.assertEqual(result['media']['transcript'], 'web transcript')
 
     def test_failed_voice_transcription_is_durable_and_retryable_without_sending(self):
         raw = b'\x1a\x45\xdf\xa3fictional webm audio'
@@ -397,6 +424,63 @@ output_cny_per_million = "8"
         self.assertEqual(result['transcript'], 'hello after retry')
         self.assertEqual(result['media']['transcript'], 'hello after retry')
         self.assertEqual(result['media']['transcription_error'], '')
+
+    def test_voice_retry_reuses_an_active_background_transcription(self):
+        media = self.hub.save_voice('audio/webm', b'\x1a\x45\xdf\xa3fictional voice', 'voice.webm')
+        started, release, retry_started = threading.Event(), threading.Event(), threading.Event()
+        retry_result = []
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self, *_): return False
+            def read(self): return b'{"text":"one transcription only"}'
+        def transcribe(*_args, **_kwargs):
+            started.set()
+            if not release.wait(5):
+                raise TimeoutError('fictional transcription gate timed out')
+            return Response()
+        with patch('dotenv.dotenv_values', return_value={'EMBED_API_KEY': 'fictional'}), patch(
+                'web_agent.urlopen', side_effect=transcribe) as request:
+            self.hub.start_voice_transcription(media['id'])
+            self.assertTrue(started.wait(2), 'background transcription did not start')
+            def retry():
+                retry_started.set()
+                retry_result.append(self.hub.retry_voice_transcription(media['id']))
+            retry_thread = threading.Thread(target=retry)
+            retry_thread.start()
+            self.assertTrue(retry_started.wait(2))
+            release.set()
+            retry_thread.join(5)
+            self.assertFalse(retry_thread.is_alive(), 'retry waited on a different transcription job')
+            request.assert_called_once()
+        self.assertEqual(retry_result, [('one transcription only', None)])
+
+    def test_background_voice_transcription_has_a_bounded_worker_limit(self):
+        medias = [self.hub.save_voice('audio/webm', b'\x1a\x45\xdf\xa3fictional voice', f'voice-{i}.webm')
+                  for i in range(5)]
+        all_started, release = threading.Event(), threading.Event()
+        started_count, started_lock = [0], threading.Lock()
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self, *_): return False
+            def read(self): return b'{"text":"bounded worker result"}'
+        def transcribe(*_args, **_kwargs):
+            with started_lock:
+                started_count[0] += 1
+                if started_count[0] == 4:
+                    all_started.set()
+            if not release.wait(5):
+                raise TimeoutError('fictional transcription gate timed out')
+            return Response()
+        with patch('dotenv.dotenv_values', return_value={'EMBED_API_KEY': 'fictional'}), patch(
+                'web_agent.urlopen', side_effect=transcribe) as request:
+            jobs = [self.hub.start_voice_transcription(media['id']) for media in medias[:4]]
+            self.assertTrue(all_started.wait(5), 'four background workers did not start')
+            rejected = self.hub.start_voice_transcription(medias[4]['id'])
+            self.assertIsNone(rejected, 'excess work must be deferred for explicit retry')
+            release.set()
+            self.assertTrue(all(job.wait(5) for job in jobs), 'background worker did not finish')
+            self.assertEqual(request.call_count, 4)
+        self.assertIn('任务较多', self.hub.media_info(medias[4]['id'])['transcription_error'])
 
     def test_failed_chat_save_restores_voice_as_retryable_and_never_claims_delivery(self):
         raw = b'\x1a\x45\xdf\xa3fictional webm audio'

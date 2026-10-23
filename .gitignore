@@ -25,4 +25,5 @@ desktop/dist/
 desktop/.npm-cache/
 desktop/test-output/
 desktop/.build/
+desktop/.runtime-data/
 

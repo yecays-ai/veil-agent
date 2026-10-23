@@ -1,161 +1,233 @@
 'use strict';
-// Runs the actual Electron windows against fictional HTTP data, never a real Agent.
-const { app, BrowserWindow, Menu, session } = require('electron');
+// Windows Electron smoke: exercise local desktop UI with fictional Agent APIs and media.
+const { app, BrowserWindow } = require('electron');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
 const http = require('node:http');
 const wait = async (predicate, message) => {
-  const end = Date.now() + 15000;
+  const end = Date.now() + 20000;
   while (Date.now() < end) { if (await predicate()) return; await new Promise(r => setTimeout(r, 80)); }
-  throw new Error(message);
+  throw new Error(typeof message === 'function' ? await message() : message);
 };
-let temp, server;
-const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1); }, 50000);
+let temp, server, mediaPermission;
+function wavFixture() {
+  const rate=8000,count=8000,data=Buffer.alloc(count*2),wav=Buffer.alloc(44+data.length);
+  for(let i=0;i<count;i++)data.writeInt16LE(Math.round(Math.sin(2*Math.PI*440*i/rate)*12000),i*2);
+  wav.write('RIFF',0);wav.writeUInt32LE(36+data.length,4);wav.write('WAVEfmt ',8);wav.writeUInt32LE(16,16);
+  wav.writeUInt16LE(1,20);wav.writeUInt16LE(1,22);wav.writeUInt32LE(rate,24);wav.writeUInt32LE(rate*2,28);
+  wav.writeUInt16LE(2,32);wav.writeUInt16LE(16,34);wav.write('data',36);wav.writeUInt32LE(data.length,40);data.copy(wav,44);
+  return wav;
+}
+const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1); }, 70000);
 (async () => {
   temp = await fs.mkdtemp(path.join(os.tmpdir(), 'veil-ui-smoke-'));
   app.setPath('userData', temp);
   await fs.writeFile(path.join(temp, 'desktop.json'), JSON.stringify({ root: temp, size: 320 }));
+  const token = 'fictional_token_123456789';
+  let nextId = 3, pending = null, sends = 0, approvals = 0, images = 0, imageSendAttempts = 0, voices = 0, failVoiceUploadOnce = false;
+  const requests = [], approvalBodies = [];
+  const media = new Map();
+  const voiceFixture=wavFixture();
+  media.set('fictional-reply.wav',{id:'reply',filename:'fictional-reply.wav',type:'audio/wav',bytes:voiceFixture});
   const events = [
     { id: 1, kind: 'assistant', text: 'Fictional saved history', history: true, time: new Date().toISOString() },
-    { id: 2, kind: 'assistant', text: 'Fictional saved voice', history: true,
-      media: { id: 'fictional-voice', filename: 'fictional-voice.mp3', mime: 'audio/mpeg', name: 'voice message' },
-      time: new Date().toISOString() },
+    { id: 2, kind: 'assistant', text: 'Fictional spoken reply', media: { id: 'reply', filename: 'fictional-reply.wav', mime: 'audio/wav' }, history: true, time: new Date().toISOString() }
   ];
-  let sends = 0, imageUploads = 0, imageAttempts = 0, imageSends = 0, approvals = 0, pending = null;
-  const token = 'fictional_token_123456789';
-  const validPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
+  const json = (res, value, status = 200) => { res.statusCode = status; res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(value)); };
+  const readBody = async req => { let raw = ''; for await (const part of req) raw += part; return JSON.parse(raw); };
   server = http.createServer(async (req, res) => {
-    const url = new URL(req.url, 'http://localhost');
-    if (url.pathname === '/') {
-      res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      res.end(await fs.readFile(path.join(__dirname, '../../web/index.html'))); return;
-    }
-    if (url.pathname === '/media/fictional-image.png') {
+    const url = new URL(req.url, 'http://127.0.0.1');
+    requests.push(url.pathname);
+    if (url.pathname.startsWith('/media/')) {
       assert.equal(url.searchParams.get('t'), token);
-      res.setHeader('Content-Type', 'image/png'); res.end(validPng); return;
+      const item = media.get(decodeURIComponent(url.pathname.slice('/media/'.length)));
+      if (!item) { res.statusCode = 404; res.end(); return; }
+      res.setHeader('Content-Type', item.type); res.end(item.bytes); return;
     }
-    if (url.pathname === '/media/fictional-voice.mp3') {
-      assert.equal(url.searchParams.get('t'), token);
-      res.setHeader('Content-Type', 'audio/mpeg'); res.end(Buffer.from('ID3fictional')); return;
-    }
-    assert.equal(req.headers['x-token'], token);
-    res.setHeader('Content-Type', 'application/json');
+    assert.equal(req.headers['x-token'], token, 'Agent API requests must keep the auth header');
     if (url.pathname === '/api/events') {
-      res.end(JSON.stringify({ name: 'Fictional Agent', events: events.filter(e => e.id > Number(url.searchParams.get('after') || 0)),
+      json(res, { name: 'Fictional Agent', events: events.filter(e => e.id > Number(url.searchParams.get('after') || 0)),
         busy: false, ready: true, stopped: false, stopping: false, pending,
-        memory_panel_url: 'http://127.0.0.1:1/dashboard' }));
-    } else if (url.pathname === '/api/media') {
-      let raw = ''; for await (const chunk of req) raw += chunk;
-      const body = JSON.parse(raw); assert.equal(body.mime, 'image/jpeg');
-      assert.equal(Buffer.from(body.data, 'base64').subarray(0, 3).equals(Buffer.from([0xFF, 0xD8, 0xFF])), true);
-      imageUploads++;
-      res.statusCode = 201; res.end(JSON.stringify({ ok: true, media: { id: 'fictional-image', filename: 'fictional-image.png', mime: 'image/png', name: 'fictional.png' } }));
+        memory_panel_url: 'http://127.0.0.1:1/dashboard', activity_enabled: false });
     } else if (url.pathname === '/api/send') {
-      let raw = ''; for await (const chunk of req) raw += chunk;
-      const body = JSON.parse(raw);
-      if (body.media?.id === 'fictional-image') {
-        imageAttempts++; assert.equal(body.text, '[图片]');
-        if (imageAttempts === 1) { res.statusCode = 409; res.end(JSON.stringify({ error: 'busy' })); return; }
-        imageSends++;
-        events.push({ id: 5, kind: 'user', text: '[图片]', request_id: body.request_id, media: { id: 'fictional-image', filename: 'fictional-image.png', mime: 'image/png', name: 'fictional.png' }, time: new Date().toISOString() });
+      const body = await readBody(req);
+      if (body.media?.id?.startsWith('fictional-voice')) {
+        assert.equal(body.text, '[voice message]', 'recording is submitted before transcription completes');
+        assert.equal(body.request_id, `voice-send-${body.media.id}`);
+      }
+      if (body.media?.id === 'fictional-image' && imageSendAttempts++ === 0) {
+        json(res, { error: 'busy' }, 409); return;
+      }
+      if (body.text === 'fictional hello') {
+        sends++; events.push({ id: nextId++, kind: 'user', text: body.text, request_id: body.request_id, time: new Date().toISOString() });
+        pending = nextId; events.push({ id: nextId++, kind: 'approval', text: 'Fictional permission request', time: new Date().toISOString() });
       } else {
         sends++;
-        assert.equal(body.text, 'fictional hello');
-        events.push({ id: 3, kind: 'user', text: body.text, time: new Date().toISOString() });
-        pending = 4; events.push({ id: 4, kind: 'approval', text: 'Fictional permission request', time: new Date().toISOString() });
+        const attached = body.media ? [...media.values()].find(x => x.id === body.media.id) : null;
+        events.push({ id: nextId++, kind: 'user', text: body.text, request_id: body.request_id,
+          media: attached?.eventMedia, time: new Date().toISOString() });
+        if (body.media?.id?.startsWith('fictional-voice')) setTimeout(() => events.push({ id: nextId++, kind: 'voice_status',
+          media: { ...attached.eventMedia, transcript: body.media.id === 'fictional-voice' ? 'fictional voice transcript' : 'fictional retry transcript' }, time: new Date().toISOString() }), 180);
       }
-      res.end('{}');
+      json(res, {});
     } else if (url.pathname === '/api/approve') {
-      let raw = ''; for await (const chunk of req) raw += chunk;
-      const body = JSON.parse(raw); assert.equal(body.answer, 'n'); assert.equal(body.id, 4);
-      approvals++; pending = null; res.end('{}');
-    } else { res.statusCode = 404; res.end('{}'); }
+      const body = await readBody(req);
+      approvalBodies.push(body); approvals++; pending = null; json(res, {});
+    } else if (url.pathname === '/api/media') {
+      const body = await readBody(req); assert.equal(body.mime, 'image/jpeg');
+      images++;
+      const filename = 'fictional-image.jpg';
+      const bytes=Buffer.from(body.data,'base64');assert.ok(bytes.length>0&&bytes.length<5*1024*1024);
+      const entry = { id: 'fictional-image', filename, type: 'image/jpeg', bytes,
+        eventMedia: { id: 'fictional-image', filename, mime: 'image/jpeg', kind: 'image', name: body.name } };
+      media.set(filename, entry); json(res, { media: entry.eventMedia });
+    } else if (url.pathname === '/api/voice') {
+      const body = await readBody(req); assert.equal(body.mime, 'audio/wav'); assert.ok(body.data);
+      assert.equal(body.send_first, true, 'desktop uploads must start background transcription after delivery');
+      if (failVoiceUploadOnce) { failVoiceUploadOnce = false; json(res, { error: 'fictional upload failure' }, 500); return; }
+      const id = voices === 0 ? 'fictional-voice' : 'fictional-voice-retry';
+      voices++;
+      const filename = id + '.wav';
+      const entry = { id, filename, type: 'audio/wav', bytes: Buffer.from(body.data, 'base64'),
+        eventMedia: { id, filename, mime: 'audio/wav', kind: 'voice', transcript: '' } };
+      media.set(filename, entry); json(res, { media: entry.eventMedia }, 202);
+    } else if (url.pathname === '/api/activity') {
+      json(res, { enabled: false });
+    } else {
+      json(res, { error: 'not found' }, 404);
+    }
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   const backend = require('../backend.cjs');
   backend.connect = async () => ({ url: `${origin}/?t=${token}`, origin });
   backend.validRoot = async () => true;
-  let menu, activeMenu;
-  await app.whenReady();
-  let permissionRequest, permissionCheck;
-  const setPermissionRequestHandler = session.defaultSession.setPermissionRequestHandler.bind(session.defaultSession);
-  const setPermissionCheckHandler = session.defaultSession.setPermissionCheckHandler.bind(session.defaultSession);
-  session.defaultSession.setPermissionRequestHandler = handler => { permissionRequest = handler; setPermissionRequestHandler(handler); };
-  session.defaultSession.setPermissionCheckHandler = handler => { permissionCheck = handler; setPermissionCheckHandler(handler); };
-  const build = Menu.buildFromTemplate;
-  Menu.buildFromTemplate = template => { menu = template; activeMenu = build(template); return activeMenu; };
-  require('../main.cjs');
+  mediaPermission = require('../main.cjs');
+  app.setPath('userData', temp);
+  app.setPath('sessionData', path.join(temp, 'session'));
   await app.whenReady();
   let pet;
   await wait(() => { pet = BrowserWindow.getAllWindows().find(w => w.webContents.getURL().endsWith('pet.html')); return pet?.isVisible(); }, 'pet not visible');
   assert.equal(pet.getBounds().width, 320);
   const prefs = pet.webContents.getLastWebPreferences();
   assert.equal(prefs.contextIsolation, true); assert.equal(prefs.sandbox, true); assert.equal(prefs.nodeIntegration, false);
-  await wait(() => pet.webContents.executeJavaScript('document.querySelector("img").complete && document.querySelector("img").naturalWidth > 0'), 'image missing');
-  await fs.mkdir(path.join(__dirname, '../test-output'), { recursive: true });
-  await fs.writeFile(path.join(__dirname, '../test-output/pet.png'), (await pet.webContents.capturePage()).toPNG());
+  await wait(() => pet.webContents.executeJavaScript('document.querySelector("img").complete && document.querySelector("img").naturalWidth > 0'), 'Peter image missing');
   const toggle = () => pet.webContents.executeJavaScript('document.querySelector("#pet").dispatchEvent(new KeyboardEvent("keydown", {key:"Enter",bubbles:true}))');
   await toggle();
   let chat;
   await wait(() => { chat = BrowserWindow.getAllWindows().find(w => w !== pet); return chat?.isVisible(); }, 'chat not visible');
   await wait(() => chat.webContents.executeJavaScript('document.body.textContent.includes("Fictional saved history")'), 'history missing');
-  await wait(() => permissionRequest && permissionCheck, 'permission handlers missing');
-  const ask = (contents, types, requestingUrl = `${origin}/`) => new Promise(resolve =>
-    permissionRequest(contents, 'media', resolve, { requestingUrl, mediaTypes: types }));
-  assert.equal(await ask(chat.webContents, ['audio']), true, 'local chat microphone should be allowed');
-  assert.equal(await ask(chat.webContents, ['video']), false, 'camera must stay denied');
-  assert.equal(await ask(pet.webContents, ['audio']), false, 'pet renderer must not get microphone');
-  assert.equal(await ask(chat.webContents, ['audio'], 'https://example.invalid/'), false, 'foreign origin must not get microphone');
-  assert.equal(permissionCheck(chat.webContents, 'media', origin, { mediaType: 'audio' }), true);
-  assert.equal(await chat.webContents.executeJavaScript('document.querySelector(".msg-voice audio")?.controls'), true);
-  assert.equal(await chat.webContents.executeJavaScript('document.querySelector(".msg-voice details div")?.textContent'), 'Fictional saved voice');
-  assert.equal(await chat.webContents.executeJavaScript('typeof window.companion'), 'undefined');
+  assert.ok(chat.webContents.getURL().startsWith('file:'), 'desktop chat must load its own local UI');
+  const chatPrefs = chat.webContents.getLastWebPreferences();
+  assert.equal(chatPrefs.contextIsolation, true); assert.equal(chatPrefs.sandbox, true); assert.equal(chatPrefs.nodeIntegration, false);
+  const requestingUrl=chat.webContents.getURL();
+  assert.equal(mediaPermission.canRequestChatMedia(chat.webContents,'media',{requestingUrl,mediaTypes:['audio']},chat),true);
+  assert.equal(mediaPermission.canRequestChatMedia(chat.webContents,'media',{requestingUrl,mediaTypes:['video']},chat),false);
+  assert.equal(mediaPermission.canRequestChatMedia(chat.webContents,'media',{requestingUrl,mediaTypes:[]},chat),false);
+  assert.equal(mediaPermission.canRequestChatMedia(chat.webContents,'media',{mediaTypes:['audio']},chat),false);
+  assert.equal(mediaPermission.canCheckChatMedia(chat.webContents,'media',{mediaType:'audio',requestingUrl,isMainFrame:true},chat),true);
+  assert.equal(mediaPermission.canCheckChatMedia(chat.webContents,'media',{mediaType:'video',requestingUrl,isMainFrame:true},chat),false);
+  assert.equal(mediaPermission.canCheckChatMedia(chat.webContents,'media',{requestingUrl,isMainFrame:true},chat),false);
+  assert.equal(mediaPermission.canCheckChatMedia(null,'media',{mediaType:'audio',requestingUrl,isMainFrame:true},chat),false);
+  assert.equal(await chat.webContents.executeJavaScript('typeof window.veilDesktop.request'), 'function');
   assert.equal(await chat.webContents.executeJavaScript('typeof require'), 'undefined');
-  assert.equal(await chat.webContents.executeJavaScript('document.querySelector("#image-file").accept'), 'image/png,image/jpeg,image/gif,image/webp');
-  assert.equal(await chat.webContents.executeJavaScript('document.querySelector("#voice-hold").textContent'), '按住说话');
-  assert.equal(await chat.webContents.executeJavaScript('document.querySelector("#voice-hold").disabled'), false);
-  assert.equal(await chat.webContents.executeJavaScript('document.querySelector("#memory-panel").disabled'), true);
-  assert.ok(await chat.webContents.executeJavaScript('document.querySelector("#box").getBoundingClientRect().width >= 300'), 'desktop input too narrow');
+  assert.equal(await chat.webContents.executeJavaScript('document.querySelector("#speech-toggle").disabled'), false);
+  assert.equal(await chat.webContents.executeJavaScript('document.querySelector("#image-button").disabled'), false);
+  assert.equal(await chat.webContents.executeJavaScript('document.body.textContent.includes("Coming Soon")'), false);
+  await chat.webContents.executeJavaScript('const language=document.querySelector("#speech-language");language.value="en-US";language.dispatchEvent(new Event("change",{bubbles:true}))');
+  const languageReloaded = new Promise(resolve => chat.webContents.once('did-finish-load', resolve));
+  chat.webContents.reload();
+  await languageReloaded;
+  await wait(() => chat.webContents.executeJavaScript('document.body.textContent.includes("Fictional saved history")'), 'chat did not restore after reload');
+  assert.equal(await chat.webContents.executeJavaScript('document.querySelector("#speech-language").value'),'en-US','dictation language should persist on this device');
+  await wait(() => chat.webContents.executeJavaScript('!!document.querySelector(".msg-voice audio")'), 'saved voice reply did not render');
   await wait(() => chat.webContents.executeJavaScript('!document.querySelector("#send").disabled'), 'send disabled');
+
   await chat.webContents.executeJavaScript('document.querySelector("#box").value="fictional hello"; document.querySelector("#send").click()');
-  await wait(() => sends === 1, 'message not delivered');
+  await wait(() => sends === 1, 'text message not delivered');
   await wait(() => chat.webContents.executeJavaScript('!!document.querySelector(".approval button:not(.yes)")'), 'approval missing');
   await chat.webContents.executeJavaScript('document.querySelector(".approval button:not(.yes)").click()');
-  await wait(() => approvals === 1, 'permission decision missing');
-  await chat.webContents.executeJavaScript(`(() => { const input=document.querySelector('#image-file'); const bytes=Uint8Array.from(atob('${validPng.toString('base64')}'), c=>c.charCodeAt(0)); const file=new File([bytes], 'fictional.png', {type:'image/png'}); const dt=new DataTransfer(); dt.items.add(file); Object.defineProperty(input, 'files', {value:dt.files}); input.dispatchEvent(new Event('change')); })()`);
-  await wait(() => chat.webContents.executeJavaScript('!document.querySelector("#image-preview").hidden'), 'image preview missing');
-  assert.equal(imageUploads, 0);
+  await wait(() => approvals === 1, `permission refusal was not delivered; requests=${requests.join(',')}; approval=${JSON.stringify(approvalBodies)}; card=${JSON.stringify(await chat.webContents.executeJavaScript('(()=>{const c=document.querySelector(".approval");return c&&{id:c.dataset.id,className:c.className,status:c.querySelector(".status").textContent,buttons:[...c.querySelectorAll("button")].map(b=>({text:b.textContent,disabled:b.disabled}))}})()'))}`);
+  assert.equal(approvalBodies[0].answer, 'n'); assert.equal(approvalBodies[0].id, 4);
+
+  await chat.webContents.executeJavaScript(`(async()=>{const canvas=document.createElement('canvas');canvas.width=1800;canvas.height=1800;const ctx=canvas.getContext('2d');const pixels=ctx.createImageData(1800,1800);let n=0x13579bdf;for(let i=0;i<pixels.data.length;i+=4){n^=n<<13;n^=n>>>17;n^=n<<5;pixels.data[i]=n&255;pixels.data[i+1]=(n>>>8)&255;pixels.data[i+2]=(n>>>16)&255;pixels.data[i+3]=255}ctx.putImageData(pixels,0,0);const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));if(blob.size<=5*1024*1024)throw new Error('fixture must exceed 5 MB');const file=new File([blob],'fictional.png',{type:'image/png'});const input=document.querySelector('#image-file');Object.defineProperty(input,'files',{configurable:true,value:[file]});return input.onchange()})()`);
+  await wait(() => chat.webContents.executeJavaScript('!document.querySelector("#image-preview").hidden'), `image preview missing: ${JSON.stringify(await chat.webContents.executeJavaScript('(()=>({errors:[...document.querySelectorAll(".error")].map(e=>e.textContent),input:document.querySelector("#image-file").files?.[0]&&{name:document.querySelector("#image-file").files[0].name,type:document.querySelector("#image-file").files[0].type,size:document.querySelector("#image-file").files[0].size},preview:document.querySelector("#image-preview").textContent,hidden:document.querySelector("#image-preview").hidden}))()'))}`);
+  await chat.webContents.executeJavaScript('document.querySelector("#box").value="fictional image caption"; document.querySelector("#send").click()');
+  await wait(() => images === 1, 'image was not uploaded');
+  await wait(() => imageSendAttempts === 1 && chat.webContents.executeJavaScript('!document.querySelector("#send").disabled && [...document.querySelectorAll(".error")].some(e=>e.textContent.includes("正在处理上一条消息"))'), 'busy image send did not preserve a retryable preview');
+  assert.equal(await chat.webContents.executeJavaScript('!document.querySelector("#image-preview").hidden'), true, 'busy send must keep the selected image');
   await chat.webContents.executeJavaScript('document.querySelector("#send").click()');
-  await wait(() => imageAttempts === 1, 'image retry was not exercised');
-  await wait(() => chat.webContents.executeJavaScript('!document.querySelector("#image-preview").hidden'), 'image was not retained for retry');
-  await wait(() => chat.webContents.executeJavaScript('!document.querySelector("#send").disabled'), 'image retry button not enabled');
-  await chat.webContents.executeJavaScript('document.querySelector("#send").click()');
-  await wait(() => imageSends === 1, 'image not delivered');
-  assert.equal(imageUploads, 1);
-  await wait(() => chat.webContents.executeJavaScript('(() => { const i=document.querySelector(".msg.user .msg-image"); return !!i && i.complete && i.naturalWidth > 0; })()'), 'image bubble missing');
+  await wait(() => imageSendAttempts === 2 && sends === 2, 'busy image send retry did not complete');
+  await wait(() => chat.webContents.executeJavaScript('!!document.querySelector(".msg-image")'), 'uploaded image message missing');
+
+  const voiceBase64=voiceFixture.toString('base64');
+  await chat.webContents.executeJavaScript(`(()=>{
+    const bytes=Uint8Array.from(atob('${voiceBase64}'),c=>c.charCodeAt(0));
+    Object.defineProperty(navigator,'mediaDevices',{configurable:true,value:{getUserMedia:async()=>({getTracks:()=>[{stop(){}}]})}});
+    class FixtureRecorder{constructor(){this.mimeType='audio/wav';this.state='inactive'}start(){this.state='recording'}stop(){this.state='inactive';this.ondataavailable({data:new Blob([bytes],{type:'audio/wav'})});this.onstop()}}
+    FixtureRecorder.isTypeSupported=()=>false;Object.defineProperty(window,'MediaRecorder',{configurable:true,value:FixtureRecorder});
+    document.querySelector('#voice-hold').dispatchEvent(new PointerEvent('pointerdown',{button:0,bubbles:true}));
+  })()`);
+  await wait(() => chat.webContents.executeJavaScript('document.querySelector("#voice-hold").dataset.recording === "true"'), 'voice recording did not start');
+  await chat.webContents.executeJavaScript(`document.querySelector('#voice-hold').dispatchEvent(new PointerEvent('pointerup',{button:0,bubbles:true}))`);
+  await wait(() => voices === 1 && sends === 3, 'voice upload and transcript message were not delivered');
+  const userVoiceText='.msg[data-media-id="fictional-voice"] .voice-transcript';
+  const userVoiceWrap='.msg[data-media-id="fictional-voice"] .msg-voice';
+  await wait(() => chat.webContents.executeJavaScript(`!!document.querySelector('${userVoiceWrap} .voice-transcript')`), 'voice bubble missing');
+  assert.equal(await chat.webContents.executeJavaScript(`document.querySelector('${userVoiceText}').hidden`),true,'voice transcript must stay hidden by default');
+  await wait(() => chat.webContents.executeJavaScript(`document.querySelector('${userVoiceText}').textContent === "fictional voice transcript"`), async () => 'background transcription status missing: ' + JSON.stringify(events) + await chat.webContents.executeJavaScript('document.body.textContent.slice(-700)'));
+  await chat.webContents.executeJavaScript(`document.querySelector('${userVoiceWrap}').dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,clientX:80,clientY:80}))`);
+  assert.deepEqual(await chat.webContents.executeJavaScript('[...document.querySelectorAll(".voice-context-menu button")].map(button=>({text:button.textContent,disabled:button.disabled}))'),[
+    {text:'删除',disabled:true},{text:'撤回',disabled:true},{text:'转文字',disabled:false}
+  ]);
+  await chat.webContents.executeJavaScript(`document.querySelector('.voice-context-menu button:not(:disabled)').click()`);
+  assert.equal(await chat.webContents.executeJavaScript(`document.querySelector('${userVoiceText}').hidden`),false);
+
+  failVoiceUploadOnce = true;
+  await chat.webContents.executeJavaScript(`document.querySelector('#voice-hold').dispatchEvent(new PointerEvent('pointerdown',{button:0,bubbles:true}))`);
+  await wait(() => chat.webContents.executeJavaScript('document.querySelector("#voice-hold").dataset.recording === "true"'), 'retry voice recording did not start');
+  await chat.webContents.executeJavaScript(`document.querySelector('#voice-hold').dispatchEvent(new PointerEvent('pointerup',{button:0,bubbles:true}))`);
+  await wait(() => chat.webContents.executeJavaScript('!!document.querySelector(".msg[data-media-id^=local-] .voice-retry")'), 'failed voice upload was not retained for retry');
+  await chat.webContents.executeJavaScript('document.querySelector(".msg[data-media-id^=local-] .voice-retry").click()');
+  await wait(() => voices === 2 && sends === 4, 'retained voice was not delivered after retry');
+  await wait(() => chat.webContents.executeJavaScript('!!document.querySelector(".msg[data-media-id=fictional-voice-retry] .msg-voice")'), 'retried voice message id was not updated');
+  await wait(() => chat.webContents.executeJavaScript('!document.querySelector(".msg[data-media-id=fictional-voice-retry] .voice-retry")'), 'successful upload retry still shows an error');
+
+  await chat.webContents.executeJavaScript('document.querySelector("#toolbar-toggle").click()');
+  await wait(() => chat.webContents.executeJavaScript('!document.querySelector("#tool-panel").hidden'), 'desktop toolbar did not open');
+  assert.equal(await chat.webContents.executeJavaScript('document.querySelector("#memory-panel").hidden'), false, 'real Memory entry should appear when available');
+  await wait(() => chat.webContents.executeJavaScript('document.querySelector(".msg-image").complete && document.querySelector(".msg-image").naturalWidth > 0'), 'compressed image did not decode');
+  await wait(() => chat.webContents.executeJavaScript('[...document.querySelectorAll(".msg-voice audio")].some(a=>a.readyState>=2)'), 'voice media did not load');
+  const historyReloaded = new Promise(resolve => chat.webContents.once('did-finish-load', resolve));
+  chat.webContents.reload();
+  await historyReloaded;
+  await wait(() => chat.webContents.executeJavaScript('!!document.querySelector(".msg-image") && !!document.querySelector(".msg[data-media-id=fictional-voice] .msg-voice") && !!document.querySelector(".msg[data-media-id=fictional-voice-retry] .msg-voice")'), 'image and sent voice messages did not restore from history');
+  assert.equal(await chat.webContents.executeJavaScript('document.querySelector(".msg[data-media-id=fictional-voice] .voice-transcript").hidden && document.querySelector(".msg[data-media-id=fictional-voice-retry] .voice-transcript").hidden'),true,'restored voice transcripts should remain hidden');
+  await chat.webContents.executeJavaScript(`document.querySelector('.msg[data-media-id="fictional-voice"] .msg-voice').dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,clientX:80,clientY:80}))`);
+  await chat.webContents.executeJavaScript(`document.querySelector('.voice-context-menu button:not(:disabled)').click()`);
+  assert.equal(await chat.webContents.executeJavaScript('!document.querySelector(".msg[data-media-id=fictional-voice] .voice-transcript").hidden'),true,'transcription should appear only after choosing the menu item');
+  await wait(() => chat.webContents.executeJavaScript('document.querySelector(".msg-image").complete && document.querySelector(".msg-image").naturalWidth > 0'), 'restored image did not decode');
+  await fs.mkdir(path.join(__dirname, '../test-output'), { recursive: true });
+  await fs.writeFile(path.join(__dirname, '../test-output/pet.png'), (await pet.webContents.capturePage()).toPNG());
+  await fs.writeFile(path.join(__dirname, '../test-output/chat.png'), (await chat.webContents.capturePage()).toPNG());
+
   chat.close(); assert.equal(chat.isDestroyed(), false); assert.equal(chat.isVisible(), false);
   await toggle(); await wait(() => chat.isVisible(), 'chat did not reopen');
-  assert.equal(sends, 1); assert.equal(approvals, 1);
-  const reloaded = new Promise(resolve => chat.webContents.once('did-finish-load', resolve));
-  chat.webContents.reload();
-  await reloaded;
-  await wait(() => chat.webContents.executeJavaScript('(() => { const i=document.querySelector(".msg.user .msg-image"); return !!i && i.complete && i.naturalWidth > 0; })()'), 'image history missing after reload');
-  assert.equal(await chat.webContents.executeJavaScript('document.querySelector(".msg-voice audio")?.controls'), true);
-  await toggle(); await wait(() => !chat.isVisible(), 'chat did not hide');
+  assert.equal(sends, 4); assert.equal(approvals, 1);
   await pet.webContents.executeJavaScript('window.companion.menu()');
-  await wait(() => !!menu, 'menu missing'); activeMenu.closePopup();
-  assert.equal(menu.find(x => x.label?.startsWith('Memory')).enabled, false);
+  let menuWindow;
+  await wait(() => { menuWindow = BrowserWindow.getAllWindows().find(w => w !== pet && w !== chat); return menuWindow?.isVisible(); }, 'pet menu missing');
+  const menuText = await menuWindow.webContents.executeJavaScript('document.body.textContent');
+  assert.match(menuText, /展开 \/ 收起聊天/); assert.match(menuText, /调整 Peter 大小/); assert.match(menuText, /查看活动状态/);
+  assert.doesNotMatch(menuText, /Coming Soon/);
   const oldPet = pet;
-  menu.find(x => x.label === 'Peter 大小').submenu.find(x => x.label === '420 px').click();
-  await wait(() => oldPet.isDestroyed(), 'old pet not replaced');
+  await menuWindow.webContents.executeJavaScript('document.querySelector("[data-size=\'420\']").click()');
+  await wait(() => oldPet.isDestroyed(), 'old pet was not replaced');
   pet = BrowserWindow.getAllWindows().find(w => w !== chat);
   assert.equal(pet.getBounds().width, 420);
-  chat.show();
-  await fs.writeFile(path.join(__dirname, '../test-output/chat.png'), (await chat.webContents.capturePage()).toPNG());
-  console.log('SMOKE PASS: original PNG, saved text/image/voice history, voice controls/transcript, image preview/upload/bubble, permission refusal, hide/reopen, reload, resize, sandbox, disabled entries');
+  console.log('SMOKE PASS: local dark chat, history, audio-only permissions, >5 MB image compression and decode, send-first voice with hidden transcript and right-click menu, persistent dictation language, audio loading, activity controls, hide/reopen, resize, sandbox');
   clearTimeout(failSafe);
   server.close(); app.exit(0);
 })().catch(error => { console.error(error); clearTimeout(failSafe); server?.close(); app.exit(1); });
