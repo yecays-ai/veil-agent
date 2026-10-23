@@ -6,7 +6,7 @@ import threading
 import unittest
 from unittest.mock import Mock
 
-from memory_agent import Memory, MemoryToolError, ordinary_hits, vault_path
+from memory_agent import MCP, Memory, MemoryToolError, ordinary_hits, vault_path
 from ombre_resident import resident_config
 from veil_agent import Budget, Character, Chat, Store, UserError, build_self_description
 
@@ -517,6 +517,22 @@ class MemoryTests(unittest.TestCase):
 
     def diagnostics_text(self):
         return (Path(self.temp.name) / 'data/fake/memory/_agent/diagnostics.jsonl').read_text(encoding='utf-8')
+
+    def test_runtime_monitor_receives_mcp_event_when_diagnostic_append_fails(self):
+        backend = MCP.__new__(MCP)
+        backend.call = Mock(return_value='')
+        monitor = Mock()
+        memory = Memory(self.cfg, self.store, self.budget, self.model, backend,
+                        runtime_monitor=monitor)
+        self.addCleanup(memory.__exit__, None, None, None)
+        facts = {'code': 'mcp_call', 'tool': 'hold', 'attempt': 1}
+        original_append = self.store.append
+        self.store.append = Mock(side_effect=OSError('fictional diagnostics disk failure'))
+        try:
+            backend.diagnostic(facts)
+        finally:
+            self.store.append = original_append
+        monitor.observe_memory.assert_called_once_with(facts)
 
     def test_failed_memory_tool_diagnostic_omits_arguments_and_memory_body(self):
         self.backend.fail = True

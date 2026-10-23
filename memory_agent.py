@@ -197,7 +197,7 @@ class MCP:
             if self.diagnostic:
                 try:
                     self.diagnostic({'code': 'recovery_failed', 'stage': stage,
-                                     'attempt': self.recovery_count})
+                                     'tool': name, 'attempt': self.recovery_count})
                 except Exception:
                     pass
             return False
@@ -262,6 +262,12 @@ class MCP:
                                            else getattr(exc, 'stage', None))) from exc
                             if self.recovery is not None and not restored:
                                 raise MemoryToolError('connection', stage='recovery') from exc
+                    if attempt > 1 and self.diagnostic:
+                        try:
+                            self.diagnostic({'code': 'retry_succeeded', 'stage': 'mcp_verified',
+                                             'tool': name, 'attempt': attempt})
+                        except Exception:
+                            pass
                     self.recovery_streak = 0  # A healthy reply restores the recovery allowance.
                     result.set_result(text)
             except TimeoutError as exc:
@@ -511,8 +517,9 @@ def explain(code, facts):
 
 
 class Memory:
-    def __init__(self, cfg, store, budget, model, backend):
+    def __init__(self, cfg, store, budget, model, backend, runtime_monitor=None):
         self.cfg, self.store, self.budget, self.model, self.backend = cfg, store, budget, model, backend
+        self.runtime_monitor = runtime_monitor
         vault_path(store.root, cfg.id)
         self.path = f'{cfg.id}/memory/_agent/state.jsonl'
         self.diagnostics = f'{cfg.id}/memory/_agent/diagnostics.jsonl'
@@ -523,7 +530,16 @@ class Memory:
         self.write_fingerprint_key = vault_path(store.root, cfg.id) / '_agent' / 'write-reconciliation.key'
         self._fingerprint_key = self._load_fingerprint_key()
         if isinstance(backend, MCP):
-            backend.diagnostic = lambda facts: self.store.append(self.diagnostics, facts)
+            def diagnostic(facts):
+                try:
+                    if runtime_monitor:
+                        runtime_monitor.observe_memory(facts)
+                finally:
+                    try:
+                        self.store.append(self.diagnostics, facts)
+                    except Exception:
+                        pass  # Safety state is independent from best-effort diagnostics.
+            backend.diagnostic = diagnostic
         self.dropped_path = f'{cfg.id}/memory/_agent/dropped.jsonl'
         self.last_tool = None
         self.delete_asked = None  # number shown by /delete, waiting for its 确认
@@ -984,16 +1000,23 @@ class Memory:
 
     def tool_failure(self, tool, exc):
         """Keep autonomous and interactive tool failures query- and body-free."""
+        error_code = self.safe_error_code(exc)
         try:
             row = {
                 'time': self.budget.clock(), 'code': 'memory_tool_failed',
                 'tool': tool, 'error_type': self.safe_error_type(exc),
             }
-            if error_code := self.safe_error_code(exc):
+            if error_code:
                 row['error_code'] = error_code
             self.store.append(self.diagnostics, row)
         except Exception:
             pass  # A diagnostic write must never hide the original tool failure.
+        if self.runtime_monitor:
+            try:
+                self.runtime_monitor.observe_memory({'code': 'memory_operation_failed',
+                                                     'tool': tool, 'error_code': error_code})
+            except Exception:
+                pass  # Monitoring must not change the tool's original result.
 
     def retrieval_failure(self, stage, exc):
         """Record only a stable stage and exception class for automatic recall."""
