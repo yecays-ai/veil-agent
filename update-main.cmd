@@ -67,7 +67,7 @@ if /i not "%CURRENT_BRANCH%"=="main" (
 )
 
 echo Updating main...
-git merge --ff-only origin/main
+git merge --ff-only origin/main >nul 2>&1
 if not errorlevel 1 goto update_complete
 
 echo Local main has commits that are not on GitHub. Creating a recovery branch...
@@ -88,11 +88,15 @@ if errorlevel 1 (
 :backup_ready
 echo Saved the old local main as %BACKUP_BRANCH%.
 set "COLLISION_FILE=%TEMP%\veil-update-collisions-%RANDOM%-%RANDOM%.tmp"
-for /f "delims=" %%I in ('git ls-files --others --ignored --exclude-standard') do (
-    git cat-file -e "origin/main:%%I" 2>nul
-    if not errorlevel 1 echo %%I>>"%COLLISION_FILE%"
+echo Checking only files newly tracked by GitHub...
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0update-main-collisions.ps1" -RepositoryPath "%CD%" -BaseRef main -TargetRef origin/main >"%COLLISION_FILE%"
+set "COLLISION_SCAN_EXIT=%ERRORLEVEL%"
+if not "%COLLISION_SCAN_EXIT%"=="0" (
+    del "%COLLISION_FILE%" >nul 2>&1
+    echo Unable to check local file collisions. Update stopped; the recovery branch is preserved.
+    goto return_to_branch
 )
-if exist "%COLLISION_FILE%" (
+for %%Z in ("%COLLISION_FILE%") do if %%~zZ GTR 0 (
     echo Update stopped because GitHub now tracks these ignored local files:
     type "%COLLISION_FILE%"
     del "%COLLISION_FILE%" >nul 2>&1
