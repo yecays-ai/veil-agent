@@ -31,7 +31,7 @@ from autonomy import AutonomyController
 PAGE = Path(__file__).resolve().parent / 'web' / 'index.html'
 MAX_BODY = 200_000
 MAX_MEDIA_BYTES = MAX_PHOTO_BYTES
-MAX_VOICE_BYTES = 10 * 1024 * 1024
+MAX_VOICE_UPLOAD_BYTES = 10 * 1024 * 1024
 MAX_PENDING_MEDIA = 32
 PENDING_MEDIA_TTL = 60 * 60
 MAX_SUBMISSIONS = 1024
@@ -49,14 +49,15 @@ VOICE_TYPES = {
     'audio/wav': '.wav',
 }
 VOICE_MIME = 'audio/mpeg'
-MAX_VOICE_BYTES = 25 * 1024 * 1024
+MAX_GENERATED_VOICE_BYTES = 25 * 1024 * 1024
 
 
 def valid_media_row(row):
     if not isinstance(row, dict):
         return False
     media_id, filename, mime = row.get('id'), row.get('filename'), row.get('mime')
-    suffix = MEDIA_TYPES[mime][0] if mime in MEDIA_TYPES else VOICE_TYPES.get(mime)
+    suffix = (MEDIA_TYPES[mime][0] if mime in MEDIA_TYPES else
+              ('.mp3' if mime == VOICE_MIME else VOICE_TYPES.get(mime)))
     return (isinstance(media_id, str) and MEDIA_ID_PATTERN.fullmatch(media_id) is not None
             and isinstance(mime, str) and suffix is not None
             and filename == media_id + suffix
@@ -178,6 +179,7 @@ class Hub:
                 or filename != media_id + '.mp3'):
             return None
         row = {key: media[key] for key in ('id', 'filename', 'path', 'mime', 'name') if key in media}
+        row['request_id'] = 'assistant-voice-' + media_id
         with self.media_lock:
             self.media_index[media_id] = row
         return dict(row)
@@ -229,7 +231,7 @@ class Hub:
     def save_voice(self, mime, raw, original_name='voice'):
         """Durably save a recording before transcription so failures can be retried."""
         if (self.media_root is None or mime not in VOICE_TYPES or not isinstance(original_name, str)
-                or not raw or len(raw) > MAX_VOICE_BYTES):
+                or not raw or len(raw) > MAX_VOICE_UPLOAD_BYTES):
             return None
         valid_container = ((mime == 'audio/webm' and raw.startswith(b'\x1a\x45\xdf\xa3'))
                            or (mime == 'audio/ogg' and raw.startswith(b'OggS'))
@@ -691,7 +693,8 @@ def make_handler(hub, token):
                     return
                 try:
                     path = hub.media_root / media['filename']
-                    limit = MAX_VOICE_BYTES if media.get('mime') == VOICE_MIME else MAX_MEDIA_BYTES
+                    limit = (MAX_GENERATED_VOICE_BYTES if media.get('mime') == VOICE_MIME else
+                             (MAX_VOICE_UPLOAD_BYTES if media.get('kind') == 'voice' else MAX_MEDIA_BYTES))
                     if path.stat().st_size > limit:
                         raise OSError('media too large')
                     with path.open('rb') as handle:
@@ -735,7 +738,7 @@ def make_handler(hub, token):
             if url.path == '/api/voice':
                 try:
                     length = int(self.headers.get('Content-Length') or 0)
-                    if not 0 < length <= MAX_VOICE_BYTES * 2:
+                    if not 0 < length <= MAX_VOICE_UPLOAD_BYTES * 2:
                         raise ValueError
                     body = json.loads(self.rfile.read(length))
                     mime, encoded = body.get('mime'), body.get('data')
@@ -880,6 +883,12 @@ def serve_chat(chat, hub):
             hub.output('语音能力通知暂时无法保存；聊天仍可使用，下次启动会重试。')
         chat.pending_capability_event = getattr(chat.tools, 'capability_event', None)
         chat.pending_capability_event_model = chat.pending_capability_event
+    elif chat.voice is None:
+        suppress_voice = getattr(files, 'suppress_voice_output_notice', None)
+        if callable(suppress_voice):
+            suppress_voice()
+            chat.pending_capability_event = getattr(chat.tools, 'capability_event', None)
+            chat.pending_capability_event_model = getattr(chat.tools, 'capability_event_model', None)
     for message in chat.history_events:
         media = message.get('media') or (hub.media_for_request(message.get('request_id'))
                                          if message['role'] == 'user' else None)

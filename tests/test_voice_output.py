@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 import urllib.error
+import http.client
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -30,6 +31,11 @@ class FakeResponse:
         chunk = self.body[self.offset:self.offset + size]
         self.offset += len(chunk)
         return chunk
+
+
+class IncompleteResponse(FakeResponse):
+    def read(self, _size=-1):
+        raise http.client.IncompleteRead(b'partial')
 
 
 class VoiceOutputTests(unittest.TestCase):
@@ -80,7 +86,18 @@ class VoiceOutputTests(unittest.TestCase):
         self.assertEqual(captured['body']['audio_setting']['format'], 'mp3')
         self.assertEqual(media['path'], f"media/{media['filename']}")
         self.assertEqual((self.store.root / 'peter' / media['path']).read_bytes(), audio)
-        self.assertEqual(self.budget.totals()[0], Decimal('0.00105'))
+
+    def test_supplementary_cjk_is_billed_as_two_characters(self):
+        self.assertEqual(billed_characters('\U00020000A'), 3)
+
+    def test_incomplete_response_becomes_unknown_outcome_voice_error(self):
+        voice = MiniMaxVoice(
+            self.voice_cfg, self.store, self.budget, 'peter',
+            opener=lambda *_args, **_kwargs: IncompleteResponse(b''))
+        with self.assertRaises(VoiceError) as caught:
+            voice.synthesize('hello')
+        self.assertTrue(caught.exception.outcome_unknown)
+        self.assertEqual(self.budget.totals()[0], Decimal('0.00175'))
 
     def test_voice_schema_identity_and_history_only_change_when_configured(self):
         disabled = Chat(self.cfg, self.store, self.budget, Mock())
@@ -94,7 +111,10 @@ class VoiceOutputTests(unittest.TestCase):
         schema = next(s for s in enabled.tool_schemas() if s['function']['name'] == 'send_message')
         self.assertEqual(schema['function']['parameters']['properties']['voice']['description'],
                          'true sends this message as a voice message in your own voice; the text is also kept.')
-        self.assertIn('send_message voice: true', self_facts(self.cfg, self.budget, voice=True)[0])
+        capabilities = SimpleNamespace(description='Messaging is available.')
+        self.assertIn('send_message voice: true', self_facts(
+            self.cfg, self.budget, capabilities=capabilities, voice=True)[0])
+        self.assertIn('You have no voice.', self_facts(self.cfg, self.budget, voice=True)[0])
 
         media = {'id': 'a' * 32, 'filename': 'a' * 32 + '.mp3',
                  'path': 'media/' + 'a' * 32 + '.mp3', 'mime': 'audio/mpeg', 'name': 'voice message'}

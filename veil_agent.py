@@ -646,7 +646,7 @@ def self_facts(cfg, budget, memory=False, capabilities=None, voice=False):
           if not cfg.tools or not cfg.tools.get('enabled', True)
           else 'Tools are currently unavailable. '))
         + ('You can speak in voice messages with send_message voice: true. '
-           if voice else 'You have no voice. ')
+           if voice and capabilities else 'You have no voice. ')
         + 'Unlisted abilities are unavailable. Do not invent memories, actions or tool results.'
     )
     changing = (f'Local time: {stamp} ({weekday}).\n'
@@ -953,16 +953,18 @@ class Chat:
             if autonomy:
                 event.update({'autonomy_run_id': run_id,
                               'autonomy_tool_call_id': tool_call_id})
+            committed = False
             try:
                 with saving():
                     self.store.append(self.path, event)
+                    committed = True
                     self.sent_messages.append(displayed_text)
                     if autonomy:
                         self.history, self.rounds = self.recent()
                     output = self.autonomy_message_output if autonomy else None
                     (output or self.output)(ChatOutput(f'{self.cfg.name}: {displayed_text}', media))
             except BaseException:
-                if media:
+                if media and not committed:
                     self.voice.discard(media)
                 raise
         if voice_failure:
@@ -1104,7 +1106,7 @@ class Chat:
             if extra_context is None:
                 _, extra_context = recent_activity_context(self.store, self.cfg)
         stable, changing = self_facts(self.cfg, self.budget, memory_mode(self.memory), self.tools,
-                                      self.voice is not None)
+                                      self.voice is not None and self.tools is not None)
         description = stable + '\n' + changing
         # Order matters for the provider's prefix cache: everything that stays the same between requests
         # comes first, then the chat history, then what changes every request (recalled memories,
@@ -1685,7 +1687,7 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead, activity=N
                 if chat.last_self is None:
                     output('（尚未发送消息：这是当前说明的预览，发送前会刷新。）')
                     output(build_self_description(chat.cfg, chat.budget, memory_mode(chat.memory), chat.tools,
-                                                  chat.voice is not None))
+                                                  chat.voice is not None and chat.tools is not None))
                 else:
                     output(chat.last_self)
             elif text == '/memory' or text.startswith(('/forget ', '/restore ', '/delete ')):

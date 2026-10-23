@@ -279,7 +279,13 @@ output_cny_per_million = "8"
                  'name': 'voice message'}
         audio = b'ID3fictional'
         (self.store.root / 'test' / 'media' / media['filename']).write_bytes(audio)
-        self.assertEqual(self.hub.register_voice_media(media), media)
+        registered = self.hub.register_voice_media(media)
+        self.assertEqual(registered['id'], media['id'])
+        self.assertEqual(registered['request_id'], 'assistant-voice-' + media['id'])
+        self.hub._rewrite_media_index()
+        reopened = Hub('Test', ActivityState(self.store.root / 'test' / 'resident-state.json'),
+                       media_root=self.store.root / 'test' / 'media')
+        self.assertEqual(reopened.media_info(media_id)['request_id'], registered['request_id'])
         request = urllib.request.Request(
             f'http://127.0.0.1:{self.port}/media/{media["filename"]}?t={TOKEN}')
         with urllib.request.urlopen(request, timeout=5) as response:
@@ -318,6 +324,11 @@ output_cny_per_million = "8"
                     if 'send_message with voice: true' in item['text']]
         self.assertEqual(len(matching), 1)
         self.assertEqual(row['pending_event'], first)
+        manager.suppress_voice_output_notice()
+        row = json.loads(manager.cap_path.read_text())
+        self.assertIsNone(row['pending_event'])
+        self.assertFalse(row['voice_output_announced'])
+        self.assertEqual(len(row['capability_updates']), 1)
 
     def test_photo_notice_save_failure_does_not_disable_chat_tools(self):
         manager = object.__new__(FilesystemTools)

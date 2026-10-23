@@ -2,6 +2,7 @@
 from dataclasses import dataclass
 from decimal import Decimal
 import json
+import http.client
 import os
 from pathlib import Path
 import re
@@ -13,7 +14,7 @@ import uuid
 MAX_AUDIO_BYTES = 25 * 1024 * 1024
 MAX_RESPONSE_BYTES = MAX_AUDIO_BYTES * 2 + 64 * 1024
 REGION_HOSTS = {'cn': 'https://api.minimaxi.com', 'global': 'https://api.minimax.io'}
-CJK = re.compile(r'[\u3400-\u9fff]')
+CJK = re.compile(r'[\u3400-\u9fff\U00020000-\U000323af]')
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -107,7 +108,7 @@ class MiniMaxVoice:
             if exc.code == 429:
                 raise VoiceError('MiniMax 额度不足或请求过多。') from exc
             raise VoiceError(f'MiniMax 请求失败（HTTP {exc.code}）。') from exc
-        except (TimeoutError, urllib.error.URLError, OSError) as exc:
+        except (TimeoutError, urllib.error.URLError, OSError, http.client.IncompleteRead) as exc:
             raise VoiceError('无法连接 MiniMax，请检查网络和账号区域。', outcome_unknown=True) from exc
         try:
             body = json.loads(raw.decode('utf-8'))
@@ -145,7 +146,10 @@ class MiniMaxVoice:
         self.budget.settle_estimate(reservation, 'minimax-voice', settled_amount=amount)
         media_id = uuid.uuid4().hex
         filename = media_id + '.mp3'
-        self.media_root.mkdir(parents=True, exist_ok=True)
+        try:
+            self.media_root.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise VoiceError('语音已经生成，但无法保存到本机。') from exc
         target = self.media_root / filename
         temp = target.with_suffix('.tmp')
         try:
@@ -156,6 +160,12 @@ class MiniMaxVoice:
                     handle.flush()
                     os.fsync(handle.fileno())
                 temp.replace(target)
+                if os.name != 'nt':
+                    directory = os.open(self.media_root, os.O_RDONLY)
+                    try:
+                        os.fsync(directory)
+                    finally:
+                        os.close(directory)
             except OSError as exc:
                 raise VoiceError('语音已经生成，但无法保存到本机。') from exc
         finally:

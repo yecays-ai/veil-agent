@@ -563,6 +563,29 @@ class FilesystemTools:
             return False
 
     @capability_transaction
+    def suppress_voice_output_notice(self):
+        """Drop an undelivered availability notice when local voice config is absent."""
+        if getattr(self, 'cap_path', None) is None:
+            return
+        try:
+            row = json.loads(self.cap_path.read_text(encoding='utf-8')) if self.cap_path.exists() else {}
+            if not isinstance(row, dict):
+                raise ValueError('invalid capability record')
+            marker = 'send_message with voice: true'
+            pending = row.get('pending_event')
+            if isinstance(pending, str) and marker in pending:
+                remaining = '\n'.join(line for line in pending.splitlines() if marker not in line).strip()
+                row['pending_event'] = remaining or None
+                row['pending_event_model'] = remaining or None
+                row['voice_output_announced'] = False
+                save_capabilities(self.cap_path, row)
+            self.capability_event = row.get('pending_event')
+            self.capability_event_model = row.get('pending_event_model')
+            return True
+        except Exception:
+            return False
+
+    @capability_transaction
     def announce_voice_output(self):
         if getattr(self, 'cap_path', None) is None:
             return
