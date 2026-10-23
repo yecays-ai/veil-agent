@@ -355,6 +355,31 @@ output_cny_per_million = "8"
         reopened.finish_media_submission(True, 'hello', recovered, request_id)
         self.assertNotIn('delivery_pending', reopened.media_info(media['id']))
 
+    def test_restart_does_not_replay_a_voice_send_outside_the_recent_history_window(self):
+        media = self.hub.save_voice('audio/webm', b'\x1a\x45\xdf\xa3fictional audio')
+        media_id = media['id']
+        self.hub.media_index[media_id]['request_id'] = 'voice-send-' + media_id
+        self.hub._rewrite_media_index()
+        voice_event_media = {key: media[key] for key in ('id', 'filename', 'mime', 'name', 'kind', 'transcript')}
+        self.store.append('test/chat.jsonl', {
+            'role': 'user', 'content': '[voice message] fictional transcript', 'time': '2026-10-23T10:00:00+08:00',
+            'request_id': 'voice-send-' + media_id, 'media': voice_event_media})
+        self.store.append('test/chat.jsonl', {
+            'role': 'assistant', 'content': 'Fictional reply', 'time': '2026-10-23T10:00:02+08:00'})
+        for index in range(25):
+            stamp = f'2026-10-23T10:{index + 1:02d}:00+08:00'
+            self.store.append('test/chat.jsonl', {'role': 'user', 'content': f'fictional turn {index}', 'time': stamp})
+            self.store.append('test/chat.jsonl', {'role': 'assistant', 'content': f'fictional answer {index}', 'time': stamp})
+
+        chat = Chat(self.cfg, self.store, Budget(self.store), self.model)
+        self.assertNotIn(media_id, {row.get('media', {}).get('id') for row in chat.history_events
+                                    if isinstance(row.get('media'), dict)})
+        with patch('web_agent.run_chat', return_value=None):
+            serve_chat(chat, self.hub)
+
+        self.assertFalse(any(event.get('media', {}).get('id') == media_id for event in self.hub.events
+                             if isinstance(event.get('media'), dict)))
+
     def test_snapshot_exposes_the_same_capability_record_used_by_peter(self):
         record = 'CAPABILITY RECORD\n2026-10-22T00:00:00+00:00: Capability update: added fictional_tool.'
         self.hub.capability_record = lambda: record
@@ -655,6 +680,7 @@ output_cny_per_million = "8"
         estimated = estimate_request_tokens(messages)
         self.assertGreaterEqual(estimated, 4096)
         self.assertLess(estimated, 5000)
+        self.assertGreaterEqual(estimate_request_tokens(messages, calibration=0.24), 4096)
         collapse_latest_photo(messages)
         self.assertEqual(messages[0]['content'], '[Lan sent a photo]\nfictional caption')
 

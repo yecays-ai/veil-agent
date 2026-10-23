@@ -24,7 +24,8 @@ PHOTO_PLACEHOLDER = '[Lan sent a photo]'
 PHOTO_MIME_TYPES = {'image/png', 'image/jpeg', 'image/gif', 'image/webp'}
 MAX_PHOTO_BYTES = 5 * 1024 * 1024
 
-RAW_DSML_TOOL_CALL = re.compile(r'<[|｜]DSML[|｜](?:tool_calls|function_calls|invoke)\b', re.IGNORECASE)
+RAW_DSML_TOOL_CALL = re.compile(
+    r'<\s*[|｜]+\s*DSML\s*[|｜]+\s*(?:tool_calls?|function_calls?|invoke|calls)\b', re.IGNORECASE)
 CJK_TEXT = re.compile(r'[\u3400-\u9fff]')
 AUTONOMY_WAKE = object()
 TOOL_DATA_RESULTS = {'read_text_file', 'read_multiple_files', 'directory_tree', 'list_directory',
@@ -567,9 +568,27 @@ class Budget:
                     and row.get('accounting') in accountings and row.get('id') not in settled])
 
     @synchronized
-    def settle(self, request_id, cfg, prompt, completion, cached):
+    def input_token_ratio(self, character, model):
+        rows = self.store.read('costs.jsonl')
+        reservations = {row.get('id'): row for row in rows if row.get('type') == 'reserve'}
+        highest_ratio = None
+        for row in reversed(rows):
+            if row.get('type') != 'settle' or type(row.get('input_bytes')) is not int or row['input_bytes'] <= 0:
+                continue
+            reservation = reservations.get(row.get('id'), {})
+            if (reservation.get('character') != character or reservation.get('model') != model
+                    or type(row.get('prompt_tokens')) is not int or row['prompt_tokens'] <= 0):
+                continue
+            ratio = row['prompt_tokens'] / row['input_bytes']
+            highest_ratio = ratio if highest_ratio is None else max(highest_ratio, ratio)
+        return highest_ratio
+
+    @synchronized
+    def settle(self, request_id, cfg, prompt, completion, cached, *, input_bytes=None):
         if any(type(n) is not int or n < 0 for n in (prompt, completion, cached)) or cached > prompt:
             raise UserError('接口未返回有效用量；本次保留预留费用。')
+        if input_bytes is not None and (type(input_bytes) is not int or input_bytes <= 0):
+            raise UserError('输入长度记录无效；本次保留预留费用。')
         p = cfg.provider
         if prompt > p['max_input_tokens'] or completion > cfg.max_output_tokens:
             raise UserError('接口用量超过配置边界；已停止并保留预留费用，请核对供应商。')
@@ -579,9 +598,12 @@ class Budget:
         rows = self.store.read('costs.jsonl')
         if any(row.get('type') == 'settle' and row.get('id') == request_id for row in rows):
             return False
-        self.store.append('costs.jsonl', {'type': 'settle', 'id': request_id,
+        settlement = {'type': 'settle', 'id': request_id,
                           'amount': str(amount), 'prompt_tokens': prompt,
-                          'completion_tokens': completion, 'cached_tokens': cached})
+                          'completion_tokens': completion, 'cached_tokens': cached}
+        if input_bytes is not None:
+            settlement['input_bytes'] = input_bytes
+        self.store.append('costs.jsonl', settlement)
         return True
 
     @synchronized
@@ -672,8 +694,7 @@ def history_keep(total, limit):
 
 
 def message_request_bytes(message):
-    # Do not count base64 as text. Reserve 4096 tokens per image: this is deliberately
-    # above the supported providers' resized-image charges and keeps preflight portable.
+    # Do not count base64 as text; estimate_request_tokens reserves 4096 tokens per image.
     sized = message
     content = message.get('content') if isinstance(message, dict) else None
     if isinstance(content, list):
@@ -692,10 +713,27 @@ def request_byte_size(messages, tools=None):
     return message_bytes + schema_bytes
 
 
-def estimate_request_tokens(messages, tools=None, calibration=0.5):
-    """Conservative preflight estimate; tool-loop usage calibrates it after a real request."""
-    ratio = max(0.5, min(1.0, calibration))
-    return math.ceil(request_byte_size(messages, tools) * ratio)
+def estimate_message_tokens(messages, calibration):
+    ratio = max(0.15, min(1.0, calibration))
+    image_count = sum(1 for message in messages if isinstance(message, dict)
+                      for part in message.get('content', []) if isinstance(message.get('content'), list)
+                      and isinstance(part, dict) and part.get('type') == 'image_url')
+    message_bytes = sum(message_request_bytes(message) for message in messages)
+    text_bytes = max(0, message_bytes - image_count * 8192)
+    return math.ceil(text_bytes * ratio + image_count * 4096)
+
+
+def estimate_request_tokens(messages, tools=None, calibration=0.4):
+    """Preflight estimate using a safety ratio and a portable fixed image reserve."""
+    ratio = max(0.15, min(1.0, calibration))
+    schema_bytes = len(json.dumps(tools or [], ensure_ascii=False).encode('utf-8')) + 256
+    return estimate_message_tokens(messages, ratio) + math.ceil(schema_bytes * ratio)
+
+
+def conservative_token_ratio(observed_ratio):
+    if not isinstance(observed_ratio, (int, float)) or not math.isfinite(observed_ratio) or observed_ratio <= 0:
+        return 0.4
+    return min(1.0, max(0.4, observed_ratio * 1.2))
 
 
 def collapse_latest_photo(messages):
@@ -1119,18 +1157,21 @@ class Chat:
         # Tool definitions already tell the model what it can use. Peter gets the one-time update
         # notice below and reads the dated record himself through capability_history.
         tail = [*recalled]
+        runtime_context = []
         if extra_context:
-            tail.append({'role': 'system', 'content': extra_context})
+            runtime_context.append({'role': 'system', 'content': extra_context})
         if isinstance(self.pending_capability_event_model, str) and self.pending_capability_event_model and not autonomy:
-            tail.append({'role': 'system', 'content':
+            runtime_context.append({'role': 'system', 'content':
                 'Program-generated capability update: ' + self.pending_capability_event_model})
-        tail.append({'role': 'system', 'content': changing})
+        runtime_context.append({'role': 'system', 'content': changing})
+        tail.extend(runtime_context)
         user = {'role': 'user', 'content': self._photo_content(text, media)}
-        # The input limit is in tokens, not UTF-8 bytes. Start with the same
-        # conservative byte-to-token floor used by the tool loop; schema bytes
-        # are included but must not be counted one-for-one as tokens.
+        observed_ratio = self.budget.input_token_ratio(self.cfg.id, self.cfg.provider['model'])
+        calibration = conservative_token_ratio(observed_ratio)
+        # The provider limit is in tokens. Reuse this model's measured token/byte
+        # ratio when available; start conservatively until a response can calibrate it.
         def bound(history):
-            return estimate_request_tokens([*head, *history, *tail, user], tool_schema)
+            return estimate_request_tokens([*head, *history, *tail, user], tool_schema, calibration)
         limit = self.cfg.provider['max_input_tokens']
         # collapse_latest_photo mutates message dictionaries; keep the durable
         # in-memory history intact while preparing this request's model view.
@@ -1151,6 +1192,15 @@ class Chat:
             self.trim_noted = True
             self.trim_note = (f'（为了不超出长度上限，这次只带了最近 {kept} 轮原文；'
                               '更早的聊天仍保存在本机，长期记忆不受影响。）')
+            components = [
+                ('人设/系统', head), ('记忆', recalled), ('运行上下文', runtime_context),
+                ('历史', history), ('当前消息', [user])]
+            usage = [f'{name}≈{estimate_message_tokens(items, calibration)}'
+                     for name, items in components]
+            schema_bytes = len(json.dumps(tool_schema or [], ensure_ascii=False).encode('utf-8')) + 256
+            usage.insert(3, f'工具定义≈{math.ceil(schema_bytes * calibration)}')
+            self.trim_note = (f'（长度估算：本轮只带最近 {kept} 轮原文；分项 tokens：'
+                              + '、'.join(usage) + f'；上限 {limit}。完整聊天仍保存在本机。）')
         messages = [*head, *history, *tail, user]
         tool_summaries = []
         with saving():
@@ -1173,6 +1223,7 @@ class Chat:
                                                         autonomy=autonomy)
             else:
                 try:
+                    sent_bytes = request_byte_size(messages)
                     reply, prompt, completion, cached = self.model(messages)
                 except UserError:
                     raise
@@ -1204,7 +1255,7 @@ class Chat:
                 self.store.append(self.path, {'role': 'assistant', 'content': reply,
                     'request_id': request_id, 'origin': 'reply'})
             if not self.tool_mode:
-                self.budget.settle(request_id, self.cfg, prompt, completion, cached)
+                self.budget.settle(request_id, self.cfg, prompt, completion, cached, input_bytes=sent_bytes)
             # The event was included in the successful normal-chat request above.
             # Do not mark it delivered before the provider returns usable text:
             # failed requests must leave the durable pending event for a retry.
@@ -1250,9 +1301,12 @@ class Chat:
             if self.runtime_monitor:
                 self.runtime_monitor.observe_tool(name, state, autonomy=autonomy, **metadata)
 
-        # Start at the same conservative floor used by Chat.send. After the first
-        # response, provider-reported usage calibrates subsequent tool-loop estimates.
-        calibration = 0.5
+        # Reuse provider-reported token usage from this model. A safety margin is
+        # applied to new estimates; the exact measured ratio is used when removing
+        # bytes already included in a previous request.
+        observed_ratio = self.budget.input_token_ratio(self.cfg.id, self.cfg.provider['model'])
+        measured_ratio = observed_ratio or 0.4
+        calibration = conservative_token_ratio(observed_ratio)
         measured_tokens = None
         measured_bytes = 0
 
@@ -1263,11 +1317,15 @@ class Chat:
         def request_size(offered):
             size = request_bytes(offered)
             if measured_tokens is None:
-                return math.ceil(0.5 * size)
-            # Preserve the measured baseline; only new bytes need the initial
-            # conservative estimate. Removed history uses the measured ratio.
+                return estimate_request_tokens(loop_messages, offered, calibration)
+            # Preserve the measured baseline; new bytes use a safety margin and
+            # removed history uses the measured ratio.
             delta = size - measured_bytes
-            rate = 0.5 if delta >= 0 else min(0.5, calibration)
+            # Newly returned tool records/results can differ from the plain-text
+            # prompt used for calibration. Keep their original conservative floor
+            # so a short or atypical first request cannot make oversized records
+            # look safe under the provider input limit.
+            rate = max(calibration, 0.5) if delta >= 0 else measured_ratio
             return math.ceil(max(0, measured_tokens + delta * rate) * 1.05)
 
         def fit_history(offered):
@@ -1283,8 +1341,9 @@ class Chat:
             if removed and not self.trim_noted:
                 self.trim_noted = True
                 kept = sum(m['role'] == 'user' for m in loop_messages[history_start:history_start + history_count])
-                self.trim_note = (f'（为了不超出长度上限，这次只带了最近 {kept} 轮原文；'
-                                  '更早的聊天仍保存在本机，长期记忆不受影响。）')
+                self.trim_note = (f'（工具调用后的上下文估算为 {request_size(offered)} / '
+                                  f'{self.cfg.provider["max_input_tokens"]} tokens，已裁到最近 {kept} 轮；'
+                                  '完整聊天仍保存在本机。）')
 
         configured_steps = (self.cfg.tools or {}).get('max_steps', 1)
         max_steps = min(configured_steps, 12) if autonomy else configured_steps
@@ -1333,9 +1392,10 @@ class Chat:
                 raise RequestFailed('请求失败，未自动重试；输入已保存，本次保留预留费用。') from exc
             message, prompt, completion, cached, *finish = response
             if isinstance(prompt, int) and prompt > 0:
-                calibration = min(1.0, prompt / sent_bytes)
+                measured_ratio = prompt / sent_bytes
+                calibration = max(calibration, conservative_token_ratio(measured_ratio))
                 measured_tokens, measured_bytes = prompt, sent_bytes
-            self.budget.settle(reservation, step_cfg, prompt, completion, cached)
+            self.budget.settle(reservation, step_cfg, prompt, completion, cached, input_bytes=sent_bytes)
             if autonomy and self.autonomy_should_yield and self.autonomy_should_yield():
                 self.autonomy_interrupted = True
                 final = 'Autonomous activity yielded after the model request to let chat or a control action proceed.'
