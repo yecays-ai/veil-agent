@@ -2,10 +2,10 @@
 
 ## 上一位停在哪
 
-- 工单 076 分支基于 main `a3eb961b1c1e8be85cd46661ea4e6745b0c66101`；PR 尚待创建与审查。
+- 工单 076 PR #118（head `81c8abb`）基于 main `a3eb961b1c1e8be85cd46661ea4e6745b0c66101`，当前未合并。
 - 桌面聊天改为本地深色紧凑界面，整合仓库已有聊天、审批、记忆、预算、能力、图片、语音和自主活动交互；桌面入口不再加载旧网页聊天。
 - 图片原图支持到 25 MB，发送前逐级缩放压缩至 4.8 MB 以下。超过 5 MB 的隔离 PNG 烟测已通过；Agent 核心 5 MB 限制未改变。
-- `npm test`：2 项通过。`npm run test:windows`：隔离 Electron 烟测通过本地聊天、历史、审批拒绝、图片压缩上传、语音媒体接口、TTS 气泡、活动控件、收放、尺寸、菜单和沙箱。未验证真实麦克风、在线转写、真实 Agent 或真实 Peter 音色。
+- GitHub PR 检查 Tests #1045、Windows desktop #35、Dependency security #117 均通过；Windows 烟测通过本地聊天、历史、审批拒绝、超过 5 MB 图片压缩上传、语音媒体接口、TTS 气泡、活动控件、收放、尺寸、菜单和沙箱。本机复跑时后端 fixture 未就绪，故本机测试不记为通过；CodeRabbit 与 Cubic 审查仍在进行。未验证真实麦克风、在线转写、真实 Agent 或真实 Peter 音色。
 - E 盘 `start-desktop.bat` 已启动并确认实际进程来自 `E:\Peter-Agent\VEIL\desktop-app\VEIL Desktop\VEIL.exe`。Agent 数据及 `data\desktop.json` 保留。
 - 075 工单要求的真人图片、语音、记忆/能力体验仍待 Lan 验收；不要将隔离烟测说成人工验收。
 
