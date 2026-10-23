@@ -62,16 +62,27 @@ class RuntimeMonitor:
 
     def _pause(self):
         try:
-            if self.activity.enabled():
-                self.activity.set(False)
-        except (OSError, ValueError, UnicodeError, AttributeError):
-            pass
+            self.activity.set(False)
+            return not self.activity.enabled()
+        except Exception:
+            return False
+
+    def _save_unknown_memory(self, code, action):
+        paused = self._pause()
+        self._save(self._row('memory', 'paused' if paused else 'attention', 'unknown',
+                             code if paused else 'memory_pause_failed',
+                             action if paused else
+                             'The uncertain write was not replayed, but automatic pause could not be confirmed; disable autonomy and verify memory state before continuing.'))
 
     def observe_memory(self, facts):
         """Accept only classified MCP metadata; ignore payload fields by construction."""
         if not isinstance(facts, dict):
             return
         code, stage, tool = facts.get('code'), facts.get('stage'), facts.get('tool')
+        if (self.current.get('module') == 'memory' and self.current.get('classification') == 'unknown'
+                and self.current.get('code') in {'memory_result_unknown', 'memory_pause_failed'}
+                and code != 'memory_operation_verified'):
+            return  # Read/recovery events cannot resolve a different uncertain write.
         if code == 'retry_succeeded' and stage == 'mcp_verified':
             self._save(self._row('memory', 'recovered', 'safe_recovery',
                                  'memory_recovered', 'No action is needed.'))
@@ -81,25 +92,38 @@ class RuntimeMonitor:
                                      'memory_service_recovered',
                                      'The service recovered; wait for the original operation result.'))
         elif code == 'recovery_failed':
-            self._pause()
-            self._save(self._row('memory', 'paused', 'unknown',
-                                 'memory_recovery_failed',
-                                 'Keep data intact and verify the memory service before retrying.'))
-        elif code == 'mcp_call':
             mutation = tool in self._MEMORY_MUTATIONS
-            if mutation:
-                self._pause()
-            self._save(self._row(
-                'memory', 'paused' if mutation else 'attention',
-                'unknown' if mutation else 'safe_to_retry',
-                'memory_result_unknown' if mutation else 'memory_unavailable',
-                ('Verify memory state before retrying; do not repeat the operation.' if mutation
-                 else 'The request was not confirmed; retry only from the original user action.')))
+            self._save(self._row('memory', 'attention',
+                                 'unknown' if mutation else 'safe_to_retry',
+                                 'memory_recovery_failed' if mutation else 'memory_unavailable',
+                                 'The write outcome will be classified after the original call returns; do not repeat it.'
+                                 if mutation else
+                                 'Memory recovery failed; retry the read only from the original user action.'))
+        elif code == 'mcp_call':
+            self._save(self._row('memory', 'attention', 'safe_to_retry',
+                                 'memory_unavailable',
+                                 'The request is still being recovered; wait for its final result before retrying.'))
+        elif code == 'memory_operation_failed':
+            mutation = tool in self._MEMORY_MUTATIONS
+            uncertain = facts.get('error_code') in {'unknown', 'timeout'}
+            if mutation and uncertain:
+                self._save_unknown_memory(
+                    'memory_result_unknown',
+                    'Verify memory state before retrying; do not repeat the operation.')
+            elif mutation:
+                self._save(self._row('memory', 'attention', 'safe_to_retry',
+                                     'memory_operation_not_confirmed',
+                                     'The write was not confirmed; retry only after checking the original action.'))
+            elif not mutation:
+                self._save(self._row('memory', 'attention', 'safe_to_retry',
+                                     'memory_unavailable',
+                                     'The read was not confirmed; retry only from the original user action.'))
 
-    def observe_tool(self, name, state, autonomy=False, **_ignored):
+    def observe_tool(self, name, state, autonomy=False, checkpoint_verified=False, **_ignored):
         if not isinstance(name, str):
             return
-        if state == '成功' and name == 'long_task_update' and self.current.get('module') == 'long_task':
+        if (state == '成功' and name == 'long_task_update' and checkpoint_verified is True
+                and self.current.get('module') == 'long_task'):
             self._save(self._row('long_task', 'recovered', 'safe_recovery',
                                  'checkpoint_verified', 'No action is needed.'))
             return
@@ -108,14 +132,19 @@ class RuntimeMonitor:
         from long_tasks import SIDE_EFFECT_TOOLS
         side_effect = name in SIDE_EFFECT_TOOLS
         if side_effect and autonomy:
-            self._pause()
+            paused = self._pause()
+        else:
+            paused = True
         self._save(self._row(
             'long_task' if side_effect and autonomy else 'file_tools',
-            'paused' if side_effect and autonomy else 'attention',
+            'paused' if side_effect and autonomy and paused else 'attention',
             'unknown' if side_effect else 'safe_to_retry',
-            'side_effect_result_unknown' if side_effect else 'tool_unavailable',
+            ('side_effect_result_unknown' if paused else 'side_effect_pause_failed') if side_effect else 'tool_unavailable',
             ('Inspect the saved checkpoint and target before continuing; do not repeat the operation.'
-             if side_effect else 'Retry only when the user asks or the service becomes available.')))
+             if side_effect and paused else
+             'The outcome is unknown; automatic pause could not be confirmed. Disable autonomy manually, then inspect the saved checkpoint and target.'
+             if side_effect else
+             'Retry only when the user asks or the service becomes available.')))
 
     def snapshot(self, long_tasks=None, tools=None):
         with self.lock:

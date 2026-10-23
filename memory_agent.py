@@ -197,7 +197,7 @@ class MCP:
             if self.diagnostic:
                 try:
                     self.diagnostic({'code': 'recovery_failed', 'stage': stage,
-                                     'attempt': self.recovery_count})
+                                     'tool': name, 'attempt': self.recovery_count})
                 except Exception:
                     pass
             return False
@@ -519,6 +519,7 @@ def explain(code, facts):
 class Memory:
     def __init__(self, cfg, store, budget, model, backend, runtime_monitor=None):
         self.cfg, self.store, self.budget, self.model, self.backend = cfg, store, budget, model, backend
+        self.runtime_monitor = runtime_monitor
         vault_path(store.root, cfg.id)
         self.path = f'{cfg.id}/memory/_agent/state.jsonl'
         self.diagnostics = f'{cfg.id}/memory/_agent/diagnostics.jsonl'
@@ -530,9 +531,14 @@ class Memory:
         self._fingerprint_key = self._load_fingerprint_key()
         if isinstance(backend, MCP):
             def diagnostic(facts):
-                self.store.append(self.diagnostics, facts)
-                if runtime_monitor:
-                    runtime_monitor.observe_memory(facts)
+                try:
+                    if runtime_monitor:
+                        runtime_monitor.observe_memory(facts)
+                finally:
+                    try:
+                        self.store.append(self.diagnostics, facts)
+                    except Exception:
+                        pass  # Safety state is independent from best-effort diagnostics.
             backend.diagnostic = diagnostic
         self.dropped_path = f'{cfg.id}/memory/_agent/dropped.jsonl'
         self.last_tool = None
@@ -994,16 +1000,23 @@ class Memory:
 
     def tool_failure(self, tool, exc):
         """Keep autonomous and interactive tool failures query- and body-free."""
+        error_code = self.safe_error_code(exc)
         try:
             row = {
                 'time': self.budget.clock(), 'code': 'memory_tool_failed',
                 'tool': tool, 'error_type': self.safe_error_type(exc),
             }
-            if error_code := self.safe_error_code(exc):
+            if error_code:
                 row['error_code'] = error_code
             self.store.append(self.diagnostics, row)
         except Exception:
             pass  # A diagnostic write must never hide the original tool failure.
+        if self.runtime_monitor:
+            try:
+                self.runtime_monitor.observe_memory({'code': 'memory_operation_failed',
+                                                     'tool': tool, 'error_code': error_code})
+            except Exception:
+                pass  # Monitoring must not change the tool's original result.
 
     def retrieval_failure(self, stage, exc):
         """Record only a stable stage and exception class for automatic recall."""

@@ -61,6 +61,7 @@ class LongTaskStore:
     def __init__(self, store, character_id):
         self.store = store
         self.character_id = character_id
+        self._checkpoint_verified = False
         self.path = Path(store.root) / character_id / 'long-task.json'
         self.tools = [TASK_STATUS_TOOL, TASK_UPDATE_TOOL]
         self.current_tool_step = -1
@@ -243,6 +244,7 @@ class LongTaskStore:
         return result
 
     def invoke(self, name, args, approval=None):
+        self._checkpoint_verified = False
         if name == 'long_task_status':
             return self.status_text(), '成功', self.preview_summary(name, args)
         try:
@@ -254,6 +256,12 @@ class LongTaskStore:
         except (KeyError, TypeError, ValueError):
             return ('The long-task arguments are invalid. For create, provide a title and goal; for update, use the current task ID.',
                     '被拒绝', '长期任务')
+
+    def take_checkpoint_verified(self):
+        """Consume the signal set only after _update persisted a verified resolution."""
+        verified = self._checkpoint_verified
+        self._checkpoint_verified = False
+        return verified
 
     def _create(self, args):
         if set(args) - {'action', 'title', 'goal'}:
@@ -337,6 +345,8 @@ class LongTaskStore:
                 task['waiting_for'] = waiting_for.strip()
             task['updated_at'] = now()
             self._save(task)
+            if resolve:
+                self._checkpoint_verified = True
         return f"长期任务已更新：{task['status']}。", '成功', task['title']
 
     @staticmethod

@@ -1506,6 +1506,7 @@ class Chat:
                     if autonomy:
                         autonomy_tool_steps += 1
                     try:
+                        checkpoint_verified = False
                         if call.function.name == 'send_message':
                             result, state, summary = self.send_message(
                                 call.function.arguments, request_id,
@@ -1522,6 +1523,7 @@ class Chat:
                             if self.long_tasks.handles(call.function.name):
                                 result, state, summary = self.long_tasks.invoke(call.function.name, args,
                                                                                 self.approval)
+                                checkpoint_verified = self.long_tasks.take_checkpoint_verified()
                             elif self.tools:
                                 summary = (self.tools.preview_summary(call.function.name, args)
                                            if hasattr(self.tools, 'preview_summary') else call.function.name)
@@ -1572,7 +1574,8 @@ class Chat:
                         self.output(display_call(call.function.name, summary, result_state,
                                                  (display_detail if result_state != '成功' else None)))
                     summaries.append({'tool': call.function.name, 'path': summary, 'state': state, **delivery})
-                    log_tool(call.function.name, summary, state, **delivery)
+                    verified = {'checkpoint_verified': True} if checkpoint_verified else {}
+                    log_tool(call.function.name, summary, state, **verified, **delivery)
                     if autonomy and self.autonomy_should_yield and self.autonomy_should_yield():
                         self.autonomy_interrupted = True
                         self.budget.settle(next_reservation, next_cfg, 0, 0, 0)

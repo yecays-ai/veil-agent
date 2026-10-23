@@ -36,10 +36,54 @@ class RuntimeMonitorTests(unittest.TestCase):
         model.assert_not_called()
 
     def test_service_restart_does_not_turn_uncertain_write_into_success(self):
-        self.monitor.observe_memory({'code': 'mcp_call', 'stage': 'mcp_tool', 'tool': 'hold'})
+        self.monitor.observe_memory({'code': 'memory_operation_failed', 'tool': 'hold',
+                                     'error_code': 'unknown'})
         self.monitor.observe_memory({'code': 'recovery_succeeded', 'stage': 'mcp_verified'})
         status = self.monitor.snapshot()
         self.assertEqual((status['state'], status['classification']), ('paused', 'unknown'))
+
+    def test_safe_mutation_retry_does_not_pause_activity(self):
+        self.monitor.observe_memory({'code': 'mcp_call', 'tool': 'hold', 'attempt': 1})
+        self.assertTrue(self.activity.enabled())
+        self.monitor.observe_memory({'code': 'retry_succeeded', 'stage': 'mcp_verified',
+                                     'tool': 'hold', 'attempt': 2})
+        self.assertTrue(self.activity.enabled())
+        self.assertEqual(self.monitor.snapshot()['state'], 'recovered')
+
+    def test_read_only_recovery_failure_needs_attention_without_pausing(self):
+        self.monitor.observe_memory({'code': 'mcp_call', 'tool': 'breath_search'})
+        self.monitor.observe_memory({'code': 'recovery_failed', 'tool': 'breath_search',
+                                     'stage': 'recovery'})
+        self.assertTrue(self.activity.enabled())
+        self.assertEqual((self.monitor.snapshot()['state'], self.monitor.snapshot()['classification']),
+                         ('attention', 'safe_to_retry'))
+
+    def test_activity_pause_failure_never_reports_paused(self):
+        self.activity.set = Mock(side_effect=OSError('fictional disk failure'))
+        self.monitor.observe_memory({'code': 'memory_operation_failed', 'tool': 'hold',
+                                     'error_code': 'unknown'})
+        status = self.monitor.snapshot()
+        self.assertEqual((status['state'], status['classification'], status['code']),
+                         ('attention', 'unknown', 'memory_pause_failed'))
+        self.assertIn('disable autonomy', status['action'])
+
+    def test_read_events_cannot_clear_unknown_memory_write(self):
+        self.monitor.observe_memory({'code': 'memory_operation_failed', 'tool': 'hold',
+                                     'error_code': 'unknown'})
+        self.monitor.observe_memory({'code': 'mcp_call', 'tool': 'breath_search'})
+        self.monitor.observe_memory({'code': 'retry_succeeded', 'stage': 'mcp_verified',
+                                     'tool': 'breath_search', 'attempt': 2})
+        self.assertEqual((self.monitor.snapshot()['state'], self.monitor.snapshot()['classification']),
+                         ('paused', 'unknown'))
+
+    def test_regular_long_task_update_cannot_verify_pending_side_effect(self):
+        self.monitor.observe_tool('write_file', '出错', autonomy=True)
+        self.monitor.observe_tool('long_task_update', '成功')
+        self.assertEqual((self.monitor.snapshot()['state'], self.monitor.snapshot()['classification']),
+                         ('paused', 'unknown'))
+        self.monitor.observe_tool('long_task_update', '成功', checkpoint_verified=True)
+        self.assertEqual((self.monitor.snapshot()['state'], self.monitor.snapshot()['classification']),
+                         ('recovered', 'safe_recovery'))
 
     def test_unknown_autonomous_side_effect_pauses_and_never_records_private_values(self):
         self.monitor.observe_tool('write_file', '出错', autonomy=True,
@@ -53,6 +97,14 @@ class RuntimeMonitorTests(unittest.TestCase):
         saved = (self.store.root / 'fixture' / 'runtime-status.json').read_text(encoding='utf-8')
         self.assertNotIn('FICTIONAL_PRIVATE_CHAT', saved)
         self.assertNotIn('private/file', saved)
+
+    def test_side_effect_pause_failure_never_reports_paused(self):
+        self.activity.set = Mock(side_effect=OSError('fictional disk failure'))
+        self.monitor.observe_tool('write_file', '出错', autonomy=True)
+        status = self.monitor.snapshot()
+        self.assertEqual((status['state'], status['classification'], status['code']),
+                         ('attention', 'unknown', 'side_effect_pause_failed'))
+        self.assertIn('Disable autonomy manually', status['action'])
 
     def test_read_failure_needs_attention_but_does_not_pause_activity(self):
         self.monitor.observe_tool('read_text_file', '出错', autonomy=True)
