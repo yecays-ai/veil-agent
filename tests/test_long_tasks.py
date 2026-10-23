@@ -39,6 +39,27 @@ class LongTaskTests(unittest.TestCase):
         self.assertEqual(saved['progress'][0]['text'], 'Part one is in lab/part-one.md.')
         self.assertEqual(saved['next_step'], 'Write part two.')
 
+    def test_checkpoint_verified_signal_requires_persisted_readback_resolution(self):
+        task_id = self.create()
+        _, state, _ = self.tasks.invoke('long_task_update', {
+            'action': 'update', 'task_id': task_id, 'progress_update': 'Ordinary progress only.'})
+        self.assertEqual(state, '成功')
+        self.assertFalse(self.tasks.take_checkpoint_verified())
+
+        self.assertEqual(self.tasks.before_tool('write_file', 'fixture.txt', True,
+            {'content': 'FICTIONAL_EXPECTED'}), (None, True))
+        self.tasks.finish_tool('write_file', 'fixture.txt', '成功', 'written')
+        self.tasks.set_tool_step(1)
+        self.tasks.observe_tool_result('read_text_file', 'fixture.txt', '成功', 'FICTIONAL_EXPECTED')
+        operation_id = self.tasks.read()['pending_action']['operation_id']
+        self.tasks.set_tool_step(2)
+        _, state, _ = self.tasks.invoke('long_task_update', {
+            'action': 'update', 'task_id': task_id, 'resolve_pending': True,
+            'pending_operation_id': operation_id, 'progress_update': 'Readback matched exactly.'})
+        self.assertEqual(state, '成功')
+        self.assertTrue(self.tasks.take_checkpoint_verified())
+        self.assertFalse(self.tasks.take_checkpoint_verified())
+
     def test_tasks_are_separated_by_role(self):
         self.create()
         ghost = LongTaskStore(self.store, 'ghost')

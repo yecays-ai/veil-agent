@@ -139,12 +139,15 @@ class MCPRecoveryTests(unittest.TestCase):
         for name in ('breath_search', 'hold'):
             with self.subTest(name=name):
                 recovered = []
+                diagnostics = []
                 client = self.backend([ExceptionGroup('wrapped', [ConnectionRefusedError()]), 'after restart'])
                 client.recovery = lambda: recovered.append('verified')
+                client.diagnostic = diagnostics.append
                 self.assertEqual(client.call(name, {}), 'after restart')
                 self.assertEqual(client.calls, [name, name])
                 self.assertEqual(recovered, ['verified'])
                 self.assertEqual((client.recovery_count, client.recovery_streak), (1, 0))
+                self.assertEqual(sum(row['code'] == 'retry_succeeded' for row in diagnostics), 1)
 
     def test_refused_connection_without_restart_is_not_resent(self):
         client = self.backend([ConnectionRefusedError()])

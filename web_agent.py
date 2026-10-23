@@ -153,6 +153,8 @@ class Hub:
         self.defer_outputs = False
         self.deferred_outputs = []
         self.current_capabilities = lambda: 'Current capabilities are not available.'
+        self.runtime_status = lambda: {
+            'state': 'healthy', 'classification': 'healthy', 'message': '运行正常。'}
         self.activity_transition = lambda enabled: self.activity.set(enabled)
         self.autonomy_busy = False
         self.autonomy_interrupted = threading.Event()
@@ -808,6 +810,7 @@ class Hub:
                     'activity_enabled': self.activity.enabled(),
                     'current_capabilities': self.current_capabilities(),
                     'capability_record': self.capability_record(),
+                    'runtime_status': self.runtime_status(),
                     'memory_panel_url': self.memory_url, **autonomy}
 
 
@@ -1134,6 +1137,8 @@ def serve_chat(chat, hub):
     hub.activity_transition = lambda enabled: chat.set_activity_enabled(hub.activity, enabled)
     chat.activity_enabled = hub.activity.enabled
     hub.current_capabilities = chat.current_capability_snapshot
+    if chat.runtime_monitor:
+        hub.runtime_status = lambda: chat.runtime_monitor.snapshot(chat.long_tasks, chat.tools)
     try:
         run_chat(chat, input_fn=hub.input_fn, output=hub.output, drop=lambda: False,
                  activity=hub.activity, autonomy=hub.autonomy)
@@ -1189,6 +1194,8 @@ def main(argv=None):
             client, model = make_model(ROOT, cfg)
             voice = make_voice(ROOT, cfg, store, budget)
             activity = ActivityState(store.root / cfg.id / 'resident-state.json')
+            from runtime_monitor import RuntimeMonitor
+            runtime_monitor = RuntimeMonitor(store, cfg.id, activity)
             memory_port = (cfg.memory or {}).get('ombre_port') if (cfg.memory or {}).get('enabled') else None
             hub = Hub(cfg.name, activity, memory_port, store.root / cfg.id / 'media')
             token = secrets.token_urlsafe(24)
@@ -1209,20 +1216,20 @@ def main(argv=None):
                         if cfg.memory and cfg.memory.get('enabled'):
                             from memory_agent import Memory, open_ombre
                             with open_ombre(ROOT, cfg) as backend:
-                                with Memory(cfg, store, budget, model, backend) as memory:
+                                with Memory(cfg, store, budget, model, backend, runtime_monitor) as memory:
                                     if memory.native:
                                         from memory_native import NativeMemoryTools, ToolSet
                                         tools = ToolSet(tools, NativeMemoryTools(
                                             memory, cfg.tools['max_result_bytes']))
                                     serve_chat(Chat(cfg, store, budget, model, memory, tools,
                                                     approval=hub.approval, output=hub.output,
-                                                    voice=voice), hub)
+                                                    voice=voice, runtime_monitor=runtime_monitor), hub)
                                 for notice in memory.notices():
                                     hub.output(notice)
                         else:
                             serve_chat(Chat(cfg, store, budget, model, tools=tools,
                                             approval=hub.approval, output=hub.output,
-                                            voice=voice), hub)
+                                            voice=voice, runtime_monitor=runtime_monitor), hub)
             except UserError as exc:
                 hub.push('error', str(exc))
                 save_startup_error(error_path, str(exc))

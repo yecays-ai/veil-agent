@@ -89,6 +89,7 @@ textarea:focus{border-color:var(--accent)}
 </details>
 <div id="runtime">
   <span class="label" id="service-status">服务运行状态：正在连接…</span>
+  <span class="label" id="runtime-status">运行安全状态：正在读取…</span>
   <span class="label" id="activity-status">自主活动状态：正在读取…</span>
   <button id="activity-toggle" disabled>读取中…</button>
   <button id="exit-service" disabled>退出服务</button>
@@ -378,6 +379,8 @@ async function poll(){
     stopping=s.stopping===true&&!s.stopped;stopped=s.stopped===true;
     $('ended').style.display=stopped?'block':'none';
     $('service-status').textContent='服务运行状态：'+(stopped?'已停止':stopping?'退出请求已收到，正在保存并关闭':'运行中');
+    const runtime=s.runtime_status||{};
+    $('runtime-status').textContent='运行安全状态：'+(runtime.message||'状态暂不可用');
     activityEnabled=s.activity_enabled===true;
     const next=s.next_wake_at?new Date(s.next_wake_at).toLocaleString():'今日次数已用完或尚未排期';
     const last=s.last_result?'；上次：'+s.last_result:'';

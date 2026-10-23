@@ -718,7 +718,7 @@ class ChatOutput(str):
 
 class Chat:
     def __init__(self, cfg, store, budget, model, memory=None, tools=None, approval=input, output=print,
-                 voice=None):
+                 voice=None, runtime_monitor=None):
         self.cfg, self.store, self.budget, self.model = cfg, store, budget, model
         self.path = f'{cfg.id}/chat.jsonl'
         self.session_path = store.root / cfg.id / 'chat-session.json'
@@ -756,6 +756,7 @@ class Chat:
         self.tool_stop_reason = ''
         self.last_tool_summaries = []
         self.autonomy_interrupted = False
+        self.runtime_monitor = runtime_monitor
 
     def tool_schemas(self):
         from tools_agent import permitted_tools
@@ -1246,6 +1247,8 @@ class Chat:
             if autonomy:
                 row['autonomy_run_id'] = self.autonomy_run_id
             self.store.append(f'{self.cfg.id}/tools.jsonl', row)
+            if self.runtime_monitor:
+                self.runtime_monitor.observe_tool(name, state, autonomy=autonomy, **metadata)
 
         # Start at the same conservative floor used by Chat.send. After the first
         # response, provider-reported usage calibrates subsequent tool-loop estimates.
@@ -1503,6 +1506,7 @@ class Chat:
                     if autonomy:
                         autonomy_tool_steps += 1
                     try:
+                        checkpoint_verified = False
                         if call.function.name == 'send_message':
                             result, state, summary = self.send_message(
                                 call.function.arguments, request_id,
@@ -1519,6 +1523,7 @@ class Chat:
                             if self.long_tasks.handles(call.function.name):
                                 result, state, summary = self.long_tasks.invoke(call.function.name, args,
                                                                                 self.approval)
+                                checkpoint_verified = self.long_tasks.take_checkpoint_verified()
                             elif self.tools:
                                 summary = (self.tools.preview_summary(call.function.name, args)
                                            if hasattr(self.tools, 'preview_summary') else call.function.name)
@@ -1569,7 +1574,8 @@ class Chat:
                         self.output(display_call(call.function.name, summary, result_state,
                                                  (display_detail if result_state != '成功' else None)))
                     summaries.append({'tool': call.function.name, 'path': summary, 'state': state, **delivery})
-                    log_tool(call.function.name, summary, state, **delivery)
+                    verified = {'checkpoint_verified': True} if checkpoint_verified else {}
+                    log_tool(call.function.name, summary, state, **verified, **delivery)
                     if autonomy and self.autonomy_should_yield and self.autonomy_should_yield():
                         self.autonomy_interrupted = True
                         self.budget.settle(next_reservation, next_cfg, 0, 0, 0)
