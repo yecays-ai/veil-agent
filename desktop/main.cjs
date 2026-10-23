@@ -138,7 +138,7 @@ async function endpointRequest(pathname, method = 'GET', body) {
   const token = new URL(agentEndpoint.url).searchParams.get('t');
   const response = await fetch(`${agentEndpoint.origin}${pathname}`, { method, headers: {
     'X-Token': token, ...(body ? { 'Content-Type': 'application/json' } : {})
-  }, body: body ? JSON.stringify(body) : undefined });
+  }, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(5000) });
   const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(data.error || '请求失败'); return data;
 }
 const fromPet = event => pet && !pet.isDestroyed() && event.sender === pet.webContents && event.senderFrame?.url === petURL;
@@ -210,11 +210,12 @@ ipcMain.on('menu:action', async (event, action, value) => {
         agentEndpoint = await readEndpoint(root);
       }
       if (agentEndpoint) await endpointRequest('/api/exit', 'POST', {});
-      app.quit();
     } catch (error) {
-      quitting = false;
-      dialog.showErrorBox('VEIL · Agent 尚未退出', error.message || '请重试。');
-      showMenu();
+      // The Agent may already have stopped, or its exit response may be lost.
+      // Never trap the user in the desktop shell when they explicitly chose exit.
+      console.warn('VEIL Agent exit request failed; closing desktop shell:', error?.name || 'Error', error?.message || 'unknown error');
+    } finally {
+      app.quit();
     }
   }
 });
