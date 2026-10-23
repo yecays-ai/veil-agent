@@ -91,6 +91,9 @@ class Hub:
         self.inbox = queue.Queue()
         self.answers = queue.Queue()
         self.pending = None       # event id of the approval being asked, else None
+        self.voice_jobs = {}
+        self.voice_jobs_lock = threading.Lock()
+        self.transcribing_voice = False
         self.submissions = OrderedDict()  # recent request ids -> normalized text digest
         self.submission_pending = False  # admission reserved while media storage runs
         self.autonomy = None
@@ -334,6 +337,67 @@ class Hub:
         self._record_voice_result(media_id, transcript, '')
         return transcript, None
 
+    def start_voice_transcription(self, media_id):
+        """Start one background transcription and return its completion event."""
+        with self.voice_jobs_lock:
+            current = self.voice_jobs.get(media_id)
+            if current:
+                return current
+            finished = threading.Event()
+            self.voice_jobs[media_id] = finished
+        def run():
+            try:
+                self.transcribe_voice(media_id)
+            finally:
+                finished.set()
+                with self.voice_jobs_lock:
+                    if self.voice_jobs.get(media_id) is finished:
+                        self.voice_jobs.pop(media_id, None)
+        threading.Thread(target=run, name='voice-transcription', daemon=True).start()
+        return finished
+
+    def _chat_input(self, queued):
+        if not isinstance(queued, tuple):
+            return queued
+        text, media, complete = queued[0], queued[1], queued[2] if len(queued) > 2 else None
+        if isinstance(media, dict) and media.get('kind') == 'voice':
+            transcript = (media.get('transcript') or '').strip()
+            if not transcript:
+                with self.voice_jobs_lock:
+                    finished = self.voice_jobs.get(media.get('id'))
+                if finished:
+                    with self.cond:
+                        self.transcribing_voice = True
+                    while not finished.wait(0.2):
+                        if self.stopping or self.stopped:
+                            with self.cond:
+                                self.transcribing_voice = False
+                            if callable(complete):
+                                complete(False)
+                            raise EOFError
+                    with self.cond:
+                        self.transcribing_voice = False
+                media = self.media_info(media.get('id')) or media
+                transcript = (media.get('transcript') or '').strip()
+            if not transcript:
+                if callable(complete):
+                    complete(False)
+                with self.media_lock:
+                    row = self.media_index.get(media.get('id'))
+                    if row:
+                        row.pop('delivery_error', None)
+                        media = dict(row)
+                self.push('voice_status', '', media=media)
+                with self.cond:
+                    self.busy = False
+                return None
+            text = '[voice message] ' + transcript
+            self.push('voice_status', '', media=media)
+        with self.cond:
+            self.defer_outputs = True
+            self.deferred_outputs = []
+        return ChatInput(text, media, complete)
+
     def _record_voice_result(self, media_id, transcript, error):
         with self.media_lock:
             row = self.media_index.get(media_id)
@@ -459,6 +523,8 @@ class Hub:
                         self._rewrite_media_index()
                     except OSError:
                         row['delivery_pending'] = True
+                if row:
+                    media = dict(row)
         with self.cond:
             if committed:
                 self.push('user', text, media=media, request_id=request_id)
@@ -480,12 +546,10 @@ class Hub:
             if text is not None:
                 with self.cond:
                     self.busy = True
-                if isinstance(text, tuple):
-                    with self.cond:
-                        self.defer_outputs = True
-                        self.deferred_outputs = []
-                    return ChatInput(text[0], text[1], text[2] if len(text) > 2 else None)
-                return text
+                item = self._chat_input(text)
+                if item is not None:
+                    return item
+                continue
             if self.stopping or self.stopped:
                 raise EOFError
             if self.autonomy is not None and self.autonomy.due():
@@ -504,12 +568,9 @@ class Hub:
                 continue
             with self.cond:
                 self.busy = True
-            if isinstance(text, tuple):
-                with self.cond:
-                    self.defer_outputs = True
-                    self.deferred_outputs = []
-                return ChatInput(text[0], text[1], text[2] if len(text) > 2 else None)
-            return text
+            item = self._chat_input(text)
+            if item is not None:
+                return item
 
     def request_stop(self):
         """Reject new work and ask the chat loop to finish its current step."""
@@ -630,6 +691,7 @@ class Hub:
         with self.cond:
             autonomy = self.autonomy.status() if self.autonomy else {}
             return {'events': self.events[after:], 'busy': self.busy and not self.autonomy_busy,
+                    'transcribing_voice': self.transcribing_voice,
                     'stopping': self.stopping and not self.stopped, 'stopped': self.stopped,
                     'name': self.name, 'pending': self.pending, 'ready': self.ready,
                     'activity_enabled': self.activity.enabled(),
@@ -754,10 +816,8 @@ def make_handler(hub, token):
                 except OSError:
                     self._send(500, {'error': 'voice storage failed'})
                     return
-                transcript, error = hub.transcribe_voice(media['id'])
-                media = hub.media_info(media['id'])
-                self._send(200, {'ok': True, 'media': media, 'transcript': transcript,
-                                 'transcription_error': error})
+                hub.start_voice_transcription(media['id'])
+                self._send(202, {'ok': True, 'media': media})
                 return
             try:
                 length = int(self.headers.get('Content-Length') or 0)

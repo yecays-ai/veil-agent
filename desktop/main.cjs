@@ -10,8 +10,17 @@ const settings = { size: 320 };
 const petURL = pathToFileURL(path.join(__dirname, 'pet.html')).href;
 const chatURL = pathToFileURL(path.join(__dirname, 'chat.html')).href;
 const menuURL = pathToFileURL(path.join(__dirname, 'menu.html')).href;
+function canRequestChatMedia(contents, permission, details, currentChat = chat) {
+  const audioOnly = Array.isArray(details?.mediaTypes) && details.mediaTypes.length === 1 && details.mediaTypes[0] === 'audio';
+  return Boolean(currentChat && !currentChat.isDestroyed() && contents === currentChat.webContents && permission === 'media' &&
+    details?.requestingUrl === chatURL && audioOnly);
+}
+function canCheckChatMedia(contents, permission, details, currentChat = chat) {
+  return Boolean(currentChat && !currentChat.isDestroyed() && contents === currentChat.webContents && permission === 'media' &&
+    details?.mediaType === 'audio' && details?.requestingUrl === chatURL && details?.isMainFrame === true);
+}
 const runtimeDataPath = app.isPackaged
-  ? path.join(path.dirname(process.execPath), 'data')
+  ? path.join(app.getPath('appData'), 'VEIL Desktop')
   : path.join(__dirname, '.runtime-data');
 app.setPath('userData', runtimeDataPath);
 app.setPath('sessionData', path.join(runtimeDataPath, 'session-data'));
@@ -67,7 +76,7 @@ async function selectRoot() {
   const choice = await dialog.showOpenDialog({ title: '选择已有的 VEIL Agent 文件夹（里面有 start-web.bat）', properties: ['openDirectory'] });
   if (choice.canceled) return null;
   if (!await validRoot(choice.filePaths[0])) throw new Error('此文件夹尚未安装 Agent。请先在原 Agent 文件夹运行 setup.bat。');
-  settings.root = choice.filePaths[0]; await save(); return settings.root;
+  settings.root = choice.filePaths[0]; await save().catch(() => {}); return settings.root;
 }
 async function toggleChat() {
   if (chat && !chat.isDestroyed()) { if (chat.isVisible()) chat.hide(); else { positionChat(); chat.show(); chat.focus(); } return; }
@@ -77,7 +86,7 @@ async function toggleChat() {
     const adjacent = app.isPackaged
       ? path.resolve(path.dirname(process.execPath), '..', '..', '..', 'veil-agent')
       : path.resolve(__dirname, '..', 'veil-agent');
-    if (!root && await validRoot(adjacent)) { root = adjacent; settings.root = root; await save(); }
+    if (!root && await validRoot(adjacent)) { root = adjacent; settings.root = root; await save().catch(() => {}); }
     if (!root) root = await selectRoot(); if (!root) return;
     agentEndpoint = await connect(root); if (quitting) return;
     chat = new BrowserWindow({ x: 0, y: 0, width: 410, height: 520, minWidth: 390, minHeight: 460,
@@ -98,6 +107,15 @@ async function showActivity() {
   if (!chat || chat.isDestroyed()) await toggleChat();
   else if (!chat.isVisible()) { positionChat(); chat.show(); chat.focus(); }
   if (chat && !chat.isDestroyed()) chat.webContents.send('desktop:show-activity');
+}
+async function reconnectChat(event) {
+  if (event && !fromChat(event)) return false;
+  if (connecting) return false;
+  if (chat && !chat.isDestroyed()) chat.destroy();
+  chat = null;
+  agentEndpoint = null;
+  await toggleChat();
+  return !!chat && !chat.isDestroyed();
 }
 function hideMenu() { if (menu && !menu.isDestroyed()) menu.hide(); }
 function showMenu() {
@@ -162,6 +180,7 @@ ipcMain.handle('chat:open-memory', async event => {
   await shell.openExternal(url.href); return true;
 });
 ipcMain.on('desktop:collapse', () => { if (chat) chat.hide(); });
+ipcMain.handle('chat:reconnect', event => reconnectChat(event));
 ipcMain.on('desktop:expand', () => { if (chat && !chat.isDestroyed()) { chat.setSize(760, 780); positionChat(); } });
 ipcMain.on('desktop:show-activity', () => { showActivity(); });
 ipcMain.on('pet:toggle', event => { if (fromPet(event)) toggleChat(); });
@@ -187,16 +206,23 @@ if (!app.requestSingleInstanceLock()) app.quit();
 else {
   app.on('second-instance', () => { if (pet) pet.showInactive(); });
   app.whenReady().then(async () => {
-    try { Object.assign(settings, JSON.parse(await fs.readFile(settingsPath(), 'utf8'))); } catch {}
+    try { Object.assign(settings, JSON.parse(await fs.readFile(settingsPath(), 'utf8'))); }
+    catch {
+      if (app.isPackaged) {
+        try {
+          const legacy = path.join(path.dirname(process.execPath), 'data', 'desktop.json');
+          Object.assign(settings, JSON.parse(await fs.readFile(legacy, 'utf8')));
+          await save().catch(() => {});
+        } catch {}
+      }
+    }
     const { session } = require('electron');
-    session.defaultSession.setPermissionRequestHandler((contents, permission, callback, details) => {
-      const mediaTypes = details?.mediaTypes || [];
-      const audioOnly = mediaTypes.length === 0 || (mediaTypes.includes('audio') && !mediaTypes.includes('video'));
-      callback(Boolean(chat && !chat.isDestroyed() && contents === chat.webContents && permission === 'media' && audioOnly));
-    });
-    session.defaultSession.setPermissionCheckHandler((contents, permission) =>
-      Boolean(chat && !chat.isDestroyed() && contents === chat.webContents && permission === 'media'));
+    session.defaultSession.setPermissionRequestHandler((contents, permission, callback, details) =>
+      callback(canRequestChatMedia(contents, permission, details)));
+    session.defaultSession.setPermissionCheckHandler((contents, permission, _origin, details) =>
+      canCheckChatMedia(contents, permission, details));
     createPet();
   });
   app.on('before-quit', () => { quitting = true; }); app.on('window-all-closed', () => app.quit());
 }
+module.exports = { canRequestChatMedia, canCheckChatMedia };

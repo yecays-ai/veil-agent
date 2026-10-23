@@ -339,27 +339,39 @@ output_cny_per_million = "8"
             self.assertFalse(manager.announce_photo_input())
         self.assertTrue(manager.enabled)
 
-    def test_voice_is_saved_transcribed_and_reaches_model_as_voice_text(self):
+    def test_voice_is_sent_before_background_transcription_and_reaches_model_as_voice_text(self):
         raw = b'\x1a\x45\xdf\xa3fictional webm audio'
+        started, release = threading.Event(), threading.Event()
         class Response:
             def __enter__(self): return self
             def __exit__(self, *_): return False
             def read(self): return b'{"text":"hello Peter"}'
+        def transcribe(*_args, **_kwargs):
+            started.set()
+            if not release.wait(5):
+                raise TimeoutError('fictional transcription gate timed out')
+            return Response()
 
         def scenario(result):
             self.assertTrue(self.wait(lambda: self.hub.ready and not self.hub.busy))
             body = {'mime': 'audio/webm', 'name': 'voice.webm',
                     'data': base64.b64encode(raw).decode()}
-            with patch('dotenv.dotenv_values', return_value={'EMBED_API_KEY': 'fictional'}), patch('web_agent.urlopen', return_value=Response()):
+            with patch('dotenv.dotenv_values', return_value={'EMBED_API_KEY': 'fictional'}), patch('web_agent.urlopen', side_effect=transcribe):
                 status, uploaded = self.call('/api/voice', body)
-            self.assertEqual(status, 200)
-            self.assertEqual(uploaded['transcript'], 'hello Peter')
+                self.assertEqual(status, 202)
+                self.assertEqual(uploaded['media']['transcript'], '')
+                self.assertNotIn('transcript', uploaded)
+                self.assertTrue(started.wait(2), 'background transcription did not start')
+                status, _ = self.call('/api/send', {'text': '[voice message]',
+                                                    'request_id': 'voice-send-' + uploaded['media']['id'],
+                                                    'media': {'id': uploaded['media']['id']}})
+                self.assertEqual(status, 200)
+                self.assertTrue(self.wait(lambda: self.hub.snapshot(0)['transcribing_voice']))
+                release.set()
+                self.assertTrue(self.wait(lambda: any(event['kind'] == 'assistant'
+                                                     for event in self.hub.snapshot(0)['events'])))
             media = uploaded['media']; result['media'] = media
-            status, _ = self.call('/api/send', {'text': '[voice message] hello Peter',
-                                                 'media': {'id': media['id']}})
-            self.assertEqual(status, 200)
-            self.assertTrue(self.wait(lambda: any(event['kind'] == 'assistant'
-                                                 for event in self.hub.snapshot(0)['events'])))
+            self.assertTrue(self.wait(lambda: not self.hub.busy))
 
         result = self.run_loop(scenario)
         media = result['media']

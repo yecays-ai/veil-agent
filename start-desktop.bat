@@ -1,6 +1,6 @@
 @echo off
 setlocal
-set "INSTALLED=%~dp0..\desktop-app\VEIL Desktop\VEIL.exe"
+set "INSTALLED=%~dp0desktop-app\VEIL Desktop\VEIL.exe"
 if exist "%INSTALLED%" (
   start "" "%INSTALLED%"
   exit /b 0
