@@ -250,10 +250,21 @@ class AutonomyController:
         result = ''
         if last:
             result = last['result'] + '：' + last['result_reason']
+        state = self.activity.snapshot()
+        reason = None
+        if next_at is None:
+            if not state['enabled']:
+                reason = '自主活动已暂停。'
+            elif self._eligible_count() >= self.daily_max_runs:
+                reason = '今日自主活动次数已用完。'
+            else:
+                reason = '当前没有已排定的唤醒时间。'
         return {
             'next_wake_at': next_at.isoformat() if next_at else None,
+            'next_wake_reason': reason,
             'last_result': result[:180],
             'last_activity': last,
+            'activity_history': [activity_view(row) for row in self.rows[-20:]],
             'autonomy_busy': self.active,
         }
 

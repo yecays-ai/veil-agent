@@ -3,39 +3,68 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data: blob: http://127.0.0.1:*; media-src 'self' blob: http://127.0.0.1:*; connect-src 'none';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'nonce-veil-custom-css'; script-src 'self'; img-src 'self' data: blob: http://127.0.0.1:*; media-src 'self' blob: http://127.0.0.1:*; connect-src 'none';">
   <title>VEIL · Peter</title>
   <link rel="stylesheet" href="chat.css">
+  <style id="custom-style" nonce="veil-custom-css"></style>
 </head>
 <body>
+  <div id="window-background" aria-hidden="true"></div>
   <div id="ended">服务已退出。重新打开 Peter 可再次连接。</div>
   <div id="offline">和 Peter 的本机服务暂时断开。<button id="reconnect" type="button">重新连接</button></div>
   <header class="topbar">
-    <div class="identity"><img src="assets/pep.png" alt=""><div><h1 id="title">Peter</h1><span id="service-status">正在连接…</span></div></div>
-    <div class="top-actions"><span id="activity-status" title="自主活动状态"></span><button id="theme" aria-label="切换到浅色模式" title="切换到浅色模式">浅色</button><button id="toolbar-toggle" aria-label="聊天工具" title="聊天工具">•••</button><button id="expand" aria-label="展开聊天" title="展开">↗</button><button id="collapse" aria-label="收起聊天" title="收起">—</button></div>
+    <div class="identity"><img src="assets/pep.png" alt=""><h1 id="title">Peter</h1></div>
+    <div class="header-status" aria-label="Peter 状态">
+      <span class="header-status-item"><i id="autonomy-indicator" class="status-dot is-pending"></i><span>自主活动：<b id="header-autonomy-status">读取中</b></span></span>
+      <span class="header-wake"><span aria-hidden="true">◷</span><span>下次唤醒</span><b id="header-next-wake">读取中…</b></span>
+    </div>
+    <div class="top-actions"><button id="expand" aria-label="放大聊天窗口" title="放大">↗</button><button id="collapse" aria-label="收起聊天窗口" title="收起">—</button></div>
   </header>
-  <section id="tool-panel" hidden>
-    <div class="tool-row">
-      <button id="new-chat" title="保留旧聊天，开始一段新聊天">新对话</button>
-      <button data-cmd="/cost">花费</button>
-      <button data-cmd="/memory">记忆</button>
-      <button id="capability-record">能力记录</button>
-      <button id="memory-panel" hidden>Memory / Ombre</button>
-    </div>
-    <details id="capability-details">
-      <summary>Peter 的能力更新记录</summary>
-      <h3>Current capabilities</h3><pre id="current-capabilities-text"></pre>
-      <h3>Capability change history</h3><pre id="capability-record-text"></pre>
-    </details>
-    <div id="runtime">
-      <span class="label" id="service-status-detail">服务运行状态：正在连接…</span>
-      <button id="activity-toggle" disabled>读取中…</button>
-      <button id="exit-service" disabled>退出服务</button>
-    </div>
-    <details id="activity-details" hidden><summary>上次自主活动详情</summary><pre id="activity-record"></pre></details>
+  <nav class="navigation" aria-label="主要页面">
+    <button class="nav-item active" data-page="chat" aria-current="page">聊天</button>
+    <button class="nav-item" data-page="activity">活动</button>
+    <button class="nav-item" data-page="memory">记忆</button>
+    <button class="nav-item" data-page="more">更多</button>
+  </nav>
+  <div id="toasts" role="status" aria-live="polite"></div>
+  <main id="log" class="page active" data-page-view="chat"><div class="col" id="col" aria-live="polite"></div></main>
+  <section id="activity-view" class="page" data-page-view="activity" hidden>
+    <div class="page-heading"><div><p class="eyebrow">自主活动</p><h2>活动</h2></div><span id="activity-state" class="state-pill">读取中…</span></div>
+    <article class="surface next-wake-card"><span class="label">下次唤醒</span><strong id="next-wake">正在读取 Agent 状态…</strong><p id="next-wake-reason"></p></article>
+    <div class="activity-actions"><button id="activity-toggle" disabled>读取中…</button><span id="activity-status">状态正在同步</span></div>
+    <article class="surface activity-summary"><div class="section-heading"><h3>最近一次活动</h3><span id="last-activity-time"></span></div><p id="last-activity-summary">还没有自主活动记录。</p><details id="activity-details" hidden><summary>查看执行详情</summary><pre id="activity-record"></pre></details></article>
+    <article class="surface history-card"><div class="section-heading"><h3>历史活动</h3><span>最近 20 次</span></div><div id="activity-history" class="activity-history"><p class="muted">还没有活动记录。</p></div></article>
+    <div class="runtime-row"><span id="service-status-detail">服务运行状态：正在连接…</span><span id="service-status" hidden>服务：连接中…</span><button id="exit-service" disabled>退出 Agent 服务</button></div>
   </section>
-  <main id="log"><div class="col" id="col" aria-live="polite"></div></main>
-  <footer>
+  <section id="memory-view" class="page" data-page-view="memory" hidden>
+    <div class="page-heading"><div><p class="eyebrow">来自 Ombre Brain 的真实记忆</p><h2>记忆</h2></div></div>
+    <div class="memory-toolbar"><label for="memory-search">搜索记忆</label><input id="memory-search" type="search" placeholder="按标题筛选"><button id="memory-reload">刷新</button></div>
+    <div class="memory-layout"><section id="memory-list" class="surface memory-list" aria-label="Ombre 记忆列表"><p class="muted">正在读取 Ombre 记忆…</p></section><article id="memory-detail" class="surface memory-detail"><p class="muted">选择一条记忆查看原文。</p></article></div>
+    <div class="memory-footer"><span id="memory-count" class="muted">尚未读取</span><div><span id="memory-unavailable" class="muted" hidden>Ombre 记忆暂不可用</span><button id="memory-panel" hidden>高级管理 · Ombre Dashboard ↗</button></div></div>
+  </section>
+  <section id="more-view" class="page" data-page-view="more" hidden>
+    <div class="page-heading"><div><p class="eyebrow">偏好与工具</p><h2>更多</h2></div></div>
+    <article class="surface appearance-card"><div class="section-heading"><div><p class="eyebrow">CSS SETTINGS</p><h3>外观</h3><p>主题、背景和透明度会保存在这台电脑上。</p></div><button id="reset-appearance" class="quiet-button">恢复默认</button></div>
+      <div class="setting-row"><span>主题</span><div class="segmented" role="group" aria-label="主题"><button data-theme-choice="light">日间</button><button data-theme-choice="dark">夜间</button></div></div>
+      <label class="setting-row range-row" for="window-opacity"><span>整体透明度</span><input id="window-opacity" type="range" min="20" max="100" step="1"><output id="window-opacity-value"></output></label>
+      <div class="opacity-settings" aria-label="各页面透明度"><p>单独调整页面</p>
+        <label class="setting-row range-row" for="chat-opacity"><span>聊天</span><input id="chat-opacity" type="range" min="20" max="100" step="1"><output id="chat-opacity-value"></output></label>
+        <label class="setting-row range-row" for="activity-opacity"><span>活动</span><input id="activity-opacity" type="range" min="20" max="100" step="1"><output id="activity-opacity-value"></output></label>
+        <label class="setting-row range-row" for="memory-opacity"><span>记忆</span><input id="memory-opacity" type="range" min="20" max="100" step="1"><output id="memory-opacity-value"></output></label>
+        <label class="setting-row range-row" for="more-opacity"><span>更多</span><input id="more-opacity" type="range" min="20" max="100" step="1"><output id="more-opacity-value"></output></label>
+      </div>
+      <label class="setting-row range-row" for="bubble-opacity"><span>聊天气泡</span><input id="bubble-opacity" type="range" min="55" max="100" step="1"><output id="bubble-opacity-value"></output></label>
+      <div class="background-settings"><div class="section-heading"><div><h3>背景图片</h3><p id="background-name">尚未选择图片</p></div><div><button id="choose-background" type="button">上传图片</button><button id="clear-background" type="button" disabled>移除</button></div></div>
+        <label class="setting-row range-row" for="background-opacity"><span>图片透明度</span><input id="background-opacity" type="range" min="0" max="100" step="1"><output id="background-opacity-value"></output></label>
+      </div>
+      <label class="custom-css-label" for="custom-css">自定义 CSS</label><textarea id="custom-css" spellcheck="false" placeholder="/* 例如：修改界面圆角或文字颜色 */&#10;.surface { border-radius: 18px; }" maxlength="20000"></textarea>
+      <div class="custom-css-actions"><span>仅作用于 VEIL 界面；不支持外部加载资源。</span><button id="apply-css" type="button">应用 CSS</button></div>
+      <label class="setting-row range-row" for="pet-size"><span>Peter 大小</span><input id="pet-size" type="range" min="160" max="720" step="1"><output id="pet-size-value"></output></label>
+      <p class="setting-hint">Peter 也可以直接拖动四角调整大小，人物比例会保持不变。</p>
+    </article>
+    <article class="surface tools-card"><h3>常用工具</h3><div class="tool-row"><button id="new-chat" title="保留旧聊天，开始一段新聊天">新对话</button><button data-cmd="/cost">花费</button><button id="capability-record">能力记录</button></div><details id="capability-details"><summary>查看 Peter 的能力与更新历史</summary><h4>当前能力</h4><pre id="current-capabilities-text"></pre><h4>能力更新记录</h4><pre id="capability-record-text"></pre></details><p class="runtime-detail" id="runtime-status">服务状态：正在连接…</p><details id="runtime-details" hidden><summary>查看持续性故障详情</summary><pre id="runtime-detail-text"></pre></details></article>
+  </section>
+  <footer id="composer-footer">
     <div id="image-preview" class="image-preview" hidden></div>
     <div class="composer" id="composer">
       <div class="voice-tools">

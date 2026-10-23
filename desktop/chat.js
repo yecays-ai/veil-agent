@@ -8,6 +8,9 @@ let speechRecorder=null,speechStream=null,speechChunks=[],speechSession=null,spe
 let after=0, busy=true, transcribingVoice=false, stopping=false, stopped=false, typing=null, sending=false;
 let revealQueue=[], revealTimer=null, roundStartedAt=0, roundHasReply=false, previousMessage=null, voiceContextMenu=null;
 let pendingApproval=null, activityEnabled=false, exiting=false;
+const recentErrors=new Map();
+let memoryAvailable=false,memoryLoaded=false,memoryLoading=false,memoryCursor='',memoryItems=[];
+let activitySignature='';
 let selectedImage=null;const awaitingImages=new Map();
 let voiceRecorder=null,voiceStream=null,voiceChunks=[],voiceStarted=0,voiceTimer=null,voiceCancelled=false,voiceSending=false,voicePermissionPending=false;
 const unsentVoiceBlobs=new Map();
@@ -16,6 +19,19 @@ const draftRequests=new Map();
 const IMAGE_TYPES=new Set(['image/png','image/jpeg','image/gif','image/webp']);
 const GROUP_GAP=15*60*1000;
 function speechIsActive(){return speechState==='listening'||speechState==='processing'||!!speechRecorder||speechPermissionPending}
+function notify(text,kind='notice'){
+  const node=document.createElement('div');node.className=kind==='error'?'toast error':'toast';node.textContent=text;$('toasts').appendChild(node);
+  setTimeout(()=>node.remove(),Math.min(15000,Math.max(2000,text.length*80)));
+}
+function setPage(name){
+  if(!['chat','activity','memory','more'].includes(name))return;
+  document.body.dataset.currentPage=name;
+  document.querySelectorAll('[data-page]').forEach(button=>{
+    const active=button.dataset.page===name;button.classList.toggle('active',active);
+    if(active)button.setAttribute('aria-current','page');else button.removeAttribute('aria-current');
+  });
+  document.querySelectorAll('[data-page-view]').forEach(page=>{page.hidden=page.dataset.pageView!==name});
+}
 function saveSpeechDraft(value){try{sessionStorage.setItem(speechDraftKey,value)}catch(e){}}
 function resizeBox(){box.style.height='auto';box.style.height=Math.min(box.scrollHeight,200)+'px'}
 function renderSpeechText(finalText){
@@ -230,6 +246,11 @@ function createVoiceBubble(kind,text,media){
   return wrap;
 }
 function add(kind,text,id,time,media){
+  if(kind==='notice'){notify(text);return}
+  if(kind==='error'){
+    const previous=recentErrors.get(text),now=Date.now();
+    if(previous&&now-previous.at<30000){previous.count++;previous.at=now;previous.node.textContent=text+'（重复 '+previous.count+' 次）';return}
+  }
   const d=document.createElement('div');
   if(kind==='user'||kind==='assistant'){
     const stamp=Date.parse(time)||Date.now();
@@ -260,6 +281,7 @@ function add(kind,text,id,time,media){
     }
   } else {d.className=kind==='error'?'error':'notice';d.textContent=text}
   if(typing)col.insertBefore(d,typing);else col.appendChild(d);
+  if(kind==='error')recentErrors.set(text,{at:Date.now(),count:1,node:d});
 }
 function setBusy(b){
   busy=b;const waiting=b||revealQueue.length>0;sendBtn.disabled=waiting||sending||voiceSending||stopping||stopped||speechIsActive();
@@ -271,6 +293,49 @@ function setBusy(b){
 async function api(path,body,timeoutMs=30000){
   const result=await window.veilDesktop.request(path,body,timeoutMs);
   return {ok:result.ok,status:result.status,json:async()=>result.data};
+}
+function renderMemoryList(){
+  const list=$('memory-list'),query=$('memory-search').value.trim().toLocaleLowerCase();list.replaceChildren();
+  const filtered=memoryItems.filter(item=>item.title.toLocaleLowerCase().includes(query));
+  if(!filtered.length){const empty=document.createElement('p');empty.className='muted';empty.textContent=query?'没有匹配的已加载记忆。':'Ombre 里还没有可显示的记忆。';list.appendChild(empty)}
+  for(const item of filtered){
+    const button=document.createElement('button');button.type='button';button.className='memory-entry';button.textContent=item.title;
+    button.setAttribute('aria-current',String($('memory-detail').dataset.memoryId===item.memory_id));
+    button.onclick=()=>readMemory(item,button);list.appendChild(button);
+  }
+  if(memoryCursor){const more=document.createElement('button');more.type='button';more.className='memory-entry more';more.textContent='加载更多记忆';more.disabled=memoryLoading;more.onclick=()=>loadMemoryCatalog(false);list.appendChild(more)}
+  $('memory-count').textContent=`已读取 ${memoryItems.length} 条${memoryCursor?' · 还有更多':''}`;
+}
+async function loadMemoryCatalog(reset=false){
+  if(memoryLoading)return;
+  memoryLoading=true;
+  if(reset){memoryLoaded=false;memoryCursor='';memoryItems=[];$('memory-list').textContent='正在读取 Ombre 记忆…'}
+  try{
+    const query=memoryCursor?'?after='+encodeURIComponent(memoryCursor):'';
+    const r=await api('/api/memory/catalog'+query);const data=await r.json();
+    if(!r.ok)throw new Error(data.error||'Ombre 记忆暂时无法读取。');
+    if(!data||!Array.isArray(data.items)||typeof data.next_after!=='string')throw new Error('Ombre 返回的记忆目录格式无法识别。');
+    memoryItems.push(...data.items.filter(item=>item&&typeof item.memory_id==='string'&&typeof item.title==='string'));
+    memoryCursor=data.next_after;memoryLoaded=true;memoryAvailable=true;renderMemoryList();
+  }catch(error){
+    memoryLoaded=true;$('memory-list').textContent=error.message||'Ombre 记忆暂时无法读取。';$('memory-unavailable').hidden=false;
+    $('memory-count').textContent='读取失败';
+  }finally{memoryLoading=false}
+}
+async function readMemory(item,button){
+  $('memory-detail').dataset.memoryId=item.memory_id;renderMemoryList();
+  $('memory-detail').textContent='正在读取记忆原文…';
+  let offset=0,version='',content='';
+  try{
+    do{
+      const params=new URLSearchParams({id:item.memory_id,offset:String(offset)});if(version)params.set('version',version);
+      const r=await api('/api/memory/read?'+params.toString());const page=await r.json();
+      if(!r.ok)throw new Error(page.error||'这条记忆暂时无法读取。');
+      if(typeof page.text!=='string'||typeof page.version!=='string')throw new Error('Ombre 返回的记忆内容格式无法识别。');
+      version=page.version;content+=page.text;offset=page.next_offset;
+    }while(offset!==null);
+    const title=document.createElement('h3');title.textContent=item.title;const body=document.createElement('pre');body.textContent=content;$('memory-detail').replaceChildren(title,body);
+  }catch(error){$('memory-detail').textContent=error.message||'这条记忆暂时无法读取。'}
 }
 async function approve(card,status,answer,id){
   if(card.dataset.sending==='true'||card.classList.contains('done'))return;
@@ -303,18 +368,36 @@ async function approve(card,status,answer,id){
     }
   }finally{card.dataset.sending='false'}
 }
-function renderActivity(record){
-  $('activity-details').hidden=!record;
-  if(!record){$('activity-record').textContent='';return}
+function activityDetails(record){
   const lines=[record.started_at+' → '+record.finished_at,
     '结果：'+record.result+'；'+record.result_reason,
     '决定/结束信息：'+record.decision,
     '已留存文件：'+((record.lab_files_changed||[]).join('、')||'无')];
   for(const item of record.tools||[])lines.push(item.tool+' | '+item.path+' | '+item.state+
     (item.result_state==='结果过长'?'；结果过长，未提供给模型':''));
+  if(record.current_focus)lines.push('当时关注：'+record.current_focus);
   if(record.next_step)lines.push('下一步：'+record.next_step);
   lines.push('本次费用：¥'+record.cost_cny);
-  $('activity-record').textContent=lines.join('\n');
+  return lines.join('\n');
+}
+function renderActivity(record,history=[]){
+  $('activity-details').hidden=!record;
+  $('last-activity-summary').textContent=record
+    ? record.result+'：'+(record.result_reason||'Agent 未提供结果说明。')
+    : '还没有自主活动记录。';
+  $('last-activity-time').textContent=record?new Date(record.started_at).toLocaleString():'';
+  $('activity-record').textContent=record?activityDetails(record):'';
+  const signature=JSON.stringify(history);
+  if(signature===activitySignature)return;
+  activitySignature=signature;
+  const list=$('activity-history');list.replaceChildren();
+  if(!history.length){const empty=document.createElement('p');empty.className='muted';empty.textContent='还没有活动记录。';list.appendChild(empty);return}
+  for(const item of [...history].reverse()){
+    const details=document.createElement('details');details.className='activity-row';
+    const summary=document.createElement('summary'),name=document.createElement('strong'),time=document.createElement('time');
+    name.textContent=item.result+' · '+(item.result_reason||'');time.textContent=new Date(item.started_at).toLocaleString();
+    summary.append(name,time);const pre=document.createElement('pre');pre.textContent=activityDetails(item);details.append(summary,pre);list.appendChild(details);
+  }
 }
 async function poll(){
   try{
@@ -324,13 +407,28 @@ async function poll(){
     $('offline').style.display='none';
     stopping=s.stopping===true&&!s.stopped;stopped=s.stopped===true;
     $('ended').style.display=stopped?'block':'none';
-    $('service-status').textContent='服务运行状态：'+(stopped?'已停止':stopping?'退出请求已收到，正在保存并关闭':'运行中');
-    $('service-status-detail').textContent=$('service-status').textContent;
+    $('service-status').textContent=stopped?'服务：已停止':stopping?'服务：正在退出':'服务：运行中';
+    $('service-status-detail').textContent='服务运行状态：'+(stopped?'已停止':stopping?'退出请求已收到，正在保存并关闭':'运行中');
+    const runtime=s.runtime_status||{};
+    $('runtime-status').textContent=runtime.message||$('service-status').textContent;
+    $('runtime-details').hidden=!runtime.state||runtime.state==='healthy';
+    $('runtime-detail-text').textContent=runtime.state&&runtime.state!=='healthy'
+      ?[runtime.time,runtime.module+' · '+runtime.classification+' · '+runtime.code,runtime.action].filter(Boolean).join('\n')
+      :'';
     activityEnabled=s.activity_enabled===true;
-    const next=s.next_wake_at?new Date(s.next_wake_at).toLocaleString():'今日次数已用完或尚未排期';
-    const last=s.last_result?'；上次：'+s.last_result:'';
-    $('activity-status').textContent='自主活动状态：'+(!activityEnabled?'已暂停':(s.autonomy_busy?'正在活动':'已开启'))+'；下次唤醒：'+next+last;
-    renderActivity(s.last_activity);
+    const nextDate=s.next_wake_at?new Date(s.next_wake_at):null;
+    const next=nextDate&&Number.isFinite(nextDate.getTime())?nextDate.toLocaleString():'';
+    $('next-wake').textContent=next||s.next_wake_reason||'Agent 暂未提供确定的唤醒时间。';
+    $('next-wake-reason').textContent=next?'Agent 已排定的下次自主活动时间。':'';
+    const state=!activityEnabled?'已暂停':(s.autonomy_busy?'正在活动':'已开启');
+    $('header-autonomy-status').textContent=state;
+    $('autonomy-indicator').className='status-dot '+(!activityEnabled?'is-offline':s.autonomy_busy?'is-busy':'is-online');
+    $('header-next-wake').textContent=nextDate&&Number.isFinite(nextDate.getTime())
+      ?nextDate.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'未确定';
+    $('header-next-wake').parentElement.title=next||s.next_wake_reason||'Agent 暂未提供确定的唤醒时间。';
+    $('activity-state').textContent=state;
+    $('activity-status').textContent='自主活动'+state;
+    renderActivity(s.last_activity,s.activity_history||[]);
     $('activity-toggle').textContent=activityEnabled?'暂停自主活动':'开启自主活动';
     $('activity-toggle').disabled=stopping||stopped||exiting;
     $('exit-service').disabled=stopping||stopped||exiting;
@@ -342,6 +440,10 @@ async function poll(){
     const memoryPanel=$('memory-panel');
     memoryPanel.hidden=!s.memory_panel_url;
     memoryPanel.onclick=()=>window.veilDesktop.openMemory();
+    memoryAvailable=s.memory_available===true;
+    $('memory-unavailable').hidden=memoryAvailable;
+    if(memoryAvailable&&!memoryLoaded&&!memoryLoading)loadMemoryCatalog(true);
+    else if(!memoryAvailable&&!memoryLoaded){$('memory-list').textContent='当前 Agent 未提供 Ombre Memory 数据。';$('memory-count').textContent='不可用'}
     const stick=log.scrollHeight-log.scrollTop-log.clientHeight<80;
     const initial=after===0;pendingApproval=s.pending;
     for(const e of s.events){receiveEvent(e,initial);after=e.id}
@@ -355,7 +457,7 @@ async function poll(){
     });
     transcribingVoice=s.transcribing_voice===true;setBusy(s.busy);
     if(s.events.length&&stick)log.scrollTop=log.scrollHeight;
-  }catch(e){$('offline').style.display='block';$('service-status').textContent='服务运行状态：连接中断';$('service-status-detail').textContent=$('service-status').textContent;$('activity-toggle').disabled=true;$('exit-service').disabled=true}
+  }catch(e){$('offline').style.display='block';$('service-status').textContent='服务：连接中断';$('service-status-detail').textContent='服务运行状态：连接中断';$('activity-toggle').disabled=true;$('exit-service').disabled=true}
   setTimeout(poll,600);
 }
 function clearImage(invalidate=true){
@@ -576,32 +678,32 @@ $('activity-toggle').onclick=async()=>{
     const r=await api('/api/activity',{enabled:!activityEnabled});
     if(!r.ok)throw new Error(r.status);
     activityEnabled=!activityEnabled;
-    $('activity-status').textContent='自主活动状态：'+(activityEnabled?'已开启':'已暂停');
+    $('activity-status').textContent='自主活动'+(activityEnabled?'已开启':'已暂停');
     $('activity-toggle').textContent=activityEnabled?'暂停自主活动':'开启自主活动';
-  }catch(e){add('error','自主活动状态保存失败，请检查连接后重试。')}
+  }catch(e){$('activity-status').textContent='状态保存失败：请检查本机 Agent 连接后重试。';add('error','自主活动状态保存失败，请检查连接后重试。')}
   finally{$('activity-toggle').disabled=stopping||stopped||exiting}
 };
 $('exit-service').onclick=async()=>{
   if(exiting||stopped||!confirm('确定退出 Peter 网页服务吗？'))return;
   exiting=true;$('exit-service').disabled=true;$('activity-toggle').disabled=true;
-  $('service-status').textContent='服务运行状态：正在退出…';
+  $('service-status').textContent='服务：退出中…';
   try{
     const r=await api('/api/exit',{});
     let result={};try{result=await r.json()}catch(e){}
     if(!r.ok||!result.ok)throw new Error(r.status);
     if(result.state==='stopped'){
       stopping=false;stopped=true;
-      $('ended').style.display='block';$('service-status').textContent='服务运行状态：已停止';
+      $('ended').style.display='block';$('service-status').textContent='服务：已停止';
       sendBtn.disabled=true;$('activity-toggle').disabled=true;$('exit-service').disabled=true;
     }else if(result.state==='accepted'||result.state==='stopping'){
       exiting=false;stopping=true;
       $('ended').style.display='none';
-      $('service-status').textContent='服务运行状态：退出请求已收到，正在保存并关闭';
+      $('service-status').textContent='服务：保存并退出中';
       sendBtn.disabled=true;$('activity-toggle').disabled=true;$('exit-service').disabled=true;
     }else throw new Error('invalid exit response');
   }catch(e){
     exiting=false;
-    $('service-status').textContent='服务运行状态：退出结果未确认，正在核对';
+    $('service-status').textContent='服务：退出状态未确认';
     add('error','没有收到退出确认；页面会继续核对服务状态，请不要重复启动。');
   }
 };
@@ -609,30 +711,80 @@ $('reconnect').onclick=async()=>{
   const button=$('reconnect');button.disabled=true;button.textContent='正在重新连接…';
   try{await window.veilDesktop.reconnect()}finally{button.disabled=false;button.textContent='重新连接'}
 };
-function theme(t){
-  const mode=t==='dark'?'dark':'light';
-  document.documentElement.setAttribute('data-theme',mode);
-  const dark=mode==='dark';
-  $('theme').textContent=dark?'浅色':'深色';
-  $('theme').setAttribute('aria-label',dark?'切换到浅色模式':'切换到深色模式');
-  $('theme').title=dark?'切换到浅色模式':'切换到深色模式';
+const APPEARANCE_KEY='veil-desktop-appearance-v1';
+const appearanceDefaults={theme:'light',windowOpacity:88,pageOpacity:{chat:88,activity:88,memory:88,more:88},bubbleOpacity:90,backgroundOpacity:100,petSize:320};
+function clampSetting(value,min,max,fallback){const n=Number(value);return Number.isFinite(n)?Math.max(min,Math.min(max,Math.round(n))):fallback}
+function loadAppearance(){
+  try{
+    const saved=JSON.parse(localStorage.getItem(APPEARANCE_KEY)||'{}');
+    const pageOpacity={};
+    for(const page of ['chat','activity','memory','more'])pageOpacity[page]=clampSetting(saved.pageOpacity?.[page],20,100,clampSetting(saved.windowOpacity,20,100,88));
+    return {theme:saved.theme==='dark'?'dark':'light',windowOpacity:clampSetting(saved.windowOpacity,20,100,88),pageOpacity,
+      bubbleOpacity:clampSetting(saved.bubbleOpacity,55,100,90),backgroundOpacity:clampSetting(saved.backgroundOpacity,0,100,100),petSize:clampSetting(saved.petSize,160,720,320)};
+  }catch{return {...appearanceDefaults}}
 }
-try{theme(localStorage.getItem('veil-theme')||'light')}catch(e){theme('light')}
-$('theme').onclick=()=>{
-  const dark=document.documentElement.dataset.theme==='dark',t=dark?'light':'dark';
-  theme(t);try{localStorage.setItem('veil-theme',t)}catch(e){}
-};
-const toolPanel=document.querySelector('#tool-panel');
+let appearance=loadAppearance();
+function storeAppearance(){try{localStorage.setItem(APPEARANCE_KEY,JSON.stringify(appearance))}catch{}}
+function applyAppearance(){
+  document.documentElement.dataset.theme=appearance.theme;
+  document.documentElement.style.setProperty('--window-alpha',String(appearance.windowOpacity/100));
+  document.documentElement.style.setProperty('--bubble-alpha',String(appearance.bubbleOpacity/100));
+  document.documentElement.style.setProperty('--background-opacity',String(appearance.backgroundOpacity/100));
+  for(const page of ['chat','activity','memory','more']){
+    document.querySelector(`[data-page-view="${page}"]`)?.style.setProperty('--view-alpha',String(appearance.pageOpacity[page]/100));
+    $(`${page}-opacity`).value=String(appearance.pageOpacity[page]);$(`${page}-opacity-value`).value=appearance.pageOpacity[page]+'%';
+  }
+  document.querySelectorAll('[data-theme-choice]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.themeChoice===appearance.theme)));
+  $('window-opacity').value=String(appearance.windowOpacity);$('window-opacity-value').value=appearance.windowOpacity+'%';
+  $('bubble-opacity').value=String(appearance.bubbleOpacity);$('bubble-opacity-value').value=appearance.bubbleOpacity+'%';
+  $('background-opacity').value=String(appearance.backgroundOpacity);$('background-opacity-value').value=appearance.backgroundOpacity+'%';
+  $('pet-size').value=String(appearance.petSize);$('pet-size-value').value=appearance.petSize+' px';
+}
+applyAppearance();
+document.querySelectorAll('[data-theme-choice]').forEach(button=>button.onclick=()=>{
+  appearance.theme=button.dataset.themeChoice;applyAppearance();storeAppearance();window.veilDesktop.saveTheme(appearance.theme);
+});
+window.veilDesktop.saveTheme(appearance.theme).catch(()=>{});
+function setAllWindowOpacity(value){appearance.windowOpacity=clampSetting(value,20,100,88);for(const page of ['chat','activity','memory','more'])appearance.pageOpacity[page]=appearance.windowOpacity;applyAppearance();storeAppearance()}
+$('window-opacity').oninput=()=>setAllWindowOpacity($('window-opacity').value);
+for(const page of ['chat','activity','memory','more'])$(`${page}-opacity`).oninput=()=>{appearance.pageOpacity[page]=clampSetting($(`${page}-opacity`).value,20,100,88);applyAppearance();storeAppearance()};
+$('bubble-opacity').oninput=()=>{appearance.bubbleOpacity=clampSetting($('bubble-opacity').value,55,100,90);applyAppearance();storeAppearance()};
+$('background-opacity').oninput=()=>{appearance.backgroundOpacity=clampSetting($('background-opacity').value,0,100,100);applyAppearance();storeAppearance()};
+$('pet-size').oninput=()=>{appearance.petSize=clampSetting($('pet-size').value,160,720,320);$('pet-size-value').value=appearance.petSize+' px';storeAppearance()};
+$('pet-size').onchange=()=>window.veilDesktop.setPetSize(appearance.petSize);
+window.veilDesktop.petSize().then(size=>{if(Number.isFinite(size)){appearance.petSize=clampSetting(size,160,720,320);applyAppearance();storeAppearance()}}).catch(()=>{});
+function setBackground(dataUrl,name){
+  document.documentElement.style.setProperty('--user-background',dataUrl?`url("${dataUrl}")`:'none');
+  $('background-name').textContent=name||'尚未选择图片';$('clear-background').disabled=!dataUrl;
+}
+window.veilDesktop.getBackground().then(dataUrl=>setBackground(dataUrl,dataUrl?'已保存的背景图片':'' )).catch(()=>setBackground(null,''));
+$('choose-background').onclick=async()=>{try{const result=await window.veilDesktop.chooseBackground();if(result){setBackground(result.dataUrl,result.name);notify('背景图片已保存。')}}catch(error){notify(error.message||'背景图片读取失败。','error')}};
+$('clear-background').onclick=async()=>{if(await window.veilDesktop.clearBackground()){setBackground(null,'');notify('背景图片已移除。')}};
+function applyCustomCSS(value){
+  const css=String(value||'');
+  if(css.length>20000||/@import\b|url\s*\(|expression\s*\(|-moz-binding|behavior\s*:/i.test(css))throw new Error('自定义 CSS 不能加载外部资源或脚本，也不能超过 20,000 个字符。');
+  $('custom-style').textContent=css;
+}
+try{$('custom-css').value=localStorage.getItem(`${APPEARANCE_KEY}-css`)||'';applyCustomCSS($('custom-css').value)}catch{$('custom-css').value=''}
+$('apply-css').onclick=()=>{try{applyCustomCSS($('custom-css').value);localStorage.setItem(`${APPEARANCE_KEY}-css`,$('custom-css').value);notify('自定义 CSS 已应用并保存。')}catch(error){notify(error.message,'error')}};
+$('reset-appearance').onclick=async()=>{appearance={...appearanceDefaults,pageOpacity:{...appearanceDefaults.pageOpacity}};applyAppearance();storeAppearance();window.veilDesktop.setPetSize(appearance.petSize);$('custom-css').value='';$('custom-style').textContent='';localStorage.removeItem(`${APPEARANCE_KEY}-css`);await window.veilDesktop.clearBackground();setBackground(null,'');notify('外观已恢复默认设置。')};
+$('memory-search').addEventListener('input',renderMemoryList);
+$('memory-reload').onclick=()=>{memoryItems=[];memoryCursor='';memoryLoaded=false;loadMemoryCatalog(true)};
+document.querySelectorAll('[data-page]').forEach(button=>button.onclick=()=>{
+  setPage(button.dataset.page);
+  if(button.dataset.page==='memory'&&memoryAvailable&&!memoryLoaded&&!memoryLoading)loadMemoryCatalog(true);
+});
+$('memory-panel').onclick=()=>window.veilDesktop.openMemory();
+document.querySelectorAll('[data-cmd="/cost"]').forEach(button=>button.onclick=()=>{setPage('chat');send('/cost')});
+$('memory-panel').title='在 Ombre Brain 中打开高级记忆管理';
 col.addEventListener('click',event=>{
   const button=event.target.closest('.approval button[data-answer]');
   if(!button)return;
   const card=button.closest('.approval');
   approve(card,card.querySelector('.status'),button.dataset.answer,Number(card.dataset.id));
 });
-document.querySelector('#toolbar-toggle').onclick=()=>{toolPanel.hidden=!toolPanel.hidden};
 document.querySelector('#collapse').onclick=()=>window.veilDesktop.collapse();
 document.querySelector('#expand').onclick=()=>window.veilDesktop.expand();
-window.veilDesktop.onShowActivity(()=>{toolPanel.hidden=false;const details=document.querySelector('#activity-details');if(!details.hidden)details.open=true});
-document.querySelector('#capability-record').onclick=()=>{document.querySelector('#capability-details').open=!document.querySelector('#capability-details').open};
-document.querySelector('#activity-status').title='自主活动状态';
-setBusy(true);poll();box.focus();
+window.veilDesktop.onShowActivity(()=>setPage('activity'));
+window.veilDesktop.onShowSettings(()=>setPage('more'));
+setPage('chat');setBusy(true);poll();box.focus();

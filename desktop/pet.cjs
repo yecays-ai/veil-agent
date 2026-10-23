@@ -1,5 +1,5 @@
 'use strict';
-const button = document.querySelector('#pet');
+const button = document.querySelector('#pet-toggle');
 const img = button.querySelector('img');
 const canvas = document.createElement('canvas');
 const ctx = canvas.getContext('2d', { willReadFrequently: true });
@@ -9,6 +9,7 @@ img.addEventListener('load', () => {
   ctx.drawImage(img, 0, 0); alpha = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
 });
 function hit(event) {
+  if (event.target.closest('.resize')) return true;
   if (!alpha) return true;
   const x = Math.floor(event.clientX / innerWidth * canvas.width);
   const y = Math.floor(event.clientY / innerHeight * canvas.height);
@@ -38,3 +39,13 @@ button.addEventListener('keydown', event => {
   if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); window.companion.toggle(); }
 });
 button.addEventListener('contextmenu', event => { event.preventDefault(); window.companion.menu(); });
+document.querySelectorAll('.resize').forEach(handle => {
+  handle.addEventListener('pointerdown', event => {
+    if (event.button !== 0) return;
+    event.preventDefault(); event.stopPropagation(); ignored = false; window.companion.hit(true);
+    handle.setPointerCapture(event.pointerId); window.companion.resizeStart(handle.dataset.corner);
+  });
+  handle.addEventListener('pointermove', event => { if (handle.hasPointerCapture(event.pointerId)) window.companion.resizeMove(); });
+  const finish = event => { if (handle.hasPointerCapture(event.pointerId)) handle.releasePointerCapture(event.pointerId); window.companion.resizeEnd(); };
+  handle.addEventListener('pointerup', finish); handle.addEventListener('pointercancel', finish);
+});

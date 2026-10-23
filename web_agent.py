@@ -133,6 +133,7 @@ class Hub:
         self.name = name
         self.activity = activity
         self.memory_url = f'http://127.0.0.1:{memory_port}/dashboard' if memory_port else None
+        self.memory_tools = None
         self.events = []
         self.busy = True          # true until the loop is waiting for input
         self.stopping = False
@@ -811,7 +812,8 @@ class Hub:
                     'current_capabilities': self.current_capabilities(),
                     'capability_record': self.capability_record(),
                     'runtime_status': self.runtime_status(),
-                    'memory_panel_url': self.memory_url, **autonomy}
+                    'memory_panel_url': self.memory_url,
+                    'memory_available': self.memory_tools is not None, **autonomy}
 
 
 def make_handler(hub, token):
@@ -854,6 +856,41 @@ def make_handler(hub, token):
             if url.path == '/':
                 if self._guard((query.get('t') or [''])[0]):
                     self._send(200, PAGE.read_bytes(), 'text/html; charset=utf-8')
+            elif url.path in ('/api/memory/catalog', '/api/memory/read'):
+                if not self._guard(self.headers.get('X-Token')):
+                    return
+                if hub.memory_tools is None:
+                    self._send(404, {'error': 'Ombre memory is not available.'})
+                    return
+                if url.path == '/api/memory/catalog':
+                    cursor = query.get('after', [''])[0]
+                    rendered, state, _ = hub.memory_tools.invoke('memory_catalog', {'after': cursor})
+                    if state != '成功':
+                        self._send(400 if state == '被拒绝' else 503, {'error': rendered})
+                    else:
+                        try:
+                            self._send(200, json.loads(rendered))
+                        except (TypeError, ValueError):
+                            self._send(503, {'error': 'Ombre memory catalog is temporarily unavailable.'})
+                else:
+                    memory_id = query.get('id', [''])[0]
+                    try:
+                        offset = int(query.get('offset', ['0'])[0])
+                    except (TypeError, ValueError):
+                        self._send(400, {'error': 'Invalid memory offset.'})
+                        return
+                    args = {'memory_id': memory_id, 'offset': offset}
+                    version = query.get('version', [None])[0]
+                    if version is not None:
+                        args['version'] = version
+                    rendered, state, _ = hub.memory_tools.invoke('memory_read', args)
+                    if state != '成功':
+                        self._send(404 if state == '被拒绝' else 503, {'error': rendered})
+                    else:
+                        try:
+                            self._send(200, json.loads(rendered))
+                        except (TypeError, ValueError):
+                            self._send(503, {'error': 'Ombre memory could not be read right now.'})
             elif url.path == '/api/events':
                 if self._guard(self.headers.get('X-Token')):
                     try:
@@ -1221,6 +1258,7 @@ def main(argv=None):
                                         from memory_native import NativeMemoryTools, ToolSet
                                         tools = ToolSet(tools, NativeMemoryTools(
                                             memory, cfg.tools['max_result_bytes']))
+                                        hub.memory_tools = tools.native
                                     serve_chat(Chat(cfg, store, budget, model, memory, tools,
                                                     approval=hub.approval, output=hub.output,
                                                     voice=voice, runtime_monitor=runtime_monitor), hub)

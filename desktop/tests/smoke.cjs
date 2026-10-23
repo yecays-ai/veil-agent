@@ -114,11 +114,16 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   const prefs = pet.webContents.getLastWebPreferences();
   assert.equal(prefs.contextIsolation, true); assert.equal(prefs.sandbox, true); assert.equal(prefs.nodeIntegration, false);
   await wait(() => pet.webContents.executeJavaScript('document.querySelector("img").complete && document.querySelector("img").naturalWidth > 0'), 'Peter image missing');
-  const toggle = () => pet.webContents.executeJavaScript('document.querySelector("#pet").dispatchEvent(new KeyboardEvent("keydown", {key:"Enter",bubbles:true}))');
+  const toggle = () => pet.webContents.executeJavaScript('document.querySelector("#pet-toggle").dispatchEvent(new KeyboardEvent("keydown", {key:"Enter",bubbles:true}))');
   await toggle();
   let chat;
   await wait(() => { chat = BrowserWindow.getAllWindows().find(w => w !== pet); return chat?.isVisible(); }, 'chat not visible');
-  await wait(() => chat.webContents.executeJavaScript('document.body.textContent.includes("Fictional saved history")'), 'history missing');
+  chat.webContents.on('console-message', (_event, level, message, line, sourceId) => console.log(`CHAT CONSOLE level=${level} ${sourceId}:${line} ${message}`));
+  chat.webContents.on('render-process-gone', (_event, details) => console.error('CHAT RENDER PROCESS GONE', JSON.stringify(details)));
+  await wait(async () => {
+    try { return await chat.webContents.executeJavaScript('document.body.textContent.includes("Fictional saved history")'); }
+    catch { return false; }
+  }, 'history missing');
   assert.ok(chat.webContents.getURL().startsWith('file:'), 'desktop chat must load its own local UI');
   const chatPrefs = chat.webContents.getLastWebPreferences();
   assert.equal(chatPrefs.contextIsolation, true); assert.equal(chatPrefs.sandbox, true); assert.equal(chatPrefs.nodeIntegration, false);
@@ -190,8 +195,8 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   await wait(() => chat.webContents.executeJavaScript('!!document.querySelector(".msg[data-media-id=fictional-voice-retry] .msg-voice")'), 'retried voice message id was not updated');
   await wait(() => chat.webContents.executeJavaScript('!document.querySelector(".msg[data-media-id=fictional-voice-retry] .voice-retry")'), 'successful upload retry still shows an error');
 
-  await chat.webContents.executeJavaScript('document.querySelector("#toolbar-toggle").click()');
-  await wait(() => chat.webContents.executeJavaScript('!document.querySelector("#tool-panel").hidden'), 'desktop toolbar did not open');
+  await chat.webContents.executeJavaScript('document.querySelector("[data-page=memory]").click()');
+  await wait(() => chat.webContents.executeJavaScript('!document.querySelector("#memory-view").hidden'), 'memory page did not open');
   assert.equal(await chat.webContents.executeJavaScript('document.querySelector("#memory-panel").hidden'), false, 'real Memory entry should appear when available');
   await wait(() => chat.webContents.executeJavaScript('document.querySelector(".msg-image").complete && document.querySelector(".msg-image").naturalWidth > 0'), 'compressed image did not decode');
   await wait(() => chat.webContents.executeJavaScript('[...document.querySelectorAll(".msg-voice audio")].some(a=>a.readyState>=2)'), 'voice media did not load');
@@ -215,14 +220,11 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   let menuWindow;
   await wait(() => { menuWindow = BrowserWindow.getAllWindows().find(w => w !== pet && w !== chat); return menuWindow?.isVisible(); }, 'pet menu missing');
   const menuText = await menuWindow.webContents.executeJavaScript('document.body.textContent');
-  assert.match(menuText, /展开 \/ 收起聊天/); assert.match(menuText, /调整 Peter 大小/); assert.match(menuText, /查看活动状态/);
+  assert.match(menuText, /展开 \/ 收起聊天/); assert.match(menuText, /外观设置/); assert.match(menuText, /查看自主活动/);
   assert.doesNotMatch(menuText, /Coming Soon/);
-  const oldPet = pet;
-  await menuWindow.webContents.executeJavaScript('document.querySelector("[data-size=\'420\']").click()');
-  await wait(() => oldPet.isDestroyed(), 'old pet was not replaced');
-  pet = BrowserWindow.getAllWindows().find(w => w !== chat);
-  assert.equal(pet.getBounds().width, 420);
-  console.log('SMOKE PASS: local dark chat, history, audio-only permissions, >5 MB image compression and decode, automatic-language dictation, send-first voice with hidden transcript and right-click menu, audio loading, activity controls, hide/reopen, resize, sandbox');
+  await menuWindow.webContents.executeJavaScript('document.querySelector("[data-action=appearance]").click()');
+  await wait(() => chat.webContents.executeJavaScript('!document.querySelector("#more-view").hidden'), 'appearance settings did not open');
+  console.log('SMOKE PASS: local dark chat, history, audio-only permissions, >5 MB image compression and decode, automatic-language dictation, send-first voice with hidden transcript and appearance settings, right-click menu, audio loading, activity controls, hide/reopen, sandbox');
   clearTimeout(failSafe);
   server.close(); app.exit(0);
 })().catch(error => { console.error(error); clearTimeout(failSafe); server?.close(); app.exit(1); });
