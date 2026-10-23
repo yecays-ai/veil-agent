@@ -14,7 +14,7 @@ from unittest.mock import Mock, patch
 
 import backup_restore
 from autonomy import AutonomyController
-from veil_agent import AUTONOMY_WAKE, ActivityState, Budget, Chat, Store, load_character
+from veil_agent import AUTONOMY_WAKE, ActivityState, Budget, Chat, Store, load_character, run_chat
 from web_agent import Hub, serve_chat, start_server
 
 REPO = Path(__file__).resolve().parents[1]
@@ -84,9 +84,11 @@ class ScheduledAutonomyCloseoutTests(unittest.TestCase):
 
             controller.interval = timedelta(0)  # controlled time advancement for the due wake
             self.assertTrue(controller.due())
-            self.assertIs(hub.input_fn(), AUTONOMY_WAKE)
-            controller.run()
-            hub.busy = False
+            wake = hub.input_fn()
+            self.assertIs(wake, AUTONOMY_WAKE)
+            inputs = iter((wake, '/quit'))
+            run_chat(chat, input_fn=lambda _prompt='': next(inputs), output=lambda *_: None,
+                     drop=lambda: False, activity=activity, autonomy=controller)
 
             rows = store.read("fixture/autonomy.jsonl")
             self.assertEqual(len(rows), 1)
@@ -126,19 +128,26 @@ class FictionalBackupRestoreCloseoutTests(unittest.TestCase):
             backup_root = base / "backups"
             target = base / "restored"
             (source / "data" / "costs.jsonl").parent.mkdir(parents=True)
-            (source / "data" / "costs.jsonl").write_text('{"fixture":"cost"}\n', encoding="utf-8")
-            (source / ".env").write_text("FIXTURE_ONLY_KEY=fictional\n", encoding="utf-8")
+            cost_value = '{"fixture":"cost"}\n'
+            env_value = "FIXTURE_ONLY_KEY=fictional\n"
+            (source / "data" / "costs.jsonl").write_text(cost_value, encoding="utf-8")
+            (source / ".env").write_text(env_value, encoding="utf-8")
             (source / "persona").mkdir()
+            shared_expected = {"data/costs.jsonl": cost_value, ".env": env_value}
             expected = {}
             for role_id, label in (("fixture", "FICTIONAL_A"), ("ghost", "FICTIONAL_B")):
                 role_data = source / "data" / role_id
                 (role_data / "memory" / "_agent").mkdir(parents=True)
                 (role_data / "workspace").mkdir()
                 (source / "characters" / role_id).mkdir(parents=True)
+                persona_value = "Fictional identity for " + label
+                character_value = f'name = "{label}"\npersona = "persona/{role_id}.md"\n'
                 (source / "persona" / (role_id + ".md")).write_text(
-                    "Fictional identity for " + label, encoding="utf-8")
+                    persona_value, encoding="utf-8")
                 (source / "characters" / role_id / "character.toml").write_text(
-                    f'name = "{label}"\npersona = "persona/{role_id}.md"\n', encoding="utf-8")
+                    character_value, encoding="utf-8")
+                shared_expected["persona/" + role_id + ".md"] = persona_value
+                shared_expected["characters/" + role_id + "/character.toml"] = character_value
                 values = {
                     "chat.jsonl": '{"role":"user","content":"' + label + ' chat"}\n',
                     "memory/fiction.md": label + " memory\n",
@@ -156,6 +165,8 @@ class FictionalBackupRestoreCloseoutTests(unittest.TestCase):
             backup_restore.verify_backup(backup)
             manifest = backup_restore.verify_backup(backup); backup_restore.restore_backup(backup, target)
             self.assertEqual(manifest["components"], list(backup_restore.PAYLOAD_ROOTS))
+            for relative, content in shared_expected.items():
+                self.assertEqual((target / relative).read_text(encoding="utf-8"), content)
             for role_id, values in expected.items():
                 for relative, content in values.items():
                     self.assertEqual((target / "data" / role_id / relative).read_text(encoding="utf-8"),
