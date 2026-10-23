@@ -3,7 +3,7 @@ const { app, BrowserWindow, ipcMain, dialog, screen, shell } = require('electron
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const { pathToFileURL } = require('node:url');
-const { connect, validRoot } = require('./backend.cjs');
+const { connect, validRoot, readEndpoint } = require('./backend.cjs');
 
 let pet, chat, menu, connecting = false, quitting = false, drag, agentEndpoint;
 const settings = { size: 320 };
@@ -193,13 +193,30 @@ ipcMain.on('pet:drag-move', event => {
 });
 ipcMain.on('pet:drag-end', event => { if (fromPet(event)) { drag = null; save().catch(() => {}); } });
 ipcMain.on('pet:hit', (event, opaque) => { if (fromPet(event) && !drag) pet.setIgnoreMouseEvents(!opaque, { forward: true }); });
-ipcMain.on('menu:action', (event, action, value) => {
+ipcMain.on('menu:action', async (event, action, value) => {
   if (!menu || event.sender !== menu.webContents) return;
   hideMenu();
   if (action === 'chat') toggleChat();
   else if (action === 'size' && [160, 240, 320, 420, 540].includes(value)) { createPet(value); save().catch(() => {}); }
   else if (action === 'activity') showActivity();
-  else if (action === 'quit') app.quit();
+  else if (action === 'quit-agent') {
+    if (quitting) return;
+    quitting = true;
+    try {
+      if (!agentEndpoint) {
+        const root = settings.root || (app.isPackaged
+          ? path.resolve(path.dirname(process.execPath), '..', '..', '..')
+          : path.resolve(__dirname, '..'));
+        agentEndpoint = await readEndpoint(root);
+      }
+      if (agentEndpoint) await endpointRequest('/api/exit', 'POST', {});
+      app.quit();
+    } catch (error) {
+      quitting = false;
+      dialog.showErrorBox('VEIL · Agent 尚未退出', error.message || '请重试。');
+      showMenu();
+    }
+  }
 });
 
 if (!app.requestSingleInstanceLock()) app.quit();

@@ -1,10 +1,5 @@
 @echo off
 setlocal
-set "INSTALLED=%~dp0desktop-app\VEIL Desktop\VEIL.exe"
-if exist "%INSTALLED%" (
-  start "" "%INSTALLED%"
-  exit /b 0
-)
 cd /d "%~dp0desktop"
 if exist "dist\VEIL-win32-x64\VEIL.exe" (
   start "" "dist\VEIL-win32-x64\VEIL.exe"
@@ -16,3 +11,4 @@ if not exist "node_modules\electron\dist\electron.exe" (
   exit /b 1
 )
 start "" "node_modules\electron\dist\electron.exe" .
+exit /b 0
