@@ -146,6 +146,33 @@ output_cny_per_million = "8"
         self.assertEqual(event['kind'], 'reset')
         self.assertIn('旧聊天保留', event['text'])
 
+    def test_ombre_memory_catalog_and_read_endpoints_are_authenticated_and_read_only(self):
+        calls = []
+
+        class FixtureMemoryTools:
+            def invoke(self, name, args):
+                calls.append((name, args))
+                if name == 'memory_catalog':
+                    return json.dumps({'items': [{'memory_id': 'fixture-id', 'title': 'Fictional memory'}],
+                                       'next_after': ''}), '成功', '记忆目录'
+                if name == 'memory_read':
+                    return json.dumps({'memory_id': args['memory_id'], 'offset': args['offset'],
+                                       'text': 'Fictional exact memory text', 'next_offset': None,
+                                       'version': 'a' * 64}), '成功', 'Fictional memory'
+                raise AssertionError('unexpected memory tool')
+
+        self.hub.memory_tools = FixtureMemoryTools()
+        self.assertEqual(self.call('/api/memory/catalog', token='wrong')[0], 403)
+        status, catalog = self.call('/api/memory/catalog?after=fixture-start')
+        self.assertEqual(status, 200)
+        self.assertEqual(catalog['items'][0]['memory_id'], 'fixture-id')
+        status, memory = self.call('/api/memory/read?id=fixture-id&offset=0&version=' + ('a' * 64))
+        self.assertEqual(status, 200)
+        self.assertEqual(memory['text'], 'Fictional exact memory text')
+        self.assertEqual(calls, [('memory_catalog', {'after': 'fixture-start'}),
+                                 ('memory_read', {'memory_id': 'fixture-id', 'offset': 0,
+                                                  'version': 'a' * 64})])
+
     def test_image_upload_is_token_bound_persisted_and_shown_as_one_chat_event(self):
         png = b'\x89PNG\r\n\x1a\nfictional'
         body = {'mime': 'image/png', 'name': 'fictional.png',
