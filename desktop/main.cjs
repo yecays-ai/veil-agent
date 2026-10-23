@@ -1,13 +1,20 @@
 'use strict';
-const { app, BrowserWindow, Menu, ipcMain, dialog, screen } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, screen, shell } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const { pathToFileURL } = require('node:url');
 const { connect, validRoot } = require('./backend.cjs');
-let pet, chat, connecting = false, quitting = false, drag;
-let chatOrigin = null;
-let settings = { size: 320 };
+
+let pet, chat, menu, connecting = false, quitting = false, drag, agentEndpoint;
+const settings = { size: 320 };
 const petURL = pathToFileURL(path.join(__dirname, 'pet.html')).href;
+const chatURL = pathToFileURL(path.join(__dirname, 'chat.html')).href;
+const menuURL = pathToFileURL(path.join(__dirname, 'menu.html')).href;
+const runtimeDataPath = app.isPackaged
+  ? path.join(path.dirname(process.execPath), 'data')
+  : path.join(__dirname, '.runtime-data');
+app.setPath('userData', runtimeDataPath);
+app.setPath('sessionData', path.join(runtimeDataPath, 'session-data'));
 const settingsPath = () => path.join(app.getPath('userData'), 'desktop.json');
 
 async function save() {
@@ -21,147 +28,175 @@ function safeContents(win, allowed) {
   win.webContents.on('will-redirect', (event, url) => { if (!allowed(url)) event.preventDefault(); });
   win.webContents.on('will-attach-webview', event => event.preventDefault());
 }
+function workAreaAt(x, y) { return screen.getDisplayNearestPoint({ x, y }).workArea; }
+function clampPosition(x, y, width, height, area) {
+  return { x: Math.round(Math.max(area.x, Math.min(x, area.x + area.width - width))),
+    y: Math.round(Math.max(area.y, Math.min(y, area.y + area.height - height))) };
+}
 function visibleBounds(size, position = settings) {
-  const area = screen.getDisplayNearestPoint({
-    x: Number.isFinite(position.x) ? position.x : 0,
-    y: Number.isFinite(position.y) ? position.y : 0
-  }).workArea;
-  return {
-    x: Math.round(Math.max(area.x, Math.min(position.x ?? area.x + area.width - size - 24, area.x + area.width - size))),
-    y: Math.round(Math.max(area.y, Math.min(position.y ?? area.y + area.height - size - 24, area.y + area.height - size))),
-    width: size, height: size
-  };
+  const area = workAreaAt(Number.isFinite(position.x) ? position.x : 0, Number.isFinite(position.y) ? position.y : 0);
+  const x = position.x ?? area.x + area.width - size - 24;
+  const y = position.y ?? area.y + area.height - size - 24;
+  return { ...clampPosition(x, y, size, size, area), width: size, height: size };
+}
+function positionChat() {
+  if (!pet || pet.isDestroyed() || !chat || chat.isDestroyed()) return;
+  const p = pet.getBounds(); const c = chat.getBounds(); const area = workAreaAt(p.x, p.y);
+  const right = p.x + p.width + 12;
+  const left = p.x - c.width - 12;
+  const x = right + c.width <= area.x + area.width ? right : Math.max(area.x, left);
+  const y = Math.max(area.y, Math.min(p.y + p.height / 2 - c.height / 2, area.y + area.height - c.height));
+  chat.setPosition(...Object.values(clampPosition(x, y, c.width, c.height, area)));
 }
 function createPet(size = settings.size) {
-  // Recreate the transparent window rather than enabling unsupported native resizing.
   size = [160, 240, 320, 420, 540].includes(size) ? size : 320;
-  const old = pet;
-  const bounds = visibleBounds(size, old && !old.isDestroyed() ? old.getBounds() : settings);
+  const old = pet; const bounds = visibleBounds(size, old && !old.isDestroyed() ? old.getBounds() : settings);
   settings.size = size;
-  pet = new BrowserWindow({ ...bounds, frame: false, transparent: true,
-    resizable: false, maximizable: false, minimizable: false, hasShadow: false,
-    alwaysOnTop: true, skipTaskbar: true, show: false,
-    webPreferences: { preload: path.join(__dirname, 'preload.cjs'),
-      contextIsolation: true, nodeIntegration: false, sandbox: true }
-  });
-  const current = pet;
-  safeContents(current, url => url === petURL);
+  pet = new BrowserWindow({ ...bounds, frame: false, transparent: true, resizable: false,
+    maximizable: false, minimizable: false, hasShadow: false, alwaysOnTop: true,
+    skipTaskbar: true, show: false, webPreferences: { preload: path.join(__dirname, 'preload.cjs'),
+      contextIsolation: true, nodeIntegration: false, sandbox: true } });
+  const current = pet; safeContents(current, url => url === petURL);
   current.once('ready-to-show', () => {
-    current.showInactive();
-    if (old && !old.isDestroyed()) old.destroy();
+    current.showInactive(); if (old && !old.isDestroyed()) old.destroy();
+    if (chat && !chat.isDestroyed()) positionChat(); save().catch(() => {});
   });
-  current.loadURL(petURL);
-  current.on('closed', () => { if (pet === current) pet = null; });
+  current.loadURL(petURL); current.on('closed', () => { if (pet === current) pet = null; });
 }
 async function selectRoot() {
   const choice = await dialog.showOpenDialog({ title: '选择已有的 VEIL Agent 文件夹（里面有 start-web.bat）', properties: ['openDirectory'] });
   if (choice.canceled) return null;
   if (!await validRoot(choice.filePaths[0])) throw new Error('此文件夹尚未安装 Agent。请先在原 Agent 文件夹运行 setup.bat。');
-  settings.root = choice.filePaths[0];
-  await save();
-  return settings.root;
+  settings.root = choice.filePaths[0]; await save(); return settings.root;
 }
 async function toggleChat() {
-  if (chat && !chat.isDestroyed()) {
-    if (chat.isVisible()) chat.hide(); else { chat.show(); chat.focus(); }
-    return;
-  }
-  if (connecting) return;
-  connecting = true;
+  if (chat && !chat.isDestroyed()) { if (chat.isVisible()) chat.hide(); else { positionChat(); chat.show(); chat.focus(); } return; }
+  if (connecting) return; connecting = true;
   try {
     let root = settings.root;
-    const adjacent = path.resolve(__dirname, '..');
-    if (!root && !app.isPackaged && await validRoot(adjacent)) root = adjacent;
-    if (!root) root = await selectRoot();
-    if (!root) return;
-    const endpoint = await connect(root);
-    chatOrigin = endpoint.origin;
-    if (quitting) return;
-    chat = new BrowserWindow({ width: 640, height: 780, minWidth: 420, minHeight: 480,
-      title: 'VEIL · 聊天', show: false,
-      webPreferences: { preload: path.join(__dirname, 'chat-preload.cjs'),
-        contextIsolation: true, nodeIntegration: false, sandbox: true }
-    });
-    const current = chat;
-    safeContents(current, url => {
-      try { const u = new URL(url); return u.origin === endpoint.origin && u.pathname === '/'; }
-      catch { return false; }
-    });
-    current.setMenu(null);
+    const adjacent = app.isPackaged
+      ? path.resolve(path.dirname(process.execPath), '..', '..', '..', 'veil-agent')
+      : path.resolve(__dirname, '..', 'veil-agent');
+    if (!root && await validRoot(adjacent)) { root = adjacent; settings.root = root; await save(); }
+    if (!root) root = await selectRoot(); if (!root) return;
+    agentEndpoint = await connect(root); if (quitting) return;
+    chat = new BrowserWindow({ x: 0, y: 0, width: 410, height: 520, minWidth: 390, minHeight: 460,
+      frame: false, transparent: true, hasShadow: true, alwaysOnTop: true, skipTaskbar: true,
+      title: 'VEIL · Peter', show: false,
+      webPreferences: { preload: path.join(__dirname, 'desktop-preload.cjs'),
+        contextIsolation: true, nodeIntegration: false, sandbox: true } });
+    const current = chat; safeContents(current, url => url === chatURL);
     current.on('close', event => { if (!quitting) { event.preventDefault(); current.hide(); } });
     current.on('closed', () => { if (chat === current) chat = null; });
-    await current.loadURL(endpoint.url).catch(() => {
-      throw new Error('聊天页面没有加载成功。请确认原网页聊天可用后，再点击 Peter 重试。');
-    });
-    if (!quitting) { current.show(); current.focus(); }
+    await current.loadURL(chatURL); positionChat(); if (!quitting) { current.show(); current.focus(); }
   } catch (error) {
     if (chat && !chat.isDestroyed()) chat.destroy();
     dialog.showErrorBox('VEIL · 暂时无法聊天', error.message);
   } finally { connecting = false; }
 }
+async function showActivity() {
+  if (!chat || chat.isDestroyed()) await toggleChat();
+  else if (!chat.isVisible()) { positionChat(); chat.show(); chat.focus(); }
+  if (chat && !chat.isDestroyed()) chat.webContents.send('desktop:show-activity');
+}
+function hideMenu() { if (menu && !menu.isDestroyed()) menu.hide(); }
 function showMenu() {
-  Menu.buildFromTemplate([
-    { label: '展开 / 收起聊天', click: toggleChat },
-    { label: '重新连接聊天（服务退出后使用）', enabled: !connecting, click: () => {
-      if (chat && !chat.isDestroyed()) chat.destroy();
-      toggleChat();
-    } },
-    { label: 'Peter 大小', submenu: [160, 240, 320, 420, 540].map(size => ({
-      label: `${size} px`, type: 'radio', checked: settings.size === size,
-      click: () => { createPet(size); save().catch(() => {}); }
-    })) },
-    { type: 'separator' },
-    { label: 'Memory / Ombre · Coming Soon（桌面入口未接通）', enabled: false },
-    { label: 'Lab · Coming Soon（桌面入口未接通）', enabled: false },
-    { label: '更换 Agent 文件夹', enabled: !connecting, click: async () => {
-      try {
-        const root = await selectRoot();
-        if (root && chat && !chat.isDestroyed()) chat.destroy();
-      } catch (error) { dialog.showErrorBox('VEIL', error.message); }
-    } },
-    { type: 'separator' },
-    { label: '退出桌面形象（Agent 服务继续运行）', click: () => app.quit() }
-  ]).popup({ window: pet });
+  const point = screen.getCursorScreenPoint(); const area = workAreaAt(point.x, point.y);
+  const bounds = clampPosition(point.x, point.y, 246, 334, area);
+  if (!menu || menu.isDestroyed()) {
+    menu = new BrowserWindow({ ...bounds, width: 246, height: 334, frame: false, transparent: true,
+      resizable: false, show: false, skipTaskbar: true, alwaysOnTop: true,
+      webPreferences: { preload: path.join(__dirname, 'menu-preload.cjs'), contextIsolation: true,
+        nodeIntegration: false, sandbox: true } });
+    safeContents(menu, url => url === menuURL); menu.on('blur', hideMenu);
+    menu.on('closed', () => { menu = null; });
+    menu.once('ready-to-show', () => { if (menu && !menu.isDestroyed()) { menu.show(); menu.focus(); } });
+    menu.loadURL(menuURL);
+  } else { menu.setBounds({ ...bounds, width: 246, height: 334 }); }
+  if (!menu.webContents.isLoading()) { menu.show(); menu.focus(); }
+}
+async function endpointRequest(pathname, method = 'GET', body) {
+  if (!agentEndpoint) throw new Error('Agent 尚未连接。');
+  const token = new URL(agentEndpoint.url).searchParams.get('t');
+  const response = await fetch(`${agentEndpoint.origin}${pathname}`, { method, headers: {
+    'X-Token': token, ...(body ? { 'Content-Type': 'application/json' } : {})
+  }, body: body ? JSON.stringify(body) : undefined });
+  const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(data.error || '请求失败'); return data;
 }
 const fromPet = event => pet && !pet.isDestroyed() && event.sender === pet.webContents && event.senderFrame?.url === petURL;
+const fromChat = event => chat && !chat.isDestroyed() && event.sender === chat.webContents && event.senderFrame?.url === chatURL;
+function allowedChatRequest(pathname, method) {
+  if (method === 'GET') return /^\/api\/events\?after=\d+$/.test(pathname);
+  return method === 'POST' && ['/api/send', '/api/media', '/api/voice', '/api/voice/retry',
+    '/api/approve', '/api/activity', '/api/exit'].includes(pathname);
+}
+ipcMain.handle('chat:request', async (event, pathname, body, timeoutMs) => {
+  if (!fromChat(event) || typeof pathname !== 'string' || !allowedChatRequest(pathname, body ? 'POST' : 'GET'))
+    return { ok: false, status: 403, data: { error: '请求未允许。' } };
+  if (body && (typeof body !== 'object' || Array.isArray(body)))
+    return { ok: false, status: 400, data: { error: '无效请求。' } };
+  try {
+    const token = new URL(agentEndpoint.url).searchParams.get('t');
+    const response = await fetch(`${agentEndpoint.origin}${pathname}`, {
+      method: body ? 'POST' : 'GET', redirect: 'error',
+      headers: { 'X-Token': token, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(Math.max(1000, Math.min(120000, Number(timeoutMs) || 30000)))
+    });
+    const data = await response.json().catch(() => ({}));
+    return { ok: response.ok, status: response.status, data };
+  } catch (error) { return { ok: false, status: 0, data: { error: error.message || 'Agent 连接中断。' } }; }
+});
+ipcMain.handle('chat:media-url', (event, filename) => {
+  if (!fromChat(event) || !agentEndpoint) throw new Error('请求未允许。');
+  if (typeof filename !== 'string' || filename.length > 180 || !/^[A-Za-z0-9_.-]+$/.test(filename) || filename.includes('..'))
+    throw new Error('无效的媒体文件名。');
+  const token = new URL(agentEndpoint.url).searchParams.get('t');
+  return `${agentEndpoint.origin}/media/${encodeURIComponent(filename)}?t=${encodeURIComponent(token)}`;
+});
+ipcMain.handle('chat:open-memory', async event => {
+  if (!fromChat(event)) return false;
+  const state = await endpointRequest('/api/events?after=0'); if (!state.memory_panel_url) return false;
+  const url = new URL(state.memory_panel_url);
+  if (!['127.0.0.1', 'localhost'].includes(url.hostname)) return false;
+  await shell.openExternal(url.href); return true;
+});
+ipcMain.on('desktop:collapse', () => { if (chat) chat.hide(); });
+ipcMain.on('desktop:expand', () => { if (chat && !chat.isDestroyed()) { chat.setSize(760, 780); positionChat(); } });
+ipcMain.on('desktop:show-activity', () => { showActivity(); });
 ipcMain.on('pet:toggle', event => { if (fromPet(event)) toggleChat(); });
 ipcMain.on('pet:menu', event => { if (fromPet(event)) showMenu(); });
-ipcMain.on('pet:drag-start', event => {
-  if (fromPet(event)) drag = { cursor: screen.getCursorScreenPoint(), bounds: pet.getBounds() };
-});
+ipcMain.on('pet:drag-start', event => { if (fromPet(event)) drag = { cursor: screen.getCursorScreenPoint(), bounds: pet.getBounds() }; });
 ipcMain.on('pet:drag-move', event => {
   if (!fromPet(event) || !drag) return;
-  const cursor = screen.getCursorScreenPoint();
-  pet.setPosition(drag.bounds.x + cursor.x - drag.cursor.x, drag.bounds.y + cursor.y - drag.cursor.y);
+  const cursor = screen.getCursorScreenPoint(); pet.setPosition(drag.bounds.x + cursor.x - drag.cursor.x, drag.bounds.y + cursor.y - drag.cursor.y);
+  if (chat && chat.isVisible()) positionChat();
 });
-ipcMain.on('pet:drag-end', event => {
-  if (fromPet(event)) { drag = null; save().catch(() => {}); }
+ipcMain.on('pet:drag-end', event => { if (fromPet(event)) { drag = null; save().catch(() => {}); } });
+ipcMain.on('pet:hit', (event, opaque) => { if (fromPet(event) && !drag) pet.setIgnoreMouseEvents(!opaque, { forward: true }); });
+ipcMain.on('menu:action', (event, action, value) => {
+  if (!menu || event.sender !== menu.webContents) return;
+  hideMenu();
+  if (action === 'chat') toggleChat();
+  else if (action === 'size' && [160, 240, 320, 420, 540].includes(value)) { createPet(value); save().catch(() => {}); }
+  else if (action === 'activity') showActivity();
+  else if (action === 'quit') app.quit();
 });
-ipcMain.on('pet:hit', (event, opaque) => {
-  if (fromPet(event) && !drag) pet.setIgnoreMouseEvents(!opaque, { forward: true });
-});
+
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
-  app.on('second-instance', () => { if (pet) pet.show(); });
+  app.on('second-instance', () => { if (pet) pet.showInactive(); });
   app.whenReady().then(async () => {
     try { Object.assign(settings, JSON.parse(await fs.readFile(settingsPath(), 'utf8'))); } catch {}
-    // The local authenticated chat origin may use audio input; every other
-    // device permission (including camera/video) remains denied.
     const { session } = require('electron');
-    const mayUseMicrophone = (contents, permission, details = {}) => {
-      if (permission !== 'media' || !chat || chat.isDestroyed() || contents !== chat.webContents) return false;
-      try {
-        const origin = new URL(details.requestingUrl || contents.getURL()).origin;
-        const types = details.mediaTypes || (details.mediaType ? [details.mediaType] : []);
-        return origin === chatOrigin && types.includes('audio') && !types.includes('video');
-      } catch { return false; }
-    };
-    session.defaultSession.setPermissionCheckHandler((contents, permission, requestingOrigin, details) =>
-      mayUseMicrophone(contents, permission, { ...details, requestingUrl: requestingOrigin }));
-    session.defaultSession.setPermissionRequestHandler((contents, permission, callback, details) =>
-      callback(mayUseMicrophone(contents, permission, details)));
+    session.defaultSession.setPermissionRequestHandler((contents, permission, callback, details) => {
+      const mediaTypes = details?.mediaTypes || [];
+      const audioOnly = mediaTypes.length === 0 || (mediaTypes.includes('audio') && !mediaTypes.includes('video'));
+      callback(Boolean(chat && !chat.isDestroyed() && contents === chat.webContents && permission === 'media' && audioOnly));
+    });
+    session.defaultSession.setPermissionCheckHandler((contents, permission) =>
+      Boolean(chat && !chat.isDestroyed() && contents === chat.webContents && permission === 'media'));
     createPet();
   });
-  app.on('before-quit', () => { quitting = true; });
-  app.on('window-all-closed', () => app.quit());
+  app.on('before-quit', () => { quitting = true; }); app.on('window-all-closed', () => app.quit());
 }

@@ -1,29 +1,21 @@
 # VEIL Windows 桌面版 0.1
 
-使用 Lan 提供的原始 `assets/pep.png`。静态形象，没有生成替代图或虚构动画。
+桌面程序使用本仓库内的 Peter PNG、透明桌宠窗口和独立深色聊天界面。聊天界面通过本机 Agent 的现有 HTTP API 工作，沿用同一聊天、记忆、预算、审批、自主活动和媒体数据，不复制 Agent 数据或服务。
 
-## 运行
+## 启动与构建
 
-打包文件夹完整解压后双击 `VEIL.exe`。首次点击 Peter，选择已经能运行网页聊天的 VEIL Agent 文件夹（有 `start-web.bat` 和安装好的 `.venv`）。桌面壳不需要 Node.js；原 Agent 仍使用原来安装的 Python、配置和数据。不要只拷贝 EXE，旁边的运行库必须保留。本版本没有捆绑 Python Agent，也不是免配置的新 Agent 安装器。
+- 在 VEIL Agent 仓库目录双击 `start-desktop.bat`。如果同级 `..\desktop-app\VEIL Desktop\VEIL.exe` 已安装，启动它；否则启动本仓库构建的 `desktop\dist\VEIL-win32-x64\VEIL.exe`，开发环境下回退到 Electron 源码。
+- 首次点击 Peter 时选择已有的 Agent 文件夹（含 `web_launcher.py` 和 `.venv`）。桌面程序调用原 `web_launcher.py --no-browser`，使用原 Python 环境、配置、聊天、记忆与权限。
+- 源码运行需要 Node.js 24：双击仓库根目录 `setup-desktop.bat`，然后双击 `start-desktop.bat`。构建时在 `desktop` 运行 `npm ci`、`node node_modules/electron/install.js`、`npm run package`。
+- 发布时复制完整 `dist\VEIL-win32-x64` 文件夹；不能只复制 `VEIL.exe`。
 
-源码方式：安装 Node.js 24，双击仓库根目录 `setup-desktop.bat`，成功后双击 `start-desktop.bat`。构建：在 desktop 目录运行 `npm ci`、`node node_modules/electron/install.js`、`npm run package`，输出为 `dist/VEIL-win32-x64/VEIL.exe`。
+## 使用
 
-## 使用与数据边界
+- 单击 Peter 展开或收起旁边的紧凑聊天窗口；按住拖动；右键打开统一深色菜单，可切换尺寸、查看活动状态或退出桌面形象。
+- 聊天保留多条独立消息、历史记录、审批、能力记录、花费/记忆命令、自主活动控制与详情。Memory Dashboard 只有 Agent 返回真实本机地址时才显示；没有接入的入口不显示。
+- 支持键盘聊天、浏览器语音听写、按住说话、收发图片、录音与 Peter 的语音消息。图片原图最大 25 MB，桌面端会缩放/压缩到 Agent 现有 5 MB 入库上限以内。麦克风权限仅限聊天窗口的音频输入。语音识别服务遵循原 Agent/浏览器行为。
+- 窗口位置和 Peter 尺寸写入桌面程序旁的 `data\desktop.json`；Agent 数据仍保留在原 Agent 目录。
 
-- 单击形象展开/收起真实聊天；按住形象拖动；右键菜单选择 160 / 240 / 320 / 420 / 540 px。PNG 自带透明留白，所以人物本身略小于窗口尺寸。大小通过重建透明窗口生效，避免开启透明窗口原生缩放。
-- 关闭聊天窗口只收起窗口，未发送的草稿、正在等待的审批和请求不会因收起重新提交。再次点击恢复同一个窗口。普通聊天窗口可用系统边框拖动、缩放。
-- 透明像素通过鼠标事件转发让下层桌面接收鼠标；跨显示器、缩放比例、全屏程序等表现仍需真实桌面验收。
-- 连接已有服务；未运行时调用原 `web_launcher.py --no-browser`，仍由其互斥锁决定启动/复用。不会另建聊天记录、记忆或预算数据库，不改变现有权限和模型配置。
-- 退出桌面形象会保留原 Agent 后台服务。需要停止 Agent 时，先在聊天里点原有“退出服务”。再次使用可右键“重新连接聊天”。切换 Agent 文件夹不停止原后台服务。
-- Memory / Ombre、Lab 的**桌面入口**禁用并标记 Coming Soon；原 Agent 在聊天中的记忆能力不变。0.1 不接通麦克风和在线语音识别，使用键盘输入。
-- 桌面壳只在 Electron 用户目录保存界面位置、大小和所选 Agent 路径。Python 的私有配置、聊天、记忆和 API Key 留在原目录，不打包进 EXE。
-- 使用系统 Chromium 沙箱与隔离上下文；聊天网页无 Node 或桌面控制桥；外部导航、新窗口和设备权限默认拒绝。
+## 验收边界
 
-## 检查与验收
-
-`npm test` 检查真实本机 HTTP 的鉴权/就绪/复用/重启接入及虚构聊天字节保留。`npm run test:windows` 用真实 Electron 窗口加载原网页与虚构服务，检查历史、一次发送、拒绝审批、收放、大小和沙箱。测试不连接真实 Agent，不调用付费模型；不代表 Lan 的真实聊天体验已验收。
-
-Windows 验收：
-1. 双击 EXE，确认人物四周透明、拖到合适位置、切换大小；聊天可收放、拖动和缩放，透明空白不会挡住桌面。
-2. 选原 Agent 目录，确认旧聊天仍在；正常聊天一次，在原有需要审批的操作里选择拒绝，确认权限仍有效。收起再展开，不重复发送。
-3. 退出并重开桌面壳，确认原记录和界面位置保留；在聊天停止服务后用“重新连接聊天”恢复。检查 Memory / Ombre、Lab 为不可用入口。不要为了验收读取真实敏感记忆或额外消费。
+自动测试使用虚构本机服务和录音数据，不调用付费模型，也不访问真实聊天或记忆。真实麦克风、语音识别、图片问答、音色、重启连续性和桌面拖拽仍需在 Windows 使用者环境体验验收；通过自动测试不代表这些体验已验收。
