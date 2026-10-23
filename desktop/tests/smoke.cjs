@@ -195,8 +195,8 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   await wait(() => chat.webContents.executeJavaScript('!!document.querySelector(".msg[data-media-id=fictional-voice-retry] .msg-voice")'), 'retried voice message id was not updated');
   await wait(() => chat.webContents.executeJavaScript('!document.querySelector(".msg[data-media-id=fictional-voice-retry] .voice-retry")'), 'successful upload retry still shows an error');
 
-  await chat.webContents.executeJavaScript('document.querySelector("#toolbar-toggle").click()');
-  await wait(() => chat.webContents.executeJavaScript('!document.querySelector("#tool-panel").hidden'), 'desktop toolbar did not open');
+  await chat.webContents.executeJavaScript('document.querySelector("[data-page=memory]").click()');
+  await wait(() => chat.webContents.executeJavaScript('!document.querySelector("#memory-view").hidden'), 'memory page did not open');
   assert.equal(await chat.webContents.executeJavaScript('document.querySelector("#memory-panel").hidden'), false, 'real Memory entry should appear when available');
   await wait(() => chat.webContents.executeJavaScript('document.querySelector(".msg-image").complete && document.querySelector(".msg-image").naturalWidth > 0'), 'compressed image did not decode');
   await wait(() => chat.webContents.executeJavaScript('[...document.querySelectorAll(".msg-voice audio")].some(a=>a.readyState>=2)'), 'voice media did not load');
