@@ -5,7 +5,7 @@ const fs = require('node:fs/promises');
 const { pathToFileURL } = require('node:url');
 const { connect, validRoot, readEndpoint } = require('./backend.cjs');
 
-let pet, chat, menu, connecting = false, quitting = false, drag, petResize, agentEndpoint, saveTimer;
+let pet, chat, menu, connecting = false, quitting = false, drag, petResize, agentEndpoint, saveTimer, saveChain = Promise.resolve();
 const settings = { size: 320, theme: 'light' };
 const petURL = pathToFileURL(path.join(__dirname, 'pet.html')).href;
 const chatURL = pathToFileURL(path.join(__dirname, 'chat.html')).href;
@@ -27,9 +27,13 @@ app.setPath('sessionData', path.join(runtimeDataPath, 'session-data'));
 const settingsPath = () => path.join(app.getPath('userData'), 'desktop.json');
 
 async function save() {
-  if (pet && !pet.isDestroyed()) Object.assign(settings, pet.getBounds());
-  await fs.mkdir(app.getPath('userData'), { recursive: true });
-  await fs.writeFile(settingsPath(), JSON.stringify(settings), 'utf8');
+  const write = saveChain.then(async () => {
+    if (pet && !pet.isDestroyed()) Object.assign(settings, pet.getBounds());
+    await fs.mkdir(app.getPath('userData'), { recursive: true });
+    await fs.writeFile(settingsPath(), JSON.stringify(settings), 'utf8');
+  });
+  saveChain = write.catch(() => {});
+  return write;
 }
 function saveSoon() {
   clearTimeout(saveTimer);
@@ -243,6 +247,9 @@ ipcMain.handle('chat:get-background', async event => {
 });
 ipcMain.handle('chat:clear-background', async event => {
   if (!fromChat(event)) return false;
+  for (const ext of Object.keys(backgroundMime)) {
+    await fs.rm(path.join(app.getPath('userData'), `appearance-background${ext}`), { force: true });
+  }
   settings.backgroundExt = null; await save(); return true;
 });
 ipcMain.handle('chat:pet-size', event => fromChat(event) && pet && !pet.isDestroyed() ? pet.getBounds().width : settings.size);

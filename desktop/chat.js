@@ -21,7 +21,7 @@ const GROUP_GAP=15*60*1000;
 function speechIsActive(){return speechState==='listening'||speechState==='processing'||!!speechRecorder||speechPermissionPending}
 function notify(text,kind='notice'){
   const node=document.createElement('div');node.className=kind==='error'?'toast error':'toast';node.textContent=text;$('toasts').appendChild(node);
-  setTimeout(()=>node.remove(),2000);
+  setTimeout(()=>node.remove(),Math.min(15000,Math.max(2000,text.length*80)));
 }
 function setPage(name){
   if(!['chat','activity','memory','more'].includes(name))return;
