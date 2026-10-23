@@ -1199,7 +1199,6 @@ class Chat:
             if not isinstance(reply, str) or not reply.strip():
                 raise UserError('接口没有返回文字回复；本次保留预留费用。')
             self.last_tool_summaries = tool_summaries
-            self.reply_displayed = reply in self.sent_messages
             if not autonomy and not self.reply_displayed:
                 self.store.append(self.path, {'role': 'assistant', 'content': reply,
                     'request_id': request_id, 'origin': 'reply'})
@@ -1238,6 +1237,7 @@ class Chat:
         next_reservation = None
         autonomy_tool_steps = 0
         output_recovered = False
+        mixed_sent_messages = []
 
 
         def log_tool(name, path, state, **metadata):
@@ -1381,6 +1381,9 @@ class Chat:
                     self.tool_stop_reason = final
                 else:
                     final = content
+                    if not autonomy and final in mixed_sent_messages:
+                        # This exact message is already visible from send_message.
+                        self.reply_displayed = True
                 if step == max_steps - 1 and summaries:
                     self.output('The tool-step limit for this request has been reached.')
                 break
@@ -1394,6 +1397,9 @@ class Chat:
             # (decision, reason, focus, next step) that the next wake is built from.
             if not autonomy and all(call.function.name == 'send_message' for call in message.tool_calls):
                 errors = []
+                failed_sends = []
+                voice_warnings = []
+                successful_sends = 0
                 for call_index, call in enumerate(message.tool_calls):
                     if autonomy and autonomy_tool_steps >= 12:
                         self.autonomy_step_limited = True
@@ -1410,9 +1416,32 @@ class Chat:
                     log_tool('send_message', summary, state)
                     if state != '成功':
                         errors.append(result)
+                        failed_sends.append((summary, state, result))
+                    else:
+                        successful_sends += 1
+                        if '语音失败' in summary:
+                            voice_warnings.append(result)
                 if not final:
-                    final = ('\n'.join(errors) if errors else
-                             message.content or (self.sent_messages[-1] if self.sent_messages else '已完成。'))
+                    if successful_sends:
+                        if voice_warnings:
+                            # Preserve the existing notice when voice generation falls
+                            # back to a saved text bubble; never echo aggregate content.
+                            self.reply_displayed = True
+                            for summary, state, error in failed_sends:
+                                self.output(display_call('send_message', summary, state, error))
+                            fallback_text = [text for text in self.sent_messages
+                                             if text.startswith('语音生成失败：')]
+                            final = '\n'.join([*fallback_text, *errors])
+                        else:
+                            # Each successful send_message already saved and displayed
+                            # its own bubble. Partial failures remain visible as errors.
+                            self.reply_displayed = True
+                            for summary, state, error in failed_sends:
+                                self.output(display_call('send_message', summary, state, error))
+                            final = (message.content if isinstance(message.content, str)
+                                     and message.content.strip() else self.sent_messages[-1])
+                    else:
+                        final = '\n'.join(errors) if errors else '已完成。'
                 break
             try:
                 next_cfg = (self.cfg if step + 1 == max_steps - 1 else
@@ -1478,6 +1507,8 @@ class Chat:
                             result, state, summary = self.send_message(
                                 call.function.arguments, request_id,
                                 f'{step}:{getattr(call, "id", None) or call_index}')
+                            if state == '成功' and self.sent_messages:
+                                mixed_sent_messages.append(self.sent_messages[-1])
                         elif call.function.name == 'capability_history':
                             result = self.capability_history_record or 'No capability changes are recorded yet.'
                             state, summary = '成功', 'capability_history'

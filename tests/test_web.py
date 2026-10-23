@@ -105,13 +105,17 @@ output_cny_per_million = "8"
     def test_dictation_hides_sensevoice_language_and_emotion_markers(self):
         self.assertEqual(clean_voice_transcript('<|zh|>你好😊<|NEUTRAL|>'), '你好')
         self.assertEqual(clean_voice_transcript('<|en|>hello there😮'), 'hello there')
+        self.assertEqual(clean_voice_transcript('<|zh|>普通语音😞'), '普通语音')
+        self.assertEqual(clean_voice_transcript('😀 你好😞'), '你好')
+        self.assertEqual(clean_voice_transcript('Wait 😊 until the end 🐱'),
+                         'Wait 😊 until the end 🐱')
 
     def test_sensevoice_dictation_response_does_not_append_emotion_emoji(self):
         class Response:
             headers = {}
             def __enter__(self): return self
             def __exit__(self, *_): return False
-            def read(self): return '{"text":"Recognized words😊"}'.encode()
+            def read(self): return '{"text":"Recognized words😞"}'.encode()
         with patch('dotenv.dotenv_values', return_value={'EMBED_API_KEY': 'fictional'}), patch(
                 'web_agent.urlopen', return_value=Response()):
             transcript, error = self.hub.transcribe_voice_bytes(b'fictional audio', 'audio/wav')

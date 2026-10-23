@@ -2,17 +2,17 @@
 
 ## 上一位停在哪
 
-- PR #120 分支 `codex/desktop-exit-update-20261023` 已合入最新 main `fec4c323705aa0100de4fff9c417a9f454669327`，当前本地还有未提交的 updater 测试夹具修复，以及 `STATUS.md`、`HANDOFF.md`、工单 077 更新。
-- 旧 head 的 Windows desktop 与 Dependency security 检查通过；Tests 的 Windows 失败定位为 updater 测试没有模拟安装的桌面打包依赖。修复后的 updater 定向测试通过，项目虚拟环境中的完整套件为 411 项通过、4 项跳过。
-- CUBIC review 请求已发到 PR #120；CUBIC 因试用额度耗尽拒绝启动。PR #120 还没有 CUBIC review。仓库规则禁止在 review 未完成时合并；付费恢复额度需要 Lan 明确决定。
-- 本地桌面单测中后端连接用例因当前 Agent 未就绪而失败；对应 PR 的 Windows desktop CI 旧 head 为通过。用户对 PR #120 的桌面体验验收未完成。
+- PR #120 已合并，最新 main 为 `4eab6bbc97eb3eca8e32720a68d3e52c1d395f63`；其桌面退出、Main Update 和浅色主题修改仍待 Lan 在本机体验验收。
+- PR #121（工单 077）包含 SenseVoice metadata emoji 清理及 `send_message` 重复气泡修复。已基于 #120 合并后的 main 重放并解决 `STATUS.md`、`HANDOFF.md` 文档冲突。
+- CodeRabbit 指出的混合工具调用重复最终回复已修：只在含 `send_message` 的混合工具轮里，抑制与已显示气泡完全相同的最终回复；不同最终回复继续显示并保存。
+- 纯 `send_message` 轮的每条成功消息继续单独保存/显示；最终 assistant 文本不额外保存/显示，消息条数不限；全失败时仍显示真实错误。`chat.send()` 返回值及 `voice:true` 路径保留。
+- 上一 head 的 Tests 3.12 失败 3 项，均已按日志处理：1 项混合轮重复，2 项测试期望与本单已确认的纯发送规则不符。此次本地定向回归通过；推送后 GitHub CI 尚待检查。未做真实 Windows/STT 验收。
 
 ## 下一个窗口第一步
 
-检查工作区改动，提交并推送到 PR #120，确认更新后 CI。随后查看 Lan 是否授权恢复 CUBIC review 额度；没有新的 review 记录前不要合并。
+等待 Lan 确认她已看到推送后的 PR #121 和 CI 状态；只有收到她的新指示后再继续处理评论或 CI。本轮不合并、不额外触发 CI/review。
 
 ## 仍然成立的边界
 
-- 只打包原有桌面目录，不生成第二份安装副本。
-- 退出操作在 Agent 不可达时仍关闭桌面端，但这不证明任意残留后台进程都已结束；通过用户验收确认实际关闭行为。
+- 只修 SenseVoice metadata 清理与 `send_message` 重复气泡；不改 STT 网络、语音 UI 或其他模块。
 - 不提交真实聊天、记忆、人设、密钥或本机数据；不改 VEIL 小手机仓库。

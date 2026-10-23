@@ -56,12 +56,17 @@ SENSEVOICE_METADATA_TAG = re.compile(
     r'<\|(?:zh|en|yue|ja|ko|nospeech|HAPPY|SAD|ANGRY|NEUTRAL|FEARFUL|DISGUSTED|SURPRISED|'
     r'EMO_UNKNOWN|BGM|Speech|Applause|Laughter|Cry|Sneeze|Breath|Cough|Sing|Speech_Noise|'
     r'withitn|woitn|GBG|Event_UNK)\|>', re.IGNORECASE)
-SENSEVOICE_METADATA_EMOJI = str.maketrans('', '', '😊😔😡😰🤢😮🎼👏😀😭🤧😷')
+SENSEVOICE_EVENT_EMOJI = '🎼👏😀😭🤧😷'
+SENSEVOICE_EMOTION_EMOJI = '😊😔😞😡😰🤢😮'
+SENSEVOICE_EVENT_EMOJI_PREFIX = re.compile(rf'^(?:[{re.escape(SENSEVOICE_EVENT_EMOJI)}]\s*)+')
+SENSEVOICE_EMOTION_EMOJI_SUFFIX = re.compile(rf'\s*[{re.escape(SENSEVOICE_EMOTION_EMOJI)}]+$')
 
 
 def clean_voice_transcript(text):
     """Remove SenseVoice rich emotion/event markers from dictation text."""
-    return SENSEVOICE_METADATA_TAG.sub('', text).translate(SENSEVOICE_METADATA_EMOJI).strip()
+    text = SENSEVOICE_METADATA_TAG.sub('', text).strip()
+    text = SENSEVOICE_EVENT_EMOJI_PREFIX.sub('', text)
+    return SENSEVOICE_EMOTION_EMOJI_SUFFIX.sub('', text).strip()
 VOICE_MIME = 'audio/mpeg'
 MAX_GENERATED_VOICE_BYTES = 25 * 1024 * 1024
 VOICE_TRANSPORT_ERRORS = {
