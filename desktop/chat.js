@@ -457,7 +457,7 @@ function stopVoice(cancel){
 }
 async function uploadVoice(blob,mime){
   const dataUrl=await fileAsDataUrl(blob),comma=dataUrl.indexOf(',');
-  const r=await api('/api/voice',{mime,name:'voice-'+Date.now(),data:dataUrl.slice(comma+1)},15000);
+  const r=await api('/api/voice',{mime,name:'voice-'+Date.now(),data:dataUrl.slice(comma+1),send_first:true},15000);
   let result={};try{result=await r.json()}catch(e){}
   if(!r.ok||!result.media)throw new Error(result.error||'录音保存失败');
   return result.media;
@@ -488,14 +488,16 @@ async function sendVoice(media){
   const r=await api('/api/send',{text,request_id:requestId,media:{id:media.id}});let result={};try{result=await r.json()}catch(e){}
   if(result.media)Object.assign(media,result.media);
   if(!r.ok){const error=new Error(result.error||'send');error.media=media;throw error}
+  media.delivery_error='';
 }
 async function retryVoice(media,button,wrap){
   button.disabled=true;button.textContent=media.delivery_error?'正在发送…':'正在识别…';
   try{
     const local=unsentVoiceBlobs.get(media.id);
     if(local){
-      const uploaded=await uploadVoice(local.blob,local.mime);Object.assign(media,uploaded);delete media.localUrl;media.transcription_pending=true;unsentVoiceBlobs.delete(media.id);
-      await sendVoice(media);updateVoiceMessage(wrap.closest('.msg'),media);return;
+      const localId=media.id,uploaded=await uploadVoice(local.blob,local.mime);Object.assign(media,uploaded);delete media.localUrl;media.transcription_pending=true;unsentVoiceBlobs.delete(localId);
+      const message=wrap.closest('.msg');if(message)message.dataset.mediaId=media.id;
+      await sendVoice(media);updateVoiceMessage(message,media);return;
     }
     if(media.delivery_error&&media.transcript){await sendVoice(media);updateVoiceMessage(wrap.closest('.msg'),media);return}
     const r=await api('/api/voice/retry',{media_id:media.id},60000);const result=await r.json();

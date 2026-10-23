@@ -32,6 +32,7 @@ PAGE = Path(__file__).resolve().parent / 'web' / 'index.html'
 MAX_BODY = 200_000
 MAX_MEDIA_BYTES = MAX_PHOTO_BYTES
 MAX_VOICE_UPLOAD_BYTES = 10 * 1024 * 1024
+MAX_ACTIVE_VOICE_TRANSCRIPTIONS = 4
 MAX_PENDING_MEDIA = 32
 PENDING_MEDIA_TTL = 60 * 60
 MAX_SUBMISSIONS = 1024
@@ -93,6 +94,7 @@ class Hub:
         self.pending = None       # event id of the approval being asked, else None
         self.voice_jobs = {}
         self.voice_jobs_lock = threading.Lock()
+        self.voice_job_slots = threading.BoundedSemaphore(MAX_ACTIVE_VOICE_TRANSCRIPTIONS)
         self.transcribing_voice = False
         self.submissions = OrderedDict()  # recent request ids -> normalized text digest
         self.submission_pending = False  # admission reserved while media storage runs
@@ -343,6 +345,14 @@ class Hub:
             current = self.voice_jobs.get(media_id)
             if current:
                 return current
+            media = self.media_info(media_id)
+            if media and media.get('transcript'):
+                finished = threading.Event()
+                finished.set()
+                return finished
+            if not self.voice_job_slots.acquire(blocking=False):
+                self._record_voice_result(media_id, '', '语音识别任务较多，录音已保留；可以稍后重试识别。')
+                return None
             finished = threading.Event()
             self.voice_jobs[media_id] = finished
         def run():
@@ -353,8 +363,23 @@ class Hub:
                 with self.voice_jobs_lock:
                     if self.voice_jobs.get(media_id) is finished:
                         self.voice_jobs.pop(media_id, None)
+                self.voice_job_slots.release()
         threading.Thread(target=run, name='voice-transcription', daemon=True).start()
         return finished
+
+    def retry_voice_transcription(self, media_id, timeout=50):
+        """Reuse an active job, or start one retry, and return its durable result."""
+        finished = self.start_voice_transcription(media_id)
+        if not finished:
+            media = self.media_info(media_id)
+            return None, (media or {}).get('transcription_error') or '语音识别任务较多，请稍后重试。'
+        if not finished.wait(timeout):
+            return None, '语音识别仍在进行；录音已保留，请稍后再看。'
+        media = self.media_info(media_id)
+        if not media:
+            return None, '录音不存在或已损坏。'
+        transcript = (media.get('transcript') or '').strip()
+        return transcript or None, (None if transcript else media.get('transcription_error') or '没有识别出文字，录音已保留；可以重试识别。')
 
     def _chat_input(self, queued):
         if not isinstance(queued, tuple):
@@ -365,16 +390,30 @@ class Hub:
             if not transcript:
                 with self.voice_jobs_lock:
                     finished = self.voice_jobs.get(media.get('id'))
+                if not finished:
+                    finished = self.start_voice_transcription(media.get('id'))
                 if finished:
                     with self.cond:
                         self.transcribing_voice = True
-                    while not finished.wait(0.2):
+                    deadline = time.monotonic() + 55
+                    while not finished.wait(min(0.2, max(0, deadline - time.monotonic()))):
                         if self.stopping or self.stopped:
                             with self.cond:
                                 self.transcribing_voice = False
                             if callable(complete):
                                 complete(False)
                             raise EOFError
+                        if time.monotonic() >= deadline:
+                            with self.cond:
+                                self.transcribing_voice = False
+                            media = self.media_info(media.get('id')) or media
+                            media['transcription_error'] = '语音识别耗时较长，录音已保留；可以重试识别。'
+                            self.push('voice_status', '', media=media)
+                            if callable(complete):
+                                complete(False)
+                            with self.cond:
+                                self.busy = False
+                            return None
                     with self.cond:
                         self.transcribing_voice = False
                 media = self.media_info(media.get('id')) or media
@@ -816,8 +855,15 @@ def make_handler(hub, token):
                 except OSError:
                     self._send(500, {'error': 'voice storage failed'})
                     return
-                hub.start_voice_transcription(media['id'])
-                self._send(202, {'ok': True, 'media': media})
+                if body.get('send_first') is True:
+                    hub.start_voice_transcription(media['id'])
+                    media = hub.media_info(media['id'])
+                    self._send(202, {'ok': True, 'media': media})
+                else:
+                    transcript, error = hub.transcribe_voice(media['id'])
+                    media = hub.media_info(media['id'])
+                    self._send(200, {'ok': True, 'media': media, 'transcript': transcript,
+                                     'transcription_error': error})
                 return
             try:
                 length = int(self.headers.get('Content-Length') or 0)
@@ -875,7 +921,7 @@ def make_handler(hub, token):
                 if not isinstance(media_id, str) or not MEDIA_ID_PATTERN.fullmatch(media_id):
                     self._send(400, {'error': 'invalid voice'})
                 else:
-                    transcript, error = hub.transcribe_voice(media_id)
+                    transcript, error = hub.retry_voice_transcription(media_id)
                     media = hub.media_info(media_id)
                     if not media:
                         self._send(404, {'error': 'invalid voice'})

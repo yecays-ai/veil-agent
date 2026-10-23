@@ -26,7 +26,7 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   app.setPath('userData', temp);
   await fs.writeFile(path.join(temp, 'desktop.json'), JSON.stringify({ root: temp, size: 320 }));
   const token = 'fictional_token_123456789';
-  let nextId = 3, pending = null, sends = 0, approvals = 0, images = 0, voices = 0;
+  let nextId = 3, pending = null, sends = 0, approvals = 0, images = 0, imageSendAttempts = 0, voices = 0, failVoiceUploadOnce = false;
   const requests = [], approvalBodies = [];
   const media = new Map();
   const voiceFixture=wavFixture();
@@ -53,9 +53,12 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
         memory_panel_url: 'http://127.0.0.1:1/dashboard', activity_enabled: false });
     } else if (url.pathname === '/api/send') {
       const body = await readBody(req);
-      if (body.media?.id === 'fictional-voice') {
+      if (body.media?.id?.startsWith('fictional-voice')) {
         assert.equal(body.text, '[voice message]', 'recording is submitted before transcription completes');
-        assert.equal(body.request_id, 'voice-send-fictional-voice');
+        assert.equal(body.request_id, `voice-send-${body.media.id}`);
+      }
+      if (body.media?.id === 'fictional-image' && imageSendAttempts++ === 0) {
+        json(res, { error: 'busy' }, 409); return;
       }
       if (body.text === 'fictional hello') {
         sends++; events.push({ id: nextId++, kind: 'user', text: body.text, request_id: body.request_id, time: new Date().toISOString() });
@@ -65,8 +68,8 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
         const attached = body.media ? [...media.values()].find(x => x.id === body.media.id) : null;
         events.push({ id: nextId++, kind: 'user', text: body.text, request_id: body.request_id,
           media: attached?.eventMedia, time: new Date().toISOString() });
-        if (body.media?.id === 'fictional-voice') setTimeout(() => events.push({ id: nextId++, kind: 'voice_status',
-          media: { ...attached.eventMedia, transcript: 'fictional voice transcript' }, time: new Date().toISOString() }), 180);
+        if (body.media?.id?.startsWith('fictional-voice')) setTimeout(() => events.push({ id: nextId++, kind: 'voice_status',
+          media: { ...attached.eventMedia, transcript: body.media.id === 'fictional-voice' ? 'fictional voice transcript' : 'fictional retry transcript' }, time: new Date().toISOString() }), 180);
       }
       json(res, {});
     } else if (url.pathname === '/api/approve') {
@@ -82,10 +85,13 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
       media.set(filename, entry); json(res, { media: entry.eventMedia });
     } else if (url.pathname === '/api/voice') {
       const body = await readBody(req); assert.equal(body.mime, 'audio/wav'); assert.ok(body.data);
+      assert.equal(body.send_first, true, 'desktop uploads must start background transcription after delivery');
+      if (failVoiceUploadOnce) { failVoiceUploadOnce = false; json(res, { error: 'fictional upload failure' }, 500); return; }
+      const id = voices === 0 ? 'fictional-voice' : 'fictional-voice-retry';
       voices++;
-      const filename = 'fictional-voice.wav';
-      const entry = { id: 'fictional-voice', filename, type: 'audio/wav', bytes: Buffer.from(body.data, 'base64'),
-        eventMedia: { id: 'fictional-voice', filename, mime: 'audio/wav', kind: 'voice', transcript: '' } };
+      const filename = id + '.wav';
+      const entry = { id, filename, type: 'audio/wav', bytes: Buffer.from(body.data, 'base64'),
+        eventMedia: { id, filename, mime: 'audio/wav', kind: 'voice', transcript: '' } };
       media.set(filename, entry); json(res, { media: entry.eventMedia }, 202);
     } else if (url.pathname === '/api/activity') {
       json(res, { enabled: false });
@@ -131,7 +137,9 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   assert.equal(await chat.webContents.executeJavaScript('document.querySelector("#image-button").disabled'), false);
   assert.equal(await chat.webContents.executeJavaScript('document.body.textContent.includes("Coming Soon")'), false);
   await chat.webContents.executeJavaScript('const language=document.querySelector("#speech-language");language.value="en-US";language.dispatchEvent(new Event("change",{bubbles:true}))');
+  const languageReloaded = new Promise(resolve => chat.webContents.once('did-finish-load', resolve));
   chat.webContents.reload();
+  await languageReloaded;
   await wait(() => chat.webContents.executeJavaScript('document.body.textContent.includes("Fictional saved history")'), 'chat did not restore after reload');
   assert.equal(await chat.webContents.executeJavaScript('document.querySelector("#speech-language").value'),'en-US','dictation language should persist on this device');
   await wait(() => chat.webContents.executeJavaScript('!!document.querySelector(".msg-voice audio")'), 'saved voice reply did not render');
@@ -148,6 +156,10 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   await wait(() => chat.webContents.executeJavaScript('!document.querySelector("#image-preview").hidden'), `image preview missing: ${JSON.stringify(await chat.webContents.executeJavaScript('(()=>({errors:[...document.querySelectorAll(".error")].map(e=>e.textContent),input:document.querySelector("#image-file").files?.[0]&&{name:document.querySelector("#image-file").files[0].name,type:document.querySelector("#image-file").files[0].type,size:document.querySelector("#image-file").files[0].size},preview:document.querySelector("#image-preview").textContent,hidden:document.querySelector("#image-preview").hidden}))()'))}`);
   await chat.webContents.executeJavaScript('document.querySelector("#box").value="fictional image caption"; document.querySelector("#send").click()');
   await wait(() => images === 1, 'image was not uploaded');
+  await wait(() => imageSendAttempts === 1 && chat.webContents.executeJavaScript('!document.querySelector("#send").disabled && [...document.querySelectorAll(".error")].some(e=>e.textContent.includes("正在处理上一条消息"))'), 'busy image send did not preserve a retryable preview');
+  assert.equal(await chat.webContents.executeJavaScript('!document.querySelector("#image-preview").hidden'), true, 'busy send must keep the selected image');
+  await chat.webContents.executeJavaScript('document.querySelector("#send").click()');
+  await wait(() => imageSendAttempts === 2 && sends === 2, 'busy image send retry did not complete');
   await wait(() => chat.webContents.executeJavaScript('!!document.querySelector(".msg-image")'), 'uploaded image message missing');
 
   const voiceBase64=voiceFixture.toString('base64');
@@ -173,18 +185,37 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   await chat.webContents.executeJavaScript(`document.querySelector('.voice-context-menu button:not(:disabled)').click()`);
   assert.equal(await chat.webContents.executeJavaScript(`document.querySelector('${userVoiceText}').hidden`),false);
 
+  failVoiceUploadOnce = true;
+  await chat.webContents.executeJavaScript(`document.querySelector('#voice-hold').dispatchEvent(new PointerEvent('pointerdown',{button:0,bubbles:true}))`);
+  await wait(() => chat.webContents.executeJavaScript('document.querySelector("#voice-hold").dataset.recording === "true"'), 'retry voice recording did not start');
+  await chat.webContents.executeJavaScript(`document.querySelector('#voice-hold').dispatchEvent(new PointerEvent('pointerup',{button:0,bubbles:true}))`);
+  await wait(() => chat.webContents.executeJavaScript('!!document.querySelector(".msg[data-media-id^=local-] .voice-retry")'), 'failed voice upload was not retained for retry');
+  await chat.webContents.executeJavaScript('document.querySelector(".msg[data-media-id^=local-] .voice-retry").click()');
+  await wait(() => voices === 2 && sends === 4, 'retained voice was not delivered after retry');
+  await wait(() => chat.webContents.executeJavaScript('!!document.querySelector(".msg[data-media-id=fictional-voice-retry] .msg-voice")'), 'retried voice message id was not updated');
+  await wait(() => chat.webContents.executeJavaScript('!document.querySelector(".msg[data-media-id=fictional-voice-retry] .voice-retry")'), 'successful upload retry still shows an error');
+
   await chat.webContents.executeJavaScript('document.querySelector("#toolbar-toggle").click()');
   await wait(() => chat.webContents.executeJavaScript('!document.querySelector("#tool-panel").hidden'), 'desktop toolbar did not open');
   assert.equal(await chat.webContents.executeJavaScript('document.querySelector("#memory-panel").hidden'), false, 'real Memory entry should appear when available');
   await wait(() => chat.webContents.executeJavaScript('document.querySelector(".msg-image").complete && document.querySelector(".msg-image").naturalWidth > 0'), 'compressed image did not decode');
   await wait(() => chat.webContents.executeJavaScript('[...document.querySelectorAll(".msg-voice audio")].some(a=>a.readyState>=2)'), 'voice media did not load');
+  const historyReloaded = new Promise(resolve => chat.webContents.once('did-finish-load', resolve));
+  chat.webContents.reload();
+  await historyReloaded;
+  await wait(() => chat.webContents.executeJavaScript('!!document.querySelector(".msg-image") && !!document.querySelector(".msg[data-media-id=fictional-voice] .msg-voice") && !!document.querySelector(".msg[data-media-id=fictional-voice-retry] .msg-voice")'), 'image and sent voice messages did not restore from history');
+  assert.equal(await chat.webContents.executeJavaScript('document.querySelector(".msg[data-media-id=fictional-voice] .voice-transcript").hidden && document.querySelector(".msg[data-media-id=fictional-voice-retry] .voice-transcript").hidden'),true,'restored voice transcripts should remain hidden');
+  await chat.webContents.executeJavaScript(`document.querySelector('.msg[data-media-id="fictional-voice"] .msg-voice').dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,clientX:80,clientY:80}))`);
+  await chat.webContents.executeJavaScript(`document.querySelector('.voice-context-menu button:not(:disabled)').click()`);
+  assert.equal(await chat.webContents.executeJavaScript('!document.querySelector(".msg[data-media-id=fictional-voice] .voice-transcript").hidden'),true,'transcription should appear only after choosing the menu item');
+  await wait(() => chat.webContents.executeJavaScript('document.querySelector(".msg-image").complete && document.querySelector(".msg-image").naturalWidth > 0'), 'restored image did not decode');
   await fs.mkdir(path.join(__dirname, '../test-output'), { recursive: true });
   await fs.writeFile(path.join(__dirname, '../test-output/pet.png'), (await pet.webContents.capturePage()).toPNG());
   await fs.writeFile(path.join(__dirname, '../test-output/chat.png'), (await chat.webContents.capturePage()).toPNG());
 
   chat.close(); assert.equal(chat.isDestroyed(), false); assert.equal(chat.isVisible(), false);
   await toggle(); await wait(() => chat.isVisible(), 'chat did not reopen');
-  assert.equal(sends, 3); assert.equal(approvals, 1);
+  assert.equal(sends, 4); assert.equal(approvals, 1);
   await pet.webContents.executeJavaScript('window.companion.menu()');
   let menuWindow;
   await wait(() => { menuWindow = BrowserWindow.getAllWindows().find(w => w !== pet && w !== chat); return menuWindow?.isVisible(); }, 'pet menu missing');
