@@ -118,7 +118,12 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   await toggle();
   let chat;
   await wait(() => { chat = BrowserWindow.getAllWindows().find(w => w !== pet); return chat?.isVisible(); }, 'chat not visible');
-  await wait(() => chat.webContents.executeJavaScript('document.body.textContent.includes("Fictional saved history")'), 'history missing');
+  chat.webContents.on('console-message', (_event, level, message, line, sourceId) => console.log(`CHAT CONSOLE level=${level} ${sourceId}:${line} ${message}`));
+  chat.webContents.on('render-process-gone', (_event, details) => console.error('CHAT RENDER PROCESS GONE', JSON.stringify(details)));
+  await wait(async () => {
+    try { return await chat.webContents.executeJavaScript('document.body.textContent.includes("Fictional saved history")'); }
+    catch { return false; }
+  }, 'history missing');
   assert.ok(chat.webContents.getURL().startsWith('file:'), 'desktop chat must load its own local UI');
   const chatPrefs = chat.webContents.getLastWebPreferences();
   assert.equal(chatPrefs.contextIsolation, true); assert.equal(chatPrefs.sandbox, true); assert.equal(chatPrefs.nodeIntegration, false);
