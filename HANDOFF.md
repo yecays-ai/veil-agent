@@ -5,7 +5,7 @@
 - PR #122、#123 和 #124 均已合并；PR #124（工单 080）合并提交为 `f4c6d3a5b14d9b40c058095689a2b0ed4a530faf`，当前最新 main 与本次开发 worktree 的基点一致。
 - PR #124 记录了 Electron 缓存打包和 Start Desktop 本地启动检查通过；正式 `update-main.cmd` 更新与 Peter 实际聊天的 Windows 体验仍待 Lan 验收。
 - 工单 081 已开 PR #125；使用 `E:\Peter-Agent\VEIL\veil-agent-codex` 独立 worktree，分支为 `ticket/081-formal-dev-directory`。改动范围为 `AGENTS.md`、`STATUS.md`、`HANDOFF.md` 和工单文件，不改 Update Main 实现。
-- PR #125 的 Cubic check 已完成但为 neutral（审查额度用尽）；scanner-report-smoke 已通过，离线矩阵与 audit 仍运行。由自动 review check 的 neutral 结果不能推断存在必需的 Cubic 门禁。GitHub App 对 main branch-protection API 返回 403，无法从该接口确认分支保护配置。
+- PR #125 的 `VEIL Main Protection` ruleset 已核实：需要四个平台离线检查、`audit` 与 `scanner-report-smoke` 通过；审批数为 0，允许 merge/squash/rebase。Cubic 是独立审查，不在 required status checks 中；当前提交的 Cubic 审查和必需检查仍需确认完成。
 
 ## 下一步
 

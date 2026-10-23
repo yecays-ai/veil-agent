@@ -1,6 +1,6 @@
 # 当前状态
 
-更新：2026-10-23 18:30 UTC · Codex。
+更新：2026-10-23 18:32 UTC · Codex。
 
 ## 当前目标与现状
 
@@ -8,7 +8,7 @@
 - PR #122 完成 Reliability 五阶段的运行安全状态与有界恢复实现。Lan 对此项 Windows 状态页体验的验收尚未记录；自动检查通过不代替体验验收。
 - PR #123（工单 079，`ticket/079-speed-up-main-update-scan`）已合并到 main，合并提交 `bd8c6c2b90083e6590433c060501b77cdb903c72`。CodeRabbit 提出的 Windows 非 ASCII Git 路径问题已修复；最新必需检查通过。
 - PR #124（工单 080，`ticket/080-cache-electron-package`）已合并到 main，合并提交 `f4c6d3a5b14d9b40c058095689a2b0ed4a530faf`。本地打包与启动检查已记录通过；正式 Main Update 与 Peter 聊天的 Windows 体验验收仍待 Lan 确认。
-- 工单 081 的规则文档已提交至 PR #125（`ticket/081-formal-dev-directory`）；PR 开放中。Cubic check 为 neutral（审查额度用尽），scanner-report-smoke 已通过，离线矩阵与 audit 仍在运行。本工单不修改 Update Main 实现。
+- 工单 081 的规则文档已提交至 PR #125（`ticket/081-formal-dev-directory`）；PR 开放中，等待 Cubic 审查和当前提交的必需检查。本工单不修改 Update Main 实现。
 
 ## 下一步
 
