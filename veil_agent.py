@@ -63,6 +63,16 @@ SEND_MESSAGE = {'type': 'function', 'function': {
                    'required': ['text'], 'additionalProperties': False},
 }}
 
+
+def send_message_schema(voice=False):
+    schema = json.loads(json.dumps(SEND_MESSAGE))
+    if voice:
+        schema['function']['parameters']['properties']['voice'] = {
+            'type': 'boolean',
+            'description': 'true sends this message as a voice message in your own voice; the text is also kept.',
+        }
+    return schema
+
 CAPABILITY_HISTORY = {'type': 'function', 'function': {
     'name': 'capability_history',
     'description': ('Look up the dated record of when your abilities were added or changed. '
@@ -190,6 +200,7 @@ class Character:
     memory: dict = None
     tools: dict = None
     autonomy: dict = None
+    voice: dict = None
 
 
 def positive_int(value):
@@ -272,6 +283,9 @@ def load_character(root, character_id):
         autonomy_daily = price(autonomy.get('daily_budget_cny', '2'))
         autonomy = {'interval_minutes': interval, 'daily_max_runs': daily_runs,
                     'daily_budget_cny': autonomy_daily}
+        voice = dict(cfg.get('voice') or {}) or None
+        if voice is not None and voice.get('provider') != 'minimax':
+            raise ValueError('unsupported voice provider')
         memory = dict(cfg.get('memory') or {})
         if memory.get('enabled', False):
             memory_port = positive_int(memory.get('ombre_port'))
@@ -281,7 +295,7 @@ def load_character(root, character_id):
         return Character(character_id, str(cfg['name']), persona,
                          positive_int(cfg.get('history_rounds', 20)),
                          positive_int(cfg.get('max_output_tokens', 1024)), provider, cfg['provider'],
-                         memory, tools, autonomy)
+                         memory, tools, autonomy, voice)
     except UserError:
         raise
     except (OSError, KeyError, ValueError, TypeError, ArithmeticError) as exc:
@@ -459,6 +473,25 @@ class Budget:
         return request_id, amount
 
     @synchronized
+    def reserve_amount(self, character, model, amount, accounting, **metadata):
+        amount = Decimal(str(amount))
+        if not amount.is_finite() or amount < 0:
+            raise UserError('费用预估无效，未发送。')
+        day, month, pending = self.totals()
+        category, active_character = self._reserve_category(amount)
+        if category == 'autonomy':
+            auto_day, auto_pending = self.category_totals(active_character)
+            if auto_day + auto_pending + amount > self.autonomy_daily:
+                raise BudgetExceeded(f'自主活动已达到 ¥{self.autonomy_daily}/日上限，聊天不受影响。')
+        if day + pending + amount > self.daily or month + pending + amount > self.monthly:
+            raise BudgetExceeded('本次费用上限会超过 ¥10/天或 ¥300/月，未发送。输入 /cost 查看。')
+        request_id = uuid.uuid4().hex
+        self.store.append('costs.jsonl', {'type': 'reserve', 'id': request_id,
+            'period': self.clock(), 'amount': str(amount), 'character': character,
+            'model': model, 'accounting': accounting, 'category': category, **metadata})
+        return request_id, amount
+
+    @synchronized
     def estimate_model(self, character, model, tokens_in, tokens_out, in_rate, out_rate):
         # Ombre's own model calls happen inside the child process, so they are estimated here.
         in_rate, out_rate = Decimal(str(in_rate)), Decimal(str(out_rate))
@@ -586,7 +619,7 @@ def memory_mode(memory):
     return ('native' if getattr(memory, 'native', False) else True) if memory else False
 
 
-def self_facts(cfg, budget, memory=False, capabilities=None):
+def self_facts(cfg, budget, memory=False, capabilities=None, voice=False):
     """(stable, changing): the stable part is identical every request so the provider can cache it;
     the changing part (time, spending ledger) is sent after the chat history."""
     stamp = budget.clock()
@@ -612,8 +645,9 @@ def self_facts(cfg, budget, memory=False, capabilities=None):
          ('You have no tools (cannot open files/folders or run scripts). '
           if not cfg.tools or not cfg.tools.get('enabled', True)
           else 'Tools are currently unavailable. '))
-        + 'You have no voice. '
-        'Unlisted abilities are unavailable. Do not invent memories, actions or tool results.'
+        + ('You can speak in voice messages with send_message voice: true. '
+           if voice and capabilities else 'You have no voice. ')
+        + 'Unlisted abilities are unavailable. Do not invent memories, actions or tool results.'
     )
     changing = (f'Local time: {stamp} ({weekday}).\n'
                 f'Pre-request ledger (CNY, excludes this reply): {budget.display(stamp, cfg.id)}\n'
@@ -621,8 +655,8 @@ def self_facts(cfg, budget, memory=False, capabilities=None):
     return stable, changing
 
 
-def build_self_description(cfg, budget, memory=False, capabilities=None):
-    stable, changing = self_facts(cfg, budget, memory, capabilities)
+def build_self_description(cfg, budget, memory=False, capabilities=None, voice=False):
+    stable, changing = self_facts(cfg, budget, memory, capabilities, voice)
     return stable + '\n' + changing
 
 
@@ -675,8 +709,16 @@ def collapse_latest_photo(messages):
             return
 
 
+class ChatOutput(str):
+    def __new__(cls, text, media=None):
+        value = super().__new__(cls, text)
+        value.media = media
+        return value
+
+
 class Chat:
-    def __init__(self, cfg, store, budget, model, memory=None, tools=None, approval=input, output=print):
+    def __init__(self, cfg, store, budget, model, memory=None, tools=None, approval=input, output=print,
+                 voice=None):
         self.cfg, self.store, self.budget, self.model = cfg, store, budget, model
         self.path = f'{cfg.id}/chat.jsonl'
         self.session_path = store.root / cfg.id / 'chat-session.json'
@@ -687,7 +729,7 @@ class Chat:
         self.trim_note = None
         self.trim_noted = False
         self.memory = memory
-        self.tools, self.approval, self.output = tools, approval, output
+        self.tools, self.approval, self.output, self.voice = tools, approval, output, voice
         self.pending_capability_event = tools.capability_event if tools else None
         self.pending_capability_event_model = capability_model_notice(tools)
         from long_tasks import LongTaskStore
@@ -721,8 +763,9 @@ class Chat:
             'name': tool.name, 'description': tool.description, 'parameters': tool.inputSchema}}
             for tool in self.long_tasks.tools] if self.task_tools_enabled else []
         existing_tools = permitted_tools(self.tools.tools if self.tools else [])
-        messaging = [SEND_MESSAGE] if ((self.cfg.tools and self.cfg.tools.get('enabled', True))
-                                        or (self.tools and self.tools.tools)) else []
+        messaging = [send_message_schema(self.voice is not None)] if (
+            (self.cfg.tools and self.cfg.tools.get('enabled', True))
+            or (self.tools and self.tools.tools)) else []
         history = [CAPABILITY_HISTORY] if existing_tools or task_tools or messaging else []
         schemas = [*existing_tools, *task_tools, *messaging, *history]
         for schema in schemas:
@@ -861,9 +904,12 @@ class Chat:
             args = json.loads(arguments)
         except (ValueError, TypeError):
             args = None
-        if (not isinstance(args, dict) or set(args) != {'text'} or
+        allowed = {'text', 'voice'} if self.voice is not None else {'text'}
+        if (not isinstance(args, dict) or not set(args).issubset(allowed) or 'text' not in args or
                 not isinstance(args['text'], str) or not args['text'].strip()):
             return 'send_message requires non-empty text.', '被拒绝', 'send_message'
+        if 'voice' in args and type(args['voice']) is not bool:
+            return 'send_message voice must be a boolean.', '被拒绝', 'send_message'
         text = args['text']
         autonomy = self.autonomy_mode
         gate = self.autonomy_message_lock if autonomy else None
@@ -886,19 +932,45 @@ class Chat:
                 sent_this_wake = sum(1 for row in rows if row.get('autonomy_run_id') == run_id)
                 if sent_this_wake >= 3:
                     return 'An autonomous wake may send at most three messages. This message was not sent.', '被拒绝', 'send_message'
-            event = {'role': 'assistant', 'content': text,
+            voice_requested = args.get('voice') is True
+            media = None
+            voice_failure = None
+            if voice_requested:
+                try:
+                    media = self.voice.synthesize(text)
+                except BudgetExceeded as exc:
+                    voice_failure = str(exc)
+                except Exception as exc:
+                    from voice_output import VoiceError
+                    if not isinstance(exc, VoiceError):
+                        raise
+                    voice_failure = exc.user_message
+            displayed_text = (f'语音生成失败：{voice_failure}\n{text}' if voice_failure else text)
+            event = {'role': 'assistant', 'content': displayed_text,
                      'request_id': request_id, 'origin': 'reply'}
+            if media:
+                event['media'] = media
             if autonomy:
                 event.update({'autonomy_run_id': run_id,
                               'autonomy_tool_call_id': tool_call_id})
-            with saving():
-                self.store.append(self.path, event)
-                self.sent_messages.append(text)
-                if autonomy:
-                    self.history, self.rounds = self.recent()
-                output = self.autonomy_message_output if autonomy else None
-                (output or self.output)(f'{self.cfg.name}: {text}')
-        return 'Sent.', '成功', 'send_message'
+            committed = False
+            try:
+                with saving():
+                    self.store.append(self.path, event)
+                    committed = True
+                    self.sent_messages.append(displayed_text)
+                    if autonomy:
+                        self.history, self.rounds = self.recent()
+                    output = self.autonomy_message_output if autonomy else None
+                    (output or self.output)(ChatOutput(f'{self.cfg.name}: {displayed_text}', media))
+            except BaseException:
+                if media and not committed:
+                    self.voice.discard(media)
+                raise
+        if voice_failure:
+            return (f'Voice generation failed: {voice_failure} The message was sent as text instead.',
+                    '成功', 'send_message（语音失败，已发文字）')
+        return ('Sent as a voice message.' if media else 'Sent.'), '成功', 'send_message'
 
     def start_new_conversation(self, language='auto'):
         if language not in ('auto', 'en'):
@@ -958,6 +1030,9 @@ class Chat:
         model_history = []
         for index, message in enumerate(self.history_events):
             content = message['content']
+            if (message['role'] == 'assistant' and isinstance(message.get('media'), dict)
+                    and message['media'].get('mime') == 'audio/mpeg'):
+                content = '[voice message] ' + content
             if message['role'] == 'user' and isinstance(message.get('media'), dict):
                 if message['media'].get('kind') == 'voice':
                     model_history.append({'role': message['role'], 'content': content})
@@ -1030,7 +1105,8 @@ class Chat:
             autonomy_handoff_id, _ = recent_chat_handoff(self.store, self.cfg)
             if extra_context is None:
                 _, extra_context = recent_activity_context(self.store, self.cfg)
-        stable, changing = self_facts(self.cfg, self.budget, memory_mode(self.memory), self.tools)
+        stable, changing = self_facts(self.cfg, self.budget, memory_mode(self.memory), self.tools,
+                                      self.voice is not None and self.tools is not None)
         description = stable + '\n' + changing
         # Order matters for the provider's prefix cache: everything that stays the same between requests
         # comes first, then the chat history, then what changes every request (recalled memories,
@@ -1523,6 +1599,14 @@ def make_model(root, cfg):
     return client, call
 
 
+def make_voice(root, cfg, store, budget):
+    from voice_output import MiniMaxVoice, load_voice_config
+    if not cfg.voice or cfg.voice.get('provider') != 'minimax':
+        return None
+    config = load_voice_config(root)
+    return MiniMaxVoice(config, store, budget, cfg.id) if config else None
+
+
 def drop_typeahead():
     # Keys typed while waiting for a reply get echoed into the reply on the
     # Windows console, so discard them before the next prompt.
@@ -1602,7 +1686,8 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead, activity=N
             elif text == '/self':
                 if chat.last_self is None:
                     output('（尚未发送消息：这是当前说明的预览，发送前会刷新。）')
-                    output(build_self_description(chat.cfg, chat.budget, memory_mode(chat.memory), chat.tools))
+                    output(build_self_description(chat.cfg, chat.budget, memory_mode(chat.memory), chat.tools,
+                                                  chat.voice is not None and chat.tools is not None))
                 else:
                     output(chat.last_self)
             elif text == '/memory' or text.startswith(('/forget ', '/restore ', '/delete ')):
@@ -1658,6 +1743,7 @@ def main():
                 print(budget.cache_display())
                 return 0
             client, model = make_model(ROOT, cfg)
+            voice = make_voice(ROOT, cfg, store, budget)
             with client:
                 from tools_agent import FilesystemTools
                 with FilesystemTools(ROOT, cfg, store) as tools:
@@ -1669,11 +1755,11 @@ def main():
                                     from memory_native import NativeMemoryTools, ToolSet
                                     tools = ToolSet(tools, NativeMemoryTools(
                                         memory, cfg.tools['max_result_bytes']))
-                                run_chat(Chat(cfg, store, budget, model, memory, tools))
+                                run_chat(Chat(cfg, store, budget, model, memory, tools, voice=voice))
                             for notice in memory.notices():
                                 print(notice)
                     else:
-                        run_chat(Chat(cfg, store, budget, model, tools=tools))
+                        run_chat(Chat(cfg, store, budget, model, tools=tools, voice=voice))
         return 0
     except UserError as exc:
         print(str(exc))

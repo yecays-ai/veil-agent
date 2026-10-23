@@ -5,6 +5,9 @@ persona = "persona/peter.md"
 history_rounds = 20
 max_output_tokens = 1024
 
+[voice]
+provider = "minimax"
+
 [providers.deepseek]
 model = "deepseek-flash"
 thinking = "enabled"

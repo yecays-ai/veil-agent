@@ -25,10 +25,12 @@ header button:hover{color:var(--text)}
 .msg pre{margin:6px 0;padding:10px;background:rgba(127,127,127,.12);border-radius:8px;overflow-x:auto;white-space:pre}
 .msg pre code{background:none;padding:0}
 .msg-image{display:block;max-width:min(360px,100%);max-height:360px;border-radius:10px;object-fit:contain;background:rgba(127,127,127,.12)}
-.msg-voice{display:flex;flex-direction:column;gap:7px;min-width:240px}
-.msg-voice audio{width:min(320px,100%);height:38px}
+.msg-voice{display:flex;flex-direction:column;gap:7px;min-width:min(300px,70vw)}
+.msg-voice audio{display:block;width:100%;height:38px}
 .msg-voice .voice-error{color:#b3402f;font-size:13px}
 .msg-voice button{align-self:flex-start;font:inherit;border:1px solid var(--line);border-radius:7px;background:var(--bg);color:var(--text);padding:4px 8px;cursor:pointer}
+.msg-voice details{font-size:14px;color:var(--muted)}
+.msg-voice details div{color:var(--text);padding-top:5px}
 .image-preview{display:flex;align-items:center;gap:8px;width:100%;padding:6px 0;color:var(--muted);font-size:13px}
 .image-preview[hidden]{display:none}
 .image-preview img{width:64px;height:64px;border-radius:8px;object-fit:cover;border:1px solid var(--line)}
@@ -290,6 +292,10 @@ function add(kind,text,id,time,media){
       const voiceError=media.delivery_error||media.transcription_error;
       if(voiceError){const error=document.createElement('div');error.className='voice-error';error.textContent=voiceError;wrap.appendChild(error);const retry=document.createElement('button');retry.type='button';retry.textContent=media.delivery_error?'重试发送':'重试识别';retry.onclick=()=>retryVoice(media,retry,wrap);wrap.appendChild(retry)}
       d.appendChild(wrap);
+    }else if(media&&media.id&&media.mime==='audio/mpeg'){
+      const wrap=document.createElement('div');wrap.className='msg-voice';
+      const audio=document.createElement('audio');audio.controls=true;audio.preload='metadata';audio.src='/media/'+encodeURIComponent(media.filename)+'?t='+encodeURIComponent(token||'');audio.setAttribute('aria-label','Peter 的语音消息');wrap.appendChild(audio);
+      const details=document.createElement('details'),summary=document.createElement('summary'),transcript=document.createElement('div');summary.textContent='展开文字';transcript.innerHTML=render(text);details.append(summary,transcript);wrap.appendChild(details);d.appendChild(wrap);
     }else if(media&&media.id){
       const image=document.createElement('img');image.className='msg-image';image.src='/media/'+encodeURIComponent(media.filename)+'?t='+encodeURIComponent(token||'');image.alt=media.name||'图片';image.loading='lazy';d.appendChild(image);
       if(text&&text!=='[图片]'){const caption=document.createElement('div');caption.innerHTML=render(text);d.appendChild(caption)}
