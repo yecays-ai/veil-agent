@@ -4,11 +4,12 @@
 
 - PR #122、#123 和 #124 均已合并；PR #124（工单 080）合并提交为 `f4c6d3a5b14d9b40c058095689a2b0ed4a530faf`，当前最新 main 与本次开发 worktree 的基点一致。
 - PR #124 记录了 Electron 缓存打包和 Start Desktop 本地启动检查通过；正式 `update-main.cmd` 更新与 Peter 实际聊天的 Windows 体验仍待 Lan 验收。
-- 当前工单 081 使用 `E:\Peter-Agent\VEIL\veil-agent-codex` 独立 worktree，分支为 `ticket/081-formal-dev-directory`；改动范围为 `AGENTS.md`、`STATUS.md`、`HANDOFF.md` 和工单文件，不改 Update Main 实现。
+- 工单 081 已开 PR #125，head 为 `805e76e2403b3c51e19cf3d262d835959cc835cc`；使用 `E:\Peter-Agent\VEIL\veil-agent-codex` 独立 worktree，分支为 `ticket/081-formal-dev-directory`。改动范围为 `AGENTS.md`、`STATUS.md`、`HANDOFF.md` 和工单文件，不改 Update Main 实现。
+- PR #125 的 Cubic check 已完成但为 neutral（审查额度用尽）；scanner-report-smoke 已通过，离线矩阵与 audit 仍运行。由自动 review check 的 neutral 结果不能推断存在必需的 Cubic 门禁。GitHub App 对 main branch-protection API 返回 403，无法从该接口确认分支保护配置。
 
 ## 下一步
 
-完成工单 081 的文档复核，提交并推送一个 PR，处理实质评审与必需检查。之后请 Lan 完成 PR #124 的 Windows 体验验收，再按 `STATUS.md` 另行安排桌面 UI 整合改版。
+完成 PR #125 的文档审核，确认最新必需检查结果和实际合并条件；满足条件后合并。合并后先检查本工单 worktree 无未提交改动，只清理它；若有改动则保留并报告。之后请 Lan 完成 PR #124 的 Windows 体验验收，再按 `STATUS.md` 另行安排桌面 UI 整合改版。
 
 ## 仍然成立的边界
 
