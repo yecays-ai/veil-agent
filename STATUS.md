@@ -1,20 +1,20 @@
 # 当前状态
 
-更新：2026-10-23 13:44 UTC · Codex。
+更新：2026-10-23 15:35 UTC · Codex。
 
 ## 当前目标与现状
 
 - PR #122 已合并到 main，合并提交 `edeea280f3163e5a32c3dd841a42c4b4f071672a`。其四个平台离线测试、audit、scanner-report-smoke 均通过；Cubic 检查因评论额度限制为 neutral。
 - PR #122 完成 Reliability 五阶段的运行安全状态与有界恢复实现。Lan 对此项 Windows 状态页体验的验收尚未记录；自动检查通过不代替体验验收。
-- PR #123（工单 079，`ticket/079-speed-up-main-update-scan`）修复 Main Update 在本地 main 分叉后的慢速冲突扫描。已同步 #122 的 main；实际冲突仅在 `STATUS.md` 与 `HANDOFF.md`，updater 代码和测试无冲突。
-- CodeRabbit 对 PR #123 提出 1 条 Major：Windows PowerShell 可能误解码非 ASCII Git 路径。扫描器现明确设置 UTF-8 输出；定向回归改用中文冲突文件名并强制代码页 437，验证本地文件不会被覆盖，1 项通过（6.72 秒）。修复已完成，推送后需核对新 head CI。
+- PR #123（工单 079，`ticket/079-speed-up-main-update-scan`）已合并到 main，合并提交 `bd8c6c2b90083e6590433c060501b77cdb903c72`。CodeRabbit 提出的 Windows 非 ASCII Git 路径问题已修复；最新必需检查通过。
+- 工单 080 正在修复 Main Update 打包时重复下载 Electron 运行包，导致更新停留在低进度。已确认本机缓存中有完整 Electron 45 压缩包；桌面包可通过官方 Packager 的本地 zip 目录参数快速重建。
 
 ## 下一步
 
-集中推送 CodeRabbit 修复和回归；新 head 必需 CI 通过后合并，再安全完成正式本地目录的首次更新和体验验证。
+完成工单 080 的缓存复用修复、评审和合并；随后用 Main Update 实际更新正式 main，并确认 Start Desktop 能和 Peter 聊天。
 
 ## Lan 的体验验收
 
-1. 在本地 main 有领先提交时运行原 Main Update，确认保留备份、扫描能快速结束、更新并打包，最后仍停在 main。
-2. 确认本地忽略数据仍在；若远端新增路径与本地文件冲突，更新应停止且文件原样保留。
-3. 更新并启动 Peter，打开状态页，确认“运行安全状态”显示运行正常；聊天与自主活动照常使用。
+1. 双击 `update-main.cmd`，确认复用 Electron 缓存、更新并打包结束，仍留在 main。
+2. 双击 `start-desktop.bat`，确认原有 VEIL Desktop 从正式仓库打包位置启动。
+3. 打开 Peter 聊天并发送一条消息，确认本地 Agent 正常响应。
