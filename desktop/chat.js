@@ -615,13 +615,16 @@ $('reconnect').onclick=async()=>{
   try{await window.veilDesktop.reconnect()}finally{button.disabled=false;button.textContent='重新连接'}
 };
 function theme(t){
-  if(t)document.documentElement.setAttribute('data-theme',t);else document.documentElement.removeAttribute('data-theme');
-  const dark=t==='dark';
+  const mode=t==='dark'?'dark':'light';
+  document.documentElement.setAttribute('data-theme',mode);
+  const dark=mode==='dark';
   $('theme').textContent=dark?'浅色':'深色';
+  $('theme').setAttribute('aria-label',dark?'切换到浅色模式':'切换到深色模式');
+  $('theme').title=dark?'切换到浅色模式':'切换到深色模式';
 }
-try{theme(localStorage.getItem('veil-theme'))}catch(e){theme(null)}
+try{theme(localStorage.getItem('veil-theme')||'light')}catch(e){theme('light')}
 $('theme').onclick=()=>{
-  const dark=$('theme').textContent==='浅色',t=dark?'light':'dark';
+  const dark=document.documentElement.dataset.theme==='dark',t=dark?'light':'dark';
   theme(t);try{localStorage.setItem('veil-theme',t)}catch(e){}
 };
 const toolPanel=document.querySelector('#tool-panel');
