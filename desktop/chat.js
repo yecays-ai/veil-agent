@@ -235,7 +235,8 @@ function createVoiceBubble(kind,text,media){
   const audio=document.createElement('audio');audio.preload='metadata';audio.hidden=true;
   audio.setAttribute('aria-label',kind==='assistant'?'Peter 的语音消息':'语音消息');
   if(media.localUrl)audio.src=media.localUrl;else window.veilDesktop.mediaUrl(media.filename).then(url=>{audio.src=url}).catch(()=>{});
-  audio.onloadedmetadata=()=>{clock.textContent=formatVoiceTime(audio.duration)};
+  const updateDuration=()=>{if(Number.isFinite(audio.duration)&&audio.duration>0)clock.textContent=formatVoiceTime(audio.duration)};
+  audio.onloadedmetadata=updateDuration;audio.ondurationchange=updateDuration;
   audio.onended=()=>{play.textContent='▶';play.setAttribute('aria-label','播放语音');wrap.classList.remove('playing')};
   play.onclick=async()=>{if(audio.paused){try{await audio.play();play.textContent='Ⅱ';play.setAttribute('aria-label','暂停语音');wrap.classList.add('playing')}catch{status.textContent='无法播放这段语音'}}else{audio.pause();play.textContent='▶';play.setAttribute('aria-label','播放语音');wrap.classList.remove('playing')}};
   row.append(play,wave,clock);wrap.append(row,audio,status);

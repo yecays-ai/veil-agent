@@ -2,20 +2,19 @@
 
 ## 当前进度
 
-- 正式运行目录 `E:\Peter-Agent\VEIL\veil-agent` 保持 `main`；工单 082 在独立 worktree `E:\Peter-Agent\VEIL\veil-agent-codex`、分支 `ticket/082-desktop-ui-first-pass` 开发。
-- PR #125（工单 081）已合并，合并提交 `ec896a5562dd2efc6cf8bf0f33408bf1350e7c2b`；该 PR 仅更新开发目录规则，不含本次 UI 改版。
-- 工单 082 已推送到 PR #126：https://github.com/yecays-ai/veil-agent/pull/126。当前等待审核与必需 CI。顶部栏最终按反馈显示居中的 Peter 名称、实际自主活动状态和下次唤醒时间，不显示服务运行状态。
-- 已实现透明外观及整体/分页面/气泡透明度、自定义 CSS、背景图、日夜主题、Peter 和聊天窗连续缩放、聊天/活动/记忆/更多页面、活动历史、Ombre Memory 日常只读入口和高级 Dashboard 次级入口。
-- UI 检查 3 项、desktop 套件 5 项通过；自主活动 26 项、Native/Ombre Memory 52 项和只读 HTTP 接口 1 项此前通过。Windows 实际体验仍待 Lan。
-- CodeRabbit 本次未请求。Windows desktop workflow 与依赖安全检查通过；Tests 的 Linux jobs 已通过，Windows Python jobs 仍运行。PR 暂无人工 review。下个窗口先查看 Tests 和审核状态，再处理实质问题。
+- 正式运行目录 `E:\Peter-Agent\VEIL\veil-agent` 保持 `main`，已快进到 PR #126 合并提交 `fb8c1bbff7af418a79b668b947894a529eed663a`。
+- PR #126（工单 082）已 squash 合并；Tests、Windows desktop、Dependency security 均成功。UI 的 Windows 真实体验仍待 Lan 验收。
+- 工单 083 的修复已在独立 worktree `E:\Peter-Agent\VEIL\worktrees\083-chat-reliability`、分支 `ticket/083-chat-reliability` 集中完成，正准备推送并开单独 PR。
+- 已实现 provider token usage 校准与上下文分项估算、截图中的 DSML 变体拦截、完整聊天账本语音去重和有效时长事件更新。
+- `test_chat` 全部 61 项与两个目标 Web 用例通过；Node 语法与 `git diff --check` 通过。Web 全套尝试运行时沙箱拒绝本地回环端口，CI 尚待。
 
 ## 下一个窗口第一步
 
-从 PR #126 检查最新提交、必需 CI 和审核意见；只处理实际功能错误、数据安全风险或重大体验阻断。满足仓库审核与 GitHub 保护规则后合并，并请 Lan 按 `STATUS.md` 的验收步骤在 Windows 上体验。合并后按仓库规则仅清理本次任务创建且确认无未提交改动的 worktree；若存在改动则保留并报告。
+复核工单 083 和最终 diff，确认校准只按相同角色/模型复用且不保存聊天文本、旧语音以完整角色聊天账本判定、DSML 只被拦截而从不解析执行。随后为这批改动创建一个提交并只推一次，开 PR 后等 CI 和 CodeRabbit。
 
 ## 边界
 
-- 不在正式运行目录或其他 worktree 开发，不删除正式目录或其他正在使用的 worktree。
-- 不迁移、删除或重写真实聊天与记忆；不修改 `update-main.cmd`。
-- 保留 Peter 角色素材和现有语音、图片、审批、消息记录与自主活动能力。
-- 预览图只证明本地开发渲染，不替代 Lan 的 Windows 实际验收。
+- 生产目录只保持并更新 `main`；代码继续只在工单 083 独立 worktree 中改。
+- 不输出或提交真实聊天内容、记忆、媒体、Persona 或密钥；context calibration 只存 provider 输入 token 数和请求估算字节数。
+- 不降低 provider 的 token 上限，不缩短记忆，不改成本预留或模型；界面提示明确标注分项为估算值。
+- PR 合并前保留工单 worktree。桌面 UI 仍需 Lan 的 Windows 体验验收。

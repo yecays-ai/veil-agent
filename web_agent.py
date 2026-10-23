@@ -1163,11 +1163,15 @@ def serve_chat(chat, hub):
             media = hub.register_voice_media(media)
         hub.push(message['role'], message['content'], time=message['time'], history=True,
                  **({'media': media} if media else {}))
-    completed_voice_ids = {message.get('media', {}).get('id') for message in chat.history_events
-                           if isinstance(message.get('media'), dict)}
+    # The UI history is a bounded window; replay decisions must use the durable
+    # full chat log or an older successful voice send looks pending on restart.
+    completed_voice_ids = {
+        message.get('media', {}).get('id') for message in chat.store.read(chat.path)
+        if isinstance(message.get('media'), dict) and message['media'].get('kind') == 'voice'
+    }
     for media in hub.media_index.values():
         if (media.get('kind') == 'voice' and media['id'] not in completed_voice_ids
-                and (media.get('request_id', '').startswith('voice-') or media.get('delivery_pending'))):
+                and (media.get('request_id') == 'voice-' + media['id'] or media.get('delivery_pending'))):
             hub.push('user', media.get('transcript') or '', time=now(), history=True, media=dict(media))
     hub.autonomy = AutonomyController(chat, hub)
     hub.capability_record = lambda: chat.capability_history_record

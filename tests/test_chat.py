@@ -11,7 +11,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from veil_agent import (Chat, Budget, Store, build_self_description, estimate_request_tokens,
+from veil_agent import (Chat, Budget, Store, build_self_description, conservative_token_ratio,
+                        estimate_request_tokens,
                         load_character, make_model, model_tool_result, run_chat, UserError,
                         RequestFailed, TooLong)
 
@@ -179,6 +180,25 @@ output_cny_per_million = "8"
 
         self.assertTrue(any('send_message requires non-empty text' in str(item) for item in outputs))
         self.assertFalse(any('must not replace the real error' in str(item) for item in outputs))
+
+    def test_raw_fullwidth_dsml_calls_marker_is_blocked_from_chat_history(self):
+        raw = ('<｜｜DSML｜｜ calls> <｜｜DSML｜｜ invoke name="trace">'
+               'parameter name="bucket_id" string="true">fictional</parameter>')
+        response = SimpleNamespace(content=raw, tool_calls=[])
+        model = Mock(return_value=(response, 100, 20, 0))
+        tools = SimpleNamespace(tools=[], capability_event=None, capability_event_model=None,
+                                capability_record=None, consume_capability_event=Mock())
+        cfg = replace(self.cfg, tools={'enabled': True, 'max_steps': 2})
+        store = Store(self.root / 'raw-dsml-data')
+        output = []
+        chat = Chat(cfg, store, Budget(store), model, tools=tools, output=output.append)
+
+        reply = chat.send('请继续处理虚构请求')
+
+        self.assertNotIn(raw, reply)
+        self.assertNotIn(raw, '\n'.join(map(str, output)))
+        self.assertNotIn(raw, json.dumps(store.read('test/chat.jsonl'), ensure_ascii=False))
+        self.assertIn('no tools ran', reply)
 
     def test_partial_send_message_failures_remain_visible_without_aggregate_reply(self):
         outputs = []
@@ -597,7 +617,7 @@ output_cny_per_million = "8"
 
     def test_too_long_input_never_sends_or_reserves(self):
         with self.assertRaises(UserError):
-            self.chat.send('中文' * 2000)
+            self.chat.send('中文' * 3000)
         self.model.assert_not_called()
         self.assertEqual(self.budget.totals(), (0, 0, 0))
 
@@ -845,9 +865,33 @@ output_cny_per_million = "8"
         self.assertTrue(history[-1]['content'].startswith('a19'))  # Newest kept.
         self.assertLessEqual(estimate_request_tokens(sent, []),
                              self.cfg.provider['max_input_tokens'])
-        self.assertEqual(len([o for o in output if '这次只带了最近' in o]), 1)
+        self.assertEqual(len([o for o in output if '分项 tokens' in o]), 1)
         self.assertEqual(self.model.call_count, 2)
         self.assertEqual(len(self.store.read('test/chat.jsonl')), 40 + 4)  # Nothing erased.
+
+    def test_provider_token_usage_calibrates_history_after_restart(self):
+        request_id, _ = self.budget.reserve(self.cfg)
+        self.budget.settle(request_id, self.cfg, 1200, 20, 0, input_bytes=6000)
+        self.assertAlmostEqual(self.budget.input_token_ratio('test', 'fake-model'), 0.2)
+        self.assertEqual(conservative_token_ratio(0.2), 0.4)
+        for i in range(20):
+            self.store.append('test/chat.jsonl', {'role': 'user', 'content': '用户' + '好' * 50})
+            self.store.append('test/chat.jsonl', {'role': 'assistant', 'content': '回答' + '好' * 50})
+
+        reopened = Chat(self.cfg, self.store, self.budget, self.model)
+        reopened.send('继续')
+        messages = self.model.call_args.args[0]
+        sent_rounds = sum(message['role'] == 'user' for message in messages)
+        self.assertGreater(sent_rounds, 3)
+        settlement = self.store.read('costs.jsonl')[-1]
+        self.assertGreater(settlement['input_bytes'], settlement['prompt_tokens'])
+
+    def test_provider_token_ratio_uses_historical_high_water_mark(self):
+        for prompt, input_bytes in ((3000, 6000), (1200, 6000)):
+            request_id, _ = self.budget.reserve(self.cfg)
+            self.budget.settle(request_id, self.cfg, prompt, 20, 0, input_bytes=input_bytes)
+        self.assertAlmostEqual(self.budget.input_token_ratio('test', 'fake-model'), 0.5)
+        self.assertIsNone(self.budget.input_token_ratio('other-character', 'fake-model'))
 
     def test_oversized_input_is_not_fatal_and_is_not_saved(self):
         output = []
@@ -865,7 +909,8 @@ output_cny_per_million = "8"
         messages = self.model.call_args.args[0]
         self.assertEqual(messages[1]['role'], 'system')
         old_messages = [messages[0], messages[-1]]
-        old_bound = sum(len(m['content'].encode('utf-8')) + 256 for m in old_messages) + 256
+        old_ratio = self.budget.input_token_ratio('test', 'fake-model')
+        old_bound = estimate_request_tokens(old_messages, calibration=conservative_token_ratio(old_ratio))
         self.cfg.provider['max_input_tokens'] = old_bound
         self.model.reset_mock()
         rows, costs = self.store.read('test/chat.jsonl'), self.store.read('costs.jsonl')
@@ -900,7 +945,7 @@ output_cny_per_million = "8"
         rows, costs = self.store.read('test/chat.jsonl'), self.store.read('costs.jsonl')
         chat._tool_chat.reset_mock()
         with self.assertRaises(UserError):
-            chat.send('Please analyze this unusually large report. ' * 1500)
+            chat.send('Please analyze this unusually large report. ' * 2000)
         chat._tool_chat.assert_not_called()
         self.assertEqual(self.store.read('test/chat.jsonl'), rows)
         self.assertEqual(self.store.read('costs.jsonl'), costs)
