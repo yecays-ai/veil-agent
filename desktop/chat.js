@@ -2,11 +2,9 @@
 const $=id=>document.getElementById(id), col=$('col'), log=$('log'), box=$('box'), sendBtn=$('send');
 const imageFile=$('image-file'),imageButton=$('image-button'),imagePreview=$('image-preview'),composer=$('composer');
 const voiceHold=$('voice-hold');
-const speechButton=$('speech-toggle'), speechLanguage=$('speech-language'), speechStatus=$('speech-status');
-const SpeechRecognition=window.SpeechRecognition||window.webkitSpeechRecognition;
+const speechButton=$('speech-toggle'), speechStatus=$('speech-status');
 const speechDraftKey='veil-speech-draft';
-const speechLanguageKey='veil-speech-language';
-let speechRecognition=null, speechSession=null, speechState='idle', speechStopRequested=false, speechErrorMessage='', speechDraftActive=false;
+let speechRecorder=null,speechStream=null,speechChunks=[],speechSession=null,speechState='idle',speechPermissionPending=false,speechCancelled=false,speechDraftActive=false,speechTimer=null;
 let after=0, busy=true, transcribingVoice=false, stopping=false, stopped=false, typing=null, sending=false;
 let revealQueue=[], revealTimer=null, roundStartedAt=0, roundHasReply=false, previousMessage=null, voiceContextMenu=null;
 let pendingApproval=null, activityEnabled=false, exiting=false;
@@ -17,16 +15,15 @@ let imageChoice=0;
 const draftRequests=new Map();
 const IMAGE_TYPES=new Set(['image/png','image/jpeg','image/gif','image/webp']);
 const GROUP_GAP=15*60*1000;
-function speechIsActive(){return speechState==='listening'||speechState==='processing'||!!speechRecognition}
+function speechIsActive(){return speechState==='listening'||speechState==='processing'||!!speechRecorder||speechPermissionPending}
 function saveSpeechDraft(value){try{sessionStorage.setItem(speechDraftKey,value)}catch(e){}}
 function resizeBox(){box.style.height='auto';box.style.height=Math.min(box.scrollHeight,200)+'px'}
-function renderSpeechText(finalText,interimText=''){
+function renderSpeechText(finalText){
   const prefix=speechSession.base;
-  const spoken=finalText+interimText;
-  const separator=prefix&&spoken&&speechSession.language==='en-US'&&!/\s$/.test(prefix)?' ':'';
-  box.value=prefix+separator+spoken;
+  const separator=prefix&&/^[A-Za-z0-9]/.test(finalText)&&/[A-Za-z0-9]$/.test(prefix)?' ':'';
+  box.value=prefix+separator+finalText;
   resizeBox();
-  if(finalText)saveSpeechDraft(prefix+(prefix&&finalText&&speechSession.language==='en-US'&&!/\s$/.test(prefix)?' ':'')+finalText);
+  if(finalText)saveSpeechDraft(prefix+separator+finalText);
 }
 function setSpeechStatus(state,message){
   speechState=state;speechStatus.dataset.state=state;speechStatus.textContent=message;
@@ -34,80 +31,78 @@ function setSpeechStatus(state,message){
   speechButton.setAttribute('aria-pressed',String(active));
   speechButton.setAttribute('aria-label',active?'停止语音识别':'开始语音识别');
   speechButton.title=active?'停止语音识别':'开始语音识别';
-  speechLanguage.disabled=active||!SpeechRecognition;
   box.disabled=active;
   sendBtn.disabled=busy||revealQueue.length>0||sending||stopping||stopped||active;
 }
 try{
   const savedSpeechDraft=sessionStorage.getItem(speechDraftKey);
   if(savedSpeechDraft!==null){box.value=savedSpeechDraft;speechDraftActive=true;resizeBox()}
-  const savedSpeechLanguage=localStorage.getItem(speechLanguageKey);
-  if(['zh-CN','en-US'].includes(savedSpeechLanguage))speechLanguage.value=savedSpeechLanguage;
 }catch(e){}
-speechLanguage.addEventListener('change',()=>{try{localStorage.setItem(speechLanguageKey,speechLanguage.value)}catch(e){}});
-if(!SpeechRecognition){speechButton.disabled=true;speechLanguage.disabled=true;setSpeechStatus('error','当前浏览器不支持语音识别，可继续键盘输入。')}
-speechButton.onclick=()=>{
-  if(speechRecognition){
-    speechStopRequested=true;
-    setSpeechStatus('processing','正在处理识别结果…');
-    try{speechRecognition.stop()}catch(e){speechRecognition.abort()}
-    return;
+if(!navigator.mediaDevices?.getUserMedia||typeof MediaRecorder==='undefined'){
+  speechButton.disabled=true;
+  setSpeechStatus('error','当前环境无法录音，请检查麦克风权限。');
+}
+function speechMime(){
+  for(const mime of ['audio/webm;codecs=opus','audio/webm','audio/ogg;codecs=opus','audio/mp4'])if(MediaRecorder.isTypeSupported?.(mime))return mime;
+  return '';
+}
+function stopSpeechTracks(){if(speechStream){speechStream.getTracks().forEach(track=>track.stop());speechStream=null}}
+function stopSpeech(cancel=false){
+  speechCancelled=speechCancelled||cancel;
+  if(speechTimer){clearTimeout(speechTimer);speechTimer=null}
+  if(speechRecorder&&!cancel)setSpeechStatus('processing','录音结束，正在转写…');
+  if(speechRecorder&&speechRecorder.state!=='inactive')speechRecorder.stop();
+  else if(speechPermissionPending){speechPermissionPending=false;speechCancelled=true;speechSession=null;setSpeechStatus('idle','已取消录音。')}
+}
+async function finishSpeech(){
+  const recorder=speechRecorder;speechRecorder=null;stopSpeechTracks();
+  if(speechTimer){clearTimeout(speechTimer);speechTimer=null}
+  if(speechCancelled){speechCancelled=false;speechChunks=[];speechSession=null;setSpeechStatus('idle','已取消录音。');return}
+  const mime=(recorder?.mimeType||speechChunks[0]?.type||'audio/webm').split(';')[0];
+  const blob=new Blob(speechChunks,{type:mime});speechChunks=[];
+  if(!blob.size){speechSession=null;setSpeechStatus('error','没有录到声音，请重试。');return}
+  if(blob.size>10*1024*1024){speechSession=null;setSpeechStatus('error','录音超过 10 MB，请缩短后重试。');return}
+  setSpeechStatus('processing','正在用 SenseVoice 转写…');
+  try{
+    const dataUrl=await fileAsDataUrl(blob),comma=dataUrl.indexOf(',');
+    const r=await api('/api/transcribe',{mime,name:'dictation-'+Date.now(),data:dataUrl.slice(comma+1)},70000);
+    const result=await r.json();
+    if(!r.ok)throw new Error(result.transcription_error||'语音提交失败，请重试。');
+    const transcript=(result.transcript||'').trim();
+    if(!transcript)throw new Error(result.transcription_error||'SenseVoice 没有识别出文字，请重试。');
+    renderSpeechText(transcript);speechSession=null;
+    setSpeechStatus('idle','SenseVoice 识别完成，可编辑后发送。');
+    box.focus();
+  }catch(error){
+    speechSession=null;setSpeechStatus('error',error.message||'SenseVoice 转写失败，请重试。');
   }
-  if(!SpeechRecognition)return;
-  speechDraftActive=true;saveSpeechDraft(box.value);
-  speechSession={base:box.value,language:speechLanguage.value,finalText:''};
-  speechStopRequested=false;speechErrorMessage='';
-  const recognition=new SpeechRecognition();speechRecognition=recognition;
-  recognition.lang=speechSession.language;recognition.continuous=true;recognition.interimResults=true;
-  recognition.onstart=()=>setSpeechStatus('listening','正在监听…再次点击可停止。');
-  recognition.onresult=event=>{
-    let finalText='',interimText='';
-    for(let i=0;i<event.results.length;i++){
-      const result=event.results[i],transcript=result[0]?.transcript||'';
-      if(result.isFinal)finalText+=transcript;else interimText+=transcript;
-    }
-    speechSession.finalText=finalText;
-    setSpeechStatus('processing','正在处理识别结果…');
-    renderSpeechText(finalText,interimText);
-    if(!speechStopRequested)setSpeechStatus('listening','正在监听…再次点击可停止。');
-  };
-  recognition.onerror=event=>{
-    const messages={
-      'not-allowed':'麦克风权限被拒绝，请在浏览器设置中允许后再试。',
-      'service-not-allowed':'浏览器语音识别服务不可用。',
-      'no-speech':'没有检测到语音，可以继续打字或重试。',
-      'network':'语音识别网络连接失败，可以继续打字。',
-      'audio-capture':'没有可用麦克风，请检查设备设置。',
-      'language-not-supported':'当前浏览器不支持所选识别语言。',
-      'aborted':'语音识别已停止。'
-    };
-    speechErrorMessage=messages[event.error]||'语音识别失败，可以继续打字或重试。';
-    if(event.error==='aborted'&&speechStopRequested)speechErrorMessage='语音识别已停止，可检查文字。';
-    setSpeechStatus('error',speechErrorMessage);
-  };
-  recognition.onend=()=>{
-    const finalText=speechSession?.finalText||'';
-    if(speechSession){renderSpeechText(finalText);if(finalText)saveSpeechDraft(box.value)}
-    speechRecognition=null;speechSession=null;
-    if(speechErrorMessage)setSpeechStatus('error',speechErrorMessage);
-    else if(finalText)setSpeechStatus('idle','识别完成，可编辑后发送。');
-    else if(speechStopRequested)setSpeechStatus('idle','已停止，没有识别到文字。');
-    else setSpeechStatus('idle','没有检测到语音，可以继续打字或重试。');
-  };
-  setSpeechStatus('processing','正在启动语音识别…');
-  try{recognition.start()}catch(e){
-    speechRecognition=null;speechSession=null;
-    setSpeechStatus('error','无法启动语音识别，请检查麦克风权限或稍后重试。');
+}
+async function startSpeech(){
+  if(speechRecorder){setSpeechStatus('processing','录音结束，正在转写…');speechRecorder.stop();return}
+  if(speechPermissionPending||voiceRecorder||voicePermissionPending||voiceSending||busy||sending||stopping||stopped)return;
+  speechCancelled=false;speechPermissionPending=true;speechSession={base:box.value};
+  speechDraftActive=true;saveSpeechDraft(box.value);setSpeechStatus('processing','正在启动麦克风…');
+  try{
+    const stream=await navigator.mediaDevices.getUserMedia({audio:{channelCount:{ideal:1},sampleRate:{ideal:16000}}});speechPermissionPending=false;
+    if(speechCancelled){stream.getTracks().forEach(track=>track.stop());return}
+    speechStream=stream;speechChunks=[];
+    const mime=speechMime();speechRecorder=new MediaRecorder(stream,{audioBitsPerSecond:48000,...(mime?{mimeType:mime}:{})});
+    speechRecorder.ondataavailable=event=>{if(event.data?.size)speechChunks.push(event.data)};
+    speechRecorder.onstop=finishSpeech;speechRecorder.start(500);
+    speechTimer=setTimeout(()=>stopSpeech(false),120000);
+    setSpeechStatus('listening','正在录音；再次点击结束并转写。');
+  }catch(error){
+    speechPermissionPending=false;speechSession=null;stopSpeechTracks();
+    if(speechCancelled){speechCancelled=false;setSpeechStatus('idle','已取消录音。');return}
+    setSpeechStatus('error','无法使用麦克风，请在 Windows 或桌面程序设置中允许后重试。');
   }
-};
+}
+speechButton.onclick=()=>speechRecorder?stopSpeech(false):speechPermissionPending?stopSpeech(true):startSpeech();
 window.addEventListener('pagehide',()=>{
-  if(speechSession){
-    const finalText=speechSession.finalText||'';
-    const prefix=speechSession.base,language=speechSession.language;
-    const separator=prefix&&finalText&&language==='en-US'&&!/\s$/.test(prefix)?' ':'';
-    saveSpeechDraft(prefix+separator+finalText);
-    try{speechRecognition?.abort()}catch(e){}
-  }
+  if(speechSession){saveSpeechDraft(box.value);stopSpeech(true);stopSpeechTracks()}
+});
+window.addEventListener('pagehide',()=>{
+  if(speechSession)saveSpeechDraft(box.value);
 });
 function bubbleDelay(text){const n=Array.from(text).length;return n<=60?1200:n<=200?2400:3600}
 function scrollIfFollowing(action){
