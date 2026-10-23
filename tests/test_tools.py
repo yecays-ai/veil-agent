@@ -896,13 +896,30 @@ class MultiMessageTests(unittest.TestCase):
         self.assertEqual([r['content'] for r in self.store.read('test/chat.jsonl')], ['read', '先看一下。'])
         self.assertEqual([m['role'] for m in model.call_args.args[0][-2:]], ['tool', 'tool'])
 
-    def test_pure_message_with_distinct_final_keeps_both(self):
+    def test_pure_message_with_distinct_final_does_not_save_or_display_final(self):
         model = Mock(return_value=(self.message([
             self.tool_call('send_message', '{"text":"Hi."}', 'one')], content='See you.'), 100, 20, 0))
         chat = Chat(self.cfg, self.store, self.budget, model, output=lambda _: None)
         self.assertEqual(chat.send('hello'), 'See you.')
-        self.assertFalse(chat.reply_displayed)
-        self.assertEqual([r['content'] for r in self.store.read('test/chat.jsonl')], ['hello', 'Hi.', 'See you.'])
+        self.assertTrue(chat.reply_displayed)
+        self.assertEqual([r['content'] for r in self.store.read('test/chat.jsonl')], ['hello', 'Hi.'])
+
+    def test_mixed_tools_keep_distinct_final_reply(self):
+        first = self.message([self.tool_call('send_message', '{"text":"先看一下。"}', 'say'),
+                              self.tool_call('read_text_file', '{"path":"lab/a.md"}', 'read')])
+        model = Mock(side_effect=[(first, 100, 30, 0),
+                                  (self.message(content='我看完了。'), 120, 20, 0)])
+        tools = Mock()
+        tools.capability_event = None
+        tools.tools = [SimpleNamespace(name='read_text_file', description='Read', inputSchema={})]
+        tools.invoke.return_value = ('fictional lab', '成功', 'lab/a.md')
+        output = []
+        chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=output.append)
+        run_chat(chat, Mock(side_effect=['read', '/quit']), output.append)
+        self.assertEqual(output.count('Peter: 先看一下。'), 1)
+        self.assertEqual(output.count('Peter: 我看完了。'), 1)
+        self.assertEqual([r['content'] for r in self.store.read('test/chat.jsonl')],
+                         ['read', '先看一下。', '我看完了。'])
 
     def test_pure_messages_need_no_followup_budget_and_complete_memory_once(self):
         self.budget.daily = Decimal('0.0125')  # Enough for this request, not a second reservation.

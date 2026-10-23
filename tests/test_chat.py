@@ -139,6 +139,69 @@ output_cny_per_million = "8"
         self.assertIn('lab_file_digest', snapshot)
         self.assertIn('Lab only', snapshot)
 
+    def test_pure_send_message_calls_show_and_save_only_their_individual_bubbles(self):
+        for count in (1, 2, 3, 10):
+            with self.subTest(send_message_count=count):
+                outputs = []
+                texts = [f'fictional bubble {index}' for index in range(count)]
+                calls = [SimpleNamespace(id=f'call-{index}', function=SimpleNamespace(
+                    name='send_message', arguments=json.dumps({'text': text})))
+                    for index, text in enumerate(texts)]
+                response = SimpleNamespace(content='merged aggregate must stay hidden', tool_calls=calls)
+                model = Mock(return_value=(response, 100, 20, 0))
+                cfg = replace(self.cfg, tools={'enabled': True, 'max_steps': 2})
+                store = Store(self.root / f'data-{count}')
+                budget = Budget(store)
+                chat = Chat(cfg, store, budget, model, output=outputs.append)
+
+                run_chat(chat, Mock(side_effect=['fictional user request', '/quit']), outputs.append)
+
+                bubbles = [str(item) for item in outputs if str(item).startswith('Test: ')]
+                self.assertEqual(bubbles, [f'Test: {text}' for text in texts])
+                assistant_rows = [row['content'] for row in store.read('test/chat.jsonl')
+                                  if row['role'] == 'assistant']
+                self.assertEqual(assistant_rows, texts)
+                reopened = Chat(cfg, store, budget, Mock())
+                self.assertEqual([row['content'] for row in reopened.history
+                                  if row['role'] == 'assistant'], texts)
+
+    def test_all_failed_send_message_calls_still_show_the_actual_error(self):
+        outputs = []
+        call = SimpleNamespace(id='bad-call', function=SimpleNamespace(
+            name='send_message', arguments='{}'))
+        response = SimpleNamespace(content='must not replace the real error', tool_calls=[call])
+        model = Mock(return_value=(response, 100, 20, 0))
+        cfg = replace(self.cfg, tools={'enabled': True, 'max_steps': 2})
+        store = Store(self.root / 'failed-send-data')
+        chat = Chat(cfg, store, Budget(store), model, output=outputs.append)
+
+        run_chat(chat, Mock(side_effect=['fictional user request', '/quit']), outputs.append)
+
+        self.assertTrue(any('send_message requires non-empty text' in str(item) for item in outputs))
+        self.assertFalse(any('must not replace the real error' in str(item) for item in outputs))
+
+    def test_partial_send_message_failures_remain_visible_without_aggregate_reply(self):
+        outputs = []
+        calls = [
+            SimpleNamespace(id='good-call', function=SimpleNamespace(
+                name='send_message', arguments=json.dumps({'text': 'fictional successful bubble'}))),
+            SimpleNamespace(id='bad-call', function=SimpleNamespace(
+                name='send_message', arguments='{}')),
+        ]
+        response = SimpleNamespace(content='must not show this merged content', tool_calls=calls)
+        model = Mock(return_value=(response, 100, 20, 0))
+        cfg = replace(self.cfg, tools={'enabled': True, 'max_steps': 2})
+        store = Store(self.root / 'partial-send-data')
+        chat = Chat(cfg, store, Budget(store), model, output=outputs.append)
+
+        run_chat(chat, Mock(side_effect=['fictional user request', '/quit']), outputs.append)
+
+        self.assertTrue(any('fictional successful bubble' in str(item) for item in outputs))
+        self.assertTrue(any('send_message requires non-empty text' in str(item) for item in outputs))
+        self.assertFalse(any('must not show this merged content' in str(item) for item in outputs))
+        self.assertEqual([row['content'] for row in store.read('test/chat.jsonl')
+                          if row['role'] == 'assistant'], ['fictional successful bubble'])
+
     def test_current_capability_snapshot_tracks_removed_tools_and_service_failure(self):
         files = SimpleNamespace(tools=[SimpleNamespace(name='search_files',
             description='Search configured folder.', inputSchema={'type': 'object'})],
