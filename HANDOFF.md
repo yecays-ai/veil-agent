@@ -2,18 +2,17 @@
 
 ## 上一位停在哪
 
-- 工单 076 PR #118（`ticket/076-desktop-chat-capabilities`）基于 main `a3eb961b1c1e8be85cd46661ea4e6745b0c66101`；语音实现提交 `09f15f1` 已推送，PR 尚未合并。
-- 桌面录音松开后立即提交，服务端后台转写；Peter 等转写成功后回复。语音播放器紧凑、转写默认隐藏；右键显示“删除 / 撤回 / 转文字”，目前前两项禁用，转文字可展开/收起。中英听写语言保存在本机；网页同步转写响应保持兼容。
-- 转写并发最多 4 个；聊天等待有超时，繁忙或超时时录音保留并可重试。成功的本地语音重试会更新原气泡并清除旧错误。
-- 本地完整假数据套件 411 项通过、4 项可选跳过；Electron 假 Agent 假服务烟测通过。实现代码 head 的 Tests #1059、Windows desktop #44、Dependency security #124 均通过；本次状态文档 head 的 CI 需确认。上一轮 Cubic 12 个 inline 问题均已回复并解决，但最新 head 的复查被试用额度耗尽拦住，未能启动。
-- Cubic 的 Agent 文件夹更换建议留在本 PR 范围外：Lan 明确限定当前只做语音消息。未验证真实麦克风、在线转写、真实 Agent、Peter 音色、重启连续性或 Lan 的 Windows 体验。
+- PR #120 分支 `codex/desktop-exit-update-20261023` 已合入最新 main `fec4c323705aa0100de4fff9c417a9f454669327`，当前本地还有未提交的 updater 测试夹具修复，以及 `STATUS.md`、`HANDOFF.md`、工单 077 更新。
+- 旧 head 的 Windows desktop 与 Dependency security 检查通过；Tests 的 Windows 失败定位为 updater 测试没有模拟安装的桌面打包依赖。修复后的 updater 定向测试通过，项目虚拟环境中的完整套件为 411 项通过、4 项跳过。
+- CUBIC review 请求已发到 PR #120；CUBIC 因试用额度耗尽拒绝启动。PR #120 还没有 CUBIC review。仓库规则禁止在 review 未完成时合并；付费恢复额度需要 Lan 明确决定。
+- 本地桌面单测中后端连接用例因当前 Agent 未就绪而失败；对应 PR 的 Windows desktop CI 旧 head 为通过。用户对 PR #120 的桌面体验验收未完成。
 
 ## 下一个窗口第一步
 
-先确认状态文档 head 的必需 CI，并等 Lan 决定如何处理 Cubic 试用审查额度；在最新 Cubic 复查和必需 CI 都满足前不合并。合并后请 Lan 按 `STATUS.md` 的两步清单体验。
+检查工作区改动，提交并推送到 PR #120，确认更新后 CI。随后查看 Lan 是否授权恢复 CUBIC review 额度；没有新的 review 记录前不要合并。
 
 ## 仍然成立的边界
 
-- 不提交真实聊天、记忆、人设、密钥或本机数据；不修改 VEIL 小手机仓库。
-- 删除与撤回只显示禁用入口，不实现功能。
-- 语音识别服务与配置仍沿用 VEIL Agent；桌面不复制小手机的模型或密钥设置。
+- 只打包原有桌面目录，不生成第二份安装副本。
+- 退出操作在 Agent 不可达时仍关闭桌面端，但这不证明任意残留后台进程都已结束；通过用户验收确认实际关闭行为。
+- 不提交真实聊天、记忆、人设、密钥或本机数据；不改 VEIL 小手机仓库。
