@@ -20,6 +20,13 @@
 
 进度只有一份，就是 `main` 分支上的 `STATUS.md`。不要在别处另存进度。
 
+## 正式运行目录与开发 worktree
+
+- `E:\Peter-Agent\VEIL\veil-agent` 是正式运行目录，固定使用 `main`；禁止在这里开发、修改源码或切换到开发分支。
+- 开发统一使用旁边的独立 worktree，例如 `E:\Peter-Agent\VEIL\veil-agent-codex`。如果目标 worktree 已存在，先检查并复用，不覆盖已有目录或修改。
+- 正式目录继续通过现有 `update-main.cmd` 一键更新；不要另造更新机制，也不要求每次 PR 合并后手动同步。
+- 保持 Update Main 与独立 worktree 兼容；更新失败时不得丢失本地修改或用户数据。
+
 ## 项目规则
 
 - 能复用成熟开源项目就不自己写。动手前先按 `reuse-first` skill 查一遍。

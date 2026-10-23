@@ -2,17 +2,16 @@
 
 ## 当前进度
 
-- PR #122 已合并；PR #123 工单 079 已合并为 `bd8c6c2b90083e6590433c060501b77cdb903c72`。正式运行目录当前 main 与 `origin/main` 一致。
-- Main Update 之前仍会下载 Electron 45 ZIP，尽管本机缓存已有完整文件。已确认 `--electron-zip-dir` 可让官方 Electron Packager 直接使用该 ZIP；当前工单 080 加入动态缓存定位与本地打包入口。
-- 使用缓存手动重建了正式仓库内同一 `desktop\dist\VEIL-win32-x64`，并从 `start-desktop.bat` 打开；已确认运行进程使用该路径，桌面配置指向原 `veil-agent` Agent 目录。
-- 用户的旧 Main Update 下载进程持续显示约 5% 和近 3 小时 ETA，已停止该旧进程，避免它与新打包互相覆盖。
+- PR #122、#123 和 #124 均已合并；PR #124（工单 080）合并提交为 `f4c6d3a5b14d9b40c058095689a2b0ed4a530faf`，当前最新 main 与本次开发 worktree 的基点一致。
+- PR #124 记录了 Electron 缓存打包和 Start Desktop 本地启动检查通过；正式 `update-main.cmd` 更新与 Peter 实际聊天的 Windows 体验仍待 Lan 验收。
+- 当前工单 081 使用 `E:\Peter-Agent\VEIL\veil-agent-codex` 独立 worktree，分支为 `ticket/081-formal-dev-directory`；改动范围为 `AGENTS.md`、`STATUS.md`、`HANDOFF.md` 和工单文件，不改 Update Main 实现。
 
 ## 下一步
 
-完成工单 080 的定向验证，提交并推送一个 PR，处理实质评审与必需检查，合并后双击正式 Main Update 验证；最终清理所有已登记的非正式 worktree，只保留正式 main。
+完成工单 081 的文档复核，提交并推送一个 PR，处理实质评审与必需检查。之后请 Lan 完成 PR #124 的 Windows 体验验收，再按 `STATUS.md` 另行安排桌面 UI 整合改版。
 
 ## 仍然成立的边界
 
-- 只处理工单 080 的 Electron 缓存复用、必要文档和定向验证；不改 Agent 数据或聊天行为。
-- 清理 worktree 前先确认准确路径只在 `git worktree list` 登记范围内；保留正式运行目录、Agent 数据及备份分支。
-- 完成更新后由 Lan 在已打开的桌面端验收 Peter 实际回复。
+- `E:\Peter-Agent\VEIL\veil-agent` 是正式运行目录，固定使用 `main`；开发和提交使用独立 worktree。
+- 正式目录继续经现有 `update-main.cmd` 更新；不要要求 PR 合并后人工同步，也不要修改这套更新机制来完成本工单。
+- 任何更新失败都必须保留本地修改和用户数据。正式 Update Main 和 Peter 实际聊天仍需 Lan 在 Windows 上验收。
