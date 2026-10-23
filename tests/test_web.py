@@ -3,6 +3,7 @@ import base64
 import hashlib
 import shutil
 import socket
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -18,7 +19,7 @@ from unittest.mock import Mock, patch
 
 from veil_agent import (ActivityState, Budget, Chat, Store, UserError, collapse_latest_photo,
                         estimate_request_tokens, load_character, run_chat)
-from web_agent import Hub, serve_chat, start_server
+from web_agent import Hub, clean_voice_transcript, serve_chat, start_server, voice_transport_category
 from tools_agent import FilesystemTools
 
 TOKEN = 'test-token'
@@ -78,6 +79,62 @@ output_cny_per_million = "8"
                 return r.status, json.loads(r.read() or b'{}')
         except urllib.error.HTTPError as exc:
             return exc.code, None
+
+    def test_voice_transport_errors_keep_their_real_category(self):
+        cases = (
+            (urllib.error.URLError(socket.gaierror(11001, 'getaddrinfo failed')), 'dns', 'gaierror'),
+            (urllib.error.URLError(ssl.SSLCertVerificationError(1, 'certificate verify failed')),
+             'tls_certificate', 'SSLCertVerificationError'),
+            (urllib.error.URLError(ssl.SSLError('TLS handshake failed')), 'tls', 'SSLError'),
+            (urllib.error.URLError(OSError('proxy tunnel failed')), 'proxy', 'OSError'),
+            (urllib.error.URLError(TimeoutError('timed out')), 'timeout', 'TimeoutError'),
+            (urllib.error.URLError(ConnectionRefusedError(10061, 'refused')),
+             'connection_refused', 'ConnectionRefusedError'),
+            (urllib.error.URLError(OSError('socket reset')), 'socket', 'OSError'),
+        )
+        for exc, expected_category, expected_type in cases:
+            with self.subTest(expected_category=expected_category):
+                category, reason = voice_transport_category(exc)
+                self.assertEqual(category, expected_category)
+                self.assertEqual(type(reason).__name__, expected_type)
+        with patch('web_agent.getproxies', return_value={'https': 'http://fictional-proxy.invalid:8080'}):
+            category, reason = voice_transport_category(urllib.error.URLError(socket.gaierror(11001, 'lookup failed')))
+        self.assertEqual(category, 'proxy')
+        self.assertEqual(type(reason).__name__, 'gaierror')
+
+    def test_dictation_hides_sensevoice_language_and_emotion_markers(self):
+        self.assertEqual(clean_voice_transcript('<|zh|>你好😊<|NEUTRAL|>'), '你好')
+        self.assertEqual(clean_voice_transcript('<|en|>hello there😮'), 'hello there')
+
+    def test_sensevoice_dictation_response_does_not_append_emotion_emoji(self):
+        class Response:
+            headers = {}
+            def __enter__(self): return self
+            def __exit__(self, *_): return False
+            def read(self): return '{"text":"Recognized words😊"}'.encode()
+        with patch('dotenv.dotenv_values', return_value={'EMBED_API_KEY': 'fictional'}), patch(
+                'web_agent.urlopen', return_value=Response()):
+            transcript, error = self.hub.transcribe_voice_bytes(b'fictional audio', 'audio/wav')
+        self.assertEqual((transcript, error), ('Recognized words', None))
+
+    def test_dictation_endpoint_uses_sensevoice_without_persisting_a_voice_message(self):
+        with patch.object(self.hub, 'transcribe_voice_bytes', return_value=('这是一条测试转写', None)) as transcribe:
+            status, result = self.call('/api/transcribe', {
+                'mime': 'audio/wav', 'name': 'dictation.wav',
+                'data': base64.b64encode(b'fictional audio').decode()})
+        self.assertEqual(status, 200)
+        self.assertEqual(result['transcript'], '这是一条测试转写')
+        self.assertEqual(result['transcription_error'], '')
+        self.assertNotIn('media', result)
+        transcribe.assert_called_once_with(b'fictional audio', 'audio/wav', 'dictation.wav')
+        self.assertEqual(self.hub.media_index, {})
+
+    def test_dictation_endpoint_rejects_unsupported_audio_before_transcription(self):
+        with patch.object(self.hub, 'transcribe_voice_bytes') as transcribe:
+            status, _ = self.call('/api/transcribe', {
+                'mime': 'image/png', 'data': base64.b64encode(b'not audio').decode()})
+        self.assertEqual(status, 400)
+        transcribe.assert_not_called()
 
     def test_new_conversation_emits_reset_event(self):
         self.hub.output('新对话已开始；旧聊天保留在本机，长期记忆与实验室未改动。')
@@ -401,10 +458,11 @@ output_cny_per_million = "8"
         raw = b'\x1a\x45\xdf\xa3fictional webm audio'
         media = self.hub.save_voice('audio/webm', raw, 'voice.webm')
         with patch('dotenv.dotenv_values', return_value={'EMBED_API_KEY': 'fictional'}), patch(
-                'web_agent.urlopen', side_effect=urllib.error.URLError('offline')):
+                'web_agent.urlopen', side_effect=urllib.error.URLError(socket.gaierror(11001, 'getaddrinfo failed'))):
             transcript, error = self.hub.transcribe_voice(media['id'])
         self.assertIsNone(transcript)
-        self.assertIn('网络连接失败', error)
+        self.assertIn('DNS', error)
+        self.assertIn('socket.gaierror', error)
         self.assertEqual(self.store.read('test/chat.jsonl'), [])
         reopened = Hub('Test', ActivityState(self.store.root / 'test' / 'reopened-state.json'),
                        media_root=self.store.root / 'test' / 'media')
