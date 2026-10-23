@@ -3,7 +3,7 @@ const { app, BrowserWindow, ipcMain, dialog, screen, shell } = require('electron
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const { pathToFileURL } = require('node:url');
-const { connect, validRoot } = require('./backend.cjs');
+const { connect, validRoot, readEndpoint } = require('./backend.cjs');
 
 let pet, chat, menu, connecting = false, quitting = false, drag, agentEndpoint;
 const settings = { size: 320 };
@@ -138,7 +138,7 @@ async function endpointRequest(pathname, method = 'GET', body) {
   const token = new URL(agentEndpoint.url).searchParams.get('t');
   const response = await fetch(`${agentEndpoint.origin}${pathname}`, { method, headers: {
     'X-Token': token, ...(body ? { 'Content-Type': 'application/json' } : {})
-  }, body: body ? JSON.stringify(body) : undefined });
+  }, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(5000) });
   const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(data.error || '请求失败'); return data;
 }
 const fromPet = event => pet && !pet.isDestroyed() && event.sender === pet.webContents && event.senderFrame?.url === petURL;
@@ -193,13 +193,31 @@ ipcMain.on('pet:drag-move', event => {
 });
 ipcMain.on('pet:drag-end', event => { if (fromPet(event)) { drag = null; save().catch(() => {}); } });
 ipcMain.on('pet:hit', (event, opaque) => { if (fromPet(event) && !drag) pet.setIgnoreMouseEvents(!opaque, { forward: true }); });
-ipcMain.on('menu:action', (event, action, value) => {
+ipcMain.on('menu:action', async (event, action, value) => {
   if (!menu || event.sender !== menu.webContents) return;
   hideMenu();
   if (action === 'chat') toggleChat();
   else if (action === 'size' && [160, 240, 320, 420, 540].includes(value)) { createPet(value); save().catch(() => {}); }
   else if (action === 'activity') showActivity();
-  else if (action === 'quit') app.quit();
+  else if (action === 'quit-agent') {
+    if (quitting) return;
+    quitting = true;
+    try {
+      if (!agentEndpoint) {
+        const root = settings.root || (app.isPackaged
+          ? path.resolve(path.dirname(process.execPath), '..', '..', '..')
+          : path.resolve(__dirname, '..'));
+        agentEndpoint = await readEndpoint(root);
+      }
+      if (agentEndpoint) await endpointRequest('/api/exit', 'POST', {});
+    } catch (error) {
+      // The Agent may already have stopped, or its exit response may be lost.
+      // Never trap the user in the desktop shell when they explicitly chose exit.
+      console.warn('VEIL Agent exit request failed; closing desktop shell:', error?.name || 'Error', error?.message || 'unknown error');
+    } finally {
+      app.quit();
+    }
+  }
 });
 
 if (!app.requestSingleInstanceLock()) app.quit();

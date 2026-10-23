@@ -1,4 +1,5 @@
 *{box-sizing:border-box}
+.top-actions #theme{width:auto;min-width:46px;padding:0 7px;background:var(--panel-2);border-color:var(--line);color:var(--text);font-size:11px}
 :root{font:14px/1.45 "Segoe UI","Microsoft YaHei",sans-serif;color:#f3f0e9;background:#17181b;--panel:#202125;--panel-2:#25262b;--line:#35363c;--text:#f3f0e9;--muted:#a5a3a0;--accent:#c0a7ff;--user:#393345;--warn:#41341f;--danger:#ef8c82}
 :root[data-theme="light"]{color:#27252b;background:#f5f1ec;--panel:#fff;--panel-2:#faf8f4;--line:#e6e0d8;--text:#27252b;--muted:#837f7a;--accent:#7658b5;--user:#ece4f7;--warn:#fff3d8;--danger:#b3402f}
 html,body{height:100%;margin:0;overflow:hidden}body{display:flex;flex-direction:column;background:transparent;color:var(--text)}button,select{font:inherit;color:inherit}button{cursor:pointer}button:disabled,select:disabled{opacity:.5;cursor:default}

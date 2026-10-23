@@ -106,11 +106,32 @@ if errorlevel 1 (
 )
 
 :update_complete
+tasklist /FI "IMAGENAME eq VEIL.exe" /NH | findstr /I /C:"VEIL.exe" >nul
+if not errorlevel 1 (
+    echo Desktop is still running. Fully exit VEIL Desktop, then run this updater again to package it.
+    set "UPDATE_EXIT=1"
+    goto end
+)
+if not exist "desktop\node_modules\.bin\electron-packager.cmd" (
+    echo Desktop packaging dependencies are missing. Run setup-desktop.bat, then run this updater again.
+    set "UPDATE_EXIT=1"
+    goto end
+)
+echo Packaging VEIL Desktop from the updated main source...
+pushd desktop
+call npm run package
+set "PACKAGE_EXIT=%ERRORLEVEL%"
+popd
+if not "%PACKAGE_EXIT%"=="0" (
+    echo The source update completed, but desktop packaging failed. Fix the packaging error and run this updater again.
+    set "UPDATE_EXIT=1"
+    goto end
+)
 set "UPDATE_EXIT=0"
 echo.
-echo Update completed successfully:
+echo Update and desktop packaging completed successfully:
 git log -1 --oneline
-echo Close Peter using Exit Service, then open start-web.bat again.
+echo Close Agent using the desktop menu, then open Start Desktop again.
 echo This folder will stay on main so Peter starts from the version just updated.
 goto end
 
