@@ -114,7 +114,7 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   const prefs = pet.webContents.getLastWebPreferences();
   assert.equal(prefs.contextIsolation, true); assert.equal(prefs.sandbox, true); assert.equal(prefs.nodeIntegration, false);
   await wait(() => pet.webContents.executeJavaScript('document.querySelector("img").complete && document.querySelector("img").naturalWidth > 0'), 'Peter image missing');
-  const toggle = () => pet.webContents.executeJavaScript('document.querySelector("#pet").dispatchEvent(new KeyboardEvent("keydown", {key:"Enter",bubbles:true}))');
+  const toggle = () => pet.webContents.executeJavaScript('document.querySelector("#pet-toggle").dispatchEvent(new KeyboardEvent("keydown", {key:"Enter",bubbles:true}))');
   await toggle();
   let chat;
   await wait(() => { chat = BrowserWindow.getAllWindows().find(w => w !== pet); return chat?.isVisible(); }, 'chat not visible');
