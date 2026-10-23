@@ -2,18 +2,18 @@
 
 ## 上一位停在哪
 
-- 073 在独立 worktree `.worktrees/ticket-073-peter-voice`、分支 `ticket/073-peter-voice`；已重放到 #114 合并后的 main `b2d5c8b`。只做 Peter 输出语音，同时保留 #114 的用户录音、麦克风和 SenseVoice 路径。
-- 只做 Peter 输出语音：MiniMax `t2a_v2`、`send_message voice:true`、`data/<角色>/media/*.mp3`、assistant 历史相对路径与原文、网页播放/展开、共享预算、失败降级和能力通知。没有改 072 worktree、用户录音输入、麦克风或 SenseVoice。
-- 自动验证：Cubic 实质意见集中修复后，`.venv` 下 405 项 Python 测试通过（3 项真实外部适配器按设计跳过）；`node tests/web_pacing.cjs` 通过；桌面后端 2 项通过；复用正式目录已安装的 Electron 对本 worktree 跑 smoke，通过图片、用户录音、Peter 输出语音历史、播放控件、文字展开、重开与刷新。
-- 尚未验证：真实 MiniMax key/voice_id/模型/区域、与小手机音色一致、真实 `/cost` 金额、退出服务再启动后的人工播放。这些必须按 `docs/tickets/073-peter-voice.md` 原验收步骤由 Lan 完成，不能用自动测试代替。
+- 正式运行目录保持在 main；本单所有施工都在独立 074 worktree，基于 main 39239e5。
+- 074 四类开发端场景全部通过：自主活动仅运行并持久化一次，重启不重放且禁用状态对齐；长期任务检查点和真实进程中断恢复通过；Ombre、文件 MCP、Web Agent 与 Electron 的故障恢复通过；双角色虚构备份恢复和损坏备份目标保护通过。
+- 最终本地验证：Python 离线全回归 408 项运行、0 失败、2 项可选门控跳过；桌面 Node 回归 2 项通过；Electron/Web Agent、Ombre 进程恢复和文件 MCP 实际本地场景均已启用并通过。
+- 没有复现到需要修改产品代码的故障；新增永久回归只使用虚构角色和临时数据。正式 Ombre 安装未改动，临时 worktree 依赖挂接和测试输出已清理。
+- 完整证据在 docs/tickets/074-windows-runtime-closeout.md。074 不要求 Lan 手工测试；只有人类体验项目进入 075。
 
 ## 下一个窗口第一步
 
-检查 PR #115 最新 head 的 Cubic 复核和六项必需 CI；实质问题已修完后合并，不追风格和低影响建议。
+查看 GitHub 上 074 PR 当前必需检查与实质审查意见；只修会影响功能、安全或数据的问题，本地重新验证后最多做一次集中 corrective push。达到仓库合并条件后合并 074，再开始 075。
 
-## 仍然成立的背景与注意
+## 仍然成立的边界
 
-- PR #113、#114 已合并；不要复制或回退到 #112。
-- `MINIMAX_API_KEY`、`MINIMAX_VOICE_ID`、`MINIMAX_MODEL`、`MINIMAX_REGION` 只从本地 `.env` 读取；四项不全或区域不是 `cn/global` 时，voice 参数和语音身份事实都不出现。`MINIMAX_CNY_PER_10K_CHARS` 默认 3.5。
-- 复用结论已写入 073 工单：小手机实现与 MIT 的 MoneyPrinterTurbo 只提供请求和边界契约，本仓库没有新增依赖。
-- 正式运行目录只保持 main，未跟踪 `.worktrees/` 不动；所有施工都在 073 worktree。
+- 不在正式运行目录改代码或切到 ticket 分支；施工和 Git 操作在 074 独立 worktree 中完成。
+- 先完成所有本地改动和验证，再集中首次 push；不因文档、状态 SHA 或低影响意见单独 push。
+- 不触碰真实 data/peter，不把角色人设、聊天、记忆、凭据或本机数据提交到仓库。
