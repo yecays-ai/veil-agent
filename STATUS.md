@@ -9,7 +9,7 @@
 - 改版涵盖透明窗口与独立透明度、日夜主题、自定义 CSS 和背景图、Peter 与聊天窗自由缩放、聊天/活动/记忆/更多页面、实际自主活动数据，以及 Ombre Memory 日常入口和高级 Dashboard 次级入口。
 - 顶部人物栏按最终反馈仅显示居中的「自主活动」状态与「下次唤醒」时间；不显示服务运行状态。
 - 保留 Peter 素材和现有聊天、图片、语音、审批、消息记录及自主活动能力；不迁移、改写或删除真实记忆。日常记忆视图只读取 Ombre Memory 的只读接口。
-- CodeRabbit 本次未请求。Windows desktop workflow 暴露 smoke 脚本仍引用已移除的旧工具栏和固定档位菜单；已改为检查「记忆」页面及「外观设置」入口，等待 workflow 重跑。自动检查不等同于 Windows 体验验收。
+- CodeRabbit 本次未请求。Windows desktop workflow 与依赖安全检查已通过。完整 Tests workflow 中 Linux jobs 已通过，两个 Windows Python jobs 仍在运行。PR 尚无人工 review。自动检查不等同于 Windows 体验验收。
 
 ## 开发检查
 
