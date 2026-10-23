@@ -7,7 +7,7 @@
 - 工单 082 已推送到 PR #126：https://github.com/yecays-ai/veil-agent/pull/126。当前等待审核与必需 CI。顶部栏最终按反馈显示居中的 Peter 名称、实际自主活动状态和下次唤醒时间，不显示服务运行状态。
 - 已实现透明外观及整体/分页面/气泡透明度、自定义 CSS、背景图、日夜主题、Peter 和聊天窗连续缩放、聊天/活动/记忆/更多页面、活动历史、Ombre Memory 日常只读入口和高级 Dashboard 次级入口。
 - UI 检查 3 项、desktop 套件 5 项通过；自主活动 26 项、Native/Ombre Memory 52 项和只读 HTTP 接口 1 项此前通过。Windows 实际体验仍待 Lan。
-- CodeRabbit 本次未请求。Windows desktop workflow 暴露 smoke 脚本仍引用改版前已移除的 `#toolbar-toggle` / `#tool-panel`；已改为点击「记忆」导航并确认页面展开，需查看下一次 workflow 的结果。没有真实聊天或记忆进入测试或预览。
+- CodeRabbit 本次未请求。Windows desktop workflow 暴露 smoke 脚本仍引用改版前已移除的工具栏与固定档位菜单；已改为点击「记忆」导航并通过菜单检查「外观设置」入口，需查看下一次 workflow 的结果。没有真实聊天或记忆进入测试或预览。
 
 ## 下一个窗口第一步
 

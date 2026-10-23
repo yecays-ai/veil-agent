@@ -10,7 +10,7 @@
 
 日常记忆页通过 Ombre Memory 的 `memory_catalog` 与 `memory_read` 只读接口显示真实可见记录；Ombre Dashboard 为次级高级入口。本轮不迁移、改写或删除真实记忆。
 
-顶部栏最终显示 Peter 与居中的「自主活动」状态、「下次唤醒」时间，不显示服务运行状态。CodeRabbit 本次不请求；等待常规 PR 审核。开发检查：`desktop/tests/ui.test.cjs` 3 项、desktop 套件 5 项、`tests/test_autonomy.py` 26 项、`tests/test_native_memory.py` 52 项、Ombre Memory 只读 HTTP 接口 1 项通过。首次 Windows workflow 暴露 smoke 脚本仍引用改版前已移除的 `#toolbar-toggle` 和 `#tool-panel`；现已改为通过「记忆」导航检查页面，等待 workflow 重跑。Windows 实际体验验收未完成，自动检查和本地预览图均不替代该验收。
+顶部栏最终显示 Peter 与居中的「自主活动」状态、「下次唤醒」时间，不显示服务运行状态。CodeRabbit 本次不请求；等待常规 PR 审核。开发检查：`desktop/tests/ui.test.cjs` 3 项、desktop 套件 5 项、`tests/test_autonomy.py` 26 项、`tests/test_native_memory.py` 52 项、Ombre Memory 只读 HTTP 接口 1 项通过。首次 Windows workflow 暴露 smoke 脚本仍引用改版前已移除的旧工具栏和固定档位菜单；现已改为检查「记忆」页面及「外观设置」入口，等待 workflow 重跑。Windows 实际体验验收未完成，自动检查和本地预览图均不替代该验收。
 
 ## 验收步骤
 
