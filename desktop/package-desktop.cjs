@@ -8,15 +8,32 @@ const { spawnSync } = require('node:child_process');
 
 const desktopDir = __dirname;
 const electronVersion = require('electron/package.json').version;
+function mirrorOption(name, fallback) {
+  const snakeName = name.replace(/([a-z])([A-Z])/g, (_, a, b) => `${a}_${b}`).toLowerCase();
+  const candidates = [
+    process.env[`npm_config_electron_${name.toLowerCase()}`],
+    process.env[`NPM_CONFIG_ELECTRON_${snakeName.toUpperCase()}`],
+    process.env[`npm_config_electron_${snakeName}`],
+    process.env[`npm_package_config_electron_${name}`],
+    process.env[`npm_package_config_electron_${snakeName}`],
+    process.env[`ELECTRON_${snakeName.toUpperCase()}`],
+  ];
+  return candidates.find(Boolean) || fallback;
+}
+
+const artifactVersion = mirrorOption('customVersion', electronVersion).replace(/^v?/, 'v');
 const cacheRoot = path.join(
   process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'),
   'electron',
   'Cache',
 );
-const zipName = `electron-v${electronVersion}-win32-x64.zip`;
-const downloadUrl = new URL(
-  `https://github.com/electron/electron/releases/download/v${electronVersion}/${zipName}`,
+const zipName = mirrorOption('customFilename', `electron-${artifactVersion}-win32-x64.zip`);
+const customDir = mirrorOption('customDir', artifactVersion).replace(
+  '{{ version }}',
+  artifactVersion.replace(/^v/, ''),
 );
+const downloadBase = mirrorOption('mirror', 'https://github.com/electron/electron/releases/download/');
+const downloadUrl = new URL(`${downloadBase}${customDir}/${zipName}`);
 downloadUrl.pathname = path.posix.dirname(downloadUrl.pathname);
 const cacheKey = createHash('sha256').update(downloadUrl.toString()).digest('hex');
 const cachedZipDir = path.join(cacheRoot, cacheKey);
