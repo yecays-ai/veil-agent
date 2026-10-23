@@ -52,6 +52,16 @@ VOICE_TYPES = {
     'audio/mp4': '.m4a',
     'audio/wav': '.wav',
 }
+SENSEVOICE_METADATA_TAG = re.compile(
+    r'<\|(?:zh|en|yue|ja|ko|nospeech|HAPPY|SAD|ANGRY|NEUTRAL|FEARFUL|DISGUSTED|SURPRISED|'
+    r'EMO_UNKNOWN|BGM|Speech|Applause|Laughter|Cry|Sneeze|Breath|Cough|Sing|Speech_Noise|'
+    r'withitn|woitn|GBG|Event_UNK)\|>', re.IGNORECASE)
+SENSEVOICE_METADATA_EMOJI = str.maketrans('', '', '😊😔😡😰🤢😮🎼👏😀😭🤧😷')
+
+
+def clean_voice_transcript(text):
+    """Remove SenseVoice rich emotion/event markers from dictation text."""
+    return SENSEVOICE_METADATA_TAG.sub('', text).translate(SENSEVOICE_METADATA_EMOJI).strip()
 VOICE_MIME = 'audio/mpeg'
 MAX_GENERATED_VOICE_BYTES = 25 * 1024 * 1024
 VOICE_TRANSPORT_ERRORS = {
@@ -355,6 +365,7 @@ class Hub:
         if not key:
             return None, '语音识别密钥未配置。'
         try:
+            started = time.monotonic()
             boundary = '----veil-' + secrets.token_hex(12)
             body = bytearray()
             def field(label, value):
@@ -367,10 +378,14 @@ class Hub:
                               headers={'Authorization': 'Bearer ' + key,
                                        'Content-Type': 'multipart/form-data; boundary=' + boundary})
             with urlopen(request, timeout=45) as response:
+                trace_id = getattr(response, 'headers', {}).get('x-siliconcloud-trace-id', '')
                 result = json.loads(response.read().decode('utf-8'))
             transcript = result.get('text', '').strip() if isinstance(result, dict) else ''
+            transcript = clean_voice_transcript(transcript)
             if not transcript:
                 raise ValueError('empty transcript')
+            logger.info('SenseVoice transcription complete: elapsed_seconds=%.2f audio_bytes=%d trace_id=%s',
+                        time.monotonic() - started, len(raw), trace_id or 'unavailable')
         except HTTPError as exc:
             logger.warning('SenseVoice HTTP failure: category=%s status=%s',
                            'proxy' if exc.code == 407 else 'http', exc.code)

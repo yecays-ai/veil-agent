@@ -19,7 +19,7 @@ from unittest.mock import Mock, patch
 
 from veil_agent import (ActivityState, Budget, Chat, Store, UserError, collapse_latest_photo,
                         estimate_request_tokens, load_character, run_chat)
-from web_agent import Hub, serve_chat, start_server, voice_transport_category
+from web_agent import Hub, clean_voice_transcript, serve_chat, start_server, voice_transport_category
 from tools_agent import FilesystemTools
 
 TOKEN = 'test-token'
@@ -101,6 +101,21 @@ output_cny_per_million = "8"
             category, reason = voice_transport_category(urllib.error.URLError(socket.gaierror(11001, 'lookup failed')))
         self.assertEqual(category, 'proxy')
         self.assertEqual(type(reason).__name__, 'gaierror')
+
+    def test_dictation_hides_sensevoice_language_and_emotion_markers(self):
+        self.assertEqual(clean_voice_transcript('<|zh|>你好😊<|NEUTRAL|>'), '你好')
+        self.assertEqual(clean_voice_transcript('<|en|>hello there😮'), 'hello there')
+
+    def test_sensevoice_dictation_response_does_not_append_emotion_emoji(self):
+        class Response:
+            headers = {}
+            def __enter__(self): return self
+            def __exit__(self, *_): return False
+            def read(self): return '{"text":"Recognized words😊"}'.encode()
+        with patch('dotenv.dotenv_values', return_value={'EMBED_API_KEY': 'fictional'}), patch(
+                'web_agent.urlopen', return_value=Response()):
+            transcript, error = self.hub.transcribe_voice_bytes(b'fictional audio', 'audio/wav')
+        self.assertEqual((transcript, error), ('Recognized words', None))
 
     def test_dictation_endpoint_uses_sensevoice_without_persisting_a_voice_message(self):
         with patch.object(self.hub, 'transcribe_voice_bytes', return_value=('这是一条测试转写', None)) as transcribe:

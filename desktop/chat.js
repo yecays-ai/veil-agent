@@ -2,9 +2,8 @@
 const $=id=>document.getElementById(id), col=$('col'), log=$('log'), box=$('box'), sendBtn=$('send');
 const imageFile=$('image-file'),imageButton=$('image-button'),imagePreview=$('image-preview'),composer=$('composer');
 const voiceHold=$('voice-hold');
-const speechButton=$('speech-toggle'), speechLanguage=$('speech-language'), speechStatus=$('speech-status');
+const speechButton=$('speech-toggle'), speechStatus=$('speech-status');
 const speechDraftKey='veil-speech-draft';
-const speechLanguageKey='veil-speech-language';
 let speechRecorder=null,speechStream=null,speechChunks=[],speechSession=null,speechState='idle',speechPermissionPending=false,speechCancelled=false,speechDraftActive=false,speechTimer=null;
 let after=0, busy=true, transcribingVoice=false, stopping=false, stopped=false, typing=null, sending=false;
 let revealQueue=[], revealTimer=null, roundStartedAt=0, roundHasReply=false, previousMessage=null, voiceContextMenu=null;
@@ -21,10 +20,10 @@ function saveSpeechDraft(value){try{sessionStorage.setItem(speechDraftKey,value)
 function resizeBox(){box.style.height='auto';box.style.height=Math.min(box.scrollHeight,200)+'px'}
 function renderSpeechText(finalText){
   const prefix=speechSession.base;
-  const separator=prefix&&finalText&&speechSession.language==='en-US'&&!/\s$/.test(prefix)?' ':'';
+  const separator=prefix&&/^[A-Za-z0-9]/.test(finalText)&&/[A-Za-z0-9]$/.test(prefix)?' ':'';
   box.value=prefix+separator+finalText;
   resizeBox();
-  if(finalText)saveSpeechDraft(prefix+(prefix&&finalText&&speechSession.language==='en-US'&&!/\s$/.test(prefix)?' ':'')+finalText);
+  if(finalText)saveSpeechDraft(prefix+separator+finalText);
 }
 function setSpeechStatus(state,message){
   speechState=state;speechStatus.dataset.state=state;speechStatus.textContent=message;
@@ -32,19 +31,15 @@ function setSpeechStatus(state,message){
   speechButton.setAttribute('aria-pressed',String(active));
   speechButton.setAttribute('aria-label',active?'停止语音识别':'开始语音识别');
   speechButton.title=active?'停止语音识别':'开始语音识别';
-  speechLanguage.disabled=active;
   box.disabled=active;
   sendBtn.disabled=busy||revealQueue.length>0||sending||stopping||stopped||active;
 }
 try{
   const savedSpeechDraft=sessionStorage.getItem(speechDraftKey);
   if(savedSpeechDraft!==null){box.value=savedSpeechDraft;speechDraftActive=true;resizeBox()}
-  const savedSpeechLanguage=localStorage.getItem(speechLanguageKey);
-  if(['zh-CN','en-US'].includes(savedSpeechLanguage))speechLanguage.value=savedSpeechLanguage;
 }catch(e){}
-speechLanguage.addEventListener('change',()=>{try{localStorage.setItem(speechLanguageKey,speechLanguage.value)}catch(e){}});
 if(!navigator.mediaDevices?.getUserMedia||typeof MediaRecorder==='undefined'){
-  speechButton.disabled=true;speechLanguage.disabled=true;
+  speechButton.disabled=true;
   setSpeechStatus('error','当前环境无法录音，请检查麦克风权限。');
 }
 function speechMime(){
@@ -85,13 +80,13 @@ async function finishSpeech(){
 async function startSpeech(){
   if(speechRecorder){setSpeechStatus('processing','录音结束，正在转写…');speechRecorder.stop();return}
   if(speechPermissionPending||voiceRecorder||voicePermissionPending||voiceSending||busy||sending||stopping||stopped)return;
-  speechCancelled=false;speechPermissionPending=true;speechSession={base:box.value,language:speechLanguage.value};
+  speechCancelled=false;speechPermissionPending=true;speechSession={base:box.value};
   speechDraftActive=true;saveSpeechDraft(box.value);setSpeechStatus('processing','正在启动麦克风…');
   try{
-    const stream=await navigator.mediaDevices.getUserMedia({audio:true});speechPermissionPending=false;
+    const stream=await navigator.mediaDevices.getUserMedia({audio:{channelCount:{ideal:1},sampleRate:{ideal:16000}}});speechPermissionPending=false;
     if(speechCancelled){stream.getTracks().forEach(track=>track.stop());return}
     speechStream=stream;speechChunks=[];
-    const mime=speechMime();speechRecorder=new MediaRecorder(stream,mime?{mimeType:mime}:undefined);
+    const mime=speechMime();speechRecorder=new MediaRecorder(stream,{audioBitsPerSecond:48000,...(mime?{mimeType:mime}:{})});
     speechRecorder.ondataavailable=event=>{if(event.data?.size)speechChunks.push(event.data)};
     speechRecorder.onstop=finishSpeech;speechRecorder.start(500);
     speechTimer=setTimeout(()=>stopSpeech(false),120000);
