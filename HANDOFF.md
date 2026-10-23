@@ -13,5 +13,6 @@
 ## 仍然成立的边界
 
 - `E:\Peter-Agent\VEIL\veil-agent` 是正式运行目录，固定使用 `main`；开发和提交使用独立 worktree。
+- PR 合并后只清理本工单创建的 worktree；清理前检查无未提交修改，有修改就保留并报告，正式目录和其他 worktree 保持原样。
 - 正式目录继续经现有 `update-main.cmd` 更新；不要要求 PR 合并后人工同步，也不要修改这套更新机制来完成本工单。
 - 任何更新失败都必须保留本地修改和用户数据。正式 Update Main 和 Peter 实际聊天仍需 Lan 在 Windows 上验收。

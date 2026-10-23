@@ -24,6 +24,7 @@
 
 - `E:\Peter-Agent\VEIL\veil-agent` 是正式运行目录，固定使用 `main`；禁止在这里开发、修改源码或切换到开发分支。
 - 开发统一使用旁边的独立 worktree，例如 `E:\Peter-Agent\VEIL\veil-agent-codex`。如果目标 worktree 已存在，先检查并复用，不覆盖已有目录或修改。
+- PR 合并后自动清理本次任务创建的 worktree；清理前确认其中没有未提交修改，有修改就保留并报告。不得删除正式运行目录或其他正在使用的 worktree。
 - 正式目录继续通过现有 `update-main.cmd` 一键更新；不要另造更新机制，也不要求每次 PR 合并后手动同步。
 - 保持 Update Main 与独立 worktree 兼容；更新失败时不得丢失本地修改或用户数据。
 

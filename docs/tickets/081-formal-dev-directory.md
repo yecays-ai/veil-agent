@@ -12,3 +12,4 @@
 
 1. 查看 `AGENTS.md`，确认正式目录、独立 worktree、现有 `update-main.cmd` 和失败保留数据的规则清楚，且未重复 PR、安全和验收流程。
 2. 确认本 PR 只改规则与状态交接文档，没有修改 Update Main 实现；正式目录继续保持 `main`。
+3. PR 合并后确认只清理本工单创建且无未提交修改的 worktree；有修改时保留并报告，不触碰正式目录或其他正在使用的 worktree。
