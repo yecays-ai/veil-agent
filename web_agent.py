@@ -744,7 +744,7 @@ def make_handler(hub, token):
         def log_message(self, *_):
             pass  # never log requests: URLs carry the token
 
-        def _send(self, code, body, ctype='application/json; charset=utf-8'):
+        def _send(self, code, body, ctype='application/json; charset=utf-8', extra_headers=None):
             data = body if isinstance(body, bytes) else json.dumps(body, ensure_ascii=False).encode('utf-8')
             self.send_response(code)
             self.send_header('Content-Type', ctype)
@@ -752,6 +752,8 @@ def make_handler(hub, token):
             self.send_header('Cache-Control', 'no-store')
             self.send_header('X-Content-Type-Options', 'nosniff')
             self.send_header('Referrer-Policy', 'no-referrer')
+            for name, value in (extra_headers or {}).items():
+                self.send_header(name, value)
             self.end_headers()
             self.wfile.write(data)
 
@@ -796,16 +798,42 @@ def make_handler(hub, token):
                     path = hub.media_root / media['filename']
                     limit = (MAX_GENERATED_VOICE_BYTES if media.get('mime') == VOICE_MIME else
                              (MAX_VOICE_UPLOAD_BYTES if media.get('kind') == 'voice' else MAX_MEDIA_BYTES))
-                    if path.stat().st_size > limit:
+                    size = path.stat().st_size
+                    if size > limit:
                         raise OSError('media too large')
+                    status = 200
+                    start, end = 0, size - 1
+                    range_header = self.headers.get('Range', '')
+                    range_match = (re.fullmatch(r'bytes=(\d*)-(\d*)', range_header.strip())
+                                   if len(range_header) <= 128 else None)
+                    if range_match:
+                        first, last = range_match.groups()
+                        if first:
+                            start = int(first)
+                            end = int(last) if last else size - 1
+                        elif last:
+                            suffix_length = int(last)
+                            start = max(0, size - suffix_length)
+                            end = size - 1
+                        if start >= size or start > end or end < 0 or not first and not last:
+                            self._send(416, b'', media['mime'], {
+                                'Accept-Ranges': 'bytes', 'Content-Range': f'bytes */{size}'})
+                            return
+                        end = min(end, size - 1)
+                        status = 206
+                    length = max(0, end - start + 1)
                     with path.open('rb') as handle:
-                        data = handle.read(limit + 1)
-                    if len(data) > limit:
+                        handle.seek(start)
+                        data = handle.read(length)
+                    if len(data) != length:
                         raise OSError('media too large')
                 except OSError:
                     self._send(404, {'error': 'not found'})
                 else:
-                    self._send(200, data, media['mime'])
+                    headers = {'Accept-Ranges': 'bytes'}
+                    if status == 206:
+                        headers['Content-Range'] = f'bytes {start}-{end}/{size}'
+                    self._send(status, data, media['mime'], headers)
             else:
                 self._send(404, {'error': 'not found'})
 
