@@ -1,17 +1,17 @@
 # 当前状态
 
-更新：2026-10-23 13:17 UTC · Codex。
+更新：2026-10-23 13:44 UTC · Codex。
 
 ## 当前目标与现状
 
 - PR #122 已合并到 main，合并提交 `edeea280f3163e5a32c3dd841a42c4b4f071672a`。其四个平台离线测试、audit、scanner-report-smoke 均通过；Cubic 检查因评论额度限制为 neutral。
 - PR #122 完成 Reliability 五阶段的运行安全状态与有界恢复实现。Lan 对此项 Windows 状态页体验的验收尚未记录；自动检查通过不代替体验验收。
 - PR #123（工单 079，`ticket/079-speed-up-main-update-scan`）修复 Main Update 在本地 main 分叉后的慢速冲突扫描。已同步 #122 的 main；实际冲突仅在 `STATUS.md` 与 `HANDOFF.md`，updater 代码和测试无冲突。
-- PR #123 原 head `1fa2366bb002f975dae0aa6fd0c832b1d0ea79b6` 的检查通过；#122 同步已进入本 PR；新 head 的 CI 尚待 GitHub 运行。正式运行目录仍保持 main，其本地提交、恢复分支和文件均未清理或覆盖。
+- CodeRabbit 对 PR #123 提出 1 条 Major：Windows PowerShell 可能误解码非 ASCII Git 路径。扫描器现明确设置 UTF-8 输出；定向回归改用中文冲突文件名并强制代码页 437，验证本地文件不会被覆盖，1 项通过（6.72 秒）。修复已完成，推送后需核对新 head CI。
 
 ## 下一步
 
-确认同步后新 head 的 CI，并在 CodeRabbit 额度恢复后请求一次审查。
+集中推送 CodeRabbit 修复和回归；新 head 必需 CI 通过后合并，再安全完成正式本地目录的首次更新和体验验证。
 
 ## Lan 的体验验收
 

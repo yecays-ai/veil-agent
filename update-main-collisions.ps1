@@ -6,6 +6,9 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$utf8 = [System.Text.UTF8Encoding]::new($false)
+[Console]::OutputEncoding = $utf8
+$OutputEncoding = $utf8
 
 try {
     $root = [System.IO.Path]::GetFullPath($RepositoryPath).TrimEnd('\', '/')

@@ -78,26 +78,28 @@ class UpdateMainCommandTests(unittest.TestCase):
             if not git_info.is_absolute():
                 git_info = repo / git_info
             with (git_info / "info" / "exclude").open("a", encoding="utf-8") as exclude:
-                exclude.write("\n/collision.txt\n/ignored-cache/\n")
-            (repo / "collision.txt").write_text("local-only\n", encoding="utf-8")
+                exclude.write("\n/本地缓存.txt\n/ignored-cache/\n")
+            (repo / "本地缓存.txt").write_text("local-only\n", encoding="utf-8")
             ignored_cache = repo / "ignored-cache"
             ignored_cache.mkdir()
             for index in range(3000):
                 (ignored_cache / f"item-{index:04}.txt").write_text("preserve\n", encoding="utf-8")
 
             (seed / "state.txt").write_text("remote\n", encoding="utf-8")
-            (seed / "collision.txt").write_text("remote\n", encoding="utf-8")
-            _git(seed, "add", "state.txt", "collision.txt")
+            (seed / "本地缓存.txt").write_text("remote\n", encoding="utf-8")
+            _git(seed, "add", "state.txt", "本地缓存.txt")
             _git(seed, "commit", "-m", "remote")
             _git(seed, "push", "origin", "main")
             remote_head = _git(seed, "rev-parse", "HEAD")
 
             blocked = subprocess.run(
-                ["cmd", "/c", "update-main.cmd"],
+                ["cmd", "/d", "/c", "chcp 437>nul & update-main.cmd"],
                 cwd=repo,
                 input="\n",
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=30,
                 env=updater_env,
             )
@@ -105,17 +107,19 @@ class UpdateMainCommandTests(unittest.TestCase):
             self.assertEqual(blocked.returncode, 1, blocked.stdout + blocked.stderr)
             self.assertNotIn("Not possible to fast-forward", blocked.stdout + blocked.stderr)
             self.assertIn("No local file was overwritten", blocked.stdout)
-            self.assertEqual((repo / "collision.txt").read_text(encoding="utf-8"), "local-only\n")
+            self.assertEqual((repo / "本地缓存.txt").read_text(encoding="utf-8"), "local-only\n")
             self.assertEqual(_git(repo, "branch", "--show-current"), "ticket/example")
             self.assertEqual(_git(repo, "rev-parse", "main"), ticket_head)
 
-            (repo / "collision.txt").unlink()
+            (repo / "本地缓存.txt").unlink()
             completed = subprocess.run(
-                ["cmd", "/c", "update-main.cmd"],
+                ["cmd", "/d", "/c", "chcp 437>nul & update-main.cmd"],
                 cwd=repo,
                 input="\n",
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=30,
                 env=updater_env,
             )
@@ -131,11 +135,13 @@ class UpdateMainCommandTests(unittest.TestCase):
             )
 
             repeated = subprocess.run(
-                ["cmd", "/c", "update-main.cmd"],
+                ["cmd", "/d", "/c", "chcp 437>nul & update-main.cmd"],
                 cwd=repo,
                 input="\n",
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=30,
                 env=updater_env,
             )
