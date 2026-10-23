@@ -2,15 +2,15 @@
 
 ## 上一位停在哪
 
-- 工单 076 PR #118（`ticket/076-desktop-chat-capabilities`）基于 main `a3eb961b1c1e8be85cd46661ea4e6745b0c66101`，head `57c1310` 已推送，尚未合并。
+- 工单 076 PR #118（`ticket/076-desktop-chat-capabilities`）基于 main `a3eb961b1c1e8be85cd46661ea4e6745b0c66101`；语音实现提交 `09f15f1` 和状态记录已推送，PR 尚未合并。
 - 桌面录音松开后立即提交，服务端后台转写；Peter 等转写成功后回复。语音播放器紧凑、转写默认隐藏；右键显示“删除 / 撤回 / 转文字”，目前前两项禁用，转文字可展开/收起。中英听写语言保存在本机；网页同步转写响应保持兼容。
 - 转写并发最多 4 个；聊天等待有超时，繁忙或超时时录音保留并可重试。成功的本地语音重试会更新原气泡并清除旧错误。
-- 本地完整假数据套件 411 项通过、4 项可选跳过；Electron 假 Agent 烟测通过。`57c1310` 的 Tests 与 Windows desktop CI 仍在运行，Dependency security 已通过。上一轮 Cubic 12 个 inline 问题均已回复并解决，但最新 head 的复查被试用额度耗尽拦住，未能启动。
-- Cubic 的 Agent 文件夹更换建议被留在本 PR 范围外：Lan 明确限定当前只做语音消息。未验证真实麦克风、在线转写、真实 Agent、Peter 音色、重启连续性或 Lan 的 Windows 体验。
+- 本地完整假数据套件 411 项通过、4 项可选跳过；Electron 假 Agent 烟测通过。当前 PR head 的必需 CI 仍需核对。上一轮 Cubic 12 个 inline 问题均已回复并解决，但最新 head 的复查被试用额度耗尽拦住，未能启动。
+- Cubic 的 Agent 文件夹更换建议留在本 PR 范围外：Lan 明确限定当前只做语音消息。未验证真实麦克风、在线转写、真实 Agent、Peter 音色、重启连续性或 Lan 的 Windows 体验。
 
 ## 下一个窗口第一步
 
-先看 Lan 是否恢复 Cubic 可用审查额度；同时确认 `57c1310` CI 结果。最新 head Cubic 复查和必需 CI 都满足后，再核对实际分支保护并决定是否合并；合并后请 Lan 按 `STATUS.md` 的两步清单体验。
+先核对当前 PR head 的必需 CI，并等 Lan 决定如何处理 Cubic 试用审查额度；在最新 Cubic 复查可用且 CI 通过前不合并。合并后请 Lan 按 `STATUS.md` 的两步清单体验。
 
 ## 仍然成立的边界
 
