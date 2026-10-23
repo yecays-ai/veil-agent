@@ -262,6 +262,12 @@ class MCP:
                                            else getattr(exc, 'stage', None))) from exc
                             if self.recovery is not None and not restored:
                                 raise MemoryToolError('connection', stage='recovery') from exc
+                    if attempt > 1 and self.diagnostic:
+                        try:
+                            self.diagnostic({'code': 'retry_succeeded', 'stage': 'mcp_verified',
+                                             'tool': name, 'attempt': attempt})
+                        except Exception:
+                            pass
                     self.recovery_streak = 0  # A healthy reply restores the recovery allowance.
                     result.set_result(text)
             except TimeoutError as exc:
@@ -511,7 +517,7 @@ def explain(code, facts):
 
 
 class Memory:
-    def __init__(self, cfg, store, budget, model, backend):
+    def __init__(self, cfg, store, budget, model, backend, runtime_monitor=None):
         self.cfg, self.store, self.budget, self.model, self.backend = cfg, store, budget, model, backend
         vault_path(store.root, cfg.id)
         self.path = f'{cfg.id}/memory/_agent/state.jsonl'
@@ -523,7 +529,11 @@ class Memory:
         self.write_fingerprint_key = vault_path(store.root, cfg.id) / '_agent' / 'write-reconciliation.key'
         self._fingerprint_key = self._load_fingerprint_key()
         if isinstance(backend, MCP):
-            backend.diagnostic = lambda facts: self.store.append(self.diagnostics, facts)
+            def diagnostic(facts):
+                self.store.append(self.diagnostics, facts)
+                if runtime_monitor:
+                    runtime_monitor.observe_memory(facts)
+            backend.diagnostic = diagnostic
         self.dropped_path = f'{cfg.id}/memory/_agent/dropped.jsonl'
         self.last_tool = None
         self.delete_asked = None  # number shown by /delete, waiting for its 确认
