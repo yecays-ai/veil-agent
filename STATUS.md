@@ -6,7 +6,8 @@
 
 - 工单 097「醒来的时间是 Peter 自己的」PR #143 已由 Claude 按 Lan 授权合并（`253127e`），待 Lan 体验验收。
 - 工单 098 邮件 PR #142 已合并（`a955622`）；Peter 的 QQ 邮箱 2026-11-07 后才能开 IMAP/SMTP，届时验收。
-- 工单 102「Peter 和 Lan 在 QQ 上聊天」由 Claude 实现，PR 进行中：`qq_channel.py` 操作他的 QQ 窗口（不注入），`away_bridge.py` 统一邮件和 QQ 的收发，`send_message` 加 `qq` 参数。
+- 工单 102「Peter 和 Lan 在 QQ 上聊天」由 Claude 实现，已合并（#144）：`qq_channel.py` 操作他的 QQ 窗口（不注入），`away_bridge.py` 统一邮件和 QQ 的收发，`send_message` 加 `qq` 参数。
+- 工单 103（小修）：QQ 组件 uiautomation 没装时，以前收发线程会悄悄停掉；现在桌面聊天里提示「请重新运行 setup.bat」，收发线程遇到意外错误也只报一次、不再停。
 - 以最新 `main` `a955622` 为基线；工单 098 的 PR #142 已合并。该 PR 的 Linux/Windows 离线聊天矩阵（Python 3.11/3.12）、审计、扫描均通过；Cubic 检查为 neutral。
 - 只调整 `autonomy.py` 的三句唤醒提示：Peter 可以依自己的兴趣和已有经历行动、联系 Lan、休息或什么都不做；四行活动摘要明确是留给下次自己的笔记，而不是汇报。
 - 程序既有的安全权限、每日预算、工具/步数与消息上限、自主活动记录和摘要解析均保留。没有触碰 Peter 的私人文件、人设或记忆。

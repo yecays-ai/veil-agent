@@ -133,6 +133,20 @@ class QQChannelTests(unittest.TestCase):
         notices = [event for event in hub.events if event['kind'] == 'notice']
         self.assertEqual(len(notices), 1)
 
+    def test_missing_component_is_reported_not_silent(self):
+        import sys
+        from unittest.mock import patch
+        from qq_channel import QQWindow
+        self.channel.ui = QQWindow('Lan')
+        hub = Hub('Peter', SimpleNamespace(enabled=lambda: False))
+        bridge = AwayBridge(self.channel, hub)
+        with patch.dict(sys.modules, {'uiautomation': None}):
+            self.assertFalse(self.channel.ready_to_send())
+            bridge.poll_once()
+        notices = [event['text'] for event in hub.events if event['kind'] == 'notice']
+        self.assertEqual(len(notices), 1)
+        self.assertIn('setup.bat', notices[0])
+
 
 if __name__ == '__main__':
     unittest.main()

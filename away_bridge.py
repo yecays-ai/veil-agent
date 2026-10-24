@@ -98,7 +98,10 @@ class AwayBridge:
         while not self.hub.stopped:
             with self.outbox_ready:
                 self.outbox_ready.wait(2)
-            self.send_pending()
+            try:
+                self.send_pending()
+            except Exception as exc:   # never let the thread die silently
+                self._report(f'{self.channel.label}发送出错：{type(exc).__name__}: {exc}')
 
     # receiving loop ---------------------------------------------------------
     def poll_once(self):
@@ -125,7 +128,10 @@ class AwayBridge:
 
     def _poll_worker(self):
         while not self.hub.stopped:
-            self.poll_once()
+            try:
+                self.poll_once()
+            except Exception as exc:   # never let the thread die silently
+                self._report(f'{self.channel.label}接收出错：{type(exc).__name__}: {exc}')
             with self.hub.cond:
                 self.hub.cond.wait_for(lambda: self.hub.stopped, timeout=self.channel.poll_seconds)
 

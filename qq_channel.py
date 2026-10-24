@@ -143,13 +143,16 @@ class QQChannel:
 
     # away-bridge interface ----------------------------------------------------
     def ready_to_send(self):
-        return self.away()
+        try:
+            return self.away()
+        except QQUnavailable:
+            return False   # poll reports why
 
     def poll(self):
         from away_bridge import ChannelError, Incoming
-        if not self.away():
-            return []   # she is at the computer: never pull windows in front of her
         try:
+            if not self.away():
+                return []   # she is at the computer: never pull windows in front of her
             current = self.ui.read()
         except QQUnavailable as exc:
             raise ChannelError(str(exc)) from exc
@@ -204,7 +207,10 @@ class QQWindow:
         self.contact = contact
 
     def _auto(self):
-        import uiautomation as auto
+        try:
+            import uiautomation as auto
+        except ImportError as exc:
+            raise QQUnavailable('操作 QQ 的组件没有装好：请退出服务，重新运行 setup.bat，再打开 Peter。') from exc
         return auto
 
     def other_app_full_screen(self):
