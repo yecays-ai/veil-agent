@@ -9,7 +9,7 @@
 
 ## 下一个窗口第一步
 
-102 合并后请 Lan 按工单验收。若 QQ 升级后找不到输入框/消息，先改 `qq_channel.py` 顶部的类名常量（来源 qq-operations 的 `qq_config.ps1`）。101 做完后，邮件和 QQ 回复要带上附件。
+102 已合并（#144）。103：`QQWindow._auto` 缺 uiautomation 时抛 `QQUnavailable`（提示重跑 setup.bat），`AwayBridge` 两个线程捕获意外异常并报一次。Lan 的电脑第一次没重跑 setup.bat 就踩到了这个。若 QQ 升级后找不到输入框/消息，先改 `qq_channel.py` 顶部的类名常量（来源 qq-operations 的 `qq_config.ps1`）。101 做完后，邮件和 QQ 回复要带上附件。
 
 ## 边界
 
