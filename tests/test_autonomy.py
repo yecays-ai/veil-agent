@@ -184,7 +184,7 @@ daily_budget_cny = "2"
         self.assertEqual(self.budget.category_totals('test')[0], Decimal('0.000420'))
         self.assertEqual(self.controller.command().split(' | ')[2], '搁置：按 Test 本次决定结束。')
 
-    def test_last_autonomy_record_remains_in_chat_context_across_restart_and_updates(self):
+    def test_last_autonomy_record_is_given_once_then_looked_up(self):
         self.controller.run()
         activity_bytes = (self.store.root / 'test' / 'autonomy.jsonl').read_bytes()
         self.model.reset_mock()
@@ -198,12 +198,13 @@ daily_budget_cny = "2"
         self.assertIn('System record | Last autonomous activity | Occurred at:', context)
         self.assertIn('historical execution data', context)
         self.assertIn('do not assume it still exists now', context)
+        self.assertIn('use autonomy_history', context)
 
         self.model.reset_mock()
         self.chat.send('我们接着聊别的。')
         messages = self.model.call_args.args[0]
         context = '\n'.join(message['content'] for message in messages if message['role'] == 'system')
-        self.assertIn('most recent completed autonomous activity record', context)
+        self.assertNotIn('most recent completed autonomous activity record', context)
         self.assertEqual((self.store.root / 'test' / 'autonomy.jsonl').read_bytes(), activity_bytes)
 
         restarted_model = Mock(return_value=('Fictional reply after restart', 100, 20, 0))
@@ -211,7 +212,12 @@ daily_budget_cny = "2"
         restarted_chat.send('重启后继续聊天。')
         messages = restarted_model.call_args.args[0]
         context = '\n'.join(message['content'] for message in messages if message['role'] == 'system')
-        self.assertIn('most recent completed autonomous activity record', context)
+        self.assertNotIn('most recent completed autonomous activity record', context)
+
+        from autonomy import activity_history
+        looked_up = activity_history(self.store, self.cfg)
+        self.assertIn('实验室整理', looked_up)
+        self.assertIn('等待新信息', looked_up)
 
         self.store.append('test/autonomy.jsonl', {
             'started_at': '2099-01-01T00:00:00+00:00', 'decision': '继续整理',
@@ -226,6 +232,9 @@ daily_budget_cny = "2"
         context = '\n'.join(message['content'] for message in messages if message['role'] == 'system')
         self.assertIn('新活动', context)
         self.assertIn('most recent completed autonomous activity record', context)
+        looked_up = activity_history(self.store, self.cfg, 2).splitlines()
+        self.assertIn('新活动', looked_up[1])
+        self.assertIn('实验室整理', looked_up[2])
 
     def test_failed_chat_request_keeps_autonomy_handoff_pending(self):
         self.controller.run()
@@ -250,7 +259,7 @@ daily_budget_cny = "2"
         self.chat.send('后续聊天。')
         messages = self.model.call_args.args[0]
         context = '\n'.join(message['content'] for message in messages if message['role'] == 'system')
-        self.assertIn('most recent completed autonomous activity record', context)
+        self.assertNotIn('most recent completed autonomous activity record', context)
 
     def test_autonomy_context_labels_previous_tool_failure_as_historical(self):
         self.store.append('test/autonomy.jsonl', {

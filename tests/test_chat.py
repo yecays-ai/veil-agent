@@ -355,6 +355,44 @@ output_cny_per_million = "8"
         self.assertEqual(tool_results, [record])
         tools.invoke.assert_not_called()
 
+    def test_peter_looks_up_autonomy_history_on_demand(self):
+        self.store.append('test/autonomy.jsonl', {
+            'started_at': '2099-01-01T00:00:00+00:00', 'decision': 'Tidy the fictional lab.',
+            'reason': 'A fictional reason.', 'tools': [], 'lab_files_changed': ['lab/notes.md'],
+            'result': '完成', 'result_reason': 'Fictional notes saved.',
+            'current_focus': 'Fictional lab', 'next_step': 'Wait.'})
+        self.store.append('test/autonomy-chat-handoffs.jsonl',
+                          {'activity_started_at': '2099-01-01T00:00:00+00:00'})
+        calls = [SimpleNamespace(id=f'history-{n}', function=SimpleNamespace(
+            name='autonomy_history', arguments=arguments)) for n, arguments in enumerate(('{"count": 0}', '{}'))]
+        def turn(call):
+            return SimpleNamespace(content=None, tool_calls=[call],
+                model_dump=lambda exclude_none=True: {'role': 'assistant', 'content': None,
+                    'tool_calls': [{'id': call.id, 'type': 'function', 'function': {
+                        'name': 'autonomy_history', 'arguments': call.function.arguments}}]})
+        final = SimpleNamespace(content='I tidied the lab.', tool_calls=[],
+            model_dump=lambda exclude_none=True: {'role': 'assistant', 'content': 'I tidied the lab.'})
+        tools = SimpleNamespace(tools=[], description='Fictional tools.', capability_event=None,
+            capability_event_model=None, consume_capability_event=Mock(), invoke=Mock())
+        chat = Chat(replace(self.cfg, tools={'enabled': True, 'max_steps': 3}),
+                    self.store, self.budget, Mock(), tools=tools, output=lambda _: None)
+        prompts = []
+        def fake_model(messages, **kwargs):
+            prompts.append((list(messages), kwargs.get('tools')))
+            return (turn(calls[len(prompts) - 1]) if len(prompts) <= 2 else final), 100, 20, 0
+        chat.model.side_effect = fake_model
+
+        chat.send('What did you do while I was away?')
+
+        first_prompt, offered = prompts[0]
+        self.assertIn('autonomy_history', {item['function']['name'] for item in offered})
+        self.assertFalse(any('Last autonomous activity' in str(item.get('content')) for item in first_prompt))
+        results = [item['content'] for item in prompts[2][0] if item.get('role') == 'tool']
+        self.assertIn('count must be an integer', results[0])
+        self.assertIn('Tidy the fictional lab.', results[1])
+        self.assertIn('lab/notes.md', results[1])
+        tools.invoke.assert_not_called()
+
     def test_failed_capability_delivery_stays_pending_then_delivers_once(self):
         notice = ('Capability update: added lab_file_digest and move_lab_file. Both are direct-use only '
                   'inside the lab folder; they cannot overwrite, delete, or run scripts.')
@@ -964,8 +1002,8 @@ output_cny_per_million = "8"
 
         self.assertEqual(reply, 'A fictional reply')
         chat._tool_chat.assert_called_once()
-        # send_message, capability_history and the two long-task tools are offered beside the authorized ones.
-        self.assertEqual(len(chat.tool_schemas()) - 4, len(names))
+        # send_message, capability_history, autonomy_history and the two long-task tools are offered beside the authorized ones.
+        self.assertEqual(len(chat.tool_schemas()) - 5, len(names))
         rows, costs = self.store.read('test/chat.jsonl'), self.store.read('costs.jsonl')
         chat._tool_chat.reset_mock()
         with self.assertRaises(UserError):

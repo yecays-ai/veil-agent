@@ -721,6 +721,11 @@ class ToolSet:
         if announce:
             announce()
 
+    def announce_autonomy_history(self):
+        announce = getattr(self.files, 'announce_autonomy_history', None)
+        if announce:
+            announce()
+
     def invoke(self, name, args, approval=input):
         if self.native.handles(name):
             return self.native.invoke(name, args, approval)
