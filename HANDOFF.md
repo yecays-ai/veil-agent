@@ -2,17 +2,16 @@
 
 ## 当前进度
 
-- 正式仓库 `main` 当前 HEAD 为 `366840b`（工单 083）。
+- 正式仓库 `main` 已包含 PR #128 的状态同步（合并提交 `283f3be`）；没有待推送的状态文档改动。
 - Reliability 五阶段已完成。
 - PR #126（工单 082）已合并；Tests、Windows desktop、Dependency security 均成功，Lan 已确认桌面 Windows 体验验收完成。
-- PR #127（工单 083）已关闭，代码已在当前 `main`；PR head `ab48b82` 的 Tests、Windows desktop、Dependency security 均成功。Lan 已确认最新桌面修改与验收完成。
+- PR #127（工单 083）已关闭，代码已在 `main`；PR head `ab48b82` 的 Tests、Windows desktop、Dependency security 均成功。Lan 已确认最新桌面修改与验收完成。
 - 工单 083 包含完整聊天账本语音去重、同角色/模型输入 token 校准与分项估算、原始 DSML 工具协议拦截；没有改写聊天、记忆或媒体数据。
 - 只读架构审计已完成。候选整理项：核心模块循环依赖、`Chat._tool_chat` 职责集中、Chat/Memory 轮次语义需要明确定义。没有修改源码。
-- 当前 GitHub 文档同步分支为 `ticket/084-sync-status-after-reliability`；PR #128 更新本文件、`STATUS.md` 和工单 084。
 
 ## 下一个窗口第一步
 
-查看 PR #128 的最新检查和评审状态。合并后，如开始架构整理，先单独明确 Chat 与 Memory 对多条 assistant 事件的轮次契约；依赖边界和 `_tool_chat` 职责拆分分别开单。
+以 `STATUS.md` 为准。如启动架构整理，先单独明确 Chat 与 Memory 对多条 assistant 事件的轮次契约；依赖边界和 `_tool_chat` 职责拆分分别开单。
 
 ## 边界
 
