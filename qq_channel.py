@@ -28,6 +28,53 @@ SEND_BUTTON_NAME = '发送'
 OWN_INPUT_MARGIN_MS = 1500
 
 
+def clipboard_bytes(text):
+    """CF_UNICODETEXT payload: UTF-16 with a terminating NUL.
+
+    uiautomation 2.0.29's SetClipboardText sizes the buffer by Python code points, but an emoji outside
+    the BMP takes two UTF-16 units, so every such emoji cut one character off the end of the message
+    (seen on Lan's PC 2026-10-25: '…不会发送）' arrived as '…不会发'). The size must come from the encoding.
+    """
+    return text.encode('utf-16-le') + b'\0\0'
+
+
+def set_clipboard_text(text):
+    """Put `text` on the Windows clipboard whole, emoji included. Returns True on success."""
+    data = clipboard_bytes(text)
+    user32, kernel32 = ctypes.windll.user32, ctypes.windll.kernel32
+    kernel32.GlobalAlloc.restype = ctypes.c_void_p
+    kernel32.GlobalAlloc.argtypes = (ctypes.c_uint, ctypes.c_size_t)
+    kernel32.GlobalLock.restype = ctypes.c_void_p
+    kernel32.GlobalLock.argtypes = (ctypes.c_void_p,)
+    kernel32.GlobalUnlock.argtypes = (ctypes.c_void_p,)
+    kernel32.GlobalFree.argtypes = (ctypes.c_void_p,)
+    user32.SetClipboardData.restype = ctypes.c_void_p
+    user32.SetClipboardData.argtypes = (ctypes.c_uint, ctypes.c_void_p)
+    for _ in range(10):   # another program may hold the clipboard for a moment
+        if user32.OpenClipboard(None):
+            break
+        time.sleep(0.05)
+    else:
+        return False
+    try:
+        user32.EmptyClipboard()
+        handle = kernel32.GlobalAlloc(0x2, len(data))   # GMEM_MOVEABLE
+        if not handle:
+            return False
+        pointer = kernel32.GlobalLock(handle)
+        if not pointer:
+            kernel32.GlobalFree(handle)
+            return False
+        ctypes.memmove(pointer, data, len(data))
+        kernel32.GlobalUnlock(handle)
+        if user32.SetClipboardData(13, handle):   # CF_UNICODETEXT; the system now owns the memory
+            return True
+        kernel32.GlobalFree(handle)
+        return False
+    finally:
+        user32.CloseClipboard()
+
+
 def new_messages(seen, current):
     """Messages in `current` that were not on screen at the last read.
 
@@ -371,7 +418,8 @@ class QQWindow:
                     saved_clipboard = None
                 rect = editor.BoundingRectangle
                 auto.Click(rect.xcenter(), rect.ycenter(), waitTime=0.3)
-                auto.SetClipboardText(text)
+                if not set_clipboard_text(text):
+                    raise QQUnavailable('剪贴板被别的程序占用，这条没有发出。')
                 auto.SendKeys('{Ctrl}a', waitTime=0.2)
                 auto.SendKeys('{Ctrl}v', waitTime=0.6)
                 typed = ''.join(child.Name or '' for child, _ in auto.WalkControl(editor, maxDepth=20)
@@ -387,7 +435,7 @@ class QQWindow:
             finally:
                 if saved_clipboard is not None:
                     try:
-                        auto.SetClipboardText(saved_clipboard)
+                        set_clipboard_text(saved_clipboard)
                     except Exception:
                         pass
                 self._back(auto, previous)

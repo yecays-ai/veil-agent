@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from away_bridge import AwayBridge
-from qq_channel import QQ_PREFIX, IdleClock, QQChannel, QQUnavailable, comparable, new_messages, parse_chat
+from qq_channel import QQ_PREFIX, IdleClock, QQChannel, QQUnavailable, clipboard_bytes, comparable, new_messages, parse_chat
 from web_agent import Hub
 
 
@@ -89,6 +89,15 @@ class ParseChatTests(unittest.TestCase):
         header_ok, messages, _ = parse_chat(self.nodes(REAL_TREE), 'Someone')
         self.assertFalse(header_ok)
         self.assertTrue(all(who == 'self' for who, _ in messages))
+
+
+class ClipboardTests(unittest.TestCase):
+    def test_emoji_outside_bmp_do_not_cut_off_the_end(self):
+        text = 'emoji 😭 test 🕷️ end（测试，不会发送）'
+        data = clipboard_bytes(text)
+        self.assertEqual(data[-2:], b'\0\0')
+        self.assertEqual(data[:-2].decode('utf-16-le'), text)
+        self.assertGreater(len(data), (len(text) + 1) * 2)   # the old code-point sizing was too small
 
 
 class ComparableTests(unittest.TestCase):
