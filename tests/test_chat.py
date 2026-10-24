@@ -63,6 +63,21 @@ output_cny_per_million = "8"
         self.assertEqual([r['role'] for r in rows], ['user', 'assistant', 'user', 'assistant'])
         self.assertTrue(all(r['time'] for r in rows))
 
+    def test_recent_keeps_multiple_assistant_messages_in_one_user_round(self):
+        for role, content in [('user', 'fictional question'),
+                              ('assistant', 'fictional first message'),
+                              ('assistant', 'fictional follow-up'),
+                              ('user', 'fictional next question'),
+                              ('assistant', 'fictional next reply')]:
+            self.store.append(self.chat.path, {'role': role, 'content': content})
+
+        history, rounds = self.chat.recent()
+
+        self.assertEqual([m['content'] for m in history], [
+            'fictional question', 'fictional first message', 'fictional follow-up',
+            'fictional next question', 'fictional next reply'])
+        self.assertEqual(rounds, 2)
+
     def test_fresh_english_chat_keeps_old_data_but_excludes_old_prompt(self):
         self.chat.send('old conversation')
         before = self.store.read('test/chat.jsonl')
