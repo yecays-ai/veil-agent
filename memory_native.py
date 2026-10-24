@@ -135,7 +135,7 @@ class NativeMemoryTools:
                     files.capability_event = row.get('pending_event')
                     files.capability_event_model = row.get('pending_event_model')
             except Exception as exc:
-                    raise UserError('The memory capability manifest could not be saved safely, so memory tools were stopped.') from exc
+                raise UserError('The memory capability manifest could not be saved safely, so memory tools were stopped.') from exc
 
     def handles(self, name):
         return name in NATIVE_TOOLS

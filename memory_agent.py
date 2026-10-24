@@ -570,7 +570,7 @@ class Memory:
                         or (write.get('submitted', True) is not True and write.get('submitted') is not False)):
                     raise ValueError('invalid pending write')
         except (ValueError, TypeError, KeyError) as exc:
-                    raise UserError('记忆调度记录损坏，已停止；请保留记忆库，不要删记录。') from exc
+            raise UserError('记忆调度记录损坏，已停止；请保留记忆库，不要删记录。') from exc
         self.mutex = threading.RLock()
         self.pending_writes = legacy_pending_writes
         self._reconcile_pending_writes()
@@ -583,7 +583,7 @@ class Memory:
         try:
             self.opening = self.call('breath', {})
         except Exception as exc:
-                    raise UserError('开场记忆读取失败，请保留记忆库后重开。') from exc
+            raise UserError('开场记忆读取失败，请保留记忆库后重开。') from exc
         self.persist()
         self.worker = threading.Thread(target=self._work, daemon=True)
         self.worker.start()
@@ -1219,7 +1219,7 @@ class Memory:
             self.report('save_failed', {**facts, 'tool': self.last_tool, 'error': type(exc).__name__})
 
     def extract(self, batches, turns, messages, extract_cfg, facts):
-            bound = sum(len(m['content'].encode('utf-8')) + 256 for m in messages) + 256
+        bound = sum(len(m['content'].encode('utf-8')) + 256 for m in messages) + 256
         if bound > self.cfg.provider['max_input_tokens']:
             raise Failure('input_too_long')
         try:
