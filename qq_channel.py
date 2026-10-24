@@ -4,7 +4,8 @@ No injection, no protocol: like QQSafeChat (MIT) and qq-operations (MIT) it read
 Windows UI Automation and types with the clipboard, using the `uiautomation` package. QQ NT builds
 its full accessibility tree only for the foreground window, so the chat window is brought forward
 only while Lan has not touched the computer for a while, and the previous window is restored after.
-Before typing, the chat header must show Lan's name; otherwise nothing is sent.
+Before typing, the chat header must show Lan's name; otherwise nothing is sent. Lan's QQ NT exposes no
+class names, so the window is read by accessibility names and control types (`parse_chat`).
 """
 import ctypes
 import hashlib
@@ -19,11 +20,10 @@ from pathlib import Path
 QQ_PREFIX = '[Lan sent this on QQ; she is away from the computer.]\n'
 ENV_KEY = 'QQ_LAN_CONTACT'
 
-# QQ NT class names (from qq-operations' qq_config.ps1); change here after a QQ upgrade.
-EDITOR_CLASS = re.compile(r'qq-msg-editor')
-HEADER_CLASS = re.compile(r'chat-header__contact-name')
-MESSAGE_CLASS = re.compile(r'^(message-container|msg-content-container)')
-SELF_CLASS = re.compile(r'container--self')
+# QQ NT accessibility names, as read on Lan's QQ on 2026-10-24 (its controls carry no class names).
+# Change here after a QQ upgrade; .local-tmp/qq_check.py prints the current tree.
+MESSAGE_LIST_NAME = '消息列表'     # WindowControl holding the bubbles; each bubble is a GroupControl named after its sender
+TOOLBAR_NAME = '会话'             # ToolBarControl just above the input box
 SEND_BUTTON_NAME = '发送'
 OWN_INPUT_MARGIN_MS = 1500
 
@@ -40,6 +40,54 @@ def new_messages(seen, current):
     # No overlap: everything scrolled away. Only messages after Peter's last one are safe to treat as new.
     last_self = max((i for i, (who, _) in enumerate(current) if who == 'self'), default=-1)
     return current[last_self + 1:]
+
+
+def parse_chat(nodes, contact):
+    """Read the chat window's accessibility tree.
+
+    `nodes` is the tree in walk order as (depth, control type, name, control). Returns
+    (header_ok, messages, editor): whether the header button shows `contact`, the bubbles as
+    (who, text) with who 'other' for Lan and 'self' for Peter, and the input box control or None.
+    """
+    header_ok, messages, editor = False, [], None
+    list_depth = group_depth = toolbar_seen = None
+    current = None
+    for depth, kind, name, control in nodes:
+        name = (name or '').strip()
+        if list_depth is not None and depth <= list_depth:
+            list_depth = None          # left the message list
+        if list_depth is None and current is not None:
+            messages.append(current)
+            current = None
+        if kind == 'WindowControl' and name == MESSAGE_LIST_NAME:
+            list_depth = depth
+            continue
+        if list_depth is not None:
+            if kind == 'GroupControl' and name and (group_depth is None or depth == group_depth):
+                group_depth = depth
+                if current is not None:
+                    messages.append(current)
+                current = ['other' if name == contact else 'self', [], depth]
+            elif current is not None and kind == 'TextControl' and depth <= current[2]:
+                messages.append(current)   # a timestamp between bubbles ends the bubble
+                current = None
+            elif current is not None and depth >= current[2]:
+                # the named group is the avatar; the bubble is its unnamed sibling at the same depth
+                if kind == 'TextControl' and name:
+                    current[1].append(name)
+                elif kind == 'ImageControl' and name:   # the avatar picture has no name
+                    current[1].append('[图片]')
+            continue
+        if toolbar_seen is None and not messages and kind == 'ButtonControl' and name == contact:
+            header_ok = True
+        if kind == 'ToolBarControl' and name == TOOLBAR_NAME:
+            toolbar_seen = True
+        elif toolbar_seen and editor is None and (kind in ('EditControl', 'DocumentControl')
+                                                 or (kind == 'GroupControl' and name == contact)):
+            editor = control
+    if current is not None:
+        messages.append(current)
+    return header_ok, [(who, '\n'.join(parts) or '[图片]') for who, parts, _ in messages], editor
 
 
 class IdleClock:
@@ -254,14 +302,18 @@ class QQWindow:
                 continue
         raise QQUnavailable(f'找不到和“{self.contact}”的 QQ 聊天窗口：请在 Peter 的 QQ 里把和你的聊天单独开成一个窗口，并保持打开。')
 
-    def _find(self, auto, root, pattern):
-        for control, _depth in auto.WalkControl(root, maxDepth=40):
+    @staticmethod
+    def _tree(auto, window):
+        nodes = []
+        for control, depth in auto.WalkControl(window, maxDepth=60):
             try:
-                if pattern.search(control.ClassName or ''):
-                    return control
+                nodes.append((depth, control.ControlTypeName, control.Name, control))
             except Exception:
                 continue
-        return None
+        return nodes
+
+    def _parse(self, auto, window):
+        return parse_chat(self._tree(auto, window), self.contact)
 
     def _front(self, auto, window):
         previous = auto.GetForegroundWindow()
@@ -270,8 +322,7 @@ class QQWindow:
             auto.ShowWindow(handle, 9)  # SW_RESTORE
         auto.SetForegroundWindow(handle)
         time.sleep(0.9)   # QQ NT rebuilds the accessibility tree once it is in front
-        header = self._find(auto, window, HEADER_CLASS)
-        if header is None or self.contact not in (header.Name or ''):
+        if not self._parse(auto, window)[0]:
             self._back(auto, previous)
             raise QQUnavailable('QQ 窗口打不开或对象不是你（电脑可能锁屏了）；为了不发错人，这次没有收发 QQ。')
         return previous
@@ -284,35 +335,16 @@ class QQWindow:
             except Exception:
                 pass
 
-    def _messages(self, auto, window):
-        found = []
-        for control, _depth in auto.WalkControl(window, maxDepth=40):
-            try:
-                cls = control.ClassName or ''
-            except Exception:
-                continue
-            if not MESSAGE_CLASS.search(cls):
-                continue
-            texts = []
-            for child, _ in auto.WalkControl(control, maxDepth=20):
-                try:
-                    if child.ControlTypeName == 'TextControl' and (child.Name or '').strip():
-                        texts.append(child.Name.strip())
-                except Exception:
-                    continue
-            found.append(('self' if SELF_CLASS.search(cls) else 'other', ''.join(texts) or '[图片]'))
-        return found
-
     def read(self):
         auto = self._auto()
         with auto.UIAutomationInitializerInThread():
             window = self._chat_window(auto)
-            header = self._find(auto, window, HEADER_CLASS)
-            if header is not None and self.contact in (header.Name or ''):
-                return self._messages(auto, window)   # the tree is complete without bringing QQ forward
+            header_ok, messages, _ = self._parse(auto, window)
+            if header_ok:
+                return messages   # the tree is complete without bringing QQ forward
             previous = self._front(auto, window)
             try:
-                return self._messages(auto, window)
+                return self._parse(auto, window)[1]
             finally:
                 self._back(auto, previous)
 
@@ -323,7 +355,7 @@ class QQWindow:
             previous = self._front(auto, window)
             saved_clipboard = None
             try:
-                editor = self._find(auto, window, EDITOR_CLASS)
+                editor = self._parse(auto, window)[2]
                 if editor is None:
                     raise QQUnavailable('QQ 输入框找不到了（QQ 可能更新了界面），这条没有发出。')
                 try:
