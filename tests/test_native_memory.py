@@ -209,14 +209,6 @@ class NativeMemoryTests(unittest.TestCase):
         self.assertTrue(any(c.get('accounting') == 'embedding-estimate' for c in costs))
         self.assertEqual(self.budget.totals()[2], 0)
 
-    def test_native_mode_has_no_background_supplement(self):
-        for i in range(8):
-            self.store.append('fake/chat.jsonl', {'role': 'user', 'content': f'fact {i}'})
-            self.store.append('fake/chat.jsonl', {'role': 'assistant', 'content': f'reply {i}'})
-            self.memory.completed()
-        self.memory.jobs.join()
-        self.model.assert_not_called()
-
     def test_same_event_updates_the_existing_entry_instead_of_adding_one(self):
         chat = self.chat(self.message([self.hold('Blue lamp', 'A gift lamp.')]), self.message(content='ok'),
                          self.message([self.hold('Blue lamp', 'A gift lamp from her sister, kept by the bed.')]),
@@ -251,7 +243,7 @@ class NativeMemoryTests(unittest.TestCase):
         self.assertEqual(state, '出错')
         self.assertIn('Do not claim the memory was saved', result)
 
-    def test_search_hides_forgotten_memories_and_truncates(self):
+    def test_search_hides_deleted_memories_and_truncates(self):
         self.tools.invoke('hold', {'title': 'a', 'content': 'lamp memory'})
         key = next(iter(self.memory.state['entries']))
         bucket_file = Path(self.temp.name) / 'data/fake/memory/dynamic/general' / f'memory_{key}.md'
@@ -274,23 +266,19 @@ class NativeMemoryTests(unittest.TestCase):
         self.assertEqual(len(self.backend.rows), 1)
         self.assertIn('lamp memory', self.backend.rows[key]['content'])
         self.assertIn('It was a gift from her sister.', self.backend.rows[key]['content'])
-        self.memory.command(f'/forget {key}')
-        self.memory.command(f'/forget {key} 确认')
+        self.memory.command(f'/delete {key}')
+        self.memory.command(f'/delete {key} 确认')
         text, _, _ = self.tools.invoke('breath_search', {'query': 'lamp'})
         self.assertEqual(text, 'No relevant memories were found.')
         self.tools.invoke('hold', {'title': 'b', 'content': 'long ' * 200})
         text, _, _ = self.tools.invoke('breath_search', {'query': 'long'})
         self.assertIn('[已截断]', text)
 
-    def test_forget_and_delete_still_work_on_memories_peter_saved(self):
+    def test_delete_still_works_on_memories_peter_saved(self):
         self.tools.invoke('hold', {'title': 'Blue lamp', 'content': 'A gift lamp.'})
         key = next(iter(self.memory.state['entries']))
-        self.assertIn('要隐藏这条记忆吗', self.memory.command(f'/forget {key}'))
-        self.assertIn('已隐藏', self.memory.command(f'/forget {key} 确认'))
-        self.assertIn('已恢复', self.memory.command(f'/restore {key}'))
         self.assertIn('确认请输入', self.memory.command(f'/delete {key}'))
         self.assertIn('已删除', self.memory.command(f'/delete {key} 确认'))
-        self.assertIn('不能用 /restore 恢复', self.memory.command(f'/restore {key}'))
         self.assertEqual(self.memory.visible([(key, 'lamp')]), [])
 
     def test_deleted_memory_is_not_searchable_or_updatable_by_peter(self):
@@ -302,29 +290,6 @@ class NativeMemoryTests(unittest.TestCase):
         text, state, _ = self.tools.invoke('hold', {'title': 'Blue lamp', 'content': 'More.', 'target_id': key})
         self.assertNotEqual(state, '成功')
         self.assertTrue(self.memory.state['entries'][key]['deleted'])
-
-    def test_restore_keeps_hidden_state_until_ombre_unhides_the_forgotten_memory(self):
-        self.tools.invoke('hold', {'title': 'Blue lamp', 'content': 'A gift lamp.'})
-        key = next(iter(self.memory.state['entries']))
-        self.memory.command(f'/forget {key}')
-        self.memory.command(f'/forget {key} 确认')
-        original_call = self.backend.call
-        fail_unhide = True
-
-        def fail_unhide_once(name, args):
-            if name == 'trace' and args.get('dont_surface') == 0 and fail_unhide:
-                raise RuntimeError('fictional unhide failure')
-            return original_call(name, args)
-
-        self.backend.call = fail_unhide_once
-        self.assertIn('没能确认', self.memory.command(f'/restore {key}'))
-        self.assertTrue(self.memory.state['entries'][key]['hidden'])
-        self.assertEqual(self.memory.visible([(key, 'lamp')]), [])
-
-        fail_unhide = False
-        self.assertIn('已恢复', self.memory.command(f'/restore {key}'))
-        self.assertFalse(self.memory.state['entries'][key]['hidden'])
-        self.assertEqual(self.memory.visible([(key, 'lamp')]), [(key, 'lamp')])
 
     def test_only_the_two_memory_tools_are_offered_and_delete_is_not_one_of_them(self):
         self.assertEqual({t['function']['name'] for t in permitted_tools(self.tools.tools)},
@@ -338,7 +303,7 @@ class NativeMemoryTests(unittest.TestCase):
         self.assertIn('you decide what to save', text)
         self.assertIn('hold', text)
         self.assertNotIn('every four completed rounds', text)
-        self.assertIn('every four completed rounds', build_self_description(self.cfg, self.budget, True, None))
+        self.assertNotIn('/forget', text)
 
 
 class VersionedOmbreBackend(Backend):

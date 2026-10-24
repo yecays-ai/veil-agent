@@ -264,6 +264,10 @@ def load_character(root, character_id):
             if lab is not False and (lab_name_problem(lab) or
                     (isinstance(grant_file, str) and lab.casefold() == grant_file.casefold())):
                 raise ValueError('lab must be a safe folder name distinct from the journal')
+        memory_mode_setting = (cfg.get('memory') or {}).get('mode', 'native')
+        if memory_mode_setting != 'native':
+            # The background "extract" mode was retired in ticket 090.
+            raise ValueError('memory mode must be "native"')
         if tools is None and (cfg.get('memory') or {}).get('mode') == 'native':
             # Native memory runs on the tool loop; files stay off unless [tools] says otherwise.
             tools = {'enabled': False, 'folder': f'data/{character_id}/workspace',
@@ -628,7 +632,7 @@ class Budget:
 
 
 def memory_mode(memory):
-    return ('native' if getattr(memory, 'native', False) else True) if memory else False
+    return 'native' if memory else False
 
 
 def self_facts(cfg, budget, memory=False, capabilities=None, voice=False):
@@ -645,12 +649,10 @@ def self_facts(cfg, budget, memory=False, capabilities=None, voice=False):
         f'model {json.dumps(cfg.provider["model"], ensure_ascii=False)}.\n'
         f'Available: text chat (web page or terminal); up to {cfg.history_rounds} recent rounds included verbatim '
         'per request; full chat logs saved locally.\n'
-        + (('Long-term memory: you decide what to save and call the hold tool yourself (the user need not say '
-            '"remember"); relevant memories are also recalled automatically each turn; '
-            if memory == 'native' else
-            'Long-term memory: automatic saving every four completed rounds, automatic recall; ')
-         + 'the user can list, suppress, restore and delete memories with /memory, /forget, /restore, /delete. '
-         if memory else 'You have no long-term memory; after restart you know only restored recent rounds. ')
+        + ('Long-term memory: you decide what to save and call the hold tool yourself (the user need not say '
+           '"remember"); relevant memories are also recalled automatically each turn; '
+           'the user can list and delete memories with /memory and /delete. '
+           if memory else 'You have no long-term memory; after restart you know only restored recent rounds. ')
         +
         ((capabilities.description if isinstance(getattr(capabilities, 'description', None), str)
           else 'Tools are currently unavailable. ') if capabilities else
@@ -1263,8 +1265,6 @@ class Chat:
             if autonomy_handoff_id is not None:
                 from autonomy import acknowledge_chat_handoff
                 acknowledge_chat_handoff(self.store, self.cfg, autonomy_handoff_id)
-        if self.memory:
-            self.memory.completed()
         self.autonomy_mode = False
         return reply
 
@@ -1856,10 +1856,9 @@ def main():
                         from memory_agent import Memory, open_ombre
                         with open_ombre(ROOT, cfg) as backend:
                             with Memory(cfg, store, budget, model, backend) as memory:
-                                if memory.native:
-                                    from memory_native import NativeMemoryTools, ToolSet
-                                    tools = ToolSet(tools, NativeMemoryTools(
-                                        memory, cfg.tools['max_result_bytes']))
+                                from memory_native import NativeMemoryTools, ToolSet
+                                tools = ToolSet(tools, NativeMemoryTools(
+                                    memory, cfg.tools['max_result_bytes']))
                                 run_chat(Chat(cfg, store, budget, model, memory, tools, voice=voice))
                             for notice in memory.notices():
                                 print(notice)

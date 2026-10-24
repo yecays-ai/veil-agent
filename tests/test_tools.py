@@ -921,17 +921,15 @@ class MultiMessageTests(unittest.TestCase):
         self.assertEqual([r['content'] for r in self.store.read('test/chat.jsonl')],
                          ['read', '先看一下。', '我看完了。'])
 
-    def test_pure_messages_need_no_followup_budget_and_complete_memory_once(self):
+    def test_pure_messages_need_no_followup_budget(self):
         self.budget.daily = Decimal('0.0125')  # Enough for this request, not a second reservation.
         model = Mock(return_value=(self.message([
             self.tool_call('send_message', '{"text":"Hello."}', 'one')]), 100, 20, 0))
         memory = Mock()
-        memory.native = False
         memory.context.return_value = []
         chat = Chat(self.cfg, self.store, self.budget, model, memory=memory, output=lambda _: None)
         self.assertEqual(chat.send('hello'), 'Hello.')
         model.assert_called_once()
-        memory.completed.assert_called_once_with()
         self.assertEqual(self.budget.totals()[2], 0)
 
     def test_invalid_message_arguments_do_not_send_or_request_again(self):

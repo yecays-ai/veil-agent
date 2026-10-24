@@ -32,8 +32,7 @@ output_cny_per_million = "16"
 
 [memory]
 enabled = true
-# "native": Peter saves memories himself with the hold tool (ticket 007).
-# "extract": the old background supplement every four rounds; switch back to compare.
+# Peter saves memories himself with the hold tool (ticket 007); "native" is the only mode.
 mode = "native"
 # Ombre's own tagging and same-event merge use the chat model and key; false keeps default tags only.
 ombre_model = true
