@@ -446,28 +446,38 @@ class FilesystemTools:
             self.enabled = False
             raise UserError('能力清单无法更新，文件工具已停止；请保留 data 文件夹。')
 
+    def _announce_once(self, flag, event, *, refresh_when_announced=True):
+        """Queue a one-time capability notice; caller holds the capability transaction."""
+        row = json.loads(self.cap_path.read_text(encoding='utf-8')) if self.cap_path.exists() else {}
+        if not isinstance(row, dict):
+            raise ValueError('invalid capability record')
+        if row.get(flag):
+            if refresh_when_announced:
+                self.capability_event = row.get('pending_event')
+                self.capability_event_model = row.get('pending_event_model')
+            return None
+        previous_event = row.get('pending_event')
+        if isinstance(previous_event, str) and previous_event and event not in previous_event:
+            event = previous_event + '\n' + event
+        row[flag] = True
+        row['pending_event'] = event
+        row['pending_event_model'] = event
+        self._record_update(row, event)
+        save_capabilities(self.cap_path, row)
+        self.capability_event = event
+        self.capability_event_model = event
+        return True
+
     @capability_transaction
     def announce_autonomy(self):
         if getattr(self, 'cap_path', None) is None:
             return
         try:
-            row = json.loads(self.cap_path.read_text(encoding='utf-8')) if self.cap_path.exists() else {}
-            if not isinstance(row, dict):
-                raise ValueError('invalid capability record')
-            if row.get('autonomy_announced'):
-                return
-            event = ('Capability update: autonomous activity is enabled: you will wake on the configured schedule and may act or '
-                     'choose not to. If send_message is available, you may send up to three chat messages per wake, or none.')
-            previous_event = row.get('pending_event')
-            if isinstance(previous_event, str) and previous_event and event not in previous_event:
-                event = previous_event + '\n' + event
-            row['autonomy_announced'] = True
-            row['pending_event'] = event
-            row['pending_event_model'] = event
-            self._record_update(row, event)
-            save_capabilities(self.cap_path, row)
-            self.capability_event = event
-            self.capability_event_model = row['pending_event_model']
+            self._announce_once(
+                'autonomy_announced',
+                'Capability update: autonomous activity is enabled: you will wake on the configured schedule and may act or '
+                'choose not to. If send_message is available, you may send up to three chat messages per wake, or none.',
+                refresh_when_announced=False)
         except Exception as exc:
             self.enabled = False
             raise UserError('能力清单无法更新，未开启自主活动；请保留 data 文件夹。') from exc
@@ -477,24 +487,11 @@ class FilesystemTools:
         if getattr(self, 'cap_path', None) is None:
             return
         try:
-            row = json.loads(self.cap_path.read_text(encoding='utf-8')) if self.cap_path.exists() else {}
-            if row.get('long_tasks_announced'):
-                self.capability_event = row.get('pending_event')
-                self.capability_event_model = row.get('pending_event_model')
-                return
-            event = ('Capability update: long-task tools are available to save one active task, record confirmed '
-                     'progress and next steps, and continue after autonomous activity or a service restart. '
-                     'Existing budgets, tool permissions, and approval rules still apply.')
-            previous_event = row.get('pending_event')
-            if isinstance(previous_event, str) and previous_event and event not in previous_event:
-                event = previous_event + '\n' + event
-            row['long_tasks_announced'] = True
-            row['pending_event'] = event
-            row['pending_event_model'] = event
-            self._record_update(row, event)
-            save_capabilities(self.cap_path, row)
-            self.capability_event = event
-            self.capability_event_model = row['pending_event_model']
+            self._announce_once(
+                'long_tasks_announced',
+                'Capability update: long-task tools are available to save one active task, record confirmed '
+                'progress and next steps, and continue after autonomous activity or a service restart. '
+                'Existing budgets, tool permissions, and approval rules still apply.')
         except Exception as exc:
             self.enabled = False
             raise UserError('长期任务能力通知无法安全保存，工具已停止；请保留 data 文件夹。') from exc
@@ -504,26 +501,10 @@ class FilesystemTools:
         if getattr(self, 'cap_path', None) is None:
             return
         try:
-            row = json.loads(self.cap_path.read_text(encoding='utf-8')) if self.cap_path.exists() else {}
-            if not isinstance(row, dict):
-                raise ValueError('invalid capability record')
-            if row.get('photo_input_announced'):
-                self.capability_event = row.get('pending_event')
-                self.capability_event_model = row.get('pending_event_model')
-                return
-            event = ('Capability update: Lan can now send you photos in chat; you see the newest one '
-                     'directly. Older photos appear as [Lan sent a photo].')
-            previous_event = row.get('pending_event')
-            if isinstance(previous_event, str) and previous_event and event not in previous_event:
-                event = previous_event + '\n' + event
-            row['photo_input_announced'] = True
-            row['pending_event'] = event
-            row['pending_event_model'] = event
-            self._record_update(row, event)
-            save_capabilities(self.cap_path, row)
-            self.capability_event = event
-            self.capability_event_model = event
-            return True
+            return self._announce_once(
+                'photo_input_announced',
+                'Capability update: Lan can now send you photos in chat; you see the newest one '
+                'directly. Older photos appear as [Lan sent a photo].')
         except Exception:
             return False
 
@@ -532,28 +513,11 @@ class FilesystemTools:
         if getattr(self, 'cap_path', None) is None:
             return
         try:
-            row = json.loads(self.cap_path.read_text(encoding='utf-8')) if self.cap_path.exists() else {}
-            if not isinstance(row, dict):
-                raise ValueError('invalid capability record')
-            if row.get('voice_input_announced'):
-                self.capability_event = row.get('pending_event')
-                self.capability_event_model = row.get('pending_event_model')
-                return
-            event = ('Capability update: Lan can now send you voice messages; you receive them as '
-                     '[voice message] followed by the transcript.')
-            previous_event = row.get('pending_event')
-            if isinstance(previous_event, str) and previous_event and event not in previous_event:
-                event = previous_event + '\n' + event
-            row['voice_input_announced'] = True
-            row['pending_event'] = event
-            row['pending_event_model'] = event
-            self._record_update(row, event)
-            save_capabilities(self.cap_path, row)
-            self.capability_event = event
-            self.capability_event_model = event
-            return True
-        except Exception as exc:
-            self.voice_notice_error = str(exc)
+            return self._announce_once(
+                'voice_input_announced',
+                'Capability update: Lan can now send you voice messages; you receive them as '
+                '[voice message] followed by the transcript.')
+        except Exception:
             return False
 
     @capability_transaction
@@ -584,26 +548,10 @@ class FilesystemTools:
         if getattr(self, 'cap_path', None) is None:
             return
         try:
-            row = json.loads(self.cap_path.read_text(encoding='utf-8')) if self.cap_path.exists() else {}
-            if not isinstance(row, dict):
-                raise ValueError('invalid capability record')
-            if row.get('voice_output_announced'):
-                self.capability_event = row.get('pending_event')
-                self.capability_event_model = row.get('pending_event_model')
-                return
-            event = ('Capability update: You can now send a message as a voice message in your own voice '
-                     'by calling send_message with voice: true.')
-            previous_event = row.get('pending_event')
-            if isinstance(previous_event, str) and previous_event and event not in previous_event:
-                event = previous_event + '\n' + event
-            row['voice_output_announced'] = True
-            row['pending_event'] = event
-            row['pending_event_model'] = event
-            self._record_update(row, event)
-            save_capabilities(self.cap_path, row)
-            self.capability_event = event
-            self.capability_event_model = event
-            return True
+            return self._announce_once(
+                'voice_output_announced',
+                'Capability update: You can now send a message as a voice message in your own voice '
+                'by calling send_message with voice: true.')
         except Exception:
             return False
 
