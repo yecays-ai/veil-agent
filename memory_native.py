@@ -11,6 +11,7 @@ import hashlib
 import re
 import uuid
 
+from agent_types import UserError
 from capability_state import capability_lock, save_capabilities
 from memory_agent import ordinary_hits, MemoryToolError, vault_path as role_vault_path
 
@@ -99,7 +100,6 @@ class NativeMemoryTools:
             if hasattr(memory.backend, 'list_tools') else {}
         missing = set(OMBRE_TOOLS) - set(available) if hasattr(memory.backend, 'list_tools') else set()
         if missing:
-            from veil_agent import UserError
             raise UserError('Ombre 缺少本工单要求的工具：' + '、'.join(sorted(missing)))
         self.ombre_tools = {name: available[name] for name in OMBRE_TOOLS if name in available}
         model_tools = [trace_tool_for_model(tool) if name == 'trace' else tool
@@ -135,7 +135,6 @@ class NativeMemoryTools:
                     files.capability_event = row.get('pending_event')
                     files.capability_event_model = row.get('pending_event_model')
             except Exception as exc:
-                from veil_agent import UserError
                 raise UserError('The memory capability manifest could not be saved safely, so memory tools were stopped.') from exc
 
     def handles(self, name):

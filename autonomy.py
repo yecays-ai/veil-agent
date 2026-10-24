@@ -5,7 +5,7 @@ import json
 import os
 import time
 
-from veil_agent import (AUTONOMY_WAKE, BudgetExceeded, RequestFailed, TooLong, UserError, now)
+from agent_types import AUTONOMY_WAKE, BudgetExceeded, RequestFailed, TooLong, UserError, now
 
 
 MAX_RUNTIME_SECONDS = 10 * 60
