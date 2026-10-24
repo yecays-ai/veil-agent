@@ -5,12 +5,12 @@
 ## 当前目标与现状
 
 - PR #138（工单 094）已合并到 `main`，最新提交为 `94bdc35`；本地已拉取远端引用。
-- 工单 095「桌面消息操作与 Lucide 图标」在独立 worktree `E:\Peter-Agent\VEIL\worktrees\095-message-actions-lucide`、分支 `ticket/095-message-actions-lucide` 开发。尚未推送，不存在 PR。
+- 工单 095「桌面消息操作与 Lucide 图标」在独立 worktree `E:\Peter-Agent\VEIL\worktrees\095-message-actions-lucide`、分支 `ticket/095-message-actions-lucide` 开发。PR #139 已开启，尚未合并。
 - 旧版源码已核实：菜单按角色/消息类型显示操作；用户撤回有两分钟期限；重新生成按整轮回复处理。桌面现有聊天记录保存在 Agent `chat.jsonl`，媒体通过角色媒体索引引用。
 
 ## 下一步
 
-本地实现、语法检查、补丁格式检查及隔离演示截图已完成。把截图交 Lan 审阅；收到同意后再复核完整变更、提交并推送单一分支、创建 PR。
+截图验收后已提交并推送单一分支、创建 PR #139。首轮 CI 中 Windows 桌面和依赖安全工作流通过；Tests 工作流暴露 4 项回归（两项 Mock 兼容问题、队列输入断言和工具数量断言）。修复已在分支待推；对应四项本地回归测试通过，等待下一轮 CI。
 
 ## 本次实现补充
 
@@ -29,5 +29,6 @@
 ## 未验证项
 
 - 当前截图用合成对话在 Chrome 中加载桌面聊天页、正式 CSS 和菜单逻辑渲染；未启动打包 Electron 程序。
-- 自动化测试和真实 Windows 消息操作验收尚未运行；不宣称工单已完成。
-- 用户要求先审阅截图，明确同意后才推送分支或创建 PR。
+- 首轮完整 CI 的 Tests 工作流失败；四项对应本地回归已通过，修复提交及 CI 重跑待完成。
+- 打包 Electron 和真实 Windows 消息操作验收尚未完成；不宣称工单已完成。
+- 截图已获用户同意并已推送；PR #139 尚未合并。

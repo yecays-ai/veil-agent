@@ -1411,7 +1411,8 @@ class Chat:
             self.pending_capability_event = self.tools.capability_event
             self.pending_capability_event_model = capability_model_notice(self.tools)
         recalled = self.memory.context(text) if self.memory else []
-        self.turn_memory_refs = list(getattr(self.memory, 'last_context_refs', [])) if self.memory else []
+        memory_refs = getattr(self.memory, 'last_context_refs', []) if self.memory else []
+        self.turn_memory_refs = list(memory_refs) if isinstance(memory_refs, list) else []
         autonomy_handoff_id = None
         if not autonomy:
             # Ticket 094: the last activity record is given once after a wake; afterwards Peter
