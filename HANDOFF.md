@@ -2,18 +2,16 @@
 
 ## 当前进度
 
-- 工单 097「醒来的时间是 Peter 自己的」已在分支 `ticket/097-wake-is-his-time`、独立 worktree `E:\Peter-Agent\VEIL\worktrees\097-wake-is-his-time` 完成实现和定向回归；PR [#143](https://github.com/yecays-ai/veil-agent/pull/143) 已创建，等待检查与 Lan 验收。
-- 基线是最新 `main` `a955622`（PR #142 / 工单 098 已合并）。
-- `autonomy.py` 只替换唤醒提示指定三句；`tests/test_autonomy.py` 覆盖新的提示语和四行摘要约定。
-- 自主活动测试 26 项通过。PR #143 的 Linux/Windows Python 3.11/3.12 矩阵、审计、扫描均通过；Cubic 检查为 neutral。尚未进行 Peter 在 Windows 打包程序中的两天体验。
-- 097 不修改权限/预算/上限、活动记录或私人文件、人设、记忆。后续工单 098–101 不在本分支实现。
+- 097 已合并（#143），098 邮件已合并（#142，邮箱 11-07 后才能验收）。
+- 102 QQ 由 Claude 在分支 `ticket/102-qq-with-lan` 实现：`away_bridge.py`（通用 `AwayBridge`：渠道消息进同一段聊天、本轮回复走原渠道、`send_message(<渠道>=true)` 主动发），`email_channel.py` 改为实现这个接口，`qq_channel.py`（`QQChannel` + `QQWindow`，uiautomation，Windows 才启用）。
+- 新依赖 `uiautomation==2.0.29`（及 `comtypes==1.4.17`），只在 Windows 安装。
+- 测试：`tests/test_email_channel.py`、`tests/test_qq_channel.py` 通过（QQ 窗口用假对象）。真实 QQ 窗口操作只能在 Lan 的 Windows 上验收。
 
 ## 下一个窗口第一步
 
-等 Lan 按 `STATUS.md` 完成体验并验收；不要合并，除非 Lan 明确验收并授权。若 Lan 提出实质问题，再按新证据处理并更新状态。
+102 合并后请 Lan 按工单验收。若 QQ 升级后找不到输入框/消息，先改 `qq_channel.py` 顶部的类名常量（来源 qq-operations 的 `qq_config.ps1`）。101 做完后，邮件和 QQ 回复要带上附件。
 
-## 仍然适用的边界
+## 边界
 
-- 正式目录 `E:\Peter-Agent\VEIL\veil-agent` 保持在 `main`，本任务只在独立 worktree 开发。
-- Peter 的说话方式只由本机人设决定；提示中不添加个性或关系设定。
-- 自主提示只引导选择，不授予工具权限；实际权限由程序控制。
+- 不注入 QQ、不用协议；只在 Lan 两分钟没碰电脑且前台不是全屏程序时操作窗口；打字前核对收件人。
+- 授权码和 Lan 的 QQ 名字只在本机 `.env`。

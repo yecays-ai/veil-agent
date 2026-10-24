@@ -75,14 +75,19 @@ SEND_MESSAGE = {'type': 'function', 'function': {
 }}
 
 
-def send_message_schema(voice=False, email=False):
+AWAY_CHANNEL_PARAMETERS = {
+    'email': ('true also sends this message to Lan by email, for when she is away from the computer. '
+              'Messages in the same turn are sent together as one email.'),
+    'qq': ('true also sends this message to Lan on QQ from your own QQ account, for when she is away '
+           'from the computer; it goes out once she has not used the computer for a little while.'),
+}
+
+
+def send_message_schema(voice=False, channels=()):
     schema = json.loads(json.dumps(SEND_MESSAGE))
-    if email:
-        schema['function']['parameters']['properties']['email'] = {
-            'type': 'boolean',
-            'description': ('true also sends this message to Lan by email, for when she is away from the computer. '
-                            'Messages in the same turn are sent together as one email.'),
-        }
+    for name in channels:
+        schema['function']['parameters']['properties'][name] = {
+            'type': 'boolean', 'description': AWAY_CHANNEL_PARAMETERS[name]}
     if voice:
         schema['function']['parameters']['properties']['voice'] = {
             'type': 'boolean',
@@ -295,6 +300,7 @@ class Character:
     voice: dict = None
     profile: dict = None
     email: dict = None
+    qq: dict = None
 
 
 def positive_int(value):
@@ -406,10 +412,16 @@ def load_character(root, character_id):
                      'smtp_port': positive_int(email.get('smtp_port', 465)),
                      'imap_host': str(email.get('imap_host', 'imap.qq.com')),
                      'imap_port': positive_int(email.get('imap_port', 993))}
+        qq = cfg.get('qq')
+        if qq is not None:
+            qq = {'enabled': qq.get('enabled', False) is True,
+                  'poll_seconds': positive_int(qq.get('poll_seconds', 20)),
+                  'idle_seconds': positive_int(qq.get('idle_seconds', 120)),
+                  'daily_max_sent': positive_int(qq.get('daily_max_sent', 100))}
         return Character(character_id, str(cfg['name']), persona,
                          positive_int(cfg.get('history_rounds', 20)),
                          positive_int(cfg.get('max_output_tokens', 1024)), provider, cfg['provider'],
-                         memory, tools, autonomy, voice, profile, email)
+                         memory, tools, autonomy, voice, profile, email, qq)
     except UserError:
         raise
     except (OSError, KeyError, ValueError, TypeError, ArithmeticError) as exc:
@@ -921,7 +933,8 @@ class Chat:
         self.last_tool_summaries = []
         self.autonomy_interrupted = False
         self.runtime_monitor = runtime_monitor
-        self.email_requested = None   # ticket 098: set by the desktop service when email is configured
+        # Tickets 098/102: channel name -> callable(text), set by the desktop service for configured channels.
+        self.away_channels = {}
 
     def tool_schemas(self):
         from tools_agent import permitted_tools
@@ -929,7 +942,7 @@ class Chat:
             'name': tool.name, 'description': tool.description, 'parameters': tool.inputSchema}}
             for tool in self.long_tasks.tools] if self.task_tools_enabled else []
         existing_tools = permitted_tools(self.tools.tools if self.tools else [])
-        messaging = [send_message_schema(self.voice is not None, self.email_requested is not None),
+        messaging = [send_message_schema(self.voice is not None, tuple(self.away_channels)),
                      RECALL_MESSAGE] if (
             (self.cfg.tools and self.cfg.tools.get('enabled', True))
             or (self.tools and self.tools.tools)) else []
@@ -1076,15 +1089,15 @@ class Chat:
         except (ValueError, TypeError):
             args = None
         allowed = {'text', 'voice'} if self.voice is not None else {'text'}
-        if self.email_requested is not None:
-            allowed.add('email')
+        allowed.update(self.away_channels)
         if (not isinstance(args, dict) or not set(args).issubset(allowed) or 'text' not in args or
                 not isinstance(args['text'], str) or not args['text'].strip()):
             return 'send_message requires non-empty text.', '被拒绝', 'send_message'
         if 'voice' in args and type(args['voice']) is not bool:
             return 'send_message voice must be a boolean.', '被拒绝', 'send_message'
-        if 'email' in args and type(args['email']) is not bool:
-            return 'send_message email must be a boolean.', '被拒绝', 'send_message'
+        for name in self.away_channels:
+            if name in args and type(args[name]) is not bool:
+                return f'send_message {name} must be a boolean.', '被拒绝', 'send_message'
         text = args['text']
         autonomy = self.autonomy_mode
         gate = self.autonomy_message_lock if autonomy else None
@@ -1145,14 +1158,16 @@ class Chat:
                 if media and not committed:
                     self.voice.discard(media)
                 raise
-        emailed = args.get('email') is True and self.email_requested is not None
-        if emailed:
-            self.email_requested(displayed_text)
+        forwarded = [name for name in self.away_channels if args.get(name) is True]
+        for name in forwarded:
+            self.away_channels[name](displayed_text)
         if voice_failure:
             return (f'Voice generation failed: {voice_failure} The message was sent as text instead.',
                     '成功', 'send_message（语音失败，已发文字）')
-        return (('Sent as a voice message.' if media else 'Sent.')
-                + (' It will also be emailed to Lan when this turn ends.' if emailed else '')), '成功', 'send_message'
+        result = 'Sent as a voice message.' if media else 'Sent.'
+        if forwarded:
+            result += f' It will also go to Lan by {" and ".join(forwarded)} when this turn ends.'
+        return result, '成功', 'send_message'
 
     def start_new_conversation(self):
         # Cursor only: old messages stay on disk.

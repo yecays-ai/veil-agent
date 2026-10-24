@@ -165,7 +165,7 @@ class Hub:
         self.activity_transition = lambda enabled: self.activity.set(enabled)
         self.autonomy_busy = False
         self.autonomy_interrupted = threading.Event()
-        self.email = None   # ticket 098 EmailBridge, when email is configured
+        self.away = []   # tickets 098/102: an AwayBridge per configured channel (email, QQ)
         self.media_root = Path(media_root) if media_root else None
         self.media_index = {}
         self.pending_media = OrderedDict()
@@ -622,8 +622,8 @@ class Hub:
             self.push('reset', text)
         elif text.startswith(prefix):
             voice = self.register_voice_media(media)
-            if self.email is not None:
-                self.email.assistant_message(text[len(prefix):])
+            for bridge in self.away:
+                bridge.assistant_message(text[len(prefix):])
             self.push('assistant', text[len(prefix):],
                       **({'media': voice} if voice else {}),
                       **({'message_id': message_id} if isinstance(message_id, str) else {}),
@@ -667,11 +667,11 @@ class Hub:
             self._publish_output(output)
 
     def input_fn(self, _prompt=''):
-        if self.email is None:
-            return self._input_fn()
-        self.email.turn_ended()
+        for bridge in self.away:
+            bridge.turn_ended()
         item = self._input_fn()
-        self.email.turn_started(item)
+        for bridge in self.away:
+            bridge.turn_started(item)
         return item
 
     def _input_fn(self):
@@ -1267,7 +1267,7 @@ def start_server(hub, token, port):
     return server
 
 
-def serve_chat(chat, hub, email=None):
+def serve_chat(chat, hub, channels=()):
     hub.chat = chat
     def publish_recalled(row):
         hub.push('message_recalled', '[Message recalled]', message_id=row['message_id'])
@@ -1330,14 +1330,16 @@ def serve_chat(chat, hub, email=None):
         if (media.get('kind') == 'voice' and media['id'] not in completed_voice_ids
                 and (media.get('request_id') == 'voice-' + media['id'] or media.get('delivery_pending'))):
             hub.push('user', media.get('transcript') or '', time=now(), history=True, media=dict(media))
-    if email is not None:
-        from email_channel import EmailBridge
-        hub.email = EmailBridge(email, hub, chat.cfg.name)
-        chat.email_requested = hub.email.email_requested
-        announce_email = getattr(files, 'announce_email', None)
-        if callable(announce_email):
-            if announce_email() is False:
-                hub.output('邮件能力通知暂时无法保存；聊天仍可使用，下次启动会重试。')
+    if channels:
+        from away_bridge import AwayBridge
+    for channel in channels:
+        bridge = AwayBridge(channel, hub)
+        hub.away.append(bridge)
+        chat.away_channels[channel.name] = bridge.requested
+        announce = getattr(files, 'announce_' + channel.name, None)
+        if callable(announce):
+            if announce() is False:
+                hub.output(f'{channel.label}能力通知暂时无法保存；聊天仍可使用，下次启动会重试。')
             chat.pending_capability_event = getattr(chat.tools, 'capability_event', None)
             chat.pending_capability_event_model = getattr(chat.tools, 'capability_event_model', None)
     hub.autonomy = AutonomyController(chat, hub)
@@ -1347,8 +1349,8 @@ def serve_chat(chat, hub, email=None):
     hub.current_capabilities = chat.current_capability_snapshot
     if chat.runtime_monitor:
         hub.runtime_status = lambda: chat.runtime_monitor.snapshot(chat.long_tasks, chat.tools)
-    if hub.email is not None:
-        hub.email.start()
+    for bridge in hub.away:
+        bridge.start()
     try:
         run_chat(chat, input_fn=hub.input_fn, output=hub.output, drop=lambda: False,
                  activity=hub.activity, autonomy=hub.autonomy)
@@ -1404,7 +1406,9 @@ def main(argv=None):
             client, model = make_model(ROOT, cfg)
             voice = make_voice(ROOT, cfg, store, budget)
             from email_channel import EmailChannel
-            email = EmailChannel.from_env(ROOT, cfg, store.root)
+            from qq_channel import QQChannel
+            channels = [channel for channel in (EmailChannel.from_env(ROOT, cfg, store.root),
+                                                QQChannel.from_env(ROOT, cfg, store.root)) if channel]
             activity = ActivityState(store.root / cfg.id / 'resident-state.json')
             from runtime_monitor import RuntimeMonitor
             runtime_monitor = RuntimeMonitor(store, cfg.id, activity)
@@ -1432,13 +1436,13 @@ def main(argv=None):
                                     hub.memory_tools = tools.native
                                     serve_chat(Chat(cfg, store, budget, model, memory, tools,
                                                     approval=hub.approval, output=hub.output,
-                                                    voice=voice, runtime_monitor=runtime_monitor), hub, email)
+                                                    voice=voice, runtime_monitor=runtime_monitor), hub, channels)
                                 for notice in memory.notices():
                                     hub.output(notice)
                         else:
                             serve_chat(Chat(cfg, store, budget, model, tools=tools,
                                             approval=hub.approval, output=hub.output,
-                                            voice=voice, runtime_monitor=runtime_monitor), hub, email)
+                                            voice=voice, runtime_monitor=runtime_monitor), hub, channels)
             except UserError as exc:
                 hub.push('error', str(exc))
                 save_startup_error(error_path, str(exc))
