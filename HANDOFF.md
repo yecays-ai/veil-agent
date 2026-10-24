@@ -2,7 +2,7 @@
 
 ## 当前进度
 
-- 当前工作：工单 099，分支 `ticket/099-web-search-and-read`，基于最新 `main` `85b2491`。联网搜索和网页只读已实现；专项测试 10 项通过。PR 创建后已按 Lan 要求触发 CodeRabbit 评论，收到评论即停止本工单，不合并。
+- 当前工作：工单 099，PR #148，分支 `ticket/099-web-search-and-read`，基于最新 `main` `85b2491`。联网搜索和网页只读已实现；专项测试 10 项通过。接下来在 PR 对话发起 CodeRabbit 审查，收到评论即停止本工单，不合并。
 - 099 的 `ddgs==9.16.1` DuckDuckGo 搜索已在当前 Windows 环境验证；官方 `mcp-server-fetch==2026.10.19` 也在隔离环境成功启动并读取公开页面。Lan 尚未体验验收。详情和步骤见 `docs/tickets/099-web-search-and-read.md` 与 `STATUS.md`。
 
 - 097 已合并（#143），098 邮件已合并（#142，邮箱 11-07 后才能验收）。
@@ -12,7 +12,7 @@
 
 ## 099 本窗口停止点
 
-等待并记录 CodeRabbit 对 099 PR 的评论；不触发 Cubic、不合并 PR，也不开始其他工单。之后交 Lan 按 `STATUS.md` 的 099 步骤进行体验验收。
+在 PR #148 发起 CodeRabbit 审查并等待其评论；评论到达后停止，不触发 Cubic、不合并 PR，也不开始其他工单。之后交 Lan 按 `STATUS.md` 的 099 步骤进行体验验收。
 
 ## 其他已完成工单交接
 

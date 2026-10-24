@@ -14,11 +14,11 @@
 - 只调整 `autonomy.py` 的三句唤醒提示：Peter 可以依自己的兴趣和已有经历行动、联系 Lan、休息或什么都不做；四行活动摘要明确是留给下次自己的笔记，而不是汇报。
 - 程序既有的安全权限、每日预算、工具/步数与消息上限、自主活动记录和摘要解析均保留。没有触碰 Peter 的私人文件、人设或记忆。
 - 本地自主活动回归测试 26 项通过。PR #143 的 Linux/Windows Python 3.11/3.12 矩阵、审计和扫描均通过；Cubic 检查为 neutral。打包程序的真实 Windows 体验待 Lan 验收。
-- 工单 099「Peter 能上网搜索和读网页」已在分支 `ticket/099-web-search-and-read` 实现，PR 待开：Peter 的聊天和自主活动可直接使用只读 `web_search`、`web_fetch`，页面内容标明为不可信数据，搜索和页面结果按现有字节上限裁剪；限制为公开 HTTP(S)，保留现有工具权限和预算。DuckDuckGo 与官方 fetch MCP 均已在当前 Windows 环境做连接验证，fetch 依赖单独锁定，不升级主程序 MCP。专项单测 10 项通过；待 CodeRabbit 审查和 Lan 体验验收。
+- 工单 099「Peter 能上网搜索和读网页」已在分支 `ticket/099-web-search-and-read` 实现，PR #148 等待 CodeRabbit 审查：Peter 的聊天和自主活动可直接使用只读 `web_search`、`web_fetch`，页面内容标明为不可信数据，搜索和页面结果按现有字节上限裁剪；限制为公开 HTTP(S)，保留现有工具权限和预算。DuckDuckGo 与官方 fetch MCP 均已在当前 Windows 环境做连接验证，fetch 依赖单独锁定，不升级主程序 MCP。专项单测 10 项通过；Lan 体验待验收。
 
 ## 下一步
 
-- 工单 099 等待 PR 中的 CodeRabbit 评论；之后由 Lan 验收。其他工单不在本次范围。
+- 工单 099 的 PR #148 等待 CodeRabbit 评论；之后由 Lan 验收。其他工单不在本次范围。
 
 ## Lan 的体验验收
 
