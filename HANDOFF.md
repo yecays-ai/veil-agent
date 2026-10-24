@@ -2,9 +2,9 @@
 
 ## 当前进度
 
-- 工单 106 在 `ticket/106-activity-window` 本地实现中，基线 `566280d`。尚未 push、尚未开 PR；Lan 要求先看效果图确认。
+- 工单 106 在 `ticket/106-activity-window`，PR #149，基线 `566280d`。Lan 已确认效果图；按 Lan 要求，主动请求 CodeRabbit 审核后停止，由 Lan 自行跟进评论与后续合并。
 - 已完成真实工具开始/结束同 `call_id` 账本、`/api/events` 折叠投影、统一活动时间线与筛选；窗口管理已扩成聊天/活动/记忆/更多四个标签均可同时拖出、独立移动缩放、分别合并与恢复各自模式/位置/尺寸，仍共用同一 `chat.html`。未改能力通知或 Peter 上下文。
-- 自动检查：活动账本 3、Ombre 50、聊天 65、网页/API 54、Autonomy 26、长期任务 20、Desktop 全套 6 均通过；真实 Electron renderer 已分别渲染聊天/活动/记忆/更多独立窗口并截图。下一步交 Lan 确认效果，确认后再提交/push/开 PR。
+- 自动检查：活动账本 3、Ombre 50、聊天 65、网页/API 54、Autonomy 26、长期任务 20、Desktop 全套 6 均通过；真实 Electron renderer 已分别渲染聊天/活动/记忆/更多独立窗口并截图。PR #149 已创建；下一步由 Lan 跟进 CodeRabbit 评论，真实 Windows 手势拖出、合并与重启恢复尚待合并后体验。
 
 - 当前工作：工单 099，PR #148，分支 `ticket/099-web-search-and-read`，基于最新 `main` `85b2491`。联网搜索和网页只读已实现；专项测试 10 项通过。接下来在 PR 对话发起 CodeRabbit 审查，收到评论即停止本工单，不合并。
 - 099 的 `ddgs==9.16.1` DuckDuckGo 搜索已在当前 Windows 环境验证；官方 `mcp-server-fetch==2026.10.19` 也在隔离环境成功启动并读取公开页面。Lan 尚未体验验收。详情和步骤见 `docs/tickets/099-web-search-and-read.md` 与 `STATUS.md`。
