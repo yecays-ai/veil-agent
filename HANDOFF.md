@@ -18,8 +18,8 @@
 
 - 保持聊天存储为现有 `chat.jsonl`，不创建第二套消息数据库；删除与撤回应影响后续模型上下文。
 - 媒体只有在聊天账本中不再引用时才可清理；不触碰无关聊天、记忆、媒体、Persona、密钥或日志。
-- 首轮 PR CI：Windows desktop、dependency security 通过；Tests 的 3.12 Ubuntu 任务报告 2 errors、2 failures，其他矩阵项因 fail-fast 取消。直接相关四项本地回归测试已通过，修复 commit 待推送并等待重跑。
-- 本地完整套件因隔离环境的临时目录和 Windows junction 权限问题未能形成完整结果，不将其记为通过。
+- 首轮 PR CI 的 Tests 暴露两项 Mock 兼容和两项接口断言问题；已在 `9ba9c76` 修复。四项定向本地回归测试通过。
+- 修复后的 push 和 PR Tests 工作流、Windows desktop、dependency security 全部通过；真实 Windows Electron UI 验收仍待完成。
 - 当前可见截图 `C:\Users\Administrator\.codex\visualizations\2026\10\24\01a16dc5-fba8-7a70-860e-48728799f663\message-actions-peter-eight.png` 展示合成对话中 Peter 消息的完整八项菜单；它是页面预览，不代表 Electron 包或真实 Windows 场景通过。
 - 截图是合成对话下的 Chrome 页面预览，不是已打包 Electron 桌面版验收；真实 Windows 场景验收尚未完成。
 - PR #139 已开；未合并。真实 Windows UI 场景验收待完成。
