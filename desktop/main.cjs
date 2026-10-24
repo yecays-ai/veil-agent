@@ -6,18 +6,25 @@ const { pathToFileURL } = require('node:url');
 const { connect, validRoot, readEndpoint } = require('./backend.cjs');
 
 let pet, chat, menu, connecting = false, quitting = false, drag, petResize, agentEndpoint, saveTimer, saveChain = Promise.resolve();
+const detachedWindows = new Map(), mergingViews = new Set();
+const VIEW_NAMES = new Set(['chat', 'activity', 'memory', 'more']);
 const settings = { size: 320, theme: 'light' };
 const petURL = pathToFileURL(path.join(__dirname, 'pet.html')).href;
 const chatURL = pathToFileURL(path.join(__dirname, 'chat.html')).href;
+const viewURL = view => `${chatURL}?view=${view}&detached=1`;
 const menuURL = pathToFileURL(path.join(__dirname, 'menu.html')).href;
 function canRequestChatMedia(contents, permission, details, currentChat = chat) {
   const audioOnly = Array.isArray(details?.mediaTypes) && details.mediaTypes.length === 1 && details.mediaTypes[0] === 'audio';
-  return Boolean(currentChat && !currentChat.isDestroyed() && contents === currentChat.webContents && permission === 'media' &&
-    details?.requestingUrl === chatURL && audioOnly);
+  const detachedChat = detachedWindows.get('chat');
+  const allowedWindow = (currentChat && !currentChat.isDestroyed() && contents === currentChat.webContents && details?.requestingUrl === chatURL) ||
+    (detachedChat && !detachedChat.isDestroyed() && contents === detachedChat.webContents && details?.requestingUrl === viewURL('chat'));
+  return Boolean(allowedWindow && permission === 'media' && audioOnly);
 }
 function canCheckChatMedia(contents, permission, details, currentChat = chat) {
-  return Boolean(currentChat && !currentChat.isDestroyed() && contents === currentChat.webContents && permission === 'media' &&
-    details?.mediaType === 'audio' && details?.requestingUrl === chatURL && details?.isMainFrame === true);
+  const detachedChat = detachedWindows.get('chat');
+  const allowedWindow = (currentChat && !currentChat.isDestroyed() && contents === currentChat.webContents && details?.requestingUrl === chatURL) ||
+    (detachedChat && !detachedChat.isDestroyed() && contents === detachedChat.webContents && details?.requestingUrl === viewURL('chat'));
+  return Boolean(allowedWindow && permission === 'media' && details?.mediaType === 'audio' && details?.isMainFrame === true);
 }
 const runtimeDataPath = app.isPackaged
   ? path.join(app.getPath('appData'), 'VEIL Desktop')
@@ -64,6 +71,61 @@ function positionChat() {
   const x = right + c.width <= area.x + area.width ? right : Math.max(area.x, left);
   const y = Math.max(area.y, Math.min(p.y + p.height / 2 - c.height / 2, area.y + area.height - c.height));
   chat.setPosition(...Object.values(clampPosition(x, y, c.width, c.height, area)));
+}
+function detachedViewNames() {
+  return [...detachedWindows].filter(([, win]) => win && !win.isDestroyed()).map(([view]) => view);
+}
+function notifyDetachedViews() {
+  const views = detachedViewNames();
+  for (const win of [chat, ...detachedWindows.values()]) if (win && !win.isDestroyed() && !win.webContents.isLoading())
+    win.webContents.send('view:states', views);
+}
+function restoredWindowBounds(saved, fallback, minimum) {
+  const restored = saved && ['x', 'y', 'width', 'height'].every(key => Number.isFinite(saved[key]));
+  const bounds = restored ? { ...saved, width: Math.max(minimum.width, Math.round(saved.width)),
+    height: Math.max(minimum.height, Math.round(saved.height)) } : { ...fallback };
+  const area = workAreaAt(bounds.x || 0, bounds.y || 0);
+  bounds.width = Math.min(bounds.width, area.width); bounds.height = Math.min(bounds.height, area.height);
+  return { restored, bounds: { ...clampPosition(bounds.x ?? area.x, bounds.y ?? area.y, bounds.width, bounds.height, area),
+    width: bounds.width, height: bounds.height } };
+}
+async function createDetachedWindow(view, point) {
+  if (!VIEW_NAMES.has(view)) return false;
+  const existing = detachedWindows.get(view);
+  if (existing && !existing.isDestroyed()) { existing.showInactive(); return true; }
+  if (!agentEndpoint) return false;
+  const fallbackSize = view === 'chat' ? { width: 520, height: 680 } : { width: 430, height: 680 };
+  const fallback = { x: Number.isFinite(point?.x) ? Math.round(point.x - 170) : 80,
+    y: Number.isFinite(point?.y) ? Math.round(point.y - 35) : 80, ...fallbackSize };
+  const saved = settings.detachedBounds?.[view];
+  const restored = restoredWindowBounds(saved, fallback, { width: 340, height: 420 });
+  const current = new BrowserWindow({ ...restored.bounds, minWidth: 340, minHeight: 420, frame: false,
+    transparent: true, backgroundColor: '#00000000', resizable: true, hasShadow: true,
+    alwaysOnTop: true, skipTaskbar: true, title: `Peter · ${view}`, show: false,
+    webPreferences: { preload: path.join(__dirname, 'desktop-preload.cjs'), contextIsolation: true,
+      nodeIntegration: false, sandbox: true } });
+  detachedWindows.set(view, current); safeContents(current, url => url === viewURL(view));
+  const rememberBounds = () => { settings.detachedBounds ||= {}; settings.detachedBounds[view] = current.getBounds(); saveSoon(); };
+  current.on('move', rememberBounds); current.on('resize', rememberBounds);
+  current.on('closed', () => {
+    if (detachedWindows.get(view) === current) detachedWindows.delete(view);
+    if (!quitting && !mergingViews.has(view)) {
+      settings.detachedViews = (settings.detachedViews || []).filter(item => item !== view); saveSoon(); notifyDetachedViews();
+    }
+  });
+  await current.loadURL(viewURL(view)); settings.detachedViews = [...new Set([...(settings.detachedViews || []), view])];
+  rememberBounds(); current.showInactive(); notifyDetachedViews(); return true;
+}
+async function mergeDetachedWindow(view) {
+  if (!VIEW_NAMES.has(view)) return false;
+  settings.detachedViews = (settings.detachedViews || []).filter(item => item !== view); mergingViews.add(view);
+  try { const win = detachedWindows.get(view); if (win && !win.isDestroyed()) win.destroy(); }
+  finally { mergingViews.delete(view); await save().catch(() => {}); }
+  notifyDetachedViews();
+  if (chat && !chat.isDestroyed()) {
+    chat.show(); chat.webContents.send(view === 'activity' ? 'desktop:show-activity' : view === 'more' ? 'desktop:show-settings' : 'desktop:show-view', view);
+  }
+  return true;
 }
 function createPet(size = settings.size) {
   size = Number.isFinite(size) ? Math.max(160, Math.min(720, Math.round(size))) : 320;
@@ -127,23 +189,34 @@ async function toggleChat() {
     current.on('move', () => { settings.chatBounds = current.getBounds(); saveSoon(); });
     current.on('resize', () => { settings.chatBounds = current.getBounds(); saveSoon(); });
     if (!quitting) { current.show(); current.focus(); }
+    notifyDetachedViews();
+    for (const view of (Array.isArray(settings.detachedViews) ? settings.detachedViews : []).filter(view => VIEW_NAMES.has(view)))
+      await createDetachedWindow(view);
   } catch (error) {
     if (chat && !chat.isDestroyed()) chat.destroy();
     dialog.showErrorBox('VEIL · 暂时无法聊天', error.message);
   } finally { connecting = false; }
 }
 async function showActivity() {
+  const detached = detachedWindows.get('activity');
+  if (detached && !detached.isDestroyed()) { detached.show(); detached.focus(); return; }
   if (!chat || chat.isDestroyed()) await toggleChat();
-  else if (!chat.isVisible()) { chat.show(); chat.focus(); }
+  const restored = detachedWindows.get('activity');
+  if (restored && !restored.isDestroyed()) { restored.show(); restored.focus(); return; }
+  if (chat && !chat.isDestroyed() && !chat.isVisible()) { chat.show(); chat.focus(); }
   if (chat && !chat.isDestroyed()) chat.webContents.send('desktop:show-activity');
 }
 async function showAppearance() {
+  const detached = detachedWindows.get('more');
+  if (detached && !detached.isDestroyed()) { detached.show(); detached.focus(); return; }
   if (!chat || chat.isDestroyed()) await toggleChat();
-  else if (!chat.isVisible()) { chat.show(); chat.focus(); }
+  const restored = detachedWindows.get('more');
+  if (restored && !restored.isDestroyed()) { restored.show(); restored.focus(); return; }
+  if (chat && !chat.isDestroyed() && !chat.isVisible()) { chat.show(); chat.focus(); }
   if (chat && !chat.isDestroyed()) chat.webContents.send('desktop:show-settings');
 }
 async function reconnectChat(event) {
-  if (event && !fromChat(event)) return false;
+  if (event && !(fromChat(event) || detachedViewFromEvent(event) === 'chat')) return false;
   if (connecting) return false;
   if (chat && !chat.isDestroyed()) chat.destroy();
   chat = null;
@@ -177,6 +250,11 @@ async function endpointRequest(pathname, method = 'GET', body) {
 }
 const fromPet = event => pet && !pet.isDestroyed() && event.sender === pet.webContents && event.senderFrame?.url === petURL;
 const fromChat = event => chat && !chat.isDestroyed() && event.sender === chat.webContents && event.senderFrame?.url === chatURL;
+function detachedViewFromEvent(event) {
+  for (const [view, win] of detachedWindows) if (win && !win.isDestroyed() && event.sender === win.webContents && event.senderFrame?.url === viewURL(view)) return view;
+  return null;
+}
+const fromChatPage = event => fromChat(event) || detachedViewFromEvent(event) !== null;
 function allowedChatRequest(pathname, method) {
   if (method === 'GET') {
     let url;
@@ -197,7 +275,12 @@ function allowedChatRequest(pathname, method) {
     '/api/transcribe', '/api/approve', '/api/activity', '/api/exit', '/api/message/action'].includes(pathname);
 }
 ipcMain.handle('chat:request', async (event, pathname, body, timeoutMs) => {
-  if (!fromChat(event) || typeof pathname !== 'string' || !allowedChatRequest(pathname, body ? 'POST' : 'GET'))
+  const detachedView = detachedViewFromEvent(event);
+  const detachedAllowed = !detachedView || detachedView === 'chat' ||
+    (detachedView === 'activity' && ((!body && pathname?.startsWith('/api/events?')) || (body && pathname === '/api/activity'))) ||
+    (detachedView === 'memory' && !body && (pathname?.startsWith('/api/events?') || pathname?.startsWith('/api/memory/'))) ||
+    (detachedView === 'more' && ((!body && pathname?.startsWith('/api/events?')) || (body && pathname === '/api/exit')));
+  if (!fromChatPage(event) || typeof pathname !== 'string' || !allowedChatRequest(pathname, body ? 'POST' : 'GET') || !detachedAllowed)
     return { ok: false, status: 403, data: { error: '请求未允许。' } };
   if (body && (typeof body !== 'object' || Array.isArray(body)))
     return { ok: false, status: 400, data: { error: '无效请求。' } };
@@ -214,7 +297,7 @@ ipcMain.handle('chat:request', async (event, pathname, body, timeoutMs) => {
   } catch (error) { return { ok: false, status: 0, data: { error: error.message || 'Agent 连接中断。' } }; }
 });
 ipcMain.handle('chat:media-url', (event, filename) => {
-  if (!fromChat(event) || !agentEndpoint) throw new Error('请求未允许。');
+  if (!(fromChat(event) || detachedViewFromEvent(event) === 'chat') || !agentEndpoint) throw new Error('请求未允许。');
   if (typeof filename !== 'string' || filename.length > 180 || !/^[A-Za-z0-9_.-]+$/.test(filename) || filename.includes('..'))
     throw new Error('无效的媒体文件名。');
   const token = new URL(agentEndpoint.url).searchParams.get('t');
@@ -226,7 +309,7 @@ function backgroundFile() {
   return backgroundMime[ext] ? { ext, mime: backgroundMime[ext], path: path.join(app.getPath('userData'), `appearance-background${ext}`) } : null;
 }
 ipcMain.handle('chat:choose-background', async event => {
-  if (!fromChat(event)) return null;
+  if (!(fromChat(event) || detachedViewFromEvent(event) === 'more')) return null;
   const choice = await dialog.showOpenDialog(chat, { title: '选择 VEIL 背景图片', properties: ['openFile'], filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp'] }] });
   if (choice.canceled || !choice.filePaths[0]) return null;
   const source = choice.filePaths[0], ext = path.extname(source).toLowerCase(), mime = backgroundMime[ext];
@@ -240,38 +323,49 @@ ipcMain.handle('chat:choose-background', async event => {
   return { name: path.basename(source), dataUrl: `data:${mime};base64,${(await fs.readFile(destination)).toString('base64')}` };
 });
 ipcMain.handle('chat:get-background', async event => {
-  if (!fromChat(event)) return null;
+  if (!fromChatPage(event)) return null;
   const stored = backgroundFile(); if (!stored) return null;
   try { return `data:${stored.mime};base64,${(await fs.readFile(stored.path)).toString('base64')}`; }
   catch { return null; }
 });
 ipcMain.handle('chat:clear-background', async event => {
-  if (!fromChat(event)) return false;
+  if (!(fromChat(event) || detachedViewFromEvent(event) === 'more')) return false;
   for (const ext of Object.keys(backgroundMime)) {
     await fs.rm(path.join(app.getPath('userData'), `appearance-background${ext}`), { force: true });
   }
   settings.backgroundExt = null; await save(); return true;
 });
-ipcMain.handle('chat:pet-size', event => fromChat(event) && pet && !pet.isDestroyed() ? pet.getBounds().width : settings.size);
+ipcMain.handle('chat:pet-size', event => fromChatPage(event) && pet && !pet.isDestroyed() ? pet.getBounds().width : settings.size);
 ipcMain.handle('chat:save-theme', (event, theme) => {
-  if (!fromChat(event) || !['light', 'dark'].includes(theme)) return false;
+  if (!fromChatPage(event) || !['light', 'dark'].includes(theme)) return false;
   settings.theme = theme; saveSoon();
   if (menu && !menu.isDestroyed() && !menu.webContents.isLoading()) menu.webContents.send('menu:theme', theme);
   return true;
 });
 ipcMain.handle('chat:set-pet-size', (event, value) => {
-  if (!fromChat(event) || !Number.isFinite(value)) return false;
+  if (!(fromChat(event) || detachedViewFromEvent(event) === 'more') || !Number.isFinite(value)) return false;
   createPet(Math.max(160, Math.min(720, Math.round(value))));
   saveSoon();
   return true;
 });
 ipcMain.handle('chat:open-memory', async event => {
-  if (!fromChat(event)) return false;
+  if (!(fromChat(event) || ['memory', 'more'].includes(detachedViewFromEvent(event)))) return false;
   const state = await endpointRequest('/api/events?after=0'); if (!state.memory_panel_url) return false;
   const url = new URL(state.memory_panel_url);
   if (!['127.0.0.1', 'localhost'].includes(url.hostname)) return false;
   await shell.openExternal(url.href); return true;
 });
+ipcMain.handle('view:detach', async (event, view, point) => {
+  if (!fromChat(event) || !VIEW_NAMES.has(view) || !point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return false;
+  return createDetachedWindow(view, point);
+});
+ipcMain.handle('view:merge', (event, view) => detachedViewFromEvent(event) === view ? mergeDetachedWindow(view) : false);
+ipcMain.handle('view:focus', (event, view) => {
+  const win = detachedWindows.get(view);
+  if (!fromChat(event) || !VIEW_NAMES.has(view) || !win || win.isDestroyed()) return false;
+  win.show(); win.focus(); return true;
+});
+ipcMain.handle('view:states', event => fromChatPage(event) ? detachedViewNames() : []);
 ipcMain.on('desktop:collapse', () => { if (chat) chat.hide(); });
 ipcMain.handle('chat:reconnect', event => reconnectChat(event));
 ipcMain.on('desktop:expand', () => { if (chat && !chat.isDestroyed()) { chat.setSize(760, 780); positionChat(); } });
@@ -345,6 +439,11 @@ else {
           await save().catch(() => {});
         } catch {}
       }
+    }
+    if (settings.activityDetached === true) {
+      settings.detachedViews = [...new Set([...(Array.isArray(settings.detachedViews) ? settings.detachedViews : []), 'activity'])];
+      settings.detachedBounds ||= {};
+      if (settings.activityBounds && !settings.detachedBounds.activity) settings.detachedBounds.activity = settings.activityBounds;
     }
     if (!backgroundFile()) settings.backgroundExt = null;
     const { session } = require('electron');

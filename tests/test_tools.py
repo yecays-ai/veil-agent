@@ -473,6 +473,17 @@ max_result_bytes = 200
     def tool_call(self, name, args, call_id):
         return SimpleNamespace(id=call_id, function=SimpleNamespace(name=name, arguments=args))
 
+    def assert_completed_tool_calls(self, rows, expected_calls):
+        calls = {}
+        for row in rows:
+            call_id = row.get('call_id')
+            self.assertTrue(call_id, 'tool activity entries must share a call_id')
+            calls.setdefault(call_id, []).append(row)
+        self.assertEqual(len(calls), expected_calls)
+        for call_id, events in calls.items():
+            with self.subTest(call_id=call_id):
+                self.assertEqual([event['state'] for event in events], ['进行中', '成功'])
+
     def test_chat_can_grant_then_append_without_second_terminal_prompt(self):
         self.cfg.tools['persistent_append_file'] = 'growth-journal.md'
         tools = FilesystemTools.__new__(FilesystemTools)
@@ -498,8 +509,7 @@ max_result_bytes = 200
         self.assertEqual(chat.send('Please continue the journal'), 'Second entry added.')
         self.assertEqual(target.read_text(encoding='utf-8'), 'first\n## 2026-10-20\nsecond')
         approval.assert_called_once()
-        self.assertEqual([row['state'] for row in self.store.read('test/tools.jsonl')],
-                         ['成功', '成功'])
+        self.assert_completed_tool_calls(self.store.read('test/tools.jsonl'), 2)
 
     def test_first_self_preview_shows_tools_and_capability_notice(self):
         tools = SimpleNamespace(
@@ -529,7 +539,7 @@ max_result_bytes = 200
         chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=output.append)
         self.assertEqual(chat.send('summarize both'), 'Here is the summary.')
         self.assertEqual([row['role'] for row in self.store.read('test/chat.jsonl')], ['user', 'assistant'])
-        self.assertEqual(len(self.store.read('test/tools.jsonl')), 2)
+        self.assert_completed_tool_calls(self.store.read('test/tools.jsonl'), 2)
         self.assertEqual(len(model.call_args_list), 2)
         second_messages = model.call_args_list[1].args[0]
         self.assertIn('reasoning_content', second_messages[-3])
@@ -639,7 +649,7 @@ max_result_bytes = 200
         self.assertNotIn('BROKEN', serialized)
         self.assertIn('kept', serialized)
         self.assertEqual(chat.tool_stop_reason, '')
-        self.assertEqual([r['state'] for r in self.store.read('test/tools.jsonl')], ['成功', '成功'])
+        self.assert_completed_tool_calls(self.store.read('test/tools.jsonl'), 2)
         self.assertEqual(self.budget.totals()[2], 0)
 
     def test_output_recovery_respects_remaining_steps(self):

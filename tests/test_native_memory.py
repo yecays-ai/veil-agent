@@ -200,7 +200,7 @@ class NativeMemoryTests(unittest.TestCase):
         self.assertTrue(any('hold' in line and '新建：Blue lamp' in line and '成功' in line
                             for line in self.output))
         rows = self.store.read('fake/tools.jsonl')
-        hold_event = next(row for row in rows if row.get('tool') == 'hold')
+        hold_event = next(row for row in rows if row.get('tool') == 'hold' and row.get('state') != '进行中')
         self.assertEqual((hold_event['tool'], hold_event['state']), ('hold', '成功'))
         capability_events = [row for row in rows if row.get('kind') == 'capability']
         self.assertEqual(capability_events, [])
