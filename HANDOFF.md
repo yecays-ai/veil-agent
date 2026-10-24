@@ -2,15 +2,16 @@
 
 ## 当前进度
 
-- PR #139（工单 095，桌面消息操作）已合并，提交 `710575d`；真实 Windows Electron 验收待 Lan。
-- 工单 096「Peter 自己维护的关于 Lan 笔记」由 Claude 在分支 `ticket/096-about-lan` 实现（同一个 PR 含工单文档和代码）：新模块 `profile_notes.py`，角色配置 `[profile]`，两个工具 `profile_append` / `profile_replace`，笔记作为第二条 system 消息紧跟人设，修改记入 `about-lan.versions.jsonl`，一次性能力通知 `profile_notes_announced`。
-- 新增 `tests/test_profile_notes.py`（5 项）通过。全套测试在云端沙箱有 6 项失败（test_web 语音传输分类、test_tools 真实文件服务），未改代码时同样失败，属沙箱代理/端口限制。
+- 工单 097–101 已写好并合并（PR #141）。Lan 选定：098 由 Claude 做，097/099/100/101 交给 Codex。
+- 098 邮件由 Claude 在分支 `ticket/098-email-with-lan` 实现：`email_channel.py`（`EmailChannel` 收发、`EmailBridge` 接到桌面服务的 Hub），`send_message` 的 `email` 参数，`[email]` 角色配置，一次性能力通知 `email_announced`。
+- 顺带修了能力清单重建时丢掉后加的 `*_announced` 标记（之前会让 096 等通知在工具清单变化后再发一次）。
+- 新增 `tests/test_email_channel.py`（7 项）通过。全套测试云端沙箱 6 项失败（test_web 语音传输分类、test_tools 真实文件服务），未改代码时同样失败。
 
 ## 下一个窗口第一步
 
-确认 096 PR 的 CI 通过并已合并后，按 `STATUS.md` 请 Lan 更新、重启并验收。
+098 合并后请 Lan 按 `STATUS.md` 验收。101（附件）做完后，邮件回信要带上附件：在 `EmailBridge` 收集消息时一并收集附件。
 
 ## 边界
 
-- 程序不往笔记里写内容，也不从记忆自动导入；笔记从空白开始，只由 Peter 用工具或 Lan 手改。
-- 不提交真实笔记内容、人设、聊天或记忆。
+- 授权码只在本机 `.env`；`email-log.jsonl` 只记时间、编号、主题。
+- 未验证：真实 QQ 邮箱收发（云端连不上），需要 Lan 本机验收。
