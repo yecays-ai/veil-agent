@@ -16,15 +16,15 @@
     <div class="identity"><img src="assets/pep.png" alt=""><h1 id="title">Peter</h1></div>
     <div class="header-status" aria-label="Peter 状态">
       <span class="header-status-item"><i id="autonomy-indicator" class="status-dot is-pending"></i><span>自主活动：<b id="header-autonomy-status">读取中</b></span></span>
-      <span class="header-wake"><span aria-hidden="true">◷</span><span>下次唤醒</span><b id="header-next-wake">读取中…</b></span>
+      <span class="header-wake"><span data-lucide="clock" data-size="14"></span><span>下次唤醒</span><b id="header-next-wake">读取中…</b></span>
     </div>
-    <div class="top-actions"><button id="expand" aria-label="放大聊天窗口" title="放大">↗</button><button id="collapse" aria-label="收起聊天窗口" title="收起">—</button></div>
+    <div class="top-actions"><button id="expand" aria-label="放大聊天窗口" title="放大"><span data-lucide="maximize-2"></span></button><button id="collapse" aria-label="收起聊天窗口" title="收起"><span data-lucide="minimize-2"></span></button></div>
   </header>
   <nav class="navigation" aria-label="主要页面">
-    <button class="nav-item active" data-page="chat" aria-current="page">聊天</button>
-    <button class="nav-item" data-page="activity">活动</button>
-    <button class="nav-item" data-page="memory">记忆</button>
-    <button class="nav-item" data-page="more">更多</button>
+    <button class="nav-item active" data-page="chat" aria-current="page"><span data-lucide="message-square"></span>聊天</button>
+    <button class="nav-item" data-page="activity"><span data-lucide="activity"></span>活动</button>
+    <button class="nav-item" data-page="memory"><span data-lucide="brain"></span>记忆</button>
+    <button class="nav-item" data-page="more"><span data-lucide="more-horizontal"></span>更多</button>
   </nav>
   <div id="toasts" role="status" aria-live="polite"></div>
   <main id="log" class="page active" data-page-view="chat"><div class="col" id="col" aria-live="polite"></div></main>
@@ -40,7 +40,7 @@
     <div class="page-heading"><div><p class="eyebrow">来自 Ombre Brain 的真实记忆</p><h2>记忆</h2></div></div>
     <div class="memory-toolbar"><label for="memory-search">搜索记忆</label><input id="memory-search" type="search" placeholder="按标题筛选"><button id="memory-reload">刷新</button></div>
     <div class="memory-layout"><section id="memory-list" class="surface memory-list" aria-label="Ombre 记忆列表"><p class="muted">正在读取 Ombre 记忆…</p></section><article id="memory-detail" class="surface memory-detail"><p class="muted">选择一条记忆查看原文。</p></article></div>
-    <div class="memory-footer"><span id="memory-count" class="muted">尚未读取</span><div><span id="memory-unavailable" class="muted" hidden>Ombre 记忆暂不可用</span><button id="memory-panel" hidden>高级管理 · Ombre Dashboard ↗</button></div></div>
+    <div class="memory-footer"><span id="memory-count" class="muted">尚未读取</span><div><span id="memory-unavailable" class="muted" hidden>Ombre 记忆暂不可用</span><button id="memory-panel" hidden>高级管理 · Ombre Dashboard <span data-lucide="external-link" data-size="14"></span></button></div></div>
   </section>
   <section id="more-view" class="page" data-page-view="more" hidden>
     <div class="page-heading"><div><p class="eyebrow">偏好与工具</p><h2>更多</h2></div></div>
@@ -65,19 +65,21 @@
     <article class="surface tools-card"><h3>常用工具</h3><div class="tool-row"><button id="new-chat" title="保留旧聊天，开始一段新聊天">新对话</button><button data-cmd="/cost">花费</button><button id="capability-record">能力记录</button></div><details id="capability-details"><summary>查看 Peter 的能力与更新历史</summary><h4>当前能力</h4><pre id="current-capabilities-text"></pre><h4>能力更新记录</h4><pre id="capability-record-text"></pre></details><p class="runtime-detail" id="runtime-status">服务状态：正在连接…</p><details id="runtime-details" hidden><summary>查看持续性故障详情</summary><pre id="runtime-detail-text"></pre></details></article>
   </section>
   <footer id="composer-footer">
+    <div id="selection-bar" class="selection-bar" hidden><span id="selection-count">已选 0 条</span><div><button id="selection-all" type="button">全选</button><button id="selection-delete" type="button" class="danger">删除</button><button id="selection-cancel" type="button">取消</button></div></div>
     <div id="image-preview" class="image-preview" hidden></div>
     <div class="composer" id="composer">
       <div class="voice-tools">
-        <button id="speech-toggle" type="button" aria-label="开始语音识别" aria-pressed="false" title="语音听写：录音发送到 SenseVoice 转写">🎙</button>
+        <button id="speech-toggle" type="button" aria-label="开始语音识别" aria-pressed="false" title="语音听写：录音发送到 SenseVoice 转写"><span data-lucide="mic"></span></button>
         <input id="image-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
-        <button id="image-button" type="button" aria-label="添加图片" title="添加图片">＋</button>
-        <button id="voice-hold" type="button" aria-label="按住说话">按住说话</button>
+        <button id="image-button" type="button" aria-label="添加图片" title="添加图片"><span data-lucide="image-plus"></span></button>
+        <button id="voice-hold" type="button" aria-label="按住说话"><span data-lucide="mic"></span><span>按住说话</span></button>
       </div>
       <span id="speech-status" role="status" aria-live="polite">点击麦克风开始录音；再次点击后用 SenseVoice 转成文字</span>
       <textarea id="box" rows="1" placeholder="和 Peter 说点什么…"></textarea>
-      <button id="send" aria-label="发送">↑</button>
+      <button id="send" aria-label="发送"><span data-lucide="arrow-up"></span></button>
     </div>
   </footer>
+  <script src="icons.js"></script>
   <script src="chat.js"></script>
 </body>
 </html>

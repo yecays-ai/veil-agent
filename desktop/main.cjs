@@ -194,7 +194,7 @@ function allowedChatRequest(pathname, method) {
     return false;
   }
   return method === 'POST' && ['/api/send', '/api/media', '/api/voice', '/api/voice/retry',
-    '/api/transcribe', '/api/approve', '/api/activity', '/api/exit'].includes(pathname);
+    '/api/transcribe', '/api/approve', '/api/activity', '/api/exit', '/api/message/action'].includes(pathname);
 }
 ipcMain.handle('chat:request', async (event, pathname, body, timeoutMs) => {
   if (!fromChat(event) || typeof pathname !== 'string' || !allowedChatRequest(pathname, body ? 'POST' : 'GET'))

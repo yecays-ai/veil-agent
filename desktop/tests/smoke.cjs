@@ -32,8 +32,8 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   const voiceFixture=wavFixture();
   media.set('fictional-reply.wav',{id:'reply',filename:'fictional-reply.wav',type:'audio/wav',bytes:voiceFixture});
   const events = [
-    { id: 1, kind: 'assistant', text: 'Fictional saved history', history: true, time: new Date().toISOString() },
-    { id: 2, kind: 'assistant', text: 'Fictional spoken reply', media: { id: 'reply', filename: 'fictional-reply.wav', mime: 'audio/wav' }, history: true, time: new Date().toISOString() }
+    { id: 1, message_id: 'fictional-history', request_id: 'fictional-history-request', kind: 'assistant', text: 'Fictional saved history', history: true, time: new Date().toISOString() },
+    { id: 2, message_id: 'fictional-spoken-reply', request_id: 'fictional-reply-request', kind: 'assistant', text: 'Fictional spoken reply', media: { id: 'reply', filename: 'fictional-reply.wav', mime: 'audio/wav' }, history: true, time: new Date().toISOString() }
   ];
   const json = (res, value, status = 200) => { res.statusCode = status; res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(value)); };
   const readBody = async req => { let raw = ''; for await (const part of req) raw += part; return JSON.parse(raw); };
@@ -61,12 +61,12 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
         json(res, { error: 'busy' }, 409); return;
       }
       if (body.text === 'fictional hello') {
-        sends++; events.push({ id: nextId++, kind: 'user', text: body.text, request_id: body.request_id, time: new Date().toISOString() });
+        sends++; events.push({ id: nextId++, message_id: body.request_id, kind: 'user', text: body.text, request_id: body.request_id, time: new Date().toISOString() });
         pending = nextId; events.push({ id: nextId++, kind: 'approval', text: 'Fictional permission request', time: new Date().toISOString() });
       } else {
         sends++;
         const attached = body.media ? [...media.values()].find(x => x.id === body.media.id) : null;
-        events.push({ id: nextId++, kind: 'user', text: body.text, request_id: body.request_id,
+        events.push({ id: nextId++, message_id: body.request_id, kind: 'user', text: body.text, request_id: body.request_id,
           media: attached?.eventMedia, time: new Date().toISOString() });
         if (body.media?.id?.startsWith('fictional-voice')) setTimeout(() => events.push({ id: nextId++, kind: 'voice_status',
           media: { ...attached.eventMedia, transcript: body.media.id === 'fictional-voice' ? 'fictional voice transcript' : 'fictional retry transcript' }, time: new Date().toISOString() }), 180);
@@ -179,10 +179,10 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   assert.equal(await chat.webContents.executeJavaScript(`document.querySelector('${userVoiceText}').hidden`),true,'voice transcript must stay hidden by default');
   await wait(() => chat.webContents.executeJavaScript(`document.querySelector('${userVoiceText}').textContent === "fictional voice transcript"`), async () => 'background transcription status missing: ' + JSON.stringify(events) + await chat.webContents.executeJavaScript('document.body.textContent.slice(-700)'));
   await chat.webContents.executeJavaScript(`document.querySelector('${userVoiceWrap}').dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,clientX:80,clientY:80}))`);
-  assert.deepEqual(await chat.webContents.executeJavaScript('[...document.querySelectorAll(".voice-context-menu button")].map(button=>({text:button.textContent,disabled:button.disabled}))'),[
-    {text:'删除',disabled:true},{text:'撤回',disabled:true},{text:'转文字',disabled:false}
+  assert.deepEqual(await chat.webContents.executeJavaScript('[...document.querySelectorAll(".chat-message-actions .chat-action-item")].map(button=>button.textContent.trim())'),[
+    'Transcribe','Favorite','Download','Delete','Recall'
   ]);
-  await chat.webContents.executeJavaScript(`document.querySelector('.voice-context-menu button:not(:disabled)').click()`);
+  await chat.webContents.executeJavaScript(`document.querySelector('.chat-message-actions .chat-action-item').click()`);
   assert.equal(await chat.webContents.executeJavaScript(`document.querySelector('${userVoiceText}').hidden`),false);
 
   failVoiceUploadOnce = true;
@@ -206,7 +206,7 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   await wait(() => chat.webContents.executeJavaScript('!!document.querySelector(".msg-image") && !!document.querySelector(".msg[data-media-id=fictional-voice] .msg-voice") && !!document.querySelector(".msg[data-media-id=fictional-voice-retry] .msg-voice")'), 'image and sent voice messages did not restore from history');
   assert.equal(await chat.webContents.executeJavaScript('document.querySelector(".msg[data-media-id=fictional-voice] .voice-transcript").hidden && document.querySelector(".msg[data-media-id=fictional-voice-retry] .voice-transcript").hidden'),true,'restored voice transcripts should remain hidden');
   await chat.webContents.executeJavaScript(`document.querySelector('.msg[data-media-id="fictional-voice"] .msg-voice').dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,clientX:80,clientY:80}))`);
-  await chat.webContents.executeJavaScript(`document.querySelector('.voice-context-menu button:not(:disabled)').click()`);
+  await chat.webContents.executeJavaScript(`document.querySelector('.chat-message-actions .chat-action-item').click()`);
   assert.equal(await chat.webContents.executeJavaScript('!document.querySelector(".msg[data-media-id=fictional-voice] .voice-transcript").hidden'),true,'transcription should appear only after choosing the menu item');
   await wait(() => chat.webContents.executeJavaScript('document.querySelector(".msg-image").complete && document.querySelector(".msg-image").naturalWidth > 0'), 'restored image did not decode');
   await fs.mkdir(path.join(__dirname, '../test-output'), { recursive: true });

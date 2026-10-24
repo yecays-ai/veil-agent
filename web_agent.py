@@ -117,11 +117,18 @@ def valid_media_row(row):
 
 
 class ChatInput(str):
-    def __new__(cls, text, media, complete=None):
+    def __new__(cls, text, media, complete=None, message_id=None):
         value = super().__new__(cls, text)
         value.media = media
         value.complete = complete or (lambda _committed: None)
+        value.message_id = message_id
         return value
+
+
+class ChatAction:
+    def __init__(self, action, payload):
+        self.action = action
+        self.payload = payload
 
 
 class Hub:
@@ -129,6 +136,7 @@ class Hub:
 
     def __init__(self, name, activity, memory_port=None, media_root=None):
         self.name = name
+        self.chat = None
         self.activity = activity
         self.memory_url = f'http://127.0.0.1:{memory_port}/dashboard' if memory_port else None
         self.memory_tools = None
@@ -458,6 +466,7 @@ class Hub:
         if not isinstance(queued, tuple):
             return queued
         text, media, complete = queued[0], queued[1], queued[2] if len(queued) > 2 else None
+        message_id = queued[3] if len(queued) > 3 else None
         if isinstance(media, dict) and media.get('kind') == 'voice':
             transcript = (media.get('transcript') or '').strip()
             if not transcript:
@@ -505,10 +514,11 @@ class Hub:
                 return None
             text = '[voice message] ' + transcript
             self.push('voice_status', '', media=media)
-        with self.cond:
-            self.defer_outputs = True
-            self.deferred_outputs = []
-        return ChatInput(text, media, complete)
+        if media:
+            with self.cond:
+                self.defer_outputs = True
+                self.deferred_outputs = []
+        return ChatInput(text, media, complete, message_id)
 
     def _record_voice_result(self, media_id, transcript, error):
         with self.media_lock:
@@ -602,13 +612,20 @@ class Hub:
 
     def _publish_output(self, text):
         media = getattr(text, 'media', None)
+        message_id = getattr(text, 'message_id', None)
+        request_id = getattr(text, 'request_id', None)
+        memory_refs = getattr(text, 'memory_refs', None)
         text = str(text)
         prefix = f'{self.name}: '
         if text.startswith('新对话已开始；'):
             self.push('reset', text)
         elif text.startswith(prefix):
             voice = self.register_voice_media(media)
-            self.push('assistant', text[len(prefix):], **({'media': voice} if voice else {}))
+            self.push('assistant', text[len(prefix):],
+                      **({'media': voice} if voice else {}),
+                      **({'message_id': message_id} if isinstance(message_id, str) else {}),
+                      **({'request_id': request_id} if isinstance(request_id, str) else {}),
+                      **({'memory_refs': memory_refs} if isinstance(memory_refs, list) and memory_refs else {}))
         elif text.startswith('请求失败，未自动重试'):
             self.push('error', text)
         elif text.startswith('接上了'):
@@ -638,8 +655,8 @@ class Hub:
                 if row:
                     media = dict(row)
         with self.cond:
-            if committed:
-                self.push('user', text, media=media, request_id=request_id)
+            if committed and media:
+                self.push('user', text, media=media, request_id=request_id, message_id=request_id)
             buffered = self.deferred_outputs
             self.deferred_outputs = []
             self.defer_outputs = False
@@ -656,6 +673,10 @@ class Hub:
             except queue.Empty:
                 text = None
             if text is not None:
+                if isinstance(text, ChatAction):
+                    with self.cond:
+                        self.busy = True
+                    return text
                 with self.cond:
                     self.busy = True
                 item = self._chat_input(text)
@@ -680,6 +701,8 @@ class Hub:
                 continue
             with self.cond:
                 self.busy = True
+            if isinstance(text, ChatAction):
+                return text
             item = self._chat_input(text)
             if item is not None:
                 return item
@@ -755,11 +778,11 @@ class Hub:
                 def complete(committed):
                     self.finish_media_submission(committed, text, media, request_id)
                 if not media:
-                    self.push('user', text, request_id=request_id)
+                    self.push('user', text, request_id=request_id, message_id=request_id)
                 self.submissions[request_id] = text_digest
                 if len(self.submissions) > MAX_SUBMISSIONS:
                     self.submissions.popitem(last=False)
-                self.inbox.put((text, media, complete) if media else text)
+                self.inbox.put((text, media, complete, request_id))
                 if self.autonomy_busy:
                     self.autonomy_interrupted.set()
                 else:
@@ -769,6 +792,98 @@ class Hub:
             with self.cond:
                 self.submission_pending = False
                 self.cond.notify_all()
+
+    def message_action(self, action, message_id=None, *, message_ids=None, content=None, favorite=None):
+        allowed = ('delete', 'recall', 'regenerate', 'edit', 'favorite')
+        if action not in allowed or self.chat is None:
+            return '无效的消息操作。'
+        ids = message_ids if action == 'delete' and message_ids is not None else [message_id]
+        if (not isinstance(ids, list) or not ids or len(ids) > 100
+                or any(not isinstance(item, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', item) for item in ids)):
+            return '无效的消息操作。'
+        with self.cond:
+            if self.stopping or self.stopped:
+                return 'Agent 服务已退出。'
+            if self.busy or self.submission_pending or self.autonomy_busy:
+                return 'Peter 正在处理消息，请稍后再试。'
+            self.busy = True
+        queued = False
+        try:
+            if action == 'regenerate':
+                user, removed = self.chat.prepare_regeneration(message_id)
+                with self.cond:
+                    self.inbox.put(ChatAction('regenerate', {'user': user, 'remove_ids': removed}))
+                    queued = True
+                return '已开始重新生成。'
+            if action == 'delete':
+                rows = self.chat.delete_messages(ids)
+                for row in rows:
+                    self.push('message_removed', '', message_id=row['message_id'])
+                    try:
+                        self._remove_unreferenced_media(row.get('media'))
+                    except (OSError, UserError):
+                        pass  # A cleanup failure leaves only an unreferenced media file.
+                return '已删除所选消息。' if len(rows) > 1 else '消息已删除。'
+            if action == 'edit':
+                row = self.chat.edit_message(message_id, content)
+                self.push('message_updated', '', message_id=message_id, text=row['content'], favorite=row.get('favorite', False))
+                return '消息已更新。'
+            if action == 'favorite':
+                row = self.chat.favorite_message(message_id, favorite)
+                self.push('message_updated', '', message_id=message_id, favorite=row['favorite'])
+                return '已收藏消息。' if favorite else '已取消收藏。'
+            row = self.chat.recall_message(message_id)
+            self.push('message_recalled', '[Message recalled]', message_id=message_id)
+            try:
+                self._remove_unreferenced_media(row.get('media'))
+            except (OSError, UserError):
+                pass
+            return '消息已撤回。'
+        except UserError as exc:
+            return str(exc)
+        except OSError:
+            return '消息记录未能安全更新，请保留数据后重试。'
+        finally:
+            if not queued:
+                with self.cond:
+                    self.busy = False
+                    self.cond.notify_all()
+
+    def message_memory(self, message_id):
+        if self.chat is None or not isinstance(message_id, str):
+            raise UserError('无效的消息。')
+        _, row = self.chat.message_record(message_id)
+        if row.get('role') != 'assistant':
+            raise UserError('只有 Peter 的回复有记忆引用。')
+        refs = row.get('memory_refs', [])
+        if not isinstance(refs, list):
+            refs = []
+        return list(dict.fromkeys(ref for ref in refs
+                                  if isinstance(ref, str) and re.fullmatch(r'[A-Za-z0-9_-]{1,100}', ref)))[:6]
+
+    def _remove_unreferenced_media(self, media):
+        if not isinstance(media, dict) or not isinstance(media.get('id'), str):
+            return
+        media_id = media['id']
+        if any((row.get('media') or {}).get('id') == media_id
+               for row in self.chat.store.read(self.chat.path)):
+            return
+        with self.media_lock:
+            row = self.media_index.get(media_id)
+            if not row:
+                return
+            self.media_index.pop(media_id, None)
+            try:
+                self._rewrite_media_index()
+            except OSError:
+                self.media_index[media_id] = row
+                raise
+        try:
+            (self.media_root / row['filename']).unlink(missing_ok=True)
+        except OSError:
+            # The chat ledger and media index no longer reference it. A locked
+            # file is harmless and can be reclaimed on a later startup.
+            pass
 
     def approval(self, prompt):
         # Same sentence the terminal shows; the page offers two buttons for y/N.
@@ -1031,6 +1146,23 @@ def make_handler(hub, token):
             except ValueError:
                 self._send(400, {'error': 'bad request'})
                 return
+            if url.path == '/api/message/action':
+                action, message_id = body.get('action'), body.get('message_id')
+                if action == 'memory':
+                    try:
+                        items = hub.message_memory(message_id)
+                    except UserError as exc:
+                        self._send(409, {'ok': False, 'message': str(exc)})
+                    else:
+                        self._send(200, {'ok': True, 'items': items})
+                    return
+                result = hub.message_action(action, message_id, message_ids=body.get('message_ids'),
+                                            content=body.get('content'), favorite=body.get('favorite'))
+                accepted = result in ('已开始重新生成。', '消息已删除。', '已删除所选消息。', '消息已撤回。',
+                                      '消息已更新。', '已收藏消息。', '已取消收藏。')
+                self._send(200 if accepted else 409,
+                           {'ok': accepted, 'message': result, 'action': action if accepted else None})
+                return
             if url.path == '/api/send':
                 text = body.get('text')
                 request_id = body.get('request_id')
@@ -1125,6 +1257,22 @@ def start_server(hub, token, port):
 
 
 def serve_chat(chat, hub):
+    hub.chat = chat
+    def publish_recalled(row):
+        hub.push('message_recalled', '[Message recalled]', message_id=row['message_id'])
+        try:
+            hub._remove_unreferenced_media(row.get('media'))
+        except (OSError, UserError):
+            pass
+    chat.message_recalled = publish_recalled
+    def publish_removed(rows):
+        for row in rows:
+            hub.push('message_removed', '', message_id=row['message_id'])
+            try:
+                hub._remove_unreferenced_media(row.get('media'))
+            except (OSError, UserError):
+                pass
+    chat.message_removed = publish_removed
     files = getattr(chat.tools, 'files', None) if chat.tools else None
     files = files or chat.tools
     announce_photo = getattr(files, 'announce_photo_input', None)
@@ -1157,6 +1305,9 @@ def serve_chat(chat, hub):
         if message['role'] == 'assistant' and isinstance(media, dict):
             media = hub.register_voice_media(media)
         hub.push(message['role'], message['content'], time=message['time'], history=True,
+                 message_id=message['message_id'], request_id=message.get('request_id'),
+                 favorite=message.get('favorite') is True,
+                 memory_refs=message.get('memory_refs', []),
                  **({'media': media} if media else {}))
     # The UI history is a bounded window; replay decisions must use the durable
     # full chat log or an older successful voice send looks pending on restart.

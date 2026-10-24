@@ -424,6 +424,7 @@ class AutonomyController:
             with self.chat.budget.autonomous(self.chat.cfg.id, self.daily_budget):
                 self.chat.long_tasks.begin_tool_run()
                 answer = self.chat.send(self._context(), autonomy=True)
+                self.chat.apply_pending_recall()
             record['decision'] = answer.strip()[:1000]
             record['reason'] = answer.strip()[:1000]
             for line in answer.splitlines():

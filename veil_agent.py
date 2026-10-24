@@ -84,6 +84,17 @@ def send_message_schema(voice=False):
         }
     return schema
 
+
+RECALL_MESSAGE = {'type': 'function', 'function': {
+    'name': 'recall_message',
+    'description': ('Withdraw one of your own recently sent messages by its supplied message_id when you decide '
+                    'that you want to retract it. This is your own decision and does not require user approval. '
+                    'The withdrawal is saved only after this reply completes successfully.'),
+    'parameters': {'type': 'object', 'properties': {
+        'message_id': {'type': 'string', 'minLength': 1, 'maxLength': 100}},
+        'required': ['message_id'], 'additionalProperties': False},
+}}
+
 CAPABILITY_HISTORY = {'type': 'function', 'function': {
     'name': 'capability_history',
     'description': ('Look up the dated record of when your abilities were added or changed. '
@@ -160,6 +171,67 @@ class Store:
             if handle.write(data) != len(data):
                 raise UserError('记录未完整保存，已停止。')
             os.fsync(handle.fileno())
+
+    @synchronized
+    def remove_records(self, name, indexes):
+        """Atomically remove selected JSONL rows while preserving every other row byte for byte."""
+        path = self.root / name
+        if not path.exists():
+            raise UserError('聊天记录已变化，请重新打开菜单后再试。')
+        lines = path.read_bytes().splitlines(keepends=True)
+        record_lines = [line_index for line_index, line in enumerate(lines) if line.strip()]
+        selected = set(indexes)
+        if not selected or any(index < 0 or index >= len(record_lines) for index in selected):
+            raise UserError('找不到这条消息，请重新打开菜单后再试。')
+        removed = []
+        for index in selected:
+            try:
+                removed.append(json.loads(lines[record_lines[index]]))
+            except (ValueError, UnicodeError) as exc:
+                raise UserError('聊天记录无法读取，已停止；请保留 data 文件夹。') from exc
+        selected_lines = {record_lines[index] for index in selected}
+        replacement = path.with_suffix('.tmp')
+        try:
+            with replacement.open('wb', buffering=0) as handle:
+                kept = b''.join(line for index, line in enumerate(lines) if index not in selected_lines)
+                if handle.write(kept) != len(kept):
+                    raise OSError('short chat rewrite')
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(replacement, path)
+        finally:
+            replacement.unlink(missing_ok=True)
+        return removed
+
+    @synchronized
+    def update_record(self, name, index, event):
+        """Atomically replace one JSONL row and retain all unrelated rows byte for byte."""
+        path = self.root / name
+        if not path.exists():
+            raise UserError('聊天记录已变化，请重新打开菜单后再试。')
+        lines = path.read_bytes().splitlines(keepends=True)
+        record_lines = [line_index for line_index, line in enumerate(lines) if line.strip()]
+        if index < 0 or index >= len(record_lines):
+            raise UserError('找不到这条消息，请重新打开菜单后再试。')
+        target_line = record_lines[index]
+        try:
+            previous = json.loads(lines[target_line])
+        except (ValueError, UnicodeError) as exc:
+            raise UserError('聊天记录无法读取，已停止；请保留 data 文件夹。') from exc
+        replacement = path.with_suffix('.tmp')
+        updated = (json.dumps({**previous, **event}, ensure_ascii=False) + '\n').encode('utf-8')
+        try:
+            with replacement.open('wb', buffering=0) as handle:
+                for row_index, line in enumerate(lines):
+                    data = updated if row_index == target_line else line
+                    if handle.write(data) != len(data):
+                        raise OSError('short chat rewrite')
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(replacement, path)
+        finally:
+            replacement.unlink(missing_ok=True)
+        return previous
 
     @synchronized
     def replace(self, name, event):
@@ -763,9 +835,12 @@ def collapse_latest_photo(messages):
 
 
 class ChatOutput(str):
-    def __new__(cls, text, media=None):
+    def __new__(cls, text, media=None, message_id=None, request_id=None, memory_refs=None):
         value = super().__new__(cls, text)
         value.media = media
+        value.message_id = message_id
+        value.request_id = request_id
+        value.memory_refs = list(memory_refs or [])
         return value
 
 
@@ -798,6 +873,8 @@ class Chat:
             self.pending_capability_event_model = capability_model_notice(tools)
         self.sent_messages = []
         self.reply_displayed = False
+        self.last_reply_message_id = None
+        self.last_reply_request_id = None
         self.autonomy_mode = False
         self.activity_enabled = lambda: False
         self._capability_request_active = False
@@ -819,7 +896,7 @@ class Chat:
             'name': tool.name, 'description': tool.description, 'parameters': tool.inputSchema}}
             for tool in self.long_tasks.tools] if self.task_tools_enabled else []
         existing_tools = permitted_tools(self.tools.tools if self.tools else [])
-        messaging = [send_message_schema(self.voice is not None)] if (
+        messaging = [send_message_schema(self.voice is not None), RECALL_MESSAGE] if (
             (self.cfg.tools and self.cfg.tools.get('enabled', True))
             or (self.tools and self.tools.tools)) else []
         history = [CAPABILITY_HISTORY, AUTONOMY_HISTORY] if existing_tools or task_tools or messaging else []
@@ -1002,8 +1079,10 @@ class Chat:
                         raise
                     voice_failure = exc.user_message
             displayed_text = (f'语音生成失败：{voice_failure}\n{text}' if voice_failure else text)
+            message_id = uuid.uuid4().hex
             event = {'role': 'assistant', 'content': displayed_text,
-                     'request_id': request_id, 'origin': 'reply'}
+                     'request_id': request_id, 'origin': 'reply', 'message_id': message_id,
+                     'memory_refs': list(getattr(self, 'turn_memory_refs', []))}
             if media:
                 event['media'] = media
             if autonomy:
@@ -1018,7 +1097,8 @@ class Chat:
                     if autonomy:
                         self.history, self.rounds = self.recent()
                     output = self.autonomy_message_output if autonomy else None
-                    (output or self.output)(ChatOutput(f'{self.cfg.name}: {displayed_text}', media))
+                    (output or self.output)(ChatOutput(f'{self.cfg.name}: {displayed_text}', media,
+                                                       message_id, request_id, getattr(self, 'turn_memory_refs', [])))
             except BaseException:
                 if media and not committed:
                     self.voice.discard(media)
@@ -1047,6 +1127,21 @@ class Chat:
         self.last_self = None
         self.trim_note = None
         self.trim_noted = False
+
+
+    @staticmethod
+    def _message_id(event, index=None):
+        existing = event.get('message_id')
+        if isinstance(existing, str) and re.fullmatch(r'[A-Za-z0-9_-]{1,100}', existing):
+            return existing
+        # Older chat rows stay in their original JSONL form. This deterministic
+        # fallback identifies them without migrating the existing chat file.
+        encoded = json.dumps(event, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+        return 'legacy-' + uuid.uuid5(uuid.NAMESPACE_URL, encoded).hex
+
+    def _chat_rows(self):
+        rows = self.store.read(self.path)
+        return [{**row, 'message_id': self._message_id(row, index)} for index, row in enumerate(rows)]
 
 
     def recent(self):
@@ -1080,7 +1175,9 @@ class Chat:
         except (KeyError, ValueError, TypeError) as exc:
             raise UserError('聊天记录无法读取，已停止；请保留 data 文件夹。') from exc
         groups = groups[-history_keep(len(groups), self.cfg.history_rounds):]
-        self.history_events = [{**m, 'origin': m.get('origin', 'reply')} for group in groups for m in group]
+        self.history_events = [{**m, 'message_id': self._message_id(m),
+                                'origin': m.get('origin', 'reply')}
+                               for group in groups for m in group]
         latest_photo = next((index for index in range(len(self.history_events) - 1, -1, -1)
                              if self.history_events[index]['role'] == 'user'
                              and isinstance(self.history_events[index].get('media'), dict)
@@ -1105,8 +1202,162 @@ class Chat:
                         content = fallback
                 else:
                     content = fallback
-            model_history.append({'role': message['role'], 'content': content})
+            model_history.append({'role': message['role'], 'content':
+                                  '[Message recalled]' if message.get('recalled') else content})
         return model_history, sum(any(m['role'] == 'assistant' for m in g) for g in groups)
+
+    def message_record(self, message_id):
+        if message_id not in {row.get('message_id') for row in self.history_events}:
+            raise UserError('这条消息不在当前对话中，请重新打开菜单后再试。')
+        rows = self._chat_rows()
+        for index, row in enumerate(rows):
+            if row['message_id'] == message_id:
+                return index, row
+        raise UserError('找不到这条消息，请重新打开菜单后再试。')
+
+    def delete_message(self, message_id):
+        return self.delete_messages([message_id])[0]
+
+    def delete_messages(self, message_ids):
+        if (not isinstance(message_ids, list) or not message_ids
+                or any(not isinstance(message_id, str) for message_id in message_ids)
+                or len(set(message_ids)) != len(message_ids)):
+            raise UserError('请选择有效的消息。')
+        rows = self._chat_rows()
+        visible = {row.get('message_id') for row in self.history_events}
+        selected = [row for row in rows if row['message_id'] in set(message_ids)]
+        if len(selected) != len(message_ids) or any(message_id not in visible for message_id in message_ids):
+            raise UserError('所选消息不在当前对话中，请刷新后重试。')
+        if any(row.get('role') not in ('user', 'assistant') for row in selected):
+            raise UserError('这类消息不能删除。')
+        indexes = [index for index, row in enumerate(rows) if row['message_id'] in set(message_ids)]
+        removed = self.store.remove_records(self.path, indexes)
+        self.history, self.rounds = self.recent()
+        return [{**row, 'message_id': self._message_id(row)} for row in removed]
+
+    def edit_message(self, message_id, content):
+        index, row = self.message_record(message_id)
+        if row.get('role') not in ('user', 'assistant') or row.get('recalled'):
+            raise UserError('这条消息不能编辑。')
+        if not isinstance(content, str) or not content.strip() or len(content) > 12000:
+            raise UserError('消息内容不能为空或超过 12,000 个字符。')
+        if row.get('media'):
+            raise UserError('图片和语音消息不能编辑。')
+        self.store.update_record(self.path, index, {'content': content.strip()})
+        self.history, self.rounds = self.recent()
+        return {**row, 'content': content.strip()}
+
+    def favorite_message(self, message_id, favorite):
+        index, row = self.message_record(message_id)
+        if row.get('role') not in ('user', 'assistant') or row.get('recalled'):
+            raise UserError('这条消息不能收藏。')
+        if type(favorite) is not bool:
+            raise UserError('收藏状态无效。')
+        self.store.update_record(self.path, index, {'favorite': favorite})
+        return {**row, 'favorite': favorite}
+
+    def recall_message(self, message_id, role='user'):
+        index, row = self.message_record(message_id)
+        if row.get('role') != role or role not in ('user', 'assistant') or row.get('recalled'):
+            raise UserError('这条消息不能撤回。')
+        stamp = row.get('time')
+        try:
+            sent_at = datetime.fromisoformat(stamp.replace('Z', '+00:00')).timestamp()
+        except (AttributeError, ValueError, OverflowError) as exc:
+            raise UserError('这条消息的发送时间无法确认，不能撤回。') from exc
+        age = datetime.now(timezone.utc).timestamp() - sent_at
+        if age < 0 or age > 120:
+            raise UserError('消息只能在发送后两分钟内撤回。')
+        if role == 'user' and any(event.get('role') == 'assistant'
+                                  and event.get('request_id') == row.get('request_id')
+                                  for event in self._chat_rows()):
+            raise UserError('Peter 已经处理了这条消息，不能再撤回。')
+        self.store.update_record(self.path, index, {
+            'message_id': message_id, 'content': '[Message recalled]', 'recalled': True, 'media': None,
+        })
+        self.history, self.rounds = self.recent()
+        return row
+
+    def recall_context(self):
+        now = datetime.now(timezone.utc).timestamp()
+        candidates = []
+        for row in reversed(self.history_events):
+            if row.get('role') != 'assistant' or row.get('recalled'):
+                continue
+            try:
+                sent_at = datetime.fromisoformat(row['time'].replace('Z', '+00:00')).timestamp()
+            except (AttributeError, KeyError, ValueError, OverflowError):
+                continue
+            if 0 <= now - sent_at <= 120:
+                candidates.append(row)
+            if len(candidates) >= 5:
+                break
+        if not candidates:
+            return None
+        lines = [f"- message_id={row['message_id']}: {row['content'][:300]}" for row in candidates]
+        return ('Internal recall candidates for your recall_message tool only. Never show these IDs to the user. '
+                'You may decide to retract your own eligible recent message without waiting for user approval. '
+                'Use the tool only when you personally decide to withdraw that message.\n'
+                + '\n'.join(lines))
+
+    def apply_pending_recall(self):
+        message_id = self.pending_recall_message_id
+        self.pending_recall_message_id = None
+        if not message_id:
+            return False
+        row = self.recall_message(message_id, role='assistant')
+        callback = getattr(self, 'message_recalled', None)
+        if callable(callback):
+            callback(row)
+        return True
+
+    def prepare_regeneration(self, message_id):
+        rows = self._chat_rows()
+        if message_id not in {row.get('message_id') for row in self.history_events}:
+            raise UserError('这条消息不在当前对话中，请重新打开菜单后再试。')
+        positions = {row['message_id']: index for index, row in enumerate(rows)}
+        selected_index = positions.get(message_id)
+        if selected_index is None:
+            raise UserError('找不到这条消息，请重新打开菜单后再试。')
+        selected = rows[selected_index]
+        request_id = selected.get('request_id')
+        if selected.get('role') != 'assistant' or not isinstance(request_id, str):
+            raise UserError('这条 Peter 回复无法重新生成。')
+        turn_indexes = [index for index, row in enumerate(rows)
+                        if row.get('role') == 'assistant' and row.get('request_id') == request_id]
+        if not turn_indexes or any(row.get('role') in ('user', 'assistant')
+                                   and index > max(turn_indexes)
+                                   and row.get('request_id') != request_id
+                                   for index, row in enumerate(rows)):
+            raise UserError('只能重新生成最近一轮 Peter 回复。')
+        first = min(turn_indexes)
+        user_indexes = [index for index, row in enumerate(rows[:first])
+                        if row.get('role') == 'user' and row.get('request_id') == request_id]
+        if not user_indexes:
+            raise UserError('找不到这轮回复对应的用户消息。')
+        user_index = user_indexes[-1]
+        user = dict(rows[user_index])
+        removed = [rows[index]['message_id'] for index in turn_indexes]
+        # Keep the old reply durable until the new reply commits. Exclude the
+        # current user turn and its assistant output from this request's context.
+        last_user = next((index for index in range(len(self.history) - 1, -1, -1)
+                          if self.history[index].get('role') == 'user'), None)
+        if last_user is None:
+            raise UserError('找不到这轮回复对应的上下文。')
+        self.history = self.history[:last_user]
+        return user, removed
+
+    def finish_regeneration(self, message_ids):
+        rows = self._chat_rows()
+        selected = set(message_ids)
+        indexes = [index for index, row in enumerate(rows) if row['message_id'] in selected]
+        if len(indexes) != len(selected):
+            raise UserError('重新生成的旧回复记录已变化；新回复已保存，旧回复仍保留。')
+        self.store.remove_records(self.path, indexes)
+        self.history, self.rounds = self.recent()
+        by_id = {row['message_id']: row for row in rows if row['message_id'] in selected}
+        return [{'message_id': message_id, 'media': by_id[message_id].get('media')}
+                for message_id in message_ids]
 
     def _photo_content(self, text, media):
         if not isinstance(media, dict):
@@ -1138,7 +1389,7 @@ class Chat:
             }},
         ]
 
-    def send(self, text, *, autonomy=False, extra_context=None, media=None):
+    def send(self, text, *, autonomy=False, extra_context=None, media=None, message_id=None, persist_user=True):
         # Per-call durability fact used by UI adapters when failures can occur
         # both before and after the user row is appended.
         self.last_send_persisted = False
@@ -1152,11 +1403,15 @@ class Chat:
         self.autonomy_budget_limited = False
         self.tool_stop_reason = ''
         self.last_tool_summaries = []
+        self.last_reply_message_id = None
+        self.last_reply_request_id = None
+        self.pending_recall_message_id = None
         self.long_tasks.begin_tool_run()
         if not self.pending_capability_event and self.tools:
             self.pending_capability_event = self.tools.capability_event
             self.pending_capability_event_model = capability_model_notice(self.tools)
         recalled = self.memory.context(text) if self.memory else []
+        self.turn_memory_refs = list(getattr(self.memory, 'last_context_refs', [])) if self.memory else []
         autonomy_handoff_id = None
         if not autonomy:
             # Ticket 094: the last activity record is given once after a wake; afterwards Peter
@@ -1178,6 +1433,10 @@ class Chat:
         # Tool definitions already tell the model what it can use. Peter gets the one-time update
         # notice below and reads the dated record himself through capability_history.
         tail = [*recalled]
+        if self.current_request_tool_schemas():
+            recall_context = self.recall_context()
+            if recall_context:
+                tail.append({'role': 'system', 'content': recall_context})
         runtime_context = []
         if extra_context:
             runtime_context.append({'role': 'system', 'content': extra_context})
@@ -1229,8 +1488,9 @@ class Chat:
                             'max_output_tokens', self.cfg.max_output_tokens))
                         if self.tool_mode else self.cfg)
             request_id, _ = self.budget.reserve(tool_cfg)
-            if not autonomy:
-                event = {'role': 'user', 'content': text, 'request_id': request_id}
+            if not autonomy and persist_user:
+                event = {'role': 'user', 'content': text, 'request_id': request_id,
+                         'message_id': message_id or uuid.uuid4().hex}
                 if isinstance(media, dict):
                     event['media'] = {key: media[key] for key in ('id', 'filename', 'mime', 'name', 'kind', 'transcript')
                                      if isinstance(media.get(key), str)}
@@ -1273,8 +1533,12 @@ class Chat:
                 raise UserError('接口没有返回文字回复；本次保留预留费用。')
             self.last_tool_summaries = tool_summaries
             if not autonomy and not self.reply_displayed:
+                self.last_reply_message_id = uuid.uuid4().hex
+                self.last_reply_request_id = request_id
                 self.store.append(self.path, {'role': 'assistant', 'content': reply,
-                    'request_id': request_id, 'origin': 'reply'})
+                    'request_id': request_id, 'origin': 'reply',
+                    'message_id': self.last_reply_message_id,
+                    'memory_refs': list(self.turn_memory_refs)})
             if not self.tool_mode:
                 self.budget.settle(request_id, self.cfg, prompt, completion, cached, input_bytes=sent_bytes)
             # The event was included in the successful normal-chat request above.
@@ -1302,6 +1566,16 @@ class Chat:
             checkpoint_verified = False
             if call.function.name == 'send_message':
                 result, state, summary = self.send_message(call.function.arguments, request_id, tool_call_id)
+            elif call.function.name == 'recall_message':
+                args = json.loads(call.function.arguments or '{}')
+                message_id = args.get('message_id') if isinstance(args, dict) else None
+                if not isinstance(message_id, str):
+                    result, state = 'This recall request is not available.', '被拒绝'
+                else:
+                    self.message_record(message_id)
+                    self.pending_recall_message_id = message_id
+                    result, state = 'The exact message will be withdrawn after this reply is saved.', '成功'
+                summary = 'recall_message'
             elif call.function.name == 'capability_history':
                 result = self.capability_history_record or 'No capability changes are recorded yet.'
                 state, summary = '成功', 'capability_history'
@@ -1796,7 +2070,34 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead, activity=N
                 for notice in chat.memory.notices():
                     output(notice)
             raw_text = input_fn('你: ')
+            action = getattr(raw_text, 'action', None)
+            if action == 'regenerate':
+                user = raw_text.payload['user']
+                try:
+                    reply = chat.send(user['content'], extra_context=pending_deletion_context(chat),
+                                      media=user.get('media'), persist_user=False)
+                    chat.apply_pending_recall()
+                    removed = chat.finish_regeneration(raw_text.payload['remove_ids'])
+                    if callable(getattr(chat, 'message_removed', None)):
+                        chat.message_removed(removed)
+                    if chat.trim_note:
+                        output(chat.trim_note)
+                    if not chat.reply_displayed:
+                        output(ChatOutput(f'{chat.cfg.name}: {reply}', message_id=chat.last_reply_message_id,
+                                          request_id=chat.last_reply_request_id,
+                                          memory_refs=chat.turn_memory_refs))
+                except TooLong as exc:
+                    chat.history, chat.rounds = chat.recent()
+                    output(str(exc))
+                except RequestFailed as exc:
+                    chat.history, chat.rounds = chat.recent()
+                    output(str(exc))
+                except UserError as exc:
+                    chat.history, chat.rounds = chat.recent()
+                    output(str(exc))
+                continue
             media = getattr(raw_text, 'media', None)
+            message_id = getattr(raw_text, 'message_id', None)
             if autonomy is not None and raw_text is AUTONOMY_WAKE:
                 autonomy.run()
                 continue
@@ -1844,13 +2145,15 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead, activity=N
                 try:
                     chat.last_send_persisted = False
                     try:
-                        reply = chat.send(text, extra_context=pending_deletion_context(chat), media=media)
+                        reply = chat.send(text, extra_context=pending_deletion_context(chat), media=media,
+                                          message_id=message_id)
                     finally:
                         # Every exit (including storage errors and interrupts)
                         # releases the adapter's transaction exactly once.
                         complete = getattr(raw_text, 'complete', None)
                         if callable(complete):
                             complete(chat.last_send_persisted)
+                    chat.apply_pending_recall()
                 except TooLong as exc:
                     output(str(exc))
                     continue
@@ -1861,7 +2164,9 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead, activity=N
                 if chat.trim_note:
                     output(chat.trim_note)
                 if not chat.reply_displayed:
-                    output(f'{chat.cfg.name}: {reply}')
+                    output(ChatOutput(f'{chat.cfg.name}: {reply}', message_id=chat.last_reply_message_id,
+                                      request_id=chat.last_reply_request_id,
+                                      memory_refs=chat.turn_memory_refs))
                 notify_dropped()
     except (KeyboardInterrupt, EOFError):
         output('\n已退出，已保存的记录仍在；未完成请求的预留额可用 /cost 查看。')
