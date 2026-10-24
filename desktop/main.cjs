@@ -201,18 +201,22 @@ async function showActivity() {
   const detached = detachedWindows.get('activity');
   if (detached && !detached.isDestroyed()) { detached.show(); detached.focus(); return; }
   if (!chat || chat.isDestroyed()) await toggleChat();
-  else if (!chat.isVisible()) { chat.show(); chat.focus(); }
+  const restored = detachedWindows.get('activity');
+  if (restored && !restored.isDestroyed()) { restored.show(); restored.focus(); return; }
+  if (chat && !chat.isDestroyed() && !chat.isVisible()) { chat.show(); chat.focus(); }
   if (chat && !chat.isDestroyed()) chat.webContents.send('desktop:show-activity');
 }
 async function showAppearance() {
   const detached = detachedWindows.get('more');
   if (detached && !detached.isDestroyed()) { detached.show(); detached.focus(); return; }
   if (!chat || chat.isDestroyed()) await toggleChat();
-  else if (!chat.isVisible()) { chat.show(); chat.focus(); }
+  const restored = detachedWindows.get('more');
+  if (restored && !restored.isDestroyed()) { restored.show(); restored.focus(); return; }
+  if (chat && !chat.isDestroyed() && !chat.isVisible()) { chat.show(); chat.focus(); }
   if (chat && !chat.isDestroyed()) chat.webContents.send('desktop:show-settings');
 }
 async function reconnectChat(event) {
-  if (event && !fromChat(event)) return false;
+  if (event && !(fromChat(event) || detachedViewFromEvent(event) === 'chat')) return false;
   if (connecting) return false;
   if (chat && !chat.isDestroyed()) chat.destroy();
   chat = null;

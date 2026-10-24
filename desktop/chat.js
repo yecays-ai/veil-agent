@@ -11,6 +11,7 @@ let pendingApproval=null, activityEnabled=false, exiting=false;
 const recentErrors=new Map();
 let memoryAvailable=false,memoryLoaded=false,memoryLoading=false,memoryCursor='',memoryItems=[];
 let activityFilter='all',toolActivity=[],autonomyActivity=[],detachedViews=new Set();
+const activityRowNodes=new Map();
 const pageQuery=new URLSearchParams(location.search),detachedView=pageQuery.get('detached')==='1'?pageQuery.get('view'):null;
 let selectedImage=null;const awaitingImages=new Map();
 let voiceRecorder=null,voiceStream=null,voiceChunks=[],voiceStarted=0,voiceTimer=null,voiceCancelled=false,voiceSending=false,voicePermissionPending=false;
@@ -602,27 +603,58 @@ function combinedActivity(){
   const autonomy=autonomyActivity.map((item,index)=>({call_id:'autonomy:'+(item.started_at||index),tool:'自主活动',path:item.result_reason||item.decision||'Peter 完成了一次自主活动',state:item.result==='失败'?'失败':'成功',detail:activityDetails(item),started_at:item.started_at,finished_at:item.finished_at,source:'自主活动',kind:'autonomy'}));
   return [...tools,...autonomy].sort((a,b)=>String(b.started_at||b.finished_at||'').localeCompare(String(a.started_at||a.finished_at||'')));
 }
+function createActivityRow(item,key){
+  const details=document.createElement('details');details.className='tool-activity-row';details.dataset.activityCallId=key;details.open=item.state==='进行中';
+  const summary=document.createElement('summary'),head=document.createElement('div');head.className='activity-record-head';
+  const title=document.createElement('div'),time=document.createElement('time'),name=document.createElement('strong'),status=document.createElement('span');
+  title.append(time,name);head.append(title,status);
+  const meta=document.createElement('div');meta.className='activity-record-meta';
+  const code=document.createElement('code'),source=document.createElement('span');meta.append(code,source);summary.append(head,meta);
+  const body=document.createElement('div');body.className='activity-detail';const dl=document.createElement('dl');
+  const values={};
+  for(const label of ['操作对象','开始时间','完成时间','执行结果']){
+    const dt=document.createElement('dt'),dd=document.createElement('dd');dt.textContent=label;
+    if(label==='执行结果'){values.result=document.createElement('pre');dd.appendChild(values.result)}else values[label]=dd;
+    dl.append(dt,dd);
+  }
+  body.appendChild(dl);details.append(summary,body);
+  return {details,time,name,status,code,source,values};
+}
+function updateActivityRow(row,item){
+  row.time.textContent=activityTime(item.started_at||item.finished_at);
+  row.name.textContent=TOOL_LABELS[item.tool]||item.tool;
+  const state=activityStatus(item.state);row.status.className='activity-state '+state.className;row.status.textContent=state.text;
+  row.code.textContent=item.tool;row.source.textContent='来源：'+(item.source||'聊天');
+  row.values['操作对象'].textContent=item.path||'未提供';
+  row.values['开始时间'].textContent=item.started_at?new Date(item.started_at).toLocaleString():'旧记录未保存开始时间';
+  row.values['完成时间'].textContent=item.finished_at?new Date(item.finished_at).toLocaleString():item.state==='进行中'?'尚未完成':'旧记录未保存完成时间';
+  row.values.result.textContent=String(item.detail||state.text);
+}
 function renderActivityTimeline(){
   const all=combinedActivity();
   const visible=all.filter(item=>activityFilter==='all'||item.kind===activityFilter||(activityFilter==='autonomy'&&item.source==='自主活动'));
-  const list=$('activity-timeline');list.replaceChildren();$('activity-count').textContent=all.length+' 条记录';
+  const list=$('activity-timeline');$('activity-count').textContent=all.length+' 条记录';
   const running=toolActivity.filter(item=>item.state==='进行中').length;
   $('activity-work-status').textContent=running?`正在执行 ${running} 项工具调用`:'等待下一次工具调用';
   $('activity-work-dot').className='status-dot '+(running?'is-busy':'is-online');
-  if(!visible.length){const empty=document.createElement('p');empty.className='muted';empty.textContent=all.length?'此筛选下还没有记录。':'还没有工具或自主活动记录。';list.appendChild(empty);return}
+  const present=new Set(all.map(item=>String(item.call_id||`${item.tool}:${item.started_at||item.finished_at||''}`)));
+  for(const [key,row] of activityRowNodes){if(!present.has(key)){row.details.remove();activityRowNodes.delete(key)}}
+  const visibleKeys=new Set(visible.map(item=>String(item.call_id||`${item.tool}:${item.started_at||item.finished_at||''}`)));
+  for(const node of [...list.children])if(!visibleKeys.has(node.dataset.activityCallId||''))node.remove();
+  let empty=list.querySelector('[data-activity-empty]');
+  if(!visible.length){
+    if(!empty){empty=document.createElement('p');empty.dataset.activityEmpty='true';empty.className='muted';list.appendChild(empty)}
+    empty.textContent=all.length?'此筛选下还没有记录。':'还没有工具或自主活动记录。';return;
+  }
+  empty?.remove();
+  let cursor=list.firstElementChild;
   for(const item of visible){
-    const details=document.createElement('details');details.className='tool-activity-row';details.open=item.state==='进行中';
-    const summary=document.createElement('summary'),head=document.createElement('div');head.className='activity-record-head';
-    const title=document.createElement('div'),time=document.createElement('time'),name=document.createElement('strong'),status=document.createElement('span');
-    time.textContent=activityTime(item.started_at||item.finished_at);name.textContent=TOOL_LABELS[item.tool]||item.tool;status.className='activity-state '+activityStatus(item.state).className;status.textContent=activityStatus(item.state).text;
-    title.append(time,name);head.append(title,status);
-    const meta=document.createElement('div');meta.className='activity-record-meta';
-    const code=document.createElement('code'),source=document.createElement('span');code.textContent=item.tool;source.textContent='来源：'+(item.source||'聊天');meta.append(code,source);
-    summary.append(head,meta);details.append(summary);
-    const body=document.createElement('div');body.className='activity-detail';const dl=document.createElement('dl');
-    const rows=[['操作对象',item.path||'未提供'],['开始时间',item.started_at?new Date(item.started_at).toLocaleString():'旧记录未保存开始时间'],['完成时间',item.finished_at?new Date(item.finished_at).toLocaleString():item.state==='进行中'?'尚未完成':'旧记录未保存完成时间'],['执行结果',item.detail||activityStatus(item.state).text]];
-    for(const [label,value] of rows){const dt=document.createElement('dt'),dd=document.createElement('dd');dt.textContent=label;if(label==='执行结果'){const pre=document.createElement('pre');pre.textContent=String(value);dd.appendChild(pre)}else dd.textContent=String(value);dl.append(dt,dd)}
-    body.appendChild(dl);details.appendChild(body);list.appendChild(details);
+    const key=String(item.call_id||`${item.tool}:${item.started_at||item.finished_at||''}`);
+    let row=activityRowNodes.get(key);
+    if(!row){row=createActivityRow(item,key);activityRowNodes.set(key,row)}
+    updateActivityRow(row,item);
+    if(row.details===cursor)cursor=cursor.nextElementSibling;
+    else list.insertBefore(row.details,cursor);
   }
 }
 function renderActivity(record,history=[],tools=[]){

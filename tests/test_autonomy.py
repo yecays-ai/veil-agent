@@ -469,6 +469,25 @@ daily_budget_cny = "2"
         self.assertIn('lab/saved.md', recovered._context())
         self.model.assert_not_called()
 
+    def test_crash_recovery_preserves_unconfirmed_tool_without_counting_it_as_success(self):
+        run_id = self.budget.clock()
+        self.controller.active_path.parent.mkdir(parents=True, exist_ok=True)
+        self.controller.active_path.write_text(json.dumps({'started_at': run_id}), encoding='utf-8')
+        self.store.append('test/tools.jsonl', {'request_id': 'interrupted', 'call_id': 'interrupted:0:read',
+            'autonomy_run_id': run_id, 'tool': 'read_text_file', 'path': 'lab/notes.md', 'state': '成功'})
+        self.store.append('test/tools.jsonl', {'request_id': 'interrupted', 'call_id': 'interrupted:1:write',
+            'autonomy_run_id': run_id, 'tool': 'write_file', 'path': 'lab/confirmed.md', 'state': '成功'})
+        self.store.append('test/tools.jsonl', {'request_id': 'interrupted', 'call_id': 'interrupted:0:append',
+            'autonomy_run_id': run_id, 'tool': 'append_file', 'path': 'lab/progress.md', 'state': '进行中'})
+
+        recovered = AutonomyController(self.chat, self.hub)
+        row = recovered.rows[-1]
+        self.assertEqual(row['tools'][-1], {'tool': 'append_file', 'path': 'lab/progress.md', 'state': '结果未确认'})
+        self.assertEqual(row['lab_files_changed'], ['lab/confirmed.md'])
+        self.assertEqual(row['result'], '部分完成')
+        self.assertIn('先核实所有“结果未确认”', row['next_step'])
+        self.assertIn('lab/progress.md', recovered._context())
+
     def test_failed_tools_only_are_not_reported_as_a_completed_activity(self):
         final = SimpleNamespace(tool_calls=[], content='决定：结束\n原因：工具不可用')
         controller, model, tools = self.progress_chat((final, 100, 20, 0))

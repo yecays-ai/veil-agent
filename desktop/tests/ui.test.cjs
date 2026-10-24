@@ -82,3 +82,14 @@ test('every existing tab detaches into the shared chat view and can merge withou
   assert.match(preload, /mergeView:.*view:merge/);
   assert.doesNotMatch(main, /activity\.html/);
 });
+
+test('activity polling preserves expanded rows and restored detached windows remain usable', async () => {
+  const [js, main] = await Promise.all([read('chat.js'), read('main.cjs')]);
+  assert.match(js, /const activityRowNodes=new Map\(\)/);
+  assert.match(js, /activityRowNodes\.get\(key\)/);
+  assert.match(js, /list\.insertBefore\(row\.details,cursor\)/);
+  assert.doesNotMatch(js, /const list=\$\('activity-timeline'\);list\.replaceChildren\(\)/);
+  assert.match(main, /async function showActivity\(\)[\s\S]*?await toggleChat\(\)[\s\S]*?detachedWindows\.get\('activity'\)[\s\S]*?restored\.focus\(\)/);
+  assert.match(main, /async function showAppearance\(\)[\s\S]*?await toggleChat\(\)[\s\S]*?detachedWindows\.get\('more'\)[\s\S]*?restored\.focus\(\)/);
+  assert.match(main, /async function reconnectChat\(event\)[\s\S]*?fromChat\(event\) \|\| detachedViewFromEvent\(event\) === 'chat'/);
+});

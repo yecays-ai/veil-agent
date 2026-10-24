@@ -49,6 +49,25 @@ class ActivityMonitorTests(unittest.TestCase):
         self.assertNotIn('abcdefghijklmnop', detail)
         self.assertIn('[已隐藏]', detail)
 
+    def test_json_credentials_are_redacted_in_objects_strings_and_old_ledger_rows(self):
+        for value in ({'password': 'hunter2', 'nested': {'client_secret': 'secret-value'}},
+                      '{"password":"hunter2","nested":{"refresh_token":"token-value"}}'):
+            detail = safe_tool_activity_detail(value)
+            for secret in ('hunter2', 'secret-value', 'token-value'):
+                self.assertNotIn(secret, detail)
+            self.assertIn('[已隐藏]', detail)
+
+        self.store.append('test/tools.jsonl', {'call_id': 'old', 'tool': 'read_text_file',
+            'path': 'lab/notes.md', 'state': '成功', 'detail': '{"password":"hunter2"}'})
+        item = self.hub.tool_activity()[0]
+        self.assertNotIn('hunter2', item['detail'])
+
+    def test_store_read_tail_parses_only_the_requested_recent_records(self):
+        path = self.store.root / 'test' / 'tools.jsonl'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('not-json\n{"n":1}\n{"n":2}\n', encoding='utf-8')
+        self.assertEqual(self.store.read_tail('test/tools.jsonl', 2), [{'n': 1}, {'n': 2}])
+
 
 if __name__ == '__main__':
     unittest.main()

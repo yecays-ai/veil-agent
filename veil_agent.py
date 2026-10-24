@@ -39,8 +39,32 @@ SENSITIVE_ACTIVITY_VALUE = re.compile(
 OPAQUE_ACTIVITY_TOKEN = re.compile(r'\b(?:sk|ghp|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{12,}\b')
 
 
+def _sensitive_activity_key(key):
+    normalized = re.sub(r'[^a-z0-9]', '', str(key).casefold())
+    return (normalized in {'apikey', 'password', 'passwd', 'secret', 'accesstoken',
+                           'refreshtoken', 'authorization', 'bearer'} or
+            normalized.endswith(('secret', 'password', 'passwd', 'token')))
+
+
+def _redact_activity_value(value):
+    if isinstance(value, dict):
+        return {key: ('[已隐藏]' if _sensitive_activity_key(key)
+                      else _redact_activity_value(item)) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_activity_value(item) for item in value]
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except (ValueError, TypeError):
+            return value
+        if isinstance(parsed, (dict, list)):
+            return json.dumps(_redact_activity_value(parsed), ensure_ascii=False)
+    return value
+
+
 def safe_tool_activity_detail(value, limit=2000):
     """Keep useful local tool results without persisting common credential forms."""
+    value = _redact_activity_value(value)
     text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
     text = SENSITIVE_ACTIVITY_VALUE.sub(lambda match: match.group(1) + match.group(2) + '[已隐藏]', text)
     text = OPAQUE_ACTIVITY_TOKEN.sub('[已隐藏的凭据]', text)
@@ -176,6 +200,34 @@ class Store:
         try:
             with path.open(encoding='utf-8') as handle:
                 return [json.loads(line) for line in handle if line.strip()]
+        except (ValueError, UnicodeError) as exc:
+            raise UserError('本机账本损坏，已停止；请保留 data 文件夹，不要删除记录。') from exc
+
+    @synchronized
+    def read_tail(self, name, limit):
+        """Read and parse only the last `limit` JSONL records from an append-only ledger."""
+        if type(limit) is not int or limit <= 0:
+            raise ValueError('positive record limit required')
+        path = self.root / name
+        if not path.exists():
+            return []
+        records, carry = [], b''
+        try:
+            with path.open('rb') as handle:
+                remaining = handle.seek(0, os.SEEK_END)
+                while remaining:
+                    start = max(0, remaining - 64 * 1024)
+                    handle.seek(start)
+                    pieces = (handle.read(remaining - start) + carry).split(b'\n')
+                    carry = pieces[0]
+                    records = [line for line in pieces[1:] if line.strip()] + records
+                    remaining = start
+                    if len(records) >= limit:
+                        break
+            if remaining == 0 and carry.strip():
+                records.insert(0, carry)
+            records = records[-limit:]
+            return [json.loads(line.decode('utf-8')) for line in records]
         except (ValueError, UnicodeError) as exc:
             raise UserError('本机账本损坏，已停止；请保留 data 文件夹，不要删除记录。') from exc
 

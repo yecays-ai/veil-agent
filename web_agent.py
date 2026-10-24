@@ -27,7 +27,8 @@ from urllib.request import Request, getproxies, urlopen
 from urllib.error import HTTPError, URLError
 
 from veil_agent import (ROOT, AUTONOMY_WAKE, MAX_PHOTO_BYTES, ActivityState, Budget, Chat, Store, UserError,
-                        load_character, now, make_model, make_voice, run_chat)
+                        load_character, now, make_model, make_voice, run_chat,
+                        safe_tool_activity_detail)
 from autonomy import AutonomyController
 
 MAX_BODY = 200_000
@@ -236,23 +237,28 @@ class Hub:
         chat = self.chat
         if chat is None:
             return []
-        rows = chat.store.read(f'{chat.cfg.id}/tools.jsonl')
+        rows = chat.store.read_tail(f'{chat.cfg.id}/tools.jsonl', 5000)
         projected = {}
         order = []
         memory_names = {'hold', 'breath_search', 'trace', 'dream', 'letter_write', 'letter_read',
                         'letter_lock_update', 'memory_history', 'memory_catalog', 'memory_read'}
-        for index, row in enumerate(rows[-5000:]):
+        for index, row in enumerate(rows):
             if not isinstance(row, dict) or not isinstance(row.get('tool'), str):
                 continue
             call_id = row.get('call_id')
             if not isinstance(call_id, str) or not call_id:
-                call_id = f'legacy:{len(rows) - min(len(rows), 5000) + index}'
+                call_id = 'legacy:' + ':'.join(str(row.get(key, '')) for key in
+                                               ('request_id', 'time', 'tool', 'path'))
+                if call_id == 'legacy::::':
+                    call_id += str(index)
             if call_id not in projected:
                 projected[call_id] = {'call_id': call_id, 'started_at': row.get('time'),
                                       'request_id': row.get('request_id')}
                 order.append(call_id)
             item = projected[call_id]
-            item.update({key: row[key] for key in ('tool', 'path', 'state', 'detail') if key in row})
+            item.update({key: row[key] for key in ('tool', 'path', 'state') if key in row})
+            if 'detail' in row:
+                item['detail'] = safe_tool_activity_detail(row['detail'])
             item['source'] = ('自主活动' if row.get('autonomy_run_id') else
                               '长期任务' if row['tool'].startswith('long_task_') else '聊天')
             item['category'] = ('memory' if row['tool'] in memory_names else
