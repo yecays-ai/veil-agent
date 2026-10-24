@@ -514,7 +514,8 @@ class Memory:
         pass
 
     def persist(self):
-        self.store.append(self.path, {'state': self.state})
+        # Only the newest snapshot is kept (ticket 092); older ones held copies of erased memories.
+        self.store.replace(self.path, {'state': self.state})
 
     def _load_fingerprint_key(self):
         """Keep the dedupe secret out of the readable operation ledger."""

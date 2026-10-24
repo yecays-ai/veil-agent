@@ -180,11 +180,26 @@ class MemoryTests(unittest.TestCase):
         self.assertNotIn('/forget', self.memory.command('/memory'))
         self.assertEqual(self.memory.visible([(key, 'x')]), [(key, 'x')])
 
+    def test_state_file_keeps_only_the_newest_snapshot(self):
+        path = 'fake/memory/_agent/state.jsonl'
+        state = self.store.read(path)[-1]['state']
+        for _ in range(3):
+            self.store.append(path, {'state': state})  # A pre-092 file with many snapshots.
+        self.assertGreater(len(self.store.read(path)), 1)
+        reopened = self.open()
+        self.assertEqual(len(self.store.read(path)), 1)
+        key = self.save()
+        reopened.persist()
+        self.assertEqual(len(self.store.read(path)), 1)
+        self.assertEqual(self.store.read(path)[0]['state'], reopened.state)
+        self.assertFalse((self.store.root / (path + '.tmp')).exists())
+        self.assertIsNotNone(key)
+
     def test_legacy_extract_state_loads_without_its_chat_cursor(self):
         key = self.save()
         state = self.store.read('fake/memory/_agent/state.jsonl')[-1]['state']
-        self.store.append('fake/memory/_agent/state.jsonl',
-                          {'state': {**state, 'cursor': 4, 'pending': [{'id': 0, 'attempts': 1}]}})
+        self.store.replace('fake/memory/_agent/state.jsonl',
+                           {'state': {**state, 'cursor': 4, 'pending': [{'id': 0, 'attempts': 1}]}})
         reopened = self.open()
         self.assertNotIn('cursor', reopened.state)
         self.assertNotIn('pending', reopened.state)
