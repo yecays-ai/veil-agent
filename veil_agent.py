@@ -151,6 +151,19 @@ class Store:
                 raise UserError('记录未完整保存，已停止。')
             os.fsync(handle.fileno())
 
+    @synchronized
+    def replace(self, name, event):
+        """Atomically keep only this one record (for state snapshots, not ledgers)."""
+        path = self.root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        data = (json.dumps({'time': now(), **event}, ensure_ascii=False) + '\n').encode('utf-8')
+        temporary = path.with_suffix(path.suffix + '.tmp')
+        with temporary.open('wb', buffering=0) as handle:
+            if handle.write(data) != len(data):
+                raise UserError('记录未完整保存，已停止。')
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+
     @contextmanager
     def lock(self):
         # OS advisory lock is released even after a crash; shared by all roles.
