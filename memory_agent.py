@@ -702,13 +702,35 @@ class Memory:
         return status
 
     def turns(self):
-        groups = []
-        for row in self.store.read(f'{self.cfg.id}/chat.jsonl'):
+        return self._completed_turns(self.store.read(f'{self.cfg.id}/chat.jsonl'))[0]
+
+    @staticmethod
+    def _completed_turns(rows):
+        """Group each user event with all assistant events before the next user.
+
+        Only completed user-led turns advance the memory cursor. Assistant-only
+        proactive openings and unanswered user messages are not memory turns.
+        The parallel request IDs keep tool summaries aligned one per turn.
+        """
+        groups, request_ids = [], []
+        current = None
+        current_request_id = None
+        has_assistant = False
+        for row in rows:
             if row['role'] == 'user':
-                groups.append([{'role': 'user', 'content': row['content']}])
-            elif groups and len(groups[-1]) == 1 and row['role'] == 'assistant':
-                groups[-1].append({'role': 'assistant', 'content': row['content']})
-        return [g for g in groups if len(g) == 2]
+                if current is not None and has_assistant:
+                    groups.append(current)
+                    request_ids.append(current_request_id)
+                current = [{'role': 'user', 'content': row['content']}]
+                current_request_id = row.get('request_id')
+                has_assistant = False
+            elif row['role'] == 'assistant' and current is not None:
+                current.append({'role': 'assistant', 'content': row['content']})
+                has_assistant = True
+        if current is not None and has_assistant:
+            groups.append(current)
+            request_ids.append(current_request_id)
+        return groups, request_ids
 
     def call(self, name, args, *, write_operation=None):
         self.last_tool = name
@@ -1143,7 +1165,8 @@ class Memory:
 
     def supplement(self):
         with self.mutex:
-            turns = self.turns()
+            chat_rows = self.store.read(f'{self.cfg.id}/chat.jsonl')
+            turns, request_ids = self._completed_turns(chat_rows)
             cursor = self.state['cursor']
             if len(turns) - cursor < 4:
                 return
@@ -1153,18 +1176,6 @@ class Memory:
                 batch['attempts'] += 1
             self.state['pending'] = [b for b in batches if b['attempts'] < 2]
             self.persist()  # Attempts are durable BEFORE any model call.
-        chat_rows = self.store.read(f'{self.cfg.id}/chat.jsonl')
-        request_ids = []
-        current = None
-        has_user = False
-        for row in chat_rows:
-            if row['role'] == 'user':
-                current = row.get('request_id')
-                has_user = True
-            elif row['role'] == 'assistant' and has_user:
-                request_ids.append(current)
-                has_user = False
-                current = None
         tool_events = {}
         file_read_requests = set()
         for event in self.store.read(f'{self.cfg.id}/tools.jsonl'):
@@ -1183,9 +1194,12 @@ class Memory:
             conversation = [list(turn) for turn in turns[start:end]]
             for offset, request_id in enumerate(request_ids[start:end]):
                 if request_id in file_read_requests and offset < len(conversation):
-                    conversation[offset] = [*conversation[offset][:-1], {
-                        'role': 'assistant',
-                        'content': 'A file-reading tool was used this turn; the reply text is omitted from memory extraction.'}]
+                    conversation[offset] = [
+                        ({**message, 'content': 'A file-reading tool was used this turn; '
+                                                'the reply text is omitted from memory extraction.'}
+                         if message['role'] == 'assistant' else message)
+                        for message in conversation[offset]
+                    ]
             safe_turns[start:end] = conversation
             raw.append({'id': batch['id'], 'turns': conversation, 'tool_events': events})
         with self.mutex:

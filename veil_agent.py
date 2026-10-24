@@ -1053,6 +1053,9 @@ class Chat:
                 role, content = event['role'], event['content']
                 if role not in ('user', 'assistant') or not isinstance(content, str):
                     raise ValueError('invalid chat record')
+                # A user starts a history group. Every following assistant event
+                # stays in that group until the next user; leading assistant-only
+                # events remain as standalone context for legacy proactive replies.
                 if role == 'user':
                     groups.append([])
                 if not groups:

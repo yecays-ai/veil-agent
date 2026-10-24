@@ -148,6 +148,28 @@ class MemoryTests(unittest.TestCase):
         self.assertEqual(reopened.state['cursor'], 0)
         self.assertEqual((self.store.root / 'fake/chat.jsonl').read_bytes(), history_before_restart)
 
+    def test_turns_group_all_assistant_messages_and_ignore_incomplete_or_orphan_events(self):
+        rows = [
+            {'role': 'assistant', 'content': 'orphan proactive message'},
+            {'role': 'user', 'content': 'unanswered user message', 'request_id': 'incomplete'},
+            {'role': 'user', 'content': 'completed user message', 'request_id': 'complete'},
+            {'role': 'assistant', 'content': 'first assistant message'},
+            {'role': 'assistant', 'content': 'second assistant message'},
+            {'role': 'user', 'content': 'next user message', 'request_id': 'next'},
+            {'role': 'assistant', 'content': 'next assistant reply'},
+        ]
+        for row in rows:
+            self.store.append('fake/chat.jsonl', row)
+
+        self.assertEqual(self.memory.turns(), [
+            [{'role': 'user', 'content': 'completed user message'},
+             {'role': 'assistant', 'content': 'first assistant message'},
+             {'role': 'assistant', 'content': 'second assistant message'}],
+            [{'role': 'user', 'content': 'next user message'},
+             {'role': 'assistant', 'content': 'next assistant reply'}],
+        ])
+        self.assertEqual(self.memory._completed_turns(rows)[1], ['complete', 'next'])
+
     def test_four_rounds_background_budget_and_notice(self):
         self.turns(3)
         self.memory.supplement()
@@ -175,6 +197,9 @@ class MemoryTests(unittest.TestCase):
             self.store.append('fake/chat.jsonl', {'role': 'assistant',
                                                   'content': 'file body secret' if i == 0 else f'reply {i}',
                                                   'request_id': request_id})
+            if i == 0:
+                self.store.append('fake/chat.jsonl', {'role': 'assistant',
+                    'content': 'assistant echoed file body secret', 'request_id': request_id})
         self.store.append('fake/tools.jsonl', {'request_id': 'request-0', 'kind': 'capability',
             'text': '你的能力有变化：可读 workspace。'})
         self.store.append('fake/tools.jsonl', {'request_id': 'request-0', 'tool': 'read_text_file',
@@ -182,8 +207,9 @@ class MemoryTests(unittest.TestCase):
         self.memory.supplement()
         raw = json.loads(self.model.call_args.args[0][1]['content'])['batches'][0]
         self.assertEqual(raw['tool_events'], ['你的能力有变化：可读 workspace。', 'read_text_file：notes.txt（成功）'])
-        self.assertIn('reply text is omitted from memory extraction', raw['turns'][0][1]['content'])
-        self.assertNotEqual(raw['turns'][0][1]['content'], 'file body secret')
+        self.assertEqual([m['role'] for m in raw['turns'][0]], ['user', 'assistant', 'assistant'])
+        self.assertTrue(all('reply text is omitted from memory extraction' in m['content']
+                            for m in raw['turns'][0][1:]))
         self.assertNotIn('file body', json.dumps(raw, ensure_ascii=False))
         self.assertTrue(self.backend.rows)
         self.assertTrue(all('file body secret' not in row.get('source_content', '')
