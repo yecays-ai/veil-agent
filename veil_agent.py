@@ -287,6 +287,7 @@ class Character:
     tools: dict = None
     autonomy: dict = None
     voice: dict = None
+    profile: dict = None
 
 
 def positive_int(value):
@@ -382,10 +383,17 @@ def load_character(root, character_id):
             if not 1024 <= memory_port <= 65535:
                 raise ValueError('memory.ombre_port must be an available TCP port')
             memory['ombre_port'] = memory_port
+        profile = cfg.get('profile')
+        if profile is not None:
+            profile_file = profile.get('file')
+            if (not isinstance(profile_file, str) or Path(profile_file).name != profile_file
+                    or profile_file in ('', '.', '..') or not profile_file.endswith('.md')):
+                raise ValueError('profile.file must be a .md filename')
+            profile = {'file': profile_file, 'max_bytes': positive_int(profile.get('max_bytes', 3000))}
         return Character(character_id, str(cfg['name']), persona,
                          positive_int(cfg.get('history_rounds', 20)),
                          positive_int(cfg.get('max_output_tokens', 1024)), provider, cfg['provider'],
-                         memory, tools, autonomy, voice)
+                         memory, tools, autonomy, voice, profile)
     except UserError:
         raise
     except (OSError, KeyError, ValueError, TypeError, ArithmeticError) as exc:
@@ -871,6 +879,14 @@ class Chat:
             tools.announce_autonomy_history()
             self.pending_capability_event = tools.capability_event
             self.pending_capability_event_model = capability_model_notice(tools)
+        self.profile = None
+        if getattr(cfg, 'profile', None):
+            from profile_notes import ProfileNotes
+            self.profile = ProfileNotes(store.root, cfg.id, cfg.profile)
+            if tools and hasattr(tools, 'announce_profile_notes'):
+                tools.announce_profile_notes(cfg.profile['max_bytes'])
+                self.pending_capability_event = tools.capability_event
+                self.pending_capability_event_model = capability_model_notice(tools)
         self.sent_messages = []
         self.reply_displayed = False
         self.last_reply_message_id = None
@@ -900,7 +916,11 @@ class Chat:
             (self.cfg.tools and self.cfg.tools.get('enabled', True))
             or (self.tools and self.tools.tools)) else []
         history = [CAPABILITY_HISTORY, AUTONOMY_HISTORY] if existing_tools or task_tools or messaging else []
-        schemas = [*existing_tools, *task_tools, *messaging, *history]
+        profile = []
+        if self.profile and history:
+            from profile_notes import PROFILE_APPEND, PROFILE_REPLACE
+            profile = [PROFILE_APPEND, PROFILE_REPLACE]
+        schemas = [*existing_tools, *task_tools, *messaging, *history, *profile]
         for schema in schemas:
             function = schema['function']
             if function['name'] in ('write_file', 'append_file', 'long_task_update', 'hold', 'trace', 'letter_write'):
@@ -1427,8 +1447,13 @@ class Chat:
         # Order matters for the provider's prefix cache: everything that stays the same between requests
         # comes first, then the chat history, then what changes every request (recalled memories,
         # capability notice, time and ledger) right before the user's message.
-        head = [{'role': 'system', 'content': self.cfg.persona},
-                {'role': 'system', 'content': stable}]
+        head = [{'role': 'system', 'content': self.cfg.persona}]
+        # Ticket 096: the role's own notes about the user sit right after the persona. They change
+        # only when edited, so the cached prefix holds between edits.
+        profile_context = self.profile.context() if self.profile else None
+        if profile_context:
+            head.append({'role': 'system', 'content': profile_context})
+        head.append({'role': 'system', 'content': stable})
         tool_schema = self.current_request_tool_schemas()
         self._active_capability_schemas = tool_schema
         # Tool definitions already tell the model what it can use. Peter gets the one-time update
@@ -1580,6 +1605,12 @@ class Chat:
             elif call.function.name == 'capability_history':
                 result = self.capability_history_record or 'No capability changes are recorded yet.'
                 state, summary = '成功', 'capability_history'
+            elif self.profile and call.function.name in ('profile_append', 'profile_replace'):
+                args = json.loads(call.function.arguments or '{}')
+                if not isinstance(args, dict):
+                    result, state, summary = 'arguments must be an object.', '被拒绝', call.function.name
+                else:
+                    result, state, summary = self.profile.invoke(call.function.name, args)
             elif call.function.name == 'autonomy_history':
                 from autonomy import AUTONOMY_HISTORY_LIMIT, activity_history
                 args = json.loads(call.function.arguments or '{}')

@@ -511,6 +511,21 @@ class FilesystemTools:
             raise UserError('能力清单无法更新，文件工具已停止；请保留 data 文件夹。') from exc
 
     @capability_transaction
+    def announce_profile_notes(self, max_bytes):
+        if getattr(self, 'cap_path', None) is None:
+            return
+        try:
+            self._announce_once(
+                'profile_notes_announced',
+                'Capability update: you now have your own notes about Lan. They are shown to you at the start '
+                'of every chat and every autonomous wake, right after your persona, so you know them without '
+                'searching memory. You write and edit them yourself with profile_append and profile_replace '
+                f'(direct use, no approval); the limit is {max_bytes} bytes. The notes start empty.')
+        except Exception as exc:
+            self.enabled = False
+            raise UserError('能力清单无法更新，文件工具已停止；请保留 data 文件夹。') from exc
+
+    @capability_transaction
     def announce_photo_input(self):
         if getattr(self, 'cap_path', None) is None:
             return
