@@ -4,7 +4,7 @@
 
 ## 当前目标与现状
 
-- 工单 097「醒来的时间是 Peter 自己的」在独立 worktree `E:\Peter-Agent\VEIL\worktrees\097-wake-is-his-time`、分支 `ticket/097-wake-is-his-time` 实现，PR 创建后补入链接。
+- 工单 097「醒来的时间是 Peter 自己的」在独立 worktree `E:\Peter-Agent\VEIL\worktrees\097-wake-is-his-time`、分支 `ticket/097-wake-is-his-time` 实现，PR [#143](https://github.com/yecays-ai/veil-agent/pull/143) 已创建，等待检查与 Lan 验收。
 - 以最新 `main` `a955622` 为基线；工单 098 的 PR #142 已合并。该 PR 的 Linux/Windows 离线聊天矩阵（Python 3.11/3.12）、审计、扫描均通过；Cubic 检查为 neutral。
 - 只调整 `autonomy.py` 的三句唤醒提示：Peter 可以依自己的兴趣和已有经历行动、联系 Lan、休息或什么都不做；四行活动摘要明确是留给下次自己的笔记，而不是汇报。
 - 程序既有的安全权限、每日预算、工具/步数与消息上限、自主活动记录和摘要解析均保留。没有触碰 Peter 的私人文件、人设或记忆。

@@ -2,7 +2,7 @@
 
 ## 当前进度
 
-- 工单 097「醒来的时间是 Peter 自己的」已在分支 `ticket/097-wake-is-his-time`、独立 worktree `E:\Peter-Agent\VEIL\worktrees\097-wake-is-his-time` 完成实现和定向回归；PR 创建后在此补链接。
+- 工单 097「醒来的时间是 Peter 自己的」已在分支 `ticket/097-wake-is-his-time`、独立 worktree `E:\Peter-Agent\VEIL\worktrees\097-wake-is-his-time` 完成实现和定向回归；PR [#143](https://github.com/yecays-ai/veil-agent/pull/143) 已创建，等待检查与 Lan 验收。
 - 基线是最新 `main` `a955622`（PR #142 / 工单 098 已合并）。
 - `autonomy.py` 只替换唤醒提示指定三句；`tests/test_autonomy.py` 覆盖新的提示语和四行摘要约定。
 - 自主活动测试 26 项通过。新 PR CI 尚未运行；尚未进行 Peter 在 Windows 打包程序中的两天体验。
