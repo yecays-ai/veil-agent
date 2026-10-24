@@ -10,6 +10,8 @@
 - 新依赖 `uiautomation==2.0.29`（及 `comtypes==1.4.17`），只在 Windows 安装。
 - 测试：`tests/test_email_channel.py`、`tests/test_qq_channel.py` 通过（QQ 窗口用假对象）。真实 QQ 窗口操作只能在 Lan 的 Windows 上验收。
 
+- Claude 审查 #148 时补了一处：桌面版实际走 `web_agent.py` 启动服务，原先只在 `veil_agent.py`（终端）接入了 `WebTools`，桌面聊天里 Peter 拿不到网页工具；现在两处都接入。
+
 ## 099 本窗口停止点
 
 在 PR #148 发起 CodeRabbit 审查并等待其评论；评论到达后停止，不触发 Cubic、不合并 PR，也不开始其他工单。之后交 Lan 按 `STATUS.md` 的 099 步骤进行体验验收。

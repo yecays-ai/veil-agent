@@ -1425,7 +1425,8 @@ def main(argv=None):
             try:
                 with client:
                     from tools_agent import FilesystemTools
-                    with FilesystemTools(ROOT, cfg, store) as tools:
+                    from web_tools import WebTools
+                    with FilesystemTools(ROOT, cfg, store, web_factory=WebTools) as tools:
                         if cfg.memory and cfg.memory.get('enabled'):
                             from memory_agent import Memory, open_ombre
                             with open_ombre(ROOT, cfg) as backend:
