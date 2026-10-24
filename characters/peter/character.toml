@@ -60,3 +60,9 @@ max_result_bytes = 8192
 interval_minutes = 180
 daily_max_runs = 6
 daily_budget_cny = "2"
+
+[profile]
+# Ticket 096: Peter's own notes about Lan, written by him with profile_append / profile_replace
+# and sent right after the persona every request. Lives at data/peter/<file>.
+file = "about-lan.md"
+max_bytes = 3000

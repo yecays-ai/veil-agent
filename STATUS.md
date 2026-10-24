@@ -6,7 +6,7 @@
 
 - PR #138（工单 094）已合并到 `main`，最新提交为 `94bdc35`；本地已拉取远端引用。
 - 工单 095「桌面消息操作与 Lucide 图标」在独立 worktree `E:\Peter-Agent\VEIL\worktrees\095-message-actions-lucide`、分支 `ticket/095-message-actions-lucide` 开发。PR #139 已合并，提交 `710575d`；Windows 体验验收待 Lan。
-- 工单 096「Peter 自己维护的关于 Lan 笔记」已写好（`docs/tickets/096-about-lan.md`），由 Claude 实现。Lan 本机人设已换成 v3.2（本机文件，不进仓库）。
+- 工单 096「Peter 自己维护的关于 Lan 笔记」（`docs/tickets/096-about-lan.md`）已由 Claude 实现，PR 待合并：Peter 用 `profile_append` / `profile_replace` 自己写 `data\peter\about-lan.md`，每次请求紧跟人设发送，上限 3000 字节，旧版本记在 `about-lan.versions.jsonl`。Lan 本机人设已换成 v3.2（本机文件，不进仓库）。
 - 旧版源码已核实：菜单按角色/消息类型显示操作；用户撤回有两分钟期限；重新生成按整轮回复处理。桌面现有聊天记录保存在 Agent `chat.jsonl`，媒体通过角色媒体索引引用。
 
 ## 下一步
@@ -22,6 +22,15 @@
 - 截图展示 Peter 消息的八项菜单。截图为合成数据下的 Chromium 页面预览，不是 Electron 包或真实 Windows 验收。
 
 ## Lan 的 Windows 体验验收
+
+工单 096（更新并重启后）：
+
+1. Peter 收到一次能力通知（他有了关于你的笔记）。
+2. 正常聊几天，不提醒他；打开 `data\peter\about-lan.md`，里面是他自己写的关于你的内容。
+3. 新开一段对话随口问“我平时几点睡”“我喜欢什么颜色”，他不用搜就能自然答出来。
+4. 用记事本在文件里加一句，下一条消息他就知道。
+
+工单 095：
 
 1. 对照旧版检查用户与 Peter 的消息菜单，确认文字、图片、语音操作适用，窗口边缘定位正确。
 2. 复制、删除、撤回及重新生成后检查即时界面与重启后的聊天记录、模型上下文。

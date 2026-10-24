@@ -726,6 +726,11 @@ class ToolSet:
         if announce:
             announce()
 
+    def announce_profile_notes(self, max_bytes):
+        announce = getattr(self.files, 'announce_profile_notes', None)
+        if announce:
+            announce(max_bytes)
+
     def invoke(self, name, args, approval=input):
         if self.native.handles(name):
             return self.native.invoke(name, args, approval)
