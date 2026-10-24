@@ -2,15 +2,16 @@
 
 ## 当前进度
 
-- GitHub `main` 最新为 PR #136（工单 092）合并提交 `083a2fc`。
+- GitHub `main` 最新为 PR #137（工单 093）合并提交 `c62d931`。
 - 架构审计报告：https://claude.ai/artifact/Xiav6ADUtAg1TxskoTCQRd 。
 - 工单 091 已合并：`Memory.erase` 在 Ombre 确认删除（文件已进 `archive/`）后删除该文件、`memory-versions.jsonl` 中该记忆的行，并清空 `delete-requests.jsonl` 中的标题/理由和状态里的标题/正文；启动时对已删除未抹掉的条目各执行一次。Ombre 自行衰减归档的记忆不受影响。
 - 工单 092 已合并：新增 `Store.replace`（临时文件 + fsync + `os.replace` 原子替换），`Memory.persist` 用它只保留最新一行状态。读取逻辑不变，旧的多行文件第一次保存后自动变成一行。
-- 工单 093 位于分支 `ticket/093-retire-browser-page`：`web_agent.py` 不再在 `/` 提供网页，`web_launcher.py`/`web_agent.py` 不再打开浏览器（仍接受 `--no-browser`，旧版已打包的桌面程序会传它）；删除 `web/index.html`、`tests/web_pacing.cjs` 和只检查网页源码的测试；`start-web.bat` 调用 `start-desktop.bat`。
+- 工单 093 已合并：`web_agent.py` 不再在 `/` 提供网页，`web_launcher.py`/`web_agent.py` 不再打开浏览器（仍接受 `--no-browser`，旧版已打包的桌面程序会传它）；删除 `web/index.html`、`tests/web_pacing.cjs` 和只检查网页源码的测试；`start-web.bat` 调用 `start-desktop.bat`。
+- 工单 094 位于分支 `ticket/094-autonomy-history`：`autonomy.recent_chat_handoff` 只在该活动未被确认交付时返回记录（沿用 `autonomy-chat-handoffs.jsonl`），聊天成功后确认；`autonomy.activity_history` + `veil_agent.AUTONOMY_HISTORY` 只读工具；`FilesystemTools.announce_autonomy_history` 一次性通知。工单 052 的“每轮都带上次记录”已撤销。
 
 ## 下一个窗口第一步
 
-确认 093 的 PR 自动检查和合并状态；之后合并工单 094（分支 `ticket/094-autonomy-history`，上次自主活动只交一次 + `autonomy_history` 只读工具）。
+确认 094 的 PR 自动检查和合并状态；之后等 Lan 验收 089–094。
 
 ## 边界
 
