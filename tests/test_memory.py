@@ -22,8 +22,11 @@ class Backend:
         if self.vault is None:
             return
         row = self.rows[key]
-        self.vault.mkdir(parents=True, exist_ok=True)
-        (self.vault / f'{key}.md').write_text(
+        # Like Ombre, a delete moves the Markdown file into archive/.
+        folder = self.vault.parent / 'archive' if row.get('deleted') else self.vault
+        folder.mkdir(parents=True, exist_ok=True)
+        (self.vault / f'{key}.md').unlink(missing_ok=True)
+        (folder / f'{key}.md').write_text(
             f'---\nid: {key}\ntitle: Fictional memory\n'
             f'dont_surface: {str(bool(row.get("hidden"))).lower()}\n'
             f'type: {"archived" if row.get("deleted") else "dynamic"}\n---\n{row["content"]}',
@@ -105,6 +108,53 @@ class MemoryTests(unittest.TestCase):
         self.assertNotIn(key, self.memory.command('/memory'))
         self.assertEqual(self.memory.visible([(key, 'x')]), [])
         self.assertIn('没有这个记忆编号', self.memory.command(f'/delete {key} 确认'))
+
+    def test_confirmed_delete_erases_the_file_and_local_copies(self):
+        key, other = self.save('secret body'), self.save('kept body')
+        self.store.append('fake/memory-versions.jsonl', {'memory_id': key, 'old_content': 'old secret'})
+        self.store.append('fake/memory-versions.jsonl', {'memory_id': other, 'old_content': 'old kept'})
+        self.store.append('fake/delete-requests.jsonl', {'memory_id': key, 'title': 'Secret', 'reason': 'why'})
+        self.memory.command(f'/delete {key}')
+        self.assertIn('抹掉', self.memory.command(f'/delete {key} 确认'))
+        memory_dir = self.store.root / 'fake' / 'memory'
+        self.assertFalse(any(key in path.name for path in memory_dir.rglob('*.md')))
+        self.assertTrue(any(other in path.name for path in memory_dir.rglob('*.md')))
+        self.assertEqual([row['memory_id'] for row in self.store.read('fake/memory-versions.jsonl')], [other])
+        self.assertEqual(self.store.read('fake/delete-requests.jsonl')[0]['title'], '')
+        entry = self.memory.state['entries'][key]
+        self.assertEqual((entry['title'], entry.get('text')), ('', None))
+        self.assertTrue(entry['erased'])
+        self.assertEqual(self.memory.visible([(key, 'x')]), [])
+        self.assertNotIn('secret body', self.store.read('fake/memory/_agent/state.jsonl')[-1]['state'].__repr__())
+
+    def test_unconfirmed_delete_erases_nothing_until_retried(self):
+        key = self.save('secret body')
+        self.backend.fail = True
+        self.memory.command(f'/delete {key}')
+        self.memory.command(f'/delete {key} 确认')
+        self.backend.fail = False
+        memory_dir = self.store.root / 'fake' / 'memory'
+        self.assertTrue(any(key in path.name for path in memory_dir.rglob('*.md')))
+        reopened = self.open()
+        self.assertTrue(any(key in path.name for path in memory_dir.rglob('*.md')))
+        reopened.command(f'/delete {key}')
+        self.assertFalse(any(key in path.name for path in memory_dir.rglob('*.md')))
+
+    def test_memories_deleted_before_erase_existed_are_erased_once_on_start(self):
+        key = self.save('old secret')
+        self.backend.call('trace', {'bucket_id': key, 'delete': True})
+        with self.memory.mutex:
+            self.memory.state['entries'][key].update(hidden=True, deleted=True)
+            self.memory.persist()
+        decayed = self.save('faded by Ombre')
+        self.backend.rows[decayed]['deleted'] = True  # Archived by Ombre, not deleted by Lan.
+        self.backend.write_row(decayed)
+        reopened = self.open()
+        memory_dir = self.store.root / 'fake' / 'memory'
+        self.assertFalse(any(key in path.name for path in memory_dir.rglob('*.md')))
+        self.assertTrue(any(decayed in path.name for path in memory_dir.rglob('*.md')))
+        self.assertIn('彻底抹掉 1 条', ' '.join(reopened.notices()))
+        self.assertEqual(self.open().notices(), [])
 
     def test_failed_delete_stays_blocked_after_restart_and_can_be_retried(self):
         kept, deleted = self.save('kept body'), self.save('deleted body')

@@ -344,7 +344,9 @@ class NativeMemoryTools:
             failure = self._delete(memory_id, summary)
             if failure:
                 return 'Deletion was not confirmed. Check the memory state before retrying.', '出错', summary
-            return '已获 lan 人工批准并完成删除；旧版本已留档。', '成功', f'{summary}（旧版本已留档）'
+            if self.memory.state['entries'].get(memory_id, {}).get('erased'):
+                return 'Lan approved; the memory and its saved old versions were erased.', '成功', f'{summary}（已彻底删除）'
+            return 'Lan approved and the memory was deleted.', '成功', f'{summary}（已删除）'
         try:
             safe_args = {key: value for key, value in args.items()
                          if key not in (*banned, 'edit_reason', 'delete')}
@@ -492,6 +494,7 @@ class NativeMemoryTools:
             return 'The deletion was not confirmed; this memory remains hidden. Check its state before retrying with /delete.'
         entry.pop('delete_pending', None)
         self.memory.persist()
+        self.memory.erase(memory_id)
         return None
 
     def _filter_hidden_result(self, result, name):
