@@ -436,6 +436,12 @@ daily_budget_cny = "2"
     def test_english_summary_keeps_focus_and_next_step(self):
         prompt = self.controller._context()
         self.assertIn('Decision: ...\nReason: ...\nFocus: ...\nNext step: ...', prompt)
+        self.assertIn('This time is yours. Nobody is waiting on you.', prompt)
+        self.assertIn('make something, read, write to Lan, rest, or nothing at all.', prompt)
+        self.assertIn('If you want to talk to Lan, use send_message (up to three per wake).', prompt)
+        self.assertIn("It's for you, not a report.", prompt)
+        self.assertNotIn('Choose a safe, useful task to continue', prompt)
+        self.assertNotIn('Do not force activity just to produce output.', prompt)
         self.assertNotRegex(prompt, r'[\u3400-\u9fff]')
         self.model.return_value = ('Decision: wait\nReason: safe\nFocus: fixture\nNext step: resume',
                                    100, 20, 0)
@@ -485,7 +491,8 @@ daily_budget_cny = "2"
         self.assertNotIn('LAB_TEXT', text)
         self.assertIn('lab/已保存.md', text)
         self.assertIn('步' * 300, text)
-        self.assertIn('end with exactly four concise lines', text)
+        self.assertIn("When you're done, leave yourself a short note for next time", text)
+        self.assertIn('Decision: ...\nReason: ...\nFocus: ...\nNext step: ...', text)
         self.assertLessEqual(len(text.encode('utf-8')), 12 * 1024)
 
     def test_oversized_state_stops_without_sending_an_oversized_wake(self):
