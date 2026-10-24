@@ -34,6 +34,8 @@ Windows 桌面版 0.1：透明 Peter 可拖动、调整大小，点击收放原 
 
 ## 桌面版（浏览器网页版已在工单 093 停用）
 
+更新：先退出 Peter，再双击根目录 `update.bat`（拉新代码、补装组件、桌面代码有变化时重新打包 `VEIL.exe`，然后打开 Peter）。只 `git pull` 不会更新桌面软件。
+
 日常聊天用桌面版：双击 `start-desktop.bat`（首次先运行 `setup.bat` 和 `setup-desktop.bat`，见 `desktop/README.md`）。桌面版在后台用 `web_launcher.py` 启动本机聊天服务（`web_agent.py`，只监听 `127.0.0.1`，带一次性令牌），聊天、记忆、花费和 `/memory` 等命令与终端版共用同一套代码。浏览器网页 `web/index.html` 已删除；`start-web.bat` 现在直接打开桌面版。桌面版和终端版共用聊天锁，同一时间只能开一个。
 
 ## 配置与预算
