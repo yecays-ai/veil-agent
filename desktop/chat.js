@@ -6,7 +6,7 @@ const speechButton=$('speech-toggle'), speechStatus=$('speech-status');
 const speechDraftKey='veil-speech-draft';
 let speechRecorder=null,speechStream=null,speechChunks=[],speechSession=null,speechState='idle',speechPermissionPending=false,speechCancelled=false,speechDraftActive=false,speechTimer=null;
 let after=0, busy=true, transcribingVoice=false, stopping=false, stopped=false, typing=null, sending=false;
-let revealQueue=[], revealTimer=null, roundStartedAt=0, roundHasReply=false, previousMessage=null, voiceContextMenu=null;
+let revealQueue=[], revealTimer=null, roundStartedAt=0, roundHasReply=false, previousMessage=null;
 let pendingApproval=null, activityEnabled=false, exiting=false;
 const recentErrors=new Map();
 let memoryAvailable=false,memoryLoaded=false,memoryLoading=false,memoryCursor='',memoryItems=[];
@@ -47,6 +47,7 @@ function setSpeechStatus(state,message){
   speechButton.setAttribute('aria-pressed',String(active));
   speechButton.setAttribute('aria-label',active?'停止语音识别':'开始语音识别');
   speechButton.title=active?'停止语音识别':'开始语音识别';
+  speechButton.innerHTML=window.veilIcon(state==='listening'?'square-x':'mic');
   box.disabled=active;
   sendBtn.disabled=busy||revealQueue.length>0||sending||stopping||stopped||active;
 }
@@ -126,12 +127,31 @@ function scrollIfFollowing(action){
   action();if(stick)log.scrollTop=log.scrollHeight;
 }
 function showEvent(e){
+  if(e.kind==='message_removed'){
+    removeMessageBubble(e.message_id);
+    return;
+  }
+  if(e.kind==='message_recalled'){
+    const node=findMessageBubble(e.message_id);
+    if(node){closeMessageActions();node.classList.add('recalled');node.replaceChildren();node.textContent='已撤回这条消息';node.dataset.messageText='[Message recalled]';node.removeAttribute('data-media-id')}
+    return;
+  }
+  if(e.kind==='message_updated'){
+    const node=findMessageBubble(e.message_id);
+    if(node){
+      if(typeof e.text==='string'){node.dataset.messageText=e.text;node.replaceChildren();node.innerHTML=render(e.text)}
+      updateFavoriteBadge(node,e.favorite===true);
+    }
+    return;
+  }
   if(e.kind==='voice_status'&&e.media?.id){
     const node=[...col.querySelectorAll('.msg')].find(item=>item.dataset.mediaId===e.media.id);
     if(node)updateVoiceMessage(node,e.media);
     return;
   }
   if(e.kind==='reset'){
+    closeMessageActions();
+    multiSelect=false;selectedMessageIds.clear();updateSelectionBar();
     col.replaceChildren();typing=null;previousMessage=null;roundStartedAt=0;roundHasReply=false;
     scrollIfFollowing(()=>add('notice',e.text,e.id,e.time));
     return;
@@ -140,7 +160,7 @@ function showEvent(e){
     const pending=[...col.querySelectorAll('.msg')].find(node=>node.dataset.mediaId===e.media.id);
     if(pending)pending.remove();
   }
-  scrollIfFollowing(()=>add(e.kind,e.text,e.id,e.time,e.media));
+  scrollIfFollowing(()=>add(e.kind,e.text,e.id,e.time,e.media,e.message_id,e.request_id,e.favorite));
   if(e.kind==='approval'&&e.id!==pendingApproval){
     const card=col.querySelector('.approval[data-id="'+e.id+'"]');
     card.classList.add('done');card.querySelector('.status').textContent='审批已结束，请看后续聊天提示。';
@@ -177,35 +197,6 @@ function render(text){
     :p.replace(i>0?/^\n/:/^$/,'').replace(i<parts.length-1?/\n$/:/^$/,'').replace(/`([^`\n]+)`/g,'<code>$1</code>').replace(/\*\*([^*\n]+)\*\*/g,'<b>$1</b>')).join('');
 }
 function formatVoiceTime(seconds){if(!Number.isFinite(seconds)||seconds<0)return'0:00';const n=Math.floor(seconds);return Math.floor(n/60)+':'+String(n%60).padStart(2,'0')}
-function closeVoiceContextMenu(){
-  if(!voiceContextMenu)return;
-  voiceContextMenu.remove();voiceContextMenu=null;
-  document.removeEventListener('pointerdown',dismissVoiceContextMenu,true);
-  document.removeEventListener('keydown',dismissVoiceContextMenu);
-}
-function dismissVoiceContextMenu(event){
-  if(event.type==='keydown'&&event.key!=='Escape')return;
-  if(event.type==='pointerdown'&&voiceContextMenu?.contains(event.target))return;
-  closeVoiceContextMenu();
-}
-function showVoiceContextMenu(event,wrap){
-  event.preventDefault();closeVoiceContextMenu();
-  const textBox=wrap.querySelector('.voice-transcript');
-  if(!textBox)return;
-  const menu=document.createElement('div');menu.className='voice-context-menu';menu.setAttribute('role','menu');
-  for(const [label,available] of [['删除',false],['撤回',false],[textBox.hidden?'转文字':'收起文字',!!textBox.textContent.trim()]]){
-    const item=document.createElement('button');item.type='button';item.setAttribute('role','menuitem');item.textContent=label;item.disabled=!available;
-    if(!available&&label!=='转文字'&&label!=='收起文字')item.title='暂未开放';
-    if(available)item.onclick=()=>{textBox.hidden=!textBox.hidden;closeVoiceContextMenu()};
-    menu.appendChild(item);
-  }
-  document.body.appendChild(menu);voiceContextMenu=menu;
-  menu.style.left=Math.max(8,Math.min(event.clientX,window.innerWidth-menu.offsetWidth-8))+'px';
-  menu.style.top=Math.max(8,Math.min(event.clientY,window.innerHeight-menu.offsetHeight-8))+'px';
-  document.addEventListener('pointerdown',dismissVoiceContextMenu,true);
-  document.addEventListener('keydown',dismissVoiceContextMenu);
-  menu.querySelector('button:not(:disabled)')?.focus();
-}
 function updateVoiceMessage(node,media){
   const wrap=node.querySelector('.msg-voice');if(!wrap)return;
   const transcript=(media.transcript||'').trim();
@@ -227,7 +218,7 @@ function updateVoiceMessage(node,media){
 function createVoiceBubble(kind,text,media){
   const wrap=document.createElement('div');wrap.className='msg-voice';
   const row=document.createElement('div');row.className='voice-player';
-  const play=document.createElement('button');play.type='button';play.className='voice-play';play.textContent='▶';play.setAttribute('aria-label','播放语音');
+  const play=document.createElement('button');play.type='button';play.className='voice-play';play.innerHTML=window.veilIcon('play',16);play.setAttribute('aria-label','播放语音');
   const wave=document.createElement('span');wave.className='voice-wave';wave.setAttribute('aria-hidden','true');
   for(let i=0;i<9;i++){const bar=document.createElement('i');wave.appendChild(bar)}
   const clock=document.createElement('span');clock.className='voice-clock';clock.textContent=formatVoiceTime(media.duration||0);
@@ -237,16 +228,22 @@ function createVoiceBubble(kind,text,media){
   if(media.localUrl)audio.src=media.localUrl;else window.veilDesktop.mediaUrl(media.filename).then(url=>{audio.src=url}).catch(()=>{});
   const updateDuration=()=>{if(Number.isFinite(audio.duration)&&audio.duration>0)clock.textContent=formatVoiceTime(audio.duration)};
   audio.onloadedmetadata=updateDuration;audio.ondurationchange=updateDuration;
-  audio.onended=()=>{play.textContent='▶';play.setAttribute('aria-label','播放语音');wrap.classList.remove('playing')};
-  play.onclick=async()=>{if(audio.paused){try{await audio.play();play.textContent='Ⅱ';play.setAttribute('aria-label','暂停语音');wrap.classList.add('playing')}catch{status.textContent='无法播放这段语音'}}else{audio.pause();play.textContent='▶';play.setAttribute('aria-label','播放语音');wrap.classList.remove('playing')}};
+  audio.onended=()=>{play.innerHTML=window.veilIcon('play',16);play.setAttribute('aria-label','播放语音');wrap.classList.remove('playing')};
+  play.onclick=async()=>{if(audio.paused){try{await audio.play();play.innerHTML=window.veilIcon('pause',16);play.setAttribute('aria-label','暂停语音');wrap.classList.add('playing')}catch{status.textContent='无法播放这段语音'}}else{audio.pause();play.innerHTML=window.veilIcon('play',16);play.setAttribute('aria-label','播放语音');wrap.classList.remove('playing')}};
   row.append(play,wave,clock);wrap.append(row,audio,status);
-  wrap.addEventListener('contextmenu',event=>showVoiceContextMenu(event,wrap));
   if(kind==='assistant'){
     const line=document.createElement('div');line.className='voice-transcript';line.hidden=true;line.textContent=(text||'').trim();wrap.append(line);
   }else updateVoiceMessage({querySelector:()=>wrap},media);
   return wrap;
 }
-function add(kind,text,id,time,media){
+function updateFavoriteBadge(node,favorite){
+  node.dataset.favorite=String(favorite);
+  node.classList.toggle('is-favorite',favorite);
+  let badge=node.querySelector('.msg-favorite');
+  if(favorite&&!badge){badge=document.createElement('span');badge.className='msg-favorite';badge.innerHTML=window.veilIcon('star',13);badge.title='Favorite';badge.setAttribute('aria-label','Favorite');node.appendChild(badge)}
+  else if(!favorite&&badge)badge.remove();
+}
+function add(kind,text,id,time,media,messageId,requestId,favorite=false){
   if(kind==='notice'){notify(text);return}
   if(kind==='error'){
     const previous=recentErrors.get(text),now=Date.now();
@@ -262,6 +259,12 @@ function add(kind,text,id,time,media){
     }
     const grouped=previousMessage&&previousMessage.kind===kind&&Math.abs(stamp-previousMessage.time)<GROUP_GAP;
     d.className='msg '+kind+(grouped?' grouped':'');
+    d.dataset.messageText=text;
+    d.dataset.time=time||'';
+    d.dataset.favorite=String(favorite===true);
+    if(messageId){d.dataset.messageId=messageId;d.tabIndex=-1;d.addEventListener('contextmenu',event=>showMessageActions(event,d))}
+    if(requestId)d.dataset.requestId=requestId;
+    if(media?.filename)d.dataset.mediaFilename=media.filename;
     if(media&&media.kind==='voice'){
       d.dataset.mediaId=media.id;
       d.appendChild(createVoiceBubble(kind,text,media));
@@ -271,18 +274,220 @@ function add(kind,text,id,time,media){
       const image=document.createElement('img');image.className='msg-image';window.veilDesktop.mediaUrl(media.filename).then(url=>{image.src=url});image.alt=media.name||'图片';image.loading='lazy';d.appendChild(image);
       if(text&&text!=='[图片]'){const caption=document.createElement('div');caption.innerHTML=render(text);d.appendChild(caption)}
     }else d.innerHTML=render(text);
+    updateFavoriteBadge(d,d.dataset.favorite==='true');
+    d.classList.toggle('is-selected',selectedMessageIds.has(messageId));
     previousMessage={kind,time:stamp};
   }
   else if(kind==='approval'){
     d.className='approval';d.dataset.id=id;
     const p=document.createElement('p');p.textContent=text;d.appendChild(p);
     const status=document.createElement('div');status.className='status';status.setAttribute('aria-live','polite');d.appendChild(status);
-    for(const [label,ans,cls] of [['同意','y','yes'],['拒绝','n','']]){
-      const b=document.createElement('button');b.type='button';b.dataset.answer=ans;b.textContent=label;b.className=cls;d.appendChild(b);
+    for(const [label,ans,cls,iconName] of [['同意','y','yes','check'],['拒绝','n','','x']]){
+      const b=document.createElement('button');b.type='button';b.dataset.answer=ans;b.innerHTML=window.veilIcon(iconName,14)+' '+label;b.className=cls;d.appendChild(b);
     }
   } else {d.className=kind==='error'?'error':'notice';d.textContent=text}
   if(typing)col.insertBefore(d,typing);else col.appendChild(d);
   if(kind==='error')recentErrors.set(text,{at:Date.now(),count:1,node:d});
+}
+let messageActionLayer=null;
+let selectedMessageIds=new Set();
+let multiSelect=false;
+function findMessageBubble(messageId){
+  if(!messageId)return null;
+  return [...col.querySelectorAll('.msg[data-message-id]')].find(node=>node.dataset.messageId===messageId)||null;
+}
+function removeMessageBubble(messageId){
+  const node=findMessageBubble(messageId);
+  if(!node)return;
+  selectedMessageIds.delete(messageId);updateSelectionBar();
+  if(messageActionLayer?.dataset.messageId===messageId)closeMessageActions();
+  node.remove();
+  const last=[...col.querySelectorAll('.msg')].at(-1);
+  previousMessage=last?{kind:last.classList.contains('user')?'user':'assistant',time:Date.parse(last.dataset.time)||Date.now()}:null;
+}
+function closeMessageActions(){
+  if(!messageActionLayer)return;
+  if(messageActionLayer.positionMenu){
+    window.removeEventListener('resize',messageActionLayer.positionMenu);
+    window.removeEventListener('scroll',messageActionLayer.positionMenu,true);
+    window.visualViewport?.removeEventListener('resize',messageActionLayer.positionMenu);
+    window.visualViewport?.removeEventListener('scroll',messageActionLayer.positionMenu);
+  }
+  messageActionLayer.remove();messageActionLayer=null;
+  document.removeEventListener('keydown',dismissMessageActions);
+}
+function dismissMessageActions(event){if(event.key==='Escape')closeMessageActions()}
+function canRegenerateMessage(node){
+  const requestId=node.dataset.requestId;
+  if(!requestId)return false;
+  const messages=[...col.querySelectorAll('.msg[data-message-id]')],index=messages.indexOf(node);
+  return index>=0&&!messages.slice(index+1).some(next=>next.classList.contains('user')||
+    (next.classList.contains('assistant')&&next.dataset.requestId!==requestId));
+}
+function recallAllowed(node){
+  const sentAt=Date.parse(node.dataset.time||'');
+  const alreadyAnswered=[...col.querySelectorAll('.msg.assistant[data-message-id]')].some(reply=>reply.dataset.requestId===node.dataset.requestId);
+  return node.classList.contains('user')&&!alreadyAnswered&&Number.isFinite(sentAt)&&Date.now()>=sentAt&&Date.now()-sentAt<=120000;
+}
+function quoteMessage(node){
+  const who=node.classList.contains('assistant')?($('title').textContent||'Peter'):'我';
+  const quoted=(node.dataset.messageText||'').split('\n').map(line=>'> '+line).join('\n');
+  const prefix=box.value.trim()?box.value.replace(/\s+$/,'')+'\n\n':'';
+  box.value=prefix+`> ${who}：\n`+quoted;resizeBox();box.focus();box.setSelectionRange(box.value.length,box.value.length);
+}
+async function showMessageMemory(node){
+  const layer=document.createElement('div');layer.className='chat-confirm-layer';
+  const backdrop=document.createElement('button');backdrop.type='button';backdrop.className='chat-confirm-backdrop';backdrop.setAttribute('aria-label','Close memory details');
+  const dialog=document.createElement('section');dialog.className='chat-confirm-dialog';dialog.setAttribute('role','dialog');dialog.setAttribute('aria-modal','true');
+  const title=document.createElement('h2');title.textContent='Memories supplied for this reply';
+  const content=document.createElement('div');content.className='message-memory-content';
+  const status=document.createElement('p');status.textContent='正在读取这条回复使用的记忆…';content.appendChild(status);
+  const buttons=document.createElement('div'),closeButton=document.createElement('button');closeButton.type='button';closeButton.textContent='Close';
+  const close=()=>{layer.remove();node.focus({preventScroll:true})};backdrop.onclick=closeButton.onclick=close;
+  dialog.addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();close()}});
+  buttons.append(closeButton);dialog.append(title,content,buttons);layer.append(backdrop,dialog);document.body.appendChild(layer);closeButton.focus();
+  try{
+    const result=await api('/api/message/action',{action:'memory',message_id:node.dataset.messageId});
+    const data=await result.json();if(!result.ok)throw new Error(data.message||'无法读取这条回复的记忆引用。');
+    if(!Array.isArray(data.items)||!data.items.length){status.textContent='这条回复没有自动提供的 Ombre 记忆。可在“记忆”页面查看和管理独立记忆。';return}
+    content.replaceChildren();
+    for(const memoryId of data.items){
+      const section=document.createElement('section');section.className='message-memory-entry';
+      const heading=document.createElement('h3');heading.textContent=`Ombre memory · ${memoryId}`;
+      const body=document.createElement('pre');body.textContent='正在读取…';section.append(heading,body);content.appendChild(section);
+      try{
+        let offset=0,version='',text='';
+        do{
+          const params=new URLSearchParams({id:memoryId,offset:String(offset)});if(version)params.set('version',version);
+          const pageResponse=await api('/api/memory/read?'+params.toString());const page=await pageResponse.json();
+          if(!pageResponse.ok)throw new Error(page.error||'这条记忆暂时无法读取。');
+          if(typeof page.text!=='string'||typeof page.version!=='string')throw new Error('记忆内容格式无法识别。');
+          version=page.version;text+=page.text;offset=page.next_offset;
+        }while(offset!==null);
+        body.textContent=text||'（空记忆）';
+      }catch(error){body.textContent=error.message||'这条记忆暂时无法读取。'}
+    }
+  }catch(error){status.textContent=error.message||'无法读取这条回复的记忆引用。'}
+}
+function showMessageEditDialog(node){
+  const layer=document.createElement('div');layer.className='chat-confirm-layer';
+  const backdrop=document.createElement('button');backdrop.type='button';backdrop.className='chat-confirm-backdrop';backdrop.setAttribute('aria-label','Cancel edit');
+  const dialog=document.createElement('section');dialog.className='chat-confirm-dialog chat-edit-dialog';dialog.setAttribute('role','dialog');dialog.setAttribute('aria-modal','true');dialog.setAttribute('aria-labelledby','message-edit-title');
+  const title=document.createElement('h2');title.id='message-edit-title';title.textContent='Edit message';
+  const input=document.createElement('textarea');input.value=node.dataset.messageText||'';input.maxLength=12000;input.rows=5;input.setAttribute('aria-label','Message text');
+  const buttons=document.createElement('div'),cancel=document.createElement('button'),save=document.createElement('button');
+  cancel.type=save.type='button';cancel.textContent='Cancel';save.textContent='Save';
+  const close=()=>{layer.remove();node.focus({preventScroll:true})};backdrop.onclick=cancel.onclick=close;
+  save.onclick=()=>{const content=input.value.trim();if(!content){notify('Message cannot be empty.','error');input.focus();return}close();void runMessageAction('edit',node.dataset.messageId,{content})};
+  dialog.addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();close();return}if(event.key==='Tab'){const targets=[input,cancel,save],index=targets.indexOf(document.activeElement);if(event.shiftKey&&index===0){event.preventDefault();save.focus()}else if(!event.shiftKey&&index===2){event.preventDefault();input.focus()}}});
+  buttons.append(cancel,save);dialog.append(title,input,buttons);layer.append(backdrop,dialog);document.body.appendChild(layer);input.focus();input.setSelectionRange(input.value.length,input.value.length);
+}
+function showMessageActions(event,node){
+  event.preventDefault();
+  if(busy||sending||stopping||stopped||node.classList.contains('recalled')||!node.dataset.messageId)return;
+  closeMessageActions();
+  const voice=node.classList.contains('voice-message')||!!node.querySelector('.msg-voice');
+  const transcript=node.querySelector('.msg-voice .voice-transcript');
+  const user=node.classList.contains('user'),favorite=node.dataset.favorite==='true';
+  const actions=voice?[
+    ['transcribe',transcript&&!transcript.hidden?'Hide text':'Transcribe','file-text',!transcript?.textContent.trim()],
+    ['favorite',favorite?'Unfavorite':'Favorite','star',false],['download','Download','download',!node.dataset.mediaFilename],
+    ['delete','Delete','trash',false],...(user?[['recall','Recall','undo',!recallAllowed(node)]]:[])
+  ]:[
+    ['copy','Copy','copy',!(node.dataset.messageText||'').trim()||!!node.dataset.mediaFilename],
+    ['edit','Edit','pencil',!((node.dataset.messageText||'').trim())||!!node.dataset.mediaFilename],
+    ['quote','Quote','quote',!(node.dataset.messageText||'').trim()],
+    ['memory','Memory','brain',user],['select','Select','select',false],
+    [user?'recall':'favorite',user?'Recall':(favorite?'Unfavorite':'Favorite'),user?'undo':'star',user&&!recallAllowed(node)],
+    ['delete','Delete','trash',false],['regenerate','Regenerate','rotate-ccw',user||!canRegenerateMessage(node)]
+  ];
+  const layer=document.createElement('div');layer.className='chat-action-layer';layer.dataset.messageId=node.dataset.messageId;
+  const backdrop=document.createElement('button');backdrop.type='button';backdrop.className='chat-action-backdrop';backdrop.setAttribute('aria-label','Close message actions');backdrop.onclick=closeMessageActions;
+  const menu=document.createElement('div');menu.className='chat-message-actions';menu.setAttribute('role','menu');menu.setAttribute('aria-label','Message actions');
+  for(const [action,label,iconName,disabled] of actions){
+    const button=document.createElement('button');button.type='button';button.className='chat-action-item'+(action==='delete'?' danger':'');button.setAttribute('role','menuitem');
+    button.disabled=disabled===true;
+    button.innerHTML=window.veilIcon(iconName,24)+`<small>${label}</small>`;
+    button.onclick=()=>{
+      if(action==='delete'){closeMessageActions();showMessageDeleteConfirm(node);return}
+      if(action==='copy'){
+        const content=node.dataset.messageText||'';closeMessageActions();
+        navigator.clipboard.writeText(content).then(()=>notify('消息已复制。')).catch(()=>notify('无法复制这条消息。','error'));
+        return;
+      }
+      if(action==='transcribe'){
+        const text=node.querySelector('.msg-voice .voice-transcript');
+        if(text)text.hidden=!text.hidden;
+        closeMessageActions();return;
+      }
+      if(action==='quote'){closeMessageActions();quoteMessage(node);return}
+      if(action==='memory'){closeMessageActions();showMessageMemory(node);return}
+      if(action==='select'){closeMessageActions();multiSelect=true;selectedMessageIds.add(node.dataset.messageId);updateSelectionBar();refreshMessageSelection();return}
+      if(action==='download'){
+        const filename=node.dataset.mediaFilename;closeMessageActions();
+        if(filename)window.veilDesktop.mediaUrl(filename).then(url=>{const link=document.createElement('a');link.href=url;link.download=filename;link.click()}).catch(()=>notify('Unable to download this voice message.','error'));
+        return;
+      }
+      if(action==='edit'){closeMessageActions();showMessageEditDialog(node);return}
+      if(action==='favorite'){closeMessageActions();void runMessageAction('favorite',node.dataset.messageId,{favorite:node.dataset.favorite!=='true'});return}
+      closeMessageActions();void runMessageAction(action,node.dataset.messageId);
+    };
+    menu.appendChild(button);
+  }
+  layer.append(backdrop,menu);document.body.appendChild(layer);messageActionLayer=layer;
+  const positionMenu=()=>{
+    if(!node.isConnected){closeMessageActions();return}
+    const area=$('log').getBoundingClientRect(),bubble=node.getBoundingClientRect(),width=menu.offsetWidth,height=menu.offsetHeight,margin=8,gap=9;
+    const left=Math.max(area.left+margin,Math.min((bubble.left+bubble.right-width)/2,area.right-margin-width));
+    const below=area.bottom-margin-(bubble.bottom+gap),above=bubble.top-gap-area.top-margin;
+    const placeBelow=height<=below||(height>above&&below>=above);
+    const available=Math.max(0,area.bottom-area.top-2*margin);
+    const top=placeBelow?bubble.bottom+gap:bubble.top-gap-Math.min(height,available);
+    menu.style.maxHeight=`${available}px`;menu.style.overflowY='auto';
+    menu.style.left=`${left}px`;menu.style.top=`${Math.max(area.top+margin,Math.min(top,area.bottom-margin-Math.min(height,available)))}px`;
+  };
+  layer.positionMenu=positionMenu;positionMenu();
+  window.addEventListener('resize',positionMenu);window.addEventListener('scroll',positionMenu,true);
+  window.visualViewport?.addEventListener('resize',positionMenu);window.visualViewport?.addEventListener('scroll',positionMenu);
+  menu.querySelector('button')?.focus();document.addEventListener('keydown',dismissMessageActions);
+}
+function showMessageDeleteConfirm(node,messageIds=null){
+  const layer=document.createElement('div');layer.className='chat-confirm-layer';
+  const backdrop=document.createElement('button');backdrop.type='button';backdrop.className='chat-confirm-backdrop';backdrop.setAttribute('aria-label','Cancel delete');
+  const dialog=document.createElement('section');dialog.className='chat-confirm-dialog';dialog.setAttribute('role','alertdialog');dialog.setAttribute('aria-modal','true');dialog.setAttribute('aria-labelledby','message-delete-title');
+  const title=document.createElement('h2');title.id='message-delete-title';title.textContent=messageIds?.length>1?'Delete selected messages?':'Delete message?';
+  const text=document.createElement('p');text.textContent='This will permanently remove the selected chat record(s), attached media when no longer referenced, and their future conversation context.';
+  const buttons=document.createElement('div'),cancel=document.createElement('button'),remove=document.createElement('button');
+  cancel.type=remove.type='button';cancel.textContent='Cancel';remove.textContent='Delete';remove.className='danger';
+  const close=()=>{layer.remove();node?.focus({preventScroll:true})};backdrop.onclick=cancel.onclick=close;
+  dialog.addEventListener('keydown',event=>{
+    if(event.key==='Escape'){event.preventDefault();close();return}
+    if(event.key==='Tab'){
+      const targets=[cancel,remove],index=targets.indexOf(document.activeElement);
+      if(event.shiftKey&&index===0){event.preventDefault();remove.focus()}
+      else if(!event.shiftKey&&index===1){event.preventDefault();cancel.focus()}
+    }
+  });
+  remove.onclick=()=>{close();void runMessageAction('delete',node?.dataset.messageId,messageIds?{message_ids:messageIds}:undefined)};
+  buttons.append(cancel,remove);dialog.append(title,text,buttons);layer.append(backdrop,dialog);document.body.appendChild(layer);remove.focus();
+}
+async function runMessageAction(action,messageId,extra={}){
+  try{
+    const response=await api('/api/message/action',{action,message_id:messageId,...extra});
+    const result=await response.json();
+    if(!response.ok||!result.ok)throw new Error(result.message||'Message action failed.');
+    notify(result.message||'Done');
+    if(action==='delete'&&extra.message_ids){multiSelect=false;selectedMessageIds.clear();updateSelectionBar();refreshMessageSelection()}
+    if(action==='regenerate')setBusy(true);
+  }catch(error){notify(error.message||'Message action failed.','error')}
+}
+function refreshMessageSelection(){
+  document.querySelectorAll('.msg[data-message-id]').forEach(node=>node.classList.toggle('is-selected',selectedMessageIds.has(node.dataset.messageId)));
+}
+function updateSelectionBar(){
+  const bar=$('selection-bar');if(!bar)return;
+  bar.hidden=!multiSelect;$('selection-count').textContent=`已选 ${selectedMessageIds.size} 条`;
+  $('selection-delete').disabled=selectedMessageIds.size===0;
 }
 function setBusy(b){
   busy=b;const waiting=b||revealQueue.length>0;sendBtn.disabled=waiting||sending||voiceSending||stopping||stopped||speechIsActive();
@@ -779,11 +984,23 @@ $('memory-panel').onclick=()=>window.veilDesktop.openMemory();
 document.querySelectorAll('[data-cmd="/cost"]').forEach(button=>button.onclick=()=>{setPage('chat');send('/cost')});
 $('memory-panel').title='在 Ombre Brain 中打开高级记忆管理';
 col.addEventListener('click',event=>{
+  if(multiSelect){
+    const message=event.target.closest('.msg[data-message-id]');
+    if(message&&!event.target.closest('button,a,input')){
+      event.preventDefault();
+      if(selectedMessageIds.has(message.dataset.messageId))selectedMessageIds.delete(message.dataset.messageId);
+      else selectedMessageIds.add(message.dataset.messageId);
+      updateSelectionBar();refreshMessageSelection();return;
+    }
+  }
   const button=event.target.closest('.approval button[data-answer]');
   if(!button)return;
   const card=button.closest('.approval');
   approve(card,card.querySelector('.status'),button.dataset.answer,Number(card.dataset.id));
 });
+$('selection-all').onclick=()=>{selectedMessageIds=new Set([...document.querySelectorAll('.msg[data-message-id]')].map(node=>node.dataset.messageId));updateSelectionBar();refreshMessageSelection()};
+$('selection-delete').onclick=()=>showMessageDeleteConfirm(null,[...selectedMessageIds]);
+$('selection-cancel').onclick=()=>{multiSelect=false;selectedMessageIds.clear();updateSelectionBar();refreshMessageSelection()};
 document.querySelector('#collapse').onclick=()=>window.veilDesktop.collapse();
 document.querySelector('#expand').onclick=()=>window.veilDesktop.expand();
 window.veilDesktop.onShowActivity(()=>setPage('activity'));
