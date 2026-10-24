@@ -31,6 +31,10 @@ class UpdateBatTests(unittest.TestCase):
         self.assertIn('git rev-list -1 HEAD -- desktop', self.commands)
         self.assertRegex(self.commands, r'>"%STAMP%" echo %DESKTOP_REV%')
 
+    def test_runs_from_a_copy_because_pull_may_rewrite_it(self):
+        self.assertIn('--running-copy', self.commands)
+        self.assertLess(self.commands.index('update-running.bat'), self.commands.index('git pull'))
+
     def test_checked_out_with_windows_line_endings(self):
         attributes = (ROOT / '.gitattributes').read_text(encoding='utf-8')
         self.assertTrue(re.search(r'^update\.bat\s+text\s+eol=crlf$', attributes, re.M))

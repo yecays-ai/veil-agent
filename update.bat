@@ -4,7 +4,14 @@ rem It never switches branches, never stashes, never touches data\ or persona\.
 rem If anything is off it stops and says why; nothing is half-changed before git succeeds.
 setlocal
 chcp 65001 >nul
-cd /d "%~dp0"
+rem git pull may rewrite this very file, and cmd keeps reading a running .bat from disk.
+rem So run from a copy; the copy is told where the Agent folder is.
+if /i not "%~1"=="--running-copy" (
+  if not exist "%~dp0.local-tmp" mkdir "%~dp0.local-tmp"
+  copy /y "%~f0" "%~dp0.local-tmp\update-running.bat" >nul
+  "%~dp0.local-tmp\update-running.bat" --running-copy "%~dp0."
+)
+cd /d "%~2"
 set PYTHONUTF8=1
 set "GIT_CONFIG_COUNT=1"
 set "GIT_CONFIG_KEY_0=safe.directory"
