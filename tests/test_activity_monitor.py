@@ -62,6 +62,20 @@ class ActivityMonitorTests(unittest.TestCase):
         item = self.hub.tool_activity()[0]
         self.assertNotIn('hunter2', item['detail'])
 
+    def test_unchanged_ledger_is_not_reread_on_every_poll(self):
+        self.store.append('test/tools.jsonl', {'call_id': 'c1', 'tool': 'read_text_file',
+                          'path': 'lab/a.md', 'state': '成功'})
+        first = self.hub.tool_activity()
+        calls = []
+        original = self.store.read_tail
+        self.store.read_tail = lambda *args: calls.append(args) or original(*args)
+        self.assertIs(self.hub.tool_activity(), first)
+        self.assertEqual(calls, [])
+        self.store.append('test/tools.jsonl', {'call_id': 'c2', 'tool': 'hold',
+                          'path': 'new', 'state': '成功'})
+        self.assertEqual(len(self.hub.tool_activity()), 2)
+        self.assertEqual(len(calls), 1)
+
     def test_store_read_tail_parses_only_the_requested_recent_records(self):
         path = self.store.root / 'test' / 'tools.jsonl'
         path.parent.mkdir(parents=True, exist_ok=True)

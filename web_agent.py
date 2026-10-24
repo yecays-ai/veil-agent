@@ -237,6 +237,15 @@ class Hub:
         chat = self.chat
         if chat is None:
             return []
+        # The desktop polls every 600 ms per window; only re-read the ledger when it changed.
+        try:
+            stat = (chat.store.root / f'{chat.cfg.id}/tools.jsonl').stat()
+            key = (chat.cfg.id, stat.st_size, stat.st_mtime_ns, limit)
+        except OSError:
+            key = None
+        cached = getattr(self, '_tool_activity_cache', None)
+        if key is not None and cached and cached[0] == key:
+            return cached[1]
         rows = chat.store.read_tail(f'{chat.cfg.id}/tools.jsonl', 5000)
         projected = {}
         order = []
@@ -267,7 +276,10 @@ class Hub:
                 item['autonomy_run_id'] = row['autonomy_run_id']
             if row.get('state') != '进行中':
                 item['finished_at'] = row.get('time')
-        return [projected[key] for key in order[-limit:]]
+        result = [projected[call] for call in order[-limit:]]
+        if key is not None:
+            self._tool_activity_cache = (key, result)
+        return result
 
     def media_info(self, media_id):
         with self.media_lock:
@@ -964,6 +976,7 @@ class Hub:
             return True
 
     def snapshot(self, after):
+        tool_activity = self.tool_activity()
         with self.cond:
             autonomy = self.autonomy.status() if self.autonomy else {}
             return {'events': self.events[after:], 'busy': self.busy and not self.autonomy_busy,
@@ -974,7 +987,7 @@ class Hub:
                     'current_capabilities': self.current_capabilities(),
                     'capability_record': self.capability_record(),
                     'runtime_status': self.runtime_status(),
-                    'tool_activity': self.tool_activity(),
+                    'tool_activity': tool_activity,
                     'memory_panel_url': self.memory_url,
                     'memory_available': self.memory_tools is not None, **autonomy}
 
