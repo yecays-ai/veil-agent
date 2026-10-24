@@ -353,7 +353,11 @@ daily_budget_cny = "2"
         self.assertEqual(self.hub.submit('another message', 'two'), 'busy')
         self.assertTrue(self.hub.autonomy_interrupted.is_set())
         self.assertFalse(self.hub.snapshot(0)['busy'])
-        self.assertEqual(self.hub.inbox.get_nowait(), 'continue chat')
+        queued = self.hub.inbox.get_nowait()
+        self.assertEqual(queued[0], 'continue chat')
+        self.assertIsNone(queued[1])
+        self.assertTrue(callable(queued[2]))
+        self.assertEqual(queued[3], 'one')
 
     def test_chat_queued_during_due_check_wins_over_autonomy_wake(self):
         self.activity.set(True)
