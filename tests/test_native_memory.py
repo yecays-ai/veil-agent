@@ -452,7 +452,7 @@ class OmbreToolGuardTests(unittest.TestCase):
         result, state, _ = self.call('trace', {'bucket_id': 'mem001', 'delete': True,
                                                'delete_reason': 'approved'}, lambda _: 'y')
         self.assertEqual(state, '成功')
-        self.assertIn('已获 lan 人工批准', result)
+        self.assertIn('Lan approved', result)
         self.assertTrue(self.memory.state['entries']['mem001']['deleted'])
 
     def test_memory_title_cannot_authorize_deletion(self):

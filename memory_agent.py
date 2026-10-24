@@ -440,8 +440,7 @@ def ordinary_hits(text):
     return [(key, found[key]) for key in allowed if key in found]
 
 
-SOFT_DELETE_NOTE = ('注意：Ombre 只做软删除——文件仍留在记忆目录里，没有被物理擦除；'
-                    '本程序不会再读取或想起它。')
+ERASE_NOTE = '记忆文件和程序保存的旧版本都已从硬盘抹掉。'
 
 
 class Memory:
@@ -504,6 +503,9 @@ class Memory:
         except Exception as exc:
             raise UserError('开场记忆读取失败，请保留记忆库后重开。') from exc
         self.persist()
+        erased = self.erase_deleted()
+        if erased:
+            self.messages.put(f'已彻底抹掉 {len(erased)} 条之前删除的记忆。')
 
     def __enter__(self):
         return self
@@ -1043,6 +1045,76 @@ class Memory:
             raise ValueError('memory save not confirmed')
         return match.group(1)
 
+    def _bucket_files(self, memory_id):
+        """Yield (path, in_archive) for role-local Markdown files carrying this exact memory ID."""
+        vault = vault_path(self.store.root, self.cfg.id).resolve()
+        archive = vault / 'archive'
+        for path in vault.rglob('*.md'):
+            if path.is_symlink() or not path.resolve().is_relative_to(vault):
+                continue
+            try:
+                lines = path.read_text(encoding='utf-8').splitlines()
+            except (OSError, UnicodeError):
+                continue
+            if not lines or lines[0].strip() != '---':
+                continue
+            end = next((i for i, line in enumerate(lines[1:], 1) if line.strip() == '---'), len(lines))
+            found = None
+            for line in lines[1:end]:
+                key, sep, value = line.partition(':')
+                if sep and not line[:1].isspace() and key.strip() == 'id':
+                    found = self._frontmatter_scalar(value)
+            if found == memory_id or (found is None and path.stem.endswith('_' + memory_id)):
+                yield path, path.resolve().is_relative_to(archive)
+
+    def _purge_rows(self, name, memory_id, scrub):
+        """Rewrite one local ledger without this memory's text (Lan's explicit erase decision)."""
+        path = self.store.root / name
+        with self.store.mutex:
+            if not path.exists():
+                return
+            rows = self.store.read(name)
+            kept = [row for row in (scrub(row) if row.get('memory_id') == memory_id else row
+                                    for row in rows) if row is not None]
+            if kept == rows:
+                return
+            temporary = path.with_suffix(path.suffix + '.tmp')
+            with temporary.open('w', encoding='utf-8', newline='\n') as handle:
+                for row in kept:
+                    handle.write(json.dumps(row, ensure_ascii=False) + '\n')
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, path)
+
+    def erase(self, memory_id):
+        """Physically remove a deleted memory and VEIL's own copies of its text (ticket 091).
+
+        Only runs after Ombre confirmed the delete: a file still outside archive/
+        means the delete did not land, so nothing is erased."""
+        files = list(self._bucket_files(memory_id))
+        if any(not in_archive for _, in_archive in files):
+            return False
+        for path, _ in files:
+            path.unlink()
+        self._purge_rows(f'{self.cfg.id}/memory-versions.jsonl', memory_id, lambda row: None)
+        self._purge_rows(f'{self.cfg.id}/delete-requests.jsonl', memory_id,
+                         lambda row: {**row, 'title': '', 'reason': ''})
+        with self.mutex:
+            previous = self.state['entries'].get(memory_id, {})
+            self.state['entries'][memory_id] = {
+                'time': previous.get('time') or self.budget.clock(), 'title': '',
+                'hidden': True, 'deleted': True, 'erased': True}
+            self.persist()
+            self.bucket_details_cache.pop(memory_id, None)
+        return True
+
+    def erase_deleted(self):
+        """Erase memories deleted before ticket 091, once each."""
+        with self.mutex:
+            pending = [key for key, row in self.state['entries'].items()
+                       if row.get('deleted') and not row.get('delete_pending') and not row.get('erased')]
+        return [key for key in pending if self.erase(key)]
+
     def command(self, text):
         with self.mutex:
             if text == '/memory':
@@ -1073,7 +1145,7 @@ class Memory:
             self.delete_asked = key
             return (f'要删除这条记忆吗：{key} | {title}\n'
                     f'确认请输入：/delete {key} 确认。删除后它不再出现在 /memory 里，也不再被想起，'
-                    f'也不能恢复。{SOFT_DELETE_NOTE}')
+                    f'也不能恢复：记忆文件和程序保存的旧版本会从硬盘抹掉。')
         self.delete_asked = None
         entry['hidden'] = entry['deleted'] = entry['delete_pending'] = True
         self.persist()  # Fail closed: it is already out of recall even if Ombre's answer is lost.
@@ -1084,8 +1156,9 @@ class Memory:
                     f'可稍后再输入 /delete {key} 重试，让 Ombre 也记上这次删除。')
         entry.pop('delete_pending', None)
         self.persist()
+        self.erase(key)
         self.messages.put(f'🗑 {self.cfg.name} 的记忆已删除：{title[:40]}')
-        return f'已删除：{title}。不能恢复。{SOFT_DELETE_NOTE}'
+        return f'已删除：{title}。不能恢复。{ERASE_NOTE}'
 
 
 
