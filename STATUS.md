@@ -8,7 +8,7 @@
 - 以最新 `main` `a955622` 为基线；工单 098 的 PR #142 已合并。该 PR 的 Linux/Windows 离线聊天矩阵（Python 3.11/3.12）、审计、扫描均通过；Cubic 检查为 neutral。
 - 只调整 `autonomy.py` 的三句唤醒提示：Peter 可以依自己的兴趣和已有经历行动、联系 Lan、休息或什么都不做；四行活动摘要明确是留给下次自己的笔记，而不是汇报。
 - 程序既有的安全权限、每日预算、工具/步数与消息上限、自主活动记录和摘要解析均保留。没有触碰 Peter 的私人文件、人设或记忆。
-- 本地自主活动回归测试 26 项通过。PR CI 与 Lan 的 Windows 体验验收待完成。
+- 本地自主活动回归测试 26 项通过。PR #143 的 Linux/Windows Python 3.11/3.12 矩阵、审计和扫描均通过；Cubic 检查为 neutral。打包程序的真实 Windows 体验待 Lan 验收。
 
 ## 下一步
 
@@ -23,5 +23,5 @@
 ## 检查状态
 
 - 本地：`python -m unittest discover -s tests -p test_autonomy.py -v`，26 项通过。
-- GitHub：本 PR 检查待运行。
+- GitHub：PR #143 的离线聊天 Linux/Windows Python 3.11/3.12、审计、扫描均通过；Cubic 为 neutral。
 - Windows：尚未进行打包程序的真实体验；等待 Lan 按上述步骤验收。
