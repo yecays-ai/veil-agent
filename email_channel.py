@@ -22,7 +22,6 @@ from pathlib import Path
 
 EMAIL_PREFIX = '[Lan sent this by email; she is away from the computer.]\n'
 ENV_KEYS = ('PETER_EMAIL_ADDRESS', 'PETER_EMAIL_AUTH_CODE', 'LAN_EMAIL_ADDRESS')
-REQUEST_PREFIX = 'email-'
 MAX_BODY_CHARS = 4000
 
 # Lines that start the quoted original in a reply. QQ Mail writes the first two;
@@ -81,8 +80,8 @@ def message_body(message):
 
 
 class EmailChannel:
-    def __init__(self, store_root, character_id, address, auth_code, lan_address, settings):
-        self.address, self.auth_code = address, auth_code
+    def __init__(self, store_root, character_id, address, auth_code, lan_address, settings, sender_name='Peter'):
+        self.address, self.auth_code, self.sender_name = address, auth_code, sender_name
         self.lan_address = lan_address.strip().lower()
         self.poll_seconds = settings['poll_seconds']
         self.daily_max_sent = settings['daily_max_sent']
@@ -101,7 +100,7 @@ class EmailChannel:
         found = [(values.get(key) or '').strip() for key in ENV_KEYS]
         if not all(found):
             return None
-        return cls(store_root, cfg.id, *found, settings)
+        return cls(store_root, cfg.id, *found, settings, cfg.name)
 
     # --- log -------------------------------------------------------------
     def _log_rows(self):
@@ -131,7 +130,7 @@ class EmailChannel:
         return {row.get('message_id') for row in self._log_rows() if row.get('kind') == 'received'}
 
     # --- sending -----------------------------------------------------------
-    def send(self, text, subject=None, in_reply_to=None, sender_name='Peter'):
+    def send(self, text, subject=None, in_reply_to=None):
         """Send one email to Lan. Returns None on success or a Chinese reason."""
         text = text.strip()
         if not text:
@@ -140,7 +139,7 @@ class EmailChannel:
             if self.sent_today() >= self.daily_max_sent:
                 return f'今天的邮件已达到 {self.daily_max_sent} 封上限，这封没有发出。'
             message = EmailMessage()
-            message['From'] = f'{sender_name} <{self.address}>'
+            message['From'] = f'{self.sender_name} <{self.address}>'
             message['To'] = self.lan_address
             if not subject:
                 first = text.splitlines()[0].strip()
@@ -205,112 +204,29 @@ class EmailChannel:
         except (imaplib.IMAP4.error, OSError):
             pass  # the log already prevents a second delivery
 
-    @staticmethod
-    def request_id(message_id):
-        return REQUEST_PREFIX + hashlib.sha256(message_id.encode('utf-8')).hexdigest()[:40]
+    # away-bridge interface (away_bridge.py) ------------------------------------
+    name, label, prefix = 'email', '邮件', EMAIL_PREFIX
 
-
-class EmailBridge:
-    """Connects the mailbox to the chat hub: delivers Lan's mail as chat input and
-    sends Peter's messages of an email turn (or the ones he marks email) back by email."""
-
-    def __init__(self, channel, hub, name='Peter'):
-        self.channel, self.hub, self.name = channel, hub, name
-        self.replying = {}       # request_id -> (message_id, subject) for mail waiting to be answered
-        self.turn = None         # (message_id, subject) while answering an email
-        self.collected = []      # Peter's messages in the current email turn
-        self.proactive = []      # messages he marked email=true outside an email turn
-        self.last_error = None
-        self.state_lock = threading.Lock()
-        self.outbox = []
-        self.outbox_ready = threading.Condition()
-
-    # chat thread hooks ------------------------------------------------------
-    def turn_ended(self):
-        """The chat loop is about to take its next input: mail what the last turn produced."""
-        with self.state_lock:
-            if self.turn and self.collected:
-                message_id, subject = self.turn
-                subject = subject if subject.lower().startswith('re:') else 'Re: ' + subject
-                self._queue('\n\n'.join(self.collected), subject, message_id)
-            elif self.proactive:
-                self._queue('\n\n'.join(self.proactive), None, None)
-            self.turn, self.collected, self.proactive = None, [], []
-
-    def turn_started(self, item):
-        request_id = getattr(item, 'message_id', None)
-        with self.state_lock:
-            if isinstance(request_id, str) and request_id in self.replying:
-                self.turn = self.replying.pop(request_id)
-
-    def assistant_message(self, text):
-        with self.state_lock:
-            if self.turn:
-                self.collected.append(text)
-
-    def email_requested(self, text):
-        """send_message(email=true). Inside an email turn every message is mailed anyway."""
-        with self.state_lock:
-            if not self.turn:
-                self.proactive.append(text)
+    def ready_to_send(self):
         return True
 
-    # sending worker ---------------------------------------------------------
-    def _queue(self, text, subject, in_reply_to):
-        with self.outbox_ready:
-            self.outbox.append((text, subject, in_reply_to))
-            self.outbox_ready.notify()
-
-    def _report(self, error):
-        if error and error != self.last_error:
-            self.hub.push('notice', error)
-        self.last_error = error
-
-    def _send_worker(self):
-        while not self.hub.stopped:
-            with self.outbox_ready:
-                while not self.outbox and not self.hub.stopped:
-                    self.outbox_ready.wait(1)
-                if self.hub.stopped:
-                    return
-                text, subject, in_reply_to = self.outbox.pop(0)
-            error = self.channel.send(text, subject, in_reply_to, self.name)
-            self._report(error)
-            if not error:
-                self.hub.push('notice', '已通过邮件发给 Lan。')
-
-    # receiving loop ---------------------------------------------------------
-    def poll_once(self):
+    def poll(self):
+        from away_bridge import ChannelError, Incoming
         try:
-            mails = self.channel.fetch_new()
-        except imaplib.IMAP4.error:
-            self._report('收邮件失败：邮箱登录被拒绝，请检查 .env 里的邮箱地址和授权码。')
-            return
-        except OSError:
-            self._report('收邮件失败（网络或邮箱服务暂时不可用），稍后会再试。')
-            return
-        self.last_error = None
-        for uid, message_id, subject, text in mails:
-            request_id = self.channel.request_id(message_id)
-            if not text:
-                self.channel.mark_received(uid, message_id)
-                continue
-            with self.state_lock:
-                self.replying[request_id] = (message_id, subject or self.name)
-            result = self.hub.submit(EMAIL_PREFIX + text, request_id)
-            if result in ('accepted', 'duplicate'):
-                self.channel.mark_received(uid, message_id)
-            else:
-                with self.state_lock:
-                    self.replying.pop(request_id, None)
-                return  # busy: leave it unread and try again on the next poll
+            mails = self.fetch_new()
+        except imaplib.IMAP4.error as exc:
+            raise ChannelError('收邮件失败：邮箱登录被拒绝，请检查 .env 里的邮箱地址和授权码。') from exc
+        except OSError as exc:
+            raise ChannelError('收邮件失败（网络或邮箱服务暂时不可用），稍后会再试。') from exc
+        return [Incoming(message_id, text, (message_id, subject or self.sender_name), uid)
+                for uid, message_id, subject, text in mails]
 
-    def _poll_worker(self):
-        while not self.hub.stopped:
-            self.poll_once()
-            with self.hub.cond:
-                self.hub.cond.wait_for(lambda: self.hub.stopped, timeout=self.channel.poll_seconds)
+    def ack(self, incoming):
+        self.mark_received(incoming.handle, incoming.key)
 
-    def start(self):
-        for target in (self._send_worker, self._poll_worker):
-            threading.Thread(target=target, daemon=True, name='email-' + target.__name__).start()
+    def reply(self, text, reply_ref):
+        if reply_ref:
+            message_id, subject = reply_ref
+            subject = subject if subject.lower().startswith('re:') else 'Re: ' + subject
+            return self.send(text, subject, message_id)
+        return self.send(text)

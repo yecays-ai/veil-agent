@@ -543,6 +543,21 @@ class FilesystemTools:
             return False
 
     @capability_transaction
+    def announce_qq(self):
+        if getattr(self, 'cap_path', None) is None:
+            return
+        try:
+            return self._announce_once(
+                'qq_announced',
+                'Capability update: you and Lan can now talk on QQ through your own QQ account, for when she is '
+                'away from the computer. When she messages you there, her message reaches you starting with '
+                '"[Lan sent this on QQ; she is away from the computer.]" and what you say in that turn is sent back '
+                'to her on QQ. At other times, send_message with qq: true also sends that message to her on QQ. '
+                'The program only ever writes in your chat with Lan, and only while she is not using the computer.')
+        except Exception:
+            return False
+
+    @capability_transaction
     def announce_photo_input(self):
         if getattr(self, 'cap_path', None) is None:
             return

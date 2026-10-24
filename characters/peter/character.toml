@@ -73,3 +73,12 @@ max_bytes = 3000
 enabled = true
 poll_seconds = 60
 daily_max_sent = 20
+
+[qq]
+# Ticket 102: Peter and Lan talk on QQ by operating his logged-in QQ window (Windows UI Automation,
+# no injection). Inert until QQ_LAN_CONTACT (Lan's name as shown in his QQ chat) is in .env.
+enabled = true
+poll_seconds = 20
+# QQ is read and written only after the keyboard and mouse have been untouched this long.
+idle_seconds = 120
+daily_max_sent = 100

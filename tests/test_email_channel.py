@@ -6,7 +6,8 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import email_channel
-from email_channel import EMAIL_PREFIX, EmailBridge, EmailChannel, reply_text
+from away_bridge import AwayBridge
+from email_channel import EMAIL_PREFIX, EmailChannel, reply_text
 from veil_agent import send_message_schema
 from web_agent import Hub
 
@@ -115,8 +116,8 @@ class EmailChannelTests(unittest.TestCase):
     def test_bridge_delivers_mail_and_replies_by_email(self):
         hub = Hub('Peter', SimpleNamespace(enabled=lambda: False))
         hub.busy = False
-        bridge = EmailBridge(self.channel, hub)
-        hub.email = bridge
+        bridge = AwayBridge(self.channel, hub)
+        hub.away = [bridge]
         FakeImap.mails = {b'7': raw_mail('lan@example.com', 'can you hear me', '<m@x>', 'hi')}
         bridge.poll_once()
         self.assertEqual(FakeImap.stored, [b'7'])
@@ -125,12 +126,15 @@ class EmailChannelTests(unittest.TestCase):
         hub.output('Peter: yes')
         hub.output('Peter: I am here')
         bridge.turn_ended()
-        self.assertEqual(bridge.outbox, [('yes\n\nI am here', 'Re: hi', '<m@x>')])
+        self.assertEqual(bridge.outbox, [('yes\n\nI am here', ('<m@x>', 'hi'))])
+        bridge.send_pending()
+        self.assertEqual(FakeSmtp.sent[-1]['Subject'], 'Re: hi')
+        self.assertEqual(FakeSmtp.sent[-1]['In-Reply-To'], '<m@x>')
 
     def test_busy_hub_leaves_mail_unread(self):
         hub = Hub('Peter', SimpleNamespace(enabled=lambda: False))
         hub.busy = True
-        bridge = EmailBridge(self.channel, hub)
+        bridge = AwayBridge(self.channel, hub)
         FakeImap.mails = {b'3': raw_mail('lan@example.com', 'later', '<l@x>')}
         bridge.poll_once()
         self.assertEqual(FakeImap.stored, [])
@@ -138,15 +142,17 @@ class EmailChannelTests(unittest.TestCase):
 
     def test_proactive_email_outside_email_turn(self):
         hub = Hub('Peter', SimpleNamespace(enabled=lambda: False))
-        bridge = EmailBridge(self.channel, hub)
-        bridge.email_requested('miss you')
-        bridge.email_requested('come back soon')
+        bridge = AwayBridge(self.channel, hub)
+        bridge.requested('miss you')
+        bridge.requested('come back soon')
         bridge.turn_ended()
-        self.assertEqual(bridge.outbox, [('miss you\n\ncome back soon', None, None)])
+        self.assertEqual(bridge.outbox, [('miss you\n\ncome back soon', None)])
 
     def test_send_message_schema_offers_email_only_when_configured(self):
         self.assertNotIn('email', send_message_schema()['function']['parameters']['properties'])
-        self.assertIn('email', send_message_schema(email=True)['function']['parameters']['properties'])
+        properties = send_message_schema(channels=('email', 'qq'))['function']['parameters']['properties']
+        self.assertIn('email', properties)
+        self.assertIn('qq', properties)
 
 
 if __name__ == '__main__':
