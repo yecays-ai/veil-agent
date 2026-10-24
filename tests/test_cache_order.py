@@ -42,7 +42,6 @@ class CacheOrderTests(unittest.TestCase):
 
     def test_recalled_memory_does_not_break_the_prefix(self):
         memory = Mock()
-        memory.native = False
         memory.context.side_effect = [[], [{'role': 'system', 'content': 'recalled: blue'}]]
         chat = Chat(self.cfg, self.store, self.budget, self.chat.model, memory)
         chat.send('one')

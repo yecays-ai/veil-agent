@@ -1258,11 +1258,10 @@ def main(argv=None):
                             from memory_agent import Memory, open_ombre
                             with open_ombre(ROOT, cfg) as backend:
                                 with Memory(cfg, store, budget, model, backend, runtime_monitor) as memory:
-                                    if memory.native:
-                                        from memory_native import NativeMemoryTools, ToolSet
-                                        tools = ToolSet(tools, NativeMemoryTools(
-                                            memory, cfg.tools['max_result_bytes']))
-                                        hub.memory_tools = tools.native
+                                    from memory_native import NativeMemoryTools, ToolSet
+                                    tools = ToolSet(tools, NativeMemoryTools(
+                                        memory, cfg.tools['max_result_bytes']))
+                                    hub.memory_tools = tools.native
                                     serve_chat(Chat(cfg, store, budget, model, memory, tools,
                                                     approval=hub.approval, output=hub.output,
                                                     voice=voice, runtime_monitor=runtime_monitor), hub)
