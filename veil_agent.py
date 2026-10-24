@@ -18,6 +18,8 @@ from decimal import Decimal
 from pathlib import Path
 from contextlib import contextmanager, nullcontext
 
+from agent_types import AUTONOMY_WAKE, BudgetExceeded, RequestFailed, TooLong, UserError, now
+
 ROOT = Path(__file__).resolve().parent
 MILLION = Decimal(1_000_000)
 PHOTO_PLACEHOLDER = '[Lan sent a photo]'
@@ -27,7 +29,6 @@ MAX_PHOTO_BYTES = 5 * 1024 * 1024
 RAW_DSML_TOOL_CALL = re.compile(
     r'<\s*[|｜]+\s*DSML\s*[|｜]+\s*(?:tool_calls?|function_calls?|invoke|calls)\b', re.IGNORECASE)
 CJK_TEXT = re.compile(r'[\u3400-\u9fff]')
-AUTONOMY_WAKE = object()
 TOOL_DATA_RESULTS = {'read_text_file', 'read_multiple_files', 'directory_tree', 'list_directory',
                      'list_directory_with_sizes', 'get_file_info', 'search_files', 'memory_read',
                      'memory_history', 'breath_search', 'dream', 'pulse', 'letter_read', 'lab_file_digest',
@@ -88,26 +89,6 @@ def synchronized(fn):
         with self.mutex:
             return fn(self, *args, **kwargs)
     return locked
-
-
-class UserError(Exception):
-    pass
-
-
-class TooLong(UserError):
-    """Nothing was saved or sent; the session can carry on."""
-
-
-class RequestFailed(UserError):
-    """A provider request failed after being sent; its reservation stays pending."""
-
-
-class BudgetExceeded(UserError):
-    """A request was refused before sending because of the configured limit."""
-
-
-def now():
-    return datetime.now().astimezone().isoformat()
 
 
 @contextmanager

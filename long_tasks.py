@@ -9,7 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import uuid
 
-from veil_agent import UserError, now
+from agent_types import UserError, now
 
 
 TASK_STATUS = ('active', 'paused', 'blocked', 'completed')

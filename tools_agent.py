@@ -15,6 +15,7 @@ from concurrent.futures import Future
 from pathlib import Path, PureWindowsPath
 from types import SimpleNamespace
 
+from agent_types import UserError
 from capability_state import capability_transaction, save_capabilities
 
 
@@ -144,7 +145,6 @@ def display_call(name, summary, state, reason=None):
 
 class FilesystemTools:
     def __init__(self, root, cfg, store):
-        from veil_agent import UserError
         self.root = Path(root).resolve()
         self.cfg, self.store = cfg, store
         role_path = Path(store.root) / cfg.id
@@ -249,7 +249,6 @@ class FilesystemTools:
         name = settings.get('lab', 'lab')
         if name is False:
             return
-        from veil_agent import UserError
         journal = settings.get('persistent_append_file')
         if (lab_name_problem(name) or
                 (isinstance(journal, str) and name.casefold() == journal.casefold())):
@@ -360,8 +359,7 @@ class FilesystemTools:
         except Exception:
             # Never permit tools if capability state cannot be durably recorded.
             self.enabled = False
-            from veil_agent import UserError
-            raise UserError('能力清单无法读取或保存，文件工具已停止；请保留 data 文件夹。')
+                raise UserError('能力清单无法读取或保存，文件工具已停止；请保留 data 文件夹。')
 
     @staticmethod
     def _permission_text(level):
@@ -428,8 +426,7 @@ class FilesystemTools:
             self._record_update(row, event)
             save_capabilities(self.cap_path, row)
         except Exception as exc:
-            from veil_agent import UserError
-            raise UserError('能力清单无法更新，未切换自主活动状态；请保留 data 文件夹。') from exc
+                raise UserError('能力清单无法更新，未切换自主活动状态；请保留 data 文件夹。') from exc
 
     @capability_transaction
     def consume_capability_event(self, delivered_event=None):
@@ -447,8 +444,7 @@ class FilesystemTools:
             return True
         except Exception:
             self.enabled = False
-            from veil_agent import UserError
-            raise UserError('能力清单无法更新，文件工具已停止；请保留 data 文件夹。')
+                raise UserError('能力清单无法更新，文件工具已停止；请保留 data 文件夹。')
 
     @capability_transaction
     def announce_autonomy(self):
@@ -474,8 +470,7 @@ class FilesystemTools:
             self.capability_event_model = row['pending_event_model']
         except Exception as exc:
             self.enabled = False
-            from veil_agent import UserError
-            raise UserError('能力清单无法更新，未开启自主活动；请保留 data 文件夹。') from exc
+                raise UserError('能力清单无法更新，未开启自主活动；请保留 data 文件夹。') from exc
 
     @capability_transaction
     def announce_long_tasks(self):
@@ -502,8 +497,7 @@ class FilesystemTools:
             self.capability_event_model = row['pending_event_model']
         except Exception as exc:
             self.enabled = False
-            from veil_agent import UserError
-            raise UserError('长期任务能力通知无法安全保存，工具已停止；请保留 data 文件夹。') from exc
+                raise UserError('长期任务能力通知无法安全保存，工具已停止；请保留 data 文件夹。') from exc
 
     @capability_transaction
     def announce_photo_input(self):
