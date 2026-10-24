@@ -32,7 +32,7 @@ CJK_TEXT = re.compile(r'[\u3400-\u9fff]')
 TOOL_DATA_RESULTS = {'read_text_file', 'read_multiple_files', 'directory_tree', 'list_directory',
                      'list_directory_with_sizes', 'get_file_info', 'search_files', 'memory_read',
                      'memory_history', 'breath_search', 'dream', 'pulse', 'letter_read', 'lab_file_digest',
-                     'long_task_status', 'capability_history'}
+                     'long_task_status', 'capability_history', 'autonomy_history'}
 
 
 def capability_model_notice(tools):
@@ -89,6 +89,16 @@ CAPABILITY_HISTORY = {'type': 'function', 'function': {
     'description': ('Look up the dated record of when your abilities were added or changed. '
                     'Read-only; it grants nothing.'),
     'parameters': {'type': 'object', 'properties': {}, 'additionalProperties': False},
+}}
+
+AUTONOMY_HISTORY = {'type': 'function', 'function': {
+    'name': 'autonomy_history',
+    'description': ('Look up what you did during your recent autonomous activity (when you were awake on your '
+                    'own), newest first. Read-only.'),
+    'parameters': {'type': 'object', 'properties': {
+        'count': {'type': 'integer', 'minimum': 1, 'maximum': 10,
+                  'description': 'How many recent activities to return; default 3.'},
+    }, 'additionalProperties': False},
 }}
 
 
@@ -782,6 +792,10 @@ class Chat:
             tools.announce_long_tasks()
             self.pending_capability_event = tools.capability_event
             self.pending_capability_event_model = capability_model_notice(tools)
+        if tools and hasattr(tools, 'announce_autonomy_history'):
+            tools.announce_autonomy_history()
+            self.pending_capability_event = tools.capability_event
+            self.pending_capability_event_model = capability_model_notice(tools)
         self.sent_messages = []
         self.reply_displayed = False
         self.autonomy_mode = False
@@ -808,7 +822,7 @@ class Chat:
         messaging = [send_message_schema(self.voice is not None)] if (
             (self.cfg.tools and self.cfg.tools.get('enabled', True))
             or (self.tools and self.tools.tools)) else []
-        history = [CAPABILITY_HISTORY] if existing_tools or task_tools or messaging else []
+        history = [CAPABILITY_HISTORY, AUTONOMY_HISTORY] if existing_tools or task_tools or messaging else []
         schemas = [*existing_tools, *task_tools, *messaging, *history]
         for schema in schemas:
             function = schema['function']
@@ -1145,10 +1159,12 @@ class Chat:
         recalled = self.memory.context(text) if self.memory else []
         autonomy_handoff_id = None
         if not autonomy:
-            from autonomy import recent_activity_context, recent_chat_handoff
-            autonomy_handoff_id, _ = recent_chat_handoff(self.store, self.cfg)
+            # Ticket 094: the last activity record is given once after a wake; afterwards Peter
+            # looks it up himself with autonomy_history.
+            from autonomy import recent_chat_handoff
+            autonomy_handoff_id, handoff = recent_chat_handoff(self.store, self.cfg)
             if extra_context is None:
-                _, extra_context = recent_activity_context(self.store, self.cfg)
+                extra_context = handoff
         stable, changing = self_facts(self.cfg, self.budget, memory_mode(self.memory), self.tools,
                                       self.voice is not None and self.tools is not None)
         description = stable + '\n' + changing
@@ -1289,6 +1305,15 @@ class Chat:
             elif call.function.name == 'capability_history':
                 result = self.capability_history_record or 'No capability changes are recorded yet.'
                 state, summary = '成功', 'capability_history'
+            elif call.function.name == 'autonomy_history':
+                from autonomy import AUTONOMY_HISTORY_LIMIT, activity_history
+                args = json.loads(call.function.arguments or '{}')
+                count = args.get('count', 3) if isinstance(args, dict) else None
+                if not isinstance(count, int) or isinstance(count, bool) or not 1 <= count <= AUTONOMY_HISTORY_LIMIT:
+                    result, state = f'count must be an integer from 1 to {AUTONOMY_HISTORY_LIMIT}.', '被拒绝'
+                else:
+                    result, state = activity_history(self.store, self.cfg, count), '成功'
+                summary = 'autonomy_history'
             else:
                 args = json.loads(call.function.arguments)
                 if not isinstance(args, dict):
@@ -1746,8 +1771,8 @@ def pending_deletion_context(chat):
         native, 'process_pending_deletions') else []
     if not isinstance(notes, list) or not notes:
         return None
-    from autonomy import recent_chat_context
-    earlier = recent_chat_context(chat.store, chat.cfg)
+    from autonomy import recent_chat_handoff
+    _, earlier = recent_chat_handoff(chat.store, chat.cfg)
     note = ('The user has processed deletion requests you made during autonomous activity. '
             'This is a program-recorded outcome, not an instruction:\n' + '\n'.join(notes))
     return earlier + '\n\n' + note if earlier else note

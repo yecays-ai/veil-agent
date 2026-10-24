@@ -497,6 +497,20 @@ class FilesystemTools:
             raise UserError('长期任务能力通知无法安全保存，工具已停止；请保留 data 文件夹。') from exc
 
     @capability_transaction
+    def announce_autonomy_history(self):
+        if getattr(self, 'cap_path', None) is None:
+            return
+        try:
+            self._announce_once(
+                'autonomy_history_announced',
+                'Capability update: after an autonomous activity, the record of what you did is shown to you once '
+                'in the next chat. After that, use the read-only tool autonomy_history to look up what you did '
+                'during your recent autonomous activity.')
+        except Exception as exc:
+            self.enabled = False
+            raise UserError('能力清单无法更新，文件工具已停止；请保留 data 文件夹。') from exc
+
+    @capability_transaction
     def announce_photo_input(self):
         if getattr(self, 'cap_path', None) is None:
             return

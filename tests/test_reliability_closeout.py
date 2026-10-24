@@ -78,7 +78,7 @@ class ScheduledAutonomyCloseoutTests(unittest.TestCase):
             live = hub.snapshot(0)
             self.assertTrue(live["activity_enabled"])
             self.assertIn("Autonomous activity: enabled.", live["current_capabilities"])
-            self.assertIn("- Available: long_task_status, long_task_update, capability_history.",
+            self.assertIn("- Available: long_task_status, long_task_update, capability_history, autonomy_history.",
                           live["current_capabilities"])
             self.assertTrue(live["next_wake_at"])
 
