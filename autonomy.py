@@ -67,7 +67,10 @@ def _activity_summary(row):
     actions = []
     status_labels = {'成功': 'succeeded', '被拒绝': 'rejected', '出错': 'failed',
                      '已存在': 'already exists', '结果过长': 'result too long'}
-    for item in row['tools'][:2]:
+    actions_to_show = list(row['tools'][:2])
+    actions_to_show.extend(item for item in row['tools'][2:]
+                           if isinstance(item, dict) and item.get('state') == '结果未确认')
+    for item in actions_to_show:
         if not isinstance(item, dict) or not all(isinstance(item.get(key), str)
                                                  for key in ('tool', 'path', 'state')):
             raise UserError('自主活动工具记录不完整，已停止；请保留 data 文件夹。')
@@ -207,14 +210,25 @@ class AutonomyController:
         if any(row.get('started_at') == active['started_at'] for row in self.rows):
             self.active_path.unlink(missing_ok=True)
             return
-        tools = []
-        for row in self.chat.store.read(f'{self.chat.cfg.id}/tools.jsonl'):
-            if row.get('autonomy_run_id') == active['started_at']:
-                if not all(isinstance(row.get(key), str) for key in ('tool', 'path', 'state')):
-                    raise UserError('中断任务的工具记录损坏，请保留 data 文件夹。')
-                tools.append({key: row[key] for key in ('tool', 'path', 'state')})
-                if row.get('result_state') == '结果过长':
-                    tools[-1]['result_state'] = '结果过长'
+        projected_tools = {}
+        for index, row in enumerate(self.chat.store.read(f'{self.chat.cfg.id}/tools.jsonl')):
+            if row.get('autonomy_run_id') != active['started_at']:
+                continue
+            if not all(isinstance(row.get(key), str) for key in ('tool', 'path', 'state')):
+                raise UserError('中断任务的工具记录损坏，请保留 data 文件夹。')
+            call_id = row.get('call_id')
+            key = (call_id if isinstance(call_id, str) and call_id else
+                   f"legacy:{row.get('request_id', '')}:{row.get('time', '')}:{index}")
+            if key not in projected_tools:
+                projected_tools[key] = {'tool': row['tool'], 'path': row['path'], 'state': '结果未确认'}
+            item = projected_tools[key]
+            item.update({field: row[field] for field in ('tool', 'path', 'state')})
+            if row.get('result_state') == '结果过长':
+                item['result_state'] = '结果过长'
+        tools = list(projected_tools.values())
+        for item in tools:
+            if item['state'] == '进行中':
+                item['state'] = '结果未确认'
         files = list(dict.fromkeys(item['path'] for item in tools if item['state'] == '成功'
                      and item['tool'] in ('write_file', 'append_file', 'create_directory', 'move_lab_file')))
         events = self.chat.store.read('costs.jsonl')
@@ -226,9 +240,9 @@ class AutonomyController:
         self._append({'started_at': active['started_at'], 'finished_at': now(),
                       'decision': '服务异常停止，本次不会自动重试。', 'reason': '',
                       'tools': tools, 'lab_files_changed': files,
-                      'result': '部分完成' if any(item['state'] == '成功' for item in tools) else '失败',
-                      'result_reason': '后台任务中断；如有未确认的请求费用，仍按账本预留保留。',
-                      'current_focus': '', 'next_step': '先核实已留存文件和未确认操作，再继续，勿重复写入。',
+                      'result': '部分完成' if any(item['state'] in ('成功', '结果未确认') for item in tools) else '失败',
+                      'result_reason': '后台任务中断；存在未确认的工具结果时，必须先核实效果再继续。',
+                      'current_focus': '', 'next_step': '先核实所有“结果未确认”的操作及已留存文件，再继续，勿重复写入。',
                       'cost_cny': str(sum(settled.values(), Decimal(0)))})
         self.active_path.unlink(missing_ok=True)
 
@@ -352,6 +366,8 @@ class AutonomyController:
                     'result': previous.get('result'), 'result_reason': previous.get('result_reason'),
                     'successful_tools': [{**item, 'state': 'succeeded'} for item in previous.get('tools', [])
                                          if item.get('state') == '成功'],
+                    'unconfirmed_tools': [item for item in previous.get('tools', [])
+                                          if item.get('state') == '结果未确认'],
                     'saved_files': previous.get('lab_files_changed', [])},
                     ensure_ascii=False))
         task = self.chat.long_tasks.read()

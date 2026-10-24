@@ -10,6 +10,7 @@
 </head>
 <body>
   <div id="window-background" aria-hidden="true"></div>
+  <header id="detached-header" class="detached-header" hidden><strong id="detached-title">Peter</strong><button id="merge-view" type="button">合并回主窗口</button></header>
   <div id="ended">服务已退出。重新打开 Peter 可再次连接。</div>
   <div id="offline">和 Peter 的本机服务暂时断开。<button id="reconnect" type="button">重新连接</button></div>
   <header class="topbar">
@@ -21,19 +22,22 @@
     <div class="top-actions"><button id="expand" aria-label="放大聊天窗口" title="放大"><span data-lucide="maximize-2"></span></button><button id="collapse" aria-label="收起聊天窗口" title="收起"><span data-lucide="minimize-2"></span></button></div>
   </header>
   <nav class="navigation" aria-label="主要页面">
-    <button class="nav-item active" data-page="chat" aria-current="page"><span data-lucide="message-square"></span>聊天</button>
-    <button class="nav-item" data-page="activity"><span data-lucide="activity"></span>活动</button>
-    <button class="nav-item" data-page="memory"><span data-lucide="brain"></span>记忆</button>
-    <button class="nav-item" data-page="more"><span data-lucide="more-horizontal"></span>更多</button>
+    <button class="nav-item active" data-page="chat" aria-current="page" title="拖出可变成独立窗口"><span data-lucide="message-square"></span>聊天</button>
+    <button id="activity-tab" class="nav-item" data-page="activity" title="拖出可变成独立窗口"><span data-lucide="activity"></span>活动</button>
+    <button class="nav-item" data-page="memory" title="拖出可变成独立窗口"><span data-lucide="brain"></span>记忆</button>
+    <button class="nav-item" data-page="more" title="拖出可变成独立窗口"><span data-lucide="more-horizontal"></span>更多</button>
   </nav>
   <div id="toasts" role="status" aria-live="polite"></div>
   <main id="log" class="page active" data-page-view="chat"><div class="col" id="col" aria-live="polite"></div></main>
   <section id="activity-view" class="page" data-page-view="activity" hidden>
-    <div class="page-heading"><div><p class="eyebrow">自主活动</p><h2>活动</h2></div><span id="activity-state" class="state-pill">读取中…</span></div>
-    <article class="surface next-wake-card"><span class="label">下次唤醒</span><strong id="next-wake">正在读取 Agent 状态…</strong><p id="next-wake-reason"></p></article>
-    <div class="activity-actions"><button id="activity-toggle" disabled>读取中…</button><span id="activity-status">状态正在同步</span></div>
-    <article class="surface activity-summary"><div class="section-heading"><h3>最近一次活动</h3><span id="last-activity-time"></span></div><p id="last-activity-summary">还没有自主活动记录。</p><details id="activity-details" hidden><summary>查看执行详情</summary><pre id="activity-record"></pre></details></article>
-    <article class="surface history-card"><div class="section-heading"><h3>历史活动</h3><span>最近 20 次</span></div><div id="activity-history" class="activity-history"><p class="muted">还没有活动记录。</p></div></article>
+    <div class="page-heading activity-heading"><div><p class="eyebrow">真实系统事件</p><h2>Peter · 活动记录</h2></div><div class="activity-heading-actions"><span id="activity-state" class="state-pill">读取中…</span><button id="merge-activity" type="button" hidden>合并回主窗口</button></div></div>
+    <article class="surface activity-overview"><div><span class="status-dot is-pending" id="activity-work-dot"></span><strong id="activity-work-status">等待下一次工具调用</strong></div><span id="activity-count">0 条记录</span><p>聊天、自主活动或长期任务调用工具时，这里会实时更新。</p></article>
+    <div class="activity-runtime"><div><span class="label">自主活动</span><strong id="activity-status">状态正在同步</strong></div><div><span class="label">下次唤醒</span><strong id="next-wake">正在读取…</strong><span id="next-wake-reason" hidden></span></div><button id="activity-toggle" disabled>读取中…</button></div>
+    <div class="activity-filters" role="group" aria-label="筛选活动记录">
+      <button class="active" data-activity-filter="all">全部</button><button data-activity-filter="tool">工具调用</button><button data-activity-filter="memory">记忆活动</button><button data-activity-filter="autonomy">自主活动</button><button data-activity-filter="long_task">长期任务</button>
+    </div>
+    <section id="activity-timeline" class="activity-timeline" aria-live="polite"><p class="muted">还没有工具或自主活动记录。</p></section>
+    <div id="activity-history" hidden></div><span id="last-activity-time" hidden></span><span id="last-activity-summary" hidden></span><pre id="activity-record" hidden></pre><details id="activity-details" hidden></details>
     <div class="runtime-row"><span id="service-status-detail">服务运行状态：正在连接…</span><span id="service-status" hidden>服务：连接中…</span><button id="exit-service" disabled>退出 Agent 服务</button></div>
   </section>
   <section id="memory-view" class="page" data-page-view="memory" hidden>

@@ -33,6 +33,42 @@ TOOL_DATA_RESULTS = {'read_text_file', 'read_multiple_files', 'directory_tree', 
                      'list_directory_with_sizes', 'get_file_info', 'search_files', 'memory_read',
                      'memory_history', 'breath_search', 'dream', 'pulse', 'letter_read', 'lab_file_digest',
                      'long_task_status', 'capability_history', 'autonomy_history'}
+SENSITIVE_ACTIVITY_VALUE = re.compile(
+    r'(?i)(api[_ -]?key|password|passwd|secret|access[_ -]?token|authorization|bearer)'
+    r'(\s*[=:]\s*|\s+)[^\s,;]{4,}')
+OPAQUE_ACTIVITY_TOKEN = re.compile(r'\b(?:sk|ghp|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{12,}\b')
+
+
+def _sensitive_activity_key(key):
+    normalized = re.sub(r'[^a-z0-9]', '', str(key).casefold())
+    return (normalized in {'apikey', 'password', 'passwd', 'secret', 'accesstoken',
+                           'refreshtoken', 'authorization', 'bearer'} or
+            normalized.endswith(('secret', 'password', 'passwd', 'token')))
+
+
+def _redact_activity_value(value):
+    if isinstance(value, dict):
+        return {key: ('[已隐藏]' if _sensitive_activity_key(key)
+                      else _redact_activity_value(item)) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_activity_value(item) for item in value]
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except (ValueError, TypeError):
+            return value
+        if isinstance(parsed, (dict, list)):
+            return json.dumps(_redact_activity_value(parsed), ensure_ascii=False)
+    return value
+
+
+def safe_tool_activity_detail(value, limit=2000):
+    """Keep useful local tool results without persisting common credential forms."""
+    value = _redact_activity_value(value)
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
+    text = SENSITIVE_ACTIVITY_VALUE.sub(lambda match: match.group(1) + match.group(2) + '[已隐藏]', text)
+    text = OPAQUE_ACTIVITY_TOKEN.sub('[已隐藏的凭据]', text)
+    return text if len(text) <= limit else text[:limit] + '\n…（详情已截断）'
 
 
 def capability_model_notice(tools):
@@ -164,6 +200,34 @@ class Store:
         try:
             with path.open(encoding='utf-8') as handle:
                 return [json.loads(line) for line in handle if line.strip()]
+        except (ValueError, UnicodeError) as exc:
+            raise UserError('本机账本损坏，已停止；请保留 data 文件夹，不要删除记录。') from exc
+
+    @synchronized
+    def read_tail(self, name, limit):
+        """Read and parse only the last `limit` JSONL records from an append-only ledger."""
+        if type(limit) is not int or limit <= 0:
+            raise ValueError('positive record limit required')
+        path = self.root / name
+        if not path.exists():
+            return []
+        records, carry = [], b''
+        try:
+            with path.open('rb') as handle:
+                remaining = handle.seek(0, os.SEEK_END)
+                while remaining:
+                    start = max(0, remaining - 64 * 1024)
+                    handle.seek(start)
+                    pieces = (handle.read(remaining - start) + carry).split(b'\n')
+                    carry = pieces[0]
+                    records = [line for line in pieces[1:] if line.strip()] + records
+                    remaining = start
+                    if len(records) >= limit:
+                        break
+            if remaining == 0 and carry.strip():
+                records.insert(0, carry)
+            records = records[-limit:]
+            return [json.loads(line.decode('utf-8')) for line in records]
         except (ValueError, UnicodeError) as exc:
             raise UserError('本机账本损坏，已停止；请保留 data 文件夹，不要删除记录。') from exc
 
@@ -1730,13 +1794,19 @@ class Chat:
         mixed_sent_messages = []
 
 
-        def log_tool(name, path, state, **metadata):
-            row = {'request_id': request_id, 'tool': name, 'path': path, 'state': state}
+        def log_tool(name, path, state, call_id=None, detail=None, **metadata):
+            path = path if isinstance(path, str) else name
+            row = {'request_id': request_id, 'tool': name, 'path': path, 'state': state,
+                   'time': now()}
+            if call_id:
+                row['call_id'] = call_id
+            if detail:
+                row['detail'] = safe_tool_activity_detail(detail)
             row.update(metadata)
             if autonomy:
                 row['autonomy_run_id'] = self.autonomy_run_id
             self.store.append(f'{self.cfg.id}/tools.jsonl', row)
-            if self.runtime_monitor:
+            if self.runtime_monitor and state != '进行中':
                 self.runtime_monitor.observe_tool(name, state, autonomy=autonomy, **metadata)
 
         # Reuse provider-reported token usage from this model. A safety margin is
@@ -1934,10 +2004,18 @@ class Chat:
                         break
                     if autonomy:
                         autonomy_tool_steps += 1
-                    result, state, summary = self.send_message(
-                        call.function.arguments, request_id,
-                        f'{step}:{getattr(call, "id", None) or call_index}')
-                    log_tool('send_message', summary, state)
+                    call_id = f'{request_id}:{step}:{getattr(call, "id", None) or call_index}'
+                    log_tool('send_message', 'send_message', '进行中', call_id=call_id)
+                    try:
+                        result, state, summary = self.send_message(
+                            call.function.arguments, request_id,
+                            f'{step}:{getattr(call, "id", None) or call_index}')
+                    except BaseException as exc:
+                        log_tool('send_message', 'send_message', '出错', call_id=call_id,
+                                 detail=str(exc) or exc.__class__.__name__)
+                        raise
+                    log_tool('send_message', summary, state, call_id=call_id,
+                             detail=result if state != '成功' else '消息已发送。')
                     if state != '成功':
                         errors.append(result)
                         failed_sends.append((summary, state, result))
@@ -1982,7 +2060,9 @@ class Chat:
                     except (ValueError, TypeError):
                         summary = call.function.name
                     self.output(display_call(call.function.name, summary, '被拒绝', 'Continuing would exceed the spending limit.'))
-                    log_tool(call.function.name, summary, '被拒绝')
+                    log_tool(call.function.name, summary, '被拒绝',
+                             call_id=f'{request_id}:{step}:{getattr(call, "id", None) or "budget"}',
+                             detail='Continuing would exceed the spending limit.')
                 self.output('The tool-step limit for this request has been reached; continuing would exceed the current spending limit.')
                 final = 'The tool-step limit for this request has been reached.'
                 break
@@ -2013,7 +2093,9 @@ class Chat:
                         summary = summary if isinstance(summary, str) else call.function.name
                         self.output(display_call(call.function.name, summary, '被拒绝', 'The tool call history exceeded its size limit.'))
                         summaries.append({'tool': call.function.name, 'path': summary, 'state': '被拒绝'})
-                        log_tool(call.function.name, summary, '被拒绝')
+                        log_tool(call.function.name, summary, '被拒绝',
+                                 call_id=f'{request_id}:{step}:{getattr(call, "id", None) or "context"}',
+                                 detail='The tool call history exceeded its size limit.')
                     self.budget.settle(next_reservation, next_cfg, 0, 0, 0)
                     final = 'The tool call history exceeded its size limit; the tool was not executed.'
                     self.tool_stop_reason = final
@@ -2026,16 +2108,32 @@ class Chat:
                         break
                     if autonomy:
                         autonomy_tool_steps += 1
-                    execution = self._execute_tool_call(
-                        call, request_id,
-                        f'{step}:{getattr(call, "id", None) or call_index}', autonomy)
+                    call_id = f'{request_id}:{step}:{getattr(call, "id", None) or call_index}'
+                    try:
+                        args = json.loads(call.function.arguments or '{}')
+                        summary = (self.tools.preview_summary(call.function.name, args)
+                                   if self.tools and call.function.name != 'send_message'
+                                   else call.function.name)
+                    except (ValueError, TypeError, AttributeError):
+                        summary = call.function.name
+                    log_tool(call.function.name, summary, '进行中', call_id=call_id)
+                    try:
+                        execution = self._execute_tool_call(
+                            call, request_id,
+                            f'{step}:{getattr(call, "id", None) or call_index}', autonomy)
+                    except BaseException as exc:
+                        log_tool(call.function.name, summary, '出错', call_id=call_id,
+                                 detail=str(exc) or exc.__class__.__name__)
+                        raise
                     state = execution.state
                     if call.function.name == 'send_message' and state == '成功' and self.sent_messages:
                         mixed_sent_messages.append(self.sent_messages[-1])
                     display_detail, result_state = append_tool_result(
                         call, execution, next_offered, history_count)
                     self._record_tool_result(call, execution, result_state, display_detail,
-                                             summaries, log_tool)
+                                             summaries, lambda name, path, state, **metadata:
+                                             log_tool(name, path, state, call_id=call_id,
+                                                      detail=execution.result, **metadata))
                     if autonomy and self.autonomy_should_yield and self.autonomy_should_yield():
                         self.autonomy_interrupted = True
                         self.budget.settle(next_reservation, next_cfg, 0, 0, 0)

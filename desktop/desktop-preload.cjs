@@ -14,6 +14,12 @@ contextBridge.exposeInMainWorld('veilDesktop', {
   collapse: () => ipcRenderer.send('desktop:collapse'),
   expand: () => ipcRenderer.send('desktop:expand'),
   openMemory: () => ipcRenderer.invoke('chat:open-memory'),
+  detachView: (view, point) => ipcRenderer.invoke('view:detach', view, point),
+  mergeView: view => ipcRenderer.invoke('view:merge', view),
+  focusView: view => ipcRenderer.invoke('view:focus', view),
+  detachedViews: () => ipcRenderer.invoke('view:states'),
+  onDetachedViews: callback => ipcRenderer.on('view:states', (_event, views) => callback(views)),
   onShowActivity: callback => ipcRenderer.on('desktop:show-activity', () => callback()),
+  onShowView: callback => ipcRenderer.on('desktop:show-view', (_event, view) => callback(view)),
   onShowSettings: callback => ipcRenderer.on('desktop:show-settings', () => callback())
 });
