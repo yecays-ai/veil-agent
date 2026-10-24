@@ -82,19 +82,28 @@ output_cny_per_million = "8"
         self.chat.send('old conversation')
         before = self.store.read('test/chat.jsonl')
         calls = self.model.call_count
-        self.chat.start_new_conversation('auto')
+        self.chat.start_new_conversation()
         self.assertEqual(self.model.call_count, calls)
         self.assertEqual(self.store.read('test/chat.jsonl'), before)
         self.assertEqual(self.chat.rounds, 0)
         self.assertEqual(self.chat.history, [])
         reopened = Chat(self.cfg, self.store, self.budget, self.model)
-        self.assertEqual(reopened.reply_language, 'auto')
+        self.assertEqual(json.loads((self.store.root / 'test' / 'chat-session.json').read_text(encoding='utf-8')),
+                         {'start': len(before)})
         self.assertEqual(reopened.history, [])
         reopened.send('...')
         prompt = self.model.call_args.args[0]
         self.assertNotIn('old conversation', str(prompt))
         self.assertFalse(any('natural English' in str(m['content']) for m in prompt))
         self.assertEqual(len(self.store.read('test/chat.jsonl')), len(before) + 2)
+
+    def test_new_chat_cursor_written_before_089_still_loads(self):
+        self.chat.send('old conversation')
+        before = self.store.read('test/chat.jsonl')
+        path = self.store.root / 'test' / 'chat-session.json'
+        path.write_text(json.dumps({'start': len(before), 'language': 'auto'}), encoding='utf-8')
+        reopened = Chat(self.cfg, self.store, self.budget, self.model)
+        self.assertEqual(reopened.history, [])
 
     def test_invalid_new_chat_cursor_fails_without_erasing_history(self):
         self.chat.send('important history')

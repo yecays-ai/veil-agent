@@ -750,8 +750,6 @@ class Chat:
         self.cfg, self.store, self.budget, self.model = cfg, store, budget, model
         self.path = f'{cfg.id}/chat.jsonl'
         self.session_path = store.root / cfg.id / 'chat-session.json'
-        self.reply_language = 'auto'
-        self.session_start = 0
         self.history, self.rounds = self.recent()
         self.last_self = None
         self.trim_note = None
@@ -1001,9 +999,7 @@ class Chat:
                     '成功', 'send_message（语音失败，已发文字）')
         return ('Sent as a voice message.' if media else 'Sent.'), '成功', 'send_message'
 
-    def start_new_conversation(self, language='auto'):
-        if language not in ('auto', 'en'):
-            raise UserError('不支持的对话语言设置。')
+    def start_new_conversation(self):
         # Cursor only: old messages stay on disk.
         start = len(self.store.read(self.path))
         path = self.session_path
@@ -1011,7 +1007,7 @@ class Chat:
         tmp = path.with_suffix('.tmp')
         try:
             with tmp.open('w', encoding='utf-8', newline='\n') as handle:
-                json.dump({'start': start, 'language': language}, handle)
+                json.dump({'start': start}, handle)
                 handle.write('\n')
                 handle.flush()
                 os.fsync(handle.fileno())
@@ -1031,11 +1027,12 @@ class Chat:
             try:
                 state = json.loads(self.session_path.read_text(encoding='utf-8'))
             except FileNotFoundError:
-                state = {'start': 0, 'language': 'auto'}
-            start, language = state['start'], state['language']
-            if type(start) is not int or not 0 <= start <= len(events) or language not in ('auto', 'en'):
+                state = {'start': 0}
+            start = state['start']
+            # Files written before ticket 089 also carry a retired "language" field.
+            if (type(start) is not int or not 0 <= start <= len(events)
+                    or state.get('language', 'auto') not in ('auto', 'en')):
                 raise ValueError('invalid session cursor')
-            self.session_start, self.reply_language = start, language
         except (OSError, ValueError, UnicodeError, TypeError, KeyError) as exc:
             raise UserError('新对话状态无法读取，已停止；请保留 data 文件夹。') from exc
         try:
@@ -1769,7 +1766,7 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead, activity=N
             if text == '/quit':
                 break
             if text in ('/new', '/new-en'):
-                chat.start_new_conversation('auto')
+                chat.start_new_conversation()
                 output('新对话已开始；旧聊天保留在本机，长期记忆与实验室未改动。')
                 continue
             if text == '/pause':
