@@ -10,7 +10,6 @@ import time
 from ctypes import wintypes
 from urllib.error import URLError
 from urllib.request import Request, urlopen
-import webbrowser
 
 ROOT = Path(__file__).resolve().parent
 ENDPOINT = ROOT / 'data' / 'web_service.json'
@@ -136,10 +135,10 @@ def start_service(character, port):
 
 def main():
     try:
-        parser = argparse.ArgumentParser(description='VEIL 网页聊天启动器')
+        parser = argparse.ArgumentParser(description='VEIL 聊天服务启动器（桌面版后端）')
         parser.add_argument('--character', default='peter')
         parser.add_argument('--port', type=int, default=0)
-        parser.add_argument('--no-browser', action='store_true')
+        parser.add_argument('--no-browser', action='store_true', help=argparse.SUPPRESS)  # kept for older desktop builds
         args = parser.parse_args()
         with StartupMutex():
             url = read_endpoint(require_ready=True)
@@ -157,8 +156,6 @@ def main():
                 if not url:
                     report_error(startup_error())
                     return 1
-        if not args.no_browser:
-            webbrowser.open(url)
         return 0
     except Exception:
         report_error(FAILED)

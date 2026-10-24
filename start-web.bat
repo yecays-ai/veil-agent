@@ -1,11 +1,3 @@
 @echo off
-setlocal
-cd /d "%~dp0"
-set PYTHONUTF8=1
-if not exist ".venv\Scripts\python.exe" (
-  echo Please run setup.bat first. See README.md.
-  pause
-  exit /b 1
-)
-".venv\Scripts\python.exe" web_launcher.py %*
-
+rem The browser page was retired in ticket 093; VEIL now runs only as the desktop app.
+call "%~dp0start-desktop.bat" %*
