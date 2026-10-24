@@ -30,6 +30,8 @@ if errorlevel 1 goto failed
 if errorlevel 1 goto failed
 ".venv\Scripts\python.exe" setup_memory.py
 if errorlevel 1 goto failed
+".venv\Scripts\python.exe" setup_fetch.py
+if errorlevel 1 goto failed
 echo Installed. Follow README.md to add your local persona and .env, then open start.bat.
 pause
 exit /b 0

@@ -301,6 +301,7 @@ class Character:
     profile: dict = None
     email: dict = None
     qq: dict = None
+    web: dict = None
 
 
 def positive_int(value):
@@ -418,10 +419,16 @@ def load_character(root, character_id):
                   'poll_seconds': positive_int(qq.get('poll_seconds', 20)),
                   'idle_seconds': positive_int(qq.get('idle_seconds', 120)),
                   'daily_max_sent': positive_int(qq.get('daily_max_sent', 100))}
+        web = cfg.get('web')
+        if web is not None:
+            enabled = web.get('enabled', False)
+            if type(enabled) is not bool:
+                raise ValueError('web.enabled must be boolean')
+            web = {'enabled': enabled}
         return Character(character_id, str(cfg['name']), persona,
                          positive_int(cfg.get('history_rounds', 20)),
                          positive_int(cfg.get('max_output_tokens', 1024)), provider, cfg['provider'],
-                         memory, tools, autonomy, voice, profile, email, qq)
+                         memory, tools, autonomy, voice, profile, email, qq, web)
     except UserError:
         raise
     except (OSError, KeyError, ValueError, TypeError, ArithmeticError) as exc:
@@ -2267,7 +2274,8 @@ def main():
             voice = make_voice(ROOT, cfg, store, budget)
             with client:
                 from tools_agent import FilesystemTools
-                with FilesystemTools(ROOT, cfg, store) as tools:
+                from web_tools import WebTools
+                with FilesystemTools(ROOT, cfg, store, web_factory=WebTools) as tools:
                     if cfg.memory and cfg.memory.get('enabled'):
                         from memory_agent import Memory, open_ombre
                         with open_ombre(ROOT, cfg) as backend:
