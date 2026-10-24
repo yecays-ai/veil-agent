@@ -1,4 +1,5 @@
 openai==3.35.1
 python-dotenv==1.2.2
 mcp==1.30.0
+ddgs==9.16.1
 uiautomation==2.0.29; sys_platform == "win32"

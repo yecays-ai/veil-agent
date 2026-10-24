@@ -82,3 +82,7 @@ poll_seconds = 20
 # QQ is read and written only after the keyboard and mouse have been untouched this long.
 idle_seconds = 120
 daily_max_sent = 100
+
+[web]
+# Ticket 099: direct-use, read-only public web search and fetch tools.
+enabled = true

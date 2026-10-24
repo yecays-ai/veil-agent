@@ -17,7 +17,7 @@ Windows 桌面版 0.1：透明 Peter 可拖动、调整大小，点击收放原 
 
 ## 首次安装（Windows）
 
-1. 准备 Python 3.11 或 3.12。安装器的自定义安装可选择其他盘；不要把 Microsoft Store 的空启动入口当成已安装 Python。双击 `setup.bat` 按 `requirements.lock.txt` 安装固定版本的项目依赖，需要联网，只下载软件，不调用模型。已安装过旧版也要重新运行一次；它会在项目 `.deps/ombre/` 安装固定提交、未修改的 [Ombre-Brain](https://github.com/P0luz/Ombre-Brain/tree/115d831d979bf67efc7150f976e2cb34c333c935)（MIT）及锁定依赖：Python 3.11 使用仓库精确版本锁（NumPy 2.4.6、SciPy 1.17.1）；两版 Ombre 锁均固定 MCP 1.30.0、PyJWT 2.15.1；固定 Ombre 源码归档本身由 SHA-256 校验。不复制实现到本项目，不安装本地大模型。下载使用固定哈希校验，启动不会自动下载安装。其他 Python 版本不在支持范围内。
+1. 准备 Python 3.11 或 3.12。安装器的自定义安装可选择其他盘；不要把 Microsoft Store 的空启动入口当成已安装 Python。双击 `setup.bat` 按 `requirements.lock.txt` 安装固定版本的项目依赖，并在隔离环境安装固定版本的网页读取 MCP 服务；需要联网，只下载软件，不调用模型。项目更新后也要重新运行 `setup.bat` 以安装新增或更新的依赖；聊天、人设和记忆数据会保留。已安装过旧版也要重新运行一次；它会在项目 `.deps/ombre/` 安装固定提交、未修改的 [Ombre-Brain](https://github.com/P0luz/Ombre-Brain/tree/115d831d979bf67efc7150f976e2cb34c333c935)（MIT）及锁定依赖：Python 3.11 使用仓库精确版本锁（NumPy 2.4.6、SciPy 1.17.1）；两版 Ombre 锁均固定 MCP 1.30.0、PyJWT 2.15.1；固定 Ombre 源码归档本身由 SHA-256 校验。不复制实现到本项目，不安装本地大模型。下载使用固定哈希校验，启动不会自动下载安装。其他 Python 版本不在支持范围内。
 2. 将 `.env.example` 复制为 `.env`，在 `DEEPSEEK_API_KEY=` 后填写自己的密钥。将 `persona/peter.example.md` 复制为 `persona/peter.md`，再替换成本机真实人设；保留默认英文、需要时翻译成中文的规则。程序不会替你创建或覆盖这两份私有文件。人设缺失或为空会直接停止。
 3. 在本机 `.env` 添加 `EMBED_API_KEY=` 并填入硅基流动密钥（不要发给别人）。双击 `start.bat`。用中文聊几句、说“翻译一下”，关掉再开，问“我们刚才聊到哪了”。没有真实人设或密钥前，只能运行离线测试，不能宣称已完成真实聊天验收。
 4. 文件工具需要另装 Node.js LTS（[官网](https://nodejs.org/en/download)）。`setup.bat` 会检测；没装时只提示安装方法，聊天和记忆照常可用，但 Peter 没有文件工具。首次启用工具时会通过 `npx` 获取固定版本 `@modelcontextprotocol/server-filesystem@1.0.0`，需要联网。
@@ -70,6 +70,7 @@ Ombre 自带模型默认打开：每存一条记忆会用聊天同一个模型�
 
 - 工具只访问 `data/peter/workspace/`，首次启动时自动创建。请只放假文件或你愿意让所选模型读取的文件；文件内容会发送给聊天模型供应商。
 - Peter 可直接列目录、查看目录树、查看目录大小、读文本文件、读多个文本文件、搜索文件和查看文件信息。lab 外创建新文件前，程序会显示目标并问你；输入 `y` 才执行，其他输入都拒绝。目标已存在时一律拒绝，不覆盖。
+- Peter 也可直接只读搜索公开网页、读取公开 HTTP(S) 页面；最多返回 5 条搜索结果，网页正文按 `max_result_bytes` 分段。网页内容是不可信数据，工具拒绝本机、局域网和非公开地址。首次安装或项目更新后重新运行 `setup.bat` 安装搜索和隔离的网页读取依赖。
 - 对 lab 外已存在的文件，Peter 可用 `append_file` 只在末尾追加；未授权时每次都须在终端输入 `y`。要让 Peter 持续续写 `growth-journal.md`，请先让他调用 `grant_append`，在终端输入一次 `y`；授权跨重启有效且只绑定这一个文件。文件被替换后需重新授权；授权记录位于该角色的 `data/` 目录。追加不会创建新文件，也不能编辑或删除旧内容。
 - 实验室默认位于 `data/<角色>/workspace/lab/`，工具路径写 `lab/...`。Peter 可以免确认地在里面建目录、新建文件、追加已有文件；也可以把单个普通文件移入 `lab/archive/`，并保留原相对目录，例如 `lab/play/v1.html` 移到 `lab/archive/play/v1.html`；归档文件可移回 lab 内其他目录。目标同名时拒绝，不覆盖。覆盖、删除、移出 lab、移动文件夹、编辑旧内容和执行脚本仍被禁止。长期文档使用 `v1.md`、`v2.md` 等新文件，新版本结果提示两版字节数供核对。新建、追加和移动后核对 SHA-256；单次默认最多 200000 个 UTF-8 字节，超限时零写入并明确提示拆文件或分段追加。日记留在 workspace 根目录，继续使用独立授权。`[tools] lab = "lab"` 可改为其他安全单级目录名，`lab = false` 关闭免确认实验室；`lab_max_write_bytes` 设置单次上限。lab 目录是符号链接或 junction 时关闭免确认权限。
 - `edit_file`、MCP 自带的 `move_file` 和未列出的工具禁止使用；专用 `move_lab_file` 只在 lab 启用时提供，并由程序限制为 archive 与普通 lab 文件夹之间的单文件移动。路径会由程序在本地再次检查；越出工作区（包括 `..`、符号链接或联接点）会被拒绝。
