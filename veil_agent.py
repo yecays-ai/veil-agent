@@ -54,6 +54,15 @@ def model_tool_result(name, result, state):
         return 'The tool operation completed successfully.'
     return result
 
+
+@dataclass(frozen=True)
+class _ToolExecution:
+    result: object
+    state: str
+    summary: str
+    checkpoint_verified: bool = False
+
+
 SEND_MESSAGE = {'type': 'function', 'function': {
     'name': 'send_message',
     'description': ('Send one independent chat message to the user immediately. In any language, '
@@ -1262,6 +1271,62 @@ class Chat:
         self.autonomy_mode = False
         return reply
 
+    def _execute_tool_call(self, call, request_id, tool_call_id, autonomy):
+        try:
+            checkpoint_verified = False
+            if call.function.name == 'send_message':
+                result, state, summary = self.send_message(call.function.arguments, request_id, tool_call_id)
+            elif call.function.name == 'capability_history':
+                result = self.capability_history_record or 'No capability changes are recorded yet.'
+                state, summary = '成功', 'capability_history'
+            else:
+                args = json.loads(call.function.arguments)
+                if not isinstance(args, dict):
+                    raise ValueError('arguments must be an object')
+                if self.long_tasks.handles(call.function.name):
+                    result, state, summary = self.long_tasks.invoke(call.function.name, args,
+                                                                    self.approval)
+                    checkpoint_verified = self.long_tasks.take_checkpoint_verified()
+                elif self.tools:
+                    summary = (self.tools.preview_summary(call.function.name, args)
+                               if hasattr(self.tools, 'preview_summary') else call.function.name)
+                    checkpoint = None
+                    blocked = None
+                    if self.long_tasks.is_side_effect(call.function.name):
+                        checkpoint_target = self.long_tasks.checkpoint_target(
+                            call.function.name, args, summary)
+                        blocked, checkpoint_started = self.long_tasks.before_tool(
+                            call.function.name, checkpoint_target, autonomy, args)
+                        if checkpoint_started:
+                            checkpoint = checkpoint_target
+                    if blocked:
+                        result, state = blocked, '被拒绝'
+                    else:
+                        result, state, summary = self.tools.invoke(call.function.name, args,
+                                                                   self.approval)
+                        if checkpoint is not None:
+                            self.long_tasks.finish_tool(call.function.name, checkpoint, state, result)
+                    result_target = self.long_tasks.checkpoint_target(
+                        call.function.name, args, summary)
+                    self.long_tasks.observe_tool_result(call.function.name, result_target, state, result)
+                else:
+                    result, state, summary = 'The program rejected this call because the tool is unavailable.', '被拒绝', call.function.name
+        except (ValueError, TypeError):
+            result, state, summary = 'The program rejected this call because the arguments are not a valid JSON object.', '被拒绝', call.function.name
+        return _ToolExecution(result, state, summary, checkpoint_verified)
+
+    def _record_tool_result(self, call, execution, result_state, display_detail, summaries, log_tool):
+        from tools_agent import display_call
+        name = call.function.name
+        if name != 'send_message' or result_state != '成功':
+            self.output(display_call(name, execution.summary, result_state,
+                                     (display_detail if result_state != '成功' else None)))
+        delivery = {'result_state': result_state} if result_state != execution.state else {}
+        summaries.append({'tool': name, 'path': execution.summary,
+                          'state': execution.state, **delivery})
+        verified = {'checkpoint_verified': True} if execution.checkpoint_verified else {}
+        log_tool(name, execution.summary, execution.state, **verified, **delivery)
+
     def _tool_chat(self, messages, request_id, history_count, history_start=None, autonomy=False):
         from tools_agent import display_call
         summaries = []
@@ -1328,6 +1393,29 @@ class Chat:
                 self.trim_note = (f'（工具调用后的上下文估算为 {request_size(offered)} / '
                                   f'{self.cfg.provider["max_input_tokens"]} tokens，已裁到最近 {kept} 轮；'
                                   '完整聊天仍保存在本机。）')
+
+        def append_tool_result(call, execution, next_offered, history_count):
+            name = call.function.name
+            display_detail = model_tool_result(name, execution.result, execution.state)
+            tool_message = {'role': 'tool', 'tool_call_id': call.id,
+                            'content': display_detail}
+            result_state = execution.state
+            loop_messages.append(tool_message)
+            history_bytes = calibration * sum(message_request_bytes(m)
+                for m in loop_messages[history_start:history_start + history_count])
+            if request_size(next_offered) - history_bytes > self.cfg.provider['max_input_tokens']:
+                tool_message['content'] = too_long_result
+                display_detail = too_long_display
+                result_state = '结果过长'
+            fit_history(next_offered)
+            if request_size(next_offered) > self.cfg.provider['max_input_tokens']:
+                tool_message['content'] = too_long_result
+                display_detail = too_long_display
+                result_state = '结果过长'
+            if result_state == '结果过长' and execution.state == '成功':
+                tool_message['content'] = 'The tool succeeded, but its result was omitted. ' + too_long_result
+                display_detail = '工具已执行成功；' + too_long_display
+            return display_detail, result_state
 
         configured_steps = (self.cfg.tools or {}).get('max_steps', 1)
         max_steps = min(configured_steps, 12) if autonomy else configured_steps
@@ -1549,77 +1637,16 @@ class Chat:
                         break
                     if autonomy:
                         autonomy_tool_steps += 1
-                    try:
-                        checkpoint_verified = False
-                        if call.function.name == 'send_message':
-                            result, state, summary = self.send_message(
-                                call.function.arguments, request_id,
-                                f'{step}:{getattr(call, "id", None) or call_index}')
-                            if state == '成功' and self.sent_messages:
-                                mixed_sent_messages.append(self.sent_messages[-1])
-                        elif call.function.name == 'capability_history':
-                            result = self.capability_history_record or 'No capability changes are recorded yet.'
-                            state, summary = '成功', 'capability_history'
-                        else:
-                            args = json.loads(call.function.arguments)
-                            if not isinstance(args, dict):
-                                raise ValueError('arguments must be an object')
-                            if self.long_tasks.handles(call.function.name):
-                                result, state, summary = self.long_tasks.invoke(call.function.name, args,
-                                                                                self.approval)
-                                checkpoint_verified = self.long_tasks.take_checkpoint_verified()
-                            elif self.tools:
-                                summary = (self.tools.preview_summary(call.function.name, args)
-                                           if hasattr(self.tools, 'preview_summary') else call.function.name)
-                                checkpoint = None
-                                blocked = None
-                                if self.long_tasks.is_side_effect(call.function.name):
-                                    checkpoint_target = self.long_tasks.checkpoint_target(
-                                        call.function.name, args, summary)
-                                    blocked, checkpoint_started = self.long_tasks.before_tool(
-                                        call.function.name, checkpoint_target, autonomy, args)
-                                    if checkpoint_started:
-                                        checkpoint = checkpoint_target
-                                if blocked:
-                                    result, state = blocked, '被拒绝'
-                                else:
-                                    result, state, summary = self.tools.invoke(call.function.name, args,
-                                                                               self.approval)
-                                    if checkpoint is not None:
-                                        self.long_tasks.finish_tool(call.function.name, checkpoint, state, result)
-                                result_target = self.long_tasks.checkpoint_target(
-                                    call.function.name, args, summary)
-                                self.long_tasks.observe_tool_result(call.function.name, result_target, state, result)
-                            else:
-                                result, state, summary = 'The program rejected this call because the tool is unavailable.', '被拒绝', call.function.name
-                    except (ValueError, TypeError):
-                        result, state, summary = 'The program rejected this call because the arguments are not a valid JSON object.', '被拒绝', call.function.name
-                    display_detail = model_tool_result(call.function.name, result, state)
-                    tool_message = {'role': 'tool', 'tool_call_id': call.id,
-                                    'content': display_detail}
-                    result_state = state
-                    loop_messages.append(tool_message)
-                    history_bytes = calibration * sum(message_request_bytes(m)
-                        for m in loop_messages[history_start:history_start + history_count])
-                    if request_size(next_offered) - history_bytes > self.cfg.provider['max_input_tokens']:
-                        tool_message['content'] = too_long_result
-                        display_detail = too_long_display
-                        result_state = '结果过长'
-                    fit_history(next_offered)
-                    if request_size(next_offered) > self.cfg.provider['max_input_tokens']:
-                        tool_message['content'] = too_long_result
-                        display_detail = too_long_display
-                        result_state = '结果过长'
-                    delivery = {'result_state': result_state} if result_state != state else {}
-                    if result_state == '结果过长' and state == '成功':
-                        tool_message['content'] = 'The tool succeeded, but its result was omitted. ' + too_long_result
-                        display_detail = '工具已执行成功；' + too_long_display
-                    if call.function.name != 'send_message' or result_state != '成功':
-                        self.output(display_call(call.function.name, summary, result_state,
-                                                 (display_detail if result_state != '成功' else None)))
-                    summaries.append({'tool': call.function.name, 'path': summary, 'state': state, **delivery})
-                    verified = {'checkpoint_verified': True} if checkpoint_verified else {}
-                    log_tool(call.function.name, summary, state, **verified, **delivery)
+                    execution = self._execute_tool_call(
+                        call, request_id,
+                        f'{step}:{getattr(call, "id", None) or call_index}', autonomy)
+                    state = execution.state
+                    if call.function.name == 'send_message' and state == '成功' and self.sent_messages:
+                        mixed_sent_messages.append(self.sent_messages[-1])
+                    display_detail, result_state = append_tool_result(
+                        call, execution, next_offered, history_count)
+                    self._record_tool_result(call, execution, result_state, display_detail,
+                                             summaries, log_tool)
                     if autonomy and self.autonomy_should_yield and self.autonomy_should_yield():
                         self.autonomy_interrupted = True
                         self.budget.settle(next_reservation, next_cfg, 0, 0, 0)

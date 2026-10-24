@@ -2,20 +2,18 @@
 
 ## 当前进度
 
-- GitHub `main` 最新已核实到 PR #130 合并提交 `bad8a42`；PR #130 的 Tests 与 Dependency security 均通过。正式运行目录仍固定使用 `main`。
-- 工单 087「核心模块共享基础类型与错误定义」位于独立分支 `ticket/087-core-import-types`。已确认核心导入环来自多个模块反向导入 `veil_agent.py` 取共享错误/哨兵/时间戳定义。
-- 当前在 `agent_types.py` 集中定义共享错误层级、唤醒哨兵与时间戳 helper；调用者继续可从 `veil_agent` 获取原有公开名称。
-- 本机 `git fetch` 因 DNS 无法解析 `github.com` 失败；远端分支以 GitHub 当前 `main` 为基线，已通过 GitHub 文件接口核对核心模块内容。
+- GitHub `main` 最新已核实为 PR #131 合并提交 `6b37c1f`；Tests（Windows/Linux、Python 3.11/3.12）、Dependency security 均通过，CodeRabbit 无可执行意见。
+- Lan 已确认桌面和先前体验验收完成；本次工单 088 的工具聊天体验验收按 `STATUS.md` 单独进行。
+- 工单 088 位于分支 `ticket/088-tool-chat-boundaries`。本工单只收窄 `Chat._tool_chat` 中的工具执行与结果处理边界。
+- `_execute_tool_call` 只执行并返回结构化结果；结果回填负责模型上下文长度保护；结果记录负责 UI 展示、摘要和工具账本。预算、权限、检查点和消息持久化顺序留在原有流程中。
+- 本机 GitHub DNS 当前不可用；本分支从 GitHub 最新 `main` 创建并通过 GitHub 集成提交。
 
 ## 下一个窗口第一步
 
-复核所有核心模块不再反向导入 `veil_agent.py` 以取得共享基础定义，并检查 `veil_agent` 的旧导出身份保持一致；再按工单步骤准备 PR 与一次性 CI/审查。
+查看工单 088 的 PR head、自动检查和 Cubic 结果；不手动重复触发 CI。确认没有影响功能、权限或数据的实质问题后合并，再请 Lan 按 `STATUS.md` 验收。
 
 ## 边界
 
-- 正式运行目录保持 `main`；代码只在独立任务 worktree 与分支中修改。
-- 不改写聊天、记忆或媒体数据；不提交真实聊天、记忆、Persona、密钥或本机数据路径。
-- `veil_agent.py` 保留原有共享错误、`now()` 与 `AUTONOMY_WAKE` 导出，确保现有调用方身份和处理行为不变。
-- 不把 `_tool_chat` 拆分或扩大为其他架构重构；本工单只处理共享基础定义与循环依赖。
-- 用户体验验收、自动 CI 和本地检查分别记录，不相互替代。
-
+- 正式运行目录保持 `main`；开发使用工单分支。
+- 不改写聊天、记忆或媒体数据；不提交 Persona、密钥、日志或本机数据路径。
+- 不改变预算预留/结算、权限审批、长任务检查点、消息写入顺序和工具返回语义；不增加外部依赖。
