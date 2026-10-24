@@ -77,6 +77,19 @@ Ombre 自带模型默认打开：每存一条记忆会用聊天同一个模型�
 - 在 `characters/peter/character.toml` 的 `[tools]` 中可设置 `enabled = false` 关闭工具；`folder`、`max_steps` 和 `max_result_bytes` 是本地工具配置。程序权限白名单不由人设或配置改变。
 - 每次调用会在屏幕显示一行。工具过程保存在 `data/peter/tools.jsonl`，聊天记录仍只存你的消息和 Peter 最终回复。能力清单保存在 `data/peter/capabilities.json`，只写相对文件夹名和工具权限，不含本机完整路径。
 
+## 用邮件和 Peter 聊天（工单 098）
+
+不在电脑前时，Peter 可以给你发邮件，你直接回信，他再用邮件回你。电脑要开着、服务要在运行。
+
+1. 给 Peter 准备一个 QQ 邮箱（可以新注册一个，也可以用你自己的小号）。网页版 QQ 邮箱 → 设置 → 账号与安全 → 安全设置 → 开启“POP3/IMAP/SMTP/Exchange/CardDAV 服务”，按提示拿到“授权码”。授权码不是 QQ 密码。
+2. 在 `.env` 里填三行：
+   ```
+   PETER_EMAIL_ADDRESS=Peter 用的 QQ 邮箱
+   PETER_EMAIL_AUTH_CODE=刚拿到的授权码
+   LAN_EMAIL_ADDRESS=你自己收信的邮箱
+   ```
+3. 重启。只认 `LAN_EMAIL_ADDRESS` 发来的信，别的邮件不看、也不标已读。每天最多发 20 封（`character.toml` 的 `[email] daily_max_sent`）。往来记录在 `data\peter\email-log.jsonl`（只有时间、编号、主题），对话本身和桌面聊天记在一起。
+
 ## 私有文件和备份
 
 `.env`、本机人设、`data/`、日志、虚拟环境均已忽略。仓库只包含示例人设和空密钥模板。聊天发送时，人设与最近上下文会交给你选择的模型供应商。不要提交或公开私有文件。

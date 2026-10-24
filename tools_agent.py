@@ -352,7 +352,9 @@ class FilesystemTools:
                    'long_tasks_announced': bool(previous and previous.get('long_tasks_announced')),
                    'photo_input_announced': bool(previous and previous.get('photo_input_announced')),
                    'voice_input_announced': bool(previous and previous.get('voice_input_announced')),
-                   'voice_output_announced': bool(previous and previous.get('voice_output_announced'))}
+                   'voice_output_announced': bool(previous and previous.get('voice_output_announced')),
+                   **{key: True for key, value in (previous or {}).items()
+                      if key.endswith('_announced') and value is True}}
             self._record_update(row, self.capability_event)
             if previous != row:
                 save_capabilities(self.cap_path, row)
@@ -524,6 +526,21 @@ class FilesystemTools:
         except Exception as exc:
             self.enabled = False
             raise UserError('能力清单无法更新，文件工具已停止；请保留 data 文件夹。') from exc
+
+    @capability_transaction
+    def announce_email(self):
+        if getattr(self, 'cap_path', None) is None:
+            return
+        try:
+            return self._announce_once(
+                'email_announced',
+                'Capability update: you and Lan can now talk by email, for when she is away from the computer. '
+                'When she emails you, her message reaches you starting with "[Lan sent this by email; she is away '
+                'from the computer.]" and everything you say in that turn is emailed back to her as one reply. '
+                'At other times, send_message with email: true also emails that message to her. '
+                'The program always sends to Lan only.')
+        except Exception:
+            return False
 
     @capability_transaction
     def announce_photo_input(self):

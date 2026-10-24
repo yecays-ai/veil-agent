@@ -66,3 +66,10 @@ daily_budget_cny = "2"
 # and sent right after the persona every request. Lives at data/peter/<file>.
 file = "about-lan.md"
 max_bytes = 3000
+
+[email]
+# Ticket 098: Peter and Lan talk by email (QQ Mail IMAP/SMTP). Inert until the three
+# PETER_EMAIL_ADDRESS / PETER_EMAIL_AUTH_CODE / LAN_EMAIL_ADDRESS values are in .env.
+enabled = true
+poll_seconds = 60
+daily_max_sent = 20
