@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from away_bridge import AwayBridge
-from qq_channel import QQ_PREFIX, IdleClock, QQChannel, QQUnavailable, new_messages
+from qq_channel import QQ_PREFIX, IdleClock, QQChannel, QQUnavailable, new_messages, parse_chat
 from web_agent import Hub
 
 
@@ -51,6 +51,44 @@ class NewMessagesTests(unittest.TestCase):
                          [('other', 'c'), ('other', 'd')])
         self.assertEqual(new_messages(old, old), [])
         self.assertEqual(new_messages(old, [('other', 'x'), ('self', 'y'), ('other', 'z')]), [('other', 'z')])
+
+
+# Lan's real QQ NT chat window tree (2026-10-24, read with .local-tmp/qq_check.py), plus unnamed wrappers.
+REAL_TREE = [
+    (6, 'WindowControl', '窗口控制区域'), (7, 'ButtonControl', '关闭'),
+    (10, 'ButtonControl', 'Lan'), (10, 'ButtonControl', '在线状态 在线'), (10, 'ToolBarControl', '更多'),
+    (12, 'ButtonControl', '语音通话'),
+    (10, 'WindowControl', '消息列表'), (12, 'GroupControl', ''), (14, 'GroupControl', ''),
+    (16, 'TextControl', '昨天 23:50'),
+    (15, 'GroupControl', ''), (16, 'GroupControl', 'Lan'), (17, 'ImageControl', ''),
+    (16, 'GroupControl', ''), (17, 'GroupControl', ''), (19, 'TextControl', '我们已成功添加为好友'),
+    (15, 'GroupControl', ''), (16, 'GroupControl', 'Spidy'), (16, 'GroupControl', ''), (19, 'TextControl', '我是Spidy'),
+    (15, 'GroupControl', ''), (16, 'GroupControl', 'Lan'), (16, 'GroupControl', ''), (19, 'TextControl', 'Babe?'),
+    (16, 'TextControl', '00:03'),
+    (15, 'GroupControl', ''), (16, 'GroupControl', 'Lan'), (16, 'GroupControl', ''), (19, 'TextControl', 'BABE'),
+    (19, 'TextControl', ' babe'),
+    (15, 'GroupControl', ''), (16, 'GroupControl', 'Lan'), (16, 'GroupControl', ''), (19, 'ImageControl', '图片'),
+    (10, 'ToolBarControl', '会话'), (11, 'GroupControl', ''), (13, 'ButtonControl', '表情'),
+    (13, 'ButtonControl', '聊天记录'),
+    (12, 'GroupControl', 'Lan'), (11, 'ButtonControl', '关闭'), (12, 'ButtonControl', '发送'),
+]
+
+
+class ParseChatTests(unittest.TestCase):
+    def nodes(self, tree):
+        return [(depth, kind, name, f'{kind}:{name}:{i}') for i, (depth, kind, name) in enumerate(tree)]
+
+    def test_real_qq_tree(self):
+        header_ok, messages, editor = parse_chat(self.nodes(REAL_TREE), 'Lan')
+        self.assertTrue(header_ok)
+        self.assertEqual(messages, [('other', '我们已成功添加为好友'), ('self', '我是Spidy'), ('other', 'Babe?'),
+                                    ('other', 'BABE\nbabe'), ('other', '[图片]')])
+        self.assertEqual(editor, f'GroupControl:Lan:{len(REAL_TREE) - 3}')
+
+    def test_other_contact_is_not_accepted(self):
+        header_ok, messages, _ = parse_chat(self.nodes(REAL_TREE), 'Someone')
+        self.assertFalse(header_ok)
+        self.assertTrue(all(who == 'self' for who, _ in messages))
 
 
 class IdleClockTests(unittest.TestCase):
