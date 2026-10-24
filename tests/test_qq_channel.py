@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from away_bridge import AwayBridge
-from qq_channel import QQ_PREFIX, IdleClock, QQChannel, QQUnavailable, new_messages, parse_chat
+from qq_channel import QQ_PREFIX, IdleClock, QQChannel, QQUnavailable, comparable, new_messages, parse_chat
 from web_agent import Hub
 
 
@@ -89,6 +89,15 @@ class ParseChatTests(unittest.TestCase):
         header_ok, messages, _ = parse_chat(self.nodes(REAL_TREE), 'Someone')
         self.assertFalse(header_ok)
         self.assertTrue(all(who == 'self' for who, _ in messages))
+
+
+class ComparableTests(unittest.TestCase):
+    def test_emoji_become_pictures_in_the_input_box(self):
+        # 2026-10-24: Peter's replies with 😭 / 💀 were cleared as "content differs" and never sent.
+        self.assertEqual(comparable("THE QQ PIPE WORKS!! 😭\n\nyou're here"), comparable("THE QQ PIPE WORKS!!you're here"))
+        self.assertEqual(comparable('💀 of course it is'), comparable('of course it is'))
+        self.assertEqual(comparable("hey!! I'm here ❤️"), comparable("hey!! I'm here"))
+        self.assertNotEqual(comparable('miss you'), comparable('miss yo'))
 
 
 class IdleClockTests(unittest.TestCase):

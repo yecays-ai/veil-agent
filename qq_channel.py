@@ -10,9 +10,9 @@ class names, so the window is read by accessibility names and control types (`pa
 import ctypes
 import hashlib
 import json
-import re
 import sys
 import time
+import unicodedata
 from datetime import datetime
 from pathlib import Path
 
@@ -40,6 +40,13 @@ def new_messages(seen, current):
     # No overlap: everything scrolled away. Only messages after Peter's last one are safe to treat as new.
     last_self = max((i for i, (who, _) in enumerate(current) if who == 'self'), default=-1)
     return current[last_self + 1:]
+
+
+def comparable(text):
+    """Text as the QQ input box reads it back: QQ turns emoji into pictures with no text, so only
+    letters, digits and punctuation are compared."""
+    return ''.join(ch for ch in text if not ch.isspace()
+                   and unicodedata.category(ch) not in ('So', 'Sk', 'Cf', 'Cs', 'Co', 'Mn'))
 
 
 def parse_chat(nodes, contact):
@@ -369,7 +376,7 @@ class QQWindow:
                 auto.SendKeys('{Ctrl}v', waitTime=0.6)
                 typed = ''.join(child.Name or '' for child, _ in auto.WalkControl(editor, maxDepth=20)
                                 if child.ControlTypeName == 'TextControl')
-                if re.sub(r'\s+', '', typed) != re.sub(r'\s+', '', text):
+                if comparable(typed) != comparable(text):
                     auto.SendKeys('{Ctrl}a{Del}', waitTime=0.2)
                     raise QQUnavailable('QQ 输入框里的内容和要发的不一致，已清空，这条没有发出。')
                 button = window.ButtonControl(Name=SEND_BUTTON_NAME, searchDepth=40)

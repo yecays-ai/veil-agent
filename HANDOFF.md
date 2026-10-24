@@ -9,7 +9,7 @@
 
 ## 下一个窗口第一步
 
-102 已合并（#144）。103：`QQWindow._auto` 缺 uiautomation 时抛 `QQUnavailable`（提示重跑 setup.bat），`AwayBridge` 两个线程捕获意外异常并报一次。Lan 的电脑第一次没重跑 setup.bat 就踩到了这个。104：QQ 界面元素没有类名，`parse_chat` 按名字解析（常量在 `qq_channel.py` 顶部）。若 QQ 升级后读不到，先在 Lan 电脑上跑 `.local-tmp\qq_check2.py` 打印当前结构（本地诊断脚本，不在仓库里）。101 做完后，邮件和 QQ 回复要带上附件。
+102 已合并（#144）。103：`QQWindow._auto` 缺 uiautomation 时抛 `QQUnavailable`（提示重跑 setup.bat），`AwayBridge` 两个线程捕获意外异常并报一次。Lan 的电脑第一次没重跑 setup.bat 就踩到了这个。105：发送前核对用 `comparable()`（去掉表情、空白），因为 QQ 把表情转成图片读不回文字。104：QQ 界面元素没有类名，`parse_chat` 按名字解析（常量在 `qq_channel.py` 顶部）。若 QQ 升级后读不到，先在 Lan 电脑上跑 `.local-tmp\qq_check2.py` 打印当前结构（本地诊断脚本，不在仓库里）。101 做完后，邮件和 QQ 回复要带上附件。
 
 ## 边界
 
