@@ -2,6 +2,7 @@
 
 ## 当前进度
 
+- 108：`update.bat` 取代已删除的 update-main.cmd（那个会 stash、切分支，Lan 说一天坏十次）。原则：出问题就停下来说原因，不自动修复本地状态。只用 `git pull --ff-only origin main`；`tests/test_update_bat.py` 禁止 stash/switch/checkout/reset/clean/merge。以后改桌面界面的 PR，验收步骤写「双击 update.bat」而不是只写 git pull。
 - 工单 106 在 `ticket/106-activity-window`，PR #149，基线 `566280d`。Lan 已确认效果图；按 Lan 要求，主动请求 CodeRabbit 审核后停止，由 Lan 自行跟进评论与后续合并。
 - Claude 审查补丁：桌面每个窗口每 600 ms 轮询 `/api/events`，原实现每次都在 Hub 锁内重读并解析 tools.jsonl 最近 5000 行（大账本约 1 秒），会卡住聊天；现在只在账本大小/修改时间变化时重算，并在锁外计算。
 - 已完成真实工具开始/结束同 `call_id` 账本、`/api/events` 折叠投影、统一活动时间线与筛选；窗口管理已扩成聊天/活动/记忆/更多四个标签均可同时拖出、独立移动缩放、分别合并与恢复各自模式/位置/尺寸，仍共用同一 `chat.html`。未改能力通知或 Peter 上下文。
