@@ -231,6 +231,38 @@ class Hub:
             for marker in self.media_root.glob('.' + ('[0-9a-f]' * 32) + '.voice-pending'):
                 marker.unlink(missing_ok=True)
 
+    def tool_activity(self, limit=240):
+        """Project the append-only tool ledger into one current row per real call."""
+        chat = self.chat
+        if chat is None:
+            return []
+        rows = chat.store.read(f'{chat.cfg.id}/tools.jsonl')
+        projected = {}
+        order = []
+        memory_names = {'hold', 'breath_search', 'trace', 'dream', 'letter_write', 'letter_read',
+                        'letter_lock_update', 'memory_history', 'memory_catalog', 'memory_read'}
+        for index, row in enumerate(rows[-5000:]):
+            if not isinstance(row, dict) or not isinstance(row.get('tool'), str):
+                continue
+            call_id = row.get('call_id')
+            if not isinstance(call_id, str) or not call_id:
+                call_id = f'legacy:{len(rows) - min(len(rows), 5000) + index}'
+            if call_id not in projected:
+                projected[call_id] = {'call_id': call_id, 'started_at': row.get('time'),
+                                      'request_id': row.get('request_id')}
+                order.append(call_id)
+            item = projected[call_id]
+            item.update({key: row[key] for key in ('tool', 'path', 'state', 'detail') if key in row})
+            item['source'] = ('自主活动' if row.get('autonomy_run_id') else
+                              '长期任务' if row['tool'].startswith('long_task_') else '聊天')
+            item['category'] = ('memory' if row['tool'] in memory_names else
+                                'long_task' if row['tool'].startswith('long_task_') else 'tool')
+            if row.get('autonomy_run_id'):
+                item['autonomy_run_id'] = row['autonomy_run_id']
+            if row.get('state') != '进行中':
+                item['finished_at'] = row.get('time')
+        return [projected[key] for key in order[-limit:]]
+
     def media_info(self, media_id):
         with self.media_lock:
             row = self.media_index.get(media_id)
@@ -936,6 +968,7 @@ class Hub:
                     'current_capabilities': self.current_capabilities(),
                     'capability_record': self.capability_record(),
                     'runtime_status': self.runtime_status(),
+                    'tool_activity': self.tool_activity(),
                     'memory_panel_url': self.memory_url,
                     'memory_available': self.memory_tools is not None, **autonomy}
 

@@ -4,6 +4,11 @@
 
 ## 当前目标与现状
 
+- 工单 106「独立活动监视窗口与实时工具记录」正在分支 `ticket/106-activity-window` 本地开发，尚未 push、尚未开 PR，等待 Lan 先确认效果图。
+- 聊天、活动、记忆、更多四个标签都可拖出为各自独立、可移动/缩放的窗口并同时存在；它们共用 `chat.html` 与现有功能，可用「合并回主窗口」分别归位，各页面拆分模式、位置和尺寸写入现有桌面设置。
+- 工具账本开始/结束现在用同一 `call_id` 记录，活动时间线按真实账本显示秒级时间、工具中文说明、对象、聊天/自主活动/长期任务来源、进行中/成功/失败/权限拒绝和可展开详情；Ombre、Lab、自主活动与长期任务统一筛选。常见 API Key、密码和令牌格式会在详情落盘前隐藏。
+- 不写 `capabilities.json` 通知，不向 Peter 上下文增加内容，不复制 Agent 状态或 renderer，不修改/迁移真实聊天、记忆和 Lab 数据。
+
 - 工单 097「醒来的时间是 Peter 自己的」PR #143 已由 Claude 按 Lan 授权合并（`253127e`），待 Lan 体验验收。
 - 工单 098 邮件 PR #142 已合并（`a955622`）；Peter 的 QQ 邮箱 2026-11-07 后才能开 IMAP/SMTP，届时验收。
 - 工单 102「Peter 和 Lan 在 QQ 上聊天」由 Claude 实现，已合并（#144）：`qq_channel.py` 操作他的 QQ 窗口（不注入），`away_bridge.py` 统一邮件和 QQ 的收发，`send_message` 加 `qq` 参数。
@@ -18,9 +23,11 @@
 
 ## 下一步
 
-- 工单 099 的 PR #148 等待 CodeRabbit 评论；之后由 Lan 验收。其他工单不在本次范围。
+- 完成本地 Windows 窗口/拖出/合并/重启检查和效果图；Lan 确认效果后再提交、push 并开工单 106 PR。
 
 ## Lan 的体验验收
+
+工单 106：见 `docs/tickets/106-activity-window.md` 的 3 步 Windows 验收；效果图确认前不 push。
 
 工单 102：见 `docs/tickets/102-qq-with-lan.md` 的验收 4 步。
 
@@ -56,6 +63,8 @@
 3. 切换日间、夜间和半透明背景，确认消息菜单及聊天窗口其余功能图标清晰一致。
 
 ## 检查状态
+
+- 本地（106）：活动账本专项 3 项、Ombre 记忆 50 项、聊天 65 项、网页/API 54 项、Autonomy 26 项、长期任务 20 项、Desktop 全套 6 项通过；Python/Node 语法检查通过。已用真实 Electron renderer 验证聊天/活动/记忆/更多可分别显示为独立窗口并生成效果图；真实手势拖出、合并与重启恢复仍待 Lan 最终体验，尚未 push。
 
 - 本地：工单 097 自主活动回归 26 项通过；`python -m unittest discover -s tests -p test_web_tools.py -v`，099 专项 10 项通过。
 - GitHub：PR #143 的离线聊天 Linux/Windows Python 3.11/3.12、审计、扫描均通过；Cubic 为 neutral。

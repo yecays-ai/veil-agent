@@ -209,6 +209,8 @@ class AutonomyController:
             return
         tools = []
         for row in self.chat.store.read(f'{self.chat.cfg.id}/tools.jsonl'):
+            if row.get('state') == '进行中':
+                continue
             if row.get('autonomy_run_id') == active['started_at']:
                 if not all(isinstance(row.get(key), str) for key in ('tool', 'path', 'state')):
                     raise UserError('中断任务的工具记录损坏，请保留 data 文件夹。')

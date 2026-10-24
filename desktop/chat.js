@@ -10,7 +10,8 @@ let revealQueue=[], revealTimer=null, roundStartedAt=0, roundHasReply=false, pre
 let pendingApproval=null, activityEnabled=false, exiting=false;
 const recentErrors=new Map();
 let memoryAvailable=false,memoryLoaded=false,memoryLoading=false,memoryCursor='',memoryItems=[];
-let activitySignature='';
+let activityFilter='all',toolActivity=[],autonomyActivity=[],detachedViews=new Set();
+const pageQuery=new URLSearchParams(location.search),detachedView=pageQuery.get('detached')==='1'?pageQuery.get('view'):null;
 let selectedImage=null;const awaitingImages=new Map();
 let voiceRecorder=null,voiceStream=null,voiceChunks=[],voiceStarted=0,voiceTimer=null,voiceCancelled=false,voiceSending=false,voicePermissionPending=false;
 const unsentVoiceBlobs=new Map();
@@ -25,6 +26,7 @@ function notify(text,kind='notice'){
 }
 function setPage(name){
   if(!['chat','activity','memory','more'].includes(name))return;
+  if(detachedView&&name!==detachedView)return;
   document.body.dataset.currentPage=name;
   document.querySelectorAll('[data-page]').forEach(button=>{
     const active=button.dataset.page===name;button.classList.toggle('active',active);
@@ -586,24 +588,45 @@ function activityDetails(record){
   lines.push('本次费用：¥'+record.cost_cny);
   return lines.join('\n');
 }
-function renderActivity(record,history=[]){
-  $('activity-details').hidden=!record;
-  $('last-activity-summary').textContent=record
-    ? record.result+'：'+(record.result_reason||'Agent 未提供结果说明。')
-    : '还没有自主活动记录。';
-  $('last-activity-time').textContent=record?new Date(record.started_at).toLocaleString():'';
-  $('activity-record').textContent=record?activityDetails(record):'';
-  const signature=JSON.stringify(history);
-  if(signature===activitySignature)return;
-  activitySignature=signature;
-  const list=$('activity-history');list.replaceChildren();
-  if(!history.length){const empty=document.createElement('p');empty.className='muted';empty.textContent='还没有活动记录。';list.appendChild(empty);return}
-  for(const item of [...history].reverse()){
-    const details=document.createElement('details');details.className='activity-row';
-    const summary=document.createElement('summary'),name=document.createElement('strong'),time=document.createElement('time');
-    name.textContent=item.result+' · '+(item.result_reason||'');time.textContent=new Date(item.started_at).toLocaleString();
-    summary.append(name,time);const pre=document.createElement('pre');pre.textContent=activityDetails(item);details.append(summary,pre);list.appendChild(details);
+const TOOL_LABELS={read_text_file:'读取文件',read_multiple_files:'读取多个文件',write_file:'写入文件',append_file:'追加文件',list_directory:'查看文件夹',directory_tree:'查看目录树',search_files:'查找文件',get_file_info:'查看文件信息',create_directory:'创建文件夹',move_lab_file:'移动 Lab 文件',lab_file_digest:'核对 Lab 文件',hold:'保存记忆',breath_search:'查找记忆',trace:'更新记忆',dream:'整理记忆',letter_write:'写记忆信件',letter_read:'读取记忆信件',memory_history:'查看记忆历史',memory_catalog:'查看记忆目录',memory_read:'读取记忆',long_task_status:'查看长期任务',long_task_update:'更新长期任务',web_search:'联网搜索',web_fetch:'读取网页',send_message:'发送消息'};
+function activityStatus(state){
+  if(state==='进行中')return {text:'进行中',className:'running'};
+  if(state==='成功')return {text:'成功',className:'success'};
+  if(state==='被拒绝')return {text:'权限拒绝',className:'failure'};
+  if(state==='出错'||state==='失败')return {text:'失败',className:'failure'};
+  return {text:state||'未知',className:'failure'};
+}
+function activityTime(value){const date=value?new Date(value):null;return date&&Number.isFinite(date.getTime())?date.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'}):'--:--:--'}
+function combinedActivity(){
+  const tools=toolActivity.map(item=>({...item,kind:item.category||'tool'}));
+  const autonomy=autonomyActivity.map((item,index)=>({call_id:'autonomy:'+(item.started_at||index),tool:'自主活动',path:item.result_reason||item.decision||'Peter 完成了一次自主活动',state:item.result==='失败'?'失败':'成功',detail:activityDetails(item),started_at:item.started_at,finished_at:item.finished_at,source:'自主活动',kind:'autonomy'}));
+  return [...tools,...autonomy].sort((a,b)=>String(b.started_at||b.finished_at||'').localeCompare(String(a.started_at||a.finished_at||'')));
+}
+function renderActivityTimeline(){
+  const all=combinedActivity();
+  const visible=all.filter(item=>activityFilter==='all'||item.kind===activityFilter||(activityFilter==='autonomy'&&item.source==='自主活动'));
+  const list=$('activity-timeline');list.replaceChildren();$('activity-count').textContent=all.length+' 条记录';
+  const running=toolActivity.filter(item=>item.state==='进行中').length;
+  $('activity-work-status').textContent=running?`正在执行 ${running} 项工具调用`:'等待下一次工具调用';
+  $('activity-work-dot').className='status-dot '+(running?'is-busy':'is-online');
+  if(!visible.length){const empty=document.createElement('p');empty.className='muted';empty.textContent=all.length?'此筛选下还没有记录。':'还没有工具或自主活动记录。';list.appendChild(empty);return}
+  for(const item of visible){
+    const details=document.createElement('details');details.className='tool-activity-row';details.open=item.state==='进行中';
+    const summary=document.createElement('summary'),head=document.createElement('div');head.className='activity-record-head';
+    const title=document.createElement('div'),time=document.createElement('time'),name=document.createElement('strong'),status=document.createElement('span');
+    time.textContent=activityTime(item.started_at||item.finished_at);name.textContent=TOOL_LABELS[item.tool]||item.tool;status.className='activity-state '+activityStatus(item.state).className;status.textContent=activityStatus(item.state).text;
+    title.append(time,name);head.append(title,status);
+    const meta=document.createElement('div');meta.className='activity-record-meta';
+    const code=document.createElement('code'),source=document.createElement('span');code.textContent=item.tool;source.textContent='来源：'+(item.source||'聊天');meta.append(code,source);
+    summary.append(head,meta);details.append(summary);
+    const body=document.createElement('div');body.className='activity-detail';const dl=document.createElement('dl');
+    const rows=[['操作对象',item.path||'未提供'],['开始时间',item.started_at?new Date(item.started_at).toLocaleString():'旧记录未保存开始时间'],['完成时间',item.finished_at?new Date(item.finished_at).toLocaleString():item.state==='进行中'?'尚未完成':'旧记录未保存完成时间'],['执行结果',item.detail||activityStatus(item.state).text]];
+    for(const [label,value] of rows){const dt=document.createElement('dt'),dd=document.createElement('dd');dt.textContent=label;if(label==='执行结果'){const pre=document.createElement('pre');pre.textContent=String(value);dd.appendChild(pre)}else dd.textContent=String(value);dl.append(dt,dd)}
+    body.appendChild(dl);details.appendChild(body);list.appendChild(details);
   }
+}
+function renderActivity(record,history=[],tools=[]){
+  toolActivity=Array.isArray(tools)?tools:[];autonomyActivity=Array.isArray(history)?history:[];renderActivityTimeline();
 }
 async function poll(){
   try{
@@ -634,7 +657,7 @@ async function poll(){
     $('header-next-wake').parentElement.title=next||s.next_wake_reason||'Agent 暂未提供确定的唤醒时间。';
     $('activity-state').textContent=state;
     $('activity-status').textContent='自主活动'+state;
-    renderActivity(s.last_activity,s.activity_history||[]);
+    renderActivity(s.last_activity,s.activity_history||[],s.tool_activity||[]);
     $('activity-toggle').textContent=activityEnabled?'暂停自主活动':'开启自主活动';
     $('activity-toggle').disabled=stopping||stopped||exiting;
     $('exit-service').disabled=stopping||stopped||exiting;
@@ -947,6 +970,10 @@ function applyAppearance(){
   $('pet-size').value=String(appearance.petSize);$('pet-size-value').value=appearance.petSize+' px';
 }
 applyAppearance();
+window.addEventListener('storage',event=>{
+  if(event.key===APPEARANCE_KEY){appearance=loadAppearance();applyAppearance()}
+  if(event.key===`${APPEARANCE_KEY}-css`){try{$('custom-css').value=event.newValue||'';applyCustomCSS(event.newValue||'')}catch{}}
+});
 document.querySelectorAll('[data-theme-choice]').forEach(button=>button.onclick=()=>{
   appearance.theme=button.dataset.themeChoice;applyAppearance();storeAppearance();window.veilDesktop.saveTheme(appearance.theme);
 });
@@ -977,6 +1004,7 @@ $('reset-appearance').onclick=async()=>{appearance={...appearanceDefaults,pageOp
 $('memory-search').addEventListener('input',renderMemoryList);
 $('memory-reload').onclick=()=>{memoryItems=[];memoryCursor='';memoryLoaded=false;loadMemoryCatalog(true)};
 document.querySelectorAll('[data-page]').forEach(button=>button.onclick=()=>{
+  if(detachedViews.has(button.dataset.page)){window.veilDesktop.focusView(button.dataset.page);return}
   setPage(button.dataset.page);
   if(button.dataset.page==='memory'&&memoryAvailable&&!memoryLoaded&&!memoryLoading)loadMemoryCatalog(true);
 });
@@ -1003,6 +1031,37 @@ $('selection-delete').onclick=()=>showMessageDeleteConfirm(null,[...selectedMess
 $('selection-cancel').onclick=()=>{multiSelect=false;selectedMessageIds.clear();updateSelectionBar();refreshMessageSelection()};
 document.querySelector('#collapse').onclick=()=>window.veilDesktop.collapse();
 document.querySelector('#expand').onclick=()=>window.veilDesktop.expand();
+$('merge-activity').onclick=()=>window.veilDesktop.mergeView('activity');
+$('merge-view').onclick=()=>detachedView&&window.veilDesktop.mergeView(detachedView);
+document.querySelectorAll('[data-activity-filter]').forEach(button=>button.onclick=()=>{
+  activityFilter=button.dataset.activityFilter;
+  document.querySelectorAll('[data-activity-filter]').forEach(item=>item.classList.toggle('active',item===button));
+  renderActivityTimeline();
+});
+function applyDetachedViews(views){
+  detachedViews=new Set(Array.isArray(views)?views:[]);document.body.dataset.detachedViews=[...detachedViews].join(' ');
+  document.body.classList.toggle('activity-detached',detachedViews.has('activity')&&!detachedView);
+  $('merge-activity').hidden=detachedView!=='activity';
+}
+window.veilDesktop.onDetachedViews(applyDetachedViews);
+window.veilDesktop.detachedViews().then(applyDetachedViews).catch(()=>{});
+let tabDrag=null;
+document.querySelectorAll('[data-page]').forEach(tab=>tab.addEventListener('pointerdown',event=>{
+  if(detachedView||detachedViews.has(tab.dataset.page)||event.button!==0)return;
+  tabDrag={x:event.screenX,y:event.screenY,view:tab.dataset.page,tab};tab.setPointerCapture(event.pointerId);
+}));
+document.querySelectorAll('[data-page]').forEach(tab=>tab.addEventListener('pointermove',event=>{
+  if(!tabDrag||tabDrag.tab!==tab)return;
+  const moved=Math.hypot(event.screenX-tabDrag.x,event.screenY-tabDrag.y)>28;
+  const outside=event.clientX<0||event.clientY<0||event.clientX>innerWidth||event.clientY>innerHeight;
+  if(moved&&outside){const view=tabDrag.view;tabDrag=null;window.veilDesktop.detachView(view,{x:event.screenX,y:event.screenY})}
+}));
+document.querySelectorAll('[data-page]').forEach(tab=>{tab.addEventListener('pointerup',()=>{tabDrag=null});tab.addEventListener('pointercancel',()=>{tabDrag=null})});
 window.veilDesktop.onShowActivity(()=>setPage('activity'));
+window.veilDesktop.onShowView(view=>setPage(view));
 window.veilDesktop.onShowSettings(()=>setPage('more'));
-setPage('chat');setBusy(true);poll();box.focus();
+if(detachedView&&['chat','activity','memory','more'].includes(detachedView)){
+  document.body.classList.add('detached-window');$('detached-header').hidden=false;
+  $('detached-title').textContent='Peter · '+({chat:'聊天',activity:'活动记录',memory:'记忆',more:'更多'}[detachedView]);setPage(detachedView);
+}else{setPage('chat');box.focus()}
+setBusy(true);poll();

@@ -61,3 +61,24 @@ test('pet provides four continuous corner resize handles and preserves its squar
   assert.match(main, /width: size, height: size/);
   assert.match(main, /petResize = \{ cursor:/);
 });
+
+test('every existing tab detaches into the shared chat view and can merge without a second renderer implementation', async () => {
+  const [html, css, js, main, preload] = await Promise.all([
+    read('chat.html'), read('chat.css'), read('chat.js'), read('main.cjs'), read('desktop-preload.cjs')
+  ]);
+  assert.match(html, /id="activity-tab"/);
+  assert.match(html, /data-activity-filter="memory"/);
+  assert.match(html, /data-activity-filter="long_task"/);
+  assert.match(html, /id="merge-activity"/);
+  assert.match(css, /body\.activity-window/);
+  assert.match(js, /detachedView=pageQuery\.get\('detached'\)==='1'\?pageQuery\.get\('view'\):null/);
+  assert.match(js, /setPointerCapture/);
+  for (const view of ['chat', 'activity', 'memory', 'more']) assert.match(main, new RegExp(`['"]${view}['"]`));
+  assert.match(main, /const viewURL = view => `\$\{chatURL\}\?view=\$\{view\}&detached=1`/);
+  assert.match(main, /settings\.detachedBounds/);
+  assert.match(main, /settings\.detachedViews/);
+  assert.match(main, /current\.showInactive\(\)/);
+  assert.match(preload, /detachView:.*view:detach/);
+  assert.match(preload, /mergeView:.*view:merge/);
+  assert.doesNotMatch(main, /activity\.html/);
+});

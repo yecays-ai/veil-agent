@@ -96,7 +96,7 @@ daily_budget_cny = "2"
         rows = self.store.read('test/chat.jsonl')
         self.assertEqual([row['content'] for row in rows], ['消息 1', '消息 2', '消息 3'])
         self.assertEqual(len(self.hub.snapshot(0)['events']), 3)
-        tool_rows = self.store.read('test/tools.jsonl')
+        tool_rows = [row for row in self.store.read('test/tools.jsonl') if row.get('state') != '进行中']
         self.assertEqual([row['state'] for row in tool_rows], ['成功', '成功', '成功', '被拒绝'])
         self.assertEqual(model.call_count, 2)
         self.assertEqual(controller.rows[-1]['next_step'], '等 lan 回复。')
@@ -128,7 +128,7 @@ daily_budget_cny = "2"
         self.assertEqual((name, args), ('read_text_file', {'path': 'lab/draft.md'}))
         self.assertEqual(approval('test'), 'n')
         self.assertEqual(model.call_count, 2)
-        self.assertEqual([row['tool'] for row in self.store.read('test/tools.jsonl')],
+        self.assertEqual([row['tool'] for row in self.store.read('test/tools.jsonl') if row.get('state') != '进行中'],
                          ['send_message', 'read_text_file'])
         self.assertEqual(len(self.hub.snapshot(0)['events']), 1)
 
