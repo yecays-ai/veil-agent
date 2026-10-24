@@ -1,10 +1,8 @@
 import json
 import base64
 import hashlib
-import shutil
 import socket
 import ssl
-import subprocess
 import sys
 import tempfile
 import threading
@@ -251,11 +249,6 @@ output_cny_per_million = "8"
         self.assertIsNone(hub.pending_media_info(first['id']))
         self.assertFalse((media_root / '.uploads' / first['filename']).exists())
 
-    def test_invalid_replacement_does_not_clear_selected_photo_first(self):
-        page = (Path(__file__).resolve().parents[1] / 'web' / 'index.html').read_text(encoding='utf-8')
-        choose = page[page.index('async function chooseImage'):page.index('imageButton.onclick')]
-        self.assertGreater(choose.index('clearImage(false)'), choose.index('prepareImage(file,mime)'))
-
     def test_image_request_rejects_bad_metadata_and_commands(self):
         self.hub.busy = False
         png = base64.b64encode(b'\x89PNG\r\n\x1a\nfictional').decode()
@@ -404,10 +397,6 @@ output_cny_per_million = "8"
         with urllib.request.urlopen(request, timeout=5) as response:
             self.assertEqual((response.headers['Content-Type'], response.read()),
                              ('audio/mpeg', audio))
-        page = (Path(__file__).parents[1] / 'web' / 'index.html').read_text(encoding='utf-8')
-        self.assertIn("media.mime==='audio/mpeg'", page)
-        self.assertIn("audio.controls=true", page)
-        self.assertIn("summary.textContent='展开文字'", page)
 
     def test_photo_capability_notice_is_persistent_and_announced_once(self):
         manager = object.__new__(FilesystemTools)
@@ -1073,14 +1062,6 @@ output_cny_per_million = "8"
         self.assertEqual(self.run_loop(scenario)['messages'], texts)
         self.assertEqual([m['content'] for m in self.store.read('test/chat.jsonl')][1:], texts)
         self.model.assert_called_once()
-
-
-class PacingTests(unittest.TestCase):
-    @unittest.skipUnless(shutil.which('node'), 'Node required for page behavior test')
-    def test_page_pacing_grouping_and_refresh(self):
-        result = subprocess.run([shutil.which('node'), str(Path(__file__).with_name('web_pacing.cjs'))],
-                                capture_output=True, text=True, timeout=15)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
 class StartupErrorTests(unittest.TestCase):

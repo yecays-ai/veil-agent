@@ -19,7 +19,6 @@ import ssl
 import sys
 import threading
 import time
-import webbrowser
 from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -31,7 +30,6 @@ from veil_agent import (ROOT, AUTONOMY_WAKE, MAX_PHOTO_BYTES, ActivityState, Bud
                         load_character, now, make_model, make_voice, run_chat)
 from autonomy import AutonomyController
 
-PAGE = Path(__file__).resolve().parent / 'web' / 'index.html'
 MAX_BODY = 200_000
 MAX_MEDIA_BYTES = MAX_PHOTO_BYTES
 MAX_VOICE_UPLOAD_BYTES = 10 * 1024 * 1024
@@ -853,10 +851,7 @@ def make_handler(hub, token):
         def do_GET(self):
             url = urlparse(self.path)
             query = parse_qs(url.query)
-            if url.path == '/':
-                if self._guard((query.get('t') or [''])[0]):
-                    self._send(200, PAGE.read_bytes(), 'text/html; charset=utf-8')
-            elif url.path in ('/api/memory/catalog', '/api/memory/read'):
+            if url.path in ('/api/memory/catalog', '/api/memory/read'):
                 if not self._guard(self.headers.get('X-Token')):
                     return
                 if hub.memory_tools is None:
@@ -1216,10 +1211,10 @@ def main(argv=None):
     for stream in (sys.stdin, sys.stdout, sys.stderr):
         if hasattr(stream, 'reconfigure'):
             stream.reconfigure(encoding='utf-8')
-    parser = argparse.ArgumentParser(description='VEIL 本机网页聊天')
+    parser = argparse.ArgumentParser(description='VEIL 本机聊天服务（桌面版后端）')
     parser.add_argument('--character', default='peter')
     parser.add_argument('--port', type=int, default=0)
-    parser.add_argument('--no-browser', action='store_true')
+    parser.add_argument('--no-browser', action='store_true', help=argparse.SUPPRESS)  # kept for older desktop builds
     args = parser.parse_args(argv)
     hub = None
     token = None
@@ -1246,9 +1241,6 @@ def main(argv=None):
                 raise UserError('网页服务未能启动；请稍后重试。')
             port = server.server_address[1]
             save_endpoint(endpoint_path, port, token)
-            url = f'http://127.0.0.1:{port}/?t={token}'
-            if not args.no_browser:
-                webbrowser.open(url)
             failed = False
             try:
                 with client:
