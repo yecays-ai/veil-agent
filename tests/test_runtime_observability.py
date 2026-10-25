@@ -113,6 +113,16 @@ class RuntimeMonitorTests(unittest.TestCase):
         self.assertEqual(status['state'], 'attention')
         self.assertEqual(status['classification'], 'safe_to_retry')
 
+    def test_later_success_clears_a_plain_tool_failure_only(self):
+        self.monitor.observe_tool('read_text_file', '出错')
+        self.monitor.observe_tool('list_directory', '成功')
+        status = self.monitor.snapshot()
+        self.assertEqual((status['state'], status['code']), ('recovered', 'tool_recovered'))
+
+        self.monitor.observe_tool('write_file', '出错')   # uncertain side effect: a success must not hide it
+        self.monitor.observe_tool('list_directory', '成功')
+        self.assertEqual(self.monitor.snapshot()['code'], 'side_effect_result_unknown')
+
     def test_diagnostic_schema_rejects_payload_fields(self):
         self.monitor.observe_memory({'code': 'mcp_call', 'stage': 'mcp_tool',
                                      'tool': 'hold', 'content': 'FICTIONAL_MEMORY_BODY',

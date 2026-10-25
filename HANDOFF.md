@@ -2,6 +2,7 @@
 
 ## 当前进度
 
+- 109：`RuntimeMonitor.observe_tool` 遇到成功时，只清掉 `tool_unavailable`（普通失败），不清 `side_effect_result_unknown`（写入结果不确定）。
 - 工单 100：分支 `ticket/100-peter-sets-next-wake`，基于最新 main `6d251cadd77322fd46827bc141777a1404914045`。代码和专项测试已完成；PR [#152](https://github.com/yecays-ai/veil-agent/pull/152) 已创建。保持未合并，CodeRabbit 对代码提交 `ef69296` 的审查无 actionable comments、风险评估 Minimal；Tests #1252 与 Dependency security #199 通过。Cubic 因试用额度无法启动。
 - 自定唤醒沿用 `AutonomyController`、Hub 空闲轮询和 `Store.replace()` 原子持久化。自定义唤醒和周期唤醒取更早者；到期状态在 Hub 空闲门内先标记消费再启动，避免重复。达到每日次数上限时标记错过。服务恢复后最多对过期的待处理事项补醒一次。
 - 已新增 `set_next_wake` 工具、60 分钟最早间隔和 7 天最大范围、一次性能力通知及原因上下文。每日最多 6 次、每日 ¥2、自主活动既有工具权限和消息/步骤限制保留。未修改桌面 UI、QQ 表情、邮件、消息功能或工单 101 及以后。
