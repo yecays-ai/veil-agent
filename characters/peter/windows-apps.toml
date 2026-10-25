@@ -1,0 +1,14 @@
+# Each app is an explicit executable and process-path allowlist.
+# Add another table here to authorize another app without changing Agent code.
+
+[applications.notepad]
+label = "Notepad"
+launch_path = "%SystemRoot%\\System32\\notepad.exe"
+process_paths = [
+  "%SystemRoot%\\System32\\notepad.exe",
+  "%ProgramFiles%\\WindowsApps\\Microsoft.WindowsNotepad_*\\Notepad\\Notepad.exe",
+]
+actions = [
+  "activate", "minimize", "restore", "invoke", "select", "toggle",
+  "expand", "collapse", "set_text",
+]
