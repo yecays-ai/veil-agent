@@ -63,6 +63,52 @@ persistent_append_file = "growth-journal.md"
         return (tools or self.tools).invoke('move_lab_file',
             {'source': source, 'destination': destination}, self.no_approval)
 
+    def test_lab_attachment_is_a_bounded_verified_snapshot(self):
+        source = self.lab / 'story.md'
+        source.write_text('first version', encoding='utf-8')
+
+        snapshot = self.tools.read_lab_attachment('lab/story.md')
+
+        self.assertEqual(snapshot['name'], 'story.md')
+        self.assertEqual(snapshot['view'], 'text')
+        self.assertEqual(snapshot['data'], b'first version')
+        source.write_text('edited after sending', encoding='utf-8')
+        self.assertEqual(snapshot['data'], b'first version')
+
+    def test_lab_attachment_rejects_unsafe_paths_links_and_types(self):
+        outside = self.root / 'secret.txt'
+        outside.write_text('not for sharing', encoding='utf-8')
+        (self.lab / 'secret.txt').write_text('lab copy', encoding='utf-8')
+        with self.assertRaises(ValueError):
+            self.tools.read_lab_attachment('lab/../secret.txt')
+        with self.assertRaises(ValueError):
+            self.tools.read_lab_attachment(str(outside))
+        unsupported = self.lab / 'payload.exe'
+        unsupported.write_bytes(b'MZ')
+        with self.assertRaises(ValueError):
+            self.tools.read_lab_attachment('lab/payload.exe')
+        (self.lab / 'too-large.txt').write_bytes(b'x' * (5 * 1024 * 1024 + 1))
+        with self.assertRaises(ValueError):
+            self.tools.read_lab_attachment('lab/too-large.txt')
+        linked = self.lab / 'linked.txt'
+        try:
+            linked.symlink_to(outside)
+        except (OSError, NotImplementedError):
+            self.skipTest('symlinks are unavailable for this account')
+        with self.assertRaises(ValueError):
+            self.tools.read_lab_attachment('lab/linked.txt')
+
+    def test_file_attachment_capability_notice_is_recorded_once(self):
+        first = self.tools.announce_file_attachments()
+        second = self.tools.announce_file_attachments()
+        row = json.loads(self.tools.cap_path.read_text(encoding='utf-8'))
+
+        self.assertTrue(first)
+        self.assertIsNone(second)
+        self.assertTrue(row['file_attachments_announced'])
+        self.assertIn('send_message with file', row['pending_event'])
+        self.assertEqual(row['pending_event'], row['pending_event_model'])
+
     def test_create_directories_files_append_and_restart_without_approval(self):
         self.assertEqual(self.call('create_directory', 'lab/research/notes')[1], '成功')
         original = '# First draft\n原文\r\n'

@@ -17,6 +17,7 @@ from types import SimpleNamespace
 
 from agent_types import UserError
 from capability_state import capability_transaction, save_capabilities
+from attachment_utils import MAX_ATTACHMENT_BYTES, inspect_attachment
 from web_tools import WEB_TOOL_NAMES
 
 
@@ -787,6 +788,55 @@ class FilesystemTools:
         if not resolved.is_relative_to(self.lab):
             raise ValueError('outside lab')
         return resolved
+
+    def read_lab_attachment(self, raw):
+        """Read one verified, unlinked file from Lab for a durable send snapshot."""
+        if not self.enabled or self.lab is None:
+            raise ValueError('Lab attachments are unavailable')
+        path = self._checked_lab_path(raw)
+        try:
+            if _redirected(path) or not path.is_file():
+                raise ValueError('only ordinary Lab files can be attached')
+            before = path.stat(follow_symlinks=False)
+            if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+                raise ValueError('only unlinked regular Lab files can be attached')
+            if not 0 < before.st_size <= MAX_ATTACHMENT_BYTES:
+                raise ValueError('Lab attachments must be between 1 byte and 5 MB')
+            flags = os.O_RDONLY | getattr(os, 'O_BINARY', 0) | getattr(os, 'O_NOFOLLOW', 0)
+            fd = os.open(path, flags)
+            with os.fdopen(fd, 'rb') as handle:
+                opened = os.fstat(handle.fileno())
+                identity = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+                if (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns) != identity:
+                    raise ValueError('Lab file changed while it was being opened')
+                raw_bytes = handle.read(MAX_ATTACHMENT_BYTES + 1)
+                after_read = os.fstat(handle.fileno())
+            after = path.stat(follow_symlinks=False)
+            if any((item.st_dev, item.st_ino, item.st_size, item.st_mtime_ns) != identity
+                   for item in (after_read, after)):
+                raise ValueError('Lab file changed while it was being copied')
+            if len(raw_bytes) != before.st_size or len(raw_bytes) > MAX_ATTACHMENT_BYTES:
+                raise ValueError('Lab file changed while it was being copied')
+            self._checked_lab_path(raw)
+            metadata = inspect_attachment(path.name, raw_bytes)
+            return {**metadata, 'data': raw_bytes}
+        except OSError as exc:
+            raise ValueError('Lab file could not be read safely') from exc
+
+    @capability_transaction
+    def announce_file_attachments(self):
+        if not self.enabled or self.lab is None or not self.cap_path:
+            return None
+        try:
+            return self._announce_once(
+                'file_attachments_announced',
+                'Capability update: you may attach one file you created in your own lab by calling '
+                'send_message with file: "lab/path". HTML opens in the default browser, supported '
+                'images display in chat, and UTF-8 text opens in the chat window. Files must be '
+                'ordinary, unlinked files no larger than 5 MB; each send keeps an independent snapshot. '
+                'When this turn replies by email, up to three snapshots are attached to that email too.')
+        except Exception:
+            return False
 
     def _ensure_lab_parent(self, raw):
         parts = re.split(r'[/\\]', raw)

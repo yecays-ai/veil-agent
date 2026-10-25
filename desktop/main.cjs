@@ -2,6 +2,7 @@
 const { app, BrowserWindow, ipcMain, dialog, screen, shell } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs/promises');
+const { randomUUID } = require('node:crypto');
 const { pathToFileURL } = require('node:url');
 const { connect, validRoot, readEndpoint } = require('./backend.cjs');
 
@@ -302,6 +303,76 @@ ipcMain.handle('chat:media-url', (event, filename) => {
     throw new Error('无效的媒体文件名。');
   const token = new URL(agentEndpoint.url).searchParams.get('t');
   return `${agentEndpoint.origin}/media/${encodeURIComponent(filename)}?t=${encodeURIComponent(token)}`;
+});
+ipcMain.handle('chat:attachment-text', async (event, id) => {
+  if (!(fromChat(event) || detachedViewFromEvent(event) === 'chat') || !/^[0-9a-f]{32}$/.test(id || ''))
+    throw new Error('请求未允许。');
+  const result = await endpointRequest(`/api/attachment-text?id=${encodeURIComponent(id)}`);
+  if (typeof result.text !== 'string') throw new Error('无法读取这个文本附件。');
+  return result.text;
+});
+ipcMain.handle('chat:open-attachment', async (event, id) => {
+  if (!(fromChat(event) || detachedViewFromEvent(event) === 'chat') || !/^[0-9a-f]{32}$/.test(id || ''))
+    throw new Error('请求未允许。');
+  const result = await endpointRequest(`/api/attachment?id=${encodeURIComponent(id)}`);
+  const attachment = result.attachment;
+  if (!attachment || attachment.id !== id || attachment.kind !== 'attachment' ||
+      attachment.view !== 'html' || attachment.mime !== 'text/html' ||
+      typeof attachment.filename !== 'string' || !/^[0-9a-f]{32}\.[a-z0-9]{1,12}$/.test(attachment.filename) ||
+      typeof attachment.name !== 'string' || attachment.name.length > 120 ||
+      path.basename(attachment.name) !== attachment.name || attachment.name.includes('\\') ||
+      attachment.name.includes('\0') || /[\x00-\x1f\x7f]/.test(attachment.name) ||
+      !Number.isSafeInteger(attachment.size) || attachment.size < 1 || attachment.size > 5 * 1024 * 1024)
+    throw new Error('附件信息无效。');
+  const extension = path.extname(attachment.filename).toLowerCase();
+  if (!['.html', '.htm'].includes(extension) || attachment.filename !== `${id}${extension}` ||
+      path.extname(attachment.name).toLowerCase() !== extension)
+    throw new Error('附件文件名无效。');
+  const token = new URL(agentEndpoint.url).searchParams.get('t');
+  const mediaUrl = `${agentEndpoint.origin}/media/${encodeURIComponent(id)}?t=${encodeURIComponent(token)}`;
+  const response = await fetch(mediaUrl, { redirect: 'error', signal: AbortSignal.timeout(30000) });
+  if (!response.ok) throw new Error('附件读取失败。');
+  if (!response.body || typeof response.body[Symbol.asyncIterator] !== 'function')
+    throw new Error('附件读取失败。');
+  const chunks = [];
+  let byteCount = 0;
+  for await (const chunk of response.body) {
+    const bytes = Buffer.from(chunk);
+    byteCount += bytes.length;
+    if (byteCount > 5 * 1024 * 1024) throw new Error('附件大小超过限制。');
+    chunks.push(bytes);
+  }
+  if (byteCount !== attachment.size)
+    throw new Error('附件大小与记录不一致。');
+  const bytes = Buffer.concat(chunks, byteCount);
+  const attachmentRoot = path.join(app.getPath('userData'), 'attachments');
+  await fs.mkdir(attachmentRoot, { recursive: true });
+  const rootStat = await fs.lstat(attachmentRoot);
+  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new Error('附件缓存目录不可用。');
+  const attachmentDir = path.join(attachmentRoot, id);
+  await fs.mkdir(attachmentDir, { recursive: true });
+  const dirStat = await fs.lstat(attachmentDir);
+  if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) throw new Error('附件缓存目录不可用。');
+  const destination = path.join(attachmentDir, attachment.name);
+  const temporary = path.join(attachmentDir, `.${id}.${randomUUID()}.tmp`);
+  try {
+    await fs.writeFile(temporary, bytes, { flag: 'wx', mode: 0o600 });
+    try {
+      const existing = await fs.lstat(destination);
+      if (!existing.isFile() || existing.isSymbolicLink()) throw new Error('附件缓存文件不可用。');
+      await fs.rm(destination);
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+    await fs.rename(temporary, destination);
+    const saved = await fs.stat(destination);
+    if (!saved.isFile() || saved.size !== bytes.length) throw new Error('附件缓存校验失败。');
+    const openError = await shell.openPath(destination);
+    if (openError) throw new Error(openError);
+    return true;
+  } finally {
+    await fs.rm(temporary, { force: true }).catch(() => {});
+  }
 });
 const backgroundMime = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp' };
 function backgroundFile() {

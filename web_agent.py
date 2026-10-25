@@ -16,6 +16,7 @@ import re
 import secrets
 import socket
 import ssl
+import stat
 import sys
 import threading
 import time
@@ -26,6 +27,8 @@ from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, getproxies, urlopen
 from urllib.error import HTTPError, URLError
 
+from attachment_utils import (ATTACHMENT_EXTENSIONS, ATTACHMENT_TYPES, MAX_ATTACHMENT_BYTES,
+                              inspect_attachment, redirected_path, valid_attachment_row)
 from veil_agent import (ROOT, AUTONOMY_WAKE, MAX_PHOTO_BYTES, ActivityState, Budget, Chat, Store, UserError,
                         load_character, now, make_model, make_voice, run_chat,
                         safe_tool_activity_detail)
@@ -105,6 +108,8 @@ def voice_transport_category(exc):
 def valid_media_row(row):
     if not isinstance(row, dict):
         return False
+    if row.get('kind') == 'attachment':
+        return valid_attachment_row(row)
     media_id, filename, mime = row.get('id'), row.get('filename'), row.get('mime')
     suffix = (MEDIA_TYPES[mime][0] if mime in MEDIA_TYPES else
               ('.mp3' if mime == VOICE_MIME else VOICE_TYPES.get(mime)))
@@ -174,8 +179,12 @@ class Hub:
         self.media_lock = threading.RLock()
         if self.media_root:
             self.media_root.mkdir(parents=True, exist_ok=True)
+            if redirected_path(self.media_root) or not self.media_root.is_dir():
+                raise UserError('附件目录被重定向，已停止；请保留 data 文件夹。')
             self.upload_root = self.media_root / '.uploads'
             self.upload_root.mkdir(exist_ok=True)
+            if redirected_path(self.upload_root) or not self.upload_root.is_dir():
+                raise UserError('附件临时目录被重定向，已停止；请保留 data 文件夹。')
             for upload in self.upload_root.iterdir():
                 if upload.is_file():
                     upload.unlink(missing_ok=True)
@@ -209,6 +218,10 @@ class Hub:
             indexed = {row['filename'] for row in self.media_index.values()}
             for candidate in self.media_root.iterdir():
                 if not candidate.is_file() or candidate.name in indexed:
+                    continue
+                attachment_match = re.fullmatch(r'([0-9a-f]{32})(\.[a-z0-9]{1,12})', candidate.name)
+                if attachment_match and attachment_match.group(2) in ATTACHMENT_EXTENSIONS:
+                    candidate.unlink(missing_ok=True)
                     continue
                 match = re.fullmatch(r'([0-9a-f]{32})\.(png|jpg|gif|webp|webm|ogg|m4a|wav)', candidate.name)
                 if not match:
@@ -285,6 +298,84 @@ class Hub:
         with self.media_lock:
             row = self.media_index.get(media_id)
             return dict(row) if row else None
+
+    def attachment_info(self, media_id):
+        row = self.media_info(media_id)
+        return row if valid_attachment_row(row) else None
+
+    def save_attachment(self, snapshot):
+        if self.media_root is None or not isinstance(snapshot, dict):
+            return None
+        raw = snapshot.get('data')
+        try:
+            metadata = inspect_attachment(snapshot.get('name'), raw)
+        except ValueError:
+            return None
+        if any(snapshot.get(key) != metadata[key] for key in ('name', 'mime', 'view', 'size')):
+            return None
+        media_id = secrets.token_hex(16)
+        filename = media_id + metadata['suffix']
+        row = {'id': media_id, 'filename': filename, 'mime': metadata['mime'],
+               'view': metadata['view'], 'kind': 'attachment', 'name': metadata['name'],
+               'size': metadata['size'], 'request_id': 'assistant-attachment-' + media_id}
+        target = self.media_root / filename
+        with self.media_lock:
+            if redirected_path(self.media_root) or not self.media_root.is_dir():
+                raise OSError('attachment directory redirected')
+            if media_id in self.media_index or target.exists() or target.is_symlink():
+                return None
+            created = False
+            try:
+                with target.open('xb', buffering=0) as handle:
+                    created = True
+                    if handle.write(raw) != len(raw):
+                        raise OSError('short attachment write')
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                self.media_index[media_id] = row
+                created = True
+                self._rewrite_media_index()
+            except OSError:
+                if created:
+                    self.media_index.pop(media_id, None)
+                    target.unlink(missing_ok=True)
+                raise
+        return dict(row)
+
+    def read_attachment(self, media_id):
+        row = self.attachment_info(media_id)
+        if not row:
+            return None
+        path = self.media_root / row['filename']
+        try:
+            if (redirected_path(self.media_root) or redirected_path(path)
+                    or not path.is_file()):
+                return None
+            before = path.stat(follow_symlinks=False)
+            if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_size != row['size']:
+                return None
+            fd = os.open(path, os.O_RDONLY | getattr(os, 'O_BINARY', 0) | getattr(os, 'O_NOFOLLOW', 0))
+            with os.fdopen(fd, 'rb') as handle:
+                opened = os.fstat(handle.fileno())
+                identity = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+                if (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns) != identity:
+                    return None
+                raw = handle.read(MAX_ATTACHMENT_BYTES + 1)
+                after_read = os.fstat(handle.fileno())
+            after = path.stat(follow_symlinks=False)
+            if (len(raw) != row['size'] or len(raw) > MAX_ATTACHMENT_BYTES or
+                    any((item.st_dev, item.st_ino, item.st_size, item.st_mtime_ns) != identity
+                        for item in (after_read, after))):
+                return None
+            try:
+                metadata = inspect_attachment(row['name'], raw)
+            except ValueError:
+                return None
+            if any(row.get(key) != metadata[key] for key in ('name', 'mime', 'view', 'size')):
+                return None
+            return row, raw
+        except OSError:
+            return None
 
     def register_voice_media(self, media):
         if not isinstance(media, dict) or media.get('mime') != VOICE_MIME:
@@ -663,6 +754,7 @@ class Hub:
 
     def _publish_output(self, text):
         media = getattr(text, 'media', None)
+        attachments = getattr(text, 'attachments', None)
         message_id = getattr(text, 'message_id', None)
         request_id = getattr(text, 'request_id', None)
         memory_refs = getattr(text, 'memory_refs', None)
@@ -672,10 +764,16 @@ class Hub:
             self.push('reset', text)
         elif text.startswith(prefix):
             voice = self.register_voice_media(media)
+            safe_attachments = []
+            for item in attachments if isinstance(attachments, list) else []:
+                attachment = self.attachment_info(item.get('id')) if isinstance(item, dict) else None
+                if attachment:
+                    safe_attachments.append(attachment)
             for bridge in self.away:
-                bridge.assistant_message(text[len(prefix):])
+                bridge.assistant_message(text[len(prefix):], safe_attachments)
             self.push('assistant', text[len(prefix):],
                       **({'media': voice} if voice else {}),
+                      **({'attachments': safe_attachments} if safe_attachments else {}),
                       **({'message_id': message_id} if isinstance(message_id, str) else {}),
                       **({'request_id': request_id} if isinstance(request_id, str) else {}),
                       **({'memory_refs': memory_refs} if isinstance(memory_refs, list) and memory_refs else {}))
@@ -879,12 +977,16 @@ class Hub:
                 return '已开始重新生成。'
             if action == 'delete':
                 rows = self.chat.delete_messages(ids)
-                for row in rows:
-                    self.push('message_removed', '', message_id=row['message_id'])
-                    try:
-                        self._remove_unreferenced_media(row.get('media'))
-                    except (OSError, UserError):
-                        pass  # A cleanup failure leaves only an unreferenced media file.
+                publish_removed = getattr(self.chat, 'message_removed', None)
+                if callable(publish_removed):
+                    publish_removed(rows)
+                else:
+                    for row in rows:
+                        self.push('message_removed', '', message_id=row['message_id'])
+                        try:
+                            self._remove_unreferenced_media([row.get('media'), *(row.get('attachments') or [])])
+                        except (OSError, UserError):
+                            pass
                 return '已删除所选消息。' if len(rows) > 1 else '消息已删除。'
             if action == 'edit':
                 row = self.chat.edit_message(message_id, content)
@@ -895,11 +997,15 @@ class Hub:
                 self.push('message_updated', '', message_id=message_id, favorite=row['favorite'])
                 return '已收藏消息。' if favorite else '已取消收藏。'
             row = self.chat.recall_message(message_id)
-            self.push('message_recalled', '[Message recalled]', message_id=message_id)
-            try:
-                self._remove_unreferenced_media(row.get('media'))
-            except (OSError, UserError):
-                pass
+            publish_recalled = getattr(self.chat, 'message_recalled', None)
+            if callable(publish_recalled):
+                publish_recalled(row)
+            else:
+                self.push('message_recalled', '[Message recalled]', message_id=message_id)
+                try:
+                    self._remove_unreferenced_media([row.get('media'), *(row.get('attachments') or [])])
+                except (OSError, UserError):
+                    pass
             return '消息已撤回。'
         except UserError as exc:
             return str(exc)
@@ -924,28 +1030,30 @@ class Hub:
                                   if isinstance(ref, str) and re.fullmatch(r'[A-Za-z0-9_-]{1,100}', ref)))[:6]
 
     def _remove_unreferenced_media(self, media):
-        if not isinstance(media, dict) or not isinstance(media.get('id'), str):
-            return
-        media_id = media['id']
-        if any((row.get('media') or {}).get('id') == media_id
-               for row in self.chat.store.read(self.chat.path)):
-            return
-        with self.media_lock:
-            row = self.media_index.get(media_id)
-            if not row:
-                return
-            self.media_index.pop(media_id, None)
+        candidates = media if isinstance(media, list) else [media]
+        media_ids = {item.get('id') for item in candidates
+                     if isinstance(item, dict) and isinstance(item.get('id'), str)}
+        for media_id in media_ids:
+            if any(media_id in ({(row.get('media') or {}).get('id')} |
+                                {item.get('id') for item in (row.get('attachments') or [])
+                                 if isinstance(item, dict)})
+                   for row in self.chat.store.read(self.chat.path)):
+                continue
+            with self.media_lock:
+                row = self.media_index.pop(media_id, None)
+                if not row:
+                    continue
+                try:
+                    self._rewrite_media_index()
+                except OSError:
+                    self.media_index[media_id] = row
+                    raise
             try:
-                self._rewrite_media_index()
+                (self.media_root / row['filename']).unlink(missing_ok=True)
             except OSError:
-                self.media_index[media_id] = row
-                raise
-        try:
-            (self.media_root / row['filename']).unlink(missing_ok=True)
-        except OSError:
-            # The chat ledger and media index no longer reference it. A locked
-            # file is harmless and can be reclaimed on a later startup.
-            pass
+                # The chat ledger and media index no longer reference it. A locked
+                # file is harmless and can be reclaimed on a later startup.
+                pass
 
     def approval(self, prompt):
         # Same sentence the terminal shows; the page offers two buttons for y/N.
@@ -1065,6 +1173,27 @@ def make_handler(hub, token):
                             self._send(200, json.loads(rendered))
                         except (TypeError, ValueError):
                             self._send(503, {'error': 'Ombre memory could not be read right now.'})
+            elif url.path in ('/api/attachment', '/api/attachment-text'):
+                if not self._guard(self.headers.get('X-Token')):
+                    return
+                media_ids = query.get('id', [])
+                if len(query) != 1 or len(media_ids) != 1 or not MEDIA_ID_PATTERN.fullmatch(media_ids[0]):
+                    self._send(400, {'error': 'invalid attachment'})
+                    return
+                saved = hub.read_attachment(media_ids[0])
+                if not saved:
+                    self._send(404, {'error': 'attachment not found'})
+                    return
+                media, raw = saved
+                if url.path == '/api/attachment':
+                    self._send(200, {'attachment': media})
+                elif media.get('view') != 'text':
+                    self._send(415, {'error': 'attachment is not plain text'})
+                else:
+                    try:
+                        self._send(200, {'text': raw.decode('utf-8')})
+                    except UnicodeDecodeError:
+                        self._send(415, {'error': 'attachment is not UTF-8 text'})
             elif url.path == '/api/events':
                 if self._guard(self.headers.get('X-Token')):
                     try:
@@ -1082,9 +1211,19 @@ def make_handler(hub, token):
                     return
                 try:
                     path = hub.media_root / media['filename']
+                    if media.get('kind') == 'attachment':
+                        saved = hub.read_attachment(media_id)
+                        if not saved:
+                            raise OSError('attachment unavailable')
+                        _, attachment_data = saved
+                        size = len(attachment_data)
+                    else:
+                        attachment_data = None
                     limit = (MAX_GENERATED_VOICE_BYTES if media.get('mime') == VOICE_MIME else
-                             (MAX_VOICE_UPLOAD_BYTES if media.get('kind') == 'voice' else MAX_MEDIA_BYTES))
-                    size = path.stat().st_size
+                             (MAX_VOICE_UPLOAD_BYTES if media.get('kind') == 'voice' else
+                              (MAX_ATTACHMENT_BYTES if media.get('kind') == 'attachment' else MAX_MEDIA_BYTES)))
+                    if attachment_data is None:
+                        size = path.stat().st_size
                     if size > limit:
                         raise OSError('media too large')
                     status = 200
@@ -1108,18 +1247,28 @@ def make_handler(hub, token):
                         end = min(end, size - 1)
                         status = 206
                     length = max(0, end - start + 1)
-                    with path.open('rb') as handle:
-                        handle.seek(start)
-                        data = handle.read(length)
+                    if attachment_data is not None:
+                        data = attachment_data[start:start + length]
+                    else:
+                        with path.open('rb') as handle:
+                            handle.seek(start)
+                            data = handle.read(length)
                     if len(data) != length:
                         raise OSError('media too large')
                 except OSError:
                     self._send(404, {'error': 'not found'})
                 else:
                     headers = {'Accept-Ranges': 'bytes'}
+                    content_type = media['mime']
+                    if media.get('kind') == 'attachment':
+                        if media.get('view') == 'html':
+                            content_type = 'application/octet-stream'
+                            headers['Content-Disposition'] = f'attachment; filename="{media["filename"]}"'
+                        elif media.get('view') == 'text':
+                            content_type = 'text/plain; charset=utf-8'
                     if status == 206:
                         headers['Content-Range'] = f'bytes {start}-{end}/{size}'
-                    self._send(status, data, media['mime'], headers)
+                    self._send(status, data, content_type, headers)
             else:
                 self._send(404, {'error': 'not found'})
 
@@ -1322,10 +1471,23 @@ def start_server(hub, token, port):
 
 def serve_chat(chat, hub, channels=()):
     hub.chat = chat
+    files = getattr(chat.tools, 'files', None) if chat.tools else None
+    files = files or chat.tools
+    if (getattr(files, 'lab', None) is not None and
+            callable(getattr(files, 'read_lab_attachment', None))):
+        chat.attachment_reader = files.read_lab_attachment
+        chat.attachment_saver = hub.save_attachment
+        chat.attachment_discarder = hub._remove_unreferenced_media
+        announce_attachments = getattr(files, 'announce_file_attachments', None)
+        if callable(announce_attachments):
+            if announce_attachments() is False:
+                hub.output('附件能力通知暂时无法保存；聊天仍可使用，下次启动会重试。')
+            chat.pending_capability_event = getattr(chat.tools, 'capability_event', None)
+            chat.pending_capability_event_model = getattr(chat.tools, 'capability_event_model', None)
     def publish_recalled(row):
         hub.push('message_recalled', '[Message recalled]', message_id=row['message_id'])
         try:
-            hub._remove_unreferenced_media(row.get('media'))
+            hub._remove_unreferenced_media([row.get('media'), *(row.get('attachments') or [])])
         except (OSError, UserError):
             pass
     chat.message_recalled = publish_recalled
@@ -1333,12 +1495,10 @@ def serve_chat(chat, hub, channels=()):
         for row in rows:
             hub.push('message_removed', '', message_id=row['message_id'])
             try:
-                hub._remove_unreferenced_media(row.get('media'))
+                hub._remove_unreferenced_media([row.get('media'), *(row.get('attachments') or [])])
             except (OSError, UserError):
                 pass
     chat.message_removed = publish_removed
-    files = getattr(chat.tools, 'files', None) if chat.tools else None
-    files = files or chat.tools
     announce_photo = getattr(files, 'announce_photo_input', None)
     if callable(announce_photo):
         if announce_photo() is False:
@@ -1368,10 +1528,14 @@ def serve_chat(chat, hub, channels=()):
                                          if message['role'] == 'user' else None)
         if message['role'] == 'assistant' and isinstance(media, dict):
             media = hub.register_voice_media(media)
+        attachments = [hub.attachment_info(item.get('id')) for item in message.get('attachments', [])
+                       if isinstance(item, dict)]
+        attachments = [item for item in attachments if item]
         hub.push(message['role'], message['content'], time=message['time'], history=True,
                  message_id=message['message_id'], request_id=message.get('request_id'),
                  favorite=message.get('favorite') is True,
                  memory_refs=message.get('memory_refs', []),
+                 **({'attachments': attachments} if attachments else {}),
                  **({'media': media} if media else {}))
     # The UI history is a bounded window; replay decisions must use the durable
     # full chat log or an older successful voice send looks pending on restart.
@@ -1389,6 +1553,8 @@ def serve_chat(chat, hub, channels=()):
         bridge = AwayBridge(channel, hub)
         hub.away.append(bridge)
         chat.away_channels[channel.name] = bridge.requested
+        if channel.name == 'email':
+            chat.email_attachment_admission = bridge.can_add_reply_attachment
         announce = getattr(files, 'announce_' + channel.name, None)
         if callable(announce):
             if announce() is False:

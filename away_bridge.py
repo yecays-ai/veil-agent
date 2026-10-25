@@ -31,6 +31,7 @@ class AwayBridge:
         self.turn = None         # reply_ref while answering a message from this channel
         self.in_turn = False
         self.collected = []      # Peter's messages in the current channel turn
+        self.collected_attachments = []
         self.proactive = []      # messages he marked for this channel outside such a turn
         self.last_error = None
         self.state_lock = threading.Lock()
@@ -45,10 +46,12 @@ class AwayBridge:
         """The chat loop is about to take its next input: send what the last turn produced."""
         with self.state_lock:
             if self.in_turn and self.collected:
-                self._queue('\n\n'.join(self.collected), self.turn)
+                self._queue('\n\n'.join(self.collected), self.turn, self.collected_attachments)
             elif self.proactive:
-                self._queue('\n\n'.join(self.proactive), None)
-            self.turn, self.in_turn, self.collected, self.proactive = None, False, [], []
+                self._queue('\n\n'.join(item[0] for item in self.proactive), None,
+                            [attachment for _, items in self.proactive for attachment in items])
+            self.turn, self.in_turn, self.collected, self.collected_attachments, self.proactive = (
+                None, False, [], [], [])
 
     def turn_started(self, item):
         request_id = getattr(item, 'message_id', None)
@@ -57,22 +60,32 @@ class AwayBridge:
                 self.turn = self.replying.pop(request_id)
                 self.in_turn = True
 
-    def assistant_message(self, text):
+    def assistant_message(self, text, attachments=None):
         with self.state_lock:
             if self.in_turn:
                 self.collected.append(text)
+                if self.channel.name == 'email' and isinstance(attachments, list):
+                    self.collected_attachments.extend(item for item in attachments if isinstance(item, dict))
 
-    def requested(self, text):
+    def can_add_reply_attachment(self):
+        with self.state_lock:
+            return (self.channel.name != 'email' or not self.in_turn
+                    or len(self.collected_attachments) < 3)
+
+    def requested(self, text, attachments=None):
         """send_message(<channel>=true). Inside this channel's turn every message goes out anyway."""
         with self.state_lock:
             if not self.in_turn:
-                self.proactive.append(text)
+                files = (list(attachments) if self.channel.name == 'email'
+                         and isinstance(attachments, list) else [])
+                self.proactive.append((text, files))
         return True
 
     # sending worker ---------------------------------------------------------
-    def _queue(self, text, reply_ref):
+    def _queue(self, text, reply_ref, attachments=()):
         with self.outbox_ready:
-            self.outbox.append((text, reply_ref))
+            files = list(attachments) if self.channel.name == 'email' else []
+            self.outbox.append((text, reply_ref, files) if files else (text, reply_ref))
             self.outbox_ready.notify()
 
     def _report(self, error):
@@ -88,8 +101,12 @@ class AwayBridge:
                     return
                 if not self.channel.ready_to_send():
                     return
-                text, reply_ref = self.outbox.pop(0)
-            error = self.channel.reply(text, reply_ref)
+                item = self.outbox.pop(0)
+                text, reply_ref = item[:2]
+                attachments = item[2] if len(item) > 2 else []
+            error = (self.channel.reply(text, reply_ref, attachments=attachments)
+                     if attachments and self.channel.name == 'email'
+                     else self.channel.reply(text, reply_ref))
             self._report(error)
             if not error:
                 self.hub.push('notice', f'已通过{self.channel.label}发给 Lan。')

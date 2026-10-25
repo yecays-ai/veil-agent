@@ -7,8 +7,10 @@ import hashlib
 import html
 import imaplib
 import json
+import os
 import re
 import smtplib
+import stat
 import ssl
 import threading
 from datetime import datetime
@@ -18,6 +20,9 @@ from email.parser import BytesParser
 from email.utils import make_msgid, parseaddr
 from html.parser import HTMLParser
 from pathlib import Path
+
+from attachment_utils import (ATTACHMENT_TYPES, MAX_ATTACHMENT_BYTES, redirected_path,
+                              valid_attachment_row)
 
 
 EMAIL_PREFIX = '[Lan sent this by email; she is away from the computer.]\n'
@@ -130,11 +135,52 @@ class EmailChannel:
         return {row.get('message_id') for row in self._log_rows() if row.get('kind') == 'received'}
 
     # --- sending -----------------------------------------------------------
-    def send(self, text, subject=None, in_reply_to=None):
+    def _read_attachments(self, attachments):
+        if not attachments:
+            return []
+        if not isinstance(attachments, (list, tuple)) or len(attachments) > 3:
+            raise ValueError('邮件附件数量超过限制。')
+        result = []
+        for row in attachments:
+            if not valid_attachment_row(row):
+                raise ValueError('邮件附件记录无效。')
+            media_root = self.log_path.parent / 'media'
+            path = media_root / row['filename']
+            if (redirected_path(media_root) or not media_root.is_dir() or path.parent != media_root
+                    or redirected_path(path) or not path.is_file()):
+                raise ValueError('邮件附件无法安全读取。')
+            before = path.stat(follow_symlinks=False)
+            if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_size != row['size']:
+                raise ValueError('邮件附件无法安全读取。')
+            fd = os.open(path, os.O_RDONLY | getattr(os, 'O_BINARY', 0) | getattr(os, 'O_NOFOLLOW', 0))
+            with os.fdopen(fd, 'rb') as handle:
+                opened = os.fstat(handle.fileno())
+                identity = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+                if (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns) != identity:
+                    raise ValueError('邮件附件在读取前发生了变化。')
+                raw = handle.read(MAX_ATTACHMENT_BYTES + 1)
+                after_read = os.fstat(handle.fileno())
+            after = path.stat(follow_symlinks=False)
+            if (len(raw) != row['size'] or len(raw) > MAX_ATTACHMENT_BYTES or
+                    any((item.st_dev, item.st_ino, item.st_size, item.st_mtime_ns) != identity
+                        for item in (after_read, after))):
+                raise ValueError('邮件附件在读取时发生了变化。')
+            suffix = Path(row['filename']).suffix.lower()
+            mime, _view = ATTACHMENT_TYPES[suffix]
+            if mime != row['mime']:
+                raise ValueError('邮件附件类型无效。')
+            result.append((raw, mime, row['name']))
+        return result
+
+    def send(self, text, subject=None, in_reply_to=None, attachments=()):
         """Send one email to Lan. Returns None on success or a Chinese reason."""
         text = text.strip()
         if not text:
             return None
+        try:
+            attachment_data = self._read_attachments(attachments)
+        except (OSError, ValueError, KeyError, TypeError):
+            return '邮件附件无法安全读取，这封邮件没有发出。'
         with self.lock:
             if self.sent_today() >= self.daily_max_sent:
                 return f'今天的邮件已达到 {self.daily_max_sent} 封上限，这封没有发出。'
@@ -151,6 +197,9 @@ class EmailChannel:
                 message['In-Reply-To'] = in_reply_to
                 message['References'] = in_reply_to
             message.set_content(text)
+            for raw, mime, name in attachment_data:
+                maintype, subtype = mime.split('/', 1)
+                message.add_attachment(raw, maintype=maintype, subtype=subtype, filename=name)
             try:
                 with smtplib.SMTP_SSL(self.smtp_host, self.smtp_port, timeout=30,
                                       context=ssl.create_default_context()) as smtp:
@@ -160,7 +209,8 @@ class EmailChannel:
                 return '邮箱登录失败：请检查 .env 里的邮箱地址和授权码。'
             except (smtplib.SMTPException, OSError):
                 return '邮件发送失败（网络或邮箱服务暂时不可用），这封没有发出。'
-            self._log({'kind': 'sent', 'message_id': message_id, 'subject': subject})
+            self._log({'kind': 'sent', 'message_id': message_id, 'subject': subject,
+                       'attachment_count': len(attachment_data)})
             return None
 
     # --- receiving ---------------------------------------------------------
@@ -224,9 +274,9 @@ class EmailChannel:
     def ack(self, incoming):
         self.mark_received(incoming.handle, incoming.key)
 
-    def reply(self, text, reply_ref):
+    def reply(self, text, reply_ref, attachments=()):
         if reply_ref:
             message_id, subject = reply_ref
             subject = subject if subject.lower().startswith('re:') else 'Re: ' + subject
-            return self.send(text, subject, message_id)
-        return self.send(text)
+            return self.send(text, subject, message_id, attachments)
+        return self.send(text, attachments=attachments)

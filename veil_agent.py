@@ -119,11 +119,18 @@ AWAY_CHANNEL_PARAMETERS = {
 }
 
 
-def send_message_schema(voice=False, channels=()):
+def send_message_schema(voice=False, channels=(), files=False):
     schema = json.loads(json.dumps(SEND_MESSAGE))
     for name in channels:
         schema['function']['parameters']['properties'][name] = {
             'type': 'boolean', 'description': AWAY_CHANNEL_PARAMETERS[name]}
+    if files:
+        schema['function']['parameters']['properties']['file'] = {
+            'type': 'string', 'minLength': 1, 'maxLength': 240,
+            'description': ('Optional path to one ordinary file you created inside your own Lab, e.g. '
+                            '"lab/game.html". The program rejects paths outside Lab, links, unsupported '
+                            'types, non-UTF-8 text, and files over 5 MB. The sent copy is a snapshot. '
+                            'If replying to email, attach at most three files in the whole response.')}
     if voice:
         schema['function']['parameters']['properties']['voice'] = {
             'type': 'boolean',
@@ -958,12 +965,13 @@ def collapse_latest_photo(messages):
 
 
 class ChatOutput(str):
-    def __new__(cls, text, media=None, message_id=None, request_id=None, memory_refs=None):
+    def __new__(cls, text, media=None, message_id=None, request_id=None, memory_refs=None, attachments=None):
         value = super().__new__(cls, text)
         value.media = media
         value.message_id = message_id
         value.request_id = request_id
         value.memory_refs = list(memory_refs or [])
+        value.attachments = list(attachments or [])
         return value
 
 
@@ -1021,6 +1029,10 @@ class Chat:
         self.last_tool_summaries = []
         self.autonomy_interrupted = False
         self.runtime_monitor = runtime_monitor
+        self.attachment_reader = None
+        self.attachment_saver = None
+        self.attachment_discarder = None
+        self.email_attachment_admission = None
         # Tickets 098/102: channel name -> callable(text), set by the desktop service for configured channels.
         self.away_channels = {}
 
@@ -1030,7 +1042,9 @@ class Chat:
             'name': tool.name, 'description': tool.description, 'parameters': tool.inputSchema}}
             for tool in self.long_tasks.tools] if self.task_tools_enabled else []
         existing_tools = permitted_tools(self.tools.tools if self.tools else [])
-        messaging = [send_message_schema(self.voice is not None, tuple(self.away_channels)),
+        messaging = [send_message_schema(self.voice is not None, tuple(self.away_channels),
+                                         files=callable(self.attachment_reader)
+                                         and callable(self.attachment_saver)),
                      RECALL_MESSAGE] if (
             (self.cfg.tools and self.cfg.tools.get('enabled', True))
             or (self.tools and self.tools.tools)) else []
@@ -1179,9 +1193,18 @@ class Chat:
             args = None
         allowed = {'text', 'voice'} if self.voice is not None else {'text'}
         allowed.update(self.away_channels)
+        if callable(self.attachment_reader) and callable(self.attachment_saver):
+            allowed.add('file')
         if (not isinstance(args, dict) or not set(args).issubset(allowed) or 'text' not in args or
                 not isinstance(args['text'], str) or not args['text'].strip()):
             return 'send_message requires non-empty text.', '被拒绝', 'send_message'
+        if 'file' in args and (not isinstance(args['file'], str) or
+                               not args['file'].strip() or len(args['file']) > 240):
+            return 'send_message file must be one Lab-relative path.', '被拒绝', 'send_message'
+        if ('file' in args and callable(self.email_attachment_admission)
+                and self.email_attachment_admission() is False):
+            return ('This email reply already has three attachments. This file was not sent; continue without it '
+                    'or send it in a separate message.'), '被拒绝', 'send_message'
         if 'voice' in args and type(args['voice']) is not bool:
             return 'send_message voice must be a boolean.', '被拒绝', 'send_message'
         for name in self.away_channels:
@@ -1210,6 +1233,24 @@ class Chat:
                 if sent_this_wake >= 3:
                     return 'An autonomous wake may send at most three messages. This message was not sent.', '被拒绝', 'send_message'
             voice_requested = args.get('voice') is True
+            attachment_snapshot = None
+            if 'file' in args:
+                try:
+                    attachment_snapshot = self.attachment_reader(args['file'])
+                except (OSError, ValueError, UserError):
+                    return ('The Lab file was rejected or could not be copied safely; nothing was sent. '
+                            'Use an ordinary supported file inside your own Lab, no larger than 5 MB.',
+                            '被拒绝', 'send_message')
+            attachment = None
+            if attachment_snapshot is not None:
+                try:
+                    attachment = self.attachment_saver(attachment_snapshot)
+                    if not isinstance(attachment, dict):
+                        return 'The Lab file could not be saved as an attachment; nothing was sent.', '出错', 'send_message'
+                except (OSError, ValueError, UserError):
+                    return ('The Lab file was rejected or could not be copied safely; nothing was sent. '
+                            'Use an ordinary supported file inside your own Lab, no larger than 5 MB.',
+                            '被拒绝', 'send_message')
             media = None
             voice_failure = None
             if voice_requested:
@@ -1220,6 +1261,8 @@ class Chat:
                 except Exception as exc:
                     from voice_output import VoiceError
                     if not isinstance(exc, VoiceError):
+                        if attachment and callable(self.attachment_discarder):
+                            self.attachment_discarder(attachment)
                         raise
                     voice_failure = exc.user_message
             displayed_text = (f'语音生成失败：{voice_failure}\n{text}' if voice_failure else text)
@@ -1229,6 +1272,8 @@ class Chat:
                      'memory_refs': list(getattr(self, 'turn_memory_refs', []))}
             if media:
                 event['media'] = media
+            if attachment:
+                event['attachments'] = [attachment]
             if autonomy:
                 event.update({'autonomy_run_id': run_id,
                               'autonomy_tool_call_id': tool_call_id})
@@ -1242,14 +1287,20 @@ class Chat:
                         self.history, self.rounds = self.recent()
                     output = self.autonomy_message_output if autonomy else None
                     (output or self.output)(ChatOutput(f'{self.cfg.name}: {displayed_text}', media,
-                                                       message_id, request_id, getattr(self, 'turn_memory_refs', [])))
+                                                       message_id, request_id, getattr(self, 'turn_memory_refs', []),
+                                                       [attachment] if attachment else []))
             except BaseException:
                 if media and not committed:
                     self.voice.discard(media)
+                if attachment and not committed and callable(self.attachment_discarder):
+                    self.attachment_discarder(attachment)
                 raise
         forwarded = [name for name in self.away_channels if args.get(name) is True]
         for name in forwarded:
-            self.away_channels[name](displayed_text)
+            if attachment:
+                self.away_channels[name](displayed_text, [attachment])
+            else:
+                self.away_channels[name](displayed_text)
         if voice_failure:
             return (f'Voice generation failed: {voice_failure} The message was sent as text instead.',
                     '成功', 'send_message（语音失败，已发文字）')
@@ -1423,7 +1474,8 @@ class Chat:
                                   for event in self._chat_rows()):
             raise UserError('Peter 已经处理了这条消息，不能再撤回。')
         self.store.update_record(self.path, index, {
-            'message_id': message_id, 'content': '[Message recalled]', 'recalled': True, 'media': None,
+            'message_id': message_id, 'content': '[Message recalled]', 'recalled': True,
+            'media': None, 'attachments': [],
         })
         self.history, self.rounds = self.recent()
         return row

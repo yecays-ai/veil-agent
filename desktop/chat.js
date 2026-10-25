@@ -163,7 +163,7 @@ function showEvent(e){
     const pending=[...col.querySelectorAll('.msg')].find(node=>node.dataset.mediaId===e.media.id);
     if(pending)pending.remove();
   }
-  scrollIfFollowing(()=>add(e.kind,e.text,e.id,e.time,e.media,e.message_id,e.request_id,e.favorite));
+  scrollIfFollowing(()=>add(e.kind,e.text,e.id,e.time,e.media,e.message_id,e.request_id,e.favorite,e.attachments));
   if(e.kind==='approval'&&e.id!==pendingApproval){
     const card=col.querySelector('.approval[data-id="'+e.id+'"]');
     card.classList.add('done');card.querySelector('.status').textContent='审批已结束，请看后续聊天提示。';
@@ -239,6 +239,45 @@ function createVoiceBubble(kind,text,media){
   }else updateVoiceMessage({querySelector:()=>wrap},media);
   return wrap;
 }
+function formatAttachmentSize(size){
+  if(!Number.isFinite(size)||size<0)return '';
+  if(size<1024)return `${size} B`;
+  if(size<1024*1024)return `${(size/1024).toFixed(1)} KB`;
+  return `${(size/(1024*1024)).toFixed(1)} MB`;
+}
+function createAttachmentCard(attachment){
+  if(!attachment||typeof attachment.id!=='string'||!/^[0-9a-f]{32}$/.test(attachment.id))return null;
+  const card=document.createElement('section');card.className='msg-file-card';
+  const heading=document.createElement('div');heading.className='msg-file-heading';
+  const name=document.createElement('span');name.className='msg-file-name';name.textContent=attachment.name||'附件';
+  const size=document.createElement('span');size.className='msg-file-size';size.textContent=formatAttachmentSize(attachment.size);
+  heading.append(name,size);card.appendChild(heading);
+  if(attachment.view==='image'&&['image/png','image/jpeg','image/gif','image/webp'].includes(attachment.mime)){
+    const image=document.createElement('img');image.className='msg-file-image';image.alt=attachment.name||'图片';image.loading='lazy';
+    window.veilDesktop.mediaUrl(attachment.filename).then(url=>{image.src=url}).catch(()=>{image.alt='图片附件无法读取'});
+    card.appendChild(image);
+  }else if(attachment.view==='html'&&attachment.mime==='text/html'){
+    const open=document.createElement('button');open.type='button';open.className='msg-file-open';open.textContent='在浏览器中打开';
+    open.onclick=async()=>{open.disabled=true;try{await window.veilDesktop.openAttachment(attachment.id)}catch(error){notify(error.message||'无法打开这个网页附件。','error')}finally{open.disabled=false}};
+    card.appendChild(open);
+  }else if(attachment.view==='text'&&attachment.mime==='text/plain'){
+    const details=document.createElement('details');details.className='msg-file-text';
+    const summary=document.createElement('summary');summary.textContent='在聊天窗口中查看';
+    const content=document.createElement('pre');details.append(summary,content);
+    let loaded=false,loading=false;
+    details.addEventListener('toggle',async()=>{
+      if(!details.open||loaded||loading)return;
+      loading=true;content.textContent='正在读取…';
+      try{content.textContent=await window.veilDesktop.attachmentText(attachment.id);loaded=true}
+      catch(error){content.textContent=error.message||'无法读取这个文本附件。'}
+      finally{loading=false}
+    });
+    card.appendChild(details);
+  }else{
+    const unsupported=document.createElement('span');unsupported.className='msg-file-note';unsupported.textContent='此文件类型暂不支持预览';card.appendChild(unsupported);
+  }
+  return card;
+}
 function updateFavoriteBadge(node,favorite){
   node.dataset.favorite=String(favorite);
   node.classList.toggle('is-favorite',favorite);
@@ -246,7 +285,7 @@ function updateFavoriteBadge(node,favorite){
   if(favorite&&!badge){badge=document.createElement('span');badge.className='msg-favorite';badge.innerHTML=window.veilIcon('star',13);badge.title='Favorite';badge.setAttribute('aria-label','Favorite');node.appendChild(badge)}
   else if(!favorite&&badge)badge.remove();
 }
-function add(kind,text,id,time,media,messageId,requestId,favorite=false){
+function add(kind,text,id,time,media,messageId,requestId,favorite=false,attachments=[]){
   if(kind==='notice'){notify(text);return}
   if(kind==='error'){
     const previous=recentErrors.get(text),now=Date.now();
@@ -277,6 +316,7 @@ function add(kind,text,id,time,media,messageId,requestId,favorite=false){
       const image=document.createElement('img');image.className='msg-image';window.veilDesktop.mediaUrl(media.filename).then(url=>{image.src=url});image.alt=media.name||'图片';image.loading='lazy';d.appendChild(image);
       if(text&&text!=='[图片]'){const caption=document.createElement('div');caption.innerHTML=render(text);d.appendChild(caption)}
     }else d.innerHTML=render(text);
+    for(const attachment of Array.isArray(attachments)?attachments:[]){const card=createAttachmentCard(attachment);if(card)d.appendChild(card)}
     updateFavoriteBadge(d,d.dataset.favorite==='true');
     d.classList.toggle('is-selected',selectedMessageIds.has(messageId));
     previousMessage={kind,time:stamp};

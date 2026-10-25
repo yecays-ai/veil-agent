@@ -5,6 +5,8 @@ contextBridge.exposeInMainWorld('veilDesktop', {
   request: (path, body, timeoutMs) => ipcRenderer.invoke('chat:request', path, body, timeoutMs),
   reconnect: () => ipcRenderer.invoke('chat:reconnect'),
   mediaUrl: filename => ipcRenderer.invoke('chat:media-url', filename),
+  attachmentText: id => ipcRenderer.invoke('chat:attachment-text', id),
+  openAttachment: id => ipcRenderer.invoke('chat:open-attachment', id),
   petSize: () => ipcRenderer.invoke('chat:pet-size'),
   setPetSize: size => ipcRenderer.invoke('chat:set-pet-size', size),
   saveTheme: theme => ipcRenderer.invoke('chat:save-theme', theme),

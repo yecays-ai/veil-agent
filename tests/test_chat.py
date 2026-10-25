@@ -14,7 +14,7 @@ from unittest.mock import Mock, patch
 from veil_agent import (Chat, Budget, Store, build_self_description, conservative_token_ratio,
                         estimate_request_tokens,
                         load_character, make_model, model_tool_result, run_chat, UserError,
-                        RequestFailed, TooLong)
+                        RequestFailed, TooLong, send_message_schema)
 
 
 def sent_facts(messages):
@@ -77,6 +77,86 @@ output_cny_per_million = "8"
             'fictional question', 'fictional first message', 'fictional follow-up',
             'fictional next question', 'fictional next reply'])
         self.assertEqual(rounds, 2)
+
+    def test_send_message_file_is_available_only_with_lab_attachment_hooks(self):
+        self.assertNotIn('file', send_message_schema()['function']['parameters']['properties'])
+        self.assertIn('file', send_message_schema(files=True)['function']['parameters']['properties'])
+        rejected, state, _ = self.chat.send_message(json.dumps({'text': 'hello', 'file': 'lab/story.md'}),
+                                                    'request-no-files')
+        self.assertEqual(state, '被拒绝')
+        self.assertIn('send_message', rejected)
+        self.assertEqual(self.store.read('test/chat.jsonl'), [])
+
+        saved = {'id': 'a' * 32, 'filename': 'a' * 32 + '.md', 'mime': 'text/plain',
+                 'view': 'text', 'kind': 'attachment', 'name': 'story.md', 'size': 12,
+                 'request_id': 'assistant-attachment-' + 'a' * 32}
+        outputs = []
+        chat = Chat(self.cfg, self.store, self.budget, self.model, output=outputs.append)
+        chat.attachment_reader = Mock(return_value={'name': 'story.md', 'suffix': '.md',
+            'mime': 'text/plain', 'view': 'text', 'size': 12, 'data': b'first version'})
+        chat.attachment_saver = Mock(return_value=saved)
+        result, state, _ = chat.send_message(json.dumps({'text': 'Here is the poem.',
+                                                         'file': 'lab/story.md'}),
+                                             'request-with-file')
+
+        self.assertEqual((result, state), ('Sent.', '成功'))
+        row = self.store.read('test/chat.jsonl')[0]
+        self.assertEqual(row['attachments'], [saved])
+        self.assertEqual(outputs[0].attachments, [saved])
+        chat.attachment_reader.assert_called_once_with('lab/story.md')
+
+    def test_email_reply_attachment_limit_rejects_fourth_file_before_reading_it(self):
+        chat = Chat(self.cfg, self.store, self.budget, self.model)
+        chat.attachment_reader = Mock()
+        chat.attachment_saver = Mock()
+        chat.email_attachment_admission = Mock(return_value=False)
+
+        result, state, _ = chat.send_message(json.dumps({'text': 'Here is another file.',
+                                                         'file': 'lab/fourth.txt'}),
+                                             'request-fourth-email-file')
+
+        self.assertEqual(state, '被拒绝')
+        self.assertIn('three attachments', result)
+        chat.email_attachment_admission.assert_called_once_with()
+        chat.attachment_reader.assert_not_called()
+        chat.attachment_saver.assert_not_called()
+        self.assertEqual(self.store.read('test/chat.jsonl'), [])
+
+    def test_attachment_save_failure_does_not_spend_voice_budget(self):
+        voice = Mock()
+        chat = Chat(self.cfg, self.store, self.budget, self.model, voice=voice)
+        chat.attachment_reader = Mock(return_value={'name': 'story.md', 'suffix': '.md',
+            'mime': 'text/plain', 'view': 'text', 'size': 12, 'data': b'first version'})
+        chat.attachment_saver = Mock(return_value=None)
+
+        result, state, _ = chat.send_message(json.dumps({'text': 'Here is the poem.',
+                                                         'file': 'lab/story.md', 'voice': True}),
+                                             'request-save-failed')
+
+        self.assertEqual((result, state),
+                         ('The Lab file could not be saved as an attachment; nothing was sent.', '出错'))
+        voice.synthesize.assert_not_called()
+        self.assertEqual(self.store.read('test/chat.jsonl'), [])
+
+    def test_attachment_snapshot_is_discarded_if_voice_generation_raises(self):
+        saved = {'id': 'c' * 32, 'filename': 'c' * 32 + '.md', 'mime': 'text/plain',
+                 'view': 'text', 'kind': 'attachment', 'name': 'story.md', 'size': 12,
+                 'request_id': 'assistant-attachment-' + 'c' * 32}
+        voice = Mock()
+        voice.synthesize.side_effect = RuntimeError('fictional local failure')
+        chat = Chat(self.cfg, self.store, self.budget, self.model, voice=voice)
+        chat.attachment_reader = Mock(return_value={'name': 'story.md', 'suffix': '.md',
+            'mime': 'text/plain', 'view': 'text', 'size': 12, 'data': b'first version'})
+        chat.attachment_saver = Mock(return_value=saved)
+        chat.attachment_discarder = Mock()
+
+        with self.assertRaisesRegex(RuntimeError, 'fictional local failure'):
+            chat.send_message(json.dumps({'text': 'Here is the poem.',
+                                          'file': 'lab/story.md', 'voice': True}),
+                              'request-voice-failed')
+
+        chat.attachment_discarder.assert_called_once_with(saved)
+        self.assertEqual(self.store.read('test/chat.jsonl'), [])
 
     def test_fresh_english_chat_keeps_old_data_but_excludes_old_prompt(self):
         self.chat.send('old conversation')
