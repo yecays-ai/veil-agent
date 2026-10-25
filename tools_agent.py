@@ -1308,7 +1308,7 @@ class FilesystemTools:
             return 'screen_pop arguments are invalid.', '被拒绝', summary
         safe, fullscreen, reason = screen_state()
         if reason == 'locked':
-            return 'Lan 的屏幕现在锁着，没显示。', '被拒绝', summary
+            return "Lan's screen is locked right now; nothing was shown.", '被拒绝', summary
         if not safe:
             return 'VEIL Desktop is not available on this platform; nothing was shown.', '出错', summary
         fullscreen_fallback = command['style'] == 'popup' and fullscreen
@@ -1328,7 +1328,7 @@ class FilesystemTools:
                 summary = 'danmaku (fullscreen fallback)'
             return 'shown', '成功', summary
         if isinstance(response, dict) and response.get('reason') == 'locked':
-            return 'Lan 的屏幕现在锁着，没显示。', '被拒绝', summary
+            return "Lan's screen is locked right now; nothing was shown.", '被拒绝', summary
         if isinstance(response, dict) and response.get('reason') == 'unavailable':
             return 'VEIL Desktop shell is not open; nothing was shown.', '出错', summary
         return ('The display could not be confirmed; the message may not have appeared. '

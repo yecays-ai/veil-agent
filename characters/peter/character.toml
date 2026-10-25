@@ -93,6 +93,10 @@ enabled = true
 # and uses Peter's existing vision-capable chat model. Other characters remain disabled by default.
 enabled = true
 
+[screen_pop]
+# Ticket 115: Peter can show popups or danmaku through the VEIL Desktop shell.
+enabled = true
+
 [windows_interaction]
 # Ticket 112: application paths and process identities are maintained in windows-apps.toml.
 enabled = true
