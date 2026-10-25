@@ -872,6 +872,10 @@ class GlanceController:
         self._claimed = True
         return True
 
+    def desktop_items(self):
+        from desktop_files import desktop_item_names
+        return desktop_item_names()
+
     def _observe(self):
         files = getattr(self.chat.tools, 'files', self.chat.tools)
         tools = getattr(files, 'windows_tools', None)
@@ -879,12 +883,18 @@ class GlanceController:
             return None, None, 'Windows 桌面观察不可用。'
         foreground, state, _ = tools.invoke('windows_foreground', {})
         if state != '成功':
-            # Lan on the bare desktop, only VEIL open, or a protected window in front:
-            # still a real moment Peter can react to; nothing from the screen is read.
-            return {'application': 'no ordinary window identified'}, (
-                'No ordinary application window could be identified in front, so nothing on screen was read. '
-                'Lan may be on the desktop, looking at VEIL itself, or in a protected window. '
-                'Reason: ' + str(foreground)[:300]), None
+            # Lan on the bare desktop or with only VEIL open: still a real moment Peter can
+            # react to, so he sees the names of what sits on her desktop (never file contents).
+            listing = self.desktop_items()
+            if listing is None:
+                items = 'Her desktop items could not be listed.'
+            else:
+                names, more = listing
+                items = ('Items on her desktop, newest first: ' + ', '.join(names) + (', …' if more else '')
+                         if names else 'Her desktop has no items on it.')
+            return {'application': 'desktop'}, (
+                'No application window is open in front, so Lan is most likely on her bare desktop '
+                '(or only VEIL is open). ' + items), None
         try:
             metadata = json.loads(str(foreground).partition('\n')[2])
             window_id = metadata['window_id']

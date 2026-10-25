@@ -60,6 +60,25 @@ def _known_folder(name):
     return Path.home() / FALLBACK_NAMES[name]
 
 
+def desktop_item_names(limit=40, *, folder_for=_known_folder):
+    """Names (never contents) of what sits on Lan's Desktop, for a glance at the bare desktop."""
+    try:
+        base = folder_for('desktop')
+        entries = sorted(base.iterdir(), key=lambda entry: entry.stat().st_mtime, reverse=True)
+    except OSError:
+        return None
+    names = []
+    for entry in entries:
+        try:
+            hidden = getattr(entry.stat(), 'st_file_attributes', 0) & getattr(stat, 'FILE_ATTRIBUTE_HIDDEN', 2)
+        except OSError:
+            continue
+        if hidden or entry.name.startswith('.') or entry.name.casefold() == 'desktop.ini':
+            continue
+        names.append(entry.name + ('/' if entry.is_dir() else ''))
+    return names[:limit], len(names) > limit
+
+
 def _is_link(path):
     info = path.lstat()
     return stat.S_ISLNK(info.st_mode) or bool(
