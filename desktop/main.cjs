@@ -433,8 +433,9 @@ async function pollScreenPop() {
     for (const command of Array.isArray(result.commands) ? result.commands : []) {
       if (command && typeof command.id === 'string') void showScreenPop(command.id);
     }
-  } catch { agentEndpoint = null; }
-  finally { screenPopPolling = false; }
+  } catch {
+    // Leave agentEndpoint alone: the chat window shares it, and one failed poll must not disconnect chat.
+  } finally { screenPopPolling = false; }
 }
 function startScreenPopPolling() {
   if (screenPopPollTimer) clearInterval(screenPopPollTimer);
