@@ -629,7 +629,7 @@ function activityDetails(record){
   lines.push('本次费用：¥'+record.cost_cny);
   return lines.join('\n');
 }
-const TOOL_LABELS={read_text_file:'读取文件',read_multiple_files:'读取多个文件',write_file:'写入文件',append_file:'追加文件',list_directory:'查看文件夹',directory_tree:'查看目录树',search_files:'查找文件',get_file_info:'查看文件信息',create_directory:'创建文件夹',move_lab_file:'移动 Lab 文件',lab_file_digest:'核对 Lab 文件',hold:'保存记忆',breath_search:'查找记忆',trace:'更新记忆',dream:'整理记忆',letter_write:'写记忆信件',letter_read:'读取记忆信件',memory_history:'查看记忆历史',memory_catalog:'查看记忆目录',memory_read:'读取记忆',long_task_status:'查看长期任务',long_task_update:'更新长期任务',web_search:'联网搜索',web_fetch:'读取网页',send_message:'发送消息'};
+const TOOL_LABELS={read_text_file:'读取文件',read_multiple_files:'读取多个文件',write_file:'写入文件',append_file:'追加文件',list_directory:'查看文件夹',directory_tree:'查看目录树',search_files:'查找文件',get_file_info:'查看文件信息',create_directory:'创建文件夹',move_lab_file:'移动 Lab 文件',lab_file_digest:'核对 Lab 文件',hold:'保存记忆',breath_search:'查找记忆',trace:'更新记忆',dream:'整理记忆',letter_write:'写记忆信件',letter_read:'读取记忆信件',memory_history:'查看记忆历史',memory_catalog:'查看记忆目录',memory_read:'读取记忆',long_task_status:'查看长期任务',long_task_update:'更新长期任务',web_search:'联网搜索',web_fetch:'读取网页',send_message:'发送消息',screen_pop:'屏幕弹出'};
 function activityStatus(state){
   if(state==='进行中')return {text:'进行中',className:'running'};
   if(state==='成功')return {text:'成功',className:'success'};
@@ -663,7 +663,11 @@ function createActivityRow(item,key){
 function updateActivityRow(row,item){
   row.time.textContent=activityTime(item.started_at||item.finished_at);
   row.name.textContent=TOOL_LABELS[item.tool]||item.tool;
-  const state=activityStatus(item.state);row.status.className='activity-state '+state.className;row.status.textContent=state.text;
+  const screenPopOpen=['还开着','弹幕播放中'].includes(item.screen_pop_state);
+  const state=item.screen_pop_state
+    ? {text:item.screen_pop_state,className:screenPopOpen?'running':'success'}
+    : activityStatus(item.state);
+  row.status.className='activity-state '+state.className;row.status.textContent=state.text;
   row.code.textContent=item.tool;row.source.textContent='来源：'+(item.source||'聊天');
   row.values['操作对象'].textContent=item.path||'未提供';
   row.values['开始时间'].textContent=item.started_at?new Date(item.started_at).toLocaleString():'旧记录未保存开始时间';
