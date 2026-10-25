@@ -118,7 +118,8 @@ class CodexWatchController:
             return False
 
     def _announce(self):
-        announce = getattr(self.chat.tools, 'announce_codex_watch', None)
+        files = getattr(self.chat.tools, 'files', self.chat.tools)
+        announce = getattr(files, 'announce_codex_watch', None)
         if not callable(announce):
             return
         if announce() is not False:
