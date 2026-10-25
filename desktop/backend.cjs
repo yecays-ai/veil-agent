@@ -12,7 +12,7 @@ async function validRoot(root) {
   } catch { return false; }
 }
 
-async function readEndpoint(root) {
+async function readEndpoint(root, { requireReady = true } = {}) {
   try {
     const value = JSON.parse(await fs.readFile(path.join(root, 'data/web_service.json'), 'utf8'));
     if (!Number.isInteger(value.port) || value.port < 1 || value.port > 65535 ||
@@ -23,7 +23,7 @@ async function readEndpoint(root) {
     });
     if (!response.ok) return null;
     const state = await response.json();
-    if (state.stopped !== false || state.ready !== true) return null;
+    if (state.stopped !== false || (requireReady && state.ready !== true)) return null;
     return { url: `${origin}/?t=${encodeURIComponent(value.token)}`, origin, name: state.name };
   } catch { return null; }
 }
