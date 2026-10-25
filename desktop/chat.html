@@ -33,8 +33,9 @@
     <div class="page-heading activity-heading"><div><p class="eyebrow">真实系统事件</p><h2>Peter · 活动记录</h2></div><div class="activity-heading-actions"><span id="activity-state" class="state-pill">读取中…</span><button id="merge-activity" type="button" hidden>合并回主窗口</button></div></div>
     <article class="surface activity-overview"><div><span class="status-dot is-pending" id="activity-work-dot"></span><strong id="activity-work-status">等待下一次工具调用</strong></div><span id="activity-count">0 条记录</span><p>聊天、自主活动或长期任务调用工具时，这里会实时更新。</p></article>
     <div class="activity-runtime"><div><span class="label">自主活动</span><strong id="activity-status">状态正在同步</strong></div><div><span class="label">下次唤醒</span><strong id="next-wake">正在读取…</strong><span id="next-wake-reason" hidden></span></div><button id="activity-toggle" disabled>读取中…</button></div>
+    <div class="activity-runtime"><div><span class="label">主动瞄一眼</span><strong id="glance-status">状态正在同步</strong><small>只在最近 5 分钟有操作且屏幕未锁时计时；/pause 会一起暂停</small></div><div><span class="label">下次瞄一眼</span><strong id="glance-next">等待同步…</strong></div><button id="glance-toggle" disabled>读取中…</button></div>
     <div class="activity-filters" role="group" aria-label="筛选活动记录">
-      <button class="active" data-activity-filter="all">全部</button><button data-activity-filter="tool">工具调用</button><button data-activity-filter="memory">记忆活动</button><button data-activity-filter="autonomy">自主活动</button><button data-activity-filter="long_task">长期任务</button>
+      <button class="active" data-activity-filter="all">全部</button><button data-activity-filter="tool">工具调用</button><button data-activity-filter="memory">记忆活动</button><button data-activity-filter="autonomy">自主活动</button><button data-activity-filter="glance">瞄一眼</button><button data-activity-filter="long_task">长期任务</button>
     </div>
     <section id="activity-timeline" class="activity-timeline" aria-live="polite"><p class="muted">还没有工具或自主活动记录。</p></section>
     <div id="activity-history" hidden></div><span id="last-activity-time" hidden></span><span id="last-activity-summary" hidden></span><pre id="activity-record" hidden></pre><details id="activity-details" hidden></details>
