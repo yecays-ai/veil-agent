@@ -1,0 +1,52 @@
+* { box-sizing: border-box; }
+html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: transparent; }
+body { font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif; }
+[hidden] { display: none !important; }
+.popup {
+  width: 100%; height: 100%; display: flex; flex-direction: column;
+  color: #1b1b1b; background: #fff; border: 1px solid #777; border-radius: 3px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, .42);
+}
+.titlebar { height: 38px; flex: none; display: flex; align-items: center; justify-content: space-between; gap: 18px; padding-left: 14px; background: linear-gradient(#fff, #f1f1f1); border-bottom: 1px solid #dedede; }
+.titlebar h1 { margin: 0; color: #505050; font-size: 16px; font-weight: 400; }
+.titlebar #close { align-self: flex-start; width: 44px; height: 31px; border: 1px solid transparent; border-radius: 0 2px 0 0; background: transparent; color: #4b4b4b; font: 21px/1 "Segoe UI", sans-serif; cursor: pointer; }
+.titlebar #close:hover { border-color: #c42b1c; background: #e81123; color: white; }
+.popup-content { flex: 1; min-height: 0; display: flex; align-items: center; gap: 20px; padding: 22px 32px; }
+.info-icon { flex: none; width: 46px; height: 46px; display: grid; place-items: center; border: 2px solid rgba(255, 255, 255, .88); border-radius: 50%; background: linear-gradient(145deg, #5db7ff, #0877d1 62%, #0758a5); box-shadow: 0 2px 5px rgba(0, 0, 0, .28); color: white; font: italic 700 31px/1 Georgia, serif; text-shadow: 0 1px 1px rgba(0, 0, 0, .35); }
+.popup-content p { flex: 1; min-width: 0; max-height: 100%; margin: 0; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 17px; line-height: 1.5; }
+.popup-actions { height: 62px; flex: none; display: flex; align-items: center; justify-content: flex-end; padding: 0 24px; background: #f0f0f0; border-top: 1px solid #e4e4e4; }
+.confirm { min-width: 96px; height: 34px; padding: 0 18px; border: 1px solid #8c8c8c; border-radius: 2px; background: linear-gradient(#fff, #e5e5e5); box-shadow: inset 0 1px rgba(255, 255, 255, .9); color: #222; font: 15px "Segoe UI", "Microsoft YaHei UI", sans-serif; }
+.confirm:disabled { opacity: .65; }
+.confirm:not(:disabled) { cursor: pointer; }
+.confirm:not(:disabled):hover { border-color: #0078d4; background: linear-gradient(#f7fcff, #d9efff); }
+.confirm:not(:disabled):active { background: #cce4f7; }
+.danmaku { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+.danmaku span {
+  position: absolute; top: var(--position-y, 12%); left: 0; width: max-content; max-width: none; opacity: 0;
+  color: #fff; font-size: clamp(28px, 3vw, 52px); font-weight: 750; line-height: 1.25;
+  white-space: pre; text-shadow: 0 2px 5px rgba(0, 0, 0, .95), 0 0 14px rgba(0, 0, 0, .7);
+  will-change: transform;
+}
+.danmaku.running span { animation-duration: var(--duration, 12s); animation-fill-mode: both; }
+.danmaku[data-animation="scroll"].running span { animation-name: danmaku-scroll; animation-timing-function: linear; }
+.danmaku[data-animation="fade"].running span,
+.danmaku[data-animation="bounce"].running span {
+  left: 50%; width: max-content; max-width: min(86vw, 1200px); white-space: pre-wrap; text-align: center;
+}
+.danmaku[data-animation="fade"].running span { animation-name: danmaku-fade; animation-timing-function: ease-in-out; }
+.danmaku[data-animation="bounce"].running span { animation-name: danmaku-bounce; animation-timing-function: cubic-bezier(.22, 1, .36, 1); }
+@keyframes danmaku-scroll {
+  from { opacity: 1; transform: translate(100vw, -50%); }
+  to { opacity: 1; transform: translate(-100%, -50%); }
+}
+@keyframes danmaku-fade {
+  0%, 100% { opacity: 0; transform: translate(-50%, -50%) scale(.97); }
+  14%, 86% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+@keyframes danmaku-bounce {
+  0% { opacity: 0; transform: translate(100vw, -50%) scale(.86); }
+  18% { opacity: 1; transform: translate(-55%, -50%) scale(1.04); }
+  28% { transform: translate(-47%, -50%) scale(.98); }
+  38%, 86% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  100% { opacity: 0; transform: translate(-50%, -50%) scale(.98); }
+}
