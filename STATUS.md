@@ -5,9 +5,9 @@
 ## 当前目标与现状
 
 - 工单 100「Peter 自己定下次几点醒」：分支 `ticket/100-peter-sets-next-wake`，从最新 main `6d251cadd77322fd46827bc141777a1404914045` 开发。支持安排、覆盖、取消一个未来唤醒；原周期唤醒不变；闹钟写入角色数据、原子消费并在服务重启后恢复；过期时最多补醒一次。每日 6 次、每日 ¥2 预算和既有权限、步骤、消息边界不变。
-- 本地：Autonomy 33 项、能力通知事务 6 项、聊天 65 项通过；工具权限专项 20 项通过、2 项因当前账户无法创建符号链接而跳过；Python 编译、`git diff --check` 通过。桌面完整测试 6 项通过、1 项因本地 Agent 服务未运行而失败，不能作为集成通过证据。PR CI 已启动，等待最新提交的 Tests 与 Dependency security 结果；Cubic 审查已请求、等待回复；Lan Windows 体验待做。
+- 本地：Autonomy 33 项、能力通知事务 6 项、聊天 65 项通过；工具权限专项 20 项通过、2 项因当前账户无法创建符号链接而跳过；Python 编译、`git diff --check` 通过。桌面完整测试 6 项通过、1 项因本地 Agent 服务未运行而失败，不能作为集成通过证据。PR #152 代码提交 `ef69296` 的 Tests #1252 与 Dependency security #199 通过。CodeRabbit 审查无 actionable comments（风险评估 Minimal）；Cubic 因试用审查额度用完无法启动。Lan Windows 体验待做。
 - APScheduler 复用调查和理由见 `docs/tickets/100-peter-sets-next-wake.md`。没有新增 UI 改动。
-- PR [#152](https://github.com/yecays-ai/veil-agent/pull/152) 已创建（head `2046ca3`）；等待审查和 CI，按 Lan 要求不自动合并。
+- PR [#152](https://github.com/yecays-ai/veil-agent/pull/152) 已创建并保持未合并；代码提交 `ef69296` 的 CI 通过、CodeRabbit 复核无 actionable comments；Cubic 因试用额度无法启动。Lan Windows 体验待验收。
 
 ## 此前工单验收状态
 
@@ -23,20 +23,26 @@
 | 106 桌面独立窗口 | PR #149 已合并；CI 通过 | Lan 确认预览效果；真实拖出、合并和重启恢复还未确认 | 待 Windows 实际体验，不提前标记完成 |
 | 107 QQ 表情发送修复 | PR #150 已合并；CI 通过 | 根因已由 Lan 电脑诊断并修复 | 带表情整句实际发送仍待确认 |
 | 108 一键更新 | PR #151 已合并；CI 通过 | `update.bat` 已实现，Windows 一键更新流程未确认 | 待 Windows 实际体验 |
-| 100 自定唤醒时间 | PR #152 已创建；Tests 与 Dependency security 已启动；Cubic 审查已请求 | 本地专项检查通过 | 待 Lan Windows 体验 |
+| 100 自定唤醒时间 | PR #152 已创建；代码提交 `ef69296` 的 Tests 与 Dependency security 通过；CodeRabbit 无 actionable comments；Cubic 额度限制未能审查 | 本地专项检查通过 | 待 Lan Windows 体验 |
 
 ## 下一步
 
-检查 PR #152 的审查与 CI；只处理实质功能、安全、权限或数据完整性问题，保持 PR 未合并。
+请 Lan 按下方步骤在 Windows 实际体验；PR #152 保持未合并。CodeRabbit 已完成复核，Cubic 受账号试用额度限制未能审查。
 
 ## 尚待 Lan 验收或观察
 
 - 097：继续观察自主行为，不标记体验通过。
 - 098：2026-11-07 后配置新 QQ 邮箱并验收 IMAP/SMTP 收发。
 - 099：验收网页读取及蜘蛛丝搜索之外的场景。
-- 100：按 `docs/tickets/100-peter-sets-next-wake.md` 在 Windows 验收安排研究、QQ 提醒、服务重启和错过时间补醒。
+- 100：按下方步骤在 Windows 验收安排研究、QQ 提醒、服务重启和错过时间补醒。
 - 106：验收真实拖出、合并和重启恢复。
 - 107：验收带 😭💀 等表情的 QQ 整句发送。
 - 108：按 PR #151 的步骤在 Windows 双击 `update.bat` 验收更新与重新打包。
+
+## 工单 100 的 Windows 体验验收
+
+1. 更新并重启 Peter，告诉他“明天下午 3 点继续研究蜘蛛丝强度”，确认安排成功，活动记录里能看到时间和理由。
+2. 告诉他“明早 8 点叫我”，确保 QQ 联系方式可用；到期前重启 VEIL 服务，确认计划仍在，到点只联系一次。
+3. 让另一项计划在电脑睡眠或关机期间经过；恢复电脑并启动 VEIL，确认最多补醒一次，没有重复消息或自主活动记录。
 
 095 的视觉设计改版是单独后续事项，不属于功能待验收，也不在本次范围。
