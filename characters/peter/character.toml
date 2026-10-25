@@ -62,6 +62,14 @@ daily_max_runs = 12
 daily_budget_cny = "2"
 min_alarm_gap_minutes = 60
 
+[glance]
+enabled = true
+min_interval_minutes = 15
+max_interval_minutes = 40
+idle_seconds = 300
+max_steps = 4
+daily_budget_cny = "1"
+
 [profile]
 # Ticket 096: Peter's own notes about Lan, written by him with profile_append / profile_replace
 # and sent right after the persona every request. Lives at data/peter/<file>.

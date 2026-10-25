@@ -696,6 +696,21 @@ class FilesystemTools:
             return False
 
     @capability_transaction
+    def announce_glance(self):
+        if (getattr(self, 'cap_path', None) is None
+                or not ((getattr(self.cfg, 'glance', None) or {}).get('enabled') is True)):
+            return
+        try:
+            return self._announce_once(
+                'glance_announced',
+                'Capability update: while Lan is actively using her unlocked computer, you may be called '
+                'for a brief glimpse every 15–40 minutes. You can notice what she is doing, say something, '
+                'use screen_pop or a message, look at another window, remember something if you choose, or '
+                'quietly leave. This is separate from your scheduled autonomous activities and pauses with them.')
+        except Exception:
+            return False
+
+    @capability_transaction
     def announce_photo_input(self):
         if getattr(self, 'cap_path', None) is None:
             return

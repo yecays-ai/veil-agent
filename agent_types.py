@@ -3,6 +3,7 @@ from datetime import datetime
 
 
 AUTONOMY_WAKE = object()
+GLANCE_WAKE = object()
 
 
 class UserError(Exception):

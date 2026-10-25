@@ -10,7 +10,7 @@ let revealQueue=[], revealTimer=null, roundStartedAt=0, roundHasReply=false, pre
 let pendingApproval=null, activityEnabled=false, exiting=false;
 const recentErrors=new Map();
 let memoryAvailable=false,memoryLoaded=false,memoryLoading=false,memoryCursor='',memoryItems=[];
-let activityFilter='all',toolActivity=[],autonomyActivity=[],detachedViews=new Set();
+let activityFilter='all',toolActivity=[],autonomyActivity=[],glanceActivity=[],detachedViews=new Set();
 const activityRowNodes=new Map();
 const pageQuery=new URLSearchParams(location.search),detachedView=pageQuery.get('detached')==='1'?pageQuery.get('view'):null;
 let selectedImage=null;const awaitingImages=new Map();
@@ -641,7 +641,8 @@ function activityTime(value){const date=value?new Date(value):null;return date&&
 function combinedActivity(){
   const tools=toolActivity.map(item=>({...item,kind:item.category||'tool'}));
   const autonomy=autonomyActivity.map((item,index)=>({call_id:'autonomy:'+(item.started_at||index),tool:'自主活动',path:item.result_reason||item.decision||'Peter 完成了一次自主活动',state:item.result==='失败'?'失败':'成功',detail:activityDetails(item),started_at:item.started_at,finished_at:item.finished_at,source:'自主活动',kind:'autonomy'}));
-  return [...tools,...autonomy].sort((a,b)=>String(b.started_at||b.finished_at||'').localeCompare(String(a.started_at||a.finished_at||'')));
+  const glances=glanceActivity.map((item,index)=>({call_id:'glance:'+(item.started_at||index),tool:'瞄一眼',path:(item.foreground?.application||'未识别窗口')+' · '+(item.foreground?.title||item.result_reason||''),state:item.result==='完成'?'成功':'失败',detail:['看到：'+(item.foreground?.application||'未识别窗口')+' · '+(item.foreground?.title||'窗口标题不可用'),item.decision||item.result_reason,'本次费用：¥'+item.cost_cny].filter(Boolean).join('\n'),started_at:item.started_at,finished_at:item.finished_at,source:'瞄一眼',kind:'glance'}));
+  return [...tools,...autonomy,...glances].sort((a,b)=>String(b.started_at||b.finished_at||'').localeCompare(String(a.started_at||a.finished_at||'')));
 }
 function createActivityRow(item,key){
   const details=document.createElement('details');details.className='tool-activity-row';details.dataset.activityCallId=key;details.open=item.state==='进行中';
@@ -701,8 +702,8 @@ function renderActivityTimeline(){
     else list.insertBefore(row.details,cursor);
   }
 }
-function renderActivity(record,history=[],tools=[]){
-  toolActivity=Array.isArray(tools)?tools:[];autonomyActivity=Array.isArray(history)?history:[];renderActivityTimeline();
+function renderActivity(record,history=[],tools=[],glances=[]){
+  toolActivity=Array.isArray(tools)?tools:[];autonomyActivity=Array.isArray(history)?history:[];glanceActivity=Array.isArray(glances)?glances:[];renderActivityTimeline();
 }
 async function poll(){
   try{
@@ -733,9 +734,15 @@ async function poll(){
     $('header-next-wake').parentElement.title=next||s.next_wake_reason||'Agent 暂未提供确定的唤醒时间。';
     $('activity-state').textContent=state;
     $('activity-status').textContent='自主活动'+state;
-    renderActivity(s.last_activity,s.activity_history||[],s.tool_activity||[]);
+    renderActivity(s.last_activity,s.activity_history||[],s.tool_activity||[],s.glance_activity||[]);
     $('activity-toggle').textContent=activityEnabled?'暂停自主活动':'开启自主活动';
     $('activity-toggle').disabled=stopping||stopped||exiting;
+    const glanceEnabled=s.glance_enabled===true;
+    $('glance-status').textContent=!glanceEnabled?'已暂停':!activityEnabled?'全局自主活动暂停中':s.autonomy_busy?'正在瞄一眼':'已开启（每 15–40 分钟）';
+    const glanceNext=s.glance_next_at?new Date(s.glance_next_at):null;
+    $('glance-next').textContent=glanceNext&&Number.isFinite(glanceNext.getTime())?glanceNext.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):(!glanceEnabled?'未排定':!activityEnabled?'恢复自主活动后重新计时':'等待电脑前活动');
+    $('glance-toggle').textContent=glanceEnabled?'暂停瞄一眼':'开启瞄一眼';
+    $('glance-toggle').disabled=stopping||stopped||exiting;
     $('exit-service').disabled=stopping||stopped||exiting;
     document.title=s.name;$('title').textContent=s.name;
     const capabilityText=s.capability_record||'No capability updates recorded yet.';
@@ -987,6 +994,15 @@ $('activity-toggle').onclick=async()=>{
     $('activity-toggle').textContent=activityEnabled?'暂停自主活动':'开启自主活动';
   }catch(e){$('activity-status').textContent='状态保存失败：请检查本机 Agent 连接后重试。';add('error','自主活动状态保存失败，请检查连接后重试。')}
   finally{$('activity-toggle').disabled=stopping||stopped||exiting}
+};
+$('glance-toggle').onclick=async()=>{
+  $('glance-toggle').disabled=true;
+  try{
+    const enabled=$('glance-toggle').textContent==='开启瞄一眼';
+    const r=await api('/api/glance',{enabled});
+    if(!r.ok)throw new Error(r.status);
+  }catch(e){$('glance-status').textContent='设置保存失败：请检查本机 Agent 连接后重试。';add('error','瞄一眼设置保存失败，请检查连接后重试。')}
+  finally{$('glance-toggle').disabled=stopping||stopped||exiting}
 };
 $('exit-service').onclick=async()=>{
   if(exiting||stopped||!confirm('确定退出 Peter 网页服务吗？'))return;

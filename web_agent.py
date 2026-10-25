@@ -29,10 +29,10 @@ from urllib.error import HTTPError, URLError
 
 from attachment_utils import (ATTACHMENT_EXTENSIONS, ATTACHMENT_TYPES, MAX_ATTACHMENT_BYTES,
                               inspect_attachment, redirected_path, valid_attachment_row)
-from veil_agent import (ROOT, AUTONOMY_WAKE, MAX_PHOTO_BYTES, ActivityState, Budget, Chat, Store, UserError,
+from veil_agent import (ROOT, AUTONOMY_WAKE, GLANCE_WAKE, MAX_PHOTO_BYTES, ActivityState, Budget, Chat, Store, UserError,
                         load_character, now, make_model, make_voice, run_chat,
                         safe_tool_activity_detail)
-from autonomy import AutonomyController
+from autonomy import AutonomyController, GlanceController
 
 MAX_BODY = 200_000
 MAX_MEDIA_BYTES = MAX_PHOTO_BYTES
@@ -165,6 +165,7 @@ class Hub:
         self.submissions = OrderedDict()  # recent request ids -> normalized text digest
         self.submission_pending = False  # admission reserved while media storage runs
         self.autonomy = None
+        self.glance = None
         self.capability_record = lambda: None
         self.defer_outputs = False
         self.deferred_outputs = []
@@ -284,9 +285,11 @@ class Hub:
             item.update({key: row[key] for key in ('tool', 'path', 'state') if key in row})
             if 'detail' in row:
                 item['detail'] = safe_tool_activity_detail(row['detail'])
-            item['source'] = ('自主活动' if row.get('autonomy_run_id') else
+            item['source'] = ('瞄一眼' if str(row.get('autonomy_run_id') or '').startswith('glance:') else
+                              '自主活动' if row.get('autonomy_run_id') else
                               '长期任务' if row['tool'].startswith('long_task_') else '聊天')
-            item['category'] = ('memory' if row['tool'] in memory_names else
+            item['category'] = ('glance' if str(row.get('autonomy_run_id') or '').startswith('glance:') else
+                                'memory' if row['tool'] in memory_names else
                                 'long_task' if row['tool'].startswith('long_task_') else 'tool')
             if row.get('autonomy_run_id'):
                 item['autonomy_run_id'] = row['autonomy_run_id']
@@ -1019,6 +1022,14 @@ class Hub:
                 continue
             if self.stopping or self.stopped:
                 raise EOFError
+            if self.glance is not None and self.glance.due():
+                with self.cond:
+                    if (not self.stopping and not self.stopped and self.inbox.empty()
+                            and not self.submission_pending and self.glance.claim_due()):
+                        self.autonomy_busy = True
+                        self.busy = True
+                        self.autonomy_interrupted.clear()
+                        return GLANCE_WAKE
             if self.autonomy is not None and self.autonomy.due():
                 with self.cond:
                     if (not self.stopping and not self.stopped and self.activity.enabled()
@@ -1074,6 +1085,13 @@ class Hub:
             if enabled and self.autonomy is not None:
                 self.autonomy.announce_autonomy()
             self.activity_transition(enabled)
+            return True
+
+    def set_glance(self, enabled):
+        with self.cond:
+            if self.stopping or self.stopped or self.glance is None:
+                return False
+            self.glance.set_enabled(enabled)
             return True
 
     def submit(self, text, request_id, media_id=None):
@@ -1266,6 +1284,7 @@ class Hub:
         tool_activity = self.tool_activity()
         with self.cond:
             autonomy = self.autonomy.status() if self.autonomy else {}
+            glance = self.glance.status() if self.glance else {}
             return {'events': self.events[after:], 'busy': self.busy and not self.autonomy_busy,
                     'transcribing_voice': self.transcribing_voice,
                     'stopping': self.stopping and not self.stopped, 'stopped': self.stopped,
@@ -1276,7 +1295,7 @@ class Hub:
                     'runtime_status': self.runtime_status(),
                     'tool_activity': tool_activity,
                     'memory_panel_url': self.memory_url,
-                    'memory_available': self.memory_tools is not None, **autonomy}
+                    'memory_available': self.memory_tools is not None, **autonomy, **glance}
 
 
 def make_handler(hub, token):
@@ -1669,6 +1688,18 @@ def make_handler(hub, token):
                             self._send(200, {'ok': True, 'enabled': enabled})
                     except UserError as exc:
                         self._send(500, {'error': str(exc)})
+            elif url.path == '/api/glance':
+                enabled = body.get('enabled')
+                if not isinstance(enabled, bool):
+                    self._send(400, {'error': 'enabled'})
+                else:
+                    try:
+                        if not hub.set_glance(enabled):
+                            self._send(409, {'error': 'unavailable'})
+                        else:
+                            self._send(200, {'ok': True, 'enabled': hub.glance.enabled()})
+                    except UserError as exc:
+                        self._send(500, {'error': str(exc)})
             elif url.path == '/api/exit':
                 state = hub.request_stop()
                 if state == 'accepted':
@@ -1789,6 +1820,8 @@ def serve_chat(chat, hub, channels=()):
             chat.pending_capability_event = getattr(chat.tools, 'capability_event', None)
             chat.pending_capability_event_model = getattr(chat.tools, 'capability_event_model', None)
     hub.autonomy = AutonomyController(chat, hub)
+    hub.glance = GlanceController(chat, hub)
+    hub.autonomy.glance = hub.glance
     hub.capability_record = lambda: chat.capability_history_record
     hub.activity_transition = lambda enabled: chat.set_activity_enabled(hub.activity, enabled)
     chat.activity_enabled = hub.activity.enabled
@@ -1849,6 +1882,8 @@ def main(argv=None):
             budget = Budget(store)
             cfg = load_character(ROOT, args.character)
             budget.autonomy_daily = cfg.autonomy['daily_budget_cny']
+            if cfg.glance:
+                budget.glance_daily = cfg.glance['daily_budget_cny']
             client, model = make_model(ROOT, cfg)
             voice = make_voice(ROOT, cfg, store, budget)
             from email_channel import EmailChannel

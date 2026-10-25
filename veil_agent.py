@@ -18,7 +18,7 @@ from decimal import Decimal
 from pathlib import Path
 from contextlib import contextmanager, nullcontext
 
-from agent_types import AUTONOMY_WAKE, BudgetExceeded, RequestFailed, TooLong, UserError, now
+from agent_types import AUTONOMY_WAKE, BudgetExceeded, GLANCE_WAKE, RequestFailed, TooLong, UserError, now
 
 ROOT = Path(__file__).resolve().parent
 MILLION = Decimal(1_000_000)
@@ -400,6 +400,7 @@ class Character:
     windows_observation: dict = None
     windows_interaction: dict = None
     screen_pop: dict = None
+    glance: dict = None
 
 
 def positive_int(value):
@@ -531,6 +532,20 @@ def load_character(root, character_id):
         autonomy = {'interval_minutes': interval, 'daily_max_runs': daily_runs,
                     'daily_budget_cny': autonomy_daily,
                     'min_alarm_gap_minutes': min_alarm_gap}
+        glance_config = dict(cfg.get('glance') or {})
+        glance = None
+        if glance_config:
+            enabled = glance_config.get('enabled', False)
+            minimum = positive_int(glance_config.get('min_interval_minutes', 15))
+            maximum = positive_int(glance_config.get('max_interval_minutes', 40))
+            idle_seconds = positive_int(glance_config.get('idle_seconds', 300))
+            max_steps = positive_int(glance_config.get('max_steps', 4))
+            glance_daily = price(glance_config.get('daily_budget_cny', '1'))
+            if type(enabled) is not bool or maximum < minimum or max_steps > 4:
+                raise ValueError('invalid glance configuration')
+            glance = {'enabled': enabled, 'min_interval_minutes': minimum,
+                      'max_interval_minutes': maximum, 'idle_seconds': idle_seconds,
+                      'max_steps': max_steps, 'daily_budget_cny': glance_daily}
         voice = dict(cfg.get('voice') or {}) or None
         if voice is not None and voice.get('provider') != 'minimax':
             raise ValueError('unsupported voice provider')
@@ -572,7 +587,7 @@ def load_character(root, character_id):
                          positive_int(cfg.get('history_rounds', 20)),
                          positive_int(cfg.get('max_output_tokens', 1024)), provider, cfg['provider'],
                          memory, tools, autonomy, voice, profile, email, qq, web, windows_observation,
-                         windows_interaction, screen_pop)
+                         windows_interaction, screen_pop, glance)
     except UserError:
         raise
     except (OSError, KeyError, ValueError, TypeError, ArithmeticError) as exc:
@@ -624,25 +639,39 @@ class ActivityState:
 
 class Budget:
     def __init__(self, store, daily=Decimal('10'), monthly=Decimal('300'), clock=now,
-                 autonomy_daily=Decimal('2')):
+                 autonomy_daily=Decimal('2'), glance_daily=Decimal('1')):
         self.mutex = threading.RLock()
         self.store, self.daily, self.monthly, self.clock = store, daily, monthly, clock
         self.autonomy_daily = Decimal(str(autonomy_daily))
+        self.glance_daily = Decimal(str(glance_daily))
         self.local = threading.local()
 
     @contextmanager
     def autonomous(self, character, daily=None):
-        previous = getattr(self.local, 'autonomy', None)
+        previous = (getattr(self.local, 'autonomy', None), getattr(self.local, 'category', None))
         if daily is not None:
             self.autonomy_daily = Decimal(str(daily))
         self.local.autonomy = character
+        self.local.category = 'autonomy'
         try:
             yield
         finally:
-            self.local.autonomy = previous
+            self.local.autonomy, self.local.category = previous
+
+    @contextmanager
+    def glancing(self, character, daily=None):
+        previous = (getattr(self.local, 'autonomy', None), getattr(self.local, 'category', None))
+        if daily is not None:
+            self.glance_daily = Decimal(str(daily))
+        self.local.autonomy = character
+        self.local.category = 'glance'
+        try:
+            yield
+        finally:
+            self.local.autonomy, self.local.category = previous
 
     @synchronized
-    def category_totals(self, character=None, stamp=None):
+    def category_totals(self, character=None, stamp=None, category='autonomy'):
         stamp = stamp or self.clock()
         reservations, settlements = {}, {}
         try:
@@ -653,7 +682,7 @@ class Budget:
                     settlements[event['id']] = event
             day = pending = Decimal(0)
             for key, event in reservations.items():
-                if event.get('category') != 'autonomy':
+                if event.get('category') != category:
                     continue
                 active_character = event.get('character')
                 if not isinstance(active_character, str) or not active_character:
@@ -674,7 +703,16 @@ class Budget:
 
     def _reserve_category(self, amount):
         character = getattr(self.local, 'autonomy', None)
-        return ('autonomy' if character else 'chat', character)
+        return (getattr(self.local, 'category', None) or ('autonomy' if character else 'chat'), character)
+
+    def _enforce_category_budget(self, category, character, amount):
+        if category not in ('autonomy', 'glance'):
+            return
+        cap = self.glance_daily if category == 'glance' else self.autonomy_daily
+        used, pending = self.category_totals(character, category=category)
+        if used + pending + amount > cap:
+            label = '瞄一眼' if category == 'glance' else '自主活动'
+            raise BudgetExceeded(f'{label}已达到 ¥{cap}/日上限，聊天不受影响。')
 
     @synchronized
     def totals(self, stamp=None):
@@ -713,10 +751,7 @@ class Budget:
                   + cfg.max_output_tokens * p['output_cny_per_million']) / MILLION
         day, month, pending = self.totals()
         category, character = self._reserve_category(amount)
-        if category == 'autonomy':
-            auto_day, auto_pending = self.category_totals(character)
-            if auto_day + auto_pending + amount > self.autonomy_daily:
-                raise BudgetExceeded(f'自主活动已达到 ¥{self.autonomy_daily}/日上限，聊天不受影响。')
+        self._enforce_category_budget(category, character, amount)
         if day + pending + amount > self.daily or month + pending + amount > self.monthly:
             raise BudgetExceeded('本次费用上限会超过 ¥10/天或 ¥300/月，未发送。输入 /cost 查看。')
         request_id = uuid.uuid4().hex
@@ -736,10 +771,7 @@ class Budget:
         amount = tokens * rate / MILLION
         day, month, pending = self.totals()
         category, active_character = self._reserve_category(amount)
-        if category == 'autonomy':
-            auto_day, auto_pending = self.category_totals(active_character)
-            if auto_day + auto_pending + amount > self.autonomy_daily:
-                raise UserError(f'自主活动已达到 ¥{self.autonomy_daily}/日上限。')
+        self._enforce_category_budget(category, active_character, amount)
         if day + pending + amount > self.daily or month + pending + amount > self.monthly:
             raise UserError('向量请求超过共享预算，未发送。')
         request_id = uuid.uuid4().hex
@@ -756,10 +788,7 @@ class Budget:
             raise UserError('费用预估无效，未发送。')
         day, month, pending = self.totals()
         category, active_character = self._reserve_category(amount)
-        if category == 'autonomy':
-            auto_day, auto_pending = self.category_totals(active_character)
-            if auto_day + auto_pending + amount > self.autonomy_daily:
-                raise BudgetExceeded(f'自主活动已达到 ¥{self.autonomy_daily}/日上限，聊天不受影响。')
+        self._enforce_category_budget(category, active_character, amount)
         if day + pending + amount > self.daily or month + pending + amount > self.monthly:
             raise BudgetExceeded('本次费用上限会超过 ¥10/天或 ¥300/月，未发送。输入 /cost 查看。')
         request_id = uuid.uuid4().hex
@@ -778,10 +807,7 @@ class Budget:
         amount = (tokens_in * in_rate + tokens_out * out_rate) / MILLION
         day, month, pending = self.totals()
         category, active_character = self._reserve_category(amount)
-        if category == 'autonomy':
-            auto_day, auto_pending = self.category_totals(active_character)
-            if auto_day + auto_pending + amount > self.autonomy_daily:
-                raise UserError(f'自主活动已达到 ¥{self.autonomy_daily}/日上限。')
+        self._enforce_category_budget(category, active_character, amount)
         if day + pending + amount > self.daily or month + pending + amount > self.monthly:
             raise UserError('记忆模型请求超过共享预算，未发送。')
         request_id = uuid.uuid4().hex
@@ -893,7 +919,7 @@ class Budget:
                     periods[event['id']] = (event['period'], event.get('category', 'chat'))
                 elif event['type'] == 'settle' and 'prompt_tokens' in event:
                     period, category = periods.get(event['id'], ('', 'chat'))
-                    if category != 'autonomy' and period[:10] == stamp[:10]:
+                    if category not in ('autonomy', 'glance') and period[:10] == stamp[:10]:
                         prompt += event['prompt_tokens']
                         cached += event['cached_tokens']
         except (KeyError, TypeError) as exc:
@@ -906,11 +932,14 @@ class Budget:
     def display(self, stamp=None, character=None):
         day, month, pending = self.totals(stamp)
         all_autonomy, _ = self.category_totals(None, stamp)
+        all_glance, _ = self.category_totals(None, stamp, 'glance')
         autonomy = all_autonomy if character is None else self.category_totals(character, stamp)[0]
-        chat = day - all_autonomy
+        glance = all_glance if character is None else self.category_totals(character, stamp, 'glance')[0]
+        chat = day - all_autonomy - all_glance
         return (f'今天 ¥{day:.6f} / {self.daily}；本月 ¥{month:.6f} / {self.monthly}；'
                 f'待核对预留 ¥{pending:.6f}；其中聊天 ¥{chat:.6f}，自主 ¥{autonomy:.6f} / '
-                f'{self.autonomy_daily}/日（自主是上限，不是消费目标）')
+                f'{self.autonomy_daily}/日（自主是上限，不是消费目标），瞄一眼 ¥{glance:.6f} / '
+                f'{self.glance_daily}/日')
 
 
 def memory_mode(memory):
@@ -1064,6 +1093,10 @@ class Chat:
             tools.announce_screen_pop()
             self.pending_capability_event = tools.capability_event
             self.pending_capability_event_model = capability_model_notice(tools)
+        if tools and hasattr(tools, 'announce_glance'):
+            tools.announce_glance()
+            self.pending_capability_event = tools.capability_event
+            self.pending_capability_event_model = capability_model_notice(tools)
         self.profile = None
         if getattr(cfg, 'profile', None):
             from profile_notes import ProfileNotes
@@ -1082,6 +1115,8 @@ class Chat:
         self._active_capability_schemas = None
         self.autonomy_should_yield = None
         self.autonomy_run_id = None
+        self.glance_mode = False
+        self.glance_tool_limit = 4
         self.screen_pop_handler = None
         self.autonomy_message_output = None
         self.autonomy_message_lock = None
@@ -1686,13 +1721,15 @@ class Chat:
         memory_refs = getattr(self.memory, 'last_context_refs', []) if self.memory else []
         self.turn_memory_refs = list(memory_refs) if isinstance(memory_refs, list) else []
         autonomy_handoff_id = None
+        glance_handoff_id = None
         if not autonomy:
             # Ticket 094: the last activity record is given once after a wake; afterwards Peter
             # looks it up himself with autonomy_history.
-            from autonomy import recent_chat_handoff
+            from autonomy import recent_chat_handoff, recent_glance_handoff
             autonomy_handoff_id, handoff = recent_chat_handoff(self.store, self.cfg)
-            if extra_context is None:
-                extra_context = handoff
+            glance_handoff_id, glance_handoff = recent_glance_handoff(self.store, self.cfg)
+            handoffs = [item for item in (extra_context, handoff, glance_handoff) if item]
+            extra_context = '\n\n'.join(handoffs) if handoffs else None
         stable, changing = self_facts(self.cfg, self.budget, memory_mode(self.memory), self.tools,
                                       self.voice is not None and self.tools is not None)
         description = stable + '\n' + changing
@@ -1840,6 +1877,9 @@ class Chat:
             if autonomy_handoff_id is not None:
                 from autonomy import acknowledge_chat_handoff
                 acknowledge_chat_handoff(self.store, self.cfg, autonomy_handoff_id)
+            if glance_handoff_id is not None:
+                from autonomy import acknowledge_glance_handoff
+                acknowledge_glance_handoff(self.store, self.cfg, glance_handoff_id)
         self.autonomy_mode = False
         return reply
 
@@ -2087,7 +2127,7 @@ class Chat:
             return display_detail, result_state
 
         configured_steps = (self.cfg.tools or {}).get('max_steps', 1)
-        autonomy_tool_limit = configured_steps
+        autonomy_tool_limit = min(configured_steps, self.glance_tool_limit) if self.glance_mode else configured_steps
         # Keep one final model turn after the last autonomous tool so Peter can
         # leave the four-line handoff without sacrificing a usable tool step.
         max_steps = configured_steps + 1 if autonomy else configured_steps
@@ -2495,6 +2535,9 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead, activity=N
             if autonomy is not None and raw_text is AUTONOMY_WAKE:
                 autonomy.run()
                 continue
+            if raw_text is GLANCE_WAKE and getattr(autonomy, 'glance', None) is not None:
+                autonomy.glance.run()
+                continue
             text = raw_text.strip()
             if text == '/quit':
                 break
@@ -2580,6 +2623,8 @@ def main():
             budget = Budget(store)
             cfg = load_character(ROOT, args.character)
             budget.autonomy_daily = cfg.autonomy['daily_budget_cny']
+            if cfg.glance:
+                budget.glance_daily = cfg.glance['daily_budget_cny']
             if args.cost:
                 print(budget.display(character=cfg.id))
                 print(budget.cache_display())
