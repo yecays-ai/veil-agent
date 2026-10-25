@@ -2063,7 +2063,8 @@ class Chat:
         max_steps = configured_steps + 1 if autonomy else configured_steps
         for step in range(max_steps):
             self.long_tasks.set_tool_step(step)
-            if autonomy and autonomy_tool_steps >= autonomy_tool_limit:
+            autonomy_limit_reached = autonomy and autonomy_tool_steps >= autonomy_tool_limit
+            if autonomy_limit_reached:
                 self.autonomy_step_limited = True
             if autonomy and self.autonomy_should_yield and self.autonomy_should_yield():
                 self.autonomy_interrupted = True
@@ -2074,7 +2075,7 @@ class Chat:
                         self.cfg, max_output_tokens=self.cfg.tools.get('max_output_tokens', self.cfg.max_output_tokens))
                     self.budget.settle(pending_reservation, pending_cfg, 0, 0, 0)
                 break
-            offered = None if step == max_steps - 1 else self.tool_schemas()
+            offered = None if step == max_steps - 1 or autonomy_limit_reached else self.tool_schemas()
             self._refresh_request_capabilities(loop_messages, offered)
             step_cfg = replace(self.cfg, max_output_tokens=self.cfg.tools.get('max_output_tokens', self.cfg.max_output_tokens)) if offered is not None else self.cfg
             fit_history(offered)

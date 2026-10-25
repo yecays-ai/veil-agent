@@ -147,10 +147,11 @@ daily_budget_cny = "2"
         self.activity.set(True)
         cfg = replace(self.cfg, tools={'enabled': True, 'max_steps': 20, 'max_output_tokens': 50})
         responses = []
-        for index in range(20):
-            call = SimpleNamespace(id=f'read-{index}', function=SimpleNamespace(
+        for turn in range(10):
+            calls = [SimpleNamespace(id=f'read-{turn}-{index}', function=SimpleNamespace(
                 name='read_text_file', arguments=json.dumps({'path': 'lab/note.md'})))
-            message = SimpleNamespace(tool_calls=[call], content=None,
+                for index in range(2)]
+            message = SimpleNamespace(tool_calls=calls, content=None,
                                       model_dump=lambda **_: {'role': 'assistant', 'tool_calls': []})
             responses.append((message, 10, 5, 0))
         final = SimpleNamespace(tool_calls=[], content=(
@@ -170,7 +171,8 @@ daily_budget_cny = "2"
         controller.run()
 
         self.assertEqual(tools.invoke.call_count, 20)
-        self.assertEqual(model.call_count, 21)
+        self.assertEqual(model.call_count, 11)
+        self.assertIsNone(model.call_args_list[-1].kwargs['tools'])
         self.assertEqual(controller.rows[-1]['result'], '搁置')
         self.assertIn('20', controller.rows[-1]['result_reason'])
         self.assertNotIn('12', controller.rows[-1]['result_reason'])
