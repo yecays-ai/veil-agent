@@ -325,7 +325,8 @@ class CodexWatchController:
             return
         self._availability = '只读监视中'
         initialized = self._state.get('initialized') is True
-        cutoff = self._state.get('last_scan_epoch') if initialized else None
+        cutoff = (self._state.get('last_scan_epoch')
+                  if initialized else time.time())
         self._read_new_lines(path, mtime, cutoff)
         self._state['initialized'] = True
         self._state['last_scan_epoch'] = time.time()
@@ -371,6 +372,8 @@ class CodexWatchController:
             event = self._claimed
             self._claimed = None
         if event is None:
+            self.hub.autonomy_busy = False
+            self.hub.autonomy_interrupted.clear()
             return
         event_id = event['event_id']
         run_id = 'codex-watch:' + event_id
