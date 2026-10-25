@@ -1,12 +1,12 @@
 # 当前状态
 
-更新：2026-10-25 06:57 UTC · Codex。
+更新：2026-10-25 07:03 UTC · Codex。
 
 ## 当前目标与现状
 
-- 工单 101「Peter 把自己做的东西发给 Lan」：分支 `ticket/101-send-lab-files` 基于最新 main `006a4b7`（PR #153）开发；PR #154 保持打开，不自动合并。Lan 已确认本地附件卡片预览。CodeRabbit 审查旧 PR 提交发现邮件回复累积第 4 个附件仍可成功、以及 UI 删除/撤回没有清理附件；当前分支已修复并增加回归测试。`send_message` 可附加 Peter Lab 中的受限文件；发送时保存独立快照，聊天历史重启后可恢复；图片内嵌、UTF-8 文本在聊天内查看、HTML 由 Lan 点击后交给默认浏览器打开；邮件回复最多带 3 个附件。只提供给桌面服务接通 Lab 与持久媒体存储的聊天，不扩展 QQ 附件能力。
+- 工单 101「Peter 把自己做的东西发给 Lan」：分支 `ticket/101-send-lab-files` 基于最新 main `006a4b7`（PR #153）开发；PR #154 保持打开，不自动合并。Lan 已确认本地附件卡片预览。CodeRabbit 审查提交 `4a1f251` 发现邮件回复累积第 4 个附件仍可成功、UI 删除/撤回未清理附件；两项均已在 `245bd84` 修复并加回归测试，评审线程已解决。`245bd84` 的 Tests #1266、Dependency security #205、Windows desktop #106 全部通过。Cubic 因试用额度无法启动；CodeRabbit 本小时额度已耗尽，因此没有对最终修复提交进行第二轮自动审查。`send_message` 可附加 Peter Lab 中的受限文件；发送时保存独立快照，聊天历史重启后可恢复；图片内嵌、UTF-8 文本在聊天内查看、HTML 由 Lan 点击后交给默认浏览器打开；邮件回复最多带 3 个附件。只提供给桌面服务接通 Lab 与持久媒体存储的聊天，不扩展 QQ 附件能力。
 - 复用现有 Hub 媒体目录、`index.jsonl` 和受令牌保护的媒体路由；邮件用 Python 标准库 `EmailMessage.add_attachment()`，没有增加第三方依赖。Lab 路径、文件类型和 5 MiB 上限在程序中检查；费用、权限和自主发送次数边界不变。
-- 本地验证：工单 101 原始改动的 Python 全量 484 项通过、4 项跳过；`test_web.py` 57 项通过；Electron 桌面 7 项通过。审查修复后的 3 项针对性回归测试通过，`test_email_channel.py` 10 项通过，Python 编译与 `git diff --check` 通过。补跑 `test_chat.py`、`test_web.py` 全文件受本机缺少 `httpx2`/`dotenv` 及 Windows 回环套接字权限（WinError 10013）影响，未形成完整通过结果。PR #154 旧提交的 Tests #1263/#1264、Dependency security #204、Windows desktop #105 均通过；后续提交 CI 以 PR 最新 Checks 为准。Lan 的 Windows 实际体验尚未做。
+- 本地验证：工单 101 原始改动的 Python 全量 484 项通过、4 项跳过；`test_web.py` 57 项通过；Electron 桌面 7 项通过。审查修复后的 3 项针对性回归测试通过，`test_email_channel.py` 10 项通过，Python 编译与 `git diff --check` 通过。补跑 `test_chat.py`、`test_web.py` 全文件受本机缺少 `httpx2`/`dotenv` 及 Windows 回环套接字权限（WinError 10013）影响，未形成本机完整通过结果；PR CI 在 Windows 3.11/3.12、Ubuntu 3.11/3.12 全量测试均通过。Cubic 未启动，最终修复提交没有第二轮 CodeRabbit 审查。Lan 的 Windows 实际体验尚未做。
 
 ## 此前工单验收状态
 
@@ -27,7 +27,7 @@
 
 ## 下一步
 
-推送审查修复后核对 PR #154 最新 CI；按 Lan 要求保持 PR 未合并。之后由 Lan 在 Windows 验收附件发送、历史恢复和邮件附件。
+PR #154 最新修复提交 CI 全部通过，评审发现的问题已修复；按 Lan 要求保持 PR 未合并，等待 Lan 的下一步决定。合并后再在 Windows 验收附件发送、历史恢复和邮件附件。
 
 ## 尚待 Lan 验收或观察
 
@@ -35,7 +35,7 @@
 - 098：2026-11-07 后配置新 QQ 邮箱并验收 IMAP/SMTP 收发。
 - 099：验收网页读取及蜘蛛丝搜索之外的场景。
 - 100：按下方步骤在 Windows 验收定时研究、QQ 提醒、服务重启和错过时间后的单次补醒。
-- 101：Lan 已确认本地预览；PR #154 的 CodeRabbit 审查发现两项实质问题，当前分支已修复；Cubic 因试用额度耗尽无法启动，CodeRabbit 本小时复审额度也已用完。最新修复提交的 CI 待核对；PR 未合并。合并后在 Windows 验收 Lab 附件、历史恢复和邮件附件。
+- 101：Lan 已确认本地预览；PR #154 的 CodeRabbit 审查发现两项实质问题，已修复并解决评审线程。最新修复提交的三项 CI 均通过；Cubic 额度耗尽，CodeRabbit 本小时额度已用完且最终修复提交没有第二轮自动审查。PR 未合并；合并后在 Windows 验收 Lab 附件、历史恢复和邮件附件。
 - 106：验收真实拖出、合并和重启恢复。
 - 107：验收带 😭💀 等表情的 QQ 整句发送。
 - 108：按 PR #151 的步骤在 Windows 双击 `update.bat` 验收更新与重新打包。
