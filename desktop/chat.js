@@ -7,7 +7,7 @@ const speechDraftKey='veil-speech-draft';
 let speechRecorder=null,speechStream=null,speechChunks=[],speechSession=null,speechState='idle',speechPermissionPending=false,speechCancelled=false,speechDraftActive=false,speechTimer=null;
 let after=0, busy=true, transcribingVoice=false, stopping=false, stopped=false, typing=null, sending=false;
 let revealQueue=[], revealTimer=null, roundStartedAt=0, roundHasReply=false, previousMessage=null;
-let pendingApproval=null, activityEnabled=false, exiting=false;
+let pendingApproval=null, activityEnabled=false, codexWatchEnabled=false, exiting=false;
 const recentErrors=new Map();
 let memoryAvailable=false,memoryLoaded=false,memoryLoading=false,memoryCursor='',memoryItems=[];
 let activityFilter='all',toolActivity=[],autonomyActivity=[],glanceActivity=[],detachedViews=new Set();
@@ -743,6 +743,11 @@ async function poll(){
     $('glance-next').textContent=glanceNext&&Number.isFinite(glanceNext.getTime())?glanceNext.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):(!glanceEnabled?'未排定':!activityEnabled?'恢复自主活动后重新计时':'等待电脑前活动');
     $('glance-toggle').textContent=glanceEnabled?'暂停瞄一眼':'开启瞄一眼';
     $('glance-toggle').disabled=stopping||stopped||exiting;
+    codexWatchEnabled=s.codex_watch_enabled===true;
+    $('codex-watch-status').textContent=!codexWatchEnabled?'已暂停':
+      (s.codex_watch_available==='没有找到 Codex 会话文件'?s.codex_watch_available:(s.codex_watch_status||'正在同步'));
+    $('codex-watch-toggle').textContent=codexWatchEnabled?'暂停监视':'开启监视';
+    $('codex-watch-toggle').disabled=stopping||stopped||exiting;
     $('exit-service').disabled=stopping||stopped||exiting;
     document.title=s.name;$('title').textContent=s.name;
     const capabilityText=s.capability_record||'No capability updates recorded yet.';
@@ -1003,6 +1008,18 @@ $('glance-toggle').onclick=async()=>{
     if(!r.ok)throw new Error(r.status);
   }catch(e){$('glance-status').textContent='设置保存失败：请检查本机 Agent 连接后重试。';add('error','瞄一眼设置保存失败，请检查连接后重试。')}
   finally{$('glance-toggle').disabled=stopping||stopped||exiting}
+};
+$('codex-watch-toggle').onclick=async()=>{
+  $('codex-watch-toggle').disabled=true;
+  try{
+    const enabled=!codexWatchEnabled;
+    const r=await api('/api/codex-watch',{enabled});
+    if(!r.ok)throw new Error(r.status);
+    codexWatchEnabled=enabled;
+    $('codex-watch-status').textContent=enabled?'等待 Codex 会话':'已暂停';
+    $('codex-watch-toggle').textContent=enabled?'暂停监视':'开启监视';
+  }catch(e){$('codex-watch-status').textContent='设置保存失败：请检查本机 Agent 连接后重试。';add('error','Codex 监视设置保存失败，请检查连接后重试。')}
+  finally{$('codex-watch-toggle').disabled=stopping||stopped||exiting}
 };
 $('exit-service').onclick=async()=>{
   if(exiting||stopped||!confirm('确定退出 Peter 网页服务吗？'))return;

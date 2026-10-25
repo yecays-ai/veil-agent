@@ -711,6 +711,20 @@ class FilesystemTools:
             return False
 
     @capability_transaction
+    def announce_codex_watch(self):
+        if getattr(self, 'cap_path', None) is None:
+            return
+        try:
+            return self._announce_once(
+                'codex_watch_announced',
+                'Capability update: a read-only watcher checks Codex desktop session logs every 10 seconds. '
+                'When a task clearly completes, is aborted, or has no new record for over 10 minutes, you may '
+                'receive one event and tell Lan through a screen popup or QQ. Approval requests and questions '
+                'cannot currently be identified reliably, so do not infer that Codex is waiting for Lan.')
+        except Exception:
+            return False
+
+    @capability_transaction
     def announce_photo_input(self):
         if getattr(self, 'cap_path', None) is None:
             return

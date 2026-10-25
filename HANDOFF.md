@@ -2,7 +2,8 @@
 
 ## 当前进度
 
-- 工单 116「Lan 在电脑前时，Peter 隔一会儿来瞄她一眼」正在分支 `ticket/116-glance-at-lan`、worktree `E:\Peter-Agent\VEIL\worktrees\116-glance-at-lan` 实现，基于 main `4a5ed56`（PR #163 合并后）。核心代码与 UI 已接好；静态语法检查与 `git diff --check` 通过，测试未运行。PR #164 的 CodeRabbit 提出三条意见：ToolSet 包装下 Windows 观察工具访问不到、审批动作会阻塞无人值守瞄一眼、切换开关会多开轮询链。三项修复已提交并发布到 PR；已在原评论下逐条回复，三条线程全部标记为已解决。Python/JavaScript 语法检查与 `git diff --check` 通过，未运行测试。最新提交的 CI 尚待结果。
+- 当前工单 117「Peter 帮 Lan 盯着 Codex」在分支 `ticket/117-watch-codex`，本地提交 `3553cdc`；远端 `main` 当前提交为 `0f39c1a7b3fec62545839075a4825ab3e5b9c95d`。只读监视、设置开关、单次模型提醒与弹窗/QQ 分流已实现。静态 Python/JavaScript 语法检查和 `git diff --check` 通过，测试未运行。远端同名分支已创建，正在发布代码并准备创建 PR。审批/提问等待没有可靠信号，不能猜测。
+- 工单 116 的 PR #164 已合并为 `0f39c1a7b3fec62545839075a4825ab3e5b9c95d`；GitHub 查询未返回该提交的 workflow/status 行，不能写成 CI 通过。Lan 的 Windows 体验仍待验收。
 - 观察路径复用 `IdleClock`、`windows_foreground` 和 `windows_observe` 的 UIA 文字/标题；不传截图给模型。曾有截图进入模型请求的修改被自动审批拒绝，因此当前实现保持 UIA-only，不要尝试绕过拒绝重新传截图。
 - 目标行为：最近 5 分钟有输入且屏幕解锁时，每次随机等 15–40 分钟；离开或 `/pause` 时停止计时，回来后重新计时。每次最多 4 个工具动作，每日独立 ¥1 上限。结果进入短期活动记录并在下一次普通聊天交付，不自动保存长期记忆。
 - 工单 115（PR #163）已合并 `4a5ed56`，Tests、Dependency security、Windows desktop 检查通过；Lan 本地视觉预览已确认，Windows 实机体验待验收。
@@ -10,9 +11,9 @@
 
 ## 下一步
 
-1. 完成最后一次差异审阅，确认 STATUS/HANDOFF 与实际检查结果同步。
-2. 查看 PR #164 最新提交的 CI；若失败，只修复实际阻断问题。
-3. Lan 的 Windows 实机体验仍待按工单 116 验收；本轮用户要求处理三条 CodeRabbit 评论后停止。
+1. 完成工单 117 的静态差异审阅，更新 STATUS/HANDOFF。
+2. 把本地提交发布到 `yecays-ai/veil-agent` 的同名分支并创建 PR；不合并，等 Lan Windows 实机验收。
+3. PR 检查、CI、Windows 实机体验分别记录；不要把未运行的测试或未回传的状态写成通过。
 
 ## 仍适用的边界
 
