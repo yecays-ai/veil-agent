@@ -4,7 +4,8 @@
 
 ## 当前目标与现状
 
-- 工单 119「盯 Codex 的能力通知发给 Peter」：分支 `ticket/119-codex-watch-notice`。开着长期记忆时工具被 `ToolSet` 包着，`codex_watch.py` 直接在外层找 `announce_codex_watch`，找不到，所以 Peter 的能力记录里没有盯 Codex 这一条。改为先取 `ToolSet.files`，加回归测试 `tests/test_codex_watch.py`。验收：更新后问 Peter 有什么新能力，他的能力记录里能查到 Codex 监视。下一个工单号 120。
+- 工单 120「瞄一眼认不出前台窗口时不再失败」：分支 `ticket/120-glance-no-window`。lan 停在桌面、只开着 VEIL 或前台是受保护窗口时，`windows_foreground` 报错，瞄一眼直接记为失败。现在 `GlanceController._observe` 照常给 Peter 一次瞄一眼：没有应用窗口在前台时，告诉他 Lan 多半停在桌面，并给他桌面上文件和文件夹的名字（最新的在前，最多 40 个，跳过隐藏项，不读文件内容；`desktop_files.desktop_item_names`）；窗口认得出但内容读不出时，只给应用名和标题。加回归测试 `tests/test_glance.py`。验收：在桌面或只开 VEIL 时等一次瞄一眼，记录不再是「未识别窗口」失败。下一个工单号 121。
+- 工单 119「盯 Codex 的能力通知发给 Peter」：分支 `ticket/119-codex-watch-notice`。开着长期记忆时工具被 `ToolSet` 包着，`codex_watch.py` 直接在外层找 `announce_codex_watch`，找不到，所以 Peter 的能力记录里没有盯 Codex 这一条。改为先取 `ToolSet.files`，加回归测试 `tests/test_codex_watch.py`。验收：更新后问 Peter 有什么新能力，他的能力记录里能查到 Codex 监视。
 - 工单 116「Lan 在电脑前时，Peter 隔一会儿来瞄她一眼」：PR #164 已合并到 main，合并提交 `0f39c1a7b3fec62545839075a4825ab3e5b9c95d`。GitHub 查询未返回该提交的 workflow/status 行，因此不记录为 CI 通过；Lan Windows 体验仍待验收。实现复用 Windows 输入空闲时钟、UIA 前台观察、现有 Chat 工具循环和预算账本；仅在最近 5 分钟有输入且屏幕解锁时随机等待 15–40 分钟，每次最多 4 个工具动作，每日独立预算 ¥1。活动页提供独立开关，瞄一眼结果作为短期记录交给下一次聊天，不自动写长期记忆。观察只用 UIA 文字和标题，不用截图。
 - 工单 115「Peter 可弹窗、发全屏弹幕」：PR #163 已合并到 main，合并提交 `4a5ed56`；Tests、Dependency security、Windows desktop 检查通过。Lan 已确认本地视觉预览；Windows 实机体验待按工单验收。
 - 工单 118「放宽自主醒来次数和步数」：PR #162 已合并为 `ffdd368`。配置最快 90 分钟、每天最多 12 次、每次最多 20 个真实工具步骤和 15 分钟；¥2/天预算与 `set_next_wake` 的 60 分钟间隔不变。针对性检查通过、3 项跳过；本机 Node 文件服务用例因服务未启动而单独失败。Lan 的 Windows 全天体验待验收。
