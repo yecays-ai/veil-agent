@@ -18,7 +18,8 @@ from decimal import Decimal
 from pathlib import Path
 from contextlib import contextmanager, nullcontext
 
-from agent_types import AUTONOMY_WAKE, BudgetExceeded, GLANCE_WAKE, RequestFailed, TooLong, UserError, now
+from agent_types import (AUTONOMY_WAKE, BudgetExceeded, CODEX_WATCH_WAKE, GLANCE_WAKE,
+                         RequestFailed, TooLong, UserError, now)
 
 ROOT = Path(__file__).resolve().parent
 MILLION = Decimal(1_000_000)
@@ -1116,6 +1117,7 @@ class Chat:
         self.autonomy_should_yield = None
         self.autonomy_run_id = None
         self.glance_mode = False
+        self.codex_watch_mode = False
         self.glance_tool_limit = 4
         self.screen_pop_handler = None
         self.autonomy_message_output = None
@@ -2130,7 +2132,8 @@ class Chat:
         autonomy_tool_limit = min(configured_steps, self.glance_tool_limit) if self.glance_mode else configured_steps
         # Keep one final model turn after the last autonomous tool so Peter can
         # leave the four-line handoff without sacrificing a usable tool step.
-        max_steps = configured_steps + 1 if autonomy else configured_steps
+        max_steps = (1 if self.codex_watch_mode else
+                     configured_steps + 1 if autonomy else configured_steps)
         for step in range(max_steps):
             self.long_tasks.set_tool_step(step)
             autonomy_limit_reached = autonomy and autonomy_tool_steps >= autonomy_tool_limit
@@ -2537,6 +2540,9 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead, activity=N
                 continue
             if raw_text is GLANCE_WAKE and getattr(autonomy, 'glance', None) is not None:
                 autonomy.glance.run()
+                continue
+            if raw_text is CODEX_WATCH_WAKE and getattr(autonomy, 'codex_watch', None) is not None:
+                autonomy.codex_watch.run_claimed()
                 continue
             text = raw_text.strip()
             if text == '/quit':

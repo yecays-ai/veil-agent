@@ -819,8 +819,12 @@ class GlanceController:
     def _desktop_is_open(self):
         if not self.enabled() or not self.activity.enabled() or self.hub.stopping or self.hub.stopped:
             return False
+        return self.desktop_recent_unlocked(self.idle_seconds_limit)
+
+    def desktop_recent_unlocked(self, idle_seconds=300):
+        """Use the shared input clock and lock check without requiring glance itself to be on."""
         try:
-            if self._input_clock is None or self._input_clock.idle_seconds() >= self.idle_seconds_limit:
+            if self._input_clock is None or self._input_clock.idle_seconds() >= idle_seconds:
                 return False
             current = time.monotonic()
             if current - self._last_lock_check >= 1.0:

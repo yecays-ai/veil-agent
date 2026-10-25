@@ -4,6 +4,7 @@ from datetime import datetime
 
 AUTONOMY_WAKE = object()
 GLANCE_WAKE = object()
+CODEX_WATCH_WAKE = object()
 
 
 class UserError(Exception):

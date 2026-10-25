@@ -34,6 +34,7 @@
     <article class="surface activity-overview"><div><span class="status-dot is-pending" id="activity-work-dot"></span><strong id="activity-work-status">等待下一次工具调用</strong></div><span id="activity-count">0 条记录</span><p>聊天、自主活动或长期任务调用工具时，这里会实时更新。</p></article>
     <div class="activity-runtime"><div><span class="label">自主活动</span><strong id="activity-status">状态正在同步</strong></div><div><span class="label">下次唤醒</span><strong id="next-wake">正在读取…</strong><span id="next-wake-reason" hidden></span></div><button id="activity-toggle" disabled>读取中…</button></div>
     <div class="activity-runtime"><div><span class="label">主动瞄一眼</span><strong id="glance-status">状态正在同步</strong><small>只在最近 5 分钟有操作且屏幕未锁时计时；/pause 会一起暂停</small></div><div><span class="label">下次瞄一眼</span><strong id="glance-next">等待同步…</strong></div><button id="glance-toggle" disabled>读取中…</button></div>
+    <div class="activity-runtime"><div><span class="label">Codex 监视</span><strong id="codex-watch-status">状态正在同步</strong><small>只读会话记录；目前无法可靠识别审批请求或提问</small></div><div><span class="label">检查间隔</span><strong>10 秒</strong></div><button id="codex-watch-toggle" disabled>读取中…</button></div>
     <div class="activity-filters" role="group" aria-label="筛选活动记录">
       <button class="active" data-activity-filter="all">全部</button><button data-activity-filter="tool">工具调用</button><button data-activity-filter="memory">记忆活动</button><button data-activity-filter="autonomy">自主活动</button><button data-activity-filter="glance">瞄一眼</button><button data-activity-filter="long_task">长期任务</button>
     </div>

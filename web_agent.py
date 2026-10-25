@@ -29,10 +29,12 @@ from urllib.error import HTTPError, URLError
 
 from attachment_utils import (ATTACHMENT_EXTENSIONS, ATTACHMENT_TYPES, MAX_ATTACHMENT_BYTES,
                               inspect_attachment, redirected_path, valid_attachment_row)
-from veil_agent import (ROOT, AUTONOMY_WAKE, GLANCE_WAKE, MAX_PHOTO_BYTES, ActivityState, Budget, Chat, Store, UserError,
+from veil_agent import (ROOT, AUTONOMY_WAKE, CODEX_WATCH_WAKE, GLANCE_WAKE, MAX_PHOTO_BYTES,
+                        ActivityState, Budget, Chat, Store, UserError,
                         load_character, now, make_model, make_voice, run_chat,
                         safe_tool_activity_detail)
 from autonomy import AutonomyController, GlanceController
+from codex_watch import CodexWatchController
 
 MAX_BODY = 200_000
 MAX_MEDIA_BYTES = MAX_PHOTO_BYTES
@@ -166,6 +168,7 @@ class Hub:
         self.submission_pending = False  # admission reserved while media storage runs
         self.autonomy = None
         self.glance = None
+        self.codex_watch = None
         self.capability_record = lambda: None
         self.defer_outputs = False
         self.deferred_outputs = []
@@ -1022,6 +1025,14 @@ class Hub:
                 continue
             if self.stopping or self.stopped:
                 raise EOFError
+            if self.codex_watch is not None and self.codex_watch.claim_due():
+                with self.cond:
+                    if (not self.stopping and not self.stopped and self.inbox.empty()
+                            and not self.submission_pending):
+                        self.autonomy_busy = True
+                        self.busy = True
+                        self.autonomy_interrupted.clear()
+                        return CODEX_WATCH_WAKE
             if self.glance is not None and self.glance.due():
                 with self.cond:
                     if (not self.stopping and not self.stopped and self.inbox.empty()
@@ -1092,6 +1103,13 @@ class Hub:
             if self.stopping or self.stopped or self.glance is None:
                 return False
             self.glance.set_enabled(enabled)
+            return True
+
+    def set_codex_watch(self, enabled):
+        with self.cond:
+            if self.stopping or self.stopped or self.codex_watch is None:
+                return False
+            self.codex_watch.set_enabled(enabled)
             return True
 
     def submit(self, text, request_id, media_id=None):
@@ -1285,6 +1303,7 @@ class Hub:
         with self.cond:
             autonomy = self.autonomy.status() if self.autonomy else {}
             glance = self.glance.status() if self.glance else {}
+            codex_watch = self.codex_watch.status() if self.codex_watch else {}
             return {'events': self.events[after:], 'busy': self.busy and not self.autonomy_busy,
                     'transcribing_voice': self.transcribing_voice,
                     'stopping': self.stopping and not self.stopped, 'stopped': self.stopped,
@@ -1295,7 +1314,7 @@ class Hub:
                     'runtime_status': self.runtime_status(),
                     'tool_activity': tool_activity,
                     'memory_panel_url': self.memory_url,
-                    'memory_available': self.memory_tools is not None, **autonomy, **glance}
+                    'memory_available': self.memory_tools is not None, **autonomy, **glance, **codex_watch}
 
 
 def make_handler(hub, token):
@@ -1700,6 +1719,18 @@ def make_handler(hub, token):
                             self._send(200, {'ok': True, 'enabled': hub.glance.enabled()})
                     except UserError as exc:
                         self._send(500, {'error': str(exc)})
+            elif url.path == '/api/codex-watch':
+                enabled = body.get('enabled')
+                if not isinstance(enabled, bool):
+                    self._send(400, {'error': 'enabled'})
+                else:
+                    try:
+                        if not hub.set_codex_watch(enabled):
+                            self._send(409, {'error': 'unavailable'})
+                        else:
+                            self._send(200, {'ok': True, 'enabled': hub.codex_watch.enabled()})
+                    except UserError as exc:
+                        self._send(500, {'error': str(exc)})
             elif url.path == '/api/exit':
                 state = hub.request_stop()
                 if state == 'accepted':
@@ -1822,6 +1853,8 @@ def serve_chat(chat, hub, channels=()):
     hub.autonomy = AutonomyController(chat, hub)
     hub.glance = GlanceController(chat, hub)
     hub.autonomy.glance = hub.glance
+    hub.codex_watch = CodexWatchController(chat, hub, glance=hub.glance)
+    hub.autonomy.codex_watch = hub.codex_watch
     hub.capability_record = lambda: chat.capability_history_record
     hub.activity_transition = lambda enabled: chat.set_activity_enabled(hub.activity, enabled)
     chat.activity_enabled = hub.activity.enabled
