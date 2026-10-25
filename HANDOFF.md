@@ -2,7 +2,8 @@
 
 ## 当前进度
 
-- 当前工单 117「Peter 帮 Lan 盯着 Codex」的 PR #165 已打开：`https://github.com/yecays-ai/veil-agent/pull/165`，分支 `ticket/117-watch-codex`，基底为 main `0f39c1a7b3fec62545839075a4825ab3e5b9c95d`。只读监视、设置开关、单次模型提醒与弹窗/QQ 分流已实现。静态 Python/JavaScript 语法检查和 `git diff --check` 通过，测试未运行；PR CI 与 Lan Windows 实机验收待确认。审批/提问等待没有可靠信号，不能猜测。
+- 当前工单 120「瞄一眼认不出前台窗口时不再失败」，分支 `ticket/120-glance-no-window`：前台只有桌面/VEIL/受保护窗口时，瞄一眼不再记失败，Peter 只被告知没读到屏幕内容；窗口内容读不出时只给应用名和标题。回归测试 `tests/test_glance.py`。
+- 工单 117（PR #165）已合并 `d42b12e`；工单 119（PR #166）已合并 `5262318`，修复 Codex 监视的能力通知。117 的审批/提问等待仍没有可靠信号。
 - 工单 116 的 PR #164 已合并为 `0f39c1a7b3fec62545839075a4825ab3e5b9c95d`；GitHub 查询未返回该提交的 workflow/status 行，不能写成 CI 通过。Lan 的 Windows 体验仍待验收。
 - 观察路径复用 `IdleClock`、`windows_foreground` 和 `windows_observe` 的 UIA 文字/标题；不传截图给模型。曾有截图进入模型请求的修改被自动审批拒绝，因此当前实现保持 UIA-only，不要尝试绕过拒绝重新传截图。
 - 目标行为：最近 5 分钟有输入且屏幕解锁时，每次随机等 15–40 分钟；离开或 `/pause` 时停止计时，回来后重新计时。每次最多 4 个工具动作，每日独立 ¥1 上限。结果进入短期活动记录并在下一次普通聊天交付，不自动保存长期记忆。
@@ -11,8 +12,8 @@
 
 ## 下一步
 
-1. 检查 PR #165 最新提交的 CI 和代码评审，只修复实质问题。
-2. PR 保持开放，等 Lan Windows 实机验收；不要把 CI 通过当作体验验收。
+1. 工单 120 CI 通过后合并，Lan 运行 update.bat 后在桌面或只开 VEIL 时验收一次瞄一眼。
+2. 115–119 仍等 Lan Windows 实机验收；不要把 CI 通过当作体验验收。
 3. PR 检查、CI、Windows 实机体验分别记录；不要把未运行的测试或未回传的状态写成通过。
 
 ## 仍适用的边界

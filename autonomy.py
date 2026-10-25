@@ -879,7 +879,12 @@ class GlanceController:
             return None, None, 'Windows 桌面观察不可用。'
         foreground, state, _ = tools.invoke('windows_foreground', {})
         if state != '成功':
-            return None, None, str(foreground)[:500]
+            # Lan on the bare desktop, only VEIL open, or a protected window in front:
+            # still a real moment Peter can react to; nothing from the screen is read.
+            return {'application': 'no ordinary window identified'}, (
+                'No ordinary application window could be identified in front, so nothing on screen was read. '
+                'Lan may be on the desktop, looking at VEIL itself, or in a protected window. '
+                'Reason: ' + str(foreground)[:300]), None
         try:
             metadata = json.loads(str(foreground).partition('\n')[2])
             window_id = metadata['window_id']
@@ -891,7 +896,11 @@ class GlanceController:
             'windows_observe', {'window_id': window_id, 'visual_fallback': 'never'},
             should_stop=self.should_yield)
         if state != '成功':
-            return metadata, None, str(observed)[:500]
+            # Window known but its contents unreadable (games, canvases): keep the glance
+            # going with the application name and title only.
+            return metadata, (
+                f"Lan's front window is {metadata.get('application')!s:.80} titled "
+                f"{metadata.get('title')!s:.200}; its contents could not be read. Reason: {str(observed)[:300]}"), None
         return metadata, observed, None
 
     def should_yield(self):
