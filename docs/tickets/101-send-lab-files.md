@@ -2,25 +2,15 @@
 
 ## 目标
 
-Peter 做好的东西（小游戏、诗、小网页、图片）能直接作为附件发到聊天里，Lan 点开就能看或玩。
+Peter 可以把自己在 Lab 做好的网页、图片或文本作为附件发给 Lan；聊天记录重启后仍能打开，回复邮件时附件也随邮件发送。
 
 ## 当前状态
 
-他做的东西在 `data\peter\lab` 里，Lan 只能自己去文件夹翻；`send_message` 只能发文字和语音。
+目前 `send_message` 只支持文字和语音，虽然 Lab 文件由 `tools_agent.py` 管理，桌面已有 `web_agent.Hub` 的媒体目录、`index.jsonl` 和受令牌保护的 `/media/{id}` 路由，但消息记录与邮件发送还没有关联附件。
 
-## 改动
+复用方案：附件快照和历史索引复用 `web_agent.Hub` 的 `media_root/index.jsonl` 及其认证媒体路由，不另建存储或调度机制；邮件使用 Python 标准库 `email.message.EmailMessage.add_attachment()`（[CPython v3.12.10 源码](https://github.com/python/cpython/blob/v3.12.10/Lib/email/message.py#L1192-L1193)），不增加第三方依赖。允许类型、5 MB 限额和 Lab 路径检查由 `attachment_utils.py`、`tools_agent.FilesystemTools` 执行；消息及邮件分别由 `veil_agent.Chat`、`web_agent.Hub`、`email_channel.EmailChannel` 和 `away_bridge.AwayBridge` 处理，桌面展示位于 `desktop/chat.js` 与 `desktop/main.cjs`。
 
-1. `send_message` 加可选参数 `file`：lab 里的相对路径。程序检查文件在 lab 内、不是链接、不超过 5 MB。
-2. 桌面聊天显示一个文件卡片（文件名、大小）。点开：`.html` 用默认浏览器打开；图片在聊天里显示；文本文件在窗口里显示。
-3. 如果这一轮走的是邮件（工单 098），附件随邮件一起发出。
-4. 发出的是那一刻的副本，之后他改 lab 里的原文件不影响已发出的附件。
-5. 一次性英文能力通知写进 `capabilities.json`。
+## 验收步骤
 
-## 费用
-
-不花钱。
-
-## 验收（Lan 的体验）
-
-1. 让他做一个小东西发给你，聊天里出现文件卡片，点开能看能玩。
-2. 重启后聊天记录里的卡片还在，还能打开。
+1. 让 Peter 在 Lab 做一个小网页或图片并发给 Lan：聊天里出现文件卡片，图片可直接看、网页可在默认浏览器打开、文本可在聊天窗口展开查看。
+2. 重启 VEIL 后打开历史附件，确认仍可用；再让 Peter 回复一封邮件并附上 Lab 文件，确认邮件收到了附件。

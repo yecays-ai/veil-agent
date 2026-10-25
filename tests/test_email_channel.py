@@ -154,6 +154,49 @@ class EmailChannelTests(unittest.TestCase):
         self.assertIn('email', properties)
         self.assertIn('qq', properties)
 
+    def test_email_reply_sends_the_immutable_lab_attachment_snapshot(self):
+        media_id = 'a' * 32
+        raw = b'<html><body>tiny game</body></html>'
+        row = {'id': media_id, 'filename': media_id + '.html', 'mime': 'text/html',
+               'view': 'html', 'kind': 'attachment', 'name': 'game.html', 'size': len(raw),
+               'request_id': 'assistant-attachment-' + media_id}
+        media_root = self.channel.log_path.parent / 'media'
+        media_root.mkdir(parents=True)
+        (media_root / row['filename']).write_bytes(raw)
+        hub = Hub('Peter', SimpleNamespace(enabled=lambda: False))
+        bridge = AwayBridge(self.channel, hub)
+        bridge.in_turn = True
+        bridge.turn = ('<lan@example.com>', 'Re: game')
+        bridge.assistant_message('Here it is.', [row])
+        bridge.requested('Here it is.', [row])
+        bridge.turn_ended()
+
+        self.assertEqual(len(bridge.outbox), 1)
+        self.assertEqual(bridge.outbox[0][2], [row])
+        bridge.send_pending()
+        sent = FakeSmtp.sent[-1]
+        attached = list(sent.iter_attachments())
+        self.assertEqual(len(attached), 1)
+        self.assertEqual(attached[0].get_filename(), 'game.html')
+        self.assertEqual(attached[0].get_payload(decode=True), raw)
+        self.assertEqual(sent['In-Reply-To'], '<lan@example.com>')
+
+    def test_proactive_email_attachment_uses_email_only(self):
+        media_id = 'b' * 32
+        raw = b'hello from Peter'
+        row = {'id': media_id, 'filename': media_id + '.txt', 'mime': 'text/plain',
+               'view': 'text', 'kind': 'attachment', 'name': 'note.txt', 'size': len(raw),
+               'request_id': 'assistant-attachment-' + media_id}
+        media_root = self.channel.log_path.parent / 'media'
+        media_root.mkdir(parents=True)
+        (media_root / row['filename']).write_bytes(raw)
+        hub = Hub('Peter', SimpleNamespace(enabled=lambda: False))
+        bridge = AwayBridge(self.channel, hub)
+        bridge.requested('A note for you.', [row])
+        bridge.turn_ended()
+        bridge.send_pending()
+        self.assertEqual(FakeSmtp.sent[-1].iter_attachments().__next__().get_payload(decode=True), raw)
+
 
 if __name__ == '__main__':
     unittest.main()

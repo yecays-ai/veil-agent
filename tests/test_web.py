@@ -78,6 +78,65 @@ output_cny_per_million = "8"
         except urllib.error.HTTPError as exc:
             return exc.code, None
 
+    def test_lab_attachment_survives_restart_and_is_served_as_safe_content(self):
+        raw = b'<html><script>window.bad=true</script><body>game</body></html>'
+        attachment = self.hub.save_attachment({'name': 'game.html', 'suffix': '.html',
+            'mime': 'text/html', 'view': 'html', 'size': len(raw), 'data': raw})
+        self.assertTrue(attachment)
+        reopened = Hub('Test', ActivityState(self.store.root / 'test' / 'reopen-state.json'),
+                       media_root=self.store.root / 'test' / 'media')
+        self.assertEqual(reopened.read_attachment(attachment['id']), (attachment, raw))
+        self.assertEqual(self.call(f"/api/attachment?id={attachment['id']}")[1]['attachment'], attachment)
+        self.assertEqual(self.call(f"/api/attachment-text?id={attachment['id']}")[0], 415)
+
+        request = urllib.request.Request(
+            f'http://127.0.0.1:{self.port}/media/{attachment["id"]}?t={TOKEN}')
+        with urllib.request.urlopen(request, timeout=5) as response:
+            body = response.read()
+            self.assertEqual(response.headers['Content-Type'], 'application/octet-stream')
+            self.assertEqual(response.headers['X-Content-Type-Options'], 'nosniff')
+            self.assertEqual(response.headers['Content-Disposition'],
+                             f'attachment; filename="{attachment["filename"]}"')
+        self.assertEqual(body, raw)
+
+    def test_lab_text_attachment_is_served_as_plain_text(self):
+        raw = b'<script>this is only text</script>'
+        attachment = self.hub.save_attachment({'name': 'notes.txt', 'suffix': '.txt',
+            'mime': 'text/plain', 'view': 'text', 'size': len(raw), 'data': raw})
+        self.assertTrue(attachment)
+        self.assertEqual(self.call(f"/api/attachment-text?id={attachment['id']}")[1]['text'],
+                         raw.decode('utf-8'))
+        request = urllib.request.Request(
+            f'http://127.0.0.1:{self.port}/media/{attachment["id"]}?t={TOKEN}')
+        with urllib.request.urlopen(request, timeout=5) as response:
+            self.assertEqual(response.headers['Content-Type'], 'text/plain; charset=utf-8')
+            self.assertEqual(response.headers['X-Content-Type-Options'], 'nosniff')
+
+    def test_chat_history_replays_the_same_attachment_after_restart(self):
+        raw = b'The first poem version.'
+        chat = Chat(self.cfg, self.store, Budget(self.store), self.model,
+                    output=self.hub.output)
+        chat.attachment_reader = lambda path: {'name': 'poem.txt', 'suffix': '.txt',
+            'mime': 'text/plain', 'view': 'text', 'size': len(raw), 'data': raw}
+        chat.attachment_saver = self.hub.save_attachment
+        chat.attachment_discarder = self.hub._remove_unreferenced_media
+        result, state, _ = chat.send_message(json.dumps({'text': 'A poem for you.',
+                                                         'file': 'lab/poem.txt'}),
+                                             'attachment-restart')
+        self.assertEqual((result, state), ('Sent.', '成功'))
+        original = self.store.read('test/chat.jsonl')[0]['attachments'][0]
+        self.assertEqual((self.hub.media_root / original['filename']).read_bytes(), raw)
+
+        reopened_hub = Hub('Test', ActivityState(self.store.root / 'test' / 'reopen-state.json'),
+                           media_root=self.store.root / 'test' / 'media')
+        reopened_chat = Chat(self.cfg, self.store, Budget(self.store), self.model)
+        with patch('web_agent.run_chat'):
+            serve_chat(reopened_chat, reopened_hub)
+        replayed = next(event for event in reopened_hub.events if event['kind'] == 'assistant')
+
+        self.assertEqual(replayed['attachments'], [original])
+        self.assertEqual(reopened_hub.read_attachment(original['id']), (original, raw))
+
     def test_voice_transport_errors_keep_their_real_category(self):
         cases = (
             (urllib.error.URLError(socket.gaierror(11001, 'getaddrinfo failed')), 'dns', 'gaierror'),
