@@ -31,6 +31,7 @@ LAB_ONLY = {'create_directory', 'move_lab_file', 'lab_file_digest'}
 # Memory tools (ticket 007) are offered by memory_native.ToolSet, never by the filesystem server.
 NATIVE = {'hold', 'breath_search', 'trace', 'dream', 'letter_write', 'letter_read',
           'letter_lock_update', 'anchor', 'release', 'plan', 'pulse', 'memory_history', 'memory_catalog', 'memory_read'}
+AUTONOMY_DIRECT = {'set_next_wake'}
 
 
 def permitted_tools(server_tools):
@@ -47,11 +48,11 @@ def permitted_tools(server_tools):
 
 
 def tool_policy(name):
-    if name in WEB_TOOL_NAMES:
+    if name in WEB_TOOL_NAMES | AUTONOMY_DIRECT:
         return 'allow'
     if name in LAB_ONLY:
         return 'lab'
-    if name in DENY or name not in ALLOW | ASK:
+    if name in DENY or name not in ALLOW | ASK | AUTONOMY_DIRECT:
         return 'deny'
     return 'ask' if name in ASK else 'allow'
 
@@ -398,6 +399,8 @@ class FilesystemTools:
                    or ['No file tools are currently available.'])
         if previous.get('autonomy_announced'):
             changes.append('Autonomous activity remains enabled; you may act or choose not to on each scheduled wake.')
+        if previous.get('next_wake_announced'):
+            changes.append('You can use set_next_wake to schedule or cancel one future autonomous wake within the existing run and budget limits.')
         if previous.get('long_tasks_announced'):
             changes.append('Long-task tools remain available to save one active task and continue it after restart.')
         if previous.get('photo_input_announced'):
@@ -501,6 +504,21 @@ class FilesystemTools:
         except Exception as exc:
             self.enabled = False
             raise UserError('能力清单无法更新，未开启自主活动；请保留 data 文件夹。') from exc
+
+    @capability_transaction
+    def announce_next_wake(self):
+        if getattr(self, 'cap_path', None) is None:
+            return
+        try:
+            self._announce_once(
+                'next_wake_announced',
+                'Capability update: you can use set_next_wake to schedule or replace one future autonomous wake, '
+                'or pass an empty at value to cancel it. Give a local ISO timestamp and a short reason. It must be '
+                'at least 60 minutes and no more than 7 days away; it counts toward your existing daily run and '
+                'budget limits and remains saved across service restarts.')
+        except Exception as exc:
+            self.enabled = False
+            raise UserError('能力清单无法更新，定时唤醒工具已停止；请保留 data 文件夹。') from exc
 
     @capability_transaction
     def announce_long_tasks(self):

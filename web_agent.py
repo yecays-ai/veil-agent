@@ -749,7 +749,8 @@ class Hub:
             if self.autonomy is not None and self.autonomy.due():
                 with self.cond:
                     if (not self.stopping and not self.stopped and self.activity.enabled()
-                            and self.inbox.empty() and not self.submission_pending):
+                            and self.inbox.empty() and not self.submission_pending
+                            and self.autonomy.claim_due()):
                         self.autonomy_busy = True
                         self.busy = True
                         self.autonomy_interrupted.clear()

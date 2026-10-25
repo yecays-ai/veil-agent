@@ -159,6 +159,20 @@ AUTONOMY_HISTORY = {'type': 'function', 'function': {
     }, 'additionalProperties': False},
 }}
 
+AUTONOMY_SET_NEXT_WAKE = {'type': 'function', 'function': {
+    'name': 'set_next_wake',
+    'description': ('Schedule or replace your one next autonomous wake using a local ISO timestamp and one short '
+                    'sentence explaining what you want to continue or when you want to contact Lan. Use an empty '
+                    'at value to cancel. The time must be at least 60 minutes from now and no more than 7 days away. '
+                    'The wake counts toward the existing daily run and budget limits and is saved across service restarts.'),
+    'parameters': {'type': 'object', 'properties': {
+        'at': {'type': 'string', 'maxLength': 64,
+               'description': 'Local ISO timestamp, for example 2026-10-26T08:00:00; use an empty string to cancel.'},
+        'reason': {'type': 'string', 'maxLength': 300,
+                   'description': 'One short sentence describing what to continue or who to contact.'},
+    }, 'required': ['at', 'reason'], 'additionalProperties': False},
+}}
+
 
 def synchronized(fn):
     @wraps(fn)
@@ -449,9 +463,11 @@ def load_character(root, character_id):
         autonomy = dict(cfg.get('autonomy', {}))
         interval = positive_int(autonomy.get('interval_minutes', 180))
         daily_runs = positive_int(autonomy.get('daily_max_runs', 6))
+        min_alarm_gap = positive_int(autonomy.get('min_alarm_gap_minutes', 60))
         autonomy_daily = price(autonomy.get('daily_budget_cny', '2'))
         autonomy = {'interval_minutes': interval, 'daily_max_runs': daily_runs,
-                    'daily_budget_cny': autonomy_daily}
+                    'daily_budget_cny': autonomy_daily,
+                    'min_alarm_gap_minutes': min_alarm_gap}
         voice = dict(cfg.get('voice') or {}) or None
         if voice is not None and voice.get('provider') != 'minimax':
             raise ValueError('unsupported voice provider')
@@ -967,6 +983,7 @@ class Chat:
         self.pending_capability_event_model = capability_model_notice(tools)
         from long_tasks import LongTaskStore
         self.long_tasks = LongTaskStore(store, cfg.id)
+        self.autonomy_controller = None
         self.task_tools_enabled = bool(cfg.tools and cfg.tools.get('max_steps', 1) > 1)
         self.tool_mode = bool((cfg.tools and cfg.tools.get('enabled', True)) or (tools and tools.tools)
                               or self.task_tools_enabled)
@@ -1018,11 +1035,12 @@ class Chat:
             (self.cfg.tools and self.cfg.tools.get('enabled', True))
             or (self.tools and self.tools.tools)) else []
         history = [CAPABILITY_HISTORY, AUTONOMY_HISTORY] if existing_tools or task_tools or messaging else []
+        wake_tools = [AUTONOMY_SET_NEXT_WAKE] if self.autonomy_controller is not None else []
         profile = []
         if self.profile and history:
             from profile_notes import PROFILE_APPEND, PROFILE_REPLACE
             profile = [PROFILE_APPEND, PROFILE_REPLACE]
-        schemas = [*existing_tools, *task_tools, *messaging, *history, *profile]
+        schemas = [*existing_tools, *task_tools, *messaging, *history, *wake_tools, *profile]
         for schema in schemas:
             function = schema['function']
             if function['name'] in ('write_file', 'append_file', 'long_task_update', 'hold', 'trace', 'letter_write'):
@@ -1732,6 +1750,14 @@ class Chat:
                 else:
                     result, state = activity_history(self.store, self.cfg, count), '成功'
                 summary = 'autonomy_history'
+            elif call.function.name == 'set_next_wake':
+                args = json.loads(call.function.arguments or '{}')
+                if not isinstance(args, dict):
+                    result, state, summary = 'The scheduled wake was not changed because the arguments are invalid.', '被拒绝', 'set_next_wake'
+                elif self.autonomy_controller is None:
+                    result, state, summary = 'Scheduled wakes are unavailable in this session.', '被拒绝', 'set_next_wake'
+                else:
+                    result, state, summary = self.autonomy_controller.set_next_wake(args)
             else:
                 args = json.loads(call.function.arguments)
                 if not isinstance(args, dict):

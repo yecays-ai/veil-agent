@@ -2,31 +2,33 @@
 
 ## 当前进度
 
-- 108：`update.bat` 取代已删除的 update-main.cmd（那个会 stash、切分支，Lan 说一天坏十次）。原则：出问题就停下来说原因，不自动修复本地状态。只用 `git pull --ff-only origin main`；`tests/test_update_bat.py` 禁止 stash/switch/checkout/reset/clean/merge。以后改桌面界面的 PR，验收步骤写「双击 update.bat」而不是只写 git pull。
-- 工单 106 在 `ticket/106-activity-window`，PR #149，基线 `566280d`。Lan 已确认效果图；按 Lan 要求，主动请求 CodeRabbit 审核后停止，由 Lan 自行跟进评论与后续合并。
-- Claude 审查补丁：桌面每个窗口每 600 ms 轮询 `/api/events`，原实现每次都在 Hub 锁内重读并解析 tools.jsonl 最近 5000 行（大账本约 1 秒），会卡住聊天；现在只在账本大小/修改时间变化时重算，并在锁外计算。
-- 已完成真实工具开始/结束同 `call_id` 账本、`/api/events` 折叠投影、统一活动时间线与筛选；窗口管理已扩成聊天/活动/记忆/更多四个标签均可同时拖出、独立移动缩放、分别合并与恢复各自模式/位置/尺寸，仍共用同一 `chat.html`。未改能力通知或 Peter 上下文。
-- 自动检查：活动账本 3、Ombre 50、聊天 65、网页/API 54、Autonomy 26、长期任务 20、Desktop 全套 6 均通过；真实 Electron renderer 已分别渲染聊天/活动/记忆/更多独立窗口并截图。PR #149 已创建；下一步由 Lan 跟进 CodeRabbit 评论，真实 Windows 手势拖出、合并与重启恢复尚待合并后体验。
+- 工单 100：分支 `ticket/100-peter-sets-next-wake`，基于最新 main `6d251cadd77322fd46827bc141777a1404914045`。代码和专项测试已完成；PR [#152](https://github.com/yecays-ai/veil-agent/pull/152) 已创建。保持未合并，CodeRabbit 对代码提交 `ef69296` 的审查无 actionable comments、风险评估 Minimal；Tests #1252 与 Dependency security #199 通过。Cubic 因试用额度无法启动。
+- 自定唤醒沿用 `AutonomyController`、Hub 空闲轮询和 `Store.replace()` 原子持久化。自定义唤醒和周期唤醒取更早者；到期状态在 Hub 空闲门内先标记消费再启动，避免重复。达到每日次数上限时标记错过。服务恢复后最多对过期的待处理事项补醒一次。
+- 已新增 `set_next_wake` 工具、60 分钟最早间隔和 7 天最大范围、一次性能力通知及原因上下文。每日最多 6 次、每日 ¥2、自主活动既有工具权限和消息/步骤限制保留。未修改桌面 UI、QQ 表情、邮件、消息功能或工单 101 及以后。
+- 复用调查：检查 APScheduler（MIT，约 7.7k stars，近期维护；支持持久 schedule、one-off 和 misfire grace）。它的调度持久层还需引入 APScheduler 及后端相关依赖；当前 VEIL Hub 和角色数据原子快照已提供所需的触发、持久化与权限/预算控制，因此没有再添加调度运行时。固定源码链接及细节见工单 100。
+- 验证：`test_autonomy.py` 33 项、`test_capability_transactions.py` 6 项、`test_chat.py` 65 项通过；`ToolPolicyTests` 20 项通过、2 项因账户无法创建符号链接跳过；Python 编译和 `git diff --check` 通过。桌面完整测试 6 项通过、1 项因本地 Agent 服务未运行而失败；代码提交 `ef69296` 的 Tests #1252 与 Dependency security #199 通过。CodeRabbit 无 actionable comments；Cubic 因试用额度无法启动。Lan Windows 体验未做。
 
-- 当前工作：工单 099，PR #148，分支 `ticket/099-web-search-and-read`，基于最新 `main` `85b2491`。联网搜索和网页只读已实现；专项测试 10 项通过。接下来在 PR 对话发起 CodeRabbit 审查，收到评论即停止本工单，不合并。
-- 099 的 `ddgs==9.16.1` DuckDuckGo 搜索已在当前 Windows 环境验证；官方 `mcp-server-fetch==2026.10.19` 也在隔离环境成功启动并读取公开页面。Lan 尚未体验验收。详情和步骤见 `docs/tickets/099-web-search-and-read.md` 与 `STATUS.md`。
+## 下一步
 
-- 097 已合并（#143），098 邮件已合并（#142，邮箱 11-07 后才能验收）。
-- 102 QQ 由 Claude 在分支 `ticket/102-qq-with-lan` 实现：`away_bridge.py`（通用 `AwayBridge`：渠道消息进同一段聊天、本轮回复走原渠道、`send_message(<渠道>=true)` 主动发），`email_channel.py` 改为实现这个接口，`qq_channel.py`（`QQChannel` + `QQWindow`，uiautomation，Windows 才启用）。
-- 新依赖 `uiautomation==2.0.29`（及 `comtypes==1.4.17`），只在 Windows 安装。
-- 测试：`tests/test_email_channel.py`、`tests/test_qq_channel.py` 通过（QQ 窗口用假对象）。真实 QQ 窗口操作只能在 Lan 的 Windows 上验收。
+1. 等待 Lan 按 Windows 步骤验收；保持 PR #152 未合并。后续只处理实质功能、安全、权限、隐私或数据完整性问题。
+2. Lan 在 Windows 按工单步骤验收明日继续研究、明早 8 点 QQ 联系、重启恢复、睡眠/关机后的单次补醒。审查期间不合并。
+3. CodeRabbit 对代码提交 `ef69296` 未发现 actionable comments；Cubic 因账号试用额度无法启动。按 Lan 要求不自动合并，等待 Windows 体验验收。
 
-- Claude 审查 #148 时补了一处：桌面版实际走 `web_agent.py` 启动服务，原先只在 `veil_agent.py`（终端）接入了 `WebTools`，桌面聊天里 Peter 拿不到网页工具；现在两处都接入。
+## 此前工单当前状态
 
-## 099 本窗口停止点
+合并和 Lan 体验验收分别记录在 `STATUS.md`。已验收的 095、096、102、103–105 不再列为待验收。仍需观察/验收：097 持续观察；098 等待 2026-11-07 邮箱开通；099 网页读取及其他场景；100 Windows 定时唤醒体验；106 真实窗口拖出/合并/恢复；107 QQ 表情整句发送；108 Windows 一键更新。
 
-在 PR #148 发起 CodeRabbit 审查并等待其评论；评论到达后停止，不触发 Cubic、不合并 PR，也不开始其他工单。之后交 Lan 按 `STATUS.md` 的 099 步骤进行体验验收。
+095 的 UI 视觉改版是独立后续事项。本次没有改桌面 UI。
 
-## 其他已完成工单交接
+## 重要边界
 
-102 已合并（#144）。103：`QQWindow._auto` 缺 uiautomation 时抛 `QQUnavailable`（提示重跑 setup.bat），`AwayBridge` 两个线程捕获意外异常并报一次。Lan 的电脑第一次没重跑 setup.bat 就踩到了这个。105：发送前核对用 `comparable()`（去掉表情、空白），因为 QQ 把表情转成图片读不回文字。104：QQ 界面元素没有类名，`parse_chat` 按名字解析（常量在 `qq_channel.py` 顶部）。若 QQ 升级后读不到，先在 Lan 电脑上跑 `.local-tmp\qq_check2.py` 打印当前结构（本地诊断脚本，不在仓库里）。101 做完后，邮件和 QQ 回复要带上附件。 107：105 的猜测不对，真正原因是 uiautomation 2.0.29 `SetClipboardText` 按码点数分配 UTF-16 缓冲，超出 BMP 的表情占两个单元，句尾被截断；现在用 `qq_channel.set_clipboard_text`（按 UTF-16 字节长度）。不要换回 `auto.SetClipboardText`。
+- 正式 checkout `E:\\Peter-Agent\\VEIL\\veil-agent` 保持在 `main`；其中预存的两个脚本删除状态来自用户环境，未纳入本分支。当前任务只在独立 worktree 开发。
+- 不覆盖角色数据；损坏或无法安全更新的闹钟状态停止并提示保留 data。闹钟只是一次自主活动触发，不扩大工具权限，也不保证模型一定选择发送消息。为避免重复，若进程在闹钟已消费后、活动开始标记写入前崩溃，该次唤醒可能跳过；服务在到期前重启或电脑睡眠/关机后恢复时，仍按持久状态处理。
+- Windows 睡眠期间不能准点运行；恢复后服务在下次空闲轮询时至多补醒一次。电脑需恢复运行且 VEIL 服务启动，Lan 的 QQ 联系方式也需已配置并可用。
 
-## 边界
+## 技术要点（长期有效，改写本文件时请保留）
 
-- 不注入 QQ、不用协议；只在 Lan 两分钟没碰电脑且前台不是全屏程序时操作窗口；打字前核对收件人。
-- 授权码和 Lan 的 QQ 名字只在本机 `.env`。
+- QQ（102–107）：不注入、不用协议；只在 Lan 两分钟没碰电脑且前台不是全屏程序时操作窗口，打字前核对聊天窗口顶部是 Lan。QQ 界面没有类名，`parse_chat` 按名字解析（常量在 `qq_channel.py` 顶部）；QQ 升级后读不到时，先在 Lan 电脑上跑 `.local-tmp\qq_check2.py` 打印结构。写剪贴板必须用 `qq_channel.set_clipboard_text`（按 UTF-16 长度）：uiautomation 2.0.29 的 `SetClipboardText` 遇到表情会截掉句尾，不要换回去。缺 uiautomation 时抛 `QQUnavailable` 提示重跑 setup.bat。授权码和 Lan 的 QQ 名字只放在本机 `.env`。
+- 桌面活动窗口（106）：`Hub.tool_activity` 按 tools.jsonl 的大小/修改时间缓存，并在 Hub 锁外计算；每个窗口每 600 ms 轮询一次，不要改回每次都重读。
+- 更新（108）：`update.bat` 只执行 `git pull --ff-only origin main`，不 stash、不切分支，出问题就停下说明原因；`tests/test_update_bat.py` 守着这些规则。改桌面界面的 PR，验收步骤写「退出 Peter → 双击 update.bat」，只 git pull 不会更新 VEIL.exe。
+- 桌面版的服务入口是 `web_agent.py`：新工具要在它和 `veil_agent.py`（终端）两处都接上（099 就漏过一次）。

@@ -60,6 +60,7 @@ max_result_bytes = 8192
 interval_minutes = 180
 daily_max_runs = 6
 daily_budget_cny = "2"
+min_alarm_gap_minutes = 60
 
 [profile]
 # Ticket 096: Peter's own notes about Lan, written by him with profile_append / profile_replace
