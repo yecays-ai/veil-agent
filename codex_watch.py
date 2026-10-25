@@ -78,6 +78,7 @@ class CodexWatchController:
         self._offset = 0
         self._bootstrapping = True
         self._bootstrap_cutoff = None
+        self._started_epoch = time.time()
         self._active = None
         self._session_id = ''
         self._project = '未知项目'
@@ -325,7 +326,9 @@ class CodexWatchController:
             return
         self._availability = '只读监视中'
         initialized = self._state.get('initialized') is True
-        cutoff = (self._state.get('last_scan_epoch')
+        # After a restart, only events from the last few minutes are new; older completions that
+        # happened while Peter was closed are remembered silently instead of popping up one by one.
+        cutoff = (max(float(self._state.get('last_scan_epoch') or 0), self._started_epoch - STALE_SECONDS)
                   if initialized else time.time())
         self._read_new_lines(path, mtime, cutoff)
         self._state['initialized'] = True
