@@ -611,5 +611,47 @@ max_result_bytes = 4096
                          (None, False))
 
 
+    def test_new_memory_hold_is_verified_by_memory_read_of_created_id(self):
+        task_id = self.create()
+        self.assertEqual(self.tasks.before_tool('hold', 'Fictional new memory title', True,
+            {'title': 'Fictional new memory title', 'content': 'Fictional body.'}), (None, True))
+        self.tasks.finish_tool('hold', 'Fictional new memory title', '成功', '已保存。 memory_id: abc123def456')
+        pending = self.tasks.read()['pending_action']
+        self.assertEqual(pending['target'], 'abc123def456')
+        blocked = self.tasks.begin_tool('append_file', 'lab/other.md')
+        self.assertIn('memory_read', blocked)
+        self.tasks.set_tool_step(1)
+        self.tasks.observe_tool_result('memory_read', 'abc123def456', '成功',
+                                       '{"memory_id":"abc123def456","text":"Fictional body."}')
+        self.tasks.set_tool_step(2)
+        result, state, _ = self.tasks.invoke('long_task_update', {
+            'action': 'update', 'task_id': task_id, 'resolve_pending': True,
+            'pending_operation_id': pending['operation_id'], 'progress_update': 'Memory read back.'})
+        self.assertEqual(state, '成功', result)
+        self.assertIsNone(self.tasks.read()['pending_action'])
+        self.assertIsNone(self.tasks.begin_tool('append_file', 'lab/other.md'))
+
+    def test_marking_blocked_releases_an_unverifiable_pending_operation(self):
+        task_id = self.create()
+        self.assertEqual(self.tasks.before_tool('hold', 'Legacy title target', True,
+            {'title': 'Legacy title target', 'content': 'Fictional body.'}), (None, True))
+        self.tasks.finish_tool('hold', 'Legacy title target', '成功', '已保存。')
+        self.assertIn('status=blocked', self.tasks.begin_tool('append_file', 'lab/journal.md'))
+        result, state, _ = self.tasks.invoke('long_task_update', {
+            'action': 'update', 'task_id': task_id, 'status': 'blocked'})
+        self.assertEqual(state, '成功', result)
+        saved = self.tasks.read()
+        self.assertIsNone(saved['pending_action'])
+        self.assertEqual(saved['tool_events'][-1]['state'], '无法核实，已阻塞')
+        self.assertIn('unverifiable', self.tasks.status_text())
+        self.assertEqual(self.tasks.before_tool('append_file', 'lab/journal.md', True,
+            {'content': 'x'}), (None, False))
+        _, state, _ = self.tasks.invoke('long_task_update', {
+            'action': 'update', 'task_id': task_id, 'status': 'active'})
+        self.assertEqual(state, '成功')
+        self.assertEqual(self.tasks.before_tool('append_file', 'lab/journal.md', True,
+            {'content': 'x'}), (None, True))
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -636,7 +636,9 @@ class NativeMemoryTools:
             # this local index update.  Report the local failure without
             # inviting a duplicate hold.
             return 'The save was confirmed, but its local memory index could not be updated. Do not save it again; reopen the memory service before continuing.', '出错', summary
-        return ('已合并进已有记忆。' if kind == '合并' else '已保存。'), '成功', f'{kind}：{summary}'
+        memory_id = self.memory.created_id(text)
+        return (('已合并进已有记忆。' if kind == '合并' else '已保存。') + f' memory_id: {memory_id}',
+                '成功', f'{kind}：{summary}')
 
     def _search(self, args):
         query = args.get('query')
