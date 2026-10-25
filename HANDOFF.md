@@ -2,6 +2,7 @@
 
 ## 当前进度
 
+- 工单 118 在 `E:\Peter-Agent\VEIL\worktrees\118-more-autonomy`、分支 `ticket/118-more-autonomy` 实现中：配置已改为 90 分钟、12 次、20 步，运行上限 15 分钟；工具循环用配置值作为真实工具总数并为自主活动多留一个模型收尾轮次。一次性英文通知 `autonomy_more_room_announced` 已接入能力清单。自主活动、能力通知、工具策略/循环、多消息、长期任务和可靠性共 118 项通过（3 项跳过）；包含 20 个连续工具动作和第 21 轮仅收尾的覆盖。真实 Node 文件服务用例因本机服务未启动单独失败，未据此认定相关集成通过；尚需提交、推送、开 PR、审查与 CI。
 - 工单 115–118 文档已写（Claude）。施工顺序建议 118 → 115 → 116 → 117（116/117 依赖 115 的 `screen_pop`）。117 开工前必须先在 Lan 电脑上实测 Codex 会话文件里的完成、中止和等待审批/提问事件格式。龙胆（steve02081504/GentianAphrodite）是 CC BY-NC-ND，只借思路，不复制代码。
 - 工单 114（Claude）：`windows_interaction._needs_approval` 只对 invoke/toggle/select 且控件名含保存/发送/提交/发布/覆盖、或祖先是覆盖确认框时要审批；set_text 不再审批。`Hub.approval` 会调用每个 `AwayBridge.approval_asked`，只在该渠道的回合内把问题发出；`poll_once` 在已发问且 `hub.pending` 存在时把最后一行的同意/不同意交给 `hub.answer`。新模块 `desktop_files.py`（`desktop_create_file`，'xb' 独占创建，Known Folder 路径）。`desktop_access.register_input_tracker` / `program_input_made` 让 QQ `IdleClock` 与 `DesktopInputMonitor` 互认程序输入（只在 Windows 真时钟上注册）。`desktop_create_file` 不在长期任务 `SIDE_EFFECT_TOOLS` 里，避免再出现无法核实的待办卡死。
 - 工单 111 已通过 PR #157 合并为 `b64875d`；四项 Windows/Linux Python 3.11/3.12 CI 通过。Lan 的 Windows 实机观察验收仍待进行。
@@ -12,9 +13,8 @@
 
 ## 下一步
 
-1. 跟进 PR #158 的 CodeRabbit/Cubic 审查意见；仅对实质问题提交修复到同一分支。
-2. 等待 Lan 按工单步骤完成 Windows 实机验收，并与自动检查分开记录。
-3. PR 保持打开，等待 Lan 验收；不要自动合并。
+1. 提交并推送 `ticket/118-more-autonomy`，创建 PR，请求并处理实质审查，等待必需 CI。
+2. 门禁通过后按仓库当前规则合并；Windows 一天体验与自动检查分开记录。
 
 ## 仍适用的边界
 

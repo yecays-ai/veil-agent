@@ -2057,17 +2057,14 @@ class Chat:
             return display_detail, result_state
 
         configured_steps = (self.cfg.tools or {}).get('max_steps', 1)
-        max_steps = min(configured_steps, 12) if autonomy else configured_steps
+        autonomy_tool_limit = configured_steps
+        # Keep one final model turn after the last autonomous tool so Peter can
+        # leave the four-line handoff without sacrificing a usable tool step.
+        max_steps = configured_steps + 1 if autonomy else configured_steps
         for step in range(max_steps):
             self.long_tasks.set_tool_step(step)
-            if autonomy and autonomy_tool_steps >= 12:
+            if autonomy and autonomy_tool_steps >= autonomy_tool_limit:
                 self.autonomy_step_limited = True
-                final = 'Autonomous activity reached the 12-tool-step limit for this run.'
-                if next_reservation:
-                    pending_cfg = self.cfg if step == max_steps - 1 else replace(
-                        self.cfg, max_output_tokens=self.cfg.tools.get('max_output_tokens', self.cfg.max_output_tokens))
-                    self.budget.settle(next_reservation, pending_cfg, 0, 0, 0)
-                break
             if autonomy and self.autonomy_should_yield and self.autonomy_should_yield():
                 self.autonomy_interrupted = True
                 final = 'Autonomous activity stopped before this tool step.'
@@ -2175,9 +2172,9 @@ class Chat:
                 voice_warnings = []
                 successful_sends = 0
                 for call_index, call in enumerate(message.tool_calls):
-                    if autonomy and autonomy_tool_steps >= 12:
+                    if autonomy and autonomy_tool_steps >= autonomy_tool_limit:
                         self.autonomy_step_limited = True
-                        final = 'Autonomous activity reached the 12-tool-step limit for this run.'
+                        final = f'Autonomous activity reached the {autonomy_tool_limit}-tool-step limit for this run.'
                         break
                     if autonomy and self.autonomy_interrupted:
                         final = 'Autonomous activity yielded to let chat or a control action proceed.'
@@ -2281,9 +2278,9 @@ class Chat:
                     self.tool_stop_reason = final
                     break
                 for call_index, call in enumerate(message.tool_calls):
-                    if autonomy and autonomy_tool_steps >= 12:
+                    if autonomy and autonomy_tool_steps >= autonomy_tool_limit:
                         self.autonomy_step_limited = True
-                        final = 'Autonomous activity reached the 12-tool-step limit for this run.'
+                        final = f'Autonomous activity reached the {autonomy_tool_limit}-tool-step limit for this run.'
                         self.budget.settle(next_reservation, next_cfg, 0, 0, 0)
                         break
                     if autonomy:

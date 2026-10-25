@@ -114,6 +114,19 @@ class CapabilityTransactionTests(unittest.TestCase):
         self.assertIsNone(reopened.capability_event)
         self.assertTrue(self.read()['next_wake_announced'])
 
+    def test_more_autonomy_notice_is_saved_once_and_survives_reopen(self):
+        self.manager.announce_autonomy_more_room()
+        row = self.read()
+        self.assertTrue(row['autonomy_more_room_announced'])
+        self.assertIn('12 wakes per day', row['pending_event'])
+        self.assertIn('20 tool steps', row['pending_event'])
+        reopened = self.open_manager()
+        reopened._record_capabilities(['read_text_file'])
+        self.assertIn('20 tool steps', reopened.capability_event)
+        reopened.consume_capability_event()
+        reopened.announce_autonomy_more_room()
+        self.assertIsNone(reopened.capability_event)
+
     def test_web_activity_toggle_and_chat_notice_do_not_deadlock(self):
         activity = ActivityState(self.store.root / 'fictional' / 'activity.json')
         hub = Hub('Example', activity)

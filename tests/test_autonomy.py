@@ -1,5 +1,6 @@
 import json
 import tempfile
+import tomllib
 import unittest
 from datetime import datetime, timedelta
 from dataclasses import replace
@@ -8,7 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from autonomy import AutonomyController
+from autonomy import MAX_RUNTIME_SECONDS, AutonomyController
 from veil_agent import ActivityState, Budget, BudgetExceeded, Chat, RequestFailed, Store, UserError, load_character
 from web_agent import Hub
 
@@ -57,6 +58,16 @@ daily_budget_cny = "2"
             '决定：发消息告诉 lan\n原因：想分享实验室进展。\n当前关注：实验室整理\n下一步：等 lan 回复。'))
         model = Mock(side_effect=[(first, 100, 30, 0), (final, 100, 20, 0)])
         return Chat(cfg, self.store, self.budget, model, output=self.hub.output), model
+
+    def test_peter_config_has_the_selected_autonomy_limits(self):
+        path = Path(__file__).resolve().parents[1] / 'characters' / 'peter' / 'character.toml'
+        with path.open('rb') as handle:
+            peter = tomllib.load(handle)
+        self.assertEqual(peter['autonomy']['interval_minutes'], 90)
+        self.assertEqual(peter['autonomy']['daily_max_runs'], 12)
+        self.assertEqual(Decimal(peter['autonomy']['daily_budget_cny']), Decimal('2'))
+        self.assertEqual(peter['autonomy']['min_alarm_gap_minutes'], 60)
+        self.assertEqual(peter['tools']['max_steps'], 20)
 
     @staticmethod
     def message_call(call_id, text):
@@ -131,6 +142,39 @@ daily_budget_cny = "2"
         self.assertEqual([row['tool'] for row in self.store.read('test/tools.jsonl') if row.get('state') != '进行中'],
                          ['send_message', 'read_text_file'])
         self.assertEqual(len(self.hub.snapshot(0)['events']), 1)
+
+    def test_configured_autonomy_limit_allows_twenty_real_tool_steps(self):
+        self.activity.set(True)
+        cfg = replace(self.cfg, tools={'enabled': True, 'max_steps': 20, 'max_output_tokens': 50})
+        responses = []
+        for index in range(20):
+            call = SimpleNamespace(id=f'read-{index}', function=SimpleNamespace(
+                name='read_text_file', arguments=json.dumps({'path': 'lab/note.md'})))
+            message = SimpleNamespace(tool_calls=[call], content=None,
+                                      model_dump=lambda **_: {'role': 'assistant', 'tool_calls': []})
+            responses.append((message, 10, 5, 0))
+        final = SimpleNamespace(tool_calls=[], content=(
+            'Decision: stop at the configured limit\nReason: twenty steps ran\n'
+            'Focus: fixture\nNext step: continue next wake'))
+        responses.append((final, 10, 5, 0))
+        model = Mock(side_effect=responses)
+        tools = SimpleNamespace(
+            tools=[SimpleNamespace(name='read_text_file', description='Read.', inputSchema={})],
+            capability_event=None, capability_event_model=None,
+            description='Authorized tools are available. ',
+            preview_summary=Mock(return_value='lab/note.md'),
+            invoke=Mock(return_value=('ok', '成功', 'lab/note.md')))
+        chat = Chat(cfg, self.store, self.budget, model, tools=tools, output=lambda *_: None)
+        controller = AutonomyController(chat, self.hub)
+
+        controller.run()
+
+        self.assertEqual(tools.invoke.call_count, 20)
+        self.assertEqual(model.call_count, 21)
+        self.assertEqual(controller.rows[-1]['result'], '搁置')
+        self.assertIn('20', controller.rows[-1]['result_reason'])
+        self.assertNotIn('12', controller.rows[-1]['result_reason'])
+        self.assertEqual(MAX_RUNTIME_SECONDS, 15 * 60)
 
     def test_autonomous_message_gate_and_recovery_never_duplicate_a_saved_call(self):
         chat, model = self.autonomous_message_chat([])

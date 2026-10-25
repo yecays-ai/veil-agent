@@ -575,6 +575,19 @@ class FilesystemTools:
             raise UserError('能力清单无法更新，定时唤醒工具已停止；请保留 data 文件夹。') from exc
 
     @capability_transaction
+    def announce_autonomy_more_room(self):
+        if getattr(self, 'cap_path', None) is None:
+            return
+        try:
+            self._announce_once(
+                'autonomy_more_room_announced',
+                'Capability update: autonomous activity now allows up to 12 wakes per day and up to 20 tool steps '
+                'per wake. The existing daily autonomy budget still applies.')
+        except Exception as exc:
+            self.enabled = False
+            raise UserError('能力清单无法更新，自主活动已停止；请保留 data 文件夹。') from exc
+
+    @capability_transaction
     def announce_long_tasks(self):
         if getattr(self, 'cap_path', None) is None:
             return

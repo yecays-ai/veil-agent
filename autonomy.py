@@ -9,7 +9,7 @@ import uuid
 from agent_types import AUTONOMY_WAKE, BudgetExceeded, RequestFailed, TooLong, UserError, now
 
 
-MAX_RUNTIME_SECONDS = 10 * 60
+MAX_RUNTIME_SECONDS = 15 * 60
 MAX_CONTEXT_BYTES = 12 * 1024
 MAX_CHAT_CONTEXT_BYTES = 1500
 MAX_ALARM_DAYS = 7
@@ -177,6 +177,7 @@ class AutonomyController:
         self.deadline = None
         self.claimed_wake_reason = None
         self.announce_next_wake()
+        self.announce_more_room()
 
     def _validate_rows(self):
         required = ('started_at', 'finished_at', 'decision', 'reason', 'tools',
@@ -449,6 +450,15 @@ class AutonomyController:
             event = getattr(self.chat.tools, 'capability_event_model', None)
             self.chat.pending_capability_event_model = event if isinstance(event, str) else None
 
+    def announce_more_room(self):
+        files = getattr(self.chat.tools, 'files', self.chat.tools)
+        announce = getattr(files, 'announce_autonomy_more_room', None)
+        if announce:
+            announce()
+            self.chat.pending_capability_event = getattr(self.chat.tools, 'capability_event', None)
+            event = getattr(self.chat.tools, 'capability_event_model', None)
+            self.chat.pending_capability_event_model = event if isinstance(event, str) else None
+
     def announce_autonomy(self):
         announce = getattr(self.chat.tools, 'announce_autonomy', None)
         if announce:
@@ -614,7 +624,7 @@ class AutonomyController:
                                            ('write_file', 'append_file', 'create_directory', 'move_lab_file')]
             if time.monotonic() >= self.deadline:
                 record['result'] = '失败'
-                record['result_reason'] = '达到每次 10 分钟的硬时限。'
+                record['result_reason'] = f'达到每次 {MAX_RUNTIME_SECONDS // 60} 分钟的硬时限。'
             elif self.chat.autonomy_interrupted:
                 record['result'] = '被打断'
                 record['result_reason'] = '在当前工具步骤后让位给聊天、暂停或服务退出。'
@@ -623,7 +633,8 @@ class AutonomyController:
                 record['result_reason'] = '后台预算池或程序总预算已到上限；正常聊天仍可继续。'
             elif self.chat.autonomy_step_limited:
                 record['result'] = '搁置'
-                record['result_reason'] = '达到每次 12 个工具步骤的硬上限。'
+                limit = (self.chat.cfg.tools or {}).get('max_steps', 1)
+                record['result_reason'] = f'达到每次 {limit} 个工具步骤的硬上限。'
             elif self.should_yield() and not self.activity.enabled():
                 record['result'] = '被打断'
                 record['result_reason'] = '自主活动已暂停。'

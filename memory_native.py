@@ -723,6 +723,11 @@ class ToolSet:
     def announce_autonomy(self):
         self.files.announce_autonomy()
 
+    def announce_autonomy_more_room(self):
+        announce = getattr(self.files, 'announce_autonomy_more_room', None)
+        if announce:
+            announce()
+
     def announce_long_tasks(self):
         announce = getattr(self.files, 'announce_long_tasks', None)
         if announce:
