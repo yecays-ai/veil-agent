@@ -8,10 +8,13 @@ const { connect, validRoot, readEndpoint } = require('./backend.cjs');
 
 let pet, chat, menu, connecting = false, quitting = false, drag, petResize, agentEndpoint, saveTimer, saveChain = Promise.resolve();
 const detachedWindows = new Map(), mergingViews = new Set();
+const screenPopWindows = new Map(), screenPopInFlight = new Set();
+let screenPopPollTimer = null, screenPopPolling = false, quitFlushStarted = false;
 const VIEW_NAMES = new Set(['chat', 'activity', 'memory', 'more']);
 const settings = { size: 320, theme: 'light' };
 const petURL = pathToFileURL(path.join(__dirname, 'pet.html')).href;
 const chatURL = pathToFileURL(path.join(__dirname, 'chat.html')).href;
+const screenPopURL = pathToFileURL(path.join(__dirname, 'screen-pop.html')).href;
 const viewURL = view => `${chatURL}?view=${view}&detached=1`;
 const menuURL = pathToFileURL(path.join(__dirname, 'menu.html')).href;
 function canRequestChatMedia(contents, permission, details, currentChat = chat) {
@@ -249,6 +252,204 @@ async function endpointRequest(pathname, method = 'GET', body) {
   }, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(5000) });
   const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(data.error || '请求失败'); return data;
 }
+function screenPopWindow(bounds, type, name) {
+  const win = new BrowserWindow({ ...bounds, frame: false, transparent: true,
+    backgroundColor: '#00000000', resizable: false, movable: false,
+    minimizable: false, maximizable: false, hasShadow: false,
+    alwaysOnTop: true, skipTaskbar: true, focusable: type === 'popup',
+    fullscreenable: false, show: false, title: name || 'Peter',
+    webPreferences: { preload: path.join(__dirname, 'screen-pop-preload.cjs'),
+      contextIsolation: true, nodeIntegration: false, sandbox: true } });
+  safeContents(win, url => url === screenPopURL);
+  win.setAlwaysOnTop(true, 'screen-saver');
+  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  if (type === 'danmaku') win.setIgnoreMouseEvents(true, { forward: true });
+  return win;
+}
+async function postScreenPopEvent(record, event, item, total) {
+  const body = { id: record.id, event };
+  if (event === 'shown') Object.assign(body, { style: record.type, total });
+  else body.item = item;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try { await endpointRequest('/api/screen-pop/event', 'POST', body); return true; }
+    catch {
+      if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 150 * (2 ** attempt)));
+    }
+  }
+  return false;
+}
+function forgetScreenPop(record) {
+  if (screenPopWindows.get(record.id) === record) screenPopWindows.delete(record.id);
+}
+function suppressAndCloseScreenPop(record) {
+  record.suppress = true;
+  for (const item of record.windows) if (!item.window.isDestroyed()) item.window.destroy();
+  forgetScreenPop(record);
+}
+function screenPopWindowClosed(record, index) {
+  if (record.suppress || !record.acknowledged || record.type !== 'popup' || record.dismissed.has(index)) return;
+  if (record.dismissalInFlight.has(index)) return;
+  record.dismissalInFlight.add(index);
+  void postScreenPopEvent(record, 'dismissed', index).then(ok => {
+    if (ok) {
+      record.dismissed.add(index);
+      if (record.dismissed.size >= record.total) forgetScreenPop(record);
+    } else if (!record.suppress && !quitting) {
+      setTimeout(() => screenPopWindowClosed(record, index), 1000);
+    }
+  }).finally(() => record.dismissalInFlight.delete(index));
+}
+async function prepareScreenPopWindow(record, win, payload, index) {
+  const item = { window: win, index, readyResolve: null };
+  item.ready = new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('screen-pop renderer did not become ready')), 5000);
+    item.readyResolve = () => { clearTimeout(timeout); resolve(); };
+    win.once('closed', () => { clearTimeout(timeout); reject(new Error('screen-pop window closed before rendering')); });
+  });
+  record.windows.push(item);
+  win.on('closed', () => screenPopWindowClosed(record, index));
+  await win.loadURL(screenPopURL);
+  win.webContents.send('screen-pop:payload', { ...payload, type: record.type });
+  await item.ready;
+}
+async function showScreenPop(popId) {
+  if (screenPopInFlight.has(popId)) return;
+  screenPopInFlight.add(popId);
+  let record;
+  try {
+    const claimed = await endpointRequest('/api/screen-pop/claim', 'POST', { id: popId });
+    const command = claimed?.command;
+    if (!command || command.id !== popId || typeof command.text !== 'string' ||
+        command.text.length < 1 || command.text.length > 500 || Buffer.byteLength(command.text, 'utf8') > 2000 ||
+        !['popup', 'danmaku'].includes(command.style) ||
+        typeof command.name !== 'string' || command.name.length > 100 ||
+        !/^#[0-9a-f]{6}$/i.test(command.color || '') ||
+        !['scroll', 'fade', 'bounce'].includes(command.animation) ||
+        !['top', 'center', 'bottom'].includes(command.position) ||
+        !Number.isInteger(command.duration) || command.duration < 1 || command.duration > 20) return;
+    if (command.style === 'popup' && (!Number.isInteger(command.count) || command.count < 1 || command.count > 10)) return;
+    if (process.platform !== 'win32') return;
+    record = { id: popId, type: command.style, total: command.style === 'popup' ? command.count : 0,
+      windows: [], dismissed: new Set(), dismissalInFlight: new Set(),
+      finished: new Set(), finishedInFlight: new Set(), acknowledged: false, suppress: false };
+    screenPopWindows.set(popId, record);
+    if (command.style === 'popup') {
+      const area = screen.getPrimaryDisplay().workArea;
+      const width = Math.min(520, area.width), height = Math.min(270, area.height);
+      const step = 24, firstX = area.x + Math.floor((area.width - width - step * (command.count - 1)) / 2);
+      const firstY = area.y + Math.floor((area.height - height - step * (command.count - 1)) / 2);
+      const wins = Array.from({ length: command.count }, (_, index) => {
+        const x = Math.max(area.x, Math.min(firstX + step * index, area.x + area.width - width));
+        const y = Math.max(area.y, Math.min(firstY + step * index, area.y + area.height - height));
+        return { index: index + 1, window: screenPopWindow({ x, y, width, height }, 'popup', command.name) };
+      });
+      await Promise.all(wins.map(item => prepareScreenPopWindow(record, item.window, command, item.index)));
+      for (const item of record.windows) item.window.showInactive();
+      if (!await postScreenPopEvent(record, 'shown', undefined, record.total)) {
+        suppressAndCloseScreenPop(record); return;
+      }
+      record.acknowledged = true;
+      for (const item of record.windows) item.window.webContents.send('screen-pop:start');
+      return;
+    }
+    const displays = screen.getAllDisplays();
+    if (!displays.length || displays.length > 32) { suppressAndCloseScreenPop(record); return; }
+    record.total = displays.length;
+    const wins = displays.map((display, index) => ({
+      index: index + 1,
+      window: screenPopWindow(display.bounds, 'danmaku', command.name),
+    }));
+    await Promise.all(wins.map(item => prepareScreenPopWindow(record, item.window, command, item.index)));
+    for (const item of record.windows) item.window.showInactive();
+    if (!await postScreenPopEvent(record, 'shown', undefined, record.total)) {
+      suppressAndCloseScreenPop(record); return;
+    }
+    record.acknowledged = true;
+    for (const item of record.windows) item.window.webContents.send('screen-pop:start');
+  } catch {
+    if (record) suppressAndCloseScreenPop(record);
+  } finally {
+    screenPopInFlight.delete(popId);
+  }
+}
+function screenPopRecordFor(event) {
+  for (const record of screenPopWindows.values()) {
+    for (const item of record.windows) {
+      if (item.window && !item.window.isDestroyed() && item.window.webContents === event.sender &&
+          event.senderFrame?.url === screenPopURL) return { record, item };
+    }
+  }
+  return null;
+}
+ipcMain.on('screen-pop:dismiss', event => {
+  const found = screenPopRecordFor(event);
+  if (found?.record.type === 'popup' && found.record.acknowledged) found.item.window.close();
+});
+ipcMain.on('screen-pop:ready', event => {
+  const found = screenPopRecordFor(event);
+  if (found?.item.readyResolve) {
+    const resolve = found.item.readyResolve;
+    found.item.readyResolve = null;
+    resolve();
+  }
+});
+function recordScreenPopFinished(record, item) {
+  if (record.suppress || record.finished.has(item.index) || record.finishedInFlight.has(item.index)) return;
+  record.finishedInFlight.add(item.index);
+  void postScreenPopEvent(record, 'finished', item.index).then(ok => {
+    if (ok) {
+      record.finished.add(item.index);
+      if (!item.window.isDestroyed()) item.window.close();
+      if (record.finished.size >= record.total) forgetScreenPop(record);
+    } else if (!record.suppress && !quitting) {
+      setTimeout(() => recordScreenPopFinished(record, item), 1000);
+    }
+  }).finally(() => record.finishedInFlight.delete(item.index));
+}
+ipcMain.on('screen-pop:finished', event => {
+  const found = screenPopRecordFor(event);
+  if (!found || found.record.type !== 'danmaku' || !found.record.acknowledged ||
+      found.record.finished.has(found.item.index)) return;
+  recordScreenPopFinished(found.record, found.item);
+});
+async function discoverRunningAgentForScreenPop() {
+  if (agentEndpoint || quitting) return;
+  const adjacent = app.isPackaged
+    ? path.resolve(path.dirname(process.execPath), '..', '..', '..', 'veil-agent')
+    : path.resolve(__dirname, '..', 'veil-agent');
+  const root = settings.root || adjacent;
+  if (!await validRoot(root)) return;
+  agentEndpoint = await readEndpoint(root, { requireReady: false });
+}
+async function pollScreenPop() {
+  if (screenPopPolling || quitting) return;
+  screenPopPolling = true;
+  try {
+    if (!agentEndpoint) await discoverRunningAgentForScreenPop();
+    if (!agentEndpoint) return;
+    const result = await endpointRequest('/api/screen-pop/next');
+    for (const command of Array.isArray(result.commands) ? result.commands : []) {
+      if (command && typeof command.id === 'string') void showScreenPop(command.id);
+    }
+  } catch { agentEndpoint = null; }
+  finally { screenPopPolling = false; }
+}
+function startScreenPopPolling() {
+  if (screenPopPollTimer) clearInterval(screenPopPollTimer);
+  screenPopPollTimer = setInterval(() => { void pollScreenPop(); }, 500);
+  void pollScreenPop();
+}
+async function flushScreenPopWindows() {
+  const records = [...screenPopWindows.values()];
+  await Promise.all(records.map(async record => {
+    if (record.type === 'popup' && record.acknowledged) {
+      await Promise.all(record.windows.filter(item => !record.dismissed.has(item.index)).map(async item => {
+        if (await postScreenPopEvent(record, 'dismissed', item.index)) record.dismissed.add(item.index);
+      }));
+    }
+    suppressAndCloseScreenPop(record);
+  }));
+}
 const fromPet = event => pet && !pet.isDestroyed() && event.sender === pet.webContents && event.senderFrame?.url === petURL;
 const fromChat = event => chat && !chat.isDestroyed() && event.sender === chat.webContents && event.senderFrame?.url === chatURL;
 function detachedViewFromEvent(event) {
@@ -480,6 +681,7 @@ ipcMain.on('menu:action', async (event, action, value) => {
     if (quitting) return;
     quitting = true;
     try {
+      await flushScreenPopWindows();
       if (!agentEndpoint) {
         const root = settings.root || (app.isPackaged
           ? path.resolve(path.dirname(process.execPath), '..', '..', '..')
@@ -523,7 +725,16 @@ else {
     session.defaultSession.setPermissionCheckHandler((contents, permission, _origin, details) =>
       canCheckChatMedia(contents, permission, details));
     createPet();
+    startScreenPopPolling();
   });
-  app.on('before-quit', () => { quitting = true; }); app.on('window-all-closed', () => app.quit());
+  app.on('before-quit', event => {
+    quitting = true;
+    if (screenPopPollTimer) clearInterval(screenPopPollTimer);
+    if (quitFlushStarted || !screenPopWindows.size) return;
+    event.preventDefault();
+    quitFlushStarted = true;
+    void flushScreenPopWindows().finally(() => app.quit());
+  });
+  app.on('window-all-closed', () => app.quit());
 }
 module.exports = { canRequestChatMedia, canCheckChatMedia };
