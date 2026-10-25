@@ -29,6 +29,7 @@ MAX_TREE_DEPTH = 8
 MAX_WINDOW_TITLE = 180
 MAX_CONTROL_TEXT = 1200
 MAX_RESULT_BYTES = 8192
+MAX_TEXT_CHARS = 4000
 MAX_SCREENSHOT_BYTES = 5 * 1024 * 1024
 MAX_CAPTURE_PIXELS = 8_000_000
 OBSERVATION_TIMEOUT_SECONDS = 8
@@ -89,7 +90,9 @@ WINDOW_TOOL_SCHEMAS = [
         description=(
             'Read one currently open window by its exact window_id from windows_list or '
             'windows_foreground. Returns bounded UI Automation control names, types, text, and '
-            'read-only states such as enabled/selected. visual_fallback defaults to auto: if UIA '
+            'read-only states such as enabled/selected, plus fresh control_id values and supported '
+            'UIA patterns. Use only those returned control_id values with windows_control_action; '
+            'they are short-lived and will be refused after the UI tree changes. visual_fallback defaults to auto: if UIA '
             'is empty or sparse, a screenshot of this target window is attached to the next model '
             'request. Use force only when the UIA result is unclear; use never to skip the image. '
             'The screenshot is taken without activating the window and is immediately '
@@ -165,6 +168,47 @@ def _is_veil_window(window):
         process == 'electron.exe' and (title.startswith('VEIL') or title.startswith('Peter 菜单')))
 
 
+def _control_identity(window_id, control, path):
+    """Return a fresh control token bound to a window and its current UIA element."""
+    try:
+        automation_id = _text(control.AutomationId, 160)
+    except Exception:
+        automation_id = ''
+    try:
+        runtime_id = list(control.GetRuntimeId())
+    except Exception:
+        runtime_id = []
+    try:
+        kind = str(control.ControlTypeName or '')
+    except Exception:
+        kind = ''
+    try:
+        name = _text(control.Name, 240)
+    except Exception:
+        name = ''
+    key = json.dumps([window_id, list(path), runtime_id, automation_id, kind, name],
+                     ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+    return 'c-' + hashlib.sha256(key).hexdigest()[:24]
+
+
+def _control_patterns(control):
+    patterns = (
+        ('invoke', 'GetInvokePattern'),
+        ('select', 'GetSelectionItemPattern'),
+        ('toggle', 'GetTogglePattern'),
+        ('expand-collapse', 'GetExpandCollapsePattern'),
+        ('value', 'GetValuePattern'),
+    )
+    found = []
+    for label, method_name in patterns:
+        try:
+            if getattr(control, method_name)():
+                found.append(label)
+        except Exception:
+            continue
+    return found
+
+
 def capture_looks_blank(colors):
     """Return True when sampled ARGB pixels are (nearly) one flat colour.
 
@@ -222,10 +266,11 @@ class WindowsObservationTools:
     """Bounded Windows-only tools exposed through VEIL's existing tool loop."""
 
     def __init__(self, enabled, max_result_bytes=8192, *, backend=None, platform_enabled=None,
-                 timeout_seconds=OBSERVATION_TIMEOUT_SECONDS):
+                 timeout_seconds=OBSERVATION_TIMEOUT_SECONDS, application_id_for=None):
         self.enabled = enabled is True
         self.platform_enabled = (os.name == 'nt') if platform_enabled is None else bool(platform_enabled)
         self.backend = backend or WindowsDesktopBackend()
+        self.application_id_for = application_id_for
         self.max_result_bytes = max(512, min(int(max_result_bytes), MAX_RESULT_BYTES))
         self.timeout_seconds = max(1, min(int(timeout_seconds), OBSERVATION_TIMEOUT_SECONDS))
         self.tools = list(WINDOW_TOOL_SCHEMAS) if self.enabled and self.platform_enabled else []
@@ -358,14 +403,24 @@ class WindowsObservationTools:
             }
         if name == 'windows_list':
             limited = safe_windows[:MAX_WINDOWS]
-            result = {
-                'windows': [{
+            rows = []
+            for item in limited:
+                row = {
                     'window_id': item['id'],
                     'application': _text(item.get('app') or item.get('process') or 'application', 80),
                     'process': _text(item.get('process'), 100),
                     'title': _text(item.get('title'), MAX_WINDOW_TITLE),
                     'state': _text(item.get('state'), 80),
-                } for item in limited],
+                }
+                try:
+                    app_id = self.application_id_for(item) if self.application_id_for else None
+                except Exception:
+                    app_id = None
+                if app_id:
+                    row['app_id'] = _text(app_id, 40)
+                rows.append(row)
+            result = {
+                'windows': rows,
                 'truncated': len(safe_windows) > MAX_WINDOWS,
             }
             return self._success(result, f'已列出 {len(limited)} 个普通应用窗口。', '已列出普通应用窗口。'), '成功', 'open application windows'
@@ -720,10 +775,10 @@ class WindowsDesktopBackend:
                 root = auto.ControlFromHandle(current['handle'])
                 if not root:
                     raise ObservationError('The selected window no longer has a readable UI Automation root.')
-                pending = [(root, 0)]
+                pending = [(root, 0, (), None)]
                 while pending and count < MAX_CONTROLS:
                     self._cancelled(stopped)
-                    control, depth = pending.pop()
+                    control, depth, path, parent_type = pending.pop()
                     count += 1
                     try:
                         kind = str(control.ControlTypeName or '')
@@ -736,13 +791,21 @@ class WindowsDesktopBackend:
                             except Exception as exc:
                                 raise ObservationError('An input field could not be checked safely.') from exc
                         name = _text(control.Name, 240)
-                        if name and SENSITIVE_LABEL.search(name):
+                        try:
+                            automation_id = _text(control.AutomationId, 160)
+                        except Exception:
+                            automation_id = ''
+                        if ((name and SENSITIVE_LABEL.search(name))
+                                or (automation_id and SENSITIVE_LABEL.search(automation_id))):
                             raise ProtectedWindow('A protected security or credential label was detected.')
                         offscreen = bool(control.IsOffscreen)
                         if not offscreen:
                             item = {
+                                'control_id': _control_identity(current['id'], control, path),
                                 'type': kind[:80],
                                 'name': name,
+                                'automation_id': automation_id,
+                                'parent_type': parent_type,
                                 'enabled': bool(control.IsEnabled),
                                 'offscreen': False,
                             }
@@ -765,6 +828,7 @@ class WindowsDesktopBackend:
                             value = self._control_value(control, kind)
                             if value:
                                 item['value'] = _text(value, MAX_CONTROL_TEXT)
+                            item['patterns'] = _control_patterns(control)
                             if kind in ('CheckBoxControl', 'RadioButtonControl'):
                                 try:
                                     pattern = control.GetTogglePattern()
@@ -782,9 +846,10 @@ class WindowsDesktopBackend:
                                 children = control.GetChildren()
                             except Exception:
                                 children = []
-                            for child in reversed(children):
+                            for child_index in range(len(children) - 1, -1, -1):
                                 if len(pending) + count < MAX_CONTROLS:
-                                    pending.append((child, depth + 1))
+                                    pending.append((children[child_index], depth + 1,
+                                                    path + (child_index,), kind))
                     except (ProtectedWindow, ObservationPaused, ObservationError):
                         raise
                     except Exception:

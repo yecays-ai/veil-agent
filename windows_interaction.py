@@ -1,0 +1,942 @@
+"""Whitelisted, bounded Windows desktop interaction through UI Automation."""
+import ctypes
+import fnmatch
+import hashlib
+import json
+import ntpath
+import os
+import queue
+import re
+import subprocess
+import threading
+import time
+import tomllib
+from pathlib import Path
+from types import SimpleNamespace
+
+from desktop_access import DesktopBusy, desktop_access
+from windows_observer import (
+    MAX_CONTROLS,
+    MAX_RESULT_BYTES,
+    MAX_TEXT_CHARS,
+    SENSITIVE_LABEL,
+    WINDOWS_OBSERVATION_TOOL_NAMES,
+    ObservationError,
+    ObservationPaused,
+    ProtectedWindow,
+    WindowsDesktopBackend,
+    WindowsToolResult,
+    _control_identity,
+    _control_patterns,
+    _text,
+)
+
+
+WINDOWS_INTERACTION_TOOL_NAMES = frozenset({
+    'windows_launch', 'windows_manage', 'windows_control_action',
+})
+WINDOWS_DESKTOP_TOOL_NAMES = WINDOWS_OBSERVATION_TOOL_NAMES | WINDOWS_INTERACTION_TOOL_NAMES
+
+WINDOWS_INTERACTION_TOOL_SCHEMAS = [
+    SimpleNamespace(
+        name='windows_launch',
+        description=(
+            'Launch one application by its exact app_id from the program allowlist. The program '
+            'checks the configured executable path and the resulting window process path. If that '
+            'application is already running, it reuses one exact identified window; if several '
+            'windows are open and none is clearly foreground, it stops and returns their window_ids. '
+            'No shell, command string, or arbitrary executable path is accepted.'
+        ),
+        inputSchema={'type': 'object', 'properties': {
+            'app_id': {'type': 'string', 'description': 'Exact id from the Windows application allowlist.'},
+        }, 'required': ['app_id'], 'additionalProperties': False},
+    ),
+    SimpleNamespace(
+        name='windows_manage',
+        description=(
+            'Activate, minimize, or restore one allowlisted application window by its exact '
+            'window_id from windows_list/windows_foreground. The program rechecks the handle, '
+            'process path, process start time, app allowlist, recent human input, and resulting '
+            'window state before reporting success. It never selects by title.'
+        ),
+        inputSchema={'type': 'object', 'properties': {
+            'app_id': {'type': 'string'},
+            'window_id': {'type': 'string', 'description': 'Exact current window_id.'},
+            'action': {'type': 'string', 'enum': ['activate', 'minimize', 'restore']},
+        }, 'required': ['app_id', 'window_id', 'action'], 'additionalProperties': False},
+    ),
+    SimpleNamespace(
+        name='windows_control_action',
+        description=(
+            'Perform exactly one UI Automation action on a control_id returned by a fresh '
+            'windows_observe result for the same window_id. Supported actions are invoke, select, '
+            'toggle, expand, collapse, and set_text. The program re-resolves the exact UIA element '
+            'and checks its type, state, password/sensitive labels, app identity, desktop lock, and '
+            'recent human input before acting. Invoke, toggle, and text edits require Lan approval; '
+            'save/send/submit actions require explicit approval, while delete/install/purchase and '
+            'administrator/security actions are refused. Text content is never written to the '
+            'activity ledger. One action only; observe again before continuing.'
+        ),
+        inputSchema={'type': 'object', 'properties': {
+            'app_id': {'type': 'string'},
+            'window_id': {'type': 'string', 'description': 'Exact current window_id.'},
+            'control_id': {'type': 'string', 'description': 'Exact control_id from a fresh windows_observe result.'},
+            'action': {'type': 'string', 'enum': [
+                'invoke', 'select', 'toggle', 'expand', 'collapse', 'set_text',
+            ]},
+            'text': {'type': 'string', 'description': 'Required only for set_text; replaces the complete value.'},
+        }, 'required': ['app_id', 'window_id', 'control_id', 'action'],
+            'additionalProperties': False},
+    ),
+]
+
+_APP_ID = re.compile(r'^[a-z][a-z0-9_-]{0,31}$')
+_WINDOW_ID = re.compile(r'^w-[0-9a-f]{24}$')
+_CONTROL_ID = re.compile(r'^c-[0-9a-f]{24}$')
+_ALLOWED_ACTIONS = frozenset({
+    'activate', 'minimize', 'restore', 'invoke', 'select', 'toggle',
+    'expand', 'collapse', 'set_text',
+})
+_BLOCKED_CONTROL = re.compile(
+    r'(?<![a-z0-9])(?:delete|remove|uninstall|install|purchase|buy|checkout|'
+    r'administrator|run as admin|elevate|uac|删除|卸载|安装|购买|付款|管理员|权限提升)(?![a-z0-9])',
+    re.IGNORECASE,
+)
+_CONFIRM_ACTIONS = frozenset({'invoke', 'toggle', 'set_text'})
+_IDLE_TICK_MARGIN_MS = 35
+MAX_KEYBOARD_FALLBACK_CHARS = 200
+
+
+class InteractionError(RuntimeError):
+    pass
+
+
+class InteractionPaused(InteractionError):
+    pass
+
+
+class HumanTookOver(InteractionError):
+    pass
+
+
+class InteractionUncertain(InteractionError):
+    pass
+
+
+def _expand_windows_path(value, env=None, *, allow_wildcards=False):
+    if not isinstance(value, str) or not value.strip() or '\x00' in value:
+        raise ValueError('Windows application paths must be non-empty strings.')
+    values = os.environ if env is None else env
+
+    def replace(match):
+        key = match.group(1)
+        if key.casefold() not in {'systemroot', 'programfiles', 'programfiles(x86)', 'localappdata'}:
+            raise ValueError('Only standard Windows installation path variables are allowed.')
+        resolved = next((v for k, v in values.items() if k.casefold() == key.casefold()), None)
+        if not resolved:
+            raise ValueError(f'Windows path variable %{key}% is unavailable.')
+        return resolved
+
+    expanded = re.sub(r'%([^%]+)%', replace, value.strip())
+    if '%' in expanded or not ntpath.isabs(expanded):
+        raise ValueError('Allowlisted application paths must resolve to absolute Windows paths.')
+    parts = ntpath.splitdrive(expanded)[1].replace('/', '\\').split('\\')
+    if '..' in parts:
+        raise ValueError('Parent-directory segments are not allowed in application paths.')
+    normalized = ntpath.normpath(expanded)
+    if not allow_wildcards and any(char in normalized for char in '*?[]'):
+        raise ValueError('Launch paths must identify one executable, not a wildcard.')
+    return ntpath.normcase(normalized)
+
+
+def validate_applications(applications):
+    if not isinstance(applications, dict) or not applications:
+        raise ValueError('At least one explicitly allowlisted Windows application is required.')
+    result = {}
+    for app_id, item in applications.items():
+        if not isinstance(app_id, str) or not _APP_ID.fullmatch(app_id) or not isinstance(item, dict):
+            raise ValueError('Windows application entries need a safe lowercase app id and a table.')
+        label, launch_path = item.get('label'), item.get('launch_path')
+        if not isinstance(label, str) or not label.strip() or len(label) > 100:
+            raise ValueError(f'{app_id} needs a short display label.')
+        launch = _expand_windows_path(launch_path)
+        if ntpath.splitext(launch)[1].casefold() != '.exe':
+            raise ValueError(f'{app_id} launch_path must point to one .exe file.')
+        process_paths = item.get('process_paths')
+        if (not isinstance(process_paths, list) or not process_paths
+                or any(not isinstance(path, str) for path in process_paths)):
+            raise ValueError(f'{app_id} needs one or more process_paths identity patterns.')
+        identities = [_expand_windows_path(path, allow_wildcards=True) for path in process_paths]
+        actions = item.get('actions')
+        if (not isinstance(actions, list) or not actions
+                or any(not isinstance(action, str) or action not in _ALLOWED_ACTIONS for action in actions)):
+            raise ValueError(f'{app_id} needs an explicit list of supported interaction actions.')
+        result[app_id] = {
+            'app_id': app_id,
+            'label': label.strip(),
+            'launch_path': launch,
+            'process_paths': tuple(identities),
+            'actions': frozenset(actions),
+        }
+    return result
+
+
+def load_application_allowlist(root, character_id, settings):
+    if not isinstance(settings, dict) or settings.get('enabled') is not True:
+        return {}
+    filename = settings.get('apps_file')
+    if (not isinstance(filename, str) or not filename.endswith('.toml')
+            or Path(filename).name != filename or filename in ('', '.', '..')):
+        raise ValueError('windows_interaction.apps_file must name a local TOML file.')
+    character_root = (Path(root) / 'characters' / character_id).resolve()
+    config_path = (character_root / filename).resolve()
+    if not config_path.is_relative_to(character_root):
+        raise ValueError('The Windows application allowlist must remain inside this character folder.')
+    with config_path.open('rb') as stream:
+        config = tomllib.load(stream)
+    return validate_applications(config.get('applications'))
+
+
+def _tick_delta(later, earlier):
+    return (int(later) - int(earlier)) & 0xFFFFFFFF
+
+
+def _tick_is_after(candidate, reference):
+    delta = _tick_delta(candidate, reference)
+    return 0 < delta < 0x80000000
+
+
+def _approval_control_label(metadata):
+    value = f'{metadata.get("type", "control")} {metadata.get("name") or "(unnamed control)"}'
+    value = ''.join(char if ord(char) >= 32 and ord(char) != 127 else ' ' for char in value)
+    return re.sub(r'\s+', ' ', value).strip()[:200]
+
+
+class DesktopInputMonitor:
+    """Tracks recent human input while excluding input generated by this process."""
+
+    def __init__(self, last_input_tick=None, now_tick=None):
+        self._last_input_tick = last_input_tick or self._windows_last_input_tick
+        self._now_tick = now_tick or self._windows_now_tick
+        self._lock = threading.Lock()
+        self._human_tick = self._last_input_tick() if os.name == 'nt' else 0
+        self._own_tick = None
+
+    @staticmethod
+    def _windows_last_input_tick():
+        if os.name != 'nt':
+            raise InteractionError('Windows input state is unavailable on this platform.')
+        class LASTINPUTINFO(ctypes.Structure):
+            _fields_ = [('cbSize', ctypes.c_uint), ('dwTime', ctypes.c_uint)]
+        info = LASTINPUTINFO()
+        info.cbSize = ctypes.sizeof(LASTINPUTINFO)
+        if not ctypes.windll.user32.GetLastInputInfo(ctypes.byref(info)):
+            raise InteractionError('The recent-input state could not be checked safely.')
+        return int(info.dwTime)
+
+    @staticmethod
+    def _windows_now_tick():
+        if os.name != 'nt':
+            raise InteractionError('Windows input state is unavailable on this platform.')
+        return int(ctypes.windll.kernel32.GetTickCount()) & 0xFFFFFFFF
+
+    def _refresh(self):
+        current = int(self._last_input_tick()) & 0xFFFFFFFF
+        with self._lock:
+            if self._own_tick is None:
+                if _tick_is_after(current, self._human_tick):
+                    self._human_tick = current
+            elif _tick_is_after(current, (self._own_tick + _IDLE_TICK_MARGIN_MS) & 0xFFFFFFFF):
+                self._human_tick = current
+            return self._human_tick
+
+    def snapshot(self):
+        return self._refresh()
+
+    def changed_since(self, snapshot):
+        return self._refresh() != snapshot
+
+    def idle_seconds(self):
+        human_tick = self._refresh()
+        return _tick_delta(self._now_tick(), human_tick) / 1000
+
+    def require_idle(self, minimum_seconds):
+        if self.idle_seconds() < minimum_seconds:
+            raise InteractionPaused('Recent human keyboard or mouse input has priority.')
+
+    def mark_own_input(self):
+        with self._lock:
+            self._own_tick = int(self._now_tick()) & 0xFFFFFFFF
+
+
+class WindowsInteractionBackend(WindowsDesktopBackend):
+    """UIA and Win32 actions, always scoped to the observer's current window identity."""
+
+    @staticmethod
+    def _require_unchanged_input(input_monitor, input_snapshot):
+        if input_monitor.changed_since(input_snapshot):
+            raise HumanTookOver('Human input arrived during target verification. No desktop action was sent.')
+
+    def _find_control(self, selected, control_id, stopped):
+        self._cancelled(stopped)
+        current = self._revalidate(selected, stopped)
+        auto = self._uia()
+        root = auto.ControlFromHandle(current['handle'])
+        if not root:
+            raise ObservationError('The selected window no longer has a UI Automation root.')
+        matches = []
+        pending = [(root, 0, (), None, ())]
+        count = 0
+        while pending and count < MAX_CONTROLS:
+            self._cancelled(stopped)
+            control, depth, path, parent_type, ancestor_labels = pending.pop()
+            count += 1
+            try:
+                kind = str(control.ControlTypeName or '')
+                name = _text(control.Name, 240)
+                automation_id = _text(control.AutomationId, 160)
+                if ((name and SENSITIVE_LABEL.search(name))
+                        or (automation_id and SENSITIVE_LABEL.search(automation_id))):
+                    raise ProtectedWindow('A protected security or credential label was detected.')
+                if kind in ('EditControl', 'DocumentControl'):
+                    try:
+                        if bool(control.IsPassword):
+                            raise ProtectedWindow('A password field was detected.')
+                    except ProtectedWindow:
+                        raise
+                    except Exception as exc:
+                        raise ObservationError('The input field could not be checked safely.') from exc
+                if _control_identity(current['id'], control, path) == control_id:
+                    metadata = {
+                        'control_id': control_id,
+                        'type': kind,
+                        'name': name,
+                        'automation_id': automation_id,
+                        'parent_type': parent_type,
+                        'ancestor_labels': ancestor_labels,
+                        'enabled': bool(control.IsEnabled),
+                        'offscreen': bool(control.IsOffscreen),
+                        'patterns': _control_patterns(control),
+                    }
+                    if kind in ('EditControl', 'DocumentControl'):
+                        metadata['read_only'] = bool(control.IsReadOnly)
+                    if kind in ('ListItemControl', 'TabItemControl', 'RadioButtonControl'):
+                        metadata['selected'] = bool(control.IsSelected)
+                    if 'toggle' in metadata['patterns']:
+                        metadata['toggle_state'] = int(control.GetTogglePattern().ToggleState)
+                    if 'expand-collapse' in metadata['patterns']:
+                        metadata['expand_state'] = int(control.GetExpandCollapsePattern().ExpandCollapseState)
+                    matches.append((control, metadata))
+                if depth < 8:
+                    try:
+                        children = control.GetChildren()
+                    except Exception:
+                        children = []
+                    labels = ancestor_labels + ((name,) if name else ())
+                    for child_index in range(len(children) - 1, -1, -1):
+                        if len(pending) + count < MAX_CONTROLS:
+                            pending.append((children[child_index], depth + 1,
+                                            path + (child_index,), kind, labels))
+            except (ProtectedWindow, ObservationPaused, ObservationError):
+                raise
+            except Exception:
+                continue
+        if len(matches) != 1:
+            raise ObservationError('That control_id is stale or ambiguous. Observe the current window again; no fallback target was used.')
+        control, metadata = matches[0]
+        if metadata['offscreen'] or not metadata['enabled']:
+            raise ObservationError('The selected control is not currently visible and enabled.')
+        return control, metadata
+
+    def inspect_control(self, selected, control_id, stopped):
+        current = self._revalidate(selected, stopped)
+        self._check_default_desktop()
+        auto = self._uia()
+        with auto.UIAutomationInitializerInThread():
+            old_timeout = self._set_search_timeout(auto, 2)
+            try:
+                _, metadata = self._find_control(current, control_id, stopped)
+                return metadata
+            finally:
+                self._restore_search_timeout(auto, old_timeout)
+
+    def _read_control_value(self, control, kind):
+        return self._control_value(control, kind)
+
+    def _run_pattern(self, control, selected, metadata, action, text, stopped,
+                     input_monitor, input_snapshot):
+        self._cancelled(stopped)
+        kind = metadata['type']
+        if action == 'invoke':
+            pattern = control.GetInvokePattern()
+            if not pattern:
+                raise ObservationError('The selected control does not expose InvokePattern.')
+            self._require_unchanged_input(input_monitor, input_snapshot)
+            self._cancelled(stopped)
+            if pattern.Invoke(waitTime=0) is False:
+                raise InteractionUncertain('InvokePattern did not confirm the action; do not repeat it automatically.')
+            return {'confirmed': None, 'verification': 'read_after_action'}
+        if action == 'select':
+            if kind not in ('TabItemControl', 'ListItemControl', 'RadioButtonControl'):
+                raise ObservationError('Selection is limited to a tab, list item, or radio item.')
+            pattern = control.GetSelectionItemPattern()
+            if not pattern:
+                raise ObservationError('The selected control does not expose SelectionItemPattern.')
+            self._require_unchanged_input(input_monitor, input_snapshot)
+            self._cancelled(stopped)
+            if pattern.Select(waitTime=0) is False:
+                raise InteractionUncertain('SelectionItemPattern did not confirm the selection.')
+            return {'confirmed': None, 'verification': 'selected'}
+        if action == 'toggle':
+            pattern = control.GetTogglePattern()
+            if not pattern:
+                raise ObservationError('The selected control does not expose TogglePattern.')
+            before = int(pattern.ToggleState)
+            self._require_unchanged_input(input_monitor, input_snapshot)
+            self._cancelled(stopped)
+            if pattern.Toggle(waitTime=0) is False:
+                raise InteractionUncertain('TogglePattern did not confirm the state change.')
+            after = int(pattern.ToggleState)
+            return {'confirmed': after != before, 'verification': 'toggle_state_changed'}
+        if action in ('expand', 'collapse'):
+            pattern = control.GetExpandCollapsePattern()
+            if not pattern:
+                raise ObservationError('The selected control does not expose ExpandCollapsePattern.')
+            desired = 1 if action == 'expand' else 0
+            state = int(pattern.ExpandCollapseState)
+            if state == desired:
+                return {'confirmed': True, 'verification': 'already_in_requested_state'}
+            self._require_unchanged_input(input_monitor, input_snapshot)
+            self._cancelled(stopped)
+            result = pattern.Expand(waitTime=0) if action == 'expand' else pattern.Collapse(waitTime=0)
+            if result is False or int(pattern.ExpandCollapseState) != desired:
+                raise InteractionUncertain('The requested expand/collapse state was not confirmed.')
+            return {'confirmed': True, 'verification': 'expand_collapse_state'}
+        if action == 'set_text':
+            if kind not in ('EditControl', 'DocumentControl') or metadata.get('read_only'):
+                raise ObservationError('Text replacement is limited to writable UIA Edit or Document controls.')
+            pattern = control.GetValuePattern()
+            if pattern:
+                if pattern.IsReadOnly:
+                    raise ObservationError('The text control is read-only.')
+                self._require_unchanged_input(input_monitor, input_snapshot)
+                self._cancelled(stopped)
+                if pattern.SetValue(text, waitTime=0) is False:
+                    raise InteractionUncertain('ValuePattern did not confirm the text replacement; do not retry automatically.')
+                readback = self._read_control_value(control, kind)
+                return {'confirmed': readback == text, 'verification': 'value_readback'}
+            # The last resort injects keys only into the already foreground, revalidated target.
+            if '\n' in text or '\r' in text:
+                raise ObservationError('Keyboard fallback is refused for multiline text; this control needs a settable ValuePattern.')
+            if len(text) > MAX_KEYBOARD_FALLBACK_CHARS:
+                raise ObservationError(
+                    f'Keyboard fallback is limited to {MAX_KEYBOARD_FALLBACK_CHARS} characters; '
+                    'this control needs a settable ValuePattern.')
+            if int(self._foreground_window()) != int(metadata.get('window_handle', 0)):
+                raise InteractionPaused('Keyboard fallback requires the verified target window to be in front.')
+            self._revalidate(selected, stopped)
+            self._require_unchanged_input(input_monitor, input_snapshot)
+            self._cancelled(stopped)
+            control.SetFocus()
+            self._require_unchanged_input(input_monitor, input_snapshot)
+            self._revalidate(selected, stopped)
+            self._require_unchanged_input(input_monitor, input_snapshot)
+            self._cancelled(stopped)
+            if int(self._foreground_window()) != int(metadata.get('window_handle', 0)):
+                raise InteractionPaused('The target window lost the foreground before keyboard input.')
+            input_monitor.mark_own_input()
+            escaped = text.replace('{', '{{}').replace('}', '{}}')
+            # interval=0 keeps typing far inside the tool timeout, so no keys can land in
+            # another window after the call has returned; mark again so the typed keys are
+            # not mistaken for Lan taking over.
+            control.SendKeys('{Ctrl}a' + escaped, interval=0, waitTime=0)
+            input_monitor.mark_own_input()
+            readback = self._read_control_value(control, kind)
+            return {'confirmed': readback == text, 'verification': 'keyboard_readback'}
+        raise ObservationError('Unsupported UI Automation action.')
+
+    @staticmethod
+    def _foreground_window():
+        if os.name != 'nt':
+            return 0
+        import ctypes.wintypes
+        user32 = ctypes.windll.user32
+        user32.GetForegroundWindow.restype = ctypes.wintypes.HWND
+        return int(user32.GetForegroundWindow() or 0)
+
+    def apply_control_action(self, selected, control_id, action, text, stopped,
+                             input_monitor, input_snapshot):
+        current = self._revalidate(selected, stopped)
+        self._check_default_desktop()
+        before_controls = self.read_controls(current, stopped) if action == 'invoke' else None
+        before_snapshot = (json.dumps(list(before_controls), ensure_ascii=False,
+                                      sort_keys=True, separators=(',', ':'))
+                           if before_controls is not None else None)
+        auto = self._uia()
+        with auto.UIAutomationInitializerInThread():
+            old_timeout = self._set_search_timeout(auto, 2)
+            try:
+                control, metadata = self._find_control(current, control_id, stopped)
+                metadata['window_handle'] = current['handle']
+                action_result = self._run_pattern(
+                    control, current, metadata, action, text, stopped,
+                    input_monitor, input_snapshot)
+            finally:
+                self._restore_search_timeout(auto, old_timeout)
+        self._cancelled(stopped)
+        current_after = self._revalidate(current, stopped)
+        if action == 'invoke':
+            controls_after = self.read_controls(current_after, stopped)
+            after_snapshot = json.dumps(list(controls_after), ensure_ascii=False,
+                                        sort_keys=True, separators=(',', ':'))
+            action_result['confirmed'] = before_snapshot != after_snapshot
+            action_result['verification'] = 'uia_tree_changed'
+        elif action == 'select':
+            after = self.inspect_control(current_after, control_id, stopped)
+            if not after.get('selected', False):
+                action_result['confirmed'] = False
+            else:
+                action_result['confirmed'] = True
+        return action_result
+
+    def _window_api(self):
+        if os.name != 'nt':
+            raise ObservationError('Windows window actions are only available on Windows.')
+        import ctypes.wintypes
+        user32 = ctypes.windll.user32
+        user32.IsWindow.argtypes = [ctypes.wintypes.HWND]
+        user32.IsWindow.restype = ctypes.wintypes.BOOL
+        user32.IsIconic.argtypes = [ctypes.wintypes.HWND]
+        user32.IsIconic.restype = ctypes.wintypes.BOOL
+        user32.ShowWindow.argtypes = [ctypes.wintypes.HWND, ctypes.c_int]
+        user32.ShowWindow.restype = ctypes.wintypes.BOOL
+        user32.SetForegroundWindow.argtypes = [ctypes.wintypes.HWND]
+        user32.SetForegroundWindow.restype = ctypes.wintypes.BOOL
+        return user32
+
+    def manage_window(self, selected, action, stopped, input_monitor, input_snapshot):
+        current = self._revalidate(selected, stopped)
+        self._check_default_desktop()
+        user32 = self._window_api()
+        hwnd = current['handle']
+        if not user32.IsWindow(hwnd):
+            raise ObservationError('The selected window closed before the action.')
+        if action == 'activate':
+            if user32.IsIconic(hwnd):
+                self._require_unchanged_input(input_monitor, input_snapshot)
+                self._cancelled(stopped)
+                user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+            self._require_unchanged_input(input_monitor, input_snapshot)
+            self._cancelled(stopped)
+            user32.SetForegroundWindow(hwnd)
+            deadline = time.monotonic() + 1.0
+            while time.monotonic() < deadline:
+                self._cancelled(stopped)
+                if self._foreground_window() == hwnd:
+                    self._revalidate(current, stopped)
+                    return {'confirmed': True, 'verification': 'foreground_window'}
+                time.sleep(0.025)
+            raise InteractionUncertain('Windows did not confirm that the selected window became foreground.')
+        if action == 'minimize':
+            self._require_unchanged_input(input_monitor, input_snapshot)
+            self._cancelled(stopped)
+            user32.ShowWindow(hwnd, 6)  # SW_MINIMIZE
+            if bool(user32.IsIconic(hwnd)):
+                self._revalidate(current, stopped)
+                return {'confirmed': True, 'verification': 'window_minimized'}
+            raise InteractionUncertain('The window did not enter the minimized state.')
+        if action == 'restore':
+            self._require_unchanged_input(input_monitor, input_snapshot)
+            self._cancelled(stopped)
+            user32.ShowWindow(hwnd, 4)  # SW_SHOWNOACTIVATE
+            if not bool(user32.IsIconic(hwnd)):
+                self._revalidate(current, stopped)
+                return {'confirmed': True, 'verification': 'window_restored_without_activation'}
+            raise InteractionUncertain('The window did not leave the minimized state.')
+        raise ObservationError('Unsupported window action.')
+
+    def start_application(self, app, stopped, input_monitor, input_snapshot):
+        launch_path = app['launch_path']
+        if os.name != 'nt' or not os.path.isfile(launch_path):
+            raise ObservationError('The configured Windows application path does not exist on this computer.')
+        self._check_default_desktop()
+        self._cancelled(stopped)
+        self._require_unchanged_input(input_monitor, input_snapshot)
+        try:
+            return subprocess.Popen([launch_path], shell=False, cwd=ntpath.dirname(launch_path),
+                                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL, close_fds=True)
+        except (OSError, ValueError) as exc:
+            raise ObservationError('Windows could not start the configured application.') from exc
+
+
+class WindowsInteractionTools:
+    """Program-enforced allowlist, approval, human-priority, and result confirmation."""
+
+    def __init__(self, enabled, applications, *, max_result_bytes=8192, backend=None,
+                 platform_enabled=None, idle_seconds=3, timeout_seconds=8,
+                 input_monitor=None):
+        self.enabled = enabled is True
+        self.platform_enabled = (os.name == 'nt') if platform_enabled is None else bool(platform_enabled)
+        self.applications = applications or {}
+        self.backend = backend or WindowsInteractionBackend()
+        self.max_result_bytes = max(512, min(int(max_result_bytes), MAX_RESULT_BYTES))
+        self.idle_seconds = max(1, min(int(idle_seconds), 30))
+        self.timeout_seconds = max(1, min(int(timeout_seconds), 8))
+        self.input_monitor = input_monitor or DesktopInputMonitor()
+        self.tools = (list(WINDOWS_INTERACTION_TOOL_SCHEMAS)
+                      if self.enabled and self.platform_enabled and self.applications else [])
+
+    def application_id_for(self, window):
+        path = str(window.get('process_path', ''))
+        if not path:
+            return None
+        normalized = ntpath.normcase(ntpath.normpath(path))
+        for app_id, app in self.applications.items():
+            if any(fnmatch.fnmatchcase(normalized, pattern) for pattern in app['process_paths']):
+                return app_id
+        return None
+
+    def preview_summary(self, name, args):
+        app_id = args.get('app_id') if isinstance(args, dict) else None
+        app = self.applications.get(app_id)
+        return app['label'] if app else 'Windows application'
+
+    def _is_stopped(self, should_stop, cancelled):
+        if cancelled.is_set():
+            return True
+        if should_stop:
+            try:
+                return bool(should_stop())
+            except Exception:
+                return True
+        return False
+
+    def _run(self, operation, summary, should_stop, *, timeout, side_effect):
+        cancelled = threading.Event()
+        result_queue = queue.Queue(maxsize=1)
+
+        def worker():
+            try:
+                with desktop_access(timeout=0.1):
+                    if self._is_stopped(should_stop, cancelled):
+                        raise InteractionPaused('The autonomous activity was paused.')
+                    result = operation(lambda: self._is_stopped(should_stop, cancelled))
+                result_queue.put((result, None))
+            except BaseException as exc:
+                result_queue.put((None, exc))
+
+        thread = threading.Thread(target=worker, name='veil-windows-interaction', daemon=True)
+        thread.start()
+        try:
+            result, error = result_queue.get(timeout=timeout)
+        except queue.Empty:
+            cancelled.set()
+            text = ('The Windows action timed out; its result is uncertain. Do not repeat it. '
+                    'Observe the target window before deciding what to do next.') if side_effect else (
+                    'The Windows UIA lookup timed out; no action was performed.')
+            state = '结果不确定' if side_effect else '出错'
+            return WindowsToolResult(text, activity_detail=f'{summary} 操作超时；未自动重试。'), state
+        if error is not None:
+            return self._error(error, summary, side_effect)
+        return result, None
+
+    def _error(self, error, summary, side_effect):
+        if isinstance(error, DesktopBusy):
+            return WindowsToolResult(
+                'The shared Windows desktop is busy. No action was performed; retry after it is free.',
+                activity_detail=f'{summary} 桌面互斥锁忙；未操作。'), '搁置'
+        if isinstance(error, (InteractionPaused, ObservationPaused)):
+            return WindowsToolResult(
+                'Recent human input or a pause request has priority. Windows interaction stopped before another action.',
+                activity_detail=f'{summary} 人工操作优先或自主活动暂停；已停止后续操作。'), '中断'
+        if isinstance(error, HumanTookOver):
+            return WindowsToolResult(
+                'Human keyboard or mouse activity was detected during the action. No further desktop action was started.',
+                activity_detail=f'{summary} 检测到人工接管；已停止后续操作。'), '中断'
+        if isinstance(error, InteractionUncertain):
+            return WindowsToolResult(
+                f'{error} Observe the target window before deciding what to do next.',
+                activity_detail=f'{summary} 操作结果不确定；未自动重试。'), '结果不确定'
+        if isinstance(error, ProtectedWindow):
+            return WindowsToolResult(
+                'This window or control may contain credentials or protected security content. No interaction was performed.',
+                activity_detail=f'{summary} 凭据或安全界面被拦截。'), '被拒绝'
+        if isinstance(error, ImportError):
+            return WindowsToolResult(
+                'Windows UI Automation is unavailable. Close VEIL, rerun setup.bat, and restart it; no desktop action was performed.',
+                activity_detail=f'{summary} UI Automation 组件不可用；未操作。'), '出错'
+        if isinstance(error, (ObservationError, InteractionError, ValueError)):
+            return WindowsToolResult(str(error), activity_detail=f'{summary} {str(error)[:180]}'), (
+                '被拒绝' if isinstance(error, ValueError) else '出错')
+        return WindowsToolResult(
+            'Windows interaction failed safely. The target was not retried.',
+            activity_detail=f'{summary} 操作失败；未自动重试。'), '出错'
+
+    def _success(self, payload, detail, summary):
+        raw = json.dumps(payload, ensure_ascii=False, separators=(',', ':'))
+        if len((detail + '\n' + raw).encode('utf-8')) > self.max_result_bytes:
+            raw = json.dumps({'truncated': True}, separators=(',', ':'))
+        return WindowsToolResult(f'{detail}\n{raw}', activity_detail=summary)
+
+    @staticmethod
+    def _valid_window_id(value):
+        return isinstance(value, str) and bool(_WINDOW_ID.fullmatch(value))
+
+    def _selected_window(self, app_id, window_id, stopped):
+        if app_id not in self.applications:
+            raise ObservationError('The requested app_id is not in this character’s Windows allowlist.')
+        if not self._valid_window_id(window_id):
+            raise ObservationError('Use an exact window_id returned by windows_list or windows_foreground.')
+        windows = self.backend.list_windows(stopped)
+        selected = next((item for item in windows if item.get('id') == window_id), None)
+        if selected is None:
+            raise ObservationError('The selected window is closed or changed. List windows again; no title-based fallback is allowed.')
+        if self.application_id_for(selected) != app_id:
+            raise ObservationError('The selected window process path does not match the requested allowlisted application.')
+        return selected
+
+    def _check_before_action(self, stopped):
+        if stopped():
+            raise InteractionPaused('The autonomous activity was paused.')
+        self.backend._check_default_desktop()
+        snapshot = self.input_monitor.snapshot()
+        self.input_monitor.require_idle(self.idle_seconds)
+        if self.input_monitor.changed_since(snapshot):
+            raise HumanTookOver('Human input arrived during the pre-action idle check.')
+        return snapshot
+
+    def _run_action_with_input_guard(self, action, stopped):
+        snapshot = self._check_before_action(stopped)
+        result = action(stopped, snapshot)
+        if self.input_monitor.changed_since(snapshot) or stopped():
+            # The action was already sent; reporting it as "not executed" could make
+            # Peter repeat a toggle or a save.
+            raise InteractionUncertain(
+                'The action was already sent, then human input or a pause arrived; its result is '
+                'uncertain. Do not repeat it automatically.')
+        return result, snapshot
+
+    def invoke(self, name, args, approval=None, *, should_stop=None):
+        summary = self.preview_summary(name, args)
+        if (not self.enabled or not self.platform_enabled or name not in WINDOWS_INTERACTION_TOOL_NAMES
+                or name not in {tool.name for tool in self.tools}):
+            return WindowsToolResult(
+                'Windows interaction is unavailable for this character, platform, or allowlist.',
+                activity_detail=f'{summary} 桌面交互当前不可用。'), '被拒绝', summary
+        if not isinstance(args, dict):
+            return WindowsToolResult('A JSON object of arguments is required.',
+                                     activity_detail=f'{summary} 参数无效。'), '被拒绝', summary
+        try:
+            result, state = self._invoke(name, args, approval, should_stop, summary)
+        except (ValueError, TypeError):
+            result, state = WindowsToolResult('The program rejected invalid interaction arguments.',
+                                              activity_detail=f'{summary} 参数无效。'), '被拒绝'
+        if state is not None:
+            return result, state, summary
+        return result, '成功', summary
+
+    def _invoke(self, name, args, approval, should_stop, summary):
+        if name == 'windows_launch':
+            if set(args) != {'app_id'} or not isinstance(args.get('app_id'), str):
+                return WindowsToolResult('Use exactly one app_id from the allowlist.', activity_detail='参数无效。'), '被拒绝'
+            app = self.applications.get(args['app_id'])
+            if app is None:
+                return WindowsToolResult('That app_id is not allowlisted; no executable was started.',
+                                         activity_detail=f'{summary} 程序白名单拒绝。'), '被拒绝'
+            def launch(stopped):
+                def work(stop):
+                    windows = [item for item in self.backend.list_windows(stop)
+                               if self.application_id_for(item) == app['app_id']]
+                    if windows:
+                        foreground = [item for item in windows if item.get('foreground')]
+                        if len(foreground) == 1:
+                            selected = foreground[0]
+                        elif len(windows) == 1:
+                            selected = windows[0]
+                        else:
+                            raise ObservationError('Several windows of this app are open. Select an exact window_id before activation.')
+                        result, _snapshot = self._run_action_with_input_guard(
+                            lambda inner_stop, _snapshot: self.backend.manage_window(
+                                selected, 'activate', inner_stop, self.input_monitor,
+                                _snapshot), stop)
+                        return self._success({
+                            'app_id': app['app_id'], 'application': app['label'],
+                            'window_id': selected['id'], 'reused': True,
+                            'confirmed': result['confirmed'],
+                        }, '已有窗口已复用并切换到前台。', f'{app["label"]} 已复用现有窗口。')
+                    _process, launch_input_snapshot = self._run_action_with_input_guard(
+                        lambda inner_stop, _snapshot: self.backend.start_application(
+                            app, inner_stop, self.input_monitor, _snapshot), stop)
+                    deadline = time.monotonic() + 7.0
+                    while time.monotonic() < deadline:
+                        if stop():
+                            raise InteractionPaused('The autonomous activity was paused.')
+                        if self.input_monitor.changed_since(launch_input_snapshot):
+                            raise HumanTookOver('Human input arrived while waiting for the app window.')
+                        matches = [item for item in self.backend.list_windows(stop)
+                                   if self.application_id_for(item) == app['app_id']]
+                        if matches:
+                            foreground = [item for item in matches if item.get('foreground')]
+                            selected = foreground[0] if len(foreground) == 1 else matches[0]
+                            if self.input_monitor.changed_since(launch_input_snapshot):
+                                raise HumanTookOver('Human input arrived before the app result was confirmed.')
+                            return self._success({
+                                'app_id': app['app_id'], 'application': app['label'],
+                                'window_id': selected['id'], 'reused': False,
+                                'confirmed': True,
+                            }, '应用窗口已出现，并已按程序路径确认身份。', f'{app["label"]} 已启动并确认窗口。')
+                        time.sleep(0.1)
+                    raise InteractionUncertain('The app process was started but its allowlisted window did not appear before timeout; do not launch it again automatically.')
+                return work(stopped)
+            return self._run(launch, summary, should_stop,
+                             timeout=self.timeout_seconds, side_effect=True)
+
+        if name == 'windows_manage':
+            if (set(args) != {'app_id', 'window_id', 'action'}
+                    or not isinstance(args.get('app_id'), str)
+                    or args.get('action') not in ('activate', 'minimize', 'restore')):
+                return WindowsToolResult('Use an allowlisted app_id, exact window_id, and activate/minimize/restore action.',
+                                         activity_detail='参数无效。'), '被拒绝'
+            app = self.applications.get(args['app_id'])
+            if app is None or args['action'] not in app['actions']:
+                return WindowsToolResult('This app or window action is not authorized by the program allowlist.',
+                                         activity_detail=f'{summary} 窗口动作未授权。'), '被拒绝'
+            def manage(stopped):
+                def work(stop):
+                    selected = self._selected_window(app['app_id'], args['window_id'], stop)
+                    result, _snapshot = self._run_action_with_input_guard(
+                        lambda inner_stop, _snapshot: self.backend.manage_window(
+                            selected, args['action'], inner_stop, self.input_monitor,
+                            _snapshot), stop)
+                    return self._success({
+                        'app_id': app['app_id'], 'window_id': selected['id'],
+                        'action': args['action'], 'confirmed': result['confirmed'],
+                        'verification': result['verification'],
+                    }, '窗口动作完成并已核对当前状态。', f'{app["label"]} 窗口 {args["action"]} 已核验。')
+                return work(stopped)
+            return self._run(manage, summary, should_stop,
+                             timeout=self.timeout_seconds, side_effect=True)
+
+        if name == 'windows_control_action':
+            allowed_keys = {'app_id', 'window_id', 'control_id', 'action', 'text'}
+            action = args.get('action')
+            required = {'app_id', 'window_id', 'control_id', 'action'}
+            if (set(args) - allowed_keys or not required.issubset(args)
+                    or not isinstance(args.get('app_id'), str)
+                    or not self._valid_window_id(args.get('window_id'))
+                    or not isinstance(args.get('control_id'), str)
+                    or not _CONTROL_ID.fullmatch(args['control_id'])
+                    or action not in _ALLOWED_ACTIONS):
+                return WindowsToolResult('Use an exact allowlisted app_id, current window_id, fresh control_id, and supported action.',
+                                         activity_detail='参数无效。'), '被拒绝'
+            if action == 'set_text':
+                text_value = args.get('text')
+                if (not isinstance(text_value, str) or len(text_value) > MAX_TEXT_CHARS
+                        or '\x00' in text_value):
+                    return WindowsToolResult(f'text must be a string of at most {MAX_TEXT_CHARS} characters without NUL.',
+                                             activity_detail='文本输入参数无效。'), '被拒绝'
+            elif 'text' in args:
+                return WindowsToolResult('text is accepted only for set_text.', activity_detail='参数无效。'), '被拒绝'
+            app = self.applications.get(args['app_id'])
+            if app is None or action not in app['actions']:
+                return WindowsToolResult('This app or UIA action is not authorized by the program allowlist.',
+                                         activity_detail=f'{summary} UIA 动作未授权。'), '被拒绝'
+            if should_stop and should_stop():
+                return WindowsToolResult('The autonomous activity is paused; no desktop action was started.',
+                                         activity_detail=f'{summary} 自主活动暂停；未操作。'), '中断'
+
+            def inspect(stopped):
+                selected = self._selected_window(app['app_id'], args['window_id'], stopped)
+                return selected, self.backend.inspect_control(selected, args['control_id'], stopped)
+
+            inspected, error = self._run(inspect, summary, should_stop, timeout=3, side_effect=False)
+            if error is not None:
+                return inspected, error
+            selected, metadata = inspected
+            if _BLOCKED_CONTROL.search(' '.join((metadata.get('name', ''),
+                                                 metadata.get('automation_id', ''),
+                                                 *metadata.get('ancestor_labels', ())))):
+                return WindowsToolResult(
+                    'This control is within a delete/install/purchase/administrator action scope that this ticket does not open.',
+                    activity_detail=f'{summary} 高风险动作被程序拒绝。'), '被拒绝'
+            if action not in metadata.get('patterns', ()):
+                # Pattern-specific operation still gets checked again during the actual call.
+                if action not in ('expand', 'collapse') or 'expand-collapse' not in metadata.get('patterns', ()):
+                    keyboard_value_control = (
+                        action == 'set_text'
+                        and metadata.get('type') in ('EditControl', 'DocumentControl')
+                    )
+                    if action != 'set_text' or ('value' not in metadata.get('patterns', ())
+                                                 and not keyboard_value_control):
+                        return WindowsToolResult('The current control does not advertise the requested UIA pattern.',
+                                                 activity_detail=f'{summary} 控件不支持该 UIA 模式。'), '被拒绝'
+            if action == 'select' and metadata['type'] not in (
+                    'TabItemControl', 'ListItemControl', 'RadioButtonControl'):
+                return WindowsToolResult('Selection is limited to a tab, list item, or radio item.',
+                                         activity_detail=f'{summary} 控件类型不允许选择。'), '被拒绝'
+            if action == 'set_text' and (metadata['type'] not in ('EditControl', 'DocumentControl')
+                                         or metadata.get('read_only')):
+                return WindowsToolResult('Text replacement is limited to writable UIA Edit or Document controls.',
+                                         activity_detail=f'{summary} 文本控件不可写。'), '被拒绝'
+            needs_approval = action in _CONFIRM_ACTIONS or action == 'select' and metadata['type'] != 'TabItemControl'
+            if needs_approval:
+                if approval is None:
+                    return WindowsToolResult('This UIA action requires Lan approval through VEIL.',
+                                             activity_detail=f'{summary} 需要 Lan 明确批准。'), '被拒绝'
+                control_label = _approval_control_label(metadata)
+                prompt = (f'Peter wants to perform {action} on {app["label"]} control {control_label}. '
+                          'This may change or submit application data. Approve this one action? y/N ')
+                if action == 'set_text':
+                    prompt = (f'Peter wants to replace text in {app["label"]} control {control_label} '
+                              f'with this exact JSON string:\n{json.dumps(args["text"], ensure_ascii=False)}\n'
+                              'Approve this one edit? y/N ')
+                try:
+                    answer = approval(prompt)
+                except Exception:
+                    return WindowsToolResult(
+                        'VEIL could not collect approval; the window was not changed.',
+                        activity_detail=f'{summary} 无法取得 Lan 批准；未操作。'), '被拒绝'
+                if str(answer or '').strip().casefold() != 'y':
+                    return WindowsToolResult('Lan did not approve this action; the window was not changed.',
+                                             activity_detail=f'{summary} Lan 未批准 UIA 动作；未操作。'), '被拒绝'
+
+            def act(stopped):
+                def work(stop):
+                    current = self._selected_window(app['app_id'], args['window_id'], stop)
+                    fresh = self.backend.inspect_control(current, args['control_id'], stop)
+                    if (fresh['type'] != metadata['type']
+                            or fresh.get('automation_id') != metadata.get('automation_id')
+                            or fresh.get('name') != metadata.get('name')
+                            or fresh.get('parent_type') != metadata.get('parent_type')
+                            or fresh.get('ancestor_labels') != metadata.get('ancestor_labels')):
+                        raise ObservationError('The selected control changed after approval. Observe it again; no action was performed.')
+                    if _BLOCKED_CONTROL.search(' '.join((fresh.get('name', ''),
+                                                         fresh.get('automation_id', ''),
+                                                         *fresh.get('ancestor_labels', ())))):
+                        raise ObservationError('The selected control is in a blocked action scope; no action was performed.')
+                    text_value = args.get('text') if action == 'set_text' else None
+                    result, _snapshot = self._run_action_with_input_guard(
+                        lambda inner_stop, input_snapshot: self.backend.apply_control_action(
+                            current, args['control_id'], action, text_value,
+                            inner_stop, self.input_monitor, input_snapshot), stop)
+                    if result.get('confirmed') is not True:
+                        raise InteractionUncertain(
+                            'The action was attempted but its resulting UIA state could not be confirmed; '
+                            'do not repeat it automatically.')
+                    payload = {
+                        'app_id': app['app_id'], 'window_id': current['id'],
+                        'control_id': args['control_id'], 'action': action,
+                        'confirmed': True, 'verification': result.get('verification'),
+                    }
+                    if action == 'set_text':
+                        payload['text_matches'] = True
+                        payload['text_characters'] = len(text_value)
+                    return self._success(payload, '控件动作已执行并重新读取 UIA 状态确认。',
+                                          f'{app["label"]} UIA {action} 已核验；未记录控件文字。')
+                return work(stopped)
+            return self._run(act, summary, should_stop,
+                             timeout=self.timeout_seconds, side_effect=True)
+
+        return WindowsToolResult('This interaction tool is not registered.',
+                                 activity_detail=f'{summary} 工具未注册。'), '被拒绝'

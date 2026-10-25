@@ -92,3 +92,10 @@ enabled = true
 # Ticket 111: read-only window discovery and UIA observation. Screenshot fallback is transient
 # and uses Peter's existing vision-capable chat model. Other characters remain disabled by default.
 enabled = true
+
+[windows_interaction]
+# Ticket 112: application paths and process identities are maintained in windows-apps.toml.
+enabled = true
+apps_file = "windows-apps.toml"
+# A short idle window keeps the prompt's own final keystroke from blocking a requested action.
+idle_seconds = 3

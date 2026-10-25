@@ -2,34 +2,30 @@
 
 ## 当前进度
 
-- 工单 110：Lan 电脑上 Peter 的长期任务卡死。根因：自主活动中新建记忆（`hold` 无 `target_id`）建立的检查点目标是记忆标题，没有任何读取工具的目标能与之匹配，所以永远无法核实；而标记 blocked 也不会清除待核实操作，`before_tool` 在自主活动中继续拦截所有副作用操作，形成死锁。修复：`memory_native` 新建记忆结果附 `memory_id`，`finish_tool` 把检查点目标改绑到该 ID（`memory_read` 可核实）；`long_task_update status=blocked` 清除未核实操作并记「无法核实，已阻塞」；拦截提示按工具类型指明读取工具。
-- Lan 机器上已卡住的那条（目标是标题 `Growth journal: first entry written unpr`）无法用读取核实，需 Peter 自己设 blocked 放行；提示已写明。
-- PR #154（工单 101）已合并为 `d00327c`。
-- PR #155（工单 110）已合并为 `e0c532a`。
-- 工单 111「桌面观察能力」：分支 `ticket/111-desktop-observation` 基于最新 main `e0c532a` 开发。已接入 `windows_list`、`windows_foreground`、`windows_observe`，复用 `uiautomation==2.0.29`、现有图片请求、工具循环、角色权限、预算和 `tools.jsonl` 活动账本；聊天与自主活动共用工具链，QQ 桌面工作与观察共用互斥锁。Lan 的 Windows 实机体验尚未进行。
+- 工单 111 已通过 PR #157 合并为 `b64875d`；四项 Windows/Linux Python 3.11/3.12 CI 通过。Lan 的 Windows 实机观察验收仍待进行。
+- 工单 112 在独立 worktree `E:\Peter-Agent\VEIL\worktrees\112-desktop-interaction`、分支 `ticket/112-desktop-interaction` 上实现，基于 main `b64875d`。PR #158 已创建并保持打开；Ubuntu/Windows Python 3.11/3.12 全量 CI 和依赖安全检查通过，CodeRabbit 审查仍在处理中。已有记事本程序白名单、启动/复用、窗口管理、精确 UIA 控件动作、文本核验、人工输入优先、共享桌面锁及活动记录接入。
+- Microsoft winapp CLI 固定提交 `6564e7adba6d339f2b06868baca050e54687a2b3` 已审阅；只借用精确目标解析、显式 UIA pattern、动作前重查和桌面协调思路，没有增加依赖或复制代码。
+- 视觉点击未开放：当前实现无法把截图坐标可靠绑定到窗口几何和布局版本；保留工单 111 的截图观察能力，目标不确定时不点。
+- 已通过 `tests.test_windows_interaction` 与 `tests.test_windows_observer` 共 34 项；Python 编译检查通过。PR #158 的 Ubuntu/Windows Python 3.11/3.12 全量 CI 和依赖安全检查通过，CodeRabbit 审查仍在处理中。另一次 181 项工具/聊天/自主活动回归运行有本机依赖、Node 服务和 junction 权限导致的失败；不是完整通过。Lan Windows 实机验收尚未完成。当前 Python 环境未安装 `uiautomation`，没有做真实桌面动作。
 
 ## 下一步
 
-1. 工单 110 的 PR #155 已合并；Lan 按 `docs/tickets/110-long-task-unstick.md` 验收，Windows 体验仍待确认。
-2. 工单 111 的桌面观察 PR 等待审查与 CI；保持打开，待 Lan 完成 Windows 实机验收，不自动合并。
-3. 其他没有读取路径的副作用工具（`plan`、`letter_write`、`letter_lock_update`、`grant_append`）检查点目标同样可能无法匹配；现在可以靠 blocked 放行，若 Peter 常卡在这些工具上，再单开工单绑定可读取的目标。
+1. 跟进 PR #158 的 CodeRabbit/Cubic 审查意见；仅对实质问题提交修复到同一分支。
+2. 等待 Lan 按工单步骤完成 Windows 实机验收，并与自动检查分开记录。
+3. PR 保持打开，等待 Lan 验收；不要自动合并。
 
-## 此前工单当前状态
+## 仍适用的边界
 
-合并和 Lan 体验验收分别记录在 `STATUS.md`。已验收的 095、096、102、103–105 不再列为待验收。仍需观察/验收：097 持续观察；098 等待 2026-11-07 邮箱开通；099 网页读取及其他场景；100 定时唤醒；101 附件体验；106 真实窗口操作；107 QQ 表情整句发送；108 Windows 一键更新；109 普通故障恢复提示；110 长期任务验收；111 Windows 桌面观察。
+- 正式 checkout `E:\Peter-Agent\VEIL\veil-agent` 留在 `main`。其中用户已有的 `update-main-collisions.ps1`、`update-main.cmd` 删除状态不属于本工单，保持原样。
+- 不修改工单 111 尚未合并分支或旧 worktree；本工单独立基于其已合并提交 `b64875d`。
+- 只有 Peter 配置启用 Windows 交互；初始只开放 `notepad`。不接受任意 exe、命令行、Shell 或 PowerShell；应用身份由可执行文件和进程路径白名单匹配。
+- 所有桌面动作与 QQ 共用 `desktop_access`；近期人工输入、锁屏/安全桌面、暂停、窗口身份变化、UIA 目标不明或结果不确定时停止。不会自动重做结果不确定的动作。
+- 文本、聊天、截图不进入工具活动明细；不新增模型供应商或预算。额外 UIA 工具步骤会使用现有请求的模型 token 和预算。
+- UIA 操作没有在 Lan 的真实 Windows 桌面验证；模拟后端只能验证 VEIL 权限、路由、互斥和结果处理，不能替代实机体验。
 
-095 的 UI 视觉设计改版是独立后续事项。本次只增加附件卡片交互，不改整体 UI 视觉设计，也不修 QQ 表情问题。
+## 仍有效的相关技术事实
 
-## 重要边界
-
-- 正式 checkout `E:\Peter-Agent\VEIL\veil-agent` 保持在 `main`；其中预存的两个脚本删除状态来自用户环境，未纳入本分支。当前任务只在独立 worktree 开发。
-- 不覆盖角色数据；损坏或无法安全更新的闹钟状态停止并提示保留 data。闹钟只是一次自主活动触发，不扩大工具权限，也不保证模型一定选择发送消息。为避免重复，若进程在闹钟已消费后、活动开始标记写入前崩溃，该次唤醒可能跳过；服务在到期前重启或电脑睡眠/关机后恢复时，仍按持久状态处理。
-- Windows 睡眠期间不能准点运行；恢复后服务在下次空闲轮询时至多补醒一次。电脑需恢复运行且 VEIL 服务启动，Lan 的 QQ 联系方式也需已配置并可用。
-
-## 技术要点（长期有效，改写本文件时请保留）
-
-- 桌面观察（111）：截图先用 `PrintWindow`(PW_RENDERFULLCONTENT) 拍后台窗口，再在前台时用 `Bitmap.FromControl`；`capture_looks_blank` 拒绝单色截图（Electron/硬件加速常返回黑屏），不要去掉这个检查。`SENSITIVE_LABEL` 英文词必须整词匹配。
-- QQ（102–107）：不注入、不用协议；只在 Lan 两分钟没碰电脑且前台不是全屏程序时操作窗口，打字前核对聊天窗口顶部是 Lan。QQ 界面没有类名，`parse_chat` 按名字解析（常量在 `qq_channel.py` 顶部）；QQ 升级后读不到时，先在 Lan 电脑上跑 `.local-tmp\qq_check2.py` 打印结构。写剪贴板必须用 `qq_channel.set_clipboard_text`（按 UTF-16 长度）：uiautomation 2.0.29 的 `SetClipboardText` 遇到表情会截掉句尾，不要换回去。缺 uiautomation 时抛 `QQUnavailable` 提示重跑 setup.bat。授权码和 Lan 的 QQ 名字只放在本机 `.env`。
-- 桌面活动窗口（106）：`Hub.tool_activity` 按 tools.jsonl 的大小/修改时间缓存，并在 Hub 锁外计算；每个窗口每 600 ms 轮询一次，不要改回每次都重读。
-- 更新（108）：`update.bat` 只执行 `git pull --ff-only origin main`，不 stash、不切分支，出问题就停下说明原因；`tests/test_update_bat.py` 守着这些规则。改桌面界面的 PR，验收步骤写「退出 Peter → 双击 update.bat」，只 git pull 不会更新 VEIL.exe。
-- 桌面版的服务入口是 `web_agent.py`：新工具要在它和 `veil_agent.py`（终端）两处都接上（099 就漏过一次）。工单 101 的附件工具只在 desktop `serve_chat` 能提供安全 Lab 读取与 Hub 保存回调时显示。
+- 工单 111 用 `PrintWindow` 观察后台窗口，并拒绝黑屏/单色截图；保留 `SENSITIVE_LABEL` 的整词匹配和窗口进程/创建时间身份校验。
+- QQ 与普通 Windows 桌面工作共享 `desktop_access`，不得引入绕过锁的独立输入路径。
+- 桌面版入口仍通过 `FilesystemTools` 共享实现接入；终端与 desktop `serve_chat` 均使用既有 Chat 工具循环、权限、预算和 `tools.jsonl` 活动账本。
+- Windows UIA 依赖仍为 `uiautomation==2.0.29`；不得为了本工单加入第二套桌面自动化框架。

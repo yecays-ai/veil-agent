@@ -1,11 +1,12 @@
 # 当前状态
 
-更新：2026-10-25 10:50 UTC · Claude。
+更新：2026-10-25 13:34 UTC · Codex。
 
 ## 当前目标与现状
 
-- 工单 110「长期任务的待核实操作不再卡死」：PR #155 已于 2026-10-25 合并为 `e0c532a`。Peter 自主活动中新建记忆后的长期任务检查点已绑定新记忆 ID，可用 `memory_read` 核实；设 `status=blocked` 会记录未核实操作并解除拦截。Lan Windows 体验仍待验收。
-- 工单 111「桌面观察能力」：分支 `ticket/111-desktop-observation` 基于最新 main `e0c532a`。提供 `windows_list`、`windows_foreground`、`windows_observe` 三个 Peter 只读工具，复用 UIA、图片理解、工具权限/预算和活动账本；无新依赖、模型供应商、Agent 或独立预算。Claude 审查后修复：敏感词按完整单词匹配（原规则把 Shopping/Pin tab 等误判为密码窗口）；截图改用 PrintWindow 支持后台窗口并拒绝黑屏/单色截图；`windows_foreground` 跳过 VEIL 自身。针对性自动检查通过，真实 Windows UIA/截图与 Lan 体验尚未验收。
+- 工单 112「Windows 桌面交互」：PR #158 已创建并保持打开，分支 `ticket/112-desktop-interaction` 基于 main `b64875d`。Ubuntu/Windows Python 3.11/3.12 全量 CI 和依赖安全检查通过；CodeRabbit 审查的两项已由 Claude 修复：键盘回退限 200 字、无间隔输入且输入后再标记自身按键（不会超时后继续往别的窗口打字）；动作发出后才检测到人工输入或暂停时，报告为「结果不确定、不要重复」，不再报「未执行」。沿用工单 111 的 UIA、窗口身份、敏感界面拦截、QQ 共用桌面锁，新增 Peter 专属记事本白名单、窗口管理、UIA 控件动作、受审批的文本替换、人工输入优先及结果核验；没有新 Agent、框架、依赖、模型供应商或独立预算。18 个交互检查与工单 111 的 16 个观察检查共 36 项通过，Python 编译检查通过。更广的 181 项本机回归运行受缺失依赖/Node 服务及 junction 权限限制，未全部通过。视觉坐标点击未开放；Lan 的 Windows 实机操作、人工接管和 QQ 回归仍待验收。
+- 工单 111「桌面观察能力」：PR #157 已合并为 `b64875d`；Windows/Linux Python 3.11/3.12 四项 CI 通过。提供 `windows_list`、`windows_foreground`、`windows_observe`，包含后台 PrintWindow 截图、拒绝黑屏/单色截图、敏感界面拦截，并与 QQ 共用桌面互斥锁。Lan 的真实 Windows UIA/截图体验仍待验收。
+- 工单 110「长期任务的待核实操作不再卡死」：PR #155 已于 2026-10-25 合并为 `e0c532a`；Lan Windows 体验仍待验收。
 - 工单 101「Peter 把自己做的东西发给 Lan」：PR #154 已合并为 `d00327c`；Windows 体验待验收。
 
 ## 此前工单验收状态
@@ -27,11 +28,13 @@
 
 ## 下一步
 
-工单 110 PR 等 CI 通过后合并；合并后 Lan 用 `update.bat` 更新，按工单 110 步骤验收。
+跟进 PR #158 的 CodeRabbit/Cubic 实质审查意见；CI 已通过。保持 PR 打开，等待 Lan 的 Windows 验收，不自动合并。
 
 ## 尚待 Lan 验收或观察
 
 - 110：按 `docs/tickets/110-long-task-unstick.md` 的步骤验收：卡住的生日寻宝任务能被 Peter 自己放行，之后写文件不再循环被拒绝。
+- 111：按本文件的工单 111 Windows 体验步骤验收桌面观察、后台截图及桌面不受干扰。
+- 112：按 `docs/tickets/112-desktop-interaction.md` 验收白名单启动、文字输入、菜单和窗口切换、人工接管、权限限制及活动账本。
 
 - 097：继续观察自主行为，不标记体验通过。
 - 098：2026-11-07 后配置新 QQ 邮箱并验收 IMAP/SMTP 收发。
