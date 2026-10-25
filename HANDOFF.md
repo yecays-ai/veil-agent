@@ -5,15 +5,18 @@
 - 工单 110：Lan 电脑上 Peter 的长期任务卡死。根因：自主活动中新建记忆（`hold` 无 `target_id`）建立的检查点目标是记忆标题，没有任何读取工具的目标能与之匹配，所以永远无法核实；而标记 blocked 也不会清除待核实操作，`before_tool` 在自主活动中继续拦截所有副作用操作，形成死锁。修复：`memory_native` 新建记忆结果附 `memory_id`，`finish_tool` 把检查点目标改绑到该 ID（`memory_read` 可核实）；`long_task_update status=blocked` 清除未核实操作并记「无法核实，已阻塞」；拦截提示按工具类型指明读取工具。
 - Lan 机器上已卡住的那条（目标是标题 `Growth journal: first entry written unpr`）无法用读取核实，需 Peter 自己设 blocked 放行；提示已写明。
 - PR #154（工单 101）已合并为 `d00327c`。
+- PR #155（工单 110）已合并为 `e0c532a`。
+- 工单 111「桌面观察能力」：分支 `ticket/111-desktop-observation` 基于最新 main `e0c532a` 开发。已接入 `windows_list`、`windows_foreground`、`windows_observe`，复用 `uiautomation==2.0.29`、现有图片请求、工具循环、角色权限、预算和 `tools.jsonl` 活动账本；聊天与自主活动共用工具链，QQ 桌面工作与观察共用互斥锁。Lan 的 Windows 实机体验尚未进行。
 
 ## 下一步
 
-1. 工单 110 PR CI 通过后合并，告诉 Lan 按 `docs/tickets/110-long-task-unstick.md` 验收。
-2. 其他没有读取路径的副作用工具（`plan`、`letter_write`、`letter_lock_update`、`grant_append`）检查点目标同样可能无法匹配；现在可以靠 blocked 放行，若 Peter 常卡在这些工具上，再单开工单绑定可读取的目标。
+1. 工单 110 的 PR #155 已合并；Lan 按 `docs/tickets/110-long-task-unstick.md` 验收，Windows 体验仍待确认。
+2. 工单 111 的桌面观察 PR 等待审查与 CI；保持打开，待 Lan 完成 Windows 实机验收，不自动合并。
+3. 其他没有读取路径的副作用工具（`plan`、`letter_write`、`letter_lock_update`、`grant_append`）检查点目标同样可能无法匹配；现在可以靠 blocked 放行，若 Peter 常卡在这些工具上，再单开工单绑定可读取的目标。
 
 ## 此前工单当前状态
 
-合并和 Lan 体验验收分别记录在 `STATUS.md`。已验收的 095、096、102、103–105 不再列为待验收。仍需观察/验收：097 持续观察；098 等待 2026-11-07 邮箱开通；099 网页读取及其他场景；100 定时唤醒；101 附件体验；106 真实窗口操作；107 QQ 表情整句发送；108 Windows 一键更新；109 普通故障恢复提示。
+合并和 Lan 体验验收分别记录在 `STATUS.md`。已验收的 095、096、102、103–105 不再列为待验收。仍需观察/验收：097 持续观察；098 等待 2026-11-07 邮箱开通；099 网页读取及其他场景；100 定时唤醒；101 附件体验；106 真实窗口操作；107 QQ 表情整句发送；108 Windows 一键更新；109 普通故障恢复提示；110 长期任务验收；111 Windows 桌面观察。
 
 095 的 UI 视觉设计改版是独立后续事项。本次只增加附件卡片交互，不改整体 UI 视觉设计，也不修 QQ 表情问题。
 

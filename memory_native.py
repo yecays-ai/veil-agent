@@ -715,6 +715,11 @@ class ToolSet:
     def set_autonomy(self, enabled):
         self.native.autonomy_mode = bool(enabled)
 
+    def begin_request(self):
+        begin = getattr(self.files, 'begin_request', None)
+        if begin:
+            begin()
+
     def announce_autonomy(self):
         self.files.announce_autonomy()
 
@@ -733,10 +738,12 @@ class ToolSet:
         if announce:
             announce(max_bytes)
 
-    def invoke(self, name, args, approval=input):
+    def invoke(self, name, args, approval=input, *, should_stop=None):
         if self.native.handles(name):
             return self.native.invoke(name, args, approval)
-        return self.files.invoke(name, args, approval)
+        if should_stop is None:
+            return self.files.invoke(name, args, approval)
+        return self.files.invoke(name, args, approval, should_stop=should_stop)
 
     def preview_summary(self, name, args):
         if self.native.handles(name):

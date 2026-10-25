@@ -87,3 +87,8 @@ daily_max_sent = 100
 [web]
 # Ticket 099: direct-use, read-only public web search and fetch tools.
 enabled = true
+
+[windows_observation]
+# Ticket 111: read-only window discovery and UIA observation. Screenshot fallback is transient
+# and uses Peter's existing vision-capable chat model. Other characters remain disabled by default.
+enabled = true

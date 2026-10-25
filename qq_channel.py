@@ -16,6 +16,8 @@ import unicodedata
 from datetime import datetime
 from pathlib import Path
 
+from desktop_access import DesktopBusy, desktop_access
+
 
 QQ_PREFIX = '[Lan sent this on QQ; she is away from the computer.]\n'
 ENV_KEY = 'QQ_LAN_CONTACT'
@@ -390,6 +392,13 @@ class QQWindow:
                 pass
 
     def read(self):
+        try:
+            with desktop_access(timeout=2):
+                return self._read_locked()
+        except DesktopBusy as exc:
+            raise QQUnavailable('QQ 正在等待另一个桌面读取，请稍后重试。') from exc
+
+    def _read_locked(self):
         auto = self._auto()
         with auto.UIAutomationInitializerInThread():
             window = self._chat_window(auto)
@@ -403,6 +412,13 @@ class QQWindow:
                 self._back(auto, previous)
 
     def send(self, text):
+        try:
+            with desktop_access(timeout=2):
+                return self._send_locked(text)
+        except DesktopBusy as exc:
+            raise QQUnavailable('QQ 正在等待另一个桌面操作，请稍后重试。') from exc
+
+    def _send_locked(self, text):
         auto = self._auto()
         with auto.UIAutomationInitializerInThread():
             window = self._chat_window(auto)
