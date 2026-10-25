@@ -2,6 +2,7 @@
 
 ## 当前进度
 
+- 当前工单 121「Peter 背景库按关键词注入」，分支 `ticket/121-background-injection`：`background.py` + `Chat.send` 在历史之后、召回之前插入命中的背景段落；本机背景文件 `persona/peter.background.md`（不进仓库）每次请求重读；`data/<角色>/context-log.jsonl` 记录每次请求的各部分大小与背景命中方式。下一个工单号 122。
 - 当前工单 120「瞄一眼认不出前台窗口时不再失败」，分支 `ticket/120-glance-no-window`：前台只有桌面/VEIL/受保护窗口时，瞄一眼不再记失败，Peter 得知 Lan 多半在桌面，并看到桌面项目名字（不读内容）；窗口内容读不出时只给应用名和标题。回归测试 `tests/test_glance.py`。
 - 工单 117（PR #165）已合并 `d42b12e`；工单 119（PR #166）已合并 `5262318`，修复 Codex 监视的能力通知。117 的审批/提问等待仍没有可靠信号。
 - 工单 116 的 PR #164 已合并为 `0f39c1a7b3fec62545839075a4825ab3e5b9c95d`；GitHub 查询未返回该提交的 workflow/status 行，不能写成 CI 通过。Lan 的 Windows 体验仍待验收。
@@ -12,6 +13,7 @@
 
 ## 下一步
 
+0. 工单 121 合并后，Lan 退出 Peter 运行 update.bat 再重开；按工单验收第 2–7 步检查，一天后算背景的实际费用写进 STATUS。
 1. 工单 120 CI 通过后合并，Lan 运行 update.bat 后在桌面或只开 VEIL 时验收一次瞄一眼。
 2. 115–119 仍等 Lan Windows 实机验收；不要把 CI 通过当作体验验收。
 3. PR 检查、CI、Windows 实机体验分别记录；不要把未运行的测试或未回传的状态写成通过。

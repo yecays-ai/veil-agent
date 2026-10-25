@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
+from background import append_context_log, background_context, background_path, context_chars, request_kind
 from contextlib import contextmanager, nullcontext
 
 from agent_types import (AUTONOMY_WAKE, BudgetExceeded, CODEX_WATCH_WAKE, GLANCE_WAKE,
@@ -402,6 +403,7 @@ class Character:
     windows_interaction: dict = None
     screen_pop: dict = None
     glance: dict = None
+    background: str = None
 
 
 def positive_int(value):
@@ -588,7 +590,8 @@ def load_character(root, character_id):
                          positive_int(cfg.get('history_rounds', 20)),
                          positive_int(cfg.get('max_output_tokens', 1024)), provider, cfg['provider'],
                          memory, tools, autonomy, voice, profile, email, qq, web, windows_observation,
-                         windows_interaction, screen_pop, glance)
+                         windows_interaction, screen_pop, glance,
+                         background=str(background_path(persona_path)))
     except UserError:
         raise
     except (OSError, KeyError, ValueError, TypeError, ArithmeticError) as exc:
@@ -1696,6 +1699,24 @@ class Chat:
             }},
         ]
 
+    def _log_context(self, text, autonomy, request_id, head, profile_context, stable, history, recalled,
+                     background_details, runtime_context, tool_schema, user, estimate):
+        # Ticket 121: one line per request with sizes, ids and keywords only, never the text itself.
+        row = {
+            'kind': request_kind(self, text, autonomy), 'request_id': request_id,
+            'persona_chars': len(self.cfg.persona), 'about_lan_chars': len(profile_context or ''),
+            'stable_chars': len(stable), 'history_rounds': sum(m.get('role') == 'user' for m in history),
+            'history_chars': context_chars(history), 'memory_ids': list(self.turn_memory_refs),
+            'memory_chars': context_chars(recalled), 'background': background_details,
+            'runtime_chars': context_chars(runtime_context),
+            'tool_schema_bytes': len(json.dumps(tool_schema or [], ensure_ascii=False).encode('utf-8')),
+            'user_chars': context_chars([user]), 'estimated_input_tokens': estimate,
+        }
+        try:
+            append_context_log(self.store, self.cfg.id, row)
+        except (OSError, UserError):
+            pass
+
     def send(self, text, *, autonomy=False, extra_context=None, media=None, message_id=None, persist_user=True):
         # Per-call durability fact used by UI adapters when failures can occur
         # both before and after the user row is appended.
@@ -1749,7 +1770,14 @@ class Chat:
         self._active_capability_schemas = tool_schema
         # Tool definitions already tell the model what it can use. Peter gets the one-time update
         # notice below and reads the dated record himself through capability_history.
-        tail = [*recalled]
+        # Ticket 121: background paragraphs that match this moment sit after the history, before
+        # recalled memories. The file is read again on every request.
+        background_current = text if isinstance(text, str) else ''
+        if autonomy and extra_context:
+            background_current += '\n' + extra_context
+        background_message, background_details = background_context(
+            self.cfg.background, background_current, self.history)
+        tail = [*([background_message] if background_message else []), *recalled]
         if self.current_request_tool_schemas():
             recall_context = self.recall_context()
             if recall_context:
@@ -1817,6 +1845,8 @@ class Chat:
                                      if isinstance(media.get(key), str)}
                 self.store.append(self.path, event)
                 self.last_send_persisted = True
+        self._log_context(text, autonomy, request_id, head, profile_context, stable, history, recalled,
+                          background_details, runtime_context, tool_schema, user, bound(history))
         try:
             self._capability_request_active = True
             self.last_self = description
