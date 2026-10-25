@@ -105,6 +105,23 @@ output_cny_per_million = "8"
         self.assertEqual(outputs[0].attachments, [saved])
         chat.attachment_reader.assert_called_once_with('lab/story.md')
 
+    def test_email_reply_attachment_limit_rejects_fourth_file_before_reading_it(self):
+        chat = Chat(self.cfg, self.store, self.budget, self.model)
+        chat.attachment_reader = Mock()
+        chat.attachment_saver = Mock()
+        chat.email_attachment_admission = Mock(return_value=False)
+
+        result, state, _ = chat.send_message(json.dumps({'text': 'Here is another file.',
+                                                         'file': 'lab/fourth.txt'}),
+                                             'request-fourth-email-file')
+
+        self.assertEqual(state, '被拒绝')
+        self.assertIn('three attachments', result)
+        chat.email_attachment_admission.assert_called_once_with()
+        chat.attachment_reader.assert_not_called()
+        chat.attachment_saver.assert_not_called()
+        self.assertEqual(self.store.read('test/chat.jsonl'), [])
+
     def test_attachment_save_failure_does_not_spend_voice_budget(self):
         voice = Mock()
         chat = Chat(self.cfg, self.store, self.budget, self.model, voice=voice)

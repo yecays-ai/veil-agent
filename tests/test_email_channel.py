@@ -181,6 +181,15 @@ class EmailChannelTests(unittest.TestCase):
         self.assertEqual(attached[0].get_payload(decode=True), raw)
         self.assertEqual(sent['In-Reply-To'], '<lan@example.com>')
 
+    def test_email_reply_attachment_admission_stops_after_three_files(self):
+        bridge = AwayBridge(self.channel, Hub('Peter', SimpleNamespace(enabled=lambda: False)))
+        self.assertTrue(bridge.can_add_reply_attachment())
+        bridge.in_turn = True
+        bridge.collected_attachments = [{'id': str(index)} for index in range(3)]
+        self.assertFalse(bridge.can_add_reply_attachment())
+        bridge.in_turn = False
+        self.assertTrue(bridge.can_add_reply_attachment())
+
     def test_proactive_email_attachment_uses_email_only(self):
         media_id = 'b' * 32
         raw = b'hello from Peter'

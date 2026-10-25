@@ -6,7 +6,7 @@ import ssl
 import sys
 import tempfile
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from types import SimpleNamespace
 import unittest
 import urllib.error
@@ -136,6 +136,46 @@ output_cny_per_million = "8"
 
         self.assertEqual(replayed['attachments'], [original])
         self.assertEqual(reopened_hub.read_attachment(original['id']), (original, raw))
+
+    def test_delete_and_recall_chat_actions_clean_attachment_snapshots(self):
+        raw = b'Fictional attachment data.'
+        deleted = self.hub.save_attachment({'name': 'deleted.txt', 'suffix': '.txt',
+            'mime': 'text/plain', 'view': 'text', 'size': len(raw), 'data': raw})
+        recalled = self.hub.save_attachment({'name': 'recalled.txt', 'suffix': '.txt',
+            'mime': 'text/plain', 'view': 'text', 'size': len(raw), 'data': raw})
+        stamp = datetime.now(timezone.utc).isoformat()
+        self.store.append('test/chat.jsonl', {
+            'role': 'assistant', 'content': 'Here is the deleted file.', 'time': stamp,
+            'request_id': 'deleted-request', 'message_id': 'deleted-message',
+            'attachments': [deleted],
+        })
+        self.store.append('test/chat.jsonl', {
+            'role': 'user', 'content': 'Please retract this file.', 'time': stamp,
+            'request_id': 'recalled-request', 'message_id': 'recalled-message',
+            'attachments': [recalled],
+        })
+        chat = Chat(self.cfg, self.store, Budget(self.store), self.model, output=self.hub.output)
+        self.hub.busy = False
+        email = SimpleNamespace(name='email', label='Email')
+        with patch('web_agent.run_chat'), patch('away_bridge.AwayBridge.start'), \
+                patch.object(self.hub, 'request_stop'):
+            serve_chat(chat, self.hub, channels=(email,))
+        email_bridge = self.hub.away[-1]
+        email_bridge.in_turn = True
+        email_bridge.collected_attachments = [{'id': str(index)} for index in range(3)]
+        self.assertFalse(chat.email_attachment_admission())
+        email_bridge.in_turn = False
+
+        self.assertEqual(self.hub.message_action('delete', message_id='deleted-message'), '消息已删除。')
+        self.assertNotIn(deleted['id'], self.hub.media_index)
+        self.assertFalse((self.hub.media_root / deleted['filename']).exists())
+
+        self.assertEqual(self.hub.message_action('recall', message_id='recalled-message'), '消息已撤回。')
+        recalled_row = next(row for row in self.store.read('test/chat.jsonl')
+                            if row.get('message_id') == 'recalled-message')
+        self.assertEqual(recalled_row['attachments'], [])
+        self.assertNotIn(recalled['id'], self.hub.media_index)
+        self.assertFalse((self.hub.media_root / recalled['filename']).exists())
 
     def test_voice_transport_errors_keep_their_real_category(self):
         cases = (

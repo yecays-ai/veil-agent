@@ -67,6 +67,11 @@ class AwayBridge:
                 if self.channel.name == 'email' and isinstance(attachments, list):
                     self.collected_attachments.extend(item for item in attachments if isinstance(item, dict))
 
+    def can_add_reply_attachment(self):
+        with self.state_lock:
+            return (self.channel.name != 'email' or not self.in_turn
+                    or len(self.collected_attachments) < 3)
+
     def requested(self, text, attachments=None):
         """send_message(<channel>=true). Inside this channel's turn every message goes out anyway."""
         with self.state_lock:

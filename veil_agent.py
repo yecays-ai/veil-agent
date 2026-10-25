@@ -1032,6 +1032,7 @@ class Chat:
         self.attachment_reader = None
         self.attachment_saver = None
         self.attachment_discarder = None
+        self.email_attachment_admission = None
         # Tickets 098/102: channel name -> callable(text), set by the desktop service for configured channels.
         self.away_channels = {}
 
@@ -1200,6 +1201,10 @@ class Chat:
         if 'file' in args and (not isinstance(args['file'], str) or
                                not args['file'].strip() or len(args['file']) > 240):
             return 'send_message file must be one Lab-relative path.', '被拒绝', 'send_message'
+        if ('file' in args and callable(self.email_attachment_admission)
+                and self.email_attachment_admission() is False):
+            return ('This email reply already has three attachments. This file was not sent; continue without it '
+                    'or send it in a separate message.'), '被拒绝', 'send_message'
         if 'voice' in args and type(args['voice']) is not bool:
             return 'send_message voice must be a boolean.', '被拒绝', 'send_message'
         for name in self.away_channels:
@@ -1469,7 +1474,8 @@ class Chat:
                                   for event in self._chat_rows()):
             raise UserError('Peter 已经处理了这条消息，不能再撤回。')
         self.store.update_record(self.path, index, {
-            'message_id': message_id, 'content': '[Message recalled]', 'recalled': True, 'media': None,
+            'message_id': message_id, 'content': '[Message recalled]', 'recalled': True,
+            'media': None, 'attachments': [],
         })
         self.history, self.rounds = self.recent()
         return row

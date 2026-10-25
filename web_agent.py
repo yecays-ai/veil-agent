@@ -977,12 +977,16 @@ class Hub:
                 return '已开始重新生成。'
             if action == 'delete':
                 rows = self.chat.delete_messages(ids)
-                for row in rows:
-                    self.push('message_removed', '', message_id=row['message_id'])
-                    try:
-                        self._remove_unreferenced_media(row.get('media'))
-                    except (OSError, UserError):
-                        pass  # A cleanup failure leaves only an unreferenced media file.
+                publish_removed = getattr(self.chat, 'message_removed', None)
+                if callable(publish_removed):
+                    publish_removed(rows)
+                else:
+                    for row in rows:
+                        self.push('message_removed', '', message_id=row['message_id'])
+                        try:
+                            self._remove_unreferenced_media([row.get('media'), *(row.get('attachments') or [])])
+                        except (OSError, UserError):
+                            pass
                 return '已删除所选消息。' if len(rows) > 1 else '消息已删除。'
             if action == 'edit':
                 row = self.chat.edit_message(message_id, content)
@@ -993,11 +997,15 @@ class Hub:
                 self.push('message_updated', '', message_id=message_id, favorite=row['favorite'])
                 return '已收藏消息。' if favorite else '已取消收藏。'
             row = self.chat.recall_message(message_id)
-            self.push('message_recalled', '[Message recalled]', message_id=message_id)
-            try:
-                self._remove_unreferenced_media(row.get('media'))
-            except (OSError, UserError):
-                pass
+            publish_recalled = getattr(self.chat, 'message_recalled', None)
+            if callable(publish_recalled):
+                publish_recalled(row)
+            else:
+                self.push('message_recalled', '[Message recalled]', message_id=message_id)
+                try:
+                    self._remove_unreferenced_media([row.get('media'), *(row.get('attachments') or [])])
+                except (OSError, UserError):
+                    pass
             return '消息已撤回。'
         except UserError as exc:
             return str(exc)
@@ -1545,6 +1553,8 @@ def serve_chat(chat, hub, channels=()):
         bridge = AwayBridge(channel, hub)
         hub.away.append(bridge)
         chat.away_channels[channel.name] = bridge.requested
+        if channel.name == 'email':
+            chat.email_attachment_admission = bridge.can_add_reply_attachment
         announce = getattr(files, 'announce_' + channel.name, None)
         if callable(announce):
             if announce() is False:
