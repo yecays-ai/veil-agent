@@ -2,17 +2,17 @@
 
 ## 当前进度
 
-- 工单 101「Peter 把自己做的东西发给 Lan」：分支 `ticket/101-send-lab-files` 已基于 PR #153 合并后的 main `006a4b7` 开发，代码与票据已本地提交。Lab 附件限制为普通、未链接、允许类型且不超过 5 MiB；聊天保存独立快照和索引，重启后历史可恢复；桌面卡片支持图片预览、纯文本查看和用户点击后用默认浏览器打开 HTML；邮件最多发送 3 个附件，QQ 不附文件。
+- 工单 101「Peter 把自己做的东西发给 Lan」：分支 `ticket/101-send-lab-files` 已基于 PR #153 合并后的 main `006a4b7` 开发并推送；PR #154 已打开。Lan 已确认本地预览，PR 的实时 CI 与审查进度见 GitHub 最新 Checks 和评论。Lab 附件限制为普通、未链接、允许类型且不超过 5 MiB；聊天保存独立快照和索引，重启后历史可恢复；桌面卡片支持图片预览、纯文本查看和用户点击后用默认浏览器打开 HTML；邮件最多发送 3 个附件，QQ 不附文件。
 - 复用现有 `Hub.media_root/index.jsonl`、认证媒体路由和 Python 标准库 `EmailMessage.add_attachment()`，不引入第三方运行依赖。每个读取/发送边界校验文件元数据；HTML 由本机浏览器打开前按 5 MiB 流式读取；无效附件不会触发语音合成。用户权限、费用和自主消息次数限制未扩大。
-- 本地：Python 全量 484 项通过、4 项跳过；`test_web.py` 57 项通过；Electron 桌面 7 项通过；Python 编译、桌面 JavaScript 语法和 `git diff --check` 通过。未运行真实模型、付费接口或真实邮箱。101 尚未推送，CI 未运行，Lan Windows 体验未做。
-- 等 Lan 看本地附件卡片效果图并确认后再推送、创建 PR；按本次要求保持 PR 未合并。
+- 本地：Python 全量 484 项通过、4 项跳过；`test_web.py` 57 项通过；Electron 桌面 7 项通过；Python 编译、桌面 JavaScript 语法和 `git diff --check` 通过。未运行真实模型、付费接口或真实邮箱。Lan Windows 体验未做；PR #154 的远端 CI/审查以最新 PR 页面为准。
+- Lan 已确认本地附件卡片效果；分支已推送并创建 PR #154（https://github.com/yecays-ai/veil-agent/pull/154）。PR 当前打开，等待审查和 CI；按 Lan 要求不自动合并。
 - PR #153（工单 109）已合并为 `006a4b7`；PR 提交 `8af814d` 的 Tests #1259 与 Dependency security #202 成功。它改了 `runtime_monitor.py`、对应测试、STATUS 和 HANDOFF；101 与它的运行代码文件不重叠，文档已基于合并后的状态重新整理。
 - PR #152（工单 100）已合并为 `c0de006`；最新 PR 提交 `f7951d5` 的 Tests #1256 与 Dependency security #201 成功。Lan Windows 定时唤醒体验仍待验收。
 - PR #149（工单 106）已合并，Tests #1237、Dependency security #193 和 Windows desktop #100 均成功；Lan 看过预览，但真实拖出、合并、重启恢复仍未验收。
 
 ## 下一步
 
-1. 展示并请 Lan 查看本地附件卡片预览；确认后推送 101 分支、创建 PR，并记录 PR 号及最新 CI。保持未合并，等审查和 Windows 体验验收。
+1. 跟进 PR #154 的 Cubic 审查与最新 CI；只处理功能、用户体验、数据完整性、隐私或安全方面的实质问题。按 Lan 要求保持 PR 打开，不自动合并。
 2. 合并后按 `STATUS.md` 中的 Windows 步骤验收聊天附件、重启恢复和邮件附件。
 
 ## 此前工单当前状态
