@@ -34,10 +34,11 @@ TASK_UPDATE_TOOL = SimpleNamespace(name='long_task_update', description=(
     'an unfinished task cannot be overwritten. Use action=update with its exact task_id to append '
     'confirmed progress and evidence, set the next step, pause, mark a blocker, or mark the whole goal '
     'completed. A session ending or reaching a tool limit is not task completion. If pending_action exists, '
-    'first inspect the exact target using read_text_file; for lab moves use lab_file_digest when the file may exceed the read limit. '
+    'first inspect the exact target using read_text_file (memory_read with the memory ID for memory operations); for lab moves use lab_file_digest when the file may exceed the read limit. '
     'For file writes and lab moves the program checks actual content against '
     'the saved operation effect. Resolve only with the pending operation_id shown by long_task_status and after '
-    'the program records a matching read. If the effect cannot be confirmed, mark the task blocked and do not repeat it. '
+    'the program records a matching read. If the effect cannot be confirmed, mark the task blocked, which records it '
+    'as unverified and releases it; do not repeat it. '
     'This state does not grant file or memory permissions.'), inputSchema={
         'type': 'object', 'additionalProperties': False,
         'properties': {
@@ -215,7 +216,8 @@ class LongTaskStore:
     def _model_event(event):
         event = dict(event)
         labels = {'经检查确认': 'verified by inspection', '被拒绝': 'rejected',
-                  '成功，需核实': 'succeeded; verification required', '结果不确定': 'outcome uncertain'}
+                  '成功，需核实': 'succeeded; verification required', '结果不确定': 'outcome uncertain',
+                  '无法核实，已阻塞': 'unverifiable; task marked blocked'}
         if event.get('state') in labels:
             event['state'] = labels[event['state']]
         if event.get('evidence', '').startswith('工具返回状态：'):
@@ -337,6 +339,14 @@ class LongTaskStore:
                                 f"{pending['verified_by']} ({pending['verified_sha256'][:16]})"})
                 task['pending_action'] = None
                 task['tool_events'] = task['tool_events'][-MAX_TOOL_EVENTS:]
+            if status == 'blocked' and task['pending_action'] and not resolve:
+                pending = task['pending_action']
+                task['tool_events'].append({'time': now(),
+                    'operation_id': self._operation_id(task['task_id'], pending),
+                    'tool': pending['tool'], 'target': pending['target'], 'state': '无法核实，已阻塞',
+                    'evidence': 'Peter marked the task blocked because this operation could not be verified.'})
+                task['pending_action'] = None
+                task['tool_events'] = task['tool_events'][-MAX_TOOL_EVENTS:]
             if status is not None:
                 task['status'] = status
             if next_step is not None:
@@ -407,8 +417,15 @@ class LongTaskStore:
                 proposed = self._normalized_target(target)
                 same_target = bool(expected and expected == proposed)
                 if autonomy or same_target:
-                    return (f"The previous side-effect operation {pending['tool']} on {pending['target']}"
-                            'is still unverified. Read the target first, then submit evidence with long_task_update; mark the task blocked if it cannot be verified.',
+                    if pending['tool'] in {'hold', 'trace', 'anchor', 'release'}:
+                        how = f"Read memory {pending['target']} with memory_read"
+                    elif pending['tool'] in {'write_file', 'append_file'}:
+                        how = 'Read the target with read_text_file'
+                    else:
+                        how = 'Read the target first'
+                    return (f"The previous side-effect operation {pending['tool']} on {pending['target']} "
+                            f'is still unverified. {how}, then submit evidence with long_task_update; '
+                            'if it cannot be verified, update the task with status=blocked to release it.',
                             False)
                 return None, False
             if not autonomy or task['status'] != 'active':
@@ -445,6 +462,12 @@ class LongTaskStore:
             if state == '成功':
                 pending['state'] = '成功，需核实'
                 pending['verified_in_step'] = None
+                created = re.search(r'memory_id: ([\w-]+)', result or '') if name == 'hold' else None
+                if created:
+                    # A new memory has no ID before it is saved; bind the checkpoint to the
+                    # created ID so memory_read can verify it.
+                    pending['target'] = created.group(1)
+                    pending['normalized_target'] = self._normalized_target(created.group(1))
                 effect = pending.get('expected_effect')
                 if name == 'move_lab_file' and isinstance(effect, dict):
                     match = re.search(r'\((\d+) bytes, SHA-256 ([0-9a-f]{64})\)', result or '')
@@ -546,5 +569,7 @@ class LongTaskStore:
                 last = f"已核实：{event['tool']} {event['target']}"
             elif event['state'] == '被拒绝':
                 last = f"上次操作未执行：{event['tool']} {event['target']}"
+            elif event['state'] == '无法核实，已阻塞':
+                last = f"无法核实，已标记阻塞：{event['tool']} {event['target']}"
         return {'title': task['title'], 'status': task['status'], 'progress': last,
                 'next_step': task['next_step'], 'waiting_for': task['waiting_for']}

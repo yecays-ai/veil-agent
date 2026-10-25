@@ -1,12 +1,11 @@
 # 当前状态
 
-更新：2026-10-25 07:03 UTC · Codex。
+更新：2026-10-25 10:50 UTC · Claude。
 
 ## 当前目标与现状
 
-- 工单 101「Peter 把自己做的东西发给 Lan」：分支 `ticket/101-send-lab-files` 基于最新 main `006a4b7`（PR #153）开发；PR #154 保持打开，不自动合并。Lan 已确认本地附件卡片预览。CodeRabbit 审查提交 `4a1f251` 发现邮件回复累积第 4 个附件仍可成功、UI 删除/撤回未清理附件；两项均已在 `245bd84` 修复并加回归测试，评审线程已解决。`245bd84` 的 Tests #1266、Dependency security #205、Windows desktop #106 全部通过。Cubic 因试用额度无法启动；CodeRabbit 本小时额度已耗尽，因此没有对最终修复提交进行第二轮自动审查。`send_message` 可附加 Peter Lab 中的受限文件；发送时保存独立快照，聊天历史重启后可恢复；图片内嵌、UTF-8 文本在聊天内查看、HTML 由 Lan 点击后交给默认浏览器打开；邮件回复最多带 3 个附件。只提供给桌面服务接通 Lab 与持久媒体存储的聊天，不扩展 QQ 附件能力。
-- 复用现有 Hub 媒体目录、`index.jsonl` 和受令牌保护的媒体路由；邮件用 Python 标准库 `EmailMessage.add_attachment()`，没有增加第三方依赖。Lab 路径、文件类型和 5 MiB 上限在程序中检查；费用、权限和自主发送次数边界不变。
-- 本地验证：工单 101 原始改动的 Python 全量 484 项通过、4 项跳过；`test_web.py` 57 项通过；Electron 桌面 7 项通过。审查修复后的 3 项针对性回归测试通过，`test_email_channel.py` 10 项通过，Python 编译与 `git diff --check` 通过。补跑 `test_chat.py`、`test_web.py` 全文件受本机缺少 `httpx2`/`dotenv` 及 Windows 回环套接字权限（WinError 10013）影响，未形成本机完整通过结果；PR CI 在 Windows 3.11/3.12、Ubuntu 3.11/3.12 全量测试均通过。Cubic 未启动，最终修复提交没有第二轮 CodeRabbit 审查。Lan 的 Windows 实际体验尚未做。
+- 工单 110「长期任务的待核实操作不再卡死」：分支 `ticket/110-long-task-unstick`。Peter 自主活动中新建记忆后，长期任务把待核实目标绑定到新记忆 ID，用 `memory_read` 读回即可核实；无法核实时设 `status=blocked` 会记录为「无法核实，已阻塞」并解除拦截。拦截提示写明该用哪个读取工具。本地 `test_long_tasks.py` 全部通过；全量测试的失败项与 main 相同（本容器缺网络/代理相关环境），以 PR CI 为准。Lan Windows 体验未做。
+- 工单 101「Peter 把自己做的东西发给 Lan」：PR #154 已合并为 `d00327c`；Windows 体验待验收。
 
 ## 此前工单验收状态
 
@@ -27,15 +26,17 @@
 
 ## 下一步
 
-PR #154 最新修复提交 CI 全部通过，评审发现的问题已修复；按 Lan 要求保持 PR 未合并，等待 Lan 的下一步决定。合并后再在 Windows 验收附件发送、历史恢复和邮件附件。
+工单 110 PR 等 CI 通过后合并；合并后 Lan 用 `update.bat` 更新，按工单 110 步骤验收。
 
 ## 尚待 Lan 验收或观察
+
+- 110：按 `docs/tickets/110-long-task-unstick.md` 的步骤验收：卡住的生日寻宝任务能被 Peter 自己放行，之后写文件不再循环被拒绝。
 
 - 097：继续观察自主行为，不标记体验通过。
 - 098：2026-11-07 后配置新 QQ 邮箱并验收 IMAP/SMTP 收发。
 - 099：验收网页读取及蜘蛛丝搜索之外的场景。
 - 100：按下方步骤在 Windows 验收定时研究、QQ 提醒、服务重启和错过时间后的单次补醒。
-- 101：Lan 已确认本地预览；PR #154 的 CodeRabbit 审查发现两项实质问题，已修复并解决评审线程。最新修复提交的三项 CI 均通过；Cubic 额度耗尽，CodeRabbit 本小时额度已用完且最终修复提交没有第二轮自动审查。PR 未合并；合并后在 Windows 验收 Lab 附件、历史恢复和邮件附件。
+- 101：PR #154 已合并；在 Windows 验收 Lab 附件、历史恢复和邮件附件。
 - 106：验收真实拖出、合并和重启恢复。
 - 107：验收带 😭💀 等表情的 QQ 整句发送。
 - 108：按 PR #151 的步骤在 Windows 双击 `update.bat` 验收更新与重新打包。
