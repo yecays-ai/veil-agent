@@ -155,6 +155,9 @@ class Hub:
         self.inbox = queue.Queue()
         self.answers = queue.Queue()
         self.pending = None       # event id of the approval being asked, else None
+        self.screen_pop_cond = threading.Condition()
+        self.screen_pop_shell_seen = 0.0
+        self.screen_pop_requests = OrderedDict()
         self.voice_jobs = {}
         self.voice_jobs_lock = threading.Lock()
         self.voice_job_slots = threading.BoundedSemaphore(MAX_ACTIVE_VOICE_TRANSCRIPTIONS)
@@ -287,12 +290,184 @@ class Hub:
                                 'long_task' if row['tool'].startswith('long_task_') else 'tool')
             if row.get('autonomy_run_id'):
                 item['autonomy_run_id'] = row['autonomy_run_id']
+            lifecycle = row.get('screen_pop_event')
+            if (row.get('tool') == 'screen_pop' and
+                    lifecycle in ('shown', 'dismissed', 'finished')):
+                item['screen_pop_style'] = row.get('screen_pop_style')
+                item['screen_pop_total'] = row.get('screen_pop_total', 1)
+                item.setdefault('screen_pop_events', []).append({
+                    'event': lifecycle, 'time': row.get('time'),
+                    'item': row.get('screen_pop_item'),
+                })
             if row.get('state') != '进行中':
                 item['finished_at'] = row.get('time')
+        for item in projected.values():
+            if item.get('tool') != 'screen_pop' or not item.get('screen_pop_events'):
+                continue
+            total = item.get('screen_pop_total', 1)
+            event_name = 'dismissed' if item.get('screen_pop_style') == 'popup' else 'finished'
+            completed = {entry.get('item') for entry in item['screen_pop_events']
+                         if entry.get('event') == event_name and isinstance(entry.get('item'), int)}
+            item['screen_pop_state'] = ('还开着' if item.get('screen_pop_style') == 'popup' else '弹幕播放中')
+            if len(completed) >= total:
+                item['screen_pop_state'] = ('已关闭' if item.get('screen_pop_style') == 'popup' else '弹幕结束')
+            labels = {'shown': 'shown', 'dismissed': 'dismissed', 'finished': 'finished'}
+            item['detail'] = '\n'.join(
+                f"{labels[event['event']]} at {event['time']}" +
+                (f" (item {event['item']})" if isinstance(event.get('item'), int) else '')
+                for event in item['screen_pop_events'] if event.get('time'))
         result = [projected[call] for call in order[-limit:]]
         if key is not None:
             self._tool_activity_cache = (key, result)
         return result
+
+    def request_screen_pop(self, command, *, request_id=None, call_id=None, autonomy_run_id=None):
+        """Wait for the desktop shell to confirm the requested message was shown."""
+        start = time.monotonic()
+        shell_deadline = start + 2.0
+        with self.screen_pop_cond:
+            while time.monotonic() < shell_deadline:
+                if self.stopping or self.stopped:
+                    return {'state': 'failed', 'reason': 'unavailable'}
+                if time.monotonic() - self.screen_pop_shell_seen <= 2.5:
+                    break
+                self.screen_pop_cond.wait(min(0.25, shell_deadline - time.monotonic()))
+            if time.monotonic() - self.screen_pop_shell_seen > 2.5:
+                return {'state': 'failed', 'reason': 'unavailable'}
+            pop_id = secrets.token_hex(16)
+            entry = {
+                'id': pop_id, 'command': {**command, 'id': pop_id, 'name': self.name},
+                'request_id': request_id, 'call_id': call_id,
+                'autonomy_run_id': autonomy_run_id, 'style': command['style'],
+                'expected': command['count'] if command['style'] == 'popup' else None,
+                'created': time.monotonic(), 'shown': False, 'failure': None,
+                'cancelled': False, 'events': set(), 'completed': set(),
+            }
+            self.screen_pop_requests[pop_id] = entry
+            deadline = time.monotonic() + 8.0
+            while True:
+                if entry['failure']:
+                    return {'state': 'failed', 'reason': entry['failure']}
+                if entry['shown']:
+                    return {'state': 'shown', 'style': entry['style']}
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    entry['cancelled'] = True
+                    self.screen_pop_cond.notify_all()
+                    return {'state': 'failed', 'reason': 'unavailable'}
+                if time.monotonic() - self.screen_pop_shell_seen > 3.0:
+                    entry['cancelled'] = True
+                    return {'state': 'failed', 'reason': 'unavailable'}
+                self.screen_pop_cond.wait(min(0.25, remaining))
+
+    def next_screen_pop(self):
+        with self.screen_pop_cond:
+            current = time.monotonic()
+            self.screen_pop_shell_seen = current
+            for pop_id, entry in list(self.screen_pop_requests.items()):
+                if entry.get('terminal_at') is not None and current - entry['terminal_at'] > 60:
+                    self.screen_pop_requests.pop(pop_id, None)
+                elif entry['cancelled'] and current - entry['created'] > 60:
+                    self.screen_pop_requests.pop(pop_id, None)
+            pending = [entry for entry in self.screen_pop_requests.values()
+                       if not entry['shown'] and not entry['cancelled'] and not entry['failure']]
+            if pending:
+                try:
+                    from screen_pop import screen_state
+                    safe, _, reason = screen_state()
+                except Exception:
+                    safe, reason = False, 'locked'
+                if reason == 'locked' or not safe:
+                    for entry in pending:
+                        entry['failure'] = 'locked'
+                    self.screen_pop_cond.notify_all()
+                    pending = []
+            self.screen_pop_cond.notify_all()
+            return [{'id': entry['id']} for entry in pending[:16]]
+
+    def claim_screen_pop(self, pop_id):
+        with self.screen_pop_cond:
+            entry = self.screen_pop_requests.get(pop_id)
+            if (not entry or entry['shown'] or entry['cancelled'] or entry['failure'] or
+                    time.monotonic() - entry['created'] > 8.0 or self.stopping or self.stopped):
+                return None
+            try:
+                from screen_pop import screen_state
+                safe, fullscreen, reason = screen_state()
+            except Exception:
+                safe, fullscreen, reason = False, False, 'locked'
+            if reason == 'locked' or not safe:
+                entry['failure'] = 'locked'
+                self.screen_pop_cond.notify_all()
+                return None
+            if fullscreen and entry['style'] == 'popup':
+                entry['style'] = 'danmaku'
+                entry['expected'] = None
+                entry['command']['style'] = 'danmaku'
+                entry['command']['count'] = 1
+            return dict(entry['command'])
+
+    def record_screen_pop_event(self, body):
+        pop_id, event = body.get('id'), body.get('event')
+        if not isinstance(pop_id, str) or not re.fullmatch(r'[0-9a-f]{32}', pop_id):
+            return False
+        if event not in ('shown', 'dismissed', 'finished'):
+            return False
+        with self.screen_pop_cond:
+            entry = self.screen_pop_requests.get(pop_id)
+            if not entry or entry['cancelled'] or entry['failure']:
+                return False
+            if event == 'shown':
+                style = body.get('style')
+                total = body.get('total')
+                if style != entry['style'] or isinstance(total, bool) or not isinstance(total, int):
+                    return False
+                maximum = entry['command']['count'] if style == 'popup' else 32
+                if not 1 <= total <= maximum or (style == 'popup' and total != entry['command']['count']):
+                    return False
+                if entry['shown']:
+                    return entry['expected'] == total
+                if time.monotonic() - entry['created'] > 8.0:
+                    return False
+                event_total = total
+            else:
+                if not entry['shown'] or event != ('dismissed' if entry['style'] == 'popup' else 'finished'):
+                    return False
+                item = body.get('item')
+                if isinstance(item, bool) or not isinstance(item, int) or not 1 <= item <= entry['expected']:
+                    return False
+                dedupe = (event, item)
+                if dedupe in entry['events']:
+                    return True
+                event_total = entry['expected']
+            item = body.get('item') if event != 'shown' else None
+            row = {
+                'request_id': entry['request_id'], 'call_id': entry['call_id'],
+                'tool': 'screen_pop', 'path': entry['style'], 'state': '成功', 'time': now(),
+                'screen_pop_event': event, 'screen_pop_style': entry['style'],
+                'screen_pop_total': event_total,
+            }
+            if item is not None:
+                row['screen_pop_item'] = item
+            if entry['autonomy_run_id']:
+                row['autonomy_run_id'] = entry['autonomy_run_id']
+            if not self.chat:
+                return False
+            # Persist the lifecycle event before changing the in-memory state
+            # that acknowledges it to the desktop shell or waiting tool call.
+            self.chat.store.append(f'{self.chat.cfg.id}/tools.jsonl', row)
+            self._tool_activity_cache = None
+            if event == 'shown':
+                entry['shown'] = True
+                entry['expected'] = event_total
+            else:
+                entry['events'].add((event, item))
+            if event != 'shown':
+                entry['completed'].add(item)
+                if len(entry['completed']) >= entry['expected']:
+                    entry['terminal_at'] = time.monotonic()
+            self.screen_pop_cond.notify_all()
+            return True
 
     def media_info(self, media_id):
         with self.media_lock:
@@ -1204,6 +1379,13 @@ def make_handler(hub, token):
                     except ValueError:
                         after = 0
                     self._send(200, hub.snapshot(after))
+            elif url.path == '/api/screen-pop/next':
+                if not self._guard(self.headers.get('X-Token')):
+                    return
+                if query:
+                    self._send(400, {'error': 'query'})
+                else:
+                    self._send(200, {'commands': hub.next_screen_pop()})
             elif url.path.startswith('/media/'):
                 if not self._guard((query.get('t') or [''])[0]):
                     return
@@ -1278,6 +1460,41 @@ def make_handler(hub, token):
         def do_POST(self):
             url = urlparse(self.path)
             if not self._guard(self.headers.get('X-Token')):
+                return
+            if url.path in ('/api/screen-pop/claim', '/api/screen-pop/event'):
+                try:
+                    length = int(self.headers.get('Content-Length') or 0)
+                    if not 0 < length <= 2048:
+                        raise ValueError
+                    body = json.loads(self.rfile.read(length))
+                    if not isinstance(body, dict):
+                        raise ValueError
+                except (ValueError, TypeError, UnicodeError):
+                    self._send(400, {'error': 'invalid screen-pop request'})
+                    return
+                if url.path == '/api/screen-pop/claim':
+                    if set(body) != {'id'} or not isinstance(body.get('id'), str):
+                        self._send(400, {'error': 'invalid screen-pop id'})
+                        return
+                    command = hub.claim_screen_pop(body['id'])
+                    if command is None:
+                        self._send(409, {'error': 'screen-pop is no longer pending'})
+                    else:
+                        self._send(200, {'command': command})
+                    return
+                event = body.get('event')
+                expected = ({'id', 'event', 'style', 'total'} if event == 'shown'
+                            else {'id', 'event', 'item'})
+                if set(body) != expected:
+                    self._send(409, {'error': 'screen-pop event was rejected'})
+                    return
+                try:
+                    accepted = hub.record_screen_pop_event(body)
+                except Exception:
+                    self._send(500, {'error': 'screen-pop event could not be saved'})
+                    return
+                self._send(200 if accepted else 409,
+                           {'ok': True} if accepted else {'error': 'screen-pop event was rejected'})
                 return
             if url.path == '/api/media':
                 try:
@@ -1474,6 +1691,7 @@ def start_server(hub, token, port):
 
 def serve_chat(chat, hub, channels=()):
     hub.chat = chat
+    chat.screen_pop_handler = hub.request_screen_pop
     files = getattr(chat.tools, 'files', None) if chat.tools else None
     files = files or chat.tools
     if (getattr(files, 'lab', None) is not None and

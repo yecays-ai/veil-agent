@@ -399,6 +399,7 @@ class Character:
     web: dict = None
     windows_observation: dict = None
     windows_interaction: dict = None
+    screen_pop: dict = None
 
 
 def positive_int(value):
@@ -507,9 +508,18 @@ def load_character(root, character_id):
                 'apps_file': apps_file,
                 'idle_seconds': idle_seconds,
             }
+        screen_pop = cfg.get('screen_pop')
+        if screen_pop is not None:
+            if not isinstance(screen_pop, dict):
+                raise ValueError('screen_pop must be a table')
+            enabled = screen_pop.get('enabled', False)
+            if type(enabled) is not bool:
+                raise ValueError('screen_pop.enabled must be boolean')
+            screen_pop = {'enabled': enabled}
         if tools is None and ((cfg.get('memory') or {}).get('mode') == 'native'
                               or (windows_observation or {}).get('enabled')
-                              or (windows_interaction or {}).get('enabled')):
+                              or (windows_interaction or {}).get('enabled')
+                              or (screen_pop or {}).get('enabled')):
             # Native memory runs on the tool loop; files stay off unless [tools] says otherwise.
             tools = {'enabled': False, 'folder': f'data/{character_id}/workspace',
                      'max_steps': 6, 'max_result_bytes': 8192}
@@ -562,7 +572,7 @@ def load_character(root, character_id):
                          positive_int(cfg.get('history_rounds', 20)),
                          positive_int(cfg.get('max_output_tokens', 1024)), provider, cfg['provider'],
                          memory, tools, autonomy, voice, profile, email, qq, web, windows_observation,
-                         windows_interaction)
+                         windows_interaction, screen_pop)
     except UserError:
         raise
     except (OSError, KeyError, ValueError, TypeError, ArithmeticError) as exc:
@@ -1050,6 +1060,10 @@ class Chat:
             tools.announce_autonomy_history()
             self.pending_capability_event = tools.capability_event
             self.pending_capability_event_model = capability_model_notice(tools)
+        if tools and hasattr(tools, 'announce_screen_pop'):
+            tools.announce_screen_pop()
+            self.pending_capability_event = tools.capability_event
+            self.pending_capability_event_model = capability_model_notice(tools)
         self.profile = None
         if getattr(cfg, 'profile', None):
             from profile_notes import ProfileNotes
@@ -1068,6 +1082,7 @@ class Chat:
         self._active_capability_schemas = None
         self.autonomy_should_yield = None
         self.autonomy_run_id = None
+        self.screen_pop_handler = None
         self.autonomy_message_output = None
         self.autonomy_message_lock = None
         self.autonomy_step_limited = False
@@ -1703,6 +1718,10 @@ class Chat:
         runtime_context = []
         if extra_context:
             runtime_context.append({'role': 'system', 'content': extra_context})
+        from screen_pop import screen_pop_history_context
+        screen_pop_context = screen_pop_history_context(self.store, self.cfg)
+        if screen_pop_context:
+            runtime_context.append({'role': 'system', 'content': screen_pop_context})
         if isinstance(self.pending_capability_event_model, str) and self.pending_capability_event_model and not autonomy:
             runtime_context.append({'role': 'system', 'content':
                 'Program-generated capability update: ' + self.pending_capability_event_model})
@@ -1844,6 +1863,17 @@ class Chat:
             elif call.function.name == 'capability_history':
                 result = self.capability_history_record or 'No capability changes are recorded yet.'
                 state, summary = '成功', 'capability_history'
+            elif call.function.name == 'screen_pop':
+                args = json.loads(call.function.arguments or '{}')
+                files = getattr(self.tools, 'files', self.tools) if self.tools else None
+                invoke_screen_pop = getattr(files, 'invoke_screen_pop', None)
+                if not isinstance(args, dict) or not callable(invoke_screen_pop):
+                    result, state, summary = 'VEIL Desktop shell is not open; nothing was shown.', '出错', 'screen_pop'
+                else:
+                    result, state, summary = invoke_screen_pop(
+                        args, request_id=request_id, call_id=f'{request_id}:{tool_call_id}',
+                        autonomy_run_id=self.autonomy_run_id if autonomy else None,
+                        handler=self.screen_pop_handler)
             elif self.profile and call.function.name in ('profile_append', 'profile_replace'):
                 args = json.loads(call.function.arguments or '{}')
                 if not isinstance(args, dict):
