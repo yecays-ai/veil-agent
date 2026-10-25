@@ -127,6 +127,12 @@ class RuntimeMonitor:
             self._save(self._row('long_task', 'recovered', 'safe_recovery',
                                  'checkpoint_verified', 'No action is needed.'))
             return
+        if (state == '成功' and self.current.get('module') == 'file_tools'
+                and self.current.get('code') == 'tool_unavailable'):
+            # A plain tool failure leaves nothing uncertain; the next success shows the tools work again.
+            self._save(self._row('file_tools', 'recovered', 'safe_recovery',
+                                 'tool_recovered', 'No action is needed.'))
+            return
         if state != '出错':
             return
         from long_tasks import SIDE_EFFECT_TOOLS
