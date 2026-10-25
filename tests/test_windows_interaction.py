@@ -11,6 +11,8 @@ from veil_agent import Budget, Chat, Store, load_character
 from windows_interaction import (
     HumanTookOver,
     InteractionPaused,
+    InteractionUncertain,
+    MAX_KEYBOARD_FALLBACK_CHARS,
     WINDOWS_INTERACTION_TOOL_SCHEMAS,
     WindowsInteractionBackend,
     WindowsInteractionTools,
@@ -418,6 +420,42 @@ idle_seconds = 3
                                  monitor, monitor.snapshot())
 
         self.assertEqual(pattern.set_calls, 0)
+
+    def test_human_input_after_action_reports_uncertain_not_unexecuted(self):
+        monitor = FakeInputMonitor()
+        tools, _ = self.make_tools(monitor=monitor)
+
+        def action(_stopped, _snapshot):
+            monitor.version += 1
+            return {'confirmed': True}
+
+        with self.assertRaises(InteractionUncertain) as raised:
+            tools._run_action_with_input_guard(action, lambda: False)
+        self.assertIn('Do not repeat', str(raised.exception))
+
+    def test_keyboard_fallback_refuses_long_text_before_typing(self):
+        monitor = FakeInputMonitor()
+
+        class KeyboardControl:
+            sent_keys = 0
+
+            def GetValuePattern(self):
+                return None
+
+            def SendKeys(self, *_args, **_kwargs):
+                self.sent_keys += 1
+
+        control = KeyboardControl()
+        backend = WindowsInteractionBackend()
+        backend._revalidate = lambda selected, _stopped: selected
+        metadata = {'type': 'EditControl', 'read_only': False, 'window_handle': 100}
+        with patch.object(WindowsInteractionBackend, '_foreground_window', return_value=100):
+            with self.assertRaises(ObservationError):
+                backend._run_pattern(control, {'id': WINDOW_ID, 'handle': 100}, metadata,
+                                     'set_text', 'x' * (MAX_KEYBOARD_FALLBACK_CHARS + 1),
+                                     lambda: False, monitor, monitor.snapshot())
+        self.assertEqual(control.sent_keys, 0)
+
 
     def test_shared_desktop_lock_prevents_interaction(self):
         tools, backend = self.make_tools()

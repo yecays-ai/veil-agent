@@ -104,6 +104,7 @@ _BLOCKED_CONTROL = re.compile(
 )
 _CONFIRM_ACTIONS = frozenset({'invoke', 'toggle', 'set_text'})
 _IDLE_TICK_MARGIN_MS = 35
+MAX_KEYBOARD_FALLBACK_CHARS = 200
 
 
 class InteractionError(RuntimeError):
@@ -427,6 +428,10 @@ class WindowsInteractionBackend(WindowsDesktopBackend):
             # The last resort injects keys only into the already foreground, revalidated target.
             if '\n' in text or '\r' in text:
                 raise ObservationError('Keyboard fallback is refused for multiline text; this control needs a settable ValuePattern.')
+            if len(text) > MAX_KEYBOARD_FALLBACK_CHARS:
+                raise ObservationError(
+                    f'Keyboard fallback is limited to {MAX_KEYBOARD_FALLBACK_CHARS} characters; '
+                    'this control needs a settable ValuePattern.')
             if int(self._foreground_window()) != int(metadata.get('window_handle', 0)):
                 raise InteractionPaused('Keyboard fallback requires the verified target window to be in front.')
             self._revalidate(selected, stopped)
@@ -441,7 +446,11 @@ class WindowsInteractionBackend(WindowsDesktopBackend):
                 raise InteractionPaused('The target window lost the foreground before keyboard input.')
             input_monitor.mark_own_input()
             escaped = text.replace('{', '{{}').replace('}', '{}}')
-            control.SendKeys('{Ctrl}a' + escaped, waitTime=0)
+            # interval=0 keeps typing far inside the tool timeout, so no keys can land in
+            # another window after the call has returned; mark again so the typed keys are
+            # not mistaken for Lan taking over.
+            control.SendKeys('{Ctrl}a' + escaped, interval=0, waitTime=0)
+            input_monitor.mark_own_input()
             readback = self._read_control_value(control, kind)
             return {'confirmed': readback == text, 'verification': 'keyboard_readback'}
         raise ObservationError('Unsupported UI Automation action.')
@@ -700,10 +709,12 @@ class WindowsInteractionTools:
     def _run_action_with_input_guard(self, action, stopped):
         snapshot = self._check_before_action(stopped)
         result = action(stopped, snapshot)
-        if self.input_monitor.changed_since(snapshot):
-            raise HumanTookOver('Human input arrived during the action.')
-        if stopped():
-            raise InteractionPaused('The autonomous activity was paused.')
+        if self.input_monitor.changed_since(snapshot) or stopped():
+            # The action was already sent; reporting it as "not executed" could make
+            # Peter repeat a toggle or a save.
+            raise InteractionUncertain(
+                'The action was already sent, then human input or a pause arrived; its result is '
+                'uncertain. Do not repeat it automatically.')
         return result, snapshot
 
     def invoke(self, name, args, approval=None, *, should_stop=None):
