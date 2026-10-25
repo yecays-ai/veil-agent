@@ -4,7 +4,7 @@
 
 ## 当前目标与现状
 
-- 工单 112「Windows 桌面交互」：分支 `ticket/112-desktop-interaction` 从最新 main `b64875d` 开发。沿用工单 111 的 UIA、窗口身份、敏感界面拦截、QQ 共用桌面锁，新增 Peter 专属记事本白名单、窗口管理、UIA 控件动作、受审批的文本替换、人工输入优先及结果核验；没有新 Agent、框架、依赖、模型供应商或独立预算。18 个交互检查与工单 111 的 16 个观察检查共 34 项通过，Python 编译检查通过。更广的 181 项回归运行受本机缺失依赖/Node 服务及 junction 权限限制，未全部通过。视觉坐标点击未开放；Lan 的 Windows 实机操作、人工接管和 QQ 回归仍待验收。
+- 工单 112「Windows 桌面交互」：PR #158 已创建并保持打开，分支 `ticket/112-desktop-interaction` 基于 main `b64875d`，head `2029efd`。沿用工单 111 的 UIA、窗口身份、敏感界面拦截、QQ 共用桌面锁，新增 Peter 专属记事本白名单、窗口管理、UIA 控件动作、受审批的文本替换、人工输入优先及结果核验；没有新 Agent、框架、依赖、模型供应商或独立预算。18 个交互检查与工单 111 的 16 个观察检查共 34 项通过，Python 编译检查通过。更广的 181 项回归运行受本机缺失依赖/Node 服务及 junction 权限限制，未全部通过。视觉坐标点击未开放；PR 审查/CI 与 Lan 的 Windows 实机操作、人工接管和 QQ 回归仍待完成。
 - 工单 111「桌面观察能力」：PR #157 已合并为 `b64875d`；Windows/Linux Python 3.11/3.12 四项 CI 通过。提供 `windows_list`、`windows_foreground`、`windows_observe`，包含后台 PrintWindow 截图、拒绝黑屏/单色截图、敏感界面拦截，并与 QQ 共用桌面互斥锁。Lan 的真实 Windows UIA/截图体验仍待验收。
 - 工单 110「长期任务的待核实操作不再卡死」：PR #155 已于 2026-10-25 合并为 `e0c532a`；Lan Windows 体验仍待验收。
 - 工单 101「Peter 把自己做的东西发给 Lan」：PR #154 已合并为 `d00327c`；Windows 体验待验收。
@@ -28,7 +28,7 @@
 
 ## 下一步
 
-从 `ticket/112-desktop-interaction` 推送并创建 PR，处理 Cubic 实质意见和当前提交的 CI；保持 PR 打开，等待 Lan 验收，不自动合并。
+跟进 PR #158 的 Cubic 审查意见和 CI；保持 PR 打开，等待 Lan 的 Windows 验收，不自动合并。
 
 ## 尚待 Lan 验收或观察
 

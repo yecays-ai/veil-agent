@@ -3,16 +3,16 @@
 ## 当前进度
 
 - 工单 111 已通过 PR #157 合并为 `b64875d`；四项 Windows/Linux Python 3.11/3.12 CI 通过。Lan 的 Windows 实机观察验收仍待进行。
-- 工单 112 在独立 worktree `E:\Peter-Agent\VEIL\worktrees\112-desktop-interaction`、分支 `ticket/112-desktop-interaction` 上实现，基于 main `b64875d`。当前已有记事本程序白名单、启动/复用、窗口管理、精确 UIA 控件动作、文本核验、人工输入优先、共享桌面锁及活动记录接入；尚未创建 PR。
+- 工单 112 在独立 worktree `E:\Peter-Agent\VEIL\worktrees\112-desktop-interaction`、分支 `ticket/112-desktop-interaction` 上实现，基于 main `b64875d`。PR #158 已创建并保持打开，head 为 `2029efd`；已有记事本程序白名单、启动/复用、窗口管理、精确 UIA 控件动作、文本核验、人工输入优先、共享桌面锁及活动记录接入。
 - Microsoft winapp CLI 固定提交 `6564e7adba6d339f2b06868baca050e54687a2b3` 已审阅；只借用精确目标解析、显式 UIA pattern、动作前重查和桌面协调思路，没有增加依赖或复制代码。
 - 视觉点击未开放：当前实现无法把截图坐标可靠绑定到窗口几何和布局版本；保留工单 111 的截图观察能力，目标不确定时不点。
 - 已通过 `tests.test_windows_interaction` 与 `tests.test_windows_observer` 共 34 项；Python 编译检查通过。另一次 181 项工具/聊天/自主活动回归运行有本机依赖、Node 服务和 junction 权限导致的失败；不是完整通过。PR 审查/CI 和 Lan Windows 实机验收尚未完成。当前 Python 环境未安装 `uiautomation`，没有做真实桌面动作。
 
 ## 下一步
 
-1. 完成最终差异复核，提交并推送本分支，创建一个 PR，包含工单、实现、`STATUS.md` 和本交接文件。
-2. 处理 Cubic 的实质意见和当前提交的 CI；把 Windows 实机验收和自动检查分开记录。
-3. PR 保持打开，等待 Lan 的 Windows 验收；不要自动合并。
+1. 跟进 PR #158 的 Cubic 审查意见和当前提交的 CI；将实质修复提交到同一分支。
+2. 等待 Lan 按工单步骤完成 Windows 实机验收，并与自动检查分开记录。
+3. PR 保持打开，等待 Lan 验收；不要自动合并。
 
 ## 仍适用的边界
 
