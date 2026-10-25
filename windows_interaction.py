@@ -105,6 +105,9 @@ _BLOCKED_CONTROL = re.compile(
 _CONFIRM_ACTIONS = frozenset({'invoke', 'toggle', 'set_text'})
 _IDLE_TICK_MARGIN_MS = 35
 MAX_KEYBOARD_FALLBACK_CHARS = 200
+# After Lan approves in VEIL, wait up to this long for 1 second without input.
+APPROVAL_IDLE_SECONDS = 1
+APPROVAL_IDLE_WAIT_SECONDS = 4
 
 
 class InteractionError(RuntimeError):
@@ -112,6 +115,10 @@ class InteractionError(RuntimeError):
 
 
 class InteractionPaused(InteractionError):
+    pass
+
+
+class ApprovalInputBusy(InteractionPaused):
     pass
 
 
@@ -646,6 +653,9 @@ class WindowsInteractionTools:
             return WindowsToolResult(
                 'The shared Windows desktop is busy. No action was performed; retry after it is free.',
                 activity_detail=f'{summary} 桌面互斥锁忙；未操作。'), '搁置'
+        if isinstance(error, ApprovalInputBusy):
+            return WindowsToolResult(str(error),
+                                     activity_detail=f'{summary} 已批准，但批准后鼠标键盘一直在动；未操作。'), '中断'
         if isinstance(error, (InteractionPaused, ObservationPaused)):
             return WindowsToolResult(
                 'Recent human input or a pause request has priority. Windows interaction stopped before another action.',
@@ -696,18 +706,37 @@ class WindowsInteractionTools:
             raise ObservationError('The selected window process path does not match the requested allowlisted application.')
         return selected
 
-    def _check_before_action(self, stopped):
+    def _wait_for_idle_after_approval(self, stopped):
+        # Lan's own click on "approve" is fresh mouse input. Give her hand a moment to
+        # leave the mouse instead of treating the approval itself as a takeover.
+        deadline = time.monotonic() + APPROVAL_IDLE_WAIT_SECONDS
+        while self.input_monitor.idle_seconds() < APPROVAL_IDLE_SECONDS:
+            if stopped():
+                raise InteractionPaused('The autonomous activity was paused.')
+            if time.monotonic() >= deadline:
+                raise ApprovalInputBusy(
+                    'Lan approved, but her mouse or keyboard stayed busy afterwards, so nothing was done. '
+                    'Ask her to let go of the mouse for a moment and request the action again.')
+            time.sleep(0.1)
+
+    def _check_before_action(self, stopped, *, approved=False):
         if stopped():
             raise InteractionPaused('The autonomous activity was paused.')
         self.backend._check_default_desktop()
+        if approved:
+            self._wait_for_idle_after_approval(stopped)
+            snapshot = self.input_monitor.snapshot()
+            if self.input_monitor.changed_since(snapshot):
+                raise HumanTookOver('Human input arrived during the pre-action idle check.')
+            return snapshot
         snapshot = self.input_monitor.snapshot()
         self.input_monitor.require_idle(self.idle_seconds)
         if self.input_monitor.changed_since(snapshot):
             raise HumanTookOver('Human input arrived during the pre-action idle check.')
         return snapshot
 
-    def _run_action_with_input_guard(self, action, stopped):
-        snapshot = self._check_before_action(stopped)
+    def _run_action_with_input_guard(self, action, stopped, *, approved=False):
+        snapshot = self._check_before_action(stopped, approved=approved)
         result = action(stopped, snapshot)
         if self.input_monitor.changed_since(snapshot) or stopped():
             # The action was already sent; reporting it as "not executed" could make
@@ -919,7 +948,8 @@ class WindowsInteractionTools:
                     result, _snapshot = self._run_action_with_input_guard(
                         lambda inner_stop, input_snapshot: self.backend.apply_control_action(
                             current, args['control_id'], action, text_value,
-                            inner_stop, self.input_monitor, input_snapshot), stop)
+                            inner_stop, self.input_monitor, input_snapshot), stop,
+                        approved=needs_approval)
                     if result.get('confirmed') is not True:
                         raise InteractionUncertain(
                             'The action was attempted but its resulting UIA state could not be confirmed; '

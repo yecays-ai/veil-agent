@@ -4,6 +4,7 @@
 
 ## 当前目标与现状
 
+- 工单 113「点同意不再被当成人工接管」：分支 `ticket/113-approval-idle`。Lan 实测：批准 Peter 的记事本动作后被报「中断」，因为批准那一下点击被当成人工输入。改为批准后最多等 4 秒、出现 1 秒无输入即执行；一直有输入则不执行并说明原因。验收见 `docs/tickets/113-approval-not-takeover.md`。
 - 工单 112「Windows 桌面交互」：PR #158 已创建并保持打开，分支 `ticket/112-desktop-interaction` 基于 main `b64875d`。Ubuntu/Windows Python 3.11/3.12 全量 CI 和依赖安全检查通过；CodeRabbit 审查的两项已由 Claude 修复：键盘回退限 200 字、无间隔输入且输入后再标记自身按键（不会超时后继续往别的窗口打字）；动作发出后才检测到人工输入或暂停时，报告为「结果不确定、不要重复」，不再报「未执行」。沿用工单 111 的 UIA、窗口身份、敏感界面拦截、QQ 共用桌面锁，新增 Peter 专属记事本白名单、窗口管理、UIA 控件动作、受审批的文本替换、人工输入优先及结果核验；没有新 Agent、框架、依赖、模型供应商或独立预算。18 个交互检查与工单 111 的 16 个观察检查共 36 项通过，Python 编译检查通过。更广的 181 项本机回归运行受缺失依赖/Node 服务及 junction 权限限制，未全部通过。视觉坐标点击未开放；Lan 的 Windows 实机操作、人工接管和 QQ 回归仍待验收。
 - 工单 111「桌面观察能力」：PR #157 已合并为 `b64875d`；Windows/Linux Python 3.11/3.12 四项 CI 通过。提供 `windows_list`、`windows_foreground`、`windows_observe`，包含后台 PrintWindow 截图、拒绝黑屏/单色截图、敏感界面拦截，并与 QQ 共用桌面互斥锁。Lan 的真实 Windows UIA/截图体验仍待验收。
 - 工单 110「长期任务的待核实操作不再卡死」：PR #155 已于 2026-10-25 合并为 `e0c532a`；Lan Windows 体验仍待验收。
@@ -31,6 +32,8 @@
 跟进 PR #158 的 CodeRabbit/Cubic 实质审查意见；CI 已通过。保持 PR 打开，等待 Lan 的 Windows 验收，不自动合并。
 
 ## 尚待 Lan 验收或观察
+
+- 113：批准后动作照常执行，批准后持续晃鼠标则不执行。
 
 - 110：按 `docs/tickets/110-long-task-unstick.md` 的步骤验收：卡住的生日寻宝任务能被 Peter 自己放行，之后写文件不再循环被拒绝。
 - 111：按本文件的工单 111 Windows 体验步骤验收桌面观察、后台截图及桌面不受干扰。
