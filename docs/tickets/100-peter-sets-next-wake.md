@@ -11,7 +11,7 @@ Peter 能安排一次未来的自主唤醒，用于继续研究或按 Lan 的要
 - 闹钟保存在 `data/<角色>/autonomy-alarm.json`，服务重启后读取；能力更新通过现有 `capabilities.json` 仅通知一次。计划时间及理由也写入现有工具活动账本和状态 API。桌面 UI 文件未改。
 - 复用调查：检查 APScheduler；调查时 GitHub 显示约 7.7k stars、MIT 许可，master 最新提交为 2026-10-12。固定版本的 [`AsyncScheduler.add_schedule()` 源码](https://github.com/agronholm/apscheduler/blob/bdaceb12792f104f25798dee2850d45f9e7d83f8/src/apscheduler/_schedulers/async_.py)与[依赖清单](https://github.com/agronholm/apscheduler/blob/bdaceb12792f104f25798dee2850d45f9e7d83f8/pyproject.toml)确认其支持一次性调度、持久数据存储与 misfire grace；Python 3.11+ 的基础依赖包括 AnyIO、attrs、tenacity、tzlocal，持久存储还需对应后端。这里复用 VEIL 已运行的 Hub 触发、原子状态存储及权限/预算门控，不增加第二套 scheduler 或存储依赖；没有复制 APScheduler 代码。
 - 本地验证：Autonomy 33 项、能力通知事务 6 项、聊天 65 项通过；工具权限专项 20 项通过、2 项因当前账户无法创建符号链接而跳过；Python 编译和 `git diff --check` 通过。桌面完整测试 6 项通过、1 项因本地 Agent 服务未运行而失败，未据此判断桌面集成通过。PR CI 和 Lan 的 Windows 体验仍待完成。
-- 当前分支 `ticket/100-peter-sets-next-wake`。本 PR 同步维护 `STATUS.md`、`HANDOFF.md`；代码完成后仍待 Lan 实际体验验收。
+- 当前分支 `ticket/100-peter-sets-next-wake`，PR [#152](https://github.com/yecays-ai/veil-agent/pull/152)。该 PR 同步维护 `STATUS.md`、`HANDOFF.md`；代码已完成，Cubic 审查已请求，Tests 与 Dependency security 正在运行，Lan 实际体验验收待进行。
 
 ## 验收步骤
 
