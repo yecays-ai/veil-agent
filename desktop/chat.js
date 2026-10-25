@@ -1001,7 +1001,6 @@ $('glance-toggle').onclick=async()=>{
     const enabled=$('glance-toggle').textContent==='开启瞄一眼';
     const r=await api('/api/glance',{enabled});
     if(!r.ok)throw new Error(r.status);
-    poll();
   }catch(e){$('glance-status').textContent='设置保存失败：请检查本机 Agent 连接后重试。';add('error','瞄一眼设置保存失败，请检查连接后重试。')}
   finally{$('glance-toggle').disabled=stopping||stopped||exiting}
 };
