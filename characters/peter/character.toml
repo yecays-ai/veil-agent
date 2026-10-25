@@ -52,13 +52,13 @@ lab = "lab"
 lab_max_write_bytes = 200000
 enabled = true
 folder = "data/peter/workspace"
-max_steps = 12
+max_steps = 20
 max_result_bytes = 8192
 
 [autonomy]
 # Four B two wake limits are role configurable; total program budget remains unchanged.
-interval_minutes = 180
-daily_max_runs = 6
+interval_minutes = 90
+daily_max_runs = 12
 daily_budget_cny = "2"
 min_alarm_gap_minutes = 60
 
