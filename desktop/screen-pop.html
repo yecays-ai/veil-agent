@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <link rel="stylesheet" href="screen-pop.css">
+  <title>Peter</title>
+</head>
+<body>
+  <main id="popup" class="popup" hidden>
+    <header class="titlebar"><h1 id="name"></h1><button id="close" type="button" aria-label="关闭" disabled>×</button></header>
+    <section class="popup-content">
+      <span class="info-icon" aria-hidden="true">i</span>
+      <p id="text"></p>
+    </section>
+    <footer class="popup-actions"><button id="confirm" class="confirm" type="button" disabled>确定</button></footer>
+  </main>
+  <div id="danmaku" class="danmaku" hidden><span id="danmaku-text"></span></div>
+  <script src="screen-pop.js"></script>
+</body>
+</html>
