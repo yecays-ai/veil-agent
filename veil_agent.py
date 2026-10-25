@@ -1137,7 +1137,9 @@ class Chat:
             elif policy == 'desktop_read':
                 label = 'Direct read-only Windows observation'
             elif policy == 'desktop_control':
-                label = 'Windows actions limited by the program allowlist and Lan approval'
+                label = 'Windows actions inside the program allowlist; saving, sending or overwriting asks Lan'
+            elif policy == 'desktop_create':
+                label = 'Create new files in Lan\'s Windows folders (never overwrites)'
             elif policy == 'ask':
                 label = "Needs Lan's approval where policy requires it"
             elif policy == 'lab':

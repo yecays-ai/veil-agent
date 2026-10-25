@@ -6,8 +6,12 @@ choose a channel himself with send_message(<channel>=true).
 
 A channel provides: name, label, prefix, poll_seconds, poll() -> [Incoming], ack(incoming),
 reply(text, reply_ref) -> None or a Chinese error, and ready_to_send() -> bool.
+
+Ticket 114: while Peter waits for Lan's approval in a turn that came from a channel, the question is sent
+there too, and a plain 同意 / 不同意 reply on that channel answers it.
 """
 import hashlib
+import re
 import threading
 from dataclasses import dataclass
 
@@ -24,6 +28,23 @@ class Incoming:
     handle: object = None
 
 
+APPROVE_WORDS = frozenset({'同意', '好', '好的', '可以', '行', 'y', 'yes', 'ok'})
+REFUSE_WORDS = frozenset({'不同意', '不', '不要', '不行', '拒绝', 'n', 'no'})
+
+
+def approval_answer(text):
+    """'y' or 'n' when Lan's last line is a plain yes/no, else None."""
+    lines = [line for line in str(text or '').splitlines() if line.strip()]
+    if not lines:
+        return None
+    word = re.sub(r'[\s。．.!！~～,，、]+', '', lines[-1]).casefold()
+    if word in APPROVE_WORDS:
+        return 'y'
+    if word in REFUSE_WORDS:
+        return 'n'
+    return None
+
+
 class AwayBridge:
     def __init__(self, channel, hub):
         self.channel, self.hub = channel, hub
@@ -34,6 +55,7 @@ class AwayBridge:
         self.collected_attachments = []
         self.proactive = []      # messages he marked for this channel outside such a turn
         self.last_error = None
+        self.asking = False      # an approval question was sent on this channel in the current turn
         self.state_lock = threading.Lock()
         self.outbox = []
         self.outbox_ready = threading.Condition()
@@ -52,6 +74,7 @@ class AwayBridge:
                             [attachment for _, items in self.proactive for attachment in items])
             self.turn, self.in_turn, self.collected, self.collected_attachments, self.proactive = (
                 None, False, [], [], [])
+            self.asking = False
 
     def turn_started(self, item):
         request_id = getattr(item, 'message_id', None)
@@ -59,6 +82,21 @@ class AwayBridge:
             if isinstance(request_id, str) and request_id in self.replying:
                 self.turn = self.replying.pop(request_id)
                 self.in_turn = True
+
+    def approval_asked(self, prompt):
+        """VEIL is asking Lan to approve one action. If she gave this task on this channel, ask her here
+        too (after what Peter already said in this turn) so she can answer without coming to the computer."""
+        with self.state_lock:
+            if not self.in_turn:
+                return False
+            if self.collected:
+                self._queue('\n\n'.join(self.collected), self.turn, self.collected_attachments)
+                self.collected, self.collected_attachments = [], []
+            question = re.sub(r'\s*y/N\s*$', '', str(prompt).strip())
+            question = re.sub(r'\s*\n\s*', ' ', question)   # one QQ message, not split on blank lines
+            self._queue(f'{question} 回复「同意」或「不同意」。', self.turn)
+            self.asking = True
+        return True
 
     def assistant_message(self, text, attachments=None):
         with self.state_lock:
@@ -132,6 +170,15 @@ class AwayBridge:
             if not incoming.text:
                 self.channel.ack(incoming)
                 continue
+            answer = approval_answer(incoming.text)
+            with self.state_lock:
+                asking = self.asking
+            if asking and answer is not None:
+                with self.hub.cond:
+                    pending = self.hub.pending
+                if pending is not None and self.hub.answer(pending, answer):
+                    self.channel.ack(incoming)
+                    continue
             request_id = self.request_id(incoming.key)
             with self.state_lock:
                 self.replying[request_id] = incoming.reply_ref

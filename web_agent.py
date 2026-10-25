@@ -1061,6 +1061,9 @@ class Hub:
             while not self.answers.empty():
                 self.answers.get_nowait()
             self.pending = self.push('approval', prompt)
+        for bridge in self.away:
+            # Ticket 114: a task Lan gave on QQ can be approved from QQ too.
+            bridge.approval_asked(prompt)
         while True:
             try:
                 answer = self.answers.get(timeout=0.5)
@@ -1499,6 +1502,12 @@ def serve_chat(chat, hub, channels=()):
             except (OSError, UserError):
                 pass
     chat.message_removed = publish_removed
+    announce_desktop = getattr(files, 'announce_desktop_freedom', None)
+    if callable(announce_desktop):
+        if announce_desktop() is False:
+            hub.output('桌面能力通知暂时无法保存；聊天仍可使用，下次启动会重试。')
+        chat.pending_capability_event = getattr(chat.tools, 'capability_event', None)
+        chat.pending_capability_event_model = getattr(chat.tools, 'capability_event_model', None)
     announce_photo = getattr(files, 'announce_photo_input', None)
     if callable(announce_photo):
         if announce_photo() is False:

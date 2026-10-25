@@ -124,6 +124,19 @@ class IdleClockTests(unittest.TestCase):
         self.assertEqual(clock.idle_seconds(), 1)
 
 
+    def test_input_made_by_another_part_of_veil_is_not_lan(self):
+        from desktop_access import program_input_made, register_input_tracker
+        now = [100_000]
+        last = [100_000]
+        clock = IdleClock(lambda: last[0], lambda: now[0])
+        register_input_tracker(clock)
+        now[0] = 300_000
+        program_input_made(object())     # e.g. Peter's keyboard fallback typed into Notepad
+        last[0] = 300_200
+        now[0] = 301_000
+        self.assertEqual(clock.idle_seconds(), 201)
+
+
 class QQChannelTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -179,6 +192,55 @@ class QQChannelTests(unittest.TestCase):
             each.turn_ended()
         bridge.send_pending()
         self.assertEqual(self.window.sent, ['miss you too'])
+
+    def test_approval_asked_during_a_qq_task_is_answered_on_qq(self):
+        # Ticket 114: Lan gives a task from bed; a save asks her on QQ and 同意 there answers it.
+        import threading
+        hub = Hub('Peter', SimpleNamespace(enabled=lambda: False))
+        hub.busy = False
+        bridge = AwayBridge(self.channel, hub)
+        hub.away = [bridge]
+        self.window.screen = [('other', 'old')]
+        bridge.poll_once()
+        self.window.screen.append(('other', 'write me a note on the desktop'))
+        bridge.poll_once()
+        item = hub.input_fn()
+        hub.output('Peter: on it!')
+        answers = []
+        asking = threading.Thread(target=lambda: answers.append(
+            hub.approval('Peter 想在记事本里点「ButtonControl 保存」（保存、发送、提交或覆盖类操作）。同意这一次吗？y/N ')))
+        asking.start()
+        for _ in range(100):
+            if hub.pending is not None:
+                break
+            threading.Event().wait(0.01)
+        bridge.send_pending()
+        self.assertEqual(self.window.sent[0], 'on it!')
+        self.assertIn('保存', self.window.sent[1])
+        self.assertIn('回复「同意」或「不同意」', self.window.sent[1])
+        self.assertNotIn('y/N', self.window.sent[1])
+        self.window.screen += [('self', item) for item in self.window.sent]
+        self.channel.seen = list(self.window.screen)
+        self.window.screen.append(('other', '同意'))
+        bridge.poll_once()
+        asking.join(2)
+        self.assertEqual(answers, ['y'])
+        self.assertTrue(hub.inbox.empty())   # the 同意 answered the question; it is not a new chat message
+        hub.output('Peter: saved!')
+        bridge.turn_ended()
+        bridge.send_pending()
+        self.assertEqual(self.window.sent[-1], 'saved!')
+
+    def test_yes_on_qq_is_ordinary_chat_when_nothing_was_asked_there(self):
+        hub = Hub('Peter', SimpleNamespace(enabled=lambda: False))
+        hub.busy = False
+        bridge = AwayBridge(self.channel, hub)
+        hub.away = [bridge]
+        self.window.screen = [('other', 'old')]
+        bridge.poll_once()
+        self.window.screen.append(('other', '好'))
+        bridge.poll_once()
+        self.assertEqual(str(hub.input_fn()), QQ_PREFIX + '好')
 
     def test_unavailable_window_is_reported_once(self):
         hub = Hub('Peter', SimpleNamespace(enabled=lambda: False))
