@@ -5,7 +5,7 @@
 ## 当前目标与现状
 
 - 工单 110「长期任务的待核实操作不再卡死」：PR #155 已于 2026-10-25 合并为 `e0c532a`。Peter 自主活动中新建记忆后的长期任务检查点已绑定新记忆 ID，可用 `memory_read` 核实；设 `status=blocked` 会记录未核实操作并解除拦截。Lan Windows 体验仍待验收。
-- 工单 111「桌面观察能力」：分支 `ticket/111-desktop-observation` 基于最新 main `e0c532a`。提供 `windows_list`、`windows_foreground`、`windows_observe` 三个 Peter 只读工具，复用 UIA、图片理解、工具权限/预算和活动账本；无新依赖、模型供应商、Agent 或独立预算。针对性自动检查通过，真实 Windows UIA/截图与 Lan 体验尚未验收。
+- 工单 111「桌面观察能力」：分支 `ticket/111-desktop-observation` 基于最新 main `e0c532a`。提供 `windows_list`、`windows_foreground`、`windows_observe` 三个 Peter 只读工具，复用 UIA、图片理解、工具权限/预算和活动账本；无新依赖、模型供应商、Agent 或独立预算。Claude 审查后修复：敏感词按完整单词匹配（原规则把 Shopping/Pin tab 等误判为密码窗口）；截图改用 PrintWindow 支持后台窗口并拒绝黑屏/单色截图；`windows_foreground` 跳过 VEIL 自身。针对性自动检查通过，真实 Windows UIA/截图与 Lan 体验尚未验收。
 - 工单 101「Peter 把自己做的东西发给 Lan」：PR #154 已合并为 `d00327c`；Windows 体验待验收。
 
 ## 此前工单验收状态
@@ -53,7 +53,7 @@
 
 1. 同时打开两个以上应用，问 Peter“你看看我现在开着什么软件”，核对名称、标题、状态和同名窗口区分。
 2. 在记事本输入测试文字，让 Peter 读取并核对内容。
-3. 选一个 UIA 内容不足的界面，确认 Peter 使用目标窗口截图辅助理解；浏览器窗口不提供截图回退。
+3. 选一个 UIA 内容不足的界面（可以在后台，不用切到前台），确认 Peter 使用目标窗口截图辅助理解；若截图是黑屏，Peter 应明确说截图失败而不是描述画面；浏览器窗口不提供截图回退。
 4. 打开 Codex，让 Peter 描述屏幕当前可见状态；不以一次截图推断是否长期卡死。
 5. 一边操作其他软件一边请求观察，确认没有焦点、布局、剪贴板或文件变化。
 6. 在活动窗口核对工具开始与成功/失败状态；确认账本和聊天历史未保存控件文字或截图。

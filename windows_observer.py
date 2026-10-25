@@ -1,7 +1,8 @@
 """Read-only Windows window discovery and UI Automation observation.
 
 No window is activated, moved, clicked, typed into, or copied from. Screenshot
-fallback is a short-lived UIA image capture of the selected foreground window.
+fallback is a short-lived PrintWindow capture of the selected window (screen
+capture only when it is foreground); flat/blank captures are rejected.
 """
 import base64
 import ctypes
@@ -43,15 +44,21 @@ BROWSER_PROCESSES = frozenset({
     'chrome.exe', 'msedge.exe', 'firefox.exe', 'brave.exe', 'opera.exe',
     'vivaldi.exe', 'waterfox.exe',
 })
+# English terms must stand alone as words so ordinary text such as "Shopping",
+# "Typing", "Pinned" or "Hotpot" is not mistaken for a PIN/OTP field. A bare PIN
+# must be upper case, so buttons such as "Pin tab" stay readable.
 SENSITIVE_LABEL = re.compile(
-    r'(?:password|passwd|passcode|credential|windows security|security key|'
+    r'(?<![a-z0-9])(?:password|passwd|passcode|credentials?|windows security|security key|'
     r'verification[\s_-]*(?:code|key)|authentication[\s_-]*(?:code|key)|'
     r'confirmation[\s_-]*(?:code|token)|one[\s-]*time[\s-]*(?:password|code|token)|'
-    r'two[\s-]*factor|2fa|mfa|totp|otp|recovery[\s_-]*code|passphrase|pin(?:[\s_-]*code)?|'
-    r'api[\s_-]*key|access[\s_-]*token|client[\s_-]*secret|private[\s_-]*key|'
-    r'密码|口令|凭据|验证码|安全密钥|身份验证|两步验证|恢复码|私钥|访问令牌|api密钥)',
+    r'two[\s-]*factor|2fa|mfa|totp|otp|recovery[\s_-]*codes?|passphrase|pin[\s_-]*(?:code|number)|(?-i:PIN)|'
+    r'api[\s_-]*key|access[\s_-]*token|client[\s_-]*secret|private[\s_-]*key)(?![a-z0-9])'
+    r'|(?:密码|口令|凭据|验证码|安全密钥|身份验证|两步验证|恢复码|私钥|访问令牌|api密钥)',
     re.IGNORECASE,
 )
+VEIL_PROCESSES = frozenset({'veil.exe'})
+BLANK_DOMINANT_SHARE = 0.995
+BLANK_SAMPLE_PIXELS = 20000
 
 
 WINDOW_TOOL_SCHEMAS = [
@@ -85,8 +92,9 @@ WINDOW_TOOL_SCHEMAS = [
             'read-only states such as enabled/selected. visual_fallback defaults to auto: if UIA '
             'is empty or sparse, a screenshot of this target window is attached to the next model '
             'request. Use force only when the UIA result is unclear; use never to skip the image. '
-            'The screenshot is allowed only while this target is still foreground and is immediately '
-            'deleted after loading into the current request. Browser screenshots are refused for privacy; '
+            'The screenshot is taken without activating the window and is immediately '
+            'deleted after loading into the current request. If the capture comes back blank, no image is '
+            'attached and the result says so; never describe a window visually without an attached image. Browser screenshots are refused for privacy; '
             'UIA can still read exposed browser controls. At most one screenshot is used per chat '
             'or autonomous activity. No window activation, click, input, clipboard, movement, or file '
             'change occurs. Password, credential, verification, and protected security windows are '
@@ -148,6 +156,31 @@ def _is_protected_window(window):
     process = str(window.get('process', '')).casefold()
     title = str(window.get('title', ''))
     return process in PROTECTED_PROCESSES or bool(SENSITIVE_LABEL.search(title))
+
+
+def _is_veil_window(window):
+    process = str(window.get('process', '')).casefold()
+    title = str(window.get('title', ''))
+    return process in VEIL_PROCESSES or (
+        process == 'electron.exe' and (title.startswith('VEIL') or title.startswith('Peter 菜单')))
+
+
+def capture_looks_blank(colors):
+    """Return True when sampled ARGB pixels are (nearly) one flat colour.
+
+    PrintWindow returns a black or white image for some Electron and
+    hardware-accelerated windows instead of failing, so such a capture must
+    never reach the model as if it were the real window.
+    """
+    total = len(colors)
+    if not total:
+        return True
+    step = max(1, total // BLANK_SAMPLE_PIXELS)
+    samples = [int(value) & 0xFFFFFF for value in colors[::step]]
+    counts = {}
+    for value in samples:
+        counts[value] = counts.get(value, 0) + 1
+    return len(counts) <= 2 or max(counts.values()) / len(samples) >= BLANK_DOMINANT_SHARE
 
 
 def _control_summary_sufficient(controls, controls_truncated=False):
@@ -338,6 +371,14 @@ class WindowsObservationTools:
             return self._success(result, f'已列出 {len(limited)} 个普通应用窗口。', '已列出普通应用窗口。'), '成功', 'open application windows'
         if name == 'windows_foreground':
             selected = next((item for item in safe_windows if item.get('foreground')), None)
+            behind_veil = False
+            if selected and _is_veil_window(selected):
+                # Lan is usually typing to Peter in VEIL; the window she means is the
+                # one right behind it (windows are listed front to back).
+                selected = next((item for item in safe_windows
+                                 if not _is_veil_window(item)
+                                 and 'minimized' not in str(item.get('state', ''))), None)
+                behind_veil = True
             if not selected:
                 raise ObservationError('The foreground window is protected or could not be identified safely.')
             result = {
@@ -347,6 +388,9 @@ class WindowsObservationTools:
                 'title': _text(selected.get('title'), MAX_WINDOW_TITLE),
                 'state': _text(selected.get('state'), 80),
             }
+            if behind_veil:
+                result['note'] = ('VEIL itself is in front, so this is the window directly behind it, '
+                                  'which Lan was most likely using.')
             summary = _text(selected.get('app') or selected.get('process') or 'foreground application', 80)
             return self._success(result, '已识别当前前台应用窗口。', '已读取前台窗口信息。'), '成功', summary
         selected = next((item for item in safe_windows if item.get('id') == args['window_id']), None)
@@ -401,8 +445,8 @@ class WindowsObservationTools:
             visual_note = 'UI Automation content was sufficient; no screenshot was taken'
         if not controls and image is None:
             raise ObservationError(
-                'No readable UI Automation controls or target-window screenshot were available; '
-                'no content was inferred.'
+                'No readable UI Automation controls or target-window screenshot were available '
+                f'({visual_note}); no content was inferred.'
             )
         payload = {
             'application': _text(selected.get('app') or selected.get('process') or 'application', 80),
@@ -413,7 +457,7 @@ class WindowsObservationTools:
             'controls_truncated': controls_truncated,
             'visual_fallback': visual_note,
         }
-        if should_capture and image is None:
+        if should_capture and image is None and not visual_note.startswith('screenshot unavailable'):
             payload['visual_fallback'] = 'screenshot unavailable; no image was attached'
         detail = (f'读取 UIA 控件 {len(controls[:MAX_CONTROLS])} 项；'
                   f'{"截图已加入当前请求" if image else "未附加截图"}。')
@@ -778,40 +822,103 @@ class WindowsDesktopBackend:
         if current.get('width', 0) * current.get('height', 0) > MAX_CAPTURE_PIXELS:
             raise ObservationError('The selected window is too large for a bounded screenshot.')
         self._check_default_desktop()
-        if not current.get('foreground'):
-            raise ObservationError('The selected window is in the background; no window was activated or captured.')
         if stopped():
             raise ObservationPaused('The autonomous activity was paused.')
         auto = self._uia()
+        handle = current['handle']
         with auto.UIAutomationInitializerInThread():
             old_timeout = self._set_search_timeout(auto, UIA_SEARCH_TIMEOUT_SECONDS)
-            path = None
             try:
-                root = auto.ControlFromHandle(current['handle'])
-                if not root:
-                    raise ObservationError('The selected window no longer has a UI Automation root.')
-                if int(auto.GetForegroundWindow() or 0) != current['handle']:
-                    raise ObservationError('The selected window is no longer foreground; no window was activated or captured.')
-                descriptor, path = tempfile.mkstemp(prefix='veil-observe-', suffix='.png')
-                os.close(descriptor)
-                if not root.CaptureToImage(path, captureCursor=False):
-                    raise ObservationError('UI Automation could not capture the selected foreground window.')
+                # PrintWindow asks the window to draw itself, so a background window can be
+                # captured without activating it. Some windows return a flat image instead.
+                image, reason = self._usable_png(auto, self._print_window_bitmap(auto, current))
+                if image is None and int(auto.GetForegroundWindow() or 0) == handle:
+                    root = auto.ControlFromHandle(handle)
+                    if root:
+                        image, reason = self._usable_png(auto, auto.Bitmap.FromControl(root))
+                    if image is not None and int(auto.GetForegroundWindow() or 0) != handle:
+                        image, reason = None, 'the foreground changed during capture'
                 if stopped():
                     raise ObservationPaused('The autonomous activity was paused.')
-                if int(auto.GetForegroundWindow() or 0) != current['handle']:
-                    raise ObservationError('The foreground changed during capture; the image was discarded.')
-                size = os.path.getsize(path)
-                if size <= 8 or size > MAX_SCREENSHOT_BYTES:
-                    raise ObservationError('The selected-window screenshot was empty or exceeded the 5 MiB limit.')
+                if image is None:
+                    raise ObservationError(
+                        f'The screenshot could not show this window ({reason}); no image was attached. '
+                        'Do not describe the window visually; tell Lan the visual capture failed.')
+                return image
+            finally:
+                self._restore_search_timeout(auto, old_timeout)
+
+    @staticmethod
+    def _print_window_bitmap(auto, current):
+        import ctypes.wintypes
+
+        width, height = int(current.get('width') or 0), int(current.get('height') or 0)
+        if width <= 0 or height <= 0:
+            return None
+        user32 = ctypes.windll.user32
+        gdi32 = ctypes.windll.gdi32
+        HANDLE = ctypes.wintypes.HANDLE
+        user32.GetWindowDC.argtypes = [ctypes.wintypes.HWND]
+        user32.GetWindowDC.restype = HANDLE
+        user32.ReleaseDC.argtypes = [ctypes.wintypes.HWND, HANDLE]
+        user32.PrintWindow.argtypes = [ctypes.wintypes.HWND, HANDLE, ctypes.wintypes.UINT]
+        user32.PrintWindow.restype = ctypes.wintypes.BOOL
+        gdi32.CreateCompatibleDC.argtypes = [HANDLE]
+        gdi32.CreateCompatibleDC.restype = HANDLE
+        gdi32.CreateCompatibleBitmap.argtypes = [HANDLE, ctypes.c_int, ctypes.c_int]
+        gdi32.CreateCompatibleBitmap.restype = HANDLE
+        gdi32.SelectObject.argtypes = [HANDLE, HANDLE]
+        gdi32.SelectObject.restype = HANDLE
+        gdi32.DeleteObject.argtypes = [HANDLE]
+        gdi32.DeleteDC.argtypes = [HANDLE]
+        window_dc = user32.GetWindowDC(current['handle'])
+        if not window_dc:
+            return None
+        memory_dc = bitmap = None
+        try:
+            memory_dc = gdi32.CreateCompatibleDC(window_dc)
+            bitmap = gdi32.CreateCompatibleBitmap(window_dc, width, height)
+            if not memory_dc or not bitmap:
+                return None
+            previous = gdi32.SelectObject(memory_dc, bitmap)
+            printed = user32.PrintWindow(current['handle'], memory_dc, 2)  # PW_RENDERFULLCONTENT
+            gdi32.SelectObject(memory_dc, previous)
+            if not printed:
+                return None
+            from uiautomation.uiautomation import _DllClient
+            cbmp = _DllClient.instance().dll.BitmapFromHBITMAP(ctypes.c_size_t(bitmap), 0, 0, 0, 0)
+            return auto.Bitmap._FromGdiplusBitmap(cbmp)
+        finally:
+            if bitmap:
+                gdi32.DeleteObject(bitmap)
+            if memory_dc:
+                gdi32.DeleteDC(memory_dc)
+            user32.ReleaseDC(current['handle'], window_dc)
+
+    @staticmethod
+    def _usable_png(auto, bitmap):
+        """Return (data URI, None) for a real-looking capture, else (None, reason)."""
+        if not bitmap:
+            return None, 'capture failed'
+        path = None
+        with bitmap:
+            if bitmap.Width <= 0 or bitmap.Height <= 0:
+                return None, 'capture was empty'
+            if capture_looks_blank(bitmap.GetAllPixelColors()):
+                return None, 'capture came back blank or black'
+            try:
+                descriptor, path = tempfile.mkstemp(prefix='veil-observe-', suffix='.png')
+                os.close(descriptor)
+                if not bitmap.ToFile(path):
+                    return None, 'capture could not be encoded'
                 with open(path, 'rb') as image_file:
                     raw = image_file.read(MAX_SCREENSHOT_BYTES + 1)
-                if len(raw) > MAX_SCREENSHOT_BYTES or not raw.startswith(b'\x89PNG\r\n\x1a\n'):
-                    raise ObservationError('The selected-window screenshot was invalid or too large.')
-                return 'data:image/png;base64,' + base64.b64encode(raw).decode('ascii')
             finally:
                 if path:
                     try:
                         os.unlink(path)
                     except OSError:
                         pass
-                self._restore_search_timeout(auto, old_timeout)
+        if len(raw) <= 8 or len(raw) > MAX_SCREENSHOT_BYTES or not raw.startswith(b'\x89PNG\r\n\x1a\n'):
+            return None, 'capture was invalid or exceeded 5 MiB'
+        return 'data:image/png;base64,' + base64.b64encode(raw).decode('ascii'), None
