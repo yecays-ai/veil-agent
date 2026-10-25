@@ -40,6 +40,11 @@ class FakeInputMonitor:
         if not self.idle:
             raise InteractionPaused('Recent human input has priority.')
 
+    def idle_seconds(self):
+        if getattr(self, 'idle_sequence', None):
+            return self.idle_sequence.pop(0)
+        return 10 if self.idle else 0
+
     def snapshot(self):
         return self.version
 
@@ -456,6 +461,33 @@ idle_seconds = 3
                                      lambda: False, monitor, monitor.snapshot())
         self.assertEqual(control.sent_keys, 0)
 
+
+    def test_approval_click_is_not_treated_as_a_takeover(self):
+        monitor = FakeInputMonitor(idle=False)
+        monitor.idle_sequence = [0.1, 0.4, 1.5]
+        tools, _ = self.make_tools(monitor=monitor)
+        result, snapshot = tools._run_action_with_input_guard(
+            lambda _stop, _snap: {'confirmed': True}, lambda: False, approved=True)
+        self.assertEqual(result, {'confirmed': True})
+
+    def test_approval_followed_by_continuous_input_stops_with_clear_reason(self):
+        monitor = FakeInputMonitor(idle=False)
+        tools, _ = self.make_tools(monitor=monitor)
+        with patch('windows_interaction.APPROVAL_IDLE_WAIT_SECONDS', 0.3):
+            result, state = tools._error(
+                self._capture(lambda: tools._run_action_with_input_guard(
+                    lambda _stop, _snap: {'confirmed': True}, lambda: False, approved=True)),
+                'Notepad', True)
+        self.assertEqual(state, '中断')
+        self.assertIn('let go of the mouse', str(result))
+
+    @staticmethod
+    def _capture(call):
+        try:
+            call()
+        except Exception as exc:
+            return exc
+        raise AssertionError('expected an exception')
 
     def test_shared_desktop_lock_prevents_interaction(self):
         tools, backend = self.make_tools()
