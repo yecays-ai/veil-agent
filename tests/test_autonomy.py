@@ -346,6 +346,106 @@ daily_budget_cny = "2"
                                 {'started_at': self.budget.clock(), 'result': '搁置'}]
         self.assertIsNone(self.controller.next_wake())
 
+    def test_next_wake_can_be_replaced_persisted_and_shown_in_status(self):
+        self.activity.set(True)
+        self.controller.interval = timedelta(hours=3)
+        first_at = (datetime.now().astimezone() + timedelta(hours=2)).isoformat()
+        result, state, _ = self.controller.set_next_wake({
+            'at': first_at, 'reason': 'Continue the spider silk research.'})
+        self.assertEqual(state, '成功')
+        self.assertIn('scheduled for', result)
+        alarm_path = self.store.root / 'test' / 'autonomy-alarm.json'
+        first = json.loads(alarm_path.read_text(encoding='utf-8'))
+        self.assertEqual(first['state'], 'pending')
+        self.assertEqual(self.controller.status()['next_wake_reason'], 'Continue the spider silk research.')
+
+        second_at = (datetime.now().astimezone() + timedelta(hours=2, minutes=30)).isoformat()
+        _, state, _ = self.controller.set_next_wake({
+            'at': second_at, 'reason': 'Check the new measurements.'})
+        second = json.loads(alarm_path.read_text(encoding='utf-8'))
+        self.assertEqual(state, '成功')
+        self.assertNotEqual(second['alarm_id'], first['alarm_id'])
+        self.assertEqual(second['reason'], 'Check the new measurements.')
+
+        restarted = AutonomyController(self.chat, self.hub)
+        restarted.interval = timedelta(hours=3)
+        self.assertEqual(restarted.status()['next_wake_reason'], 'Check the new measurements.')
+        self.assertEqual(datetime.fromisoformat(restarted.status()['next_wake_at']),
+                         datetime.fromisoformat(second['at']))
+
+    def test_next_wake_rejects_too_soon_and_more_than_seven_days(self):
+        self.activity.set(True)
+        for delta, expected in ((timedelta(minutes=59), 'at least'),
+                                (timedelta(days=8), 'more than 7 days')):
+            result, state, _ = self.controller.set_next_wake({
+                'at': (datetime.now().astimezone() + delta).isoformat(), 'reason': 'Continue research.'})
+            self.assertEqual(state, '被拒绝')
+            self.assertIn(expected, result)
+        self.assertFalse((self.store.root / 'test' / 'autonomy-alarm.json').exists())
+
+    def test_next_wake_cancellation_and_late_claim_are_at_most_once(self):
+        from agent_types import AUTONOMY_WAKE
+        self.activity.set(True)
+        self.controller.interval = timedelta(hours=3)
+        alarm = {'alarm_id': 'fixture-alarm',
+                 'at': (datetime.now().astimezone() - timedelta(minutes=5)).isoformat(),
+                 'reason': 'Contact Lan about the morning reminder.', 'state': 'pending'}
+        self.controller._save_alarm(alarm)
+        self.hub.autonomy = self.controller
+        self.assertIs(self.hub.input_fn(), AUTONOMY_WAKE)
+        self.assertEqual(self.controller.claimed_wake_reason, alarm['reason'])
+        self.assertIn(alarm['reason'], self.controller._context(self.controller.claimed_wake_reason))
+        self.assertEqual(self.controller._read_alarm()['state'], 'consumed')
+
+        restarted = AutonomyController(self.chat, self.hub)
+        restarted.interval = timedelta(hours=3)
+        self.assertFalse(restarted.due())
+        self.assertFalse(restarted.claim_due())
+
+        _, state, _ = restarted.set_next_wake({'at': '', 'reason': ''})
+        self.assertEqual(state, '成功')
+        self.assertEqual(restarted._read_alarm()['state'], 'consumed')
+
+    def test_due_alarm_missed_at_daily_cap_is_not_replayed_next_day(self):
+        self.activity.set(True)
+        alarm = {'alarm_id': 'fixture-alarm',
+                 'at': (datetime.now().astimezone() - timedelta(minutes=5)).isoformat(),
+                 'reason': 'Contact Lan.', 'state': 'pending'}
+        self.controller._save_alarm(alarm)
+        self.controller._eligible_count = lambda day=None: self.controller.daily_max_runs
+        self.assertFalse(self.controller.due())
+        self.assertEqual(self.controller._read_alarm()['state'], 'missed')
+
+        restarted = AutonomyController(self.chat, self.hub)
+        self.assertFalse(restarted.due())
+        self.assertFalse(restarted.claim_due())
+
+    def test_periodic_wake_remains_scheduled_before_a_later_alarm(self):
+        self.activity.set(True)
+        self.controller.interval = timedelta(hours=3)
+        self.controller.set_next_wake({
+            'at': (datetime.now().astimezone() + timedelta(hours=4)).isoformat(),
+            'reason': 'Continue research.'})
+        status = self.controller.status()
+        self.assertLess(datetime.fromisoformat(status['next_wake_at']),
+                        datetime.fromisoformat(self.controller._read_alarm()['at']))
+        self.assertIsNone(status['next_wake_reason'])
+
+    def test_set_next_wake_tool_is_offered_as_a_direct_action(self):
+        from tools_agent import tool_policy
+        self.activity.set(True)
+        names = {schema['function']['name'] for schema in self.chat.tool_schemas()}
+        self.assertIn('set_next_wake', names)
+        self.assertEqual(tool_policy('set_next_wake'), 'allow')
+        call = SimpleNamespace(function=SimpleNamespace(
+            name='set_next_wake', arguments=json.dumps({
+                'at': (datetime.now().astimezone() + timedelta(hours=2)).isoformat(),
+                'reason': 'Continue the research.'})))
+        execution = self.chat._execute_tool_call(call, 'request', 'call', False)
+        self.assertEqual(execution.state, '成功')
+        self.assertIn('scheduled for', execution.result)
+        self.assertIn('Continue the research.', execution.summary)
+
     def test_chat_can_enqueue_once_and_interrupt_autonomy_without_busy_indicator(self):
         self.hub.autonomy_busy = True
         self.assertEqual(self.hub.submit('continue chat', 'one'), 'accepted')

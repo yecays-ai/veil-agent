@@ -100,6 +100,20 @@ class CapabilityTransactionTests(unittest.TestCase):
         self.assertIn('long-task tools', row['pending_event'])
         self.assertTrue(other.enabled)
 
+    def test_next_wake_notice_is_saved_once_and_survives_reopen(self):
+        self.manager.announce_next_wake()
+        row = self.read()
+        self.assertTrue(row['next_wake_announced'])
+        self.assertIn('set_next_wake', row['pending_event'])
+        self.assertIn('7 days', row['pending_event'])
+        reopened = self.open_manager()
+        reopened._record_capabilities(['read_text_file'])
+        self.assertIn('set_next_wake', reopened.capability_event)
+        reopened.consume_capability_event()
+        reopened.announce_next_wake()
+        self.assertIsNone(reopened.capability_event)
+        self.assertTrue(self.read()['next_wake_announced'])
+
     def test_web_activity_toggle_and_chat_notice_do_not_deadlock(self):
         activity = ActivityState(self.store.root / 'fictional' / 'activity.json')
         hub = Hub('Example', activity)
