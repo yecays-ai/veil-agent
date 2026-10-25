@@ -14,7 +14,7 @@ import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 
-from desktop_access import DesktopBusy, desktop_access
+from desktop_access import DesktopBusy, desktop_access, program_input_made, register_input_tracker
 from windows_observer import (
     MAX_CONTROLS,
     MAX_RESULT_BYTES,
@@ -72,10 +72,11 @@ WINDOWS_INTERACTION_TOOL_SCHEMAS = [
             'windows_observe result for the same window_id. Supported actions are invoke, select, '
             'toggle, expand, collapse, and set_text. The program re-resolves the exact UIA element '
             'and checks its type, state, password/sensitive labels, app identity, desktop lock, and '
-            'recent human input before acting. Invoke, toggle, and text edits require Lan approval; '
-            'save/send/submit actions require explicit approval, while delete/install/purchase and '
-            'administrator/security actions are refused. Text content is never written to the '
-            'activity ledger. One action only; observe again before continuing.'
+            'recent human input before acting. Clicks, navigation, selection and text edits run '
+            'directly. A control that saves, sends, submits, publishes or overwrites asks Lan first '
+            '(she can answer in VEIL or on QQ); delete/install/purchase and administrator/security '
+            'actions are refused. Text content is never written to the activity ledger. One action '
+            'only; observe again before continuing.'
         ),
         inputSchema={'type': 'object', 'properties': {
             'app_id': {'type': 'string'},
@@ -102,7 +103,20 @@ _BLOCKED_CONTROL = re.compile(
     r'administrator|run as admin|elevate|uac|删除|卸载|安装|购买|付款|管理员|权限提升)(?![a-z0-9])',
     re.IGNORECASE,
 )
-_CONFIRM_ACTIONS = frozenset({'invoke', 'toggle', 'set_text'})
+# Ticket 114: ordinary clicks, navigation and text edits run without asking. Only an action on a
+# control that saves, sends, submits, publishes or overwrites asks Lan first (in VEIL or on QQ).
+_RISKY_CONTROL = re.compile(
+    r'(?<![a-z0-9])(?:save|send|submit|post|publish|overwrite|'
+    r'保存|另存为|发送|提交|发布|发表|覆盖)(?![a-z0-9])',
+    re.IGNORECASE,
+)
+# A plain "Yes"/"OK" inside a file-overwrite confirmation is identified by the dialog around it.
+_RISKY_SCOPE = re.compile(
+    r'(?<![a-z0-9])(?:confirm save as|already exists|overwrite|replace it|'
+    r'确认另存为|已存在|覆盖)(?![a-z0-9])',
+    re.IGNORECASE,
+)
+_RISKY_ACTIONS = frozenset({'invoke', 'toggle', 'select'})
 _IDLE_TICK_MARGIN_MS = 35
 MAX_KEYBOARD_FALLBACK_CHARS = 200
 # After Lan approves in VEIL, wait up to this long for 1 second without input.
@@ -213,6 +227,14 @@ def _tick_is_after(candidate, reference):
     return 0 < delta < 0x80000000
 
 
+def _needs_approval(action, metadata):
+    if action not in _RISKY_ACTIONS:
+        return False
+    own = ' '.join((metadata.get('name') or '', metadata.get('automation_id') or ''))
+    return bool(_RISKY_CONTROL.search(own)
+                or _RISKY_SCOPE.search(' '.join(metadata.get('ancestor_labels', ()))))
+
+
 def _approval_control_label(metadata):
     value = f'{metadata.get("type", "control")} {metadata.get("name") or "(unnamed control)"}'
     value = ''.join(char if ord(char) >= 32 and ord(char) != 127 else ' ' for char in value)
@@ -228,6 +250,8 @@ class DesktopInputMonitor:
         self._lock = threading.Lock()
         self._human_tick = self._last_input_tick() if os.name == 'nt' else 0
         self._own_tick = None
+        if last_input_tick is None and now_tick is None and os.name == 'nt':
+            register_input_tracker(self)
 
     @staticmethod
     def _windows_last_input_tick():
@@ -271,9 +295,13 @@ class DesktopInputMonitor:
         if self.idle_seconds() < minimum_seconds:
             raise InteractionPaused('Recent human keyboard or mouse input has priority.')
 
-    def mark_own_input(self):
+    def note_program_input(self):
         with self._lock:
             self._own_tick = int(self._now_tick()) & 0xFFFFFFFF
+
+    def mark_own_input(self):
+        self.note_program_input()
+        program_input_made(self)
 
 
 class WindowsInteractionBackend(WindowsDesktopBackend):
@@ -908,18 +936,15 @@ class WindowsInteractionTools:
                                          or metadata.get('read_only')):
                 return WindowsToolResult('Text replacement is limited to writable UIA Edit or Document controls.',
                                          activity_detail=f'{summary} 文本控件不可写。'), '被拒绝'
-            needs_approval = action in _CONFIRM_ACTIONS or action == 'select' and metadata['type'] != 'TabItemControl'
+            needs_approval = _needs_approval(action, metadata)
             if needs_approval:
                 if approval is None:
-                    return WindowsToolResult('This UIA action requires Lan approval through VEIL.',
+                    return WindowsToolResult('Saving, sending, submitting or overwriting needs Lan approval, '
+                                             'and none can be asked here; the window was not changed.',
                                              activity_detail=f'{summary} 需要 Lan 明确批准。'), '被拒绝'
                 control_label = _approval_control_label(metadata)
-                prompt = (f'Peter wants to perform {action} on {app["label"]} control {control_label}. '
-                          'This may change or submit application data. Approve this one action? y/N ')
-                if action == 'set_text':
-                    prompt = (f'Peter wants to replace text in {app["label"]} control {control_label} '
-                              f'with this exact JSON string:\n{json.dumps(args["text"], ensure_ascii=False)}\n'
-                              'Approve this one edit? y/N ')
+                prompt = (f'Peter 想在{app["label"]}里点「{control_label}」'
+                          '（保存、发送、提交或覆盖类操作）。同意这一次吗？y/N ')
                 try:
                     answer = approval(prompt)
                 except Exception:

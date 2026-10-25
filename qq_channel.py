@@ -16,7 +16,7 @@ import unicodedata
 from datetime import datetime
 from pathlib import Path
 
-from desktop_access import DesktopBusy, desktop_access
+from desktop_access import DesktopBusy, desktop_access, program_input_made, register_input_tracker
 
 
 QQ_PREFIX = '[Lan sent this on QQ; she is away from the computer.]\n'
@@ -154,8 +154,12 @@ class IdleClock:
         self.own_input_until = 0
         self.human_input = now_ms()
 
-    def mark_own_input(self):
+    def note_program_input(self):
         self.own_input_until = self.now_ms()
+
+    def mark_own_input(self):
+        self.note_program_input()
+        program_input_made(self)
 
     def idle_seconds(self):
         last = self.last_input_ms()
@@ -204,7 +208,10 @@ class QQChannel:
         self.daily_max_sent = settings['daily_max_sent']
         self.log_path = Path(store_root) / character_id / 'qq-log.jsonl'
         self.ui = ui or QQWindow(self.contact)
-        self.clock = clock or IdleClock(*_windows_input_clock())
+        if clock is None:
+            clock = IdleClock(*_windows_input_clock())
+            register_input_tracker(clock)
+        self.clock = clock
         self.seen = None
         self.pending_snapshot = None
 

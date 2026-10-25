@@ -242,7 +242,7 @@ idle_seconds = 3
         self.assertIn('rerun setup.bat', result)
         self.assertEqual(backend.launches, 0)
 
-    def test_text_replacement_requires_approval_and_does_not_leak_into_activity_detail(self):
+    def test_text_replacement_runs_without_approval_and_does_not_leak_into_activity_detail(self):
         tools, backend = self.make_tools()
         prompts = []
         text = 'Hello, Lan! 你好。\nSecond line'
@@ -257,10 +257,7 @@ idle_seconds = 3
         self.assertTrue(payload['text_matches'])
         self.assertEqual(payload['text_characters'], len(text))
         self.assertEqual(backend.value, text)
-        self.assertEqual(len(prompts), 1)
-        self.assertIn(json.dumps(text, ensure_ascii=False), prompts[0])
-        self.assertIn('Text Editor untrusted prompt text', prompts[0])
-        self.assertEqual(prompts[0].count('\n'), 2)
+        self.assertEqual(prompts, [])
         self.assertNotIn(text, result.activity_detail)
 
     def test_approval_callback_failure_is_denied(self):
@@ -269,9 +266,10 @@ idle_seconds = 3
         def broken_approval(_prompt):
             raise EOFError('approval view closed')
 
+        backend.control.update(name='Save', type='ButtonControl', patterns=['invoke'])
         result, state, _ = tools.invoke('windows_control_action', {
             'app_id': 'notepad', 'window_id': WINDOW_ID,
-            'control_id': CONTROL_ID, 'action': 'set_text', 'text': 'not written',
+            'control_id': CONTROL_ID, 'action': 'invoke',
         }, approval=broken_approval)
         self.assertEqual(state, '被拒绝')
         self.assertIn('could not collect approval', result)
@@ -279,9 +277,10 @@ idle_seconds = 3
 
     def test_denial_and_high_risk_control_do_not_call_ui_automation(self):
         tools, backend = self.make_tools()
+        backend.control.update(name='发送', type='ButtonControl', patterns=['invoke'])
         result, state, _ = tools.invoke('windows_control_action', {
             'app_id': 'notepad', 'window_id': WINDOW_ID,
-            'control_id': CONTROL_ID, 'action': 'set_text', 'text': 'not written',
+            'control_id': CONTROL_ID, 'action': 'invoke',
         }, approval=lambda _prompt: 'n')
         self.assertEqual(state, '被拒绝')
         self.assertEqual(backend.actions, [])
@@ -319,8 +318,64 @@ idle_seconds = 3
         })
 
         self.assertEqual(state, '被拒绝')
-        self.assertIn('requires Lan approval', result)
+        self.assertIn('needs Lan approval', result)
         self.assertEqual(backend.actions, [])
+
+        prompts = []
+        result, state, _ = tools.invoke('windows_control_action', {
+            'app_id': 'notepad', 'window_id': WINDOW_ID,
+            'control_id': CONTROL_ID, 'action': 'invoke',
+        }, approval=lambda prompt: prompts.append(prompt) or 'y')
+        self.assertEqual(state, '成功')
+        self.assertEqual(len(prompts), 1)
+        self.assertIn('Save」', prompts[0])
+        self.assertEqual(backend.actions, [('invoke', None)])
+
+    def test_ordinary_clicks_and_selection_run_without_approval(self):
+        tools, backend = self.make_tools()
+        backend.control.update(name='Bold', type='ButtonControl', patterns=['invoke', 'toggle'])
+        for action in ('invoke', 'toggle'):
+            result, state, _ = tools.invoke('windows_control_action', {
+                'app_id': 'notepad', 'window_id': WINDOW_ID,
+                'control_id': CONTROL_ID, 'action': action,
+            })
+            self.assertEqual(state, '成功', result)
+        backend.control.update(name='Wrap', type='ListItemControl', patterns=['select'])
+        result, state, _ = tools.invoke('windows_control_action', {
+            'app_id': 'notepad', 'window_id': WINDOW_ID,
+            'control_id': CONTROL_ID, 'action': 'select',
+        })
+        self.assertEqual(state, '成功', result)
+        self.assertEqual([action for action, _ in backend.actions], ['invoke', 'toggle', 'select'])
+
+    def test_overwrite_confirmation_and_send_controls_ask_lan(self):
+        tools, backend = self.make_tools()
+        cases = [
+            {'name': 'Yes', 'ancestor_labels': ('Confirm Save As',)},
+            {'name': '是(Y)', 'ancestor_labels': ('确认另存为', 'notes.txt 已存在。要替换它吗?')},
+            {'name': 'Send message', 'ancestor_labels': ()},
+            {'name': '另存为', 'ancestor_labels': ()},
+            {'name': 'Submit', 'ancestor_labels': ()},
+        ]
+        for case in cases:
+            backend.control.update(type='ButtonControl', patterns=['invoke'], **case)
+            result, state, _ = tools.invoke('windows_control_action', {
+                'app_id': 'notepad', 'window_id': WINDOW_ID,
+                'control_id': CONTROL_ID, 'action': 'invoke',
+            }, approval=lambda _prompt: 'n')
+            self.assertEqual(state, '被拒绝', case)
+            self.assertIn('did not approve', result)
+        self.assertEqual(backend.actions, [])
+
+    def test_words_containing_risky_terms_do_not_ask(self):
+        tools, backend = self.make_tools()
+        for name in ('Saved searches', 'Sender info', 'Postcard', 'Find and Replace'):
+            backend.control.update(name=name, type='ButtonControl', patterns=['invoke'], ancestor_labels=())
+            result, state, _ = tools.invoke('windows_control_action', {
+                'app_id': 'notepad', 'window_id': WINDOW_ID,
+                'control_id': CONTROL_ID, 'action': 'invoke',
+            })
+            self.assertEqual(state, '成功', name)
 
     def test_expanding_a_menu_uses_uiautomation_without_extra_approval(self):
         tools, backend = self.make_tools()
@@ -587,7 +642,7 @@ max_steps = 3
 
             self.assertEqual(reply, 'The note is visible.')
             self.assertEqual(backend.value, 'Hello, Lan! 你好。')
-            self.assertEqual(len(approval_prompts), 1)
+            self.assertEqual(approval_prompts, [])
             self.assertTrue(any('<untrusted_windows_desktop>' in str(message)
                                 for message in requests[1]))
             ledger = store.read('test/tools.jsonl')

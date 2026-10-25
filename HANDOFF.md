@@ -2,6 +2,7 @@
 
 ## 当前进度
 
+- 工单 114（Claude）：`windows_interaction._needs_approval` 只对 invoke/toggle/select 且控件名含保存/发送/提交/发布/覆盖、或祖先是覆盖确认框时要审批；set_text 不再审批。`Hub.approval` 会调用每个 `AwayBridge.approval_asked`，只在该渠道的回合内把问题发出；`poll_once` 在已发问且 `hub.pending` 存在时把最后一行的同意/不同意交给 `hub.answer`。新模块 `desktop_files.py`（`desktop_create_file`，'xb' 独占创建，Known Folder 路径）。`desktop_access.register_input_tracker` / `program_input_made` 让 QQ `IdleClock` 与 `DesktopInputMonitor` 互认程序输入（只在 Windows 真时钟上注册）。`desktop_create_file` 不在长期任务 `SIDE_EFFECT_TOOLS` 里，避免再出现无法核实的待办卡死。
 - 工单 111 已通过 PR #157 合并为 `b64875d`；四项 Windows/Linux Python 3.11/3.12 CI 通过。Lan 的 Windows 实机观察验收仍待进行。
 - 工单 112 在独立 worktree `E:\Peter-Agent\VEIL\worktrees\112-desktop-interaction`、分支 `ticket/112-desktop-interaction` 上实现，基于 main `b64875d`。PR #158 已创建并保持打开；Ubuntu/Windows Python 3.11/3.12 全量 CI 和依赖安全检查通过，CodeRabbit 审查仍在处理中。已有记事本程序白名单、启动/复用、窗口管理、精确 UIA 控件动作、文本核验、人工输入优先、共享桌面锁及活动记录接入。
 - Microsoft winapp CLI 固定提交 `6564e7adba6d339f2b06868baca050e54687a2b3` 已审阅；只借用精确目标解析、显式 UIA pattern、动作前重查和桌面协调思路，没有增加依赖或复制代码。
