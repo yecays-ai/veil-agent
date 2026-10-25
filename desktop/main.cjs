@@ -250,7 +250,7 @@ async function endpointRequest(pathname, method = 'GET', body) {
   const response = await fetch(`${agentEndpoint.origin}${pathname}`, { method, headers: {
     'X-Token': token, ...(body ? { 'Content-Type': 'application/json' } : {})
   }, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(5000) });
-  const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(data.error || '请求失败'); return data;
+  const data = await response.json().catch(() => ({})); if (!response.ok) { const error = new Error(data.error || '请求失败'); error.status = response.status; throw error; } return data;
 }
 function screenPopWindow(bounds, type, name) {
   const win = new BrowserWindow({ ...bounds, frame: false, transparent: true,
@@ -272,7 +272,9 @@ async function postScreenPopEvent(record, event, item, total) {
   else body.item = item;
   for (let attempt = 0; attempt < 3; attempt++) {
     try { await endpointRequest('/api/screen-pop/event', 'POST', body); return true; }
-    catch {
+    catch (error) {
+      // The agent no longer knows this pop (for example after a restart): stop retrying.
+      if (error?.status === 400 || error?.status === 409) return 'rejected';
       if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 150 * (2 ** attempt)));
     }
   }
@@ -345,7 +347,7 @@ async function showScreenPop(popId) {
       });
       await Promise.all(wins.map(item => prepareScreenPopWindow(record, item.window, command, item.index)));
       for (const item of record.windows) item.window.showInactive();
-      if (!await postScreenPopEvent(record, 'shown', undefined, record.total)) {
+      if (await postScreenPopEvent(record, 'shown', undefined, record.total) !== true) {
         suppressAndCloseScreenPop(record); return;
       }
       record.acknowledged = true;
@@ -361,7 +363,7 @@ async function showScreenPop(popId) {
     }));
     await Promise.all(wins.map(item => prepareScreenPopWindow(record, item.window, command, item.index)));
     for (const item of record.windows) item.window.showInactive();
-    if (!await postScreenPopEvent(record, 'shown', undefined, record.total)) {
+    if (await postScreenPopEvent(record, 'shown', undefined, record.total) !== true) {
       suppressAndCloseScreenPop(record); return;
     }
     record.acknowledged = true;
