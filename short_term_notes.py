@@ -193,11 +193,7 @@ class ShortTermNotes:
 
     def context(self):
         try:
-            try:
-                self.extract_if_due()
-            except Exception:
-                # A background extraction failure must not block an ordinary reply.
-                pass
+            # Extraction runs only on the background timer so a reply never waits for it.
             self.expire_overdue()
             with self._write_lock:
                 active = [note for note in self._latest_notes().values()
