@@ -9,12 +9,12 @@ const read = file => fs.readFile(path.join(__dirname, '..', file), 'utf8');
 test('chat shell exposes appearance CSS, custom background, global and per-page opacity controls', async () => {
   const [html, css, js, main, preload] = await Promise.all([read('chat.html'), read('chat.css'), read('chat.js'), read('main.cjs'), read('desktop-preload.cjs')]);
   assert.deepEqual([...html.matchAll(/class="nav-item[^\"]*" data-page="([^"]+)"/g)].map(match => match[1]),
-    ['chat', 'activity', 'memory', 'more']);
+    ['chat', 'activity', 'context', 'memory', 'more']);
   assert.match(html, /自主活动：<b id="header-autonomy-status">/);
   assert.match(html, /id="header-next-wake"/);
   assert.match(html, /id="service-status" hidden/);
   assert.match(html, /id="window-opacity" type="range"/);
-  for (const page of ['chat', 'activity', 'memory', 'more']) assert.match(html, new RegExp(`id="${page}-opacity" type="range"`));
+  for (const page of ['chat', 'activity', 'context', 'memory', 'more']) assert.match(html, new RegExp(`id="${page}-opacity" type="range"`));
   assert.match(html, /id="bubble-opacity" type="range"/);
   assert.match(html, /id="background-opacity" type="range"/);
   assert.match(html, /id="custom-css"/);
@@ -73,7 +73,7 @@ test('every existing tab detaches into the shared chat view and can merge withou
   assert.match(css, /body\.activity-window/);
   assert.match(js, /detachedView=pageQuery\.get\('detached'\)==='1'\?pageQuery\.get\('view'\):null/);
   assert.match(js, /setPointerCapture/);
-  for (const view of ['chat', 'activity', 'memory', 'more']) assert.match(main, new RegExp(`['"]${view}['"]`));
+  for (const view of ['chat', 'activity', 'context', 'memory', 'more']) assert.match(main, new RegExp(`['"]${view}['"]`));
   assert.match(main, /const viewURL = view => `\$\{chatURL\}\?view=\$\{view\}&detached=1`/);
   assert.match(main, /settings\.detachedBounds/);
   assert.match(main, /settings\.detachedViews/);
@@ -92,4 +92,11 @@ test('activity polling preserves expanded rows and restored detached windows rem
   assert.match(main, /async function showActivity\(\)[\s\S]*?await toggleChat\(\)[\s\S]*?detachedWindows\.get\('activity'\)[\s\S]*?restored\.focus\(\)/);
   assert.match(main, /async function showAppearance\(\)[\s\S]*?await toggleChat\(\)[\s\S]*?detachedWindows\.get\('more'\)[\s\S]*?restored\.focus\(\)/);
   assert.match(main, /async function reconnectChat\(event\)[\s\S]*?fromChat\(event\) \|\| detachedViewFromEvent\(event\) === 'chat'/);
+});
+
+test('live context view shows request activity above short-term notes and can be detached read-only', async () => {
+  const [html, js, main] = await Promise.all([read('chat.html'), read('chat.js'), read('main.cjs')]);
+  assert.match(html, /id="context-view"[\s\S]*?id="context-turns"[\s\S]*?id="context-notes"/);
+  assert.match(js, /renderLiveContext\(s\.live_context\)/);
+  assert.match(main, /detachedView === 'context' && !body && pathname\?\.startsWith\('\/api\/events\?'\)/);
 });

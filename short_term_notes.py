@@ -221,6 +221,34 @@ class ShortTermNotes:
         except (OSError, UserError, ValueError, TypeError):
             return None, {'count': 0, 'characters': 0}
 
+    def snapshot(self, recent_hours=3, limit=10):
+        """Ticket 125: what Lan's live-context panel shows; read-only, never extracts."""
+        with self._write_lock:
+            events = self._read_events()
+        notes = list(self._latest_notes(events).values())
+        cutoff = _local_now().astimezone(timezone.utc) - timedelta(hours=recent_hours)
+
+        def changed(note):
+            return (_parse_time(note.get('time')) or datetime.min.replace(tzinfo=timezone.utc))
+
+        def view(note):
+            deadline = self._expire_deadline(note) if note.get('status') == '进行中' else None
+            return {'note_id': note.get('note_id'), 'status': note.get('status'),
+                    'text': note.get('text', ''), 'created_at': note.get('created_at'),
+                    'updated_at': note.get('updated_at'), 'changed_at': note.get('time'),
+                    'hold_until': note.get('hold_until'),
+                    'fades_at': deadline.isoformat(timespec='seconds') if deadline else None}
+
+        active = sorted((note for note in notes if note.get('status') == '进行中'), key=changed, reverse=True)
+        closed = sorted((note for note in notes if note.get('status') != '进行中' and changed(note) >= cutoff),
+                        key=changed, reverse=True)
+        last = self._last_attempt_time(events)
+        return {'active': [view(note) for note in active[:limit]],
+                'recent': [view(note) for note in closed[:limit]],
+                'last_extraction_at': last.isoformat(timespec='seconds') if last else None,
+                'next_extraction_at': ((last or self._started_at.astimezone(timezone.utc)) + INTERVAL)
+                .isoformat(timespec='seconds')}
+
     @staticmethod
     def _message_id(row):
         existing = row.get('message_id')

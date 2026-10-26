@@ -3,6 +3,7 @@
   const paths = {
     activity: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
     'arrow-up': '<path d="m5 12 7-7 7 7"/><path d="M12 19V5"/>',
+    layers: '<path d="m12 2 10 5-10 5L2 7z"/><path d="m2 12 10 5 10-5M2 17l10 5 10-5"/>',
     brain: '<path d="M12 18V5"/><path d="M15 13a4.17 4.17 0 0 1-3-4 4.17 4.17 0 0 1-3 4"/><path d="M17.6 6.5a3 3 0 1 0-5.6-1.5 3 3 0 1 0-5.6 1.5A3 3 0 0 0 6 12a3 3 0 0 0 1 5.8A3 3 0 0 0 12 19a3 3 0 0 0 5 1.2A3 3 0 0 0 18 14a3 3 0 0 0-.4-7.5Z"/>',
     check: '<path d="m5 12 4 4L19 6"/>',
     clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',

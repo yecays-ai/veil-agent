@@ -327,6 +327,56 @@ class Hub:
             self._tool_activity_cache = (key, result)
         return result
 
+    def live_context(self, tools, limit=10):
+        """Ticket 125: the newest context-log rows with their tool calls, plus short-term notes."""
+        chat = self.chat
+        if chat is None:
+            return {'turns': [], 'notes': None}
+        name = f'{chat.cfg.id}/context-log.jsonl'
+        try:
+            stat = (chat.store.root / name).stat()
+            key = (chat.cfg.id, stat.st_size, stat.st_mtime_ns, limit)
+        except OSError:
+            key = None
+        cached = getattr(self, '_context_log_cache', None)
+        if key is not None and cached and cached[0] == key:
+            rows = cached[1]
+        else:
+            try:
+                rows = chat.store.read_tail(name, limit) if key is not None else []
+            except (OSError, UserError, ValueError):
+                rows = []
+            if key is not None:
+                self._context_log_cache = (key, rows)
+        by_request = {}
+        for item in tools or []:
+            if item.get('request_id'):
+                by_request.setdefault(item['request_id'], []).append(
+                    {'tool': item.get('tool'), 'state': item.get('state')})
+        turns = []
+        for row in reversed(rows):
+            if not isinstance(row, dict):
+                continue
+            background = row.get('background') if isinstance(row.get('background'), dict) else {}
+            notes = row.get('short_term_notes') if isinstance(row.get('short_term_notes'), dict) else {}
+            turns.append({
+                'time': row.get('time'), 'kind': row.get('kind'),
+                'history_rounds': row.get('history_rounds'),
+                'memory_count': len(row.get('memory_ids') or []),
+                'background_count': len(background.get('paragraphs') or []) + len(background.get('core') or []),
+                'notes_count': notes.get('count', 0),
+                'estimated_input_tokens': row.get('estimated_input_tokens'),
+                'tools': by_request.get(row.get('request_id'), []),
+            })
+        notes = None
+        short_term = getattr(chat, 'short_term_notes', None)
+        if short_term is not None:
+            try:
+                notes = short_term.snapshot()
+            except (OSError, UserError, ValueError, TypeError):
+                notes = None
+        return {'turns': turns, 'notes': notes}
+
     def request_screen_pop(self, command, *, request_id=None, call_id=None, autonomy_run_id=None):
         """Wait for the desktop shell to confirm the requested message was shown."""
         start = time.monotonic()
@@ -1300,6 +1350,7 @@ class Hub:
 
     def snapshot(self, after):
         tool_activity = self.tool_activity()
+        live_context = self.live_context(tool_activity)
         with self.cond:
             autonomy = self.autonomy.status() if self.autonomy else {}
             glance = self.glance.status() if self.glance else {}
@@ -1313,6 +1364,7 @@ class Hub:
                     'capability_record': self.capability_record(),
                     'runtime_status': self.runtime_status(),
                     'tool_activity': tool_activity,
+                    'live_context': live_context,
                     'memory_panel_url': self.memory_url,
                     'memory_available': self.memory_tools is not None, **autonomy, **glance, **codex_watch}
 
