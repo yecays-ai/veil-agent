@@ -1147,7 +1147,7 @@ output_cny_per_million = "8"
         calls = [fixture.tool_call('send_message', json.dumps({'text': text}), str(i))
                  for i, text in enumerate(texts)]
         self.cfg = replace(self.cfg, tools={'enabled': True, 'max_steps': 3})
-        self.model.return_value = (fixture.message(calls), 100, 30, 0)
+        self.model.side_effect = [(fixture.message(calls), 100, 30, 0), (fixture.message(content=''), 120, 5, 0)]
 
         def scenario(result):
             self.assertTrue(self.wait(lambda: not self.call('/api/events')[1]['busy']))
@@ -1160,7 +1160,7 @@ output_cny_per_million = "8"
 
         self.assertEqual(self.run_loop(scenario)['messages'], texts)
         self.assertEqual([m['content'] for m in self.store.read('test/chat.jsonl')][1:], texts)
-        self.model.assert_called_once()
+        self.assertEqual(self.model.call_count, 2)
 
 
 class StartupErrorTests(unittest.TestCase):

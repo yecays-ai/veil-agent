@@ -2,6 +2,7 @@
 
 ## 当前进度
 
+- 当前工单 122「Peter 发完消息还能接着说」，分支 `ticket/122-let-peter-finish`：删除 `_tool_chat` 中聊天专用的「只有 send_message 就结束回合」分支；send_message 走通用工具循环，最后空回复时以最后一条已发消息作为回复且不重复显示。send_message 工具说明同步更新。下一个工单号 123。
 - 当前工单 121「Peter 背景库按关键词注入」，分支 `ticket/121-background-injection`：`background.py` + `Chat.send` 在历史之后、召回之前插入命中的背景段落；本机背景文件 `persona/peter.background.md`（不进仓库）每次请求重读；`data/<角色>/context-log.jsonl` 记录每次请求的各部分大小与背景命中方式。下一个工单号 122。
 - 当前工单 120「瞄一眼认不出前台窗口时不再失败」，分支 `ticket/120-glance-no-window`：前台只有桌面/VEIL/受保护窗口时，瞄一眼不再记失败，Peter 得知 Lan 多半在桌面，并看到桌面项目名字（不读内容）；窗口内容读不出时只给应用名和标题。回归测试 `tests/test_glance.py`。
 - 工单 117（PR #165）已合并 `d42b12e`；工单 119（PR #166）已合并 `5262318`，修复 Codex 监视的能力通知。117 的审批/提问等待仍没有可靠信号。
@@ -13,6 +14,7 @@
 
 ## 下一步
 
+- 工单 122 合并后，Lan 退出 Peter 运行 update.bat 再重开；连续聊 10 分钟确认不再出现只发一句开头就停。
 0. 工单 121 合并后，Lan 退出 Peter 运行 update.bat 再重开；按工单验收第 2–7 步检查，一天后算背景的实际费用写进 STATUS。
 1. 工单 120 CI 通过后合并，Lan 运行 update.bat 后在桌面或只开 VEIL 时验收一次瞄一眼。
 2. 115–119 仍等 Lan Windows 实机验收；不要把 CI 通过当作体验验收。

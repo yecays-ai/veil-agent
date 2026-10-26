@@ -117,7 +117,7 @@ SEND_MESSAGE = {'type': 'function', 'function': {
                     'write like texting: one sentence or short thought per message; call this '
                     'tool multiple times in the same step when you have more to say. You may '
                     'send just one. Code or a long list may stay in one longer message. '
-                    'A step containing only send_message calls ends the turn.'),
+                    'After they are sent you may send more. When you are done, end with no text: any text you write then appears as one more message.'),
     'parameters': {'type': 'object', 'properties': {'text': {'type': 'string'}},
                    'required': ['text'], 'additionalProperties': False},
 }}
@@ -2256,6 +2256,9 @@ class Chat:
                     self.tool_stop_reason = final
                 else:
                     final = content
+                    if not autonomy and mixed_sent_messages and not final.strip():
+                        # Peter finished after sending his messages; they are the reply.
+                        final = mixed_sent_messages[-1]
                     if not autonomy and final in mixed_sent_messages:
                         # This exact message is already visible from send_message.
                         self.reply_displayed = True
@@ -2266,65 +2269,6 @@ class Chat:
                 final = 'The tool-step limit for this request has been reached.'
                 self.tool_stop_reason = final
                 self.output(final)
-                break
-            # These calls finish in this response: no follow-up request or reservation.
-            # In autonomy the loop continues so Peter can still write the four-line record
-            # (decision, reason, focus, next step) that the next wake is built from.
-            if not autonomy and all(call.function.name == 'send_message' for call in message.tool_calls):
-                errors = []
-                failed_sends = []
-                voice_warnings = []
-                successful_sends = 0
-                for call_index, call in enumerate(message.tool_calls):
-                    if autonomy and autonomy_tool_steps >= autonomy_tool_limit:
-                        self.autonomy_step_limited = True
-                        final = f'Autonomous activity reached the {autonomy_tool_limit}-tool-step limit for this run.'
-                        break
-                    if autonomy and self.autonomy_interrupted:
-                        final = 'Autonomous activity yielded to let chat or a control action proceed.'
-                        break
-                    if autonomy:
-                        autonomy_tool_steps += 1
-                    call_id = f'{request_id}:{step}:{getattr(call, "id", None) or call_index}'
-                    log_tool('send_message', 'send_message', '进行中', call_id=call_id)
-                    try:
-                        result, state, summary = self.send_message(
-                            call.function.arguments, request_id,
-                            f'{step}:{getattr(call, "id", None) or call_index}')
-                    except BaseException as exc:
-                        log_tool('send_message', 'send_message', '出错', call_id=call_id,
-                                 detail=str(exc) or exc.__class__.__name__)
-                        raise
-                    log_tool('send_message', summary, state, call_id=call_id,
-                             detail=result if state != '成功' else '消息已发送。')
-                    if state != '成功':
-                        errors.append(result)
-                        failed_sends.append((summary, state, result))
-                    else:
-                        successful_sends += 1
-                        if '语音失败' in summary:
-                            voice_warnings.append(result)
-                if not final:
-                    if successful_sends:
-                        if voice_warnings:
-                            # Preserve the existing notice when voice generation falls
-                            # back to a saved text bubble; never echo aggregate content.
-                            self.reply_displayed = True
-                            for summary, state, error in failed_sends:
-                                self.output(display_call('send_message', summary, state, error))
-                            fallback_text = [text for text in self.sent_messages
-                                             if text.startswith('语音生成失败：')]
-                            final = '\n'.join([*fallback_text, *errors])
-                        else:
-                            # Each successful send_message already saved and displayed
-                            # its own bubble. Partial failures remain visible as errors.
-                            self.reply_displayed = True
-                            for summary, state, error in failed_sends:
-                                self.output(display_call('send_message', summary, state, error))
-                            final = (message.content if isinstance(message.content, str)
-                                     and message.content.strip() else self.sent_messages[-1])
-                    else:
-                        final = '\n'.join(errors) if errors else '已完成。'
                 break
             try:
                 next_cfg = (self.cfg if step + 1 == max_steps - 1 else
