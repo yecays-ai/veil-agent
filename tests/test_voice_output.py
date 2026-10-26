@@ -164,7 +164,8 @@ class VoiceOutputTests(unittest.TestCase):
             model_dump=lambda exclude_none=True: {'role': 'assistant', 'tool_calls': [{
                 'id': call.id, 'type': 'function', 'function': {
                     'name': call.function.name, 'arguments': call.function.arguments}}]})
-        model = Mock(return_value=(message, 100, 20, 0))
+        model = Mock(side_effect=[(message, 100, 20, 0),
+                                  (SimpleNamespace(content='', tool_calls=[]), 120, 5, 0)])
         voice = Mock()
         voice.synthesize.side_effect = VoiceError('MiniMax 鉴权失败，请检查 API Key 和账号区域。')
         output = []

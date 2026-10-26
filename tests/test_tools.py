@@ -869,24 +869,22 @@ class MultiMessageTests(unittest.TestCase):
     setUp = ToolLoopTests.setUp
     message = ToolLoopTests.message
     tool_call = ToolLoopTests.tool_call
-    def test_messages_in_all_languages_use_one_request_and_survive_restart(self):
+    def test_messages_in_all_languages_survive_restart(self):
         texts = ['Good morning.', '早上好。今天想去走走。', 'Bonjour 👋', '一会儿见，see you!']
         calls = [self.tool_call('send_message', json.dumps({'text': text}), str(i))
                  for i, text in enumerate(texts)]
-        model = Mock(return_value=(self.message(calls), 100, 40, 0))
+        model = Mock(side_effect=[(self.message(calls), 100, 40, 0), (self.message(content=''), 120, 5, 0)])
         output = []
         chat = Chat(self.cfg, self.store, self.budget, model, output=output.append)
         run_chat(chat, Mock(side_effect=['hello', '/quit']), output.append)
         self.assertEqual([s for s in output if s.startswith('Peter: ')], ['Peter: ' + t for t in texts])
-        model.assert_called_once()
+        self.assertEqual(model.call_count, 2)
         rows = self.store.read('test/chat.jsonl')
         self.assertEqual([r['content'] for r in rows], ['hello', *texts])
         self.assertTrue(all(r['origin'] == 'reply' for r in rows[1:]))
         self.assertEqual(len({r['request_id'] for r in rows}), 1)
         reopened = Chat(self.cfg, self.store, self.budget, model)
         self.assertEqual([m['content'] for m in reopened.history], ['hello', *texts])
-        costs = self.store.read('costs.jsonl')
-        self.assertEqual(sum(r['type'] == 'reserve' for r in costs), 1)
         self.assertEqual(self.budget.totals()[2], 0)
 
     def test_mixed_tools_continue_and_final_duplicate_is_not_displayed_or_saved(self):
@@ -906,13 +904,14 @@ class MultiMessageTests(unittest.TestCase):
         self.assertEqual([r['content'] for r in self.store.read('test/chat.jsonl')], ['read', '先看一下。'])
         self.assertEqual([m['role'] for m in model.call_args.args[0][-2:]], ['tool', 'tool'])
 
-    def test_pure_message_with_distinct_final_does_not_save_or_display_final(self):
-        model = Mock(return_value=(self.message([
-            self.tool_call('send_message', '{"text":"Hi."}', 'one')], content='See you.'), 100, 20, 0))
+    def test_text_written_after_messages_becomes_one_more_message(self):
+        model = Mock(side_effect=[
+            (self.message([self.tool_call('send_message', '{"text":"Hi."}', 'one')]), 100, 20, 0),
+            (self.message(content='See you.'), 120, 20, 0)])
         chat = Chat(self.cfg, self.store, self.budget, model, output=lambda _: None)
         self.assertEqual(chat.send('hello'), 'See you.')
-        self.assertTrue(chat.reply_displayed)
-        self.assertEqual([r['content'] for r in self.store.read('test/chat.jsonl')], ['hello', 'Hi.'])
+        self.assertFalse(chat.reply_displayed)
+        self.assertEqual([r['content'] for r in self.store.read('test/chat.jsonl')], ['hello', 'Hi.', 'See you.'])
 
     def test_mixed_tools_keep_distinct_final_reply(self):
         first = self.message([self.tool_call('send_message', '{"text":"先看一下。"}', 'say'),
@@ -931,25 +930,30 @@ class MultiMessageTests(unittest.TestCase):
         self.assertEqual([r['content'] for r in self.store.read('test/chat.jsonl')],
                          ['read', '先看一下。', '我看完了。'])
 
-    def test_pure_messages_need_no_followup_budget(self):
-        self.budget.daily = Decimal('0.0125')  # Enough for this request, not a second reservation.
-        model = Mock(return_value=(self.message([
-            self.tool_call('send_message', '{"text":"Hello."}', 'one')]), 100, 20, 0))
-        memory = Mock()
-        memory.context.return_value = []
-        chat = Chat(self.cfg, self.store, self.budget, model, memory=memory, output=lambda _: None)
-        self.assertEqual(chat.send('hello'), 'Hello.')
-        model.assert_called_once()
+    def test_a_lone_message_does_not_end_the_turn(self):
+        # Peter can open with one line and keep going in the next step.
+        model = Mock(side_effect=[
+            (self.message([self.tool_call('send_message', '{"text":"ok. honest answer."}', 'one')]), 100, 20, 0),
+            (self.message([self.tool_call('send_message', '{"text":"it was me, not a bug."}', 'two')]), 120, 20, 0),
+            (self.message(content=''), 140, 5, 0)])
+        output = []
+        chat = Chat(self.cfg, self.store, self.budget, model, output=output.append)
+        self.assertEqual(chat.send('what happened?'), 'it was me, not a bug.')
+        self.assertTrue(chat.reply_displayed)
+        self.assertEqual(model.call_count, 3)
+        self.assertEqual([r['content'] for r in self.store.read('test/chat.jsonl')],
+                         ['what happened?', 'ok. honest answer.', 'it was me, not a bug.'])
         self.assertEqual(self.budget.totals()[2], 0)
 
-    def test_invalid_message_arguments_do_not_send_or_request_again(self):
+    def test_invalid_message_arguments_do_not_send_and_peter_sees_why(self):
         for arguments in ('{bad', '[]', '{"text":" "}', '{"text":7}', '{"text":"hi","path":"x"}'):
-            model = Mock(return_value=(self.message([
-                self.tool_call('send_message', arguments, 'invalid')]), 100, 20, 0))
+            model = Mock(side_effect=[
+                (self.message([self.tool_call('send_message', arguments, 'invalid')]), 100, 20, 0),
+                (self.message(content='retrying in words'), 120, 20, 0)])
             chat = Chat(self.cfg, self.store, self.budget, model, output=lambda _: None)
-            self.assertIn('send_message requires non-empty text', chat.send('hello'))
+            self.assertEqual(chat.send('hello'), 'retrying in words')
             self.assertEqual(chat.sent_messages, [])
-            model.assert_called_once()
+            self.assertIn('send_message requires non-empty text', model.call_args.args[0][-1]['content'])
 
     def test_assistant_first_old_history_is_read_without_rewriting(self):
         self.store.append('test/chat.jsonl', {'role': 'assistant', 'content': 'I can start.'})

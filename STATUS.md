@@ -1,9 +1,10 @@
 # 当前状态
 
-更新：2026-10-25 UTC · Claude。
+更新：2026-10-26 UTC · Claude。
 
 ## 当前目标与现状
 
+- 工单 122「Peter 发完消息还能接着说」：分支 `ticket/122-let-peter-finish`，Claude 实现。聊天里 Peter 某一步只调用 send_message 时，程序以前直接结束回合；他常先发一句开头（如 "ok. honest answer, and it's not a good one"）就被截断。现在 send_message 和其他工具一样走正常工具循环：发完后他可以继续发，结束时不写文字即可（发过的消息就是回复）；最后写了不同的文字会多显示一条。自主醒来本来就是这样。每次带消息的回复多一次模型调用，估计每天多 ¥0.1–0.3（未验证）。全量测试与 main 相同（本机仅 1 项 Node 文件服务用例失败，两边一致）。验收：更新后连续聊 10 分钟，Peter 不再出现只发一句开头就停的情况；需要时他会分成多条发。下一个工单号 123。
 - 工单 121「Peter 背景库按关键词注入」：分支 `ticket/121-background-injection`，Claude 实现。新文件 `background.py` 移植小手机的背景分段注入（关键词 + 正文相关性、`[常驻]`、每轮最多 3 段 / 1500 字符），每次请求重读本机 `persona/peter.background.md`，放在聊天历史之后、召回记忆之前；没有这个文件时一切照旧。每次请求追加一行 `data/peter/context-log.jsonl`（只记编号、关键词、大小，最多 500 行）。全量测试与 main 相同（本机 13 项环境相关失败两边一致），新增 `tests/test_background.py` 14 项通过。验收见 `docs/tickets/121-background-injection.md`；实际每天多花多少钱待用一天后按 `costs.jsonl` 计算。下一个工单号 122。
 - 工单 120「瞄一眼认不出前台窗口时不再失败」：分支 `ticket/120-glance-no-window`。lan 停在桌面、只开着 VEIL 或前台是受保护窗口时，`windows_foreground` 报错，瞄一眼直接记为失败。现在 `GlanceController._observe` 照常给 Peter 一次瞄一眼：没有应用窗口在前台时，告诉他 Lan 多半停在桌面，并给他桌面上文件和文件夹的名字（最新的在前，最多 40 个，跳过隐藏项，不读文件内容；`desktop_files.desktop_item_names`）；窗口认得出但内容读不出时，只给应用名和标题。加回归测试 `tests/test_glance.py`。验收：在桌面或只开 VEIL 时等一次瞄一眼，记录不再是「未识别窗口」失败。
 - 工单 119「盯 Codex 的能力通知发给 Peter」：分支 `ticket/119-codex-watch-notice`。开着长期记忆时工具被 `ToolSet` 包着，`codex_watch.py` 直接在外层找 `announce_codex_watch`，找不到，所以 Peter 的能力记录里没有盯 Codex 这一条。改为先取 `ToolSet.files`，加回归测试 `tests/test_codex_watch.py`。验收：更新后问 Peter 有什么新能力，他的能力记录里能查到 Codex 监视。

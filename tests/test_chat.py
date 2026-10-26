@@ -252,8 +252,11 @@ output_cny_per_million = "8"
                 calls = [SimpleNamespace(id=f'call-{index}', function=SimpleNamespace(
                     name='send_message', arguments=json.dumps({'text': text})))
                     for index, text in enumerate(texts)]
-                response = SimpleNamespace(content='merged aggregate must stay hidden', tool_calls=calls)
-                model = Mock(return_value=(response, 100, 20, 0))
+                response = SimpleNamespace(content='merged aggregate must stay hidden', tool_calls=calls,
+                    model_dump=lambda exclude_none=True: {'role': 'assistant', 'tool_calls': [
+                    {'id': c.id, 'type': 'function', 'function': {
+                        'name': c.function.name, 'arguments': c.function.arguments}} for c in calls]})
+                model = Mock(side_effect=[(response, 100, 20, 0), (SimpleNamespace(content='', tool_calls=[]), 120, 5, 0)])
                 cfg = replace(self.cfg, tools={'enabled': True, 'max_steps': 2})
                 store = Store(self.root / f'data-{count}')
                 budget = Budget(store)
@@ -274,8 +277,12 @@ output_cny_per_million = "8"
         outputs = []
         call = SimpleNamespace(id='bad-call', function=SimpleNamespace(
             name='send_message', arguments='{}'))
-        response = SimpleNamespace(content='must not replace the real error', tool_calls=[call])
-        model = Mock(return_value=(response, 100, 20, 0))
+        calls = [call]
+        response = SimpleNamespace(content='must not replace the real error', tool_calls=calls,
+            model_dump=lambda exclude_none=True: {'role': 'assistant', 'tool_calls': [
+                    {'id': c.id, 'type': 'function', 'function': {
+                        'name': c.function.name, 'arguments': c.function.arguments}} for c in calls]})
+        model = Mock(side_effect=[(response, 100, 20, 0), (SimpleNamespace(content='', tool_calls=[]), 120, 5, 0)])
         cfg = replace(self.cfg, tools={'enabled': True, 'max_steps': 2})
         store = Store(self.root / 'failed-send-data')
         chat = Chat(cfg, store, Budget(store), model, output=outputs.append)
@@ -312,8 +319,11 @@ output_cny_per_million = "8"
             SimpleNamespace(id='bad-call', function=SimpleNamespace(
                 name='send_message', arguments='{}')),
         ]
-        response = SimpleNamespace(content='must not show this merged content', tool_calls=calls)
-        model = Mock(return_value=(response, 100, 20, 0))
+        response = SimpleNamespace(content='must not show this merged content', tool_calls=calls,
+            model_dump=lambda exclude_none=True: {'role': 'assistant', 'tool_calls': [
+                    {'id': c.id, 'type': 'function', 'function': {
+                        'name': c.function.name, 'arguments': c.function.arguments}} for c in calls]})
+        model = Mock(side_effect=[(response, 100, 20, 0), (SimpleNamespace(content='', tool_calls=[]), 120, 5, 0)])
         cfg = replace(self.cfg, tools={'enabled': True, 'max_steps': 2})
         store = Store(self.root / 'partial-send-data')
         chat = Chat(cfg, store, Budget(store), model, output=outputs.append)
