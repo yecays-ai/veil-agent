@@ -477,12 +477,13 @@ function allowedChatRequest(pathname, method) {
     return false;
   }
   return method === 'POST' && ['/api/send', '/api/media', '/api/voice', '/api/voice/retry',
-    '/api/transcribe', '/api/approve', '/api/activity', '/api/exit', '/api/message/action'].includes(pathname);
+    '/api/transcribe', '/api/approve', '/api/activity', '/api/glance', '/api/codex-watch', '/api/exit',
+    '/api/message/action'].includes(pathname);
 }
 ipcMain.handle('chat:request', async (event, pathname, body, timeoutMs) => {
   const detachedView = detachedViewFromEvent(event);
   const detachedAllowed = !detachedView || detachedView === 'chat' ||
-    (detachedView === 'activity' && ((!body && pathname?.startsWith('/api/events?')) || (body && pathname === '/api/activity'))) ||
+    (detachedView === 'activity' && ((!body && pathname?.startsWith('/api/events?')) || (body && ['/api/activity', '/api/glance', '/api/codex-watch'].includes(pathname)))) ||
     (detachedView === 'memory' && !body && (pathname?.startsWith('/api/events?') || pathname?.startsWith('/api/memory/'))) ||
     (detachedView === 'more' && ((!body && pathname?.startsWith('/api/events?')) || (body && pathname === '/api/exit')));
   if (!fromChatPage(event) || typeof pathname !== 'string' || !allowedChatRequest(pathname, body ? 'POST' : 'GET') || !detachedAllowed)

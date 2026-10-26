@@ -1,9 +1,10 @@
 # 当前状态
 
-更新：2026-10-26 UTC · Codex。
+更新：2026-10-26 UTC · Claude。
 
 ## 当前目标与现状
 
+- 工单 124「瞄一眼和 Codex 监视能单独暂停」：分支 `ticket/124-toggle-allowlist`，Claude 实现。桌面程序 `desktop/main.cjs` 的请求白名单漏了 `/api/glance` 和 `/api/codex-watch`，两个开关点了都显示「设置保存失败」（Lan 电脑上从未生成这两个设置文件）。现在主窗口和弹出的活动小窗都允许这两个请求。需要运行 update.bat 重新打包 exe。验收：单独点「暂停瞄一眼」「暂停监视」都显示已暂停、自主活动仍开着，重启后保持暂停。下一个工单号 125。
 - 工单 123「Peter 聊天短期便签（程序提取）」：分支 `ticket/123-short-term-notes`，实现完成。Peter 每 30 分钟在有新增对话时用非 thinking 调用提取具体事实、决定和未完成事项；点击“新对话”清空历史前也先提取。便签只追加到 `data/peter/notes.jsonl`，状态为进行中/已完成/已过期；普通便签无进展 60 分钟后过期，带未来时间的便签到该时间后再计时。活跃便签与背景并列放入上下文，最多 10 条 / 800 字符，仅作上下文，不写 Ombre 或 Plan；提取费用单列为 `short_term_notes`。本地完整测试 560 项通过、5 项跳过；GitHub CI 与 CodeRabbit 审查按当前 PR 核对，Lan Windows 验收待做。下一个工单号 124。
 - 工单 121「Peter 背景库按关键词注入」：分支 `ticket/121-background-injection`，Claude 实现。新文件 `background.py` 移植小手机的背景分段注入（关键词 + 正文相关性、`[常驻]`、每轮最多 3 段 / 1500 字符），每次请求重读本机 `persona/peter.background.md`，放在聊天历史之后、召回记忆之前；没有这个文件时一切照旧。每次请求追加一行 `data/peter/context-log.jsonl`（只记编号、关键词、大小，最多 500 行）。全量测试与 main 相同（本机 13 项环境相关失败两边一致），新增 `tests/test_background.py` 14 项通过。验收见 `docs/tickets/121-background-injection.md`；实际每天多花多少钱待用一天后按 `costs.jsonl` 计算。
 - 工单 120「瞄一眼认不出前台窗口时不再失败」：分支 `ticket/120-glance-no-window`。lan 停在桌面、只开着 VEIL 或前台是受保护窗口时，`windows_foreground` 报错，瞄一眼直接记为失败。现在 `GlanceController._observe` 照常给 Peter 一次瞄一眼：没有应用窗口在前台时，告诉他 Lan 多半停在桌面，并给他桌面上文件和文件夹的名字（最新的在前，最多 40 个，跳过隐藏项，不读文件内容；`desktop_files.desktop_item_names`）；窗口认得出但内容读不出时，只给应用名和标题。加回归测试 `tests/test_glance.py`。验收：在桌面或只开 VEIL 时等一次瞄一眼，记录不再是「未识别窗口」失败。
