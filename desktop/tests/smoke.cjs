@@ -50,7 +50,12 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
     if (url.pathname === '/api/events') {
       json(res, { name: 'Fictional Agent', events: events.filter(e => e.id > Number(url.searchParams.get('after') || 0)),
         busy: false, ready: true, stopped: false, stopping: false, pending,
-        memory_panel_url: 'http://127.0.0.1:1/dashboard', activity_enabled: false });
+        memory_panel_url: 'http://127.0.0.1:1/dashboard', activity_enabled: false,
+        live_context: { turns: [{ time: new Date().toISOString(), kind: 'chat', history_rounds: 20, memory_count: 1, background_count: 2,
+          notes_count: 1, estimated_input_tokens: 9000, tools: [{ tool: 'send_message', state: '成功' }, { tool: 'send_message', state: '成功' }] }],
+        notes: { active: [{ status: '进行中', text: 'Fictional user ordered takeout.', created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(), fades_at: new Date(Date.now() + 3600000).toISOString() }], recent: [],
+          next_extraction_at: new Date(Date.now() + 1800000).toISOString() } } });
     } else if (url.pathname === '/api/send') {
       const body = await readBody(req);
       if (body.media?.id?.startsWith('fictional-voice')) {
@@ -195,6 +200,11 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   await wait(() => chat.webContents.executeJavaScript('!!document.querySelector(".msg[data-media-id=fictional-voice-retry] .msg-voice")'), 'retried voice message id was not updated');
   await wait(() => chat.webContents.executeJavaScript('!document.querySelector(".msg[data-media-id=fictional-voice-retry] .voice-retry")'), 'successful upload retry still shows an error');
 
+  await chat.webContents.executeJavaScript('document.querySelector("[data-page=context]").click()');
+  await wait(() => chat.webContents.executeJavaScript('!document.querySelector("#context-view").hidden && /send_message ×2/.test(document.querySelector("#context-turns").textContent) && /Fictional user ordered takeout/.test(document.querySelector("#context-notes").textContent)'), 'live context page did not render');
+  await fs.mkdir(path.join(__dirname, '../test-output'), { recursive: true });
+  await new Promise(resolve => setTimeout(resolve, 500));
+  await fs.writeFile(path.join(__dirname, '../test-output/context.png'), (await chat.webContents.capturePage()).toPNG());
   await chat.webContents.executeJavaScript('document.querySelector("[data-page=memory]").click()');
   await wait(() => chat.webContents.executeJavaScript('!document.querySelector("#memory-view").hidden'), 'memory page did not open');
   assert.equal(await chat.webContents.executeJavaScript('document.querySelector("#memory-panel").hidden'), false, 'real Memory entry should appear when available');

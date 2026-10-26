@@ -26,7 +26,7 @@ function notify(text,kind='notice'){
   setTimeout(()=>node.remove(),Math.min(15000,Math.max(2000,text.length*80)));
 }
 function setPage(name){
-  if(!['chat','activity','memory','more'].includes(name))return;
+  if(!['chat','activity','context','memory','more'].includes(name))return;
   if(detachedView&&name!==detachedView)return;
   document.body.dataset.currentPage=name;
   document.querySelectorAll('[data-page]').forEach(button=>{
@@ -705,6 +705,43 @@ function renderActivityTimeline(){
 function renderActivity(record,history=[],tools=[],glances=[]){
   toolActivity=Array.isArray(tools)?tools:[];autonomyActivity=Array.isArray(history)?history:[];glanceActivity=Array.isArray(glances)?glances:[];renderActivityTimeline();
 }
+const CONTEXT_KINDS={chat:'聊天',qq:'QQ',autonomy:'自主活动',glance:'瞄一眼',codex:'Codex 提醒'};
+const NOTE_STATUS={'进行中':['进行中','active'],'已完成':['已完成','done'],'已过期':['已过期','expired']};
+let liveContextKey='';
+function shortTime(value){const d=value?new Date(value):null;return d&&Number.isFinite(d.getTime())?d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):''}
+function contextRow(parts){
+  const row=document.createElement('div');row.className='context-row';
+  const head=document.createElement('div');head.className='head';
+  for(const [tag,cls,text] of parts.head){const el=document.createElement(tag);if(cls)el.className=cls;el.textContent=text;head.appendChild(el)}
+  row.appendChild(head);
+  for(const [cls,text] of parts.lines){if(!text)continue;const el=document.createElement('div');el.className=cls;el.textContent=text;row.appendChild(el)}
+  return row;
+}
+function renderLiveContext(live){
+  live=live||{};const key=JSON.stringify(live);if(key===liveContextKey)return;liveContextKey=key;
+  const turns=Array.isArray(live.turns)?live.turns:[],turnList=$('context-turns');turnList.replaceChildren();
+  if(!turns.length){const p=document.createElement('p');p.className='muted';p.textContent='还没有记录。Peter 回复一次后这里就会出现。';turnList.appendChild(p)}
+  for(const turn of turns){
+    const tools=Array.isArray(turn.tools)?turn.tools:[];
+    const counts={};for(const item of tools){const name=item.tool||'?';counts[name]=(counts[name]||0)+1}
+    const toolText=Object.entries(counts).map(([name,count])=>count>1?`${name} ×${count}`:name).join('、');
+    turnList.appendChild(contextRow({head:[['time','',shortTime(turn.time)],['strong','',CONTEXT_KINDS[turn.kind]||turn.kind||'请求']],
+      lines:[['meta',`原文 ${turn.history_rounds??0} 轮 · 背景 ${turn.background_count||0} 段 · 长期记忆 ${turn.memory_count||0} 条 · 便签 ${turn.notes_count||0} 条`+(turn.estimated_input_tokens?` · 约 ${turn.estimated_input_tokens} tokens`:'')],
+        ['meta',toolText?'工具：'+toolText:'']]}));
+  }
+  const notes=live.notes,noteList=$('context-notes');noteList.replaceChildren();
+  if(!notes){$('context-notes-next').textContent='';const p=document.createElement('p');p.className='muted';p.textContent='短期便签没有开启。';noteList.appendChild(p);return}
+  const next=shortTime(notes.next_extraction_at);$('context-notes-next').textContent=next?`下次整理便签约 ${next}`:'';
+  const items=[...(notes.active||[]),...(notes.recent||[])];
+  if(!items.length){const p=document.createElement('p');p.className='muted';p.textContent='还没有便签。聊天每 30 分钟整理一次，点"新对话"前也会整理。';noteList.appendChild(p)}
+  for(const note of items){
+    const [label,cls]=NOTE_STATUS[note.status]||[note.status||'',''];
+    const fades=note.status==='进行中'&&shortTime(note.fades_at)?`约 ${shortTime(note.fades_at)} 无进展就淡出`:'';
+    const changed=note.status!=='进行中'&&shortTime(note.changed_at)?`${label}于 ${shortTime(note.changed_at)}`:'';
+    noteList.appendChild(contextRow({head:[['time','',shortTime(note.created_at)],['span','note-status '+cls,label]],
+      lines:[['note-text',note.text||''],['meta',[note.updated_at&&note.updated_at!==note.created_at?`更新 ${shortTime(note.updated_at)}`:'',fades||changed].filter(Boolean).join(' · ')]]}));
+  }
+}
 async function poll(){
   try{
     const r=await api('/api/events?after='+after);
@@ -735,6 +772,7 @@ async function poll(){
     $('activity-state').textContent=state;
     $('activity-status').textContent='自主活动'+state;
     renderActivity(s.last_activity,s.activity_history||[],s.tool_activity||[],s.glance_activity||[]);
+    renderLiveContext(s.live_context);
     $('activity-toggle').textContent=activityEnabled?'暂停自主活动':'开启自主活动';
     $('activity-toggle').disabled=stopping||stopped||exiting;
     const glanceEnabled=s.glance_enabled===true;
@@ -1056,7 +1094,7 @@ function loadAppearance(){
   try{
     const saved=JSON.parse(localStorage.getItem(APPEARANCE_KEY)||'{}');
     const pageOpacity={};
-    for(const page of ['chat','activity','memory','more'])pageOpacity[page]=clampSetting(saved.pageOpacity?.[page],20,100,clampSetting(saved.windowOpacity,20,100,88));
+    for(const page of ['chat','activity','context','memory','more'])pageOpacity[page]=clampSetting(saved.pageOpacity?.[page],20,100,clampSetting(saved.windowOpacity,20,100,88));
     return {theme:saved.theme==='dark'?'dark':'light',windowOpacity:clampSetting(saved.windowOpacity,20,100,88),pageOpacity,
       bubbleOpacity:clampSetting(saved.bubbleOpacity,55,100,90),backgroundOpacity:clampSetting(saved.backgroundOpacity,0,100,100),petSize:clampSetting(saved.petSize,160,720,320)};
   }catch{return {...appearanceDefaults}}
@@ -1068,7 +1106,7 @@ function applyAppearance(){
   document.documentElement.style.setProperty('--window-alpha',String(appearance.windowOpacity/100));
   document.documentElement.style.setProperty('--bubble-alpha',String(appearance.bubbleOpacity/100));
   document.documentElement.style.setProperty('--background-opacity',String(appearance.backgroundOpacity/100));
-  for(const page of ['chat','activity','memory','more']){
+  for(const page of ['chat','activity','context','memory','more']){
     document.querySelector(`[data-page-view="${page}"]`)?.style.setProperty('--view-alpha',String(appearance.pageOpacity[page]/100));
     $(`${page}-opacity`).value=String(appearance.pageOpacity[page]);$(`${page}-opacity-value`).value=appearance.pageOpacity[page]+'%';
   }
@@ -1087,9 +1125,9 @@ document.querySelectorAll('[data-theme-choice]').forEach(button=>button.onclick=
   appearance.theme=button.dataset.themeChoice;applyAppearance();storeAppearance();window.veilDesktop.saveTheme(appearance.theme);
 });
 window.veilDesktop.saveTheme(appearance.theme).catch(()=>{});
-function setAllWindowOpacity(value){appearance.windowOpacity=clampSetting(value,20,100,88);for(const page of ['chat','activity','memory','more'])appearance.pageOpacity[page]=appearance.windowOpacity;applyAppearance();storeAppearance()}
+function setAllWindowOpacity(value){appearance.windowOpacity=clampSetting(value,20,100,88);for(const page of ['chat','activity','context','memory','more'])appearance.pageOpacity[page]=appearance.windowOpacity;applyAppearance();storeAppearance()}
 $('window-opacity').oninput=()=>setAllWindowOpacity($('window-opacity').value);
-for(const page of ['chat','activity','memory','more'])$(`${page}-opacity`).oninput=()=>{appearance.pageOpacity[page]=clampSetting($(`${page}-opacity`).value,20,100,88);applyAppearance();storeAppearance()};
+for(const page of ['chat','activity','context','memory','more'])$(`${page}-opacity`).oninput=()=>{appearance.pageOpacity[page]=clampSetting($(`${page}-opacity`).value,20,100,88);applyAppearance();storeAppearance()};
 $('bubble-opacity').oninput=()=>{appearance.bubbleOpacity=clampSetting($('bubble-opacity').value,55,100,90);applyAppearance();storeAppearance()};
 $('background-opacity').oninput=()=>{appearance.backgroundOpacity=clampSetting($('background-opacity').value,0,100,100);applyAppearance();storeAppearance()};
 $('pet-size').oninput=()=>{appearance.petSize=clampSetting($('pet-size').value,160,720,320);$('pet-size-value').value=appearance.petSize+' px';storeAppearance()};
@@ -1169,8 +1207,8 @@ document.querySelectorAll('[data-page]').forEach(tab=>{tab.addEventListener('poi
 window.veilDesktop.onShowActivity(()=>setPage('activity'));
 window.veilDesktop.onShowView(view=>setPage(view));
 window.veilDesktop.onShowSettings(()=>setPage('more'));
-if(detachedView&&['chat','activity','memory','more'].includes(detachedView)){
+if(detachedView&&['chat','activity','context','memory','more'].includes(detachedView)){
   document.body.classList.add('detached-window');$('detached-header').hidden=false;
-  $('detached-title').textContent='Peter · '+({chat:'聊天',activity:'活动记录',memory:'记忆',more:'更多'}[detachedView]);setPage(detachedView);
+  $('detached-title').textContent='Peter · '+({chat:'聊天',activity:'活动记录',context:'实时上下文',memory:'记忆',more:'更多'}[detachedView]);setPage(detachedView);
 }else{setPage('chat');box.focus()}
 setBusy(true);poll();

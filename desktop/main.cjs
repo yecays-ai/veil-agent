@@ -10,7 +10,7 @@ let pet, chat, menu, connecting = false, quitting = false, drag, petResize, agen
 const detachedWindows = new Map(), mergingViews = new Set();
 const screenPopWindows = new Map(), screenPopInFlight = new Set();
 let screenPopPollTimer = null, screenPopPolling = false, quitFlushStarted = false;
-const VIEW_NAMES = new Set(['chat', 'activity', 'memory', 'more']);
+const VIEW_NAMES = new Set(['chat', 'activity', 'context', 'memory', 'more']);
 const settings = { size: 320, theme: 'light' };
 const petURL = pathToFileURL(path.join(__dirname, 'pet.html')).href;
 const chatURL = pathToFileURL(path.join(__dirname, 'chat.html')).href;
@@ -484,6 +484,7 @@ ipcMain.handle('chat:request', async (event, pathname, body, timeoutMs) => {
   const detachedView = detachedViewFromEvent(event);
   const detachedAllowed = !detachedView || detachedView === 'chat' ||
     (detachedView === 'activity' && ((!body && pathname?.startsWith('/api/events?')) || (body && ['/api/activity', '/api/glance', '/api/codex-watch'].includes(pathname)))) ||
+    (detachedView === 'context' && !body && pathname?.startsWith('/api/events?')) ||
     (detachedView === 'memory' && !body && (pathname?.startsWith('/api/events?') || pathname?.startsWith('/api/memory/'))) ||
     (detachedView === 'more' && ((!body && pathname?.startsWith('/api/events?')) || (body && pathname === '/api/exit')));
   if (!fromChatPage(event) || typeof pathname !== 'string' || !allowedChatRequest(pathname, body ? 'POST' : 'GET') || !detachedAllowed)

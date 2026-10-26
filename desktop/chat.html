@@ -24,6 +24,7 @@
   <nav class="navigation" aria-label="主要页面">
     <button class="nav-item active" data-page="chat" aria-current="page" title="拖出可变成独立窗口"><span data-lucide="message-square"></span>聊天</button>
     <button id="activity-tab" class="nav-item" data-page="activity" title="拖出可变成独立窗口"><span data-lucide="activity"></span>活动</button>
+    <button class="nav-item" data-page="context" title="拖出可变成独立窗口"><span data-lucide="layers"></span>上下文</button>
     <button class="nav-item" data-page="memory" title="拖出可变成独立窗口"><span data-lucide="brain"></span>记忆</button>
     <button class="nav-item" data-page="more" title="拖出可变成独立窗口"><span data-lucide="more-horizontal"></span>更多</button>
   </nav>
@@ -42,6 +43,11 @@
     <div id="activity-history" hidden></div><span id="last-activity-time" hidden></span><span id="last-activity-summary" hidden></span><pre id="activity-record" hidden></pre><details id="activity-details" hidden></details>
     <div class="runtime-row"><span id="service-status-detail">服务运行状态：正在连接…</span><span id="service-status" hidden>服务：连接中…</span><button id="exit-service" disabled>退出 Agent 服务</button></div>
   </section>
+  <section id="context-view" class="page" data-page-view="context" hidden>
+    <div class="page-heading"><div><p class="eyebrow">Peter 每次回复时带进去了什么</p><h2>实时上下文</h2></div><span id="context-notes-next" class="muted"></span></div>
+    <section class="surface context-block"><h3>聊天时活动 <small class="muted">最近 10 次请求</small></h3><div id="context-turns" class="context-list" aria-live="polite"><p class="muted">还没有记录。</p></div></section>
+    <section class="surface context-block"><h3>短期便签 <small class="muted">进行中的会放进他的上下文</small></h3><div id="context-notes" class="context-list" aria-live="polite"><p class="muted">还没有便签。</p></div></section>
+  </section>
   <section id="memory-view" class="page" data-page-view="memory" hidden>
     <div class="page-heading"><div><p class="eyebrow">来自 Ombre Brain 的真实记忆</p><h2>记忆</h2></div></div>
     <div class="memory-toolbar"><label for="memory-search">搜索记忆</label><input id="memory-search" type="search" placeholder="按标题筛选"><button id="memory-reload">刷新</button></div>
@@ -56,6 +62,7 @@
       <div class="opacity-settings" aria-label="各页面透明度"><p>单独调整页面</p>
         <label class="setting-row range-row" for="chat-opacity"><span>聊天</span><input id="chat-opacity" type="range" min="20" max="100" step="1"><output id="chat-opacity-value"></output></label>
         <label class="setting-row range-row" for="activity-opacity"><span>活动</span><input id="activity-opacity" type="range" min="20" max="100" step="1"><output id="activity-opacity-value"></output></label>
+        <label class="setting-row range-row" for="context-opacity"><span>上下文</span><input id="context-opacity" type="range" min="20" max="100" step="1"><output id="context-opacity-value"></output></label>
         <label class="setting-row range-row" for="memory-opacity"><span>记忆</span><input id="memory-opacity" type="range" min="20" max="100" step="1"><output id="memory-opacity-value"></output></label>
         <label class="setting-row range-row" for="more-opacity"><span>更多</span><input id="more-opacity" type="range" min="20" max="100" step="1"><output id="more-opacity-value"></output></label>
       </div>
