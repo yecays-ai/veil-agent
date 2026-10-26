@@ -111,3 +111,7 @@ enabled = true
 apps_file = "windows-apps.toml"
 # A short idle window keeps the prompt's own final keystroke from blocking a requested action.
 idle_seconds = 3
+
+[short_term_notes]
+# Ticket 123: temporary conversation notes; never written to Ombre or Plan.
+enabled = true

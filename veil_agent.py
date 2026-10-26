@@ -404,6 +404,7 @@ class Character:
     screen_pop: dict = None
     glance: dict = None
     background: str = None
+    short_term_notes: dict = None
 
 
 def positive_int(value):
@@ -520,6 +521,14 @@ def load_character(root, character_id):
             if type(enabled) is not bool:
                 raise ValueError('screen_pop.enabled must be boolean')
             screen_pop = {'enabled': enabled}
+        short_term_notes = cfg.get('short_term_notes')
+        if short_term_notes is not None:
+            if not isinstance(short_term_notes, dict):
+                raise ValueError('short_term_notes must be a table')
+            enabled = short_term_notes.get('enabled', False)
+            if type(enabled) is not bool:
+                raise ValueError('short_term_notes.enabled must be boolean')
+            short_term_notes = {'enabled': enabled}
         if tools is None and ((cfg.get('memory') or {}).get('mode') == 'native'
                               or (windows_observation or {}).get('enabled')
                               or (windows_interaction or {}).get('enabled')
@@ -591,7 +600,8 @@ def load_character(root, character_id):
                          positive_int(cfg.get('max_output_tokens', 1024)), provider, cfg['provider'],
                          memory, tools, autonomy, voice, profile, email, qq, web, windows_observation,
                          windows_interaction, screen_pop, glance,
-                         background=str(background_path(persona_path)))
+                         background=str(background_path(persona_path)),
+                         short_term_notes=short_term_notes)
     except UserError:
         raise
     except (OSError, KeyError, ValueError, TypeError, ArithmeticError) as exc:
@@ -749,12 +759,13 @@ class Budget:
             raise UserError('花费账本无法核对，已停止；请保留 data 文件夹。') from exc
 
     @synchronized
-    def reserve(self, cfg, *, accounting=None):
+    def reserve(self, cfg, *, accounting=None, category=None):
         p = cfg.provider
         amount = (p['max_input_tokens'] * p['input_cny_per_million']
                   + cfg.max_output_tokens * p['output_cny_per_million']) / MILLION
         day, month, pending = self.totals()
-        category, character = self._reserve_category(amount)
+        active_category, character = self._reserve_category(amount)
+        category = category or active_category
         self._enforce_category_budget(category, character, amount)
         if day + pending + amount > self.daily or month + pending + amount > self.monthly:
             raise BudgetExceeded('本次费用上限会超过 ¥10/天或 ¥300/月，未发送。输入 /cost 查看。')
@@ -890,7 +901,8 @@ class Budget:
         return highest_ratio
 
     @synchronized
-    def settle(self, request_id, cfg, prompt, completion, cached, *, input_bytes=None):
+    def settle(self, request_id, cfg, prompt, completion, cached, *, input_bytes=None,
+               accounting=None, category=None):
         if any(type(n) is not int or n < 0 for n in (prompt, completion, cached)) or cached > prompt:
             raise UserError('接口未返回有效用量；本次保留预留费用。')
         if input_bytes is not None and (type(input_bytes) is not int or input_bytes <= 0):
@@ -907,6 +919,10 @@ class Budget:
         settlement = {'type': 'settle', 'id': request_id,
                           'amount': str(amount), 'prompt_tokens': prompt,
                           'completion_tokens': completion, 'cached_tokens': cached}
+        if category:
+            settlement['category'] = category
+        if accounting:
+            settlement['accounting'] = accounting
         if input_bytes is not None:
             settlement['input_bytes'] = input_bytes
         self.store.append('costs.jsonl', settlement)
@@ -923,7 +939,7 @@ class Budget:
                     periods[event['id']] = (event['period'], event.get('category', 'chat'))
                 elif event['type'] == 'settle' and 'prompt_tokens' in event:
                     period, category = periods.get(event['id'], ('', 'chat'))
-                    if category not in ('autonomy', 'glance') and period[:10] == stamp[:10]:
+                    if category not in ('autonomy', 'glance', 'short_term_notes') and period[:10] == stamp[:10]:
                         prompt += event['prompt_tokens']
                         cached += event['cached_tokens']
         except (KeyError, TypeError) as exc:
@@ -937,13 +953,16 @@ class Budget:
         day, month, pending = self.totals(stamp)
         all_autonomy, _ = self.category_totals(None, stamp)
         all_glance, _ = self.category_totals(None, stamp, 'glance')
+        all_short_term, _ = self.category_totals(None, stamp, 'short_term_notes')
         autonomy = all_autonomy if character is None else self.category_totals(character, stamp)[0]
         glance = all_glance if character is None else self.category_totals(character, stamp, 'glance')[0]
-        chat = day - all_autonomy - all_glance
+        short_term = (all_short_term if character is None else
+                      self.category_totals(character, stamp, 'short_term_notes')[0])
+        chat = day - all_autonomy - all_glance - all_short_term
         return (f'今天 ¥{day:.6f} / {self.daily}；本月 ¥{month:.6f} / {self.monthly}；'
                 f'待核对预留 ¥{pending:.6f}；其中聊天 ¥{chat:.6f}，自主 ¥{autonomy:.6f} / '
                 f'{self.autonomy_daily}/日（自主是上限，不是消费目标），瞄一眼 ¥{glance:.6f} / '
-                f'{self.glance_daily}/日')
+                f'{self.glance_daily}/日，短期便签提取 ¥{short_term:.6f}')
 
 
 def memory_mode(memory):
@@ -1137,6 +1156,20 @@ class Chat:
         self.email_attachment_admission = None
         # Tickets 098/102: channel name -> callable(text), set by the desktop service for configured channels.
         self.away_channels = {}
+        notes_config = getattr(cfg, 'short_term_notes', None) or {}
+        self.short_term_notes = None
+        if notes_config.get('enabled') is True:
+            from short_term_notes import ShortTermNotes
+            self.short_term_notes = ShortTermNotes(
+                cfg, store, budget, model, self.path, self.session_path)
+
+    def start_short_term_notes_scheduler(self):
+        if self.short_term_notes:
+            self.short_term_notes.start()
+
+    def stop_short_term_notes_scheduler(self):
+        if self.short_term_notes:
+            self.short_term_notes.stop()
 
     def tool_schemas(self):
         from tools_agent import permitted_tools
@@ -1418,6 +1451,8 @@ class Chat:
         return result, '成功', 'send_message'
 
     def start_new_conversation(self):
+        notes_result = (self.short_term_notes.extract_before_new_conversation()
+                        if self.short_term_notes else False)
         # Cursor only: old messages stay on disk.
         start = len(self.store.read(self.path))
         path = self.session_path
@@ -1436,6 +1471,7 @@ class Chat:
         self.last_self = None
         self.trim_note = None
         self.trim_noted = False
+        return notes_result
 
 
     @staticmethod
@@ -1700,7 +1736,7 @@ class Chat:
         ]
 
     def _log_context(self, text, autonomy, request_id, head, profile_context, stable, history, recalled,
-                     background_details, runtime_context, tool_schema, user, estimate):
+                     background_details, short_term_details, runtime_context, tool_schema, user, estimate):
         # Ticket 121: one line per request with sizes, ids and keywords only, never the text itself.
         row = {
             'kind': request_kind(self, text, autonomy), 'request_id': request_id,
@@ -1708,6 +1744,7 @@ class Chat:
             'stable_chars': len(stable), 'history_rounds': sum(m.get('role') == 'user' for m in history),
             'history_chars': context_chars(history), 'memory_ids': list(self.turn_memory_refs),
             'memory_chars': context_chars(recalled), 'background': background_details,
+            'short_term_notes': short_term_details,
             'runtime_chars': context_chars(runtime_context),
             'tool_schema_bytes': len(json.dumps(tool_schema or [], ensure_ascii=False).encode('utf-8')),
             'user_chars': context_chars([user]), 'estimated_input_tokens': estimate,
@@ -1777,7 +1814,11 @@ class Chat:
             background_current += '\n' + extra_context
         background_message, background_details = background_context(
             self.cfg.background, background_current, self.history)
-        tail = [*([background_message] if background_message else []), *recalled]
+        short_term_message, short_term_details = (self.short_term_notes.context()
+                                                  if self.short_term_notes and not autonomy
+                                                  else (None, {'count': 0, 'characters': 0}))
+        tail = [*([background_message] if background_message else []),
+                *([short_term_message] if short_term_message else []), *recalled]
         if self.current_request_tool_schemas():
             recall_context = self.recall_context()
             if recall_context:
@@ -1846,7 +1887,8 @@ class Chat:
                 self.store.append(self.path, event)
                 self.last_send_persisted = True
         self._log_context(text, autonomy, request_id, head, profile_context, stable, history, recalled,
-                          background_details, runtime_context, tool_schema, user, bound(history))
+                          background_details, short_term_details, runtime_context, tool_schema, user,
+                          bound(history))
         try:
             self._capability_request_active = True
             self.last_self = description
@@ -2466,6 +2508,7 @@ def pending_deletion_context(chat):
 def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead, activity=None, autonomy=None):
     activity = activity or ActivityState(chat.store.root / chat.cfg.id / 'resident-state.json')
     chat.activity_enabled = activity.enabled
+    chat.start_short_term_notes_scheduler()
     output(f'接上了 {chat.rounds} 轮。输入 /cost 查花费，/autonomy 查自主记录，/self 看当前说明，'
            '/pause 或 /resume 切换自主活动，/quit 退出。')
     if getattr(chat.tools, 'startup_notice', None):
@@ -2522,8 +2565,11 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead, activity=N
             if text == '/quit':
                 break
             if text in ('/new', '/new-en'):
-                chat.start_new_conversation()
-                output('新对话已开始；旧聊天保留在本机，长期记忆与实验室未改动。')
+                notes_result = chat.start_new_conversation()
+                notice = '新对话已开始；旧聊天保留在本机，长期记忆与实验室未改动。'
+                if notes_result is None:
+                    notice += '短期便签提取暂时未完成，系统会保留原聊天并在后续检查时重试。'
+                output(notice)
                 continue
             if text == '/pause':
                 chat.set_activity_enabled(activity, False)
@@ -2587,6 +2633,8 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead, activity=N
                 notify_dropped()
     except (KeyboardInterrupt, EOFError):
         output('\n已退出，已保存的记录仍在；未完成请求的预留额可用 /cost 查看。')
+    finally:
+        chat.stop_short_term_notes_scheduler()
 
 
 def main():
