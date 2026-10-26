@@ -904,14 +904,19 @@ class MultiMessageTests(unittest.TestCase):
         self.assertEqual([r['content'] for r in self.store.read('test/chat.jsonl')], ['read', '先看一下。'])
         self.assertEqual([m['role'] for m in model.call_args.args[0][-2:]], ['tool', 'tool'])
 
-    def test_text_written_after_messages_becomes_one_more_message(self):
+    def test_text_written_right_after_messages_is_not_repeated(self):
+        # Lan saw every QQ reply followed by a restatement of the same bubbles.
         model = Mock(side_effect=[
-            (self.message([self.tool_call('send_message', '{"text":"Hi."}', 'one')]), 100, 20, 0),
-            (self.message(content='See you.'), 120, 20, 0)])
-        chat = Chat(self.cfg, self.store, self.budget, model, output=lambda _: None)
-        self.assertEqual(chat.send('hello'), 'See you.')
-        self.assertFalse(chat.reply_displayed)
-        self.assertEqual([r['content'] for r in self.store.read('test/chat.jsonl')], ['hello', 'Hi.', 'See you.'])
+            (self.message([self.tool_call('send_message', '{"text":"found it."}', 'one'),
+                           self.tool_call('send_message', '{"text":"go to sleep."}', 'two')]), 100, 20, 0),
+            (self.message(content='Found it. Go to sleep.'), 120, 20, 0)])
+        output = []
+        chat = Chat(self.cfg, self.store, self.budget, model, output=output.append)
+        self.assertEqual(chat.send('hello'), 'go to sleep.')
+        self.assertTrue(chat.reply_displayed)
+        self.assertNotIn('Peter: Found it. Go to sleep.', output)
+        self.assertEqual([r['content'] for r in self.store.read('test/chat.jsonl')],
+                         ['hello', 'found it.', 'go to sleep.'])
 
     def test_mixed_tools_keep_distinct_final_reply(self):
         first = self.message([self.tool_call('send_message', '{"text":"先看一下。"}', 'say'),

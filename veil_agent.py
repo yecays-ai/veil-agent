@@ -117,7 +117,7 @@ SEND_MESSAGE = {'type': 'function', 'function': {
                     'write like texting: one sentence or short thought per message; call this '
                     'tool multiple times in the same step when you have more to say. You may '
                     'send just one. Code or a long list may stay in one longer message. '
-                    'After they are sent you may send more. When you are done, end with no text: any text you write then appears as one more message.'),
+                    'After they are sent you may send more. When you are done, end with no text: text written right after your messages is not shown.'),
     'parameters': {'type': 'object', 'properties': {'text': {'type': 'string'}},
                    'required': ['text'], 'additionalProperties': False},
 }}
@@ -2081,6 +2081,7 @@ class Chat:
         autonomy_tool_steps = 0
         output_recovered = False
         mixed_sent_messages = []
+        work_since_message = False  # a non-message tool ran after the last sent message
 
 
         def log_tool(name, path, state, call_id=None, detail=None, **metadata):
@@ -2298,8 +2299,9 @@ class Chat:
                     self.tool_stop_reason = final
                 else:
                     final = content
-                    if not autonomy and mixed_sent_messages and not final.strip():
-                        # Peter finished after sending his messages; they are the reply.
+                    if not autonomy and mixed_sent_messages and (not final.strip() or not work_since_message):
+                        # Peter finished after sending his messages; they are the reply. Text written
+                        # right after them only restates them, so it is not shown or sent again.
                         final = mixed_sent_messages[-1]
                     if not autonomy and final in mixed_sent_messages:
                         # This exact message is already visible from send_message.
@@ -2395,6 +2397,9 @@ class Chat:
                     state = execution.state
                     if call.function.name == 'send_message' and state == '成功' and self.sent_messages:
                         mixed_sent_messages.append(self.sent_messages[-1])
+                        work_since_message = False
+                    elif call.function.name != 'send_message':
+                        work_since_message = True
                     display_detail, result_state = append_tool_result(
                         call, execution, next_offered)
                     log_detail = execution.result
