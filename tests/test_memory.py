@@ -278,6 +278,16 @@ class MemoryTests(unittest.TestCase):
         self.assertEqual(text.count('[bucket_id:'), 3)
         self.assertNotIn('body 4', text)
 
+    def test_later_turn_still_recalls_relevant_memories_without_opening(self):
+        self.backend.rows['fictional'] = {'content': 'relevant remembered event'}
+        self.backend.write_row('fictional')
+        self.memory.refresh_opening()
+        context = self.memory.context('relevant', include_opening=False)
+        self.assertEqual(len(context), 1)
+        self.assertNotIn('Opening memories', context[0]['content'])
+        self.assertIn('relevant remembered event', context[0]['content'])
+        self.assertEqual(self.memory.last_context_refs, ['fictional'])
+
     def test_random_surfacing_and_exact_id_are_not_hits(self):
         raw = '[bucket_id:bad] unrelated\n=== ombre:result-ids ===\n```json\n{"bucket_ids": []}\n```'
         self.assertEqual(ordinary_hits(raw), [])
