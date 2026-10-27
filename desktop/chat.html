@@ -20,7 +20,7 @@
       <span class="header-wake"><span data-lucide="clock" data-size="14"></span><span>下次唤醒</span><b id="header-next-wake">读取中…</b></span>
       <label class="header-model" title="Peter 用哪个模型说话，下一句开始生效"><span data-lucide="cpu" data-size="14"></span><select id="model-switch" aria-label="Peter 用的模型" disabled><option>读取中…</option></select></label>
     </div>
-    <div class="top-actions"><button id="expand" aria-label="放大聊天窗口" title="放大"><span data-lucide="maximize-2"></span></button><button id="collapse" aria-label="收起聊天窗口" title="收起"><span data-lucide="minimize-2"></span></button></div>
+    <div class="top-actions"><button id="expand" aria-label="铺满可用桌面区域" title="铺满可用桌面区域"><span data-lucide="maximize-2"></span></button><button id="collapse" aria-label="收起聊天窗口" title="收起"><span data-lucide="minimize-2"></span></button></div>
   </header>
   <nav class="navigation" aria-label="主要页面">
     <button class="nav-item active" data-page="chat" aria-current="page" title="拖出可变成独立窗口"><span data-lucide="message-square"></span>聊天</button>
@@ -123,7 +123,7 @@
       </div>
       <span id="speech-status" role="status" aria-live="polite">点击麦克风开始录音；再次点击后用 SenseVoice 转成文字</span>
       <div class="chat-input-shell"><textarea id="box" rows="1" placeholder="和 Peter 说点什么…"></textarea><button id="voice-hold" type="button" aria-label="点击开始录音" aria-pressed="false" title="点击开始录音"><span data-lucide="mic"></span></button></div>
-      <span id="voice-record-status" class="voice-record-status" role="status" aria-live="polite" hidden></span>
+      <span id="voice-record-status" class="voice-record-status" role="status" aria-live="polite" hidden><span id="voice-record-label"></span><button id="voice-record-cancel" type="button" aria-label="删除这条录音" title="删除这条录音" hidden>删除</button></span>
       <button id="send" aria-label="发送"><span data-lucide="arrow-up"></span></button>
     </div>
   </footer>
