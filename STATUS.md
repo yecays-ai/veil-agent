@@ -4,7 +4,7 @@
 
 ## 当前目标与现状
 
-- 工单 131「消息操作和回忆界面」：分支 `ticket/131-message-ui`。右键浮起选中消息并虚化背景，使用 Lucide 官方图标；引用有可取消预览和消息内引用块；回复关联记忆以横向卡片显示时间、最多三个标签及正文，最多展示五条。输入区以 T 听写、官方图片图标和内嵌麦克风操作，点击开始、再次点击发送语音。桌面自动测试 10 项通过、虚构数据 Windows Electron smoke 通过；真实 Windows/Lan 体验待验收。验收见 `docs/tickets/131-message-ui.md`。
+- 工单 131「消息操作和回忆界面」：分支 `ticket/131-message-ui`，PR #178。右键浮起选中消息并虚化背景，使用 Lucide 官方图标；引用有可取消预览和消息内引用块；回复关联记忆以横向卡片显示时间、最多三个标签及正文，最多展示五条。输入区以 T 听写、官方图片图标和内嵌麦克风操作，点击开始、再次点击发送语音。修复发送期间修改草稿会丢失引用的问题。桌面自动测试 10 项和虚构数据 Windows Electron smoke 通过；真实 Windows/Lan 体验待验收。验收见 `docs/tickets/131-message-ui.md`。
 
 - 工单 130「Codex 提醒不再召回长期记忆」：分支 `ticket/130-codex-no-recall`，Claude 实现，Lan 2026-10-27 同意。`codex_watch_mode` 时跳过 `memory.context`。回归测试在 `tests/test_background.py`；全量测试与 main 相同（本机 13 项环境相关失败两边一致）。下一个工单号 131。
 - 工单 129「能力记录按本地时间显示」：分支 `ticket/129-capability-local-time`，Claude 实现。`capabilities.json` 仍存 UTC，交给 Peter 时转成本机时间（`capability_state.local_stamp`）。起因：10-26 他把 UTC 时间当本地时间读，以为新上线的瞄一眼是旧能力。新增 `tests/test_capability_local_time.py`；全量测试与 main 相同（本机 13 项环境相关失败两边一致）。下一个工单号 130。

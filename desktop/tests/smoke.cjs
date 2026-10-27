@@ -26,7 +26,7 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   app.setPath('userData', temp);
   await fs.writeFile(path.join(temp, 'desktop.json'), JSON.stringify({ root: temp, size: 320 }));
   const token = 'fictional_token_123456789';
-  let nextId = 3, pending = null, sends = 0, approvals = 0, images = 0, imageSendAttempts = 0, voices = 0, failVoiceUploadOnce = false;
+  let nextId = 3, pending = null, sends = 0, approvals = 0, images = 0, imageSendAttempts = 0, voices = 0, failVoiceUploadOnce = false, quotedSendStarted = false;
   const requests = [], approvalBodies = [];
   const media = new Map();
   const voiceFixture=wavFixture();
@@ -58,6 +58,9 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
           next_extraction_at: new Date(Date.now() + 1800000).toISOString() } } });
     } else if (url.pathname === '/api/send') {
       const body = await readBody(req);
+      if (body.text.includes('fictional quoted draft')) {
+        quotedSendStarted = true; await new Promise(resolve => setTimeout(resolve, 800)); json(res, {}); return;
+      }
       if (body.media?.id?.startsWith('fictional-voice')) {
         assert.equal(body.text, '[voice message]', 'recording is submitted before transcription completes');
         assert.equal(body.request_id, `voice-send-${body.media.id}`);
@@ -163,7 +166,12 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   assert.equal(await chat.webContents.executeJavaScript('document.querySelector(".message-memory-entry").textContent.includes("fictional-memory")'), false, 'memory ID must not be displayed');
   await chat.webContents.executeJavaScript(`document.querySelector('.message-memory-dialog button').click();document.querySelector('[data-message-id="fictional-history"]').dispatchEvent(new MouseEvent('contextmenu',{bubbles:true}));Array.from(document.querySelectorAll('.chat-action-item')).find(x=>x.textContent.includes('Quote')).click()`);
   assert.equal(await chat.webContents.executeJavaScript('!document.querySelector("#quote-bar").hidden && document.querySelector("#quote-text").textContent === "Fictional saved history"'), true, 'quote should show the selected message');
-  await chat.webContents.executeJavaScript('document.querySelector("#quote-cancel").click()');
+  await chat.webContents.executeJavaScript('document.querySelector("#box").value="fictional quoted draft";document.querySelector("#send").click()');
+  await wait(() => quotedSendStarted, 'quoted send did not start');
+  await chat.webContents.executeJavaScript('document.querySelector("#box").value="new draft"');
+  await wait(() => chat.webContents.executeJavaScript('!document.querySelector("#send").disabled'), 'quoted send did not finish');
+  assert.equal(await chat.webContents.executeJavaScript('document.querySelector("#box").value === "new draft" && !document.querySelector("#quote-bar").hidden && document.querySelector("#quote-text").textContent === "Fictional saved history"'), true, 'editing during send should preserve draft and quote');
+  await chat.webContents.executeJavaScript('document.querySelector("#quote-cancel").click();document.querySelector("#box").value=""');
 
   await chat.webContents.executeJavaScript('document.querySelector("#box").value="fictional hello"; document.querySelector("#send").click()');
   await wait(() => sends === 1, 'text message not delivered');

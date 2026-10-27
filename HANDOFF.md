@@ -2,7 +2,7 @@
 
 ## 当前进度
 
-- 工单 131：分支 `ticket/131-message-ui`，完成消息右键、引用、回复关联记忆卡片及点击录音输入区；虚构数据桌面测试 10 项和 Windows Electron smoke 通过。按照 Lan 要求创建 PR、请求 CodeRabbit 后停止，不自动合并；真实 Windows 体验待 Lan 验收。
+- 工单 131：PR #178，已修复 CodeRabbit 指出的发送期间修改草稿会丢失引用问题；虚构数据桌面测试 10 项和 Windows Electron smoke 通过。Lan 已授权检查通过后合并；真实 Windows 体验待 Lan 验收。
 
 - 工单 130：Codex 提醒不再召回长期记忆（`codex_watch_mode`）。下一个工单号 131。
 - 工单 129：能力记录给 Peter 看时转成本地时间，保存仍是 UTC。记忆相关工单今后由 Claude 负责。下一个工单号 130。

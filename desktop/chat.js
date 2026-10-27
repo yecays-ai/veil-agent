@@ -1027,8 +1027,8 @@ async function send(text){
           box.value='';resizeBox();
           try{sessionStorage.removeItem(speechDraftKey)}catch(e){}
           speechDraftActive=false;
+          if(pendingQuote===quote)clearQuote();
         }
-        if(pendingQuote===quote)clearQuote();
         draftRequests.delete(payloadKey);
       }
       if(attachedImage&&result.duplicate){awaitingImages.delete(requestId);if(selectedImage===attachedImage)clearImage()}
