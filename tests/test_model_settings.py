@@ -215,3 +215,32 @@ class ModelSettingsTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class ProviderErrorTests(unittest.TestCase):
+    def test_failure_says_status_and_logs_redacted_detail(self):
+        import tempfile as _tempfile
+        from agent_types import UserError
+        tmp = _tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        (root / 'characters' / 'test').mkdir(parents=True)
+        (root / 'persona').mkdir()
+        (root / 'persona' / 'test.md').write_text('Fictional', encoding='utf-8')
+        (root / 'characters' / 'test' / 'character.toml').write_text(TOML, encoding='utf-8')
+        cfg = load_character(root, 'test')
+        store = Store(root / 'data')
+
+        class FakeStatusError(Exception):
+            status_code = 401
+            message = 'Invalid token sk-abcdef123456 for model'
+
+        chat = Chat(cfg, store, Budget(store), Mock(side_effect=FakeStatusError()))
+        with self.assertRaises(UserError) as result:
+            chat.send('虚构消息')
+        self.assertIn('HTTP 401', str(result.exception))
+        self.assertNotIn('Invalid token', str(result.exception))
+        rows = store.read('test/provider-errors.jsonl')
+        self.assertEqual(rows[0]['status'], 401)
+        self.assertIn('sk-***', rows[0]['detail'])
+        self.assertNotIn('abcdef123456', rows[0]['detail'])
