@@ -219,6 +219,7 @@ class AutonomyController:
         self.active = False
         self.deadline = None
         self.claimed_wake_reason = None
+        self.missed_shown = set()
         self.announce_next_wake()
         self.announce_more_room()
         self.announce_cleanup()
@@ -687,6 +688,11 @@ class AutonomyController:
                 self._transition_alarms({alarm['alarm_id'] for alarm in due_alarms}, 'missed',
                                         'night quiet hours')
             return True
+        # An alarm whose time fell inside quiet hours does not ring late once they end.
+        quiet_ids = {alarm['alarm_id'] for alarm in due_alarms if self.in_quiet(self._local_time(alarm['at']))}
+        if quiet_ids:
+            self._transition_alarms(quiet_ids, 'missed', 'night quiet hours')
+            due_alarms[:] = [alarm for alarm in due_alarms if alarm['alarm_id'] not in quiet_ids]
         return False
 
     def due(self):
@@ -892,24 +898,30 @@ class AutonomyController:
         return text
 
     def _missed_alarm_text(self):
-        """Tell Peter once which wakes he scheduled did not happen, and why."""
+        """Missed wakes Peter has not been told about; marked told only after the wake request succeeds."""
         try:
             alarms = self._read_alarms()
         except UserError:
             return ''
         missed = [alarm for alarm in alarms if alarm['state'] == 'missed' and not alarm.get('missed_reported')]
-        if not missed:
-            return ''
-        for alarm in missed:
-            alarm['missed_reported'] = True
-        try:
-            self._save_alarms(alarms)
-        except OSError:
-            return ''
+        self.missed_shown = {alarm['alarm_id'] for alarm in missed}
         return ''.join(
             f'The wake you scheduled for {alarm["at"]} did not happen '
             f'({alarm.get("missed_reason") or "daily wake limit reached"}). Your note was: '
             + json.dumps(alarm['reason'], ensure_ascii=False) + '\n' for alarm in missed)
+
+    def _mark_missed_reported(self):
+        shown, self.missed_shown = self.missed_shown, set()
+        if not shown:
+            return
+        try:
+            alarms = self._read_alarms()
+            for alarm in alarms:
+                if alarm['alarm_id'] in shown:
+                    alarm['missed_reported'] = True
+            self._save_alarms(alarms)
+        except (OSError, UserError):
+            pass
 
     def should_yield(self):
         return (self.hub.stopped or self.hub.autonomy_interrupted.is_set()
@@ -950,6 +962,7 @@ class AutonomyController:
             with self.chat.budget.autonomous(self.chat.cfg.id, self.daily_budget):
                 self.chat.long_tasks.begin_tool_run()
                 answer = self.chat.send(self._context(wake_reason), autonomy=True)
+                self._mark_missed_reported()
                 self.chat.apply_pending_recall()
             record['decision'] = answer.strip()[:1000]
             record['reason'] = answer.strip()[:1000]

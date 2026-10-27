@@ -119,7 +119,17 @@ class WakeControlTests(unittest.TestCase):
         text = self.controller._missed_alarm_text()
         self.assertEqual(text.count('did not happen (daily wake limit reached)'), 2)
         self.assertIn('Tell Lan good morning.', text)
+        self.assertEqual(self.controller._missed_alarm_text(), text)  # not told yet: request may still fail
+        self.controller._mark_missed_reported()
         self.assertEqual(self.controller._missed_alarm_text(), '')
+
+    def test_alarm_inside_quiet_hours_does_not_ring_late_after_they_end(self):
+        alarm = self.past_alarm('a1', 30, 'Night thought.')
+        self.controller._save_alarm(alarm)
+        alarm_at = self.controller._local_time(alarm['at'])
+        with patch.object(self.controller, 'in_quiet', side_effect=lambda stamp=None: stamp == alarm_at):
+            self.assertFalse(self.controller.claim_due())
+        self.assertEqual(self.controller._read_alarm()['missed_reason'], 'night quiet hours')
 
     def test_alarm_file_from_before_139_is_still_read(self):
         legacy = self.past_alarm('old', -120, 'Old single alarm.')
