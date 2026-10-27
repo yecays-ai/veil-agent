@@ -10,6 +10,7 @@ let revealQueue=[], revealTimer=null, roundStartedAt=0, roundHasReply=false, pre
 let pendingApproval=null, activityEnabled=false, codexWatchEnabled=false, exiting=false;
 const recentErrors=new Map();
 let memoryAvailable=false,memoryLoaded=false,memoryLoading=false,memoryCursor='',memoryItems=[];
+let pendingQuote=null;
 let activityFilter='all',toolActivity=[],autonomyActivity=[],glanceActivity=[],detachedViews=new Set();
 const activityRowNodes=new Map();
 const pageQuery=new URLSearchParams(location.search),detachedView=pageQuery.get('detached')==='1'?pageQuery.get('view'):null;
@@ -50,7 +51,7 @@ function setSpeechStatus(state,message){
   speechButton.setAttribute('aria-pressed',String(active));
   speechButton.setAttribute('aria-label',active?'停止语音识别':'开始语音识别');
   speechButton.title=active?'停止语音识别':'开始语音识别';
-  speechButton.innerHTML=window.veilIcon(state==='listening'?'square-x':'mic');
+  speechButton.textContent='T';
   box.disabled=active;
   sendBtn.disabled=busy||revealQueue.length>0||sending||stopping||stopped||active;
 }
@@ -194,6 +195,9 @@ function receiveEvent(e,initial){
 
 function esc(s){return s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
 function render(text){
+  const match=text.match(/^> ([^\n]{1,100})：\n((?:>[^\n]*(?:\n|$))+)(?:\n)?([\s\S]*)$/);
+  if(match){const preview=match[2].split('\n').filter(line=>line.startsWith('>')).map(line=>line.slice(1).replace(/^ /,'')).join('\n');
+    return '<span class="chat-quote-preview"><strong>'+esc(match[1])+'</strong><span>'+esc(preview)+'</span></span>'+render(match[3]);}
   // Escape first, then allow only code blocks, inline code and bold.
   const parts=esc(text).split(/```/);
   return parts.map((p,i)=>i%2?'<pre><code>'+p.replace(/^[^\n]*\n/,'').replace(/\n$/,'')+'</code></pre>'
@@ -374,29 +378,45 @@ function recallAllowed(node){
 }
 function quoteMessage(node){
   const who=node.classList.contains('assistant')?($('title').textContent||'Peter'):'我';
-  const quoted=(node.dataset.messageText||'').split('\n').map(line=>'> '+line).join('\n');
-  const prefix=box.value.trim()?box.value.replace(/\s+$/,'')+'\n\n':'';
-  box.value=prefix+`> ${who}：\n`+quoted;resizeBox();box.focus();box.setSelectionRange(box.value.length,box.value.length);
+  pendingQuote={who,text:node.dataset.messageText||''};
+  $('quote-author').textContent=who;$('quote-text').textContent=pendingQuote.text;$('quote-bar').hidden=false;
+  box.focus();box.setSelectionRange(box.value.length,box.value.length);
+}
+function clearQuote() {pendingQuote=null;$('quote-bar').hidden=true;}
+$('quote-cancel').onclick=clearQuote;
+function memoryDisplay(raw){
+  const match=raw.match(/^---\s*\r?\n([\s\S]*?)\r?\n---\s*(?:\r?\n|$)([\s\S]*)$/);
+  if(!match)return {date:'',tags:[],body:raw.trim()};
+  const lines=match[1].split(/\r?\n/),tags=[];let date='',inTags=false;
+  for(const line of lines){
+    if(/^created:\s*/.test(line))date=line.replace(/^created:\s*/, '').replace(/^['"]|['"]$/g,'');
+    if(/^tags:\s*$/.test(line)){inTags=true;continue}
+    if(inTags&&/^-\s+/.test(line)){tags.push(line.replace(/^-\s+/, '').replace(/^['"]|['"]$/g,''));continue}
+    if(inTags&&!/^\s/.test(line))inTags=false;
+  }
+  const parsed=Date.parse(date);if(Number.isFinite(parsed))date=new Date(parsed).toLocaleString();
+  return {date,tags:tags.slice(0,3),body:match[2].trim()};
 }
 async function showMessageMemory(node){
   const layer=document.createElement('div');layer.className='chat-confirm-layer';
   const backdrop=document.createElement('button');backdrop.type='button';backdrop.className='chat-confirm-backdrop';backdrop.setAttribute('aria-label','Close memory details');
-  const dialog=document.createElement('section');dialog.className='chat-confirm-dialog';dialog.setAttribute('role','dialog');dialog.setAttribute('aria-modal','true');
-  const title=document.createElement('h2');title.textContent='Memories supplied for this reply';
+  const dialog=document.createElement('section');dialog.className='chat-confirm-dialog message-memory-dialog';dialog.setAttribute('role','dialog');dialog.setAttribute('aria-modal','true');
+  const title=document.createElement('h2');title.textContent='Recall Memory';
+  const explanation=document.createElement('p');explanation.textContent='这条回复关联的记忆 · 显示当前内容';
   const content=document.createElement('div');content.className='message-memory-content';
   const status=document.createElement('p');status.textContent='正在读取这条回复使用的记忆…';content.appendChild(status);
   const buttons=document.createElement('div'),closeButton=document.createElement('button');closeButton.type='button';closeButton.textContent='Close';
   const close=()=>{layer.remove();node.focus({preventScroll:true})};backdrop.onclick=closeButton.onclick=close;
   dialog.addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();close()}});
-  buttons.append(closeButton);dialog.append(title,content,buttons);layer.append(backdrop,dialog);document.body.appendChild(layer);closeButton.focus();
+  buttons.append(closeButton);dialog.append(title,explanation,content,buttons);layer.append(backdrop,dialog);document.body.appendChild(layer);closeButton.focus();
   try{
     const result=await api('/api/message/action',{action:'memory',message_id:node.dataset.messageId});
     const data=await result.json();if(!result.ok)throw new Error(data.message||'无法读取这条回复的记忆引用。');
     if(!Array.isArray(data.items)||!data.items.length){status.textContent='这条回复没有自动提供的 Ombre 记忆。可在“记忆”页面查看和管理独立记忆。';return}
     content.replaceChildren();
-    for(const memoryId of data.items){
+    for(const memoryId of data.items.slice(0,5)){
       const section=document.createElement('section');section.className='message-memory-entry';
-      const heading=document.createElement('h3');heading.textContent=`Ombre memory · ${memoryId}`;
+      const heading=document.createElement('h3');heading.textContent='Memory';
       const body=document.createElement('pre');body.textContent='正在读取…';section.append(heading,body);content.appendChild(section);
       try{
         let offset=0,version='',text='';
@@ -407,9 +427,11 @@ async function showMessageMemory(node){
           if(typeof page.text!=='string'||typeof page.version!=='string')throw new Error('记忆内容格式无法识别。');
           version=page.version;text+=page.text;offset=page.next_offset;
         }while(offset!==null);
-        body.textContent=text||'（空记忆）';
+        const memory=memoryDisplay(text);heading.textContent=[memory.date,...memory.tags].filter(Boolean).join(' · ')||'Memory';
+        body.textContent=memory.body||'（空记忆）';
       }catch(error){body.textContent=error.message||'这条记忆暂时无法读取。'}
     }
+    if(data.items.length>5){const note=document.createElement('p');note.textContent=`仅显示前 5 条，共 ${data.items.length} 条。`;content.appendChild(note)}
   }catch(error){status.textContent=error.message||'无法读取这条回复的记忆引用。'}
 }
 function showMessageEditDialog(node){
@@ -446,6 +468,7 @@ function showMessageActions(event,node){
   ];
   const layer=document.createElement('div');layer.className='chat-action-layer';layer.dataset.messageId=node.dataset.messageId;
   const backdrop=document.createElement('button');backdrop.type='button';backdrop.className='chat-action-backdrop';backdrop.setAttribute('aria-label','Close message actions');backdrop.onclick=closeMessageActions;
+  const selected=node.cloneNode(true);selected.classList.remove('is-selected');selected.classList.add('chat-action-selected');selected.removeAttribute('data-message-id');selected.removeAttribute('tabindex');selected.setAttribute('aria-hidden','true');
   const menu=document.createElement('div');menu.className='chat-message-actions';menu.setAttribute('role','menu');menu.setAttribute('aria-label','Message actions');
   for(const [action,label,iconName,disabled] of actions){
     const button=document.createElement('button');button.type='button';button.className='chat-action-item'+(action==='delete'?' danger':'');button.setAttribute('role','menuitem');
@@ -477,10 +500,11 @@ function showMessageActions(event,node){
     };
     menu.appendChild(button);
   }
-  layer.append(backdrop,menu);document.body.appendChild(layer);messageActionLayer=layer;
+  layer.append(backdrop,selected,menu);document.body.appendChild(layer);messageActionLayer=layer;
   const positionMenu=()=>{
     if(!node.isConnected){closeMessageActions();return}
     const area=$('log').getBoundingClientRect(),bubble=node.getBoundingClientRect(),width=menu.offsetWidth,height=menu.offsetHeight,margin=8,gap=9;
+    selected.style.left=`${bubble.left}px`;selected.style.top=`${Math.max(area.top,bubble.top)}px`;selected.style.width=`${bubble.width}px`;selected.style.maxHeight=`${Math.max(0,Math.min(bubble.bottom,area.bottom)-Math.max(bubble.top,area.top))}px`;
     const left=Math.max(area.left+margin,Math.min((bubble.left+bubble.right-width)/2,area.right-margin-width));
     const below=area.bottom-margin-(bubble.bottom+gap),above=bubble.top-gap-area.top-margin;
     const placeBelow=height<=below||(height>above&&below>=above);
@@ -533,8 +557,8 @@ function updateSelectionBar(){
   $('selection-delete').disabled=selectedMessageIds.size===0;
 }
 function setBusy(b){
-  busy=b;const waiting=b||revealQueue.length>0;sendBtn.disabled=waiting||sending||voiceSending||stopping||stopped||speechIsActive();
-  voiceHold.disabled=waiting||sending||stopping||stopped||voiceSending||speechIsActive();
+  busy=b;const waiting=b||revealQueue.length>0;sendBtn.disabled=waiting||sending||voiceSending||stopping||stopped||speechIsActive()||!!voiceRecorder||voicePermissionPending;
+  voiceHold.disabled=(waiting||sending||stopping||stopped||voiceSending||speechIsActive())&&!voiceRecorder;
   if(waiting&&!typing&&!stopped){typing=document.createElement('div');typing.id='typing';typing.textContent=transcribingVoice?'正在转写语音…':($('title').textContent||'')+' 正在回复…';col.appendChild(typing)}
   else if(waiting&&typing)typing.textContent=transcribingVoice?'正在转写语音…':($('title').textContent||'')+' 正在回复…';
   if((!waiting||stopped)&&typing){typing.remove();typing=null}
@@ -887,21 +911,21 @@ function voiceMime(){
   return '';
 }
 function stopVoiceTracks(){if(voiceStream){voiceStream.getTracks().forEach(track=>track.stop());voiceStream=null}}
-function resetVoiceButton(){clearInterval(voiceTimer);voiceTimer=null;voiceHold.dataset.recording='false';voiceHold.textContent='按住说话'}
+function resetVoiceButton(){clearInterval(voiceTimer);voiceTimer=null;voiceHold.dataset.recording='false';voiceHold.setAttribute('aria-pressed','false');voiceHold.setAttribute('aria-label','点击开始录音');voiceHold.title='点击开始录音';voiceHold.innerHTML=window.veilIcon('mic',18);$('voice-record-status').hidden=true}
 async function startVoice(){
   if(voiceRecorder||voicePermissionPending||voiceSending||busy||sending||stopping||stopped||speechIsActive())return;
   if(!navigator.mediaDevices?.getUserMedia||typeof MediaRecorder==='undefined'){add('error','当前环境不支持录音。');return}
-  voiceCancelled=false;voicePermissionPending=true;voiceChunks=[];
+  voiceCancelled=false;voicePermissionPending=true;voiceChunks=[];setBusy(busy);
   try{
     const stream=await navigator.mediaDevices.getUserMedia({audio:true});voicePermissionPending=false;
-    if(voiceCancelled){stream.getTracks().forEach(track=>track.stop());voiceCancelled=false;resetVoiceButton();return}
+    if(voiceCancelled){stream.getTracks().forEach(track=>track.stop());voiceCancelled=false;resetVoiceButton();setBusy(busy);return}
     voiceStream=stream;
     const mime=voiceMime();voiceRecorder=new MediaRecorder(voiceStream,mime?{mimeType:mime}:undefined);voiceStarted=Date.now();
     voiceRecorder.ondataavailable=e=>{if(e.data?.size)voiceChunks.push(e.data)};
     voiceRecorder.onstop=finishVoice;
-    voiceRecorder.start(500);voiceHold.dataset.recording='true';voiceHold.textContent='松开发送 · 0:00';
-    voiceTimer=setInterval(()=>{const seconds=Math.floor((Date.now()-voiceStarted)/1000);voiceHold.textContent='松开发送 · '+Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0');if(seconds>=120)stopVoice(false)},250);
-  }catch(e){voicePermissionPending=false;stopVoiceTracks();voiceRecorder=null;resetVoiceButton();if(!voiceCancelled)add('error','无法使用麦克风，请在系统或浏览器设置中允许后重试。');voiceCancelled=false}
+    voiceRecorder.start(500);voiceHold.dataset.recording='true';voiceHold.setAttribute('aria-pressed','true');voiceHold.setAttribute('aria-label','点击结束录音并发送');voiceHold.title='点击结束录音并发送';$('voice-record-status').hidden=false;$('voice-record-status').textContent='录音中 0:00 · 再点一次发送';setBusy(busy);
+    voiceTimer=setInterval(()=>{const seconds=Math.floor((Date.now()-voiceStarted)/1000);$('voice-record-status').textContent='录音中 '+Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0')+' · 再点一次发送';if(seconds>=120)stopVoice(false)},250);
+  }catch(e){voicePermissionPending=false;stopVoiceTracks();voiceRecorder=null;resetVoiceButton();setBusy(busy);if(!voiceCancelled)add('error','无法使用麦克风，请在系统或浏览器设置中允许后重试。');voiceCancelled=false}
 }
 function stopVoice(cancel){
   if(!voiceRecorder){if(voicePermissionPending)voiceCancelled=true;return}voiceCancelled=voiceCancelled||cancel;resetVoiceButton();
@@ -916,12 +940,12 @@ async function uploadVoice(blob,mime){
 }
 async function finishVoice(){
   const recorder=voiceRecorder;voiceRecorder=null;stopVoiceTracks();resetVoiceButton();
-  if(voiceCancelled){add('notice','已取消这条录音。');return}
+  if(voiceCancelled){voiceCancelled=false;setBusy(busy);add('notice','已取消这条录音。');return}
   const mime=(recorder.mimeType||voiceChunks[0]?.type||'audio/webm').split(';')[0];
   const blob=new Blob(voiceChunks,{type:mime});voiceChunks=[];
-  if(!blob.size){add('error','没有录到声音，请重试。');return}
-  if(blob.size>10*1024*1024){add('error','录音超过 10 MB，未保存；请缩短后重试。');return}
-  voiceSending=true;setBusy(busy);voiceHold.textContent='正在发送…';
+  if(!blob.size){setBusy(busy);add('error','没有录到声音，请重试。');return}
+  if(blob.size>10*1024*1024){setBusy(busy);add('error','录音超过 10 MB，未保存；请缩短后重试。');return}
+  voiceSending=true;setBusy(busy);voiceHold.title='正在发送…';
   let savedMedia=null;
   try{
     savedMedia=await uploadVoice(blob,mime);
@@ -959,12 +983,9 @@ async function retryVoice(media,button,wrap){
     else{Object.assign(media,result.media||{});media.transcription_error=result.transcription_error||'没有识别出文字，可以重试。';media.transcription_pending=false;updateVoiceMessage(wrap.closest('.msg'),media);button.disabled=false}
   }catch(e){if(e.media)Object.assign(media,e.media);else{media.transcription_error=media.transcript?'发送结果未确认；录音仍保留，可以重试发送。':'重试失败，录音仍保留；可以重试识别。';media.transcription_pending=false}updateVoiceMessage(wrap.closest('.msg'),media);button.disabled=false}
 }
-voiceHold.addEventListener('pointerdown',e=>{if(e.button!==undefined&&e.button!==0)return;e.preventDefault();startVoice()});
-voiceHold.addEventListener('pointerup',e=>{e.preventDefault();stopVoice(false)});
-voiceHold.addEventListener('pointerleave',()=>{if(voiceRecorder||voicePermissionPending)stopVoice(true)});
-voiceHold.addEventListener('keydown',e=>{if(e.code==='Space'&&!e.repeat){e.preventDefault();startVoice()}});
-window.addEventListener('keyup',e=>{if(e.code==='Space'&&(voiceRecorder||voicePermissionPending)){e.preventDefault();stopVoice(false)}});
-window.addEventListener('blur',()=>{if(voiceRecorder||voicePermissionPending)stopVoice(true)});
+voiceHold.addEventListener('click',()=>{if(voiceRecorder)stopVoice(false);else if(!voicePermissionPending)startVoice()});
+window.addEventListener('keydown',e=>{if(e.key==='Escape'&&(voiceRecorder||voicePermissionPending)){e.preventDefault();stopVoice(true)}});
+window.addEventListener('pagehide',()=>{if(voiceRecorder||voicePermissionPending){stopVoice(true);stopVoiceTracks()}});
 async function uploadImage(image){
   if(!image)return null;
   if(image.media)return image.media;
@@ -980,6 +1001,8 @@ async function send(text){
   const attachedImage=selectedImage;
   if(attachedImage&&text.startsWith('/')){add('error','图片不能和命令一起发送；图片仍保留在发送区。');return}
   if(!text)text='[图片]';
+  const draftText=text,quote=fromBox?pendingQuote:null;
+  if(quote)text=`> ${quote.who}：\n`+quote.text.split('\n').map(line=>'> '+line).join('\n')+'\n\n'+text;
   const payloadKey=text+'\0'+(attachedImage?.key||'');
   if(fromBox&&!draftRequests.has(payloadKey)){
     draftRequests.set(payloadKey,crypto.randomUUID());
@@ -1000,10 +1023,11 @@ async function send(text){
         :'发送未成功，输入已保留；可以稍后重新操作。');
     }else{
       if(fromBox){
-        if(box.value.trim()===text){
+        if(box.value.trim()===draftText){
           box.value='';resizeBox();
           try{sessionStorage.removeItem(speechDraftKey)}catch(e){}
           speechDraftActive=false;
+          if(pendingQuote===quote)clearQuote();
         }
         draftRequests.delete(payloadKey);
       }
