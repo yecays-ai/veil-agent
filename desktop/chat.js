@@ -563,9 +563,14 @@ function updateSelectionBar(){
 function setBusy(b){
   busy=b;const waiting=b||revealQueue.length>0;sendBtn.disabled=waiting||sending||voiceSending||stopping||stopped||speechIsActive()||!!voiceRecorder||voicePermissionPending;
   voiceHold.disabled=(waiting||sending||stopping||stopped||voiceSending||speechIsActive())&&!voiceRecorder;
-  if(waiting&&!typing&&!stopped){typing=document.createElement('div');typing.id='typing';typing.textContent=transcribingVoice?'正在转写语音…':($('title').textContent||'')+' 正在回复…';col.appendChild(typing)}
-  else if(waiting&&typing)typing.textContent=transcribingVoice?'正在转写语音…':($('title').textContent||'')+' 正在回复…';
+  if(waiting&&!typing&&!stopped){typing=document.createElement('div');typing.id='typing';typing.innerHTML='<span></span><button type="button" class="stop-turn" title="让他说完这一步就停">停下</button>';typing.querySelector('button').addEventListener('click',stopTurn);col.appendChild(typing)}
+  if(waiting&&typing){typing.firstChild.textContent=transcribingVoice?'正在转写语音…':($('title').textContent||'')+' 正在回复…';const stopButton=typing.querySelector('button');stopButton.hidden=!b||transcribingVoice;if(!b)stopButton.disabled=false}
   if((!waiting||stopped)&&typing){typing.remove();typing=null}
+}
+// Ticket 138: Lan can stop a reply that keeps going; Peter stops before his next step.
+async function stopTurn(e){
+  const button=e.currentTarget;button.disabled=true;
+  try{const r=await api('/api/stop',{});if(!r.ok)button.disabled=false}catch(err){button.disabled=false}
 }
 async function api(path,body,timeoutMs=30000){
   const result=await window.veilDesktop.request(path,body,timeoutMs);

@@ -1385,6 +1385,15 @@ class Hub:
             self.answers.put(answer)
             return True
 
+    def stop_turn(self):
+        # Ticket 138: Lan's stop button. Peter's chat turn ends before its next model step.
+        with self.cond:
+            if not self.busy or self.autonomy_busy or self.chat is None:
+                return False
+            self.chat.user_stop.set()
+            self.push('notice', '已叫停，等这一步说完就停。')
+            return True
+
     def snapshot(self, after):
         tool_activity = self.tool_activity()
         live_context = self.live_context(tool_activity)
@@ -1819,6 +1828,11 @@ def make_handler(hub, token):
                     self._send(409, {'error': 'no such pending approval'})
                 else:
                     self._send(200, {'ok': True})
+            elif url.path == '/api/stop':
+                if hub.stop_turn():
+                    self._send(200, {'ok': True})
+                else:
+                    self._send(409, {'error': 'not replying'})
             elif url.path == '/api/activity':
                 enabled = body.get('enabled')
                 if not isinstance(enabled, bool):
