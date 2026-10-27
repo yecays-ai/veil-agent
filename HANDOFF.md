@@ -2,6 +2,7 @@
 
 ## 当前进度
 
+- 工单 135：请求失败时显示原因，接口原文存 `data/peter/provider-errors.jsonl`。134 已合并（c87d312），Lan 首次用 jiushi Sonnet 5.5 请求失败，原因待这个文件。下一个工单号 136。
 - 工单 134：设置里加模型（接口、模型、Peter/记忆后台分开选、顶栏切换、页面可设费用上限）。改了 `desktop/`，Lan 需 update.bat 重新打包 exe。中转站 Sonnet 5.5 按次 ¥0.06；Peter 每天约 80–320 次请求，约 ¥5–20/天。下一个工单号 135。
 - 工单 133：PR #180，六部分已实现（见 STATUS.md）。改了 `desktop/`，Lan 需 update.bat 重新打包 exe。下一个工单号 134。
 - 工单 132：看得懂的记忆页（列表、分组、编辑、删除）。改了 `desktop/main.cjs`，Lan 需 update.bat 重新打包 exe。下一个工单号 133。

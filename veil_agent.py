@@ -1846,6 +1846,25 @@ class Chat:
         except (OSError, UserError):
             pass
 
+    def _request_failed(self, exc):
+        """Ticket 135: say which kind of provider failure it was and keep the provider's own words
+        in a local file (keys redacted) so a wrong relay setting can be diagnosed."""
+        status = getattr(exc, 'status_code', None)
+        kind = (f'接口返回 HTTP {status}' if isinstance(status, int)
+                else '超时' if 'Timeout' in type(exc).__name__
+                else '连不上接口' if 'Connection' in type(exc).__name__ else type(exc).__name__)
+        detail = str(getattr(exc, 'message', None) or exc)
+        detail = re.sub(r'(sk-|Bearer\s+)[A-Za-z0-9._-]+', r'\1***', detail)[:2000]
+        try:
+            self.store.append(f'{self.cfg.id}/provider-errors.jsonl', {
+                'time': now(), 'model': self.cfg.provider.get('model'),
+                'base_url': self.cfg.provider.get('base_url'), 'status': status,
+                'type': type(exc).__name__, 'detail': detail})
+        except (OSError, UserError):
+            pass
+        return RequestFailed(f'请求失败，未自动重试；输入已保存，本次保留预留费用。（{kind}，'
+                             f'模型 {self.cfg.provider.get("model")}；详情在 data/{self.cfg.id}/provider-errors.jsonl）')
+
     def switch_model(self, name, provider):
         """Ticket 134: Lan picked another model for Peter; it answers from his next request on."""
         with self.model_lock:
@@ -2034,7 +2053,7 @@ class Chat:
                 except Exception as exc:
                     # Keep the reservation pending: the provider may have received
                     # the request even when its response was lost.
-                    raise RequestFailed('请求失败，未自动重试；输入已保存，本次保留预留费用。') from exc
+                    raise self._request_failed(exc) from exc
         except (KeyboardInterrupt, EOFError):
             self._capability_request_active = False
             raise
@@ -2376,7 +2395,7 @@ class Chat:
             except Exception as exc:
                 # Only the provider call is recoverable. Ledger, storage and tool
                 # integrity failures below must still stop the session.
-                raise RequestFailed('请求失败，未自动重试；输入已保存，本次保留预留费用。') from exc
+                raise self._request_failed(exc) from exc
             message, prompt, completion, cached, *finish = response
             if isinstance(prompt, int) and prompt > 0:
                 measured_ratio = prompt / sent_bytes
