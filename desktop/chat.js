@@ -4,7 +4,7 @@ const imageFile=$('image-file'),imageButton=$('image-button'),imagePreview=$('im
 const voiceHold=$('voice-hold');
 const speechButton=$('speech-toggle'), speechStatus=$('speech-status');
 const speechDraftKey='veil-speech-draft';
-let speechRecorder=null,speechStream=null,speechChunks=[],speechSession=null,speechState='idle',speechPermissionPending=false,speechCancelled=false,speechDraftActive=false,speechTimer=null;
+let speechRecorder=null,speechStream=null,speechChunks=[],speechSession=null,speechState='idle',speechPermissionPending=false,speechCancelled=false,speechDraftActive=false,speechTimer=null,speechErrorTimer=null;
 let after=0, busy=true, transcribingVoice=false, stopping=false, stopped=false, typing=null, sending=false;
 let revealQueue=[], revealTimer=null, roundStartedAt=0, roundHasReply=false, previousMessage=null;
 let pendingApproval=null, activityEnabled=false, codexWatchEnabled=false, exiting=false;
@@ -49,6 +49,7 @@ function renderSpeechText(finalText){
   if(finalText)saveSpeechDraft(prefix+separator+finalText);
 }
 function setSpeechStatus(state,message){
+  if(speechErrorTimer){clearTimeout(speechErrorTimer);speechErrorTimer=null}
   speechState=state;speechStatus.dataset.state=state;speechStatus.textContent=message;
   const active=speechIsActive();
   speechButton.setAttribute('aria-pressed',String(active));
@@ -57,6 +58,7 @@ function setSpeechStatus(state,message){
   speechButton.textContent='T';
   box.disabled=active;
   sendBtn.disabled=busy||revealQueue.length>0||sending||stopping||stopped||active;
+  if(state==='error')speechErrorTimer=setTimeout(()=>{if(speechState==='error')setSpeechStatus('idle','')},3000);
 }
 try{
   const savedSpeechDraft=sessionStorage.getItem(speechDraftKey);
@@ -293,7 +295,6 @@ function updateFavoriteBadge(node,favorite){
   else if(!favorite&&badge)badge.remove();
 }
 function add(kind,text,id,time,media,messageId,requestId,favorite=false,attachments=[]){
-  if(kind==='notice'){notify(text);return}
   if(kind==='error'){
     const previous=recentErrors.get(text),now=Date.now();
     if(previous&&now-previous.at<30000){previous.count++;previous.at=now;previous.node.textContent=text+'（重复 '+previous.count+' 次）';return}
@@ -998,7 +999,7 @@ function voiceMime(){
   return '';
 }
 function stopVoiceTracks(){if(voiceStream){voiceStream.getTracks().forEach(track=>track.stop());voiceStream=null}}
-function resetVoiceButton(){clearInterval(voiceTimer);voiceTimer=null;voiceHold.dataset.recording='false';voiceHold.setAttribute('aria-pressed','false');voiceHold.setAttribute('aria-label','点击开始录音');voiceHold.title='点击开始录音';voiceHold.innerHTML=window.veilIcon('mic',18);$('voice-record-status').hidden=true}
+function resetVoiceButton(){clearInterval(voiceTimer);voiceTimer=null;voiceHold.dataset.recording='false';voiceHold.setAttribute('aria-pressed','false');voiceHold.setAttribute('aria-label','点击开始录音');voiceHold.title='点击开始录音';voiceHold.innerHTML=window.veilIcon('mic',18);$('voice-record-status').hidden=true;$('voice-record-cancel').hidden=true}
 async function startVoice(){
   if(voiceRecorder||voicePermissionPending||voiceSending||busy||sending||stopping||stopped||speechIsActive())return;
   if(!navigator.mediaDevices?.getUserMedia||typeof MediaRecorder==='undefined'){add('error','当前环境不支持录音。');return}
@@ -1010,8 +1011,8 @@ async function startVoice(){
     const mime=voiceMime();voiceRecorder=new MediaRecorder(voiceStream,mime?{mimeType:mime}:undefined);voiceStarted=Date.now();
     voiceRecorder.ondataavailable=e=>{if(e.data?.size)voiceChunks.push(e.data)};
     voiceRecorder.onstop=finishVoice;
-    voiceRecorder.start(500);voiceHold.dataset.recording='true';voiceHold.setAttribute('aria-pressed','true');voiceHold.setAttribute('aria-label','点击结束录音并发送');voiceHold.title='点击结束录音并发送';$('voice-record-status').hidden=false;$('voice-record-status').textContent='录音中 0:00 · 再点一次发送';setBusy(busy);
-    voiceTimer=setInterval(()=>{const seconds=Math.floor((Date.now()-voiceStarted)/1000);$('voice-record-status').textContent='录音中 '+Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0')+' · 再点一次发送';if(seconds>=120)stopVoice(false)},250);
+    voiceRecorder.start(500);voiceHold.dataset.recording='true';voiceHold.setAttribute('aria-pressed','true');voiceHold.setAttribute('aria-label','点击结束录音并发送');voiceHold.title='点击结束录音并发送';$('voice-record-status').hidden=false;$('voice-record-cancel').hidden=false;$('voice-record-label').textContent='录音中 0:00 · 再点一次发送';setBusy(busy);
+    voiceTimer=setInterval(()=>{const seconds=Math.floor((Date.now()-voiceStarted)/1000);$('voice-record-label').textContent='录音中 '+Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0')+' · 再点一次发送';if(seconds>=120)stopVoice(false)},250);
   }catch(e){voicePermissionPending=false;stopVoiceTracks();voiceRecorder=null;resetVoiceButton();setBusy(busy);if(!voiceCancelled)add('error','无法使用麦克风，请在系统或浏览器设置中允许后重试。');voiceCancelled=false}
 }
 function stopVoice(cancel){
@@ -1071,6 +1072,7 @@ async function retryVoice(media,button,wrap){
   }catch(e){if(e.media)Object.assign(media,e.media);else{media.transcription_error=media.transcript?'发送结果未确认；录音仍保留，可以重试发送。':'重试失败，录音仍保留；可以重试识别。';media.transcription_pending=false}updateVoiceMessage(wrap.closest('.msg'),media);button.disabled=false}
 }
 voiceHold.addEventListener('click',()=>{if(voiceRecorder)stopVoice(false);else if(!voicePermissionPending)startVoice()});
+$('voice-record-cancel').addEventListener('click',()=>stopVoice(true));
 window.addEventListener('keydown',e=>{if(e.key==='Escape'&&(voiceRecorder||voicePermissionPending)){e.preventDefault();stopVoice(true)}});
 window.addEventListener('pagehide',()=>{if(voiceRecorder||voicePermissionPending){stopVoice(true);stopVoiceTracks()}});
 async function uploadImage(image){

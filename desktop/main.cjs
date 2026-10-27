@@ -647,7 +647,13 @@ ipcMain.handle('view:focus', (event, view) => {
 ipcMain.handle('view:states', event => fromChatPage(event) ? detachedViewNames() : []);
 ipcMain.on('desktop:collapse', () => { if (chat) chat.hide(); });
 ipcMain.handle('chat:reconnect', event => reconnectChat(event));
-ipcMain.on('desktop:expand', () => { if (chat && !chat.isDestroyed()) { chat.setSize(760, 780); positionChat(); } });
+ipcMain.on('desktop:expand', event => {
+  if (!fromChat(event) || !chat || chat.isDestroyed()) return;
+  const bounds = chat.getBounds();
+  const area = workAreaAt(bounds.x + Math.floor(bounds.width / 2), bounds.y + Math.floor(bounds.height / 2));
+  chat.setBounds({ x: area.x, y: area.y, width: area.width, height: area.height });
+  settings.chatBounds = chat.getBounds(); saveSoon();
+});
 ipcMain.on('desktop:show-activity', () => { showActivity(); });
 ipcMain.on('pet:toggle', event => { if (fromPet(event)) toggleChat(); });
 ipcMain.on('pet:menu', event => { if (fromPet(event)) showMenu(); });

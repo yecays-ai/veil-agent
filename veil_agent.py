@@ -1501,6 +1501,9 @@ class Chat:
             event = {'role': 'assistant', 'content': displayed_text,
                      'request_id': request_id, 'origin': 'reply', 'message_id': message_id,
                      'memory_refs': list(getattr(self, 'turn_memory_refs', []))}
+            regeneration_parent = getattr(self, 'regeneration_parent_message_id', None)
+            if isinstance(regeneration_parent, str) and regeneration_parent:
+                event['regeneration_parent_message_id'] = regeneration_parent
             if media:
                 event['media'] = media
             if attachment:
@@ -1769,11 +1772,29 @@ class Chat:
                                    for index, row in enumerate(rows)):
             raise UserError('只能重新生成最近一轮 Peter 回复。')
         first = min(turn_indexes)
-        user_indexes = [index for index, row in enumerate(rows[:first])
-                        if row.get('role') == 'user' and row.get('request_id') == request_id]
-        if not user_indexes:
+        parent_message_id = selected.get('regeneration_parent_message_id')
+        if parent_message_id is not None:
+            # A recorded parent that is gone (Lan deleted it) must not fall back to an
+            # older turn: finish_regeneration would then replace this reply.
+            user_index = next((index for index, row in enumerate(rows[:first])
+                               if row.get('role') == 'user'
+                               and row.get('message_id') == parent_message_id), None)
+            if user_index is None:
+                raise UserError('这轮回复对应的用户消息已删除，无法重新生成。')
+        else:
+            user_indexes = [index for index, row in enumerate(rows[:first])
+                            if row.get('role') == 'user' and row.get('request_id') == request_id]
+            user_index = user_indexes[-1] if user_indexes else None
+        if user_index is None and any(rows[index].get('autonomy_run_id') for index in turn_indexes):
+            # Autonomous messages answer no user request.
+            raise UserError('Peter 自己主动发的消息无法重新生成。')
+        if user_index is None:
+            # Regenerated replies written before the parent ID was recorded use
+            # a fresh request ID. The nearest preceding user is the original turn.
+            user_index = next((index for index in range(first - 1, -1, -1)
+                               if rows[index].get('role') == 'user'), None)
+        if user_index is None:
             raise UserError('找不到这轮回复对应的用户消息。')
-        user_index = user_indexes[-1]
         user = dict(rows[user_index])
         removed = [rows[index]['message_id'] for index in turn_indexes]
         # Keep the old reply durable until the new reply commits. Exclude the
@@ -1894,7 +1915,8 @@ class Chat:
         finally:
             self.cfg = original
 
-    def _send(self, text, *, autonomy=False, extra_context=None, media=None, message_id=None, persist_user=True):
+    def _send(self, text, *, autonomy=False, extra_context=None, media=None, message_id=None,
+              persist_user=True, regeneration_parent_message_id=None):
         # Per-call durability fact used by UI adapters when failures can occur
         # both before and after the user row is appended.
         self.last_send_persisted = False
@@ -1912,6 +1934,9 @@ class Chat:
         self.last_tool_summaries = []
         self.last_reply_message_id = None
         self.last_reply_request_id = None
+        self.regeneration_parent_message_id = (regeneration_parent_message_id
+                                               if isinstance(regeneration_parent_message_id, str)
+                                               else None)
         self.pending_recall_message_id = None
         self.long_tasks.begin_tool_run()
         if not self.pending_capability_event and self.tools:
@@ -2077,10 +2102,13 @@ class Chat:
             if not autonomy and not self.reply_displayed:
                 self.last_reply_message_id = uuid.uuid4().hex
                 self.last_reply_request_id = request_id
-                self.store.append(self.path, {'role': 'assistant', 'content': reply,
+                event = {'role': 'assistant', 'content': reply,
                     'request_id': request_id, 'origin': 'reply',
                     'message_id': self.last_reply_message_id,
-                    'memory_refs': list(self.turn_memory_refs)})
+                    'memory_refs': list(self.turn_memory_refs)}
+                if self.regeneration_parent_message_id:
+                    event['regeneration_parent_message_id'] = self.regeneration_parent_message_id
+                self.store.append(self.path, event)
             if not self.tool_mode:
                 self.budget.settle(request_id, self.cfg, prompt, completion, cached, input_bytes=sent_bytes)
             # The event was included in the successful normal-chat request above.
@@ -2733,7 +2761,8 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead, activity=N
                 user = raw_text.payload['user']
                 try:
                     reply = chat.send(user['content'], extra_context=pending_deletion_context(chat),
-                                      media=user.get('media'), persist_user=False)
+                                      media=user.get('media'), persist_user=False,
+                                      regeneration_parent_message_id=user.get('message_id'))
                     chat.apply_pending_recall()
                     removed = chat.finish_regeneration(raw_text.payload['remove_ids'])
                     if callable(getattr(chat, 'message_removed', None)):
