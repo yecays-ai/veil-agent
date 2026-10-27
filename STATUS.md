@@ -4,6 +4,7 @@
 
 ## 当前目标与现状
 
+- 工单 129「能力记录按本地时间显示」：分支 `ticket/129-capability-local-time`，Claude 实现。`capabilities.json` 仍存 UTC，交给 Peter 时转成本机时间（`capability_state.local_stamp`）。起因：10-26 他把 UTC 时间当本地时间读，以为新上线的瞄一眼是旧能力。新增 `tests/test_capability_local_time.py`；全量测试与 main 相同（本机 13 项环境相关失败两边一致）。下一个工单号 130。
 - 工单 127「QQ 消息来源与背景匹配」：分支 `ticket/127-qq-context`。QQ 消息使用简短的 `[QQ 发送]` 标记；旧聊天只在背景匹配时转换来源标记，原记录保留。复用既有 QQ 和背景匹配流程。新增针对背景误触发及 QQ 分类的测试，本地 QQ 与背景测试各 16 项通过；PR 审查、CI 与 Lan Windows 体验待核实。验收见 `docs/tickets/127-qq-context.md`。
 
 - 工单 126「发完消息不再重复说一遍」：分支 `ticket/126-no-repeat-after-send`，Claude 实现。122 之后 Peter 用 send_message 发完几条，常再写一段换个说法的总结，按 122 的规则会多显示/多发一条（Lan 在 QQ 上看到每段话后面都重复一遍）。现在：发完消息后紧接着写的文字不显示、不发送、不存（以最后一条已发消息为回复）；如果发消息之后他又用了别的工具（如先说「先看一下」再读文件），之后写的文字照常作为新回复。send_message 说明同步改为「紧接着写的文字不会显示」。验收：update.bat 后在 QQ 和桌面各聊 5 分钟，不再出现一组消息后跟一条重述。下一个工单号 127。

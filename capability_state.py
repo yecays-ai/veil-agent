@@ -2,6 +2,7 @@
 import json
 import os
 import threading
+from datetime import datetime
 from functools import wraps
 from pathlib import Path
 
@@ -38,3 +39,14 @@ def save_capabilities(path, row):
         handle.flush()
         os.fsync(handle.fileno())
     os.replace(temporary, path)
+
+
+def local_stamp(at):
+    """Ticket 129: records are stored in UTC; Peter reads them in local time so a new entry never looks old."""
+    try:
+        moment = datetime.fromisoformat(at)
+    except (TypeError, ValueError):
+        return at
+    if moment.tzinfo is None:
+        return at
+    return moment.astimezone().strftime('%Y-%m-%d %H:%M local time')
