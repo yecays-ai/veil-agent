@@ -1276,7 +1276,8 @@ class Chat:
         try:
             row = json.loads(path.read_text(encoding='utf-8'))
             updates = row.get('capability_updates', [])
-            lines = [f'{item["at"]}: {item["text"]}' for item in updates
+            from capability_state import local_stamp
+            lines = [f'{local_stamp(item["at"])}: {item["text"]}' for item in updates
                      if isinstance(item, dict) and isinstance(item.get('at'), str)
                      and isinstance(item.get('text'), str)]
             return ('CAPABILITY RECORD (program-maintained; use it when asked what changed, do not claim an '
