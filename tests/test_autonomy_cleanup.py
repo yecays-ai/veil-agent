@@ -105,6 +105,8 @@ class WakeCountAndQuietHoursTests(unittest.TestCase):
         context = self.controller._context()
         self.assertIn('did not happen (night quiet hours)', context)
         self.assertIn('send piece 4', context)
+        self.assertIn('did not happen', self.controller._context())  # until a wake request succeeds
+        self.controller._mark_missed_reported()
         self.assertNotIn('did not happen', self.controller._context())
 
     def test_set_next_wake_refuses_quiet_hours_and_reports_remaining_wakes(self):

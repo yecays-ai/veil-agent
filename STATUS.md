@@ -1,9 +1,10 @@
 # 当前状态
 
-更新：2026-10-28 UTC · Claude。
+更新：2026-10-28 UTC · Claude（工单 139）。
 
 ## 当前目标与现状
 
+- 工单 139「Peter 自己决定怎么醒来」：分支 `ticket/139-wake-control`，Claude 实现，Lan 2026-10-28 同意。参考 Kli Space Wake Veil（1.0 仓库思路 + 2.0 设计稿），Python 重写。自然醒改为醒后安静、慢慢攒够才醒（平均约 90 分钟，多在 30–190 分钟）；新工具 `set_wake_rhythm`（quieter / silent / custom，带时长自动恢复）；`set_next_wake` 可排多个带留言的闹钟、最早 15 分钟，安静时也照响；错过的闹钟下次一起告诉他。Lan 的暂停、夜间安静、12 次/天、¥3/天不变。新增 `tests/test_wake_control.py`（7 项）；全量测试与 main 相同（本机 6 项环境相关失败两边一致）。未改桌面界面。验收见 `docs/tickets/139-wake-control.md`。下一个工单号 140。
 - 工单 138「Peter 自己说完就停，Lan 可以叫停」：分支 `ticket/138-turn-stop`，Claude 实现，Lan 2026-10-28 同意。argon 一句晚安发了 19 条，一直跑到 20 步上限。send_message 加了可选的 `done`：他标为最后一条后，这一轮就结束（自主活动里忽略）。聊天「正在回复…」旁加「停下」按钮（`/api/stop`），在下一步开始前停下，已经发出的消息保留。新增 `tests/test_turn_stop.py`（7 项）；全量测试与 main 相同（本机 6 项环境相关失败两边一致），桌面测试通过。需要 update.bat 重新打包 exe。验收见 `docs/tickets/138-turn-stop.md`。PR #184（Codex 的 137）还开着；本单避开了它改的行。下一个工单号 139。
 - 工单 137「桌面 UI 提示与连续重新生成」：已合并（PR #184），分支 `ticket/137-regenerate-ui-notifications`。连续重新生成通过原用户消息 ID 保持关联；桌宠调整点默认隐藏、聊天窗口铺满屏幕工作区、语音识别错误三秒后收起、录音提供删除取消入口，普通通知改为留在聊天记录中。Python/JavaScript 语法检查和 `git diff --check` 通过；PR #184；Claude 按审查意见修正：原消息已删除或自主消息时拒绝重新生成；新增 `tests/test_regeneration.py`；全量测试与 main 相同。Windows 体验待验收。验收步骤见 `docs/tickets/137-regenerate-ui-notifications.md`。下一个工单号 138。
 - 工单 136「慢模型不再一分钟就算失败」：分支 `ticket/136-slow-model-timeout`，Claude 实现。中转站 Gemini 一步最长约 45 秒，超过 60 秒的一步被当成失败；模型请求等待上限改为 180 秒（`MODEL_TIMEOUT_SECONDS`）。验收见 `docs/tickets/136-slow-model-timeout.md`。下一个工单号 137。

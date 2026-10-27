@@ -2,6 +2,7 @@
 
 ## 当前进度
 
+- 工单 139：Peter 自己调醒来节律（`set_wake_rhythm`）、多个带留言的闹钟（最早 15 分钟）、自然醒随机（`autonomy._natural_wait`，每轮门槛由时间种子决定）。闹钟文件改成 `alarms` 列表，旧格式兼容。没改 `desktop/`。下一个工单号 140。
 - 工单 138：send_message 加 `done`，聊天加「停下」按钮。起因是 argon 不会空着回复收尾，一直发到 20 步。改了 `desktop/`，Lan 需要 update.bat。下一个工单号 139。
 - 工单 137「桌面 UI 提示与连续重新生成」：分支 `ticket/137-regenerate-ui-notifications`。范围为连续重新生成保留原用户消息关联、隐藏桌宠四角调整点、聊天窗铺满工作区、语音识别错误三秒后收起、录音提供删除取消且普通工具通知留在聊天记录。Python/JavaScript 语法检查和 `git diff --check` 通过；PR #184；Claude 按审查意见修正：记录的原消息已删除、或是 Peter 主动发的消息时拒绝重新生成，不再借用更早一轮；新增 `tests/test_regeneration.py`（3 项）；全量测试与 main 相同（本机 6 项环境相关失败两边一致），桌面测试 10 项通过。Windows 实机验收待做。代码和验收步骤见 `docs/tickets/137-regenerate-ui-notifications.md`。
 - 工单 136：模型请求等待上限 60→180 秒。Lan 试中转站：`[k]claude-sonnet-5.5` 会把工具回执变成用户「-」（推断），已弃用；现在用 `[vertex-t3按量]gemini-4-argon`（按 token，约 ¥0.01/次），慢且一步发一个气泡。下一个工单号 137。
@@ -34,7 +35,7 @@
 - 工单 137 合并后按 `docs/tickets/137-regenerate-ui-notifications.md` 做 Windows 体验验收。
 - 工单 123 已合并，Lan 的 Windows 体验待验收。
 - 工单 116、117、115、118 仍有 Windows 实机体验待验收；不得把合并或 CI 通过记作体验验收。
-- 下一个工单号为 138。
+- 下一个工单号为 140。
 
 ## 仍适用的边界
 
