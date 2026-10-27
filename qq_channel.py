@@ -19,7 +19,7 @@ from pathlib import Path
 from desktop_access import DesktopBusy, desktop_access, program_input_made, register_input_tracker
 
 
-QQ_PREFIX = '[Lan sent this on QQ; she is away from the computer.]\n'
+QQ_PREFIX = '[QQ 发送]\n'
 ENV_KEY = 'QQ_LAN_CONTACT'
 
 # QQ NT accessibility names, as read on Lan's QQ on 2026-10-24 (its controls carry no class names).

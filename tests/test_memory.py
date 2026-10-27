@@ -283,8 +283,9 @@ class MemoryTests(unittest.TestCase):
         self.backend.write_row('fictional')
         self.memory.refresh_opening()
         context = self.memory.context('relevant', include_opening=False)
-        self.assertNotIn('relevant remembered event', context[0]['content'])
-        self.assertIn('relevant remembered event', context[1]['content'])
+        self.assertEqual(len(context), 1)
+        self.assertNotIn('Opening memories', context[0]['content'])
+        self.assertIn('relevant remembered event', context[0]['content'])
         self.assertEqual(self.memory.last_context_refs, ['fictional'])
 
     def test_random_surfacing_and_exact_id_are_not_hits(self):
