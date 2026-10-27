@@ -2581,6 +2581,10 @@ class Chat:
         return final, summaries
 
 
+# Ticket 136: relay models (e.g. Gemini through a relay) can take over a minute for one step.
+MODEL_TIMEOUT_SECONDS = 180
+
+
 def make_model(root, cfg, provider=None):
     """Return (clients, call). Without `provider` every call uses cfg.provider as it is at that moment,
     so a model Lan switches to on the settings page answers from the next request (ticket 134)."""
@@ -2602,7 +2606,7 @@ def make_model(root, cfg, provider=None):
             cache_key = (p['base_url'], key.strip())
             if cache_key not in clients:
                 clients[cache_key] = OpenAI(api_key=key.strip(), base_url=p['base_url'],
-                                            max_retries=0, timeout=60)
+                                            max_retries=0, timeout=MODEL_TIMEOUT_SECONDS)
             return clients[cache_key]
 
     client_for(current())
