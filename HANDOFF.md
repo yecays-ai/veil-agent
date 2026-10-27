@@ -2,6 +2,7 @@
 
 ## 当前进度
 
+- 工单 133：只写了工单（六部分合一个 PR），等 Lan 指定实现者。下一个工单号 134。
 - 工单 132：看得懂的记忆页（列表、分组、编辑、删除）。改了 `desktop/main.cjs`，Lan 需 update.bat 重新打包 exe。下一个工单号 133。
 - 工单 131：PR #178，已修复 CodeRabbit 指出的发送期间修改草稿会丢失引用问题；虚构数据桌面测试 10 项和 Windows Electron smoke 通过。Lan 已授权检查通过后合并；真实 Windows 体验待 Lan 验收。
 
