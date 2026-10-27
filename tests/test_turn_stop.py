@@ -61,7 +61,7 @@ class TurnStopTests(unittest.TestCase):
 
     def test_done_ends_the_turn_without_another_model_step(self):
         model = Mock(side_effect=[(sends({'text': 'night'}, {'text': 'sleep well', 'done': True}), 100, 20, 0)])
-        chat = Chat(self.cfg, self.store, self.budget, model)
+        chat = Chat(self.cfg, self.store, self.budget, model, output=[].append)
         reply = chat.send('fictional goodnight')
         self.assertEqual(model.call_count, 1)
         self.assertEqual(reply, 'sleep well')
@@ -73,14 +73,14 @@ class TurnStopTests(unittest.TestCase):
         model = Mock(side_effect=[(sends({'text': 'one'}), 100, 20, 0),
                                   (sends({'text': 'two'}, step=1), 100, 20, 0),
                                   (SimpleNamespace(content='', tool_calls=[]), 100, 5, 0)])
-        Chat(self.cfg, self.store, self.budget, model).send('fictional')
+        Chat(self.cfg, self.store, self.budget, model, output=[].append).send('fictional')
         self.assertEqual(model.call_count, 3)
         self.assertEqual(self.assistant_rows(), ['one', 'two'])
 
     def test_done_must_be_boolean(self):
         model = Mock(side_effect=[(sends({'text': 'x', 'done': 'yes'}), 100, 20, 0),
                                   (SimpleNamespace(content='fictional plain reply', tool_calls=[]), 100, 5, 0)])
-        Chat(self.cfg, self.store, self.budget, model).send('fictional')
+        Chat(self.cfg, self.store, self.budget, model, output=[].append).send('fictional')
         self.assertEqual(self.assistant_rows(), ['fictional plain reply'])
 
     def test_stop_button_ends_after_the_running_step(self):
@@ -92,7 +92,7 @@ class TurnStopTests(unittest.TestCase):
             model.calls += 1
             return sends({'text': f'bubble {model.calls}'}, step=model.calls), 100, 20, 0
         model.calls = 0
-        chat = Chat(self.cfg, self.store, self.budget, model)
+        chat = Chat(self.cfg, self.store, self.budget, model, output=[].append)
         reply = chat.send('fictional')
         self.assertEqual(model.calls, 2)
         # The step that was running when she pressed stop does not send anything.
@@ -109,7 +109,7 @@ class TurnStopTests(unittest.TestCase):
         def model(*args, **kwargs):
             chat.user_stop.set()
             return sends({'text': 'never shown'}), 100, 20, 0
-        chat = Chat(self.cfg, self.store, self.budget, model)
+        chat = Chat(self.cfg, self.store, self.budget, model, output=[].append)
         with self.assertRaises(RequestFailed) as result:
             chat.send('fictional')
         self.assertIn('已停止', str(result.exception))
@@ -122,7 +122,7 @@ class TurnStopTests(unittest.TestCase):
         hub = Hub('Test', ActivityState(self.store.root / 'test' / 'resident-state.json'),
                   media_root=self.store.root / 'test' / 'media')
         self.assertFalse(hub.stop_turn())
-        hub.chat = Chat(self.cfg, self.store, self.budget, Mock())
+        hub.chat = Chat(self.cfg, self.store, self.budget, Mock(), output=[].append)
         hub.busy, hub.autonomy_busy = True, True
         self.assertFalse(hub.stop_turn())
         hub.autonomy_busy = False
