@@ -1773,13 +1773,21 @@ class Chat:
             raise UserError('只能重新生成最近一轮 Peter 回复。')
         first = min(turn_indexes)
         parent_message_id = selected.get('regeneration_parent_message_id')
-        user_index = next((index for index, row in enumerate(rows[:first])
-                           if row.get('role') == 'user'
-                           and row.get('message_id') == parent_message_id), None)
-        if user_index is None:
+        if parent_message_id is not None:
+            # A recorded parent that is gone (Lan deleted it) must not fall back to an
+            # older turn: finish_regeneration would then replace this reply.
+            user_index = next((index for index, row in enumerate(rows[:first])
+                               if row.get('role') == 'user'
+                               and row.get('message_id') == parent_message_id), None)
+            if user_index is None:
+                raise UserError('这轮回复对应的用户消息已删除，无法重新生成。')
+        else:
             user_indexes = [index for index, row in enumerate(rows[:first])
                             if row.get('role') == 'user' and row.get('request_id') == request_id]
             user_index = user_indexes[-1] if user_indexes else None
+        if user_index is None and any(rows[index].get('autonomy_run_id') for index in turn_indexes):
+            # Autonomous messages answer no user request.
+            raise UserError('Peter 自己主动发的消息无法重新生成。')
         if user_index is None:
             # Regenerated replies written before the parent ID was recorded use
             # a fresh request ID. The nearest preceding user is the original turn.

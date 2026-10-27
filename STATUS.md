@@ -4,7 +4,7 @@
 
 ## 当前目标与现状
 
-- 工单 137「桌面 UI 提示与连续重新生成」：进行中，分支 `ticket/137-regenerate-ui-notifications`，本地提交。连续重新生成通过原用户消息 ID 保持关联；桌宠调整点默认隐藏、聊天窗口铺满屏幕工作区、语音识别错误三秒后收起、录音提供删除取消入口，普通通知改为留在聊天记录中。Python/JavaScript 语法检查和 `git diff --check` 通过；未运行测试套件。预览已展示；Windows 体验待验收，尚未推送或开 PR。验收步骤见 `docs/tickets/137-regenerate-ui-notifications.md`。下一个工单号 138。
+- 工单 137「桌面 UI 提示与连续重新生成」：进行中，分支 `ticket/137-regenerate-ui-notifications`，本地提交。连续重新生成通过原用户消息 ID 保持关联；桌宠调整点默认隐藏、聊天窗口铺满屏幕工作区、语音识别错误三秒后收起、录音提供删除取消入口，普通通知改为留在聊天记录中。Python/JavaScript 语法检查和 `git diff --check` 通过；PR #184；Claude 按审查意见修正：原消息已删除或自主消息时拒绝重新生成；新增 `tests/test_regeneration.py`；全量测试与 main 相同。Windows 体验待验收。验收步骤见 `docs/tickets/137-regenerate-ui-notifications.md`。下一个工单号 138。
 - 工单 136「慢模型不再一分钟就算失败」：分支 `ticket/136-slow-model-timeout`，Claude 实现。中转站 Gemini 一步最长约 45 秒，超过 60 秒的一步被当成失败；模型请求等待上限改为 180 秒（`MODEL_TIMEOUT_SECONDS`）。验收见 `docs/tickets/136-slow-model-timeout.md`。下一个工单号 137。
 - 工单 135「请求失败时说出原因」：分支 `ticket/135-provider-error-reason`，Claude 实现。134 接中转站后 Lan 只看到「请求失败」。现在红字带 HTTP 状态码/超时/连不上和模型名，接口原文（key 打码）写进本机 `data/<角色>/provider-errors.jsonl`。新增测试在 `tests/test_model_settings.py`。验收见 `docs/tickets/135-provider-error-reason.md`。下一个工单号 136。
 - 工单 134「设置里加模型」：分支 `ticket/134-model-settings`，Claude 实现，Lan 2026-10-27 要求（中转站试 Sonnet 5.5，以后试更多模型）。「更多」页「模型」卡片添加接口（key 只进本机 `.env`）和模型（按次或按 token 计价、思考开关），「Peter 本人」和「记忆后台」分别选模型，顶栏下拉切换 Peter 的模型（下一次请求生效）；费用上限改为页面可设（Lan 选试用期 ¥30/天、¥600/月）。本机文件 `data/<角色>/models.json`。新增 `tests/test_model_settings.py`（9 项）；全量测试与 main 相同（本机 6 项环境相关失败两边一致），桌面测试 10 项通过。Windows 体验待验收（update.bat 会重新打包 exe），验收见 `docs/tickets/134-model-settings.md`。下一个工单号 135。
@@ -55,7 +55,7 @@
 
 ## 下一步
 
-工单 137 正在实现，完成后按 `docs/tickets/137-regenerate-ui-notifications.md` 更新 Windows 桌面程序并验收。工单 116、117 的 Windows 实机验收仍待完成。
+工单 137 合并后按 `docs/tickets/137-regenerate-ui-notifications.md` 更新 Windows 桌面程序并验收。工单 116、117 的 Windows 实机验收仍待完成。
 
 ## 尚待 Lan 验收或观察
 
