@@ -147,6 +147,21 @@ class InjectionTests(unittest.TestCase):
         chat.send('You woke up on your own.', autonomy=True)
         self.assertEqual(self.store.read('fake/context-log.jsonl')[-1]['kind'], 'autonomy')
 
+    def test_qq_markers_do_not_match_name_but_real_message_and_qq_can(self):
+        self.library.write_text('Lan made a drawing.\nKeywords: Lan\n\nQQ is where we chat.\nKeywords: QQ', encoding='utf-8')
+        old = '[Lan sent this on QQ; she is away from the computer.]\nhello'
+        history = [{'role': 'user', 'content': old}, {'role': 'assistant', 'content': 'hi'}]
+        message, details = background_context(self.library, '[QQ 发送]\nhello', history)
+        self.assertEqual([p['n'] for p in details['paragraphs']], [2])
+        self.assertNotIn('Lan made a drawing', message['content'])
+        message, details = background_context(self.library, '[QQ 发送]\nLan made a drawing', [])
+        self.assertEqual([p['n'] for p in details['paragraphs']], [1, 2])
+
+    def test_qq_marker_still_logs_the_channel(self):
+        chat = Chat(self.cfg, self.store, self.budget, self.model)
+        chat.send('[QQ 发送]\nhello')
+        self.assertEqual(self.store.read('fake/context-log.jsonl')[-1]['kind'], 'qq')
+
     def test_context_log_keeps_only_the_newest_rows(self):
         for n in range(30):
             append_context_log(self.store, 'fake', {'n': n}, keep=10)
