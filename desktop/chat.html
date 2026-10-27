@@ -18,6 +18,7 @@
     <div class="header-status" aria-label="Peter 状态">
       <span class="header-status-item"><i id="autonomy-indicator" class="status-dot is-pending"></i><span>自主活动：<b id="header-autonomy-status">读取中</b></span></span>
       <span class="header-wake"><span data-lucide="clock" data-size="14"></span><span>下次唤醒</span><b id="header-next-wake">读取中…</b></span>
+      <label class="header-model" title="Peter 用哪个模型说话，下一句开始生效"><span data-lucide="cpu" data-size="14"></span><select id="model-switch" aria-label="Peter 用的模型" disabled><option>读取中…</option></select></label>
     </div>
     <div class="top-actions"><button id="expand" aria-label="放大聊天窗口" title="放大"><span data-lucide="maximize-2"></span></button><button id="collapse" aria-label="收起聊天窗口" title="收起"><span data-lucide="minimize-2"></span></button></div>
   </header>
@@ -58,6 +59,37 @@
   </section>
   <section id="more-view" class="page" data-page-view="more" hidden>
     <div class="page-heading"><div><p class="eyebrow">偏好与工具</p><h2>更多</h2></div></div>
+    <article class="surface models-card" id="models-card"><div class="section-heading"><div><p class="eyebrow">MODELS</p><h3>模型</h3><p>先添加接口（中转站地址和 key），再在接口下添加模型。key 只存在这台电脑的 .env 里。</p></div></div>
+      <div class="setting-row"><span>Peter 本人</span><select id="use-peter" aria-label="Peter 本人用的模型"></select></div>
+      <p class="setting-hint">聊天、自主活动、瞄一眼、QQ 和邮件都用这个，下一句开始生效。</p>
+      <div class="setting-row"><span>记忆后台</span><select id="use-background" aria-label="记忆后台用的模型"></select></div>
+      <p class="setting-hint" id="background-hint">Ombre 给记忆打标签、整理短期便签用这个。换了以后，完全退出 Peter 再打开才生效。</p>
+      <div class="setting-row"><span>费用上限</span><label>每天 ¥<input id="limit-daily" type="number" min="1" max="1000" step="1" inputmode="decimal"></label><label>每月 ¥<input id="limit-monthly" type="number" min="1" max="30000" step="1" inputmode="decimal"></label><button id="save-limits" type="button">保存</button></div>
+      <h4>接口</h4><div id="endpoint-list" class="model-list"><p class="muted">还没有添加接口。</p></div>
+      <button id="add-endpoint" type="button">添加接口</button>
+      <form id="endpoint-form" class="model-form" hidden>
+        <label>名字<input id="endpoint-name" maxlength="40" placeholder="例如 jiushi"></label>
+        <label>接口地址<input id="endpoint-url" maxlength="300" placeholder="https://xxx.com/v1"></label>
+        <label>API Key<input id="endpoint-key" type="password" maxlength="500" autocomplete="off" placeholder="sk-…"></label>
+        <p class="setting-hint" id="endpoint-key-hint">编辑时 key 留空就保持原来的。</p>
+        <div class="tool-row"><button type="submit">保存接口</button><button type="button" id="endpoint-cancel">取消</button></div>
+      </form>
+      <h4>模型</h4><div id="model-list" class="model-list"></div>
+      <button id="add-model" type="button">添加模型</button>
+      <form id="model-form" class="model-form" hidden>
+        <label>接口<select id="model-endpoint"></select></label>
+        <label>模型名（照中转站抄）<input id="model-name" maxlength="200" placeholder="例如 [k]claude-sonnet-5.5"></label>
+        <label>显示名（可不填）<input id="model-label" maxlength="40" placeholder="例如 Sonnet 5.5"></label>
+        <div class="segmented" role="group" aria-label="计费方式"><button type="button" data-billing="call">按次</button><button type="button" data-billing="tokens">按 token</button></div>
+        <label data-billing-field="call">每次 ¥<input id="model-per-call" type="number" min="0" step="0.001" inputmode="decimal" placeholder="0.06"></label>
+        <label data-billing-field="tokens">输入 ¥/百万 tokens<input id="model-input-price" type="number" min="0" step="0.01" inputmode="decimal"></label>
+        <label data-billing-field="tokens">缓存输入 ¥/百万 tokens（不知道就留空）<input id="model-cached-price" type="number" min="0" step="0.01" inputmode="decimal"></label>
+        <label data-billing-field="tokens">输出 ¥/百万 tokens<input id="model-output-price" type="number" min="0" step="0.01" inputmode="decimal"></label>
+        <label>最长输入（tokens）<input id="model-max-input" type="number" min="4096" max="2000000" step="1024" value="32768"></label>
+        <label class="check-row"><input id="model-thinking" type="checkbox" checked>思考模式（DeepSeek 一定要开）</label>
+        <div class="tool-row"><button type="submit">保存模型</button><button type="button" id="model-cancel">取消</button></div>
+      </form>
+    </article>
     <article class="surface appearance-card"><div class="section-heading"><div><p class="eyebrow">CSS SETTINGS</p><h3>外观</h3><p>主题、背景和透明度会保存在这台电脑上。</p></div><button id="reset-appearance" class="quiet-button">恢复默认</button></div>
       <div class="setting-row"><span>主题</span><div class="segmented" role="group" aria-label="主题"><button data-theme-choice="light">日间</button><button data-theme-choice="dark">夜间</button></div></div>
       <label class="setting-row range-row" for="window-opacity"><span>整体透明度</span><input id="window-opacity" type="range" min="20" max="100" step="1"><output id="window-opacity-value"></output></label>

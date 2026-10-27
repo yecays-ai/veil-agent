@@ -385,7 +385,7 @@ def open_ombre(root, cfg, *, data_root=None, api_key_overrides=None):
                        check=True, capture_output=True, timeout=20)
         if ombre_model_on(cfg):
             model_key = api_key_overrides.get('OMBRE_COMPRESS_API_KEY',
-                (local_keys or {}).get(cfg.provider['api_key_env']))
+                (local_keys or {}).get((getattr(cfg, 'background_provider', None) or cfg.provider)['api_key_env']))
             if not model_key or not model_key.strip():
                 raise UserError('本机 .env 缺少聊天模型的 API Key（记忆打标和合并要用），请填写后重开。')
         port, token, resident = start_or_connect(
@@ -645,11 +645,14 @@ class Memory:
                 content = str(args.get('content', ''))
                 tokens_in, tokens_out = ombre_model_tokens(content, worst_case=True)
                 normal_in, normal_out = ombre_model_tokens(content)
-                p = self.cfg.provider
+                p = getattr(self.cfg, 'background_provider', None) or self.cfg.provider
+                # Ticket 134: a per-request price covers analyze + judge, each retried up to three times.
+                per_call = p.get('cny_per_call')
                 model_reservation = self.budget.estimate_model(
                     self.cfg.id, p['model'], tokens_in, tokens_out,
-                    p['input_cny_per_million'], p['output_cny_per_million'])
-                normal_model_amount = (
+                    p['input_cny_per_million'], p['output_cny_per_million'],
+                    fixed=per_call * 2 * OMBRE_MODEL_ATTEMPTS if per_call else None)
+                normal_model_amount = per_call * 2 if per_call else (
                     Decimal(normal_in) * p['input_cny_per_million']
                     + Decimal(normal_out) * p['output_cny_per_million']
                 ) / Decimal(1_000_000)

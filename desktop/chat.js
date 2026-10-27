@@ -878,6 +878,7 @@ async function poll(){
     $('activity-status').textContent='自主活动'+state;
     renderActivity(s.last_activity,s.activity_history||[],s.tool_activity||[],s.glance_activity||[]);
     renderLiveContext(s.live_context);
+    renderModels(s.models);
     $('activity-toggle').textContent=activityEnabled?'暂停自主活动':'开启自主活动';
     $('activity-toggle').disabled=stopping||stopped||exiting;
     $('wakes-today').textContent=Number.isInteger(s.wakes_today)&&Number.isInteger(s.daily_max_runs)?s.wakes_today+' / '+s.daily_max_runs+' 次':'未提供';
@@ -1337,3 +1338,121 @@ if(detachedView&&['chat','activity','context','memory','more'].includes(detached
   $('detached-title').textContent='Peter · '+({chat:'聊天',activity:'活动记录',context:'实时上下文',memory:'记忆',more:'更多'}[detachedView]);setPage(detachedView);
 }else{setPage('chat');box.focus()}
 setBusy(true);poll();
+
+// Ticket 134: 模型 settings card and the header switch. The server keeps keys; this page only sees "…1234".
+let modelsView=null,modelsSignature='',editingEndpoint=null,editingModel=null,modelBilling='call',modelsSaving=false;
+function modelName(m){return (m.label||m.model)+(m.builtin?'':' · '+m.endpoint_name)}
+function modelPrice(m){
+  if(m.builtin)return '内置，价格在 character.toml';
+  return m.billing==='call'?'每次 ¥'+m.cny_per_call:'输入 ¥'+m.input_cny_per_million+' / 输出 ¥'+m.output_cny_per_million+'（每百万 tokens）';
+}
+function fillModelSelect(select,view,value){
+  select.replaceChildren(...view.models.map(m=>{const o=document.createElement('option');o.value=m.id;o.textContent=modelName(m)+(m.key_set?'':'（没有 key）');return o}));
+  select.value=value;
+}
+function modelItem(title,detail,onEdit,onDelete){
+  const row=document.createElement('div');row.className='model-item';
+  const text=document.createElement('div');const strong=document.createElement('strong');strong.textContent=title;const small=document.createElement('small');small.textContent=detail;text.append(strong,small);
+  const actions=document.createElement('div');actions.className='tool-row';
+  if(onEdit){const b=document.createElement('button');b.type='button';b.textContent='编辑';b.onclick=onEdit;actions.append(b)}
+  if(onDelete){const b=document.createElement('button');b.type='button';b.className='danger';b.textContent='删除';b.onclick=()=>{if(b.dataset.confirm){onDelete()}else{b.dataset.confirm='1';b.textContent='再点一次删除';setTimeout(()=>{delete b.dataset.confirm;b.textContent='删除'},4000)}};actions.append(b)}
+  row.append(text,actions);return row;
+}
+function renderModels(view){
+  const card=$('models-card'),sw=$('model-switch');
+  if(!view){card.hidden=true;sw.disabled=true;return}
+  card.hidden=false;sw.disabled=modelsSaving||stopping||stopped;
+  const signature=JSON.stringify(view);
+  if(signature===modelsSignature)return;
+  modelsSignature=signature;modelsView=view;
+  fillModelSelect(sw,view,view.use.peter);
+  fillModelSelect($('use-peter'),view,view.use.peter);fillModelSelect($('use-background'),view,view.use.background);
+  $('background-hint').textContent=view.background_restart?'记忆后台已改，完全退出 Peter 再打开才生效。':'Ombre 给记忆打标签、整理短期便签用这个。换了以后，完全退出 Peter 再打开才生效。';
+  if(document.activeElement!==$('limit-daily'))$('limit-daily').value=view.limits.daily_cny;
+  if(document.activeElement!==$('limit-monthly'))$('limit-monthly').value=view.limits.monthly_cny;
+  const endpoints=$('endpoint-list');endpoints.replaceChildren();
+  if(!view.endpoints.length){const p=document.createElement('p');p.className='muted';p.textContent='还没有添加接口。';endpoints.append(p)}
+  for(const e of view.endpoints)endpoints.append(modelItem(e.name,e.base_url+' · '+(e.key_set?'key 已保存 '+e.key_hint:'没有 key'),()=>openEndpointForm(e),
+    ()=>saveModels({endpoints:modelsPayload().endpoints.filter(x=>x.id!==e.id),models:modelsPayload().models.filter(m=>m.endpoint!==e.id)},'接口已删除。')));
+  const models=$('model-list');models.replaceChildren();
+  for(const m of view.models)models.append(modelItem(modelName(m),m.model+' · '+modelPrice(m)+(m.builtin?'':' · 思考'+(m.thinking?'开':'关')),
+    m.builtin?null:()=>openModelForm(m),m.builtin?null:()=>saveModels({models:modelsPayload().models.filter(x=>x.id!==m.id)},'模型已删除。')));
+  $('add-model').disabled=!view.endpoints.length;
+}
+function modelsPayload(){
+  const v=modelsView;
+  return {endpoints:v.endpoints.map(e=>({id:e.id,name:e.name,base_url:e.base_url})),
+    models:v.models.filter(m=>!m.builtin).map(m=>{const out={};for(const k of ['id','endpoint','model','label','thinking','billing','cny_per_call','input_cny_per_million','cached_input_cny_per_million','output_cny_per_million','max_input_tokens'])if(m[k]!==undefined)out[k]=m[k];return out}),
+    use:{...v.use},limits:{...v.limits}};
+}
+async function saveModels(change,done){
+  if(!modelsView||modelsSaving)return false;
+  modelsSaving=true;
+  try{
+    const r=await api('/api/models',{...modelsPayload(),...change});const data=await r.json();
+    if(!r.ok){add('error',(data&&data.message)||'模型设置保存失败，请检查本机 Agent 连接后重试。');return false}
+    modelsSignature='';renderModels(data.models);if(done)add('notice',done);return true;
+  }catch(e){add('error','模型设置保存失败，请检查本机 Agent 连接后重试。');return false}
+  finally{modelsSaving=false;$('model-switch').disabled=stopping||stopped}
+}
+async function useModel(role,id){
+  if(!modelsView||modelsSaving||id===modelsView.use[role])return;
+  modelsSaving=true;
+  try{
+    const r=await api('/api/models/use',{role,model:id});const data=await r.json();
+    if(!r.ok){add('error',(data&&data.message)||'切换模型失败，请重试。');modelsSignature='';renderModels(modelsView);return}
+    modelsSignature='';renderModels(data.models);
+    const m=data.models.models.find(x=>x.id===id);
+    add('notice',role==='peter'?'下一句开始，Peter 用 '+modelName(m)+'。':'记忆后台改成 '+modelName(m)+'，完全退出 Peter 再打开后生效。');
+  }catch(e){add('error','切换模型失败，请检查本机 Agent 连接后重试。')}
+  finally{modelsSaving=false;$('model-switch').disabled=stopping||stopped}
+}
+$('model-switch').onchange=e=>useModel('peter',e.target.value);
+$('use-peter').onchange=e=>useModel('peter',e.target.value);
+$('use-background').onchange=e=>useModel('background',e.target.value);
+$('save-limits').onclick=()=>saveModels({limits:{daily_cny:$('limit-daily').value,monthly_cny:$('limit-monthly').value}},'费用上限已保存。');
+function openEndpointForm(e){
+  editingEndpoint=e||null;$('endpoint-form').hidden=false;$('add-endpoint').hidden=true;
+  $('endpoint-name').value=e?e.name:'';$('endpoint-url').value=e?e.base_url:'';$('endpoint-key').value='';
+  $('endpoint-key-hint').hidden=!e;$('endpoint-name').focus();
+}
+function closeEndpointForm(){$('endpoint-form').hidden=true;$('add-endpoint').hidden=false;$('endpoint-key').value='';editingEndpoint=null}
+$('add-endpoint').onclick=()=>openEndpointForm(null);
+$('endpoint-cancel').onclick=closeEndpointForm;
+$('endpoint-form').onsubmit=async ev=>{
+  ev.preventDefault();
+  const item={name:$('endpoint-name').value,base_url:$('endpoint-url').value};
+  if($('endpoint-key').value.trim())item.key=$('endpoint-key').value.trim();
+  const endpoints=modelsPayload().endpoints;
+  if(editingEndpoint){const i=endpoints.findIndex(x=>x.id===editingEndpoint.id);endpoints[i]={...endpoints[i],...item}}else endpoints.push(item);
+  if(await saveModels({endpoints},editingEndpoint?'接口已更新。':'接口已添加，接着在下面添加这个接口的模型。'))closeEndpointForm();
+};
+function setBilling(kind){
+  modelBilling=kind;
+  document.querySelectorAll('[data-billing]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.billing===kind)));
+  document.querySelectorAll('[data-billing-field]').forEach(f=>f.hidden=f.dataset.billingField!==kind);
+}
+document.querySelectorAll('[data-billing]').forEach(b=>b.onclick=()=>setBilling(b.dataset.billing));
+function openModelForm(m){
+  editingModel=m||null;$('model-form').hidden=false;$('add-model').hidden=true;
+  const select=$('model-endpoint');select.replaceChildren(...modelsView.endpoints.map(e=>{const o=document.createElement('option');o.value=e.id;o.textContent=e.name;return o}));
+  select.value=m?m.endpoint:modelsView.endpoints[0].id;
+  $('model-name').value=m?m.model:'';$('model-label').value=m?m.label:'';
+  $('model-per-call').value=m&&m.cny_per_call||'';$('model-input-price').value=m&&m.input_cny_per_million||'';
+  $('model-cached-price').value=m&&m.billing==='tokens'&&m.cached_input_cny_per_million!==m.input_cny_per_million?m.cached_input_cny_per_million:'';
+  $('model-output-price').value=m&&m.output_cny_per_million||'';$('model-max-input').value=m?m.max_input_tokens:32768;
+  $('model-thinking').checked=m?m.thinking:true;setBilling(m?m.billing:'call');$('model-name').focus();
+}
+function closeModelForm(){$('model-form').hidden=true;$('add-model').hidden=false;editingModel=null}
+$('add-model').onclick=()=>openModelForm(null);
+$('model-cancel').onclick=closeModelForm;
+$('model-form').onsubmit=async ev=>{
+  ev.preventDefault();
+  const item={endpoint:$('model-endpoint').value,model:$('model-name').value,label:$('model-label').value,thinking:$('model-thinking').checked,
+    billing:modelBilling,max_input_tokens:Number($('model-max-input').value)||32768};
+  if(modelBilling==='call')item.cny_per_call=$('model-per-call').value;
+  else{item.input_cny_per_million=$('model-input-price').value;item.output_cny_per_million=$('model-output-price').value;if($('model-cached-price').value!=='')item.cached_input_cny_per_million=$('model-cached-price').value}
+  const models=modelsPayload().models;
+  if(editingModel){const i=models.findIndex(x=>x.id===editingModel.id);models[i]={id:editingModel.id,...item}}else models.push(item);
+  if(await saveModels({models},editingModel?'模型已更新。':'模型已添加。在上面“Peter 本人”或顶上的下拉里就能切过去。'))closeModelForm();
+};

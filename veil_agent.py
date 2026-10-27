@@ -405,6 +405,9 @@ class Character:
     glance: dict = None
     background: str = None
     short_term_notes: dict = None
+    # Ticket 134: Ombre tagging and short-term notes use this model; None means the chat model.
+    background_provider: dict = None
+    models: object = None
 
 
 def positive_int(value):
@@ -440,6 +443,21 @@ def price(value):
     return result
 
 
+def toml_provider(raw):
+    provider = dict(raw)
+    for key in ('model', 'base_url', 'api_key_env'):
+        if not isinstance(provider[key], str) or not provider[key].strip():
+            raise ValueError(key)
+    if not provider['base_url'].startswith('https://'):
+        raise ValueError('HTTPS required')
+    for key in ('input_cny_per_million', 'cached_input_cny_per_million', 'output_cny_per_million'):
+        provider[key] = price(provider[key])
+    if provider['cached_input_cny_per_million'] > provider['input_cny_per_million']:
+        raise ValueError('cached rate exceeds regular rate')
+    provider['max_input_tokens'] = positive_int(provider['max_input_tokens'])
+    return provider
+
+
 def load_character(root, character_id):
     if not re.fullmatch(r'[a-z0-9][a-z0-9_-]*', character_id):
         raise UserError('角色编号只能用小写英文、数字、下划线和短横线。')
@@ -456,17 +474,19 @@ def load_character(root, character_id):
             raise UserError('读不到人设：请按 README 在 persona 文件夹放好本机人设后重开。') from exc
         if not persona:
             raise UserError('人设文件为空，请填写后重开。')
-        provider = dict(cfg['providers'][cfg['provider']])
-        for key in ('model', 'base_url', 'api_key_env'):
-            if not isinstance(provider[key], str) or not provider[key].strip():
-                raise ValueError(key)
-        if not provider['base_url'].startswith('https://'):
-            raise ValueError('HTTPS required')
-        for key in ('input_cny_per_million', 'cached_input_cny_per_million', 'output_cny_per_million'):
-            provider[key] = price(provider[key])
-        if provider['cached_input_cny_per_million'] > provider['input_cny_per_million']:
-            raise ValueError('cached rate exceeds regular rate')
-        provider['max_input_tokens'] = positive_int(provider['max_input_tokens'])
+        provider = toml_provider(cfg['providers'][cfg['provider']])
+        builtins = {cfg['provider']: provider}
+        for name, raw in cfg['providers'].items():
+            if name not in builtins:
+                try:
+                    builtins[name] = toml_provider(raw)
+                except (KeyError, ValueError, TypeError, ArithmeticError):
+                    continue  # an unused, broken profile must not stop Peter
+        from model_settings import ModelSettings
+        # Ticket 134: Lan's own model list on this computer picks Peter's and the background's models.
+        models = ModelSettings(root, character_id, builtins, cfg['provider'])
+        _, provider_name, provider = models.chosen('peter')
+        _, _, background_provider = models.chosen('background')
         tools = dict(cfg['tools']) if 'tools' in cfg else None
         if tools is not None:
             enabled = tools.get('enabled', True)
@@ -625,11 +645,12 @@ def load_character(root, character_id):
             web = {'enabled': enabled}
         return Character(character_id, str(cfg['name']), persona,
                          positive_int(cfg.get('history_rounds', 20)),
-                         positive_int(cfg.get('max_output_tokens', 1024)), provider, cfg['provider'],
+                         positive_int(cfg.get('max_output_tokens', 1024)), provider, provider_name,
                          memory, tools, autonomy, voice, profile, email, qq, web, windows_observation,
                          windows_interaction, screen_pop, glance,
                          background=str(background_path(persona_path)),
-                         short_term_notes=short_term_notes)
+                         short_term_notes=short_term_notes,
+                         background_provider=background_provider, models=models)
     except UserError:
         raise
     except (OSError, KeyError, ValueError, TypeError, ArithmeticError) as exc:
@@ -789,14 +810,15 @@ class Budget:
     @synchronized
     def reserve(self, cfg, *, accounting=None, category=None):
         p = cfg.provider
-        amount = (p['max_input_tokens'] * p['input_cny_per_million']
-                  + cfg.max_output_tokens * p['output_cny_per_million']) / MILLION
+        amount = p['cny_per_call'] if p.get('cny_per_call') else (
+            p['max_input_tokens'] * p['input_cny_per_million']
+            + cfg.max_output_tokens * p['output_cny_per_million']) / MILLION
         day, month, pending = self.totals()
         active_category, character = self._reserve_category(amount)
         category = category or active_category
         self._enforce_category_budget(category, character, amount)
         if day + pending + amount > self.daily or month + pending + amount > self.monthly:
-            raise BudgetExceeded('本次费用上限会超过 ¥10/天或 ¥300/月，未发送。输入 /cost 查看。')
+            raise BudgetExceeded(f'本次费用上限会超过 ¥{self.daily}/天或 ¥{self.monthly}/月，未发送。输入 /cost 查看。')
         request_id = uuid.uuid4().hex
         event = {'type': 'reserve', 'id': request_id,
                           'period': self.clock(), 'amount': str(amount),
@@ -833,7 +855,7 @@ class Budget:
         category, active_character = self._reserve_category(amount)
         self._enforce_category_budget(category, active_character, amount)
         if day + pending + amount > self.daily or month + pending + amount > self.monthly:
-            raise BudgetExceeded('本次费用上限会超过 ¥10/天或 ¥300/月，未发送。输入 /cost 查看。')
+            raise BudgetExceeded(f'本次费用上限会超过 ¥{self.daily}/天或 ¥{self.monthly}/月，未发送。输入 /cost 查看。')
         request_id = uuid.uuid4().hex
         self.store.append('costs.jsonl', {'type': 'reserve', 'id': request_id,
             'period': self.clock(), 'amount': str(amount), 'character': character,
@@ -841,13 +863,13 @@ class Budget:
         return request_id, amount
 
     @synchronized
-    def estimate_model(self, character, model, tokens_in, tokens_out, in_rate, out_rate):
+    def estimate_model(self, character, model, tokens_in, tokens_out, in_rate, out_rate, *, fixed=None):
         # Ombre's own model calls happen inside the child process, so they are estimated here.
         in_rate, out_rate = Decimal(str(in_rate)), Decimal(str(out_rate))
         if (type(tokens_in) is not int or type(tokens_out) is not int or tokens_in < 0 or tokens_out < 0
                 or not in_rate.is_finite() or not out_rate.is_finite() or in_rate < 0 or out_rate < 0):
             raise UserError('记忆模型费用配置无效。')
-        amount = (tokens_in * in_rate + tokens_out * out_rate) / MILLION
+        amount = Decimal(str(fixed)) if fixed is not None else (tokens_in * in_rate + tokens_out * out_rate) / MILLION
         day, month, pending = self.totals()
         category, active_character = self._reserve_category(amount)
         self._enforce_category_budget(category, active_character, amount)
@@ -938,9 +960,11 @@ class Budget:
         p = cfg.provider
         if prompt > p['max_input_tokens'] or completion > cfg.max_output_tokens:
             raise UserError('接口用量超过配置边界；已停止并保留预留费用，请核对供应商。')
-        amount = ((prompt - cached) * p['input_cny_per_million']
-                  + cached * p['cached_input_cny_per_million']
-                  + completion * p['output_cny_per_million']) / MILLION
+        # Ticket 134: some relays charge a flat price per request whatever its length.
+        amount = p['cny_per_call'] if p.get('cny_per_call') else (
+            (prompt - cached) * p['input_cny_per_million']
+            + cached * p['cached_input_cny_per_million']
+            + completion * p['output_cny_per_million']) / MILLION
         rows = self.store.read('costs.jsonl')
         if any(row.get('type') == 'settle' and row.get('id') == request_id for row in rows):
             return False
@@ -991,6 +1015,30 @@ class Budget:
                 f'待核对预留 ¥{pending:.6f}；其中聊天 ¥{chat:.6f}，自主 ¥{autonomy:.6f} / '
                 f'{self.autonomy_daily}/日（自主是上限，不是消费目标），瞄一眼 ¥{glance:.6f} / '
                 f'{self.glance_daily}/日，短期便签提取 ¥{short_term:.6f}')
+
+    @synchronized
+    def model_display(self, stamp=None):
+        """Ticket 134: today's spend and request count per model, so a switched model is visible in /cost."""
+        stamp = stamp or self.clock()
+        try:
+            reservations, settlements = {}, {}
+            for event in self.store.read('costs.jsonl'):
+                if event['type'] == 'reserve':
+                    reservations[event['id']] = event
+                elif event['type'] == 'settle':
+                    settlements[event['id']] = event
+            totals = {}
+            for key, event in reservations.items():
+                if event['period'][:10] != stamp[:10] or key not in settlements:
+                    continue
+                amount, count = totals.get(event.get('model', '?'), (Decimal(0), 0))
+                totals[event.get('model', '?')] = (amount + Decimal(settlements[key]['amount']), count + 1)
+        except (KeyError, ValueError, TypeError, ArithmeticError) as exc:
+            raise UserError('花费账本无法核对，已停止；请保留 data 文件夹。') from exc
+        if not totals:
+            return ''
+        return '今天按模型：' + '；'.join(f'{model} ¥{amount:.4f}（{count} 次）'
+                                        for model, (amount, count) in sorted(totals.items()))
 
 
 def memory_mode(memory):
@@ -1122,8 +1170,10 @@ class ChatOutput(str):
 
 class Chat:
     def __init__(self, cfg, store, budget, model, memory=None, tools=None, approval=input, output=print,
-                 voice=None, runtime_monitor=None):
+                 voice=None, runtime_monitor=None, background_model=None):
         self.cfg, self.store, self.budget, self.model = cfg, store, budget, model
+        self.pending_model = None
+        self.model_lock = threading.Lock()
         self.path = f'{cfg.id}/chat.jsonl'
         self.session_path = store.root / cfg.id / 'chat-session.json'
         self.history, self.rounds = self.recent()
@@ -1200,7 +1250,7 @@ class Chat:
         if notes_config.get('enabled') is True:
             from short_term_notes import ShortTermNotes
             self.short_term_notes = ShortTermNotes(
-                cfg, store, budget, model, self.path, self.session_path)
+                background_cfg(cfg), store, budget, background_model or model, self.path, self.session_path)
 
     def start_short_term_notes_scheduler(self):
         if self.short_term_notes:
@@ -1796,7 +1846,23 @@ class Chat:
         except (OSError, UserError):
             pass
 
+    def switch_model(self, name, provider):
+        """Ticket 134: Lan picked another model for Peter; it answers from his next request on."""
+        with self.model_lock:
+            self.pending_model = (name, dict(provider))
+
+    def _apply_pending_model(self):
+        with self.model_lock:
+            pending, self.pending_model = self.pending_model, None
+        if pending:
+            # Same dict object everywhere (model calls, ledger, memory), so update it in place.
+            name, provider = pending
+            self.cfg.provider.clear()
+            self.cfg.provider.update(provider)
+            self.cfg.provider_name = name
+
     def send(self, text, *, autonomy=False, **kwargs):
+        self._apply_pending_model()
         # Ticket 133: background requests (wakes, glances, Codex reminders) may use a larger
         # input window than ordinary chat; chat keeps the provider limit and its cost.
         limit = (self.cfg.autonomy or {}).get('max_input_tokens') if autonomy else None
@@ -2496,24 +2562,42 @@ class Chat:
         return final, summaries
 
 
-def make_model(root, cfg):
+def make_model(root, cfg, provider=None):
+    """Return (clients, call). Without `provider` every call uses cfg.provider as it is at that moment,
+    so a model Lan switches to on the settings page answers from the next request (ticket 134)."""
     from dotenv import dotenv_values
     from openai import OpenAI
-    # No environment fallback or interpolation: key comes only from this file.
-    values = dotenv_values(Path(root) / '.env', interpolate=False, encoding='utf-8-sig')
-    key = values.get(cfg.provider['api_key_env'])
-    if not key or not key.strip():
-        raise UserError('本机 .env 缺少所选接口的 API Key，请按 README 填写。')
-    client = OpenAI(api_key=key, base_url=cfg.provider['base_url'], max_retries=0, timeout=60)
+    clients = {}
+    lock = threading.Lock()
+
+    def current():
+        return provider if provider is not None else cfg.provider
+
+    def client_for(p):
+        # No environment fallback or interpolation: key comes only from this file.
+        values = dotenv_values(Path(root) / '.env', interpolate=False, encoding='utf-8-sig')
+        key = values.get(p['api_key_env'])
+        if not key or not key.strip():
+            raise UserError('本机 .env 缺少所选接口的 API Key，请按 README 填写。')
+        with lock:
+            cache_key = (p['base_url'], key.strip())
+            if cache_key not in clients:
+                clients[cache_key] = OpenAI(api_key=key.strip(), base_url=p['base_url'],
+                                            max_retries=0, timeout=60)
+            return clients[cache_key]
+
+    client_for(current())
 
     def call(messages, *, json_output=False, max_tokens=None, thinking=None, detail=False,
              tools=None, message_output=False):
+        p = current()
+        client = client_for(p)
         extra = {}
-        if (thinking or cfg.provider.get('thinking')) == 'disabled':
+        if (thinking or p.get('thinking')) == 'disabled':
             extra['extra_body'] = {'thinking': {'type': 'disabled'}}
         if json_output:
             extra['response_format'] = {'type': 'json_object'}
-        request = {'model': cfg.provider['model'], 'messages': messages,
+        request = {'model': p['model'], 'messages': messages,
                    'max_tokens': max_tokens or cfg.max_output_tokens, 'stream': False, **extra}
         if tools is not None:
             request['tools'] = tools
@@ -2537,7 +2621,33 @@ def make_model(root, cfg):
         result = (choice.message.content, usage.prompt_tokens, usage.completion_tokens, cached)
         return result + (choice.finish_reason,) if detail else result
 
-    return client, call
+    return ModelClients(clients, lock), call
+
+
+class ModelClients:
+    """Closes every OpenAI client made for the models used during this run."""
+
+    def __init__(self, clients, lock):
+        self.clients, self.lock = clients, lock
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        with self.lock:
+            for client in self.clients.values():
+                client.close()
+            self.clients.clear()
+        return False
+
+    def close(self):
+        self.__exit__(None, None, None)
+
+
+def background_cfg(cfg):
+    """Ticket 134: the configuration Ombre tagging and short-term notes are priced and called with."""
+    background = getattr(cfg, 'background_provider', None)
+    return cfg if not background else replace(cfg, provider=background)
 
 
 def make_voice(root, cfg, store, budget):
@@ -2660,7 +2770,8 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead, activity=N
                                      for row in reversed(rows)) or '还没有自主活动记录。')
             elif text == '/cost':
                 output(chat.budget.display(character=chat.cfg.id))
-                output(chat.budget.cache_display())
+                by_model = chat.budget.model_display()
+                output(chat.budget.cache_display() + ('\n' + by_model if by_model else ''))
             elif text == '/self':
                 if chat.last_self is None:
                     output('（尚未发送消息：这是当前说明的预览，发送前会刷新。）')
@@ -2724,13 +2835,16 @@ def main():
             budget.autonomy_daily = cfg.autonomy['daily_budget_cny']
             if cfg.glance:
                 budget.glance_daily = cfg.glance['daily_budget_cny']
+            budget.daily, budget.monthly = cfg.models.limits()
             if args.cost:
                 print(budget.display(character=cfg.id))
                 print(budget.cache_display())
+                print(budget.model_display() or '今天按模型：还没有花费。')
                 return 0
             client, model = make_model(ROOT, cfg)
+            background_client, background_model = make_model(ROOT, cfg, provider=cfg.background_provider)
             voice = make_voice(ROOT, cfg, store, budget)
-            with client:
+            with client, background_client:
                 from tools_agent import FilesystemTools
                 from web_tools import WebTools
                 with FilesystemTools(ROOT, cfg, store, web_factory=WebTools) as tools:
@@ -2741,11 +2855,13 @@ def main():
                                 from memory_native import NativeMemoryTools, ToolSet
                                 tools = ToolSet(tools, NativeMemoryTools(
                                     memory, cfg.tools['max_result_bytes']))
-                                run_chat(Chat(cfg, store, budget, model, memory, tools, voice=voice))
+                                run_chat(Chat(cfg, store, budget, model, memory, tools, voice=voice,
+                                              background_model=background_model))
                             for notice in memory.notices():
                                 print(notice)
                     else:
-                        run_chat(Chat(cfg, store, budget, model, tools=tools, voice=voice))
+                        run_chat(Chat(cfg, store, budget, model, tools=tools, voice=voice,
+                                      background_model=background_model))
         return 0
     except UserError as exc:
         print(str(exc))
