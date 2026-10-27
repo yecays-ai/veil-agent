@@ -98,6 +98,12 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
       const entry = { id, filename, type: 'audio/wav', bytes: Buffer.from(body.data, 'base64'),
         eventMedia: { id, filename, mime: 'audio/wav', kind: 'voice', transcript: '' } };
       media.set(filename, entry); json(res, { media: entry.eventMedia }, 202);
+    } else if (url.pathname === '/api/message/action') {
+      const body = await readBody(req);
+      if (body.action === 'memory') json(res, {items:['fictional-memory']});
+      else json(res, {error:'unsupported fictional action'}, 400);
+    } else if (url.pathname === '/api/memory/read') {
+      json(res, {version:'1',next_offset:null,text:'---\ncreated: 2026-10-26T12:30:00+08:00\ntags:\n- games\n- laughter\n---\nA fictional shared memory.'});
     } else if (url.pathname === '/api/activity') {
       json(res, { enabled: false });
     } else {
@@ -150,6 +156,15 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   await wait(() => chat.webContents.executeJavaScript('!!document.querySelector(".msg-voice audio")'), 'saved voice reply did not render');
   await wait(() => chat.webContents.executeJavaScript('!document.querySelector("#send").disabled'), 'send disabled');
 
+  await chat.webContents.executeJavaScript(`document.querySelector('[data-message-id="fictional-history"]').dispatchEvent(new MouseEvent('contextmenu',{bubbles:true}))`);
+  assert.equal(await chat.webContents.executeJavaScript('!!document.querySelector(".chat-action-selected")'), true, 'selected message should float above the backdrop');
+  await chat.webContents.executeJavaScript(`Array.from(document.querySelectorAll('.chat-action-item')).find(x=>x.textContent.includes('Memory')).click()`);
+  await wait(() => chat.webContents.executeJavaScript('document.querySelector(".message-memory-entry")?.textContent.includes("A fictional shared memory.")'), 'memory card did not load');
+  assert.equal(await chat.webContents.executeJavaScript('document.querySelector(".message-memory-entry").textContent.includes("fictional-memory")'), false, 'memory ID must not be displayed');
+  await chat.webContents.executeJavaScript(`document.querySelector('.message-memory-dialog button').click();document.querySelector('[data-message-id="fictional-history"]').dispatchEvent(new MouseEvent('contextmenu',{bubbles:true}));Array.from(document.querySelectorAll('.chat-action-item')).find(x=>x.textContent.includes('Quote')).click()`);
+  assert.equal(await chat.webContents.executeJavaScript('!document.querySelector("#quote-bar").hidden && document.querySelector("#quote-text").textContent === "Fictional saved history"'), true, 'quote should show the selected message');
+  await chat.webContents.executeJavaScript('document.querySelector("#quote-cancel").click()');
+
   await chat.webContents.executeJavaScript('document.querySelector("#box").value="fictional hello"; document.querySelector("#send").click()');
   await wait(() => sends === 1, 'text message not delivered');
   await wait(() => chat.webContents.executeJavaScript('!!document.querySelector(".approval button:not(.yes)")'), 'approval missing');
@@ -173,10 +188,12 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
     Object.defineProperty(navigator,'mediaDevices',{configurable:true,value:{getUserMedia:async()=>({getTracks:()=>[{stop(){}}]})}});
     class FixtureRecorder{constructor(){this.mimeType='audio/wav';this.state='inactive'}start(){this.state='recording'}stop(){this.state='inactive';this.ondataavailable({data:new Blob([bytes],{type:'audio/wav'})});this.onstop()}}
     FixtureRecorder.isTypeSupported=()=>false;Object.defineProperty(window,'MediaRecorder',{configurable:true,value:FixtureRecorder});
-    document.querySelector('#voice-hold').dispatchEvent(new PointerEvent('pointerdown',{button:0,bubbles:true}));
+    document.querySelector('#voice-hold').click();
   })()`);
   await wait(() => chat.webContents.executeJavaScript('document.querySelector("#voice-hold").dataset.recording === "true"'), 'voice recording did not start');
-  await chat.webContents.executeJavaScript(`document.querySelector('#voice-hold').dispatchEvent(new PointerEvent('pointerup',{button:0,bubbles:true}))`);
+  await chat.webContents.executeJavaScript(`document.querySelector('#voice-hold').dispatchEvent(new PointerEvent('pointerleave',{bubbles:true}))`);
+  assert.equal(await chat.webContents.executeJavaScript('document.querySelector("#voice-hold").dataset.recording'), 'true', 'moving the pointer away must not cancel recording');
+  await chat.webContents.executeJavaScript(`document.querySelector('#voice-hold').click()`);
   await wait(() => voices === 1 && sends === 3, 'voice upload and transcript message were not delivered');
   const userVoiceText='.msg[data-media-id="fictional-voice"] .voice-transcript';
   const userVoiceWrap='.msg[data-media-id="fictional-voice"] .msg-voice';
@@ -191,9 +208,9 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   assert.equal(await chat.webContents.executeJavaScript(`document.querySelector('${userVoiceText}').hidden`),false);
 
   failVoiceUploadOnce = true;
-  await chat.webContents.executeJavaScript(`document.querySelector('#voice-hold').dispatchEvent(new PointerEvent('pointerdown',{button:0,bubbles:true}))`);
+  await chat.webContents.executeJavaScript(`document.querySelector('#voice-hold').click()`);
   await wait(() => chat.webContents.executeJavaScript('document.querySelector("#voice-hold").dataset.recording === "true"'), 'retry voice recording did not start');
-  await chat.webContents.executeJavaScript(`document.querySelector('#voice-hold').dispatchEvent(new PointerEvent('pointerup',{button:0,bubbles:true}))`);
+  await chat.webContents.executeJavaScript(`document.querySelector('#voice-hold').click()`);
   await wait(() => chat.webContents.executeJavaScript('!!document.querySelector(".msg[data-media-id^=local-] .voice-retry")'), 'failed voice upload was not retained for retry');
   await chat.webContents.executeJavaScript('document.querySelector(".msg[data-media-id^=local-] .voice-retry").click()');
   await wait(() => voices === 2 && sends === 4, 'retained voice was not delivered after retry');

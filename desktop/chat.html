@@ -79,16 +79,17 @@
   </section>
   <footer id="composer-footer">
     <div id="selection-bar" class="selection-bar" hidden><span id="selection-count">已选 0 条</span><div><button id="selection-all" type="button">全选</button><button id="selection-delete" type="button" class="danger">删除</button><button id="selection-cancel" type="button">取消</button></div></div>
+    <div id="quote-bar" class="chat-quote-bar" hidden><div class="chat-quote-preview"><strong id="quote-author"></strong><span id="quote-text"></span></div><button id="quote-cancel" type="button" aria-label="取消引用">×</button></div>
     <div id="image-preview" class="image-preview" hidden></div>
     <div class="composer" id="composer">
       <div class="voice-tools">
-        <button id="speech-toggle" type="button" aria-label="开始语音识别" aria-pressed="false" title="语音听写：录音发送到 SenseVoice 转写"><span data-lucide="mic"></span></button>
+        <button id="speech-toggle" type="button" aria-label="开始语音识别" aria-pressed="false" title="语音转文字">T</button>
         <input id="image-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
         <button id="image-button" type="button" aria-label="添加图片" title="添加图片"><span data-lucide="image-plus"></span></button>
-        <button id="voice-hold" type="button" aria-label="按住说话"><span data-lucide="mic"></span><span>按住说话</span></button>
       </div>
       <span id="speech-status" role="status" aria-live="polite">点击麦克风开始录音；再次点击后用 SenseVoice 转成文字</span>
-      <textarea id="box" rows="1" placeholder="和 Peter 说点什么…"></textarea>
+      <div class="chat-input-shell"><textarea id="box" rows="1" placeholder="和 Peter 说点什么…"></textarea><button id="voice-hold" type="button" aria-label="点击开始录音" aria-pressed="false" title="点击开始录音"><span data-lucide="mic"></span></button></div>
+      <span id="voice-record-status" class="voice-record-status" role="status" aria-live="polite" hidden></span>
       <button id="send" aria-label="发送"><span data-lucide="arrow-up"></span></button>
     </div>
   </footer>

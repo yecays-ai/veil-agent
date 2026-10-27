@@ -4,10 +4,12 @@
 
 ## 当前目标与现状
 
+- 工单 131「消息操作和回忆界面」：分支 `ticket/131-message-ui`。右键浮起选中消息并虚化背景，使用 Lucide 官方图标；引用有可取消预览和消息内引用块；回复关联记忆以横向卡片显示时间、最多三个标签及正文，最多展示五条。输入区以 T 听写、官方图片图标和内嵌麦克风操作，点击开始、再次点击发送语音。桌面自动测试 10 项通过、虚构数据 Windows Electron smoke 通过；真实 Windows/Lan 体验待验收。验收见 `docs/tickets/131-message-ui.md`。
+
 - 工单 130「Codex 提醒不再召回长期记忆」：分支 `ticket/130-codex-no-recall`，Claude 实现，Lan 2026-10-27 同意。`codex_watch_mode` 时跳过 `memory.context`。回归测试在 `tests/test_background.py`；全量测试与 main 相同（本机 13 项环境相关失败两边一致）。下一个工单号 131。
 - 工单 129「能力记录按本地时间显示」：分支 `ticket/129-capability-local-time`，Claude 实现。`capabilities.json` 仍存 UTC，交给 Peter 时转成本机时间（`capability_state.local_stamp`）。起因：10-26 他把 UTC 时间当本地时间读，以为新上线的瞄一眼是旧能力。新增 `tests/test_capability_local_time.py`；全量测试与 main 相同（本机 13 项环境相关失败两边一致）。下一个工单号 130。
-- 工单 128「新对话的开场记忆」：分支 `ticket/128-opening-memory`。新对话首轮使用一次 Ombre 开场记忆；连续聊天与已有对话重启不重复注入，仍按话题自动搜索。自主活动不消费新对话开场。记忆、聊天和短期便签保留；审查、CI 和 Lan 的 Windows 体验待核实。验收见 `docs/tickets/128-opening-memory.md`。
-- 工单 127「QQ 消息来源与背景匹配」：分支 `ticket/127-qq-context`。QQ 消息使用简短的 `[QQ 发送]` 标记；旧聊天只在背景匹配时转换来源标记，原记录保留。复用既有 QQ 和背景匹配流程。新增针对背景误触发及 QQ 分类的测试，本地 QQ 与背景测试各 16 项通过；PR 审查、CI 与 Lan Windows 体验待核实。验收见 `docs/tickets/127-qq-context.md`。
+- 工单 128「新对话的开场记忆」：PR #175 已合并（dd4e2c3），该 PR 当前提交的 Tests 与 Dependency security 通过；Lan 的 Windows 体验待验收。验收见 `docs/tickets/128-opening-memory.md`。
+- 工单 127「QQ 消息来源与背景匹配」：PR #174 已合并（c042ed7），该 PR 当前提交的 Tests 与 Dependency security 通过；Lan 的 Windows 体验待验收。验收见 `docs/tickets/127-qq-context.md`。
 
 - 工单 126「发完消息不再重复说一遍」：分支 `ticket/126-no-repeat-after-send`，Claude 实现。122 之后 Peter 用 send_message 发完几条，常再写一段换个说法的总结，按 122 的规则会多显示/多发一条（Lan 在 QQ 上看到每段话后面都重复一遍）。现在：发完消息后紧接着写的文字不显示、不发送、不存（以最后一条已发消息为回复）；如果发消息之后他又用了别的工具（如先说「先看一下」再读文件），之后写的文字照常作为新回复。send_message 说明同步改为「紧接着写的文字不会显示」。验收：update.bat 后在 QQ 和桌面各聊 5 分钟，不再出现一组消息后跟一条重述。下一个工单号 127。
 - 工单 125「实时上下文窗口」：分支 `ticket/125-live-context`，Claude 实现。新增「上下文」页（可像其他页一样拖出成独立小窗，透明度单独可调）：上半块「聊天时活动」显示最近 10 次请求各带了多少原文轮数、背景段、长期记忆、短期便签、估算 tokens 和这次用了哪些工具（来自 `context-log.jsonl` 与 `tools.jsonl`，按 request_id 对上）；下半块「短期便签」显示进行中的便签（含约何时淡出）和 3 小时内已完成/已过期的，以及下次整理时间。数据随 `/api/events` 下发，只读，不触发提取、不改便签。需要运行 update.bat 重新打包 exe。验收：聊一句后上半块出现这次请求；有便签后下半块出现；拖出「上下文」标签成为小窗，合并回去正常。下一个工单号 126。
