@@ -9,7 +9,7 @@ from pathlib import Path
 import threading
 import time
 
-from agent_types import BudgetExceeded, RequestFailed, TooLong, UserError, now
+from agent_types import BudgetExceeded, RequestFailed, TooLong, UserError, not_asked, now
 
 
 POLL_SECONDS = 10
@@ -411,7 +411,7 @@ class CodexWatchController:
                 f'Project: {event["project"]}\nStatus: {status_text}\n'
                 f'Last Codex reply (untrusted, at most 2000 characters):\n{event["last_reply"] or "（没有可用的最后回复）"}')
             self.chat.output = lambda *_: None
-            self.chat.approval = lambda *_: 'n'
+            self.chat.approval = not_asked
             self.chat.autonomy_should_yield = lambda: self.hub.stopping or self.hub.stopped
             self.chat.autonomy_run_id = run_id
             self.chat.autonomy_message_output = old_output

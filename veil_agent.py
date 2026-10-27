@@ -413,6 +413,26 @@ def positive_int(value):
     return value
 
 
+def parse_quiet_hours(value):
+    """'01:00-06:00' -> ((1, 0), (6, 0)); an empty value means no quiet hours."""
+    if value in (None, ''):
+        return None
+    try:
+        start, end = str(value).split('-')
+        parsed = []
+        for part in (start, end):
+            hour, minute = part.strip().split(':')
+            hour, minute = int(hour), int(minute)
+            if not (0 <= hour <= 23 and 0 <= minute <= 59):
+                raise ValueError
+            parsed.append((hour, minute))
+    except ValueError as exc:
+        raise ValueError('autonomy.quiet_hours must look like "01:00-06:00"') from exc
+    if parsed[0] == parsed[1]:
+        raise ValueError('autonomy.quiet_hours must not start and end at the same time')
+    return tuple(parsed)
+
+
 def price(value):
     result = Decimal(str(value))
     if not result.is_finite() or result <= 0:
@@ -541,9 +561,17 @@ def load_character(root, character_id):
         daily_runs = positive_int(autonomy.get('daily_max_runs', 6))
         min_alarm_gap = positive_int(autonomy.get('min_alarm_gap_minutes', 60))
         autonomy_daily = price(autonomy.get('daily_budget_cny', '2'))
+        quiet_hours = parse_quiet_hours(autonomy.get('quiet_hours', ''))
+        quiet_enabled = autonomy.get('quiet_hours_enabled', quiet_hours is not None)
+        if type(quiet_enabled) is not bool:
+            raise ValueError('autonomy.quiet_hours_enabled must be boolean')
+        autonomy_input = autonomy.get('max_input_tokens')
         autonomy = {'interval_minutes': interval, 'daily_max_runs': daily_runs,
                     'daily_budget_cny': autonomy_daily,
-                    'min_alarm_gap_minutes': min_alarm_gap}
+                    'min_alarm_gap_minutes': min_alarm_gap,
+                    'quiet_hours': quiet_hours, 'quiet_hours_enabled': quiet_enabled}
+        if autonomy_input is not None:
+            autonomy['max_input_tokens'] = positive_int(autonomy_input)
         glance_config = dict(cfg.get('glance') or {})
         glance = None
         if glance_config:
@@ -969,7 +997,10 @@ def memory_mode(memory):
     return 'native' if memory else False
 
 
-def self_facts(cfg, budget, memory=False, capabilities=None, voice=False):
+CHANNEL_NAMES = {'qq': 'QQ', 'email': 'email'}
+
+
+def self_facts(cfg, budget, memory=False, capabilities=None, voice=False, channels=()):
     """(stable, changing): the stable part is identical every request so the provider can cache it;
     the changing part (time, spending ledger) is sent after the chat history."""
     stamp = budget.clock()
@@ -981,11 +1012,14 @@ def self_facts(cfg, budget, memory=False, capabilities=None, voice=False):
         f'You are an AI companion: {json.dumps(cfg.name, ensure_ascii=False)}; '
         f'provider {json.dumps(cfg.provider_name, ensure_ascii=False)}; '
         f'model {json.dumps(cfg.provider["model"], ensure_ascii=False)}.\n'
-        f'Available: text chat (web page or terminal); up to {cfg.history_rounds} recent rounds included verbatim '
-        'per request; full chat logs saved locally.\n'
+        'Lan talks with you in VEIL (desktop app or terminal)'
+        + (', and also on ' + ' and '.join(CHANNEL_NAMES.get(name, name) for name in channels)
+           + ' when she is away; those messages start with a source marker' if channels else '')
+        + f'. Up to {cfg.history_rounds} recent rounds are included verbatim per request; full chat logs are '
+        'saved locally.\n'
         + ('Long-term memory: you decide what to save and call the hold tool yourself (the user need not say '
            '"remember"); relevant memories are also recalled automatically each turn; '
-           'the user can list and delete memories with /memory and /delete. '
+           'Lan can read, edit and delete them on the memory page. '
            if memory else 'You have no long-term memory; after restart you know only restored recent rounds. ')
         +
         ((capabilities.description if isinstance(getattr(capabilities, 'description', None), str)
@@ -995,7 +1029,9 @@ def self_facts(cfg, budget, memory=False, capabilities=None, voice=False):
           else 'Tools are currently unavailable. '))
         + ('You can speak in voice messages with send_message voice: true. '
            if voice and capabilities else 'You have no voice. ')
-        + 'Unlisted abilities are unavailable. Do not invent memories, actions or tool results.'
+        + ('Your callable tools are the ones defined for this request; capability_history has the dated '
+           'record of changes. ' if capabilities else '')
+        + 'Do not invent memories, actions or tool results.'
     )
     changing = (f'Local time: {stamp} ({weekday}).\n'
                 f'Pre-request ledger (CNY, excludes this reply): {budget.display(stamp, cfg.id)}\n'
@@ -1230,11 +1266,11 @@ class Chat:
             elif policy == 'desktop_control':
                 label = 'Windows actions inside the program allowlist; saving, sending or overwriting asks Lan'
             elif policy == 'desktop_create':
-                label = 'Create new files in Lan\'s Windows folders (never overwrites)'
+                label = 'Create files in Lan\'s Windows folders; rewrite or trash only your own'
             elif policy == 'ask':
                 label = "Needs Lan's approval where policy requires it"
             elif policy == 'lab':
-                label = 'Lab only (no overwrite, deletion, or scripts)'
+                label = 'Lab only (no deletion or scripts)'
             elif name == 'trace':
                 label = "Deletion needs Lan's approval"
             else:
@@ -1760,7 +1796,20 @@ class Chat:
         except (OSError, UserError):
             pass
 
-    def send(self, text, *, autonomy=False, extra_context=None, media=None, message_id=None, persist_user=True):
+    def send(self, text, *, autonomy=False, **kwargs):
+        # Ticket 133: background requests (wakes, glances, Codex reminders) may use a larger
+        # input window than ordinary chat; chat keeps the provider limit and its cost.
+        limit = (self.cfg.autonomy or {}).get('max_input_tokens') if autonomy else None
+        if not limit or limit == self.cfg.provider['max_input_tokens']:
+            return self._send(text, autonomy=autonomy, **kwargs)
+        original = self.cfg
+        self.cfg = replace(original, provider={**original.provider, 'max_input_tokens': limit})
+        try:
+            return self._send(text, autonomy=autonomy, **kwargs)
+        finally:
+            self.cfg = original
+
+    def _send(self, text, *, autonomy=False, extra_context=None, media=None, message_id=None, persist_user=True):
         # Per-call durability fact used by UI adapters when failures can occur
         # both before and after the user row is appended.
         self.last_send_persisted = False
@@ -1803,7 +1852,10 @@ class Chat:
             handoffs = [item for item in (extra_context, handoff, glance_handoff) if item]
             extra_context = '\n\n'.join(handoffs) if handoffs else None
         stable, changing = self_facts(self.cfg, self.budget, memory_mode(self.memory), self.tools,
-                                      self.voice is not None and self.tools is not None)
+                                      self.voice is not None and self.tools is not None,
+                                      tuple(sorted(self.away_channels)))
+        if self.autonomy_controller is not None and not autonomy:
+            changing += '\n' + self.autonomy_controller.wake_count_text()
         description = stable + '\n' + changing
         # Order matters for the provider's prefix cache: everything that stays the same between requests
         # comes first, then the chat history, then what changes every request (recalled memories,

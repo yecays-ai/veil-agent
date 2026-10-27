@@ -4,6 +4,7 @@
 
 ## 当前目标与现状
 
+- 工单 133「自主活动和能力说明一次整理」：分支 `ticket/133-autonomy-cleanup`，PR #180，Claude 实现，Lan 2026-10-27 确认并要求合成一个 PR。六部分：醒来说明和聊天账本显示「今天已醒 n/12 次」、约的醒来落空时下次告诉他原因；夜间 01:00–06:00 安静时段（活动页可开关，默认开）；醒来/瞄一眼/Codex 提醒时需要批准的操作返回「不会问 Lan」而不是「Lan 没同意」；每轮固定事实改为真实渠道和记忆页；Peter 可改写自己的实验室文件和自己在桌面新建的文件（程序留旧版本）、挪进 `lab/trash/`，不能删除；醒来请求输入上限 65536（聊天仍 32768），自主预算 ¥3/日。新增 `tests/test_autonomy_cleanup.py`（12 项）；全量测试与 main 相同（本机 6 项环境相关失败两边一致），桌面测试 10 项通过。Windows 体验待验收（update.bat 会重新打包 exe），验收见 `docs/tickets/133-autonomy-and-capability-cleanup.md`。下一个工单号 134。
 - 工单 132「看得懂的记忆页」：分支 `ticket/132-readable-memory-page`，Claude 实现，Lan 2026-10-27 要求。记忆页一次读出全部记忆（`/api/memory/panel`），最近的在前、按天分组，四个分组按钮（只合并显示，不改 Ombre 分类），可编辑标题/为什么记/内容（走 trace，旧版本留档）和删除（点两次，同 /delete）；标签含「惊喜」的记忆不发正文。新增 `tests/test_memory_panel.py` 和 web 接口测试；全量测试与 main 相同（本机 13 项环境相关失败两边一致），桌面测试 10 项通过。验收见 `docs/tickets/132-readable-memory-page.md`。下一个工单号 133。
 - 工单 131「消息操作和回忆界面」：分支 `ticket/131-message-ui`，PR #178。右键浮起选中消息并虚化背景，使用 Lucide 官方图标；引用有可取消预览和消息内引用块；回复关联记忆以横向卡片显示时间、最多三个标签及正文，最多展示五条。输入区以 T 听写、官方图片图标和内嵌麦克风操作，点击开始、再次点击发送语音。修复发送期间修改草稿会丢失引用的问题。桌面自动测试 10 项和虚构数据 Windows Electron smoke 通过；真实 Windows/Lan 体验待验收。验收见 `docs/tickets/131-message-ui.md`。
 

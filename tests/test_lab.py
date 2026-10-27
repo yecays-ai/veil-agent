@@ -123,11 +123,16 @@ persistent_append_file = "growth-journal.md"
         self.no_approval.assert_not_called()
         self.worker.call.assert_not_called()
 
-    def test_no_overwrite_including_case_alias_and_create_race(self):
+    def test_rewrite_keeps_every_previous_version_and_create_race_is_refused(self):
         self.assertEqual(self.call('write_file', 'lab/V1.md', 'original')[1], '成功')
-        for name in ('lab/V1.md', 'lab/v1.md'):
-            self.assertEqual(self.call('write_file', name, 'replacement')[1], '被拒绝')
-        self.assertEqual((self.lab / 'V1.md').read_bytes(), b'original')
+        for name, text in (('lab/V1.md', 'second'), ('lab/v1.md', 'third')):
+            result, state, _ = self.call('write_file', name, text)
+            self.assertEqual(state, '成功', result)
+            self.assertIn('kept the previous version', result)
+        self.assertEqual([p.name for p in self.lab.iterdir()], ['V1.md'])
+        self.assertEqual((self.lab / 'V1.md').read_bytes(), b'third')
+        versions = sorted((self.root / 'data/test/own-work-versions/lab').iterdir())
+        self.assertEqual([p.read_bytes() for p in versions], [b'original', b'second'])
         real_open = Path.open
         def racing_open(path, mode='r', *args, **kwargs):
             if path.name == 'race.md' and mode == 'xb':
@@ -409,7 +414,8 @@ persistent_append_file = "growth-journal.md"
         self.assertIn('Your lab folder "lab/" is available', self.tools.capability_event)
         self.tools.consume_capability_event()
         self.assertIsNone(self.open_tools().capability_event)
-        for text in ('lab/research/v1.md', 'plan B', 'fully read', 'head/tail', 'independent', 'script allowlist is empty'):
+        for text in ('lab/research/v1.md', 'rewrite existing files', 'lab/trash/', 'Nothing can be deleted',
+                     'independent', 'scripts cannot run'):
             self.assertIn(text, self.tools.description)
 
     def test_disabled_lab_removes_lab_only_tool_and_free_permissions(self):

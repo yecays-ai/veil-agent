@@ -65,7 +65,9 @@ daily_budget_cny = "2"
             peter = tomllib.load(handle)
         self.assertEqual(peter['autonomy']['interval_minutes'], 90)
         self.assertEqual(peter['autonomy']['daily_max_runs'], 12)
-        self.assertEqual(Decimal(peter['autonomy']['daily_budget_cny']), Decimal('2'))
+        self.assertEqual(Decimal(peter['autonomy']['daily_budget_cny']), Decimal('3'))
+        self.assertEqual(peter['autonomy']['quiet_hours'], '01:00-06:00')
+        self.assertEqual(peter['autonomy']['max_input_tokens'], 65536)
         self.assertEqual(peter['autonomy']['min_alarm_gap_minutes'], 60)
         self.assertEqual(peter['tools']['max_steps'], 20)
 
@@ -137,7 +139,7 @@ daily_budget_cny = "2"
         tools.invoke.assert_called_once()
         name, args, approval = tools.invoke.call_args.args
         self.assertEqual((name, args), ('read_text_file', {'path': 'lab/draft.md'}))
-        self.assertEqual(approval('test'), 'n')
+        self.assertEqual(approval('test'), 'not asked')
         self.assertEqual(model.call_count, 2)
         self.assertEqual([row['tool'] for row in self.store.read('test/tools.jsonl') if row.get('state') != '进行中'],
                          ['send_message', 'read_text_file'])

@@ -59,8 +59,13 @@ max_result_bytes = 8192
 # Four B two wake limits are role configurable; total program budget remains unchanged.
 interval_minutes = 90
 daily_max_runs = 12
-daily_budget_cny = "2"
+daily_budget_cny = "3"
 min_alarm_gap_minutes = 60
+# Ticket 133: no autonomous wakes 01:00-06:00 local time while Lan keeps this on (activity page switch).
+quiet_hours = "01:00-06:00"
+quiet_hours_enabled = true
+# Wakes, glances and Codex reminders may use a larger input window; ordinary chat keeps the provider limit.
+max_input_tokens = 65536
 
 [glance]
 enabled = true

@@ -999,8 +999,10 @@ class FilesystemServerTests(unittest.TestCase):
             read, read_state, _ = manager.invoke('read_text_file', {'path': 'lab/research/v1.md'})
             self.assertEqual(read_state, '成功')
             self.assertEqual(read, 'original\naddition')
+            # Ticket 133: Peter may rewrite his own lab file; the program keeps the previous version.
             self.assertEqual(manager.invoke('write_file',
-                {'path': 'lab/research/v1.md', 'content': 'overwrite'}, no_prompt)[1], '被拒绝')
+                {'path': 'lab/research/v1.md', 'content': 'rewritten'}, no_prompt)[1], '成功')
+            self.assertEqual(manager.invoke('read_text_file', {'path': 'lab/research/v1.md'})[0], 'rewritten')
         self.assertEqual((state, summary), ('成功', '.'))
         self.assertIn('fiction.txt', result)
 
