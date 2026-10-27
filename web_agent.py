@@ -169,6 +169,8 @@ class Hub:
         self.autonomy = None
         self.glance = None
         self.codex_watch = None
+        self.models_view = None       # ticket 134: what the 模型 settings card shows
+        self.background_running = None
         self.capability_record = lambda: None
         self.defer_outputs = False
         self.deferred_outputs = []
@@ -1161,6 +1163,35 @@ class Hub:
                 return False
             return self.autonomy.set_quiet_enabled(enabled)
 
+    def refresh_models(self):
+        """Ticket 134: rebuild the 模型 card's data; called at start and after every change."""
+        models = getattr(getattr(self.chat, 'cfg', None), 'models', None)
+        if models is None:
+            self.models_view = None
+            return None
+        view = models.public()
+        view['background_running'] = self.background_running
+        view['background_restart'] = (self.background_running is not None
+                                      and view['use']['background'] != self.background_running)
+        self.models_view = view
+        return view
+
+    def save_models(self, payload):
+        models = self.chat.cfg.models
+        before = models.chosen('peter')
+        models.save(payload)
+        self.chat.budget.daily, self.chat.budget.monthly = models.limits()
+        after = models.chosen('peter')
+        if after[0] != before[0] or after[2] != before[2]:
+            self.chat.switch_model(after[1], after[2])
+        return self.refresh_models()
+
+    def use_model(self, role, model_id):
+        model_id, name, provider = self.chat.cfg.models.use(role, model_id)
+        if role == 'peter':
+            self.chat.switch_model(name, provider)
+        return self.refresh_models()
+
     def set_codex_watch(self, enabled):
         with self.cond:
             if self.stopping or self.stopped or self.codex_watch is None:
@@ -1372,7 +1403,8 @@ class Hub:
                     'tool_activity': tool_activity,
                     'live_context': live_context,
                     'memory_panel_url': self.memory_url,
-                    'memory_available': self.memory_tools is not None, **autonomy, **glance, **codex_watch}
+                    'memory_available': self.memory_tools is not None,
+                    'models': self.models_view, **autonomy, **glance, **codex_watch}
 
 
 def make_handler(hub, token):
@@ -1811,6 +1843,23 @@ def make_handler(hub, token):
                             self._send(200, {'ok': True, 'enabled': hub.glance.enabled()})
                     except UserError as exc:
                         self._send(500, {'error': str(exc)})
+            elif url.path in ('/api/models', '/api/models/use'):
+                from model_settings import SettingsError
+                try:
+                    with hub.cond:
+                        if hub.stopping or hub.stopped or hub.chat is None or hub.chat.cfg.models is None:
+                            self._send(409, {'error': 'unavailable'})
+                            return
+                    if url.path == '/api/models':
+                        view = hub.save_models(body)
+                    else:
+                        view = hub.use_model(body.get('role'), body.get('model'))
+                except SettingsError as exc:
+                    self._send(400, {'ok': False, 'message': str(exc)})
+                except OSError:
+                    self._send(500, {'ok': False, 'message': '设置文件写不进去，请检查磁盘。'})
+                else:
+                    self._send(200, {'ok': True, 'models': view})
             elif url.path == '/api/quiet-hours':
                 enabled = body.get('enabled')
                 if not isinstance(enabled, bool):
@@ -1857,6 +1906,9 @@ def start_server(hub, token, port):
 
 def serve_chat(chat, hub, channels=()):
     hub.chat = chat
+    if getattr(chat.cfg, 'models', None) is not None:
+        hub.background_running = chat.cfg.models.chosen('background')[0]
+        hub.refresh_models()
     chat.screen_pop_handler = hub.request_screen_pop
     files = getattr(chat.tools, 'files', None) if chat.tools else None
     files = files or chat.tools
@@ -2021,7 +2073,9 @@ def main(argv=None):
             budget.autonomy_daily = cfg.autonomy['daily_budget_cny']
             if cfg.glance:
                 budget.glance_daily = cfg.glance['daily_budget_cny']
+            budget.daily, budget.monthly = cfg.models.limits()
             client, model = make_model(ROOT, cfg)
+            background_client, background_model = make_model(ROOT, cfg, provider=cfg.background_provider)
             voice = make_voice(ROOT, cfg, store, budget)
             from email_channel import EmailChannel
             from qq_channel import QQChannel
@@ -2041,7 +2095,7 @@ def main(argv=None):
             save_endpoint(endpoint_path, port, token)
             failed = False
             try:
-                with client:
+                with client, background_client:
                     from tools_agent import FilesystemTools
                     from web_tools import WebTools
                     with FilesystemTools(ROOT, cfg, store, web_factory=WebTools) as tools:
@@ -2055,13 +2109,15 @@ def main(argv=None):
                                     hub.memory_tools = tools.native
                                     serve_chat(Chat(cfg, store, budget, model, memory, tools,
                                                     approval=hub.approval, output=hub.output,
-                                                    voice=voice, runtime_monitor=runtime_monitor), hub, channels)
+                                                    voice=voice, runtime_monitor=runtime_monitor,
+                                                    background_model=background_model), hub, channels)
                                 for notice in memory.notices():
                                     hub.output(notice)
                         else:
                             serve_chat(Chat(cfg, store, budget, model, tools=tools,
                                             approval=hub.approval, output=hub.output,
-                                            voice=voice, runtime_monitor=runtime_monitor), hub, channels)
+                                            voice=voice, runtime_monitor=runtime_monitor,
+                                            background_model=background_model), hub, channels)
             except UserError as exc:
                 hub.push('error', str(exc))
                 save_startup_error(error_path, str(exc))

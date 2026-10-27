@@ -23,6 +23,11 @@ class ResidentError(RuntimeError):
         super().__init__(stage)
 
 
+def _model_provider(cfg):
+    """Ticket 134: Ombre's tagging uses the background model Lan picked, not Peter's chat model."""
+    return getattr(cfg, 'background_provider', None) or cfg.provider
+
+
 def resident_config(cfg, vault, token):
     settings = cfg.memory
     config = {
@@ -34,7 +39,7 @@ def resident_config(cfg, vault, token):
         'ollama': {'enabled': False, 'auto_start': False},
         'update': {'allow_pip_install': False},
         'hooks': {'token': '', 'allow_public': False},
-        'dehydration': ({'model': cfg.provider['model'], 'base_url': cfg.provider['base_url'],
+        'dehydration': ({'model': _model_provider(cfg)['model'], 'base_url': _model_provider(cfg)['base_url'],
                          'api_key': '', 'max_tokens': 1024, 'temperature': 0.1,
                          'timeout_seconds': 30} if settings.get('ombre_model', True) else {'api_key': ''}),
         'embedding': {'enabled': bool(settings.get('embedding_enabled', True)),
@@ -43,7 +48,7 @@ def resident_config(cfg, vault, token):
                       'base_url': settings['base_url'], 'dim': int(settings.get('dimensions', 1024)),
                       'timeout_seconds': 20},
     }
-    if 'deepseek' in cfg.provider['base_url'] and settings.get('ombre_model', True):
+    if 'deepseek' in _model_provider(cfg)['base_url'] and settings.get('ombre_model', True):
         config['dehydration']['extra_body'] = {'thinking': {'type': 'disabled'}}
     return config
 
@@ -222,7 +227,7 @@ def _environment(root, cfg, vault, private, config_path, token, port, api_key_ov
     if cfg.memory.get('ombre_model', True):
         env['OMBRE_COMPRESS_API_KEY'] = (api_key_overrides['OMBRE_COMPRESS_API_KEY']
             if 'OMBRE_COMPRESS_API_KEY' in api_key_overrides
-            else raw.get(cfg.provider['api_key_env']) or '').strip()
+            else raw.get(_model_provider(cfg)['api_key_env']) or '').strip()
     else:
         env['OMBRE_COMPRESS_API_KEY'] = ''
     return env
