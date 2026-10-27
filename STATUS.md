@@ -4,6 +4,7 @@
 
 ## 当前目标与现状
 
+- 工单 130「Codex 提醒不再召回长期记忆」：分支 `ticket/130-codex-no-recall`，Claude 实现，Lan 2026-10-27 同意。`codex_watch_mode` 时跳过 `memory.context`。回归测试在 `tests/test_background.py`；全量测试与 main 相同（本机 13 项环境相关失败两边一致）。下一个工单号 131。
 - 工单 129「能力记录按本地时间显示」：分支 `ticket/129-capability-local-time`，Claude 实现。`capabilities.json` 仍存 UTC，交给 Peter 时转成本机时间（`capability_state.local_stamp`）。起因：10-26 他把 UTC 时间当本地时间读，以为新上线的瞄一眼是旧能力。新增 `tests/test_capability_local_time.py`；全量测试与 main 相同（本机 13 项环境相关失败两边一致）。下一个工单号 130。
 - 工单 128「新对话的开场记忆」：分支 `ticket/128-opening-memory`。新对话首轮使用一次 Ombre 开场记忆；连续聊天与已有对话重启不重复注入，仍按话题自动搜索。自主活动不消费新对话开场。记忆、聊天和短期便签保留；审查、CI 和 Lan 的 Windows 体验待核实。验收见 `docs/tickets/128-opening-memory.md`。
 - 工单 127「QQ 消息来源与背景匹配」：分支 `ticket/127-qq-context`。QQ 消息使用简短的 `[QQ 发送]` 标记；旧聊天只在背景匹配时转换来源标记，原记录保留。复用既有 QQ 和背景匹配流程。新增针对背景误触发及 QQ 分类的测试，本地 QQ 与背景测试各 16 项通过；PR 审查、CI 与 Lan Windows 体验待核实。验收见 `docs/tickets/127-qq-context.md`。
