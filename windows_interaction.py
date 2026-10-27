@@ -14,6 +14,7 @@ import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 
+from agent_types import NOT_ASKED, NOT_ASKED_TEXT
 from desktop_access import DesktopBusy, desktop_access, program_input_made, register_input_tracker
 from windows_observer import (
     MAX_CONTROLS,
@@ -951,6 +952,9 @@ class WindowsInteractionTools:
                     return WindowsToolResult(
                         'VEIL could not collect approval; the window was not changed.',
                         activity_detail=f'{summary} 无法取得 Lan 批准；未操作。'), '被拒绝'
+                if answer == NOT_ASKED:
+                    return WindowsToolResult(NOT_ASKED_TEXT + ' The window was not changed.',
+                                             activity_detail=f'{summary} 自主活动时不询问 Lan；未操作。'), '被拒绝'
                 if str(answer or '').strip().casefold() != 'y':
                     return WindowsToolResult('Lan did not approve this action; the window was not changed.',
                                              activity_detail=f'{summary} Lan 未批准 UIA 动作；未操作。'), '被拒绝'

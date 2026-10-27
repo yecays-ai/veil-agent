@@ -3,7 +3,9 @@
 ## 目标
 一个 PR 做完下面六部分：Peter 知道今天还能醒几次；夜里 1–6 点可开关的安静时段；醒来时的批准结果说真话；每轮固定事实不再过时；他能改写自己的作品、扔进自己的垃圾桶（不能删除）；醒来不再被长度上限截断，自主预算 ¥3/日。
 
-Lan 2026-10-27 确认了全部内容，并要求合成一个 PR。
+Lan 2026-10-27 确认了全部内容，并要求合成一个 PR，由 Claude 实现。
+
+实现要点：程序文件 `autonomy.py`、`veil_agent.py`、`tools_agent.py`、`desktop_files.py`、`windows_interaction.py`、`codex_watch.py`、`agent_types.py`、`web_agent.py`，桌面 `desktop/chat.html`、`chat.js`、`main.cjs`；测试 `tests/test_autonomy_cleanup.py`。桌面文件改动后 update.bat 会重新打包 exe。在本工单之前建的桌面文件不在台账里，Peter 只能改写/挪走本工单之后新建的。
 
 ## 第 1 部分：Peter 看得到今天还能醒几次
 ### 目标

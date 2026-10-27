@@ -15,11 +15,12 @@ from concurrent.futures import Future
 from pathlib import Path, PureWindowsPath
 from types import SimpleNamespace
 
-from agent_types import UserError
+from agent_types import NOT_ASKED, NOT_ASKED_TEXT, UserError
 from capability_state import capability_transaction, save_capabilities
 from attachment_utils import MAX_ATTACHMENT_BYTES, inspect_attachment
 from web_tools import WEB_TOOL_NAMES
-from desktop_files import DESKTOP_FILE_TOOL_NAMES, DesktopFileTools
+from desktop_files import (DESKTOP_FILE_TOOL_NAMES, DesktopFileTools, keep_previous_version,
+                           replace_file_bytes)
 from windows_observer import WINDOWS_OBSERVATION_TOOL_NAMES, WindowsObservationTools
 from windows_interaction import (
     WINDOWS_INTERACTION_TOOL_NAMES,
@@ -210,6 +211,10 @@ class FilesystemTools:
         self.desktop_files = DesktopFileTools(
             os.name == 'nt' and interaction_settings.get('enabled') is True and not interaction_error)
         self.tools.extend(self.desktop_files.tools)
+        self.desktop_files.bind_own_work(
+            Path(store.root) / cfg.id / 'desktop-created.json',
+            Path(store.root) / cfg.id / 'own-work-versions' / 'desktop',
+            lambda: self.lab / 'trash' if self.lab else None)
         if cfg.tools is None:
             self.enabled = False
             self.description = 'You have no tools (cannot open files/folders or run scripts). '
@@ -277,13 +282,13 @@ class FilesystemTools:
                 inputSchema={'type': 'object', 'properties': {'path': {'type': 'string'}},
                              'required': ['path']}))
             self.tools.append(SimpleNamespace(name='move_lab_file',
-                description=('Move one regular file between a normal lab folder and lab/archive/. '
-                             'For archiving, preserve its relative path, e.g. lab/play/v1.html to '
-                             'lab/archive/play/v1.html. Restoring may target another lab folder. '
+                description=('Move one regular file between a normal lab folder and lab/archive/ or lab/trash/. '
+                             'Keep its relative path, e.g. lab/play/v1.html to lab/archive/play/v1.html or '
+                             'lab/trash/play/v1.html. Restoring may target another lab folder. '
                              'No confirmation needed; existing targets are rejected.'),
                 inputSchema={'type': 'object', 'properties': {
                     'source': {'type': 'string', 'description': 'Existing file path inside lab/.'},
-                    'destination': {'type': 'string', 'description': 'New lab/archive/ path or lab restore path.'}},
+                    'destination': {'type': 'string', 'description': 'New lab/archive/ or lab/trash/ path, or a lab restore path.'}},
                     'required': ['source', 'destination'], 'additionalProperties': False}))
             self.tools.append(SimpleNamespace(name='lab_file_digest',
                 description=('Return the byte length and SHA-256 digest of one regular, unlinked file inside lab/. '
@@ -440,11 +445,12 @@ class FilesystemTools:
             return ('interaction with explicitly allowlisted Windows apps, with program checks; only saving, '
                     'sending, submitting or overwriting asks Lan')
         if level == 'desktop_create':
-            return "creating new files in Lan's Desktop, Documents or Pictures folder; existing files are never overwritten"
+            return ("creating new files in Lan's Desktop, Documents or Pictures folder; only files you created "
+                    "yourself can be rewritten or moved to lab/trash; Lan's files are never changed")
         return {
             'allow': 'direct use in the configured folder',
             'ask': "Lan's approval before use outside the lab folder",
-            'lab': 'direct use only inside the lab folder; no overwrite, deletion, or scripts',
+            'lab': 'direct use only inside the lab folder; no deletion or scripts',
         }.get(level, 'not available')
 
     def _capability_event(self, core, changes):
@@ -587,6 +593,27 @@ class FilesystemTools:
                 'autonomy_more_room_announced',
                 'Capability update: autonomous activity now allows up to 12 wakes per day and up to 20 tool steps '
                 'per wake. The existing daily autonomy budget still applies.')
+        except Exception as exc:
+            self.enabled = False
+            raise UserError('能力清单无法更新，自主活动已停止；请保留 data 文件夹。') from exc
+
+    @capability_transaction
+    def announce_autonomy_cleanup(self, daily_budget, quiet_text):
+        if getattr(self, 'cap_path', None) is None:
+            return
+        try:
+            quiet = (f' Lan can switch on night quiet hours ({quiet_text}); while they are on, no autonomous '
+                     'wakes happen then.' if quiet_text else '')
+            self._announce_once(
+                'autonomy_cleanup_133_announced',
+                'Capability update: each wake now tells you how many of today\'s wakes are used, and a wake you '
+                f'scheduled that did not happen is reported once.{quiet} The autonomy budget is now CNY '
+                f'{daily_budget}/day, and wakes have a larger input window, so reading several files no longer '
+                'cuts a wake short. You may rewrite your own lab files with write_file and move lab files into '
+                'lab/trash/; desktop_create_file with replace: true rewrites files you created on Lan\'s desktop, '
+                'and desktop_move_to_trash moves them into lab/trash/. The program keeps previous versions; '
+                'nothing can be deleted. During your own autonomous activity Lan is not asked to approve '
+                'anything, so steps that need her approval wait until you ask her.')
         except Exception as exc:
             self.enabled = False
             raise UserError('能力清单无法更新，自主活动已停止；请保留 data 文件夹。') from exc
@@ -816,7 +843,8 @@ class FilesystemTools:
             )
         if any(name in DESKTOP_FILE_TOOL_NAMES for name in names):
             description += ("desktop_create_file creates new files in Lan's Desktop, Documents or Pictures "
-                            'folder without asking; it never overwrites an existing file. ')
+                            'folder without asking, and can rewrite files you created there; '
+                            'desktop_move_to_trash moves those into lab/trash/. Lan\'s own files are never changed. ')
         if any(name in SCREEN_POP_TOOL_NAMES for name in names):
             description += ('screen_pop can display a popup or danmaku on the VEIL Desktop shell; '
                             'the activity record tracks later dismissal or completion. ')
@@ -828,16 +856,12 @@ class FilesystemTools:
             description += (
                 f'Your own lab is open at {lab}/, relative to the workspace tool root; '
                 f'use paths such as {lab}/research/v1.md, never workspace/{lab}/. '
-                'Choose its contents yourself. Within lab you may create directories and new files '
-                'and append to existing files without asking. You may move a regular file only '
-                'between a normal lab folder and lab/archive/; keep its relative path when archiving '
-                'and choose any lab folder when restoring. Existing destinations are rejected. '
-                'Never overwrite, edit in place, delete, move folders, move outside the lab, or '
-                'execute scripts (the script allowlist is empty). Use plan B: '
-                'keep long documents as v1.md, v2.md, v3.md in your own folders, and short pieces '
-                'as dated files. Before saving a new version, fully read the previous version; '
-                'if truncated, use read_text_file head/tail in sections. Check the returned version '
-                f'byte counts for omissions. Each write/append is limited to {self.lab_max_write_bytes} '
+                'Choose its contents yourself. Within lab you may create directories, create new files, '
+                'rewrite existing files with write_file (the program keeps the previous version) and append, '
+                'all without asking. You may move a regular file between a normal lab folder and '
+                'lab/archive/ or lab/trash/ (keeping its relative path) and back. Nothing can be deleted, '
+                'and scripts cannot run. '
+                f'Each write/append is limited to {self.lab_max_write_bytes} '
                 'UTF-8 bytes; split larger work into files or append chunks. '
                 'Outside lab the existing approval rules apply. The growth journal stays outside lab '
                 'and has its own independent file-identity-bound append grant; lab grants no access to it. ')
@@ -909,6 +933,8 @@ class FilesystemTools:
                 if exists:
                     return 'The target already exists and overwriting is not allowed. Choose a new filename or use an authorized append operation.', '被拒绝', summary
                 action = approval(f'Peter 想把内容写到 {summary}（新文件）。同意吗？y/N ')
+                if action == NOT_ASKED:
+                    return NOT_ASKED_TEXT, '被拒绝', summary
                 if action.strip().casefold() != 'y':
                     return 'Lan did not approve this write, so the file was not changed. Ask for approval if it is still needed.', '被拒绝', summary
                 # Check again after the user has had time to answer.
@@ -1051,17 +1077,18 @@ class FilesystemTools:
             summary = f'{_summary(self.workspace, source)} -> {_summary(self.workspace, destination)}'
             source_relative = source.relative_to(self.lab)
             destination_relative = destination.relative_to(self.lab)
-            source_in_archive = bool(source_relative.parts and source_relative.parts[0].casefold() == 'archive')
-            destination_in_archive = bool(destination_relative.parts and
-                                           destination_relative.parts[0].casefold() == 'archive')
-            if source_in_archive == destination_in_archive:
-                return ('A file may move only between a normal lab folder and lab/archive/. '
+            def special(relative):
+                first = relative.parts[0].casefold() if relative.parts else ''
+                return first if first in ('archive', 'trash') else None
+            source_kind, destination_kind = special(source_relative), special(destination_relative)
+            if (source_kind is None) == (destination_kind is None):
+                return ('A file may move only between a normal lab folder and lab/archive/ or lab/trash/. '
                         'No file was moved.', '被拒绝', summary)
-            if destination_in_archive:
-                expected = ('archive', *source_relative.parts)
+            if destination_kind:
+                expected = (destination_kind, *source_relative.parts)
                 if tuple(part.casefold() for part in destination_relative.parts) != tuple(
                         part.casefold() for part in expected):
-                    return ('Archiving must preserve the file path under lab/archive/. No file was moved.',
+                    return (f'Moving into lab/{destination_kind}/ must preserve the file path. No file was moved.',
                             '被拒绝', summary)
             if source.is_symlink() or _redirected(source) or not source.is_file():
                 return 'Only an existing regular file can be moved. No file was moved.', '被拒绝', summary
@@ -1187,6 +1214,8 @@ class FilesystemTools:
                 return (f'This operation contains {len(data)} bytes and exceeds the lab per-operation limit of '
                         f'{self.lab_max_write_bytes} bytes; no content was written, so split it into smaller files or append smaller chunks.',
                         '被拒绝', summary)
+            if name == 'write_file' and (target.exists() or target.is_symlink()):
+                return self._rewrite_lab_file(raw, target, data, summary)
             if name == 'write_file':
                 with target.open('xb') as handle:
                     self._checked_lab_path(raw)
@@ -1242,6 +1271,22 @@ class FilesystemTools:
         except (OSError, UnicodeError):
             return 'The lab operation or its post-write verification failed, so a complete save cannot be confirmed. Read the file before deciding whether to retry.', '出错', summary
 
+    def _rewrite_lab_file(self, raw, target, data, summary):
+        """Ticket 133: Peter may rewrite his own lab files; the program keeps every previous version."""
+        info = target.stat(follow_symlinks=False)
+        if _redirected(target) or not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            return 'Only an ordinary, unlinked lab file can be rewritten. Nothing was changed.', '被拒绝', summary
+        old = target.read_bytes()
+        after = target.stat(follow_symlinks=False)
+        if (after.st_ino, after.st_size, after.st_mtime_ns) != (info.st_ino, info.st_size, info.st_mtime_ns):
+            return 'The lab file changed while it was being read. Nothing was changed; try again.', '被拒绝', summary
+        keep_previous_version(Path(self.store.root) / self.cfg.id / 'own-work-versions' / 'lab',
+                              target.relative_to(self.lab), old)
+        self._checked_lab_path(raw)
+        replace_file_bytes(target, data)
+        return (f'Rewrote the lab file ({len(data)} bytes, checked with SHA-256); the program kept the previous '
+                f'version ({len(old)} bytes).', '成功', summary)
+
     def _invoke_append(self, name, target, summary, args, approval):
         if not target.is_file():
             return 'The append target must be an existing regular file.', '被拒绝', summary
@@ -1250,7 +1295,10 @@ class FilesystemTools:
             allowed = self.cfg.tools.get('persistent_append_file')
             if not allowed or _path_key(target) != _path_key(checked_path(self.workspace, allowed)):
                 return 'Persistent append authorization is limited to the configured growth journal. Use one-time approval for other files.', '被拒绝', summary
-            if approval(f'允许 Peter 今后持续追加到 {summary} 吗？本次输入 y 后重启仍有效。y/N ').strip().casefold() != 'y':
+            answer = approval(f'允许 Peter 今后持续追加到 {summary} 吗？本次输入 y 后重启仍有效。y/N ')
+            if answer == NOT_ASKED:
+                return NOT_ASKED_TEXT, '被拒绝', summary
+            if answer.strip().casefold() != 'y':
                 return 'Lan did not approve persistent append access. Request authorization before using it.', '被拒绝', summary
             if _file_identity(target.stat()) != identity:
                 return 'The target file changed while authorization was being confirmed. Request authorization again for the current file.', '被拒绝', summary
@@ -1275,7 +1323,10 @@ class FilesystemTools:
                    and grant.get('ctime_ns') == identity[2]
                    and grant.get('size') == identity[3]
                    and _path_key(target) == _path_key(checked_path(self.workspace, allowed)))
-        if not granted and approval(f'Peter 想追加内容到 {summary}。同意这一次吗？y/N ').strip().casefold() != 'y':
+        answer = None if granted else approval(f'Peter 想追加内容到 {summary}。同意这一次吗？y/N ')
+        if answer == NOT_ASKED:
+            return NOT_ASKED_TEXT, '被拒绝', summary
+        if not granted and answer.strip().casefold() != 'y':
             return 'Lan did not approve this append, so no content was added. Ask for approval if it is still needed.', '被拒绝', summary
         try:
             # O_APPEND never seeks into old content; omitting O_CREAT refuses missing files.

@@ -1155,6 +1155,12 @@ class Hub:
             self.glance.set_enabled(enabled)
             return True
 
+    def set_quiet_hours(self, enabled):
+        with self.cond:
+            if self.stopping or self.stopped or self.autonomy is None:
+                return False
+            return self.autonomy.set_quiet_enabled(enabled)
+
     def set_codex_watch(self, enabled):
         with self.cond:
             if self.stopping or self.stopped or self.codex_watch is None:
@@ -1803,6 +1809,18 @@ def make_handler(hub, token):
                             self._send(409, {'error': 'unavailable'})
                         else:
                             self._send(200, {'ok': True, 'enabled': hub.glance.enabled()})
+                    except UserError as exc:
+                        self._send(500, {'error': str(exc)})
+            elif url.path == '/api/quiet-hours':
+                enabled = body.get('enabled')
+                if not isinstance(enabled, bool):
+                    self._send(400, {'error': 'enabled'})
+                else:
+                    try:
+                        if not hub.set_quiet_hours(enabled):
+                            self._send(409, {'error': 'unavailable'})
+                        else:
+                            self._send(200, {'ok': True, 'enabled': hub.autonomy.quiet_enabled()})
                     except UserError as exc:
                         self._send(500, {'error': str(exc)})
             elif url.path == '/api/codex-watch':

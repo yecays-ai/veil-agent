@@ -23,6 +23,16 @@ class BudgetExceeded(UserError):
     """A request was refused before sending because of the configured limit."""
 
 
+# Ticket 133: during Peter's own autonomous activity nobody is asked; tools report that truthfully.
+NOT_ASKED = 'not asked'
+NOT_ASKED_TEXT = ('Lan is not asked during your own autonomous activity, so this was not done. '
+                  'It needs her approval: ask her later in chat or on QQ.')
+
+
+def not_asked(*_):
+    return NOT_ASKED
+
+
 def now():
     """Return the local ISO timestamp format used by existing Agent ledgers."""
     return datetime.now().astimezone().isoformat()

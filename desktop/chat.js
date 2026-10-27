@@ -13,6 +13,7 @@ let memoryAvailable=false,memoryLoaded=false,memoryLoading=false,memoryCursor=''
 // Display-only groups over Ombre's own categories; Ombre's files keep their tags and categories.
 const MEMORY_GROUPS={recent:{label:'最近',domains:null},us:{label:'我们俩',domains:['恋爱','人际']},peter:{label:'他自己',domains:['内心','心理','兴趣','游戏']},system:{label:'系统和能力',domains:['数字','AI','编程','工作']}};
 let pendingQuote=null;
+let quietEnabled=false;
 let activityFilter='all',toolActivity=[],autonomyActivity=[],glanceActivity=[],detachedViews=new Set();
 const activityRowNodes=new Map();
 const pageQuery=new URLSearchParams(location.search),detachedView=pageQuery.get('detached')==='1'?pageQuery.get('view'):null;
@@ -879,6 +880,11 @@ async function poll(){
     renderLiveContext(s.live_context);
     $('activity-toggle').textContent=activityEnabled?'暂停自主活动':'开启自主活动';
     $('activity-toggle').disabled=stopping||stopped||exiting;
+    $('wakes-today').textContent=Number.isInteger(s.wakes_today)&&Number.isInteger(s.daily_max_runs)?s.wakes_today+' / '+s.daily_max_runs+' 次':'未提供';
+    quietEnabled=s.quiet_enabled===true;
+    $('quiet-status').textContent=!s.quiet_hours?'未配置':(quietEnabled?'已开启（'+s.quiet_hours+'）':'已关闭（'+s.quiet_hours+' 也会醒）');
+    $('quiet-toggle').textContent=quietEnabled?'关闭夜间安静':'开启夜间安静';
+    $('quiet-toggle').disabled=!s.quiet_hours||stopping||stopped||exiting;
     const glanceEnabled=s.glance_enabled===true;
     $('glance-status').textContent=!glanceEnabled?'已暂停':!activityEnabled?'全局自主活动暂停中':s.autonomy_busy?'正在瞄一眼':'已开启（每 15–40 分钟）';
     const glanceNext=s.glance_next_at?new Date(s.glance_next_at):null;
@@ -1141,6 +1147,17 @@ $('activity-toggle').onclick=async()=>{
     $('activity-toggle').textContent=activityEnabled?'暂停自主活动':'开启自主活动';
   }catch(e){$('activity-status').textContent='状态保存失败：请检查本机 Agent 连接后重试。';add('error','自主活动状态保存失败，请检查连接后重试。')}
   finally{$('activity-toggle').disabled=stopping||stopped||exiting}
+};
+$('quiet-toggle').onclick=async()=>{
+  $('quiet-toggle').disabled=true;
+  try{
+    const enabled=!quietEnabled;
+    const r=await api('/api/quiet-hours',{enabled});
+    if(!r.ok)throw new Error(r.status);
+    quietEnabled=enabled;
+    $('quiet-toggle').textContent=quietEnabled?'关闭夜间安静':'开启夜间安静';
+  }catch(e){$('quiet-status').textContent='设置保存失败：请检查本机 Agent 连接后重试。';add('error','夜间安静设置保存失败，请检查连接后重试。')}
+  finally{$('quiet-toggle').disabled=stopping||stopped||exiting}
 };
 $('glance-toggle').onclick=async()=>{
   $('glance-toggle').disabled=true;

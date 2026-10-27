@@ -926,7 +926,7 @@ output_cny_per_million = "8"
         self.assertEqual(facts['role'], 'system')
         for value in ['program-generated', 'not user-authored', 'AI companion', 'Lumen', 'alternate',
                       'alternate-model', '2026-10-19T09:10:00+08:00', 'Monday', '20 recent rounds',
-                      'no long-term memory', 'no tools', 'no voice', 'Unlisted abilities are unavailable']:
+                      'no long-term memory', 'no tools', 'no voice', 'Lan talks with you in VEIL', 'Do not invent memories']:
             self.assertIn(value, facts['content'])
 
     def test_self_uses_same_cost_source_and_actual_budget_limits(self):
