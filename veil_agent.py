@@ -117,8 +117,12 @@ SEND_MESSAGE = {'type': 'function', 'function': {
                     'write like texting: one sentence or short thought per message; call this '
                     'tool multiple times in the same step when you have more to say. You may '
                     'send just one. Code or a long list may stay in one longer message. '
-                    'After they are sent you may send more. When you are done, end with no text: text written right after your messages is not shown.'),
-    'parameters': {'type': 'object', 'properties': {'text': {'type': 'string'}},
+                    'After they are sent you may send more. When you are done, end with no text: text written right after your messages is not shown. '
+                    'Or set done to true on your last message: your turn then ends right after it.'),
+    'parameters': {'type': 'object', 'properties': {
+        'text': {'type': 'string'},
+        # Ticket 138: some models never end a step with empty text; this lets Peter end his own turn.
+        'done': {'type': 'boolean', 'description': 'true if this is your last message for now; nothing more is asked of you this turn.'}},
                    'required': ['text'], 'additionalProperties': False},
 }}
 
@@ -1238,6 +1242,9 @@ class Chat:
         self.tool_stop_reason = ''
         self.last_tool_summaries = []
         self.autonomy_interrupted = False
+        self.turn_done = False
+        # Ticket 138: Lan's stop button ends a chat turn between model steps.
+        self.user_stop = threading.Event()
         self.runtime_monitor = runtime_monitor
         self.attachment_reader = None
         self.attachment_saver = None
@@ -1422,7 +1429,7 @@ class Chat:
             args = json.loads(arguments)
         except (ValueError, TypeError):
             args = None
-        allowed = {'text', 'voice'} if self.voice is not None else {'text'}
+        allowed = {'text', 'voice', 'done'} if self.voice is not None else {'text', 'done'}
         allowed.update(self.away_channels)
         if callable(self.attachment_reader) and callable(self.attachment_saver):
             allowed.add('file')
@@ -1438,6 +1445,8 @@ class Chat:
                     'or send it in a separate message.'), '被拒绝', 'send_message'
         if 'voice' in args and type(args['voice']) is not bool:
             return 'send_message voice must be a boolean.', '被拒绝', 'send_message'
+        if 'done' in args and type(args['done']) is not bool:
+            return 'send_message done must be a boolean.', '被拒绝', 'send_message'
         for name in self.away_channels:
             if name in args and type(args[name]) is not bool:
                 return f'send_message {name} must be a boolean.', '被拒绝', 'send_message'
@@ -1536,6 +1545,9 @@ class Chat:
             return (f'Voice generation failed: {voice_failure} The message was sent as text instead.',
                     '成功', 'send_message（语音失败，已发文字）')
         result = 'Sent as a voice message.' if media else 'Sent.'
+        if args.get('done') is True and not autonomy:
+            self.turn_done = True
+            result += ' Your turn ends here.'
         if forwarded:
             result += f' It will also go to Lan by {" and ".join(forwarded)} when this turn ends.'
         return result, '成功', 'send_message'
@@ -1900,6 +1912,9 @@ class Chat:
         self.last_send_persisted = False
         self.sent_messages = []
         self.reply_displayed = False
+        self.turn_done = False
+        if not autonomy:
+            self.user_stop.clear()
         self.autonomy_mode = autonomy
         if self.tools and hasattr(self.tools, 'begin_request'):
             self.tools.begin_request()
@@ -2358,8 +2373,21 @@ class Chat:
         # leave the four-line handoff without sacrificing a usable tool step.
         max_steps = (1 if self.codex_watch_mode else
                      configured_steps + 1 if autonomy else configured_steps)
+        def end_turn_here():
+            # Ticket 138: Peter said done, or Lan pressed stop. The messages he already sent are the reply.
+            if mixed_sent_messages:
+                self.reply_displayed = True
+                return mixed_sent_messages[-1]
+            raise RequestFailed('已停止：Peter 这一轮还没有发出消息。')
+
         for step in range(max_steps):
             self.long_tasks.set_tool_step(step)
+            if not autonomy and self.user_stop.is_set():
+                pending_reservation = request_id if step == 0 else next_reservation
+                if pending_reservation:
+                    self.budget.settle(pending_reservation, self.cfg, 0, 0, 0)
+                final = end_turn_here()
+                break
             autonomy_limit_reached = autonomy and autonomy_tool_steps >= autonomy_tool_limit
             if autonomy_limit_reached:
                 self.autonomy_step_limited = True
@@ -2402,6 +2430,10 @@ class Chat:
                 calibration = max(calibration, conservative_token_ratio(measured_ratio))
                 measured_tokens, measured_bytes = prompt, sent_bytes
             self.budget.settle(reservation, step_cfg, prompt, completion, cached, input_bytes=sent_bytes)
+            if not autonomy and self.user_stop.is_set():
+                # Lan pressed stop while this step was running: none of its tools run.
+                final = end_turn_here()
+                break
             if autonomy and self.autonomy_should_yield and self.autonomy_should_yield():
                 self.autonomy_interrupted = True
                 final = 'Autonomous activity yielded after the model request to let chat or a control action proceed.'
@@ -2569,6 +2601,12 @@ class Chat:
                         break
                 if self.autonomy_interrupted or self.autonomy_step_limited:
                     pending_image_messages.clear()
+                    break
+                if not autonomy and (self.turn_done or self.user_stop.is_set()):
+                    if not mixed_sent_messages:
+                        end_turn_here()  # raises; the handler below releases the reservation
+                    self.budget.settle(next_reservation, next_cfg, 0, 0, 0)
+                    final = end_turn_here()
                     break
                 loop_messages.extend(pending_image_messages)
                 pending_image_messages.clear()
