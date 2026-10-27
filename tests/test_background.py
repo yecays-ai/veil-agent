@@ -147,6 +147,26 @@ class InjectionTests(unittest.TestCase):
         chat.send('You woke up on your own.', autonomy=True)
         self.assertEqual(self.store.read('fake/context-log.jsonl')[-1]['kind'], 'autonomy')
 
+    def test_opening_memory_once_per_new_conversation_and_not_on_autonomy(self):
+        memory = Mock()
+        memory.last_context_refs = []
+        memory.context.side_effect = lambda text, include_opening: ([
+            {'role': 'system', 'content': 'OPENING_MEMORY'}] if include_opening else [])
+        chat = Chat(self.cfg, self.store, self.budget, self.model, memory)
+        chat.send('wake up', autonomy=True)
+        self.assertNotIn('OPENING_MEMORY', self.contents(self.sent[-1]))
+        chat.send('hello')
+        self.assertIn('OPENING_MEMORY', self.contents(self.sent[-1]))
+        chat.send('again')
+        self.assertNotIn('OPENING_MEMORY', self.contents(self.sent[-1]))
+        restarted = Chat(self.cfg, self.store, self.budget, self.model, memory)
+        restarted.send('after restart')
+        self.assertNotIn('OPENING_MEMORY', self.contents(self.sent[-1]))
+        restarted.start_new_conversation()
+        restarted.send('new conversation')
+        self.assertIn('OPENING_MEMORY', self.contents(self.sent[-1]))
+        memory.refresh_opening.assert_called_once()
+
     def test_context_log_keeps_only_the_newest_rows(self):
         for n in range(30):
             append_context_log(self.store, 'fake', {'n': n}, keep=10)

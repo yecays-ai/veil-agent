@@ -4,10 +4,12 @@
 
 ## 当前目标与现状
 
+- 工单 128「新对话的开场记忆」：分支 `ticket/128-opening-memory`。新对话首轮使用一次 Ombre 开场记忆；连续聊天与已有对话重启不重复注入，仍按话题自动搜索。自主活动不消费新对话开场。记忆、聊天和短期便签保留；审查、CI 和 Lan 的 Windows 体验待核实。验收见 `docs/tickets/128-opening-memory.md`。
+
 - 工单 126「发完消息不再重复说一遍」：分支 `ticket/126-no-repeat-after-send`，Claude 实现。122 之后 Peter 用 send_message 发完几条，常再写一段换个说法的总结，按 122 的规则会多显示/多发一条（Lan 在 QQ 上看到每段话后面都重复一遍）。现在：发完消息后紧接着写的文字不显示、不发送、不存（以最后一条已发消息为回复）；如果发消息之后他又用了别的工具（如先说「先看一下」再读文件），之后写的文字照常作为新回复。send_message 说明同步改为「紧接着写的文字不会显示」。验收：update.bat 后在 QQ 和桌面各聊 5 分钟，不再出现一组消息后跟一条重述。下一个工单号 127。
 - 工单 125「实时上下文窗口」：分支 `ticket/125-live-context`，Claude 实现。新增「上下文」页（可像其他页一样拖出成独立小窗，透明度单独可调）：上半块「聊天时活动」显示最近 10 次请求各带了多少原文轮数、背景段、长期记忆、短期便签、估算 tokens 和这次用了哪些工具（来自 `context-log.jsonl` 与 `tools.jsonl`，按 request_id 对上）；下半块「短期便签」显示进行中的便签（含约何时淡出）和 3 小时内已完成/已过期的，以及下次整理时间。数据随 `/api/events` 下发，只读，不触发提取、不改便签。需要运行 update.bat 重新打包 exe。验收：聊一句后上半块出现这次请求；有便签后下半块出现；拖出「上下文」标签成为小窗，合并回去正常。下一个工单号 126。
 - 工单 124「瞄一眼和 Codex 监视能单独暂停」：分支 `ticket/124-toggle-allowlist`，Claude 实现。桌面程序 `desktop/main.cjs` 的请求白名单漏了 `/api/glance` 和 `/api/codex-watch`，两个开关点了都显示「设置保存失败」（Lan 电脑上从未生成这两个设置文件）。现在主窗口和弹出的活动小窗都允许这两个请求。需要运行 update.bat 重新打包 exe。验收：单独点「暂停瞄一眼」「暂停监视」都显示已暂停、自主活动仍开着，重启后保持暂停。下一个工单号 125。
-- 工单 123「Peter 聊天短期便签（程序提取）」：分支 `ticket/123-short-term-notes`，实现完成。Peter 每 30 分钟在有新增对话时用非 thinking 调用提取具体事实、决定和未完成事项；点击“新对话”清空历史前也先提取。便签只追加到 `data/peter/notes.jsonl`，状态为进行中/已完成/已过期；普通便签无进展 60 分钟后过期，带未来时间的便签到该时间后再计时。活跃便签与背景并列放入上下文，最多 10 条 / 800 字符，仅作上下文，不写 Ombre 或 Plan；提取费用单列为 `short_term_notes`。本地完整测试 560 项通过、5 项跳过；GitHub CI 与 CodeRabbit 审查按当前 PR 核对，Lan Windows 验收待做。下一个工单号 124。
+- 工单 123「Peter 聊天短期便签（程序提取）」：分支 `ticket/123-short-term-notes`，实现完成。Peter 每 30 分钟在有新增对话时用非 thinking 调用提取具体事实、决定和未完成事项；点击“新对话”清空历史前也先提取。便签只追加到 `data/peter/notes.jsonl`，状态为进行中/已完成/已过期；普通便签无进展 60 分钟后过期，带未来时间的便签到该时间后再计时。活跃便签与背景并列放入上下文，最多 10 条 / 800 字符，仅作上下文，不写 Ombre 或 Plan；提取费用单列为 `short_term_notes`。本地完整测试 560 项通过、5 项跳过；PR #170 已合并（ce414a2）；Lan Windows 验收待做。下一个工单号 124。
 - 工单 121「Peter 背景库按关键词注入」：分支 `ticket/121-background-injection`，Claude 实现。新文件 `background.py` 移植小手机的背景分段注入（关键词 + 正文相关性、`[常驻]`、每轮最多 3 段 / 1500 字符），每次请求重读本机 `persona/peter.background.md`，放在聊天历史之后、召回记忆之前；没有这个文件时一切照旧。每次请求追加一行 `data/peter/context-log.jsonl`（只记编号、关键词、大小，最多 500 行）。全量测试与 main 相同（本机 13 项环境相关失败两边一致），新增 `tests/test_background.py` 14 项通过。验收见 `docs/tickets/121-background-injection.md`；实际每天多花多少钱待用一天后按 `costs.jsonl` 计算。
 - 工单 120「瞄一眼认不出前台窗口时不再失败」：分支 `ticket/120-glance-no-window`。lan 停在桌面、只开着 VEIL 或前台是受保护窗口时，`windows_foreground` 报错，瞄一眼直接记为失败。现在 `GlanceController._observe` 照常给 Peter 一次瞄一眼：没有应用窗口在前台时，告诉他 Lan 多半停在桌面，并给他桌面上文件和文件夹的名字（最新的在前，最多 40 个，跳过隐藏项，不读文件内容；`desktop_files.desktop_item_names`）；窗口认得出但内容读不出时，只给应用名和标题。加回归测试 `tests/test_glance.py`。验收：在桌面或只开 VEIL 时等一次瞄一眼，记录不再是「未识别窗口」失败。
 - 工单 119「盯 Codex 的能力通知发给 Peter」：分支 `ticket/119-codex-watch-notice`。开着长期记忆时工具被 `ToolSet` 包着，`codex_watch.py` 直接在外层找 `announce_codex_watch`，找不到，所以 Peter 的能力记录里没有盯 Codex 这一条。改为先取 `ToolSet.files`，加回归测试 `tests/test_codex_watch.py`。验收：更新后问 Peter 有什么新能力，他的能力记录里能查到 Codex 监视。
@@ -42,7 +44,7 @@
 
 ## 下一步
 
-工单 123 的 PR 必须等 CodeRabbit 审查完成、当前提交的必需 CI 通过并处理实质问题后再合并；合并后 Lan 按 `docs/tickets/123-short-term-notes.md` 验收。工单 116、117 的 Windows 实机验收仍待完成。
+工单 123 已合并；Lan 按 `docs/tickets/123-short-term-notes.md` 验收。工单 116、117 的 Windows 实机验收仍待完成。
 
 ## 尚待 Lan 验收或观察
 
