@@ -466,6 +466,7 @@ function allowedChatRequest(pathname, method) {
     try { url = new URL(pathname, 'http://127.0.0.1'); } catch { return false; }
     const keys = [...url.searchParams.keys()];
     if (url.pathname === '/api/events') return keys.length === 1 && keys[0] === 'after' && /^\d+$/.test(url.searchParams.get('after'));
+    if (url.pathname === '/api/memory/panel') return keys.length === 0;
     if (url.pathname === '/api/memory/catalog')
       return keys.every(key => key === 'after') && keys.length <= 1 && (!keys.length || /^[A-Za-z0-9_-]{1,100}$/.test(url.searchParams.get('after')));
     if (url.pathname === '/api/memory/read') {
@@ -478,14 +479,15 @@ function allowedChatRequest(pathname, method) {
   }
   return method === 'POST' && ['/api/send', '/api/media', '/api/voice', '/api/voice/retry',
     '/api/transcribe', '/api/approve', '/api/activity', '/api/glance', '/api/codex-watch', '/api/exit',
-    '/api/message/action'].includes(pathname);
+    '/api/message/action', '/api/memory/edit', '/api/memory/delete'].includes(pathname);
 }
 ipcMain.handle('chat:request', async (event, pathname, body, timeoutMs) => {
   const detachedView = detachedViewFromEvent(event);
   const detachedAllowed = !detachedView || detachedView === 'chat' ||
     (detachedView === 'activity' && ((!body && pathname?.startsWith('/api/events?')) || (body && ['/api/activity', '/api/glance', '/api/codex-watch'].includes(pathname)))) ||
     (detachedView === 'context' && !body && pathname?.startsWith('/api/events?')) ||
-    (detachedView === 'memory' && !body && (pathname?.startsWith('/api/events?') || pathname?.startsWith('/api/memory/'))) ||
+    (detachedView === 'memory' && ((!body && (pathname?.startsWith('/api/events?') || pathname?.startsWith('/api/memory/'))) ||
+      (body && ['/api/memory/edit', '/api/memory/delete'].includes(pathname)))) ||
     (detachedView === 'more' && ((!body && pathname?.startsWith('/api/events?')) || (body && pathname === '/api/exit')));
   if (!fromChatPage(event) || typeof pathname !== 'string' || !allowedChatRequest(pathname, body ? 'POST' : 'GET') || !detachedAllowed)
     return { ok: false, status: 403, data: { error: '请求未允许。' } };

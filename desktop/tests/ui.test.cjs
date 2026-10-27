@@ -43,9 +43,13 @@ test('daily memory view reads Ombre catalog and exact records without the legacy
     read('chat.html'), read('main.cjs'), fs.readFile(path.join(__dirname, '..', '..', 'web_agent.py'), 'utf8'),
     fs.readFile(path.join(__dirname, '..', '..', 'memory_native.py'), 'utf8')
   ]);
-  assert.match(html, /来自 Ombre Brain 的真实记忆/);
+  assert.match(html, /PETER'S MEMORY/);
+  assert.match(html, /data-memory-group="recent"/);
+  assert.match(main, /\/api\/memory\/panel/);
+  assert.match(main, /'\/api\/memory\/edit', '\/api\/memory\/delete'/);
   assert.match(main, /\/api\/memory\/catalog/);
   assert.match(main, /\/api\/memory\/read/);
+  assert.match(web, /panel_entries/);
   assert.match(web, /memory_catalog/);
   assert.match(web, /memory_read/);
   assert.match(native, /def _visible_records\(/);

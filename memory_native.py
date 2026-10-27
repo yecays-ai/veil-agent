@@ -20,6 +20,7 @@ OMBRE_TOOLS = ('trace', 'dream', 'letter_write', 'letter_read', 'letter_lock_upd
 NATIVE_TOOLS = ('hold', 'breath_search', *OMBRE_TOOLS, 'memory_history', 'memory_catalog', 'memory_read')
 CONTENT_LIMIT, TITLE_LIMIT, WHY_LIMIT = 1500, 100, 500
 MERGED_MEMORY_LIMIT_BYTES = 48 * 1024
+SURPRISE_TAGS = {'惊喜', 'surprise'}
 
 HOLD = SimpleNamespace(name='hold', inputSchema={
     'type': 'object', 'required': ['content'], 'additionalProperties': False,
@@ -90,6 +91,55 @@ def trace_tool_for_model(tool):
         'why_remembered says why the memory matters, while edit_reason says why you are changing it now. '
         'Use edit_reason for the change history; it is stored locally and not sent to Ombre.')
     return SimpleNamespace(name=tool.name, inputSchema=schema, description=description)
+
+
+def _unquote(value):
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] == "'":
+        return value[1:-1].replace("''", "'")
+    if len(value) >= 2 and value[0] == value[-1] == '"':
+        try:
+            return json.loads(value)
+        except ValueError:
+            return value[1:-1]
+    return value
+
+
+def parse_frontmatter(raw):
+    """Read the simple YAML Ombre writes: scalars, '- item' lists and wrapped scalars."""
+    lines = raw.splitlines()
+    if not lines or lines[0].strip() != '---':
+        return {}, raw
+    end = next((i for i, line in enumerate(lines[1:], 1) if line.strip() == '---'), None)
+    if end is None:
+        return {}, raw
+    meta, key = {}, None
+    for line in lines[1:end]:
+        if not line.strip():
+            continue
+        if not line[:1].isspace() and not line.startswith('- '):
+            key, _, value = line.partition(':')
+            key = key.strip()
+            meta[key] = _unquote(value) if value.strip() else []
+        elif key is None:
+            continue
+        elif line.lstrip().startswith('- ') and isinstance(meta[key], list):
+            meta[key].append(_unquote(line.lstrip()[2:]))
+        elif isinstance(meta[key], str):
+            # A long scalar wrapped onto indented continuation lines.
+            meta[key] += ' ' + line.strip()
+    for name, value in meta.items():
+        if isinstance(value, str) and value.startswith('[') and value.endswith(']'):
+            meta[name] = [_unquote(item) for item in value[1:-1].split(',') if item.strip()]
+        elif isinstance(value, str):
+            meta[name] = _unquote(value)
+    return meta, '\n'.join(lines[end + 1:])
+
+
+def as_list(value):
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    return [value] if value else []
 
 
 class NativeMemoryTools:
@@ -212,6 +262,58 @@ class NativeMemoryTools:
                     raise ValueError('ambiguous memory ID')
                 records[key] = (meta.get('title') or meta.get('name') or key, raw)
         return records
+
+    def panel_entries(self, recent_requests=100):
+        """Readable memory list for Lan's memory page; never sent to the model."""
+        recalled = {}
+        try:
+            rows = self.memory.store.read_tail(f'{self.memory.cfg.id}/context-log.jsonl', recent_requests)
+        except Exception:
+            rows = []
+        for row in rows:
+            for memory_id in row.get('memory_ids') or []:
+                recalled[memory_id] = recalled.get(memory_id, 0) + 1
+        entries = []
+        for key, (title, raw) in self._visible_records().items():
+            meta, body = parse_frontmatter(raw)
+            tags = as_list(meta.get('tags'))
+            # Peter's surprises for Lan stay folded; the page only reveals them on request.
+            surprise = any(tag.strip().casefold() in SURPRISE_TAGS for tag in tags)
+            entries.append({
+                'memory_id': key, 'title': title, 'created': meta.get('created', ''),
+                'kind': meta.get('type', ''), 'domain': as_list(meta.get('domain')),
+                'tags': [] if surprise else tags, 'importance': meta.get('importance', ''),
+                'why': '' if surprise else meta.get('why_remembered', ''),
+                'body': '' if surprise else body.strip(), 'surprise': surprise,
+                'source_record': title.strip() == '原文来源', 'recalled': recalled.get(key, 0)})
+        entries.sort(key=lambda entry: entry['created'], reverse=True)
+        return {'items': entries, 'recent_requests': len(rows)}
+
+    def panel_edit(self, memory_id, changes):
+        """Lan's edit from the memory page; uses the same archived trace path as Peter's edits."""
+        fields = {key: value for key, value in changes.items() if key in ('title', 'content', 'why_remembered')}
+        if (not isinstance(memory_id, str) or not fields or len(fields) != len(changes)
+                or any(not isinstance(value, str) or not value.strip() for value in fields.values())):
+            return False, '没有可保存的修改。'
+        limits = {'title': TITLE_LIMIT, 'content': CONTENT_LIMIT, 'why_remembered': WHY_LIMIT}
+        too_long = [key for key, value in fields.items() if len(value) > limits[key]]
+        if too_long:
+            names = {'title': '标题', 'content': '内容', 'why_remembered': '为什么记'}
+            return False, '、'.join(names[key] for key in too_long) + '太长了，请删短一点再保存。'
+        if memory_id not in self._visible_records():
+            return False, '这条记忆不存在或已经删除。'
+        args = {'bucket_id': memory_id, **fields, 'edit_reason': 'Lan edited this memory in the memory page.'}
+        result, state, _ = self._trace(args, None)
+        return state == '成功', '已保存，旧版本已留档。' if state == '成功' else result
+
+    def panel_delete(self, memory_id):
+        """Lan's delete from the memory page; same erase as /delete 编号 确认."""
+        if not isinstance(memory_id, str) or memory_id not in self._visible_records():
+            return False, '这条记忆不存在或已经删除。'
+        title = self.memory.title_for(memory_id) or memory_id
+        failure = self._delete(memory_id, title)
+        return (False, '这次没能确认 Ombre 的删除；这条已经不会再被想起，稍后可以再删一次。') if failure \
+            else (True, '已删除。')
 
     def _catalog(self, args):
         after = args.get('after', '')

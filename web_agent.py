@@ -1406,7 +1406,17 @@ def make_handler(hub, token):
         def do_GET(self):
             url = urlparse(self.path)
             query = parse_qs(url.query)
-            if url.path in ('/api/memory/catalog', '/api/memory/read'):
+            if url.path == '/api/memory/panel':
+                if not self._guard(self.headers.get('X-Token')):
+                    return
+                if hub.memory_tools is None:
+                    self._send(404, {'error': 'Ombre memory is not available.'})
+                    return
+                try:
+                    self._send(200, hub.memory_tools.panel_entries())
+                except Exception:
+                    self._send(503, {'error': 'Ombre 记忆暂时无法读取。'})
+            elif url.path in ('/api/memory/catalog', '/api/memory/read'):
                 if not self._guard(self.headers.get('X-Token')):
                     return
                 if hub.memory_tools is None:
@@ -1585,6 +1595,30 @@ def make_handler(hub, token):
                     return
                 self._send(200 if accepted else 409,
                            {'ok': True} if accepted else {'error': 'screen-pop event was rejected'})
+                return
+            if url.path in ('/api/memory/edit', '/api/memory/delete'):
+                try:
+                    length = int(self.headers.get('Content-Length') or 0)
+                    if not 0 < length <= 64 * 1024:
+                        raise ValueError
+                    body = json.loads(self.rfile.read(length))
+                    if not isinstance(body, dict) or not isinstance(body.get('id'), str):
+                        raise ValueError
+                except (ValueError, TypeError, UnicodeError):
+                    self._send(400, {'error': '无效请求。'})
+                    return
+                if hub.memory_tools is None:
+                    self._send(404, {'error': 'Ombre 记忆暂不可用。'})
+                    return
+                try:
+                    if url.path == '/api/memory/edit':
+                        ok, message = hub.memory_tools.panel_edit(body['id'], body.get('changes') or {}
+                                                                  if isinstance(body.get('changes'), dict) else {})
+                    else:
+                        ok, message = hub.memory_tools.panel_delete(body['id'])
+                except Exception:
+                    ok, message = False, 'Ombre 暂时没有响应，这次没有改动。'
+                self._send(200 if ok else 409, {'ok': True, 'message': message} if ok else {'error': message})
                 return
             if url.path == '/api/media':
                 try:

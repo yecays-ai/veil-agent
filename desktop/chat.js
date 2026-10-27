@@ -9,7 +9,9 @@ let after=0, busy=true, transcribingVoice=false, stopping=false, stopped=false, 
 let revealQueue=[], revealTimer=null, roundStartedAt=0, roundHasReply=false, previousMessage=null;
 let pendingApproval=null, activityEnabled=false, codexWatchEnabled=false, exiting=false;
 const recentErrors=new Map();
-let memoryAvailable=false,memoryLoaded=false,memoryLoading=false,memoryCursor='',memoryItems=[];
+let memoryAvailable=false,memoryLoaded=false,memoryLoading=false,memoryCursor='',memoryItems=[],memoryGroup='recent',memoryShown=50;
+// Display-only groups over Ombre's own categories; Ombre's files keep their tags and categories.
+const MEMORY_GROUPS={recent:{label:'最近',domains:null},us:{label:'我们俩',domains:['恋爱','人际']},peter:{label:'他自己',domains:['内心','心理','兴趣','游戏']},system:{label:'系统和能力',domains:['数字','AI','编程','工作']}};
 let pendingQuote=null;
 let activityFilter='all',toolActivity=[],autonomyActivity=[],glanceActivity=[],detachedViews=new Set();
 const activityRowNodes=new Map();
@@ -567,48 +569,126 @@ async function api(path,body,timeoutMs=30000){
   const result=await window.veilDesktop.request(path,body,timeoutMs);
   return {ok:result.ok,status:result.status,json:async()=>result.data};
 }
+function memoryDay(created){
+  const date=new Date(created);if(!created||Number.isNaN(date.getTime()))return '没有日期';
+  const today=new Date();today.setHours(0,0,0,0);const day=new Date(date);day.setHours(0,0,0,0);
+  const diff=Math.round((today-day)/86400000);
+  return diff===0?'今天':diff===1?'昨天':`${date.getMonth()+1}月${date.getDate()}日`;
+}
+function memoryTime(created){
+  const date=new Date(created);if(!created||Number.isNaN(date.getTime()))return '';
+  return `${String(date.getHours()).padStart(2,'0')}:${String(date.getMinutes()).padStart(2,'0')}`;
+}
+function memoryMatches(item,query){
+  if(!query)return true;
+  const fields=[item.title,...item.domain,...item.tags,item.why,item.body];
+  return fields.some(text=>String(text||'').toLocaleLowerCase().includes(query));
+}
 function renderMemoryList(){
-  const list=$('memory-list'),query=$('memory-search').value.trim().toLocaleLowerCase();list.replaceChildren();
-  const filtered=memoryItems.filter(item=>item.title.toLocaleLowerCase().includes(query));
-  if(!filtered.length){const empty=document.createElement('p');empty.className='muted';empty.textContent=query?'没有匹配的已加载记忆。':'Ombre 里还没有可显示的记忆。';list.appendChild(empty)}
-  for(const item of filtered){
-    const button=document.createElement('button');button.type='button';button.className='memory-entry';button.textContent=item.title;
+  const list=$('memory-list'),query=$('memory-search').value.trim().toLocaleLowerCase(),group=MEMORY_GROUPS[memoryGroup];list.replaceChildren();
+  $('memory-heading').textContent=group.label;
+  const filtered=memoryItems.filter(item=>!item.source_record&&(!group.domains||item.domain.some(name=>group.domains.includes(name)))&&memoryMatches(item,query));
+  if(!filtered.length){const empty=document.createElement('p');empty.className='muted';empty.textContent=query?'没有匹配的记忆。':'这里还没有记忆。';list.appendChild(empty)}
+  let lastDay='';
+  for(const item of filtered.slice(0,memoryShown)){
+    const day=memoryDay(item.created);
+    if(day!==lastDay){const heading=document.createElement('h4');heading.className='memory-day';heading.textContent=day;list.appendChild(heading);lastDay=day}
+    const button=document.createElement('button');button.type='button';button.className='memory-entry';
+    const top=document.createElement('span');top.className='memory-entry-top';
+    const title=document.createElement('span');title.className='memory-entry-title';title.textContent=item.surprise?'🎁 '+item.title:item.title;
+    const time=document.createElement('time');time.textContent=memoryTime(item.created);top.append(title,time);
+    const preview=document.createElement('span');preview.className='memory-entry-preview';
+    preview.textContent=item.surprise?'Peter 给你准备的惊喜，先不剧透。':(item.body||item.why).replace(/\s+/g,' ').slice(0,90);
+    button.append(top,preview);
     button.setAttribute('aria-current',String($('memory-detail').dataset.memoryId===item.memory_id));
-    button.onclick=()=>readMemory(item,button);list.appendChild(button);
+    button.onclick=()=>readMemory(item);list.appendChild(button);
   }
-  if(memoryCursor){const more=document.createElement('button');more.type='button';more.className='memory-entry more';more.textContent='加载更多记忆';more.disabled=memoryLoading;more.onclick=()=>loadMemoryCatalog(false);list.appendChild(more)}
-  $('memory-count').textContent=`已读取 ${memoryItems.length} 条${memoryCursor?' · 还有更多':''}`;
+  if(filtered.length>memoryShown){const more=document.createElement('button');more.type='button';more.className='memory-entry more';more.textContent=`看更早的（还有 ${filtered.length-memoryShown} 条）`;more.onclick=()=>{memoryShown+=50;renderMemoryList()};list.appendChild(more)}
+  const total=memoryItems.filter(item=>!item.source_record).length;
+  $('memory-count').textContent=group.domains||query?`显示 ${filtered.length} 条 · 共 ${total} 条记忆`:`共 ${total} 条记忆`;
 }
 async function loadMemoryCatalog(reset=false){
   if(memoryLoading)return;
-  memoryLoading=true;
-  if(reset){memoryLoaded=false;memoryCursor='';memoryItems=[];$('memory-list').textContent='正在读取 Ombre 记忆…'}
+  memoryLoading=true;memoryCursor='';
+  if(reset){memoryLoaded=false;memoryItems=[];$('memory-list').textContent='正在读取 Ombre 记忆…'}
   try{
-    const query=memoryCursor?'?after='+encodeURIComponent(memoryCursor):'';
-    const r=await api('/api/memory/catalog'+query);const data=await r.json();
+    const r=await api('/api/memory/panel');const data=await r.json();
     if(!r.ok)throw new Error(data.error||'Ombre 记忆暂时无法读取。');
-    if(!data||!Array.isArray(data.items)||typeof data.next_after!=='string')throw new Error('Ombre 返回的记忆目录格式无法识别。');
-    memoryItems.push(...data.items.filter(item=>item&&typeof item.memory_id==='string'&&typeof item.title==='string'));
-    memoryCursor=data.next_after;memoryLoaded=true;memoryAvailable=true;renderMemoryList();
+    if(!data||!Array.isArray(data.items))throw new Error('Ombre 返回的记忆格式无法识别。');
+    memoryItems=data.items.filter(item=>item&&typeof item.memory_id==='string'&&typeof item.title==='string')
+      .map(item=>({...item,domain:Array.isArray(item.domain)?item.domain:[],tags:Array.isArray(item.tags)?item.tags:[]}));
+    memoryLoaded=true;memoryAvailable=true;renderMemoryList();
+    const current=memoryItems.find(item=>item.memory_id===$('memory-detail').dataset.memoryId);if(current)readMemory(current);
   }catch(error){
     memoryLoaded=true;$('memory-list').textContent=error.message||'Ombre 记忆暂时无法读取。';$('memory-unavailable').hidden=false;
     $('memory-count').textContent='读取失败';
   }finally{memoryLoading=false}
 }
-async function readMemory(item,button){
-  $('memory-detail').dataset.memoryId=item.memory_id;renderMemoryList();
-  $('memory-detail').textContent='正在读取记忆原文…';
+async function readRawMemory(memoryId){
   let offset=0,version='',content='';
-  try{
-    do{
-      const params=new URLSearchParams({id:item.memory_id,offset:String(offset)});if(version)params.set('version',version);
-      const r=await api('/api/memory/read?'+params.toString());const page=await r.json();
-      if(!r.ok)throw new Error(page.error||'这条记忆暂时无法读取。');
-      if(typeof page.text!=='string'||typeof page.version!=='string')throw new Error('Ombre 返回的记忆内容格式无法识别。');
-      version=page.version;content+=page.text;offset=page.next_offset;
-    }while(offset!==null);
-    const title=document.createElement('h3');title.textContent=item.title;const body=document.createElement('pre');body.textContent=content;$('memory-detail').replaceChildren(title,body);
-  }catch(error){$('memory-detail').textContent=error.message||'这条记忆暂时无法读取。'}
+  do{
+    const params=new URLSearchParams({id:memoryId,offset:String(offset)});if(version)params.set('version',version);
+    const r=await api('/api/memory/read?'+params.toString());const page=await r.json();
+    if(!r.ok)throw new Error(page.error||'这条记忆暂时无法读取。');
+    if(typeof page.text!=='string'||typeof page.version!=='string')throw new Error('Ombre 返回的记忆内容格式无法识别。');
+    version=page.version;content+=page.text;offset=page.next_offset;
+  }while(offset!==null);
+  return content;
+}
+function memoryField(label,value,multiline,rows=3){
+  const wrap=document.createElement('label');wrap.className='memory-field';
+  const name=document.createElement('span');name.textContent=label;
+  const input=document.createElement(multiline?'textarea':'input');input.value=value;if(multiline)input.rows=rows;
+  wrap.append(name,input);return {wrap,input};
+}
+function readMemory(item){
+  const detail=$('memory-detail');detail.dataset.memoryId=item.memory_id;renderMemoryList();
+  const eyebrow=document.createElement('p');eyebrow.className='eyebrow';eyebrow.textContent='MEMORY DETAIL';
+  const heading=document.createElement('h3');heading.textContent=item.surprise?'🎁 '+item.title:item.title;
+  const date=new Date(item.created);
+  const facts=document.createElement('p');facts.className='memory-facts';
+  facts.textContent=[Number.isNaN(date.getTime())?'':`记录于 ${date.getFullYear()}.${date.getMonth()+1}.${date.getDate()} ${memoryTime(item.created)}`,
+    item.domain.length?'分类 · '+item.domain.join(' / '):'',item.importance?`重要度 ${item.importance}`:'',item.recalled?`最近想起过 ${item.recalled} 次`:''].filter(Boolean).join('　');
+  if(item.surprise){
+    const note=document.createElement('p');note.className='memory-surprise';note.textContent='这条是 Peter 给你准备的惊喜，内容先藏起来了，不能在这里编辑。';
+    detail.replaceChildren(eyebrow,heading,facts,note);return;
+  }
+  const title=memoryField('标题',item.title,false),why=memoryField('他为什么记这条',item.why,true,2),body=memoryField('记忆内容',item.body,true,8);
+  const status=document.createElement('p');status.className='memory-status';status.setAttribute('aria-live','polite');
+  const actions=document.createElement('div');actions.className='memory-actions';
+  const save=document.createElement('button');save.type='button';save.className='primary';save.textContent='保存修改';
+  const reset=document.createElement('button');reset.type='button';reset.textContent='还原';
+  const remove=document.createElement('button');remove.type='button';remove.className='danger';remove.textContent='删除这条';
+  actions.append(save,reset,remove);
+  const original={title:item.title,why_remembered:item.why,content:item.body};
+  const inputs={title:title.input,why_remembered:why.input,content:body.input};
+  const changes=()=>Object.fromEntries(Object.entries(inputs).filter(([key,input])=>input.value!==original[key]).map(([key,input])=>[key,input.value]));
+  const sync=()=>{const dirty=Object.keys(changes()).length>0;save.disabled=!dirty;reset.disabled=!dirty};
+  Object.values(inputs).forEach(input=>input.addEventListener('input',sync));sync();
+  reset.onclick=()=>{for(const [key,input] of Object.entries(inputs))input.value=original[key];status.textContent='';sync()};
+  save.onclick=async()=>{
+    save.disabled=true;status.textContent='正在保存…';
+    try{const r=await api('/api/memory/edit',{id:item.memory_id,changes:changes()});const data=await r.json();
+      if(!r.ok)throw new Error(data.error||'没能保存。');
+      await loadMemoryCatalog(false);const after=$('memory-detail').querySelector('.memory-status');if(after)after.textContent=data.message||'已保存。';
+    }catch(error){status.textContent=error.message||'没能保存。';sync()}
+  };
+  let armed=null;
+  remove.onclick=async()=>{
+    if(!armed){remove.textContent='确定删除？再点一次';remove.classList.add('armed');armed=setTimeout(()=>{armed=null;remove.textContent='删除这条';remove.classList.remove('armed')},4000);return}
+    clearTimeout(armed);armed=null;remove.disabled=true;status.textContent='正在删除…';
+    try{const r=await api('/api/memory/delete',{id:item.memory_id});const data=await r.json();
+      if(!r.ok)throw new Error(data.error||'没能删除。');
+      delete detail.dataset.memoryId;const done=document.createElement('p');done.className='muted';done.textContent='已删除「'+item.title+'」。删除后不能恢复。';
+      detail.replaceChildren(done);await loadMemoryCatalog(false);
+    }catch(error){status.textContent=error.message||'没能删除。';remove.disabled=false;remove.textContent='删除这条';remove.classList.remove('armed')}
+  };
+  const raw=document.createElement('details');raw.className='memory-raw';
+  const summary=document.createElement('summary');summary.textContent='原始文件（含全部字段和标签）';const pre=document.createElement('pre');raw.append(summary,pre);
+  raw.ontoggle=async()=>{if(!raw.open||pre.dataset.loaded)return;pre.textContent='正在读取…';
+    try{pre.textContent=await readRawMemory(item.memory_id);pre.dataset.loaded='true'}catch(error){pre.textContent=error.message||'这条记忆暂时无法读取。'}};
+  const hint=document.createElement('p');hint.className='memory-hint';hint.textContent='保存会把旧版本留档；删除不能恢复。Peter 不会收到通知。';
+  detail.replaceChildren(eyebrow,heading,facts,title.wrap,why.wrap,body.wrap,actions,status,hint,raw);
 }
 async function approve(card,status,answer,id){
   if(card.dataset.sending==='true'||card.classList.contains('done'))return;
@@ -1172,7 +1252,11 @@ function applyCustomCSS(value){
 try{$('custom-css').value=localStorage.getItem(`${APPEARANCE_KEY}-css`)||'';applyCustomCSS($('custom-css').value)}catch{$('custom-css').value=''}
 $('apply-css').onclick=()=>{try{applyCustomCSS($('custom-css').value);localStorage.setItem(`${APPEARANCE_KEY}-css`,$('custom-css').value);notify('自定义 CSS 已应用并保存。')}catch(error){notify(error.message,'error')}};
 $('reset-appearance').onclick=async()=>{appearance={...appearanceDefaults,pageOpacity:{...appearanceDefaults.pageOpacity}};applyAppearance();storeAppearance();window.veilDesktop.setPetSize(appearance.petSize);$('custom-css').value='';$('custom-style').textContent='';localStorage.removeItem(`${APPEARANCE_KEY}-css`);await window.veilDesktop.clearBackground();setBackground(null,'');notify('外观已恢复默认设置。')};
-$('memory-search').addEventListener('input',renderMemoryList);
+$('memory-search').addEventListener('input',()=>{memoryShown=50;renderMemoryList()});
+document.querySelectorAll('[data-memory-group]').forEach(button=>button.onclick=()=>{
+  memoryGroup=button.dataset.memoryGroup;memoryShown=50;
+  document.querySelectorAll('[data-memory-group]').forEach(other=>other.classList.toggle('active',other===button));renderMemoryList();
+});
 $('memory-reload').onclick=()=>{memoryItems=[];memoryCursor='';memoryLoaded=false;loadMemoryCatalog(true)};
 document.querySelectorAll('[data-page]').forEach(button=>button.onclick=()=>{
   if(detachedViews.has(button.dataset.page)){window.veilDesktop.focusView(button.dataset.page);return}
