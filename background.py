@@ -245,11 +245,19 @@ def message_text(content):
     return ''
 
 
+def background_input(content):
+    """Normalize the historical QQ channel marker for matching without changing chat records."""
+    old = '[Lan sent this on QQ; she is away from the computer.]\n'
+    if content.startswith(old):
+        return '[QQ 发送]\n' + content[len(old):]
+    return content
+
+
 def recent_text(history):
     """The last two rounds (user and assistant messages), like 小手机's recent turns."""
     users = [index for index, message in enumerate(history) if message.get('role') == 'user']
     start = users[-2] if len(users) >= 2 else users[0] if users else len(history)
-    return '\n'.join(message_text(message.get('content'))
+    return '\n'.join(background_input(message_text(message.get('content')))
                      for message in history[start:] if message.get('role') in ('user', 'assistant'))
 
 
@@ -268,7 +276,7 @@ def background_context(path, current, history):
     except OSError:
         return None, details
     core, retrievable = split_background(text)
-    chosen, skipped = select_background(retrievable, current, recent_text(history))
+    chosen, skipped = select_background(retrievable, background_input(current), recent_text(history))
     entries = [item['text'] for item in core]
     previous = None
     for item in chosen:
@@ -312,7 +320,7 @@ def request_kind(chat, text, autonomy):
         if getattr(chat, 'codex_watch_mode', False):
             return 'codex'
         return 'glance' if getattr(chat, 'glance_mode', False) else 'autonomy'
-    return 'qq' if isinstance(text, str) and text.startswith('[Lan sent this on QQ') else 'chat'
+    return 'qq' if isinstance(text, str) and text.startswith(('[QQ 发送]\n', '[Lan sent this on QQ')) else 'chat'
 
 
 def context_chars(messages):
