@@ -68,7 +68,7 @@ daily_budget_cny = "2"
         self.assertEqual(Decimal(peter['autonomy']['daily_budget_cny']), Decimal('3'))
         self.assertEqual(peter['autonomy']['quiet_hours'], '01:00-06:00')
         self.assertEqual(peter['autonomy']['max_input_tokens'], 65536)
-        self.assertEqual(peter['autonomy']['min_alarm_gap_minutes'], 60)
+        self.assertEqual(peter['autonomy']['min_alarm_gap_minutes'], 15)
         self.assertEqual(peter['tools']['max_steps'], 20)
 
     @staticmethod
@@ -215,7 +215,7 @@ daily_budget_cny = "2"
 
     def test_autonomous_wake_is_logged_without_changing_chat_history(self):
         self.activity.set(True)
-        enabled_at = datetime.fromisoformat(self.activity.snapshot()['enabled_at']) - timedelta(minutes=2)
+        enabled_at = datetime.fromisoformat(self.activity.snapshot()['enabled_at']) - timedelta(minutes=4)
         self.activity.path.write_text(json.dumps({'enabled': True, 'enabled_at': enabled_at.isoformat()}),
                                       encoding='utf-8')
         self.controller.started_at = enabled_at
@@ -394,42 +394,47 @@ daily_budget_cny = "2"
                                 {'started_at': self.budget.clock(), 'result': '搁置'}]
         self.assertIsNone(self.controller.next_wake())
 
-    def test_next_wake_can_be_replaced_persisted_and_shown_in_status(self):
+    def test_several_alarms_are_kept_persisted_and_the_earliest_is_shown(self):
         self.activity.set(True)
         self.controller.interval = timedelta(hours=3)
         first_at = (datetime.now().astimezone() + timedelta(hours=2)).isoformat()
         result, state, _ = self.controller.set_next_wake({
             'at': first_at, 'reason': 'Continue the spider silk research.'})
         self.assertEqual(state, '成功')
-        self.assertIn('scheduled for', result)
-        alarm_path = self.store.root / 'test' / 'autonomy-alarm.json'
-        first = json.loads(alarm_path.read_text(encoding='utf-8'))
-        self.assertEqual(first['state'], 'pending')
-        self.assertEqual(self.controller.status()['next_wake_reason'], 'Continue the spider silk research.')
-
+        self.assertIn('is scheduled for', result)
         second_at = (datetime.now().astimezone() + timedelta(hours=2, minutes=30)).isoformat()
         _, state, _ = self.controller.set_next_wake({
             'at': second_at, 'reason': 'Check the new measurements.'})
-        second = json.loads(alarm_path.read_text(encoding='utf-8'))
         self.assertEqual(state, '成功')
-        self.assertNotEqual(second['alarm_id'], first['alarm_id'])
-        self.assertEqual(second['reason'], 'Check the new measurements.')
+        saved = json.loads((self.store.root / 'test' / 'autonomy-alarm.json').read_text(encoding='utf-8'))
+        self.assertEqual([alarm['state'] for alarm in saved['alarms']], ['pending', 'pending'])
 
         restarted = AutonomyController(self.chat, self.hub)
-        restarted.interval = timedelta(hours=3)
+        restarted.interval = timedelta(hours=10)
+        status = restarted.status()
+        self.assertEqual(status['next_wake_reason'], 'Continue the spider silk research.')
+        self.assertEqual([item['note'] for item in status['scheduled_wakes']],
+                         ['Continue the spider silk research.', 'Check the new measurements.'])
+        self.assertIn('Check the new measurements.', restarted.wake_count_text())
+
+        first_id = status['scheduled_wakes'][0]['id']
+        _, state, _ = restarted.set_next_wake({'at': '', 'reason': '', 'cancel': first_id})
+        self.assertEqual(state, '成功')
         self.assertEqual(restarted.status()['next_wake_reason'], 'Check the new measurements.')
-        self.assertEqual(datetime.fromisoformat(restarted.status()['next_wake_at']),
-                         datetime.fromisoformat(second['at']))
 
     def test_next_wake_rejects_too_soon_and_more_than_seven_days(self):
         self.activity.set(True)
-        for delta, expected in ((timedelta(minutes=59), 'at least'),
+        for delta, expected in ((timedelta(minutes=14), 'at least'),
                                 (timedelta(days=8), 'more than 7 days')):
             result, state, _ = self.controller.set_next_wake({
                 'at': (datetime.now().astimezone() + delta).isoformat(), 'reason': 'Continue research.'})
             self.assertEqual(state, '被拒绝')
             self.assertIn(expected, result)
         self.assertFalse((self.store.root / 'test' / 'autonomy-alarm.json').exists())
+        _, state, _ = self.controller.set_next_wake({
+            'at': (datetime.now().astimezone() + timedelta(minutes=16)).isoformat(),
+            'reason': 'Finish what I was saying.'})
+        self.assertEqual(state, '成功')
 
     def test_next_wake_cancellation_and_late_claim_are_at_most_once(self):
         from agent_types import AUTONOMY_WAKE
@@ -470,7 +475,7 @@ daily_budget_cny = "2"
 
     def test_periodic_wake_remains_scheduled_before_a_later_alarm(self):
         self.activity.set(True)
-        self.controller.interval = timedelta(hours=3)
+        self.controller.interval = timedelta(minutes=30)
         self.controller.set_next_wake({
             'at': (datetime.now().astimezone() + timedelta(hours=4)).isoformat(),
             'reason': 'Continue research.'})
@@ -491,7 +496,7 @@ daily_budget_cny = "2"
                 'reason': 'Continue the research.'})))
         execution = self.chat._execute_tool_call(call, 'request', 'call', False)
         self.assertEqual(execution.state, '成功')
-        self.assertIn('scheduled for', execution.result)
+        self.assertIn('is scheduled for', execution.result)
         self.assertIn('Continue the research.', execution.summary)
 
     def test_chat_can_enqueue_once_and_interrupt_autonomy_without_busy_indicator(self):

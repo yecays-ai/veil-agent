@@ -60,7 +60,7 @@ max_result_bytes = 8192
 interval_minutes = 90
 daily_max_runs = 12
 daily_budget_cny = "3"
-min_alarm_gap_minutes = 60
+min_alarm_gap_minutes = 15
 # Ticket 133: no autonomous wakes 01:00-06:00 local time while Lan keeps this on (activity page switch).
 quiet_hours = "01:00-06:00"
 quiet_hours_enabled = true

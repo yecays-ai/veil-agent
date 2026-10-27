@@ -2,6 +2,7 @@
 from datetime import datetime, timedelta
 from decimal import Decimal
 import json
+import math
 import os
 import random
 import sys
@@ -18,6 +19,15 @@ MAX_CHAT_CONTEXT_BYTES = 1500
 MAX_ALARM_DAYS = 7
 MAX_ALARM_REASON_CHARS = 300
 ALARM_STATES = {'pending', 'consumed', 'missed', 'cancelled'}
+ALARM_HISTORY_LIMIT = 10
+MAX_PENDING_ALARMS = 12
+RHYTHM_MODES = ('normal', 'quieter', 'silent', 'custom')
+QUIETER_FACTOR = 2.5
+MIN_RHYTHM_MINUTES = 15
+MAX_RHYTHM_MINUTES = 72 * 60
+MIN_CUSTOM_INTERVAL = 30
+MAX_CUSTOM_INTERVAL = 360
+MIN_NATURAL_GAP = 20
 GLANCE_HISTORY_LIMIT = 1
 
 
@@ -192,10 +202,11 @@ class AutonomyController:
         self.path = f'{chat.cfg.id}/autonomy.jsonl'
         self.active_path = chat.store.root / chat.cfg.id / 'autonomy-active.json'
         self.alarm_path = chat.store.root / chat.cfg.id / 'autonomy-alarm.json'
+        self.rhythm_path = chat.store.root / chat.cfg.id / 'autonomy-rhythm.json'
         self.interval = timedelta(minutes=chat.cfg.autonomy['interval_minutes'])
         self.daily_max_runs = chat.cfg.autonomy['daily_max_runs']
         self.daily_budget = chat.cfg.autonomy['daily_budget_cny']
-        self.min_alarm_gap = timedelta(minutes=chat.cfg.autonomy.get('min_alarm_gap_minutes', 60))
+        self.min_alarm_gap = timedelta(minutes=chat.cfg.autonomy.get('min_alarm_gap_minutes', 15))
         self.quiet_hours = chat.cfg.autonomy.get('quiet_hours')
         self.quiet_default = chat.cfg.autonomy.get('quiet_hours_enabled', self.quiet_hours is not None)
         self.quiet_path = chat.store.root / chat.cfg.id / 'autonomy-quiet.json'
@@ -203,13 +214,15 @@ class AutonomyController:
         self.rows = self.chat.store.read(self.path)
         self._recover_active()
         self._validate_rows()
-        self._read_alarm()
+        self._read_alarms()
+        self._read_rhythm()
         self.active = False
         self.deadline = None
         self.claimed_wake_reason = None
         self.announce_next_wake()
         self.announce_more_room()
         self.announce_cleanup()
+        self.announce_wake_control()
 
     def _validate_rows(self):
         required = ('started_at', 'finished_at', 'decision', 'reason', 'tools',
@@ -237,13 +250,12 @@ class AutonomyController:
             except (KeyError, TypeError, ValueError, ArithmeticError) as exc:
                 raise UserError('自主活动记录不完整，已停止；请保留 data 文件夹。') from exc
 
-    def _read_alarm(self):
-        try:
-            alarm = json.loads(self.alarm_path.read_text(encoding='utf-8'))
-        except FileNotFoundError:
-            return None
-        except (OSError, ValueError, UnicodeError) as exc:
-            raise UserError('Scheduled wake state could not be read safely. Keep the data folder intact.') from exc
+    # Ticket 139: Peter's own wake controls. Alarms he sets are exact; his natural rhythm is
+    # a hazard that builds after each wake (idea from Kli Space's Wake Veil, written fresh here).
+    # Lan's limits (pause, quiet hours, daily runs, budget) stay above both.
+
+    @staticmethod
+    def _valid_alarm(alarm):
         if (not isinstance(alarm, dict)
                 or not isinstance(alarm.get('alarm_id'), str) or not alarm['alarm_id']
                 or not isinstance(alarm.get('state'), str) or alarm['state'] not in ALARM_STATES
@@ -252,50 +264,85 @@ class AutonomyController:
                 or len(alarm['reason']) > MAX_ALARM_REASON_CHARS):
             raise UserError('Scheduled wake state is incomplete. Keep the data folder intact.')
         if alarm['state'] == 'cancelled':
-            if alarm['at'] or alarm['reason']:
-                raise UserError('Cancelled wake state is invalid. Keep the data folder intact.')
-        else:
-            try:
-                datetime.fromisoformat(alarm['at']).astimezone()
-            except (ValueError, OverflowError, OSError) as exc:
-                raise UserError('Scheduled wake time is invalid. Keep the data folder intact.') from exc
-            if alarm['state'] == 'pending' and not alarm['reason'].strip():
-                raise UserError('Scheduled wake reason is missing. Keep the data folder intact.')
-        return alarm
+            return {key: value for key, value in alarm.items() if key != 'time'}
+        try:
+            datetime.fromisoformat(alarm['at']).astimezone()
+        except (ValueError, OverflowError, OSError) as exc:
+            raise UserError('Scheduled wake time is invalid. Keep the data folder intact.') from exc
+        if alarm['state'] == 'pending' and not alarm['reason'].strip():
+            raise UserError('Scheduled wake reason is missing. Keep the data folder intact.')
+        return {key: value for key, value in alarm.items() if key != 'time'}
+
+    def _read_alarms(self):
+        try:
+            data = json.loads(self.alarm_path.read_text(encoding='utf-8'))
+        except FileNotFoundError:
+            return []
+        except (OSError, ValueError, UnicodeError) as exc:
+            raise UserError('Scheduled wake state could not be read safely. Keep the data folder intact.') from exc
+        if isinstance(data, dict) and 'alarms' in data:
+            if not isinstance(data['alarms'], list):
+                raise UserError('Scheduled wake state is incomplete. Keep the data folder intact.')
+            return [self._valid_alarm(alarm) for alarm in data['alarms']]
+        return [self._valid_alarm(data)]  # one alarm saved before ticket 139
+
+    def _save_alarms(self, alarms):
+        keep = [alarm for alarm in alarms
+                if alarm['state'] == 'pending' or (alarm['state'] == 'missed' and not alarm.get('missed_reported'))]
+        done = [alarm for alarm in alarms if alarm not in keep][-ALARM_HISTORY_LIMIT:]
+        self.chat.store.replace(f'{self.chat.cfg.id}/autonomy-alarm.json', {'alarms': done + keep})
+
+    def _read_alarm(self):
+        """The most recently set alarm, or None."""
+        alarms = self._read_alarms()
+        return alarms[-1] if alarms else None
+
+    def _save_alarm(self, alarm):
+        alarms = [item for item in self._read_alarms() if item['alarm_id'] != alarm['alarm_id']]
+        self._save_alarms(alarms + [{key: value for key, value in alarm.items() if key != 'time'}])
+
+    def _pending_alarms(self):
+        pending = [alarm for alarm in self._read_alarms() if alarm['state'] == 'pending']
+        return sorted(pending, key=lambda alarm: self._local_time(alarm['at']))
 
     @staticmethod
     def _local_time(value):
         return datetime.fromisoformat(value).astimezone()
 
-    def _save_alarm(self, alarm):
-        self.chat.store.replace(f'{self.chat.cfg.id}/autonomy-alarm.json', alarm)
-
-    def _transition_alarm(self, alarm, state, reason=None):
+    def _transition_alarms(self, ids, state, reason=None):
         try:
-            updated = {key: value for key, value in alarm.items() if key != 'time'}
-            updated['state'] = state
-            if reason:
-                updated['missed_reason'] = reason
-            self._save_alarm(updated)
+            alarms = self._read_alarms()
+            for alarm in alarms:
+                if alarm['alarm_id'] in ids:
+                    alarm['state'] = state
+                    if reason:
+                        alarm['missed_reason'] = reason
+            self._save_alarms(alarms)
         except OSError as exc:
             raise UserError('Scheduled wake state could not be updated safely; no wake was started. Keep the data folder intact.') from exc
+
+    def _transition_alarm(self, alarm, state, reason=None):
+        self._transition_alarms({alarm['alarm_id']}, state, reason)
 
     def set_next_wake(self, args):
         if not isinstance(args, dict):
             return 'The scheduled wake was not changed because the arguments are invalid.', '被拒绝', 'set_next_wake'
         at = args.get('at')
         reason = args.get('reason', '')
-        if not isinstance(at, str):
+        cancel = args.get('cancel', '')
+        if not isinstance(at, str) or not isinstance(cancel, str):
             return 'The at value must be a local ISO timestamp, or an empty string to cancel.', '被拒绝', 'set_next_wake'
         if not at.strip():
-            current = self._read_alarm()
-            if not current or current['state'] != 'pending':
-                return 'There is no scheduled wake to cancel.', '成功', 'no scheduled wake'
+            pending = self._pending_alarms()
+            target = cancel.strip()
+            chosen = [alarm for alarm in pending if not target or target == 'all' or alarm['alarm_id'] == target]
+            if not chosen:
+                return 'There is no matching scheduled wake to cancel.', '成功', 'no scheduled wake'
             try:
-                self._save_alarm({'alarm_id': current['alarm_id'], 'at': '', 'reason': '', 'state': 'cancelled'})
-            except OSError:
+                self._transition_alarms({alarm['alarm_id'] for alarm in chosen}, 'cancelled')
+            except UserError:
                 return 'The scheduled wake could not be cancelled safely; its previous state was preserved.', '出错', 'cancel scheduled wake'
-            return 'The scheduled wake was cancelled.', '成功', 'cancel scheduled wake'
+            return (f'Cancelled {len(chosen)} scheduled wake(s).', '成功', 'cancel scheduled wake')
         if not self.activity.enabled():
             return 'Autonomous activity is paused. Resume it before scheduling a wake.', '被拒绝', 'set_next_wake'
         if not isinstance(reason, str):
@@ -318,10 +365,14 @@ class AutonomyController:
         if self.quiet_enabled() and self._quiet_bounds(scheduled):
             return (f'{scheduled.isoformat()} is inside the night quiet hours ({self.quiet_text()}) Lan set; '
                     'no autonomous wake happens then. Choose a time outside them.', '被拒绝', 'set_next_wake')
-        alarm = {'alarm_id': uuid.uuid4().hex, 'at': scheduled.isoformat(),
-                 'reason': reason, 'state': 'pending'}
         try:
-            self._save_alarm(alarm)
+            alarms = self._read_alarms()
+            if sum(1 for alarm in alarms if alarm['state'] == 'pending') >= MAX_PENDING_ALARMS:
+                return (f'You already have {MAX_PENDING_ALARMS} scheduled wakes waiting. Cancel one first.',
+                        '被拒绝', 'set_next_wake')
+            alarm = {'alarm_id': uuid.uuid4().hex[:8], 'at': scheduled.isoformat(), 'reason': reason,
+                     'state': 'pending', 'set_at': current_time.isoformat()}
+            self._save_alarms(alarms + [alarm])
         except OSError:
             return 'The scheduled wake could not be saved safely; the previous state was preserved.', '出错', 'set_next_wake'
         used = self._eligible_count(scheduled.date().isoformat())
@@ -331,8 +382,113 @@ class AutonomyController:
         else:
             note = (f' That day has {self.daily_max_runs - used} of {self.daily_max_runs} wakes left so far; '
                     'regular wakes use them too.')
-        return (f'The next autonomous wake is scheduled for {scheduled.isoformat()}. Reason: {reason}' + note,
+        return (f'Wake {alarm["alarm_id"]} is scheduled for {scheduled.isoformat()}. Your note: {reason}' + note
+                + ' It rings even if your natural rhythm is set to quiet or off.',
                 '成功', f'{scheduled.isoformat()} | {reason}')
+
+    def _read_rhythm(self):
+        """Peter's current rhythm choice; anything expired or missing means normal."""
+        try:
+            data = json.loads(self.rhythm_path.read_text(encoding='utf-8'))
+        except FileNotFoundError:
+            return {'mode': 'normal'}
+        except (OSError, ValueError, UnicodeError) as exc:
+            raise UserError('Wake rhythm setting could not be read safely. Keep the data folder intact.') from exc
+        try:
+            mode = data['mode']
+            until = datetime.fromisoformat(data['until']).astimezone()
+            set_at = datetime.fromisoformat(data['set_at']).astimezone()
+            if mode not in RHYTHM_MODES or mode == 'normal' or not isinstance(data.get('reason'), str):
+                raise ValueError(mode)
+            if mode == 'custom':
+                minutes = data['interval_minutes']
+                if type(minutes) is not int or not MIN_CUSTOM_INTERVAL <= minutes <= MAX_CUSTOM_INTERVAL:
+                    raise ValueError(minutes)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise UserError('Wake rhythm setting is invalid. Keep the data folder intact.') from exc
+        if datetime.now().astimezone() >= until:
+            return {'mode': 'normal', 'since': until}
+        return {**{key: value for key, value in data.items() if key != 'time'},
+                'until': until, 'set_at': set_at, 'since': set_at}
+
+    def set_wake_rhythm(self, args):
+        if not isinstance(args, dict) or args.get('mode') not in RHYTHM_MODES:
+            return ('mode must be one of: ' + ', '.join(RHYTHM_MODES) + '.', '被拒绝', 'set_wake_rhythm')
+        mode = args['mode']
+        current_time = datetime.now().astimezone()
+        if mode == 'normal':
+            if self._read_rhythm()['mode'] == 'normal':
+                return 'Your natural wake rhythm is already normal.', '成功', 'rhythm normal'
+            try:
+                self.chat.store.replace(f'{self.chat.cfg.id}/autonomy-rhythm.json', {
+                    'mode': 'quieter', 'until': current_time.isoformat(), 'set_at': current_time.isoformat(),
+                    'reason': 'ended early'})
+            except OSError:
+                return 'The rhythm could not be changed safely; the previous setting stays.', '出错', 'set_wake_rhythm'
+            return 'Your natural wake rhythm is back to normal now.', '成功', 'rhythm normal'
+        minutes, reason = args.get('minutes'), args.get('reason', '')
+        if type(minutes) is not int or not MIN_RHYTHM_MINUTES <= minutes <= MAX_RHYTHM_MINUTES:
+            return (f'minutes must be a whole number from {MIN_RHYTHM_MINUTES} to {MAX_RHYTHM_MINUTES}; '
+                    'the setting ends by itself after that.', '被拒绝', 'set_wake_rhythm')
+        if not isinstance(reason, str) or not ' '.join(reason.split()) or len(reason) > MAX_ALARM_REASON_CHARS:
+            return f'The reason must contain 1 to {MAX_ALARM_REASON_CHARS} characters.', '被拒绝', 'set_wake_rhythm'
+        record = {'mode': mode, 'until': (current_time + timedelta(minutes=minutes)).isoformat(),
+                  'set_at': current_time.isoformat(), 'reason': ' '.join(reason.split())}
+        if mode == 'custom':
+            interval = args.get('interval_minutes')
+            if type(interval) is not int or not MIN_CUSTOM_INTERVAL <= interval <= MAX_CUSTOM_INTERVAL:
+                return (f'custom needs interval_minutes from {MIN_CUSTOM_INTERVAL} to {MAX_CUSTOM_INTERVAL}.',
+                        '被拒绝', 'set_wake_rhythm')
+            record['interval_minutes'] = interval
+        try:
+            self.chat.store.replace(f'{self.chat.cfg.id}/autonomy-rhythm.json', record)
+        except OSError:
+            return 'The rhythm could not be changed safely; the previous setting stays.', '出错', 'set_wake_rhythm'
+        return (f'Natural wake rhythm set: {self.rhythm_text()} Scheduled wakes you set still ring. '
+                'Lan\'s daily limit and quiet hours still apply.', '成功', f'rhythm {mode} {minutes}min')
+
+    def _mean_interval(self, rhythm):
+        """Average minutes between natural wakes for this rhythm, or None when they are off."""
+        base = self.interval.total_seconds() / 60
+        if rhythm['mode'] == 'silent':
+            return None
+        if rhythm['mode'] == 'quieter':
+            return base * QUIETER_FACTOR
+        if rhythm['mode'] == 'custom':
+            return float(rhythm['interval_minutes'])
+        return base
+
+    def rhythm_text(self):
+        rhythm = self._read_rhythm()
+        if rhythm['mode'] == 'normal':
+            return f'normal (natural wakes about every {round(self._mean_interval(rhythm))} minutes on average).'
+        until = rhythm['until'].strftime('%H:%M')
+        left = max(int((rhythm['until'] - datetime.now().astimezone()).total_seconds() // 60), 0)
+        what = {'quieter': 'quieter', 'silent': 'no natural wakes',
+                'custom': f'custom, about every {rhythm.get("interval_minutes")} minutes'}[rhythm['mode']]
+        if rhythm['mode'] == 'quieter':
+            what += f' (about every {round(self._mean_interval(rhythm))} minutes)'
+        return (f'{what} until {until} ({left} min left), then normal again. You set it because: '
+                + json.dumps(rhythm['reason'], ensure_ascii=False) + '.')
+
+    def _natural_wait(self, reference, mean):
+        """Minutes from reference until the next natural wake.
+
+        The urge to wake builds at a rate around 1/mean per minute: low right after a wake, then
+        drifting a little up or down for this cycle. A wake happens once the built-up urge passes
+        this cycle's threshold. Threshold and drift are drawn once per cycle from a seed, so a
+        restart finds the same time instead of rolling again.
+        """
+        rng = random.Random(f'{reference.isoformat()}|{mean:.1f}')
+        threshold = rng.gammavariate(3, 1 / 3)
+        drift = math.exp(rng.gauss(0, 0.25))
+        steps_per_mean = 60
+        built, step = 0.0, 0
+        while built < threshold and step < 3 * steps_per_mean:
+            step += 1
+            settle = 1 - 0.7 * math.exp(-step / (steps_per_mean * 0.2))
+            built += 1.17 * drift * settle / steps_per_mean  # 1.17 keeps the average at mean
+        return max(step * mean / steps_per_mean, min(MIN_NATURAL_GAP, mean / 3))
 
     def _periodic_next_wake(self, state):
         enabled_at = state['enabled_at']
@@ -348,9 +504,19 @@ class AutonomyController:
             if when >= reference:
                 reference = max(reference, when)
                 break
-        next_at = reference + self.interval
+        rhythm = self._read_rhythm()
+        if rhythm.get('since'):
+            reference = max(reference, rhythm['since'])
+        mean = self._mean_interval(rhythm)
+        if mean is None:
+            return None
+        next_at = reference + timedelta(minutes=self._natural_wait(reference, mean))
+        if rhythm['mode'] != 'normal' and next_at >= rhythm['until']:
+            # The setting ends first; the next cycle starts from the moment it ends.
+            normal = self._mean_interval({'mode': 'normal'})
+            next_at = rhythm['until'] + timedelta(minutes=self._natural_wait(rhythm['until'], normal))
         if next_at < self.started_at:
-            return self.started_at + self.interval
+            return self.started_at + timedelta(minutes=self._natural_wait(self.started_at, mean))
         return next_at
 
     def _next_wake_details(self):
@@ -360,15 +526,20 @@ class AutonomyController:
         if self._eligible_count() >= self.daily_max_runs:
             return None, '今日自主活动次数已用完。'
         periodic = self._periodic_next_wake(state)
-        if self.quiet_enabled():
+        if periodic is not None and self.quiet_enabled():
             bounds = self._quiet_bounds(max(periodic, datetime.now().astimezone()))
             if bounds:
                 periodic = max(periodic, bounds[1])
-        alarm = self._read_alarm()
-        if alarm and alarm['state'] == 'pending':
+        for alarm in self._pending_alarms():
             alarm_at = self._local_time(alarm['at'])
-            if alarm_at <= periodic and not (self.quiet_enabled() and self._quiet_bounds(alarm_at)):
+            if self.quiet_enabled() and self._quiet_bounds(alarm_at):
+                continue
+            if periodic is None or alarm_at <= periodic:
                 return alarm_at, alarm['reason']
+            break
+        if periodic is None:
+            rhythm = self._read_rhythm()
+            return None, f'Peter 自己暂停了自然醒，{rhythm["until"].strftime("%H:%M")} 恢复；他定的闹钟照常。'
         return periodic, None
 
     def _recover_active(self):
@@ -483,6 +654,12 @@ class AutonomyController:
                 'the count resets at local midnight.')
         if self.quiet_enabled():
             text += f' Night quiet hours {self.quiet_text()} are on: no autonomous wakes happen then.'
+        text += ' Your natural wake rhythm: ' + self.rhythm_text()
+        pending = self._pending_alarms()
+        if pending:
+            text += ' Wakes you scheduled: ' + '; '.join(
+                f'{alarm["alarm_id"]} at {self._local_time(alarm["at"]).strftime("%Y-%m-%d %H:%M")} '
+                + json.dumps(alarm['reason'], ensure_ascii=False) for alarm in pending) + '.'
         return text
 
     def _today(self, stamp=None):
@@ -495,46 +672,51 @@ class AutonomyController:
     def next_wake(self):
         return self._next_wake_details()[0]
 
+    def _due_alarms(self, current_time):
+        return [alarm for alarm in self._pending_alarms() if self._local_time(alarm['at']) <= current_time]
+
+    def _blocked_by_lan(self, current_time, due_alarms):
+        """Lan's limits come first; alarms caught by them become missed, never replayed."""
+        if self._eligible_count() >= self.daily_max_runs:
+            if due_alarms:
+                self._transition_alarms({alarm['alarm_id'] for alarm in due_alarms}, 'missed',
+                                        'daily wake limit reached')
+            return True
+        if self.in_quiet(current_time):
+            if due_alarms:
+                self._transition_alarms({alarm['alarm_id'] for alarm in due_alarms}, 'missed',
+                                        'night quiet hours')
+            return True
+        return False
+
     def due(self):
         state = self.activity.snapshot()
         if not state['enabled']:
             return False
         current_time = datetime.now().astimezone()
-        alarm = self._read_alarm()
-        alarm_due = bool(alarm and alarm['state'] == 'pending'
-                         and self._local_time(alarm['at']) <= current_time)
-        if alarm_due and self._eligible_count() >= self.daily_max_runs:
-            self._transition_alarm(alarm, 'missed', 'daily wake limit reached')
+        due_alarms = self._due_alarms(current_time)
+        if self._blocked_by_lan(current_time, due_alarms):
             return False
-        if self.in_quiet(current_time):
-            if alarm_due:
-                self._transition_alarm(alarm, 'missed', 'night quiet hours')
-            return False
+        if due_alarms:
+            return True
         next_at = self.next_wake()
         return next_at is not None and current_time >= next_at
 
     def claim_due(self):
-        """Claim one idle wake and durably consume an alarm before it can run."""
+        """Claim one idle wake and durably consume its alarms before it can run."""
         state = self.activity.snapshot()
         if not state['enabled']:
             return False
         current_time = datetime.now().astimezone()
-        alarm = self._read_alarm()
-        alarm_due = bool(alarm and alarm['state'] == 'pending'
-                         and self._local_time(alarm['at']) <= current_time)
-        if self._eligible_count() >= self.daily_max_runs:
-            if alarm_due:
-                self._transition_alarm(alarm, 'missed', 'daily wake limit reached')
+        due_alarms = self._due_alarms(current_time)
+        if self._blocked_by_lan(current_time, due_alarms):
             return False
-        if self.in_quiet(current_time):
-            if alarm_due:
-                self._transition_alarm(alarm, 'missed', 'night quiet hours')
-            return False
-        if alarm_due:
+        if due_alarms:
             # Consume before returning to the chat loop. A crash between this
             # write and model startup can miss one wake, but can never replay it.
-            self._transition_alarm(alarm, 'consumed')
-            self.claimed_wake_reason = alarm['reason']
+            self._transition_alarms({alarm['alarm_id'] for alarm in due_alarms}, 'consumed')
+            notes = [alarm['reason'] for alarm in due_alarms]
+            self.claimed_wake_reason = notes[0] if len(notes) == 1 else notes
             return True
         next_at = self.next_wake()
         if next_at is None or current_time < next_at:
@@ -561,6 +743,9 @@ class AutonomyController:
             'daily_max_runs': self.daily_max_runs,
             'quiet_hours': self.quiet_text() or None,
             'quiet_enabled': self.quiet_enabled(),
+            'rhythm': self.rhythm_text(),
+            'scheduled_wakes': [{'id': alarm['alarm_id'], 'at': alarm['at'], 'note': alarm['reason']}
+                                for alarm in self._pending_alarms()],
         }
 
     def announce_next_wake(self):
@@ -586,6 +771,15 @@ class AutonomyController:
         announce = getattr(files, 'announce_autonomy_cleanup', None)
         if announce:
             announce(self.daily_budget, self.quiet_text())
+            self.chat.pending_capability_event = getattr(self.chat.tools, 'capability_event', None)
+            event = getattr(self.chat.tools, 'capability_event_model', None)
+            self.chat.pending_capability_event_model = event if isinstance(event, str) else None
+
+    def announce_wake_control(self):
+        files = getattr(self.chat.tools, 'files', self.chat.tools)
+        announce = getattr(files, 'announce_wake_control', None)
+        if announce:
+            announce()
             self.chat.pending_capability_event = getattr(self.chat.tools, 'capability_event', None)
             event = getattr(self.chat.tools, 'capability_event_model', None)
             self.chat.pending_capability_event_model = event if isinstance(event, str) else None
@@ -698,17 +892,24 @@ class AutonomyController:
         return text
 
     def _missed_alarm_text(self):
-        """Tell Peter once that a wake he scheduled did not happen, and why."""
-        alarm = self._read_alarm()
-        if not alarm or alarm['state'] != 'missed' or alarm.get('missed_reported'):
-            return ''
-        why = alarm.get('missed_reason') or 'daily wake limit reached'
+        """Tell Peter once which wakes he scheduled did not happen, and why."""
         try:
-            self._save_alarm({**{k: v for k, v in alarm.items() if k != 'time'}, 'missed_reported': True})
+            alarms = self._read_alarms()
+        except UserError:
+            return ''
+        missed = [alarm for alarm in alarms if alarm['state'] == 'missed' and not alarm.get('missed_reported')]
+        if not missed:
+            return ''
+        for alarm in missed:
+            alarm['missed_reported'] = True
+        try:
+            self._save_alarms(alarms)
         except OSError:
             return ''
-        return (f'The wake you scheduled for {alarm["at"]} did not happen ({why}). Its reason was: '
-                + json.dumps(alarm['reason'], ensure_ascii=False) + '\n')
+        return ''.join(
+            f'The wake you scheduled for {alarm["at"]} did not happen '
+            f'({alarm.get("missed_reason") or "daily wake limit reached"}). Your note was: '
+            + json.dumps(alarm['reason'], ensure_ascii=False) + '\n' for alarm in missed)
 
     def should_yield(self):
         return (self.hub.stopped or self.hub.autonomy_interrupted.is_set()

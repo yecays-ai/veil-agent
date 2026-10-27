@@ -184,16 +184,37 @@ AUTONOMY_HISTORY = {'type': 'function', 'function': {
 
 AUTONOMY_SET_NEXT_WAKE = {'type': 'function', 'function': {
     'name': 'set_next_wake',
-    'description': ('Schedule or replace your one next autonomous wake using a local ISO timestamp and one short '
-                    'sentence explaining what you want to continue or when you want to contact Lan. Use an empty '
-                    'at value to cancel. The time must be at least 60 minutes from now and no more than 7 days away. '
-                    'The wake counts toward the existing daily run and budget limits and is saved across service restarts.'),
+    'description': ('Set an alarm to wake yourself at an exact local time, with a short note to your future self '
+                    'about why (what you want to continue, or that you want to come back to Lan). You can keep '
+                    'several alarms; each rings once. It must be at least 15 minutes from now and no more than '
+                    '7 days away. Alarms ring even when your natural rhythm is quiet or off, but count toward '
+                    "Lan's daily wake limit and never ring in her night quiet hours. To cancel, pass an empty at "
+                    'and cancel set to the alarm id, or "all". Saved across restarts.'),
     'parameters': {'type': 'object', 'properties': {
         'at': {'type': 'string', 'maxLength': 64,
-               'description': 'Local ISO timestamp, for example 2026-10-26T08:00:00; use an empty string to cancel.'},
+               'description': 'Local ISO timestamp, for example 2026-10-26T08:00:00; empty string to cancel.'},
         'reason': {'type': 'string', 'maxLength': 300,
-                   'description': 'One short sentence describing what to continue or who to contact.'},
+                   'description': 'One short note to your future self: why you want to wake then.'},
+        'cancel': {'type': 'string', 'maxLength': 32,
+                   'description': 'Only with an empty at: the alarm id to cancel, or "all".'},
     }, 'required': ['at', 'reason'], 'additionalProperties': False},
+}}
+
+AUTONOMY_SET_WAKE_RHYTHM = {'type': 'function', 'function': {
+    'name': 'set_wake_rhythm',
+    'description': ('Choose how often you wake on your own for a while. normal: the usual rhythm. quieter: fewer '
+                    'natural wakes. silent: no natural wakes at all (alarms you set still ring). custom: about '
+                    'every interval_minutes. The choice lasts minutes, then goes back to normal by itself; '
+                    'mode normal ends it early. Setting it again replaces the current choice.'),
+    'parameters': {'type': 'object', 'properties': {
+        'mode': {'type': 'string', 'enum': ['normal', 'quieter', 'silent', 'custom']},
+        'minutes': {'type': 'integer', 'minimum': 15, 'maximum': 4320,
+                    'description': 'How long the choice lasts (not needed for normal).'},
+        'interval_minutes': {'type': 'integer', 'minimum': 30, 'maximum': 360,
+                             'description': 'Only for custom: average minutes between natural wakes.'},
+        'reason': {'type': 'string', 'maxLength': 300,
+                   'description': 'One short sentence on why, for your future self.'},
+    }, 'required': ['mode'], 'additionalProperties': False},
 }}
 
 
@@ -583,7 +604,7 @@ def load_character(root, character_id):
         autonomy = dict(cfg.get('autonomy', {}))
         interval = positive_int(autonomy.get('interval_minutes', 180))
         daily_runs = positive_int(autonomy.get('daily_max_runs', 6))
-        min_alarm_gap = positive_int(autonomy.get('min_alarm_gap_minutes', 60))
+        min_alarm_gap = positive_int(autonomy.get('min_alarm_gap_minutes', 15))
         autonomy_daily = price(autonomy.get('daily_budget_cny', '2'))
         quiet_hours = parse_quiet_hours(autonomy.get('quiet_hours', ''))
         quiet_enabled = autonomy.get('quiet_hours_enabled', quiet_hours is not None)
@@ -1280,7 +1301,7 @@ class Chat:
             (self.cfg.tools and self.cfg.tools.get('enabled', True))
             or (self.tools and self.tools.tools)) else []
         history = [CAPABILITY_HISTORY, AUTONOMY_HISTORY] if existing_tools or task_tools or messaging else []
-        wake_tools = [AUTONOMY_SET_NEXT_WAKE] if self.autonomy_controller is not None else []
+        wake_tools = [AUTONOMY_SET_NEXT_WAKE, AUTONOMY_SET_WAKE_RHYTHM] if self.autonomy_controller is not None else []
         profile = []
         if self.profile and history:
             from profile_notes import PROFILE_APPEND, PROFILE_REPLACE
@@ -2205,6 +2226,12 @@ class Chat:
                     result, state, summary = 'Scheduled wakes are unavailable in this session.', '被拒绝', 'set_next_wake'
                 else:
                     result, state, summary = self.autonomy_controller.set_next_wake(args)
+            elif call.function.name == 'set_wake_rhythm':
+                args = json.loads(call.function.arguments or '{}')
+                if self.autonomy_controller is None:
+                    result, state, summary = 'Wake rhythm is unavailable in this session.', '被拒绝', 'set_wake_rhythm'
+                else:
+                    result, state, summary = self.autonomy_controller.set_wake_rhythm(args)
             else:
                 args = json.loads(call.function.arguments)
                 if not isinstance(args, dict):

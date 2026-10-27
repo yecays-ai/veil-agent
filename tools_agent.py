@@ -45,7 +45,7 @@ LAB_ONLY = {'create_directory', 'move_lab_file', 'lab_file_digest'}
 # Memory tools (ticket 007) are offered by memory_native.ToolSet, never by the filesystem server.
 NATIVE = {'hold', 'breath_search', 'trace', 'dream', 'letter_write', 'letter_read',
           'letter_lock_update', 'anchor', 'release', 'plan', 'pulse', 'memory_history', 'memory_catalog', 'memory_read'}
-AUTONOMY_DIRECT = {'set_next_wake'}
+AUTONOMY_DIRECT = {'set_next_wake', 'set_wake_rhythm'}
 
 
 def permitted_tools(server_tools):
@@ -614,6 +614,24 @@ class FilesystemTools:
                 'and desktop_move_to_trash moves them into lab/trash/. The program keeps previous versions; '
                 'nothing can be deleted. During your own autonomous activity Lan is not asked to approve '
                 'anything, so steps that need her approval wait until you ask her.')
+        except Exception as exc:
+            self.enabled = False
+            raise UserError('能力清单无法更新，自主活动已停止；请保留 data 文件夹。') from exc
+
+    @capability_transaction
+    def announce_wake_control(self):
+        if getattr(self, 'cap_path', None) is None:
+            return
+        try:
+            self._announce_once(
+                'wake_control_139_announced',
+                'Capability update: you now decide more of how you wake. Your natural wakes no longer come on a '
+                'fixed clock: the urge to wake builds after each wake and the time varies, about 90 minutes on '
+                'average. With set_wake_rhythm you can make them quieter, turn them off, or set your own pace '
+                'for a while; it returns to normal by itself. set_next_wake now keeps several alarms, each with '
+                'a note to your future self, as soon as 15 minutes ahead, and they ring even when your rhythm '
+                "is quiet or off. Lan's pause switch, night quiet hours, daily wake limit and budget still apply. "
+                'Each wake and chat turn shows your current rhythm and alarms.')
         except Exception as exc:
             self.enabled = False
             raise UserError('能力清单无法更新，自主活动已停止；请保留 data 文件夹。') from exc
