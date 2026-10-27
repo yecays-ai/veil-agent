@@ -49,9 +49,10 @@
     <section class="surface context-block"><h3>短期便签 <small class="muted">进行中的会放进他的上下文</small></h3><div id="context-notes" class="context-list" aria-live="polite"><p class="muted">还没有便签。</p></div></section>
   </section>
   <section id="memory-view" class="page" data-page-view="memory" hidden>
-    <div class="page-heading"><div><p class="eyebrow">来自 Ombre Brain 的真实记忆</p><h2>记忆</h2></div></div>
-    <div class="memory-toolbar"><label for="memory-search">搜索记忆</label><input id="memory-search" type="search" placeholder="按标题筛选"><button id="memory-reload">刷新</button></div>
-    <div class="memory-layout"><section id="memory-list" class="surface memory-list" aria-label="Ombre 记忆列表"><p class="muted">正在读取 Ombre 记忆…</p></section><article id="memory-detail" class="surface memory-detail"><p class="muted">选择一条记忆查看原文。</p></article></div>
+    <div class="page-heading"><div><p class="eyebrow">PETER'S MEMORY</p><h2 id="memory-heading">最近</h2></div><button id="memory-reload">刷新</button></div>
+    <div class="memory-groups" role="group" aria-label="记忆分组"><button class="active" data-memory-group="recent">最近</button><button data-memory-group="us">我们俩</button><button data-memory-group="peter">他自己</button><button data-memory-group="system">系统和能力</button></div>
+    <div class="memory-toolbar"><label for="memory-search">搜索记忆</label><input id="memory-search" type="search" placeholder="搜索记忆…（标题、内容、标签都能搜）"></div>
+    <div class="memory-layout"><section id="memory-list" class="surface memory-list" aria-label="Ombre 记忆列表"><p class="muted">正在读取 Ombre 记忆…</p></section><article id="memory-detail" class="surface memory-detail"><p class="muted">点上面一条记忆查看内容。</p></article></div>
     <div class="memory-footer"><span id="memory-count" class="muted">尚未读取</span><div><span id="memory-unavailable" class="muted" hidden>Ombre 记忆暂不可用</span><button id="memory-panel" hidden>高级管理 · Ombre Dashboard <span data-lucide="external-link" data-size="14"></span></button></div></div>
   </section>
   <section id="more-view" class="page" data-page-view="more" hidden>

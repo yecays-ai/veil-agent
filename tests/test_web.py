@@ -270,6 +270,31 @@ output_cny_per_million = "8"
                                  ('memory_read', {'memory_id': 'fixture-id', 'offset': 0,
                                                   'version': 'a' * 64})])
 
+    def test_memory_page_list_edit_and_delete_endpoints(self):
+        calls = []
+
+        class FixtureMemoryTools:
+            def panel_entries(self):
+                return {'items': [{'memory_id': 'fixture-id', 'title': 'Fictional memory'}], 'recent_requests': 0}
+
+            def panel_edit(self, memory_id, changes):
+                calls.append(('edit', memory_id, changes))
+                return True, 'saved'
+
+            def panel_delete(self, memory_id):
+                calls.append(('delete', memory_id))
+                return False, 'not confirmed'
+
+        self.hub.memory_tools = FixtureMemoryTools()
+        self.assertEqual(self.call('/api/memory/panel', token='wrong')[0], 403)
+        status, listing = self.call('/api/memory/panel')
+        self.assertEqual((status, listing['items'][0]['memory_id']), (200, 'fixture-id'))
+        self.assertEqual(self.call('/api/memory/edit', {'id': 'fixture-id', 'changes': {'title': 'New'}}, token='wrong')[0], 403)
+        self.assertEqual(self.call('/api/memory/edit', {'id': 'fixture-id', 'changes': {'title': 'New'}}), (200, {'ok': True, 'message': 'saved'}))
+        self.assertEqual(self.call('/api/memory/delete', {'id': 'fixture-id'})[0], 409)
+        self.assertEqual(self.call('/api/memory/delete', {'nope': 1})[0], 400)
+        self.assertEqual(calls, [('edit', 'fixture-id', {'title': 'New'}), ('delete', 'fixture-id')])
+
     def test_image_upload_is_token_bound_persisted_and_shown_as_one_chat_event(self):
         png = b'\x89PNG\r\n\x1a\nfictional'
         body = {'mime': 'image/png', 'name': 'fictional.png',

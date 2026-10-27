@@ -1,9 +1,10 @@
 # 当前状态
 
-更新：2026-10-26 UTC · Claude。
+更新：2026-10-27 UTC · Claude。
 
 ## 当前目标与现状
 
+- 工单 132「看得懂的记忆页」：分支 `ticket/132-readable-memory-page`，Claude 实现，Lan 2026-10-27 要求。记忆页一次读出全部记忆（`/api/memory/panel`），最近的在前、按天分组，四个分组按钮（只合并显示，不改 Ombre 分类），可编辑标题/为什么记/内容（走 trace，旧版本留档）和删除（点两次，同 /delete）；标签含「惊喜」的记忆不发正文。新增 `tests/test_memory_panel.py` 和 web 接口测试；全量测试与 main 相同（本机 13 项环境相关失败两边一致），桌面测试 10 项通过。验收见 `docs/tickets/132-readable-memory-page.md`。下一个工单号 133。
 - 工单 131「消息操作和回忆界面」：分支 `ticket/131-message-ui`，PR #178。右键浮起选中消息并虚化背景，使用 Lucide 官方图标；引用有可取消预览和消息内引用块；回复关联记忆以横向卡片显示时间、最多三个标签及正文，最多展示五条。输入区以 T 听写、官方图片图标和内嵌麦克风操作，点击开始、再次点击发送语音。修复发送期间修改草稿会丢失引用的问题。桌面自动测试 10 项和虚构数据 Windows Electron smoke 通过；真实 Windows/Lan 体验待验收。验收见 `docs/tickets/131-message-ui.md`。
 
 - 工单 130「Codex 提醒不再召回长期记忆」：分支 `ticket/130-codex-no-recall`，Claude 实现，Lan 2026-10-27 同意。`codex_watch_mode` 时跳过 `memory.context`。回归测试在 `tests/test_background.py`；全量测试与 main 相同（本机 13 项环境相关失败两边一致）。下一个工单号 131。
