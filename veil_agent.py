@@ -1787,8 +1787,10 @@ class Chat:
         if self.memory and opening_turn and self.opening_refresh_needed:
             self.memory.refresh_opening()
             self.opening_refresh_needed = False
-        recalled = self.memory.context(text, include_opening=opening_turn) if self.memory else []
-        memory_refs = getattr(self.memory, 'last_context_refs', []) if self.memory else []
+        # Ticket 130: a Codex reminder is a short notice; it does not need long-term memories.
+        recalled = (self.memory.context(text, include_opening=opening_turn)
+                    if self.memory and not self.codex_watch_mode else [])
+        memory_refs = getattr(self.memory, 'last_context_refs', []) if self.memory and not self.codex_watch_mode else []
         self.turn_memory_refs = list(memory_refs) if isinstance(memory_refs, list) else []
         autonomy_handoff_id = None
         glance_handoff_id = None
