@@ -1091,6 +1091,9 @@ class Chat:
         self.path = f'{cfg.id}/chat.jsonl'
         self.session_path = store.root / cfg.id / 'chat-session.json'
         self.history, self.rounds = self.recent()
+        self.opening_pending = not any(m.get('role') == 'assistant' and not m.get('autonomy_run_id')
+                                       for m in self.history_events)
+        self.opening_refresh_needed = False
         self.last_self = None
         self.trim_note = None
         self.trim_noted = False
@@ -1469,6 +1472,8 @@ class Chat:
         finally:
             tmp.unlink(missing_ok=True)
         self.history, self.rounds = self.recent()
+        self.opening_pending = True
+        self.opening_refresh_needed = True
         self.last_self = None
         self.trim_note = None
         self.trim_noted = False
@@ -1778,7 +1783,11 @@ class Chat:
         if not self.pending_capability_event and self.tools:
             self.pending_capability_event = self.tools.capability_event
             self.pending_capability_event_model = capability_model_notice(self.tools)
-        recalled = self.memory.context(text) if self.memory else []
+        opening_turn = bool(self.opening_pending and not autonomy and not self.glance_mode and not self.codex_watch_mode)
+        if self.memory and opening_turn and self.opening_refresh_needed:
+            self.memory.refresh_opening()
+            self.opening_refresh_needed = False
+        recalled = self.memory.context(text, include_opening=opening_turn) if self.memory else []
         memory_refs = getattr(self.memory, 'last_context_refs', []) if self.memory else []
         self.turn_memory_refs = list(memory_refs) if isinstance(memory_refs, list) else []
         autonomy_handoff_id = None
@@ -1947,6 +1956,8 @@ class Chat:
                 else:
                     self.pending_capability_event = None
                     self.pending_capability_event_model = None
+        if opening_turn:
+            self.opening_pending = False
         if not autonomy:
             self.history, self.rounds = self.recent()
             if autonomy_handoff_id is not None:
