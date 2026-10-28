@@ -62,6 +62,11 @@ class WindowsMediaTests(unittest.TestCase):
     def test_no_session_and_stopped_session_are_distinct(self):
         FakeManager.session = None
         self.assertEqual(self.read_immediate(FakeManager), {'state': 'none'})
+        tools = WindowsMediaTools(True, platform_enabled=True, reader=lambda: {'state': 'none'})
+        result, state, _ = tools.invoke('windows_now_playing', {})
+        self.assertEqual(state, '成功')
+        self.assertIn('Windows SMTC', result)
+        self.assertIn('Settings > System', result)
         FakeManager.session = FakeSession('STOPPED', 'Old song', 'Old artist')
         self.assertEqual(self.read_immediate(FakeManager), {'state': 'stopped'})
 

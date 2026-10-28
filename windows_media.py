@@ -87,7 +87,8 @@ class WindowsMediaTools:
             return 'Windows did not provide readable media-session information; no song was inferred.', '出错', name
         state = data.get('state')
         if state == 'none':
-            return 'There is no current Windows media session.', '成功', name
+            return ('There is no current Windows media session. Make sure the player exposes Windows SMTC; '
+                    'in NetEase Cloud Music, enable SMTC in Settings > System and restart the player.'), '成功', name
         if state == 'stopped':
             return 'The current Windows media session is stopped.', '成功', name
         if state not in {'playing', 'paused', 'unknown'}:
@@ -95,7 +96,8 @@ class WindowsMediaTools:
         title = _plain(data.get('title'))
         artist = _plain(data.get('artist'))
         if not title and not artist:
-            return f'Playback state: {state}. Windows did not provide a song title or artist.', '成功', name
+            return (f'Playback state: {state}. Windows did not provide a song title or artist. Make sure the '
+                    'player exposes Windows SMTC; in NetEase Cloud Music, enable SMTC in Settings > System.'), '成功', name
         fields = []
         if title:
             fields.append(f'Title: {title}')
