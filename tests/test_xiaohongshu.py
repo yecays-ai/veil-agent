@@ -1,6 +1,8 @@
 """Offline account, transport and safety scenarios; no real cookies or paid API."""
 import json
 import os
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -12,7 +14,7 @@ from unittest.mock import Mock, patch
 
 from tools_agent import FilesystemTools, permitted_tools, tool_policy
 from xiaohongshu_tools import (MAX_DAILY, Cooldown, Sidecar, TOOL, XiaohongshuTools,
-                              account_lock, companion_env, private_folder)
+                              account_lock, companion_env, private_folder, stop_process_tree)
 
 
 class XiaohongshuTests(unittest.TestCase):
@@ -121,6 +123,12 @@ class XiaohongshuTests(unittest.TestCase):
         self.assertIn('disabled', text)
         self.assertNotIn('dedicated"', text)
         self.assertLessEqual(len(text.encode()), 8192)
+        self.cfg.tools = {'max_result_bytes': 64}
+        bounded = XiaohongshuTools(self.root, self.cfg, sidecar=self.sidecar, clock=lambda: self.now)
+        self.now += 20
+        text, state, _ = bounded.invoke('xiaohongshu', {'action': 'status'})
+        self.assertEqual(state, '成功')
+        self.assertLessEqual(len(text.encode()), 64)
 
     def test_four_operations_per_turn_and_disabled_role(self):
         for _ in range(4):
@@ -161,6 +169,86 @@ class XiaohongshuTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 with account_lock(self.folder):
                     self.fail('second session entered')
+
+    def test_human_relogin_keeps_account_binding_and_daily_budget(self):
+        from xiaohongshu_setup import login_and_bind
+        cookies = self.folder / 'cookies.json'
+        cookies.write_text('fictional cookies', encoding='utf-8')
+        quota = self.folder / 'read-budget.json'
+        quota.write_text('{"count":60}', encoding='utf-8')
+        with patch('builtins.input', side_effect=['RELOGIN', 'dedicated']), patch('builtins.print'), \
+                patch('xiaohongshu_setup.binary_path', return_value=self.root / 'fake.exe'), \
+                patch('xiaohongshu_setup.subprocess.Popen') as process, \
+                patch('xiaohongshu_setup.Sidecar', return_value=self.sidecar):
+            process.return_value.wait.return_value = 0
+            login_and_bind(self.root, self.folder)
+        self.assertFalse(cookies.exists())
+        self.assertEqual(json.loads((self.folder / 'account.json').read_text())['user_id'], 'dedicated')
+        self.assertEqual(json.loads(quota.read_text())['count'], 60)
+        process.assert_called_once()
+
+    def test_login_timeout_uses_process_tree_cleanup(self):
+        from xiaohongshu_setup import login_and_bind
+        process = Mock()
+        process.wait.side_effect = subprocess.TimeoutExpired('fake-login', 600)
+        with patch('builtins.print'), \
+                patch('xiaohongshu_setup.binary_path', return_value=self.root / 'fake.exe'), \
+                patch('xiaohongshu_setup.subprocess.Popen', return_value=process), \
+                patch('xiaohongshu_setup.stop_process_tree') as cleanup:
+            with self.assertRaises(subprocess.TimeoutExpired):
+                login_and_bind(self.root, self.folder)
+        cleanup.assert_called_once_with(process)
+        self.assertEqual(json.loads((self.folder / 'account.json').read_text())['user_id'], 'dedicated')
+
+    def test_sidecar_closes_before_account_lock_is_released_on_success_or_error(self):
+        def closing():
+            with self.assertRaises(ValueError):
+                with account_lock(self.folder):
+                    self.fail('account lock was released before sidecar close')
+        self.sidecar.close.side_effect = closing
+        self.tools._operation({'action': 'status'}, threading.Event())
+        self.now += 20
+        self.sidecar.request.side_effect = ValueError('failed read')
+        with self.assertRaises(ValueError):
+            self.tools._operation({'action': 'status'}, threading.Event())
+        self.assertEqual(self.sidecar.close.call_count, 2)
+        with account_lock(self.folder):
+            pass
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows process-tree cleanup')
+    def test_real_windows_cleanup_stops_owned_child_too(self):
+        import ctypes
+        from ctypes import wintypes
+        kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+        kernel.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        kernel.OpenProcess.restype = wintypes.HANDLE
+        kernel.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+        kernel.TerminateProcess.argtypes = (wintypes.HANDLE, wintypes.UINT)
+        kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
+        pid_file = self.root / 'owned-child.txt'
+        code = ("import subprocess,sys,time; from pathlib import Path; "
+                "p=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'],"
+                "creationflags=subprocess.CREATE_NO_WINDOW); "
+                "Path(sys.argv[1]).write_text(str(p.pid)); time.sleep(60)")
+        parent = subprocess.Popen([sys.executable, '-c', code, str(pid_file)],
+                                  creationflags=subprocess.CREATE_NO_WINDOW)
+        handle = None
+        try:
+            deadline = time.monotonic() + 5
+            while not pid_file.exists() and time.monotonic() < deadline:
+                time.sleep(.05)
+            self.assertTrue(pid_file.exists(), 'owned child did not start')
+            handle = kernel.OpenProcess(0x100001, False, int(pid_file.read_text()))
+            self.assertTrue(handle)
+            stop_process_tree(parent)
+            self.assertIsNotNone(parent.poll())
+            self.assertEqual(kernel.WaitForSingleObject(handle, 5000), 0)
+        finally:
+            stop_process_tree(parent)
+            if handle:
+                if kernel.WaitForSingleObject(handle, 0) == 258:
+                    kernel.TerminateProcess(handle, 1)
+                kernel.CloseHandle(handle)
 
     def test_companion_never_inherits_model_keys_or_browser_overrides(self):
         with patch.dict(os.environ, {'OPENAI_API_KEY': 'secret', 'GITHUB_TOKEN': 'secret',

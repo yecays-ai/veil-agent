@@ -7,7 +7,8 @@ import threading
 from pathlib import Path
 from urllib.request import urlopen
 
-from xiaohongshu_tools import ASSETS, VERSION, Sidecar, account_lock, binary_path, companion_env, private_folder
+from xiaohongshu_tools import (ASSETS, VERSION, Sidecar, account_lock, binary_path,
+                              companion_env, private_folder, stop_process_tree)
 
 
 def install(root):
@@ -58,10 +59,24 @@ def main():
 
 
 def login_and_bind(root, folder):
+    cookies = folder / 'cookies.json'
+    if cookies.exists():
+        choice = input('已有专属登录状态。回车继续；需要重新登录时输入 RELOGIN 清除本机专属登录状态：').strip()
+        if choice == 'RELOGIN':
+            cookies.unlink()  # Human-only; the bound account ID and read budget stay intact.
+        elif choice:
+            print('未更改登录状态。')
+            return
     env = companion_env(folder)
     print('即将打开专属登录窗口。首次需要下载浏览器，请耐心等待。', flush=True)
-    subprocess.run([str(binary_path(root, 'xiaohongshu-login-windows-amd64.exe'))],
-                   cwd=folder, env=env, check=True, timeout=600)
+    command = [str(binary_path(root, 'xiaohongshu-login-windows-amd64.exe'))]
+    login = subprocess.Popen(command, cwd=folder, env=env)
+    try:
+        result = login.wait(timeout=600)
+        if result:
+            raise subprocess.CalledProcessError(result, command)
+    finally:
+        stop_process_tree(login)
     sidecar = Sidecar(root, 'peter')
     try:
         sidecar.start()

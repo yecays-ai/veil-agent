@@ -118,14 +118,35 @@ def companion_env(folder):
     return env
 
 
+def stop_process_tree(process):
+    """Stop only the owned companion and its browser descendants, including on timeout."""
+    if process and process.poll() is None:
+        if os.name == 'nt':
+            try:
+                subprocess.run(['taskkill', '/PID', str(process.pid), '/T', '/F'],
+                               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, timeout=5,
+                               creationflags=subprocess.CREATE_NO_WINDOW)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+        if process.poll() is None:
+            process.kill()
+        process.wait(timeout=5)
+
+
 class Sidecar:
     """Only VEIL knows the random port/token; ignore all inherited proxy settings."""
     def __init__(self, root, role):
         self.root, self.role = Path(root), role
         self.process = None
         self.token = None
+        self.process_lock = threading.Lock()
 
     def start(self):
+        with self.process_lock:
+            self._start()
+
+    def _start(self):
         if self.process and self.process.poll() is None:
             return
         folder = private_folder(self.root, self.role)
@@ -177,21 +198,10 @@ class Sidecar:
         raise ValueError('Xiaohongshu companion startup timed out. Browser download may need manual setup.')
 
     def close(self):
-        process, self.process = self.process, None
-        if process and process.poll() is None:
-            if os.name == 'nt':
-                # The companion owns browser children too; do not leave them on stop.
-                try:
-                    subprocess.run(['taskkill', '/PID', str(process.pid), '/T', '/F'],
-                                   stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                   stderr=subprocess.DEVNULL, timeout=5,
-                                   creationflags=subprocess.CREATE_NO_WINDOW)
-                except (OSError, subprocess.TimeoutExpired):
-                    pass
-            if process.poll() is None:
-                process.kill()
-            process.wait(timeout=5)
-        self.token = None
+        with self.process_lock:
+            stop_process_tree(self.process)
+            self.process = None
+            self.token = None
 
 
 class XiaohongshuTools:
@@ -200,7 +210,7 @@ class XiaohongshuTools:
         settings = getattr(cfg, 'web', None) or {}
         self.enabled = settings.get('enabled') is True and settings.get('xiaohongshu_readonly') is True
         self.tools = [TOOL] if self.enabled else []
-        self.max_bytes = min(8192, max(256, (cfg.tools or {}).get('max_result_bytes', 8192)))
+        self.max_bytes = min(8192, max(1, (cfg.tools or {}).get('max_result_bytes', 8192)))
         self.sidecar = sidecar or Sidecar(root, cfg.id)
         self.lock = threading.Lock()
         self.refs = {}
@@ -248,7 +258,11 @@ class XiaohongshuTools:
     def _operation(self, args, cancelled):
         folder = private_folder(self.root, self.cfg.id)
         with account_lock(folder):
-            return self._locked_operation(args, cancelled, folder)
+            try:
+                return self._locked_operation(args, cancelled, folder)
+            finally:
+                # The service must not outlive the lock that isolates this account.
+                self.sidecar.close()
 
     def _locked_operation(self, args, cancelled, folder):
         if cancelled.is_set():
