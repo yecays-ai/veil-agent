@@ -394,7 +394,7 @@ output_cny_per_million = "8"
         self.assertEqual(status, 400)
         self.assertFalse(self.hub.busy)
 
-    def test_busy_send_does_not_commit_a_pending_upload(self):
+    def test_busy_send_commits_and_queues_a_pending_upload(self):
         png = base64.b64encode(b'\x89PNG\r\n\x1a\nfictional').decode()
         status, result = self.call('/api/media', {
             'mime': 'image/png', 'name': 'fictional.png', 'data': png})
@@ -402,9 +402,9 @@ output_cny_per_million = "8"
         media = result['media']
         self.hub.busy = True
         status, _ = self.call('/api/send', {'text': 'hello', 'media': {'id': media['id']}})
-        self.assertEqual(status, 409)
-        self.assertIsNone(self.hub.media_info(media['id']))
-        self.assertIsNotNone(self.hub.pending_media_info(media['id']))
+        self.assertEqual(status, 200)
+        self.assertIsNotNone(self.hub.media_info(media['id']))
+        self.assertIsNone(self.hub.pending_media_info(media['id']))
 
     def test_torn_final_media_index_row_keeps_completed_history(self):
         media_root = self.store.root / 'test' / 'torn-media'
@@ -723,18 +723,18 @@ output_cny_per_million = "8"
         self.assertIn('没有交给 Peter', retained['delivery_error'])
         self.assertFalse(any(event['kind'] == 'user' for event in self.hub.snapshot(0)['events']))
 
-    def test_busy_voice_send_remains_retryable_with_same_idempotency_key(self):
+    def test_busy_voice_send_is_queued_with_same_idempotency_key(self):
         media = self.hub.save_voice('audio/webm', b'\x1a\x45\xdf\xa3fictional audio', 'voice.webm')
         self.hub._record_voice_result(media['id'], 'hello Peter', '')
         self.hub.busy = True
         request_id = 'voice-send-' + media['id']
         status, _ = self.call('/api/send', {'text': '[voice message] hello Peter',
                                             'request_id': request_id, 'media': {'id': media['id']}})
-        self.assertEqual(status, 409)
+        self.assertEqual(status, 200)
         retained = self.hub.media_info(media['id'])
         self.assertEqual(retained['transcript'], 'hello Peter')
-        self.assertIn('可以重试发送', retained['delivery_error'])
-        self.assertTrue(retained['request_id'].startswith('voice-'))
+        self.assertNotIn('delivery_error', retained)
+        self.assertEqual(retained['request_id'], request_id)
 
         def scenario(_result):
             self.assertTrue(self.wait(lambda: self.hub.ready and not self.hub.busy))
@@ -1045,7 +1045,7 @@ output_cny_per_million = "8"
         saved = self.store.read('test/chat.jsonl')
         self.assertEqual([m['content'] for m in saved], ['你好 hello', 'A fictional reply'])
 
-    def test_second_message_while_busy_is_refused(self):
+    def test_second_message_while_busy_is_queued(self):
         gate = threading.Event()
         self.model.side_effect = lambda *a, **k: (gate.wait(5), ('slow', 10, 5, 0))[1]
 
@@ -1064,7 +1064,7 @@ output_cny_per_million = "8"
 
         result = self.run_loop(scenario)
         self.assertEqual((result['first'], result['duplicate'], result['conflict'], result['second'],
-                          result['late_duplicate'], result['retry']), (200, 200, 409, 409, 200, 200))
+                          result['late_duplicate'], result['retry']), (200, 200, 409, 200, 200, 200))
         self.assertEqual(self.model.call_count, 2)
         self.assertEqual([m['content'] for m in self.store.read('test/chat.jsonl')
                           if m['role'] == 'user'], ['one', 'two'])

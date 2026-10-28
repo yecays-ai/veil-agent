@@ -2,6 +2,7 @@
 
 ## 当前进度
 
+- 工单 141：PR #188，分支 `ticket/141-free-reply`。自由对话核心、桌面输入状态/Request Reply、reply_later 持久化与限额已实现；CodeRabbit 五条评论已一次修复，本地全量 629 项通过、7 项跳过，桌面 10 项通过。Claude 接手复审：补 `reply_later` 只传 `cancel: true` 可作废自己挂起的晚点回（不结束本轮），能力通知同步说明，加 1 项回归。Windows `update.bat` 体验仍待 Lan 验收。下一个工单号 142。
 - 工单 140：长期任务进度满 40 条滚动归档（`long-task-progress-archive.jsonl`），同一步先读后确认可通过。下一个工单号 141。
 - 工单 139：Peter 自己调醒来节律（`set_wake_rhythm`）、多个带留言的闹钟（最早 15 分钟）、自然醒随机（`autonomy._natural_wait`，每轮门槛由时间种子决定）。闹钟文件改成 `alarms` 列表，旧格式兼容。没改 `desktop/`。下一个工单号 140。
 - 工单 138：send_message 加 `done`，聊天加「停下」按钮。起因是 argon 不会空着回复收尾，一直发到 20 步。改了 `desktop/`，Lan 需要 update.bat。下一个工单号 139。

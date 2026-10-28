@@ -125,11 +125,15 @@ def valid_media_row(row):
 
 
 class ChatInput(str):
-    def __new__(cls, text, media, complete=None, message_id=None):
+    def __new__(cls, text, media, complete=None, message_id=None, user_events=None, force_reply=False,
+                persisted=False):
         value = super().__new__(cls, text)
         value.media = media
         value.complete = complete or (lambda _committed: None)
         value.message_id = message_id
+        value.user_events = user_events
+        value.force_reply = force_reply
+        value.persisted = persisted
         return value
 
 
@@ -166,6 +170,7 @@ class Hub:
         self.transcribing_voice = False
         self.submissions = OrderedDict()  # recent request ids -> normalized text digest
         self.submission_pending = False  # admission reserved while media storage runs
+        self.user_typing = False
         self.autonomy = None
         self.glance = None
         self.codex_watch = None
@@ -839,9 +844,10 @@ class Hub:
 
     def _chat_input(self, queued):
         if not isinstance(queued, tuple):
-            return queued
+            return ChatInput(str(queued), None)
         text, media, complete = queued[0], queued[1], queued[2] if len(queued) > 2 else None
         message_id = queued[3] if len(queued) > 3 else None
+        persisted = queued[4] if len(queued) > 4 else False
         if isinstance(media, dict) and media.get('kind') == 'voice':
             transcript = (media.get('transcript') or '').strip()
             if not transcript:
@@ -893,7 +899,50 @@ class Hub:
             with self.cond:
                 self.defer_outputs = True
                 self.deferred_outputs = []
-        return ChatInput(text, media, complete, message_id)
+        return ChatInput(text, media, complete, message_id, persisted=persisted)
+
+    @staticmethod
+    def _is_command(item):
+        text = item[0] if isinstance(item, tuple) else item
+        return isinstance(text, str) and text.lstrip().startswith('/')
+
+    def _chat_batch(self, first):
+        rows = [first]
+        while not self._is_command(first):
+            with self.inbox.mutex:
+                if (not self.inbox.queue or isinstance(self.inbox.queue[0], ChatAction)
+                        or self._is_command(self.inbox.queue[0])):
+                    break
+            try:
+                item = self.inbox.get_nowait()
+            except queue.Empty:
+                break
+            rows.append(item)
+        converted = [self._chat_input(row) for row in rows]
+        converted = [row for row in converted if row is not None]
+        if not converted:
+            return None
+        if len(converted) == 1:
+            converted[0].user_events = [{'content': str(converted[0]), 'message_id': converted[0].message_id,
+                                         'media': converted[0].media, 'persisted': converted[0].persisted}]
+            converted[0].runtime_context = 'Lan is typing.' if self.user_typing else None
+            return converted[0]
+        if any(row.media for row in converted):
+            for row in converted[1:]:
+                self.inbox.put((str(row), row.media, row.complete, row.message_id, row.persisted))
+            converted[0].user_events = [{'content': str(converted[0]), 'message_id': converted[0].message_id,
+                                         'media': converted[0].media, 'persisted': converted[0].persisted}]
+            converted[0].runtime_context = 'Lan is typing.' if self.user_typing else None
+            return converted[0]
+        text = '\n'.join(f'[Lan message {i + 1}] {row}' for i, row in enumerate(converted))
+        def complete(committed):
+            for row in converted:
+                row.complete(committed)
+        events = [{'content': str(row), 'message_id': row.message_id, 'persisted': row.persisted}
+                  for row in converted]
+        result = ChatInput(text, None, complete, converted[-1].message_id, events)
+        result.runtime_context = 'Lan is typing.' if self.user_typing else None
+        return result
 
     def _record_voice_result(self, media_id, transcript, error):
         with self.media_lock:
@@ -1071,12 +1120,18 @@ class Hub:
                     return text
                 with self.cond:
                     self.busy = True
-                item = self._chat_input(text)
+                item = self._chat_batch(text)
                 if item is not None:
                     return item
                 continue
             if self.stopping or self.stopped:
                 raise EOFError
+            if self.chat is not None:
+                due = self.chat.claim_due_reply_later()
+                if due is not None:
+                    with self.cond:
+                        self.busy = True
+                    return ChatAction('reply_later_due', due)
             if self.codex_watch is not None and self.codex_watch.claim_due():
                 with self.cond:
                     if (not self.stopping and not self.stopped and self.inbox.empty()
@@ -1112,7 +1167,7 @@ class Hub:
                 self.busy = True
             if isinstance(text, ChatAction):
                 return text
-            item = self._chat_input(text)
+            item = self._chat_batch(text)
             if item is not None:
                 return item
 
@@ -1199,7 +1254,7 @@ class Hub:
             self.codex_watch.set_enabled(enabled)
             return True
 
-    def submit(self, text, request_id, media_id=None):
+    def submit(self, text, request_id, media_id=None, *, allow_while_busy=True):
         digest_input = text.encode('utf-8') + b'\0' + (media_id.encode() if isinstance(media_id, str) else b'')
         text_digest = hashlib.sha256(digest_input).digest()
         if media_id is not None and (
@@ -1215,10 +1270,7 @@ class Hub:
                 return 'stopped'
             if self.submission_pending:
                 return 'busy'
-            if self.autonomy_busy:
-                if not self.inbox.empty():
-                    return 'busy'
-            elif self.busy:
+            if not allow_while_busy and (self.busy or self.autonomy_busy or not self.inbox.empty()):
                 return 'busy'
             self.submission_pending = True
         # Disk writes must not hold the event/approval condition. The reservation
@@ -1230,6 +1282,14 @@ class Hub:
                 return 'media_storage'
             if media_id is not None and not media:
                 return 'media'
+            persisted = False
+            if (self.chat is not None and not text.lstrip().startswith('/')
+                    and not (isinstance(media, dict) and media.get('kind') == 'voice')):
+                try:
+                    self.chat.persist_incoming(text, request_id, media)
+                    persisted = True
+                except (OSError, ValueError, UserError):
+                    return 'media_storage'
             with self.cond:
                 if self.stopping or self.stopped:
                     return 'stopped'
@@ -1240,7 +1300,7 @@ class Hub:
                 self.submissions[request_id] = text_digest
                 if len(self.submissions) > MAX_SUBMISSIONS:
                     self.submissions.popitem(last=False)
-                self.inbox.put((text, media, complete, request_id))
+                self.inbox.put((text, media, complete, request_id, persisted))
                 if self.autonomy_busy:
                     self.autonomy_interrupted.set()
                 else:
@@ -1394,6 +1454,36 @@ class Hub:
             self.push('notice', '已叫停，等这一步说完就停。')
             return True
 
+    def set_typing(self, typing):
+        with self.cond:
+            if self.stopping or self.stopped:
+                return False
+            self.user_typing = bool(typing)
+            return True
+
+    def request_reply(self):
+        with self.cond:
+            if self.stopping or self.stopped:
+                return False
+            self.inbox.put(ChatAction('request_reply', {}))
+            if self.autonomy_busy:
+                self.autonomy_interrupted.set()
+            self.busy = True
+            return True
+
+    def claim_steer(self):
+        with self.inbox.mutex:
+            head = self.inbox.queue[0] if self.inbox.queue else None
+        if head is not None and self._is_command(head):
+            return None
+        try:
+            first = self.inbox.get_nowait()
+        except queue.Empty:
+            return None
+        if isinstance(first, ChatAction):
+            return first
+        return self._chat_batch(first)
+
     def snapshot(self, after):
         tool_activity = self.tool_activity()
         live_context = self.live_context(tool_activity)
@@ -1403,6 +1493,7 @@ class Hub:
             codex_watch = self.codex_watch.status() if self.codex_watch else {}
             return {'events': self.events[after:], 'busy': self.busy and not self.autonomy_busy,
                     'transcribing_voice': self.transcribing_voice,
+                    'user_typing': self.user_typing,
                     'stopping': self.stopping and not self.stopped, 'stopped': self.stopped,
                     'name': self.name, 'pending': self.pending, 'ready': self.ready,
                     'activity_enabled': self.activity.enabled(),
@@ -1833,6 +1924,18 @@ def make_handler(hub, token):
                     self._send(200, {'ok': True})
                 else:
                     self._send(409, {'error': 'not replying'})
+            elif url.path == '/api/typing':
+                if not isinstance(body.get('typing'), bool):
+                    self._send(400, {'error': 'typing'})
+                elif hub.set_typing(body['typing']):
+                    self._send(200, {'ok': True})
+                else:
+                    self._send(409, {'error': 'stopping'})
+            elif url.path == '/api/request-reply':
+                if hub.request_reply():
+                    self._send(202, {'ok': True})
+                else:
+                    self._send(409, {'error': 'stopping'})
             elif url.path == '/api/activity':
                 enabled = body.get('enabled')
                 if not isinstance(enabled, bool):
@@ -1920,12 +2023,18 @@ def start_server(hub, token, port):
 
 def serve_chat(chat, hub, channels=()):
     hub.chat = chat
+    chat.claim_steer = hub.claim_steer
     if getattr(chat.cfg, 'models', None) is not None:
         hub.background_running = chat.cfg.models.chosen('background')[0]
         hub.refresh_models()
     chat.screen_pop_handler = hub.request_screen_pop
     files = getattr(chat.tools, 'files', None) if chat.tools else None
     files = files or chat.tools
+    announce_free_reply = getattr(files, 'announce_free_reply', None)
+    if callable(announce_free_reply):
+        announce_free_reply()
+        chat.pending_capability_event = getattr(chat.tools, 'capability_event', None)
+        chat.pending_capability_event_model = getattr(chat.tools, 'capability_event_model', None)
     if (getattr(files, 'lab', None) is not None and
             callable(getattr(files, 'read_lab_attachment', None))):
         chat.attachment_reader = files.read_lab_attachment

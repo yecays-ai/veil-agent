@@ -57,7 +57,7 @@ function setSpeechStatus(state,message){
   speechButton.title=active?'停止语音识别':'开始语音识别';
   speechButton.textContent='T';
   box.disabled=active;
-  sendBtn.disabled=busy||revealQueue.length>0||sending||stopping||stopped||active;
+  sendBtn.disabled=sending||stopping||stopped||active;
   if(state==='error')speechErrorTimer=setTimeout(()=>{if(speechState==='error')setSpeechStatus('idle','')},3000);
 }
 try{
@@ -561,7 +561,7 @@ function updateSelectionBar(){
   $('selection-delete').disabled=selectedMessageIds.size===0;
 }
 function setBusy(b){
-  busy=b;const waiting=b||revealQueue.length>0;sendBtn.disabled=waiting||sending||voiceSending||stopping||stopped||speechIsActive()||!!voiceRecorder||voicePermissionPending;
+  busy=b;const waiting=b||revealQueue.length>0;sendBtn.disabled=sending||voiceSending||stopping||stopped||speechIsActive()||!!voiceRecorder||voicePermissionPending;
   voiceHold.disabled=(waiting||sending||stopping||stopped||voiceSending||speechIsActive())&&!voiceRecorder;
   if(waiting&&!typing&&!stopped){typing=document.createElement('div');typing.id='typing';typing.innerHTML='<span></span><button type="button" class="stop-turn" title="让他说完这一步就停">停下</button>';typing.querySelector('button').addEventListener('click',stopTurn);col.appendChild(typing)}
   if(waiting&&typing){typing.firstChild.textContent=transcribingVoice?'正在转写语音…':($('title').textContent||'')+' 正在回复…';const stopButton=typing.querySelector('button');stopButton.hidden=!b||transcribingVoice;if(!b)stopButton.disabled=false}
@@ -1091,7 +1091,7 @@ async function uploadImage(image){
 async function send(text){
   const fromBox=!text;
   text=(text||box.value).trim();
-    if((!text&&!selectedImage)||busy||revealQueue.length||stopping||stopped||sending||voiceSending||speechIsActive())return;
+    if((!text&&!selectedImage)||stopping||stopped||sending||voiceSending||speechIsActive())return;
   const attachedImage=selectedImage;
   if(attachedImage&&text.startsWith('/')){add('error','图片不能和命令一起发送；图片仍保留在发送区。');return}
   if(!text)text='[图片]';
@@ -1104,7 +1104,7 @@ async function send(text){
   const requestId=fromBox?draftRequests.get(payloadKey):crypto.randomUUID();
   if(attachedImage)awaitingImages.set(requestId,attachedImage);
   if(attachedImage?.cancel)attachedImage.cancel.disabled=true;
-  sending=true;setBusy(true);
+  sending=true;setBusy(busy);
   try{
     const media=attachedImage?await uploadImage(attachedImage):null;
     const r=await api('/api/send',{text,request_id:requestId,media:media?{id:media.id}:undefined});
@@ -1119,6 +1119,7 @@ async function send(text){
       if(fromBox){
         if(box.value.trim()===draftText){
           box.value='';resizeBox();
+          reportTyping(false);
           try{sessionStorage.removeItem(speechDraftKey)}catch(e){}
           speechDraftActive=false;
           if(pendingQuote===quote)clearQuote();
@@ -1144,6 +1145,19 @@ box.addEventListener('keydown',e=>{
   if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing&&e.keyCode!==229){e.preventDefault();if(!speechIsActive())send()}
 });
 box.addEventListener('input',()=>{resizeBox();if(speechDraftActive)saveSpeechDraft(box.value)});
+let typingTimer=null,lastTyping=null;
+function reportTyping(value){
+  if(value===lastTyping)return;lastTyping=value;api('/api/typing',{typing:value}).catch(()=>{});
+}
+box.addEventListener('input',()=>{
+  if(typingTimer)clearTimeout(typingTimer);
+  typingTimer=setTimeout(()=>reportTyping(box.value.length>0),180);
+});
+$('request-reply').onclick=async()=>{
+  if(stopping||stopped)return;
+  const r=await api('/api/request-reply',{});
+  if(!r.ok)add('error','请求回复没有提交成功，请稍后重试。');
+};
 document.querySelectorAll('[data-cmd]').forEach(b=>b.onclick=()=>send(b.dataset.cmd));
 $('activity-toggle').onclick=async()=>{
   $('activity-toggle').disabled=true;

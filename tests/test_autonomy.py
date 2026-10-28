@@ -501,11 +501,11 @@ daily_budget_cny = "2"
         self.assertIn('is scheduled for', execution.result)
         self.assertIn('Continue the research.', execution.summary)
 
-    def test_chat_can_enqueue_once_and_interrupt_autonomy_without_busy_indicator(self):
+    def test_chat_can_enqueue_several_and_interrupt_autonomy_without_busy_indicator(self):
         self.hub.autonomy_busy = True
         self.assertEqual(self.hub.submit('continue chat', 'one'), 'accepted')
         self.assertEqual(self.hub.submit('continue chat', 'one'), 'duplicate')
-        self.assertEqual(self.hub.submit('another message', 'two'), 'busy')
+        self.assertEqual(self.hub.submit('another message', 'two'), 'accepted')
         self.assertTrue(self.hub.autonomy_interrupted.is_set())
         self.assertFalse(self.hub.snapshot(0)['busy'])
         queued = self.hub.inbox.get_nowait()
@@ -513,6 +513,7 @@ daily_budget_cny = "2"
         self.assertIsNone(queued[1])
         self.assertTrue(callable(queued[2]))
         self.assertEqual(queued[3], 'one')
+        self.assertEqual(self.hub.inbox.get_nowait()[3], 'two')
 
     def test_chat_queued_during_due_check_wins_over_autonomy_wake(self):
         self.activity.set(True)
