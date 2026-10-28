@@ -2033,6 +2033,9 @@ def serve_chat(chat, hub, channels=()):
     announce_free_reply = getattr(files, 'announce_free_reply', None)
     if callable(announce_free_reply):
         announce_free_reply()
+        announce_stay_silent = getattr(files, 'announce_stay_silent', None)
+        if callable(announce_stay_silent):
+            announce_stay_silent()
         chat.pending_capability_event = getattr(chat.tools, 'capability_event', None)
         chat.pending_capability_event_model = getattr(chat.tools, 'capability_event_model', None)
     if (getattr(files, 'lab', None) is not None and

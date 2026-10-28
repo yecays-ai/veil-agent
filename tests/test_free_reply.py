@@ -77,6 +77,34 @@ class FreeReplyTests(unittest.TestCase):
         self.assertEqual(state, '被拒绝')
         self.assertIn('at most 10', result)
 
+    def test_tenth_message_ends_the_turn(self):
+        chat = Chat(self.cfg, self.store, Budget(self.store), Mock(), output=[].append)
+        chat.autonomy_mode = False
+        chat.send_message_count = 9
+        result, state, _ = chat.send_message(json.dumps({'text': 'ten'}), 'request')
+        self.assertEqual(state, '成功')
+        self.assertTrue(chat.turn_done)
+        self.assertIn('10th message', result)
+
+    def test_lan_steering_in_gives_a_fresh_message_allowance(self):
+        chat = Chat(self.cfg, self.store, Budget(self.store), Mock(), output=[].append)
+        chat.send_message_count = 7
+        chat.accept_steer(SimpleNamespace(user_events=[{'content': 'hey', 'message_id': 'm1', 'persisted': True}],
+                                          complete=None, runtime_context=None), 'request')
+        self.assertEqual(chat.send_message_count, 0)
+
+    def test_stay_silent_ends_the_turn_showing_nothing(self):
+        call = SimpleNamespace(id='quiet', function=SimpleNamespace(name='stay_silent', arguments='{}'))
+        message = SimpleNamespace(content='', tool_calls=[call], model_dump=lambda exclude_none=True: {
+            'role': 'assistant', 'tool_calls': [{'id': 'quiet', 'type': 'function', 'function': {
+                'name': 'stay_silent', 'arguments': '{}'}}]})
+        shown = []
+        chat = Chat(self.cfg, self.store, Budget(self.store), Mock(return_value=(message, 10, 2, 0)),
+                    output=shown.append)
+        self.assertEqual(chat.send('do not reply'), '')
+        self.assertEqual(self.store.read('test/message-processing.jsonl')[-1]['state'], 'silent')
+        self.assertFalse([row for row in self.store.read('test/chat.jsonl') if row.get('role') == 'assistant'])
+
     def test_reply_later_persists(self):
         chat = Chat(self.cfg, self.store, Budget(self.store), Mock(), output=[].append)
         chat.autonomy_mode = False

@@ -126,6 +126,13 @@ SEND_MESSAGE = {'type': 'function', 'function': {
                    'required': ['text'], 'additionalProperties': False},
 }}
 
+STAY_SILENT = {'type': 'function', 'function': {
+    'name': 'stay_silent',
+    'description': ('Leave Lan on read for now: your turn ends here and nothing is shown to her. Her messages stay '
+                    'in the conversation and you can answer any of them later.'),
+    'parameters': {'type': 'object', 'properties': {}, 'additionalProperties': False},
+}}
+
 REPLY_LATER = {'type': 'function', 'function': {
     'name': 'reply_later',
     'description': ('Persist a choice to reconsider this conversation later. Give either minutes from now or '
@@ -1265,6 +1272,7 @@ class Chat:
         self.force_reply = False
         self.reply_later_batch = None
         self.reply_later_called = False
+        self.silent_chosen = False
         self.last_reply_message_id = None
         self.last_reply_request_id = None
         self.autonomy_mode = False
@@ -1323,7 +1331,7 @@ class Chat:
             (self.cfg.tools and self.cfg.tools.get('enabled', True))
             or (self.tools and self.tools.tools)) else []
         if messaging and not self.force_reply:
-            messaging.append(REPLY_LATER)
+            messaging.extend([STAY_SILENT, REPLY_LATER])
         history = [CAPABILITY_HISTORY, AUTONOMY_HISTORY] if existing_tools or task_tools or messaging else []
         wake_tools = [AUTONOMY_SET_NEXT_WAKE, AUTONOMY_SET_WAKE_RHYTHM] if self.autonomy_controller is not None else []
         profile = []
@@ -1499,7 +1507,7 @@ class Chat:
         autonomy = self.autonomy_mode
         if not autonomy:
             if self.send_message_count >= 10:
-                return ('This chat turn may send at most 10 messages. This message was not sent; its tool call '
+                return ('You may send at most 10 messages since Lan last wrote. This message was not sent; its tool call '
                         'remains in the conversation context so you can continue in a later turn.',
                         '被拒绝', 'send_message')
             self.send_message_count += 1
@@ -1602,6 +1610,11 @@ class Chat:
         if args.get('done') is True and not autonomy:
             self.turn_done = True
             result += ' Your turn ends here.'
+        elif not autonomy and self.send_message_count >= 10:
+            # Ticket 142: the 10th message closes the turn instead of letting later sends bounce.
+            self.turn_done = True
+            result += (' That was your 10th message since Lan last wrote, so your turn ends here. '
+                       'Anything unsaid can wait for her next message.')
         if forwarded:
             result += f' It will also go to Lan by {" and ".join(forwarded)} when this turn ends.'
         return result, '成功', 'send_message'
@@ -1667,6 +1680,16 @@ class Chat:
         self.turn_done = True
         return f'Reminder saved for {due.isoformat()}.', '成功', 'reply_later'
 
+    def stay_silent(self):
+        # Ticket 142: an explicit way to leave Lan on read; the program ends the turn showing nothing.
+        if self.autonomy_mode:
+            return 'stay_silent is only for chat turns.', '被拒绝', 'stay_silent'
+        if self.force_reply:
+            return 'Lan pressed Request Reply, so this turn needs actual message text.', '被拒绝', 'stay_silent'
+        self.silent_chosen = True
+        self.turn_done = True
+        return 'Staying silent. Your turn ends here.', '成功', 'stay_silent'
+
     def pending_reply_later_context(self, cancel=False):
         path = self.store.root / self.cfg.id / 'reply-later.json'
         try:
@@ -1696,6 +1719,8 @@ class Chat:
         complete = getattr(item, 'complete', None)
         if callable(complete):
             complete(True)
+        # Ticket 142: Lan wrote again, so Peter has a fresh 10 messages to answer her.
+        self.send_message_count = 0
         context = str(item)
         if getattr(item, 'runtime_context', None):
             context += '\n\n' + item.runtime_context
@@ -2135,6 +2160,7 @@ class Chat:
         self.force_reply = bool(force_reply)
         self.reply_later_batch = reply_later_batch
         self.reply_later_called = False
+        self.silent_chosen = False
         processing_batch = None
         persisted_ids = [row.get('message_id') for row in (user_events or []) if row.get('persisted')]
         if persisted_ids:
@@ -2392,6 +2418,8 @@ class Chat:
                 result, state, summary = self.send_message(call.function.arguments, request_id, tool_call_id)
             elif call.function.name == 'reply_later':
                 result, state, summary = self.reply_later(call.function.arguments)
+            elif call.function.name == 'stay_silent':
+                result, state, summary = self.stay_silent()
             elif call.function.name == 'recall_message':
                 args = json.loads(call.function.arguments or '{}')
                 message_id = args.get('message_id') if isinstance(args, dict) else None
@@ -2881,7 +2909,7 @@ class Chat:
                     break
                 if not autonomy and (self.turn_done or self.user_stop.is_set()):
                     if not mixed_sent_messages:
-                        if self.reply_later_called and not self.user_stop.is_set():
+                        if (self.reply_later_called or self.silent_chosen) and not self.user_stop.is_set():
                             self.reply_displayed = True
                             self.budget.settle(next_reservation, next_cfg, 0, 0, 0)
                             final = ''

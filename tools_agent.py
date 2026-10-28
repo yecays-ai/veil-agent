@@ -653,6 +653,20 @@ class FilesystemTools:
             raise UserError('自由对话能力通知无法保存；请保留 data 文件夹。') from exc
 
     @capability_transaction
+    def announce_stay_silent(self):
+        if getattr(self, 'cap_path', None) is None:
+            return
+        try:
+            self._announce_once(
+                'stay_silent_142_announced',
+                'Capability update: in chat you now have stay_silent. Call it to leave Lan on read: your turn ends '
+                'and nothing at all is shown to her, not even an action line. After Lan writes again you have a '
+                'fresh 10 messages, and your 10th message ends that turn.')
+        except Exception as exc:
+            self.enabled = False
+            raise UserError('不回复能力通知无法保存；请保留 data 文件夹。') from exc
+
+    @capability_transaction
     def announce_long_tasks(self):
         if getattr(self, 'cap_path', None) is None:
             return
