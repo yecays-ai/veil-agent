@@ -297,7 +297,7 @@ output_cny_per_million = "8"
             'fullwidth_dsml': ('<｜｜DSML｜｜ calls> <｜｜DSML｜｜ invoke name="trace">'
                                'parameter name="bucket_id" string="true">fictional</parameter>'),
             'send_message_arguments': (
-                '调用 send_message（参数： done: false, text: "fictional message"）'),
+                '调用send_message（参数： done: false, text: "fictional message"）'),
             'numbered_message_batch': (
                 '[Message 1] fictional message one\n[Message 2] fictional message two\n'
                 'done: true'),
@@ -314,12 +314,15 @@ output_cny_per_million = "8"
                 output = []
                 chat = Chat(cfg, store, Budget(store), model, tools=tools, output=output.append)
 
-                reply = chat.send('请继续处理虚构请求')
+                with self.assertRaises(RequestFailed) as caught:
+                    chat.send('请继续处理虚构请求')
 
-                self.assertNotIn(raw, reply)
+                self.assertIn('未执行', str(caught.exception))
+                self.assertNotIn(raw, str(caught.exception))
                 self.assertNotIn(raw, '\n'.join(map(str, output)))
-                self.assertNotIn(raw, json.dumps(store.read('test/chat.jsonl'), ensure_ascii=False))
-                self.assertIn('未执行', reply)
+                rows = store.read('test/chat.jsonl')
+                self.assertNotIn(raw, json.dumps(rows, ensure_ascii=False))
+                self.assertFalse([row for row in rows if row['role'] == 'assistant'])
                 diagnostic = store.read('test/memory/_agent/diagnostics.jsonl')[-1]
                 self.assertEqual(diagnostic['code'], 'raw_tool_call_text')
                 self.assertNotIn('content', diagnostic)

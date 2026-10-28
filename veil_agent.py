@@ -31,11 +31,13 @@ MAX_PHOTO_BYTES = 5 * 1024 * 1024
 RAW_DSML_TOOL_CALL = re.compile(
     r'<\s*[|｜]+\s*DSML\s*[|｜]+\s*(?:tool_calls?|function_calls?|invoke|calls)\b', re.IGNORECASE)
 RAW_SEND_MESSAGE_TEXT_CALL = re.compile(
-    r'\bsend_message\s*[（(]\s*(?:参数\s*[:：]\s*)?'
+    r'(?<![A-Za-z0-9_])send_message\s*[（(]\s*(?:参数\s*[:：]\s*)?'
     r'(?:done\s*[:：=]\s*(?:true|false)\b|text\s*[:：=])', re.IGNORECASE)
-RAW_MESSAGE_BATCH_TEXT = re.compile(
-    r'(?is)(?=.*\[\s*message\s+1\s*\])(?=.*\[\s*message\s+2\s*\])'
-    r'(?=.*\bdone\s*[:：=]\s*(?:true|false)\b)')
+# Searched one by one: a reply missing any marker is rejected after a single linear scan.
+RAW_MESSAGE_BATCH_MARKERS = (
+    re.compile(r'\[\s*message\s+1\s*\]', re.IGNORECASE),
+    re.compile(r'\[\s*message\s+2\s*\]', re.IGNORECASE),
+    re.compile(r'\bdone\s*[:：=]\s*(?:true|false)\b', re.IGNORECASE))
 CJK_TEXT = re.compile(r'[\u3400-\u9fff]')
 TOOL_DATA_RESULTS = {'read_text_file', 'read_multiple_files', 'directory_tree', 'list_directory',
                      'list_directory_with_sizes', 'get_file_info', 'search_files', 'memory_read',
@@ -55,7 +57,7 @@ def raw_tool_call_text_format(content):
         return 'dsml'
     if RAW_SEND_MESSAGE_TEXT_CALL.search(content):
         return 'send_message_arguments'
-    if RAW_MESSAGE_BATCH_TEXT.search(content):
+    if all(marker.search(content) for marker in RAW_MESSAGE_BATCH_MARKERS):
         return 'numbered_message_batch'
     return None
 
@@ -3014,6 +3016,15 @@ class Chat:
                         'model': self.cfg.provider.get('model'),
                         'finish_reason': finish[0] if finish else None,
                         'content_chars': len(content)})
+                    if not autonomy:
+                        if mixed_sent_messages:
+                            # The messages he already sent this turn are the reply.
+                            self.reply_displayed = True
+                            final = mixed_sent_messages[-1]
+                        else:
+                            # A failure, not a reply: nothing is saved as his words, and a
+                            # regeneration keeps the reply it was replacing.
+                            raise RequestFailed(final)
                 else:
                     final = content
                     if not autonomy and not final.strip() and not self.force_reply:
