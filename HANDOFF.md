@@ -2,7 +2,7 @@
 
 ## 当前进度
 
-- 工单 155：分支 `ticket/155-isolated-browser`，从最新 main `42f277c11cf1fc0903fdb5322aaa663e0c43e9f8` 开工。`browser_tools.py` 复用官方 Playwright 1.64.1 和仓库已有 Chromium，公开 HTTPS/443、全新非持久会话，固定 open/observe/click/scroll/close，链接导航不用网页点击脚本，不提供账户、社交写入、下载、任意脚本或个人 Chrome 接口。通过公网 IP 固定拨号代理阻断私网和重绑定，共享 desktop_access、人工输入优先，接入聊天停止和自主让位，保留原模型/步数/上下文/费用限制。8 项新增检查（含真实 Chromium、停止及聊天/自主工具循环）和 130 项相关检查通过；全量运行 710 项通过、10 项跳过。真实 B 站首页已进入 BV1eKMn6MEHo，页面标题和播放器可见，播放器 readyState=0/paused=true/currentTime=0，不能确认加载或播放。可见窗口被实际人工输入拦下；真实科普搜索已返回候选并进入 BV1mfn662EHb；整段语音/文字找视频仍待 Windows 实体验收。下一窗口先核对本分支 PR 最新 CI 与功能/安全审查，再按 docs/tickets/155-isolated-browser.md 跟进；用户明确要求不自动合并。下一工单号 156。
+- 工单 155：分支 `ticket/155-isolated-browser`，从最新 main `42f277c11cf1fc0903fdb5322aaa663e0c43e9f8` 开工。`browser_tools.py` 复用官方 Playwright 1.64.1 和仓库已有 Chromium，公开 HTTPS/443、全新非持久会话，固定 open/observe/click/scroll/close，链接导航不用网页点击脚本，不提供账户、社交写入、下载、任意脚本或个人 Chrome 接口。通过公网 IP 固定拨号代理阻断私网和重绑定，共享 desktop_access、人工输入优先，接入聊天停止和自主让位，保留原模型/步数/上下文/费用限制。8 项新增检查（含真实 Chromium、停止及聊天/自主工具循环）和 130 项相关检查通过；全量运行 710 项通过、10 项跳过。真实 B 站首页已进入 BV1eKMn6MEHo，页面标题和播放器可见，播放器 readyState=0/paused=true/currentTime=0，不能确认加载或播放。可见窗口被实际人工输入拦下；真实科普搜索已返回候选并进入 BV1mfn662EHb；整段语音/文字找视频仍待 Windows 实体验收。PR #203 已开放，Cubic 试用额度耗尽、CodeRabbit 手动请求暂被限流，CI 尚在运行；下一窗口先核对本分支 PR 最新 CI 与功能/安全审查，再按 docs/tickets/155-isolated-browser.md 跟进；用户明确要求不自动合并。下一工单号 156。
 - 工单 154 已由 PR #202 合并为 `42f277c11cf1fc0903fdb5322aaa663e0c43e9f8`；合并提交四项跨平台检查通过，匿名源码读取和受限官方只读 MCP 实现已进入 main；真实官方鉴权与 Lan Windows 体验待验收。
 - 工单 153 已由 PR #201 合并为 fef11147ce2a7ecc9030773d419f5d81b013ef00；该 main 提交四项跨平台 Python 检查通过，Windows 体验待验收。
 
