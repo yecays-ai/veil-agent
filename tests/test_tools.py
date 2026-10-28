@@ -37,6 +37,7 @@ class ToolPolicyTests(unittest.TestCase):
         result = permitted_tools(server)
         names = {item['function']['name'] for item in result}
         self.assertEqual(names, ALLOW | ASK | LAB_ONLY)
+        self.assertEqual(tool_policy('preview_lab_page'), 'lab')
         self.assertEqual(tool_policy('write_file'), 'ask')
         self.assertEqual(tool_policy('edit_file'), 'deny')
         self.assertEqual(tool_policy('unknown'), 'deny')
@@ -178,7 +179,8 @@ class ToolPolicyTests(unittest.TestCase):
             manager = FilesystemTools(self.root, cfg, store)
         names = {tool.name for tool in manager.tools}
         self.assertEqual(names, {'write_file', 'append_file', 'grant_append',
-                                 'create_directory', 'move_lab_file', 'lab_file_digest'})
+                                 'create_directory', 'move_lab_file', 'lab_file_digest',
+                                 'preview_lab_page'})
         self.assertEqual({item['function']['name'] for item in permitted_tools(manager.tools)}, names)
         self.assertEqual(manager.grant_path, self.root / 'data/test/append-grant.json')
 
@@ -1065,3 +1067,4 @@ class FilesystemServerTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+

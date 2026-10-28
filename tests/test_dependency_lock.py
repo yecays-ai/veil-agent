@@ -32,7 +32,10 @@ class DependencyLockTests(unittest.TestCase):
         setup = (ROOT / "setup.bat").read_text(encoding="utf-8")
         workflow = (ROOT / ".github" / "workflows" / "tests.yml").read_text(encoding="utf-8")
         self.assertIn("requirements.lock.txt", setup)
+        self.assertIn("-m playwright install chromium", setup)
         self.assertIn("requirements.lock.txt", workflow)
+        update = (ROOT / "update.bat").read_text(encoding="utf-8")
+        self.assertIn("-m playwright install chromium", update)
         self.assertIn("(3, 11) <= sys.version_info[:2] < (3, 13)", setup)
 
     def test_ombre_installer_uses_the_archive_locked_requirements(self):
@@ -66,3 +69,4 @@ class DependencyLockTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

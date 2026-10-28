@@ -28,6 +28,8 @@ if errorlevel 1 goto no_python
 if errorlevel 1 goto failed
 ".venv\Scripts\python.exe" -m pip install --no-cache-dir -r requirements.lock.txt
 if errorlevel 1 goto failed
+".venv\Scripts\python.exe" -m playwright install chromium
+if errorlevel 1 goto failed
 ".venv\Scripts\python.exe" setup_memory.py
 if errorlevel 1 goto failed
 ".venv\Scripts\python.exe" setup_fetch.py
@@ -43,3 +45,4 @@ exit /b 1
 echo Setup failed. Your local persona and chat data have not been replaced.
 pause
 exit /b 1
+

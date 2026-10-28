@@ -41,7 +41,7 @@ ALLOW = {
 }
 ASK = {'write_file', 'append_file', 'grant_append'}
 DENY = {'edit_file', 'move_file'}
-LAB_ONLY = {'create_directory', 'move_lab_file', 'lab_file_digest'}
+LAB_ONLY = {'create_directory', 'move_lab_file', 'lab_file_digest', 'preview_lab_page'}
 # Memory tools (ticket 007) are offered by memory_native.ToolSet, never by the filesystem server.
 NATIVE = {'hold', 'breath_search', 'trace', 'dream', 'letter_write', 'letter_read',
           'letter_lock_update', 'anchor', 'release', 'plan', 'pulse', 'memory_history', 'memory_catalog', 'memory_read'}
@@ -199,6 +199,7 @@ class FilesystemTools:
             raise UserError('角色数据目录被重定向，文件工具已停止。')
         self.cap_path = role_path / 'capabilities.json'
         self.lab = None
+        self.lab_preview = None
         settings = cfg.tools or {}
         self.screen_pop_enabled = (getattr(cfg, 'screen_pop', None) or {}).get('enabled') is True
         self.tools = [SCREEN_POP_TOOL] if self.screen_pop_enabled else []
@@ -291,9 +292,13 @@ class FilesystemTools:
         self.tools.extend(tool for tool in self.client.tools
                           if tool_policy(tool.name) != 'deny'
                           and tool.name not in WINDOWS_DESKTOP_TOOL_NAMES
-                          and tool.name not in ('append_file', 'grant_append', 'create_directory', 'move_lab_file'))
+                          and tool.name not in ('append_file', 'grant_append', 'create_directory', 'move_lab_file',
+                                                'preview_lab_page'))
         self._open_lab(settings)
         if self.lab:
+            from lab_preview import LabPreview
+            self.lab_preview = LabPreview(self.lab, platform_enabled=os.name == 'nt')
+            self.tools.extend(self.lab_preview.tools)
             self.tools.append(SimpleNamespace(name='create_directory',
                 description='Create folders only inside your lab, e.g. lab/research. '
                             'No confirmation needed. Directories outside lab are forbidden.',
@@ -926,7 +931,9 @@ class FilesystemTools:
                 'rewrite existing files with write_file (the program keeps the previous version) and append, '
                 'all without asking. You may move a regular file between a normal lab folder and '
                 'lab/archive/ or lab/trash/ (keeping its relative path) and back. Nothing can be deleted, '
-                'and scripts cannot run. '
+                'and scripts cannot be launched on the computer. preview_lab_page renders a Lab HTML page '
+                'in a temporary sandboxed Chromium session and returns its screenshot and page errors; '
+                'page JavaScript has no external network, downloads, popups or access to other local files. '
                 f'Each write/append is limited to {self.lab_max_write_bytes} '
                 'UTF-8 bytes; split larger work into files or append chunks. '
                 'Outside lab the existing approval rules apply. The growth journal stays outside lab '
@@ -934,11 +941,17 @@ class FilesystemTools:
         return description
 
     def begin_request(self):
+        if self.lab_preview:
+            self.lab_preview.begin_request()
         windows_tools = getattr(self, 'windows_tools', None)
         if windows_tools:
             windows_tools.begin_request()
 
     def invoke(self, name, args, approval=input, *, should_stop=None):
+        if name == 'preview_lab_page':
+            if self.lab_preview is None:
+                return 'Lab page preview is unavailable because this character has no safe Lab folder.', '被拒绝', 'Lab preview'
+            return self.lab_preview.invoke(args, should_stop=should_stop)
         if name in SCREEN_POP_TOOL_NAMES:
             return self.invoke_screen_pop(args)
         if name in WINDOWS_OBSERVATION_TOOL_NAMES:
@@ -1565,5 +1578,6 @@ class _McpWorker:
         if self.thread.is_alive() and self.requests is not None:
             self.loop.call_soon_threadsafe(self.requests.put_nowait, None)
             self.thread.join(timeout=10)
+
 
 

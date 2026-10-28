@@ -41,7 +41,8 @@ persistent_append_file = "growth-journal.md"
         self.store = Store(self.root / 'data')
         self.worker = SimpleNamespace(tools=[SimpleNamespace(
             name=name, description=name, inputSchema={})
-            for name in ALLOW | ASK | DENY | LAB_ONLY | {'delete_file', 'execute_script'}],
+            for name in (ALLOW | ASK | DENY | LAB_ONLY | {'delete_file', 'execute_script'})
+            if name != 'preview_lab_page'],
             call=Mock(return_value='fictional read result'), close=Mock())
         self.no_approval = Mock(side_effect=AssertionError('lab must not ask'))
         self.tools = self.open_tools()
@@ -415,14 +416,16 @@ persistent_append_file = "growth-journal.md"
         self.tools.consume_capability_event()
         self.assertIsNone(self.open_tools().capability_event)
         for text in ('lab/research/v1.md', 'rewrite existing files', 'lab/trash/', 'Nothing can be deleted',
-                     'independent', 'scripts cannot run'):
+                     'independent', 'preview_lab_page', 'sandboxed Chromium', 'external network'):
             self.assertIn(text, self.tools.description)
 
     def test_disabled_lab_removes_lab_only_tool_and_free_permissions(self):
         self.cfg.tools['lab'] = False
         reopened = self.open_tools()
         self.assertIsNone(reopened.lab)
-        self.assertNotIn('create_directory', {t['function']['name'] for t in permitted_tools(reopened.tools)})
+        disabled_names = {t['function']['name'] for t in permitted_tools(reopened.tools)}
+        self.assertNotIn('create_directory', disabled_names)
+        self.assertNotIn('preview_lab_page', disabled_names)
         asked = Mock(return_value='n')
         result = self.call('write_file', 'lab/new.md', 'new', approval=asked, tools=reopened)
         self.assertEqual(result[1], '被拒绝')
@@ -465,7 +468,9 @@ persistent_append_file = "growth-journal.md"
         chat = Chat(self.cfg, self.store, Budget(self.store), model, tools=self.tools,
                     approval=self.no_approval, output=lambda text: None)
         self.assertEqual(chat.send('The lab is open; choose what to create.'), 'Saved.')
-        self.assertTrue({'write_file', 'append_file', 'grant_append', 'create_directory'} <= offered[0])
+        self.assertTrue({'write_file', 'append_file', 'grant_append', 'create_directory',
+                         'preview_lab_page'} <= offered[0])
         self.assertEqual((self.lab / 'research/v1.md').read_bytes(), b'original\naddition')
         self.no_approval.assert_not_called()
         self.worker.call.assert_not_called()
+
