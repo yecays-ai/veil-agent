@@ -19,8 +19,8 @@ from pathlib import Path
 from background import append_context_log, background_context, background_path, context_chars, request_kind
 from contextlib import contextmanager, nullcontext
 
-from agent_types import (AUTONOMY_WAKE, BudgetExceeded, CODEX_WATCH_WAKE, GLANCE_WAKE,
-                         RequestFailed, TooLong, UserError, now)
+from agent_types import (AUTONOMY_WAKE, BudgetExceeded, CODEX_WATCH_WAKE, EmptyReplyError,
+                         GLANCE_WAKE, RequestFailed, TooLong, UserError, now)
 
 ROOT = Path(__file__).resolve().parent
 MILLION = Decimal(1_000_000)
@@ -757,6 +757,10 @@ class Budget:
         self.autonomy_daily = Decimal(str(autonomy_daily))
         self.glance_daily = Decimal(str(glance_daily))
         self.local = threading.local()
+        try:
+            self.reconcile_unsettled({'short-term-notes-extraction'})
+        except Exception:
+            pass
 
     @contextmanager
     def autonomous(self, character, daily=None):
@@ -2401,13 +2405,13 @@ class Chat:
             self.autonomy_interrupted = True
         with saving():
             if not isinstance(reply, str):
-                raise UserError('接口没有返回文字回复；本次保留预留费用。')
+                raise EmptyReplyError('接口没有返回文字回复；本次保留预留费用。')
             if not reply.strip():
                 if not autonomy and self.tool_mode and not self.force_reply:
                     self.reply_displayed = True
                     reply = ''
                 else:
-                    raise UserError('接口没有返回文字回复；本次保留预留费用。')
+                    raise EmptyReplyError('接口没有返回文字回复；本次保留预留费用。')
             self.last_tool_summaries = tool_summaries
             if not autonomy and not self.reply_displayed:
                 self.last_reply_message_id = uuid.uuid4().hex
@@ -3266,11 +3270,7 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead, activity=N
                     output(str(exc))
                     notify_dropped()
                     continue
-                except UserError as exc:
-                    # Storage and accounting errors stop the session rather than
-                    # permitting a subsequent request on uncertain local state.
-                    if '接口没有返回文字回复' not in str(exc):
-                        raise
+                except EmptyReplyError as exc:
                     chat.history, chat.rounds = chat.recent()
                     output(str(exc))
                     notify_dropped()

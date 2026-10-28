@@ -887,6 +887,18 @@ output_cny_per_million = "8"
             self.assertEqual(len(hub.submissions), 2)
             self.assertNotIn('one', hub.submissions)
 
+    def test_failed_media_submission_allows_resubmission_with_same_request_id(self):
+        hub = self.hub
+        hub.busy = False
+        media = hub.save_media('image/png', b'\x89PNG\r\n\x1a\nfictional')
+        self.assertEqual(hub.submit('look at this', 'retry-req-1', media_id=media['id']), 'accepted')
+        self.assertIn('retry-req-1', hub.submissions)
+        committed = hub.media_info(media['id'])
+        hub.finish_media_submission(committed=False, text='look at this', media=committed, request_id='retry-req-1')
+        self.assertNotIn('retry-req-1', hub.submissions)
+        hub.busy = False
+        self.assertEqual(hub.submit('look at this', 'retry-req-1', media_id=media['id']), 'accepted')
+
     def wait(self, predicate, seconds=5):
         end = threading.Event()
         for _ in range(int(seconds * 50)):

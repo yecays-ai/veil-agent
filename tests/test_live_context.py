@@ -108,6 +108,20 @@ class LiveContextTest(unittest.TestCase):
                             and row.get('accounting') == f'{COST_ACCOUNTING}-recovered'
                             for row in costs))
 
+    def test_budget_init_reconciles_unsettled_short_term_notes_reservations(self):
+        self.store.append('costs.jsonl', {
+            'type': 'reserve', 'id': 'orphaned-notes-res', 'period': '2026-10-28',
+            'amount': '0.08', 'character': 'peter', 'model': 'test-model',
+            'accounting': COST_ACCOUNTING, 'category': 'short_term_notes'
+        })
+        budget = Budget(self.store)
+        _, _, pending = budget.totals()
+        self.assertEqual(pending, Decimal(0))
+        costs = self.store.read('costs.jsonl')
+        self.assertTrue(any(row.get('type') == 'settle' and row.get('id') == 'orphaned-notes-res'
+                            and row.get('accounting') == f'{COST_ACCOUNTING}-recovered'
+                            for row in costs))
+
 
 if __name__ == '__main__':
     unittest.main()

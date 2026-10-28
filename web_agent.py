@@ -1079,6 +1079,8 @@ class Hub:
     def finish_media_submission(self, committed, text, media, request_id):
         if not committed:
             self.mark_voice_unsent(media)
+            with self.cond:
+                self.submissions.pop(request_id, None)
         elif isinstance(media, dict) and media.get('kind') == 'voice':
             with self.media_lock:
                 row = self.media_index.get(media.get('id'))
