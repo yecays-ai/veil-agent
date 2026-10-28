@@ -298,6 +298,8 @@ output_cny_per_million = "8"
                                'parameter name="bucket_id" string="true">fictional</parameter>'),
             'send_message_arguments': (
                 '调用send_message（参数： done: false, text: "fictional message"）'),
+            'send_message_voice_first': (
+                'send_message(voice: true, text: "fictional message")'),
             'numbered_message_batch': (
                 '[Message 1] fictional message one\n[Message 2] fictional message two\n'
                 'done: true'),

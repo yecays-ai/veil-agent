@@ -32,7 +32,8 @@ RAW_DSML_TOOL_CALL = re.compile(
     r'<\s*[|｜]+\s*DSML\s*[|｜]+\s*(?:tool_calls?|function_calls?|invoke|calls)\b', re.IGNORECASE)
 RAW_SEND_MESSAGE_TEXT_CALL = re.compile(
     r'(?<![A-Za-z0-9_])send_message\s*[（(]\s*(?:参数\s*[:：]\s*)?'
-    r'(?:done\s*[:：=]\s*(?:true|false)\b|text\s*[:：=])', re.IGNORECASE)
+    # Any parameter may come first: send_message_schema adds voice, file and channel flags.
+    r'[A-Za-z_][A-Za-z0-9_]*\s*[:：=]', re.IGNORECASE)
 # Searched one by one: a reply missing any marker is rejected after a single linear scan.
 RAW_MESSAGE_BATCH_MARKERS = (
     re.compile(r'\[\s*message\s+1\s*\]', re.IGNORECASE),
