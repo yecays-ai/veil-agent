@@ -23,6 +23,11 @@ jobs:
         env:
           VEIL_LAB_PREVIEW_BROWSER_TEST: '1'
         run: python -m unittest tests.test_lab_preview.LabPreviewChromiumTests -v
+      - name: Verify public browser navigation, cancellation and fresh context
+        if: matrix.os == 'windows-latest' && matrix.python == '3.12'
+        env:
+          VEIL_BROWSER_TEST: '1'
+        run: python -m unittest tests.test_browser_tools -v
       - run: python setup_memory.py
       - name: Real isolated Ombre lifecycle recovery
         env:
