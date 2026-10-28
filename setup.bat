@@ -28,6 +28,8 @@ if errorlevel 1 goto no_python
 if errorlevel 1 goto failed
 ".venv\Scripts\python.exe" -m pip install --no-cache-dir -r requirements.lock.txt
 if errorlevel 1 goto failed
+".venv\Scripts\python.exe" -m playwright install chromium
+if errorlevel 1 goto failed
 ".venv\Scripts\python.exe" setup_memory.py
 if errorlevel 1 goto failed
 ".venv\Scripts\python.exe" setup_fetch.py

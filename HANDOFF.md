@@ -2,7 +2,8 @@
 
 ## 当前进度
 
-- 工单 148：只改记录。STATUS.md 改为「验收总表（按功能）」+「待验收与待确认」+「工单记录（按编号）」三块；按 Lan 2026-10-28 确认把 097、099–101、106–112、115–118、123、127、128、131、133、134、137、139、141 记为 Windows 实际体验验收通过；098 等 2026-11-07；142–147 按真实记录待验收；135/136/138 待她确认。下一个工单号 149。
+- 工单 149：分支 `ticket/149-peter-lab-preview`。已实现隔离 Chromium Lab HTML 预览、截图当轮输入、错误诊断、超时/迭代限制、回归测试、安装脚本与 Windows CI；新增工单文档并更新 STATUS。本机提交 `b483850`；因本机 DNS 无法访问 GitHub，使用仓库 Git API 发布同一内容，PR #196 已开放。已运行记录中的针对性测试与 diff 检查。CI 的 Python 3.11/pyee 14 不兼容、测试替身没有初始化 lab_preview、依赖测试未忽略空行已修正，待发布修复提交并核对新 CI；CodeRabbit 已请求，Cubic 试用额度用尽。保持 PR 未合并。真实 Chromium 集成只在 Windows Python 3.12 CI 中运行；Lan Windows 体验待验收。
+- 工单 148：只改记录。STATUS.md 改为「验收总表（按功能）」+「待验收与待确认」+「工单记录（按编号）」三块；按 Lan 2026-10-28 确认把 097、099–101、106–112、115–118、123、127、128、131、133、134、137、139、141 记为 Windows 实际体验验收通过；098 等 2026-11-07；142–147 按真实记录待验收；135/136/138 待她确认。下一个工单号 150。
 - 工单 147：`memory_native.neutral_dream_header` + `DREAM_NOTE`（只换 `=== Dreaming` 标题与第一个空行之间、含 `trace(` 且不含 `ID:` 的引导段）；`veil_agent` 通用工具分支 `json.loads(arguments or '{}')`，`null` → `{}`。下一个工单号 148。
 - 工单 146：核心可靠性修复，分支 `ticket/146-core-reliability`。已完成：1. 解耦 `persist_incoming` 准入写入与 `chat.jsonl` 正式历史，引入 `incoming-submissions.jsonl`，消息在实际轮次开始或插话时提交至 `chat.jsonl`，修复连发/插话时的历史错序、prompt 用户消息重复注入及问答归类混乱，服务重启时自动补录排队中未开始的消息，失败媒体上传清理 submission 记录以允许重试；2. 修复短期便签 `_call_extractor` 异常时费用预留泄漏并在 `Budget.__init__` 初始化时对账清理，防止 pending 累积阻断聊天；3. 引入专用 `EmptyReplyError(UserError)`，`run_chat` 文本分支针对性捕获模型空回复，防止后台服务异常崩溃退出的同时保留存储与账本致命异常的向外暴露保护。CodeRabbit 3 项评审意见已全数修复。新增/更新回归测试全部通过。下一个工单号 147。
 - 工单 145：`memory_native.OMBRE_DESCRIPTIONS` + `ombre_tool_for_model`（替代 trace_tool_for_model；去 schema title、去 trace 被拒参数）；`tools_agent.FILESYSTEM_DESCRIPTIONS`（permitted_tools 里替换说明、去 `$schema`）；long_tasks、windows_observer、windows_interaction 说明缩短；veil_agent 输出预算后缀缩短。下一个工单号 146。
@@ -43,9 +44,9 @@
 
 - 验收状态以 STATUS.md「验收总表」为准，后续开发路线以它为依据。
 - 098 QQ 邮箱：2026-11-07 后验收收发。
-- 142–147：Lan 按各自工单做 Windows 体验验收。
+- 142–149：Lan 按各自工单做 Windows 体验验收。
 - 135、136、138：请 Lan 确认（10-27 说过 134–138 验收完毕，但不在 10-28 清单里）。
-- 下一个工单号为 149。
+- 下一个工单号为 150。
 
 ## 仍适用的边界
 

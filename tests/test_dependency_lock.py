@@ -14,6 +14,8 @@ class DependencyLockTests(unittest.TestCase):
     def test_every_direct_requirement_is_exactly_present_in_lock(self):
         direct = {}
         for line in (ROOT / "requirements.txt").read_text(encoding="utf-8").splitlines():
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
             match = re.match(r"^\s*([A-Za-z0-9_.-]+)==([^\s;]+)", line)
             self.assertIsNotNone(match, f"Direct dependency is not exactly pinned: {line}")
             direct[normalize(match.group(1))] = match.group(2)
@@ -32,7 +34,10 @@ class DependencyLockTests(unittest.TestCase):
         setup = (ROOT / "setup.bat").read_text(encoding="utf-8")
         workflow = (ROOT / ".github" / "workflows" / "tests.yml").read_text(encoding="utf-8")
         self.assertIn("requirements.lock.txt", setup)
+        self.assertIn("-m playwright install chromium", setup)
         self.assertIn("requirements.lock.txt", workflow)
+        update = (ROOT / "update.bat").read_text(encoding="utf-8")
+        self.assertIn("-m playwright install chromium", update)
         self.assertIn("(3, 11) <= sys.version_info[:2] < (3, 13)", setup)
 
     def test_ombre_installer_uses_the_archive_locked_requirements(self):

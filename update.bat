@@ -48,6 +48,8 @@ echo [2/4] Checking Python components...
 if not exist ".venv\Scripts\python.exe" goto no_venv
 ".venv\Scripts\python.exe" -m pip install -q --no-cache-dir -r requirements.lock.txt
 if errorlevel 1 goto failed
+".venv\Scripts\python.exe" -m playwright install chromium
+if errorlevel 1 goto failed
 ".venv\Scripts\python.exe" setup_memory.py
 if errorlevel 1 goto failed
 ".venv\Scripts\python.exe" setup_fetch.py

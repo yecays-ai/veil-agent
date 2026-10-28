@@ -2161,6 +2161,17 @@ class Chat:
         return RequestFailed(f'请求失败，未自动重试；输入已保存，本次保留预留费用。（{kind}，'
                              f'模型 {self.cfg.provider.get("model")}；详情在 data/{self.cfg.id}/provider-errors.jsonl）')
 
+    @staticmethod
+    def _is_image_input_rejection(exc):
+        status = getattr(exc, 'status_code', None)
+        detail = str(getattr(exc, 'message', None) or exc).casefold()
+        mentions_image = any(term in detail for term in (
+            'image', 'vision', 'multimodal', '图片', '图像', '视觉'))
+        rejected = any(term in detail for term in (
+            'not support', 'unsupported', 'does not support', 'invalid type', 'not allowed',
+            'unrecognized', 'unknown content', 'not implemented'))
+        return mentions_image and (status in (400, 413, 415, 422) or rejected)
+
     def switch_model(self, name, provider):
         """Ticket 134: Lan picked another model for Peter; it answers from his next request on."""
         with self.model_lock:
@@ -2587,6 +2598,7 @@ class Chat:
         self.last_tool_summaries = summaries
         loop_messages = list(messages)
         pending_image_messages = []
+        ephemeral_image_bindings = []
         if history_start is None:
             history_start = len(messages) - history_count - 1
         final = ''
@@ -2668,7 +2680,22 @@ class Chat:
             image_message = observation_image_message(execution.result)
             if image_message:
                 pending_image_messages.append(image_message)
+                ephemeral_image_bindings.append((image_message, tool_message, execution, name))
             image_pending = bool(image_message)
+
+            def omit_image(reason):
+                raw = str(execution.result).replace(
+                    'Screenshot captured: yes.',
+                    f'Screenshot was not sent to the model ({reason}); Peter has not seen the page.',
+                )
+                tool_message['content'] = model_tool_result(name, raw, execution.state)
+
+            def discard_pending_image():
+                if not pending_image_messages:
+                    return
+                removed = pending_image_messages.pop()
+                ephemeral_image_bindings[:] = [binding for binding in ephemeral_image_bindings
+                                               if binding[0] is not removed]
 
             # A tool result must not evict ordinary chat history merely because
             # the result itself (or its screenshot) cannot fit in this request.
@@ -2678,13 +2705,9 @@ class Chat:
             )
             if (image_pending and request_size(next_offered) - history_bytes
                     > self.cfg.provider['max_input_tokens']):
-                pending_image_messages.pop()
+                discard_pending_image()
                 image_pending = False
-                raw_result = str(execution.result).replace(
-                    'screenshot attached to this request only',
-                    'screenshot omitted because the current request input limit was reached',
-                )
-                tool_message['content'] = model_tool_result(name, raw_result, execution.state)
+                omit_image('the current request input limit was reached')
                 display_detail = '界面文字已读取；截图因输入长度上限未发送。'
                 result_state = '结果过长'
             if (request_size(next_offered) - history_bytes
@@ -2694,13 +2717,9 @@ class Chat:
                 result_state = '结果过长'
             fit_history(next_offered)
             if request_size(next_offered) > self.cfg.provider['max_input_tokens'] and image_pending:
-                pending_image_messages.pop()
+                discard_pending_image()
                 image_pending = False
-                raw_result = str(execution.result).replace(
-                    'screenshot attached to this request only',
-                    'screenshot omitted because the current request input limit was reached',
-                )
-                tool_message['content'] = model_tool_result(name, raw_result, execution.state)
+                omit_image('the current request input limit was reached')
                 display_detail = '界面文字已读取；截图因输入长度上限未发送。'
                 result_state = '结果过长'
                 fit_history(next_offered)
@@ -2768,9 +2787,47 @@ class Chat:
             except UserError:
                 raise
             except Exception as exc:
-                # Only the provider call is recoverable. Ledger, storage and tool
-                # integrity failures below must still stop the session.
-                raise self._request_failed(exc) from exc
+                has_transient_images = any(
+                    any(message is binding[0] for message in loop_messages)
+                    for binding in ephemeral_image_bindings)
+                if has_transient_images and self._is_image_input_rejection(exc):
+                    # A definite image-format/vision rejection is recoverable without
+                    # repeating the visual input. Let Peter explain the limitation,
+                    # then finish from diagnostics only. Other provider failures remain
+                    # non-retrying and continue through the ordinary error path.
+                    for image_message, tool_message, execution, image_tool_name in ephemeral_image_bindings:
+                        image_message['content'] = [{
+                            'type': 'text',
+                            'text': 'The preview screenshot was rejected by the selected model. '
+                                    'Peter has not seen this page.',
+                        }]
+                        text_result = str(execution.result).replace(
+                            'Screenshot captured: yes.',
+                            'The current model rejected image input; Peter has not seen the page.',
+                        )
+                        tool_message['content'] = model_tool_result(
+                            image_tool_name, text_result, '出错')
+                    ephemeral_image_bindings.clear()
+                    loop_messages.append({
+                        'role': 'system',
+                        'content': ('VEIL runtime fact: the selected model rejected visual image input. '
+                                    'Peter has not seen or visually verified the screenshot. Tell him this '
+                                    'clearly before discussing appearance. Use text diagnostics only and '
+                                    'never claim visual verification.'),
+                    })
+                    try:
+                        sent_bytes = request_bytes(offered)
+                        response = self.model(loop_messages, tools=offered, message_output=True,
+                                              max_tokens=step_cfg.max_output_tokens, detail=True)
+                    except UserError:
+                        raise
+                    except Exception as retry_exc:
+                        raise self._request_failed(retry_exc) from retry_exc
+                else:
+                    # Only the provider call is recoverable. Ledger, storage and tool
+                    # integrity failures below must still stop the session.
+                    raise self._request_failed(exc) from exc
+            ephemeral_image_bindings.clear()
             message, prompt, completion, cached, *finish = response
             if isinstance(prompt, int) and prompt > 0:
                 measured_ratio = prompt / sent_bytes
