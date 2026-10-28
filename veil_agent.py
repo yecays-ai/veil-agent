@@ -1499,7 +1499,7 @@ class Chat:
         autonomy = self.autonomy_mode
         if not autonomy:
             if self.send_message_count >= 10:
-                return ('This chat turn may send at most 10 messages. This message was not sent; its tool call '
+                return ('You may send at most 10 messages since Lan last wrote. This message was not sent; its tool call '
                         'remains in the conversation context so you can continue in a later turn.',
                         '被拒绝', 'send_message')
             self.send_message_count += 1
@@ -1602,6 +1602,11 @@ class Chat:
         if args.get('done') is True and not autonomy:
             self.turn_done = True
             result += ' Your turn ends here.'
+        elif not autonomy and self.send_message_count >= 10:
+            # Ticket 142: the 10th message closes the turn instead of letting later sends bounce.
+            self.turn_done = True
+            result += (' That was your 10th message since Lan last wrote, so your turn ends here. '
+                       'Anything unsaid can wait for her next message.')
         if forwarded:
             result += f' It will also go to Lan by {" and ".join(forwarded)} when this turn ends.'
         return result, '成功', 'send_message'
@@ -1696,6 +1701,8 @@ class Chat:
         complete = getattr(item, 'complete', None)
         if callable(complete):
             complete(True)
+        # Ticket 142: Lan wrote again, so Peter has a fresh 10 messages to answer her.
+        self.send_message_count = 0
         context = str(item)
         if getattr(item, 'runtime_context', None):
             context += '\n\n' + item.runtime_context

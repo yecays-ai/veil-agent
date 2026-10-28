@@ -77,6 +77,22 @@ class FreeReplyTests(unittest.TestCase):
         self.assertEqual(state, '被拒绝')
         self.assertIn('at most 10', result)
 
+    def test_tenth_message_ends_the_turn(self):
+        chat = Chat(self.cfg, self.store, Budget(self.store), Mock(), output=[].append)
+        chat.autonomy_mode = False
+        chat.send_message_count = 9
+        result, state, _ = chat.send_message(json.dumps({'text': 'ten'}), 'request')
+        self.assertEqual(state, '成功')
+        self.assertTrue(chat.turn_done)
+        self.assertIn('10th message', result)
+
+    def test_lan_steering_in_gives_a_fresh_message_allowance(self):
+        chat = Chat(self.cfg, self.store, Budget(self.store), Mock(), output=[].append)
+        chat.send_message_count = 7
+        chat.accept_steer(SimpleNamespace(user_events=[{'content': 'hey', 'message_id': 'm1', 'persisted': True}],
+                                          complete=None, runtime_context=None), 'request')
+        self.assertEqual(chat.send_message_count, 0)
+
     def test_reply_later_persists(self):
         chat = Chat(self.cfg, self.store, Budget(self.store), Mock(), output=[].append)
         chat.autonomy_mode = False
