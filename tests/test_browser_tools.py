@@ -21,6 +21,27 @@ class Idle:
 
 
 class BrowserSafetyTests(unittest.TestCase):
+    def test_failed_and_cancelled_operations_release_their_stop_callback(self):
+        async def scenario():
+            browser = BrowserTools(CFG, platform_enabled=True, monitor=Idle())
+            self.assertFalse(browser.stopped())
+            with self.assertRaises(ValueError):
+                await browser._operate({'action': 'observe'}, lambda: True)
+            self.assertFalse(browser.stopped())
+            browser.page = SimpleNamespace(is_closed=lambda: False)
+            entered = asyncio.Event()
+            async def slow_snapshot():
+                entered.set()
+                await asyncio.Future()
+            browser._snapshot = slow_snapshot
+            task = asyncio.create_task(browser._operate({'action': 'observe'}, lambda: False))
+            await entered.wait()
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+            self.assertFalse(browser.stopped())
+        asyncio.run(scenario())
+
     def test_unsafe_urls_and_write_parameters_are_refused(self):
         for url in ['file:///secret', 'http://example.com', 'https://127.0.0.1',
                     'https://user:pw@example.com', 'https://example.com:8443',
@@ -135,6 +156,36 @@ class BrowserChromiumTests(unittest.TestCase):
 
     def tearDown(self):
         self.browser.close()
+
+    def test_handoff_page_keeps_loading_after_old_stop_condition_changes(self):
+        async def scenario():
+            browser = self.browser
+            await browser._launch()
+            async def fixture(route):
+                async def continue_read():
+                    await route.fulfill(status=200, content_type='text/html',
+                                        body='<title>Public page</title><p>Ready</p>')
+                await browser._route(SimpleNamespace(request=route.request,
+                                                     continue_=continue_read, abort=route.abort))
+            await browser.context.route('https://example.com/**', fixture)
+            old_stop = [False]
+            await browser._operate({'action': 'open', 'url': 'https://example.com/'},
+                                   lambda: old_stop[0])
+            # Simulates human takeover or expiry AFTER Peter handed the page over.
+            old_stop[0] = True
+            self.assertTrue(await browser.page.evaluate("async () => (await fetch('/lazy')).ok"))
+            await browser.page.goto('https://example.com/manual-navigation')
+            self.assertEqual(await browser.page.title(), 'Public page')
+            with self.assertRaises(ValueError):
+                await browser._operate({'action': 'observe'}, lambda: True)
+            self.assertTrue(await browser.page.evaluate("async () => (await fetch('/after-failure')).ok"))
+            # Clearing operation state must not weaken the permanent read-only policy.
+            self.assertFalse(await browser.page.evaluate(
+                "async () => {try {await fetch('/write', {method:'POST'});return true;} catch {return false;}}"))
+            with self.assertRaises(Exception):
+                await browser.page.goto('https://127.0.0.1/')
+        self.browser._start_loop()
+        asyncio.run_coroutine_threadsafe(scenario(), self.browser.loop).result(timeout=20)
 
     def test_search_scroll_page_turn_video_and_isolation(self):
         async def scenario():

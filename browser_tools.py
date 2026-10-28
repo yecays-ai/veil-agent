@@ -152,6 +152,7 @@ class BrowserTools:
         self.page = self.context = self.engine = self.runtime = self.proxy = None
         self.serial = 0
         self.quarantined = False
+        self.stopped = lambda: False
 
     def begin_request(self):
         # Chat/wake already enforces its model budget and total step count.
@@ -279,6 +280,9 @@ class BrowserTools:
         except BaseException:
             self.links = {}
             raise
+        finally:
+            # Human input/deadlines stop Peter's operation, not the page left for Lan.
+            self.stopped = lambda: False
 
     def invoke(self, name, args, approval=None, *, should_stop=None):
         summary = 'isolated public browser'
