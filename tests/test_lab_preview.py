@@ -30,7 +30,8 @@ class LabPreviewPathTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name)
+        # Resolve once so Windows 8.3 temp names (RUNNER~1) match the paths the code returns.
+        self.root = Path(self.temporary.name).resolve()
         self.lab = self.root / "lab"
         self.lab.mkdir()
         (self.lab / "game.html").write_text("<h1>game</h1>", encoding="utf-8")
