@@ -464,21 +464,13 @@ class LongTaskStore:
                                         'evidence': f'工具返回状态：{state[:40]}'})
             task['tool_events'] = task['tool_events'][-MAX_TOOL_EVENTS:]
             if state == '成功':
-                pending['state'] = '成功，需核实'
-                pending['verified_in_step'] = None
-                created = re.search(r'memory_id: ([\w-]+)', result or '') if name == 'hold' else None
-                if created:
-                    # A new memory has no ID before it is saved; bind the checkpoint to the
-                    # created ID so memory_read can verify it.
-                    pending['target'] = created.group(1)
-                    pending['normalized_target'] = self._normalized_target(created.group(1))
-                effect = pending.get('expected_effect')
-                if name == 'move_lab_file' and isinstance(effect, dict):
-                    match = re.search(r'\((\d+) bytes, SHA-256 ([0-9a-f]{64})\)', result or '')
-                    if match:
-                        effect['byte_length'] = int(match.group(1))
-                        effect['sha256'] = match.group(2)
-            elif state == '被拒绝':
+                # Ticket 152: a write the tool itself reports as successful needs no read-back.
+                # Only interrupted or uncertain operations stay pending for verification.
+                task['pending_action'] = None
+                task['updated_at'] = now()
+                self._save(task)
+                return
+            if state == '被拒绝':
                 task['pending_action'] = None
             else:
                 pending['state'] = '结果不确定'

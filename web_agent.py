@@ -2086,6 +2086,9 @@ def serve_chat(chat, hub, channels=()):
         announce_typing_wait = getattr(files, 'announce_typing_wait', None)
         if callable(announce_typing_wait):
             announce_typing_wait()
+        announce_wake_freedom = getattr(files, 'announce_wake_freedom', None)
+        if callable(announce_wake_freedom):
+            announce_wake_freedom()
         chat.pending_capability_event = getattr(chat.tools, 'capability_event', None)
         chat.pending_capability_event_model = getattr(chat.tools, 'capability_event_model', None)
     if (getattr(files, 'lab', None) is not None and

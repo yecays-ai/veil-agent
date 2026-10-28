@@ -393,7 +393,8 @@ class OmbreToolGuardTests(unittest.TestCase):
         result, state, changed_title = self.call('trace', args)
         self.assertEqual(state, '成功', result)
         self.assertIn('旧版本已留档', changed_title)
-        tasks.finish_tool('trace', target, state)
+        # Ticket 152: only an uncertain result waits for a read-back (for example a lost reply).
+        tasks.finish_tool('trace', target, '出错')
 
         tasks.set_tool_step(1)
         tasks.observe_tool_result('memory_read', target, '成功',

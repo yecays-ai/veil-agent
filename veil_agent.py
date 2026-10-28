@@ -1262,6 +1262,9 @@ class Chat:
         self.pending_capability_event_model = capability_model_notice(tools)
         from long_tasks import LongTaskStore
         self.long_tasks = LongTaskStore(store, cfg.id)
+        # Ticket 152: Peter's own index of thoughts that might carry on (one line each).
+        from thoughts import ThoughtIndex
+        self.thoughts = ThoughtIndex(store, cfg.id)
         self.autonomy_controller = None
         self.task_tools_enabled = bool(cfg.tools and cfg.tools.get('max_steps', 1) > 1)
         self.tool_mode = bool((cfg.tools and cfg.tools.get('enabled', True)) or (tools and tools.tools)
@@ -1364,7 +1367,9 @@ class Chat:
         if self.profile and history:
             from profile_notes import PROFILE_APPEND, PROFILE_REPLACE
             profile = [PROFILE_APPEND, PROFILE_REPLACE]
-        schemas = [*existing_tools, *task_tools, *messaging, *history, *wake_tools, *profile]
+        from thoughts import THOUGHT_TOOL
+        thought = [THOUGHT_TOOL] if history else []
+        schemas = [*existing_tools, *task_tools, *messaging, *history, *wake_tools, *profile, *thought]
         for schema in schemas:
             function = schema['function']
             if function['name'] in ('write_file', 'append_file', 'long_task_update', 'hold', 'trace', 'letter_write'):
@@ -2547,6 +2552,8 @@ class Chat:
                     result, state, summary = 'Scheduled wakes are unavailable in this session.', '被拒绝', 'set_next_wake'
                 else:
                     result, state, summary = self.autonomy_controller.set_next_wake(args)
+            elif call.function.name == 'thought':
+                result, state, summary = self.thoughts.invoke(json.loads(call.function.arguments or '{}'))
             elif call.function.name == 'set_wake_rhythm':
                 args = json.loads(call.function.arguments or '{}')
                 if self.autonomy_controller is None:

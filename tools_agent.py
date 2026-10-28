@@ -720,6 +720,24 @@ class FilesystemTools:
             raise UserError('打字等待通知无法保存；请保留 data 文件夹。') from exc
 
     @capability_transaction
+    def announce_wake_freedom(self):
+        if getattr(self, 'cap_path', None) is None:
+            return
+        try:
+            self._announce_once(
+                'wake_freedom_152_announced',
+                'Capability update: during an active long task, a write, note or memory that the tool reports as '
+                'saved is now recorded as done; you no longer have to read it back or file long_task_update before '
+                'the next action. Only an operation whose result was uncertain still waits for a check. You also '
+                'have a new tool, thought: a small index of thoughts that might carry on, one line each, linked '
+                'to Ombre memories if you like. Passing ones fade by themselves; ones you come back to or keep '
+                'stay. Waking up, you now see a list of recent Lab files instead of their full text, and now and '
+                'then a line from that index.')
+        except Exception as exc:
+            self.enabled = False
+            raise UserError('醒来自由通知无法保存；请保留 data 文件夹。') from exc
+
+    @capability_transaction
     def announce_long_tasks(self):
         if getattr(self, 'cap_path', None) is None:
             return
