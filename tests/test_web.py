@@ -1187,6 +1187,29 @@ output_cny_per_million = "8"
         self.assertEqual([m['content'] for m in self.store.read('test/chat.jsonl')][1:], texts)
         self.assertEqual(self.model.call_count, 2)
 
+    def test_startup_recovers_uncommitted_incoming_submissions(self):
+        self.store.append('test/incoming-submissions.jsonl', {
+            'role': 'user', 'content': 'saved before crash',
+            'request_id': 'crash-id', 'message_id': 'crash-id',
+            'state': 'received', 'time': '2026-10-28T12:00:00Z'
+        })
+        chat = Chat(self.cfg, self.store, Budget(self.store), self.model)
+        hub = Hub('Test', ActivityState(self.store.root / 'test' / 'res-state.json'),
+                  media_root=self.store.root / 'test' / 'media')
+        hub.chat = chat
+
+        # Simulate the startup recovery block
+        from web_agent import serve_chat
+        with patch('web_agent.run_chat'):
+            serve_chat(chat, hub)
+
+        self.assertFalse(hub.inbox.empty())
+        item = hub.inbox.get_nowait()
+        self.assertEqual(item[0], 'saved before crash')
+        self.assertEqual(item[3], 'crash-id')
+        self.assertIn('crash-id', hub.submissions)
+        self.assertTrue(any(e.get('text') == 'saved before crash' for e in hub.events))
+
 
 class StartupErrorTests(unittest.TestCase):
     def test_service_environment_refreshes_stale_windows_path(self):

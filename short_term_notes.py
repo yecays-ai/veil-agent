@@ -95,6 +95,8 @@ class ShortTermNotes:
         self._extract_lock = threading.Lock()
         self._stop = threading.Event()
         self._thread = None
+        if getattr(self.budget, 'reconcile_unsettled', None):
+            self.budget.reconcile_unsettled({COST_ACCOUNTING})
 
     def start(self):
         if self._thread and self._thread.is_alive():
@@ -440,14 +442,18 @@ class ShortTermNotes:
 
     def _call_extractor(self, messages):
         request_cfg = replace(self.cfg, max_output_tokens=MAX_OUTPUT_TOKENS)
-        reservation, _ = self.budget.reserve(request_cfg, accounting=COST_ACCOUNTING,
-                                             category=COST_CATEGORY)
+        reservation, amount = self.budget.reserve(request_cfg, accounting=COST_ACCOUNTING,
+                                                  category=COST_CATEGORY)
         try:
             output, prompt_tokens, completion_tokens, cached_tokens = self.model(
                 messages, json_output=True, max_tokens=MAX_OUTPUT_TOKENS, thinking='disabled')
         except UserError:
+            if hasattr(self.budget, 'settle_estimate'):
+                self.budget.settle_estimate((reservation, amount), accounting=f'{COST_ACCOUNTING}-failed')
             raise
         except Exception as exc:
+            if hasattr(self.budget, 'settle_estimate'):
+                self.budget.settle_estimate((reservation, amount), accounting=f'{COST_ACCOUNTING}-failed')
             raise RequestFailed('短期便签提取请求失败；没有自动重试，原聊天仍保留。') from exc
         self.budget.settle(reservation, request_cfg, prompt_tokens, completion_tokens, cached_tokens,
                            accounting=COST_ACCOUNTING, category=COST_CATEGORY)

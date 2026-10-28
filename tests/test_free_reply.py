@@ -56,7 +56,10 @@ class FreeReplyTests(unittest.TestCase):
         hub.busy = True
         self.assertEqual(hub.submit('one', 'id-1'), 'accepted')
         self.assertEqual(hub.submit('two', 'id-2'), 'accepted')
-        self.assertEqual([r['content'] for r in self.store.read('test/chat.jsonl')], ['one', 'two'])
+        self.assertEqual([r['content'] for r in self.store.read('test/incoming-submissions.jsonl')
+                          if r.get('state') == 'received'], ['one', 'two'])
+        # chat.jsonl must remain clean until the messages actually enter turn processing
+        self.assertEqual(self.store.read('test/chat.jsonl'), [])
         batch = hub._chat_batch(hub.inbox.get_nowait())
         chat.send(str(batch), user_events=batch.user_events)
         rows = self.store.read('test/chat.jsonl')
@@ -272,6 +275,72 @@ class FreeReplyTests(unittest.TestCase):
         self.assertEqual(res, 'nevermind, here is the answer')
         states = self.store.read('test/message-processing.jsonl')
         self.assertEqual(states[-1]['state'], 'replied')
+
+    def test_queued_messages_maintain_strict_chronological_order_without_prompt_duplication(self):
+        prompts = []
+        def fake_model(messages, **kwargs):
+            prompts.append(list(messages))
+            if len(prompts) == 1:
+                return ('reply A', 10, 2, 0)
+            return ('reply B', 10, 2, 0)
+
+        cfg = replace(self.cfg, tools=None)
+        chat = Chat(cfg, self.store, Budget(self.store), fake_model, output=[].append)
+
+        # User submits A and it starts turn 1
+        chat.persist_incoming('message A', 'req-a')
+        # Simulate message B submitted over HTTP while turn 1 is pending/in flight
+        chat.persist_incoming('message B', 'req-b')
+
+        # chat.jsonl must NOT yet contain message B (it is safely in incoming-submissions.jsonl)
+        chat_rows_before = self.store.read('test/chat.jsonl')
+        self.assertNotIn('message B', [r.get('content') for r in chat_rows_before])
+
+        # Turn 1 completes
+        chat.send('message A', message_id='req-a')
+        # Now chat.jsonl has [message A, reply A]
+        chat_rows_mid = self.store.read('test/chat.jsonl')
+        self.assertEqual([r.get('content') for r in chat_rows_mid], ['message A', 'reply A'])
+
+        # Turn 2 runs for message B
+        chat.send('message B', message_id='req-b')
+
+        # Model prompt for Turn 2 must NOT duplicate message B in history
+        prompt_b = prompts[1]
+        # Count occurrences of message B in prompt_b
+        b_occurrences = [msg for msg in prompt_b if msg.get('role') == 'user' and 'message B' in msg.get('content', '')]
+        self.assertEqual(len(b_occurrences), 1, "message B should only appear once in prompt as current message")
+
+        # Chat history on disk must maintain strict chronological order: [User A, Reply A, User B, Reply B]
+        chat_rows_final = self.store.read('test/chat.jsonl')
+        self.assertEqual(
+            [(r.get('role'), r.get('content')) for r in chat_rows_final],
+            [('user', 'message A'), ('assistant', 'reply A'), ('user', 'message B'), ('assistant', 'reply B')]
+        )
+
+        # recent() grouping must correctly pair A with Reply A, and B with Reply B
+        _, rounds = chat.recent()
+        self.assertEqual(rounds, 2)
+
+    def test_uncommitted_incoming_submissions_recovered_after_crash(self):
+        cfg = replace(self.cfg, tools=None)
+        chat = Chat(cfg, self.store, Budget(self.store), Mock(), output=[].append)
+
+        # Message is accepted into incoming-submissions
+        chat.persist_incoming('crash test message', 'req-crash')
+
+        # Before turn processing, it is uncommitted
+        uncommitted = chat.recover_uncommitted_incoming()
+        self.assertEqual(len(uncommitted), 1)
+        self.assertEqual(uncommitted[0]['content'], 'crash test message')
+
+        # Now simulate message entering turn and being committed
+        chat.model = Mock(return_value=('reply to crash', 10, 2, 0))
+        chat.send('crash test message', message_id='req-crash')
+
+        # After turn completion, it is committed and not returned by recover_uncommitted_incoming
+        uncommitted_after = chat.recover_uncommitted_incoming()
+        self.assertEqual(uncommitted_after, [])
 
 
 if __name__ == '__main__':

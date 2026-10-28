@@ -2120,6 +2120,20 @@ def serve_chat(chat, hub, channels=()):
         if (media.get('kind') == 'voice' and media['id'] not in completed_voice_ids
                 and (media.get('request_id') == 'voice-' + media['id'] or media.get('delivery_pending'))):
             hub.push('user', media.get('transcript') or '', time=now(), history=True, media=dict(media))
+    if hasattr(chat, 'recover_uncommitted_incoming'):
+        for row in chat.recover_uncommitted_incoming():
+            mid = row.get('message_id')
+            req_id = row.get('request_id') or mid
+            text = row.get('content') or ''
+            media = row.get('media')
+            def complete(committed, r_text=text, r_media=media, r_id=req_id):
+                hub.finish_media_submission(committed, r_text, r_media, r_id)
+            if not media:
+                hub.push('user', text, request_id=req_id, message_id=mid)
+            digest_input = text.encode('utf-8') + b'\0' + (media['id'].encode() if isinstance(media, dict) and isinstance(media.get('id'), str) else b'')
+            hub.submissions[req_id] = hashlib.sha256(digest_input).digest()
+            hub.inbox.put((text, media, complete, req_id, True))
+            hub.busy = True
     if channels:
         from away_bridge import AwayBridge
     for channel in channels:

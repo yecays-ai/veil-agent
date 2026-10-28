@@ -1719,11 +1719,17 @@ class Chat:
             {'content': str(item), 'message_id': getattr(item, 'message_id', None),
              'media': getattr(item, 'media', None)}]
         with saving():
+            in_history = {row.get('message_id') for row in getattr(self, 'history_events', [])}
             for row in events:
                 event = {'role': 'user', 'content': row['content'], 'request_id': request_id,
                          'message_id': row.get('message_id') or uuid.uuid4().hex}
-                if not row.get('persisted'):
+                row_media = row.get('media')
+                if isinstance(row_media, dict):
+                    event['media'] = {key: row_media[key] for key in ('id', 'filename', 'mime', 'name', 'kind', 'transcript')
+                                      if isinstance(row_media.get(key), str)}
+                if event['message_id'] not in in_history:
                     self.store.append(self.path, event)
+            self.commit_incoming([row.get('message_id') for row in events if row.get('message_id')])
         complete = getattr(item, 'complete', None)
         if callable(complete):
             complete(True)
@@ -1983,14 +1989,39 @@ class Chat:
 
     def persist_incoming(self, text, message_id, media=None):
         event = {'role': 'user', 'content': text, 'request_id': message_id,
-                 'message_id': message_id or uuid.uuid4().hex}
+                 'message_id': message_id or uuid.uuid4().hex,
+                 'time': now(), 'state': 'received'}
         if isinstance(media, dict):
             event['media'] = {key: media[key] for key in ('id', 'filename', 'mime', 'name', 'kind', 'transcript')
                               if isinstance(media.get(key), str)}
         # HTTP admission runs on a request thread; Store.append is already synchronized and fsynced.
         # The signal-masking saving() context is main-thread-only.
-        self.store.append(self.path, event)
+        self.store.append(f'{self.cfg.id}/incoming-submissions.jsonl', event)
         return event['message_id']
+
+    def commit_incoming(self, message_ids):
+        ids = [mid for mid in message_ids if isinstance(mid, str) and mid]
+        if not ids:
+            return
+        for mid in ids:
+            self.store.append(f'{self.cfg.id}/incoming-submissions.jsonl', {
+                'message_id': mid, 'state': 'committed', 'time': now()
+            })
+
+    def recover_uncommitted_incoming(self):
+        rows = self.store.read(f'{self.cfg.id}/incoming-submissions.jsonl')
+        if not rows:
+            return []
+        committed = {row['message_id'] for row in rows if row.get('state') == 'committed'}
+        committed |= {row.get('message_id') for row in self.store.read(self.path)}
+        pending = {}
+        for row in rows:
+            mid = row.get('message_id')
+            if row.get('state') == 'received' and mid and mid not in committed:
+                pending[mid] = row
+            elif row.get('state') == 'committed' and mid in pending:
+                pending.pop(mid, None)
+        return list(pending.values())
 
     def prepare_regeneration(self, message_id):
         rows = self._chat_rows()
@@ -2315,6 +2346,7 @@ class Chat:
                 rows = user_events if isinstance(user_events, list) and user_events else [
                     {'content': text, 'message_id': message_id, 'media': media}]
                 processing_batch = next((row.get('message_id') for row in rows if row.get('message_id')), uuid.uuid4().hex)
+                in_history = {row.get('message_id') for row in self.history_events}
                 for row in rows:
                     event = {'role': 'user', 'content': row['content'], 'request_id': request_id,
                              'message_id': row.get('message_id') or uuid.uuid4().hex}
@@ -2322,8 +2354,9 @@ class Chat:
                     if isinstance(row_media, dict):
                         event['media'] = {key: row_media[key] for key in ('id', 'filename', 'mime', 'name', 'kind', 'transcript')
                                           if isinstance(row_media.get(key), str)}
-                    if not row.get('persisted'):
+                    if event['message_id'] not in in_history:
                         self.store.append(self.path, event)
+                self.commit_incoming([row.get('message_id') for row in rows])
                 self.store.append(f'{self.cfg.id}/message-processing.jsonl', {
                     'batch_id': processing_batch, 'message_ids': [row.get('message_id') for row in rows],
                     'state': 'pending', 'at': now()})
@@ -3230,6 +3263,11 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead, activity=N
                     output(str(exc))
                     continue
                 except RequestFailed as exc:
+                    output(str(exc))
+                    notify_dropped()
+                    continue
+                except UserError as exc:
+                    chat.history, chat.rounds = chat.recent()
                     output(str(exc))
                     notify_dropped()
                     continue
