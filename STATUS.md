@@ -1,9 +1,10 @@
 # 当前状态
 
-更新：2026-10-28 UTC · Claude（工单 140）。
+更新：2026-10-28 UTC · Codex（工单 141）。
 
 ## 当前目标与现状
 
+- 工单 141「自由对话」：分支 `ticket/141-free-reply`，基于最新 main `bf86eff`。实现随时连发、批量交付、生成中安全边界插话、输入状态事实、自由沉默、持久 `reply_later`、Request Reply、每轮 10 条硬上限与批次状态；桌面需 `update.bat`。自动检查和 Windows 体验尚待完成，详见 `docs/tickets/141-free-reply.md`。下一个工单号 142。
 - 工单 140「长期任务进度不再记满就卡死」：分支 `ticket/140-long-task-rolling`，Claude 实现，Lan 2026-10-28 提出。进度满 40 条后最旧的移入 `long-task-progress-archive.jsonl`，新进度照常写；待定操作在同一步先读后确认即可。新增测试 2 项（`tests/test_long_tasks.py`）。验收见 `docs/tickets/140-long-task-rolling.md`。下一个工单号 141。
 - 工单 139「Peter 自己决定怎么醒来」：PR #186 已合并（6f6ba0c），CI 通过；Lan 电脑上已生效（10-28 自然醒 11:52/13:24/14:21，他自己排了闹钟）。分支 `ticket/139-wake-control`，Claude 实现，Lan 2026-10-28 同意。参考 Kli Space Wake Veil（1.0 仓库思路 + 2.0 设计稿），Python 重写。自然醒改为醒后安静、慢慢攒够才醒（平均约 90 分钟，多在 30–190 分钟）；新工具 `set_wake_rhythm`（quieter / silent / custom，带时长自动恢复）；`set_next_wake` 可排多个带留言的闹钟、最早 15 分钟，安静时也照响；错过的闹钟下次一起告诉他。Lan 的暂停、夜间安静、12 次/天、¥3/天不变。新增 `tests/test_wake_control.py`（7 项）；全量测试与 main 相同（本机 6 项环境相关失败两边一致）。未改桌面界面。验收见 `docs/tickets/139-wake-control.md`。下一个工单号 140。
 - 工单 138「Peter 自己说完就停，Lan 可以叫停」：分支 `ticket/138-turn-stop`，Claude 实现，Lan 2026-10-28 同意。argon 一句晚安发了 19 条，一直跑到 20 步上限。send_message 加了可选的 `done`：他标为最后一条后，这一轮就结束（自主活动里忽略）。聊天「正在回复…」旁加「停下」按钮（`/api/stop`），在下一步开始前停下，已经发出的消息保留。新增 `tests/test_turn_stop.py`（7 项）；全量测试与 main 相同（本机 6 项环境相关失败两边一致），桌面测试通过。需要 update.bat 重新打包 exe。验收见 `docs/tickets/138-turn-stop.md`。PR #184（Codex 的 137）还开着；本单避开了它改的行。下一个工单号 139。

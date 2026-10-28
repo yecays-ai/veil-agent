@@ -182,7 +182,8 @@ class AwayBridge:
             request_id = self.request_id(incoming.key)
             with self.state_lock:
                 self.replying[request_id] = incoming.reply_ref
-            result = self.hub.submit(self.channel.prefix + incoming.text, request_id)
+            result = self.hub.submit(self.channel.prefix + incoming.text, request_id,
+                                     allow_while_busy=False)
             if result in ('accepted', 'duplicate'):
                 self.channel.ack(incoming)
             else:

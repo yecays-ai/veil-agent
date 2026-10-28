@@ -13,7 +13,7 @@ import uuid
 import threading
 from functools import wraps
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from background import append_context_log, background_context, background_path, context_chars, request_kind
@@ -124,6 +124,17 @@ SEND_MESSAGE = {'type': 'function', 'function': {
         # Ticket 138: some models never end a step with empty text; this lets Peter end his own turn.
         'done': {'type': 'boolean', 'description': 'true if this is your last message for now; nothing more is asked of you this turn.'}},
                    'required': ['text'], 'additionalProperties': False},
+}}
+
+REPLY_LATER = {'type': 'function', 'function': {
+    'name': 'reply_later',
+    'description': ('Persist a choice to reconsider this conversation later. Give either minutes from now or '
+                    'one future local ISO time, plus a short private note to your future self.'),
+    'parameters': {'type': 'object', 'properties': {
+        'minutes': {'type': 'integer', 'minimum': 1},
+        'at': {'type': 'string', 'maxLength': 64},
+        'note': {'type': 'string', 'minLength': 1, 'maxLength': 300},
+    }, 'required': ['note'], 'additionalProperties': False},
 }}
 
 
@@ -526,6 +537,10 @@ def load_character(root, character_id):
                 'persistent_append_file': tools.get('persistent_append_file'),
                 'lab': tools.get('lab', 'lab'),
                 'lab_max_write_bytes': positive_int(tools.get('lab_max_write_bytes', 200000)),
+                'reply_later_max_hours': positive_int(tools.get('reply_later_max_hours', 24)),
+                'reply_later_max_deferrals': positive_int(tools.get('reply_later_max_deferrals', 2)),
+                'reply_later_max_pending': positive_int(tools.get('reply_later_max_pending', 3)),
+                'reply_later_daily_wakes': positive_int(tools.get('reply_later_daily_wakes', 20)),
             }
             if tools['max_steps'] < 2:
                 raise ValueError('tools.max_steps must allow a tool call and a final response')
@@ -1243,7 +1258,10 @@ class Chat:
                 self.pending_capability_event = tools.capability_event
                 self.pending_capability_event_model = capability_model_notice(tools)
         self.sent_messages = []
+        self.send_message_count = 0
         self.reply_displayed = False
+        self.force_reply = False
+        self.reply_later_batch = None
         self.last_reply_message_id = None
         self.last_reply_request_id = None
         self.autonomy_mode = False
@@ -1251,6 +1269,7 @@ class Chat:
         self._capability_request_active = False
         self._active_capability_schemas = None
         self.autonomy_should_yield = None
+        self.claim_steer = None
         self.autonomy_run_id = None
         self.glance_mode = False
         self.codex_watch_mode = False
@@ -1300,6 +1319,8 @@ class Chat:
                      RECALL_MESSAGE] if (
             (self.cfg.tools and self.cfg.tools.get('enabled', True))
             or (self.tools and self.tools.tools)) else []
+        if messaging and not self.force_reply:
+            messaging.append(REPLY_LATER)
         history = [CAPABILITY_HISTORY, AUTONOMY_HISTORY] if existing_tools or task_tools or messaging else []
         wake_tools = [AUTONOMY_SET_NEXT_WAKE, AUTONOMY_SET_WAKE_RHYTHM] if self.autonomy_controller is not None else []
         profile = []
@@ -1473,6 +1494,12 @@ class Chat:
                 return f'send_message {name} must be a boolean.', '被拒绝', 'send_message'
         text = args['text']
         autonomy = self.autonomy_mode
+        if not autonomy:
+            if self.send_message_count >= 10:
+                return ('This chat turn may send at most 10 messages. This message was not sent; its tool call '
+                        'remains in the conversation context so you can continue in a later turn.',
+                        '被拒绝', 'send_message')
+            self.send_message_count += 1
         gate = self.autonomy_message_lock if autonomy else None
         with gate if gate is not None else nullcontext():
             if autonomy and self.autonomy_should_yield and self.autonomy_should_yield():
@@ -1575,6 +1602,123 @@ class Chat:
         if forwarded:
             result += f' It will also go to Lan by {" and ".join(forwarded)} when this turn ends.'
         return result, '成功', 'send_message'
+
+    def reply_later(self, arguments):
+        try:
+            args = json.loads(arguments or '{}')
+        except (ValueError, TypeError):
+            args = None
+        if self.force_reply:
+            return 'reply_later is unavailable because Lan requested an actual reply now.', '被拒绝', 'reply_later'
+        if (not isinstance(args, dict) or set(args) - {'minutes', 'at', 'note'}
+                or not isinstance(args.get('note'), str) or not args['note'].strip()
+                or (('minutes' in args) == ('at' in args))):
+            return 'Give exactly one of minutes or at, plus a non-empty note.', '被拒绝', 'reply_later'
+        current = datetime.now().astimezone()
+        try:
+            if 'minutes' in args:
+                if type(args['minutes']) is not int or args['minutes'] < 1:
+                    raise ValueError
+                due = current + timedelta(minutes=args['minutes'])
+            else:
+                due = datetime.fromisoformat(args['at'])
+                if due.tzinfo is None:
+                    due = due.replace(tzinfo=current.tzinfo)
+                due = due.astimezone()
+        except (ValueError, TypeError, OverflowError):
+            return 'The reply_later time is invalid.', '被拒绝', 'reply_later'
+        max_hours = int((self.cfg.tools or {}).get('reply_later_max_hours', 24))
+        if due <= current or due > current + timedelta(hours=max_hours):
+            return f'reply_later must be in the future and no more than {max_hours} hours away.', '被拒绝', 'reply_later'
+        path = f'{self.cfg.id}/reply-later.json'
+        try:
+            saved = json.loads((self.store.root / path).read_text(encoding='utf-8'))
+        except (OSError, ValueError, TypeError):
+            saved = {'pending': [], 'wake_log': []}
+        pending = [x for x in saved.get('pending', []) if isinstance(x, dict) and x.get('state') == 'pending']
+        if len(pending) >= int((self.cfg.tools or {}).get('reply_later_max_pending', 3)):
+            return 'At most 3 reply_later reminders may be pending at once.', '被拒绝', 'reply_later'
+        batch = self.reply_later_batch or uuid.uuid4().hex
+        deferrals = sum(1 for x in pending if x.get('batch_id') == batch)
+        if deferrals >= int((self.cfg.tools or {}).get('reply_later_max_deferrals', 2)):
+            return 'The same message batch may be postponed at most 2 times.', '被拒绝', 'reply_later'
+        pending.append({'id': uuid.uuid4().hex, 'batch_id': batch, 'due': due.isoformat(),
+                        'note': args['note'].strip(), 'created_at': current.isoformat(), 'state': 'pending'})
+        self.store.replace(path, {'pending': pending, 'wake_log': saved.get('wake_log', [])})
+        self.turn_done = True
+        return f'Reminder saved for {due.isoformat()}.', '成功', 'reply_later'
+
+    def pending_reply_later_context(self, cancel=False):
+        path = self.store.root / self.cfg.id / 'reply-later.json'
+        try:
+            saved = json.loads(path.read_text(encoding='utf-8'))
+        except (OSError, ValueError, TypeError):
+            return None
+        pending = [x for x in saved.get('pending', []) if isinstance(x, dict) and x.get('state') == 'pending']
+        if not pending:
+            return None
+        if cancel:
+            for row in pending:
+                row['state'] = 'cancelled_by_request_reply'
+            self.store.replace(f'{self.cfg.id}/reply-later.json', saved)
+        lines = [f"- due {row.get('due')}: {row.get('note')}" for row in pending]
+        return 'Pending reply_later choices from earlier turns:\n' + '\n'.join(lines)
+
+    def accept_steer(self, item, request_id):
+        events = getattr(item, 'user_events', None) or [
+            {'content': str(item), 'message_id': getattr(item, 'message_id', None),
+             'media': getattr(item, 'media', None)}]
+        with saving():
+            for row in events:
+                event = {'role': 'user', 'content': row['content'], 'request_id': request_id,
+                         'message_id': row.get('message_id') or uuid.uuid4().hex}
+                if not row.get('persisted'):
+                    self.store.append(self.path, event)
+        complete = getattr(item, 'complete', None)
+        if callable(complete):
+            complete(True)
+        context = str(item)
+        if getattr(item, 'runtime_context', None):
+            context += '\n\n' + item.runtime_context
+        return {'role': 'user', 'content': context}
+
+    def claim_due_reply_later(self):
+        path = self.store.root / self.cfg.id / 'reply-later.json'
+        try:
+            saved = json.loads(path.read_text(encoding='utf-8'))
+        except (OSError, ValueError, TypeError):
+            return None
+        current = datetime.now().astimezone()
+        wakes = []
+        for stamp in saved.get('wake_log', []):
+            try:
+                if isinstance(stamp, str) and datetime.fromisoformat(stamp).astimezone().date() == current.date():
+                    wakes.append(stamp)
+            except ValueError:
+                continue
+        daily = int((self.cfg.tools or {}).get('reply_later_daily_wakes', 20))
+        if len(wakes) >= daily:
+            return None
+        for row in saved.get('pending', []):
+            if not isinstance(row, dict) or row.get('state') != 'pending':
+                continue
+            try:
+                due = datetime.fromisoformat(row['due']).astimezone()
+            except (ValueError, TypeError, KeyError):
+                continue
+            controller = self.autonomy_controller
+            bounds = controller._quiet_bounds(due) if controller and controller.quiet_enabled() else None
+            if bounds:
+                due = bounds[1]
+                row['due'] = due.isoformat()
+            if due > current:
+                continue
+            row['state'] = 'claimed'
+            wakes.append(current.isoformat())
+            saved['wake_log'] = wakes[-100:]
+            self.store.replace(f'{self.cfg.id}/reply-later.json', saved)
+            return row
+        return None
 
     def start_new_conversation(self):
         notes_result = (self.short_term_notes.extract_before_new_conversation()
@@ -1785,6 +1929,16 @@ class Chat:
             callback(row)
         return True
 
+    def persist_incoming(self, text, message_id, media=None):
+        event = {'role': 'user', 'content': text, 'request_id': message_id,
+                 'message_id': message_id or uuid.uuid4().hex}
+        if isinstance(media, dict):
+            event['media'] = {key: media[key] for key in ('id', 'filename', 'mime', 'name', 'kind', 'transcript')
+                              if isinstance(media.get(key), str)}
+        with saving():
+            self.store.append(self.path, event)
+        return event['message_id']
+
     def prepare_regeneration(self, message_id):
         rows = self._chat_rows()
         if message_id not in {row.get('message_id') for row in self.history_events}:
@@ -1949,13 +2103,26 @@ class Chat:
             self.cfg = original
 
     def _send(self, text, *, autonomy=False, extra_context=None, media=None, message_id=None,
-              persist_user=True, regeneration_parent_message_id=None):
+              persist_user=True, regeneration_parent_message_id=None, force_reply=False,
+              reply_later_batch=None, user_events=None):
         # Per-call durability fact used by UI adapters when failures can occur
         # both before and after the user row is appended.
         self.last_send_persisted = False
         self.sent_messages = []
+        self.send_message_count = 0
         self.reply_displayed = False
         self.turn_done = False
+        self.force_reply = bool(force_reply)
+        self.reply_later_batch = reply_later_batch
+        processing_batch = None
+        persisted_ids = [row.get('message_id') for row in (user_events or []) if row.get('persisted')]
+        if persisted_ids:
+            # Accepted messages are already durable. Exclude those trailing rows from history for this
+            # request because they are represented once as the current batched user input below.
+            self.history, self.rounds = self.recent()
+            trailing = [row.get('message_id') for row in self.history_events[-len(persisted_ids):]]
+            if trailing == persisted_ids:
+                self.history = self.history[:-len(persisted_ids)]
         if not autonomy:
             self.user_stop.clear()
         self.autonomy_mode = autonomy
@@ -2089,12 +2256,21 @@ class Chat:
                         if self.tool_mode else self.cfg)
             request_id, _ = self.budget.reserve(tool_cfg)
             if not autonomy and persist_user:
-                event = {'role': 'user', 'content': text, 'request_id': request_id,
-                         'message_id': message_id or uuid.uuid4().hex}
-                if isinstance(media, dict):
-                    event['media'] = {key: media[key] for key in ('id', 'filename', 'mime', 'name', 'kind', 'transcript')
-                                     if isinstance(media.get(key), str)}
-                self.store.append(self.path, event)
+                rows = user_events if isinstance(user_events, list) and user_events else [
+                    {'content': text, 'message_id': message_id, 'media': media}]
+                processing_batch = next((row.get('message_id') for row in rows if row.get('message_id')), uuid.uuid4().hex)
+                for row in rows:
+                    event = {'role': 'user', 'content': row['content'], 'request_id': request_id,
+                             'message_id': row.get('message_id') or uuid.uuid4().hex}
+                    row_media = row.get('media')
+                    if isinstance(row_media, dict):
+                        event['media'] = {key: row_media[key] for key in ('id', 'filename', 'mime', 'name', 'kind', 'transcript')
+                                          if isinstance(row_media.get(key), str)}
+                    if not row.get('persisted'):
+                        self.store.append(self.path, event)
+                self.store.append(f'{self.cfg.id}/message-processing.jsonl', {
+                    'batch_id': processing_batch, 'message_ids': [row.get('message_id') for row in rows],
+                    'state': 'pending', 'at': now()})
                 self.last_send_persisted = True
         self._log_context(text, autonomy, request_id, head, profile_context, stable, history, recalled,
                           background_details, short_term_details, runtime_context, tool_schema, user,
@@ -2120,6 +2296,9 @@ class Chat:
             raise
         except (TooLong, RequestFailed):
             self._capability_request_active = False
+            if processing_batch:
+                self.store.append(f'{self.cfg.id}/message-processing.jsonl', {
+                    'batch_id': processing_batch, 'state': 'failed', 'at': now()})
             # The failed message may already be persisted (provider failure or a
             # tool-mode length failure). Keep this live session aligned with a
             # reopened one; recent() also fails closed on corrupt chat records.
@@ -2132,8 +2311,14 @@ class Chat:
         if autonomy and self.autonomy_should_yield and self.autonomy_should_yield():
             self.autonomy_interrupted = True
         with saving():
-            if not isinstance(reply, str) or not reply.strip():
+            if not isinstance(reply, str):
                 raise UserError('接口没有返回文字回复；本次保留预留费用。')
+            if not reply.strip():
+                if not autonomy and self.tool_mode and not self.force_reply:
+                    self.reply_displayed = True
+                    reply = ''
+                else:
+                    raise UserError('接口没有返回文字回复；本次保留预留费用。')
             self.last_tool_summaries = tool_summaries
             if not autonomy and not self.reply_displayed:
                 self.last_reply_message_id = uuid.uuid4().hex
@@ -2163,6 +2348,11 @@ class Chat:
             self.opening_pending = False
         if not autonomy:
             self.history, self.rounds = self.recent()
+            if processing_batch:
+                state = ('replied' if self.sent_messages or (isinstance(reply, str) and reply.strip())
+                         else 'reply_later' if self.reply_later_batch else 'silent')
+                self.store.append(f'{self.cfg.id}/message-processing.jsonl', {
+                    'batch_id': processing_batch, 'state': state, 'at': now()})
             if autonomy_handoff_id is not None:
                 from autonomy import acknowledge_chat_handoff
                 acknowledge_chat_handoff(self.store, self.cfg, autonomy_handoff_id)
@@ -2179,6 +2369,8 @@ class Chat:
             checkpoint_verified = False
             if call.function.name == 'send_message':
                 result, state, summary = self.send_message(call.function.arguments, request_id, tool_call_id)
+            elif call.function.name == 'reply_later':
+                result, state, summary = self.reply_later(call.function.arguments)
             elif call.function.name == 'recall_message':
                 args = json.loads(call.function.arguments or '{}')
                 message_id = args.get('message_id') if isinstance(args, dict) else None
@@ -2529,6 +2721,13 @@ class Chat:
                 break
             if not message.tool_calls:
                 content = message.content or ''
+                if (not autonomy and self.force_reply and not content.strip()
+                        and not mixed_sent_messages and step + 1 < max_steps):
+                    loop_messages.append({'role': 'assistant', 'content': content})
+                    loop_messages.append({'role': 'system', 'content': (
+                        'Lan pressed Request Reply. This one request must produce actual message text. '
+                        'reply_later is unavailable; use send_message with non-empty text before ending.')})
+                    continue
                 if isinstance(content, str) and RAW_DSML_TOOL_CALL.search(content):
                     # Never display provider-internal tool syntax as a reply or feed
                     # it to another parser. Only structured, allowlisted tool_calls
@@ -2537,6 +2736,8 @@ class Chat:
                     self.tool_stop_reason = final
                 else:
                     final = content
+                    if not autonomy and not final.strip() and not self.force_reply:
+                        self.reply_displayed = True
                     if not autonomy and mixed_sent_messages and (not final.strip() or not work_since_message):
                         # Peter finished after sending his messages; they are the reply. Text written
                         # right after them only restates them, so it is not shown or sent again.
@@ -2547,6 +2748,8 @@ class Chat:
                 if step == max_steps - 1 and summaries:
                     self.output('The tool-step limit for this request has been reached.')
                 break
+            steered = (self.claim_steer() if not autonomy and callable(self.claim_steer)
+                       and step + 1 < max_steps else None)
             if offered is None:
                 final = 'The tool-step limit for this request has been reached.'
                 self.tool_stop_reason = final
@@ -2659,15 +2862,31 @@ class Chat:
                     break
                 if not autonomy and (self.turn_done or self.user_stop.is_set()):
                     if not mixed_sent_messages:
+                        if self.reply_later_batch and not self.user_stop.is_set():
+                            self.reply_displayed = True
+                            self.budget.settle(next_reservation, next_cfg, 0, 0, 0)
+                            final = ''
+                            break
                         end_turn_here()  # raises; the handler below releases the reservation
                     self.budget.settle(next_reservation, next_cfg, 0, 0, 0)
                     final = end_turn_here()
                     break
                 loop_messages.extend(pending_image_messages)
                 pending_image_messages.clear()
+                if steered is not None:
+                    if getattr(steered, 'action', None) == 'request_reply':
+                        self.force_reply = True
+                        pending_later = self.pending_reply_later_context(cancel=True)
+                        loop_messages.append({'role': 'system', 'content': '\n\n'.join(x for x in (
+                            'Lan pressed Request Reply: she wants an actual reply now. reply_later is unavailable.',
+                            pending_later) if x)})
+                    else:
+                        loop_messages.append(self.accept_steer(steered, request_id))
             except BaseException:
                 self.budget.settle(next_reservation, next_cfg, 0, 0, 0)
                 raise
+        if not final and self.reply_displayed and not autonomy:
+            return '', summaries
         if not final:
             final = 'The tool-step limit for this request has been reached.'
             self.output(final)
@@ -2822,6 +3041,36 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead, activity=N
                     output(notice)
             raw_text = input_fn('你: ')
             action = getattr(raw_text, 'action', None)
+            if action == 'request_reply':
+                try:
+                    pending_later = chat.pending_reply_later_context(cancel=True)
+                    reply = chat.send(
+                        'Lan pressed Request Reply.', persist_user=False, force_reply=True,
+                        extra_context='\n\n'.join(x for x in (
+                            'Lan pressed Request Reply: she wants an actual reply now.', pending_later) if x))
+                    if not chat.reply_displayed:
+                        output(ChatOutput(f'{chat.cfg.name}: {reply}', message_id=chat.last_reply_message_id,
+                                          request_id=chat.last_reply_request_id,
+                                          memory_refs=chat.turn_memory_refs))
+                except (TooLong, RequestFailed, UserError) as exc:
+                    output(str(exc))
+                continue
+            if action == 'reply_later_due':
+                due = raw_text.payload
+                try:
+                    later = chat.pending_reply_later_context()
+                    reply = chat.send(
+                        'A reply_later reminder became due.', persist_user=False,
+                        reply_later_batch=due.get('batch_id'),
+                        extra_context=(f"Your reply_later reminder is due now. Your note: {due.get('note')}\n"
+                                       + (later or '')))
+                    if not chat.reply_displayed:
+                        output(ChatOutput(f'{chat.cfg.name}: {reply}', message_id=chat.last_reply_message_id,
+                                          request_id=chat.last_reply_request_id,
+                                          memory_refs=chat.turn_memory_refs))
+                except (TooLong, RequestFailed, UserError) as exc:
+                    output(str(exc))
+                continue
             if action == 'regenerate':
                 user = raw_text.payload['user']
                 try:
@@ -2907,8 +3156,11 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead, activity=N
                 try:
                     chat.last_send_persisted = False
                     try:
-                        reply = chat.send(text, extra_context=pending_deletion_context(chat), media=media,
-                                          message_id=message_id)
+                        contexts = [pending_deletion_context(chat), getattr(raw_text, 'runtime_context', None),
+                                    chat.pending_reply_later_context()]
+                        reply = chat.send(text, extra_context='\n\n'.join(x for x in contexts if x), media=media,
+                                          message_id=message_id,
+                                          user_events=getattr(raw_text, 'user_events', None))
                     finally:
                         # Every exit (including storage errors and interrupts)
                         # releases the adapter's transaction exactly once.

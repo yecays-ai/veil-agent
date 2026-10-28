@@ -637,6 +637,22 @@ class FilesystemTools:
             raise UserError('能力清单无法更新，自主活动已停止；请保留 data 文件夹。') from exc
 
     @capability_transaction
+    def announce_free_reply(self):
+        if getattr(self, 'cap_path', None) is None:
+            return
+        try:
+            self._announce_once(
+                'free_reply_141_announced',
+                'Capability update: Lan can send several messages at any time, including while you are replying; '
+                'new messages may join your turn at a safe step boundary. You may reply, wait, stay silent, or use '
+                'reply_later. "Lan is typing." is only a fact and never includes her draft. If Lan presses Request '
+                'Reply, you must send actual text in that request and reply_later is unavailable. A chat turn may '
+                'send at most 10 messages.')
+        except Exception as exc:
+            self.enabled = False
+            raise UserError('自由对话能力通知无法保存；请保留 data 文件夹。') from exc
+
+    @capability_transaction
     def announce_long_tasks(self):
         if getattr(self, 'cap_path', None) is None:
             return
