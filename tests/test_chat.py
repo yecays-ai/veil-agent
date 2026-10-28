@@ -1017,7 +1017,7 @@ output_cny_per_million = "8"
         self.assertTrue(history[-1]['content'].startswith('a19'))  # Newest kept.
         self.assertLessEqual(estimate_request_tokens(sent, []),
                              self.cfg.provider['max_input_tokens'])
-        self.assertEqual(len([o for o in output if '分项 tokens' in o]), 1)
+        self.assertFalse([o for o in output if '分项 tokens' in o])  # Ticket 143: the estimate stays off the chat.
         self.assertEqual(self.model.call_count, 2)
         self.assertEqual(len(self.store.read('test/chat.jsonl')), 40 + 4)  # Nothing erased.
 
