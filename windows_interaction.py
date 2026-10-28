@@ -7,7 +7,9 @@ import ntpath
 import os
 import queue
 import re
+import shutil
 import subprocess
+import tempfile
 import threading
 import time
 import tomllib
@@ -42,11 +44,13 @@ WINDOWS_INTERACTION_TOOL_SCHEMAS = [
     SimpleNamespace(
         name='windows_launch',
         description=(
-            'Open one allowlisted app by app_id, or reuse its open window. If several of its windows are open, '
-            'it returns their window_ids for you to choose.'
+            'Open one allowlisted app by app_id, or reuse its open window. An app configured for public_web must '
+            'receive a public HTTP(S) URL; the browser opens it in a Guest window. If several windows are open, '
+            'the result includes their window_ids.'
         ),
         inputSchema={'type': 'object', 'properties': {
             'app_id': {'type': 'string', 'description': 'Exact id from the Windows application allowlist.'},
+            'url': {'type': 'string', 'description': 'Optional public HTTP(S) page URL; only apps explicitly configured for public_web can use it.'},
         }, 'required': ['app_id'], 'additionalProperties': False},
     ),
     SimpleNamespace(
@@ -64,7 +68,7 @@ WINDOWS_INTERACTION_TOOL_SCHEMAS = [
         name='windows_control_action',
         description=(
             'Do one action (invoke, select, toggle, expand, collapse, set_text) on a control_id from a fresh '
-            'windows_observe of the same window. Clicks, navigation, selection and typing run directly. Saving, '
+            'windows_observe of the same window, only when allowed for that app. Clicks, navigation, selection and typing run directly. Saving, '
             'sending, submitting, publishing or overwriting asks Lan first (in VEIL or on QQ); delete, install, '
             'purchase and administrator actions are refused. It stops if Lan is using the computer. Observe '
             'again before the next action.'
@@ -180,7 +184,7 @@ def validate_applications(applications):
             raise ValueError(f'{app_id} needs one or more process_paths identity patterns.')
         identities = [_expand_windows_path(path, allow_wildcards=True) for path in process_paths]
         actions = item.get('actions')
-        if (not isinstance(actions, list) or not actions
+        if (not isinstance(actions, list)
                 or any(not isinstance(action, str) or action not in _ALLOWED_ACTIONS for action in actions)):
             raise ValueError(f'{app_id} needs an explicit list of supported interaction actions.')
         result[app_id] = {
@@ -189,7 +193,10 @@ def validate_applications(applications):
             'launch_path': launch,
             'process_paths': tuple(identities),
             'actions': frozenset(actions),
+            'public_web': item.get('public_web', False),
         }
+        if type(result[app_id]['public_web']) is not bool:
+            raise ValueError(f'{app_id} public_web must be boolean.')
     return result
 
 
@@ -581,19 +588,48 @@ class WindowsInteractionBackend(WindowsDesktopBackend):
             raise InteractionUncertain('The window did not leave the minimized state.')
         raise ObservationError('Unsupported window action.')
 
-    def start_application(self, app, stopped, input_monitor, input_snapshot):
+    def start_application(self, app, stopped, input_monitor, input_snapshot, *, url=None):
         launch_path = app['launch_path']
         if os.name != 'nt' or not os.path.isfile(launch_path):
+            if app.get('public_web') is True:
+                raise ObservationError(
+                    f'{app["label"]} is not installed at the configured path or its executable is unavailable.')
             raise ObservationError('The configured Windows application path does not exist on this computer.')
         self._check_default_desktop()
         self._cancelled(stopped)
         self._require_unchanged_input(input_monitor, input_snapshot)
+        profile_directory = None
         try:
-            return subprocess.Popen([launch_path], shell=False, cwd=ntpath.dirname(launch_path),
-                                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                    stderr=subprocess.DEVNULL, close_fds=True)
+            args = [launch_path]
+            if url is not None:
+                if app.get('public_web') is not True:
+                    raise ObservationError('This application is not authorized to open public webpages.')
+                # A separate user-data root prevents Chrome from routing this launch to Lan's
+                # regular profile. Guest is preferred; incognito keeps the isolated fallback
+                # private if a Chrome policy disables Guest mode.
+                profile_directory = tempfile.mkdtemp(prefix='veil-chrome-guest-')
+                # A fresh user-data directory counts as a first run; skip Chrome's welcome and
+                # default-browser prompts so the only new window is the requested page.
+                args.extend(['--guest', '--incognito', '--new-window',
+                             f'--user-data-dir={profile_directory}', '--no-first-run',
+                             '--no-default-browser-check', url])
+            process = subprocess.Popen(args, shell=False, cwd=ntpath.dirname(launch_path),
+                                       stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                       stderr=subprocess.DEVNULL, close_fds=True)
         except (OSError, ValueError) as exc:
-            raise ObservationError('Windows could not start the configured application.') from exc
+            if profile_directory:
+                shutil.rmtree(profile_directory, ignore_errors=True)
+            raise ObservationError(f'Windows could not start {app["label"]}. Check that the app can be launched.') from exc
+        if profile_directory:
+            def clean_profile_after_exit():
+                try:
+                    process.wait()
+                except Exception:
+                    return
+                shutil.rmtree(profile_directory, ignore_errors=True)
+            threading.Thread(target=clean_profile_after_exit,
+                             name='veil-chrome-guest-cleanup', daemon=True).start()
+        return process
 
 
 class WindowsInteractionTools:
@@ -626,6 +662,8 @@ class WindowsInteractionTools:
     def preview_summary(self, name, args):
         app_id = args.get('app_id') if isinstance(args, dict) else None
         app = self.applications.get(app_id)
+        if name == 'windows_launch' and app:
+            return f'{app["label"]} launch'
         return app['label'] if app else 'Windows application'
 
     def _is_stopped(self, should_stop, cancelled):
@@ -786,17 +824,38 @@ class WindowsInteractionTools:
 
     def _invoke(self, name, args, approval, should_stop, summary):
         if name == 'windows_launch':
-            if set(args) != {'app_id'} or not isinstance(args.get('app_id'), str):
-                return WindowsToolResult('Use exactly one app_id from the allowlist.', activity_detail='参数无效。'), '被拒绝'
+            if (set(args) - {'app_id', 'url'} or 'app_id' not in args
+                    or not isinstance(args.get('app_id'), str)
+                    or ('url' in args and not isinstance(args.get('url'), str))):
+                return WindowsToolResult('Use an allowlisted app_id and, optionally, one public HTTP(S) URL.', activity_detail='参数无效。'), '被拒绝'
             app = self.applications.get(args['app_id'])
             if app is None:
                 return WindowsToolResult('That app_id is not allowlisted; no executable was started.',
                                          activity_detail=f'{summary} 程序白名单拒绝。'), '被拒绝'
+            url = None
+            if app.get('public_web') is True and 'url' not in args:
+                return WindowsToolResult('This browser permission only opens a supplied public webpage URL.',
+                                         activity_detail=f'{summary} 需要公开网页 URL。'), '被拒绝'
+            if 'url' in args:
+                if app.get('public_web') is not True:
+                    return WindowsToolResult('This allowlisted application is not authorized to open webpage URLs.',
+                                             activity_detail=f'{summary} 网页打开未授权。'), '被拒绝'
+                from web_tools import public_http_url
+                url = public_http_url(args['url'])
+                if not url:
+                    return WindowsToolResult('Only a valid public HTTP(S) webpage URL can be opened.',
+                                             activity_detail=f'{summary} 仅允许公开网页 URL。'), '被拒绝'
+                from urllib.parse import urlsplit
+                if urlsplit(url).path.casefold().endswith((
+                        '.exe', '.msi', '.msix', '.bat', '.cmd', '.ps1', '.scr', '.com', '.dll')):
+                    return WindowsToolResult('Direct executable or installer download URLs are not opened.',
+                                             activity_detail=f'{summary} 可执行文件下载被拒绝。'), '被拒绝'
             def launch(stopped):
                 def work(stop):
                     windows = [item for item in self.backend.list_windows(stop)
                                if self.application_id_for(item) == app['app_id']]
-                    if windows:
+                    existing_window_ids = {item['id'] for item in windows}
+                    if windows and url is None:
                         foreground = [item for item in windows if item.get('foreground')]
                         if len(foreground) == 1:
                             selected = foreground[0]
@@ -815,7 +874,7 @@ class WindowsInteractionTools:
                         }, '已有窗口已复用并切换到前台。', f'{app["label"]} 已复用现有窗口。')
                     _process, launch_input_snapshot = self._run_action_with_input_guard(
                         lambda inner_stop, _snapshot: self.backend.start_application(
-                            app, inner_stop, self.input_monitor, _snapshot), stop)
+                            app, inner_stop, self.input_monitor, _snapshot, url=url), stop)
                     deadline = time.monotonic() + 7.0
                     while time.monotonic() < deadline:
                         if stop():
@@ -823,7 +882,8 @@ class WindowsInteractionTools:
                         if self.input_monitor.changed_since(launch_input_snapshot):
                             raise HumanTookOver('Human input arrived while waiting for the app window.')
                         matches = [item for item in self.backend.list_windows(stop)
-                                   if self.application_id_for(item) == app['app_id']]
+                                   if self.application_id_for(item) == app['app_id']
+                                   and (url is None or item['id'] not in existing_window_ids)]
                         if matches:
                             foreground = [item for item in matches if item.get('foreground')]
                             selected = foreground[0] if len(foreground) == 1 else matches[0]
@@ -835,6 +895,10 @@ class WindowsInteractionTools:
                                 'confirmed': True,
                             }, '应用窗口已出现，并已按程序路径确认身份。', f'{app["label"]} 已启动并确认窗口。')
                         time.sleep(0.1)
+                    if url is not None:
+                        raise InteractionUncertain(
+                            f'{app["label"]} did not open a new Guest window. Check that Guest mode is available; '
+                            'no existing browser window was activated. Do not launch it again automatically.')
                     raise InteractionUncertain('The app process was started but its allowlisted window did not appear before timeout; do not launch it again automatically.')
                 return work(stopped)
             return self._run(launch, summary, should_stop,

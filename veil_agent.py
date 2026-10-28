@@ -446,6 +446,8 @@ class Character:
     web: dict = None
     windows_observation: dict = None
     windows_interaction: dict = None
+    desktop_file_read: dict = None
+    windows_media: dict = None
     screen_pop: dict = None
     glance: dict = None
     background: str = None
@@ -602,6 +604,22 @@ def load_character(root, character_id):
                 'apps_file': apps_file,
                 'idle_seconds': idle_seconds,
             }
+        desktop_file_read = cfg.get('desktop_file_read')
+        if desktop_file_read is not None:
+            if not isinstance(desktop_file_read, dict):
+                raise ValueError('desktop_file_read must be a table')
+            enabled = desktop_file_read.get('enabled', False)
+            if type(enabled) is not bool:
+                raise ValueError('desktop_file_read.enabled must be boolean')
+            desktop_file_read = {'enabled': enabled}
+        windows_media = cfg.get('windows_media')
+        if windows_media is not None:
+            if not isinstance(windows_media, dict):
+                raise ValueError('windows_media must be a table')
+            enabled = windows_media.get('enabled', False)
+            if type(enabled) is not bool:
+                raise ValueError('windows_media.enabled must be boolean')
+            windows_media = {'enabled': enabled}
         screen_pop = cfg.get('screen_pop')
         if screen_pop is not None:
             if not isinstance(screen_pop, dict):
@@ -621,6 +639,8 @@ def load_character(root, character_id):
         if tools is None and ((cfg.get('memory') or {}).get('mode') == 'native'
                               or (windows_observation or {}).get('enabled')
                               or (windows_interaction or {}).get('enabled')
+                              or (desktop_file_read or {}).get('enabled')
+                              or (windows_media or {}).get('enabled')
                               or (screen_pop or {}).get('enabled')):
             # Native memory runs on the tool loop; files stay off unless [tools] says otherwise.
             tools = {'enabled': False, 'folder': f'data/{character_id}/workspace',
@@ -696,7 +716,7 @@ def load_character(root, character_id):
                          positive_int(cfg.get('history_rounds', 20)),
                          positive_int(cfg.get('max_output_tokens', 1024)), provider, provider_name,
                          memory, tools, autonomy, voice, profile, email, qq, web, windows_observation,
-                         windows_interaction, screen_pop, glance,
+                         windows_interaction, desktop_file_read, windows_media, screen_pop, glance,
                          background=str(background_path(persona_path)),
                          short_term_notes=short_term_notes,
                          background_provider=background_provider, models=models)
@@ -1378,7 +1398,9 @@ class Chat:
             if policy == 'allow':
                 label = 'Direct use'
             elif policy == 'desktop_read':
-                label = 'Direct read-only Windows observation'
+                label = 'Direct read-only Windows observation and media status'
+            elif policy == 'desktop_file_read':
+                label = "Direct read-only access to Lan's visible Desktop files"
             elif policy == 'desktop_control':
                 label = 'Windows actions inside the program allowlist; saving, sending or overwriting asks Lan'
             elif policy == 'desktop_create':
