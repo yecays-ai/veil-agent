@@ -100,6 +100,9 @@ daily_max_sent = 100
 [web]
 # Ticket 099: direct-use, read-only public web search and fetch tools.
 enabled = true
+# Public research only. No developer GitHub credentials or write tools are exposed.
+github_readonly = true
+github_repository = "yecays-ai/veil-agent"
 
 [windows_observation]
 # Ticket 111: read-only window discovery and UIA observation. Screenshot fallback is transient

@@ -19,6 +19,7 @@ from agent_types import NOT_ASKED, NOT_ASKED_TEXT, UserError
 from capability_state import capability_transaction, save_capabilities
 from attachment_utils import MAX_ATTACHMENT_BYTES, inspect_attachment
 from web_tools import WEB_TOOL_NAMES
+from github_readonly import GITHUB_TOOL_NAMES, GitHubReadTools
 from desktop_files import (DESKTOP_FILE_READ_TOOL_NAMES, DESKTOP_FILE_TOOL_NAMES,
                            DesktopFileReadTools, DesktopFileTools, keep_previous_version,
                            replace_file_bytes)
@@ -37,7 +38,7 @@ from screen_pop import SCREEN_POP_TOOL, SCREEN_POP_TOOL_NAMES, normalize_screen_
 VERSION = 1
 ALLOW = {
     'list_directory', 'directory_tree', 'read_text_file', 'read_multiple_files',
-    'get_file_info', 'search_files', 'list_directory_with_sizes', *WEB_TOOL_NAMES,
+    'get_file_info', 'search_files', 'list_directory_with_sizes', *WEB_TOOL_NAMES, *GITHUB_TOOL_NAMES,
     *WINDOWS_OBSERVATION_TOOL_NAMES, *WINDOWS_INTERACTION_TOOL_NAMES, *DESKTOP_FILE_TOOL_NAMES,
     *DESKTOP_FILE_READ_TOOL_NAMES, *WINDOWS_MEDIA_TOOL_NAMES,
     *SCREEN_POP_TOOL_NAMES,
@@ -268,6 +269,7 @@ class FilesystemTools:
         self.grant_path = Path(store.root) / cfg.id / 'append-grant.json'
         self.client = None
         self.web_tools = None
+        self.github_tools = GitHubReadTools(cfg)
         self.capability_event = None
         self.capability_event_model = None
         self.startup_notice = ('Windows 桌面交互白名单配置无效，启动、窗口动作和 UIA 操作已关闭。'
@@ -278,6 +280,7 @@ class FilesystemTools:
             self.description = self._description(names) or (
                 'You have no tools; tools are disabled by this character configuration. ')
             return
+        self.tools.extend(self.github_tools.tools)
         if web_factory:
             try:
                 self.web_tools = web_factory(self.root, cfg)
@@ -937,7 +940,7 @@ class FilesystemTools:
         desktop_names = [name for name in names if name in WINDOWS_OBSERVATION_TOOL_NAMES]
         interaction_names = [name for name in names if name in WINDOWS_INTERACTION_TOOL_NAMES]
         file_names = [name for name in names
-                      if name not in (WEB_TOOL_NAMES | WINDOWS_DESKTOP_TOOL_NAMES |
+                      if name not in (WEB_TOOL_NAMES | GITHUB_TOOL_NAMES | WINDOWS_DESKTOP_TOOL_NAMES |
                                       DESKTOP_FILE_TOOL_NAMES | SCREEN_POP_TOOL_NAMES)]
         if file_names:
             entries = [f'{name} (ask lan first)' if name in ASK else f'{name} (direct use)'
@@ -945,6 +948,8 @@ class FilesystemTools:
             description = f'You can use file tools only in the "{self.folder_name}" folder: ' + ', '.join(entries) + '. '
         else:
             description = ''
+        if any(name in GITHUB_TOOL_NAMES for name in names):
+            description += self.github_tools.description
         if desktop_names:
             description += (
                 'Read-only Windows observation tools: ' + ', '.join(desktop_names) +
@@ -1039,6 +1044,10 @@ class FilesystemTools:
             if self.web_tools is None:
                 return 'This web tool is unavailable for the current role.', '被拒绝', name
             return self.web_tools.invoke(name, args, approval)
+        if name in GITHUB_TOOL_NAMES:
+            if not self.enabled:
+                return 'GitHub research is disabled for this role.', '被拒绝', name
+            return self.github_tools.invoke(name, args, approval)
         policy = tool_policy(name)
         if policy == 'deny' or name not in {tool.name for tool in self.tools}:
             return 'This tool is not authorized for the current role. Choose an available tool; permissions cannot be bypassed.', '被拒绝', name
@@ -1506,6 +1515,8 @@ class FilesystemTools:
         os.replace(temporary, self.grant_path)
 
     def preview_summary(self, name, args):
+        if name in GITHUB_TOOL_NAMES:
+            return self.github_tools.preview_summary(name, args)
         if name in SCREEN_POP_TOOL_NAMES:
             style = args.get('style') if isinstance(args, dict) else None
             count = args.get('count', 1) if isinstance(args, dict) else 1

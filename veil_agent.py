@@ -711,7 +711,15 @@ def load_character(root, character_id):
             enabled = web.get('enabled', False)
             if type(enabled) is not bool:
                 raise ValueError('web.enabled must be boolean')
-            web = {'enabled': enabled}
+            github_readonly = web.get('github_readonly', False)
+            github_repository = web.get('github_repository', '')
+            if type(github_readonly) is not bool or not isinstance(github_repository, str):
+                raise ValueError('Invalid public GitHub research settings')
+            if github_repository and not re.fullmatch(
+                    r'[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9_.-]{1,100}', github_repository):
+                raise ValueError('Invalid public GitHub repository')
+            web = {'enabled': enabled, 'github_readonly': github_readonly,
+                   'github_repository': github_repository}
         return Character(character_id, str(cfg['name']), persona,
                          positive_int(cfg.get('history_rounds', 20)),
                          positive_int(cfg.get('max_output_tokens', 1024)), provider, provider_name,
