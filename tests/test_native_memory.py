@@ -555,6 +555,20 @@ class OmbreToolGuardTests(unittest.TestCase):
                 'bucket_id': 'mem001', 'content': 'safe edit', **extra}, approval)[1], '成功')
             self.assertIs(self.backend.calls[-1][1]['delete'], False)
 
+    def test_dream_reflection_questions_become_a_neutral_note(self):
+        # Ticket 147: Ombre's questions push self-review and name hold(feel=True), which VEIL lacks.
+        self.backend.result = ('=== Dreaming · 过去 48 小时全量记忆（1 个桶）===\n'
+                               '以下是你最近的记忆。用第一人称想：\n- 有什么还没想清楚？\n'
+                               '想完之后：值得放下的用 trace(bucket_id, resolved=1)；\n'
+                               '有沉淀的用 hold(content="...", feel=True) 写下来。\n\n'
+                               '[a memory]\nID: visible\nvisible body')
+        dream = self.call('dream', {})[0]
+        self.assertTrue(dream.startswith('=== Dreaming'))
+        self.assertIn('nothing needs to be written', dream)
+        self.assertNotIn('还没想清楚', dream)
+        self.assertNotIn('feel=True', dream)
+        self.assertIn('ID: visible\nvisible body', dream)
+
     def test_dream_and_pulse_do_not_forward_hidden_memory_blocks(self):
         self.memory.state['entries']['mem001'] = {'title': 'Old title', 'hidden': True}
         self.backend.result = ('=== Dreaming · 过去 48 小时全量记忆（2 个桶）===\nID: mem001\nhidden body\n---\n'

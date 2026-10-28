@@ -1,9 +1,10 @@
 # 当前状态
 
-更新：2026-10-28 UTC · Claude（工单 146）。
+更新：2026-10-28 UTC · Claude（工单 147）。
 
 ## 当前目标与现状
 
+- 工单 147「dream 不再引导反省、无参数工具不再被拒」：分支 `ticket/147-dream-and-empty-args`，Claude 实现，Lan 2026-10-28 提出。dream 返回开头的 Ombre 中文反省引导换成一句中性英文（记忆内容不变，不改 Ombre）；工具参数为空或 null 时当作 `{}`。需要 update.bat。验收见 `docs/tickets/147-dream-note-and-empty-args.md`。下一个工单号 148。
 - 工单 146「核心可靠性修复」：分支 `ticket/146-core-reliability`，Claude 实现。修复架构与代码审计中的 3 个核心可靠性问题：1. 解耦 `persist_incoming` 准入写入与 `chat.jsonl` 正式历史，引入 `incoming-submissions.jsonl`，消息在实际轮次开始或插话时提交至 `chat.jsonl`，修复连发/插话时的历史错序、prompt 用户消息重复注入及问答归类混乱，服务重启时自动补录排队中未开始的消息，失败媒体上传允许同 request_id 重试；2. 修复短期便签 `_call_extractor` 异常时费用预留泄漏并在 `Budget.__init__` 启动时自动对账清理，防止 pending 累积阻断聊天；3. 引入专用 `EmptyReplyError(UserError)` 异常子类，`run_chat` 文本分支精准捕获模型空回复，防止后台服务异常崩溃退出的同时保留存储与账本致命异常的向外暴露保护。根据 CodeRabbit 评审意见完善了异常分级、通用预算对账与媒体失败重试机制。新增/更新回归测试全部通过。验收见 `docs/tickets/146-core-reliability.md`。下一个工单号 147。
 - 工单 145「工具说明瘦身」：分支 `ticket/145-slim-tool-descriptions`，Claude 实现，Lan 2026-10-28 提出（工具定义占上下文一半以上）。能力不删，只把 Ombre 九个工具、文件工具、long_task_update、Windows 工具的说明改成简短英文；trace 去掉 VEIL 本来就拒绝的硬删除/删除审批参数。估计每次请求 46KB → 约 34KB（未验证）。需要 update.bat。验收见 `docs/tickets/145-slim-tool-descriptions.md`。下一个工单号 146。
 - 工单 144「消息队列原子性与回复状态可靠性修复」：分支 `ticket/144-chat-queue-reliability`。修复 `reply_later(cancel=True)` 未重置 `turn_done`/`reply_later_called` 导致轮次意外结束的问题（保留 `send_message(done=True)` 状态）；修复 `_chat_batch` 和 `claim_steer` 队列头部检查与取出的竞争窗口，防止 `ChatAction`（如 Request Reply）被吞为文本；修复语音转录阻塞期间新消息入队导致的乱序，改用队首逆序插入严格保序 A → B → C。新增回归测试 5 项（`tests/test_free_reply.py`）。验收见 `docs/tickets/144-chat-queue-reliability.md`。下一个工单号 145。

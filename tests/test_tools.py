@@ -594,6 +594,20 @@ max_result_bytes = 200
         self.assertIn('arguments are not a valid JSON object', model.call_args_list[1].args[0][-1]['content'])
         self.assertTrue(any('arguments are not a valid JSON object' in line for line in output))
 
+    def test_empty_or_null_arguments_call_a_tool_without_parameters(self):
+        # Ticket 147: some models send '' or 'null' for tools that take no arguments.
+        for raw in ('', 'null'):
+            first = self.message([self.tool_call('memory_catalog', raw, 'empty')])
+            final = self.message(content='Listed.')
+            model = Mock(side_effect=[(first, 100, 20, 0), (final, 120, 20, 0)])
+            tools = Mock()
+            tools.tools = [SimpleNamespace(name='memory_catalog', description='List', inputSchema={})]
+            tools.capability_event = None
+            tools.invoke.return_value = ('{"items": []}', '成功', 'catalog')
+            chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=lambda *_: None)
+            self.assertEqual(chat.send('list them'), 'Listed.')
+            self.assertEqual(tools.invoke.call_args.args[:2], ('memory_catalog', {}))
+
     def test_tool_output_limit_is_reserved_sent_and_settled_without_raising_daily_cap(self):
         self.cfg.tools['max_output_tokens'] = 4096
         self.cfg.tools['max_steps'] = 2
