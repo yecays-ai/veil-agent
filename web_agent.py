@@ -907,16 +907,16 @@ class Hub:
         return isinstance(text, str) and text.lstrip().startswith('/')
 
     def _chat_batch(self, first):
+        if isinstance(first, ChatAction):
+            return first
         rows = [first]
         while not self._is_command(first):
             with self.inbox.mutex:
                 if (not self.inbox.queue or isinstance(self.inbox.queue[0], ChatAction)
                         or self._is_command(self.inbox.queue[0])):
                     break
-            try:
-                item = self.inbox.get_nowait()
-            except queue.Empty:
-                break
+                item = self.inbox.queue.popleft()
+                self.inbox.not_full.notify()
             rows.append(item)
         converted = [self._chat_input(row) for row in rows]
         converted = [row for row in converted if row is not None]
@@ -928,8 +928,11 @@ class Hub:
             converted[0].runtime_context = 'Lan is typing.' if self.user_typing else None
             return converted[0]
         if any(row.media for row in converted):
-            for row in converted[1:]:
-                self.inbox.put((str(row), row.media, row.complete, row.message_id, row.persisted))
+            with self.inbox.mutex:
+                for row in reversed(converted[1:]):
+                    self.inbox.queue.appendleft((str(row), row.media, row.complete, row.message_id, row.persisted))
+                    self.inbox.unfinished_tasks += 1
+                    self.inbox.not_empty.notify()
             converted[0].user_events = [{'content': str(converted[0]), 'message_id': converted[0].message_id,
                                          'media': converted[0].media, 'persisted': converted[0].persisted}]
             converted[0].runtime_context = 'Lan is typing.' if self.user_typing else None
@@ -1473,13 +1476,12 @@ class Hub:
 
     def claim_steer(self):
         with self.inbox.mutex:
-            head = self.inbox.queue[0] if self.inbox.queue else None
-        if head is not None and self._is_command(head):
-            return None
-        try:
-            first = self.inbox.get_nowait()
-        except queue.Empty:
-            return None
+            if not self.inbox.queue:
+                return None
+            if self._is_command(self.inbox.queue[0]):
+                return None
+            first = self.inbox.queue.popleft()
+            self.inbox.not_full.notify()
         if isinstance(first, ChatAction):
             return first
         return self._chat_batch(first)

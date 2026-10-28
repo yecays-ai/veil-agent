@@ -1,9 +1,10 @@
 # 当前状态
 
-更新：2026-10-28 UTC · Claude（工单 142）。
+更新：2026-10-28 UTC · Antigravity（工单 144）。
 
 ## 当前目标与现状
 
+- 工单 144「消息队列原子性与回复状态可靠性修复」：分支 `ticket/144-chat-queue-reliability`。修复 `reply_later(cancel=True)` 未重置 `turn_done`/`reply_later_called` 导致轮次意外结束的问题（保留 `send_message(done=True)` 状态）；修复 `_chat_batch` 和 `claim_steer` 队列头部检查与取出的竞争窗口，防止 `ChatAction`（如 Request Reply）被吞为文本；修复语音转录阻塞期间新消息入队导致的乱序，改用队首逆序插入严格保序 A → B → C。新增回归测试 5 项（`tests/test_free_reply.py`）。验收见 `docs/tickets/144-chat-queue-reliability.md`。下一个工单号 145。
 - 工单 142「气泡上限按 Lan 的消息重新计数、请求回复按钮改成图标」：分支 `ticket/142-bubble-cap`，Claude 实现，Lan 2026-10-28 截图反馈。插话后 Peter 的 10 条额度重置；第 10 条发出即结束本轮；请求回复按钮改为 sparkles 图标方形按钮；新工具 `stay_silent`（Peter 明确选择不回，本轮结束、界面不显示任何东西，附一次性能力通知）。新增 3 项回归（`tests/test_free_reply.py`）。需要 update.bat 重新打包 exe。验收见 `docs/tickets/142-bubble-cap-and-reply-button.md`。下一个工单号 143。
 - 工单 141「自由对话」：PR #188，分支 `ticket/141-free-reply`，基于 main `bf86eff`。实现随时连发、批量交付、生成中安全边界插话、输入状态事实、自由沉默、持久 `reply_later`、Request Reply、每轮 10 条硬上限与批次状态。CodeRabbit 五项数据/流程问题已修复；本地全量 629 项通过、7 项跳过，桌面 10 项通过。桌面需 `update.bat`；Windows 体验尚待完成，详见 `docs/tickets/141-free-reply.md`。下一个工单号 142。
 - 工单 140「长期任务进度不再记满就卡死」：分支 `ticket/140-long-task-rolling`，Claude 实现，Lan 2026-10-28 提出。进度满 40 条后最旧的移入 `long-task-progress-archive.jsonl`，新进度照常写；待定操作在同一步先读后确认即可。新增测试 2 项（`tests/test_long_tasks.py`）。验收见 `docs/tickets/140-long-task-rolling.md`。下一个工单号 141。
