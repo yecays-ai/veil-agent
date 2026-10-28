@@ -98,6 +98,7 @@ idle_seconds = 120
 daily_max_sent = 100
 
 [web]
+browser_interaction = true
 # Ticket 099: direct-use, read-only public web search and fetch tools.
 enabled = true
 # Public research only. No developer GitHub credentials or write tools are exposed.

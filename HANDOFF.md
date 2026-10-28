@@ -2,7 +2,8 @@
 
 ## 当前进度
 
-- 工单 154：独立分支 ticket/154-github-readonly，基于最新 main fef11147ce2a7ecc9030773d419f5d81b013ef00。github_readonly.py 新增公开仓库只读适配；目录、源码、Issue/PR/提交和受限搜索走无凭据 GET，可选独立 VEIL_GITHUB_READONLY_TOKEN 复用官方 /mcp/readonly 的 search_code，固定工具名、只读请求头、单仓库范围与匿名公开性检查。无 GitHub 写工具；不使用开发者 Git/gh 凭据。匿名搜索可按 path/ref 分页检查文本源码，明确范围与限流。原桌面文件创建、审批、预算与调度保持原权限。13 项新增离线检查及 105 项现有相关检查通过（后者 1 项跳过），实际匿名读取固定提交源码成功；官方鉴权未实连，Lan Windows 体验未验收。下一窗口先查看本分支 PR 最新提交、CI 和审查，再按 docs/tickets/154-github-readonly.md 跟进；用户明确要求 PR 不自动合并。下一工单号 155。
+- 工单 155：分支 `ticket/155-isolated-browser`，从最新 main `42f277c11cf1fc0903fdb5322aaa663e0c43e9f8` 开工。`browser_tools.py` 复用官方 Playwright 1.64.1 和仓库已有 Chromium，公开 HTTPS/443、全新非持久会话，固定 open/observe/click/scroll/close，链接导航不用网页点击脚本，不提供账户、社交写入、下载、任意脚本或个人 Chrome 接口。通过公网 IP 固定拨号代理阻断私网和重绑定，共享 desktop_access、人工输入优先，接入聊天停止和自主让位，保留原模型/步数/上下文/费用限制。8 项新增检查（含真实 Chromium、停止及聊天/自主工具循环）和 130 项相关检查通过；全量运行 710 项通过、10 项跳过。真实 B 站首页已进入 BV1eKMn6MEHo，页面标题和播放器可见，播放器 readyState=0/paused=true/currentTime=0，不能确认加载或播放。可见窗口被实际人工输入拦下；真实科普搜索已返回候选并进入 BV1mfn662EHb；整段语音/文字找视频仍待 Windows 实体验收。下一窗口先核对本分支 PR 最新 CI 与功能/安全审查，再按 docs/tickets/155-isolated-browser.md 跟进；用户明确要求不自动合并。下一工单号 156。
+- 工单 154 已由 PR #202 合并为 `42f277c11cf1fc0903fdb5322aaa663e0c43e9f8`；合并提交四项跨平台检查通过，匿名源码读取和受限官方只读 MCP 实现已进入 main；真实官方鉴权与 Lan Windows 体验待验收。
 - 工单 153 已由 PR #201 合并为 fef11147ce2a7ecc9030773d419f5d81b013ef00；该 main 提交四项跨平台 Python 检查通过，Windows 体验待验收。
 
 - 工单 153：聊天轮里模型返回空正文且没有工具调用、Peter 也没调用 `stay_silent`/`reply_later`、本轮没发过消息时，视为接口故障：写 `data/<id>/memory/_agent/diagnostics.jsonl`（code `empty_reply`，finish_reason、tokens、reasoning 长度），用同一组消息重问一次（约 ¥0.015/次）；仍空则抛 `RequestFailed`（处理状态 `failed`，Lan 看到提示）。沉默只来自 `stay_silent`。起因：抗截断 gemini 通道 10-28 晚 27 轮里 7 轮空回复被当成不回。体验待验收。
@@ -53,12 +54,12 @@
 - 098 QQ 邮箱：2026-11-07 后验收收发。
 - 142–151：Lan 按各自工单做 Windows 体验验收。
 - 135、136、138：请 Lan 确认（10-27 说过 134–138 验收完毕，但不在 10-28 清单里）。
-- 下一个工单号为 155。
+- 下一个工单号为 156。
 
 ## 仍适用的边界
 
 - 正式 checkout `E:\Peter-Agent\VEIL\veil-agent` 留在 `main`。其中用户已有的 `update-main-collisions.ps1`、`update-main.cmd` 删除状态不属于本工单，保持原样。
-- 只在上述独立 worktree 操作；合并后依仓库规则检查干净状态再清理本工单 worktree。
-- 不增加 Agent、桌面自动化依赖或模型供应商；共享既有权限控制、`desktop_access` 互斥、Chat 工具循环和成本账本。工单 151 仅为 GSMTC 增加 Windows 专用 PyWinRT API 投影。
+- 只在本工单独立 worktree 操作；合并后依仓库规则检查干净状态再清理本工单 worktree。
+- 不增加第二个 Agent 或模型供应商；浏览器复用仓库已有 Playwright 依赖；共享既有权限控制、`desktop_access` 互斥、Chat 工具循环和成本账本。工单 151 仅为 GSMTC 增加 Windows 专用 PyWinRT API 投影。
 - UIA 窗口内容是非可信数据；敏感窗口过滤由现有 Windows 观察工具执行。当前瞄一眼观察仅用 UIA，不调用截图回退，不把原始 UIA 内容写入活动文件或长期记忆。
 - 代码检查、CI、Windows 实机体验是不同证据；各工单的体验验收状态以 STATUS.md「验收总表」为准。
