@@ -48,15 +48,33 @@ NATIVE = {'hold', 'breath_search', 'trace', 'dream', 'letter_write', 'letter_rea
 AUTONOMY_DIRECT = {'set_next_wake', 'set_wake_rhythm'}
 
 
+# Ticket 145: the filesystem server's own descriptions are long and generic; these say the same briefly.
+FILESYSTEM_DESCRIPTIONS = {
+    'read_text_file': 'Read a text file. head or tail returns only the first or last N lines.',
+    'read_multiple_files': 'Read several text files at once; one failed file does not stop the others.',
+    'write_file': ('Create a text file, or overwrite one. Inside lab/ it runs directly and keeps the old version '
+                   'of a file you overwrite; elsewhere it asks Lan.'),
+    'list_directory': 'List a folder; entries are marked [FILE] or [DIR].',
+    'list_directory_with_sizes': 'List a folder with file sizes, sorted by name or size.',
+    'directory_tree': 'Show a folder and everything under it as a JSON tree.',
+    'search_files': 'Find files and folders under path by glob pattern, e.g. "*.md" or "**/*.html".',
+    'get_file_info': 'Show size, times, permissions and type of a file or folder without reading it.',
+}
+
+
 def permitted_tools(server_tools):
     """Convert only application-allowlisted MCP tools to OpenAI tool schemas."""
     result = []
     for tool in server_tools:
         if tool.name not in ALLOW | ASK | NATIVE | LAB_ONLY:
             continue
+        parameters = tool.inputSchema
+        if isinstance(parameters, dict) and '$schema' in parameters:
+            parameters = {key: value for key, value in parameters.items() if key != '$schema'}
         result.append({'type': 'function', 'function': {
-            'name': tool.name, 'description': tool.description or tool.name,
-            'parameters': tool.inputSchema,
+            'name': tool.name,
+            'description': FILESYSTEM_DESCRIPTIONS.get(tool.name) or tool.description or tool.name,
+            'parameters': parameters,
         }})
     return result
 

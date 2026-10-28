@@ -42,11 +42,8 @@ WINDOWS_INTERACTION_TOOL_SCHEMAS = [
     SimpleNamespace(
         name='windows_launch',
         description=(
-            'Launch one application by its exact app_id from the program allowlist. The program '
-            'checks the configured executable path and the resulting window process path. If that '
-            'application is already running, it reuses one exact identified window; if several '
-            'windows are open and none is clearly foreground, it stops and returns their window_ids. '
-            'No shell, command string, or arbitrary executable path is accepted.'
+            'Open one allowlisted app by app_id, or reuse its open window. If several of its windows are open, '
+            'it returns their window_ids for you to choose.'
         ),
         inputSchema={'type': 'object', 'properties': {
             'app_id': {'type': 'string', 'description': 'Exact id from the Windows application allowlist.'},
@@ -55,10 +52,7 @@ WINDOWS_INTERACTION_TOOL_SCHEMAS = [
     SimpleNamespace(
         name='windows_manage',
         description=(
-            'Activate, minimize, or restore one allowlisted application window by its exact '
-            'window_id from windows_list/windows_foreground. The program rechecks the handle, '
-            'process path, process start time, app allowlist, recent human input, and resulting '
-            'window state before reporting success. It never selects by title.'
+            'Activate, minimize or restore one allowlisted app window by window_id.'
         ),
         inputSchema={'type': 'object', 'properties': {
             'app_id': {'type': 'string'},
@@ -69,15 +63,11 @@ WINDOWS_INTERACTION_TOOL_SCHEMAS = [
     SimpleNamespace(
         name='windows_control_action',
         description=(
-            'Perform exactly one UI Automation action on a control_id returned by a fresh '
-            'windows_observe result for the same window_id. Supported actions are invoke, select, '
-            'toggle, expand, collapse, and set_text. The program re-resolves the exact UIA element '
-            'and checks its type, state, password/sensitive labels, app identity, desktop lock, and '
-            'recent human input before acting. Clicks, navigation, selection and text edits run '
-            'directly. A control that saves, sends, submits, publishes or overwrites asks Lan first '
-            '(she can answer in VEIL or on QQ); delete/install/purchase and administrator/security '
-            'actions are refused. Text content is never written to the activity ledger. One action '
-            'only; observe again before continuing.'
+            'Do one action (invoke, select, toggle, expand, collapse, set_text) on a control_id from a fresh '
+            'windows_observe of the same window. Clicks, navigation, selection and typing run directly. Saving, '
+            'sending, submitting, publishing or overwriting asks Lan first (in VEIL or on QQ); delete, install, '
+            'purchase and administrator actions are refused. It stops if Lan is using the computer. Observe '
+            'again before the next action.'
         ),
         inputSchema={'type': 'object', 'properties': {
             'app_id': {'type': 'string'},

@@ -79,17 +79,73 @@ MEMORY_READ = SimpleNamespace(name='memory_read', description=(
         'properties': {'memory_id': {'type': 'string'}, 'offset': {'type': 'integer', 'minimum': 0}, 'version': {'type': 'string'}}})
 
 
-def trace_tool_for_model(tool):
-    """Keep Ombre's schema while adding VEIL-only history context."""
+# Ticket 145: Ombre's own docstrings are long Chinese text about its internals and test
+# helpers. Peter gets the same schema with short English descriptions of what VEIL allows.
+OMBRE_DESCRIPTIONS = {
+    'trace': (
+        'Edit one existing memory by its exact bucket_id; never guess an ID. Pass only the fields you change '
+        '(-1 or empty means unchanged). content replaces the whole body; or old_str/new_str replaces one exact, '
+        'unique passage (empty new_str removes it); not both. title is the memory\'s (or letter\'s) own title; '
+        'name is only its bucket name. resolved=1 lets it settle, 0 reactivates it; pinned=1 makes it a permanent '
+        'core memory; protected=1 stops decay without forcing it up; digested=1 hides it from passive recall and '
+        'dream; dont_surface=1 keeps it out of daily recall. Removing the last pinned/protected needs importance '
+        '1-10 in the same call. Metadata: importance 1-10, domain and tags comma-separated, valence/arousal 0-1, '
+        'why_remembered, meaning_append/meaning_replace, media_append/media_replace (replace drops the old value; '
+        'prefer append). status (active/resolved/abandoned) and weight belong to plan items. '
+        'Each of these goes in its own call: reinforce=true when, after reading it, this memory truly matters '
+        '(search hits do not reinforce); quotes_replace corrects or removes its original quotes (never adds); '
+        'unlink=<id> removes a wrong link; relink=<id> with relation_type (caused_by, causes, continuation_of, '
+        'continues, related_to, same_event) fixes an existing link. restore=true brings back an archived memory. '
+        'delete=true with delete_reason asks Lan; during your own autonomous activity it becomes a request she '
+        'answers on the memory page. edit_reason says why you change it now (kept in VEIL history only).'),
+    'dream': (
+        'Read every memory that changed in the last window_hours (default 48), in full, to look back and digest. '
+        'What you have let go of can settle with trace(resolved=1). Active plans are listed at the end.'),
+    'letter_write': (
+        'Write a letter to Lan or to your future self. Letters are kept word for word forever, never compressed, '
+        'merged or faded; put words meant to last here rather than in a memory. author: "ai" for you, "user" for '
+        'Lan. title, date and user_name are optional. lock_type: "none" (default), "timed" with a future '
+        'unlock_date (2027-01-01 or a full ISO time) opens on that date, "permanent" seals it unread forever. '
+        'Only the writer can change a lock later with letter_lock_update, and only if ai_name (your name) was '
+        'given when writing.'),
+    'letter_read': (
+        'Find letters: optional query (meaning search), author ("ai", "user" or a signature), date_from/date_to '
+        '(ISO dates). Without query, the newest limit letters. Returns full text.'),
+    'letter_lock_update': (
+        'Change only the lock of an existing letter you wrote; letter_id is the bracketed ID from letter_read. '
+        'lock_type "none", "timed" (with a future unlock_date) or "permanent". Lan\'s letters are not yours to lock.'),
+    'anchor': (
+        'Mark a memory as an anchor: a cold reference that stays out of default recall but still answers matching '
+        'searches. At most 24; release one first when full.'),
+    'release': 'Remove the anchor mark from a memory; it returns to default recall. pinned stays as it was.',
+    'plan': (
+        'Record a to-do, promise or open loop. status active (default), resolved or abandoned; related_bucket '
+        'optionally links a memory; weight 0-1 is how heavy the promise is (not how important); why_remembered is '
+        'optional. Plans never fade and appear only at the end of dream; close one with '
+        'trace(bucket_id, status="resolved").'),
+    'pulse': (
+        'Memory library status: counts, storage, decay engine state and a one-line summary of every memory; '
+        'anchors are marked. include_archive=true also lists archived ones.'),
+}
+TRACE_HIDDEN_FIELDS = ('hard_delete', 'deletion_request_id', 'deletion_decision', 'deletion_ai_reason')
+
+
+def ombre_tool_for_model(tool):
+    """Keep Ombre's parameters; drop schema titles and fields VEIL refuses; describe briefly."""
     schema = json.loads(json.dumps(tool.inputSchema))
-    schema.setdefault('properties', {})['edit_reason'] = {
-        'type': 'string',
-        'description': 'Optional: why you are making this change now. Saved only in VEIL history; not sent to Ombre.',
-    }
-    description = (tool.description.rstrip() + '\n\n'
-        'VEIL fields: content changes the memory body; meaning_append/meaning_replace change its meaning metadata. '
-        'why_remembered says why the memory matters, while edit_reason says why you are changing it now. '
-        'Use edit_reason for the change history; it is stored locally and not sent to Ombre.')
+    schema.pop('title', None)
+    properties = schema.setdefault('properties', {})
+    for value in properties.values():
+        if isinstance(value, dict):
+            value.pop('title', None)
+    if tool.name == 'trace':
+        for name in TRACE_HIDDEN_FIELDS:
+            properties.pop(name, None)
+        properties['edit_reason'] = {
+            'type': 'string',
+            'description': 'Optional: why you are making this change now. Saved only in VEIL history; not sent to Ombre.',
+        }
+    description = OMBRE_DESCRIPTIONS.get(tool.name, tool.description)
     return SimpleNamespace(name=tool.name, inputSchema=schema, description=description)
 
 
@@ -152,8 +208,7 @@ class NativeMemoryTools:
         if missing:
             raise UserError('Ombre 缺少本工单要求的工具：' + '、'.join(sorted(missing)))
         self.ombre_tools = {name: available[name] for name in OMBRE_TOOLS if name in available}
-        model_tools = [trace_tool_for_model(tool) if name == 'trace' else tool
-                       for name, tool in self.ombre_tools.items()]
+        model_tools = [ombre_tool_for_model(tool) for tool in self.ombre_tools.values()]
         self.tools = [HOLD, SEARCH, *model_tools, MEMORY_HISTORY, MEMORY_CATALOG, MEMORY_READ]
         self.description = DESCRIPTION
         self.autonomy_mode = False

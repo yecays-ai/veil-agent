@@ -1,9 +1,10 @@
 # 当前状态
 
-更新：2026-10-28 UTC · Antigravity（工单 144）。
+更新：2026-10-28 UTC · Claude（工单 145）。
 
 ## 当前目标与现状
 
+- 工单 145「工具说明瘦身」：分支 `ticket/145-slim-tool-descriptions`，Claude 实现，Lan 2026-10-28 提出（工具定义占上下文一半以上）。能力不删，只把 Ombre 九个工具、文件工具、long_task_update、Windows 工具的说明改成简短英文；trace 去掉 VEIL 本来就拒绝的硬删除/删除审批参数。估计每次请求 46KB → 约 34KB（未验证）。需要 update.bat。验收见 `docs/tickets/145-slim-tool-descriptions.md`。下一个工单号 146。
 - 工单 144「消息队列原子性与回复状态可靠性修复」：分支 `ticket/144-chat-queue-reliability`。修复 `reply_later(cancel=True)` 未重置 `turn_done`/`reply_later_called` 导致轮次意外结束的问题（保留 `send_message(done=True)` 状态）；修复 `_chat_batch` 和 `claim_steer` 队列头部检查与取出的竞争窗口，防止 `ChatAction`（如 Request Reply）被吞为文本；修复语音转录阻塞期间新消息入队导致的乱序，改用队首逆序插入严格保序 A → B → C。新增回归测试 5 项（`tests/test_free_reply.py`）。验收见 `docs/tickets/144-chat-queue-reliability.md`。下一个工单号 145。
 - 工单 143「聊天里不再出现没意义的提示」：分支 `ticket/143-quiet-silence`，Claude 实现，Lan 2026-10-28 截图反馈。成功的 `stay_silent`、`reply_later` 不再在聊天里显示「Peter 用了…」行（活动页照常记录）；「长度估算」提示不再发到聊天（「上下文」页已有分项）。需要 update.bat。验收：让 Peter 已读不回，聊天里什么都不出现；重启后聊几句不再出现「长度估算」行。下一个工单号 144。
 - 工单 142「气泡上限按 Lan 的消息重新计数、请求回复按钮改成图标」：分支 `ticket/142-bubble-cap`，Claude 实现，Lan 2026-10-28 截图反馈。插话后 Peter 的 10 条额度重置；第 10 条发出即结束本轮；请求回复按钮改为 sparkles 图标方形按钮；新工具 `stay_silent`（Peter 明确选择不回，本轮结束、界面不显示任何东西，附一次性能力通知）。新增 3 项回归（`tests/test_free_reply.py`）。需要 update.bat 重新打包 exe。验收见 `docs/tickets/142-bubble-cap-and-reply-button.md`。下一个工单号 143。
