@@ -717,6 +717,9 @@ def load_character(root, character_id):
                 raise ValueError('web.enabled must be boolean')
             github_readonly = web.get('github_readonly', False)
             browser_interaction = web.get('browser_interaction', False)
+            xiaohongshu_readonly = web.get('xiaohongshu_readonly', False)
+            if type(xiaohongshu_readonly) is not bool:
+                raise ValueError('web.xiaohongshu_readonly must be boolean')
             if type(browser_interaction) is not bool:
                 raise ValueError('web.browser_interaction must be boolean')
             github_repository = web.get('github_repository', '')
@@ -727,6 +730,7 @@ def load_character(root, character_id):
                 raise ValueError('Invalid public GitHub repository')
             web = {'enabled': enabled, 'github_readonly': github_readonly,
                    'browser_interaction': browser_interaction,
+                   'xiaohongshu_readonly': xiaohongshu_readonly,
                    'github_repository': github_repository}
         return Character(character_id, str(cfg['name']), persona,
                          positive_int(cfg.get('history_rounds', 20)),

@@ -98,6 +98,8 @@ idle_seconds = 120
 daily_max_sent = 100
 
 [web]
+# Dedicated human login required. Only reads; external actions have no executable entry point.
+xiaohongshu_readonly = true
 browser_interaction = true
 # Ticket 099: direct-use, read-only public web search and fetch tools.
 enabled = true
