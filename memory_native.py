@@ -127,6 +127,23 @@ OMBRE_DESCRIPTIONS = {
         'Memory library status: counts, storage, decay engine state and a one-line summary of every memory; '
         'anchors are marked. include_archive=true also lists archived ones.'),
 }
+DREAM_NOTE = ('Your recent memories, for looking back. Anything you are done with can settle with '
+              'trace(bucket_id, resolved=1); nothing needs to be written.')
+
+
+def neutral_dream_header(result):
+    """Ticket 147: replace Ombre's reflection questions above the first memory with a plain note.
+
+    Ombre asks what still weighs on him and suggests hold(feel=True), which VEIL does not offer."""
+    if not isinstance(result, str) or not result.startswith('=== Dreaming'):
+        return result
+    header, newline, rest = result.partition('\n')
+    guidance, blank, memories = rest.partition('\n\n')
+    if not blank or 'trace(' not in guidance or re.search(r'(?m)^ID: ', guidance):
+        return result
+    return header + newline + DREAM_NOTE + blank + memories
+
+
 TRACE_HIDDEN_FIELDS = ('hard_delete', 'deletion_request_id', 'deletion_decision', 'deletion_ai_reason')
 
 
@@ -468,6 +485,8 @@ class NativeMemoryTools:
             return 'The memory tool failed. Check the current memory state before retrying.', '出错', summary
         if name in ('dream', 'pulse'):
             result = self._filter_hidden_result(result, name)
+        if name == 'dream':
+            result = neutral_dream_header(result)
         return self._bounded(result), '成功', summary
 
     def _trace(self, args, approval):

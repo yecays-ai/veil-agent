@@ -2520,7 +2520,10 @@ class Chat:
                 else:
                     result, state, summary = self.autonomy_controller.set_wake_rhythm(args)
             else:
-                args = json.loads(call.function.arguments)
+                # Ticket 147: some models send empty or null arguments for tools without parameters.
+                args = json.loads(call.function.arguments or '{}')
+                if args is None:
+                    args = {}
                 if not isinstance(args, dict):
                     raise ValueError('arguments must be an object')
                 if self.long_tasks.handles(call.function.name):
@@ -2859,7 +2862,7 @@ class Chat:
                     self.autonomy_budget_limited = True
                 for call in message.tool_calls:
                     try:
-                        args = json.loads(call.function.arguments)
+                        args = json.loads(call.function.arguments or '{}') or {}
                         summary = (self.tools.preview_summary(call.function.name, args)
                                    if self.tools and call.function.name != 'send_message' else call.function.name)
                     except (ValueError, TypeError):

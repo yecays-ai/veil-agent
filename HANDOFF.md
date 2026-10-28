@@ -2,6 +2,7 @@
 
 ## 当前进度
 
+- 工单 147：`memory_native.neutral_dream_header` + `DREAM_NOTE`（只换 `=== Dreaming` 标题与第一个空行之间、含 `trace(` 且不含 `ID:` 的引导段）；`veil_agent` 通用工具分支 `json.loads(arguments or '{}')`，`null` → `{}`。下一个工单号 148。
 - 工单 146：核心可靠性修复，分支 `ticket/146-core-reliability`。已完成：1. 解耦 `persist_incoming` 准入写入与 `chat.jsonl` 正式历史，引入 `incoming-submissions.jsonl`，消息在实际轮次开始或插话时提交至 `chat.jsonl`，修复连发/插话时的历史错序、prompt 用户消息重复注入及问答归类混乱，服务重启时自动补录排队中未开始的消息，失败媒体上传清理 submission 记录以允许重试；2. 修复短期便签 `_call_extractor` 异常时费用预留泄漏并在 `Budget.__init__` 初始化时对账清理，防止 pending 累积阻断聊天；3. 引入专用 `EmptyReplyError(UserError)`，`run_chat` 文本分支针对性捕获模型空回复，防止后台服务异常崩溃退出的同时保留存储与账本致命异常的向外暴露保护。CodeRabbit 3 项评审意见已全数修复。新增/更新回归测试全部通过。下一个工单号 147。
 - 工单 145：`memory_native.OMBRE_DESCRIPTIONS` + `ombre_tool_for_model`（替代 trace_tool_for_model；去 schema title、去 trace 被拒参数）；`tools_agent.FILESYSTEM_DESCRIPTIONS`（permitted_tools 里替换说明、去 `$schema`）；long_tasks、windows_observer、windows_interaction 说明缩短；veil_agent 输出预算后缀缩短。下一个工单号 146。
 - 工单 144：消息队列原子性与回复状态可靠性修复，分支 `ticket/144-chat-queue-reliability`。已完成：1. `reply_later(cancel=True)` 重置 `reply_later_called` 与 `turn_done`，同时增加 `message_turn_done` 防止误清除 `send_message(done=True)` 的轮次结束标记；2. `_chat_batch` 与 `claim_steer` 实现原子出队，避免 `ChatAction`（如 Request Reply）被当成文本吞掉；3. 语音消息批次重入队改为持锁逆序 `appendleft`，严格保持真实消息时序 A → B → C。新增/完善 5 项回归测试全部通过。下一个工单号 145。
