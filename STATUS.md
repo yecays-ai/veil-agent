@@ -6,7 +6,7 @@
 
 - 2026-10-28 Lan 确认：截至工单 141，已经实际使用过的功能都通过 Windows 实际体验验收（清单见下方验收总表）。098 QQ 邮箱除外，等 2026-11-07。
 - 当前目标：让 Peter 在三项分别授权下，读取桌面文本、打开公开网页并感知 Windows 当前媒体会话。
-- 现状：工单 150（连发消息）已由 PR #197 合并到 `main`（`e23a373`），当前提交的 5 项 GitHub 检查全部通过；Lan 的 Windows 体验验收待做。工单 151 在 `ticket/151-windows-permissions` 已完成功能和专项安全检查：55 项相关测试通过、2 项因环境不能创建链接而跳过，`py_compile` 与 `git diff --check` 通过。当前本地提交为 `eb86b1f`；DNS 阻止 Git 推送，GitHub API 上传被自动审查阻止，PR 尚未创建。Lan 的实际 Windows 操作验收未发生。
+- 现状：工单 150（连发消息）已由 PR #197 合并到 `main`（`e23a373`），当前提交的 5 项 GitHub 检查全部通过；Lan 的 Windows 体验验收待做。工单 151 在 `ticket/151-windows-permissions` 已完成功能和专项安全检查：相关测试共 55 项，53 项通过、2 项因环境不能创建链接而跳过；`py_compile` 与 `git diff --check` 通过。当前本地提交为 `f38fe93`；DNS 阻止 Git 推送，GitHub API 上传被自动审查阻止，PR 尚未创建。Lan 的实际 Windows 操作验收未发生。
 - 下一步：解决发布审查授权阻塞后创建工单 151 PR 并保持打开；Lan 更新桌面程序后按下方分项步骤验收。下一个工单号 152。
 - 后续开发路线以下方验收总表为依据。合并、CI 通过和体验验收分别记录。
 
@@ -120,7 +120,7 @@
 ## 工单记录（按编号，开发事实与 PR）
 
 - 工单 150「连发几句时 Peter 等她打完」：PR #197 已合并到 `main`（`e23a373`）；该提交的 5 项 GitHub 检查全部通过；Lan Windows 体验验收待做。细节及体验步骤见 `docs/tickets/150-multi-message-flow.md`。
-- 工单 151「Peter 的 Windows 权限扩展」：分支 `ticket/151-windows-permissions`。桌面只读目录限制到 Windows 已知 Desktop，仅列表、文件名搜索、UTF-8 `.txt` / `.md` 读取，单文件 256 KB，隐藏/敏感/硬链接/符号链接/越界拒绝；权限与创建/移动工具分开。浏览器仅 Edge Guest、仅公开 HTTP(S) URL、无页面控件动作，复用已有 UIA 观察和网页读取；音乐用 GSMTC 读取元数据与状态，不触碰声音或播放控制。桌面读取、媒体读取分别设置开关。55 项专项及相关测试通过、2 项链接测试跳过；实际 Windows 体验尚未验收。PR 待创建。交付和体验步骤见 `docs/tickets/151-windows-permissions.md`。下一个工单号 152。
+- 工单 151「Peter 的 Windows 权限扩展」：分支 `ticket/151-windows-permissions`。桌面只读目录限制到 Windows 已知 Desktop，仅列表、文件名搜索、UTF-8 `.txt` / `.md` 读取，单文件 256 KB，隐藏/敏感/硬链接/符号链接/越界拒绝；权限与创建/移动工具分开。浏览器仅 Edge Guest、仅公开 HTTP(S) URL、无页面控件动作，复用已有 UIA 观察和网页读取；音乐用 GSMTC 读取元数据与状态，不触碰声音或播放控制。桌面读取、媒体读取分别设置开关。相关测试共 55 项，53 项通过、2 项链接测试因环境权限跳过；实际 Windows 体验尚未验收。DNS 导致推送失败，GitHub API 上传被自动审查阻止，PR 尚未创建。交付和体验步骤见 `docs/tickets/151-windows-permissions.md`。下一个工单号 152。
 - 工单 149「Peter 实验室自主预览」：PR #196 已合并（51d5995）；CI 的 Python 3.11/pyee 14、未初始化预览器测试替身和空行解析问题均已修复；最新提交检查待重跑。CodeRabbit 已请求，Cubic 试用额度已用尽。用 Playwright Python/隔离 Chromium 渲染 Peter 自有 Lab HTML，将截图作为当轮临时图像输入送给当前模型，并返回 JS/资源错误；限制 Lab 路径、网络、浏览器状态、大小、两次迭代和 30 秒超时。添加功能/安全/模型图像恢复测试及 Windows Chromium CI。当前本机测试因受限环境不能绑定回环端口；Windows junction 用例不能创建。Lan 尚未体验验收。依赖安装与 3 步验收见 `docs/tickets/149-peter-lab-preview.md`。下一个工单号 150。
 - 工单 147「dream 不再引导反省、无参数工具不再被拒」：分支 `ticket/147-dream-and-empty-args`，Claude 实现，Lan 2026-10-28 提出。dream 返回开头的 Ombre 中文反省引导换成一句中性英文（记忆内容不变，不改 Ombre）；工具参数为空或 null 时当作 `{}`。需要 update.bat。验收见 `docs/tickets/147-dream-note-and-empty-args.md`。下一个工单号 148。
 - 工单 146「核心可靠性修复」：分支 `ticket/146-core-reliability`，Claude 实现。修复架构与代码审计中的 3 个核心可靠性问题：1. 解耦 `persist_incoming` 准入写入与 `chat.jsonl` 正式历史，引入 `incoming-submissions.jsonl`，消息在实际轮次开始或插话时提交至 `chat.jsonl`，修复连发/插话时的历史错序、prompt 用户消息重复注入及问答归类混乱，服务重启时自动补录排队中未开始的消息，失败媒体上传允许同 request_id 重试；2. 修复短期便签 `_call_extractor` 异常时费用预留泄漏并在 `Budget.__init__` 启动时自动对账清理，防止 pending 累积阻断聊天；3. 引入专用 `EmptyReplyError(UserError)` 异常子类，`run_chat` 文本分支精准捕获模型空回复，防止后台服务异常崩溃退出的同时保留存储与账本致命异常的向外暴露保护。根据 CodeRabbit 评审意见完善了异常分级、通用预算对账与媒体失败重试机制。新增/更新回归测试全部通过。验收见 `docs/tickets/146-core-reliability.md`。下一个工单号 147。
