@@ -40,6 +40,9 @@ WINDOWS_INTERACTION_TOOL_NAMES = frozenset({
 })
 WINDOWS_DESKTOP_TOOL_NAMES = WINDOWS_OBSERVATION_TOOL_NAMES | WINDOWS_INTERACTION_TOOL_NAMES
 
+APP_WINDOW_WAIT_SECONDS = 7
+PUBLIC_WEB_WINDOW_WAIT_SECONDS = 25
+
 WINDOWS_INTERACTION_TOOL_SCHEMAS = [
     SimpleNamespace(
         name='windows_launch',
@@ -875,7 +878,10 @@ class WindowsInteractionTools:
                     _process, launch_input_snapshot = self._run_action_with_input_guard(
                         lambda inner_stop, _snapshot: self.backend.start_application(
                             app, inner_stop, self.input_monitor, _snapshot, url=url), stop)
-                    deadline = time.monotonic() + 7.0
+                    # Ticket 151 follow-up: a fresh Guest profile can take well over 7 seconds to show
+                    # its first window on Lan's PC, so a browser launch waits longer.
+                    deadline = time.monotonic() + (PUBLIC_WEB_WINDOW_WAIT_SECONDS if url is not None
+                                                   else APP_WINDOW_WAIT_SECONDS)
                     while time.monotonic() < deadline:
                         if stop():
                             raise InteractionPaused('The autonomous activity was paused.')
@@ -897,8 +903,9 @@ class WindowsInteractionTools:
                         time.sleep(0.1)
                     if url is not None:
                         raise InteractionUncertain(
-                            f'{app["label"]} did not open a new Guest window. Check that Guest mode is available; '
-                            'no existing browser window was activated. Do not launch it again automatically.')
+                            f'{app["label"]} was started, but its new Guest window was not seen within '
+                            f'{PUBLIC_WEB_WINDOW_WAIT_SECONDS} seconds; it may still be opening. Check with '
+                            'windows_list before launching again; no existing browser window was activated.')
                     raise InteractionUncertain('The app process was started but its allowlisted window did not appear before timeout; do not launch it again automatically.')
                 return work(stopped)
             return self._run(launch, summary, should_stop,
