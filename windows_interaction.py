@@ -7,7 +7,9 @@ import ntpath
 import os
 import queue
 import re
+import shutil
 import subprocess
+import tempfile
 import threading
 import time
 import tomllib
@@ -182,7 +184,7 @@ def validate_applications(applications):
             raise ValueError(f'{app_id} needs one or more process_paths identity patterns.')
         identities = [_expand_windows_path(path, allow_wildcards=True) for path in process_paths]
         actions = item.get('actions')
-        if (not isinstance(actions, list) or not actions
+        if (not isinstance(actions, list)
                 or any(not isinstance(action, str) or action not in _ALLOWED_ACTIONS for action in actions)):
             raise ValueError(f'{app_id} needs an explicit list of supported interaction actions.')
         result[app_id] = {
@@ -589,21 +591,42 @@ class WindowsInteractionBackend(WindowsDesktopBackend):
     def start_application(self, app, stopped, input_monitor, input_snapshot, *, url=None):
         launch_path = app['launch_path']
         if os.name != 'nt' or not os.path.isfile(launch_path):
+            if app.get('public_web') is True:
+                raise ObservationError(
+                    f'{app["label"]} is not installed at the configured path or its executable is unavailable.')
             raise ObservationError('The configured Windows application path does not exist on this computer.')
         self._check_default_desktop()
         self._cancelled(stopped)
         self._require_unchanged_input(input_monitor, input_snapshot)
+        profile_directory = None
         try:
             args = [launch_path]
             if url is not None:
                 if app.get('public_web') is not True:
                     raise ObservationError('This application is not authorized to open public webpages.')
-                args.extend(['--guest', '--new-window', url])
-            return subprocess.Popen(args, shell=False, cwd=ntpath.dirname(launch_path),
-                                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                    stderr=subprocess.DEVNULL, close_fds=True)
+                # A separate user-data root prevents Chrome from routing this launch to Lan's
+                # regular profile. Guest is preferred; incognito keeps the isolated fallback
+                # private if a Chrome policy disables Guest mode.
+                profile_directory = tempfile.mkdtemp(prefix='veil-chrome-guest-')
+                args.extend(['--guest', '--incognito', '--new-window',
+                             f'--user-data-dir={profile_directory}', url])
+            process = subprocess.Popen(args, shell=False, cwd=ntpath.dirname(launch_path),
+                                       stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                       stderr=subprocess.DEVNULL, close_fds=True)
         except (OSError, ValueError) as exc:
-            raise ObservationError('Windows could not start the configured application.') from exc
+            if profile_directory:
+                shutil.rmtree(profile_directory, ignore_errors=True)
+            raise ObservationError(f'Windows could not start {app["label"]}. Check that the app can be launched.') from exc
+        if profile_directory:
+            def clean_profile_after_exit():
+                try:
+                    process.wait()
+                except Exception:
+                    return
+                shutil.rmtree(profile_directory, ignore_errors=True)
+            threading.Thread(target=clean_profile_after_exit,
+                             name='veil-chrome-guest-cleanup', daemon=True).start()
+        return process
 
 
 class WindowsInteractionTools:
@@ -828,6 +851,7 @@ class WindowsInteractionTools:
                 def work(stop):
                     windows = [item for item in self.backend.list_windows(stop)
                                if self.application_id_for(item) == app['app_id']]
+                    existing_window_ids = {item['id'] for item in windows}
                     if windows and url is None:
                         foreground = [item for item in windows if item.get('foreground')]
                         if len(foreground) == 1:
@@ -855,7 +879,8 @@ class WindowsInteractionTools:
                         if self.input_monitor.changed_since(launch_input_snapshot):
                             raise HumanTookOver('Human input arrived while waiting for the app window.')
                         matches = [item for item in self.backend.list_windows(stop)
-                                   if self.application_id_for(item) == app['app_id']]
+                                   if self.application_id_for(item) == app['app_id']
+                                   and (url is None or item['id'] not in existing_window_ids)]
                         if matches:
                             foreground = [item for item in matches if item.get('foreground')]
                             selected = foreground[0] if len(foreground) == 1 else matches[0]
@@ -867,6 +892,10 @@ class WindowsInteractionTools:
                                 'confirmed': True,
                             }, '应用窗口已出现，并已按程序路径确认身份。', f'{app["label"]} 已启动并确认窗口。')
                         time.sleep(0.1)
+                    if url is not None:
+                        raise InteractionUncertain(
+                            f'{app["label"]} did not open a new Guest window. Check that Guest mode is available; '
+                            'no existing browser window was activated. Do not launch it again automatically.')
                     raise InteractionUncertain('The app process was started but its allowlisted window did not appear before timeout; do not launch it again automatically.')
                 return work(stopped)
             return self._run(launch, summary, should_stop,

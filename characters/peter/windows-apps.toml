@@ -13,15 +13,14 @@ actions = [
   "expand", "collapse", "set_text",
 ]
 
-# The standard installed Microsoft Edge app. Its only browser permission is to open public
-# HTTP(S) pages and expose the current window through the existing read-only UIA observer.
-# Browser controls are intentionally absent, so Peter cannot log in, click purchases, publish,
-# or start downloads through the browser UI.
-[applications.edge]
-label = "Microsoft Edge"
-launch_path = "%ProgramFiles(x86)%\\Microsoft\\Edge\\Application\\msedge.exe"
+# Peter opens public pages in an isolated Chrome Guest window. Runtime launch also uses a fresh
+# temporary user-data directory and incognito mode, so Chrome policies that disable Guest cannot
+# expose Lan's personal profile. Browser window controls and page actions are not authorized.
+[applications.chrome]
+label = "Google Chrome Guest"
+launch_path = "%ProgramFiles%\\Google\\Chrome\\Application\\chrome.exe"
 process_paths = [
-  "%ProgramFiles(x86)%\\Microsoft\\Edge\\Application\\msedge.exe",
+  "%ProgramFiles%\\Google\\Chrome\\Application\\chrome.exe",
 ]
-actions = ["activate", "minimize", "restore"]
+actions = []
 public_web = true

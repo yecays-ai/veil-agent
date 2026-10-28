@@ -92,6 +92,8 @@ class FakeInteractionBackend:
         self.inspect_calls = 0
         self.after_approval_control = None
         self.launch_url = None
+        self.launch_error = None
+        self.open_window_on_launch = True
 
     def _check_default_desktop(self):
         pass
@@ -126,9 +128,17 @@ class FakeInteractionBackend:
         self.actions.append((action, None))
         return {'confirmed': True, 'verification': 'fake_window_state'}
 
-    def start_application(self, _app, _stopped, _monitor, _input_snapshot, *, url=None):
+    def start_application(self, app, _stopped, _monitor, _input_snapshot, *, url=None):
+        if self.launch_error:
+            raise self.launch_error
         self.launches += 1
         self.launch_url = url
+        if url is not None and self.open_window_on_launch:
+            self.windows.append({
+                'id': 'chrome-guest-window', 'handle': 102, 'title': 'Guest page',
+                'process_path': r'C:\Program Files\Google\Chrome\Application\chrome.exe',
+                'foreground': False,
+            })
         return object()
 
 
@@ -177,42 +187,123 @@ class WindowsInteractionTests(unittest.TestCase):
                 },
             })
 
-    def test_peters_edge_allowlist_has_public_open_and_no_browser_controls(self):
+    def test_peters_chrome_allowlist_has_guest_open_and_no_browser_controls(self):
         if os.name != 'nt':
             self.skipTest('Windows browser installation paths are Windows-only.')
         root = Path(__file__).resolve().parents[1]
         applications = load_application_allowlist(root, 'peter', {
             'enabled': True, 'apps_file': 'windows-apps.toml',
         })
-        edge = applications['edge']
-        self.assertTrue(edge['public_web'])
-        self.assertEqual(edge['label'], 'Microsoft Edge')
-        self.assertEqual(edge['actions'], frozenset({'activate', 'minimize', 'restore'}))
+        chrome = applications['chrome']
+        self.assertTrue(chrome['public_web'])
+        self.assertEqual(chrome['label'], 'Google Chrome Guest')
+        self.assertEqual(chrome['launch_path'], r'c:\program files\google\chrome\application\chrome.exe')
+        self.assertEqual(chrome['actions'], frozenset())
 
-    def test_public_browser_url_is_validated_and_control_actions_remain_allowlisted(self):
+    def test_public_browser_url_opens_a_separate_guest_window_without_activating_lans_chrome(self):
         applications = validate_applications({
-            'edge': {
-                'label': 'Edge', 'launch_path': NOTEPAD_PATH,
-                'process_paths': [NOTEPAD_PATH],
-                'actions': ['activate', 'minimize', 'restore'], 'public_web': True,
+            'chrome': {
+                'label': 'Google Chrome Guest',
+                'launch_path': r'C:\Program Files\Google\Chrome\Application\chrome.exe',
+                'process_paths': [r'C:\Program Files\Google\Chrome\Application\chrome.exe'],
+                'actions': [], 'public_web': True,
             },
         })
         backend = FakeInteractionBackend()
+        backend.windows.append({
+            'id': 'w-' + '3' * 24, 'handle': 101, 'title': 'Lan private page',
+            'process_path': r'C:\Program Files\Google\Chrome\Application\chrome.exe',
+            'foreground': True,
+        })
         tools = WindowsInteractionTools(True, applications, backend=backend, platform_enabled=True,
                                         input_monitor=FakeInputMonitor())
         result, state, _ = tools.invoke('windows_launch', {
-            'app_id': 'edge', 'url': 'https://example.com/docs?x=1#part'})
+            'app_id': 'chrome', 'url': 'https://example.com/docs?x=1#part'})
         self.assertEqual(state, '成功', result)
         self.assertEqual(backend.launch_url, 'https://example.com/docs?x=1')
-        self.assertNotIn('set_text', applications['edge']['actions'])
-        self.assertNotIn('invoke', applications['edge']['actions'])
-        result, state, _ = tools.invoke('windows_launch', {'app_id': 'edge'})
+        payload = json.loads(str(result).split('\n', 1)[1])
+        self.assertEqual(payload['window_id'], 'chrome-guest-window')
+        self.assertFalse(payload['reused'])
+        self.assertEqual(backend.actions, [])
+        self.assertNotIn('set_text', applications['chrome']['actions'])
+        self.assertNotIn('invoke', applications['chrome']['actions'])
+        result, state, _ = tools.invoke('windows_manage', {
+            'app_id': 'chrome', 'window_id': 'w-' + '3' * 24, 'action': 'activate'})
+        self.assertEqual(state, '被拒绝')
+        self.assertEqual(backend.actions, [])
+        result, state, _ = tools.invoke('windows_launch', {'app_id': 'chrome'})
         self.assertEqual(state, '被拒绝')
         for url in ('file:///C:/secret.txt', 'http://127.0.0.1/',
                     'https://example.com/tool.exe', 'https://user@example.com/'):
-            result, state, _ = tools.invoke('windows_launch', {'app_id': 'edge', 'url': url})
+            result, state, _ = tools.invoke('windows_launch', {'app_id': 'chrome', 'url': url})
             self.assertEqual(state, '被拒绝', url)
         self.assertEqual(backend.launches, 1)
+
+    def test_chrome_start_failure_is_reported_instead_of_silently_succeeding(self):
+        applications = validate_applications({
+            'chrome': {
+                'label': 'Google Chrome Guest',
+                'launch_path': r'C:\Program Files\Google\Chrome\Application\chrome.exe',
+                'process_paths': [r'C:\Program Files\Google\Chrome\Application\chrome.exe'],
+                'actions': [], 'public_web': True,
+            },
+        })
+        backend = FakeInteractionBackend()
+        backend.launch_error = ObservationError(
+            'Google Chrome Guest is not installed at the configured path or its executable is unavailable.')
+        tools = WindowsInteractionTools(True, applications, backend=backend, platform_enabled=True,
+                                        input_monitor=FakeInputMonitor())
+        result, state, _ = tools.invoke('windows_launch', {
+            'app_id': 'chrome', 'url': 'https://example.com/'})
+        self.assertEqual(state, '出错')
+        self.assertIn('not installed', result)
+        self.assertNotIn('success', result.casefold())
+        self.assertEqual(backend.launches, 0)
+
+    def test_chrome_backend_checks_installation_and_starts_in_guest_mode(self):
+        app = {
+            'app_id': 'chrome', 'label': 'Google Chrome Guest',
+            'launch_path': r'C:\Program Files\Google\Chrome\Application\chrome.exe',
+            'public_web': True,
+        }
+        backend = object.__new__(WindowsInteractionBackend)
+        monitor = FakeInputMonitor()
+        with patch('windows_interaction.os.path.isfile', return_value=False):
+            with self.assertRaisesRegex(ObservationError, 'not installed'):
+                backend.start_application(app, lambda: False, monitor, monitor.snapshot(),
+                                          url='https://example.com/')
+
+        if os.name != 'nt':
+            self.skipTest('Chrome process launch arguments are Windows-specific.')
+        with patch.object(backend, '_check_default_desktop'), \
+                patch.object(backend, '_cancelled'), \
+                patch('windows_interaction.os.path.isfile', return_value=True), \
+                patch('windows_interaction.subprocess.Popen', return_value=Mock()) as popen:
+            backend.start_application(app, lambda: False, monitor, monitor.snapshot(),
+                                      url='https://example.com/')
+        args = popen.call_args.args[0]
+        self.assertEqual(args[:4], [app['launch_path'], '--guest', '--incognito', '--new-window'])
+        self.assertTrue(any(arg.startswith('--user-data-dir=') for arg in args))
+        self.assertEqual(args[-1], 'https://example.com/')
+        self.assertFalse(popen.call_args.kwargs['shell'])
+
+    def test_chrome_process_start_exception_names_the_browser(self):
+        if os.name != 'nt':
+            self.skipTest('Chrome process launch errors are Windows-specific.')
+        app = {
+            'app_id': 'chrome', 'label': 'Google Chrome Guest',
+            'launch_path': r'C:\Program Files\Google\Chrome\Application\chrome.exe',
+            'public_web': True,
+        }
+        backend = object.__new__(WindowsInteractionBackend)
+        monitor = FakeInputMonitor()
+        with patch.object(backend, '_check_default_desktop'), \
+                patch.object(backend, '_cancelled'), \
+                patch('windows_interaction.os.path.isfile', return_value=True), \
+                patch('windows_interaction.subprocess.Popen', side_effect=OSError('blocked')):
+            with self.assertRaisesRegex(ObservationError, 'could not start Google Chrome Guest'):
+                backend.start_application(app, lambda: False, monitor, monitor.snapshot(),
+                                          url='https://example.com/')
 
     def test_nonbrowser_allowlisted_apps_cannot_receive_urls(self):
         tools, backend = self.make_tools()
