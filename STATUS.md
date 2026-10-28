@@ -6,7 +6,7 @@
 
 - 2026-10-28 Lan 确认：截至工单 141，已经实际使用过的功能都通过 Windows 实际体验验收（清单见下方验收总表）。098 QQ 邮箱除外，等 2026-11-07。
 - 当前目标：让 Peter 在 Lab 中预览自己制作的 HTML，基于真实截图和错误信息自主改进。
-- 现状：实现与回归测试在 `ticket/149-peter-lab-preview`；PR [#196](https://github.com/yecays-ai/veil-agent/pull/196) 已开放（head `09a374d`）。真实 Chromium 集成检查在 Windows CI 执行；CI 与 Cubic 审查待完成，Lan 的 Windows 体验验收待合并和更新后进行。
+- 现状：实现与回归测试在 `ticket/149-peter-lab-preview`；PR [#196](https://github.com/yecays-ai/veil-agent/pull/196) 已开放（head `eedb34a`）。真实 Chromium 集成检查在 Windows CI 执行；CI 的首轮发现 Python 3.11 与 pyee 14 锁定不兼容，已改锁 `pyee==13.0.1`，新 head 检查待重跑；CodeRabbit 审查进行中，Cubic 试用额度用尽。Lan 的 Windows 体验验收待合并和更新后进行。
 - 下一步：审查 PR #196 当前 head 的 Cubic 意见与必需 CI，修复实质问题后保持 PR 打开，等待 Lan 按本页步骤体验。下一个工单号 150。
 - 后续开发路线以下方验收总表为依据。合并、CI 通过和体验验收分别记录。
 
@@ -110,7 +110,7 @@
 
 ## 工单记录（按编号，开发事实与 PR）
 
-- 工单 149「Peter 实验室自主预览」：分支 `ticket/149-peter-lab-preview`，PR #196 开放（head `09a374d`，CI 与 Cubic 审查待完成）。用 Playwright Python/隔离 Chromium 渲染 Peter 自有 Lab HTML，将截图作为当轮临时图像输入送给当前模型，并返回 JS/资源错误；限制 Lab 路径、网络、浏览器状态、大小、两次迭代和 30 秒超时。添加功能/安全/模型图像恢复测试及 Windows Chromium CI。当前本机测试因受限环境不能绑定回环端口；Windows junction 用例不能创建。Lan 尚未体验验收。依赖安装与 3 步验收见 `docs/tickets/149-peter-lab-preview.md`。下一个工单号 150。
+- 工单 149「Peter 实验室自主预览」：分支 `ticket/149-peter-lab-preview`，PR #196 开放（head `eedb34a`，CI 与 Cubic 审查待完成）。用 Playwright Python/隔离 Chromium 渲染 Peter 自有 Lab HTML，将截图作为当轮临时图像输入送给当前模型，并返回 JS/资源错误；限制 Lab 路径、网络、浏览器状态、大小、两次迭代和 30 秒超时。添加功能/安全/模型图像恢复测试及 Windows Chromium CI。当前本机测试因受限环境不能绑定回环端口；Windows junction 用例不能创建。Lan 尚未体验验收。依赖安装与 3 步验收见 `docs/tickets/149-peter-lab-preview.md`。下一个工单号 150。
 - 工单 147「dream 不再引导反省、无参数工具不再被拒」：分支 `ticket/147-dream-and-empty-args`，Claude 实现，Lan 2026-10-28 提出。dream 返回开头的 Ombre 中文反省引导换成一句中性英文（记忆内容不变，不改 Ombre）；工具参数为空或 null 时当作 `{}`。需要 update.bat。验收见 `docs/tickets/147-dream-note-and-empty-args.md`。下一个工单号 148。
 - 工单 146「核心可靠性修复」：分支 `ticket/146-core-reliability`，Claude 实现。修复架构与代码审计中的 3 个核心可靠性问题：1. 解耦 `persist_incoming` 准入写入与 `chat.jsonl` 正式历史，引入 `incoming-submissions.jsonl`，消息在实际轮次开始或插话时提交至 `chat.jsonl`，修复连发/插话时的历史错序、prompt 用户消息重复注入及问答归类混乱，服务重启时自动补录排队中未开始的消息，失败媒体上传允许同 request_id 重试；2. 修复短期便签 `_call_extractor` 异常时费用预留泄漏并在 `Budget.__init__` 启动时自动对账清理，防止 pending 累积阻断聊天；3. 引入专用 `EmptyReplyError(UserError)` 异常子类，`run_chat` 文本分支精准捕获模型空回复，防止后台服务异常崩溃退出的同时保留存储与账本致命异常的向外暴露保护。根据 CodeRabbit 评审意见完善了异常分级、通用预算对账与媒体失败重试机制。新增/更新回归测试全部通过。验收见 `docs/tickets/146-core-reliability.md`。下一个工单号 147。
 - 工单 145「工具说明瘦身」：分支 `ticket/145-slim-tool-descriptions`，Claude 实现，Lan 2026-10-28 提出（工具定义占上下文一半以上）。能力不删，只把 Ombre 九个工具、文件工具、long_task_update、Windows 工具的说明改成简短英文；trace 去掉 VEIL 本来就拒绝的硬删除/删除审批参数。估计每次请求 46KB → 约 34KB（未验证）。需要 update.bat。验收见 `docs/tickets/145-slim-tool-descriptions.md`。下一个工单号 146。
