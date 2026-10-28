@@ -1285,6 +1285,7 @@ class Chat:
         self._active_capability_schemas = None
         self.autonomy_should_yield = None
         self.claim_steer = None
+        self.steer_pending = None
         self.autonomy_run_id = None
         self.glance_mode = False
         self.codex_watch_mode = False
@@ -2746,6 +2747,27 @@ class Chat:
                 return mixed_sent_messages[-1]
             raise RequestFailed('已停止：Peter 这一轮还没有发出消息。')
 
+        def lan_wrote_meanwhile(step):
+            # Ticket 150: Lan sent more while this step was generating. Peter reads it in this
+            # same turn instead of ending on older messages and answering her in a separate turn.
+            pending = self.steer_pending
+            return bool(not autonomy and callable(pending) and callable(self.claim_steer)
+                        and step + 1 < max_steps and not self.user_stop.is_set() and pending())
+
+        def take_steer(steered):
+            nonlocal work_since_message
+            if getattr(steered, 'action', None) == 'request_reply':
+                self.force_reply = True
+                pending_later = self.pending_reply_later_context(cancel=True)
+                loop_messages.append({'role': 'system', 'content': '\n\n'.join(x for x in (
+                    'Lan pressed Request Reply: she wants an actual reply now. reply_later is unavailable.',
+                    pending_later) if x)})
+            else:
+                loop_messages.append(self.accept_steer(steered, request_id))
+            # Text written after her new message answers her; it is not a restatement of earlier bubbles.
+            work_since_message = True
+            self.reply_displayed = False
+
         for step in range(max_steps):
             self.long_tasks.set_tool_step(step)
             if not autonomy and self.user_stop.is_set():
@@ -2902,6 +2924,36 @@ class Chat:
                     if not autonomy and final in mixed_sent_messages:
                         # This exact message is already visible from send_message.
                         self.reply_displayed = True
+                if (isinstance(content, str) and not RAW_DSML_TOOL_CALL.search(content)
+                        and lan_wrote_meanwhile(step)):
+                    try:
+                        next_cfg = (self.cfg if step + 1 == max_steps - 1 else replace(
+                            self.cfg, max_output_tokens=self.cfg.tools.get('max_output_tokens', self.cfg.max_output_tokens)))
+                        next_reservation = self.budget.reserve(next_cfg)[0]
+                    except BudgetExceeded:
+                        next_reservation = None
+                    unsent = final if final.strip() and final not in mixed_sent_messages else ''
+                    delivered = not unsent
+                    if next_reservation and unsent:
+                        # His plain reply is shown now as a message, so her newer words can follow it.
+                        _result, sent_state, _label = self.send_message(
+                            json.dumps({'text': unsent}), request_id, f'{step}:reply')
+                        delivered = sent_state == '成功' and bool(self.sent_messages)
+                        if delivered:
+                            mixed_sent_messages.append(self.sent_messages[-1])
+                    steered = self.claim_steer() if next_reservation and delivered else None
+                    if steered is not None:
+                        record = message.model_dump(exclude_none=True)
+                        reasoning = getattr(message, 'reasoning_content', None)
+                        if reasoning is not None:
+                            record['reasoning_content'] = reasoning
+                        loop_messages.append(record)
+                        final = ''
+                        take_steer(steered)
+                        continue
+                    if next_reservation:
+                        self.budget.settle(next_reservation, next_cfg, 0, 0, 0)
+                        next_reservation = None
                 if step == max_steps - 1 and summaries:
                     self.output('The tool-step limit for this request has been reached.')
                 break
@@ -3015,6 +3067,18 @@ class Chat:
                 if self.autonomy_interrupted or self.autonomy_step_limited:
                     pending_image_messages.clear()
                     break
+                if (not autonomy and self.turn_done and not self.reply_later_called
+                        and lan_wrote_meanwhile(step)):
+                    steered = self.claim_steer()
+                    if steered is not None:
+                        # Ticket 150: his done or silence was about her older messages; she has written since.
+                        self.turn_done = False
+                        self.message_turn_done = False
+                        self.silent_chosen = False
+                        loop_messages.extend(pending_image_messages)
+                        pending_image_messages.clear()
+                        take_steer(steered)
+                        continue
                 if not autonomy and (self.turn_done or self.user_stop.is_set()):
                     if not mixed_sent_messages:
                         if (self.reply_later_called or self.silent_chosen) and not self.user_stop.is_set():
@@ -3031,14 +3095,7 @@ class Chat:
                 steered = (self.claim_steer() if not autonomy and callable(self.claim_steer)
                            and step + 1 < max_steps else None)
                 if steered is not None:
-                    if getattr(steered, 'action', None) == 'request_reply':
-                        self.force_reply = True
-                        pending_later = self.pending_reply_later_context(cancel=True)
-                        loop_messages.append({'role': 'system', 'content': '\n\n'.join(x for x in (
-                            'Lan pressed Request Reply: she wants an actual reply now. reply_later is unavailable.',
-                            pending_later) if x)})
-                    else:
-                        loop_messages.append(self.accept_steer(steered, request_id))
+                    take_steer(steered)
             except BaseException:
                 self.budget.settle(next_reservation, next_cfg, 0, 0, 0)
                 raise

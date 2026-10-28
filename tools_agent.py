@@ -690,6 +690,21 @@ class FilesystemTools:
             raise UserError('不回复能力通知无法保存；请保留 data 文件夹。') from exc
 
     @capability_transaction
+    def announce_typing_wait(self):
+        if getattr(self, 'cap_path', None) is None:
+            return
+        try:
+            self._announce_once(
+                'typing_wait_150_announced',
+                'Chat update: when Lan sends a line and keeps typing, the program now waits until she stops typing '
+                'and hands you her lines together. Anything she sends while you are still answering reaches you '
+                'in the same turn, even after done or stay_silent, so you can take it into account before '
+                'the turn ends.')
+        except Exception as exc:
+            self.enabled = False
+            raise UserError('打字等待通知无法保存；请保留 data 文件夹。') from exc
+
+    @capability_transaction
     def announce_long_tasks(self):
         if getattr(self, 'cap_path', None) is None:
             return

@@ -1,13 +1,13 @@
 # 当前状态
 
-更新：2026-10-28 UTC · Claude（工单 149：Peter 实验室自主预览，PR #196 开放）。
+更新：2026-10-28 UTC · Claude（工单 150：连发几句时 Peter 等她打完、回复中途的新消息同一轮接上）。
 
 ## 当前目标与现状
 
 - 2026-10-28 Lan 确认：截至工单 141，已经实际使用过的功能都通过 Windows 实际体验验收（清单见下方验收总表）。098 QQ 邮箱除外，等 2026-11-07。
-- 当前目标：让 Peter 在 Lab 中预览自己制作的 HTML，基于真实截图和错误信息自主改进。
-- 现状：实现与回归测试在 `ticket/149-peter-lab-preview`；PR [#196](https://github.com/yecays-ai/veil-agent/pull/196) 已开放，已改用兼容 Python 3.11 的 `pyee==13.0.1`，并修复完整 CI 发现的未初始化预览器测试替身与空行解析问题；最新提交检查待重跑。CodeRabbit 审查已请求，Cubic 试用额度用尽。真实 Chromium 集成检查在 Windows CI 执行。Lan 的 Windows 体验验收待合并和更新后进行。
-- 下一步：确认 PR #196 最新修复提交的必需 CI 与 CodeRabbit 意见；Cubic 因试用额度无法审查。修复实质问题后保持 PR 打开，等待 Lan 按本页步骤体验。下一个工单号 150。
+- 当前目标：Lan 连发几句时 Peter 像真人一样看完再回，不再一句一句单独回。
+- 现状：工单 150 在 `ticket/150-multi-message-flow`（Claude 实现，Lan 2026-10-28 选择「打字时他等你」）。149 已合并（PR #196），等 Lan update.bat 后验收。
+- 下一步：150 合并后 Lan update.bat（含 exe 重新打包）并按 `docs/tickets/150-multi-message-flow.md` 验收。下一个工单号 151。
 - 后续开发路线以下方验收总表为依据。合并、CI 通过和体验验收分别记录。
 
 ## 验收总表（按功能）
@@ -25,6 +25,7 @@
 | 138 | 说完就停 + 停下按钮 | 未在 10-28 清单中；Lan 10-27 对 134–138 说过「验收完毕」，待她确认后再改 |
 | 142 | 气泡额度按 Lan 的消息重计、不回、请求回复图标 | 待验收 |
 | 143 | 聊天里不再显示已读不回/长度估算 | 待验收 |
+| 150 | 连发几句时等她打完再回；回复中途的新消息同一轮接上 | 待验收 |
 | 144 | 消息队列原子性与回复状态 | 待验收 |
 | 146 | 核心可靠性：连发保序、便签预算、空回复不崩 | 待验收 |
 
@@ -76,7 +77,7 @@
 
 | 工单 | 功能 | Lan 体验验收 |
 | --- | --- | --- |
-| 149 | Peter 自主预览 Lab HTML、查看截图和错误并迭代 | 待验收（PR/Windows CI 待检查） |
+| 149 | Peter 自主预览 Lab HTML、查看截图和错误并迭代 | 待验收（PR #196 已合并） |
 
 ### QQ、邮件、网页与附件
 
@@ -102,7 +103,7 @@
 ## 待验收与待确认
 
 - 098 QQ 邮箱：2026-11-07 后配置新 QQ 邮箱并验收收发。
-- 142–149：已合并或待合并，按各自 `docs/tickets/` 验收步骤做 Windows 体验。
+- 142–150：已合并或待合并，按各自 `docs/tickets/` 验收步骤做 Windows 体验。
 - 135、136、138：Lan 10-27 说过 134–138 验收完毕，但不在 10-28 清单里，待她确认。
 - 113、119–122、124–126、129、130、132、140：没有单独的验收记录；多数是修复或后台改动，日常使用中出问题再记。
 
@@ -110,7 +111,8 @@
 
 ## 工单记录（按编号，开发事实与 PR）
 
-- 工单 149「Peter 实验室自主预览」：分支 `ticket/149-peter-lab-preview`，PR #196 开放；CI 的 Python 3.11/pyee 14、未初始化预览器测试替身和空行解析问题均已修复；最新提交检查待重跑。CodeRabbit 已请求，Cubic 试用额度已用尽。用 Playwright Python/隔离 Chromium 渲染 Peter 自有 Lab HTML，将截图作为当轮临时图像输入送给当前模型，并返回 JS/资源错误；限制 Lab 路径、网络、浏览器状态、大小、两次迭代和 30 秒超时。添加功能/安全/模型图像恢复测试及 Windows Chromium CI。当前本机测试因受限环境不能绑定回环端口；Windows junction 用例不能创建。Lan 尚未体验验收。依赖安装与 3 步验收见 `docs/tickets/149-peter-lab-preview.md`。下一个工单号 150。
+- 工单 150「连发几句时 Peter 等她打完」：分支 `ticket/150-multi-message-flow`，Claude 实现，Lan 2026-10-28 反馈「他一句一句单独回」并在卡片上选择「打字时他等你」。① Lan 的消息到达后，程序先等约 2 秒；只要她还在输入框里敲字（4 秒内有按键）就继续等，等她停手或发出下一句后把几句一起交给 Peter；留着不动的草稿不会拦住他；最多等 90 秒；请求回复不等。② Peter 回复中途 Lan 发的新消息，在本轮结束前（包括他用 done、stay_silent 或直接写正文结束时）交给他，同一轮接着回；他的正文先作为一条消息显示。③ 插话后 Peter 写的正文不再被当成重复内容吞掉。一次性通知 `typing_wait_150_announced`。需要 update.bat（桌面 exe 重新打包）。验收见 `docs/tickets/150-multi-message-flow.md`。下一个工单号 151。
+- 工单 149「Peter 实验室自主预览」：PR #196 已合并（51d5995）；CI 的 Python 3.11/pyee 14、未初始化预览器测试替身和空行解析问题均已修复；最新提交检查待重跑。CodeRabbit 已请求，Cubic 试用额度已用尽。用 Playwright Python/隔离 Chromium 渲染 Peter 自有 Lab HTML，将截图作为当轮临时图像输入送给当前模型，并返回 JS/资源错误；限制 Lab 路径、网络、浏览器状态、大小、两次迭代和 30 秒超时。添加功能/安全/模型图像恢复测试及 Windows Chromium CI。当前本机测试因受限环境不能绑定回环端口；Windows junction 用例不能创建。Lan 尚未体验验收。依赖安装与 3 步验收见 `docs/tickets/149-peter-lab-preview.md`。下一个工单号 150。
 - 工单 147「dream 不再引导反省、无参数工具不再被拒」：分支 `ticket/147-dream-and-empty-args`，Claude 实现，Lan 2026-10-28 提出。dream 返回开头的 Ombre 中文反省引导换成一句中性英文（记忆内容不变，不改 Ombre）；工具参数为空或 null 时当作 `{}`。需要 update.bat。验收见 `docs/tickets/147-dream-note-and-empty-args.md`。下一个工单号 148。
 - 工单 146「核心可靠性修复」：分支 `ticket/146-core-reliability`，Claude 实现。修复架构与代码审计中的 3 个核心可靠性问题：1. 解耦 `persist_incoming` 准入写入与 `chat.jsonl` 正式历史，引入 `incoming-submissions.jsonl`，消息在实际轮次开始或插话时提交至 `chat.jsonl`，修复连发/插话时的历史错序、prompt 用户消息重复注入及问答归类混乱，服务重启时自动补录排队中未开始的消息，失败媒体上传允许同 request_id 重试；2. 修复短期便签 `_call_extractor` 异常时费用预留泄漏并在 `Budget.__init__` 启动时自动对账清理，防止 pending 累积阻断聊天；3. 引入专用 `EmptyReplyError(UserError)` 异常子类，`run_chat` 文本分支精准捕获模型空回复，防止后台服务异常崩溃退出的同时保留存储与账本致命异常的向外暴露保护。根据 CodeRabbit 评审意见完善了异常分级、通用预算对账与媒体失败重试机制。新增/更新回归测试全部通过。验收见 `docs/tickets/146-core-reliability.md`。下一个工单号 147。
 - 工单 145「工具说明瘦身」：分支 `ticket/145-slim-tool-descriptions`，Claude 实现，Lan 2026-10-28 提出（工具定义占上下文一半以上）。能力不删，只把 Ombre 九个工具、文件工具、long_task_update、Windows 工具的说明改成简短英文；trace 去掉 VEIL 本来就拒绝的硬删除/删除审批参数。估计每次请求 46KB → 约 34KB（未验证）。需要 update.bat。验收见 `docs/tickets/145-slim-tool-descriptions.md`。下一个工单号 146。
