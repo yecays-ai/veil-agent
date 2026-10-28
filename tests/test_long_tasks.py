@@ -102,6 +102,39 @@ class LongTaskTests(unittest.TestCase):
         self.assertEqual(state, '成功')
         self.assertIsNone(self.tasks.read()['pending_action'])
 
+    def test_full_progress_rolls_oldest_into_archive_instead_of_refusing(self):
+        from long_tasks import MAX_PROGRESS_ITEMS
+        task_id = self.create()
+        for index in range(MAX_PROGRESS_ITEMS + 2):
+            _, state, _ = self.tasks.invoke('long_task_update', {
+                'action': 'update', 'task_id': task_id, 'progress_update': f'Step {index} done.'})
+            self.assertEqual(state, '成功')
+        progress = self.tasks.read()['progress']
+        self.assertEqual(len(progress), MAX_PROGRESS_ITEMS)
+        self.assertEqual(progress[-1]['text'], f'Step {MAX_PROGRESS_ITEMS + 1} done.')
+        archive = self.store.read('peter/long-task-progress-archive.jsonl')
+        self.assertEqual([row['text'] for row in archive], ['Step 0 done.', 'Step 1 done.'])
+        self.assertEqual(archive[0]['task_id'], task_id)
+
+    def test_pending_can_be_resolved_in_the_same_step_as_its_read(self):
+        task_id = self.create()
+        self.assertEqual(self.tasks.before_tool(
+            'create_directory', 'lab/same-step', autonomy=True, args={}), (None, True))
+        operation_id = self.tasks.read()['pending_action']['operation_id']
+        (Path(self.temp.name) / 'lab' / 'same-step').mkdir(parents=True)
+        self.tasks.finish_tool('create_directory', 'lab/same-step', '成功')
+        self.tasks.set_tool_step(1)
+        _, state, _ = self.tasks.invoke('long_task_update', {
+            'action': 'update', 'task_id': task_id, 'resolve_pending': True,
+            'pending_operation_id': operation_id})
+        self.assertEqual(state, '被拒绝')
+        self.tasks.observe_tool_result('get_file_info', 'lab/same-step', '成功', '{"type":"directory"}')
+        _, state, _ = self.tasks.invoke('long_task_update', {
+            'action': 'update', 'task_id': task_id, 'resolve_pending': True,
+            'pending_operation_id': operation_id, 'progress_update': 'The folder exists.'})
+        self.assertEqual(state, '成功')
+        self.assertIsNone(self.tasks.read()['pending_action'])
+
     def test_legacy_nonfile_pending_remains_recoverable_with_stable_id(self):
         task_id = self.create()
         self.assertEqual(self.tasks.before_tool(

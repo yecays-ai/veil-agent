@@ -410,7 +410,9 @@ daily_budget_cny = "2"
         self.assertEqual([alarm['state'] for alarm in saved['alarms']], ['pending', 'pending'])
 
         restarted = AutonomyController(self.chat, self.hub)
-        restarted.interval = timedelta(hours=10)
+        # Natural wakes vary (ticket 139); keep the next one far away so the alarms decide.
+        far = datetime.now().astimezone() + timedelta(days=2)
+        restarted._periodic_next_wake = lambda state: far
         status = restarted.status()
         self.assertEqual(status['next_wake_reason'], 'Continue the spider silk research.')
         self.assertEqual([item['note'] for item in status['scheduled_wakes']],
