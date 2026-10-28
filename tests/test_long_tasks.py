@@ -48,7 +48,7 @@ class LongTaskTests(unittest.TestCase):
 
         self.assertEqual(self.tasks.before_tool('write_file', 'fixture.txt', True,
             {'content': 'FICTIONAL_EXPECTED'}), (None, True))
-        self.tasks.finish_tool('write_file', 'fixture.txt', '成功', 'written')
+        self.tasks.finish_tool('write_file', 'fixture.txt', '出错', 'written')
         self.tasks.set_tool_step(1)
         self.tasks.observe_tool_result('read_text_file', 'fixture.txt', '成功', 'FICTIONAL_EXPECTED')
         operation_id = self.tasks.read()['pending_action']['operation_id']
@@ -86,7 +86,7 @@ class LongTaskTests(unittest.TestCase):
             'create_directory', 'lab/new-folder', autonomy=True, args={}), (None, True))
         operation_id = self.tasks.read()['pending_action']['operation_id']
         directory.mkdir(parents=True)
-        self.tasks.finish_tool('create_directory', 'lab/new-folder', '成功')
+        self.tasks.finish_tool('create_directory', 'lab/new-folder', '出错')
 
         self.tasks.set_tool_step(1)
         self.tasks.observe_tool_result('get_file_info', 'lab/new-folder-copy', '成功',
@@ -122,7 +122,7 @@ class LongTaskTests(unittest.TestCase):
             'create_directory', 'lab/same-step', autonomy=True, args={}), (None, True))
         operation_id = self.tasks.read()['pending_action']['operation_id']
         (Path(self.temp.name) / 'lab' / 'same-step').mkdir(parents=True)
-        self.tasks.finish_tool('create_directory', 'lab/same-step', '成功')
+        self.tasks.finish_tool('create_directory', 'lab/same-step', '出错')
         self.tasks.set_tool_step(1)
         _, state, _ = self.tasks.invoke('long_task_update', {
             'action': 'update', 'task_id': task_id, 'resolve_pending': True,
@@ -141,7 +141,7 @@ class LongTaskTests(unittest.TestCase):
             'create_directory', 'lab/archive', autonomy=True, args={}), (None, True))
         directory = Path(self.temp.name) / 'lab' / 'archive'
         directory.mkdir(parents=True)
-        self.tasks.finish_tool('create_directory', 'lab/archive', '成功')
+        self.tasks.finish_tool('create_directory', 'lab/archive', '出错')
         saved = self.tasks.read()
         for key in ('operation_id', 'normalized_target', 'expected_effect'):
             saved['pending_action'].pop(key, None)
@@ -172,9 +172,9 @@ class LongTaskTests(unittest.TestCase):
         operation_id = self.tasks.read()['pending_action']['operation_id']
         target.write_text(requested, encoding='utf-8')
         with self.assertRaises(UserError):
-            self.tasks.finish_tool('write_file', 'lab/test-a-copy.txt', '成功')
+            self.tasks.finish_tool('write_file', 'lab/test-a-copy.txt', '出错')
         self.assertEqual(self.tasks.read()['pending_action']['operation_id'], operation_id)
-        self.tasks.finish_tool('write_file', 'lab/test-a.txt', '成功')
+        self.tasks.finish_tool('write_file', 'lab/test-a.txt', '出错')
 
         reopened = LongTaskStore(self.store, 'peter')
         reopened.begin_tool_run()
@@ -209,83 +209,22 @@ class LongTaskTests(unittest.TestCase):
         self.assertEqual(event['state'], '经检查确认')
         self.assertIn(operation_id, event['evidence'])
 
-    def test_pending_lab_move_requires_destination_digest_after_restart(self):
+    def test_reported_success_needs_no_readback_but_uncertain_results_do(self):
+        # Ticket 152: Lab writes, notes and memories that the tool reports as saved do not block
+        # the next action; only an uncertain result waits for a read-back.
         self.create()
-        task_id = self.tasks.read()['task_id']
-        content = b'Fictional archived file, complete.\r\n'
-        digest = hashlib.sha256(content).hexdigest()
-        destination = 'lab/archive/play/v1.html'
-        self.assertEqual(self.tasks.before_tool(
-            'move_lab_file', destination, autonomy=True,
-            args={'source': 'lab/play/v1.html', 'destination': destination}), (None, True))
-        operation_id = self.tasks.read()['pending_action']['operation_id']
-        self.tasks.finish_tool('move_lab_file', destination, '成功',
-                               f'File moved intact ({len(content)} bytes, SHA-256 {digest}).')
-
-        reopened = LongTaskStore(self.store, 'peter')
-        reopened.set_tool_step(1)
-        reopened.observe_tool_result('read_text_file', destination, '成功', 'different')
-        self.assertIsNone(reopened.read()['pending_action']['verified_in_step'])
-        reopened.observe_tool_result('read_text_file', destination, '成功', content.decode())
-        self.assertEqual(reopened.read()['pending_action']['verified_in_step'], 1)
-        reopened.set_tool_step(2)
-        _, state, _ = reopened.invoke('long_task_update', {
-            'action': 'update', 'task_id': task_id, 'resolve_pending': True,
-            'pending_operation_id': operation_id, 'progress_update': 'Archived file readback matched.'})
-        self.assertEqual(state, '成功')
-        self.assertIsNone(reopened.read()['pending_action'])
-
-        self.assertEqual(reopened.before_tool(
-            'move_lab_file', destination, autonomy=True,
-            args={'source': 'lab/play/v1.html', 'destination': destination}), (None, True))
-        reopened.set_tool_step(3)
-        reopened.observe_tool_result('read_text_file', destination, '成功', content.decode())
-        self.assertIsNone(reopened.read()['pending_action']['verified_in_step'])
-
-    def test_large_lab_move_can_be_verified_with_bounded_digest_result(self):
-        self.create()
-        task_id = self.tasks.read()['task_id']
-        content = bytes(range(256)) * 128
-        digest = hashlib.sha256(content).hexdigest()
-        destination = 'lab/archive/play/large.bin'
-        self.assertEqual(self.tasks.before_tool(
-            'move_lab_file', destination, autonomy=True,
-            args={'source': 'lab/play/large.bin', 'destination': destination}), (None, True))
-        operation_id = self.tasks.read()['pending_action']['operation_id']
-        self.tasks.finish_tool('move_lab_file', destination, '成功',
-                               f'File moved intact ({len(content)} bytes, SHA-256 {digest}).')
-        self.tasks.set_tool_step(1)
-        self.tasks.observe_tool_result('lab_file_digest', destination, '成功', json.dumps({
-            'path': destination, 'byte_length': len(content), 'sha256': '0' * 64}))
-        self.assertIsNone(self.tasks.read()['pending_action']['verified_in_step'])
-        self.tasks.observe_tool_result('lab_file_digest', destination, '成功', json.dumps({
-            'path': destination, 'byte_length': len(content), 'sha256': digest}))
-        self.assertEqual(self.tasks.read()['pending_action']['verified_in_step'], 1)
-        self.tasks.set_tool_step(2)
-        _, state, _ = self.tasks.invoke('long_task_update', {
-            'action': 'update', 'task_id': task_id, 'resolve_pending': True,
-            'pending_operation_id': operation_id,
-            'progress_update': 'Large archived file digest matched.'})
-        self.assertEqual(state, '成功')
-
-    def test_append_verification_checks_the_written_suffix(self):
-        self.create()
-        lab = Path(self.temp.name) / 'lab'
-        lab.mkdir()
-        target = lab / 'notes.txt'
-        target.write_text('Existing\n', encoding='utf-8')
-        chunk = 'Appended section\n'
-        self.assertEqual(self.tasks.before_tool(
-            'append_file', 'lab/notes.txt', autonomy=True, args={'content': chunk}), (None, True))
-        target.write_text(target.read_text(encoding='utf-8') + chunk, encoding='utf-8')
-        self.tasks.finish_tool('append_file', 'lab/notes.txt', '成功')
-        reopened = LongTaskStore(self.store, 'peter')
-        reopened.set_tool_step(1)
-        reopened.observe_tool_result('read_text_file', 'lab/notes.txt', '成功',
-                                     target.read_text(encoding='utf-8'))
-        self.assertEqual(reopened.read()['pending_action']['verified_in_step'], 1)
-        reopened.observe_tool_result('read_text_file', 'lab/notes.txt', '成功', 'Existing\n')
-        self.assertEqual(reopened.read()['pending_action']['verified_in_step'], 1)
+        for name, target in (('append_file', 'lab/notes.txt'), ('move_lab_file', 'lab/b.txt'),
+                             ('hold', 'A fictional memory'), ('write_file', 'lab/a.txt')):
+            self.assertEqual(self.tasks.before_tool(name, target, True, {'content': 'x'}), (None, True))
+            self.tasks.finish_tool(name, target, '成功', 'done')
+            saved = self.tasks.read()
+            self.assertIsNone(saved['pending_action'])
+            self.assertEqual(saved['tool_events'][-1]['state'], '成功')
+        self.assertEqual(self.tasks.before_tool('write_file', 'lab/c.txt', True, {'content': 'x'}), (None, True))
+        self.tasks.finish_tool('write_file', 'lab/c.txt', '出错')
+        self.assertEqual(self.tasks.read()['pending_action']['state'], '结果不确定')
+        blocked, _ = self.tasks.before_tool('write_file', 'lab/d.txt', True, {'content': 'y'})
+        self.assertIn('is still unverified', blocked)
 
     def test_ambiguous_append_with_preexisting_matching_suffix_stays_pending(self):
         self.create()
@@ -378,8 +317,9 @@ max_result_bytes = 4096
 
         saved = chat.long_tasks.read()
         self.assertEqual(result, 'Saved the first part.')
-        self.assertEqual(saved['pending_action']['state'], '成功，需核实')
-        self.assertIn('is still unverified', chat.long_tasks.begin_tool('append_file', 'lab/part-one.md'))
+        # Ticket 152: the tool reported success, so nothing waits for a read-back.
+        self.assertIsNone(saved['pending_action'])
+        self.assertIsNone(chat.long_tasks.begin_tool('append_file', 'lab/part-one.md'))
         self.assertEqual(saved['tool_events'][-1]['tool'], 'append_file')
         self.assertEqual(saved['tool_events'][-1]['state'], '成功')
         self.assertEqual(saved['tool_events'][-1]['target'], 'lab/part-one.md')
@@ -439,9 +379,9 @@ max_result_bytes = 4096
 
         saved = chat.long_tasks.read()
         self.assertEqual(result, 'Memory updated.')
-        self.assertEqual(saved['pending_action']['target'], 'memory-001')
+        self.assertIsNone(saved['pending_action'])
         self.assertEqual(saved['tool_events'][-1]['target'], 'memory-001')
-        self.assertEqual(saved['pending_action']['state'], '成功，需核实')
+        self.assertEqual(saved['tool_events'][-1]['state'], '成功')
 
     def test_completion_at_progress_limit_persists_evidence_and_allows_next_task(self):
         task_id = self.create()
@@ -489,7 +429,7 @@ max_result_bytes = 4096
         self.assertEqual(self.tasks.before_tool(
             'trace', 'memory-001', autonomy=True, args={'bucket_id': 'memory-001'}), (None, True))
         operation_id = self.tasks.read()['pending_action']['operation_id']
-        self.tasks.finish_tool('trace', 'memory-001', '成功')
+        self.tasks.finish_tool('trace', 'memory-001', '出错')
         reopened = LongTaskStore(self.store, 'peter')
         reopened.set_tool_step(1)
         reopened.observe_tool_result('memory_read', 'memory-001', '成功',
@@ -593,39 +533,27 @@ max_result_bytes = 4096
             chat._tool_chat([{'role': 'user', 'content': 'Run fictional task.'}], request_id, 0,
                             history_start=0, autonomy=True)
         self.assertEqual((workspace / 'checkpoint.txt').read_text(encoding='utf-8'), 'FICTIONAL_EFFECT')
-        pending = chat.long_tasks.read()['pending_action']
-        self.assertEqual(pending['state'], '成功，需核实')
+        # Ticket 152: the write returned success before the provider failed, so it is recorded
+        # as done and the next run can finish the task without a read-back.
+        self.assertIsNone(chat.long_tasks.read()['pending_action'])
+        self.assertEqual(chat.long_tasks.read()['tool_events'][-1]['state'], '成功')
 
         resumed = Chat(cfg, self.store, budget, None, tools=files, approval=lambda _prompt: 'y', output=lambda *_: None)
-        readbacks = iter(['WRONG_FICTIONAL_EFFECT', 'FICTIONAL_EFFECT'])
-        files.client.call.side_effect = lambda _name, _args: next(readbacks)
-        def resume_model(*_args, **_kwargs):
-            step = resume_model.step
-            resume_model.step += 1
-            operation_id = resumed.long_tasks.read()['pending_action']['operation_id'] if step in (1, 3) else None
-            responses = [
-                Message([call('read_text_file', {'path': 'checkpoint.txt'}, 'read')]),
-                Message([call('long_task_update', {'action': 'update', 'task_id': task_id,
-                    'resolve_pending': True, 'pending_operation_id': operation_id}, 'reject-bad-readback')]),
-                Message([call('read_text_file', {'path': 'checkpoint.txt'}, 'read-again')]),
-                Message([call('long_task_update', {'action': 'update', 'task_id': task_id,
-                    'resolve_pending': True, 'pending_operation_id': operation_id}, 'resolve')]),
-                Message([call('long_task_update', {'action': 'update', 'task_id': task_id, 'status': 'completed',
-                    'progress_update': 'The existing fictional file was read back exactly.'}, 'complete')]),
-                Message(content='Fictional task completed after verification.'),
-            ]
-            return responses[step], 100, 10, 0
-        resume_model.step = 0
-        resumed.model = resume_model
+        files.client.call.reset_mock()
+        resumed.model = Mock(side_effect=[
+            (Message([call('long_task_update', {'action': 'update', 'task_id': task_id, 'status': 'completed',
+                'progress_update': 'The fictional file was written and reported saved.'}, 'complete')]), 100, 10, 0),
+            (Message(content='Fictional task completed.'), 100, 10, 0),
+        ])
         request_id, _ = budget.reserve(cfg)
         reply, _ = resumed._tool_chat([{'role': 'user', 'content': 'Resume safely.'}], request_id, 0,
                                       history_start=0, autonomy=True)
         saved = resumed.long_tasks.read()
-        self.assertEqual(reply, 'Fictional task completed after verification.')
+        self.assertEqual(reply, 'Fictional task completed.')
         self.assertEqual(len(saved['progress']), 40)
-        self.assertEqual(saved['completion_evidence'], 'The existing fictional file was read back exactly.')
+        self.assertEqual(saved['completion_evidence'], 'The fictional file was written and reported saved.')
         self.assertIsNone(saved['pending_action'])
-        self.assertEqual(files.client.call.call_count, 2)
+        self.assertEqual(files.client.call.call_count, 0)
         reopened = LongTaskStore(self.store, 'peter')
         self.assertEqual(reopened.read(), saved)
         self.assertEqual(reopened.invoke('long_task_update', {
@@ -644,31 +572,11 @@ max_result_bytes = 4096
                          (None, False))
 
 
-    def test_new_memory_hold_is_verified_by_memory_read_of_created_id(self):
-        task_id = self.create()
-        self.assertEqual(self.tasks.before_tool('hold', 'Fictional new memory title', True,
-            {'title': 'Fictional new memory title', 'content': 'Fictional body.'}), (None, True))
-        self.tasks.finish_tool('hold', 'Fictional new memory title', '成功', '已保存。 memory_id: abc123def456')
-        pending = self.tasks.read()['pending_action']
-        self.assertEqual(pending['target'], 'abc123def456')
-        blocked = self.tasks.begin_tool('append_file', 'lab/other.md')
-        self.assertIn('memory_read', blocked)
-        self.tasks.set_tool_step(1)
-        self.tasks.observe_tool_result('memory_read', 'abc123def456', '成功',
-                                       '{"memory_id":"abc123def456","text":"Fictional body."}')
-        self.tasks.set_tool_step(2)
-        result, state, _ = self.tasks.invoke('long_task_update', {
-            'action': 'update', 'task_id': task_id, 'resolve_pending': True,
-            'pending_operation_id': pending['operation_id'], 'progress_update': 'Memory read back.'})
-        self.assertEqual(state, '成功', result)
-        self.assertIsNone(self.tasks.read()['pending_action'])
-        self.assertIsNone(self.tasks.begin_tool('append_file', 'lab/other.md'))
-
     def test_marking_blocked_releases_an_unverifiable_pending_operation(self):
         task_id = self.create()
         self.assertEqual(self.tasks.before_tool('hold', 'Legacy title target', True,
             {'title': 'Legacy title target', 'content': 'Fictional body.'}), (None, True))
-        self.tasks.finish_tool('hold', 'Legacy title target', '成功', '已保存。')
+        self.tasks.finish_tool('hold', 'Legacy title target', '出错', '已保存。')
         self.assertIn('status=blocked', self.tasks.begin_tool('append_file', 'lab/journal.md'))
         result, state, _ = self.tasks.invoke('long_task_update', {
             'action': 'update', 'task_id': task_id, 'status': 'blocked'})
