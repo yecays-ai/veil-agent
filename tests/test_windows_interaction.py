@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -90,6 +91,7 @@ class FakeInteractionBackend:
         self.list_error = None
         self.inspect_calls = 0
         self.after_approval_control = None
+        self.launch_url = None
 
     def _check_default_desktop(self):
         pass
@@ -124,8 +126,9 @@ class FakeInteractionBackend:
         self.actions.append((action, None))
         return {'confirmed': True, 'verification': 'fake_window_state'}
 
-    def start_application(self, _app, _stopped, _monitor, _input_snapshot):
+    def start_application(self, _app, _stopped, _monitor, _input_snapshot, *, url=None):
         self.launches += 1
+        self.launch_url = url
         return object()
 
 
@@ -173,6 +176,50 @@ class WindowsInteractionTests(unittest.TestCase):
                     'process_paths': [NOTEPAD_PATH], 'actions': ['activate'],
                 },
             })
+
+    def test_peters_edge_allowlist_has_public_open_and_no_browser_controls(self):
+        if os.name != 'nt':
+            self.skipTest('Windows browser installation paths are Windows-only.')
+        root = Path(__file__).resolve().parents[1]
+        applications = load_application_allowlist(root, 'peter', {
+            'enabled': True, 'apps_file': 'windows-apps.toml',
+        })
+        edge = applications['edge']
+        self.assertTrue(edge['public_web'])
+        self.assertEqual(edge['label'], 'Microsoft Edge')
+        self.assertEqual(edge['actions'], frozenset({'activate', 'minimize', 'restore'}))
+
+    def test_public_browser_url_is_validated_and_control_actions_remain_allowlisted(self):
+        applications = validate_applications({
+            'edge': {
+                'label': 'Edge', 'launch_path': NOTEPAD_PATH,
+                'process_paths': [NOTEPAD_PATH],
+                'actions': ['activate', 'minimize', 'restore'], 'public_web': True,
+            },
+        })
+        backend = FakeInteractionBackend()
+        tools = WindowsInteractionTools(True, applications, backend=backend, platform_enabled=True,
+                                        input_monitor=FakeInputMonitor())
+        result, state, _ = tools.invoke('windows_launch', {
+            'app_id': 'edge', 'url': 'https://example.com/docs?x=1#part'})
+        self.assertEqual(state, '成功', result)
+        self.assertEqual(backend.launch_url, 'https://example.com/docs?x=1')
+        self.assertNotIn('set_text', applications['edge']['actions'])
+        self.assertNotIn('invoke', applications['edge']['actions'])
+        result, state, _ = tools.invoke('windows_launch', {'app_id': 'edge'})
+        self.assertEqual(state, '被拒绝')
+        for url in ('file:///C:/secret.txt', 'http://127.0.0.1/',
+                    'https://example.com/tool.exe', 'https://user@example.com/'):
+            result, state, _ = tools.invoke('windows_launch', {'app_id': 'edge', 'url': url})
+            self.assertEqual(state, '被拒绝', url)
+        self.assertEqual(backend.launches, 1)
+
+    def test_nonbrowser_allowlisted_apps_cannot_receive_urls(self):
+        tools, backend = self.make_tools()
+        result, state, _ = tools.invoke('windows_launch', {'app_id': 'notepad', 'url': 'https://example.com/'})
+        self.assertEqual(state, '被拒绝')
+        self.assertIn('not authorized', str(result))
+        self.assertEqual(backend.launches, 0)
 
     def test_role_interaction_setting_is_loaded_and_enables_tool_loop(self):
         with tempfile.TemporaryDirectory() as directory:

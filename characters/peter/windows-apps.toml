@@ -12,3 +12,16 @@ actions = [
   "activate", "minimize", "restore", "invoke", "select", "toggle",
   "expand", "collapse", "set_text",
 ]
+
+# The standard installed Microsoft Edge app. Its only browser permission is to open public
+# HTTP(S) pages and expose the current window through the existing read-only UIA observer.
+# Browser controls are intentionally absent, so Peter cannot log in, click purchases, publish,
+# or start downloads through the browser UI.
+[applications.edge]
+label = "Microsoft Edge"
+launch_path = "%ProgramFiles(x86)%\\Microsoft\\Edge\\Application\\msedge.exe"
+process_paths = [
+  "%ProgramFiles(x86)%\\Microsoft\\Edge\\Application\\msedge.exe",
+]
+actions = ["activate", "minimize", "restore"]
+public_web = true

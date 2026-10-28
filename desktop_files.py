@@ -18,7 +18,13 @@ from types import SimpleNamespace
 
 
 DESKTOP_FILE_TOOL_NAMES = frozenset({'desktop_create_file', 'desktop_move_to_trash'})
+DESKTOP_FILE_READ_TOOL_NAMES = frozenset({
+    'desktop_list', 'desktop_find_file', 'desktop_read_text_file',
+})
 MAX_CREATE_BYTES = 512 * 1024
+MAX_READ_BYTES = 256 * 1024
+MAX_LIST_ENTRIES = 1000
+MAX_SEARCH_VISITS = 5000
 # Text formats only; nothing Windows would run when double-clicked.
 CREATE_EXTENSIONS = frozenset({'.txt', '.md', '.html', '.htm', '.svg', '.csv', '.json', '.css', '.xml'})
 FOLDER_IDS = {
@@ -28,6 +34,42 @@ FOLDER_IDS = {
 }
 FALLBACK_NAMES = {'desktop': 'Desktop', 'documents': 'Documents', 'pictures': 'Pictures'}
 _RESERVED = {'CON', 'PRN', 'AUX', 'NUL', 'CONIN$', 'CONOUT$'}
+_SENSITIVE_NAME = re.compile(
+    r'(?:^|[._ -])(?:pass(?:word|wd)?|secrets?|tokens?|credentials?|api[_ -]?keys?|'
+    r'private[_ -]?keys?|id[_ -]?rsa|ssh[_ -]?(?:keys?)?)(?:$|[._ -])',
+    re.IGNORECASE,
+)
+_SENSITIVE_EXTENSIONS = frozenset({'.env', '.key', '.pem', '.p12', '.pfx', '.kdbx', '.sqlite', '.db'})
+
+DESKTOP_FILE_READ_TOOL_SCHEMAS = [SimpleNamespace(
+    name='desktop_list',
+    description=(
+        'List visible files and folders on Lan\'s Windows Desktop, or in a folder below it. '
+        'Read-only; hidden items and links are skipped. Use a relative path or an empty path for the Desktop.'
+    ),
+    inputSchema={'type': 'object', 'properties': {
+        'path': {'type': 'string', 'description': 'Optional relative folder path; empty means the Desktop.'},
+    }, 'additionalProperties': False},
+), SimpleNamespace(
+    name='desktop_find_file',
+    description=(
+        'Find visible files on Lan\'s Windows Desktop by exact filename, searching below the Desktop. '
+        'Returns relative paths only. Read-only; bounded search; hidden items and links are skipped.'
+    ),
+    inputSchema={'type': 'object', 'properties': {
+        'name': {'type': 'string', 'description': 'Exact filename including extension, e.g. note.txt.'},
+    }, 'required': ['name'], 'additionalProperties': False},
+), SimpleNamespace(
+    name='desktop_read_text_file',
+    description=(
+        f'Read an authorized .txt or .md file from Lan\'s Windows Desktop only (up to {MAX_READ_BYTES // 1024} KB). '
+        'Use a relative path returned by desktop_list or desktop_find_file. Hidden, sensitive, linked, unsupported, '
+        'too-large, or out-of-Desktop files are refused. This tool cannot write, move, or delete files.'
+    ),
+    inputSchema={'type': 'object', 'properties': {
+        'path': {'type': 'string', 'description': 'Relative .txt or .md path on the Desktop.'},
+    }, 'required': ['path'], 'additionalProperties': False},
+)]
 
 DESKTOP_FILE_TOOL_SCHEMAS = [SimpleNamespace(
     name='desktop_create_file',
@@ -302,3 +344,243 @@ class DesktopFileTools:
         except OSError:
             return 'The file could not be created. Check the path and try a different name.', '出错', summary
         return f'Created {target} ({len(data)} bytes).', '成功', summary
+
+
+def _sensitive_name(name):
+    path = PureWindowsPath(name)
+    return (name.startswith('.') or path.name.casefold() == 'desktop.ini'
+            or path.suffix.casefold() in _SENSITIVE_EXTENSIONS
+            or bool(_SENSITIVE_NAME.search(path.stem)))
+
+
+def _plain_visible(path):
+    try:
+        info = path.lstat()
+    except OSError:
+        return False
+    hidden = getattr(info, 'st_file_attributes', 0) & getattr(stat, 'FILE_ATTRIBUTE_HIDDEN', 2)
+    return (not hidden and not _sensitive_name(path.name) and not _is_link(path)
+            and (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)))
+
+
+def _relative_desktop_path(raw, *, allow_empty=False):
+    if not isinstance(raw, str) or '\x00' in raw:
+        return None
+    value = raw.strip()
+    if not value and allow_empty:
+        return ()
+    path = PureWindowsPath(value)
+    parts = path.parts
+    if not parts or path.anchor or any(_name_problem(part) for part in parts):
+        return None
+    return parts
+
+
+def _inside(base, candidate):
+    try:
+        root = Path(base).resolve(strict=True)
+        target = Path(candidate).resolve(strict=True)
+        return target == root or target.is_relative_to(root)
+    except (OSError, RuntimeError):
+        return False
+
+
+class DesktopFileReadTools:
+    """A separate read-only permission over Lan's visible Desktop items."""
+
+    def __init__(self, enabled, *, folder_for=_known_folder, platform_enabled=None):
+        self.enabled = enabled is True and (os.name == 'nt' if platform_enabled is None else bool(platform_enabled))
+        self.folder_for = folder_for
+        self.tools = list(DESKTOP_FILE_READ_TOOL_SCHEMAS) if self.enabled else []
+
+    def _base(self):
+        base = self.folder_for('desktop')
+        # The OS-known folder may itself be redirected (for example by OneDrive); this exact
+        # known-folder target becomes the allowlist root. Links below it remain refused.
+        if not base.is_dir():
+            raise OSError('The Desktop folder is unavailable.')
+        return base.resolve(strict=True)
+
+    def _resolve_folder(self, raw, *, allow_empty=False):
+        parts = _relative_desktop_path(raw, allow_empty=allow_empty)
+        if parts is None:
+            return None, None
+        if any(_sensitive_name(part) for part in parts):
+            return None, None
+        base = self._base()
+        target = base.joinpath(*parts)
+        current = base
+        for part in parts:
+            current = current / part
+            if _is_link(current) or not _plain_visible(current):
+                return None, None
+        if not target.is_dir() or not _inside(base, target):
+            return None, None
+        return base, target.resolve(strict=True)
+
+    def _visible_entries(self, folder):
+        entries = []
+        try:
+            for entry in folder.iterdir():
+                if not _plain_visible(entry):
+                    continue
+                entries.append(entry)
+                if len(entries) >= MAX_LIST_ENTRIES:
+                    break
+        except OSError:
+            raise
+        return sorted(entries, key=lambda item: (not item.is_dir(), item.name.casefold()))
+
+    def _list(self, args):
+        if set(args) - {'path'}:
+            return 'Use only a relative Desktop folder path.', '被拒绝', 'desktop/'
+        raw = args.get('path', '')
+        base, folder = self._resolve_folder(raw, allow_empty=True)
+        if folder is None:
+            return 'That folder is not a visible, plain folder on the Desktop. Links and out-of-Desktop paths are refused.', '被拒绝', 'desktop/'
+        rows = []
+        truncated = False
+        for index, entry in enumerate(self._visible_entries(folder)):
+            if index >= MAX_LIST_ENTRIES:
+                truncated = True
+                break
+            rel = entry.relative_to(base).as_posix()
+            rows.append(('[DIR] ' if entry.is_dir() else '[FILE] ') + rel)
+        if len(rows) >= MAX_LIST_ENTRIES:
+            truncated = True
+        prefix = f'{len(rows)} visible item(s) on the Desktop.'
+        if truncated:
+            prefix += f' Listing capped at {MAX_LIST_ENTRIES} items.'
+        return prefix + ('\n' + '\n'.join(rows) if rows else '\nNo visible items found.'), '成功', 'desktop/' + (str(raw).strip().replace('\\', '/') if raw else '')
+
+    def _find(self, args):
+        if set(args) != {'name'} or not isinstance(args.get('name'), str):
+            return 'Use one exact filename.', '被拒绝', 'desktop search'
+        name = args['name'].strip()
+        if not name or len(name) > 255 or PureWindowsPath(name).name != name or _name_problem(name):
+            return 'Use one valid filename without a directory path.', '被拒绝', 'desktop search'
+        try:
+            base = self._base()
+            matches, visited, capped = [], 0, False
+            stack = [(base, 0)]
+            while stack and visited < MAX_SEARCH_VISITS:
+                folder, depth = stack.pop()
+                try:
+                    entries = list(folder.iterdir())
+                except OSError:
+                    continue
+                for entry in entries:
+                    visited += 1
+                    if visited >= MAX_SEARCH_VISITS:
+                        capped = True
+                        break
+                    if not _plain_visible(entry):
+                        continue
+                    if entry.name.casefold() == name.casefold() and entry.is_file():
+                        matches.append(entry.relative_to(base).as_posix())
+                        if len(matches) >= 20:
+                            capped = True
+                            break
+                    if depth < 8 and entry.is_dir():
+                        stack.append((entry, depth + 1))
+                if capped and (visited >= MAX_SEARCH_VISITS or len(matches) >= 20):
+                    break
+            lines = [f'Found {len(matches)} matching file(s) on the Desktop:']
+            lines.extend(matches)
+            if capped:
+                lines.append('Search was capped; there may be more matches.')
+            if not matches:
+                lines.append('No matching visible file was found.')
+            return '\n'.join(lines), '成功', 'desktop search'
+        except OSError:
+            return 'The Desktop could not be searched; no file contents were read.', '出错', 'desktop search'
+
+    def _read(self, args):
+        if set(args) != {'path'}:
+            return 'Use one relative .txt or .md path on the Desktop.', '被拒绝', 'desktop read'
+        parts = _relative_desktop_path(args.get('path'))
+        if not parts:
+            return 'Use a valid relative path on the Desktop.', '被拒绝', 'desktop read'
+        if PureWindowsPath(parts[-1]).suffix.casefold() not in {'.txt', '.md'}:
+            return 'Only ordinary .txt and .md files are supported.', '被拒绝', 'desktop/' + '/'.join(parts)
+        if any(_sensitive_name(part) for part in parts):
+            return 'This filename looks sensitive and is not available through desktop read access.', '被拒绝', 'desktop/' + '/'.join(parts)
+        try:
+            base = self._base()
+            candidate = base.joinpath(*parts)
+            current = base
+            for part in parts:
+                current = current / part
+                if _is_link(current) or not _plain_visible(current):
+                    return 'A path component is a link or reparse point; nothing was read.', '被拒绝', 'desktop/' + '/'.join(parts)
+            resolved = candidate.resolve(strict=True)
+            if not _inside(base, resolved) or not _plain_visible(resolved):
+                return 'The file is not a plain file inside the Desktop.', '被拒绝', 'desktop/' + '/'.join(parts)
+            before = resolved.stat()
+            if before.st_size > MAX_READ_BYTES:
+                return f'The file is larger than the {MAX_READ_BYTES // 1024} KB read limit.', '被拒绝', 'desktop/' + '/'.join(parts)
+            flags = os.O_RDONLY | getattr(os, 'O_BINARY', 0)
+            fd = os.open(resolved, flags)
+            try:
+                opened = os.fstat(fd)
+                if (not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1 or opened.st_size > MAX_READ_BYTES
+                        or _identity(before) != _identity(opened)):
+                    return 'The file changed while it was being opened; nothing was read.', '被拒绝', 'desktop/' + '/'.join(parts)
+                if os.name == 'nt':
+                    final_path = _final_path_for_fd(fd)
+                    if final_path is None or os.path.normcase(str(final_path)) != os.path.normcase(str(resolved)):
+                        return 'The opened file resolved through a link or path redirection; nothing was read.', '被拒绝', 'desktop/' + '/'.join(parts)
+                with os.fdopen(fd, 'rb', closefd=False) as stream:
+                    raw = stream.read(MAX_READ_BYTES + 1)
+                after = os.fstat(fd)
+                if len(raw) > MAX_READ_BYTES or _identity(opened) != _identity(after):
+                    return 'The file changed or exceeded the read limit; its contents were not returned.', '被拒绝', 'desktop/' + '/'.join(parts)
+            finally:
+                os.close(fd)
+            text = raw.decode('utf-8-sig')
+            return text, '成功', 'desktop/' + '/'.join(parts)
+        except UnicodeDecodeError:
+            return 'This file is not UTF-8 text, so its contents cannot be read safely.', '出错', 'desktop/' + '/'.join(parts)
+        except (OSError, RuntimeError):
+            return 'The file could not be read. It may have moved, become unavailable, or be a link.', '出错', 'desktop/' + '/'.join(parts)
+
+    def invoke(self, name, args):
+        if not self.enabled or name not in DESKTOP_FILE_READ_TOOL_NAMES or name not in {tool.name for tool in self.tools}:
+            return 'Read-only Desktop file access is disabled for this character or platform.', '被拒绝', name
+        if not isinstance(args, dict):
+            return 'A JSON object of arguments is required.', '被拒绝', name
+        if name == 'desktop_list':
+            try:
+                return self._list(args)
+            except OSError:
+                return 'The Desktop folder could not be listed.', '出错', 'desktop/'
+        if name == 'desktop_find_file':
+            return self._find(args)
+        return self._read(args)
+
+
+def _final_path_for_fd(fd):
+    """Resolve the path attached to an open Windows handle to close a reparse-point race."""
+    if os.name != 'nt':
+        return None
+    import msvcrt
+    handle = msvcrt.get_osfhandle(fd)
+    kernel32 = ctypes.windll.kernel32
+    get_path = kernel32.GetFinalPathNameByHandleW
+    get_path.argtypes = (ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_uint32, ctypes.c_uint32)
+    get_path.restype = ctypes.c_uint32
+    size = 512
+    while size <= 32768:
+        buffer = ctypes.create_unicode_buffer(size)
+        written = get_path(handle, buffer, size, 0)
+        if not written:
+            return None
+        if written < size:
+            value = buffer.value
+            if value.startswith('\\\\?\\UNC\\'):
+                value = '\\\\' + value[8:]
+            elif value.startswith('\\\\?\\'):
+                value = value[4:]
+            return Path(value)
+        size = written + 1
+    return None

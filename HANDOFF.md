@@ -2,7 +2,8 @@
 
 ## 当前进度
 
-- 工单 150：`web_agent.Hub._wait_while_lan_types`（`TYPING_GRACE_SECONDS`=2、`TYPING_ACTIVE_SECONDS`=4、`TYPING_MAX_WAIT_SECONDS`=90；`set_typing` 记录 `typed_at`；桌面 `reportTyping` 输入时每秒心跳）；`Hub.steer_pending` 供 `Chat._tool_chat` 在结束本轮前查看（`lan_wrote_meanwhile` / `take_steer`：done、stay_silent、第 10 条、纯正文结束时都先接上 Lan 新消息；reply_later 和叫停除外）；`take_steer` 设 `work_since_message=True` 修复插话后正文被当复述吞掉。回归：`tests/test_free_reply.py` 新增 9 项；`test_web` 排队用例改为等第一轮开始再发第二条。下一个工单号 151。
+- 工单 151：分支 `ticket/151-windows-permissions`，基于最新 GitHub `main`（`e23a373`）。新增 `DesktopFileReadTools`（独立只读目录权限）、Edge Guest 公开 URL 打开（复用现有 Windows 观察）和 `WindowsMediaTools`（GSMTC）；桌面读取与媒体读取分别配置开关，Edge 控件动作不在白名单。55 项相关测试、py_compile、diff 检查通过；2 项链接创建测试因环境权限跳过。全量套件未能在约 45 秒内结束，停止后未取得结果。已审查权限接线与路径边界；提交并创建 PR 待做。Lan 实际 Windows 验收尚未发生。
+- 工单 150 已由 PR #197 合并（`e23a373`）；该提交的 5 项 GitHub 检查全部通过，Lan Windows 体验待验收。
 - 工单 149：分支 `ticket/149-peter-lab-preview`。已实现隔离 Chromium Lab HTML 预览、截图当轮输入、错误诊断、超时/迭代限制、回归测试、安装脚本与 Windows CI；新增工单文档并更新 STATUS。本机提交 `b483850`；因本机 DNS 无法访问 GitHub，使用仓库 Git API 发布同一内容，PR #196 已开放。已运行记录中的针对性测试与 diff 检查。CI 的 Python 3.11/pyee 14 不兼容、测试替身没有初始化 lab_preview、依赖测试未忽略空行已修正，待发布修复提交并核对新 CI；CodeRabbit 已请求，Cubic 试用额度用尽。保持 PR 未合并。真实 Chromium 集成只在 Windows Python 3.12 CI 中运行；Lan Windows 体验待验收。
 - 工单 148：只改记录。STATUS.md 改为「验收总表（按功能）」+「待验收与待确认」+「工单记录（按编号）」三块；按 Lan 2026-10-28 确认把 097、099–101、106–112、115–118、123、127、128、131、133、134、137、139、141 记为 Windows 实际体验验收通过；098 等 2026-11-07；142–147 按真实记录待验收；135/136/138 待她确认。下一个工单号 150。
 - 工单 147：`memory_native.neutral_dream_header` + `DREAM_NOTE`（只换 `=== Dreaming` 标题与第一个空行之间、含 `trace(` 且不含 `ID:` 的引导段）；`veil_agent` 通用工具分支 `json.loads(arguments or '{}')`，`null` → `{}`。下一个工单号 148。
@@ -45,14 +46,14 @@
 
 - 验收状态以 STATUS.md「验收总表」为准，后续开发路线以它为依据。
 - 098 QQ 邮箱：2026-11-07 后验收收发。
-- 142–150：Lan 按各自工单做 Windows 体验验收。
+- 142–151：Lan 按各自工单做 Windows 体验验收。
 - 135、136、138：请 Lan 确认（10-27 说过 134–138 验收完毕，但不在 10-28 清单里）。
-- 下一个工单号为 150。
+- 下一个工单号为 152。
 
 ## 仍适用的边界
 
 - 正式 checkout `E:\Peter-Agent\VEIL\veil-agent` 留在 `main`。其中用户已有的 `update-main-collisions.ps1`、`update-main.cmd` 删除状态不属于本工单，保持原样。
 - 只在上述独立 worktree 操作；合并后依仓库规则检查干净状态再清理本工单 worktree。
-- 不增加 Agent、桌面自动化依赖或模型供应商；共享既有权限控制、`desktop_access` 互斥、Chat 工具循环和成本账本。
+- 不增加 Agent、桌面自动化依赖或模型供应商；共享既有权限控制、`desktop_access` 互斥、Chat 工具循环和成本账本。工单 151 仅为 GSMTC 增加 Windows 专用 PyWinRT API 投影。
 - UIA 窗口内容是非可信数据；敏感窗口过滤由现有 Windows 观察工具执行。当前瞄一眼观察仅用 UIA，不调用截图回退，不把原始 UIA 内容写入活动文件或长期记忆。
 - 代码检查、CI、Windows 实机体验是不同证据；各工单的体验验收状态以 STATUS.md「验收总表」为准。

@@ -117,6 +117,14 @@ apps_file = "windows-apps.toml"
 # A short idle window keeps the prompt's own final keystroke from blocking a requested action.
 idle_seconds = 3
 
+[desktop_file_read]
+# Ticket 151: independent, read-only access to visible text files on the Windows Desktop.
+enabled = true
+
+[windows_media]
+# Ticket 151: read-only Windows media-session status and metadata; no audio or controls.
+enabled = true
+
 [short_term_notes]
 # Ticket 123: temporary conversation notes; never written to Ombre or Plan.
 enabled = true
