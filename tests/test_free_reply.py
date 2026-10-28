@@ -98,6 +98,18 @@ class FreeReplyTests(unittest.TestCase):
         states = self.store.read('test/message-processing.jsonl')
         self.assertEqual(states[-1]['state'], 'reply_later')
 
+    def test_reply_later_cancel_drops_pending_without_ending_turn(self):
+        chat = Chat(self.cfg, self.store, Budget(self.store), Mock(), output=[].append)
+        chat.reply_later(json.dumps({'minutes': 5, 'note': 'think again'}))
+        chat.turn_done = False
+        result, state, _ = chat.reply_later(json.dumps({'cancel': True}))
+        self.assertEqual(state, '成功')
+        self.assertIn('Cancelled 1', result)
+        self.assertFalse(chat.turn_done)
+        saved = json.loads((self.store.root / 'test/reply-later.json').read_text(encoding='utf-8'))
+        self.assertEqual(saved['pending'][0]['state'], 'cancelled_by_peter')
+        self.assertIsNone(chat.claim_due_reply_later())
+
     def test_claimed_reply_later_counts_toward_same_batch_limit(self):
         chat = Chat(self.cfg, self.store, Budget(self.store), Mock(), output=[].append)
         chat.reply_later_batch = 'batch'

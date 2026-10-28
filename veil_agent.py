@@ -129,12 +129,14 @@ SEND_MESSAGE = {'type': 'function', 'function': {
 REPLY_LATER = {'type': 'function', 'function': {
     'name': 'reply_later',
     'description': ('Persist a choice to reconsider this conversation later. Give either minutes from now or '
-                    'one future local ISO time, plus a short private note to your future self.'),
+                    'one future local ISO time, plus a short private note to your future self. '
+                    'Or pass only cancel: true to drop every pending reply_later you no longer need.'),
     'parameters': {'type': 'object', 'properties': {
         'minutes': {'type': 'integer', 'minimum': 1},
         'at': {'type': 'string', 'maxLength': 64},
         'note': {'type': 'string', 'minLength': 1, 'maxLength': 300},
-    }, 'required': ['note'], 'additionalProperties': False},
+        'cancel': {'type': 'boolean'},
+    }, 'additionalProperties': False},
 }}
 
 
@@ -1611,6 +1613,20 @@ class Chat:
             args = None
         if self.force_reply:
             return 'reply_later is unavailable because Lan requested an actual reply now.', '被拒绝', 'reply_later'
+        if isinstance(args, dict) and args.get('cancel') is True and set(args) == {'cancel'}:
+            path = f'{self.cfg.id}/reply-later.json'
+            try:
+                saved = json.loads((self.store.root / path).read_text(encoding='utf-8'))
+            except (OSError, ValueError, TypeError):
+                return 'No reply_later is pending.', '成功', 'reply_later'
+            dropped = 0
+            for row in saved.get('pending', []):
+                if isinstance(row, dict) and row.get('state') == 'pending':
+                    row['state'] = 'cancelled_by_peter'
+                    dropped += 1
+            if dropped:
+                self.store.replace(path, saved)
+            return f'Cancelled {dropped} pending reply_later reminder(s).', '成功', 'reply_later'
         if (not isinstance(args, dict) or set(args) - {'minutes', 'at', 'note'}
                 or not isinstance(args.get('note'), str) or not args['note'].strip()
                 or (('minutes' in args) == ('at' in args))):

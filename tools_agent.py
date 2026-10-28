@@ -645,7 +645,7 @@ class FilesystemTools:
                 'free_reply_141_announced',
                 'Capability update: Lan can send several messages at any time, including while you are replying; '
                 'new messages may join your turn at a safe step boundary. You may reply, wait, stay silent, or use '
-                'reply_later. "Lan is typing." is only a fact and never includes her draft. If Lan presses Request '
+                'reply_later (reply_later with only cancel: true drops reminders you no longer need). "Lan is typing." is only a fact and never includes her draft. If Lan presses Request '
                 'Reply, you must send actual text in that request and reply_later is unavailable. A chat turn may '
                 'send at most 10 messages.')
         except Exception as exc:
