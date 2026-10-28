@@ -2,9 +2,9 @@
 
 ## 当前进度
 
-- 工单 156：分支 `ticket/156-xiaohongshu`，基于最新 main `27cceb4e8a746b83b06f130affbbb25378cddddf`。新增 `xiaohongshu_tools.py`，复用固定 xiaohongshu-mcp v2.5.5 Windows 服务和人工登录程序；`xiaohongshu-login.cmd` 安装、校验、独立登录并要求用户核对账号 ID 绑定，私有 Cookie 不在模型文件 workspace 中。每次读前核对同一账号，跨进程互斥、60 HTTP 调用/天、10 秒间隔、4 操作/轮、45 秒总时限、1 MB 原响应/8 KB 模型返回、6 卡片/10 顶层评论样本；停止关闭服务及浏览器子进程，错误后停止重试。白名单只有 status/feed/search/detail，公开发布、评论、私信、关注、点赞、收藏全部无执行入口。草稿复用已有 Lab 文件与交付能力，兴趣复用 thought/Ombre，不新增 Agent/调度器/记忆引擎。读取开关在角色 `[web].xiaohongshu_readonly`。
+- 工单 156：分支 `ticket/156-xiaohongshu`，PR #204 保持开放，基于最新 main `27cceb4e8a746b83b06f130affbbb25378cddddf`。新增 `xiaohongshu_tools.py`，复用固定 xiaohongshu-mcp v2.5.5 Windows 服务和人工登录程序；`xiaohongshu-login.cmd` 安装、校验、独立登录并要求用户核对账号 ID 绑定，私有 Cookie 不在模型文件 workspace 中。每次读前核对同一账号，跨进程互斥、60 HTTP 调用/天、10 秒间隔、4 操作/轮、45 秒总时限、1 MB 原响应/8 KB 模型返回、6 卡片/10 顶层评论样本；停止关闭服务及浏览器子进程，错误后停止重试。白名单只有 status/feed/search/detail，公开发布、评论、私信、关注、点赞、收藏全部无执行入口。草稿复用已有 Lab 文件与交付能力，兴趣复用 thought/Ombre，不新增 Agent/调度器/记忆引擎。读取开关在角色 `[web].xiaohongshu_readonly`。
 - 156 证据：14 项专项通过（含自主醒来搜索→本地草稿→拒绝发布），全仓库复查 725 项无失败、11 项跳过；最后增补的节流场景与最终代码 14 项专项通过，PR CI/评审待结果。真实 Windows 发行文件校验/启动参数及服务健康 200、未鉴权 401 通过，测试进程已退出。没有登录用户账号，真实搜索/正文/评论与草稿体验不能算通过。研究、平台限制和 Windows 三步体验验收见 `docs/tickets/156-xiaohongshu.md`。下一窗口先读 156 PR 的最新 CI/功能安全评审及用户真实体验结果；**本单不自动合并**。今晚不实现乌有乡或独立 Python 实验室。下一工单号 157。
-- 155 的 PR #203 已合并到当前 main；实现 head 的跨平台 Python、审计等检查通过。其浏览器交接修复已进入 main，视频播放与 Lan Windows 整段体验仍待验收。以下 155 段落保留实现证据，PR 状态以上述当前事实为准。
+- 155 的 PR #203 已合并到当前 main；实现 head 的跨平台 Python、审计等检查通过。其浏览器交接修复已进入 main，视频播放与 Lan Windows 整段体验仍待验收。155 实现证据见下一条。
 - 工单 155 实现证据：独立 Playwright 浏览器只允许公开 HTTPS 只读导航；已修复正常/异常/取消后停止闭包释放。PR #203 已合并，10 项专项及实现 head CI 通过；真实 B 站页面可打开，视频播放未确认，Windows 整段体验待验收。
 - 工单 154 已由 PR #202 合并为 `42f277c11cf1fc0903fdb5322aaa663e0c43e9f8`；合并提交四项跨平台检查通过，匿名源码读取和受限官方只读 MCP 实现已进入 main；真实官方鉴权与 Lan Windows 体验待验收。
 - 工单 153 已由 PR #201 合并为 fef11147ce2a7ecc9030773d419f5d81b013ef00；该 main 提交四项跨平台 Python 检查通过，Windows 体验待验收。

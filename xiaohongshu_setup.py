@@ -46,8 +46,10 @@ def main():
     print('Peter 的小红书专属登录。请先关闭 VEIL，避免同时使用这个账号。')
     print('只在新打开的专属窗口中登录 Peter 的独立账号，不使用个人账号。')
     print('本版仅阅读和本地草稿，发布/评论/私信/关注/点赞均关闭。')
+    print('上游使用带指纹一致性功能的 CloakBrowser，并非普通 Chrome 或平台官方 API。')
+    print('请先确认当前平台规则允许这种自动化访问；不允许时请退出，不要登录。')
     print('遇到验证码、实名或风控请由你在平台处理；不要关闭杀毒软件或绕过平台限制。')
-    if input('确认已关闭 VEIL，且准备使用独立账号？输入 LOGIN：').strip() != 'LOGIN':
+    if input('确认访问符合当前平台规则、已关闭 VEIL，且使用独立账号？输入 LOGIN：').strip() != 'LOGIN':
         return
     install(root)
     folder = private_folder(root, 'peter')
