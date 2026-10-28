@@ -1262,6 +1262,7 @@ class Chat:
         self.reply_displayed = False
         self.force_reply = False
         self.reply_later_batch = None
+        self.reply_later_called = False
         self.last_reply_message_id = None
         self.last_reply_request_id = None
         self.autonomy_mode = False
@@ -1635,16 +1636,18 @@ class Chat:
             saved = json.loads((self.store.root / path).read_text(encoding='utf-8'))
         except (OSError, ValueError, TypeError):
             saved = {'pending': [], 'wake_log': []}
-        pending = [x for x in saved.get('pending', []) if isinstance(x, dict) and x.get('state') == 'pending']
+        rows = [x for x in saved.get('pending', []) if isinstance(x, dict)]
+        pending = [x for x in rows if x.get('state') == 'pending']
         if len(pending) >= int((self.cfg.tools or {}).get('reply_later_max_pending', 3)):
             return 'At most 3 reply_later reminders may be pending at once.', '被拒绝', 'reply_later'
         batch = self.reply_later_batch or uuid.uuid4().hex
-        deferrals = sum(1 for x in pending if x.get('batch_id') == batch)
+        deferrals = sum(1 for x in rows if x.get('batch_id') == batch)
         if deferrals >= int((self.cfg.tools or {}).get('reply_later_max_deferrals', 2)):
             return 'The same message batch may be postponed at most 2 times.', '被拒绝', 'reply_later'
-        pending.append({'id': uuid.uuid4().hex, 'batch_id': batch, 'due': due.isoformat(),
-                        'note': args['note'].strip(), 'created_at': current.isoformat(), 'state': 'pending'})
-        self.store.replace(path, {'pending': pending, 'wake_log': saved.get('wake_log', [])})
+        rows.append({'id': uuid.uuid4().hex, 'batch_id': batch, 'due': due.isoformat(),
+                     'note': args['note'].strip(), 'created_at': current.isoformat(), 'state': 'pending'})
+        self.store.replace(path, {'pending': rows, 'wake_log': saved.get('wake_log', [])})
+        self.reply_later_called = True
         self.turn_done = True
         return f'Reminder saved for {due.isoformat()}.', '成功', 'reply_later'
 
@@ -1935,8 +1938,9 @@ class Chat:
         if isinstance(media, dict):
             event['media'] = {key: media[key] for key in ('id', 'filename', 'mime', 'name', 'kind', 'transcript')
                               if isinstance(media.get(key), str)}
-        with saving():
-            self.store.append(self.path, event)
+        # HTTP admission runs on a request thread; Store.append is already synchronized and fsynced.
+        # The signal-masking saving() context is main-thread-only.
+        self.store.append(self.path, event)
         return event['message_id']
 
     def prepare_regeneration(self, message_id):
@@ -2114,6 +2118,7 @@ class Chat:
         self.turn_done = False
         self.force_reply = bool(force_reply)
         self.reply_later_batch = reply_later_batch
+        self.reply_later_called = False
         processing_batch = None
         persisted_ids = [row.get('message_id') for row in (user_events or []) if row.get('persisted')]
         if persisted_ids:
@@ -2350,7 +2355,7 @@ class Chat:
             self.history, self.rounds = self.recent()
             if processing_batch:
                 state = ('replied' if self.sent_messages or (isinstance(reply, str) and reply.strip())
-                         else 'reply_later' if self.reply_later_batch else 'silent')
+                         else 'reply_later' if self.reply_later_called else 'silent')
                 self.store.append(f'{self.cfg.id}/message-processing.jsonl', {
                     'batch_id': processing_batch, 'state': state, 'at': now()})
             if autonomy_handoff_id is not None:
@@ -2748,8 +2753,6 @@ class Chat:
                 if step == max_steps - 1 and summaries:
                     self.output('The tool-step limit for this request has been reached.')
                 break
-            steered = (self.claim_steer() if not autonomy and callable(self.claim_steer)
-                       and step + 1 < max_steps else None)
             if offered is None:
                 final = 'The tool-step limit for this request has been reached.'
                 self.tool_stop_reason = final
@@ -2862,7 +2865,7 @@ class Chat:
                     break
                 if not autonomy and (self.turn_done or self.user_stop.is_set()):
                     if not mixed_sent_messages:
-                        if self.reply_later_batch and not self.user_stop.is_set():
+                        if self.reply_later_called and not self.user_stop.is_set():
                             self.reply_displayed = True
                             self.budget.settle(next_reservation, next_cfg, 0, 0, 0)
                             final = ''
@@ -2873,6 +2876,8 @@ class Chat:
                     break
                 loop_messages.extend(pending_image_messages)
                 pending_image_messages.clear()
+                steered = (self.claim_steer() if not autonomy and callable(self.claim_steer)
+                           and step + 1 < max_steps else None)
                 if steered is not None:
                     if getattr(steered, 'action', None) == 'request_reply':
                         self.force_reply = True

@@ -86,6 +86,51 @@ class FreeReplyTests(unittest.TestCase):
         saved = json.loads((self.store.root / 'test/reply-later.json').read_text(encoding='utf-8'))
         self.assertEqual(saved['pending'][0]['note'], 'think again')
 
+    def test_reply_later_tool_ends_an_ordinary_turn_without_error(self):
+        call = SimpleNamespace(id='later', function=SimpleNamespace(
+            name='reply_later', arguments=json.dumps({'minutes': 5, 'note': 'think again'})))
+        message = SimpleNamespace(content='', tool_calls=[call], model_dump=lambda exclude_none=True: {
+            'role': 'assistant', 'tool_calls': [{'id': 'later', 'type': 'function', 'function': {
+                'name': 'reply_later', 'arguments': call.function.arguments}}]})
+        model = Mock(return_value=(message, 10, 2, 0))
+        chat = Chat(self.cfg, self.store, Budget(self.store), model, output=[].append)
+        self.assertEqual(chat.send('later please'), '')
+        states = self.store.read('test/message-processing.jsonl')
+        self.assertEqual(states[-1]['state'], 'reply_later')
+
+    def test_claimed_reply_later_counts_toward_same_batch_limit(self):
+        chat = Chat(self.cfg, self.store, Budget(self.store), Mock(), output=[].append)
+        chat.reply_later_batch = 'batch'
+        self.store.replace('test/reply-later.json', {'pending': [{
+            'id': 'old', 'batch_id': 'batch', 'due': '2026-10-28T08:00:00+08:00',
+            'note': 'old', 'state': 'claimed'}], 'wake_log': []})
+        self.assertEqual(chat.reply_later(json.dumps({'minutes': 5, 'note': 'second'}))[1], '成功')
+        result, state, _ = chat.reply_later(json.dumps({'minutes': 6, 'note': 'third'}))
+        self.assertEqual(state, '被拒绝')
+        self.assertIn('at most 2', result)
+        saved = json.loads((self.store.root / 'test/reply-later.json').read_text(encoding='utf-8'))
+        self.assertEqual([row['state'] for row in saved['pending']], ['claimed', 'pending'])
+
+    def test_command_waits_behind_current_batch_and_is_not_steered(self):
+        hub = Hub('Test', ActivityState(self.store.root / 'test/state.json'),
+                  media_root=self.store.root / 'test/media')
+        hub.inbox.put(('hello', None, None, 'one', False))
+        hub.inbox.put(('/quit', None, None, 'quit', False))
+        batch = hub._chat_batch(hub.inbox.get_nowait())
+        self.assertEqual(str(batch), 'hello')
+        self.assertIsNone(hub.claim_steer())
+        self.assertEqual(hub.inbox.get_nowait()[0], '/quit')
+
+    def test_media_batch_marks_the_first_persisted_event(self):
+        hub = Hub('Test', ActivityState(self.store.root / 'test/state.json'),
+                  media_root=self.store.root / 'test/media')
+        media = {'id': 'm', 'kind': 'image'}
+        hub.inbox.put(('photo', media, None, 'photo-id', True))
+        hub.inbox.put(('after', None, None, 'after-id', True))
+        batch = hub._chat_batch(hub.inbox.get_nowait())
+        self.assertTrue(batch.user_events[0]['persisted'])
+        self.assertEqual(hub.inbox.get_nowait()[3], 'after-id')
+
 
 if __name__ == '__main__':
     unittest.main()

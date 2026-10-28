@@ -901,11 +901,17 @@ class Hub:
                 self.deferred_outputs = []
         return ChatInput(text, media, complete, message_id, persisted=persisted)
 
+    @staticmethod
+    def _is_command(item):
+        text = item[0] if isinstance(item, tuple) else item
+        return isinstance(text, str) and text.lstrip().startswith('/')
+
     def _chat_batch(self, first):
         rows = [first]
-        while True:
+        while not self._is_command(first):
             with self.inbox.mutex:
-                if not self.inbox.queue or isinstance(self.inbox.queue[0], ChatAction):
+                if (not self.inbox.queue or isinstance(self.inbox.queue[0], ChatAction)
+                        or self._is_command(self.inbox.queue[0])):
                     break
             try:
                 item = self.inbox.get_nowait()
@@ -924,6 +930,9 @@ class Hub:
         if any(row.media for row in converted):
             for row in converted[1:]:
                 self.inbox.put((str(row), row.media, row.complete, row.message_id, row.persisted))
+            converted[0].user_events = [{'content': str(converted[0]), 'message_id': converted[0].message_id,
+                                         'media': converted[0].media, 'persisted': converted[0].persisted}]
+            converted[0].runtime_context = 'Lan is typing.' if self.user_typing else None
             return converted[0]
         text = '\n'.join(f'[Lan message {i + 1}] {row}' for i, row in enumerate(converted))
         def complete(committed):
@@ -1463,6 +1472,10 @@ class Hub:
             return True
 
     def claim_steer(self):
+        with self.inbox.mutex:
+            head = self.inbox.queue[0] if self.inbox.queue else None
+        if head is not None and self._is_command(head):
+            return None
         try:
             first = self.inbox.get_nowait()
         except queue.Empty:
