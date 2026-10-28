@@ -473,4 +473,3 @@ persistent_append_file = "growth-journal.md"
         self.assertEqual((self.lab / 'research/v1.md').read_bytes(), b'original\naddition')
         self.no_approval.assert_not_called()
         self.worker.call.assert_not_called()
-

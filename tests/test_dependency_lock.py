@@ -14,6 +14,8 @@ class DependencyLockTests(unittest.TestCase):
     def test_every_direct_requirement_is_exactly_present_in_lock(self):
         direct = {}
         for line in (ROOT / "requirements.txt").read_text(encoding="utf-8").splitlines():
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
             match = re.match(r"^\s*([A-Za-z0-9_.-]+)==([^\s;]+)", line)
             self.assertIsNotNone(match, f"Direct dependency is not exactly pinned: {line}")
             direct[normalize(match.group(1))] = match.group(2)
@@ -69,4 +71,3 @@ class DependencyLockTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

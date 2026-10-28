@@ -45,4 +45,3 @@ exit /b 1
 echo Setup failed. Your local persona and chat data have not been replaced.
 pause
 exit /b 1
-

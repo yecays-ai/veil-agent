@@ -406,4 +406,3 @@ class LabPreview:
         text = "\n".join(lines).encode("utf-8")[:8192].decode("utf-8", errors="ignore")
         state = "成功" if image_data_uri else "出错"
         return LabPreviewResult(text, image_data_uri), state, args["path"][:180]
-

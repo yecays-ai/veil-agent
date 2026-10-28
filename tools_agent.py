@@ -941,8 +941,9 @@ class FilesystemTools:
         return description
 
     def begin_request(self):
-        if self.lab_preview:
-            self.lab_preview.begin_request()
+        lab_preview = getattr(self, 'lab_preview', None)
+        if lab_preview:
+            lab_preview.begin_request()
         windows_tools = getattr(self, 'windows_tools', None)
         if windows_tools:
             windows_tools.begin_request()
@@ -1578,6 +1579,5 @@ class _McpWorker:
         if self.thread.is_alive() and self.requests is not None:
             self.loop.call_soon_threadsafe(self.requests.put_nowait, None)
             self.thread.join(timeout=10)
-
 
 

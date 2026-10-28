@@ -971,4 +971,3 @@ class WindowsDesktopBackend:
         if len(raw) <= 8 or len(raw) > MAX_SCREENSHOT_BYTES or not raw.startswith(b'\x89PNG\r\n\x1a\n'):
             return None, 'capture was invalid or exceeded 5 MiB'
         return 'data:image/png;base64,' + base64.b64encode(raw).decode('ascii'), None
-
