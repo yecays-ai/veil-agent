@@ -2635,6 +2635,7 @@ class Chat:
         next_reservation = None
         autonomy_tool_steps = 0
         output_recovered = False
+        empty_retries = 0
         mixed_sent_messages = []
         work_since_message = False  # a non-message tool ran after the last sent message
 
@@ -2936,6 +2937,31 @@ class Chat:
                         'Lan pressed Request Reply. This one request must produce actual message text. '
                         'reply_later is unavailable; use send_message with non-empty text before ending.')})
                     continue
+                if (not autonomy and not content.strip() and not mixed_sent_messages
+                        and not self.reply_later_called and not self.silent_chosen):
+                    # Ticket 153: silence is only Peter's when he calls stay_silent. An empty
+                    # answer with no tool call is a provider failure: ask the same step once more.
+                    reasoning = getattr(message, 'reasoning_content', None)
+                    self.store.append(f'{self.cfg.id}/memory/_agent/diagnostics.jsonl', {
+                        'time': now(), 'code': 'empty_reply', 'attempt': empty_retries + 1,
+                        'request_id': request_id, 'step': step, 'model': self.cfg.provider.get('model'),
+                        'finish_reason': finish[0] if finish else None,
+                        'prompt_tokens': prompt, 'completion_tokens': completion,
+                        'reasoning_chars': len(reasoning) if isinstance(reasoning, str) else 0})
+                    if not empty_retries and step + 1 < max_steps:
+                        try:
+                            next_cfg = (self.cfg if step + 1 == max_steps - 1 else replace(
+                                self.cfg, max_output_tokens=self.cfg.tools.get('max_output_tokens', self.cfg.max_output_tokens)))
+                            next_reservation = self.budget.reserve(next_cfg)[0]
+                        except BudgetExceeded:
+                            next_reservation = None
+                        if next_reservation:
+                            empty_retries += 1
+                            self.output('The model returned an empty reply (Peter did not choose silence); asking once more.')
+                            continue
+                    raise RequestFailed(f'模型返回了空内容，Peter 这一轮没有发出消息（不是他选择不回）。'
+                                        f'模型 {self.cfg.provider.get("model")}；详情在 '
+                                        f'data/{self.cfg.id}/memory/_agent/diagnostics.jsonl')
                 if isinstance(content, str) and RAW_DSML_TOOL_CALL.search(content):
                     # Never display provider-internal tool syntax as a reply or feed
                     # it to another parser. Only structured, allowlisted tool_calls

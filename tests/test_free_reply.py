@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 from veil_agent import Budget, Chat, Store, load_character
+from agent_types import RequestFailed
 from web_agent import Hub, ChatAction
 from veil_agent import ActivityState
 
@@ -65,11 +66,27 @@ class FreeReplyTests(unittest.TestCase):
         rows = self.store.read('test/chat.jsonl')
         self.assertEqual([r['content'] for r in rows if r['role'] == 'user'], ['one', 'two'])
 
-    def test_silence_is_success_and_has_no_assistant_row(self):
+    def test_empty_answer_is_asked_once_more_not_taken_as_silence(self):
+        # Ticket 153: only stay_silent is silence; an empty answer is a provider failure.
+        model = Mock(side_effect=[(SimpleNamespace(content='', tool_calls=[]), 10, 2, 0),
+                                  (SimpleNamespace(content='here I am', tool_calls=[]), 10, 2, 0)])
+        shown = []
+        chat = Chat(self.cfg, self.store, Budget(self.store), model, output=shown.append)
+        self.assertEqual(chat.send('hello'), 'here I am')
+        self.assertEqual(model.call_count, 2)
+        self.assertTrue(any('empty reply' in str(item) for item in shown))
+        self.assertEqual(self.store.read('test/message-processing.jsonl')[-1]['state'], 'replied')
+        diagnostics = self.store.read('test/memory/_agent/diagnostics.jsonl')
+        self.assertEqual([row['code'] for row in diagnostics], ['empty_reply'])
+
+    def test_empty_answer_twice_fails_visibly_instead_of_silence(self):
         model = Mock(return_value=(SimpleNamespace(content='', tool_calls=[]), 10, 2, 0))
         chat = Chat(self.cfg, self.store, Budget(self.store), model, output=[].append)
-        self.assertEqual(chat.send('hello'), '')
-        self.assertTrue(chat.reply_displayed)
+        with self.assertRaises(RequestFailed) as caught:
+            chat.send('hello')
+        self.assertIn('不是他选择不回', str(caught.exception))
+        self.assertEqual(model.call_count, 2)
+        self.assertEqual(self.store.read('test/message-processing.jsonl')[-1]['state'], 'failed')
         self.assertEqual([r for r in self.store.read('test/chat.jsonl') if r['role'] == 'assistant'], [])
 
     def test_eleventh_message_is_rejected(self):
