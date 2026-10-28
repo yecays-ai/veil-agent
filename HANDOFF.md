@@ -2,6 +2,7 @@
 
 ## 当前进度
 
+- 工单 143：`_record_tool_result` 对成功的 stay_silent / reply_later 不输出聊天行；`run_chat` 不再输出 `trim_note`（仍计算，见上下文页）。下一个工单号 144。
 - 工单 142：插话重置 send_message 10 条额度（`accept_steer`），第 10 条后 `turn_done`；请求回复按钮改图标（`desktop/icons.js` 加 sparkles）；新工具 `stay_silent`（`silent_chosen` 与 reply_later 同路径静默结束），通知键 `stay_silent_142_announced`。下一个工单号 143。
 - 工单 141：PR #188，分支 `ticket/141-free-reply`。自由对话核心、桌面输入状态/Request Reply、reply_later 持久化与限额已实现；CodeRabbit 五条评论已一次修复，本地全量 629 项通过、7 项跳过，桌面 10 项通过。Claude 接手复审：补 `reply_later` 只传 `cancel: true` 可作废自己挂起的晚点回（不结束本轮），能力通知同步说明，加 1 项回归。Windows `update.bat` 体验仍待 Lan 验收。下一个工单号 142。
 - 工单 140：长期任务进度满 40 条滚动归档（`long-task-progress-archive.jsonl`），同一步先读后确认可通过。下一个工单号 141。

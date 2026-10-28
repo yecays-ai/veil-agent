@@ -2519,7 +2519,9 @@ class Chat:
     def _record_tool_result(self, call, execution, result_state, display_detail, summaries, log_tool):
         from tools_agent import display_call
         name = call.function.name
-        if name != 'send_message' or result_state != '成功':
+        # Ticket 143: a successful message is already its own bubble, and choosing silence or a later reply
+        # should leave nothing in Lan's chat; the activity page still records every call.
+        if name not in ('send_message', 'stay_silent', 'reply_later') or result_state != '成功':
             self.output(display_call(name, execution.summary, result_state,
                                      (display_detail if result_state != '成功' else None)))
         delivery = {'result_state': result_state} if result_state != execution.state else {}
@@ -3130,8 +3132,6 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead, activity=N
                     removed = chat.finish_regeneration(raw_text.payload['remove_ids'])
                     if callable(getattr(chat, 'message_removed', None)):
                         chat.message_removed(removed)
-                    if chat.trim_note:
-                        output(chat.trim_note)
                     if not chat.reply_displayed:
                         output(ChatOutput(f'{chat.cfg.name}: {reply}', message_id=chat.last_reply_message_id,
                                           request_id=chat.last_reply_request_id,
@@ -3224,8 +3224,6 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead, activity=N
                     output(str(exc))
                     notify_dropped()
                     continue
-                if chat.trim_note:
-                    output(chat.trim_note)
                 if not chat.reply_displayed:
                     output(ChatOutput(f'{chat.cfg.name}: {reply}', message_id=chat.last_reply_message_id,
                                       request_id=chat.last_reply_request_id,
