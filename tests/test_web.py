@@ -1109,6 +1109,16 @@ output_cny_per_million = "8"
             self.assertTrue(self.wait(lambda: self.call('/api/events')[1]['busy'] is False))
             barrier = threading.Barrier(3)
             statuses = []
+            # Hold the winner inside its admission write so the loser always meets the
+            # reservation; otherwise a fast winner finishes first and both are accepted.
+            release = threading.Event()
+            persist = self.hub.chat.persist_incoming
+
+            def held_persist(*args, **kwargs):
+                release.wait(5)
+                return persist(*args, **kwargs)
+
+            self.hub.chat.persist_incoming = held_persist
 
             def send(text, request_id):
                 barrier.wait()
@@ -1119,6 +1129,8 @@ output_cny_per_million = "8"
             for thread in threads:
                 thread.start()
             barrier.wait()
+            self.assertTrue(self.wait(lambda: len(statuses) == 1))
+            release.set()
             for thread in threads:
                 thread.join(5)
             result['statuses'] = statuses
