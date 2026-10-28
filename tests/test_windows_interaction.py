@@ -284,6 +284,8 @@ class WindowsInteractionTests(unittest.TestCase):
         args = popen.call_args.args[0]
         self.assertEqual(args[:4], [app['launch_path'], '--guest', '--incognito', '--new-window'])
         self.assertTrue(any(arg.startswith('--user-data-dir=') for arg in args))
+        self.assertIn('--no-first-run', args)
+        self.assertIn('--no-default-browser-check', args)
         self.assertEqual(args[-1], 'https://example.com/')
         self.assertFalse(popen.call_args.kwargs['shell'])
 

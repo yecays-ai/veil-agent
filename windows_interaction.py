@@ -608,8 +608,11 @@ class WindowsInteractionBackend(WindowsDesktopBackend):
                 # regular profile. Guest is preferred; incognito keeps the isolated fallback
                 # private if a Chrome policy disables Guest mode.
                 profile_directory = tempfile.mkdtemp(prefix='veil-chrome-guest-')
+                # A fresh user-data directory counts as a first run; skip Chrome's welcome and
+                # default-browser prompts so the only new window is the requested page.
                 args.extend(['--guest', '--incognito', '--new-window',
-                             f'--user-data-dir={profile_directory}', url])
+                             f'--user-data-dir={profile_directory}', '--no-first-run',
+                             '--no-default-browser-check', url])
             process = subprocess.Popen(args, shell=False, cwd=ntpath.dirname(launch_path),
                                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                        stderr=subprocess.DEVNULL, close_fds=True)
