@@ -93,6 +93,18 @@ class FreeReplyTests(unittest.TestCase):
                                           complete=None, runtime_context=None), 'request')
         self.assertEqual(chat.send_message_count, 0)
 
+    def test_stay_silent_ends_the_turn_showing_nothing(self):
+        call = SimpleNamespace(id='quiet', function=SimpleNamespace(name='stay_silent', arguments='{}'))
+        message = SimpleNamespace(content='', tool_calls=[call], model_dump=lambda exclude_none=True: {
+            'role': 'assistant', 'tool_calls': [{'id': 'quiet', 'type': 'function', 'function': {
+                'name': 'stay_silent', 'arguments': '{}'}}]})
+        shown = []
+        chat = Chat(self.cfg, self.store, Budget(self.store), Mock(return_value=(message, 10, 2, 0)),
+                    output=shown.append)
+        self.assertEqual(chat.send('do not reply'), '')
+        self.assertEqual(self.store.read('test/message-processing.jsonl')[-1]['state'], 'silent')
+        self.assertFalse([row for row in self.store.read('test/chat.jsonl') if row.get('role') == 'assistant'])
+
     def test_reply_later_persists(self):
         chat = Chat(self.cfg, self.store, Budget(self.store), Mock(), output=[].append)
         chat.autonomy_mode = False
