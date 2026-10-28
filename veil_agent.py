@@ -1294,6 +1294,7 @@ class Chat:
         self.last_tool_summaries = []
         self.autonomy_interrupted = False
         self.turn_done = False
+        self.message_turn_done = False
         # Ticket 138: Lan's stop button ends a chat turn between model steps.
         self.user_stop = threading.Event()
         self.runtime_monitor = runtime_monitor
@@ -1609,10 +1610,12 @@ class Chat:
         result = 'Sent as a voice message.' if media else 'Sent.'
         if args.get('done') is True and not autonomy:
             self.turn_done = True
+            self.message_turn_done = True
             result += ' Your turn ends here.'
         elif not autonomy and self.send_message_count >= 10:
             # Ticket 142: the 10th message closes the turn instead of letting later sends bounce.
             self.turn_done = True
+            self.message_turn_done = True
             result += (' That was your 10th message since Lan last wrote, so your turn ends here. '
                        'Anything unsaid can wait for her next message.')
         if forwarded:
@@ -1631,7 +1634,7 @@ class Chat:
             try:
                 saved = json.loads((self.store.root / path).read_text(encoding='utf-8'))
             except (OSError, ValueError, TypeError):
-                return 'No reply_later is pending.', '成功', 'reply_later'
+                saved = {'pending': [], 'wake_log': []}
             dropped = 0
             for row in saved.get('pending', []):
                 if isinstance(row, dict) and row.get('state') == 'pending':
@@ -1639,7 +1642,12 @@ class Chat:
                     dropped += 1
             if dropped:
                 self.store.replace(path, saved)
-            return f'Cancelled {dropped} pending reply_later reminder(s).', '成功', 'reply_later'
+            if self.reply_later_called:
+                self.reply_later_called = False
+                if not self.message_turn_done and not self.silent_chosen:
+                    self.turn_done = False
+            return (f'Cancelled {dropped} pending reply_later reminder(s).' if dropped
+                    else 'No reply_later is pending.'), '成功', 'reply_later'
         if (not isinstance(args, dict) or set(args) - {'minutes', 'at', 'note'}
                 or not isinstance(args.get('note'), str) or not args['note'].strip()
                 or (('minutes' in args) == ('at' in args))):
@@ -2157,6 +2165,7 @@ class Chat:
         self.send_message_count = 0
         self.reply_displayed = False
         self.turn_done = False
+        self.message_turn_done = False
         self.force_reply = bool(force_reply)
         self.reply_later_batch = reply_later_batch
         self.reply_later_called = False
