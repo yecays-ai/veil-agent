@@ -887,6 +887,18 @@ output_cny_per_million = "8"
             self.assertEqual(len(hub.submissions), 2)
             self.assertNotIn('one', hub.submissions)
 
+    def test_failed_media_submission_allows_resubmission_with_same_request_id(self):
+        hub = self.hub
+        hub.busy = False
+        media = hub.save_media('image/png', b'\x89PNG\r\n\x1a\nfictional')
+        self.assertEqual(hub.submit('look at this', 'retry-req-1', media_id=media['id']), 'accepted')
+        self.assertIn('retry-req-1', hub.submissions)
+        committed = hub.media_info(media['id'])
+        hub.finish_media_submission(committed=False, text='look at this', media=committed, request_id='retry-req-1')
+        self.assertNotIn('retry-req-1', hub.submissions)
+        hub.busy = False
+        self.assertEqual(hub.submit('look at this', 'retry-req-1', media_id=media['id']), 'accepted')
+
     def wait(self, predicate, seconds=5):
         end = threading.Event()
         for _ in range(int(seconds * 50)):
@@ -1097,6 +1109,16 @@ output_cny_per_million = "8"
             self.assertTrue(self.wait(lambda: self.call('/api/events')[1]['busy'] is False))
             barrier = threading.Barrier(3)
             statuses = []
+            # Hold the winner inside its admission write so the loser always meets the
+            # reservation; otherwise a fast winner finishes first and both are accepted.
+            release = threading.Event()
+            persist = self.hub.chat.persist_incoming
+
+            def held_persist(*args, **kwargs):
+                release.wait(5)
+                return persist(*args, **kwargs)
+
+            self.hub.chat.persist_incoming = held_persist
 
             def send(text, request_id):
                 barrier.wait()
@@ -1107,6 +1129,8 @@ output_cny_per_million = "8"
             for thread in threads:
                 thread.start()
             barrier.wait()
+            self.assertTrue(self.wait(lambda: len(statuses) == 1))
+            release.set()
             for thread in threads:
                 thread.join(5)
             result['statuses'] = statuses
@@ -1186,6 +1210,29 @@ output_cny_per_million = "8"
         self.assertEqual(self.run_loop(scenario)['messages'], texts)
         self.assertEqual([m['content'] for m in self.store.read('test/chat.jsonl')][1:], texts)
         self.assertEqual(self.model.call_count, 2)
+
+    def test_startup_recovers_uncommitted_incoming_submissions(self):
+        self.store.append('test/incoming-submissions.jsonl', {
+            'role': 'user', 'content': 'saved before crash',
+            'request_id': 'crash-id', 'message_id': 'crash-id',
+            'state': 'received', 'time': '2026-10-28T12:00:00Z'
+        })
+        chat = Chat(self.cfg, self.store, Budget(self.store), self.model)
+        hub = Hub('Test', ActivityState(self.store.root / 'test' / 'res-state.json'),
+                  media_root=self.store.root / 'test' / 'media')
+        hub.chat = chat
+
+        # Simulate the startup recovery block
+        from web_agent import serve_chat
+        with patch('web_agent.run_chat'):
+            serve_chat(chat, hub)
+
+        self.assertFalse(hub.inbox.empty())
+        item = hub.inbox.get_nowait()
+        self.assertEqual(item[0], 'saved before crash')
+        self.assertEqual(item[3], 'crash-id')
+        self.assertIn('crash-id', hub.submissions)
+        self.assertTrue(any(e.get('text') == 'saved before crash' for e in hub.events))
 
 
 class StartupErrorTests(unittest.TestCase):

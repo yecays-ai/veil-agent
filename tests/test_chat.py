@@ -336,6 +336,32 @@ output_cny_per_million = "8"
         self.assertEqual([row['content'] for row in store.read('test/chat.jsonl')
                           if row['role'] == 'assistant'], ['fictional successful bubble'])
 
+    def test_empty_model_reply_does_not_crash_run_chat(self):
+        outputs = []
+        model = Mock(side_effect=[
+            ('', 100, 0, 0),
+            ('normal reply', 100, 10, 0),
+        ])
+        cfg = replace(self.cfg, tools=None)
+        store = Store(self.root / 'empty-reply-data')
+        chat = Chat(cfg, store, Budget(store), model, output=outputs.append)
+
+        run_chat(chat, Mock(side_effect=['first request', 'second request', '/quit']), outputs.append)
+
+        self.assertTrue(any('接口没有返回文字回复' in str(item) for item in outputs))
+        self.assertTrue(any('normal reply' in str(item) for item in outputs))
+
+    def test_storage_user_error_propagates_out_of_run_chat(self):
+        outputs = []
+        cfg = replace(self.cfg, tools=None)
+        store = Store(self.root / 'storage-error-data')
+        chat = Chat(cfg, store, Budget(store), Mock(), output=outputs.append)
+        chat.send = Mock(side_effect=UserError('花费账本无法核对，已停止；请保留 data 文件夹。'))
+
+        with self.assertRaises(UserError) as cm:
+            run_chat(chat, Mock(side_effect=['test request']), outputs.append)
+        self.assertIn('已停止', str(cm.exception))
+
     def test_current_capability_snapshot_tracks_removed_tools_and_service_failure(self):
         files = SimpleNamespace(tools=[SimpleNamespace(name='search_files',
             description='Search configured folder.', inputSchema={'type': 'object'})],
