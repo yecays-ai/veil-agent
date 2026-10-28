@@ -3267,6 +3267,10 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead, activity=N
                     notify_dropped()
                     continue
                 except UserError as exc:
+                    # Storage and accounting errors stop the session rather than
+                    # permitting a subsequent request on uncertain local state.
+                    if '接口没有返回文字回复' not in str(exc):
+                        raise
                     chat.history, chat.rounds = chat.recent()
                     output(str(exc))
                     notify_dropped()

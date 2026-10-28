@@ -11,13 +11,14 @@
 
 - **聊天连发、插话与历史保序（Bug A）**：
   - 根因：`submit()` 在接收到 HTTP 请求后立即调用 `persist_incoming()` 写入 `chat.jsonl`，导致正在生成的上一轮 assistant 回复被追加到新 user 消息之后，造成 `[User 1, User 2, Assistant 1]` 的错序；后续轮次因为尾部切片比较不匹配，导致历史记录将 User 2 重复打包进 prompt，界面刷新后问答归组也错乱。
-  - 修复：将 `persist_incoming()` 的准入持久化与 `chat.jsonl` 正式对话历史解耦。接收消息时先写入 `data/<character>/incoming-submissions.jsonl` 保证崩溃安全性，不污染对话历史；仅在消息真正开始生成或被插话（`_send` / `accept_steer`）时才正式 commit 并写入 `chat.jsonl`。服务重启时通过 `recover_uncommitted_incoming()` 自动补录未提交消息，保证零丢消息、严格时序与模型 prompt 不重复。
+  - 修复：将 `persist_incoming()` 的准入持久化与 `chat.jsonl` 正式对话历史解耦。接收消息时先写入 `data/<character>/incoming-submissions.jsonl` 保证崩溃安全性，不污染对话历史；仅在消息真正开始生成或被插话（`_send` / `accept_steer`）时才正式 commit 并写入 `chat.jsonl`。服务重启时通过 `recover_uncommitted_incoming()` 自动补录排队中未进入生成轮次的消息，保证排队消息不丢失且严格时序、模型 prompt 不重复。
+  - 边界说明：消息写入 `chat.jsonl` 后已作为历史保存。若崩溃发生在模型生成中途，该消息会作为历史中尚未有回复的记录呈现，系统重启后不会自动触发补生成回复（避免潜在的外部工具二次调用与重复费用），此情况属于已留存历史但未自动补全回复的已知边界。
 - **短期便签费用预留结算（Bug B）**：
   - 根因：`short_term_notes.py` 中 `_call_extractor` 调用 `budget.reserve()` 后，若模型请求超时或抛出异常，`budget.settle()` 被跳过且异常被外层静默吞掉，导致预留永久留在 `pending`，累积后触发总预算上限锁死正常聊天。
   - 修复：在 `_call_extractor` 捕获异常处调用 `budget.settle_estimate(...)` 保守结算已预留费用，避免 `pending` 泄露；并在 `ShortTermNotes.__init__` 初始化时调用 `budget.reconcile_unsettled({COST_ACCOUNTING})` 自动对账清理历史遗留未结预留。
 - **空模型回复服务崩溃防护（Bug C）**：
   - 根因：`veil_agent.py` 的 `run_chat` 文本分支仅捕获 `TooLong` 和 `RequestFailed`，未捕获模型空回复抛出的 `UserError`，导致异常溢出到 `serve_chat()` 的 `finally: hub.request_stop()`，彻底终止后台服务。
-  - 修复：增加 `except UserError as exc:` 异常捕获，重置并同步内存轮次状态（`chat.history, chat.rounds = chat.recent()`），将错误原因输出到聊天界面并通知丢弃输入，保持聊天循环正常运转。
+  - 修复：增加对模型空回复 `UserError`（`接口没有返回文字回复`）的针对性捕获，重置并同步内存轮次状态（`chat.history, chat.rounds = chat.recent()`），将错误原因输出到聊天界面并通知丢弃输入，保持聊天循环正常运转；其他涉及存储破坏、账本无法核对等致命 `UserError` 保持正常抛出，避免掩盖数据不一致。
 - 涉及文件：`veil_agent.py`、`short_term_notes.py`、`web_agent.py`、`tests/test_chat.py`、`tests/test_free_reply.py`、`tests/test_live_context.py`、`tests/test_web.py`。
 
 ## 验收
