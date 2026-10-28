@@ -345,3 +345,153 @@ class FreeReplyTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class _Said(str):
+    """A steered Lan message as the hub hands it over."""
+
+
+def _tool_message(*calls):
+    rows = [{'id': call_id, 'type': 'function', 'function': {'name': name, 'arguments': json.dumps(args)}}
+            for call_id, name, args in calls]
+    tool_calls = [SimpleNamespace(id=row['id'], function=SimpleNamespace(
+        name=row['function']['name'], arguments=row['function']['arguments'])) for row in rows]
+    return SimpleNamespace(content='', tool_calls=tool_calls,
+                           model_dump=lambda exclude_none=True: {'role': 'assistant', 'tool_calls': rows})
+
+
+def _text_message(text):
+    return SimpleNamespace(content=text, tool_calls=None,
+                           model_dump=lambda exclude_none=True: {'role': 'assistant', 'content': text})
+
+
+class LanWroteMeanwhileTests(unittest.TestCase):
+    """Ticket 150: words Lan sends while a step is generating reach Peter in the same turn."""
+
+    setUp = FreeReplyTests.setUp
+
+    def chat_with(self, replies, waiting):
+        prompts = []
+
+        def model(messages, **kwargs):
+            prompts.append(list(messages))
+            return (replies[len(prompts) - 1], 10, 2, 0)
+
+        shown = []
+        chat = Chat(self.cfg, self.store, Budget(self.store), model, output=shown.append)
+        queue = [_Said(text) for text in waiting]
+        chat.steer_pending = lambda: bool(queue)
+        chat.claim_steer = lambda: queue.pop(0) if queue else None
+        return chat, prompts
+
+    def assistant_rows(self):
+        return [row['content'] for row in self.store.read('test/chat.jsonl') if row.get('role') == 'assistant']
+
+    def test_done_does_not_end_the_turn_over_her_newer_message(self):
+        chat, prompts = self.chat_with([
+            _tool_message(('a', 'send_message', {'text': 'about dragons', 'done': True})),
+            _tool_message(('b', 'send_message', {'text': 'oh, the money. sorry', 'done': True})),
+        ], ['wait, my money!!'])
+        self.assertEqual(chat.send('so, 一言难尽'), 'oh, the money. sorry')
+        self.assertEqual(len(prompts), 2)
+        self.assertIn('wait, my money!!', prompts[1][-1]['content'])
+        self.assertEqual(self.assistant_rows(), ['about dragons', 'oh, the money. sorry'])
+
+    def test_plain_reply_is_shown_then_her_new_message_is_answered(self):
+        chat, prompts = self.chat_with([_text_message('first thought'), _text_message('and to that: yes')],
+                                       ['also this'])
+        self.assertEqual(chat.send('hi'), 'and to that: yes')
+        self.assertEqual(len(prompts), 2)
+        self.assertEqual(self.assistant_rows(), ['first thought', 'and to that: yes'])
+        users = [row['content'] for row in self.store.read('test/chat.jsonl') if row.get('role') == 'user']
+        self.assertEqual(users, ['hi', 'also this'])
+
+    def test_plain_text_after_steer_is_not_swallowed_as_restatement(self):
+        chat, prompts = self.chat_with([
+            _tool_message(('a', 'send_message', {'text': 'bubble one'})),
+            _text_message('answer to the new thing'),
+        ], ['new thing'])
+        self.assertEqual(chat.send('hi'), 'answer to the new thing')
+        self.assertEqual(self.assistant_rows(), ['bubble one', 'answer to the new thing'])
+
+    def test_silence_is_reconsidered_when_she_writes_again(self):
+        chat, prompts = self.chat_with([
+            _tool_message(('a', 'stay_silent', {})),
+            _tool_message(('b', 'send_message', {'text': 'ok ok I am here', 'done': True})),
+        ], ['TALK BACK NOW'])
+        self.assertEqual(chat.send('do not reply'), 'ok ok I am here')
+        self.assertEqual(self.store.read('test/message-processing.jsonl')[-1]['state'], 'replied')
+
+    def test_nothing_waiting_ends_the_turn_as_before(self):
+        chat, prompts = self.chat_with([_text_message('just this')], [])
+        self.assertEqual(chat.send('hi'), 'just this')
+        self.assertEqual(len(prompts), 1)
+        self.assertEqual(self.assistant_rows(), ['just this'])
+
+
+class WaitWhileLanTypesTests(unittest.TestCase):
+    """Ticket 150: Peter starts only once Lan is not typing her next line."""
+
+    setUp = FreeReplyTests.setUp
+
+    def hub(self):
+        return Hub('Test', ActivityState(self.store.root / 'test/state.json'),
+                   media_root=self.store.root / 'test/media')
+
+    def test_lines_sent_while_she_keeps_typing_are_read_together(self):
+        import threading
+        import time
+        from unittest.mock import patch
+        hub = self.hub()
+        hub.inbox.put(('wait', None, None, 'id-1', False))
+        hub.set_typing(True)
+
+        def keep_typing_then_send():
+            for _ in range(5):
+                time.sleep(0.1)
+                hub.set_typing(True)
+            hub.inbox.put(('listen to me', None, None, 'id-2', False))
+            hub.set_typing(False)
+
+        worker = threading.Thread(target=keep_typing_then_send)
+        with patch('web_agent.TYPING_GRACE_SECONDS', 0.2), patch('web_agent.TYPING_ACTIVE_SECONDS', 0.3):
+            worker.start()
+            batch = hub._input_fn()
+        worker.join()
+        self.assertEqual([row['content'] for row in batch.user_events], ['wait', 'listen to me'])
+
+    def test_no_typing_starts_right_after_the_grace(self):
+        import time
+        from unittest.mock import patch
+        hub = self.hub()
+        hub.inbox.put(('hi', None, None, 'id-1', False))
+        with patch('web_agent.TYPING_GRACE_SECONDS', 0.2):
+            started = time.monotonic()
+            batch = hub._input_fn()
+        self.assertEqual(str(batch), 'hi')
+        self.assertLess(time.monotonic() - started, 1.5)
+
+    def test_an_untouched_draft_does_not_hold_him(self):
+        import time
+        from unittest.mock import patch
+        hub = self.hub()
+        hub.set_typing(True)
+        hub.typed_at = time.monotonic() - 10
+        hub.inbox.put(('hi', None, None, 'id-1', False))
+        with patch('web_agent.TYPING_GRACE_SECONDS', 0.2), patch('web_agent.TYPING_ACTIVE_SECONDS', 0.3):
+            started = time.monotonic()
+            batch = hub._input_fn()
+        self.assertEqual(str(batch), 'hi')
+        self.assertEqual(batch.runtime_context, 'Lan is typing.')
+        self.assertLess(time.monotonic() - started, 1.5)
+
+    def test_request_reply_does_not_wait_for_typing(self):
+        import time
+        hub = self.hub()
+        hub.set_typing(True)
+        hub.inbox.put(('hi', None, None, 'id-1', False))
+        hub.inbox.put(ChatAction('request_reply', {}))
+        started = time.monotonic()
+        batch = hub._input_fn()
+        self.assertEqual(str(batch), 'hi')
+        self.assertLess(time.monotonic() - started, 1.0)

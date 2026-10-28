@@ -1145,13 +1145,17 @@ box.addEventListener('keydown',e=>{
   if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing&&e.keyCode!==229){e.preventDefault();if(!speechIsActive())send()}
 });
 box.addEventListener('input',()=>{resizeBox();if(speechDraftActive)saveSpeechDraft(box.value)});
-let typingTimer=null,lastTyping=null;
+let typingTimer=null,lastTyping=null,lastTypingAt=0;
 function reportTyping(value){
-  if(value===lastTyping)return;lastTyping=value;api('/api/typing',{typing:value}).catch(()=>{});
+  // Ticket 150: keep telling the service while keys are still being pressed, so Peter waits for her next line.
+  const now=Date.now();
+  if(value===lastTyping&&!(value&&now-lastTypingAt>1000))return;
+  lastTyping=value;lastTypingAt=now;api('/api/typing',{typing:value}).catch(()=>{});
 }
 box.addEventListener('input',()=>{
   if(typingTimer)clearTimeout(typingTimer);
-  typingTimer=setTimeout(()=>reportTyping(box.value.length>0),180);
+  if(box.value.length>0)reportTyping(true);
+  else typingTimer=setTimeout(()=>reportTyping(box.value.length>0),180);
 });
 $('request-reply').onclick=async()=>{
   if(stopping||stopped)return;

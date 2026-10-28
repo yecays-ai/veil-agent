@@ -1066,6 +1066,8 @@ output_cny_per_million = "8"
             result['first'] = self.call('/api/send', {'text': 'one', 'request_id': 'one'})[0]
             result['duplicate'] = self.call('/api/send', {'text': 'one', 'request_id': 'one'})[0]
             result['conflict'] = self.call('/api/send', {'text': 'different', 'request_id': 'one'})[0]
+            # Ticket 150: Peter starts on "one" after the short typing grace; "two" then arrives mid-reply.
+            self.assertTrue(self.wait(lambda: self.model.call_count == 1))
             result['second'] = self.call('/api/send', {'text': 'two', 'request_id': 'two'})[0]
             gate.set()
             self.assertTrue(self.wait(lambda: self.call('/api/events')[1]['busy'] is False))

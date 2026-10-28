@@ -43,6 +43,12 @@ MAX_ACTIVE_VOICE_TRANSCRIPTIONS = 4
 MAX_PENDING_MEDIA = 32
 PENDING_MEDIA_TTL = 60 * 60
 MAX_SUBMISSIONS = 1024
+# Ticket 150: Peter waits only while Lan is actually typing. A keystroke counts as typing for
+# a few seconds; a draft she leaves alone does not hold him. The grace lets her next keystroke
+# arrive after she presses send; the ceiling only guards a stuck typing signal.
+TYPING_ACTIVE_SECONDS = 4.0
+TYPING_GRACE_SECONDS = 2.0
+TYPING_MAX_WAIT_SECONDS = 90.0
 MEDIA_ID_PATTERN = re.compile(r'^[0-9a-f]{32}$')
 MEDIA_TYPES = {
     'image/png': ('.png', b'\x89PNG\r\n\x1a\n'),
@@ -171,6 +177,7 @@ class Hub:
         self.submissions = OrderedDict()  # recent request ids -> normalized text digest
         self.submission_pending = False  # admission reserved while media storage runs
         self.user_typing = False
+        self.typed_at = None
         self.autonomy = None
         self.glance = None
         self.codex_watch = None
@@ -906,6 +913,28 @@ class Hub:
         text = item[0] if isinstance(item, tuple) else item
         return isinstance(text, str) and text.lstrip().startswith('/')
 
+    def _wait_while_lan_types(self):
+        # Ticket 150: while Lan is still typing her next line, Peter waits and reads the lines together.
+        # This follows her keystrokes, not a fixed window: no typing means he starts right away.
+        arrived = time.monotonic()
+        queued = None
+        with self.cond:
+            while not (self.stopping or self.stopped):
+                current = time.monotonic()
+                with self.inbox.mutex:
+                    if len(self.inbox.queue) != queued:
+                        queued, arrived = len(self.inbox.queue), current
+                    head = self.inbox.queue[0] if self.inbox.queue else None
+                if isinstance(head, ChatAction) or (head is not None and self._is_command(head)):
+                    return
+                typing = (self.user_typing and self.typed_at is not None
+                          and current - self.typed_at < TYPING_ACTIVE_SECONDS)
+                if current - arrived >= TYPING_GRACE_SECONDS and not typing:
+                    return
+                if current - arrived >= TYPING_MAX_WAIT_SECONDS:
+                    return
+                self.cond.wait(0.1)
+
     def _chat_batch(self, first):
         if isinstance(first, ChatAction):
             return first
@@ -1123,6 +1152,8 @@ class Hub:
                     with self.cond:
                         self.busy = True
                     return text
+                if not self._is_command(text):
+                    self._wait_while_lan_types()
                 with self.cond:
                     self.busy = True
                 item = self._chat_batch(text)
@@ -1168,10 +1199,14 @@ class Hub:
                 if self.stopping or self.stopped:
                     raise EOFError
                 continue
+            if isinstance(text, ChatAction):
+                with self.cond:
+                    self.busy = True
+                return text
+            if not self._is_command(text):
+                self._wait_while_lan_types()
             with self.cond:
                 self.busy = True
-            if isinstance(text, ChatAction):
-                return text
             item = self._chat_batch(text)
             if item is not None:
                 return item
@@ -1464,6 +1499,8 @@ class Hub:
             if self.stopping or self.stopped:
                 return False
             self.user_typing = bool(typing)
+            self.typed_at = time.monotonic() if typing else None
+            self.cond.notify_all()
             return True
 
     def request_reply(self):
@@ -1475,6 +1512,11 @@ class Hub:
                 self.autonomy_interrupted.set()
             self.busy = True
             return True
+
+    def steer_pending(self):
+        # Ticket 150: a cheap look, without taking anything, at whether Lan's words are waiting.
+        with self.inbox.mutex:
+            return bool(self.inbox.queue) and not self._is_command(self.inbox.queue[0])
 
     def claim_steer(self):
         with self.inbox.mutex:
@@ -2028,6 +2070,7 @@ def start_server(hub, token, port):
 def serve_chat(chat, hub, channels=()):
     hub.chat = chat
     chat.claim_steer = hub.claim_steer
+    chat.steer_pending = hub.steer_pending
     if getattr(chat.cfg, 'models', None) is not None:
         hub.background_running = chat.cfg.models.chosen('background')[0]
         hub.refresh_models()
@@ -2040,6 +2083,9 @@ def serve_chat(chat, hub, channels=()):
         announce_stay_silent = getattr(files, 'announce_stay_silent', None)
         if callable(announce_stay_silent):
             announce_stay_silent()
+        announce_typing_wait = getattr(files, 'announce_typing_wait', None)
+        if callable(announce_typing_wait):
+            announce_typing_wait()
         chat.pending_capability_event = getattr(chat.tools, 'capability_event', None)
         chat.pending_capability_event_model = getattr(chat.tools, 'capability_event_model', None)
     if (getattr(files, 'lab', None) is not None and
