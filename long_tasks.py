@@ -315,20 +315,27 @@ class LongTaskStore:
                 return 'There is no pending operation to verify.', '被拒绝', task['title']
             if resolve and args.get('pending_operation_id') != self._operation_id(task['task_id'], task['pending_action']):
                 return 'The pending operation ID does not match.', '被拒绝', task['title']
-            if resolve and (task['pending_action'].get('verified_in_step') is None
-                            or self.current_tool_step <= task['pending_action']['verified_in_step']):
-                return ('First use a read-only tool to inspect the target for the pending operation, then submit evidence based on the read result in a later tool step.'
-                        ''), '被拒绝', task['title']
+            # Ticket 140: the program itself has matched the read against the expected effect, so a
+            # read earlier in the same step (or any earlier step of this run) is enough.
+            if resolve and task['pending_action'].get('verified_in_step') is None:
+                return ('First read the target of the pending operation with a read-only tool '
+                        '(it can be earlier in the same step), then resolve it.'), '被拒绝', task['title']
             if status == 'completed' and not progress:
                 return 'To mark the task complete, include verifiable final-result evidence in this progress_update.', '被拒绝', task['title']
             if task['pending_action'] and status == 'completed' and not resolve:
                 return 'The task cannot be marked complete while an operation remains unverified.', '被拒绝', task['title']
             if progress:
-                if len(task['progress']) >= MAX_PROGRESS_ITEMS:
-                    if status != 'completed':
-                        return 'The progress evidence limit has been reached. Summarize existing evidence with progress_update before adding more.', '被拒绝', task['title']
+                if len(task['progress']) >= MAX_PROGRESS_ITEMS and status == 'completed':
                     task['completion_evidence'] = progress.strip()
                 else:
+                    if len(task['progress']) >= MAX_PROGRESS_ITEMS:
+                        # Ticket 140: keep the newest entries here; older ones move to an archive
+                        # file instead of refusing new progress.
+                        overflow = task['progress'][:len(task['progress']) - MAX_PROGRESS_ITEMS + 1]
+                        for item in overflow:
+                            self.store.append(f'{self.character_id}/long-task-progress-archive.jsonl',
+                                              {'task_id': task['task_id'], 'title': task['title'], **item})
+                        task['progress'] = task['progress'][len(overflow):]
                     task['progress'].append({'time': now(), 'text': progress.strip()})
             if resolve:
                 pending = task['pending_action']
