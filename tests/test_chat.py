@@ -292,24 +292,45 @@ output_cny_per_million = "8"
         self.assertTrue(any('send_message requires non-empty text' in str(item) for item in outputs))
         self.assertFalse(any('must not replace the real error' in str(item) for item in outputs))
 
-    def test_raw_fullwidth_dsml_calls_marker_is_blocked_from_chat_history(self):
-        raw = ('<｜｜DSML｜｜ calls> <｜｜DSML｜｜ invoke name="trace">'
-               'parameter name="bucket_id" string="true">fictional</parameter>')
-        response = SimpleNamespace(content=raw, tool_calls=[])
-        model = Mock(return_value=(response, 100, 20, 0))
+    def test_raw_tool_call_text_formats_are_blocked_from_chat_history(self):
+        cases = {
+            'fullwidth_dsml': ('<｜｜DSML｜｜ calls> <｜｜DSML｜｜ invoke name="trace">'
+                               'parameter name="bucket_id" string="true">fictional</parameter>'),
+            'send_message_arguments': (
+                '调用 send_message（参数： done: false, text: "fictional message"）'),
+            'numbered_message_batch': (
+                '[Message 1] fictional message one\n[Message 2] fictional message two\n'
+                'done: true'),
+        }
+        cfg = replace(self.cfg, tools={'enabled': True, 'max_steps': 2})
         tools = SimpleNamespace(tools=[], capability_event=None, capability_event_model=None,
                                 capability_record=None, consume_capability_event=Mock())
-        cfg = replace(self.cfg, tools={'enabled': True, 'max_steps': 2})
-        store = Store(self.root / 'raw-dsml-data')
-        output = []
-        chat = Chat(cfg, store, Budget(store), model, tools=tools, output=output.append)
 
-        reply = chat.send('请继续处理虚构请求')
+        for label, raw in cases.items():
+            with self.subTest(format=label):
+                response = SimpleNamespace(content=raw, tool_calls=[])
+                model = Mock(return_value=(response, 100, 20, 0))
+                store = Store(self.root / f'raw-{label}-data')
+                output = []
+                chat = Chat(cfg, store, Budget(store), model, tools=tools, output=output.append)
 
-        self.assertNotIn(raw, reply)
-        self.assertNotIn(raw, '\n'.join(map(str, output)))
-        self.assertNotIn(raw, json.dumps(store.read('test/chat.jsonl'), ensure_ascii=False))
-        self.assertIn('no tools ran', reply)
+                reply = chat.send('请继续处理虚构请求')
+
+                self.assertNotIn(raw, reply)
+                self.assertNotIn(raw, '\n'.join(map(str, output)))
+                self.assertNotIn(raw, json.dumps(store.read('test/chat.jsonl'), ensure_ascii=False))
+                self.assertIn('未执行', reply)
+                diagnostic = store.read('test/memory/_agent/diagnostics.jsonl')[-1]
+                self.assertEqual(diagnostic['code'], 'raw_tool_call_text')
+                self.assertNotIn('content', diagnostic)
+
+    def test_plain_tool_name_mention_is_not_treated_as_raw_tool_call_text(self):
+        from veil_agent import raw_tool_call_text_format
+
+        self.assertIsNone(raw_tool_call_text_format(
+            'Peter explained that send_message can send up to three separate messages.'))
+        self.assertIsNone(raw_tool_call_text_format(
+            'Lan asked what the text "done: true" means in a tool example.'))
 
     def test_partial_send_message_failures_remain_visible_without_aggregate_reply(self):
         outputs = []

@@ -30,6 +30,12 @@ MAX_PHOTO_BYTES = 5 * 1024 * 1024
 
 RAW_DSML_TOOL_CALL = re.compile(
     r'<\s*[|｜]+\s*DSML\s*[|｜]+\s*(?:tool_calls?|function_calls?|invoke|calls)\b', re.IGNORECASE)
+RAW_SEND_MESSAGE_TEXT_CALL = re.compile(
+    r'\bsend_message\s*[（(]\s*(?:参数\s*[:：]\s*)?'
+    r'(?:done\s*[:：=]\s*(?:true|false)\b|text\s*[:：=])', re.IGNORECASE)
+RAW_MESSAGE_BATCH_TEXT = re.compile(
+    r'(?is)(?=.*\[\s*message\s+1\s*\])(?=.*\[\s*message\s+2\s*\])'
+    r'(?=.*\bdone\s*[:：=]\s*(?:true|false)\b)')
 CJK_TEXT = re.compile(r'[\u3400-\u9fff]')
 TOOL_DATA_RESULTS = {'read_text_file', 'read_multiple_files', 'directory_tree', 'list_directory',
                      'list_directory_with_sizes', 'get_file_info', 'search_files', 'memory_read',
@@ -39,6 +45,19 @@ SENSITIVE_ACTIVITY_VALUE = re.compile(
     r'(?i)(api[_ -]?key|password|passwd|secret|access[_ -]?token|authorization|bearer)'
     r'(\s*[=:]\s*|\s+)[^\s,;]{4,}')
 OPAQUE_ACTIVITY_TOKEN = re.compile(r'\b(?:sk|ghp|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{12,}\b')
+
+
+def raw_tool_call_text_format(content):
+    """Identify common plain-text serializations of tool calls; never parse or execute them."""
+    if not isinstance(content, str):
+        return None
+    if RAW_DSML_TOOL_CALL.search(content):
+        return 'dsml'
+    if RAW_SEND_MESSAGE_TEXT_CALL.search(content):
+        return 'send_message_arguments'
+    if RAW_MESSAGE_BATCH_TEXT.search(content):
+        return 'numbered_message_batch'
+    return None
 
 
 def _sensitive_activity_key(key):
@@ -2982,12 +3001,19 @@ class Chat:
                     raise RequestFailed(f'模型返回了空内容，Peter 这一轮没有发出消息（不是他选择不回）。'
                                         f'模型 {self.cfg.provider.get("model")}；详情在 '
                                         f'data/{self.cfg.id}/memory/_agent/diagnostics.jsonl')
-                if isinstance(content, str) and RAW_DSML_TOOL_CALL.search(content):
+                raw_tool_format = raw_tool_call_text_format(content)
+                if raw_tool_format:
                     # Never display provider-internal tool syntax as a reply or feed
                     # it to another parser. Only structured, allowlisted tool_calls
                     # reach the existing permission and budget checks above.
-                    final = 'The model returned tool-call text that was not executed; no tools ran. Check /cost before retrying.'
+                    final = '接口返回了无法识别的工具调用文本；这段内容未执行，请重试。'
                     self.tool_stop_reason = final
+                    self.store.append(f'{self.cfg.id}/memory/_agent/diagnostics.jsonl', {
+                        'time': now(), 'code': 'raw_tool_call_text',
+                        'format': raw_tool_format, 'request_id': request_id, 'step': step,
+                        'model': self.cfg.provider.get('model'),
+                        'finish_reason': finish[0] if finish else None,
+                        'content_chars': len(content)})
                 else:
                     final = content
                     if not autonomy and not final.strip() and not self.force_reply:
@@ -2999,7 +3025,7 @@ class Chat:
                     if not autonomy and final in mixed_sent_messages:
                         # This exact message is already visible from send_message.
                         self.reply_displayed = True
-                if (isinstance(content, str) and not RAW_DSML_TOOL_CALL.search(content)
+                if (isinstance(content, str) and not raw_tool_format
                         and lan_wrote_meanwhile(step)):
                     try:
                         next_cfg = (self.cfg if step + 1 == max_steps - 1 else replace(
