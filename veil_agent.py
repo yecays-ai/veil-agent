@@ -1345,9 +1345,9 @@ class Chat:
             if function['name'] in ('write_file', 'append_file', 'long_task_update', 'hold', 'trace', 'letter_write'):
                 function = dict(function)
                 function['description'] += (
-                    f' Output budget: {(self.cfg.tools or {}).get("max_output_tokens", self.cfg.max_output_tokens)} tokens. '
-                    'Keep new text under 1500 characters per call; persist one verified slice at a time. '
-                    'Do not reproduce whole files or inventories in arguments.')
+                    f' Up to 1500 new characters per call (output budget '
+                    f'{(self.cfg.tools or {}).get("max_output_tokens", self.cfg.max_output_tokens)} tokens); '
+                    'write long work in slices, never whole files.')
                 schema['function'] = function
         return schemas
 

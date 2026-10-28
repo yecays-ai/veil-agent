@@ -661,11 +661,24 @@ class OmbreToolGuardTests(unittest.TestCase):
                              'anchor', 'release', 'plan', 'pulse')).issubset(names))
         self.assertNotIn('grow', names)
         trace = next(t for t in self.tools.native.tools if t.name == 'trace')
-        self.assertTrue(trace.description.startswith('upstream trace'))
-        self.assertIn('content changes the memory body', trace.description)
+        # Ticket 145: short English description instead of Ombre's docstring; same parameters.
+        self.assertNotIn('upstream trace', trace.description)
+        self.assertLess(len(trace.description.encode('utf-8')), 2200)
         self.assertIn('meaning_append/meaning_replace', trace.description)
         self.assertIn('why_remembered', trace.description)
         self.assertIn('edit_reason', trace.inputSchema['properties'])
+        for refused in ('hard_delete', 'deletion_request_id', 'deletion_decision', 'deletion_ai_reason'):
+            self.assertNotIn(refused, trace.inputSchema['properties'])
+        from memory_native import ombre_tool_for_model
+        stripped = ombre_tool_for_model(SimpleNamespace(name='trace', description='上游', inputSchema={
+            'title': 'traceArguments', 'type': 'object', 'properties': {
+                'bucket_id': {'title': 'Bucket Id', 'type': 'string'},
+                'hard_delete': {'title': 'Hard Delete', 'type': 'boolean'}}}))
+        self.assertEqual(stripped.inputSchema['properties']['bucket_id'], {'type': 'string'})
+        self.assertNotIn('hard_delete', stripped.inputSchema['properties'])
+        self.assertNotIn('title', stripped.inputSchema)
+        for tool in self.tools.native.tools:
+            self.assertFalse(re.search(r'[\u4e00-\u9fff]', tool.description), tool.name)
 
     def test_hold_target_archives_complete_markdown_before_append(self):
         original = ('---\nid: mem001\ntitle: Old title\ntags: [keep]\n'
