@@ -2,6 +2,7 @@
 
 ## 当前进度
 
+- 工单 153：聊天轮里模型返回空正文且没有工具调用、Peter 也没调用 `stay_silent`/`reply_later`、本轮没发过消息时，视为接口故障：写 `data/<id>/memory/_agent/diagnostics.jsonl`（code `empty_reply`，finish_reason、tokens、reasoning 长度），用同一组消息重问一次（约 ¥0.015/次）；仍空则抛 `RequestFailed`（处理状态 `failed`，Lan 看到提示）。沉默只来自 `stay_silent`。起因：抗截断 gemini 通道 10-28 晚 27 轮里 7 轮空回复被当成不回。下一个工单号 154。
 - 工单 152：`long_tasks.finish_tool` 工具返回成功即清除 pending（只有出错/不确定/中断才需读回核对）；新模块 `thoughts.py`（`ThoughtIndex`，工具 `thought`，`data/<id>/thoughts.json`，passing 3 天无触碰消失、touch 3 次转 kept、done/dropped 30 天清除、上限 40 条活跃；`wake_text()` 最多 2 条、24 小时不重复）；`autonomy._lab_context` 改为最近 12 个文件列表 + 最新文件前 600 字节；`autonomy.jsonl` 新增 `model`；通知 `wake_freedom_152_announced`（`web_agent` 启动时与 150 通知一起排队）。下一个工单号 153。
 - 工单 151：分支 `ticket/151-windows-permissions`，PR #198 已开放，目标 `main` 基于 `e23a373`。新增 `DesktopFileReadTools`（独立只读目录权限）、Chrome Guest 公开 URL 新窗口（复用现有 Windows 观察）和 `WindowsMediaTools`（GSMTC）；桌面读取与媒体读取分别配置开关，Chrome 控件及窗口管理动作不在白名单。Chrome 使用 `--guest --incognito`、每次独立的临时用户数据目录（进程退出清理），不读 Lan 的 Chrome 资料或 Cookie，不复用/激活 Lan 现有窗口；必须检测到新窗口才报告成功，未安装、进程启动失败和窗口未出现均明确报错。针对性回归共 58 项，56 项通过、2 项因环境不能创建链接而跳过；`py_compile` 与 `diff --check` 通过。首次 GitHub API 上传审查因认为含历史会话链接的状态/交接记录未获明确外发授权而拒绝；Lan 随后明确授权保留记录并创建 PR，正常 Git 推送已成功。PR 最新提交自动检查待完成；此前全量套件未能在约 45 秒内完成，未取得结果。Lan 实际 Windows 验收尚未发生，PR 保持开放。
 - 工单 150 已由 PR #197 合并（`e23a373`）；该提交的 5 项 GitHub 检查全部通过，Lan Windows 体验待验收。
