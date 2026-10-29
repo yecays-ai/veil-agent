@@ -67,6 +67,10 @@ class Transient(ValueError):
     """Slow or unreachable this time; not a login, account or platform refusal."""
 
 
+class PageFailure(Transient):
+    """The platform page was slow or failed to load; repeated ones may mean risk control."""
+
+
 # Upstream (xiaohongshu-mcp v2.5.5) answers 500 with these codes when its own browser page failed to
 # load or read (navigation timeout, page error). Logged out is a normal 200 with is_logged_in false.
 PAGE_FAILURE_CODES = {'STATUS_CHECK_FAILED', 'LIST_FEEDS_FAILED', 'SEARCH_FEEDS_FAILED', 'GET_FEED_DETAIL_FAILED'}
@@ -204,15 +208,17 @@ class Sidecar:
                              {'Authorization': 'Bearer ' + self.token, 'Content-Type': 'application/json'})
                 response = conn.getresponse()
                 raw = response.read(MAX_RESPONSE + 1)
-            except (TimeoutError, ConnectionError) as exc:
-                raise Transient('The Xiaohongshu companion did not answer in time.') from exc
+            except TimeoutError as exc:
+                raise PageFailure('The Xiaohongshu companion did not answer in time.') from exc
+            except ConnectionError as exc:
+                raise Transient('The Xiaohongshu companion could not be reached.') from exc
             if len(raw) > MAX_RESPONSE:
                 raise ValueError('Xiaohongshu response exceeded the size limit.')
             result = json.loads(raw)
             code = result.get('code') if isinstance(result, dict) else None
-            if response.status >= 500 and code in PAGE_FAILURE_CODES:
+            if response.status >= 500 and isinstance(code, str) and code in PAGE_FAILURE_CODES:
                 # Only our own fixed code is kept; upstream details may include tokens or paths.
-                raise Transient(f'Xiaohongshu page did not load ({code}).')
+                raise PageFailure(f'Xiaohongshu page did not load ({code}).')
             if response.status != 200 or not isinstance(result, dict) or result.get('success') is not True:
                 # Do not return upstream error bodies (may include tokens or personal paths).
                 label = f'HTTP {response.status}' + (f' {code}' if isinstance(code, str) and re.fullmatch(r'[A-Z_]{1,40}', code) else '')
@@ -383,8 +389,11 @@ class XiaohongshuTools:
             pass
 
     def _transient(self, error, kind, started, summary):
-        self.transient_streak += 1
         self._log_error(kind, error, started)
+        if not isinstance(error, PageFailure):
+            # Local causes (account busy, companion start or connection) say nothing about the platform.
+            return TRANSIENT_TEXT, '出错', summary
+        self.transient_streak += 1
         if self.transient_streak >= TRANSIENT_LIMIT:
             # Repeated page failures can mean platform risk control: stop instead of hammering the account.
             self.blocked = True
@@ -447,7 +456,7 @@ class XiaohongshuTools:
             if timed_out and (error is None or isinstance(error, Transient)
                               or str(error).startswith('Stopped')):
                 # Cancellation errors and late results after the deadline are part of the timeout.
-                return self._transient(Transient('Operation took too long.'), 'timeout', started, summary)
+                return self._transient(PageFailure('Operation took too long.'), 'timeout', started, summary)
             if error:
                 if isinstance(error, ValueError) and ('cooldown' in str(error) or 'Daily' in str(error)):
                     return str(error), '被拒绝', summary
