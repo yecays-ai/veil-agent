@@ -2,7 +2,8 @@
 
 ## 当前进度
 
-- 工单 161：`ticket/161-mcp-foundation`、PR #209 实现独立本地 stdio MCP 管理模块、薄聊天接口及可拖出的 MCP 桌面标签。默认逐次询问；配置写入角色私有 `data/<id>/mcp-services.json`。本地标准 MCP 专项 14 项、完整 Python 回归 760 项（11 跳过）、桌面单测 10 项及 Electron 虚构数据 smoke 通过；深色表单预览已检查。Cubic 审查意见已逐项处理，当前新提交的 CI 待复核，正式 Windows 更新版及用户体验尚未验收。下一步先核对 PR 当前提交、CI 和审查，再按工单文档进行用户体验验收。
+- 工单 162：分支 `ticket/162-xiaohongshu-page-wait`、PR #210 已推送，目前最新自动检查运行中。基于工单 161 合并提交 `cd30c10`。已复现登录状态约 27.8 秒、推荐流约 11.9 秒后 HTTP 500；上游固定 v2.5.5 的原因是登录检查等整页 `load`、feeds 状态只等 8 秒。上游补丁脚本改为等新页面 DOMContentLoaded 和初始状态中的登录用户 ID 或访客，并将 feeds 等待延长到 25 秒；Go 1.24.0 Windows x64 本机构建成功，产物 SHA-256 已固定。静态检查通过，测试与真实账号体验未运行。
+- 下一步先核对 PR #210 当前 head 的自动检查与评审。合并后在 main 手动运行 `Build Xiaohongshu Windows sidecar` 生成发行文件；再提醒 Lan 更新 VEIL 并按 `docs/tickets/162-xiaohongshu-page-wait.md` 验收。
 
 - 工单 160（PR #208）：上游 v2.5.5 浏览器页面失败返回 HTTP 500 + `STATUS_CHECK_FAILED`/`LIST_FEEDS_FAILED`/`SEARCH_FEEDS_FAILED`/`GET_FEED_DETAIL_FAILED`（未登录是 200 + `is_logged_in:false`，因 pkg/errors `Wrap(nil)` 返回 nil）。这些改为 `PageFailure(Transient)`；只有 `PageFailure`（含 HTTP 超时、整次超时）计入 `transient_streak`，连续 3 次锁死并说明，成功清零；其他拒绝文字带 `HTTP <状态> <代码>`（代码仅 `[A-Z_]`）。`xiaohongshu_setup.login_and_bind` 复查遇 `PageFailure` 时，绑定文件有效则提示直接启动 VEIL。下一工单号 161。
 - 工单 159：PR #207 已合并 `f302ac8`。短期便签分批提取、失败诊断及预算结清已实现；聊天缓存用量新增来源标记，旧版 0 保守显示为未核实。Claude 评审补了：单轮超长对话按字节截断后照样推进检查点；`settle` 报用量异常时按预留结清并继续使用输出（不再每 30 分钟重发重扣）；`prompt_tokens==0` 的占位结算不计入缓存统计。Windows 体验待验收。
@@ -63,7 +64,7 @@
 - 098 QQ 邮箱：2026-11-07 后验收收发。
 - 142–151：Lan 按各自工单做 Windows 体验验收。
 - 135、136、138：请 Lan 确认（10-27 说过 134–138 验收完毕，但不在 10-28 清单里）。
-- 下一个工单号为 161。
+- 下一个工单号为 163。
 
 ## 仍适用的边界
 

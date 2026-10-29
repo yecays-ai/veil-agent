@@ -23,9 +23,10 @@ from types import SimpleNamespace
 from web_tools import _clip_utf8
 
 XHS_TOOL_NAMES = frozenset({'xiaohongshu'})
-VERSION = 'v2.5.5'
+UPSTREAM_VERSION = 'v2.5.5'
+VERSION = 'v2.5.5-veil.1'
 ASSETS = {
-    'xiaohongshu-mcp-windows-amd64.exe': 'cb55674f90c1649c875be9c4cde3af193b02fc34ffc860c40c8d711e6ca53e27',
+    'xiaohongshu-mcp-windows-amd64.exe': '9b905234693040dab963f1824de9781a4b7c137deda83e5ed80d480ddcd86d19',
     'xiaohongshu-login-windows-amd64.exe': 'edc313583d681701095e57688069a263ea06fa83f2e6a82c2d8578f8ba1224cd',
 }
 MAX_RESPONSE = 1_000_000
