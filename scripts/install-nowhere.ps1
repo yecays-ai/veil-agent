@@ -68,6 +68,24 @@ if ($LASTEXITCODE -ne 0 -or $actualRevision -ne $revision) {
     throw "Nowhere source is not at the required revision $revision; it was left untouched."
 }
 
+# The pinned upstream revision has a trailing comma in the web-observer
+# announcement. That turns the f-string into a one-item tuple, so `prose +=`
+# raises TypeError on the first open_door call. Apply this narrow compatibility
+# fix without changing the pinned upstream revision or any other upstream code.
+$serverFile = Join-Path $source 'nowhere\server.py'
+$serverText = [System.IO.File]::ReadAllText($serverFile)
+$brokenAnnouncement = '        prose += f"\n（旁观者可以在这里看你走路：{_web_url}）",'
+$fixedAnnouncement = '        prose += f"\n（旁观者可以在这里看你走路：{_web_url}）"'
+$brokenCount = ([regex]::Matches($serverText, [regex]::Escape($brokenAnnouncement))).Count
+if ($brokenCount -eq 1) {
+    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+    [System.IO.File]::WriteAllText($serverFile, $serverText.Replace($brokenAnnouncement, $fixedAnnouncement), $utf8NoBom)
+} elseif ($brokenCount -gt 1) {
+    throw 'The pinned Nowhere source has multiple observer announcements; refusing an ambiguous patch.'
+} elseif (-not $serverText.Contains($fixedAnnouncement)) {
+    throw 'The pinned Nowhere source has an unexpected observer announcement; refusing an unverified patch.'
+}
+
 if (Test-Path -LiteralPath $python) {
     & $python -c "import sys; assert sys.version_info[:2] == (3, 12)"
     if ($LASTEXITCODE -ne 0) { throw 'The existing Nowhere environment is not Python 3.12; it was left untouched.' }

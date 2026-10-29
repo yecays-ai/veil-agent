@@ -2,9 +2,9 @@
 
 ## 当前进度
 
-- 工单 166：PR #214 已开放，基于已合并工单 165 的 main `589bb17`；接入上游固定提交 `f0803c1053e5f97a6f44bab26e15043d71825ec7`，复用现有 MCP 管理器、唤醒循环、念头池、Ombre 和 Lab。乌有乡运行环境独立安装，`NOWHERE_HOME` 指向 `data/peter/nowhere`，地图仅允许本机回环地址；第一次启用服务时需由 Lan 明确授权直接调用。
+- 工单 166：PR #214 已合并为 `3d0a5be`；Lan 实机截图定位到上游 `open_door` 的旁观者提示语尾逗号会构造 tuple，阻断首次落地。当前安装源码已本地修复；分支 `ticket/166-open-door-fix` 将同一窄兼容修正纳入安装器并更新界面标记，保证重装后保留。仍需一次针对性验证、提交并跑最终 head CI；重启后 MCP 真正返回地点、恢复旅程等用户场景待 Lan 验收。
 - 工单 165：PR #213 已合并为 `589bb17`；Windows 实际体验待验收。
-- 下一步：Nowhere 76 项依赖的官方 SHA-256 已加入锁文件，安装器启用 `--require-hashes`；Windows Python 3.12 完整锁文件 pip dry-run 校验通过。上一 head 的 Python 3.11/3.12 全量矩阵、Windows 桌面及依赖安全工作流通过；本轮更新安装器回退、无效 ID 校验和安装失败说明后，需查看最新 head 自动检查。系统 Python 本地全套测试因开发环境依赖不完整未完成，不计为通过。真实 Windows 更新、MCP 启停/重启、工具真实返回、旅程恢复、Lab 文件、自主停止/暂停与地图访问仍待 Lan 验收；按用户授权，最终自动检查通过后合并。
+- 下一步：完成 `ticket/166-open-door-fix` 的定向验证后一次性提交并推送，检查本次 head 自动检查和实质评审意见；不重复触发整套流程。Windows 重启后工具真实返回、旅程恢复、Lab 文件、自主停止/暂停与地图访问仍待 Lan 验收。
 - 工单 164：PR #212 仍开放；Windows 实际体验待验收。
 - 工单 163：PR #211 已合并，必需 CI 已通过；Windows 体验验收待按 `docs/tickets/163-mcp-integrations.md` 执行。
 - 工单 162：PR #210 已合并；在 main 手动运行 `Build Xiaohongshu Windows sidecar` 后，Lan 更新并按 `docs/tickets/162-xiaohongshu-page-wait.md` 验收。
