@@ -1,6 +1,6 @@
 # 当前状态
 
-工单 168（2026-10-30）：Lab 游戏成绩自动回传和 Desktop JPG/PNG 自主读取已在独立分支 `ticket/168-game-results-desktop-images` 实现，本地定向检查通过；PR、CI、Windows 实机体验待完成。原定 167 已用于并行的 Lab Python 沙盒调查，Lan 指定本单改号。见 `docs/tickets/168-game-results-desktop-images.md`。
+工单 168（2026-10-30）：Lab 游戏成绩自动回传和 Desktop JPG/PNG 自主读取已在独立分支 `ticket/168-game-results-desktop-images` 实现，PR #216 已开放；本地完整 Python 测试 781 项中 770 通过、11 跳过，CI、审查和 Windows 实机体验待完成。原定 167 已用于并行的 Lab Python 沙盒调查，Lan 指定本单改号。见 `docs/tickets/168-game-results-desktop-images.md`。
 
 更新：2026-10-30 · Codex（工单 166：Peter 接入乌有乡自主旅行；PR #214 已合并，旅行入口修复待交付）。
 
@@ -96,14 +96,14 @@
 | 161 | 本地 MCP 服务管理与桌面 MCP 标签 | 待验收（已合并） |
 | 163 | 小红书与 GitHub 迁入 MCP 管理 | PR #211，待验收 |
 | 166 | 乌有乡旅行 MCP、Peter 独立旅程状态、记忆/Lab 与地图入口 | PR #214、#215 已合并；重启后的 Windows 工具返回待验收 |
-| 168 | 授权桌面 JPG/PNG 指定读取与视觉理解 | 本地实现，PR/CI/Windows 体验待验收 |
+| 168 | 授权桌面 JPG/PNG 指定读取与视觉理解 | PR #216 开放，CI/Windows 体验待验收 |
 
 ### Lab 创作与附件
 
 | 工单 | 功能 | Lan 体验验收 |
 | --- | --- | --- |
 | 149 | Peter 自主预览 Lab HTML、查看截图和错误并迭代 | 待验收（PR #196 已合并） |
-| 168 | Lab HTML 游戏成绩自动回传、去重与重启保留 | 本地实现，PR/CI/Windows 体验待验收 |
+| 168 | Lab HTML 游戏成绩自动回传、去重与重启保留 | PR #216 开放，CI/Windows 体验待验收 |
 
 ### QQ、邮件、网页与附件
 

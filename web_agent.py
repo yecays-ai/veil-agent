@@ -1610,7 +1610,10 @@ def make_handler(hub, token):
             query = parse_qs(url.query)
             if url.path.startswith('/game/'):
                 parts = url.path.split('/', 3)
-                if len(parts) != 4 or not self._game_origin_guard():
+                if len(parts) != 4:
+                    self._send(404, {'error': 'game resource unavailable'})
+                    return
+                if not self._game_origin_guard():
                     return
                 manager = getattr(hub, 'game_manager', None)
                 if manager is None:
@@ -1795,7 +1798,10 @@ def make_handler(hub, token):
             url = urlparse(self.path)
             if url.path.startswith('/game/'):
                 parts = url.path.split('/')
-                if len(parts) != 4 or parts[3] != 'score' or not self._game_origin_guard(post=True):
+                if len(parts) != 4 or parts[3] != 'score':
+                    self._send(404, {'error': 'game endpoint unavailable'})
+                    return
+                if not self._game_origin_guard(post=True):
                     return
                 manager = getattr(hub, 'game_manager', None)
                 if manager is None:
