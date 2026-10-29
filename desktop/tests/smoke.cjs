@@ -284,7 +284,7 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   let detachedMCP;
   await wait(()=>{detachedMCP=BrowserWindow.getAllWindows().find(w=>w!==pet&&w!==chat&&w.webContents.getURL().includes('view=mcp'));return detachedMCP?.isVisible()},'MCP detached window missing');
   await wait(()=>detachedMCP.webContents.executeJavaScript('document.querySelector("#offline").style.display==="none"'),'detached MCP window lost Agent events');
-  assert.equal(await detachedMCP.webContents.executeJavaScript('document.querySelector("#mcp-list").textContent.includes("echo")'),true);
+  await wait(()=>detachedMCP.webContents.executeJavaScript('document.querySelector("#mcp-list").textContent.includes("echo")'),'detached MCP service list missing');
   await detachedMCP.webContents.executeJavaScript('document.querySelector("#merge-view").click(); true');
   await wait(()=>detachedMCP.isDestroyed(),'MCP detached window did not merge');
   console.log('SMOKE PASS: local dark chat, history, audio-only permissions, >5 MB image compression and decode, automatic-language dictation, send-first voice with hidden transcript and appearance settings, right-click menu, audio loading, activity controls, hide/reopen, sandbox');

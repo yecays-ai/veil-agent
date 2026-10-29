@@ -2638,8 +2638,9 @@ class Chat:
                         result, state, summary = 'MCP tools are unavailable for this role.', '被拒绝', call.function.name
                     else:
                         target = self.long_tasks.checkpoint_target(call.function.name, args, call.function.name)
-                        blocked, checkpoint_started = self.long_tasks.before_tool(
-                            call.function.name, target, autonomy, args)
+                        checkpoint_needed = self.mcp_services.needs_checkpoint(call.function.name)
+                        blocked, checkpoint_started = (self.long_tasks.before_tool(
+                            call.function.name, target, autonomy, args) if checkpoint_needed else (None, False))
                         if blocked:
                             result, state, summary = blocked, '被拒绝', call.function.name
                         else:

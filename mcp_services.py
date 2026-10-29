@@ -353,6 +353,19 @@ class MCPServices:
             service = next((item for item in self.config['services'] if item['id'] == match.group(1)), None)
             return 'allow' if service and service['permission'] == 'direct' else 'ask'
 
+    def needs_checkpoint(self, name):
+        match = re.fullmatch(r'mcp__([a-z][a-z0-9_]{0,31}?)__(.+)', name)
+        if not match:
+            return True
+        with self.lock:
+            worker = self.workers.get(match.group(1))
+            if worker:
+                for tool in worker.tools:
+                    if tool.name == match.group(2):
+                        # A server hint guides long-task recovery, never tool permission.
+                        return getattr(tool.annotations, 'readOnlyHint', None) is not True
+        return True
+
     def view(self):
         with self.lock:
             rows = []

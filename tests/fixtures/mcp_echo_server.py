@@ -4,11 +4,12 @@ import os
 import sys
 import threading
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 
 server = FastMCP('veil-test')
 
 
-@server.tool()
+@server.tool(annotations=ToolAnnotations(readOnlyHint=True))
 def echo(text: str) -> str:
     """Return the input unchanged."""
     return text
