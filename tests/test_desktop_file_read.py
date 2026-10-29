@@ -113,14 +113,15 @@ class DesktopFileReadTests(unittest.TestCase):
         (self.root / 'broken.png').write_bytes(b'not an image')
         (self.root / 'huge.png').write_bytes(b'\x89PNG\r\n\x1a\n' + b'\0\0\0\rIHDR'
                                              + (100000).to_bytes(4, 'big') * 2 + b'\0' * 20)
-        for path in ('../outside.png', 'password.png', 'broken.png', 'huge.png'):
-            self.assertNotEqual(self.tools.invoke('desktop_read_image', {'path': path})[1], '成功')
         outside = Path(self.temp.name) / 'outside.png'
         outside.write_bytes(b'private')
+        for path in ('../outside.png', 'password.png', 'broken.png', 'huge.png'):
+            state = self.tools.invoke('desktop_read_image', {'path': path})[1]
+            self.assertEqual(state, '出错' if path in ('broken.png', 'huge.png') else '被拒绝')
         try:
             (self.root / 'link.png').symlink_to(outside)
         except OSError:
-            return
+            self.skipTest('symlink creation is unavailable')
         self.assertEqual(self.tools.invoke('desktop_read_image', {'path': 'link.png'})[1], '被拒绝')
 
     def test_character_can_enable_desktop_read_without_enabling_other_desktop_permissions(self):

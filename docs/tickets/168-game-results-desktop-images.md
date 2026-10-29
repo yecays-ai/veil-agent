@@ -12,7 +12,7 @@ Lan 玩完 Peter 制作的 Lab HTML 游戏后，成绩和结局自动保存，Pe
 
 实现于 `lab_games.py`、`web_agent.py`、`tools_agent.py`、`desktop_files.py`，并复用 `windows_observer.observation_image_message` 的视觉消息入口。游戏页面在自有 Lab 子目录中，由 `open_lab_game` 打开常驻本地服务链接；游戏代码在一局结束时调用 `window.veilGame.saveResult({round_id, score, duration_ms, ending, ended_at})`，其中 `round_id` 应在每局开始生成并在重试时保持不变。服务只接收固定字段，游戏 ID 由入口文件绑定，成绩追加在同目录 `scores.jsonl`；重复局次返回已保存。页面浮层显示服务确认或失败。图片工具仅在 Peter 指定路径时读取，限 5 MB、2500 万像素及现有 Desktop 权限范围。
 
-本地完整 Python 测试 781 项：770 项通过、11 项跳过（允许本机回环连接后运行）；游戏 HTTP 入口、成绩保存、重复局与跨来源拒绝的实连用例通过。CI 和 Windows 实机体验待验收。
+本地完整 Python 测试 785 项：774 项通过、11 项跳过（允许本机回环连接后运行）；游戏 HTTP 入口、成绩保存、重复局与跨来源拒绝的实连用例通过。CI 和 Windows 实机体验待验收。
 
 ## 验收步骤
 

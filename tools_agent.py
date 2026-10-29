@@ -320,7 +320,7 @@ class FilesystemTools:
             self.lab_preview = LabPreview(self.lab, platform_enabled=os.name == 'nt')
             self.tools.extend(self.lab_preview.tools)
             self.game_manager = None
-            self.tools.append(SimpleNamespace(name='open_lab_game',
+            self.game_tool_schema = SimpleNamespace(name='open_lab_game',
                 description=('Open a playable Lab HTML game in Lan\'s browser and return its link. '
                              'Place each game in its own lab folder. At game end, call '
                              'window.veilGame.saveResult with a stable round_id, score, duration_ms, '
@@ -328,7 +328,7 @@ class FilesystemTools:
                              'Peter can later read scores.jsonl from the same game folder.'),
                 inputSchema={'type': 'object', 'properties': {
                     'path': {'type': 'string', 'description': 'Lab-relative HTML entry path.'}},
-                    'required': ['path'], 'additionalProperties': False}))
+                    'required': ['path'], 'additionalProperties': False})
             self.tools.append(SimpleNamespace(name='create_directory',
                 description='Create folders only inside your lab, e.g. lab/research. '
                             'No confirmation needed. Directories outside lab are forbidden.',
@@ -1035,6 +1035,13 @@ class FilesystemTools:
         if windows_tools:
             windows_tools.begin_request()
 
+    def attach_game_manager(self, manager):
+        if getattr(self, 'lab', None) is None or getattr(self, 'game_tool_schema', None) is None:
+            return
+        self.game_manager = manager
+        if not any(tool.name == 'open_lab_game' for tool in self.tools):
+            self.tools.append(self.game_tool_schema)
+
     def invoke(self, name, args, approval=input, *, should_stop=None):
         if name in XHS_TOOL_NAMES:
             return 'Xiaohongshu is managed through the MCP service; use its MCP tool.', '被拒绝', name
@@ -1048,7 +1055,7 @@ class FilesystemTools:
                 return 'Lab page preview is unavailable because this character has no safe Lab folder.', '被拒绝', 'Lab preview'
             return self.lab_preview.invoke(args, should_stop=should_stop)
         if name == 'open_lab_game':
-            if self.game_manager is None or not isinstance(args, dict) or set(args) != {'path'}:
+            if getattr(self, 'game_manager', None) is None or not isinstance(args, dict) or set(args) != {'path'}:
                 return 'The playable Lab game service is unavailable.', '被拒绝', 'Lab game'
             try:
                 url = self.game_manager.open(args['path'])

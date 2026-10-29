@@ -10,6 +10,7 @@ import stat
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 from lab_preview import _safe_lab_file
 
@@ -50,7 +51,7 @@ class LabGames:
             self.entries[capability] = (folder, entry, subpath)
             if len(self.entries) > 64:
                 self.entries.pop(next(iter(self.entries)))
-        return f'http://127.0.0.1:{self.port}/game/{capability}/{entry.name}'
+        return f'http://127.0.0.1:{self.port}/game/{capability}/{quote(entry.name, safe="")}'
 
     def _entry(self, capability):
         with self.lock:
@@ -79,7 +80,8 @@ class LabGames:
                 at = body.lower().find(b'</head>')
                 body = body[:at] + helper + body[at:]
             else:
-                body = helper + body
+                at = body.lower().find(b'</body>')
+                body = body[:at] + helper + body[at:] if at >= 0 else body + helper
         mime = mimetypes.guess_type(path.name)[0] or 'application/octet-stream'
         return body, mime
 
@@ -127,7 +129,9 @@ class LabGames:
                     existing = source.read(MAX_SCORE_FILE + 1)
                 for line in existing.splitlines():
                     previous = json.loads(line)
-                    if previous.get('round_id') == row['round_id']:
+                    if not isinstance(previous, dict):
+                        raise ValueError('The existing score file is invalid.')
+                    if previous.get('game_id') == game_id and previous.get('round_id') == row['round_id']:
                         return {'ok': True, 'duplicate': True}
             encoded = (json.dumps(record, ensure_ascii=False, separators=(',', ':')) + '\n').encode('utf-8')
             if (score_file.stat().st_size if score_file.exists() else 0) + len(encoded) > MAX_SCORE_FILE:
@@ -151,9 +155,15 @@ class LabGames:
                     final = _final_path_for_fd(fd)
                     if final is None or os.path.normcase(str(final)) != os.path.normcase(str(score_file)):
                         raise OSError('Score file redirected.')
-                if os.write(fd, encoded) != len(encoded):
-                    raise OSError('Score write incomplete.')
-                os.fsync(fd)
+                start_size = opened.st_size
+                try:
+                    if os.write(fd, encoded) != len(encoded):
+                        raise OSError('Score write incomplete.')
+                    os.fsync(fd)
+                except OSError:
+                    os.ftruncate(fd, start_size)
+                    os.fsync(fd)
+                    raise
             finally:
                 os.close(fd)
         return {'ok': True, 'duplicate': False}

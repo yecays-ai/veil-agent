@@ -1,8 +1,8 @@
 # 当前状态
 
-工单 168（2026-10-30）：Lab 游戏成绩自动回传和 Desktop JPG/PNG 自主读取已在独立分支 `ticket/168-game-results-desktop-images` 实现，PR #216 已开放；本地完整 Python 测试 781 项中 770 通过、11 跳过，CI、审查和 Windows 实机体验待完成。原定 167 已用于并行的 Lab Python 沙盒调查，Lan 指定本单改号。见 `docs/tickets/168-game-results-desktop-images.md`。
+工单 168（2026-10-30）：Lab 游戏成绩自动回传和 Desktop JPG/PNG 自主读取已在独立分支 `ticket/168-game-results-desktop-images` 实现，PR #216 已开放；本地完整 Python 测试 785 项中 774 通过、11 跳过，最新 head 的 CI、审查和 Windows 实机体验待完成。原定 167 已用于并行的 Lab Python 沙盒调查，Lan 指定本单改号。见 `docs/tickets/168-game-results-desktop-images.md`。
 
-更新：2026-10-30 · Codex（工单 166：Peter 接入乌有乡自主旅行；PR #214 已合并，旅行入口修复待交付）。
+更新：2026-10-30 · Codex（工单 168：游戏成绩与桌面图片；PR #216 审查中）。
 
 ## 当前目标与现状
 

@@ -2183,7 +2183,7 @@ def serve_chat(chat, hub, channels=()):
     if getattr(files, 'lab', None) is not None:
         from lab_games import LabGames
         hub.game_manager = LabGames(files.lab, hub.game_port)
-        files.game_manager = hub.game_manager
+        files.attach_game_manager(hub.game_manager)
     announce_free_reply = getattr(files, 'announce_free_reply', None)
     if callable(announce_free_reply):
         announce_free_reply()

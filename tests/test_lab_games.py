@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+from unittest.mock import patch
 from types import SimpleNamespace
 from pathlib import Path
 from urllib.request import Request, urlopen
@@ -53,6 +54,31 @@ class LabGameTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.service.resource(self.capability, '../notes.txt')
 
+    def test_same_round_id_in_another_game_entry_is_distinct(self):
+        (self.game / 'bonus.html').write_text('<html><body>Bonus</body></html>', encoding='utf-8')
+        bonus = urlsplit(self.service.open('lab/spider/bonus.html')).path.split('/')[2]
+        self.service.save(self.capability, self.score())
+        self.assertEqual(self.service.save(bonus, self.score(game_id='spider/bonus.html'))['duplicate'], False)
+        self.assertEqual(len((self.game / 'scores.jsonl').read_text().splitlines()), 2)
+
+    def test_entry_url_encodes_special_characters(self):
+        (self.game / '游戏 #1.html').write_text('<html><body>Game</body></html>', encoding='utf-8')
+        link = self.service.open('lab/spider/游戏 #1.html')
+        self.assertIn('%23', link)
+        self.assertNotIn('游戏', link)
+
+    def test_short_write_rolls_back_and_next_round_can_save(self):
+        import os
+        real_write = os.write
+        def short_write(fd, data):
+            real_write(fd, data[:5])
+            return 5
+        with patch('lab_games.os.write', side_effect=short_write):
+            with self.assertRaises(OSError):
+                self.service.save(self.capability, self.score())
+        self.assertEqual((self.game / 'scores.jsonl').read_bytes(), b'')
+        self.assertFalse(self.service.save(self.capability, self.score())['duplicate'])
+
     def test_invalid_scores_and_links_do_not_modify_other_files(self):
         other = self.game / 'notes.txt'
         other.write_text('keep', encoding='utf-8')
@@ -69,7 +95,7 @@ class LabGameTests(unittest.TestCase):
         try:
             (self.game / 'scores.jsonl').symlink_to(target)
         except OSError:
-            return
+            self.skipTest('symlink creation is unavailable')
         with self.assertRaises(OSError):
             self.service.save(self.capability, self.score())
         self.assertEqual(target.read_text(), 'private')
