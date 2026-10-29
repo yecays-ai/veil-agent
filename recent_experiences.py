@@ -17,11 +17,14 @@ def _timestamp(value):
         return None
 
 
-def _current_items(store, cfg):
+def _current_items(store, cfg, *, tolerant=False):
     try:
         rows = store.read(f'{cfg.id}/recent-experiences.json')
     except (OSError, UserError):
-        # Optional continuity: an unreadable snapshot is treated as empty so chat keeps working.
+        # Reading for chat context treats an unreadable snapshot as empty so chat keeps working;
+        # read-modify-write callers must not replace a snapshot they could not read.
+        if not tolerant:
+            raise
         return []
     items = rows[-1].get('items', []) if rows else []
     return [item for item in items if isinstance(item, dict)
@@ -66,7 +69,7 @@ def begin_glance(store, cfg, started_at):
 
 
 def has_recent_glance(store, cfg):
-    return any(item.get('kind') == 'glance' for item in _current_items(store, cfg))
+    return any(item.get('kind') == 'glance' for item in _current_items(store, cfg, tolerant=True))
 
 
 def record_glance(store, cfg, activity):
@@ -88,7 +91,7 @@ def record_glance(store, cfg, activity):
 
 def recent_experience_context(store, cfg):
     with store.mutex:
-        items = _bounded(_current_items(store, cfg))
+        items = _bounded(_current_items(store, cfg, tolerant=True))
     if not items:
         return None
     return (
