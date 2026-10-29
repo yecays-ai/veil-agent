@@ -2,7 +2,7 @@
 
 ## 当前进度
 
-- 工单 163：PR #211 最新提交含 GitHub、小红书的 MCP 管理迁移。修复点包括保留已有 MCP 总开关的关闭状态、幂等旧服务迁移、原子写配置、内置服务 ID 冲突保护、记忆工具包装器兼容、GitHub 停止信号传递；小红书私有登录目录始终排除在文件工作区外。最新提交 CI/Cubic 待复核；本机未运行测试；合并后按工单 163 做 Windows 体验验收。
+- 工单 163：PR #211 最新提交含 GitHub、小红书的 MCP 管理迁移。修复点包括保留已有 MCP 总开关的关闭状态、旧开关只在首次配置时初始化总开关、幂等旧服务迁移、原子写配置、内置服务 ID 冲突保护、记忆工具包装器兼容、GitHub 停止信号传递；小红书私有登录目录始终排除在文件工作区外。最新文档修正待推送和复核；本机未运行测试；合并后按工单 163 做 Windows 体验验收。
 - 工单 162：PR #210 已合并；在 main 手动运行 `Build Xiaohongshu Windows sidecar` 后，Lan 更新并按 `docs/tickets/162-xiaohongshu-page-wait.md` 验收。登录等待与 feed 注水修复背景见工单 162。
 
 - 工单 160（PR #208）：上游 v2.5.5 浏览器页面失败返回 HTTP 500 + `STATUS_CHECK_FAILED`/`LIST_FEEDS_FAILED`/`SEARCH_FEEDS_FAILED`/`GET_FEED_DETAIL_FAILED`（未登录是 200 + `is_logged_in:false`，因 pkg/errors `Wrap(nil)` 返回 nil）。这些改为 `PageFailure(Transient)`；只有 `PageFailure`（含 HTTP 超时、整次超时）计入 `transient_streak`，连续 3 次锁死并说明，成功清零；其他拒绝文字带 `HTTP <状态> <代码>`（代码仅 `[A-Z_]`）。`xiaohongshu_setup.login_and_bind` 复查遇 `PageFailure` 时，绑定文件有效则提示直接启动 VEIL。下一工单号 161。
