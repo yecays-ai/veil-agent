@@ -144,6 +144,13 @@ class GlanceContinuityTests(unittest.TestCase):
         self.assertIsNone(recent_experience_context(self.store, SimpleNamespace(id='other-role')))
         self.assertLess(len(recent_experience_context(self.store, self.cfg).encode('utf-8')), 18000)
 
+    def test_unreadable_snapshot_does_not_stop_chat(self):
+        path = self.store.root / f'{self.cfg.id}/recent-experiences.json'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('{broken json\n', encoding='utf-8')
+        self.chat.send('Hello again')
+        self.assertEqual(self.model.call_count, 1)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -2,6 +2,8 @@
 import json
 from datetime import datetime
 
+from agent_types import UserError
+
 
 MAX_ITEMS = 5  # Last glance and its at most four screen-message tool actions.
 MAX_CONTEXT_BYTES = 18000
@@ -16,7 +18,11 @@ def _timestamp(value):
 
 
 def _current_items(store, cfg):
-    rows = store.read(f'{cfg.id}/recent-experiences.json')
+    try:
+        rows = store.read(f'{cfg.id}/recent-experiences.json')
+    except (OSError, UserError):
+        # Optional continuity: an unreadable snapshot is treated as empty so chat keeps working.
+        return []
     items = rows[-1].get('items', []) if rows else []
     return [item for item in items if isinstance(item, dict)
             and _timestamp(item.get('time')) is not None][-MAX_ITEMS:]
