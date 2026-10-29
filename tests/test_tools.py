@@ -863,6 +863,27 @@ max_result_bytes = 200
         self.assertNotIn('结果已截断', activity['detail'])
         self.assertTrue(any((m.get('content') or '').startswith('old ') for m in model.call_args_list[1].args[0]))
 
+    def test_truncated_preview_does_not_claim_omitted_screenshot_was_seen(self):
+        from lab_preview import LabPreviewResult
+        self.cfg.provider['max_input_tokens'] = 3000
+        self.cfg.tools['max_steps'] = 2
+        preview = LabPreviewResult('Screenshot captured: yes.\n' + 'secret ' * 900,
+                                   'data:image/png;base64,aGVsbG8=')
+        first = self.message([self.tool_call('read_text_file', '{"path":"preview"}', 'preview')])
+        final = self.message(content='The preview text was read.')
+        model = Mock(side_effect=[(first, 100, 20, 0), (final, 120, 20, 0)])
+        tools = Mock()
+        tools.tools = [SimpleNamespace(name='read_text_file', description='Read', inputSchema={})]
+        tools.capability_event = None
+        tools.invoke.return_value = (preview, '成功', 'preview')
+        chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=lambda _: None)
+
+        self.assertEqual(chat.send('read preview'), 'The preview text was read.')
+        forwarded = model.call_args_list[1].args[0][-1]['content']
+        self.assertIn('Screenshot was not sent to the model', forwarded)
+        self.assertNotIn('Screenshot captured: yes.', forwarded)
+        self.assertIn('结果已截断', forwarded)
+
     def test_eight_large_results_mask_older_results_and_keep_latest_before_send(self):
         self.cfg.tools['max_steps'] = 12
         self.cfg.provider['max_input_tokens'] = 10000

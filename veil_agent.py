@@ -2877,11 +2877,17 @@ class Chat:
                     return True
             return request_size(offered) <= self.cfg.provider['max_input_tokens']
 
-        def truncate_tool_result(message, call, execution, offered):
+        def truncate_tool_result(message, call, execution, offered, screenshot_omitted=False):
             """Keep the largest result prefix that fits in the current input budget."""
             raw = execution.result if isinstance(execution.result, str) else None
             if raw is None:
                 return None
+            if screenshot_omitted:
+                raw = raw.replace(
+                    'Screenshot captured: yes.',
+                    'Screenshot was not sent to the model (the current request input limit was reached); '
+                    'Peter has not seen the page.',
+                )
             name = call.function.name
             canonical_name = self._resolve_tool_name(name, offered)
             marker = '\n[结果已截断，完整内容未提供。]'
@@ -2918,13 +2924,16 @@ class Chat:
                 pending_image_messages.append(image_message)
                 ephemeral_image_bindings.append((image_message, tool_message, execution, name))
             image_pending = bool(image_message)
+            image_was_omitted = False
 
             def omit_image(reason):
+                nonlocal image_was_omitted
                 raw = str(execution.result).replace(
                     'Screenshot captured: yes.',
                     f'Screenshot was not sent to the model ({reason}); Peter has not seen the page.',
                 )
                 tool_message['content'] = model_tool_result(name, raw, execution.state)
+                image_was_omitted = True
 
             def discard_pending_image():
                 if not pending_image_messages:
@@ -2951,7 +2960,9 @@ class Chat:
                     > self.cfg.provider['max_input_tokens']):
                 fit_old_tool_results(next_offered, protected=tool_message)
                 if request_size(next_offered) > self.cfg.provider['max_input_tokens']:
-                    truncated = truncate_tool_result(tool_message, call, execution, next_offered)
+                    truncated = truncate_tool_result(
+                        tool_message, call, execution, next_offered,
+                        screenshot_omitted=image_was_omitted)
                     if truncated is not None:
                         display_detail = '工具结果已截断，以下为部分内容：\n' + truncated
                         result_state = '已截断'
@@ -2971,7 +2982,9 @@ class Chat:
                 fit_history(next_offered)
             if (request_size(next_offered) > self.cfg.provider['max_input_tokens']
                     and result_state != '结果过长'):
-                truncated = truncate_tool_result(tool_message, call, execution, next_offered)
+                truncated = truncate_tool_result(
+                    tool_message, call, execution, next_offered,
+                    screenshot_omitted=image_was_omitted)
                 if truncated is not None:
                     display_detail = '工具结果已截断，以下为部分内容：\n' + truncated
                     result_state = '已截断'

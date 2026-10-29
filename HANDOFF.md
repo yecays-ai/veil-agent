@@ -2,8 +2,8 @@
 
 ## 当前进度
 
-- 工单 165：PR #213 已创建，分支 `ticket/165-tool-results-fit` 基于 main `ea147a7`。已实现旧结果遮蔽、单项截断、长度停止异常处理、超限时保留 `send_message` 和 `web_search` 参数回显。旧 head `87da6aa` 的远程全量 CI 有 4 项与新行为不一致的旧断言失败；Cubic 找出的自主工具限额、活动记录 ID、保留完整结果日志、遮蔽身份与短结果边界问题，以及断言/状态文档问题已纳入同一待提交修复。CodeRabbit 对旧 head 仍显示处理中。修复后 head 尚未推送，CI、CodeRabbit 复审和 Windows 体验未完成。此前 38 项定向测试与语法检查通过；本轮受限环境测试因临时目录及测试导入路径报错，不能计为通过；Python 编译和 `git diff --check` 通过。
-- 下一步：完成一次修复提交并推送，核对修复后 head 的 CI 与 CodeRabbit/Cubic 评价；没有实质问题且必需 CI 通过后合并。Windows 实际体验仍按工单步骤验收。
+- 工单 165：PR #213 已创建，分支 `ticket/165-tool-results-fit` 基于 main `ea147a7`。旧 head `87da6aa` 的远程全量 CI 有 4 项旧断言失败；Cubic 的限额、记录关联、结果留存、遮蔽边界和状态文档意见，以及 CodeRabbit 对旧断言/限额/记录关联的意见，已在 `e4050a0` 一次修复并推送。CodeRabbit 后续确认 Lab 预览结果是带截图字段的 `str` 子类，因此截图遗漏后的截断重建也需保留“未发送”说明；该意见与回归测试已纳入当前未提交跟进。CodeRabbit 对当前 head 的复审请求被限流。原 head `e4050a0` 的 Tests 与 Dependency security 正在运行，Windows desktop 已通过。此前定向测试 38 项通过；本轮受限环境测试因临时目录/测试导入路径问题不能计为通过；Python 编译和 `git diff --check` 通过。
+- 下一步：提交并推送截图状态跟进，查看新 head 的必需 CI；不再手动重跑测试。确认 CodeRabbit/Cubic 当前意见已关闭或说明后，必需 CI 通过且无实质问题时合并。Windows 实际体验仍按工单步骤验收。
 - GitHub 当前 main 为 `ea147a730840ab4c1ee4c2bee639888111d15b11`；本机 GitHub DNS 解析失败，已由 GitHub 连接器读取提交记录核对。已保留另一现存本地 worktree `ticket/165-xhs-release-fallback`，未修改。
 - 工单 164：main 的 `STATUS.md` 记录 PR #212 已开放；GitHub review 记录中 Cubic/CodeRabbit 意见已处理，`ea147a7` 的 combined status 暂无状态项。Windows 实际体验待验收。
 - 工单 163：PR #211 已合并，必需 CI 已通过；Windows 体验验收待按 `docs/tickets/163-mcp-integrations.md` 执行。
