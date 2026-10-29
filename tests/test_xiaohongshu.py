@@ -408,7 +408,7 @@ class XiaohongshuTests(unittest.TestCase):
         cfg = SimpleNamespace(id='peter', web=self.cfg.web,
                               tools={'folder': 'data/peter'}, screen_pop=None,
                               windows_interaction=None, desktop_file_read=None,
-                              windows_media=None, windows_observation=None)
+                              windows_observation=None)
         store = SimpleNamespace(root=self.root / 'data')
         with self.assertRaises(UserError):
             FilesystemTools(self.root, cfg, store)

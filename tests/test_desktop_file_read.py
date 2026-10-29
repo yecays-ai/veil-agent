@@ -116,14 +116,11 @@ cached_input_cny_per_million = "1"
 output_cny_per_million = "8"
 [desktop_file_read]
 enabled = true
-[windows_media]
-enabled = false
 [windows_interaction]
 enabled = false
 ''', encoding='utf-8')
             cfg = load_character(root, 'fixture')
         self.assertEqual(cfg.desktop_file_read, {'enabled': True})
-        self.assertEqual(cfg.windows_media, {'enabled': False})
         self.assertEqual(cfg.windows_interaction['enabled'], False)
 
 

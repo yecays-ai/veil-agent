@@ -581,7 +581,8 @@ class AutonomyController:
             if item['state'] == '进行中':
                 item['state'] = '结果未确认'
         files = list(dict.fromkeys(item['path'] for item in tools if item['state'] == '成功'
-                     and item['tool'] in ('write_file', 'append_file', 'create_directory', 'move_lab_file')))
+                     and self.chat.canonical_tool_name(item['tool']) in
+                     ('write_file', 'append_file', 'create_directory', 'move_lab_file')))
         events = self.chat.store.read('costs.jsonl')
         run_ids = {event['id'] for event in events if event.get('type') == 'reserve'
                    and event.get('category') == 'autonomy' and event.get('character') == self.chat.cfg.id
@@ -990,7 +991,7 @@ class AutonomyController:
                     record['reason'] = value.strip()[:500]
             record['tools'] = self.chat.last_tool_summaries
             record['lab_files_changed'] = [item.get('path') for item in record['tools']
-                                           if item.get('state') == '成功' and item.get('tool') in
+                                           if item.get('state') == '成功' and self.chat.canonical_tool_name(item.get('tool')) in
                                            ('write_file', 'append_file', 'create_directory', 'move_lab_file')]
             if time.monotonic() >= self.deadline:
                 record['result'] = '失败'
@@ -1030,7 +1031,8 @@ class AutonomyController:
             record['tools'] = self.chat.last_tool_summaries
             record['lab_files_changed'] = list(dict.fromkeys(
                 item['path'] for item in record['tools'] if item.get('state') == '成功'
-                and item.get('tool') in ('write_file', 'append_file', 'create_directory', 'move_lab_file')))
+                and self.chat.canonical_tool_name(item.get('tool')) in
+                ('write_file', 'append_file', 'create_directory', 'move_lab_file')))
             successful = any(item.get('state') == '成功' for item in record['tools'])
             failures = [item for item in record['tools'] if tool_failed(item)]
             stop = self.chat.tool_stop_reason
