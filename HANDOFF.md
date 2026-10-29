@@ -2,9 +2,9 @@
 
 ## 当前进度
 
-- 工单 166：PR #214 已开放，基于已合并工单 165 的 main `589bb17`；接入上游固定提交 `f0803c1053e5f97a6f44bab26e15043d71825ec7`，复用现有 MCP 管理器、唤醒循环、念头池、Ombre 和 Lab。乌有乡运行环境独立安装，`NOWHERE_HOME` 指向 `data/peter/nowhere`，地图仅允许本机回环地址；第一次启用服务时需由 Lan 明确授权直接调用。
+- 工单 166：PR #214 已合并为 `3d0a5be`；Lan 实机截图定位到上游 `open_door` 的旁观者提示语尾逗号会构造 tuple，阻断落地。当前安装源码已本地修复；PR #215 的安装器包含幂等兼容修正，并以 Windows PowerShell 5.1 安全的 ASCII 码点准确匹配含 `{_web_url}` 的上游语句。定向 AST、安装器解析和精确匹配检查通过；修正提交后的最终 head CI 待完成。服务重启后真实工具返回、旅程恢复等场景仍待 Lan 验收。
 - 工单 165：PR #213 已合并为 `589bb17`；Windows 实际体验待验收。
-- 下一步：Nowhere 76 项依赖的官方 SHA-256 已加入锁文件，安装器启用 `--require-hashes`；Windows Python 3.12 完整锁文件 pip dry-run 校验通过。上一 head 的 Python 3.11/3.12 全量矩阵、Windows 桌面及依赖安全工作流通过；本轮更新安装器回退、无效 ID 校验和安装失败说明后，需查看最新 head 自动检查。系统 Python 本地全套测试因开发环境依赖不完整未完成，不计为通过。真实 Windows 更新、MCP 启停/重启、工具真实返回、旅程恢复、Lab 文件、自主停止/暂停与地图访问仍待 Lan 验收；按用户授权，最终自动检查通过后合并。
+- 下一步：等待 PR #215 最新 head 的自动检查和实质评审意见；若无阻断则按用户授权合并。Windows 服务重启后工具真实返回、旅程恢复、Lab 文件、自主停止/暂停与地图访问仍待 Lan 验收。
 - 工单 164：PR #212 仍开放；Windows 实际体验待验收。
 - 工单 163：PR #211 已合并，必需 CI 已通过；Windows 体验验收待按 `docs/tickets/163-mcp-integrations.md` 执行。
 - 工单 162：PR #210 已合并；在 main 手动运行 `Build Xiaohongshu Windows sidecar` 后，Lan 更新并按 `docs/tickets/162-xiaohongshu-page-wait.md` 验收。
@@ -68,12 +68,12 @@
 - 098 QQ 邮箱：2026-11-07 后验收收发。
 - 142–151：Lan 按各自工单做 Windows 体验验收。
 - 135、136、138：请 Lan 确认（10-27 说过 134–138 验收完毕，但不在 10-28 清单里）。
-- 下一个工单号为 167（工单 166 尚在本地施工）。
+- 下一个工单号为 167（工单 166 主功能已合并；开门兼容修复在 PR #215）。
 
 ## 仍适用的边界
 
 - 正式 checkout `E:\Peter-Agent\VEIL\veil-agent` 留在 `main`。其中用户已有的 `update-main-collisions.ps1`、`update-main.cmd` 删除状态不属于本工单，保持原样。
-- 工单 166 只在独立 worktree 操作；工单 165 已合并，可以在本地工作完成后推送并创建单项 PR。Windows 验收前保持 PR 打开，不清理本工单 worktree。
+- 工单 166 的开门兼容修复只在独立 worktree 操作；PR #214 主功能已合并，PR #215 待最终 CI 后合并。Windows 实机验收前保持修复 worktree，暂不清理。
 - 不增加第二个 Agent、模型供应商、Agent 框架或依赖；浏览器复用仓库已有 Playwright 依赖；工具别名复用现有角色配置、Chat 工具循环及权限/预算/检查点入口。工单 164 移除了工单 151 的 GSMTC 媒体读取及其 PyWinRT 依赖，其他 Windows 观察能力保留。
 - UIA 窗口内容是非可信数据；敏感窗口过滤由现有 Windows 观察工具执行。当前瞄一眼观察仅用 UIA，不调用截图回退，不把原始 UIA 内容写入活动文件或长期记忆。
 - 代码检查、CI、Windows 实机体验是不同证据；各工单的体验验收状态以 STATUS.md「验收总表」为准。

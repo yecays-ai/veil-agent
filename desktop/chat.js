@@ -1427,7 +1427,7 @@ function renderMCP(){
     const title=document.createElement('h3');title.textContent=service.id;
     const status=document.createElement('span');status.className='state-pill';status.textContent=service.builtin?(service.status==='connected'?'已启用':'已停用'):service.status==='connected'?'已连接':service.status==='connecting'?'连接中':service.status==='error'?'连接失败':'已停用';
     heading.append(title,status);card.append(heading);
-    const details=document.createElement('p');details.textContent=service.managed==='nowhere'?`${service.tools.length} 个工具 · Peter 的独立旅程存档 · ${service.direct_grant?'已授权直接调用':'启用前需确认自主旅行权限'} · 旋复 / 乌有乡 · CC BY-NC 4.0（上游未修改）`:service.builtin?`${service.tools.length} 个工具 · VEIL 内置集成`:`${service.tools.length} 个工具 · ${service.permission==='ask'?'每次询问':'直接调用'}`;card.append(details);
+    const details=document.createElement('p');details.textContent=service.managed==='nowhere'?`${service.tools.length} 个工具 · Peter 的独立旅程存档 · ${service.direct_grant?'已授权直接调用':'启用前需确认自主旅行权限'} · 旋复 / 乌有乡 · CC BY-NC 4.0（含 VEIL 兼容修正）`:service.builtin?`${service.tools.length} 个工具 · VEIL 内置集成`:`${service.tools.length} 个工具 · ${service.permission==='ask'?'每次询问':'直接调用'}`;card.append(details);
     if(service.managed==='nowhere'){
       const project=document.createElement('p');project.className='mcp-tools';project.textContent='项目与许可：https://github.com/yuyixuanfu/nowhere · https://creativecommons.org/licenses/by-nc/4.0/';card.append(project);
     }

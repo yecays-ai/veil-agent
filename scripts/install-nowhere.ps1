@@ -68,6 +68,26 @@ if ($LASTEXITCODE -ne 0 -or $actualRevision -ne $revision) {
     throw "Nowhere source is not at the required revision $revision; it was left untouched."
 }
 
+# The pinned upstream revision has a trailing comma in the web-observer
+# announcement. That turns the f-string into a one-item tuple, so `prose +=`
+# raises TypeError on open_door. Build the Chinese text from code points because
+# Windows PowerShell 5.1 reads BOM-less UTF-8 scripts using the system code page.
+$serverFile = Join-Path $source 'nowhere\server.py'
+$serverText = [System.IO.File]::ReadAllText($serverFile)
+$observerText = -join [char[]]@(0xFF08, 0x65C1, 0x89C2, 0x8005, 0x53EF, 0x4EE5, 0x5728, 0x8FD9, 0x91CC, 0x770B, 0x4F60, 0x8D70, 0x8DEF, 0xFF1A)
+$observerClose = [char]0xFF09
+$brokenAnnouncement = '        prose += f"\n' + $observerText + '{_web_url}' + $observerClose + '",'
+$fixedAnnouncement = '        prose += f"\n' + $observerText + '{_web_url}' + $observerClose + '"'
+$brokenCount = ([regex]::Matches($serverText, [regex]::Escape($brokenAnnouncement))).Count
+if ($brokenCount -eq 1) {
+    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+    [System.IO.File]::WriteAllText($serverFile, $serverText.Replace($brokenAnnouncement, $fixedAnnouncement), $utf8NoBom)
+} elseif ($brokenCount -gt 1) {
+    throw 'The pinned Nowhere source has multiple observer announcements; refusing an ambiguous patch.'
+} elseif (-not $serverText.Contains($fixedAnnouncement)) {
+    throw 'The pinned Nowhere source has an unexpected observer announcement; refusing an unverified patch.'
+}
+
 if (Test-Path -LiteralPath $python) {
     & $python -c "import sys; assert sys.version_info[:2] == (3, 12)"
     if ($LASTEXITCODE -ne 0) { throw 'The existing Nowhere environment is not Python 3.12; it was left untouched.' }
