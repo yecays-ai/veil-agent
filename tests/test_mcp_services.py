@@ -58,6 +58,14 @@ class MCPServicesTest(unittest.TestCase):
         self.assertEqual(self.manager.view()['services'][0]['status'], 'error')
         self.assertTrue(self.manager.view()['services'][0]['error'])
 
+    def test_disconnection_is_visible(self):
+        config = self.config()
+        config['services'][0]['args'].append('--exit-after')
+        self.manager.save(config)
+        self.await_status('connected')
+        self.await_status('error')
+        self.assertIn('断开', self.manager.view()['services'][0]['error'])
+
     def test_call_timeout_is_visible_and_chat_safe(self):
         self.manager.save(self.config())
         self.await_status('connected')

@@ -1,5 +1,8 @@
 """Account-free stdio server for MCP integration checks."""
 import asyncio
+import os
+import sys
+import threading
 from mcp.server.fastmcp import FastMCP
 
 server = FastMCP('veil-test')
@@ -19,4 +22,6 @@ async def slow() -> str:
 
 
 if __name__ == '__main__':
+    if '--exit-after' in sys.argv:
+        threading.Timer(1, lambda: os._exit(0)).start()
     server.run(transport='stdio')

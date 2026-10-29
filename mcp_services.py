@@ -75,7 +75,12 @@ class _Worker:
                     if self.closing.is_set():
                         return
                     while True:
-                        job = await self.jobs.get()
+                        try:
+                            job = await asyncio.wait_for(self.jobs.get(), timeout=2)
+                        except TimeoutError:
+                            async with asyncio.timeout(2):
+                                await session.send_ping()
+                            continue
                         if job is None:
                             break
                         name, args, reply = job

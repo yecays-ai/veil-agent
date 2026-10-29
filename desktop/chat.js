@@ -1415,6 +1415,7 @@ $('mcp-form').onsubmit=async event=>{
   if(await saveMCP({...current,services})){$('mcp-form').hidden=true;mcpEditing=null}
 };
 if(detachedView==='mcp')loadMCP();
+setInterval(()=>{if(document.body.dataset.currentPage==='mcp'&&!mcpLoading&&$('mcp-form').hidden)loadMCP()},3000);
 
 // Ticket 134: 模型 settings card and the header switch. The server keeps keys; this page only sees "…1234".
 let modelsView=null,modelsSignature='',editingEndpoint=null,editingModel=null,modelBilling='call',modelsSaving=false;
