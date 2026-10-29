@@ -859,7 +859,8 @@ max_result_bytes = 200
         self.assertEqual(chat.last_tool_summaries[0]['result_state'], '已截断')
         activity = self.store.read('test/tools.jsonl')[-1]
         self.assertEqual(activity['result_state'], '已截断')
-        self.assertIn('工具结果已截断', activity['detail'])
+        self.assertIn('secret', activity['detail'])
+        self.assertNotIn('结果已截断', activity['detail'])
         self.assertTrue(any((m.get('content') or '').startswith('old ') for m in model.call_args_list[1].args[0]))
 
     def test_eight_large_results_mask_older_results_and_keep_latest_before_send(self):
@@ -875,6 +876,7 @@ max_result_bytes = 200
         def model(messages, **_kwargs):
             requests.append(json.loads(json.dumps(messages, ensure_ascii=False)))
             prompt_tokens = max(100, len(json.dumps(messages, ensure_ascii=False).encode('utf-8')) // 2)
+            self.assertLessEqual(prompt_tokens, self.cfg.provider['max_input_tokens'])
             return next(responses), prompt_tokens, 20, 0
         tools = Mock()
         tools.tools = [SimpleNamespace(name='read_text_file', description='Read', inputSchema={}),
@@ -900,6 +902,9 @@ max_result_bytes = 200
         latest_read = next(row for row in reversed(rows)
                            if row.get('tool') == 'read_text_file' and row.get('path') == 'source-0')
         self.assertEqual(latest_read['result_state'], '已截断')
+        masked_rows = [row for row in rows
+                       if row.get('tool') == 'read_text_file' and row.get('path') == 'source-0']
+        self.assertEqual(len({row.get('call_id') for row in masked_rows}), 1)
 
     def test_length_stop_raises_request_failed_without_peter_reply(self):
         first = self.message([self.tool_call('read_text_file', '{"path":"x"}', 'read')],
@@ -917,6 +922,7 @@ max_result_bytes = 200
         self.assertFalse(any(line.startswith('Peter: ') for line in output))
         self.assertEqual(len([row for row in self.store.read('test/chat.jsonl')
                               if row.get('role') == 'assistant']), 0)
+        tools.invoke.assert_not_called()
 
     def test_length_stop_returns_already_sent_message_without_raising(self):
         first = self.message([self.tool_call('send_message', '{"text":"Found one source."}', 'send')])
@@ -933,6 +939,7 @@ max_result_bytes = 200
 
         self.assertEqual(reply, 'Found one source.')
         self.assertTrue(chat.reply_displayed)
+        tools.invoke.assert_not_called()
 
     def test_length_stop_still_executes_send_message_from_same_tool_batch(self):
         response = self.message([

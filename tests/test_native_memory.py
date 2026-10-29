@@ -856,7 +856,8 @@ class SearchThenSaveTests(unittest.TestCase):
         # The provider reports a prompt as large as the bytes, so no calibration discount applies.
         chat = Chat(self.cfg, self.store, self.budget, lambda messages, **_: (huge, 30000, 300, 0),
                     self.memory, self.tools, output=output.append)
-        self.assertIn('tool was not executed', chat.send('hi'))
+        with self.assertRaises(RequestFailed):
+            chat.send('hi')
         self.assertNotIn('hold', [n for n, _ in self.backend.calls])
         self.assertTrue(any('长度检查' in line for line in output))
 

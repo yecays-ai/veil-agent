@@ -2778,6 +2778,8 @@ class Chat:
         mixed_sent_messages = []
         work_since_message = False  # a non-message tool ran after the last sent message
         result_summaries = {}
+        result_call_ids = {}
+        masked_tool_messages = set()
 
 
         def log_tool(name, path, state, call_id=None, detail=None, **metadata):
@@ -2851,20 +2853,24 @@ class Chat:
             for message in loop_messages[current_start:]:
                 if (message is protected or message.get('role') != 'tool'
                         or not isinstance(message.get('content'), str)
-                        or '[这条较早的工具结果已缩短，需要可再取一次。]' in message['content']):
+                        or id(message) in masked_tool_messages):
                     continue
                 content = message['content']
                 prefix = content[:600]
                 closing_tag = next((tag for tag in (
                     '</untrusted_mcp>', '</untrusted_browser>', '</untrusted_windows_desktop>')
                     if tag in content and tag not in prefix), None)
-                message['content'] = prefix + notice + (f'\n{closing_tag}' if closing_tag else '')
+                shortened = prefix + notice + (f'\n{closing_tag}' if closing_tag else '')
+                if len(shortened) >= len(content):
+                    continue
+                message['content'] = shortened
+                masked_tool_messages.add(id(message))
                 call_id = message.get('tool_call_id')
                 summary = result_summaries.get(call_id)
                 if summary:
                     summary['result_state'] = '已截断'
                     log_tool(summary['tool'], summary['path'], summary['state'],
-                             call_id=call_id,
+                             call_id=result_call_ids.get(call_id, call_id),
                              detail='本轮较早的工具结果已缩短，模型可按需重新获取。',
                              result_state='已截断', _observe_runtime=False)
                 if request_size(offered) <= self.cfg.provider['max_input_tokens']:
@@ -3314,6 +3320,19 @@ class Chat:
                         if self._resolve_tool_name(call.function.name, offered) != 'send_message':
                             continue
                         call_id = f'{request_id}:{step}:{getattr(call, "id", None) or call_index}'
+                        if autonomy and autonomy_tool_steps >= autonomy_tool_limit:
+                            self.autonomy_step_limited = True
+                            detail = (f'Autonomous activity reached the {autonomy_tool_limit}-tool-step '
+                                      'limit for this run; this message was not sent.')
+                            self.output(display_call(call.function.name, call.function.name,
+                                                     '被拒绝', detail))
+                            summaries.append({'tool': call.function.name,
+                                              'path': call.function.name, 'state': '被拒绝'})
+                            log_tool(call.function.name, call.function.name, '被拒绝',
+                                     call_id=call_id, detail=detail)
+                            break
+                        if autonomy:
+                            autonomy_tool_steps += 1
                         try:
                             args = json.loads(call.function.arguments or '{}')
                             summary = call.function.name
@@ -3376,13 +3395,14 @@ class Chat:
                         log_detail = (execution.activity_detail or (
                             'Isolated public browser step.' if canonical_name == 'browser'
                             else 'Windows desktop action completed.'))
-                    if result_state in ('已截断', '结果过长'):
+                    if result_state == '结果过长':
                         log_detail = display_detail
                     self._record_tool_result(call, execution, result_state, display_detail,
                                              summaries, lambda name, path, state, **metadata:
                                              log_tool(name, path, state, call_id=call_id,
                                                       detail=log_detail, **metadata))
                     result_summaries[call.id] = summaries[-1]
+                    result_call_ids[call.id] = call_id
                     if autonomy and self.autonomy_should_yield and self.autonomy_should_yield():
                         self.autonomy_interrupted = True
                         self.budget.settle(next_reservation, next_cfg, 0, 0, 0)

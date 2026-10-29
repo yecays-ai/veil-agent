@@ -5,14 +5,14 @@
 ## 当前目标与现状
 
 - 当前目标：Peter 可以持续查阅网页或 GitHub，旧工具结果按需缩短，仍能将结论发给 Lan。
-- 工单 165：PR #213 已开放，分支 `ticket/165-tool-results-fit`。本轮较早工具结果按需缩短，单个超大结果尽量截断保留，长度不足时仍允许 `send_message`，长度停止走系统错误；`web_search` 拒绝信息会回显不合法参数。工具循环、网页工具与活动行定向测试 38 项通过；CI 与 CodeRabbit 审查待完成，Windows 体验待验收。设计参考 OpenHands observation masking，仅复用遮蔽旧观测思路，不增加依赖或模型调用。
+- 工单 165：PR #213 已开放，分支 `ticket/165-tool-results-fit`。本轮较早工具结果按需缩短，单个超大结果尽量截断保留，长度不足时仍允许 `send_message`，长度停止走系统错误；`web_search` 拒绝信息会回显不合法参数。首个远程 CI 在旧 head `87da6aa` 上有 4 项旧断言失败，按新行为更新；另修 Cubic 指出的自主限额、活动记录关联与遮蔽边界问题。CodeRabbit 对旧 head 仍显示处理中；修复后 head 的 CI 与复审待完成。Windows 体验待验收。设计参考 OpenHands observation masking，仅复用遮蔽旧观测思路，不增加依赖或模型调用。
 - 工单 164：PR #212 已开放，角色配置、schema 和统一分发映射已实现；移除 `windows_now_playing` 实现、配置与 WinRT 依赖。定向测试已通过，最新审查问题已修复并等待自动检查；Windows 实际体验尚未验收，步骤见 `docs/tickets/164-peter-tool-aliases.md`。
 - 工单 161：PR #209 已于 2026-10-29 合并，合并提交 `cd30c10`。本地专项、全量 Python（760 项通过、11 项跳过）、桌面单测（10 项）和 Electron 虚构窗口 smoke 记录在 PR；Windows 正式程序体验待验收。
 - 现状：工单 159 PR #207 已合并（`f302ac8`，Codex 实现、Claude 评审补修）：短期便签积压分批提取、逐批推进检查点；缓存用量区分明确的 0 与接口未报告。工单 158 PR #206 已合并（`7b91d83`）：小红书读取超时不再锁死；错误记录到 `data/<id>/xiaohongshu/errors.jsonl`。工单 157 PR #205 已合并。
 - 前序记录：工单 156 的 PR #204 已合并为上述 main；代码、CI 与 Windows 发行文件检查记录见下方，真实小红书账号体验仍待验收。工单 155 PR #203 已合并；工单 154 PR #202、153 PR #201、152 PR #200、151 PR #198/#199 已合并，体验状态以下表为准。
 - 工单 160（PR #208，分支 `ticket/159-xiaohongshu-page-load`，因 Codex 的 PR #207 先占 159 改号）：Lan 更新 158 后登录复查报「refused」，原因是上游浏览器页面没加载完时返回 HTTP 500 `STATUS_CHECK_FAILED`（没登录是 200 + false）。四个页面失败代码改为临时失败；页面连续 3 次没加载出来暂停保护账号，成功清零；本机原因不计入；其他拒绝带 HTTP 状态和上游代码；登录脚本复查失败时保留有效绑定。
 - 工单 162：PR #210 已于 2026-10-29 合并。受控读取测得登录状态约 27.8 秒、推荐流约 11.9 秒后报 `LIST_FEEDS_FAILED`；上游 v2.5.5 登录检查等待整页 `load`，feeds 数据只轮询 8 秒。改为先等新页面 DOMContentLoaded，再等初始状态明确呈现登录用户 ID 或访客；feeds 注水等待延至 25 秒。固定上游补丁脚本、本地 Go 1.24.0 Windows x64 构建、SHA-256 校验和合并后手动发行流水线已准备。真实账号体验待验收。详情见 `docs/tickets/162-xiaohongshu-page-wait.md`。
-- 工单 163：PR #211 已合并；最新 head 的必需 CI 已通过。首次配置按旧开关初始化 MCP 总开关，迁移按已注册适配器去重，重启不会重复添加。Windows 体验按 `docs/tickets/163-mcp-integrations.md` 待验收。工单 161、162 的体验验收仍待进行。下一工单号 165。
+- 工单 163：PR #211 已合并；最新 head 的必需 CI 已通过。首次配置按旧开关初始化 MCP 总开关，迁移按已注册适配器去重，重启不会重复添加。Windows 体验按 `docs/tickets/163-mcp-integrations.md` 待验收。工单 161、162 的体验验收仍待进行。下一工单号 166。
 - 既有验收：2026-10-28 Lan 确认截至 141 已实际使用的功能通过，098 QQ 邮箱等 2026-11-07。10-31 寻宝后再观察动机机制；其余验收状态保留在下表。
 
 ## 验收总表（按功能）

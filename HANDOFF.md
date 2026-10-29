@@ -2,8 +2,8 @@
 
 ## 当前进度
 
-- 工单 165：PR #213 已创建，分支 `ticket/165-tool-results-fit` 基于 main `ea147a7`。本轮旧工具结果遮蔽、单项截断、长度停止异常、超限时保留 `send_message` 和 `web_search` 参数回显已实现；工具循环、网页工具与活动行定向测试 38 项通过，Python 编译和桌面 JavaScript 语法检查通过。状态文档正在同步到 PR；CI、CodeRabbit 审查和 Windows 体验待完成。
-- 下一步：推送状态文档更新，随后请求 CodeRabbit 并核对 PR 最新 head 的必需 CI；按工单步骤安排 Lan 做 Windows 验收。
+- 工单 165：PR #213 已创建，分支 `ticket/165-tool-results-fit` 基于 main `ea147a7`。已实现旧结果遮蔽、单项截断、长度停止异常处理、超限时保留 `send_message` 和 `web_search` 参数回显。旧 head `87da6aa` 的远程全量 CI 有 4 项与新行为不一致的旧断言失败；Cubic 找出的自主工具限额、活动记录 ID、保留完整结果日志、遮蔽身份与短结果边界问题，以及断言/状态文档问题已纳入同一待提交修复。CodeRabbit 对旧 head 仍显示处理中。修复后 head 尚未推送，CI、CodeRabbit 复审和 Windows 体验未完成。此前 38 项定向测试与语法检查通过；本轮受限环境测试因临时目录及测试导入路径报错，不能计为通过；Python 编译和 `git diff --check` 通过。
+- 下一步：完成一次修复提交并推送，核对修复后 head 的 CI 与 CodeRabbit/Cubic 评价；没有实质问题且必需 CI 通过后合并。Windows 实际体验仍按工单步骤验收。
 - GitHub 当前 main 为 `ea147a730840ab4c1ee4c2bee639888111d15b11`；本机 GitHub DNS 解析失败，已由 GitHub 连接器读取提交记录核对。已保留另一现存本地 worktree `ticket/165-xhs-release-fallback`，未修改。
 - 工单 164：main 的 `STATUS.md` 记录 PR #212 已开放；GitHub review 记录中 Cubic/CodeRabbit 意见已处理，`ea147a7` 的 combined status 暂无状态项。Windows 实际体验待验收。
 - 工单 163：PR #211 已合并，必需 CI 已通过；Windows 体验验收待按 `docs/tickets/163-mcp-integrations.md` 执行。
