@@ -73,9 +73,25 @@ class CacheOrderTests(unittest.TestCase):
         self.chat.send('two')
         text = self.budget.cache_display()
         self.assertIn('80%', text)
-        self.assertIn('1600 / 输入 2000', text)
+        self.assertIn('1600 / 已报告输入 2000', text)
         self.clock[0] = '2026-10-20T09:00:00+08:00'
         self.assertIn('暂无', self.budget.cache_display())
+
+    def test_missing_cache_usage_is_unknown_but_charged_at_regular_input_rate(self):
+        request_id, reserved = self.budget.reserve(self.cfg)
+        self.budget.settle(request_id, self.cfg, 1000, 20, None)
+        row = self.store.read('costs.jsonl')[-1]
+        self.assertEqual(row['cached_tokens'], 0)
+        self.assertIs(row['cache_reported'], False)
+        self.assertEqual(row['amount'], str((1000 * 2 + 20 * 8) / 1_000_000))
+        self.assertIn('未报告缓存用量', self.budget.cache_display())
+        self.assertNotIn('缓存命中 0%', self.budget.cache_display())
+
+        request_id, reserved = self.budget.reserve(self.cfg)
+        self.budget.settle(request_id, self.cfg, 1000, 20, 0)
+        self.assertIs(self.store.read('costs.jsonl')[-1]['cache_reported'], True)
+        self.assertIn('已报告输入 1000 tokens', self.budget.cache_display())
+        self.assertIn('另有 1 次', self.budget.cache_display())
 
 
 if __name__ == '__main__':
