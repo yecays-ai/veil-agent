@@ -34,8 +34,8 @@ def _validate_service(raw):
             not isinstance(arg, str) or len(arg) > 2000 or '\x00' in arg for arg in args):
         raise MCPConfigError('启动参数必须是字符串列表。')
     cwd = raw.get('cwd') or None
-    if cwd is not None and (not isinstance(cwd, str) or len(cwd) > 1000 or not Path(cwd).is_dir()):
-        raise MCPConfigError('工作目录不存在。')
+    if cwd is not None and (not isinstance(cwd, str) or len(cwd) > 1000 or '\x00' in cwd):
+        raise MCPConfigError('工作目录无效。')
     permission = raw.get('permission', 'ask')
     if permission not in ('ask', 'direct'):
         raise MCPConfigError('服务权限无效。')
@@ -53,6 +53,8 @@ class _Worker:
         self.main_task = None
         self.jobs = None
         self.active_reply = None
+        self.pending = set()
+        self.pending_lock = threading.Lock()
         self.tools = []
         self.tool_limit_hit = False
         self.closing = threading.Event()
@@ -81,12 +83,19 @@ class _Worker:
                     self.ready.set_result(True)
                     if self.closing.is_set():
                         return
+                    missed_pings = 0
                     while True:
                         try:
                             job = await asyncio.wait_for(self.jobs.get(), timeout=2)
                         except TimeoutError:
-                            async with asyncio.timeout(2):
-                                await session.send_ping()
+                            try:
+                                async with asyncio.timeout(5):
+                                    await session.send_ping()
+                                missed_pings = 0
+                            except TimeoutError:
+                                missed_pings += 1
+                                if missed_pings >= 3:
+                                    raise RuntimeError('MCP 服务连续三次未回应连接探测。')
                             continue
                         if job is None:
                             break
@@ -100,62 +109,84 @@ class _Worker:
                             if response.isError:
                                 detail = '\n'.join(str(getattr(block, 'text', '')) for block in response.content)
                                 raise RuntimeError(('MCP 工具返回错误：' + detail)[:300])
-                            if not reply.done():
-                                value = '\n'.join(str(getattr(block, 'text', '')) for block in response.content)
-                                if not value and response.structuredContent is not None:
-                                    value = json.dumps(response.structuredContent, ensure_ascii=False)
-                                reply.set_result(value[:16000])
+                            value = '\n'.join(str(getattr(block, 'text', '')) for block in response.content)
+                            if not value and response.structuredContent is not None:
+                                value = json.dumps(response.structuredContent, ensure_ascii=False)
+                            self._finish(reply, value=value[:16000])
                         except TimeoutError:
-                            if not reply.done():
-                                reply.set_exception(RuntimeError('MCP 工具调用超时，执行结果未知。'))
+                            self._finish(reply, error=RuntimeError('MCP 工具调用超时，执行结果未知。'))
                             self.closing.set()
                             return
                         except Exception as exc:
-                            if not reply.done():
-                                reply.set_exception(exc)
+                            self._finish(reply, error=exc)
                         finally:
                             self.active_reply = None
         try:
             asyncio.run(run())
         except BaseException as exc:
             if not self.ready.done():
-                self.ready.set_exception(RuntimeError(str(exc)[:300]))
+                message = 'MCP 服务已停用。' if self.closing.is_set() else (str(exc) or 'MCP 服务启动失败。')
+                self.ready.set_exception(RuntimeError(message[:300]))
             if self.jobs is not None:
                 while not self.jobs.empty():
                     job = self.jobs.get_nowait()
-                    if job is not None and not job[2].done():
-                        job[2].set_exception(RuntimeError('MCP 服务已断开。'))
+                    if job is not None:
+                        self._finish(job[2], error=RuntimeError('MCP 服务已断开。'))
+
+    def _finish(self, reply, value=None, error=None):
+        with self.pending_lock:
+            if reply.done():
+                return
+            try:
+                if error is None:
+                    reply.set_result(value)
+                else:
+                    reply.set_exception(error)
+            except InvalidStateError:
+                pass
 
     def call(self, name, args, should_stop=None):
         if not self.thread.is_alive() or self.loop is None or self.closing.is_set():
             raise RuntimeError('MCP 服务已断开。')
         reply = Future()
-        self.loop.call_soon_threadsafe(self.jobs.put_nowait, (name, args, reply))
+        with self.pending_lock:
+            self.pending.add(reply)
+        try:
+            self.loop.call_soon_threadsafe(self.jobs.put_nowait, (name, args, reply))
+        except RuntimeError as exc:
+            with self.pending_lock:
+                self.pending.discard(reply)
+            raise RuntimeError('MCP 服务已断开。') from exc
         deadline = time.monotonic() + CALL_TIMEOUT + 3
-        while True:
-            if reply.done():
-                return reply.result()
-            if should_stop and should_stop():
-                reply.cancel()
-                self.close()
-                raise RuntimeError('MCP 调用已停止，执行结果未知。')
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                reply.cancel()
-                self.close()
-                raise RuntimeError('MCP 工具调用超时，执行结果未知。')
-            try:
-                return reply.result(timeout=min(0.2, remaining))
-            except FutureTimeout:
-                pass
+        try:
+            while True:
+                if reply.done():
+                    return reply.result()
+                if should_stop and should_stop():
+                    with self.pending_lock:
+                        reply.cancel()
+                    self.close()
+                    raise RuntimeError('MCP 调用已停止，执行结果未知。')
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    with self.pending_lock:
+                        reply.cancel()
+                    self.close()
+                    raise RuntimeError('MCP 工具调用超时，执行结果未知。')
+                try:
+                    return reply.result(timeout=min(0.2, remaining))
+                except FutureTimeout:
+                    pass
+        finally:
+            with self.pending_lock:
+                self.pending.discard(reply)
 
     def stop(self):
         self.closing.set()
-        if self.active_reply is not None and not self.active_reply.done():
-            try:
-                self.active_reply.set_exception(RuntimeError('MCP 服务已停用。'))
-            except InvalidStateError:
-                pass
+        with self.pending_lock:
+            for reply in self.pending:
+                if not reply.done():
+                    reply.set_exception(RuntimeError('MCP 服务已停用。'))
         if self.thread.is_alive() and self.loop and self.jobs:
             try:
                 if self.main_task:
@@ -235,6 +266,10 @@ class MCPServices:
                 return None
             if not self.config['enabled'] or not service['enabled']:
                 return None
+            if service['cwd'] and not Path(service['cwd']).is_dir():
+                self.errors[service['id']] = '工作目录不存在。'
+                self.failed.add(service['id'])
+                return None
             retiring = self.retiring.get(service['id'])
             if retiring:
                 if retiring.thread.is_alive():
@@ -250,7 +285,7 @@ class MCPServices:
                     try:
                         worker.ready.result()
                     except Exception as exc:
-                        self.errors[service['id']] = (str(exc) or type(exc).__name__)[:300]
+                        self.errors.setdefault(service['id'], (str(exc) or type(exc).__name__)[:300])
                         self.failed.add(service['id'])
                 elif time.monotonic() - worker.started_at > 12:
                     self.errors[service['id']] = 'MCP 服务连接超时。'
@@ -268,6 +303,10 @@ class MCPServices:
             if worker:
                 worker.stop()
                 if worker.thread.is_alive():
+                    if retry:
+                        self.retiring[service['id']] = worker
+                        self.workers.pop(service['id'], None)
+                        self.failed.discard(service['id'])
                     return None
                 self.workers.pop(service['id'], None)
             worker = _Worker(service)
@@ -319,6 +358,11 @@ class MCPServices:
             for service in self.config['services']:
                 worker = self.workers.get(service['id'])
                 retiring = self.retiring.get(service['id'])
+                if retiring and not retiring.thread.is_alive():
+                    self.retiring.pop(service['id'], None)
+                    retiring = None
+                    if self.errors.get(service['id']) == '旧 MCP 服务正在关闭，请稍后刷新。':
+                        self.errors.pop(service['id'], None)
                 if retiring and retiring.thread.is_alive():
                     self.errors[service['id']] = '旧 MCP 服务正在关闭，请稍后刷新。'
                 if worker and not worker.ready.done() and time.monotonic() - worker.started_at > 12:
@@ -329,7 +373,7 @@ class MCPServices:
                     try:
                         worker.ready.result()
                     except Exception as exc:
-                        self.errors[service['id']] = (str(exc) or type(exc).__name__)[:300]
+                        self.errors.setdefault(service['id'], (str(exc) or type(exc).__name__)[:300])
                         self.failed.add(service['id'])
                 if worker and not worker.thread.is_alive() and service['id'] not in self.failed:
                     self.errors[service['id']] = 'MCP 服务已断开。'

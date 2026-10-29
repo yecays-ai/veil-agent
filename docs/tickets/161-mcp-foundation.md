@@ -12,6 +12,6 @@ Lan 可在 VEIL 桌面添加、启停和查看本地 stdio MCP 服务，Peter �
 
 ## 验收步骤
 
-1. 更新 Windows 桌面程序，打开并拖出「MCP」标签，添加 `python` 和 `tests/fixtures/mcp_echo_server.py` 作为本地测试服务；打开总开关后看到 `echo`、`slow` 工具，再让 Peter 调用 `echo`。
+1. 更新 Windows 桌面程序，打开并拖出「MCP」标签，使用 VEIL 安装目录的 `.venv\Scripts\python.exe` 作为启动命令、该目录内的 `tests/fixtures/mcp_echo_server.py` 作为参数添加测试服务；打开总开关后看到 `echo`、`slow` 工具，再让 Peter 调用 `echo`。
 2. 分别关闭该服务和 MCP 总开关，让 Peter 再次尝试调用；确认调用被拒绝，其他工具和聊天照常。重启 VEIL，确认配置与开关恢复。
 3. 把启动命令临时改成不存在的程序，再改回；确认启动错误可见。调用 `slow` 等待约 20 秒确认超时错误可见、聊天不崩溃。确认 GitHub、小红书现有功能照常。

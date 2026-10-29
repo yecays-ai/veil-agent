@@ -1370,14 +1370,23 @@ if(detachedView&&['chat','activity','context','memory','mcp','more'].includes(de
 }else{setPage('chat');box.focus()}
 setBusy(true);poll();
 
-let mcpView={enabled:false,services:[]},mcpEditing=null,mcpLoading=false,mcpReady=false,mcpSaveQueue=Promise.resolve();
+let mcpView={enabled:false,services:[]},mcpEditing=null,mcpLoading=false,mcpReady=false,mcpSaving=false,mcpSaveQueue=Promise.resolve(),mcpGeneration=0,mcpSignature='',mcpActionError='';
 $('mcp-add').disabled=true;$('mcp-enabled').disabled=true;
 function mcpConfig(source=mcpView){return {enabled:source.enabled,services:source.services.map(({id,command,args,cwd,enabled,permission})=>({id,command,args,cwd,enabled,permission}))}}
 async function loadMCP(force=false){
-  if(mcpLoading)return;
-  mcpLoading=true;$('mcp-status').textContent='正在读取服务状态…';
-  try{const response=await api(force?'/api/mcp?retry=1':'/api/mcp');const data=await response.json();if(!response.ok)throw new Error(data.error||'读取失败');mcpView=data;mcpReady=true;renderMCP()}
-  catch(error){$('mcp-status').textContent=error.message}
+  if(mcpLoading||mcpSaving)return;
+  const generation=mcpGeneration;
+  mcpLoading=true;if(!mcpReady||force)$('mcp-status').textContent='正在读取服务状态…';
+  try{
+    const response=await api(force?'/api/mcp?retry=1':'/api/mcp');const data=await response.json();
+    if(generation!==mcpGeneration)return;
+    if(!response.ok)throw new Error(data.error||'读取失败');
+    const signature=JSON.stringify(data);
+    mcpReady=true;if(force)mcpActionError='';
+    if(signature!==mcpSignature){mcpView=data;mcpSignature=signature;renderMCP()}
+    else if(force)$('mcp-status').textContent=mcpActionError||mcpView.error||`${mcpView.services.length} 个服务`;
+  }
+  catch(error){if(generation===mcpGeneration&&(!mcpReady||force))$('mcp-status').textContent=error.message}
   finally{mcpLoading=false}
 }
 function saveMCP(change){
@@ -1385,6 +1394,7 @@ function saveMCP(change){
 }
 async function saveMCPNow(change){
   if(!mcpReady){$('mcp-status').textContent='请先等服务配置读取完成。';return false}
+  mcpSaving=true;mcpGeneration++;
   $('mcp-status').textContent='正在保存…';
   try{
     for(let attempt=0;attempt<3;attempt++){
@@ -1394,16 +1404,17 @@ async function saveMCPNow(change){
       const response=await api('/api/mcp',{...next,revision:current.revision},30000);const data=await response.json();
       if(response.status===409)continue;
       if(!response.ok)throw new Error(data.error||'保存失败');
-      mcpView=data;renderMCP();return true;
+      mcpView=data;mcpSignature=JSON.stringify(data);mcpActionError='';renderMCP();return true;
     }
     throw new Error('配置正在其他窗口修改，请稍后重试。');
   }
-  catch(error){$('mcp-status').textContent=error.message;return false}
+  catch(error){mcpActionError=error.message;$('mcp-status').textContent=error.message;return false}
+  finally{mcpSaving=false;mcpGeneration++}
 }
 function renderMCP(){
   $('mcp-add').disabled=!mcpReady;$('mcp-enabled').disabled=!mcpReady;
   $('mcp-enabled').checked=mcpView.enabled;
-  $('mcp-status').textContent=mcpView.error||`${mcpView.services.length} 个服务`;
+  $('mcp-status').textContent=mcpActionError||mcpView.error||`${mcpView.services.length} 个服务`;
   const list=$('mcp-list');list.replaceChildren();
   if(!mcpView.services.length){const p=document.createElement('p');p.className='muted';p.textContent='还没有本地 MCP 服务。';list.append(p)}
   for(const service of mcpView.services){

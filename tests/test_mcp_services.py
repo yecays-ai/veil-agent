@@ -27,7 +27,7 @@ class MCPServicesTest(unittest.TestCase):
             'cwd': None, 'enabled': service_enabled, 'permission': permission}]}
 
     def await_status(self, expected):
-        deadline = time.monotonic() + 8
+        deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
             self.manager.schemas()
             if self.manager.view()['services'][0]['status'] == expected:
@@ -65,6 +65,18 @@ class MCPServicesTest(unittest.TestCase):
         with self.assertRaises(MCPConflict):
             self.manager.save(self.config(enabled=True), expected_revision=0)
         self.assertFalse(self.manager.view()['enabled'])
+
+    def test_missing_working_directory_keeps_other_config(self):
+        config = self.config()
+        config['services'][0]['cwd'] = str(Path(self.tmp.name) / 'gone')
+        self.manager.save(config)
+        reopened = MCPServices(self.manager.path)
+        try:
+            self.assertEqual(len(reopened.view()['services']), 1)
+            self.assertEqual(reopened.schemas(), [])
+            self.assertIn('工作目录不存在', reopened.view()['services'][0]['error'])
+        finally:
+            reopened.close()
 
     def test_untrusted_result_and_checkpoint_policy(self):
         from veil_agent import model_tool_result
