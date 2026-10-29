@@ -865,9 +865,8 @@ max_result_bytes = 200
 
     def test_truncated_preview_does_not_claim_omitted_screenshot_was_seen(self):
         from lab_preview import LabPreviewResult
-        self.cfg.provider['max_input_tokens'] = 3000
         self.cfg.tools['max_steps'] = 2
-        preview = LabPreviewResult('Screenshot captured: yes.\n' + 'secret ' * 900,
+        preview = LabPreviewResult('Screenshot captured: yes.\n' + 'secret ' * 15000,
                                    'data:image/png;base64,aGVsbG8=')
         first = self.message([self.tool_call('read_text_file', '{"path":"preview"}', 'preview')])
         final = self.message(content='The preview text was read.')
