@@ -16,8 +16,8 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           repository: xpzouying/xiaohongshu-mcp
           ref: a5c8f7799980ba1fdd501999843eb2d17e4c9a9f
@@ -29,7 +29,7 @@ jobs:
         run: |
           if ($env:SIDECAR_VERSION -ne 'v2.5.5-veil.1') { throw 'Unexpected sidecar version.' }
           python "$env:GITHUB_WORKSPACE/scripts/patch_xiaohongshu_mcp_v2_5_5.py" "$env:GITHUB_WORKSPACE/upstream"
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
           go-version: 1.24.0
       - name: Build Windows x64 sidecar
@@ -44,7 +44,7 @@ jobs:
           $out = "$env:RUNNER_TEMP/xiaohongshu-mcp-windows-amd64.exe"
           go build -buildvcs=false -trimpath -ldflags "-s -w -X main.version=$env:SIDECAR_VERSION" -o $out .
           $actual = (Get-FileHash $out -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($actual -ne '4efa73d4bb1f5def9f2fa7f822464b01b519a9ff99955f884b680c884a215ad9') {
+          if ($actual -ne '9b905234693040dab963f1824de9781a4b7c137deda83e5ed80d480ddcd86d19') {
             throw "Built binary hash mismatch: $actual"
           }
       - name: Publish pinned binary and upstream license
@@ -53,10 +53,22 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SIDECAR_VERSION: ${{ inputs.version }}
         run: |
-          gh release create $env:SIDECAR_VERSION `
+          $release = gh release list --repo "$env:GITHUB_REPOSITORY" --limit 100 --json tagName,isDraft | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Could not list existing releases.' }
+          if (-not ($release | Where-Object { $_.tagName -eq $env:SIDECAR_VERSION })) {
+            gh release create $env:SIDECAR_VERSION `
+              --repo "$env:GITHUB_REPOSITORY" `
+              --target main `
+              --draft `
+              --title "Xiaohongshu MCP $env:SIDECAR_VERSION" `
+              --notes "VEIL-patched Windows x64 sidecar built from xpzouying/xiaohongshu-mcp v2.5.5 at a5c8f7799980ba1fdd501999843eb2d17e4c9a9f. See docs/tickets/162-xiaohongshu-page-wait.md and the included Apache-2.0 license."
+            if ($LASTEXITCODE -ne 0) { throw 'Could not create the draft sidecar release.' }
+          }
+          gh release upload $env:SIDECAR_VERSION `
             "$env:RUNNER_TEMP/xiaohongshu-mcp-windows-amd64.exe" `
             "upstream/LICENSE" `
             --repo "$env:GITHUB_REPOSITORY" `
-            --target main `
-            --title "Xiaohongshu MCP $env:SIDECAR_VERSION" `
-            --notes "VEIL-patched Windows x64 sidecar built from xpzouying/xiaohongshu-mcp v2.5.5 at a5c8f7799980ba1fdd501999843eb2d17e4c9a9f. See docs/tickets/162-xiaohongshu-page-wait.md and the included Apache-2.0 license."
+            --clobber
+          if ($LASTEXITCODE -ne 0) { throw 'Could not upload the sidecar release assets.' }
+          gh release edit $env:SIDECAR_VERSION --repo "$env:GITHUB_REPOSITORY" --draft=false
+          if ($LASTEXITCODE -ne 0) { throw 'Could not publish the sidecar release.' }

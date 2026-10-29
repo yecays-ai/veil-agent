@@ -2,7 +2,7 @@
 
 ## 当前进度
 
-- 工单 162：分支 `ticket/162-xiaohongshu-page-wait`、PR #210 已推送，目前自动检查运行中。基于工单 161 合并提交 `cd30c10`。已复现登录状态约 27.8 秒、推荐流约 11.9 秒后 HTTP 500；上游固定 v2.5.5 的原因是登录检查等整页 `load`、feeds 状态只等 8 秒。上游补丁脚本改为等初始状态明确呈现登录用户 ID 或访客，并将 feeds 等待延长到 25 秒；Go 1.24.0 Windows x64 本机构建成功，产物 SHA-256 已固定。静态检查通过，测试与真实账号体验未运行。
+- 工单 162：分支 `ticket/162-xiaohongshu-page-wait`、PR #210 已推送，目前最新自动检查运行中。基于工单 161 合并提交 `cd30c10`。已复现登录状态约 27.8 秒、推荐流约 11.9 秒后 HTTP 500；上游固定 v2.5.5 的原因是登录检查等整页 `load`、feeds 状态只等 8 秒。上游补丁脚本改为等新页面 DOMContentLoaded 和初始状态中的登录用户 ID 或访客，并将 feeds 等待延长到 25 秒；Go 1.24.0 Windows x64 本机构建成功，产物 SHA-256 已固定。静态检查通过，测试与真实账号体验未运行。
 - 下一步先核对 PR #210 当前 head 的自动检查与评审。合并后在 main 手动运行 `Build Xiaohongshu Windows sidecar` 生成发行文件；再提醒 Lan 更新 VEIL 并按 `docs/tickets/162-xiaohongshu-page-wait.md` 验收。
 
 - 工单 160（PR #208）：上游 v2.5.5 浏览器页面失败返回 HTTP 500 + `STATUS_CHECK_FAILED`/`LIST_FEEDS_FAILED`/`SEARCH_FEEDS_FAILED`/`GET_FEED_DETAIL_FAILED`（未登录是 200 + `is_logged_in:false`，因 pkg/errors `Wrap(nil)` 返回 nil）。这些改为 `PageFailure(Transient)`；只有 `PageFailure`（含 HTTP 超时、整次超时）计入 `transient_streak`，连续 3 次锁死并说明，成功清零；其他拒绝文字带 `HTTP <状态> <代码>`（代码仅 `[A-Z_]`）。`xiaohongshu_setup.login_and_bind` 复查遇 `PageFailure` 时，绑定文件有效则提示直接启动 VEIL。下一工单号 161。

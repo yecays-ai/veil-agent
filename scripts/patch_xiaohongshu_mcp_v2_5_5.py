@@ -19,6 +19,12 @@ def main() -> None:
     login_path = root / 'xiaohongshu/login.go'
     login_source = login_path.read_bytes()
     newline = b'\r\n' if b'\r\n' in login_source else b'\n'
+    replace_once(
+        root,
+        'xiaohongshu/login.go',
+        b'"github.com/go-rod/rod"',
+        b'"github.com/go-rod/rod"' + newline + b'\t"github.com/go-rod/rod/lib/proto"',
+    )
     login = newline.join((
         b'func (a *LoginAction) CheckLoginStatus(ctx context.Context) (bool, error) {',
         '\t// 加超时保护：只是查登录态的快速检查，不应无限挂（登录扫码的等待在 Login/WaitForLogin 里）'.encode('utf-8'),
@@ -29,7 +35,9 @@ def main() -> None:
         b'func (a *LoginAction) CheckLoginStatus(ctx context.Context) (bool, error) {',
         '\t// 加超时保护：只是查登录态的快速检查，不应无限挂（登录扫码的等待在 Login/WaitForLogin 里）'.encode('utf-8'),
         b'\tpp := a.page.Context(ctx).Timeout(30 * time.Second)',
+        b'\twaitDOMLoaded := pp.WaitNavigation(proto.PageLifecycleEventNameDOMContentLoaded)',
         b'\tpp.MustNavigate("https://www.xiaohongshu.com/explore")',
+        b'\twaitDOMLoaded()',
         b'\tpp.MustWait(`() => {',
         b'\t\tconst user = window.__INITIAL_STATE__ && window.__INITIAL_STATE__.user;',
         b'\t\tconst info = user && user.userInfo && user.userInfo.value !== undefined ? user.userInfo.value : (user && user.userInfo);',

@@ -8,11 +8,11 @@ Peter 读取小红书时，登录状态检查不再等整页所有资源完成�
 
 - 工单 161 的 PR #209 已于 2026-10-29 合并，合并提交 `cd30c10`；162 独立工作树已同步到该提交。
 - 17:03 的受控读取中，登录状态接口约 27.8 秒才返回；推荐流约 11.9 秒返回 HTTP 500 `LIST_FEEDS_FAILED`。上游 v2.5.5 源码证实登录检查先等 `load` 事件（30 秒上下文），推荐流只给 `__INITIAL_STATE__.feed.feeds` 8 秒注水时间。相同 Cookie 的独立 Chromium 页面中用户状态先于整页 `load` 出现，推荐数据也在 8 秒之后注入；浏览器指纹与上游不同，因此该时间只作旁证。
-- 最小改动：上游登录检查改为等待初始状态中的登录用户 ID 或明确访客状态；推荐流等待上限从 8 秒改为 25 秒。保持每次读取的账号 ID 核验、原有 60 秒请求上限和 VEIL 只读边界。
-- 修复基于上游 Apache-2.0 项目 `xpzouying/xiaohongshu-mcp` 固定提交 `a5c8f7799980ba1fdd501999843eb2d17e4c9a9f`。复现补丁位于 `scripts/patch_xiaohongshu_mcp_v2_5_5.py`；Go 1.24.0 Windows x64 本机构建成功，产物 SHA-256 `4efa73d4bb1f5def9f2fa7f822464b01b519a9ff99955f884b680c884a215ad9` 固定在 `xiaohongshu_tools.py`。工单合并后从 `Build Xiaohongshu Windows sidecar` 手动生成公开发行文件，登录程序仍从上游 v2.5.5 下载并校验。
-- 代码、构建流水线和 PR CI 尚待完成；Windows 真实账号体验未验收。本机不运行小红书真实账号请求。
+- 最小改动：上游登录检查先等待新页面 DOMContentLoaded，再等初始状态中的登录用户 ID 或明确访客状态；推荐流等待上限从 8 秒改为 25 秒。保持每次读取的账号 ID 核验、原有 60 秒请求上限和 VEIL 只读边界。
+- 修复基于上游 Apache-2.0 项目 `xpzouying/xiaohongshu-mcp` 固定提交 `a5c8f7799980ba1fdd501999843eb2d17e4c9a9f`。复现补丁位于 `scripts/patch_xiaohongshu_mcp_v2_5_5.py`；Go 1.24.0 Windows x64 本机构建成功，产物 SHA-256 `9b905234693040dab963f1824de9781a4b7c137deda83e5ed80d480ddcd86d19` 固定在 `xiaohongshu_tools.py`。工单合并后从 `Build Xiaohongshu Windows sidecar` 手动生成公开发行文件，登录程序仍从上游 v2.5.5 下载并校验。
+- 代码和构建流水线已提交到 PR #210；PR CI 与评审待完成，Windows 真实账号体验未验收。本机不运行小红书真实账号请求。
 
 ## 验收步骤
 
 1. 合并后生成 `v2.5.5-veil.1` 发行文件，运行登录入口完成现有独立账号检查。
-2. 更新 VEIL 后让 Peter 读取一次登录状态和推荐流；确认推荐流不再因页面在 8 秒后注水而报 `LIST_FEEDS_FAILED`，而真实无数据/未登录仍明确返回失败。
+2. 更新 VEIL 后让 Peter 读取一次登录状态和推荐流；确认推荐流不再因页面在 8 秒后注水而报 `LIST_FEEDS_FAILED`，未登录仍明确返回未登录，合法空列表可正常返回，缺失或不可解析的数据仍明确失败。
