@@ -29,7 +29,8 @@ def _validate_service(raw):
         adapter_id = raw.get('adapter', service_id)
         if (not isinstance(service_id, str) or not NAME.fullmatch(service_id)
                 or '__' in service_id or service_id.endswith('_')
-                or adapter_id not in {'github', 'xiaohongshu'} or type(raw.get('enabled')) is not bool):
+                or not isinstance(adapter_id, str) or adapter_id not in {'github', 'xiaohongshu'}
+                or type(raw.get('enabled')) is not bool):
             raise MCPConfigError('内置 MCP 服务配置无效。')
         return {'id': service_id, 'adapter': adapter_id, 'builtin': True, 'enabled': raw['enabled'],
                 'permission': 'direct', 'command': '', 'args': [], 'cwd': None}
@@ -267,11 +268,15 @@ class MCPServices:
             raise MCPConfigError('MCP 总开关无效。')
         services = raw.get('services')
         if (not isinstance(services, list) or len(services) > 22
+                or sum(item.get('builtin') is True for item in services if isinstance(item, dict)) > 2
                 or sum(item.get('builtin') is not True for item in services if isinstance(item, dict)) > 20):
             raise MCPConfigError('最多配置 20 个本地 MCP 服务及 2 个内置集成。')
         result = [_validate_service(item) for item in services]
         if len({item['id'] for item in result}) != len(result):
             raise MCPConfigError('服务 ID 不能重复。')
+        adapters = [item['adapter'] for item in result if item.get('builtin')]
+        if len(set(adapters)) != len(adapters):
+            raise MCPConfigError('内置 MCP 集成不能重复配置。')
         return {'enabled': raw['enabled'], 'services': result}
 
     def save(self, raw, expected_revision=None):
