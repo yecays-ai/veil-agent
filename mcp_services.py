@@ -8,11 +8,28 @@ import re
 import subprocess
 import threading
 import time
+from urllib.parse import urlsplit
 
 
 NAME = re.compile(r'^[a-z][a-z0-9_]{0,31}$')
 TOOL_PREFIX = 'mcp__'
 CALL_TIMEOUT = 20
+
+
+def _local_observer_url(instructions):
+    if not isinstance(instructions, str):
+        return None
+    for candidate in re.findall(r'https?://[^\s<>"\']+', instructions):
+        try:
+            parsed = urlsplit(candidate.rstrip('.,;。'))
+            if (parsed.scheme == 'http' and parsed.hostname == '127.0.0.1'
+                    and parsed.port and 1 <= parsed.port <= 65535
+                    and not parsed.username and not parsed.password and parsed.path in ('', '/')
+                    and not parsed.query and not parsed.fragment):
+                return f'http://127.0.0.1:{parsed.port}'
+        except ValueError:
+            continue
+    return None
 
 
 class MCPConfigError(ValueError):
@@ -36,6 +53,9 @@ def _validate_service(raw):
                 'permission': 'direct', 'command': '', 'args': [], 'cwd': None}
     if not isinstance(raw, dict) or not NAME.fullmatch(str(raw.get('id', ''))) or '__' in raw.get('id', '') or raw['id'].endswith('_'):
         raise MCPConfigError('服务 ID 只能使用小写字母、数字和下划线，并以字母开头。')
+    managed = raw.get('managed')
+    if managed not in (None, 'nowhere'):
+        raise MCPConfigError('内置服务标记无效。')
     command = raw.get('command')
     args = raw.get('args', [])
     if not isinstance(command, str) or not command.strip() or len(command) > 500 or '\x00' in command:
@@ -49,15 +69,26 @@ def _validate_service(raw):
     permission = raw.get('permission', 'ask')
     if permission not in ('ask', 'direct'):
         raise MCPConfigError('服务权限无效。')
+    direct_grant = raw.get('direct_grant', False)
+    if managed and type(direct_grant) is not bool:
+        raise MCPConfigError('乌有乡直接调用授权状态无效。')
+    if managed and raw.get('enabled', True) and not direct_grant:
+        raise MCPConfigError('启用乌有乡直接调用前，必须由用户明确授权。')
     if not isinstance(raw.get('enabled', True), bool):
         raise MCPConfigError('服务开关无效。')
-    return {'id': raw['id'], 'command': command.strip(), 'args': args, 'cwd': cwd,
-            'enabled': raw.get('enabled', True), 'permission': permission}
+    result = {'id': raw['id'], 'command': command.strip(), 'args': args, 'cwd': cwd,
+              'enabled': raw.get('enabled', True), 'permission': permission}
+    if managed:
+        result['managed'] = managed
+        result['direct_grant'] = direct_grant
+    return result
 
 
 class _Worker:
-    def __init__(self, service):
+    def __init__(self, service, environment=None):
         self.service = service
+        self.environment = environment
+        self.observer_url = None
         self.ready = Future()
         self.loop = None
         self.main_task = None
@@ -82,11 +113,14 @@ class _Worker:
             if self.closing.is_set():
                 return
             params = StdioServerParameters(command=self.service['command'], args=self.service['args'],
-                                            cwd=self.service['cwd'])
+                                            cwd=self.service['cwd'], env=self.environment)
             async with stdio_client(params, errlog=subprocess.DEVNULL) as (read, write):
                 async with ClientSession(read, write) as session:
                     async with asyncio.timeout(10):
-                        await session.initialize()
+                        initialized = await session.initialize()
+                        self.observer_url = _local_observer_url(
+                            getattr(initialized, 'instructions', None)
+                            if self.service.get('managed') == 'nowhere' else None)
                         discovered = (await session.list_tools()).tools
                         self.tool_limit_hit = len(discovered) > 40
                         self.tools = discovered[:40]
@@ -216,7 +250,7 @@ class _Worker:
 
 
 class MCPServices:
-    def __init__(self, path, initial_integrations=None):
+    def __init__(self, path, initial_integrations=None, initial_services=None, managed_env=None):
         self.path = Path(path)
         self.lock = threading.RLock()
         self.workers = {}
@@ -224,6 +258,8 @@ class MCPServices:
         self.errors = {}
         self.failed = set()
         self.adapters = {}
+        self.initial_services = list(initial_services or [])
+        self.managed_env = dict(managed_env or {})
         self.config = {'enabled': False, 'services': []}
         self.revision = 0
         config_existed = self.path.exists()
@@ -261,17 +297,67 @@ class MCPServices:
                     self.config = migrated
                 except OSError as exc:
                     self.errors['_config'] = str(exc)[:300]
+        if self.initial_services and '_config' not in self.errors:
+            existing_managed = {item.get('managed'): index for index, item in enumerate(self.config['services'])
+                                if item.get('managed')}
+            additions = []
+            existing_ids = {item['id'] for item in self.config['services']}
+            changed = False
+            for item in self.initial_services:
+                if item.get('managed') in existing_managed:
+                    index = existing_managed[item['managed']]
+                    current = self.config['services'][index]
+                    refreshed = {**current, 'command': item['command'], 'args': item['args'],
+                                 'cwd': item['cwd'], 'managed': item['managed'],
+                                 'permission': item['permission'],
+                                 'direct_grant': current.get('direct_grant') is True}
+                    if refreshed['enabled'] and not refreshed['direct_grant']:
+                        refreshed['enabled'] = False
+                    if refreshed != current:
+                        self.config['services'][index] = refreshed
+                        changed = True
+                    continue
+                row = dict(item)
+                base = row['id']
+                suffix = 2
+                while row['id'] in existing_ids:
+                    row['id'] = f'peter_{base}' if suffix == 2 else f'peter_{base}_{suffix}'
+                    suffix += 1
+                existing_ids.add(row['id'])
+                additions.append(row)
+            if additions or changed:
+                try:
+                    migration_enabled = self.config['enabled'] or (
+                        not config_existed and any(row.get('enabled') is True for row in additions))
+                    migrated = self._validate({'enabled': migration_enabled,
+                                               'services': [*self.config['services'], *additions]})
+                    self.path.parent.mkdir(parents=True, exist_ok=True)
+                    temp = self.path.with_suffix('.tmp')
+                    temp.write_text(json.dumps(migrated, ensure_ascii=False, indent=2), encoding='utf-8')
+                    os.replace(temp, self.path)
+                    self.config = migrated
+                except (OSError, ValueError, TypeError) as exc:
+                    self.errors['_config'] = str(exc)[:300]
 
     @staticmethod
     def _validate(raw):
         if not isinstance(raw, dict) or not isinstance(raw.get('enabled'), bool):
             raise MCPConfigError('MCP 总开关无效。')
         services = raw.get('services')
-        if (not isinstance(services, list) or len(services) > 22
+        has_nowhere = isinstance(services, list) and any(
+            isinstance(item, dict) and item.get('managed') == 'nowhere' for item in services)
+        if (not isinstance(services, list) or len(services) > 23
                 or sum(item.get('builtin') is True for item in services if isinstance(item, dict)) > 2
-                or sum(item.get('builtin') is not True for item in services if isinstance(item, dict)) > 20):
-            raise MCPConfigError('最多配置 20 个本地 MCP 服务及 2 个内置集成。')
-        result = [_validate_service(item) for item in services]
+                or sum(item.get('builtin') is not True for item in services if isinstance(item, dict))
+                   > (21 if has_nowhere else 20)
+                or sum(item.get('managed') == 'nowhere' for item in services if isinstance(item, dict)) > 1):
+            raise MCPConfigError('最多配置 20 个本地 MCP 服务、1 个乌有乡服务及 2 个内置集成。')
+        result = []
+        for item in services:
+            if (isinstance(item, dict) and item.get('managed') == 'nowhere'
+                    and item.get('enabled', True) is True and item.get('direct_grant') is not True):
+                item = {**item, 'enabled': False}
+            result.append(_validate_service(item))
         if len({item['id'] for item in result}) != len(result):
             raise MCPConfigError('服务 ID 不能重复。')
         adapters = [item['adapter'] for item in result if item.get('builtin')]
@@ -280,10 +366,35 @@ class MCPServices:
         return {'enabled': raw['enabled'], 'services': result}
 
     def save(self, raw, expected_revision=None):
-        config = self._validate(raw)
         with self.lock:
             if expected_revision is not None and expected_revision != self.revision:
                 raise MCPConflict('MCP 配置已在另一个窗口改变，请重试。')
+            raw = dict(raw) if isinstance(raw, dict) else raw
+            if isinstance(raw, dict) and isinstance(raw.get('services'), list):
+                rows = [dict(row) if isinstance(row, dict) else row for row in raw['services']]
+                row_by_id = {row.get('id'): index for index, row in enumerate(rows)
+                             if isinstance(row, dict) and isinstance(row.get('id'), str)}
+                managed_ids = {item['id'] for item in self.config['services']
+                               if item.get('managed') == 'nowhere'}
+                if any(isinstance(row, dict) and row.get('managed') == 'nowhere'
+                       and (not isinstance(row.get('id'), str) or row.get('id') not in managed_ids)
+                       for row in rows):
+                    raise MCPConfigError('只能使用程序注册的乌有乡服务配置。')
+                for current in self.config['services']:
+                    if current.get('managed') != 'nowhere':
+                        continue
+                    index = row_by_id.get(current['id'])
+                    if index is None:
+                        row_by_id[current['id']] = len(rows)
+                        rows.append(dict(current))
+                    else:
+                        rows[index] = {**current, **rows[index], 'managed': 'nowhere',
+                                       'command': current['command'], 'args': current['args'],
+                                       'cwd': current['cwd'], 'permission': current['permission'],
+                                       'direct_grant': current.get('direct_grant') is True
+                                       or rows[index].get('direct_grant') is True}
+                raw['services'] = rows
+            config = self._validate(raw)
             self.path.parent.mkdir(parents=True, exist_ok=True)
             temp = self.path.with_suffix('.tmp')
             temp.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding='utf-8')
@@ -369,7 +480,7 @@ class MCPServices:
                         self.failed.discard(service['id'])
                     return None
                 self.workers.pop(service['id'], None)
-            worker = _Worker(service)
+            worker = _Worker(service, environment=self.managed_env.get(service.get('managed')))
             self.workers[service['id']] = worker
             self.errors.pop(service['id'], None)
             self.failed.discard(service['id'])
@@ -479,6 +590,7 @@ class MCPServices:
                                   and self.config['enabled'] and service['enabled'])
                 rows.append({**service, 'status': 'connected' if connected else 'connecting' if connecting else 'error' if service['id'] in self.failed or (retiring and retiring.thread.is_alive()) else 'off',
                              'tools': [tool.name for tool in worker.tools if self._usable_name(service, tool)] if connected else [],
+                             'observer_url': worker.observer_url if connected and service.get('managed') == 'nowhere' else None,
                              'error': self.errors.get(service['id']) or (
                                  '该服务工具超过 40 个，仅提供前 40 个。' if connected and worker.tool_limit_hit else None)})
             return {'enabled': self.config['enabled'], 'services': rows,

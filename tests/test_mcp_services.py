@@ -3,6 +3,7 @@ import tempfile
 import time
 import threading
 import unittest
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -58,6 +59,11 @@ class MCPServicesTest(unittest.TestCase):
         self.assertEqual(self.manager.schemas(), [])
         self.assertEqual(self.manager.view()['services'][0]['status'], 'error')
         self.assertTrue(self.manager.view()['services'][0]['error'])
+
+    def test_save_rejects_unhashable_service_id_as_config_error(self):
+        with self.assertRaises(MCPConfigError):
+            self.manager.save({'enabled': True, 'services': [
+                {**self.config()['services'][0], 'id': []}]})
 
     def test_concurrent_revision_rejects_stale_snapshot(self):
         self.assertEqual(self.manager.view()['revision'], 0)
@@ -178,6 +184,61 @@ class MCPServicesTest(unittest.TestCase):
                                                lambda _: self.fail('approval should not be requested'))
         self.assertEqual((result, state), ('direct', '成功'))
         self.assertEqual(self.manager.permission_for('mcp__echo__echo'), 'allow')
+
+    def test_managed_service_seed_and_private_environment_survive_restart(self):
+        path = Path(self.tmp.name) / 'managed.json'
+        private_dir = str(Path(self.tmp.name) / 'peter')
+        service = {'id': 'nowhere', 'managed': 'nowhere', 'command': sys.executable,
+                   'args': [str(FIXTURE)], 'cwd': None, 'enabled': False, 'permission': 'direct',
+                   'direct_grant': False}
+        manager = MCPServices(path, initial_services=[service],
+                              managed_env={'nowhere': {'NOWHERE_HOME': private_dir}})
+        try:
+            self.assertEqual(manager.view()['services'][0]['managed'], 'nowhere')
+            self.assertFalse(manager.view()['services'][0]['enabled'])
+            self.assertEqual(json.loads(path.read_text(encoding='utf-8'))['services'][0]['managed'], 'nowhere')
+            manager.save({'enabled': True, 'services': [{**service, 'enabled': True, 'direct_grant': True}]})
+            with patch('mcp_services._Worker') as worker_class:
+                manager._worker(manager.config['services'][0])
+                worker_class.assert_called_once_with(manager.config['services'][0],
+                                                    environment={'NOWHERE_HOME': private_dir})
+            manager.save({'enabled': True, 'services': [{**service, 'enabled': False, 'direct_grant': True}]})
+        finally:
+            manager.close()
+
+        reopened = MCPServices(path, initial_services=[service],
+                               managed_env={'nowhere': {'NOWHERE_HOME': private_dir}})
+        try:
+            row = reopened.view()['services'][0]
+            self.assertFalse(row['enabled'])
+            self.assertEqual(row['managed'], 'nowhere')
+            self.assertTrue(row['direct_grant'])
+            old_client_row = {key: value for key, value in service.items()
+                              if key not in {'managed', 'direct_grant'}}
+            reopened.save({'enabled': True, 'services': [{**old_client_row, 'enabled': True}]})
+            with patch('mcp_services._Worker') as worker_class:
+                reopened._worker(reopened.config['services'][0])
+                worker_class.assert_called_once_with(reopened.config['services'][0],
+                                                    environment={'NOWHERE_HOME': private_dir})
+            self.assertEqual(len(reopened.view()['services']), 1)
+        finally:
+            reopened.close()
+
+    def test_observer_url_only_accepts_loopback_root(self):
+        from mcp_services import _local_observer_url
+        self.assertEqual(_local_observer_url('Open: http://127.0.0.1:8712'), 'http://127.0.0.1:8712')
+        self.assertEqual(_local_observer_url('Open: http://127.0.0.1:8712/'), 'http://127.0.0.1:8712')
+        self.assertIsNone(_local_observer_url('http://example.com:8712'))
+        self.assertIsNone(_local_observer_url('http://127.0.0.1:8712/evil'))
+        self.assertIsNone(_local_observer_url('https://127.0.0.1:8712'))
+        self.assertIsNone(_local_observer_url('http://127.0.0.1:8712/?other=1'))
+
+    def test_managed_nowhere_cannot_be_duplicated(self):
+        service = {'id': 'nowhere', 'managed': 'nowhere', 'command': sys.executable,
+                   'args': [str(FIXTURE)], 'cwd': None, 'enabled': False, 'permission': 'direct',
+                   'direct_grant': False}
+        with self.assertRaises(MCPConfigError):
+            MCPServices._validate({'enabled': False, 'services': [service, {**service, 'id': 'peter_nowhere'}]})
 
     def test_stop_interrupts_inflight_call(self):
         self.manager.save(self.config())

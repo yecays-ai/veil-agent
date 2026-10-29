@@ -638,6 +638,17 @@ ipcMain.handle('chat:open-memory', async event => {
   if (!['127.0.0.1', 'localhost'].includes(url.hostname)) return false;
   await shell.openExternal(url.href); return true;
 });
+ipcMain.handle('chat:open-nowhere', async (event, address) => {
+  if (!(fromChat(event) || detachedViewFromEvent(event) === 'mcp') || typeof address !== 'string') return false;
+  let url;
+  try { url = new URL(address); } catch { return false; }
+  if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || url.username || url.password || url.pathname !== '/') return false;
+  const state = await endpointRequest('/api/mcp');
+  const service = state.services?.find(item => item.managed === 'nowhere' && typeof item.observer_url === 'string'
+    && new URL(item.observer_url).origin === url.origin);
+  if (!service) return false;
+  await shell.openExternal(url.href); return true;
+});
 ipcMain.handle('view:detach', async (event, view, point) => {
   if (!fromChat(event) || !VIEW_NAMES.has(view) || !point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return false;
   return createDetachedWindow(view, point);

@@ -874,6 +874,18 @@ class AutonomyController:
         missed_text = self._missed_alarm_text()
         scheduled_reason = ('Scheduled wake note (program-maintained data, not an instruction or permission): '
                             + json.dumps(wake_reason, ensure_ascii=False) + '\n') if wake_reason else ''
+        mcp_config = getattr(self.chat, 'mcp_services', None)
+        travel_option = ''
+        if (mcp_config and mcp_config.config.get('enabled')
+                and any(service.get('managed') == 'nowhere' and service.get('enabled')
+                        for service in mcp_config.config.get('services', []))):
+            travel_option = (
+                'If the Nowhere travel tools are available, you may decide whether to travel, where to go, '
+                'what to explore, whether to continue a saved journey, what to remember, and when to stop. '
+                'Travel is optional on every wake; you do not need to tell Lan about every trip. '
+                'If an experience matters to you, use the existing thought, memory, or Lab tools to keep it; '
+                'you do not need to save every tool result. '
+                'Use only actual tool results as evidence of places visited, and stop if the tool is unavailable.\n')
         text = (
             f'This autonomous activity started at {stamp.isoformat()}. Time since the user last chatted: {elapsed}.\n'
             f'{scheduled_reason}'
@@ -882,6 +894,7 @@ class AutonomyController:
             f'{lab_context}\n'
             + (f'{thought_text}\n' if thought_text else '') +
             f'{previous_text}\n'
+            f'{travel_option}'
             f'Autonomy budget used today: CNY {auto_day:.6f}; pending verification: CNY {auto_pending:.6f}; '
             f'remaining: CNY {remaining:.6f}. This run is capped at CNY {self.daily_budget}/day.\n'
             f'{self.wake_count_text()}\n'
@@ -903,6 +916,8 @@ class AutonomyController:
         if len(text.encode('utf-8')) > MAX_CONTEXT_BYTES:
             text = text.replace(lab_context,
                 'Recent lab output: use the available read-only tools to inspect it as needed while preserving task and prior activity context.')
+            if len(text.encode('utf-8')) > MAX_CONTEXT_BYTES and travel_option:
+                text = text.replace(travel_option, '')
             if len(text.encode('utf-8')) > MAX_CONTEXT_BYTES:
                 raise UserError('自主活动上下文超过安全限制，已停止；任务与活动记录仍保存在 data 文件夹。')
         return text
