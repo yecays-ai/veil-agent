@@ -27,6 +27,7 @@
     <button id="activity-tab" class="nav-item" data-page="activity" title="拖出可变成独立窗口"><span data-lucide="activity"></span>活动</button>
     <button class="nav-item" data-page="context" title="拖出可变成独立窗口"><span data-lucide="layers"></span>上下文</button>
     <button class="nav-item" data-page="memory" title="拖出可变成独立窗口"><span data-lucide="brain"></span>记忆</button>
+    <button class="nav-item" data-page="mcp" title="拖出可变成独立窗口"><span data-lucide="plug"></span>MCP</button>
     <button class="nav-item" data-page="more" title="拖出可变成独立窗口"><span data-lucide="more-horizontal"></span>更多</button>
   </nav>
   <div id="toasts" role="status" aria-live="polite"></div>
@@ -56,6 +57,22 @@
     <div class="memory-toolbar"><label for="memory-search">搜索记忆</label><input id="memory-search" type="search" placeholder="搜索记忆…（标题、内容、标签都能搜）"></div>
     <div class="memory-layout"><section id="memory-list" class="surface memory-list" aria-label="Ombre 记忆列表"><p class="muted">正在读取 Ombre 记忆…</p></section><article id="memory-detail" class="surface memory-detail"><p class="muted">点上面一条记忆查看内容。</p></article></div>
     <div class="memory-footer"><span id="memory-count" class="muted">尚未读取</span><div><span id="memory-unavailable" class="muted" hidden>Ombre 记忆暂不可用</span><button id="memory-panel" hidden>高级管理 · Ombre Dashboard <span data-lucide="external-link" data-size="14"></span></button></div></div>
+  </section>
+  <section id="mcp-view" class="page" data-page-view="mcp" hidden>
+    <div class="page-heading"><div><p class="eyebrow">本地工具服务</p><h2>MCP</h2></div><button id="mcp-refresh" type="button">刷新</button></div>
+    <article class="surface"><label class="check-row"><input id="mcp-enabled" type="checkbox">启用 MCP</label><p>关闭后，所有 MCP 工具会停止提供给 Peter。</p><p id="mcp-status" role="status"></p></article>
+    <div id="mcp-list" class="mcp-list" aria-live="polite"></div>
+    <button id="mcp-add" type="button">添加服务</button>
+    <form id="mcp-form" class="surface model-form" hidden>
+      <h3 id="mcp-form-heading">添加本地服务</h3>
+      <label>服务 ID<input id="mcp-id" required pattern="[a-z][a-z0-9_]*" maxlength="32" placeholder="例如 local_tools"></label>
+      <label>启动命令<input id="mcp-command" required maxlength="500" placeholder="例如 python"></label>
+      <label>参数（每行一个）<textarea id="mcp-args" rows="4" placeholder="-m&#10;your_mcp_server"></textarea></label>
+      <label>工作目录（可选）<input id="mcp-cwd" maxlength="1000"></label>
+      <label>调用权限<select id="mcp-permission"><option value="ask">每次询问</option><option value="direct">直接调用</option></select></label>
+      <p class="muted">直接调用允许该服务的全部工具执行，包括可能修改文件或向外发送数据的工具。</p>
+      <div class="tool-row"><button type="submit">保存服务</button><button id="mcp-cancel" type="button">取消</button></div>
+    </form>
   </section>
   <section id="more-view" class="page" data-page-view="more" hidden>
     <div class="page-heading"><div><p class="eyebrow">偏好与工具</p><h2>更多</h2></div></div>
@@ -98,6 +115,7 @@
         <label class="setting-row range-row" for="activity-opacity"><span>活动</span><input id="activity-opacity" type="range" min="20" max="100" step="1"><output id="activity-opacity-value"></output></label>
         <label class="setting-row range-row" for="context-opacity"><span>上下文</span><input id="context-opacity" type="range" min="20" max="100" step="1"><output id="context-opacity-value"></output></label>
         <label class="setting-row range-row" for="memory-opacity"><span>记忆</span><input id="memory-opacity" type="range" min="20" max="100" step="1"><output id="memory-opacity-value"></output></label>
+        <label class="setting-row range-row" for="mcp-opacity"><span>MCP</span><input id="mcp-opacity" type="range" min="20" max="100" step="1"><output id="mcp-opacity-value"></output></label>
         <label class="setting-row range-row" for="more-opacity"><span>更多</span><input id="more-opacity" type="range" min="20" max="100" step="1"><output id="more-opacity-value"></output></label>
       </div>
       <label class="setting-row range-row" for="bubble-opacity"><span>聊天气泡</span><input id="bubble-opacity" type="range" min="55" max="100" step="1"><output id="bubble-opacity-value"></output></label>

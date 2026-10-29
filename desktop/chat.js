@@ -30,7 +30,7 @@ function notify(text,kind='notice'){
   setTimeout(()=>node.remove(),Math.min(15000,Math.max(2000,text.length*80)));
 }
 function setPage(name){
-  if(!['chat','activity','context','memory','more'].includes(name))return;
+  if(!['chat','activity','context','memory','mcp','more'].includes(name))return;
   if(detachedView&&name!==detachedView)return;
   document.body.dataset.currentPage=name;
   document.querySelectorAll('[data-page]').forEach(button=>{
@@ -1235,13 +1235,13 @@ $('reconnect').onclick=async()=>{
   try{await window.veilDesktop.reconnect()}finally{button.disabled=false;button.textContent='重新连接'}
 };
 const APPEARANCE_KEY='veil-desktop-appearance-v1';
-const appearanceDefaults={theme:'light',windowOpacity:88,pageOpacity:{chat:88,activity:88,memory:88,more:88},bubbleOpacity:90,backgroundOpacity:100,petSize:320};
+const appearanceDefaults={theme:'light',windowOpacity:88,pageOpacity:{chat:88,activity:88,context:88,memory:88,mcp:88,more:88},bubbleOpacity:90,backgroundOpacity:100,petSize:320};
 function clampSetting(value,min,max,fallback){const n=Number(value);return Number.isFinite(n)?Math.max(min,Math.min(max,Math.round(n))):fallback}
 function loadAppearance(){
   try{
     const saved=JSON.parse(localStorage.getItem(APPEARANCE_KEY)||'{}');
     const pageOpacity={};
-    for(const page of ['chat','activity','context','memory','more'])pageOpacity[page]=clampSetting(saved.pageOpacity?.[page],20,100,clampSetting(saved.windowOpacity,20,100,88));
+    for(const page of ['chat','activity','context','memory','mcp','more'])pageOpacity[page]=clampSetting(saved.pageOpacity?.[page],20,100,clampSetting(saved.windowOpacity,20,100,88));
     return {theme:saved.theme==='dark'?'dark':'light',windowOpacity:clampSetting(saved.windowOpacity,20,100,88),pageOpacity,
       bubbleOpacity:clampSetting(saved.bubbleOpacity,55,100,90),backgroundOpacity:clampSetting(saved.backgroundOpacity,0,100,100),petSize:clampSetting(saved.petSize,160,720,320)};
   }catch{return {...appearanceDefaults}}
@@ -1253,7 +1253,7 @@ function applyAppearance(){
   document.documentElement.style.setProperty('--window-alpha',String(appearance.windowOpacity/100));
   document.documentElement.style.setProperty('--bubble-alpha',String(appearance.bubbleOpacity/100));
   document.documentElement.style.setProperty('--background-opacity',String(appearance.backgroundOpacity/100));
-  for(const page of ['chat','activity','context','memory','more']){
+  for(const page of ['chat','activity','context','memory','mcp','more']){
     document.querySelector(`[data-page-view="${page}"]`)?.style.setProperty('--view-alpha',String(appearance.pageOpacity[page]/100));
     $(`${page}-opacity`).value=String(appearance.pageOpacity[page]);$(`${page}-opacity-value`).value=appearance.pageOpacity[page]+'%';
   }
@@ -1272,9 +1272,9 @@ document.querySelectorAll('[data-theme-choice]').forEach(button=>button.onclick=
   appearance.theme=button.dataset.themeChoice;applyAppearance();storeAppearance();window.veilDesktop.saveTheme(appearance.theme);
 });
 window.veilDesktop.saveTheme(appearance.theme).catch(()=>{});
-function setAllWindowOpacity(value){appearance.windowOpacity=clampSetting(value,20,100,88);for(const page of ['chat','activity','context','memory','more'])appearance.pageOpacity[page]=appearance.windowOpacity;applyAppearance();storeAppearance()}
+function setAllWindowOpacity(value){appearance.windowOpacity=clampSetting(value,20,100,88);for(const page of ['chat','activity','context','memory','mcp','more'])appearance.pageOpacity[page]=appearance.windowOpacity;applyAppearance();storeAppearance()}
 $('window-opacity').oninput=()=>setAllWindowOpacity($('window-opacity').value);
-for(const page of ['chat','activity','context','memory','more'])$(`${page}-opacity`).oninput=()=>{appearance.pageOpacity[page]=clampSetting($(`${page}-opacity`).value,20,100,88);applyAppearance();storeAppearance()};
+for(const page of ['chat','activity','context','memory','mcp','more'])$(`${page}-opacity`).oninput=()=>{appearance.pageOpacity[page]=clampSetting($(`${page}-opacity`).value,20,100,88);applyAppearance();storeAppearance()};
 $('bubble-opacity').oninput=()=>{appearance.bubbleOpacity=clampSetting($('bubble-opacity').value,55,100,90);applyAppearance();storeAppearance()};
 $('background-opacity').oninput=()=>{appearance.backgroundOpacity=clampSetting($('background-opacity').value,0,100,100);applyAppearance();storeAppearance()};
 $('pet-size').oninput=()=>{appearance.petSize=clampSetting($('pet-size').value,160,720,320);$('pet-size-value').value=appearance.petSize+' px';storeAppearance()};
@@ -1305,6 +1305,7 @@ document.querySelectorAll('[data-page]').forEach(button=>button.onclick=()=>{
   if(detachedViews.has(button.dataset.page)){window.veilDesktop.focusView(button.dataset.page);return}
   setPage(button.dataset.page);
   if(button.dataset.page==='memory'&&memoryAvailable&&!memoryLoaded&&!memoryLoading)loadMemoryCatalog(true);
+  if(button.dataset.page==='mcp')loadMCP();
 });
 $('memory-panel').onclick=()=>window.veilDesktop.openMemory();
 document.querySelectorAll('[data-cmd="/cost"]').forEach(button=>button.onclick=()=>{setPage('chat');send('/cost')});
@@ -1358,11 +1359,62 @@ document.querySelectorAll('[data-page]').forEach(tab=>{tab.addEventListener('poi
 window.veilDesktop.onShowActivity(()=>setPage('activity'));
 window.veilDesktop.onShowView(view=>setPage(view));
 window.veilDesktop.onShowSettings(()=>setPage('more'));
-if(detachedView&&['chat','activity','context','memory','more'].includes(detachedView)){
+if(detachedView&&['chat','activity','context','memory','mcp','more'].includes(detachedView)){
   document.body.classList.add('detached-window');$('detached-header').hidden=false;
-  $('detached-title').textContent='Peter · '+({chat:'聊天',activity:'活动记录',context:'实时上下文',memory:'记忆',more:'更多'}[detachedView]);setPage(detachedView);
+  $('detached-title').textContent='Peter · '+({chat:'聊天',activity:'活动记录',context:'实时上下文',memory:'记忆',mcp:'MCP',more:'更多'}[detachedView]);setPage(detachedView);
 }else{setPage('chat');box.focus()}
 setBusy(true);poll();
+
+let mcpView={enabled:false,services:[]},mcpEditing=null,mcpLoading=false;
+function mcpConfig(){return {enabled:mcpView.enabled,services:mcpView.services.map(({id,command,args,cwd,enabled,permission})=>({id,command,args,cwd,enabled,permission}))}}
+async function loadMCP(force=false){
+  if(mcpLoading)return;
+  mcpLoading=true;$('mcp-status').textContent='正在读取服务状态…';
+  try{const response=await api(force?'/api/mcp?retry=1':'/api/mcp');const data=await response.json();if(!response.ok)throw new Error(data.error||'读取失败');mcpView=data;renderMCP()}
+  catch(error){$('mcp-status').textContent=error.message}
+  finally{mcpLoading=false}
+}
+async function saveMCP(next){
+  $('mcp-status').textContent='正在保存…';
+  try{const response=await api('/api/mcp',next,30000);const data=await response.json();if(!response.ok)throw new Error(data.error||'保存失败');mcpView=data;renderMCP();return true}
+  catch(error){$('mcp-status').textContent=error.message;return false}
+}
+function renderMCP(){
+  $('mcp-enabled').checked=mcpView.enabled;
+  $('mcp-status').textContent=mcpView.error||`${mcpView.services.length} 个服务`;
+  const list=$('mcp-list');list.replaceChildren();
+  if(!mcpView.services.length){const p=document.createElement('p');p.className='muted';p.textContent='还没有本地 MCP 服务。';list.append(p)}
+  for(const service of mcpView.services){
+    const card=document.createElement('article');card.className='surface mcp-card';
+    const heading=document.createElement('div');heading.className='section-heading';
+    const title=document.createElement('h3');title.textContent=service.id;
+    const status=document.createElement('span');status.className='state-pill';status.textContent=service.status==='connected'?'已连接':service.status==='connecting'?'连接中':service.status==='error'?'连接失败':'已停用';
+    heading.append(title,status);card.append(heading);
+    const details=document.createElement('p');details.textContent=`${service.tools.length} 个工具 · ${service.permission==='ask'?'每次询问':'直接调用'}`;card.append(details);
+    if(service.error){const error=document.createElement('p');error.className='mcp-error';error.textContent=service.error;card.append(error)}
+    if(service.tools.length){const tools=document.createElement('p');tools.className='mcp-tools';tools.textContent=service.tools.join('、');card.append(tools)}
+    const actions=document.createElement('div');actions.className='tool-row';
+    const toggle=document.createElement('button');toggle.type='button';toggle.textContent=service.enabled?'停用':'启用';toggle.onclick=()=>saveMCP({...mcpConfig(),services:mcpConfig().services.map(item=>item.id===service.id?{...item,enabled:!item.enabled}:item)});
+    const edit=document.createElement('button');edit.type='button';edit.textContent='编辑';edit.onclick=()=>openMCPForm(service);
+    const remove=document.createElement('button');remove.type='button';remove.textContent='移除';remove.onclick=()=>{if(confirm(`移除 MCP 服务 ${service.id}？`))saveMCP({...mcpConfig(),services:mcpConfig().services.filter(item=>item.id!==service.id)})};
+    actions.append(toggle,edit,remove);card.append(actions);list.append(card);
+  }
+  if(mcpView.services.some(service=>service.status==='connecting'))setTimeout(()=>{if(document.body.dataset.currentPage==='mcp')loadMCP()},700);
+}
+function openMCPForm(service=null){
+  mcpEditing=service?.id||null;$('mcp-form').hidden=false;$('mcp-form-heading').textContent=service?'编辑本地服务':'添加本地服务';
+  $('mcp-id').value=service?.id||'';$('mcp-id').readOnly=Boolean(service);
+  $('mcp-command').value=service?.command||'';$('mcp-args').value=(service?.args||[]).join('\n');$('mcp-cwd').value=service?.cwd||'';
+  $('mcp-permission').value=service?.permission||'ask';$('mcp-id').focus();
+}
+$('mcp-add').onclick=()=>openMCPForm();$('mcp-cancel').onclick=()=>{$('mcp-form').hidden=true};$('mcp-refresh').onclick=()=>loadMCP(true);
+$('mcp-enabled').onchange=async()=>{const checked=$('mcp-enabled').checked;if(!await saveMCP({...mcpConfig(),enabled:checked}))$('mcp-enabled').checked=mcpView.enabled};
+$('mcp-form').onsubmit=async event=>{
+  event.preventDefault();const service={id:$('mcp-id').value.trim(),command:$('mcp-command').value.trim(),args:$('mcp-args').value.split(/\r?\n/).filter(Boolean),cwd:$('mcp-cwd').value.trim()||null,enabled:true,permission:$('mcp-permission').value};
+  const current=mcpConfig(),services=mcpEditing?current.services.map(item=>item.id===mcpEditing?{...service,enabled:item.enabled}:item):[...current.services,service];
+  if(await saveMCP({...current,services})){$('mcp-form').hidden=true;mcpEditing=null}
+};
+if(detachedView==='mcp')loadMCP();
 
 // Ticket 134: 模型 settings card and the header switch. The server keeps keys; this page only sees "…1234".
 let modelsView=null,modelsSignature='',editingEndpoint=null,editingModel=null,modelBilling='call',modelsSaving=false;

@@ -1315,6 +1315,8 @@ class Chat:
         self.trim_noted = False
         self.memory = memory
         self.tools, self.approval, self.output, self.voice = tools, approval, output, voice
+        from mcp_services import MCPServices
+        self.mcp_services = MCPServices(store.root / cfg.id / 'mcp-services.json')
         self.pending_capability_event = tools.capability_event if tools else None
         self.pending_capability_event_model = capability_model_notice(tools)
         from long_tasks import LongTaskStore
@@ -1426,7 +1428,9 @@ class Chat:
             profile = [PROFILE_APPEND, PROFILE_REPLACE]
         from thoughts import THOUGHT_TOOL
         thought = [THOUGHT_TOOL] if history else []
-        schemas = [*existing_tools, *task_tools, *messaging, *history, *wake_tools, *profile, *thought]
+        mcp_tools = self.mcp_services.schemas() if (self.cfg.tools or {}).get('enabled', True) else []
+        schemas = [*existing_tools, *task_tools, *messaging, *history, *wake_tools, *profile, *thought,
+                   *mcp_tools]
         for schema in schemas:
             function = schema['function']
             if function['name'] in ('write_file', 'append_file', 'long_task_update', 'hold', 'trace', 'letter_write'):
@@ -1456,7 +1460,7 @@ class Chat:
             name = schema.get('function', {}).get('name')
             if not isinstance(name, str):
                 continue
-            policy = tool_policy(name)
+            policy = ('ask' if name.startswith('mcp__') else tool_policy(name))
             if policy == 'allow':
                 label = 'Direct use'
             elif policy == 'desktop_read':
@@ -2624,7 +2628,12 @@ class Chat:
                     args = {}
                 if not isinstance(args, dict):
                     raise ValueError('arguments must be an object')
-                if self.long_tasks.handles(call.function.name):
+                if call.function.name.startswith('mcp__'):
+                    if not (self.cfg.tools or {}).get('enabled', True) or (self.cfg.tools or {}).get('max_steps', 1) <= 1:
+                        result, state, summary = 'MCP tools are unavailable for this role.', '被拒绝', call.function.name
+                    else:
+                        result, state, summary = self.mcp_services.invoke(call.function.name, args, self.approval)
+                elif self.long_tasks.handles(call.function.name):
                     result, state, summary = self.long_tasks.invoke(call.function.name, args,
                                                                     self.approval)
                     checkpoint_verified = self.long_tasks.take_checkpoint_verified()

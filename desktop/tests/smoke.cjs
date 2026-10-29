@@ -28,6 +28,7 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   const token = 'fictional_token_123456789';
   let nextId = 3, pending = null, sends = 0, approvals = 0, images = 0, imageSendAttempts = 0, voices = 0, failVoiceUploadOnce = false, quotedSendStarted = false;
   const requests = [], approvalBodies = [];
+  let mcpState = {enabled:false,services:[]};
   const media = new Map();
   const voiceFixture=wavFixture();
   media.set('fictional-reply.wav',{id:'reply',filename:'fictional-reply.wav',type:'audio/wav',bytes:voiceFixture});
@@ -107,6 +108,9 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
       else json(res, {error:'unsupported fictional action'}, 400);
     } else if (url.pathname === '/api/memory/read') {
       json(res, {version:'1',next_offset:null,text:'---\ncreated: 2026-10-26T12:30:00+08:00\ntags:\n- games\n- laughter\n---\nA fictional shared memory.'});
+    } else if (url.pathname === '/api/mcp') {
+      if(req.method==='POST')mcpState=await readBody(req);
+      json(res,{...mcpState,services:mcpState.services.map(item=>({...item,status:mcpState.enabled&&item.enabled?'connected':'off',tools:mcpState.enabled&&item.enabled?['echo']:[],error:null}))});
     } else if (url.pathname === '/api/activity') {
       json(res, { enabled: false });
     } else {
@@ -153,6 +157,14 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   assert.equal(await chat.webContents.executeJavaScript('typeof window.veilDesktop.request'), 'function');
   assert.equal(await chat.webContents.executeJavaScript('typeof require'), 'undefined');
   assert.equal(await chat.webContents.executeJavaScript('document.querySelector("#speech-toggle").disabled'), false);
+  await chat.webContents.executeJavaScript('document.querySelector("[data-page=mcp]").click()');
+  await wait(() => chat.webContents.executeJavaScript('document.querySelector("#mcp-status").textContent.includes("0 个服务")'), 'MCP panel did not load');
+  await chat.webContents.executeJavaScript('document.querySelector("#mcp-add").click();document.querySelector("#mcp-id").value="echo";document.querySelector("#mcp-command").value="python";document.querySelector("#mcp-form").requestSubmit()');
+  await wait(() => chat.webContents.executeJavaScript('document.querySelector("#mcp-list").textContent.includes("echo")'), 'MCP service was not added');
+  await chat.webContents.executeJavaScript('document.querySelector("#mcp-enabled").click()');
+  await wait(() => chat.webContents.executeJavaScript('document.querySelector("#mcp-list").textContent.includes("已连接")'), 'MCP global switch did not update');
+  if(process.env.VEIL_MCP_PREVIEW)await fs.writeFile(process.env.VEIL_MCP_PREVIEW,await chat.capturePage().then(image=>image.toPNG()));
+  await chat.webContents.executeJavaScript('document.querySelector("[data-page=chat]").click()');
   assert.equal(await chat.webContents.executeJavaScript('document.querySelector("#image-button").disabled'), false);
   assert.equal(await chat.webContents.executeJavaScript('document.body.textContent.includes("Coming Soon")'), false);
   assert.equal(await chat.webContents.executeJavaScript('document.querySelector("#speech-language")'), null, 'dictation language is detected automatically');

@@ -2,6 +2,8 @@
 
 ## 当前进度
 
+- 工单 161：`ticket/161-mcp-foundation` 实现独立本地 stdio MCP 管理模块、薄聊天接口及可拖出的 MCP 桌面标签。默认逐次询问；配置写入角色私有 `data/<id>/mcp-services.json`。本地标准 MCP 测试服务 3 项、完整 Python 回归 749 项（11 跳过）、桌面单测 10 项及 Electron 虚构数据 smoke 通过；预览已检查。正式 Windows 更新版及用户体验尚未验收。下一步先核对 PR 当前提交、CI 和 Cubic 审查，再按工单文档进行用户体验验收。
+
 - 工单 160（PR #208）：上游 v2.5.5 浏览器页面失败返回 HTTP 500 + `STATUS_CHECK_FAILED`/`LIST_FEEDS_FAILED`/`SEARCH_FEEDS_FAILED`/`GET_FEED_DETAIL_FAILED`（未登录是 200 + `is_logged_in:false`，因 pkg/errors `Wrap(nil)` 返回 nil）。这些改为 `PageFailure(Transient)`；只有 `PageFailure`（含 HTTP 超时、整次超时）计入 `transient_streak`，连续 3 次锁死并说明，成功清零；其他拒绝文字带 `HTTP <状态> <代码>`（代码仅 `[A-Z_]`）。`xiaohongshu_setup.login_and_bind` 复查遇 `PageFailure` 时，绑定文件有效则提示直接启动 VEIL。下一工单号 161。
 - 工单 159：PR #207 已合并 `f302ac8`。短期便签分批提取、失败诊断及预算结清已实现；聊天缓存用量新增来源标记，旧版 0 保守显示为未核实。Claude 评审补了：单轮超长对话按字节截断后照样推进检查点；`settle` 报用量异常时按预留结清并继续使用输出（不再每 30 分钟重发重扣）；`prompt_tokens==0` 的占位结算不计入缓存统计。Windows 体验待验收。
 - 工单 158：`xiaohongshu_tools.py` 新增 `Transient`（HTTP 超时/连接错误、伴随程序启动超时、账号锁占用）与 `OPERATION_TIMEOUT=120`（单次 HTTP `TIMEOUT=60`）。临时失败不设 `blocked`；整次超时停止本次读取但不锁死；`should_stop` 仍锁死（原行为）。掉登录/账号不符给专门文字，其余拒绝仍锁死；锁死后再调用提示「still paused」。每次失败写私有目录 `data/<id>/xiaohongshu/errors.jsonl`；过期 note_ref 只拒绝不锁死；锁死检查在账号锁之前；超时后 worker 2 秒内不退出则锁死并如实说明（kind/error/detail/seconds，detail 只含本程序 ValueError 文字）。PR #206 已合并 `7b91d83`。

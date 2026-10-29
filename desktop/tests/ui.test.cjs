@@ -9,12 +9,12 @@ const read = file => fs.readFile(path.join(__dirname, '..', file), 'utf8');
 test('chat shell exposes appearance CSS, custom background, global and per-page opacity controls', async () => {
   const [html, css, js, main, preload] = await Promise.all([read('chat.html'), read('chat.css'), read('chat.js'), read('main.cjs'), read('desktop-preload.cjs')]);
   assert.deepEqual([...html.matchAll(/class="nav-item[^\"]*" data-page="([^"]+)"/g)].map(match => match[1]),
-    ['chat', 'activity', 'context', 'memory', 'more']);
+    ['chat', 'activity', 'context', 'memory', 'mcp', 'more']);
   assert.match(html, /自主活动：<b id="header-autonomy-status">/);
   assert.match(html, /id="header-next-wake"/);
   assert.match(html, /id="service-status" hidden/);
   assert.match(html, /id="window-opacity" type="range"/);
-  for (const page of ['chat', 'activity', 'context', 'memory', 'more']) assert.match(html, new RegExp(`id="${page}-opacity" type="range"`));
+  for (const page of ['chat', 'activity', 'context', 'memory', 'mcp', 'more']) assert.match(html, new RegExp(`id="${page}-opacity" type="range"`));
   assert.match(html, /id="bubble-opacity" type="range"/);
   assert.match(html, /id="background-opacity" type="range"/);
   assert.match(html, /id="custom-css"/);

@@ -10,7 +10,7 @@ let pet, chat, menu, connecting = false, quitting = false, drag, petResize, agen
 const detachedWindows = new Map(), mergingViews = new Set();
 const screenPopWindows = new Map(), screenPopInFlight = new Set();
 let screenPopPollTimer = null, screenPopPolling = false, quitFlushStarted = false;
-const VIEW_NAMES = new Set(['chat', 'activity', 'context', 'memory', 'more']);
+const VIEW_NAMES = new Set(['chat', 'activity', 'context', 'memory', 'mcp', 'more']);
 const settings = { size: 320, theme: 'light' };
 const petURL = pathToFileURL(path.join(__dirname, 'pet.html')).href;
 const chatURL = pathToFileURL(path.join(__dirname, 'chat.html')).href;
@@ -467,6 +467,8 @@ function allowedChatRequest(pathname, method) {
     const keys = [...url.searchParams.keys()];
     if (url.pathname === '/api/events') return keys.length === 1 && keys[0] === 'after' && /^\d+$/.test(url.searchParams.get('after'));
     if (url.pathname === '/api/memory/panel') return keys.length === 0;
+    if (url.pathname === '/api/mcp') return keys.length === 0 ||
+      (keys.length === 1 && keys[0] === 'retry' && url.searchParams.get('retry') === '1');
     if (url.pathname === '/api/memory/catalog')
       return keys.every(key => key === 'after') && keys.length <= 1 && (!keys.length || /^[A-Za-z0-9_-]{1,100}$/.test(url.searchParams.get('after')));
     if (url.pathname === '/api/memory/read') {
@@ -480,13 +482,14 @@ function allowedChatRequest(pathname, method) {
   return method === 'POST' && ['/api/send', '/api/media', '/api/voice', '/api/voice/retry',
     '/api/transcribe', '/api/approve', '/api/activity', '/api/glance', '/api/codex-watch', '/api/quiet-hours', '/api/exit',
     '/api/message/action', '/api/memory/edit', '/api/memory/delete', '/api/models', '/api/models/use', '/api/stop',
-    '/api/typing', '/api/request-reply'].includes(pathname);
+    '/api/typing', '/api/request-reply', '/api/mcp'].includes(pathname);
 }
 ipcMain.handle('chat:request', async (event, pathname, body, timeoutMs) => {
   const detachedView = detachedViewFromEvent(event);
   const detachedAllowed = !detachedView || detachedView === 'chat' ||
     (detachedView === 'activity' && ((!body && pathname?.startsWith('/api/events?')) || (body && ['/api/activity', '/api/glance', '/api/codex-watch', '/api/quiet-hours'].includes(pathname)))) ||
     (detachedView === 'context' && !body && pathname?.startsWith('/api/events?')) ||
+    (detachedView === 'mcp' && (pathname === '/api/mcp' || (!body && pathname === '/api/mcp?retry=1'))) ||
     (detachedView === 'memory' && ((!body && (pathname?.startsWith('/api/events?') || pathname?.startsWith('/api/memory/'))) ||
       (body && ['/api/memory/edit', '/api/memory/delete'].includes(pathname)))) ||
     (detachedView === 'more' && ((!body && pathname?.startsWith('/api/events?')) || (body && ['/api/exit', '/api/models', '/api/models/use'].includes(pathname))));
