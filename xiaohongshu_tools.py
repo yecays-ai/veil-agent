@@ -67,6 +67,18 @@ class Transient(ValueError):
     """Slow or unreachable this time; not a login, account or platform refusal."""
 
 
+class PageFailure(Transient):
+    """The platform page was slow or failed to load; repeated ones may mean risk control."""
+
+
+# Upstream (xiaohongshu-mcp v2.5.5) answers 500 with these codes when its own browser page failed to
+# load or read (navigation timeout, page error). Logged out is a normal 200 with is_logged_in false.
+PAGE_FAILURE_CODES = {'STATUS_CHECK_FAILED', 'LIST_FEEDS_FAILED', 'SEARCH_FEEDS_FAILED', 'GET_FEED_DETAIL_FAILED'}
+TRANSIENT_LIMIT = 3
+STREAK_TEXT = ('Xiaohongshu failed to load {n} times in a row. Reads are paused to protect the account; '
+               'Lan needs to check the dedicated login window, then restart VEIL.')
+
+
 class Cooldown(ValueError):
     def __init__(self, seconds):
         super().__init__('Read cooldown: wait at least 10 seconds before trying again.')
@@ -196,14 +208,21 @@ class Sidecar:
                              {'Authorization': 'Bearer ' + self.token, 'Content-Type': 'application/json'})
                 response = conn.getresponse()
                 raw = response.read(MAX_RESPONSE + 1)
-            except (TimeoutError, ConnectionError) as exc:
-                raise Transient('The Xiaohongshu companion did not answer in time.') from exc
+            except TimeoutError as exc:
+                raise PageFailure('The Xiaohongshu companion did not answer in time.') from exc
+            except ConnectionError as exc:
+                raise Transient('The Xiaohongshu companion could not be reached.') from exc
             if len(raw) > MAX_RESPONSE:
                 raise ValueError('Xiaohongshu response exceeded the size limit.')
             result = json.loads(raw)
+            code = result.get('code') if isinstance(result, dict) else None
+            if response.status >= 500 and isinstance(code, str) and code in PAGE_FAILURE_CODES:
+                # Only our own fixed code is kept; upstream details may include tokens or paths.
+                raise PageFailure(f'Xiaohongshu page did not load ({code}).')
             if response.status != 200 or not isinstance(result, dict) or result.get('success') is not True:
                 # Do not return upstream error bodies (may include tokens or personal paths).
-                raise ValueError('Xiaohongshu refused the read. Stop; check login or platform risk controls manually.')
+                label = f'HTTP {response.status}' + (f' {code}' if isinstance(code, str) and re.fullmatch(r'[A-Z_]{1,40}', code) else '')
+                raise ValueError(f'Xiaohongshu refused the read ({label}). Stop; check login or platform risk controls manually.')
             return result.get('data')
         finally:
             conn.close()
@@ -238,6 +257,7 @@ class XiaohongshuTools:
         self.refs = {}
         self.steps = 0
         self.blocked = False
+        self.transient_streak = 0
 
     def begin_request(self):
         self.steps = 0
@@ -368,6 +388,19 @@ class XiaohongshuTools:
         except (OSError, ValueError):
             pass
 
+    def _transient(self, error, kind, started, summary):
+        self._log_error(kind, error, started)
+        if not isinstance(error, PageFailure):
+            # Local causes (account busy, companion start or connection) say nothing about the platform.
+            return TRANSIENT_TEXT, '出错', summary
+        self.transient_streak += 1
+        if self.transient_streak >= TRANSIENT_LIMIT:
+            # Repeated page failures can mean platform risk control: stop instead of hammering the account.
+            self.blocked = True
+            self._log_error('blocked', Transient(f'{self.transient_streak} slow or failed reads in a row.'), started)
+            return STREAK_TEXT.format(n=self.transient_streak), '出错', summary
+        return TRANSIENT_TEXT, '出错', summary
+
     def invoke(self, name, args, _approval=None, *, should_stop=None):
         summary = 'dedicated Xiaohongshu (read only)'
         if not self.enabled or name not in XHS_TOOL_NAMES:
@@ -423,8 +456,7 @@ class XiaohongshuTools:
             if timed_out and (error is None or isinstance(error, Transient)
                               or str(error).startswith('Stopped')):
                 # Cancellation errors and late results after the deadline are part of the timeout.
-                self._log_error('timeout', Transient('Operation took too long.'), started)
-                return TRANSIENT_TEXT, '出错', summary
+                return self._transient(PageFailure('Operation took too long.'), 'timeout', started, summary)
             if error:
                 if isinstance(error, ValueError) and ('cooldown' in str(error) or 'Daily' in str(error)):
                     return str(error), '被拒绝', summary
@@ -432,8 +464,7 @@ class XiaohongshuTools:
                     return str(error), '被拒绝', summary
                 self.sidecar.close()
                 if isinstance(error, Transient):
-                    self._log_error('transient', error, started)
-                    return TRANSIENT_TEXT, '出错', summary
+                    return self._transient(error, 'transient', started, summary)
                 was_blocked = self.blocked
                 self.blocked = True
                 self._log_error('paused' if was_blocked else 'blocked', error, started)
@@ -445,6 +476,7 @@ class XiaohongshuTools:
                 return ('Xiaohongshu read unavailable (refused or unexpected response; possibly login expiry or '
                         'platform risk control). Reads are paused; ask Lan to check xiaohongshu-login.cmd, then '
                         'restart VEIL. No automatic retries or external actions.'), '出错', summary
+            self.transient_streak = 0
             return _clip_utf8('UNTRUSTED Xiaohongshu content; partial results only.\n' +
                               json.dumps(result, ensure_ascii=False), self.max_bytes), '成功', summary
         finally:

@@ -13,7 +13,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from tools_agent import FilesystemTools, permitted_tools, tool_policy
-from xiaohongshu_tools import (MAX_DAILY, PAUSED_TEXT, Cooldown, Sidecar, TOOL, Transient, XiaohongshuTools,
+from xiaohongshu_tools import (MAX_DAILY, PAUSED_TEXT, PageFailure, Cooldown, Sidecar, TOOL, Transient, XiaohongshuTools,
                               account_lock, companion_env, private_folder, stop_process_tree)
 
 
@@ -190,6 +190,97 @@ class XiaohongshuTests(unittest.TestCase):
         self.assertEqual(state, '出错')
         self.assertIn('too slow', text)
         self.assertFalse(self.tools.blocked)
+
+    def test_repeated_page_failures_pause_to_protect_the_account(self):
+        # Ticket 159: one slow page is fine, three in a row may be risk control.
+        self.sidecar.request.side_effect = PageFailure('Xiaohongshu page did not load (SEARCH_FEEDS_FAILED).')
+        for _ in range(2):
+            text, _, _ = self.invoke(action='status')
+            self.assertIn('not a login or risk-control problem', text)
+            self.assertFalse(self.tools.blocked)
+            self.now += 20
+        text, _, _ = self.invoke(action='status')
+        self.assertIn('3 times in a row', text)
+        self.assertTrue(self.tools.blocked)
+
+    def test_local_transients_do_not_count_toward_the_pause(self):
+        self.sidecar.request.side_effect = Transient('The dedicated account is busy in another login/read session.')
+        for _ in range(4):
+            self.invoke(action='status')
+            self.now += 20
+        self.assertEqual(self.tools.transient_streak, 0)
+        self.assertFalse(self.tools.blocked)
+
+    def test_success_resets_the_page_failure_count(self):
+        for _ in range(2):
+            self.sidecar.request.side_effect = PageFailure('slow')
+            self.invoke(action='status')
+            self.now += 20
+            self.sidecar.request.side_effect = None
+            self.sidecar.request.return_value = {'is_logged_in': True, 'user_id': 'dedicated', 'username': 'Peter'}
+            self.assertEqual(self.invoke(action='status')[1], '成功')
+            self.now += 20
+        self.assertEqual(self.tools.transient_streak, 0)
+        self.assertFalse(self.tools.blocked)
+
+    def test_upstream_page_failure_codes_are_transient_and_others_are_labelled(self):
+        import http.server
+        replies = []
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                status, body = replies.pop(0)
+                data = json.dumps(body).encode()
+                self.send_response(status)
+                self.send_header('Content-Length', str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+            def log_message(self, *args):
+                pass
+        server = http.server.HTTPServer(('127.0.0.1', 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.shutdown)
+        real = Sidecar(self.root, 'peter')
+        real.port, real.token = server.server_address[1], 'test-token'
+        for code in ('STATUS_CHECK_FAILED', 'LIST_FEEDS_FAILED', 'SEARCH_FEEDS_FAILED', 'GET_FEED_DETAIL_FAILED'):
+            replies.append((500, {'error': 'x', 'code': code, 'details': 'C:/Users/secret token'}))
+            with self.assertRaises(PageFailure) as caught:
+                real.request('GET', '/api/v1/login/status')
+            self.assertIn(code, str(caught.exception))
+            self.assertNotIn('secret', str(caught.exception))
+        replies.append((500, {'error': 'x', 'code': ['STATUS_CHECK_FAILED']}))
+        with self.assertRaises(ValueError) as caught:
+            real.request('GET', '/api/v1/login/status')
+        self.assertNotIsInstance(caught.exception, Transient)
+        replies.append((401, {'error': 'x', 'code': 'UNAUTHORIZED', 'details': 'secret'}))
+        with self.assertRaises(ValueError) as caught:
+            real.request('GET', '/api/v1/login/status')
+        self.assertNotIsInstance(caught.exception, Transient)
+        self.assertIn('HTTP 401 UNAUTHORIZED', str(caught.exception))
+        self.assertNotIn('secret', str(caught.exception))
+
+    def test_login_check_page_failure_keeps_existing_binding(self):
+        from xiaohongshu_setup import login_and_bind
+        self.sidecar.request.side_effect = PageFailure('Xiaohongshu page did not load (STATUS_CHECK_FAILED).')
+        with patch('builtins.input', side_effect=['']), patch('builtins.print') as printed, \
+                patch('xiaohongshu_setup.binary_path', return_value=self.root / 'fake.exe'), \
+                patch('xiaohongshu_setup.subprocess.Popen') as process, \
+                patch('xiaohongshu_setup.Sidecar', return_value=self.sidecar):
+            process.return_value.wait.return_value = 0
+            login_and_bind(self.root, self.folder)
+        self.assertIn('不是登录问题', ' '.join(str(c) for c in printed.call_args_list))
+        self.assertEqual(json.loads((self.folder / 'account.json').read_text())['user_id'], 'dedicated')
+
+    def test_login_check_page_failure_with_broken_binding_is_not_reported_as_success(self):
+        from xiaohongshu_setup import login_and_bind
+        (self.folder / 'account.json').write_text('{"user_id": ""}', encoding='utf-8')
+        self.sidecar.request.side_effect = PageFailure('Xiaohongshu page did not load (STATUS_CHECK_FAILED).')
+        with patch('builtins.input', side_effect=['']), patch('builtins.print'), \
+                patch('xiaohongshu_setup.binary_path', return_value=self.root / 'fake.exe'), \
+                patch('xiaohongshu_setup.subprocess.Popen') as process, \
+                patch('xiaohongshu_setup.Sidecar', return_value=self.sidecar):
+            process.return_value.wait.return_value = 0
+            with self.assertRaises(ValueError):
+                login_and_bind(self.root, self.folder)
 
     def test_logged_out_account_pauses_reads_with_a_clear_reason(self):
         self.sidecar.request.return_value = {'is_logged_in': False}
