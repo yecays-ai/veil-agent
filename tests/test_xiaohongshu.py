@@ -13,7 +13,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from tools_agent import FilesystemTools, permitted_tools, tool_policy
-from xiaohongshu_tools import (MAX_DAILY, Cooldown, Sidecar, TOOL, XiaohongshuTools,
+from xiaohongshu_tools import (MAX_DAILY, PAUSED_TEXT, Cooldown, Sidecar, TOOL, Transient, XiaohongshuTools,
                               account_lock, companion_env, private_folder, stop_process_tree)
 
 
@@ -163,6 +163,59 @@ class XiaohongshuTests(unittest.TestCase):
         self.sidecar.close.assert_called()
         self.assertTrue(self.tools.blocked)
         self.assertEqual(self.sidecar.request.call_count, 1)
+
+    def test_slow_or_unreachable_read_does_not_pause_later_reads(self):
+        # Ticket 158: a timeout on Lan's PC is not a login or risk-control problem.
+        self.sidecar.request.side_effect = Transient('The Xiaohongshu companion did not answer in time.')
+        text, state, _ = self.invoke(action='status')
+        self.assertEqual(state, '出错')
+        self.assertIn('not a login or risk-control problem', text)
+        self.assertFalse(self.tools.blocked)
+        self.sidecar.request.side_effect = None
+        self.sidecar.request.return_value = {'is_logged_in': True, 'user_id': 'dedicated', 'username': 'Peter'}
+        self.now += 20
+        self.assertEqual(self.invoke(action='status')[1], '成功')
+        rows = [json.loads(line) for line in (self.folder / 'errors.jsonl').read_text(encoding='utf-8').splitlines()]
+        self.assertEqual([row['kind'] for row in rows], ['transient'])
+
+    def test_whole_operation_deadline_stops_the_read_without_pausing(self):
+        release = threading.Event()
+        def slow(*args):
+            release.wait(2)
+            raise Transient('closed')
+        self.sidecar.request.side_effect = slow
+        self.sidecar.close.side_effect = release.set
+        with patch('xiaohongshu_tools.OPERATION_TIMEOUT', 0.2):
+            text, state, _ = self.invoke(action='status')
+        self.assertEqual(state, '出错')
+        self.assertIn('too slow', text)
+        self.assertFalse(self.tools.blocked)
+
+    def test_logged_out_account_pauses_reads_with_a_clear_reason(self):
+        self.sidecar.request.return_value = {'is_logged_in': False}
+        text, state, _ = self.invoke(action='status')
+        self.assertIn('logged out', text)
+        self.assertTrue(self.tools.blocked)
+        self.now += 20
+        text, _, _ = self.invoke(action='status')
+        self.assertEqual(PAUSED_TEXT, text)
+
+    def test_expired_note_ref_is_rejected_without_pausing(self):
+        self.tools.refs['old'] = ('a' * 24, 'token', self.now - 4000)
+        text, state, _ = self.invoke(action='detail', note_ref='old')
+        self.assertEqual(state, '被拒绝')
+        self.assertIn('expired', text)
+        self.assertFalse(self.tools.blocked)
+
+    def test_worker_that_never_stops_pauses_and_says_so(self):
+        hold = threading.Event()
+        self.addCleanup(hold.set)
+        self.sidecar.request.side_effect = lambda *args: hold.wait(10)
+        with patch('xiaohongshu_tools.OPERATION_TIMEOUT', 0.2):
+            text, state, _ = self.invoke(action='status')
+        self.assertEqual(state, '出错')
+        self.assertIn('paused', text)
+        self.assertTrue(self.tools.blocked)
 
     def test_account_lock_excludes_parallel_login_and_read(self):
         with account_lock(self.folder):
