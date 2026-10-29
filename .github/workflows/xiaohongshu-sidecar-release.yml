@@ -1,0 +1,62 @@
+name: Build Xiaohongshu Windows sidecar
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Fixed VEIL sidecar release version
+        required: true
+        default: v2.5.5-veil.1
+        type: string
+permissions:
+  contents: read
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: xpzouying/xiaohongshu-mcp
+          ref: a5c8f7799980ba1fdd501999843eb2d17e4c9a9f
+          path: upstream
+      - name: Check release version and apply the reviewed patch
+        shell: pwsh
+        env:
+          SIDECAR_VERSION: ${{ inputs.version }}
+        run: |
+          if ($env:SIDECAR_VERSION -ne 'v2.5.5-veil.1') { throw 'Unexpected sidecar version.' }
+          python "$env:GITHUB_WORKSPACE/scripts/patch_xiaohongshu_mcp_v2_5_5.py" "$env:GITHUB_WORKSPACE/upstream"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.24.0
+      - name: Build Windows x64 sidecar
+        shell: pwsh
+        working-directory: upstream
+        env:
+          CGO_ENABLED: 0
+          GOOS: windows
+          GOARCH: amd64
+          SIDECAR_VERSION: ${{ inputs.version }}
+        run: |
+          $out = "$env:RUNNER_TEMP/xiaohongshu-mcp-windows-amd64.exe"
+          go build -buildvcs=false -trimpath -ldflags "-s -w -X main.version=$env:SIDECAR_VERSION" -o $out .
+          $actual = (Get-FileHash $out -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne '4efa73d4bb1f5def9f2fa7f822464b01b519a9ff99955f884b680c884a215ad9') {
+            throw "Built binary hash mismatch: $actual"
+          }
+      - name: Publish pinned binary and upstream license
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SIDECAR_VERSION: ${{ inputs.version }}
+        run: |
+          gh release create $env:SIDECAR_VERSION `
+            "$env:RUNNER_TEMP/xiaohongshu-mcp-windows-amd64.exe" `
+            "upstream/LICENSE" `
+            --repo "$env:GITHUB_REPOSITORY" `
+            --target main `
+            --title "Xiaohongshu MCP $env:SIDECAR_VERSION" `
+            --notes "VEIL-patched Windows x64 sidecar built from xpzouying/xiaohongshu-mcp v2.5.5 at a5c8f7799980ba1fdd501999843eb2d17e4c9a9f. See docs/tickets/162-xiaohongshu-page-wait.md and the included Apache-2.0 license."

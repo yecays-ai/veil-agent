@@ -7,7 +7,7 @@ import threading
 from pathlib import Path
 from urllib.request import urlopen
 
-from xiaohongshu_tools import (ASSETS, VERSION, Sidecar, account_lock, binary_path,
+from xiaohongshu_tools import (ASSETS, UPSTREAM_VERSION, VERSION, Sidecar, account_lock, binary_path,
                               PageFailure, companion_env, private_folder, stop_process_tree)
 
 
@@ -20,8 +20,11 @@ def install(root):
             continue
         except ValueError:
             pass
-        print('下载并校验官方发行文件：' + name, flush=True)
-        url = f'https://github.com/xpzouying/xiaohongshu-mcp/releases/download/{VERSION}/{name}'
+        print('下载并校验发行文件：' + name, flush=True)
+        if name == 'xiaohongshu-mcp-windows-amd64.exe':
+            url = f'https://github.com/yecays-ai/veil-agent/releases/download/{VERSION}/{name}'
+        else:
+            url = f'https://github.com/xpzouying/xiaohongshu-mcp/releases/download/{UPSTREAM_VERSION}/{name}'
         temporary = folder / (name + '.download')
         try:
             with urlopen(url, timeout=60) as response, temporary.open('wb') as target:
