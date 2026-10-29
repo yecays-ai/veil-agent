@@ -65,7 +65,7 @@ class LabGames:
             path = _safe_lab_file(self.lab, entry.relative_to(self.lab).as_posix(), page=True)
         else:
             path = _safe_lab_file(self.lab, (folder.relative_to(self.lab) / relative).as_posix())
-            if path.parent != folder:
+            if not path.is_relative_to(folder):
                 raise ValueError('Game resources must stay in the game folder.')
         if path.stat().st_size > MAX_GAME_RESOURCE:
             raise ValueError('Game resource is too large.')

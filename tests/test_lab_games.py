@@ -43,6 +43,16 @@ class LabGameTests(unittest.TestCase):
         new_capability = urlsplit(restarted.open('lab/spider/index.html')).path.split('/')[2]
         self.assertEqual(restarted.save(new_capability, self.score()), {'ok': True, 'duplicate': True})
 
+    def test_nested_static_resources_stay_in_game_folder(self):
+        scripts = self.game / 'js'
+        scripts.mkdir()
+        (scripts / 'game.js').write_text('window.started = true', encoding='utf-8')
+        body, mime = self.service.resource(self.capability, 'js/game.js')
+        self.assertIn(b'window.started', body)
+        self.assertIn('javascript', mime)
+        with self.assertRaises(ValueError):
+            self.service.resource(self.capability, '../notes.txt')
+
     def test_invalid_scores_and_links_do_not_modify_other_files(self):
         other = self.game / 'notes.txt'
         other.write_text('keep', encoding='utf-8')
@@ -78,6 +88,10 @@ class LabGameTests(unittest.TestCase):
             if isinstance(exc.reason, PermissionError):
                 self.skipTest('Loopback connections are blocked in this environment')
             raise
+        (self.game / 'js').mkdir()
+        (self.game / 'js' / 'game.js').write_text('window.playable = true', encoding='utf-8')
+        with urlopen(url.rsplit('/', 1)[0] + '/js/game.js') as response:
+            self.assertIn(b'window.playable', response.read())
         score_url = url.rsplit('/', 1)[0] + '/score'
         origin = f'http://127.0.0.1:{server.server_address[1]}'
         request = Request(score_url, self.score(), {'Content-Type': 'application/json', 'Origin': origin},

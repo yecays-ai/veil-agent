@@ -1615,6 +1615,12 @@ def make_handler(hub, token):
                     return
                 if not self._game_origin_guard():
                     return
+                from urllib.parse import unquote
+                try:
+                    parts[3] = unquote(parts[3], errors='strict')
+                except UnicodeError:
+                    self._send(404, {'error': 'game resource unavailable'})
+                    return
                 manager = getattr(hub, 'game_manager', None)
                 if manager is None:
                     self._send(404, {'error': 'game unavailable'})
