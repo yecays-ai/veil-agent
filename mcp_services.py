@@ -1,6 +1,6 @@
 """Local stdio MCP services, isolated from VEIL's built-in tool runtime."""
 import asyncio
-from concurrent.futures import Future, TimeoutError as FutureTimeout
+from concurrent.futures import Future, InvalidStateError, TimeoutError as FutureTimeout
 import json
 import os
 from pathlib import Path
@@ -46,7 +46,9 @@ class _Worker:
         self.service = service
         self.ready = Future()
         self.loop = None
+        self.main_task = None
         self.jobs = None
+        self.active_reply = None
         self.tools = []
         self.tool_limit_hit = False
         self.closing = threading.Event()
@@ -59,6 +61,7 @@ class _Worker:
             from mcp import ClientSession, StdioServerParameters
             from mcp.client.stdio import stdio_client
             self.loop = asyncio.get_running_loop()
+            self.main_task = asyncio.current_task()
             self.jobs = asyncio.Queue()
             if self.closing.is_set():
                 return
@@ -84,6 +87,7 @@ class _Worker:
                         if job is None:
                             break
                         name, args, reply = job
+                        self.active_reply = reply
                         try:
                             async with asyncio.timeout(CALL_TIMEOUT):
                                 response = await session.call_tool(name, args)
@@ -98,6 +102,8 @@ class _Worker:
                         except Exception as exc:
                             if not reply.done():
                                 reply.set_exception(exc)
+                        finally:
+                            self.active_reply = None
         try:
             asyncio.run(run())
         except BaseException as exc:
@@ -122,8 +128,19 @@ class _Worker:
 
     def close(self):
         self.closing.set()
+        if self.active_reply is not None and not self.active_reply.done():
+            try:
+                self.active_reply.set_exception(RuntimeError('MCP 服务已停用。'))
+            except InvalidStateError:
+                pass
         if self.thread.is_alive() and self.loop and self.jobs:
-            self.loop.call_soon_threadsafe(self.jobs.put_nowait, None)
+            try:
+                if self.main_task:
+                    self.loop.call_soon_threadsafe(self.main_task.cancel)
+                else:
+                    self.loop.call_soon_threadsafe(self.jobs.put_nowait, None)
+            except RuntimeError:
+                pass
             self.thread.join(timeout=3)
 
 

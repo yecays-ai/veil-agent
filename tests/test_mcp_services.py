@@ -1,6 +1,7 @@
 import sys
 import tempfile
 import time
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -65,6 +66,24 @@ class MCPServicesTest(unittest.TestCase):
         self.await_status('connected')
         self.await_status('error')
         self.assertIn('断开', self.manager.view()['services'][0]['error'])
+
+    def test_disabling_aborts_inflight_call(self):
+        self.manager.save(self.config())
+        self.await_status('connected')
+        worker = self.manager.workers['echo']
+        result = []
+        thread = threading.Thread(target=lambda: result.append(
+            self.manager.invoke('mcp__echo__slow', {}, lambda _: 'y')))
+        thread.start()
+        deadline = time.monotonic() + 3
+        while worker.active_reply is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertIsNotNone(worker.active_reply)
+        self.manager.save(self.config(enabled=False))
+        thread.join(timeout=4)
+        self.assertFalse(thread.is_alive())
+        self.assertFalse(worker.thread.is_alive())
+        self.assertEqual(result[0][1], '出错')
 
     def test_call_timeout_is_visible_and_chat_safe(self):
         self.manager.save(self.config())
