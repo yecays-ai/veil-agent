@@ -55,7 +55,8 @@ jobs:
         run: |
           $release = gh release list --repo "$env:GITHUB_REPOSITORY" --limit 100 --json tagName,isDraft | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0) { throw 'Could not list existing releases.' }
-          if (-not ($release | Where-Object { $_.tagName -eq $env:SIDECAR_VERSION })) {
+          $existingRelease = $release | Where-Object { $_.tagName -eq $env:SIDECAR_VERSION } | Select-Object -First 1
+          if (-not $existingRelease) {
             gh release create $env:SIDECAR_VERSION `
               --repo "$env:GITHUB_REPOSITORY" `
               --target main `
@@ -63,6 +64,8 @@ jobs:
               --title "Xiaohongshu MCP $env:SIDECAR_VERSION" `
               --notes "VEIL-patched Windows x64 sidecar built from xpzouying/xiaohongshu-mcp v2.5.5 at a5c8f7799980ba1fdd501999843eb2d17e4c9a9f. See docs/tickets/162-xiaohongshu-page-wait.md and the included Apache-2.0 license."
             if ($LASTEXITCODE -ne 0) { throw 'Could not create the draft sidecar release.' }
+          } elseif (-not $existingRelease.isDraft) {
+            throw 'Refusing to replace assets in an already published sidecar release.'
           }
           gh release upload $env:SIDECAR_VERSION `
             "$env:RUNNER_TEMP/xiaohongshu-mcp-windows-amd64.exe" `
