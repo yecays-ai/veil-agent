@@ -121,6 +121,13 @@ if not exist "desktop\node_modules\.bin\electron-packager.cmd" (
     set "UPDATE_EXIT=1"
     goto end
 )
+echo Checking the pinned Nowhere runtime...
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\install-nowhere.ps1" -RepositoryPath "%CD%"
+if errorlevel 1 (
+    echo The source update completed, but Nowhere installation did not finish. Your existing Python environment and data were left in place.
+    set "UPDATE_EXIT=1"
+    goto end
+)
 echo Packaging VEIL Desktop from the updated main source...
 pushd desktop
 call npm run package

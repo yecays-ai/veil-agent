@@ -8,11 +8,27 @@ import re
 import subprocess
 import threading
 import time
+from urllib.parse import urlsplit
 
 
 NAME = re.compile(r'^[a-z][a-z0-9_]{0,31}$')
 TOOL_PREFIX = 'mcp__'
 CALL_TIMEOUT = 20
+
+
+def _local_observer_url(instructions):
+    if not isinstance(instructions, str):
+        return None
+    for candidate in re.findall(r'https?://[^\s<>"\']+', instructions):
+        try:
+            parsed = urlsplit(candidate.rstrip('.,;。'))
+            if (parsed.scheme == 'http' and parsed.hostname == '127.0.0.1'
+                    and parsed.port and 1 <= parsed.port <= 65535
+                    and not parsed.username and not parsed.password and not parsed.path):
+                return f'http://127.0.0.1:{parsed.port}'
+        except ValueError:
+            continue
+    return None
 
 
 class MCPConfigError(ValueError):
@@ -36,6 +52,9 @@ def _validate_service(raw):
                 'permission': 'direct', 'command': '', 'args': [], 'cwd': None}
     if not isinstance(raw, dict) or not NAME.fullmatch(str(raw.get('id', ''))) or '__' in raw.get('id', '') or raw['id'].endswith('_'):
         raise MCPConfigError('服务 ID 只能使用小写字母、数字和下划线，并以字母开头。')
+    managed = raw.get('managed')
+    if managed not in (None, 'nowhere'):
+        raise MCPConfigError('内置服务标记无效。')
     command = raw.get('command')
     args = raw.get('args', [])
     if not isinstance(command, str) or not command.strip() or len(command) > 500 or '\x00' in command:
@@ -51,13 +70,18 @@ def _validate_service(raw):
         raise MCPConfigError('服务权限无效。')
     if not isinstance(raw.get('enabled', True), bool):
         raise MCPConfigError('服务开关无效。')
-    return {'id': raw['id'], 'command': command.strip(), 'args': args, 'cwd': cwd,
-            'enabled': raw.get('enabled', True), 'permission': permission}
+    result = {'id': raw['id'], 'command': command.strip(), 'args': args, 'cwd': cwd,
+              'enabled': raw.get('enabled', True), 'permission': permission}
+    if managed:
+        result['managed'] = managed
+    return result
 
 
 class _Worker:
-    def __init__(self, service):
+    def __init__(self, service, environment=None):
         self.service = service
+        self.environment = environment
+        self.observer_url = None
         self.ready = Future()
         self.loop = None
         self.main_task = None
@@ -82,11 +106,14 @@ class _Worker:
             if self.closing.is_set():
                 return
             params = StdioServerParameters(command=self.service['command'], args=self.service['args'],
-                                            cwd=self.service['cwd'])
+                                            cwd=self.service['cwd'], env=self.environment)
             async with stdio_client(params, errlog=subprocess.DEVNULL) as (read, write):
                 async with ClientSession(read, write) as session:
                     async with asyncio.timeout(10):
-                        await session.initialize()
+                        initialized = await session.initialize()
+                        self.observer_url = _local_observer_url(
+                            getattr(initialized, 'instructions', None)
+                            if self.service.get('managed') == 'nowhere' else None)
                         discovered = (await session.list_tools()).tools
                         self.tool_limit_hit = len(discovered) > 40
                         self.tools = discovered[:40]
@@ -216,7 +243,7 @@ class _Worker:
 
 
 class MCPServices:
-    def __init__(self, path, initial_integrations=None):
+    def __init__(self, path, initial_integrations=None, initial_services=None, managed_env=None):
         self.path = Path(path)
         self.lock = threading.RLock()
         self.workers = {}
@@ -224,6 +251,8 @@ class MCPServices:
         self.errors = {}
         self.failed = set()
         self.adapters = {}
+        self.initial_services = list(initial_services or [])
+        self.managed_env = dict(managed_env or {})
         self.config = {'enabled': False, 'services': []}
         self.revision = 0
         config_existed = self.path.exists()
@@ -261,16 +290,47 @@ class MCPServices:
                     self.config = migrated
                 except OSError as exc:
                     self.errors['_config'] = str(exc)[:300]
+        if self.initial_services and '_config' not in self.errors:
+            existing_managed = {item.get('managed') for item in self.config['services']}
+            additions = []
+            existing_ids = {item['id'] for item in self.config['services']}
+            for item in self.initial_services:
+                if item.get('managed') in existing_managed:
+                    continue
+                row = dict(item)
+                base = row['id']
+                suffix = 2
+                while row['id'] in existing_ids:
+                    row['id'] = f'peter_{base}' if suffix == 2 else f'peter_{base}_{suffix}'
+                    suffix += 1
+                existing_ids.add(row['id'])
+                additions.append(row)
+            if additions:
+                try:
+                    migration_enabled = self.config['enabled'] or (
+                        not config_existed and any(row.get('enabled') is True for row in additions))
+                    migrated = self._validate({'enabled': migration_enabled,
+                                               'services': [*self.config['services'], *additions]})
+                    self.path.parent.mkdir(parents=True, exist_ok=True)
+                    temp = self.path.with_suffix('.tmp')
+                    temp.write_text(json.dumps(migrated, ensure_ascii=False, indent=2), encoding='utf-8')
+                    os.replace(temp, self.path)
+                    self.config = migrated
+                except (OSError, ValueError, TypeError) as exc:
+                    self.errors['_config'] = str(exc)[:300]
 
     @staticmethod
     def _validate(raw):
         if not isinstance(raw, dict) or not isinstance(raw.get('enabled'), bool):
             raise MCPConfigError('MCP 总开关无效。')
         services = raw.get('services')
-        if (not isinstance(services, list) or len(services) > 22
+        has_nowhere = isinstance(services, list) and any(
+            isinstance(item, dict) and item.get('managed') == 'nowhere' for item in services)
+        if (not isinstance(services, list) or len(services) > 23
                 or sum(item.get('builtin') is True for item in services if isinstance(item, dict)) > 2
-                or sum(item.get('builtin') is not True for item in services if isinstance(item, dict)) > 20):
-            raise MCPConfigError('最多配置 20 个本地 MCP 服务及 2 个内置集成。')
+                or sum(item.get('builtin') is not True for item in services if isinstance(item, dict))
+                   > (21 if has_nowhere else 20)):
+            raise MCPConfigError('最多配置 20 个本地 MCP 服务、1 个乌有乡服务及 2 个内置集成。')
         result = [_validate_service(item) for item in services]
         if len({item['id'] for item in result}) != len(result):
             raise MCPConfigError('服务 ID 不能重复。')
@@ -369,7 +429,7 @@ class MCPServices:
                         self.failed.discard(service['id'])
                     return None
                 self.workers.pop(service['id'], None)
-            worker = _Worker(service)
+            worker = _Worker(service, environment=self.managed_env.get(service.get('managed')))
             self.workers[service['id']] = worker
             self.errors.pop(service['id'], None)
             self.failed.discard(service['id'])
@@ -479,6 +539,7 @@ class MCPServices:
                                   and self.config['enabled'] and service['enabled'])
                 rows.append({**service, 'status': 'connected' if connected else 'connecting' if connecting else 'error' if service['id'] in self.failed or (retiring and retiring.thread.is_alive()) else 'off',
                              'tools': [tool.name for tool in worker.tools if self._usable_name(service, tool)] if connected else [],
+                             'observer_url': worker.observer_url if connected and service.get('managed') == 'nowhere' else None,
                              'error': self.errors.get(service['id']) or (
                                  '该服务工具超过 40 个，仅提供前 40 个。' if connected and worker.tool_limit_hit else None)})
             return {'enabled': self.config['enabled'], 'services': rows,

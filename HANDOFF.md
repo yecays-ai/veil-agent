@@ -2,10 +2,10 @@
 
 ## 当前进度
 
-- 工单 165：PR #213 已创建，分支 `ticket/165-tool-results-fit` 基于 main `ea147a7`。旧 head `87da6aa` 的 CI 旧断言、Cubic 的限额/记录/遮蔽问题及 CodeRabbit 的重叠意见已修。`LabPreviewResult` 同时携带截图字段和字符串原文，截图遗漏后截断的状态说明已在 `718cf8e` 修复并加回归测试。Cubic 补充的导入和 ID 非空断言已在 `7322f63` 修复。`7322f63` 的 CI 再发现输入上限小于角色提示的截图用例，以及两处对旧输出文字的断言；当前待推送已修正这三处。CodeRabbit 对更新 head 的复审被限流。此前定向测试 38 项通过；本轮受限环境测试不能计为通过。
-- 下一步：推送最后一批 CI 修正，读取新 head 的 CI 结论；不手动重跑测试。若必需 CI 通过且没有未处理的实质意见则合并。Windows 实际体验仍按工单步骤验收。
-- GitHub 当前 main 为 `ea147a730840ab4c1ee4c2bee639888111d15b11`；本机 GitHub DNS 解析失败，已由 GitHub 连接器读取提交记录核对。已保留另一现存本地 worktree `ticket/165-xhs-release-fallback`，未修改。
-- 工单 164：main 的 `STATUS.md` 记录 PR #212 已开放；GitHub review 记录中 Cubic/CodeRabbit 意见已处理，`ea147a7` 的 combined status 暂无状态项。Windows 实际体验待验收。
+- 工单 166：本地分支 `ticket/166-nowhere-travel` 基于已合并工单 165 的 main `589bb17`；接入上游固定提交 `f0803c1053e5f97a6f44bab26e15043d71825ec7`，复用现有 MCP 管理器、唤醒循环、念头池、Ombre 和 Lab。乌有乡运行环境独立安装，`NOWHERE_HOME` 指向 `data/peter/nowhere`，地图仅允许本机回环地址。
+- 工单 165：PR #213 已合并为 `589bb17`；Windows 实际体验待验收。
+- 下一步：完成代码和针对性检查，复核文档后提交并创建单项 PR。真实 Windows 更新、MCP 启停/重启、工具真实返回、旅程恢复、Lab 文件、自主停止/暂停与地图访问仍待 Lan 验收。
+- 工单 164：PR #212 仍开放；Windows 实际体验待验收。
 - 工单 163：PR #211 已合并，必需 CI 已通过；Windows 体验验收待按 `docs/tickets/163-mcp-integrations.md` 执行。
 - 工单 162：PR #210 已合并；在 main 手动运行 `Build Xiaohongshu Windows sidecar` 后，Lan 更新并按 `docs/tickets/162-xiaohongshu-page-wait.md` 验收。
 
@@ -68,12 +68,12 @@
 - 098 QQ 邮箱：2026-11-07 后验收收发。
 - 142–151：Lan 按各自工单做 Windows 体验验收。
 - 135、136、138：请 Lan 确认（10-27 说过 134–138 验收完毕，但不在 10-28 清单里）。
-- 下一个工单号为 164。
+- 下一个工单号为 167（工单 166 尚在本地施工）。
 
 ## 仍适用的边界
 
 - 正式 checkout `E:\Peter-Agent\VEIL\veil-agent` 留在 `main`。其中用户已有的 `update-main-collisions.ps1`、`update-main.cmd` 删除状态不属于本工单，保持原样。
-- 只在本工单独立 worktree 操作；Windows 验收前保持 PR 打开，不清理本工单 worktree。
+- 工单 166 只在独立 worktree 操作；工单 165 已合并，可以在本地工作完成后推送并创建单项 PR。Windows 验收前保持 PR 打开，不清理本工单 worktree。
 - 不增加第二个 Agent、模型供应商、Agent 框架或依赖；浏览器复用仓库已有 Playwright 依赖；工具别名复用现有角色配置、Chat 工具循环及权限/预算/检查点入口。工单 164 移除了工单 151 的 GSMTC 媒体读取及其 PyWinRT 依赖，其他 Windows 观察能力保留。
 - UIA 窗口内容是非可信数据；敏感窗口过滤由现有 Windows 观察工具执行。当前瞄一眼观察仅用 UIA，不调用截图回退，不把原始 UIA 内容写入活动文件或长期记忆。
 - 代码检查、CI、Windows 实机体验是不同证据；各工单的体验验收状态以 STATUS.md「验收总表」为准。

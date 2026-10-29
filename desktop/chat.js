@@ -1376,7 +1376,7 @@ setBusy(true);poll();
 
 let mcpView={enabled:false,services:[]},mcpEditing=null,mcpLoading=false,mcpReady=false,mcpSaving=false,mcpSaveQueue=Promise.resolve(),mcpGeneration=0,mcpSignature='',mcpActionError='';
 $('mcp-add').disabled=true;$('mcp-enabled').disabled=true;
-function mcpConfig(source=mcpView){return {enabled:source.enabled,services:source.services.map(({id,builtin,adapter,command,args,cwd,enabled,permission})=>builtin?{id,builtin:true,adapter,enabled}:{id,command,args,cwd,enabled,permission})}}
+function mcpConfig(source=mcpView){return {enabled:source.enabled,services:source.services.map(({id,builtin,adapter,managed,command,args,cwd,enabled,permission})=>builtin?{id,builtin:true,adapter,enabled}:{id,managed,command,args,cwd,enabled,permission})}}
 async function loadMCP(force=false){
   if(mcpLoading||mcpSaving)return;
   const generation=mcpGeneration;
@@ -1427,13 +1427,17 @@ function renderMCP(){
     const title=document.createElement('h3');title.textContent=service.id;
     const status=document.createElement('span');status.className='state-pill';status.textContent=service.builtin?(service.status==='connected'?'已启用':'已停用'):service.status==='connected'?'已连接':service.status==='connecting'?'连接中':service.status==='error'?'连接失败':'已停用';
     heading.append(title,status);card.append(heading);
-    const details=document.createElement('p');details.textContent=service.builtin?`${service.tools.length} 个工具 · VEIL 内置集成`:`${service.tools.length} 个工具 · ${service.permission==='ask'?'每次询问':'直接调用'}`;card.append(details);
+    const details=document.createElement('p');details.textContent=service.managed==='nowhere'?`${service.tools.length} 个工具 · Peter 的独立旅程存档 · 旋复 / 乌有乡 · CC BY-NC 4.0（上游未修改）`:service.builtin?`${service.tools.length} 个工具 · VEIL 内置集成`:`${service.tools.length} 个工具 · ${service.permission==='ask'?'每次询问':'直接调用'}`;card.append(details);
+    if(service.managed==='nowhere'){
+      const project=document.createElement('p');project.className='mcp-tools';project.textContent='项目与许可：https://github.com/yuyixuanfu/nowhere · https://creativecommons.org/licenses/by-nc/4.0/';card.append(project);
+    }
     if(service.error){const error=document.createElement('p');error.className='mcp-error';error.textContent=service.error;card.append(error)}
     if(service.tools.length){const tools=document.createElement('p');tools.className='mcp-tools';tools.textContent=service.tools.join('、');card.append(tools)}
     const actions=document.createElement('div');actions.className='tool-row';
+    if(service.managed==='nowhere'&&service.observer_url){const observe=document.createElement('button');observe.type='button';observe.textContent='查看旅程地图';observe.onclick=()=>window.veilDesktop.openNowhere(service.observer_url);actions.append(observe)}
     const toggle=document.createElement('button');toggle.type='button';toggle.textContent=service.enabled?'停用':'启用';toggle.onclick=()=>saveMCP(current=>({...current,services:current.services.map(item=>item.id===service.id?{...item,enabled:!item.enabled}:item)}));
     actions.append(toggle);
-    if(!service.builtin){const edit=document.createElement('button');edit.type='button';edit.textContent='编辑';edit.onclick=()=>openMCPForm(service);
+    if(!service.builtin&&!service.managed){const edit=document.createElement('button');edit.type='button';edit.textContent='编辑';edit.onclick=()=>openMCPForm(service);
       const remove=document.createElement('button');remove.type='button';remove.textContent='移除';remove.onclick=()=>{if(confirm(`移除 MCP 服务 ${service.id}？`))saveMCP(current=>({...current,services:current.services.filter(item=>item.id!==service.id)}))};actions.append(edit,remove)}
     card.append(actions);list.append(card);
   }

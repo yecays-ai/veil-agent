@@ -1331,7 +1331,14 @@ class Chat:
         integrations['github'] = bool(tools_enabled and legacy_web.get('github_readonly') is True)
         integrations['xiaohongshu'] = bool(tools_enabled and legacy_web.get('enabled') is True
                                            and legacy_web.get('xiaohongshu_readonly') is True)
-        self.mcp_services = MCPServices(store.root / cfg.id / 'mcp-services.json', integrations)
+        initial_services = []
+        managed_env = {}
+        if cfg.id == 'peter':
+            from nowhere_integration import service_config, service_environment
+            initial_services.append(service_config())
+            managed_env['nowhere'] = service_environment(store.root / cfg.id / 'nowhere')
+        self.mcp_services = MCPServices(store.root / cfg.id / 'mcp-services.json', integrations,
+                                        initial_services=initial_services, managed_env=managed_env)
         if filesystem_tools:
             if getattr(filesystem_tools, 'github_tools', None):
                 self.mcp_services.register_adapter('github', filesystem_tools.github_tools)

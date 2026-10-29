@@ -28,6 +28,9 @@ if errorlevel 1 goto no_python
 if errorlevel 1 goto failed
 ".venv\Scripts\python.exe" -m pip install --no-cache-dir -r requirements.lock.txt
 if errorlevel 1 goto failed
+echo Installing the pinned Nowhere runtime in an isolated Python environment...
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\install-nowhere.ps1" -RepositoryPath "%CD%"
+if errorlevel 1 goto failed
 ".venv\Scripts\python.exe" -m playwright install chromium
 if errorlevel 1 goto failed
 ".venv\Scripts\python.exe" setup_memory.py
