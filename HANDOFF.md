@@ -2,8 +2,10 @@
 
 ## 当前进度
 
-- 工单 164：PR #212 已开放，分支 `ticket/164-peter-tool-aliases` 基于最新 main。角色别名映射、schema 处理、统一执行还原及 `windows_now_playing` 与 WinRT 依赖清理已实现。已处理本轮 review 的实质问题；前一提交的 Tests 与 Dependency security 通过，最新修改等待自动检查。filesystem 服务测试未确认，Windows 实际体验待验收。
-- 下一步：核对本轮修复、集中提交一次并更新 PR；不手动重触发 review；自动检查完成后由 Lan 跟进审查意见与 Windows 验收。
+- 工单 165：PR #213 已创建，分支 `ticket/165-tool-results-fit` 基于 main `ea147a7`。旧 head `87da6aa` 的 CI 旧断言、Cubic 的限额/记录/遮蔽问题及 CodeRabbit 的重叠意见已修。`LabPreviewResult` 同时携带截图字段和字符串原文，截图遗漏后截断的状态说明已在 `718cf8e` 修复并加回归测试。Cubic 补充的导入和 ID 非空断言已在 `7322f63` 修复。`7322f63` 的 CI 再发现输入上限小于角色提示的截图用例，以及两处对旧输出文字的断言；当前待推送已修正这三处。CodeRabbit 对更新 head 的复审被限流。此前定向测试 38 项通过；本轮受限环境测试不能计为通过。
+- 下一步：推送最后一批 CI 修正，读取新 head 的 CI 结论；不手动重跑测试。若必需 CI 通过且没有未处理的实质意见则合并。Windows 实际体验仍按工单步骤验收。
+- GitHub 当前 main 为 `ea147a730840ab4c1ee4c2bee639888111d15b11`；本机 GitHub DNS 解析失败，已由 GitHub 连接器读取提交记录核对。已保留另一现存本地 worktree `ticket/165-xhs-release-fallback`，未修改。
+- 工单 164：main 的 `STATUS.md` 记录 PR #212 已开放；GitHub review 记录中 Cubic/CodeRabbit 意见已处理，`ea147a7` 的 combined status 暂无状态项。Windows 实际体验待验收。
 - 工单 163：PR #211 已合并，必需 CI 已通过；Windows 体验验收待按 `docs/tickets/163-mcp-integrations.md` 执行。
 - 工单 162：PR #210 已合并；在 main 手动运行 `Build Xiaohongshu Windows sidecar` 后，Lan 更新并按 `docs/tickets/162-xiaohongshu-page-wait.md` 验收。
 

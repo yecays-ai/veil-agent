@@ -12,7 +12,7 @@ from memory_native import HOLD, NativeMemoryTools, ToolSet
 from long_tasks import LongTaskStore
 from test_memory import Backend
 from tools_agent import permitted_tools
-from veil_agent import Budget, Character, Chat, Store, build_self_description, memory_mode
+from veil_agent import Budget, Character, Chat, RequestFailed, Store, build_self_description, memory_mode
 
 
 class MergingBackend(Backend):
@@ -856,9 +856,9 @@ class SearchThenSaveTests(unittest.TestCase):
         # The provider reports a prompt as large as the bytes, so no calibration discount applies.
         chat = Chat(self.cfg, self.store, self.budget, lambda messages, **_: (huge, 30000, 300, 0),
                     self.memory, self.tools, output=output.append)
-        self.assertIn('tool was not executed', chat.send('hi'))
+        with self.assertRaisesRegex(RequestFailed, '长度上限'):
+            chat.send('hi')
         self.assertNotIn('hold', [n for n, _ in self.backend.calls])
-        self.assertTrue(any('长度检查' in line for line in output))
 
 
 class EnglishSearchThenSaveTests(SearchThenSaveTests):

@@ -12,7 +12,8 @@ from unittest.mock import Mock
 
 from tools_agent import (ALLOW, ASK, DENY, LAB_ONLY, FilesystemTools, checked_path,
                          permitted_tools, tool_policy)
-from veil_agent import Budget, Chat, Store, load_character, model_tool_result, run_chat
+from veil_agent import (Budget, Chat, RequestFailed, Store, load_character,
+                        model_tool_result, run_chat)
 
 
 class ToolPolicyTests(unittest.TestCase):
@@ -822,7 +823,8 @@ max_result_bytes = 200
         tools.tools = [SimpleNamespace(name='write_file', description='Write', inputSchema={})]
         tools.capability_event = None
         chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=lambda _: None)
-        self.assertIn('tool was not executed', chat.send('write it'))
+        with self.assertRaises(RequestFailed):
+            chat.send('write it')
         tools.invoke.assert_not_called()
 
     def test_measured_prompt_baseline_keeps_room_for_next_tool_record(self):
@@ -838,7 +840,7 @@ max_result_bytes = 200
         self.assertEqual(tools.invoke.call_count, 1)
         self.assertEqual(model.call_count, 2)
 
-    def test_real_result_over_limit_is_not_sent_to_model(self):
+    def test_real_result_over_limit_is_truncated_to_fit(self):
         self.cfg.tools['max_result_bytes'] = 6000
         self.store.append('test/chat.jsonl', {'role': 'user', 'content': 'old ' + 'x' * 2100})
         self.store.append('test/chat.jsonl', {'role': 'assistant', 'content': 'old answer'})
@@ -852,9 +854,132 @@ max_result_bytes = 200
         chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=lambda _: None)
         self.assertEqual(chat.send('read it'), 'The result was too long.')
         forwarded = model.call_args_list[1].args[0][-1]['content']
-        self.assertIn('exceeded this request input limit', forwarded)
-        self.assertNotIn('secret', forwarded)
+        self.assertIn('secret', forwarded)
+        self.assertIn('结果已截断', forwarded)
+        self.assertEqual(chat.last_tool_summaries[0]['result_state'], '已截断')
+        activity = self.store.read('test/tools.jsonl')[-1]
+        self.assertEqual(activity['result_state'], '已截断')
+        self.assertIn('secret', activity['detail'])
+        self.assertNotIn('结果已截断', activity['detail'])
         self.assertTrue(any((m.get('content') or '').startswith('old ') for m in model.call_args_list[1].args[0]))
+
+    def test_truncated_preview_does_not_claim_omitted_screenshot_was_seen(self):
+        from lab_preview import LabPreviewResult
+        self.cfg.tools['max_steps'] = 2
+        preview = LabPreviewResult('Screenshot captured: yes.\n' + 'secret ' * 15000,
+                                   'data:image/png;base64,aGVsbG8=')
+        first = self.message([self.tool_call('read_text_file', '{"path":"preview"}', 'preview')])
+        final = self.message(content='The preview text was read.')
+        model = Mock(side_effect=[(first, 100, 20, 0), (final, 120, 20, 0)])
+        tools = Mock()
+        tools.tools = [SimpleNamespace(name='read_text_file', description='Read', inputSchema={})]
+        tools.capability_event = None
+        tools.invoke.return_value = (preview, '成功', 'preview')
+        chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=lambda _: None)
+
+        self.assertEqual(chat.send('read preview'), 'The preview text was read.')
+        forwarded = model.call_args_list[1].args[0][-1]['content']
+        self.assertIn('Screenshot was not sent to the model', forwarded)
+        self.assertNotIn('Screenshot captured: yes.', forwarded)
+        self.assertIn('结果已截断', forwarded)
+
+    def test_eight_large_results_mask_older_results_and_keep_latest_before_send(self):
+        self.cfg.tools['max_steps'] = 12
+        self.cfg.provider['max_input_tokens'] = 10000
+        calls = [self.message([self.tool_call('read_text_file', '{"path":"source-%d"}' % i,
+                                               'read-%d' % i)]) for i in range(8)]
+        calls += [self.message([self.tool_call('send_message',
+                                               '{"text":"I checked eight sources."}', 'send')]),
+                  self.message(content='I checked eight sources.')]
+        responses = iter(calls)
+        requests = []
+        def model(messages, **_kwargs):
+            requests.append(json.loads(json.dumps(messages, ensure_ascii=False)))
+            prompt_tokens = max(100, len(json.dumps(messages, ensure_ascii=False).encode('utf-8')) // 2)
+            self.assertLessEqual(prompt_tokens, self.cfg.provider['max_input_tokens'])
+            return next(responses), prompt_tokens, 20, 0
+        tools = Mock()
+        tools.tools = [SimpleNamespace(name='read_text_file', description='Read', inputSchema={}),
+                       SimpleNamespace(name='send_message', description='Send', inputSchema={})]
+        tools.capability_event = None
+        tools.invoke.side_effect = lambda name, args, _approval=None: (
+            ('source-%s ' % args['path'][-1]) + ('x' * 5990), '成功', args['path'])
+        chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=lambda _: None)
+
+        reply = chat.send('查八个来源')
+
+        self.assertEqual(reply, 'I checked eight sources.')
+        self.assertEqual(chat.send_message_count, 1)
+        send_request = requests[8]
+        read_results = [m['content'] for m in send_request
+                        if m.get('role') == 'tool' and m.get('tool_call_id', '').startswith('read-')]
+        self.assertEqual(len(read_results), 8)
+        self.assertTrue(any('这条较早的工具结果已缩短' in result for result in read_results))
+        self.assertTrue(read_results[-1].endswith('x' * 5990))
+        self.assertTrue(any(item.get('result_state') == '已截断'
+                            for item in chat.last_tool_summaries[:7]))
+        rows = self.store.read('test/tools.jsonl')
+        latest_read = next(row for row in reversed(rows)
+                           if row.get('tool') == 'read_text_file' and row.get('path') == 'source-0')
+        self.assertEqual(latest_read['result_state'], '已截断')
+        masked_rows = [row for row in rows
+                       if row.get('tool') == 'read_text_file' and row.get('path') == 'source-0']
+        masked_call_ids = {row.get('call_id') for row in masked_rows}
+        self.assertEqual(len(masked_call_ids), 1)
+        self.assertTrue(next(iter(masked_call_ids)))
+
+    def test_length_stop_raises_request_failed_without_peter_reply(self):
+        first = self.message([self.tool_call('read_text_file', '{"path":"x"}', 'read')],
+                             reasoning='r' * 12000)
+        model = Mock(return_value=(first, 100, 20, 0))
+        tools = Mock()
+        tools.tools = [SimpleNamespace(name='read_text_file', description='Read', inputSchema={})]
+        tools.capability_event = None
+        output = []
+        chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=output.append)
+
+        with self.assertRaises(RequestFailed):
+            chat.send('read it')
+
+        self.assertFalse(any(line.startswith('Peter: ') for line in output))
+        self.assertEqual(len([row for row in self.store.read('test/chat.jsonl')
+                              if row.get('role') == 'assistant']), 0)
+        tools.invoke.assert_not_called()
+
+    def test_length_stop_returns_already_sent_message_without_raising(self):
+        first = self.message([self.tool_call('send_message', '{"text":"Found one source."}', 'send')])
+        second = self.message([self.tool_call('read_text_file', '{"path":"x"}', 'read')],
+                              reasoning='r' * 30000)
+        model = Mock(side_effect=[(first, 100, 20, 0), (second, 100, 20, 0)])
+        tools = Mock()
+        tools.tools = [SimpleNamespace(name='read_text_file', description='Read', inputSchema={}),
+                       SimpleNamespace(name='send_message', description='Send', inputSchema={})]
+        tools.capability_event = None
+        chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=lambda _: None)
+
+        reply = chat.send('查来源')
+
+        self.assertEqual(reply, 'Found one source.')
+        self.assertTrue(chat.reply_displayed)
+        tools.invoke.assert_not_called()
+
+    def test_length_stop_still_executes_send_message_from_same_tool_batch(self):
+        response = self.message([
+            self.tool_call('read_text_file', '{"path":"x"}', 'read'),
+            self.tool_call('send_message', '{"text":"The result is ready."}', 'send')],
+            reasoning='r' * 30000)
+        model = Mock(return_value=(response, 100, 20, 0))
+        tools = Mock()
+        tools.tools = [SimpleNamespace(name='read_text_file', description='Read', inputSchema={}),
+                       SimpleNamespace(name='send_message', description='Send', inputSchema={})]
+        tools.capability_event = None
+        chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=lambda _: None)
+
+        reply = chat.send('查完后告诉我')
+
+        self.assertEqual(reply, 'The result is ready.')
+        self.assertEqual(chat.send_message_count, 1)
+        tools.invoke.assert_not_called()
 
     def test_tool_result_drops_oldest_history_round_before_reply(self):
         self.cfg.tools['max_result_bytes'] = 6000

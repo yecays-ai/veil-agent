@@ -570,7 +570,7 @@ daily_budget_cny = "2"
         row = controller.rows[-1]
         self.assertEqual(row['result'], '部分完成')
         self.assertIn('程序限制', row['decision'])
-        self.assertIn('size limit', row['result_reason'])
+        self.assertIn('长度上限', row['result_reason'])
         self.assertEqual(row['lab_files_changed'], ['lab/progress.md'])
         self.assertEqual(tools.invoke.call_count, 1)
         self.assertIn('lab/progress.md', controller.command())
@@ -708,11 +708,11 @@ daily_budget_cny = "2"
             chat.send('synthetic read and append', autonomy=True)
         row = self.store.read('test/tools.jsonl')[-1]
         self.assertEqual(row['state'], '成功')
-        self.assertEqual(row['result_state'], '结果过长')
+        self.assertEqual(row['result_state'], '已截断')
         recovered = AutonomyController(chat, self.hub)
         self.assertEqual(recovered.rows[-1]['lab_files_changed'], ['lab/progress.md'])
         self.assertEqual(recovered.rows[-1]['tools'][-1]['state'], '成功')
-        self.assertEqual(recovered.rows[-1]['tools'][-1]['result_state'], '结果过长')
+        self.assertEqual(recovered.rows[-1]['tools'][-1]['result_state'], '已截断')
         self.assertEqual(target.read_text(encoding='utf-8'), 'confirmed\n')
         self.assertEqual(tools.invoke.call_count, 2)
 

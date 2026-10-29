@@ -75,6 +75,18 @@ class WebToolsTests(unittest.TestCase):
         ddgs.assert_not_called()
         self.assertEqual(state, '被拒绝')
         self.assertIn('1 to 500 characters', result)
+        self.assertIn("Received query parameter: '   '", result)
+        with patch('web_tools.DDGS') as ddgs:
+            result, state, _ = tools.invoke('web_search', {})
+        ddgs.assert_not_called()
+        self.assertEqual(state, '被拒绝')
+        self.assertIn("Received query parameter: '<missing>'", result)
+        with patch('web_tools.DDGS') as ddgs:
+            result, state, _ = tools.invoke('web_search', {'query': 'q' * 1000})
+        ddgs.assert_not_called()
+        received = result.split('Received query parameter: ', 1)[1]
+        self.assertEqual(len(received), 200)
+        self.assertEqual(state, '被拒绝')
         with patch('web_tools.DDGS', side_effect=TimeoutError()):
             result, state, summary = tools.invoke('web_search', {'query': 'a useful topic'})
         self.assertEqual(state, '出错')

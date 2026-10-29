@@ -574,8 +574,8 @@ class AutonomyController:
                 projected_tools[key] = {'tool': row['tool'], 'path': row['path'], 'state': '结果未确认'}
             item = projected_tools[key]
             item.update({field: row[field] for field in ('tool', 'path', 'state')})
-            if row.get('result_state') == '结果过长':
-                item['result_state'] = '结果过长'
+            if row.get('result_state') in ('结果过长', '已截断'):
+                item['result_state'] = row['result_state']
         tools = list(projected_tools.values())
         for item in tools:
             if item['state'] == '进行中':
