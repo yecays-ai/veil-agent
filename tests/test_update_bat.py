@@ -35,6 +35,11 @@ class UpdateBatTests(unittest.TestCase):
         self.assertIn('--running-copy', self.commands)
         self.assertLess(self.commands.index('update-running.bat'), self.commands.index('git pull'))
 
+    def test_helper_scripts_are_found_from_the_agent_folder_not_the_running_copy(self):
+        # The running copy lives in .local-tmp, so %~dp0 would point there (ticket 170).
+        self.assertNotIn('%~dp0scripts', self.commands)
+        self.assertIn('-File "%CD%\\scripts\\install-nowhere.ps1"', self.commands)
+
     def test_checked_out_with_windows_line_endings(self):
         attributes = (ROOT / '.gitattributes').read_text(encoding='utf-8')
         self.assertTrue(re.search(r'^update\.bat\s+text\s+eol=crlf$', attributes, re.M))
