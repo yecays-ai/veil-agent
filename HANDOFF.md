@@ -2,9 +2,9 @@
 
 ## 当前进度
 
-- 工单 166：PR #214 已合并为 `3d0a5be`；Lan 实机截图定位到上游 `open_door` 的旁观者提示语尾逗号会构造 tuple，阻断首次落地。当前安装源码已本地修复；分支 `ticket/166-open-door-fix` 将同一窄兼容修正纳入安装器并更新界面标记，保证重装后保留。仍需一次针对性验证、提交并跑最终 head CI；重启后 MCP 真正返回地点、恢复旅程等用户场景待 Lan 验收。
+- 工单 166：PR #214 已合并为 `3d0a5be`；Lan 实机截图定位到上游 `open_door` 的旁观者提示语尾逗号会构造 tuple，阻断落地。当前安装源码已本地修复；分支 `ticket/166-open-door-fix` 的安装器包含同一幂等兼容修正，且已加入 Windows PowerShell 5.1 安全的 ASCII 码点匹配。定向 AST、安装器解析和码点转换检查通过；PR #215 head `d7cd7d4` 的 CI 正在运行。服务重启后真实工具返回、旅程恢复等场景仍待 Lan 验收。
 - 工单 165：PR #213 已合并为 `589bb17`；Windows 实际体验待验收。
-- 下一步：完成 `ticket/166-open-door-fix` 的定向验证后一次性提交并推送，检查本次 head 自动检查和实质评审意见；不重复触发整套流程。Windows 重启后工具真实返回、旅程恢复、Lab 文件、自主停止/暂停与地图访问仍待 Lan 验收。
+- 下一步：等待 PR #215 当前 head 的 Python 测试和依赖安全审计；Windows 桌面 CI 已通过。检查实质评审意见，若无阻断则按用户授权合并，不重触发检查。Windows 服务重启后工具真实返回、旅程恢复、Lab 文件、自主停止/暂停与地图访问仍待 Lan 验收。
 - 工单 164：PR #212 仍开放；Windows 实际体验待验收。
 - 工单 163：PR #211 已合并，必需 CI 已通过；Windows 体验验收待按 `docs/tickets/163-mcp-integrations.md` 执行。
 - 工单 162：PR #210 已合并；在 main 手动运行 `Build Xiaohongshu Windows sidecar` 后，Lan 更新并按 `docs/tickets/162-xiaohongshu-page-wait.md` 验收。
@@ -68,12 +68,12 @@
 - 098 QQ 邮箱：2026-11-07 后验收收发。
 - 142–151：Lan 按各自工单做 Windows 体验验收。
 - 135、136、138：请 Lan 确认（10-27 说过 134–138 验收完毕，但不在 10-28 清单里）。
-- 下一个工单号为 167（工单 166 尚在本地施工）。
+- 下一个工单号为 167（工单 166 主功能已合并；开门兼容修复在 PR #215）。
 
 ## 仍适用的边界
 
 - 正式 checkout `E:\Peter-Agent\VEIL\veil-agent` 留在 `main`。其中用户已有的 `update-main-collisions.ps1`、`update-main.cmd` 删除状态不属于本工单，保持原样。
-- 工单 166 只在独立 worktree 操作；工单 165 已合并，可以在本地工作完成后推送并创建单项 PR。Windows 验收前保持 PR 打开，不清理本工单 worktree。
+- 工单 166 的开门兼容修复只在独立 worktree 操作；PR #214 主功能已合并，PR #215 待最终 CI 后合并。Windows 实机验收前保持修复 worktree，暂不清理。
 - 不增加第二个 Agent、模型供应商、Agent 框架或依赖；浏览器复用仓库已有 Playwright 依赖；工具别名复用现有角色配置、Chat 工具循环及权限/预算/检查点入口。工单 164 移除了工单 151 的 GSMTC 媒体读取及其 PyWinRT 依赖，其他 Windows 观察能力保留。
 - UIA 窗口内容是非可信数据；敏感窗口过滤由现有 Windows 观察工具执行。当前瞄一眼观察仅用 UIA，不调用截图回退，不把原始 UIA 内容写入活动文件或长期记忆。
 - 代码检查、CI、Windows 实机体验是不同证据；各工单的体验验收状态以 STATUS.md「验收总表」为准。

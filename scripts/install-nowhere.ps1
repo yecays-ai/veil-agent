@@ -70,12 +70,13 @@ if ($LASTEXITCODE -ne 0 -or $actualRevision -ne $revision) {
 
 # The pinned upstream revision has a trailing comma in the web-observer
 # announcement. That turns the f-string into a one-item tuple, so `prose +=`
-# raises TypeError on the first open_door call. Apply this narrow compatibility
-# fix without changing the pinned upstream revision or any other upstream code.
+# raises TypeError on open_door. Build the Chinese text from code points because
+# Windows PowerShell 5.1 reads BOM-less UTF-8 scripts using the system code page.
 $serverFile = Join-Path $source 'nowhere\server.py'
 $serverText = [System.IO.File]::ReadAllText($serverFile)
-$brokenAnnouncement = '        prose += f"\n（旁观者可以在这里看你走路：{_web_url}）",'
-$fixedAnnouncement = '        prose += f"\n（旁观者可以在这里看你走路：{_web_url}）"'
+$observerText = -join [char[]]@(0xFF08, 0x65C1, 0x89C2, 0x8005, 0x53EF, 0x4EE5, 0x5728, 0x8FD9, 0x91CC, 0x770B, 0x4F60, 0x8D70, 0x8DEF, 0xFF1A, 0xFF09)
+$brokenAnnouncement = '        prose += f"\n' + $observerText + '",'
+$fixedAnnouncement = '        prose += f"\n' + $observerText + '"'
 $brokenCount = ([regex]::Matches($serverText, [regex]::Escape($brokenAnnouncement))).Count
 if ($brokenCount -eq 1) {
     $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
