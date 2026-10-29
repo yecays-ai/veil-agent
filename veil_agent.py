@@ -2442,6 +2442,10 @@ class Chat:
             if recall_context:
                 tail.append({'role': 'system', 'content': recall_context})
         runtime_context = []
+        from recent_experiences import recent_experience_context
+        experiences = recent_experience_context(self.store, self.cfg)
+        if experiences:
+            runtime_context.append({'role': 'system', 'content': experiences})
         if extra_context:
             runtime_context.append({'role': 'system', 'content': extra_context})
         from screen_pop import screen_pop_history_context
@@ -3842,3 +3846,4 @@ def main():
 if __name__ == '__main__':
     sys.modules.setdefault('veil_agent', sys.modules[__name__])
     raise SystemExit(main())
+
