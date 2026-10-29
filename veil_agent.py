@@ -1321,17 +1321,18 @@ class Chat:
         self.tools, self.approval, self.output, self.voice = tools, approval, output, voice
         from mcp_services import MCPServices
         integrations = {}
+        filesystem_tools = getattr(tools, 'files', tools)
         legacy_web = getattr(cfg, 'web', None) or {}
-        tools_enabled = bool(tools and getattr(tools, 'enabled', False))
+        tools_enabled = bool(filesystem_tools and getattr(filesystem_tools, 'enabled', False))
         integrations['github'] = bool(tools_enabled and legacy_web.get('github_readonly') is True)
         integrations['xiaohongshu'] = bool(tools_enabled and legacy_web.get('enabled') is True
                                            and legacy_web.get('xiaohongshu_readonly') is True)
         self.mcp_services = MCPServices(store.root / cfg.id / 'mcp-services.json', integrations)
-        if tools:
-            if getattr(tools, 'github_tools', None):
-                self.mcp_services.register_adapter('github', tools.github_tools)
-            if getattr(tools, 'xiaohongshu_tools', None):
-                self.mcp_services.register_adapter('xiaohongshu', tools.xiaohongshu_tools)
+        if filesystem_tools:
+            if getattr(filesystem_tools, 'github_tools', None):
+                self.mcp_services.register_adapter('github', filesystem_tools.github_tools)
+            if getattr(filesystem_tools, 'xiaohongshu_tools', None):
+                self.mcp_services.register_adapter('xiaohongshu', filesystem_tools.xiaohongshu_tools)
         self.pending_capability_event = tools.capability_event if tools else None
         self.pending_capability_event_model = capability_model_notice(tools)
         from long_tasks import LongTaskStore

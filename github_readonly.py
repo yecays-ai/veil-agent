@@ -27,6 +27,10 @@ RESOURCES = ('repository', 'tree', 'file', 'issues', 'issue', 'issue_comments',
              'search_issues', 'search_pulls', 'search_commits', 'search_code')
 
 
+class _GitHubStopped(Exception):
+    pass
+
+
 class _NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, *_args, **_kwargs):
         # Do not follow server-supplied URLs, even for renamed repositories.
@@ -114,9 +118,11 @@ class GitHubReadTools:
     def preview_summary(_name, _arguments):
         return 'github_read (public, read-only)'
 
-    def invoke(self, name, args, _approval=None):
+    def invoke(self, name, args, _approval=None, *, should_stop=None):
         summary = self.preview_summary(name, args)
         try:
+            if should_stop and should_stop():
+                raise _GitHubStopped()
             if not self.enabled or name not in GITHUB_TOOL_NAMES or not isinstance(args, dict):
                 raise ValueError('GitHub research is not available for this role.')
             allowed = set(self.tools[0].inputSchema['properties'])
@@ -156,10 +162,14 @@ class GitHubReadTools:
             if metadata.get('private') is not False or metadata.get('visibility', 'public') != 'public':
                 raise ValueError('Only public repositories can be researched.')
             value, source = self._read(prefix, repo, metadata, resource, path, ref,
-                                       number, query, page)
+                                       number, query, page, should_stop=should_stop)
+            if should_stop and should_stop():
+                raise _GitHubStopped()
             if not isinstance(value, str):
                 value = json.dumps(value, ensure_ascii=False, indent=2)
             return self._page(value, source, offset), '成功', summary
+        except _GitHubStopped:
+            return 'GitHub 调用已停止。', '被拒绝', summary
         except ValueError as exc:
             return _clip_utf8(str(exc), self.max_bytes), '被拒绝', summary
         except HTTPError as exc:
@@ -179,7 +189,11 @@ class GitHubReadTools:
             raise ValueError(f'{key} must be an integer from {minimum} to {maximum}.')
         return value
 
-    def _read(self, prefix, repo, metadata, resource, path, ref, number, query, page):
+    def _read(self, prefix, repo, metadata, resource, path, ref, number, query, page, *, should_stop=None):
+        def check_stop():
+            if should_stop and should_stop():
+                raise _GitHubStopped()
+
         source = 'https://github.com/' + repo
         if resource == 'repository':
             return metadata, source
@@ -191,6 +205,7 @@ class GitHubReadTools:
             'pull_comments': f'/issues/{number}/comments', 'commits': '/commits',
         }
         if resource in endpoints:
+            check_stop()
             if resource in {'issues', 'pulls'}:
                 params['state'] = 'all'
             if resource == 'commits' and ref:
@@ -199,6 +214,7 @@ class GitHubReadTools:
             return {'page': page, 'next_page': page + 1 if isinstance(value, list) and len(value) == 10 else None,
                     'data': value}, source + endpoints[resource]
         if resource in {'search_issues', 'search_pulls', 'search_commits'}:
+            check_stop()
             endpoint = 'commits' if resource == 'search_commits' else 'issues'
             qualifier = ' is:pr' if resource == 'search_pulls' else ''
             value = self.get('/search/' + endpoint, {
@@ -206,7 +222,9 @@ class GitHubReadTools:
             return {'page': page, 'next_page': page + 1 if len(value.get('items', [])) == 10 else None,
                     'data': value}, source
         if resource == 'search_code' and os.environ.get(TOKEN_ENV) and not (ref or path):
+            check_stop()
             return self.mcp_search(f'"{query}" repo:{repo}', page, os.environ[TOKEN_ENV]), source
+        check_stop()
         commit = self.get(prefix + '/commits/' + quote(ref or metadata['default_branch'], safe=''))
         sha = commit['sha']
         if not re.fullmatch(r'[a-f0-9]{40}', sha):
@@ -216,6 +234,7 @@ class GitHubReadTools:
         if resource == 'file':
             text = self._file(prefix, path, sha)
             return '\n'.join(f'{i}: {line}' for i, line in enumerate(text.splitlines(), 1)), source + '/blob/' + sha + '/' + quote(path)
+        check_stop()
         tree = self.get(prefix + '/git/trees/' + commit['commit']['tree']['sha'], {'recursive': 1})
         entries = [e for e in tree['tree'] if not path or e['path'] == path or e['path'].startswith(path.rstrip('/') + '/')]
         if resource == 'tree':
@@ -226,6 +245,7 @@ class GitHubReadTools:
         selected = files[(page - 1) * 3:page * 3]
         matches, skipped = [], []
         for entry in selected:
+            check_stop()
             try:
                 text = self._file(prefix, entry['path'], sha)
             except (UnicodeError, ValueError):

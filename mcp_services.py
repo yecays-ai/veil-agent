@@ -27,7 +27,8 @@ def _validate_service(raw):
     if isinstance(raw, dict) and raw.get('builtin') is True:
         service_id = raw.get('id')
         adapter_id = raw.get('adapter', service_id)
-        if (not NAME.fullmatch(str(service_id or '')) or '__' in service_id or service_id.endswith('_')
+        if (not isinstance(service_id, str) or not NAME.fullmatch(service_id)
+                or '__' in service_id or service_id.endswith('_')
                 or adapter_id not in {'github', 'xiaohongshu'} or type(raw.get('enabled')) is not bool):
             raise MCPConfigError('内置 MCP 服务配置无效。')
         return {'id': service_id, 'adapter': adapter_id, 'builtin': True, 'enabled': raw['enabled'],
@@ -246,13 +247,17 @@ class MCPServices:
                         suffix += 1
                     row['id'] = candidate
             if additions:
-                migration_enabled = self.config['enabled'] or (not config_existed and any(row['enabled'] for row in additions))
-                self.config = self._validate({'enabled': migration_enabled,
-                                              'services': [*self.config['services'], *additions]})
-                self.path.parent.mkdir(parents=True, exist_ok=True)
-                temp = self.path.with_suffix('.tmp')
-                temp.write_text(json.dumps(self.config, ensure_ascii=False, indent=2), encoding='utf-8')
-                os.replace(temp, self.path)
+                try:
+                    migration_enabled = self.config['enabled'] or (not config_existed and any(row['enabled'] for row in additions))
+                    migrated = self._validate({'enabled': migration_enabled,
+                                               'services': [*self.config['services'], *additions]})
+                    self.path.parent.mkdir(parents=True, exist_ok=True)
+                    temp = self.path.with_suffix('.tmp')
+                    temp.write_text(json.dumps(migrated, ensure_ascii=False, indent=2), encoding='utf-8')
+                    os.replace(temp, self.path)
+                    self.config = migrated
+                except OSError as exc:
+                    self.errors['_config'] = str(exc)[:300]
 
     @staticmethod
     def _validate(raw):
@@ -494,10 +499,7 @@ class MCPServices:
                     return 'MCP 工具不可用。', '被拒绝', name
                 permission = service['permission']
         if adapter:
-            if service_id == 'xiaohongshu':
-                result = adapter.invoke(tool_name, args, approval, should_stop=should_stop)
-            else:
-                result = adapter.invoke(tool_name, args, approval)
+            result = adapter.invoke(tool_name, args, approval, should_stop=should_stop)
             with self.lock:
                 if result[1] == '出错':
                     self.errors[service_id] = str(result[0])[:300]
