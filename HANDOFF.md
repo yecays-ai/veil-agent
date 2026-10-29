@@ -2,8 +2,8 @@
 
 ## 当前进度
 
-- 工单 165：分支 `ticket/165-tool-results-fit` 基于 main `ea147a7`。本轮旧工具结果遮蔽、单项截断、长度停止异常、超限时保留 `send_message` 和 `web_search` 参数回显已实现；工具循环、网页工具与活动行定向测试 38 项通过，Python 编译和桌面 JavaScript 语法检查通过。PR 尚未创建，自动检查、审查和 Windows 体验待完成。
-- 下一步：检查差异与状态文档，提交并推送该分支、创建 PR；确认必需检查和实质审查后，按工单 165 步骤交 Lan 做 Windows 验收。
+- 工单 165：分支 `ticket/165-tool-results-fit` 基于 main `ea147a7`，本地提交 `1b69664`。本轮旧工具结果遮蔽、单项截断、长度停止异常、超限时保留 `send_message` 和 `web_search` 参数回显已实现；工具循环、网页工具与活动行定向测试 38 项通过，Python 编译和桌面 JavaScript 语法检查通过。推送被自动审查拦下，PR 尚未创建，自动检查、审查和 Windows 体验待完成。
+- 下一步：等待 Lan 明确授权将工单 165 分支上传至 GitHub；获授权后推送并创建 PR，再确认必需检查和实质审查，最后按工单步骤交 Lan 做 Windows 验收。
 - GitHub 当前 main 为 `ea147a730840ab4c1ee4c2bee639888111d15b11`；本机 GitHub DNS 解析失败，已由 GitHub 连接器读取提交记录核对。已保留另一现存本地 worktree `ticket/165-xhs-release-fallback`，未修改。
 - 工单 164：main 的 `STATUS.md` 记录 PR #212 已开放；GitHub review 记录中 Cubic/CodeRabbit 意见已处理，`ea147a7` 的 combined status 暂无状态项。Windows 实际体验待验收。
 - 工单 163：PR #211 已合并，必需 CI 已通过；Windows 体验验收待按 `docs/tickets/163-mcp-integrations.md` 执行。

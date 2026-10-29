@@ -5,7 +5,7 @@
 ## 当前目标与现状
 
 - 当前目标：Peter 可以持续查阅网页或 GitHub，旧工具结果按需缩短，仍能将结论发给 Lan。
-- 工单 165：分支 `ticket/165-tool-results-fit`。本轮较早工具结果按需缩短，单个超大结果尽量截断保留，长度不足时仍允许 `send_message`，长度停止走系统错误；`web_search` 拒绝信息会回显不合法参数。已通过工具循环、网页工具与活动行定向测试（38 项）；Windows 体验待验收。先提交并创建 PR，自动检查/审查待完成。设计参考 OpenHands observation masking，仅复用遮蔽旧观测思路，不增加依赖或模型调用。
+- 工单 165：分支 `ticket/165-tool-results-fit`，本地提交 `1b69664`。本轮较早工具结果按需缩短，单个超大结果尽量截断保留，长度不足时仍允许 `send_message`，长度停止走系统错误；`web_search` 拒绝信息会回显不合法参数。已通过工具循环、网页工具与活动行定向测试（38 项）；Windows 体验待验收。推送和 PR 待明确授权，自动检查/审查尚未开始。设计参考 OpenHands observation masking，仅复用遮蔽旧观测思路，不增加依赖或模型调用。
 - 工单 164：PR #212 已开放，角色配置、schema 和统一分发映射已实现；移除 `windows_now_playing` 实现、配置与 WinRT 依赖。定向测试已通过，最新审查问题已修复并等待自动检查；Windows 实际体验尚未验收，步骤见 `docs/tickets/164-peter-tool-aliases.md`。
 - 工单 161：PR #209 已于 2026-10-29 合并，合并提交 `cd30c10`。本地专项、全量 Python（760 项通过、11 项跳过）、桌面单测（10 项）和 Electron 虚构窗口 smoke 记录在 PR；Windows 正式程序体验待验收。
 - 现状：工单 159 PR #207 已合并（`f302ac8`，Codex 实现、Claude 评审补修）：短期便签积压分批提取、逐批推进检查点；缓存用量区分明确的 0 与接口未报告。工单 158 PR #206 已合并（`7b91d83`）：小红书读取超时不再锁死；错误记录到 `data/<id>/xiaohongshu/errors.jsonl`。工单 157 PR #205 已合并。
