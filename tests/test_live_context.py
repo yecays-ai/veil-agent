@@ -8,7 +8,7 @@ from decimal import Decimal
 from unittest.mock import Mock
 
 from agent_types import RequestFailed
-from short_term_notes import ShortTermNotes, COST_ACCOUNTING
+from short_term_notes import ShortTermNotes, COST_ACCOUNTING, MAX_REQUEST_BYTES
 from veil_agent import Budget, Character, Store
 from web_agent import Hub
 
@@ -121,6 +121,81 @@ class LiveContextTest(unittest.TestCase):
         self.assertTrue(any(row.get('type') == 'settle' and row.get('id') == 'orphaned-notes-res'
                             and row.get('accounting') == f'{COST_ACCOUNTING}-recovered'
                             for row in costs))
+
+    def test_backlog_is_checkpointed_in_bounded_complete_groups(self):
+        cfg = Character(
+            id='peter', name='Peter', persona='test', history_rounds=10, max_output_tokens=512,
+            provider={'model': 'test-model', 'max_input_tokens': 32768,
+                      'input_cny_per_million': Decimal('10'),
+                      'cached_input_cny_per_million': Decimal('5'),
+                      'output_cny_per_million': Decimal('30')}, provider_name='test')
+        calls = []
+
+        def model(messages, **kwargs):
+            calls.append(messages)
+            return '{"operations": []}', 100, 10, 0
+
+        notes = ShortTermNotes(cfg, self.store, Budget(self.store), model, 'peter/chat.jsonl',
+                               Path(self.temp.name) / 'session.json')
+        for index in range(4):
+            self.store.append('peter/chat.jsonl', {'role': 'user', 'content': 'x' * 5000,
+                                                    'message_id': f'user-{index}'})
+            self.store.append('peter/chat.jsonl', {'role': 'assistant', 'content': 'ok',
+                                                    'message_id': f'assistant-{index}'})
+        self.assertTrue(notes._extract(force=False))
+        first = [row for row in self.store.read('peter/notes.jsonl') if row['kind'] == 'checkpoint'][-1]
+        self.assertLess(first['source_message_count'], 8)
+        self.assertTrue(notes._extract(force=False))
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(all(sum(len(message['content'].encode('utf-8')) for message in call)
+                            <= MAX_REQUEST_BYTES for call in calls))
+        second = [row for row in self.store.read('peter/notes.jsonl') if row['kind'] == 'checkpoint'][-1]
+        self.assertEqual(first['source_message_count'] + second['source_message_count'], 8)
+
+    def test_one_oversized_exchange_is_clipped_and_checkpointed(self):
+        cfg = Character(
+            id='peter', name='Peter', persona='test', history_rounds=10, max_output_tokens=512,
+            provider={'model': 'test-model', 'max_input_tokens': 32768,
+                      'input_cny_per_million': Decimal('10'),
+                      'cached_input_cny_per_million': Decimal('5'),
+                      'output_cny_per_million': Decimal('30')}, provider_name='test')
+        calls = []
+
+        def model(messages, **kwargs):
+            calls.append(messages)
+            return '{"operations": []}', 100, 10, 0
+
+        notes = ShortTermNotes(cfg, self.store, Budget(self.store), model, 'peter/chat.jsonl',
+                               Path(self.temp.name) / 'session.json')
+        self.store.append('peter/chat.jsonl', {'role': 'user', 'content': '长' * 30000, 'message_id': 'big'})
+        self.store.append('peter/chat.jsonl', {'role': 'assistant', 'content': 'ok', 'message_id': 'reply'})
+        self.store.append('peter/chat.jsonl', {'role': 'user', 'content': 'next', 'message_id': 'later'})
+        self.store.append('peter/chat.jsonl', {'role': 'assistant', 'content': 'ok', 'message_id': 'later-reply'})
+        self.assertTrue(notes._extract(force=False))
+        self.assertTrue(notes._extract(force=False))
+        self.assertTrue(all(sum(len(message['content'].encode('utf-8')) for message in call)
+                            <= MAX_REQUEST_BYTES for call in calls))
+        checkpoints = [row for row in self.store.read('peter/notes.jsonl') if row['kind'] == 'checkpoint']
+        self.assertEqual([row['through_message_id'] for row in checkpoints], ['reply', 'later-reply'])
+
+    def test_invalid_provider_usage_is_charged_and_logged(self):
+        cfg = Character(
+            id='peter', name='Peter', persona='test', history_rounds=10, max_output_tokens=512,
+            provider={'model': 'test-model', 'max_input_tokens': 1000,
+                      'input_cny_per_million': Decimal('10'),
+                      'cached_input_cny_per_million': Decimal('5'),
+                      'output_cny_per_million': Decimal('30')}, provider_name='test')
+        budget = Budget(self.store)
+        notes = ShortTermNotes(cfg, self.store, budget,
+                               lambda messages, **kwargs: ('{}', 1001, 10, 0),
+                               'peter/chat.jsonl', Path(self.temp.name) / 'session.json')
+        self.assertEqual(notes._call_extractor([{'role': 'user', 'content': 'test'}]), '{}')
+        day, month, pending = budget.totals()
+        self.assertEqual(pending, Decimal(0))
+        self.assertGreater(day, Decimal(0))
+        self.assertEqual(day, month)
+        self.assertTrue(any(row.get('accounting') == f'{COST_ACCOUNTING}-usage-invalid'
+                            for row in self.store.read('costs.jsonl')))
 
 
 if __name__ == '__main__':

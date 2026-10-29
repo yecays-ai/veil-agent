@@ -139,6 +139,9 @@ class ModelSettingsTests(unittest.TestCase):
             with clients:
                 chat = Chat(cfg, store, Budget(store), model)
                 chat.send('第一句')
+                first_settlement = [row for row in store.read('costs.jsonl')
+                                    if row.get('type') == 'settle' and 'prompt_tokens' in row][-1]
+                self.assertIs(first_settlement['cache_reported'], False)
                 _, name, provider = cfg.models.use('peter', model_id)
                 chat.switch_model(name, provider)
                 chat.send('第二句')
