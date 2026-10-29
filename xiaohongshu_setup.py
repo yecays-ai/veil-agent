@@ -8,7 +8,7 @@ from pathlib import Path
 from urllib.request import urlopen
 
 from xiaohongshu_tools import (ASSETS, VERSION, Sidecar, account_lock, binary_path,
-                              companion_env, private_folder, stop_process_tree)
+                              Transient, companion_env, private_folder, stop_process_tree)
 
 
 def install(root):
@@ -81,7 +81,14 @@ def login_and_bind(root, folder):
     try:
         sidecar.start()
         sidecar.wait_ready(threading.Event())
-        status = sidecar.request('GET', '/api/v1/login/status')
+        try:
+            status = sidecar.request('GET', '/api/v1/login/status')
+        except Transient:
+            # The login window already confirmed the login; only the background check page failed to load.
+            if (folder / 'account.json').exists():
+                print('登录本身已成功；后台复查这次页面没加载完（不是登录问题）。账号绑定还在，直接启动 VEIL 即可。')
+                return
+            raise ValueError('登录本身已成功，但后台复查页面没加载完，还没有绑定账号。请稍后再运行一次，回车继续即可。')
         if not isinstance(status, dict) or status.get('is_logged_in') is not True or not status.get('user_id'):
             raise ValueError('未确认登录账号，请重新登录；没有绑定账号。')
         print('当前账号昵称：' + str(status.get('username', '')))
