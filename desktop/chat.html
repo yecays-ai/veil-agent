@@ -65,7 +65,7 @@
     <button id="mcp-add" type="button">添加服务</button>
     <form id="mcp-form" class="surface model-form" hidden>
       <h3 id="mcp-form-heading">添加本地服务</h3>
-      <label>服务 ID<input id="mcp-id" required pattern="(?!.*__)[a-z](?:[a-z0-9_]*[a-z0-9])?" maxlength="32" placeholder="例如 local_tools"></label>
+      <label>服务 ID<input id="mcp-id" required pattern="(?!.*__)[a-z](?:[a-z0-9_]*[a-z0-9])?" maxlength="32" title="小写字母开头，只含小写字母、数字和单下划线，且不以下划线结尾" placeholder="例如 local_tools"></label>
       <label>启动命令<input id="mcp-command" required maxlength="500" placeholder="例如 python"></label>
       <label>参数（每行一个）<textarea id="mcp-args" rows="4" placeholder="-m&#10;your_mcp_server"></textarea></label>
       <label>工作目录（可选）<input id="mcp-cwd" maxlength="1000"></label>

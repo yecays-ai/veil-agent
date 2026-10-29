@@ -151,6 +151,8 @@ class _Worker:
             raise RuntimeError('MCP 服务已断开。')
         reply = Future()
         with self.pending_lock:
+            if self.closing.is_set():
+                raise RuntimeError('MCP 服务已停用。')
             self.pending.add(reply)
         try:
             self.loop.call_soon_threadsafe(self.jobs.put_nowait, (name, args, reply))
@@ -413,7 +415,7 @@ class MCPServices:
             if not self.config['enabled'] or not service or not service['enabled']:
                 return 'MCP 服务已停用。', '被拒绝', name
             worker = self.workers.get(service_id)
-            if not worker or not worker.thread.is_alive() or not any(
+            if service_id in self.failed or not worker or not worker.thread.is_alive() or not any(
                     tool.name == tool_name and self._usable_name(service, tool) == name
                     for tool in worker.tools):
                 return 'MCP 工具不可用。', '被拒绝', name
@@ -425,7 +427,8 @@ class MCPServices:
                 return 'Lan 没有批准这次 MCP 调用。', '被拒绝', name
         with self.lock:
             current = next((item for item in self.config['services'] if item['id'] == service_id), None)
-            if not self.config['enabled'] or not current or not current['enabled'] or self.workers.get(service_id) is not worker:
+            if (not self.config['enabled'] or not current or not current['enabled']
+                    or service_id in self.failed or self.workers.get(service_id) is not worker):
                 return 'MCP 服务已停用。', '被拒绝', name
         try:
             result = worker.call(tool_name, args, should_stop=should_stop)

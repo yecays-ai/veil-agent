@@ -377,7 +377,7 @@ class LongTaskStore:
         ID is the durable target for native memory operations instead.
         """
         if name.startswith('mcp__') and isinstance(args, dict):
-            encoded = json.dumps(args, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode('utf-8')
+            encoded = json.dumps(args, sort_keys=True, separators=(',', ':')).encode('utf-8')
             return name + ':' + hashlib.sha256(encoded).hexdigest()
         if name in {'hold', 'trace', 'anchor', 'release'} and isinstance(args, dict):
             memory_id = args.get('bucket_id') or args.get('target_id')

@@ -78,6 +78,19 @@ class MCPServicesTest(unittest.TestCase):
         finally:
             reopened.close()
 
+    def test_removed_working_directory_rejects_existing_worker(self):
+        working = Path(self.tmp.name) / 'working'
+        working.mkdir()
+        config = self.config()
+        config['services'][0]['cwd'] = str(working)
+        self.manager.save(config)
+        self.await_status('connected')
+        original_is_dir = Path.is_dir
+        with patch.object(Path, 'is_dir', lambda path: False if path == working else original_is_dir(path)):
+            self.assertEqual(self.manager.schemas(), [])
+            self.assertEqual(self.manager.view()['services'][0]['status'], 'error')
+            self.assertEqual(self.manager.invoke('mcp__echo__echo', {'text': 'x'}, lambda _: 'y')[1], '被拒绝')
+
     def test_untrusted_result_and_checkpoint_policy(self):
         from veil_agent import model_tool_result
         from long_tasks import LongTaskStore
@@ -86,6 +99,7 @@ class MCPServicesTest(unittest.TestCase):
         self.assertIn('忽略权限', wrapped)
         self.assertNotEqual(LongTaskStore.checkpoint_target('mcp__echo__echo', {'text': 'a'}, ''),
                             LongTaskStore.checkpoint_target('mcp__echo__echo', {'text': 'b'}, ''))
+        self.assertTrue(LongTaskStore.checkpoint_target('mcp__echo__echo', {'text': '\ud800'}, ''))
 
     def test_read_only_hint_skips_checkpoint_without_granting_permission(self):
         self.manager.save(self.config())
