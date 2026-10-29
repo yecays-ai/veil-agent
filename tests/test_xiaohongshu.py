@@ -175,7 +175,7 @@ class XiaohongshuTests(unittest.TestCase):
         self.sidecar.request.return_value = {'is_logged_in': True, 'user_id': 'dedicated', 'username': 'Peter'}
         self.now += 20
         self.assertEqual(self.invoke(action='status')[1], '成功')
-        rows = [json.loads(line) for line in self.tools.error_log.read_text(encoding='utf-8').splitlines()]
+        rows = [json.loads(line) for line in (self.folder / 'errors.jsonl').read_text(encoding='utf-8').splitlines()]
         self.assertEqual([row['kind'] for row in rows], ['transient'])
 
     def test_whole_operation_deadline_stops_the_read_without_pausing(self):
@@ -198,7 +198,24 @@ class XiaohongshuTests(unittest.TestCase):
         self.assertTrue(self.tools.blocked)
         self.now += 20
         text, _, _ = self.invoke(action='status')
-        self.assertIn('still paused', text)
+        self.assertIn('paused', text)
+
+    def test_expired_note_ref_is_rejected_without_pausing(self):
+        self.tools.refs['old'] = ('a' * 24, 'token', self.now - 4000)
+        text, state, _ = self.invoke(action='detail', note_ref='old')
+        self.assertEqual(state, '被拒绝')
+        self.assertIn('expired', text)
+        self.assertFalse(self.tools.blocked)
+
+    def test_worker_that_never_stops_pauses_and_says_so(self):
+        hold = threading.Event()
+        self.addCleanup(hold.set)
+        self.sidecar.request.side_effect = lambda *args: hold.wait(10)
+        with patch('xiaohongshu_tools.OPERATION_TIMEOUT', 0.2):
+            text, state, _ = self.invoke(action='status')
+        self.assertEqual(state, '出错')
+        self.assertIn('paused', text)
+        self.assertTrue(self.tools.blocked)
 
     def test_account_lock_excludes_parallel_login_and_read(self):
         with account_lock(self.folder):
