@@ -247,7 +247,12 @@ class WebTools:
     def _search(self, arguments):
         query = arguments.get('query')
         if not isinstance(query, str) or not query.strip() or len(query) > MAX_QUERY_CHARS:
-            return self._bounded_output('Search query must contain 1 to 500 characters.'), '被拒绝', 'web_search'
+            received = repr(query if 'query' in arguments else '<missing>')
+            if len(received) > 200:
+                received = received[:197] + '...'
+            return self._bounded_output(
+                f'Search query must contain 1 to 500 characters. Received query parameter: {received}'), \
+                '被拒绝', 'web_search'
         try:
             results = list(DDGS(timeout=30).text(
                 query.strip(), backend='duckduckgo', max_results=5))

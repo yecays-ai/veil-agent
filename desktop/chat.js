@@ -734,7 +734,8 @@ function activityDetails(record){
     '决定/结束信息：'+record.decision,
     '已留存文件：'+((record.lab_files_changed||[]).join('、')||'无')];
   for(const item of record.tools||[])lines.push(item.tool+' | '+item.path+' | '+item.state+
-    (item.result_state==='结果过长'?'；结果过长，未提供给模型':''));
+    (item.result_state==='已截断'?'；结果已截断，已提供部分内容':
+      item.result_state==='结果过长'?'；结果过长，未提供给模型':''));
   if(record.current_focus)lines.push('当时关注：'+record.current_focus);
   if(record.next_step)lines.push('下一步：'+record.next_step);
   lines.push('本次费用：¥'+record.cost_cny);
@@ -784,7 +785,10 @@ function updateActivityRow(row,item){
   row.values['操作对象'].textContent=item.path||'未提供';
   row.values['开始时间'].textContent=item.started_at?new Date(item.started_at).toLocaleString():'旧记录未保存开始时间';
   row.values['完成时间'].textContent=item.finished_at?new Date(item.finished_at).toLocaleString():item.state==='进行中'?'尚未完成':'旧记录未保存完成时间';
-  row.values.result.textContent=String(item.detail||state.text);
+  const resultNote=item.result_state==='已截断'?'\n结果已截断，Peter 可看到部分内容':
+    item.result_state==='结果过长'?'\n结果过长，未提供给模型':'';
+  const resultDetail=String(item.detail||state.text);
+  row.values.result.textContent=resultDetail+(resultNote&& !resultDetail.includes('结果已截断')?resultNote:'');
 }
 function renderActivityTimeline(){
   const all=combinedActivity();

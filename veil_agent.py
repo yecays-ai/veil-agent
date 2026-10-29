@@ -2777,9 +2777,11 @@ class Chat:
         empty_retries = 0
         mixed_sent_messages = []
         work_since_message = False  # a non-message tool ran after the last sent message
+        result_summaries = {}
 
 
         def log_tool(name, path, state, call_id=None, detail=None, **metadata):
+            observe_runtime = metadata.pop('_observe_runtime', True)
             path = path if isinstance(path, str) else name
             row = {'request_id': request_id, 'tool': name, 'path': path, 'state': state,
                    'time': now()}
@@ -2791,7 +2793,7 @@ class Chat:
             if autonomy:
                 row['autonomy_run_id'] = self.autonomy_run_id
             self.store.append(f'{self.cfg.id}/tools.jsonl', row)
-            if self.runtime_monitor and state != '进行中':
+            if observe_runtime and self.runtime_monitor and state != '进行中':
                 monitor_name = self._resolve_tool_name(name, offered) or name
                 self.runtime_monitor.observe_tool(monitor_name, state, autonomy=autonomy, **metadata)
 
@@ -2840,6 +2842,62 @@ class Chat:
                                   f'{self.cfg.provider["max_input_tokens"]} tokens，已裁到最近 {kept} 轮；'
                                   '完整聊天仍保存在本机。）')
 
+        def fit_old_tool_results(offered, protected=None):
+            """Mask the oldest observations from this turn before trimming chat history."""
+            if request_size(offered) <= self.cfg.provider['max_input_tokens']:
+                return True
+            current_start = history_start + history_count
+            notice = '\n[这条较早的工具结果已缩短，需要可再取一次。]'
+            for message in loop_messages[current_start:]:
+                if (message is protected or message.get('role') != 'tool'
+                        or not isinstance(message.get('content'), str)
+                        or '[这条较早的工具结果已缩短，需要可再取一次。]' in message['content']):
+                    continue
+                content = message['content']
+                prefix = content[:600]
+                closing_tag = next((tag for tag in (
+                    '</untrusted_mcp>', '</untrusted_browser>', '</untrusted_windows_desktop>')
+                    if tag in content and tag not in prefix), None)
+                message['content'] = prefix + notice + (f'\n{closing_tag}' if closing_tag else '')
+                call_id = message.get('tool_call_id')
+                summary = result_summaries.get(call_id)
+                if summary:
+                    summary['result_state'] = '已截断'
+                    log_tool(summary['tool'], summary['path'], summary['state'],
+                             call_id=call_id,
+                             detail='本轮较早的工具结果已缩短，模型可按需重新获取。',
+                             result_state='已截断', _observe_runtime=False)
+                if request_size(offered) <= self.cfg.provider['max_input_tokens']:
+                    return True
+            return request_size(offered) <= self.cfg.provider['max_input_tokens']
+
+        def truncate_tool_result(message, call, execution, offered):
+            """Keep the largest result prefix that fits in the current input budget."""
+            raw = execution.result if isinstance(execution.result, str) else None
+            if raw is None:
+                return None
+            name = call.function.name
+            canonical_name = self._resolve_tool_name(name, offered)
+            marker = '\n[结果已截断，完整内容未提供。]'
+            low, high = 0, len(raw)
+            best = None
+            while low <= high:
+                mid = (low + high) // 2
+                candidate = model_tool_result(canonical_name or name,
+                                              raw[:mid] + marker, execution.state)
+                message['content'] = candidate
+                if request_size(offered) <= self.cfg.provider['max_input_tokens']:
+                    best = mid
+                    low = mid + 1
+                else:
+                    high = mid - 1
+            if best is None:
+                return None
+            prefix = raw[:best]
+            message['content'] = model_tool_result(canonical_name or name,
+                                                   prefix + marker, execution.state)
+            return prefix + marker
+
         def append_tool_result(call, execution, next_offered):
             nonlocal history_count
             name = call.function.name
@@ -2875,18 +2933,27 @@ class Chat:
                 message_request_bytes(message)
                 for message in loop_messages[history_start:history_start + history_count]
             )
+            fit_old_tool_results(next_offered, protected=tool_message)
             if (image_pending and request_size(next_offered) - history_bytes
                     > self.cfg.provider['max_input_tokens']):
                 discard_pending_image()
                 image_pending = False
                 omit_image('the current request input limit was reached')
                 display_detail = '界面文字已读取；截图因输入长度上限未发送。'
-                result_state = '结果过长'
+                result_state = '已截断'
             if (request_size(next_offered) - history_bytes
                     > self.cfg.provider['max_input_tokens']):
-                tool_message['content'] = too_long_result
-                display_detail = too_long_display
-                result_state = '结果过长'
+                fit_old_tool_results(next_offered, protected=tool_message)
+                if request_size(next_offered) > self.cfg.provider['max_input_tokens']:
+                    truncated = truncate_tool_result(tool_message, call, execution, next_offered)
+                    if truncated is not None:
+                        display_detail = '工具结果已截断，以下为部分内容：\n' + truncated
+                        result_state = '已截断'
+                    else:
+                        tool_message['content'] = too_long_result
+                        display_detail = too_long_display
+                        result_state = '结果过长'
+            fit_old_tool_results(next_offered, protected=tool_message)
             fit_history(next_offered)
             if request_size(next_offered) > self.cfg.provider['max_input_tokens'] and image_pending:
                 discard_pending_image()
@@ -2894,7 +2961,14 @@ class Chat:
                 omit_image('the current request input limit was reached')
                 display_detail = '界面文字已读取；截图因输入长度上限未发送。'
                 result_state = '结果过长'
+                fit_old_tool_results(next_offered, protected=tool_message)
                 fit_history(next_offered)
+            if (request_size(next_offered) > self.cfg.provider['max_input_tokens']
+                    and result_state != '结果过长'):
+                truncated = truncate_tool_result(tool_message, call, execution, next_offered)
+                if truncated is not None:
+                    display_detail = '工具结果已截断，以下为部分内容：\n' + truncated
+                    result_state = '已截断'
             if request_size(next_offered) > self.cfg.provider['max_input_tokens']:
                 tool_message['content'] = too_long_result
                 display_detail = too_long_display
@@ -2962,6 +3036,7 @@ class Chat:
             offered = None if step == max_steps - 1 or autonomy_limit_reached else self.tool_schemas()
             self._refresh_request_capabilities(loop_messages, offered)
             step_cfg = replace(self.cfg, max_output_tokens=self.cfg.tools.get('max_output_tokens', self.cfg.max_output_tokens)) if offered is not None else self.cfg
+            fit_old_tool_results(offered)
             fit_history(offered)
             if request_size(offered) > self.cfg.provider['max_input_tokens']:
                 if step == 0:
@@ -3211,27 +3286,56 @@ class Chat:
                 placeholders = [{'role': 'tool', 'tool_call_id': call.id, 'content': too_long_result}
                                 for call in message.tool_calls]
                 loop_messages.extend(placeholders)
+                fit_old_tool_results(next_offered)
                 fit_history(next_offered)
                 can_report_results = request_size(next_offered) <= self.cfg.provider['max_input_tokens']
                 del loop_messages[-len(placeholders):]
                 if not can_report_results:
-                    self.output(f'（长度检查：估算 {request_size(next_offered)}，上限 {self.cfg.provider["max_input_tokens"]}，'
-                                f'按实测比例 {calibration:.2f} 折算。）')
+                    refusal = '本轮工具结果仍超过输入长度上限；未执行的工具已停止。'
+                    self.tool_stop_reason = refusal
                     for call in message.tool_calls:
+                        canonical_name = self._resolve_tool_name(call.function.name, offered)
+                        if canonical_name == 'send_message':
+                            continue
                         try:
-                            summary = self.tools.preview_summary(call.function.name, json.loads(call.function.arguments))
+                            args = json.loads(call.function.arguments or '{}')
+                            summary = self.tools.preview_summary(call.function.name, args)
                         except (ValueError, TypeError, AttributeError):
                             summary = None
                         summary = summary if isinstance(summary, str) else call.function.name
-                        self.output(display_call(call.function.name, summary, '被拒绝', 'The tool call history exceeded its size limit.'))
+                        detail = '本轮工具结果仍超过输入长度上限；此工具未执行。'
+                        self.output(display_call(call.function.name, summary, '被拒绝', detail))
                         summaries.append({'tool': call.function.name, 'path': summary, 'state': '被拒绝'})
                         log_tool(call.function.name, summary, '被拒绝',
                                  call_id=f'{request_id}:{step}:{getattr(call, "id", None) or "context"}',
-                                 detail='The tool call history exceeded its size limit.')
-                    self.budget.settle(next_reservation, next_cfg, 0, 0, 0)
-                    final = 'The tool call history exceeded its size limit; the tool was not executed.'
-                    self.tool_stop_reason = final
-                    break
+                                 detail=detail)
+                    sent_in_this_step = False
+                    for call_index, call in enumerate(message.tool_calls):
+                        if self._resolve_tool_name(call.function.name, offered) != 'send_message':
+                            continue
+                        call_id = f'{request_id}:{step}:{getattr(call, "id", None) or call_index}'
+                        try:
+                            args = json.loads(call.function.arguments or '{}')
+                            summary = call.function.name
+                        except (ValueError, TypeError):
+                            args, summary = {}, call.function.name
+                        log_tool(call.function.name, summary, '进行中', call_id=call_id)
+                        execution = self._execute_tool_call(
+                            call, request_id,
+                            f'{step}:{getattr(call, "id", None) or call_index}', autonomy, offered)
+                        if execution.state == '成功' and self.sent_messages:
+                            mixed_sent_messages.append(self.sent_messages[-1])
+                            sent_in_this_step = True
+                        self._record_tool_result(
+                            call, execution, execution.state, execution.result, summaries,
+                            lambda name, path, state, **metadata:
+                            log_tool(name, path, state, call_id=call_id, detail=execution.result, **metadata))
+                    if sent_in_this_step or mixed_sent_messages:
+                        self.budget.settle(next_reservation, next_cfg, 0, 0, 0)
+                        self.reply_displayed = True
+                        final = mixed_sent_messages[-1]
+                        break
+                    raise RequestFailed(refusal)
                 for call_index, call in enumerate(message.tool_calls):
                     if autonomy and autonomy_tool_steps >= autonomy_tool_limit:
                         self.autonomy_step_limited = True
@@ -3272,12 +3376,13 @@ class Chat:
                         log_detail = (execution.activity_detail or (
                             'Isolated public browser step.' if canonical_name == 'browser'
                             else 'Windows desktop action completed.'))
-                        if result_state == '结果过长':
-                            log_detail = display_detail
+                    if result_state in ('已截断', '结果过长'):
+                        log_detail = display_detail
                     self._record_tool_result(call, execution, result_state, display_detail,
                                              summaries, lambda name, path, state, **metadata:
                                              log_tool(name, path, state, call_id=call_id,
                                                       detail=log_detail, **metadata))
+                    result_summaries[call.id] = summaries[-1]
                     if autonomy and self.autonomy_should_yield and self.autonomy_should_yield():
                         self.autonomy_interrupted = True
                         self.budget.settle(next_reservation, next_cfg, 0, 0, 0)

@@ -299,7 +299,7 @@ class Hub:
                                       'request_id': row.get('request_id')}
                 order.append(call_id)
             item = projected[call_id]
-            item.update({key: row[key] for key in ('tool', 'path', 'state') if key in row})
+            item.update({key: row[key] for key in ('tool', 'path', 'state', 'result_state') if key in row})
             if 'detail' in row:
                 item['detail'] = safe_tool_activity_detail(row['detail'])
             item['source'] = ('瞄一眼' if str(row.get('autonomy_run_id') or '').startswith('glance:') else

@@ -27,10 +27,12 @@ class ActivityMonitorTests(unittest.TestCase):
         self.assertEqual(running[0]['state'], '进行中')
         self.store.append(path, {'request_id': 'r1', 'call_id': 'r1:0:c1', 'tool': 'read_text_file',
                                  'path': 'lab/notes.md', 'state': '成功', 'detail': '读取成功',
+                                 'result_state': '已截断',
                                  'time': '2026-10-25T12:00:02+00:00'})
         finished = self.hub.tool_activity()
         self.assertEqual(len(finished), 1)
         self.assertEqual(finished[0]['state'], '成功')
+        self.assertEqual(finished[0]['result_state'], '已截断')
         self.assertEqual(finished[0]['started_at'], '2026-10-25T12:00:01+00:00')
         self.assertEqual(finished[0]['finished_at'], '2026-10-25T12:00:02+00:00')
 
