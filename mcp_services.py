@@ -235,9 +235,11 @@ class MCPServices:
             self.errors['_config'] = str(exc)[:300]
         if initial_integrations and '_config' not in self.errors:
             existing = {item['id'] for item in self.config['services']}
+            existing_adapters = {item.get('adapter', item['id']) for item in self.config['services']
+                                 if item.get('builtin')}
             additions = [{'id': service_id, 'adapter': service_id, 'builtin': True, 'enabled': bool(enabled)}
                          for service_id, enabled in initial_integrations.items()
-                         if service_id in {'github', 'xiaohongshu'}]
+                         if service_id in {'github', 'xiaohongshu'} and service_id not in existing_adapters]
             for row in additions:
                 if row['id'] in existing:
                     base = 'veil_' + row['adapter']
