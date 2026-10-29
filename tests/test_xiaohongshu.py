@@ -13,7 +13,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from tools_agent import FilesystemTools, permitted_tools, tool_policy
-from xiaohongshu_tools import (MAX_DAILY, Cooldown, Sidecar, TOOL, Transient, XiaohongshuTools,
+from xiaohongshu_tools import (MAX_DAILY, PAUSED_TEXT, Cooldown, Sidecar, TOOL, Transient, XiaohongshuTools,
                               account_lock, companion_env, private_folder, stop_process_tree)
 
 
@@ -198,7 +198,7 @@ class XiaohongshuTests(unittest.TestCase):
         self.assertTrue(self.tools.blocked)
         self.now += 20
         text, _, _ = self.invoke(action='status')
-        self.assertIn('Reads paused after', text)
+        self.assertEqual(PAUSED_TEXT, text)
 
     def test_expired_note_ref_is_rejected_without_pausing(self):
         self.tools.refs['old'] = ('a' * 24, 'token', self.now - 4000)
