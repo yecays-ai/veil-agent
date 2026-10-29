@@ -1421,7 +1421,7 @@ function renderMCP(){
     const card=document.createElement('article');card.className='surface mcp-card';
     const heading=document.createElement('div');heading.className='section-heading';
     const title=document.createElement('h3');title.textContent=service.id;
-    const status=document.createElement('span');status.className='state-pill';status.textContent=service.status==='connected'?'已连接':service.status==='connecting'?'连接中':service.status==='error'?'连接失败':'已停用';
+    const status=document.createElement('span');status.className='state-pill';status.textContent=service.builtin?(service.enabled&&mcpView.enabled?'已启用':'已停用'):service.status==='connected'?'已连接':service.status==='connecting'?'连接中':service.status==='error'?'连接失败':'已停用';
     heading.append(title,status);card.append(heading);
     const details=document.createElement('p');details.textContent=service.builtin?`${service.tools.length} 个工具 · VEIL 内置集成`:`${service.tools.length} 个工具 · ${service.permission==='ask'?'每次询问':'直接调用'}`;card.append(details);
     if(service.error){const error=document.createElement('p');error.className='mcp-error';error.textContent=service.error;card.append(error)}

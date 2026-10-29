@@ -238,7 +238,9 @@ class MCPServices:
                 self.config = self._validate({'enabled': self.config['enabled'] or any(row['enabled'] for row in additions),
                                               'services': [*self.config['services'], *additions]})
                 self.path.parent.mkdir(parents=True, exist_ok=True)
-                self.path.write_text(json.dumps(self.config, ensure_ascii=False, indent=2), encoding='utf-8')
+                temp = self.path.with_suffix('.tmp')
+                temp.write_text(json.dumps(self.config, ensure_ascii=False, indent=2), encoding='utf-8')
+                os.replace(temp, self.path)
 
     @staticmethod
     def _validate(raw):
