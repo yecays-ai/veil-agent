@@ -1113,6 +1113,8 @@ class Budget:
                     if category not in ('autonomy', 'glance', 'short_term_notes') and period[:10] == stamp[:10]:
                         # Legacy zeroes did not distinguish an explicit zero from an absent field.
                         reported = event.get('cache_reported')
+                        if not event['prompt_tokens']:
+                            continue  # placeholder settlement for a request that never reached the provider
                         if reported is False or (reported is None and event['cached_tokens'] == 0):
                             unknown += 1
                         else:

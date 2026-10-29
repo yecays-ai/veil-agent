@@ -152,6 +152,32 @@ class LiveContextTest(unittest.TestCase):
         second = [row for row in self.store.read('peter/notes.jsonl') if row['kind'] == 'checkpoint'][-1]
         self.assertEqual(first['source_message_count'] + second['source_message_count'], 8)
 
+    def test_one_oversized_exchange_is_clipped_and_checkpointed(self):
+        cfg = Character(
+            id='peter', name='Peter', persona='test', history_rounds=10, max_output_tokens=512,
+            provider={'model': 'test-model', 'max_input_tokens': 32768,
+                      'input_cny_per_million': Decimal('10'),
+                      'cached_input_cny_per_million': Decimal('5'),
+                      'output_cny_per_million': Decimal('30')}, provider_name='test')
+        calls = []
+
+        def model(messages, **kwargs):
+            calls.append(messages)
+            return '{"operations": []}', 100, 10, 0
+
+        notes = ShortTermNotes(cfg, self.store, Budget(self.store), model, 'peter/chat.jsonl',
+                               Path(self.temp.name) / 'session.json')
+        self.store.append('peter/chat.jsonl', {'role': 'user', 'content': '长' * 30000, 'message_id': 'big'})
+        self.store.append('peter/chat.jsonl', {'role': 'assistant', 'content': 'ok', 'message_id': 'reply'})
+        self.store.append('peter/chat.jsonl', {'role': 'user', 'content': 'next', 'message_id': 'later'})
+        self.store.append('peter/chat.jsonl', {'role': 'assistant', 'content': 'ok', 'message_id': 'later-reply'})
+        self.assertTrue(notes._extract(force=False))
+        self.assertTrue(notes._extract(force=False))
+        self.assertTrue(all(sum(len(message['content'].encode('utf-8')) for message in call)
+                            <= MAX_REQUEST_BYTES for call in calls))
+        checkpoints = [row for row in self.store.read('peter/notes.jsonl') if row['kind'] == 'checkpoint']
+        self.assertEqual([row['through_message_id'] for row in checkpoints], ['reply', 'later-reply'])
+
     def test_invalid_provider_usage_is_charged_and_logged(self):
         cfg = Character(
             id='peter', name='Peter', persona='test', history_rounds=10, max_output_tokens=512,
@@ -163,9 +189,11 @@ class LiveContextTest(unittest.TestCase):
         notes = ShortTermNotes(cfg, self.store, budget,
                                lambda messages, **kwargs: ('{}', 1001, 10, 0),
                                'peter/chat.jsonl', Path(self.temp.name) / 'session.json')
-        with self.assertRaises(Exception):
-            notes._call_extractor([{'role': 'user', 'content': 'test'}])
-        self.assertEqual(budget.totals()[2], Decimal(0))
+        self.assertEqual(notes._call_extractor([{'role': 'user', 'content': 'test'}]), '{}')
+        day, month, pending = budget.totals()
+        self.assertEqual(pending, Decimal(0))
+        self.assertGreater(day, Decimal(0))
+        self.assertEqual(day, month)
         self.assertTrue(any(row.get('accounting') == f'{COST_ACCOUNTING}-usage-invalid'
                             for row in self.store.read('costs.jsonl')))
 

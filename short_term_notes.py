@@ -69,6 +69,13 @@ def _format_time(value):
     return local.strftime('%Y-%m-%d %H:%M %z')
 
 
+def _clip_bytes(text, limit):
+    data = text.encode('utf-8')
+    if len(data) <= limit:
+        return text
+    return data[:max(0, limit - 20)].decode('utf-8', 'ignore') + ' …[clipped]'
+
+
 def _clean_text(value):
     if not isinstance(value, str):
         return None
@@ -459,12 +466,12 @@ class ShortTermNotes:
         try:
             self.budget.settle(reservation, request_cfg, prompt_tokens, completion_tokens, cached_tokens,
                                accounting=COST_ACCOUNTING, category=COST_CATEGORY)
-        except Exception:
+        except UserError:
             # A provider can bill a response whose reported usage exceeds the local
-            # configured bound. Keep the conservative charge without leaving pending debt.
+            # configured bound. Keep the conservative charge without leaving pending debt,
+            # and still use the reply so the same batch is not sent and charged again.
             self.budget.settle_estimate((reservation, amount),
                                         accounting=f'{COST_ACCOUNTING}-usage-invalid')
-            raise
         return output
 
     def _extract(self, force):
@@ -496,10 +503,15 @@ class ShortTermNotes:
                 candidate, ensure_ascii=False, separators=(',', ':')).encode('utf-8'))
             limit = min(MAX_REQUEST_BYTES, self.cfg.provider['max_input_tokens'] // 2)
             if size > limit:
-                if not transcript:
-                    self.store.append(self.path, {'kind': 'error', 'reason': 'conversation_group_too_large',
-                                                  'through_message_id': group[-1]['message_id'],
-                                                  'request_bytes': size})
+                if transcript:
+                    break
+                # One exchange alone is too large (e.g. a pasted document): clip each message so the
+                # checkpoint still moves past it instead of retrying the same group forever.
+                base = size - sum(len(row['text'].encode('utf-8')) for row in next_rows)
+                share = max(200, (limit - base) * 4 // 5 // len(next_rows))
+                next_rows = [{**row, 'text': _clip_bytes(row['text'], share)} for row in next_rows]
+                request['new_messages'].extend(next_rows)
+                transcript.extend(group)
                 break
             request['new_messages'].extend(next_rows)
             transcript.extend(group)
