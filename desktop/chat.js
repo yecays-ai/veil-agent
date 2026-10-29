@@ -1372,7 +1372,7 @@ setBusy(true);poll();
 
 let mcpView={enabled:false,services:[]},mcpEditing=null,mcpLoading=false,mcpReady=false,mcpSaving=false,mcpSaveQueue=Promise.resolve(),mcpGeneration=0,mcpSignature='',mcpActionError='';
 $('mcp-add').disabled=true;$('mcp-enabled').disabled=true;
-function mcpConfig(source=mcpView){return {enabled:source.enabled,services:source.services.map(({id,builtin,command,args,cwd,enabled,permission})=>builtin?{id,builtin:true,enabled}:{id,command,args,cwd,enabled,permission})}}
+function mcpConfig(source=mcpView){return {enabled:source.enabled,services:source.services.map(({id,builtin,adapter,command,args,cwd,enabled,permission})=>builtin?{id,builtin:true,adapter,enabled}:{id,command,args,cwd,enabled,permission})}}
 async function loadMCP(force=false){
   if(mcpLoading||mcpSaving)return;
   const generation=mcpGeneration;

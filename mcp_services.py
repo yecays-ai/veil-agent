@@ -26,9 +26,11 @@ class MCPConflict(MCPConfigError):
 def _validate_service(raw):
     if isinstance(raw, dict) and raw.get('builtin') is True:
         service_id = raw.get('id')
-        if service_id not in {'github', 'xiaohongshu'} or type(raw.get('enabled')) is not bool:
+        adapter_id = raw.get('adapter', service_id)
+        if (not NAME.fullmatch(str(service_id or '')) or '__' in service_id or service_id.endswith('_')
+                or adapter_id not in {'github', 'xiaohongshu'} or type(raw.get('enabled')) is not bool):
             raise MCPConfigError('内置 MCP 服务配置无效。')
-        return {'id': service_id, 'builtin': True, 'enabled': raw['enabled'],
+        return {'id': service_id, 'adapter': adapter_id, 'builtin': True, 'enabled': raw['enabled'],
                 'permission': 'direct', 'command': '', 'args': [], 'cwd': None}
     if not isinstance(raw, dict) or not NAME.fullmatch(str(raw.get('id', ''))) or '__' in raw.get('id', '') or raw['id'].endswith('_'):
         raise MCPConfigError('服务 ID 只能使用小写字母、数字和下划线，并以字母开头。')
@@ -232,9 +234,17 @@ class MCPServices:
             self.errors['_config'] = str(exc)[:300]
         if initial_integrations and '_config' not in self.errors:
             existing = {item['id'] for item in self.config['services']}
-            additions = [{'id': service_id, 'builtin': True, 'enabled': bool(enabled)}
+            additions = [{'id': service_id, 'adapter': service_id, 'builtin': True, 'enabled': bool(enabled)}
                          for service_id, enabled in initial_integrations.items()
-                         if service_id in {'github', 'xiaohongshu'} and service_id not in existing]
+                         if service_id in {'github', 'xiaohongshu'}]
+            for row in additions:
+                if row['id'] in existing:
+                    base = 'veil_' + row['adapter']
+                    candidate, suffix = base, 2
+                    while candidate in existing:
+                        candidate = f'{base}_{suffix}'
+                        suffix += 1
+                    row['id'] = candidate
             if additions:
                 migration_enabled = self.config['enabled'] or (not config_existed and any(row['enabled'] for row in additions))
                 self.config = self._validate({'enabled': migration_enabled,
@@ -276,7 +286,9 @@ class MCPServices:
             self.retiring.update(to_close)
             self.config = config
             self.revision += 1
-            self.errors = {key: value for key, value in self.errors.items() if key in self.workers}
+            builtin_ids = {item['id'] for item in config['services'] if item.get('builtin')}
+            self.errors = {key: value for key, value in self.errors.items()
+                           if key in self.workers or key in builtin_ids}
             self.failed.intersection_update(self.workers)
         for key, worker in to_close.items():
             worker.close()
@@ -355,7 +367,7 @@ class MCPServices:
         result = []
         for service in list(self.config['services']):
             if service.get('builtin'):
-                adapter = self.adapters.get(service['id'])
+                adapter = self.adapters.get(service.get('adapter', service['id']))
                 if not self.config['enabled'] or not service['enabled'] or adapter is None:
                     continue
                 for tool in adapter.tools:
@@ -421,7 +433,7 @@ class MCPServices:
             rows = []
             for service in self.config['services']:
                 if service.get('builtin'):
-                    adapter = self.adapters.get(service['id'])
+                    adapter = self.adapters.get(service.get('adapter', service['id']))
                     active = bool(self.config['enabled'] and service['enabled'] and adapter)
                     rows.append({**service, 'status': 'connected' if active else 'off',
                                  'tools': [tool.name for tool in adapter.tools] if active else [],
@@ -470,7 +482,7 @@ class MCPServices:
             if not self.config['enabled'] or not service or not service['enabled']:
                 return 'MCP 服务已停用。', '被拒绝', name
             if service.get('builtin'):
-                adapter = self.adapters.get(service_id)
+                adapter = self.adapters.get(service.get('adapter', service_id))
                 if not adapter or not any(tool.name == tool_name for tool in adapter.tools):
                     return 'MCP 工具不可用。', '被拒绝', name
             else:

@@ -476,6 +476,7 @@ class XiaohongshuTests(unittest.TestCase):
         activity.set(True)
         hub = Hub('Test', activity)
         chat = Chat(cfg, store, Budget(store), model, tools=manager, output=hub.output)
+        self.assertIn('mcp__xiaohongshu__xiaohongshu', chat.current_capability_snapshot())
         with patch('xiaohongshu_tools.MIN_INTERVAL', 0):
             AutonomyController(chat, hub).run()
         self.assertEqual((manager.lab / 'xiaohongshu-draft.md').read_text(encoding='utf-8'), draft)
