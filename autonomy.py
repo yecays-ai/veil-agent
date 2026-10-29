@@ -916,6 +916,8 @@ class AutonomyController:
         if len(text.encode('utf-8')) > MAX_CONTEXT_BYTES:
             text = text.replace(lab_context,
                 'Recent lab output: use the available read-only tools to inspect it as needed while preserving task and prior activity context.')
+            if len(text.encode('utf-8')) > MAX_CONTEXT_BYTES and travel_option:
+                text = text.replace(travel_option, '')
             if len(text.encode('utf-8')) > MAX_CONTEXT_BYTES:
                 raise UserError('自主活动上下文超过安全限制，已停止；任务与活动记录仍保存在 data 文件夹。')
         return text

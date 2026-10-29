@@ -29,8 +29,8 @@ if errorlevel 1 goto failed
 ".venv\Scripts\python.exe" -m pip install --no-cache-dir -r requirements.lock.txt
 if errorlevel 1 goto failed
 echo Installing the pinned Nowhere runtime in an isolated Python environment...
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\install-nowhere.ps1" -RepositoryPath "%CD%"
-if errorlevel 1 goto failed
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\install-nowhere.ps1" -RepositoryPath "%CD%" -BootstrapPythonPath "%CD%\.venv\Scripts\python.exe"
+if errorlevel 1 echo Warning: Nowhere is unavailable; the rest of VEIL setup will continue. Run setup.bat again after resolving the Nowhere installation error.
 ".venv\Scripts\python.exe" -m playwright install chromium
 if errorlevel 1 goto failed
 ".venv\Scripts\python.exe" setup_memory.py

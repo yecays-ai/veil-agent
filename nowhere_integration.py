@@ -18,7 +18,10 @@ def service_config():
         'command': str(PYTHON),
         'args': ['-m', 'nowhere.server', '--web', '--host', '127.0.0.1'],
         'cwd': str(SOURCE_DIR),
-        'enabled': True,
+        # Activating this service in the MCP manager is the explicit grant that
+        # lets Peter travel without an approval prompt on every autonomous step.
+        'enabled': False,
+        'direct_grant': False,
         'permission': 'direct',
     }
 

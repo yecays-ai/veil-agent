@@ -8,10 +8,10 @@ Lan 更新 VEIL 后，可在 MCP 管理页启停乌有乡；Peter 在聊天或�
 
 - 上游：`yuyixuanfu/nowhere`，固定到 `f0803c1053e5f97a6f44bab26e15043d71825ec7`。运行时从该提交动态发现 MCP 工具，不在 VEIL 中复制工具接口或上游代码。上游提供本地地图/旅程展示页，并通过 MCP 初始化说明返回地址。
 - 许可：上游使用 [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/)。本功能用于 Peter 的私人非商业用途；MCP 管理页注明作者“旋复”、[项目链接](https://github.com/yuyixuanfu/nowhere)、许可链接和上游未修改。上游另行提供的数据按各自来源许可使用。
-- 安装：运行 `scripts/install-nowhere.ps1 -RepositoryPath <VEIL 仓库路径>`，或通过 `setup.bat` / `update-main.cmd` 安装。代码和依赖固定版本放在 `.runtime/nowhere/<提交号>/` 独立目录及 Python 环境中，不改 VEIL 主环境；依赖锁定在 `requirements.nowhere.lock.txt`。
-- 启动与关闭：在 MCP 管理页启用/停用“nowhere”；停用后再启用可重启服务。配置保存在现有 MCP 配置，重启 VEIL 后继续生效。首次启动失败时页面明确显示错误；更新依赖可重新运行安装脚本。
+- 安装：Windows 更新路径 `setup.bat`、`update.bat` 和 `update-main.cmd` 都会尝试安装；独立运行 `scripts/install-nowhere.ps1 -RepositoryPath <VEIL 仓库路径> -BootstrapPythonPath <VEIL 的 Python 3.12>` 也可以重试。源码固定在 `.runtime/nowhere/<提交号>/source`，依赖装入同目录独立 Python 3.12 环境，不改 VEIL 主环境；依赖锁在 `requirements.nowhere.lock.txt`，逐项校验官方 SHA-256 并纳入安全审计。Git/GitHub 或 Python 3.12 不可用时，安装脚本明确报错，但普通 VEIL 安装/更新会继续；乌有乡默认关闭，用户尝试启用而服务无法启动时，MCP 管理页显示错误。
+- 启动与关闭：MCP 管理页的全局 MCP 开关和“nowhere”服务开关都要启用。第一次启用服务时会明确询问是否授权 Peter 在聊天和自主醒来时直接调用旅行工具；这是让他自主旅行而不逐次等待审批所需的授权。停用后再启用可重启服务，已授予权限会随配置保留。MCP 配置重启后继续生效；上游启动失败时明确显示错误，不虚构旅行结果。
 - 独立状态：`NOWHERE_HOME` 固定指向 `data/peter/nowhere`，由乌有乡原生持久化旅程、地点和标记。其他角色不会共用该目录。服务配置关闭状态与 Peter 的旅程存档互不覆盖。
-- 体验边界：Peter 自行判断是否出门、目的地、停留与是否记游记；自主唤醒继续走现有工具预算、停止和暂停路径，不要求每次汇报。外部工具结果按现有 MCP 非可信内容边界处理；调用超时明确报错，不宣称已成功旅行。
+- 体验边界：Peter 自行判断是否出门、目的地、停留与是否记游记；自主唤醒继续走现有工具预算、停止和暂停路径，不要求每次汇报。授权范围是乌有乡工具对 Peter 私人旅程、地点标记与纪念数据的操作，不涉及公开发布或第三方账号写入。外部工具结果按现有 MCP 非可信内容边界处理；调用超时明确报错，不宣称已成功旅行。
 - 地图：仅接受 MCP 初始化说明中 `127.0.0.1` 根地址，MCP 管理页出现“查看旅程地图”入口；桌面主进程会再次核对该地址仍属于已连接的乌有乡服务。未验证外网或其他设备访问。
 - 交付状态：PR #214 已开放，分支 `ticket/166-nowhere-travel` 以工单 165 合并后的 main `589bb17` 为基线。自动 CI、评审及 Windows 实机和真实旅行体验待完成。
 

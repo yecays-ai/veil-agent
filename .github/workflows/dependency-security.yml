@@ -34,6 +34,13 @@ jobs:
         uses: pypa/gh-action-pip-audit@1220774d901786e6f652ae159f7b6bc8fea6d266 # v1.1.0
         with:
           inputs: requirements.ombre-py312.lock.txt
+      - name: Audit Nowhere Python 3.12 lock
+        id: nowhere312-audit
+        continue-on-error: true
+        uses: pypa/gh-action-pip-audit@1220774d901786e6f652ae159f7b6bc8fea6d266 # v1.1.0
+        with:
+          inputs: requirements.nowhere.lock.txt
+          no-deps: true
       - name: Fail if any audit found a vulnerability
         if: always()
         shell: bash
@@ -41,6 +48,7 @@ jobs:
           test "${{ steps.project-audit.outcome }}" = success
           test "${{ steps.ombre311-audit.outcome }}" = success
           test "${{ steps.ombre312-audit.outcome }}" = success
+          test "${{ steps.nowhere312-audit.outcome }}" = success
   scanner-report-smoke:
     runs-on: ubuntu-latest
     steps:

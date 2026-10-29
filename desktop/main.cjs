@@ -639,12 +639,13 @@ ipcMain.handle('chat:open-memory', async event => {
   await shell.openExternal(url.href); return true;
 });
 ipcMain.handle('chat:open-nowhere', async (event, address) => {
-  if (!(fromChatPage(event) || detachedViewFromEvent(event) === 'mcp') || typeof address !== 'string') return false;
+  if (!(fromChat(event) || detachedViewFromEvent(event) === 'mcp') || typeof address !== 'string') return false;
   let url;
   try { url = new URL(address); } catch { return false; }
-  if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || !url.port || url.username || url.password || url.pathname !== '/') return false;
+  if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || url.username || url.password || url.pathname !== '/') return false;
   const state = await endpointRequest('/api/mcp');
-  const service = state.services?.find(item => item.managed === 'nowhere' && item.observer_url === url.origin);
+  const service = state.services?.find(item => item.managed === 'nowhere' && typeof item.observer_url === 'string'
+    && new URL(item.observer_url).origin === url.origin);
   if (!service) return false;
   await shell.openExternal(url.href); return true;
 });
