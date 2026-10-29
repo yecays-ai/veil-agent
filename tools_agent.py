@@ -211,7 +211,10 @@ class FilesystemTools:
         self.lab = None
         self.lab_preview = None
         self.browser_tools = BrowserTools(cfg)
-        self.xiaohongshu_tools = XiaohongshuTools(self.root, cfg)
+        integration_cfg = SimpleNamespace(**vars(cfg))
+        integration_cfg.web = {**(getattr(cfg, 'web', None) or {}), 'enabled': True,
+                                'xiaohongshu_readonly': True, 'github_readonly': True}
+        self.xiaohongshu_tools = XiaohongshuTools(self.root, integration_cfg)
         settings = cfg.tools or {}
         self.screen_pop_enabled = (getattr(cfg, 'screen_pop', None) or {}).get('enabled') is True
         self.tools = [SCREEN_POP_TOOL] if self.screen_pop_enabled else []
@@ -277,7 +280,7 @@ class FilesystemTools:
         self.grant_path = Path(store.root) / cfg.id / 'append-grant.json'
         self.client = None
         self.web_tools = None
-        self.github_tools = GitHubReadTools(cfg)
+        self.github_tools = GitHubReadTools(integration_cfg)
         self.capability_event = None
         self.capability_event_model = None
         self.startup_notice = ('Windows 桌面交互白名单配置无效，启动、窗口动作和 UIA 操作已关闭。'
@@ -288,9 +291,7 @@ class FilesystemTools:
             self.description = self._description(names) or (
                 'You have no tools; tools are disabled by this character configuration. ')
             return
-        self.tools.extend(self.github_tools.tools)
         self.tools.extend(self.browser_tools.tools)
-        self.tools.extend(self.xiaohongshu_tools.tools)
         if web_factory:
             try:
                 self.web_tools = web_factory(self.root, cfg)

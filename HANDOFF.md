@@ -2,8 +2,11 @@
 
 ## 当前进度
 
-- 工单 162：分支 `ticket/162-xiaohongshu-page-wait`、PR #210 已推送，目前最新自动检查运行中。基于工单 161 合并提交 `cd30c10`。已复现登录状态约 27.8 秒、推荐流约 11.9 秒后 HTTP 500；上游固定 v2.5.5 的原因是登录检查等整页 `load`、feeds 状态只等 8 秒。上游补丁脚本改为等新页面 DOMContentLoaded 和初始状态中的登录用户 ID 或访客，并将 feeds 等待延长到 25 秒；Go 1.24.0 Windows x64 本机构建成功，产物 SHA-256 已固定。静态检查通过，测试与真实账号体验未运行。
-- 下一步先核对 PR #210 当前 head 的自动检查与评审。合并后在 main 手动运行 `Build Xiaohongshu Windows sidecar` 生成发行文件；再提醒 Lan 更新 VEIL 并按 `docs/tickets/162-xiaohongshu-page-wait.md` 验收。
+- 工单 163：`ticket/163-mcp-integrations` 基于 PR #210 合并提交 `5beee1d`。GitHub 和小红书已从普通工具 schema 移到 MCP 管理器，映射为 `mcp__github__github_read` 与 `mcp__xiaohongshu__xiaohongshu`，MCP 窗口可以分别启停；旧配置首次迁入角色 MCP 配置。GitHub 公开只读、小红书专用账号与只读限制仍由原适配器执行。尚未运行自动测试，需继续做静态复核、推送、开 PR 并检查 CI/审查；合并后按工单 163 做 Windows 体验验收。
+- 工单 162：PR #210 已合并；在 main 手动运行 `Build Xiaohongshu Windows sidecar` 后，Lan 更新并按 `docs/tickets/162-xiaohongshu-page-wait.md` 验收。
+
+- 工单 162：分支 `ticket/162-xiaohongshu-page-wait`、PR #210 已于 2026-10-29 合并。基于工单 161 合并提交 `cd30c10`。已复现登录状态约 27.8 秒、推荐流约 11.9 秒后 HTTP 500；上游固定 v2.5.5 的原因是登录检查等整页 `load`、feeds 状态只等 8 秒。上游补丁脚本改为等新页面 DOMContentLoaded 和初始状态中的登录用户 ID 或访客，并将 feeds 等待延长到 25 秒；Go 1.24.0 Windows x64 本机构建成功，产物 SHA-256 已固定。静态检查通过，测试与真实账号体验未运行。
+- PR #210 已合并；后续在 main 手动运行 `Build Xiaohongshu Windows sidecar` 生成发行文件，Lan 更新 VEIL 后按 `docs/tickets/162-xiaohongshu-page-wait.md` 验收。
 
 - 工单 160（PR #208）：上游 v2.5.5 浏览器页面失败返回 HTTP 500 + `STATUS_CHECK_FAILED`/`LIST_FEEDS_FAILED`/`SEARCH_FEEDS_FAILED`/`GET_FEED_DETAIL_FAILED`（未登录是 200 + `is_logged_in:false`，因 pkg/errors `Wrap(nil)` 返回 nil）。这些改为 `PageFailure(Transient)`；只有 `PageFailure`（含 HTTP 超时、整次超时）计入 `transient_streak`，连续 3 次锁死并说明，成功清零；其他拒绝文字带 `HTTP <状态> <代码>`（代码仅 `[A-Z_]`）。`xiaohongshu_setup.login_and_bind` 复查遇 `PageFailure` 时，绑定文件有效则提示直接启动 VEIL。下一工单号 161。
 - 工单 159：PR #207 已合并 `f302ac8`。短期便签分批提取、失败诊断及预算结清已实现；聊天缓存用量新增来源标记，旧版 0 保守显示为未核实。Claude 评审补了：单轮超长对话按字节截断后照样推进检查点；`settle` 报用量异常时按预留结清并继续使用输出（不再每 30 分钟重发重扣）；`prompt_tokens==0` 的占位结算不计入缓存统计。Windows 体验待验收。

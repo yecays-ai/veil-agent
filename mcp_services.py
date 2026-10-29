@@ -24,6 +24,12 @@ class MCPConflict(MCPConfigError):
 
 
 def _validate_service(raw):
+    if isinstance(raw, dict) and raw.get('builtin') is True:
+        service_id = raw.get('id')
+        if service_id not in {'github', 'xiaohongshu'} or type(raw.get('enabled')) is not bool:
+            raise MCPConfigError('内置 MCP 服务配置无效。')
+        return {'id': service_id, 'builtin': True, 'enabled': raw['enabled'],
+                'permission': 'direct', 'command': '', 'args': [], 'cwd': None}
     if not isinstance(raw, dict) or not NAME.fullmatch(str(raw.get('id', ''))) or '__' in raw.get('id', '') or raw['id'].endswith('_'):
         raise MCPConfigError('服务 ID 只能使用小写字母、数字和下划线，并以字母开头。')
     command = raw.get('command')
@@ -206,13 +212,14 @@ class _Worker:
 
 
 class MCPServices:
-    def __init__(self, path):
+    def __init__(self, path, initial_integrations=None):
         self.path = Path(path)
         self.lock = threading.RLock()
         self.workers = {}
         self.retiring = {}
         self.errors = {}
         self.failed = set()
+        self.adapters = {}
         self.config = {'enabled': False, 'services': []}
         self.revision = 0
         try:
@@ -222,14 +229,25 @@ class MCPServices:
             pass
         except (OSError, ValueError, TypeError) as exc:
             self.errors['_config'] = str(exc)[:300]
+        if initial_integrations and '_config' not in self.errors:
+            existing = {item['id'] for item in self.config['services']}
+            additions = [{'id': service_id, 'builtin': True, 'enabled': bool(enabled)}
+                         for service_id, enabled in initial_integrations.items()
+                         if service_id in {'github', 'xiaohongshu'} and service_id not in existing]
+            if additions:
+                self.config = self._validate({'enabled': self.config['enabled'] or any(row['enabled'] for row in additions),
+                                              'services': [*self.config['services'], *additions]})
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+                self.path.write_text(json.dumps(self.config, ensure_ascii=False, indent=2), encoding='utf-8')
 
     @staticmethod
     def _validate(raw):
         if not isinstance(raw, dict) or not isinstance(raw.get('enabled'), bool):
             raise MCPConfigError('MCP 总开关无效。')
         services = raw.get('services')
-        if not isinstance(services, list) or len(services) > 20:
-            raise MCPConfigError('最多配置 20 个 MCP 服务。')
+        if (not isinstance(services, list) or len(services) > 22
+                or sum(item.get('builtin') is not True for item in services if isinstance(item, dict)) > 20):
+            raise MCPConfigError('最多配置 20 个本地 MCP 服务及 2 个内置集成。')
         result = [_validate_service(item) for item in services]
         if len({item['id'] for item in result}) != len(result):
             raise MCPConfigError('服务 ID 不能重复。')
@@ -263,7 +281,15 @@ class MCPServices:
                     self.retiring.pop(key, None)
         return self.view()
 
+    def register_adapter(self, service_id, adapter):
+        if service_id not in {'github', 'xiaohongshu'}:
+            raise ValueError('Unknown built-in MCP adapter.')
+        with self.lock:
+            self.adapters[service_id] = adapter
+
     def _worker(self, service, retry=False):
+        if service.get('builtin'):
+            return None
         with self.lock:
             if next((item for item in self.config['services'] if item['id'] == service['id']), None) != service:
                 return None
@@ -324,6 +350,16 @@ class MCPServices:
     def schemas(self, retry=False):
         result = []
         for service in list(self.config['services']):
+            if service.get('builtin'):
+                adapter = self.adapters.get(service['id'])
+                if not self.config['enabled'] or not service['enabled'] or adapter is None:
+                    continue
+                for tool in adapter.tools:
+                    result.append({'type': 'function', 'function': {
+                        'name': f"{TOOL_PREFIX}{service['id']}__{tool.name}",
+                        'description': f"MCP 服务 {service['id']}：{tool.description}",
+                        'parameters': {key: value for key, value in tool.inputSchema.items() if key != '$schema'}}})
+                continue
             worker = self._worker(service, retry=retry)
             if not worker or not worker.ready.done():
                 continue
@@ -356,6 +392,8 @@ class MCPServices:
             return 'deny'
         with self.lock:
             service = next((item for item in self.config['services'] if item['id'] == match.group(1)), None)
+            if service and service.get('builtin') and service['enabled'] and self.config['enabled']:
+                return 'allow'
             return 'allow' if service and service['permission'] == 'direct' else 'ask'
 
     def needs_checkpoint(self, name):
@@ -363,6 +401,9 @@ class MCPServices:
         if not match:
             return True
         with self.lock:
+            service = next((item for item in self.config['services'] if item['id'] == match.group(1)), None)
+            if service and service.get('builtin'):
+                return False  # Bundled GitHub and Xiaohongshu adapters expose read-only operations only.
             worker = self.workers.get(match.group(1))
             if worker:
                 for tool in worker.tools:
@@ -375,6 +416,13 @@ class MCPServices:
         with self.lock:
             rows = []
             for service in self.config['services']:
+                if service.get('builtin'):
+                    adapter = self.adapters.get(service['id'])
+                    active = bool(self.config['enabled'] and service['enabled'] and adapter)
+                    rows.append({**service, 'status': 'connected' if active else 'off',
+                                 'tools': [tool.name for tool in adapter.tools] if active else [],
+                                 'error': self.errors.get(service['id'])})
+                    continue
                 worker = self.workers.get(service['id'])
                 retiring = self.retiring.get(service['id'])
                 if retiring and not retiring.thread.is_alive():
@@ -417,12 +465,29 @@ class MCPServices:
             service = next((item for item in self.config['services'] if item['id'] == service_id), None)
             if not self.config['enabled'] or not service or not service['enabled']:
                 return 'MCP 服务已停用。', '被拒绝', name
-            worker = self.workers.get(service_id)
-            if service_id in self.failed or not worker or not worker.thread.is_alive() or not any(
-                    tool.name == tool_name and self._usable_name(service, tool) == name
-                    for tool in worker.tools):
-                return 'MCP 工具不可用。', '被拒绝', name
-            permission = service['permission']
+            if service.get('builtin'):
+                adapter = self.adapters.get(service_id)
+                if not adapter or not any(tool.name == tool_name for tool in adapter.tools):
+                    return 'MCP 工具不可用。', '被拒绝', name
+            else:
+                adapter = None
+                worker = self.workers.get(service_id)
+                if service_id in self.failed or not worker or not worker.thread.is_alive() or not any(
+                        tool.name == tool_name and self._usable_name(service, tool) == name
+                        for tool in worker.tools):
+                    return 'MCP 工具不可用。', '被拒绝', name
+                permission = service['permission']
+        if adapter:
+            if service_id == 'xiaohongshu':
+                result = adapter.invoke(tool_name, args, approval, should_stop=should_stop)
+            else:
+                result = adapter.invoke(tool_name, args, approval)
+            with self.lock:
+                if result[1] == '出错':
+                    self.errors[service_id] = str(result[0])[:300]
+                elif result[1] == '成功':
+                    self.errors.pop(service_id, None)
+            return result
         if permission == 'ask':
             from agent_types import NOT_ASKED
             answer = approval(f'Peter 想调用 MCP 服务 {service_id} 的 {tool_name}。同意吗？y/N ')
