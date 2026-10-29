@@ -68,7 +68,7 @@ def login_and_bind(root, folder):
             print('未更改登录状态。')
             return
     env = companion_env(folder)
-    print('即将打开专属登录窗口。首次需要下载浏览器，请耐心等待。', flush=True)
+    print('即将打开专属登录窗口。首次需要下载浏览器，请耐心等待。窗口打开后先不要点网页，等二维码出现再用手机扫码；页面加载时点击会让上游登录程序崩溃。', flush=True)
     command = [str(binary_path(root, 'xiaohongshu-login-windows-amd64.exe'))]
     login = subprocess.Popen(command, cwd=folder, env=env)
     try:

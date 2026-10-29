@@ -44,3 +44,7 @@
    - 「太慢 / 没响应」是正常现象，他稍后还能再试；
    - 「掉登录」或「平台拒绝」说明需要你运行 xiaohongshu-login.cmd 检查账号。
 4. 遇到问题时，把 `data\peter\xiaohongshu\errors.jsonl` 的最后几行发给 Claude。
+
+## 登录窗口闪退（10-29 Lan 实测）
+
+上游 `xiaohongshu-login` 在页面加载完成前若页面跳转（例如用户点击网页），会因 `Inspected target navigated or closed` 直接崩溃。登录提示已加一句：窗口打开后先不要点网页，等二维码出现再扫码。已有专属登录状态时直接回车即可，不必重新登录。
