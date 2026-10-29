@@ -54,7 +54,7 @@ if errorlevel 1 goto failed
 if errorlevel 1 goto failed
 ".venv\Scripts\python.exe" setup_fetch.py
 if errorlevel 1 goto failed
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\install-nowhere.ps1" -RepositoryPath "%CD%" -BootstrapPythonPath "%CD%\.venv\Scripts\python.exe"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%CD%\scripts\install-nowhere.ps1" -RepositoryPath "%CD%" -BootstrapPythonPath "%CD%\.venv\Scripts\python.exe"
 if errorlevel 1 echo Warning: Nowhere is unavailable; Peter can still use VEIL. Rerun setup.bat after resolving the Nowhere installation error.
 
 echo [3/4] Checking desktop components...
