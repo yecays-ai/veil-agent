@@ -21,6 +21,7 @@ from contextlib import contextmanager, nullcontext
 
 from agent_types import (AUTONOMY_WAKE, BudgetExceeded, CODEX_WATCH_WAKE, EmptyReplyError,
                          GLANCE_WAKE, RequestFailed, TooLong, UserError, now)
+from tool_aliases import alias_system_messages, alias_tool_schemas, resolve_tool_name, validate_tool_aliases
 
 ROOT = Path(__file__).resolve().parent
 MILLION = Decimal(1_000_000)
@@ -44,13 +45,14 @@ TOOL_DATA_RESULTS = {'read_text_file', 'read_multiple_files', 'directory_tree', 
                      'list_directory_with_sizes', 'get_file_info', 'search_files', 'memory_read',
                      'memory_history', 'breath_search', 'dream', 'pulse', 'letter_read', 'lab_file_digest',
                      'long_task_status', 'capability_history', 'autonomy_history'}
+_UNSET_TOOL_SCHEMAS = object()
 SENSITIVE_ACTIVITY_VALUE = re.compile(
     r'(?i)(api[_ -]?key|password|passwd|secret|access[_ -]?token|authorization|bearer)'
     r'(\s*[=:]\s*|\s+)[^\s,;]{4,}')
 OPAQUE_ACTIVITY_TOKEN = re.compile(r'\b(?:sk|ghp|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{12,}\b')
 
 
-def raw_tool_call_text_format(content):
+def raw_tool_call_text_format(content, tool_aliases=None):
     """Identify common plain-text serializations of tool calls; never parse or execute them."""
     if not isinstance(content, str):
         return None
@@ -58,6 +60,13 @@ def raw_tool_call_text_format(content):
         return 'dsml'
     if RAW_SEND_MESSAGE_TEXT_CALL.search(content):
         return 'send_message_arguments'
+    send_alias = (tool_aliases or {}).get('send_message')
+    if isinstance(send_alias, str):
+        alias_call = re.compile(r'(?<![A-Za-z0-9_])' + re.escape(send_alias) +
+                                r'\s*[（(]\s*(?:参数\s*[:：]\s*)?'
+                                r'[A-Za-z_][A-Za-z0-9_]*\s*[:：=]', re.IGNORECASE)
+        if alias_call.search(content):
+            return 'send_message_arguments'
     if all(marker.search(content) for marker in RAW_MESSAGE_BATCH_MARKERS):
         return 'numbered_message_batch'
     return None
@@ -477,7 +486,6 @@ class Character:
     windows_observation: dict = None
     windows_interaction: dict = None
     desktop_file_read: dict = None
-    windows_media: dict = None
     screen_pop: dict = None
     glance: dict = None
     background: str = None
@@ -485,6 +493,7 @@ class Character:
     # Ticket 134: Ombre tagging and short-term notes use this model; None means the chat model.
     background_provider: dict = None
     models: object = None
+    tool_aliases: dict = None
 
 
 def positive_int(value):
@@ -642,14 +651,7 @@ def load_character(root, character_id):
             if type(enabled) is not bool:
                 raise ValueError('desktop_file_read.enabled must be boolean')
             desktop_file_read = {'enabled': enabled}
-        windows_media = cfg.get('windows_media')
-        if windows_media is not None:
-            if not isinstance(windows_media, dict):
-                raise ValueError('windows_media must be a table')
-            enabled = windows_media.get('enabled', False)
-            if type(enabled) is not bool:
-                raise ValueError('windows_media.enabled must be boolean')
-            windows_media = {'enabled': enabled}
+        tool_aliases = validate_tool_aliases(cfg.get('tool_aliases'))
         screen_pop = cfg.get('screen_pop')
         if screen_pop is not None:
             if not isinstance(screen_pop, dict):
@@ -670,7 +672,6 @@ def load_character(root, character_id):
                               or (windows_observation or {}).get('enabled')
                               or (windows_interaction or {}).get('enabled')
                               or (desktop_file_read or {}).get('enabled')
-                              or (windows_media or {}).get('enabled')
                               or (screen_pop or {}).get('enabled')):
             # Native memory runs on the tool loop; files stay off unless [tools] says otherwise.
             tools = {'enabled': False, 'folder': f'data/{character_id}/workspace',
@@ -762,10 +763,11 @@ def load_character(root, character_id):
                          positive_int(cfg.get('history_rounds', 20)),
                          positive_int(cfg.get('max_output_tokens', 1024)), provider, provider_name,
                          memory, tools, autonomy, voice, profile, email, qq, web, windows_observation,
-                         windows_interaction, desktop_file_read, windows_media, screen_pop, glance,
+                         windows_interaction, desktop_file_read, screen_pop, glance,
                          background=str(background_path(persona_path)),
                          short_term_notes=short_term_notes,
-                         background_provider=background_provider, models=models)
+                         background_provider=background_provider, models=models,
+                         tool_aliases=tool_aliases)
     except UserError:
         raise
     except (OSError, KeyError, ValueError, TypeError, ArithmeticError) as exc:
@@ -1319,6 +1321,8 @@ class Chat:
         self.trim_noted = False
         self.memory = memory
         self.tools, self.approval, self.output, self.voice = tools, approval, output, voice
+        self.tool_aliases = validate_tool_aliases(getattr(cfg, 'tool_aliases', None))
+        self.active_tool_aliases = {}
         from mcp_services import MCPServices
         integrations = {}
         filesystem_tools = getattr(tools, 'files', tools)
@@ -1456,7 +1460,24 @@ class Chat:
                     f'{(self.cfg.tools or {}).get("max_output_tokens", self.cfg.max_output_tokens)} tokens); '
                     'write long work in slices, never whole files.')
                 schema['function'] = function
+        from tools_agent import ALLOW, ASK, AUTONOMY_DIRECT, LAB_ONLY, NATIVE
+        reserved_names = (ALLOW | ASK | AUTONOMY_DIRECT | LAB_ONLY | NATIVE | {
+            'send_message', 'recall_message', 'stay_silent', 'reply_later', 'screen_pop',
+            'capability_history', 'autonomy_history', 'profile_append', 'profile_replace',
+            'thought', 'long_task_status', 'long_task_update', 'set_next_wake', 'set_wake_rhythm',
+        })
+        schemas, self.active_tool_aliases = alias_tool_schemas(
+            schemas, self.tool_aliases, reserved_names)
         return schemas
+
+    def _resolve_tool_name(self, name, schemas=None):
+        schemas = self.tool_schemas() if schemas is None else schemas
+        active = self.active_tool_aliases
+        reverse = {alias: original for original, alias in active.items()}
+        model_names = {schema.get('function', {}).get('name') for schema in schemas}
+        available = {reverse.get(tool_name, tool_name) for tool_name in model_names}
+        available.discard(None)
+        return resolve_tool_name(name, self.tool_aliases, active, available)
 
     def current_request_tool_schemas(self):
         config = self.cfg.tools or {}
@@ -1476,12 +1497,13 @@ class Chat:
             name = schema.get('function', {}).get('name')
             if not isinstance(name, str):
                 continue
-            policy = (self.mcp_services.permission_for(name) if name.startswith('mcp__')
-                      else tool_policy(name))
+            canonical_name = self._resolve_tool_name(name, schemas) or name
+            policy = (self.mcp_services.permission_for(canonical_name)
+                      if canonical_name.startswith('mcp__') else tool_policy(canonical_name))
             if policy == 'allow':
                 label = 'Direct use'
             elif policy == 'desktop_read':
-                label = 'Direct read-only Windows observation and media status'
+                label = 'Direct read-only Windows observation'
             elif policy == 'desktop_file_read':
                 label = "Direct read-only access to Lan's visible Desktop files"
             elif policy == 'desktop_control':
@@ -1492,7 +1514,7 @@ class Chat:
                 label = "Needs Lan's approval where policy requires it"
             elif policy == 'lab':
                 label = 'Lab only (no deletion or scripts)'
-            elif name == 'trace':
+            elif canonical_name == 'trace':
                 label = "Deletion needs Lan's approval"
             else:
                 label = 'Available'
@@ -2572,8 +2594,24 @@ class Chat:
         self.autonomy_mode = False
         return reply
 
-    def _execute_tool_call(self, call, request_id, tool_call_id, autonomy):
+    def _execute_tool_call(self, call, request_id, tool_call_id, autonomy,
+                           offered=_UNSET_TOOL_SCHEMAS):
         from windows_interaction import WINDOWS_DESKTOP_TOOL_NAMES
+        from types import SimpleNamespace
+        model_name = call.function.name
+        if offered is _UNSET_TOOL_SCHEMAS:
+            offered = self.tool_schemas()
+        if offered is None:
+            return _ToolExecution(
+                'The program rejected this call because the current step has no available tools.',
+                '被拒绝', model_name)
+        canonical_name = self._resolve_tool_name(model_name, offered)
+        if canonical_name is None:
+            return _ToolExecution(
+                'The program rejected this call because the tool is unavailable for the current role.',
+                '被拒绝', model_name)
+        call = SimpleNamespace(id=getattr(call, 'id', None), function=SimpleNamespace(
+            name=canonical_name, arguments=call.function.arguments))
         activity_detail = None
         try:
             checkpoint_verified = False
@@ -2705,9 +2743,10 @@ class Chat:
     def _record_tool_result(self, call, execution, result_state, display_detail, summaries, log_tool):
         from tools_agent import display_call
         name = call.function.name
+        canonical_name = self._resolve_tool_name(name)
         # Ticket 143: a successful message is already its own bubble, and choosing silence or a later reply
         # should leave nothing in Lan's chat; the activity page still records every call.
-        if name not in ('send_message', 'stay_silent', 'reply_later') or result_state != '成功':
+        if canonical_name not in ('send_message', 'stay_silent', 'reply_later') or result_state != '成功':
             self.output(display_call(name, execution.summary, result_state,
                                      (display_detail if result_state != '成功' else None)))
         delivery = {'result_state': result_state} if result_state != execution.state else {}
@@ -2749,7 +2788,8 @@ class Chat:
                 row['autonomy_run_id'] = self.autonomy_run_id
             self.store.append(f'{self.cfg.id}/tools.jsonl', row)
             if self.runtime_monitor and state != '进行中':
-                self.runtime_monitor.observe_tool(name, state, autonomy=autonomy, **metadata)
+                monitor_name = self._resolve_tool_name(name, offered) or name
+                self.runtime_monitor.observe_tool(monitor_name, state, autonomy=autonomy, **metadata)
 
         # Reuse provider-reported token usage from this model. A safety margin is
         # applied to new estimates; the exact measured ratio is used when removing
@@ -2799,7 +2839,8 @@ class Chat:
         def append_tool_result(call, execution, next_offered):
             nonlocal history_count
             name = call.function.name
-            display_detail = model_tool_result(name, execution.result, execution.state)
+            canonical_name = self._resolve_tool_name(name, offered)
+            display_detail = model_tool_result(canonical_name or name, execution.result, execution.state)
             tool_message = {'role': 'tool', 'tool_call_id': call.id,
                             'content': display_detail}
             result_state = execution.state
@@ -2930,7 +2971,8 @@ class Chat:
             reservation = request_id if step == 0 else next_reservation
             sent_bytes = request_bytes(offered)
             try:
-                response = self.model(loop_messages, tools=offered, message_output=True,
+                model_messages = alias_system_messages(loop_messages, self.tool_aliases)
+                response = self.model(model_messages, tools=offered, message_output=True,
                                       max_tokens=step_cfg.max_output_tokens, detail=True)
             except UserError:
                 raise
@@ -2954,7 +2996,8 @@ class Chat:
                             'The current model rejected image input; Peter has not seen the page.',
                         )
                         tool_message['content'] = model_tool_result(
-                            image_tool_name, text_result, '出错')
+                            self._resolve_tool_name(image_tool_name, offered) or image_tool_name,
+                            text_result, '出错')
                     ephemeral_image_bindings.clear()
                     loop_messages.append({
                         'role': 'system',
@@ -2965,7 +3008,8 @@ class Chat:
                     })
                     try:
                         sent_bytes = request_bytes(offered)
-                        response = self.model(loop_messages, tools=offered, message_output=True,
+                        model_messages = alias_system_messages(loop_messages, self.tool_aliases)
+                        response = self.model(model_messages, tools=offered, message_output=True,
                                               max_tokens=step_cfg.max_output_tokens, detail=True)
                     except UserError:
                         raise
@@ -3058,7 +3102,7 @@ class Chat:
                     raise RequestFailed(f'模型返回了空内容，Peter 这一轮没有发出消息（不是他选择不回）。'
                                         f'模型 {self.cfg.provider.get("model")}；详情在 '
                                         f'data/{self.cfg.id}/memory/_agent/diagnostics.jsonl')
-                raw_tool_format = raw_tool_call_text_format(content)
+                raw_tool_format = raw_tool_call_text_format(content, self.tool_aliases)
                 if raw_tool_format:
                     # Never display provider-internal tool syntax as a reply or feed
                     # it to another parser. Only structured, allowlisted tool_calls
@@ -3195,8 +3239,9 @@ class Chat:
                     call_id = f'{request_id}:{step}:{getattr(call, "id", None) or call_index}'
                     try:
                         args = json.loads(call.function.arguments or '{}')
-                        summary = (self.tools.preview_summary(call.function.name, args)
-                                   if self.tools and call.function.name != 'send_message'
+                        preview_name = self._resolve_tool_name(call.function.name, offered)
+                        summary = (self.tools.preview_summary(preview_name, args)
+                                   if self.tools and preview_name not in (None, 'send_message')
                                    else call.function.name)
                     except (ValueError, TypeError, AttributeError):
                         summary = call.function.name
@@ -3204,23 +3249,24 @@ class Chat:
                     try:
                         execution = self._execute_tool_call(
                             call, request_id,
-                            f'{step}:{getattr(call, "id", None) or call_index}', autonomy)
+                            f'{step}:{getattr(call, "id", None) or call_index}', autonomy, offered)
                     except BaseException as exc:
                         log_tool(call.function.name, summary, '出错', call_id=call_id,
                                  detail=str(exc) or exc.__class__.__name__)
                         raise
                     state = execution.state
-                    if call.function.name == 'send_message' and state == '成功' and self.sent_messages:
+                    canonical_name = self._resolve_tool_name(call.function.name, offered)
+                    if canonical_name == 'send_message' and state == '成功' and self.sent_messages:
                         mixed_sent_messages.append(self.sent_messages[-1])
                         work_since_message = False
-                    elif call.function.name != 'send_message':
+                    elif canonical_name != 'send_message':
                         work_since_message = True
                     display_detail, result_state = append_tool_result(
                         call, execution, next_offered)
                     log_detail = execution.result
-                    if call.function.name in WINDOWS_DESKTOP_TOOL_NAMES or call.function.name == 'browser':
+                    if canonical_name in WINDOWS_DESKTOP_TOOL_NAMES or canonical_name == 'browser':
                         log_detail = (execution.activity_detail or (
-                            'Isolated public browser step.' if call.function.name == 'browser'
+                            'Isolated public browser step.' if canonical_name == 'browser'
                             else 'Windows desktop action completed.'))
                         if result_state == '结果过长':
                             log_detail = display_detail

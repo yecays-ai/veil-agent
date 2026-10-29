@@ -2,8 +2,10 @@
 
 ## 当前进度
 
-- 工单 163：PR #211 已提交 GitHub、小红书 MCP 管理迁移。改动包括首次配置时依据旧开关初始化 MCP 总开关、幂等迁移、原子写配置、内置服务 ID 冲突保护、记忆工具包装器兼容、GitHub 停止信号传递；小红书私有登录目录始终排除在文件工作区外。最新 head 必需 CI 已通过；本机未运行测试；Windows 体验验收待按工单 163 执行。
-- 工单 162：PR #210 已合并；在 main 手动运行 `Build Xiaohongshu Windows sidecar` 后，Lan 更新并按 `docs/tickets/162-xiaohongshu-page-wait.md` 验收。登录等待与 feed 注水修复背景见工单 162。
+- 工单 164：独立 worktree `E:\Peter-Agent\VEIL\worktrees\164-peter-tool-aliases`，分支 `ticket/164-peter-tool-aliases`，基于已合并 PR #211 的源码树。角色别名配置、schema/描述转换、统一执行还原及 `windows_now_playing` 与 WinRT 依赖清理已实现；尚未创建 PR。新增 9 项专项通过；29 项观察/桌面读取回归（2 跳过）、52 项工具/消息回归（2 跳过）、106 项聊天/长任务/运行监控回归通过。本地 filesystem 服务测试因当前环境长时间无输出而未确认通过。PR CI/审查和 Windows 实际体验尚未完成。
+- 下一个窗口第一步：先运行 `git -c safe.directory=E:/Peter-Agent/VEIL/worktrees/164-peter-tool-aliases status --short --branch` 与 diff 检查，确认本分支文件；从 GitHub 当前 `main` `1ca58d3e0bb12d855aed7d000a08df168818a226` 创建提交并打开 PR（本机 GitHub DNS 不通时可用仓库 GitHub API）；核对新 PR 必需检查和实质审查，再通知 Lan 做 `docs/tickets/164-peter-tool-aliases.md` 中的 Windows 验收。按用户偏好，Windows 验收前保持 PR 打开。
+- 工单 163：PR #211 已合并，必需 CI 已通过；Windows 体验验收待按 `docs/tickets/163-mcp-integrations.md` 执行。
+- 工单 162：PR #210 已合并；在 main 手动运行 `Build Xiaohongshu Windows sidecar` 后，Lan 更新并按 `docs/tickets/162-xiaohongshu-page-wait.md` 验收。
 
 - 工单 160（PR #208）：上游 v2.5.5 浏览器页面失败返回 HTTP 500 + `STATUS_CHECK_FAILED`/`LIST_FEEDS_FAILED`/`SEARCH_FEEDS_FAILED`/`GET_FEED_DETAIL_FAILED`（未登录是 200 + `is_logged_in:false`，因 pkg/errors `Wrap(nil)` 返回 nil）。这些改为 `PageFailure(Transient)`；只有 `PageFailure`（含 HTTP 超时、整次超时）计入 `transient_streak`，连续 3 次锁死并说明，成功清零；其他拒绝文字带 `HTTP <状态> <代码>`（代码仅 `[A-Z_]`）。`xiaohongshu_setup.login_and_bind` 复查遇 `PageFailure` 时，绑定文件有效则提示直接启动 VEIL。下一工单号 161。
 - 工单 159：PR #207 已合并 `f302ac8`。短期便签分批提取、失败诊断及预算结清已实现；聊天缓存用量新增来源标记，旧版 0 保守显示为未核实。Claude 评审补了：单轮超长对话按字节截断后照样推进检查点；`settle` 报用量异常时按预留结清并继续使用输出（不再每 30 分钟重发重扣）；`prompt_tokens==0` 的占位结算不计入缓存统计。Windows 体验待验收。
@@ -69,7 +71,7 @@
 ## 仍适用的边界
 
 - 正式 checkout `E:\Peter-Agent\VEIL\veil-agent` 留在 `main`。其中用户已有的 `update-main-collisions.ps1`、`update-main.cmd` 删除状态不属于本工单，保持原样。
-- 只在本工单独立 worktree 操作；合并后依仓库规则检查干净状态再清理本工单 worktree。
-- 不增加第二个 Agent 或模型供应商；浏览器复用仓库已有 Playwright 依赖；共享既有权限控制、`desktop_access` 互斥、Chat 工具循环和成本账本。工单 151 仅为 GSMTC 增加 Windows 专用 PyWinRT API 投影。
+- 只在本工单独立 worktree 操作；Windows 验收前保持 PR 打开，不清理本工单 worktree。
+- 不增加第二个 Agent、模型供应商、Agent 框架或依赖；浏览器复用仓库已有 Playwright 依赖；工具别名复用现有角色配置、Chat 工具循环及权限/预算/检查点入口。工单 164 移除了工单 151 的 GSMTC 媒体读取及其 PyWinRT 依赖，其他 Windows 观察能力保留。
 - UIA 窗口内容是非可信数据；敏感窗口过滤由现有 Windows 观察工具执行。当前瞄一眼观察仅用 UIA，不调用截图回退，不把原始 UIA 内容写入活动文件或长期记忆。
 - 代码检查、CI、Windows 实机体验是不同证据；各工单的体验验收状态以 STATUS.md「验收总表」为准。

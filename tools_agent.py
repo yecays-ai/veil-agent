@@ -25,7 +25,6 @@ from xiaohongshu_tools import XHS_TOOL_NAMES, XiaohongshuTools
 from desktop_files import (DESKTOP_FILE_READ_TOOL_NAMES, DESKTOP_FILE_TOOL_NAMES,
                            DesktopFileReadTools, DesktopFileTools, keep_previous_version,
                            replace_file_bytes)
-from windows_media import WINDOWS_MEDIA_TOOL_NAMES, WindowsMediaTools
 from windows_observer import WINDOWS_OBSERVATION_TOOL_NAMES, WindowsObservationTools
 from windows_interaction import (
     WINDOWS_INTERACTION_TOOL_NAMES,
@@ -42,7 +41,7 @@ ALLOW = {
     'list_directory', 'directory_tree', 'read_text_file', 'read_multiple_files',
     'get_file_info', 'search_files', 'list_directory_with_sizes', *WEB_TOOL_NAMES, *GITHUB_TOOL_NAMES,
     *WINDOWS_OBSERVATION_TOOL_NAMES, *WINDOWS_INTERACTION_TOOL_NAMES, *DESKTOP_FILE_TOOL_NAMES,
-    *DESKTOP_FILE_READ_TOOL_NAMES, *WINDOWS_MEDIA_TOOL_NAMES,
+    *DESKTOP_FILE_READ_TOOL_NAMES,
     *SCREEN_POP_TOOL_NAMES, *BROWSER_TOOL_NAMES, *XHS_TOOL_NAMES,
 }
 ASK = {'write_file', 'append_file', 'grant_append'}
@@ -88,8 +87,6 @@ def permitted_tools(server_tools):
 def tool_policy(name):
     if name in DESKTOP_FILE_READ_TOOL_NAMES:
         return 'desktop_file_read'
-    if name in WINDOWS_MEDIA_TOOL_NAMES:
-        return 'desktop_read'
     if name in WINDOWS_OBSERVATION_TOOL_NAMES:
         return 'desktop_read'
     if name in WINDOWS_INTERACTION_TOOL_NAMES:
@@ -248,9 +245,6 @@ class FilesystemTools:
         self.desktop_file_reads = DesktopFileReadTools(
             (getattr(cfg, 'desktop_file_read', None) or {}).get('enabled', False))
         self.tools.extend(self.desktop_file_reads.tools)
-        self.windows_media = WindowsMediaTools(
-            (getattr(cfg, 'windows_media', None) or {}).get('enabled', False))
-        self.tools.extend(self.windows_media.tools)
         self.desktop_files.bind_own_work(
             Path(store.root) / cfg.id / 'desktop-created.json',
             Path(store.root) / cfg.id / 'own-work-versions' / 'desktop',
@@ -993,9 +987,6 @@ class FilesystemTools:
             description += ('Read-only access to visible items on Lan\'s Windows Desktop: list folders, find exact '
                             'filenames, and read ordinary .txt/.md files up to 256 KB. Only that Desktop is in scope; '
                             'hidden, sensitive-looking, unsupported, linked, too-large and out-of-folder paths are refused. ')
-        if any(name in WINDOWS_MEDIA_TOOL_NAMES for name in names):
-            description += ('Read-only Windows media-session metadata may include the current title, artist, and '
-                            'playback state; no audio is captured and no playback controls are available. ')
         if any(name in SCREEN_POP_TOOL_NAMES for name in names):
             description += ('screen_pop can display a popup or danmaku on the VEIL Desktop shell; '
                             'the activity record tracks later dismissal or completion. ')
@@ -1068,11 +1059,6 @@ class FilesystemTools:
             if desktop_reads is None:
                 return 'Read-only Desktop file access is not available for this character or platform.', '被拒绝', name
             return desktop_reads.invoke(name, args)
-        if name in WINDOWS_MEDIA_TOOL_NAMES:
-            media_tools = getattr(self, 'windows_media', None)
-            if media_tools is None:
-                return 'Windows media-session information is not available for this character or platform.', '被拒绝', name
-            return media_tools.invoke(name, args)
         if name in WEB_TOOL_NAMES:
             if self.web_tools is None:
                 return 'This web tool is unavailable for the current role.', '被拒绝', name

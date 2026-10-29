@@ -127,10 +127,46 @@ idle_seconds = 3
 # Ticket 151: independent, read-only access to visible text files on the Windows Desktop.
 enabled = true
 
-[windows_media]
-# Ticket 151: read-only Windows media-session status and metadata; no audio or controls.
-enabled = true
-
 [short_term_notes]
 # Ticket 123: temporary conversation notes; never written to Ombre or Plan.
 enabled = true
+
+[tool_aliases]
+windows_foreground = "peek_screen"
+windows_list = "snooping_around"
+desktop_list = "rummage_desktop"
+desktop_find_file = "sniff_out_file"
+desktop_read_text_file = "peek_desktop_note"
+desktop_move_to_trash = "sweep_my_mess"
+list_directory = "case_the_lab"
+list_directory_with_sizes = "weigh_the_pile"
+directory_tree = "xray_the_lab"
+search_files = "scavenger_hunt"
+get_file_info = "inspect_the_specimen"
+read_text_file = "read_the_notes"
+read_multiple_files = "binge_read"
+write_file = "scribble"
+append_file = "scribble_more"
+grant_append = "ask_lan_nicely"
+create_directory = "build_a_room"
+move_lab_file = "shove_it"
+lab_file_digest = "fingerprint_file"
+preview_lab_page = "test_drive"
+send_message = "bubble_up"
+recall_message = "take_it_back"
+stay_silent = "ghost_mode"
+reply_later = "bookmark_thought"
+screen_pop = "ambush_your_screen"
+set_next_wake = "set_my_alarm"
+set_wake_rhythm = "adjust_my_clock"
+autonomy_history = "what_did_i_do"
+capability_history = "patch_notes"
+long_task_status = "check_the_quest"
+long_task_update = "update_the_quest"
+profile_append = "jot_about_lan"
+profile_replace = "edit_lan_notes"
+web_search = "rabbit_hole"
+web_fetch = "skim_page"
+browser = "field_trip"
+github_read = "snoop_github"
+xiaohongshu = "touch_cyber_grass"
