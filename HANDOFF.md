@@ -2,8 +2,8 @@
 
 ## 当前进度
 
-- 工单 164：独立 worktree `E:\Peter-Agent\VEIL\worktrees\164-peter-tool-aliases`，分支 `ticket/164-peter-tool-aliases`，基于已合并 PR #211 的源码树。角色别名配置、schema/描述转换、统一执行还原及 `windows_now_playing` 与 WinRT 依赖清理已实现；尚未创建 PR。新增 9 项专项通过；29 项观察/桌面读取回归（2 跳过）、52 项工具/消息回归（2 跳过）、106 项聊天/长任务/运行监控回归通过。本地 filesystem 服务测试因当前环境长时间无输出而未确认通过。PR CI/审查和 Windows 实际体验尚未完成。
-- 下一个窗口第一步：先运行 `git -c safe.directory=E:/Peter-Agent/VEIL/worktrees/164-peter-tool-aliases status --short --branch` 与 diff 检查，确认本分支文件；从 GitHub 当前 `main` `1ca58d3e0bb12d855aed7d000a08df168818a226` 创建提交并打开 PR（本机 GitHub DNS 不通时可用仓库 GitHub API）；核对新 PR 必需检查和实质审查，再通知 Lan 做 `docs/tickets/164-peter-tool-aliases.md` 中的 Windows 验收。按用户偏好，Windows 验收前保持 PR 打开。
+- 工单 164：PR #212 已开放，分支 `ticket/164-peter-tool-aliases` 基于最新 main。角色别名映射、schema 处理、统一执行还原及 `windows_now_playing` 与 WinRT 依赖清理已实现。当前 review 提出的问题正在集中修复；本地回归通过。filesystem 服务测试未确认，Windows 实际体验待验收。
+- 下一步：核对本轮修复、集中提交一次并更新 PR；仅查看该提交自动检查状态，不重复触发检查，然后交由 Lan 跟进审查意见与 Windows 验收。
 - 工单 163：PR #211 已合并，必需 CI 已通过；Windows 体验验收待按 `docs/tickets/163-mcp-integrations.md` 执行。
 - 工单 162：PR #210 已合并；在 main 手动运行 `Build Xiaohongshu Windows sidecar` 后，Lan 更新并按 `docs/tickets/162-xiaohongshu-page-wait.md` 验收。
 

@@ -62,7 +62,7 @@ def raw_tool_call_text_format(content, tool_aliases=None):
         return 'send_message_arguments'
     send_alias = (tool_aliases or {}).get('send_message')
     if isinstance(send_alias, str):
-        alias_call = re.compile(r'(?<![A-Za-z0-9_])' + re.escape(send_alias) +
+        alias_call = re.compile(r'^\s*' + re.escape(send_alias) +
                                 r'\s*[（(]\s*(?:参数\s*[:：]\s*)?'
                                 r'[A-Za-z_][A-Za-z0-9_]*\s*[:：=]', re.IGNORECASE)
         if alias_call.search(content):
@@ -1472,12 +1472,16 @@ class Chat:
 
     def _resolve_tool_name(self, name, schemas=None):
         schemas = self.tool_schemas() if schemas is None else schemas
-        active = self.active_tool_aliases
+        active = getattr(schemas, 'aliases', self.active_tool_aliases)
         reverse = {alias: original for original, alias in active.items()}
         model_names = {schema.get('function', {}).get('name') for schema in schemas}
         available = {reverse.get(tool_name, tool_name) for tool_name in model_names}
         available.discard(None)
         return resolve_tool_name(name, self.tool_aliases, active, available)
+
+    def canonical_tool_name(self, name):
+        reverse = {alias: original for original, alias in self.active_tool_aliases.items()}
+        return reverse.get(name, name)
 
     def current_request_tool_schemas(self):
         config = self.cfg.tools or {}

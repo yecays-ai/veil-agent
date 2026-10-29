@@ -48,6 +48,30 @@ class ToolAliasTests(unittest.TestCase):
         self.assertIsNone(resolve_tool_name('mcp__veil_github__github_read',
                                             {'github_read': 'snoop_github'}, active, available))
 
+    def test_duplicate_mcp_short_names_fall_back_to_service_qualified_name(self):
+        schemas, active = alias_tool_schemas([
+            {'type': 'function', 'function': {'name': 'mcp__one__github_read',
+             'description': 'Read github_read.', 'parameters': {'type': 'object'}}},
+            {'type': 'function', 'function': {'name': 'mcp__two__github_read',
+             'description': 'Read github_read.', 'parameters': {'type': 'object'}}},
+        ], {'github_read': 'snoop_github'})
+        self.assertEqual([s['function']['name'] for s in schemas], ['snoop_github', 'mcp__two__github_read'])
+        self.assertEqual(active, {'mcp__one__github_read': 'snoop_github'})
+
+    def test_schema_only_rewrites_descriptions_and_respects_function_name_boundary(self):
+        source = [{'type': 'function', 'function': {
+            'name': 'foo', 'description': 'Use foo and foo-bar.',
+            'parameters': {'type': 'object', 'properties': {'kind': {
+                'type': 'string', 'description': 'Calls foo.', 'enum': ['foo'], 'default': 'foo'},
+                '$ref': '#/$defs/foo'}}}}]
+        result, _ = alias_tool_schemas(source, {'foo': 'bar'})
+        self.assertEqual(result[0]['function']['description'], 'Use bar and foo-bar.')
+        prop = result[0]['function']['parameters']['properties']['kind']
+        self.assertEqual(prop['description'], 'Calls bar.')
+        self.assertEqual(prop['enum'], ['foo'])
+        self.assertEqual(prop['default'], 'foo')
+        self.assertEqual(result[0]['function']['parameters']['properties']['$ref'], '#/$defs/foo')
+
     def test_mcp_alias_is_executed_through_the_existing_mcp_permission_entry(self):
         import tempfile
         from pathlib import Path
@@ -74,6 +98,18 @@ class ToolAliasTests(unittest.TestCase):
             self.assertEqual(execution.state, '成功')
             self.assertEqual(invoke.call_args.args[0], 'mcp__veil_github__github_read')
             self.assertEqual(invoke.call_args.args[1], {})
+            canonical = chat._resolve_tool_name('snoop_github', schemas)
+            self.assertEqual(model_tool_result(canonical, 'external content', '成功'),
+                             model_tool_result('mcp__veil_github__github_read', 'external content', '成功'))
+            self.assertIn('<untrusted_mcp>', model_tool_result(canonical, 'external content', '成功'))
+            # Reconfiguring tools after this schema was offered must not retarget
+            # the in-flight alias to another service with the same short name.
+            chat.mcp_services.schemas = lambda: [{'type': 'function', 'function': {
+                'name': 'mcp__other__github_read', 'description': 'Other service.',
+                'parameters': {'type': 'object'}}}]
+            chat.tool_schemas()
+            self.assertEqual(chat._resolve_tool_name('snoop_github', schemas),
+                             'mcp__veil_github__github_read')
 
     def test_program_tool_references_change_but_persona_and_chat_history_do_not(self):
         messages = [
@@ -84,6 +120,10 @@ class ToolAliasTests(unittest.TestCase):
         result = alias_system_messages(messages, {'send_message': 'bubble_up'})
         self.assertEqual(result[0]['content'], messages[0]['content'])
         self.assertEqual(result[1]['content'], 'Use bubble_up when you want to reply.')
+        from tool_aliases import _replace_tool_references
+        self.assertEqual(_replace_tool_references('Open lab/read_text_file.txt and read_text_file.',
+                                                  {'read_text_file': 'read_the_notes'}),
+                         'Open lab/read_text_file.txt and read_the_notes.')
         self.assertIs(result[2], messages[2])
 
     def test_chat_executes_alias_via_original_tool_and_refuses_hidden_old_name(self):
@@ -129,11 +169,11 @@ class ToolAliasTests(unittest.TestCase):
                          'send_message_arguments')
         self.assertIsNone(raw_tool_call_text_format('Peter said bubble_up casually.',
                                                     {'send_message': 'bubble_up'}))
+        self.assertIsNone(raw_tool_call_text_format('Peter said bubble_up(text="hello")',
+                                                    {'send_message': 'bubble_up'}))
 
     def test_alias_results_keep_existing_data_and_untrusted_content_handling(self):
         self.assertEqual(model_tool_result('read_text_file', '真实文件内容', '成功'), '真实文件内容')
-        self.assertIn('<untrusted_mcp>', model_tool_result(
-            'mcp__github__github_read', 'external content', '成功'))
 
 
 if __name__ == '__main__':

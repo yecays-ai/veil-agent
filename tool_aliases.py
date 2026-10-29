@@ -6,6 +6,12 @@ import re
 TOOL_NAME = re.compile(r'^[A-Za-z0-9_-]{1,64}$')
 
 
+class AliasSchemas(list):
+    def __init__(self, values, aliases):
+        super().__init__(values)
+        self.aliases = dict(aliases)
+
+
 def validate_tool_aliases(value):
     if value is None:
         return {}
@@ -29,14 +35,28 @@ def validate_tool_aliases(value):
 def _replace_tool_references(value, aliases):
     if isinstance(value, str):
         for original, alias in sorted(aliases.items(), key=lambda item: -len(item[0])):
-            value = re.sub(r'(?<![A-Za-z0-9_])' + re.escape(original) +
-                           r'(?![A-Za-z0-9_])', lambda _: alias, value)
+            value = re.sub(r'(?<![A-Za-z0-9_/-])(?<!\.[A-Za-z0-9])' + re.escape(original) +
+                           r'(?![A-Za-z0-9_-]|\.[A-Za-z0-9])', lambda _: alias, value)
         return value
     if isinstance(value, list):
         return [_replace_tool_references(item, aliases) for item in value]
     if isinstance(value, dict):
         return {key: _replace_tool_references(item, aliases) for key, item in value.items()}
     return value
+
+
+def _rewrite_descriptions(value, aliases):
+    if isinstance(value, list):
+        return [_rewrite_descriptions(item, aliases) for item in value]
+    if not isinstance(value, dict):
+        return value
+    result = {}
+    for key, item in value.items():
+        if key == 'description' and isinstance(item, str):
+            result[key] = _replace_tool_references(item, aliases)
+        else:
+            result[key] = _rewrite_descriptions(item, aliases)
+    return result
 
 
 def alias_tool_schemas(schemas, aliases, reserved_names=()):
@@ -54,21 +74,21 @@ def alias_tool_schemas(schemas, aliases, reserved_names=()):
             if len(pieces) == 3 and pieces[2] in aliases:
                 alias_key = pieces[2]
         if alias_key in aliases:
-            active[name] = aliases[alias_key]
-    alias_names = list(active.values())
-    if len(alias_names) != len(set(alias_names)):
-        raise ValueError('active tool aliases are not unique')
-    if set(alias_names) & (set(original_names) | set(reserved_names)):
-        raise ValueError('an active tool alias conflicts with an original tool name')
+            candidate = aliases[alias_key]
+            # MCP tools from separate services may share a short name. Keep
+            # subsequent schemas under their service-qualified names.
+            if (candidate not in active.values()
+                    and candidate not in set(original_names) | set(reserved_names)):
+                active[name] = candidate
     for index, schema in enumerate(schemas):
-        schema = _replace_tool_references(schema, {**aliases, **active})
+        schema = _rewrite_descriptions(schema, aliases)
         schemas[index] = schema
         function = schema.get('function')
         if isinstance(function, dict):
             name = function.get('name')
             if name in active:
                 function['name'] = active[name]
-    return schemas, active
+    return AliasSchemas(schemas, active), active
 
 
 def resolve_tool_name(name, aliases, active_aliases, available_names):
@@ -77,7 +97,7 @@ def resolve_tool_name(name, aliases, active_aliases, available_names):
     if name in reverse:
         original = reverse[name]
         return original if original in available_names else None
-    if name in active_aliases or name in aliases:
+    if name in active_aliases or (name in aliases and name not in available_names):
         # Do not let an aliased implementation remain callable by its old name.
         return None
     return name if name in available_names else None

@@ -5,7 +5,7 @@
 ## 当前目标与现状
 
 - 当前目标：Peter 使用自己选定的工具别名调用现有能力；其他角色保持独立名称配置。
-- 工单 164：分支 `ticket/164-peter-tool-aliases` 已完成角色配置、schema 和统一分发映射；移除 `windows_now_playing` 实现、配置与 WinRT 依赖。定向测试已通过，PR 自动检查和审查待完成。Windows 实际体验尚未验收，步骤见 `docs/tickets/164-peter-tool-aliases.md`。
+- 工单 164：PR #212 已开放，角色配置、schema 和统一分发映射已实现；移除 `windows_now_playing` 实现、配置与 WinRT 依赖。定向测试已通过，审查问题正在集中修复；Windows 实际体验尚未验收，步骤见 `docs/tickets/164-peter-tool-aliases.md`。
 - 工单 161：PR #209 已于 2026-10-29 合并，合并提交 `cd30c10`。本地专项、全量 Python（760 项通过、11 项跳过）、桌面单测（10 项）和 Electron 虚构窗口 smoke 记录在 PR；Windows 正式程序体验待验收。
 - 现状：工单 159 PR #207 已合并（`f302ac8`，Codex 实现、Claude 评审补修）：短期便签积压分批提取、逐批推进检查点；缓存用量区分明确的 0 与接口未报告。工单 158 PR #206 已合并（`7b91d83`）：小红书读取超时不再锁死；错误记录到 `data/<id>/xiaohongshu/errors.jsonl`。工单 157 PR #205 已合并。
 - 前序记录：工单 156 的 PR #204 已合并为上述 main；代码、CI 与 Windows 发行文件检查记录见下方，真实小红书账号体验仍待验收。工单 155 PR #203 已合并；工单 154 PR #202、153 PR #201、152 PR #200、151 PR #198/#199 已合并，体验状态以下表为准。
