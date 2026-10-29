@@ -1037,10 +1037,7 @@ class FilesystemTools:
 
     def invoke(self, name, args, approval=input, *, should_stop=None):
         if name in XHS_TOOL_NAMES:
-            xhs = getattr(self, 'xiaohongshu_tools', None)
-            if xhs is None or not self.enabled:
-                return 'Xiaohongshu is disabled.', '被拒绝', name
-            return xhs.invoke(name, args, approval, should_stop=should_stop)
+            return 'Xiaohongshu is managed through the MCP service; use its MCP tool.', '被拒绝', name
         if name in BROWSER_TOOL_NAMES:
             browser = getattr(self, 'browser_tools', None)
             if browser is None or not self.enabled:
@@ -1082,9 +1079,7 @@ class FilesystemTools:
                 return 'This web tool is unavailable for the current role.', '被拒绝', name
             return self.web_tools.invoke(name, args, approval)
         if name in GITHUB_TOOL_NAMES:
-            if not self.enabled:
-                return 'GitHub research is disabled for this role.', '被拒绝', name
-            return self.github_tools.invoke(name, args, approval)
+            return 'GitHub research is managed through the MCP service; use its MCP tool.', '被拒绝', name
         policy = tool_policy(name)
         if policy == 'deny' or name not in {tool.name for tool in self.tools}:
             return 'This tool is not authorized for the current role. Choose an available tool; permissions cannot be bypassed.', '被拒绝', name

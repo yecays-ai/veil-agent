@@ -1322,8 +1322,9 @@ class Chat:
         from mcp_services import MCPServices
         integrations = {}
         legacy_web = getattr(cfg, 'web', None) or {}
-        integrations['github'] = bool(tools and tools.enabled and legacy_web.get('github_readonly') is True)
-        integrations['xiaohongshu'] = bool(tools and tools.enabled and legacy_web.get('enabled') is True
+        tools_enabled = bool(tools and getattr(tools, 'enabled', False))
+        integrations['github'] = bool(tools_enabled and legacy_web.get('github_readonly') is True)
+        integrations['xiaohongshu'] = bool(tools_enabled and legacy_web.get('enabled') is True
                                            and legacy_web.get('xiaohongshu_readonly') is True)
         self.mcp_services = MCPServices(store.root / cfg.id / 'mcp-services.json', integrations)
         if tools:

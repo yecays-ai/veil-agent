@@ -238,13 +238,12 @@ class GitHubWakeIntegrationTests(unittest.TestCase):
             manager.github_tools = GitHubReadTools(cfg, get=get)
             manager.desktop_files = DesktopFileTools(True, folder_for=lambda _name: desktop)
             manager.tools.extend(manager.desktop_files.tools)
-            self.assertIn('github_read', manager.capability_record)
-            self.assertIn('github_read', [t['function']['name'] for t in permitted_tools(manager.tools)])
+            self.assertNotIn('github_read', [t['function']['name'] for t in permitted_tools(manager.tools)])
             source_url = 'https://github.com/example/companion/blob/' + SHA + '/wake.py#L2'
             proposal = '# 改进申请\n目标：提供自由探索入口。\n源码证据：' + source_url + '\n收益：方便探索。\n风险：需保留暂停。\n验收：自主醒来可探索，等待 Lan 审批实现。'
             requests = [
-                ('github_read', {'repository': 'example/companion', 'resource': 'tree'}),
-                ('github_read', {'repository': 'example/companion', 'resource': 'file', 'ref': SHA, 'path': 'wake.py'}),
+                ('mcp__github__github_read', {'repository': 'example/companion', 'resource': 'tree'}),
+                ('mcp__github__github_read', {'repository': 'example/companion', 'resource': 'file', 'ref': SHA, 'path': 'wake.py'}),
                 ('desktop_create_file', {'folder': 'desktop', 'path': '改进申请.md', 'content': proposal}),
             ]
             seen = []
@@ -272,8 +271,8 @@ class GitHubWakeIntegrationTests(unittest.TestCase):
             self.assertEqual([r['tool'] for r in rows], [r[0] for r in requests])
             self.assertIn('2:     return', json.dumps(seen[2][0]))
             self.assertEqual(get.call_count, 6)
-            self.assertEqual(tool_policy('github_read'), 'allow')
-            self.assertIn('github_read', chat.current_capability_snapshot())
+            self.assertEqual(chat.mcp_services.permission_for('mcp__github__github_read'), 'allow')
+            self.assertIn('mcp__github__github_read', chat.current_capability_snapshot())
             self.assertEqual(tool_policy('desktop_create_file'), 'desktop_create')
             # Existing file protection remains active, including on repeated wakes.
             self.assertEqual(manager.invoke('desktop_create_file', requests[-1][1])[1], '被拒绝')
