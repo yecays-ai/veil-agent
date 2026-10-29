@@ -5,7 +5,7 @@
 ## 当前目标与现状
 
 - 当前目标：Peter 可以持续查阅网页或 GitHub，旧工具结果按需缩短，仍能将结论发给 Lan。
-- 工单 165：PR #213 已开放，分支 `ticket/165-tool-results-fit`。本轮较早工具结果按需缩短，单个超大结果尽量截断保留，长度不足时仍允许 `send_message`，长度停止走系统错误；`web_search` 拒绝信息会回显不合法参数。首个远程 CI 在旧 head `87da6aa` 上有 4 项旧断言失败，按新行为更新；Cubic 的自主限额、活动记录关联与遮蔽边界意见已修。CodeRabbit 对 `87da6aa` 的 6 条意见中，5 条与 Cubic/CI 重合已修，另 1 条关于 Lab 预览截图状态的意见现已纳入跟进修复；对新 head 的复审请求被限流。当前 head 的 CI 待完成，Windows 体验待验收。设计参考 OpenHands observation masking，仅复用遮蔽旧观测思路，不增加依赖或模型调用。
+- 工单 165：PR #213 已开放，分支 `ticket/165-tool-results-fit`。本轮较早工具结果按需缩短，单个超大结果尽量截断保留，长度不足时仍允许 `send_message`，长度停止走系统错误；`web_search` 拒绝信息会回显不合法参数。首个远程 CI 在旧 head `87da6aa` 上有 4 项旧断言失败，按新行为更新；Cubic 的自主限额、活动记录关联与遮蔽边界意见已修。CodeRabbit 对 `87da6aa` 的 6 条意见已处理，截图状态问题已随 `718cf8e` 修复；CodeRabbit 对更新后 head 的复审请求被限流。Cubic 对 `718cf8e` 又指出两个测试断言问题，已修正并推送；最终 head 的 CI 待完成，Windows 体验待验收。设计参考 OpenHands observation masking，仅复用遮蔽旧观测思路，不增加依赖或模型调用。
 - 工单 164：PR #212 已开放，角色配置、schema 和统一分发映射已实现；移除 `windows_now_playing` 实现、配置与 WinRT 依赖。定向测试已通过，最新审查问题已修复并等待自动检查；Windows 实际体验尚未验收，步骤见 `docs/tickets/164-peter-tool-aliases.md`。
 - 工单 161：PR #209 已于 2026-10-29 合并，合并提交 `cd30c10`。本地专项、全量 Python（760 项通过、11 项跳过）、桌面单测（10 项）和 Electron 虚构窗口 smoke 记录在 PR；Windows 正式程序体验待验收。
 - 现状：工单 159 PR #207 已合并（`f302ac8`，Codex 实现、Claude 评审补修）：短期便签积压分批提取、逐批推进检查点；缓存用量区分明确的 0 与接口未报告。工单 158 PR #206 已合并（`7b91d83`）：小红书读取超时不再锁死；错误记录到 `data/<id>/xiaohongshu/errors.jsonl`。工单 157 PR #205 已合并。

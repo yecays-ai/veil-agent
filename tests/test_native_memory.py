@@ -12,7 +12,7 @@ from memory_native import HOLD, NativeMemoryTools, ToolSet
 from long_tasks import LongTaskStore
 from test_memory import Backend
 from tools_agent import permitted_tools
-from veil_agent import Budget, Character, Chat, Store, build_self_description, memory_mode
+from veil_agent import Budget, Character, Chat, RequestFailed, Store, build_self_description, memory_mode
 
 
 class MergingBackend(Backend):

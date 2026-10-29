@@ -925,7 +925,9 @@ max_result_bytes = 200
         self.assertEqual(latest_read['result_state'], '已截断')
         masked_rows = [row for row in rows
                        if row.get('tool') == 'read_text_file' and row.get('path') == 'source-0']
-        self.assertEqual(len({row.get('call_id') for row in masked_rows}), 1)
+        masked_call_ids = {row.get('call_id') for row in masked_rows}
+        self.assertEqual(len(masked_call_ids), 1)
+        self.assertTrue(next(iter(masked_call_ids)))
 
     def test_length_stop_raises_request_failed_without_peter_reply(self):
         first = self.message([self.tool_call('read_text_file', '{"path":"x"}', 'read')],

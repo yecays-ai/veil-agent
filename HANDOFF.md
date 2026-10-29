@@ -2,8 +2,8 @@
 
 ## 当前进度
 
-- 工单 165：PR #213 已创建，分支 `ticket/165-tool-results-fit` 基于 main `ea147a7`。旧 head `87da6aa` 的远程全量 CI 有 4 项旧断言失败；Cubic 的限额、记录关联、结果留存、遮蔽边界和状态文档意见，以及 CodeRabbit 对旧断言/限额/记录关联的意见，已在 `e4050a0` 一次修复并推送。CodeRabbit 后续确认 Lab 预览结果是带截图字段的 `str` 子类，因此截图遗漏后的截断重建也需保留“未发送”说明；该意见与回归测试已纳入当前未提交跟进。CodeRabbit 对当前 head 的复审请求被限流。原 head `e4050a0` 的 Tests 与 Dependency security 正在运行，Windows desktop 已通过。此前定向测试 38 项通过；本轮受限环境测试因临时目录/测试导入路径问题不能计为通过；Python 编译和 `git diff --check` 通过。
-- 下一步：提交并推送截图状态跟进，查看新 head 的必需 CI；不再手动重跑测试。确认 CodeRabbit/Cubic 当前意见已关闭或说明后，必需 CI 通过且无实质问题时合并。Windows 实际体验仍按工单步骤验收。
+- 工单 165：PR #213 已创建，分支 `ticket/165-tool-results-fit` 基于 main `ea147a7`。旧 head `87da6aa` 的远程全量 CI 有 4 项旧断言失败；Cubic 的限额、记录关联、结果留存、遮蔽身份和短结果边界意见，以及 CodeRabbit 对旧断言/限额/记录关联的意见，已修复。CodeRabbit 发现 Lab 预览结果是带截图字段的 `str` 子类；截图遗漏后的截断重建已在 `718cf8e` 修复并加回归测试。Cubic 随后指出 `RequestFailed` 导入遗漏和 call_id 断言未验证非空，现已修正，待推送。CodeRabbit 对更新后 head 的复审请求被限流。此前定向测试 38 项通过；本轮受限环境测试因临时目录/测试导入路径问题不能计为通过。
+- 下一步：推送最后两项测试修正，读取最终 head 的必需 CI 状态；不再手动重跑测试。若必需 CI 通过且没有未处理的实质意见则合并。Windows 实际体验仍按工单步骤验收。
 - GitHub 当前 main 为 `ea147a730840ab4c1ee4c2bee639888111d15b11`；本机 GitHub DNS 解析失败，已由 GitHub 连接器读取提交记录核对。已保留另一现存本地 worktree `ticket/165-xhs-release-fallback`，未修改。
 - 工单 164：main 的 `STATUS.md` 记录 PR #212 已开放；GitHub review 记录中 Cubic/CodeRabbit 意见已处理，`ea147a7` 的 combined status 暂无状态项。Windows 实际体验待验收。
 - 工单 163：PR #211 已合并，必需 CI 已通过；Windows 体验验收待按 `docs/tickets/163-mcp-integrations.md` 执行。
