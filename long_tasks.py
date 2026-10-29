@@ -376,6 +376,9 @@ class LongTaskStore:
         (for example, trace adds an archive note to a memory title).  A memory
         ID is the durable target for native memory operations instead.
         """
+        if name.startswith('mcp__') and isinstance(args, dict):
+            encoded = json.dumps(args, sort_keys=True, separators=(',', ':')).encode('utf-8')
+            return name + ':' + hashlib.sha256(encoded).hexdigest()
         if name in {'hold', 'trace', 'anchor', 'release'} and isinstance(args, dict):
             memory_id = args.get('bucket_id') or args.get('target_id')
             if isinstance(memory_id, str) and memory_id.strip():

@@ -1663,6 +1663,14 @@ def make_handler(hub, token):
                     except ValueError:
                         after = 0
                     self._send(200, hub.snapshot(after))
+            elif url.path == '/api/mcp':
+                if not self._guard(self.headers.get('X-Token')):
+                    return
+                if hub.chat is None or hub.stopping or hub.stopped:
+                    self._send(409, {'error': 'Peter 尚未就绪。'})
+                else:
+                    hub.chat.mcp_services.schemas(retry=query.get('retry') == ['1'])
+                    self._send(200, hub.chat.mcp_services.view())
             elif url.path == '/api/screen-pop/next':
                 if not self._guard(self.headers.get('X-Token')):
                     return
@@ -2023,6 +2031,24 @@ def make_handler(hub, token):
                     self._send(500, {'ok': False, 'message': '设置文件写不进去，请检查磁盘。'})
                 else:
                     self._send(200, {'ok': True, 'models': view})
+            elif url.path == '/api/mcp':
+                from mcp_services import MCPConfigError, MCPConflict
+                if hub.chat is None or hub.stopping or hub.stopped:
+                    self._send(409, {'error': 'Peter 尚未就绪。'})
+                else:
+                    try:
+                        if not isinstance(body.get('revision'), int) or isinstance(body.get('revision'), bool):
+                            self._send(400, {'error': '缺少 MCP 配置版本，请刷新页面。'})
+                            return
+                        view = hub.chat.mcp_services.save(body, expected_revision=body['revision'])
+                        hub.chat.mcp_services.schemas()
+                        self._send(200, hub.chat.mcp_services.view())
+                    except MCPConflict as exc:
+                        self._send(409, {'error': str(exc)})
+                    except MCPConfigError as exc:
+                        self._send(400, {'error': str(exc)})
+                    except OSError:
+                        self._send(500, {'error': 'MCP 配置保存失败。'})
             elif url.path == '/api/quiet-hours':
                 enabled = body.get('enabled')
                 if not isinstance(enabled, bool):
@@ -2316,6 +2342,8 @@ def main(argv=None):
                 save_startup_error(error_path, str(exc))
                 failed = True
             finally:
+                if hub.chat is not None:
+                    hub.chat.mcp_services.close()
                 hub.stop()
                 time.sleep(1.5)   # let an open page read the final state
         return 1 if failed else 0
