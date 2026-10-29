@@ -198,7 +198,7 @@ class XiaohongshuTests(unittest.TestCase):
         self.assertTrue(self.tools.blocked)
         self.now += 20
         text, _, _ = self.invoke(action='status')
-        self.assertIn('paused', text)
+        self.assertIn('Reads paused after', text)
 
     def test_expired_note_ref_is_rejected_without_pausing(self):
         self.tools.refs['old'] = ('a' * 24, 'token', self.now - 4000)
