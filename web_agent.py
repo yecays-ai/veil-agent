@@ -1593,9 +1593,60 @@ def make_handler(hub, token):
                 return False
             return True
 
+        def _game_origin_guard(self, *, post=False):
+            port = self.server.server_address[1]
+            host = self.headers.get('Host')
+            if host != f'127.0.0.1:{port}':
+                self._send(403, {'error': 'host'})
+                return False
+            origin = self.headers.get('Origin')
+            if post and origin != f'http://127.0.0.1:{port}':
+                self._send(403, {'error': 'origin'})
+                return False
+            if origin is not None and origin != f'http://127.0.0.1:{port}':
+                self._send(403, {'error': 'origin'})
+                return False
+            if post and self.headers.get('Sec-Fetch-Site') not in (None, 'same-origin'):
+                self._send(403, {'error': 'source'})
+                return False
+            return True
+
         def do_GET(self):
             url = urlparse(self.path)
             query = parse_qs(url.query)
+            if url.path.startswith('/game/'):
+                parts = url.path.split('/', 3)
+                if len(parts) != 4:
+                    self._send(404, {'error': 'game resource unavailable'})
+                    return
+                if not self._game_origin_guard():
+                    return
+                from urllib.parse import unquote
+                try:
+                    parts[3] = unquote(parts[3], errors='strict')
+                except UnicodeError:
+                    self._send(404, {'error': 'game resource unavailable'})
+                    return
+                manager = getattr(hub, 'game_manager', None)
+                if manager is None:
+                    self._send(404, {'error': 'game unavailable'})
+                    return
+                try:
+                    if parts[3] == 'veil-score.js':
+                        from lab_games import score_helper
+                        _folder, _entry, game_id = manager._entry(parts[2])
+                        body = score_helper(parts[2], game_id).encode('utf-8')
+                        mime = 'text/javascript; charset=utf-8'
+                    else:
+                        body, mime = manager.resource(parts[2], parts[3])
+                except (OSError, ValueError):
+                    self._send(404, {'error': 'game resource unavailable'})
+                    return
+                from lab_preview import _csp
+                self._send(200, body, mime, {
+                    'Content-Security-Policy': _csp(),
+                    'Cross-Origin-Resource-Policy': 'same-origin'})
+                return
             if url.path == '/api/memory/panel':
                 if not self._guard(self.headers.get('X-Token')):
                     return
@@ -1757,6 +1808,31 @@ def make_handler(hub, token):
 
         def do_POST(self):
             url = urlparse(self.path)
+            if url.path.startswith('/game/'):
+                parts = url.path.split('/')
+                if len(parts) != 4 or parts[3] != 'score':
+                    self._send(404, {'error': 'game endpoint unavailable'})
+                    return
+                if not self._game_origin_guard(post=True):
+                    return
+                manager = getattr(hub, 'game_manager', None)
+                if manager is None:
+                    self._send(404, {'error': 'game unavailable'})
+                    return
+                try:
+                    if self.headers.get('Content-Type', '').split(';')[0].strip().lower() != 'application/json':
+                        raise ValueError('JSON is required.')
+                    length = int(self.headers.get('Content-Length') or 0)
+                    if not 0 < length <= 2048:
+                        raise ValueError('Score body exceeds the limit.')
+                    result = manager.save(parts[2], self.rfile.read(length))
+                except ValueError as exc:
+                    self._send(400, {'error': str(exc)})
+                except OSError:
+                    self._send(500, {'error': 'Score could not be saved.'})
+                else:
+                    self._send(200, result)
+                return
             if not self._guard(self.headers.get('X-Token')):
                 return
             if url.path in ('/api/screen-pop/claim', '/api/screen-pop/event'):
@@ -2095,6 +2171,7 @@ def make_handler(hub, token):
 
 def start_server(hub, token, port):
     server = ThreadingHTTPServer(('127.0.0.1', port), make_handler(hub, token))
+    hub.game_port = server.server_address[1]
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server
 
@@ -2109,6 +2186,10 @@ def serve_chat(chat, hub, channels=()):
     chat.screen_pop_handler = hub.request_screen_pop
     files = getattr(chat.tools, 'files', None) if chat.tools else None
     files = files or chat.tools
+    if getattr(files, 'lab', None) is not None:
+        from lab_games import LabGames
+        hub.game_manager = LabGames(files.lab, hub.game_port)
+        files.attach_game_manager(hub.game_manager)
     announce_free_reply = getattr(files, 'announce_free_reply', None)
     if callable(announce_free_reply):
         announce_free_reply()
