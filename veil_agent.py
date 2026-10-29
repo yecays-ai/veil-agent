@@ -2889,14 +2889,16 @@ class Chat:
             raw = execution.result if isinstance(execution.result, str) else None
             if raw is None:
                 return None
+            name = call.function.name
+            canonical_name = self._resolve_tool_name(name, offered)
+            if screenshot_omitted and canonical_name == 'desktop_read_image':
+                raw = 'Desktop image was not sent to the model; its contents were not seen.'
             if screenshot_omitted:
                 raw = raw.replace(
                     'Screenshot captured: yes.',
                     'Screenshot was not sent to the model (the current request input limit was reached); '
                     'Peter has not seen the page.',
                 )
-            name = call.function.name
-            canonical_name = self._resolve_tool_name(name, offered)
             marker = '\n[结果已截断，完整内容未提供。]'
             low, high = 0, len(raw)
             best = None
@@ -2939,7 +2941,9 @@ class Chat:
                     'Screenshot captured: yes.',
                     f'Screenshot was not sent to the model ({reason}); Peter has not seen the page.',
                 )
-                tool_message['content'] = model_tool_result(name, raw, execution.state)
+                if canonical_name == 'desktop_read_image':
+                    raw = f'Desktop image was not sent to the model ({reason}); Peter has not seen its contents.'
+                tool_message['content'] = model_tool_result(canonical_name or name, raw, execution.state)
                 image_was_omitted = True
 
             def discard_pending_image():
@@ -2961,7 +2965,9 @@ class Chat:
                 discard_pending_image()
                 image_pending = False
                 omit_image('the current request input limit was reached')
-                display_detail = '界面文字已读取；截图因输入长度上限未发送。'
+                display_detail = ('桌面图片因输入长度上限未发送；Peter 尚未看见画面。'
+                                  if canonical_name == 'desktop_read_image' else
+                                  '界面文字已读取；截图因输入长度上限未发送。')
                 result_state = '已截断'
             if (request_size(next_offered) - history_bytes
                     > self.cfg.provider['max_input_tokens']):
@@ -2983,7 +2989,9 @@ class Chat:
                 discard_pending_image()
                 image_pending = False
                 omit_image('the current request input limit was reached')
-                display_detail = '界面文字已读取；截图因输入长度上限未发送。'
+                display_detail = ('桌面图片因输入长度上限未发送；Peter 尚未看见画面。'
+                                  if canonical_name == 'desktop_read_image' else
+                                  '界面文字已读取；截图因输入长度上限未发送。')
                 result_state = '结果过长'
                 fit_old_tool_results(next_offered, protected=tool_message)
                 fit_history(next_offered)
@@ -3003,6 +3011,9 @@ class Chat:
                 if display_detail == too_long_display:
                     tool_message['content'] = 'The tool succeeded, but its result was omitted. ' + too_long_result
                     display_detail = '工具已执行成功；' + too_long_display
+            if image_was_omitted and canonical_name == 'desktop_read_image':
+                tool_message['content'] = 'Desktop image was not sent to the model; Peter has not seen its contents.'
+                display_detail = '桌面图片未发送给模型；Peter 尚未看见画面。'
             return display_detail, result_state
 
         configured_steps = (self.cfg.tools or {}).get('max_steps', 1)
@@ -3093,13 +3104,15 @@ class Chat:
                     for image_message, tool_message, execution, image_tool_name in ephemeral_image_bindings:
                         image_message['content'] = [{
                             'type': 'text',
-                            'text': 'The preview screenshot was rejected by the selected model. '
-                                    'Peter has not seen this page.',
+                            'text': 'The selected image was rejected by the model. '
+                                    'Peter has not seen its contents.',
                         }]
                         text_result = str(execution.result).replace(
                             'Screenshot captured: yes.',
                             'The current model rejected image input; Peter has not seen the page.',
                         )
+                        if image_tool_name == 'desktop_read_image':
+                            text_result = 'The current model rejected image input; Peter has not seen the Desktop image.'
                         tool_message['content'] = model_tool_result(
                             self._resolve_tool_name(image_tool_name, offered) or image_tool_name,
                             text_result, '出错')

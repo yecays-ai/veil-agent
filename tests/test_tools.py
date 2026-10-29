@@ -183,6 +183,8 @@ class ToolPolicyTests(unittest.TestCase):
                                  'create_directory', 'move_lab_file', 'lab_file_digest',
                                  'preview_lab_page'})
         self.assertEqual({item['function']['name'] for item in permitted_tools(manager.tools)}, names)
+        manager.attach_game_manager(object())
+        self.assertIn('open_lab_game', {tool.name for tool in manager.tools})
         self.assertEqual(manager.grant_path, self.root / 'data/test/append-grant.json')
 
     def test_append_refuses_file_replaced_between_check_and_open(self):
