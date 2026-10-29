@@ -57,6 +57,9 @@ class ToolAliasTests(unittest.TestCase):
         ], {'github_read': 'snoop_github'})
         self.assertEqual([s['function']['name'] for s in schemas], ['snoop_github', 'mcp__two__github_read'])
         self.assertEqual(active, {'mcp__one__github_read': 'snoop_github'})
+        self.assertIn('snoop_github', schemas[0]['function']['description'])
+        self.assertIn('github_read', schemas[1]['function']['description'])
+        self.assertNotIn('snoop_github', schemas[1]['function']['description'])
 
     def test_schema_only_rewrites_descriptions_and_respects_function_name_boundary(self):
         source = [{'type': 'function', 'function': {
@@ -84,6 +87,7 @@ class ToolAliasTests(unittest.TestCase):
             manager = SimpleNamespace(tools=[], description='Fictional tools.', capability_event=None,
                                       enabled=True)
             chat = Chat(cfg, store, Budget(store), Mock(), tools=manager, output=lambda *_: None)
+            self.assertEqual(chat.canonical_tool_name('snoop_github'), 'github_read')
             mcp_schema = {'type': 'function', 'function': {'name': 'mcp__veil_github__github_read',
                 'description': 'Public read-only GitHub access.', 'parameters': {'type': 'object'}}}
             invoke = Mock(return_value=('fictional repository data', '成功', 'github_read'))
@@ -171,6 +175,9 @@ class ToolAliasTests(unittest.TestCase):
                                                     {'send_message': 'bubble_up'}))
         self.assertIsNone(raw_tool_call_text_format('Peter said bubble_up(text="hello")',
                                                     {'send_message': 'bubble_up'}))
+        self.assertEqual(raw_tool_call_text_format(
+            'Here is the call:\nbubble_up(text="hello")', {'send_message': 'bubble_up'}),
+            'send_message_arguments')
 
     def test_alias_results_keep_existing_data_and_untrusted_content_handling(self):
         self.assertEqual(model_tool_result('read_text_file', '真实文件内容', '成功'), '真实文件内容')

@@ -2,8 +2,8 @@
 
 ## 当前进度
 
-- 工单 164：PR #212 已开放，分支 `ticket/164-peter-tool-aliases` 基于最新 main。角色别名映射、schema 处理、统一执行还原及 `windows_now_playing` 与 WinRT 依赖清理已实现。当前 review 提出的问题正在集中修复；本地回归通过。filesystem 服务测试未确认，Windows 实际体验待验收。
-- 下一步：核对本轮修复、集中提交一次并更新 PR；仅查看该提交自动检查状态，不重复触发检查，然后交由 Lan 跟进审查意见与 Windows 验收。
+- 工单 164：PR #212 已开放，分支 `ticket/164-peter-tool-aliases` 基于最新 main。角色别名映射、schema 处理、统一执行还原及 `windows_now_playing` 与 WinRT 依赖清理已实现。已处理本轮 review 的实质问题；前一提交的 Tests 与 Dependency security 通过，最新修改等待自动检查。filesystem 服务测试未确认，Windows 实际体验待验收。
+- 下一步：核对本轮修复、集中提交一次并更新 PR；不手动重触发 review；自动检查完成后由 Lan 跟进审查意见与 Windows 验收。
 - 工单 163：PR #211 已合并，必需 CI 已通过；Windows 体验验收待按 `docs/tickets/163-mcp-integrations.md` 执行。
 - 工单 162：PR #210 已合并；在 main 手动运行 `Build Xiaohongshu Windows sidecar` 后，Lan 更新并按 `docs/tickets/162-xiaohongshu-page-wait.md` 验收。
 

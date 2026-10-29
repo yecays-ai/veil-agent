@@ -81,7 +81,16 @@ def alias_tool_schemas(schemas, aliases, reserved_names=()):
                     and candidate not in set(original_names) | set(reserved_names)):
                 active[name] = candidate
     for index, schema in enumerate(schemas):
-        schema = _rewrite_descriptions(schema, aliases)
+        function = schema.get('function')
+        name = function.get('name') if isinstance(function, dict) else None
+        references = dict(aliases)
+        alias_key = name
+        if isinstance(name, str) and name.startswith('mcp__'):
+            pieces = name.split('__', 2)
+            alias_key = pieces[2] if len(pieces) == 3 else name
+        if alias_key in aliases and name not in active:
+            references.pop(alias_key, None)
+        schema = _rewrite_descriptions(schema, references)
         schemas[index] = schema
         function = schema.get('function')
         if isinstance(function, dict):
