@@ -1,12 +1,12 @@
 # 当前状态
 
-更新：2026-10-30 · Codex（工单 166：Peter 接入乌有乡自主旅行；工单 165 已合并，166 本地实现待完成后提交 PR）。
+更新：2026-10-30 · Codex（工单 166：Peter 接入乌有乡自主旅行；PR #214 已开放）。
 
 ## 当前目标与现状
 
 - 当前目标：复用现有 MCP 管理器接入乌有乡，让 Peter 可在聊天或自主醒来时自行选择是否旅行，并将有意义经历留在现有念头池、Ombre 或 Lab。
 - 工单 165：PR #213 已合并，合并提交 `589bb17`。工具结果按需缩短并保留可发送结论的处理已进入 main；Windows 体验验收仍待完成。
-- 工单 166：分支 `ticket/166-nowhere-travel`，基于合并后的 main `589bb17` 本地实现。上游固定到 `f0803c1053e5f97a6f44bab26e15043d71825ec7`，使用独立 Python 环境和 `data/peter/nowhere` 状态目录，工具动态发现，原生地图只通过本机回环地址打开。代码、检查和文档完成后提交并创建单项 PR；Windows 更新、启停/重启、真实旅行、恢复、Lab 明信片、自主醒来和地图体验均待 Lan 验收，步骤见 `docs/tickets/166-nowhere-travel.md`。
+- 工单 166：PR #214 已开放，分支 `ticket/166-nowhere-travel` 基于 main `589bb17`。上游固定到 `f0803c1053e5f97a6f44bab26e15043d71825ec7`，使用独立 Python 环境和 `data/peter/nowhere` 状态目录，工具动态发现，原生地图只通过本机回环地址打开。两个新增定向用例及语法检查通过；完整 `tests.test_mcp_services` 因本机 MCP 子进程握手超时有 11/16 项失败，未计为通过。CI、评审和 Windows 更新、启停/重启、真实旅行、恢复、Lab 明信片、自主醒来和地图体验均待完成，步骤见 `docs/tickets/166-nowhere-travel.md`。
 - 工单 164：PR #212 已开放，角色配置、schema 和统一分发映射已实现；移除 `windows_now_playing` 实现、配置与 WinRT 依赖。定向测试已通过，最新审查问题已修复并等待自动检查；Windows 实际体验尚未验收，步骤见 `docs/tickets/164-peter-tool-aliases.md`。
 - 工单 161：PR #209 已于 2026-10-29 合并，合并提交 `cd30c10`。本地专项、全量 Python（760 项通过、11 项跳过）、桌面单测（10 项）和 Electron 虚构窗口 smoke 记录在 PR；Windows 正式程序体验待验收。
 - 现状：工单 159 PR #207 已合并（`f302ac8`，Codex 实现、Claude 评审补修）：短期便签积压分批提取、逐批推进检查点；缓存用量区分明确的 0 与接口未报告。工单 158 PR #206 已合并（`7b91d83`）：小红书读取超时不再锁死；错误记录到 `data/<id>/xiaohongshu/errors.jsonl`。工单 157 PR #205 已合并。
@@ -93,7 +93,7 @@
 | 151 | 桌面文本只读、Chrome Guest 公开网页、Windows 音乐状态（分别验收） | 待验收 |
 | 161 | 本地 MCP 服务管理与桌面 MCP 标签 | 待验收（已合并） |
 | 163 | 小红书与 GitHub 迁入 MCP 管理 | PR #211，待验收 |
-| 166 | 乌有乡旅行 MCP、Peter 独立旅程状态、记忆/Lab 与地图入口 | 本地实现；准备创建 PR，Windows 体验待验收 |
+| 166 | 乌有乡旅行 MCP、Peter 独立旅程状态、记忆/Lab 与地图入口 | PR #214 开放；待 CI/评审与 Windows 体验验收 |
 
 ### Lab 创作与附件
 
