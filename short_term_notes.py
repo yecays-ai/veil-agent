@@ -15,6 +15,7 @@ MAX_CONTEXT_CHARACTERS = 800
 MAX_NOTE_CHARACTERS = 240
 MAX_OPERATIONS = 50
 MAX_OUTPUT_TOKENS = 512
+MAX_REQUEST_BYTES = 20000
 COST_CATEGORY = 'short_term_notes'
 COST_ACCOUNTING = 'short-term-notes-extraction'
 MESSAGE_ID = re.compile(r'^[A-Za-z0-9_-]{1,100}$')
@@ -455,8 +456,15 @@ class ShortTermNotes:
             if hasattr(self.budget, 'settle_estimate'):
                 self.budget.settle_estimate((reservation, amount), accounting=f'{COST_ACCOUNTING}-failed')
             raise RequestFailed('短期便签提取请求失败；没有自动重试，原聊天仍保留。') from exc
-        self.budget.settle(reservation, request_cfg, prompt_tokens, completion_tokens, cached_tokens,
-                           accounting=COST_ACCOUNTING, category=COST_CATEGORY)
+        try:
+            self.budget.settle(reservation, request_cfg, prompt_tokens, completion_tokens, cached_tokens,
+                               accounting=COST_ACCOUNTING, category=COST_CATEGORY)
+        except Exception:
+            # A provider can bill a response whose reported usage exceeds the local
+            # configured bound. Keep the conservative charge without leaving pending debt.
+            self.budget.settle_estimate((reservation, amount),
+                                        accounting=f'{COST_ACCOUNTING}-usage-invalid')
+            raise
         return output
 
     def _extract(self, force):
@@ -467,19 +475,6 @@ class ShortTermNotes:
         groups = self._new_groups(rows, start, force)
         if not groups:
             return False
-        transcript = [item for group in groups for item in group]
-        source_ids = [item['message_id'] for item in transcript]
-        source_times = {item['message_id']: item['time'] for item in transcript}
-        if force:
-            recent_attempt = next((row for row in reversed(notes_events)
-                                   if row.get('kind') == 'attempt'), None)
-            attempted_at = _parse_time(recent_attempt.get('time')) if recent_attempt else None
-            last = transcript[-1]
-            if (attempted_at is not None and
-                    _local_now().astimezone(timezone.utc) - attempted_at < INTERVAL and
-                    recent_attempt.get('through_message_id') == last['message_id'] and
-                    recent_attempt.get('through_position') == last['position'] + 1):
-                return False
         active = {key: value for key, value in self._latest_notes(notes_events).items()
                   if value.get('status') == '进行中'}
         request = {
@@ -488,23 +483,59 @@ class ShortTermNotes:
                               'text': note.get('text', ''), 'updated_at': note.get('updated_at'),
                               'hold_until': note.get('hold_until')}
                              for note in active.values()],
-            'new_messages': [{'message_id': item['message_id'], 'time': item['time'],
-                              'speaker': item['role'], 'text': item['text']}
-                             for item in transcript],
+            'new_messages': [],
         }
+        # A persisted checkpoint follows each complete conversation group. The byte cap is
+        # deliberately below the configured 32k token limit even for one-byte tokens.
+        transcript = []
+        for group in groups:
+            next_rows = [{'message_id': item['message_id'], 'time': item['time'],
+                          'speaker': item['role'], 'text': item['text']} for item in group]
+            candidate = {**request, 'new_messages': request['new_messages'] + next_rows}
+            size = len(EXTRACTOR_PROMPT.encode('utf-8')) + len(json.dumps(
+                candidate, ensure_ascii=False, separators=(',', ':')).encode('utf-8'))
+            limit = min(MAX_REQUEST_BYTES, self.cfg.provider['max_input_tokens'] // 2)
+            if size > limit:
+                if not transcript:
+                    self.store.append(self.path, {'kind': 'error', 'reason': 'conversation_group_too_large',
+                                                  'through_message_id': group[-1]['message_id'],
+                                                  'request_bytes': size})
+                break
+            request['new_messages'].extend(next_rows)
+            transcript.extend(group)
+        if not transcript:
+            return False
+        source_ids = [item['message_id'] for item in transcript]
+        source_times = {item['message_id']: item['time'] for item in transcript}
+        last = transcript[-1]
+        if force:
+            recent_attempt = next((row for row in reversed(notes_events)
+                                   if row.get('kind') == 'attempt'), None)
+            attempted_at = _parse_time(recent_attempt.get('time')) if recent_attempt else None
+            if (attempted_at is not None and
+                    _local_now().astimezone(timezone.utc) - attempted_at < INTERVAL and
+                    recent_attempt.get('through_message_id') == last['message_id'] and
+                    recent_attempt.get('through_position') == last['position'] + 1):
+                return False
         messages = [
             {'role': 'system', 'content': EXTRACTOR_PROMPT},
             {'role': 'user', 'content': json.dumps(request, ensure_ascii=False, separators=(',', ':'))},
         ]
-        last = transcript[-1]
         self.store.append(self.path, {
             'kind': 'attempt', 'through_message_id': last['message_id'],
             'through_position': last['position'] + 1,
             'source_message_count': len(transcript), 'attempted_at': _iso(),
         })
-        output = self._call_extractor(messages)
-        operations = self._validate_operations(output, source_ids, active)
-        self._apply_operations(operations, source_ids, source_times)
+        try:
+            output = self._call_extractor(messages)
+            operations = self._validate_operations(output, source_ids, active)
+            self._apply_operations(operations, source_ids, source_times)
+        except Exception as exc:
+            self.store.append(self.path, {'kind': 'error', 'reason': type(exc).__name__,
+                                          'cause': type(exc.__cause__).__name__ if exc.__cause__ else '',
+                                          'detail': str(exc)[:300] if isinstance(exc, UserError) else '',
+                                          'through_message_id': last['message_id']})
+            raise
         self.store.append(self.path, {
             'kind': 'checkpoint', 'through_message_id': last['message_id'],
             'through_position': last['position'] + 1,

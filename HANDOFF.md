@@ -2,6 +2,8 @@
 
 ## 当前进度
 
+- 工单 159：`ticket/159-notes-backlog` 基于 158 已合并的主线准备推送和 PR。短期便签分批提取、失败诊断及预算结清已实现；聊天缓存用量新增来源标记，旧版 0 保守显示为未核实。下一步完成复测、推送、PR 和评审；Windows 体验待验收。下一工单号 160。
+
 - 工单 158：`xiaohongshu_tools.py` 新增 `Transient`（HTTP 超时/连接错误、伴随程序启动超时、账号锁占用）与 `OPERATION_TIMEOUT=120`（单次 HTTP `TIMEOUT=60`）。临时失败不设 `blocked`；整次超时停止本次读取但不锁死；`should_stop` 仍锁死（原行为）。掉登录/账号不符给专门文字，其余拒绝仍锁死；锁死后再调用提示「still paused」。每次失败写私有目录 `data/<id>/xiaohongshu/errors.jsonl`；过期 note_ref 只拒绝不锁死；锁死检查在账号锁之前；超时后 worker 2 秒内不退出则锁死并如实说明（kind/error/detail/seconds，detail 只含本程序 ValueError 文字）。下一工单号 159。
 - 工单 157：分支 `ticket/157-raw-tool-format-guard`，PR #205 已合并（`0b6c005`；Claude 补了拦截按失败处理、中文紧邻工具名、任意首参数、逐个标记查找）。修复两种模型/接口可能把内部 `send_message` 调用格式当成普通回复返回的情况：参数文本及 `[Message 1]` 批次文本现在被识别、拦截，不解析、不执行；诊断只记录格式类型、模型、请求步数和正文长度，不写泄漏正文。新增覆盖两种复现格式、普通提及不误拦的回归测试。等待 Lan Windows 验收。
 - 工单 156：PR #204 已由 `yecays-ai` 合并，合并提交 `7a3e6b18289b601af12ea9cd06f287bf221424f4`。代码/CI 与 Windows 发行文件检查已记录；真实账号体验仍待 Lan 验收。此前状态文本过期，已按 GitHub 当前状态更正。

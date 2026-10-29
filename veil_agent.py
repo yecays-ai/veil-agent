@@ -1068,8 +1068,11 @@ class Budget:
     @synchronized
     def settle(self, request_id, cfg, prompt, completion, cached, *, input_bytes=None,
                accounting=None, category=None):
-        if any(type(n) is not int or n < 0 for n in (prompt, completion, cached)) or cached > prompt:
+        cache_reported = cached is not None
+        if (any(type(n) is not int or n < 0 for n in (prompt, completion))
+                or (cache_reported and (type(cached) is not int or cached < 0 or cached > prompt))):
             raise UserError('接口未返回有效用量；本次保留预留费用。')
+        cached = cached if cache_reported else 0
         if input_bytes is not None and (type(input_bytes) is not int or input_bytes <= 0):
             raise UserError('输入长度记录无效；本次保留预留费用。')
         p = cfg.provider
@@ -1085,7 +1088,8 @@ class Budget:
             return False
         settlement = {'type': 'settle', 'id': request_id,
                           'amount': str(amount), 'prompt_tokens': prompt,
-                          'completion_tokens': completion, 'cached_tokens': cached}
+                          'completion_tokens': completion, 'cached_tokens': cached,
+                          'cache_reported': cache_reported}
         if category:
             settlement['category'] = category
         if accounting:
@@ -1100,21 +1104,30 @@ class Budget:
         """Today's share of chat-model input tokens the provider served from its cache."""
         stamp = stamp or self.clock()
         try:
-            periods, prompt, cached = {}, 0, 0
+            periods, prompt, cached, unknown = {}, 0, 0, 0
             for event in self.store.read('costs.jsonl'):
                 if event['type'] == 'reserve':
                     periods[event['id']] = (event['period'], event.get('category', 'chat'))
                 elif event['type'] == 'settle' and 'prompt_tokens' in event:
                     period, category = periods.get(event['id'], ('', 'chat'))
                     if category not in ('autonomy', 'glance', 'short_term_notes') and period[:10] == stamp[:10]:
-                        prompt += event['prompt_tokens']
-                        cached += event['cached_tokens']
+                        # Legacy zeroes did not distinguish an explicit zero from an absent field.
+                        reported = event.get('cache_reported')
+                        if reported is False or (reported is None and event['cached_tokens'] == 0):
+                            unknown += 1
+                        else:
+                            prompt += event['prompt_tokens']
+                            cached += event['cached_tokens']
         except (KeyError, TypeError) as exc:
             raise UserError('花费账本无法核对，已停止；请保留 data 文件夹。') from exc
-        if not prompt:
+        if not prompt and not unknown:
             return '今天还没有聊天模型的用量记录，缓存命中率暂无。'
-        return (f'今天聊天缓存命中 {cached * 100 / prompt:.0f}%（命中 {cached} / 输入 {prompt} tokens；'
-                '只统计聊天模型，不含记忆打标和向量）')
+        if not prompt:
+            return f'今天聊天缓存命中率暂无：{unknown} 次请求未报告缓存用量或为旧版无法核实的 0。'
+        result = f'今天聊天缓存命中 {cached * 100 / prompt:.0f}%（命中 {cached} / 已报告输入 {prompt} tokens）'
+        if unknown:
+            result += f'；另有 {unknown} 次请求未报告缓存用量或为旧版无法核实的 0'
+        return result + '。只统计聊天模型，不含记忆打标和向量。'
 
     def display(self, stamp=None, character=None):
         day, month, pending = self.totals(stamp)
@@ -3272,7 +3285,9 @@ def make_model(root, cfg, provider=None):
         details = getattr(usage, 'prompt_tokens_details', None)
         cached = getattr(usage, 'prompt_cache_hit_tokens', None)
         if cached is None:
-            cached = getattr(details, 'cached_tokens', 0) or 0
+            cached = getattr(details, 'cached_tokens', None)
+        if cached is None:
+            cached = getattr(usage, 'total_cached_tokens', None)
         choice = response.choices[0]
         if tools is not None or message_output:
             message = choice.message.model_dump(exclude_none=True)
