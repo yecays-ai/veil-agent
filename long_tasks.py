@@ -81,7 +81,7 @@ class LongTaskStore:
 
     @staticmethod
     def is_side_effect(name):
-        return name in SIDE_EFFECT_TOOLS
+        return name in SIDE_EFFECT_TOOLS or name.startswith('mcp__')
 
     def preview_summary(self, name, args):
         task = self.read()

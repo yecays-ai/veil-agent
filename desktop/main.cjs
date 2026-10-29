@@ -489,7 +489,7 @@ ipcMain.handle('chat:request', async (event, pathname, body, timeoutMs) => {
   const detachedAllowed = !detachedView || detachedView === 'chat' ||
     (detachedView === 'activity' && ((!body && pathname?.startsWith('/api/events?')) || (body && ['/api/activity', '/api/glance', '/api/codex-watch', '/api/quiet-hours'].includes(pathname)))) ||
     (detachedView === 'context' && !body && pathname?.startsWith('/api/events?')) ||
-    (detachedView === 'mcp' && (pathname === '/api/mcp' || (!body && pathname === '/api/mcp?retry=1'))) ||
+    (detachedView === 'mcp' && ((!body && pathname?.startsWith('/api/events?')) || pathname === '/api/mcp' || (!body && pathname === '/api/mcp?retry=1'))) ||
     (detachedView === 'memory' && ((!body && (pathname?.startsWith('/api/events?') || pathname?.startsWith('/api/memory/'))) ||
       (body && ['/api/memory/edit', '/api/memory/delete'].includes(pathname)))) ||
     (detachedView === 'more' && ((!body && pathname?.startsWith('/api/events?')) || (body && ['/api/exit', '/api/models', '/api/models/use'].includes(pathname))));

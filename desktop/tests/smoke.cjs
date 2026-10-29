@@ -29,6 +29,7 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   let nextId = 3, pending = null, sends = 0, approvals = 0, images = 0, imageSendAttempts = 0, voices = 0, failVoiceUploadOnce = false, quotedSendStarted = false;
   const requests = [], approvalBodies = [];
   let mcpState = {enabled:false,services:[]};
+  let mcpRevision = 0;
   const media = new Map();
   const voiceFixture=wavFixture();
   media.set('fictional-reply.wav',{id:'reply',filename:'fictional-reply.wav',type:'audio/wav',bytes:voiceFixture});
@@ -109,8 +110,12 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
     } else if (url.pathname === '/api/memory/read') {
       json(res, {version:'1',next_offset:null,text:'---\ncreated: 2026-10-26T12:30:00+08:00\ntags:\n- games\n- laughter\n---\nA fictional shared memory.'});
     } else if (url.pathname === '/api/mcp') {
-      if(req.method==='POST')mcpState=await readBody(req);
-      json(res,{...mcpState,services:mcpState.services.map(item=>({...item,status:mcpState.enabled&&item.enabled?'connected':'off',tools:mcpState.enabled&&item.enabled?['echo']:[],error:null}))});
+      if(req.method==='POST'){
+        const body=await readBody(req);
+        if(body.revision!==mcpRevision){json(res,{error:'revision conflict'},409);return}
+        mcpState={enabled:body.enabled,services:body.services};mcpRevision++;
+      }
+      json(res,{...mcpState,revision:mcpRevision,services:mcpState.services.map(item=>({...item,status:mcpState.enabled&&item.enabled?'connected':'off',tools:mcpState.enabled&&item.enabled?['echo']:[],error:null}))});
     } else if (url.pathname === '/api/activity') {
       json(res, { enabled: false });
     } else {
@@ -163,7 +168,11 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   await wait(() => chat.webContents.executeJavaScript('document.querySelector("#mcp-list").textContent.includes("echo")'), 'MCP service was not added');
   await chat.webContents.executeJavaScript('document.querySelector("#mcp-enabled").click()');
   await wait(() => chat.webContents.executeJavaScript('document.querySelector("#mcp-list").textContent.includes("已连接")'), 'MCP global switch did not update');
-  if(process.env.VEIL_MCP_PREVIEW)await fs.writeFile(process.env.VEIL_MCP_PREVIEW,await chat.capturePage().then(image=>image.toPNG()));
+  if(process.env.VEIL_MCP_PREVIEW){
+    await chat.webContents.executeJavaScript('document.querySelector("[data-theme-choice=dark]").click();document.querySelector("#mcp-list button:nth-of-type(2)").click()');
+    await fs.writeFile(process.env.VEIL_MCP_PREVIEW,await chat.capturePage().then(image=>image.toPNG()));
+    await chat.webContents.executeJavaScript('document.querySelector("#mcp-cancel").click()');
+  }
   await chat.webContents.executeJavaScript('document.querySelector("[data-page=chat]").click()');
   assert.equal(await chat.webContents.executeJavaScript('document.querySelector("#image-button").disabled'), false);
   assert.equal(await chat.webContents.executeJavaScript('document.body.textContent.includes("Coming Soon")'), false);
@@ -271,6 +280,13 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   assert.doesNotMatch(menuText, /Coming Soon/);
   await menuWindow.webContents.executeJavaScript('document.querySelector("[data-action=appearance]").click()');
   await wait(() => chat.webContents.executeJavaScript('!document.querySelector("#more-view").hidden'), 'appearance settings did not open');
+  assert.equal(await chat.webContents.executeJavaScript('window.veilDesktop.detachView("mcp",{x:400,y:200})'),true);
+  let detachedMCP;
+  await wait(()=>{detachedMCP=BrowserWindow.getAllWindows().find(w=>w!==pet&&w!==chat&&w.webContents.getURL().includes('view=mcp'));return detachedMCP?.isVisible()},'MCP detached window missing');
+  await wait(()=>detachedMCP.webContents.executeJavaScript('document.querySelector("#offline").style.display==="none"'),'detached MCP window lost Agent events');
+  assert.equal(await detachedMCP.webContents.executeJavaScript('document.querySelector("#mcp-list").textContent.includes("echo")'),true);
+  await detachedMCP.webContents.executeJavaScript('document.querySelector("#merge-view").click(); true');
+  await wait(()=>detachedMCP.isDestroyed(),'MCP detached window did not merge');
   console.log('SMOKE PASS: local dark chat, history, audio-only permissions, >5 MB image compression and decode, automatic-language dictation, send-first voice with hidden transcript and appearance settings, right-click menu, audio loading, activity controls, hide/reopen, sandbox');
   clearTimeout(failSafe);
   server.close(); app.exit(0);

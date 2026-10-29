@@ -1666,7 +1666,7 @@ def make_handler(hub, token):
             elif url.path == '/api/mcp':
                 if not self._guard(self.headers.get('X-Token')):
                     return
-                if hub.chat is None:
+                if hub.chat is None or hub.stopping or hub.stopped:
                     self._send(409, {'error': 'Peter 尚未就绪。'})
                 else:
                     hub.chat.mcp_services.schemas(retry=query.get('retry') == ['1'])
@@ -2032,14 +2032,19 @@ def make_handler(hub, token):
                 else:
                     self._send(200, {'ok': True, 'models': view})
             elif url.path == '/api/mcp':
-                from mcp_services import MCPConfigError
-                if hub.chat is None:
+                from mcp_services import MCPConfigError, MCPConflict
+                if hub.chat is None or hub.stopping or hub.stopped:
                     self._send(409, {'error': 'Peter 尚未就绪。'})
                 else:
                     try:
-                        view = hub.chat.mcp_services.save(body)
+                        if not isinstance(body.get('revision'), int) or isinstance(body.get('revision'), bool):
+                            self._send(400, {'error': '缺少 MCP 配置版本，请刷新页面。'})
+                            return
+                        view = hub.chat.mcp_services.save(body, expected_revision=body['revision'])
                         hub.chat.mcp_services.schemas()
                         self._send(200, hub.chat.mcp_services.view())
+                    except MCPConflict as exc:
+                        self._send(409, {'error': str(exc)})
                     except MCPConfigError as exc:
                         self._send(400, {'error': str(exc)})
                     except OSError:

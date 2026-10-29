@@ -19,8 +19,12 @@ class MCPConfigError(ValueError):
     pass
 
 
+class MCPConflict(MCPConfigError):
+    pass
+
+
 def _validate_service(raw):
-    if not isinstance(raw, dict) or not NAME.fullmatch(str(raw.get('id', ''))) or '__' in raw.get('id', ''):
+    if not isinstance(raw, dict) or not NAME.fullmatch(str(raw.get('id', ''))) or '__' in raw.get('id', '') or raw['id'].endswith('_'):
         raise MCPConfigError('服务 ID 只能使用小写字母、数字和下划线，并以字母开头。')
     command = raw.get('command')
     args = raw.get('args', [])
@@ -87,6 +91,8 @@ class _Worker:
                         if job is None:
                             break
                         name, args, reply = job
+                        if reply.done():
+                            continue
                         self.active_reply = reply
                         try:
                             async with asyncio.timeout(CALL_TIMEOUT):
@@ -99,6 +105,11 @@ class _Worker:
                                 if not value and response.structuredContent is not None:
                                     value = json.dumps(response.structuredContent, ensure_ascii=False)
                                 reply.set_result(value[:16000])
+                        except TimeoutError:
+                            if not reply.done():
+                                reply.set_exception(RuntimeError('MCP 工具调用超时，执行结果未知。'))
+                            self.closing.set()
+                            return
                         except Exception as exc:
                             if not reply.done():
                                 reply.set_exception(exc)
@@ -115,18 +126,30 @@ class _Worker:
                     if job is not None and not job[2].done():
                         job[2].set_exception(RuntimeError('MCP 服务已断开。'))
 
-    def call(self, name, args):
-        if not self.thread.is_alive() or self.loop is None:
+    def call(self, name, args, should_stop=None):
+        if not self.thread.is_alive() or self.loop is None or self.closing.is_set():
             raise RuntimeError('MCP 服务已断开。')
         reply = Future()
         self.loop.call_soon_threadsafe(self.jobs.put_nowait, (name, args, reply))
-        try:
-            return reply.result(timeout=CALL_TIMEOUT + 3)
-        except FutureTimeout as exc:
-            reply.cancel()
-            raise RuntimeError('MCP 工具调用超时。') from exc
+        deadline = time.monotonic() + CALL_TIMEOUT + 3
+        while True:
+            if reply.done():
+                return reply.result()
+            if should_stop and should_stop():
+                reply.cancel()
+                self.close()
+                raise RuntimeError('MCP 调用已停止，执行结果未知。')
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                reply.cancel()
+                self.close()
+                raise RuntimeError('MCP 工具调用超时，执行结果未知。')
+            try:
+                return reply.result(timeout=min(0.2, remaining))
+            except FutureTimeout:
+                pass
 
-    def close(self):
+    def stop(self):
         self.closing.set()
         if self.active_reply is not None and not self.active_reply.done():
             try:
@@ -141,6 +164,10 @@ class _Worker:
                     self.loop.call_soon_threadsafe(self.jobs.put_nowait, None)
             except RuntimeError:
                 pass
+
+    def close(self):
+        self.stop()
+        if self.thread.is_alive():
             self.thread.join(timeout=3)
 
 
@@ -149,9 +176,11 @@ class MCPServices:
         self.path = Path(path)
         self.lock = threading.RLock()
         self.workers = {}
+        self.retiring = {}
         self.errors = {}
         self.failed = set()
         self.config = {'enabled': False, 'services': []}
+        self.revision = 0
         try:
             raw = json.loads(self.path.read_text(encoding='utf-8'))
             self.config = self._validate(raw)
@@ -172,9 +201,11 @@ class MCPServices:
             raise MCPConfigError('服务 ID 不能重复。')
         return {'enabled': raw['enabled'], 'services': result}
 
-    def save(self, raw):
+    def save(self, raw, expected_revision=None):
         config = self._validate(raw)
         with self.lock:
+            if expected_revision is not None and expected_revision != self.revision:
+                raise MCPConflict('MCP 配置已在另一个窗口改变，请重试。')
             self.path.parent.mkdir(parents=True, exist_ok=True)
             temp = self.path.with_suffix('.tmp')
             temp.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding='utf-8')
@@ -185,19 +216,32 @@ class MCPServices:
             self.workers = {item['id']: old[item['id']] for item in config['services']
                             if config['enabled'] and item['enabled'] and old_config['enabled']
                             and old_services.get(item['id']) == item and item['id'] in old}
+            to_close = {key: worker for key, worker in old.items() if key not in self.workers}
+            self.retiring.update(to_close)
             self.config = config
+            self.revision += 1
             self.errors = {key: value for key, value in self.errors.items() if key in self.workers}
             self.failed.intersection_update(self.workers)
-        for key, worker in old.items():
-            if key in self.workers:
-                continue
+        for key, worker in to_close.items():
             worker.close()
+            with self.lock:
+                if not worker.thread.is_alive() and self.retiring.get(key) is worker:
+                    self.retiring.pop(key, None)
         return self.view()
 
     def _worker(self, service, retry=False):
         with self.lock:
+            if next((item for item in self.config['services'] if item['id'] == service['id']), None) != service:
+                return None
             if not self.config['enabled'] or not service['enabled']:
                 return None
+            retiring = self.retiring.get(service['id'])
+            if retiring:
+                if retiring.thread.is_alive():
+                    self.errors[service['id']] = '旧 MCP 服务正在关闭，请稍后刷新。'
+                    return None
+                self.retiring.pop(service['id'], None)
+                self.errors.pop(service['id'], None)
             if service['id'] in self.failed and not retry:
                 return None
             worker = self.workers.get(service['id'])
@@ -211,7 +255,7 @@ class MCPServices:
                 elif time.monotonic() - worker.started_at > 12:
                     self.errors[service['id']] = 'MCP 服务连接超时。'
                     self.failed.add(service['id'])
-                    worker.close()
+                    worker.stop()
                 if service['id'] in self.failed and not retry:
                     return None
                 if worker.thread.is_alive() and service['id'] not in self.failed:
@@ -222,7 +266,9 @@ class MCPServices:
                     if not retry:
                         return None
             if worker:
-                worker.close()
+                worker.stop()
+                if worker.thread.is_alive():
+                    return None
                 self.workers.pop(service['id'], None)
             worker = _Worker(service)
             self.workers[service['id']] = worker
@@ -237,27 +283,48 @@ class MCPServices:
             if not worker or not worker.ready.done():
                 continue
             for tool in worker.tools:
-                name = f"{TOOL_PREFIX}{service['id']}__{tool.name}"
-                if len(name) > 64 or not re.fullmatch(r'[a-zA-Z0-9_]+', name):
+                name = self._usable_name(service, tool)
+                if name is None:
+                    self.errors[service['id']] = '部分 MCP 工具名称或参数说明不兼容，Peter 无法调用这些工具。'
                     continue
                 params = tool.inputSchema if isinstance(tool.inputSchema, dict) else {'type': 'object', 'properties': {}}
-                if len(json.dumps(params, ensure_ascii=False)) > 12000:
-                    self.errors[service['id']] = '一个 MCP 工具的参数说明过大，已跳过。'
-                    continue
                 result.append({'type': 'function', 'function': {'name': name,
                     'description': f"MCP 服务 {service['id']}（{service['permission']}）: {str(tool.description or tool.name)[:500]}",
                     'parameters': {key: value for key, value in params.items() if key != '$schema'}}})
         return result
+
+    @staticmethod
+    def _usable_name(service, tool):
+        name = f"{TOOL_PREFIX}{service['id']}__{tool.name}"
+        if len(name) > 64 or not re.fullmatch(r'[a-zA-Z0-9_]+', name):
+            return None
+        try:
+            if len(json.dumps(tool.inputSchema, ensure_ascii=False)) > 12000:
+                return None
+        except (TypeError, ValueError):
+            return None
+        return name
+
+    def permission_for(self, name):
+        match = re.fullmatch(r'mcp__([a-z][a-z0-9_]{0,31}?)__(.+)', name)
+        if not match:
+            return 'deny'
+        with self.lock:
+            service = next((item for item in self.config['services'] if item['id'] == match.group(1)), None)
+            return 'allow' if service and service['permission'] == 'direct' else 'ask'
 
     def view(self):
         with self.lock:
             rows = []
             for service in self.config['services']:
                 worker = self.workers.get(service['id'])
+                retiring = self.retiring.get(service['id'])
+                if retiring and retiring.thread.is_alive():
+                    self.errors[service['id']] = '旧 MCP 服务正在关闭，请稍后刷新。'
                 if worker and not worker.ready.done() and time.monotonic() - worker.started_at > 12:
                     self.errors[service['id']] = 'MCP 服务连接超时。'
                     self.failed.add(service['id'])
-                    worker.close()
+                    worker.stop()
                 if worker and worker.ready.done():
                     try:
                         worker.ready.result()
@@ -271,13 +338,14 @@ class MCPServices:
                                  and service['id'] not in self.failed and self.config['enabled'] and service['enabled'])
                 connecting = bool(worker and not worker.ready.done() and service['id'] not in self.failed
                                   and self.config['enabled'] and service['enabled'])
-                rows.append({**service, 'status': 'connected' if connected else 'connecting' if connecting else 'error' if service['id'] in self.failed else 'off',
-                             'tools': [tool.name for tool in worker.tools] if connected else [],
+                rows.append({**service, 'status': 'connected' if connected else 'connecting' if connecting else 'error' if service['id'] in self.failed or (retiring and retiring.thread.is_alive()) else 'off',
+                             'tools': [tool.name for tool in worker.tools if self._usable_name(service, tool)] if connected else [],
                              'error': self.errors.get(service['id']) or (
                                  '该服务工具超过 40 个，仅提供前 40 个。' if connected and worker.tool_limit_hit else None)})
-            return {'enabled': self.config['enabled'], 'services': rows, 'error': self.errors.get('_config')}
+            return {'enabled': self.config['enabled'], 'services': rows,
+                    'revision': self.revision, 'error': self.errors.get('_config')}
 
-    def invoke(self, name, args, approval):
+    def invoke(self, name, args, approval, should_stop=None):
         match = re.fullmatch(r'mcp__([a-z][a-z0-9_]{0,31}?)__(.+)', name)
         if not match:
             return 'MCP 工具名称无效。', '被拒绝', name
@@ -287,7 +355,9 @@ class MCPServices:
             if not self.config['enabled'] or not service or not service['enabled']:
                 return 'MCP 服务已停用。', '被拒绝', name
             worker = self.workers.get(service_id)
-            if not worker or not worker.thread.is_alive() or tool_name not in [tool.name for tool in worker.tools]:
+            if not worker or not worker.thread.is_alive() or not any(
+                    tool.name == tool_name and self._usable_name(service, tool) == name
+                    for tool in worker.tools):
                 return 'MCP 工具不可用。', '被拒绝', name
             permission = service['permission']
         if permission == 'ask':
@@ -300,16 +370,20 @@ class MCPServices:
             if not self.config['enabled'] or not current or not current['enabled'] or self.workers.get(service_id) is not worker:
                 return 'MCP 服务已停用。', '被拒绝', name
         try:
-            result = worker.call(tool_name, args)
+            result = worker.call(tool_name, args, should_stop=should_stop)
             return result, '成功', name
         except Exception as exc:
             with self.lock:
                 self.errors[service_id] = str(exc)[:300]
+                if worker.closing.is_set() or not worker.thread.is_alive():
+                    self.failed.add(service_id)
             return 'MCP 服务调用失败：' + str(exc)[:300], '出错', name
 
     def close(self):
         with self.lock:
             old = self.workers
             self.workers = {}
-        for worker in old.values():
+            retiring = self.retiring
+            self.retiring = {}
+        for worker in {**old, **retiring}.values():
             worker.close()

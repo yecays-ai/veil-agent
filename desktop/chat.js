@@ -859,6 +859,11 @@ async function poll(){
     if(!r.ok)throw new Error(r.status);
     const s=await r.json();
     $('offline').style.display='none';
+    if(detachedView==='mcp'){
+      $('ended').style.display=s.stopped?'block':'none';
+      if(s.events?.length)after=s.events[s.events.length-1].id;
+      setTimeout(poll,600);return;
+    }
     stopping=s.stopping===true&&!s.stopped;stopped=s.stopped===true;
     $('ended').style.display=stopped?'block':'none';
     $('service-status').textContent=stopped?'服务：已停止':stopping?'服务：正在退出':'服务：运行中';
@@ -1365,21 +1370,38 @@ if(detachedView&&['chat','activity','context','memory','mcp','more'].includes(de
 }else{setPage('chat');box.focus()}
 setBusy(true);poll();
 
-let mcpView={enabled:false,services:[]},mcpEditing=null,mcpLoading=false;
-function mcpConfig(){return {enabled:mcpView.enabled,services:mcpView.services.map(({id,command,args,cwd,enabled,permission})=>({id,command,args,cwd,enabled,permission}))}}
+let mcpView={enabled:false,services:[]},mcpEditing=null,mcpLoading=false,mcpReady=false,mcpSaveQueue=Promise.resolve();
+$('mcp-add').disabled=true;$('mcp-enabled').disabled=true;
+function mcpConfig(source=mcpView){return {enabled:source.enabled,services:source.services.map(({id,command,args,cwd,enabled,permission})=>({id,command,args,cwd,enabled,permission}))}}
 async function loadMCP(force=false){
   if(mcpLoading)return;
   mcpLoading=true;$('mcp-status').textContent='正在读取服务状态…';
-  try{const response=await api(force?'/api/mcp?retry=1':'/api/mcp');const data=await response.json();if(!response.ok)throw new Error(data.error||'读取失败');mcpView=data;renderMCP()}
+  try{const response=await api(force?'/api/mcp?retry=1':'/api/mcp');const data=await response.json();if(!response.ok)throw new Error(data.error||'读取失败');mcpView=data;mcpReady=true;renderMCP()}
   catch(error){$('mcp-status').textContent=error.message}
   finally{mcpLoading=false}
 }
-async function saveMCP(next){
+function saveMCP(change){
+  const task=mcpSaveQueue.then(()=>saveMCPNow(change));mcpSaveQueue=task.catch(()=>{});return task;
+}
+async function saveMCPNow(change){
+  if(!mcpReady){$('mcp-status').textContent='请先等服务配置读取完成。';return false}
   $('mcp-status').textContent='正在保存…';
-  try{const response=await api('/api/mcp',next,30000);const data=await response.json();if(!response.ok)throw new Error(data.error||'保存失败');mcpView=data;renderMCP();return true}
+  try{
+    for(let attempt=0;attempt<3;attempt++){
+      const currentResponse=await api('/api/mcp');const current=await currentResponse.json();
+      if(!currentResponse.ok)throw new Error(current.error||'读取失败');
+      const next=change(mcpConfig(current));
+      const response=await api('/api/mcp',{...next,revision:current.revision},30000);const data=await response.json();
+      if(response.status===409)continue;
+      if(!response.ok)throw new Error(data.error||'保存失败');
+      mcpView=data;renderMCP();return true;
+    }
+    throw new Error('配置正在其他窗口修改，请稍后重试。');
+  }
   catch(error){$('mcp-status').textContent=error.message;return false}
 }
 function renderMCP(){
+  $('mcp-add').disabled=!mcpReady;$('mcp-enabled').disabled=!mcpReady;
   $('mcp-enabled').checked=mcpView.enabled;
   $('mcp-status').textContent=mcpView.error||`${mcpView.services.length} 个服务`;
   const list=$('mcp-list');list.replaceChildren();
@@ -1394,9 +1416,9 @@ function renderMCP(){
     if(service.error){const error=document.createElement('p');error.className='mcp-error';error.textContent=service.error;card.append(error)}
     if(service.tools.length){const tools=document.createElement('p');tools.className='mcp-tools';tools.textContent=service.tools.join('、');card.append(tools)}
     const actions=document.createElement('div');actions.className='tool-row';
-    const toggle=document.createElement('button');toggle.type='button';toggle.textContent=service.enabled?'停用':'启用';toggle.onclick=()=>saveMCP({...mcpConfig(),services:mcpConfig().services.map(item=>item.id===service.id?{...item,enabled:!item.enabled}:item)});
+    const toggle=document.createElement('button');toggle.type='button';toggle.textContent=service.enabled?'停用':'启用';toggle.onclick=()=>saveMCP(current=>({...current,services:current.services.map(item=>item.id===service.id?{...item,enabled:!item.enabled}:item)}));
     const edit=document.createElement('button');edit.type='button';edit.textContent='编辑';edit.onclick=()=>openMCPForm(service);
-    const remove=document.createElement('button');remove.type='button';remove.textContent='移除';remove.onclick=()=>{if(confirm(`移除 MCP 服务 ${service.id}？`))saveMCP({...mcpConfig(),services:mcpConfig().services.filter(item=>item.id!==service.id)})};
+    const remove=document.createElement('button');remove.type='button';remove.textContent='移除';remove.onclick=()=>{if(confirm(`移除 MCP 服务 ${service.id}？`))saveMCP(current=>({...current,services:current.services.filter(item=>item.id!==service.id)}))};
     actions.append(toggle,edit,remove);card.append(actions);list.append(card);
   }
   if(mcpView.services.some(service=>service.status==='connecting'))setTimeout(()=>{if(document.body.dataset.currentPage==='mcp')loadMCP()},700);
@@ -1407,12 +1429,13 @@ function openMCPForm(service=null){
   $('mcp-command').value=service?.command||'';$('mcp-args').value=(service?.args||[]).join('\n');$('mcp-cwd').value=service?.cwd||'';
   $('mcp-permission').value=service?.permission||'ask';$('mcp-id').focus();
 }
-$('mcp-add').onclick=()=>openMCPForm();$('mcp-cancel').onclick=()=>{$('mcp-form').hidden=true};$('mcp-refresh').onclick=()=>loadMCP(true);
-$('mcp-enabled').onchange=async()=>{const checked=$('mcp-enabled').checked;if(!await saveMCP({...mcpConfig(),enabled:checked}))$('mcp-enabled').checked=mcpView.enabled};
+$('mcp-add').onclick=()=>{if(mcpReady)openMCPForm()};$('mcp-cancel').onclick=()=>{$('mcp-form').hidden=true};$('mcp-refresh').onclick=()=>loadMCP(true);
+$('mcp-enabled').onchange=async()=>{const checked=$('mcp-enabled').checked;if(!await saveMCP(current=>({...current,enabled:checked})))$('mcp-enabled').checked=mcpView.enabled};
 $('mcp-form').onsubmit=async event=>{
-  event.preventDefault();const service={id:$('mcp-id').value.trim(),command:$('mcp-command').value.trim(),args:$('mcp-args').value.split(/\r?\n/).filter(Boolean),cwd:$('mcp-cwd').value.trim()||null,enabled:true,permission:$('mcp-permission').value};
-  const current=mcpConfig(),services=mcpEditing?current.services.map(item=>item.id===mcpEditing?{...service,enabled:item.enabled}:item):[...current.services,service];
-  if(await saveMCP({...current,services})){$('mcp-form').hidden=true;mcpEditing=null}
+  event.preventDefault();if(!mcpReady)return;
+  const service={id:$('mcp-id').value.trim(),command:$('mcp-command').value.trim(),args:$('mcp-args').value.split(/\r?\n/).filter(Boolean),cwd:$('mcp-cwd').value.trim()||null,enabled:true,permission:$('mcp-permission').value};
+  const editingId=mcpEditing;
+  if(await saveMCP(current=>{const services=editingId?current.services.map(item=>item.id===editingId?{...service,enabled:item.enabled}:item):[...current.services,service];return {...current,services}})){$('mcp-form').hidden=true;mcpEditing=null}
 };
 if(detachedView==='mcp')loadMCP();
 setInterval(()=>{if(document.body.dataset.currentPage==='mcp'&&!mcpLoading&&$('mcp-form').hidden)loadMCP()},3000);
