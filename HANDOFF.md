@@ -2,6 +2,7 @@
 
 ## 当前进度
 
+- 工单 158：`xiaohongshu_tools.py` 新增 `Transient`（HTTP 超时/连接错误、伴随程序启动超时、账号锁占用）与 `OPERATION_TIMEOUT=120`（单次 HTTP `TIMEOUT=60`）。临时失败不设 `blocked`；整次超时停止本次读取但不锁死；`should_stop` 仍锁死（原行为）。掉登录/账号不符给专门文字，其余拒绝仍锁死；锁死后再调用提示「still paused」。每次失败写 `data/<id>/xiaohongshu-errors.jsonl`（kind/error/detail/seconds，detail 只含本程序 ValueError 文字）。下一工单号 159。
 - 工单 157：分支 `ticket/157-raw-tool-format-guard`，PR #205 基于 PR #204 合并提交 `7a3e6b18289b601af12ea9cd06f287bf221424f4`，保持开放。修复两种模型/接口可能把内部 `send_message` 调用格式当成普通回复返回的情况：参数文本及 `[Message 1]` 批次文本现在被识别、拦截，不解析、不执行；诊断只记录格式类型、模型、请求步数和正文长度，不写泄漏正文。新增覆盖两种复现格式、普通提及不误拦的回归测试。等待 Lan Windows 验收。
 - 检查状态：`tests.test_chat` 共 72 项通过，Python 编译和 `git diff --check` 通过。本机真实模型及 Windows 聊天体验尚未验收。
 - 下一个窗口第一步：查看 PR 当前 head 的必需检查与实质评审，再由 Lan 更新后验证正常聊天、多条合法 `send_message` 与异常文本格式被拦截；PR 不合并，直到明确收到验收指示。

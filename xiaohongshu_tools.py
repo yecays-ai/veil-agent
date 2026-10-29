@@ -31,7 +31,10 @@ ASSETS = {
 MAX_RESPONSE = 1_000_000
 MAX_DAILY = 60  # HTTP calls, including account checks; not a platform allowance.
 MIN_INTERVAL = 10
-TIMEOUT = 45
+# Ticket 158: one read cold-starts the companion's browser, checks login, then reads; on Lan's PC
+# that took 23-43 s and often passed 45 s. Each HTTP call and the whole operation get room.
+TIMEOUT = 60
+OPERATION_TIMEOUT = 120
 TOOL = SimpleNamespace(name='xiaohongshu', description=(
     'Read your dedicated Xiaohongshu account in chat or autonomous time: status, feed, search, '
     'detail (note_ref from a recent result). Returns a limited sample of notes/comments, never all. '
@@ -46,6 +49,14 @@ TOOL = SimpleNamespace(name='xiaohongshu', description=(
         'query': {'type': 'string', 'maxLength': 80},
         'note_ref': {'type': 'string'},
     }, 'required': ['action'], 'additionalProperties': False})
+
+
+TRANSIENT_TEXT = ('Xiaohongshu was too slow or did not answer this time. This is not a login or risk-control '
+                  'problem; you can try again later. Nothing was retried automatically.')
+
+
+class Transient(ValueError):
+    """Slow or unreachable this time; not a login, account or platform refusal."""
 
 
 class Cooldown(ValueError):
@@ -87,7 +98,7 @@ def account_lock(folder):
                 import fcntl
                 fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError as exc:
-            raise ValueError('The dedicated account is busy in another login/read session.') from exc
+            raise Transient('The dedicated account is busy in another login/read session.') from exc
         try:
             yield
         finally:
@@ -172,10 +183,13 @@ class Sidecar:
             raise ValueError('External actions are disabled; no request was sent.')
         conn = http.client.HTTPConnection('127.0.0.1', self.port, timeout=TIMEOUT)
         try:
-            conn.request(method, path, None if body is None else json.dumps(body),
-                         {'Authorization': 'Bearer ' + self.token, 'Content-Type': 'application/json'})
-            response = conn.getresponse()
-            raw = response.read(MAX_RESPONSE + 1)
+            try:
+                conn.request(method, path, None if body is None else json.dumps(body),
+                             {'Authorization': 'Bearer ' + self.token, 'Content-Type': 'application/json'})
+                response = conn.getresponse()
+                raw = response.read(MAX_RESPONSE + 1)
+            except (OSError, http.client.HTTPException) as exc:
+                raise Transient('The Xiaohongshu companion did not answer in time.') from exc
             if len(raw) > MAX_RESPONSE:
                 raise ValueError('Xiaohongshu response exceeded the size limit.')
             result = json.loads(raw)
@@ -195,7 +209,7 @@ class Sidecar:
                     return
             except OSError:
                 cancelled.wait(.1)
-        raise ValueError('Xiaohongshu companion startup timed out. Browser download may need manual setup.')
+        raise Transient('Xiaohongshu companion startup timed out. Browser download may need manual setup.')
 
     def close(self):
         with self.process_lock:
@@ -216,6 +230,7 @@ class XiaohongshuTools:
         self.refs = {}
         self.steps = 0
         self.blocked = False
+        self.error_log = self.root / 'data' / cfg.id / 'xiaohongshu-errors.jsonl'
 
     def begin_request(self):
         self.steps = 0
@@ -330,6 +345,18 @@ class XiaohongshuTools:
                               'replies': [str(r.get('content', ''))[:200] for r in (c.get('subComments') or [])[:2]]}
                              for c in comments[:10]], 'partial_comments': True}
 
+    def _log_error(self, kind, error, started):
+        # Our own messages only; upstream bodies never reach this file.
+        detail = str(error) if isinstance(error, ValueError) else type(error).__name__
+        try:
+            with self.error_log.open('a', encoding='utf-8') as handle:
+                handle.write(json.dumps({
+                    'time': datetime.now().astimezone().isoformat(), 'kind': kind,
+                    'error': type(error).__name__, 'detail': detail[:300],
+                    'seconds': round(time.monotonic() - started, 1)}, ensure_ascii=False) + '\n')
+        except OSError:
+            pass
+
     def invoke(self, name, args, _approval=None, *, should_stop=None):
         summary = 'dedicated Xiaohongshu (read only)'
         if not self.enabled or name not in XHS_TOOL_NAMES:
@@ -354,23 +381,43 @@ class XiaohongshuTools:
             if should_stop and should_stop():
                 return 'Stopped before reading.', '被拒绝', summary
             self.steps += 1
+            started = time.monotonic()
             thread.start()
-            deadline = time.monotonic() + TIMEOUT
+            deadline = started + OPERATION_TIMEOUT
             while thread.is_alive():
-                if (should_stop and should_stop()) or time.monotonic() > deadline:
+                if should_stop and should_stop():
                     cancelled.set()
                     self.sidecar.close()
                     self.blocked = True
-                    return 'Xiaohongshu read stopped or timed out. Check the dedicated session before restarting VEIL.', '出错', summary
+                    self._log_error('stopped', ValueError('Stopped while reading.'), started)
+                    return 'Xiaohongshu read stopped. Check the dedicated session before restarting VEIL.', '出错', summary
+                if time.monotonic() > deadline:
+                    # Too slow is not a login or risk problem: stop this read, keep later reads possible.
+                    cancelled.set()
+                    self.sidecar.close()
+                    self._log_error('timeout', Transient('Operation took too long.'), started)
+                    return TRANSIENT_TEXT, '出错', summary
                 thread.join(.1)
             result, error = output.get_nowait()
             if error:
                 if isinstance(error, ValueError) and ('cooldown' in str(error) or 'Daily' in str(error)):
                     return str(error), '被拒绝', summary
-                self.blocked = True
                 self.sidecar.close()
-                return ('Xiaohongshu read unavailable. Check the dedicated account/login or platform risk controls '
-                        'with xiaohongshu-login.cmd, then restart VEIL. No automatic retries or external actions.'), '出错', summary
+                if isinstance(error, Transient):
+                    self._log_error('transient', error, started)
+                    return TRANSIENT_TEXT, '出错', summary
+                was_blocked = self.blocked
+                self.blocked = True
+                self._log_error('paused' if was_blocked else 'blocked', error, started)
+                if was_blocked:
+                    return ('Xiaohongshu reads are still paused after an earlier login, account or platform error. '
+                            'Lan needs to check the dedicated login window, then restart VEIL.'), '出错', summary
+                if isinstance(error, ValueError) and 'logged out or does not match' in str(error):
+                    return ('Your dedicated Xiaohongshu account is logged out or does not match. Reads are paused; '
+                            'ask Lan to run xiaohongshu-login.cmd, then restart VEIL.'), '出错', summary
+                return ('Xiaohongshu read unavailable (refused or unexpected response; possibly login expiry or '
+                        'platform risk control). Reads are paused; ask Lan to check xiaohongshu-login.cmd, then '
+                        'restart VEIL. No automatic retries or external actions.'), '出错', summary
             return _clip_utf8('UNTRUSTED Xiaohongshu content; partial results only.\n' +
                               json.dumps(result, ensure_ascii=False), self.max_bytes), '成功', summary
         finally:
