@@ -2,9 +2,9 @@
 
 ## 当前进度
 
-- 工单 166：PR #214 已合并为 `3d0a5be`；Lan 实机截图定位到上游 `open_door` 的旁观者提示语尾逗号会构造 tuple，阻断落地。当前安装源码已本地修复；分支 `ticket/166-open-door-fix` 的安装器包含同一幂等兼容修正，且已加入 Windows PowerShell 5.1 安全的 ASCII 码点匹配。定向 AST、安装器解析和码点转换检查通过；PR #215 head `d7cd7d4` 的 CI 正在运行。服务重启后真实工具返回、旅程恢复等场景仍待 Lan 验收。
+- 工单 166：PR #214 已合并为 `3d0a5be`；Lan 实机截图定位到上游 `open_door` 的旁观者提示语尾逗号会构造 tuple，阻断落地。当前安装源码已本地修复；PR #215 的安装器包含幂等兼容修正，并以 Windows PowerShell 5.1 安全的 ASCII 码点准确匹配含 `{_web_url}` 的上游语句。定向 AST、安装器解析和精确匹配检查通过；修正提交后的最终 head CI 待完成。服务重启后真实工具返回、旅程恢复等场景仍待 Lan 验收。
 - 工单 165：PR #213 已合并为 `589bb17`；Windows 实际体验待验收。
-- 下一步：等待 PR #215 当前 head 的 Python 测试和依赖安全审计；Windows 桌面 CI 已通过。检查实质评审意见，若无阻断则按用户授权合并，不重触发检查。Windows 服务重启后工具真实返回、旅程恢复、Lab 文件、自主停止/暂停与地图访问仍待 Lan 验收。
+- 下一步：等待 PR #215 最新 head 的自动检查和实质评审意见；若无阻断则按用户授权合并。Windows 服务重启后工具真实返回、旅程恢复、Lab 文件、自主停止/暂停与地图访问仍待 Lan 验收。
 - 工单 164：PR #212 仍开放；Windows 实际体验待验收。
 - 工单 163：PR #211 已合并，必需 CI 已通过；Windows 体验验收待按 `docs/tickets/163-mcp-integrations.md` 执行。
 - 工单 162：PR #210 已合并；在 main 手动运行 `Build Xiaohongshu Windows sidecar` 后，Lan 更新并按 `docs/tickets/162-xiaohongshu-page-wait.md` 验收。
