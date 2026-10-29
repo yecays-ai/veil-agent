@@ -211,7 +211,10 @@ class FilesystemTools:
         self.lab = None
         self.lab_preview = None
         self.browser_tools = BrowserTools(cfg)
-        self.xiaohongshu_tools = XiaohongshuTools(self.root, cfg)
+        integration_cfg = SimpleNamespace(**vars(cfg))
+        integration_cfg.web = {**(getattr(cfg, 'web', None) or {}), 'enabled': True,
+                                'xiaohongshu_readonly': True, 'github_readonly': True}
+        self.xiaohongshu_tools = XiaohongshuTools(self.root, integration_cfg)
         settings = cfg.tools or {}
         self.screen_pop_enabled = (getattr(cfg, 'screen_pop', None) or {}).get('enabled') is True
         self.tools = [SCREEN_POP_TOOL] if self.screen_pop_enabled else []
@@ -269,15 +272,14 @@ class FilesystemTools:
         if not configured.is_relative_to(role_root):
             raise UserError('文件工具文件夹必须位于该角色自己的 data 目录。')
         self.workspace = configured
-        if (getattr(cfg, 'web', None) or {}).get('xiaohongshu_readonly') is True:
-            private_xhs = self.root / 'data' / cfg.id / 'xiaohongshu'
-            if private_xhs.is_relative_to(self.workspace):
-                raise UserError('小红书登录数据必须位于文件工具的工作区之外，请使用独立 workspace 文件夹。')
+        private_xhs = self.root / 'data' / cfg.id / 'xiaohongshu'
+        if private_xhs.is_relative_to(self.workspace):
+            raise UserError('小红书登录数据必须位于文件工具的工作区之外，请使用独立 workspace 文件夹。')
         self.workspace.mkdir(parents=True, exist_ok=True)
         self.grant_path = Path(store.root) / cfg.id / 'append-grant.json'
         self.client = None
         self.web_tools = None
-        self.github_tools = GitHubReadTools(cfg)
+        self.github_tools = GitHubReadTools(integration_cfg)
         self.capability_event = None
         self.capability_event_model = None
         self.startup_notice = ('Windows 桌面交互白名单配置无效，启动、窗口动作和 UIA 操作已关闭。'
@@ -288,9 +290,7 @@ class FilesystemTools:
             self.description = self._description(names) or (
                 'You have no tools; tools are disabled by this character configuration. ')
             return
-        self.tools.extend(self.github_tools.tools)
         self.tools.extend(self.browser_tools.tools)
-        self.tools.extend(self.xiaohongshu_tools.tools)
         if web_factory:
             try:
                 self.web_tools = web_factory(self.root, cfg)
@@ -1036,10 +1036,7 @@ class FilesystemTools:
 
     def invoke(self, name, args, approval=input, *, should_stop=None):
         if name in XHS_TOOL_NAMES:
-            xhs = getattr(self, 'xiaohongshu_tools', None)
-            if xhs is None or not self.enabled:
-                return 'Xiaohongshu is disabled.', '被拒绝', name
-            return xhs.invoke(name, args, approval, should_stop=should_stop)
+            return 'Xiaohongshu is managed through the MCP service; use its MCP tool.', '被拒绝', name
         if name in BROWSER_TOOL_NAMES:
             browser = getattr(self, 'browser_tools', None)
             if browser is None or not self.enabled:
@@ -1081,9 +1078,7 @@ class FilesystemTools:
                 return 'This web tool is unavailable for the current role.', '被拒绝', name
             return self.web_tools.invoke(name, args, approval)
         if name in GITHUB_TOOL_NAMES:
-            if not self.enabled:
-                return 'GitHub research is disabled for this role.', '被拒绝', name
-            return self.github_tools.invoke(name, args, approval)
+            return 'GitHub research is managed through the MCP service; use its MCP tool.', '被拒绝', name
         policy = tool_policy(name)
         if policy == 'deny' or name not in {tool.name for tool in self.tools}:
             return 'This tool is not authorized for the current role. Choose an available tool; permissions cannot be bypassed.', '被拒绝', name

@@ -450,15 +450,15 @@ class XiaohongshuTests(unittest.TestCase):
             manager = FilesystemTools(self.root, cfg, store)
         self.addCleanup(manager.__exit__, None)
         manager.xiaohongshu_tools = self.tools
-        self.assertIn('xiaohongshu', manager.capability_record)
+        self.assertNotIn('xiaohongshu', [tool.name for tool in manager.tools])
         self.sidecar.request.side_effect = [
             {'is_logged_in': True, 'user_id': 'dedicated'},
             {'feeds': [{'id': 'a'*24, 'xsecToken': 'PRIVATE_XSEC', 'noteCard': {'displayTitle': 'Trails'}}]},
         ]
         draft = '# Local draft\nTitle: A trail idea\nBody: Original text\nImage plan: My own drawing\nNot published.'
-        requests = [('xiaohongshu', {'action': 'search', 'query': 'trails'}),
+        requests = [('mcp__xiaohongshu__xiaohongshu', {'action': 'search', 'query': 'trails'}),
                     ('write_file', {'path': 'lab/xiaohongshu-draft.md', 'content': draft}),
-                    ('xiaohongshu', {'action': 'publish'})]
+                    ('mcp__xiaohongshu__xiaohongshu', {'action': 'publish'})]
         seen = []
         def model(messages, **kwargs):
             index = len(seen)
@@ -476,6 +476,7 @@ class XiaohongshuTests(unittest.TestCase):
         activity.set(True)
         hub = Hub('Test', activity)
         chat = Chat(cfg, store, Budget(store), model, tools=manager, output=hub.output)
+        self.assertIn('mcp__xiaohongshu__xiaohongshu', chat.current_capability_snapshot())
         with patch('xiaohongshu_tools.MIN_INTERVAL', 0):
             AutonomyController(chat, hub).run()
         self.assertEqual((manager.lab / 'xiaohongshu-draft.md').read_text(encoding='utf-8'), draft)
