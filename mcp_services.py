@@ -222,6 +222,7 @@ class MCPServices:
         self.adapters = {}
         self.config = {'enabled': False, 'services': []}
         self.revision = 0
+        config_existed = self.path.exists()
         try:
             raw = json.loads(self.path.read_text(encoding='utf-8'))
             self.config = self._validate(raw)
@@ -235,7 +236,8 @@ class MCPServices:
                          for service_id, enabled in initial_integrations.items()
                          if service_id in {'github', 'xiaohongshu'} and service_id not in existing]
             if additions:
-                self.config = self._validate({'enabled': self.config['enabled'] or any(row['enabled'] for row in additions),
+                migration_enabled = self.config['enabled'] or (not config_existed and any(row['enabled'] for row in additions))
+                self.config = self._validate({'enabled': migration_enabled,
                                               'services': [*self.config['services'], *additions]})
                 self.path.parent.mkdir(parents=True, exist_ok=True)
                 temp = self.path.with_suffix('.tmp')

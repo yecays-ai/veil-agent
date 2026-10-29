@@ -2,7 +2,7 @@
 
 ## 当前进度
 
-- 工单 163：`ticket/163-mcp-integrations` 基于 PR #210 合并提交 `5beee1d`。GitHub 和小红书已从普通工具 schema 移到 MCP 管理器，映射为 `mcp__github__github_read` 与 `mcp__xiaohongshu__xiaohongshu`，MCP 窗口可以分别启停；旧配置首次迁入角色 MCP 配置。GitHub 公开只读、小红书专用账号与只读限制仍由原适配器执行。尚未运行自动测试，需继续做静态复核、推送、开 PR 并检查 CI/审查；合并后按工单 163 做 Windows 体验验收。
+- 工单 163：PR #211 最新提交含 GitHub、小红书的 MCP 管理迁移。修复点包括保留已有 MCP 总开关的关闭状态、无 MCP 配置时按旧服务开关迁移、原子写配置；工作区始终排除小红书私有登录目录。本机未运行测试，PR CI 需验证；合并后按工单 163 做 Windows 体验验收。
 - 工单 162：PR #210 已合并；在 main 手动运行 `Build Xiaohongshu Windows sidecar` 后，Lan 更新并按 `docs/tickets/162-xiaohongshu-page-wait.md` 验收。
 
 - 工单 162：分支 `ticket/162-xiaohongshu-page-wait`、PR #210 已于 2026-10-29 合并。基于工单 161 合并提交 `cd30c10`。已复现登录状态约 27.8 秒、推荐流约 11.9 秒后 HTTP 500；上游固定 v2.5.5 的原因是登录检查等整页 `load`、feeds 状态只等 8 秒。上游补丁脚本改为等新页面 DOMContentLoaded 和初始状态中的登录用户 ID 或访客，并将 feeds 等待延长到 25 秒；Go 1.24.0 Windows x64 本机构建成功，产物 SHA-256 已固定。静态检查通过，测试与真实账号体验未运行。
@@ -67,7 +67,7 @@
 - 098 QQ 邮箱：2026-11-07 后验收收发。
 - 142–151：Lan 按各自工单做 Windows 体验验收。
 - 135、136、138：请 Lan 确认（10-27 说过 134–138 验收完毕，但不在 10-28 清单里）。
-- 下一个工单号为 163。
+- 下一个工单号为 164。
 
 ## 仍适用的边界
 

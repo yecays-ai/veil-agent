@@ -272,10 +272,9 @@ class FilesystemTools:
         if not configured.is_relative_to(role_root):
             raise UserError('文件工具文件夹必须位于该角色自己的 data 目录。')
         self.workspace = configured
-        if (getattr(cfg, 'web', None) or {}).get('xiaohongshu_readonly') is True:
-            private_xhs = self.root / 'data' / cfg.id / 'xiaohongshu'
-            if private_xhs.is_relative_to(self.workspace):
-                raise UserError('小红书登录数据必须位于文件工具的工作区之外，请使用独立 workspace 文件夹。')
+        private_xhs = self.root / 'data' / cfg.id / 'xiaohongshu'
+        if private_xhs.is_relative_to(self.workspace):
+            raise UserError('小红书登录数据必须位于文件工具的工作区之外，请使用独立 workspace 文件夹。')
         self.workspace.mkdir(parents=True, exist_ok=True)
         self.grant_path = Path(store.root) / cfg.id / 'append-grant.json'
         self.client = None
