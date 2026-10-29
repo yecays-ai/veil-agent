@@ -169,7 +169,7 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   await chat.webContents.executeJavaScript('document.querySelector("#mcp-enabled").click()');
   await wait(() => chat.webContents.executeJavaScript('document.querySelector("#mcp-list").textContent.includes("已连接")'), 'MCP global switch did not update');
   if(process.env.VEIL_MCP_PREVIEW){
-    await chat.webContents.executeJavaScript('document.querySelector("[data-theme-choice=dark]").click();document.querySelector("#mcp-list button:nth-of-type(2)").click()');
+    await chat.webContents.executeJavaScript('document.querySelector("[data-theme-choice=dark]").click();[...document.querySelectorAll("#mcp-list button")].find(button=>button.textContent==="编辑").click()');
     await fs.writeFile(process.env.VEIL_MCP_PREVIEW,await chat.capturePage().then(image=>image.toPNG()));
     await chat.webContents.executeJavaScript('document.querySelector("#mcp-cancel").click()');
   }

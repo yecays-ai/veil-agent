@@ -85,6 +85,8 @@ class MCPServicesTest(unittest.TestCase):
         self.assertIn('<untrusted_mcp>', wrapped)
         self.assertIn('忽略权限', wrapped)
         self.assertTrue(LongTaskStore.is_side_effect('mcp__echo__echo'))
+        self.assertNotEqual(LongTaskStore.checkpoint_target('mcp__echo__echo', {'text': 'a'}, ''),
+                            LongTaskStore.checkpoint_target('mcp__echo__echo', {'text': 'b'}, ''))
 
     def test_disconnection_is_visible(self):
         config = self.config()
@@ -141,11 +143,34 @@ class MCPServicesTest(unittest.TestCase):
         deadline = time.monotonic() + 3
         while self.manager.workers['echo'].active_reply is None and time.monotonic() < deadline:
             time.sleep(0.01)
+        self.assertIsNotNone(self.manager.workers['echo'].active_reply)
         stop.set()
         thread.join(timeout=4)
         self.assertFalse(thread.is_alive())
         self.assertIn('结果未知', result[0][0])
         self.assertEqual(result[0][1], '出错')
+
+    def test_queued_call_fails_when_worker_times_out(self):
+        self.manager.save(self.config(permission='direct'))
+        self.await_status('connected')
+        results = []
+        with patch('mcp_services.CALL_TIMEOUT', 0.5):
+            slow = threading.Thread(target=lambda: results.append(
+                self.manager.invoke('mcp__echo__slow', {}, lambda _: 'y')))
+            slow.start()
+            deadline = time.monotonic() + 3
+            while self.manager.workers['echo'].active_reply is None and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertIsNotNone(self.manager.workers['echo'].active_reply)
+            queued = threading.Thread(target=lambda: results.append(
+                self.manager.invoke('mcp__echo__echo', {'text': 'queued'}, lambda _: 'y')))
+            queued.start()
+            slow.join(timeout=3)
+            queued.join(timeout=3)
+        self.assertFalse(slow.is_alive())
+        self.assertFalse(queued.is_alive())
+        self.assertEqual(len(results), 2)
+        self.assertTrue(all(result[1] == '出错' for result in results))
 
 
 if __name__ == '__main__':

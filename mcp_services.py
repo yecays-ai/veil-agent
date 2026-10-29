@@ -127,6 +127,7 @@ class _Worker:
             if not self.ready.done():
                 message = 'MCP 服务已停用。' if self.closing.is_set() else (str(exc) or 'MCP 服务启动失败。')
                 self.ready.set_exception(RuntimeError(message[:300]))
+        finally:
             if self.jobs is not None:
                 while not self.jobs.empty():
                     job = self.jobs.get_nowait()
