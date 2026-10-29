@@ -85,11 +85,38 @@ class MCPServicesTest(unittest.TestCase):
         config['services'][0]['cwd'] = str(working)
         self.manager.save(config)
         self.await_status('connected')
+        worker = self.manager.workers['echo']
         original_is_dir = Path.is_dir
         with patch.object(Path, 'is_dir', lambda path: False if path == working else original_is_dir(path)):
             self.assertEqual(self.manager.schemas(), [])
             self.assertEqual(self.manager.view()['services'][0]['status'], 'error')
             self.assertEqual(self.manager.invoke('mcp__echo__echo', {'text': 'x'}, lambda _: 'y')[1], '被拒绝')
+        self.assertTrue(worker.closing.is_set())
+        worker.thread.join(timeout=3)
+        self.assertFalse(worker.thread.is_alive())
+
+    def test_removed_working_directory_aborts_inflight_call(self):
+        working = Path(self.tmp.name) / 'working'
+        working.mkdir()
+        config = self.config(permission='direct')
+        config['services'][0]['cwd'] = str(working)
+        self.manager.save(config)
+        self.await_status('connected')
+        worker = self.manager.workers['echo']
+        results = []
+        thread = threading.Thread(target=lambda: results.append(
+            self.manager.invoke('mcp__echo__slow', {}, lambda _: 'y')))
+        thread.start()
+        deadline = time.monotonic() + 3
+        while worker.active_reply is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertIsNotNone(worker.active_reply)
+        original_is_dir = Path.is_dir
+        with patch.object(Path, 'is_dir', lambda path: False if path == working else original_is_dir(path)):
+            self.assertEqual(self.manager.schemas(), [])
+        thread.join(timeout=3)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(results[0][1], '出错')
 
     def test_untrusted_result_and_checkpoint_policy(self):
         from veil_agent import model_tool_result

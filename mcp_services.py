@@ -272,6 +272,9 @@ class MCPServices:
             if service['cwd'] and not Path(service['cwd']).is_dir():
                 self.errors[service['id']] = '工作目录不存在。'
                 self.failed.add(service['id'])
+                worker = self.workers.get(service['id'])
+                if worker:
+                    worker.stop()
                 return None
             retiring = self.retiring.get(service['id'])
             if retiring:
@@ -427,9 +430,10 @@ class MCPServices:
                 return 'Lan 没有批准这次 MCP 调用。', '被拒绝', name
         with self.lock:
             current = next((item for item in self.config['services'] if item['id'] == service_id), None)
-            if (not self.config['enabled'] or not current or not current['enabled']
-                    or service_id in self.failed or self.workers.get(service_id) is not worker):
+            if not self.config['enabled'] or not current or not current['enabled']:
                 return 'MCP 服务已停用。', '被拒绝', name
+            if service_id in self.failed or self.workers.get(service_id) is not worker:
+                return 'MCP 工具不可用。', '被拒绝', name
         try:
             result = worker.call(tool_name, args, should_stop=should_stop)
             return result, '成功', name
