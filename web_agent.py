@@ -525,6 +525,12 @@ class Hub:
                 return False
             # Persist the lifecycle event before changing the in-memory state
             # that acknowledges it to the desktop shell or waiting tool call.
+            if event == 'shown':
+                from recent_experiences import record_screen_message
+                record_screen_message(
+                    self.chat.store, self.chat.cfg, call_id=entry['call_id'] or pop_id,
+                    text=entry['command']['text'], style=entry['style'], stamp=row['time'],
+                    run_id=entry['autonomy_run_id'])
             self.chat.store.append(f'{self.chat.cfg.id}/tools.jsonl', row)
             self._tool_activity_cache = None
             if event == 'shown':
@@ -2378,5 +2384,6 @@ def main(argv=None):
 
 if __name__ == '__main__':
     raise SystemExit(main())
+
 
 
