@@ -2939,6 +2939,8 @@ class Chat:
                     'Screenshot captured: yes.',
                     f'Screenshot was not sent to the model ({reason}); Peter has not seen the page.',
                 )
+                if name == 'desktop_read_image':
+                    raw = f'Desktop image was not sent to the model ({reason}); Peter has not seen its contents.'
                 tool_message['content'] = model_tool_result(name, raw, execution.state)
                 image_was_omitted = True
 
@@ -3093,13 +3095,15 @@ class Chat:
                     for image_message, tool_message, execution, image_tool_name in ephemeral_image_bindings:
                         image_message['content'] = [{
                             'type': 'text',
-                            'text': 'The preview screenshot was rejected by the selected model. '
-                                    'Peter has not seen this page.',
+                            'text': 'The selected image was rejected by the model. '
+                                    'Peter has not seen its contents.',
                         }]
                         text_result = str(execution.result).replace(
                             'Screenshot captured: yes.',
                             'The current model rejected image input; Peter has not seen the page.',
                         )
+                        if image_tool_name == 'desktop_read_image':
+                            text_result = 'The current model rejected image input; Peter has not seen the Desktop image.'
                         tool_message['content'] = model_tool_result(
                             self._resolve_tool_name(image_tool_name, offered) or image_tool_name,
                             text_result, '出错')

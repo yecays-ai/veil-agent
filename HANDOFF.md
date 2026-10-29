@@ -1,5 +1,12 @@
 # 交接
 
+## 工单 168 交接（2026-10-30）
+
+- 分支 `ticket/168-game-results-desktop-images`，worktree `E:\Peter-Agent\VEIL\worktrees\168-game-results-desktop-images`。原定 167 与本机 `ticket/167-lab-python-sandbox` 冲突，Lan 明确指定本单改 168。正式目录保持 main；其中原有未跟踪文件 `cleanup_memories_2026_10_27.py` 未触碰。
+- 已实现游戏本地入口、受限成绩追加/去重、页面保存提示，以及 Desktop 图片读取到既有视觉消息链路。允许本机回环连接后，HTTP 实连用例通过；完整 Python 测试 781 项中 770 项通过、11 项跳过。没有 Windows 实机体验。
+- 下一步：审查本分支安全与功能风险，运行可行的完整测试，提交推送并开 PR；CI 和 Cubic 完成后处理实质问题。GitHub 域名解析失败导致本机 pull/push 不通；GitHub 连接可读取 PR #215 已合并，合并提交 `5d240da` 与本地 main 相同。若网络仍不通，保留本地分支并如实报告。
+
+
 ## 当前进度
 
 - 工单 166：PR #214 已合并为 `3d0a5be`；Lan 实机截图定位到上游 `open_door` 的旁观者提示语尾逗号会构造 tuple，阻断落地。当前安装源码已本地修复；PR #215 的安装器包含幂等兼容修正，并以 Windows PowerShell 5.1 安全的 ASCII 码点准确匹配含 `{_web_url}` 的上游语句。定向 AST、安装器解析和精确匹配检查通过；修正提交后的最终 head CI 待完成。服务重启后真实工具返回、旅程恢复等场景仍待 Lan 验收。

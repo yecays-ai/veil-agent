@@ -181,7 +181,7 @@ class ToolPolicyTests(unittest.TestCase):
         names = {tool.name for tool in manager.tools}
         self.assertEqual(names, {'write_file', 'append_file', 'grant_append',
                                  'create_directory', 'move_lab_file', 'lab_file_digest',
-                                 'preview_lab_page'})
+                                 'preview_lab_page', 'open_lab_game'})
         self.assertEqual({item['function']['name'] for item in permitted_tools(manager.tools)}, names)
         self.assertEqual(manager.grant_path, self.root / 'data/test/append-grant.json')
 

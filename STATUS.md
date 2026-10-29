@@ -1,12 +1,14 @@
 # 当前状态
 
+工单 168（2026-10-30）：Lab 游戏成绩自动回传和 Desktop JPG/PNG 自主读取已在独立分支 `ticket/168-game-results-desktop-images` 实现，本地定向检查通过；PR、CI、Windows 实机体验待完成。原定 167 已用于并行的 Lab Python 沙盒调查，Lan 指定本单改号。见 `docs/tickets/168-game-results-desktop-images.md`。
+
 更新：2026-10-30 · Codex（工单 166：Peter 接入乌有乡自主旅行；PR #214 已合并，旅行入口修复待交付）。
 
 ## 当前目标与现状
 
-- 当前目标：复用现有 MCP 管理器接入乌有乡，让 Peter 可在聊天或自主醒来时自行选择是否旅行，并将有意义经历留在现有念头池、Ombre 或 Lab。
+- 当前目标：让 Peter 制作的 Lab HTML 游戏在 Lan 玩完后自动保存成绩，并让 Peter 自主读取授权桌面目录的 JPG/PNG 图片。
 - 工单 165：PR #213 已合并，合并提交 `589bb17`。工具结果按需缩短并保留可发送结论的处理已进入 main；Windows 体验验收仍待完成。
-- 工单 166：PR #214 已合并，合并提交 `3d0a5be`。Lan 实机反馈首次 `open_door` 因上游旁观者提示行末尾多余逗号而把字符串变成 tuple，导致旅行入口每次报错。已在当前安装目录修正该行，并在分支 `ticket/166-open-door-fix` 为安装器加入幂等兼容修正；MCP 重启后应可开门，地图仍从原生旁观页面查看。该修复的 PR、自动检查与重启后的真实工具返回待完成；依赖锁定、角色隔离与授权边界仍沿用 PR #214。步骤见 `docs/tickets/166-nowhere-travel.md`。
+- 工单 166：PR #214 已合并，合并提交 `3d0a5be`；开门兼容修复 PR #215 也已合并，合并提交 `5d240da`。MCP 重启后的真实工具返回仍待体验验收；依赖锁定、角色隔离与授权边界沿用 PR #214。步骤见 `docs/tickets/166-nowhere-travel.md`。
 - 工单 164：PR #212 已开放，角色配置、schema 和统一分发映射已实现；移除 `windows_now_playing` 实现、配置与 WinRT 依赖。定向测试已通过，最新审查问题已修复并等待自动检查；Windows 实际体验尚未验收，步骤见 `docs/tickets/164-peter-tool-aliases.md`。
 - 工单 161：PR #209 已于 2026-10-29 合并，合并提交 `cd30c10`。本地专项、全量 Python（760 项通过、11 项跳过）、桌面单测（10 项）和 Electron 虚构窗口 smoke 记录在 PR；Windows 正式程序体验待验收。
 - 现状：工单 159 PR #207 已合并（`f302ac8`，Codex 实现、Claude 评审补修）：短期便签积压分批提取、逐批推进检查点；缓存用量区分明确的 0 与接口未报告。工单 158 PR #206 已合并（`7b91d83`）：小红书读取超时不再锁死；错误记录到 `data/<id>/xiaohongshu/errors.jsonl`。工单 157 PR #205 已合并。
@@ -93,13 +95,15 @@
 | 151 | 桌面文本只读、Chrome Guest 公开网页、Windows 音乐状态（分别验收） | 待验收 |
 | 161 | 本地 MCP 服务管理与桌面 MCP 标签 | 待验收（已合并） |
 | 163 | 小红书与 GitHub 迁入 MCP 管理 | PR #211，待验收 |
-| 166 | 乌有乡旅行 MCP、Peter 独立旅程状态、记忆/Lab 与地图入口 | PR #214 已合并；PR #215 修复开门错误，待 CI/评审与 Windows 体验验收 |
+| 166 | 乌有乡旅行 MCP、Peter 独立旅程状态、记忆/Lab 与地图入口 | PR #214、#215 已合并；重启后的 Windows 工具返回待验收 |
+| 168 | 授权桌面 JPG/PNG 指定读取与视觉理解 | 本地实现，PR/CI/Windows 体验待验收 |
 
 ### Lab 创作与附件
 
 | 工单 | 功能 | Lan 体验验收 |
 | --- | --- | --- |
 | 149 | Peter 自主预览 Lab HTML、查看截图和错误并迭代 | 待验收（PR #196 已合并） |
+| 168 | Lab HTML 游戏成绩自动回传、去重与重启保留 | 本地实现，PR/CI/Windows 体验待验收 |
 
 ### QQ、邮件、网页与附件
 

@@ -1,4 +1,5 @@
 import tempfile
+import base64
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -7,6 +8,7 @@ import desktop_files
 from desktop_files import DesktopFileReadTools, MAX_READ_BYTES
 from tools_agent import tool_policy
 from veil_agent import load_character
+from windows_observer import observation_image_message
 
 
 class DesktopFileReadTests(unittest.TestCase):
@@ -96,6 +98,30 @@ class DesktopFileReadTests(unittest.TestCase):
         self.assertEqual(disabled.tools, [])
         self.assertEqual(disabled.invoke('desktop_read_text_file', {'path': 'x.txt'})[1], '被拒绝')
         self.assertEqual(tool_policy('desktop_read_text_file'), 'desktop_file_read')
+
+    def test_reads_selected_png_through_existing_vision_message(self):
+        raw = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=')
+        (self.root / 'screenshot.png').write_bytes(raw)
+        result, state, _ = self.tools.invoke('desktop_read_image', {'path': 'screenshot.png'})
+        self.assertEqual(state, '成功')
+        message = observation_image_message(result)
+        self.assertEqual(message['content'][1]['image_url']['url'], result.image_data_uri)
+        self.assertEqual(tool_policy('desktop_read_image'), 'desktop_file_read')
+
+    def test_image_rejects_escape_sensitive_link_and_invalid_pixels(self):
+        (self.root / 'password.png').write_bytes(b'private')
+        (self.root / 'broken.png').write_bytes(b'not an image')
+        (self.root / 'huge.png').write_bytes(b'\x89PNG\r\n\x1a\n' + b'\0\0\0\rIHDR'
+                                             + (100000).to_bytes(4, 'big') * 2 + b'\0' * 20)
+        for path in ('../outside.png', 'password.png', 'broken.png', 'huge.png'):
+            self.assertNotEqual(self.tools.invoke('desktop_read_image', {'path': path})[1], '成功')
+        outside = Path(self.temp.name) / 'outside.png'
+        outside.write_bytes(b'private')
+        try:
+            (self.root / 'link.png').symlink_to(outside)
+        except OSError:
+            return
+        self.assertEqual(self.tools.invoke('desktop_read_image', {'path': 'link.png'})[1], '被拒绝')
 
     def test_character_can_enable_desktop_read_without_enabling_other_desktop_permissions(self):
         with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[1]) as directory:

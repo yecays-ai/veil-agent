@@ -46,7 +46,7 @@ ALLOW = {
 }
 ASK = {'write_file', 'append_file', 'grant_append'}
 DENY = {'edit_file', 'move_file'}
-LAB_ONLY = {'create_directory', 'move_lab_file', 'lab_file_digest', 'preview_lab_page'}
+LAB_ONLY = {'create_directory', 'move_lab_file', 'lab_file_digest', 'preview_lab_page', 'open_lab_game'}
 # Memory tools (ticket 007) are offered by memory_native.ToolSet, never by the filesystem server.
 NATIVE = {'hold', 'breath_search', 'trace', 'dream', 'letter_write', 'letter_read',
           'letter_lock_update', 'anchor', 'release', 'plan', 'pulse', 'memory_history', 'memory_catalog', 'memory_read'}
@@ -319,6 +319,16 @@ class FilesystemTools:
             from lab_preview import LabPreview
             self.lab_preview = LabPreview(self.lab, platform_enabled=os.name == 'nt')
             self.tools.extend(self.lab_preview.tools)
+            self.game_manager = None
+            self.tools.append(SimpleNamespace(name='open_lab_game',
+                description=('Open a playable Lab HTML game in Lan\'s browser and return its link. '
+                             'Place each game in its own lab folder. At game end, call '
+                             'window.veilGame.saveResult with a stable round_id, score, duration_ms, '
+                             'ending and ended_at ISO time. The page displays a durable save receipt or error. '
+                             'Peter can later read scores.jsonl from the same game folder.'),
+                inputSchema={'type': 'object', 'properties': {
+                    'path': {'type': 'string', 'description': 'Lab-relative HTML entry path.'}},
+                    'required': ['path'], 'additionalProperties': False}))
             self.tools.append(SimpleNamespace(name='create_directory',
                 description='Create folders only inside your lab, e.g. lab/research. '
                             'No confirmation needed. Directories outside lab are forbidden.',
@@ -1037,6 +1047,17 @@ class FilesystemTools:
             if self.lab_preview is None:
                 return 'Lab page preview is unavailable because this character has no safe Lab folder.', '被拒绝', 'Lab preview'
             return self.lab_preview.invoke(args, should_stop=should_stop)
+        if name == 'open_lab_game':
+            if self.game_manager is None or not isinstance(args, dict) or set(args) != {'path'}:
+                return 'The playable Lab game service is unavailable.', '被拒绝', 'Lab game'
+            try:
+                url = self.game_manager.open(args['path'])
+                import webbrowser
+                opened = webbrowser.open(url)
+                return (f'Game URL: {url}\n' + ('Browser opened.' if opened else 'Open this link in a browser.'),
+                        '成功', str(args['path'])[:180])
+            except (OSError, ValueError) as exc:
+                return f'The game could not be opened: {exc}', '出错', 'Lab game'
         if name in SCREEN_POP_TOOL_NAMES:
             return self.invoke_screen_pop(args)
         if name in WINDOWS_OBSERVATION_TOOL_NAMES:
