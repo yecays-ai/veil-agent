@@ -804,7 +804,7 @@ max_steps = 3
             'app_id': 'notepad', 'label': 'Notepad', 'launch_path': NOTEPAD_PATH,
             'process_paths': (NOTEPAD_PATH,), 'actions': frozenset({'activate'}),
             'public_web': False,
-        }}, backend=backend, platform_enabled=True)
+        }}, backend=backend, platform_enabled=True, input_monitor=FakeInputMonitor())
 
         # Mock discovery results
         mock_discovery = Mock()
@@ -852,7 +852,8 @@ max_steps = 3
 
     def test_windows_launch_discovered_application_and_window_reuse(self):
         backend = FakeInteractionBackend()
-        tools = WindowsInteractionTools(True, {}, backend=backend, platform_enabled=True)
+        tools = WindowsInteractionTools(True, {}, backend=backend, platform_enabled=True,
+                                        input_monitor=FakeInputMonitor())
 
         tools.discovered_applications['app_paint'] = {
             'app_id': 'app_paint',
@@ -892,7 +893,8 @@ max_steps = 3
 
     def test_windows_launch_refuses_disallowed_or_unlaunchable_discovered_app(self):
         backend = FakeInteractionBackend()
-        tools = WindowsInteractionTools(True, {}, backend=backend, platform_enabled=True)
+        tools = WindowsInteractionTools(True, {}, backend=backend, platform_enabled=True,
+                                        input_monitor=FakeInputMonitor())
 
         # Non-existent app_id
         res, state, _ = tools.invoke('windows_launch', {'app_id': 'app_unknown'})
@@ -918,7 +920,8 @@ max_steps = 3
 
     def test_discovered_app_control_action_blocks_file_dialog(self):
         backend = FakeInteractionBackend()
-        tools = WindowsInteractionTools(True, {}, backend=backend, platform_enabled=True)
+        tools = WindowsInteractionTools(True, {}, backend=backend, platform_enabled=True,
+                                        input_monitor=FakeInputMonitor())
 
         tools.discovered_applications['app_paint'] = {
             'app_id': 'app_paint',
@@ -960,7 +963,8 @@ max_steps = 3
 
     def test_discovered_app_control_action_blocks_ambiguous_confirmation(self):
         backend = FakeInteractionBackend()
-        tools = WindowsInteractionTools(True, {}, backend=backend, platform_enabled=True)
+        tools = WindowsInteractionTools(True, {}, backend=backend, platform_enabled=True,
+                                        input_monitor=FakeInputMonitor())
 
         tools.discovered_applications['app_calc'] = {
             'app_id': 'app_calc',
@@ -1003,7 +1007,8 @@ max_steps = 3
 
     def test_discovered_app_control_action_blocks_unsafe_text_input(self):
         backend = FakeInteractionBackend()
-        tools = WindowsInteractionTools(True, {}, backend=backend, platform_enabled=True)
+        tools = WindowsInteractionTools(True, {}, backend=backend, platform_enabled=True,
+                                        input_monitor=FakeInputMonitor())
 
         tools.discovered_applications['app_paint'] = {
             'app_id': 'app_paint',
@@ -1047,7 +1052,8 @@ max_steps = 3
 
     def test_discovered_app_allows_safe_actions(self):
         backend = FakeInteractionBackend()
-        tools = WindowsInteractionTools(True, {}, backend=backend, platform_enabled=True)
+        tools = WindowsInteractionTools(True, {}, backend=backend, platform_enabled=True,
+                                        input_monitor=FakeInputMonitor())
 
         tools.discovered_applications['app_paint'] = {
             'app_id': 'app_paint',
