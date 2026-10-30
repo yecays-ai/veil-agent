@@ -768,10 +768,10 @@ class WindowsInteractionTools:
             return None
         normalized = ntpath.normcase(ntpath.normpath(path))
         for app_id, app in self.applications.items():
-            if any(fnmatch.fnmatchcase(normalized, pattern) for pattern in app['process_paths']):
+            if any(fnmatch.fnmatchcase(normalized, ntpath.normcase(ntpath.normpath(pattern))) for pattern in app['process_paths']):
                 return app_id
         for app_id, app in self.discovered_applications.items():
-            if any(fnmatch.fnmatchcase(normalized, pattern) for pattern in app['process_paths']):
+            if any(fnmatch.fnmatchcase(normalized, ntpath.normcase(ntpath.normpath(pattern))) for pattern in app['process_paths']):
                 return app_id
         return None
 

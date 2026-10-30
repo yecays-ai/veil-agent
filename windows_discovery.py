@@ -353,7 +353,7 @@ class WindowsAppDiscovery:
             base_name = ntpath.basename(target).lower()
             process_paths = [norm_target]
 
-            prog_files = os.environ.get('ProgramFiles', 'C:\\Program Files')
+            prog_files = ntpath.normcase(ntpath.normpath(os.environ.get('ProgramFiles', 'C:\\Program Files')))
             # Packaged store app execution paths
             if 'windowsapps' in norm_target:
                 process_paths.append(f'{prog_files}\\windowsapps\\*\\{base_name}')
@@ -363,6 +363,8 @@ class WindowsAppDiscovery:
                 process_paths.extend([f'{prog_files}\\windowsapps\\*\\calculatorapp.exe', norm_target])
             elif base_name == 'mspaint.exe':
                 process_paths.extend([f'{prog_files}\\windowsapps\\*\\paintapp.exe', norm_target])
+
+            process_paths = [ntpath.normcase(ntpath.normpath(p)) for p in process_paths]
 
             app_record = {
                 'app_id': app_id,

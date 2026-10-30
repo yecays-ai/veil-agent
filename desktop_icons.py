@@ -259,15 +259,23 @@ class Win32DesktopIconsBackend(BaseDesktopIconsBackend):
         )
 
     def get_icons(self) -> List[DesktopIcon]:
-        """Read icons via Shell COM IFolderView."""
-        icons = self._read_via_folder_view()
-        if not icons:
-            raise DesktopIconsUnavailable('无法从 Windows Explorer 视图读取桌面图标真实物理坐标。')
-        return icons
+        """Read icons via Shell COM IFolderView with retries."""
+        for attempt in range(3):
+            icons = self._read_via_folder_view()
+            if icons:
+                return icons
+            time.sleep(0.05)
+        raise DesktopIconsUnavailable('无法从 Windows Explorer 视图读取桌面图标真实物理坐标。')
 
     def _read_via_folder_view(self) -> List[DesktopIcon]:
+        need_uninit = False
         try:
             import pythoncom
+            pythoncom.CoInitialize()
+            need_uninit = True
+        except Exception:
+            pass
+        try:
             import win32com.client as wcomcli
             from win32com.shell import shell, shellcon
 
@@ -284,6 +292,8 @@ class Win32DesktopIconsBackend(BaseDesktopIconsBackend):
                 0,
                 SWFO_NEEDDISPATCH,
             )
+            if not dispatch:
+                return []
             service_provider = dispatch._oleobj_.QueryInterface(pythoncom.IID_IServiceProvider)
             browser = service_provider.QueryService(shell.SID_STopLevelBrowser, shell.IID_IShellBrowser)
             shell_view = browser.QueryActiveShellView()
@@ -311,6 +321,19 @@ class Win32DesktopIconsBackend(BaseDesktopIconsBackend):
             return results
         except Exception:
             return []
+        finally:
+            dispatch = None
+            service_provider = None
+            browser = None
+            shell_view = None
+            folder_view = None
+            desktop_folder = None
+            shell_windows = None
+            if need_uninit:
+                try:
+                    pythoncom.CoUninitialize()
+                except Exception:
+                    pass
 
     def _determine_item_type(self, name: str) -> str:
         lower = name.lower()
@@ -335,9 +358,16 @@ class Win32DesktopIconsBackend(BaseDesktopIconsBackend):
         pos_map = {item[0]: (item[1], item[2]) for item in positions}
         id_to_item: Dict[str, Tuple[Any, int]] = {}
 
-        # Using IFolderView if accessible
+        need_uninit = False
         try:
             import pythoncom
+            pythoncom.CoInitialize()
+            need_uninit = True
+        except Exception:
+            pass
+
+        # Using IFolderView if accessible
+        try:
             import win32com.client as wcomcli
             from win32com.shell import shell, shellcon
 
@@ -354,33 +384,47 @@ class Win32DesktopIconsBackend(BaseDesktopIconsBackend):
                 0,
                 SWFO_NEEDDISPATCH,
             )
-            service_provider = dispatch._oleobj_.QueryInterface(pythoncom.IID_IServiceProvider)
-            browser = service_provider.QueryService(shell.SID_STopLevelBrowser, shell.IID_IShellBrowser)
-            shell_view = browser.QueryActiveShellView()
-            folder_view = shell_view.QueryInterface(IID_IFolderView)
-            desktop_folder = shell.SHGetDesktopFolder()
+            if dispatch:
+                service_provider = dispatch._oleobj_.QueryInterface(pythoncom.IID_IServiceProvider)
+                browser = service_provider.QueryService(shell.SID_STopLevelBrowser, shell.IID_IShellBrowser)
+                shell_view = browser.QueryActiveShellView()
+                folder_view = shell_view.QueryInterface(IID_IFolderView)
+                desktop_folder = shell.SHGetDesktopFolder()
 
-            count = folder_view.ItemCount(shellcon.SVGIO_ALLVIEW)
+                count = folder_view.ItemCount(shellcon.SVGIO_ALLVIEW)
 
-            # Build exact 1-to-1 mapping matching get_icons logic
-            seen_ids: set[str] = set()
-            for i in range(count):
-                pidl = folder_view.Item(i)
-                name = desktop_folder.GetDisplayNameOf([pidl], shellcon.SHGDN_NORMAL)
-                item_type = self._determine_item_type(name)
-                icon_id = generate_icon_id(name, item_type, seen_ids)
-                id_to_item[icon_id] = (pidl, i)
+                # Build exact 1-to-1 mapping matching get_icons logic
+                seen_ids: set[str] = set()
+                for i in range(count):
+                    pidl = folder_view.Item(i)
+                    name = desktop_folder.GetDisplayNameOf([pidl], shellcon.SHGDN_NORMAL)
+                    item_type = self._determine_item_type(name)
+                    icon_id = generate_icon_id(name, item_type, seen_ids)
+                    id_to_item[icon_id] = (pidl, i)
 
-            verified: Dict[str, Tuple[int, int]] = {}
-            for icon_id, (target_x, target_y) in pos_map.items():
-                if icon_id in id_to_item:
-                    pidl, _ = id_to_item[icon_id]
-                    folder_view.SelectAndPositionItems(1, [pidl], [(int(target_x), int(target_y))], 0x00000020)
-                    actual_x, actual_y = folder_view.GetItemPosition(pidl)
-                    verified[icon_id] = (int(actual_x), int(actual_y))
-            return verified
+                verified: Dict[str, Tuple[int, int]] = {}
+                for icon_id, (target_x, target_y) in pos_map.items():
+                    if icon_id in id_to_item:
+                        pidl, _ = id_to_item[icon_id]
+                        folder_view.SelectAndPositionItems(1, [pidl], [(int(target_x), int(target_y))], 0x00000020)
+                        actual_x, actual_y = folder_view.GetItemPosition(pidl)
+                        verified[icon_id] = (int(actual_x), int(actual_y))
+                return verified
         except Exception:
             pass
+        finally:
+            dispatch = None
+            service_provider = None
+            browser = None
+            shell_view = None
+            folder_view = None
+            desktop_folder = None
+            shell_windows = None
+            if need_uninit:
+                try:
+                    pythoncom.CoUninitialize()
+                except Exception:
+                    pass
 
         # Win32 SendMessage fallback (LVM_SETITEMPOSITION = 0x1000 + 15 = 4111)
         user32 = ctypes.windll.user32
