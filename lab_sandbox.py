@@ -294,10 +294,27 @@ class LabPythonSandbox:
         initial_fingerprints: Dict[str, Tuple[int, float]] = {}
         script_rel_in_lab = script_file.relative_to(self.lab).as_posix()
 
+        # Ensure workspace directory permissions for container access
+        try:
+            os.chmod(temp_path, 0o777)
+        except Exception:
+            pass
+
         for rel, src in staged_files.items():
             dest = temp_path / rel
             dest.parent.mkdir(parents=True, exist_ok=True)
+            curr = dest.parent
+            while curr != temp_path and curr != curr.parent:
+                try:
+                    os.chmod(curr, 0o777)
+                except Exception:
+                    pass
+                curr = curr.parent
             shutil.copy2(src, dest)
+            try:
+                os.chmod(dest, 0o666)
+            except Exception:
+                pass
             stat_res = dest.stat()
             initial_fingerprints[rel] = (stat_res.st_size, stat_res.st_mtime)
 
@@ -325,6 +342,10 @@ class LabPythonSandbox:
             "ALL",
             "--security-opt",
             "no-new-privileges",
+        ]
+        if hasattr(os, "getuid") and hasattr(os, "getgid"):
+            cmd.extend(["--user", f"{os.getuid()}:{os.getgid()}"])
+        cmd.extend([
             "-v",
             f"{temp_path}:/workspace",
             "-w",
@@ -338,7 +359,7 @@ class LabPythonSandbox:
             DOCKER_IMAGE,
             "python",
             script_in_workspace,
-        ]
+        ])
         cmd.extend(args)
 
         # 3. Launch container process
