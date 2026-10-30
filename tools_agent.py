@@ -495,7 +495,7 @@ class FilesystemTools:
         if level == 'desktop_read':
             return 'direct read-only observation of ordinary Windows application windows'
         if level == 'desktop_file_read':
-            return "direct read-only listing, filename search, and reading of supported text files on Lan's Desktop"
+            return "direct read-only listing, filename search, and reading of TXT, Markdown, DOCX, text PDF, JPG and PNG in Lan's Desktop, Documents, Downloads and Pictures"
         if level == 'desktop_control':
             return ('interaction with explicitly allowlisted Windows apps, with program checks; only saving, '
                     'sending, submitting or overwriting asks Lan')
@@ -994,9 +994,10 @@ class FilesystemTools:
                             'folder without asking, and can rewrite files you created there; '
                             'desktop_move_to_trash moves those into lab/trash/. Lan\'s own files are never changed. ')
         if any(name in DESKTOP_FILE_READ_TOOL_NAMES for name in names):
-            description += ('Read-only access to visible items on Lan\'s Windows Desktop: list folders, find exact '
-                            'filenames, and read ordinary .txt/.md files up to 256 KB. Only that Desktop is in scope; '
-                            'hidden, sensitive-looking, unsupported, linked, too-large and out-of-folder paths are refused. ')
+            description += ('Read-only access to visible items in Lan\'s Windows Desktop, Documents, Downloads '
+                            'and Pictures: list folders, find exact filenames, read .txt/.md up to 256 KB, '
+                            'read .docx/text PDF up to 5 MB in 12,000-character segments, and view JPG/PNG. '
+                            'Hidden, sensitive-looking, unsupported, linked, too-large and out-of-folder paths are refused. ')
         if any(name in SCREEN_POP_TOOL_NAMES for name in names):
             description += ('screen_pop can display a popup or danmaku on the VEIL Desktop shell; '
                             'the activity record tracks later dismissal or completion. ')
