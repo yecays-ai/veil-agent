@@ -3428,11 +3428,13 @@ class Chat:
                     display_detail, result_state = append_tool_result(
                         call, execution, next_offered)
                     log_detail = execution.result
+                    if canonical_name in DESKTOP_FILE_READ_TOOL_NAMES:
+                        log_detail = f'{canonical_name}: {execution.summary} ({state})'
                     if canonical_name in WINDOWS_DESKTOP_TOOL_NAMES or canonical_name == 'browser':
                         log_detail = (execution.activity_detail or (
                             'Isolated public browser step.' if canonical_name == 'browser'
                             else 'Windows desktop action completed.'))
-                    if result_state == '结果过长':
+                    if result_state == '结果过长' and canonical_name not in DESKTOP_FILE_READ_TOOL_NAMES:
                         log_detail = display_detail
                     self._record_tool_result(call, execution, result_state, display_detail,
                                              summaries, lambda name, path, state, **metadata:

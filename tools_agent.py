@@ -495,7 +495,7 @@ class FilesystemTools:
         if level == 'desktop_read':
             return 'direct read-only observation of ordinary Windows application windows'
         if level == 'desktop_file_read':
-            return "direct read-only listing, filename search, and reading of supported text files on Lan's Desktop"
+            return "direct read-only listing, filename search, and reading of ordinary files in Lan's Desktop, Documents, Downloads and Pictures"
         if level == 'desktop_control':
             return ('interaction with explicitly allowlisted Windows apps, with program checks; only saving, '
                     'sending, submitting or overwriting asks Lan')
