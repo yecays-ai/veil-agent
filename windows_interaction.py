@@ -19,6 +19,12 @@ from types import SimpleNamespace
 
 from agent_types import NOT_ASKED, NOT_ASKED_TEXT
 from desktop_access import DesktopBusy, desktop_access, program_input_made, register_input_tracker
+from desktop_icons import (
+    DesktopIconsError,
+    DesktopIconsLayoutBlocked,
+    DesktopIconsPaused,
+    DesktopIconsUnavailable,
+)
 from windows_discovery import (
     WindowsAppDiscovery,
     is_ambiguous_confirmation,
@@ -44,6 +50,7 @@ from windows_observer import (
 
 WINDOWS_INTERACTION_TOOL_NAMES = frozenset({
     'windows_discover_apps', 'windows_launch', 'windows_manage', 'windows_control_action',
+    'desktop_icons_read', 'desktop_icons_arrange', 'desktop_icons_restore',
 })
 WINDOWS_DESKTOP_TOOL_NAMES = WINDOWS_OBSERVATION_TOOL_NAMES | WINDOWS_INTERACTION_TOOL_NAMES
 
@@ -104,6 +111,61 @@ WINDOWS_INTERACTION_TOOL_SCHEMAS = [
             'text': {'type': 'string', 'description': 'Required only for set_text; replaces the complete value.'},
         }, 'required': ['app_id', 'window_id', 'control_id', 'action'],
             'additionalProperties': False},
+    ),
+    SimpleNamespace(
+        name='desktop_icons_read',
+        description=(
+            'Read the current Windows desktop icons layout: names, icon_ids, item_types '
+            '(shortcut, file, folder, system), coordinates (x, y), screen resolution, monitors, '
+            'and auto-arrange status. Read-only. Does not move, rename or modify any files.'
+        ),
+        inputSchema={'type': 'object', 'properties': {}, 'additionalProperties': False},
+    ),
+    SimpleNamespace(
+        name='desktop_icons_arrange',
+        description=(
+            'Safely adjust visual display coordinates of desktop icons. Takes a list of moves '
+            '[{"icon_id": "...", "x": 100, "y": 100}]. Automatically takes a layout snapshot '
+            'before moving. Validates coordinates to prevent off-screen placement and overlaps. '
+            'NEVER modifies, moves, copies, renames, or deletes files or folders on disk. '
+            'Stops immediately if Lan moves mouse or hits keyboard. Returns verified coordinates.'
+        ),
+        inputSchema={
+            'type': 'object',
+            'properties': {
+                'moves': {
+                    'type': 'array',
+                    'items': {
+                        'type': 'object',
+                        'properties': {
+                            'icon_id': {'type': 'string', 'description': 'Exact icon_id from desktop_icons_read.'},
+                            'x': {'type': 'integer', 'description': 'Target X pixel coordinate on visible screen.'},
+                            'y': {'type': 'integer', 'description': 'Target Y pixel coordinate on visible screen.'},
+                        },
+                        'required': ['icon_id', 'x', 'y'],
+                        'additionalProperties': False,
+                    },
+                    'description': 'List of icon moves with target display coordinates.',
+                },
+                'reason': {'type': 'string', 'description': 'Optional short note on why this layout was chosen.'},
+            },
+            'required': ['moves'],
+            'additionalProperties': False,
+        },
+    ),
+    SimpleNamespace(
+        name='desktop_icons_restore',
+        description=(
+            'Restore desktop icon positions from a previously saved snapshot. By default restores the '
+            'latest snapshot taken before the last arrangement. Does not touch or change actual files on disk.'
+        ),
+        inputSchema={
+            'type': 'object',
+            'properties': {
+                'snapshot_id': {'type': 'string', 'description': 'Optional snapshot_id. If omitted, restores the latest layout snapshot.'},
+            },
+            'additionalProperties': False,
+        },
     ),
 ]
 
@@ -664,7 +726,8 @@ class WindowsInteractionTools:
 
     def __init__(self, enabled, applications, *, max_result_bytes=8192, backend=None,
                  platform_enabled=None, idle_seconds=3, timeout_seconds=8,
-                 input_monitor=None, discovery=None):
+                 input_monitor=None, discovery=None, desktop_icons_manager=None,
+                 desktop_icons_backend=None, store=None, character_id=None):
         self.enabled = enabled is True
         self.platform_enabled = (os.name == 'nt') if platform_enabled is None else bool(platform_enabled)
         self.applications = applications or {}
@@ -675,6 +738,22 @@ class WindowsInteractionTools:
         self.idle_seconds = max(1, min(int(idle_seconds), 30))
         self.timeout_seconds = max(1, min(int(timeout_seconds), 8))
         self.input_monitor = input_monitor or DesktopInputMonitor()
+        self.store = store
+        self.character_id = character_id or 'default'
+
+        if desktop_icons_manager is not None:
+            self.desktop_icons_manager = desktop_icons_manager
+        else:
+            from desktop_icons import DesktopIconsManager, FakeDesktopIconsBackend, Win32DesktopIconsBackend
+            if desktop_icons_backend is None:
+                desktop_icons_backend = (Win32DesktopIconsBackend()
+                                         if self.platform_enabled else FakeDesktopIconsBackend())
+            self.desktop_icons_manager = DesktopIconsManager(
+                store=self.store,
+                character_id=self.character_id,
+                backend=desktop_icons_backend,
+            )
+
         self.tools = (list(WINDOWS_INTERACTION_TOOL_SCHEMAS)
                       if self.enabled and self.platform_enabled else [])
 
@@ -699,6 +778,12 @@ class WindowsInteractionTools:
     def preview_summary(self, name, args):
         if name == 'windows_discover_apps':
             return 'Windows application discovery'
+        if name == 'desktop_icons_read':
+            return 'Desktop icons inspection'
+        if name == 'desktop_icons_arrange':
+            return 'Desktop icons arrangement'
+        if name == 'desktop_icons_restore':
+            return 'Desktop icons restore'
         app_id = args.get('app_id') if isinstance(args, dict) else None
         app = self.get_app(app_id)
         if name == 'windows_launch' and app:
@@ -745,6 +830,16 @@ class WindowsInteractionTools:
         return result, None
 
     def _error(self, error, summary, side_effect):
+        if isinstance(error, DesktopIconsLayoutBlocked):
+            return WindowsToolResult(
+                str(error), activity_detail=f'{summary} 自动排列阻止调整。'), '被拒绝'
+        if isinstance(error, DesktopIconsPaused):
+            return WindowsToolResult(
+                'Desktop icons operation was interrupted by user activity.',
+                activity_detail=f'{summary} 用户操作打断。'), '中断'
+        if isinstance(error, DesktopIconsError):
+            return WindowsToolResult(
+                str(error), activity_detail=f'{summary} 桌面图标操作失败。'), '出错'
         if isinstance(error, DesktopBusy):
             return WindowsToolResult(
                 'The shared Windows desktop is busy. No action was performed; retry after it is free.',
@@ -895,6 +990,67 @@ class WindowsInteractionTools:
                 }, detail, summary_msg)
 
             return self._run(discover, summary, should_stop, timeout=self.timeout_seconds, side_effect=False)
+
+        if name == 'desktop_icons_read':
+            if args:
+                return WindowsToolResult('desktop_icons_read accepts no arguments.', activity_detail='参数无效。'), '被拒绝'
+
+            def read_icons(stopped):
+                if stopped():
+                    raise InteractionPaused('The autonomous activity was paused.')
+                data = self.desktop_icons_manager.read_desktop()
+                icon_count = data['count']
+                auto_arr = data['metrics']['auto_arrange']
+                detail = f'读取桌面图标 {icon_count} 个（自动排列: {"开启" if auto_arr else "关闭"}）。'
+                summary_msg = f'已读取 {icon_count} 个桌面图标布局。'
+                return self._success(data, detail, summary_msg)
+
+            return self._run(read_icons, summary, should_stop, timeout=self.timeout_seconds, side_effect=False)
+
+        if name == 'desktop_icons_arrange':
+            if (set(args) - {'moves', 'reason'} or 'moves' not in args
+                    or not isinstance(args.get('moves'), list) or not args['moves']):
+                return WindowsToolResult('desktop_icons_arrange requires a non-empty moves list.', activity_detail='参数无效。'), '被拒绝'
+            moves = args['moves']
+            for m in moves:
+                if (not isinstance(m, dict) or not isinstance(m.get('icon_id'), str)
+                        or not isinstance(m.get('x'), (int, float)) or not isinstance(m.get('y'), (int, float))):
+                    return WindowsToolResult('Each move must specify icon_id (str), x (int), and y (int).', activity_detail='参数无效。'), '被拒绝'
+
+            def arrange_icons(stopped):
+                result = self.desktop_icons_manager.arrange_icons(
+                    moves=moves, should_stop=stopped, trigger='autonomous_arrange'
+                )
+                moved = result['moved_count']
+                snap_id = result['snapshot_id']
+                detail = (f'整理桌面图标 {moved} 个（备份快照: {snap_id}）。'
+                          if not result.get('interrupted')
+                          else f'整理桌面图标被用户操作打断，已完成 {moved} 个。')
+                summary_msg = f'已移动 {moved} 个图标。' if not result.get('interrupted') else '用户操作打断图标整理。'
+                return self._success(result, detail, summary_msg)
+
+            return self._run(arrange_icons, summary, should_stop, timeout=self.timeout_seconds, side_effect=True)
+
+        if name == 'desktop_icons_restore':
+            if set(args) - {'snapshot_id'} or ('snapshot_id' in args and not isinstance(args.get('snapshot_id'), str)):
+                return WindowsToolResult('Optional snapshot_id must be a string.', activity_detail='参数无效。'), '被拒绝'
+            snap_id = args.get('snapshot_id')
+
+            def restore_icons(stopped):
+                result = self.desktop_icons_manager.restore_snapshot(
+                    snapshot_id=snap_id, should_stop=stopped
+                )
+                restored = result['restored_count']
+                target_id = result['snapshot_id']
+                detail = (f'恢复桌面图标布局 {restored} 个（快照: {target_id}）。'
+                          if not result.get('interrupted')
+                          else f'恢复图标布局被用户操作打断，已恢复 {restored} 个。')
+                summary_msg = f'已恢复 {restored} 个桌面图标。' if not result.get('interrupted') else '用户操作打断图标恢复。'
+                return self._success(result, detail, summary_msg)
+
+            return self._run(restore_icons, summary, should_stop, timeout=self.timeout_seconds, side_effect=True)
+
+            return self._run(restore_icons, summary, should_stop, timeout=self.timeout_seconds, side_effect=True)
 
         if name == 'windows_launch':
             if (set(args) - {'app_id', 'url'} or 'app_id' not in args

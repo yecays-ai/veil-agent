@@ -87,7 +87,7 @@ def permitted_tools(server_tools):
 def tool_policy(name):
     if name in DESKTOP_FILE_READ_TOOL_NAMES:
         return 'desktop_file_read'
-    if name in WINDOWS_OBSERVATION_TOOL_NAMES or name == 'windows_discover_apps':
+    if name in WINDOWS_OBSERVATION_TOOL_NAMES or name in ('windows_discover_apps', 'desktop_icons_read'):
         return 'desktop_read'
     if name in WINDOWS_INTERACTION_TOOL_NAMES:
         return 'desktop_control'
@@ -236,6 +236,8 @@ class FilesystemTools:
             backend=windows_backend,
             platform_enabled=os.name == 'nt',
             idle_seconds=interaction_settings.get('idle_seconds', 3),
+            store=store,
+            character_id=cfg.id,
         )
         self.windows_tools.application_id_for = self.windows_interaction_tools.application_id_for
         self.tools.extend(self.windows_tools.tools)
@@ -992,6 +994,7 @@ class FilesystemTools:
                 'Windows interaction tools: ' + ', '.join(interaction_names) +
                 (f'. Configured applications: {app_ids}. ' if app_ids else '. ') +
                 'windows_discover_apps discovers installed Windows desktop applications. '
+                'desktop_icons_read, desktop_icons_arrange and desktop_icons_restore manage desktop icon visual placement safely with automatic layout snapshots. '
                 'Paths and process identity are checked by the program. '
                 'Window actions stop when recent human input is detected. Clicks, navigation and text edits run directly; '
                 'saving, sending, submitting or overwriting asks Lan (in VEIL or on QQ); '

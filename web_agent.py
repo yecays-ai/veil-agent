@@ -1563,6 +1563,23 @@ class Hub:
                     'models': self.models_view, **autonomy, **glance, **codex_watch}
 
 
+def _get_desktop_icons_manager(hub):
+    if hasattr(hub, 'desktop_icons_manager') and hub.desktop_icons_manager:
+        return hub.desktop_icons_manager
+    if hub.chat and hasattr(hub.chat, 'tools') and hasattr(hub.chat.tools, 'windows_interaction_tools'):
+        mgr = getattr(hub.chat.tools.windows_interaction_tools, 'desktop_icons_manager', None)
+        if mgr:
+            return mgr
+    from desktop_icons import DesktopIconsManager, FakeDesktopIconsBackend, Win32DesktopIconsBackend
+    from veil_agent import Store
+    backend = Win32DesktopIconsBackend() if os.name == 'nt' else FakeDesktopIconsBackend()
+    store_root = getattr(hub, 'store_root', 'data')
+    char_id = getattr(hub, 'name', 'peter').lower()
+    mgr = DesktopIconsManager(store=Store(store_root), character_id=char_id, backend=backend)
+    hub.desktop_icons_manager = mgr
+    return mgr
+
+
 def make_handler(hub, token):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_):
@@ -1739,6 +1756,12 @@ def make_handler(hub, token):
                     self._send(400, {'error': 'query'})
                 else:
                     self._send(200, {'commands': hub.next_screen_pop()})
+            elif url.path == '/api/desktop-icons/snapshots':
+                if not self._guard(self.headers.get('X-Token')):
+                    return
+                mgr = _get_desktop_icons_manager(hub)
+                snapshots = mgr.list_snapshots(limit=10)
+                self._send(200, {'snapshots': snapshots})
             elif url.path.startswith('/media/'):
                 if not self._guard((query.get('t') or [''])[0]):
                     return
@@ -2064,6 +2087,14 @@ def make_handler(hub, token):
                     self._send(200, {'ok': True})
                 else:
                     self._send(409, {'error': 'not replying'})
+            elif url.path == '/api/desktop-icons/restore':
+                mgr = _get_desktop_icons_manager(hub)
+                snap_id = body.get('snapshot_id') if isinstance(body, dict) else None
+                try:
+                    res = mgr.restore_snapshot(snapshot_id=snap_id)
+                    self._send(200, {'ok': True, 'result': res})
+                except Exception as exc:
+                    self._send(400, {'error': str(exc)})
             elif url.path == '/api/typing':
                 if not isinstance(body.get('typing'), bool):
                     self._send(400, {'error': 'typing'})
