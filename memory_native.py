@@ -445,7 +445,7 @@ class NativeMemoryTools:
         rows = [row for row in self.memory.store.read(f'{self.memory.cfg.id}/memory-versions.jsonl')
                 if row.get('memory_id') == memory_id]
         if not rows:
-            return '这条记忆还没有由你改动过的旧版本。', '成功', f'历史：{summary}'
+            return 'This memory has no earlier versions edited by you.', '成功', f'历史：{summary}'
         rendered = '\n\n---\n\n'.join(
             f"Time: {row['time']}\nChanged fields: {', '.join(row['fields']) or 'not recorded'}\n"
             f"Reason for this operation: {row.get('operation_reason') or 'not provided'}\n"
@@ -589,7 +589,7 @@ class NativeMemoryTools:
                 pass
             return 'The pending deletion request could not be saved safely; the memory was not deleted. Retry later.', '出错', summary
         self.memory.messages.put(f'待处理的删除申请：记忆 #{memory_id}「{summary}」，理由：{reason or "未提供"}。')
-        return '已放进待删除栏目，等 lan 回来处理。', '成功', summary
+        return 'The memory was placed in pending deletion for Lan to review.', '成功', summary
 
     def process_pending_deletions(self, approval):
         path = f'{self.memory.cfg.id}/delete-requests.jsonl'
@@ -769,7 +769,7 @@ class NativeMemoryTools:
                 merged = f'{merged}\n\n补充：{addition}'
                 changed = True
             if not changed:
-                return '这段内容已在该记忆中，没有重复写入。', '成功', f'已存在：{summary}'
+                return 'This content is already in the memory; nothing was written twice.', '成功', f'已存在：{summary}'
             updated = merged
             if len(updated.encode('utf-8')) > MERGED_MEMORY_LIMIT_BYTES:
                 return "The merged memory would exceed Ombre's safe per-memory size limit; the original was not changed. Shorten the addition and retry.", '被拒绝', summary
@@ -788,7 +788,8 @@ class NativeMemoryTools:
             self.memory.record_native_update(target_id, stored)
             self.search_results[target_id] = stored
             merged_note = f'，并整合 {len(source_ids)} 条相关记忆' if source_ids else ''
-            return ('已追加到这条记忆；原文和标题均保留，改动前完整版本（含元数据）已留档。',
+            return ('Content was appended to this memory. Its original text and title remain, and '
+                    'the complete previous version with metadata was archived.',
                     '成功', f'更新：{summary}（{target_id}）{merged_note}')
         ombre_args = {'content': content.strip(), 'title': title.strip()}
         if why.strip():
@@ -813,7 +814,7 @@ class NativeMemoryTools:
             # inviting a duplicate hold.
             return 'The save was confirmed, but its local memory index could not be updated. Do not save it again; reopen the memory service before continuing.', '出错', summary
         memory_id = self.memory.created_id(text)
-        return (('已合并进已有记忆。' if kind == '合并' else '已保存。') + f' memory_id: {memory_id}',
+        return (('Merged into an existing memory.' if kind == '合并' else 'Memory saved.') + f' memory_id: {memory_id}',
                 '成功', f'{kind}：{summary}')
 
     def _search(self, args):

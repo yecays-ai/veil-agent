@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from long_tasks import LongTaskStore
 from tools_agent import FilesystemTools
-from veil_agent import Budget, Chat, Store, UserError, load_character
+from veil_agent import Budget, Chat, Store, UserError, load_character, model_tool_result
 
 
 class LongTaskTests(unittest.TestCase):
@@ -23,6 +23,8 @@ class LongTaskTests(unittest.TestCase):
         result, state, _ = self.tasks.invoke('long_task_update', {
             'action': 'create', 'title': 'Three-part study', 'goal': 'Produce three verified sections.'})
         self.assertEqual(state, '成功', result)
+        self.assertEqual(model_tool_result('long_task_update', result, state), result)
+        self.assertTrue(result.startswith('Long task created with ID '))
         return self.tasks.read()['task_id']
 
     def test_create_updates_and_refuses_to_replace_unfinished_task(self):

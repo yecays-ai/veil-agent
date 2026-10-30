@@ -281,7 +281,7 @@ class LongTaskStore:
                     'waiting_for': '', 'tool_events': [], 'pending_action': None,
                     'completion_evidence': '', 'created_at': stamp, 'updated_at': stamp}
             self._save(task)
-        return f"长期任务已建立，编号 {task['task_id']}。", '成功', task['title']
+        return f"Long task created with ID {task['task_id']}.", '成功', task['title']
 
     def _update(self, args):
         allowed = {'action', 'task_id', 'status', 'progress_update', 'next_step',
@@ -361,7 +361,7 @@ class LongTaskStore:
             self._save(task)
             if resolve:
                 self._checkpoint_verified = True
-        return f"长期任务已更新：{task['status']}。", '成功', task['title']
+        return f"Long task updated; status: {task['status']}.", '成功', task['title']
 
     @staticmethod
     def _normalized_target(target):
