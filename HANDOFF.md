@@ -1,17 +1,20 @@
 # 交接
 
+## 工单 167 交接（2026-10-30）
+
+- 独立分支 `ticket/167-lab-python-sandbox`。实现 Peter Lab 独立代码实验室，基于本地 Docker 隔离容器执行 Python 脚本，支持标准输入输出/错误捕获、超时与资源限制、Lab 成果文件生成与持久化；默认断网且无法访问宿主环境与凭据。
+
 ## 工单 172 交接（2026-10-30）
 
 - 基于工单 171 合并提交 `1d4f91e` 建立 `ticket/172-preserve-tool-results`。`model_tool_result()` 不再按中文字符或工具白名单丢弃成功结果；明确的程序成功提示在 `tools_agent.py` 生成处改为英文。
 - 新增中文桌面、记忆、混合语言、拒绝与失败结果回归，并将现有长结果测试改为中文正文；MCP、浏览器、Windows 桌面的不可信包裹沿用原逻辑。
-- PR #220 已开放。首轮 Cubic 提出小红书不可信内容边界和其他中文程序成功提示两项实质问题，已补修；下一步复测并推送修正，然后确认最新 head 的 CI 和审查。Windows 真实体验由 Lan 按 `docs/tickets/172-preserve-tool-results.md` 验收。
+- PR #220 已合并。
 
 ## 工单 168 交接（2026-10-30）
 
 - 分支 `ticket/168-game-results-desktop-images` 使用独立 worktree。原定 167 与本机 `ticket/167-lab-python-sandbox` 冲突，Lan 明确指定本单改 168。正式目录保持 main；其中原有未跟踪文件未触碰。
 - 已实现游戏本地入口、受限成绩追加/去重、页面保存提示，以及 Desktop 图片读取到既有视觉消息链路。允许本机回环连接后，HTTP 实连用例通过；完整 Python 测试 785 项中 774 项通过、11 项跳过。没有 Windows 实机体验。
 - 下一步：检查 PR #216 当前 head 的 CI 和 Cubic 实质审查意见，修复功能、数据或安全问题后按仓库规则合并；Windows 体验请 Lan 完成。GitHub 域名解析失败导致本机 pull/push 不通，GitHub 连接已上传与本地 tree 一致的远端提交。PR #215 已合并，合并提交 `5d240da` 与本地 main 相同。
-
 
 ## 当前进度
 
