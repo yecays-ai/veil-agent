@@ -237,6 +237,75 @@ class LabSandboxExecutionTests(unittest.TestCase):
         self.assertTrue(saved_file.is_file())
         self.assertEqual(saved_file.read_text(encoding="utf-8"), '{"planets": 8}')
 
+    def test_docker_run_command_contains_all_isolation_flags(self):
+        sandbox = LabPythonSandbox(self.lab, docker_check_fn=lambda: (True, "29.0"))
+        captured_cmd = []
+
+        def fake_popen(cmd, **kwargs):
+            mock_proc = Mock()
+            mock_proc.__enter__ = Mock(return_value=mock_proc)
+            mock_proc.__exit__ = Mock(return_value=None)
+            if isinstance(cmd, list) and len(cmd) > 1 and cmd[1] in ("rm", "kill"):
+                mock_proc.communicate.return_value = ("", "")
+                mock_proc.returncode = 0
+                return mock_proc
+
+            captured_cmd.extend(cmd)
+            mock_proc.poll.return_value = 0
+            mock_proc.returncode = 0
+            mock_proc.communicate.return_value = ("ok", "")
+            return mock_proc
+
+        with patch("subprocess.Popen", side_effect=fake_popen):
+            res, state, summary = sandbox.invoke({"path": "good.py"})
+
+        self.assertEqual(state, "成功")
+        self.assertIn("--network", captured_cmd)
+        self.assertEqual(captured_cmd[captured_cmd.index("--network") + 1], "none")
+        self.assertIn("--memory", captured_cmd)
+        self.assertEqual(captured_cmd[captured_cmd.index("--memory") + 1], "256m")
+        self.assertIn("--cpus", captured_cmd)
+        self.assertEqual(captured_cmd[captured_cmd.index("--cpus") + 1], "1.0")
+        self.assertIn("--pids-limit", captured_cmd)
+        self.assertEqual(captured_cmd[captured_cmd.index("--pids-limit") + 1], "64")
+        self.assertIn("--cap-drop", captured_cmd)
+        self.assertEqual(captured_cmd[captured_cmd.index("--cap-drop") + 1], "ALL")
+        self.assertIn("--security-opt", captured_cmd)
+        self.assertEqual(captured_cmd[captured_cmd.index("--security-opt") + 1], "no-new-privileges")
+        self.assertIn("PYTHONUNBUFFERED=1", captured_cmd)
+        self.assertIn("PYTHONDONTWRITEBYTECODE=1", captured_cmd)
+        self.assertIn("HOME=/workspace", captured_cmd)
+
+    def test_timeout_skips_output_file_write_back(self):
+        sandbox = LabPythonSandbox(self.lab, docker_check_fn=lambda: (True, "29.0"))
+
+        def fake_popen(cmd, **kwargs):
+            mock_proc = Mock()
+            mock_proc.__enter__ = Mock(return_value=mock_proc)
+            mock_proc.__exit__ = Mock(return_value=None)
+            if isinstance(cmd, list) and len(cmd) > 1 and cmd[1] in ("rm", "kill"):
+                mock_proc.communicate.return_value = ("", "")
+                mock_proc.returncode = 0
+                return mock_proc
+
+            ws_idx = cmd.index("-v") + 1
+            host_temp = cmd[ws_idx].split(":/workspace")[0]
+            out_file = Path(host_temp) / "corrupt.json"
+            out_file.write_text('{"truncated": true', encoding="utf-8")
+
+            mock_proc.poll.return_value = None
+            mock_proc.returncode = 137
+            mock_proc.communicate.return_value = ("", "Timeout killed")
+            return mock_proc
+
+        with patch("subprocess.Popen", side_effect=fake_popen), \
+             patch("time.monotonic", side_effect=[0.0, 0.1, 5.0, 5.1]):
+            res, state, summary = sandbox.invoke({"path": "good.py", "timeout": 2})
+
+        self.assertEqual(state, "成功")
+        self.assertIn("Timed Out", res)
+        self.assertFalse((self.lab / "corrupt.json").exists())
+
 
 class LabSandboxToolPolicyTests(unittest.TestCase):
     def test_tool_policy_and_permitted_tools(self):
@@ -257,6 +326,8 @@ class LabSandboxRealDockerTests(unittest.TestCase):
     """Integration test executing a real Python script inside Docker Desktop."""
 
     def setUp(self):
+        if os.environ.get("CI") and os.environ.get("VEIL_DOCKER_SANDBOX_TEST") != "1":
+            self.skipTest("Real Docker execution tests in CI require VEIL_DOCKER_SANDBOX_TEST=1")
         is_ready, _ = check_docker_available()
         if not is_ready:
             self.skipTest("Docker daemon is not running on this machine.")

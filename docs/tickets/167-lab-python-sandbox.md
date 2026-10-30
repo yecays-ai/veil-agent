@@ -5,39 +5,45 @@
 ## 一、交付范围与核心能力
 
 Peter 现在可以在自己的 Lab 独立编写、运行、观察、调试并修改 Python 程序：
-1. **真实独立执行**：通过本地 Docker 容器（`python:3.12-slim`）执行 Peter 的 Lab 脚本，实时捕获 stdout、stderr、耗时与产生的文件。
+1. **真实独立执行**：通过本地 Docker 容器（`python:3.12-slim`）执行 Peter 的 Lab 脚本，执行结束后汇总捕获 stdout、stderr、耗时与产生的文件（单流上限 50 KB / 1,000 行）。
 2. **严格隔离边界**：
    - 绝不使用宿主机 Python 作为执行器；
    - Docker 未启动或不可用时快速拒绝并明确提示，**绝不退回宿主机进程**；
    - 容器强制断网（`--network none`）；
-   - 不挂载宿主机个人目录（桌面、文档、浏览器、微信、Ombre 等）及源码仓库；
+   - 一次性临时工作区绑定挂载（`/workspace`），不挂载宿主机个人目录（桌面、文档、浏览器、微信、Ombre 等）及源码仓库；
    - 不继承 VEIL 主进程的环境变量（API Key、Token 等）；
    - 严格资源限制：内存 256MB、CPU 1.0、最大进程数 64、无提权（`--security-opt no-new-privileges`、`--cap-drop ALL`）；
-   - 硬超时控制：默认 15 秒，上限 30 秒；支持用户停止（`should_stop`）时立即 `docker kill` 销毁。
-3. **成果持久化**：
-   - 执行前在隔离暂存区准备当前实验脚本及项目文件；
-   - 运行后自动扫描新生成及修改的文件，经安全路径检查（防目录穿越与软链接）后回写至 Peter 的 `lab/` 目录；
+   - 硬超时控制：默认 15 秒，上限 30 秒；支持用户停止（`should_stop`）时立即 `docker kill` 销毁容器。
+3. **成果持久化与防损坏**：
+   - 执行前在隔离暂存区准备当前实验脚本及项目文件，并记录 SHA-256 内容哈希；
+   - 超时或被取消的执行**跳过成果回写**，防止半写文件损坏原有实验成果；
+   - 运行正常结束后基于内容哈希比对新生成及修改的文件，经安全路径检查（防目录穿越与软链接）后，通过临时同级文件与 `os.replace` 原子替换写回 Peter 的 `lab/` 目录；
    - 重启 VEIL 后，Peter 可基于之前保存的成果继续实验。
 4. **自主调试闭环**：
-   - 脚本报错时返回完整 Python Traceback，工具调用保持成功，模型可在上下文直接读取报错信息并自行修改代码再试。
+   - 脚本报错时返回包含 Python Traceback 的完整错误输出，工具调用保持成功，模型可在上下文直接读取报错信息并自行修改代码再试。
 5. **角色工具别名**：
-   - 在 Peter 的 `character.toml` 中配置 `run_lab_python = "tinker_in_lab"`。
+   - 在 Peter 的 `character.toml` 中配置 `run_lab_python = "tinker_in_lab"`，配合写文件别名 `scribble` 形成完整闭环。
 
 ---
 
 ## 二、架构与模块实现
 
 - `lab_sandbox.py`：
-  - `LabPythonSandbox`：负责环境探测、参数校验、执行环境准备、Docker 容器调用、超时与打断监控、生成文件写回与结果格式化。
-  - `check_docker_available()`：通过轻量 `docker version` 校验本地 Docker 守护进程连通性，带快速超时与缓存防抖。
+  - `LabPythonSandbox`：负责环境探测、参数校验、执行环境准备、Docker 容器调用、超时与打断监控、内容哈希比对、原子文件写回与结果格式化。
+  - `check_docker_available()`：通过轻量 `docker version` 校验本地 Docker 守护进程连通性，带快速超时与 5 秒缓存防抖。
   - `_safe_lab_file()`：严格限制文件只允许在 `lab/` 作用域内，阻断 `..` 越界、绝对路径与 Windows Reparse Points。
 - `tools_agent.py`：
-  - 注册 `run_lab_python` 工具到 `LAB_ONLY` 与 `FilesystemTools`；
+  - 注册 `run_lab_python` 工具到 `LAB_ONLY` 与 `FilesystemTools`，提供准确的权限说明；
   - 在 `begin_request`、`invoke` 与 `preview_summary` 中接入 `LabPythonSandbox` 生命周期。
+- `veil_agent.py`：
+  - 在 `load_character` 中规范化并保留 `python_sandbox` 配置开关；
+  - 在工具分发循环中将 `run_lab_python` 纳入支持 `should_stop` 打断的工具列表。
+- `long_tasks.py`：
+  - 将 `run_lab_python` 纳入 `SIDE_EFFECT_TOOLS`，保证长任务检查点正确记录副作用。
 - `characters/peter/character.toml`：
   - 添加工具别名映射：`run_lab_python = "tinker_in_lab"`。
 - `tests/test_lab_sandbox.py`：
-  - 16 项单测与真实 Docker 集成测试（覆盖路径校验、Docker 缺失阻断、断网隔离、超时杀死、错误捕获、文件回写持久化等）。
+  - 包含 15 项单元/模拟测试（覆盖隔离参数、安全路径防穿越、Docker 缺失快速阻断、超时杀死、打断清理、超时防损坏跳过回写、原子写回）及 3 项真实 Docker 集成测试。
 
 ---
 
@@ -50,8 +56,8 @@ Peter 现在可以在自己的 Lab 独立编写、运行、观察、调试并修
 1. 打开 VEIL 与 Peter 对话或触发自主醒来，对 Peter 说：
    > “Peter，在你的 Lab 里写一个 Python 程序，计算斐波那契数列前 20 项并打印出来，同时把结果存成 `fib.json`。”
 2. **观察点**：
-   - Peter 调用 `write_file` 创建 `lab/fib.py`；
-   - Peter 调用 `run_lab_python`（或 `tinker_in_lab`）执行 `fib.py`；
+   - Peter 调用 `scribble`（即 `write_file`）创建 `lab/fib.py`；
+   - Peter 调用 `tinker_in_lab`（即 `run_lab_python`）执行 `fib.py`；
    - 工具返回成功，输出标准输出与产生的 `fib.json` 文件；
    - 查看 Peter 的 `lab/` 目录下实际产生了 `fib.json` 文件，内容正确。
 
@@ -70,7 +76,7 @@ Peter 现在可以在自己的 Lab 独立编写、运行、观察、调试并修
    > “Peter，还记得你之前在 Lab 算的斐波那契数列吗？读一下刚才保存的 `fib.json`，根据它写一个 `show.html` 网页展示结果。”
 3. **观察点**：
    - 重启后之前生成的文件依然完好保存在 `lab/` 中；
-   - Peter 可以读取 `fib.json` 并生成 `show.html`，随后可通过 `preview_lab_page` 预览网页。
+   - Peter 可以读取 `fib.json` 并生成 `show.html`，随后可通过 `preview_lab_page`（`test_drive`）预览网页。
 
 ### 场景 D：严格安全隔离验证（私密文件、网络与凭据）
 1. 让 Peter 运行一个探测宿主环境的恶意脚本，例如：
@@ -101,5 +107,5 @@ Peter 现在可以在自己的 Lab 独立编写、运行、观察、调试并修
 ### 场景 E：死循环超时与打断清理
 1. 让 Peter 运行一个死循环脚本（如 `while True: pass`）；
 2. **观察点**：
-   - 程序执行到达 15 秒（或设定超时）后自动终止，返回超时说明；
+   - 程序执行到达 15 秒（或设定超时）后自动终止，返回超时说明且不回写损坏文件；
    - 宿主机上无挂起容器（`docker ps` 中该容器已自动销毁退出）。

@@ -1,6 +1,7 @@
 """Bounded, container-isolated Python execution sandbox for Peter's Lab."""
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import shutil
@@ -93,8 +94,17 @@ def _safe_lab_file(lab: Path, relative: str, *, must_exist: bool = True) -> Path
     return candidate
 
 
+_DOCKER_CACHE: Tuple[float, bool, str] = (0.0, False, "")
+_CACHE_TTL = 5.0
+
+
 def check_docker_available(timeout: float = 2.0) -> Tuple[bool, str]:
-    """Check if the local Docker engine is accessible."""
+    """Check if the local Docker engine is accessible (with 5s debounce cache)."""
+    global _DOCKER_CACHE
+    now = time.monotonic()
+    last_time, cached_ok, cached_ver = _DOCKER_CACHE
+    if now - last_time < _CACHE_TTL:
+        return cached_ok, cached_ver
     try:
         proc = subprocess.run(
             ["docker", "version", "--format", "{{.Server.Version}}"],
@@ -103,15 +113,25 @@ def check_docker_available(timeout: float = 2.0) -> Tuple[bool, str]:
             timeout=timeout,
         )
         if proc.returncode == 0 and proc.stdout.strip():
-            return True, proc.stdout.strip()
+            res = (True, proc.stdout.strip())
+            _DOCKER_CACHE = (now, res[0], res[1])
+            return res
         err = proc.stderr.strip() or "Docker daemon is not running."
-        return False, err
+        res = (False, err)
+        _DOCKER_CACHE = (now, res[0], res[1])
+        return res
     except FileNotFoundError:
-        return False, "Docker executable 'docker' was not found on PATH."
+        res = (False, "Docker executable 'docker' was not found on PATH.")
+        _DOCKER_CACHE = (now, res[0], res[1])
+        return res
     except subprocess.TimeoutExpired:
-        return False, "Docker engine response timed out."
+        res = (False, "Docker engine response timed out.")
+        _DOCKER_CACHE = (now, res[0], res[1])
+        return res
     except Exception as exc:
-        return False, str(exc)
+        res = (False, str(exc))
+        _DOCKER_CACHE = (now, res[0], res[1])
+        return res
 
 
 class LabPythonSandbox:
@@ -279,6 +299,17 @@ class LabPythonSandbox:
                         continue
         return staged
 
+    @staticmethod
+    def _file_hash(path: Path) -> Optional[bytes]:
+        try:
+            h = hashlib.sha256()
+            with path.open("rb") as f:
+                while chunk := f.read(65536):
+                    h.update(chunk)
+            return h.digest()
+        except Exception:
+            return None
+
     def _run_sandbox(
         self,
         *,
@@ -290,33 +321,50 @@ class LabPythonSandbox:
         summary: str,
         should_stop: Optional[Callable[[], bool]],
     ) -> Tuple[str, str, str]:
-        # 1. Copy staged files into temp_path
-        initial_fingerprints: Dict[str, Tuple[int, float]] = {}
+        # Enforce total staged file size limit
+        try:
+            total_staged_bytes = sum(src.stat().st_size for src in staged_files.values())
+        except OSError as exc:
+            return f"Failed to access staged experiment files: {exc}", "出错", summary
+
+        if total_staged_bytes > MAX_TOTAL_OUTPUT_BYTES:
+            return (
+                f"Staged project files exceed total limit ({total_staged_bytes} > {MAX_TOTAL_OUTPUT_BYTES} bytes).",
+                "被拒绝",
+                summary,
+            )
+
+        # 1. Copy staged files into temp_path and record content hashes
+        initial_hashes: Dict[str, bytes] = {}
         script_rel_in_lab = script_file.relative_to(self.lab).as_posix()
 
-        # Ensure workspace directory permissions for container access
+        # Workspace directory permissions for container access
         try:
-            os.chmod(temp_path, 0o777)
+            os.chmod(temp_path, 0o700)
         except Exception:
             pass
 
-        for rel, src in staged_files.items():
-            dest = temp_path / rel
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            curr = dest.parent
-            while curr != temp_path and curr != curr.parent:
+        try:
+            for rel, src in staged_files.items():
+                dest = temp_path / rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                curr = dest.parent
+                while curr != temp_path and curr != curr.parent:
+                    try:
+                        os.chmod(curr, 0o700)
+                    except Exception:
+                        pass
+                    curr = curr.parent
+                shutil.copy2(src, dest)
                 try:
-                    os.chmod(curr, 0o777)
+                    os.chmod(dest, stat.S_IMODE(src.stat().st_mode) | stat.S_IRUSR | stat.S_IWUSR)
                 except Exception:
                     pass
-                curr = curr.parent
-            shutil.copy2(src, dest)
-            try:
-                os.chmod(dest, 0o666)
-            except Exception:
-                pass
-            stat_res = dest.stat()
-            initial_fingerprints[rel] = (stat_res.st_size, stat_res.st_mtime)
+                h = self._file_hash(src)
+                if h is not None:
+                    initial_hashes[rel] = h
+        except Exception as exc:
+            return f"Failed to stage experiment files: {exc}", "出错", summary
 
         # 2. Build docker run invocation
         container_name = f"veil-lab-{uuid.uuid4().hex[:12]}"
@@ -333,8 +381,6 @@ class LabPythonSandbox:
             "--cpus",
             CONTAINER_CPUS,
             "--memory",
-            CONTAINER_MEMORY,
-            "--memory-swap",
             CONTAINER_MEMORY,
             "--pids-limit",
             str(CONTAINER_PIDS),
@@ -399,7 +445,10 @@ class LabPythonSandbox:
         stdout, stderr = proc.communicate()
 
         # Ensure container cleanup
-        subprocess.run(["docker", "rm", "-f", container_name], capture_output=True, timeout=5)
+        try:
+            subprocess.run(["docker", "rm", "-f", container_name], capture_output=True, timeout=5)
+        except Exception:
+            pass
 
         # 5. Format execution status
         if cancelled:
@@ -411,8 +460,11 @@ class LabPythonSandbox:
         else:
             status_desc = f"Failed (Exit Code: {proc.returncode})"
 
-        # 6. Check and write back generated files
-        generated_files, write_back_errors = self._sync_output_files(temp_path, initial_fingerprints)
+        # 6. Check and write back generated files (skip on timeout or cancellation to prevent corrupting artifacts)
+        if cancelled or timed_out:
+            generated_files, write_back_errors = [], []
+        else:
+            generated_files, write_back_errors = self._sync_output_files(temp_path, initial_hashes)
 
         # 7. Format output report for Peter
         report = self._build_report(
@@ -439,7 +491,7 @@ class LabPythonSandbox:
             pass
 
     def _sync_output_files(
-        self, temp_path: Path, initial_fingerprints: Dict[str, Tuple[int, float]]
+        self, temp_path: Path, initial_hashes: Dict[str, bytes]
     ) -> Tuple[List[Tuple[str, int]], List[str]]:
         """Inspect the workspace after execution and safely copy new/modified files back to Lab."""
         new_or_modified: List[Tuple[str, Path]] = []
@@ -461,9 +513,9 @@ class LabPythonSandbox:
                 except OSError:
                     continue
 
-                fp = (stat_info.st_size, stat_info.st_mtime)
-                # Check if new or modified
-                if rel_posix not in initial_fingerprints or initial_fingerprints[rel_posix] != fp:
+                # Check if new or modified by content hash
+                current_hash = self._file_hash(full_path)
+                if rel_posix not in initial_hashes or (current_hash is not None and initial_hashes[rel_posix] != current_hash):
                     # Validate relative path and file size
                     if stat_info.st_size > MAX_FILE_BYTES:
                         errors.append(f"File '{rel_posix}' ({stat_info.st_size} bytes) exceeded per-file limit ({MAX_FILE_BYTES} bytes); skipped.")
@@ -488,13 +540,29 @@ class LabPythonSandbox:
 
         saved: List[Tuple[str, int]] = []
         for rel_posix, src_path in new_or_modified:
-            dest_path = self.lab / rel_posix
+            tmp_dest = None
             try:
+                dest_path = _safe_lab_file(self.lab, rel_posix, must_exist=False)
                 dest_path.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(src_path, dest_path)
+                curr = dest_path.parent
+                while curr != self.lab and curr != curr.parent:
+                    if _is_reparse_point(curr):
+                        raise ValueError("Reparse point or symlink detected in destination parent directory.")
+                    curr = curr.parent
+
+                # Atomic write-back via temporary sibling file and replace
+                tmp_dest = dest_path.with_name(f".tmp.{uuid.uuid4().hex}.{dest_path.name}")
+                shutil.copy2(src_path, tmp_dest)
+                os.replace(tmp_dest, dest_path)
                 saved.append((f"{self.lab.name}/{rel_posix}", src_path.stat().st_size))
             except Exception as exc:
                 errors.append(f"Failed to save '{rel_posix}' to Lab: {exc}")
+                if tmp_dest is not None:
+                    try:
+                        if tmp_dest.exists():
+                            tmp_dest.unlink()
+                    except Exception:
+                        pass
 
         return saved, errors
 

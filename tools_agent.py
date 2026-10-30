@@ -436,14 +436,14 @@ class FilesystemTools:
                     before, after = old.get(name), core['tools'].get(name)
                     if before != after:
                         if before is None:
-                            changes.append(f'Added {name} ({self._permission_text(after)}).')
+                            changes.append(f'Added {name} ({self._permission_text(after, name)}).')
                         elif after is None:
                             changes.append(f'Removed {name}; it is no longer available.')
                         else:
-                            changes.append(f'Changed {name} from {self._permission_text(before)} '
-                                           f'to {self._permission_text(after)}.')
+                            changes.append(f'Changed {name} from {self._permission_text(before, name)} '
+                                           f'to {self._permission_text(after, name)}.')
                 if previous is None:
-                    changes = ([f'Added {name} ({self._permission_text(level)}).'
+                    changes = ([f'Added {name} ({self._permission_text(level, name)}).'
                                 for name, level in sorted(core['tools'].items())]
                                or ['No file tools are currently available.'])
                 memory_announcement = (core['resident_memory'] and previous is not None
@@ -452,7 +452,7 @@ class FilesystemTools:
                 if core['lab'] and core['lab'] != old_lab:
                     changes.append(f'Your lab folder "{self.lab.name}/" is available: you may create folders, '
                                    'create or append files, and move one file between ordinary folders and archive. '
-                                   'You may not overwrite, delete, or run scripts; journal permission is separate.')
+                                   'You may not overwrite, delete, or run host scripts; journal permission is separate.')
                 elif old_lab and not core['lab']:
                     changes.append('Direct-use lab permission is no longer available.')
                 old_messaging = previous.get('messaging', False) if previous else False
@@ -493,7 +493,9 @@ class FilesystemTools:
             raise UserError('能力清单无法读取或保存，文件工具已停止；请保留 data 文件夹。')
 
     @staticmethod
-    def _permission_text(level):
+    def _permission_text(level, name=None):
+        if name == 'run_lab_python':
+            return 'isolated container execution for Lab Python scripts with resource limits; no host execution, deletion or network'
         if level == 'web':
             return 'direct read-only use on public webpages'
         if level == 'desktop_read':
@@ -509,14 +511,14 @@ class FilesystemTools:
         return {
             'allow': 'direct use in the configured folder',
             'ask': "Lan's approval before use outside the lab folder",
-            'lab': 'direct use only inside the lab folder; no deletion or scripts',
+            'lab': 'direct use only inside the lab folder; no deletion or host scripts',
         }.get(level, 'not available')
 
     def _capability_event(self, core, changes):
         return (f'Capability update: in the "{core["folder"]}" folder, ' + ' '.join(changes))
 
     def _legacy_capability_event(self, core, previous):
-        changes = ([f'Current {name} permission: {self._permission_text(level)}.'
+        changes = ([f'Current {name} permission: {self._permission_text(level, name)}.'
                     for name, level in sorted(core['tools'].items())]
                    or ['No file tools are currently available.'])
         if previous.get('autonomy_announced'):
