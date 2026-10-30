@@ -747,7 +747,7 @@ class WindowsInteractionTools:
             from desktop_icons import DesktopIconsManager, FakeDesktopIconsBackend, Win32DesktopIconsBackend
             if desktop_icons_backend is None:
                 desktop_icons_backend = (Win32DesktopIconsBackend()
-                                         if self.platform_enabled else FakeDesktopIconsBackend())
+                                         if (self.platform_enabled and os.name == 'nt') else FakeDesktopIconsBackend())
             self.desktop_icons_manager = DesktopIconsManager(
                 store=self.store,
                 character_id=self.character_id,
