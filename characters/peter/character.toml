@@ -135,6 +135,7 @@ enabled = true
 [tool_aliases]
 windows_foreground = "peek_screen"
 windows_list = "snooping_around"
+windows_discover_apps = "scout_apps"
 desktop_list = "rummage_desktop"
 desktop_find_file = "sniff_out_file"
 desktop_read_text_file = "peek_desktop_note"

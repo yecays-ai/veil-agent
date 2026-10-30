@@ -21,6 +21,7 @@ READ_ONLY_TOOLS = {
     'list_directory', 'directory_tree', 'read_text_file', 'read_multiple_files',
     'get_file_info', 'search_files', 'list_directory_with_sizes', 'lab_file_digest', 'breath_search',
     'dream', 'letter_read', 'memory_history', 'memory_catalog', 'memory_read', 'pulse',
+    'windows_discover_apps',
 }
 MAX_PROGRESS_ITEMS = 40
 MAX_TOOL_EVENTS = 12

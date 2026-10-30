@@ -8,6 +8,7 @@ import os
 import queue
 import re
 import shutil
+import shlex
 import subprocess
 import tempfile
 import threading
@@ -18,6 +19,12 @@ from types import SimpleNamespace
 
 from agent_types import NOT_ASKED, NOT_ASKED_TEXT
 from desktop_access import DesktopBusy, desktop_access, program_input_made, register_input_tracker
+from windows_discovery import (
+    WindowsAppDiscovery,
+    is_ambiguous_confirmation,
+    is_file_dialog_control,
+    is_unsafe_text_input,
+)
 from windows_observer import (
     MAX_CONTROLS,
     MAX_RESULT_BYTES,
@@ -36,7 +43,7 @@ from windows_observer import (
 
 
 WINDOWS_INTERACTION_TOOL_NAMES = frozenset({
-    'windows_launch', 'windows_manage', 'windows_control_action',
+    'windows_discover_apps', 'windows_launch', 'windows_manage', 'windows_control_action',
 })
 WINDOWS_DESKTOP_TOOL_NAMES = WINDOWS_OBSERVATION_TOOL_NAMES | WINDOWS_INTERACTION_TOOL_NAMES
 
@@ -44,6 +51,17 @@ APP_WINDOW_WAIT_SECONDS = 7
 PUBLIC_WEB_WINDOW_WAIT_SECONDS = 25
 
 WINDOWS_INTERACTION_TOOL_SCHEMAS = [
+    SimpleNamespace(
+        name='windows_discover_apps',
+        description=(
+            'Discover installed Windows desktop applications from the Start Menu, App Paths and WindowsApps. '
+            'Returns a list of applications with app_id, name, can_launch, can_observe, can_interact. '
+            'Optional query filters applications by name or app_id. Read-only.'
+        ),
+        inputSchema={'type': 'object', 'properties': {
+            'query': {'type': 'string', 'description': 'Optional search term to filter applications by name or app_id.'},
+        }, 'additionalProperties': False},
+    ),
     SimpleNamespace(
         name='windows_launch',
         description=(
@@ -604,6 +622,12 @@ class WindowsInteractionBackend(WindowsDesktopBackend):
         profile_directory = None
         try:
             args = [launch_path]
+            if app.get('launch_args') and url is None:
+                try:
+                    extra_args = shlex.split(app['launch_args'], posix=False)
+                    args.extend(extra_args)
+                except Exception:
+                    pass
             if url is not None:
                 if app.get('public_web') is not True:
                     raise ObservationError('This application is not authorized to open public webpages.')
@@ -640,17 +664,24 @@ class WindowsInteractionTools:
 
     def __init__(self, enabled, applications, *, max_result_bytes=8192, backend=None,
                  platform_enabled=None, idle_seconds=3, timeout_seconds=8,
-                 input_monitor=None):
+                 input_monitor=None, discovery=None):
         self.enabled = enabled is True
         self.platform_enabled = (os.name == 'nt') if platform_enabled is None else bool(platform_enabled)
         self.applications = applications or {}
+        self.discovery = discovery or WindowsAppDiscovery()
+        self.discovered_applications = {}
         self.backend = backend or WindowsInteractionBackend()
         self.max_result_bytes = max(512, min(int(max_result_bytes), MAX_RESULT_BYTES))
         self.idle_seconds = max(1, min(int(idle_seconds), 30))
         self.timeout_seconds = max(1, min(int(timeout_seconds), 8))
         self.input_monitor = input_monitor or DesktopInputMonitor()
         self.tools = (list(WINDOWS_INTERACTION_TOOL_SCHEMAS)
-                      if self.enabled and self.platform_enabled and self.applications else [])
+                      if self.enabled and self.platform_enabled else [])
+
+    def get_app(self, app_id):
+        if not app_id:
+            return None
+        return self.applications.get(app_id) or self.discovered_applications.get(app_id)
 
     def application_id_for(self, window):
         path = str(window.get('process_path', ''))
@@ -660,11 +691,16 @@ class WindowsInteractionTools:
         for app_id, app in self.applications.items():
             if any(fnmatch.fnmatchcase(normalized, pattern) for pattern in app['process_paths']):
                 return app_id
+        for app_id, app in self.discovered_applications.items():
+            if any(fnmatch.fnmatchcase(normalized, pattern) for pattern in app['process_paths']):
+                return app_id
         return None
 
     def preview_summary(self, name, args):
+        if name == 'windows_discover_apps':
+            return 'Windows application discovery'
         app_id = args.get('app_id') if isinstance(args, dict) else None
-        app = self.applications.get(app_id)
+        app = self.get_app(app_id)
         if name == 'windows_launch' and app:
             return f'{app["label"]} launch'
         return app['label'] if app else 'Windows application'
@@ -754,8 +790,8 @@ class WindowsInteractionTools:
         return isinstance(value, str) and bool(_WINDOW_ID.fullmatch(value))
 
     def _selected_window(self, app_id, window_id, stopped):
-        if app_id not in self.applications:
-            raise ObservationError('The requested app_id is not in this character’s Windows allowlist.')
+        if not self.get_app(app_id):
+            raise ObservationError('The requested app_id is not in this character’s Windows allowlist or discovered applications.')
         if not self._valid_window_id(window_id):
             raise ObservationError('Use an exact window_id returned by windows_list or windows_foreground.')
         windows = self.backend.list_windows(stopped)
@@ -826,15 +862,52 @@ class WindowsInteractionTools:
         return result, '成功', summary
 
     def _invoke(self, name, args, approval, should_stop, summary):
+        if name == 'windows_discover_apps':
+            if set(args) - {'query'} or ('query' in args and not isinstance(args.get('query'), str)):
+                return WindowsToolResult('Invalid arguments. Optional query must be a string.', activity_detail='参数无效。'), '被拒绝'
+            query = (args.get('query') or '').strip().lower()
+
+            def discover(stopped):
+                if stopped():
+                    raise InteractionPaused('The autonomous activity was paused.')
+                discovered_list = self.discovery.discover_applications(existing_apps=self.applications)
+                for item in discovered_list:
+                    self.discovered_applications[item['app_id']] = item
+
+                matches = []
+                for item in discovered_list:
+                    if not query or query in item['app_id'].lower() or query in item['label'].lower():
+                        matches.append({
+                            'app_id': item['app_id'],
+                            'name': item['label'],
+                            'can_launch': item['can_launch'],
+                            'can_observe': item['can_observe'],
+                            'can_interact': item['can_interact'],
+                        })
+
+                launchable = sum(1 for m in matches if m['can_launch'])
+                detail = f'发现 Windows 软件 {len(matches)} 款（可启动 {launchable} 款）。'
+                summary_msg = f'已发现 {len(matches)} 款可用应用。'
+                return self._success({
+                    'count': len(matches),
+                    'applications': matches[:30],
+                    'query': query or None,
+                }, detail, summary_msg)
+
+            return self._run(discover, summary, should_stop, timeout=self.timeout_seconds, side_effect=False)
+
         if name == 'windows_launch':
             if (set(args) - {'app_id', 'url'} or 'app_id' not in args
                     or not isinstance(args.get('app_id'), str)
                     or ('url' in args and not isinstance(args.get('url'), str))):
                 return WindowsToolResult('Use an allowlisted app_id and, optionally, one public HTTP(S) URL.', activity_detail='参数无效。'), '被拒绝'
-            app = self.applications.get(args['app_id'])
+            app = self.get_app(args['app_id'])
             if app is None:
-                return WindowsToolResult('That app_id is not allowlisted; no executable was started.',
-                                         activity_detail=f'{summary} 程序白名单拒绝。'), '被拒绝'
+                return WindowsToolResult('That app_id is not allowlisted or discovered; no executable was started.',
+                                         activity_detail=f'{summary} 未找到该应用。'), '被拒绝'
+            if app.get('discovered') and not app.get('can_launch'):
+                return WindowsToolResult('This discovered application cannot be safely launched automatically; launch was refused.',
+                                         activity_detail=f'{summary} 安全规则拒绝启动。'), '被拒绝'
             url = None
             if app.get('public_web') is True and 'url' not in args:
                 return WindowsToolResult('This browser permission only opens a supplied public webpage URL.',
@@ -917,7 +990,7 @@ class WindowsInteractionTools:
                     or args.get('action') not in ('activate', 'minimize', 'restore')):
                 return WindowsToolResult('Use an allowlisted app_id, exact window_id, and activate/minimize/restore action.',
                                          activity_detail='参数无效。'), '被拒绝'
-            app = self.applications.get(args['app_id'])
+            app = self.get_app(args['app_id'])
             if app is None or args['action'] not in app['actions']:
                 return WindowsToolResult('This app or window action is not authorized by the program allowlist.',
                                          activity_detail=f'{summary} 窗口动作未授权。'), '被拒绝'
@@ -957,10 +1030,13 @@ class WindowsInteractionTools:
                                              activity_detail='文本输入参数无效。'), '被拒绝'
             elif 'text' in args:
                 return WindowsToolResult('text is accepted only for set_text.', activity_detail='参数无效。'), '被拒绝'
-            app = self.applications.get(args['app_id'])
+            app = self.get_app(args['app_id'])
             if app is None or action not in app['actions']:
                 return WindowsToolResult('This app or UIA action is not authorized by the program allowlist.',
                                          activity_detail=f'{summary} UIA 动作未授权。'), '被拒绝'
+            if app.get('discovered') and not app.get('can_interact'):
+                return WindowsToolResult('This discovered application has observation-only permissions; interaction is not authorized.',
+                                         activity_detail=f'{summary} 交互权限未开放。'), '被拒绝'
             if should_stop and should_stop():
                 return WindowsToolResult('The autonomous activity is paused; no desktop action was started.',
                                          activity_detail=f'{summary} 自主活动暂停；未操作。'), '中断'
@@ -973,6 +1049,19 @@ class WindowsInteractionTools:
             if error is not None:
                 return inspected, error
             selected, metadata = inspected
+            if app.get('discovered'):
+                if is_file_dialog_control(metadata, selected):
+                    return WindowsToolResult(
+                        'This control is inside a file open/save dialog. File dialog operations are prohibited on discovered apps to protect files.',
+                        activity_detail=f'{summary} 文件对话框被程序拒绝。'), '被拒绝'
+                if action == 'invoke' and is_ambiguous_confirmation(metadata, selected):
+                    return WindowsToolResult(
+                        'Generic confirmation button in unverified context is rejected for safety.',
+                        activity_detail=f'{summary} 模糊确认按钮被程序拒绝。'), '被拒绝'
+                if action == 'set_text' and is_unsafe_text_input(metadata):
+                    return WindowsToolResult(
+                        'Text input on file paths, command inputs, or address fields is prohibited on discovered apps.',
+                        activity_detail=f'{summary} 危险文本输入被程序拒绝。'), '被拒绝'
             if _BLOCKED_CONTROL.search(' '.join((metadata.get('name', ''),
                                                  metadata.get('automation_id', ''),
                                                  *metadata.get('ancestor_labels', ())))):
@@ -1030,6 +1119,13 @@ class WindowsInteractionTools:
                             or fresh.get('parent_type') != metadata.get('parent_type')
                             or fresh.get('ancestor_labels') != metadata.get('ancestor_labels')):
                         raise ObservationError('The selected control changed after approval. Observe it again; no action was performed.')
+                    if app.get('discovered'):
+                        if is_file_dialog_control(fresh, current):
+                            raise ObservationError('The selected control is inside a file dialog; action was refused.')
+                        if action == 'invoke' and is_ambiguous_confirmation(fresh, current):
+                            raise ObservationError('Generic confirmation button in unverified context was refused.')
+                        if action == 'set_text' and is_unsafe_text_input(fresh):
+                            raise ObservationError('Text input on path or command field was refused.')
                     if _BLOCKED_CONTROL.search(' '.join((fresh.get('name', ''),
                                                          fresh.get('automation_id', ''),
                                                          *fresh.get('ancestor_labels', ())))):

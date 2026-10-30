@@ -1,6 +1,8 @@
 # 当前状态
 
-工单 167（2026-10-30）：分支 `ticket/167-lab-python-sandbox`。实现 Peter Lab 独立代码实验室，基于本地 Docker 隔离容器（`python:3.12-slim`）执行 Python 脚本，支持标准输出/错误堆栈捕获、管道防死锁与超时/资源/磁盘限制（256MB/Swap限制/1.0CPU/15s默认30s上限/50MB工作区配额）、Lab 成果文件生成与持久化；一次性临时工作区绑定挂载、只读根文件系统、不挂载个人/源码目录、无环境变量继承，容器严格断网（`--network none`），结果添加不可信数据包裹，默认关闭且仅 Peter 启用，Docker 不可用时快速拒绝绝不退回宿主。全量测试通过。Windows 实机体验按 A–E 待验收。验收见 `docs/tickets/167-lab-python-sandbox.md`。
+工单 173（2026-10-31）：分支 `ticket/173-windows-app-discovery`。实现 Peter 自主发现与探索 Windows 软件：新增通用软件安全发现模块（`windows_discovery.py`），通过开始菜单快捷方式、App Paths 注册表及 WindowsApps 自动识别已安装普通桌面应用，排除安装卸载、脚本解释器、系统提权等危险入口；复用已有 UIA、Win32、窗口管理链路与人类操作优先机制，实施发现/启动/观察/交互分级权限控制，程序层拦截文件对话框与模糊确认控件；提供 `windows_discover_apps` 工具与 `scout_apps` 别名。测试全部通过，Windows 实机体验待 Lan 验收。验收见 `docs/tickets/173-windows-app-discovery.md`。
+
+工单 167（2026-10-30）：分支 `ticket/167-lab-python-sandbox`。PR #221 已合并（`cc31b85`）。实现 Peter Lab 独立代码实验室，基于本地 Docker 隔离容器（`python:3.12-slim`）执行 Python 脚本，支持标准输出/错误堆栈捕获、管道防死锁与超时/资源/磁盘限制（256MB/Swap限制/1.0CPU/15s默认30s上限/50MB工作区配额）、Lab 成果文件生成与持久化；一次性临时工作区绑定挂载、只读根文件系统、不挂载个人/源码目录、无环境变量继承，容器严格断网（`--network none`），结果添加不可信数据包裹，默认关闭且仅 Peter 启用，Docker 不可用时快速拒绝绝不退回宿主。全量测试通过。Windows 实机体验按 A–E 待 Lan 验收。验收见 `docs/tickets/167-lab-python-sandbox.md`。
 
 工单 172（2026-10-30）：基于已合并 171 的 main，在 `ticket/172-preserve-tool-results` 修复中文工具正文被替换为英文成功提示的问题，PR #220 已合并。中文桌面文件名、记忆目录及正文、混合语言结果均保留；明确的程序成功提示改为英文，小红书内容加不可信包裹，原有其他不可信内容包裹和 165 的长度控制继续使用。自动检查及 Windows 实机体验以实际结果为准。验收见 `docs/tickets/172-preserve-tool-results.md`。
 
@@ -14,7 +16,9 @@
 
 ## 当前目标与现状
 
-- 当前目标：让 Peter 制作的 Lab HTML 游戏在 Lan 玩完后自动保存成绩，并让 Peter 自主读取授权桌面目录的 JPG/PNG 图片。
+- 当前目标：让 Peter 在聊天和自主唤醒时能够自主发现 Windows 电脑上安装的普通桌面软件，安全启动感兴趣的软件并进行界面观察和受控探索。
+- 工单 173：分支 `ticket/173-windows-app-discovery`。新增通用软件安全发现模块（`windows_discovery.py`），通过开始菜单快捷方式、App Paths 注册表及 WindowsApps 自动识别已安装普通桌面应用，排除安装卸载、脚本解释器、系统提权等危险入口；复用已有 UIA、Win32、窗口管理链路与人类操作优先机制，实施发现/启动/观察/交互分级权限控制，程序层拦截文件对话框与模糊确认控件；提供 `windows_discover_apps` 工具与 `scout_apps` 别名。测试全部通过，Windows 实机体验待 Lan 验收。见 `docs/tickets/173-windows-app-discovery.md`。
+- 工单 167：PR #221 已合并（`cc31b85`）。全量测试通过；Windows 实机体验按 A–E 待 Lan 验收。见 `docs/tickets/167-lab-python-sandbox.md`。
 - 当前目标（补）：Lan 回复瞄一眼弹幕时，Peter 能接上自己刚才看见的窗口、当时的观察和弹幕原话。
 - 工单 170：分支 `ticket/170-update-bat-nowhere`。update.bat 复制到 `.local-tmp` 运行时，安装乌有乡一行的脚本路径指向了 `.local-tmp`，改为从 Agent 目录（`%CD%`）取；Windows 待 Lan 重新运行 update.bat 验收。见 `docs/tickets/170-update-bat-nowhere-path.md`。下一工单号 171。
 - 工单 169：分支 `ticket/169-glance-continuity` 已实现最近一次瞄一眼的私有经历记录：保留原始时间、窗口、观察摘要和显示得到确认的弹幕原话，每轮自动注入，持续到下一次瞄一眼启动时替换。原始 UIA 不落盘，不自动写长期记忆，记录明确供接话使用而非每轮主动重提。本地 121 项专项、聊天、自主与缓存回归通过；网页 HTTP 回归受本机回环网络权限限制，待 CI 验证；PR、CI、评审与 Windows 体验状态以实际交付为准。验收步骤见 `docs/tickets/169-glance-continuity.md`。下一工单号 171。
@@ -109,6 +113,7 @@
 | 163 | 小红书与 GitHub 迁入 MCP 管理 | PR #211，待验收 |
 | 166 | 乌有乡旅行 MCP、Peter 独立旅程状态、记忆/Lab 与地图入口 | PR #214、#215 已合并；重启后的 Windows 工具返回待验收 |
 | 168 | 授权桌面 JPG/PNG 指定读取与视觉理解 | PR #216 开放，CI/Windows 体验待验收 |
+| 173 | 自主发现与探索 Windows 软件（分级权限、防注入与文件对话框拦截） | PR 开放中，待 CI 与 Windows 体验验收 |
 
 ### Lab 创作与附件
 

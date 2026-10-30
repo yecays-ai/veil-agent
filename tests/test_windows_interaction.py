@@ -695,9 +695,10 @@ idle_seconds = 3
     def test_program_policy_marks_interactions_as_controlled(self):
         self.assertEqual(tool_policy('windows_launch'), 'desktop_control')
         self.assertEqual(tool_policy('windows_list'), 'desktop_read')
+        self.assertEqual(tool_policy('windows_discover_apps'), 'desktop_read')
         offered = permitted_tools(WINDOWS_INTERACTION_TOOL_SCHEMAS)
         self.assertEqual({item['function']['name'] for item in offered}, {
-            'windows_launch', 'windows_manage', 'windows_control_action',
+            'windows_discover_apps', 'windows_launch', 'windows_manage', 'windows_control_action',
         })
 
     def test_chat_tool_loop_uses_approval_untrusted_result_and_activity_ledger(self):
@@ -796,6 +797,295 @@ max_steps = 3
             paused = chat._execute_tool_call(call, 'autonomy-request', 'autonomy-call', True)
             self.assertEqual(paused.state, '中断')
             self.assertEqual(backend.actions, before_actions)
+
+    def test_windows_discover_apps_lists_and_filters_applications(self):
+        backend = FakeInteractionBackend()
+        tools = WindowsInteractionTools(True, {'notepad': {
+            'app_id': 'notepad', 'label': 'Notepad', 'launch_path': NOTEPAD_PATH,
+            'process_paths': (NOTEPAD_PATH,), 'actions': frozenset({'activate'}),
+            'public_web': False,
+        }}, backend=backend, platform_enabled=True)
+
+        # Mock discovery results
+        mock_discovery = Mock()
+        mock_discovery.discover_applications.return_value = [
+            {
+                'app_id': 'app_paint',
+                'label': 'Paint',
+                'launch_path': 'C:\\WindowsApps\\mspaint.exe',
+                'launch_args': None,
+                'process_paths': ('c:\\windowsapps\\mspaint.exe', '*\\paintapp.exe'),
+                'actions': frozenset({'activate', 'minimize', 'restore', 'invoke', 'select', 'toggle', 'set_text'}),
+                'discovered': True,
+                'can_launch': True,
+                'can_observe': True,
+                'can_interact': True,
+                'public_web': False,
+            },
+            {
+                'app_id': 'app_calc',
+                'label': 'Calculator',
+                'launch_path': 'C:\\Windows\\System32\\calc.exe',
+                'launch_args': None,
+                'process_paths': ('c:\\windows\\system32\\calc.exe', '*\\calculator.exe'),
+                'actions': frozenset({'activate', 'invoke'}),
+                'discovered': True,
+                'can_launch': True,
+                'can_observe': True,
+                'can_interact': True,
+                'public_web': False,
+            },
+        ]
+        tools.discovery = mock_discovery
+
+        result, state, summary = tools.invoke('windows_discover_apps', {})
+        self.assertEqual(state, '成功')
+        self.assertIn('发现 Windows 软件 2 款', str(result))
+        self.assertEqual(len(tools.discovered_applications), 2)
+        self.assertIn('app_paint', tools.discovered_applications)
+
+        # Test query filter
+        filtered_result, f_state, _ = tools.invoke('windows_discover_apps', {'query': 'paint'})
+        self.assertEqual(f_state, '成功')
+        self.assertIn('app_paint', str(filtered_result))
+        self.assertNotIn('app_calc', str(filtered_result))
+
+    def test_windows_launch_discovered_application_and_window_reuse(self):
+        backend = FakeInteractionBackend()
+        tools = WindowsInteractionTools(True, {}, backend=backend, platform_enabled=True)
+
+        tools.discovered_applications['app_paint'] = {
+            'app_id': 'app_paint',
+            'label': 'Paint',
+            'launch_path': 'C:\\WindowsApps\\mspaint.exe',
+            'launch_args': None,
+            'process_paths': ('c:\\windowsapps\\mspaint.exe', '*\\paintapp.exe'),
+            'actions': frozenset({'activate', 'invoke'}),
+            'discovered': True,
+            'can_launch': True,
+            'can_observe': True,
+            'can_interact': True,
+            'public_web': False,
+        }
+
+        # Window matching discovered app
+        backend.windows = [{
+            'id': 'w-' + '3' * 24,
+            'handle': 301,
+            'pid': 401,
+            'created': 501,
+            'process_path': 'C:\\Program Files\\WindowsApps\\Microsoft.Paint\\PaintApp.exe',
+            'process': 'paintapp.exe',
+            'title': 'Untitled - Paint',
+            'state': 'visible',
+            'foreground': False,
+        }]
+
+        # Match application_id_for
+        self.assertEqual(tools.application_id_for(backend.windows[0]), 'app_paint')
+
+        # Launch reuses existing window
+        result, state, summary = tools.invoke('windows_launch', {'app_id': 'app_paint'})
+        self.assertEqual(state, '成功')
+        self.assertIn('已复用现有窗口', result.activity_detail)
+        self.assertEqual(backend.actions, [('activate', None)])
+
+    def test_windows_launch_refuses_disallowed_or_unlaunchable_discovered_app(self):
+        backend = FakeInteractionBackend()
+        tools = WindowsInteractionTools(True, {}, backend=backend, platform_enabled=True)
+
+        # Non-existent app_id
+        res, state, _ = tools.invoke('windows_launch', {'app_id': 'app_unknown'})
+        self.assertEqual(state, '被拒绝')
+        self.assertIn('未找到该应用', res.activity_detail)
+
+        # Discovered app with can_launch = False
+        tools.discovered_applications['app_unlaunchable'] = {
+            'app_id': 'app_unlaunchable',
+            'label': 'Unlaunchable Tool',
+            'launch_path': 'C:\\tool.exe',
+            'process_paths': ('c:\\tool.exe',),
+            'actions': frozenset({'activate'}),
+            'discovered': True,
+            'can_launch': False,
+            'can_observe': True,
+            'can_interact': False,
+            'public_web': False,
+        }
+        res2, state2, _ = tools.invoke('windows_launch', {'app_id': 'app_unlaunchable'})
+        self.assertEqual(state2, '被拒绝')
+        self.assertIn('安全规则拒绝启动', res2.activity_detail)
+
+    def test_discovered_app_control_action_blocks_file_dialog(self):
+        backend = FakeInteractionBackend()
+        tools = WindowsInteractionTools(True, {}, backend=backend, platform_enabled=True)
+
+        tools.discovered_applications['app_paint'] = {
+            'app_id': 'app_paint',
+            'label': 'Paint',
+            'launch_path': 'C:\\WindowsApps\\mspaint.exe',
+            'process_paths': ('c:\\windowsapps\\mspaint.exe',),
+            'actions': frozenset({'invoke', 'set_text'}),
+            'discovered': True,
+            'can_launch': True,
+            'can_observe': True,
+            'can_interact': True,
+            'public_web': False,
+        }
+        backend.windows[0]['process_path'] = 'C:\\WindowsApps\\mspaint.exe'
+        backend.windows[0]['title'] = 'Save As'
+
+        backend.control = {
+            'control_id': CONTROL_ID,
+            'type': 'ButtonControl',
+            'name': 'Save',
+            'automation_id': 'SaveButton',
+            'parent_type': 'WindowControl',
+            'ancestor_labels': ('#32770', 'Save As'),
+            'enabled': True,
+            'offscreen': False,
+            'patterns': ['invoke'],
+        }
+
+        res, state, _ = tools.invoke('windows_control_action', {
+            'app_id': 'app_paint',
+            'window_id': WINDOW_ID,
+            'control_id': CONTROL_ID,
+            'action': 'invoke',
+        })
+        self.assertEqual(state, '被拒绝')
+        self.assertIn('file open/save dialog', str(res))
+        self.assertIn('文件对话框被程序拒绝', res.activity_detail)
+        self.assertEqual(backend.actions, [])
+
+    def test_discovered_app_control_action_blocks_ambiguous_confirmation(self):
+        backend = FakeInteractionBackend()
+        tools = WindowsInteractionTools(True, {}, backend=backend, platform_enabled=True)
+
+        tools.discovered_applications['app_calc'] = {
+            'app_id': 'app_calc',
+            'label': 'Calculator',
+            'launch_path': 'C:\\Windows\\System32\\calc.exe',
+            'process_paths': ('c:\\windows\\system32\\calc.exe',),
+            'actions': frozenset({'invoke'}),
+            'discovered': True,
+            'can_launch': True,
+            'can_observe': True,
+            'can_interact': True,
+            'public_web': False,
+        }
+        backend.windows[0]['process_path'] = 'C:\\Windows\\System32\\calc.exe'
+        backend.windows[0]['title'] = 'Calculator'
+
+        # Generic "确定" in an unverified dialog context
+        backend.control = {
+            'control_id': CONTROL_ID,
+            'type': 'ButtonControl',
+            'name': '确定',
+            'automation_id': 'ConfirmBtn',
+            'parent_type': 'WindowControl',
+            'ancestor_labels': ('Dialog',),
+            'enabled': True,
+            'offscreen': False,
+            'patterns': ['invoke'],
+        }
+
+        res, state, _ = tools.invoke('windows_control_action', {
+            'app_id': 'app_calc',
+            'window_id': WINDOW_ID,
+            'control_id': CONTROL_ID,
+            'action': 'invoke',
+        })
+        self.assertEqual(state, '被拒绝')
+        self.assertIn('Generic confirmation button in unverified context is rejected', str(res))
+        self.assertIn('模糊确认按钮被程序拒绝', res.activity_detail)
+        self.assertEqual(backend.actions, [])
+
+    def test_discovered_app_control_action_blocks_unsafe_text_input(self):
+        backend = FakeInteractionBackend()
+        tools = WindowsInteractionTools(True, {}, backend=backend, platform_enabled=True)
+
+        tools.discovered_applications['app_paint'] = {
+            'app_id': 'app_paint',
+            'label': 'Paint',
+            'launch_path': 'C:\\WindowsApps\\mspaint.exe',
+            'process_paths': ('c:\\windowsapps\\mspaint.exe',),
+            'actions': frozenset({'set_text'}),
+            'discovered': True,
+            'can_launch': True,
+            'can_observe': True,
+            'can_interact': True,
+            'public_web': False,
+        }
+        backend.windows[0]['process_path'] = 'C:\\WindowsApps\\mspaint.exe'
+
+        # Text input on a file path or command field
+        backend.control = {
+            'control_id': CONTROL_ID,
+            'type': 'EditControl',
+            'name': 'File Name',
+            'automation_id': 'FilePathInput',
+            'parent_type': 'PaneControl',
+            'ancestor_labels': (),
+            'enabled': True,
+            'offscreen': False,
+            'read_only': False,
+            'patterns': ['value'],
+        }
+
+        res, state, _ = tools.invoke('windows_control_action', {
+            'app_id': 'app_paint',
+            'window_id': WINDOW_ID,
+            'control_id': CONTROL_ID,
+            'action': 'set_text',
+            'text': 'C:\\test.txt',
+        })
+        self.assertEqual(state, '被拒绝')
+        self.assertIn('Text input on file paths, command inputs, or address fields is prohibited', str(res))
+        self.assertIn('危险文本输入被程序拒绝', res.activity_detail)
+        self.assertEqual(backend.actions, [])
+
+    def test_discovered_app_allows_safe_actions(self):
+        backend = FakeInteractionBackend()
+        tools = WindowsInteractionTools(True, {}, backend=backend, platform_enabled=True)
+
+        tools.discovered_applications['app_paint'] = {
+            'app_id': 'app_paint',
+            'label': 'Paint',
+            'launch_path': 'C:\\WindowsApps\\mspaint.exe',
+            'process_paths': ('c:\\windowsapps\\mspaint.exe',),
+            'actions': frozenset({'invoke', 'set_text'}),
+            'discovered': True,
+            'can_launch': True,
+            'can_observe': True,
+            'can_interact': True,
+            'public_web': False,
+        }
+        backend.windows[0]['process_path'] = 'C:\\WindowsApps\\mspaint.exe'
+        backend.windows[0]['title'] = 'Untitled - Paint'
+
+        # Safe toolbar brush button
+        backend.control = {
+            'control_id': CONTROL_ID,
+            'type': 'ButtonControl',
+            'name': 'Brush Tool',
+            'automation_id': 'Brush1',
+            'parent_type': 'ToolBarControl',
+            'ancestor_labels': ('Ribbon', 'HomeTab'),
+            'enabled': True,
+            'offscreen': False,
+            'patterns': ['invoke'],
+        }
+
+        res, state, _ = tools.invoke('windows_control_action', {
+            'app_id': 'app_paint',
+            'window_id': WINDOW_ID,
+            'control_id': CONTROL_ID,
+            'action': 'invoke',
+        })
+        self.assertEqual(state, '成功')
+        self.assertIn('控件动作已执行', str(res))
+        self.assertEqual(backend.actions, [('invoke', None)])
 
 
 if __name__ == '__main__':

@@ -1,5 +1,20 @@
 # 交接
 
+## 工单 173 交接（2026-10-31）
+
+- 独立分支 `ticket/173-windows-app-discovery`。实现 Peter 自主发现与探索 Windows 软件：
+  1. 软件发现与安全过滤：新建 `windows_discovery.py`，从当前用户及公共开始菜单（`Programs\*.lnk`）、注册表 `App Paths`（`HKLM` 与 `HKCU`）、WindowsApps 执行别名目录以及常用系统应用中动态发现普通桌面应用；强制排除命令解释器与脚本宿主（`cmd.exe`, `powershell.exe`, `bash.exe`, `wscript.exe`, `wt.exe`, `python.exe` 等）、安装卸载程序（`uninstall`, `unins000`, `setup`, `installer` 等）、系统管理/服务提权工具（`regedit.exe`, `mmc.exe`, `cleanmgr.exe`, `dism.exe` 等）以及敏感凭据保护进程（`PROTECTED_PROCESSES`）；过滤快捷方式中包含重定向、管道、脚本执行的危险注入参数。
+  2. 身份绑定与通用启动：生成安全规范的唯一应用 ID（`app_<slug>`，防冲突且不覆盖静态配置），自动绑定可执行路径与进程特征（`process_paths`）；动态注册到 `WindowsInteractionTools`，复用已有 `windows_launch` 启动链路，核对实际进程身份与目标窗口，支持已开启窗口安全复用，超时明确上报 `InteractionUncertain` 并推荐先观察。
+  3. 分级权限与强制安全边界：发现（可读取信息）、启动（可启动普通安全应用）、观察（可读取 UIA 控件与截图）、交互（安全操作受控开放）。针对动态发现的应用，在程序层强制拦截：
+     - 文件对话框（`#32770`、打开、另存为、浏览、导出等）直接拒绝执行，彻底杜绝遍历或修改用户私人文件；
+     - 模糊确认按钮（上下文不明确的“确定”、“OK”、“Yes”、“是”、“Apply”、“应用”、“Continue”、“继续”）在未经验证的对话框或模态窗口中直接拒绝执行；
+     - 文本输入控件严格过滤，禁止向路径、命令行或地址栏输入文本；
+     - 沿用 `_BLOCKED_CONTROL` 拦截删除、卸载、安装、提权操作。
+  4. 人类优先与打断机制：沿用 `DesktopInputMonitor`、`desktop_access` 互斥锁与 `should_stop` 回调，Lan 移动鼠标或敲击键盘时立即中断桌面动作。
+  5. 工具注册与角色别名：在 `tools_agent.py` 与 `windows_interaction.py` 中注册 `windows_discover_apps`（`tool_policy` 为 `desktop_read`，在 `long_tasks.py` 中加入 `READ_ONLY_TOOLS`），在 Peter 的 `character.toml` 中配置别名 `windows_discover_apps = "scout_apps"`。
+  6. 自动化测试：`tests/test_windows_discovery.py`（7 项用例）覆盖快捷方式解析、安全过滤、危险参数拦截、唯一标识生成、文件对话框/模糊确认按钮/危险文本拦截判定及真实 Windows 发现；`tests/test_windows_interaction.py`（38 项用例）全面覆盖工具发现、过滤查询、动态启动与窗口复用、未授权启动拦截、文件对话框拦截、模糊确认拦截、危险文本输入拦截及安全控件操作。全量测试均通过。
+  7. 下一步：提交 PR 并关注 GitHub Actions CI 与 Cubic 评审意见；合并后由 Lan 在 Windows 实机按 1–3 步验收。见 `docs/tickets/173-windows-app-discovery.md`。
+
 ## 工单 167 交接（2026-10-30）
 
 - 独立分支 `ticket/167-lab-python-sandbox`。实现 Peter Lab 独立代码实验室：
