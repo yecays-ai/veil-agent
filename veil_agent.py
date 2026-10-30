@@ -21,6 +21,7 @@ from contextlib import contextmanager, nullcontext
 
 from agent_types import (AUTONOMY_WAKE, BudgetExceeded, CODEX_WATCH_WAKE, EmptyReplyError,
                          GLANCE_WAKE, RequestFailed, TooLong, UserError, now)
+from desktop_files import DESKTOP_FILE_READ_TOOL_NAMES
 from tool_aliases import alias_system_messages, alias_tool_schemas, resolve_tool_name, validate_tool_aliases
 
 ROOT = Path(__file__).resolve().parent

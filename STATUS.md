@@ -1,6 +1,6 @@
 # 当前状态
 
-工单 171（2026-10-30）：独立分支 `ticket/171-local-file-exploration` 已实现 Peter 对 Desktop、Documents、Downloads、Pictures 普通文件的只读探索与 DOCX/PDF 分段阅读。定向自动检查 19 项中 14 通过、5 项因链接权限跳过；全量测试在本机无输出等待后中断，PR CI、审查与 Windows 实机体验尚待完成。验收见 `docs/tickets/171-local-file-exploration.md`。
+工单 171（2026-10-30）：独立分支 `ticket/171-local-file-exploration`、PR #219 已实现 Peter 对 Desktop、Documents、Downloads、Pictures 普通文件的只读探索与 DOCX/PDF 分段阅读。首次 CI 发现工具活动日志缺少常量导入与旧版 `pypdf` 漏洞；修复及 Cubic 的实质意见已合并到本分支，定向回归通过，最新 head 的 CI 与 Windows 实机体验待完成。验收见 `docs/tickets/171-local-file-exploration.md`。下一工单号 172。
 
 工单 168（2026-10-30）：Lab 游戏成绩自动回传和 Desktop JPG/PNG 自主读取已在独立分支 `ticket/168-game-results-desktop-images` 实现，PR #216 已合并（`fece2c0`）；本地完整 Python 测试 785 项中 774 通过、11 跳过，最新 head 的 CI、审查和 Windows 实机体验待完成。原定 167 已用于并行的 Lab Python 沙盒调查，Lan 指定本单改号。见 `docs/tickets/168-game-results-desktop-images.md`。
 

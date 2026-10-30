@@ -1,4 +1,3 @@
-import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -72,9 +71,11 @@ class DesktopExplorationTests(unittest.TestCase):
             self.assertEqual(state, '成功', text)
             self.assertIn(expected, text)
 
-    @unittest.skipIf(os.name == 'nt', 'Symlink creation may need privileges')
     def test_refuses_linked_directory(self):
-        (self.root / 'documents' / 'link').symlink_to(self.root / 'desktop', target_is_directory=True)
+        try:
+            (self.root / 'documents' / 'link').symlink_to(self.root / 'desktop', target_is_directory=True)
+        except OSError as exc:
+            self.skipTest(f'Symlink creation unavailable: {exc}')
         _, state, _ = self.tools.invoke('desktop_list', {'folder': 'documents', 'path': 'link'})
         self.assertEqual(state, '被拒绝')
 
