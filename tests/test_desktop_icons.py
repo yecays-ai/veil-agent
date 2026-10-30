@@ -54,7 +54,7 @@ class DesktopIconsCoreTests(unittest.TestCase):
 
         self.assertEqual(id1, 'visual_studio_code_shortcut')
         self.assertEqual(id2, 'visual_studio_code_shortcut_1')
-        self.assertTrue(id3.startswith('icon_'))
+        self.assertTrue(id3.startswith('item_'))
 
     def test_read_desktop_returns_metrics_and_icons(self):
         data = self.manager.read_desktop()
@@ -183,22 +183,43 @@ class DesktopIconsCoreTests(unittest.TestCase):
         self.assertEqual((icons['icon_calculator_shortcut'].x, icons['icon_calculator_shortcut'].y), (20, 120))
         self.assertEqual((icons['icon_paint_shortcut'].x, icons['icon_paint_shortcut'].y), (20, 220))
 
+    def test_validate_layout_plan_rejects_non_integers(self):
+        moves_float = [{'icon_id': 'icon_calculator_shortcut', 'x': 200.5, 'y': 200}]
+        ok, reason = validate_layout_plan(self.test_icons, moves_float, self.metrics)
+        self.assertFalse(ok)
+        self.assertIn('坐标必须为整数', reason)
+
+        moves_bool = [{'icon_id': 'icon_calculator_shortcut', 'x': True, 'y': 200}]
+        ok_b, reason_b = validate_layout_plan(self.test_icons, moves_bool, self.metrics)
+        self.assertFalse(ok_b)
+        self.assertIn('坐标必须为整数', reason_b)
+
+    def test_take_snapshot_without_store_raises(self):
+        mgr_no_store = DesktopIconsManager(store=None, character_id='peter', backend=self.backend)
+        with self.assertRaises(DesktopIconsError):
+            mgr_no_store.take_snapshot()
+
     def test_restore_snapshot_handles_unmatched_or_new_icons(self):
         # Take snapshot of 4 icons
         snap = self.manager.take_snapshot()
 
-        # Remove one icon from desktop and add a new one
+        # Remove notes.txt and add a new game shortcut that CONFLICTS with recycle bin at (20, 20)
         del self.backend.icons['icon_notes_file']
-        self.backend.icons['icon_game_shortcut'] = DesktopIcon('icon_game_shortcut', '游戏', 'shortcut', 500, 500)
+        self.backend.icons['icon_game_shortcut'] = DesktopIcon('icon_game_shortcut', '游戏', 'shortcut', 20, 20)
 
         # Restore
         res = self.manager.restore_snapshot(snapshot_id=snap['snapshot_id'])
-        self.assertEqual(res['status'], 'success')
-        self.assertEqual(res['restored_count'], 3)
+        self.assertEqual(res['status'], 'partial')
+        # notes.txt is unmatched
         self.assertIn('notes.txt', res['unmatched'])
-        # New icon was preserved untouched
+        # recycle bin target (20, 20) conflicted with new game icon and was skipped safely
+        self.assertEqual(len(res['skipped_conflicts']), 1)
+        self.assertEqual(res['skipped_conflicts'][0]['icon_id'], 'icon_recycle_bin_system')
+        # Calculator and paint were restored
+        self.assertEqual(res['restored_count'], 2)
+        # New icon at (20, 20) was preserved untouched without overlap
         self.assertIn('icon_game_shortcut', self.backend.icons)
-        self.assertEqual((self.backend.icons['icon_game_shortcut'].x, self.backend.icons['icon_game_shortcut'].y), (500, 500))
+        self.assertEqual((self.backend.icons['icon_game_shortcut'].x, self.backend.icons['icon_game_shortcut'].y), (20, 20))
 
 
 if __name__ == '__main__':

@@ -17,11 +17,20 @@ from windows_interaction import (
 
 
 class FakeInputMonitor:
-    def changed_since(self, snapshot):
-        return False
+    def __init__(self, idle=True):
+        self.idle = idle
+
+    def require_idle(self, _minimum_seconds):
+        pass
+
+    def idle_seconds(self):
+        return 10 if self.idle else 0
 
     def snapshot(self):
         return 0
+
+    def changed_since(self, snapshot):
+        return False
 
 
 class DesktopIconsToolsTests(unittest.TestCase):
@@ -58,7 +67,7 @@ class DesktopIconsToolsTests(unittest.TestCase):
         self.assertEqual(tool_policy('desktop_icons_read'), 'desktop_read')
         self.assertEqual(tool_policy('desktop_icons_arrange'), 'desktop_control')
         self.assertEqual(tool_policy('desktop_icons_restore'), 'desktop_control')
-        self.assertIn('desktop_icons_read', READ_ONLY_TOOLS)
+        self.assertNotIn('desktop_icons_read', READ_ONLY_TOOLS)
 
     def test_invoke_desktop_icons_read(self):
         result, state, summary = self.interaction_tools.invoke('desktop_icons_read', {})
@@ -84,6 +93,7 @@ class DesktopIconsToolsTests(unittest.TestCase):
         # 2. Check updated coordinates
         updated = {i.icon_id: i for i in self.backend.get_icons()}
         self.assertEqual((updated['icon_calc_shortcut'].x, updated['icon_calc_shortcut'].y), (300, 300))
+        self.assertEqual((updated['icon_paint_shortcut'].x, updated['icon_paint_shortcut'].y), (300, 420))
 
         # 3. Restore
         res_restore, state_restore, summary_restore = self.interaction_tools.invoke(
@@ -94,6 +104,7 @@ class DesktopIconsToolsTests(unittest.TestCase):
 
         restored = {i.icon_id: i for i in self.backend.get_icons()}
         self.assertEqual((restored['icon_calc_shortcut'].x, restored['icon_calc_shortcut'].y), (10, 10))
+        self.assertEqual((restored['icon_paint_shortcut'].x, restored['icon_paint_shortcut'].y), (10, 110))
 
     def test_invoke_desktop_icons_arrange_validation_failure(self):
         # Out of bounds move

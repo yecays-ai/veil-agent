@@ -1012,14 +1012,25 @@ class WindowsInteractionTools:
                     or not isinstance(args.get('moves'), list) or not args['moves']):
                 return WindowsToolResult('desktop_icons_arrange requires a non-empty moves list.', activity_detail='参数无效。'), '被拒绝'
             moves = args['moves']
+            if len(moves) > 50:
+                return WindowsToolResult('moves list exceeds maximum allowed (50).', activity_detail='参数过多。'), '被拒绝'
             for m in moves:
                 if (not isinstance(m, dict) or not isinstance(m.get('icon_id'), str)
-                        or not isinstance(m.get('x'), (int, float)) or not isinstance(m.get('y'), (int, float))):
+                        or type(m.get('x')) is not int or type(m.get('y')) is not int):
                     return WindowsToolResult('Each move must specify icon_id (str), x (int), and y (int).', activity_detail='参数无效。'), '被拒绝'
 
             def arrange_icons(stopped):
+                input_snapshot = self._check_before_action(stopped)
+
+                def combined_stop():
+                    if stopped and stopped():
+                        return True
+                    if self.input_monitor.changed_since(input_snapshot):
+                        return True
+                    return False
+
                 result = self.desktop_icons_manager.arrange_icons(
-                    moves=moves, should_stop=stopped, trigger='autonomous_arrange'
+                    moves=moves, should_stop=combined_stop, trigger='autonomous_arrange'
                 )
                 moved = result['moved_count']
                 snap_id = result['snapshot_id']
@@ -1032,13 +1043,24 @@ class WindowsInteractionTools:
             return self._run(arrange_icons, summary, should_stop, timeout=self.timeout_seconds, side_effect=True)
 
         if name == 'desktop_icons_restore':
-            if set(args) - {'snapshot_id'} or ('snapshot_id' in args and not isinstance(args.get('snapshot_id'), str)):
-                return WindowsToolResult('Optional snapshot_id must be a string.', activity_detail='参数无效。'), '被拒绝'
+            if (set(args) - {'snapshot_id'}
+                    or ('snapshot_id' in args and (not isinstance(args.get('snapshot_id'), str)
+                                                   or not args.get('snapshot_id')))):
+                return WindowsToolResult('Optional snapshot_id must be a non-empty string.', activity_detail='参数无效。'), '被拒绝'
             snap_id = args.get('snapshot_id')
 
             def restore_icons(stopped):
+                input_snapshot = self._check_before_action(stopped)
+
+                def combined_stop():
+                    if stopped and stopped():
+                        return True
+                    if self.input_monitor.changed_since(input_snapshot):
+                        return True
+                    return False
+
                 result = self.desktop_icons_manager.restore_snapshot(
-                    snapshot_id=snap_id, should_stop=stopped
+                    snapshot_id=snap_id, should_stop=combined_stop
                 )
                 restored = result['restored_count']
                 target_id = result['snapshot_id']
@@ -1047,8 +1069,6 @@ class WindowsInteractionTools:
                           else f'恢复图标布局被用户操作打断，已恢复 {restored} 个。')
                 summary_msg = f'已恢复 {restored} 个桌面图标。' if not result.get('interrupted') else '用户操作打断图标恢复。'
                 return self._success(result, detail, summary_msg)
-
-            return self._run(restore_icons, summary, should_stop, timeout=self.timeout_seconds, side_effect=True)
 
             return self._run(restore_icons, summary, should_stop, timeout=self.timeout_seconds, side_effect=True)
 

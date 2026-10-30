@@ -83,9 +83,13 @@ class DisplayMetrics:
 
 def _slugify_name(name: str) -> str:
     cleaned = re.sub(r'[\s\-_\.]+', '_', name.strip().lower())
-    cleaned = re.sub(r'[^a-z0-9_]', '', cleaned)
-    if not cleaned or not cleaned[0].isalpha():
-        cleaned = f'icon_{cleaned}'
+    cleaned = re.sub(r'[^a-z0-9_]', '', cleaned).strip('_')
+    if not cleaned:
+        # Non-ASCII or Chinese names get a deterministic short hex digest
+        short_hash = hashlib.sha256(name.strip().encode('utf-8')).hexdigest()[:6]
+        return f'item_{short_hash}'
+    if not cleaned[0].isalpha():
+        cleaned = f'item_{cleaned}'
     return cleaned[:32].rstrip('_')
 
 
@@ -237,21 +241,29 @@ class Win32DesktopIconsBackend(BaseDesktopIconsBackend):
             auto_arrange = bool(style & 0x0100)  # LVS_AUTOARRANGE
             align_to_grid = bool(style & 0x0800)  # LVS_ALIGNLEFT / grid style
 
+        scale_factor = 1.0
+        try:
+            dpi = user32.GetDpiForSystem()
+            if dpi:
+                scale_factor = round(dpi / 96.0, 2)
+        except Exception:
+            pass
+
         return DisplayMetrics(
             resolution=(width, height),
             monitors=monitors,
-            scale_factor=1.0,
+            scale_factor=scale_factor,
             grid_spacing=(100, 100),
             auto_arrange=auto_arrange,
             align_to_grid=align_to_grid,
         )
 
     def get_icons(self) -> List[DesktopIcon]:
-        """Read icons via Shell COM IFolderView or filesystem fallback."""
+        """Read icons via Shell COM IFolderView."""
         icons = self._read_via_folder_view()
-        if icons:
-            return icons
-        return self._read_via_desktop_folder()
+        if not icons:
+            raise DesktopIconsUnavailable('无法从 Windows Explorer 视图读取桌面图标真实物理坐标。')
+        return icons
 
     def _read_via_folder_view(self) -> List[DesktopIcon]:
         try:
@@ -300,41 +312,6 @@ class Win32DesktopIconsBackend(BaseDesktopIconsBackend):
         except Exception:
             return []
 
-    def _read_via_desktop_folder(self) -> List[DesktopIcon]:
-        """Fallback reading from desktop directories if COM view is not responsive."""
-        user_desktop = Path(os.path.expanduser('~/Desktop'))
-        public_desktop = Path(os.environ.get('PUBLIC', 'C:\\Users\\Public')) / 'Desktop'
-
-        items = []
-        for d in (user_desktop, public_desktop):
-            if d.exists() and d.is_dir():
-                for p in d.iterdir():
-                    if p.name.startswith(('desktop.ini', '~$')) or p.name.startswith('.'):
-                        continue
-                    items.append(p)
-
-        results: List[DesktopIcon] = []
-        seen_ids: set[str] = set()
-        col_x = 20
-        row_y = 20
-        for p in items:
-            name = p.stem if p.suffix.lower() == '.lnk' else p.name
-            item_type = 'shortcut' if p.suffix.lower() == '.lnk' else ('folder' if p.is_dir() else 'file')
-            icon_id = generate_icon_id(name, item_type, seen_ids)
-            results.append(DesktopIcon(
-                icon_id=icon_id,
-                name=name,
-                item_type=item_type,
-                x=col_x,
-                y=row_y,
-                target_path=str(p),
-            ))
-            row_y += 100
-            if row_y > 800:
-                row_y = 20
-                col_x += 100
-        return results
-
     def _determine_item_type(self, name: str) -> str:
         lower = name.lower()
         if lower.endswith('.lnk'):
@@ -354,6 +331,9 @@ class Win32DesktopIconsBackend(BaseDesktopIconsBackend):
         hwnd = self._get_listview_hwnd()
         if not hwnd:
             raise DesktopIconsUnavailable('未能定位到 Windows 桌面图标视图句柄。')
+
+        pos_map = {item[0]: (item[1], item[2]) for item in positions}
+        id_to_item: Dict[str, Tuple[Any, int]] = {}
 
         # Using IFolderView if accessible
         try:
@@ -381,17 +361,23 @@ class Win32DesktopIconsBackend(BaseDesktopIconsBackend):
             desktop_folder = shell.SHGetDesktopFolder()
 
             count = folder_view.ItemCount(shellcon.SVGIO_ALLVIEW)
-            pos_map = {item[0]: (item[1], item[2]) for item in positions}
 
-            verified: Dict[str, Tuple[int, int]] = {}
+            # Build exact 1-to-1 mapping matching get_icons logic
+            seen_ids: set[str] = set()
             for i in range(count):
                 pidl = folder_view.Item(i)
                 name = desktop_folder.GetDisplayNameOf([pidl], shellcon.SHGDN_NORMAL)
-                for icon_id, (target_x, target_y) in pos_map.items():
-                    if _slugify_name(name) in icon_id or name in icon_id:
-                        folder_view.SelectAndPositionItems(1, [pidl], [(int(target_x), int(target_y))], 0x00000020)
-                        actual_x, actual_y = folder_view.GetItemPosition(pidl)
-                        verified[icon_id] = (int(actual_x), int(actual_y))
+                item_type = self._determine_item_type(name)
+                icon_id = generate_icon_id(name, item_type, seen_ids)
+                id_to_item[icon_id] = (pidl, i)
+
+            verified: Dict[str, Tuple[int, int]] = {}
+            for icon_id, (target_x, target_y) in pos_map.items():
+                if icon_id in id_to_item:
+                    pidl, _ = id_to_item[icon_id]
+                    folder_view.SelectAndPositionItems(1, [pidl], [(int(target_x), int(target_y))], 0x00000020)
+                    actual_x, actual_y = folder_view.GetItemPosition(pidl)
+                    verified[icon_id] = (int(actual_x), int(actual_y))
             return verified
         except Exception:
             pass
@@ -403,10 +389,12 @@ class Win32DesktopIconsBackend(BaseDesktopIconsBackend):
         user32.SendMessageW.restype = ctypes.c_long
 
         verified = {}
-        for index, (icon_id, x, y) in enumerate(positions):
-            lparam = (int(y) << 16) | (int(x) & 0xFFFF)
-            user32.SendMessageW(hwnd, LVM_SETITEMPOSITION, index, lparam)
-            verified[icon_id] = (int(x), int(y))
+        for icon_id, x, y in positions:
+            if icon_id in id_to_item:
+                _, index = id_to_item[icon_id]
+                lparam = (int(y) << 16) | (int(x) & 0xFFFF)
+                user32.SendMessageW(hwnd, LVM_SETITEMPOSITION, index, lparam)
+                verified[icon_id] = (int(x), int(y))
         return verified
 
 
@@ -430,8 +418,8 @@ def validate_layout_plan(
             return False, f'未知图标 ID 或桌面未发现该图标: {icon_id}'
         x = move.get('x')
         y = move.get('y')
-        if not isinstance(x, (int, float)) or not isinstance(y, (int, float)):
-            return False, f'坐标必须为数值: icon_id={icon_id}, x={x}, y={y}'
+        if type(x) is not int or type(y) is not int:
+            return False, f'坐标必须为整数: icon_id={icon_id}, x={x}, y={y}'
 
     # Check boundaries against monitor regions
     for move in proposed_moves:
@@ -493,6 +481,9 @@ class DesktopIconsManager:
 
     def take_snapshot(self, trigger: str = 'autonomous_arrange') -> Dict[str, Any]:
         """Record a full snapshot of the current desktop layout before modification."""
+        if self.store is None:
+            raise DesktopIconsError('未配置本地存储组件，无法持久化桌面布局快照，拒绝修改。')
+
         metrics = self.backend.get_metrics()
         icons = self.backend.get_icons()
         now_dt = datetime.now().astimezone()
@@ -509,9 +500,7 @@ class DesktopIconsManager:
             'icon_count': len(icons),
         }
 
-        if self.store is not None:
-            self.store.append(self.storage_path, snapshot)
-
+        self.store.append(self.storage_path, snapshot)
         return snapshot
 
     def list_snapshots(self, limit: int = 10) -> List[Dict[str, Any]]:
@@ -553,29 +542,45 @@ class DesktopIconsManager:
                 positions.append((move['icon_id'], int(move['x']), int(move['y'])))
 
             executed_moves: List[Dict[str, Any]] = []
+            failed_moves: List[Dict[str, Any]] = []
             for item in positions:
                 if should_stop and should_stop():
                     # Stop immediately, preserve snapshot
                     break
                 # Set position for item
-                res = self.backend.set_icon_positions([item])
-                if item[0] in res:
-                    executed_moves.append({'icon_id': item[0], 'actual': res[item[0]]})
+                try:
+                    res = self.backend.set_icon_positions([item])
+                    if item[0] in res:
+                        executed_moves.append({'icon_id': item[0], 'actual': res[item[0]]})
+                except Exception as exc:
+                    failed_moves.append({'icon_id': item[0], 'error': str(exc)})
+                    break
 
             # 3. Read back verified coordinates
             updated_icons = self.backend.get_icons()
             updated_map = {icon.icon_id: (icon.x, icon.y) for icon in updated_icons}
 
             moved_count = len(executed_moves)
+            is_interrupted = (moved_count < len(positions)) and not failed_moves
             is_partial = moved_count < len(positions)
+
+            # Strict verification of actual vs target
+            verified = (moved_count == len(positions))
+            if verified:
+                for move in moves:
+                    actual = updated_map.get(move['icon_id'])
+                    if not actual or abs(actual[0] - move['x']) > 50 or abs(actual[1] - move['y']) > 50:
+                        verified = False
+                        break
 
             return {
                 'status': 'partial' if is_partial else 'success',
                 'snapshot_id': snapshot['snapshot_id'],
                 'moved_count': moved_count,
                 'total_requested': len(positions),
-                'verified': True,
-                'interrupted': is_partial,
+                'verified': verified,
+                'interrupted': is_interrupted,
+                'failed_moves': failed_moves,
                 'updated_positions': {m['icon_id']: updated_map.get(m['icon_id']) for m in moves if m['icon_id'] in updated_map},
             }
 
@@ -592,6 +597,10 @@ class DesktopIconsManager:
             if self.store is None:
                 raise DesktopIconsError('本地数据存储不可用，无法读取快照。')
 
+            metrics = self.backend.get_metrics()
+            if metrics.auto_arrange:
+                raise DesktopIconsLayoutBlocked('Windows 桌面开启了“自动排列图标”，无法恢复图标位置。')
+
             snapshots = self.store.read(self.storage_path)
             if not snapshots:
                 raise DesktopIconsError('暂无已保存的桌面图标布局快照。')
@@ -607,7 +616,6 @@ class DesktopIconsManager:
             else:
                 target_snap = snapshots[-1]
 
-            metrics = self.backend.get_metrics()
             current_icons = self.backend.get_icons()
             current_map = {icon.icon_id: icon for icon in current_icons}
             name_map = {icon.name: icon for icon in current_icons}
@@ -636,26 +644,93 @@ class DesktopIconsManager:
                     'message': '快照中的图标均未在当前桌面找到（可能已被重命名或移除）。',
                 }
 
+            # Conflict and boundary check against unmoved desktop icons and current monitors
+            matched_ids = {m[0] for m in matched_moves}
+            unmoved_current_icons = [icon for icon in current_icons if icon.icon_id not in matched_ids]
+
+            valid_restore_moves: List[Tuple[str, int, int]] = []
+            skipped_conflicts: List[Dict[str, Any]] = []
+
+            for icon_id, tx, ty in matched_moves:
+                cur_icon = current_map[icon_id]
+                # Screen bounds check
+                in_bounds = any(
+                    mon['left'] <= tx <= mon['right'] - 40 and mon['top'] <= ty <= mon['bottom'] - 40
+                    for mon in metrics.monitors
+                )
+                if not in_bounds:
+                    skipped_conflicts.append({
+                        'icon_id': icon_id,
+                        'name': cur_icon.name,
+                        'reason': f'目标位置 ({tx},{ty}) 超出当前可见显示器区域。',
+                    })
+                    continue
+
+                # Overlap check with current desktop icons not being restored
+                overlaps_unmoved = any(
+                    abs(tx - other.x) < 40 and abs(ty - other.y) < 40
+                    for other in unmoved_current_icons
+                )
+                if overlaps_unmoved:
+                    skipped_conflicts.append({
+                        'icon_id': icon_id,
+                        'name': cur_icon.name,
+                        'reason': f'目标位置 ({tx},{ty}) 与桌面上新增的图标重叠。',
+                    })
+                    continue
+
+                valid_restore_moves.append((icon_id, tx, ty))
+
+            if not valid_restore_moves:
+                return {
+                    'status': 'conflict_blocked',
+                    'snapshot_id': target_snap['snapshot_id'],
+                    'restored_count': 0,
+                    'skipped_conflicts': skipped_conflicts,
+                    'unmatched': unmatched_in_snapshot,
+                    'message': '所有匹配图标的目标位置均存在屏幕越界或与当前新图标重叠冲突，已取消恢复以保护桌面布局。',
+                }
+
+            # Pre-restore safety snapshot
+            pre_restore_snap = self.take_snapshot(trigger='pre_restore')
+
             restored_count = 0
-            for item in matched_moves:
+            failed_moves: List[Dict[str, Any]] = []
+            for item in valid_restore_moves:
                 if should_stop and should_stop():
                     break
-                self.backend.set_icon_positions([item])
-                restored_count += 1
+                try:
+                    self.backend.set_icon_positions([item])
+                    restored_count += 1
+                except Exception as exc:
+                    failed_moves.append({'icon_id': item[0], 'error': str(exc)})
+                    break
 
-            interrupted = restored_count < len(matched_moves)
+            interrupted = (restored_count < len(valid_restore_moves)) and not failed_moves
 
             # Re-read verified positions
             final_icons = self.backend.get_icons()
             final_map = {icon.icon_id: (icon.x, icon.y) for icon in final_icons}
 
+            # Verify actual vs target
+            verified = (restored_count == len(valid_restore_moves)) and (not failed_moves)
+            if verified:
+                for icon_id, tx, ty in valid_restore_moves:
+                    actual = final_map.get(icon_id)
+                    if not actual or abs(actual[0] - tx) > 50 or abs(actual[1] - ty) > 50:
+                        verified = False
+                        break
+
             return {
-                'status': 'partial' if interrupted else 'success',
+                'status': 'partial' if (interrupted or failed_moves or skipped_conflicts) else 'success',
                 'snapshot_id': target_snap['snapshot_id'],
+                'pre_restore_snapshot_id': pre_restore_snap['snapshot_id'],
                 'restored_count': restored_count,
                 'total_snapshot_icons': len(target_snap.get('icons', [])),
+                'skipped_conflicts': skipped_conflicts,
+                'failed_moves': failed_moves,
                 'unmatched': unmatched_in_snapshot,
                 'interrupted': interrupted,
-                'verified': True,
-                'positions': {icon_id: final_map.get(icon_id) for icon_id, _, _ in matched_moves},
+                'verified': verified,
+                'positions': {icon_id: final_map.get(icon_id) for icon_id, _, _ in valid_restore_moves[:restored_count]},
             }

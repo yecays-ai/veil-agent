@@ -1566,16 +1566,23 @@ class Hub:
 def _get_desktop_icons_manager(hub):
     if hasattr(hub, 'desktop_icons_manager') and hub.desktop_icons_manager:
         return hub.desktop_icons_manager
-    if hub.chat and hasattr(hub.chat, 'tools') and hasattr(hub.chat.tools, 'windows_interaction_tools'):
-        mgr = getattr(hub.chat.tools.windows_interaction_tools, 'desktop_icons_manager', None)
-        if mgr:
-            return mgr
+    if hub.chat:
+        tools = getattr(hub.chat, 'tools', None)
+        if tools:
+            mgr = getattr(getattr(tools, 'windows_interaction_tools', None), 'desktop_icons_manager', None)
+            if not mgr and hasattr(tools, 'files'):
+                mgr = getattr(getattr(tools.files, 'windows_interaction_tools', None), 'desktop_icons_manager', None)
+            if mgr:
+                return mgr
     from desktop_icons import DesktopIconsManager, FakeDesktopIconsBackend, Win32DesktopIconsBackend
     from veil_agent import Store
     backend = Win32DesktopIconsBackend() if os.name == 'nt' else FakeDesktopIconsBackend()
-    store_root = getattr(hub, 'store_root', 'data')
-    char_id = getattr(hub, 'name', 'peter').lower()
-    mgr = DesktopIconsManager(store=Store(store_root), character_id=char_id, backend=backend)
+    store = getattr(hub, 'store', None) or (getattr(hub.chat, 'store', None) if hub.chat else None)
+    if store is None:
+        store_root = getattr(hub, 'store_root', 'data')
+        store = Store(store_root)
+    char_id = getattr(hub, 'character_id', None) or getattr(getattr(hub, 'cfg', None), 'id', None) or getattr(hub, 'name', 'peter').lower()
+    mgr = DesktopIconsManager(store=store, character_id=char_id, backend=backend)
     hub.desktop_icons_manager = mgr
     return mgr
 
