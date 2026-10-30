@@ -54,6 +54,7 @@ enabled = true
 folder = "data/peter/workspace"
 max_steps = 20
 max_result_bytes = 8192
+python_sandbox = true
 
 [autonomy]
 # Four B two wake limits are role configurable; total program budget remains unchanged.
@@ -152,6 +153,7 @@ create_directory = "build_a_room"
 move_lab_file = "shove_it"
 lab_file_digest = "fingerprint_file"
 preview_lab_page = "test_drive"
+run_lab_python = "tinker_in_lab"
 send_message = "bubble_up"
 recall_message = "take_it_back"
 stay_silent = "ghost_mode"

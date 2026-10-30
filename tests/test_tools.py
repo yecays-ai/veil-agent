@@ -181,7 +181,7 @@ class ToolPolicyTests(unittest.TestCase):
         names = {tool.name for tool in manager.tools}
         self.assertEqual(names, {'write_file', 'append_file', 'grant_append',
                                  'create_directory', 'move_lab_file', 'lab_file_digest',
-                                 'preview_lab_page'})
+                                 'preview_lab_page', 'run_lab_python'})
         self.assertEqual({item['function']['name'] for item in permitted_tools(manager.tools)}, names)
         manager.attach_game_manager(object())
         self.assertIn('open_lab_game', {tool.name for tool in manager.tools})
