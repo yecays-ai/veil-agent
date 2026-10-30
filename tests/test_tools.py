@@ -86,7 +86,7 @@ class ToolPolicyTests(unittest.TestCase):
         allowed = Mock(return_value='y')
         result, state, path = manager.invoke('write_file',
             {'path': 'summary.txt', 'content': 'fictional'}, allowed)
-        self.assertEqual((result, state, path), ('新文件已创建。', '成功', 'summary.txt'))
+        self.assertEqual((result, state, path), ('The new file was created.', '成功', 'summary.txt'))
         self.assertEqual((self.workspace / 'summary.txt').read_text(encoding='utf-8'), 'fictional')
         manager.client.call.assert_not_called()
         (self.workspace / 'summary.txt').write_text('old', encoding='utf-8')
@@ -852,16 +852,16 @@ max_result_bytes = 200
         tools = Mock()
         tools.tools = [SimpleNamespace(name='read_text_file', description='Read', inputSchema={})]
         tools.capability_event = None
-        tools.invoke.return_value = ('secret' * 3000, '成功', 'large.txt')
+        tools.invoke.return_value = ('中文片段 English data ' * 1500, '成功', 'large.txt')
         chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=lambda _: None)
         self.assertEqual(chat.send('read it'), 'The result was too long.')
         forwarded = model.call_args_list[1].args[0][-1]['content']
-        self.assertIn('secret', forwarded)
+        self.assertIn('中文片段 English data', forwarded)
         self.assertIn('结果已截断', forwarded)
         self.assertEqual(chat.last_tool_summaries[0]['result_state'], '已截断')
         activity = self.store.read('test/tools.jsonl')[-1]
         self.assertEqual(activity['result_state'], '已截断')
-        self.assertIn('secret', activity['detail'])
+        self.assertIn('中文片段 English data', activity['detail'])
         self.assertNotIn('结果已截断', activity['detail'])
         self.assertTrue(any((m.get('content') or '').startswith('old ') for m in model.call_args_list[1].args[0]))
 

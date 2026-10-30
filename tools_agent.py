@@ -1148,7 +1148,7 @@ class FilesystemTools:
                 # refuses the operation if another file appeared meanwhile.
                 with target.open('x', encoding='utf-8', newline='') as handle:
                     handle.write(content)
-                return '新文件已创建。', '成功', summary
+                return 'The new file was created.', '成功', summary
             result = self.client.call(name, safe_args)
             if isinstance(result, str):
                 size = len(result.encode('utf-8'))
@@ -1405,7 +1405,7 @@ class FilesystemTools:
             if name == 'create_directory':
                 target.mkdir(parents=True, exist_ok=True)
                 self._checked_lab_path(raw)
-                return '实验室文件夹已创建。', '成功', summary
+                return 'The Lab folder was created.', '成功', summary
             content = args.get('content')
             if not isinstance(content, str) or (name == 'append_file' and not content):
                 return 'Content must be text, and appended content cannot be empty. No content was written.', '被拒绝', summary
@@ -1433,9 +1433,10 @@ class FilesystemTools:
                     prior = next((p for p in target.parent.iterdir()
                                   if p.name.casefold() == prior_name), None)
                     if prior and prior.is_file():
-                        note = (f' 上一版 {prior.name}：{prior.stat().st_size} 字节；'
-                                f'本版 {target.name}：{len(data)} 字节。请核对是否漏掉上一版内容。')
-                return f'实验室新文件已创建并通过 SHA-256 核对（{len(data)} 字节）。{note}', '成功', summary
+                        note = (f' Previous version {prior.name}: {prior.stat().st_size} bytes; '
+                                f'current version {target.name}: {len(data)} bytes. '
+                                'Check that no content from the previous version was omitted.')
+                return f'The new Lab file was created and verified with SHA-256 ({len(data)} bytes).{note}', '成功', summary
             if not target.is_file():
                 return 'The append target must be an existing regular file. No content was written.', '被拒绝', summary
             info = target.stat()
@@ -1463,7 +1464,7 @@ class FilesystemTools:
                 written = handle.read()
             if hashlib.sha256(written).digest() != hashlib.sha256(data).digest():
                 raise OSError('append verification failed')
-            return f'已追加 {len(data)} 字节并通过 SHA-256 核对，原内容保留。', '成功', summary
+            return f'Appended {len(data)} bytes and verified them with SHA-256; existing content was preserved.', '成功', summary
         except FileExistsError:
             return 'The target already exists and overwriting is not allowed. No content was written; choose a new filename.', '被拒绝', summary
         except ValueError:
@@ -1506,7 +1507,7 @@ class FilesystemTools:
                 self._save_append_grant(summary, identity)
             except OSError:
                 return 'Persistent append authorization could not be saved, so it was not granted. Check the character data folder.', '出错', summary
-            return '已保存此文件的持续追加授权。', '成功', summary
+            return 'Persistent append authorization was saved for this file.', '成功', summary
         content = args.get('content')
         if not isinstance(content, str) or not content:
             return 'Append content must be non-empty text.', '被拒绝', summary
@@ -1546,7 +1547,7 @@ class FilesystemTools:
                     return 'The file changed during the append. Read the file before deciding whether to retry.', '出错', summary
             if granted:
                 self._save_append_grant(summary, latest)
-            return '已追加到文件末尾。', '成功', summary
+            return 'Content was appended to the end of the file.', '成功', summary
         except OSError:
             return 'The append failed and may have written partial content. Read the file before deciding whether to retry.', '出错', summary
 

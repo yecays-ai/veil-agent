@@ -1,5 +1,11 @@
 # 交接
 
+## 工单 172 交接（2026-10-30）
+
+- 基于工单 171 合并提交 `1d4f91e` 建立 `ticket/172-preserve-tool-results`。`model_tool_result()` 不再按中文字符或工具白名单丢弃成功结果；明确的程序成功提示在 `tools_agent.py` 生成处改为英文。
+- 新增中文桌面、记忆、混合语言、拒绝与失败结果回归，并将现有长结果测试改为中文正文；MCP、浏览器、Windows 桌面的不可信包裹沿用原逻辑。
+- 下一步：完成定向回归与 diff 检查，提交并开 PR；确认最新 head 的 CI 和实质审查。Windows 真实体验由 Lan 按 `docs/tickets/172-preserve-tool-results.md` 验收。
+
 ## 工单 168 交接（2026-10-30）
 
 - 分支 `ticket/168-game-results-desktop-images` 使用独立 worktree。原定 167 与本机 `ticket/167-lab-python-sandbox` 冲突，Lan 明确指定本单改 168。正式目录保持 main；其中原有未跟踪文件未触碰。

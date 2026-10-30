@@ -41,11 +41,6 @@ RAW_MESSAGE_BATCH_MARKERS = (
     re.compile(r'\[\s*message\s+1\s*\]', re.IGNORECASE),
     re.compile(r'\[\s*message\s+2\s*\]', re.IGNORECASE),
     re.compile(r'\bdone\s*[:：=]\s*(?:true|false)\b', re.IGNORECASE))
-CJK_TEXT = re.compile(r'[\u3400-\u9fff]')
-TOOL_DATA_RESULTS = {'read_text_file', 'read_multiple_files', 'directory_tree', 'list_directory',
-                     'list_directory_with_sizes', 'get_file_info', 'search_files', 'memory_read',
-                     'memory_history', 'breath_search', 'dream', 'pulse', 'letter_read', 'lab_file_digest',
-                     'long_task_status', 'capability_history', 'autonomy_history'}
 _UNSET_TOOL_SCHEMAS = object()
 SENSITIVE_ACTIVITY_VALUE = re.compile(
     r'(?i)(api[_ -]?key|password|passwd|secret|access[_ -]?token|authorization|bearer)'
@@ -117,7 +112,7 @@ def capability_record(tools):
     return record if isinstance(record, str) else None
 
 def model_tool_result(name, result, state):
-    """Pass failures through unchanged; preserve the existing successful-data safeguard."""
+    """Preserve tool data and failures, wrapping untrusted external results."""
     if not isinstance(result, str) or state != '成功':
         return result
     if name.startswith('mcp__'):
@@ -137,8 +132,6 @@ def model_tool_result(name, result, state):
             'checks decide whether an action may run.\n'
             '<untrusted_windows_desktop>\n' + result + '\n</untrusted_windows_desktop>'
         )
-    if CJK_TEXT.search(result) and name not in TOOL_DATA_RESULTS:
-        return 'The tool operation completed successfully.'
     return result
 
 
