@@ -13,12 +13,24 @@ DISALLOWED_EXECUTABLES = frozenset({
     'mshta.exe', 'rundll32.exe', 'regsvr32.exe', 'certutil.exe', 'bash.exe',
     'wsl.exe', 'wslconfig.exe', 'conhost.exe', 'wt.exe', 'python.exe',
     'pythonw.exe', 'py.exe', 'pymanager.exe', 'pyw.exe', 'pywmanager.exe',
-    'node.exe', 'deno.exe', 'git-bash.exe', 'regedit.exe', 'mmc.exe',
+    'python3.exe', 'node.exe', 'deno.exe', 'git-bash.exe', 'regedit.exe', 'mmc.exe',
     'cleanmgr.exe', 'dism.exe', 'taskmgr.exe', 'systemreset.exe', 'control.exe',
     'resmon.exe', 'perfmon.exe', 'eventvwr.exe', 'msconfig.exe', 'logonui.exe',
     'consent.exe', 'credwiz.exe', 'credentialuibroker.exe', 'lockapp.exe',
     'winlogon.exe', 'schtasks.exe', 'bitsadmin.exe', 'vssadmin.exe',
     'takeown.exe', 'icacls.exe', 'net.exe', 'net1.exe', 'ftp.exe', 'ssh.exe',
+})
+
+# Versioned interpreters and WSL distribution execution aliases
+VERSIONED_SHELL_PATTERN = re.compile(
+    r'^(?:python\d*|pythonw\d*|py\d*|wsl.*|ubuntu.*|debian.*|kali.*|arch.*|opensuse.*|sles.*)\.exe$',
+    re.IGNORECASE,
+)
+
+# Web browsers requiring dedicated Guest isolation (Ticket 151)
+BROWSER_PROCESSES = frozenset({
+    'chrome.exe', 'msedge.exe', 'firefox.exe', 'brave.exe', 'opera.exe',
+    'vivaldi.exe', 'waterfox.exe',
 })
 
 # Name heuristics for installers, uninstallers, helpers, and administrative utilities
@@ -38,10 +50,19 @@ DANGEROUS_ARGUMENTS_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-# File dialog indicators: window classes, control names, or ancestor labels
-FILE_DIALOG_PATTERN = re.compile(
-    r'(?:#32770|filedialog|fileopendialog|filesavedialog|save as|open file|'
-    r'open\b|browse\b|browse|另存为|打开文件|打开\b|浏览|选择文件|export\b|import\b|导出|导入)',
+# Untrusted locations (user temp, downloads, desktop scratch files)
+UNTRUSTED_PATH_PATTERN = re.compile(
+    r'[\\/](?:temp|tmp|downloads|desktop|documents|recent|appdata[\\/]local[\\/]temp)\b',
+    re.IGNORECASE,
+)
+
+# File dialog indicators: window titles or controls
+FILE_DIALOG_TITLE_PATTERN = re.compile(
+    r'(?:#32770|save as|open file|\bopen\b|另存为|打开文件|\b打开\b|选择文件|export\b|import\b|导出|导入|browse\b|浏览)',
+    re.IGNORECASE,
+)
+FILE_DIALOG_CONTROL_PATTERN = re.compile(
+    r'(?:filedialog|fileopendialog|filesavedialog|save as|open file|\bopen\b|另存为|打开文件|\b打开\b|浏览\b|browse\b|选择文件|export\b|import\b)',
     re.IGNORECASE,
 )
 
@@ -53,7 +74,7 @@ GENERIC_CONFIRMATION_PATTERN = re.compile(
 
 # Text inputs that resemble paths, commands, or addresses
 UNSAFE_TEXT_INPUT_PATTERN = re.compile(
-    r'(?:path|file|cmd|command|url|address|location|路径|文件|命令|地址|位置)',
+    r'(?:path|file|cmd|command|url|address|location|query|search|filter|路径|文件|命令|地址|位置|搜索)',
     re.IGNORECASE,
 )
 
@@ -258,19 +279,27 @@ class WindowsAppDiscovery:
             return False, 'Target is a protected credential or security process.', capabilities
 
         # 4. Command shells, script interpreters, and administrative elevation binaries
-        if base_exe in DISALLOWED_EXECUTABLES:
-            return False, f'Target executable {base_exe} is a restricted system binary or shell.', capabilities
+        if base_exe in DISALLOWED_EXECUTABLES or VERSIONED_SHELL_PATTERN.match(base_exe):
+            return False, f'Target executable {base_exe} is a restricted system binary, interpreter, or shell.', capabilities
 
-        # 5. Name heuristics for installers, uninstallers, helpers
+        # 5. Browsers require dedicated Guest profile isolation
+        if base_exe in BROWSER_PROCESSES:
+            return False, f'Browser executable {base_exe} requires dedicated Guest isolation.', capabilities
+
+        # 6. Name heuristics for installers, uninstallers, helpers
         if DISALLOWED_NAME_PATTERNS.search(name) or DISALLOWED_NAME_PATTERNS.search(base_exe):
             return False, f'Application name or executable indicates an uninstaller or installer: {name}', capabilities
 
-        # 6. Target path heuristics (e.g. unins000.exe, temp directory setups)
+        # 7. Target path heuristics (e.g. unins000.exe, temp directory setups)
         norm_target = ntpath.normcase(ntpath.normpath(target))
         if re.search(r'[\\/](?:unins\d*|setup|installer)[^\\/]*\.exe$', norm_target):
             return False, 'Target path belongs to an installer or uninstaller.', capabilities
 
-        # 7. Dangerous arguments
+        # 8. Untrusted locations (Downloads, Temp, Desktop, Documents scratch)
+        if UNTRUSTED_PATH_PATTERN.search(norm_target):
+            return False, 'Target executable is in an untrusted or user-data location.', capabilities
+
+        # 9. Dangerous arguments
         if args and DANGEROUS_ARGUMENTS_PATTERN.search(args):
             return False, 'Target shortcut contains dangerous or dynamic arguments.', capabilities
 
@@ -286,12 +315,20 @@ class WindowsAppDiscovery:
         raw_candidates = self.discover_raw_candidates()
         seen_targets: Set[str] = set()
         seen_ids: Set[str] = set(existing_apps.keys()) if existing_apps else set()
+
+        # Collect configured static application targets to avoid emitting duplicates
+        configured_targets = {
+            ntpath.normcase(ntpath.normpath(app.get('launch_path', '')))
+            for app in (existing_apps or {}).values()
+            if isinstance(app, dict) and app.get('launch_path')
+        }
+
         results: List[Dict[str, Any]] = []
 
         for cand in raw_candidates:
             target = cand.get('target', '').strip()
             norm_target = ntpath.normcase(ntpath.normpath(target))
-            if norm_target in seen_targets:
+            if norm_target in seen_targets or norm_target in configured_targets:
                 continue
 
             is_safe, refusal_reason, caps = self.validate_candidate(cand)
@@ -312,19 +349,20 @@ class WindowsAppDiscovery:
                 counter += 1
             seen_ids.add(app_id)
 
-            # Build process_paths matching patterns
+            # Build process_paths matching patterns safely bound to application directory
             base_name = ntpath.basename(target).lower()
             process_paths = [norm_target]
 
-            # Store / execution alias process paths
+            prog_files = os.environ.get('ProgramFiles', 'C:\\Program Files')
+            # Packaged store app execution paths
             if 'windowsapps' in norm_target:
-                process_paths.append(f'*\\{base_name}')
+                process_paths.append(f'{prog_files}\\windowsapps\\*\\{base_name}')
                 if 'mspaint' in base_name or 'pbrush' in base_name:
-                    process_paths.extend(['*\\paintapp.exe', '*\\mspaint.exe'])
+                    process_paths.extend([f'{prog_files}\\windowsapps\\*\\paintapp.exe', norm_target])
             elif base_name == 'calc.exe':
-                process_paths.extend(['*\\calculator.exe', '*\\calculatorapp.exe'])
+                process_paths.extend([f'{prog_files}\\windowsapps\\*\\calculatorapp.exe', norm_target])
             elif base_name == 'mspaint.exe':
-                process_paths.extend(['*\\paintapp.exe', '*\\mspaint.exe'])
+                process_paths.extend([f'{prog_files}\\windowsapps\\*\\paintapp.exe', norm_target])
 
             app_record = {
                 'app_id': app_id,
@@ -350,16 +388,17 @@ class WindowsAppDiscovery:
 def is_file_dialog_control(metadata: Dict[str, Any], window: Optional[Dict[str, Any]] = None) -> bool:
     """Check if a UIA control belongs to a file open/save dialog."""
     window_title = (window.get('title') or '') if window else ''
-    if FILE_DIALOG_PATTERN.search(window_title):
+    window_class = (window.get('class_name') or '') if window else ''
+
+    if window_class == '#32770' or FILE_DIALOG_TITLE_PATTERN.search(window_title):
         return True
 
     name = metadata.get('name') or ''
     auto_id = metadata.get('automation_id') or ''
-    kind = metadata.get('type') or ''
     ancestors = ' '.join(metadata.get('ancestor_labels', ()))
 
-    combined = f'{name} {auto_id} {kind} {ancestors}'
-    return bool(FILE_DIALOG_PATTERN.search(combined))
+    combined = f'{name} {auto_id} {ancestors}'
+    return bool(FILE_DIALOG_CONTROL_PATTERN.search(combined))
 
 
 def is_ambiguous_confirmation(metadata: Dict[str, Any], window: Optional[Dict[str, Any]] = None) -> bool:
@@ -368,18 +407,25 @@ def is_ambiguous_confirmation(metadata: Dict[str, Any], window: Optional[Dict[st
     if not GENERIC_CONFIRMATION_PATTERN.match(name):
         return False
 
+    window_class = (window.get('class_name') or '') if window else ''
+    window_title = (window.get('title') or '') if window else ''
     ancestors = metadata.get('ancestor_labels', ())
-    # If the button is in a dialog or popup window without clear verified scope
+
+    # Win32 dialog class #32770 or dialog keywords
+    if window_class == '#32770':
+        return True
+
+    # If the window title indicates a dialog or popup
+    if re.search(r'(?i)(?:dialog|confirm|save|replace|delete|overwrite|warning|alert|确认|保存|替换|删除|覆盖|警告|提示|对话框)', window_title):
+        return True
+
+    # If ancestors contain dialog indications
     if any(re.search(r'(?i)(?:dialog|messagebox|confirm|warning|alert|提示|确认|警告|对话框)', label) for label in ancestors):
         return True
 
-    # If the window title indicates a modal or subdialog
-    window_title = (window.get('title') or '') if window else ''
-    if re.search(r'(?i)(?:confirm|save|replace|delete|overwrite|确认|保存|替换|删除|覆盖)', window_title):
-        return True
-
-    # A generic confirmation in an unverified pane or dialog is unsafe for autonomous interaction
-    if metadata.get('parent_type') in ('WindowControl', 'PaneControl') and not ancestors:
+    # If not explicitly inside a verified toolbar or ribbon, reject generic confirmation
+    parent_type = metadata.get('parent_type') or ''
+    if parent_type in ('WindowControl', 'PaneControl', 'CustomControl') or not ancestors:
         return True
 
     return False

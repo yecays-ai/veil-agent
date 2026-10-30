@@ -96,13 +96,19 @@ class WindowsAppDiscoveryTests(unittest.TestCase):
             {'name': 'ScriptRunner', 'target': 'C:\\App\\app.exe', 'args': '-c import os', 'source': 'start_menu'},
             {'name': 'BatchRunner', 'target': 'C:\\App\\tool.exe', 'args': 'run.bat', 'source': 'start_menu'},
             {'name': 'Bitwarden', 'target': 'C:\\App\\bitwarden.exe', 'args': '', 'source': 'start_menu'},
+            {'name': 'Python 3.12', 'target': 'C:\\Python312\\python3.12.exe', 'args': '', 'source': 'start_menu'},
+            {'name': 'Ubuntu WSL', 'target': 'C:\\WindowsApps\\ubuntu.exe', 'args': '', 'source': 'start_menu'},
+            {'name': 'Google Chrome', 'target': 'C:\\Program Files\\Google\\Chrome\\chrome.exe', 'args': '', 'source': 'start_menu'},
+            {'name': 'Downloaded Tool', 'target': 'C:\\Users\\lan\\Downloads\\tool.exe', 'args': '', 'source': 'start_menu'},
+            {'name': 'Temp Tool', 'target': 'C:\\Temp\\scratch.exe', 'args': '', 'source': 'start_menu'},
             {'name': 'Bandizip', 'target': 'C:\\Program Files\\Bandizip\\Bandizip.exe', 'args': '', 'source': 'registry_app_paths'},
             {'name': 'Registry Editor', 'target': 'C:\\Windows\\regedit.exe', 'args': '', 'source': 'registry_app_paths'},
             {'name': 'Calculator', 'target': 'C:\\Windows\\System32\\calc.exe', 'args': '', 'source': 'system32'},
             {'name': 'Duplicate Code', 'target': 'C:\\VSCode\\Code.exe', 'args': '', 'source': 'start_menu'},
+            {'name': 'Notepad App', 'target': 'C:\\Windows\\notepad.exe', 'args': '', 'source': 'start_menu'},
         ]
 
-        apps = self.discovery.discover_applications(existing_apps={'notepad': {}})
+        apps = self.discovery.discover_applications(existing_apps={'notepad': {'launch_path': 'C:\\Windows\\notepad.exe'}})
         app_ids = [a['app_id'] for a in apps]
         labels = [a['label'] for a in apps]
 
@@ -120,6 +126,14 @@ class WindowsAppDiscoveryTests(unittest.TestCase):
         self.assertNotIn('batchrunner', app_ids)
         self.assertNotIn('bitwarden', app_ids)
         self.assertNotIn('registry_editor', app_ids)
+        self.assertNotIn('python_3_12', app_ids)
+        self.assertNotIn('ubuntu_wsl', app_ids)
+        self.assertNotIn('google_chrome', app_ids)
+        self.assertNotIn('downloaded_tool', app_ids)
+        self.assertNotIn('temp_tool', app_ids)
+
+        # Existing configured app targets are deduplicated
+        self.assertNotIn('notepad_app', app_ids)
 
         # Duplicate targets are deduplicated
         code_apps = [a for a in apps if 'code.exe' in a['launch_path'].lower()]
