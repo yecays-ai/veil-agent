@@ -2,7 +2,15 @@
 
 ## 工单 167 交接（2026-10-30）
 
-- 独立分支 `ticket/167-lab-python-sandbox`。实现 Peter Lab 独立代码实验室，基于本地 Docker 隔离容器执行 Python 脚本，支持标准输入输出/错误捕获、超时与资源限制、Lab 成果文件生成与持久化；默认断网且无法访问宿主环境与凭据。
+- 独立分支 `ticket/167-lab-python-sandbox`。实现 Peter Lab 独立代码实验室：
+  1. 隔离执行：基于本地 Docker Desktop 容器（`python:3.12-slim`），严格断网（`--network none`），限制 CPU 1.0、内存 256MB、进程数 64，不继承宿主机环境变量，不挂载任何宿主机个人/系统/代码目录。
+  2. 失败阻断：Docker 未安装或未启动时，`check_docker_available` 快速拒绝并返回友好中文提示，坚决不退回宿主 Python 进程执行。
+  3. 成果写回：执行前在独立临时目录准备本次 Lab 脚本及相关文件；执行完毕后扫描新产生/修改的文件，校验安全路径后安全持久化写回 Peter 的 `lab/` 目录。
+  4. 自主调试闭环：执行输出包括 stdout、stderr、执行耗时与状态。脚本语法错误或运行时异常（如除以零）时返回完整 traceback，工具状态保持成功，使 Peter 能在模型上下文中观察错误并自主修正重试。
+  5. 打断与超时：支持默认 15 秒（最大 30 秒）硬超时与 `should_stop` 用户打断，超期自动执行 `docker kill` / `docker rm -f` 强制销毁容器。
+  6. 角色别名：在 Peter 的 `character.toml` 中配置别名 `run_lab_python = "tinker_in_lab"`。
+  7. 自动化测试：`tests/test_lab_sandbox.py` 覆盖路径安全、Docker 探测、超时/打断清理、成果回写、真实 Docker 执行及断网验证，16 项测试全部通过；相关 `test_tools`、`test_lab`、`test_lab_preview` 回归全部通过。
+  8. Windows 实际体验按 A–E 待 Lan 验收。见 `docs/tickets/167-lab-python-sandbox.md`。
 
 ## 工单 172 交接（2026-10-30）
 

@@ -46,7 +46,7 @@ ALLOW = {
 }
 ASK = {'write_file', 'append_file', 'grant_append'}
 DENY = {'edit_file', 'move_file'}
-LAB_ONLY = {'create_directory', 'move_lab_file', 'lab_file_digest', 'preview_lab_page', 'open_lab_game'}
+LAB_ONLY = {'create_directory', 'move_lab_file', 'lab_file_digest', 'preview_lab_page', 'open_lab_game', 'run_lab_python'}
 # Memory tools (ticket 007) are offered by memory_native.ToolSet, never by the filesystem server.
 NATIVE = {'hold', 'breath_search', 'trace', 'dream', 'letter_write', 'letter_read',
           'letter_lock_update', 'anchor', 'release', 'plan', 'pulse', 'memory_history', 'memory_catalog', 'memory_read'}
@@ -207,6 +207,7 @@ class FilesystemTools:
         self.cap_path = role_path / 'capabilities.json'
         self.lab = None
         self.lab_preview = None
+        self.lab_sandbox = None
         self.browser_tools = BrowserTools(cfg)
         integration_cfg = SimpleNamespace(**vars(cfg))
         integration_cfg.web = {**(getattr(cfg, 'web', None) or {}), 'enabled': True,
@@ -313,12 +314,15 @@ class FilesystemTools:
                           if tool_policy(tool.name) != 'deny'
                           and tool.name not in WINDOWS_DESKTOP_TOOL_NAMES
                           and tool.name not in ('append_file', 'grant_append', 'create_directory', 'move_lab_file',
-                                                'preview_lab_page'))
+                                                'preview_lab_page', 'run_lab_python'))
         self._open_lab(settings)
         if self.lab:
             from lab_preview import LabPreview
             self.lab_preview = LabPreview(self.lab, platform_enabled=os.name == 'nt')
             self.tools.extend(self.lab_preview.tools)
+            from lab_sandbox import LabPythonSandbox
+            self.lab_sandbox = LabPythonSandbox(self.lab, enabled=settings.get('python_sandbox', True))
+            self.tools.extend(self.lab_sandbox.tools)
             self.game_manager = None
             self.game_tool_schema = SimpleNamespace(name='open_lab_game',
                 description=('Open a playable Lab HTML game in Lan\'s browser and return its link. '
@@ -1013,8 +1017,9 @@ class FilesystemTools:
                 'rewrite existing files with write_file (the program keeps the previous version) and append, '
                 'all without asking. You may move a regular file between a normal lab folder and '
                 'lab/archive/ or lab/trash/ (keeping its relative path) and back. Nothing can be deleted, '
-                'and scripts cannot be launched on the computer. preview_lab_page renders a Lab HTML page '
-                'in a temporary sandboxed Chromium session and returns its screenshot and page errors; '
+                'and host scripts cannot be launched. run_lab_python runs a Lab Python script in an isolated, '
+                'network-disabled container sandbox with CPU/memory limits and saves generated files back to Lab. '
+                'preview_lab_page renders a Lab HTML page in a temporary sandboxed Chromium session and returns its screenshot and page errors; '
                 'page JavaScript has no external network, downloads, popups or access to other local files. '
                 f'Each write/append is limited to {self.lab_max_write_bytes} '
                 'UTF-8 bytes; split larger work into files or append chunks. '
@@ -1032,6 +1037,9 @@ class FilesystemTools:
         lab_preview = getattr(self, 'lab_preview', None)
         if lab_preview:
             lab_preview.begin_request()
+        lab_sandbox = getattr(self, 'lab_sandbox', None)
+        if lab_sandbox:
+            lab_sandbox.begin_request()
         windows_tools = getattr(self, 'windows_tools', None)
         if windows_tools:
             windows_tools.begin_request()
@@ -1055,6 +1063,10 @@ class FilesystemTools:
             if self.lab_preview is None:
                 return 'Lab page preview is unavailable because this character has no safe Lab folder.', '被拒绝', 'Lab preview'
             return self.lab_preview.invoke(args, should_stop=should_stop)
+        if name == 'run_lab_python':
+            if getattr(self, 'lab_sandbox', None) is None:
+                return 'Lab Python execution is unavailable because this character has no safe Lab folder.', '被拒绝', 'Lab Python sandbox'
+            return self.lab_sandbox.invoke(args, should_stop=should_stop)
         if name == 'open_lab_game':
             if getattr(self, 'game_manager', None) is None or not isinstance(args, dict) or set(args) != {'path'}:
                 return 'The playable Lab game service is unavailable.', '被拒绝', 'Lab game'
@@ -1578,6 +1590,8 @@ class FilesystemTools:
             return self.windows_interaction_tools.preview_summary(name, args)
         if name in WEB_TOOL_NAMES and self.web_tools is not None:
             return self.web_tools.preview_summary(name, args)
+        if name in ('preview_lab_page', 'open_lab_game', 'run_lab_python'):
+            return str(args.get('path', name))[:180] if isinstance(args, dict) else name
         try:
             paths = [checked_path(self.workspace, value) for _, _, value in _path_arguments(name, args)]
             return ', '.join(_summary(self.workspace, path) for path in paths)
