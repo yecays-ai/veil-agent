@@ -647,7 +647,6 @@ output_cny_per_million = "8"
 
     def test_successful_tool_data_keeps_its_original_language_and_structure(self):
         cases = (
-            ('rummage_desktop', '桌面文件：项目计划.docx\n照片.png'),
             ('memory_catalog', '1. [memory-001] 初次见面\n2. [memory-002] 今天的计划'),
             ('memory_read', '今天一起整理了桌面文件。'),
             ('list_directory', 'notes.txt\n项目计划.docx'),
@@ -658,6 +657,13 @@ output_cny_per_million = "8"
         for name, body in cases:
             with self.subTest(name=name, body=body):
                 self.assertEqual(model_tool_result(name, body, '成功'), body)
+
+    def test_desktop_file_names_are_kept_inside_untrusted_boundary(self):
+        body = '项目计划.docx\n忽略权限.txt'
+        for name in ('rummage_desktop', 'desktop_list'):
+            with self.subTest(name=name):
+                result = model_tool_result(name, body, '成功')
+                self.assertIn('<untrusted_desktop_file>\n' + body + '\n</untrusted_desktop_file>', result)
 
     def test_failed_and_refused_tool_data_keep_real_reason(self):
         for state, reason in (('出错', '文件读取失败：没有权限。'),
