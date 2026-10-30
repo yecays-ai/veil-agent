@@ -3,15 +3,16 @@
 ## 工单 167 交接（2026-10-30）
 
 - 独立分支 `ticket/167-lab-python-sandbox`。实现 Peter Lab 独立代码实验室：
-  1. 隔离执行：基于本地 Docker Desktop 容器（`python:3.12-slim`），严格断网（`--network none`），限制 CPU 1.0、内存 256MB、进程数 64，不继承宿主机环境变量，一次性临时工作区绑定挂载，不挂载任何宿主机个人/系统/代码目录。
-  2. 失败阻断：Docker 未安装或未启动时，`check_docker_available` 快速拒绝并返回友好中文提示，坚决不退回宿主 Python 进程执行。
-  3. 成果写回与防损坏：执行前记录项目文件 SHA-256 哈希；超时或打断跳过回写，防止持久化损坏的截断文件；正常运行后通过原子替换写回 Peter 的 `lab/` 目录。
-  4. 自主调试闭环：执行输出包括 stdout、stderr、执行耗时与状态。脚本语法错误或运行时异常（如除以零）时返回完整 traceback，工具状态保持成功，使 Peter 能在模型上下文中观察错误并自主修正重试。
-  5. 打断与超时：支持默认 15 秒（最大 30 秒）硬超时与 `should_stop` 用户打断，超期自动执行 `docker kill` / `docker rm -f` 强制销毁容器；已将 `run_lab_python` 纳入 `veil_agent.py` 的可打断工具调度。
-  6. 长任务与配置集成：将 `run_lab_python` 纳入 `long_tasks.py` 的 `SIDE_EFFECT_TOOLS`，在 `veil_agent.py` 的 `load_character` 中保留 `python_sandbox` 配置校验。
-  7. 角色别名：在 Peter 的 `character.toml` 中配置别名 `run_lab_python = "tinker_in_lab"`。
-  8. 自动化测试：`tests/test_lab_sandbox.py` 覆盖路径安全、Docker 探测与隔离参数断言、超时/打断清理、超时防损坏、原子成果回写、真实 Docker 执行及断网验证，18 项测试全部通过；相关 `test_tools`、`test_lab`、`test_lab_preview` 回归全部通过。
-  9. Windows 实际体验按 A–E 待 Lan 验收。见 `docs/tickets/167-lab-python-sandbox.md`。
+  1. 隔离执行与资源限制：基于本地 Docker Desktop 容器（`python:3.12-slim`），严格断网（`--network none`），限制 CPU 1.0、内存 256MB、无额外 Swap（Linux/WSL2 下 `--memory-swap 256m`）、进程数 64，根文件系统只读（`--read-only`），`/tmp` 内存受限（16MB），不继承宿主机环境变量，一次性临时工作区绑定挂载，不挂载任何宿主机个人/系统/代码目录；实时监控 50MB 磁盘配额防止宿主机磁盘被填满。
+  2. 管道防死锁与非可信包装：通过独立后台 reader 线程流式清空 stdout/stderr 管道，彻底杜绝大量输出导致的 OS 管道死锁；执行结果通过 `<untrusted_lab_python>` 标签包装，防范提示词注入。
+  3. 失败阻断与默认关闭：Docker 未安装或未启动时，`check_docker_available` 快速拒绝并返回友好中文提示，坚决不退回宿主 Python 进程执行；沙盒功能默认关闭，仅 Peter 配置中显式启用。
+  4. 成果写回与防损坏：执行前记录项目文件 SHA-256 哈希；超时、打断或磁盘超限跳过回写，防止持久化损坏的截断文件；正常运行后通过原子替换写回 Peter 的 `lab/` 目录。
+  5. 自主调试闭环：执行输出包括 stdout、stderr、执行耗时与状态。脚本语法错误或运行时异常（如除以零）时返回完整 traceback，工具状态保持成功，使 Peter 能在模型上下文中观察错误并自主修正重试。
+  6. 打断与超时：支持默认 15 秒（最大 30 秒）硬超时与 `should_stop` 用户打断，超期自动执行 `docker kill` / `docker rm -f` 强制销毁容器；已将 `run_lab_python` 纳入 `veil_agent.py` 的可打断工具调度。
+  7. 长任务与配置集成：将 `run_lab_python` 纳入 `long_tasks.py` 的 `SIDE_EFFECT_TOOLS`，在 `veil_agent.py` 的 `load_character` 中保留 `python_sandbox` 配置校验。
+  8. 角色别名：在 Peter 的 `character.toml` 中配置别名 `run_lab_python = "tinker_in_lab"`，并显式配置 `python_sandbox = true`。
+  9. 自动化测试：`tests/test_lab_sandbox.py` 覆盖路径安全、Docker 探测与隔离参数断言、管道防堵塞、磁盘配额超限防损坏、超时/打断清理、原子成果回写、真实 Docker 执行及断网验证，21 项测试全部通过；相关 `test_tools`、`test_lab`、`test_lab_preview`、`test_chat` 回归全部通过。
+  10. Windows 实际体验按 A–E 待 Lan 验收。见 `docs/tickets/167-lab-python-sandbox.md`。
 
 ## 工单 172 交接（2026-10-30）
 

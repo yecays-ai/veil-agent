@@ -5,21 +5,25 @@
 ## 一、交付范围与核心能力
 
 Peter 现在可以在自己的 Lab 独立编写、运行、观察、调试并修改 Python 程序：
-1. **真实独立执行**：通过本地 Docker 容器（`python:3.12-slim`）执行 Peter 的 Lab 脚本，执行结束后汇总捕获 stdout、stderr、耗时与产生的文件（单流上限 50 KB / 1,000 行）。
-2. **严格隔离边界**：
+1. **真实独立执行**：通过本地 Docker 容器（`python:3.12-slim`）执行 Peter 的 Lab 脚本；采用独立后台流式读取线程实时清空标准输出与错误管道，彻底消除大输出导致的 OS 管道阻塞死锁；单流上限 50 KB / 1,000 行。
+2. **严格隔离边界与资源限制**：
    - 绝不使用宿主机 Python 作为执行器；
    - Docker 未启动或不可用时快速拒绝并明确提示，**绝不退回宿主机进程**；
+   - **默认关闭沙箱**，仅在 Peter 的配置中明确启用（`python_sandbox = true`）；
    - 容器强制断网（`--network none`）；
+   - 容器根文件系统只读（`--read-only`），临时目录受限内存挂载（`--tmpfs /tmp:rw,noexec,nosuid,size=16m`）；
+   - 宿主机临时工作区严格监控 50MB 磁盘写入配额，防止脚本填满宿主机磁盘，超限立即杀死容器并跳过文件回写；
    - 一次性临时工作区绑定挂载（`/workspace`），不挂载宿主机个人目录（桌面、文档、浏览器、微信、Ombre 等）及源码仓库；
    - 不继承 VEIL 主进程的环境变量（API Key、Token 等）；
-   - 严格资源限制：内存 256MB、CPU 1.0、最大进程数 64、无提权（`--security-opt no-new-privileges`、`--cap-drop ALL`）；
+   - 严格资源限制：内存 256MB、Swap 限制 256MB（Linux/WSL2 下 `--memory-swap 256m` 严格禁止额外 Swap）、CPU 1.0、最大进程数 64、无提权（`--security-opt no-new-privileges`、`--cap-drop ALL`）；
    - 硬超时控制：默认 15 秒，上限 30 秒；支持用户停止（`should_stop`）时立即 `docker kill` 销毁容器。
 3. **成果持久化与防损坏**：
    - 执行前在隔离暂存区准备当前实验脚本及项目文件，并记录 SHA-256 内容哈希；
-   - 超时或被取消的执行**跳过成果回写**，防止半写文件损坏原有实验成果；
+   - 超时、取消或磁盘超限的执行**跳过成果回写**，防止半写文件损坏原有实验成果；
    - 运行正常结束后基于内容哈希比对新生成及修改的文件，经安全路径检查（防目录穿越与软链接）后，通过临时同级文件与 `os.replace` 原子替换写回 Peter 的 `lab/` 目录；
    - 重启 VEIL 后，Peter 可基于之前保存的成果继续实验。
-4. **自主调试闭环**：
+4. **自主调试闭环与不可信数据安全**：
+   - 执行结果由 `model_tool_result` 统一使用 `<untrusted_lab_python>` 标签包裹，明确标识为非指令数据，杜绝注入风险；
    - 脚本报错时返回包含 Python Traceback 的完整错误输出，工具调用保持成功，模型可在上下文直接读取报错信息并自行修改代码再试。
 5. **角色工具别名**：
    - 在 Peter 的 `character.toml` 中配置 `run_lab_python = "tinker_in_lab"`，配合写文件别名 `scribble` 形成完整闭环。
@@ -30,20 +34,21 @@ Peter 现在可以在自己的 Lab 独立编写、运行、观察、调试并修
 
 - `lab_sandbox.py`：
   - `LabPythonSandbox`：负责环境探测、参数校验、执行环境准备、Docker 容器调用、超时与打断监控、内容哈希比对、原子文件写回与结果格式化。
-  - `check_docker_available()`：通过轻量 `docker version` 校验本地 Docker 守护进程连通性，带快速超时与 5 秒缓存防抖。
+  - `check_docker_available()`：通过轻量 `docker version` 校验本地 Docker 守护进程连通性及引擎平台，带快速超时与 5 秒缓存防抖。
   - `_safe_lab_file()`：严格限制文件只允许在 `lab/` 作用域内，阻断 `..` 越界、绝对路径与 Windows Reparse Points。
 - `tools_agent.py`：
-  - 注册 `run_lab_python` 工具到 `LAB_ONLY` 与 `FilesystemTools`，提供准确的权限说明；
+  - 注册 `run_lab_python` 工具到 `LAB_ONLY` 与 `FilesystemTools`，默认关闭，提供准确的权限说明；
   - 在 `begin_request`、`invoke` 与 `preview_summary` 中接入 `LabPythonSandbox` 生命周期。
 - `veil_agent.py`：
-  - 在 `load_character` 中规范化并保留 `python_sandbox` 配置开关；
+  - 在 `load_character` 中规范化并保留 `python_sandbox` 配置开关，默认 `False`；
+  - 在 `model_tool_result` 中为 `run_lab_python` 添加 `<untrusted_lab_python>` 数据包裹；
   - 在工具分发循环中将 `run_lab_python` 纳入支持 `should_stop` 打断的工具列表。
 - `long_tasks.py`：
   - 将 `run_lab_python` 纳入 `SIDE_EFFECT_TOOLS`，保证长任务检查点正确记录副作用。
 - `characters/peter/character.toml`：
-  - 添加工具别名映射：`run_lab_python = "tinker_in_lab"`。
+  - 添加工具配置与别名映射：`python_sandbox = true`，`run_lab_python = "tinker_in_lab"`。
 - `tests/test_lab_sandbox.py`：
-  - 包含 15 项单元/模拟测试（覆盖隔离参数、安全路径防穿越、Docker 缺失快速阻断、超时杀死、打断清理、超时防损坏跳过回写、原子写回）及 3 项真实 Docker 集成测试。
+  - 包含 18 项单元/模拟测试（覆盖隔离参数、Swap/只读配置、管道防堵塞、磁盘配额超限防损坏、安全路径防穿越、Docker 缺失快速阻断、超时杀死、打断清理、原子写回）及 3 项真实 Docker 集成测试。
 
 ---
 
@@ -58,7 +63,7 @@ Peter 现在可以在自己的 Lab 独立编写、运行、观察、调试并修
 2. **观察点**：
    - Peter 调用 `scribble`（即 `write_file`）创建 `lab/fib.py`；
    - Peter 调用 `tinker_in_lab`（即 `run_lab_python`）执行 `fib.py`；
-   - 工具返回成功，输出标准输出与产生的 `fib.json` 文件；
+   - 工具返回成功，输出标准输出与产生的 `fib.json` 文件，返回结果带有 `<untrusted_lab_python>` 数据包裹；
    - 查看 Peter 的 `lab/` 目录下实际产生了 `fib.json` 文件，内容正确。
 
 ### 场景 B：错误捕获与自愈闭环

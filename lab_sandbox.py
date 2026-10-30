@@ -25,6 +25,7 @@ MAX_SCRIPT_BYTES = 2 * 1024 * 1024   # 2 MB max script size
 MAX_GENERATED_FILES = 20
 MAX_FILE_BYTES = 5 * 1024 * 1024     # 5 MB per generated file
 MAX_TOTAL_OUTPUT_BYTES = 20 * 1024 * 1024  # 20 MB total
+MAX_WORKSPACE_DISK_BYTES = 50 * 1024 * 1024  # 50 MB total workspace disk limit
 
 DOCKER_IMAGE = "python:3.12-slim"
 CONTAINER_MEMORY = "256m"
@@ -94,50 +95,53 @@ def _safe_lab_file(lab: Path, relative: str, *, must_exist: bool = True) -> Path
     return candidate
 
 
-_DOCKER_CACHE: Tuple[float, bool, str] = (0.0, False, "")
+_DOCKER_CACHE: Tuple[float, bool, str, str] = (0.0, False, "", "")
 _CACHE_TTL = 5.0
 
 
-def check_docker_available(timeout: float = 2.0) -> Tuple[bool, str]:
+def check_docker_available(timeout: float = 2.0) -> Tuple[bool, str, str]:
     """Check if the local Docker engine is accessible (with 5s debounce cache)."""
     global _DOCKER_CACHE
     now = time.monotonic()
-    last_time, cached_ok, cached_ver = _DOCKER_CACHE
+    last_time, cached_ok, cached_ver, cached_os = _DOCKER_CACHE
     if now - last_time < _CACHE_TTL:
-        return cached_ok, cached_ver
+        return cached_ok, cached_ver, cached_os
     try:
         proc = subprocess.run(
-            ["docker", "version", "--format", "{{.Server.Version}}"],
+            ["docker", "version", "--format", "{{.Server.Version}}|{{.Server.Os}}"],
             capture_output=True,
             text=True,
             timeout=timeout,
         )
         if proc.returncode == 0 and proc.stdout.strip():
-            res = (True, proc.stdout.strip())
-            _DOCKER_CACHE = (now, res[0], res[1])
+            parts = proc.stdout.strip().split("|", 1)
+            ver = parts[0].strip()
+            server_os = parts[1].strip().lower() if len(parts) > 1 else "linux"
+            res = (True, ver, server_os)
+            _DOCKER_CACHE = (now, res[0], res[1], res[2])
             return res
         err = proc.stderr.strip() or "Docker daemon is not running."
-        res = (False, err)
-        _DOCKER_CACHE = (now, res[0], res[1])
+        res = (False, err, "")
+        _DOCKER_CACHE = (now, res[0], res[1], res[2])
         return res
     except FileNotFoundError:
-        res = (False, "Docker executable 'docker' was not found on PATH.")
-        _DOCKER_CACHE = (now, res[0], res[1])
+        res = (False, "Docker executable 'docker' was not found on PATH.", "")
+        _DOCKER_CACHE = (now, res[0], res[1], res[2])
         return res
     except subprocess.TimeoutExpired:
-        res = (False, "Docker engine response timed out.")
-        _DOCKER_CACHE = (now, res[0], res[1])
+        res = (False, "Docker engine response timed out.", "")
+        _DOCKER_CACHE = (now, res[0], res[1], res[2])
         return res
     except Exception as exc:
-        res = (False, str(exc))
-        _DOCKER_CACHE = (now, res[0], res[1])
+        res = (False, str(exc), "")
+        _DOCKER_CACHE = (now, res[0], res[1], res[2])
         return res
 
 
 class LabPythonSandbox:
     """Manages isolated Python executions inside dedicated Docker containers."""
 
-    def __init__(self, lab: Path, *, enabled: bool = True, docker_check_fn: Optional[Callable[[], Tuple[bool, str]]] = None):
+    def __init__(self, lab: Path, *, enabled: bool = False, docker_check_fn: Optional[Callable[..., Any]] = None):
         self.lab = Path(lab).resolve()
         self.enabled = bool(enabled)
         self._docker_check_fn = docker_check_fn or check_docker_available
@@ -225,7 +229,10 @@ class LabPythonSandbox:
             return f"Failed to inspect script file: {exc}", "出错", summary
 
         # Check Docker availability; strictly forbid host execution
-        is_ready, detail = self._docker_check_fn()
+        docker_res = self._docker_check_fn()
+        is_ready = docker_res[0]
+        detail = docker_res[1]
+        server_os = docker_res[2] if len(docker_res) > 2 else "linux"
         if not is_ready:
             return (
                 f"Lab Python execution is unavailable because Docker is not ready: {detail}. "
@@ -268,6 +275,7 @@ class LabPythonSandbox:
                     timeout=timeout,
                     summary=summary,
                     should_stop=should_stop,
+                    server_os=server_os,
                 )
 
     def _collect_staged_files(
@@ -320,6 +328,7 @@ class LabPythonSandbox:
         timeout: int,
         summary: str,
         should_stop: Optional[Callable[[], bool]],
+        server_os: str = "linux",
     ) -> Tuple[str, str, str]:
         # Enforce total staged file size limit
         try:
@@ -388,7 +397,12 @@ class LabPythonSandbox:
             "ALL",
             "--security-opt",
             "no-new-privileges",
+            "--read-only",
+            "--tmpfs",
+            "/tmp:rw,noexec,nosuid,size=16m",
         ]
+        if server_os != "windows":
+            cmd.extend(["--memory-swap", CONTAINER_MEMORY])
         if hasattr(os, "getuid") and hasattr(os, "getgid"):
             cmd.extend(["--user", f"{os.getuid()}:{os.getgid()}"])
         cmd.extend([
@@ -412,6 +426,7 @@ class LabPythonSandbox:
         start_time = time.monotonic()
         timed_out = False
         cancelled = False
+        disk_exceeded = False
 
         try:
             proc = subprocess.Popen(
@@ -426,7 +441,32 @@ class LabPythonSandbox:
         except Exception as exc:
             return f"Failed to start sandbox container: {exc}", "出错", summary
 
-        # 4. Monitor loop with timeout and should_stop
+        # Continuous reader threads to prevent pipe deadlock on large output
+        stdout_chunks: List[str] = []
+        stderr_chunks: List[str] = []
+        max_capture_bytes = MAX_OUTPUT_BYTES + 4096
+
+        def _drain_stream(stream, chunks: List[str]):
+            captured = 0
+            try:
+                for line in iter(stream.readline, ""):
+                    if captured < max_capture_bytes:
+                        chunks.append(line)
+                        captured += len(line.encode("utf-8", errors="replace"))
+            except Exception:
+                pass
+            finally:
+                try:
+                    stream.close()
+                except Exception:
+                    pass
+
+        stdout_thread = threading.Thread(target=_drain_stream, args=(proc.stdout, stdout_chunks), daemon=True)
+        stderr_thread = threading.Thread(target=_drain_stream, args=(proc.stderr, stderr_chunks), daemon=True)
+        stdout_thread.start()
+        stderr_thread.start()
+
+        # 4. Monitor loop with timeout, should_stop and live disk usage check
         while True:
             ret = proc.poll()
             if ret is not None:
@@ -439,10 +479,32 @@ class LabPythonSandbox:
                 timed_out = True
                 self._terminate_container(container_name, proc)
                 break
+
+            # Live workspace disk quota check (prevent filling host volume)
+            try:
+                disk_bytes = sum(
+                    f.stat().st_size
+                    for f in temp_path.rglob("*")
+                    if f.is_file() and not _is_reparse_point(f)
+                )
+                if disk_bytes > MAX_WORKSPACE_DISK_BYTES:
+                    disk_exceeded = True
+                    self._terminate_container(container_name, proc)
+                    break
+            except OSError:
+                pass
+
             time.sleep(0.05)
 
         duration = time.monotonic() - start_time
-        stdout, stderr = proc.communicate()
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            pass
+        stdout_thread.join(timeout=2.0)
+        stderr_thread.join(timeout=2.0)
+        stdout = "".join(stdout_chunks)
+        stderr = "".join(stderr_chunks)
 
         # Ensure container cleanup
         try:
@@ -455,13 +517,15 @@ class LabPythonSandbox:
             status_desc = "Cancelled (interrupted by user or system)"
         elif timed_out:
             status_desc = f"Timed Out (exceeded {timeout}s limit)"
+        elif disk_exceeded:
+            status_desc = f"Failed (Workspace disk limit {MAX_WORKSPACE_DISK_BYTES // (1024*1024)}MB exceeded)"
         elif proc.returncode == 0:
             status_desc = "Success (Exit Code: 0)"
         else:
             status_desc = f"Failed (Exit Code: {proc.returncode})"
 
-        # 6. Check and write back generated files (skip on timeout or cancellation to prevent corrupting artifacts)
-        if cancelled or timed_out:
+        # 6. Check and write back generated files (skip on timeout, cancellation, or disk exceeded)
+        if cancelled or timed_out or disk_exceeded:
             generated_files, write_back_errors = [], []
         else:
             generated_files, write_back_errors = self._sync_output_files(temp_path, initial_hashes)

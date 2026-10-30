@@ -321,7 +321,7 @@ class FilesystemTools:
             self.lab_preview = LabPreview(self.lab, platform_enabled=os.name == 'nt')
             self.tools.extend(self.lab_preview.tools)
             from lab_sandbox import LabPythonSandbox
-            self.lab_sandbox = LabPythonSandbox(self.lab, enabled=settings.get('python_sandbox', True))
+            self.lab_sandbox = LabPythonSandbox(self.lab, enabled=settings.get('python_sandbox', False))
             self.tools.extend(self.lab_sandbox.tools)
             self.game_manager = None
             self.game_tool_schema = SimpleNamespace(name='open_lab_game',

@@ -1,6 +1,6 @@
 # 当前状态
 
-工单 167（2026-10-30）：分支 `ticket/167-lab-python-sandbox`。实现 Peter Lab 独立代码实验室，基于本地 Docker 隔离容器（`python:3.12-slim`）执行 Python 脚本，支持标准输出/错误堆栈捕获、超时与资源限制（256MB/1.0CPU/15s默认30s上限）、Lab 成果文件生成与持久化；一次性临时工作区绑定挂载、不挂载个人/源码目录、无环境变量继承，容器严格断网（`--network none`），Docker 不可用时快速拒绝绝不退回宿主。包含 15 项单元/模拟测试及 3 项真实 Docker 集成测试通过。Windows 实机体验按 A–E 待验收。验收见 `docs/tickets/167-lab-python-sandbox.md`。
+工单 167（2026-10-30）：分支 `ticket/167-lab-python-sandbox`。实现 Peter Lab 独立代码实验室，基于本地 Docker 隔离容器（`python:3.12-slim`）执行 Python 脚本，支持标准输出/错误堆栈捕获、管道防死锁与超时/资源/磁盘限制（256MB/Swap限制/1.0CPU/15s默认30s上限/50MB工作区配额）、Lab 成果文件生成与持久化；一次性临时工作区绑定挂载、只读根文件系统、不挂载个人/源码目录、无环境变量继承，容器严格断网（`--network none`），结果添加不可信数据包裹，默认关闭且仅 Peter 启用，Docker 不可用时快速拒绝绝不退回宿主。全量测试通过。Windows 实机体验按 A–E 待验收。验收见 `docs/tickets/167-lab-python-sandbox.md`。
 
 工单 172（2026-10-30）：基于已合并 171 的 main，在 `ticket/172-preserve-tool-results` 修复中文工具正文被替换为英文成功提示的问题，PR #220 已合并。中文桌面文件名、记忆目录及正文、混合语言结果均保留；明确的程序成功提示改为英文，小红书内容加不可信包裹，原有其他不可信内容包裹和 165 的长度控制继续使用。自动检查及 Windows 实机体验以实际结果为准。验收见 `docs/tickets/172-preserve-tool-results.md`。
 
