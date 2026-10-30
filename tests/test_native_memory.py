@@ -705,7 +705,7 @@ class OmbreToolGuardTests(unittest.TestCase):
                                                'why_remembered': 'the event matters'})
 
         self.assertEqual(state, '成功')
-        self.assertIn('改动前完整版本（含元数据）已留档', result)
+        self.assertIn('complete previous version with metadata was archived', result)
         versions = self.store.read('fake/memory-versions.jsonl')
         self.assertEqual(len(versions), 1)
         self.assertEqual(versions[0]['old_content'], original)

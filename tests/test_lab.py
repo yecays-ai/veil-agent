@@ -179,9 +179,9 @@ persistent_append_file = "growth-journal.md"
         self.call('write_file', 'lab/v1.md', original)
         result = self.call('write_file', 'lab/v2.md', 'short')
         self.assertEqual(result[1], '成功')
-        self.assertIn(f'v1.md：{len(original.encode("utf-8"))} 字节', result[0])
-        self.assertIn('v2.md：5 字节', result[0])
-        self.assertIn('漏掉', result[0])
+        self.assertIn(f'Previous version v1.md: {len(original.encode("utf-8"))} bytes', result[0])
+        self.assertIn('current version v2.md: 5 bytes', result[0])
+        self.assertIn('Check that no content', result[0])
         self.assertEqual((self.lab / 'v1.md').read_bytes(), original.encode('utf-8'))
 
     def test_failed_hash_verification_is_not_reported_as_success(self):
