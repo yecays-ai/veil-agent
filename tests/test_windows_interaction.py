@@ -696,9 +696,13 @@ idle_seconds = 3
         self.assertEqual(tool_policy('windows_launch'), 'desktop_control')
         self.assertEqual(tool_policy('windows_list'), 'desktop_read')
         self.assertEqual(tool_policy('windows_discover_apps'), 'desktop_read')
+        self.assertEqual(tool_policy('desktop_icons_read'), 'desktop_read')
+        self.assertEqual(tool_policy('desktop_icons_arrange'), 'desktop_control')
+        self.assertEqual(tool_policy('desktop_icons_restore'), 'desktop_control')
         offered = permitted_tools(WINDOWS_INTERACTION_TOOL_SCHEMAS)
         self.assertEqual({item['function']['name'] for item in offered}, {
             'windows_discover_apps', 'windows_launch', 'windows_manage', 'windows_control_action',
+            'desktop_icons_read', 'desktop_icons_arrange', 'desktop_icons_restore',
         })
 
     def test_chat_tool_loop_uses_approval_untrusted_result_and_activity_ledger(self):

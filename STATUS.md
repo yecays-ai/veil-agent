@@ -1,6 +1,8 @@
 # 当前状态
 
-工单 173（2026-10-31）：分支 `ticket/173-windows-app-discovery`。实现 Peter 自主发现与探索 Windows 软件：新增通用软件安全发现模块（`windows_discovery.py`），通过开始菜单快捷方式、App Paths 注册表及 WindowsApps 自动识别已安装普通桌面应用，排除安装卸载、脚本解释器、系统提权等危险入口；复用已有 UIA、Win32、窗口管理链路与人类操作优先机制，实施发现/启动/观察/交互分级权限控制，程序层拦截文件对话框与模糊确认控件；提供 `windows_discover_apps` 工具与 `scout_apps` 别名。测试全部通过，Windows 实机体验待 Lan 验收。验收见 `docs/tickets/173-windows-app-discovery.md`。
+工单 174（2026-10-31）：分支 `ticket/174-desktop-icons-and-creation`。实现第三阶段：连续自主操作与创作 + Windows 桌面图标整理。新增桌面图标安全管理模块（`desktop_icons.py`），通过 Explorer/Win32 视图读取桌面图标坐标与显示器配置，支持安全校验（防越界、防重叠、自动排列拦截）、整理前强制拍摄快照与 Lan 一键还原；绝不执行文件移动、复制、重命名或正文修改；提供 `desktop_icons_read`、`desktop_icons_arrange`、`desktop_icons_restore` 工具及 `scout_desktop_icons`、`tidy_desktop_icons`、`restore_desktop_layout` 别名；新增 `/api/desktop-icons/snapshots` 与 `/api/desktop-icons/restore` 恢复入口；更新自主唤醒规划，支持连续操作应用创作并归档至 Lab。全量测试与回归通过，Windows 实机体验待 Lan 验收。见 `docs/tickets/174-desktop-icons-and-creation.md`。
+
+工单 173（2026-10-31）：分支 `ticket/173-windows-app-discovery`。PR #222 已合并（`b5df397`）。实现 Peter 自主发现与探索 Windows 软件：新增通用软件安全发现模块（`windows_discovery.py`），通过开始菜单快捷方式、App Paths 注册表及 WindowsApps 自动识别已安装普通桌面应用，排除安装卸载、脚本解释器、系统提权等危险入口；复用已有 UIA、Win32、窗口管理链路与人类操作优先机制，实施发现/启动/观察/交互分级权限控制，程序层拦截文件对话框与模糊确认控件；提供 `windows_discover_apps` 工具与 `scout_apps` 别名。测试与 CI 12 项检查通过，核心体验通过，软件实际交互待验收。验收见 `docs/tickets/173-windows-app-discovery.md`。
 
 工单 167（2026-10-30）：分支 `ticket/167-lab-python-sandbox`。PR #221 已合并（`cc31b85`）。实现 Peter Lab 独立代码实验室，基于本地 Docker 隔离容器（`python:3.12-slim`）执行 Python 脚本，支持标准输出/错误堆栈捕获、管道防死锁与超时/资源/磁盘限制（256MB/Swap限制/1.0CPU/15s默认30s上限/50MB工作区配额）、Lab 成果文件生成与持久化；一次性临时工作区绑定挂载、只读根文件系统、不挂载个人/源码目录、无环境变量继承，容器严格断网（`--network none`），结果添加不可信数据包裹，默认关闭且仅 Peter 启用，Docker 不可用时快速拒绝绝不退回宿主。全量测试通过。Windows 实机体验按 A–E 待 Lan 验收。验收见 `docs/tickets/167-lab-python-sandbox.md`。
 
@@ -16,8 +18,9 @@
 
 ## 当前目标与现状
 
-- 当前目标：让 Peter 在聊天和自主唤醒时能够自主发现 Windows 电脑上安装的普通桌面软件，安全启动感兴趣的软件并进行界面观察和受控探索。
-- 工单 173：分支 `ticket/173-windows-app-discovery`。新增通用软件安全发现模块（`windows_discovery.py`），通过开始菜单快捷方式、App Paths 注册表及 WindowsApps 自动识别已安装普通桌面应用，排除安装卸载、脚本解释器、系统提权等危险入口；复用已有 UIA、Win32、窗口管理链路与人类操作优先机制，实施发现/启动/观察/交互分级权限控制，程序层拦截文件对话框与模糊确认控件；提供 `windows_discover_apps` 工具与 `scout_apps` 别名。测试全部通过，Windows 实机体验待 Lan 验收。见 `docs/tickets/173-windows-app-discovery.md`。
+- 当前目标：让 Peter 在聊天或自主唤醒时能够连续使用已授权的 Windows 软件完成简单任务并保存成果至 Lab；同时自主发现桌面图标布局、规划并受控调整图标视觉位置，每次整理自动备份且支持 Lan 一键恢复，绝不改变文件真实路径、名称或内容。
+- 工单 174：分支 `ticket/174-desktop-icons-and-creation`。新增桌面图标安全管理模块（`desktop_icons.py`），通过 Explorer/Win32 视图读取桌面图标坐标与显示器配置，支持安全校验（防越界、防重叠、自动排列拦截）、整理前强制拍摄快照与 Lan 一键还原；绝不执行文件移动、复制、重命名或正文修改；提供 `desktop_icons_read`、`desktop_icons_arrange`、`desktop_icons_restore` 工具及 `scout_desktop_icons`、`tidy_desktop_icons`、`restore_desktop_layout` 别名；新增 `/api/desktop-icons/snapshots` 与 `/api/desktop-icons/restore` 恢复入口；更新自主唤醒规划，支持连续操作应用创作并归档至 Lab。全量测试与回归通过，Windows 实机体验待 Lan 验收。见 `docs/tickets/174-desktop-icons-and-creation.md`。
+- 工单 173：PR #222 已合并（`b5df397`）。核心体验通过，软件实际交互待验收。新增通用软件安全发现模块（`windows_discovery.py`），通过开始菜单快捷方式、App Paths 注册表及 WindowsApps 自动识别已安装普通桌面应用，排除安装卸载、脚本解释器、系统提权等危险入口；复用已有 UIA、Win32、窗口管理链路与人类操作优先机制，实施发现/启动/观察/交互分级权限控制，程序层拦截文件对话框与模糊确认控件；提供 `windows_discover_apps` 工具与 `scout_apps` 别名。测试与 CI 12 项检查通过。见 `docs/tickets/173-windows-app-discovery.md`。
 - 工单 167：PR #221 已合并（`cc31b85`）。全量测试通过；Windows 实机体验按 A–E 待 Lan 验收。见 `docs/tickets/167-lab-python-sandbox.md`。
 - 当前目标（补）：Lan 回复瞄一眼弹幕时，Peter 能接上自己刚才看见的窗口、当时的观察和弹幕原话。
 - 工单 170：分支 `ticket/170-update-bat-nowhere`。update.bat 复制到 `.local-tmp` 运行时，安装乌有乡一行的脚本路径指向了 `.local-tmp`，改为从 Agent 目录（`%CD%`）取；Windows 待 Lan 重新运行 update.bat 验收。见 `docs/tickets/170-update-bat-nowhere-path.md`。下一工单号 171。

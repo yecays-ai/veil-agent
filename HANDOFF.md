@@ -1,8 +1,19 @@
 # 交接
 
+## 工单 174 交接（2026-10-31）
+
+- 独立分支 `ticket/174-desktop-icons-and-creation`。实现第三阶段：连续自主操作与创作 + Windows 桌面图标整理：
+  1. 桌面图标管理与安全防线：新建 `desktop_icons.py`，基于 Explorer / Win32 视图读取桌面图标坐标与显示器配置（分辨率、多显示器边界、网格间距、自动排列与贴齐网格状态）；程序层严格限制仅调整显示层视觉坐标，坚决不调用文件系统移动、重命名、复制或删除，不修改文件正文与快捷方式目标；坐标经过防越界与防重叠安全校验，Windows 自动排列开启时安全拒绝。
+  2. 强制预备份与一键恢复：整理操作前强制自动拍摄完整布局快照并存入 `Store`；恢复操作根据快照安全复原匹配图标位置，安全跳过已删除或新增的图标，恢复后重新读取并校验坐标；提供 Web API `/api/desktop-icons/snapshots` 与 `/api/desktop-icons/restore` 供 Lan 随时直接还原桌面，不消耗模型预算与活动额度。
+  3. 人类优先与打断机制：整理和恢复过程在每步移动前严格检查 `should_stop()` 与 `DesktopInputMonitor`，Lan 移动鼠标或敲击键盘时即刻中止后续操作，保留已拍摄快照。
+  4. 连续自主操作与 Lab 创作：在 `autonomy.py` 中更新自主规划提示，支持 Peter 在自主唤醒中根据桌面状态自主规划整理，并连续操作已授权软件完成简单创作并保存到 Lab。
+  5. 工具注册与别名：注册 `desktop_icons_read`（只读权限 `desktop_read`，纳入长任务只读工具）、`desktop_icons_arrange` 与 `desktop_icons_restore`（权限 `desktop_control`）；在 Peter 的 `character.toml` 中配置别名 `scout_desktop_icons`、`tidy_desktop_icons` 与 `restore_desktop_layout`。
+  6. 自动化测试：`tests/test_desktop_icons.py`（11 项用例）全面覆盖标识生成、坐标校验（越界/重叠/自动排列）、快照保存、坐标移动与验证、多状态还原、人类操作打断；`tests/test_desktop_icons_tools.py`（5 项用例）覆盖工具权限策略、只读长任务、工具调用链路及 Web API 管理器映射。全量回归通过。
+  7. 下一步：集中提交推送到 GitHub，发起 PR 并关注 CI 与审查结果，合并后由 Lan 在 Windows 实机按 A/B 步骤验收。见 `docs/tickets/174-desktop-icons-and-creation.md`。
+
 ## 工单 173 交接（2026-10-31）
 
-- 独立分支 `ticket/173-windows-app-discovery`。实现 Peter 自主发现与探索 Windows 软件：
+- 独立分支 `ticket/173-windows-app-discovery`。PR #222 已合并（`b5df397`），核心体验通过，软件实际交互待验收。实现 Peter 自主发现与探索 Windows 软件：
   1. 软件发现与安全过滤：新建 `windows_discovery.py`，从当前用户及公共开始菜单（`Programs\*.lnk`）、注册表 `App Paths`（`HKLM` 与 `HKCU`）、WindowsApps 执行别名目录以及常用系统应用中动态发现普通桌面应用；强制排除命令解释器与脚本宿主（`cmd.exe`, `powershell.exe`, `bash.exe`, `wscript.exe`, `wt.exe`, `python.exe` 等）、安装卸载程序（`uninstall`, `unins000`, `setup`, `installer` 等）、系统管理/服务提权工具（`regedit.exe`, `mmc.exe`, `cleanmgr.exe`, `dism.exe` 等）以及敏感凭据保护进程（`PROTECTED_PROCESSES`）；过滤快捷方式中包含重定向、管道、脚本执行的危险注入参数。
   2. 身份绑定与通用启动：生成安全规范的唯一应用 ID（`app_<slug>`，防冲突且不覆盖静态配置），自动绑定可执行路径与进程特征（`process_paths`）；动态注册到 `WindowsInteractionTools`，复用已有 `windows_launch` 启动链路，核对实际进程身份与目标窗口，支持已开启窗口安全复用，超时明确上报 `InteractionUncertain` 并推荐先观察。
   3. 分级权限与强制安全边界：发现（可读取信息）、启动（可启动普通安全应用）、观察（可读取 UIA 控件与截图）、交互（安全操作受控开放）。针对动态发现的应用，在程序层强制拦截：
