@@ -1020,12 +1020,12 @@ class WindowsInteractionTools:
                     return WindowsToolResult('Each move must specify icon_id (str), x (int), and y (int).', activity_detail='参数无效。'), '被拒绝'
 
             def arrange_icons(stopped):
-                input_snapshot = self._check_before_action(stopped)
+                input_snapshot = self.input_monitor.snapshot() if self.input_monitor else None
 
                 def combined_stop():
                     if stopped and stopped():
                         return True
-                    if self.input_monitor.changed_since(input_snapshot):
+                    if self.input_monitor and input_snapshot is not None and self.input_monitor.changed_since(input_snapshot):
                         return True
                     return False
 
@@ -1050,12 +1050,12 @@ class WindowsInteractionTools:
             snap_id = args.get('snapshot_id')
 
             def restore_icons(stopped):
-                input_snapshot = self._check_before_action(stopped)
+                input_snapshot = self.input_monitor.snapshot() if self.input_monitor else None
 
                 def combined_stop():
                     if stopped and stopped():
                         return True
-                    if self.input_monitor.changed_since(input_snapshot):
+                    if self.input_monitor and input_snapshot is not None and self.input_monitor.changed_since(input_snapshot):
                         return True
                     return False
 
