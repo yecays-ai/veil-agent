@@ -178,6 +178,7 @@ class Hub:
         self.submission_pending = False  # admission reserved while media storage runs
         self.user_typing = False
         self.typed_at = None
+        self.emitted_error_requests = set()
         self.autonomy = None
         self.glance = None
         self.codex_watch = None
@@ -1083,6 +1084,7 @@ class Hub:
         request_id = getattr(text, 'request_id', None)
         memory_refs = getattr(text, 'memory_refs', None)
         text = str(text)
+        is_error = getattr(text, 'is_error', False)
         prefix = f'{self.name}: '
         if text.startswith('新对话已开始；'):
             self.push('reset', text)
@@ -1101,8 +1103,15 @@ class Hub:
                       **({'message_id': message_id} if isinstance(message_id, str) else {}),
                       **({'request_id': request_id} if isinstance(request_id, str) else {}),
                       **({'memory_refs': memory_refs} if isinstance(memory_refs, list) and memory_refs else {}))
-        elif text.startswith('请求失败，未自动重试'):
-            self.push('error', text)
+        elif (is_error or text.startswith(('请求失败', '当前输入及必要上下文',
+                                            '这条输入加上人设和记忆太长', '工具说明和本轮上下文超过长度上限',
+                                            '模型返回空内容'))):
+            with self.cond:
+                if request_id and request_id in self.emitted_error_requests:
+                    return
+                if request_id:
+                    self.emitted_error_requests.add(request_id)
+            self.push('error', text, **({'request_id': request_id} if request_id else {}))
         elif text.startswith('接上了'):
             self.push('notice', text.split('。')[0] + '。')   # drop the terminal-only command hints
         else:
@@ -1118,6 +1127,8 @@ class Hub:
     def finish_media_submission(self, committed, text, media, request_id):
         if not committed:
             self.mark_voice_unsent(media)
+            if self.chat is not None and request_id:
+                self.chat.fail_incoming([request_id], reason='submission_uncommitted')
             with self.cond:
                 self.submissions.pop(request_id, None)
         elif isinstance(media, dict) and media.get('kind') == 'voice':
@@ -1342,6 +1353,8 @@ class Hub:
                     return 'media_storage'
             with self.cond:
                 if self.stopping or self.stopped:
+                    if persisted and self.chat is not None:
+                        self.chat.fail_incoming([request_id], reason='stopped')
                     return 'stopped'
                 def complete(committed):
                     self.finish_media_submission(committed, text, media, request_id)

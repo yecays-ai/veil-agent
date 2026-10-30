@@ -9,6 +9,8 @@ let after=0, busy=true, transcribingVoice=false, stopping=false, stopped=false, 
 let revealQueue=[], revealTimer=null, roundStartedAt=0, roundHasReply=false, previousMessage=null;
 let pendingApproval=null, activityEnabled=false, codexWatchEnabled=false, exiting=false;
 const recentErrors=new Map();
+const displayedErrorRequests=new Set();
+const displayedEventIds=new Set();
 let memoryAvailable=false,memoryLoaded=false,memoryLoading=false,memoryCursor='',memoryItems=[],memoryGroup='recent',memoryShown=50;
 // Display-only groups over Ombre's own categories; Ombre's files keep their tags and categories.
 const MEMORY_GROUPS={recent:{label:'最近',domains:null},us:{label:'我们俩',domains:['恋爱','人际']},peter:{label:'他自己',domains:['内心','心理','兴趣','游戏']},system:{label:'系统和能力',domains:['数字','AI','编程','工作']}};
@@ -136,6 +138,8 @@ function scrollIfFollowing(action){
   action();if(stick)log.scrollTop=log.scrollHeight;
 }
 function showEvent(e){
+  if(e.id)displayedEventIds.add(e.id);
+  if(e.kind==='error'&&e.request_id)displayedErrorRequests.add(e.request_id);
   if(e.kind==='message_removed'){
     removeMessageBubble(e.message_id);
     return;
@@ -189,6 +193,8 @@ function revealNext(){
   if(delay)revealTimer=setTimeout(reveal,delay);else reveal();
 }
 function receiveEvent(e,initial){
+  if(e.id&&displayedEventIds.has(e.id))return;
+  if(e.kind==='error'&&e.request_id&&displayedErrorRequests.has(e.request_id))return;
   const confirmedImage=e.kind==='user'&&e.request_id?awaitingImages.get(e.request_id):null;
   if(confirmedImage){if(selectedImage===confirmedImage)clearImage();awaitingImages.delete(e.request_id)}
   if(initial||e.history){
@@ -296,8 +302,13 @@ function updateFavoriteBadge(node,favorite){
 }
 function add(kind,text,id,time,media,messageId,requestId,favorite=false,attachments=[]){
   if(kind==='error'){
+    if(requestId&&displayedErrorRequests.has(requestId))return;
+    if(id&&displayedEventIds.has(id))return;
     const previous=recentErrors.get(text),now=Date.now();
-    if(previous&&now-previous.at<30000){previous.count++;previous.at=now;previous.node.textContent=text+'（重复 '+previous.count+' 次）';return}
+    if(previous&&now-previous.at<10000)return;
+    if(requestId)displayedErrorRequests.add(requestId);
+    if(id)displayedEventIds.add(id);
+    recentErrors.set(text,{at:now});
   }
   const d=document.createElement('div');
   if(kind==='user'||kind==='assistant'){
@@ -1121,9 +1132,12 @@ async function send(text){
     if(!r.ok){
       awaitingImages.delete(requestId);
       if(attachedImage&&result.error==='invalid media')attachedImage.media=null;
-      add('error',r.status===409&&result.error==='busy'
+      const errMsg = r.status===409&&result.error==='busy'
         ?'Peter 正在处理上一条消息；这条没有发送，输入已保留。'
-        :'发送未成功，输入已保留；可以稍后重新操作。');
+        :(result.error==='invalid media'
+          ?'图片格式不支持或无法读取，已取消发送；请重新选择图片。'
+          :'请求未成功，输入已保留；可以稍后重新操作。');
+      add('error',errMsg,null,null,null,null,requestId);
     }else{
       if(fromBox){
         if(box.value.trim()===draftText){
@@ -1138,7 +1152,12 @@ async function send(text){
       if(attachedImage&&result.duplicate){awaitingImages.delete(requestId);if(selectedImage===attachedImage)clearImage()}
       if(result.duplicate)add('notice','这条消息此前已提交，没有重复发送。');
     }
-  }catch(e){add('error',attachedImage?'图片发送未确认，图片仍在发送区；请稍后重试。':'发送结果未确认，输入已保留；页面不会自动重发。')}
+  }catch(e){
+    const errMsg = attachedImage
+      ?'网络连接未确认，图片仍在发送区；请检查网络后重试。'
+      :'发送结果未确认，输入已保留；页面不会自动重发。';
+    add('error',errMsg,null,null,null,null,requestId);
+  }
   finally{
     if(attachedImage?.cancel&&selectedImage===attachedImage)attachedImage.cancel.disabled=false;
     sending=false;log.scrollTop=log.scrollHeight
