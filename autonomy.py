@@ -966,7 +966,7 @@ class AutonomyController:
         self.chat.tool_stop_reason = ''
         self.active = True
         self.deadline = time.monotonic() + MAX_RUNTIME_SECONDS
-        before = sum(self.chat.budget.category_totals(self.chat.cfg.id))
+        before = None
         record = {'started_at': started_at, 'finished_at': None, 'decision': '', 'reason': '',
                   'tools': [], 'lab_files_changed': [], 'result': '失败', 'result_reason': '',
                   'current_focus': '', 'next_step': '', 'cost_cny': '0'}
@@ -989,6 +989,7 @@ class AutonomyController:
         self.chat.autonomy_message_output = old_output
         self.chat.autonomy_message_lock = self.hub.cond
         try:
+            before = sum(self.chat.budget.category_totals(self.chat.cfg.id))
             with self.chat.budget.autonomous(self.chat.cfg.id, self.daily_budget):
                 self.chat.long_tasks.begin_tool_run()
                 answer = self.chat.send(self._context(wake_reason), autonomy=True)
@@ -1072,7 +1073,7 @@ class AutonomyController:
                     record['next_step'] = '如有结果未确认的操作，先核实它；工具已返回成功的操作不必重读。不要重复写入。'
                 after = sum(self.chat.budget.category_totals(self.chat.cfg.id))
                 record['finished_at'] = now()
-                record['cost_cny'] = str(max(after - before, 0))
+                record['cost_cny'] = str(max(after - before, 0)) if before is not None else '0'
                 # Ticket 152: which model actually served this wake, for later comparison.
                 provider = getattr(self.chat.cfg, 'provider', None) or {}
                 record['model'] = str(provider.get('label') or provider.get('model') or '')

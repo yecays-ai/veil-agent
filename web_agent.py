@@ -159,7 +159,7 @@ class Hub:
         self.memory_url = f'http://127.0.0.1:{memory_port}/dashboard' if memory_port else None
         self.memory_tools = None
         self.events = []
-        self.last_submit_error = ''
+        self.submit_errors = {}
         self.busy = True          # true until the loop is waiting for input
         self.stopping = False
         self.stopped = False
@@ -1358,7 +1358,11 @@ class Hub:
                     persisted = True
                 except (OSError, ValueError, UserError) as exc:
                     # The real reason (for example a damaged ledger) must reach Lan; it is not a media fault.
-                    self.last_submit_error = str(exc) if isinstance(exc, UserError) else '消息没能写入本机记录。'
+                    with self.cond:
+                        self.submit_errors[request_id] = (
+                            str(exc) if isinstance(exc, UserError) else '消息没能写入本机记录。')
+                        while len(self.submit_errors) > 50:
+                            self.submit_errors.pop(next(iter(self.submit_errors)))
                     return 'media_storage' if media else 'storage'
             with self.cond:
                 stopped = self.stopping or self.stopped
@@ -2081,9 +2085,9 @@ def make_handler(hub, token):
                     elif result == 'media_command':
                         self._send(400, {'error': 'media cannot be sent with a command'})
                     elif result == 'storage':
-                        self._send(500, {'error': 'storage', 'message': getattr(hub, 'last_submit_error', '')})
+                        self._send(500, {'error': 'storage', 'message': hub.submit_errors.pop(request_id, '')})
                     elif result == 'media_storage':
-                        response = {'error': 'media_storage'}
+                        response = {'error': 'media_storage', 'message': hub.submit_errors.pop(request_id, '')}
                         if (isinstance(supplied_media, dict) and isinstance(media_id, str)
                                 and hub.media_info(media_id)
                                 and hub.media_info(media_id).get('kind') == 'voice'):

@@ -874,6 +874,17 @@ class ActivityState:
             return enabled
 
 
+# Reservations that are estimates made before an external call whose start is not recorded:
+# an interruption keeps their full conservative charge. Every other kind of reservation is
+# charged in full only when mark_dispatched() recorded that its request was about to be sent.
+ESTIMATE_ACCOUNTINGS = frozenset({'embedding-estimate', 'ombre-model-estimate', 'memory-extraction',
+                                  'short-term-notes-extraction'})
+
+
+class RequestNotSent(UserError):
+    """The provider request failed locally before anything was sent, so nothing was charged."""
+
+
 class Budget:
     def __init__(self, store, daily=Decimal('10'), monthly=Decimal('300'), clock=now,
                  autonomy_daily=Decimal('2'), glance_daily=Decimal('1')):
@@ -1103,6 +1114,19 @@ class Budget:
         self.store.append('costs.jsonl', {'type': 'dispatch', 'id': request_id})
 
     @synchronized
+    def release_not_sent(self, request_id):
+        """Settle a reservation at zero because its request never left this machine."""
+        rows = self.store.read('costs.jsonl')
+        reserve = next((row for row in rows if row.get('type') == 'reserve' and row.get('id') == request_id), None)
+        if reserve is None:
+            raise UserError('预算预留无法核对，已停止；请保留 data 文件夹。')
+        if any(row.get('type') == 'settle' and row.get('id') == request_id for row in rows):
+            return False
+        self.settle_estimate((request_id, Decimal(reserve['amount'])), accounting='request-not-sent',
+                             settled_amount=0)
+        return True
+
+    @synchronized
     def recover_interrupted(self):
         """Settle reservations left open by a stopped process, so they stop occupying the budget.
 
@@ -1119,10 +1143,10 @@ class Budget:
                 continue
             reservation = (row['id'], Decimal(row['amount']))
             accounting = row.get('accounting')
-            if accounting is None and row['id'] not in dispatched:
-                self.settle_estimate(reservation, accounting='interrupted-not-sent', settled_amount=0)
-            else:
+            if accounting in ESTIMATE_ACCOUNTINGS or row['id'] in dispatched:
                 self.settle_estimate(reservation, accounting=f"{accounting or 'chat'}-recovered")
+            else:
+                self.settle_estimate(reservation, accounting='interrupted-not-sent', settled_amount=0)
             count += 1
         return count
 
@@ -2751,6 +2775,9 @@ class Chat:
                     sent_bytes = request_byte_size(messages)
                     self.budget.mark_dispatched(request_id)
                     reply, prompt, completion, cached = self.model(messages)
+                except RequestNotSent:
+                    self.budget.release_not_sent(request_id)
+                    raise
                 except UserError:
                     raise
                 except Exception as exc:
@@ -3317,6 +3344,9 @@ class Chat:
                 self.budget.mark_dispatched(reservation)
                 response = self.model(model_messages, tools=offered, message_output=True,
                                       max_tokens=step_cfg.max_output_tokens, detail=True)
+            except RequestNotSent:
+                self.budget.release_not_sent(reservation)
+                raise
             except UserError:
                 raise
             except Exception as exc:
@@ -3357,6 +3387,9 @@ class Chat:
                         self.budget.mark_dispatched(reservation)
                         response = self.model(model_messages, tools=offered, message_output=True,
                                               max_tokens=step_cfg.max_output_tokens, detail=True)
+                    except RequestNotSent:
+                        self.budget.release_not_sent(reservation)
+                        raise
                     except UserError:
                         raise
                     except Exception as retry_exc:
@@ -3739,7 +3772,7 @@ def make_model(root, cfg, provider=None):
         values = dotenv_values(Path(root) / '.env', interpolate=False, encoding='utf-8-sig')
         key = values.get(p['api_key_env'])
         if not key or not key.strip():
-            raise UserError('本机 .env 缺少所选接口的 API Key，请按 README 填写。')
+            raise RequestNotSent('本机 .env 缺少所选接口的 API Key，请按 README 填写。')
         with lock:
             cache_key = (p['base_url'], key.strip())
             if cache_key not in clients:

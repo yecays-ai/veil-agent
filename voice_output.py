@@ -136,6 +136,7 @@ class MiniMaxVoice:
         amount = Decimal(chars) * self.config.cny_per_10k_chars / Decimal(10_000)
         reservation = self.budget.reserve_amount(
             self.character, self.config.model, amount, 'minimax-voice', billed_characters=chars)
+        self.budget.mark_dispatched(reservation[0])
         try:
             audio = self._request(text)
         except VoiceError as exc:

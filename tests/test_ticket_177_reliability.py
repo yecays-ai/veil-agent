@@ -61,6 +61,25 @@ class InterruptedBudgetTests(unittest.TestCase):
         self.assertEqual(budget.category_totals('fixture')[1], 0)
 
 
+    def test_known_estimate_and_unmarked_provider_reservations_are_treated_differently(self):
+        reserve(self.store, 'voice', accounting='minimax-voice', category='chat')   # never dispatched
+        reserve(self.store, 'voice_sent', accounting='minimax-voice', category='chat')
+        self.store.append('costs.jsonl', {'type': 'dispatch', 'id': 'voice_sent'})
+        Budget(self.store)
+        rows = {r['id']: r for r in self.store.read('costs.jsonl') if r['type'] == 'settle'}
+        self.assertEqual(Decimal(rows['voice']['amount']), 0)
+        self.assertEqual(Decimal(rows['voice_sent']['amount']), Decimal('0.2'))
+
+    def test_request_not_sent_is_released_immediately(self):
+        budget = Budget(self.store)
+        cfg = type('Cfg', (), {'provider': {'cny_per_call': Decimal('0.06'), 'model': 'fixture'},
+                               'id': 'fixture', 'max_output_tokens': 10})()
+        request_id, _ = budget.reserve(cfg)
+        self.assertTrue(budget.release_not_sent(request_id))
+        self.assertEqual(budget.totals()[2], 0)
+        self.assertEqual(budget.totals()[0], 0)
+
+
 class SnapshotGuardTests(unittest.TestCase):
     def test_empty_layout_is_never_saved_and_no_icon_moves(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -79,9 +98,6 @@ class SnapshotGuardTests(unittest.TestCase):
             self.assertEqual(saved['snapshot_id'], result['snapshot_id'])
             self.assertEqual((saved['icons'][0]['x'], saved['icons'][0]['y']), (20, 20))
 
-
-if __name__ == '__main__':
-    unittest.main()
 
 
 class UsageOverBoundTests(unittest.TestCase):
@@ -108,3 +124,7 @@ class UsageOverBoundTests(unittest.TestCase):
             from veil_agent import UserError
             with self.assertRaises(UserError):
                 budget.settle(request_id, cfg, 500, 5000, 0)
+
+
+if __name__ == '__main__':
+    unittest.main()
