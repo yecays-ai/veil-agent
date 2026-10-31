@@ -751,7 +751,8 @@ function activityDetails(record){
   lines.push('本次费用：¥'+record.cost_cny);
   return lines.join('\n');
 }
-const TOOL_LABELS={read_text_file:'读取文件',read_multiple_files:'读取多个文件',write_file:'写入文件',append_file:'追加文件',list_directory:'查看文件夹',directory_tree:'查看目录树',search_files:'查找文件',get_file_info:'查看文件信息',create_directory:'创建文件夹',move_lab_file:'移动 Lab 文件',lab_file_digest:'核对 Lab 文件',hold:'保存记忆',breath_search:'查找记忆',trace:'更新记忆',dream:'整理记忆',letter_write:'写记忆信件',letter_read:'读取记忆信件',memory_history:'查看记忆历史',memory_catalog:'查看记忆目录',memory_read:'读取记忆',long_task_status:'查看长期任务',long_task_update:'更新长期任务',web_search:'联网搜索',web_fetch:'读取网页',send_message:'发送消息',screen_pop:'屏幕弹出'};
+const TOOL_LABELS={read_text_file:'读取文件',read_multiple_files:'读取多个文件',write_file:'写入文件',append_file:'追加文件',list_directory:'查看文件夹',directory_tree:'查看目录树',search_files:'查找文件',get_file_info:'查看文件信息',create_directory:'创建文件夹',move_lab_file:'移动 Lab 文件',lab_file_digest:'核对 Lab 文件',hold:'保存记忆',breath_search:'查找记忆',trace:'更新记忆',dream:'整理记忆',letter_write:'写记忆信件',letter_read:'读记忆信件',memory_history:'查看记忆历史',memory_catalog:'查看记忆目录',memory_read:'读取记忆',long_task_status:'查看长期任务',long_task_update:'更新长期任务',web_search:'联网搜索',web_fetch:'读取网页',send_message:'发送消息',screen_pop:'屏幕弹出'};
+const NOWHERE_TOOL_LABELS={say:'记录乌有乡语录',quotes:'查看旅程语录',bury:'埋藏纪念品'};
 function activityStatus(state){
   if(state==='进行中')return {text:'进行中',className:'running'};
   if(state==='成功')return {text:'成功',className:'success'};
@@ -777,28 +778,81 @@ function createActivityRow(item,key){
   const values={};
   for(const label of ['操作对象','开始时间','完成时间','执行结果']){
     const dt=document.createElement('dt'),dd=document.createElement('dd');dt.textContent=label;
-    if(label==='执行结果'){values.result=document.createElement('pre');dd.appendChild(values.result)}else values[label]=dd;
+    if(label==='执行结果'){values.result=document.createElement('pre');values.resultContainer=dd;dd.appendChild(values.result)}else values[label]=dd;
     dl.append(dt,dd);
   }
   body.appendChild(dl);details.append(summary,body);
   return {details,time,name,status,code,source,values};
 }
+function activityDate(value){
+  if(!value)return '';
+  const date=new Date(value);
+  return Number.isFinite(date.getTime())?date.toLocaleString():String(value);
+}
+function appendNowhereField(parent,label,value){
+  if(value===null||value===undefined||value==='')return;
+  const line=document.createElement('p');line.className='nowhere-result-meta';
+  const name=document.createElement('span');name.textContent=label+'：';line.append(name,document.createTextNode(String(value)));parent.appendChild(line);
+}
+function renderNowhereResult(item,parsed){
+  const card=document.createElement('div');card.className='nowhere-readable';
+  const heading=document.createElement('strong');
+  if(parsed.kind==='say'){
+    heading.textContent='Peter 留下一段语录';card.appendChild(heading);
+    if(parsed.text!==null){const quote=document.createElement('blockquote');quote.className='nowhere-quote';quote.textContent=parsed.text;card.appendChild(quote)}
+    else{const note=document.createElement('p');note.className='nowhere-result-meta';note.textContent='语录已记下；原文未包含在这次写入回执中。';card.appendChild(note)}
+    if(parsed.truncated)appendNowhereField(card,'说明','乌有乡按长度上限截短了语录');
+  }else if(parsed.kind==='quotes'){
+    heading.textContent=`本旅程语录（查询结果 · ${parsed.returnedCount} 条）`;card.appendChild(heading);
+    if(!parsed.quotes.length){const empty=document.createElement('p');empty.className='nowhere-result-meta';empty.textContent=parsed.returnedCount?'查询记录未包含可展示的原文。':'本次查询没有旅程语录。';card.appendChild(empty)}
+    for(const quoteData of parsed.quotes){
+      const entry=document.createElement('article');entry.className='nowhere-quote-entry';
+      const quote=document.createElement('blockquote');quote.className='nowhere-quote';quote.textContent=quoteData.text;entry.appendChild(quote);
+      const meta=document.createElement('div');meta.className='nowhere-result-meta-list';
+      if(quoteData.place)appendNowhereField(meta,'地点',quoteData.place);
+      if(quoteData.sim_time)appendNowhereField(meta,'旅程时间',activityDate(quoteData.sim_time));
+      if(Array.isArray(quoteData.pos)&&quoteData.pos.length>=2)appendNowhereField(meta,'坐标',quoteData.pos.slice(0,2).join('，'));
+      entry.appendChild(meta);card.appendChild(entry);
+    }
+    if(parsed.duplicateCount){const note=document.createElement('p');note.className='nowhere-result-meta';note.textContent=`其中 ${parsed.duplicateCount} 条与本次语录写入相同，已在写入记录中展示。`;card.appendChild(note)}
+  }else{
+    heading.textContent='埋藏纪念品';card.appendChild(heading);
+    if(parsed.name)appendNowhereField(card,'纪念品',parsed.name);
+    if(parsed.pos&&parsed.pos.length>=2)appendNowhereField(card,'地点',parsed.pos.slice(0,2).join('，'));
+    if(parsed.source)appendNowhereField(card,'来源',parsed.source);
+    if(parsed.buried_at)appendNowhereField(card,'埋藏时间',activityDate(parsed.buried_at));
+    if(parsed.description)appendNowhereField(card,'纪念品描述',parsed.description);
+    if(parsed.note){const note=document.createElement('blockquote');note.className='nowhere-quote nowhere-note';note.textContent=parsed.note;card.appendChild(note)}
+  }
+  const raw=document.createElement('details');raw.className='nowhere-raw-result';
+  const summary=document.createElement('summary');summary.textContent='查看原始结果';
+  const pre=document.createElement('pre');pre.textContent=String(item.detail||'');raw.append(summary,pre);card.appendChild(raw);
+  return card;
+}
 function updateActivityRow(row,item){
   row.time.textContent=activityTime(item.started_at||item.finished_at);
-  row.name.textContent=TOOL_LABELS[item.tool]||item.tool;
+  const nowhereKind=window.VeilNowhereActivity?.toolKind(item.canonical_tool||item.tool);
+  row.name.textContent=nowhereKind?NOWHERE_TOOL_LABELS[nowhereKind]:(TOOL_LABELS[item.tool]||item.tool);
   const screenPopOpen=['还开着','弹幕播放中'].includes(item.screen_pop_state);
   const state=item.screen_pop_state
     ? {text:item.screen_pop_state,className:screenPopOpen?'running':'success'}
     : activityStatus(item.state);
   row.status.className='activity-state '+state.className;row.status.textContent=state.text;
-  row.code.textContent=item.tool;row.source.textContent='来源：'+(item.source||'聊天');
-  row.values['操作对象'].textContent=item.path||'未提供';
+  row.code.textContent=nowhereKind?'乌有乡':item.tool;row.source.textContent='来源：'+(item.source||'聊天');
+  row.values['操作对象'].textContent=nowhereKind?'乌有乡旅行记录':(item.path||'未提供');
   row.values['开始时间'].textContent=item.started_at?new Date(item.started_at).toLocaleString():'旧记录未保存开始时间';
   row.values['完成时间'].textContent=item.finished_at?new Date(item.finished_at).toLocaleString():item.state==='进行中'?'尚未完成':'旧记录未保存完成时间';
   const resultNote=item.result_state==='已截断'?'\n结果已截断，Peter 可看到部分内容':
     item.result_state==='结果过长'?'\n结果过长，未提供给模型':'';
   const resultDetail=String(item.detail||state.text);
-  row.values.result.textContent=resultDetail+(resultNote&& !resultDetail.includes('结果已截断')?resultNote:'');
+  const friendly=window.VeilNowhereActivity?.parse(item,toolActivity);
+  if(friendly){
+    const rawWasOpen=row.values.resultContainer.querySelector('.nowhere-raw-result')?.open===true;
+    const rendered=renderNowhereResult(item,friendly);
+    const raw=rendered.querySelector('.nowhere-raw-result');if(raw)raw.open=rawWasOpen;
+    row.values.resultContainer.replaceChildren(rendered);
+  }
+  else{row.values.resultContainer.replaceChildren(row.values.result);row.values.result.textContent=resultDetail+(resultNote&& !resultDetail.includes('结果已截断')?resultNote:'')}
 }
 function renderActivityTimeline(){
   const all=combinedActivity();

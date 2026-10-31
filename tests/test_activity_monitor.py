@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from veil_agent import Store, safe_tool_activity_detail
+from veil_agent import Store, nowhere_activity_metadata, safe_tool_activity_detail
 from web_agent import Hub
 
 
@@ -44,12 +44,63 @@ class ActivityMonitorTests(unittest.TestCase):
         self.assertEqual(item['source'], '自主活动')
         self.assertEqual(item['category'], 'memory')
 
+    def test_saved_nowhere_say_text_uses_the_existing_tool_ledger(self):
+        metadata = nowhere_activity_metadata(
+            'mcp__nowhere__say', 'mcp__nowhere__say', {'text': 'A fictional quote'},
+            '{"text":"记下了。","data":{"saved":true}}', '成功')
+        self.assertEqual(metadata, {'tool_input': 'A fictional quote'})
+
+        truncated = nowhere_activity_metadata(
+            'mcp__nowhere__say', 'mcp_nowhere_say', {'text': 'x' * 501},
+            '{"data":{"saved":true,"truncated":true}}', '成功')
+        self.assertEqual(len(truncated['tool_input']), 500)
+        self.assertTrue(truncated['tool_input_truncated'])
+        self.assertEqual(truncated['canonical_tool'], 'mcp__nowhere__say')
+
+    def test_unsaved_or_unrelated_mcp_calls_do_not_persist_tool_input(self):
+        args = {'text': 'A fictional quote'}
+        self.assertEqual(nowhere_activity_metadata(
+            'mcp__nowhere__say', 'mcp__nowhere__say', args,
+            '{"data":{"saved":false}}', '成功'), {})
+        self.assertEqual(nowhere_activity_metadata(
+            'mcp__nowhere__say', 'mcp__nowhere__say', args,
+            '{"data":{"saved":true}}', '失败'), {})
+        self.assertEqual(nowhere_activity_metadata(
+            'mcp__nowhere__quotes', 'mcp__nowhere__quotes', args,
+            '{"data":{"saved":true}}', '成功'), {})
+
+    def test_activity_projection_keeps_optional_say_input_role_scoped(self):
+        self.store.append('test/tools.jsonl', {'request_id': 'r3', 'call_id': 'r3:0:say',
+            'tool': 'mcp__nowhere__say', 'path': 'mcp__nowhere__say', 'state': '成功',
+            'detail': '{"data":{"saved":true}}',
+            **nowhere_activity_metadata('mcp__nowhere__say', 'quote_alias',
+                {'text': 'A fictional quote'}, '{"data":{"saved":true}}', '成功'),
+            'autonomy_run_id': 'wake-3', 'time': '2026-10-31T12:03:00+00:00'})
+        self.store.append('peter/tools.jsonl', {'request_id': 'other', 'call_id': 'private',
+            'tool': 'mcp__nowhere__say', 'state': '成功', 'tool_input': 'other role text'})
+        rows = self.hub.tool_activity()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['tool_input'], 'A fictional quote')
+        self.assertEqual(rows[0]['canonical_tool'], 'mcp__nowhere__say')
+        self.assertEqual(rows[0]['source'], '自主活动')
+
     def test_common_credentials_are_redacted_before_persistence(self):
         detail = safe_tool_activity_detail('api_key=secret-value password: hunter2 bearer abcdefghijklmnop')
         self.assertNotIn('secret-value', detail)
         self.assertNotIn('hunter2', detail)
         self.assertNotIn('abcdefghijklmnop', detail)
         self.assertIn('[已隐藏]', detail)
+        natural = safe_tool_activity_detail('api_key is AABBCCDDEEFF')
+        self.assertNotIn('AABBCCDDEEFF', natural)
+        self.assertIn('[已隐藏]', natural)
+        multiword = safe_tool_activity_detail('api_key is abcd efgh')
+        self.assertNotIn('abcd', multiword)
+        self.assertNotIn('efgh', multiword)
+        authorization = safe_tool_activity_detail('Authorization: Bearer fictional-token-value')
+        self.assertNotIn('fictional-token-value', authorization)
+        self.assertIn('[已隐藏]', authorization)
+        ordinary = 'authorization is required to access the API'
+        self.assertEqual(safe_tool_activity_detail(ordinary), ordinary)
 
     def test_json_credentials_are_redacted_in_objects_strings_and_old_ledger_rows(self):
         for value in ({'password': 'hunter2', 'nested': {'client_secret': 'secret-value'}},

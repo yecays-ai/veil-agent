@@ -303,6 +303,12 @@ class Hub:
             item.update({key: row[key] for key in ('tool', 'path', 'state', 'result_state') if key in row})
             if 'detail' in row:
                 item['detail'] = safe_tool_activity_detail(row['detail'])
+            if isinstance(row.get('tool_input'), str):
+                item['tool_input'] = safe_tool_activity_detail(row['tool_input'], limit=1000)
+            if row.get('tool_input_truncated') is True:
+                item['tool_input_truncated'] = True
+            if isinstance(row.get('canonical_tool'), str):
+                item['canonical_tool'] = row['canonical_tool']
             item['source'] = ('瞄一眼' if str(row.get('autonomy_run_id') or '').startswith('glance:') else
                               '自主活动' if row.get('autonomy_run_id') else
                               '长期任务' if row['tool'].startswith('long_task_') else '聊天')

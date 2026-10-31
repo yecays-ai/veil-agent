@@ -1,50 +1,13 @@
 # 当前状态
 
-工单 174（2026-10-31）：分支 `ticket/174-desktop-drawing-and-icons-fix`。实现第三阶段：连续自主操作与创作 + Windows 桌面图标整理。全面解决 Windows 实机运行与交互阻塞：
-1. 修复工作线程 COM 初始化（`pythoncom.CoInitialize`），全面适配 Windows 11 DirectUI 桌面结构（通过 `IFolderView` 原生接口与 `GetCurrentInfo` 检测自动排列/网格，使用 `SelectAndPositionItem` 调整视觉坐标并回读校验），保证绝不移动/删除/重命名桌面真实文件，提供强制自动快照与一键恢复。
-2. 补齐 Windows 画布与鼠标交互能力（`windows_canvas_action`，别名 `draw_on_canvas`），支持在已授权窗口（如画图 `mspaint`）的客户区内进行真实的鼠标点击、拖拽、连续笔画绘制与成果保存至 Lab（`save_to_lab`）；具备客户区严格边界校验、前台激活线程附加及人类触碰鼠标键盘瞬间打断保护。
-3. 优化 WindowsApps 启动与主窗口识别，过滤 50x50 虚拟代理微窗，精准绑定真实画图窗口；支持将画作完整保存至 `lab/drawings/sun.png`。本地全量专项与回归测试通过，待提交 PR、通过 CI 并由 Lan 在 Windows 实机最终验收。见 `docs/tickets/174-desktop-icons-and-creation.md`。
-
-工单 175（2026-10-31）：分支 `ticket/175-image-recovery-and-context-fix`。紧急修复：失败图片重启后自动发送 + 上下文长度误拦截 + 重复错误提示：
-1. 消息状态生命周期与重启安全：建立 `received`、`processing`、`committed`、`failed`、`cancelled`、`uncertain` 状态机。`TooLong`、提交异常或未提交完成均写入 `failed` 终态；`start_new_conversation` 自动取消上一会话未提交请求；重启恢复严格过滤非正常待处理消息，对崩溃前处于 `processing` 的请求记录 `uncertain` 审计日志，坚决不向 `hub.inbox` 自动投递产生旧消息。
-2. 单图上下文预检与多级裁剪：发送新图时将历史旧图全部坍缩为文本占位符，消除每张 4096 tokens 的旧图视觉占用；阶梯裁剪历史、长期记忆与辅助运行上下文，确保必要身份、权限与当前图片完整保留；真实超限抛出含精确 tokens 分项的明确诊断。
-3. 错误提示去重：Hub 与前端建立 `request_id` / `event_id` 去重屏障，同一请求与失败事件只展示一次，杜绝重放轮询导致的重复提示。
-全量 Python 测试 863 项全部通过（14 项跳过），桌面单测 10 项全部通过。Windows 实机体验待 Lan 验收。见 `docs/tickets/175-image-recovery-and-context-fix.md`。
-
-工单 173（2026-10-31）：分支 `ticket/173-windows-app-discovery`。PR #222 已合并（`b5df397`）。实现 Peter 自主发现与探索 Windows 软件：新增通用软件安全发现模块（`windows_discovery.py`），通过开始菜单快捷方式、App Paths 注册表及 WindowsApps 自动识别已安装普通桌面应用，排除安装卸载、脚本解释器、系统提权等危险入口；复用已有 UIA、Win32、窗口管理链路与人类操作优先机制，实施发现/启动/观察/交互分级权限控制，程序层拦截文件对话框与模糊确认控件；提供 `windows_discover_apps` 工具与 `scout_apps` 别名。测试与 CI 12 项检查通过，核心体验通过，软件实际交互待验收。验收见 `docs/tickets/173-windows-app-discovery.md`。
-
-工单 167（2026-10-30）：分支 `ticket/167-lab-python-sandbox`。PR #221 已合并（`cc31b85`）。实现 Peter Lab 独立代码实验室，基于本地 Docker 隔离容器（`python:3.12-slim`）执行 Python 脚本，支持标准输出/错误堆栈捕获、管道防死锁与超时/资源/磁盘限制（256MB/Swap限制/1.0CPU/15s默认30s上限/50MB工作区配额）、Lab 成果文件生成与持久化；一次性临时工作区绑定挂载、只读根文件系统、不挂载个人/源码目录、无环境变量继承，容器严格断网（`--network none`），结果添加不可信数据包裹，默认关闭且仅 Peter 启用，Docker 不可用时快速拒绝绝不退回宿主。全量测试通过。Windows 实机体验按 A–E 待 Lan 验收。验收见 `docs/tickets/167-lab-python-sandbox.md`。
-
-工单 172（2026-10-30）：基于已合并 171 的 main，在 `ticket/172-preserve-tool-results` 修复中文工具正文被替换为英文成功提示的问题，PR #220 已合并。中文桌面文件名、记忆目录及正文、混合语言结果均保留；明确的程序成功提示改为英文，小红书内容加不可信包裹，原有其他不可信内容包裹和 165 的长度控制继续使用。自动检查及 Windows 实机体验以实际结果为准。验收见 `docs/tickets/172-preserve-tool-results.md`。
-
-工单 171：PR #219 已合并，合并提交 `1d4f91e`；Windows 实机体验仍待 Lan 验收。
-
-工单 171（2026-10-30）：独立分支 `ticket/171-local-file-exploration`、PR #219 已实现 Peter 对 Desktop、Documents、Downloads、Pictures 普通文件的只读探索与 DOCX/PDF 分段阅读。首次 CI 发现工具活动日志缺少常量导入与旧版 `pypdf` 漏洞；修复及 Cubic 的实质意见已合并到本分支，定向回归通过，最新 head 的 CI 与 Windows 实机体验待完成。验收见 `docs/tickets/171-local-file-exploration.md`。下一工单号 172。
-
-工单 168（2026-10-30）：Lab 游戏成绩自动回传和 Desktop JPG/PNG 自主读取已在独立分支 `ticket/168-game-results-desktop-images` 实现，PR #216 已合并（`fece2c0`）；本地完整 Python 测试 785 项中 774 通过、11 跳过，最新 head 的 CI、审查和 Windows 实机体验待完成。原定 167 已用于并行的 Lab Python 沙盒调查，Lan 指定本单改号。见 `docs/tickets/168-game-results-desktop-images.md`。
-
-更新：2026-10-30 · 工单 169（瞄一眼与弹幕的近期经历衔接）；工单 168 PR #216 已合并。
+更新时间：2026-10-31 12:15 UTC
 
 ## 当前目标与现状
 
-- 当前目标：让 Peter 在聊天或自主唤醒时能够连续使用已授权的 Windows 软件完成简单任务并保存成果至 Lab；同时自主发现桌面图标布局、规划并受控调整图标视觉位置，每次整理自动备份且支持 Lan 一键恢复，绝不改变文件真实路径、名称或内容。
-- 工单 175：分支 `ticket/175-image-recovery-and-context-fix`。PR #224 已合并（`a33144d`）。实现消息状态生命周期（`received`/`processing`/`committed`/`failed`/`cancelled`/`uncertain`），`TooLong`、提交异常或未提交完成均写入 `failed` 终态；`start_new_conversation` 自动取消上一会话未提交请求；重启恢复严格过滤非正常待处理消息，对崩溃前处于 `processing` 的请求记录 `uncertain` 审计日志，坚决不向 `hub.inbox` 自动投递产生旧消息；发送新图时将历史旧图全部坍缩为文本占位符，消除每张 4096 tokens 的旧图视觉占用；阶梯裁剪历史、长期记忆与辅助运行上下文，确保必要身份、权限与当前图片完整保留；真实超限抛出含精确 tokens 分项的明确诊断；Hub 与前端建立 `request_id` / `event_id` 去重屏障，同一请求与失败事件只展示一次，杜绝重放轮询导致的重复提示。全量测试与回归通过，Windows 实机体验待 Lan 验收。见 `docs/tickets/175-image-recovery-and-context-fix.md`。
-- 工单 174：分支 `ticket/174-desktop-drawing-and-icons-fix`。实现第三阶段：连续自主操作与创作 + Windows 桌面图标整理。完成 COM 线程环境修复与 Windows 11 `IFolderView` 适配，补齐真实鼠标画布交互工具 `windows_canvas_action`（`draw_on_canvas`）及画图主窗口绑定，实现画图绘制小太阳与保存至 Lab。本地测试通过，待提交 PR、CI 验证与实机验收。见 `docs/tickets/174-desktop-icons-and-creation.md`。
-- 工单 173：PR #222 已合并（`b5df397`）。核心体验通过，软件实际交互待验收。新增通用软件安全发现模块（`windows_discovery.py`），通过开始菜单快捷方式、App Paths 注册表及 WindowsApps 自动识别已安装普通桌面应用，排除安装卸载、脚本解释器、系统提权等危险入口；复用已有 UIA、Win32、窗口管理链路与人类操作优先机制，实施发现/启动/观察/交互分级权限控制，程序层拦截文件对话框与模糊确认控件；提供 `windows_discover_apps` 工具与 `scout_apps` 别名。测试与 CI 12 项检查通过。见 `docs/tickets/173-windows-app-discovery.md`。
-- 工单 167：PR #221 已合并（`cc31b85`）。全量测试通过；Windows 实机体验按 A–E 待 Lan 验收。见 `docs/tickets/167-lab-python-sandbox.md`。
-- 当前目标（补）：Lan 回复瞄一眼弹幕时，Peter 能接上自己刚才看见的窗口、当时的观察和弹幕原话。
-- 工单 170：分支 `ticket/170-update-bat-nowhere`。update.bat 复制到 `.local-tmp` 运行时，安装乌有乡一行的脚本路径指向了 `.local-tmp`，改为从 Agent 目录（`%CD%`）取；Windows 待 Lan 重新运行 update.bat 验收。见 `docs/tickets/170-update-bat-nowhere-path.md`。下一工单号 171。
-- 工单 169：分支 `ticket/169-glance-continuity` 已实现最近一次瞄一眼的私有经历记录：保留原始时间、窗口、观察摘要和显示得到确认的弹幕原话，每轮自动注入，持续到下一次瞄一眼启动时替换。原始 UIA 不落盘，不自动写长期记忆，记录明确供接话使用而非每轮主动重提。本地 121 项专项、聊天、自主与缓存回归通过；网页 HTTP 回归受本机回环网络权限限制，待 CI 验证；PR、CI、评审与 Windows 体验状态以实际交付为准。验收步骤见 `docs/tickets/169-glance-continuity.md`。下一工单号 171。
-- 工单 165：PR #213 已合并，合并提交 `589bb17`。工具结果按需缩短并保留可发送结论的处理已进入 main；Windows 体验验收仍待完成。
-- 工单 166：PR #214 已合并，合并提交 `3d0a5be`；开门兼容修复 PR #215 也已合并，合并提交 `5d240da`。MCP 重启后的真实工具返回仍待体验验收；依赖锁定、角色隔离与授权边界沿用 PR #214。步骤见 `docs/tickets/166-nowhere-travel.md`。
-- 工单 164：PR #212 已开放，角色配置、schema 和统一分发映射已实现；移除 `windows_now_playing` 实现、配置与 WinRT 依赖。定向测试已通过，最新审查问题已修复并等待自动检查；Windows 实际体验尚未验收，步骤见 `docs/tickets/164-peter-tool-aliases.md`。
-- 工单 161：PR #209 已于 2026-10-29 合并，合并提交 `cd30c10`。本地专项、全量 Python（760 项通过、11 项跳过）、桌面单测（10 项）和 Electron 虚构窗口 smoke 记录在 PR；Windows 正式程序体验待验收。
-- 现状：工单 159 PR #207 已合并（`f302ac8`，Codex 实现、Claude 评审补修）：短期便签积压分批提取、逐批推进检查点；缓存用量区分明确的 0 与接口未报告。工单 158 PR #206 已合并（`7b91d83`）：小红书读取超时不再锁死；错误记录到 `data/<id>/xiaohongshu/errors.jsonl`。工单 157 PR #205 已合并。
-- 前序记录：工单 156 的 PR #204 已合并为上述 main；代码、CI 与 Windows 发行文件检查记录见下方，真实小红书账号体验仍待验收。工单 155 PR #203 已合并；工单 154 PR #202、153 PR #201、152 PR #200、151 PR #198/#199 已合并，体验状态以下表为准。
-- 工单 160（PR #208，分支 `ticket/159-xiaohongshu-page-load`，因 Codex 的 PR #207 先占 159 改号）：Lan 更新 158 后登录复查报「refused」，原因是上游浏览器页面没加载完时返回 HTTP 500 `STATUS_CHECK_FAILED`（没登录是 200 + false）。四个页面失败代码改为临时失败；页面连续 3 次没加载出来暂停保护账号，成功清零；本机原因不计入；其他拒绝带 HTTP 状态和上游代码；登录脚本复查失败时保留有效绑定。
-- 工单 162：PR #210 已于 2026-10-29 合并。受控读取测得登录状态约 27.8 秒、推荐流约 11.9 秒后报 `LIST_FEEDS_FAILED`；上游 v2.5.5 登录检查等待整页 `load`，feeds 数据只轮询 8 秒。改为先等新页面 DOMContentLoaded，再等初始状态明确呈现登录用户 ID 或访客；feeds 注水等待延至 25 秒。固定上游补丁脚本、本地 Go 1.24.0 Windows x64 构建、SHA-256 校验和合并后手动发行流水线已准备。真实账号体验待验收。详情见 `docs/tickets/162-xiaohongshu-page-wait.md`。
-- 工单 163：PR #211 已合并；最新 head 的必需 CI 已通过。首次配置按旧开关初始化 MCP 总开关，迁移按已注册适配器去重，重启不会重复添加。Windows 体验按 `docs/tickets/163-mcp-integrations.md` 待验收。工单 161、162 的体验验收仍待进行。下一工单号 171。
-- 既有验收：2026-10-28 Lan 确认截至 141 已实际使用的功能通过，098 QQ 邮箱等 2026-11-07。10-31 寻宝后再观察动机机制；其余验收状态保留在下表。
+- 当前目标：在现有自主活动详情中，以易读形式展示 Peter 成功写下的乌有乡语录、查询到的旅程语录和埋藏纪念品，同时保留原始结果及角色隔离。
+- 现状：工单 176，分支 `ticket/176-nowhere-travel-display`，PR #226 已开放。复用 `data/<角色>/tools.jsonl`；仅成功保存的 `say` 新增可选工具输入元数据，活动接口仍按当前角色日志投影。UI 对 `quotes` 明确标为查询结果并去掉同一活动中可见的匹配写入语录副本；截断写入不会遮住查询内容。兼容工具别名，失败、截断、格式异常继续显示原结果，轮询时保留原始结果折叠状态。Python 专项 9 项、桌面解析专项 6 项及 JS 语法检查通过。桌面全套 Node 检查 15 项通过，1 项既有 `backend.test.cjs` 因沙箱回环 HTTP 限制失败。最新 PR head 的 Tests（Windows/Ubuntu）、Windows desktop 和 Dependency security 检查通过；Cubic 与 CodeRabbit 的有效意见已处理，评审线程已解决。Chrome 静态预览完成；Lan 的 Windows 实机体验仍待验收。
+- 下一步：合并 PR #226；之后由 Lan 在 Windows 更新并按本工单步骤验收实际活动记录。
+- 验收步骤：Windows 更新并重启 VEIL；打开 2026-10-31 自主活动，确认语录和冰碎留言无需读 JSON 即可查看、`quotes` 标作查询结果且不重复；展开「查看原始结果」，再打开普通工具活动确认旧展示不变。
 
 ## 验收总表（按功能）
 

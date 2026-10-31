@@ -1,5 +1,12 @@
 # 交接
 
+## 工单 176 交接（2026-10-31）
+
+- 分支 `ticket/176-nowhere-travel-display`，基于最新 main `ee83ea1`。界面已在 Chrome 中以现有桌面 CSS 和虚构工具结果预览；Python 工具活动专项 9 项、桌面解析专项 6 项、JavaScript 语法检查通过。桌面全套 Node 检查最近一次为 15 项通过，1 项既有 `backend.test.cjs` 因当前环境回环 HTTP 被拒而无法连接其临时测试服务。PR #226 最新 head 的 Tests（Windows/Ubuntu）、Windows desktop、Dependency security 均通过。Cubic 与 CodeRabbit 有效意见已处理，评审线程均已解决。Electron 依赖目录在该 worktree 不存在，因此未运行 Electron 应用本身；Lan 的 Windows 实机体验尚待验收。
+- 实现：成功 `mcp__nowhere__say` 新增保存到既有工具日志的可选输入元数据；`web_agent.py` 仍通过当前角色日志投影它；自主活动详情解析规范 MCP 工具名称（包括角色别名），优先展示返回字段，`quotes` 明确为查询结果并去掉同活动匹配写入语录的所有副本，原始结果可折叠查看且轮询时保持展开状态；失败、截断、格式异常回退既有结果展示。未新增旅行档案或改变 Peter 自主活动行为。
+- PR #226 已开放（https://github.com/yecays-ai/veil-agent/pull/226）。Cubic 首轮后已提交审查修复：保留规范工具别名，畸形 quote 结果回退原文，清除与 say 相同的全部 query 副本，展示 bury 来源，轮询保留原始 JSON 展开状态，初始化坏参数路径，并移除本机目录。Cubic 关于 say 元数据“未接线”的意见已附现有成功结果日志调用链和角色投影测试依据。CodeRabbit 追加的 bearer 凭据格式、避免误改普通授权语句、完整处理 `api_key is` 多词值、截断输入不参与去重均已补修并加回归测试。最新 PR head 的 Tests、Windows desktop、Dependency security 均通过；Cubic/CodeRabbit 意见已处理且线程已解决。待合并后由 Lan 按 `STATUS.md` 完成 Windows 实机验收。
+- 注意：历史 `say` 日志未保存工具输入，无法从旧 say 回执恢复原文；10 月 31 日的原文仍由同次 `quotes` 查询返回值显示。`bury` 的文字和物品来自其实际回执；地点若只返回坐标，则界面也只展示坐标。没有运行真实 Nowhere MCP 写入操作。
+
 ## 工单 175 交接（2026-10-31）
 
 - 独立分支 `ticket/175-image-recovery-and-context-fix`。实现紧急修复：失败图片重启后自动发送 + 上下文长度误拦截 + 重复错误提示：
