@@ -90,6 +90,9 @@ class ActivityMonitorTests(unittest.TestCase):
         self.assertNotIn('hunter2', detail)
         self.assertNotIn('abcdefghijklmnop', detail)
         self.assertIn('[已隐藏]', detail)
+        natural = safe_tool_activity_detail('api_key is AABBCCDDEEFF')
+        self.assertNotIn('AABBCCDDEEFF', natural)
+        self.assertIn('[已隐藏]', natural)
 
     def test_json_credentials_are_redacted_in_objects_strings_and_old_ledger_rows(self):
         for value in ({'password': 'hunter2', 'nested': {'client_secret': 'secret-value'}},

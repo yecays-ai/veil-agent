@@ -44,7 +44,7 @@ RAW_MESSAGE_BATCH_MARKERS = (
 _UNSET_TOOL_SCHEMAS = object()
 SENSITIVE_ACTIVITY_VALUE = re.compile(
     r'(?i)(api[_ -]?key|password|passwd|secret|access[_ -]?token|authorization|bearer)'
-    r'(\s*[=:]\s*|\s+)[^\s,;]{4,}')
+    r'(\s*[=:]\s*|\s+(?:is\s+)?)[^\s,;]{4,}')
 OPAQUE_ACTIVITY_TOKEN = re.compile(r'\b(?:sk|ghp|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{12,}\b')
 
 

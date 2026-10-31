@@ -30,6 +30,7 @@
     const texts = new Set();
     for (const peer of peers || []) {
       if (peer === item || peer.state !== '成功' || toolKind(peer.canonical_tool || peer.tool) !== 'say' ||
+          peer.result_state === '已截断' || peer.result_state === '结果过长' ||
           typeof peer.tool_input !== 'string' || !sameActivity(item, peer)) continue;
       texts.add(peer.tool_input);
     }
