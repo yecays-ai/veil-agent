@@ -210,3 +210,23 @@ class WindowsAppDiscoveryTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class VendorFolderIdentityTests(unittest.TestCase):
+    def test_launcher_in_install_root_covers_real_window_exe(self):
+        import os
+        from unittest.mock import patch
+        from windows_discovery import _vendor_dir_pattern, is_blocked_window_exe
+        env = {'ProgramFiles': 'C:\\Program Files', 'LOCALAPPDATA': 'C:\\Users\\lan\\AppData\\Local'}
+        with patch.dict(os.environ, env, clear=False):
+            pattern = _vendor_dir_pattern('C:\\Users\\lan\\AppData\\Local\\Kingsoft\\WPS Office\\ksolaunch.exe')
+            self.assertIsNotNone(pattern)
+            import fnmatch
+            real = 'c:\\users\\lan\\appdata\\local\\kingsoft\\wps office\\12.1\\office6\\wps.exe'
+            self.assertTrue(fnmatch.fnmatchcase(real, pattern))
+            # shared / system folders never get a folder-wide identity
+            self.assertIsNone(_vendor_dir_pattern('C:\\Program Files\\app.exe'))
+            self.assertIsNone(_vendor_dir_pattern('C:\\Windows\\System32\\calc.exe'))
+        self.assertTrue(is_blocked_window_exe('C:\\x\\office6\\unins000.exe'))
+        self.assertTrue(is_blocked_window_exe('C:\\x\\cmd.exe'))
+        self.assertFalse(is_blocked_window_exe('C:\\x\\office6\\wps.exe'))

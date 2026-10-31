@@ -224,3 +224,22 @@ class DesktopIconsCoreTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class DesktopIconsObstructionTests(unittest.TestCase):
+    def test_organizer_overlay_is_reported_not_claimed_as_verified(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            backend = FakeDesktopIconsBackend(obstructions=['检测到桌面整理软件正在运行：desktopmgr.exe。'])
+            manager = DesktopIconsManager(store=Store(tmp), character_id='peter', backend=backend)
+            result = manager.arrange_icons([{'icon_id': 'icon_calculator_shortcut', 'x': 500, 'y': 100}])
+        self.assertFalse(result['verified'])
+        self.assertFalse(result['visible_on_screen'])
+        self.assertIn('desktopmgr.exe', result['obstructions'][0])
+        self.assertIn('看不到', result['note'])
+
+    def test_no_overlay_keeps_normal_result(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manager = DesktopIconsManager(store=Store(tmp), character_id='peter', backend=FakeDesktopIconsBackend())
+            result = manager.arrange_icons([{'icon_id': 'icon_calculator_shortcut', 'x': 500, 'y': 100}])
+        self.assertTrue(result['verified'])
+        self.assertEqual(result['obstructions'], [])

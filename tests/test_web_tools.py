@@ -66,7 +66,7 @@ class WebToolsTests(unittest.TestCase):
         self.assertNotIn('Shanghai weather', summary)
         self.assertLessEqual(len(result.encode('utf-8')), 4096)
         ddgs.text.assert_called_once_with(
-            'Shanghai weather', backend='duckduckgo', max_results=5)
+            'Shanghai weather', backend='auto', max_results=5)
 
     def test_query_validation_and_network_failure_are_bounded(self):
         _, _, tools, _ = self.make_tools(worker=Mock())
@@ -91,6 +91,7 @@ class WebToolsTests(unittest.TestCase):
             result, state, summary = tools.invoke('web_search', {'query': 'a useful topic'})
         self.assertEqual(state, '出错')
         self.assertNotIn('a useful topic', result)
+        self.assertIn('TimeoutError', result)
         self.assertEqual(summary, 'web_search')
 
     def test_small_result_limit_applies_to_fixed_messages(self):

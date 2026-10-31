@@ -103,6 +103,51 @@ def generate_icon_id(name: str, item_type: str, existing_ids: Optional[set] = No
     return candidate
 
 
+# 桌面整理软件会在系统桌面上方自己画一层图标；进程名未在真机逐一验证（「未验证」），
+# 另有“图标层是否隐藏”这条不依赖进程名的检测兜底。
+_DESKTOP_ORGANIZER_PROCESSES = frozenset({
+    'desktopmgr.exe', 'desktopmgr64.exe', 'tencentdesktop.exe', 'qqdesktop.exe',
+    'fences.exe', 'fences3.exe', 'fences4.exe', 'fences5.exe', 'deskgo.exe',
+    'deskcover.exe', 'rainmeter.exe', 'desktopok.exe', 'desktopcoral.exe',
+    'winxcorners.exe', '360desktop.exe', '360desktopmgr.exe',
+})
+
+
+def _running_process_names() -> List[str]:
+    """Executable names of running processes (Windows toolhelp snapshot)."""
+    if os.name != 'nt':
+        return []
+    import ctypes.wintypes as wt
+
+    class PROCESSENTRY32W(ctypes.Structure):
+        _fields_ = [('dwSize', wt.DWORD), ('cntUsage', wt.DWORD), ('th32ProcessID', wt.DWORD),
+                    ('th32DefaultHeapID', ctypes.c_size_t), ('th32ModuleID', wt.DWORD),
+                    ('cntThreads', wt.DWORD), ('th32ParentProcessID', wt.DWORD),
+                    ('pcPriClassBase', ctypes.c_long), ('dwFlags', wt.DWORD),
+                    ('szExeFile', ctypes.c_wchar * 260)]
+
+    kernel32 = ctypes.windll.kernel32
+    kernel32.CreateToolhelp32Snapshot.restype = ctypes.c_void_p
+    kernel32.CreateToolhelp32Snapshot.argtypes = [wt.DWORD, wt.DWORD]
+    kernel32.Process32FirstW.argtypes = [ctypes.c_void_p, ctypes.POINTER(PROCESSENTRY32W)]
+    kernel32.Process32NextW.argtypes = [ctypes.c_void_p, ctypes.POINTER(PROCESSENTRY32W)]
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+    snap = kernel32.CreateToolhelp32Snapshot(0x2, 0)  # TH32CS_SNAPPROCESS
+    if not snap or snap == ctypes.c_void_p(-1).value:
+        return []
+    names: List[str] = []
+    try:
+        entry = PROCESSENTRY32W()
+        entry.dwSize = ctypes.sizeof(PROCESSENTRY32W)
+        ok = kernel32.Process32FirstW(snap, ctypes.byref(entry))
+        while ok:
+            names.append(entry.szExeFile)
+            ok = kernel32.Process32NextW(snap, ctypes.byref(entry))
+    finally:
+        kernel32.CloseHandle(snap)
+    return names
+
+
 class BaseDesktopIconsBackend:
     """Interface for querying and manipulating desktop icon positions."""
 
@@ -116,6 +161,10 @@ class BaseDesktopIconsBackend:
         """Sets new (x, y) coordinates for icons by icon_id. Returns actual verified (x, y)."""
         raise NotImplementedError
 
+    def display_obstructions(self) -> List[str]:
+        """Reasons the real desktop icons may not be what Lan sees on screen (empty = none found)."""
+        return []
+
 
 class FakeDesktopIconsBackend(BaseDesktopIconsBackend):
     """In-memory mock backend for testing and platforms without interactive desktop."""
@@ -125,7 +174,9 @@ class FakeDesktopIconsBackend(BaseDesktopIconsBackend):
         icons: Optional[List[DesktopIcon]] = None,
         metrics: Optional[DisplayMetrics] = None,
         auto_arrange: bool = False,
+        obstructions: Optional[List[str]] = None,
     ):
+        self.obstructions = list(obstructions or [])
         self.metrics = metrics or DisplayMetrics(
             resolution=(1920, 1080),
             monitors=[{'id': 0, 'left': 0, 'top': 0, 'right': 1920, 'bottom': 1080, 'is_primary': True}],
@@ -151,6 +202,9 @@ class FakeDesktopIconsBackend(BaseDesktopIconsBackend):
 
     def get_metrics(self) -> DisplayMetrics:
         return self.metrics
+
+    def display_obstructions(self) -> List[str]:
+        return list(self.obstructions)
 
     def get_icons(self) -> List[DesktopIcon]:
         return [DesktopIcon(**asdict(icon)) for icon in self.icons.values()]
@@ -191,6 +245,25 @@ class Win32DesktopIconsBackend(BaseDesktopIconsBackend):
         if not defview:
             return 0
         return user32.FindWindowExW(defview, 0, 'SysListView32', None)
+
+    def display_obstructions(self) -> List[str]:
+        """Detect desktop organizers that draw their own icons over (or instead of) the Windows desktop."""
+        found: List[str] = []
+        try:
+            user32 = ctypes.windll.user32
+            hwnd = self._get_listview_hwnd()
+            if hwnd and not user32.IsWindowVisible(hwnd):
+                found.append('Windows 桌面图标层当前是隐藏的（桌面图标被关闭或被整理软件接管）。')
+        except Exception:
+            pass
+        try:
+            names = {n.lower() for n in _running_process_names()}
+            hit = sorted(names & _DESKTOP_ORGANIZER_PROCESSES)
+            if hit:
+                found.append('检测到桌面整理软件正在运行：' + '、'.join(hit) + '。')
+        except Exception:
+            pass
+        return found
 
     def get_metrics(self) -> DisplayMetrics:
         user32 = ctypes.windll.user32
@@ -608,6 +681,25 @@ class DesktopIconsManager:
         snaps = self.list_snapshots(limit=1)
         return snaps[0] if snaps else None
 
+    def _obstructions(self) -> List[str]:
+        try:
+            return list(self.backend.display_obstructions())
+        except Exception:
+            return []
+
+    @staticmethod
+    def _visibility_fields(obstructions: List[str]) -> Dict[str, Any]:
+        if not obstructions:
+            return {'visible_on_screen': 'not_checked', 'obstructions': []}
+        return {
+            'visible_on_screen': False,
+            'obstructions': obstructions,
+            'note': ('Windows 桌面里的图标坐标已改好并读回，但这不能证明 Lan 屏幕上看得到变化：'
+                     + ' '.join(obstructions)
+                     + ' 整理软件画在系统桌面上方，Lan 看到的是它的图标，不会随之移动。'
+                     '请如实告诉 Lan 这次移动在她屏幕上可能看不到，不要说“整理好了”。'),
+        }
+
     def arrange_icons(
         self,
         moves: Sequence[Dict[str, Any]],
@@ -668,12 +760,19 @@ class DesktopIconsManager:
                         verified = False
                         break
 
+            # The read-back above reads the same Windows desktop list that was just written, so
+            # it cannot prove what Lan sees. If an organizer overlay is present, say so plainly.
+            obstructions = self._obstructions()
+            if obstructions:
+                verified = False
+
             return {
                 'status': 'partial' if is_partial else 'success',
                 'snapshot_id': snapshot['snapshot_id'],
                 'moved_count': moved_count,
                 'total_requested': len(positions),
                 'verified': verified,
+                **self._visibility_fields(obstructions),
                 'interrupted': is_interrupted,
                 'failed_moves': failed_moves,
                 'updated_positions': {m['icon_id']: updated_map.get(m['icon_id']) for m in moves if m['icon_id'] in updated_map},
@@ -807,6 +906,8 @@ class DesktopIconsManager:
             final_icons = self.backend.get_icons()
             final_map = {icon.icon_id: (icon.x, icon.y) for icon in final_icons}
 
+            obstructions = self._obstructions()
+
             # Verify actual vs target
             verified = (restored_count == len(valid_restore_moves)) and (not failed_moves)
             if verified:
@@ -826,6 +927,7 @@ class DesktopIconsManager:
                 'failed_moves': failed_moves,
                 'unmatched': unmatched_in_snapshot,
                 'interrupted': interrupted,
-                'verified': verified,
+                'verified': verified and not obstructions,
+                **self._visibility_fields(obstructions),
                 'positions': {icon_id: final_map.get(icon_id) for icon_id, _, _ in valid_restore_moves[:restored_count]},
             }

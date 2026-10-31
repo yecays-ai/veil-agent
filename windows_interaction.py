@@ -1,5 +1,6 @@
 """Whitelisted, bounded Windows desktop interaction through UI Automation."""
 import base64
+import contextlib
 import ctypes
 import fnmatch
 import json
@@ -27,6 +28,7 @@ from desktop_icons import (
 from windows_discovery import (
     WindowsAppDiscovery,
     is_ambiguous_confirmation,
+    is_blocked_window_exe,
     is_file_dialog_control,
     is_unsafe_text_input,
 )
@@ -84,7 +86,7 @@ WINDOWS_INTERACTION_TOOL_SCHEMAS = [
     SimpleNamespace(
         name='windows_manage',
         description=(
-            'Activate, minimize or restore one allowlisted app window by window_id.'
+            'Activate, minimize or restore one allowlisted app window by window_id. restore also brings a maximized window back to its normal size.'
         ),
         inputSchema={'type': 'object', 'properties': {
             'app_id': {'type': 'string'},
@@ -185,7 +187,8 @@ WINDOWS_INTERACTION_TOOL_SCHEMAS = [
             '[{"icon_id": "...", "x": 100, "y": 100}]. Automatically takes a layout snapshot '
             'before moving. Validates coordinates to prevent off-screen placement and overlaps. '
             'NEVER modifies, moves, copies, renames, or deletes files or folders on disk. '
-            'Stops immediately if Lan moves mouse or hits keyboard. Returns verified coordinates.'
+            'Stops immediately if Lan moves mouse or hits keyboard. Returns the coordinates read back from the Windows desktop; '
+            'if a desktop organizer is covering the desktop the result says so and the move may not be visible to Lan.'
         ),
         inputSchema={
             'type': 'object',
@@ -388,6 +391,7 @@ class DesktopInputMonitor:
         self._lock = threading.Lock()
         self._human_tick = self._last_input_tick() if os.name == 'nt' else 0
         self._own_tick = None
+        self._own_depth = 0
         if last_input_tick is None and now_tick is None and os.name == 'nt':
             register_input_tracker(self)
 
@@ -412,6 +416,10 @@ class DesktopInputMonitor:
     def _refresh(self):
         current = int(self._last_input_tick()) & 0xFFFFFFFF
         with self._lock:
+            if self._own_depth > 0:
+                # VEIL itself is sending input right now (a cursor move takes longer than a
+                # fixed margin); whatever the system input clock shows is ours.
+                return self._human_tick
             if self._own_tick is None:
                 if _tick_is_after(current, self._human_tick):
                     self._human_tick = current
@@ -440,6 +448,20 @@ class DesktopInputMonitor:
     def mark_own_input(self):
         self.note_program_input()
         program_input_made(self)
+
+    @contextlib.contextmanager
+    def own_input(self):
+        """Wrap input VEIL sends itself. Input that arrives while this block runs, or in the
+        moment right after it, is VEIL's own; real human input before or after still counts."""
+        with self._lock:
+            self._own_depth += 1
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._own_depth -= 1
+                self._own_tick = int(self._now_tick()) & 0xFFFFFFFF
+            program_input_made(self)
 
 
 class WindowsInteractionBackend(WindowsDesktopBackend):
@@ -617,13 +639,12 @@ class WindowsInteractionBackend(WindowsDesktopBackend):
             self._cancelled(stopped)
             if int(self._foreground_window()) != int(metadata.get('window_handle', 0)):
                 raise InteractionPaused('The target window lost the foreground before keyboard input.')
-            input_monitor.mark_own_input()
             escaped = text.replace('{', '{{}').replace('}', '{}}')
             # interval=0 keeps typing far inside the tool timeout, so no keys can land in
-            # another window after the call has returned; mark again so the typed keys are
-            # not mistaken for Lan taking over.
-            control.SendKeys('{Ctrl}a' + escaped, interval=0, waitTime=0)
-            input_monitor.mark_own_input()
+            # another window after the call has returned; the typed keys are VEIL's own
+            # input, not Lan taking over.
+            with input_monitor.own_input():
+                control.SendKeys('{Ctrl}a' + escaped, interval=0, waitTime=0)
             readback = self._read_control_value(control, kind)
             return {'confirmed': readback == text, 'verification': 'keyboard_readback'}
         raise ObservationError('Unsupported UI Automation action.')
@@ -681,6 +702,8 @@ class WindowsInteractionBackend(WindowsDesktopBackend):
         user32.IsWindow.restype = ctypes.wintypes.BOOL
         user32.IsIconic.argtypes = [ctypes.wintypes.HWND]
         user32.IsIconic.restype = ctypes.wintypes.BOOL
+        user32.IsZoomed.argtypes = [ctypes.wintypes.HWND]
+        user32.IsZoomed.restype = ctypes.wintypes.BOOL
         user32.ShowWindow.argtypes = [ctypes.wintypes.HWND, ctypes.c_int]
         user32.ShowWindow.restype = ctypes.wintypes.BOOL
         user32.SetForegroundWindow.argtypes = [ctypes.wintypes.HWND]
@@ -738,6 +761,14 @@ class WindowsInteractionBackend(WindowsDesktopBackend):
         if action == 'restore':
             self._require_unchanged_input(input_monitor, input_snapshot)
             self._cancelled(stopped)
+            is_zoomed = getattr(user32, 'IsZoomed', None)
+            if is_zoomed is not None and bool(is_zoomed(hwnd)):
+                # A maximized ("full screen") window only goes back to its normal size with SW_RESTORE.
+                user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+                if bool(is_zoomed(hwnd)):
+                    raise InteractionUncertain('The window is still maximized after the restore request.')
+                self._revalidate(current, stopped)
+                return {'confirmed': True, 'verification': 'window_unmaximized'}
             user32.ShowWindow(hwnd, 4)  # SW_SHOWNOACTIVATE
             if not bool(user32.IsIconic(hwnd)):
                 self._revalidate(current, stopped)
@@ -781,17 +812,17 @@ class WindowsInteractionBackend(WindowsDesktopBackend):
                 x, y = params['x'], params['y']
                 check_coord(x, y)
                 sx, sy = origin_x + x, origin_y + y
-                input_monitor.mark_own_input()
-                auto.MoveTo(sx, sy)
+                with input_monitor.own_input():
+                    auto.MoveTo(sx, sy)
                 time.sleep(0.02)
                 self._require_unchanged_input(input_monitor, input_snapshot)
                 self._cancelled(stopped)
-                auto.PressMouse(sx, sy)
-                try:
-                    time.sleep(0.02)
-                finally:
-                    auto.ReleaseMouse()
-                    input_monitor.mark_own_input()
+                with input_monitor.own_input():
+                    auto.PressMouse(sx, sy)
+                    try:
+                        time.sleep(0.02)
+                    finally:
+                        auto.ReleaseMouse()
                 return {'confirmed': True, 'action': 'click', 'pos': (x, y)}
 
             elif action == 'drag':
@@ -802,12 +833,13 @@ class WindowsInteractionBackend(WindowsDesktopBackend):
                 sx1, sy1 = origin_x + x1, origin_y + y1
                 sx2, sy2 = origin_x + x2, origin_y + y2
 
-                input_monitor.mark_own_input()
-                auto.MoveTo(sx1, sy1)
+                with input_monitor.own_input():
+                    auto.MoveTo(sx1, sy1)
                 time.sleep(0.02)
                 self._require_unchanged_input(input_monitor, input_snapshot)
                 self._cancelled(stopped)
-                auto.PressMouse(sx1, sy1)
+                with input_monitor.own_input():
+                    auto.PressMouse(sx1, sy1)
                 try:
                     dist = ((x2 - x1)**2 + (y2 - y1)**2)**0.5
                     steps = max(2, int(dist / 8))
@@ -816,12 +848,12 @@ class WindowsInteractionBackend(WindowsDesktopBackend):
                         self._cancelled(stopped)
                         ix = int(sx1 + (sx2 - sx1) * i / steps)
                         iy = int(sy1 + (sy2 - sy1) * i / steps)
-                        auto.MoveTo(ix, iy)
-                        input_monitor.mark_own_input()
+                        with input_monitor.own_input():
+                            auto.MoveTo(ix, iy)
                         time.sleep(0.008)
                 finally:
-                    auto.ReleaseMouse()
-                    input_monitor.mark_own_input()
+                    with input_monitor.own_input():
+                        auto.ReleaseMouse()
                 return {'confirmed': True, 'action': 'drag', 'from': (x1, y1), 'to': (x2, y2)}
 
             elif action == 'stroke':
@@ -837,12 +869,13 @@ class WindowsInteractionBackend(WindowsDesktopBackend):
 
                     first_x, first_y = points[0]
                     first_sx, first_sy = origin_x + first_x, origin_y + first_y
-                    input_monitor.mark_own_input()
-                    auto.MoveTo(first_sx, first_sy)
+                    with input_monitor.own_input():
+                        auto.MoveTo(first_sx, first_sy)
                     time.sleep(0.02)
                     self._require_unchanged_input(input_monitor, input_snapshot)
                     self._cancelled(stopped)
-                    auto.PressMouse(first_sx, first_sy)
+                    with input_monitor.own_input():
+                        auto.PressMouse(first_sx, first_sy)
                     try:
                         for idx in range(len(points) - 1):
                             p1, p2 = points[idx], points[idx + 1]
@@ -853,12 +886,12 @@ class WindowsInteractionBackend(WindowsDesktopBackend):
                                 self._cancelled(stopped)
                                 mx = int(p1[0] + (p2[0] - p1[0]) * i / steps)
                                 my = int(p1[1] + (p2[1] - p1[1]) * i / steps)
-                                auto.MoveTo(origin_x + mx, origin_y + my)
-                                input_monitor.mark_own_input()
+                                with input_monitor.own_input():
+                                    auto.MoveTo(origin_x + mx, origin_y + my)
                                 time.sleep(0.008)
                     finally:
-                        auto.ReleaseMouse()
-                        input_monitor.mark_own_input()
+                        with input_monitor.own_input():
+                            auto.ReleaseMouse()
                     total_points += len(points)
                 return {'confirmed': True, 'action': 'stroke', 'strokes_count': len(strokes_list), 'points_count': total_points}
         raise ObservationError(f'Unsupported canvas action: {action}')
@@ -964,8 +997,13 @@ class WindowsInteractionTools:
             if any(fnmatch.fnmatchcase(normalized, ntpath.normcase(ntpath.normpath(pattern))) for pattern in app['process_paths']):
                 return app_id
         for app_id, app in self.discovered_applications.items():
-            if any(fnmatch.fnmatchcase(normalized, ntpath.normcase(ntpath.normpath(pattern))) for pattern in app['process_paths']):
-                return app_id
+            for pattern in app['process_paths']:
+                if not fnmatch.fnmatchcase(normalized, ntpath.normcase(ntpath.normpath(pattern))):
+                    continue
+                # A folder pattern covers helper exes beside the launcher; shells, installers,
+                # browsers and credential tools stay excluded unless the launcher itself is that file.
+                if normalized == ntpath.normcase(ntpath.normpath(pattern)) or not is_blocked_window_exe(normalized):
+                    return app_id
         return None
 
     def preview_summary(self, name, args):
@@ -1233,6 +1271,9 @@ class WindowsInteractionTools:
                           if not result.get('interrupted')
                           else f'整理桌面图标被用户操作打断，已完成 {moved} 个。')
                 summary_msg = f'已移动 {moved} 个图标。' if not result.get('interrupted') else '用户操作打断图标整理。'
+                if result.get('obstructions'):
+                    detail += ' 注意：桌面被整理软件覆盖，屏幕上可能看不到变化。'
+                    summary_msg += '（屏幕上可能看不到变化）'
                 return self._success(result, detail, summary_msg)
 
             return self._run(arrange_icons, summary, should_stop, timeout=self.timeout_seconds, side_effect=True)

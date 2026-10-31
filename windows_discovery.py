@@ -84,6 +84,37 @@ PROTECTED_PROCESSES = frozenset({
 })
 
 
+def _vendor_dir_pattern(target: str) -> Optional[str]:
+    """`<install folder>\\*` for apps whose launcher spawns the real window from a sibling or
+    sub folder (e.g. WPS: launcher in the install root, windows owned by `office6\\wps.exe`).
+    Only an app-specific folder inside Program Files / AppData qualifies, never a shared
+    system folder or a bare root."""
+    folder = ntpath.normcase(ntpath.normpath(ntpath.dirname(target)))
+    roots = []
+    for var in ('ProgramFiles', 'ProgramFiles(x86)', 'LOCALAPPDATA', 'APPDATA'):
+        value = os.environ.get(var)
+        if value:
+            roots.append(ntpath.normcase(ntpath.normpath(value)))
+            if var == 'LOCALAPPDATA':
+                roots.append(ntpath.normcase(ntpath.normpath(ntpath.join(value, 'Programs'))))
+    for root in roots:
+        if folder.startswith(root + '\\') and folder != root:
+            rest = folder[len(root) + 1:]
+            if rest.split('\\')[0] in ('windowsapps', 'microsoft', 'temp', 'packages'):
+                return None
+            return folder.replace('[', '[[]') + '\\*.exe'
+    return None
+
+
+def is_blocked_window_exe(path: str) -> bool:
+    """Executables that must never count as a discovered app's window, whatever folder they sit in."""
+    base = ntpath.basename(path or '').lower()
+    return bool(
+        base in DISALLOWED_EXECUTABLES or base in BROWSER_PROCESSES or base in PROTECTED_PROCESSES
+        or VERSIONED_SHELL_PATTERN.match(base) or DISALLOWED_NAME_PATTERNS.search(base)
+    )
+
+
 def _slugify(text: str, fallback_exe: str = '') -> str:
     """Generate a clean lowercase ASCII identifier matching ^[a-z][a-z0-9_-]{0,31}$."""
     slug = re.sub(r'[^a-zA-Z0-9_-]+', '_', text.strip()).strip('_').lower()
@@ -362,6 +393,9 @@ class WindowsAppDiscovery:
                 process_paths.extend([f'{prog_files}\\windowsapps\\*\\paintapp.exe', norm_target])
 
             process_paths = [ntpath.normcase(ntpath.normpath(p)) for p in process_paths]
+            vendor_pattern = _vendor_dir_pattern(target) if base_name != 'calc.exe' else None
+            if vendor_pattern:
+                process_paths.append(vendor_pattern)
 
             app_record = {
                 'app_id': app_id,

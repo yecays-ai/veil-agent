@@ -1,5 +1,13 @@
 # 交接
 
+## 工单 182 交接（2026-10-31）
+
+- 分支 `ticket/182-desktop-bugs-batch`。`DesktopInputMonitor.own_input()` 取代画布/键盘输入前后的 `mark_own_input`；发现应用的安装文件夹 exe 识别（`_vendor_dir_pattern`、`is_blocked_window_exe`）；`desktop_icons` 的 `display_obstructions`；`restore` 处理最大化；搜索改 `auto` 并报真实原因。
+- 测试：新增用例通过；全套仅剩与 main 相同的 6 项沙箱失败。
+- 未验证：Windows 真机上画图中断是否消失、桌面整理软件进程名、搜索真实失败原因。若画图仍中断，先查 uiautomation `MoveTo` 是否用 SetCursorPos 以外的方式在 `own_input` 之外延迟发输入。
+- 小红书图片阅读是新功能，需要 lan 同意后另开单。
+- 下一个工单号 183（182 之前预留给 `_tool_chat` 拆分的计划已由 lan 决定不做）。
+
 ## 工单 181 交接（2026-10-31）
 
 - 分支 `ticket/181-split-hub`。新增 `hub_screen_pop.py`，`ScreenPopMixin` 放 `request_screen_pop`、`next_screen_pop`、`claim_screen_pop`、`record_screen_pop_event`，方法代码原样搬出，`Hub` 继承它；状态仍在 `Hub.__init__` 创建。
