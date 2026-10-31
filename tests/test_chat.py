@@ -728,7 +728,8 @@ output_cny_per_million = "8"
         with self.assertRaises(KeyboardInterrupt):
             self.chat.send('keep me')
         self.assertEqual(self.store.read('test/chat.jsonl')[0]['content'], 'keep me')
-        self.assertGreater(Budget(self.store).totals()[2], 0)
+        # After a restart the dispatched request's reservation is settled as spend, never released.
+        self.assertGreater(Budget(self.store).totals()[0], 0)
 
     def test_send_reports_whether_too_long_happened_before_or_after_persistence(self):
         self.cfg.provider['max_input_tokens'] = 1
@@ -818,7 +819,7 @@ output_cny_per_million = "8"
         with self.assertRaises(UserError):
             self.chat.send('test')
         self.assertEqual(self.model.call_count, 1)
-        self.assertGreater(Budget(Store(self.root / 'data')).totals()[2], 0)
+        self.assertGreater(Budget(Store(self.root / 'data')).totals()[0], 0)
 
     def test_provider_failure_is_reported_and_chat_loop_continues_without_retry(self):
         self.model.side_effect = [RuntimeError('private provider detail'),
@@ -832,7 +833,7 @@ output_cny_per_million = "8"
         self.assertEqual([m['content'] for m in saved if m['role'] == 'user'], ['first', 'second'])
         self.assertEqual([m['content'] for m in self.chat.history if m['role'] == 'user'],
                          ['first', 'second'])
-        self.assertGreater(Budget(Store(self.root / 'data')).totals()[2], 0)
+        self.assertGreater(Budget(Store(self.root / 'data')).totals()[0], 0)
 
     def test_provider_failure_drops_terminal_typeahead_before_next_input(self):
         self.model.side_effect = RuntimeError('private provider detail')

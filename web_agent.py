@@ -159,6 +159,7 @@ class Hub:
         self.memory_url = f'http://127.0.0.1:{memory_port}/dashboard' if memory_port else None
         self.memory_tools = None
         self.events = []
+        self.last_submit_error = ''
         self.busy = True          # true until the loop is waiting for input
         self.stopping = False
         self.stopped = False
@@ -1355,8 +1356,10 @@ class Hub:
                 try:
                     self.chat.persist_incoming(text, request_id, media)
                     persisted = True
-                except (OSError, ValueError, UserError):
-                    return 'media_storage'
+                except (OSError, ValueError, UserError) as exc:
+                    # The real reason (for example a damaged ledger) must reach Lan; it is not a media fault.
+                    self.last_submit_error = str(exc) if isinstance(exc, UserError) else '消息没能写入本机记录。'
+                    return 'media_storage' if media else 'storage'
             with self.cond:
                 stopped = self.stopping or self.stopped
                 if not stopped:
@@ -2077,6 +2080,8 @@ def make_handler(hub, token):
                         self._send(400, {'error': 'invalid media'})
                     elif result == 'media_command':
                         self._send(400, {'error': 'media cannot be sent with a command'})
+                    elif result == 'storage':
+                        self._send(500, {'error': 'storage', 'message': getattr(hub, 'last_submit_error', '')})
                     elif result == 'media_storage':
                         response = {'error': 'media_storage'}
                         if (isinstance(supplied_media, dict) and isinstance(media_id, str)

@@ -1,5 +1,13 @@
 # 交接
 
+## 工单 177 交接（2026-10-31）
+
+- 分支 `ticket/177-budget-chat-icons-reliability`。改动：`veil_agent.py`（`Budget.mark_dispatched`、`recover_interrupted`、`settle` 的 `tolerate_over_bound`，聊天请求前写 dispatch 标记）、`autonomy.py`（自主 `run()` 的 finally 里状态恢复放进嵌套 finally）、`web_agent.py` 与 `desktop/chat.js`（单条事件渲染失败不卡轮询；保存失败显示真实原因）、`desktop_icons.py`（快照不得为空，复用校验时读到的布局）、`desktop/chat.html`（价格 step=any）。
+- 账本新增事件类型 `dispatch`（只有 id）。旧版本读不了含它的账本，所以升级后不要回退。
+- 已有的旧未结算预留（没有 dispatch 标记）在下次启动时按「没发出」释放为 0；这是对历史数据的一次性处理，真实花费以供应商账单为准。
+- 测试：`tests/test_ticket_177_reliability.py`；4 个旧测试里「重启后仍是待核对」改为「重启后记为已花费」。
+- 下一步：合并后验收；后续工单候选见 STATUS「下一步」。
+
 ## 工单 176 交接（2026-10-31）
 
 - 分支 `ticket/176-nowhere-travel-display`，基于最新 main `ee83ea1`。界面已在 Chrome 中以现有桌面 CSS 和虚构工具结果预览；Python 工具活动专项 9 项、桌面解析专项 6 项、JavaScript 语法检查通过。桌面全套 Node 检查最近一次为 15 项通过，1 项既有 `backend.test.cjs` 因当前环境回环 HTTP 被拒而无法连接其临时测试服务。PR #226 最新 head 的 Tests（Windows/Ubuntu）、Windows desktop、Dependency security 均通过。Cubic 与 CodeRabbit 有效意见已处理，评审线程均已解决。Electron 依赖目录在该 worktree 不存在，因此未运行 Electron 应用本身；Lan 的 Windows 实机体验尚待验收。

@@ -882,10 +882,9 @@ class Budget:
         self.autonomy_daily = Decimal(str(autonomy_daily))
         self.glance_daily = Decimal(str(glance_daily))
         self.local = threading.local()
-        try:
-            self.reconcile_unsettled({'short-term-notes-extraction'})
-        except Exception:
-            pass
+        # Budget is created under the data-folder lock, so any reservation without a settlement
+        # belongs to an earlier process that stopped mid-request.
+        self.recover_interrupted()
 
     @contextmanager
     def autonomous(self, character, daily=None):
@@ -965,7 +964,7 @@ class Budget:
                     reservations[event['id']] = event
                 elif event['type'] == 'settle':
                     settlements[event['id']] = event
-                else:
+                elif event['type'] != 'dispatch':
                     raise ValueError('unknown cost event')
             day = month = pending = Decimal(0)
             for key, event in reservations.items():
@@ -1095,6 +1094,39 @@ class Budget:
         return True
 
     @synchronized
+    def mark_dispatched(self, request_id):
+        """Record that the provider request for this reservation is about to be sent.
+
+        If the process stops afterwards, recovery cannot know what the provider charged and keeps
+        the reserved upper bound as spend. Without this marker the request never left the machine,
+        so recovery releases the reservation."""
+        self.store.append('costs.jsonl', {'type': 'dispatch', 'id': request_id})
+
+    @synchronized
+    def recover_interrupted(self):
+        """Settle reservations left open by a stopped process, so they stop occupying the budget.
+
+        Memory/embedding/notes estimates keep their conservative full charge. Chat, autonomy and
+        glance requests are charged in full only if they were marked as dispatched; otherwise the
+        provider was never called and nothing is charged. Returns the number of settled entries."""
+        self.totals()  # Validate the full ledger before recovering any entry.
+        rows = self.store.read('costs.jsonl')
+        settled = {row.get('id') for row in rows if row.get('type') == 'settle'}
+        dispatched = {row.get('id') for row in rows if row.get('type') == 'dispatch'}
+        count = 0
+        for row in rows:
+            if row.get('type') != 'reserve' or row.get('id') in settled:
+                continue
+            reservation = (row['id'], Decimal(row['amount']))
+            accounting = row.get('accounting')
+            if accounting is None and row['id'] not in dispatched:
+                self.settle_estimate(reservation, accounting='interrupted-not-sent', settled_amount=0)
+            else:
+                self.settle_estimate(reservation, accounting=f"{accounting or 'chat'}-recovered")
+            count += 1
+        return count
+
+    @synchronized
     def reconcile_unsettled(self, accountings):
         """Convert interrupted memory reservations to their full conservative charge.
 
@@ -1130,7 +1162,7 @@ class Budget:
 
     @synchronized
     def settle(self, request_id, cfg, prompt, completion, cached, *, input_bytes=None,
-               accounting=None, category=None):
+               accounting=None, category=None, tolerate_over_bound=False):
         cache_reported = cached is not None
         if (any(type(n) is not int or n < 0 for n in (prompt, completion))
                 or (cache_reported and (type(cached) is not int or cached < 0 or cached > prompt))):
@@ -1139,7 +1171,11 @@ class Budget:
         if input_bytes is not None and (type(input_bytes) is not int or input_bytes <= 0):
             raise UserError('输入长度记录无效；本次保留预留费用。')
         p = cfg.provider
-        if prompt > p['max_input_tokens'] or completion > cfg.max_output_tokens:
+        # A provider can report more than the configured bounds (for example reasoning tokens
+        # counted as output). The request already happened and was charged, so record what it
+        # reported instead of stopping the whole service, and keep the numbers for diagnosis.
+        over_bound = prompt > p['max_input_tokens'] or completion > cfg.max_output_tokens
+        if over_bound and not tolerate_over_bound:
             raise UserError('接口用量超过配置边界；已停止并保留预留费用，请核对供应商。')
         # Ticket 134: some relays charge a flat price per request whatever its length.
         amount = p['cny_per_call'] if p.get('cny_per_call') else (
@@ -1157,6 +1193,10 @@ class Budget:
             settlement['category'] = category
         if accounting:
             settlement['accounting'] = accounting
+        if over_bound:
+            settlement['accounting'] = f"{accounting + '+' if accounting else ''}usage-over-bound"
+            settlement['bounds'] = {'max_input_tokens': p['max_input_tokens'],
+                                    'max_output_tokens': cfg.max_output_tokens}
         if input_bytes is not None:
             settlement['input_bytes'] = input_bytes
         self.store.append('costs.jsonl', settlement)
@@ -2709,6 +2749,7 @@ class Chat:
             else:
                 try:
                     sent_bytes = request_byte_size(messages)
+                    self.budget.mark_dispatched(request_id)
                     reply, prompt, completion, cached = self.model(messages)
                 except UserError:
                     raise
@@ -2758,7 +2799,7 @@ class Chat:
                     event['regeneration_parent_message_id'] = self.regeneration_parent_message_id
                 self.store.append(self.path, event)
             if not self.tool_mode:
-                self.budget.settle(request_id, self.cfg, prompt, completion, cached, input_bytes=sent_bytes)
+                self.budget.settle(request_id, self.cfg, prompt, completion, cached, input_bytes=sent_bytes, tolerate_over_bound=True)
             # The event was included in the successful normal-chat request above.
             # Do not mark it delivered before the provider returns usable text:
             # failed requests must leave the durable pending event for a retry.
@@ -3273,6 +3314,7 @@ class Chat:
             sent_bytes = request_bytes(offered)
             try:
                 model_messages = alias_system_messages(loop_messages, self.tool_aliases)
+                self.budget.mark_dispatched(reservation)
                 response = self.model(model_messages, tools=offered, message_output=True,
                                       max_tokens=step_cfg.max_output_tokens, detail=True)
             except UserError:
@@ -3312,6 +3354,7 @@ class Chat:
                     try:
                         sent_bytes = request_bytes(offered)
                         model_messages = alias_system_messages(loop_messages, self.tool_aliases)
+                        self.budget.mark_dispatched(reservation)
                         response = self.model(model_messages, tools=offered, message_output=True,
                                               max_tokens=step_cfg.max_output_tokens, detail=True)
                     except UserError:
@@ -3328,7 +3371,7 @@ class Chat:
                 measured_ratio = prompt / sent_bytes
                 calibration = max(calibration, conservative_token_ratio(measured_ratio))
                 measured_tokens, measured_bytes = prompt, sent_bytes
-            self.budget.settle(reservation, step_cfg, prompt, completion, cached, input_bytes=sent_bytes)
+            self.budget.settle(reservation, step_cfg, prompt, completion, cached, input_bytes=sent_bytes, tolerate_over_bound=True)
             if not autonomy and self.user_stop.is_set():
                 # Lan pressed stop while this step was running: none of its tools run.
                 final = end_turn_here()

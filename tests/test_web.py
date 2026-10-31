@@ -1101,7 +1101,7 @@ output_cny_per_million = "8"
         self.assertEqual(self.model.call_count, 2)
         self.assertEqual([m['content'] for m in self.store.read('test/chat.jsonl')
                           if m['role'] == 'user'], ['first', 'second'])
-        self.assertGreater(Budget(self.store).totals()[2], 0)
+        self.assertGreater(Budget(self.store).totals()[0], 0)
 
     def test_concurrent_distinct_sends_have_one_atomic_winner(self):
         gate = threading.Event()

@@ -991,7 +991,14 @@ async function poll(){
     else if(!memoryAvailable&&!memoryLoaded){$('memory-list').textContent='当前 Agent 未提供 Ombre Memory 数据。';$('memory-count').textContent='不可用'}
     const stick=log.scrollHeight-log.scrollTop-log.clientHeight<80;
     const initial=after===0;pendingApproval=s.pending;
-    for(const e of s.events){receiveEvent(e,initial);after=e.id}
+    for(const e of s.events){
+      // One event that cannot be drawn must not look like a lost connection or stall the cursor.
+      try{receiveEvent(e,initial)}catch(err){
+        console.error('event render failed',e&&e.id,err);
+        try{add('error','有一条消息无法显示（编号 '+(e&&e.id)+'），其余消息不受影响。')}catch(_){}
+      }
+      after=e.id;
+    }
     // Only the approval being asked right now can be clicked; older cards are inert.
     document.querySelectorAll('.approval').forEach(c=>{
       if(Number(c.dataset.id)!==s.pending){
@@ -1189,7 +1196,9 @@ async function send(text){
         ?'Peter 正在处理上一条消息；这条没有发送，输入已保留。'
         :(result.error==='invalid media'
           ?'图片格式不支持或无法读取，已取消发送；请重新选择图片。'
-          :'请求未成功，输入已保留；可以稍后重新操作。');
+          :(result.error==='storage'&&result.message
+            ?'没能保存这条消息，输入已保留：'+result.message
+            :'请求未成功，输入已保留；可以稍后重新操作。'));
       add('error',errMsg,null,null,null,null,requestId);
     }else{
       if(fromBox){

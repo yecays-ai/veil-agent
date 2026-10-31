@@ -98,10 +98,10 @@
         <label>模型名（照中转站抄）<input id="model-name" maxlength="200" placeholder="例如 [k]claude-sonnet-5.5"></label>
         <label>显示名（可不填）<input id="model-label" maxlength="40" placeholder="例如 Sonnet 5.5"></label>
         <div class="segmented" role="group" aria-label="计费方式"><button type="button" data-billing="call">按次</button><button type="button" data-billing="tokens">按 token</button></div>
-        <label data-billing-field="call">每次 ¥<input id="model-per-call" type="number" min="0" step="0.001" inputmode="decimal" placeholder="0.06"></label>
-        <label data-billing-field="tokens">输入 ¥/百万 tokens<input id="model-input-price" type="number" min="0" step="0.01" inputmode="decimal"></label>
-        <label data-billing-field="tokens">缓存输入 ¥/百万 tokens（不知道就留空）<input id="model-cached-price" type="number" min="0" step="0.01" inputmode="decimal"></label>
-        <label data-billing-field="tokens">输出 ¥/百万 tokens<input id="model-output-price" type="number" min="0" step="0.01" inputmode="decimal"></label>
+        <label data-billing-field="call">每次 ¥<input id="model-per-call" type="number" min="0" step="any" inputmode="decimal" placeholder="0.06"></label>
+        <label data-billing-field="tokens">输入 ¥/百万 tokens<input id="model-input-price" type="number" min="0" step="any" inputmode="decimal"></label>
+        <label data-billing-field="tokens">缓存输入 ¥/百万 tokens（不知道就留空）<input id="model-cached-price" type="number" min="0" step="any" inputmode="decimal"></label>
+        <label data-billing-field="tokens">输出 ¥/百万 tokens<input id="model-output-price" type="number" min="0" step="any" inputmode="decimal"></label>
         <label>最长输入（tokens）<input id="model-max-input" type="number" min="4096" max="2000000" step="1024" value="32768"></label>
         <label class="check-row"><input id="model-thinking" type="checkbox" checked>思考模式（DeepSeek 一定要开）</label>
         <div class="tool-row"><button type="submit">保存模型</button><button type="button" id="model-cancel">取消</button></div>
