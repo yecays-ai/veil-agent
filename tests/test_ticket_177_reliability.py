@@ -170,6 +170,14 @@ output_cny_per_million = "8"
         self.chat.pending_recall_message_id = 'missing'
         self.assertFalse(self.chat.apply_pending_recall())
 
+    def test_storage_errors_are_not_mistaken_for_a_rejected_recall(self):
+        from unittest.mock import patch
+        from veil_agent import UserError, RecallRejected
+        with patch.object(self.chat, '_chat_rows', side_effect=UserError('本机账本损坏')):
+            with self.assertRaises(UserError) as caught:
+                self.chat.check_recallable('a_old', 'assistant')
+        self.assertNotIsInstance(caught.exception, RecallRejected)
+
     def test_the_menu_path_still_reports_the_reason(self):
         from veil_agent import UserError
         with self.assertRaisesRegex(UserError, '两分钟'):

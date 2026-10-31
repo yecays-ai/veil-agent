@@ -881,6 +881,10 @@ ESTIMATE_ACCOUNTINGS = frozenset({'embedding-estimate', 'ombre-model-estimate', 
                                   'short-term-notes-extraction'})
 
 
+class MessageNotFound(UserError):
+    """The message id is not part of the current conversation (storage errors are different)."""
+
+
 class RecallRejected(UserError):
     """A message cannot be recalled right now (too old, wrong sender, already handled)."""
 
@@ -2168,12 +2172,12 @@ class Chat:
 
     def message_record(self, message_id):
         if message_id not in {row.get('message_id') for row in self.history_events}:
-            raise UserError('这条消息不在当前对话中，请重新打开菜单后再试。')
+            raise MessageNotFound('这条消息不在当前对话中，请重新打开菜单后再试。')
         rows = self._chat_rows()
         for index, row in enumerate(rows):
             if row['message_id'] == message_id:
                 return index, row
-        raise UserError('找不到这条消息，请重新打开菜单后再试。')
+        raise MessageNotFound('找不到这条消息，请重新打开菜单后再试。')
 
     def delete_message(self, message_id):
         return self.delete_messages([message_id])[0]
@@ -2220,7 +2224,7 @@ class Chat:
         """Return (index, row) when the message may be recalled now; otherwise raise RecallRejected."""
         try:
             index, row = self.message_record(message_id)
-        except UserError as exc:
+        except MessageNotFound as exc:
             raise RecallRejected(str(exc)) from exc
         if row.get('role') != role or role not in ('user', 'assistant') or row.get('recalled'):
             raise RecallRejected('这条消息不能撤回。')
@@ -2914,7 +2918,8 @@ class Chat:
                         result, state = f'Not withdrawn: {exc} The message stays as it is.', '被拒绝'
                     else:
                         self.pending_recall_message_id = message_id
-                        result, state = 'The exact message will be withdrawn after this reply is saved.', '成功'
+                        result, state = ('The exact message will be withdrawn after this reply is saved, '
+                                         'provided it is still inside the two-minute window then.'), '成功'
                 summary = 'recall_message'
             elif call.function.name == 'capability_history':
                 result = self.capability_history_record or 'No capability changes are recorded yet.'
