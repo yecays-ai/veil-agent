@@ -1,5 +1,11 @@
 # 交接
 
+## 工单 180 交接（2026-10-31）
+
+- 分支 `ticket/180-split-make-handler`。`web_agent.py` 的 `make_handler` 里每条 GET/POST 路由搬成独立 `_get_*`/`_post_*` 方法，`do_GET`/`do_POST` 只做分发；每一行代码不变，路由与鉴权顺序不变。
+- 测试：`test_web` 等 82 项结果与修改前一致。
+- 下一步：181 拆 `Hub` 的独立职责。
+
 ## 工单 179 交接（2026-10-31）
 
 - 分支 `ticket/179-unused-imports-and-stale-docs`。只删无用 import 和一个多余的 `nonlocal`，不改行为；有意没动的项见 `docs/tickets/179-unused-imports.md`。
