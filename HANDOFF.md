@@ -2,7 +2,7 @@
 
 ## 工单 180 交接（2026-10-31）
 
-- 分支 `ticket/180-split-make-handler`。`web_agent.py` 的 `make_handler` 里每条 GET/POST 路由搬成独立 `_get_*`/`_post_*` 方法，`do_GET`/`do_POST` 只做分发；每一行代码不变，路由与鉴权顺序不变。
+- 分支 `ticket/180-split-make-handler`。`web_agent.py` 的 `make_handler` 里每条 GET/POST 路由搬成独立 `_get_*`/`_post_*` 方法，`do_GET` 只做分发，`do_POST` 先处理游戏路由、令牌校验和通用 JSON 解析再分发；只搬代码，唯一控制流改动是 `/api/memory/panel` 的 `if` 改为 `elif`，路由与鉴权顺序不变。
 - 测试：`test_web` 等 82 项结果与修改前一致。
 - 下一步：181 拆 `Hub` 的独立职责。
 
