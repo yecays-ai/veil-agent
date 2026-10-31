@@ -1,3 +1,4 @@
+import contextlib
 import json
 import os
 import tempfile
@@ -54,6 +55,10 @@ class FakeInputMonitor:
 
     def mark_own_input(self):
         pass
+
+    @contextlib.contextmanager
+    def own_input(self):
+        yield
 
 
 class FakeInteractionBackend:
@@ -1324,6 +1329,9 @@ max_steps = 3
         class FakeInputMonitor:
             def mark_own_input(self):
                 pass
+            @contextlib.contextmanager
+            def own_input(self):
+                yield
             def changed_since(self, _snap):
                 return False
 
@@ -1342,6 +1350,43 @@ max_steps = 3
         # Stroke with fewer than 2 points raises ObservationError
         with self.assertRaises(ObservationError):
             backend.apply_canvas_action({'handle': 12345}, 'stroke', {'points': [[50, 60]]}, lambda: False, monitor, None)
+
+
+
+
+class OwnInputMonitorTests(unittest.TestCase):
+    def make(self):
+        from windows_interaction import DesktopInputMonitor
+        clock = {'last': 1000, 'now': 1000}
+        monitor = DesktopInputMonitor(last_input_tick=lambda: clock['last'], now_tick=lambda: clock['now'])
+        monitor._human_tick = 1000
+        return monitor, clock
+
+    def test_long_own_mouse_move_is_not_human_input(self):
+        monitor, clock = self.make()
+        snap = monitor.snapshot()
+        with monitor.own_input():
+            for step in range(1, 10):          # a slow cursor move: input keeps arriving for 400 ms
+                clock['now'] = 1000 + step * 50
+                clock['last'] = clock['now']
+                self.assertFalse(monitor.changed_since(snap))
+        self.assertFalse(monitor.changed_since(snap))
+
+    def test_human_input_after_own_input_still_stops_peter(self):
+        monitor, clock = self.make()
+        snap = monitor.snapshot()
+        with monitor.own_input():
+            clock['now'] = clock['last'] = 1400
+        clock['now'] = clock['last'] = 1500   # a real mouse move well after VEIL's own input
+        self.assertTrue(monitor.changed_since(snap))
+
+    def test_human_input_before_own_input_is_kept(self):
+        monitor, clock = self.make()
+        clock['now'] = clock['last'] = 1100
+        self.assertEqual(monitor.snapshot(), 1100)
+        with monitor.own_input():
+            clock['now'] = clock['last'] = 1200
+        self.assertEqual(monitor.snapshot(), 1100)
 
 
 if __name__ == '__main__':
