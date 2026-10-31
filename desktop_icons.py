@@ -118,9 +118,6 @@ class BaseDesktopIconsBackend:
         """Sets new (x, y) coordinates for icons by icon_id. Returns actual verified (x, y)."""
         raise NotImplementedError
 
-    def is_auto_arrange(self) -> bool:
-        return self.get_metrics().auto_arrange
-
 
 class FakeDesktopIconsBackend(BaseDesktopIconsBackend):
     """In-memory mock backend for testing and platforms without interactive desktop."""
@@ -171,9 +168,6 @@ class FakeDesktopIconsBackend(BaseDesktopIconsBackend):
                 icon.y = int(y)
                 verified[icon_id] = (icon.x, icon.y)
         return verified
-
-    def is_auto_arrange(self) -> bool:
-        return self.metrics.auto_arrange
 
 
 class Win32DesktopIconsBackend(BaseDesktopIconsBackend):

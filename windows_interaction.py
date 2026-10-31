@@ -829,7 +829,7 @@ class WindowsInteractionBackend(WindowsDesktopBackend):
             elif action == 'stroke':
                 strokes_list = params.get('strokes') or [params['points']]
                 total_points = 0
-                for stroke_idx, points in enumerate(strokes_list):
+                for points in strokes_list:
                     if len(points) < 2:
                         raise ObservationError('Each stroke requires at least 2 points.')
                     if len(points) > 500:

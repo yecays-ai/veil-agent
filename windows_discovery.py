@@ -331,7 +331,7 @@ class WindowsAppDiscovery:
             if norm_target in seen_targets or norm_target in configured_targets:
                 continue
 
-            is_safe, refusal_reason, caps = self.validate_candidate(cand)
+            is_safe, _reason, caps = self.validate_candidate(cand)
             if not is_safe:
                 continue
 

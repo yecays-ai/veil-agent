@@ -29,8 +29,6 @@ PROFILE_REPLACE = {'type': 'function', 'function': {
         'required': ['old_text', 'new_text'], 'additionalProperties': False},
 }}
 
-PROFILE_TOOLS = ('profile_append', 'profile_replace')
-
 
 class ProfileNotes:
     def __init__(self, data_root, character_id, settings, user_name='Lan'):

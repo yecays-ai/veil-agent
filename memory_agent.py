@@ -554,8 +554,6 @@ class Memory:
         """
         rows = self.store.read(self.write_reconciliation)
         submitted = {row.get('operation_id') for row in rows if row.get('status') == 'submitted'}
-        terminal = {row.get('operation_id') for row in rows
-                    if row.get('status') in {'confirmed', 'not_submitted'}}
         pending = {row['operation_id']: row for row in self.pending_writes
                    if row.get('submitted', True) or row['operation_id'] in submitted}
         for row in rows:

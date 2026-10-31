@@ -222,7 +222,6 @@ def _cold_lock(root, *, create_session=False):
 
 def _validate_character_files(staged_payload):
     characters = staged_payload / "characters"
-    personas = staged_payload / "persona"
     configs = sorted(characters.glob("*/character.toml"))
     if not configs:
         raise BackupError("备份中没有角色配置（characters/<id>/character.toml）。")
