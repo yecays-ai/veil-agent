@@ -29,6 +29,12 @@ def free_port():
         return s.getsockname()[1]
 
 
+def recovered_spend(store):
+    """A request that was sent but never settled is charged once, in full, after a restart."""
+    return any(row.get('type') == 'settle' and row.get('accounting') == 'chat-recovered'
+               and __import__("decimal").Decimal(row['amount']) > 0 for row in store.read('costs.jsonl'))
+
+
 class WebTests(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
@@ -1101,7 +1107,7 @@ output_cny_per_million = "8"
         self.assertEqual(self.model.call_count, 2)
         self.assertEqual([m['content'] for m in self.store.read('test/chat.jsonl')
                           if m['role'] == 'user'], ['first', 'second'])
-        self.assertGreater(Budget(self.store).totals()[2], 0)
+        self.assertTrue(recovered_spend(Budget(self.store).store))
 
     def test_concurrent_distinct_sends_have_one_atomic_winner(self):
         gate = threading.Event()

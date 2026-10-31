@@ -874,6 +874,25 @@ class ActivityState:
             return enabled
 
 
+# Reservations that are estimates made before an external call whose start is not recorded:
+# an interruption keeps their full conservative charge. Every other kind of reservation is
+# charged in full only when mark_dispatched() recorded that its request was about to be sent.
+ESTIMATE_ACCOUNTINGS = frozenset({'embedding-estimate', 'ombre-model-estimate', 'memory-extraction',
+                                  'short-term-notes-extraction'})
+
+
+class MessageNotFound(UserError):
+    """The message id is not part of the current conversation (storage errors are different)."""
+
+
+class RecallRejected(UserError):
+    """A message cannot be recalled right now (too old, wrong sender, already handled)."""
+
+
+class RequestNotSent(UserError):
+    """The provider request failed locally before anything was sent, so nothing was charged."""
+
+
 class Budget:
     def __init__(self, store, daily=Decimal('10'), monthly=Decimal('300'), clock=now,
                  autonomy_daily=Decimal('2'), glance_daily=Decimal('1')):
@@ -882,10 +901,9 @@ class Budget:
         self.autonomy_daily = Decimal(str(autonomy_daily))
         self.glance_daily = Decimal(str(glance_daily))
         self.local = threading.local()
-        try:
-            self.reconcile_unsettled({'short-term-notes-extraction'})
-        except Exception:
-            pass
+        # Budget is created under the data-folder lock, so any reservation without a settlement
+        # belongs to an earlier process that stopped mid-request.
+        self.recover_interrupted()
 
     @contextmanager
     def autonomous(self, character, daily=None):
@@ -965,7 +983,7 @@ class Budget:
                     reservations[event['id']] = event
                 elif event['type'] == 'settle':
                     settlements[event['id']] = event
-                else:
+                elif event['type'] != 'dispatch':
                     raise ValueError('unknown cost event')
             day = month = pending = Decimal(0)
             for key, event in reservations.items():
@@ -1095,6 +1113,52 @@ class Budget:
         return True
 
     @synchronized
+    def mark_dispatched(self, request_id):
+        """Record that the provider request for this reservation is about to be sent.
+
+        If the process stops afterwards, recovery cannot know what the provider charged and keeps
+        the reserved upper bound as spend. Without this marker the request never left the machine,
+        so recovery releases the reservation."""
+        self.store.append('costs.jsonl', {'type': 'dispatch', 'id': request_id})
+
+    @synchronized
+    def release_not_sent(self, request_id):
+        """Settle a reservation at zero because its request never left this machine."""
+        rows = self.store.read('costs.jsonl')
+        reserve = next((row for row in rows if row.get('type') == 'reserve' and row.get('id') == request_id), None)
+        if reserve is None:
+            raise UserError('预算预留无法核对，已停止；请保留 data 文件夹。')
+        if any(row.get('type') == 'settle' and row.get('id') == request_id for row in rows):
+            return False
+        self.settle_estimate((request_id, Decimal(reserve['amount'])), accounting='request-not-sent',
+                             settled_amount=0)
+        return True
+
+    @synchronized
+    def recover_interrupted(self):
+        """Settle reservations left open by a stopped process, so they stop occupying the budget.
+
+        Memory/embedding/notes estimates keep their conservative full charge. Chat, autonomy and
+        glance requests are charged in full only if they were marked as dispatched; otherwise the
+        provider was never called and nothing is charged. Returns the number of settled entries."""
+        self.totals()  # Validate the full ledger before recovering any entry.
+        rows = self.store.read('costs.jsonl')
+        settled = {row.get('id') for row in rows if row.get('type') == 'settle'}
+        dispatched = {row.get('id') for row in rows if row.get('type') == 'dispatch'}
+        count = 0
+        for row in rows:
+            if row.get('type') != 'reserve' or row.get('id') in settled:
+                continue
+            reservation = (row['id'], Decimal(row['amount']))
+            accounting = row.get('accounting')
+            if accounting in ESTIMATE_ACCOUNTINGS or row['id'] in dispatched:
+                self.settle_estimate(reservation, accounting=f"{accounting or 'chat'}-recovered")
+            else:
+                self.settle_estimate(reservation, accounting='interrupted-not-sent', settled_amount=0)
+            count += 1
+        return count
+
+    @synchronized
     def reconcile_unsettled(self, accountings):
         """Convert interrupted memory reservations to their full conservative charge.
 
@@ -1130,7 +1194,7 @@ class Budget:
 
     @synchronized
     def settle(self, request_id, cfg, prompt, completion, cached, *, input_bytes=None,
-               accounting=None, category=None):
+               accounting=None, category=None, tolerate_over_bound=False):
         cache_reported = cached is not None
         if (any(type(n) is not int or n < 0 for n in (prompt, completion))
                 or (cache_reported and (type(cached) is not int or cached < 0 or cached > prompt))):
@@ -1139,7 +1203,11 @@ class Budget:
         if input_bytes is not None and (type(input_bytes) is not int or input_bytes <= 0):
             raise UserError('输入长度记录无效；本次保留预留费用。')
         p = cfg.provider
-        if prompt > p['max_input_tokens'] or completion > cfg.max_output_tokens:
+        # A provider can report more than the configured bounds (for example reasoning tokens
+        # counted as output). The request already happened and was charged, so record what it
+        # reported instead of stopping the whole service, and keep the numbers for diagnosis.
+        over_bound = prompt > p['max_input_tokens'] or completion > cfg.max_output_tokens
+        if over_bound and not tolerate_over_bound:
             raise UserError('接口用量超过配置边界；已停止并保留预留费用，请核对供应商。')
         # Ticket 134: some relays charge a flat price per request whatever its length.
         amount = p['cny_per_call'] if p.get('cny_per_call') else (
@@ -1157,6 +1225,10 @@ class Budget:
             settlement['category'] = category
         if accounting:
             settlement['accounting'] = accounting
+        if over_bound:
+            settlement['accounting'] = f"{accounting + '+' if accounting else ''}usage-over-bound"
+            settlement['bounds'] = {'max_input_tokens': p['max_input_tokens'],
+                                    'max_output_tokens': cfg.max_output_tokens}
         if input_bytes is not None:
             settlement['input_bytes'] = input_bytes
         self.store.append('costs.jsonl', settlement)
@@ -2100,12 +2172,12 @@ class Chat:
 
     def message_record(self, message_id):
         if message_id not in {row.get('message_id') for row in self.history_events}:
-            raise UserError('这条消息不在当前对话中，请重新打开菜单后再试。')
+            raise MessageNotFound('这条消息不在当前对话中，请重新打开菜单后再试。')
         rows = self._chat_rows()
         for index, row in enumerate(rows):
             if row['message_id'] == message_id:
                 return index, row
-        raise UserError('找不到这条消息，请重新打开菜单后再试。')
+        raise MessageNotFound('找不到这条消息，请重新打开菜单后再试。')
 
     def delete_message(self, message_id):
         return self.delete_messages([message_id])[0]
@@ -2148,22 +2220,30 @@ class Chat:
         self.store.update_record(self.path, index, {'favorite': favorite})
         return {**row, 'favorite': favorite}
 
-    def recall_message(self, message_id, role='user'):
-        index, row = self.message_record(message_id)
+    def check_recallable(self, message_id, role='user'):
+        """Return (index, row) when the message may be recalled now; otherwise raise RecallRejected."""
+        try:
+            index, row = self.message_record(message_id)
+        except MessageNotFound as exc:
+            raise RecallRejected(str(exc)) from exc
         if row.get('role') != role or role not in ('user', 'assistant') or row.get('recalled'):
-            raise UserError('这条消息不能撤回。')
+            raise RecallRejected('这条消息不能撤回。')
         stamp = row.get('time')
         try:
             sent_at = datetime.fromisoformat(stamp.replace('Z', '+00:00')).timestamp()
         except (AttributeError, ValueError, OverflowError) as exc:
-            raise UserError('这条消息的发送时间无法确认，不能撤回。') from exc
+            raise RecallRejected('这条消息的发送时间无法确认，不能撤回。') from exc
         age = datetime.now(timezone.utc).timestamp() - sent_at
         if age < 0 or age > 120:
-            raise UserError('消息只能在发送后两分钟内撤回。')
+            raise RecallRejected('消息只能在发送后两分钟内撤回。')
         if role == 'user' and any(event.get('role') == 'assistant'
                                   and event.get('request_id') == row.get('request_id')
                                   for event in self._chat_rows()):
-            raise UserError('Peter 已经处理了这条消息，不能再撤回。')
+            raise RecallRejected('Peter 已经处理了这条消息，不能再撤回。')
+        return index, row
+
+    def recall_message(self, message_id, role='user'):
+        index, row = self.check_recallable(message_id, role)
         self.store.update_record(self.path, index, {
             'message_id': message_id, 'content': '[Message recalled]', 'recalled': True,
             'media': None, 'attachments': [],
@@ -2198,7 +2278,13 @@ class Chat:
         self.pending_recall_message_id = None
         if not message_id:
             return False
-        row = self.recall_message(message_id, role='assistant')
+        try:
+            row = self.recall_message(message_id, role='assistant')
+        except RecallRejected:
+            # The message stopped being recallable while this turn ran (for example the two
+            # minutes passed). That must never stop the service; the tool result already
+            # told Peter the condition, and the message simply stays.
+            return False
         callback = getattr(self, 'message_recalled', None)
         if callable(callback):
             callback(row)
@@ -2709,7 +2795,11 @@ class Chat:
             else:
                 try:
                     sent_bytes = request_byte_size(messages)
+                    self.budget.mark_dispatched(request_id)
                     reply, prompt, completion, cached = self.model(messages)
+                except RequestNotSent:
+                    self.budget.release_not_sent(request_id)
+                    raise
                 except UserError:
                     raise
                 except Exception as exc:
@@ -2758,7 +2848,7 @@ class Chat:
                     event['regeneration_parent_message_id'] = self.regeneration_parent_message_id
                 self.store.append(self.path, event)
             if not self.tool_mode:
-                self.budget.settle(request_id, self.cfg, prompt, completion, cached, input_bytes=sent_bytes)
+                self.budget.settle(request_id, self.cfg, prompt, completion, cached, input_bytes=sent_bytes, tolerate_over_bound=True)
             # The event was included in the successful normal-chat request above.
             # Do not mark it delivered before the provider returns usable text:
             # failed requests must leave the durable pending event for a retry.
@@ -2822,9 +2912,14 @@ class Chat:
                 if not isinstance(message_id, str):
                     result, state = 'This recall request is not available.', '被拒绝'
                 else:
-                    self.message_record(message_id)
-                    self.pending_recall_message_id = message_id
-                    result, state = 'The exact message will be withdrawn after this reply is saved.', '成功'
+                    try:
+                        self.check_recallable(message_id, 'assistant')
+                    except RecallRejected as exc:
+                        result, state = f'Not withdrawn: {exc} The message stays as it is.', '被拒绝'
+                    else:
+                        self.pending_recall_message_id = message_id
+                        result, state = ('The exact message will be withdrawn after this reply is saved, '
+                                         'provided it is still inside the two-minute window then.'), '成功'
                 summary = 'recall_message'
             elif call.function.name == 'capability_history':
                 result = self.capability_history_record or 'No capability changes are recorded yet.'
@@ -3273,8 +3368,12 @@ class Chat:
             sent_bytes = request_bytes(offered)
             try:
                 model_messages = alias_system_messages(loop_messages, self.tool_aliases)
+                self.budget.mark_dispatched(reservation)
                 response = self.model(model_messages, tools=offered, message_output=True,
                                       max_tokens=step_cfg.max_output_tokens, detail=True)
+            except RequestNotSent:
+                self.budget.release_not_sent(reservation)
+                raise
             except UserError:
                 raise
             except Exception as exc:
@@ -3312,8 +3411,12 @@ class Chat:
                     try:
                         sent_bytes = request_bytes(offered)
                         model_messages = alias_system_messages(loop_messages, self.tool_aliases)
+                        self.budget.mark_dispatched(reservation)
                         response = self.model(model_messages, tools=offered, message_output=True,
                                               max_tokens=step_cfg.max_output_tokens, detail=True)
+                    except RequestNotSent:
+                        self.budget.release_not_sent(reservation)
+                        raise
                     except UserError:
                         raise
                     except Exception as retry_exc:
@@ -3328,7 +3431,7 @@ class Chat:
                 measured_ratio = prompt / sent_bytes
                 calibration = max(calibration, conservative_token_ratio(measured_ratio))
                 measured_tokens, measured_bytes = prompt, sent_bytes
-            self.budget.settle(reservation, step_cfg, prompt, completion, cached, input_bytes=sent_bytes)
+            self.budget.settle(reservation, step_cfg, prompt, completion, cached, input_bytes=sent_bytes, tolerate_over_bound=True)
             if not autonomy and self.user_stop.is_set():
                 # Lan pressed stop while this step was running: none of its tools run.
                 final = end_turn_here()
@@ -3696,7 +3799,7 @@ def make_model(root, cfg, provider=None):
         values = dotenv_values(Path(root) / '.env', interpolate=False, encoding='utf-8-sig')
         key = values.get(p['api_key_env'])
         if not key or not key.strip():
-            raise UserError('本机 .env 缺少所选接口的 API Key，请按 README 填写。')
+            raise RequestNotSent('本机 .env 缺少所选接口的 API Key，请按 README 填写。')
         with lock:
             cache_key = (p['base_url'], key.strip())
             if cache_key not in clients:

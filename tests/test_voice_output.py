@@ -131,7 +131,7 @@ class VoiceOutputTests(unittest.TestCase):
             voice.synthesize('hello')
         opener.assert_called_once()
         self.assertEqual(self.budget.totals(), (Decimal(0), Decimal(0), Decimal(0)))
-        rows = self.store.read('costs.jsonl')
+        rows = [row for row in self.store.read('costs.jsonl') if row['type'] != 'dispatch']
         self.assertEqual([row['accounting'] for row in rows],
                          ['minimax-voice', 'minimax-voice-failed'])
 

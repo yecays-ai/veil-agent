@@ -576,13 +576,19 @@ class DesktopIconsManager:
             'count': len(icons),
         }
 
-    def take_snapshot(self, trigger: str = 'autonomous_arrange') -> Dict[str, Any]:
-        """Record a full snapshot of the current desktop layout before modification."""
+    def take_snapshot(self, trigger: str = 'autonomous_arrange', *, metrics=None, icons=None) -> Dict[str, Any]:
+        """Record a full snapshot of the current desktop layout before modification.
+
+        Callers that already read the layout pass it in, so the snapshot is exactly the layout
+        that was validated. An empty layout is never saved: it could not restore anything and
+        would hide the last good snapshot."""
         if self.store is None:
             raise DesktopIconsError('未配置本地存储组件，无法持久化桌面布局快照，拒绝修改。')
 
-        metrics = self.backend.get_metrics()
-        icons = self.backend.get_icons()
+        metrics = metrics if metrics is not None else self.backend.get_metrics()
+        icons = list(icons) if icons is not None else self.backend.get_icons()
+        if not icons:
+            raise DesktopIconsError('没有读到桌面图标，无法保存有效的布局快照，已拒绝修改。')
         now_dt = datetime.now().astimezone()
         now_str = now_dt.isoformat()
         digest = hashlib.sha256(f'{now_str}-{len(icons)}'.encode()).hexdigest()[:8]
@@ -631,7 +637,7 @@ class DesktopIconsManager:
                 raise DesktopIconsError(reason or '图标排列方案未通过安全校验。')
 
             # 1. Mandatory snapshot taken before modification
-            snapshot = self.take_snapshot(trigger=trigger)
+            snapshot = self.take_snapshot(trigger=trigger, metrics=metrics, icons=current_icons)
 
             # 2. Execute moves checking interruption between each icon
             positions: List[Tuple[str, int, int]] = []

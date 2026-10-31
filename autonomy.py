@@ -966,7 +966,7 @@ class AutonomyController:
         self.chat.tool_stop_reason = ''
         self.active = True
         self.deadline = time.monotonic() + MAX_RUNTIME_SECONDS
-        before = sum(self.chat.budget.category_totals(self.chat.cfg.id))
+        before = None
         record = {'started_at': started_at, 'finished_at': None, 'decision': '', 'reason': '',
                   'tools': [], 'lab_files_changed': [], 'result': '失败', 'result_reason': '',
                   'current_focus': '', 'next_step': '', 'cost_cny': '0'}
@@ -989,6 +989,7 @@ class AutonomyController:
         self.chat.autonomy_message_output = old_output
         self.chat.autonomy_message_lock = self.hub.cond
         try:
+            before = sum(self.chat.budget.category_totals(self.chat.cfg.id))
             with self.chat.budget.autonomous(self.chat.cfg.id, self.daily_budget):
                 self.chat.long_tasks.begin_tool_run()
                 answer = self.chat.send(self._context(wake_reason), autonomy=True)
@@ -1047,44 +1048,46 @@ class AutonomyController:
             record['result_reason'] = str(exc)
             raise
         finally:
-            # Chat keeps this list live, even if a later model request fails.
-            record['tools'] = self.chat.last_tool_summaries
-            record['lab_files_changed'] = list(dict.fromkeys(
-                item['path'] for item in record['tools'] if item.get('state') == '成功'
-                and self.chat.canonical_tool_name(item.get('tool')) in
-                ('write_file', 'append_file', 'create_directory', 'move_lab_file')))
-            successful = any(item.get('state') == '成功' for item in record['tools'])
-            failures = [item for item in record['tools'] if tool_failed(item)]
-            stop = self.chat.tool_stop_reason
-            if stop and record['result'] not in ('被打断',):
-                record['result'] = '部分完成' if successful else '失败'
-                record['result_reason'] = stop
-                record['decision'] = '本次因程序限制中断。'
-                record['program_stop_reason'] = stop
-            elif record['result'] == '失败' and successful:
-                record['result'] = '部分完成'
-            elif record['result'] in ('完成', '搁置') and failures:
-                record['result'] = '部分完成' if successful else '失败'
-                record['result_reason'] = '未成功或结果不可用的工具操作：' + '、'.join(
-                    item['tool'] + '（' + tool_state(item) + '）' for item in failures)
-            if record['result'] in ('失败', '部分完成') and not record['next_step']:
-                record['next_step'] = '如有结果未确认的操作，先核实它；工具已返回成功的操作不必重读。不要重复写入。'
-            after = sum(self.chat.budget.category_totals(self.chat.cfg.id))
-            record['finished_at'] = now()
-            record['cost_cny'] = str(max(after - before, 0))
-            # Ticket 152: which model actually served this wake, for later comparison.
-            provider = getattr(self.chat.cfg, 'provider', None) or {}
-            record['model'] = str(provider.get('label') or provider.get('model') or '')
-            self.chat.output, self.chat.approval = old_output, old_approval
-            self.chat.autonomy_should_yield = old_yield
-            self.chat.autonomy_message_output = old_message_output
-            self.chat.autonomy_message_lock = old_message_lock
-            self.chat.autonomy_run_id = old_run_id
-            self.chat.autonomy_mode = False
-            self.deadline = None
-            self.active = False
-            self.hub.autonomy_busy = False
-            self.hub.autonomy_interrupted.clear()
+            try:
+                # Chat keeps this list live, even if a later model request fails.
+                record['tools'] = self.chat.last_tool_summaries
+                record['lab_files_changed'] = list(dict.fromkeys(
+                    item['path'] for item in record['tools'] if item.get('state') == '成功'
+                    and self.chat.canonical_tool_name(item.get('tool')) in
+                    ('write_file', 'append_file', 'create_directory', 'move_lab_file')))
+                successful = any(item.get('state') == '成功' for item in record['tools'])
+                failures = [item for item in record['tools'] if tool_failed(item)]
+                stop = self.chat.tool_stop_reason
+                if stop and record['result'] not in ('被打断',):
+                    record['result'] = '部分完成' if successful else '失败'
+                    record['result_reason'] = stop
+                    record['decision'] = '本次因程序限制中断。'
+                    record['program_stop_reason'] = stop
+                elif record['result'] == '失败' and successful:
+                    record['result'] = '部分完成'
+                elif record['result'] in ('完成', '搁置') and failures:
+                    record['result'] = '部分完成' if successful else '失败'
+                    record['result_reason'] = '未成功或结果不可用的工具操作：' + '、'.join(
+                        item['tool'] + '（' + tool_state(item) + '）' for item in failures)
+                if record['result'] in ('失败', '部分完成') and not record['next_step']:
+                    record['next_step'] = '如有结果未确认的操作，先核实它；工具已返回成功的操作不必重读。不要重复写入。'
+                after = sum(self.chat.budget.category_totals(self.chat.cfg.id))
+                record['finished_at'] = now()
+                record['cost_cny'] = str(max(after - before, 0)) if before is not None else '0'
+                # Ticket 152: which model actually served this wake, for later comparison.
+                provider = getattr(self.chat.cfg, 'provider', None) or {}
+                record['model'] = str(provider.get('label') or provider.get('model') or '')
+            finally:
+                self.chat.output, self.chat.approval = old_output, old_approval
+                self.chat.autonomy_should_yield = old_yield
+                self.chat.autonomy_message_output = old_message_output
+                self.chat.autonomy_message_lock = old_message_lock
+                self.chat.autonomy_run_id = old_run_id
+                self.chat.autonomy_mode = False
+                self.deadline = None
+                self.active = False
+                self.hub.autonomy_busy = False
+                self.hub.autonomy_interrupted.clear()
             if not self.rows or self.rows[-1].get('started_at') != started_at:
                 self._append(record)
             self.active_path.unlink(missing_ok=True)
