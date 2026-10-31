@@ -789,9 +789,11 @@ class WindowsInteractionBackend(WindowsDesktopBackend):
                 self._require_unchanged_input(input_monitor, input_snapshot)
                 self._cancelled(stopped)
                 auto.PressMouse(sx, sy)
-                time.sleep(0.02)
-                auto.ReleaseMouse(sx, sy)
-                input_monitor.mark_own_input()
+                try:
+                    time.sleep(0.02)
+                finally:
+                    auto.ReleaseMouse()
+                    input_monitor.mark_own_input()
                 return {'confirmed': True, 'action': 'click', 'pos': (x, y)}
 
             elif action == 'drag':
@@ -829,7 +831,7 @@ class WindowsInteractionBackend(WindowsDesktopBackend):
                 total_points = 0
                 for stroke_idx, points in enumerate(strokes_list):
                     if len(points) < 2:
-                        continue
+                        raise ObservationError('Each stroke requires at least 2 points.')
                     if len(points) > 500:
                         raise ObservationError('Maximum 500 points per stroke.')
                     for pt_item in points:
@@ -1537,6 +1539,16 @@ class WindowsInteractionTools:
                 return WindowsToolResult('That app_id is not allowlisted or discovered.', activity_detail=f'{summary} 未找到该应用。'), '被拒绝'
             if app.get('discovered') and not app.get('can_interact'):
                 return WindowsToolResult('This discovered application has observation-only permissions; interaction is not authorized.', activity_detail=f'{summary} 交互权限未开放。'), '被拒绝'
+            if app.get('actions') is not None and len(app.get('actions')) == 0:
+                return WindowsToolResult('This application has no interaction actions authorized.', activity_detail=f'{summary} 未授权交互动作。'), '被拒绝'
+
+            is_canvas_app = (
+                app['app_id'] == 'mspaint'
+                or 'canvas' in app.get('actions', [])
+                or any('mspaint' in str(p).lower() for p in app.get('process_paths', []))
+            )
+            if not is_canvas_app:
+                return WindowsToolResult('Canvas actions are only permitted on authorized drawing applications (such as Paint).', activity_detail=f'{summary} 非画图类应用。'), '被拒绝'
 
             if should_stop and should_stop():
                 return WindowsToolResult('The autonomous activity is paused; no canvas action was started.', activity_detail=f'{summary} 自主活动暂停；未操作。'), '中断'
@@ -1548,34 +1560,41 @@ class WindowsInteractionTools:
                 cleaned = lab_path.strip().replace('\\', '/')
                 if '..' in cleaned or cleaned.startswith('/'):
                     return WindowsToolResult('lab_path must be a relative path without ".." segments.', activity_detail='路径无效。'), '被拒绝'
-                if not any(cleaned.lower().endswith(ext) for ext in ('.png', '.jpg', '.jpeg')):
+                if not cleaned.lower().endswith('.png'):
                     cleaned += '.png'
                 if self.lab is None:
                     return WindowsToolResult('Lab directory is not configured.', activity_detail='Lab 不可用。'), '被拒绝'
                 lab_root = self.lab.resolve()
                 dest_file = (self.lab / cleaned).resolve()
-                if not str(dest_file).startswith(str(lab_root)):
+                if not dest_file.is_relative_to(lab_root):
                     return WindowsToolResult('Destination path escapes Lab directory.', activity_detail='越界路径被拒绝。'), '被拒绝'
+                if dest_file.exists():
+                    return WindowsToolResult('The destination already exists; choose a new Lab path.', activity_detail='目标已存在。'), '被拒绝'
 
                 def save_action(stopped):
-                    current = self._selected_window(app['app_id'], args['window_id'], stopped)
-                    capture = self.backend.capture_window(current, stopped)
-                    if not capture or not capture.startswith('data:image/png;base64,'):
-                        raise ObservationError('Could not capture window canvas for Lab saving.')
-                    b64 = capture.split('data:image/png;base64,', 1)[1]
-                    png_bytes = base64.b64decode(b64)
-                    dest_file.parent.mkdir(parents=True, exist_ok=True)
-                    dest_file.write_bytes(png_bytes)
-                    rel_saved = str(dest_file.relative_to(lab_root)).replace('\\', '/')
-                    detail = f'画图作品已保存至 Lab: lab/{rel_saved} ({len(png_bytes)} 字节)。'
-                    summary_msg = f'已将作品保存至 lab/{rel_saved}。'
-                    return self._success({
-                        'app_id': app['app_id'],
-                        'window_id': current['id'],
-                        'saved_path': f'lab/{rel_saved}',
-                        'bytes': len(png_bytes),
-                        'confirmed': True,
-                    }, detail, summary_msg)
+                    def work(stop):
+                        current = self._selected_window(app['app_id'], args['window_id'], stop)
+                        def do_save(inner_stop, _snapshot):
+                            capture = self.backend.capture_window(current, inner_stop)
+                            if not capture or not capture.startswith('data:image/png;base64,'):
+                                raise ObservationError('Could not capture window canvas for Lab saving.')
+                            b64 = capture.split('data:image/png;base64,', 1)[1]
+                            png_bytes = base64.b64decode(b64)
+                            dest_file.parent.mkdir(parents=True, exist_ok=True)
+                            dest_file.write_bytes(png_bytes)
+                            return png_bytes
+                        png_bytes, _snapshot = self._run_action_with_input_guard(do_save, stop)
+                        rel_saved = str(dest_file.relative_to(lab_root)).replace('\\', '/')
+                        detail = f'画图作品已保存至 Lab: lab/{rel_saved} ({len(png_bytes)} 字节)。'
+                        summary_msg = f'已将作品保存至 lab/{rel_saved}。'
+                        return self._success({
+                            'app_id': app['app_id'],
+                            'window_id': current['id'],
+                            'saved_path': f'lab/{rel_saved}',
+                            'bytes': len(png_bytes),
+                            'confirmed': True,
+                        }, detail, summary_msg)
+                    return work(stopped)
 
                 return self._run(save_action, summary, should_stop, timeout=self.timeout_seconds, side_effect=True)
 

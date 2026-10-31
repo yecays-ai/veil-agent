@@ -243,10 +243,14 @@ class Win32DesktopIconsBackend(BaseDesktopIconsBackend):
         else:
             # Query via Shell COM folder view settings
             need_uninit = False
+            info_retrieved = False
             try:
                 import pythoncom
-                pythoncom.CoInitialize()
-                need_uninit = True
+                try:
+                    pythoncom.CoInitialize()
+                    need_uninit = True
+                except pythoncom.com_error:
+                    need_uninit = False
                 import win32com.client as wcomcli
                 from win32com.shell import shell, shellcon
 
@@ -272,6 +276,7 @@ class Win32DesktopIconsBackend(BaseDesktopIconsBackend):
                         flags = int(info[1])
                         auto_arrange = bool(flags & 0x0001)  # FWF_AUTOARRANGE
                         align_to_grid = bool(flags & 0x0004)  # FWF_SNAPTOGRID
+                        info_retrieved = True
             except Exception:
                 pass
             finally:
@@ -285,6 +290,8 @@ class Win32DesktopIconsBackend(BaseDesktopIconsBackend):
                         pythoncom.CoUninitialize()
                     except Exception:
                         pass
+            if not info_retrieved:
+                raise DesktopIconsUnavailable('未能通过 Windows 桌面视图获取布局配置。')
 
         scale_factor = 1.0
         try:

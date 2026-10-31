@@ -1120,6 +1120,7 @@ max_steps = 3
             'label': 'Paint',
             'can_interact': True,
             'process_paths': (paint_path,),
+            'actions': ['canvas'],
         }
 
         # Click
@@ -1157,6 +1158,7 @@ max_steps = 3
             'label': 'Paint',
             'can_interact': True,
             'process_paths': (paint_path,),
+            'actions': ['canvas'],
         }
 
         points = [[100, 100], [120, 110], [140, 130]]
@@ -1183,6 +1185,7 @@ max_steps = 3
                 'label': 'Paint',
                 'can_interact': True,
                 'process_paths': (paint_path,),
+                'actions': ['canvas'],
             }
 
             res, state, _ = tools.invoke('windows_canvas_action', {
@@ -1196,6 +1199,16 @@ max_steps = 3
             saved_file = Path(temp_dir) / 'drawings' / 'sun.png'
             self.assertTrue(saved_file.exists())
             self.assertGreater(saved_file.stat().st_size, 0)
+
+            # Saving again to existing file must be rejected to prevent overwriting
+            res_dup, state_dup, _ = tools.invoke('windows_canvas_action', {
+                'app_id': 'app_paint',
+                'window_id': WINDOW_ID,
+                'action': 'save_to_lab',
+                'lab_path': 'drawings/sun.png',
+            })
+            self.assertEqual(state_dup, '被拒绝')
+            self.assertIn('already exists', str(res_dup))
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
@@ -1208,7 +1221,26 @@ max_steps = 3
             'label': 'Paint',
             'can_interact': True,
             'process_paths': (paint_path,),
+            'actions': ['canvas'],
         }
+
+        # Non-canvas application rejected
+        tools.discovered_applications['app_notepad'] = {
+            'app_id': 'app_notepad',
+            'label': 'Notepad',
+            'can_interact': True,
+            'process_paths': (r'C:\Windows\notepad.exe',),
+            'actions': ['invoke', 'set_text'],
+        }
+        res, state, _ = tools.invoke('windows_canvas_action', {
+            'app_id': 'app_notepad',
+            'window_id': WINDOW_ID,
+            'action': 'click',
+            'x': 10,
+            'y': 10,
+        })
+        self.assertEqual(state, '被拒绝')
+        self.assertIn('drawing applications', str(res))
 
         # Missing coordinates for click
         res, state, _ = tools.invoke('windows_canvas_action', {
@@ -1234,6 +1266,82 @@ max_steps = 3
             'lab_path': '../../system32/evil.png',
         })
         self.assertEqual(state, '被拒绝')
+
+    def test_backend_canvas_action_execution_and_guards(self):
+        import ctypes, ctypes.wintypes
+        backend = WindowsInteractionBackend()
+        backend._check_default_desktop = lambda: None
+        backend._foreground_window = lambda: 12345
+        backend._revalidate = lambda sel, _stop: {'handle': 12345, 'id': 'win1', 'app': 'paint'}
+
+        class DummyRect:
+            def __init__(self):
+                self.left = 0
+                self.top = 0
+                self.right = 800
+                self.bottom = 600
+
+        class DummyPoint:
+            def __init__(self):
+                self.x = 100
+                self.y = 100
+
+        class FakeUser32:
+            def IsWindow(self, _hwnd):
+                return True
+            def GetClientRect(self, _hwnd, rect_ptr):
+                r = ctypes.cast(rect_ptr, ctypes.POINTER(ctypes.wintypes.RECT)).contents
+                r.left = 0
+                r.top = 0
+                r.right = 800
+                r.bottom = 600
+                return True
+            def ClientToScreen(self, _hwnd, pt_ptr):
+                p = ctypes.cast(pt_ptr, ctypes.POINTER(ctypes.wintypes.POINT)).contents
+                p.x += 100
+                p.y += 100
+                return True
+
+        class FakeUia:
+            def __init__(self):
+                self.moves = []
+                self.pressed = False
+                self.released = False
+            def UIAutomationInitializerInThread(self):
+                from contextlib import nullcontext
+                return nullcontext()
+            def MoveTo(self, x, y):
+                self.moves.append((x, y))
+            def PressMouse(self, x, y):
+                self.pressed = True
+            def ReleaseMouse(self):
+                self.released = True
+
+        fake_uia = FakeUia()
+        backend._window_api = lambda: FakeUser32()
+        backend._uia = lambda: fake_uia
+
+        class FakeInputMonitor:
+            def mark_own_input(self):
+                pass
+            def changed_since(self, _snap):
+                return False
+
+        monitor = FakeInputMonitor()
+
+        # Out of bounds coordinate raises ObservationError
+        with self.assertRaises(ObservationError):
+            backend.apply_canvas_action({'handle': 12345}, 'click', {'x': 900, 'y': 100}, lambda: False, monitor, None)
+
+        # Successful click calls MoveTo, PressMouse, and ReleaseMouse in finally
+        res = backend.apply_canvas_action({'handle': 12345}, 'click', {'x': 50, 'y': 60}, lambda: False, monitor, None)
+        self.assertTrue(res['confirmed'])
+        self.assertTrue(fake_uia.pressed)
+        self.assertTrue(fake_uia.released)
+
+        # Stroke with fewer than 2 points raises ObservationError
+        with self.assertRaises(ObservationError):
+            backend.apply_canvas_action({'handle': 12345}, 'stroke', {'points': [[50, 60]]}, lambda: False, monitor, None)
 
 
 if __name__ == '__main__':

@@ -397,6 +397,8 @@ class FilesystemTools:
             if _redirected(folder) or folder.resolve() != folder:
                 raise ValueError('redirected lab')
             self.lab = folder
+            if hasattr(self, 'windows_interaction_tools'):
+                self.windows_interaction_tools.lab = folder
         except (OSError, ValueError):
             self.startup_notice = '实验室不可用：目录不是普通文件夹或存在链接重定向；实验室免确认权限已关闭。'
 
