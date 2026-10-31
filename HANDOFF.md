@@ -1,5 +1,11 @@
 # 交接
 
+## 工单 178 交接（2026-10-31）
+
+- 分支 `ticket/178-dead-code-cleanup`。只删死代码，不改行为；删除项与「有意没删」的项见 `docs/tickets/178-dead-code-cleanup.md`。
+- 测试：全套与修改前失败项一致（沙箱环境限制）。
+- 下一步：179 无用 import、JS 死代码、重复实现、过期文档。
+
 ## 工单 177 交接（2026-10-31）
 
 - 分支 `ticket/177-budget-chat-icons-reliability`。改动：`veil_agent.py`（`Budget.mark_dispatched`、`recover_interrupted`、`settle` 的 `tolerate_over_bound`，聊天请求前写 dispatch 标记）、`autonomy.py`（自主 `run()` 的 finally 里状态恢复放进嵌套 finally）、`web_agent.py` 与 `desktop/chat.js`（单条事件渲染失败不卡轮询；保存失败显示真实原因）、`desktop_icons.py`（快照不得为空，复用校验时读到的布局）、`desktop/chat.html`（价格 step=any）、`veil_agent.py` 的撤回（`check_recallable`、`RecallRejected`；`apply_pending_recall` 遇到已过期的撤回只跳过）。

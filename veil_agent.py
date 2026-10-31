@@ -2179,9 +2179,6 @@ class Chat:
                 return index, row
         raise MessageNotFound('找不到这条消息，请重新打开菜单后再试。')
 
-    def delete_message(self, message_id):
-        return self.delete_messages([message_id])[0]
-
     def delete_messages(self, message_ids):
         if (not isinstance(message_ids, list) or not message_ids
                 or any(not isinstance(message_id, str) for message_id in message_ids)

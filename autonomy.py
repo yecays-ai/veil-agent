@@ -28,7 +28,6 @@ MAX_RHYTHM_MINUTES = 72 * 60
 MIN_CUSTOM_INTERVAL = 30
 MAX_CUSTOM_INTERVAL = 360
 MIN_NATURAL_GAP = 20
-GLANCE_HISTORY_LIMIT = 1
 
 
 def tool_failed(item):
@@ -326,9 +325,6 @@ class AutonomyController:
             self._save_alarms(alarms)
         except OSError as exc:
             raise UserError('Scheduled wake state could not be updated safely; no wake was started. Keep the data folder intact.') from exc
-
-    def _transition_alarm(self, alarm, state, reason=None):
-        self._transition_alarms({alarm['alarm_id']}, state, reason)
 
     def set_next_wake(self, args):
         if not isinstance(args, dict):
@@ -1133,7 +1129,6 @@ class GlanceController:
         self.max_steps = min(int(self.config.get('max_steps', 4)), 4)
         self.daily_budget = self.config.get('daily_budget_cny', Decimal('1'))
         self.last_path = f'{chat.cfg.id}/glance-last.json'
-        self.delivered_path = f'{chat.cfg.id}/glance-delivered.json'
         self.settings_path = chat.store.root / chat.cfg.id / 'glance-settings.json'
         self._rng = rng or random
         self._next_at = None
