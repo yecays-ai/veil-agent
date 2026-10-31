@@ -5,7 +5,6 @@ fallback is a short-lived PrintWindow capture of the selected window (screen
 capture only when it is foreground); flat/blank captures are rejected.
 """
 import base64
-import ctypes
 import hashlib
 import json
 import os

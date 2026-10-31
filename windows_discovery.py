@@ -1,10 +1,7 @@
 """Universal Windows installed application discovery and security classification."""
-import fnmatch
-import glob
 import ntpath
 import os
 import re
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 # Shells, command interpreters, and script hosts that MUST NOT be launched

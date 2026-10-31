@@ -1,5 +1,4 @@
 """Screen pop tool validation and read-only Windows desktop state checks."""
-import ctypes
 import os
 import re
 from types import SimpleNamespace

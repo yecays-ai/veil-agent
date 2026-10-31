@@ -1,5 +1,11 @@
 # 交接
 
+## 工单 179 交接（2026-10-31）
+
+- 分支 `ticket/179-unused-imports-and-stale-docs`。只删无用 import 和一个多余的 `nonlocal`，不改行为；有意没动的项见 `docs/tickets/179-unused-imports.md`。
+- 测试：全套与修改前失败项一致（沙箱环境限制）。
+- 下一步：180 `make_handler` 路由拆分（先选边界清楚的部分）。
+
 ## 工单 178 交接（2026-10-31）
 
 - 分支 `ticket/178-dead-code-cleanup`。只删死代码，不改行为；删除项与「有意没删」的项见 `docs/tickets/178-dead-code-cleanup.md`。

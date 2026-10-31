@@ -3197,7 +3197,6 @@ class Chat:
             return prefix + marker
 
         def append_tool_result(call, execution, next_offered):
-            nonlocal history_count
             name = call.function.name
             canonical_name = self._resolve_tool_name(name, offered)
             display_detail = model_tool_result(canonical_name or name, execution.result, execution.state)

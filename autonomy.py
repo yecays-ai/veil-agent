@@ -9,8 +9,7 @@ import sys
 import time
 import uuid
 
-from agent_types import (AUTONOMY_WAKE, BudgetExceeded, GLANCE_WAKE, RequestFailed, TooLong, UserError, now,
-                         not_asked)
+from agent_types import BudgetExceeded, RequestFailed, TooLong, UserError, now, not_asked
 
 
 MAX_RUNTIME_SECONDS = 15 * 60

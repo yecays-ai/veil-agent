@@ -14,13 +14,11 @@ from __future__ import annotations
 
 import ctypes
 import hashlib
-import json
 import os
 import re
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from datetime import datetime
-from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from desktop_access import desktop_access

@@ -11,9 +11,9 @@ import tempfile
 import threading
 import time
 import uuid
-from pathlib import Path, PureWindowsPath
+from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 REPARSE_POINT = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
 
