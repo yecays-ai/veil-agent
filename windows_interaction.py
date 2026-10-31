@@ -1,4 +1,5 @@
 """Whitelisted, bounded Windows desktop interaction through UI Automation."""
+import base64
 import ctypes
 import fnmatch
 import hashlib
@@ -50,6 +51,7 @@ from windows_observer import (
 
 WINDOWS_INTERACTION_TOOL_NAMES = frozenset({
     'windows_discover_apps', 'windows_launch', 'windows_manage', 'windows_control_action',
+    'windows_canvas_action',
     'desktop_icons_read', 'desktop_icons_arrange', 'desktop_icons_restore',
 })
 WINDOWS_DESKTOP_TOOL_NAMES = WINDOWS_OBSERVATION_TOOL_NAMES | WINDOWS_INTERACTION_TOOL_NAMES
@@ -111,6 +113,63 @@ WINDOWS_INTERACTION_TOOL_SCHEMAS = [
             'text': {'type': 'string', 'description': 'Required only for set_text; replaces the complete value.'},
         }, 'required': ['app_id', 'window_id', 'control_id', 'action'],
             'additionalProperties': False},
+    ),
+    SimpleNamespace(
+        name='windows_canvas_action',
+        description=(
+            'Draw or click with the mouse on an active, allowlisted window canvas (such as Paint), '
+            'or save the canvas creation directly to your Lab. '
+            'Actions: click at (x, y); drag from (x, y) to (to_x, to_y); stroke along points [[x1, y1], [x2, y2], ...] '
+            'or strokes [[[x, y], ...], ...]; save_to_lab to save the canvas creation as PNG into Lab (e.g. lab_path="drawings/sun.png"). '
+            'All coordinates are strictly verified to stay within window client area. '
+            'Stops immediately if Lan moves mouse or hits keyboard.'
+        ),
+        inputSchema={
+            'type': 'object',
+            'properties': {
+                'app_id': {'type': 'string', 'description': 'Exact id from allowlisted or discovered apps (e.g. mspaint).'},
+                'window_id': {'type': 'string', 'description': 'Exact current window_id.'},
+                'action': {
+                    'type': 'string',
+                    'enum': ['click', 'drag', 'stroke', 'save_to_lab'],
+                    'description': 'Canvas action to perform: click, drag, stroke, or save_to_lab.',
+                },
+                'x': {'type': 'integer', 'description': 'Starting X pixel inside window client bounds.'},
+                'y': {'type': 'integer', 'description': 'Starting Y pixel inside window client bounds.'},
+                'to_x': {'type': 'integer', 'description': 'Ending X pixel for drag inside window client bounds.'},
+                'to_y': {'type': 'integer', 'description': 'Ending Y pixel for drag inside window client bounds.'},
+                'points': {
+                    'type': 'array',
+                    'items': {
+                        'type': 'array',
+                        'items': {'type': 'integer'},
+                        'minItems': 2,
+                        'maxItems': 2,
+                    },
+                    'description': 'List of [x, y] coordinates inside window client bounds for stroke drawing.',
+                },
+                'strokes': {
+                    'type': 'array',
+                    'items': {
+                        'type': 'array',
+                        'items': {
+                            'type': 'array',
+                            'items': {'type': 'integer'},
+                            'minItems': 2,
+                            'maxItems': 2,
+                        },
+                        'minItems': 2,
+                    },
+                    'description': 'List of strokes (each stroke is a list of [x, y] coordinates).',
+                },
+                'lab_path': {
+                    'type': 'string',
+                    'description': 'Destination relative path in Lab for save_to_lab (e.g. drawings/sun.png).',
+                },
+            },
+            'required': ['app_id', 'window_id', 'action'],
+            'additionalProperties': False,
+        },
     ),
     SimpleNamespace(
         name='desktop_icons_read',
@@ -628,6 +687,12 @@ class WindowsInteractionBackend(WindowsDesktopBackend):
         user32.ShowWindow.restype = ctypes.wintypes.BOOL
         user32.SetForegroundWindow.argtypes = [ctypes.wintypes.HWND]
         user32.SetForegroundWindow.restype = ctypes.wintypes.BOOL
+        user32.BringWindowToTop.argtypes = [ctypes.wintypes.HWND]
+        user32.BringWindowToTop.restype = ctypes.wintypes.BOOL
+        user32.GetWindowThreadProcessId.argtypes = [ctypes.wintypes.HWND, ctypes.POINTER(ctypes.wintypes.DWORD)]
+        user32.GetWindowThreadProcessId.restype = ctypes.wintypes.DWORD
+        user32.AttachThreadInput.argtypes = [ctypes.wintypes.DWORD, ctypes.wintypes.DWORD, ctypes.wintypes.BOOL]
+        user32.AttachThreadInput.restype = ctypes.wintypes.BOOL
         return user32
 
     def manage_window(self, selected, action, stopped, input_monitor, input_snapshot):
@@ -644,7 +709,18 @@ class WindowsInteractionBackend(WindowsDesktopBackend):
                 user32.ShowWindow(hwnd, 9)  # SW_RESTORE
             self._require_unchanged_input(input_monitor, input_snapshot)
             self._cancelled(stopped)
-            user32.SetForegroundWindow(hwnd)
+            cur_tid = ctypes.windll.kernel32.GetCurrentThreadId()
+            fg_hwnd = user32.GetForegroundWindow()
+            fg_tid = user32.GetWindowThreadProcessId(fg_hwnd, None) if fg_hwnd else 0
+            attached = False
+            if fg_tid and cur_tid != fg_tid:
+                attached = bool(user32.AttachThreadInput(cur_tid, fg_tid, True))
+            try:
+                user32.BringWindowToTop(hwnd)
+                user32.SetForegroundWindow(hwnd)
+            finally:
+                if attached:
+                    user32.AttachThreadInput(cur_tid, fg_tid, False)
             deadline = time.monotonic() + 1.0
             while time.monotonic() < deadline:
                 self._cancelled(stopped)
@@ -670,6 +746,124 @@ class WindowsInteractionBackend(WindowsDesktopBackend):
                 return {'confirmed': True, 'verification': 'window_restored_without_activation'}
             raise InteractionUncertain('The window did not leave the minimized state.')
         raise ObservationError('Unsupported window action.')
+
+    def apply_canvas_action(self, selected, action, params, stopped, input_monitor, input_snapshot):
+        current = self._revalidate(selected, stopped)
+        self._check_default_desktop()
+        user32 = self._window_api()
+        hwnd = current['handle']
+        if not user32.IsWindow(hwnd):
+            raise ObservationError('The selected window closed before the action.')
+
+        # If not foreground, activate target window
+        if self._foreground_window() != hwnd:
+            self.manage_window(current, 'activate', stopped, input_monitor, input_snapshot)
+
+        import ctypes.wintypes
+        client_rect = ctypes.wintypes.RECT()
+        user32.GetClientRect(hwnd, ctypes.byref(client_rect))
+        pt = ctypes.wintypes.POINT(0, 0)
+        user32.ClientToScreen(hwnd, ctypes.byref(pt))
+        origin_x, origin_y = pt.x, pt.y
+        cw = client_rect.right - client_rect.left
+        ch = client_rect.bottom - client_rect.top
+        if cw < 10 or ch < 10:
+            raise ObservationError('The target window has no valid client drawing area.')
+
+        def check_coord(x, y):
+            if not (0 <= x < cw and 0 <= y < ch):
+                raise ObservationError(f'Coordinate ({x}, {y}) is outside target window client bounds (0, 0, {cw}, {ch}).')
+
+        self._require_unchanged_input(input_monitor, input_snapshot)
+        self._cancelled(stopped)
+
+        auto = self._uia()
+        with auto.UIAutomationInitializerInThread():
+            if action == 'click':
+                x, y = params['x'], params['y']
+                check_coord(x, y)
+                sx, sy = origin_x + x, origin_y + y
+                input_monitor.mark_own_input()
+                auto.MoveTo(sx, sy)
+                time.sleep(0.02)
+                self._require_unchanged_input(input_monitor, input_snapshot)
+                self._cancelled(stopped)
+                auto.PressMouse(sx, sy)
+                try:
+                    time.sleep(0.02)
+                finally:
+                    auto.ReleaseMouse()
+                    input_monitor.mark_own_input()
+                return {'confirmed': True, 'action': 'click', 'pos': (x, y)}
+
+            elif action == 'drag':
+                x1, y1 = params['x'], params['y']
+                x2, y2 = params['to_x'], params['to_y']
+                check_coord(x1, y1)
+                check_coord(x2, y2)
+                sx1, sy1 = origin_x + x1, origin_y + y1
+                sx2, sy2 = origin_x + x2, origin_y + y2
+
+                input_monitor.mark_own_input()
+                auto.MoveTo(sx1, sy1)
+                time.sleep(0.02)
+                self._require_unchanged_input(input_monitor, input_snapshot)
+                self._cancelled(stopped)
+                auto.PressMouse(sx1, sy1)
+                try:
+                    dist = ((x2 - x1)**2 + (y2 - y1)**2)**0.5
+                    steps = max(2, int(dist / 8))
+                    for i in range(1, steps + 1):
+                        self._require_unchanged_input(input_monitor, input_snapshot)
+                        self._cancelled(stopped)
+                        ix = int(sx1 + (sx2 - sx1) * i / steps)
+                        iy = int(sy1 + (sy2 - sy1) * i / steps)
+                        auto.MoveTo(ix, iy)
+                        input_monitor.mark_own_input()
+                        time.sleep(0.008)
+                finally:
+                    auto.ReleaseMouse()
+                    input_monitor.mark_own_input()
+                return {'confirmed': True, 'action': 'drag', 'from': (x1, y1), 'to': (x2, y2)}
+
+            elif action == 'stroke':
+                strokes_list = params.get('strokes') or [params['points']]
+                total_points = 0
+                for stroke_idx, points in enumerate(strokes_list):
+                    if len(points) < 2:
+                        raise ObservationError('Each stroke requires at least 2 points.')
+                    if len(points) > 500:
+                        raise ObservationError('Maximum 500 points per stroke.')
+                    for pt_item in points:
+                        check_coord(pt_item[0], pt_item[1])
+
+                    first_x, first_y = points[0]
+                    first_sx, first_sy = origin_x + first_x, origin_y + first_y
+                    input_monitor.mark_own_input()
+                    auto.MoveTo(first_sx, first_sy)
+                    time.sleep(0.02)
+                    self._require_unchanged_input(input_monitor, input_snapshot)
+                    self._cancelled(stopped)
+                    auto.PressMouse(first_sx, first_sy)
+                    try:
+                        for idx in range(len(points) - 1):
+                            p1, p2 = points[idx], points[idx + 1]
+                            dist = ((p2[0] - p1[0])**2 + (p2[1] - p1[1])**2)**0.5
+                            steps = max(1, int(dist / 8))
+                            for i in range(1, steps + 1):
+                                self._require_unchanged_input(input_monitor, input_snapshot)
+                                self._cancelled(stopped)
+                                mx = int(p1[0] + (p2[0] - p1[0]) * i / steps)
+                                my = int(p1[1] + (p2[1] - p1[1]) * i / steps)
+                                auto.MoveTo(origin_x + mx, origin_y + my)
+                                input_monitor.mark_own_input()
+                                time.sleep(0.008)
+                    finally:
+                        auto.ReleaseMouse()
+                        input_monitor.mark_own_input()
+                    total_points += len(points)
+                return {'confirmed': True, 'action': 'stroke', 'strokes_count': len(strokes_list), 'points_count': total_points}
+        raise ObservationError(f'Unsupported canvas action: {action}')
 
     def start_application(self, app, stopped, input_monitor, input_snapshot, *, url=None):
         launch_path = app['launch_path']
@@ -727,7 +921,7 @@ class WindowsInteractionTools:
     def __init__(self, enabled, applications, *, max_result_bytes=8192, backend=None,
                  platform_enabled=None, idle_seconds=3, timeout_seconds=8,
                  input_monitor=None, discovery=None, desktop_icons_manager=None,
-                 desktop_icons_backend=None, store=None, character_id=None):
+                 desktop_icons_backend=None, store=None, character_id=None, lab=None):
         self.enabled = enabled is True
         self.platform_enabled = (os.name == 'nt') if platform_enabled is None else bool(platform_enabled)
         self.applications = applications or {}
@@ -740,6 +934,7 @@ class WindowsInteractionTools:
         self.input_monitor = input_monitor or DesktopInputMonitor()
         self.store = store
         self.character_id = character_id or 'default'
+        self.lab = Path(lab) if lab else (Path(store.root) / self.character_id / 'lab' if store and hasattr(store, 'root') else None)
 
         if desktop_icons_manager is not None:
             self.desktop_icons_manager = desktop_icons_manager
@@ -768,10 +963,10 @@ class WindowsInteractionTools:
             return None
         normalized = ntpath.normcase(ntpath.normpath(path))
         for app_id, app in self.applications.items():
-            if any(fnmatch.fnmatchcase(normalized, pattern) for pattern in app['process_paths']):
+            if any(fnmatch.fnmatchcase(normalized, ntpath.normcase(ntpath.normpath(pattern))) for pattern in app['process_paths']):
                 return app_id
         for app_id, app in self.discovered_applications.items():
-            if any(fnmatch.fnmatchcase(normalized, pattern) for pattern in app['process_paths']):
+            if any(fnmatch.fnmatchcase(normalized, ntpath.normcase(ntpath.normpath(pattern))) for pattern in app['process_paths']):
                 return app_id
         return None
 
@@ -786,6 +981,8 @@ class WindowsInteractionTools:
             return 'Desktop icons restore'
         app_id = args.get('app_id') if isinstance(args, dict) else None
         app = self.get_app(app_id)
+        if name == 'windows_canvas_action':
+            return f'{app["label"]} canvas action' if app else 'Windows canvas action'
         if name == 'windows_launch' and app:
             return f'{app["label"]} launch'
         return app['label'] if app else 'Windows application'
@@ -1329,6 +1526,146 @@ class WindowsInteractionTools:
                 return work(stopped)
             return self._run(act, summary, should_stop,
                              timeout=self.timeout_seconds, side_effect=True)
+
+        if name == 'windows_canvas_action':
+            action = args.get('action')
+            if (not isinstance(args.get('app_id'), str)
+                    or not self._valid_window_id(args.get('window_id'))
+                    or action not in ('click', 'drag', 'stroke', 'save_to_lab')):
+                return WindowsToolResult('Use allowlisted app_id, window_id, and click/drag/stroke/save_to_lab action.', activity_detail='参数无效。'), '被拒绝'
+
+            app = self.get_app(args['app_id'])
+            if app is None:
+                return WindowsToolResult('That app_id is not allowlisted or discovered.', activity_detail=f'{summary} 未找到该应用。'), '被拒绝'
+            if app.get('discovered') and not app.get('can_interact'):
+                return WindowsToolResult('This discovered application has observation-only permissions; interaction is not authorized.', activity_detail=f'{summary} 交互权限未开放。'), '被拒绝'
+            if app.get('actions') is not None and len(app.get('actions')) == 0:
+                return WindowsToolResult('This application has no interaction actions authorized.', activity_detail=f'{summary} 未授权交互动作。'), '被拒绝'
+
+            is_canvas_app = (
+                app['app_id'] == 'mspaint'
+                or 'canvas' in app.get('actions', [])
+                or any('mspaint' in str(p).lower() for p in app.get('process_paths', []))
+            )
+            if not is_canvas_app:
+                return WindowsToolResult('Canvas actions are only permitted on authorized drawing applications (such as Paint).', activity_detail=f'{summary} 非画图类应用。'), '被拒绝'
+
+            if should_stop and should_stop():
+                return WindowsToolResult('The autonomous activity is paused; no canvas action was started.', activity_detail=f'{summary} 自主活动暂停；未操作。'), '中断'
+
+            if action == 'save_to_lab':
+                lab_path = args.get('lab_path') or args.get('save_path') or (args.get('path') if isinstance(args.get('path'), str) else None)
+                if not isinstance(lab_path, str) or not lab_path.strip():
+                    return WindowsToolResult('save_to_lab requires a destination lab_path (e.g. drawings/sun.png).', activity_detail='参数无效。'), '被拒绝'
+                cleaned = lab_path.strip().replace('\\', '/')
+                if '..' in cleaned or cleaned.startswith('/'):
+                    return WindowsToolResult('lab_path must be a relative path without ".." segments.', activity_detail='路径无效。'), '被拒绝'
+                if not cleaned.lower().endswith('.png'):
+                    cleaned += '.png'
+                if self.lab is None:
+                    return WindowsToolResult('Lab directory is not configured.', activity_detail='Lab 不可用。'), '被拒绝'
+                lab_root = self.lab.resolve()
+                dest_file = (self.lab / cleaned).resolve()
+                if not dest_file.is_relative_to(lab_root):
+                    return WindowsToolResult('Destination path escapes Lab directory.', activity_detail='越界路径被拒绝。'), '被拒绝'
+                if dest_file.exists():
+                    return WindowsToolResult('The destination already exists; choose a new Lab path.', activity_detail='目标已存在。'), '被拒绝'
+
+                def save_action(stopped):
+                    def work(stop):
+                        current = self._selected_window(app['app_id'], args['window_id'], stop)
+                        def do_save(inner_stop, _snapshot):
+                            capture = self.backend.capture_window(current, inner_stop)
+                            if not capture or not capture.startswith('data:image/png;base64,'):
+                                raise ObservationError('Could not capture window canvas for Lab saving.')
+                            b64 = capture.split('data:image/png;base64,', 1)[1]
+                            png_bytes = base64.b64decode(b64)
+                            max_bytes = getattr(self, 'lab_max_write_bytes', None)
+                            if max_bytes is not None and len(png_bytes) > max_bytes:
+                                raise ObservationError(f'Artwork size ({len(png_bytes)} bytes) exceeds Lab max write limit ({max_bytes} bytes).')
+                            dest_file.parent.mkdir(parents=True, exist_ok=True)
+                            temp_file = dest_file.with_name(dest_file.name + '.tmp')
+                            try:
+                                temp_file.write_bytes(png_bytes)
+                                temp_file.replace(dest_file)
+                            except Exception:
+                                if temp_file.exists():
+                                    try:
+                                        temp_file.unlink()
+                                    except OSError:
+                                        pass
+                                raise
+                            return png_bytes
+                        png_bytes, _snapshot = self._run_action_with_input_guard(do_save, stop)
+                        rel_saved = str(dest_file.relative_to(lab_root)).replace('\\', '/')
+                        detail = f'画图作品已保存至 Lab: lab/{rel_saved} ({len(png_bytes)} 字节)。'
+                        summary_msg = f'已将作品保存至 lab/{rel_saved}。'
+                        return self._success({
+                            'app_id': app['app_id'],
+                            'window_id': current['id'],
+                            'saved_path': f'lab/{rel_saved}',
+                            'bytes': len(png_bytes),
+                            'confirmed': True,
+                        }, detail, summary_msg)
+                    return work(stopped)
+
+                return self._run(save_action, summary, should_stop, timeout=self.timeout_seconds, side_effect=True)
+
+            params = {}
+            if action == 'click':
+                if 'x' not in args or 'y' not in args:
+                    return WindowsToolResult('click requires integer x and y coordinates.', activity_detail='缺少坐标。'), '被拒绝'
+                try:
+                    params['x'] = int(args['x'])
+                    params['y'] = int(args['y'])
+                except (ValueError, TypeError):
+                    return WindowsToolResult('x and y coordinates must be integers.', activity_detail='坐标无效。'), '被拒绝'
+
+            elif action == 'drag':
+                for k in ('x', 'y', 'to_x', 'to_y'):
+                    if k not in args:
+                        return WindowsToolResult('drag requires x, y, to_x, to_y coordinates.', activity_detail='缺少坐标。'), '被拒绝'
+                try:
+                    params['x'] = int(args['x'])
+                    params['y'] = int(args['y'])
+                    params['to_x'] = int(args['to_x'])
+                    params['to_y'] = int(args['to_y'])
+                except (ValueError, TypeError):
+                    return WindowsToolResult('drag coordinates must be integers.', activity_detail='坐标无效。'), '被拒绝'
+
+            elif action == 'stroke':
+                strokes = args.get('strokes')
+                points = args.get('points') or args.get('path')
+                if not strokes and not points:
+                    return WindowsToolResult('stroke requires points or strokes list.', activity_detail='缺少笔画坐标。'), '被拒绝'
+                if strokes:
+                    if not isinstance(strokes, list) or not strokes:
+                        return WindowsToolResult('strokes must be a list of stroke points.', activity_detail='笔画格式无效。'), '被拒绝'
+                    params['strokes'] = strokes
+                else:
+                    if not isinstance(points, list) or len(points) < 2:
+                        return WindowsToolResult('points must be a list of at least 2 [x, y] coordinates.', activity_detail='笔画点过少。'), '被拒绝'
+                    params['points'] = points
+
+            def do_canvas_action(stopped):
+                def work(stop):
+                    current = self._selected_window(app['app_id'], args['window_id'], stop)
+                    result, _snapshot = self._run_action_with_input_guard(
+                        lambda inner_stop, input_snapshot: self.backend.apply_canvas_action(
+                            current, action, params, inner_stop, self.input_monitor, input_snapshot),
+                        stop)
+                    detail = f'画布操作已执行（{action}）。'
+                    summary_msg = f'{app["label"]} 画布操作 {action} 完成。'
+                    return self._success({
+                        'app_id': app['app_id'],
+                        'window_id': current['id'],
+                        'action': action,
+                        'confirmed': result.get('confirmed', True),
+                        'result': result,
+                    }, detail, summary_msg)
+                return work(stopped)
+
+            return self._run(do_canvas_action, summary, should_stop, timeout=self.timeout_seconds, side_effect=True)
 
         return WindowsToolResult('This interaction tool is not registered.',
                                  activity_detail=f'{summary} 工具未注册。'), '被拒绝'

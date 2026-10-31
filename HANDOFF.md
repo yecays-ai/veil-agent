@@ -11,14 +11,16 @@
 
 ## 工单 174 交接（2026-10-31）
 
-- 独立分支 `ticket/174-desktop-icons-and-creation`。实现第三阶段：连续自主操作与创作 + Windows 桌面图标整理：
-  1. 桌面图标管理与安全防线：新建 `desktop_icons.py`，基于 Explorer / Win32 视图读取桌面图标坐标与显示器配置（分辨率、多显示器边界、网格间距、自动排列与贴齐网格状态）；程序层严格限制仅调整显示层视觉坐标，坚决不调用文件系统移动、重命名、复制或删除，不修改文件正文与快捷方式目标；坐标经过防越界与防重叠安全校验，Windows 自动排列开启时安全拒绝。
+- 独立分支 `ticket/174-desktop-drawing-and-icons-fix`。实现第三阶段：连续自主操作与创作 + Windows 桌面图标整理：
+  1. 桌面图标管理与 Windows 11 / COM 修复：新建 `desktop_icons.py`，解决工作线程 COM 初始化问题（`pythoncom.CoInitialize`），直接基于 Shell COM `IFolderView` 原生接口与 `GetCurrentInfo` 精确检测 Windows 11 桌面自动排列与贴齐网格状态；使用 `SelectAndPositionItem` 调整图标视觉位置，并回读物理坐标验证；只改变桌面视觉坐标，绝不调用文件系统移动、重命名、复制或删除真实文件，坐标经过防越界与防重叠安全校验。
   2. 强制预备份与一键恢复：整理操作前强制自动拍摄完整布局快照并存入 `Store`；恢复操作根据快照安全复原匹配图标位置，安全跳过已删除或新增的图标，恢复后重新读取并校验坐标；提供 Web API `/api/desktop-icons/snapshots` 与 `/api/desktop-icons/restore` 供 Lan 随时直接还原桌面，不消耗模型预算与活动额度。
-  3. 人类优先与打断机制：整理和恢复过程在每步移动前严格检查 `should_stop()` 与 `DesktopInputMonitor`，Lan 移动鼠标或敲击键盘时即刻中止后续操作，保留已拍摄快照。
-  4. 连续自主操作与 Lab 创作：在 `autonomy.py` 中更新自主规划提示，支持 Peter 在自主唤醒中根据桌面状态自主规划整理，并连续操作已授权软件完成简单创作并保存到 Lab。
-  5. 工具注册与别名：注册 `desktop_icons_read`（只读权限 `desktop_read`，纳入长任务只读工具）、`desktop_icons_arrange` 与 `desktop_icons_restore`（权限 `desktop_control`）；在 Peter 的 `character.toml` 中配置别名 `scout_desktop_icons`、`tidy_desktop_icons` 与 `restore_desktop_layout`。
-  6. 自动化测试：`tests/test_desktop_icons.py`（11 项用例）全面覆盖标识生成、坐标校验（越界/重叠/自动排列）、快照保存、坐标移动与验证、多状态还原、人类操作打断；`tests/test_desktop_icons_tools.py`（5 项用例）覆盖工具权限策略、只读长任务、工具调用链路及 Web API 管理器映射。全量回归通过。
-  7. 下一步：集中提交推送到 GitHub，发起 PR 并关注 CI 与审查结果，合并后由 Lan 在 Windows 实机按 A/B 步骤验收。见 `docs/tickets/174-desktop-icons-and-creation.md`。
+  3. Windows 画图与画布交互能力（`windows_canvas_action`）：为 Peter 补齐真实的鼠标画布交互工具（角色别名 `draw_on_canvas`），支持 `click`、`drag`、`stroke`（单笔画及多笔画序列），以及 `save_to_lab` 直接将当前画布作品保存为 PNG 到 Lab（如 `lab/drawings/sun.png`）；具备客户区严格边界校验（`GetClientRect`）、前台激活线程附加保护与按键防黏连（`ReleaseMouse` 释放保证）。
+  4. 主窗口识别优化：优化 `windows_observer.py` 窗口过滤规则，过滤掉 WindowsApps 临时产生的 50x50 代理占位窗口，确保 `windows_launch` 稳定绑定到实际的应用主窗口（如画图的 `无标题 - 画图`）。
+  5. 人类优先与打断机制：整理、恢复和画布绘制的每步移动与插值循环中，均严格检查 `should_stop()` 与 `DesktopInputMonitor`，Lan 触碰鼠标或敲击键盘时立即释放鼠标并即刻中止后续操作，保留已拍摄快照。
+  6. 连续自主操作与 Lab 创作：在 `autonomy.py` 中更新自主规划提示，支持 Peter 在自主唤醒中根据桌面状态自主规划整理，并连续操作已授权软件完成简单创作并保存到 Lab。
+  7. 工具注册与别名：注册 `desktop_icons_read`（只读权限 `desktop_read`，纳入长任务只读工具）、`desktop_icons_arrange`、`desktop_icons_restore` 与 `windows_canvas_action`（权限 `desktop_control`）；在 Peter 的 `character.toml` 中配置别名 `scout_desktop_icons`、`tidy_desktop_icons`、`restore_desktop_layout` 与 `draw_on_canvas`。
+  8. 自动化测试：`tests/test_desktop_icons.py`（18 项用例）、`tests/test_desktop_icons_tools.py`（5 项用例）、`tests/test_windows_interaction.py`（42 项用例）全量通过，覆盖 COM 初始化、Win11 定位、快照恢复、画布点击/拖拽/笔画/Lab 保存校验。
+  9. 下一步：提交 PR 并关注 GitHub Actions CI 与评审结果；合并后重启 `web_agent.py` 并由 Lan 在 Windows 实机按 A/B 步骤验收。见 `docs/tickets/174-desktop-icons-and-creation.md`。
 
 ## 工单 173 交接（2026-10-31）
 
