@@ -881,6 +881,10 @@ ESTIMATE_ACCOUNTINGS = frozenset({'embedding-estimate', 'ombre-model-estimate', 
                                   'short-term-notes-extraction'})
 
 
+class RecallRejected(UserError):
+    """A message cannot be recalled right now (too old, wrong sender, already handled)."""
+
+
 class RequestNotSent(UserError):
     """The provider request failed locally before anything was sent, so nothing was charged."""
 
@@ -2212,22 +2216,30 @@ class Chat:
         self.store.update_record(self.path, index, {'favorite': favorite})
         return {**row, 'favorite': favorite}
 
-    def recall_message(self, message_id, role='user'):
-        index, row = self.message_record(message_id)
+    def check_recallable(self, message_id, role='user'):
+        """Return (index, row) when the message may be recalled now; otherwise raise RecallRejected."""
+        try:
+            index, row = self.message_record(message_id)
+        except UserError as exc:
+            raise RecallRejected(str(exc)) from exc
         if row.get('role') != role or role not in ('user', 'assistant') or row.get('recalled'):
-            raise UserError('这条消息不能撤回。')
+            raise RecallRejected('这条消息不能撤回。')
         stamp = row.get('time')
         try:
             sent_at = datetime.fromisoformat(stamp.replace('Z', '+00:00')).timestamp()
         except (AttributeError, ValueError, OverflowError) as exc:
-            raise UserError('这条消息的发送时间无法确认，不能撤回。') from exc
+            raise RecallRejected('这条消息的发送时间无法确认，不能撤回。') from exc
         age = datetime.now(timezone.utc).timestamp() - sent_at
         if age < 0 or age > 120:
-            raise UserError('消息只能在发送后两分钟内撤回。')
+            raise RecallRejected('消息只能在发送后两分钟内撤回。')
         if role == 'user' and any(event.get('role') == 'assistant'
                                   and event.get('request_id') == row.get('request_id')
                                   for event in self._chat_rows()):
-            raise UserError('Peter 已经处理了这条消息，不能再撤回。')
+            raise RecallRejected('Peter 已经处理了这条消息，不能再撤回。')
+        return index, row
+
+    def recall_message(self, message_id, role='user'):
+        index, row = self.check_recallable(message_id, role)
         self.store.update_record(self.path, index, {
             'message_id': message_id, 'content': '[Message recalled]', 'recalled': True,
             'media': None, 'attachments': [],
@@ -2262,7 +2274,13 @@ class Chat:
         self.pending_recall_message_id = None
         if not message_id:
             return False
-        row = self.recall_message(message_id, role='assistant')
+        try:
+            row = self.recall_message(message_id, role='assistant')
+        except RecallRejected:
+            # The message stopped being recallable while this turn ran (for example the two
+            # minutes passed). That must never stop the service; the tool result already
+            # told Peter the condition, and the message simply stays.
+            return False
         callback = getattr(self, 'message_recalled', None)
         if callable(callback):
             callback(row)
@@ -2890,9 +2908,13 @@ class Chat:
                 if not isinstance(message_id, str):
                     result, state = 'This recall request is not available.', '被拒绝'
                 else:
-                    self.message_record(message_id)
-                    self.pending_recall_message_id = message_id
-                    result, state = 'The exact message will be withdrawn after this reply is saved.', '成功'
+                    try:
+                        self.check_recallable(message_id, 'assistant')
+                    except RecallRejected as exc:
+                        result, state = f'Not withdrawn: {exc} The message stays as it is.', '被拒绝'
+                    else:
+                        self.pending_recall_message_id = message_id
+                        result, state = 'The exact message will be withdrawn after this reply is saved.', '成功'
                 summary = 'recall_message'
             elif call.function.name == 'capability_history':
                 result = self.capability_history_record or 'No capability changes are recorded yet.'

@@ -126,5 +126,55 @@ class UsageOverBoundTests(unittest.TestCase):
                 budget.settle(request_id, cfg, 500, 5000, 0)
 
 
+class RecallExpiryTests(unittest.TestCase):
+    def setUp(self):
+        from unittest.mock import Mock
+        from veil_agent import Chat, load_character
+        self.directory = tempfile.TemporaryDirectory()
+        root = Path(self.directory.name)
+        (root / 'characters' / 'test').mkdir(parents=True)
+        (root / 'persona').mkdir()
+        (root / 'persona' / 'test.md').write_text('Fictional persona', encoding='utf-8')
+        (root / 'characters' / 'test' / 'character.toml').write_text('''name = "Test"
+provider = "fake"
+persona = "persona/test.md"
+max_output_tokens = 50
+[providers.fake]
+model = "fake-model"
+base_url = "https://example.invalid/v1"
+api_key_env = "FAKE_KEY"
+max_input_tokens = 6000
+input_cny_per_million = "2"
+cached_input_cny_per_million = "1"
+output_cny_per_million = "8"
+''', encoding='utf-8')
+        self.store = Store(root / 'data')
+        for role, mid, time in (('user', 'u1', '2026-10-31T10:00:00+08:00'),
+                                ('assistant', 'a_old', '2026-10-31T10:00:05+08:00')):
+            self.store.append('test/chat.jsonl', {'role': role, 'content': 'fictional', 'message_id': mid,
+                                                  'request_id': 'r1', 'time': time})
+        cfg = load_character(root, 'test')
+        self.chat = Chat(cfg, self.store, Budget(self.store), Mock())
+
+    def tearDown(self):
+        self.directory.cleanup()
+
+    def test_message_that_expired_during_the_turn_is_skipped_without_stopping_the_service(self):
+        self.chat.pending_recall_message_id = 'a_old'
+        self.assertFalse(self.chat.apply_pending_recall())
+        self.assertIsNone(self.chat.pending_recall_message_id)
+        row = next(r for r in self.store.read('test/chat.jsonl') if r['message_id'] == 'a_old')
+        self.assertFalse(row.get('recalled'))
+
+    def test_unknown_message_is_rejected_the_same_way(self):
+        self.chat.pending_recall_message_id = 'missing'
+        self.assertFalse(self.chat.apply_pending_recall())
+
+    def test_the_menu_path_still_reports_the_reason(self):
+        from veil_agent import UserError
+        with self.assertRaisesRegex(UserError, '两分钟'):
+            self.chat.recall_message('a_old', role='assistant')
+
+
 if __name__ == '__main__':
     unittest.main()

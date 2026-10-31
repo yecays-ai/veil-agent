@@ -2,7 +2,7 @@
 
 ## 工单 177 交接（2026-10-31）
 
-- 分支 `ticket/177-budget-chat-icons-reliability`。改动：`veil_agent.py`（`Budget.mark_dispatched`、`recover_interrupted`、`settle` 的 `tolerate_over_bound`，聊天请求前写 dispatch 标记）、`autonomy.py`（自主 `run()` 的 finally 里状态恢复放进嵌套 finally）、`web_agent.py` 与 `desktop/chat.js`（单条事件渲染失败不卡轮询；保存失败显示真实原因）、`desktop_icons.py`（快照不得为空，复用校验时读到的布局）、`desktop/chat.html`（价格 step=any）。
+- 分支 `ticket/177-budget-chat-icons-reliability`。改动：`veil_agent.py`（`Budget.mark_dispatched`、`recover_interrupted`、`settle` 的 `tolerate_over_bound`，聊天请求前写 dispatch 标记）、`autonomy.py`（自主 `run()` 的 finally 里状态恢复放进嵌套 finally）、`web_agent.py` 与 `desktop/chat.js`（单条事件渲染失败不卡轮询；保存失败显示真实原因）、`desktop_icons.py`（快照不得为空，复用校验时读到的布局）、`desktop/chat.html`（价格 step=any）、`veil_agent.py` 的撤回（`check_recallable`、`RecallRejected`；`apply_pending_recall` 遇到已过期的撤回只跳过）。
 - 账本新增事件类型 `dispatch`（只有 id）。旧版本读不了含它的账本，所以升级后不要回退。
 - 已有的旧未结算预留（没有 dispatch 标记）在下次启动时按「没发出」释放为 0；这是对历史数据的一次性处理，真实花费以供应商账单为准。
 - 测试：`tests/test_ticket_177_reliability.py`；4 个旧测试里「重启后仍是待核对」改为「重启后记为已花费」。
