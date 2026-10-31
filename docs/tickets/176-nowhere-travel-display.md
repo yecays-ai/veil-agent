@@ -6,7 +6,7 @@ Lan 在现有自主活动详情中直接阅读 Peter 在乌有乡写下的语录
 
 ## 当前状态
 
-分支 `ticket/176-nowhere-travel-display`，PR #226 已开放。乌有乡 `say` 的成功回执只返回 `saved` 标志，未返回原文；因此成功保存的输入文本会作为可选元数据写入既有、按角色分隔的工具活动日志。`quotes` 与 `bury` 继续使用现有返回值。自主活动详情增加结构化展示，并保留原始结果折叠区。测试使用虚构数据；专项 Python 9 项与桌面 Node 6 项通过，桌面全套 Node 检查 15 项通过、1 项既有回环 HTTP 测试受当前环境限制；Chrome 静态预览完成。Cubic 与 CodeRabbit 当前意见已处理；最新 CI、复审和 Windows 实机验收尚未完成。
+分支 `ticket/176-nowhere-travel-display`，PR #226 已开放。乌有乡 `say` 的成功回执只返回 `saved` 标志，未返回原文；因此成功保存的输入文本会作为可选元数据写入既有、按角色分隔的工具活动日志。`quotes` 与 `bury` 继续使用现有返回值。自主活动详情增加结构化展示，并保留原始结果折叠区。测试使用虚构数据；专项 Python 9 项与桌面 Node 6 项通过，桌面全套 Node 检查 15 项通过、1 项既有回环 HTTP 测试受当前环境限制；Chrome 静态预览完成。PR 最新 head 的 Tests（Windows/Ubuntu）、Windows desktop、Dependency security 均通过，Cubic 与 CodeRabbit 有效意见已处理且评审线程已解决。Lan 的 Windows 实机验收尚未完成。
 
 ## 验收步骤
 
