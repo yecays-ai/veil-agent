@@ -1,5 +1,14 @@
 # 交接
 
+## 工单 175 交接（2026-10-31）
+
+- 独立分支 `ticket/175-image-recovery-and-context-fix`。实现紧急修复：失败图片重启后自动发送 + 上下文长度误拦截 + 重复错误提示：
+  1. 消息状态机闭环与终态保证：在 `veil_agent.py` 中为 `incoming-submissions.jsonl` 实现完整状态流转（`received`、`processing`、`committed`、`failed`、`cancelled`、`uncertain`）。`TooLong`、预检不通过或提交异常均写入 `failed` 终态；`finish_media_submission` 未提交时调用 `fail_incoming`；新对话 `/new` 自动将上一会话未提交请求作废为 `cancelled`；服务启动恢复 `recover_uncommitted_incoming` 排除非正常状态，崩溃前中断处于 `processing` 的请求自动记录为 `uncertain` 并保留审计记录，绝不自动投递至 `hub.inbox` 产生旧消息。
+  2. 单图上下文多级裁剪与透明诊断：在 `veil_agent.py` 中重构上下文预算与裁剪次序。在发送新图片时，自动将历史记录中的所有旧图坍缩为文本占位符，消除每张 4096 tokens 的旧图虚高；采用“历史聊天轮次 → 长期记忆召回（`recalled`） → 辅助运行上下文（经历/便签/背景/弹幕）”的阶梯裁剪机制，确保核心角色身份（Persona）、必要状态权限与用户当前图片完整保留；若在裁剪所有可裁剪内容后仍超限，返回包含透明 tokens 分项（系统人设、工具定义、用户输入等）的明确诊断，不再模糊报错。
+  3. 错误提示去重与分类：在 `web_agent.py` 与 `desktop/chat.js` 中建立请求 ID 与事件 ID 级去重屏障，同一请求或失败事件严格只渲染一次，杜绝重放轮询导致的重复提示，去除“（重复 n 次）”文本追加。
+  4. 自动化测试：新建 `tests/test_image_recovery_and_context.py`（8 项用例），覆盖失败图片重启不复活、崩溃中断记录 uncertain 且不自动重发、新会话作废上一会话未提交消息、单图自动裁剪历史与记忆成功入模、真实超限透明诊断、Hub 错误去重、未提交媒体终结 failed 及媒体文件缺失处理。全量 Python 测试（863 项通过、14 项跳过）与桌面测试（10 项通过）全数通过。
+  5. 下一步：推送独立 PR，由 Lan 在 Windows 实机按 A–D 步骤完成验收。见 `docs/tickets/175-image-recovery-and-context-fix.md`。
+
 ## 工单 174 交接（2026-10-31）
 
 - 独立分支 `ticket/174-desktop-drawing-and-icons-fix`。实现第三阶段：连续自主操作与创作 + Windows 桌面图标整理：

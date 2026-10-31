@@ -1580,8 +1580,21 @@ class WindowsInteractionTools:
                                 raise ObservationError('Could not capture window canvas for Lab saving.')
                             b64 = capture.split('data:image/png;base64,', 1)[1]
                             png_bytes = base64.b64decode(b64)
+                            max_bytes = getattr(self, 'lab_max_write_bytes', None)
+                            if max_bytes is not None and len(png_bytes) > max_bytes:
+                                raise ObservationError(f'Artwork size ({len(png_bytes)} bytes) exceeds Lab max write limit ({max_bytes} bytes).')
                             dest_file.parent.mkdir(parents=True, exist_ok=True)
-                            dest_file.write_bytes(png_bytes)
+                            temp_file = dest_file.with_name(dest_file.name + '.tmp')
+                            try:
+                                temp_file.write_bytes(png_bytes)
+                                temp_file.replace(dest_file)
+                            except Exception:
+                                if temp_file.exists():
+                                    try:
+                                        temp_file.unlink()
+                                    except OSError:
+                                        pass
+                                raise
                             return png_bytes
                         png_bytes, _snapshot = self._run_action_with_input_guard(do_save, stop)
                         rel_saved = str(dest_file.relative_to(lab_root)).replace('\\', '/')

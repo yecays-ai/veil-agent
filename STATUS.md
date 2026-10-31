@@ -5,6 +5,12 @@
 2. 补齐 Windows 画布与鼠标交互能力（`windows_canvas_action`，别名 `draw_on_canvas`），支持在已授权窗口（如画图 `mspaint`）的客户区内进行真实的鼠标点击、拖拽、连续笔画绘制与成果保存至 Lab（`save_to_lab`）；具备客户区严格边界校验、前台激活线程附加及人类触碰鼠标键盘瞬间打断保护。
 3. 优化 WindowsApps 启动与主窗口识别，过滤 50x50 虚拟代理微窗，精准绑定真实画图窗口；支持将画作完整保存至 `lab/drawings/sun.png`。本地全量专项与回归测试通过，待提交 PR、通过 CI 并由 Lan 在 Windows 实机最终验收。见 `docs/tickets/174-desktop-icons-and-creation.md`。
 
+工单 175（2026-10-31）：分支 `ticket/175-image-recovery-and-context-fix`。紧急修复：失败图片重启后自动发送 + 上下文长度误拦截 + 重复错误提示：
+1. 消息状态生命周期与重启安全：建立 `received`、`processing`、`committed`、`failed`、`cancelled`、`uncertain` 状态机。`TooLong`、提交异常或未提交完成均写入 `failed` 终态；`start_new_conversation` 自动取消上一会话未提交请求；重启恢复严格过滤非正常待处理消息，对崩溃前处于 `processing` 的请求记录 `uncertain` 审计日志，坚决不向 `hub.inbox` 自动投递产生旧消息。
+2. 单图上下文预检与多级裁剪：发送新图时将历史旧图全部坍缩为文本占位符，消除每张 4096 tokens 的旧图视觉占用；阶梯裁剪历史、长期记忆与辅助运行上下文，确保必要身份、权限与当前图片完整保留；真实超限抛出含精确 tokens 分项的明确诊断。
+3. 错误提示去重：Hub 与前端建立 `request_id` / `event_id` 去重屏障，同一请求与失败事件只展示一次，杜绝重放轮询导致的重复提示。
+全量 Python 测试 863 项全部通过（14 项跳过），桌面单测 10 项全部通过。Windows 实机体验待 Lan 验收。见 `docs/tickets/175-image-recovery-and-context-fix.md`。
+
 工单 173（2026-10-31）：分支 `ticket/173-windows-app-discovery`。PR #222 已合并（`b5df397`）。实现 Peter 自主发现与探索 Windows 软件：新增通用软件安全发现模块（`windows_discovery.py`），通过开始菜单快捷方式、App Paths 注册表及 WindowsApps 自动识别已安装普通桌面应用，排除安装卸载、脚本解释器、系统提权等危险入口；复用已有 UIA、Win32、窗口管理链路与人类操作优先机制，实施发现/启动/观察/交互分级权限控制，程序层拦截文件对话框与模糊确认控件；提供 `windows_discover_apps` 工具与 `scout_apps` 别名。测试与 CI 12 项检查通过，核心体验通过，软件实际交互待验收。验收见 `docs/tickets/173-windows-app-discovery.md`。
 
 工单 167（2026-10-30）：分支 `ticket/167-lab-python-sandbox`。PR #221 已合并（`cc31b85`）。实现 Peter Lab 独立代码实验室，基于本地 Docker 隔离容器（`python:3.12-slim`）执行 Python 脚本，支持标准输出/错误堆栈捕获、管道防死锁与超时/资源/磁盘限制（256MB/Swap限制/1.0CPU/15s默认30s上限/50MB工作区配额）、Lab 成果文件生成与持久化；一次性临时工作区绑定挂载、只读根文件系统、不挂载个人/源码目录、无环境变量继承，容器严格断网（`--network none`），结果添加不可信数据包裹，默认关闭且仅 Peter 启用，Docker 不可用时快速拒绝绝不退回宿主。全量测试通过。Windows 实机体验按 A–E 待 Lan 验收。验收见 `docs/tickets/167-lab-python-sandbox.md`。
@@ -22,6 +28,7 @@
 ## 当前目标与现状
 
 - 当前目标：让 Peter 在聊天或自主唤醒时能够连续使用已授权的 Windows 软件完成简单任务并保存成果至 Lab；同时自主发现桌面图标布局、规划并受控调整图标视觉位置，每次整理自动备份且支持 Lan 一键恢复，绝不改变文件真实路径、名称或内容。
+- 工单 175：分支 `ticket/175-image-recovery-and-context-fix`。PR #224 已合并（`a33144d`）。实现消息状态生命周期（`received`/`processing`/`committed`/`failed`/`cancelled`/`uncertain`），`TooLong`、提交异常或未提交完成均写入 `failed` 终态；`start_new_conversation` 自动取消上一会话未提交请求；重启恢复严格过滤非正常待处理消息，对崩溃前处于 `processing` 的请求记录 `uncertain` 审计日志，坚决不向 `hub.inbox` 自动投递产生旧消息；发送新图时将历史旧图全部坍缩为文本占位符，消除每张 4096 tokens 的旧图视觉占用；阶梯裁剪历史、长期记忆与辅助运行上下文，确保必要身份、权限与当前图片完整保留；真实超限抛出含精确 tokens 分项的明确诊断；Hub 与前端建立 `request_id` / `event_id` 去重屏障，同一请求与失败事件只展示一次，杜绝重放轮询导致的重复提示。全量测试与回归通过，Windows 实机体验待 Lan 验收。见 `docs/tickets/175-image-recovery-and-context-fix.md`。
 - 工单 174：分支 `ticket/174-desktop-drawing-and-icons-fix`。实现第三阶段：连续自主操作与创作 + Windows 桌面图标整理。完成 COM 线程环境修复与 Windows 11 `IFolderView` 适配，补齐真实鼠标画布交互工具 `windows_canvas_action`（`draw_on_canvas`）及画图主窗口绑定，实现画图绘制小太阳与保存至 Lab。本地测试通过，待提交 PR、CI 验证与实机验收。见 `docs/tickets/174-desktop-icons-and-creation.md`。
 - 工单 173：PR #222 已合并（`b5df397`）。核心体验通过，软件实际交互待验收。新增通用软件安全发现模块（`windows_discovery.py`），通过开始菜单快捷方式、App Paths 注册表及 WindowsApps 自动识别已安装普通桌面应用，排除安装卸载、脚本解释器、系统提权等危险入口；复用已有 UIA、Win32、窗口管理链路与人类操作优先机制，实施发现/启动/观察/交互分级权限控制，程序层拦截文件对话框与模糊确认控件；提供 `windows_discover_apps` 工具与 `scout_apps` 别名。测试与 CI 12 项检查通过。见 `docs/tickets/173-windows-app-discovery.md`。
 - 工单 167：PR #221 已合并（`cc31b85`）。全量测试通过；Windows 实机体验按 A–E 待 Lan 验收。见 `docs/tickets/167-lab-python-sandbox.md`。

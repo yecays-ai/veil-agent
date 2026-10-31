@@ -399,6 +399,7 @@ class FilesystemTools:
             self.lab = folder
             if hasattr(self, 'windows_interaction_tools'):
                 self.windows_interaction_tools.lab = folder
+                self.windows_interaction_tools.lab_max_write_bytes = self.lab_max_write_bytes
         except (OSError, ValueError):
             self.startup_notice = '实验室不可用：目录不是普通文件夹或存在链接重定向；实验室免确认权限已关闭。'
 
