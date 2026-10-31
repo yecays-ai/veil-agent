@@ -100,6 +100,37 @@ def safe_tool_activity_detail(value, limit=2000):
     return text if len(text) <= limit else text[:limit] + '\n…（详情已截断）'
 
 
+def nowhere_activity_metadata(canonical_name, logged_name, args, result, state):
+    """Add optional Nowhere display metadata to the existing role-scoped tool ledger.
+
+    Aliased MCP tools keep their canonical name for display. The upstream ``say``
+    result only acknowledges the save; it does not echo the submitted text, so
+    preserve that input only after Nowhere confirms it was saved.
+    """
+    normalized = str(canonical_name or '').casefold().replace('__', '_')
+    if not normalized.startswith('mcp_nowhere_'):
+        return {}
+    metadata = {}
+    if logged_name and logged_name != canonical_name:
+        metadata['canonical_tool'] = canonical_name
+    if normalized != 'mcp_nowhere_say' or state != '成功':
+        return metadata
+    if not isinstance(args, dict) or not isinstance(args.get('text'), str):
+        return metadata
+    try:
+        payload = json.loads(result) if isinstance(result, str) else result
+    except (TypeError, ValueError):
+        return metadata
+    data = payload.get('data') if isinstance(payload, dict) else None
+    if not isinstance(data, dict) or data.get('saved') is not True:
+        return metadata
+    text = args['text'][:500]  # Nowhere itself caps a saved quote at 500 characters.
+    metadata['tool_input'] = safe_tool_activity_detail(text, limit=1000)
+    if data.get('truncated') is True or len(args['text']) > 500:
+        metadata['tool_input_truncated'] = True
+    return metadata
+
+
 def capability_model_notice(tools):
     # A capability update is one program-generated event.  The display and the
     # model must receive the same body; never substitute a short model summary.
@@ -3545,6 +3576,7 @@ class Chat:
                     if autonomy:
                         autonomy_tool_steps += 1
                     call_id = f'{request_id}:{step}:{getattr(call, "id", None) or call_index}'
+                    args = {}
                     try:
                         args = json.loads(call.function.arguments or '{}')
                         preview_name = self._resolve_tool_name(call.function.name, offered)
@@ -3580,10 +3612,14 @@ class Chat:
                             else 'Windows desktop action completed.'))
                     if result_state == '结果过长' and canonical_name not in DESKTOP_FILE_READ_TOOL_NAMES:
                         log_detail = display_detail
+                    activity_metadata = nowhere_activity_metadata(
+                        canonical_name or call.function.name, call.function.name,
+                        args, execution.result, state)
                     self._record_tool_result(call, execution, result_state, display_detail,
                                              summaries, lambda name, path, state, **metadata:
                                              log_tool(name, path, state, call_id=call_id,
-                                                      detail=log_detail, **metadata))
+                                                      detail=log_detail, **metadata,
+                                                      **activity_metadata))
                     result_summaries[call.id] = summaries[-1]
                     result_call_ids[call.id] = call_id
                     if autonomy and self.autonomy_should_yield and self.autonomy_should_yield():
