@@ -44,7 +44,12 @@ RAW_MESSAGE_BATCH_MARKERS = (
 _UNSET_TOOL_SCHEMAS = object()
 SENSITIVE_ACTIVITY_VALUE = re.compile(
     r'(?i)(api[_ -]?key|password|passwd|secret|access[_ -]?token|authorization|bearer)'
-    r'(\s*[=:]\s*|\s+(?:is\s+)?)[^\s,;]{4,}')
+    r'(\s*[=:]\s*(?:bearer\s+)?|(?<=\bbearer)\s+)'
+    r'[^\s,;]{4,}')
+NATURAL_API_KEY_VALUE = re.compile(
+    r'(?i)(api[_ -]?key)(\s+is\s+)(?:bearer\s+)?[^\s,;]{4,}'
+    r'(?:\s+(?!password\b|passwd\b|secret\b|access[_ -]?token\b|authorization\b|'
+    r'bearer\b|api[_ -]?key\b)[^\s,;]{4,})*')
 OPAQUE_ACTIVITY_TOKEN = re.compile(r'\b(?:sk|ghp|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{12,}\b')
 
 
@@ -95,6 +100,7 @@ def safe_tool_activity_detail(value, limit=2000):
     """Keep useful local tool results without persisting common credential forms."""
     value = _redact_activity_value(value)
     text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
+    text = NATURAL_API_KEY_VALUE.sub(lambda match: match.group(1) + match.group(2) + '[已隐藏]', text)
     text = SENSITIVE_ACTIVITY_VALUE.sub(lambda match: match.group(1) + match.group(2) + '[已隐藏]', text)
     text = OPAQUE_ACTIVITY_TOKEN.sub('[已隐藏的凭据]', text)
     return text if len(text) <= limit else text[:limit] + '\n…（详情已截断）'

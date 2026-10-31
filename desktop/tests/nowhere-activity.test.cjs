@@ -45,6 +45,17 @@ test('truncated say records do not hide quote text from the query result', () =>
     ['Hidden by truncated result']);
 });
 
+test('truncated say input does not hide a full query quote', () => {
+  const say = { tool: 'mcp__nowhere__say', state: '成功',
+    tool_input_truncated: true, autonomy_run_id: 'wake-input-truncated',
+    tool_input: 'Partial fictional' };
+  const quotes = { tool: 'mcp__nowhere__quotes', state: '成功',
+    autonomy_run_id: 'wake-input-truncated',
+    detail: result({ quotes: [{ text: 'Partial fictional note', place: 'North Ridge' }] }) };
+  assert.deepEqual(parse(quotes, [say, quotes]).quotes.map(quote => quote.text),
+    ['Partial fictional note']);
+});
+
 test('aliased tools use their canonical name and malformed quote rows fall back', () => {
   const item = { tool: 'quote_alias', canonical_tool: 'mcp__nowhere__quotes', state: '成功',
     detail: result({ quotes: [{ text: 'A fictional quote' }, { place: 'Missing text' }] }) };

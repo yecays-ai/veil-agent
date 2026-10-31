@@ -93,6 +93,14 @@ class ActivityMonitorTests(unittest.TestCase):
         natural = safe_tool_activity_detail('api_key is AABBCCDDEEFF')
         self.assertNotIn('AABBCCDDEEFF', natural)
         self.assertIn('[已隐藏]', natural)
+        multiword = safe_tool_activity_detail('api_key is abcd efgh')
+        self.assertNotIn('abcd', multiword)
+        self.assertNotIn('efgh', multiword)
+        authorization = safe_tool_activity_detail('Authorization: Bearer fictional-token-value')
+        self.assertNotIn('fictional-token-value', authorization)
+        self.assertIn('[已隐藏]', authorization)
+        ordinary = 'authorization is required to access the API'
+        self.assertEqual(safe_tool_activity_detail(ordinary), ordinary)
 
     def test_json_credentials_are_redacted_in_objects_strings_and_old_ledger_rows(self):
         for value in ({'password': 'hunter2', 'nested': {'client_secret': 'secret-value'}},
