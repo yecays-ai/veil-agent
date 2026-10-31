@@ -1673,367 +1673,629 @@ def make_handler(hub, token):
                 return False
             return True
 
+        def _get_game(self, url):
+            parts = url.path.split('/', 3)
+            if len(parts) != 4:
+                self._send(404, {'error': 'game resource unavailable'})
+                return
+            if not self._game_origin_guard():
+                return
+            from urllib.parse import unquote
+            try:
+                parts[3] = unquote(parts[3], errors='strict')
+            except UnicodeError:
+                self._send(404, {'error': 'game resource unavailable'})
+                return
+            manager = getattr(hub, 'game_manager', None)
+            if manager is None:
+                self._send(404, {'error': 'game unavailable'})
+                return
+            try:
+                if parts[3] == 'veil-score.js':
+                    from lab_games import score_helper
+                    _folder, _entry, game_id = manager._entry(parts[2])
+                    body = score_helper(parts[2], game_id).encode('utf-8')
+                    mime = 'text/javascript; charset=utf-8'
+                else:
+                    body, mime = manager.resource(parts[2], parts[3])
+            except (OSError, ValueError):
+                self._send(404, {'error': 'game resource unavailable'})
+                return
+            from lab_preview import _csp
+            self._send(200, body, mime, {
+                'Content-Security-Policy': _csp(),
+                'Cross-Origin-Resource-Policy': 'same-origin'})
+            return
+
+        def _get_memory_panel(self):
+            if not self._guard(self.headers.get('X-Token')):
+                return
+            if hub.memory_tools is None:
+                self._send(404, {'error': 'Ombre memory is not available.'})
+                return
+            try:
+                self._send(200, hub.memory_tools.panel_entries())
+            except Exception:
+                self._send(503, {'error': 'Ombre 记忆暂时无法读取。'})
+
+        def _get_memory(self, url, query):
+            if not self._guard(self.headers.get('X-Token')):
+                return
+            if hub.memory_tools is None:
+                self._send(404, {'error': 'Ombre memory is not available.'})
+                return
+            if url.path == '/api/memory/catalog':
+                cursor = query.get('after', [''])[0]
+                rendered, state, _ = hub.memory_tools.invoke('memory_catalog', {'after': cursor})
+                if state != '成功':
+                    self._send(400 if state == '被拒绝' else 503, {'error': rendered})
+                else:
+                    try:
+                        self._send(200, json.loads(rendered))
+                    except (TypeError, ValueError):
+                        self._send(503, {'error': 'Ombre memory catalog is temporarily unavailable.'})
+            else:
+                memory_id = query.get('id', [''])[0]
+                try:
+                    offset = int(query.get('offset', ['0'])[0])
+                except (TypeError, ValueError):
+                    self._send(400, {'error': 'Invalid memory offset.'})
+                    return
+                args = {'memory_id': memory_id, 'offset': offset}
+                version = query.get('version', [None])[0]
+                if version is not None:
+                    args['version'] = version
+                rendered, state, _ = hub.memory_tools.invoke('memory_read', args)
+                if state != '成功':
+                    self._send(404 if state == '被拒绝' else 503, {'error': rendered})
+                else:
+                    try:
+                        self._send(200, json.loads(rendered))
+                    except (TypeError, ValueError):
+                        self._send(503, {'error': 'Ombre memory could not be read right now.'})
+
+        def _get_attachment(self, url, query):
+            if not self._guard(self.headers.get('X-Token')):
+                return
+            media_ids = query.get('id', [])
+            if len(query) != 1 or len(media_ids) != 1 or not MEDIA_ID_PATTERN.fullmatch(media_ids[0]):
+                self._send(400, {'error': 'invalid attachment'})
+                return
+            saved = hub.read_attachment(media_ids[0])
+            if not saved:
+                self._send(404, {'error': 'attachment not found'})
+                return
+            media, raw = saved
+            if url.path == '/api/attachment':
+                self._send(200, {'attachment': media})
+            elif media.get('view') != 'text':
+                self._send(415, {'error': 'attachment is not plain text'})
+            else:
+                try:
+                    self._send(200, {'text': raw.decode('utf-8')})
+                except UnicodeDecodeError:
+                    self._send(415, {'error': 'attachment is not UTF-8 text'})
+
+        def _get_events(self, query):
+            if self._guard(self.headers.get('X-Token')):
+                try:
+                    after = max(0, int((query.get('after') or ['0'])[0]))
+                except ValueError:
+                    after = 0
+                self._send(200, hub.snapshot(after))
+
+        def _get_mcp(self, query):
+            if not self._guard(self.headers.get('X-Token')):
+                return
+            if hub.chat is None or hub.stopping or hub.stopped:
+                self._send(409, {'error': 'Peter 尚未就绪。'})
+            else:
+                hub.chat.mcp_services.schemas(retry=query.get('retry') == ['1'])
+                self._send(200, hub.chat.mcp_services.view())
+
+        def _get_screen_pop_next(self, query):
+            if not self._guard(self.headers.get('X-Token')):
+                return
+            if query:
+                self._send(400, {'error': 'query'})
+            else:
+                self._send(200, {'commands': hub.next_screen_pop()})
+
+        def _get_desktop_icon_snapshots(self):
+            if not self._guard(self.headers.get('X-Token')):
+                return
+            mgr = _get_desktop_icons_manager(hub)
+            snapshots = mgr.list_snapshots(limit=10)
+            self._send(200, {'snapshots': snapshots})
+
+        def _get_media(self, url, query):
+            if not self._guard((query.get('t') or [''])[0]):
+                return
+            media_id = url.path.rsplit('/', 1)[-1].split('.', 1)[0]
+            media = hub.media_info(media_id)
+            if not media:
+                self._send(404, {'error': 'not found'})
+                return
+            try:
+                path = hub.media_root / media['filename']
+                if media.get('kind') == 'attachment':
+                    saved = hub.read_attachment(media_id)
+                    if not saved:
+                        raise OSError('attachment unavailable')
+                    _, attachment_data = saved
+                    size = len(attachment_data)
+                else:
+                    attachment_data = None
+                limit = (MAX_GENERATED_VOICE_BYTES if media.get('mime') == VOICE_MIME else
+                         (MAX_VOICE_UPLOAD_BYTES if media.get('kind') == 'voice' else
+                          (MAX_ATTACHMENT_BYTES if media.get('kind') == 'attachment' else MAX_MEDIA_BYTES)))
+                if attachment_data is None:
+                    size = path.stat().st_size
+                if size > limit:
+                    raise OSError('media too large')
+                status = 200
+                start, end = 0, size - 1
+                range_header = self.headers.get('Range', '')
+                range_match = (re.fullmatch(r'bytes=(\d*)-(\d*)', range_header.strip())
+                               if len(range_header) <= 128 else None)
+                if range_match:
+                    first, last = range_match.groups()
+                    if first:
+                        start = int(first)
+                        end = int(last) if last else size - 1
+                    elif last:
+                        suffix_length = int(last)
+                        start = max(0, size - suffix_length)
+                        end = size - 1
+                    if start >= size or start > end or end < 0 or not first and not last:
+                        self._send(416, b'', media['mime'], {
+                            'Accept-Ranges': 'bytes', 'Content-Range': f'bytes */{size}'})
+                        return
+                    end = min(end, size - 1)
+                    status = 206
+                length = max(0, end - start + 1)
+                if attachment_data is not None:
+                    data = attachment_data[start:start + length]
+                else:
+                    with path.open('rb') as handle:
+                        handle.seek(start)
+                        data = handle.read(length)
+                if len(data) != length:
+                    raise OSError('media too large')
+            except OSError:
+                self._send(404, {'error': 'not found'})
+            else:
+                headers = {'Accept-Ranges': 'bytes'}
+                content_type = media['mime']
+                if media.get('kind') == 'attachment':
+                    if media.get('view') == 'html':
+                        content_type = 'application/octet-stream'
+                        headers['Content-Disposition'] = f'attachment; filename="{media["filename"]}"'
+                    elif media.get('view') == 'text':
+                        content_type = 'text/plain; charset=utf-8'
+                if status == 206:
+                    headers['Content-Range'] = f'bytes {start}-{end}/{size}'
+                self._send(status, data, content_type, headers)
+
         def do_GET(self):
             url = urlparse(self.path)
             query = parse_qs(url.query)
             if url.path.startswith('/game/'):
-                parts = url.path.split('/', 3)
-                if len(parts) != 4:
-                    self._send(404, {'error': 'game resource unavailable'})
-                    return
-                if not self._game_origin_guard():
-                    return
-                from urllib.parse import unquote
-                try:
-                    parts[3] = unquote(parts[3], errors='strict')
-                except UnicodeError:
-                    self._send(404, {'error': 'game resource unavailable'})
-                    return
-                manager = getattr(hub, 'game_manager', None)
-                if manager is None:
-                    self._send(404, {'error': 'game unavailable'})
-                    return
-                try:
-                    if parts[3] == 'veil-score.js':
-                        from lab_games import score_helper
-                        _folder, _entry, game_id = manager._entry(parts[2])
-                        body = score_helper(parts[2], game_id).encode('utf-8')
-                        mime = 'text/javascript; charset=utf-8'
-                    else:
-                        body, mime = manager.resource(parts[2], parts[3])
-                except (OSError, ValueError):
-                    self._send(404, {'error': 'game resource unavailable'})
-                    return
-                from lab_preview import _csp
-                self._send(200, body, mime, {
-                    'Content-Security-Policy': _csp(),
-                    'Cross-Origin-Resource-Policy': 'same-origin'})
-                return
-            if url.path == '/api/memory/panel':
-                if not self._guard(self.headers.get('X-Token')):
-                    return
-                if hub.memory_tools is None:
-                    self._send(404, {'error': 'Ombre memory is not available.'})
-                    return
-                try:
-                    self._send(200, hub.memory_tools.panel_entries())
-                except Exception:
-                    self._send(503, {'error': 'Ombre 记忆暂时无法读取。'})
+                self._get_game(url)
+            elif url.path == '/api/memory/panel':
+                self._get_memory_panel()
             elif url.path in ('/api/memory/catalog', '/api/memory/read'):
-                if not self._guard(self.headers.get('X-Token')):
-                    return
-                if hub.memory_tools is None:
-                    self._send(404, {'error': 'Ombre memory is not available.'})
-                    return
-                if url.path == '/api/memory/catalog':
-                    cursor = query.get('after', [''])[0]
-                    rendered, state, _ = hub.memory_tools.invoke('memory_catalog', {'after': cursor})
-                    if state != '成功':
-                        self._send(400 if state == '被拒绝' else 503, {'error': rendered})
-                    else:
-                        try:
-                            self._send(200, json.loads(rendered))
-                        except (TypeError, ValueError):
-                            self._send(503, {'error': 'Ombre memory catalog is temporarily unavailable.'})
-                else:
-                    memory_id = query.get('id', [''])[0]
-                    try:
-                        offset = int(query.get('offset', ['0'])[0])
-                    except (TypeError, ValueError):
-                        self._send(400, {'error': 'Invalid memory offset.'})
-                        return
-                    args = {'memory_id': memory_id, 'offset': offset}
-                    version = query.get('version', [None])[0]
-                    if version is not None:
-                        args['version'] = version
-                    rendered, state, _ = hub.memory_tools.invoke('memory_read', args)
-                    if state != '成功':
-                        self._send(404 if state == '被拒绝' else 503, {'error': rendered})
-                    else:
-                        try:
-                            self._send(200, json.loads(rendered))
-                        except (TypeError, ValueError):
-                            self._send(503, {'error': 'Ombre memory could not be read right now.'})
+                self._get_memory(url, query)
             elif url.path in ('/api/attachment', '/api/attachment-text'):
-                if not self._guard(self.headers.get('X-Token')):
-                    return
-                media_ids = query.get('id', [])
-                if len(query) != 1 or len(media_ids) != 1 or not MEDIA_ID_PATTERN.fullmatch(media_ids[0]):
-                    self._send(400, {'error': 'invalid attachment'})
-                    return
-                saved = hub.read_attachment(media_ids[0])
-                if not saved:
-                    self._send(404, {'error': 'attachment not found'})
-                    return
-                media, raw = saved
-                if url.path == '/api/attachment':
-                    self._send(200, {'attachment': media})
-                elif media.get('view') != 'text':
-                    self._send(415, {'error': 'attachment is not plain text'})
-                else:
-                    try:
-                        self._send(200, {'text': raw.decode('utf-8')})
-                    except UnicodeDecodeError:
-                        self._send(415, {'error': 'attachment is not UTF-8 text'})
+                self._get_attachment(url, query)
             elif url.path == '/api/events':
-                if self._guard(self.headers.get('X-Token')):
-                    try:
-                        after = max(0, int((query.get('after') or ['0'])[0]))
-                    except ValueError:
-                        after = 0
-                    self._send(200, hub.snapshot(after))
+                self._get_events(query)
             elif url.path == '/api/mcp':
-                if not self._guard(self.headers.get('X-Token')):
-                    return
-                if hub.chat is None or hub.stopping or hub.stopped:
-                    self._send(409, {'error': 'Peter 尚未就绪。'})
-                else:
-                    hub.chat.mcp_services.schemas(retry=query.get('retry') == ['1'])
-                    self._send(200, hub.chat.mcp_services.view())
+                self._get_mcp(query)
             elif url.path == '/api/screen-pop/next':
-                if not self._guard(self.headers.get('X-Token')):
-                    return
-                if query:
-                    self._send(400, {'error': 'query'})
-                else:
-                    self._send(200, {'commands': hub.next_screen_pop()})
+                self._get_screen_pop_next(query)
             elif url.path == '/api/desktop-icons/snapshots':
-                if not self._guard(self.headers.get('X-Token')):
-                    return
-                mgr = _get_desktop_icons_manager(hub)
-                snapshots = mgr.list_snapshots(limit=10)
-                self._send(200, {'snapshots': snapshots})
+                self._get_desktop_icon_snapshots()
             elif url.path.startswith('/media/'):
-                if not self._guard((query.get('t') or [''])[0]):
-                    return
-                media_id = url.path.rsplit('/', 1)[-1].split('.', 1)[0]
-                media = hub.media_info(media_id)
-                if not media:
-                    self._send(404, {'error': 'not found'})
-                    return
-                try:
-                    path = hub.media_root / media['filename']
-                    if media.get('kind') == 'attachment':
-                        saved = hub.read_attachment(media_id)
-                        if not saved:
-                            raise OSError('attachment unavailable')
-                        _, attachment_data = saved
-                        size = len(attachment_data)
-                    else:
-                        attachment_data = None
-                    limit = (MAX_GENERATED_VOICE_BYTES if media.get('mime') == VOICE_MIME else
-                             (MAX_VOICE_UPLOAD_BYTES if media.get('kind') == 'voice' else
-                              (MAX_ATTACHMENT_BYTES if media.get('kind') == 'attachment' else MAX_MEDIA_BYTES)))
-                    if attachment_data is None:
-                        size = path.stat().st_size
-                    if size > limit:
-                        raise OSError('media too large')
-                    status = 200
-                    start, end = 0, size - 1
-                    range_header = self.headers.get('Range', '')
-                    range_match = (re.fullmatch(r'bytes=(\d*)-(\d*)', range_header.strip())
-                                   if len(range_header) <= 128 else None)
-                    if range_match:
-                        first, last = range_match.groups()
-                        if first:
-                            start = int(first)
-                            end = int(last) if last else size - 1
-                        elif last:
-                            suffix_length = int(last)
-                            start = max(0, size - suffix_length)
-                            end = size - 1
-                        if start >= size or start > end or end < 0 or not first and not last:
-                            self._send(416, b'', media['mime'], {
-                                'Accept-Ranges': 'bytes', 'Content-Range': f'bytes */{size}'})
-                            return
-                        end = min(end, size - 1)
-                        status = 206
-                    length = max(0, end - start + 1)
-                    if attachment_data is not None:
-                        data = attachment_data[start:start + length]
-                    else:
-                        with path.open('rb') as handle:
-                            handle.seek(start)
-                            data = handle.read(length)
-                    if len(data) != length:
-                        raise OSError('media too large')
-                except OSError:
-                    self._send(404, {'error': 'not found'})
-                else:
-                    headers = {'Accept-Ranges': 'bytes'}
-                    content_type = media['mime']
-                    if media.get('kind') == 'attachment':
-                        if media.get('view') == 'html':
-                            content_type = 'application/octet-stream'
-                            headers['Content-Disposition'] = f'attachment; filename="{media["filename"]}"'
-                        elif media.get('view') == 'text':
-                            content_type = 'text/plain; charset=utf-8'
-                    if status == 206:
-                        headers['Content-Range'] = f'bytes {start}-{end}/{size}'
-                    self._send(status, data, content_type, headers)
+                self._get_media(url, query)
             else:
                 self._send(404, {'error': 'not found'})
+
+        def _post_game_score(self, url):
+            parts = url.path.split('/')
+            if len(parts) != 4 or parts[3] != 'score':
+                self._send(404, {'error': 'game endpoint unavailable'})
+                return
+            if not self._game_origin_guard(post=True):
+                return
+            manager = getattr(hub, 'game_manager', None)
+            if manager is None:
+                self._send(404, {'error': 'game unavailable'})
+                return
+            try:
+                if self.headers.get('Content-Type', '').split(';')[0].strip().lower() != 'application/json':
+                    raise ValueError('JSON is required.')
+                length = int(self.headers.get('Content-Length') or 0)
+                if not 0 < length <= 2048:
+                    raise ValueError('Score body exceeds the limit.')
+                result = manager.save(parts[2], self.rfile.read(length))
+            except ValueError as exc:
+                self._send(400, {'error': str(exc)})
+            except OSError:
+                self._send(500, {'error': 'Score could not be saved.'})
+            else:
+                self._send(200, result)
+            return
+
+        def _post_screen_pop(self, url):
+            try:
+                length = int(self.headers.get('Content-Length') or 0)
+                if not 0 < length <= 2048:
+                    raise ValueError
+                body = json.loads(self.rfile.read(length))
+                if not isinstance(body, dict):
+                    raise ValueError
+            except (ValueError, TypeError, UnicodeError):
+                self._send(400, {'error': 'invalid screen-pop request'})
+                return
+            if url.path == '/api/screen-pop/claim':
+                if set(body) != {'id'} or not isinstance(body.get('id'), str):
+                    self._send(400, {'error': 'invalid screen-pop id'})
+                    return
+                command = hub.claim_screen_pop(body['id'])
+                if command is None:
+                    self._send(409, {'error': 'screen-pop is no longer pending'})
+                else:
+                    self._send(200, {'command': command})
+                return
+            event = body.get('event')
+            expected = ({'id', 'event', 'style', 'total'} if event == 'shown'
+                        else {'id', 'event', 'item'})
+            if set(body) != expected:
+                self._send(409, {'error': 'screen-pop event was rejected'})
+                return
+            try:
+                accepted = hub.record_screen_pop_event(body)
+            except Exception:
+                self._send(500, {'error': 'screen-pop event could not be saved'})
+                return
+            self._send(200 if accepted else 409,
+                       {'ok': True} if accepted else {'error': 'screen-pop event was rejected'})
+            return
+
+        def _post_memory_change(self, url):
+            try:
+                length = int(self.headers.get('Content-Length') or 0)
+                if not 0 < length <= 64 * 1024:
+                    raise ValueError
+                body = json.loads(self.rfile.read(length))
+                if not isinstance(body, dict) or not isinstance(body.get('id'), str):
+                    raise ValueError
+            except (ValueError, TypeError, UnicodeError):
+                self._send(400, {'error': '无效请求。'})
+                return
+            if hub.memory_tools is None:
+                self._send(404, {'error': 'Ombre 记忆暂不可用。'})
+                return
+            try:
+                if url.path == '/api/memory/edit':
+                    ok, message = hub.memory_tools.panel_edit(body['id'], body.get('changes') or {}
+                                                              if isinstance(body.get('changes'), dict) else {})
+                else:
+                    ok, message = hub.memory_tools.panel_delete(body['id'])
+            except Exception:
+                ok, message = False, 'Ombre 暂时没有响应，这次没有改动。'
+            self._send(200 if ok else 409, {'ok': True, 'message': message} if ok else {'error': message})
+            return
+
+        def _post_media(self):
+            try:
+                length = int(self.headers.get('Content-Length') or 0)
+                if not 0 < length <= MAX_MEDIA_BYTES * 2:
+                    raise ValueError
+                body = json.loads(self.rfile.read(length))
+                if not isinstance(body, dict):
+                    raise ValueError
+                mime = body.get('mime')
+                encoded = body.get('data')
+                if not isinstance(mime, str) or not isinstance(encoded, str):
+                    raise ValueError
+                raw = base64.b64decode(encoded, validate=True)
+                media = hub.save_media(mime, raw, body.get('name', 'image'))
+                if not media:
+                    raise ValueError
+            except (ValueError, base64.binascii.Error):
+                self._send(400, {'error': 'invalid image'})
+            except OSError:
+                self._send(500, {'error': 'image storage failed'})
+            else:
+                self._send(201, {'ok': True, 'media': media})
+            return
+
+        def _post_transcribe(self):
+            try:
+                length = int(self.headers.get('Content-Length') or 0)
+                if not 0 < length <= MAX_VOICE_UPLOAD_BYTES * 2:
+                    raise ValueError
+                body = json.loads(self.rfile.read(length))
+                if not isinstance(body, dict):
+                    raise ValueError
+                mime, encoded = body.get('mime'), body.get('data')
+                if not isinstance(mime, str) or mime not in VOICE_TYPES or not isinstance(encoded, str):
+                    raise ValueError
+                raw = base64.b64decode(encoded, validate=True)
+                if not raw or len(raw) > MAX_VOICE_UPLOAD_BYTES:
+                    raise ValueError
+            except (ValueError, TypeError, base64.binascii.Error):
+                self._send(400, {'error': 'invalid voice'})
+                return
+            transcript, error = hub.transcribe_voice_bytes(raw, mime, 'dictation' + VOICE_TYPES[mime])
+            self._send(200, {'ok': True, 'transcript': transcript or '',
+                             'transcription_error': error or ''})
+            return
+
+        def _post_voice(self):
+            try:
+                length = int(self.headers.get('Content-Length') or 0)
+                if not 0 < length <= MAX_VOICE_UPLOAD_BYTES * 2:
+                    raise ValueError
+                body = json.loads(self.rfile.read(length))
+                mime, encoded = body.get('mime'), body.get('data')
+                if not isinstance(mime, str) or not isinstance(encoded, str):
+                    raise ValueError
+                raw = base64.b64decode(encoded, validate=True)
+                media = hub.save_voice(mime, raw, body.get('name', 'voice'))
+                if not media:
+                    raise ValueError
+            except (ValueError, TypeError, base64.binascii.Error):
+                self._send(400, {'error': 'invalid voice'})
+                return
+            except OSError:
+                self._send(500, {'error': 'voice storage failed'})
+                return
+            if body.get('send_first') is True:
+                hub.start_voice_transcription(media['id'])
+                media = hub.media_info(media['id'])
+                self._send(202, {'ok': True, 'media': media})
+            else:
+                transcript, error = hub.transcribe_voice(media['id'])
+                media = hub.media_info(media['id'])
+                self._send(200, {'ok': True, 'media': media, 'transcript': transcript,
+                                 'transcription_error': error})
+            return
+
+        def _post_message_action(self, body):
+            action, message_id = body.get('action'), body.get('message_id')
+            if action == 'memory':
+                try:
+                    items = hub.message_memory(message_id)
+                except UserError as exc:
+                    self._send(409, {'ok': False, 'message': str(exc)})
+                else:
+                    self._send(200, {'ok': True, 'items': items})
+                return
+            result = hub.message_action(action, message_id, message_ids=body.get('message_ids'),
+                                        content=body.get('content'), favorite=body.get('favorite'))
+            accepted = result in ('已开始重新生成。', '消息已删除。', '已删除所选消息。', '消息已撤回。',
+                                  '消息已更新。', '已收藏消息。', '已取消收藏。')
+            self._send(200 if accepted else 409,
+                       {'ok': accepted, 'message': result, 'action': action if accepted else None})
+            return
+
+        def _post_send(self, body):
+            text = body.get('text')
+            request_id = body.get('request_id')
+            if not isinstance(text, str) or not text.strip():
+                self._send(400, {'error': 'empty'})
+            elif not isinstance(request_id, str) or not request_id or len(request_id) > 100:
+                self._send(400, {'error': 'request_id'})
+            else:
+                text = text.strip()
+                supplied_media = body.get('media') if 'media' in body else None
+                if (supplied_media is not None and
+                        (not isinstance(supplied_media, dict) or supplied_media.get('id') is None)):
+                    result = 'media'
+                else:
+                    media_id = supplied_media.get('id') if supplied_media is not None else None
+                    result = hub.submit(text, request_id, media_id)
+                if result in ('accepted', 'duplicate'):
+                    if result == 'accepted' and text == '/quit':
+                        hub.push('notice', '正在保存并退出，稍等几秒，然后可以关掉这个页面。')
+                    self._send(200, {'ok': True, 'duplicate': result == 'duplicate'})
+                elif result == 'media':
+                    self._send(400, {'error': 'invalid media'})
+                elif result == 'media_command':
+                    self._send(400, {'error': 'media cannot be sent with a command'})
+                elif result == 'storage':
+                    self._send(500, {'error': 'storage', 'message': hub.submit_errors.pop(request_id, '')})
+                elif result == 'media_storage':
+                    response = {'error': 'media_storage', 'message': hub.submit_errors.pop(request_id, '')}
+                    if (isinstance(supplied_media, dict) and isinstance(media_id, str)
+                            and hub.media_info(media_id)
+                            and hub.media_info(media_id).get('kind') == 'voice'):
+                        response['media'] = hub.media_info(media_id)
+                    self._send(500, response)
+                else:
+                    response = {'error': result}
+                    if (isinstance(supplied_media, dict) and isinstance(media_id, str)
+                            and hub.media_info(media_id)
+                            and hub.media_info(media_id).get('kind') == 'voice'):
+                        hub.mark_voice_unsent(
+                            hub.media_info(media_id),
+                            'Peter 正在回复或暂时不可用；录音和识别文字已保留，可以重试发送。')
+                        response['media'] = hub.media_info(media_id)
+                    self._send(409, response)
+
+        def _post_voice_retry(self, body):
+            media_id = body.get('media_id')
+            if not isinstance(media_id, str) or not MEDIA_ID_PATTERN.fullmatch(media_id):
+                self._send(400, {'error': 'invalid voice'})
+            else:
+                transcript, error = hub.retry_voice_transcription(media_id)
+                media = hub.media_info(media_id)
+                if not media:
+                    self._send(404, {'error': 'invalid voice'})
+                else:
+                    self._send(200, {'ok': True, 'media': media, 'transcript': transcript,
+                                     'transcription_error': error})
+
+        def _post_approve(self, body):
+            answer = body.get('answer')
+            if answer not in ('y', 'n'):
+                self._send(400, {'error': 'answer'})
+            elif not hub.answer(body.get('id'), answer):
+                self._send(409, {'error': 'no such pending approval'})
+            else:
+                self._send(200, {'ok': True})
+
+        def _post_stop(self):
+            if hub.stop_turn():
+                self._send(200, {'ok': True})
+            else:
+                self._send(409, {'error': 'not replying'})
+
+        def _post_desktop_icons_restore(self, body):
+            mgr = _get_desktop_icons_manager(hub)
+            snap_id = body.get('snapshot_id') if isinstance(body, dict) else None
+            try:
+                res = mgr.restore_snapshot(snapshot_id=snap_id)
+                self._send(200, {'ok': True, 'result': res})
+            except Exception as exc:
+                self._send(400, {'error': str(exc)})
+
+        def _post_typing(self, body):
+            if not isinstance(body.get('typing'), bool):
+                self._send(400, {'error': 'typing'})
+            elif hub.set_typing(body['typing']):
+                self._send(200, {'ok': True})
+            else:
+                self._send(409, {'error': 'stopping'})
+
+        def _post_request_reply(self):
+            if hub.request_reply():
+                self._send(202, {'ok': True})
+            else:
+                self._send(409, {'error': 'stopping'})
+
+        def _post_activity(self, body):
+            enabled = body.get('enabled')
+            if not isinstance(enabled, bool):
+                self._send(400, {'error': 'enabled'})
+            else:
+                try:
+                    if not hub.set_activity(enabled):
+                        self._send(409, {'error': 'stopping'})
+                    else:
+                        self._send(200, {'ok': True, 'enabled': enabled})
+                except UserError as exc:
+                    self._send(500, {'error': str(exc)})
+
+        def _post_glance(self, body):
+            enabled = body.get('enabled')
+            if not isinstance(enabled, bool):
+                self._send(400, {'error': 'enabled'})
+            else:
+                try:
+                    if not hub.set_glance(enabled):
+                        self._send(409, {'error': 'unavailable'})
+                    else:
+                        self._send(200, {'ok': True, 'enabled': hub.glance.enabled()})
+                except UserError as exc:
+                    self._send(500, {'error': str(exc)})
+
+        def _post_models(self, url, body):
+            from model_settings import SettingsError
+            try:
+                with hub.cond:
+                    if hub.stopping or hub.stopped or hub.chat is None or hub.chat.cfg.models is None:
+                        self._send(409, {'error': 'unavailable'})
+                        return
+                if url.path == '/api/models':
+                    view = hub.save_models(body)
+                else:
+                    view = hub.use_model(body.get('role'), body.get('model'))
+            except SettingsError as exc:
+                self._send(400, {'ok': False, 'message': str(exc)})
+            except OSError:
+                self._send(500, {'ok': False, 'message': '设置文件写不进去，请检查磁盘。'})
+            else:
+                self._send(200, {'ok': True, 'models': view})
+
+        def _post_mcp(self, body):
+            from mcp_services import MCPConfigError, MCPConflict
+            if hub.chat is None or hub.stopping or hub.stopped:
+                self._send(409, {'error': 'Peter 尚未就绪。'})
+            else:
+                try:
+                    if not isinstance(body.get('revision'), int) or isinstance(body.get('revision'), bool):
+                        self._send(400, {'error': '缺少 MCP 配置版本，请刷新页面。'})
+                        return
+                    view = hub.chat.mcp_services.save(body, expected_revision=body['revision'])
+                    hub.chat.mcp_services.schemas()
+                    self._send(200, hub.chat.mcp_services.view())
+                except MCPConflict as exc:
+                    self._send(409, {'error': str(exc)})
+                except MCPConfigError as exc:
+                    self._send(400, {'error': str(exc)})
+                except OSError:
+                    self._send(500, {'error': 'MCP 配置保存失败。'})
+
+        def _post_quiet_hours(self, body):
+            enabled = body.get('enabled')
+            if not isinstance(enabled, bool):
+                self._send(400, {'error': 'enabled'})
+            else:
+                try:
+                    if not hub.set_quiet_hours(enabled):
+                        self._send(409, {'error': 'unavailable'})
+                    else:
+                        self._send(200, {'ok': True, 'enabled': hub.autonomy.quiet_enabled()})
+                except UserError as exc:
+                    self._send(500, {'error': str(exc)})
+
+        def _post_codex_watch(self, body):
+            enabled = body.get('enabled')
+            if not isinstance(enabled, bool):
+                self._send(400, {'error': 'enabled'})
+            else:
+                try:
+                    if not hub.set_codex_watch(enabled):
+                        self._send(409, {'error': 'unavailable'})
+                    else:
+                        self._send(200, {'ok': True, 'enabled': hub.codex_watch.enabled()})
+                except UserError as exc:
+                    self._send(500, {'error': str(exc)})
+
+        def _post_exit(self):
+            state = hub.request_stop()
+            if state == 'accepted':
+                self._send(202, {'ok': True, 'state': 'accepted'})
+            elif state == 'stopping':
+                self._send(202, {'ok': True, 'state': 'stopping'})
+            else:
+                self._send(200, {'ok': True, 'state': 'stopped'})
 
         def do_POST(self):
             url = urlparse(self.path)
             if url.path.startswith('/game/'):
-                parts = url.path.split('/')
-                if len(parts) != 4 or parts[3] != 'score':
-                    self._send(404, {'error': 'game endpoint unavailable'})
-                    return
-                if not self._game_origin_guard(post=True):
-                    return
-                manager = getattr(hub, 'game_manager', None)
-                if manager is None:
-                    self._send(404, {'error': 'game unavailable'})
-                    return
-                try:
-                    if self.headers.get('Content-Type', '').split(';')[0].strip().lower() != 'application/json':
-                        raise ValueError('JSON is required.')
-                    length = int(self.headers.get('Content-Length') or 0)
-                    if not 0 < length <= 2048:
-                        raise ValueError('Score body exceeds the limit.')
-                    result = manager.save(parts[2], self.rfile.read(length))
-                except ValueError as exc:
-                    self._send(400, {'error': str(exc)})
-                except OSError:
-                    self._send(500, {'error': 'Score could not be saved.'})
-                else:
-                    self._send(200, result)
+                self._post_game_score(url)
                 return
             if not self._guard(self.headers.get('X-Token')):
                 return
             if url.path in ('/api/screen-pop/claim', '/api/screen-pop/event'):
-                try:
-                    length = int(self.headers.get('Content-Length') or 0)
-                    if not 0 < length <= 2048:
-                        raise ValueError
-                    body = json.loads(self.rfile.read(length))
-                    if not isinstance(body, dict):
-                        raise ValueError
-                except (ValueError, TypeError, UnicodeError):
-                    self._send(400, {'error': 'invalid screen-pop request'})
-                    return
-                if url.path == '/api/screen-pop/claim':
-                    if set(body) != {'id'} or not isinstance(body.get('id'), str):
-                        self._send(400, {'error': 'invalid screen-pop id'})
-                        return
-                    command = hub.claim_screen_pop(body['id'])
-                    if command is None:
-                        self._send(409, {'error': 'screen-pop is no longer pending'})
-                    else:
-                        self._send(200, {'command': command})
-                    return
-                event = body.get('event')
-                expected = ({'id', 'event', 'style', 'total'} if event == 'shown'
-                            else {'id', 'event', 'item'})
-                if set(body) != expected:
-                    self._send(409, {'error': 'screen-pop event was rejected'})
-                    return
-                try:
-                    accepted = hub.record_screen_pop_event(body)
-                except Exception:
-                    self._send(500, {'error': 'screen-pop event could not be saved'})
-                    return
-                self._send(200 if accepted else 409,
-                           {'ok': True} if accepted else {'error': 'screen-pop event was rejected'})
+                self._post_screen_pop(url)
                 return
             if url.path in ('/api/memory/edit', '/api/memory/delete'):
-                try:
-                    length = int(self.headers.get('Content-Length') or 0)
-                    if not 0 < length <= 64 * 1024:
-                        raise ValueError
-                    body = json.loads(self.rfile.read(length))
-                    if not isinstance(body, dict) or not isinstance(body.get('id'), str):
-                        raise ValueError
-                except (ValueError, TypeError, UnicodeError):
-                    self._send(400, {'error': '无效请求。'})
-                    return
-                if hub.memory_tools is None:
-                    self._send(404, {'error': 'Ombre 记忆暂不可用。'})
-                    return
-                try:
-                    if url.path == '/api/memory/edit':
-                        ok, message = hub.memory_tools.panel_edit(body['id'], body.get('changes') or {}
-                                                                  if isinstance(body.get('changes'), dict) else {})
-                    else:
-                        ok, message = hub.memory_tools.panel_delete(body['id'])
-                except Exception:
-                    ok, message = False, 'Ombre 暂时没有响应，这次没有改动。'
-                self._send(200 if ok else 409, {'ok': True, 'message': message} if ok else {'error': message})
+                self._post_memory_change(url)
                 return
             if url.path == '/api/media':
-                try:
-                    length = int(self.headers.get('Content-Length') or 0)
-                    if not 0 < length <= MAX_MEDIA_BYTES * 2:
-                        raise ValueError
-                    body = json.loads(self.rfile.read(length))
-                    if not isinstance(body, dict):
-                        raise ValueError
-                    mime = body.get('mime')
-                    encoded = body.get('data')
-                    if not isinstance(mime, str) or not isinstance(encoded, str):
-                        raise ValueError
-                    raw = base64.b64decode(encoded, validate=True)
-                    media = hub.save_media(mime, raw, body.get('name', 'image'))
-                    if not media:
-                        raise ValueError
-                except (ValueError, base64.binascii.Error):
-                    self._send(400, {'error': 'invalid image'})
-                except OSError:
-                    self._send(500, {'error': 'image storage failed'})
-                else:
-                    self._send(201, {'ok': True, 'media': media})
+                self._post_media()
                 return
             if url.path == '/api/transcribe':
-                try:
-                    length = int(self.headers.get('Content-Length') or 0)
-                    if not 0 < length <= MAX_VOICE_UPLOAD_BYTES * 2:
-                        raise ValueError
-                    body = json.loads(self.rfile.read(length))
-                    if not isinstance(body, dict):
-                        raise ValueError
-                    mime, encoded = body.get('mime'), body.get('data')
-                    if not isinstance(mime, str) or mime not in VOICE_TYPES or not isinstance(encoded, str):
-                        raise ValueError
-                    raw = base64.b64decode(encoded, validate=True)
-                    if not raw or len(raw) > MAX_VOICE_UPLOAD_BYTES:
-                        raise ValueError
-                except (ValueError, TypeError, base64.binascii.Error):
-                    self._send(400, {'error': 'invalid voice'})
-                    return
-                transcript, error = hub.transcribe_voice_bytes(raw, mime, 'dictation' + VOICE_TYPES[mime])
-                self._send(200, {'ok': True, 'transcript': transcript or '',
-                                 'transcription_error': error or ''})
+                self._post_transcribe()
                 return
             if url.path == '/api/voice':
-                try:
-                    length = int(self.headers.get('Content-Length') or 0)
-                    if not 0 < length <= MAX_VOICE_UPLOAD_BYTES * 2:
-                        raise ValueError
-                    body = json.loads(self.rfile.read(length))
-                    mime, encoded = body.get('mime'), body.get('data')
-                    if not isinstance(mime, str) or not isinstance(encoded, str):
-                        raise ValueError
-                    raw = base64.b64decode(encoded, validate=True)
-                    media = hub.save_voice(mime, raw, body.get('name', 'voice'))
-                    if not media:
-                        raise ValueError
-                except (ValueError, TypeError, base64.binascii.Error):
-                    self._send(400, {'error': 'invalid voice'})
-                    return
-                except OSError:
-                    self._send(500, {'error': 'voice storage failed'})
-                    return
-                if body.get('send_first') is True:
-                    hub.start_voice_transcription(media['id'])
-                    media = hub.media_info(media['id'])
-                    self._send(202, {'ok': True, 'media': media})
-                else:
-                    transcript, error = hub.transcribe_voice(media['id'])
-                    media = hub.media_info(media['id'])
-                    self._send(200, {'ok': True, 'media': media, 'transcript': transcript,
-                                     'transcription_error': error})
+                self._post_voice()
                 return
             try:
                 length = int(self.headers.get('Content-Length') or 0)
@@ -2046,201 +2308,36 @@ def make_handler(hub, token):
                 self._send(400, {'error': 'bad request'})
                 return
             if url.path == '/api/message/action':
-                action, message_id = body.get('action'), body.get('message_id')
-                if action == 'memory':
-                    try:
-                        items = hub.message_memory(message_id)
-                    except UserError as exc:
-                        self._send(409, {'ok': False, 'message': str(exc)})
-                    else:
-                        self._send(200, {'ok': True, 'items': items})
-                    return
-                result = hub.message_action(action, message_id, message_ids=body.get('message_ids'),
-                                            content=body.get('content'), favorite=body.get('favorite'))
-                accepted = result in ('已开始重新生成。', '消息已删除。', '已删除所选消息。', '消息已撤回。',
-                                      '消息已更新。', '已收藏消息。', '已取消收藏。')
-                self._send(200 if accepted else 409,
-                           {'ok': accepted, 'message': result, 'action': action if accepted else None})
+                self._post_message_action(body)
                 return
             if url.path == '/api/send':
-                text = body.get('text')
-                request_id = body.get('request_id')
-                if not isinstance(text, str) or not text.strip():
-                    self._send(400, {'error': 'empty'})
-                elif not isinstance(request_id, str) or not request_id or len(request_id) > 100:
-                    self._send(400, {'error': 'request_id'})
-                else:
-                    text = text.strip()
-                    supplied_media = body.get('media') if 'media' in body else None
-                    if (supplied_media is not None and
-                            (not isinstance(supplied_media, dict) or supplied_media.get('id') is None)):
-                        result = 'media'
-                    else:
-                        media_id = supplied_media.get('id') if supplied_media is not None else None
-                        result = hub.submit(text, request_id, media_id)
-                    if result in ('accepted', 'duplicate'):
-                        if result == 'accepted' and text == '/quit':
-                            hub.push('notice', '正在保存并退出，稍等几秒，然后可以关掉这个页面。')
-                        self._send(200, {'ok': True, 'duplicate': result == 'duplicate'})
-                    elif result == 'media':
-                        self._send(400, {'error': 'invalid media'})
-                    elif result == 'media_command':
-                        self._send(400, {'error': 'media cannot be sent with a command'})
-                    elif result == 'storage':
-                        self._send(500, {'error': 'storage', 'message': hub.submit_errors.pop(request_id, '')})
-                    elif result == 'media_storage':
-                        response = {'error': 'media_storage', 'message': hub.submit_errors.pop(request_id, '')}
-                        if (isinstance(supplied_media, dict) and isinstance(media_id, str)
-                                and hub.media_info(media_id)
-                                and hub.media_info(media_id).get('kind') == 'voice'):
-                            response['media'] = hub.media_info(media_id)
-                        self._send(500, response)
-                    else:
-                        response = {'error': result}
-                        if (isinstance(supplied_media, dict) and isinstance(media_id, str)
-                                and hub.media_info(media_id)
-                                and hub.media_info(media_id).get('kind') == 'voice'):
-                            hub.mark_voice_unsent(
-                                hub.media_info(media_id),
-                                'Peter 正在回复或暂时不可用；录音和识别文字已保留，可以重试发送。')
-                            response['media'] = hub.media_info(media_id)
-                        self._send(409, response)
+                self._post_send(body)
             elif url.path == '/api/voice/retry':
-                media_id = body.get('media_id')
-                if not isinstance(media_id, str) or not MEDIA_ID_PATTERN.fullmatch(media_id):
-                    self._send(400, {'error': 'invalid voice'})
-                else:
-                    transcript, error = hub.retry_voice_transcription(media_id)
-                    media = hub.media_info(media_id)
-                    if not media:
-                        self._send(404, {'error': 'invalid voice'})
-                    else:
-                        self._send(200, {'ok': True, 'media': media, 'transcript': transcript,
-                                         'transcription_error': error})
+                self._post_voice_retry(body)
             elif url.path == '/api/approve':
-                answer = body.get('answer')
-                if answer not in ('y', 'n'):
-                    self._send(400, {'error': 'answer'})
-                elif not hub.answer(body.get('id'), answer):
-                    self._send(409, {'error': 'no such pending approval'})
-                else:
-                    self._send(200, {'ok': True})
+                self._post_approve(body)
             elif url.path == '/api/stop':
-                if hub.stop_turn():
-                    self._send(200, {'ok': True})
-                else:
-                    self._send(409, {'error': 'not replying'})
+                self._post_stop()
             elif url.path == '/api/desktop-icons/restore':
-                mgr = _get_desktop_icons_manager(hub)
-                snap_id = body.get('snapshot_id') if isinstance(body, dict) else None
-                try:
-                    res = mgr.restore_snapshot(snapshot_id=snap_id)
-                    self._send(200, {'ok': True, 'result': res})
-                except Exception as exc:
-                    self._send(400, {'error': str(exc)})
+                self._post_desktop_icons_restore(body)
             elif url.path == '/api/typing':
-                if not isinstance(body.get('typing'), bool):
-                    self._send(400, {'error': 'typing'})
-                elif hub.set_typing(body['typing']):
-                    self._send(200, {'ok': True})
-                else:
-                    self._send(409, {'error': 'stopping'})
+                self._post_typing(body)
             elif url.path == '/api/request-reply':
-                if hub.request_reply():
-                    self._send(202, {'ok': True})
-                else:
-                    self._send(409, {'error': 'stopping'})
+                self._post_request_reply()
             elif url.path == '/api/activity':
-                enabled = body.get('enabled')
-                if not isinstance(enabled, bool):
-                    self._send(400, {'error': 'enabled'})
-                else:
-                    try:
-                        if not hub.set_activity(enabled):
-                            self._send(409, {'error': 'stopping'})
-                        else:
-                            self._send(200, {'ok': True, 'enabled': enabled})
-                    except UserError as exc:
-                        self._send(500, {'error': str(exc)})
+                self._post_activity(body)
             elif url.path == '/api/glance':
-                enabled = body.get('enabled')
-                if not isinstance(enabled, bool):
-                    self._send(400, {'error': 'enabled'})
-                else:
-                    try:
-                        if not hub.set_glance(enabled):
-                            self._send(409, {'error': 'unavailable'})
-                        else:
-                            self._send(200, {'ok': True, 'enabled': hub.glance.enabled()})
-                    except UserError as exc:
-                        self._send(500, {'error': str(exc)})
+                self._post_glance(body)
             elif url.path in ('/api/models', '/api/models/use'):
-                from model_settings import SettingsError
-                try:
-                    with hub.cond:
-                        if hub.stopping or hub.stopped or hub.chat is None or hub.chat.cfg.models is None:
-                            self._send(409, {'error': 'unavailable'})
-                            return
-                    if url.path == '/api/models':
-                        view = hub.save_models(body)
-                    else:
-                        view = hub.use_model(body.get('role'), body.get('model'))
-                except SettingsError as exc:
-                    self._send(400, {'ok': False, 'message': str(exc)})
-                except OSError:
-                    self._send(500, {'ok': False, 'message': '设置文件写不进去，请检查磁盘。'})
-                else:
-                    self._send(200, {'ok': True, 'models': view})
+                self._post_models(url, body)
             elif url.path == '/api/mcp':
-                from mcp_services import MCPConfigError, MCPConflict
-                if hub.chat is None or hub.stopping or hub.stopped:
-                    self._send(409, {'error': 'Peter 尚未就绪。'})
-                else:
-                    try:
-                        if not isinstance(body.get('revision'), int) or isinstance(body.get('revision'), bool):
-                            self._send(400, {'error': '缺少 MCP 配置版本，请刷新页面。'})
-                            return
-                        view = hub.chat.mcp_services.save(body, expected_revision=body['revision'])
-                        hub.chat.mcp_services.schemas()
-                        self._send(200, hub.chat.mcp_services.view())
-                    except MCPConflict as exc:
-                        self._send(409, {'error': str(exc)})
-                    except MCPConfigError as exc:
-                        self._send(400, {'error': str(exc)})
-                    except OSError:
-                        self._send(500, {'error': 'MCP 配置保存失败。'})
+                self._post_mcp(body)
             elif url.path == '/api/quiet-hours':
-                enabled = body.get('enabled')
-                if not isinstance(enabled, bool):
-                    self._send(400, {'error': 'enabled'})
-                else:
-                    try:
-                        if not hub.set_quiet_hours(enabled):
-                            self._send(409, {'error': 'unavailable'})
-                        else:
-                            self._send(200, {'ok': True, 'enabled': hub.autonomy.quiet_enabled()})
-                    except UserError as exc:
-                        self._send(500, {'error': str(exc)})
+                self._post_quiet_hours(body)
             elif url.path == '/api/codex-watch':
-                enabled = body.get('enabled')
-                if not isinstance(enabled, bool):
-                    self._send(400, {'error': 'enabled'})
-                else:
-                    try:
-                        if not hub.set_codex_watch(enabled):
-                            self._send(409, {'error': 'unavailable'})
-                        else:
-                            self._send(200, {'ok': True, 'enabled': hub.codex_watch.enabled()})
-                    except UserError as exc:
-                        self._send(500, {'error': str(exc)})
+                self._post_codex_watch(body)
             elif url.path == '/api/exit':
-                state = hub.request_stop()
-                if state == 'accepted':
-                    self._send(202, {'ok': True, 'state': 'accepted'})
-                elif state == 'stopping':
-                    self._send(202, {'ok': True, 'state': 'stopping'})
-                else:
-                    self._send(200, {'ok': True, 'state': 'stopped'})
+                self._post_exit()
             else:
                 self._send(404, {'error': 'not found'})
 
