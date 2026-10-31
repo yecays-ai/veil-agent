@@ -1347,6 +1347,8 @@ class Hub:
             try:
                 media = self.commit_media(media_id, request_id, text_digest)
             except OSError:
+                with self.cond:
+                    self.submit_errors[request_id] = '图片或语音文件没能保存到本机。'
                 return 'media_storage'
             if media_id is not None and not media:
                 return 'media'
