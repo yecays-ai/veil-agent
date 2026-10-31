@@ -1313,14 +1313,26 @@ def collapse_latest_photo(messages):
             return
 
 
+def collapse_all_history_photos(messages):
+    """Replace all historical photos with durable text placeholders so they don't consume vision tokens."""
+    for message in messages:
+        content = message.get('content') if isinstance(message, dict) else None
+        if message.get('role') == 'user' and isinstance(content, list):
+            text = next((part.get('text') for part in content
+                         if isinstance(part, dict) and part.get('type') == 'text'), '')
+            message['content'] = PHOTO_PLACEHOLDER + (('\n' + text) if text else '')
+
+
 class ChatOutput(str):
-    def __new__(cls, text, media=None, message_id=None, request_id=None, memory_refs=None, attachments=None):
+    def __new__(cls, text, media=None, message_id=None, request_id=None, memory_refs=None, attachments=None,
+                is_error=False):
         value = super().__new__(cls, text)
         value.media = media
         value.message_id = message_id
         value.request_id = request_id
         value.memory_refs = list(memory_refs or [])
         value.attachments = list(attachments or [])
+        value.is_error = bool(is_error)
         return value
 
 
@@ -1944,6 +1956,11 @@ class Chat:
     def start_new_conversation(self):
         notes_result = (self.short_term_notes.extract_before_new_conversation()
                         if self.short_term_notes else False)
+        # Cancel uncommitted incoming messages so the new conversation starts cleanly.
+        uncommitted = self.recover_uncommitted_incoming()
+        if uncommitted:
+            self.cancel_incoming([r['message_id'] for r in uncommitted if r.get('message_id')],
+                                 reason='new_conversation')
         # Cursor only: old messages stay on disk.
         start = len(self.store.read(self.path))
         path = self.session_path
@@ -2162,6 +2179,15 @@ class Chat:
         self.store.append(f'{self.cfg.id}/incoming-submissions.jsonl', event)
         return event['message_id']
 
+    def mark_incoming_processing(self, message_ids):
+        ids = [mid for mid in message_ids if isinstance(mid, str) and mid]
+        if not ids:
+            return
+        for mid in ids:
+            self.store.append(f'{self.cfg.id}/incoming-submissions.jsonl', {
+                'message_id': mid, 'state': 'processing', 'time': now()
+            })
+
     def commit_incoming(self, message_ids):
         ids = [mid for mid in message_ids if isinstance(mid, str) and mid]
         if not ids:
@@ -2171,20 +2197,77 @@ class Chat:
                 'message_id': mid, 'state': 'committed', 'time': now()
             })
 
+    def fail_incoming(self, message_ids, reason='failed'):
+        ids = [mid for mid in message_ids if isinstance(mid, str) and mid]
+        if not ids:
+            return
+        for mid in ids:
+            self.store.append(f'{self.cfg.id}/incoming-submissions.jsonl', {
+                'message_id': mid, 'state': 'failed', 'reason': str(reason), 'time': now()
+            })
+
+    def cancel_incoming(self, message_ids, reason='cancelled'):
+        ids = [mid for mid in message_ids if isinstance(mid, str) and mid]
+        if not ids:
+            return
+        for mid in ids:
+            self.store.append(f'{self.cfg.id}/incoming-submissions.jsonl', {
+                'message_id': mid, 'state': 'cancelled', 'reason': str(reason), 'time': now()
+            })
+
+    def mark_incoming_uncertain(self, message_ids, reason='uncertain'):
+        ids = [mid for mid in message_ids if isinstance(mid, str) and mid]
+        if not ids:
+            return
+        for mid in ids:
+            self.store.append(f'{self.cfg.id}/incoming-submissions.jsonl', {
+                'message_id': mid, 'state': 'uncertain', 'reason': str(reason), 'time': now()
+            })
+
     def recover_uncommitted_incoming(self):
         rows = self.store.read(f'{self.cfg.id}/incoming-submissions.jsonl')
         if not rows:
             return []
-        committed = {row['message_id'] for row in rows if row.get('state') == 'committed'}
-        committed |= {row.get('message_id') for row in self.store.read(self.path)}
-        pending = {}
+        committed_in_chat = {row.get('message_id') for row in self.store.read(self.path) if row.get('message_id')}
+        definitions = {}
+        states = {}
         for row in rows:
             mid = row.get('message_id')
-            if row.get('state') == 'received' and mid and mid not in committed:
-                pending[mid] = row
-            elif row.get('state') == 'committed' and mid in pending:
-                pending.pop(mid, None)
-        return list(pending.values())
+            if not mid:
+                continue
+            if row.get('state') == 'received' and 'content' in row:
+                definitions[mid] = row
+            states[mid] = row.get('state')
+
+        for mid in committed_in_chat:
+            states[mid] = 'committed'
+
+        terminal_states = {'committed', 'failed', 'cancelled', 'uncertain'}
+        to_recover = []
+        uncertain_to_record = []
+
+        for mid, state in states.items():
+            if state in terminal_states:
+                continue
+            if state == 'processing':
+                uncertain_to_record.append(mid)
+            elif state == 'received':
+                defn = definitions.get(mid)
+                if defn:
+                    media = defn.get('media')
+                    if isinstance(media, dict) and media.get('kind') != 'voice':
+                        filename = media.get('filename')
+                        if filename:
+                            media_path = self.store.root / self.cfg.id / 'media' / filename
+                            if not media_path.is_file():
+                                self.fail_incoming([mid], reason='media_missing')
+                                continue
+                    to_recover.append(defn)
+
+        if uncertain_to_record:
+            self.mark_incoming_uncertain(uncertain_to_record, reason='interrupted_during_processing')
+
+        return to_recover
 
     def prepare_regeneration(self, message_id):
         rows = self._chat_rows()
@@ -2415,6 +2498,7 @@ class Chat:
                     if self.memory and not self.codex_watch_mode else [])
         memory_refs = getattr(self.memory, 'last_context_refs', []) if self.memory and not self.codex_watch_mode else []
         self.turn_memory_refs = list(memory_refs) if isinstance(memory_refs, list) else []
+        recalled_memory_refs = list(self.turn_memory_refs)
         autonomy_handoff_id = None
         glance_handoff_id = None
         if not autonomy:
@@ -2455,57 +2539,91 @@ class Chat:
         short_term_message, short_term_details = (self.short_term_notes.context()
                                                   if self.short_term_notes and not autonomy
                                                   else (None, {'count': 0, 'characters': 0}))
-        tail = [*([background_message] if background_message else []),
-                *([short_term_message] if short_term_message else []), *recalled]
-        if self.current_request_tool_schemas():
-            recall_context = self.recall_context()
-            if recall_context:
-                tail.append({'role': 'system', 'content': recall_context})
-        runtime_context = []
+        recalled_memories = list(recalled)
+        recall_context_msg = {'role': 'system', 'content': self.recall_context()} if (self.current_request_tool_schemas() and self.recall_context()) else None
+
+        runtime_auxiliary = []
         from recent_experiences import recent_experience_context
         experiences = recent_experience_context(self.store, self.cfg)
         if experiences:
-            runtime_context.append({'role': 'system', 'content': experiences})
-        if extra_context:
-            runtime_context.append({'role': 'system', 'content': extra_context})
+            runtime_auxiliary.append({'role': 'system', 'content': experiences})
+        if extra_context and not reply_later_batch:
+            runtime_auxiliary.append({'role': 'system', 'content': extra_context})
         from screen_pop import screen_pop_history_context
         screen_pop_context = screen_pop_history_context(self.store, self.cfg)
         if screen_pop_context:
-            runtime_context.append({'role': 'system', 'content': screen_pop_context})
+            runtime_auxiliary.append({'role': 'system', 'content': screen_pop_context})
+
+        auxiliary_context = [
+            *([background_message] if background_message else []),
+            *([short_term_message] if short_term_message else []),
+            *([recall_context_msg] if recall_context_msg else []),
+            *runtime_auxiliary,
+        ]
+
+        runtime_required = []
         if isinstance(self.pending_capability_event_model, str) and self.pending_capability_event_model and not autonomy:
-            runtime_context.append({'role': 'system', 'content':
+            runtime_required.append({'role': 'system', 'content':
                 'Program-generated capability update: ' + self.pending_capability_event_model})
-        runtime_context.append({'role': 'system', 'content': changing})
-        tail.extend(runtime_context)
+        if reply_later_batch and extra_context:
+            runtime_required.append({'role': 'system', 'content': extra_context})
+        runtime_required.append({'role': 'system', 'content': changing})
+
         user = {'role': 'user', 'content': self._photo_content(text, media)}
         observed_ratio = self.budget.input_token_ratio(self.cfg.id, self.cfg.provider['model'])
         calibration = conservative_token_ratio(observed_ratio)
-        # The provider limit is in tokens. Reuse this model's measured token/byte
-        # ratio when available; start conservatively until a response can calibrate it.
-        def bound(history):
-            return estimate_request_tokens([*head, *history, *tail, user], tool_schema, calibration)
         limit = self.cfg.provider['max_input_tokens']
-        # collapse_latest_photo mutates message dictionaries; keep the durable
-        # in-memory history intact while preparing this request's model view.
+
+        rows = user_events if isinstance(user_events, list) and user_events else [
+            {'content': text, 'message_id': message_id, 'media': media}]
+        mids = [row.get('message_id') for row in rows if row.get('message_id')]
+        def bound(curr_history=None, curr_recalled=None, curr_auxiliary=None):
+            h = history if curr_history is None else curr_history
+            r = recalled_memories if curr_recalled is None else curr_recalled
+            a = auxiliary_context if curr_auxiliary is None else curr_auxiliary
+            curr_tail = [*a, *r, *runtime_required]
+            return estimate_request_tokens([*head, *h, *curr_tail, user], tool_schema, calibration)
+
         history = [dict(message) for message in self.history]
-        if isinstance(media, dict) and media.get('kind') != 'voice':
-            collapse_latest_photo(history)
-        # Long replies make the window outgrow the limit. Drop the oldest whole
-        # rounds from this request only; chat.jsonl keeps everything.
-        while history and bound(history) > limit:
+        collapse_all_history_photos(history)
+
+        # Progressively prune croppable context: history -> memories -> auxiliary context
+        while history and bound(history, recalled_memories, auxiliary_context) > limit:
             history.pop(0)
             while history and history[0]['role'] != 'user':
                 history.pop(0)
-        if bound(history) > limit:
-            raise TooLong('这条输入加上人设和记忆太长，未发送；请缩短输入后再发。')
+
+        while recalled_memories and bound(history, recalled_memories, auxiliary_context) > limit:
+            recalled_memories.pop()
+        self.turn_memory_refs = (recalled_memory_refs if len(recalled_memories) == len(recalled)
+                                 else [])
+
+        while auxiliary_context and bound(history, recalled_memories, auxiliary_context) > limit:
+            auxiliary_context.pop()
+
+        if bound(history, recalled_memories, auxiliary_context) > limit:
+            if not autonomy and persist_user and mids:
+                self.fail_incoming(mids, reason='too_long')
+            necessary_components = [
+                ('系统人设与身份', head),
+                ('状态与权限', runtime_required),
+                ('当前消息（含图片）', [user]),
+            ]
+            usage = [f'{name}≈{estimate_message_tokens(items, calibration)}' for name, items in necessary_components]
+            schema_bytes = len(json.dumps(tool_schema or [], ensure_ascii=False).encode('utf-8')) + 256
+            usage.insert(1, f'工具定义≈{math.ceil(schema_bytes * calibration)}')
+            total_est = bound(history, recalled_memories, auxiliary_context)
+            raise TooLong(
+                f'当前输入及必要上下文太长，超过模型上限（上限 {limit} tokens，必要估算≈{total_est} tokens）：'
+                + '、'.join(usage) + '。已裁剪全部历史与记忆，仍无法容纳；请更换更大输入上限的模型或减少启用的工具。'
+            )
+
         kept = sum(m['role'] == 'user' for m in history)
         self.trim_note = None
-        if len(history) < len(self.history) and not self.trim_noted:
+        if (len(history) < len(self.history) or len(recalled_memories) < len(recalled)) and not self.trim_noted:
             self.trim_noted = True
-            self.trim_note = (f'（为了不超出长度上限，这次只带了最近 {kept} 轮原文；'
-                              '更早的聊天仍保存在本机，长期记忆不受影响。）')
             components = [
-                ('人设/系统', head), ('记忆', recalled), ('运行上下文', runtime_context),
+                ('人设/系统', head), ('记忆', recalled_memories), ('运行上下文', [*auxiliary_context, *runtime_required]),
                 ('历史', history), ('当前消息', [user])]
             usage = [f'{name}≈{estimate_message_tokens(items, calibration)}'
                      for name, items in components]
@@ -2513,6 +2631,8 @@ class Chat:
             usage.insert(3, f'工具定义≈{math.ceil(schema_bytes * calibration)}')
             self.trim_note = (f'（长度估算：本轮只带最近 {kept} 轮原文；分项 tokens：'
                               + '、'.join(usage) + f'；上限 {limit}。完整聊天仍保存在本机。）')
+
+        tail = [*auxiliary_context, *recalled_memories, *runtime_required]
         messages = [*head, *history, *tail, user]
         tool_summaries = []
         with saving():
@@ -2534,13 +2654,14 @@ class Chat:
                                           if isinstance(row_media.get(key), str)}
                     if event['message_id'] not in in_history:
                         self.store.append(self.path, event)
+                self.mark_incoming_processing([row.get('message_id') for row in rows])
                 self.commit_incoming([row.get('message_id') for row in rows])
                 self.store.append(f'{self.cfg.id}/message-processing.jsonl', {
                     'batch_id': processing_batch, 'message_ids': [row.get('message_id') for row in rows],
                     'state': 'pending', 'at': now()})
                 self.last_send_persisted = True
-        self._log_context(text, autonomy, request_id, head, profile_context, stable, history, recalled,
-                          background_details, short_term_details, runtime_context, tool_schema, user,
+        self._log_context(text, autonomy, request_id, head, profile_context, stable, history, recalled_memories,
+                          background_details, short_term_details, [*auxiliary_context, *runtime_required], tool_schema, user,
                           bound(history))
         try:
             self._capability_request_active = True
@@ -2561,8 +2682,10 @@ class Chat:
         except (KeyboardInterrupt, EOFError):
             self._capability_request_active = False
             raise
-        except (TooLong, RequestFailed):
+        except (TooLong, RequestFailed) as exc:
             self._capability_request_active = False
+            if not self.last_send_persisted and mids:
+                self.fail_incoming(mids, reason=str(exc))
             if processing_batch:
                 self.store.append(f'{self.cfg.id}/message-processing.jsonl', {
                     'batch_id': processing_batch, 'state': 'failed', 'at': now()})
@@ -3787,15 +3910,15 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead, activity=N
                             complete(chat.last_send_persisted)
                     chat.apply_pending_recall()
                 except TooLong as exc:
-                    output(str(exc))
+                    output(ChatOutput(str(exc), request_id=message_id, is_error=True))
                     continue
                 except RequestFailed as exc:
-                    output(str(exc))
+                    output(ChatOutput(str(exc), request_id=message_id, is_error=True))
                     notify_dropped()
                     continue
                 except EmptyReplyError as exc:
                     chat.history, chat.rounds = chat.recent()
-                    output(str(exc))
+                    output(ChatOutput(str(exc), request_id=message_id, is_error=True))
                     notify_dropped()
                     continue
                 if not chat.reply_displayed:
