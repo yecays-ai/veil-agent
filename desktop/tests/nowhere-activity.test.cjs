@@ -58,8 +58,11 @@ test('truncated say input does not hide a full query quote', () => {
 
 test('aliased tools use their canonical name and malformed quote rows fall back', () => {
   const item = { tool: 'quote_alias', canonical_tool: 'mcp__nowhere__quotes', state: '成功',
+    detail: result({ quotes: [{ text: 'A fictional quote' }] }) };
+  assert.deepEqual(parse(item).quotes.map(quote => quote.text), ['A fictional quote']);
+  const malformed = { ...item,
     detail: result({ quotes: [{ text: 'A fictional quote' }, { place: 'Missing text' }] }) };
-  assert.equal(parse(item), null);
+  assert.equal(parse(malformed), null);
 });
 
 test('buried items show only returned fields and malformed, failed, or truncated results fall back', () => {
