@@ -222,8 +222,6 @@ class DesktopIconsCoreTests(unittest.TestCase):
         self.assertEqual((self.backend.icons['icon_game_shortcut'].x, self.backend.icons['icon_game_shortcut'].y), (20, 20))
 
 
-if __name__ == '__main__':
-    unittest.main()
 
 
 class DesktopIconsObstructionTests(unittest.TestCase):
@@ -243,3 +241,7 @@ class DesktopIconsObstructionTests(unittest.TestCase):
             result = manager.arrange_icons([{'icon_id': 'icon_calculator_shortcut', 'x': 500, 'y': 100}])
         self.assertTrue(result['verified'])
         self.assertEqual(result['obstructions'], [])
+
+
+if __name__ == '__main__':
+    unittest.main()

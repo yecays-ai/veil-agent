@@ -100,7 +100,7 @@ def _vendor_dir_pattern(target: str) -> Optional[str]:
     for root in roots:
         if folder.startswith(root + '\\') and folder != root:
             rest = folder[len(root) + 1:]
-            if rest.split('\\')[0] in ('windowsapps', 'microsoft', 'temp', 'packages'):
+            if rest.split('\\')[0] in ('windowsapps', 'microsoft', 'temp', 'packages', 'common files'):
                 return None
             return folder.replace('[', '[[]') + '\\*.exe'
     return None

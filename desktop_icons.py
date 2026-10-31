@@ -108,8 +108,7 @@ def generate_icon_id(name: str, item_type: str, existing_ids: Optional[set] = No
 _DESKTOP_ORGANIZER_PROCESSES = frozenset({
     'desktopmgr.exe', 'desktopmgr64.exe', 'tencentdesktop.exe', 'qqdesktop.exe',
     'fences.exe', 'fences3.exe', 'fences4.exe', 'fences5.exe', 'deskgo.exe',
-    'deskcover.exe', 'rainmeter.exe', 'desktopok.exe', 'desktopcoral.exe',
-    'winxcorners.exe', '360desktop.exe', '360desktopmgr.exe',
+    'deskcover.exe', 'desktopcoral.exe', '360desktop.exe', '360desktopmgr.exe',
 })
 
 
@@ -696,7 +695,7 @@ class DesktopIconsManager:
             'obstructions': obstructions,
             'note': ('Windows 桌面里的图标坐标已改好并读回，但这不能证明 Lan 屏幕上看得到变化：'
                      + ' '.join(obstructions)
-                     + ' 整理软件画在系统桌面上方，Lan 看到的是它的图标，不会随之移动。'
+                     + ' 图标层被隐藏或被整理软件覆盖时，Lan 屏幕上看到的图标不会随之移动。'
                      '请如实告诉 Lan 这次移动在她屏幕上可能看不到，不要说“整理好了”。'),
         }
 

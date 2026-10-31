@@ -28,6 +28,7 @@ from desktop_icons import (
 from windows_discovery import (
     WindowsAppDiscovery,
     is_ambiguous_confirmation,
+    UNTRUSTED_PATH_PATTERN,
     is_blocked_window_exe,
     is_file_dialog_control,
     is_unsafe_text_input,
@@ -1002,7 +1003,9 @@ class WindowsInteractionTools:
                     continue
                 # A folder pattern covers helper exes beside the launcher; shells, installers,
                 # browsers and credential tools stay excluded unless the launcher itself is that file.
-                if normalized == ntpath.normcase(ntpath.normpath(pattern)) or not is_blocked_window_exe(normalized):
+                if normalized == ntpath.normcase(ntpath.normpath(pattern)):
+                    return app_id
+                if not is_blocked_window_exe(normalized) and not UNTRUSTED_PATH_PATTERN.search(normalized):
                     return app_id
         return None
 

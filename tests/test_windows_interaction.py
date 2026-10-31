@@ -1352,8 +1352,6 @@ max_steps = 3
             backend.apply_canvas_action({'handle': 12345}, 'stroke', {'points': [[50, 60]]}, lambda: False, monitor, None)
 
 
-if __name__ == '__main__':
-    unittest.main()
 
 
 class OwnInputMonitorTests(unittest.TestCase):
@@ -1389,3 +1387,7 @@ class OwnInputMonitorTests(unittest.TestCase):
         with monitor.own_input():
             clock['now'] = clock['last'] = 1200
         self.assertEqual(monitor.snapshot(), 1100)
+
+
+if __name__ == '__main__':
+    unittest.main()
