@@ -27,7 +27,7 @@ from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, getproxies, urlopen
 from urllib.error import HTTPError, URLError
 
-from attachment_utils import (ATTACHMENT_EXTENSIONS, ATTACHMENT_TYPES, MAX_ATTACHMENT_BYTES,
+from attachment_utils import (ATTACHMENT_EXTENSIONS, MAX_ATTACHMENT_BYTES,
                               inspect_attachment, redirected_path, valid_attachment_row)
 from veil_agent import (ROOT, AUTONOMY_WAKE, CODEX_WATCH_WAKE, GLANCE_WAKE, MAX_PHOTO_BYTES,
                         ActivityState, Budget, Chat, Store, UserError,

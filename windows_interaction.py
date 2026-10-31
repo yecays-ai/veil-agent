@@ -2,7 +2,6 @@
 import base64
 import ctypes
 import fnmatch
-import hashlib
 import json
 import ntpath
 import os
@@ -24,7 +23,6 @@ from desktop_icons import (
     DesktopIconsError,
     DesktopIconsLayoutBlocked,
     DesktopIconsPaused,
-    DesktopIconsUnavailable,
 )
 from windows_discovery import (
     WindowsAppDiscovery,
