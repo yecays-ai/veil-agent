@@ -695,7 +695,7 @@ class WindowsDesktopBackend:
                             continue
                         minimized = bool(user32.IsIconic(hwnd))
                         width, height = self._window_rect(hwnd)
-                        if not minimized and (width < 50 or height < 40):
+                        if not minimized and (width <= 120 or height <= 100):
                             continue
                         result.append({
                             'id': self._window_id(pid.value, hwnd, process_path, created),

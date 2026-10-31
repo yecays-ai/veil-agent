@@ -238,6 +238,7 @@ class FilesystemTools:
             idle_seconds=interaction_settings.get('idle_seconds', 3),
             store=store,
             character_id=cfg.id,
+            lab=self.lab,
         )
         self.windows_tools.application_id_for = self.windows_interaction_tools.application_id_for
         self.tools.extend(self.windows_tools.tools)
@@ -994,6 +995,7 @@ class FilesystemTools:
                 'Windows interaction tools: ' + ', '.join(interaction_names) +
                 (f'. Configured applications: {app_ids}. ' if app_ids else '. ') +
                 'windows_discover_apps discovers installed Windows desktop applications. '
+                'windows_canvas_action performs mouse clicking, dragging, and stroke drawing on canvas windows, or saves creations directly to your Lab. '
                 'desktop_icons_read, desktop_icons_arrange and desktop_icons_restore manage desktop icon visual placement safely with automatic layout snapshots. '
                 'Paths and process identity are checked by the program. '
                 'Window actions stop when recent human input is detected. Clicks, navigation and text edits run directly; '
