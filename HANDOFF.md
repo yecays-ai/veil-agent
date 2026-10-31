@@ -1,5 +1,12 @@
 # 交接
 
+## 工单 181 交接（2026-10-31）
+
+- 分支 `ticket/181-split-hub`。新增 `hub_screen_pop.py`，`ScreenPopMixin` 放 `request_screen_pop`、`next_screen_pop`、`claim_screen_pop`、`record_screen_pop_event`，方法代码原样搬出，`Hub` 继承它；状态仍在 `Hub.__init__` 创建。
+- 测试：全套与修改前失败项一致（沙箱环境限制）。
+- 媒体与语音等其它组暂未拆：测试里有对 `web_agent.urlopen` 的替换，直接搬会失效。
+- 下一步：182 拆 `_tool_chat` 的工具执行步骤。
+
 ## 工单 180 交接（2026-10-31）
 
 - 分支 `ticket/180-split-make-handler`。`web_agent.py` 的 `make_handler` 里每条 GET/POST 路由搬成独立 `_get_*`/`_post_*` 方法，`do_GET` 只做分发，`do_POST` 先处理游戏路由、令牌校验和通用 JSON 解析再分发；只搬代码，唯一控制流改动是 `/api/memory/panel` 的 `if` 改为 `elif`，路由与鉴权顺序不变。
