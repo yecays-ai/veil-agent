@@ -2498,6 +2498,7 @@ class Chat:
                     if self.memory and not self.codex_watch_mode else [])
         memory_refs = getattr(self.memory, 'last_context_refs', []) if self.memory and not self.codex_watch_mode else []
         self.turn_memory_refs = list(memory_refs) if isinstance(memory_refs, list) else []
+        recalled_memory_refs = list(self.turn_memory_refs)
         autonomy_handoff_id = None
         glance_handoff_id = None
         if not autonomy:
@@ -2546,7 +2547,7 @@ class Chat:
         experiences = recent_experience_context(self.store, self.cfg)
         if experiences:
             runtime_auxiliary.append({'role': 'system', 'content': experiences})
-        if extra_context:
+        if extra_context and not reply_later_batch:
             runtime_auxiliary.append({'role': 'system', 'content': extra_context})
         from screen_pop import screen_pop_history_context
         screen_pop_context = screen_pop_history_context(self.store, self.cfg)
@@ -2564,6 +2565,8 @@ class Chat:
         if isinstance(self.pending_capability_event_model, str) and self.pending_capability_event_model and not autonomy:
             runtime_required.append({'role': 'system', 'content':
                 'Program-generated capability update: ' + self.pending_capability_event_model})
+        if reply_later_batch and extra_context:
+            runtime_required.append({'role': 'system', 'content': extra_context})
         runtime_required.append({'role': 'system', 'content': changing})
 
         user = {'role': 'user', 'content': self._photo_content(text, media)}
@@ -2574,9 +2577,6 @@ class Chat:
         rows = user_events if isinstance(user_events, list) and user_events else [
             {'content': text, 'message_id': message_id, 'media': media}]
         mids = [row.get('message_id') for row in rows if row.get('message_id')]
-        if not autonomy and persist_user and mids:
-            self.mark_incoming_processing(mids)
-
         def bound(curr_history=None, curr_recalled=None, curr_auxiliary=None):
             h = history if curr_history is None else curr_history
             r = recalled_memories if curr_recalled is None else curr_recalled
@@ -2595,6 +2595,8 @@ class Chat:
 
         while recalled_memories and bound(history, recalled_memories, auxiliary_context) > limit:
             recalled_memories.pop()
+        self.turn_memory_refs = (recalled_memory_refs if len(recalled_memories) == len(recalled)
+                                 else [])
 
         while auxiliary_context and bound(history, recalled_memories, auxiliary_context) > limit:
             auxiliary_context.pop()
@@ -2652,6 +2654,7 @@ class Chat:
                                           if isinstance(row_media.get(key), str)}
                     if event['message_id'] not in in_history:
                         self.store.append(self.path, event)
+                self.mark_incoming_processing([row.get('message_id') for row in rows])
                 self.commit_incoming([row.get('message_id') for row in rows])
                 self.store.append(f'{self.cfg.id}/message-processing.jsonl', {
                     'batch_id': processing_batch, 'message_ids': [row.get('message_id') for row in rows],

@@ -138,8 +138,7 @@ function scrollIfFollowing(action){
   action();if(stick)log.scrollTop=log.scrollHeight;
 }
 function showEvent(e){
-  if(e.id)displayedEventIds.add(e.id);
-  if(e.kind==='error'&&e.request_id)displayedErrorRequests.add(e.request_id);
+  if(e.kind!=='error'&&e.id)displayedEventIds.add(e.id);
   if(e.kind==='message_removed'){
     removeMessageBubble(e.message_id);
     return;

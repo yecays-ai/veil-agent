@@ -1083,8 +1083,8 @@ class Hub:
         message_id = getattr(text, 'message_id', None)
         request_id = getattr(text, 'request_id', None)
         memory_refs = getattr(text, 'memory_refs', None)
-        text = str(text)
         is_error = getattr(text, 'is_error', False)
+        text = str(text)
         prefix = f'{self.name}: '
         if text.startswith('新对话已开始；'):
             self.push('reset', text)
@@ -1352,23 +1352,29 @@ class Hub:
                 except (OSError, ValueError, UserError):
                     return 'media_storage'
             with self.cond:
-                if self.stopping or self.stopped:
-                    if persisted and self.chat is not None:
+                stopped = self.stopping or self.stopped
+                if not stopped:
+                    def complete(committed):
+                        self.finish_media_submission(committed, text, media, request_id)
+                    if not media:
+                        self.push('user', text, request_id=request_id, message_id=request_id)
+                    self.emitted_error_requests.discard(request_id)
+                    self.submissions[request_id] = text_digest
+                    if len(self.submissions) > MAX_SUBMISSIONS:
+                        self.submissions.popitem(last=False)
+                    self.inbox.put((text, media, complete, request_id, persisted))
+                    if self.autonomy_busy:
+                        self.autonomy_interrupted.set()
+                    else:
+                        self.busy = True
+            if stopped:
+                if persisted and self.chat is not None:
+                    try:
                         self.chat.fail_incoming([request_id], reason='stopped')
-                    return 'stopped'
-                def complete(committed):
-                    self.finish_media_submission(committed, text, media, request_id)
-                if not media:
-                    self.push('user', text, request_id=request_id, message_id=request_id)
-                self.submissions[request_id] = text_digest
-                if len(self.submissions) > MAX_SUBMISSIONS:
-                    self.submissions.popitem(last=False)
-                self.inbox.put((text, media, complete, request_id, persisted))
-                if self.autonomy_busy:
-                    self.autonomy_interrupted.set()
-                else:
-                    self.busy = True
-                return 'accepted'
+                    except OSError:
+                        return 'media_storage'
+                return 'stopped'
+            return 'accepted'
         finally:
             with self.cond:
                 self.submission_pending = False
