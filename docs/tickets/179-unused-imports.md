@@ -7,7 +7,7 @@
 
 ## 做了什么
 
-- 删除 13 个文件中的无用 import：`autonomy.py`（`AUTONOMY_WAKE`、`GLANCE_WAKE`）、`desktop_files.py`、`desktop_icons.py`（`json`、`field`、`Path`）、`lab_preview.py`（`json`、`time`）、`lab_sandbox.py`（`PureWindowsPath`、`Set`）、`long_tasks.py`、`ombre_host.py`、`screen_pop.py`（`ctypes`）、`web_agent.py`（`ATTACHMENT_TYPES`）、`windows_discovery.py`（`fnmatch`、`glob`、`Path`）、`windows_interaction.py`（`hashlib`、`DesktopIconsUnavailable`）、`windows_observer.py`（`ctypes`）。
+- 删除 12 个文件中的无用 import：`autonomy.py`（`AUTONOMY_WAKE`、`GLANCE_WAKE`）、`desktop_files.py`（`shutil`）、`desktop_icons.py`（`json`、`field`、`Path`）、`lab_preview.py`（`json`、`time`）、`lab_sandbox.py`（`PureWindowsPath`、`Set`）、`long_tasks.py`（`re`）、`ombre_host.py`（`sys`）、`screen_pop.py`（`ctypes`）、`web_agent.py`（`ATTACHMENT_TYPES`）、`windows_discovery.py`（`fnmatch`、`glob`、`Path`）、`windows_interaction.py`（`hashlib`、`DesktopIconsUnavailable`）、`windows_observer.py`（`ctypes`）。
 - `veil_agent.py`：删除 `append_tool_result` 里没有被赋值的 `nonlocal history_count`。
 
 ## 有意没动
