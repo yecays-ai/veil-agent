@@ -155,6 +155,11 @@ class PinnedTests(Base):
         self.assertNotIn('trace', [n for n, _ in self.backend.calls])
         _, state, _ = self.tools.invoke('trace', {'bucket_id': 'plain', 'pinned': 1, 'edit_reason': '  '})
         self.assertEqual(state, '被拒绝')
+        self.assertNotIn('trace', [n for n, _ in self.backend.calls])
+        for odd_pin in ('true', '1', 1.0):
+            _, state, _ = self.tools.invoke('trace', {'bucket_id': 'plain', 'pinned': odd_pin, 'edit_reason': '\u200b '})
+            self.assertEqual(state, '被拒绝', odd_pin)
+        self.assertNotIn('trace', [n for n, _ in self.backend.calls])
 
     def test_trace_cannot_pin_past_the_cap(self):
         for i in range(PINNED_LIMIT):

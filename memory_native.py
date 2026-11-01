@@ -4,6 +4,7 @@ The model decides what is worth keeping; Ombre does the tagging and same-event m
 Deleting is not offered to the model: /delete stays with the user.
 """
 from types import SimpleNamespace
+import unicodedata
 import inspect
 import json
 from datetime import datetime, timezone
@@ -590,11 +591,16 @@ class NativeMemoryTools:
         old = self.memory.raw_content_for(memory_id)
         if old is None:
             return 'The target memory could not be read, so it was not changed.', '被拒绝', summary
-        if args.get('pinned') in (1, True) and type(args.get('pinned')) in (int, bool):
+        pin = args.get('pinned')
+        if isinstance(pin, str):
+            pin = pin.strip().casefold() in ('1', 'true', 'yes')
+        elif isinstance(pin, float):
+            pin = pin == 1.0
+        if pin is True or (type(pin) is int and pin == 1):
             if self.autonomy_mode:
                 return 'Pinning is available only while chatting with Lan, not during autonomous activity.', '被拒绝', summary
             already = self._pinned_ids()
-            if memory_id not in already and not edit_reason.strip():
+            if memory_id not in already and not any(unicodedata.category(ch)[0] not in 'ZC' for ch in edit_reason):
                 return ('Pinning needs edit_reason: say why this memory must always surface first.'), '被拒绝', summary
             if memory_id not in already and len(already) >= PINNED_LIMIT:
                 return (f'{PINNED_LIMIT} memories are already pinned. Unpin one first '
