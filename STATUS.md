@@ -4,7 +4,7 @@
 
 ## 当前目标与现状
 
-- 工单 190「Peter 与 Lan 的生活记录中心」：PR #240 审查修复中。桌面三栏与本地记录读写已接入；Peter 原有长期任务及短期便签可在生活页直接编辑，写回各自原数据源；正式生活记录工具已加入。Windows 实际体验与完整回归仍待验证。验收见 `docs/tickets/190-life-records-center.md`。
+- 工单 190「Peter 与 Lan 的生活记录中心」：PR #240 已合并（5274439）。桌面三栏与本地记录读写已接入；Peter 原有长期任务可在生活页直接编辑，写回原数据源（聊天短期便签是给模型接续上下文的事实，不显示在生活页，工单 191 起）；「生活」标签可拖出独立窗口；正式生活记录工具已加入。Windows 实际体验与完整回归仍待验证。验收见 `docs/tickets/190-life-records-center.md`。
 
 - 工单 189「把 Ombre 的 `I`（自我认知）接给 Peter」（`ticket/189-wire-i-tool`）：lan/ChatGPT 11-01 决定接入 `I`、`feel` 暂缓写入。Peter 可自己写候选、经 3 个不同日期的 dream 见证后自己升级、用 `supersedes` 修正；开场不注入，程序不替他写；不调模型。现状：代码和自动测试完成，Windows 体验未验证。详见 `docs/tickets/189-wire-i-tool.md`。下一个工单号 190。
 - 工单 188「读过的记忆也算展示过」（`ticket/188-read-counts-as-shown`）：Peter 整理重复记忆时，`memory_read` 读过的记忆被 `hold(target_id)` 拒绝（只有自动召回和 `breath_search` 登记）。现在读成功也登记。现状：代码和自动测试完成，Windows 体验未验证。验收见 `docs/tickets/188-read-counts-as-shown.md`。下一个工单号 189（工单 187 为 PR #237）。

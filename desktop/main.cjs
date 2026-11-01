@@ -10,7 +10,7 @@ let pet, chat, menu, connecting = false, quitting = false, drag, petResize, agen
 const detachedWindows = new Map(), mergingViews = new Set();
 const screenPopWindows = new Map(), screenPopInFlight = new Set();
 let screenPopPollTimer = null, screenPopPolling = false, quitFlushStarted = false;
-const VIEW_NAMES = new Set(['chat', 'activity', 'context', 'memory', 'mcp', 'more']);
+const VIEW_NAMES = new Set(['chat', 'activity', 'context', 'memory', 'life', 'mcp', 'more']);
 const settings = { size: 320, theme: 'light' };
 const petURL = pathToFileURL(path.join(__dirname, 'pet.html')).href;
 const chatURL = pathToFileURL(path.join(__dirname, 'chat.html')).href;
@@ -98,12 +98,12 @@ async function createDetachedWindow(view, point) {
   const existing = detachedWindows.get(view);
   if (existing && !existing.isDestroyed()) { existing.showInactive(); return true; }
   if (!agentEndpoint) return false;
-  const fallbackSize = view === 'chat' ? { width: 520, height: 680 } : { width: 430, height: 680 };
+  const fallbackSize = view === 'chat' ? { width: 520, height: 680 } : view === 'life' ? { width: 980, height: 700 } : { width: 430, height: 680 };
   const fallback = { x: Number.isFinite(point?.x) ? Math.round(point.x - 170) : 80,
     y: Number.isFinite(point?.y) ? Math.round(point.y - 35) : 80, ...fallbackSize };
   const saved = settings.detachedBounds?.[view];
   const restored = restoredWindowBounds(saved, fallback, { width: 340, height: 420 });
-  const current = new BrowserWindow({ ...restored.bounds, minWidth: 340, minHeight: 420, frame: false,
+  const current = new BrowserWindow({ ...restored.bounds, minWidth: view === 'life' ? 520 : 340, minHeight: 420, frame: false,
     transparent: true, backgroundColor: '#00000000', resizable: true, hasShadow: true,
     alwaysOnTop: true, skipTaskbar: true, title: `Peter · ${view}`, show: false,
     webPreferences: { preload: path.join(__dirname, 'desktop-preload.cjs'), contextIsolation: true,
@@ -493,6 +493,7 @@ ipcMain.handle('chat:request', async (event, pathname, body, timeoutMs) => {
     (detachedView === 'mcp' && ((!body && pathname?.startsWith('/api/events?')) || pathname === '/api/mcp' || (!body && pathname === '/api/mcp?retry=1'))) ||
     (detachedView === 'memory' && ((!body && (pathname?.startsWith('/api/events?') || pathname?.startsWith('/api/memory/'))) ||
       (body && ['/api/memory/edit', '/api/memory/delete'].includes(pathname)))) ||
+    (detachedView === 'life' && ((!body && (pathname?.startsWith('/api/events?') || pathname === '/api/life')) || (body && pathname === '/api/life'))) ||
     (detachedView === 'more' && ((!body && pathname?.startsWith('/api/events?')) || (body && ['/api/exit', '/api/models', '/api/models/use'].includes(pathname))));
   if (!fromChatPage(event) || typeof pathname !== 'string' || !allowedChatRequest(pathname, body ? 'POST' : 'GET') || !detachedAllowed)
     return { ok: false, status: 403, data: { error: '请求未允许。' } };
@@ -663,11 +664,28 @@ ipcMain.handle('view:focus', (event, view) => {
 ipcMain.handle('view:states', event => fromChatPage(event) ? detachedViewNames() : []);
 ipcMain.on('desktop:collapse', () => { if (chat) chat.hide(); });
 ipcMain.handle('chat:reconnect', event => reconnectChat(event));
+let chatExpandedFrom = null;
 ipcMain.on('desktop:expand', event => {
   if (!fromChat(event) || !chat || chat.isDestroyed()) return;
+  if (chat.isMaximized() || chat.isFullScreen()) {
+    chat.setFullScreen(false); chat.unmaximize();
+    if (!chatExpandedFrom) { settings.chatBounds = chat.getBounds(); saveSoon(); return; }
+  }
   const bounds = chat.getBounds();
   const area = workAreaAt(bounds.x + Math.floor(bounds.width / 2), bounds.y + Math.floor(bounds.height / 2));
-  chat.setBounds({ x: area.x, y: area.y, width: area.width, height: area.height });
+  const filled = Math.abs(bounds.x - area.x) <= 2 && Math.abs(bounds.y - area.y) <= 2 &&
+    Math.abs(bounds.width - area.width) <= 2 && Math.abs(bounds.height - area.height) <= 2;
+  if (!chatExpandedFrom && filled) chatExpandedFrom = { x: area.x + Math.floor((area.width - 560) / 2), y: area.y + Math.floor((area.height - 700) / 2), width: Math.min(560, area.width), height: Math.min(700, area.height) };
+  if (chatExpandedFrom) {
+    // Second click: go back to the size the window had before it was expanded.
+    const saved = chatExpandedFrom; chatExpandedFrom = null;
+    const width = Math.max(430, Math.min(saved.width, area.width)), height = Math.max(480, Math.min(saved.height, area.height));
+    const position = clampPosition(saved.x, saved.y, width, height, area);
+    chat.setBounds({ ...position, width, height });
+  } else {
+    chatExpandedFrom = bounds;
+    chat.setBounds({ x: area.x, y: area.y, width: area.width, height: area.height });
+  }
   settings.chatBounds = chat.getBounds(); saveSoon();
 });
 ipcMain.on('desktop:show-activity', () => { showActivity(); });
