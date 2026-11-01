@@ -1,3 +1,9 @@
+## 工单 186 交接（2026-11-01）
+
+- 分支 `ticket/186-deepseek-window-64k`。只改 `characters/peter/character.toml`：`[providers.deepseek] max_input_tokens` 32768 → 65536。聊天裁剪用 `cfg.provider['max_input_tokens']`（`veil_agent.py` 约 3116–3282），所以历史会多保留，不再先裁光。同一上限还影响两处：短期便签提取批次上限 `min(MAX_REQUEST_BYTES, max_input_tokens // 2)`（`short_term_notes.py` 约 532，由 16384 字节变为 20000 字节，一次便签整理的输入略多）；每次请求的费用预留 `Budget.reserve` 按上限算输入部分，预留约由 ¥0.07 变为 ¥0.14（只在接近每日上限时才可能影响放行，结算仍按实际用量）。`gpt` 档不变；用户在「模型」页自加的模型仍用自己的上限。
+- 未验证：每天多花的费用（估算 ¥1–3，最坏约 ¥9.8）和 Windows 实际体验；按 `docs/tickets/186-deepseek-window-64k.md` 核对 `data\costs.jsonl`。
+- 下一个工单号 187。
+
 ## 工单 185 交接（2026-11-01）
 
 - 分支 `ticket/185-trace-pin-needs-reason`。`NativeMemoryTools._trace`：新置顶（记忆当前未置顶）时 `edit_reason` 不能为空，否则拒绝，Ombre 不被调用；已置顶的记忆再次 trace 不受影响。trace 工具说明补了这条。测试：`tests/test_memory_importance_browse.py` 加 1 项，旧的上限测试补理由。
