@@ -108,7 +108,8 @@ OMBRE_DESCRIPTIONS = {
         '(-1 or empty means unchanged). content replaces the whole body; or old_str/new_str replaces one exact, '
         'unique passage (empty new_str removes it); not both. title is the memory\'s (or letter\'s) own title; '
         'name is only its bucket name. resolved=1 lets it settle, 0 reactivates it; pinned=1 makes it a permanent '
-        'core memory; protected=1 stops decay without forcing it up; digested=1 hides it from passive recall and '
+        'core memory (needs edit_reason saying why; very few may exist); protected=1 stops decay without '
+        'forcing it up; digested=1 hides it from passive recall and '
         'dream; dont_surface=1 keeps it out of daily recall. Removing the last pinned/protected needs importance '
         '1-10 in the same call. Metadata: importance 1-10, domain and tags comma-separated, valence/arousal 0-1, '
         'why_remembered, meaning_append/meaning_replace, media_append/media_replace (replace drops the old value; '
@@ -593,6 +594,8 @@ class NativeMemoryTools:
             if self.autonomy_mode:
                 return 'Pinning is available only while chatting with Lan, not during autonomous activity.', '被拒绝', summary
             already = self._pinned_ids()
+            if memory_id not in already and not edit_reason.strip():
+                return ('Pinning needs edit_reason: say why this memory must always surface first.'), '被拒绝', summary
             if memory_id not in already and len(already) >= PINNED_LIMIT:
                 return (f'{PINNED_LIMIT} memories are already pinned. Unpin one first '
                         '(trace pinned=0 with importance 1-10) before pinning another.'), '被拒绝', summary

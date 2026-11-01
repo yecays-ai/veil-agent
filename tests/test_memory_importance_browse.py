@@ -146,13 +146,23 @@ class PinnedTests(Base):
         self.assertIn('autonomous', result)
         self.assertNotIn('trace', [n for n, _ in self.backend.calls])
 
+    def test_trace_pin_needs_a_reason(self):
+        self.write('plain')
+        self.memory.state['entries']['plain'] = {'title': 'T plain', 'time': 'x', 'signature': None, 'hidden': False, 'text': 'body plain'}
+        result, state, _ = self.tools.invoke('trace', {'bucket_id': 'plain', 'pinned': 1})
+        self.assertEqual(state, '被拒绝')
+        self.assertIn('edit_reason', result)
+        self.assertNotIn('trace', [n for n, _ in self.backend.calls])
+        _, state, _ = self.tools.invoke('trace', {'bucket_id': 'plain', 'pinned': 1, 'edit_reason': '  '})
+        self.assertEqual(state, '被拒绝')
+
     def test_trace_cannot_pin_past_the_cap(self):
         for i in range(PINNED_LIMIT):
             self.write(f'p{i}', folder='permanent', extra='pinned: true\ntype: permanent\n')
         self.write('plain')
         self.memory.state['entries']['plain'] = {'title': 'T plain', 'time': 'x', 'signature': None, 'hidden': False, 'text': 'body plain'}
         self.memory.state['entries']['p0'] = {'title': 'T p0', 'time': 'x', 'signature': None, 'hidden': False, 'text': 'body p0'}
-        result, state, _ = self.tools.invoke('trace', {'bucket_id': 'plain', 'pinned': 1})
+        result, state, _ = self.tools.invoke('trace', {'bucket_id': 'plain', 'pinned': 1, 'edit_reason': 'why'})
         self.assertEqual(state, '被拒绝')
         self.assertIn(str(PINNED_LIMIT), result)
         self.assertNotIn('trace', [n for n, _ in self.backend.calls])
