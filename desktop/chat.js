@@ -1570,6 +1570,7 @@ $('mcp-form').onsubmit=async event=>{
 };
 if(detachedView==='mcp')loadMCP();
 if(detachedView==='life')loadLife();
+setInterval(()=>{if(document.body.dataset.currentPage==='life'&&!document.hidden)loadLife()},15000);
 setInterval(()=>{if(document.body.dataset.currentPage==='mcp'&&!mcpLoading&&$('mcp-form').hidden)loadMCP()},3000);
 
 // Ticket 134: 模型 settings card and the header switch. The server keeps keys; this page only sees "…1234".

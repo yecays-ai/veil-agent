@@ -98,12 +98,12 @@ async function createDetachedWindow(view, point) {
   const existing = detachedWindows.get(view);
   if (existing && !existing.isDestroyed()) { existing.showInactive(); return true; }
   if (!agentEndpoint) return false;
-  const fallbackSize = view === 'chat' ? { width: 520, height: 680 } : { width: 430, height: 680 };
+  const fallbackSize = view === 'chat' ? { width: 520, height: 680 } : view === 'life' ? { width: 980, height: 700 } : { width: 430, height: 680 };
   const fallback = { x: Number.isFinite(point?.x) ? Math.round(point.x - 170) : 80,
     y: Number.isFinite(point?.y) ? Math.round(point.y - 35) : 80, ...fallbackSize };
   const saved = settings.detachedBounds?.[view];
   const restored = restoredWindowBounds(saved, fallback, { width: 340, height: 420 });
-  const current = new BrowserWindow({ ...restored.bounds, minWidth: 340, minHeight: 420, frame: false,
+  const current = new BrowserWindow({ ...restored.bounds, minWidth: view === 'life' ? 520 : 340, minHeight: 420, frame: false,
     transparent: true, backgroundColor: '#00000000', resizable: true, hasShadow: true,
     alwaysOnTop: true, skipTaskbar: true, title: `Peter · ${view}`, show: false,
     webPreferences: { preload: path.join(__dirname, 'desktop-preload.cjs'), contextIsolation: true,
