@@ -19,6 +19,9 @@ OMBRE_TOOLS = ('trace', 'dream', 'letter_write', 'letter_read', 'letter_lock_upd
                 'anchor', 'release', 'plan', 'pulse')
 NATIVE_TOOLS = ('hold', 'breath_search', *OMBRE_TOOLS, 'memory_history', 'memory_catalog', 'memory_read')
 CONTENT_LIMIT, TITLE_LIMIT, WHY_LIMIT = 1500, 100, 500
+# Ombre allows 20 pinned memories; VEIL keeps the permanent front row much smaller (ticket 184).
+PINNED_LIMIT = 8
+CATALOG_PAGE = 5
 MERGED_MEMORY_LIMIT_BYTES = 48 * 1024
 SURPRISE_TAGS = {'惊喜', 'surprise'}
 
@@ -38,6 +41,14 @@ HOLD = SimpleNamespace(name='hold', inputSchema={
             'Optional other IDs of shown memories that describe this same event. '
             'Their exact stored text is appended to target_id; those source entries remain untouched.'},
         'why_remembered': {'type': 'string', 'description': 'Optional: why this matters to you, first person.'},
+        'importance': {'type': 'integer', 'minimum': 1, 'maximum': 10, 'description':
+            'Optional, new memory only: 1-10, default 5. It decides what surfaces first when a conversation '
+            'opens. Leave it unset unless you judge this memory clearly more or less central than usual; '
+            'change an existing memory later with trace.'},
+        'pinned': {'type': 'boolean', 'description':
+            'Optional, new memory only: make it a permanent core memory that always surfaces first (importance '
+            'becomes 10). Very scarce: at most ' + str(PINNED_LIMIT) + ' pinned memories exist at once, '
+            'why_remembered is required, and nothing else may be pinned for a passing feeling.'},
     }}, description=(
         'Save one long-term memory when YOU judge it worth keeping; the user does not need to say "remember". '
         'Worth keeping: facts with their reason, shared experiences, the relationship growing, decisions you '
@@ -50,8 +61,11 @@ HOLD = SimpleNamespace(name='hold', inputSchema={
         'Only say you remembered it if this tool succeeded.'))
 SEARCH = SimpleNamespace(name='breath_search', inputSchema={
     'type': 'object', 'required': ['query'], 'additionalProperties': False,
-    'properties': {'query': {'type': 'string', 'description': 'What to look for.'}}},
-    description='Look up your saved memories when the automatic recall did not bring up what you need.')
+    'properties': {'query': {'type': 'string', 'description': 'What to look for.'},
+                   'date_from': {'type': 'string', 'description': 'Optional YYYY-MM-DD: only memories created on or after it.'},
+                   'date_to': {'type': 'string', 'description': 'Optional YYYY-MM-DD: only memories created on or before it.'}}},
+    description='Look up your saved memories when the automatic recall did not bring up what you need. '
+                'date_from / date_to narrow the search to memories created in that period.')
 
 DESCRIPTION = ('Memory tools are separate from file access. Use hold to save lasting experience and '
                'breath_search to find a known memory; use the listed Ombre tools for edits, reflection, '
@@ -65,11 +79,18 @@ MEMORY_HISTORY = SimpleNamespace(name='memory_history', inputSchema={
 
 
 MEMORY_CATALOG = SimpleNamespace(name='memory_catalog', description=(
-    'List current visible memory IDs and titles in stable ID order, five per page. '
-    'Pass next_after as after to continue; an empty next_after means done. '
-    'This reads local metadata without embeddings or a model. Use memory_read for current text; '
-    'memory_history contains only older versions, and dream has no historical offset.'), inputSchema={
-        'type': 'object', 'properties': {'after': {'type': 'string'}}, 'additionalProperties': False})
+    'List current visible memory IDs, titles and creation dates, five per page, from local metadata '
+    '(no embeddings, no model). order: "id" (default, stable ID order), "newest" or "oldest" by creation time. '
+    'created_from / created_to (YYYY-MM-DD, both inclusive, optional) keep only memories created in that period; '
+    'use them to walk the older memories of a given time span. Each result has total (all matches), items and '
+    'next_after; pass next_after as after, with the same order and dates, to continue; an empty next_after '
+    'means done. Use memory_read for current text; memory_history contains only older versions, and dream has '
+    'no historical offset.'), inputSchema={
+        'type': 'object', 'additionalProperties': False, 'properties': {
+            'after': {'type': 'string'},
+            'order': {'type': 'string', 'enum': ['id', 'newest', 'oldest']},
+            'created_from': {'type': 'string', 'description': 'YYYY-MM-DD, inclusive.'},
+            'created_to': {'type': 'string', 'description': 'YYYY-MM-DD, inclusive.'}}})
 MEMORY_READ = SimpleNamespace(name='memory_read', description=(
     'Read an exact slice of a current visible memory, including its metadata. '
     'Pass its memory_id from memory_catalog and next_offset as offset until next_offset is null. '
@@ -287,7 +308,7 @@ class NativeMemoryTools:
         except Exception:
             return 'The memory tool failed. Check the current memory state before retrying.', '出错', self.preview_summary(name, args)
 
-    def _visible_records(self):
+    def _visible_records(self, include_hidden=False):
         # Read only actual bucket folders, never letters, plans, sources or private files.
         vault_path = role_vault_path(self.memory.store.root, self.memory.cfg.id)
         hidden = self.memory.hidden_ids()
@@ -322,11 +343,12 @@ class NativeMemoryTools:
                 if meta.get('source_tool', '').casefold() == 'letter' or '__letter__' in '\n'.join(lines[1:end]):
                     continue
                 key = meta.get('id', '')
-                if not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', key) or key in hidden:
+                if not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', key) or (key in hidden and not include_hidden):
                     continue
                 if meta.get('deleted_at', '').casefold() not in ('', 'null', 'none', 'false'):
                     continue
-                if meta.get('dont_surface', '').casefold() not in ('', '0', 'false', 'null', 'none'):
+                if (not include_hidden
+                        and meta.get('dont_surface', '').casefold() not in ('', '0', 'false', 'null', 'none')):
                     continue
                 if self.memory.state['entries'].get(key, {}).get('deleted'):
                     continue
@@ -387,23 +409,81 @@ class NativeMemoryTools:
         return (False, '这次没能确认 Ombre 的删除；这条已经不会再被想起，稍后可以再删一次。') if failure \
             else (True, '已删除。')
 
+    @staticmethod
+    def _date_bound(value, *, upper):
+        """Parse an optional YYYY-MM-DD bound; None when empty. Raises ValueError when invalid."""
+        if value in (None, ''):
+            return None
+        if not isinstance(value, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}', value.strip()):
+            raise ValueError('dates must be YYYY-MM-DD')
+        day = datetime.strptime(value.strip(), '%Y-%m-%d')
+        return day.replace(hour=23, minute=59, second=59, microsecond=999999) if upper else day
+
+    @staticmethod
+    def _created_of(raw):
+        """Creation time as written in the memory (local time, offset dropped); None if unreadable."""
+        created = parse_frontmatter(raw)[0].get('created')
+        if not isinstance(created, str) or not created.strip():
+            return None
+        try:
+            return datetime.fromisoformat(created.strip().replace('Z', '+00:00')).replace(tzinfo=None)
+        except ValueError:
+            return None
+
+    def _pinned_ids(self):
+        # Hidden (dont_surface) pinned memories still occupy a pin slot: hiding one must not free it.
+        pinned = set()
+        for key, (_, raw) in self._visible_records(include_hidden=True).items():
+            if str(parse_frontmatter(raw)[0].get('pinned', '')).casefold() in ('true', '1', 'yes'):
+                pinned.add(key)
+        return pinned
+
     def _catalog(self, args):
         after = args.get('after', '')
         if not isinstance(after, str) or (after and not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', after)):
             return 'The memory catalog cursor is invalid. Restart the listing without a cursor.', '被拒绝', 'memory_catalog'
+        order = args.get('order', 'id')
+        if order not in ('id', 'newest', 'oldest'):
+            return 'order must be "id", "newest" or "oldest".', '被拒绝', 'memory_catalog'
+        try:
+            created_from = self._date_bound(args.get('created_from'), upper=False)
+            created_to = self._date_bound(args.get('created_to'), upper=True)
+        except ValueError:
+            return 'created_from and created_to must be dates written YYYY-MM-DD.', '被拒绝', 'memory_catalog'
+        if created_from and created_to and created_from > created_to:
+            return 'created_from cannot be later than created_to.', '被拒绝', 'memory_catalog'
         records = self._visible_records()
-        keys = sorted(key for key in records if key > after)
+        stamps = {key: self._created_of(raw) for key, (_, raw) in records.items()}
+        if created_from or created_to:
+            # A memory whose creation time cannot be read cannot prove it is inside the period: leave it out.
+            matching = [key for key, stamp in stamps.items() if stamp is not None
+                        and (not created_from or stamp >= created_from) and (not created_to or stamp <= created_to)]
+        else:
+            matching = list(records)
+        if order == 'id':
+            keys = sorted(matching)
+            keys = [key for key in keys if key > after]
+        else:
+            keys = sorted(matching, key=lambda key: (stamps[key] or datetime.min, key), reverse=order == 'newest')
+            if after:
+                if after not in keys:
+                    return ('The catalog cursor no longer points to a listed memory. '
+                            'Restart the listing without a cursor.'), '被拒绝', 'memory_catalog'
+                keys = keys[keys.index(after) + 1:]
         page = []
-        for key in keys[:5]:
-            candidate = page + [{'memory_id': key, 'title': records[key][0][:80]}]
-            result = json.dumps({'items': candidate, 'next_after': key if len(keys) > len(candidate) else ''}, ensure_ascii=False)
+        for key in keys[:CATALOG_PAGE]:
+            stamp = stamps[key]
+            item = {'memory_id': key, 'title': records[key][0][:80], 'created': stamp.strftime('%Y-%m-%d') if stamp else ''}
+            candidate = page + [item]
+            result = json.dumps({'total': len(matching), 'items': candidate,
+                                 'next_after': key if len(keys) > len(candidate) else ''}, ensure_ascii=False)
             if len(result.encode('utf-8')) > self.max_result_bytes:
                 break
             page = candidate
         if keys and not page:
             return 'The result limit is too small to return one complete catalog entry.', '出错', 'memory_catalog'
         cursor = page[-1]['memory_id'] if len(keys) > len(page) else ''
-        return json.dumps({'items': page, 'next_after': cursor}, ensure_ascii=False), '成功', '记忆目录'
+        return json.dumps({'total': len(matching), 'items': page, 'next_after': cursor}, ensure_ascii=False), '成功', '记忆目录'
 
     def _read(self, args):
         key, offset = args.get('memory_id'), args.get('offset', 0)
@@ -509,6 +589,18 @@ class NativeMemoryTools:
         old = self.memory.raw_content_for(memory_id)
         if old is None:
             return 'The target memory could not be read, so it was not changed.', '被拒绝', summary
+        if args.get('pinned') in (1, True) and type(args.get('pinned')) in (int, bool):
+            if self.autonomy_mode:
+                return 'Pinning is available only while chatting with Lan, not during autonomous activity.', '被拒绝', summary
+            already = self._pinned_ids()
+            if memory_id not in already and len(already) >= PINNED_LIMIT:
+                return (f'{PINNED_LIMIT} memories are already pinned. Unpin one first '
+                        '(trace pinned=0 with importance 1-10) before pinning another.'), '被拒绝', summary
+        hide = args.get('dont_surface')
+        if (hide is True or hide == 1 or (isinstance(hide, str) and hide.strip().casefold() in ('1', 'true', 'yes'))) \
+                and memory_id in self._pinned_ids() and args.get('pinned') not in (0, False):
+            return ('This memory is pinned. Unpin it first (trace pinned=0 with importance 1-10) '
+                    'before hiding it from recall.'), '被拒绝', summary
         if delete and self.autonomy_mode:
             return self._queue_delete(memory_id, summary, args, old)
         if delete and (approval is None or approval(
@@ -748,6 +840,24 @@ class NativeMemoryTools:
         if (len(content) > CONTENT_LIMIT or len(why) > WHY_LIMIT
                 or (isinstance(title, str) and len(title) > TITLE_LIMIT)):
             return f'The content exceeds the {CONTENT_LIMIT}-character limit. Shorten it and save again.', '被拒绝', summary
+        importance, pinned = args.get('importance'), args.get('pinned')
+        if importance is not None or pinned is not None:
+            if target_id is not None:
+                return 'importance and pinned apply only to a new memory. Change an existing one with trace.', '被拒绝', summary
+            if importance is not None and (type(importance) is not int or not 1 <= importance <= 10):
+                return 'importance must be a whole number from 1 to 10.', '被拒绝', summary
+            if pinned is not None and type(pinned) is not bool:
+                return 'pinned must be true or false.', '被拒绝', summary
+            if pinned:
+                if self.autonomy_mode:
+                    return 'Pinning is available only while chatting with Lan, not during autonomous activity.', '被拒绝', summary
+                if importance is not None:
+                    return 'A pinned memory always has importance 10; do not pass importance with pinned.', '被拒绝', summary
+                if not why.strip():
+                    return 'A pinned memory needs why_remembered: say why it must always surface first.', '被拒绝', summary
+                if len(self._pinned_ids()) >= PINNED_LIMIT:
+                    return (f'{PINNED_LIMIT} memories are already pinned. Unpin one with trace first, or save this '
+                            'one without pinned.'), '被拒绝', summary
         if target_id is not None:
             if not isinstance(target_id, str) or not self._editable(target_id):
                 return 'target_id must be a memory you were shown: an automatic recall or a breath_search result from this conversation. Search again and use its ID.', '被拒绝', summary
@@ -813,6 +923,10 @@ class NativeMemoryTools:
         ombre_args = {'content': content.strip(), 'title': title.strip()}
         if why.strip():
             ombre_args['why_remembered'] = why.strip()
+        if pinned:
+            ombre_args['pinned'] = True
+        elif importance is not None:
+            ombre_args['importance'] = importance
         operation_id, duplicate_operation = self.memory.begin_write(ombre_args)
         if duplicate_operation is not None:
             return ('This save is still unconfirmed after its earlier connection failure. '
@@ -840,8 +954,19 @@ class NativeMemoryTools:
         query = args.get('query')
         if not isinstance(query, str) or not query.strip():
             return 'The search query must be non-empty text.', '被拒绝', 'breath_search'
-        text = self.memory.call('breath_search', {
-            'query': query.strip(), 'mode': 'automatic', 'with_ids': True, 'max_results': 3})
+        ombre_args = {'query': query.strip(), 'mode': 'automatic', 'with_ids': True, 'max_results': 3}
+        try:
+            start = self._date_bound(args.get('date_from'), upper=False)
+            end = self._date_bound(args.get('date_to'), upper=True)
+        except ValueError:
+            return 'date_from and date_to must be dates written YYYY-MM-DD.', '被拒绝', 'breath_search'
+        if start and end and start > end:
+            return 'date_from cannot be later than date_to.', '被拒绝', 'breath_search'
+        if start:
+            ombre_args['date_from'] = args['date_from'].strip()
+        if end:
+            ombre_args['date_to'] = args['date_to'].strip()
+        text = self.memory.call('breath_search', ombre_args)
         found = self.memory.visible(ordinary_hits(text))
         # Keep earlier results so a memory found a moment ago can still be extended (ticket 183).
         self.memory.mark_surfaced([key for key, _ in found])

@@ -1,5 +1,13 @@
 # 交接
 
+## 工单 184 交接（2026-11-01）
+
+- 分支 `ticket/184-memory-importance-browse`。`NativeMemoryTools`：`hold` 新增 `importance`/`pinned`（`PINNED_LIMIT = 8`，`_pinned_ids()` 数本地文件里的 `pinned: true`，`trace(pinned=1)` 同样检查）；`memory_catalog` 新增 `order`/`created_from`/`created_to` 和 `total`；`breath_search` 新增 `date_from`/`date_to` 并原样传给 Ombre。`memory_agent` 的 `created_id`/`record_native` 认得 `📌钉选→`。
+- 没有用官方 `breath_advanced(catalog=True)`：它没有 ID、没有翻页、超过 50 条静默截断，见工单文档。
+- 未验证：Windows 上 Peter 是否会合理使用 importance；置顶后开场记忆是否按预期置顶（Ombre `breath()` 的 pinned 置顶行为只读过代码）；官方日期过滤在真实库里的命中。
+- 下一步（等 lan 审核）：110 条记忆的重要度/置顶建议表，只出表，不改数据；之后评估 `hold(feel)` 和 `I`。
+- 下一个工单号 185。
+
 ## 工单 183 交接（2026-11-01）
 
 - 分支 `ticket/183-memory-update-notes-json`。`Memory.surfaced_ids` + `NativeMemoryTools._editable`：召回或搜索过的记忆可 `hold(target_id)`；`short_term_notes._parse_json_object` 容错并在 error 行记录 `reply_head`/`reply_chars`/`consecutive_failures`。

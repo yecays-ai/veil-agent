@@ -121,7 +121,7 @@ class NativeMemoryTests(unittest.TestCase):
 
         catalog, state, _ = native.invoke('memory_catalog', {})
         self.assertEqual(state, '成功')
-        self.assertEqual(json.loads(catalog)['items'], [{'memory_id': 'linked', 'title': 'Linked fiction'}])
+        self.assertEqual(json.loads(catalog)['items'], [{'memory_id': 'linked', 'title': 'Linked fiction', 'created': ''}])
         read, state, _ = native.invoke('memory_read', {'memory_id': 'linked'})
         self.assertEqual(state, '成功')
         self.assertIn('FICTIONAL_RELATED_MEMORY', json.loads(read)['text'])
