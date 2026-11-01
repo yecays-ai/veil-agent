@@ -745,6 +745,13 @@ class OmbreToolGuardTests(unittest.TestCase):
         self.assertEqual(state, '被拒绝')
         self.assertNotIn('does-not-exist', self.memory.surfaced_ids)
 
+    def test_a_refused_read_of_a_hidden_memory_does_not_make_it_editable(self):
+        self.path.write_text(self.path.read_text(encoding='utf-8').replace('tags: [keep]', 'tags: [keep]\ndont_surface: true'),
+                             encoding='utf-8')
+        _, state, _ = self.call('memory_read', {'memory_id': 'mem001'})
+        self.assertEqual(state, '被拒绝')
+        self.assertNotIn('mem001', self.memory.surfaced_ids)
+
     def test_hold_target_refuses_surfaced_memory_that_became_hidden(self):
         self.memory.mark_surfaced(['mem001'])
         self.path.write_text(self.path.read_text(encoding='utf-8').replace('tags: [keep]', 'tags: [keep]\ndont_surface: true'),
