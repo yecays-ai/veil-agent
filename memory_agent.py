@@ -1057,7 +1057,7 @@ class Memory:
     def record_native(self, args, text):
         """Track a memory Peter saved through hold so /memory and /delete can reach it."""
         memory_id = self.created_id(text)
-        kind = re.search(r'(新建|feel|合并)→', text).group(1)
+        kind = re.search(r'(新建|feel|合并|钉选)→', text).group(1)
         with self.mutex:
             previous = self.state['entries'].get(memory_id, {})
             entry = {'title': args['title'][:100], 'time': self.budget.clock(), 'signature': None,
@@ -1068,11 +1068,11 @@ class Memory:
             self.state['entries'][memory_id] = entry
             self.persist()
             self.bucket_details_cache.pop(memory_id, None)
-        return '新建' if kind == 'feel' else kind
+        return '新建' if kind in ('feel', '钉选') else kind
 
     @staticmethod
     def created_id(text):
-        match = re.search(r'(?:新建|feel|合并)→([\w-]+)', text)
+        match = re.search(r'(?:新建|feel|合并|钉选)→([\w-]+)', text)
         if not match:
             raise ValueError('memory save not confirmed')
         return match.group(1)
