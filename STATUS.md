@@ -4,6 +4,7 @@
 
 ## 当前目标与现状
 
+- 工单 188「读过的记忆也算展示过」（`ticket/188-read-counts-as-shown`）：Peter 整理重复记忆时，`memory_read` 读过的记忆被 `hold(target_id)` 拒绝（只有自动召回和 `breath_search` 登记）。现在读成功也登记。现状：代码和自动测试完成，Windows 体验未验证。验收见 `docs/tickets/188-read-counts-as-shown.md`。下一个工单号 189（工单 187 为 PR #237）。
 - 工单 186「DeepSeek 内置输入上限 64K」（`ticket/186-deepseek-window-64k`）：lan 11-01 用 deepseek 每次报「超过 32768」（系统人设 5125 + 工具定义 23965 + 状态 430 + 当前消息含图 4244 ≈ 33763，历史已全裁掉仍放不下）。`characters/peter/character.toml` 的 deepseek 内置档 `max_input_tokens` 由 32768 改为 65536（自主醒来本来就用 65536）；只在真的超过 32K 时才多发，费用见验收单。现状：配置改完，Windows 体验未验证。验收见 `docs/tickets/186-deepseek-window-64k.md`。下一个工单号 187。
 - 工单 185「trace 置顶也要理由」（`ticket/185-trace-pin-needs-reason`）：工单 184 已合并（PR #234）。Peter 11-01 实测发现用 trace 置顶不需要理由（hold 要），重要度直接变 10。现在 trace 置顶（新置顶）必须带 `edit_reason`，否则拒绝（理由须含可见文字，pinned 写成 "true"/1.0 也一样）。现状：代码和自动测试完成，Windows 体验未验证。验收见 `docs/tickets/185-trace-pin-needs-reason.md`。下一个工单号 186。
 - 工单 184（`ticket/184-memory-importance-browse`，已合并 PR #234）按 11-01 记忆对照审计（项目文件 `audit/ombre-wiring-comparison-2026-11-01.md`）补接 Ombre：`hold` 可给重要度和受限置顶（最多 8 条，要理由，后台不可用），`breath_search` 可按日期，`memory_catalog` 可按创建时间排序、按日期区间翻页。现状：代码和自动测试完成，Windows 体验未验证。验收见 `docs/tickets/184-memory-importance-browse.md`。重要度/置顶建议表已出（项目文件 `audit/memory-importance-proposal-2026-11-01.md`），等 lan 审核后才改数据。

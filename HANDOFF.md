@@ -1,3 +1,8 @@
+## 工单 188 交接（2026-11-01）
+
+- 分支 `ticket/188-read-counts-as-shown`。`NativeMemoryTools._read` 成功后调用 `memory.mark_surfaced([key])`；`_editable` 本来就认 `surfaced_ids`，所以不用别的改动。隐藏/不存在的记忆读失败，不登记；名单上限仍是 `Memory.SURFACED_LIMIT = 40`。连续工具卡片占满屏幕没有处理，另议。
+- 下一个工单号 189（187 为 PR #237）。
+
 ## 工单 186 交接（2026-11-01）
 
 - 分支 `ticket/186-deepseek-window-64k`。只改 `characters/peter/character.toml`：`[providers.deepseek] max_input_tokens` 32768 → 65536。聊天裁剪用 `cfg.provider['max_input_tokens']`（`veil_agent.py` 约 3116–3282），所以历史会多保留，不再先裁光。同一上限还影响两处：短期便签提取批次上限 `min(MAX_REQUEST_BYTES, max_input_tokens // 2)`（`short_term_notes.py` 约 532，由 16384 字节变为 20000 字节，一次便签整理的输入略多）；每次请求的费用预留 `Budget.reserve` 按上限算输入部分，预留约由 ¥0.07 变为 ¥0.14（只在接近每日上限时才可能影响放行，结算仍按实际用量）。`gpt` 档不变；用户在「模型」页自加的模型仍用自己的上限。
