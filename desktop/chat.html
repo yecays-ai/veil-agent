@@ -27,6 +27,7 @@
     <button id="activity-tab" class="nav-item" data-page="activity" title="拖出可变成独立窗口"><span data-lucide="activity"></span>活动</button>
     <button class="nav-item" data-page="context" title="拖出可变成独立窗口"><span data-lucide="layers"></span>上下文</button>
     <button class="nav-item" data-page="memory" title="拖出可变成独立窗口"><span data-lucide="brain"></span>记忆</button>
+    <button class="nav-item" data-page="life" title="共同生活记录"><span data-lucide="calendar-heart"></span>生活</button>
     <button class="nav-item" data-page="mcp" title="拖出可变成独立窗口"><span data-lucide="plug"></span>MCP</button>
     <button class="nav-item" data-page="more" title="拖出可变成独立窗口"><span data-lucide="more-horizontal"></span>更多</button>
   </nav>
@@ -57,6 +58,9 @@
     <div class="memory-toolbar"><label for="memory-search">搜索记忆</label><input id="memory-search" type="search" placeholder="搜索记忆…（标题、内容、标签都能搜）"></div>
     <div class="memory-layout"><section id="memory-list" class="surface memory-list" aria-label="Ombre 记忆列表"><p class="muted">正在读取 Ombre 记忆…</p></section><article id="memory-detail" class="surface memory-detail"><p class="muted">点上面一条记忆查看内容。</p></article></div>
     <div class="memory-footer"><span id="memory-count" class="muted">尚未读取</span><div><span id="memory-unavailable" class="muted" hidden>Ombre 记忆暂不可用</span><button id="memory-panel" hidden>高级管理 · Ombre Dashboard <span data-lucide="external-link" data-size="14"></span></button></div></div>
+  </section>
+  <section id="life-view" class="page" data-page-view="life" hidden>
+    <div class="life-shell"><aside class="life-nav surface"><div class="life-brand"><span>✦</span><div><b>生活记录中心</b><small>Peter &amp; Lan</small></div></div><div class="life-filter"><button data-life-owner="all" aria-pressed="true">共同空间</button><button data-life-owner="Peter">Peter</button><button data-life-owner="Lan">Lan</button></div><div class="life-section"><small>记录</small><button data-life-kind="all" class="active">◷　今日</button><button data-life-kind="event">▦　日历</button><button data-life-kind="note">☑　每日便签</button><button data-life-kind="plan">◇　长期计划</button><button data-life-kind="diary">▤　日记</button><button data-life-kind="completed">✓　已完成</button></div><label class="life-date">查看日期<input id="life-day" type="date"></label></aside><section class="life-main"><header class="life-header"><div><p class="eyebrow">生活记录 · PETER & LAN</p><h2 id="life-heading">今天，慢慢来</h2><p>把日子留在这里，之后还可以一起翻阅。</p></div><button class="life-add" id="life-new">＋　新记录</button></header><div class="life-toolbar"><span>今日记录</span><span id="life-count">正在读取记录…</span></div><div id="life-records" class="life-records"></div></section><aside class="life-detail surface" id="life-detail"><div class="detail-empty"><span>✧</span><h3>留一点空间给今天</h3><p>选择一条记录，或者写下一个想记住的瞬间。</p><button id="life-detail-new">写一条记录　＋</button></div></aside></div>
   </section>
   <section id="mcp-view" class="page" data-page-view="mcp" hidden>
     <div class="page-heading"><div><p class="eyebrow">本地工具服务</p><h2>MCP</h2></div><button id="mcp-refresh" type="button">刷新</button></div>

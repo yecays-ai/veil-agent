@@ -32,7 +32,7 @@ function notify(text,kind='notice'){
   setTimeout(()=>node.remove(),Math.min(15000,Math.max(2000,text.length*80)));
 }
 function setPage(name){
-  if(!['chat','activity','context','memory','mcp','more'].includes(name))return;
+  if(!['chat','activity','context','memory','mcp','more','life'].includes(name))return;
   if(detachedView&&name!==detachedView)return;
   document.body.dataset.currentPage=name;
   document.querySelectorAll('[data-page]').forEach(button=>{
@@ -711,6 +711,30 @@ function readMemory(item){
   const hint=document.createElement('p');hint.className='memory-hint';hint.textContent='保存会把旧版本留档；删除不能恢复。Peter 不会收到通知。';
   detail.replaceChildren(eyebrow,heading,facts,title.wrap,why.wrap,body.wrap,actions,status,hint,raw);
 }
+const LIFE_LABEL={event:'日历记录',note:'每日便签',plan:'长期计划',diary:'日记'};let lifeRows=[],lifeOwner='all',lifeKind='all',lifeDay='';const lifeToday=()=>new Date().getFullYear()+'-'+String(new Date().getMonth()+1).padStart(2,'0')+'-'+String(new Date().getDate()).padStart(2,'0');
+async function loadLife(){try{const r=await api('/api/life');const d=await r.json();if(!r.ok)throw Error(d.error||'读取失败');lifeRows=d.records||[];renderLife()}catch(e){$('life-count').textContent=e.message}}
+function renderLife(){const host=$('life-records');host.replaceChildren();if(lifeKind==='event'){
+    const selected=lifeDay?new Date(lifeDay+'T12:00:00'):new Date();
+    const month=new Date(selected.getFullYear(),selected.getMonth(),1);
+    const start=new Date(month);start.setDate(1-((month.getDay()+6)%7));
+    const grid=document.createElement('div');grid.className='life-calendar surface';
+    const heading=document.createElement('div');heading.className='life-calendar-heading';
+    const prev=document.createElement('button');prev.textContent='‹';
+    const next=document.createElement('button');next.textContent='›';
+    const label=document.createElement('strong');label.textContent=month.toLocaleDateString('zh-CN',{year:'numeric',month:'long'});
+    prev.onclick=()=>{lifeDay=new Date(month.getFullYear(),month.getMonth()-1,1).toISOString().slice(0,10);$('life-day').value=lifeDay;renderLife()};
+    next.onclick=()=>{lifeDay=new Date(month.getFullYear(),month.getMonth()+1,1).toISOString().slice(0,10);$('life-day').value=lifeDay;renderLife()};
+    heading.append(prev,label,next);grid.append(heading);
+    const days=document.createElement('div');days.className='life-calendar-days';
+    for(const name of ['一','二','三','四','五','六','日']){const cell=document.createElement('span');cell.textContent=name;days.append(cell)}
+    for(let i=0;i<42;i++){const date=new Date(start);date.setDate(start.getDate()+i);const key=date.getFullYear()+'-'+String(date.getMonth()+1).padStart(2,'0')+'-'+String(date.getDate()).padStart(2,'0');const cell=document.createElement('button');cell.textContent=String(date.getDate());cell.className=date.getMonth()===month.getMonth()?'':'outside';if(key===lifeDay)cell.classList.add('selected');if(lifeRows.some(x=>x.kind==='event'&&x.date===key))cell.classList.add('has-record');cell.onclick=()=>{lifeDay=key;$('life-day').value=key;renderLife()};days.append(cell)}
+    grid.append(days);host.append(grid)
+  }
+  const rows=lifeRows.filter(x=>(lifeOwner==='all'||x.owner===lifeOwner)&&(lifeKind==='all'&&(x.date===lifeToday()||x.kind==='plan'&&x.state==='active')||lifeKind==='completed'&&x.state==='completed'||x.kind===lifeKind)&&(lifeKind!=='event'||!lifeDay||x.date===lifeDay));$('life-count').textContent=rows.length+' 条记录';for(const x of rows){const b=document.createElement('button');b.className='life-card surface';b.style.setProperty('background','var(--panel)','important');b.style.setProperty('color','var(--text)','important');b.innerHTML='<span class="life-card-icon">✦</span><span class="life-card-copy"><span class="life-card-meta"></span><b></b><span class="life-summary"></span></span><span class="life-state"></span>';b.querySelector('.life-card-meta').textContent=`${LIFE_LABEL[x.kind]} · ${x.owner} · ${x.date}`;b.querySelector('b').textContent=x.title;b.querySelector('.life-summary').textContent=x.content||'打开查看记录';b.querySelector('.life-state').textContent=x.state==='completed'?'已完成':x.state==='paused'?'已搁置':'进行中';b.onclick=()=>showLife(x);host.append(b)}}
+function showLife(x){$('life-detail').innerHTML='<div class="detail-top"></div><h2 class="detail-title"></h2><p class="detail-date"></p><div class="detail-content"></div><div class="detail-audit"></div><div class="detail-history"></div><div class="detail-actions"><button id="life-edit">编辑</button><button id="life-done">标记完成</button></div>';const d=$('life-detail');d.querySelector('.detail-top').textContent=LIFE_LABEL[x.kind]+' · '+x.owner;d.querySelector('.detail-title').textContent=x.title;d.querySelector('.detail-date').textContent=x.date+' · '+x.state;d.querySelector('.detail-content').textContent=x.content;d.querySelector('.detail-audit').textContent='由 '+x.created_by+' 创建 · 最近由 '+x.updated_by+' 修改于 '+x.updated_at+(x.completed_at?' · 完成于 '+x.completed_at:'')+(x.history?.length?' · 历史版本 '+x.history.length+' 条':'');if(x.history?.length){const h=d.querySelector('.detail-history');const title=document.createElement('h3');title.textContent='修改历史';h.append(title);for(const item of [...x.history].reverse()){const row=document.createElement('div');row.textContent=(item.at||'')+' · '+(item.by||'')+' · '+(item.state||'')+' · '+(item.title||'');h.append(row)}}d.querySelector('#life-edit').disabled=!!x.read_only;d.querySelector('#life-done').disabled=!!x.read_only&&x.source!=='Ombre plan';d.querySelector('#life-edit').onclick=()=>lifeForm(x);d.querySelector('#life-done').onclick=()=>saveLife(x.source==='Ombre plan'?{id:x.id,state:'completed'}:{...x,state:'completed'})}
+function lifeForm(x={}){const d=$('life-detail');d.innerHTML='<h2>写下一条记录</h2><label class="life-field">类型<select id="lf-kind"><option value="event">日历记录</option><option value="note">每日便签</option><option value="plan">长期计划</option><option value="diary">日记</option></select></label><label class="life-field">标题<input id="lf-title"></label><label class="life-field">内容<textarea id="lf-content" rows="7"></textarea></label><label class="life-field">归属<select id="lf-owner"><option>共同</option><option>Peter</option><option>Lan</option></select></label><label class="life-field">日期<input id="lf-date" type="date"></label><button id="lf-save" class="life-add">保存记录</button>';d.querySelector('#lf-kind').value=x.kind||'event';d.querySelector('#lf-title').value=x.title||'';d.querySelector('#lf-content').value=x.content||'';d.querySelector('#lf-owner').value=x.owner||'共同';d.querySelector('#lf-date').value=x.date||lifeToday();d.querySelector('#lf-save').onclick=()=>saveLife({...x,id:x.id,kind:d.querySelector('#lf-kind').value,title:d.querySelector('#lf-title').value,content:d.querySelector('#lf-content').value,owner:d.querySelector('#lf-owner').value,date:d.querySelector('#lf-date').value,updated_by:'Lan'})}
+async function saveLife(x){const r=await api('/api/life',x),d=await r.json();if(!r.ok){notify(d.error||'保存失败','error');return}const i=lifeRows.findIndex(y=>y.id===d.record.id);if(i<0)lifeRows.unshift(d.record);else lifeRows[i]=d.record;renderLife();showLife(d.record)}
+document.querySelectorAll('[data-life-kind]').forEach(b=>b.onclick=()=>{lifeKind=b.dataset.lifeKind;document.querySelectorAll('[data-life-kind]').forEach(x=>x.classList.toggle('active',x===b));renderLife()});document.querySelectorAll('[data-life-owner]').forEach(b=>b.onclick=()=>{lifeOwner=b.dataset.lifeOwner;renderLife()});$('life-new').onclick=$('life-detail-new').onclick=()=>lifeForm();$('life-day').onchange=()=>{lifeDay=$('life-day').value;renderLife()};
 async function approve(card,status,answer,id){
   if(card.dataset.sending==='true'||card.classList.contains('done'))return;
   card.dataset.sending='true';
@@ -1363,7 +1387,7 @@ window.addEventListener('storage',event=>{
   if(event.key===`${APPEARANCE_KEY}-css`){try{$('custom-css').value=event.newValue||'';applyCustomCSS(event.newValue||'')}catch{}}
 });
 document.querySelectorAll('[data-theme-choice]').forEach(button=>button.onclick=()=>{
-  appearance.theme=button.dataset.themeChoice;applyAppearance();storeAppearance();window.veilDesktop.saveTheme(appearance.theme);
+  appearance.theme=button.dataset.themeChoice;applyAppearance();if(document.body.dataset.currentPage==='life')renderLife();storeAppearance();window.veilDesktop.saveTheme(appearance.theme);
 });
 window.veilDesktop.saveTheme(appearance.theme).catch(()=>{});
 function setAllWindowOpacity(value){appearance.windowOpacity=clampSetting(value,20,100,88);for(const page of ['chat','activity','context','memory','mcp','more'])appearance.pageOpacity[page]=appearance.windowOpacity;applyAppearance();storeAppearance()}
@@ -1400,6 +1424,7 @@ document.querySelectorAll('[data-page]').forEach(button=>button.onclick=()=>{
   setPage(button.dataset.page);
   if(button.dataset.page==='memory'&&memoryAvailable&&!memoryLoaded&&!memoryLoading)loadMemoryCatalog(true);
   if(button.dataset.page==='mcp')loadMCP();
+  if(button.dataset.page==='life')loadLife();
 });
 $('memory-panel').onclick=()=>window.veilDesktop.openMemory();
 document.querySelectorAll('[data-cmd="/cost"]').forEach(button=>button.onclick=()=>{setPage('chat');send('/cost')});

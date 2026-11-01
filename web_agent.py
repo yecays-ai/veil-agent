@@ -155,6 +155,7 @@ class Hub(ScreenPopMixin):
 
     def __init__(self, name, activity, memory_port=None, media_root=None):
         self.name = name
+        self.life_path = ROOT / 'data' / 'life-records.json'
         self.chat = None
         self.activity = activity
         self.memory_url = f'http://127.0.0.1:{memory_port}/dashboard' if memory_port else None
@@ -1627,6 +1628,52 @@ def make_handler(hub, token):
                     after = 0
                 self._send(200, hub.snapshot(after))
 
+        def _get_life(self):
+            if not self._guard(self.headers.get('X-Token')):
+                return
+            try:
+                value = {'records': hub.chat.life_records.read()} if hub.chat is not None else {'records': []}
+                if not isinstance(value, dict) or not isinstance(value.get('records'), list):
+                    raise ValueError
+                rows = list(value['records'])
+                chat = hub.chat
+                if chat is not None:
+                    task = chat.long_tasks.read()
+                    if task:
+                        rows.append({'id': 'long-task:' + task['task_id'], 'kind': 'plan',
+                            'title': task['title'], 'content': task['goal'], 'owner': 'Peter',
+                            'date': task['created_at'][:10], 'state': task['status'],
+                            'created_by': 'Peter', 'created_at': task['created_at'],
+                            'updated_by': 'Peter', 'updated_at': task['updated_at'],
+                            'source': 'long_task_update', 'progress': task['progress'],
+                            'read_only': True})
+                    for old in chat.store.read(f'{chat.cfg.id}/long-task-history.jsonl'):
+                        if not isinstance(old,dict) or not isinstance(old.get('task_id'),str):
+                            continue
+                        rows.append({'id':'long-task:'+old['task_id'],'kind':'plan',
+                            'title':old.get('title',''),'content':old.get('goal',''),
+                            'owner':'Peter','date':old.get('created_at','')[:10],
+                            'state':'completed','completed_at':old.get('updated_at',''),
+                            'created_by':'Peter','created_at':old.get('created_at',''),
+                            'updated_by':'Peter','updated_at':old.get('updated_at',''),
+                            'source':'long_task_update','progress':old.get('progress',[]),
+                            'read_only':True})
+                    notes = getattr(chat, 'short_term_notes', None)
+                    if notes is not None:
+                        for note in notes._latest_notes().values():
+                            rows.append({'id': 'short-note:' + note['note_id'], 'kind': 'note',
+                                'title': note.get('text', '')[:120], 'content': note.get('text', ''),
+                                'owner': 'Peter', 'date': str(note.get('occurred_at') or note.get('time', ''))[:10],
+                                'state': 'completed' if note.get('status') == '已完成' else 'active',
+                                'created_by': 'Peter', 'created_at': note.get('time', ''),
+                                'updated_by': 'Peter', 'updated_at': note.get('updated_at', ''),
+                                'source': 'short_term_notes', 'read_only': True})
+                if hub.memory_tools is not None:
+                    rows.extend(hub.memory_tools.plan_entries())
+                self._send(200, {'records': rows})
+            except (OSError, ValueError, UnicodeError, UserError):
+                self._send(500, {'error': '生活记录无法安全读取。'})
+
         def _get_mcp(self, query):
             if not self._guard(self.headers.get('X-Token')):
                 return
@@ -1733,6 +1780,8 @@ def make_handler(hub, token):
                 self._get_attachment(url, query)
             elif url.path == '/api/events':
                 self._get_events(query)
+            elif url.path == '/api/life':
+                self._get_life()
             elif url.path == '/api/mcp':
                 self._get_mcp(query)
             elif url.path == '/api/screen-pop/next':
@@ -2118,6 +2167,45 @@ def make_handler(hub, token):
             else:
                 self._send(200, {'ok': True, 'state': 'stopped'})
 
+        def _post_life(self):
+            try:
+                length = int(self.headers.get('Content-Length') or 0)
+                if not 0 < length <= 20000:
+                    raise ValueError
+                body = json.loads(self.rfile.read(length))
+                if not isinstance(body, dict):
+                    raise ValueError
+                self._save_life(body)
+            except (ValueError, TypeError, UnicodeError):
+                self._send(400, {'error': 'invalid life record'})
+
+        def _save_life(self, body):
+            if hub.chat is None:
+                self._send(409, {'error':'Peter 尚未就绪。'})
+                return
+            source_id=body.get('id')
+            if isinstance(source_id,str) and source_id.startswith('ombre-plan:'):
+                if set(body)-{'id','state'} or body.get('state') not in ('active','completed','paused'):
+                    self._send(400, {'error':'此计划只能在这里修改状态；正文请在记忆页编辑。'})
+                    return
+                if hub.memory_tools is None:
+                    self._send(503, {'error':'Ombre 暂不可用。'})
+                    return
+                desired={'active':'active','completed':'resolved','paused':'abandoned'}[body['state']]
+                result,state,_=hub.memory_tools.invoke('trace',{'bucket_id':source_id.split(':',1)[1],
+                                                                   'status':desired})
+                self._send(200 if state=='成功' else 409, {'ok':state=='成功','message':result,
+                                                          'record':next((r for r in hub.memory_tools.plan_entries()
+                                                              if r['id']==source_id),None)})
+                return
+            try:
+                row=hub.chat.life_records.write(body,'Lan')
+                self._send(200, {'ok':True,'record':row})
+            except ValueError as exc:
+                self._send(400, {'error':str(exc)})
+            except (OSError,UnicodeError):
+                self._send(500, {'error':'生活记录未能安全保存。'})
+
         def do_POST(self):
             url = urlparse(self.path)
             if url.path.startswith('/game/'):
@@ -2130,6 +2218,9 @@ def make_handler(hub, token):
                 return
             if url.path in ('/api/memory/edit', '/api/memory/delete'):
                 self._post_memory_change(url)
+                return
+            if url.path == '/api/life':
+                self._post_life()
                 return
             if url.path == '/api/media':
                 self._post_media()
@@ -2149,6 +2240,9 @@ def make_handler(hub, token):
                     raise ValueError
             except ValueError:
                 self._send(400, {'error': 'bad request'})
+                return
+            if url.path == '/api/life':
+                self._save_life(body)
                 return
             if url.path == '/api/message/action':
                 self._post_message_action(body)

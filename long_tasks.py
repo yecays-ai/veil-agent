@@ -275,6 +275,10 @@ class LongTaskStore:
             if existing and existing['status'] != 'completed':
                 return (f"An unfinished task already exists ({existing['task_id']}: {existing['title']}, "
                         f"status: {existing['status']}); it cannot be replaced.", '被拒绝', existing['title'])
+            if existing and existing['status'] == 'completed':
+                history = f'{self.character_id}/long-task-history.jsonl'
+                if not any(row.get('task_id') == existing['task_id'] for row in self.store.read(history)):
+                    self.store.append(history, existing)
             stamp = now()
             task = {'task_id': uuid.uuid4().hex, 'title': title.strip(), 'goal': goal.strip(),
                     'status': 'active', 'progress': [], 'next_step': '拆分并开始第一项可验证工作。',

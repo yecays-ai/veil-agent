@@ -1,3 +1,9 @@
+## 工单 190 交接（2026-11-01）
+
+- 当前分支 `ticket/190-life-records-center`，本地从 main `d4a868c` 建立；Git CLI 推送因执行环境 DNS 受限，GitHub 连接器可读写仓库。
+- 生活页和记录工具开发中，见 `docs/tickets/190-life-records-center.md`；正式运行目录未改。
+- 下一步：补 Ombre 计划的真实展示、完整 Windows 渲染与回归，再推 PR。
+
 ## 工单 189 交接（2026-11-01）
 
 - 分支 `ticket/189-wire-i-tool`。`OMBRE_TOOLS` 加 `I`（Ombre 原样 schema + 一段英文说明），结果走隐藏记忆过滤；`tools_agent.NATIVE`、`web_agent.memory_names` 同步登记；`memory_agent.call` 的向量预留只在 `content`/`promote`/`supersedes` 时；`_filter_hidden_i` 按条目整块过滤隐藏记忆；`promote`/`supersedes` 指向隐藏记忆直接拒绝；`I` 不放进 `long_tasks` 的副作用/只读名单。一次性通知走现有 `bind_capabilities`。开场不注入 `I`，`feel` 写入没开。
@@ -238,4 +244,3 @@
 ## 工单 171 交接（2026-10-30）
 
 独立工作树基于远端 `main` 的 `57aacf0`，PR #219 已开放。首次 CI 已运行，因缺少常量导入与 `pypdf` 旧版漏洞失败；Cubic 的功能、安全和日志意见已在一个后续提交中修复。本地定向回归通过；活动日志只写工具、路径、结果，不记文档正文，写入目录没有扩大。下一步：核对最新 head 的 CI 与实质审查，按仓库规则处理 PR；Windows 体验待 Lan 验收。
-
