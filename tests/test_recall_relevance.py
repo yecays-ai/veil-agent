@@ -125,6 +125,7 @@ class AssistedRecallTests(unittest.TestCase):
         with unittest.mock.patch('dotenv.dotenv_values', return_value={}):
             text = self.text(memory, 'try again')
         self.assertIn('TAXES_MEMORY', text)  # today's recall
+        self.assertEqual([name for name, _ in self.backend.calls].count('breath_search'), 1)  # no extra search
         # Only Ombre's own search estimates (large) exist; no small estimate for the query embedding.
         reserves = [row for row in self.store.read('costs.jsonl') if row.get('type') == 'reserve']
         self.assertTrue(reserves)

@@ -1017,10 +1017,10 @@ class Memory:
         """Search again with the last rounds, keep only candidates close to that text; may keep none."""
         from recall_relevance import context_text, cosine, load_vectors
         text = context_text(recent, query, settings['rounds'])
+        embedder = self.embedder()  # a missing key fails here, before any extra search, reservation or request
         extra = ordinary_hits(self.call('breath_search', {
             'query': text, 'mode': 'automatic', 'with_ids': True, 'max_results': 3}))
         candidates = dict(normal + extra + emotional)
-        embedder = self.embedder()  # a missing key fails here, before anything is reserved or sent
         tokens = max(512, len(text.encode('utf-8')))
         rate = Decimal(str(self.cfg.memory['input_cny_per_million']))
         reservation = self.budget.estimate(self.cfg.id, self.cfg.memory['model'], tokens, rate)
