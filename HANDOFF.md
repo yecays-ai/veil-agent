@@ -3,6 +3,13 @@
 - 分支 `ticket/188-read-counts-as-shown`。`NativeMemoryTools._read` 成功后调用 `memory.mark_surfaced([key])`；`_editable` 本来就认 `surfaced_ids`，所以不用别的改动。隐藏/不存在的记忆读失败，不登记；名单上限仍是 `Memory.SURFACED_LIMIT = 40`。连续工具卡片占满屏幕没有处理，另议。
 - 下一个工单号 189（187 为 PR #237）。
 
+## 工单 187 交接（2026-11-01）
+
+- 分支 `ticket/187-recall-relevance`。新文件 `recall_relevance.py`（向量解码/余弦/只读读 `embeddings.db`/`QueryEmbedder`/上文拼接）；`Memory.context(query, recent=…)` 在 `[memory.recall_context]` 开启且 `min_similarity` 已填、这句不超过 `short_chars`、有上文时才走 `assisted_recall`；其余路径一字不变。`veil_agent.py` 把 `self.history[-8:]` 传入。`EMBED_API_KEY` 从仓库 `.env` 读，缺失则本轮保持今天的召回。`Memory.__exit__` 关闭 embedder。
+- 默认关闭，`character.toml` 只有注释。校准用：开着诊断看 `diagnostics.jsonl` 的 `assisted_recall` 分数；校准前不要写 `min_similarity`。
+- 未验证：阈值、延迟、费用（每次启用多一次给「上文+这句」算的查询向量，并多一次 `breath_search` 向量检索，价格 ¥0 配置）、Windows 实际体验。
+- 下一个工单号 189。
+
 ## 工单 186 交接（2026-11-01）
 
 - 分支 `ticket/186-deepseek-window-64k`。只改 `characters/peter/character.toml`：`[providers.deepseek] max_input_tokens` 32768 → 65536。聊天裁剪用 `cfg.provider['max_input_tokens']`（`veil_agent.py` 约 3116–3282），所以历史会多保留，不再先裁光。同一上限还影响两处：短期便签提取批次上限 `min(MAX_REQUEST_BYTES, max_input_tokens // 2)`（`short_term_notes.py` 约 532，由 16384 字节变为 20000 字节，一次便签整理的输入略多）；每次请求的费用预留 `Budget.reserve` 按上限算输入部分，预留约由 ¥0.07 变为 ¥0.14（只在接近每日上限时才可能影响放行，结算仍按实际用量）。`gpt` 档不变；用户在「模型」页自加的模型仍用自己的上限。

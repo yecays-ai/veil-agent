@@ -44,6 +44,15 @@ dimensions = 1024
 # Official price checked 2026-10-19: https://siliconflow.cn/pricing
 # This is the free model, NOT Pro/BAAI/bge-m3. Update together when switching.
 input_cny_per_million = "0"
+# Ticket 187: for a short message that needs the last rounds ("try again"), search again with those rounds
+# and keep only memories whose stored vector is close to that text; none may remain. OFF until
+# min_similarity is calibrated on real memory text. To turn it on, add this table right here, after the
+# [memory] keys and before the next section:
+# [memory.recall_context]
+# enabled = true
+# min_similarity = <fill in the calibrated value; the table is ignored without a number>
+# short_chars = 12
+# rounds = 2
 
 [tools]
 max_output_tokens = 4096

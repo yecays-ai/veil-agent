@@ -514,7 +514,9 @@ class Memory:
         return self
 
     def __exit__(self, *_):
-        pass
+        embedder = getattr(self, '_embedder', None)
+        if embedder is not None and hasattr(embedder, 'close'):
+            embedder.close()
 
     def persist(self):
         # Only the newest snapshot is kept (ticket 092); older ones held copies of erased memories.
@@ -986,9 +988,66 @@ class Memory:
             self.persist()
             self.bucket_details_cache[memory_id] = (entry['title'], content)
 
-    def context(self, query, *, include_opening=True):
+    def assisted_settings(self, query, recent):
+        """Ticket 187: settings when this turn's recall may use the last rounds, else None (today's recall)."""
+        raw = (self.cfg.memory or {}).get('recall_context')
+        if not isinstance(raw, dict) or raw.get('enabled') is not True or not recent:
+            return None
+        threshold = raw.get('min_similarity')
+        if type(threshold) not in (int, float) or not 0 < threshold <= 1:
+            return None  # not calibrated yet: keep today's recall
+        short = raw.get('short_chars', 12)
+        if type(short) is not int or short < 1 or len(query.strip()) > short:
+            return None
+        rounds = raw.get('rounds', 2)
+        return {'threshold': float(threshold), 'rounds': rounds if type(rounds) is int and 1 <= rounds <= 4 else 2}
+
+    def embedder(self):
+        if getattr(self, '_embedder', None) is None:
+            from dotenv import dotenv_values
+            from recall_relevance import QueryEmbedder
+            key = dotenv_values(Path(__file__).resolve().parent / '.env', interpolate=False,
+                                encoding='utf-8-sig').get('EMBED_API_KEY')
+            if not key or not key.strip():
+                raise UserError('missing EMBED_API_KEY')
+            self._embedder = QueryEmbedder(self.cfg.memory['base_url'], self.cfg.memory['model'], key.strip())
+        return self._embedder
+
+    def assisted_recall(self, query, recent, settings, normal, emotional):
+        """Search again with the last rounds, keep only candidates close to that text; may keep none."""
+        from recall_relevance import context_text, cosine, load_vectors
+        text = context_text(recent, query, settings['rounds'])
+        embedder = self.embedder()  # a missing key fails here, before any extra search, reservation or request
+        extra = ordinary_hits(self.call('breath_search', {
+            'query': text, 'mode': 'automatic', 'with_ids': True, 'max_results': 3}))
+        candidates = dict(normal + extra + emotional)
+        tokens = max(512, len(text.encode('utf-8')))
+        rate = Decimal(str(self.cfg.memory['input_cny_per_million']))
+        reservation = self.budget.estimate(self.cfg.id, self.cfg.memory['model'], tokens, rate)
+        try:
+            query_vector = embedder.embed(text)
+        finally:
+            self.budget.settle_estimate(reservation, accounting='embedding-estimate',
+                                        settled_amount=Decimal(tokens) * rate / Decimal(1_000_000))
+        vectors = load_vectors(vault_path(self.store.root, self.cfg.id) / 'embeddings.db', list(candidates))
+        scored = sorted(((cosine(query_vector, vectors[key]), key) for key in candidates if key in vectors),
+                        reverse=True)
+        kept = [(key, candidates[key]) for sim, key in scored if sim >= settings['threshold']][:3]
+        self.last_assisted = {'candidates': [(key, round(sim, 4)) for sim, key in scored],
+                              'kept': [key for key, _ in kept], 'threshold': settings['threshold']}
+        try:
+            self.store.append(self.diagnostics, {
+                'time': self.budget.clock(), 'code': 'assisted_recall', 'candidates': len(candidates),
+                'kept': len(kept), 'scores': [round(sim, 3) for sim, _ in scored[:6]],
+                'threshold': settings['threshold']})
+        except Exception:
+            pass
+        return kept
+
+    def context(self, query, *, include_opening=True, recent=None):
         self._turn_notice_local.seen = set()
         self.last_context_refs = []
+        self.last_assisted = None
         opening = []
         normal = []
         emotional = []
@@ -1001,6 +1060,13 @@ class Memory:
             emotional = blocks(self.call('feel', {'query': query}))
         except Exception as exc:
             self.retrieval_failure('feel', exc)
+        settings = self.assisted_settings(query, recent)
+        if settings:
+            try:
+                normal, emotional = self.assisted_recall(query, recent, settings, normal, emotional), []
+            except Exception as exc:
+                # Any failure keeps today's recall for this turn.
+                self.retrieval_failure('assisted_recall', exc)
         combined = self.context_visible(
             normal[:1] + emotional[:1] + normal[1:] + emotional[1:],
             failure_stage='recall_visibility')
