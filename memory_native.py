@@ -801,12 +801,13 @@ class NativeMemoryTools:
         hidden = self.memory.hidden_ids()
         if not hidden:
             return result
-        titles = {title for key in hidden if (title := self.memory.title_for(key))}
+        # Ombre prints no title for these entries, so only a hidden ID (as a whole word) marks one.
         kept, skipping = [], False
         for line in result.splitlines():
             if line.startswith('==='):
                 skipping = False
-            elif any(key in line for key in hidden) or any(title in line for title in titles):
+            elif any(re.search(r'(?<![A-Za-z0-9_-])' + re.escape(key) + r'(?![A-Za-z0-9_-])', line)
+                     for key in hidden):
                 skipping = True
                 continue
             elif re.search(r'\b[0-9a-f]{12}\b', line):

@@ -619,6 +619,12 @@ class OmbreToolGuardTests(unittest.TestCase):
         self.assertNotIn('secret', text)
         self.assertIn('shown text', text)
 
+    def test_I_read_keeps_a_visible_entry_that_only_shares_a_word_with_a_hidden_id_or_title(self):
+        self.memory.state['entries']['mem001'] = {'title': 'Old title', 'hidden': True}
+        self.backend.result = ('2026-11-01 0123456789ab （1/3 次 dream）\nThe Old title idea and mem0010 stay readable')
+        text, state, _ = self.call('I', {'read': True})
+        self.assertIn('stay readable', text)
+
     def test_I_read_does_not_forward_hidden_memory_lines(self):
         self.memory.state['entries']['mem001'] = {'title': 'Old title', 'hidden': True}
         self.backend.result = ('待沉淀候选:\n- mem001 hidden candidate\n- 0123456789ab shown candidate')
