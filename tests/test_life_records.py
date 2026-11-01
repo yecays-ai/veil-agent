@@ -55,7 +55,12 @@ class LifeRecordsTest(unittest.TestCase):
             rows=[{'id':str(i),'kind':'note','state':'completed','completed_at':'2026-11-%02dT10:00:00'%(i%28+1)} for i in range(35)]
             visible,folded=fold_completed(rows)
             self.assertEqual((len(visible),folded),(30,5))
-            self.assertTrue(all(r['id']!='0' for r in visible) or folded==5)
+            self.assertEqual({r['id'] for r in visible},{str(i) for i in range(35)}-{'0','1','28','29','30'})
+            records.path.write_text(json.dumps({'records':[{'id':'old','kind':'diary','title':'Old diary','owner':'共同','date':'2026-10-01','state':'active','content':'','created_by':'Peter','created_at':'x','updated_by':'Peter','updated_at':'x','history':[]}]}),encoding='utf-8')
+            self.assertEqual(len(records.read()),1)
+            self.assertEqual(json.loads(records.invoke({'action':'list'})[0]),[])
+            note=records.write({'kind':'note','title':'Visible'},'Lan')
+            with self.assertRaises(ValueError): records.write({'id':note['id'],'kind':'diary'},'Lan')
             listed=json.loads(records.invoke({'action':'list'})[0])
             self.assertTrue(any(r['title']=='Out' for r in listed))
 

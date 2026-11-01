@@ -68,7 +68,7 @@ class LifeRecords:
             state=body.get('state',prior.get('state') if prior else 'active')
             mood=body.get('mood',prior.get('mood','') if prior else '')
             repeat=body.get('repeat',prior.get('repeat','none') if prior else 'none')
-            if (kind not in ('event','note','diary','plan') or kind=='diary' and not prior
+            if (kind not in ('event','note','diary','plan') or kind=='diary' and (not prior or prior.get('kind')!='diary')
                 or not isinstance(mood,str) or len(mood)>40 or repeat not in ('none','daily') or repeat=='daily' and kind!='note' or actor=='Peter' and kind=='plan' and (not prior or prior.get('kind')!='plan')
                 or not isinstance(title,str) or not title.strip() or len(title)>240
                 or not isinstance(content,str) or len(content)>12000
@@ -83,8 +83,8 @@ class LifeRecords:
                 'created_at':prior.get('created_at',stamp) if prior else stamp,
                 'created_by':prior.get('created_by',actor) if prior else actor,
                 'updated_at':stamp,'updated_by':actor,
-                'history': (prior.get('history',[]) + [{'at':prior['updated_at'],'by':prior['updated_by'],
-                    'title':prior['title'],'content':prior['content'],'state':prior['state']}] if prior else [])[-50:],
+                'history': (original.get('history',[]) + [{'at':original['updated_at'],'by':original['updated_by'],
+                    'title':original['title'],'content':original['content'],'state':original['state']}] if original else [])[-50:],
                 'completed_at':stamp if state=='completed' and (not prior or prior.get('state')!='completed') else
                     prior.get('completed_at') if prior and state=='completed' else None}
             if prior: rows[rows.index(original)]=row
