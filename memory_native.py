@@ -308,7 +308,7 @@ class NativeMemoryTools:
         except Exception:
             return 'The memory tool failed. Check the current memory state before retrying.', '出错', self.preview_summary(name, args)
 
-    def _visible_records(self):
+    def _visible_records(self, include_hidden=False):
         # Read only actual bucket folders, never letters, plans, sources or private files.
         vault_path = role_vault_path(self.memory.store.root, self.memory.cfg.id)
         hidden = self.memory.hidden_ids()
@@ -343,11 +343,12 @@ class NativeMemoryTools:
                 if meta.get('source_tool', '').casefold() == 'letter' or '__letter__' in '\n'.join(lines[1:end]):
                     continue
                 key = meta.get('id', '')
-                if not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', key) or key in hidden:
+                if not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', key) or (key in hidden and not include_hidden):
                     continue
                 if meta.get('deleted_at', '').casefold() not in ('', 'null', 'none', 'false'):
                     continue
-                if meta.get('dont_surface', '').casefold() not in ('', '0', 'false', 'null', 'none'):
+                if (not include_hidden
+                        and meta.get('dont_surface', '').casefold() not in ('', '0', 'false', 'null', 'none')):
                     continue
                 if self.memory.state['entries'].get(key, {}).get('deleted'):
                     continue
@@ -430,8 +431,9 @@ class NativeMemoryTools:
             return None
 
     def _pinned_ids(self):
+        # Hidden (dont_surface) pinned memories still occupy a pin slot: hiding one must not free it.
         pinned = set()
-        for key, (_, raw) in self._visible_records().items():
+        for key, (_, raw) in self._visible_records(include_hidden=True).items():
             if str(parse_frontmatter(raw)[0].get('pinned', '')).casefold() in ('true', '1', 'yes'):
                 pinned.add(key)
         return pinned
@@ -588,6 +590,8 @@ class NativeMemoryTools:
         if old is None:
             return 'The target memory could not be read, so it was not changed.', '被拒绝', summary
         if args.get('pinned') in (1, True) and type(args.get('pinned')) in (int, bool):
+            if self.autonomy_mode:
+                return 'Pinning is available only while chatting with Lan, not during autonomous activity.', '被拒绝', summary
             already = self._pinned_ids()
             if memory_id not in already and len(already) >= PINNED_LIMIT:
                 return (f'{PINNED_LIMIT} memories are already pinned. Unpin one first '

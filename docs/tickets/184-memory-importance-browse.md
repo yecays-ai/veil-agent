@@ -3,12 +3,12 @@
 ## 目标
 
 - Peter 新建记忆时可以给重要度（1 到 10，默认 5）。重要度决定新对话开头先浮现什么；之前所有记忆都是 5，排序等于只看时间。
-- Peter 可以把极少数记忆置顶（永久核心记忆）：同时最多 8 条（Ombre 自己的上限是 20），必须写 `why_remembered`，只能新建时置顶，不能与 `importance` 同传，自主活动（后台）里不可用。用 `trace(pinned=1)` 置顶同样受 8 条限制，取消置顶不受限。
+- Peter 可以把极少数记忆置顶（永久核心记忆）：同时最多 8 条（Ombre 自己的上限是 20；被隐藏的置顶记忆也算数），必须写 `why_remembered`，只能新建时置顶，不能与 `importance` 同传，自主活动（后台）里不可用。用 `trace(pinned=1)` 置顶同样受 8 条限制，取消置顶不受限。
 - Peter 能翻出指定时间段的旧记忆：`memory_catalog` 增加 `order`（`id` 默认、`newest`、`oldest`）、`created_from`、`created_to`（YYYY-MM-DD，含当天），每条带创建日期，结果带 `total`；`breath_search` 增加 `date_from`、`date_to`（直接用 Ombre 官方的日期过滤）。
 
 ## 为什么没有直接用官方目录 `breath_advanced(catalog=True)`
 
-对照官方源码（审计文档 `audit/ombre-wiring-comparison-2026-11-01.md`）发现官方目录不能当浏览器用：
+对照官方源码（`tools/breath/catalog.py`；对照审计在项目文件库，不在本仓库）发现官方目录不能当浏览器用：
 
 - 每行只有名字、域、重要度，没有 memory ID，Peter 拿到后无法 `memory_read` 或追加。
 - 最多 50 条，没有翻页；超出的按重要度排序后被静默截掉，不提示还有多少条。

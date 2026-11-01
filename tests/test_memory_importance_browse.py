@@ -127,6 +127,25 @@ class PinnedTests(Base):
         self.assertEqual(state, '被拒绝')
         self.assertEqual(self.holds(), [])
 
+    def test_hidden_pinned_memories_still_count_toward_the_cap(self):
+        for i in range(PINNED_LIMIT):
+            extra = 'pinned: true\ntype: permanent\n' + ('dont_surface: true\n' if i == 0 else '')
+            self.write(f'p{i}', folder='permanent', extra=extra)
+        self.assertEqual(len(self.native._pinned_ids()), PINNED_LIMIT)
+        _, state, _ = self.tools.invoke('hold', {'title': 'P', 'content': 'p', 'pinned': True,
+                                                 'why_remembered': 'again'})
+        self.assertEqual(state, '被拒绝')
+        self.assertEqual(self.holds(), [])
+
+    def test_trace_cannot_pin_during_autonomous_activity(self):
+        self.write('plain')
+        self.memory.state['entries']['plain'] = {'title': 'T plain', 'time': 'x', 'signature': None, 'hidden': False, 'text': 'body plain'}
+        self.tools.set_autonomy(True)
+        result, state, _ = self.tools.invoke('trace', {'bucket_id': 'plain', 'pinned': 1})
+        self.assertEqual(state, '被拒绝')
+        self.assertIn('autonomous', result)
+        self.assertNotIn('trace', [n for n, _ in self.backend.calls])
+
     def test_trace_cannot_pin_past_the_cap(self):
         for i in range(PINNED_LIMIT):
             self.write(f'p{i}', folder='permanent', extra='pinned: true\ntype: permanent\n')
