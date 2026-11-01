@@ -1477,7 +1477,7 @@ document.querySelectorAll('[data-page]').forEach(tab=>tab.addEventListener('poin
 }));
 document.querySelectorAll('[data-page]').forEach(tab=>{tab.addEventListener('pointerup',()=>{tabDrag=null});tab.addEventListener('pointercancel',()=>{tabDrag=null})});
 window.veilDesktop.onShowActivity(()=>setPage('activity'));
-window.veilDesktop.onShowView(view=>setPage(view));
+window.veilDesktop.onShowView(view=>{setPage(view);if(view==='life')loadLife()});
 window.veilDesktop.onShowSettings(()=>setPage('more'));
 if(detachedView&&['chat','activity','context','memory','life','mcp','more'].includes(detachedView)){
   document.body.classList.add('detached-window');$('detached-header').hidden=false;

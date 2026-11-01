@@ -664,25 +664,23 @@ ipcMain.handle('view:focus', (event, view) => {
 ipcMain.handle('view:states', event => fromChatPage(event) ? detachedViewNames() : []);
 ipcMain.on('desktop:collapse', () => { if (chat) chat.hide(); });
 ipcMain.handle('chat:reconnect', event => reconnectChat(event));
+let chatExpandedFrom = null;
 ipcMain.on('desktop:expand', event => {
   if (!fromChat(event) || !chat || chat.isDestroyed()) return;
-  if (chat.isMaximized() || chat.isFullScreen()) { chat.setFullScreen(false); chat.unmaximize(); return; }
+  if (chat.isMaximized() || chat.isFullScreen()) {
+    chat.setFullScreen(false); chat.unmaximize();
+    if (!chatExpandedFrom) { settings.chatBounds = chat.getBounds(); saveSoon(); return; }
+  }
   const bounds = chat.getBounds();
   const area = workAreaAt(bounds.x + Math.floor(bounds.width / 2), bounds.y + Math.floor(bounds.height / 2));
-  const filled = Math.abs(bounds.x - area.x) <= 2 && Math.abs(bounds.y - area.y) <= 2 &&
-    Math.abs(bounds.width - area.width) <= 2 && Math.abs(bounds.height - area.height) <= 2;
-  if (filled) {
-    // Second click: go back to the size the window had before it was expanded (or a normal default).
-    const saved = settings.chatNormalBounds;
-    const ok = saved && ['x', 'y', 'width', 'height'].every(key => Number.isFinite(saved[key])) &&
-      saved.width < area.width - 4 && saved.height < area.height - 4;
-    const width = ok ? Math.max(430, saved.width) : Math.min(560, area.width);
-    const height = ok ? Math.max(480, saved.height) : Math.min(700, area.height);
-    const position = clampPosition(ok ? saved.x : area.x + Math.floor((area.width - width) / 2),
-      ok ? saved.y : area.y + Math.floor((area.height - height) / 2), width, height, area);
+  if (chatExpandedFrom) {
+    // Second click: go back to the size the window had before it was expanded.
+    const saved = chatExpandedFrom; chatExpandedFrom = null;
+    const width = Math.max(430, Math.min(saved.width, area.width)), height = Math.max(480, Math.min(saved.height, area.height));
+    const position = clampPosition(saved.x, saved.y, width, height, area);
     chat.setBounds({ ...position, width, height });
   } else {
-    settings.chatNormalBounds = bounds;
+    chatExpandedFrom = bounds;
     chat.setBounds({ x: area.x, y: area.y, width: area.width, height: area.height });
   }
   settings.chatBounds = chat.getBounds(); saveSoon();
