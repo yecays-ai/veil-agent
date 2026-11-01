@@ -730,6 +730,21 @@ class OmbreToolGuardTests(unittest.TestCase):
         self.assertIn('added detail', self.path.read_text(encoding='utf-8'))
         self.assertEqual(len(self.store.read('fake/memory-versions.jsonl')), 1)
 
+    def test_hold_target_accepts_a_memory_that_was_just_read(self):
+        # Ticket 188: memory_read shows the memory, so extending it afterwards must not be refused.
+        rejected, state, _ = self.call('hold', {'target_id': 'mem001', 'content': 'added detail'})
+        self.assertEqual(state, '被拒绝')
+        read, state, _ = self.call('memory_read', {'memory_id': 'mem001'})
+        self.assertEqual(state, '成功')
+        result, state, _ = self.call('hold', {'target_id': 'mem001', 'content': 'added detail'})
+        self.assertEqual(state, '成功', result)
+        self.assertIn('added detail', self.path.read_text(encoding='utf-8'))
+
+    def test_a_refused_read_does_not_make_a_memory_editable(self):
+        _, state, _ = self.call('memory_read', {'memory_id': 'does-not-exist'})
+        self.assertEqual(state, '被拒绝')
+        self.assertNotIn('does-not-exist', self.memory.surfaced_ids)
+
     def test_hold_target_refuses_surfaced_memory_that_became_hidden(self):
         self.memory.mark_surfaced(['mem001'])
         self.path.write_text(self.path.read_text(encoding='utf-8').replace('tags: [keep]', 'tags: [keep]\ndont_surface: true'),
