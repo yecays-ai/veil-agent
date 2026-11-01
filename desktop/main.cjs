@@ -673,6 +673,9 @@ ipcMain.on('desktop:expand', event => {
   }
   const bounds = chat.getBounds();
   const area = workAreaAt(bounds.x + Math.floor(bounds.width / 2), bounds.y + Math.floor(bounds.height / 2));
+  const filled = Math.abs(bounds.x - area.x) <= 2 && Math.abs(bounds.y - area.y) <= 2 &&
+    Math.abs(bounds.width - area.width) <= 2 && Math.abs(bounds.height - area.height) <= 2;
+  if (!chatExpandedFrom && filled) chatExpandedFrom = { x: area.x + Math.floor((area.width - 560) / 2), y: area.y + Math.floor((area.height - 700) / 2), width: Math.min(560, area.width), height: Math.min(700, area.height) };
   if (chatExpandedFrom) {
     // Second click: go back to the size the window had before it was expanded.
     const saved = chatExpandedFrom; chatExpandedFrom = null;
