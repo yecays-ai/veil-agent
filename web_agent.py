@@ -1644,11 +1644,13 @@ def make_handler(hub, token):
                             'title': task['title'], 'content': task['goal'], 'owner': 'Peter',
                             'date': task['created_at'][:10], 'state': task['status'],
                             'created_by': 'Peter', 'created_at': task['created_at'],
-                            'updated_by': 'Peter', 'updated_at': task['updated_at'],
+                            'updated_by': task.get('updated_by','Peter'), 'updated_at': task['updated_at'],
                             'source': 'long_task_update', 'progress': task['progress'],
                             'read_only': True})
                     for old in chat.store.read(f'{chat.cfg.id}/long-task-history.jsonl'):
                         if not isinstance(old,dict) or not isinstance(old.get('task_id'),str):
+                            continue
+                        if task and old['task_id'] == task['task_id']:
                             continue
                         rows.append({'id':'long-task:'+old['task_id'],'kind':'plan',
                             'title':old.get('title',''),'content':old.get('goal',''),
@@ -1664,9 +1666,9 @@ def make_handler(hub, token):
                             rows.append({'id': 'short-note:' + note['note_id'], 'kind': 'note',
                                 'title': note.get('text', '')[:120], 'content': note.get('text', ''),
                                 'owner': 'Peter', 'date': str(note.get('occurred_at') or note.get('time', ''))[:10],
-                                'state': 'completed' if note.get('status') == '已完成' else 'active',
+                                'state': {'已完成':'completed','已过期':'expired'}.get(note.get('status'),'active'),
                                 'created_by': 'Peter', 'created_at': note.get('time', ''),
-                                'updated_by': 'Peter', 'updated_at': note.get('updated_at', ''),
+                                'updated_by': note.get('updated_by','Peter'), 'updated_at': note.get('time', ''),
                                 'source': 'short_term_notes', 'read_only': True})
                 if hub.memory_tools is not None:
                     rows.extend(hub.memory_tools.plan_entries())
@@ -2184,6 +2186,51 @@ def make_handler(hub, token):
                 self._send(409, {'error':'Peter 尚未就绪。'})
                 return
             source_id=body.get('id')
+            if isinstance(source_id,str) and source_id.startswith('long-task:'):
+                task_id=source_id.split(':',1)[1]
+                try:
+                    if set(body)-{'id','title','content','state','progress_update'}:
+                        raise ValueError('invalid long task edit')
+                    if 'title' in body or 'content' in body:
+                        current=hub.chat.long_tasks.read()
+                        if not current or current['task_id']!=task_id:
+                            raise ValueError('long task is no longer editable')
+                        hub.chat.long_tasks.edit_from_desktop(task_id,body.get('title',current['title']),
+                                                              body.get('content',current['goal']))
+                    if 'state' in body:
+                        update={'action':'update','task_id':task_id,'status':body['state']}
+                        if 'progress_update' in body: update['progress_update']=body['progress_update']
+                        result,state,_=hub.chat.long_tasks._update(update,actor='Lan')
+                        if state!='成功': raise ValueError(result)
+                    current=hub.chat.long_tasks.read()
+                    self._send(200,{'ok':True,'record':{'id':source_id,'kind':'plan',
+                        'title':current['title'],'content':current['goal'],'owner':'Peter',
+                        'date':current['created_at'][:10],'state':current['status'],
+                        'created_by':'Peter','created_at':current['created_at'],
+                        'updated_by':current.get('updated_by','Peter'),'updated_at':current['updated_at'],
+                        'source':'long_task_update','progress':current['progress'],
+                        'read_only':current['status']=='completed'}})
+                except (ValueError,UserError) as exc:
+                    self._send(400,{'error':str(exc)})
+                return
+            if isinstance(source_id,str) and source_id.startswith('short-note:'):
+                try:
+                    if set(body)-{'id','content','state'} or body.get('state','active') not in ('active','completed'):
+                        raise ValueError('invalid short note edit')
+                    note_id=source_id.split(':',1)[1]
+                    notes=hub.chat.short_term_notes
+                    current=notes._latest_notes().get(note_id)
+                    if not current: raise ValueError('short note not found')
+                    note=notes.edit_from_desktop(note_id,body.get('content',current['text']),
+                                                 body.get('state')=='completed')
+                    self._send(200,{'ok':True,'record':{'id':source_id,'kind':'note','title':note['text'][:120],
+                        'content':note['text'],'owner':'Peter','date':str(note.get('occurred_at',''))[:10],
+                        'state':'completed' if note['status']=='已完成' else 'active','created_by':'Peter',
+                        'created_at':note['created_at'],'updated_by':'Lan','updated_at':note['time'],
+                        'source':'short_term_notes'}})
+                except (ValueError,AttributeError) as exc:
+                    self._send(400,{'error':str(exc)})
+                return
             if isinstance(source_id,str) and source_id.startswith('ombre-plan:'):
                 if set(body)-{'id','state'} or body.get('state') not in ('active','completed','paused'):
                     self._send(400, {'error':'此计划只能在这里修改状态；正文请在记忆页编辑。'})

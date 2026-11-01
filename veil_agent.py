@@ -1600,7 +1600,7 @@ class Chat:
         from life_records import LIFE_TOOL
         thought = [THOUGHT_TOOL] if history else []
         mcp_tools = self.mcp_services.schemas() if (self.cfg.tools or {}).get('enabled', True) else []
-        schemas = [*existing_tools, *task_tools, *messaging, *history, *wake_tools, *profile, *thought, *([{'type': 'function', 'function': {'name': LIFE_TOOL.name, 'description': LIFE_TOOL.description, 'parameters': LIFE_TOOL.inputSchema}}] if self.cfg.id == 'peter' else []),
+        schemas = [*existing_tools, *task_tools, *messaging, *history, *wake_tools, *profile, *thought, *([{'type': 'function', 'function': {'name': LIFE_TOOL.name, 'description': LIFE_TOOL.description, 'parameters': LIFE_TOOL.inputSchema}}] if self.cfg.id == 'peter' and self.task_tools_enabled and (self.cfg.tools or {}).get('enabled', True) else []),
                    *mcp_tools]
         for schema in schemas:
             function = schema['function']

@@ -3,6 +3,7 @@ import json
 import os
 import re
 import secrets
+from datetime import date as calendar_date
 from pathlib import Path
 from types import SimpleNamespace
 from veil_agent import now
@@ -44,12 +45,14 @@ class LifeRecords:
             owner=body.get('owner',prior.get('owner') if prior else actor)
             date=body.get('date',prior.get('date') if prior else now()[:10])
             state=body.get('state',prior.get('state') if prior else 'active')
-            if (kind not in ('event','note','diary','plan') or actor=='Peter' and kind=='plan' and not prior
+            if (kind not in ('event','note','diary','plan') or actor=='Peter' and kind=='plan' and (not prior or prior.get('kind')!='plan')
                 or not isinstance(title,str) or not title.strip() or len(title)>240
                 or not isinstance(content,str) or len(content)>12000
                 or owner not in ('Peter','Lan','共同') or actor=='Peter' and owner=='Lan'
                 or not isinstance(date,str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}',date)
                 or state not in ('active','completed','paused')): raise ValueError('invalid record')
+            try: calendar_date.fromisoformat(date)
+            except ValueError: raise ValueError('invalid record date') from None
             stamp=now()
             row={'id':key or secrets.token_hex(12),'kind':kind,'title':title.strip(),
                 'content':content,'owner':owner,'date':date,'state':state,
@@ -71,6 +74,7 @@ class LifeRecords:
             return row
     def invoke(self,args):
         try:
+            if not isinstance(args,dict): raise ValueError('invalid arguments')
             action=args.get('action')
             if action=='list':
                 rows=[r for r in self.read() if r.get('owner') in ('Peter','共同')]

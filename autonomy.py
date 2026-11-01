@@ -874,7 +874,9 @@ class AutonomyController:
             try:
                 records = self.chat.life_records.read()
                 today = stamp.date().isoformat()
-                today_rows = [r for r in records if r.get('date') == today]
+                today_rows = [r for r in records if isinstance(r, dict) and r.get('date') == today
+                              and r.get('owner') in ('Peter', '共同') and isinstance(r.get('title'), str)
+                              and isinstance(r.get('state'), str) and isinstance(r.get('kind'), str)]
                 if today_rows:
                     summary = [{'title': r['title'][:80], 'state': r['state'], 'kind': r['kind']}
                                for r in today_rows[-6:]]
@@ -927,6 +929,9 @@ class AutonomyController:
             "When you're done, leave yourself a short note for next time, four lines: "
             'Decision / Reason / Focus / Next step. It\'s for you, not a report.\n'
             'Decision: ...\nReason: ...\nFocus: ...\nNext step: ...')
+        if len(text.encode('utf-8')) > MAX_CONTEXT_BYTES:
+            if life_text:
+                text = text.replace(life_text, '')
         if len(text.encode('utf-8')) > MAX_CONTEXT_BYTES:
             text = text.replace(lab_context,
                 'Recent lab output: use the available read-only tools to inspect it as needed while preserving task and prior activity context.')
