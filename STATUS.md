@@ -1,9 +1,10 @@
 # 当前状态
 
-更新时间：2026-10-31 23:00 UTC
+更新时间：2026-11-01 09:00 UTC
 
 ## 当前目标与现状
 
+- 当前目标：工单 183（`ticket/183-memory-update-notes-json`）按 11-01 记忆审计修两件事：Peter 看到过的记忆都能直接追加（不再因「不在本轮搜索结果」被拒而新建重复记忆），短期便签整理能解析被代码块或说明文字包住的 JSON，失败时记录模型原话。其余审计项（召回带上下文、瞄一眼不召回、合并重复）等 lan 决定。现状：代码和自动测试完成，Windows 体验未验证。验收见 `docs/tickets/183-memory-update-notes-json.md`。
 - 当前目标：工单 182 批量修复 lan 当晚实测的桌面类问题（`ticket/182-desktop-bugs-batch`，一个 PR）：画图时 Peter 自己的鼠标被当成真人而中断、WPS 等自动发现应用的窗口路径不匹配、桌面被整理软件接管时整理图标结果不如实、最大化窗口还原、搜索失败不报真实原因。小红书图片阅读是新功能，未做。验收见 `docs/tickets/182-desktop-bugs-batch.md`；合并后 lan 运行 update.bat 验收，全部「未验证」直到她的 Windows 实测。
 - 仓库整理期（并行，不影响 Peter 的使用）：工单 178（`ticket/178-dead-code-cleanup`）只删确认过的死代码，不改行为；之后依次为 179 无用 import/重复实现/过期文档、180 `make_handler`、181 `Hub`，每项一个 PR。清单见 `docs/tickets/178-dead-code-cleanup.md`。
 - 工单 178、179、180 已合并（`24dc24e`、`3e34c3a`、`bcab779`），都没有行为变化，不需要专门验收。工单 181（`ticket/181-split-hub`）把 `Hub` 里屏幕弹幕的 4 个方法原样搬到 `hub_screen_pop.py`；`_tool_chat` 拆分已由 lan 决定不做。清单见 `docs/tickets/181-split-hub.md`。

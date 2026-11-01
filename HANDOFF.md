@@ -1,5 +1,12 @@
 # 交接
 
+## 工单 183 交接（2026-11-01）
+
+- 分支 `ticket/183-memory-update-notes-json`。`Memory.surfaced_ids` + `NativeMemoryTools._editable`：召回或搜索过的记忆可 `hold(target_id)`；`short_term_notes._parse_json_object` 容错并在 error 行记录 `reply_head`/`reply_chars`/`consecutive_failures`。
+- 审计报告（项目文件 `audit/memory-system-audit-2026-11-01.md`）里其余建议未做，等 lan 决定：召回带上一轮上下文、瞄一眼跳过召回、整理重复记忆、记忆条目偏长、整理时只看得到最近 48 小时。
+- 未验证：Windows 上便签是否恢复整理、Peter 是否改为追加而不是新建。
+- 下一个工单号 184。
+
 ## 工单 182 交接（2026-10-31）
 
 - 分支 `ticket/182-desktop-bugs-batch`。`DesktopInputMonitor.own_input()` 取代画布/键盘输入前后的 `mark_own_input`；发现应用的安装文件夹 exe 识别（`_vendor_dir_pattern`、`is_blocked_window_exe`）；`desktop_icons` 的 `display_obstructions`；`restore` 处理最大化；搜索改 `auto` 并报真实原因。
