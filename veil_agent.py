@@ -1489,6 +1489,8 @@ class Chat:
         self.pending_capability_event_model = capability_model_notice(tools)
         from long_tasks import LongTaskStore
         self.long_tasks = LongTaskStore(store, cfg.id)
+        from life_records import LifeRecords
+        self.life_records = LifeRecords(store, cfg.id)
         # Ticket 152: Peter's own index of thoughts that might carry on (one line each).
         from thoughts import ThoughtIndex
         self.thoughts = ThoughtIndex(store, cfg.id)
@@ -1595,9 +1597,10 @@ class Chat:
             from profile_notes import PROFILE_APPEND, PROFILE_REPLACE
             profile = [PROFILE_APPEND, PROFILE_REPLACE]
         from thoughts import THOUGHT_TOOL
+        from life_records import LIFE_TOOL
         thought = [THOUGHT_TOOL] if history else []
         mcp_tools = self.mcp_services.schemas() if (self.cfg.tools or {}).get('enabled', True) else []
-        schemas = [*existing_tools, *task_tools, *messaging, *history, *wake_tools, *profile, *thought,
+        schemas = [*existing_tools, *task_tools, *messaging, *history, *wake_tools, *profile, *thought, *([{'type': 'function', 'function': {'name': LIFE_TOOL.name, 'description': LIFE_TOOL.description, 'parameters': LIFE_TOOL.inputSchema}}] if self.cfg.id == 'peter' and self.task_tools_enabled and (self.cfg.tools or {}).get('enabled', True) else []),
                    *mcp_tools]
         for schema in schemas:
             function = schema['function']
@@ -1612,7 +1615,7 @@ class Chat:
         reserved_names = (ALLOW | ASK | AUTONOMY_DIRECT | LAB_ONLY | NATIVE | {
             'send_message', 'recall_message', 'stay_silent', 'reply_later', 'screen_pop',
             'capability_history', 'autonomy_history', 'profile_append', 'profile_replace',
-            'thought', 'long_task_status', 'long_task_update', 'set_next_wake', 'set_wake_rhythm',
+            'thought', 'life_record', 'long_task_status', 'long_task_update', 'set_next_wake', 'set_wake_rhythm',
         })
         schemas, self.active_tool_aliases = alias_tool_schemas(
             schemas, self.tool_aliases, reserved_names)
@@ -2947,6 +2950,8 @@ class Chat:
                 else:
                     result, state = activity_history(self.store, self.cfg, count), '成功'
                 summary = 'autonomy_history'
+            elif call.function.name == 'life_record':
+                result, state, summary = self.life_records.invoke(json.loads(call.function.arguments or '{}'))
             elif call.function.name == 'set_next_wake':
                 args = json.loads(call.function.arguments or '{}')
                 if not isinstance(args, dict):

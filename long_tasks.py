@@ -275,6 +275,10 @@ class LongTaskStore:
             if existing and existing['status'] != 'completed':
                 return (f"An unfinished task already exists ({existing['task_id']}: {existing['title']}, "
                         f"status: {existing['status']}); it cannot be replaced.", '被拒绝', existing['title'])
+            if existing and existing['status'] == 'completed':
+                history = f'{self.character_id}/long-task-history.jsonl'
+                if not any(row.get('task_id') == existing['task_id'] for row in self.store.read(history)):
+                    self.store.append(history, existing)
             stamp = now()
             task = {'task_id': uuid.uuid4().hex, 'title': title.strip(), 'goal': goal.strip(),
                     'status': 'active', 'progress': [], 'next_step': '拆分并开始第一项可验证工作。',
@@ -283,7 +287,21 @@ class LongTaskStore:
             self._save(task)
         return f"Long task created with ID {task['task_id']}.", '成功', task['title']
 
-    def _update(self, args):
+    def edit_from_desktop(self, task_id, title, goal):
+        """Lan edits the existing task in its owning store, retaining progress and checkpoints."""
+        if (not isinstance(title, str) or not title.strip() or len(title.strip()) > 120 or
+                not isinstance(goal, str) or not goal.strip() or len(goal.strip()) > 2000):
+            raise ValueError('invalid long task title or goal')
+        with self.store.mutex:
+            task = self._read_file()
+            if not task or task['task_id'] != task_id or task['status'] == 'completed':
+                raise ValueError('long task is no longer editable')
+            task['title'], task['goal'], task['updated_at'] = title.strip(), goal.strip(), now()
+            task['updated_by'] = 'Lan'
+            self._save(task)
+            return task
+
+    def _update(self, args, actor='Peter'):
         allowed = {'action', 'task_id', 'status', 'progress_update', 'next_step',
                    'waiting_for', 'resolve_pending', 'pending_operation_id'}
         if set(args) - allowed or not isinstance(args.get('task_id'), str):
@@ -358,6 +376,7 @@ class LongTaskStore:
             if waiting_for is not None:
                 task['waiting_for'] = waiting_for.strip()
             task['updated_at'] = now()
+            task['updated_by'] = actor
             self._save(task)
             if resolve:
                 self._checkpoint_verified = True

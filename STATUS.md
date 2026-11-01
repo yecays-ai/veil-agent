@@ -4,6 +4,8 @@
 
 ## 当前目标与现状
 
+- 工单 190「Peter 与 Lan 的生活记录中心」：PR #240 审查修复中。桌面三栏与本地记录读写已接入；Peter 原有长期任务及短期便签可在生活页直接编辑，写回各自原数据源；正式生活记录工具已加入。Windows 实际体验与完整回归仍待验证。验收见 `docs/tickets/190-life-records-center.md`。
+
 - 工单 189「把 Ombre 的 `I`（自我认知）接给 Peter」（`ticket/189-wire-i-tool`）：lan/ChatGPT 11-01 决定接入 `I`、`feel` 暂缓写入。Peter 可自己写候选、经 3 个不同日期的 dream 见证后自己升级、用 `supersedes` 修正；开场不注入，程序不替他写；不调模型。现状：代码和自动测试完成，Windows 体验未验证。详见 `docs/tickets/189-wire-i-tool.md`。下一个工单号 190。
 - 工单 188「读过的记忆也算展示过」（`ticket/188-read-counts-as-shown`）：Peter 整理重复记忆时，`memory_read` 读过的记忆被 `hold(target_id)` 拒绝（只有自动召回和 `breath_search` 登记）。现在读成功也登记。现状：代码和自动测试完成，Windows 体验未验证。验收见 `docs/tickets/188-read-counts-as-shown.md`。下一个工单号 189（工单 187 为 PR #237）。
 - 工单 187「依赖上文的短消息用上文找记忆，可零条」（`ticket/187-recall-relevance`）：lan/ChatGPT 11-01 批准在 VEIL 侧用 bge-m3 做相关度过滤。短消息（默认 ≤12 字）且有上文时，再用前两轮查一次，只留与「上文+这句」向量相近的记忆，最多 3 条，可以零条；读 Ombre 的 `embeddings.db`（只读），不改 Ombre；默认关闭，阈值未校准前不开。现状：代码和自动测试完成，阈值未校准，Windows 体验未验证。详见 `docs/tickets/187-recall-relevance.md`。下一个工单号 189。
@@ -182,4 +184,3 @@
 - 工单 117「Peter 帮 Lan 盯着 Codex」：PR #165 已合并至 main，合并提交 `d42b12e`；审批/提问等待没有可靠信号，不推断“正在等 Lan”。Lan 2026-10-28 确认 Windows 实际体验验收通过。
 - 工单 116「Lan 在电脑前时，Peter 隔一会儿来瞄她一眼」：PR #164 已合并到 main，合并提交 `0f39c1a7b3fec62545839075a4825ab3e5b9c95d`。GitHub 查询未返回该提交的 workflow/status 行，因此不记录为 CI 通过；实现复用 Windows 输入空闲时钟、UIA 前台观察、现有 Chat 工具循环和预算账本；仅在最近 5 分钟有输入且屏幕解锁时随机等待 15–40 分钟，每次最多 4 个工具动作，每日独立预算 ¥1。活动页提供独立开关，瞄一眼结果作为短期记录交给下一次聊天，不自动写长期记忆。观察只用 UIA 文字和标题，不用截图。Lan 2026-10-28 确认 Windows 实际体验验收通过。
 - 工单 115「Peter 可弹窗、发全屏弹幕」：PR #163 已合并到 main，合并提交 `4a5ed56`；Tests、Dependency security、Windows desktop 检查通过。Lan 已确认本地视觉预览。Lan 2026-10-28 确认 Windows 实际体验验收通过。
-

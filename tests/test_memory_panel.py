@@ -52,6 +52,16 @@ class MemoryPanelTests(unittest.TestCase):
             f"---\nid: {key}\ncreated: '{created}'\ntitle: {title}\ntags: {tags}\n{extra}---\nbody of {key}\n",
             encoding='utf-8')
 
+    def test_existing_ombre_plan_is_visible_without_copying_memory(self):
+        plans=self.vault.parent / 'plan'
+        plans.mkdir()
+        (plans / 'promise.md').write_text("---\nid: plan001\ntitle: Play together\ncreated: '2026-11-01T10:00:00+08:00'\nstatus: resolved\n---\nTry the game together.\n",encoding='utf-8')
+        rows=self.native().plan_entries()
+        self.assertEqual(len(rows),1)
+        self.assertEqual(rows[0]['state'],'completed')
+        self.assertEqual(rows[0]['content'],'Try the game together.')
+        self.assertNotIn('plan001',[x['memory_id'] for x in self.native().panel_entries()['items']])
+
     def test_entries_are_newest_first_with_recall_counts(self):
         self.write('older', '2026-10-20T10:00:00+08:00', 'Older')
         self.write('newer', '2026-10-27T10:00:00+08:00', 'Newer')

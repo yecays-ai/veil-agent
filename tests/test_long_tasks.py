@@ -27,6 +27,15 @@ class LongTaskTests(unittest.TestCase):
         self.assertTrue(result.startswith('Long task created with ID '))
         return self.tasks.read()['task_id']
 
+    def test_desktop_edit_keeps_existing_task_and_progress(self):
+        task_id = self.create()
+        self.tasks.invoke('long_task_update', {'action':'update','task_id':task_id,
+                                               'progress_update':'Saved evidence.'})
+        edited = self.tasks.edit_from_desktop(task_id, 'Renamed', 'Revised goal')
+        self.assertEqual(edited['task_id'], task_id)
+        self.assertEqual(edited['progress'][0]['text'], 'Saved evidence.')
+        self.assertEqual(self.tasks.read()['updated_by'], 'Lan')
+
     def test_create_updates_and_refuses_to_replace_unfinished_task(self):
         task_id = self.create()
         result, state, _ = self.tasks.invoke('long_task_update', {

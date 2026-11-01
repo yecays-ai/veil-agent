@@ -367,6 +367,38 @@ class NativeMemoryTools:
                 records[key] = (meta.get('title') or meta.get('name') or key, raw)
         return records
 
+    def plan_entries(self):
+        """Read Peter's existing Ombre plan files without copying them into life records."""
+        from tools_agent import _redirected
+        vault = role_vault_path(self.memory.store.root, self.memory.cfg.id)
+        if not vault.exists():
+            return []
+        if _redirected(vault):
+            raise ValueError('redirected vault')
+        root = vault.resolve()
+        hidden = self.memory.hidden_ids()
+        rows = []
+        for path in (root / 'plan').rglob('*.md'):
+            if _redirected(path) or not path.resolve().is_relative_to(root):
+                continue
+            raw = path.read_text(encoding='utf-8')
+            meta, body = parse_frontmatter(raw)
+            key = str(meta.get('id') or '')
+            if not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', key) or key in hidden:
+                continue
+            status = str(meta.get('status') or 'active').lower()
+            if status not in ('active', 'resolved', 'abandoned'):
+                continue
+            created = str(meta.get('created') or '')
+            updated = str(meta.get('updated') or created)
+            rows.append({'id':'ombre-plan:'+key,'kind':'plan','title':str(meta.get('title') or key),
+                         'content':body.strip(),'owner':'Peter','date':created[:10],
+                         'state':'completed' if status=='resolved' else 'paused' if status=='abandoned' else 'active',
+                         'created_by':'Peter','created_at':created,'updated_by':'Peter',
+                         'updated_at':updated,'completed_at':updated if status=='resolved' else None,
+                         'source':'Ombre plan','memory_id':key,'read_only':True})
+        return rows
+
     def panel_entries(self, recent_requests=100):
         """Readable memory list for Lan's memory page; never sent to the model."""
         recalled = {}

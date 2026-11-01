@@ -466,6 +466,7 @@ function allowedChatRequest(pathname, method) {
     try { url = new URL(pathname, 'http://127.0.0.1'); } catch { return false; }
     const keys = [...url.searchParams.keys()];
     if (url.pathname === '/api/events') return keys.length === 1 && keys[0] === 'after' && /^\d+$/.test(url.searchParams.get('after'));
+    if (url.pathname === '/api/life') return keys.length === 0;
     if (url.pathname === '/api/memory/panel') return keys.length === 0;
     if (url.pathname === '/api/mcp') return keys.length === 0 ||
       (keys.length === 1 && keys[0] === 'retry' && url.searchParams.get('retry') === '1');
@@ -482,7 +483,7 @@ function allowedChatRequest(pathname, method) {
   return method === 'POST' && ['/api/send', '/api/media', '/api/voice', '/api/voice/retry',
     '/api/transcribe', '/api/approve', '/api/activity', '/api/glance', '/api/codex-watch', '/api/quiet-hours', '/api/exit',
     '/api/message/action', '/api/memory/edit', '/api/memory/delete', '/api/models', '/api/models/use', '/api/stop',
-    '/api/typing', '/api/request-reply', '/api/mcp'].includes(pathname);
+    '/api/typing', '/api/request-reply', '/api/mcp', '/api/life'].includes(pathname);
 }
 ipcMain.handle('chat:request', async (event, pathname, body, timeoutMs) => {
   const detachedView = detachedViewFromEvent(event);

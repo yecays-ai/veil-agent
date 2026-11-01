@@ -190,6 +190,18 @@ class ShortTermNotes:
                 latest[row['note_id']] = row
         return latest
 
+    def edit_from_desktop(self, note_id, text, complete=False):
+        """Apply a Lan edit to the original short-note event stream."""
+        cleaned = _clean_text(text)
+        if not isinstance(note_id, str) or cleaned is None or _is_instruction(cleaned):
+            raise ValueError('invalid short note')
+        with self._write_lock:
+            note = self._latest_notes().get(note_id)
+            if note is None or note.get('status') != '进行中':
+                raise ValueError('short note is no longer editable')
+            return self._append_note_event(note, '已完成' if complete else '进行中', cleaned,
+                                           note.get('hold_until'), note.get('source_message_ids', []), [], actor='Lan')
+
     def _last_checkpoint(self, events=None):
         for row in reversed(self._read_events() if events is None else events):
             if row.get('kind') == 'checkpoint':
@@ -343,7 +355,7 @@ class ShortTermNotes:
         return groups
 
     def _append_note_event(self, previous, status, text, hold_until, source_ids, evidence_ids,
-                           source_times=None):
+                           source_times=None, actor='Peter'):
         event_id = uuid.uuid4().hex
         timestamp = _iso()
         evidence_times = [_parse_time((source_times or {}).get(message_id))
@@ -372,7 +384,7 @@ class ShortTermNotes:
             'status': status, 'text': text, 'created_at': created_at,
             'updated_at': progress_timestamp, 'occurred_at': progress_timestamp,
             'time': timestamp,
-            'hold_until': hold_until, 'source_message_ids': list(source_ids),
+            'hold_until': hold_until, 'updated_by': actor, 'source_message_ids': list(source_ids),
             'evidence_message_ids': list(evidence_ids),
         }
         self.store.append(self.path, event)
