@@ -150,7 +150,7 @@ class InjectionTests(unittest.TestCase):
     def test_opening_memory_once_per_new_conversation_and_not_on_autonomy(self):
         memory = Mock()
         memory.last_context_refs = []
-        memory.context.side_effect = lambda text, include_opening: ([
+        memory.context.side_effect = lambda text, include_opening, recent=None: ([
             {'role': 'system', 'content': 'OPENING_MEMORY'}] if include_opening else [])
         chat = Chat(self.cfg, self.store, self.budget, self.model, memory)
         chat.send('wake up', autonomy=True)

@@ -2614,7 +2614,7 @@ class Chat:
             self.memory.refresh_opening()
             self.opening_refresh_needed = False
         # Ticket 130: a Codex reminder is a short notice; it does not need long-term memories.
-        recalled = (self.memory.context(text, include_opening=opening_turn)
+        recalled = (self.memory.context(text, include_opening=opening_turn, recent=self.history[-8:])
                     if self.memory and not self.codex_watch_mode else [])
         memory_refs = getattr(self.memory, 'last_context_refs', []) if self.memory and not self.codex_watch_mode else []
         self.turn_memory_refs = list(memory_refs) if isinstance(memory_refs, list) else []
