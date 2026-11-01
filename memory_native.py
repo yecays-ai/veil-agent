@@ -565,6 +565,11 @@ class NativeMemoryTools:
             memory_id = args.get('bucket_id')
             if not isinstance(memory_id, str) or self.memory.is_hidden(memory_id):
                 return 'The target memory does not exist or is hidden.', '被拒绝', summary
+        if name == 'I':
+            for key in ('promote', 'supersedes'):
+                target = args.get(key)
+                if target not in (None, '') and (not isinstance(target, str) or self.memory.is_hidden(target)):
+                    return 'The target of this self-knowledge change does not exist or is hidden.', '被拒绝', summary
         if name == 'plan':
             related = args.get('related_bucket')
             if related and self.memory.is_hidden(related):
@@ -575,7 +580,9 @@ class NativeMemoryTools:
             return str(exc), '出错', summary
         except Exception:
             return 'The memory tool failed. Check the current memory state before retrying.', '出错', summary
-        if name in ('dream', 'pulse', 'I'):
+        if name == 'I':
+            result = self._filter_hidden_i(result)
+        if name in ('dream', 'pulse'):
             result = self._filter_hidden_result(result, name)
         if name == 'dream':
             result = neutral_dream_header(result)
@@ -783,6 +790,30 @@ class NativeMemoryTools:
         self.memory.persist()
         self.memory.erase(memory_id)
         return None
+
+    def _filter_hidden_i(self, result):
+        """Drop each hidden self-knowledge entry or candidate as a whole block.
+
+        Ombre prints an entry as a header line holding its ID followed by free text over any number of
+        lines, so filtering line by line would leak the text of a hidden entry. A block starts at a
+        header line naming a hidden ID (or its title) and ends at the next header line (any 12-hex ID)
+        or section line (===)."""
+        hidden = self.memory.hidden_ids()
+        if not hidden:
+            return result
+        titles = {title for key in hidden if (title := self.memory.title_for(key))}
+        kept, skipping = [], False
+        for line in result.splitlines():
+            if line.startswith('==='):
+                skipping = False
+            elif any(key in line for key in hidden) or any(title in line for title in titles):
+                skipping = True
+                continue
+            elif re.search(r'\b[0-9a-f]{12}\b', line):
+                skipping = False
+            if not skipping:
+                kept.append(line)
+        return '\n'.join(kept)
 
     def _filter_hidden_result(self, result, name):
         hidden = self.memory.hidden_ids()

@@ -634,7 +634,7 @@ class Memory:
                     or (name == 'trace' and any(args.get(key) for key in
                         ('old_str', 'new_str', 'meaning_append', 'meaning_replace')))
                     or (name == 'plan' and args.get('content'))
-                    or (name == 'I' and (args.get('content') or args.get('promote')))
+                    or (name == 'I' and (args.get('content') or args.get('promote') or args.get('supersedes')))
                     or (name == 'letter_write' and args.get('content'))
                     or (name == 'letter_read' and args.get('query'))):
                 normal_tokens = max(

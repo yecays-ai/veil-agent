@@ -14,7 +14,7 @@ from agent_types import UserError, now
 TASK_STATUS = ('active', 'paused', 'blocked', 'completed')
 SIDE_EFFECT_TOOLS = {
     'write_file', 'append_file', 'grant_append', 'create_directory', 'move_lab_file', 'run_lab_python', 'hold', 'trace',
-    'letter_write', 'letter_lock_update', 'anchor', 'release', 'plan', 'I',
+    'letter_write', 'letter_lock_update', 'anchor', 'release', 'plan',
 }
 READ_ONLY_TOOLS = {
     'list_directory', 'directory_tree', 'read_text_file', 'read_multiple_files',

@@ -315,7 +315,10 @@ class VersionedOmbreBackend(Backend):
     def list_tools(self):
         names = ('trace', 'dream', 'letter_write', 'letter_read', 'letter_lock_update',
                  'anchor', 'release', 'plan', 'pulse', 'I')
-        return [SimpleNamespace(name=name, inputSchema={'type': 'object', 'properties': {}},
+        i_properties = {key: {'type': 'string'} for key in ('content', 'aspect', 'promote', 'supersedes')}
+        i_properties.update(read={'type': 'boolean'}, limit={'type': 'integer'})
+        return [SimpleNamespace(name=name, inputSchema={'type': 'object',
+                                                        'properties': i_properties if name == 'I' else {}},
                                 description=f'upstream {name}') for name in names]
 
     def call(self, name, args):
@@ -592,9 +595,33 @@ class OmbreToolGuardTests(unittest.TestCase):
         self.assertEqual(self.backend.calls[-1],
                          ('I', {'content': 'I think I stall before hard questions', 'aspect': 'patterns'}))
 
+    def test_I_schema_keeps_write_promote_supersede_and_read_arguments(self):
+        tool = next(t for t in self.tools.native.tools if t.name == 'I')
+        self.assertEqual(set(tool.inputSchema['properties']),
+                         {'content', 'aspect', 'promote', 'supersedes', 'read', 'limit'})
+        self.assertNotIn('upstream I', tool.description)
+
+    def test_I_cannot_promote_or_supersede_a_hidden_memory(self):
+        self.memory.state['entries']['mem001'] = {'title': 'Old title', 'hidden': True}
+        for args in ({'promote': 'mem001'}, {'content': 'I think differently', 'supersedes': 'mem001'}):
+            before = len(self.backend.calls)
+            _, state, _ = self.call('I', args)
+            self.assertEqual(state, '被拒绝')
+            self.assertEqual(len(self.backend.calls), before)
+
+    def test_I_read_drops_a_hidden_entry_with_all_its_lines(self):
+        self.memory.state['entries']['mem001'] = {'title': 'Old title', 'hidden': True}
+        self.backend.result = ('=== 正在沉淀的「我觉得」（2 条）===\n\n2026-11-01 mem001 （1/3 次 dream）\n'
+                               'secret first line\n\nsecret second paragraph\n'
+                               '\n2026-11-01 0123456789ab （1/3 次 dream）\nshown text')
+        text, state, _ = self.call('I', {'read': True})
+        self.assertEqual(state, '成功')
+        self.assertNotIn('secret', text)
+        self.assertIn('shown text', text)
+
     def test_I_read_does_not_forward_hidden_memory_lines(self):
         self.memory.state['entries']['mem001'] = {'title': 'Old title', 'hidden': True}
-        self.backend.result = ('待沉淀候选:\n- [mem001] hidden candidate\n- [visible] shown candidate')
+        self.backend.result = ('待沉淀候选:\n- mem001 hidden candidate\n- 0123456789ab shown candidate')
         text, state, _ = self.call('I', {'read': True})
         self.assertEqual(state, '成功')
         self.assertNotIn('hidden candidate', text)
