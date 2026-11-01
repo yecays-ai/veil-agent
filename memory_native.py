@@ -507,6 +507,8 @@ class NativeMemoryTools:
             result = json.dumps({'memory_id': key, 'offset': offset, 'text': raw[offset:end],
                                  'next_offset': end if end < len(raw) else None, 'version': version}, ensure_ascii=False)
             if len(result.encode('utf-8')) <= self.max_result_bytes:
+                # Ticket 188: a memory Peter has just read is a memory he was shown; hold(target_id) may extend it.
+                self.memory.mark_surfaced([key])
                 return result, '成功', f'{title[:80]}（{key}）'
             if end <= offset:
                 return 'The result limit is too small to return the requested memory content.', '出错', 'memory_read'
