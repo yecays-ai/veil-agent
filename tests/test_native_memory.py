@@ -732,7 +732,8 @@ class OmbreToolGuardTests(unittest.TestCase):
 
     def test_hold_target_refuses_surfaced_memory_that_became_hidden(self):
         self.memory.mark_surfaced(['mem001'])
-        self.memory.native_hidden.add('mem001')
+        self.path.write_text(self.path.read_text(encoding='utf-8').replace('tags: [keep]', 'tags: [keep]\ndont_surface: true'),
+                             encoding='utf-8')
         result, state, _ = self.call('hold', {'target_id': 'mem001', 'content': 'added detail'})
         self.assertEqual(state, '被拒绝')
         self.assertNotIn('added detail', self.path.read_text(encoding='utf-8'))

@@ -10,6 +10,10 @@ class NotesJsonToleranceTests(unittest.TestCase):
         for text in (body, '```json\n' + body + '\n```', 'Sure, here it is:\n' + body + '\nDone.'):
             self.assertEqual(_parse_json_object(text), {'operations': []})
 
+    def test_object_with_operations_wins_over_earlier_object(self):
+        text = 'Example: {"note": 1}\n{"operations": [{"action": "complete"}]}'
+        self.assertEqual(_parse_json_object(text), {'operations': [{'action': 'complete'}]})
+
     def test_unusable_replies_return_none(self):
         for text in ('', 'no json here', '{"operations": [', None):
             self.assertIsNone(_parse_json_object(text))

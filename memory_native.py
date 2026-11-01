@@ -721,14 +721,18 @@ class NativeMemoryTools:
     def _editable(self, memory_id):
         """A memory may be extended only if Peter was shown it: his own search results, or an
         automatic recall (read fresh from disk now). Other IDs, hidden or erased ones stay refused."""
+        shown = memory_id in self.search_results or memory_id in getattr(self.memory, 'surfaced_ids', {})
+        # Visibility is re-read from disk every time: a memory hidden or archived after it was shown stays refused.
+        if not shown or not self.memory.refresh_visibility(memory_id):
+            return False
         if memory_id in self.search_results:
             return True
-        if memory_id not in getattr(self.memory, 'surfaced_ids', {}):
-            return False
         text = self.memory.content_for(memory_id, refresh=True)
         if text is None:
             return False
         self.search_results[memory_id] = text
+        while len(self.search_results) > self.SEARCH_RESULTS_LIMIT:
+            self.search_results.pop(next(iter(self.search_results)))
         return True
 
     def _hold(self, args):

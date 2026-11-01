@@ -49,6 +49,7 @@ def _parse_json_object(output):
         return json.loads(output)
     except ValueError:
         pass
+    first = None
     start = output.find('{')
     while start != -1:
         try:
@@ -57,9 +58,11 @@ def _parse_json_object(output):
             start = output.find('{', start + 1)
             continue
         if isinstance(value, dict):
-            return value
+            if 'operations' in value:
+                return value
+            first = first or value
         start = output.find('{', start + 1)
-    return None
+    return first
 
 
 def _local_now():
