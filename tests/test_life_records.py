@@ -61,7 +61,6 @@ class LifeRecordsTest(unittest.TestCase):
             self.assertEqual(json.loads(records.invoke({'action':'list'})[0]),[])
             note=records.write({'kind':'note','title':'Visible'},'Lan')
             with self.assertRaises(ValueError): records.write({'id':note['id'],'kind':'diary'},'Lan')
-            listed=json.loads(records.invoke({'action':'list'})[0])
-            self.assertTrue(any(r['title']=='Out' for r in listed))
+            self.assertEqual([r['title'] for r in json.loads(records.invoke({'action':'list'})[0])],['Visible'])
 
 if __name__ == '__main__': unittest.main()
