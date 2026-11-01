@@ -314,8 +314,11 @@ class VersionedOmbreBackend(Backend):
 
     def list_tools(self):
         names = ('trace', 'dream', 'letter_write', 'letter_read', 'letter_lock_update',
-                 'anchor', 'release', 'plan', 'pulse')
-        return [SimpleNamespace(name=name, inputSchema={'type': 'object', 'properties': {}},
+                 'anchor', 'release', 'plan', 'pulse', 'I')
+        i_properties = {key: {'type': 'string'} for key in ('content', 'aspect', 'promote', 'supersedes')}
+        i_properties.update(read={'type': 'boolean'}, limit={'type': 'integer'})
+        return [SimpleNamespace(name=name, inputSchema={'type': 'object',
+                                                        'properties': i_properties if name == 'I' else {}},
                                 description=f'upstream {name}') for name in names]
 
     def call(self, name, args):
@@ -332,7 +335,7 @@ class VersionedOmbreBackend(Backend):
                              count=1, flags=re.M)
             self.path.write_text(raw, encoding='utf-8')
             return 'updated'
-        if name in ('dream', 'pulse'):
+        if name in ('dream', 'pulse', 'I'):
             return self.result
         return f'{name} result'
 
@@ -583,6 +586,53 @@ class OmbreToolGuardTests(unittest.TestCase):
         self.assertNotIn('secret', pulse)
         self.assertNotIn('固化桶: 7 个', pulse)
 
+    def test_I_is_offered_and_forwards_its_arguments_without_program_help(self):
+        # Ticket 189: Peter writes, reads and promotes self-knowledge himself; VEIL adds nothing.
+        self.assertIn('I', {tool.name for tool in self.tools.native.tools})
+        self.backend.result = 'candidate saved'
+        result, state, _ = self.call('I', {'content': 'I think I stall before hard questions', 'aspect': 'patterns'})
+        self.assertEqual((result, state), ('candidate saved', '成功'))
+        self.assertEqual(self.backend.calls[-1],
+                         ('I', {'content': 'I think I stall before hard questions', 'aspect': 'patterns'}))
+
+    def test_I_schema_keeps_write_promote_supersede_and_read_arguments(self):
+        tool = next(t for t in self.tools.native.tools if t.name == 'I')
+        self.assertEqual(set(tool.inputSchema['properties']),
+                         {'content', 'aspect', 'promote', 'supersedes', 'read', 'limit'})
+        self.assertNotIn('upstream I', tool.description)
+
+    def test_I_cannot_promote_or_supersede_a_hidden_memory(self):
+        self.memory.state['entries']['mem001'] = {'title': 'Old title', 'hidden': True}
+        for args in ({'promote': 'mem001'}, {'content': 'I think differently', 'supersedes': 'mem001'}):
+            before = len(self.backend.calls)
+            _, state, _ = self.call('I', args)
+            self.assertEqual(state, '被拒绝')
+            self.assertEqual(len(self.backend.calls), before)
+
+    def test_I_read_drops_a_hidden_entry_with_all_its_lines(self):
+        self.memory.state['entries']['mem001'] = {'title': 'Old title', 'hidden': True}
+        self.backend.result = ('=== 正在沉淀的「我觉得」（2 条）===\n\n2026-11-01 mem001 （1/3 次 dream）\n'
+                               'secret first line\n\nsecret second paragraph\n'
+                               '\n2026-11-01 0123456789ab （1/3 次 dream）\nshown text')
+        text, state, _ = self.call('I', {'read': True})
+        self.assertEqual(state, '成功')
+        self.assertNotIn('secret', text)
+        self.assertIn('shown text', text)
+
+    def test_I_read_keeps_a_visible_entry_that_only_shares_a_word_with_a_hidden_id_or_title(self):
+        self.memory.state['entries']['mem001'] = {'title': 'Old title', 'hidden': True}
+        self.backend.result = ('2026-11-01 0123456789ab （1/3 次 dream）\nThe Old title idea and mem0010 stay readable')
+        text, state, _ = self.call('I', {'read': True})
+        self.assertIn('stay readable', text)
+
+    def test_I_read_does_not_forward_hidden_memory_lines(self):
+        self.memory.state['entries']['mem001'] = {'title': 'Old title', 'hidden': True}
+        self.backend.result = ('待沉淀候选:\n- mem001 hidden candidate\n- 0123456789ab shown candidate')
+        text, state, _ = self.call('I', {'read': True})
+        self.assertEqual(state, '成功')
+        self.assertNotIn('hidden candidate', text)
+        self.assertIn('shown candidate', text)
+
     def test_connection_failure_reaches_model_as_safe_actionable_message(self):
         self.backend.call = Mock(side_effect=MemoryToolError('connection'))
         result, state, _ = self.call('pulse', {})
@@ -673,7 +723,7 @@ class OmbreToolGuardTests(unittest.TestCase):
     def test_upstream_schemas_are_selected_by_name(self):
         names = {tool.name for tool in self.tools.native.tools}
         self.assertTrue(set(('trace', 'dream', 'letter_write', 'letter_read', 'letter_lock_update',
-                             'anchor', 'release', 'plan', 'pulse')).issubset(names))
+                             'anchor', 'release', 'plan', 'pulse', 'I')).issubset(names))
         self.assertNotIn('grow', names)
         trace = next(t for t in self.tools.native.tools if t.name == 'trace')
         # Ticket 145: short English description instead of Ombre's docstring; same parameters.

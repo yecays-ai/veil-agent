@@ -1,3 +1,9 @@
+## 工单 189 交接（2026-11-01）
+
+- 分支 `ticket/189-wire-i-tool`。`OMBRE_TOOLS` 加 `I`（Ombre 原样 schema + 一段英文说明），结果走隐藏记忆过滤；`tools_agent.NATIVE`、`web_agent.memory_names` 同步登记；`memory_agent.call` 的向量预留只在 `content`/`promote`/`supersedes` 时；`_filter_hidden_i` 按条目整块过滤隐藏记忆；`promote`/`supersedes` 指向隐藏记忆直接拒绝；`I` 不放进 `long_tasks` 的副作用/只读名单。一次性通知走现有 `bind_capabilities`。开场不注入 `I`，`feel` 写入没开。
+- 未验证：Windows 实际体验、Peter 会不会按「隔天 dream」的节奏用、dream 输出变长后的 token 费用。
+- 下一个工单号 190。
+
 ## 工单 188 交接（2026-11-01）
 
 - 分支 `ticket/188-read-counts-as-shown`。`NativeMemoryTools._read` 成功后调用 `memory.mark_surfaced([key])`；`_editable` 本来就认 `surfaced_ids`，所以不用别的改动。隐藏/不存在的记忆读失败，不登记；名单上限仍是 `Memory.SURFACED_LIMIT = 40`。连续工具卡片占满屏幕没有处理，另议。

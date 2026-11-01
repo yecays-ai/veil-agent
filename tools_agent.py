@@ -49,7 +49,7 @@ DENY = {'edit_file', 'move_file'}
 LAB_ONLY = {'create_directory', 'move_lab_file', 'lab_file_digest', 'preview_lab_page', 'open_lab_game', 'run_lab_python'}
 # Memory tools (ticket 007) are offered by memory_native.ToolSet, never by the filesystem server.
 NATIVE = {'hold', 'breath_search', 'trace', 'dream', 'letter_write', 'letter_read',
-          'letter_lock_update', 'anchor', 'release', 'plan', 'pulse', 'memory_history', 'memory_catalog', 'memory_read'}
+          'letter_lock_update', 'anchor', 'release', 'plan', 'pulse', 'I', 'memory_history', 'memory_catalog', 'memory_read'}
 AUTONOMY_DIRECT = {'set_next_wake', 'set_wake_rhythm'}
 
 

@@ -16,7 +16,7 @@ class PinningBackend(Backend):
     """Like Ombre: hold(pinned=True) answers with the pin line, not 新建."""
     def list_tools(self):
         names = ('trace', 'dream', 'letter_write', 'letter_read', 'letter_lock_update',
-                 'anchor', 'release', 'plan', 'pulse')
+                 'anchor', 'release', 'plan', 'pulse', 'I')
         return [SimpleNamespace(name=name, inputSchema={'type': 'object', 'properties': {}},
                                 description=f'upstream {name}') for name in names]
 

@@ -287,7 +287,7 @@ class Hub(ScreenPopMixin):
         projected = {}
         order = []
         memory_names = {'hold', 'breath_search', 'trace', 'dream', 'letter_write', 'letter_read',
-                        'letter_lock_update', 'memory_history', 'memory_catalog', 'memory_read'}
+                        'letter_lock_update', 'I', 'memory_history', 'memory_catalog', 'memory_read'}
         for index, row in enumerate(rows):
             if not isinstance(row, dict) or not isinstance(row.get('tool'), str):
                 continue

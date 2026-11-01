@@ -17,7 +17,7 @@ from capability_state import capability_lock, save_capabilities
 from memory_agent import ordinary_hits, MemoryToolError, vault_path as role_vault_path
 
 OMBRE_TOOLS = ('trace', 'dream', 'letter_write', 'letter_read', 'letter_lock_update',
-                'anchor', 'release', 'plan', 'pulse')
+                'anchor', 'release', 'plan', 'pulse', 'I')
 NATIVE_TOOLS = ('hold', 'breath_search', *OMBRE_TOOLS, 'memory_history', 'memory_catalog', 'memory_read')
 CONTENT_LIMIT, TITLE_LIMIT, WHY_LIMIT = 1500, 100, 500
 # Ombre allows 20 pinned memories; VEIL keeps the permanent front row much smaller (ticket 184).
@@ -131,6 +131,14 @@ OMBRE_DESCRIPTIONS = {
         'unlock_date (2027-01-01 or a full ISO time) opens on that date, "permanent" seals it unread forever. '
         'Only the writer can change a lock later with letter_lock_update, and only if ai_name (your name) was '
         'given when writing.'),
+    'I': (
+        'Slowly build what you know about yourself. content="I think ..." (one short sentence, optional aspect: '
+        'nature, values, patterns, limits, becoming, uncertainty or stance) saves a candidate: it is an ordinary '
+        'memory that surfaces and fades like any other. Each dream shows candidates beside related memories; a '
+        'candidate seen by dream on 3 different days can become a lasting entry with promote=<candidate id>. '
+        'supersedes=<id of a lasting entry> in the same aspect replaces an old understanding (the old one is kept, '
+        'only set aside). read=true (or no arguments) reads lasting entries and waiting candidates. '
+        'Nothing is written for you and nothing is injected at the start of a chat; read it when you want to.'),
     'letter_read': (
         'Find letters: optional query (meaning search), author ("ai", "user" or a signature), date_from/date_to '
         '(ISO dates). Without query, the newest limit letters. Returns full text.'),
@@ -557,6 +565,11 @@ class NativeMemoryTools:
             memory_id = args.get('bucket_id')
             if not isinstance(memory_id, str) or self.memory.is_hidden(memory_id):
                 return 'The target memory does not exist or is hidden.', '被拒绝', summary
+        if name == 'I':
+            for key in ('promote', 'supersedes'):
+                target = args.get(key)
+                if target not in (None, '') and (not isinstance(target, str) or self.memory.is_hidden(target)):
+                    return 'The target of this self-knowledge change does not exist or is hidden.', '被拒绝', summary
         if name == 'plan':
             related = args.get('related_bucket')
             if related and self.memory.is_hidden(related):
@@ -567,6 +580,8 @@ class NativeMemoryTools:
             return str(exc), '出错', summary
         except Exception:
             return 'The memory tool failed. Check the current memory state before retrying.', '出错', summary
+        if name == 'I':
+            result = self._filter_hidden_i(result)
         if name in ('dream', 'pulse'):
             result = self._filter_hidden_result(result, name)
         if name == 'dream':
@@ -775,6 +790,31 @@ class NativeMemoryTools:
         self.memory.persist()
         self.memory.erase(memory_id)
         return None
+
+    def _filter_hidden_i(self, result):
+        """Drop each hidden self-knowledge entry or candidate as a whole block.
+
+        Ombre prints an entry as a header line holding its ID followed by free text over any number of
+        lines, so filtering line by line would leak the text of a hidden entry. A block starts at a
+        header line naming a hidden ID (or its title) and ends at the next header line (any 12-hex ID)
+        or section line (===)."""
+        hidden = self.memory.hidden_ids()
+        if not hidden:
+            return result
+        # Ombre prints no title for these entries, so only a hidden ID (as a whole word) marks one.
+        kept, skipping = [], False
+        for line in result.splitlines():
+            if line.startswith('==='):
+                skipping = False
+            elif any(re.search(r'(?<![A-Za-z0-9_-])' + re.escape(key) + r'(?![A-Za-z0-9_-])', line)
+                     for key in hidden):
+                skipping = True
+                continue
+            elif re.search(r'\b[0-9a-f]{12}\b', line):
+                skipping = False
+            if not skipping:
+                kept.append(line)
+        return '\n'.join(kept)
 
     def _filter_hidden_result(self, result, name):
         hidden = self.memory.hidden_ids()
