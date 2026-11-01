@@ -10,7 +10,7 @@ let pet, chat, menu, connecting = false, quitting = false, drag, petResize, agen
 const detachedWindows = new Map(), mergingViews = new Set();
 const screenPopWindows = new Map(), screenPopInFlight = new Set();
 let screenPopPollTimer = null, screenPopPolling = false, quitFlushStarted = false;
-const VIEW_NAMES = new Set(['chat', 'activity', 'context', 'memory', 'mcp', 'more']);
+const VIEW_NAMES = new Set(['chat', 'activity', 'context', 'memory', 'life', 'mcp', 'more']);
 const settings = { size: 320, theme: 'light' };
 const petURL = pathToFileURL(path.join(__dirname, 'pet.html')).href;
 const chatURL = pathToFileURL(path.join(__dirname, 'chat.html')).href;
@@ -493,6 +493,7 @@ ipcMain.handle('chat:request', async (event, pathname, body, timeoutMs) => {
     (detachedView === 'mcp' && ((!body && pathname?.startsWith('/api/events?')) || pathname === '/api/mcp' || (!body && pathname === '/api/mcp?retry=1'))) ||
     (detachedView === 'memory' && ((!body && (pathname?.startsWith('/api/events?') || pathname?.startsWith('/api/memory/'))) ||
       (body && ['/api/memory/edit', '/api/memory/delete'].includes(pathname)))) ||
+    (detachedView === 'life' && ((!body && (pathname?.startsWith('/api/events?') || pathname === '/api/life')) || (body && pathname === '/api/life'))) ||
     (detachedView === 'more' && ((!body && pathname?.startsWith('/api/events?')) || (body && ['/api/exit', '/api/models', '/api/models/use'].includes(pathname))));
   if (!fromChatPage(event) || typeof pathname !== 'string' || !allowedChatRequest(pathname, body ? 'POST' : 'GET') || !detachedAllowed)
     return { ok: false, status: 403, data: { error: '请求未允许。' } };

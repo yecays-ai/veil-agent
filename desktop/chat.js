@@ -1479,9 +1479,9 @@ document.querySelectorAll('[data-page]').forEach(tab=>{tab.addEventListener('poi
 window.veilDesktop.onShowActivity(()=>setPage('activity'));
 window.veilDesktop.onShowView(view=>setPage(view));
 window.veilDesktop.onShowSettings(()=>setPage('more'));
-if(detachedView&&['chat','activity','context','memory','mcp','more'].includes(detachedView)){
+if(detachedView&&['chat','activity','context','memory','life','mcp','more'].includes(detachedView)){
   document.body.classList.add('detached-window');$('detached-header').hidden=false;
-  $('detached-title').textContent='Peter · '+({chat:'聊天',activity:'活动记录',context:'实时上下文',memory:'记忆',mcp:'MCP',more:'更多'}[detachedView]);setPage(detachedView);
+  $('detached-title').textContent='Peter · '+({chat:'聊天',activity:'活动记录',context:'实时上下文',memory:'记忆',life:'生活',mcp:'MCP',more:'更多'}[detachedView]);setPage(detachedView);
 }else{setPage('chat');box.focus()}
 setBusy(true);poll();
 
@@ -1569,6 +1569,7 @@ $('mcp-form').onsubmit=async event=>{
   if(await saveMCP(current=>{const services=editingId?current.services.map(item=>item.id===editingId?{...service,enabled:item.enabled}:item):[...current.services,service];return {...current,services}})){$('mcp-form').hidden=true;mcpEditing=null}
 };
 if(detachedView==='mcp')loadMCP();
+if(detachedView==='life')loadLife();
 setInterval(()=>{if(document.body.dataset.currentPage==='mcp'&&!mcpLoading&&$('mcp-form').hidden)loadMCP()},3000);
 
 // Ticket 134: 模型 settings card and the header switch. The server keeps keys; this page only sees "…1234".

@@ -1660,16 +1660,6 @@ def make_handler(hub, token):
                             'updated_by':'Peter','updated_at':old.get('updated_at',''),
                             'source':'long_task_update','progress':old.get('progress',[]),
                             'read_only':True})
-                    notes = getattr(chat, 'short_term_notes', None)
-                    if notes is not None:
-                        for note in notes._latest_notes().values():
-                            rows.append({'id': 'short-note:' + note['note_id'], 'kind': 'note',
-                                'title': note.get('text', '')[:120], 'content': note.get('text', ''),
-                                'owner': 'Peter', 'date': str(note.get('occurred_at') or note.get('time', ''))[:10],
-                                'state': {'已完成':'completed','已过期':'expired'}.get(note.get('status'),'active'),
-                                'created_by': 'Peter', 'created_at': note.get('time', ''),
-                                'updated_by': note.get('updated_by','Peter'), 'updated_at': note.get('time', ''),
-                                'source': 'short_term_notes', 'read_only': True})
                 if hub.memory_tools is not None:
                     rows.extend(hub.memory_tools.plan_entries())
                 self._send(200, {'records': rows})
