@@ -157,6 +157,14 @@ class PinnedTests(Base):
         self.assertIn(str(PINNED_LIMIT), result)
         self.assertNotIn('trace', [n for n, _ in self.backend.calls])
 
+    def test_trace_cannot_hide_a_pinned_memory_before_unpinning(self):
+        self.write('p0', folder='permanent', extra='pinned: true\ntype: permanent\n')
+        self.memory.state['entries']['p0'] = {'title': 'T p0', 'time': 'x', 'signature': None, 'hidden': False, 'text': 'body p0'}
+        result, state, _ = self.tools.invoke('trace', {'bucket_id': 'p0', 'dont_surface': 1})
+        self.assertEqual(state, '被拒绝')
+        self.assertIn('Unpin', result)
+        self.assertNotIn('trace', [n for n, _ in self.backend.calls])
+
 
 class CatalogBrowseTests(Base):
     def seed(self):

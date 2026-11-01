@@ -596,6 +596,11 @@ class NativeMemoryTools:
             if memory_id not in already and len(already) >= PINNED_LIMIT:
                 return (f'{PINNED_LIMIT} memories are already pinned. Unpin one first '
                         '(trace pinned=0 with importance 1-10) before pinning another.'), '被拒绝', summary
+        hide = args.get('dont_surface')
+        if (hide is True or hide == 1 or (isinstance(hide, str) and hide.strip().casefold() in ('1', 'true', 'yes'))) \
+                and memory_id in self._pinned_ids() and args.get('pinned') not in (0, False):
+            return ('This memory is pinned. Unpin it first (trace pinned=0 with importance 1-10) '
+                    'before hiding it from recall.'), '被拒绝', summary
         if delete and self.autonomy_mode:
             return self._queue_delete(memory_id, summary, args, old)
         if delete and (approval is None or approval(
