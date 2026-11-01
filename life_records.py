@@ -68,7 +68,7 @@ class LifeRecords:
             state=body.get('state',prior.get('state') if prior else 'active')
             mood=body.get('mood',prior.get('mood','') if prior else '')
             repeat=body.get('repeat',prior.get('repeat','none') if prior else 'none')
-            if (kind not in ('event','note','diary','plan') or kind=='diary' and (not prior or prior.get('kind')!='diary')
+            if (kind not in ('event','note','diary','plan') or kind=='diary'
                 or not isinstance(mood,str) or len(mood)>40 or repeat not in ('none','daily') or repeat=='daily' and kind!='note' or actor=='Peter' and kind=='plan' and (not prior or prior.get('kind')!='plan')
                 or not isinstance(title,str) or not title.strip() or len(title)>240
                 or not isinstance(content,str) or len(content)>12000

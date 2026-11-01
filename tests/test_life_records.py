@@ -59,6 +59,8 @@ class LifeRecordsTest(unittest.TestCase):
             records.path.write_text(json.dumps({'records':[{'id':'old','kind':'diary','title':'Old diary','owner':'共同','date':'2026-10-01','state':'active','content':'','created_by':'Peter','created_at':'x','updated_by':'Peter','updated_at':'x','history':[]}]}),encoding='utf-8')
             self.assertEqual(len(records.read()),1)
             self.assertEqual(json.loads(records.invoke({'action':'list'})[0]),[])
+            with self.assertRaises(ValueError): records.write({'id':'old','title':'changed'},'Peter')
+            self.assertEqual(records.read()[0]['title'],'Old diary')
             note=records.write({'kind':'note','title':'Visible','owner':'共同'},'Lan')
             with self.assertRaises(ValueError): records.write({'id':note['id'],'kind':'diary'},'Lan')
             self.assertEqual([r['title'] for r in json.loads(records.invoke({'action':'list'})[0])],['Visible'])
