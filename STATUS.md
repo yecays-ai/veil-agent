@@ -4,6 +4,7 @@
 
 ## 当前目标与现状
 
+- 工单 189「把 Ombre 的 `I`（自我认知）接给 Peter」（`ticket/189-wire-i-tool`）：lan/ChatGPT 11-01 决定接入 `I`、`feel` 暂缓写入。Peter 可自己写候选、经 3 个不同日期的 dream 见证后自己升级、用 `supersedes` 修正；开场不注入，程序不替他写；不调模型。现状：代码和自动测试完成，Windows 体验未验证。详见 `docs/tickets/189-wire-i-tool.md`。下一个工单号 190。
 - 工单 188「读过的记忆也算展示过」（`ticket/188-read-counts-as-shown`）：Peter 整理重复记忆时，`memory_read` 读过的记忆被 `hold(target_id)` 拒绝（只有自动召回和 `breath_search` 登记）。现在读成功也登记。现状：代码和自动测试完成，Windows 体验未验证。验收见 `docs/tickets/188-read-counts-as-shown.md`。下一个工单号 189（工单 187 为 PR #237）。
 - 工单 187「依赖上文的短消息用上文找记忆，可零条」（`ticket/187-recall-relevance`）：lan/ChatGPT 11-01 批准在 VEIL 侧用 bge-m3 做相关度过滤。短消息（默认 ≤12 字）且有上文时，再用前两轮查一次，只留与「上文+这句」向量相近的记忆，最多 3 条，可以零条；读 Ombre 的 `embeddings.db`（只读），不改 Ombre；默认关闭，阈值未校准前不开。现状：代码和自动测试完成，阈值未校准，Windows 体验未验证。详见 `docs/tickets/187-recall-relevance.md`。下一个工单号 189。
 - 工单 186「DeepSeek 内置输入上限 64K」（`ticket/186-deepseek-window-64k`）：lan 11-01 用 deepseek 每次报「超过 32768」（系统人设 5125 + 工具定义 23965 + 状态 430 + 当前消息含图 4244 ≈ 33763，历史已全裁掉仍放不下）。`characters/peter/character.toml` 的 deepseek 内置档 `max_input_tokens` 由 32768 改为 65536（自主醒来本来就用 65536）；只在真的超过 32K 时才多发，费用见验收单。现状：配置改完，Windows 体验未验证。验收见 `docs/tickets/186-deepseek-window-64k.md`。下一个工单号 187。

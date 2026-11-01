@@ -314,7 +314,7 @@ class VersionedOmbreBackend(Backend):
 
     def list_tools(self):
         names = ('trace', 'dream', 'letter_write', 'letter_read', 'letter_lock_update',
-                 'anchor', 'release', 'plan', 'pulse')
+                 'anchor', 'release', 'plan', 'pulse', 'I')
         return [SimpleNamespace(name=name, inputSchema={'type': 'object', 'properties': {}},
                                 description=f'upstream {name}') for name in names]
 
@@ -332,7 +332,7 @@ class VersionedOmbreBackend(Backend):
                              count=1, flags=re.M)
             self.path.write_text(raw, encoding='utf-8')
             return 'updated'
-        if name in ('dream', 'pulse'):
+        if name in ('dream', 'pulse', 'I'):
             return self.result
         return f'{name} result'
 
@@ -583,6 +583,23 @@ class OmbreToolGuardTests(unittest.TestCase):
         self.assertNotIn('secret', pulse)
         self.assertNotIn('固化桶: 7 个', pulse)
 
+    def test_I_is_offered_and_forwards_its_arguments_without_program_help(self):
+        # Ticket 189: Peter writes, reads and promotes self-knowledge himself; VEIL adds nothing.
+        self.assertIn('I', {tool.name for tool in self.tools.native.tools})
+        self.backend.result = 'candidate saved'
+        result, state, _ = self.call('I', {'content': 'I think I stall before hard questions', 'aspect': 'patterns'})
+        self.assertEqual((result, state), ('candidate saved', '成功'))
+        self.assertEqual(self.backend.calls[-1],
+                         ('I', {'content': 'I think I stall before hard questions', 'aspect': 'patterns'}))
+
+    def test_I_read_does_not_forward_hidden_memory_lines(self):
+        self.memory.state['entries']['mem001'] = {'title': 'Old title', 'hidden': True}
+        self.backend.result = ('待沉淀候选:\n- [mem001] hidden candidate\n- [visible] shown candidate')
+        text, state, _ = self.call('I', {'read': True})
+        self.assertEqual(state, '成功')
+        self.assertNotIn('hidden candidate', text)
+        self.assertIn('shown candidate', text)
+
     def test_connection_failure_reaches_model_as_safe_actionable_message(self):
         self.backend.call = Mock(side_effect=MemoryToolError('connection'))
         result, state, _ = self.call('pulse', {})
@@ -673,7 +690,7 @@ class OmbreToolGuardTests(unittest.TestCase):
     def test_upstream_schemas_are_selected_by_name(self):
         names = {tool.name for tool in self.tools.native.tools}
         self.assertTrue(set(('trace', 'dream', 'letter_write', 'letter_read', 'letter_lock_update',
-                             'anchor', 'release', 'plan', 'pulse')).issubset(names))
+                             'anchor', 'release', 'plan', 'pulse', 'I')).issubset(names))
         self.assertNotIn('grow', names)
         trace = next(t for t in self.tools.native.tools if t.name == 'trace')
         # Ticket 145: short English description instead of Ombre's docstring; same parameters.
