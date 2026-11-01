@@ -36,6 +36,17 @@ class LiveContextTest(unittest.TestCase):
         self.assertIsNotNone(snapshot['active'][0]['fades_at'])
         self.assertIsNotNone(snapshot['next_extraction_at'])
 
+    def test_desktop_edit_uses_original_note_history(self):
+        note = self.notes._append_note_event(None, '进行中', 'First text.', None, [], [])
+        edited = self.notes.edit_from_desktop(note['note_id'], 'Updated text.')
+        self.assertEqual(edited['updated_by'], 'Lan')
+        self.assertEqual(edited['previous_event_id'], note['event_id'])
+        done = self.notes.edit_from_desktop(note['note_id'], 'Updated text.', complete=True)
+        self.assertEqual(done['status'], '已完成')
+        self.assertEqual(self.notes._latest_notes()[note['note_id']]['status'], '已完成')
+        with self.assertRaises(ValueError):
+            self.notes.edit_from_desktop(note['note_id'], 'Again')
+
     def test_snapshot_hides_notes_closed_long_ago(self):
         old = (datetime.now(timezone.utc) - timedelta(hours=5)).isoformat()
         self.store.append('peter/notes.jsonl', {'kind': 'note', 'note_id': 'a', 'status': '已过期',
