@@ -50,7 +50,7 @@ input_cny_per_million = "0"
 # [memory] keys and before the next section:
 # [memory.recall_context]
 # enabled = true
-# min_similarity = 0.50   # placeholder, not calibrated
+# min_similarity = <fill in the calibrated value; the table is ignored without a number>
 # short_chars = 12
 # rounds = 2
 

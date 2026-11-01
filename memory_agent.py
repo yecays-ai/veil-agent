@@ -1020,11 +1020,12 @@ class Memory:
         extra = ordinary_hits(self.call('breath_search', {
             'query': text, 'mode': 'automatic', 'with_ids': True, 'max_results': 3}))
         candidates = dict(normal + extra + emotional)
+        embedder = self.embedder()  # a missing key fails here, before anything is reserved or sent
         tokens = max(512, len(text.encode('utf-8')))
         rate = Decimal(str(self.cfg.memory['input_cny_per_million']))
         reservation = self.budget.estimate(self.cfg.id, self.cfg.memory['model'], tokens, rate)
         try:
-            query_vector = self.embedder().embed(text)
+            query_vector = embedder.embed(text)
         finally:
             self.budget.settle_estimate(reservation, accounting='embedding-estimate',
                                         settled_amount=Decimal(tokens) * rate / Decimal(1_000_000))

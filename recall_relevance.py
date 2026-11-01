@@ -34,7 +34,8 @@ def decode_vector(raw):
 
 def cosine(a, b):
     if not a or len(a) != len(b):
-        return 0.0
+        # A different size means a different embedding model; scoring it 0 would silently drop every memory.
+        raise ValueError('embedding sizes differ')
     dot = sum(x * y for x, y in zip(a, b))
     na = math.sqrt(sum(x * x for x in a))
     nb = math.sqrt(sum(y * y for y in b))
@@ -42,11 +43,14 @@ def cosine(a, b):
 
 
 def load_vectors(db_path, ids):
-    """Read the stored content vectors of the given memories, read-only. Missing ones are left out."""
+    """Read the stored content vectors of the given memories, read-only. Memories without a vector are left out;
+    a missing database is an error, so the caller keeps today's recall."""
     ids = [i for i in dict.fromkeys(ids) if isinstance(i, str) and i]
     found = {}
-    if not ids or not Path(db_path).is_file():
+    if not ids:
         return found
+    if not Path(db_path).is_file():
+        raise FileNotFoundError('embeddings.db is missing')
     conn = sqlite3.connect(Path(db_path).resolve().as_uri() + '?mode=ro', uri=True, timeout=5)
     try:
         for start in range(0, len(ids), 50):

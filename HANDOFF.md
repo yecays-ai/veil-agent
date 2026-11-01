@@ -2,7 +2,7 @@
 
 - 分支 `ticket/187-recall-relevance`。新文件 `recall_relevance.py`（向量解码/余弦/只读读 `embeddings.db`/`QueryEmbedder`/上文拼接）；`Memory.context(query, recent=…)` 在 `[memory.recall_context]` 开启且 `min_similarity` 已填、这句不超过 `short_chars`、有上文时才走 `assisted_recall`；其余路径一字不变。`veil_agent.py` 把 `self.history[-8:]` 传入。`EMBED_API_KEY` 从仓库 `.env` 读，缺失则本轮保持今天的召回。`Memory.__exit__` 关闭 embedder。
 - 默认关闭，`character.toml` 只有注释。校准用：开着诊断看 `diagnostics.jsonl` 的 `assisted_recall` 分数；校准前不要写 `min_similarity`。
-- 未验证：阈值、延迟、费用（每次启用多一次 bge-m3 调用，价格 ¥0 配置）、Windows 实际体验。
+- 未验证：阈值、延迟、费用（每次启用多一次给「上文+这句」算的查询向量，并多一次 `breath_search` 向量检索，价格 ¥0 配置）、Windows 实际体验。
 - 下一个工单号 188。
 
 ## 工单 186 交接（2026-11-01）

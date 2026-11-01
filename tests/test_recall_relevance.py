@@ -3,6 +3,7 @@ import array
 import sqlite3
 import tempfile
 import unittest
+import unittest.mock
 from decimal import Decimal
 from pathlib import Path
 from unittest.mock import Mock
@@ -106,6 +107,29 @@ class AssistedRecallTests(unittest.TestCase):
         self.assertIn('GARDEN_MEMORY', text)
         self.assertIn('TAXES_MEMORY', text)
 
+    def test_wrong_vector_size_or_missing_database_keep_todays_recall(self):
+        memory = self.memory(self.enabled())
+        memory._embedder = FakeEmbedder((1.0, 0.0, 0.0))  # stored vectors have 2 dimensions
+        text = self.text(memory, 'try again')
+        self.assertIn('GARDEN_MEMORY', text)
+        self.assertIn('TAXES_MEMORY', text)
+        (vault_path(self.store.root, 'fake') / 'embeddings.db').unlink()
+        memory = self.memory(self.enabled())
+        memory._embedder = FakeEmbedder((1.0, 0.0))
+        text = self.text(memory, 'try again')
+        self.assertIn('GARDEN_MEMORY', text)
+        self.assertIn('TAXES_MEMORY', text)
+
+    def test_missing_key_fails_before_anything_is_reserved(self):
+        memory = self.memory(self.enabled())
+        with unittest.mock.patch('dotenv.dotenv_values', return_value={}):
+            text = self.text(memory, 'try again')
+        self.assertIn('TAXES_MEMORY', text)  # today's recall
+        # Only Ombre's own search estimates (large) exist; no small estimate for the query embedding.
+        reserves = [row for row in self.store.read('costs.jsonl') if row.get('type') == 'reserve']
+        self.assertTrue(reserves)
+        self.assertTrue(all(row['estimated_tokens'] >= 8192 for row in reserves))
+
     def test_candidates_without_a_stored_vector_are_dropped(self):
         self.backend.rows['new'] = {'content': 'NEW_MEMORY'}
         self.backend.write_row('new')
@@ -121,7 +145,8 @@ class HelperTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             decode_vector(b'abc')
         self.assertAlmostEqual(cosine([1, 0], [1, 1]), 0.7071, places=3)
-        self.assertEqual(cosine([1], [1, 2]), 0.0)
+        with self.assertRaises(ValueError):
+            cosine([1], [1, 2])
 
     def test_context_text_takes_the_last_rounds_and_clips_assistant_text(self):
         rows = [{'role': 'user', 'content': 'a'}, {'role': 'assistant', 'content': 'b'},
@@ -132,8 +157,10 @@ class HelperTests(unittest.TestCase):
         self.assertTrue(text.endswith('f\nnow'))
         self.assertLess(len(text), 300)
 
-    def test_missing_database_returns_nothing(self):
-        self.assertEqual(load_vectors('/nonexistent/embeddings.db', ['x']), {})
+    def test_missing_database_is_an_error_not_an_empty_answer(self):
+        with self.assertRaises(FileNotFoundError):
+            load_vectors('/nonexistent/embeddings.db', ['x'])
+        self.assertEqual(load_vectors('/nonexistent/embeddings.db', []), {})
 
 
 if __name__ == '__main__':
