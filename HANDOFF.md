@@ -1,3 +1,8 @@
+## 工单 186 交接（2026-11-01）
+
+- 分支 `ticket/186-deepseek-window-64k`。只改 `characters/peter/character.toml`：`[providers.deepseek] max_input_tokens` 32768 → 65536。聊天裁剪用 `cfg.provider['max_input_tokens']`（`veil_agent.py` 约 3116–3282），所以历史会多保留，不再先裁光。`gpt` 档不变；用户在「模型」页自加的模型仍用自己的上限。
+- 下一个工单号 187。
+
 ## 工单 185 交接（2026-11-01）
 
 - 分支 `ticket/185-trace-pin-needs-reason`。`NativeMemoryTools._trace`：新置顶（记忆当前未置顶）时 `edit_reason` 不能为空，否则拒绝，Ombre 不被调用；已置顶的记忆再次 trace 不受影响。trace 工具说明补了这条。测试：`tests/test_memory_importance_browse.py` 加 1 项，旧的上限测试补理由。

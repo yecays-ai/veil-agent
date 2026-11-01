@@ -13,7 +13,7 @@ model = "deepseek-flash"
 thinking = "enabled"
 base_url = "https://api.deepseek.com"
 api_key_env = "DEEPSEEK_API_KEY"
-max_input_tokens = 32768
+max_input_tokens = 65536
 # CNY per million tokens, peak rates; off-peak savings are not assumed.
 # Verify against https://api-docs.deepseek.com/zh-cn/quick_start/pricing/
 input_cny_per_million = "2"
