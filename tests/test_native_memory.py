@@ -718,6 +718,31 @@ class OmbreToolGuardTests(unittest.TestCase):
         self.assertIn('Reason for this operation: hold(target_id) 追加', history)
         self.assertIn('Why this memory matters (why_remembered): the event matters', history)
 
+    def test_hold_target_accepts_automatically_recalled_memory_but_not_unseen_ones(self):
+        # Ticket 183: a memory shown by automatic recall can be extended without searching again.
+        rejected, state, _ = self.call('hold', {'target_id': 'mem001', 'content': 'added detail'})
+        self.assertEqual(state, '被拒绝')
+        self.assertIn('you were shown', rejected)
+        self.assertNotIn('added detail', self.path.read_text(encoding='utf-8'))
+        self.memory.mark_surfaced(['mem001'])
+        result, state, _ = self.call('hold', {'target_id': 'mem001', 'content': 'added detail'})
+        self.assertEqual(state, '成功')
+        self.assertIn('added detail', self.path.read_text(encoding='utf-8'))
+        self.assertEqual(len(self.store.read('fake/memory-versions.jsonl')), 1)
+
+    def test_hold_target_refuses_surfaced_memory_that_became_hidden(self):
+        self.memory.mark_surfaced(['mem001'])
+        self.path.write_text(self.path.read_text(encoding='utf-8').replace('tags: [keep]', 'tags: [keep]\ndont_surface: true'),
+                             encoding='utf-8')
+        result, state, _ = self.call('hold', {'target_id': 'mem001', 'content': 'added detail'})
+        self.assertEqual(state, '被拒绝')
+        self.assertNotIn('added detail', self.path.read_text(encoding='utf-8'))
+
+    def test_surfaced_memory_list_is_bounded(self):
+        self.memory.mark_surfaced([f'm{i}' for i in range(Memory.SURFACED_LIMIT + 10)])
+        self.assertEqual(len(self.memory.surfaced_ids), Memory.SURFACED_LIMIT)
+        self.assertNotIn('m0', self.memory.surfaced_ids)
+
     def test_hold_target_does_not_append_when_snapshot_cannot_be_saved(self):
         original = self.path.read_text(encoding='utf-8')
         self.tools.native.search_results['mem001'] = 'old memory body\n'

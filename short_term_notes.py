@@ -41,6 +41,30 @@ Each operation must be one of:
 Reuse an active note by updating it when the conversation changes its facts or status; do not add a duplicate. Complete an existing note only when the transcript clearly shows that it is finished or no longer pending. A changed decision (for example, changing a food order) is an update that replaces the earlier active fact. Cite only message IDs present in the transcript. Keep hold_until unchanged for an existing note when its scheduled future event is still pending. For a clear future time, return hold_until as an ISO 8601 timestamp with an explicit UTC offset, using the transcript's local time zone; for a vague part of day, use the end of that period. Return null when no future time is stated. If nothing qualifies, return an empty operations list."""
 
 
+def _parse_json_object(output):
+    """Strict JSON first; otherwise the first complete {...} object (code fences or surrounding prose)."""
+    if not isinstance(output, str):
+        return None
+    try:
+        return json.loads(output)
+    except ValueError:
+        pass
+    first = None
+    start = output.find('{')
+    while start != -1:
+        try:
+            value, _ = json.JSONDecoder().raw_decode(output[start:])
+        except ValueError:
+            start = output.find('{', start + 1)
+            continue
+        if isinstance(value, dict):
+            if 'operations' in value:
+                return value
+            first = first or value
+        start = output.find('{', start + 1)
+    return first
+
+
 def _local_now():
     return datetime.now().astimezone()
 
@@ -355,10 +379,14 @@ class ShortTermNotes:
         return event
 
     def _validate_operations(self, output, source_ids, active):
-        try:
-            payload = json.loads(output)
-        except (TypeError, ValueError) as exc:
-            raise UserError('短期便签提取未返回有效 JSON；原聊天仍保留，稍后重试。') from exc
+        payload = _parse_json_object(output)
+        if payload is None:
+            error = UserError('短期便签提取未返回有效 JSON；原聊天仍保留，稍后重试。')
+            text = output if isinstance(output, str) else repr(output)
+            # Ticket 183: keep what the model actually said so a failing background model can be diagnosed.
+            error.reply_head = re.sub(r'\s+', ' ', text)[:300]
+            error.reply_chars = len(text)
+            raise error
         operations = payload.get('operations') if isinstance(payload, dict) else None
         if not isinstance(operations, list) or len(operations) > MAX_OPERATIONS:
             raise UserError('短期便签提取结果格式无效；原聊天仍保留，稍后重试。')
@@ -543,10 +571,21 @@ class ShortTermNotes:
             operations = self._validate_operations(output, source_ids, active)
             self._apply_operations(operations, source_ids, source_times)
         except Exception as exc:
-            self.store.append(self.path, {'kind': 'error', 'reason': type(exc).__name__,
-                                          'cause': type(exc.__cause__).__name__ if exc.__cause__ else '',
-                                          'detail': str(exc)[:300] if isinstance(exc, UserError) else '',
-                                          'through_message_id': last['message_id']})
+            row = {'kind': 'error', 'reason': type(exc).__name__,
+                   'cause': type(exc.__cause__).__name__ if exc.__cause__ else '',
+                   'detail': str(exc)[:300] if isinstance(exc, UserError) else '',
+                   'through_message_id': last['message_id']}
+            if hasattr(exc, 'reply_head'):
+                row['reply_head'] = exc.reply_head
+                row['reply_chars'] = exc.reply_chars
+            streak = 1
+            for earlier in reversed(notes_events):
+                if earlier.get('kind') == 'checkpoint':
+                    break
+                if earlier.get('kind') == 'error':
+                    streak += 1
+            row['consecutive_failures'] = streak
+            self.store.append(self.path, row)
             raise
         self.store.append(self.path, {
             'kind': 'checkpoint', 'through_message_id': last['message_id'],

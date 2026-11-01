@@ -31,11 +31,11 @@ HOLD = SimpleNamespace(name='hold', inputSchema={
         'title': {'type': 'string', 'description':
             'Short title, required for a new memory; existing title is kept when target_id is set.'},
         'target_id': {'type': 'string', 'description':
-            'Optional stable ID from breath_search when adding details to an existing memory. '
+            'Optional stable ID of a memory you were shown (automatic recall or breath_search) when adding details to it. '
             'When set, content is treated as an addition and appended to that exact memory; '
             'the existing wording and title are preserved.'},
         'merge_ids': {'type': 'array', 'items': {'type': 'string'}, 'description':
-            'Optional other IDs from the same breath_search that describe this same event. '
+            'Optional other IDs of shown memories that describe this same event. '
             'Their exact stored text is appended to target_id; those source entries remain untouched.'},
         'why_remembered': {'type': 'string', 'description': 'Optional: why this matters to you, first person.'},
     }}, description=(
@@ -716,6 +716,25 @@ class NativeMemoryTools:
             result += '\n\n（包含隐藏记忆的统计与条目已隐藏。）'
         return result
 
+    SEARCH_RESULTS_LIMIT = 20
+
+    def _editable(self, memory_id):
+        """A memory may be extended only if Peter was shown it: his own search results, or an
+        automatic recall (read fresh from disk now). Other IDs, hidden or erased ones stay refused."""
+        shown = memory_id in self.search_results or memory_id in getattr(self.memory, 'surfaced_ids', {})
+        # Visibility is re-read from disk every time: a memory hidden or archived after it was shown stays refused.
+        if not shown or not self.memory.refresh_visibility(memory_id):
+            return False
+        if memory_id in self.search_results:
+            return True
+        text = self.memory.content_for(memory_id, refresh=True)
+        if text is None:
+            return False
+        self.search_results[memory_id] = text
+        while len(self.search_results) > self.SEARCH_RESULTS_LIMIT:
+            self.search_results.pop(next(iter(self.search_results)))
+        return True
+
     def _hold(self, args):
         summary = self.preview_summary('hold', args)
         content, title = args.get('content'), args.get('title')
@@ -730,18 +749,18 @@ class NativeMemoryTools:
                 or (isinstance(title, str) and len(title) > TITLE_LIMIT)):
             return f'The content exceeds the {CONTENT_LIMIT}-character limit. Shorten it and save again.', '被拒绝', summary
         if target_id is not None:
-            if not isinstance(target_id, str) or target_id not in self.search_results:
-                return 'target_id must be an exact visible result from breath_search in this turn. Search again and use its ID.', '被拒绝', summary
+            if not isinstance(target_id, str) or not self._editable(target_id):
+                return 'target_id must be a memory you were shown: an automatic recall or a breath_search result from this conversation. Search again and use its ID.', '被拒绝', summary
             previous = self.search_results[target_id]
             if not self.memory.visible([(target_id, previous)]):
                 return 'This memory is hidden or unavailable; no update was made.', '被拒绝', summary
             merge_ids = args.get('merge_ids', [])
             if (not isinstance(merge_ids, list) or any(not isinstance(key, str) for key in merge_ids)
                     or len(set(merge_ids)) != len(merge_ids)):
-                return 'merge_ids must be a list of distinct IDs returned by breath_search during this turn. Search again and use only those IDs.', '被拒绝', summary
+                return 'merge_ids must be a list of distinct IDs of memories you were shown. Search again and use only those IDs.', '被拒绝', summary
             source_ids = [key for key in merge_ids if key != target_id]
-            if any(key not in self.search_results for key in source_ids):
-                return 'Every merge_id must come from breath_search results returned during this turn. Search again before retrying.', '被拒绝', summary
+            if any(not self._editable(key) for key in source_ids):
+                return 'Every merge_id must be a memory you were shown (automatic recall or breath_search in this conversation). Search again before retrying.', '被拒绝', summary
             if (source_ids
                     and not self.memory.visible([(key, self.search_results[key]) for key in source_ids])):
                 return 'A memory selected for merging is hidden or unavailable; no update was made.', '被拒绝', summary
@@ -824,13 +843,17 @@ class NativeMemoryTools:
         text = self.memory.call('breath_search', {
             'query': query.strip(), 'mode': 'automatic', 'with_ids': True, 'max_results': 3})
         found = self.memory.visible(ordinary_hits(text))
-        self.search_results = {}
+        # Keep earlier results so a memory found a moment ago can still be extended (ticket 183).
+        self.memory.mark_surfaced([key for key, _ in found])
         rendered = []
         for key, body in found:
             title = self.memory.title_for(key) or '标题未登记'
             exact_content = self.memory.content_for(key)
             if exact_content is not None:
+                self.search_results.pop(key, None)
                 self.search_results[key] = exact_content
+                while len(self.search_results) > self.SEARCH_RESULTS_LIMIT:
+                    self.search_results.pop(next(iter(self.search_results)))
                 rendered.append(f'[Memory ID: {key} | Title: {title}]\n{exact_content}')
             else:
                 display = body.removeprefix(f'[bucket_id:{key}]').strip()
