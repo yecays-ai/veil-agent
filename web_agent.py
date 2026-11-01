@@ -1632,7 +1632,8 @@ def make_handler(hub, token):
             if not self._guard(self.headers.get('X-Token')):
                 return
             try:
-                value = {'records': hub.chat.life_records.read()} if hub.chat is not None else {'records': []}
+                from life_records import effective, fold_completed
+                value = {'records': [effective(r) for r in hub.chat.life_records.read() if isinstance(r, dict) and r.get('kind') != 'diary']} if hub.chat is not None else {'records': []}
                 if not isinstance(value, dict) or not isinstance(value.get('records'), list):
                     raise ValueError
                 rows = list(value['records'])
@@ -1662,7 +1663,8 @@ def make_handler(hub, token):
                             'read_only':True})
                 if hub.memory_tools is not None:
                     rows.extend(hub.memory_tools.plan_entries())
-                self._send(200, {'records': rows})
+                rows, folded = fold_completed(rows)
+                self._send(200, {'records': rows, 'folded': folded})
             except (OSError, ValueError, UnicodeError, UserError):
                 self._send(500, {'error': '生活记录无法安全读取。'})
 
