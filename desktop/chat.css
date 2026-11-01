@@ -163,3 +163,5 @@ body{isolation:isolate}
 
 .detail-history{margin-top:16px;color:#767a70;font-size:10px;line-height:1.7}.detail-history h3{font:15px Georgia,serif;color:#424b42}.detail-history>div{padding:7px 0;border-bottom:1px solid var(--line)}
 #life-view .life-card.surface,#life-view .life-empty.surface,#life-view .life-calendar.surface{background:var(--panel)!important;color:var(--text)!important}#life-view .life-card-copy b{color:var(--text)}#life-view .life-card-meta,#life-view .life-summary{color:var(--muted)}
+
+#life-view .life-card.done .life-card-copy b,#life-view .life-card.done .life-summary{text-decoration:line-through;opacity:.55}#life-view .life-card-icon.life-check{font-size:19px;cursor:pointer;border:1px solid var(--line)}#life-view .life-card-icon.life-check:hover{background:var(--accent);color:var(--panel)}
