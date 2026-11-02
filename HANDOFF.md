@@ -1,3 +1,8 @@
+## 工单 194 交接（2026-11-02）
+
+- 分支 `ticket/194-glance-no-recall`：`veil_agent.py` 里 `skip_recall = codex_watch_mode or glance_mode`，自动召回与召回引用都跳过。未改记忆工具。
+- 未验证：Windows 实机瞄一眼后的 context-log。与 PR #243（工单 193）同改 STATUS/HANDOFF，合并时注意顺序和冲突。
+
 ## 工单 190 交接（2026-11-02）
 
 - 当前分支 `ticket/190-life-records-center`，本地从 main `d4a868c` 建立；Git CLI 推送因执行环境 DNS 受限，GitHub 连接器可读写仓库。

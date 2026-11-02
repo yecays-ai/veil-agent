@@ -198,6 +198,20 @@ class InjectionTests(unittest.TestCase):
         chat.send('hello')
         self.assertIn('RECALLED_MEMORY', self.contents(self.sent[-1]))
 
+    def test_glance_does_not_recall_long_term_memory(self):
+        memory = Mock()
+        memory.last_context_refs = ['m1']
+        memory.context.return_value = [{'role': 'system', 'content': 'RECALLED_MEMORY'}]
+        chat = Chat(self.cfg, self.store, self.budget, self.model, memory)
+        chat.glance_mode = True
+        chat.send('Take a brief look at what Lan is doing now.', autonomy=True)
+        memory.context.assert_not_called()
+        self.assertNotIn('RECALLED_MEMORY', self.contents(self.sent[-1]))
+        self.assertEqual(self.store.read('fake/context-log.jsonl')[-1]['memory_ids'], [])
+        chat.glance_mode = False
+        chat.send('hello')
+        self.assertIn('RECALLED_MEMORY', self.contents(self.sent[-1]))
+
     def test_context_log_keeps_only_the_newest_rows(self):
         for n in range(30):
             append_context_log(self.store, 'fake', {'n': n}, keep=10)

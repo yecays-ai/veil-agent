@@ -2617,9 +2617,12 @@ class Chat:
             self.memory.refresh_opening()
             self.opening_refresh_needed = False
         # Ticket 130: a Codex reminder is a short notice; it does not need long-term memories.
+        # Ticket 194: a glance's request text is a fixed sentence (the screen is in extra_context), so
+        # recalling with it returned the same few memories every time. Peter can still search himself.
+        skip_recall = self.codex_watch_mode or self.glance_mode
         recalled = (self.memory.context(text, include_opening=opening_turn, recent=self.history[-8:])
-                    if self.memory and not self.codex_watch_mode else [])
-        memory_refs = getattr(self.memory, 'last_context_refs', []) if self.memory and not self.codex_watch_mode else []
+                    if self.memory and not skip_recall else [])
+        memory_refs = getattr(self.memory, 'last_context_refs', []) if self.memory and not skip_recall else []
         self.turn_memory_refs = list(memory_refs) if isinstance(memory_refs, list) else []
         recalled_memory_refs = list(self.turn_memory_refs)
         autonomy_handoff_id = None
