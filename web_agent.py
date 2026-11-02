@@ -1155,9 +1155,11 @@ class Hub(ScreenPopMixin):
         return self.refresh_models()
 
     def use_model(self, role, model_id):
-        model_id, name, provider = self.chat.cfg.models.use(role, model_id)
-        if role == 'peter':
-            self.chat.switch_model(name, provider)
+        models = self.chat.cfg.models
+        with models.lock:
+            model_id, name, provider = models.use(role, model_id)
+            if role == 'peter':
+                self.chat.switch_model(name, provider)
         return self.refresh_models()
 
     def set_codex_watch(self, enabled):
