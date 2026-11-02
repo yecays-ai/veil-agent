@@ -236,6 +236,49 @@ class MCPServicesTest(unittest.TestCase):
         finally:
             reopened.close()
 
+    def test_managed_grant_revocation_persists_and_rejects_stale_window(self):
+        path = Path(self.tmp.name) / 'managed-revoke.json'
+        service = {'id': 'nowhere', 'managed': 'nowhere', 'command': sys.executable,
+                   'args': [str(FIXTURE)], 'cwd': None, 'enabled': False,
+                   'permission': 'direct', 'direct_grant': False}
+        manager = MCPServices(path, initial_services=[service])
+        try:
+            granted = manager.save({'enabled': True, 'services': [
+                {**service, 'enabled': True, 'direct_grant': True}]})
+            stale_revision = granted['revision']
+            with patch('mcp_services.os.replace', side_effect=OSError('disk full')):
+                with self.assertRaises(OSError):
+                    manager.save({'enabled': True, 'services': [
+                        {**service, 'enabled': False, 'direct_grant': False}]},
+                        expected_revision=stale_revision)
+            self.assertTrue(manager.view()['services'][0]['direct_grant'])
+            revoked = manager.save({'enabled': True, 'services': [
+                {**service, 'enabled': False, 'direct_grant': False}]},
+                expected_revision=stale_revision)
+            row = revoked['services'][0]
+            self.assertFalse(row['direct_grant'])
+            self.assertFalse(row['enabled'])
+            self.assertEqual(manager.invoke('mcp__nowhere__echo', {}, lambda _: 'y')[1], '被拒绝')
+            with self.assertRaises(MCPConflict):
+                manager.save({'enabled': True, 'services': [
+                    {**service, 'enabled': True, 'direct_grant': True}]},
+                    expected_revision=stale_revision)
+            self.assertFalse(json.loads(path.read_text(encoding='utf-8'))['services'][0]['direct_grant'])
+        finally:
+            manager.close()
+        reopened = MCPServices(path, initial_services=[service])
+        try:
+            self.assertFalse(reopened.view()['services'][0]['direct_grant'])
+            self.assertFalse(reopened.view()['services'][0]['enabled'])
+            self.assertEqual(reopened.invoke('mcp__nowhere__echo', {}, lambda _: 'y')[1], '被拒绝')
+            old_client_row = {key: value for key, value in service.items()
+                              if key not in {'managed', 'direct_grant'}}
+            reopened.save({'enabled': True, 'services': [{**old_client_row, 'enabled': True}]})
+            self.assertFalse(reopened.view()['services'][0]['enabled'])
+            self.assertFalse(reopened.view()['services'][0]['direct_grant'])
+        finally:
+            reopened.close()
+
     def test_observer_url_only_accepts_loopback_root(self):
         from mcp_services import _local_observer_url
         self.assertEqual(_local_observer_url('Open: http://127.0.0.1:8712'), 'http://127.0.0.1:8712')

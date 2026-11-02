@@ -1540,7 +1540,7 @@ function renderMCP(){
     const title=document.createElement('h3');title.textContent=service.id;
     const status=document.createElement('span');status.className='state-pill';status.textContent=service.builtin?(service.status==='connected'?'已启用':'已停用'):service.status==='connected'?'已连接':service.status==='connecting'?'连接中':service.status==='error'?'连接失败':'已停用';
     heading.append(title,status);card.append(heading);
-    const details=document.createElement('p');details.textContent=service.managed==='nowhere'?`${service.tools.length} 个工具 · Peter 的独立旅程存档 · ${service.direct_grant?'已授权直接调用':'启用前需确认自主旅行权限'} · 旋复 / 乌有乡 · CC BY-NC 4.0（含 VEIL 兼容修正）`:service.builtin?`${service.tools.length} 个工具 · VEIL 内置集成`:`${service.tools.length} 个工具 · ${service.permission==='ask'?'每次询问':'直接调用'}`;card.append(details);
+    const details=document.createElement('p');details.textContent=service.managed==='nowhere'?`${service.tools.length} 个工具 · Peter 的独立旅程存档 · ${service.direct_grant?'已授权直接调用':'直接调用授权已撤销，重新启用需确认'} · 旋复 / 乌有乡 · CC BY-NC 4.0（含 VEIL 兼容修正）`:service.builtin?`${service.tools.length} 个工具 · VEIL 内置集成`:`${service.tools.length} 个工具 · ${service.permission==='ask'?'每次询问':'直接调用'}`;card.append(details);
     if(service.managed==='nowhere'){
       const project=document.createElement('p');project.className='mcp-tools';project.textContent='项目与许可：https://github.com/yuyixuanfu/nowhere · https://creativecommons.org/licenses/by-nc/4.0/';card.append(project);
     }
@@ -1548,7 +1548,7 @@ function renderMCP(){
     if(service.tools.length){const tools=document.createElement('p');tools.className='mcp-tools';tools.textContent=service.tools.join('、');card.append(tools)}
     const actions=document.createElement('div');actions.className='tool-row';
     if(service.managed==='nowhere'&&service.observer_url){const observe=document.createElement('button');observe.type='button';observe.textContent='查看旅程地图';observe.onclick=()=>window.veilDesktop.openNowhere(service.observer_url);actions.append(observe)}
-    const toggle=document.createElement('button');toggle.type='button';toggle.textContent=service.enabled?'停用':'启用';toggle.onclick=()=>{const grantTravel=service.managed==='nowhere'&&!service.direct_grant;if(grantTravel&&!confirm('授权 Peter 在聊天和自主醒来时直接调用乌有乡旅行工具，并修改他自己的地点、旅程与纪念数据。数据保存在 Peter 的独立目录。继续？'))return;saveMCP(current=>({...current,services:current.services.map(item=>item.id===service.id?{...item,enabled:!item.enabled,direct_grant:item.direct_grant||grantTravel}:item)}))};
+    const toggle=document.createElement('button');toggle.type='button';toggle.textContent=service.enabled?'停用并撤销授权':'启用';toggle.onclick=()=>{const grantTravel=service.managed==='nowhere'&&!service.enabled;if(grantTravel&&!confirm('授权 Peter 在聊天和自主醒来时直接调用乌有乡旅行工具，并修改他自己的地点、旅程与纪念数据。数据保存在 Peter 的独立目录。继续？'))return;saveMCP(current=>({...current,services:current.services.map(item=>item.id===service.id?{...item,enabled:!service.enabled,direct_grant:service.managed==='nowhere'?(service.enabled?false:grantTravel):item.direct_grant}:item)}))};
     actions.append(toggle);
     if(!service.builtin&&!service.managed){const edit=document.createElement('button');edit.type='button';edit.textContent='编辑';edit.onclick=()=>openMCPForm(service);
       const remove=document.createElement('button');remove.type='button';remove.textContent='移除';remove.onclick=()=>{if(confirm(`移除 MCP 服务 ${service.id}？`))saveMCP(current=>({...current,services:current.services.filter(item=>item.id!==service.id)}))};actions.append(edit,remove)}

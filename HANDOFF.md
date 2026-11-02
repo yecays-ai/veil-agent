@@ -85,6 +85,12 @@
 
 # 交接
 
+## 工单 204 交接（2026-11-03）
+
+- 从 `main` `a64baf57` 建立 `ticket/204-mcp-grant-revoke`。现有乌有乡启用动作就是直接调用授权；停用现改为同时撤销持久授权，再启用须重新确认。后端不再用布尔或保留旧授权。
+- 隔离测试覆盖明确撤销、旧窗口版本冲突、重启、旧客户端缺失字段和拒绝调用。Windows 真实体验待验收。已经开始的外部调用不能撤回；保存完成后的新调用按当前配置判定。
+- 下一步：核对 CI、Cubic 实质意见，满足合并条件后合并；请 Lan 按工单 204 步骤验收。
+
 ## 工单 184 交接（2026-11-01）
 
 - 分支 `ticket/184-memory-importance-browse`。`NativeMemoryTools`：`hold` 新增 `importance`/`pinned`（`PINNED_LIMIT = 8`，`_pinned_ids()` 数本地文件里的 `pinned: true`，`trace(pinned=1)` 同样检查）；`memory_catalog` 新增 `order`/`created_from`/`created_to` 和 `total`；`breath_search` 新增 `date_from`/`date_to` 并原样传给 Ombre。`memory_agent` 的 `created_id`/`record_native` 认得 `📌钉选→`。
