@@ -1,3 +1,8 @@
+## 工单 196 交接（2026-11-02）
+
+- 分支 `ticket/196-nowhere-deps-stamp`：只改 `scripts/install-nowhere.ps1`。原因：Windows 的 `requirements.nowhere.lock.txt` 把 timezonefinder 钉成 pythonhosted 的 sdist 直链，pip 对直链每次都重新下载（1.3 MB，lan 网速约 23kB/s）并重建。现在安装成功后在 `.runtime\nowhere\<rev>\deps-installed.sha256` 记锁文件哈希；下次哈希一致且 import 检查通过就跳过 pip。锁文件变了或 import 失败仍会完整安装。
+- 未验证：Windows 实机第二次 update.bat 不再下载（第一次更新后仍会下载一次来写标记）。
+
 ## 工单 195 交接（2026-11-02）
 
 - 分支 `ticket/195-wake-steps`：`browser_tools.py`（描述、`TEXT_BYTES`、正文 3000 字）与 `autonomy.py`（`earlier_text`、实验室预览开头加结尾）。未改步数、预算、记忆工具。

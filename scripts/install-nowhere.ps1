@@ -114,9 +114,28 @@ if (Test-Path -LiteralPath $python) {
     else { & $bootstrap -m venv $venv }
     if ($LASTEXITCODE -ne 0) { throw 'Could not create the isolated Nowhere Python environment.' }
 }
-& $python -m pip install --disable-pip-version-check --no-cache-dir --require-hashes -r (Join-Path $root 'requirements.nowhere.lock.txt')
-if ($LASTEXITCODE -ne 0) { throw 'Could not install the locked Nowhere dependencies.' }
+# timezonefinder is pinned to a direct sdist URL on Windows, and pip re-downloads
+# and rebuilds URL requirements on every run. Skip pip when the lock file is
+# unchanged since the last successful install and the packages still import.
+$lockFile = Join-Path $root 'requirements.nowhere.lock.txt'
+$lockHash = (Get-FileHash -LiteralPath $lockFile -Algorithm SHA256).Hash
+$stampFile = Join-Path $runtime 'deps-installed.sha256'
+$depsCurrent = $false
+if (Test-Path -LiteralPath $stampFile) {
+    $stamped = (Get-Content -LiteralPath $stampFile -Raw).Trim()
+    if ($stamped -eq $lockHash) {
+        & $python -c "import fastmcp, numpy, scipy, timezonefinder" 2>$null
+        if ($LASTEXITCODE -eq 0) { $depsCurrent = $true }
+    }
+}
+if ($depsCurrent) {
+    Write-Output 'Nowhere dependencies are already installed at the locked versions; skipping download.'
+} else {
+    & $python -m pip install --disable-pip-version-check --no-cache-dir --require-hashes -r $lockFile
+    if ($LASTEXITCODE -ne 0) { throw 'Could not install the locked Nowhere dependencies.' }
+}
 & $python -c "import fastmcp, numpy, scipy, timezonefinder"
 if ($LASTEXITCODE -ne 0) { throw 'The isolated Nowhere environment did not pass its import check.' }
+Set-Content -LiteralPath $stampFile -Value $lockHash -Encoding ascii
 
 Write-Output "Nowhere $revision is installed in its own Python environment."
