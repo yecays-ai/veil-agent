@@ -131,10 +131,12 @@ def repair(root, file, *, confirm=input, notice=print):
             ledger.validate_cost_ledger(repaired)
         if cost:
             # Pause paid requests first: if we stop after replacing the file, costs stay blocked.
+            if os.path.islink(path.parent / ledger.UNVERIFIED_EVIDENCE) or \
+                    os.path.islink(ledger.marker_path(path.parent)):
+                raise BackupError('费用证据文件或标记是符号链接，已停止，文件没有改动。')
             ledger.append_evidence(path.parent, [
                 {'kind': 'repair-quarantined', 'line_number': line.number,
-                 'raw_b64': base64.b64encode(line.raw).decode('ascii'), 'problem': problem,
-                 'original_copy': original_copy.name}
+                 'raw_b64': base64.b64encode(line.raw).decode('ascii'), 'problem': problem}
                 for line, problem in serious])
             ledger.mark_unverified(path.parent, 'repair-quarantined', len(serious), ledger.UNVERIFIED_EVIDENCE,
                                    original_copy=original_copy.name, quarantine=quarantine.name)

@@ -288,6 +288,29 @@ def mark_unverified(data_dir, kind, count, evidence_file, **details):
     })
 
 
+def _carry_evidence_file(source_data, target_data, name):
+    """Copy an evidence file across byte for byte; lines the target lacks are appended verbatim."""
+    if not isinstance(name, str) or not name or name != os.path.basename(name):
+        return
+    source = os.path.join(str(source_data), name)
+    target = os.path.join(str(target_data), name)
+    if not os.path.isfile(source) or os.path.islink(source):
+        return
+    if os.path.islink(target):
+        raise ValueError('the evidence file in the target is a symbolic link')
+    with open(source, 'rb') as handle:
+        source_lines = [line for line in handle.read().splitlines(keepends=True) if line.strip()]
+    existing = set()
+    if os.path.exists(target):
+        with open(target, 'rb') as handle:
+            existing = {line.rstrip(b'\r\n') for line in handle.read().splitlines(keepends=True)}
+    fresh = [_terminated(line) for line in source_lines if line.rstrip(b'\r\n') not in existing]
+    if fresh:
+        with open(target, 'ab', buffering=0) as handle:
+            handle.write(b''.join(fresh))
+            os.fsync(handle.fileno())
+
+
 def carry_unverified(source_data, target_data):
     """A restore must never lift the pause: keep an unverified state the old data already had."""
     source_marker = marker_path(source_data)
@@ -295,31 +318,15 @@ def carry_unverified(source_data, target_data):
         return False
     if os.path.islink(source_marker) or not os.path.isfile(source_marker):
         raise ValueError('the unverified-costs marker is not a regular file')
+    # The standard evidence file always travels with the pause, whatever the marker says.
+    _carry_evidence_file(source_data, target_data, UNVERIFIED_EVIDENCE)
     carried = read_marker(source_data)
-    if carried and not carried.get('unreadable'):
-        for item in carried.get('items', []):
-            if not isinstance(item, dict):
-                continue
-            name = item.get('evidence')
-            if isinstance(name, str) and name == os.path.basename(name):
-                source_evidence = os.path.join(str(source_data), name)
-                if os.path.isfile(source_evidence) and not os.path.islink(source_evidence):
-                    with open(source_evidence, 'rb') as handle:
-                        rows = []
-                        for raw in handle.read().splitlines():
-                            try:
-                                rows.append(json.loads(raw.decode('utf-8')))
-                            except (ValueError, UnicodeDecodeError):
-                                continue
-                    if name.endswith('.jsonl') and name == UNVERIFIED_EVIDENCE:
-                        append_evidence(target_data, rows)
-                    elif not os.path.lexists(os.path.join(str(target_data), name)):
-                        with open(source_evidence, 'rb') as src, \
-                                open(os.path.join(str(target_data), name), 'wb') as dst:
-                            dst.write(src.read())
-                            dst.flush()
-                            os.fsync(dst.fileno())
-            mark_unverified(target_data, item.get('kind', 'carried'), item.get('count', 0), name,
+    items = [item for item in (carried or {}).get('items', []) if isinstance(item, dict)]
+    if carried and not carried.get('unreadable') and items:
+        for item in items:
+            _carry_evidence_file(source_data, target_data, item.get('evidence'))
+            mark_unverified(target_data, item.get('kind', 'carried'), item.get('count', 0),
+                            item.get('evidence'),
                             **{k: v for k, v in item.items() if k not in ('kind', 'count', 'evidence', 'recorded')})
     elif not os.path.lexists(marker_path(target_data)):
         with open(source_marker, 'rb') as src, open(marker_path(target_data), 'wb') as dst:

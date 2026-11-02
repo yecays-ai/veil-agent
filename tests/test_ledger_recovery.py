@@ -278,6 +278,11 @@ class RepairTests(unittest.TestCase):
         with self.assertRaises(backup_restore.BackupError):
             data_repair.ledger_verify(self.root, confirm=lambda _: 'VERIFIED', notice=lambda _: None)
         self.assertTrue(ledger.is_unverified(data))
+        (data / ledger.UNVERIFIED_MARKER).write_text('{"items": []}', encoding='utf-8')
+        with self.assertRaises(backup_restore.BackupError):
+            data_repair.ledger_verify(self.root, confirm=lambda _: 'VERIFIED', notice=lambda _: None)
+        self.assertTrue(ledger.is_unverified(data))
+        (data / ledger.UNVERIFIED_MARKER).write_text('not json', encoding='utf-8')
         ledger.mark_unverified(data, 'x', 1, 'costs-unverified.jsonl')  # never overwrites it
         self.assertEqual((data / ledger.UNVERIFIED_MARKER).read_text(encoding='utf-8'), 'not json')
 
@@ -290,6 +295,24 @@ class RepairTests(unittest.TestCase):
         self.assertTrue(ledger.carry_unverified(old, new))
         self.assertTrue(ledger.is_unverified(new))
         self.assertEqual(ledger.append_evidence(new, [{'kind': 'x', 'n': 1}]), 0)
+        # damaged and non-object evidence lines are carried over byte for byte, not dropped or fatal
+        with open(old / ledger.UNVERIFIED_EVIDENCE, 'ab') as handle:
+            handle.write(b'garbage\n[1, 2]\n')
+        ledger.carry_unverified(old, new)
+        carried = (new / ledger.UNVERIFIED_EVIDENCE).read_bytes()
+        self.assertIn(b'garbage\n', carried)
+        self.assertIn(b'[1, 2]\n', carried)
+        ledger.carry_unverified(old, new)
+        self.assertEqual((new / ledger.UNVERIFIED_EVIDENCE).read_bytes(), carried)
+        # an unreadable marker still brings the evidence file along
+        broken_old, broken_new = self.root / 'bold', self.root / 'bnew'
+        broken_old.mkdir()
+        broken_new.mkdir()
+        (broken_old / ledger.UNVERIFIED_MARKER).write_text('???', encoding='utf-8')
+        (broken_old / ledger.UNVERIFIED_EVIDENCE).write_bytes(b'{"kind": "y"}\n')
+        ledger.carry_unverified(broken_old, broken_new)
+        self.assertEqual((broken_new / ledger.UNVERIFIED_EVIDENCE).read_bytes(), b'{"kind": "y"}\n')
+        self.assertTrue(ledger.is_unverified(broken_new))
         directory = tempfile.TemporaryDirectory()
         try:
             store = Store(Path(directory.name))
