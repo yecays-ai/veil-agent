@@ -1,5 +1,7 @@
 # 当前状态
 
+更新时间：2026-11-03 UTC。工单 203「模型配置安全恢复与原子保存」在 `ticket/203-model-config-recovery`：配置损坏停止模型请求，模型与 Key 保存使用事务记录在重启时恢复；隔离回归已验证，PR 检查及 Windows 体验待验收。验收见 `docs/tickets/203-model-config-recovery.md`。
+
 更新时间：2026-11-03 UTC。工单 202「生活页未就绪与保存反馈」在 `ticket/202-life-status-feedback`：代码和隔离 API 回归已提交，等待自动检查与审查；Windows 体验未验证。下一步核对 PR 检查并按 `docs/tickets/202-life-status-feedback.md` 验收。
 
 更新时间：2026-11-03 UTC。工单 201「画图保存到 Lab 的文件安全边界」在 `ticket/201-canvas-lab-save`：已完成代码与隔离竞争测试，待 PR 审核；Windows 正式桌面体验未验证。下一步由 lan 跟进 CodeRabbit 审核与 PR，验收见 `docs/tickets/201-canvas-lab-save.md`。
