@@ -1,3 +1,8 @@
+## 工单 195 交接（2026-11-02）
+
+- 分支 `ticket/195-wake-steps`：`browser_tools.py`（描述、`TEXT_BYTES`、正文 3000 字）与 `autonomy.py`（`earlier_text`、实验室预览开头加结尾）。未改步数、预算、记忆工具。
+- 未验证：Windows 实机醒来后的步骤构成；与 PR #243 同改 STATUS/HANDOFF，合并时注意顺序。
+
 ## 工单 194 交接（2026-11-02）
 
 - 分支 `ticket/194-glance-no-recall`：`veil_agent.py` 里 `skip_recall = codex_watch_mode or glance_mode`，自动召回与召回引用都跳过。未改记忆工具。
