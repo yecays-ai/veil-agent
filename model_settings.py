@@ -12,6 +12,7 @@ import re
 import secrets
 import base64
 import shutil
+import stat
 import threading
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -24,6 +25,7 @@ DEFAULT_MAX_INPUT = 32768
 MAX_ENDPOINTS = 20
 MAX_MODELS = 60
 ID_PATTERN = re.compile(r'[em][0-9a-f]{6}')
+_ENV_LOCK = threading.RLock()
 
 
 class SettingsError(ValueError):
@@ -71,25 +73,39 @@ class ModelSettings:
         self.env_path = self.root / '.env'
         self.path = self.root / 'data' / character_id / 'models.json'
         self.journal = self.root / f'.env.models-{character_id}.pending'
-        self.env_stage = self.root / '.env.models-stage'
+        self.env_stage = self.root / f'.env.models-{character_id}.stage'
         self.builtins = dict(builtins)
         self.default = BUILTIN_PREFIX + default_name
         self.lock = threading.RLock()
         self.blocked = False
-        self._recover()
+        with _ENV_LOCK:
+            self._recover()
         self.data = self._clean(self._read())
 
     # ---- reading -------------------------------------------------------
     @staticmethod
-    def _atomic_bytes(path, content):
+    def _sync_directory(path):
+        if os.name == 'nt':
+            return
+        descriptor = os.open(path, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+    @staticmethod
+    def _atomic_bytes(path, content, mode=0o600):
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(path.name + '.tmp')
         try:
-            with tmp.open('wb') as stream:
+            descriptor = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+            with os.fdopen(descriptor, 'wb') as stream:
+                os.chmod(tmp, mode)
                 stream.write(content)
                 stream.flush()
                 os.fsync(stream.fileno())
             os.replace(tmp, path)
+            ModelSettings._sync_directory(path.parent)
         finally:
             tmp.unlink(missing_ok=True)
 
@@ -104,11 +120,14 @@ class ModelSettings:
                     original = record[key]
                     if original is None:
                         path.unlink(missing_ok=True)
+                        self._sync_directory(path.parent)
                     else:
-                        self._atomic_bytes(path, base64.b64decode(original, validate=True))
+                        mode = record.get('env_mode', 0o600) if key == 'env' else 0o600
+                        self._atomic_bytes(path, base64.b64decode(original, validate=True), mode)
             elif record['state'] != 'committed':
                 raise ValueError('bad transaction state')
             self.journal.unlink()
+            self._sync_directory(self.journal.parent)
             self.env_stage.unlink(missing_ok=True)
             self.blocked = False
         except (OSError, ValueError, KeyError, TypeError) as exc:
@@ -310,7 +329,7 @@ class ModelSettings:
         if (not isinstance(endpoints_in, list) or not isinstance(models_in, list)
                 or len(endpoints_in) > MAX_ENDPOINTS or len(models_in) > MAX_MODELS):
             raise SettingsError('接口或模型太多了。')
-        with self.lock:
+        with _ENV_LOCK, self.lock:
             if self.blocked or self.journal.exists():
                 self._recover()
             endpoints, new_keys = [], {}
@@ -329,12 +348,16 @@ class ModelSettings:
                 endpoints.append(endpoint)
             if len({item['name'] for item in endpoints}) != len(endpoints):
                 raise SettingsError('两个接口不能同名。')
+            if len({item['id'] for item in endpoints}) != len(endpoints):
+                raise SettingsError('两个接口不能使用相同 ID。')
             endpoint_ids = {item['id'] for item in endpoints}
             models = []
             for item in models_in:
                 if not isinstance(item, dict):
                     raise SettingsError('设置格式不对。')
                 models.append(self._model(item, endpoint_ids))
+            if len({item['id'] for item in models}) != len(models):
+                raise SettingsError('两个模型不能使用相同 ID。')
             data = {'endpoints': endpoints, 'models': models, 'use': {},
                     'limits': self._limits(payload.get('limits') or {})}
             use = payload.get('use') if isinstance(payload.get('use'), dict) else self.data['use']
@@ -348,7 +371,8 @@ class ModelSettings:
                 self.data = data
                 return self.public()
             record = {'state': 'prepared', 'env': self._snapshot(self.env_path),
-                      'models': self._snapshot(self.path)}
+                      'models': self._snapshot(self.path),
+                      'env_mode': stat.S_IMODE(self.env_path.stat().st_mode) if self.env_path.exists() else 0o600}
             self._atomic_bytes(self.journal, json.dumps(record).encode('utf-8'))
             try:
                 self._write_env(new_keys, removed)
@@ -359,6 +383,7 @@ class ModelSettings:
                 raise
             self.data = data
             self.journal.unlink()
+            self._sync_directory(self.journal.parent)
             return self.public()
 
     def use(self, role, model_id):
@@ -375,10 +400,7 @@ class ModelSettings:
             return self.chosen(role)
 
     def _write(self, data):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix('.json.tmp')
-        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
-        os.replace(tmp, self.path)
+        self._atomic_bytes(self.path, (json.dumps(data, ensure_ascii=False, indent=2) + '\n').encode('utf-8'))
 
     def _write_env(self, new_keys, removed):
         if not new_keys and not removed:
@@ -390,6 +412,7 @@ class ModelSettings:
                 shutil.copy2(self.env_path, staged)
             else:
                 staged.write_text('', encoding='utf-8')
+            os.chmod(staged, stat.S_IMODE(self.env_path.stat().st_mode) if self.env_path.exists() else 0o600)
             for name, value in new_keys.items():
                 set_key(staged, name, value, quote_mode='always', encoding='utf-8')
             for name in removed:
@@ -398,6 +421,7 @@ class ModelSettings:
             with staged.open('rb+') as stream:
                 os.fsync(stream.fileno())
             os.replace(staged, self.env_path)
+            self._sync_directory(self.env_path.parent)
         finally:
             staged.unlink(missing_ok=True)
 
