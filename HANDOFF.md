@@ -1,3 +1,9 @@
+## 工单 197 交接（2026-11-02）
+
+- 分支 `ticket/197-backup-coverage`：`backup_restore.py`（桌面数据组件 `desktop-data`、空间检查、`pre-update`/`usage` 子命令、恢复标记里的 `original_safety_copy`、重跑失败保持标记）、`veil_agent.py`（`Store` 的未完成恢复提示）、`update.bat`（有新版本才备份，失败停止，`--skip-backup`）、`.env.example`、`docs/backup-and-restore.md`。
+- 决定：附件缓存是原件的再生副本（原件在 `data\<角色>\media`），不备份；只备份 `desktop.json` 与背景图。
+- 未验证：Windows 真机的 update.bat 备份流程、`tasklist` 判断桌面版是否运行、真实 APPDATA 恢复。账本对账与 JSONL 修复是工单 B，A 验收后再做。
+
 ## 工单 196 交接（2026-11-02）
 
 - 分支 `ticket/196-nowhere-deps-stamp`：只改 `scripts/install-nowhere.ps1`。原因：Windows 的 `requirements.nowhere.lock.txt` 把 timezonefinder 钉成 pythonhosted 的 sdist 直链，pip 对直链每次都重新下载（1.3 MB，lan 网速约 23kB/s）并重建。现在安装成功后在 `.runtime\nowhere\<rev>\deps-installed.sha256` 记锁文件哈希；下次哈希一致且 import 检查通过就跳过 pip。锁文件变了或 import 失败仍会完整安装。
@@ -265,4 +271,4 @@
 
 - 工单 192：生活页改待办便签（圆圈打勾划掉、`repeat: daily` 每天 0 点复位、已完成一次性便签超过 30 条折叠）+ 日历心情；日记入口移除，旧日记记录保留但不显示；`life_record` 工具新增 `mood`、`repeat`，不能再新建日记；自主唤醒内容改为当天日历标题 + 全部未完成待办数。分支 `ticket/192-life-todo-calendar`；需要 update.bat；Windows 体验待 Lan 验收；`tests.test_autonomy` 4 项因既有 `test_tools` 导入错误失败（改动前后相同）。下一个工单号 193。
 - 工单 193：生活页待办改为便签卡（每件事单独勾选，底部可新增，勾掉划线保留）；`life_record` 说明要求每件待办单独一条。分支 `ticket/193-todo-sticky`；需要 update.bat；Windows 体验待 Lan 验收。下一个工单号 195。
-- 工单 197：待办便签可删除（两步确认，`/api/life` 收 `{id,delete:true}`，仅 Lan、仅 event/note，原记录写入 `life-records-deleted.jsonl`）；每日重复待办单独一张便签；便签顶部改通栏色片。分支 `ticket/197-sticky-delete`；需要 update.bat；Windows 体验待 Lan 验收。
+- 工单 198：待办便签可删除（两步确认，`/api/life` 收 `{id,delete:true}`，仅 Lan、仅 event/note，原记录写入 `life-records-deleted.jsonl`）；每日重复待办单独一张便签；便签顶部改通栏色片。分支 `ticket/198-sticky-delete`；需要 update.bat；Windows 体验待 Lan 验收。

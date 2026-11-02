@@ -9,7 +9,7 @@ rem So run from a copy; the copy is told where the Agent folder is.
 if /i not "%~1"=="--running-copy" (
   if not exist "%~dp0.local-tmp" mkdir "%~dp0.local-tmp"
   copy /y "%~f0" "%~dp0.local-tmp\update-running.bat" >nul
-  "%~dp0.local-tmp\update-running.bat" --running-copy "%~dp0."
+  "%~dp0.local-tmp\update-running.bat" --running-copy "%~dp0." %1
 )
 cd /d "%~2"
 set PYTHONUTF8=1
@@ -37,7 +37,23 @@ set "BRANCH="
 for /f "delims=" %%B in ('git branch --show-current') do set "BRANCH=%%B"
 if /i not "%BRANCH%"=="main" goto not_main
 
+echo [0/4] Checking whether a new version exists...
+git fetch origin main
+if errorlevel 1 goto pull_failed
 for /f "delims=" %%H in ('git rev-parse HEAD') do set "OLD=%%H"
+rem Only back up when the fetched main has commits this folder lacks.
+set "BEHIND=1"
+for /f "delims=" %%N in ('git rev-list --count HEAD..FETCH_HEAD') do set "BEHIND=%%N"
+if "%BEHIND%"=="0" goto backup_done
+if /i "%~3"=="--skip-backup" goto backup_skipped
+if not exist ".venv\Scripts\python.exe" goto no_venv
+echo       New version found. Backing up your data first...
+".venv\Scripts\python.exe" backup_restore.py pre-update
+if errorlevel 1 goto backup_failed
+goto backup_done
+:backup_skipped
+echo       WARNING: --skip-backup was given, so no backup was made before this update.
+:backup_done
 echo [1/4] Getting the newest code...
 git pull --ff-only origin main
 if errorlevel 1 goto pull_failed
@@ -107,6 +123,12 @@ goto stop
 :not_main
 echo This folder is on branch "%BRANCH%", not main. Nothing was changed.
 echo Ask Claude before switching branches here.
+goto stop
+:backup_failed
+echo Backup failed, so the update was stopped before changing anything.
+echo The reason is printed above. Your program, chats and memory are unchanged.
+echo Fix it (backup folder in .env as VEIL_BACKUP_DIR, enough disk space), then run update.bat again.
+echo Only if you really want to update without a backup: update.bat --skip-backup
 goto stop
 :pull_failed
 echo Could not get the new code: no network, or files here were edited locally.

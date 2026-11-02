@@ -19,6 +19,15 @@ import uuid
 FORMAT_VERSION = 1
 DATA_LAYOUT_VERSION = 1
 PAYLOAD_ROOTS = ("data", "characters", "persona", ".env")
+# Desktop-app state lives outside the project folder. Only the two things that cannot be
+# regenerated are saved: window/settings and the chosen chat background. The attachment
+# cache and Chromium session data are copies/caches and are deliberately left out.
+DESKTOP_COMPONENT = "desktop-data"
+DESKTOP_FILES = ("desktop.json",) + tuple(
+    "appearance-background" + extension for extension in (".png", ".jpg", ".jpeg", ".webp")
+)
+BACKUP_DIR_KEY = "VEIL_BACKUP_DIR"
+_AUTO = object()
 OMBRE_RUNTIME_FILES = {
     "ombre.lock", "ombre.process.json", "ombre.stop", "ombre-http-ready.json",
     "process.log",
@@ -37,7 +46,18 @@ def _recovery_marker(target):
     return target / RECOVERY_MARKER_NAME
 
 
-def _write_recovery_marker(target, backup, safety=None):
+def _read_recovery_marker(target):
+    """The previous incomplete-restore marker as a dict, or None."""
+    try:
+        value = json.loads(_recovery_marker(target).read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else {"status": "restore-incomplete"}
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError, UnicodeError):
+        return {"status": "restore-incomplete"}
+
+
+def _write_recovery_marker(target, backup, safety=None, original_safety=None):
     """Persist a fail-closed marker before changing a restore target.
 
     This is deliberately a target-root file rather than data/ content: replace
@@ -50,6 +70,9 @@ def _write_recovery_marker(target, backup, safety=None):
         "status": "restore-incomplete",
         "backup": str(backup),
         "safety_copy": str(safety) if safety else None,
+        # The first safety copy of an interrupted restore holds the user's real data;
+        # later copies may only hold half-restored files.
+        "original_safety_copy": str(original_safety or safety) if (original_safety or safety) else None,
     }
     with temporary.open("w", encoding="utf-8", newline="\n") as handle:
         handle.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
@@ -60,6 +83,42 @@ def _write_recovery_marker(target, backup, safety=None):
 
 def _clear_recovery_marker(target):
     _recovery_marker(target).unlink(missing_ok=True)
+
+
+def default_desktop_dir():
+    """Where the packaged desktop app keeps its own settings (Windows only)."""
+    base = os.environ.get("APPDATA")
+    return Path(base) / "VEIL Desktop" if base and os.name == "nt" else None
+
+
+def _desktop_files(desktop_dir):
+    if desktop_dir is None:
+        return []
+    desktop_dir = Path(desktop_dir)
+    found = []
+    for name in DESKTOP_FILES:
+        path = desktop_dir / name
+        if path.is_symlink():
+            raise BackupError(f"桌面端数据文件是符号链接，已停止：{name}")
+        if path.exists():
+            if not path.is_file():
+                raise BackupError(f"桌面端数据项类型不正确：{name}")
+            found.append(name)
+    return found
+
+
+def _desktop_app_running():
+    if os.name != "nt":
+        return False
+    try:
+        result = subprocess.run(
+            ["tasklist", "/FI", "IMAGENAME eq VEIL.exe"], capture_output=True, text=True, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return True  # cannot tell: treat the desktop app as running and write nothing live
+    if result.returncode != 0:
+        return True  # the check itself failed: do not assume the desktop app is closed
+    return "VEIL.exe" in (result.stdout or "")
 
 
 def _utc_stamp():
@@ -85,7 +144,11 @@ def _sha256(path):
 def _entry_is_excluded(relative):
     parts = PurePosixPath(relative).parts
     name = parts[-1]
-    if relative == "data/session.lock":
+    if relative in ("data/session.lock", "data/web_service.json"):
+        return True
+    # Leftover write-temp files of the data layer sit directly in data/ or data/<role>/.
+    # Anything deeper (workspace, media...) is the user's own file and is kept.
+    if parts[0] == "data" and len(parts) <= 3 and name.endswith(".tmp"):
         return True
     if "_agent" not in parts:
         return False
@@ -241,7 +304,40 @@ def _validate_character_files(staged_payload):
             raise BackupError(f"角色配置无法被当前程序读取：{config_path.name}") from exc
 
 
-def create_backup(root, destination):
+def _payload_size(root, files, desktop_dir, desktop_names):
+    total = 0
+    for relative in files:
+        try:
+            total += (root / Path(*PurePosixPath(relative).parts)).stat().st_size
+        except OSError:
+            pass
+    for name in desktop_names:
+        try:
+            total += (Path(desktop_dir) / name).stat().st_size
+        except OSError:
+            pass
+    return total
+
+
+def _check_free_space(destination, needed):
+    probe = destination
+    while not probe.exists() and probe.parent != probe:
+        probe = probe.parent
+    try:
+        free = shutil.disk_usage(probe).free
+    except OSError:
+        return
+    required = needed + max(64 * 1024 * 1024, needed // 10)
+    if free < required:
+        raise BackupError(
+            f"备份位置磁盘空间不足：需要约 {required // (1024 * 1024)} MB，"
+            f"现有 {free // (1024 * 1024)} MB。未创建备份，原有数据未改动。"
+        )
+
+
+def create_backup(root, destination, desktop_dir=_AUTO):
+    if desktop_dir is _AUTO:
+        desktop_dir = default_desktop_dir()
     root = Path(root).resolve()
     destination = Path(destination).expanduser()
     if destination.is_symlink():
@@ -258,6 +354,8 @@ def create_backup(root, destination):
         with _cold_lock(root, create_session=True):
             destination.mkdir(parents=True, exist_ok=True)
             files, directories = _payload_entries(root)
+            desktop_names = _desktop_files(desktop_dir)
+            _check_free_space(destination, _payload_size(root, files, desktop_dir, desktop_names))
             stage.mkdir()
             payload = stage / "payload"
             payload.mkdir()
@@ -273,17 +371,37 @@ def create_backup(root, destination):
                     "path": f"payload/{relative}", "size": target.stat().st_size,
                     "sha256": _sha256(target),
                 })
+            components = list(PAYLOAD_ROOTS)
+            if desktop_names:
+                components.append(DESKTOP_COMPONENT)
+                directories = directories + [DESKTOP_COMPONENT]
+                (payload / DESKTOP_COMPONENT).mkdir()
+                for name in desktop_names:
+                    target = payload / DESKTOP_COMPONENT / name
+                    shutil.copy2(Path(desktop_dir) / name, target)
+                    if name == "desktop.json":
+                        try:
+                            json.loads(target.read_text(encoding="utf-8-sig"))
+                        except (OSError, ValueError, UnicodeError) as exc:
+                            raise BackupError(
+                                "桌面端设置文件正在写入或已损坏；请先完全关闭 VEIL 桌面版后重试。"
+                            ) from exc
+                    manifest_files.append({
+                        "path": f"payload/{DESKTOP_COMPONENT}/{name}", "size": target.stat().st_size,
+                        "sha256": _sha256(target),
+                    })
             manifest = {
                 "application": "veil-agent",
                 "backup_format_version": FORMAT_VERSION,
                 "data_layout_version": DATA_LAYOUT_VERSION,
                 "created_at_utc": datetime.now(timezone.utc).isoformat(),
                 "source_revision": _git_revision(root),
-                "components": list(PAYLOAD_ROOTS),
+                "components": components,
                 "directories": [f"payload/{path}" for path in directories],
                 "files": manifest_files,
                 "excluded_runtime_items": [
-                    "data/session.lock", "data/<role>/memory/_agent/ombre.lock",
+                    "data/session.lock", "data/web_service.json", "data/*.tmp", "data/<role>/*.tmp",
+                    "data/<role>/memory/_agent/ombre.lock",
                     "data/<role>/memory/_agent/ombre.process.json",
                     "data/<role>/memory/_agent/ombre.stop",
                     "data/<role>/memory/_agent/ombre-http-ready.json",
@@ -305,7 +423,7 @@ def create_backup(root, destination):
             verify_backup(stage)
             os.replace(stage, final)
             return final, len(manifest_files)
-    except Exception:
+    except BaseException:  # includes Ctrl+C: never leave a half-written staging folder behind
         if stage.exists() and _inside(stage.resolve(), destination):
             shutil.rmtree(stage, ignore_errors=True)
         raise
@@ -355,8 +473,11 @@ def verify_backup(backup):
             manifest.get("backup_format_version") != FORMAT_VERSION or
             manifest.get("data_layout_version") != DATA_LAYOUT_VERSION):
         raise BackupError("此备份格式或数据布局版本不受当前程序支持，未改动目标目录。")
-    if manifest.get("components") != list(PAYLOAD_ROOTS):
+    if manifest.get("components") not in (
+        list(PAYLOAD_ROOTS), list(PAYLOAD_ROOTS) + [DESKTOP_COMPONENT],
+    ):
         raise BackupError("备份组件清单与当前程序不兼容。")
+    has_desktop = DESKTOP_COMPONENT in manifest["components"]
 
     file_entries = manifest.get("files")
     directory_entries = manifest.get("directories")
@@ -388,6 +509,13 @@ def verify_backup(backup):
         raise BackupError("备份清单将同一路径登记为文件和目录。")
     if "payload/.env" not in expected_files or "payload/data" not in expected_dirs:
         raise BackupError("备份缺少必要的环境或角色数据。")
+    desktop_root = f"payload/{DESKTOP_COMPONENT}"
+    desktop_paths = {path for path in expected_files if path.startswith(desktop_root + "/")}
+    if has_desktop != (desktop_root in expected_dirs) or (desktop_paths and not has_desktop):
+        raise BackupError("备份清单中的桌面端数据登记不一致。")
+    if any(PurePosixPath(path).name not in DESKTOP_FILES or len(PurePosixPath(path).parts) != 3
+           for path in desktop_paths):
+        raise BackupError("备份清单含未登记的桌面端文件。")
 
     payload = backup / "payload"
     actual_files, actual_dirs = set(), {"payload"}
@@ -451,8 +579,54 @@ def _copy_atomic(source, destination):
         temporary.unlink(missing_ok=True)
 
 
-def restore_backup(backup, target, *, replace=False, confirm=input):
-    manifest = verify_backup(backup)
+def _restore_desktop(backup, names, live_dir, side_parent, running, notice):
+    """Put saved desktop settings back without ever overwriting a desktop config in use.
+
+    The live folder is written only when it has none of these files yet and the desktop
+    app is not running; otherwise the files are placed in a new folder beside the restored
+    project and the user is told how to apply them. Failures never undo the data restore.
+    """
+    source = backup / "payload" / DESKTOP_COMPONENT
+    reason = None
+    if live_dir is None:
+        reason = "无法确定桌面端数据位置"
+    elif running():
+        reason = "VEIL 桌面版正在运行"
+    elif any((Path(live_dir) / name).exists() or (Path(live_dir) / name).is_symlink() for name in DESKTOP_FILES):
+        reason = "当前桌面端已有设置文件"
+    use_live = reason is None
+    destination = Path(live_dir) if use_live else side_parent / f"restored-desktop-data-{_utc_stamp()}"
+    try:
+        destination.mkdir(parents=True, exist_ok=True)
+        for name in names:
+            _copy_atomic(source / name, destination / name)
+    except OSError as exc:
+        notice(f"桌面端设置没有恢复（{exc}）；备份里的 payload/{DESKTOP_COMPONENT}/ 完好，可手动复制。")
+        return None
+    if use_live:
+        notice(f"桌面端设置和背景图已恢复到：{destination}")
+    else:
+        notice(
+            f"{reason}，为避免覆盖正在使用的桌面配置，桌面端设置和背景图没有写入当前位置，"
+            f"已放在：{destination}。要使用它们：先完全关闭 VEIL，再把里面的文件复制到 "
+            f"{live_dir if live_dir else '%APPDATA%/VEIL Desktop'}。"
+        )
+    return destination
+
+
+def restore_backup(backup, target, *, replace=False, confirm=input, desktop_dir=_AUTO,
+                   desktop_running=_desktop_app_running, notice=None):
+    if desktop_dir is _AUTO:
+        desktop_dir = default_desktop_dir()
+    notice = notice or (lambda message: None)
+    full_manifest = verify_backup(backup)
+    desktop_prefix = f"payload/{DESKTOP_COMPONENT}"
+    desktop_names = [PurePosixPath(entry["path"]).name for entry in full_manifest["files"]
+                     if entry["path"].startswith(desktop_prefix + "/")]
+    manifest = dict(full_manifest)
+    manifest["files"] = [entry for entry in full_manifest["files"]
+                         if not entry["path"].startswith(desktop_prefix + "/")]
+    manifest["directories"] = [path for path in full_manifest["directories"] if path != desktop_prefix]
     backup = Path(backup).expanduser().resolve()
     target = Path(target).expanduser()
     if target.is_symlink():
@@ -464,6 +638,25 @@ def restore_backup(backup, target, *, replace=False, confirm=input):
         raise BackupError("恢复目标必须是普通目录或尚不存在的目录。")
     if not target.parent.is_dir():
         raise BackupError("恢复目标的上级目录不存在。")
+
+    previous_marker = _read_recovery_marker(target) if target.exists() else None
+    original_safety = None
+    if previous_marker:
+        original_safety = previous_marker.get("original_safety_copy") or previous_marker.get("safety_copy")
+        notice(
+            "检测到上一次恢复没有完成。"
+            + (f"你原来的数据保存在：{original_safety}（请不要删除）。" if original_safety else "")
+            + "本次会重新完成恢复。"
+        )
+
+    def _keep_or_clear_marker():
+        # A failed re-run must not make a half-restored folder look finished.
+        if previous_marker:
+            temporary = _recovery_marker(target).with_name(RECOVERY_MARKER_NAME + f".{uuid.uuid4().hex}.tmp")
+            temporary.write_text(json.dumps(previous_marker, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            os.replace(temporary, _recovery_marker(target))
+        else:
+            _clear_recovery_marker(target)
 
     stage = Path(tempfile.mkdtemp(prefix=".veil-restore-stage-", dir=target.parent))
     target_created = not target.exists()
@@ -517,7 +710,7 @@ def restore_backup(backup, target, *, replace=False, confirm=input):
                     try:
                         if not target.exists():
                             target.mkdir()
-                        _write_recovery_marker(target, backup, safety)
+                        _write_recovery_marker(target, backup, safety, original_safety)
                         marker_written = True
                         for name in existing_components:
                             component = target / name
@@ -554,7 +747,7 @@ def restore_backup(backup, target, *, replace=False, confirm=input):
                         if safety is not None:
                             shutil.rmtree(safety, ignore_errors=True)
                         if marker_written:
-                            _clear_recovery_marker(target)
+                            _keep_or_clear_marker()
                         raise
                 finally:
                     data = target / "data"
@@ -574,7 +767,7 @@ def restore_backup(backup, target, *, replace=False, confirm=input):
                     )
                 if not target.exists():
                     target.mkdir()
-                _write_recovery_marker(target, backup)
+                _write_recovery_marker(target, backup, original_safety=original_safety)
                 marker_written = True
                 all_directories = set(manifest["directories"])
                 for relative in sorted(all_directories, key=lambda value: (len(PurePosixPath(value).parts), value)):
@@ -601,10 +794,20 @@ def restore_backup(backup, target, *, replace=False, confirm=input):
                         except OSError:
                             pass
                     if marker_written:
-                        _clear_recovery_marker(target)
+                        _keep_or_clear_marker()
                     raise
             if marker_written:
                 _clear_recovery_marker(target)
+        if previous_marker and original_safety:
+            if safety is not None and str(safety) != str(original_safety):
+                notice(
+                    f"最早的安全副本 {original_safety} 才是你原来的数据；本次新生成的 {safety} "
+                    "可能只含上次中断时的半恢复内容。程序不会删除其中任何一个。"
+                )
+            else:
+                notice(f"你原来的数据仍保存在：{original_safety}，程序不会删除它。")
+        if desktop_names:
+            _restore_desktop(backup, desktop_names, desktop_dir, target.parent, desktop_running, notice)
         return len(manifest["files"]), safety
     except Exception:
         if target_created and target.exists() and not target.is_symlink():
@@ -615,6 +818,79 @@ def restore_backup(backup, target, *, replace=False, confirm=input):
     finally:
         if stage.exists():
             shutil.rmtree(stage, ignore_errors=True)
+
+
+def read_env_value(root, key):
+    """A plain KEY=value lookup in the process environment, then the project's .env."""
+    value = os.environ.get(key)
+    if value and value.strip():
+        return value.strip()
+    try:
+        lines = (Path(root) / ".env").read_text(encoding="utf-8-sig").splitlines()
+    except OSError:
+        return None
+    found = None
+    for line in lines:
+        text = line.strip()
+        if not text or text.startswith("#") or "=" not in text:
+            continue
+        name, _, raw = text.partition("=")
+        if name.strip() == key:
+            raw = raw.strip()
+            if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "\"'":
+                raw = raw[1:-1]
+            found = raw.strip() or None
+    return found
+
+
+def pre_update_backup(root):
+    """Back up before an update; any problem raises BackupError so the update stops."""
+    destination = read_env_value(root, BACKUP_DIR_KEY)
+    if not destination:
+        raise BackupError(
+            f"没有设置备份位置。请在 .env 里加一行 {BACKUP_DIR_KEY}=X:\\VEIL-backups（另一块磁盘），"
+            "然后重新运行 update.bat；如果这一次确实不想备份，运行 update.bat --skip-backup。"
+        )
+    return create_backup(root, destination)
+
+
+def _tree_size(path):
+    total = 0
+    for current, _dirs, names in os.walk(path, followlinks=False):
+        for name in names:
+            try:
+                total += (Path(current) / name).lstat().st_size
+            except OSError:
+                pass
+    return total
+
+
+def _mb(size):
+    return f"{size / (1024 * 1024):.1f} MB"
+
+
+def usage_report(root, destination=None):
+    """Counts and sizes of files that pile up. Read-only: nothing is ever deleted here."""
+    root = Path(root).resolve()
+    lines = []
+    copies = sorted((root / "data").glob("*/memory.backup-*"))
+    lines.append(f"Ombre 升级前自动留的记忆副本（data/<角色>/memory.backup-*）：{len(copies)} 份，"
+                 f"共 {_mb(sum(_tree_size(path) for path in copies))}")
+    stray = [path for path in (root / "data").glob("*.tmp")] + [path for path in (root / "data").glob("*/*.tmp")]
+    lines.append(f"数据目录里遗留的 .tmp 文件：{len(stray)} 个，共 {_mb(sum(_tree_size(path) for path in stray))}")
+    safety = sorted(root.parent.glob(root.name + ".before-restore-*"))
+    lines.append(f"恢复时留下的安全副本（{root.name}.before-restore-*，位于项目目录旁）：{len(safety)} 份，"
+                 f"共 {_mb(sum(_tree_size(path) for path in safety))}")
+    destination = destination or read_env_value(root, BACKUP_DIR_KEY)
+    if destination and Path(destination).expanduser().is_dir():
+        folder = Path(destination).expanduser()
+        backups = sorted(folder.glob("VEIL-Agent-Backup-*"))
+        leftovers = sorted(folder.glob(".veil-backup-*.tmp"))
+        lines.append(f"备份位置 {folder} 里的备份：{len(backups)} 份，共 {_mb(sum(_tree_size(path) for path in backups))}；"
+                     f"中断留下的临时目录：{len(leftovers)} 个")
+    else:
+        lines.append(f"备份位置未设置或不存在（.env 的 {BACKUP_DIR_KEY}）。")
+    return lines
 
 
 def _parser():
@@ -628,6 +904,9 @@ def _parser():
     restore.add_argument("--backup", required=True, help="备份目录")
     restore.add_argument("--target", required=True, help="明确指定的项目根目录")
     restore.add_argument("--replace", action="store_true", help="确认后先整体保存现有角色数据，再恢复干净备份")
+    sub.add_parser("pre-update", help="更新前备份到 .env 里 VEIL_BACKUP_DIR 指定的位置（由 update.bat 调用）")
+    usage = sub.add_parser("usage", help="只统计备份、安全副本、记忆副本和临时文件占用，不删除任何东西")
+    usage.add_argument("--destination", help="备份根目录；默认读 .env 的 VEIL_BACKUP_DIR")
     return parser
 
 
@@ -642,8 +921,13 @@ def main(argv=None):
         elif args.command == "verify":
             manifest = verify_backup(args.backup)
             print(f"校验通过：{len(manifest['files'])} 个文件；数据布局 v{manifest['data_layout_version']}。")
+        elif args.command == "pre-update":
+            path, count = pre_update_backup(root)
+            print(f"更新前备份成功：{path}（{count} 个文件）")
+        elif args.command == "usage":
+            print("\n".join(usage_report(root, args.destination)))
         else:
-            count, safety = restore_backup(args.backup, args.target, replace=args.replace)
+            count, safety = restore_backup(args.backup, args.target, replace=args.replace, notice=print)
             print(f"恢复成功：{args.target}（{count} 个文件）")
             if safety:
                 print(f"原有角色数据安全副本：{safety}")
