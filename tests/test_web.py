@@ -84,6 +84,10 @@ output_cny_per_million = "8"
         except urllib.error.HTTPError as exc:
             return exc.code, None
 
+    def test_life_page_reports_service_not_ready_instead_of_empty_records(self):
+        status, _ = self.call('/api/life')
+        self.assertEqual(status, 503)
+
     def test_lab_attachment_survives_restart_and_is_served_as_safe_content(self):
         raw = b'<html><script>window.bad=true</script><body>game</body></html>'
         attachment = self.hub.save_attachment({'name': 'game.html', 'suffix': '.html',
