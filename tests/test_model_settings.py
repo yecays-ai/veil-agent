@@ -99,6 +99,20 @@ class ModelSettingsTests(unittest.TestCase):
         path.write_text('{"endpoints": [], "models": [], "use": {}, "limits": {}}', encoding='utf-8')
         self.assertEqual(load_character(self.root, 'test').provider['model'], 'fake-model')
 
+    def test_valid_older_model_defaults_are_kept(self):
+        path = self.root / 'data' / 'test' / 'models.json'
+        path.parent.mkdir(parents=True)
+        legacy = {'endpoints': [{'id': 'eabcdef', 'name': 'old', 'base_url': 'https://old.invalid/v1'}],
+                  'models': [{'id': 'mabcdef', 'endpoint': 'eabcdef', 'model': 'old-model',
+                              'billing': 'tokens', 'input_cny_per_million': '1',
+                              'output_cny_per_million': '2'}],
+                  'use': {'peter': 'mabcdef'}}
+        path.write_text(json.dumps(legacy), encoding='utf-8')
+        cfg = load_character(self.root, 'test')
+        self.assertEqual(cfg.provider['model'], 'old-model')
+        self.assertEqual(cfg.provider['cached_input_cny_per_million'], Decimal('1'))
+        self.assertEqual(cfg.provider['max_input_tokens'], 32768)
+
     def test_key_and_model_transaction_recovers_after_second_write_failure(self):
         cfg = load_character(self.root, 'test')
         initial_env = (self.root / '.env').read_bytes()
