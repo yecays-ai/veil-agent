@@ -144,6 +144,35 @@ class ModelSettingsTests(unittest.TestCase):
         cfg.models.save(RELAY)
         self.assertEqual(len(load_character(self.root, 'test').models.public()['endpoints']), 1)
 
+    def test_model_selection_waits_for_both_files_to_finish(self):
+        import threading
+        cfg = load_character(self.root, 'test')
+        env_written = threading.Event()
+        finish = threading.Event()
+        selected = threading.Event()
+        original = cfg.models._write
+        def paused_write(data):
+            env_written.set()
+            self.assertTrue(finish.wait(5))
+            original(data)
+        def save():
+            cfg.models.save(RELAY)
+        def select():
+            cfg.models.chosen('peter')
+            selected.set()
+        with patch.object(cfg.models, '_write', side_effect=paused_write):
+            saving = threading.Thread(target=save)
+            saving.start()
+            self.assertTrue(env_written.wait(5))
+            selecting = threading.Thread(target=select)
+            selecting.start()
+            self.assertFalse(selected.wait(0.1))
+            finish.set()
+            saving.join(5)
+            selecting.join(5)
+        self.assertTrue(selected.is_set())
+        self.assertFalse(cfg.models.journal.exists())
+
     def test_interrupted_save_rolls_back_on_restart(self):
         cfg = load_character(self.root, 'test')
         initial_env = (self.root / '.env').read_bytes()
