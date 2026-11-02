@@ -24,6 +24,7 @@ from agent_types import (AUTONOMY_WAKE, BudgetExceeded, CODEX_WATCH_WAKE, EmptyR
                          GLANCE_WAKE, RequestFailed, TooLong, UserError, now)
 from desktop_files import DESKTOP_FILE_READ_TOOL_NAMES
 from tool_aliases import alias_system_messages, alias_tool_schemas, resolve_tool_name, validate_tool_aliases
+from model_settings import SettingsError
 
 ROOT = Path(__file__).resolve().parent
 MILLION = Decimal(1_000_000)
@@ -859,6 +860,8 @@ def load_character(root, character_id):
                          tool_aliases=tool_aliases)
     except UserError:
         raise
+    except SettingsError as exc:
+        raise UserError(str(exc)) from None
     except (OSError, KeyError, ValueError, TypeError, ArithmeticError) as exc:
         raise UserError('角色配置无法读取或字段无效，请检查 character.toml。') from exc
 
@@ -3861,8 +3864,13 @@ def make_model(root, cfg, provider=None):
 
     def call(messages, *, json_output=False, max_tokens=None, thinking=None, detail=False,
              tools=None, message_output=False):
-        p = current()
-        client = client_for(p)
+        if getattr(cfg, 'models', None) is not None:
+            with cfg.models.lock:
+                p = cfg.models.chosen('peter')[2] if provider is None else provider
+                client = client_for(p)
+        else:
+            p = current()
+            client = client_for(p)
         extra = {}
         if (thinking or p.get('thinking')) == 'disabled':
             extra['extra_body'] = {'thinking': {'type': 'disabled'}}
