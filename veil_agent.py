@@ -2604,7 +2604,7 @@ class Chat:
     def send(self, text, *, autonomy=False, **kwargs):
         models = getattr(self.cfg, 'models', None)
         if models is not None:
-            with models.lock:
+            with models.env_lock, models.lock:
                 try:
                     models.chosen('peter')
                 except SettingsError as exc:
@@ -3877,7 +3877,7 @@ def make_model(root, cfg, provider=None):
              tools=None, message_output=False):
         models = getattr(cfg, 'models', None)
         if models is not None:
-            with models.lock:
+            with models.env_lock, models.lock:
                 try:
                     models.chosen('peter')
                 except SettingsError as exc:

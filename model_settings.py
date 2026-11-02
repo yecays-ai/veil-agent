@@ -77,6 +77,7 @@ class ModelSettings:
         self.builtins = dict(builtins)
         self.default = BUILTIN_PREFIX + default_name
         self.lock = threading.RLock()
+        self.env_lock = _ENV_LOCK
         self.blocked = False
         with _ENV_LOCK:
             self._recover()

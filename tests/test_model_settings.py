@@ -198,6 +198,55 @@ class ModelSettingsTests(unittest.TestCase):
         self.assertEqual(len(view['endpoints']), 1)
         self.assertEqual(len(load_character(self.root, 'test').models.public()['endpoints']), 1)
 
+    def test_second_instance_model_call_waits_for_shared_env_transaction(self):
+        import threading
+        first = load_character(self.root, 'test')
+        second = load_character(self.root, 'test')
+        entered = threading.Event()
+        finish = threading.Event()
+        called = threading.Event()
+        requesting_started = threading.Event()
+        errors = []
+        original = first.models._write
+        def paused_write(data):
+            entered.set()
+            if not finish.wait(5):
+                raise AssertionError('save did not resume')
+            original(data)
+        def save():
+            try:
+                first.models.save(RELAY)
+            except Exception as exc:
+                errors.append(exc)
+        def request(call):
+            requesting_started.set()
+            try:
+                call([{'role': 'user', 'content': 'fake'}])
+                called.set()
+            except Exception as exc:
+                errors.append(exc)
+        fake = Mock()
+        fake.chat.completions.create.return_value.usage.prompt_tokens = 1
+        fake.chat.completions.create.return_value.usage.completion_tokens = 1
+        fake.chat.completions.create.return_value.choices = [Mock(message=Mock(content='ok'))]
+        with patch('openai.OpenAI', return_value=fake):
+            _, call = make_model(self.root, second)
+            with patch.object(first.models, '_write', side_effect=paused_write):
+                saving = threading.Thread(target=save)
+                saving.start()
+                self.assertTrue(entered.wait(5))
+                requesting = threading.Thread(target=request, args=(call,))
+                requesting.start()
+                self.assertTrue(requesting_started.wait(5))
+                self.assertFalse(called.wait(0.1))
+                finish.set()
+                saving.join(5)
+                requesting.join(5)
+        self.assertFalse(saving.is_alive())
+        self.assertFalse(requesting.is_alive())
+        self.assertEqual(errors, [])
+        self.assertTrue(called.is_set())
+
     def test_interrupted_save_rolls_back_on_restart(self):
         cfg = load_character(self.root, 'test')
         initial_env = (self.root / '.env').read_bytes()

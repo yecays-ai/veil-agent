@@ -1145,7 +1145,7 @@ class Hub(ScreenPopMixin):
 
     def save_models(self, payload):
         models = self.chat.cfg.models
-        with models.lock:
+        with models.env_lock, models.lock:
             before = models.chosen('peter')
             models.save(payload)
             self.chat.budget.daily, self.chat.budget.monthly = models.limits()
@@ -1156,7 +1156,7 @@ class Hub(ScreenPopMixin):
 
     def use_model(self, role, model_id):
         models = self.chat.cfg.models
-        with models.lock:
+        with models.env_lock, models.lock:
             model_id, name, provider = models.use(role, model_id)
             if role == 'peter':
                 self.chat.switch_model(name, provider)
