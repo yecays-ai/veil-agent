@@ -1288,6 +1288,7 @@ max_steps = 3
                 })
             self.assertNotEqual(state, '成功')
             self.assertFalse((Path(temp_dir) / 'drawings' / 'sun.png').exists())
+            self.assertEqual(list((Path(temp_dir) / 'drawings').glob('*.tmp')), [])
 
     def test_canvas_action_validations(self):
         tools, backend = self.make_tools()

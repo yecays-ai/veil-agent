@@ -1647,9 +1647,10 @@ class WindowsInteractionTools:
                     cleaned += '.png'
                 if self.lab is None:
                     return WindowsToolResult('Lab directory is not configured.', activity_detail='Lab 不可用。'), '被拒绝'
-                lab_root = self.lab.resolve()
-                if lab_root != self.lab:
+                lab_info = self.lab.lstat()
+                if self.lab.is_symlink() or getattr(lab_info, 'st_file_attributes', 0) & 0x400:
                     return WindowsToolResult('Lab directory was redirected.', activity_detail='Lab 路径已改变。'), '被拒绝'
+                lab_root = self.lab.resolve()
                 dest_file = (self.lab / cleaned).resolve()
                 if not dest_file.is_relative_to(lab_root):
                     return WindowsToolResult('Destination path escapes Lab directory.', activity_detail='越界路径被拒绝。'), '被拒绝'
@@ -1671,33 +1672,25 @@ class WindowsInteractionTools:
                             with _locked_lab_directories(lab_root, dest_file.parent):
                                 if dest_file.parent.resolve() != dest_file.parent:
                                     raise ObservationError('Lab destination directory changed.')
-                                # Exclusive creation also refuses a file that appears after the initial check.
-                                flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_BINARY', 0)
-                                fd = os.open(dest_file, flags, 0o600)
-                                created = os.fstat(fd)
-                                handle = None
+                                # Publish only a complete PNG. Windows rename refuses an existing
+                                # destination; POSIX link has the same no-replace guarantee.
+                                fd, temporary_name = tempfile.mkstemp(
+                                    prefix=f'.{dest_file.name}.', suffix='.tmp', dir=dest_file.parent)
+                                temporary = Path(temporary_name)
                                 try:
-                                    handle = os.fdopen(fd, 'wb')
-                                    with handle:
+                                    with os.fdopen(fd, 'wb') as handle:
                                         handle.write(png_bytes)
                                         handle.flush()
                                         os.fsync(handle.fileno())
-                                except Exception:
-                                    # A failed write must not reserve the filename with a partial PNG.
-                                    # Never remove a different file if another process replaced ours.
-                                    if handle is None:
-                                        try:
-                                            os.close(fd)
-                                        except OSError:
-                                            pass
+                                    if os.name == 'nt':
+                                        os.rename(temporary, dest_file)
+                                    else:
+                                        os.link(temporary, dest_file)
+                                finally:
                                     try:
-                                        existing_file = dest_file.stat(follow_symlinks=False)
-                                        if ((existing_file.st_dev, existing_file.st_ino)
-                                                == (created.st_dev, created.st_ino)):
-                                            dest_file.unlink()
+                                        temporary.unlink(missing_ok=True)
                                     except OSError:
                                         pass
-                                    raise
                             return png_bytes
                         png_bytes, _snapshot = self._run_action_with_input_guard(do_save, stop)
                         rel_saved = str(dest_file.relative_to(lab_root)).replace('\\', '/')
