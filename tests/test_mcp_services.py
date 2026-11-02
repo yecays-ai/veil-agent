@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
+import mcp_services
 from mcp_services import MCPConfigError, MCPConflict, MCPServices
 
 
@@ -50,6 +51,17 @@ class MCPServicesTest(unittest.TestCase):
         self.manager.save(self.config(enabled=False))
         self.assertEqual(self.manager.schemas(), [])
         self.assertFalse(MCPServices(self.manager.path).view()['enabled'])
+
+    def test_startup_allows_slow_bridge_and_timeout_message_is_readable(self):
+        # Ticket 200: cmd -> npx -> mcp-remote took ~8s alone; the old 10s/12s limits failed it intermittently.
+        self.assertGreaterEqual(mcp_services.START_TIMEOUT, 60)
+        self.assertGreater(mcp_services.START_WATCHDOG, mcp_services.START_TIMEOUT)
+        wrapped = ExceptionGroup('unhandled errors in a TaskGroup', [TimeoutError()])
+        message = mcp_services._startup_failure_message(wrapped)
+        self.assertIn('启动超时', message)
+        self.assertNotIn('TaskGroup', message)
+        self.assertEqual(mcp_services._startup_failure_message(RuntimeError('boom')), 'boom')
+        self.assertEqual(mcp_services._startup_failure_message(RuntimeError('')), 'MCP 服务启动失败。')
 
     def test_failure_and_validation(self):
         with self.assertRaises(MCPConfigError):

@@ -14,6 +14,9 @@ from urllib.parse import urlsplit
 NAME = re.compile(r'^[a-z][a-z0-9_]{0,31}$')
 TOOL_PREFIX = 'mcp__'
 CALL_TIMEOUT = 20
+# Ticket 200: starting a bridged service (cmd -> npx -> mcp-remote -> network) can take well over 10 seconds.
+START_TIMEOUT = 60
+START_WATCHDOG = START_TIMEOUT + 5
 
 
 def _local_observer_url(instructions):
@@ -84,6 +87,17 @@ def _validate_service(raw):
     return result
 
 
+def _startup_failure_message(exc):
+    # Ticket 200: a startup timeout surfaces as an opaque ExceptionGroup; say what happened.
+    pending = [exc]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, TimeoutError):
+            return f'MCP 服务启动超时（超过 {START_TIMEOUT} 秒），请稍后点停用再启用重试。'
+        pending.extend(getattr(item, 'exceptions', ()) or ())
+    return str(exc) or 'MCP 服务启动失败。'
+
+
 class _Worker:
     def __init__(self, service, environment=None):
         self.service = service
@@ -116,7 +130,7 @@ class _Worker:
                                             cwd=self.service['cwd'], env=self.environment)
             async with stdio_client(params, errlog=subprocess.DEVNULL) as (read, write):
                 async with ClientSession(read, write) as session:
-                    async with asyncio.timeout(10):
+                    async with asyncio.timeout(START_TIMEOUT):
                         initialized = await session.initialize()
                         self.observer_url = _local_observer_url(
                             getattr(initialized, 'instructions', None)
@@ -169,7 +183,7 @@ class _Worker:
             asyncio.run(run())
         except BaseException as exc:
             if not self.ready.done():
-                message = 'MCP 服务已停用。' if self.closing.is_set() else (str(exc) or 'MCP 服务启动失败。')
+                message = 'MCP 服务已停用。' if self.closing.is_set() else _startup_failure_message(exc)
                 self.ready.set_exception(RuntimeError(message[:300]))
         finally:
             if self.jobs is not None:
@@ -458,7 +472,7 @@ class MCPServices:
                     except Exception as exc:
                         self.errors.setdefault(service['id'], (str(exc) or type(exc).__name__)[:300])
                         self.failed.add(service['id'])
-                elif time.monotonic() - worker.started_at > 12:
+                elif time.monotonic() - worker.started_at > START_WATCHDOG:
                     self.errors[service['id']] = 'MCP 服务连接超时。'
                     self.failed.add(service['id'])
                     worker.stop()
@@ -571,7 +585,7 @@ class MCPServices:
                         self.errors.pop(service['id'], None)
                 if retiring and retiring.thread.is_alive():
                     self.errors[service['id']] = '旧 MCP 服务正在关闭，请稍后刷新。'
-                if worker and not worker.ready.done() and time.monotonic() - worker.started_at > 12:
+                if worker and not worker.ready.done() and time.monotonic() - worker.started_at > START_WATCHDOG:
                     self.errors[service['id']] = 'MCP 服务连接超时。'
                     self.failed.add(service['id'])
                     worker.stop()
