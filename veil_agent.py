@@ -357,10 +357,30 @@ class Store:
         self.root = Path(root)
         marker = self.root.parent / '.veil-restore-incomplete.json'
         if marker.exists():
-            raise UserError(
-                '检测到未完成的备份恢复，已停止使用此数据目录；请保留目标与安全副本，并用备份恢复工具完成恢复。'
-            )
+            raise UserError(self._incomplete_restore_message(marker))
         self.root.mkdir(parents=True, exist_ok=True)
+
+    @staticmethod
+    def _incomplete_restore_message(marker):
+        """Say exactly what state the folder is in and what to run next."""
+        try:
+            info = json.loads(marker.read_text(encoding='utf-8'))
+            info = info if isinstance(info, dict) else {}
+        except (OSError, ValueError, UnicodeError):
+            info = {}
+        original = info.get('original_safety_copy') or info.get('safety_copy')
+        backup = info.get('backup')
+        lines = ['检测到未完成的备份恢复，已停止使用此数据目录（里面可能是半恢复的数据）。']
+        if original:
+            lines.append(f'你原来的数据保存在：{original}。请不要删除它。')
+        if backup:
+            def literal(value):  # PowerShell single quotes do not expand $name or $(...)
+                return "'" + str(value).replace("'", "''") + "'"
+            lines.append('重新完成恢复：先完全关闭 VEIL，再在项目目录运行 '
+                         f'.venv\\Scripts\\python.exe backup_restore.py restore --backup {literal(backup)} '
+                         f'--target {literal(marker.parent)} --replace')
+        lines.append('详见 docs/backup-and-restore.md。')
+        return '\n'.join(lines)
 
     @synchronized
     def read(self, name):
