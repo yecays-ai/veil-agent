@@ -120,7 +120,8 @@ class ModelSettings:
                     original = record[key]
                     if original is None:
                         path.unlink(missing_ok=True)
-                        self._sync_directory(path.parent)
+                        if path.parent.exists():
+                            self._sync_directory(path.parent)
                     else:
                         mode = record.get('env_mode', 0o600) if key == 'env' else 0o600
                         self._atomic_bytes(path, base64.b64decode(original, validate=True), mode)
