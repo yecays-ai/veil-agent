@@ -118,7 +118,7 @@ def repair(root, file, *, confirm=input, notice=print):
         stamp = _utc_stamp()
         original_copy = path.with_name(f'{path.name}.corrupt-{stamp}')
         shutil.copy2(path, original_copy)
-        with original_copy.open('rb') as handle:
+        with original_copy.open('r+b') as handle:  # Windows fsync needs a writable handle
             os.fsync(handle.fileno())
         if _sha256(original_copy) != _sha256(path):
             original_copy.unlink(missing_ok=True)
