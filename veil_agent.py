@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
+import ledger_recovery
 from background import append_context_log, background_context, background_path, context_chars, request_kind
 from contextlib import contextmanager, nullcontext
 
@@ -351,6 +352,11 @@ def saving():
         raise KeyboardInterrupt
 
 
+def _ps_literal(value):
+    """A PowerShell single-quoted literal: `$name` and `$(...)` are not expanded."""
+    return "'" + str(value).replace("'", "''") + "'"
+
+
 class Store:
     def __init__(self, root):
         self.mutex = threading.RLock()
@@ -359,6 +365,14 @@ class Store:
         if marker.exists():
             raise UserError(self._incomplete_restore_message(marker))
         self.root.mkdir(parents=True, exist_ok=True)
+
+    def _repair_hint(self, path):
+        return ('请保留 data 文件夹；先完全关闭 VEIL，再运行 '
+                f'.venv\\Scripts\\python.exe data_repair.py diagnose --file {_ps_literal(path)} 查看，'
+                '确认后运行同一命令的 repair 修复（会先保存原文件，不删除任何东西）。')
+
+    def _damaged_message(self, path):
+        return '本机账本损坏，已停止；不要手动删除记录。' + self._repair_hint(path)
 
     @staticmethod
     def _incomplete_restore_message(marker):
@@ -374,11 +388,9 @@ class Store:
         if original:
             lines.append(f'你原来的数据保存在：{original}。请不要删除它。')
         if backup:
-            def literal(value):  # PowerShell single quotes do not expand $name or $(...)
-                return "'" + str(value).replace("'", "''") + "'"
             lines.append('重新完成恢复：先完全关闭 VEIL，再在项目目录运行 '
-                         f'.venv\\Scripts\\python.exe backup_restore.py restore --backup {literal(backup)} '
-                         f'--target {literal(marker.parent)} --replace')
+                         f'.venv\\Scripts\\python.exe backup_restore.py restore --backup {_ps_literal(backup)} '
+                         f'--target {_ps_literal(marker.parent)} --replace')
         lines.append('详见 docs/backup-and-restore.md。')
         return '\n'.join(lines)
 
@@ -391,7 +403,7 @@ class Store:
             with path.open(encoding='utf-8') as handle:
                 return [json.loads(line) for line in handle if line.strip()]
         except (ValueError, UnicodeError) as exc:
-            raise UserError('本机账本损坏，已停止；请保留 data 文件夹，不要删除记录。') from exc
+            raise UserError(self._damaged_message(path)) from exc
 
     @synchronized
     def read_tail(self, name, limit):
@@ -419,7 +431,7 @@ class Store:
             records = records[-limit:]
             return [json.loads(line.decode('utf-8')) for line in records]
         except (ValueError, UnicodeError) as exc:
-            raise UserError('本机账本损坏，已停止；请保留 data 文件夹，不要删除记录。') from exc
+            raise UserError(self._damaged_message(path)) from exc
 
     @synchronized
     def append(self, name, event):
@@ -430,7 +442,7 @@ class Store:
             with path.open('rb') as handle:
                 handle.seek(-1, os.SEEK_END)
                 if handle.read(1) != b'\n':
-                    raise UserError('账本末行不完整，已停止；请保留 data 文件夹。')
+                    raise UserError('账本末行不完整，已停止；' + self._repair_hint(path))
         data = (json.dumps({'time': now(), **event}, ensure_ascii=False) + '\n').encode('utf-8')
         with path.open('ab', buffering=0) as handle:
             if handle.write(data) != len(data):
@@ -925,6 +937,12 @@ class Budget:
         # belongs to an earlier process that stopped mid-request.
         self.recover_interrupted()
 
+    def _require_verified(self):
+        """After a restore or repair left cost records unverified, no new paid request starts."""
+        if ledger_recovery.is_unverified(self.store.root):
+            raise BudgetExceeded('费用账本有待核实的记录，已暂停所有付费请求，未发送。请先关闭 VEIL，对照供应商账单后运行 '
+                                 '.venv\\Scripts\\python.exe data_repair.py ledger-status / ledger-verify。')
+
     @contextmanager
     def autonomous(self, character, daily=None):
         previous = (getattr(self.local, 'autonomy', None), getattr(self.local, 'category', None))
@@ -978,7 +996,7 @@ class Budget:
                     day += amount
             return day, pending
         except (KeyError, ValueError, TypeError, ArithmeticError) as exc:
-            raise UserError('花费账本无法核对，已停止；请保留 data 文件夹。') from exc
+            raise UserError('花费账本无法核对，已停止；请保留 data 文件夹，关闭 VEIL 后运行 .venv\\Scripts\\python.exe data_repair.py diagnose --file data\\costs.jsonl 查看。') from exc
 
     def _reserve_category(self, amount):
         character = getattr(self.local, 'autonomy', None)
@@ -1021,7 +1039,7 @@ class Budget:
                         month += amount
             return day, month, pending
         except (KeyError, ValueError, TypeError, ArithmeticError) as exc:
-            raise UserError('花费账本无法核对，已停止；请保留 data 文件夹。') from exc
+            raise UserError('花费账本无法核对，已停止；请保留 data 文件夹，关闭 VEIL 后运行 .venv\\Scripts\\python.exe data_repair.py diagnose --file data\\costs.jsonl 查看。') from exc
 
     @synchronized
     def reserve(self, cfg, *, accounting=None, category=None):
@@ -1029,6 +1047,7 @@ class Budget:
         amount = p['cny_per_call'] if p.get('cny_per_call') else (
             p['max_input_tokens'] * p['input_cny_per_million']
             + cfg.max_output_tokens * p['output_cny_per_million']) / MILLION
+        self._require_verified()
         day, month, pending = self.totals()
         active_category, character = self._reserve_category(amount)
         category = category or active_category
@@ -1050,6 +1069,7 @@ class Budget:
         if type(tokens) is not int or tokens < 0 or not rate.is_finite() or rate < 0:
             raise UserError('向量费用配置无效。')
         amount = tokens * rate / MILLION
+        self._require_verified()
         day, month, pending = self.totals()
         category, active_character = self._reserve_category(amount)
         self._enforce_category_budget(category, active_character, amount)
@@ -1067,6 +1087,7 @@ class Budget:
         amount = Decimal(str(amount))
         if not amount.is_finite() or amount < 0:
             raise UserError('费用预估无效，未发送。')
+        self._require_verified()
         day, month, pending = self.totals()
         category, active_character = self._reserve_category(amount)
         self._enforce_category_budget(category, active_character, amount)
@@ -1086,6 +1107,7 @@ class Budget:
                 or not in_rate.is_finite() or not out_rate.is_finite() or in_rate < 0 or out_rate < 0):
             raise UserError('记忆模型费用配置无效。')
         amount = Decimal(str(fixed)) if fixed is not None else (tokens_in * in_rate + tokens_out * out_rate) / MILLION
+        self._require_verified()
         day, month, pending = self.totals()
         category, active_character = self._reserve_category(amount)
         self._enforce_category_budget(category, active_character, amount)
@@ -1161,6 +1183,8 @@ class Budget:
         Memory/embedding/notes estimates keep their conservative full charge. Chat, autonomy and
         glance requests are charged in full only if they were marked as dispatched; otherwise the
         provider was never called and nothing is charged. Returns the number of settled entries."""
+        if ledger_recovery.is_unverified(self.store.root):
+            return 0  # never settle anything while the ledger is unverified
         self.totals()  # Validate the full ledger before recovering any entry.
         rows = self.store.read('costs.jsonl')
         settled = {row.get('id') for row in rows if row.get('type') == 'settle'}
@@ -1276,7 +1300,7 @@ class Budget:
                             prompt += event['prompt_tokens']
                             cached += event['cached_tokens']
         except (KeyError, TypeError) as exc:
-            raise UserError('花费账本无法核对，已停止；请保留 data 文件夹。') from exc
+            raise UserError('花费账本无法核对，已停止；请保留 data 文件夹，关闭 VEIL 后运行 .venv\\Scripts\\python.exe data_repair.py diagnose --file data\\costs.jsonl 查看。') from exc
         if not prompt and not unknown:
             return '今天还没有聊天模型的用量记录，缓存命中率暂无。'
         if not prompt:
@@ -1296,7 +1320,9 @@ class Budget:
         short_term = (all_short_term if character is None else
                       self.category_totals(character, stamp, 'short_term_notes')[0])
         chat = day - all_autonomy - all_glance - all_short_term
-        return (f'今天 ¥{day:.6f} / {self.daily}；本月 ¥{month:.6f} / {self.monthly}；'
+        warning = ('【费用账本有待核实的记录，已暂停所有付费请求；见 data_repair.py ledger-status】'
+                   if ledger_recovery.is_unverified(self.store.root) else '')
+        return (warning + f'今天 ¥{day:.6f} / {self.daily}；本月 ¥{month:.6f} / {self.monthly}；'
                 f'待核对预留 ¥{pending:.6f}；其中聊天 ¥{chat:.6f}，自主 ¥{autonomy:.6f} / '
                 f'{self.autonomy_daily}/日（自主是上限，不是消费目标），瞄一眼 ¥{glance:.6f} / '
                 f'{self.glance_daily}/日，短期便签提取 ¥{short_term:.6f}')
@@ -1319,7 +1345,7 @@ class Budget:
                 amount, count = totals.get(event.get('model', '?'), (Decimal(0), 0))
                 totals[event.get('model', '?')] = (amount + Decimal(settlements[key]['amount']), count + 1)
         except (KeyError, ValueError, TypeError, ArithmeticError) as exc:
-            raise UserError('花费账本无法核对，已停止；请保留 data 文件夹。') from exc
+            raise UserError('花费账本无法核对，已停止；请保留 data 文件夹，关闭 VEIL 后运行 .venv\\Scripts\\python.exe data_repair.py diagnose --file data\\costs.jsonl 查看。') from exc
         if not totals:
             return ''
         return '今天按模型：' + '；'.join(f'{model} ¥{amount:.4f}（{count} 次）'

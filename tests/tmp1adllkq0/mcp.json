@@ -1,0 +1,15 @@
+{
+  "enabled": true,
+  "services": [
+    {
+      "id": "echo",
+      "command": "/usr/local/bin/python3",
+      "args": [
+        "/home/user/veil-agent/tests/fixtures/mcp_echo_server.py"
+      ],
+      "cwd": "/home/user/veil-agent/tests/tmp1adllkq0/working",
+      "enabled": true,
+      "permission": "ask"
+    }
+  ]
+}

@@ -3,6 +3,13 @@
 - 分支 `ticket/200-mcp-start-timeout`：`mcp_services.py` 加 `START_TIMEOUT = 60`、`START_WATCHDOG = 65`，启动握手与两处看门狗（`view` 和 `_worker`）改用它们；`_startup_failure_message` 把 ExceptionGroup 里的 TimeoutError 翻成人话。工具调用超时 `CALL_TIMEOUT` 不变。
 - 未验证：Windows 真机重启后花园服务（`E:\Peter-Agent\secrets\galatea-mcp.cmd` 包装脚本）自动连接。与 PR #249（工单 199）同改 STATUS/HANDOFF，合并顺序注意冲突。
 
+## 工单 199 交接（2026-11-02）
+
+- 分支 `ticket/199-ledger-recovery`：新增 `ledger_recovery.py`（逐行读取、费用行校验、按 id 与生命周期步骤的账本合并、「费用待核实」标记 `data/costs-unverified.json` 与证据文件）、`data_repair.py`（diagnose / repair / ledger-status / ledger-verify，需先关闭 VEIL）；`backup_restore.py` 的 `--replace` 在完整性复核后对账（也读中断前的第一份安全副本）；`veil_agent.py` 的 `Budget` 在待核实时拒绝新的付费请求（已发出的请求仍可结算），`Store` 报错写出命令。
+- 决定：冲突时保留备份里的行，另一版本存证据；任何无法确认的都不当零元、不丢弃，用暂停付费请求换取人工核对；验证只在隔离的假数据上做。
+- 未验证：Windows 真机的恢复与修复流程；真实账本里是否出现过冲突或损坏。
+- 工单 197：lan 自述已成功备份一次；update.bat 备份失败停止、桌面设置恢复等验收项还没有她的确认。
+
 ## 工单 197 交接（2026-11-02）
 
 - 分支 `ticket/197-backup-coverage`：`backup_restore.py`（桌面数据组件 `desktop-data`、空间检查、`pre-update`/`usage` 子命令、恢复标记里的 `original_safety_copy`、重跑失败保持标记）、`veil_agent.py`（`Store` 的未完成恢复提示）、`update.bat`（有新版本才备份，失败停止，`--skip-backup`）、`.env.example`、`docs/backup-and-restore.md`。

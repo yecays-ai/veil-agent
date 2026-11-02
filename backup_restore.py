@@ -15,6 +15,8 @@ import tempfile
 import tomllib
 import uuid
 
+import ledger_recovery
+
 
 FORMAT_VERSION = 1
 DATA_LAYOUT_VERSION = 1
@@ -579,6 +581,61 @@ def _copy_atomic(source, destination):
         temporary.unlink(missing_ok=True)
 
 
+def _reconcile_ledger(target, sources, notice):
+    """After a replace restore, keep the cost records the backup does not have.
+
+    ``sources`` are folders holding the pre-restore data (the safety copies). Every request
+    keeps its whole reserve/dispatch/settle lifecycle; anything that cannot be reconciled is
+    kept as evidence and pauses paid requests until a person verifies the costs."""
+    restored = target / "data" / "costs.jsonl"
+    for source in sources:
+        current = Path(source) / "data" / "costs.jsonl"
+        try:
+            ledger_recovery.carry_unverified(Path(source) / "data", target / "data")
+        except (ValueError, OSError) as exc:
+            raise BackupError(f"恢复前的待核实标记无法带入：{exc}") from exc
+        if current.is_symlink():
+            raise BackupError("恢复前的费用账本是符号链接，已停止。")
+        if not current.is_file():
+            continue
+        if restored.is_symlink():
+            raise BackupError("恢复后的账本是符号链接，已停止。")
+        restored_raw = restored.read_bytes() if restored.is_file() else b""
+        current_raw = current.read_bytes()
+        if current_raw == restored_raw:
+            continue
+        result = ledger_recovery.merge_cost_ledgers(restored_raw, current_raw)
+        try:
+            ledger_recovery.validate_cost_ledger(result.merged)
+        except ValueError as exc:
+            raise BackupError(f"费用账本对账后无法通过校验（{exc}），正在回滚整个目标数据集。") from exc
+        if result.merged != restored_raw:
+            temporary = restored.with_name(restored.name + f".{uuid.uuid4().hex}.tmp")
+            try:
+                with temporary.open("wb") as handle:
+                    handle.write(result.merged)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(temporary, restored)
+            finally:
+                temporary.unlink(missing_ok=True)
+        notice(
+            f"费用账本已与恢复前的账本对账：补回备份之后的 {result.new_requests} 个请求、"
+            f"{result.completed} 个后续结算/发出记录（每个请求的完整过程都保留）。"
+        )
+        if result.evidence:
+            name = ledger_recovery.UNVERIFIED_EVIDENCE
+            if ledger_recovery.append_evidence(target / "data", result.evidence) or \
+                    not ledger_recovery.is_unverified(target / "data"):
+                ledger_recovery.mark_unverified(target / "data", "restore-reconciliation",
+                                                len(result.evidence), name)
+            notice(
+                f"有 {len(result.evidence)} 处无法确认（两份账本不一致或有损坏的行）：已原样保存在 data/{name}，"
+                "没有按零元处理，也没有丢弃；所有付费请求已暂停。请核对供应商账单后运行 "
+                "data_repair.py ledger-verify。"
+            )
+
+
 def _restore_desktop(backup, names, live_dir, side_parent, running, notice):
     """Put saved desktop settings back without ever overwriting a desktop config in use.
 
@@ -727,6 +784,12 @@ def restore_backup(backup, target, *, replace=False, confirm=input, desktop_dir=
                             destination = target / Path(*PurePosixPath(entry["path"]).parts[1:])
                             if destination.stat().st_size != entry["size"] or _sha256(destination) != entry["sha256"]:
                                 raise BackupError("恢复后完整性复核失败，正在回滚整个目标数据集。")
+                        if safety is not None or original_safety is not None:
+                            sources = []
+                            for candidate in (original_safety, safety):
+                                if candidate is not None and str(candidate) not in [str(item) for item in sources]:
+                                    sources.append(candidate)
+                            _reconcile_ledger(target, sources, notice)
                     except Exception as failure:
                         rollback_errors = []
                         for destination, staged_component in reversed(installed):
