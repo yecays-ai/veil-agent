@@ -1,3 +1,8 @@
+## 工单 194 交接（2026-11-02）
+
+- 分支 `ticket/194-glance-no-recall`：`veil_agent.py` 里 `skip_recall = codex_watch_mode or glance_mode`，自动召回与召回引用都跳过。未改记忆工具。
+- 未验证：Windows 实机瞄一眼后的 context-log。与 PR #243（工单 193）同改 STATUS/HANDOFF，合并时注意顺序和冲突。
+
 ## 工单 190 交接（2026-11-02）
 
 - 当前分支 `ticket/190-life-records-center`，本地从 main `d4a868c` 建立；Git CLI 推送因执行环境 DNS 受限，GitHub 连接器可读写仓库。
@@ -249,4 +254,4 @@
 - 工单 191：聊天窗口右上角「铺满」按钮改为开关，再点一次恢复到铺满前的小窗（记住铺满前位置大小；Win+↑ 最大化的窗口点一次也会还原）。
 
 - 工单 192：生活页改待办便签（圆圈打勾划掉、`repeat: daily` 每天 0 点复位、已完成一次性便签超过 30 条折叠）+ 日历心情；日记入口移除，旧日记记录保留但不显示；`life_record` 工具新增 `mood`、`repeat`，不能再新建日记；自主唤醒内容改为当天日历标题 + 全部未完成待办数。分支 `ticket/192-life-todo-calendar`；需要 update.bat；Windows 体验待 Lan 验收；`tests.test_autonomy` 4 项因既有 `test_tools` 导入错误失败（改动前后相同）。下一个工单号 193。
-- 工单 193：生活页待办改为便签卡（每件事单独勾选，底部可新增，勾掉划线保留）；`life_record` 说明要求每件待办单独一条。分支 `ticket/193-todo-sticky`；需要 update.bat；Windows 体验待 Lan 验收。下一个工单号 194。
+- 工单 193：生活页待办改为便签卡（每件事单独勾选，底部可新增，勾掉划线保留）；`life_record` 说明要求每件待办单独一条。分支 `ticket/193-todo-sticky`；需要 update.bat；Windows 体验待 Lan 验收。下一个工单号 195。
