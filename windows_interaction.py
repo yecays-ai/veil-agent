@@ -1673,10 +1673,31 @@ class WindowsInteractionTools:
                                     raise ObservationError('Lab destination directory changed.')
                                 # Exclusive creation also refuses a file that appears after the initial check.
                                 flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_BINARY', 0)
-                                with os.fdopen(os.open(dest_file, flags, 0o600), 'wb') as handle:
-                                    handle.write(png_bytes)
-                                    handle.flush()
-                                    os.fsync(handle.fileno())
+                                fd = os.open(dest_file, flags, 0o600)
+                                created = os.fstat(fd)
+                                handle = None
+                                try:
+                                    handle = os.fdopen(fd, 'wb')
+                                    with handle:
+                                        handle.write(png_bytes)
+                                        handle.flush()
+                                        os.fsync(handle.fileno())
+                                except Exception:
+                                    # A failed write must not reserve the filename with a partial PNG.
+                                    # Never remove a different file if another process replaced ours.
+                                    if handle is None:
+                                        try:
+                                            os.close(fd)
+                                        except OSError:
+                                            pass
+                                    try:
+                                        existing_file = dest_file.stat(follow_symlinks=False)
+                                        if ((existing_file.st_dev, existing_file.st_ino)
+                                                == (created.st_dev, created.st_ino)):
+                                            dest_file.unlink()
+                                    except OSError:
+                                        pass
+                                    raise
                             return png_bytes
                         png_bytes, _snapshot = self._run_action_with_input_guard(do_save, stop)
                         rel_saved = str(dest_file.relative_to(lab_root)).replace('\\', '/')

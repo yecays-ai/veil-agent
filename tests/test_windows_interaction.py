@@ -1218,7 +1218,6 @@ max_steps = 3
             shutil.rmtree(temp_dir, ignore_errors=True)
 
     def test_canvas_save_refuses_file_created_after_path_check(self):
-        import shutil
         with tempfile.TemporaryDirectory() as temp_dir:
             tools, backend = self.make_tools()
             paint_path = r'C:\Program Files\PaintApp\PaintApp.exe'
@@ -1254,11 +1253,15 @@ max_steps = 3
             }
             original_capture = backend.capture_window
             redirected = Path(temp_dir) / 'drawings'
+            probe = Path(temp_dir) / 'link_probe'
+            try:
+                probe.symlink_to(outside_dir, target_is_directory=True)
+            except OSError:
+                self.skipTest('directory links are unavailable for this account')
+            else:
+                probe.unlink()
             def race(selected, stopped):
-                try:
-                    redirected.symlink_to(outside_dir, target_is_directory=True)
-                except OSError:
-                    self.skipTest('directory links are unavailable for this account')
+                redirected.symlink_to(outside_dir, target_is_directory=True)
                 return original_capture(selected, stopped)
             backend.capture_window = race
             _, state, _ = tools.invoke('windows_canvas_action', {
@@ -1267,6 +1270,24 @@ max_steps = 3
             })
             self.assertNotEqual(state, '成功')
             self.assertFalse((Path(outside_dir) / 'sun.png').exists())
+
+    def test_canvas_save_removes_partial_file_after_write_failure(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            tools, backend = self.make_tools()
+            paint_path = r'C:\Program Files\PaintApp\PaintApp.exe'
+            backend.windows[0]['process_path'] = paint_path
+            tools.lab = Path(temp_dir)
+            tools.discovered_applications['app_paint'] = {
+                'app_id': 'app_paint', 'label': 'Paint', 'can_interact': True,
+                'process_paths': (paint_path,), 'actions': ['canvas'],
+            }
+            with patch('windows_interaction.os.fsync', side_effect=OSError('fake disk failure')):
+                _, state, _ = tools.invoke('windows_canvas_action', {
+                    'app_id': 'app_paint', 'window_id': WINDOW_ID,
+                    'action': 'save_to_lab', 'lab_path': 'drawings/sun.png',
+                })
+            self.assertNotEqual(state, '成功')
+            self.assertFalse((Path(temp_dir) / 'drawings' / 'sun.png').exists())
 
     def test_canvas_action_validations(self):
         tools, backend = self.make_tools()
