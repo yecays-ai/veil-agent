@@ -224,7 +224,7 @@ class BrowserTools:
         public_url(self.page.url)
         data = await self.page.evaluate(SNAPSHOT)
         # Keep room for links: long (e.g. Chinese) page text is cut by bytes, not only characters.
-        data['text'] = data['text'].encode('utf-8')[:TEXT_BYTES].decode('utf-8', 'ignore')
+        data['text'] = data['text'].encode('utf-8', 'ignore')[:TEXT_BYTES].decode('utf-8', 'ignore')
         self.serial += 1
         self.links = {}
         result_links = []
