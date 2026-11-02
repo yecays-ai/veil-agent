@@ -1,5 +1,9 @@
 # 本机私有内容，永不提交
 .env
+.env.models-*.pending
+.env.models-*.pending.tmp
+.env.models-stage
+.env.models-*.stage
 *.local.*
 config.toml
 persona/*.md
@@ -27,4 +31,5 @@ desktop/.npm-cache/
 desktop/test-output/
 desktop/.build/
 desktop/.runtime-data/
+
 

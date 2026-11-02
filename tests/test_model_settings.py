@@ -7,6 +7,7 @@ from unittest.mock import Mock, patch
 
 from model_settings import ModelSettings, SettingsError
 from veil_agent import Budget, Chat, Store, background_cfg, load_character, make_model
+from agent_types import UserError
 
 TOML = '''name = "Test"
 provider = "fake"
@@ -83,6 +84,183 @@ class ModelSettingsTests(unittest.TestCase):
         self.assertEqual((cfg.provider_name, cfg.provider['model']), ('fake', 'fake-model'))
         self.assertEqual(cfg.background_provider['model'], 'fake-model')
         self.assertEqual(cfg.models.limits(), (Decimal('10'), Decimal('300')))
+
+    def test_corrupt_existing_config_never_falls_back_or_changes_file(self):
+        path = self.root / 'data' / 'test' / 'models.json'
+        path.parent.mkdir(parents=True)
+        for raw in ('{broken', '[]', '{"models": "bad"}',
+                    '{"use": {"peter": "mabcdef"}}',
+                    '{"endpoints": [{"name": "broken"}]}'):
+            with self.subTest(raw=raw):
+                path.write_text(raw, encoding='utf-8')
+                with self.assertRaises(UserError):
+                    load_character(self.root, 'test')
+                self.assertEqual(path.read_text(encoding='utf-8'), raw)
+        path.write_text('{"endpoints": [], "models": [], "use": {}, "limits": {}}', encoding='utf-8')
+        self.assertEqual(load_character(self.root, 'test').provider['model'], 'fake-model')
+
+    def test_valid_older_model_defaults_are_kept(self):
+        path = self.root / 'data' / 'test' / 'models.json'
+        path.parent.mkdir(parents=True)
+        legacy = {'endpoints': [{'id': 'eabcdef', 'name': 'old', 'base_url': 'https://old.invalid/v1'}],
+                  'models': [{'id': 'mabcdef', 'endpoint': 'eabcdef', 'model': 'old-model',
+                              'billing': 'tokens', 'input_cny_per_million': '1',
+                              'output_cny_per_million': '2'}],
+                  'use': {'peter': 'mabcdef'}}
+        path.write_text(json.dumps(legacy), encoding='utf-8')
+        cfg = load_character(self.root, 'test')
+        self.assertEqual(cfg.provider['model'], 'old-model')
+        self.assertEqual(cfg.provider['cached_input_cny_per_million'], Decimal('1'))
+        self.assertEqual(cfg.provider['max_input_tokens'], 32768)
+
+    def test_key_and_model_transaction_recovers_after_second_write_failure(self):
+        cfg = load_character(self.root, 'test')
+        initial_env = (self.root / '.env').read_bytes()
+        path = cfg.models.path
+        original_write = cfg.models._write
+        def fail_write(data):
+            raise OSError('fictional write failure')
+        with patch.object(cfg.models, '_write', side_effect=fail_write):
+            with self.assertRaises(OSError):
+                cfg.models.save(RELAY)
+        self.assertEqual((self.root / '.env').read_bytes(), initial_env)
+        self.assertFalse(path.exists())
+        self.assertFalse(cfg.models.journal.exists())
+        self.assertEqual(load_character(self.root, 'test').provider['model'], 'fake-model')
+        cfg.models._write = original_write
+        cfg.models.save(RELAY)
+        self.assertTrue(path.exists())
+        self.assertIn('sk-fake-relay-1234', (self.root / '.env').read_text(encoding='utf-8'))
+
+    def test_env_write_failure_keeps_old_files_and_can_retry(self):
+        cfg = load_character(self.root, 'test')
+        before = (self.root / '.env').read_bytes()
+        with patch.object(cfg.models, '_write_env', side_effect=OSError('fake denied')):
+            with self.assertRaises(OSError):
+                cfg.models.save(RELAY)
+        self.assertEqual((self.root / '.env').read_bytes(), before)
+        self.assertFalse(cfg.models.path.exists())
+        self.assertFalse(cfg.models.journal.exists())
+        cfg.models.save(RELAY)
+        self.assertEqual(len(load_character(self.root, 'test').models.public()['endpoints']), 1)
+
+    def test_model_selection_waits_for_both_files_to_finish(self):
+        import threading
+        cfg = load_character(self.root, 'test')
+        env_written = threading.Event()
+        finish = threading.Event()
+        selected = threading.Event()
+        selecting_started = threading.Event()
+        errors = []
+        original = cfg.models._write
+        def paused_write(data):
+            env_written.set()
+            self.assertTrue(finish.wait(5))
+            original(data)
+        def save():
+            try:
+                cfg.models.save(RELAY)
+            except Exception as exc:
+                errors.append(exc)
+        def select():
+            selecting_started.set()
+            try:
+                cfg.models.chosen('peter')
+                selected.set()
+            except Exception as exc:
+                errors.append(exc)
+        with patch.object(cfg.models, '_write', side_effect=paused_write):
+            saving = threading.Thread(target=save)
+            saving.start()
+            self.assertTrue(env_written.wait(5))
+            selecting = threading.Thread(target=select)
+            selecting.start()
+            self.assertTrue(selecting_started.wait(5))
+            self.assertFalse(selected.wait(0.1))
+            finish.set()
+            saving.join(5)
+            selecting.join(5)
+        self.assertFalse(saving.is_alive())
+        self.assertFalse(selecting.is_alive())
+        self.assertEqual(errors, [])
+        self.assertTrue(selected.is_set())
+        self.assertFalse(cfg.models.journal.exists())
+
+    def test_cleanup_sync_failure_does_not_report_committed_save_as_failed(self):
+        cfg = load_character(self.root, 'test')
+        original = cfg.models._sync_directory
+        def fail_cleanup(directory):
+            if not cfg.models.journal.exists():
+                raise OSError('fictional cleanup sync failure')
+            original(directory)
+        with patch.object(cfg.models, '_sync_directory', side_effect=fail_cleanup):
+            view = cfg.models.save(RELAY)
+        self.assertEqual(len(view['endpoints']), 1)
+        self.assertEqual(len(load_character(self.root, 'test').models.public()['endpoints']), 1)
+
+    def test_second_instance_model_call_waits_for_shared_env_transaction(self):
+        import threading
+        first = load_character(self.root, 'test')
+        second = load_character(self.root, 'test')
+        entered = threading.Event()
+        finish = threading.Event()
+        called = threading.Event()
+        requesting_started = threading.Event()
+        errors = []
+        original = first.models._write
+        def paused_write(data):
+            entered.set()
+            if not finish.wait(5):
+                raise AssertionError('save did not resume')
+            original(data)
+        def save():
+            try:
+                first.models.save(RELAY)
+            except Exception as exc:
+                errors.append(exc)
+        def request(call):
+            requesting_started.set()
+            try:
+                call([{'role': 'user', 'content': 'fake'}])
+                called.set()
+            except Exception as exc:
+                errors.append(exc)
+        fake = Mock()
+        fake.chat.completions.create.return_value.usage.prompt_tokens = 1
+        fake.chat.completions.create.return_value.usage.completion_tokens = 1
+        fake.chat.completions.create.return_value.choices = [Mock(message=Mock(content='ok'))]
+        with patch('openai.OpenAI', return_value=fake):
+            _, call = make_model(self.root, second)
+            with patch.object(first.models, '_write', side_effect=paused_write):
+                saving = threading.Thread(target=save)
+                saving.start()
+                self.assertTrue(entered.wait(5))
+                requesting = threading.Thread(target=request, args=(call,))
+                requesting.start()
+                self.assertTrue(requesting_started.wait(5))
+                self.assertFalse(called.wait(0.1))
+                finish.set()
+                saving.join(5)
+                requesting.join(5)
+        self.assertFalse(saving.is_alive())
+        self.assertFalse(requesting.is_alive())
+        self.assertEqual(errors, [])
+        self.assertTrue(called.is_set())
+
+    def test_interrupted_save_rolls_back_on_restart(self):
+        cfg = load_character(self.root, 'test')
+        initial_env = (self.root / '.env').read_bytes()
+        import base64
+        record = {'state': 'prepared', 'env': base64.b64encode(initial_env).decode('ascii'), 'models': None}
+        cfg.models._atomic_bytes(cfg.models.journal, json.dumps(record).encode())
+        (self.root / '.env').write_text('FAKE_KEY=half-new\n', encoding='utf-8')
+        cfg.models.path.parent.mkdir(parents=True)
+        cfg.models.path.write_text('{"use": {"peter": "mabcdef"}}', encoding='utf-8')
+        restarted = load_character(self.root, 'test')
+        self.assertEqual((self.root / '.env').read_bytes(), initial_env)
+        self.assertFalse(cfg.models.path.exists())
+        self.assertFalse(cfg.models.journal.exists())
+        self.assertEqual(restarted.provider['model'], 'fake-model')
 
     def test_peter_and_background_pick_separately_and_survive_restart(self):
         cfg, model_id = self.add_relay()
@@ -247,3 +425,4 @@ class ProviderErrorTests(unittest.TestCase):
         self.assertEqual(rows[0]['status'], 401)
         self.assertIn('sk-***', rows[0]['detail'])
         self.assertNotIn('abcdef123456', rows[0]['detail'])
+

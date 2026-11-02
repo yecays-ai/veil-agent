@@ -1145,18 +1145,21 @@ class Hub(ScreenPopMixin):
 
     def save_models(self, payload):
         models = self.chat.cfg.models
-        before = models.chosen('peter')
-        models.save(payload)
-        self.chat.budget.daily, self.chat.budget.monthly = models.limits()
-        after = models.chosen('peter')
-        if after[0] != before[0] or after[2] != before[2]:
-            self.chat.switch_model(after[1], after[2])
+        with models.env_lock, models.lock:
+            before = models.chosen('peter')
+            models.save(payload)
+            self.chat.budget.daily, self.chat.budget.monthly = models.limits()
+            after = models.chosen('peter')
+            if after[0] != before[0] or after[2] != before[2]:
+                self.chat.switch_model(after[1], after[2])
         return self.refresh_models()
 
     def use_model(self, role, model_id):
-        model_id, name, provider = self.chat.cfg.models.use(role, model_id)
-        if role == 'peter':
-            self.chat.switch_model(name, provider)
+        models = self.chat.cfg.models
+        with models.env_lock, models.lock:
+            model_id, name, provider = models.use(role, model_id)
+            if role == 'peter':
+                self.chat.switch_model(name, provider)
         return self.refresh_models()
 
     def set_codex_watch(self, enabled):
@@ -2106,7 +2109,7 @@ def make_handler(hub, token):
             except SettingsError as exc:
                 self._send(400, {'ok': False, 'message': str(exc)})
             except OSError:
-                self._send(500, {'ok': False, 'message': '设置文件写不进去，请检查磁盘。'})
+                self._send(500, {'ok': False, 'message': '模型设置保存结果未确认，请检查磁盘权限，重启后核对再重试。'})
             else:
                 self._send(200, {'ok': True, 'models': view})
 

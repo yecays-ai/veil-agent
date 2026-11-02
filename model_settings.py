@@ -10,6 +10,9 @@ import json
 import os
 import re
 import secrets
+import base64
+import shutil
+import stat
 import threading
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -22,6 +25,7 @@ DEFAULT_MAX_INPUT = 32768
 MAX_ENDPOINTS = 20
 MAX_MODELS = 60
 ID_PATTERN = re.compile(r'[em][0-9a-f]{6}')
+_ENV_LOCK = threading.RLock()
 
 
 class SettingsError(ValueError):
@@ -68,45 +72,125 @@ class ModelSettings:
         self.root = Path(root)
         self.env_path = self.root / '.env'
         self.path = self.root / 'data' / character_id / 'models.json'
+        self.journal = self.root / f'.env.models-{character_id}.pending'
+        self.env_stage = self.root / f'.env.models-{character_id}.stage'
         self.builtins = dict(builtins)
         self.default = BUILTIN_PREFIX + default_name
         self.lock = threading.RLock()
+        self.env_lock = _ENV_LOCK
+        self.blocked = False
+        with _ENV_LOCK:
+            self._recover()
         self.data = self._clean(self._read())
 
     # ---- reading -------------------------------------------------------
+    @staticmethod
+    def _sync_directory(path):
+        if os.name == 'nt':
+            return
+        descriptor = os.open(path, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+    @staticmethod
+    def _atomic_bytes(path, content, mode=0o600):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + '.tmp')
+        try:
+            descriptor = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+            with os.fdopen(descriptor, 'wb') as stream:
+                os.chmod(tmp, mode)
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(tmp, path)
+            ModelSettings._sync_directory(path.parent)
+        finally:
+            tmp.unlink(missing_ok=True)
+
+    def _recover(self):
+        if not self.journal.exists():
+            self.blocked = False
+            try:
+                self.env_stage.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return
+        try:
+            record = json.loads(self.journal.read_text(encoding='utf-8'))
+            if record['state'] == 'prepared':
+                for path, key in ((self.env_path, 'env'), (self.path, 'models')):
+                    original = record[key]
+                    if original is None:
+                        path.unlink(missing_ok=True)
+                        if path.parent.exists():
+                            self._sync_directory(path.parent)
+                    else:
+                        mode = record.get('env_mode', 0o600) if key == 'env' else 0o600
+                        self._atomic_bytes(path, base64.b64decode(original, validate=True), mode)
+            elif record['state'] != 'committed':
+                raise ValueError('bad transaction state')
+            self.journal.unlink()
+            self._sync_directory(self.journal.parent)
+            self.env_stage.unlink(missing_ok=True)
+            self.blocked = False
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            self.blocked = True
+            raise SettingsError('模型设置上次保存未完成且无法自动恢复；已停止模型请求，请检查磁盘权限并保留配置文件。') from None
+
+    @staticmethod
+    def _snapshot(path):
+        try:
+            return base64.b64encode(path.read_bytes()).decode('ascii')
+        except FileNotFoundError:
+            return None
+
     def _read(self):
         try:
             value = json.loads(self.path.read_text(encoding='utf-8'))
-            return value if isinstance(value, dict) else {}
         except FileNotFoundError:
             return {}
         except (OSError, ValueError, UnicodeError):
-            return {}
+            raise SettingsError('模型配置 models.json 无法读取或解析；原文件已保留，请修复后重启。') from None
+        if not isinstance(value, dict):
+            raise SettingsError('模型配置 models.json 顶层必须是对象；原文件已保留。')
+        return value
 
     def _clean(self, raw):
         """Keep only entries that would pass the settings page's own checks."""
         data = {'endpoints': [], 'models': [], 'use': {}, 'limits': {}}
+        for field, kind in (('endpoints', list), ('models', list), ('use', dict), ('limits', dict)):
+            if field in raw and not isinstance(raw[field], kind):
+                raise SettingsError(f'模型配置 models.json 的 {field} 格式错误；原文件已保留。')
         for item in raw.get('endpoints') or []:
             try:
                 data['endpoints'].append(self._endpoint(item, existing={}))
-            except (SettingsError, TypeError, AttributeError):
-                continue
+            except (SettingsError, TypeError, AttributeError) as exc:
+                raise SettingsError(f'模型配置 models.json 的接口无效：{exc}；原文件已保留。') from None
         endpoint_ids = {item['id'] for item in data['endpoints']}
+        if len(endpoint_ids) != len(data['endpoints']):
+            raise SettingsError('模型配置 models.json 的接口 ID 重复；原文件已保留。')
         for item in raw.get('models') or []:
             try:
                 model = self._model(item, endpoint_ids)
-            except (SettingsError, TypeError, AttributeError):
-                continue
+            except (SettingsError, TypeError, AttributeError) as exc:
+                raise SettingsError(f'模型配置 models.json 的模型无效：{exc}；原文件已保留。') from None
             data['models'].append(model)
+        if len({item['id'] for item in data['models']}) != len(data['models']):
+            raise SettingsError('模型配置 models.json 的模型 ID 重复；原文件已保留。')
         use = raw.get('use') if isinstance(raw.get('use'), dict) else {}
         for role in ROLES:
-            if self._provider(data, use.get(role)) is not None:
+            if role in use:
+                if self._provider(data, use[role]) is None:
+                    raise SettingsError(f'模型配置 models.json 中 {role} 选中的模型不存在或无效；原文件已保留。')
                 data['use'][role] = use[role]
         limits = raw.get('limits') if isinstance(raw.get('limits'), dict) else {}
         try:
             data['limits'] = self._limits(limits) if limits else {}
-        except SettingsError:
-            data['limits'] = {}
+        except SettingsError as exc:
+            raise SettingsError(f'模型配置 models.json 的费用上限无效：{exc}；原文件已保留。') from None
         return data
 
     def _endpoint(self, item, existing):
@@ -191,10 +275,12 @@ class ModelSettings:
     def chosen(self, role):
         """(model id, provider name for SYSTEM FACTS, provider dict) for 'peter' or 'background'."""
         with self.lock:
+            if self.blocked:
+                raise SettingsError('模型设置保存未完成；已停止模型请求，请重启恢复。')
             model_id = self.data['use'].get(role, self.default)
             provider = self._provider(self.data, model_id)
             if provider is None:
-                model_id, provider = self.default, self._provider(self.data, self.default)
+                raise SettingsError(f'{role} 选中的模型无效；已停止模型请求。')
             if model_id.startswith(BUILTIN_PREFIX):
                 name = model_id[len(BUILTIN_PREFIX):]
             else:
@@ -249,7 +335,9 @@ class ModelSettings:
         if (not isinstance(endpoints_in, list) or not isinstance(models_in, list)
                 or len(endpoints_in) > MAX_ENDPOINTS or len(models_in) > MAX_MODELS):
             raise SettingsError('接口或模型太多了。')
-        with self.lock:
+        with _ENV_LOCK, self.lock:
+            if self.blocked or self.journal.exists():
+                self._recover()
             endpoints, new_keys = [], {}
             known = {item['id']: item for item in self.data['endpoints']}
             taken = set(known)
@@ -266,12 +354,16 @@ class ModelSettings:
                 endpoints.append(endpoint)
             if len({item['name'] for item in endpoints}) != len(endpoints):
                 raise SettingsError('两个接口不能同名。')
+            if len({item['id'] for item in endpoints}) != len(endpoints):
+                raise SettingsError('两个接口不能使用相同 ID。')
             endpoint_ids = {item['id'] for item in endpoints}
             models = []
             for item in models_in:
                 if not isinstance(item, dict):
                     raise SettingsError('设置格式不对。')
                 models.append(self._model(item, endpoint_ids))
+            if len({item['id'] for item in models}) != len(models):
+                raise SettingsError('两个模型不能使用相同 ID。')
             data = {'endpoints': endpoints, 'models': models, 'use': {},
                     'limits': self._limits(payload.get('limits') or {})}
             use = payload.get('use') if isinstance(payload.get('use'), dict) else self.data['use']
@@ -280,15 +372,37 @@ class ModelSettings:
                 if self._provider(data, model_id) is not None:
                     data['use'][role] = model_id
             removed = [item['key_env'] for item in self.data['endpoints'] if item['id'] not in endpoint_ids]
-            self._write_env(new_keys, removed)
-            self._write(data)
+            if not new_keys and not removed:
+                self._write(data)
+                self.data = data
+                return self.public()
+            record = {'state': 'prepared', 'env': self._snapshot(self.env_path),
+                      'models': self._snapshot(self.path),
+                      'env_mode': stat.S_IMODE(self.env_path.stat().st_mode) if self.env_path.exists() else 0o600}
+            self._atomic_bytes(self.journal, json.dumps(record).encode('utf-8'))
+            try:
+                self._write_env(new_keys, removed)
+                self._write(data)
+                self._atomic_bytes(self.journal, json.dumps({**record, 'state': 'committed'}).encode('utf-8'))
+            except Exception:
+                self._recover()
+                raise
             self.data = data
+            try:
+                self.journal.unlink()
+                self._sync_directory(self.journal.parent)
+            except OSError:
+                # Both files and the committed marker are durable. A leftover marker is
+                # cleaned on restart; cleanup must not turn a committed save into failure.
+                pass
             return self.public()
 
     def use(self, role, model_id):
         if role not in ROLES:
             raise SettingsError('不认识的用途。')
         with self.lock:
+            if self.blocked or self.journal.exists():
+                raise SettingsError('模型设置保存未完成；请重启恢复后再切换。')
             if self._provider(self.data, model_id) is None:
                 raise SettingsError('这个模型已经不在列表里了。')
             data = {**self.data, 'use': {**self.data['use'], role: model_id}}
@@ -297,19 +411,28 @@ class ModelSettings:
             return self.chosen(role)
 
     def _write(self, data):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix('.json.tmp')
-        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
-        os.replace(tmp, self.path)
+        self._atomic_bytes(self.path, (json.dumps(data, ensure_ascii=False, indent=2) + '\n').encode('utf-8'))
 
     def _write_env(self, new_keys, removed):
         if not new_keys and not removed:
             return
         from dotenv import set_key, unset_key
-        if not self.env_path.exists():
-            self.env_path.write_text('', encoding='utf-8')
-        for name, value in new_keys.items():
-            set_key(self.env_path, name, value, quote_mode='always', encoding='utf-8')
-        for name in removed:
-            if name not in new_keys:
-                unset_key(self.env_path, name, encoding='utf-8')
+        staged = self.env_stage
+        try:
+            if self.env_path.exists():
+                shutil.copy2(self.env_path, staged)
+            else:
+                staged.write_text('', encoding='utf-8')
+            os.chmod(staged, stat.S_IMODE(self.env_path.stat().st_mode) if self.env_path.exists() else 0o600)
+            for name, value in new_keys.items():
+                set_key(staged, name, value, quote_mode='always', encoding='utf-8')
+            for name in removed:
+                if name not in new_keys:
+                    unset_key(staged, name, encoding='utf-8')
+            with staged.open('rb+') as stream:
+                os.fsync(stream.fileno())
+            os.replace(staged, self.env_path)
+            self._sync_directory(self.env_path.parent)
+        finally:
+            staged.unlink(missing_ok=True)
+

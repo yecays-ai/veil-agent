@@ -24,6 +24,7 @@ from agent_types import (AUTONOMY_WAKE, BudgetExceeded, CODEX_WATCH_WAKE, EmptyR
                          GLANCE_WAKE, RequestFailed, TooLong, UserError, now)
 from desktop_files import DESKTOP_FILE_READ_TOOL_NAMES
 from tool_aliases import alias_system_messages, alias_tool_schemas, resolve_tool_name, validate_tool_aliases
+from model_settings import SettingsError
 
 ROOT = Path(__file__).resolve().parent
 MILLION = Decimal(1_000_000)
@@ -859,6 +860,8 @@ def load_character(root, character_id):
                          tool_aliases=tool_aliases)
     except UserError:
         raise
+    except SettingsError as exc:
+        raise UserError(str(exc)) from None
     except (OSError, KeyError, ValueError, TypeError, ArithmeticError) as exc:
         raise UserError('角色配置无法读取或字段无效，请检查 character.toml。') from exc
 
@@ -2599,6 +2602,17 @@ class Chat:
             self.cfg.provider_name = name
 
     def send(self, text, *, autonomy=False, **kwargs):
+        models = getattr(self.cfg, 'models', None)
+        if models is not None:
+            with models.env_lock, models.lock:
+                try:
+                    models.chosen('peter')
+                except SettingsError as exc:
+                    raise UserError(str(exc)) from None
+                return self._send_with_stable_model(text, autonomy=autonomy, **kwargs)
+        return self._send_with_stable_model(text, autonomy=autonomy, **kwargs)
+
+    def _send_with_stable_model(self, text, *, autonomy=False, **kwargs):
         self._apply_pending_model()
         # Ticket 133: background requests (wakes, glances, Codex reminders) may use a larger
         # input window than ordinary chat; chat keeps the provider limit and its cost.
@@ -3861,6 +3875,20 @@ def make_model(root, cfg, provider=None):
 
     def call(messages, *, json_output=False, max_tokens=None, thinking=None, detail=False,
              tools=None, message_output=False):
+        models = getattr(cfg, 'models', None)
+        if models is not None:
+            with models.env_lock, models.lock:
+                try:
+                    models.chosen('peter')
+                except SettingsError as exc:
+                    raise UserError(str(exc)) from None
+                return _call(messages, json_output=json_output, max_tokens=max_tokens,
+                             thinking=thinking, detail=detail, tools=tools, message_output=message_output)
+        return _call(messages, json_output=json_output, max_tokens=max_tokens,
+                     thinking=thinking, detail=detail, tools=tools, message_output=message_output)
+
+    def _call(messages, *, json_output=False, max_tokens=None, thinking=None, detail=False,
+              tools=None, message_output=False):
         p = current()
         client = client_for(p)
         extra = {}
