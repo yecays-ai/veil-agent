@@ -1,3 +1,8 @@
+## 工单 200 交接（2026-11-02）
+
+- 分支 `ticket/200-mcp-start-timeout`：`mcp_services.py` 加 `START_TIMEOUT = 60`、`START_WATCHDOG = 65`，启动握手与两处看门狗（`view` 和 `_worker`）改用它们；`_startup_failure_message` 把 ExceptionGroup 里的 TimeoutError 翻成人话。工具调用超时 `CALL_TIMEOUT` 不变。
+- 未验证：Windows 真机重启后花园服务（`E:\Peter-Agent\secrets\galatea-mcp.cmd` 包装脚本）自动连接。与 PR #249（工单 199）同改 STATUS/HANDOFF，合并顺序注意冲突。
+
 ## 工单 197 交接（2026-11-02）
 
 - 分支 `ticket/197-backup-coverage`：`backup_restore.py`（桌面数据组件 `desktop-data`、空间检查、`pre-update`/`usage` 子命令、恢复标记里的 `original_safety_copy`、重跑失败保持标记）、`veil_agent.py`（`Store` 的未完成恢复提示）、`update.bat`（有新版本才备份，失败停止，`--skip-backup`）、`.env.example`、`docs/backup-and-restore.md`。
