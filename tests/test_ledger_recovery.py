@@ -314,6 +314,11 @@ class RepairTests(unittest.TestCase):
         ledger.carry_unverified(glue_old, glue_new)
         self.assertEqual((glue_new / ledger.UNVERIFIED_EVIDENCE).read_bytes(),
                          b'{"kind": "tail"}\n{"kind": "new"}\n')
+        torn = self.root / 'torn'
+        torn.mkdir()
+        (torn / ledger.UNVERIFIED_EVIDENCE).write_bytes(b'{"kind": "half"')
+        ledger.append_evidence(torn, [{'kind': 'z'}])
+        self.assertEqual((torn / ledger.UNVERIFIED_EVIDENCE).read_bytes(), b'{"kind": "half"\n{"kind": "z"}\n')
         # an unreadable marker still brings the evidence file along
         broken_old, broken_new = self.root / 'bold', self.root / 'bnew'
         broken_old.mkdir()

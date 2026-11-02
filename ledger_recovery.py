@@ -246,10 +246,12 @@ def append_evidence(data_dir, rows, name=UNVERIFIED_EVIDENCE):
 
     Returns how many rows were new, so re-running a reconciliation never duplicates evidence."""
     path = os.path.join(str(data_dir), name)
-    existing = set()
+    existing, tail_open = set(), False
     try:
         with open(path, 'rb') as handle:
-            for raw in handle.read().splitlines():
+            content = handle.read()
+            tail_open = bool(content) and not content.endswith((b'\n', b'\r'))
+            for raw in content.splitlines():
                 try:
                     existing.add(_evidence_key(json.loads(raw.decode('utf-8'))))
                 except (ValueError, UnicodeDecodeError, AttributeError):
@@ -264,6 +266,8 @@ def append_evidence(data_dir, rows, name=UNVERIFIED_EVIDENCE):
             fresh.append(row)
     if fresh:
         payload = b''.join((json.dumps(row, ensure_ascii=False) + '\n').encode('utf-8') for row in fresh)
+        if tail_open:
+            payload = b'\n' + payload  # never glue a new row onto an unterminated last line
         with open(path, 'ab', buffering=0) as handle:
             handle.write(payload)
             os.fsync(handle.fileno())
