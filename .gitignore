@@ -2,6 +2,7 @@
 .env
 .env.models-*.pending
 .env.models-*.pending.tmp
+.env.models-stage
 .env.models-*.stage
 *.local.*
 config.toml

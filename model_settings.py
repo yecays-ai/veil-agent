@@ -111,7 +111,11 @@ class ModelSettings:
 
     def _recover(self):
         if not self.journal.exists():
-            self.env_stage.unlink(missing_ok=True)
+            self.blocked = False
+            try:
+                self.env_stage.unlink(missing_ok=True)
+            except OSError:
+                pass
             return
         try:
             record = json.loads(self.journal.read_text(encoding='utf-8'))
@@ -270,7 +274,7 @@ class ModelSettings:
     def chosen(self, role):
         """(model id, provider name for SYSTEM FACTS, provider dict) for 'peter' or 'background'."""
         with self.lock:
-            if self.blocked or self.journal.exists():
+            if self.blocked:
                 raise SettingsError('模型设置保存未完成；已停止模型请求，请重启恢复。')
             model_id = self.data['use'].get(role, self.default)
             provider = self._provider(self.data, model_id)
@@ -383,8 +387,13 @@ class ModelSettings:
                 self._recover()
                 raise
             self.data = data
-            self.journal.unlink()
-            self._sync_directory(self.journal.parent)
+            try:
+                self.journal.unlink()
+                self._sync_directory(self.journal.parent)
+            except OSError:
+                # Both files and the committed marker are durable. A leftover marker is
+                # cleaned on restart; cleanup must not turn a committed save into failure.
+                pass
             return self.public()
 
     def use(self, role, model_id):

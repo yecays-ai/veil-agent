@@ -150,28 +150,53 @@ class ModelSettingsTests(unittest.TestCase):
         env_written = threading.Event()
         finish = threading.Event()
         selected = threading.Event()
+        selecting_started = threading.Event()
+        errors = []
         original = cfg.models._write
         def paused_write(data):
             env_written.set()
             self.assertTrue(finish.wait(5))
             original(data)
         def save():
-            cfg.models.save(RELAY)
+            try:
+                cfg.models.save(RELAY)
+            except Exception as exc:
+                errors.append(exc)
         def select():
-            cfg.models.chosen('peter')
-            selected.set()
+            selecting_started.set()
+            try:
+                cfg.models.chosen('peter')
+                selected.set()
+            except Exception as exc:
+                errors.append(exc)
         with patch.object(cfg.models, '_write', side_effect=paused_write):
             saving = threading.Thread(target=save)
             saving.start()
             self.assertTrue(env_written.wait(5))
             selecting = threading.Thread(target=select)
             selecting.start()
+            self.assertTrue(selecting_started.wait(5))
             self.assertFalse(selected.wait(0.1))
             finish.set()
             saving.join(5)
             selecting.join(5)
+        self.assertFalse(saving.is_alive())
+        self.assertFalse(selecting.is_alive())
+        self.assertEqual(errors, [])
         self.assertTrue(selected.is_set())
         self.assertFalse(cfg.models.journal.exists())
+
+    def test_cleanup_sync_failure_does_not_report_committed_save_as_failed(self):
+        cfg = load_character(self.root, 'test')
+        original = cfg.models._sync_directory
+        def fail_cleanup(directory):
+            if not cfg.models.journal.exists():
+                raise OSError('fictional cleanup sync failure')
+            original(directory)
+        with patch.object(cfg.models, '_sync_directory', side_effect=fail_cleanup):
+            view = cfg.models.save(RELAY)
+        self.assertEqual(len(view['endpoints']), 1)
+        self.assertEqual(len(load_character(self.root, 'test').models.public()['endpoints']), 1)
 
     def test_interrupted_save_rolls_back_on_restart(self):
         cfg = load_character(self.root, 'test')
