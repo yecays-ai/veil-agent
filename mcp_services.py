@@ -407,7 +407,8 @@ class MCPServices:
                                        'cwd': current['cwd'], 'permission': current['permission'],
                                        'direct_grant': (rows[index].get('direct_grant') is True
                                                         if 'direct_grant' in rows[index]
-                                                        else current.get('direct_grant') is True)}
+                                                        else (current.get('direct_grant') is True
+                                                              and rows[index].get('enabled') is True))}
                 raw['services'] = rows
             config = self._validate(raw)
             self.path.parent.mkdir(parents=True, exist_ok=True)

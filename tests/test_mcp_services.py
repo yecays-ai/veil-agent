@@ -279,6 +279,25 @@ class MCPServicesTest(unittest.TestCase):
         finally:
             reopened.close()
 
+    def test_legacy_client_disable_also_revokes_managed_grant(self):
+        path = Path(self.tmp.name) / 'legacy-revoke.json'
+        service = {'id': 'nowhere', 'managed': 'nowhere', 'command': sys.executable,
+                   'args': [str(FIXTURE)], 'cwd': None, 'enabled': False,
+                   'permission': 'direct', 'direct_grant': False}
+        manager = MCPServices(path, initial_services=[service])
+        try:
+            manager.save({'enabled': True, 'services': [
+                {**service, 'enabled': True, 'direct_grant': True}]})
+            old_client_row = {key: value for key, value in service.items()
+                              if key not in {'managed', 'direct_grant'}}
+            manager.save({'enabled': True, 'services': [old_client_row]})
+            self.assertFalse(manager.view()['services'][0]['direct_grant'])
+            manager.save({'enabled': True, 'services': [{**old_client_row, 'enabled': True}]})
+            self.assertFalse(manager.view()['services'][0]['enabled'])
+            self.assertFalse(manager.view()['services'][0]['direct_grant'])
+        finally:
+            manager.close()
+
     def test_observer_url_only_accepts_loopback_root(self):
         from mcp_services import _local_observer_url
         self.assertEqual(_local_observer_url('Open: http://127.0.0.1:8712'), 'http://127.0.0.1:8712')
