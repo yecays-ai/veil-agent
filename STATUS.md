@@ -4,6 +4,7 @@
 
 ## 当前目标与现状
 
+- 工单 196「update 不再每次重下 timezonefinder」（`ticket/196-nowhere-deps-stamp`）：Nowhere 依赖安装加锁文件哈希标记，没变化就跳过 pip。现状：代码完成，Windows 实机未验证。验收：update.bat 跑两次，第二次不再出现 Downloading timezonefinder。下一个工单号 197。
 - 工单 195「自主醒来少花步数在重复读取上」（`ticket/195-wake-steps`）：步数上限 20 与 ¥3/天预算不变。浏览器工具描述说明 open/click/scroll 已带快照，页面正文 1200→3000 字（另按 4500 字节限）；醒来上下文多带前两次活动一行摘要，实验室最新文件预览改为开头加结尾。预计 +¥0.1–0.3/天，Windows 实机未验证。见 `docs/tickets/195-wake-steps.md`。
 - 工单 193「今日待办便签卡」（`ticket/193-todo-sticky`）：生活页待办改成一张便签，每件事一行各自勾选、划线保留、底部可直接新增；`life_record` 说明要求 Peter 每件事单独一条。现状：代码完成，生活记录与桌面 UI 自动测试通过，浏览器渲染截图已看；需要 update.bat；Windows 体验未验证。验收见 `docs/tickets/193-todo-sticky.md`。下一个工单号 195。
 - 工单 194「瞄一眼不再自动召回长期记忆」（`ticket/194-glance-no-recall`）：瞄一眼的请求文字是固定一句话，召回每次相同（16 次只有 5 条不同记忆）。lan 11-02 决定直接不召回；`glance_mode` 与 Codex 提醒一样跳过自动召回，Peter 仍可自己 `breath_search`。加 1 项回归测试；Windows 体验未验证。见 `docs/tickets/194-glance-no-recall.md`。
