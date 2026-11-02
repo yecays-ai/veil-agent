@@ -256,6 +256,47 @@ _RISKY_SCOPE = re.compile(
     re.IGNORECASE,
 )
 _RISKY_ACTIONS = frozenset({'invoke', 'toggle', 'select'})
+
+
+@contextlib.contextmanager
+def _locked_lab_directories(lab, parent):
+    """Keep each directory in the destination chain from being renamed on Windows."""
+    handles = []
+    try:
+        chain = (*reversed(lab.parents), lab, *parent.relative_to(lab).parts)
+        for directory in chain:
+            if not isinstance(directory, Path):
+                directory = handles[-1][0] / directory
+            if not directory.exists():
+                directory.mkdir()
+            if os.name == 'nt':
+                kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+                kernel.CreateFileW.argtypes = (ctypes.c_wchar_p, ctypes.c_uint32,
+                    ctypes.c_uint32, ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p)
+                kernel.CreateFileW.restype = ctypes.c_void_p
+                kernel.GetFileAttributesW.argtypes = (ctypes.c_wchar_p,)
+                kernel.GetFileAttributesW.restype = ctypes.c_uint32
+                handle = kernel.CreateFileW(str(directory), 0, 0x1 | 0x2, None, 3,
+                                            0x02000000 | 0x00200000, None)
+                if handle == ctypes.c_void_p(-1).value:
+                    raise OSError(ctypes.get_last_error(), 'Lab directory could not be locked')
+                handles.append((directory, handle))
+                if directory == lab or directory.is_relative_to(lab):
+                    redirected = bool(kernel.GetFileAttributesW(str(directory)) & 0x400)
+                else:
+                    redirected = False
+                if redirected:
+                    raise ObservationError('Lab destination contains a redirected directory.')
+            else:
+                handles.append((directory, None))
+            if ((directory == lab or directory.is_relative_to(lab))
+                    and directory.resolve() != directory) or not directory.is_dir():
+                raise ObservationError('Lab destination directory changed.')
+        yield
+    finally:
+        if os.name == 'nt':
+            for _, handle in reversed(handles):
+                ctypes.WinDLL('kernel32').CloseHandle(ctypes.c_void_p(handle))
 _IDLE_TICK_MARGIN_MS = 35
 MAX_KEYBOARD_FALLBACK_CHARS = 200
 # After Lan approves in VEIL, wait up to this long for 1 second without input.
@@ -1606,6 +1647,9 @@ class WindowsInteractionTools:
                     cleaned += '.png'
                 if self.lab is None:
                     return WindowsToolResult('Lab directory is not configured.', activity_detail='Lab 不可用。'), '被拒绝'
+                lab_info = self.lab.lstat()
+                if self.lab.is_symlink() or getattr(lab_info, 'st_file_attributes', 0) & 0x400:
+                    return WindowsToolResult('Lab directory was redirected.', activity_detail='Lab 路径已改变。'), '被拒绝'
                 lab_root = self.lab.resolve()
                 dest_file = (self.lab / cleaned).resolve()
                 if not dest_file.is_relative_to(lab_root):
@@ -1625,18 +1669,28 @@ class WindowsInteractionTools:
                             max_bytes = getattr(self, 'lab_max_write_bytes', None)
                             if max_bytes is not None and len(png_bytes) > max_bytes:
                                 raise ObservationError(f'Artwork size ({len(png_bytes)} bytes) exceeds Lab max write limit ({max_bytes} bytes).')
-                            dest_file.parent.mkdir(parents=True, exist_ok=True)
-                            temp_file = dest_file.with_name(dest_file.name + '.tmp')
-                            try:
-                                temp_file.write_bytes(png_bytes)
-                                temp_file.replace(dest_file)
-                            except Exception:
-                                if temp_file.exists():
+                            with _locked_lab_directories(lab_root, dest_file.parent):
+                                if dest_file.parent.resolve() != dest_file.parent:
+                                    raise ObservationError('Lab destination directory changed.')
+                                # Publish only a complete PNG. Windows rename refuses an existing
+                                # destination; POSIX link has the same no-replace guarantee.
+                                fd, temporary_name = tempfile.mkstemp(
+                                    prefix=f'.{dest_file.name}.', suffix='.tmp', dir=dest_file.parent)
+                                temporary = Path(temporary_name)
+                                try:
+                                    with os.fdopen(fd, 'wb') as handle:
+                                        handle.write(png_bytes)
+                                        handle.flush()
+                                        os.fsync(handle.fileno())
+                                    if os.name == 'nt':
+                                        os.rename(temporary, dest_file)
+                                    else:
+                                        os.link(temporary, dest_file)
+                                finally:
                                     try:
-                                        temp_file.unlink()
+                                        temporary.unlink(missing_ok=True)
                                     except OSError:
                                         pass
-                                raise
                             return png_bytes
                         png_bytes, _snapshot = self._run_action_with_input_guard(do_save, stop)
                         rel_saved = str(dest_file.relative_to(lab_root)).replace('\\', '/')

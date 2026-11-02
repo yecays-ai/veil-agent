@@ -1,3 +1,8 @@
+## 工单 201 交接（2026-11-03）
+
+- 分支 `ticket/201-canvas-lab-save`：修复 `windows_canvas_action/save_to_lab` 检查后目录替换及同名文件覆盖风险；增加隔离假目录竞争测试。
+- 本轮按 lan 要求申请一次 CodeRabbit 审核后停止，由 lan 跟进；没有合并或做真实 Windows 桌面验收。下一步先看该 PR 审核意见及 CI，再按工单验收。
+
 ## 工单 200 交接（2026-11-02）
 
 - 分支 `ticket/200-mcp-start-timeout`：`mcp_services.py` 加 `START_TIMEOUT = 60`、`START_WATCHDOG = 65`，启动握手与两处看门狗（`view` 和 `_worker`）改用它们；`_startup_failure_message` 把 ExceptionGroup 里的 TimeoutError 翻成人话。工具调用超时 `CALL_TIMEOUT` 不变。
