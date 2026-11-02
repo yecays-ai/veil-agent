@@ -40,10 +40,11 @@ if /i not "%BRANCH%"=="main" goto not_main
 echo [0/4] Checking whether a new version exists...
 git fetch origin main
 if errorlevel 1 goto pull_failed
-set "REMOTE="
-for /f "delims=" %%H in ('git rev-parse FETCH_HEAD') do set "REMOTE=%%H"
 for /f "delims=" %%H in ('git rev-parse HEAD') do set "OLD=%%H"
-if "%OLD%"=="%REMOTE%" goto backup_done
+rem Only back up when the fetched main has commits this folder lacks.
+set "BEHIND=1"
+for /f "delims=" %%N in ('git rev-list --count HEAD..FETCH_HEAD') do set "BEHIND=%%N"
+if "%BEHIND%"=="0" goto backup_done
 if /i "%~3"=="--skip-backup" goto backup_skipped
 if not exist ".venv\Scripts\python.exe" goto no_venv
 echo       New version found. Backing up your data first...

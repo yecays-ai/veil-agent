@@ -60,7 +60,7 @@ class BackupFixture:
         )
 
     def _create(self):
-        return backup_restore.create_backup(self.source, self.backups)[0]
+        return backup_restore.create_backup(self.source, self.backups, desktop_dir=None)[0]
 
 
 class ColdBackupTests(BackupFixture, unittest.TestCase):
@@ -339,6 +339,7 @@ class DesktopAndRecoveryTests(BackupFixture, unittest.TestCase):
 
     def test_restore_never_overwrites_a_running_or_existing_desktop_config(self):
         backup, _ = backup_restore.create_backup(self.source, self.backups, desktop_dir=self._desktop())
+        seen_side = set()
         for index, (running, existing) in enumerate([(True, False), (False, True)]):
             live = self.base / f"live-{index}"
             live.mkdir()
@@ -352,8 +353,11 @@ class DesktopAndRecoveryTests(BackupFixture, unittest.TestCase):
             self.assertFalse((live / "appearance-background.png").exists())
             if existing:
                 self.assertEqual((live / "desktop.json").read_text(encoding="utf-8"), '{"size": 999}')
-            side = list(target.glob("restored-desktop-data-*"))
+            side = [path for path in self.base.glob("restored-desktop-data-*")
+                    if path not in seen_side]
+            seen_side.update(side)
             self.assertEqual(len(side), 1)
+            self.assertEqual(side[0].parent, target.parent)
             self.assertEqual((side[0] / "desktop.json").read_text(encoding="utf-8"),
                              '{"size": 320, "backgroundExt": ".png"}')
             self.assertIn("没有写入当前位置", messages[-1])

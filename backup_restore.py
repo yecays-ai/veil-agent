@@ -116,6 +116,8 @@ def _desktop_app_running():
         )
     except (OSError, subprocess.SubprocessError):
         return True  # cannot tell: treat the desktop app as running and write nothing live
+    if result.returncode != 0:
+        return True  # the check itself failed: do not assume the desktop app is closed
     return "VEIL.exe" in (result.stdout or "")
 
 
@@ -805,7 +807,7 @@ def restore_backup(backup, target, *, replace=False, confirm=input, desktop_dir=
             else:
                 notice(f"你原来的数据仍保存在：{original_safety}，程序不会删除它。")
         if desktop_names:
-            _restore_desktop(backup, desktop_names, desktop_dir, target, desktop_running, notice)
+            _restore_desktop(backup, desktop_names, desktop_dir, target.parent, desktop_running, notice)
         return len(manifest["files"]), safety
     except Exception:
         if target_created and target.exists() and not target.is_symlink():

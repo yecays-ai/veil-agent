@@ -374,9 +374,11 @@ class Store:
         if original:
             lines.append(f'你原来的数据保存在：{original}。请不要删除它。')
         if backup:
+            def literal(value):  # PowerShell single quotes do not expand $name or $(...)
+                return "'" + str(value).replace("'", "''") + "'"
             lines.append('重新完成恢复：先完全关闭 VEIL，再在项目目录运行 '
-                         f'.venv\\Scripts\\python.exe backup_restore.py restore --backup "{backup}" '
-                         f'--target "{marker.parent}" --replace')
+                         f'.venv\\Scripts\\python.exe backup_restore.py restore --backup {literal(backup)} '
+                         f'--target {literal(marker.parent)} --replace')
         lines.append('详见 docs/backup-and-restore.md。')
         return '\n'.join(lines)
 

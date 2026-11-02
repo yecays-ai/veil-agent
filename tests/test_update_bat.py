@@ -51,11 +51,14 @@ class UpdateBatTests(unittest.TestCase):
 
     def test_skipping_the_backup_needs_an_explicit_flag_and_is_announced(self):
         self.assertIn('if /i "%~3"=="--skip-backup" goto backup_skipped', self.commands)
+        self.assertIn('\n:backup_skipped\n', self.text.replace('\r\n', '\n'))
         self.assertIn('WARNING: --skip-backup', self.text)
         self.assertIn('--running-copy "%~dp0." %1', self.commands)
 
     def test_no_backup_is_made_when_the_code_is_already_current(self):
-        self.assertIn('if "%OLD%"=="%REMOTE%" goto backup_done', self.commands)
+        self.assertIn('git rev-list --count HEAD..FETCH_HEAD', self.commands)
+        self.assertIn('if "%BEHIND%"=="0" goto backup_done', self.commands)
+        self.assertIn('\n:backup_done\n', self.text.replace('\r\n', '\n'))
 
     def test_checked_out_with_windows_line_endings(self):
         attributes = (ROOT / '.gitattributes').read_text(encoding='utf-8')

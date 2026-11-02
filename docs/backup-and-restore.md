@@ -34,8 +34,8 @@ $backup = "X:\VEIL-backups\VEIL-Agent-Backup-实际时间戳"
 .venv\Scripts\python.exe backup_restore.py restore --backup $backup --target "D:\VEIL-recovery" --replace
 ```
 
-- 桌面版设置只在「桌面版没有运行，并且当前位置还没有这些文件」时写回原位置；否则放进恢复目录旁新建的 `restored-desktop-data-*` 文件夹，屏幕会写明；要使用就先完全关闭 VEIL，再手动复制进 `%APPDATA%\VEIL Desktop`。恢复不会覆盖正在使用的桌面配置。
-- 恢复旧备份后，聊天、记忆、费用账本都回到备份当时的样子。
+- 桌面版设置只在「桌面版没有运行，并且当前位置还没有这些文件」时写回原位置；否则放进恢复目录所在文件夹里新建的 `restored-desktop-data-*` 文件夹，屏幕会写明；要使用就先完全关闭 VEIL，再手动复制进 `%APPDATA%\VEIL Desktop`。恢复不会覆盖正在使用的桌面配置。
+- 恢复旧备份后，聊天、记忆、费用账本都回到备份当时的样子。**备份之后记录的花费会从账本中消失，但供应商已收的费用不会撤销，¥10/日、¥300/月上限的统计会偏低；恢复后请先用 `/cost` 核对今日与本月花费再继续使用。**
 
 ## 恢复被打断了怎么办
 
