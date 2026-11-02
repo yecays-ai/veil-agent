@@ -145,12 +145,16 @@ class ModelSettings:
             except (SettingsError, TypeError, AttributeError) as exc:
                 raise SettingsError(f'模型配置 models.json 的接口无效：{exc}；原文件已保留。') from None
         endpoint_ids = {item['id'] for item in data['endpoints']}
+        if len(endpoint_ids) != len(data['endpoints']):
+            raise SettingsError('模型配置 models.json 的接口 ID 重复；原文件已保留。')
         for item in raw.get('models') or []:
             try:
                 model = self._model(item, endpoint_ids)
             except (SettingsError, TypeError, AttributeError) as exc:
                 raise SettingsError(f'模型配置 models.json 的模型无效：{exc}；原文件已保留。') from None
             data['models'].append(model)
+        if len({item['id'] for item in data['models']}) != len(data['models']):
+            raise SettingsError('模型配置 models.json 的模型 ID 重复；原文件已保留。')
         use = raw.get('use') if isinstance(raw.get('use'), dict) else {}
         for role in ROLES:
             if role in use:
@@ -361,6 +365,8 @@ class ModelSettings:
         if role not in ROLES:
             raise SettingsError('不认识的用途。')
         with self.lock:
+            if self.blocked or self.journal.exists():
+                raise SettingsError('模型设置保存未完成；请重启恢复后再切换。')
             if self._provider(self.data, model_id) is None:
                 raise SettingsError('这个模型已经不在列表里了。')
             data = {**self.data, 'use': {**self.data['use'], role: model_id}}
