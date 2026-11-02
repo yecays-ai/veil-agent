@@ -2107,7 +2107,7 @@ def make_handler(hub, token):
             except SettingsError as exc:
                 self._send(400, {'ok': False, 'message': str(exc)})
             except OSError:
-                self._send(500, {'ok': False, 'message': '模型设置保存未完成，请检查磁盘权限后重试；重启时会恢复原设置。'})
+                self._send(500, {'ok': False, 'message': '模型设置保存结果未确认，请检查磁盘权限，重启后核对再重试。'})
             else:
                 self._send(200, {'ok': True, 'models': view})
 
