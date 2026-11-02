@@ -2605,7 +2605,10 @@ class Chat:
         models = getattr(self.cfg, 'models', None)
         if models is not None:
             with models.lock:
-                models.chosen('peter')
+                try:
+                    models.chosen('peter')
+                except SettingsError as exc:
+                    raise UserError(str(exc)) from None
                 return self._send_with_stable_model(text, autonomy=autonomy, **kwargs)
         return self._send_with_stable_model(text, autonomy=autonomy, **kwargs)
 
@@ -3872,14 +3875,22 @@ def make_model(root, cfg, provider=None):
 
     def call(messages, *, json_output=False, max_tokens=None, thinking=None, detail=False,
              tools=None, message_output=False):
-        if getattr(cfg, 'models', None) is not None:
-            with cfg.models.lock:
-                cfg.models.chosen('peter')
-                p = current()
-                client = client_for(p)
-        else:
-            p = current()
-            client = client_for(p)
+        models = getattr(cfg, 'models', None)
+        if models is not None:
+            with models.lock:
+                try:
+                    models.chosen('peter')
+                except SettingsError as exc:
+                    raise UserError(str(exc)) from None
+                return _call(messages, json_output=json_output, max_tokens=max_tokens,
+                             thinking=thinking, detail=detail, tools=tools, message_output=message_output)
+        return _call(messages, json_output=json_output, max_tokens=max_tokens,
+                     thinking=thinking, detail=detail, tools=tools, message_output=message_output)
+
+    def _call(messages, *, json_output=False, max_tokens=None, thinking=None, detail=False,
+              tools=None, message_output=False):
+        p = current()
+        client = client_for(p)
         extra = {}
         if (thinking or p.get('thinking')) == 'disabled':
             extra['extra_body'] = {'thinking': {'type': 'disabled'}}
