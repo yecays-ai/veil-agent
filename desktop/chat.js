@@ -712,8 +712,8 @@ function readMemory(item){
   detail.replaceChildren(eyebrow,heading,facts,title.wrap,why.wrap,body.wrap,actions,status,hint,raw);
 }
 const LIFE_LABEL={event:'日历记录',note:'待办便签',plan:'长期计划',diary:'日记'};let lifeRows=[],lifeOwner='all',lifeKind='all',lifeDay='';const lifeDateKey=d=>d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');const lifeToday=()=>lifeDateKey(new Date());
-let lifeRevision=0,lifeFolded=0;
-async function loadLife(){const revision=lifeRevision;try{const r=await api('/api/life');const d=await r.json();if(!r.ok)throw Error(d.error||'读取失败');if(revision!==lifeRevision)return;lifeRows=d.records||[];lifeFolded=d.folded||0;renderLife()}catch(e){if(revision!==lifeRevision)return;lifeRows=[];lifeFolded=0;renderLife();$('life-count').textContent=e.message||'生活记录暂不可用'}}
+let lifeRevision=0,lifeLoadRevision=0,lifeFolded=0;
+async function loadLife(){const revision=lifeRevision,loadRevision=++lifeLoadRevision;try{const r=await api('/api/life');const d=await r.json();if(!r.ok)throw Error(d.error||'读取失败');if(revision!==lifeRevision||loadRevision!==lifeLoadRevision)return;lifeRows=d.records||[];lifeFolded=d.folded||0;renderLife()}catch(e){if(revision!==lifeRevision||loadRevision!==lifeLoadRevision)return;lifeRows=[];lifeFolded=0;renderLife();$('life-count').textContent=e.message||'生活记录暂不可用'}}
 function renderLife(){const host=$('life-records');host.replaceChildren();if(lifeKind==='event'){
     const selected=lifeDay?new Date(lifeDay+'T12:00:00'):new Date();
     const month=new Date(selected.getFullYear(),selected.getMonth(),1);
