@@ -1631,6 +1631,9 @@ def make_handler(hub, token):
         def _get_life(self):
             if not self._guard(self.headers.get('X-Token')):
                 return
+            if hub.chat is None:
+                self._send(503, {'error': '服务尚未就绪，请稍后重试。'})
+                return
             try:
                 from life_records import effective, fold_completed
                 value = {'records': [effective(r) for r in hub.chat.life_records.read() if isinstance(r, dict) and r.get('kind') != 'diary']} if hub.chat is not None else {'records': []}

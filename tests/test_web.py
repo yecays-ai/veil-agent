@@ -82,7 +82,12 @@ output_cny_per_million = "8"
             with urllib.request.urlopen(req, timeout=5) as r:
                 return r.status, json.loads(r.read() or b'{}')
         except urllib.error.HTTPError as exc:
-            return exc.code, None
+            return exc.code, json.loads(exc.read() or b'{}')
+
+    def test_life_page_reports_service_not_ready_instead_of_empty_records(self):
+        status, body = self.call('/api/life')
+        self.assertEqual(status, 503)
+        self.assertEqual(body['error'], '服务尚未就绪，请稍后重试。')
 
     def test_lab_attachment_survives_restart_and_is_served_as_safe_content(self):
         raw = b'<html><script>window.bad=true</script><body>game</body></html>'
