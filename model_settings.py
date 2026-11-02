@@ -10,6 +10,8 @@ import json
 import os
 import re
 import secrets
+import base64
+import shutil
 import threading
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -68,45 +70,98 @@ class ModelSettings:
         self.root = Path(root)
         self.env_path = self.root / '.env'
         self.path = self.root / 'data' / character_id / 'models.json'
+        self.journal = self.root / f'.env.models-{character_id}.pending'
+        self.env_stage = self.root / '.env.models-stage'
         self.builtins = dict(builtins)
         self.default = BUILTIN_PREFIX + default_name
         self.lock = threading.RLock()
+        self.blocked = False
+        self._recover()
         self.data = self._clean(self._read())
 
     # ---- reading -------------------------------------------------------
+    @staticmethod
+    def _atomic_bytes(path, content):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + '.tmp')
+        try:
+            with tmp.open('wb') as stream:
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(tmp, path)
+        finally:
+            tmp.unlink(missing_ok=True)
+
+    def _recover(self):
+        if not self.journal.exists():
+            self.env_stage.unlink(missing_ok=True)
+            return
+        try:
+            record = json.loads(self.journal.read_text(encoding='utf-8'))
+            if record['state'] == 'prepared':
+                for path, key in ((self.env_path, 'env'), (self.path, 'models')):
+                    original = record[key]
+                    if original is None:
+                        path.unlink(missing_ok=True)
+                    else:
+                        self._atomic_bytes(path, base64.b64decode(original, validate=True))
+            elif record['state'] != 'committed':
+                raise ValueError('bad transaction state')
+            self.journal.unlink()
+            self.env_stage.unlink(missing_ok=True)
+            self.blocked = False
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            self.blocked = True
+            raise SettingsError('模型设置上次保存未完成且无法自动恢复；已停止模型请求，请检查磁盘权限并保留配置文件。') from None
+
+    @staticmethod
+    def _snapshot(path):
+        try:
+            return base64.b64encode(path.read_bytes()).decode('ascii')
+        except FileNotFoundError:
+            return None
+
     def _read(self):
         try:
             value = json.loads(self.path.read_text(encoding='utf-8'))
-            return value if isinstance(value, dict) else {}
+            if not isinstance(value, dict):
+                raise SettingsError('模型配置 models.json 顶层必须是对象；原文件已保留。')
+            return value
         except FileNotFoundError:
             return {}
-        except (OSError, ValueError, UnicodeError):
-            return {}
+        except (OSError, ValueError, UnicodeError) as exc:
+            raise SettingsError('模型配置 models.json 无法读取或解析；原文件已保留，请修复后重启。') from None
 
     def _clean(self, raw):
         """Keep only entries that would pass the settings page's own checks."""
         data = {'endpoints': [], 'models': [], 'use': {}, 'limits': {}}
+        for field, kind in (('endpoints', list), ('models', list), ('use', dict), ('limits', dict)):
+            if field in raw and not isinstance(raw[field], kind):
+                raise SettingsError(f'模型配置 models.json 的 {field} 格式错误；原文件已保留。')
         for item in raw.get('endpoints') or []:
             try:
                 data['endpoints'].append(self._endpoint(item, existing={}))
-            except (SettingsError, TypeError, AttributeError):
-                continue
+            except (SettingsError, TypeError, AttributeError) as exc:
+                raise SettingsError(f'模型配置 models.json 的接口无效：{exc}；原文件已保留。') from None
         endpoint_ids = {item['id'] for item in data['endpoints']}
         for item in raw.get('models') or []:
             try:
                 model = self._model(item, endpoint_ids)
-            except (SettingsError, TypeError, AttributeError):
-                continue
+            except (SettingsError, TypeError, AttributeError) as exc:
+                raise SettingsError(f'模型配置 models.json 的模型无效：{exc}；原文件已保留。') from None
             data['models'].append(model)
         use = raw.get('use') if isinstance(raw.get('use'), dict) else {}
         for role in ROLES:
-            if self._provider(data, use.get(role)) is not None:
+            if role in use:
+                if self._provider(data, use[role]) is None:
+                    raise SettingsError(f'模型配置 models.json 中 {role} 选中的模型不存在或无效；原文件已保留。')
                 data['use'][role] = use[role]
         limits = raw.get('limits') if isinstance(raw.get('limits'), dict) else {}
         try:
             data['limits'] = self._limits(limits) if limits else {}
-        except SettingsError:
-            data['limits'] = {}
+        except SettingsError as exc:
+            raise SettingsError(f'模型配置 models.json 的费用上限无效：{exc}；原文件已保留。') from None
         return data
 
     def _endpoint(self, item, existing):
@@ -191,10 +246,12 @@ class ModelSettings:
     def chosen(self, role):
         """(model id, provider name for SYSTEM FACTS, provider dict) for 'peter' or 'background'."""
         with self.lock:
+            if self.blocked or self.journal.exists():
+                raise SettingsError('模型设置保存未完成；已停止模型请求，请重启恢复。')
             model_id = self.data['use'].get(role, self.default)
             provider = self._provider(self.data, model_id)
             if provider is None:
-                model_id, provider = self.default, self._provider(self.data, self.default)
+                raise SettingsError(f'{role} 选中的模型无效；已停止模型请求。')
             if model_id.startswith(BUILTIN_PREFIX):
                 name = model_id[len(BUILTIN_PREFIX):]
             else:
@@ -250,6 +307,8 @@ class ModelSettings:
                 or len(endpoints_in) > MAX_ENDPOINTS or len(models_in) > MAX_MODELS):
             raise SettingsError('接口或模型太多了。')
         with self.lock:
+            if self.blocked or self.journal.exists():
+                self._recover()
             endpoints, new_keys = [], {}
             known = {item['id']: item for item in self.data['endpoints']}
             taken = set(known)
@@ -280,9 +339,22 @@ class ModelSettings:
                 if self._provider(data, model_id) is not None:
                     data['use'][role] = model_id
             removed = [item['key_env'] for item in self.data['endpoints'] if item['id'] not in endpoint_ids]
-            self._write_env(new_keys, removed)
-            self._write(data)
+            if not new_keys and not removed:
+                self._write(data)
+                self.data = data
+                return self.public()
+            record = {'state': 'prepared', 'env': self._snapshot(self.env_path),
+                      'models': self._snapshot(self.path)}
+            self._atomic_bytes(self.journal, json.dumps(record).encode('utf-8'))
+            try:
+                self._write_env(new_keys, removed)
+                self._write(data)
+                self._atomic_bytes(self.journal, json.dumps({**record, 'state': 'committed'}).encode('utf-8'))
+            except Exception:
+                self._recover()
+                raise
             self.data = data
+            self.journal.unlink()
             return self.public()
 
     def use(self, role, model_id):
@@ -306,10 +378,20 @@ class ModelSettings:
         if not new_keys and not removed:
             return
         from dotenv import set_key, unset_key
-        if not self.env_path.exists():
-            self.env_path.write_text('', encoding='utf-8')
-        for name, value in new_keys.items():
-            set_key(self.env_path, name, value, quote_mode='always', encoding='utf-8')
-        for name in removed:
-            if name not in new_keys:
-                unset_key(self.env_path, name, encoding='utf-8')
+        staged = self.env_stage
+        try:
+            if self.env_path.exists():
+                shutil.copy2(self.env_path, staged)
+            else:
+                staged.write_text('', encoding='utf-8')
+            for name, value in new_keys.items():
+                set_key(staged, name, value, quote_mode='always', encoding='utf-8')
+            for name in removed:
+                if name not in new_keys:
+                    unset_key(staged, name, encoding='utf-8')
+            with staged.open('rb+') as stream:
+                os.fsync(stream.fileno())
+            os.replace(staged, self.env_path)
+        finally:
+            staged.unlink(missing_ok=True)
+
