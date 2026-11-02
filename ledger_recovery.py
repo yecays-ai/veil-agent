@@ -294,19 +294,24 @@ def _carry_evidence_file(source_data, target_data, name):
         return
     source = os.path.join(str(source_data), name)
     target = os.path.join(str(target_data), name)
-    if not os.path.isfile(source) or os.path.islink(source):
+    if os.path.islink(source):
+        raise ValueError('the evidence file in the source is a symbolic link')
+    if not os.path.isfile(source):
         return
     if os.path.islink(target):
         raise ValueError('the evidence file in the target is a symbolic link')
     with open(source, 'rb') as handle:
         source_lines = [line for line in handle.read().splitlines(keepends=True) if line.strip()]
-    existing = set()
+    existing, existing_raw = set(), b''
     if os.path.exists(target):
         with open(target, 'rb') as handle:
-            existing = {line.rstrip(b'\r\n') for line in handle.read().splitlines(keepends=True)}
+            existing_raw = handle.read()
+        existing = {line.rstrip(b'\r\n') for line in existing_raw.splitlines(keepends=True)}
     fresh = [_terminated(line) for line in source_lines if line.rstrip(b'\r\n') not in existing]
     if fresh:
         with open(target, 'ab', buffering=0) as handle:
+            if existing_raw and not existing_raw.endswith((b'\n', b'\r')):
+                handle.write(b'\n')  # never glue new evidence onto an unterminated last line
             handle.write(b''.join(fresh))
             os.fsync(handle.fileno())
 

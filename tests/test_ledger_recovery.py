@@ -304,6 +304,16 @@ class RepairTests(unittest.TestCase):
         self.assertIn(b'[1, 2]\n', carried)
         ledger.carry_unverified(old, new)
         self.assertEqual((new / ledger.UNVERIFIED_EVIDENCE).read_bytes(), carried)
+        # an unterminated last line in the target is not glued to what is appended
+        glue_old, glue_new = self.root / 'gold', self.root / 'gnew'
+        glue_old.mkdir()
+        glue_new.mkdir()
+        ledger.mark_unverified(glue_old, 'x', 1, ledger.UNVERIFIED_EVIDENCE)
+        (glue_old / ledger.UNVERIFIED_EVIDENCE).write_bytes(b'{"kind": "new"}\n')
+        (glue_new / ledger.UNVERIFIED_EVIDENCE).write_bytes(b'{"kind": "tail"}')
+        ledger.carry_unverified(glue_old, glue_new)
+        self.assertEqual((glue_new / ledger.UNVERIFIED_EVIDENCE).read_bytes(),
+                         b'{"kind": "tail"}\n{"kind": "new"}\n')
         # an unreadable marker still brings the evidence file along
         broken_old, broken_new = self.root / 'bold', self.root / 'bnew'
         broken_old.mkdir()
