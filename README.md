@@ -108,7 +108,7 @@ Ombre 自带模型默认打开：每存一条记忆会用聊天同一个模型�
 
 `.env`、本机人设、`data/`、日志、虚拟环境均已忽略。仓库只包含示例人设和空密钥模板。聊天发送时，人设与最近上下文会交给你选择的模型供应商。不要提交或公开私有文件。
 
-完整的备份、更新前自动备份、恢复被打断后的处理步骤见 [docs/backup-and-restore.md](docs/backup-and-restore.md)。
+完整的备份、更新前自动备份、恢复被打断后的处理步骤见 [docs/backup-and-restore.md](docs/backup-and-restore.md)。聊天或账本文件损坏、恢复旧备份后的费用账本核对，见 [docs/data-repair-and-ledger.md](docs/data-repair-and-ledger.md)。
 
 ### 手动冷备份
 
