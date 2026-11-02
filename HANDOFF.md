@@ -271,3 +271,4 @@
 
 - 工单 192：生活页改待办便签（圆圈打勾划掉、`repeat: daily` 每天 0 点复位、已完成一次性便签超过 30 条折叠）+ 日历心情；日记入口移除，旧日记记录保留但不显示；`life_record` 工具新增 `mood`、`repeat`，不能再新建日记；自主唤醒内容改为当天日历标题 + 全部未完成待办数。分支 `ticket/192-life-todo-calendar`；需要 update.bat；Windows 体验待 Lan 验收；`tests.test_autonomy` 4 项因既有 `test_tools` 导入错误失败（改动前后相同）。下一个工单号 193。
 - 工单 193：生活页待办改为便签卡（每件事单独勾选，底部可新增，勾掉划线保留）；`life_record` 说明要求每件待办单独一条。分支 `ticket/193-todo-sticky`；需要 update.bat；Windows 体验待 Lan 验收。下一个工单号 195。
+- 工单 198：待办便签可删除（两步确认，`/api/life` 收 `{id,delete:true}`，仅 Lan、仅 event/note，原记录写入 `life-records-deleted.jsonl`）；每日重复待办单独一张便签；便签顶部改通栏色片。分支 `ticket/198-sticky-delete`；需要 update.bat；Windows 体验待 Lan 验收。

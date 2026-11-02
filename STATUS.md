@@ -4,6 +4,7 @@
 
 ## 当前目标与现状
 
+- 工单 198「待办便签可删除、每日重复单独一张」（`ticket/198-sticky-delete`）：每条待办可两步确认删除（原记录留底到 `life-records-deleted.jsonl`），每日重复待办单独放最上面一张便签，顶部改纯色通栏。现状：代码完成，生活记录与桌面 UI 自动测试通过，浏览器渲染图已看；需要 update.bat；Windows 体验未验证。验收见 `docs/tickets/198-sticky-delete.md`。下一个工单号 199。
 - 工单 197「备份覆盖与恢复体验」（`ticket/197-backup-coverage`，lan 11-02 批准）：桌面版设置与背景图进备份（附件缓存、浏览器缓存不备份）；恢复不覆盖正在使用的桌面配置；恢复被打断后提示写明原数据在哪、重跑命令，重跑失败仍保持未完成状态；`update.bat` 有新版本时先备份到 `.env` 的 `VEIL_BACKUP_DIR`，备份失败默认停止更新（`--skip-backup` 明确跳过）；备份前检查磁盘空间；排除 `web_service.json` 与遗留 `.tmp`；`backup_restore.py usage` 只统计占用。现状：代码和自动测试完成，Windows 真机验收未验证。含桌面数据的新备份（清单多一个 `desktop-data` 组件，格式版本仍为 1）旧版程序读不了，回滚前注意。验收见 `docs/tickets/197-backup-coverage-recovery.md`，说明文档 `docs/backup-and-restore.md`。下一个工单号 198。工单 B「数据损坏与账本安全恢复」排在本单验收之后（草稿见项目文件 `audit/tickets/`）。
 - 工单 196「update 不再每次重下 timezonefinder」（`ticket/196-nowhere-deps-stamp`）：Nowhere 依赖安装加锁文件哈希标记，没变化就跳过 pip。现状：代码完成，Windows 实机未验证。验收：update.bat 跑两次，第二次不再出现 Downloading timezonefinder。下一个工单号 197。
 - 工单 195「自主醒来少花步数在重复读取上」（`ticket/195-wake-steps`）：步数上限 20 与 ¥3/天预算不变。浏览器工具描述说明 open/click/scroll 已带快照，页面正文 1200→3000 字（另按 4500 字节限）；醒来上下文多带前两次活动一行摘要，实验室最新文件预览改为开头加结尾。预计 +¥0.1–0.3/天，Windows 实机未验证。见 `docs/tickets/195-wake-steps.md`。

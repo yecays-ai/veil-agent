@@ -97,6 +97,22 @@ class LifeRecords:
                 handle.flush(); os.fsync(handle.fileno())
             os.replace(temp,self.path)
             return row
+    def delete(self, key):
+        with self.store.mutex:
+            rows=self.read()
+            row=next((r for r in rows if r.get('id')==key),None)
+            if not row: raise ValueError('record not found')
+            if row.get('kind') not in ('event','note'): raise ValueError('record cannot be deleted')
+            self.path.parent.mkdir(parents=True,exist_ok=True)
+            with self.path.with_name('life-records-deleted.jsonl').open('a',encoding='utf-8') as handle:
+                handle.write(json.dumps({'deleted_at':now(),'record':row},ensure_ascii=False)+'\n')
+                handle.flush(); os.fsync(handle.fileno())
+            rows.remove(row)
+            temp=self.path.with_suffix('.tmp')
+            with temp.open('w',encoding='utf-8') as handle:
+                handle.write(json.dumps({'records':rows},ensure_ascii=False,indent=2)+'\n')
+                handle.flush(); os.fsync(handle.fileno())
+            os.replace(temp,self.path)
     def invoke(self,args):
         try:
             if not isinstance(args,dict): raise ValueError('invalid arguments')

@@ -2237,13 +2237,23 @@ def make_handler(hub, token):
                                                           'record':next((r for r in hub.memory_tools.plan_entries()
                                                               if r['id']==source_id),None)})
                 return
+            if body.get('delete') is True:
+                try:
+                    if set(body)!={'id','delete'} or not isinstance(source_id,str): raise ValueError('invalid delete')
+                    hub.chat.life_records.delete(source_id)
+                    self._send(200, {'ok':True,'deleted':source_id})
+                except (OSError,UnicodeError):
+                    self._send(500, {'error':'生活记录未能安全删除。'})
+                except ValueError as exc:
+                    self._send(400, {'error':str(exc)})
+                return
             try:
                 row=hub.chat.life_records.write(body,'Lan')
                 self._send(200, {'ok':True,'record':row})
-            except ValueError as exc:
-                self._send(400, {'error':str(exc)})
             except (OSError,UnicodeError):
                 self._send(500, {'error':'生活记录未能安全保存。'})
+            except ValueError as exc:
+                self._send(400, {'error':str(exc)})
 
         def do_POST(self):
             url = urlparse(self.path)

@@ -65,4 +65,19 @@ class LifeRecordsTest(unittest.TestCase):
             with self.assertRaises(ValueError): records.write({'id':note['id'],'kind':'diary'},'Lan')
             self.assertEqual([r['title'] for r in json.loads(records.invoke({'action':'list'})[0])],['Visible'])
 
+    def test_delete_keeps_a_copy_and_only_removes_events_and_notes(self):
+        temp_root=Path.cwd() / '.task-test-temp'
+        temp_root.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=temp_root) as directory:
+            store=SimpleNamespace(root=Path(directory),mutex=threading.RLock())
+            records=LifeRecords(store,'peter')
+            note=records.write({'kind':'note','title':'Typo','owner':'共同'},'Lan')
+            plan=records.write({'kind':'plan','title':'Keep','owner':'共同'},'Lan')
+            records.delete(note['id'])
+            self.assertEqual([r['id'] for r in records.read()],[plan['id']])
+            saved=(records.path.with_name('life-records-deleted.jsonl')).read_text(encoding='utf-8')
+            self.assertIn('Typo',saved)
+            with self.assertRaises(ValueError): records.delete(plan['id'])
+            with self.assertRaises(ValueError): records.delete('missing')
+
 if __name__ == '__main__': unittest.main()
