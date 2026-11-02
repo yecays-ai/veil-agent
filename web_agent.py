@@ -1145,12 +1145,13 @@ class Hub(ScreenPopMixin):
 
     def save_models(self, payload):
         models = self.chat.cfg.models
-        before = models.chosen('peter')
-        models.save(payload)
-        self.chat.budget.daily, self.chat.budget.monthly = models.limits()
-        after = models.chosen('peter')
-        if after[0] != before[0] or after[2] != before[2]:
-            self.chat.switch_model(after[1], after[2])
+        with models.lock:
+            before = models.chosen('peter')
+            models.save(payload)
+            self.chat.budget.daily, self.chat.budget.monthly = models.limits()
+            after = models.chosen('peter')
+            if after[0] != before[0] or after[2] != before[2]:
+                self.chat.switch_model(after[1], after[2])
         return self.refresh_models()
 
     def use_model(self, role, model_id):
@@ -2106,7 +2107,7 @@ def make_handler(hub, token):
             except SettingsError as exc:
                 self._send(400, {'ok': False, 'message': str(exc)})
             except OSError:
-                self._send(500, {'ok': False, 'message': '设置文件写不进去，请检查磁盘。'})
+                self._send(500, {'ok': False, 'message': '模型设置保存未完成，请检查磁盘权限后重试；重启时会恢复原设置。'})
             else:
                 self._send(200, {'ok': True, 'models': view})
 
