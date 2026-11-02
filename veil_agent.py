@@ -2602,6 +2602,14 @@ class Chat:
             self.cfg.provider_name = name
 
     def send(self, text, *, autonomy=False, **kwargs):
+        models = getattr(self.cfg, 'models', None)
+        if models is not None:
+            with models.lock:
+                models.chosen('peter')
+                return self._send_with_stable_model(text, autonomy=autonomy, **kwargs)
+        return self._send_with_stable_model(text, autonomy=autonomy, **kwargs)
+
+    def _send_with_stable_model(self, text, *, autonomy=False, **kwargs):
         self._apply_pending_model()
         # Ticket 133: background requests (wakes, glances, Codex reminders) may use a larger
         # input window than ordinary chat; chat keeps the provider limit and its cost.
@@ -3866,7 +3874,8 @@ def make_model(root, cfg, provider=None):
              tools=None, message_output=False):
         if getattr(cfg, 'models', None) is not None:
             with cfg.models.lock:
-                p = cfg.models.chosen('peter')[2] if provider is None else provider
+                cfg.models.chosen('peter')
+                p = current()
                 client = client_for(p)
         else:
             p = current()
