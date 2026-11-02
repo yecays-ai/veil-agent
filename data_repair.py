@@ -176,7 +176,8 @@ def ledger_verify(root, *, confirm=input, notice=print):
             return None
         for line in ledger_status(root):
             notice(line)
-        if marker.get('unreadable') or not marker.get('items'):
+        if (marker.get('unreadable') or not isinstance(marker.get('items'), list) or not marker['items']
+                or any(not isinstance(item, dict) for item in marker['items'])):
             raise BackupError('标记文件无法读取或没有明细，不能自动确认；仍然暂停付费请求。')
         if confirm('你已核对供应商账单并确认费用？输入 VERIFIED：') != 'VERIFIED':
             raise BackupError('未确认，仍然暂停付费请求。')
