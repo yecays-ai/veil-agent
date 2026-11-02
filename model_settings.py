@@ -125,13 +125,13 @@ class ModelSettings:
     def _read(self):
         try:
             value = json.loads(self.path.read_text(encoding='utf-8'))
-            if not isinstance(value, dict):
-                raise SettingsError('模型配置 models.json 顶层必须是对象；原文件已保留。')
-            return value
         except FileNotFoundError:
             return {}
-        except (OSError, ValueError, UnicodeError) as exc:
+        except (OSError, ValueError, UnicodeError):
             raise SettingsError('模型配置 models.json 无法读取或解析；原文件已保留，请修复后重启。') from None
+        if not isinstance(value, dict):
+            raise SettingsError('模型配置 models.json 顶层必须是对象；原文件已保留。')
+        return value
 
     def _clean(self, raw):
         """Keep only entries that would pass the settings page's own checks."""
