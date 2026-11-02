@@ -1,3 +1,9 @@
+## 工单 197 交接（2026-11-02）
+
+- 分支 `ticket/197-backup-coverage`：`backup_restore.py`（桌面数据组件 `desktop-data`、空间检查、`pre-update`/`usage` 子命令、恢复标记里的 `original_safety_copy`、重跑失败保持标记）、`veil_agent.py`（`Store` 的未完成恢复提示）、`update.bat`（有新版本才备份，失败停止，`--skip-backup`）、`.env.example`、`docs/backup-and-restore.md`。
+- 决定：附件缓存是原件的再生副本（原件在 `data\<角色>\media`），不备份；只备份 `desktop.json` 与背景图。
+- 未验证：Windows 真机的 update.bat 备份流程、`tasklist` 判断桌面版是否运行、真实 APPDATA 恢复。账本对账与 JSONL 修复是工单 B，A 验收后再做。
+
 ## 工单 196 交接（2026-11-02）
 
 - 分支 `ticket/196-nowhere-deps-stamp`：只改 `scripts/install-nowhere.ps1`。原因：Windows 的 `requirements.nowhere.lock.txt` 把 timezonefinder 钉成 pythonhosted 的 sdist 直链，pip 对直链每次都重新下载（1.3 MB，lan 网速约 23kB/s）并重建。现在安装成功后在 `.runtime\nowhere\<rev>\deps-installed.sha256` 记锁文件哈希；下次哈希一致且 import 检查通过就跳过 pip。锁文件变了或 import 失败仍会完整安装。

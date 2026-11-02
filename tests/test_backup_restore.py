@@ -13,7 +13,7 @@ import backup_restore
 REPO = Path(__file__).resolve().parents[1]
 
 
-class ColdBackupTests(unittest.TestCase):
+class BackupFixture:
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(dir=REPO)
         self.base = Path(self.temp.name)
@@ -62,6 +62,8 @@ class ColdBackupTests(unittest.TestCase):
     def _create(self):
         return backup_restore.create_backup(self.source, self.backups)[0]
 
+
+class ColdBackupTests(BackupFixture, unittest.TestCase):
     def test_create_manifest_covers_local_state_and_omits_only_runtime_files(self):
         backup, count = backup_restore.create_backup(self.source, self.backups)
         self.assertEqual(count, 13)
@@ -282,6 +284,204 @@ class ColdBackupTests(unittest.TestCase):
         else:
             with self.assertRaisesRegex(backup_restore.BackupError, "备份缺少必要项目"):
                 backup_restore.verify_backup(backup)
+
+
+class DesktopAndRecoveryTests(BackupFixture, unittest.TestCase):
+    """Ticket 197: desktop data, interruption guidance, pre-update backup, leftovers."""
+
+    def _desktop(self, name="desktop-appdata"):
+        folder = self.base / name
+        folder.mkdir()
+        (folder / "desktop.json").write_text('{"size": 320, "backgroundExt": ".png"}', encoding="utf-8")
+        (folder / "appearance-background.png").write_bytes(b"fake png bytes")
+        (folder / "attachments" / "abc").mkdir(parents=True)
+        (folder / "attachments" / "abc" / "page.html").write_bytes(b"cache copy")
+        (folder / "session-data").mkdir()
+        (folder / "session-data" / "Cookies").write_bytes(b"chromium")
+        return folder
+
+    def test_desktop_settings_and_background_are_saved_but_caches_are_not(self):
+        desktop = self._desktop()
+        backup, _ = backup_restore.create_backup(self.source, self.backups, desktop_dir=desktop)
+        manifest = backup_restore.verify_backup(backup)
+        paths = {entry["path"] for entry in manifest["files"]}
+        self.assertIn("payload/desktop-data/desktop.json", paths)
+        self.assertIn("payload/desktop-data/appearance-background.png", paths)
+        self.assertFalse([path for path in paths if "attachments" in path or "session-data" in path])
+        self.assertEqual(manifest["components"][-1], "desktop-data")
+
+    def test_backup_without_desktop_data_keeps_the_original_component_list(self):
+        backup, _ = backup_restore.create_backup(self.source, self.backups, desktop_dir=self.base / "missing")
+        self.assertEqual(backup_restore.verify_backup(backup)["components"], list(backup_restore.PAYLOAD_ROOTS))
+
+    def test_half_written_desktop_settings_stop_the_backup(self):
+        desktop = self._desktop()
+        (desktop / "desktop.json").write_text('{"size": 3', encoding="utf-8")
+        with self.assertRaisesRegex(backup_restore.BackupError, "桌面端设置文件"):
+            backup_restore.create_backup(self.source, self.backups, desktop_dir=desktop)
+        self.assertEqual(list(self.backups.glob("*")), [])
+
+    def test_unregistered_desktop_file_in_manifest_is_rejected(self):
+        desktop = self._desktop()
+        backup, _ = backup_restore.create_backup(self.source, self.backups, desktop_dir=desktop)
+        (backup / "payload" / "desktop-data" / "evil.exe").write_bytes(b"x")
+        with self.assertRaises(backup_restore.BackupError):
+            backup_restore.verify_backup(backup)
+
+    def test_restore_writes_desktop_data_only_to_an_empty_idle_location(self):
+        backup, _ = backup_restore.create_backup(self.source, self.backups, desktop_dir=self._desktop())
+        fresh = self.base / "fresh-appdata"
+        messages = []
+        backup_restore.restore_backup(backup, self.target, desktop_dir=fresh,
+                                      desktop_running=lambda: False, notice=messages.append)
+        self.assertEqual((fresh / "appearance-background.png").read_bytes(), b"fake png bytes")
+        self.assertIn(str(fresh), messages[-1])
+
+    def test_restore_never_overwrites_a_running_or_existing_desktop_config(self):
+        backup, _ = backup_restore.create_backup(self.source, self.backups, desktop_dir=self._desktop())
+        for index, (running, existing) in enumerate([(True, False), (False, True)]):
+            live = self.base / f"live-{index}"
+            live.mkdir()
+            if existing:
+                (live / "desktop.json").write_text('{"size": 999}', encoding="utf-8")
+            target = self.base / f"target-{index}"
+            messages = []
+            backup_restore.restore_backup(backup, target, desktop_dir=live,
+                                          desktop_running=lambda running=running: running,
+                                          notice=messages.append)
+            self.assertFalse((live / "appearance-background.png").exists())
+            if existing:
+                self.assertEqual((live / "desktop.json").read_text(encoding="utf-8"), '{"size": 999}')
+            side = list(target.glob("restored-desktop-data-*"))
+            self.assertEqual(len(side), 1)
+            self.assertEqual((side[0] / "desktop.json").read_text(encoding="utf-8"),
+                             '{"size": 320, "backgroundExt": ".png"}')
+            self.assertIn("没有写入当前位置", messages[-1])
+
+    def test_old_backups_without_desktop_data_still_restore(self):
+        backup, _ = backup_restore.create_backup(self.source, self.backups, desktop_dir=None)
+        count, _ = backup_restore.restore_backup(backup, self.target, desktop_dir=self.base / "unused")
+        self.assertGreater(count, 0)
+
+    def test_runtime_leftovers_are_not_backed_up_but_user_files_are(self):
+        (self.source / "data" / "web_service.json").write_text('{"port":1,"token":"x"}', encoding="utf-8")
+        (self.source / "data" / "costs.tmp").write_text("stale", encoding="utf-8")
+        (self.source / "data" / "fixture" / "chat.tmp").write_text("stale", encoding="utf-8")
+        backup, _ = backup_restore.create_backup(self.source, self.backups, desktop_dir=None)
+        paths = {entry["path"] for entry in backup_restore.verify_backup(backup)["files"]}
+        self.assertNotIn("payload/data/web_service.json", paths)
+        self.assertNotIn("payload/data/costs.tmp", paths)
+        self.assertNotIn("payload/data/fixture/chat.tmp", paths)
+        self.assertIn("payload/data/fixture/workspace/ordinary.tmp", paths)
+
+    def test_ctrl_c_during_backup_leaves_no_staging_folder(self):
+        with mock.patch.object(backup_restore.shutil, "copy2", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                backup_restore.create_backup(self.source, self.backups, desktop_dir=None)
+        self.assertEqual(list(self.backups.iterdir()), [])
+
+    def test_not_enough_disk_space_is_reported_before_anything_is_written(self):
+        class Usage:
+            free = 1024
+        with mock.patch.object(backup_restore.shutil, "disk_usage", return_value=Usage):
+            with self.assertRaisesRegex(backup_restore.BackupError, "磁盘空间不足"):
+                backup_restore.create_backup(self.source, self.backups, desktop_dir=None)
+        self.assertEqual(list(self.backups.iterdir()), [])
+
+    def _interrupt_replace(self, backup):
+        self.target.mkdir()
+        (self.target / ".env").write_bytes(b"OLD=real\n")
+        (self.target / "data" / "fixture").mkdir(parents=True)
+        (self.target / "data" / "fixture" / "chat.jsonl").write_bytes(b"real current chat\n")
+        original = backup_restore.os.replace
+        calls = {"n": 0}
+
+        def die(source, destination):
+            calls["n"] += 1
+            result = original(source, destination)
+            if calls["n"] == 4:
+                raise KeyboardInterrupt
+            return result
+
+        with mock.patch.object(backup_restore.os, "replace", side_effect=die):
+            with self.assertRaises(KeyboardInterrupt):
+                backup_restore.restore_backup(backup, self.target, replace=True,
+                                              confirm=lambda _: "RESTORE", desktop_dir=None)
+
+    def test_interrupted_restore_tells_where_the_real_data_is_and_rerun_keeps_it(self):
+        backup = self._create()
+        self._interrupt_replace(backup)
+        marker = json.loads((self.target / backup_restore.RECOVERY_MARKER_NAME).read_text(encoding="utf-8"))
+        first_safety = Path(marker["original_safety_copy"])
+        self.assertEqual((first_safety / "data" / "fixture" / "chat.jsonl").read_bytes(), b"real current chat\n")
+        from veil_agent import Store, UserError
+        with self.assertRaises(UserError) as caught:
+            Store(self.target / "data")
+        text = str(caught.exception)
+        self.assertIn(str(first_safety), text)
+        self.assertIn("backup_restore.py restore --backup", text)
+        self.assertIn("--replace", text)
+        messages = []
+        _, second_safety = backup_restore.restore_backup(
+            backup, self.target, replace=True, confirm=lambda _: "RESTORE",
+            desktop_dir=None, notice=messages.append)
+        self.assertNotEqual(first_safety, second_safety)
+        self.assertTrue(first_safety.exists() and second_safety.exists())
+        self.assertFalse((self.target / backup_restore.RECOVERY_MARKER_NAME).exists())
+        self.assertTrue(any(str(first_safety) in message and "才是你原来的数据" in message for message in messages))
+
+    def test_a_failed_rerun_does_not_make_a_half_restored_folder_look_finished(self):
+        backup = self._create()
+        self._interrupt_replace(backup)
+        first = json.loads((self.target / backup_restore.RECOVERY_MARKER_NAME).read_text(encoding="utf-8"))
+        original = backup_restore.os.replace
+
+        def fail_install(source, destination):
+            if Path(source).parent.name.startswith(".veil-restore-stage-"):
+                raise OSError("simulated failure")
+            return original(source, destination)
+
+        with mock.patch.object(backup_restore.os, "replace", side_effect=fail_install):
+            with self.assertRaisesRegex(OSError, "simulated failure"):
+                backup_restore.restore_backup(backup, self.target, replace=True,
+                                              confirm=lambda _: "RESTORE", desktop_dir=None)
+        again = json.loads((self.target / backup_restore.RECOVERY_MARKER_NAME).read_text(encoding="utf-8"))
+        self.assertEqual(again["original_safety_copy"], first["original_safety_copy"])
+
+    def test_pre_update_needs_a_backup_folder_and_never_silently_skips(self):
+        with mock.patch.dict(backup_restore.os.environ, {}, clear=False):
+            backup_restore.os.environ.pop(backup_restore.BACKUP_DIR_KEY, None)
+            with self.assertRaisesRegex(backup_restore.BackupError, "VEIL_BACKUP_DIR"):
+                backup_restore.pre_update_backup(self.source)
+
+    def test_pre_update_reads_the_folder_from_env_file_with_quotes(self):
+        with mock.patch.dict(backup_restore.os.environ, {}, clear=False):
+            backup_restore.os.environ.pop(backup_restore.BACKUP_DIR_KEY, None)
+            with (self.source / ".env").open("a", encoding="utf-8") as handle:
+                handle.write(f'VEIL_BACKUP_DIR="{self.backups}"\n')
+            with mock.patch.object(backup_restore, "default_desktop_dir", return_value=None):
+                path, count = backup_restore.pre_update_backup(self.source)
+        self.assertTrue(path.parent == self.backups.resolve() and count > 0)
+
+    def test_pre_update_failure_changes_nothing_in_the_project(self):
+        before = {p: p.read_bytes() for p in self.source.rglob("*") if p.is_file()}
+        with mock.patch.dict(backup_restore.os.environ, {backup_restore.BACKUP_DIR_KEY: str(self.source / "data" / "inside")}):
+            with self.assertRaises(backup_restore.BackupError):
+                backup_restore.pre_update_backup(self.source)
+        self.assertEqual(before, {p: p.read_bytes() for p in self.source.rglob("*") if p.is_file()})
+
+    def test_usage_report_counts_pile_ups_and_deletes_nothing(self):
+        copy = self.source / "data" / "fixture" / "memory.backup-20261101T000000Z"
+        copy.mkdir()
+        (copy / "note.md").write_bytes(b"x" * 2048)
+        (self.source / "data" / "stray.tmp").write_bytes(b"y")
+        self._create()
+        lines = backup_restore.usage_report(self.source, self.backups)
+        text = "\n".join(lines)
+        self.assertIn("1 份", text)
+        self.assertIn("遗留的 .tmp 文件：1 个", text)
+        self.assertIn("备份：1 份", text)
+        self.assertTrue((copy / "note.md").exists() and (self.source / "data" / "stray.tmp").exists())
 
 
 if __name__ == "__main__":
