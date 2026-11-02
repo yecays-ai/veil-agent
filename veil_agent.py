@@ -1183,6 +1183,8 @@ class Budget:
         Memory/embedding/notes estimates keep their conservative full charge. Chat, autonomy and
         glance requests are charged in full only if they were marked as dispatched; otherwise the
         provider was never called and nothing is charged. Returns the number of settled entries."""
+        if ledger_recovery.is_unverified(self.store.root):
+            return 0  # never settle anything while the ledger is unverified
         self.totals()  # Validate the full ledger before recovering any entry.
         rows = self.store.read('costs.jsonl')
         settled = {row.get('id') for row in rows if row.get('type') == 'settle'}

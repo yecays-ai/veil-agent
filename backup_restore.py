@@ -590,7 +590,13 @@ def _reconcile_ledger(target, sources, notice):
     restored = target / "data" / "costs.jsonl"
     for source in sources:
         current = Path(source) / "data" / "costs.jsonl"
-        if current.is_symlink() or not current.is_file():
+        try:
+            ledger_recovery.carry_unverified(Path(source) / "data", target / "data")
+        except (ValueError, OSError) as exc:
+            raise BackupError(f"恢复前的待核实标记无法带入：{exc}") from exc
+        if current.is_symlink():
+            raise BackupError("恢复前的费用账本是符号链接，已停止。")
+        if not current.is_file():
             continue
         if restored.is_symlink():
             raise BackupError("恢复后的账本是符号链接，已停止。")
@@ -618,9 +624,11 @@ def _reconcile_ledger(target, sources, notice):
             f"{result.completed} 个后续结算/发出记录（每个请求的完整过程都保留）。"
         )
         if result.evidence:
-            name = ledger_recovery.append_evidence(target / "data", result.evidence)
-            ledger_recovery.mark_unverified(target / "data", "restore-reconciliation",
-                                            len(result.evidence), name)
+            name = ledger_recovery.UNVERIFIED_EVIDENCE
+            if ledger_recovery.append_evidence(target / "data", result.evidence) or \
+                    not ledger_recovery.is_unverified(target / "data"):
+                ledger_recovery.mark_unverified(target / "data", "restore-reconciliation",
+                                                len(result.evidence), name)
             notice(
                 f"有 {len(result.evidence)} 处无法确认（两份账本不一致或有损坏的行）：已原样保存在 data/{name}，"
                 "没有按零元处理，也没有丢弃；所有付费请求已暂停。请核对供应商账单后运行 "

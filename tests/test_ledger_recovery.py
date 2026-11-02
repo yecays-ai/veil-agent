@@ -81,6 +81,16 @@ class MergeTests(unittest.TestCase):
         self.assertEqual([item['kind'] for item in result.evidence], ['conflict'])
         self.assertIn('0.9', result.evidence[0]['preview'])
 
+    def test_duplicate_step_with_different_content_in_the_backup_is_evidence(self):
+        backup = ledger_bytes(row('reserve', 'a'), row('settle', 'a'), row('settle', 'a', amount='0.9'))
+        result = ledger.merge_cost_ledgers(backup, ledger_bytes(row('reserve', 'a')))
+        self.assertEqual([e['kind'] for e in result.evidence], ['backup-duplicate-conflict'])
+
+    def test_bad_period_dates_are_rejected(self):
+        for period in ('2026-13-45', 'tomorrow', 20261101, None):
+            self.assertEqual(ledger.check_cost_row({'type': 'reserve', 'id': 'x', 'amount': '1',
+                                                    'period': period}), 'invalid-period')
+
     def test_unreadable_current_lines_become_evidence_never_zero_cost(self):
         backup = ledger_bytes(row('reserve', 'a'))
         current = ledger_bytes(row('reserve', 'a')) + b'{"type": "settle", "id": "a", "amo'
@@ -222,7 +232,7 @@ class RepairTests(unittest.TestCase):
         self.assertEqual(self.chat.read_bytes(), before)
         outcome = data_repair.repair(self.root, self.chat, confirm=lambda _: 'REPAIR', notice=lambda _: None)
         self.assertEqual(Path(outcome['original_copy']).read_bytes(), before)
-        self.assertEqual(Path(outcome['quarantine']).read_bytes(), b'{"n":3, "tex\n')
+        self.assertEqual(Path(outcome['quarantine']).read_bytes(), b'{"n":3, "tex')
         self.assertEqual(Store(self.root / 'data').read('fixture/chat.jsonl'), [{'n': 1}, {'n': 2}])
         Store(self.root / 'data').append('fixture/chat.jsonl', {'n': 4})  # appending works again
         self.assertFalse(ledger.is_unverified(self.root / 'data'))  # chat repair does not block payments
@@ -239,6 +249,8 @@ class RepairTests(unittest.TestCase):
                           + row('reserve', 'b'))
         outcome = data_repair.repair(self.root, costs, confirm=lambda _: 'REPAIR', notice=lambda _: None)
         self.assertEqual(Path(outcome['quarantine']).read_bytes(), b'{"type": "settle", "id": "a", "am\n')
+        evidence = (self.root / 'data' / 'costs-unverified.jsonl').read_text(encoding='utf-8')
+        self.assertIn('repair-quarantined', evidence)
         self.assertTrue(ledger.is_unverified(self.root / 'data'))
         budget = Budget(Store(self.root / 'data'), clock=lambda: DAY)
         with self.assertRaises(BudgetExceeded):
@@ -251,6 +263,52 @@ class RepairTests(unittest.TestCase):
         self.assertFalse(ledger.is_unverified(self.root / 'data'))
         self.assertTrue(list((self.root / 'data').glob('costs-unverified.verified-*.json')))
         self.assertTrue(Path(outcome['quarantine']).exists())
+
+    def test_repair_refuses_while_an_interrupted_restore_marker_exists(self):
+        (self.root / backup_restore.RECOVERY_MARKER_NAME).write_text('{}', encoding='utf-8')
+        with self.assertRaises(backup_restore.BackupError):
+            data_repair.repair(self.root, self.chat, confirm=lambda _: 'REPAIR', notice=lambda _: None)
+        self.assertEqual(self.chat.read_bytes(), b'{"n":1}\n{"n":2}\n{"n":3, "tex')
+
+    def test_unreadable_or_empty_marker_keeps_the_pause_and_cannot_be_verified(self):
+        data = self.root / 'data'
+        (data / ledger.UNVERIFIED_MARKER).write_text('not json', encoding='utf-8')
+        self.assertTrue(ledger.is_unverified(data))
+        self.assertIn('仍然有效', '\n'.join(data_repair.ledger_status(self.root)))
+        with self.assertRaises(backup_restore.BackupError):
+            data_repair.ledger_verify(self.root, confirm=lambda _: 'VERIFIED', notice=lambda _: None)
+        self.assertTrue(ledger.is_unverified(data))
+        ledger.mark_unverified(data, 'x', 1, 'costs-unverified.jsonl')  # never overwrites it
+        self.assertEqual((data / ledger.UNVERIFIED_MARKER).read_text(encoding='utf-8'), 'not json')
+
+    def test_a_pause_in_the_old_data_survives_and_nothing_is_settled_while_paused(self):
+        old, new = self.root / 'old', self.root / 'new'
+        old.mkdir()
+        new.mkdir()
+        ledger.append_evidence(old, [{'kind': 'x', 'n': 1}])
+        ledger.mark_unverified(old, 'repair-quarantined', 1, ledger.UNVERIFIED_EVIDENCE)
+        self.assertTrue(ledger.carry_unverified(old, new))
+        self.assertTrue(ledger.is_unverified(new))
+        self.assertEqual(ledger.append_evidence(new, [{'kind': 'x', 'n': 1}]), 0)
+        directory = tempfile.TemporaryDirectory()
+        try:
+            store = Store(Path(directory.name))
+            budget = Budget(store, clock=lambda: DAY)
+            budget.reserve_amount('fixture', 'm', '0.1', 'chat')
+            ledger.mark_unverified(store.root, 'x', 1, ledger.UNVERIFIED_EVIDENCE)
+            self.assertEqual(budget.recover_interrupted(), 0)
+        finally:
+            directory.cleanup()
+
+    def test_repair_refuses_a_symlinked_data_folder(self):
+        real = self.root / 'realdata'
+        (self.root / 'data').rename(real)
+        try:
+            os.symlink(real, self.root / 'data', target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest('symlinks unavailable')
+        with self.assertRaises(backup_restore.BackupError):
+            data_repair.diagnose(self.root, self.root / 'data' / 'fixture' / 'chat.jsonl')
 
     def test_refuses_files_outside_data_and_while_veil_runs(self):
         outside = self.root / 'outside.jsonl'

@@ -7,6 +7,7 @@ start new paid requests (see ``Budget``)."""
 import base64
 import json
 import os
+import re
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
@@ -74,6 +75,20 @@ def _decimal(value):
     return amount if amount.is_finite() and amount >= 0 else None
 
 
+_PERIOD_START = re.compile(r'^\d{4}-\d{2}-\d{2}')
+
+
+def _valid_period(value):
+    """Budget buckets by the first 10 / 7 characters, so they must be a real YYYY-MM-DD date."""
+    if not isinstance(value, str) or not _PERIOD_START.match(value):
+        return False
+    try:
+        datetime.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
+
+
 def check_cost_row(row):
     """The reason Budget would refuse this ledger row, or None."""
     if row.get('type') not in COST_EVENT_TYPES:
@@ -82,7 +97,7 @@ def check_cost_row(row):
         return 'missing-id'
     if row['type'] in ('reserve', 'settle') and _decimal(row.get('amount')) is None:
         return 'invalid-amount'
-    if row['type'] == 'reserve' and (not isinstance(row.get('period'), str) or len(row['period']) < 10):
+    if row['type'] == 'reserve' and not _valid_period(row.get('period')):
         return 'invalid-period'
     return None
 
@@ -91,9 +106,11 @@ def find_problems(lines, *, cost_ledger=False):
     """Every line that needs attention, as (Line, problem). 'no-newline' is a fix, not a loss."""
     found = []
     for line in lines:
-        problem = line.problem
-        if problem is None and cost_ledger:
+        problem = line.problem if line.problem != 'no-newline' else None
+        if problem is None and cost_ledger and line.row is not None:
             problem = check_cost_row(line.row)
+        if problem is None:
+            problem = line.problem  # a clean row that only lacks its newline
         if problem:
             found.append((line, problem))
     return found
@@ -107,15 +124,13 @@ def _terminated(raw):
     return raw if raw.endswith((b'\n', b'\r')) or not raw else raw + b'\n'
 
 
-_SIGNIFICANT = {
-    'reserve': ('amount', 'period', 'character', 'model', 'category'),
-    'settle': ('amount',),
-    'dispatch': (),
-}
+def _same(left, right):
+    """A ledger row is append-only, so the same step must be identical in every field."""
+    return left == right
 
 
 def _evidence_row(kind, line=None, **fields):
-    row = {'kind': kind, 'recorded': datetime.now(timezone.utc).isoformat(), **fields}
+    row = {'kind': kind, **fields}
     if line is not None:
         row['line_number'] = line.number
         row['raw_b64'] = base64.b64encode(line.raw).decode('ascii')
@@ -142,13 +157,18 @@ def merge_cost_ledgers(backup_raw, current_raw):
     reserve / dispatch / settle rows. A step both ledgers have but with different
     content is a conflict: the backup row stays and the other version goes to evidence."""
     backup_lines = read_lines(backup_raw)
-    known = {}
+    known, evidence = {}, []
     for line in backup_lines:
-        if line.row is not None and check_cost_row(line.row) is None:
-            known[(line.row['id'], line.row['type'])] = line.row
+        if line.row is None or check_cost_row(line.row) is not None:
+            continue
+        key = (line.row['id'], line.row['type'])
+        if key in known and not _same(known[key], line.row):
+            evidence.append(_evidence_row('backup-duplicate-conflict', line, id=key[0], type=key[1],
+                                          detail='the backup ledger repeats this step with different content'))
+        known[key] = line.row
     backup_ids = {key[0] for key in known}
     merged = [_terminated(backup_raw)]
-    evidence, new_ids, completed, seen = [], set(), 0, {}
+    new_ids, completed, seen = set(), 0, {}
     for line in read_lines(current_raw):
         problem = line.problem if line.problem != 'no-newline' else None
         if problem is None and line.row is not None:
@@ -158,15 +178,14 @@ def merge_cost_ledgers(backup_raw, current_raw):
             continue
         row = line.row
         key = (row['id'], row['type'])
-        fields = _SIGNIFICANT[row['type']]
         if key in seen:
-            if any(seen[key].get(name) != row.get(name) for name in fields):
+            if not _same(seen[key], row):
                 evidence.append(_evidence_row('conflict', line, id=row['id'], type=row['type'],
                                               detail='current ledger repeats this step with different content'))
             continue
         seen[key] = row
         if key in known:
-            if any(known[key].get(name) != row.get(name) for name in fields):
+            if not _same(known[key], row):
                 evidence.append(_evidence_row('conflict', line, id=row['id'], type=row['type'],
                                               kept=known[key], detail='backup and current ledger disagree'))
             continue
@@ -218,19 +237,47 @@ def _write_json_atomic(path, value):
     os.replace(temporary, path)
 
 
+def _evidence_key(row):
+    return json.dumps({k: v for k, v in row.items() if k != 'recorded'}, sort_keys=True, ensure_ascii=False)
+
+
 def append_evidence(data_dir, rows, name=UNVERIFIED_EVIDENCE):
-    """Append evidence rows (one JSON object per line) and fsync."""
+    """Append evidence rows not already recorded (one JSON object per line) and fsync.
+
+    Returns how many rows were new, so re-running a reconciliation never duplicates evidence."""
     path = os.path.join(str(data_dir), name)
-    payload = b''.join((json.dumps(row, ensure_ascii=False) + '\n').encode('utf-8') for row in rows)
-    with open(path, 'ab', buffering=0) as handle:
-        handle.write(payload)
-        os.fsync(handle.fileno())
-    return name
+    existing = set()
+    try:
+        with open(path, 'rb') as handle:
+            for raw in handle.read().splitlines():
+                try:
+                    existing.add(_evidence_key(json.loads(raw.decode('utf-8'))))
+                except (ValueError, UnicodeDecodeError, AttributeError):
+                    continue
+    except FileNotFoundError:
+        pass
+    fresh = []
+    for row in rows:
+        key = _evidence_key(row)
+        if key not in existing:
+            existing.add(key)
+            fresh.append(row)
+    if fresh:
+        payload = b''.join((json.dumps(row, ensure_ascii=False) + '\n').encode('utf-8') for row in fresh)
+        with open(path, 'ab', buffering=0) as handle:
+            handle.write(payload)
+            os.fsync(handle.fileno())
+    return len(fresh)
 
 
 def mark_unverified(data_dir, kind, count, evidence_file, **details):
-    """Block paid requests until a person has checked these items against the provider bills."""
+    """Block paid requests until a person has checked these items against the provider bills.
+
+    An unreadable existing marker is never overwritten: it keeps blocking and must be
+    recovered explicitly."""
     previous = read_marker(data_dir) or {}
+    if previous.get('unreadable'):
+        return
     items = [item for item in previous.get('items', []) if isinstance(item, dict)]
     items.append({'kind': kind, 'count': count, 'evidence': evidence_file,
                   'recorded': datetime.now(timezone.utc).isoformat(), **details})
@@ -239,6 +286,47 @@ def mark_unverified(data_dir, kind, count, evidence_file, **details):
         'created': previous.get('created') or datetime.now(timezone.utc).isoformat(),
         'items': items,
     })
+
+
+def carry_unverified(source_data, target_data):
+    """A restore must never lift the pause: keep an unverified state the old data already had."""
+    source_marker = marker_path(source_data)
+    if not os.path.lexists(source_marker):
+        return False
+    if os.path.islink(source_marker) or not os.path.isfile(source_marker):
+        raise ValueError('the unverified-costs marker is not a regular file')
+    carried = read_marker(source_data)
+    if carried and not carried.get('unreadable'):
+        for item in carried.get('items', []):
+            if not isinstance(item, dict):
+                continue
+            name = item.get('evidence')
+            if isinstance(name, str) and name == os.path.basename(name):
+                source_evidence = os.path.join(str(source_data), name)
+                if os.path.isfile(source_evidence) and not os.path.islink(source_evidence):
+                    with open(source_evidence, 'rb') as handle:
+                        rows = []
+                        for raw in handle.read().splitlines():
+                            try:
+                                rows.append(json.loads(raw.decode('utf-8')))
+                            except (ValueError, UnicodeDecodeError):
+                                continue
+                    if name.endswith('.jsonl') and name == UNVERIFIED_EVIDENCE:
+                        append_evidence(target_data, rows)
+                    elif not os.path.lexists(os.path.join(str(target_data), name)):
+                        with open(source_evidence, 'rb') as src, \
+                                open(os.path.join(str(target_data), name), 'wb') as dst:
+                            dst.write(src.read())
+                            dst.flush()
+                            os.fsync(dst.fileno())
+            mark_unverified(target_data, item.get('kind', 'carried'), item.get('count', 0), name,
+                            **{k: v for k, v in item.items() if k not in ('kind', 'count', 'evidence', 'recorded')})
+    elif not os.path.lexists(marker_path(target_data)):
+        with open(source_marker, 'rb') as src, open(marker_path(target_data), 'wb') as dst:
+            dst.write(src.read())
+            dst.flush()
+            os.fsync(dst.fileno())
+    return True
 
 
 def archive_marker(data_dir):

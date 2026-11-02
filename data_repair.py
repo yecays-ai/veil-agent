@@ -5,6 +5,7 @@ removed line goes to a quarantine file byte for byte, and nothing is ever delete
 ledger a repair also blocks new paid requests until a person has checked the costs."""
 
 import argparse
+import base64
 import hashlib
 import os
 from pathlib import Path
@@ -13,7 +14,7 @@ import sys
 import uuid
 
 import ledger_recovery as ledger
-from backup_restore import BackupError, _cold_lock, _utc_stamp
+from backup_restore import BackupError, RECOVERY_MARKER_NAME, _cold_lock, _utc_stamp
 
 
 def _is_cost_ledger(root, path):
@@ -22,6 +23,8 @@ def _is_cost_ledger(root, path):
 
 def _resolve(root, file):
     root = Path(root).resolve()
+    if (root / 'data').is_symlink():
+        raise BackupError('data 目录是符号链接，已停止。')
     raw = Path(file).expanduser()
     if not raw.is_absolute():
         raw = root / raw
@@ -92,7 +95,9 @@ def repair(root, file, *, confirm=input, notice=print):
     root = Path(root).resolve()
     path = _resolve(root, file)
     cost = _is_cost_ledger(root, path)
-    with _cold_lock(root):
+    if os.path.lexists(root / RECOVERY_MARKER_NAME):
+        raise BackupError('上一次恢复没有完成（存在 .veil-restore-incomplete.json），请先按提示重新运行恢复。')
+    with _cold_lock(root, create_session=True):
         raw = path.read_bytes()
         lines = ledger.read_lines(raw)
         problems = ledger.find_problems(lines, cost_ledger=cost)
@@ -113,22 +118,30 @@ def repair(root, file, *, confirm=input, notice=print):
         stamp = _utc_stamp()
         original_copy = path.with_name(f'{path.name}.corrupt-{stamp}')
         shutil.copy2(path, original_copy)
+        with original_copy.open('rb') as handle:
+            os.fsync(handle.fileno())
         if _sha256(original_copy) != _sha256(path):
             original_copy.unlink(missing_ok=True)
             raise BackupError('原文件备份校验失败，已停止，文件没有改动。')
         bad = {id(line) for line, _ in serious}
         quarantine = path.with_name(f'{path.stem}.quarantine-{stamp}.jsonl')
-        _write_atomic(quarantine, b''.join(ledger._terminated(line.raw) for line, _ in serious))
+        _write_atomic(quarantine, b''.join(line.raw for line, _ in serious))
         repaired = b''.join(ledger._terminated(line.raw) for line in lines if id(line) not in bad)
         if cost:
             ledger.validate_cost_ledger(repaired)
+        if cost:
+            # Pause paid requests first: if we stop after replacing the file, costs stay blocked.
+            ledger.append_evidence(path.parent, [
+                {'kind': 'repair-quarantined', 'line_number': line.number,
+                 'raw_b64': base64.b64encode(line.raw).decode('ascii'), 'problem': problem,
+                 'original_copy': original_copy.name}
+                for line, problem in serious])
+            ledger.mark_unverified(path.parent, 'repair-quarantined', len(serious), ledger.UNVERIFIED_EVIDENCE,
+                                   original_copy=original_copy.name, quarantine=quarantine.name)
         _write_atomic(path, repaired)
         after = ledger.find_problems(ledger.read_lines(path.read_bytes()), cost_ledger=cost)
         if after:
             raise BackupError(f'修复后仍有问题（{len(after)} 行）；原文件已保存为 {original_copy.name}。')
-        if cost:
-            ledger.mark_unverified(path.parent, 'repair-quarantined', len(serious), quarantine.name,
-                                   original_copy=original_copy.name)
         notice(f'已修复。原文件保存为：{original_copy}')
         notice(f'被隔离的 {len(serious)} 行（原样保留）：{quarantine}')
         if cost:
@@ -143,7 +156,11 @@ def ledger_status(root):
     if marker is None:
         return ['费用账本没有待核实的记录。']
     out = ['费用账本有待核实的记录，已暂停所有付费请求（聊天、自主活动、瞄一眼、记忆整理都不会发请求）。']
+    if marker.get('unreadable') or not marker.get('items'):
+        out.append('  - 标记文件无法读取或没有明细：暂停状态仍然有效。请保留 data/costs-unverified* 文件并联系 Claude 协助核对。')
     for item in marker.get('items', []):
+        if not isinstance(item, dict):
+            continue
         out.append(f"  - {item.get('kind')}：{item.get('count')} 项，证据文件 data/{item.get('evidence')}"
                    + (f"，原文件 data/{item['original_copy']}" if item.get('original_copy') else ''))
     out.append('请对照供应商账单，确认保留的账本金额合理；确认后运行 data_repair.py ledger-verify。')
@@ -159,6 +176,8 @@ def ledger_verify(root, *, confirm=input, notice=print):
             return None
         for line in ledger_status(root):
             notice(line)
+        if marker.get('unreadable') or not marker.get('items'):
+            raise BackupError('标记文件无法读取或没有明细，不能自动确认；仍然暂停付费请求。')
         if confirm('你已核对供应商账单并确认费用？输入 VERIFIED：') != 'VERIFIED':
             raise BackupError('未确认，仍然暂停付费请求。')
         archived = ledger.archive_marker(root / 'data')

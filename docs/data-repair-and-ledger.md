@@ -27,7 +27,8 @@
 3. 确认后修复：`.venv\Scripts\python.exe data_repair.py repair --file ...`，输入 `REPAIR`。它会：
    - 先把原文件完整保存成 `<原名>.corrupt-<时间>`（并校验一致）；
    - 把有问题的行**原样**移到 `<名字>.quarantine-<时间>.jsonl`，其余记录一字不动；
-   - 只缺末尾换行的文件，只补一个换行，不改任何记录。
+   - 只缺末尾换行的文件，只补一个换行，不改任何记录（这种情况不会生成 `.corrupt-` 副本，也不会暂停付费请求）。
+   - 上一次恢复没有完成（出现 `.veil-restore-incomplete.json`）时，修复工具会拒绝运行，请先重新运行恢复。
 4. 修的是费用账本 `costs.jsonl` 时：被隔离的行可能对应真实花费，所以修复后同样会暂停付费请求，要按上面的步骤核对并 `ledger-verify`。
 
 只能处理项目 `data` 文件夹里的 `.jsonl` 文件。
