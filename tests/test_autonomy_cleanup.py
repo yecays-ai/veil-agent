@@ -70,6 +70,22 @@ class WakeCountAndQuietHoursTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 parse_quiet_hours(bad)
 
+    def test_wake_context_carries_earlier_activity_and_lab_tail(self):
+        for index in range(4):
+            self.add_row(f'2026-11-0{index + 1}T10:00:00+08:00')
+            self.controller.rows[-1].update(decision=f'decision-{index}', current_focus=f'focus-{index}')
+        text = self.controller._context()
+        self.assertIn('decision-2', text)
+        self.assertIn('decision-1', text)
+        self.assertNotIn('decision-0', text)
+        lab = self.root / 'data' / 'test' / 'lab'
+        lab.mkdir(parents=True, exist_ok=True)
+        (lab / 'diary.md').write_text('START ' + 'x' * 3000 + ' LAST-LINE-WRITTEN', encoding='utf-8')
+        self.controller.chat.tools = SimpleNamespace(files=SimpleNamespace(lab=lab))
+        lab_text = self.controller._lab_context()
+        self.assertIn('START', lab_text)
+        self.assertIn('LAST-LINE-WRITTEN', lab_text)
+
     def test_wake_context_and_chat_ledger_show_todays_count(self):
         self.assertIn('Autonomous wakes today: 0 of 3 used', self.controller._context())
         self.add_row(datetime.now().astimezone().isoformat())

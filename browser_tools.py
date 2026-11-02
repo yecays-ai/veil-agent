@@ -19,6 +19,7 @@ BROWSER_TOOL_NAMES = frozenset({'browser'})
 MAX_STEPS = 20
 MAX_SECONDS = 300
 MAX_BYTES = 8192
+TEXT_BYTES = 4500
 FORBIDDEN = re.compile(
     r'login|signin|signout|logout|passport|oauth|account|checkout|purchase|delete|'
     r'download|upload|publish|comment|reply|like|favorite|coin|subscribe|message|send|'
@@ -28,7 +29,9 @@ TOOL = SimpleNamespace(
     name='browser',
     description=(
         'Browse public HTTPS pages in your own isolated visible browser, also during autonomous wakes. '
-        'Use web_search for discovery, open a URL, observe, click a fresh link_id, or scroll to see more links. '
+        'Use web_search for discovery, then open a URL, click a fresh link_id, or scroll to see more. '
+        'open, click and scroll each already return the page text and links, so do not call observe right after them; '
+        'observe only re-reads the current page. '
         'click navigates an anchor URL; no buttons/forms, login, accounts, social actions or downloads. '
         'Only page/link text and measured video state are evidence: page ready does NOT mean video playing. '
         'Human input, stop/pause, 20 steps and 5 minutes take priority. close releases your browser.'),
@@ -126,7 +129,7 @@ SNAPSHOT = """() => {
  const visible = e => {const r=e.getBoundingClientRect(); return r.width>0 && r.height>0 &&
    r.bottom>0 && r.top<innerHeight && getComputedStyle(e).visibility!=='hidden';};
  return {title: document.title.slice(0,300), ready: document.readyState,
-   text: (document.body?.innerText || '').slice(0,1200),
+   text: (document.body?.innerText || '').slice(0,3000),
    links: [...document.querySelectorAll('a[href]')].filter(visible).slice(0,60)
      .map(e=>({text:(e.innerText || e.getAttribute('title') || e.getAttribute('aria-label') || '').trim().slice(0,100), url:e.href})),
    videos:[...document.querySelectorAll('video')].slice(0,3).map(v=>({
@@ -220,6 +223,8 @@ class BrowserTools:
     async def _snapshot(self):
         public_url(self.page.url)
         data = await self.page.evaluate(SNAPSHOT)
+        # Keep room for links: long (e.g. Chinese) page text is cut by bytes, not only characters.
+        data['text'] = data['text'].encode('utf-8', 'ignore')[:TEXT_BYTES].decode('utf-8', 'ignore')
         self.serial += 1
         self.links = {}
         result_links = []
