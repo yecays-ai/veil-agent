@@ -108,9 +108,10 @@
         <label data-billing-field="tokens">输入 ¥/百万 tokens<input id="model-input-price" type="number" min="0" step="any" inputmode="decimal"></label>
         <label data-billing-field="tokens">缓存输入 ¥/百万 tokens（不知道就留空）<input id="model-cached-price" type="number" min="0" step="any" inputmode="decimal"></label>
         <label data-billing-field="tokens">输出 ¥/百万 tokens<input id="model-output-price" type="number" min="0" step="any" inputmode="decimal"></label>
-        <label>最长输入（tokens）<input id="model-max-input" type="number" min="4096" max="2000000" step="1024" value="32768"></label>
+        <label>最长输入（tokens）<input id="model-max-input" type="number" min="4096" max="2000000" step="1" value="32768"></label>
         <label class="check-row"><input id="model-thinking" type="checkbox" checked>思考模式（DeepSeek 一定要开）</label>
         <div class="tool-row"><button type="submit">保存模型</button><button type="button" id="model-cancel">取消</button></div>
+        <p id="models-error" class="setting-hint" role="alert" hidden></p>
       </form>
     </article>
     <article class="surface appearance-card"><div class="section-heading"><div><p class="eyebrow">CSS SETTINGS</p><h3>外观</h3><p>主题、背景和透明度会保存在这台电脑上。</p></div><button id="reset-appearance" class="quiet-button">恢复默认</button></div>

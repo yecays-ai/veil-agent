@@ -1622,14 +1622,16 @@ function modelsPayload(){
     models:v.models.filter(m=>!m.builtin).map(m=>{const out={};for(const k of ['id','endpoint','model','label','thinking','billing','cny_per_call','input_cny_per_million','cached_input_cny_per_million','output_cny_per_million','max_input_tokens'])if(m[k]!==undefined)out[k]=m[k];return out}),
     use:{...v.use},limits:{...v.limits}};
 }
+function showModelsError(text){const el=$('models-error');el.textContent=text||'';el.hidden=!text}
 async function saveModels(change,done){
-  if(!modelsView||modelsSaving)return false;
-  modelsSaving=true;
+  if(!modelsView)return false;
+  if(modelsSaving){showModelsError('上一次保存还没结束，稍等几秒再点一次。');return false}
+  modelsSaving=true;showModelsError('');
   try{
     const r=await api('/api/models',{...modelsPayload(),...change});const data=await r.json();
-    if(!r.ok){add('error',(data&&data.message)||'模型设置保存失败，请检查本机 Agent 连接后重试。');return false}
+    if(!r.ok){const msg=(data&&data.message)||'模型设置保存失败，请检查本机 Agent 连接后重试。';showModelsError(msg);add('error',msg);return false}
     modelsSignature='';renderModels(data.models);if(done)add('notice',done);return true;
-  }catch(e){add('error','模型设置保存失败，请检查本机 Agent 连接后重试。');return false}
+  }catch(e){const msg='模型设置保存失败，请检查本机 Agent 连接后重试。';showModelsError(msg);add('error',msg);return false}
   finally{modelsSaving=false;$('model-switch').disabled=stopping||stopped}
 }
 async function useModel(role,id){
@@ -1682,7 +1684,7 @@ function openModelForm(m){
   $('model-output-price').value=m&&m.output_cny_per_million||'';$('model-max-input').value=m?m.max_input_tokens:32768;
   $('model-thinking').checked=m?m.thinking:true;setBilling(m?m.billing:'call');$('model-name').focus();
 }
-function closeModelForm(){$('model-form').hidden=true;$('add-model').hidden=false;editingModel=null}
+function closeModelForm(){showModelsError('');$('model-form').hidden=true;$('add-model').hidden=false;editingModel=null}
 $('add-model').onclick=()=>openModelForm(null);
 $('model-cancel').onclick=closeModelForm;
 $('model-form').onsubmit=async ev=>{

@@ -1,3 +1,7 @@
+## 工单 212 交接（2026-11-04）
+
+- 只改 `desktop/chat.html` 和 `desktop/chat.js`：模型页表单加 `#models-error`，保存失败写这里；最长输入 step 改 1。无后端改动；原因为读代码推断，真机未验证。
+
 ## 工单 211 交接（2026-11-04）
 
 - `model_settings.py`：角色增加 `glance`，值可为模型 id 或 `follow-chat`；未设置时优先选名称含 `grok-4.6` 的已配置模型，没有则跟随聊天（`selected()`/`chosen()`）。
