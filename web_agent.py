@@ -6,6 +6,7 @@ bound to 127.0.0.1.
 """
 import argparse
 import base64
+import bisect
 import hashlib
 import hmac
 import json
@@ -44,6 +45,8 @@ MAX_ACTIVE_VOICE_TRANSCRIPTIONS = 4
 MAX_PENDING_MEDIA = 32
 PENDING_MEDIA_TTL = 60 * 60
 MAX_SUBMISSIONS = 1024
+MAX_LIVE_EVENTS = 5000   # live replay window for page reloads; older chat comes from the durable chat log
+EVENT_TRIM_SLACK = 500
 # Ticket 150: Peter waits only while Lan is actually typing. A keystroke counts as typing for
 # a few seconds; a draft she leaves alone does not hold him. The grace lets her next keystroke
 # arrive after she presses send; the ceiling only guards a stuck typing signal.
@@ -160,7 +163,8 @@ class Hub(ScreenPopMixin):
         self.activity = activity
         self.memory_url = f'http://127.0.0.1:{memory_port}/dashboard' if memory_port else None
         self.memory_tools = None
-        self.events = []
+        self.events = []          # newest MAX_LIVE_EVENTS or so; ids keep counting, see push()
+        self.last_event_id = 0
         self.submit_errors = {}
         self.busy = True          # true until the loop is waiting for input
         self.stopping = False
@@ -923,9 +927,17 @@ class Hub(ScreenPopMixin):
 
     def push(self, kind, text, **metadata):
         with self.cond:
-            event_id = len(self.events) + 1
+            self.last_event_id += 1
+            event_id = self.last_event_id
             self.events.append({'id': event_id, 'kind': kind, 'text': text,
                                 'time': now(), **metadata})
+            if len(self.events) > MAX_LIVE_EVENTS + EVENT_TRIM_SLACK:
+                # Old chat stays in the durable chat log; only the live replay window is bounded.
+                cut = len(self.events) - MAX_LIVE_EVENTS
+                # A card still waiting for an answer must survive a reload, so it is never trimmed.
+                waiting = [event for event in self.events[:cut]
+                           if event['kind'] == 'approval' and event['id'] == self.pending]
+                self.events[:cut] = waiting
             return event_id
 
     def _publish_output(self, text):
@@ -1421,6 +1433,11 @@ class Hub(ScreenPopMixin):
             return first
         return self._chat_batch(first)
 
+    def events_after(self, after):
+        """Events with id greater than `after`; a cursor older than the kept window gets the whole window."""
+        with self.cond:
+            return self.events[bisect.bisect_right(self.events, after, key=lambda event: event['id']):]
+
     def snapshot(self, after):
         tool_activity = self.tool_activity()
         live_context = self.live_context(tool_activity)
@@ -1428,7 +1445,7 @@ class Hub(ScreenPopMixin):
             autonomy = self.autonomy.status() if self.autonomy else {}
             glance = self.glance.status() if self.glance else {}
             codex_watch = self.codex_watch.status() if self.codex_watch else {}
-            return {'events': self.events[after:], 'busy': self.busy and not self.autonomy_busy,
+            return {'events': self.events_after(after), 'busy': self.busy and not self.autonomy_busy,
                     'transcribing_voice': self.transcribing_voice,
                     'user_typing': self.user_typing,
                     'stopping': self.stopping and not self.stopped, 'stopped': self.stopped,

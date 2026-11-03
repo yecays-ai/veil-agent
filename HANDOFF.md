@@ -1,3 +1,8 @@
+## 工单 206 交接（2026-11-03）
+
+- 分支 `ticket/206-hub-events-bounded`：`Hub.push` 用 `last_event_id` 计数并在超过 `MAX_LIVE_EVENTS + EVENT_TRIM_SLACK` 时裁掉最旧事件；`Hub.events_after(after)` 二分取增量；`snapshot` 使用它。测试 `tests/test_hub_event_window.py`。`test_web` 里 5 个语音传输用例在 Linux 沙箱因代理环境失败，与本改动无关。
+- 与工单 205（PR #255）同改 STATUS/HANDOFF，合并后者解冲突时两条都保留。
+
 ## 工单 205 交接（2026-11-03）
 
 - 分支 `ticket/205-ledger-incremental-read`：`Store.incremental_state` 增量读 JSONL，`_LedgerTotals` 增量维护费用合计，`Budget.totals/category_totals` 使用，保留 `_totals_full/_category_totals_full` 作回退和对照测试。新测试 `tests/test_ledger_incremental.py`（含随机账本与整本计算逐项对照）。
