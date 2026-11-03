@@ -431,7 +431,9 @@ class Store:
                 state = cache.get(name)
                 if state is not None:
                     size = stat.st_size
-                    ok = (state['id'] == (stat.st_dev, stat.st_ino) and size >= state['offset'])
+                    ok = (state['id'] == (stat.st_dev, stat.st_ino) and size >= state['offset']
+                          # same length but touched since we last looked: edited in place
+                          and not (size == state['offset'] and stat.st_mtime_ns != state['mtime']))
                     if ok and state['offset']:
                         handle.seek(0)
                         ok = handle.read(min(64, state['offset'])) == state['head']
@@ -459,6 +461,7 @@ class Store:
                     state['head'] = handle.read(min(64, state['offset']))
                     handle.seek(max(0, state['offset'] - 64))
                     state['tail'] = handle.read(min(64, state['offset']))
+            state['mtime'] = os.stat(path).st_mtime_ns
             cache[name] = state
             return state, extra
         except (ValueError, UnicodeError) as exc:
@@ -999,7 +1002,7 @@ class _LedgerTotals:
         self.day, self.month = {}, {}          # settled spend by 'YYYY-MM-DD' / 'YYYY-MM'
         self.pending = Decimal(0)
         self.cat_day, self.cat_pending = {}, {}  # (category, character[, date]) -> Decimal
-        self.bad_category = set()
+        self.bad_ids = {}                        # reservation id -> autonomy/glance category with no valid character
 
     @staticmethod
     def _bump(table, key, amount):
@@ -1017,7 +1020,10 @@ class _LedgerTotals:
         category, character = reserve.get('category'), reserve.get('character')
         valid_character = isinstance(character, str) and bool(character)
         if category in ('autonomy', 'glance') and not valid_character:
-            self.bad_category.add(category)
+            if sign > 0:
+                self.bad_ids[key] = category
+            else:
+                self.bad_ids.pop(key, None)
         if settled is None:
             self.pending += amount
             if valid_character:
@@ -1108,7 +1114,7 @@ class Budget:
             state, extra = self.store.incremental_state('costs.jsonl')
             self._running.update(state, extra)
             run = self._running
-            if category in run.bad_category:
+            if category in run.bad_ids.values():
                 raise ValueError('invalid autonomy character')
             date = stamp[:10]
             day = sum((v for (c, who, d), v in run.cat_day.items()

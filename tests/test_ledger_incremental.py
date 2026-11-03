@@ -107,6 +107,24 @@ class IncrementalLedgerTests(unittest.TestCase):
             with self.assertRaises(UserError):
                 self.budget.totals()
 
+    def test_same_length_edit_in_the_middle_is_reparsed(self):
+        fake_ledger(self.ledger, 20)
+        self.store.read_incremental('costs.jsonl')
+        raw = self.ledger.read_bytes()
+        middle = raw.index(b'"r10"')
+        edited = raw[:middle] + b'"q10"' + raw[middle + 5:]
+        time.sleep(0.02)
+        self.ledger.write_bytes(edited)
+        self.assertEqual(self.store.read_incremental('costs.jsonl'), self.store.read('costs.jsonl'))
+
+    def test_replaced_invalid_autonomy_reservation_no_longer_reports_damage(self):
+        bad = {'type': 'reserve', 'id': 'x', 'period': STAMP, 'amount': '0.01', 'category': 'autonomy'}
+        self.store.append('costs.jsonl', bad)
+        with self.assertRaises(UserError):
+            self.budget.category_totals(None, STAMP, 'autonomy')
+        self.store.append('costs.jsonl', {**bad, 'character': 'a'})
+        self.assertEqual(self.budget.category_totals(None, STAMP, 'autonomy'), (Decimal(0), Decimal('0.01')))
+
     def test_missing_file(self):
         self.assertEqual(self.store.read_incremental('nope.jsonl'), [])
 
