@@ -405,8 +405,10 @@ class MCPServices:
                         rows[index] = {**current, **rows[index], 'managed': 'nowhere',
                                        'command': current['command'], 'args': current['args'],
                                        'cwd': current['cwd'], 'permission': current['permission'],
-                                       'direct_grant': current.get('direct_grant') is True
-                                       or rows[index].get('direct_grant') is True}
+                                       'direct_grant': (rows[index]['direct_grant']
+                                                        if 'direct_grant' in rows[index]
+                                                        else (current.get('direct_grant') is True
+                                                              and rows[index].get('enabled') is True))}
                 raw['services'] = rows
             config = self._validate(raw)
             self.path.parent.mkdir(parents=True, exist_ok=True)

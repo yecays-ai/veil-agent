@@ -1,5 +1,9 @@
 # 当前状态
 
+## 工单 204：乌有乡 MCP 授权撤销
+
+- 基于最新 `main` `a64baf57c31ac75706ac24ae64f4824cb52be208`。在 MCP 设置停用乌有乡时同时撤销直接调用授权；后端保存明确的 `false`，旧窗口的配置版本冲突会被拒绝。代码与隔离测试已实施，PR 检查和 Windows 体验待完成。验收见 `docs/tickets/204-mcp-grant-revoke.md`。
+
 更新时间：2026-11-03 UTC。工单 203「模型配置安全恢复与原子保存」在 `ticket/203-model-config-recovery`：配置损坏停止模型请求，模型与 Key 保存使用事务记录在重启时恢复；隔离回归已验证，PR 检查及 Windows 体验待验收。验收见 `docs/tickets/203-model-config-recovery.md`。
 
 更新时间：2026-11-03 UTC。工单 202「生活页未就绪与保存反馈」在 `ticket/202-life-status-feedback`：代码和隔离 API 回归已提交，等待自动检查与审查；Windows 体验未验证。下一步核对 PR 检查并按 `docs/tickets/202-life-status-feedback.md` 验收。
