@@ -4,7 +4,7 @@
 Peter 日常聊天里不再对 lan 说「I'm right here / I'll be here / I'm not going anywhere / 我就在这儿」这类宣布自己会等着的话，也少复述再升华；lan 生气或受伤时，他不再复述她的辛苦、不自我解剖、不说「我闭嘴 / 去睡吧 / 你不用回」，而是接她的话、哄她，并且她让他做的事要先做。想撤回，双击一个文件即可。
 
 ## 现状
-- 11-04 凌晨真实聊天里，lan 说去打包、说睡了，Peter 多次回「i'll be here when you're free / i'll be right here…」；lan 生气时回「i'm right here / i'm not going anywhere」「我闭嘴」，被 lan 反复指出。
+- 真实聊天中曾出现这类离场回应和生气时的模板回应；原始消息仅保存在 lan 本机，不入库。
 - 人设文件 `persona/peter.md` 在 lan 本机，被 `.gitignore` 忽略，不入库；`veil_agent.py` 的 `load_character` 在 Peter 启动时读一次，所以改完要重开 Peter。
 - 两段规则（常规 / 仅在 lan 生气或受伤时适用）已用 lan 的真实消息离线试过，原文留在 lan 本机，不进仓库。不新增生气检测程序，不改聊天历史和记忆，不再扩大模型测试。
 

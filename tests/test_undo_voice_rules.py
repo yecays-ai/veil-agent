@@ -31,7 +31,23 @@ class UndoVoiceRulesTests(unittest.TestCase):
             self.assertEqual((root / 'persona' / 'peter.md').read_bytes().decode('utf-8'), original)
             copies = list((root / 'persona').glob('peter.before-undo-voice-rules-*.md'))
             self.assertEqual(len(copies), 1)
-            self.assertIn(BEGIN, copies[0].read_text(encoding='utf-8'))
+            self.assertEqual(copies[0].read_bytes(), (original + block).encode('utf-8'))
+
+    def test_block_in_the_middle_keeps_text_after_it(self):
+        text = f'Fictional intro\n\n{BEGIN}\n## Fictional rules\n{END}\nFictional outro\n'
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.make_root(tmp, text)
+            self.assertEqual(self.run_undo(root).returncode, 0)
+            self.assertEqual((root / 'persona' / 'peter.md').read_bytes().decode('utf-8'),
+                             'Fictional intro\n\nFictional outro\n')
+
+    def test_incomplete_block_fails_and_changes_nothing(self):
+        text = f'Fictional intro\n\n{BEGIN}\n## Fictional rules\n'
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.make_root(tmp, text)
+            self.assertNotEqual(self.run_undo(root).returncode, 0)
+            self.assertEqual((root / 'persona' / 'peter.md').read_bytes().decode('utf-8'), text)
+            self.assertEqual(list((root / 'persona').glob('peter.before-undo-*')), [])
 
     def test_without_block_changes_nothing(self):
         with tempfile.TemporaryDirectory() as tmp:
