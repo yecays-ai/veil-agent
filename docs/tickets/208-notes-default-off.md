@@ -1,7 +1,7 @@
 # 工单 208：短期便签后台提取默认关闭
 
 ## 目标
-Lan 11-02 决定先关掉短期便签后台提取（没有体会到作用，只是在花钱）。已有便签数据、`notes.jsonl` 和「上下文」页面都保留；以后想重做，把 `characters/peter/character.toml` 的 `[short_term_notes] enabled` 改回 `true` 即可。
+Lan 11-02 决定先关掉短期便签后台提取（没有体会到作用，只是在花钱）。已有便签数据、`notes.jsonl` 和「上下文」页面都保留；以后想重做，把 `characters/peter/character.toml` 的 `[short_term_notes] enabled` 改回 `true`，并完全退出再重新打开 Peter（配置只在启动时读取）。关闭期间「上下文」页下半部分的便签区为空，这是预期的（Lan 另想去掉该页，另开工单）。
 
 ## 现状
 Lan 电脑上的 `character.toml` 已手改为 `enabled = false`。本工单把仓库默认值也改成 `false`，避免 `update.bat` 因本地改动冲突或把它改回开启。只改配置，不改代码。
