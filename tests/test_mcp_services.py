@@ -252,6 +252,10 @@ class MCPServicesTest(unittest.TestCase):
                         {**service, 'enabled': False, 'direct_grant': False}]},
                         expected_revision=stale_revision)
             self.assertTrue(manager.view()['services'][0]['direct_grant'])
+            with self.assertRaises(MCPConfigError):
+                manager.save({'enabled': True, 'services': [
+                    {**service, 'enabled': True, 'direct_grant': 'false'}]})
+            self.assertTrue(manager.view()['services'][0]['direct_grant'])
             revoked = manager.save({'enabled': True, 'services': [
                 {**service, 'enabled': False, 'direct_grant': False}]},
                 expected_revision=stale_revision)
