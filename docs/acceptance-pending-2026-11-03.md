@@ -1,6 +1,6 @@
 # 待 Lan 验收清单（2026-11-03 审计收尾时汇总）
 
-说明：下面都是代码和自动测试已完成、**Windows 真机未验证**的项目。每项只写体验步骤，详细步骤见对应 `docs/tickets/`。除标注外，先退出 Peter，双击 `update.bat`，再启动。
+说明：下面是待 Windows 体验验收的项目（代码和自动测试已完成并合并，具体状态以 `STATUS.md` 为准）。每项只写体验步骤，详细步骤见对应 `docs/tickets/`。除标注外，先退出 Peter，双击 `update.bat`，再启动。
 
 ## A. 先做（一次更新就能看到）
 1. **更新本身（196/197）**：连续运行两次 `update.bat`，第二次不再出现 Downloading timezonefinder；在 `.env` 设了 `VEIL_BACKUP_DIR` 时，更新前先出现备份结果。
