@@ -1165,9 +1165,44 @@ class Budget:
             return
         cap = self.glance_daily if category == 'glance' else self.autonomy_daily
         used, pending = self.category_totals(character, category=category)
+        if category == 'glance' and pending > 0 and self._settle_stale_glance():
+            used, pending = self.category_totals(character, category=category)
         if used + pending + amount > cap:
             label = '瞄一眼' if category == 'glance' else '自主活动'
             raise BudgetExceeded(f'{label}已达到 ¥{cap}/日上限，聊天不受影响。')
+
+    STALE_GLANCE_SECONDS = 600
+
+    @synchronized
+    def _settle_stale_glance(self):
+        """Ticket 211: a glance request that was dispatched but never settled (process or provider
+        stopped mid-request) must not occupy the daily glance budget until the next restart. After
+        10 minutes it is settled like a restart would: dispatched ones at the reserved upper bound
+        (counted once as spend), never-sent ones at zero. Returns how many were settled."""
+        try:
+            now = datetime.fromisoformat(self.clock())
+            rows = self.store.read_incremental('costs.jsonl')
+        except (ValueError, TypeError, UserError):
+            return 0
+        settled = {row.get('id') for row in rows if row.get('type') == 'settle'}
+        dispatched = {row.get('id') for row in rows if row.get('type') == 'dispatch'}
+        count = 0
+        for row in rows:
+            if row.get('type') != 'reserve' or row.get('category') != 'glance' or row.get('id') in settled:
+                continue
+            try:
+                age = (now - datetime.fromisoformat(row['period'])).total_seconds()
+            except (KeyError, ValueError, TypeError):
+                continue
+            if age < self.STALE_GLANCE_SECONDS:
+                continue
+            reservation = (row['id'], Decimal(row['amount']))
+            if row['id'] in dispatched:
+                self.settle_estimate(reservation, accounting='glance-stale-recovered')
+            else:
+                self.settle_estimate(reservation, accounting='interrupted-not-sent', settled_amount=0)
+            count += 1
+        return count
 
     @synchronized
     def totals(self, stamp=None):
@@ -2781,10 +2816,41 @@ class Chat:
                 return self._send_with_stable_model(text, autonomy=autonomy, **kwargs)
         return self._send_with_stable_model(text, autonomy=autonomy, **kwargs)
 
+    def _glance_model(self):
+        """(provider name, provider) for this glance, or None when it follows Peter's chat model."""
+        models = getattr(self.cfg, 'models', None)
+        if models is None:
+            return None
+        try:
+            model_id, name, provider = models.chosen('glance')
+            if model_id == models.chosen('peter')[0]:
+                return None
+        except SettingsError as exc:
+            raise UserError(str(exc)) from None
+        return name, provider
+
     def _send_with_stable_model(self, text, *, autonomy=False, **kwargs):
         self._apply_pending_model()
         # Ticket 133: background requests (wakes, glances, Codex reminders) may use a larger
         # input window than ordinary chat; chat keeps the provider limit and its cost.
+        glance_model = self._glance_model() if self.glance_mode else None
+        if glance_model is None:
+            return self._send_with_input_limit(text, autonomy=autonomy, **kwargs)
+        # Ticket 211: this glance uses its own model. send() holds the model lock for the whole
+        # request, so no chat request can run while the provider is swapped; it is always put back.
+        name, provider = glance_model
+        saved, saved_name = dict(self.cfg.provider), self.cfg.provider_name
+        self.cfg.provider.clear()
+        self.cfg.provider.update(provider)
+        self.cfg.provider_name = name
+        try:
+            return self._send_with_input_limit(text, autonomy=autonomy, **kwargs)
+        finally:
+            self.cfg.provider.clear()
+            self.cfg.provider.update(saved)
+            self.cfg.provider_name = saved_name
+
+    def _send_with_input_limit(self, text, *, autonomy=False, **kwargs):
         limit = (self.cfg.autonomy or {}).get('max_input_tokens') if autonomy else None
         if not limit or limit == self.cfg.provider['max_input_tokens']:
             return self._send(text, autonomy=autonomy, **kwargs)
