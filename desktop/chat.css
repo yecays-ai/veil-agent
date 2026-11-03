@@ -178,3 +178,5 @@ body{isolation:isolate}
 
 #life-view .sticky-del{flex:none;min-width:30px;min-height:30px;border:0;background:transparent;color:var(--muted);font:inherit;font-size:17px;padding:2px 8px;border-radius:4px;cursor:pointer;opacity:.6}#life-view li:hover .sticky-del,#life-view .sticky-del[data-armed]{opacity:1}#life-view .sticky-del[data-armed]{color:#fff;background:#c0392b;font-size:12px}#life-detail #life-delete[data-armed]{background:#c0392b;color:#fff}
 #life-view .life-sticky button:focus-visible,#life-view .sticky-add input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}#life-view .sticky-add::before{content:"+";flex:none;color:var(--accent);font-size:20px;line-height:1}
+
+.header-model,.header-model select{-webkit-app-region:no-drag}

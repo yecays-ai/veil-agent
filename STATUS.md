@@ -1,5 +1,9 @@
 # 当前状态
 
+## 工单 210：顶部模型下拉能点开
+
+- `ticket/210-model-dropdown-clickable`：顶栏是窗口拖动区，模型下拉没设 `no-drag`，点击被当成拖窗口。给它加 `no-drag`（一行 CSS）。Windows 未验证。验收见 `docs/tickets/210-model-dropdown-clickable.md`。下一个工单号 211。
+
 ## 工单 209：访客浏览器临时文件夹继续重试删除
 
 - `ticket/209-guest-cleanup-retry`：Lan 验收 207 时，窗口开了 6 分钟才关，程序只重试约 5 分钟就放弃，文件夹留下。重试改为约 2 小时。加 1 项测试；Windows 未验证。验收见 `docs/tickets/209-guest-cleanup-retry.md`。下一个工单号 210。
