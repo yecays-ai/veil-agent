@@ -1165,7 +1165,7 @@ class Budget:
             return
         cap = self.glance_daily if category == 'glance' else self.autonomy_daily
         used, pending = self.category_totals(character, category=category)
-        if category == 'glance' and pending > 0 and self._settle_stale_glance():
+        if category == 'glance' and pending > 0 and self.settle_stale_glance():
             used, pending = self.category_totals(character, category=category)
         if used + pending + amount > cap:
             label = '瞄一眼' if category == 'glance' else '自主活动'
@@ -1174,7 +1174,7 @@ class Budget:
     STALE_GLANCE_SECONDS = 600
 
     @synchronized
-    def _settle_stale_glance(self):
+    def settle_stale_glance(self):
         """Ticket 211: a glance request that was dispatched but never settled (process or provider
         stopped mid-request) must not occupy the daily glance budget until the next restart. After
         10 minutes it is settled like a restart would: dispatched ones at the reserved upper bound

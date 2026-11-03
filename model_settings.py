@@ -291,6 +291,9 @@ class ModelSettings:
                             GLANCE_DEFAULT_MODEL in item['model'].lower():
                         if self._provider(self.data, item['id']) is not None:
                             return item['id']
+                for name, provider in self.builtins.items():
+                    if GLANCE_DEFAULT_MODEL in name.lower() or GLANCE_DEFAULT_MODEL in provider['model'].lower():
+                        return BUILTIN_PREFIX + name
                 return FOLLOW_CHAT
             return self.data['use'].get(role, self.default)
 

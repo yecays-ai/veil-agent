@@ -66,6 +66,14 @@ class GlanceModelTests(unittest.TestCase):
         self.assertEqual(seen[1][0], 'fake-model')
         self.assertEqual(cfg.provider['model'], 'fake-model')
 
+    def test_builtin_grok_is_the_default_when_configured(self):
+        toml = TOML + '[providers.grok]\nmodel = "grok-4.6"\nbase_url = "https://g.invalid/v1"\n' \
+            'api_key_env = "FAKE_KEY"\nmax_input_tokens = 6000\ninput_cny_per_million = "1"\n' \
+            'cached_input_cny_per_million = "1"\noutput_cny_per_million = "1"\n'
+        (self.root / 'characters' / 'test' / 'character.toml').write_text(toml, encoding='utf-8')
+        cfg = load_character(self.root, 'test')
+        self.assertEqual(cfg.models.public()['use']['glance'], 'builtin:grok')
+
 
 class StaleGlanceReservationTests(unittest.TestCase):
     def test_old_dispatched_glance_reservation_is_settled_once_and_stops_blocking(self):
