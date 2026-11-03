@@ -22,7 +22,8 @@ POLL_SECONDS = 5.0
 STALE_AFTER_DEAD_OWNER = 24 * 60 * 60  # owner process is gone and the folder is at least 1 day old
 LEGACY_PREFIX = 'veil-chrome-guest-'   # folders made by earlier versions directly in the temp folder
 LEGACY_STALE_AFTER = 7 * 24 * 60 * 60
-WATCH_ATTEMPTS = 60                    # removal retries (about 5 minutes) before leaving it to the sweep
+WATCH_ATTEMPTS = 1440                  # removal retries (about 2 hours) before leaving it to the sweep; the launched
+                                       # process can exit while the real browser keeps the folder open
 STALE_ANYWAY = 7 * 24 * 60 * 60        # a pid can be reused, so also sweep anything over 7 days old
 
 

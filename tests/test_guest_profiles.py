@@ -77,6 +77,22 @@ class GuestProfileTests(unittest.TestCase):
         self.assertEqual(watcher.poll_once(), 0)
         self.assertFalse(directory.exists())
 
+    def test_profile_locked_for_minutes_is_still_retried(self):
+        # The launched process can exit while the real browser keeps the folder open.
+        watcher = gp.GuestProfileWatcher(poll_seconds=3600, parent=self.parent)
+        process, directory = FakeProcess(), gp.create_profile(self.parent)
+        process.code = 0
+        real_remove = gp.remove_profile
+        gp.remove_profile = lambda *a, **k: False
+        try:
+            watcher.watched.append((process, directory))
+            for _ in range(70):  # more than the old 60 retries (about 5 minutes)
+                self.assertEqual(watcher.poll_once(), 1)
+        finally:
+            gp.remove_profile = real_remove
+        self.assertEqual(watcher.poll_once(), 0)
+        self.assertFalse(directory.exists())
+
     def test_legacy_temp_folders_are_swept_only_when_old_real_and_prefixed(self):
         now = time.time()
         old, young, other, plain = (self.root / n for n in ('veil-chrome-guest-abc', 'veil-chrome-guest-new',

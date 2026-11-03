@@ -1,5 +1,9 @@
 # 当前状态
 
+## 工单 209：访客浏览器临时文件夹继续重试删除
+
+- `ticket/209-guest-cleanup-retry`：Lan 验收 207 时，窗口开了 6 分钟才关，程序只重试约 5 分钟就放弃，文件夹留下。重试改为约 2 小时。加 1 项测试；Windows 未验证。验收见 `docs/tickets/209-guest-cleanup-retry.md`。下一个工单号 210。
+
 ## 工单 208：短期便签默认关闭
 
 - `ticket/208-notes-default-off`：仓库 `character.toml` 的 `[short_term_notes] enabled` 改为 `false`（与 Lan 电脑上已手改的一致），数据与页面保留。仅配置，Windows 未验证。验收见 `docs/tickets/208-notes-default-off.md`。下一个工单号 209。

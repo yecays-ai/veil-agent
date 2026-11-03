@@ -9,7 +9,7 @@
 update.bat 后聊一会儿：`data\peter\notes.jsonl` 不再新增 `attempt`，`costs.jsonl` 不再出现新的 `short_term_notes`。若 update.bat 报 `character.toml` 冲突，告诉我，保留 `enabled = false`。
 
 ## 2. 还没从记录里确认的
-1. **访客浏览器清理（207）**：自己操作，别转发给 Peter。在资源管理器地址栏输入 `%TEMP%\veil-chrome-guest` 看现有子文件夹；让 Peter 只做「用访客 Chrome 打开 example.com，打开后告诉我」，再让他关掉；几秒后新出现的子文件夹应消失。若启动报「超时、结果不确定」，告诉我（11-03 16:05 出现过一次）。
+1. **访客浏览器清理（207 + 209）**：更新并完全重开 Peter 后，让 Peter 用访客 Chrome 打开 example.com，**等 6 分钟以上**再关窗口；关闭后 10–20 秒内，`E:\Peter-Agent\VEIL\veil-agent\.local-tmp\veil-chrome-guest\` 里该子文件夹应消失（你的临时文件夹在 `.local-tmp`，不在 C 盘）。旧的 `25520-7efbc6cada6e` 可手动删。别把这个任务转发给 Peter，他读不到临时文件夹。
 2. **瞄一眼不召回（194）**：瞄一眼已打开（11-03），等下一次出现，瞄一眼后，`data\peter\context-log.jsonl` 最新 glance 记录的 `memory_ids` 为空（11-01 之后没有新的瞄一眼）。
 3. **DeepSeek 带图（186）**：已搁置（Lan 近期不常用 DeepSeek），想用时再测，并把 `costs.jsonl` 总数告诉我。
 4. **自主醒来（195）**：看几次醒来的活动页，重复读取变少、能接着上次的事（预计 +¥0.1–0.3/天）。
