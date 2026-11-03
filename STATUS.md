@@ -1,5 +1,9 @@
 # 当前状态
 
+## 工单 209：访客浏览器临时文件夹继续重试删除
+
+- `ticket/209-guest-cleanup-retry`：Lan 验收 207 时，窗口开了 6 分钟才关，程序只重试约 5 分钟就放弃，文件夹留下。重试改为约 2 小时。加 1 项测试；Windows 未验证。验收见 `docs/tickets/209-guest-cleanup-retry.md`。下一个工单号 210。
+
 ## 审计收尾（2026-11-03）
 
 - 深度审计 1–6 已全部代码完成并合并（PR #248、#249、#251–#257）；PERF-04/05 仅测量未改（证据见项目文件 `audit/perf-evidence/`）。本轮审计收尾；待办见 `docs/acceptance-pending-2026-11-03.md` 和下方遗留项。
