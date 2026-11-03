@@ -139,7 +139,8 @@ enabled = true
 
 [short_term_notes]
 # Ticket 123: temporary conversation notes; never written to Ombre or Plan.
-enabled = true
+# Ticket 208: off by default (Lan 2026-11-02: no visible benefit, only cost). Set true to resume background extraction.
+enabled = false
 
 [tool_aliases]
 windows_foreground = "peek_screen"

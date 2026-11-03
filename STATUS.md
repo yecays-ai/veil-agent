@@ -4,10 +4,14 @@
 
 - `ticket/209-guest-cleanup-retry`：Lan 验收 207 时，窗口开了 6 分钟才关，程序只重试约 5 分钟就放弃，文件夹留下。重试改为约 2 小时。加 1 项测试；Windows 未验证。验收见 `docs/tickets/209-guest-cleanup-retry.md`。下一个工单号 210。
 
+## 工单 208：短期便签默认关闭
+
+- `ticket/208-notes-default-off`：仓库 `character.toml` 的 `[short_term_notes] enabled` 改为 `false`（与 Lan 电脑上已手改的一致），数据与页面保留。仅配置，Windows 未验证。验收见 `docs/tickets/208-notes-default-off.md`。下一个工单号 209。
+
 ## 审计收尾（2026-11-03）
 
 - 深度审计 1–6 已全部代码完成并合并（PR #248、#249、#251–#257）；PERF-04/05 仅测量未改（证据见项目文件 `audit/perf-evidence/`）。本轮审计收尾；待办见 `docs/acceptance-pending-2026-11-03.md` 和下方遗留项。
-- 已知未做：短期便签后台提取（Lan 11-02 要求关闭）还没有工单；下一个工单号 208。人设（Peter 说话方式）调整在代码稳定后再慢慢做。
+- 已知：短期便签后台提取已按 Lan 11-02 要求关闭，工单 208 已处理。人设（Peter 说话方式）调整在代码稳定后再慢慢做。
 
 ## 工单 207：访客浏览器临时资料回收
 

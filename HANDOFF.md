@@ -2,6 +2,10 @@
 
 - `guest_profiles.WATCH_ATTEMPTS` 60→1440（约 2 小时）；测试 `test_profile_locked_for_minutes_is_still_retried`。与工单 208（PR #259）同改 STATUS/HANDOFF，合并后者解冲突时两条都保留。下一步：Lan 更新后按工单验收。
 
+## 工单 208 交接（2026-11-03）
+
+- 仅 `characters/peter/character.toml` 一行默认值 + 工单文档。Lan 本机已手改同一行，update.bat 若报该文件冲突，保留 `enabled = false` 即可。下一步：Lan 更新后按工单验收。
+
 ## 审计收尾交接（2026-11-03）
 
 - 仅改文档：新增 `docs/acceptance-pending-2026-11-03.md`（按功能分组的 Lan 验收清单），STATUS 顶部标明审计/冻结期结束。无代码改动。
