@@ -1,3 +1,8 @@
+## 工单 207 交接（2026-11-03）
+
+- 分支 `ticket/207-chrome-guest-cleanup`：新增 `guest_profiles.py`（专用父目录 + 归属标记、`GuestProfileWatcher` 单线程轮询、`sweep_stale`），`windows_interaction.start_application` 改用；`tests/test_guest_profiles.py`。未做 Windows 真机验证（Chrome 启动后的进程是否即浏览器主进程，沿用旧假设）。
+- 与工单 205/206 同改 STATUS/HANDOFF，合并时两条都保留。
+
 ## 工单 206 交接（2026-11-03）
 
 - 分支 `ticket/206-hub-events-bounded`：`Hub.push` 用 `last_event_id` 计数并在超过 `MAX_LIVE_EVENTS + EVENT_TRIM_SLACK` 时裁掉最旧事件；`Hub.events_after(after)` 二分取增量；`snapshot` 使用它。测试 `tests/test_hub_event_window.py`。`test_web` 里 5 个语音传输用例在 Linux 沙箱因代理环境失败，与本改动无关。

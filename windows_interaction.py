@@ -15,6 +15,7 @@ import tempfile
 import threading
 import time
 import tomllib
+import guest_profiles
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -963,7 +964,13 @@ class WindowsInteractionBackend(WindowsDesktopBackend):
                 # A separate user-data root prevents Chrome from routing this launch to Lan's
                 # regular profile. Guest is preferred; incognito keeps the isolated fallback
                 # private if a Chrome policy disables Guest mode.
-                profile_directory = tempfile.mkdtemp(prefix='veil-chrome-guest-')
+                active = [d for _, d in list(guest_profiles.WATCHER.watched)]
+                guest_profiles.sweep_stale(skip=active)
+                guest_profiles.sweep_legacy(skip=active)
+                # A large old folder can take a while to delete; honor a stop or the user's input again.
+                self._cancelled(stopped)
+                self._require_unchanged_input(input_monitor, input_snapshot)
+                profile_directory = str(guest_profiles.create_profile())
                 # A fresh user-data directory counts as a first run; skip Chrome's welcome and
                 # default-browser prompts so the only new window is the requested page.
                 args.extend(['--guest', '--incognito', '--new-window',
@@ -974,17 +981,10 @@ class WindowsInteractionBackend(WindowsDesktopBackend):
                                        stderr=subprocess.DEVNULL, close_fds=True)
         except (OSError, ValueError) as exc:
             if profile_directory:
-                shutil.rmtree(profile_directory, ignore_errors=True)
+                guest_profiles.remove_profile(profile_directory)
             raise ObservationError(f'Windows could not start {app["label"]}. Check that the app can be launched.') from exc
         if profile_directory:
-            def clean_profile_after_exit():
-                try:
-                    process.wait()
-                except Exception:
-                    return
-                shutil.rmtree(profile_directory, ignore_errors=True)
-            threading.Thread(target=clean_profile_after_exit,
-                             name='veil-chrome-guest-cleanup', daemon=True).start()
+            guest_profiles.WATCHER.watch(process, profile_directory)
         return process
 
 
