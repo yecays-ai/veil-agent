@@ -18,7 +18,9 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 BUILTIN_PREFIX = 'builtin:'
-ROLES = ('peter', 'background')
+ROLES = ('peter', 'background', 'glance')
+FOLLOW_CHAT = 'follow-chat'  # glance only: use whatever Peter's chat model is
+GLANCE_DEFAULT_MODEL = 'grok-4.6'  # Ticket 211: preferred glance model when Lan has configured it
 DEFAULT_DAILY = Decimal('10')
 DEFAULT_MONTHLY = Decimal('300')
 DEFAULT_MAX_INPUT = 32768
@@ -183,7 +185,7 @@ class ModelSettings:
         use = raw.get('use') if isinstance(raw.get('use'), dict) else {}
         for role in ROLES:
             if role in use:
-                if self._provider(data, use[role]) is None:
+                if not self._choice_ok(data, role, use[role]):
                     raise SettingsError(f'模型配置 models.json 中 {role} 选中的模型不存在或无效；原文件已保留。')
                 data['use'][role] = use[role]
         limits = raw.get('limits') if isinstance(raw.get('limits'), dict) else {}
@@ -271,13 +273,39 @@ class ModelSettings:
                 provider[key] = Decimal(model[key])
         return provider
 
+    def _choice_ok(self, data, role, model_id):
+        if role == 'glance' and model_id == FOLLOW_CHAT:
+            return True
+        return self._provider(data, model_id) is not None
+
+    def selected(self, role):
+        """What the 模型 page shows for a role. For glance this can be FOLLOW_CHAT."""
+        with self.lock:
+            if role == 'glance':
+                stored = self.data['use'].get('glance')
+                if stored is not None:
+                    return stored
+                # Ticket 211: default to grok-4.6 when Lan has it configured, else follow chat.
+                for item in self.data['models']:
+                    if GLANCE_DEFAULT_MODEL in (item.get('label') or '').lower() or \
+                            GLANCE_DEFAULT_MODEL in item['model'].lower():
+                        if self._provider(self.data, item['id']) is not None:
+                            return item['id']
+                for name, provider in self.builtins.items():
+                    if GLANCE_DEFAULT_MODEL in name.lower() or GLANCE_DEFAULT_MODEL in provider['model'].lower():
+                        return BUILTIN_PREFIX + name
+                return FOLLOW_CHAT
+            return self.data['use'].get(role, self.default)
+
     # ---- what the program uses ----------------------------------------
     def chosen(self, role):
-        """(model id, provider name for SYSTEM FACTS, provider dict) for 'peter' or 'background'."""
+        """(model id, provider name for SYSTEM FACTS, provider dict) for 'peter', 'background' or 'glance'."""
         with self.lock:
             if self.blocked:
                 raise SettingsError('模型设置保存未完成；已停止模型请求，请重启恢复。')
-            model_id = self.data['use'].get(role, self.default)
+            model_id = self.selected(role)
+            if model_id == FOLLOW_CHAT:
+                return self.chosen('peter')
             provider = self._provider(self.data, model_id)
             if provider is None:
                 raise SettingsError(f'{role} 选中的模型无效；已停止模型请求。')
@@ -321,7 +349,7 @@ class ModelSettings:
                 models.append({**item, 'builtin': False, 'endpoint_name': names.get(item['endpoint'], ''),
                                'key_set': keys.get(item['endpoint'], False)})
             daily, monthly = self.limits()
-            use = {role: self.chosen(role)[0] for role in ROLES}
+            use = {role: (self.chosen(role)[0] if role != 'glance' else self.selected(role)) for role in ROLES}
             return {'endpoints': endpoints, 'models': models, 'use': use,
                     'limits': {'daily_cny': str(daily), 'monthly_cny': str(monthly)}}
 
@@ -369,7 +397,7 @@ class ModelSettings:
             use = payload.get('use') if isinstance(payload.get('use'), dict) else self.data['use']
             for role in ROLES:
                 model_id = use.get(role, self.data['use'].get(role))
-                if self._provider(data, model_id) is not None:
+                if self._choice_ok(data, role, model_id):
                     data['use'][role] = model_id
             removed = [item['key_env'] for item in self.data['endpoints'] if item['id'] not in endpoint_ids]
             if not new_keys and not removed:
@@ -403,7 +431,7 @@ class ModelSettings:
         with self.lock:
             if self.blocked or self.journal.exists():
                 raise SettingsError('模型设置保存未完成；请重启恢复后再切换。')
-            if self._provider(self.data, model_id) is None:
+            if not self._choice_ok(self.data, role, model_id):
                 raise SettingsError('这个模型已经不在列表里了。')
             data = {**self.data, 'use': {**self.data['use'], role: model_id}}
             self._write(data)

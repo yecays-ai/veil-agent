@@ -1,5 +1,9 @@
 # 当前状态
 
+## 工单 211：瞄一眼单独选模型，并修预留占满额度
+
+- `ticket/211-glance-model-and-budget`：「模型」页新增“瞄一眼”下拉（默认 grok-4.6，没配置则跟随聊天，可随时改）；瞄一眼请求只在它自己运行期间用该模型，聊天模型不变；发出后 10 分钟仍未结算的瞄一眼预留，在下一次预算检查中按预留额结算一次，不再长期算“进行中”。新增 `tests/test_glance_model.py`；完整测试与 main 上相同的 26 项失败一致（云端沙箱网络相关）。Windows 未验证。验收见 `docs/tickets/211-glance-model-and-budget.md`。下一个工单号 212。
+
 ## 工单 210：顶部模型下拉能点开
 
 - `ticket/210-model-dropdown-clickable`：顶栏是窗口拖动区，模型下拉没设 `no-drag`，点击被当成拖窗口。给它加 `no-drag`（一行 CSS）。Windows 未验证。验收见 `docs/tickets/210-model-dropdown-clickable.md`。下一个工单号 211。
