@@ -1,3 +1,7 @@
+## 工单 210 交接（2026-11-04）
+
+- 只改 `desktop/chat.css` 末尾一条规则；无后端改动。Lan 反映顶部模型下拉点不开，根因是拖动区吞掉点击。验收见工单文档。
+
 ## 工单 209 交接（2026-11-03）
 
 - `guest_profiles.WATCH_ATTEMPTS` 60→1440（约 2 小时）；测试 `test_profile_locked_for_minutes_is_still_retried`。与工单 208（PR #259）同改 STATUS/HANDOFF，合并后者解冲突时两条都保留。下一步：Lan 更新后按工单验收。
