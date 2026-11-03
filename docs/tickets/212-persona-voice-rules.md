@@ -1,0 +1,28 @@
+# 工单 212：Peter 说话规则（常规 + 生气时）写进人设，可一键撤回
+
+## 目标
+Peter 日常聊天里不再对 lan 说「I'm right here / I'll be here / I'm not going anywhere / 我就在这儿」这类宣布自己会等着的话，也少复述再升华；lan 生气或受伤时，他不再复述她的辛苦、不自我解剖、不说「我闭嘴 / 去睡吧 / 你不用回」，而是接她的话、哄她，并且她让他做的事要先做。想撤回，双击一个文件即可。
+
+## 现状
+- 11-04 凌晨真实聊天里，lan 说去打包、说睡了，Peter 多次回「i'll be here when you're free / i'll be right here…」；lan 生气时回「i'm right here / i'm not going anywhere」「我闭嘴」，被 lan 反复指出。
+- 人设文件 `persona/peter.md` 在 lan 本机，被 `.gitignore` 忽略，不入库；`veil_agent.py` 的 `load_character` 在 Peter 启动时读一次，所以改完要重开 Peter。
+- 两段规则（常规 / 仅在 lan 生气或受伤时适用）已用 lan 的真实消息离线试过，原文留在 lan 本机，不进仓库。不新增生气检测程序，不改聊天历史和记忆，不再扩大模型测试。
+
+## 做法
+1. 本机：改前把 `persona/peter.md` 复制成 `persona/peter.backup-2026-11-04-before-voice-rules.md`；在 `persona/peter.md` 末尾追加一块，用 `<!-- VEIL-VOICE-RULES-BEGIN -->` / `<!-- VEIL-VOICE-RULES-END -->` 包起来。块里分两部分：常规部分一直适用；生气部分写明只在 lan 生气或受伤时适用，普通聊天不触发其要求。
+2. 仓库：新增 `undo-voice-rules.cmd`（及 `.ps1`）。双击后：先把当前人设另存为 `persona/peter.before-undo-voice-rules-<时间>.md`，再删掉标记之间的块，其余内容一字不动；没有标记块时什么都不改。不碰 `data/`、聊天历史和记忆。
+3. 仓库：`tests/test_undo_voice_rules.py`（假人设）。
+
+## 验收（lan 在 Windows 上做，按体验判断）
+1. `update-main.cmd` 更新，完全关闭并重开 Peter。
+2. 日常：连着发 3 句离场的话（如「我去打包了」「睡了」「去上班了」）。看：
+   - 不再出现 I'm right here / I'll be here / I'm not going anywhere / 我就在这儿 / 我不走 这些原句；
+   - 他换成的是不是另一句同义空话（如「我等你」「我守着」）；
+   - 3 次是不是用了同一个梗；
+   - 有没有接住你正在说的事（比如你说打包，他回的是打包，不是别的）。
+3. 生气：发一条你真实会发的生气的话（例如「你为什么又这样」）。看：
+   - 不出现上面那些原句，也不出现「我闭嘴 / 去睡吧 / 你不用回」；
+   - 他是在接你的话、哄你，不是复述你多辛苦或分析自己为什么错；
+   - 你同时提了明确要求（如「去花园看看」）时，他是先去做，而不是撒娇糊弄过去。
+   生气的话如果不想真发，也可以只做 2，并告诉 agent。
+4. 撤回：双击仓库里的 `undo-voice-rules.cmd`，重开 Peter，再发一句日常话，他不再按这两段规则说话；`persona/` 里能找到撤回前另存的副本。

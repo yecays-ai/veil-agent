@@ -1,5 +1,9 @@
 # 当前状态
 
+## 工单 212：Peter 说话规则（常规 + 生气时）写进人设，可一键撤回
+
+- `claude/project-thread-83765n`（基于 `main` ab1003b）：新增 `undo-voice-rules.cmd/.ps1`（先另存当前人设，再只删 `<!-- VEIL-VOICE-RULES-BEGIN/END -->` 之间的块）和 `tests/test_undo_voice_rules.py`（假人设，2 项通过）。两段规则（常规一直适用 / 仅 lan 生气或受伤时适用）的原文在 lan 本机，不入库；人设文件被 `.gitignore` 忽略。合并后由 agent 在本机把规则块追加进 `persona/peter.md`（改前备份），需重开 Peter 生效。不新增生气检测，不改聊天历史和记忆。Windows 体验未验证。验收见 `docs/tickets/212-persona-voice-rules.md`。下一个工单号 213。
+
 ## 工单 211：瞄一眼单独选模型，并修预留占满额度
 
 - `ticket/211-glance-model-and-budget`：「模型」页新增“瞄一眼”下拉（默认 grok-4.6，没配置则跟随聊天，可随时改）；瞄一眼请求只在它自己运行期间用该模型，聊天模型不变；发出后 10 分钟仍未结算的瞄一眼预留，在下一次预算检查中按预留额结算一次，不再长期算“进行中”。新增 `tests/test_glance_model.py`；完整测试与 main 上相同的 26 项失败一致（云端沙箱网络相关）。Windows 未验证。验收见 `docs/tickets/211-glance-model-and-budget.md`。下一个工单号 212。
