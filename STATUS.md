@@ -1,5 +1,9 @@
 # 当前状态
 
+## 工单 205：费用账本增量读取
+
+- 基于最新 `main` `30a339a`（`ticket/205-ledger-incremental-read`）。预算检查不再每次整本解析 `costs.jsonl`：只读新追加的部分并增量维护合计，文件被改写时自动重读；账本格式与预留/结算/对账/暂停机制不变。6 万行下统计从约 87 ms 降到 0.05 ms 以下（假数据）。代码与自动测试完成，Windows 体验未验证。验收见 `docs/tickets/205-ledger-incremental-read.md`。下一个工单号 206。
+
 ## 工单 204：乌有乡 MCP 授权撤销
 
 - 基于最新 `main` `a64baf57c31ac75706ac24ae64f4824cb52be208`。在 MCP 设置停用乌有乡时同时撤销直接调用授权；后端保存明确的 `false`，旧窗口的配置版本冲突会被拒绝。代码与隔离测试已实施，PR 检查和 Windows 体验待完成。验收见 `docs/tickets/204-mcp-grant-revoke.md`。
