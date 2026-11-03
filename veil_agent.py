@@ -407,6 +407,68 @@ class Store:
             raise UserError(self._damaged_message(path)) from exc
 
     @synchronized
+    def read_incremental(self, name):
+        state, extra = self.incremental_state(name)
+        return state['rows'] + extra if state else []
+
+    @synchronized
+    def incremental_state(self, name):
+        """(state, unterminated_extra_rows). `state['rows']` grows by append only while `state['gen']`
+        stays the same; a new `gen` means the file was replaced or rewritten and was parsed again.
+        Same records as `read`, but only bytes appended since the last call are parsed.
+
+        For append-only ledgers that are read on every request. The cache is dropped and the file is
+        parsed from the start whenever it was replaced, truncated or rewritten (checked by file identity
+        and by fingerprints of its first and last bytes), so external repair/restore tools stay safe."""
+        path = self.root / name
+        cache = self.__dict__.setdefault('_incremental', {})
+        if not path.exists():
+            cache.pop(name, None)
+            return None, []
+        try:
+            with path.open('rb') as handle:
+                stat = os.fstat(handle.fileno())
+                state = cache.get(name)
+                if state is not None:
+                    size = stat.st_size
+                    ok = (state['id'] == (stat.st_dev, stat.st_ino) and size >= state['offset']
+                          # same length but touched since we last looked: edited in place
+                          and not (size == state['offset'] and stat.st_mtime_ns != state['mtime']))
+                    if ok and state['offset']:
+                        handle.seek(0)
+                        ok = handle.read(min(64, state['offset'])) == state['head']
+                        if ok:
+                            handle.seek(max(0, state['offset'] - 64))
+                            ok = handle.read(min(64, state['offset'])) == state['tail']
+                    if not ok:
+                        state = None
+                if state is None:
+                    state = {'id': (stat.st_dev, stat.st_ino), 'offset': 0, 'rows': [], 'head': b'', 'tail': b'',
+                             'gen': object()}
+                handle.seek(state['offset'])
+                chunk = handle.read()
+            complete, _, partial = chunk.rpartition(b'\n')
+            new_rows = [json.loads(line.decode('utf-8')) for line in complete.split(b'\n') if line.strip()]
+            extra = []
+            if partial.strip():
+                extra = [json.loads(partial.decode('utf-8'))]  # unterminated last row: valid JSON is read, torn is damage
+            consumed = len(complete) + 1 if b'\n' in chunk else 0
+            if consumed:
+                state['rows'].extend(new_rows)
+                state['offset'] += consumed
+                with path.open('rb') as handle:
+                    handle.seek(0)
+                    state['head'] = handle.read(min(64, state['offset']))
+                    handle.seek(max(0, state['offset'] - 64))
+                    state['tail'] = handle.read(min(64, state['offset']))
+            state['mtime'] = os.stat(path).st_mtime_ns
+            cache[name] = state
+            return state, extra
+        except (ValueError, UnicodeError) as exc:
+            cache.pop(name, None)
+            raise UserError(self._damaged_message(path)) from exc
+
+    @synchronized
     def read_tail(self, name, limit):
         """Read and parse only the last `limit` JSONL records from an append-only ledger."""
         if type(limit) is not int or limit <= 0:
@@ -928,6 +990,80 @@ class RequestNotSent(UserError):
     """The provider request failed locally before anything was sent, so nothing was charged."""
 
 
+class _LedgerTotals:
+    """Running cost totals over the append-only ledger, updated from newly appended rows only.
+
+    Gives exactly what a full pass over all rows gives (a later row with the same id replaces an
+    earlier one, an unsettled reservation counts as pending, a settled one counts by its period)."""
+
+    def __init__(self):
+        self.gen, self.seen = None, 0
+        self.reserves, self.settles = {}, {}
+        self.day, self.month = {}, {}          # settled spend by 'YYYY-MM-DD' / 'YYYY-MM'
+        self.pending = Decimal(0)
+        self.cat_day, self.cat_pending = {}, {}  # (category, character[, date]) -> Decimal
+        self.bad_ids = {}                        # reservation id -> autonomy/glance category with no valid character
+
+    @staticmethod
+    def _bump(table, key, amount):
+        table[key] = table.get(key, Decimal(0)) + amount
+
+    def _apply(self, key, sign):
+        reserve = self.reserves.get(key)
+        if reserve is None:
+            return
+        settled = self.settles.get(key)
+        amount = Decimal((settled or reserve)['amount'])
+        if not amount.is_finite() or amount < 0:
+            raise ValueError('invalid amount')
+        amount *= sign
+        category, character = reserve.get('category'), reserve.get('character')
+        valid_character = isinstance(character, str) and bool(character)
+        if category in ('autonomy', 'glance') and not valid_character:
+            if sign > 0:
+                self.bad_ids[key] = category
+            else:
+                self.bad_ids.pop(key, None)
+        if settled is None:
+            self.pending += amount
+            if valid_character:
+                self._bump(self.cat_pending, (category, character), amount)
+        else:
+            self._bump(self.day, reserve['period'][:10], amount)
+            self._bump(self.month, reserve['period'][:7], amount)
+            if valid_character:
+                self._bump(self.cat_day, (category, character, reserve['period'][:10]), amount)
+
+    def update(self, state, extra):
+        if state is None:
+            self.__init__()
+            return
+        try:
+            if state['gen'] is not self.gen:
+                self.__init__()
+                self.gen = state['gen']
+            rows = state['rows']
+            for row in rows[self.seen:]:
+                kind = row['type']
+                if kind == 'reserve' or kind == 'settle':
+                    key = row['id']
+                    self._apply(key, -1)
+                    (self.reserves if kind == 'reserve' else self.settles)[key] = row
+                    self._apply(key, 1)
+                elif kind != 'dispatch':
+                    raise ValueError('unknown cost event')
+                self.seen += 1
+        except (KeyError, ValueError, TypeError, ArithmeticError):
+            self.__init__()  # recompute from scratch next time; the caller reports the damage
+            raise
+        if extra:
+            raise _Unaggregated()
+
+
+class _Unaggregated(Exception):
+    """The ledger ends in a valid but unterminated row; callers fall back to a full pass."""
+
+
 class Budget:
     def __init__(self, store, daily=Decimal('10'), monthly=Decimal('300'), clock=now,
                  autonomy_daily=Decimal('2'), glance_daily=Decimal('1')):
@@ -936,6 +1072,7 @@ class Budget:
         self.autonomy_daily = Decimal(str(autonomy_daily))
         self.glance_daily = Decimal(str(glance_daily))
         self.local = threading.local()
+        self._running = _LedgerTotals()
         # Budget is created under the data-folder lock, so any reservation without a settlement
         # belongs to an earlier process that stopped mid-request.
         self.recover_interrupted()
@@ -973,9 +1110,27 @@ class Budget:
     @synchronized
     def category_totals(self, character=None, stamp=None, category='autonomy'):
         stamp = stamp or self.clock()
+        try:
+            state, extra = self.store.incremental_state('costs.jsonl')
+            self._running.update(state, extra)
+            run = self._running
+            if category in run.bad_ids.values():
+                raise ValueError('invalid autonomy character')
+            date = stamp[:10]
+            day = sum((v for (c, who, d), v in run.cat_day.items()
+                       if c == category and d == date and (character is None or who == character)), Decimal(0))
+            pending = sum((v for (c, who), v in run.cat_pending.items()
+                           if c == category and (character is None or who == character)), Decimal(0))
+            return day, pending
+        except _Unaggregated:
+            return self._category_totals_full(character, stamp, category)
+        except (KeyError, ValueError, TypeError, ArithmeticError) as exc:
+            raise UserError(self._LEDGER_UNREADABLE) from exc
+
+    def _category_totals_full(self, character, stamp, category):
         reservations, settlements = {}, {}
         try:
-            for event in self.store.read('costs.jsonl'):
+            for event in self.store.read_incremental('costs.jsonl'):
                 if event['type'] == 'reserve':
                     reservations[event['id']] = event
                 elif event['type'] == 'settle':
@@ -999,7 +1154,7 @@ class Budget:
                     day += amount
             return day, pending
         except (KeyError, ValueError, TypeError, ArithmeticError) as exc:
-            raise UserError('花费账本无法核对，已停止；请保留 data 文件夹，关闭 VEIL 后运行 .venv\\Scripts\\python.exe data_repair.py diagnose --file data\\costs.jsonl 查看。') from exc
+            raise UserError(self._LEDGER_UNREADABLE) from exc
 
     def _reserve_category(self, amount):
         character = getattr(self.local, 'autonomy', None)
@@ -1017,9 +1172,23 @@ class Budget:
     @synchronized
     def totals(self, stamp=None):
         stamp = stamp or self.clock()
+        try:
+            state, extra = self.store.incremental_state('costs.jsonl')
+            self._running.update(state, extra)
+            run = self._running
+            return (run.day.get(stamp[:10], Decimal(0)), run.month.get(stamp[:7], Decimal(0)), run.pending)
+        except _Unaggregated:
+            return self._totals_full(stamp)
+        except (KeyError, ValueError, TypeError, ArithmeticError) as exc:
+            raise UserError(self._LEDGER_UNREADABLE) from exc
+
+    _LEDGER_UNREADABLE = ('花费账本无法核对，已停止；请保留 data 文件夹，关闭 VEIL 后运行 '
+                          '.venv\\Scripts\\python.exe data_repair.py diagnose --file data\\costs.jsonl 查看。')
+
+    def _totals_full(self, stamp):
         reservations, settlements = {}, {}
         try:
-            for event in self.store.read('costs.jsonl'):
+            for event in self.store.read_incremental('costs.jsonl'):
                 if event['type'] == 'reserve':
                     reservations[event['id']] = event
                 elif event['type'] == 'settle':
@@ -1042,7 +1211,7 @@ class Budget:
                         month += amount
             return day, month, pending
         except (KeyError, ValueError, TypeError, ArithmeticError) as exc:
-            raise UserError('花费账本无法核对，已停止；请保留 data 文件夹，关闭 VEIL 后运行 .venv\\Scripts\\python.exe data_repair.py diagnose --file data\\costs.jsonl 查看。') from exc
+            raise UserError(self._LEDGER_UNREADABLE) from exc
 
     @synchronized
     def reserve(self, cfg, *, accounting=None, category=None):
@@ -1126,7 +1295,7 @@ class Budget:
     @synchronized
     def settle_estimate(self, reservation, accounting='embedding-estimate', *, settled_amount=None):
         request_id, reserved_amount = reservation
-        rows = self.store.read('costs.jsonl')
+        rows = self.store.read_incremental('costs.jsonl')
         reserve = next((row for row in rows if row.get('type') == 'reserve'
                         and row.get('id') == request_id), None)
         if reserve is None or Decimal(reserve['amount']) != Decimal(reserved_amount):
@@ -1146,7 +1315,7 @@ class Budget:
     def release_estimate(self, reservation, accounting='preflight-cancelled'):
         """Release only when the external call was never entered."""
         request_id, amount = reservation
-        rows = self.store.read('costs.jsonl')
+        rows = self.store.read_incremental('costs.jsonl')
         reserve = next((row for row in rows if row.get('type') == 'reserve'
                         and row.get('id') == request_id), None)
         if reserve is None or Decimal(reserve['amount']) != Decimal(amount):
@@ -1169,7 +1338,7 @@ class Budget:
     @synchronized
     def release_not_sent(self, request_id):
         """Settle a reservation at zero because its request never left this machine."""
-        rows = self.store.read('costs.jsonl')
+        rows = self.store.read_incremental('costs.jsonl')
         reserve = next((row for row in rows if row.get('type') == 'reserve' and row.get('id') == request_id), None)
         if reserve is None:
             raise UserError('预算预留无法核对，已停止；请保留 data 文件夹。')
@@ -1189,7 +1358,7 @@ class Budget:
         if ledger_recovery.is_unverified(self.store.root):
             return 0  # never settle anything while the ledger is unverified
         self.totals()  # Validate the full ledger before recovering any entry.
-        rows = self.store.read('costs.jsonl')
+        rows = self.store.read_incremental('costs.jsonl')
         settled = {row.get('id') for row in rows if row.get('type') == 'settle'}
         dispatched = {row.get('id') for row in rows if row.get('type') == 'dispatch'}
         count = 0
@@ -1213,7 +1382,7 @@ class Budget:
         estimate becomes settled spend, so it cannot permanently occupy pending.
         """
         self.totals()  # Validate the full ledger before recovering any entry.
-        rows = self.store.read('costs.jsonl')
+        rows = self.store.read_incremental('costs.jsonl')
         settled = {row.get('id') for row in rows if row.get('type') == 'settle'}
         for row in rows:
             if (row.get('type') == 'reserve' and row.get('accounting') in accountings
@@ -1225,7 +1394,7 @@ class Budget:
 
     @synchronized
     def input_token_ratio(self, character, model):
-        rows = self.store.read('costs.jsonl')
+        rows = self.store.read_incremental('costs.jsonl')
         reservations = {row.get('id'): row for row in rows if row.get('type') == 'reserve'}
         highest_ratio = None
         for row in reversed(rows):
@@ -1261,7 +1430,7 @@ class Budget:
             (prompt - cached) * p['input_cny_per_million']
             + cached * p['cached_input_cny_per_million']
             + completion * p['output_cny_per_million']) / MILLION
-        rows = self.store.read('costs.jsonl')
+        rows = self.store.read_incremental('costs.jsonl')
         if any(row.get('type') == 'settle' and row.get('id') == request_id for row in rows):
             return False
         settlement = {'type': 'settle', 'id': request_id,
@@ -1287,7 +1456,7 @@ class Budget:
         stamp = stamp or self.clock()
         try:
             periods, prompt, cached, unknown = {}, 0, 0, 0
-            for event in self.store.read('costs.jsonl'):
+            for event in self.store.read_incremental('costs.jsonl'):
                 if event['type'] == 'reserve':
                     periods[event['id']] = (event['period'], event.get('category', 'chat'))
                 elif event['type'] == 'settle' and 'prompt_tokens' in event:
@@ -1336,7 +1505,7 @@ class Budget:
         stamp = stamp or self.clock()
         try:
             reservations, settlements = {}, {}
-            for event in self.store.read('costs.jsonl'):
+            for event in self.store.read_incremental('costs.jsonl'):
                 if event['type'] == 'reserve':
                     reservations[event['id']] = event
                 elif event['type'] == 'settle':
