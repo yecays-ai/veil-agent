@@ -1,3 +1,8 @@
+## 审计收尾交接（2026-11-03）
+
+- 仅改文档：新增 `docs/acceptance-pending-2026-11-03.md`（按功能分组的 Lan 验收清单），STATUS 顶部标明审计/冻结期结束。无代码改动。
+- 遗留：短期便签后台提取关闭工单未做；PERF-04/05 待确认；所有 Windows 验收未验证。
+
 ## 工单 207 交接（2026-11-03）
 
 - 分支 `ticket/207-chrome-guest-cleanup`：新增 `guest_profiles.py`（专用父目录 + 归属标记、`GuestProfileWatcher` 单线程轮询、`sweep_stale`），`windows_interaction.start_application` 改用；`tests/test_guest_profiles.py`。未做 Windows 真机验证（Chrome 启动后的进程是否即浏览器主进程，沿用旧假设）。
