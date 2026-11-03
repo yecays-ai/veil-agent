@@ -1256,7 +1256,11 @@ class GlanceController:
             self.chat.cfg.id, category='glance')
         if pending > 0 and spent + pending >= self.daily_budget:
             # Ticket 211: an old unsettled glance reservation must not keep the budget full.
-            if self.chat.budget.settle_stale_glance():
+            try:
+                settled = self.chat.budget.settle_stale_glance()
+            except (OSError, UserError):
+                settled = 0  # leave it for the next check; never break scheduling
+            if settled:
                 spent, pending = self.chat.budget.category_totals(
                     self.chat.cfg.id, category='glance')
         self._budget_day = today
