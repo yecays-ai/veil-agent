@@ -1,5 +1,9 @@
 # 当前状态
 
+## 工单 211：瞄一眼单独选模型，并修预留占满额度
+
+- `ticket/211-glance-model-and-budget`：Lan 11-04 看到瞄一眼提示达到 ¥1/日上限但实际只花约 ¥0.50，原因是一笔已发出未结算的预留一直占额度，加上每次预留偏大。工单只有规格，**还没有实现**。验收见 `docs/tickets/211-glance-model-and-budget.md`。下一个工单号 212。
+
 ## 工单 210：顶部模型下拉能点开
 
 - `ticket/210-model-dropdown-clickable`：顶栏是窗口拖动区，模型下拉没设 `no-drag`，点击被当成拖窗口。给它加 `no-drag`（一行 CSS）。Windows 未验证。验收见 `docs/tickets/210-model-dropdown-clickable.md`。下一个工单号 211。
