@@ -964,7 +964,12 @@ class WindowsInteractionBackend(WindowsDesktopBackend):
                 # A separate user-data root prevents Chrome from routing this launch to Lan's
                 # regular profile. Guest is preferred; incognito keeps the isolated fallback
                 # private if a Chrome policy disables Guest mode.
-                guest_profiles.sweep_stale(skip=[d for _, d in guest_profiles.WATCHER.watched])
+                active = [d for _, d in list(guest_profiles.WATCHER.watched)]
+                guest_profiles.sweep_stale(skip=active)
+                guest_profiles.sweep_legacy(skip=active)
+                # A large old folder can take a while to delete; honor a stop or the user's input again.
+                self._cancelled(stopped)
+                self._require_unchanged_input(input_monitor, input_snapshot)
                 profile_directory = str(guest_profiles.create_profile())
                 # A fresh user-data directory counts as a first run; skip Chrome's welcome and
                 # default-browser prompts so the only new window is the requested page.

@@ -9,6 +9,7 @@ import ctypes
 import json
 import os
 import shutil
+import stat
 import tempfile
 import threading
 import time
@@ -18,7 +19,10 @@ from pathlib import Path
 PARENT_NAME = 'veil-chrome-guest'
 MARKER = '.veil-owner.json'
 POLL_SECONDS = 5.0
-STALE_AFTER_DEAD_OWNER = 60 * 60       # owner process is gone and the folder is at least 1 hour old
+STALE_AFTER_DEAD_OWNER = 24 * 60 * 60  # owner process is gone and the folder is at least 1 day old
+LEGACY_PREFIX = 'veil-chrome-guest-'   # folders made by earlier versions directly in the temp folder
+LEGACY_STALE_AFTER = 7 * 24 * 60 * 60
+WATCH_ATTEMPTS = 60                    # removal retries (about 5 minutes) before leaving it to the sweep
 STALE_ANYWAY = 7 * 24 * 60 * 60        # a pid can be reused, so also sweep anything over 7 days old
 
 
@@ -30,7 +34,13 @@ def pid_alive(pid):
     if not isinstance(pid, int) or pid <= 0:
         return False
     if os.name == 'nt':
-        kernel32 = ctypes.windll.kernel32
+        kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+        kernel32.OpenProcess.argtypes = (ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong)
+        kernel32.OpenProcess.restype = ctypes.c_void_p
+        kernel32.GetExitCodeProcess.argtypes = (ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong))
+        kernel32.GetExitCodeProcess.restype = ctypes.c_int
+        kernel32.CloseHandle.argtypes = (ctypes.c_void_p,)
+        kernel32.CloseHandle.restype = ctypes.c_int
         handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
         if not handle:
             return False
@@ -49,7 +59,13 @@ def pid_alive(pid):
 
 
 def _is_link(path):
-    return path.is_symlink() or (hasattr(os.path, 'isjunction') and os.path.isjunction(path))
+    """Symlink or Windows junction/reparse point (also on Python 3.11, which lacks os.path.isjunction)."""
+    try:
+        info = os.lstat(path)
+    except OSError:
+        return False
+    return (stat.S_ISLNK(info.st_mode)
+            or bool(getattr(info, 'st_file_attributes', 0) & getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0x400)))
 
 
 def remove_profile(directory, parent=None):
@@ -63,16 +79,22 @@ def remove_profile(directory, parent=None):
     except OSError:
         return False
     shutil.rmtree(directory, ignore_errors=True)
-    return True
+    return not directory.exists()
 
 
 def create_profile(parent=None):
     parent = Path(parent) if parent else parent_directory()
+    if _is_link(parent):
+        raise OSError('the guest profile folder is a link; refusing to use it')
     parent.mkdir(parents=True, exist_ok=True)
     directory = parent / f'{os.getpid()}-{uuid.uuid4().hex[:12]}'
     directory.mkdir()
-    (directory / MARKER).write_text(json.dumps({'owner_pid': os.getpid(), 'created': time.time()}),
-                                    encoding='utf-8')
+    try:
+        (directory / MARKER).write_text(json.dumps({'owner_pid': os.getpid(), 'created': time.time()}),
+                                        encoding='utf-8')
+    except OSError:
+        shutil.rmtree(directory, ignore_errors=True)
+        raise
     return directory
 
 
@@ -82,6 +104,8 @@ def sweep_stale(parent=None, *, now=None, alive=pid_alive, skip=()):
     now = time.time() if now is None else now
     skip = {str(Path(p)) for p in skip}
     removed = []
+    if _is_link(parent):
+        return removed
     try:
         entries = list(parent.iterdir())
     except OSError:
@@ -101,6 +125,30 @@ def sweep_stale(parent=None, *, now=None, alive=pid_alive, skip=()):
     return removed
 
 
+def sweep_legacy(temp=None, *, now=None, skip=()):
+    """One-off cleanup of `veil-chrome-guest-*` folders earlier versions left directly in the temp folder
+    (that prefix is only ever made by VEIL). Only real folders untouched for a week are removed."""
+    temp = Path(temp) if temp else Path(tempfile.gettempdir())
+    now = time.time() if now is None else now
+    skip = {str(Path(p)) for p in skip}
+    removed = []
+    try:
+        entries = list(temp.iterdir())
+    except OSError:
+        return removed
+    for entry in entries:
+        try:
+            if (not entry.name.startswith(LEGACY_PREFIX) or str(entry) in skip or _is_link(entry)
+                    or not entry.is_dir() or now - entry.stat().st_mtime < LEGACY_STALE_AFTER):
+                continue
+        except OSError:
+            continue
+        shutil.rmtree(entry, ignore_errors=True)
+        if not entry.exists():
+            removed.append(entry)
+    return removed
+
+
 class GuestProfileWatcher:
     """One thread that removes each guest profile once its browser process has exited."""
 
@@ -108,6 +156,7 @@ class GuestProfileWatcher:
         self.poll_seconds, self.parent = poll_seconds, parent
         self.lock = threading.Lock()
         self.watched = []   # (process, directory)
+        self.attempts = {}  # directory -> failed removals
         self.thread = None
 
     def watch(self, process, directory):
@@ -127,8 +176,12 @@ class GuestProfileWatcher:
             except Exception:
                 done = True
             if done:
-                remove_profile(directory, self.parent)
-                finished.append((process, directory))
+                tries = self.attempts.get(directory, 0) + 1
+                if remove_profile(directory, self.parent) or tries >= WATCH_ATTEMPTS:
+                    self.attempts.pop(directory, None)
+                    finished.append((process, directory))  # gone, or left to the next sweep
+                else:
+                    self.attempts[directory] = tries       # still locked (Chrome shutting down): retry
         with self.lock:
             self.watched = [item for item in self.watched if item not in finished]
             return len(self.watched)
