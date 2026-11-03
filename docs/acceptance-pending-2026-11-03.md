@@ -9,9 +9,9 @@
 update.bat 后聊一会儿：`data\peter\notes.jsonl` 不再新增 `attempt`，`costs.jsonl` 不再出现新的 `short_term_notes`。若 update.bat 报 `character.toml` 冲突，告诉我，保留 `enabled = false`。
 
 ## 2. 还没从记录里确认的
-1. **访客浏览器清理（207）**：让 Peter 开几次访客浏览器再全关，`%TEMP%\veil-chrome-guest\` 里的文件夹几秒内消失；你自己的 Chrome 不受影响。
-2. **瞄一眼不召回（194）**：等一次瞄一眼后，`data\peter\context-log.jsonl` 最新 glance 记录的 `memory_ids` 为空（11-01 之后没有新的瞄一眼）。
-3. **DeepSeek 带图（186）**：带一张图发一句话，不再报「超过 32768」；用一天后把 `costs.jsonl` 总数告诉我（预计 +¥1–3/天）。
+1. **访客浏览器清理（207）**：自己操作，别转发给 Peter。在资源管理器地址栏输入 `%TEMP%\veil-chrome-guest` 看现有子文件夹；让 Peter 只做「用访客 Chrome 打开 example.com，打开后告诉我」，再让他关掉；几秒后新出现的子文件夹应消失。若启动报「超时、结果不确定」，告诉我（11-03 16:05 出现过一次）。
+2. **瞄一眼不召回（194）**：瞄一眼已打开（11-03），等下一次出现，瞄一眼后，`data\peter\context-log.jsonl` 最新 glance 记录的 `memory_ids` 为空（11-01 之后没有新的瞄一眼）。
+3. **DeepSeek 带图（186）**：已搁置（Lan 近期不常用 DeepSeek），想用时再测，并把 `costs.jsonl` 总数告诉我。
 4. **自主醒来（195）**：看几次醒来的活动页，重复读取变少、能接着上次的事（预计 +¥0.1–0.3/天）。
 5. **置顶规则（184/185）**：让 Peter 置顶一条记忆，不给理由被拒，满 8 条被拒；验完让他取消置顶。
 6. **记忆追加不重复（183/188）**：让他记一件和刚召回旧记忆同一件事的新细节，应追加到那条，不新建。
