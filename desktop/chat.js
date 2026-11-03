@@ -1657,7 +1657,7 @@ function openEndpointForm(e){
   $('endpoint-name').value=e?e.name:'';$('endpoint-url').value=e?e.base_url:'';$('endpoint-key').value='';
   $('endpoint-key-hint').hidden=!e;$('endpoint-name').focus();
 }
-function closeEndpointForm(){$('endpoint-form').hidden=true;$('add-endpoint').hidden=false;$('endpoint-key').value='';editingEndpoint=null}
+function closeEndpointForm(){showModelsError('');$('endpoint-form').hidden=true;$('add-endpoint').hidden=false;$('endpoint-key').value='';editingEndpoint=null}
 $('add-endpoint').onclick=()=>openEndpointForm(null);
 $('endpoint-cancel').onclick=closeEndpointForm;
 $('endpoint-form').onsubmit=async ev=>{

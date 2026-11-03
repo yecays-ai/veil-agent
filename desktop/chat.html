@@ -81,6 +81,7 @@
   <section id="more-view" class="page" data-page-view="more" hidden>
     <div class="page-heading"><div><p class="eyebrow">偏好与工具</p><h2>更多</h2></div></div>
     <article class="surface models-card" id="models-card"><div class="section-heading"><div><p class="eyebrow">MODELS</p><h3>模型</h3><p>先添加接口（中转站地址和 key），再在接口下添加模型。key 只存在这台电脑的 .env 里。</p></div></div>
+      <p id="models-error" class="setting-hint models-error" role="alert" hidden></p>
       <div class="setting-row"><span>Peter 本人</span><select id="use-peter" aria-label="Peter 本人用的模型"></select></div>
       <p class="setting-hint">聊天、自主活动、QQ 和邮件都用这个，下一句开始生效。</p>
       <div class="setting-row"><span>瞄一眼</span><select id="use-glance" aria-label="瞄一眼用的模型"></select></div>
@@ -111,7 +112,6 @@
         <label>最长输入（tokens）<input id="model-max-input" type="number" min="4096" max="2000000" step="1" value="32768"></label>
         <label class="check-row"><input id="model-thinking" type="checkbox" checked>思考模式（DeepSeek 一定要开）</label>
         <div class="tool-row"><button type="submit">保存模型</button><button type="button" id="model-cancel">取消</button></div>
-        <p id="models-error" class="setting-hint" role="alert" hidden></p>
       </form>
     </article>
     <article class="surface appearance-card"><div class="section-heading"><div><p class="eyebrow">CSS SETTINGS</p><h3>外观</h3><p>主题、背景和透明度会保存在这台电脑上。</p></div><button id="reset-appearance" class="quiet-button">恢复默认</button></div>

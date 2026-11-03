@@ -1,6 +1,6 @@
 ## 工单 213 交接（2026-11-04）
 
-- 只改 `desktop/chat.html` 和 `desktop/chat.js`：模型页表单加 `#models-error`，保存失败写这里；最长输入 step 改 1。无后端改动；原因为读代码推断，真机未验证。
+- 只改 `desktop/chat.html`、`desktop/chat.js`、`desktop/chat.css`：模型页表单加 `#models-error`（放在卡片顶部，接口/模型/上限的保存失败都写这里）；最长输入 step 改 1。无后端改动；原因为读代码推断，真机未验证。
 
 ## 工单 211 交接（2026-11-04）
 
