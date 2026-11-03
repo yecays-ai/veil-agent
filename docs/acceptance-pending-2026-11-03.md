@@ -44,3 +44,6 @@
 ## F. 只测量、未改的两项（等 ChatGPT/你确认）
 - PERF-04：每轮聊天读全量聊天记录，2 万行约 0.8 秒；你的聊天记录若超过 2 万行再做增量读取。
 - PERF-05：MCP 停启后是否残留进程，Linux 假服务无残留，Windows 未验证。证据在项目文件 `audit/perf-evidence/`。
+
+## G. 工单 208（短期便签默认关闭）
+update.bat 后聊一会儿：`data\peter\notes.jsonl` 不再新增 `attempt` 行，`costs.jsonl` 不再出现新的 `short_term_notes`。若 update.bat 报 `character.toml` 冲突，告诉我，保留 `enabled = false`。
