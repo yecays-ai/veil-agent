@@ -1,5 +1,9 @@
 # 当前状态
 
+## 工单 206：网页实时事件有界化
+
+- 基于 `main` `30a339a`（`ticket/206-hub-events-bounded`）。页面实时事件窗口最多保留最新约 5000 条，事件编号改由单调计数器给出，游标按编号二分取事件；聊天原始记录不动。代码与自动测试完成，Windows 体验未验证。验收见 `docs/tickets/206-hub-events-bounded.md`。下一个工单号 207（205 为 PR #255）。
+
 ## 工单 204：乌有乡 MCP 授权撤销
 
 - 基于最新 `main` `a64baf57c31ac75706ac24ae64f4824cb52be208`。在 MCP 设置停用乌有乡时同时撤销直接调用授权；后端保存明确的 `false`，旧窗口的配置版本冲突会被拒绝。代码与隔离测试已实施，PR 检查和 Windows 体验待完成。验收见 `docs/tickets/204-mcp-grant-revoke.md`。

@@ -1,3 +1,8 @@
+## 工单 206 交接（2026-11-03）
+
+- 分支 `ticket/206-hub-events-bounded`：`Hub.push` 用 `last_event_id` 计数并在超过 `MAX_LIVE_EVENTS + EVENT_TRIM_SLACK` 时裁掉最旧事件；`Hub.events_after(after)` 二分取增量；`snapshot` 使用它。测试 `tests/test_hub_event_window.py`。`test_web` 里 5 个语音传输用例在 Linux 沙箱因代理环境失败，与本改动无关。
+- 与工单 205（PR #255）同改 STATUS/HANDOFF，合并后者解冲突时两条都保留。
+
 ## 工单 203 交接（2026-11-03）
 
 - 远端最新 main 为 `630cb660557f89d1fb7eb3c089f819c16a16748b`，PR #252 已合并。正式运行目录有本地修改，未触碰；Git 直连 DNS 失败，远端分支由 GitHub 连接器从最新 main 建立。
