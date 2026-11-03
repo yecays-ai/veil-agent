@@ -1,3 +1,8 @@
+## 工单 207 交接（2026-11-03）
+
+- 分支 `ticket/207-chrome-guest-cleanup`：新增 `guest_profiles.py`（专用父目录 + 归属标记、`GuestProfileWatcher` 单线程轮询、`sweep_stale`），`windows_interaction.start_application` 改用；`tests/test_guest_profiles.py`。未做 Windows 真机验证（Chrome 启动后的进程是否即浏览器主进程，沿用旧假设）。
+- 与工单 205/206 同改 STATUS/HANDOFF，合并时两条都保留。
+
 ## 工单 203 交接（2026-11-03）
 
 - 远端最新 main 为 `630cb660557f89d1fb7eb3c089f819c16a16748b`，PR #252 已合并。正式运行目录有本地修改，未触碰；Git 直连 DNS 失败，远端分支由 GitHub 连接器从最新 main 建立。

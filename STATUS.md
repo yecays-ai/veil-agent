@@ -1,5 +1,9 @@
 # 当前状态
 
+## 工单 207：访客浏览器临时资料回收
+
+- 基于 `main` `30a339a`（`ticket/207-chrome-guest-cleanup`）。访客 Chrome 的临时资料统一建在专用目录并带归属标记，一个共享线程在浏览器退出后回收，下次启动前清扫已死 VEIL 进程遗留的；只删带标记且在专用目录内的文件夹。代码与假文件夹/假进程测试完成，Windows 真机未验证。验收见 `docs/tickets/207-chrome-guest-cleanup.md`。下一个工单号 208。
+
 ## 工单 204：乌有乡 MCP 授权撤销
 
 - 基于最新 `main` `a64baf57c31ac75706ac24ae64f4824cb52be208`。在 MCP 设置停用乌有乡时同时撤销直接调用授权；后端保存明确的 `false`，旧窗口的配置版本冲突会被拒绝。代码与隔离测试已实施，PR 检查和 Windows 体验待完成。验收见 `docs/tickets/204-mcp-grant-revoke.md`。
