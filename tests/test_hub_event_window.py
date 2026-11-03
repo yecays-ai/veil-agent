@@ -47,6 +47,18 @@ class HubEventWindowTests(unittest.TestCase):
         self.assertEqual([e['id'] for e in self.hub.events_after(window[-3]['id'])],
                          [window[-2]['id'], window[-1]['id']])
 
+    def test_pending_approval_survives_trimming(self):
+        approval = self.hub.push('approval', 'allow this fictional action?')
+        self.hub.pending = approval
+        self.fill(web_agent.MAX_LIVE_EVENTS + web_agent.EVENT_TRIM_SLACK + 5)
+        ids = [e['id'] for e in self.hub.events_after(0)]
+        self.assertEqual(ids[0], approval)
+        self.assertEqual(ids, sorted(ids))
+        self.assertLessEqual(len(ids), web_agent.MAX_LIVE_EVENTS + web_agent.EVENT_TRIM_SLACK + 1)
+        self.hub.pending = None
+        self.fill(web_agent.EVENT_TRIM_SLACK + 5)
+        self.assertNotIn(approval, [e['id'] for e in self.hub.events])
+
     def test_small_history_is_untouched(self):
         self.fill(10)
         self.assertEqual([e['id'] for e in self.hub.events_after(0)], list(range(1, 11)))

@@ -933,7 +933,11 @@ class Hub(ScreenPopMixin):
                                 'time': now(), **metadata})
             if len(self.events) > MAX_LIVE_EVENTS + EVENT_TRIM_SLACK:
                 # Old chat stays in the durable chat log; only the live replay window is bounded.
-                del self.events[:len(self.events) - MAX_LIVE_EVENTS]
+                cut = len(self.events) - MAX_LIVE_EVENTS
+                # A card still waiting for an answer must survive a reload, so it is never trimmed.
+                waiting = [event for event in self.events[:cut]
+                           if event['kind'] == 'approval' and event['id'] == self.pending]
+                self.events[:cut] = waiting
             return event_id
 
     def _publish_output(self, text):
