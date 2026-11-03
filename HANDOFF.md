@@ -3,6 +3,12 @@
 - 分支 `ticket/206-hub-events-bounded`：`Hub.push` 用 `last_event_id` 计数并在超过 `MAX_LIVE_EVENTS + EVENT_TRIM_SLACK` 时裁掉最旧事件；`Hub.events_after(after)` 二分取增量；`snapshot` 使用它。测试 `tests/test_hub_event_window.py`。`test_web` 里 5 个语音传输用例在 Linux 沙箱因代理环境失败，与本改动无关。
 - 与工单 205（PR #255）同改 STATUS/HANDOFF，合并后者解冲突时两条都保留。
 
+## 工单 205 交接（2026-11-03）
+
+- 分支 `ticket/205-ledger-incremental-read`：`Store.incremental_state` 增量读 JSONL，`_LedgerTotals` 增量维护费用合计，`Budget.totals/category_totals` 使用，保留 `_totals_full/_category_totals_full` 作回退和对照测试。新测试 `tests/test_ledger_incremental.py`（含随机账本与整本计算逐项对照）。
+- 本机 Linux 全量测试有 21 个与本改动无关的既有失败（环境相关，改动前后相同）。Windows 体验未验证。
+- 审计后续：PERF-02（Hub 事件）为工单 206，PERF-03（Chrome Guest）为工单 207；PERF-04/05 先测量。
+
 ## 工单 203 交接（2026-11-03）
 
 - 远端最新 main 为 `630cb660557f89d1fb7eb3c089f819c16a16748b`，PR #252 已合并。正式运行目录有本地修改，未触碰；Git 直连 DNS 失败，远端分支由 GitHub 连接器从最新 main 建立。

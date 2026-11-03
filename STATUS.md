@@ -2,7 +2,11 @@
 
 ## 工单 206：网页实时事件有界化
 
-- 基于 `main` `30a339a`（`ticket/206-hub-events-bounded`）。页面实时事件窗口最多保留最新约 5000 条，事件编号改由单调计数器给出，游标按编号二分取事件；聊天原始记录不动。代码与自动测试完成，Windows 体验未验证。验收见 `docs/tickets/206-hub-events-bounded.md`。下一个工单号 207（205 为 PR #255）。
+- 基于 `main` `30a339a`（`ticket/206-hub-events-bounded`）。页面实时事件窗口最多保留最新约 5000 条，事件编号改由单调计数器给出，游标按编号二分取事件；聊天原始记录不动。代码与自动测试完成，Windows 体验未验证。验收见 `docs/tickets/206-hub-events-bounded.md`。下一个工单号 207（205 为 PR #255，已合并）。
+
+## 工单 205：费用账本增量读取
+
+- 基于最新 `main` `30a339a`（`ticket/205-ledger-incremental-read`）。预算检查不再每次整本解析 `costs.jsonl`：只读新追加的部分并增量维护合计，文件被改写时自动重读；账本格式与预留/结算/对账/暂停机制不变。6 万行下统计从约 87 ms 降到 0.05 ms 以下（假数据）。代码与自动测试完成，Windows 体验未验证。验收见 `docs/tickets/205-ledger-incremental-read.md`。下一个工单号 206。
 
 ## 工单 204：乌有乡 MCP 授权撤销
 
