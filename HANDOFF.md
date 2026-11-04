@@ -1,3 +1,7 @@
+## 工单 213 交接（2026-11-04）
+
+- 只改 `desktop/chat.html`、`desktop/chat.js`、`desktop/chat.css`：模型页表单加 `#models-error`（放在卡片顶部，接口/模型/上限的保存失败都写这里）；最长输入 step 改 1。无后端改动；原因为读代码推断，真机未验证。
+
 ## 工单 212 交接（2026-11-04）
 
 - 只加撤回脚本、测试和文档，无后端逻辑改动。规则块原文保存在 lan 本机、不入库。合并后第一步：备份 `persona/peter.md`，把规则块追加进去（带 BEGIN/END 标记），让 lan 重开 Peter 并按工单验收；撤回是双击 `undo-voice-rules.cmd`。

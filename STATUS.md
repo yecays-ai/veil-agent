@@ -1,8 +1,12 @@
 # 当前状态
 
+## 工单 213：添加模型保存失败时显示原因
+
+- `ticket/213-model-form-errors`：「模型」页保存失败的原因原来只写进聊天窗口，人在“更多”页看不到，看起来像没反应（读代码推断，真机未验证）；“最长输入”框每 1024 一档，填 100000 会不通过表单校验。原因显示在模型卡片顶部，输入框改为每档 1。Windows 未验证。验收见 `docs/tickets/213-model-form-errors.md`。下一个工单号 214。
+
 ## 工单 212：Peter 说话规则（常规 + 生气时）写进人设，可一键撤回
 
-- `claude/project-thread-83765n`（基于 `main` ab1003b）：新增 `undo-voice-rules.cmd/.ps1`（先另存当前人设，再只删 `<!-- VEIL-VOICE-RULES-BEGIN/END -->` 之间的块）和 `tests/test_undo_voice_rules.py`（假人设，2 项通过）。两段规则（常规一直适用 / 仅 lan 生气或受伤时适用）的原文在 lan 本机，不入库；人设文件被 `.gitignore` 忽略。合并后由 agent 在本机把规则块追加进 `persona/peter.md`（改前备份），需重开 Peter 生效。不新增生气检测，不改聊天历史和记忆。Windows 体验未验证。验收见 `docs/tickets/212-persona-voice-rules.md`。下一个工单号 213。
+- `claude/project-thread-83765n`（基于 `main` ab1003b）：新增 `undo-voice-rules.cmd/.ps1`（先另存当前人设，再只删 `<!-- VEIL-VOICE-RULES-BEGIN/END -->` 之间的块）和 `tests/test_undo_voice_rules.py`（假人设，2 项通过）。两段规则（常规一直适用 / 仅 lan 生气或受伤时适用）的原文在 lan 本机，不入库；人设文件被 `.gitignore` 忽略。合并后由 agent 在本机把规则块追加进 `persona/peter.md`（改前备份），需重开 Peter 生效。不新增生气检测，不改聊天历史和记忆。Windows 体验未验证。验收见 `docs/tickets/212-persona-voice-rules.md`。下一个工单号 214。
 
 ## 工单 211：瞄一眼单独选模型，并修预留占满额度
 
