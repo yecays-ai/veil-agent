@@ -27,7 +27,7 @@ while ($true) {
 if ($new.Contains($begin) -or $new.Contains($end)) { Write-Host '撤回后人设里仍残留规则标记，不完整，什么都没改。请手动检查 persona\peter.md。'; exit 1 }
 $tmp = $persona + '.undo-tmp'
 [System.IO.File]::WriteAllText($tmp, $new, $utf8)
-[System.IO.File]::Replace($tmp, $persona, $null)
+[System.IO.File]::Replace($tmp, $persona, [NullString]::Value)
 Write-Host '已撤回“说话规则”块。撤回前的人设已另存：'
 Write-Host $copy
 Write-Host '请完全关闭并重新打开 Peter，下一句话开始生效。'
