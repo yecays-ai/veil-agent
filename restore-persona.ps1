@@ -31,7 +31,7 @@ $sha = [System.Security.Cryptography.SHA256]::Create()
 $currentHash = [BitConverter]::ToString($sha.ComputeHash($current))
 $known = $false
 foreach ($item in $items) {
-    if ([BitConverter]::ToString($sha.ComputeHash([System.IO.File]::ReadAllBytes($item.FullName))) -eq $currentHash) { $known = $true; break }
+    try { if ([BitConverter]::ToString($sha.ComputeHash([System.IO.File]::ReadAllBytes($item.FullName))) -eq $currentHash) { $known = $true; break } } catch { continue }
 }
 if (-not $known) {
     $stampNow = (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmss')
