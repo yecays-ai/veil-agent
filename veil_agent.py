@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 import ledger_recovery
+import persona_versions
 from background import append_context_log, background_context, background_path, context_chars, request_kind
 from contextlib import contextmanager, nullcontext
 
@@ -708,6 +709,7 @@ def load_character(root, character_id):
             raise UserError('读不到人设：请按 README 在 persona 文件夹放好本机人设后重开。') from exc
         if not persona:
             raise UserError('人设文件为空，请填写后重开。')
+        persona_versions.snapshot(persona_path)  # ticket 214: never raises
         provider = toml_provider(cfg['providers'][cfg['provider']])
         builtins = {cfg['provider']: provider}
         for name, raw in cfg['providers'].items():

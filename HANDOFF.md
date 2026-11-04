@@ -1,3 +1,7 @@
+## 工单 214 交接（2026-11-04）
+
+- 新增 `persona_versions.py`（`snapshot`/`list_versions`），`veil_agent.load_character` 读到非空人设后调用一次；重复内容不存，保存失败只在控制台打印一行提示、跳过备份（先写 `.partial` 再改名，写一半不会留下半份版本）。副本在 `persona/versions/peter.<UTC>.md`（已 gitignore）。`restore-persona.ps1` 用 SHA256 判断当前人设是否已在副本里，不在就先另存；用临时文件 + `File.Replace(..., [NullString]::Value)` 换文件（PowerShell 不能传 `$null`）。人设内容、聊天历史、记忆都不动。注意：改完人设必须重开 Peter 才生效；只有重开时才会存新版本。
+
 ## 工单 213 交接（2026-11-04）
 
 - 只改 `desktop/chat.html`、`desktop/chat.js`、`desktop/chat.css`：模型页表单加 `#models-error`（放在卡片顶部，接口/模型/上限的保存失败都写这里）；最长输入 step 改 1。无后端改动；原因为读代码推断，真机未验证。
