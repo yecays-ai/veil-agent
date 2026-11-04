@@ -180,3 +180,5 @@ body{isolation:isolate}
 #life-view .life-sticky button:focus-visible,#life-view .sticky-add input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}#life-view .sticky-add::before{content:"+";flex:none;color:var(--accent);font-size:20px;line-height:1}
 
 .header-model,.header-model select{-webkit-app-region:no-drag}
+
+.models-error{color:var(--danger)}
