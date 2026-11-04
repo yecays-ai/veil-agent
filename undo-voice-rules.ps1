@@ -15,11 +15,16 @@ if ($text -notmatch $pattern) {
 $copy = Join-Path (Split-Path $persona) ('peter.before-undo-voice-rules-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.md')
 Copy-Item -LiteralPath $persona -Destination $copy
 $nl = if ($text.Contains("`r`n")) { "`r`n" } else { "`n" }
-$m = [regex]::Match($text, $pattern)
-$before = $text.Substring(0, $m.Index)
-$after = $text.Substring($m.Index + $m.Length)
-$sep = if ($before.Length -gt 0 -and $after.Length -gt 0) { $nl + $nl } elseif ($before.Length -gt 0) { $nl } else { '' }
-$new = $before + $sep + $after
+$new = $text
+while ($true) {
+    $m = [regex]::Match($new, $pattern)
+    if (-not $m.Success) { break }
+    $before = $new.Substring(0, $m.Index)
+    $after = $new.Substring($m.Index + $m.Length)
+    $sep = if ($before.Length -gt 0 -and $after.Length -gt 0) { $nl + $nl } elseif ($before.Length -gt 0) { $nl } else { '' }
+    $new = $before + $sep + $after
+}
+if ($new.Contains($begin) -or $new.Contains($end)) { Write-Host '撤回后人设里仍残留规则标记，不完整，什么都没改。请手动检查 persona\peter.md。'; exit 1 }
 $tmp = $persona + '.undo-tmp'
 [System.IO.File]::WriteAllText($tmp, $new, $utf8)
 [System.IO.File]::Replace($tmp, $persona, $null)

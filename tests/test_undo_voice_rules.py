@@ -41,6 +41,14 @@ class UndoVoiceRulesTests(unittest.TestCase):
             self.assertEqual((root / 'persona' / 'peter.md').read_bytes().decode('utf-8'),
                              'Fictional intro\n\nFictional outro\n')
 
+    def test_block_added_twice_is_removed_both_times(self):
+        original = 'Fictional intro\n'
+        block = f'\n{BEGIN}\n## Fictional rules\n{END}\n'
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.make_root(tmp, original + block + block)
+            self.assertEqual(self.run_undo(root).returncode, 0)
+            self.assertEqual((root / 'persona' / 'peter.md').read_bytes().decode('utf-8'), original)
+
     def test_incomplete_block_fails_and_changes_nothing(self):
         text = f'Fictional intro\n\n{BEGIN}\n## Fictional rules\n'
         with tempfile.TemporaryDirectory() as tmp:
