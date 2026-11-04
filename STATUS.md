@@ -1,5 +1,9 @@
 # 当前状态
 
+## 工单 214：人设文件自动留版本，可还原
+
+- `ticket/214-persona-versions`：Peter 每次启动，人设内容是新的就自动存一份到 `persona/versions/`（已有相同副本不重复存，存不了也不影响启动）；新增 `restore-persona.cmd/.ps1`，列出版本、选编号还原，还原前先另存当前人设。`persona/versions/` 被 `.gitignore` 忽略。新增 `tests/test_persona_versions.py`（8 项，Windows 才跑还原脚本那 1 项）。Windows 真机未验证。验收见 `docs/tickets/214-persona-versions.md`。下一个工单号 215。
+
 ## 工单 213：添加模型保存失败时显示原因
 
 - `ticket/213-model-form-errors`：「模型」页保存失败的原因原来只写进聊天窗口，人在“更多”页看不到，看起来像没反应（读代码推断，真机未验证）；“最长输入”框每 1024 一档，填 100000 会不通过表单校验。原因显示在模型卡片顶部，输入框改为每档 1。Windows 未验证。验收见 `docs/tickets/213-model-form-errors.md`。下一个工单号 214。
