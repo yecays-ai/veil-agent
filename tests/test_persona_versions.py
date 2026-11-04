@@ -61,6 +61,27 @@ class PersonaVersionsTests(unittest.TestCase):
         self.assertEqual(first.read_text(encoding='utf-8'), 'Fictional persona one\n')
         self.assertEqual(second.read_text(encoding='utf-8'), 'Fictional persona two\n')
 
+    def test_more_than_ten_in_one_second_still_newest_first(self):
+        names = []
+        for number in range(12):
+            self.write(f'Fictional persona {number}\n')
+            names.append(persona_versions.snapshot(self.persona, at(1)).name)
+        listed = [item.name for item in persona_versions.list_versions(self.persona)]
+        self.assertEqual(listed, names[::-1])
+
+    def test_unreadable_old_copy_does_not_block_new_one(self):
+        self.write('Fictional persona one\n')
+        persona_versions.snapshot(self.persona, at(1))
+        (self.persona.parent / 'versions' / 'peter.20261104-010209.md').mkdir()  # not a file: ignored
+        self.write('Fictional persona two\n')
+        self.assertIsNotNone(persona_versions.snapshot(self.persona, at(2)))
+
+    def test_no_partial_file_is_left_behind(self):
+        self.write('Fictional persona one\n')
+        persona_versions.snapshot(self.persona, at(1))
+        left = [item.name for item in (self.persona.parent / 'versions').iterdir()]
+        self.assertEqual(left, ['peter.20261104-010201.md'])
+
     def test_empty_or_missing_file_saves_nothing(self):
         self.assertIsNone(persona_versions.snapshot(self.persona, at(1)))
         self.write('  \n')
