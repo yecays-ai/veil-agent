@@ -79,6 +79,29 @@ class FreeReplyTests(unittest.TestCase):
         diagnostics = self.store.read('test/memory/_agent/diagnostics.jsonl')
         self.assertEqual([row['code'] for row in diagnostics], ['empty_reply'])
 
+    def test_fake_sticker_marker_in_a_plain_reply_is_sent_back_to_peter(self):
+        # Ticket 224: typing a sticker marker for a sticker that does not exist is not a reply.
+        from stickers import StickerLibrary
+        library = StickerLibrary(self.root / 'stickers')
+        library.add_bytes('peter', 'chair', b'\x89PNG\r\n\x1a\n' + b'0' * 20, create_pack=True)
+        model = Mock(side_effect=[
+            (SimpleNamespace(content='[表情包：peter/被抓包]\n\nhamster eyes', tool_calls=[]), 10, 2, 0),
+            (SimpleNamespace(content='hamster eyes', tool_calls=[]), 10, 2, 0)])
+        chat = Chat(self.cfg, self.store, Budget(self.store), model, output=[].append)
+        chat.sticker_library = library
+        self.assertEqual(chat.send('hello'), 'hamster eyes')
+        self.assertEqual(model.call_count, 2)
+        sent_back = model.call_args_list[1].args[0]
+        self.assertTrue(any('no such sticker' in str(m.get('content')) for m in sent_back))
+        self.assertEqual([r['content'] for r in self.store.read('test/chat.jsonl') if r['role'] == 'assistant'],
+                         ['hamster eyes'])
+        # a sticker that exists is left alone
+        chat2 = Chat(self.cfg, self.store, Budget(self.store),
+                     Mock(return_value=(SimpleNamespace(content='[表情包：peter/chair]', tool_calls=[]), 10, 2, 0)),
+                     output=[].append)
+        chat2.sticker_library = library
+        self.assertEqual(chat2.send('again'), '[表情包：peter/chair]')
+
     def test_empty_answer_twice_fails_visibly_instead_of_silence(self):
         model = Mock(return_value=(SimpleNamespace(content='', tool_calls=[]), 10, 2, 0))
         chat = Chat(self.cfg, self.store, Budget(self.store), model, output=[].append)
