@@ -1,3 +1,9 @@
+## 工单 219 交接（2026-11-05）
+
+- 改动在 `web_tools.py`（`_find_results` 逐引擎回退、`_research`、`_FetchWorker` 并发）、`tool_groups.py`、`characters/peter/character.toml`（别名 dig_deep）、`tests/test_web_tools.py`。ddgs 9.16.1 的文字搜索引擎只有 brave、duckduckgo、grokipedia、mojeek、startpage、wikipedia、yahoo，没有 Bing 和百度；仍不稳可考虑加国内搜索 API（需先问 lan 费用）。
+- 全量测试有 6 项既有失败（语音和文件系统服务），main 上同样存在，与本单无关。
+- 小红书图片阅读是单独的工单，不在本单。
+
 ## 工单 216 交接（2026-11-05）
 
 - 新增 `tool_groups.py`（组成员按规范工具名匹配，`expand_schema`、`announce_text`）；`veil_agent.py`：配置项 `tools.tool_groups`（未知组名报错）、`tool_schemas()` 在加别名之前过滤并追加 `expand_capability`、`expand_capability()` 与 `_tick_expanded_groups()`（每次请求开头调用一次：醒来清空，聊天递减）、`FREE_REVIEW_TOOLS` 加入 `expand_capability`；`tools_agent.py`/`memory_native.py`：`announce_tool_groups`。`characters/peter/character.toml` 加了 `tool_groups`。
