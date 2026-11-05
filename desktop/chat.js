@@ -337,7 +337,7 @@ function add(kind,text,id,time,media,messageId,requestId,favorite=false,attachme
     }else if(media&&media.id){
       const image=document.createElement('img');image.className='msg-image';window.veilDesktop.mediaUrl(media.filename).then(url=>{image.src=url});image.alt=media.name||'图片';image.loading='lazy';d.appendChild(image);
       if(text&&text!=='[图片]'){const caption=document.createElement('div');caption.innerHTML=render(text);d.appendChild(caption)}
-    }else d.innerHTML=render(text);
+    }else if(!stickerBubble(d,text))d.innerHTML=render(text);
     for(const attachment of Array.isArray(attachments)?attachments:[]){const card=createAttachmentCard(attachment);if(card)d.appendChild(card)}
     updateFavoriteBadge(d,d.dataset.favorite==='true');
     d.classList.toggle('is-selected',selectedMessageIds.has(messageId));
@@ -1718,4 +1718,122 @@ $('model-form').onsubmit=async ev=>{
   const models=modelsPayload().models;
   if(editingModel){const i=models.findIndex(x=>x.id===editingModel.id);models[i]={id:editingModel.id,...item}}else models.push(item);
   if(await saveModels({models},editingModel?'模型已更新。':'模型已添加。在上面“Peter 本人”或顶上的下拉里就能切过去。'))closeModelForm();
+};
+
+// ---- Ticket 222: stickers (表情包). In chat a sticker is the text "[表情包：图集/名字]"; the window draws the picture. ----
+const STICKER_MARK=/^\[表情包：([^\[\]\/\n]{1,30})\/([^\[\]\n]{1,40})\]\n?([\s\S]*)$/;
+let stickerLib=null,stickerLoading=null,stickerPackId=null,stickerManage=false;
+function loadStickers(force=false){
+  if(stickerLib&&!force)return Promise.resolve(stickerLib);
+  if(!stickerLoading)stickerLoading=api('/api/stickers').then(async r=>{const d=await r.json();if(!r.ok)throw new Error(d.error||'表情包读取失败');stickerLib=d;return d}).finally(()=>{stickerLoading=null});
+  return stickerLoading;
+}
+function findSticker(lib,pack,name){
+  const p=(lib.packs||[]).find(x=>x.name.toLowerCase()===pack.trim().toLowerCase());
+  return p&&p.stickers.find(s=>s.name.toLowerCase()===name.trim().toLowerCase())||null;
+}
+function stickerBubble(d,text){
+  const m=STICKER_MARK.exec(text||'');if(!m)return false;
+  d.classList.add('sticker-msg');
+  const holder=document.createElement('div');holder.className='msg-sticker-wrap';
+  const label=document.createElement('span');label.className='msg-sticker-label';label.textContent=`表情包：${m[1]}/${m[2]}`;
+  holder.appendChild(label);d.appendChild(holder);
+  const caption=m[3]&&m[3].trim();if(caption){const c=document.createElement('div');c.innerHTML=render(caption);d.appendChild(c)}
+  const show=lib=>{
+    const s=findSticker(lib,m[1],m[2]);if(!s)return;
+    window.veilDesktop.stickerUrl(s.file).then(url=>{const img=document.createElement('img');img.className='msg-sticker';img.alt=`${m[1]}/${m[2]}`;img.loading='lazy';img.onload=()=>{label.remove()};img.src=url;holder.appendChild(img)}).catch(()=>{});
+  };
+  loadStickers().then(lib=>{if(findSticker(lib,m[1],m[2]))show(lib);else loadStickers(true).then(show).catch(()=>{})}).catch(()=>{});
+  return true;
+}
+const stickerPanel=$('sticker-panel'),stickerButton=$('sticker-button'),stickerPacks=$('sticker-packs'),stickerGrid=$('sticker-grid'),stickerTools=$('sticker-tools'),stickerStatus=$('sticker-status');
+function stickerSay(text){stickerStatus.textContent=text||''}
+async function stickerPost(body){
+  const r=await api('/api/stickers',body,120000);const d=await r.json();
+  if(!r.ok)throw new Error(d.error||'没成功');
+  stickerLib={packs:d.packs};return d;
+}
+function stickerCurrentPack(){const packs=stickerLib?.packs||[];return packs.find(p=>p.id===stickerPackId)||packs[0]||null}
+function renderStickers(){
+  const pack=stickerCurrentPack();stickerPackId=pack?.id||null;
+  stickerPacks.replaceChildren();
+  for(const p of stickerLib?.packs||[]){
+    const b=document.createElement('button');b.type='button';b.className='sticker-pack'+(p.id===stickerPackId?' active':'');
+    b.textContent=`${p.name} ${p.stickers.length}`;b.onclick=()=>{stickerPackId=p.id;renderStickers()};stickerPacks.appendChild(b);
+  }
+  stickerGrid.replaceChildren();
+  if(!pack){const e=document.createElement('p');e.className='sticker-empty';e.textContent='还没有表情包。点「管理」新建图集，再粘贴链接添加。';stickerGrid.appendChild(e)}
+  else if(!pack.stickers.length){const e=document.createElement('p');e.className='sticker-empty';e.textContent='这个图集还是空的。';stickerGrid.appendChild(e)}
+  else for(const s of pack.stickers){
+    const tile=document.createElement('div');tile.className='sticker-tile';
+    const img=document.createElement('img');img.alt=s.name;img.loading='lazy';
+    window.veilDesktop.stickerUrl(s.file).then(url=>{img.src=url}).catch(()=>{});
+    if(stickerManage){
+      const name=document.createElement('input');name.value=s.name;name.maxLength=10;name.title='改名（最多 10 个字），回车保存';
+      name.onkeydown=e=>{if(e.key==='Enter')name.blur()};
+      name.onchange=async()=>{try{await stickerPost({action:'rename',id:s.id,name:name.value});renderStickers()}catch(e){stickerSay(e.message);name.value=s.name}};
+      const del=document.createElement('button');del.type='button';del.className='sticker-del';del.textContent='×';del.title='删除这张';
+      del.onclick=async()=>{if(del.dataset.sure!=='1'){del.dataset.sure='1';del.textContent='确定？';setTimeout(()=>{del.dataset.sure='';del.textContent='×'},3000);return}try{await stickerPost({action:'delete',id:s.id});renderStickers()}catch(e){stickerSay(e.message)}};
+      tile.append(img,name,del);
+    }else{
+      const cap=document.createElement('span');cap.textContent=s.name;
+      tile.append(img,cap);tile.onclick=()=>{send(`[表情包：${pack.name}/${s.name}]`);closeStickerPanel()};
+    }
+    stickerGrid.appendChild(tile);
+  }
+  stickerTools.hidden=!stickerManage;$('sticker-manage').textContent=stickerManage?'完成':'管理';
+  $('sticker-pack-name').value=pack?.name||'';
+}
+async function openStickerPanel(){
+  stickerPanel.hidden=false;stickerButton.setAttribute('aria-expanded','true');
+  try{await loadStickers(true)}catch(e){stickerSay(e.message);return}
+  renderStickers();
+}
+function closeStickerPanel(){stickerPanel.hidden=true;stickerButton.setAttribute('aria-expanded','false');stickerManage=false}
+stickerButton.onclick=()=>{stickerPanel.hidden?openStickerPanel():closeStickerPanel()};
+$('sticker-close').onclick=closeStickerPanel;
+$('sticker-manage').onclick=()=>{stickerManage=!stickerManage;stickerSay('');renderStickers()};
+$('sticker-add-pack').onclick=async()=>{
+  const input=$('sticker-new-pack');if(!input.value.trim())return;
+  try{const d=await stickerPost({action:'add_pack',name:input.value});stickerPackId=d.pack.id;input.value='';stickerSay('');renderStickers()}catch(e){stickerSay(e.message)}
+};
+$('sticker-rename-pack').onclick=async()=>{const pack=stickerCurrentPack();if(!pack)return;try{await stickerPost({action:'rename_pack',id:pack.id,name:$('sticker-pack-name').value});stickerSay('');renderStickers()}catch(e){stickerSay(e.message)}};
+$('sticker-delete-pack').onclick=async e=>{
+  const pack=stickerCurrentPack();if(!pack)return;const b=e.currentTarget;
+  if(b.dataset.sure!=='1'){b.dataset.sure='1';b.textContent=`再点一次删除「${pack.name}」和里面的 ${pack.stickers.length} 张`;setTimeout(()=>{b.dataset.sure='';b.textContent='删除图集'},4000);return}
+  b.dataset.sure='';b.textContent='删除图集';
+  try{await stickerPost({action:'delete_pack',id:pack.id});stickerPackId=null;renderStickers()}catch(err){stickerSay(err.message)}
+};
+$('sticker-add-links').onclick=async()=>{
+  const pack=stickerCurrentPack(),box=$('sticker-links');
+  if(!pack){stickerSay('先新建一个图集。');return}
+  if(!box.value.trim())return;
+  const button=$('sticker-add-links');button.disabled=true;
+  try{
+    const parsed=await stickerPost({action:'parse',text:box.value});
+    const rows=parsed.rows;let added=0;const failed=[];
+    for(let i=0;i<rows.length;i+=20){
+      stickerSay(`正在下载 ${Math.min(i+20,rows.length)}/${rows.length}…`);
+      const d=await stickerPost({action:'add_links',pack:pack.id,rows:rows.slice(i,i+20)});
+      added+=d.added;failed.push(...d.failed);
+    }
+    const skipped=parsed.skipped.length;
+    const failedLines=failed.map(f=>`${f.name||''} ${f.url||''}`.trim());
+    box.value=failedLines.join('\n');
+    stickerSay(`添加了 ${added} 张`+(failed.length?`，${failed.length} 张没下载成功（留在输入框里，可重试）`:'')+(skipped?`，${skipped} 行看不懂已跳过`:''));
+    renderStickers();
+  }catch(e){stickerSay(e.message)}finally{button.disabled=false}
+};
+$('sticker-upload').onclick=()=>$('sticker-file').click();
+$('sticker-file').onchange=async e=>{
+  const pack=stickerCurrentPack();const files=[...e.target.files];e.target.value='';
+  if(!pack||!files.length)return;let ok=0;
+  for(const file of files){
+    try{
+      const dataUrl=await fileAsDataUrl(file);
+      const r=await api('/api/stickers/upload',{pack:pack.id,name:file.name.replace(/\.[^.]+$/,'').slice(0,10)||'表情',data:dataUrl.slice(dataUrl.indexOf(',')+1)},60000);
+      const d=await r.json();if(!r.ok)throw new Error(d.error||'没成功');stickerLib={packs:d.packs};ok++;
+    }catch(err){stickerSay(`${file.name}：${err.message}`)}
+  }
+  if(ok)stickerSay(`上传了 ${ok} 张，名字是文件名，可以在「管理」里改。`);renderStickers();
 };

@@ -84,6 +84,37 @@ output_cny_per_million = "8"
             'fictional next question', 'fictional next reply'])
         self.assertEqual(rounds, 2)
 
+    def test_send_message_can_send_a_sticker_as_its_text_marker(self):
+        from stickers import StickerLibrary
+        library = StickerLibrary(self.root / 'stickers')
+        library.add_bytes('丑猫', '打人', b'\x89PNG\r\n\x1a\n' + b'0' * 20, create_pack=True)
+        self.assertNotIn('sticker', send_message_schema()['function']['parameters']['properties'])
+        self.assertIn('sticker', send_message_schema(stickers=True)['function']['parameters']['properties'])
+        outputs = []
+        chat = Chat(self.cfg, self.store, self.budget, self.model, output=outputs.append)
+        rejected, state, _ = chat.send_message(json.dumps({'sticker': '丑猫/打人'}), 'request-sticker-off')
+        self.assertEqual(state, '被拒绝')
+        chat.sticker_library = library
+        missing, state, _ = chat.send_message(json.dumps({'sticker': '丑猫/没有'}), 'request-sticker-missing')
+        self.assertEqual(state, '被拒绝')
+        self.assertIn('stickers tool', missing)
+        result, state, _ = chat.send_message(json.dumps({'sticker': '丑猫/打人'}), 'request-sticker')
+        self.assertEqual((result, state), ('Sent.', '成功'))
+        result, state, _ = chat.send_message(json.dumps({'sticker': '丑猫/打人', 'text': 'take that'}),
+                                             'request-sticker-caption')
+        self.assertEqual(state, '成功')
+        rows = self.store.read('test/chat.jsonl')
+        self.assertEqual(rows[0]['content'], '[表情包：丑猫/打人]')
+        self.assertEqual(rows[1]['content'], '[表情包：丑猫/打人]\ntake that')
+
+    def test_stickers_tool_is_offered_only_with_a_library(self):
+        from stickers import StickerLibrary
+        names = lambda chat: [s['function']['name'] for s in chat.tool_schemas()]
+        chat = Chat(self.cfg, self.store, self.budget, self.model)
+        self.assertNotIn('stickers', names(chat))
+        chat.sticker_library = StickerLibrary(self.root / 'stickers')
+        chat.tool_schemas()  # must not raise even when no tools are enabled
+
     def test_send_message_file_is_available_only_with_lab_attachment_hooks(self):
         self.assertNotIn('file', send_message_schema()['function']['parameters']['properties'])
         self.assertIn('file', send_message_schema(files=True)['function']['parameters']['properties'])

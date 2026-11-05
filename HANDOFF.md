@@ -1,3 +1,9 @@
+## 工单 222 交接（2026-11-05）
+
+- 改动：`stickers.py`（库、解析、下载、工具）、`veil_agent.py`（`stickers` 工具分发、`send_message` 的 `sticker` 参数）、`web_agent.py`（`/api/stickers`、`/api/stickers/upload`、`/sticker/<file>`）、`tools_agent.py`（一次性通知）、`desktop/`（`main.cjs` 白名单和 `chat:sticker-url`、面板 HTML/JS/CSS）、`windows_observer.py`（图片消息放行 gif）。`stickers` 工具没放进可展开的组，始终可用。
+- 下一步：lan 更新后按验收走一遍；核对 `data\peter\tools.jsonl` 里 `stickers`/`send_message` 记录，`data\stickers\index.json` 内容；留意 Peter 是否会选错图集（名字太随意）和 GIF 的 `look` 是否被模型拒绝（会自动降级为「没看到」）。
+- 未验证：Windows 真机界面、真实链接下载、GIF `look`、他自己画的 SVG 在窗口里的显示。
+
 ## 工单 221 交接（2026-11-05）
 
 - 改动在 `chat_search.py`（搜索与排序）、`veil_agent.py`（工具注册、调用分支、算免费回顾）、`tests/test_chat_search.py`、`tests/test_chat.py`。读 `store.read(chat.jsonl)` 全量，每次调用读一遍文件。

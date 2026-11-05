@@ -466,7 +466,7 @@ function allowedChatRequest(pathname, method) {
     try { url = new URL(pathname, 'http://127.0.0.1'); } catch { return false; }
     const keys = [...url.searchParams.keys()];
     if (url.pathname === '/api/events') return keys.length === 1 && keys[0] === 'after' && /^\d+$/.test(url.searchParams.get('after'));
-    if (url.pathname === '/api/life') return keys.length === 0;
+    if (url.pathname === '/api/life' || url.pathname === '/api/stickers') return keys.length === 0;
     if (url.pathname === '/api/memory/panel') return keys.length === 0;
     if (url.pathname === '/api/mcp') return keys.length === 0 ||
       (keys.length === 1 && keys[0] === 'retry' && url.searchParams.get('retry') === '1');
@@ -483,7 +483,7 @@ function allowedChatRequest(pathname, method) {
   return method === 'POST' && ['/api/send', '/api/media', '/api/voice', '/api/voice/retry',
     '/api/transcribe', '/api/approve', '/api/activity', '/api/glance', '/api/codex-watch', '/api/quiet-hours', '/api/exit',
     '/api/message/action', '/api/memory/edit', '/api/memory/delete', '/api/models', '/api/models/use', '/api/stop',
-    '/api/typing', '/api/request-reply', '/api/mcp', '/api/life'].includes(pathname);
+    '/api/typing', '/api/request-reply', '/api/mcp', '/api/life', '/api/stickers', '/api/stickers/upload'].includes(pathname);
 }
 ipcMain.handle('chat:request', async (event, pathname, body, timeoutMs) => {
   const detachedView = detachedViewFromEvent(event);
@@ -523,6 +523,12 @@ ipcMain.handle('chat:media-url', (event, filename) => {
     throw new Error('无效的媒体文件名。');
   const token = new URL(agentEndpoint.url).searchParams.get('t');
   return `${agentEndpoint.origin}/media/${encodeURIComponent(filename)}?t=${encodeURIComponent(token)}`;
+});
+ipcMain.handle('chat:sticker-url', (event, filename) => {
+  if (!(fromChat(event) || detachedViewFromEvent(event) === 'chat') || !agentEndpoint) throw new Error('请求未允许。');
+  if (typeof filename !== 'string' || !/^[0-9a-f]{32}\.(png|jpg|gif|webp|svg)$/.test(filename)) throw new Error('无效的表情包文件名。');
+  const token = new URL(agentEndpoint.url).searchParams.get('t');
+  return `${agentEndpoint.origin}/sticker/${encodeURIComponent(filename)}?t=${encodeURIComponent(token)}`;
 });
 ipcMain.handle('chat:attachment-text', async (event, id) => {
   if (!(fromChat(event) || detachedViewFromEvent(event) === 'chat') || !/^[0-9a-f]{32}$/.test(id || ''))

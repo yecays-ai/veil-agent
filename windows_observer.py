@@ -231,7 +231,7 @@ def observation_image_message(result):
         images = [getattr(result, 'image_data_uri', None)]
     if len(images) > 6:
         return None
-    pattern = r'data:image/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+'
+    pattern = r'data:image/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+'
     total = 0
     for image in images:
         if not isinstance(image, str) or not re.fullmatch(pattern, image):

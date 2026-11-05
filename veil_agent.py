@@ -250,8 +250,14 @@ AWAY_CHANNEL_PARAMETERS = {
 }
 
 
-def send_message_schema(voice=False, channels=(), files=False):
+def send_message_schema(voice=False, channels=(), files=False, stickers=False):
     schema = json.loads(json.dumps(SEND_MESSAGE))
+    if stickers:
+        schema['function']['parameters']['properties']['sticker'] = {
+            'type': 'string', 'maxLength': 80,
+            'description': 'Optional sticker to send as this message, written "pack/name" (see the stickers tool). '
+                           'With a sticker, text may be left out.'}
+        schema['function']['parameters']['required'] = []
     for name in channels:
         schema['function']['parameters']['properties'][name] = {
             'type': 'boolean', 'description': AWAY_CHANNEL_PARAMETERS[name]}
@@ -1845,6 +1851,7 @@ class Chat:
         self.user_stop = threading.Event()
         self.runtime_monitor = runtime_monitor
         self.attachment_reader = None
+        self.sticker_library = None  # ticket 222
         self.attachment_saver = None
         self.attachment_discarder = None
         self.email_attachment_admission = None
@@ -1873,12 +1880,16 @@ class Chat:
         existing_tools = permitted_tools(self.tools.tools if self.tools else [])
         messaging = [send_message_schema(self.voice is not None, tuple(self.away_channels),
                                          files=callable(self.attachment_reader)
-                                         and callable(self.attachment_saver)),
+                                         and callable(self.attachment_saver),
+                                         stickers=self.sticker_library is not None),
                      RECALL_MESSAGE] if (
             (self.cfg.tools and self.cfg.tools.get('enabled', True))
             or (self.tools and self.tools.tools)) else []
         if messaging and not self.force_reply:
             messaging.extend([STAY_SILENT, REPLY_LATER])
+        if messaging and self.sticker_library is not None:
+            import stickers
+            messaging.append(stickers.tool_schema(self.sticker_library))
         from chat_search import TOOL_SCHEMA as CHAT_SEARCH
         history = [CAPABILITY_HISTORY, AUTONOMY_HISTORY, CHAT_SEARCH] if existing_tools or task_tools or messaging else []
         wake_tools = [AUTONOMY_SET_NEXT_WAKE, AUTONOMY_SET_WAKE_RHYTHM] if self.autonomy_controller is not None else []
@@ -1917,7 +1928,7 @@ class Chat:
             'send_message', 'recall_message', 'stay_silent', 'reply_later', 'screen_pop',
             'capability_history', 'autonomy_history', 'search_chat_history', 'profile_append', 'profile_replace',
             'thought', 'life_record', 'long_task_status', 'long_task_update', 'set_next_wake', 'set_wake_rhythm',
-            'expand_capability',
+            'expand_capability', 'stickers',
         })
         schemas, self.active_tool_aliases = alias_tool_schemas(
             schemas, self.tool_aliases, reserved_names)
@@ -2101,6 +2112,22 @@ class Chat:
         allowed.update(self.away_channels)
         if callable(self.attachment_reader) and callable(self.attachment_saver):
             allowed.add('file')
+        if self.sticker_library is not None:
+            allowed.add('sticker')
+        if isinstance(args, dict) and 'sticker' in args and self.sticker_library is not None:
+            # Ticket 222: a sticker is sent as the plain-text marker the chat window draws as a picture.
+            sticker_ref = args['sticker']
+            pack_name, _, sticker_name = (sticker_ref.partition('/') if isinstance(sticker_ref, str) else ('', '', ''))
+            found = self.sticker_library.find(pack_name, sticker_name) if sticker_name else None
+            if not found:
+                return ('No sticker "' + str(sticker_ref)[:80] + '"; nothing was sent. Use the stickers tool to list a '
+                        'pack and copy "pack/name" exactly.'), '被拒绝', 'send_message'
+            import stickers as sticker_module
+            caption = args.get('text') if isinstance(args.get('text'), str) else ''
+            args = {**args, 'text': sticker_module.marker(found['pack'], found['name'])
+                    + (('\n' + caption.strip()) if caption.strip() else '')}
+            del args['sticker']
+            arguments = json.dumps(args, ensure_ascii=False)
         if (not isinstance(args, dict) or not set(args).issubset(allowed) or 'text' not in args or
                 not isinstance(args['text'], str) or not args['text'].strip()):
             return 'send_message requires non-empty text.', '被拒绝', 'send_message'
@@ -3334,6 +3361,14 @@ class Chat:
                                                 args.get('since'), args.get('until'))
                     state = '成功'
                 summary = 'search_chat_history'
+            elif call.function.name == 'stickers':
+                import stickers
+                try:
+                    sticker_args = json.loads(call.function.arguments or '{}')
+                except ValueError:
+                    sticker_args = None
+                result, state = stickers.run_tool(self.sticker_library, sticker_args, self.attachment_reader)
+                summary = 'stickers'
             elif call.function.name == 'life_record':
                 result, state, summary = self.life_records.invoke(json.loads(call.function.arguments or '{}'))
             elif call.function.name == 'set_next_wake':

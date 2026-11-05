@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('veilDesktop', {
   reconnect: () => ipcRenderer.invoke('chat:reconnect'),
   copyText: text => ipcRenderer.invoke('chat:copy-text', text),
   mediaUrl: filename => ipcRenderer.invoke('chat:media-url', filename),
+  stickerUrl: filename => ipcRenderer.invoke('chat:sticker-url', filename),
   attachmentText: id => ipcRenderer.invoke('chat:attachment-text', id),
   openAttachment: id => ipcRenderer.invoke('chat:open-attachment', id),
   petSize: () => ipcRenderer.invoke('chat:pet-size'),

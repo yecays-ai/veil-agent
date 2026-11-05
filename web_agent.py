@@ -405,6 +405,8 @@ class Hub(ScreenPopMixin):
                 notes = None
         return {'turns': turns, 'notes': notes}
 
+    sticker_library = None  # ticket 222; set at startup
+
     def media_info(self, media_id):
         with self.media_lock:
             row = self.media_index.get(media_id)
@@ -1648,6 +1650,98 @@ def make_handler(hub, token):
                     after = 0
                 self._send(200, hub.snapshot(after))
 
+        def _get_stickers(self):
+            if not self._guard(self.headers.get('X-Token')):
+                return
+            library = hub.sticker_library
+            if library is None:
+                self._send(503, {'error': '表情包暂不可用。'})
+                return
+            try:
+                self._send(200, library.snapshot())
+            except ValueError as exc:
+                self._send(500, {'error': str(exc)})
+
+        def _get_sticker_file(self, url, query):
+            if not self._guard((query.get('t') or [''])[0]):
+                return
+            read = hub.sticker_library.read_file(url.path.rsplit('/', 1)[-1]) if hub.sticker_library else None
+            if not read:
+                self._send(404, {'error': 'not found'})
+                return
+            data, mime = read
+            headers = {'Cache-Control': 'private, max-age=86400'}
+            if mime == 'image/svg+xml':
+                headers['Content-Security-Policy'] = "default-src 'none'; style-src 'unsafe-inline'; img-src data:"
+            self._send(200, data, mime, headers)
+
+        def _post_stickers(self, body):
+            library = hub.sticker_library
+            if library is None:
+                self._send(503, {'error': '表情包暂不可用。'})
+                return
+            from stickers import StickerError, parse_sticker_text
+            action = body.get('action')
+            try:
+                if action == 'add_pack':
+                    pack = library.add_pack(body.get('name'))
+                    result = {'pack': {'id': pack['id'], 'name': pack['name']}}
+                elif action == 'rename_pack':
+                    library.rename_pack(body.get('id'), body.get('name'))
+                    result = {}
+                elif action == 'delete_pack':
+                    library.delete_pack(body.get('id'))
+                    result = {}
+                elif action == 'parse':
+                    rows, skipped = parse_sticker_text(body.get('text') if isinstance(body.get('text'), str) else '')
+                    result = {'rows': rows, 'skipped': skipped}
+                elif action == 'add_links':
+                    rows = body.get('rows')
+                    if not isinstance(rows, list):
+                        raise StickerError('没有可添加的链接。')
+                    added, failed = library.add_links(body.get('pack'), rows)
+                    result = {'added': added, 'failed': failed}
+                elif action == 'rename':
+                    result = {'name': library.rename_sticker(body.get('id'), body.get('name'))}
+                elif action == 'delete':
+                    library.delete_sticker(body.get('id'))
+                    result = {}
+                else:
+                    self._send(400, {'error': 'bad request'})
+                    return
+            except StickerError as exc:
+                self._send(400, {'error': str(exc)})
+                return
+            except OSError:
+                self._send(500, {'error': '表情包没能保存到本机。'})
+                return
+            self._send(200, {'ok': True, **result, **library.snapshot()})
+
+        def _post_sticker_upload(self):
+            library = hub.sticker_library
+            try:
+                length = int(self.headers.get('Content-Length') or 0)
+                if library is None or not 0 < length <= 3_300_000:
+                    raise ValueError
+                body = json.loads(self.rfile.read(length))
+                raw = base64.b64decode(body['data'], validate=True)
+                name, pack = body.get('name'), body.get('pack')
+                if not isinstance(name, str) or not isinstance(pack, str):
+                    raise ValueError
+            except (ValueError, KeyError, TypeError):
+                self._send(400, {'error': 'bad request'})
+                return
+            from stickers import StickerError
+            try:
+                library.add_bytes(pack, name, raw, by='lan')
+            except StickerError as exc:
+                self._send(400, {'error': str(exc)})
+                return
+            except OSError:
+                self._send(500, {'error': '表情包没能保存到本机。'})
+                return
+            self._send(200, {'ok': True, **library.snapshot()})
+
         def _get_life(self):
             if not self._guard(self.headers.get('X-Token')):
                 return
@@ -1797,6 +1891,10 @@ def make_handler(hub, token):
                 self._get_attachment(url, query)
             elif url.path == '/api/events':
                 self._get_events(query)
+            elif url.path == '/api/stickers':
+                self._get_stickers()
+            elif url.path.startswith('/sticker/'):
+                self._get_sticker_file(url, query)
             elif url.path == '/api/life':
                 self._get_life()
             elif url.path == '/api/mcp':
@@ -2294,6 +2392,9 @@ def make_handler(hub, token):
             if url.path == '/api/life':
                 self._post_life()
                 return
+            if url.path == '/api/stickers/upload':
+                self._post_sticker_upload()
+                return
             if url.path == '/api/media':
                 self._post_media()
                 return
@@ -2319,7 +2420,9 @@ def make_handler(hub, token):
             if url.path == '/api/message/action':
                 self._post_message_action(body)
                 return
-            if url.path == '/api/send':
+            if url.path == '/api/stickers':
+                self._post_stickers(body)
+            elif url.path == '/api/send':
                 self._post_send(body)
             elif url.path == '/api/voice/retry':
                 self._post_voice_retry(body)
@@ -2362,6 +2465,7 @@ def start_server(hub, token, port):
 
 def serve_chat(chat, hub, channels=()):
     hub.chat = chat
+    chat.sticker_library = hub.sticker_library
     chat.claim_steer = hub.claim_steer
     chat.steer_pending = hub.steer_pending
     if getattr(chat.cfg, 'models', None) is not None:
@@ -2370,6 +2474,9 @@ def serve_chat(chat, hub, channels=()):
     chat.screen_pop_handler = hub.request_screen_pop
     files = getattr(chat.tools, 'files', None) if chat.tools else None
     files = files or chat.tools
+    announce_stickers = getattr(files, 'announce_stickers', None)
+    if hub.sticker_library is not None and callable(announce_stickers):
+        announce_stickers()
     if getattr(files, 'lab', None) is not None:
         from lab_games import LabGames
         hub.game_manager = LabGames(files.lab, hub.game_port)
@@ -2576,6 +2683,8 @@ def main(argv=None):
             runtime_monitor = RuntimeMonitor(store, cfg.id, activity)
             memory_port = (cfg.memory or {}).get('ombre_port') if (cfg.memory or {}).get('enabled') else None
             hub = Hub(cfg.name, activity, memory_port, store.root / cfg.id / 'media')
+            from stickers import StickerLibrary
+            hub.sticker_library = StickerLibrary(store.root / 'stickers')
             token = secrets.token_urlsafe(24)
             try:
                 server = start_server(hub, token, args.port)

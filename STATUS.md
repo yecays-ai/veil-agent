@@ -1,5 +1,9 @@
 # 当前状态
 
+## 工单 222：表情包（图集两级选择）
+
+- `ticket/222-stickers`：新增 `stickers.py`（图集库，文件存 `data\stickers\`）；输入栏表情面板（选图集、点发送、管理：新建/改名/删除图集、粘贴「名字：链接」批量添加、上传图片、改名/删单张）；聊天里表情包是文字 `[表情包：图集/名字]`，窗口画成图片；Peter 有 `stickers` 工具（说明里只列图集名和数量，列某图集的名字，`look` 才读图，`add` 加自己画的 SVG 或 Lab 图片）和 `send_message` 的 `sticker` 参数；一次性英文能力通知。名字最多 10 个字。新增 `tests/test_stickers.py` 13 项和 2 项 chat 测试；全量测试与 main 相同的云端环境类失败一致；Windows 实机、真实链接下载、GIF 能否被模型接受均未验证；费用约 +¥0.02–0.1/天（粗估）。验收见 `docs/tickets/222-stickers.md`。下一个工单号 223。
+
 ## 工单 221：Peter 自己翻聊天记录找回忆
 
 - `ticket/221-chat-history-search`：新增只读工具 `search_chat_history`（只要 Peter 有工具能力就始终可用，不用 expand_capability）：Peter 给 1 到 6 个线索词（可含同义词）和可选日期范围，程序在完整聊天记录里找，线索词在相邻几条里同时出现的排最前，返回时间、原文和前后各 2 条消息（最多 5 段、不超过 8KB）；没找到明确返回“没找到，不要猜”。已撤回消息不返回；自主醒来时算只读回顾不占步数。新增 `chat_search.py`、8 项测试；全量测试与 main 相同的云端网络类失败一致；Windows 体验未验证；费用预计每天不到 ¥0.05（粗估）。验收见 `docs/tickets/221-chat-history-search.md`。下一个工单号 222（220 已分给消息菜单修复 #272）。
