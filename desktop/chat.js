@@ -1777,7 +1777,7 @@ function renderStickers(){
       tile.append(img,name,del);
     }else{
       const cap=document.createElement('span');cap.textContent=s.name;
-      tile.append(img,cap);tile.onclick=()=>{if(selectedImage){stickerSay('先发送或取消发送区里的图片，再发表情包。');return}send(`[表情包：${pack.name}/${s.name}]`);closeStickerPanel()};
+      tile.append(img,cap);tile.onclick=()=>{if(selectedImage){stickerSay('先发送或取消发送区里的图片，再发表情包。');return}if(stopping||stopped||sending||voiceSending||speechIsActive()){stickerSay('现在不能发送（正在发送或录音中），稍后再点。');return}send(`[表情包：${pack.name}/${s.name}]`);closeStickerPanel()};
     }
     stickerGrid.appendChild(tile);
   }

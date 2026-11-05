@@ -224,10 +224,16 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def download_image(url):
-    """One public http(s) picture: pinned to a validated address, redirects re-checked, no cookies or proxy,
+    """One public http(s) picture: pinned to a validated address, redirects re-checked, no cookies,
     size-capped and under a total time limit. Raises StickerError."""
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect,
-                                         _PinnedHTTPHandler, _PinnedHTTPSHandler)
+    proxied = bool(urllib.request.getproxies())
+    if proxied:
+        # Behind a proxy the proxy resolves names (local DNS may even be a fake-IP range), so the connection
+        # cannot be pinned here; names that are plainly local or private are still refused below.
+        opener = urllib.request.build_opener(_NoRedirect)
+    else:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect,
+                                             _PinnedHTTPHandler, _PinnedHTTPSHandler)
     deadline = time.monotonic() + DOWNLOAD_DEADLINE
     current = url
     for _ in range(MAX_REDIRECTS + 1):
@@ -238,7 +244,12 @@ def download_image(url):
             raise StickerError('bad link') from exc
         if parts.scheme not in ('http', 'https') or parts.username or not host:
             raise StickerError('link is not a public web address')
-        _public_addresses(host, port or (443 if parts.scheme == 'https' else 80))
+        if proxied:
+            from web_tools import public_http_url
+            if public_http_url(current) is None:
+                raise StickerError('link is not a public web address')
+        else:
+            _public_addresses(host, port or (443 if parts.scheme == 'https' else 80))
         request = urllib.request.Request(current, headers={
             'User-Agent': 'Mozilla/5.0', 'Accept': 'image/png,image/jpeg,image/gif,image/webp,*/*;q=0.5'})
         try:
