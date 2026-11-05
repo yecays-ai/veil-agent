@@ -1,7 +1,7 @@
 ## 工单 223 交接（2026-11-05）
 
-- 改动：`desktop/chat.js`（`stickerBubble`）、`desktop/chat.css`（`.sticker-msg` 无框）、`veil_agent.py`（`sticker` 与 `text` 互斥）、`tests/test_chat.py`。
-- 下一步：lan 更新后看表情包是否无框单独一条，核对 `data\peter\tools.jsonl` 里有没有 Peter 带文字发表情包被拒绝的记录。
+- 改动：`desktop/chat.js`（`stickerBubble`）、`desktop/chat.css`（`.sticker-msg` 无框）、`veil_agent.py`（`sticker` 带 `text` 时自动拆成两条）、`tests/test_chat.py`。
+- 下一步：lan 更新后看表情包是否无框单独一条，核对 Peter 带文字发表情包时 chat.jsonl 里是两行（表情包、文字）。
 - 未验证：Windows 真机界面。
 
 ## 工单 222 交接（2026-11-05）

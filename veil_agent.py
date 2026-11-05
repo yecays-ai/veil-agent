@@ -256,8 +256,8 @@ def send_message_schema(voice=False, channels=(), files=False, stickers=False):
         schema['function']['parameters']['properties']['sticker'] = {
             'type': 'string', 'maxLength': 80,
             'description': 'Optional sticker to send as this message, written "pack/name" (see the stickers tool). '
-                           'A sticker is its own message: leave text out, and send any words in a separate '
-                           'send_message. You may reply with just a sticker.'}
+                           'A sticker always shows as its own bubble; any text sent with it appears as a '
+                           'separate bubble right after. You may reply with just a sticker.'}
         schema['function']['parameters']['required'] = []
     for name in channels:
         schema['function']['parameters']['properties'][name] = {
@@ -2127,8 +2127,14 @@ class Chat:
                         'pack and copy "pack/name" exactly.'), '被拒绝', 'send_message'
             import stickers as sticker_module
             if isinstance(args.get('text'), str) and args['text'].strip():
-                return ('A sticker is its own message, so nothing was sent. Send the sticker with no text, and send '
-                        'any words as a separate send_message.'), '被拒绝', 'send_message'
+                # Ticket 223: a sticker is always its own bubble. Words sent with it go out as the next message.
+                first = self.send_message(json.dumps({'sticker': sticker_ref}, ensure_ascii=False), request_id,
+                                          tool_call_id)
+                if first[1] in ('被拒绝', '出错'):
+                    return first
+                rest = {k: v for k, v in args.items() if k != 'sticker'}
+                return self.send_message(json.dumps(rest, ensure_ascii=False), request_id,
+                                         f'{tool_call_id}:text' if tool_call_id else tool_call_id)
             args = {**args, 'text': sticker_module.marker(found['pack'], found['name'])}
             del args['sticker']
             arguments = json.dumps(args, ensure_ascii=False)

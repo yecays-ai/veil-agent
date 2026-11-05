@@ -1,6 +1,6 @@
 ## 工单 223：表情包单独一个气泡
 
-- `ticket/223-sticker-bubble`：聊天里表情包消息去掉气泡框，图片单独一条；`send_message` 带 `sticker` 时不能再带 `text`（拒绝并提示文字另发），工具说明写明可以只回一个表情包。`desktop/chat.js`、`chat.css`、`veil_agent.py`、`tests/test_chat.py`。全量测试与 main 相同的云端环境类失败一致；Windows 真机未验证。验收见 `docs/tickets/223-sticker-bubble.md`。下一个工单号 224。
+- `ticket/223-sticker-bubble`：聊天里表情包消息去掉气泡框，图片单独一条；`send_message` 带 `sticker` 又带 `text` 时程序自动拆成两条（先表情包后文字），工具说明写明可以只回一个表情包。`desktop/chat.js`、`chat.css`、`veil_agent.py`、`tests/test_chat.py`。全量测试与 main 相同的云端环境类失败一致；Windows 真机未验证。验收见 `docs/tickets/223-sticker-bubble.md`。下一个工单号 224。
 
 # 当前状态
 
