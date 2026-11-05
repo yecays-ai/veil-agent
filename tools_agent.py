@@ -795,6 +795,17 @@ class FilesystemTools:
             raise UserError('能力清单无法更新，文件工具已停止；请保留 data 文件夹。') from exc
 
     @capability_transaction
+    def announce_tool_groups(self, groups):
+        if getattr(self, 'cap_path', None) is None:
+            return
+        try:
+            from tool_groups import announce_text
+            self._announce_once('tool_groups_announced', announce_text(groups))
+        except Exception as exc:
+            self.enabled = False
+            raise UserError('能力清单无法更新，文件工具已停止；请保留 data 文件夹。') from exc
+
+    @capability_transaction
     def announce_profile_notes(self, max_bytes):
         if getattr(self, 'cap_path', None) is None:
             return
