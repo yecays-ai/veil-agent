@@ -188,6 +188,26 @@ output_cny_per_million = "8"
         self.assertNotIn(recalled['id'], self.hub.media_index)
         self.assertFalse((self.hub.media_root / recalled['filename']).exists())
 
+    def test_edit_and_favorite_actions_update_row_and_publish_event(self):
+        stamp = datetime.now(timezone.utc).isoformat()
+        self.store.append('test/chat.jsonl', {
+            'role': 'assistant', 'content': 'Original reply.', 'time': stamp,
+            'request_id': 'edit-request', 'message_id': 'edit-message'})
+        chat = Chat(self.cfg, self.store, Budget(self.store), self.model, output=self.hub.output)
+        self.hub.busy = False
+        with patch('web_agent.run_chat'), patch('away_bridge.AwayBridge.start'), \
+                patch.object(self.hub, 'request_stop'):
+            serve_chat(chat, self.hub, channels=())
+        self.hub.busy = False
+        self.assertEqual(self.hub.message_action('edit', message_id='edit-message', content='Edited reply.'), '消息已更新。')
+        event = [e for e in self.hub.events if e['kind'] == 'message_updated'][-1]
+        self.assertEqual((event['message_id'], event['text'], event.get('edited')), ('edit-message', 'Edited reply.', True))
+        self.assertEqual(self.hub.message_action('favorite', message_id='edit-message', favorite=True), '已收藏消息。')
+        favorite_event = [e for e in self.hub.events if e['kind'] == 'message_updated'][-1]
+        self.assertNotIn('edited', favorite_event)
+        row = next(r for r in self.store.read('test/chat.jsonl') if r.get('message_id') == 'edit-message')
+        self.assertEqual((row['content'], row['favorite']), ('Edited reply.', True))
+
     def test_voice_transport_errors_keep_their_real_category(self):
         cases = (
             (urllib.error.URLError(socket.gaierror(11001, 'getaddrinfo failed')), 'dns', 'gaierror'),

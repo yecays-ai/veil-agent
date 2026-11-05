@@ -151,7 +151,7 @@ function showEvent(e){
   if(e.kind==='message_updated'){
     const node=findMessageBubble(e.message_id);
     if(node){
-      if(typeof e.text==='string'){node.dataset.messageText=e.text;node.replaceChildren();node.innerHTML=render(e.text)}
+      if(e.edited===true&&typeof e.text==='string'){node.dataset.messageText=e.text;node.replaceChildren();node.innerHTML=render(e.text)}
       updateFavoriteBadge(node,e.favorite===true);
     }
     return;
@@ -465,6 +465,14 @@ function showMessageEditDialog(node){
   dialog.addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();close();return}if(event.key==='Tab'){const targets=[input,cancel,save],index=targets.indexOf(document.activeElement);if(event.shiftKey&&index===0){event.preventDefault();save.focus()}else if(!event.shiftKey&&index===2){event.preventDefault();input.focus()}}});
   buttons.append(cancel,save);dialog.append(title,input,buttons);layer.append(backdrop,dialog);document.body.appendChild(layer);input.focus();input.setSelectionRange(input.value.length,input.value.length);
 }
+{
+  const favoritesButton=$('favorites-filter');
+  if(favoritesButton)favoritesButton.onclick=()=>{
+    const on=!col.classList.contains('only-favorites');
+    col.classList.toggle('only-favorites',on);favoritesButton.setAttribute('aria-pressed',String(on));
+    if(!on)log.scrollTop=log.scrollHeight;
+  };
+}
 function showMessageActions(event,node){
   event.preventDefault();
   if(busy||sending||stopping||stopped||node.classList.contains('recalled')||!node.dataset.messageId)return;
@@ -496,7 +504,7 @@ function showMessageActions(event,node){
       if(action==='delete'){closeMessageActions();showMessageDeleteConfirm(node);return}
       if(action==='copy'){
         const content=node.dataset.messageText||'';closeMessageActions();
-        navigator.clipboard.writeText(content).then(()=>notify('消息已复制。')).catch(()=>notify('无法复制这条消息。','error'));
+        (window.veilDesktop?.copyText?window.veilDesktop.copyText(content):navigator.clipboard.writeText(content)).then(()=>notify('消息已复制。')).catch(()=>notify('无法复制这条消息。','error'));
         return;
       }
       if(action==='transcribe'){

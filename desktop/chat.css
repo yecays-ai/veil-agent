@@ -182,3 +182,7 @@ body{isolation:isolate}
 .header-model,.header-model select{-webkit-app-region:no-drag}
 
 .models-error{color:var(--danger)}
+
+#favorites-filter[aria-pressed="true"]{background:var(--panel-2);border-color:var(--accent);color:var(--accent)}
+#col.only-favorites .msg:not(.is-favorite),#col.only-favorites .timestamp,#col.only-favorites .notice{display:none}
+#col.only-favorites:not(:has(.msg.is-favorite))::before{content:"还没有收藏的消息。右键一条消息选 Favorite 就能收藏。";display:block;padding:24px 12px;text-align:center;color:var(--muted);font-size:13px}

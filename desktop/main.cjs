@@ -1,5 +1,5 @@
 'use strict';
-const { app, BrowserWindow, ipcMain, dialog, screen, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, screen, shell, clipboard } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const { randomUUID } = require('node:crypto');
@@ -510,6 +510,12 @@ ipcMain.handle('chat:request', async (event, pathname, body, timeoutMs) => {
     const data = await response.json().catch(() => ({}));
     return { ok: response.ok, status: response.status, data };
   } catch (error) { return { ok: false, status: 0, data: { error: error.message || 'Agent 连接中断。' } }; }
+});
+ipcMain.handle('chat:copy-text', (event, text) => {
+  if (!(fromChat(event) || detachedViewFromEvent(event) === 'chat')) throw new Error('请求未允许。');
+  if (typeof text !== 'string' || !text || text.length > 200000) throw new Error('没有可复制的内容。');
+  clipboard.writeText(text);
+  return true;
 });
 ipcMain.handle('chat:media-url', (event, filename) => {
   if (!(fromChat(event) || detachedViewFromEvent(event) === 'chat') || !agentEndpoint) throw new Error('请求未允许。');

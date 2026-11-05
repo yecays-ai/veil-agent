@@ -4,6 +4,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('veilDesktop', {
   request: (path, body, timeoutMs) => ipcRenderer.invoke('chat:request', path, body, timeoutMs),
   reconnect: () => ipcRenderer.invoke('chat:reconnect'),
+  copyText: text => ipcRenderer.invoke('chat:copy-text', text),
   mediaUrl: filename => ipcRenderer.invoke('chat:media-url', filename),
   attachmentText: id => ipcRenderer.invoke('chat:attachment-text', id),
   openAttachment: id => ipcRenderer.invoke('chat:open-attachment', id),

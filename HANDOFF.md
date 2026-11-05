@@ -1,3 +1,9 @@
+## 工单 220 交接（2026-11-05）
+
+- 复制改走 IPC `chat:copy-text` → Electron `clipboard.writeText`，桌面前端改动，无费用影响。Windows 体验未验证：右键/长按消息选 Copy，粘贴到记事本看到原文；编辑：改字保存后气泡立刻更新。
+- 编辑根因：`hub.push('message_updated', '', ..., text=...)` 重复传 `text`，TypeError，保存时请求失败。已改为位置参数传正文，加测试 `test_edit_and_favorite_actions_update_row_and_publish_event`。
+- 收藏入口：顶部栏星标按钮切换 `#col.only-favorites`，纯 CSS 过滤，不改数据；位置是临时的。Windows 体验未验证：右键一条消息收藏，点顶部星标只剩收藏消息，再点恢复。
+
 ## 工单 219 交接（2026-11-05）
 
 - 改动在 `web_tools.py`（`_find_results` 逐引擎回退、`_research`、`_FetchWorker` 并发）、`tool_groups.py`、`characters/peter/character.toml`（别名 dig_deep）、`tests/test_web_tools.py`。ddgs 9.16.1 的文字搜索引擎只有 brave、duckduckgo、grokipedia、mojeek、startpage、wikipedia、yahoo，没有 Bing 和百度；仍不稳可考虑加国内搜索 API（需先问 lan 费用）。
