@@ -4,6 +4,12 @@
 - 编辑根因：`hub.push('message_updated', '', ..., text=...)` 重复传 `text`，TypeError，保存时请求失败。已改为位置参数传正文，加测试 `test_edit_and_favorite_actions_update_row_and_publish_event`。
 - 收藏入口：顶部栏星标按钮切换 `#col.only-favorites`，纯 CSS 过滤，不改数据；位置是临时的。Windows 体验未验证：右键一条消息收藏，点顶部星标只剩收藏消息，再点恢复。
 
+## 工单 219 交接（2026-11-05）
+
+- 改动在 `web_tools.py`（`_find_results` 逐引擎回退、`_research`、`_FetchWorker` 并发）、`tool_groups.py`、`characters/peter/character.toml`（别名 dig_deep）、`tests/test_web_tools.py`。ddgs 9.16.1 的文字搜索引擎只有 brave、duckduckgo、grokipedia、mojeek、startpage、wikipedia、yahoo，没有 Bing 和百度；仍不稳可考虑加国内搜索 API（需先问 lan 费用）。
+- 全量测试有 6 项既有失败（语音和文件系统服务），main 上同样存在，与本单无关。
+- 小红书图片阅读是单独的工单，不在本单。
+
 ## 工单 218 交接（2026-11-05）
 
 - 改动在 `xiaohongshu_tools.py`（`image_urls`/`fetch_images`/`XhsImageResult`）、`windows_observer.observation_image_message`（多图）、`veil_agent.py`（图片被省略/被拒时对 xiaohongshu 的提示）。

@@ -2,7 +2,11 @@
 
 ## 工单 220：消息菜单「复制」「编辑」修复
 
-- `ticket/218-message-copy`（工单号 220，分支名沿用）：聊天消息菜单的复制原先用页面里的 `navigator.clipboard`，桌面窗口的权限处理只放行麦克风，复制可能被拒绝而没写进剪贴板；改为 `veilDesktop.copyText` 经主进程 `clipboard.writeText` 写入（仅聊天窗口可调用，上限 20 万字符），没有桌面桥时仍回退原写法。Windows 体验未验证。验收：长按/右键一条消息选 Copy，粘贴到记事本能看到原文。另：消息「编辑」保存后界面毫无变化的根因是 `web_agent.py` 推送 `message_updated` 时 `text` 参数重复传入（TypeError，请求 500，聊天记录也未更新）；已修并加回归测试。收藏：聊天页顶部栏加了星标按钮「只看收藏」，按下后只显示已收藏的消息，再按恢复（位置是临时的，lan 之后整体改 UI）。下一个工单号 221（219 已分给搜索替换）。
+- `ticket/218-message-copy`（工单号 220，分支名沿用）：聊天消息菜单的复制原先用页面里的 `navigator.clipboard`，桌面窗口的权限处理只放行麦克风，复制可能被拒绝而没写进剪贴板；改为 `veilDesktop.copyText` 经主进程 `clipboard.writeText` 写入（仅聊天窗口可调用，上限 20 万字符），没有桌面桥时仍回退原写法。Windows 体验未验证。验收：长按/右键一条消息选 Copy，粘贴到记事本能看到原文。另：消息「编辑」保存后界面毫无变化的根因是 `web_agent.py` 推送 `message_updated` 时 `text` 参数重复传入（TypeError，请求 500，聊天记录也未更新）；已修并加回归测试。收藏：聊天页顶部栏加了星标按钮「只看收藏」，按下后只显示已收藏的消息，再按恢复（位置是临时的，lan 之后整体改 UI）。下一个工单号 221。
+
+## 工单 219：搜索失败自动换引擎，新增搜索并阅读
+
+- `ticket/219-web-search-fallback`：`web_search` 按 Brave、Yahoo、Mojeek、Startpage、DuckDuckGo 顺序逐个尝试，第一个有结果的就用，全部失败才报错，最多返回 8 条；新增 `web_research`（Peter 名 dig_deep，属 web 组）一次搜索并同时读前 1 到 5 个网页，单次返回上限 12KB；网页读取服务改为可并发。新增 3 项测试；云端环境无法连搜索引擎，真实网络效果未验证，请日志核对。不增加固定花费。验收见 `docs/tickets/219-web-search-fallback-and-research.md`。下一个工单号 220。
 
 ## 工单 218：Peter 能看懂小红书帖子的图片
 
