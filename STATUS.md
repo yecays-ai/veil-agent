@@ -4,6 +4,14 @@
 
 - `ticket/219-web-search-fallback`：`web_search` 按 Brave、Yahoo、Mojeek、Startpage、DuckDuckGo 顺序逐个尝试，第一个有结果的就用，全部失败才报错，最多返回 8 条；新增 `web_research`（Peter 名 dig_deep，属 web 组）一次搜索并同时读前 1 到 5 个网页，单次返回上限 12KB；网页读取服务改为可并发。新增 3 项测试；云端环境无法连搜索引擎，真实网络效果未验证，请日志核对。不增加固定花费。验收见 `docs/tickets/219-web-search-fallback-and-research.md`。下一个工单号 220。
 
+## 工单 218：Peter 能看懂小红书帖子的图片
+
+- `ticket/218-xiaohongshu-images`：`xiaohongshu` detail 额外取帖子前 3 张图（仅 xhscdn/xiaohongshu 域名，不带 cookie、不跟跳转、有大小上限），经现有桌面图片的临时图片消息送给模型；`observation_image_message` 支持多图和 webp；结果带 `image_total`/`images_shown`；超限或模型拒图时降级为文字并明说没看到。新增 3 项测试；Windows 实机和真实 CDN 下载未验证；费用约 +¥0.05–0.2/天（粗估）。验收见 `docs/tickets/218-xiaohongshu-images.md`。下一个工单号 220（219 已分给搜索替换）。
+
+## 工单 217：活动页「执行结果」框滚动不再弹回
+
+- `ticket/217-activity-result-scroll`：`desktop/chat.js` 的 `updateActivityRow` 每次刷新都重新挂载结果框并重写文字，滚动位置被重置到顶部；改为内容没变就不动 DOM，变了则保留滚动位置。Windows 体验未验证。验收见 `docs/tickets/217-activity-result-scroll.md`。下一个工单号 218。
+
 ## 工单 216：工具分组，按需展开
 
 - `ticket/216-tool-groups`：`tool_groups.py` 把 web、github、social（小红书/花园论坛/乌有乡）、desktop_control（启动、点击、画图、管理窗口、桌面图标整理）四组工具从默认列表里拿掉，Peter 用新工具 `expand_capability` 自己展开；聊天里展开后保持当前轮加 3 轮，自主醒来保持到本次醒来结束，下次醒来重新关闭；醒来里展开不占步数（算在免费额度内，聊天里占一步）；权限和审批不变。启动时一次性通知并记入 capability_history，系统提示里不加能力清单。`character.toml` 的 `tool_groups` 决定哪些组，没写的角色不变。新增 9 项测试；Windows 体验未验证；费用：展开会让缓存失效一次，每次约 ¥0.03–0.1（粗估），整体预计下降，更新后核对 `tool_schema_bytes` 与 costs。验收见 `docs/tickets/216-tool-groups.md`。下一个工单号 217。
