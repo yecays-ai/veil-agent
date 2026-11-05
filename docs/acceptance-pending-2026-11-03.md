@@ -9,9 +9,11 @@
 ## 日常使用时留意（不用专门测，出问题告诉我）
 - 「模型」页保存失败时，表单里能看到原因（212/213）。
 - Peter 说话规则（212）：觉得不对可以用 `undo-voice-rules.cmd` 一键撤回；人设文件每次启动自动留版本，可双击还原（214）。
-- 访客浏览器（207、209）：下次 Peter 用访客 Chrome 时，我会看日志确认临时文件夹是否被清掉，你不用管。旧的 `E:\Peter-Agent\VEIL\veil-agent\.local-tmp\veil-chrome-guest\25520-7efbc6cada6e` 可手动删。
+- 访客浏览器（207、209）：Claude 自己核对，不用 Lan 做。信号：`tools.jsonl` 里有新的 `windows_launch`（Google Chrome Guest），且窗口关掉后 `E:\Peter-Agent\VEIL\veil-agent\.local-tmp\veil-chrome-guest\` 里除正在开着的窗口外没有子文件夹。Peter 还没再开过访客 Chrome（最后一次 11-03），所以暂无结果；若要立刻验，6 分钟以上再关的那个步骤见 `docs/tickets/209-guest-cleanup-retry.md`。旧的 `E:\Peter-Agent\VEIL\veil-agent\.local-tmp\veil-chrome-guest\25520-7efbc6cada6e` 可手动删。
 
 ## 暂缓
+- 183/188 记忆追加：日志里 11-03 `hold` 追加成功（`Content was appended to this memory`），视为通过。192 生活页：已通过。
+- 184/185 重要度与置顶规则、195 自主醒来省步数、201 画图保存不覆盖：没有明确问题，不专门测；日常发现异常再告诉我。
 - 11-07 之后：098 QQ 邮箱启用 IMAP/SMTP 后收发。
 - 数据安全（备份恢复、账本、损坏恢复，197/199/203–205）：只在复制出来的假数据里做，等你有空再说；我可以先在隔离假数据上自己跑一遍。
 - DeepSeek 带图（186）：你不常用，先放着。
