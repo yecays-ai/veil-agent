@@ -1721,8 +1721,8 @@ $('model-form').onsubmit=async ev=>{
 };
 
 // ---- Ticket 222: stickers (表情包). In chat a sticker is the text "[表情包：图集/名字]"; the window draws the picture. ----
-const STICKER_MARK=/^\[表情包：([^\[\]\/\n]{1,30})\/([^\[\]\n]{1,40})\]\n?([\s\S]*)$/;
-let stickerLib=null,stickerLoading=null,stickerPackId=null,stickerManage=false;
+var STICKER_MARK=/^\[表情包：([^\[\]\/\n]{1,30})\/([^\[\]\n]{1,40})\]\n?([\s\S]*)$/;
+var stickerLib=null,stickerLoading=null,stickerPackId=null,stickerManage=false;
 function loadStickers(force=false){
   if(stickerLib&&!force)return Promise.resolve(stickerLib);
   if(!stickerLoading)stickerLoading=api('/api/stickers').then(async r=>{const d=await r.json();if(!r.ok)throw new Error(d.error||'表情包读取失败');stickerLib=d;return d}).finally(()=>{stickerLoading=null});

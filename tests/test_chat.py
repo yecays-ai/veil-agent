@@ -102,12 +102,12 @@ output_cny_per_million = "8"
         self.assertEqual(state, '被拒绝')
         result, state, _ = chat.send_message(json.dumps({'sticker': '丑猫/打人'}), 'request-sticker')
         self.assertEqual((result, state), ('Sent.', '成功'))
-        result, state, _ = chat.send_message(json.dumps({'sticker': '丑猫/打人', 'text': 'take that'}),
-                                             'request-sticker-caption')
-        self.assertEqual(state, '成功')
+        words, state, _ = chat.send_message(json.dumps({'sticker': '丑猫/打人', 'text': 'take that'}),
+                                            'request-sticker-caption')
+        self.assertEqual(state, '被拒绝')
+        self.assertIn('separate send_message', words)
         rows = self.store.read('test/chat.jsonl')
-        self.assertEqual(rows[0]['content'], '[表情包：丑猫/打人]')
-        self.assertEqual(rows[1]['content'], '[表情包：丑猫/打人]\ntake that')
+        self.assertEqual([row['content'] for row in rows], ['[表情包：丑猫/打人]'])
 
     def test_stickers_tool_is_offered_only_with_a_library(self):
         from stickers import StickerLibrary

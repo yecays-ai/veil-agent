@@ -256,7 +256,8 @@ def send_message_schema(voice=False, channels=(), files=False, stickers=False):
         schema['function']['parameters']['properties']['sticker'] = {
             'type': 'string', 'maxLength': 80,
             'description': 'Optional sticker to send as this message, written "pack/name" (see the stickers tool). '
-                           'With a sticker, text may be left out.'}
+                           'A sticker is its own message: leave text out, and send any words in a separate '
+                           'send_message. You may reply with just a sticker.'}
         schema['function']['parameters']['required'] = []
     for name in channels:
         schema['function']['parameters']['properties'][name] = {
@@ -2125,9 +2126,10 @@ class Chat:
                 return ('No sticker "' + str(sticker_ref)[:80] + '"; nothing was sent. Use the stickers tool to list a '
                         'pack and copy "pack/name" exactly.'), '被拒绝', 'send_message'
             import stickers as sticker_module
-            caption = args.get('text') if isinstance(args.get('text'), str) else ''
-            args = {**args, 'text': sticker_module.marker(found['pack'], found['name'])
-                    + (('\n' + caption.strip()) if caption.strip() else '')}
+            if isinstance(args.get('text'), str) and args['text'].strip():
+                return ('A sticker is its own message, so nothing was sent. Send the sticker with no text, and send '
+                        'any words as a separate send_message.'), '被拒绝', 'send_message'
+            args = {**args, 'text': sticker_module.marker(found['pack'], found['name'])}
             del args['sticker']
             arguments = json.dumps(args, ensure_ascii=False)
         if (not isinstance(args, dict) or not set(args).issubset(allowed) or 'text' not in args or
