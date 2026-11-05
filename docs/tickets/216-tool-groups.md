@@ -12,10 +12,10 @@ Peter 每次请求带的工具说明明显变少，输入上下文更干净；�
    - `web`：web_search、web_fetch、browser
    - `github`：github_read
    - `social`：小红书、花园论坛和漂流瓶、乌有乡
-   - `desktop_control`：启动应用、点击、画图、管理窗口（windows_discover_apps、windows_launch、windows_manage、windows_control_action、windows_canvas_action）
+   - `desktop_control`：启动应用、点击、画图、管理窗口（windows_launch、windows_manage、windows_control_action、windows_canvas_action、桌面图标整理）；找应用（windows_discover_apps）和只读观察一直提供
    其余（记忆、说话、便签、实验室、桌面只读观察、生活记录等）一直提供，不分组。
 2. 新工具 `expand_capability`：参数 groups（要展开的组）、可选 reason。说明里列出还没展开的组和各自内容。展开后，对应工具从下一步起可用；权限、审批、预算都不变。已全部展开时这个工具不再出现。
-3. 展开的有效期：聊天里是当前这轮加之后 3 轮；自主醒来是整个这次醒来，下次醒来重新是关闭状态。展开动作本身不占 20 步（和 215 的免费回顾调用共用每次醒来最多 6 次）。
+3. 展开的有效期：聊天里是当前这轮加之后 3 轮；自主醒来是整个这次醒来，下次醒来重新是关闭状态。自主醒来里，展开动作不占 20 步（和 215 的免费回顾调用共用每次醒来最多 6 次）；聊天里展开算一步。
 4. 一次性通知：第一次启动带新分组的版本时，告诉他一次现在工具分组了、用 expand_capability 打开，之后不再重复，也记进 capability_history，你和他都能查。系统提示里不加能力清单。
 5. 没配置 `tool_groups` 的角色行为不变；配置里写了不认识的组名会直接报错。
 

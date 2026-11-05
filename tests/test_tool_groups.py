@@ -56,6 +56,11 @@ tool_groups = ["web", "github"]
         self.assertEqual(group_of('browser'), 'web')
         self.assertEqual(group_of('github_read'), 'github')
         self.assertEqual(group_of('xiaohongshu'), 'social')
+        self.assertEqual(group_of('mcp__github__github_read'), 'github')
+        self.assertEqual(group_of('mcp__xiaohongshu__xiaohongshu'), 'social')
+        self.assertEqual(group_of('desktop_icons_arrange'), 'desktop_control')
+        self.assertIsNone(group_of('windows_discover_apps'))
+        self.assertIsNone(group_of('desktop_icons_read'))
         self.assertEqual(group_of('mcp__galatea_garden__get_thread'), 'social')
         self.assertEqual(group_of('mcp__nowhere__walk'), 'social')
         self.assertEqual(group_of('windows_launch'), 'desktop_control')
@@ -116,10 +121,11 @@ tool_groups = ["web", "github"]
         self.chat._tick_expanded_groups(True)
         self.assertNotIn('web_search', self.names())
 
-    def test_a_wake_keeps_a_group_open_until_the_next_request(self):
+    def test_a_group_opened_in_a_wake_closes_when_the_next_request_starts(self):
         self.chat.autonomy_mode = True
         self.chat.expand_capability(json.dumps({'groups': ['web']}))
         self.assertIn('web_search', self.names())
+        self.assertIn('web_search', self.names())  # still open on later steps of the same wake
         self.chat._tick_expanded_groups(False)
         self.assertNotIn('web_search', self.names())
 

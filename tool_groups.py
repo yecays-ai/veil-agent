@@ -8,11 +8,13 @@ GROUP_TOOL_NAMES = {
     'web': frozenset({'web_search', 'web_fetch', 'browser'}),
     'github': frozenset({'github_read'}),
     'social': frozenset({'xiaohongshu'}),
-    'desktop_control': frozenset({'windows_discover_apps', 'windows_launch', 'windows_manage',
-                                  'windows_control_action', 'windows_canvas_action'}),
+    'desktop_control': frozenset({'windows_launch', 'windows_manage', 'windows_control_action',
+                                  'windows_canvas_action', 'desktop_icons_arrange', 'desktop_icons_restore'}),
 }
+# Built-in adapters (GitHub, Xiaohongshu) reach the model as mcp__<service>__<tool>.
 GROUP_TOOL_PREFIXES = {
-    'social': ('mcp__galatea_', 'mcp__nowhere__'),
+    'github': ('mcp__github__',),
+    'social': ('mcp__galatea_', 'mcp__nowhere__', 'mcp__xiaohongshu__'),
 }
 GROUP_SUMMARIES = {
     'web': 'web search, reading pages, browsing',
