@@ -1,5 +1,9 @@
 # 当前状态
 
+## 工单 215：醒来回顾不占步数，久没动的任务不再出现
+
+- `ticket/215-wake-steps-and-stale-task`：自主醒来时，只读的“看自己状态”（`autonomy_history`、`capability_history`、`long_task_status`，以及 `life_record`/`thought` 的 list）不占 20 步，每次醒来最多 6 次免费，写入类不免费，步数上限与 ¥3/天不变；长期任务超过 3 天没更新就不放进醒来内容（数据保留，`long_task_status` 仍可看）；醒来内容加一句中性的“可以先决定这轮想做什么”。新增 3 项测试；Windows 体验未验证，费用估计每天多 ¥0.1–0.3（粗估）。验收见 `docs/tickets/215-wake-steps-and-stale-task.md`。下一个工单号 216。
+
 ## 验收清单更新（2026-11-05）
 
 - Lan 确认 134–138、210（顶部模型下拉）、211（瞄一眼单独选模型）通过（2026-11-05，Lan 在清单评论里明确确认）。工单 194（瞄一眼不召回）已由日志核实：更新后 4 次瞄一眼 `memory_ids` 全为空；工单 208 便签关闭已核实：`notes.jsonl` 11-03 04:45 后无新增，`costs.jsonl` 无新的 short_term_notes。最新清单见 `docs/acceptance-pending-2026-11-03.md`，只保留需要 Lan 自己做的事。
