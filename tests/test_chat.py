@@ -554,7 +554,10 @@ output_cny_per_million = "8"
             model_dump=lambda exclude_none=True: {'role': 'assistant', 'content': 'You were annoyed at the factory.'})
         tools = SimpleNamespace(tools=[], description='Fictional tools.', capability_event=None,
             capability_event_model=None, consume_capability_event=Mock(), invoke=Mock())
-        chat = Chat(replace(self.cfg, tools={'enabled': True, 'max_steps': 3}),
+        for n in range(3):
+            self.store.append('test/chat.jsonl', {'role': 'user', 'content': f'Newer filler {n}.'})
+            self.store.append('test/chat.jsonl', {'role': 'assistant', 'content': 'Okay.'})
+        chat = Chat(replace(self.cfg, tools={'enabled': True, 'max_steps': 3}, history_rounds=1),
                     self.store, self.budget, Mock(), tools=tools, output=lambda _: None)
         prompts = []
         def fake_model(messages, **kwargs):
@@ -564,6 +567,7 @@ output_cny_per_million = "8"
 
         chat.send('Remember what I said about the factory and the badges?')
 
+        self.assertNotIn('delayed my badge', str(prompts[0][0]))  # outside the recent rounds sent to the model
         self.assertIn('search_chat_history', {item['function']['name'] for item in prompts[0][1]})
         results = [item['content'] for item in prompts[1][0] if item.get('role') == 'tool']
         self.assertIn('The factory delayed my badge order.', results[0])

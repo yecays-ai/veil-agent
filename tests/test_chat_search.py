@@ -31,11 +31,22 @@ class ChatSearchTests(unittest.TestCase):
         self.assertIn('2026-10-20', first)
         self.assertIn('[*]', first)
         self.assertIn('Did they give a date?', first)
-        self.assertNotIn('Withdrawn badge factory remark', text)
 
     def test_single_word_match_is_ranked_after_pairs_and_still_returned(self):
         text, found = search_chat(LOG, ['factory', 'badge'])
-        self.assertIn('badge colours are lovely', text)
+        self.assertLess(text.index('factory still has not'), text.index('badge colours are lovely'))
+
+    def test_withdrawn_messages_never_appear_even_as_context(self):
+        text, _ = search_chat(LOG, ['colours'])
+        self.assertNotIn('Withdrawn badge factory remark', text)
+        self.assertNotIn('2026-10-25 10:01', text)
+        self.assertNotIn('withdrawn', text)
+
+    def test_overlapping_context_is_not_printed_twice(self):
+        log = [row('user', f'filler {n} badge' if n in (2, 5) else f'filler {n}', f'2026-10-01T12:0{n}:00+00:00')
+               for n in range(8)]
+        text, _ = search_chat(log, ['badge'])
+        self.assertEqual(text.count('filler 3'), 1)
 
     def test_nothing_found_says_so(self):
         text, found = search_chat(LOG, ['dragon'])
@@ -49,6 +60,8 @@ class ChatSearchTests(unittest.TestCase):
         self.assertNotIn('factory still has not', text.split('#1', 1)[1].split('\n')[1])
         _, found = search_chat(LOG, ['factory'], since='2026-10-24')
         self.assertFalse(found)
+        self.assertFalse(search_chat(LOG, ['badge'], since=20261105)[1])
+        self.assertFalse(search_chat(LOG, ['badge'], since='2026-11-05junk')[1])
         text, found = search_chat(LOG, ['badge'], since='nonsense')
         self.assertFalse(found)
         self.assertIn('2026-11-05', text)

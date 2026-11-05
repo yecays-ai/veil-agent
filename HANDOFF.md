@@ -1,13 +1,14 @@
-## 工单 220 交接（2026-11-05）
-
-- 复制改走 IPC `chat:copy-text` → Electron `clipboard.writeText`，桌面前端改动，无费用影响。Windows 体验未验证：右键/长按消息选 Copy，粘贴到记事本看到原文；编辑：改字保存后气泡立刻更新。
-- 编辑根因：`hub.push('message_updated', '', ..., text=...)` 重复传 `text`，TypeError，保存时请求失败。已改为位置参数传正文，加测试 `test_edit_and_favorite_actions_update_row_and_publish_event`。
-- 收藏入口：顶部栏星标按钮切换 `#col.only-favorites`，纯 CSS 过滤，不改数据；位置是临时的。Windows 体验未验证：右键一条消息收藏，点顶部星标只剩收藏消息，再点恢复。
 ## 工单 221 交接（2026-11-05）
 
 - 改动在 `chat_search.py`（搜索与排序）、`veil_agent.py`（工具注册、调用分支、算免费回顾）、`tests/test_chat_search.py`、`tests/test_chat.py`。读 `store.read(chat.jsonl)` 全量，每次调用读一遍文件。
 - 下一步：lan 更新后给 Peter 一两个线索词，核对 `data\peter\tools.jsonl` 有 `search_chat_history` 记录且返回对应原话；留意他是否会主动调用、结果是否过长（costs）。
 - 未验证：Windows 真机；语音消息的文字（转写）是否都能搜到。
+
+## 工单 220 交接（2026-11-05）
+
+- 复制改走 IPC `chat:copy-text` → Electron `clipboard.writeText`，桌面前端改动，无费用影响。Windows 体验未验证：右键/长按消息选 Copy，粘贴到记事本看到原文；编辑：改字保存后气泡立刻更新。
+- 编辑根因：`hub.push('message_updated', '', ..., text=...)` 重复传 `text`，TypeError，保存时请求失败。已改为位置参数传正文，加测试 `test_edit_and_favorite_actions_update_row_and_publish_event`。
+- 收藏入口：顶部栏星标按钮切换 `#col.only-favorites`，纯 CSS 过滤，不改数据；位置是临时的。Windows 体验未验证：右键一条消息收藏，点顶部星标只剩收藏消息，再点恢复。
 
 ## 工单 219 交接（2026-11-05）
 

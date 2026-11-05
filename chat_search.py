@@ -44,10 +44,12 @@ def split_keywords(value):
 
 
 def _parse_day(text):
-    if not text:
+    if text is None or text == '':
         return None
+    if not isinstance(text, str):
+        return False
     try:
-        return datetime.strptime(text.strip()[:10], '%Y-%m-%d').date()
+        return datetime.strptime(text.strip(), '%Y-%m-%d').date()
     except ValueError:
         return False
 
@@ -85,6 +87,7 @@ def search_chat(rows, keywords, since=None, until=None):
         if row.get('role') not in ('user', 'assistant') or not isinstance(content, str) or row.get('recalled'):
             continue
         usable.append(index)
+    usable_set = set(usable)
     matches = {}
     for index in usable:
         row = rows[index]
@@ -104,9 +107,9 @@ def search_chat(rows, keywords, since=None, until=None):
     scored = []
     for index, hit in matches.items():
         together = set(hit)
-        for other, other_hit in matches.items():
-            if other != index and abs(other - index) <= NEIGHBOUR_WINDOW:
-                together |= other_hit
+        for other in range(index - NEIGHBOUR_WINDOW, index + NEIGHBOUR_WINDOW + 1):
+            if other != index and other in matches:
+                together |= matches[other]
         scored.append((len(together), len(hit), index, together))
     scored.sort(key=lambda item: (-item[0], -item[1], -item[2]))
     chosen, covered = [], set()
@@ -114,27 +117,26 @@ def search_chat(rows, keywords, since=None, until=None):
         if len(chosen) >= MAX_EXCERPTS:
             break
         span = range(max(0, index - CONTEXT_EACH_SIDE), min(len(rows), index + CONTEXT_EACH_SIDE + 1))
-        if any(i in covered for i in span) and any(c[0] == index or abs(c[0] - index) <= CONTEXT_EACH_SIDE
-                                                   for c in chosen):
+        if index in covered:
             continue
+        chosen.append((index, together_count, together, [i for i in span if i not in covered]))
         covered.update(span)
-        chosen.append((index, together_count, together))
     pieces = [f'Searched the whole saved chat log for: {", ".join(words)}. Best matches first '
               f'(of {len(matches)} matching messages); [*] marks a message that contains a clue word.']
-    for number, (index, count, together) in enumerate(chosen, 1):
+    for number, (index, count, together, rows_to_show) in enumerate(chosen, 1):
         found = ', '.join(words[i] for i in sorted(together))
         label = 'all clue words near each other' if count == len(words) and len(words) > 1 else (
             f'{count} of {len(words)} clue words ({found})' if len(words) > 1 else f'contains {found}')
         lines = [f'#{number} {label}']
-        for i in range(max(0, index - CONTEXT_EACH_SIDE), min(len(rows), index + CONTEXT_EACH_SIDE + 1)):
+        for i in rows_to_show:
             row = rows[i]
-            if row.get('role') not in ('user', 'assistant') or not isinstance(row.get('content'), str):
+            if i not in usable_set:
                 continue
             when = _local(row.get('time'))
             stamp = when.strftime('%Y-%m-%d %H:%M') if when else 'unknown time'
             who = 'lan' if row['role'] == 'user' else 'you'
             mark = '[*] ' if i in matches else ''
-            body = '[withdrawn]' if row.get('recalled') else _shorten(row['content'], words)
+            body = _shorten(row['content'], words)
             lines.append(f'{mark}{stamp} {who}: {body}')
         pieces.append('\n'.join(lines))
     text = '\n\n'.join(pieces)
