@@ -1146,6 +1146,11 @@ class ToolSet:
         if announce:
             announce()
 
+    def announce_tool_groups(self, groups):
+        announce = getattr(self.files, 'announce_tool_groups', None)
+        if announce:
+            announce(groups)
+
     def announce_profile_notes(self, max_bytes):
         announce = getattr(self.files, 'announce_profile_notes', None)
         if announce:

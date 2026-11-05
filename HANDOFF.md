@@ -1,3 +1,8 @@
+## 工单 216 交接（2026-11-05）
+
+- 新增 `tool_groups.py`（组成员按规范工具名匹配，`expand_schema`、`announce_text`）；`veil_agent.py`：配置项 `tools.tool_groups`（未知组名报错）、`tool_schemas()` 在加别名之前过滤并追加 `expand_capability`、`expand_capability()` 与 `_tick_expanded_groups()`（每次请求开头调用一次：醒来清空，聊天递减）、`FREE_REVIEW_TOOLS` 加入 `expand_capability`；`tools_agent.py`/`memory_native.py`：`announce_tool_groups`。`characters/peter/character.toml` 加了 `tool_groups`。
+- 注意：过滤发生在别名之前，所以组名用规范名；glance 模式沿用同一套；展开后工具最早在下一步出现。没做 per-tool 字节统计，核对用 `context-log.jsonl` 的 `tool_schema_bytes`。Windows 体验未验证。下一个工单号 217。
+
 ## 工单 215 交接（2026-11-05）
 
 - `veil_agent.py`：`FREE_REVIEW_TOOLS`/`FREE_REVIEW_LIST_TOOLS`/`FREE_REVIEW_CALLS=6` 和 `is_free_review_call`；自主醒来（非瞄一眼）时这些调用不加 `autonomy_tool_steps`，并把模型轮数上限放大 6，防止无界。`autonomy.py`：`STALE_TASK_DAYS=3` 与 `_task_is_stale`；醒来文字加一句中性提示。

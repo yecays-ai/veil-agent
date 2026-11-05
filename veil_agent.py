@@ -283,7 +283,7 @@ RECALL_MESSAGE = {'type': 'function', 'function': {
 # Ticket 215: during an autonomous wake, looking back at his own state (activity history, long-task
 # status, life records and thoughts in list form) does not use up the tool steps meant for doing things.
 # These looks are capped separately, so a wake can never run unbounded.
-FREE_REVIEW_TOOLS = frozenset({'autonomy_history', 'capability_history', 'long_task_status'})
+FREE_REVIEW_TOOLS = frozenset({'autonomy_history', 'capability_history', 'long_task_status', 'expand_capability'})
 FREE_REVIEW_LIST_TOOLS = frozenset({'life_record', 'thought'})
 FREE_REVIEW_CALLS = 6
 
@@ -745,6 +745,7 @@ def load_character(root, character_id):
         _, provider_name, provider = models.chosen('peter')
         _, _, background_provider = models.chosen('background')
         tools = dict(cfg['tools']) if 'tools' in cfg else None
+        raw_tools = dict(tools) if tools is not None else {}
         if tools is not None:
             enabled = tools.get('enabled', True)
             if type(enabled) is not bool:
@@ -767,6 +768,11 @@ def load_character(root, character_id):
                 'reply_later_max_pending': positive_int(tools.get('reply_later_max_pending', 3)),
                 'reply_later_daily_wakes': positive_int(tools.get('reply_later_daily_wakes', 20)),
             }
+            from tool_groups import TOOL_GROUPS
+            groups = tuple(raw_tools.get('tool_groups', ()))
+            if any(not isinstance(item, str) or item not in TOOL_GROUPS for item in groups):
+                raise ValueError('tools.tool_groups may only list: ' + ', '.join(TOOL_GROUPS))
+            tools['tool_groups'] = groups
             if tools['max_steps'] < 2:
                 raise ValueError('tools.max_steps must allow a tool call and a final response')
             folder = Path(tools['folder'])
@@ -1782,6 +1788,12 @@ class Chat:
             tools.announce_autonomy_history()
             self.pending_capability_event = tools.capability_event
             self.pending_capability_event_model = capability_model_notice(tools)
+        self.tool_groups = tuple((cfg.tools or {}).get('tool_groups', ()))
+        self.expanded_groups = {}
+        if self.tool_groups and tools and hasattr(tools, 'announce_tool_groups'):
+            tools.announce_tool_groups(self.tool_groups)
+            self.pending_capability_event = tools.capability_event
+            self.pending_capability_event_model = capability_model_notice(tools)
         if tools and hasattr(tools, 'announce_screen_pop'):
             tools.announce_screen_pop()
             self.pending_capability_event = tools.capability_event
@@ -1887,15 +1899,52 @@ class Chat:
                     f'{(self.cfg.tools or {}).get("max_output_tokens", self.cfg.max_output_tokens)} tokens); '
                     'write long work in slices, never whole files.')
                 schema['function'] = function
+        if self.tool_groups:
+            from tool_groups import expand_schema, group_of
+            kept, hidden = [], []
+            for schema in schemas:
+                group = group_of(schema['function']['name'])
+                if group in self.tool_groups and group not in self.expanded_groups:
+                    if group not in hidden:
+                        hidden.append(group)
+                else:
+                    kept.append(schema)
+            schemas = kept + ([expand_schema(hidden)] if hidden else [])
         from tools_agent import ALLOW, ASK, AUTONOMY_DIRECT, LAB_ONLY, NATIVE
         reserved_names = (ALLOW | ASK | AUTONOMY_DIRECT | LAB_ONLY | NATIVE | {
             'send_message', 'recall_message', 'stay_silent', 'reply_later', 'screen_pop',
             'capability_history', 'autonomy_history', 'profile_append', 'profile_replace',
             'thought', 'life_record', 'long_task_status', 'long_task_update', 'set_next_wake', 'set_wake_rhythm',
+            'expand_capability',
         })
         schemas, self.active_tool_aliases = alias_tool_schemas(
             schemas, self.tool_aliases, reserved_names)
         return schemas
+
+    def expand_capability(self, arguments):
+        args = json.loads(arguments or '{}')
+        groups = args.get('groups') if isinstance(args, dict) else None
+        if (not isinstance(groups, list) or not groups or not set(args) <= {'groups', 'reason'}
+                or any(not isinstance(item, str) for item in groups)):
+            return 'expand_capability needs a list of group names.', '被拒绝', 'expand_capability'
+        from tool_groups import CHAT_WARM_REQUESTS, group_of
+        opened = [item for item in dict.fromkeys(groups) if item in self.tool_groups]
+        if not opened:
+            return ('None of those groups can be opened. Choose from the groups in this tool\'s description.',
+                    '被拒绝', 'expand_capability')
+        for group in opened:
+            self.expanded_groups[group] = 1 if self.autonomy_mode else CHAT_WARM_REQUESTS + 1
+        names = [schema['function']['name'] for schema in self.tool_schemas()
+                 if group_of(self.canonical_tool_name(schema['function']['name'])) in opened]
+        return (f'Opened: {", ".join(opened)}. Available from your next step: {", ".join(names) or "none"}.',
+                '成功', 'expand_capability')
+
+    def _tick_expanded_groups(self, autonomy):
+        """Called once at the start of each request: an autonomous wake starts closed, chat groups age out."""
+        if autonomy:
+            self.expanded_groups.clear()
+            return
+        self.expanded_groups = {group: left - 1 for group, left in self.expanded_groups.items() if left > 1}
 
     def _resolve_tool_name(self, name, schemas=None):
         schemas = self.tool_schemas() if schemas is None else schemas
@@ -3242,6 +3291,8 @@ class Chat:
                         result, state = ('The exact message will be withdrawn after this reply is saved, '
                                          'provided it is still inside the two-minute window then.'), '成功'
                 summary = 'recall_message'
+            elif call.function.name == 'expand_capability':
+                result, state, summary = self.expand_capability(call.function.arguments)
             elif call.function.name == 'capability_history':
                 result = self.capability_history_record or 'No capability changes are recorded yet.'
                 state, summary = '成功', 'capability_history'
@@ -3382,6 +3433,7 @@ class Chat:
         final = ''
         next_reservation = None
         autonomy_tool_steps = 0
+        self._tick_expanded_groups(autonomy)
         output_recovered = False
         empty_retries = 0
         mixed_sent_messages = []
