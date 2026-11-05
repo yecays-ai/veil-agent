@@ -883,7 +883,13 @@ function updateActivityRow(row,item){
     const raw=rendered.querySelector('.nowhere-raw-result');if(raw)raw.open=rawWasOpen;
     row.values.resultContainer.replaceChildren(rendered);
   }
-  else{row.values.resultContainer.replaceChildren(row.values.result);row.values.result.textContent=resultDetail+(resultNote&& !resultDetail.includes('结果已截断')?resultNote:'')}
+  else{
+    // 刷新时内容没变就不要动 DOM：重新挂载或重写 textContent 会把「执行结果」框的滚动位置弹回顶部
+    const container=row.values.resultContainer,pre=row.values.result;
+    if(container.firstElementChild!==pre||container.childNodes.length!==1)container.replaceChildren(pre);
+    const nextText=resultDetail+(resultNote&& !resultDetail.includes('结果已截断')?resultNote:'');
+    if(pre.textContent!==nextText){const top=pre.scrollTop;pre.textContent=nextText;pre.scrollTop=top}
+  }
 }
 function renderActivityTimeline(){
   const all=combinedActivity();
