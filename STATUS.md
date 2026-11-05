@@ -2,7 +2,7 @@
 
 ## 工单 221：Peter 自己翻聊天记录找回忆
 
-- `ticket/221-chat-history-search`：新增只读工具 `search_chat_history`（只要 Peter 有工具能力就始终可用，不用 expand_capability）：Peter 给 1 到 6 个线索词（可含同义词）和可选日期范围，程序在完整聊天记录里找，线索词在相邻几条里同时出现的排最前，返回时间、原文和前后各 2 条消息（最多 5 段、约 7KB）；没找到明确返回“没找到，不要猜”。已撤回消息不返回；自主醒来时算只读回顾不占步数。新增 `chat_search.py`、8 项测试；全量测试与 main 相同的云端网络类失败一致；Windows 体验未验证；费用预计每天不到 ¥0.05（粗估）。验收见 `docs/tickets/221-chat-history-search.md`。下一个工单号 222（220 已分给消息菜单修复 #272）。
+- `ticket/221-chat-history-search`：新增只读工具 `search_chat_history`（只要 Peter 有工具能力就始终可用，不用 expand_capability）：Peter 给 1 到 6 个线索词（可含同义词）和可选日期范围，程序在完整聊天记录里找，线索词在相邻几条里同时出现的排最前，返回时间、原文和前后各 2 条消息（最多 5 段、不超过 8KB）；没找到明确返回“没找到，不要猜”。已撤回消息不返回；自主醒来时算只读回顾不占步数。新增 `chat_search.py`、8 项测试；全量测试与 main 相同的云端网络类失败一致；Windows 体验未验证；费用预计每天不到 ¥0.05（粗估）。验收见 `docs/tickets/221-chat-history-search.md`。下一个工单号 222（220 已分给消息菜单修复 #272）。
 
 ## 工单 220：消息菜单「复制」「编辑」修复
 

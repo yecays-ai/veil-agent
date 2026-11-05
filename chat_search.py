@@ -9,8 +9,8 @@ from datetime import datetime
 CONTEXT_EACH_SIDE = 2
 MAX_EXCERPTS = 5
 MAX_KEYWORDS = 6
-MESSAGE_CHARS = 300
-RESULT_CHARS = 7000
+MESSAGE_CHARS = 200
+RESULT_BYTES = 8000  # same ceiling as other tool results (max_result_bytes 8192)
 NEIGHBOUR_WINDOW = 3  # keywords found within this many messages of each other count as appearing together
 
 TOOL_NAME = 'search_chat_history'
@@ -140,6 +140,7 @@ def search_chat(rows, keywords, since=None, until=None):
             lines.append(f'{mark}{stamp} {who}: {body}')
         pieces.append('\n'.join(lines))
     text = '\n\n'.join(pieces)
-    if len(text) > RESULT_CHARS:
-        text = text[:RESULT_CHARS].rstrip() + '\n…(cut; narrow with more specific words or since/until)'
+    if len(text.encode('utf-8')) > RESULT_BYTES:
+        text = text.encode('utf-8')[:RESULT_BYTES].decode('utf-8', 'ignore').rstrip() + (
+            '\n…(cut; narrow with more specific words or since/until)')
     return text, True

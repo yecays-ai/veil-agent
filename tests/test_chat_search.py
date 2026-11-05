@@ -72,6 +72,11 @@ class ChatSearchTests(unittest.TestCase):
         self.assertIn('needle', text)
         self.assertLess(len(text), 900)
 
+    def test_result_stays_under_the_tool_result_limit_for_chinese_text(self):
+        log = [row('user', '厂家' + '很慢' * 100, f'2026-10-01T12:{n:02d}:00+00:00') for n in range(40)]
+        text, _ = search_chat(log, ['厂家'])
+        self.assertLessEqual(len(text.encode('utf-8')), 8200)
+
     def test_case_insensitive_and_empty_keywords(self):
         _, found = search_chat(LOG, ['FACTORY'])
         self.assertTrue(found)
