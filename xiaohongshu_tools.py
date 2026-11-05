@@ -18,6 +18,7 @@ import time
 from contextlib import contextmanager
 from datetime import datetime
 import base64
+import http.client
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -44,7 +45,8 @@ OPERATION_TIMEOUT = 120
 MAX_IMAGES = 3
 MAX_IMAGE_BYTES = 2_500_000
 MAX_IMAGES_TOTAL = 5_000_000
-IMAGE_TIMEOUT = 15
+IMAGE_TIMEOUT = 4   # per socket operation
+IMAGE_BUDGET = 20   # seconds for all pictures together
 IMAGE_HOSTS = ('xhscdn.com', 'xiaohongshu.com')
 TOOL = SimpleNamespace(name='xiaohongshu', description=(
     'Read your dedicated Xiaohongshu account in chat or autonomous time: status, feed, search, '
@@ -286,9 +288,10 @@ def _image_url_ok(url):
     try:
         parts = urllib.parse.urlsplit(url)
         host = (parts.hostname or '').lower()
+        no_port = parts.port is None
     except ValueError:
         return False
-    return (parts.scheme in {'http', 'https'} and parts.port is None and not parts.username
+    return (parts.scheme in {'http', 'https'} and no_port and not parts.username
             and any(host == h or host.endswith('.' + h) for h in IMAGE_HOSTS))
 
 
@@ -306,7 +309,7 @@ def image_urls(note):
     return urls
 
 
-def _download_image(url, cancelled):
+def _download_image(url, cancelled, deadline=None):
     """Fetch one CDN picture over https. No cookies, no redirects, size-capped; None on any failure."""
     base = urllib.parse.urlsplit(url)._replace(scheme='https', query='', fragment='')
     base = urllib.parse.urlunsplit(base).split('!')[0]
@@ -314,27 +317,38 @@ def _download_image(url, cancelled):
     # Ask the CDN for a mid-size JPEG first; fall back to the URL as given.
     for candidate in (base + '?imageView2/2/w/1024/format/jpg', urllib.parse.urlunsplit(
             urllib.parse.urlsplit(url)._replace(scheme='https'))):
-        if cancelled.is_set() or not _image_url_ok(candidate):
+        if cancelled.is_set() or not _image_url_ok(candidate) or (deadline and time.monotonic() > deadline):
             return None
         request = urllib.request.Request(candidate, headers={
             'Referer': 'https://www.xiaohongshu.com/', 'Accept': 'image/jpeg,image/png,image/webp',
             'User-Agent': 'Mozilla/5.0'})
         try:
             with opener.open(request, timeout=IMAGE_TIMEOUT) as response:
-                raw = response.read(MAX_IMAGE_BYTES + 1)
-        except (OSError, ValueError, urllib.error.URLError):
+                raw = b''
+                while len(raw) <= MAX_IMAGE_BYTES:
+                    if cancelled.is_set() or (deadline and time.monotonic() > deadline):
+                        return None
+                    chunk = response.read(65536)
+                    if not chunk:
+                        break
+                    raw += chunk
+        except (OSError, ValueError, urllib.error.URLError, http.client.HTTPException):
             continue
         if 0 < len(raw) <= MAX_IMAGE_BYTES and _image_mime(raw):
             return 'data:' + _image_mime(raw) + ';base64,' + base64.b64encode(raw).decode('ascii')
     return None
 
 
-def fetch_images(urls, cancelled):
+def fetch_images(urls, cancelled, deadline=None):
+    """Pictures are a bonus: any failure here returns fewer pictures, never an error."""
     images, total = [], 0
     for url in urls:
-        if cancelled.is_set():
+        if cancelled.is_set() or (deadline and time.monotonic() > deadline):
             break
-        uri = _download_image(url, cancelled)
+        try:
+            uri = _download_image(url, cancelled, deadline)
+        except Exception:
+            uri = None
         if uri and total + len(uri) <= MAX_IMAGES_TOTAL:
             images.append(uri)
             total += len(uri)
@@ -519,7 +533,9 @@ class XiaohongshuTools:
                 if isinstance(result, dict):
                     urls = result.pop('_image_urls', [])
                     if urls and not cancelled.is_set():
-                        images = fetch_images(urls, cancelled)
+                        # Stay well inside the operation limit so pictures can never turn a good read into a timeout.
+                        deadline = min(time.monotonic() + IMAGE_BUDGET, started + OPERATION_TIMEOUT - 8)
+                        images = fetch_images(urls, cancelled, deadline)
                     if 'image_total' in result:
                         result['images_shown'] = len(images)
                 output.put(((result, images), None))

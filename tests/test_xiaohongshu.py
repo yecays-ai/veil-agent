@@ -144,7 +144,7 @@ class XiaohongshuTests(unittest.TestCase):
         self.assertEqual((data['image_total'], data['images_shown']), (7, 2))
         self.assertEqual(text.image_data_uris, [uri, uri])
 
-    def test_image_download_refuses_redirects_and_non_images(self):
+    def test_image_download_accepts_only_real_images_from_cdn_hosts(self):
         class Opener:
             def __init__(self, raw): self.raw = raw
             def open(self, request, timeout=0):
@@ -157,6 +157,13 @@ class XiaohongshuTests(unittest.TestCase):
         with patch('xiaohongshu_tools.urllib.request.build_opener', return_value=Opener(b'<html>')):
             self.assertIsNone(xiaohongshu_tools._download_image('https://sns.xhscdn.com/a', threading.Event()))
         self.assertIsNone(xiaohongshu_tools._download_image('https://evil.example/a', threading.Event()))
+        self.assertIsNone(xiaohongshu_tools._NoRedirect().redirect_request(None, None, 302, '', {}, 'https://evil.example/'))
+        self.assertFalse(xiaohongshu_tools._image_url_ok('https://sns.xhscdn.com:abc/x'))
+        import http.client
+        class Bad:
+            def open(self, request, timeout=0): raise http.client.BadStatusLine('x')
+        with patch('xiaohongshu_tools.urllib.request.build_opener', return_value=Bad()):
+            self.assertEqual(xiaohongshu_tools.fetch_images(['https://sns.xhscdn.com/a'], threading.Event()), [])
 
     def test_multiple_note_pictures_become_one_transient_image_message(self):
         import base64

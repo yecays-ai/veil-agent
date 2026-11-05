@@ -3784,7 +3784,7 @@ class Chat:
                                            '\nThe current model rejected image input; Peter has not seen the note pictures.')
                         tool_message['content'] = model_tool_result(
                             self._resolve_tool_name(image_tool_name, offered) or image_tool_name,
-                            text_result, '出错')
+                            text_result, execution.state if image_tool_name == 'xiaohongshu' else '出错')
                     ephemeral_image_bindings.clear()
                     loop_messages.append({
                         'role': 'system',

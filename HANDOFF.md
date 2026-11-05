@@ -2,7 +2,7 @@
 
 - 改动在 `xiaohongshu_tools.py`（`image_urls`/`fetch_images`/`XhsImageResult`）、`windows_observer.observation_image_message`（多图）、`veil_agent.py`（图片被省略/被拒时对 xiaohongshu 的提示）。
 - 未验证：真实 CDN 下载（上游字段 `note.imageList[].urlDefault` 已对照 v2.5.5 types.go）；`imageView2/.../format/jpg` 参数是否被 CDN 接受，不行会回退原 URL（可能是 webp，已支持）。
-- 下一步：Lan 更新后让 Peter 看一条图片帖；查 `data/peter/tools.jsonl` 里 xiaohongshu detail 成功、`context-log` 里有图片请求，核对 costs。
+- 下一步：Lan 更新后让 Peter 看一条图片帖；以他对图片内容的描述为准；`data/peter/tools.jsonl` 只能看到 detail 成功，核对 costs。
 - 下一个工单号 219。
 
 ## 工单 216 交接（2026-11-05）
