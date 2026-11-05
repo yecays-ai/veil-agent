@@ -1,3 +1,10 @@
+## 工单 218 交接（2026-11-05）
+
+- 改动在 `xiaohongshu_tools.py`（`image_urls`/`fetch_images`/`XhsImageResult`）、`windows_observer.observation_image_message`（多图）、`veil_agent.py`（图片被省略/被拒时对 xiaohongshu 的提示）。
+- 未验证：真实 CDN 下载（上游字段 `note.imageList[].urlDefault` 已对照 v2.5.5 types.go）；`imageView2/.../format/jpg` 参数是否被 CDN 接受，不行会回退原 URL（可能是 webp，已支持）。
+- 下一步：Lan 更新后让 Peter 看一条图片帖；查 `data/peter/tools.jsonl` 里 xiaohongshu detail 成功、`context-log` 里有图片请求，核对 costs。
+- 下一个工单号 219。
+
 ## 工单 216 交接（2026-11-05）
 
 - 新增 `tool_groups.py`（组成员按规范工具名匹配，`expand_schema`、`announce_text`）；`veil_agent.py`：配置项 `tools.tool_groups`（未知组名报错）、`tool_schemas()` 在加别名之前过滤并追加 `expand_capability`、`expand_capability()` 与 `_tick_expanded_groups()`（每次请求开头调用一次：醒来清空，聊天递减）、`FREE_REVIEW_TOOLS` 加入 `expand_capability`；`tools_agent.py`/`memory_native.py`：`announce_tool_groups`。`characters/peter/character.toml` 加了 `tool_groups`。

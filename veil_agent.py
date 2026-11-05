@@ -3597,6 +3597,8 @@ class Chat:
                 )
                 if canonical_name == 'desktop_read_image':
                     raw = f'Desktop image was not sent to the model ({reason}); Peter has not seen its contents.'
+                if canonical_name == 'xiaohongshu':
+                    raw += f'\nThe note pictures were not sent to the model ({reason}); Peter has not seen them.'
                 tool_message['content'] = model_tool_result(canonical_name or name, raw, execution.state)
                 image_was_omitted = True
 
@@ -3621,6 +3623,8 @@ class Chat:
                 omit_image('the current request input limit was reached')
                 display_detail = ('桌面图片因输入长度上限未发送；Peter 尚未看见画面。'
                                   if canonical_name == 'desktop_read_image' else
+                                  '帖子文字已读取；图片因输入长度上限未发送。'
+                                  if canonical_name == 'xiaohongshu' else
                                   '界面文字已读取；截图因输入长度上限未发送。')
                 result_state = '已截断'
             if (request_size(next_offered) - history_bytes
@@ -3645,6 +3649,8 @@ class Chat:
                 omit_image('the current request input limit was reached')
                 display_detail = ('桌面图片因输入长度上限未发送；Peter 尚未看见画面。'
                                   if canonical_name == 'desktop_read_image' else
+                                  '帖子文字已读取；图片因输入长度上限未发送。'
+                                  if canonical_name == 'xiaohongshu' else
                                   '界面文字已读取；截图因输入长度上限未发送。')
                 result_state = '结果过长'
                 fit_old_tool_results(next_offered, protected=tool_message)
@@ -3773,6 +3779,9 @@ class Chat:
                         )
                         if image_tool_name == 'desktop_read_image':
                             text_result = 'The current model rejected image input; Peter has not seen the Desktop image.'
+                        if image_tool_name == 'xiaohongshu':
+                            text_result = (str(execution.result) +
+                                           '\nThe current model rejected image input; Peter has not seen the note pictures.')
                         tool_message['content'] = model_tool_result(
                             self._resolve_tool_name(image_tool_name, offered) or image_tool_name,
                             text_result, '出错')
