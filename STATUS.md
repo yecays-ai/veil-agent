@@ -1,5 +1,9 @@
 # 当前状态
 
+## 工单 218：Peter 能看懂小红书帖子的图片
+
+- `ticket/218-xiaohongshu-images`：`xiaohongshu` detail 额外取帖子前 3 张图（仅 xhscdn/xiaohongshu 域名，不带 cookie、不跟跳转、有大小上限），经现有桌面图片的临时图片消息送给模型；`observation_image_message` 支持多图和 webp；结果带 `image_total`/`images_shown`；超限或模型拒图时降级为文字并明说没看到。新增 3 项测试；Windows 实机和真实 CDN 下载未验证；费用约 +¥0.05–0.2/天（粗估）。验收见 `docs/tickets/218-xiaohongshu-images.md`。下一个工单号 220（219 已分给搜索替换）。
+
 ## 工单 217：活动页「执行结果」框滚动不再弹回
 
 - `ticket/217-activity-result-scroll`：`desktop/chat.js` 的 `updateActivityRow` 每次刷新都重新挂载结果框并重写文字，滚动位置被重置到顶部；改为内容没变就不动 DOM，变了则保留滚动位置。Windows 体验未验证。验收见 `docs/tickets/217-activity-result-scroll.md`。下一个工单号 218。

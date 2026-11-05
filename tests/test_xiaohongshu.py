@@ -13,6 +13,8 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from tools_agent import FilesystemTools, permitted_tools, tool_policy
+import xiaohongshu_tools
+from windows_observer import observation_image_message
 from xiaohongshu_tools import (MAX_DAILY, PAUSED_TEXT, PageFailure, Cooldown, Sidecar, TOOL, Transient, XiaohongshuTools,
                               account_lock, companion_env, private_folder, stop_process_tree)
 
@@ -116,6 +118,63 @@ class XiaohongshuTests(unittest.TestCase):
             self.assertFalse(body['load_all_comments'])
             self.assertFalse(body['comment_config']['click_more_replies'])
             self.assertNotIn('PRIVATE_XSEC', text)
+
+    def test_detail_shows_first_note_pictures_from_cdn_hosts_only(self):
+        good = ['https://sns-webpic-qc.xhscdn.com/a!nd_dft', 'http://ci.xiaohongshu.com/b', 'https://sns-webpic-qc.xhscdn.com/c',
+                'https://sns-webpic-qc.xhscdn.com/d']
+        note = {'imageList': [{'urlDefault': 'https://evil.example/x.jpg'}, {'urlDefault': 'https://xhscdn.com.evil.io/y'},
+                              {'urlDefault': 'https://u@sns.xhscdn.com/z'}, *({'urlDefault': u} for u in good)]}
+        self.assertEqual(xiaohongshu_tools.image_urls(note), good[:3])
+        uri = 'data:image/jpeg;base64,/9j/'
+        self.sidecar.request.side_effect = [
+            {'is_logged_in': True, 'user_id': 'dedicated'},
+            {'feeds': [{'id': 'a' * 24, 'xsecToken': 't', 'noteCard': {'displayTitle': 'x'}}]},
+            {'is_logged_in': True, 'user_id': 'dedicated'},
+            {'data': {'note': {'title': 'T', 'desc': 'D', **note}, 'comments': {'list': []}}},
+        ]
+        with patch('xiaohongshu_tools.MIN_INTERVAL', 0), \
+                patch('xiaohongshu_tools.fetch_images', return_value=[uri, uri]) as fetch:
+            text, state, _ = self.invoke(action='search', query='trails')
+            ref = json.loads(text.split('\n', 1)[1])['notes'][0]['note_ref']
+            text, state, _ = self.invoke(action='detail', note_ref=ref)
+        self.assertEqual(state, '成功', text)
+        self.assertEqual(fetch.call_args.args[0], good[:3])
+        data = json.loads(text.split('\n', 1)[1])
+        self.assertNotIn('_image_urls', data)
+        self.assertEqual((data['image_total'], data['images_shown']), (7, 2))
+        self.assertEqual(text.image_data_uris, [uri, uri])
+
+    def test_image_download_accepts_only_real_images_from_cdn_hosts(self):
+        class Opener:
+            def __init__(self, raw): self.raw = raw
+            def open(self, request, timeout=0):
+                from io import BytesIO
+                return BytesIO(self.raw)
+        jpeg = b'\xff\xd8\xff' + b'0' * 20
+        with patch('xiaohongshu_tools.urllib.request.build_opener', return_value=Opener(jpeg)):
+            uri = xiaohongshu_tools._download_image('https://sns.xhscdn.com/a', threading.Event())
+        self.assertTrue(uri.startswith('data:image/jpeg;base64,'))
+        with patch('xiaohongshu_tools.urllib.request.build_opener', return_value=Opener(b'<html>')):
+            self.assertIsNone(xiaohongshu_tools._download_image('https://sns.xhscdn.com/a', threading.Event()))
+        self.assertIsNone(xiaohongshu_tools._download_image('https://evil.example/a', threading.Event()))
+        self.assertIsNone(xiaohongshu_tools._NoRedirect().redirect_request(None, None, 302, '', {}, 'https://evil.example/'))
+        self.assertFalse(xiaohongshu_tools._image_url_ok('https://sns.xhscdn.com:abc/x'))
+        import http.client
+        class Bad:
+            def open(self, request, timeout=0): raise http.client.BadStatusLine('x')
+        with patch('xiaohongshu_tools.urllib.request.build_opener', return_value=Bad()):
+            self.assertEqual(xiaohongshu_tools.fetch_images(['https://sns.xhscdn.com/a'], threading.Event()), [])
+
+    def test_failed_picture_ends_the_list_so_order_stays_true(self):
+        with patch('xiaohongshu_tools._download_image', side_effect=['u1', None, 'u3']):
+            self.assertEqual(xiaohongshu_tools.fetch_images(['a', 'b', 'c'], threading.Event()), ['u1'])
+
+    def test_multiple_note_pictures_become_one_transient_image_message(self):
+        import base64
+        uri = 'data:image/jpeg;base64,' + base64.b64encode(b'\xff\xd8\xff0000').decode()
+        message = observation_image_message(xiaohongshu_tools.XhsImageResult('t', [uri, uri]))
+        self.assertEqual([p['type'] for p in message['content']], ['text', 'image_url', 'image_url'])
+        self.assertIsNone(observation_image_message(xiaohongshu_tools.XhsImageResult('t', ['data:text/html;base64,AAAA'])))
 
     def test_status_and_content_fit_byte_budget(self):
         text, state, _ = self.invoke(action='status')
