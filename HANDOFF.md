@@ -1,3 +1,9 @@
+## 工单 219 交接（2026-11-05）
+
+- 改动在 `web_tools.py`（`_find_results` 逐引擎回退、`_research`、`_FetchWorker` 并发）、`tool_groups.py`、`characters/peter/character.toml`（别名 dig_deep）、`tests/test_web_tools.py`。ddgs 9.16.1 的文字搜索引擎只有 brave、duckduckgo、grokipedia、mojeek、startpage、wikipedia、yahoo，没有 Bing 和百度；仍不稳可考虑加国内搜索 API（需先问 lan 费用）。
+- 全量测试有 6 项既有失败（语音和文件系统服务），main 上同样存在，与本单无关。
+- 小红书图片阅读是单独的工单，不在本单。
+
 ## 工单 218 交接（2026-11-05）
 
 - 改动在 `xiaohongshu_tools.py`（`image_urls`/`fetch_images`/`XhsImageResult`）、`windows_observer.observation_image_message`（多图）、`veil_agent.py`（图片被省略/被拒时对 xiaohongshu 的提示）。

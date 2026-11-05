@@ -66,7 +66,7 @@ class WebToolsTests(unittest.TestCase):
         self.assertNotIn('Shanghai weather', summary)
         self.assertLessEqual(len(result.encode('utf-8')), 4096)
         ddgs.text.assert_called_once_with(
-            'Shanghai weather', backend='auto', max_results=5)
+            'Shanghai weather', backend='brave', max_results=8)
 
     def test_query_validation_and_network_failure_are_bounded(self):
         _, _, tools, _ = self.make_tools(worker=Mock())
@@ -93,6 +93,51 @@ class WebToolsTests(unittest.TestCase):
         self.assertNotIn('a useful topic', result)
         self.assertIn('TimeoutError', result)
         self.assertEqual(summary, 'web_search')
+
+    def test_search_falls_back_to_next_engine_when_one_fails_or_is_empty(self):
+        _, _, tools, _ = self.make_tools(worker=Mock())
+        ddgs = Mock()
+        ddgs.text.side_effect = [
+            TimeoutError(), [],
+            [{'title': 'Hit', 'href': 'https://ok.example/a', 'body': 'x'}]]
+        with patch('web_tools.DDGS', return_value=ddgs):
+            result, state, summary = tools.invoke('web_search', {'query': 'topic'})
+        self.assertEqual(state, '成功', result)
+        self.assertIn('https://ok.example/a', result)
+        self.assertEqual([c.kwargs['backend'] for c in ddgs.text.call_args_list],
+                         ['brave', 'yahoo', 'mojeek'])
+
+    def test_search_reports_error_only_after_every_engine_failed(self):
+        _, _, tools, _ = self.make_tools(worker=Mock())
+        ddgs = Mock()
+        ddgs.text.side_effect = TimeoutError()
+        with patch('web_tools.DDGS', return_value=ddgs):
+            result, state, _ = tools.invoke('web_search', {'query': 'topic'})
+        self.assertEqual(state, '出错')
+        self.assertEqual(ddgs.text.call_count, 5)
+
+    def test_research_searches_and_reads_top_pages_with_bounded_output(self):
+        worker = Mock()
+        worker.call.side_effect = lambda name, args: (
+            'Contents of page ' + args['url'] + '\n' + 'word ' * 5000 if 'bad' not in args['url']
+            else (_ for _ in ()).throw(RuntimeError('boom')))
+        _, _, tools, _ = self.make_tools(worker=worker)
+        self.assertIn('web_research', [t.name for t in tools.tools])
+        ddgs = Mock()
+        ddgs.text.return_value = [
+            {'title': f'T{i}', 'href': f'https://site{i}.example/' + ('bad' if i == 2 else ''), 'body': 's'}
+            for i in range(1, 7)] + [{'title': 'priv', 'href': 'http://10.0.0.1/', 'body': 'x'}]
+        with patch('web_tools.DDGS', return_value=ddgs):
+            result, state, summary = tools.invoke('web_research', {'query': 'topic', 'pages': 3})
+        self.assertEqual(state, '成功', result)
+        self.assertEqual(worker.call.call_count, 3)
+        self.assertIn('Contents of page https://site1.example/', result)
+        self.assertIn('(could not be read)', result)
+        self.assertNotIn('10.0.0.1', result)
+        self.assertLessEqual(len(result.encode('utf-8')), 12288)
+        self.assertIn('2 pages read', summary)
+        _, state, _ = tools.invoke('web_research', {'query': 'topic', 'pages': 9})
+        self.assertEqual(state, '被拒绝')
 
     def test_small_result_limit_applies_to_fixed_messages(self):
         _, _, tools, _ = self.make_tools(worker=Mock(), max_bytes=32)
@@ -144,6 +189,7 @@ class WebToolsTests(unittest.TestCase):
         self.assertIsNone(disabled.startup_notice)
         _, _, degraded, _ = self.make_tools(worker=None)
         self.assertEqual([tool.name for tool in degraded.tools], ['web_search'])
+        self.assertNotIn('web_research', [tool.name for tool in degraded.tools])
         self.assertIn('run setup.bat', degraded.startup_notice)
 
 

@@ -5,7 +5,7 @@ unchanged. Groups come from the role's `[tools] tool_groups`; a role without tha
 """
 
 GROUP_TOOL_NAMES = {
-    'web': frozenset({'web_search', 'web_fetch', 'browser'}),
+    'web': frozenset({'web_search', 'web_fetch', 'web_research', 'browser'}),
     'github': frozenset({'github_read'}),
     'social': frozenset({'xiaohongshu'}),
     'desktop_control': frozenset({'windows_launch', 'windows_manage', 'windows_control_action',

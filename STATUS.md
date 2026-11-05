@@ -1,5 +1,9 @@
 # 当前状态
 
+## 工单 219：搜索失败自动换引擎，新增搜索并阅读
+
+- `ticket/219-web-search-fallback`：`web_search` 按 Brave、Yahoo、Mojeek、Startpage、DuckDuckGo 顺序逐个尝试，第一个有结果的就用，全部失败才报错，最多返回 8 条；新增 `web_research`（Peter 名 dig_deep，属 web 组）一次搜索并同时读前 1 到 5 个网页，单次返回上限 12KB；网页读取服务改为可并发。新增 3 项测试；云端环境无法连搜索引擎，真实网络效果未验证，请日志核对。不增加固定花费。验收见 `docs/tickets/219-web-search-fallback-and-research.md`。下一个工单号 220。
+
 ## 工单 218：Peter 能看懂小红书帖子的图片
 
 - `ticket/218-xiaohongshu-images`：`xiaohongshu` detail 额外取帖子前 3 张图（仅 xhscdn/xiaohongshu 域名，不带 cookie、不跟跳转、有大小上限），经现有桌面图片的临时图片消息送给模型；`observation_image_message` 支持多图和 webp；结果带 `image_total`/`images_shown`；超限或模型拒图时降级为文字并明说没看到。新增 3 项测试；Windows 实机和真实 CDN 下载未验证；费用约 +¥0.05–0.2/天（粗估）。验收见 `docs/tickets/218-xiaohongshu-images.md`。下一个工单号 220（219 已分给搜索替换）。
