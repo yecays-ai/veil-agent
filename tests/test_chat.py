@@ -98,6 +98,8 @@ output_cny_per_million = "8"
         missing, state, _ = chat.send_message(json.dumps({'sticker': '丑猫/没有'}), 'request-sticker-missing')
         self.assertEqual(state, '被拒绝')
         self.assertIn('stickers tool', missing)
+        voice, state, _ = chat.send_message(json.dumps({'sticker': '丑猫/打人', 'voice': True}), 'request-sticker-voice')
+        self.assertEqual(state, '被拒绝')
         result, state, _ = chat.send_message(json.dumps({'sticker': '丑猫/打人'}), 'request-sticker')
         self.assertEqual((result, state), ('Sent.', '成功'))
         result, state, _ = chat.send_message(json.dumps({'sticker': '丑猫/打人', 'text': 'take that'}),
@@ -113,7 +115,16 @@ output_cny_per_million = "8"
         chat = Chat(self.cfg, self.store, self.budget, self.model)
         self.assertNotIn('stickers', names(chat))
         chat.sticker_library = StickerLibrary(self.root / 'stickers')
-        chat.tool_schemas()  # must not raise even when no tools are enabled
+        self.assertNotIn('stickers', names(chat))  # no tools enabled: nothing is offered
+        enabled = Chat(replace(self.cfg, tools={'enabled': True, 'max_steps': 2}), self.store, self.budget,
+                       self.model, tools=SimpleNamespace(tools=[], description='Tools. ', startup_notice=None,
+                       capability_event=None, capability_event_model=None, capability_record=None,
+                       consume_capability_event=Mock()))
+        self.assertNotIn('stickers', names(enabled))
+        enabled.sticker_library = StickerLibrary(self.root / 'stickers')
+        self.assertIn('stickers', names(enabled))
+        self.assertIn('sticker', [s for s in enabled.tool_schemas()
+                                  if s['function']['name'] == 'send_message'][0]['function']['parameters']['properties'])
 
     def test_send_message_file_is_available_only_with_lab_attachment_hooks(self):
         self.assertNotIn('file', send_message_schema()['function']['parameters']['properties'])

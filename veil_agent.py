@@ -2116,6 +2116,8 @@ class Chat:
             allowed.add('sticker')
         if isinstance(args, dict) and 'sticker' in args and self.sticker_library is not None:
             # Ticket 222: a sticker is sent as the plain-text marker the chat window draws as a picture.
+            if args.get('voice') is True:
+                return 'A sticker cannot be sent as a voice message; nothing was sent.', '被拒绝', 'send_message'
             sticker_ref = args['sticker']
             pack_name, _, sticker_name = (sticker_ref.partition('/') if isinstance(sticker_ref, str) else ('', '', ''))
             found = self.sticker_library.find(pack_name, sticker_name) if sticker_name else None

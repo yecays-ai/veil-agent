@@ -1670,7 +1670,7 @@ def make_handler(hub, token):
                 self._send(404, {'error': 'not found'})
                 return
             data, mime = read
-            headers = {'Cache-Control': 'private, max-age=86400'}
+            headers = {}
             if mime == 'image/svg+xml':
                 headers['Content-Security-Policy'] = "default-src 'none'; style-src 'unsafe-inline'; img-src data:"
             self._send(200, data, mime, headers)

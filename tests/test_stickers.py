@@ -78,6 +78,31 @@ class StickerTests(unittest.TestCase):
             with self.assertRaises(StickerError):
                 stickers.download_image(url)
 
+    def test_svg_with_crlf_or_immediate_close_is_accepted_and_bad_links_are_skipped(self):
+        self.library.add_pack('p')
+        self.library.add_bytes('p', 'a', b'<svg>\r\n<rect width="4" height="4"/></svg>')
+        self.library.add_bytes('p', 'b', b'<svg\r\n viewBox="0 0 1 1"></svg>')
+        rows, skipped = parse_sticker_text('坏：http://[::1/a.png\n好：https://a.test/b.png')
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(len(skipped), 1)
+
+    def test_a_crafted_index_cannot_delete_files_outside_the_library(self):
+        outside = Path(self.tmp.name) / 'precious.txt'
+        outside.write_text('keep')
+        pack = self.library.add_pack('p')
+        data = json.loads(self.library.index_path.read_text(encoding='utf-8'))
+        data['packs'][0]['stickers'] = [{'id': 'x', 'name': 'x', 'file': '../../precious.txt', 'by': 'lan'}]
+        self.library.index_path.write_text(json.dumps(data), encoding='utf-8')
+        self.library.delete_pack(pack['id'])
+        self.assertTrue(outside.exists())
+
+    def test_download_resolves_once_and_refuses_names_that_resolve_private(self):
+        from unittest.mock import patch
+        private = [(2, 1, 6, '', ('10.0.0.5', 80))]
+        with patch('stickers.socket.getaddrinfo', return_value=private):
+            with self.assertRaises(StickerError):
+                stickers.download_image('http://rebind.test/a.png')
+
     def test_file_names_are_restricted(self):
         self.assertIsNone(self.library.read_file('../index.json'))
         self.assertIsNone(self.library.read_file('a' * 32 + '.exe'))

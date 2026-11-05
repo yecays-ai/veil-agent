@@ -14,6 +14,7 @@ import re
 import secrets
 import socket
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -28,6 +29,7 @@ MAX_IMAGE_BYTES = 2 * 1024 * 1024
 MAX_SVG_BYTES = 40 * 1024
 MAX_URL_CHARS = 2000
 DOWNLOAD_TIMEOUT = 10
+DOWNLOAD_DEADLINE = 15  # seconds for one whole download, however slowly the server trickles
 DOWNLOAD_WORKERS = 6
 MAX_REDIRECTS = 3
 MAX_NAMES_LISTED = 300
@@ -118,8 +120,11 @@ def parse_sticker_text(text):
     def add(label, link, original):
         url = link.strip()
         url = _TRAILING.sub('', url)
-        if (not url or len(url) > MAX_URL_CHARS
-                or urllib.parse.urlsplit(url).scheme not in ('http', 'https')):
+        try:
+            scheme = urllib.parse.urlsplit(url).scheme
+        except ValueError:
+            scheme = ''
+        if not url or len(url) > MAX_URL_CHARS or scheme not in ('http', 'https'):
             skipped.append(original[:120])
             return
         if url in seen:
@@ -166,15 +171,51 @@ def parse_sticker_text(text):
 
 # ── Downloading a link into the library ──
 
-def _public_host(host):
+def _public_addresses(host, port):
+    """Resolve once and require every address to be public; the connection then uses exactly these addresses."""
     if not host or host.lower() == 'localhost':
-        return False
+        raise StickerError('link is not a public web address')
     try:
-        infos = socket.getaddrinfo(host, None)
-    except OSError:
-        return False
-    addresses = {info[4][0] for info in infos}
-    return bool(addresses) and all(ipaddress.ip_address(a.split('%')[0]).is_global for a in addresses)
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except OSError as exc:
+        raise StickerError('link is not a public web address') from exc
+    if not infos or any(not ipaddress.ip_address(info[4][0].split('%')[0]).is_global for info in infos):
+        raise StickerError('link is not a public web address')
+    return infos
+
+
+def _connect_pinned(host, port, timeout):
+    """Connect to a validated address, never re-resolving the name (no DNS-rebinding window)."""
+    for family, kind, proto, _name, address in _public_addresses(host, port):
+        sock = socket.socket(family, kind, proto)
+        try:
+            sock.settimeout(timeout)
+            sock.connect(address)
+            return sock
+        except OSError:
+            sock.close()
+    raise StickerError('download failed')
+
+
+class _PinnedHTTPConnection(http.client.HTTPConnection):
+    def connect(self):
+        self.sock = _connect_pinned(self.host, self.port, self.timeout)
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    def connect(self):
+        sock = _connect_pinned(self.host, self.port, self.timeout)
+        self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
+
+
+class _PinnedHTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, req):
+        return self.do_open(_PinnedHTTPConnection, req)
+
+
+class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, req):
+        return self.do_open(_PinnedHTTPSConnection, req, context=self._context)
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -183,22 +224,33 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def download_image(url):
-    """One public http(s) picture, size-capped, redirects re-checked, no cookies. Raises StickerError."""
-    opener = urllib.request.build_opener(_NoRedirect)
+    """One public http(s) picture: pinned to a validated address, redirects re-checked, no cookies or proxy,
+    size-capped and under a total time limit. Raises StickerError."""
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect,
+                                         _PinnedHTTPHandler, _PinnedHTTPSHandler)
+    deadline = time.monotonic() + DOWNLOAD_DEADLINE
     current = url
     for _ in range(MAX_REDIRECTS + 1):
-        parts = urllib.parse.urlsplit(current)
         try:
-            host, _port = parts.hostname, parts.port
+            parts = urllib.parse.urlsplit(current)
+            host, port = parts.hostname, parts.port
         except ValueError as exc:
             raise StickerError('bad link') from exc
-        if parts.scheme not in ('http', 'https') or parts.username or not _public_host(host):
+        if parts.scheme not in ('http', 'https') or parts.username or not host:
             raise StickerError('link is not a public web address')
+        _public_addresses(host, port or (443 if parts.scheme == 'https' else 80))
         request = urllib.request.Request(current, headers={
             'User-Agent': 'Mozilla/5.0', 'Accept': 'image/png,image/jpeg,image/gif,image/webp,*/*;q=0.5'})
         try:
             with opener.open(request, timeout=DOWNLOAD_TIMEOUT) as response:
-                raw = response.read(MAX_IMAGE_BYTES + 1)
+                raw = b''
+                while len(raw) <= MAX_IMAGE_BYTES:
+                    if time.monotonic() > deadline:
+                        raise StickerError('download took too long')
+                    chunk = response.read(65536)
+                    if not chunk:
+                        break
+                    raw += chunk
         except urllib.error.HTTPError as exc:
             if exc.code in (301, 302, 303, 307, 308) and exc.headers.get('Location'):
                 current = urllib.parse.urljoin(current, exc.headers['Location'])
@@ -294,7 +346,12 @@ class StickerLibrary:
             data['packs'].remove(pack)
             self._save(data)
             for sticker in pack['stickers']:
-                (self.files / sticker['file']).unlink(missing_ok=True)
+                self._remove_file(sticker.get('file'))
+
+    def _remove_file(self, file_name):
+        # index.json is only trusted for names this module could have written.
+        if isinstance(file_name, str) and FILE_RE.fullmatch(file_name):
+            (self.files / file_name).unlink(missing_ok=True)
 
     # stickers
     def _unique_name(self, pack, name):
@@ -308,7 +365,8 @@ class StickerLibrary:
 
     def add_bytes(self, pack_ref, name, raw, by='lan', create_pack=False):
         suffix = sniff(raw) if isinstance(raw, bytes) else None
-        if suffix is None and isinstance(raw, bytes) and raw.lstrip()[:5].lower() in (b'<svg ', b'<?xml', b'<svg\n', b'<svg\t'):
+        if (suffix is None and isinstance(raw, bytes)
+                and (raw.lstrip()[:4].lower() == b'<svg' or raw.lstrip()[:5].lower() == b'<?xml')):
             suffix = 'svg'
             raw = check_svg(raw.decode('utf-8', errors='replace'))
         if suffix is None:
@@ -392,7 +450,7 @@ class StickerLibrary:
                     if sticker['id'] == sticker_id:
                         pack['stickers'].remove(sticker)
                         self._save(data)
-                        (self.files / sticker['file']).unlink(missing_ok=True)
+                        self._remove_file(sticker.get('file'))
                         return
 
     # reading

@@ -151,7 +151,7 @@ function showEvent(e){
   if(e.kind==='message_updated'){
     const node=findMessageBubble(e.message_id);
     if(node){
-      if(e.edited===true&&typeof e.text==='string'){node.dataset.messageText=e.text;node.replaceChildren();node.innerHTML=render(e.text)}
+      if(e.edited===true&&typeof e.text==='string'){node.dataset.messageText=e.text;node.replaceChildren();node.classList.remove('sticker-msg');if(!stickerBubble(node,e.text))node.innerHTML=render(e.text)}
       updateFavoriteBadge(node,e.favorite===true);
     }
     return;
@@ -1777,7 +1777,7 @@ function renderStickers(){
       tile.append(img,name,del);
     }else{
       const cap=document.createElement('span');cap.textContent=s.name;
-      tile.append(img,cap);tile.onclick=()=>{send(`[表情包：${pack.name}/${s.name}]`);closeStickerPanel()};
+      tile.append(img,cap);tile.onclick=()=>{if(selectedImage){stickerSay('先发送或取消发送区里的图片，再发表情包。');return}send(`[表情包：${pack.name}/${s.name}]`);closeStickerPanel()};
     }
     stickerGrid.appendChild(tile);
   }
@@ -1800,8 +1800,8 @@ $('sticker-add-pack').onclick=async()=>{
 $('sticker-rename-pack').onclick=async()=>{const pack=stickerCurrentPack();if(!pack)return;try{await stickerPost({action:'rename_pack',id:pack.id,name:$('sticker-pack-name').value});stickerSay('');renderStickers()}catch(e){stickerSay(e.message)}};
 $('sticker-delete-pack').onclick=async e=>{
   const pack=stickerCurrentPack();if(!pack)return;const b=e.currentTarget;
-  if(b.dataset.sure!=='1'){b.dataset.sure='1';b.textContent=`再点一次删除「${pack.name}」和里面的 ${pack.stickers.length} 张`;setTimeout(()=>{b.dataset.sure='';b.textContent='删除图集'},4000);return}
-  b.dataset.sure='';b.textContent='删除图集';
+  if(b.dataset.sure!=='1'||b.dataset.packId!==pack.id){b.dataset.sure='1';b.dataset.packId=pack.id;b.textContent=`再点一次删除「${pack.name}」和里面的 ${pack.stickers.length} 张`;setTimeout(()=>{if(b.dataset.packId===pack.id){b.dataset.sure='';b.dataset.packId='';b.textContent='删除图集'}},4000);return}
+  b.dataset.sure='';b.dataset.packId='';b.textContent='删除图集';
   try{await stickerPost({action:'delete_pack',id:pack.id});stickerPackId=null;renderStickers()}catch(err){stickerSay(err.message)}
 };
 $('sticker-add-links').onclick=async()=>{
@@ -1811,15 +1811,22 @@ $('sticker-add-links').onclick=async()=>{
   const button=$('sticker-add-links');button.disabled=true;
   try{
     const parsed=await stickerPost({action:'parse',text:box.value});
-    const rows=parsed.rows;let added=0;const failed=[];
-    for(let i=0;i<rows.length;i+=20){
-      stickerSay(`正在下载 ${Math.min(i+20,rows.length)}/${rows.length}…`);
-      const d=await stickerPost({action:'add_links',pack:pack.id,rows:rows.slice(i,i+20)});
-      added+=d.added;failed.push(...d.failed);
+    const rows=parsed.rows;let added=0,done=0;const failed=[];
+    try{
+      for(;done<rows.length;done+=10){
+        stickerSay(`正在下载 ${Math.min(done+10,rows.length)}/${rows.length}…`);
+        const d=await stickerPost({action:'add_links',pack:pack.id,rows:rows.slice(done,done+10)});
+        added+=d.added;failed.push(...d.failed);
+      }
+    }catch(e){
+      // Keep only what was not saved yet, so a retry never adds the same pictures twice.
+      const left=[...failed,...rows.slice(done)].map(f=>`${f.name||''}：${f.url||''}`);
+      box.value=left.join('\n');renderStickers();
+      stickerSay(`中途出错：${e.message}。已添加 ${added} 张，没处理的留在输入框里，可以重试。`);
+      return;
     }
     const skipped=parsed.skipped.length;
-    const failedLines=failed.map(f=>`${f.name||''} ${f.url||''}`.trim());
-    box.value=failedLines.join('\n');
+    box.value=failed.map(f=>`${f.name||''}：${f.url||''}`).join('\n');
     stickerSay(`添加了 ${added} 张`+(failed.length?`，${failed.length} 张没下载成功（留在输入框里，可重试）`:'')+(skipped?`，${skipped} 行看不懂已跳过`:''));
     renderStickers();
   }catch(e){stickerSay(e.message)}finally{button.disabled=false}
@@ -1827,13 +1834,14 @@ $('sticker-add-links').onclick=async()=>{
 $('sticker-upload').onclick=()=>$('sticker-file').click();
 $('sticker-file').onchange=async e=>{
   const pack=stickerCurrentPack();const files=[...e.target.files];e.target.value='';
-  if(!pack||!files.length)return;let ok=0;
+  if(!pack||!files.length)return;let ok=0;const bad=[];
   for(const file of files){
     try{
+      if(file.size>2*1024*1024)throw new Error('超过 2MB');
       const dataUrl=await fileAsDataUrl(file);
       const r=await api('/api/stickers/upload',{pack:pack.id,name:file.name.replace(/\.[^.]+$/,'').slice(0,10)||'表情',data:dataUrl.slice(dataUrl.indexOf(',')+1)},60000);
       const d=await r.json();if(!r.ok)throw new Error(d.error||'没成功');stickerLib={packs:d.packs};ok++;
-    }catch(err){stickerSay(`${file.name}：${err.message}`)}
+    }catch(err){bad.push(`${file.name}（${err.message}）`)}
   }
-  if(ok)stickerSay(`上传了 ${ok} 张，名字是文件名，可以在「管理」里改。`);renderStickers();
+  stickerSay((ok?`上传了 ${ok} 张，名字是文件名，可以在「管理」里改。`:'')+(bad.length?` 没成功：${bad.join('、')}`:''));renderStickers();
 };

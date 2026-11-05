@@ -2,7 +2,7 @@
 
 ## 工单 222：表情包（图集两级选择）
 
-- `ticket/222-stickers`：新增 `stickers.py`（图集库，文件存 `data\stickers\`）；输入栏表情面板（选图集、点发送、管理：新建/改名/删除图集、粘贴「名字：链接」批量添加、上传图片、改名/删单张）；聊天里表情包是文字 `[表情包：图集/名字]`，窗口画成图片；Peter 有 `stickers` 工具（说明里只列图集名和数量，列某图集的名字，`look` 才读图，`add` 加自己画的 SVG 或 Lab 图片）和 `send_message` 的 `sticker` 参数；一次性英文能力通知。名字最多 10 个字。新增 `tests/test_stickers.py` 13 项和 2 项 chat 测试；全量测试与 main 相同的云端环境类失败一致；Windows 实机、真实链接下载、GIF 能否被模型接受均未验证；费用约 +¥0.02–0.1/天（粗估）。验收见 `docs/tickets/222-stickers.md`。下一个工单号 223。
+- `ticket/222-stickers`：新增 `stickers.py`（图集库，文件存 `data\stickers\`）；输入栏表情面板（选图集、点发送、管理：新建/改名/删除图集、粘贴「名字：链接」批量添加、上传图片、改名/删单张）；聊天里表情包是文字 `[表情包：图集/名字]`，窗口画成图片；Peter 有 `stickers` 工具（说明里只列图集名和数量，列某图集的名字，`look` 才读图，`add` 加自己画的 SVG 或 Lab 图片）和 `send_message` 的 `sticker` 参数；一次性英文能力通知。名字最多 10 个字。下载固定到已校验的公网地址（防 DNS 重绑定，不走系统代理，总时限 15 秒，仅 png/jpg/gif/webp ≤2MB）；新增 `tests/test_stickers.py` 16 项和 2 项 chat 测试；全量测试与 main 相同的云端环境类失败一致；Windows 实机、真实链接下载、GIF 能否被模型接受均未验证；费用约 +¥0.02–0.1/天（粗估）。验收见 `docs/tickets/222-stickers.md`。下一个工单号 223。
 
 ## 工单 221：Peter 自己翻聊天记录找回忆
 

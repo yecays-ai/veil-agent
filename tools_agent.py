@@ -1274,8 +1274,9 @@ class FilesystemTools:
                 'sent in chat, like a meme or reaction image, not words. In chat it appears as the text '
                 '[表情包：pack/name]; when lan sends one you see that text and know it is a sticker, and the name says '
                 'what it shows. Send one with send_message sticker: "pack/name". The stickers tool lists a pack, lets '
-                'you look at a picture only when you want to, and saves stickers you draw yourself (SVG) or make in '
-                'your Lab. You may look or not; you are never required to.')
+                'you look at a picture only when you want to, and saves stickers you draw yourself (SVG)'
+                + (' or pictures you made in your Lab' if self.lab is not None else '')
+                + '. You may look or not; you are never required to.')
         except Exception:
             return False
 
