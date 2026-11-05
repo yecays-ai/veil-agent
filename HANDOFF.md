@@ -1,3 +1,9 @@
+## 工单 221 交接（2026-11-05）
+
+- 改动在 `chat_search.py`（搜索与排序）、`veil_agent.py`（工具注册、调用分支、算免费回顾）、`tests/test_chat_search.py`、`tests/test_chat.py`。读 `store.read(chat.jsonl)` 全量，每次调用读一遍文件。
+- 下一步：lan 更新后给 Peter 一两个线索词，核对 `data\peter\tools.jsonl` 有 `search_chat_history` 记录且返回对应原话；留意他是否会主动调用、结果是否过长（costs）。
+- 未验证：Windows 真机；语音消息的文字（转写）是否都能搜到。
+
 ## 工单 220 交接（2026-11-05）
 
 - 复制改走 IPC `chat:copy-text` → Electron `clipboard.writeText`，桌面前端改动，无费用影响。Windows 体验未验证：右键/长按消息选 Copy，粘贴到记事本看到原文；编辑：改字保存后气泡立刻更新。

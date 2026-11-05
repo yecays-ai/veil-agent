@@ -283,7 +283,8 @@ RECALL_MESSAGE = {'type': 'function', 'function': {
 # Ticket 215: during an autonomous wake, looking back at his own state (activity history, long-task
 # status, life records and thoughts in list form) does not use up the tool steps meant for doing things.
 # These looks are capped separately, so a wake can never run unbounded.
-FREE_REVIEW_TOOLS = frozenset({'autonomy_history', 'capability_history', 'long_task_status', 'expand_capability'})
+FREE_REVIEW_TOOLS = frozenset({'autonomy_history', 'capability_history', 'long_task_status', 'expand_capability',
+                               'search_chat_history'})
 FREE_REVIEW_LIST_TOOLS = frozenset({'life_record', 'thought'})
 FREE_REVIEW_CALLS = 6
 
@@ -1878,7 +1879,8 @@ class Chat:
             or (self.tools and self.tools.tools)) else []
         if messaging and not self.force_reply:
             messaging.extend([STAY_SILENT, REPLY_LATER])
-        history = [CAPABILITY_HISTORY, AUTONOMY_HISTORY] if existing_tools or task_tools or messaging else []
+        from chat_search import TOOL_SCHEMA as CHAT_SEARCH
+        history = [CAPABILITY_HISTORY, AUTONOMY_HISTORY, CHAT_SEARCH] if existing_tools or task_tools or messaging else []
         wake_tools = [AUTONOMY_SET_NEXT_WAKE, AUTONOMY_SET_WAKE_RHYTHM] if self.autonomy_controller is not None else []
         profile = []
         if self.profile and history:
@@ -1913,7 +1915,7 @@ class Chat:
         from tools_agent import ALLOW, ASK, AUTONOMY_DIRECT, LAB_ONLY, NATIVE
         reserved_names = (ALLOW | ASK | AUTONOMY_DIRECT | LAB_ONLY | NATIVE | {
             'send_message', 'recall_message', 'stay_silent', 'reply_later', 'screen_pop',
-            'capability_history', 'autonomy_history', 'profile_append', 'profile_replace',
+            'capability_history', 'autonomy_history', 'search_chat_history', 'profile_append', 'profile_replace',
             'thought', 'life_record', 'long_task_status', 'long_task_update', 'set_next_wake', 'set_wake_rhythm',
             'expand_capability',
         })
@@ -3322,6 +3324,16 @@ class Chat:
                 else:
                     result, state = activity_history(self.store, self.cfg, count), '成功'
                 summary = 'autonomy_history'
+            elif call.function.name == 'search_chat_history':
+                from chat_search import search_chat
+                args = json.loads(call.function.arguments or '{}')
+                if not isinstance(args, dict) or not set(args) <= {'keywords', 'since', 'until'}:
+                    result, state = 'Give keywords (a list of words), optionally since and until.', '被拒绝'
+                else:
+                    result, found = search_chat(self.store.read(self.path), args.get('keywords'),
+                                                args.get('since'), args.get('until'))
+                    state = '成功'
+                summary = 'search_chat_history'
             elif call.function.name == 'life_record':
                 result, state, summary = self.life_records.invoke(json.loads(call.function.arguments or '{}'))
             elif call.function.name == 'set_next_wake':

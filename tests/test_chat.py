@@ -541,6 +541,39 @@ output_cny_per_million = "8"
         self.assertIn('lab/notes.md', results[1])
         tools.invoke.assert_not_called()
 
+    def test_peter_searches_the_whole_chat_log_himself(self):
+        self.store.append('test/chat.jsonl', {'role': 'user', 'content': 'The factory delayed my badge order.'})
+        self.store.append('test/chat.jsonl', {'role': 'assistant', 'content': 'Ugh, did they say when?'})
+        call = SimpleNamespace(id='search-1', function=SimpleNamespace(
+            name='search_chat_history', arguments='{"keywords": ["factory", "badge"]}'))
+        turn = SimpleNamespace(content=None, tool_calls=[call],
+            model_dump=lambda exclude_none=True: {'role': 'assistant', 'content': None,
+                'tool_calls': [{'id': call.id, 'type': 'function', 'function': {
+                    'name': 'search_chat_history', 'arguments': call.function.arguments}}]})
+        final = SimpleNamespace(content='You were annoyed at the factory.', tool_calls=[],
+            model_dump=lambda exclude_none=True: {'role': 'assistant', 'content': 'You were annoyed at the factory.'})
+        tools = SimpleNamespace(tools=[], description='Fictional tools.', capability_event=None,
+            capability_event_model=None, consume_capability_event=Mock(), invoke=Mock())
+        for n in range(3):
+            self.store.append('test/chat.jsonl', {'role': 'user', 'content': f'Newer filler {n}.'})
+            self.store.append('test/chat.jsonl', {'role': 'assistant', 'content': 'Okay.'})
+        chat = Chat(replace(self.cfg, tools={'enabled': True, 'max_steps': 3}, history_rounds=1),
+                    self.store, self.budget, Mock(), tools=tools, output=lambda _: None)
+        prompts = []
+        def fake_model(messages, **kwargs):
+            prompts.append((list(messages), kwargs.get('tools')))
+            return (turn if len(prompts) == 1 else final), 100, 20, 0
+        chat.model.side_effect = fake_model
+
+        chat.send('Remember what I said about the factory and the badges?')
+
+        self.assertNotIn('delayed my badge', str(prompts[0][0]))  # outside the recent rounds sent to the model
+        self.assertIn('search_chat_history', {item['function']['name'] for item in prompts[0][1]})
+        results = [item['content'] for item in prompts[1][0] if item.get('role') == 'tool']
+        self.assertIn('The factory delayed my badge order.', results[0])
+        self.assertIn('Ugh, did they say when?', results[0])
+        tools.invoke.assert_not_called()
+
     def test_failed_capability_delivery_stays_pending_then_delivers_once(self):
         notice = ('Capability update: added lab_file_digest and move_lab_file. Both are direct-use only '
                   'inside the lab folder; they cannot overwrite, delete, or run scripts.')
@@ -1196,7 +1229,7 @@ output_cny_per_million = "8"
         self.assertEqual(reply, 'A fictional reply')
         chat._tool_chat.assert_called_once()
         # send_message, recall_message, capability_history, autonomy_history, thought and the two long-task tools are offered beside the authorized ones.
-        self.assertEqual(len(chat.tool_schemas()) - 9, len(names))
+        self.assertEqual(len(chat.tool_schemas()) - 10, len(names))
         rows, costs = self.store.read('test/chat.jsonl'), self.store.read('costs.jsonl')
         chat._tool_chat.reset_mock()
         with self.assertRaises(UserError):
