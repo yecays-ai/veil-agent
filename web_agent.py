@@ -1291,7 +1291,7 @@ class Hub(ScreenPopMixin):
                 return '已删除所选消息。' if len(rows) > 1 else '消息已删除。'
             if action == 'edit':
                 row = self.chat.edit_message(message_id, content)
-                self.push('message_updated', row['content'], message_id=message_id, favorite=row.get('favorite', False))
+                self.push('message_updated', row['content'], message_id=message_id, edited=True, favorite=row.get('favorite', False))
                 return '消息已更新。'
             if action == 'favorite':
                 row = self.chat.favorite_message(message_id, favorite)

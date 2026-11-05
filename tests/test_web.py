@@ -201,8 +201,10 @@ output_cny_per_million = "8"
         self.hub.busy = False
         self.assertEqual(self.hub.message_action('edit', message_id='edit-message', content='Edited reply.'), '消息已更新。')
         event = [e for e in self.hub.events if e['kind'] == 'message_updated'][-1]
-        self.assertEqual((event['message_id'], event['text']), ('edit-message', 'Edited reply.'))
+        self.assertEqual((event['message_id'], event['text'], event.get('edited')), ('edit-message', 'Edited reply.', True))
         self.assertEqual(self.hub.message_action('favorite', message_id='edit-message', favorite=True), '已收藏消息。')
+        favorite_event = [e for e in self.hub.events if e['kind'] == 'message_updated'][-1]
+        self.assertNotIn('edited', favorite_event)
         row = next(r for r in self.store.read('test/chat.jsonl') if r.get('message_id') == 'edit-message')
         self.assertEqual((row['content'], row['favorite']), ('Edited reply.', True))
 

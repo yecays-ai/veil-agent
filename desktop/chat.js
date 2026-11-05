@@ -151,7 +151,7 @@ function showEvent(e){
   if(e.kind==='message_updated'){
     const node=findMessageBubble(e.message_id);
     if(node){
-      if(typeof e.text==='string'){node.dataset.messageText=e.text;node.replaceChildren();node.innerHTML=render(e.text)}
+      if(e.edited===true&&typeof e.text==='string'){node.dataset.messageText=e.text;node.replaceChildren();node.innerHTML=render(e.text)}
       updateFavoriteBadge(node,e.favorite===true);
     }
     return;
