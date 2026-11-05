@@ -1,8 +1,12 @@
 # 当前状态
 
-## 工单 218：消息菜单「复制」「编辑」修复
+## 工单 219：消息菜单「复制」「编辑」修复
 
-- `ticket/218-message-copy`：聊天消息菜单的复制原先用页面里的 `navigator.clipboard`，桌面窗口的权限处理只放行麦克风，复制可能被拒绝而没写进剪贴板；改为 `veilDesktop.copyText` 经主进程 `clipboard.writeText` 写入（仅聊天窗口可调用，上限 20 万字符），没有桌面桥时仍回退原写法。Windows 体验未验证。验收：长按/右键一条消息选 Copy，粘贴到记事本能看到原文。另：消息「编辑」保存后界面毫无变化的根因是 `web_agent.py` 推送 `message_updated` 时 `text` 参数重复传入（TypeError，请求 500，聊天记录也未更新）；已修并加回归测试。收藏：聊天页顶部栏加了星标按钮「只看收藏」，按下后只显示已收藏的消息，再按恢复（位置是临时的，lan 之后整体改 UI）。下一个工单号 219。
+- `ticket/219-message-copy`：聊天消息菜单的复制原先用页面里的 `navigator.clipboard`，桌面窗口的权限处理只放行麦克风，复制可能被拒绝而没写进剪贴板；改为 `veilDesktop.copyText` 经主进程 `clipboard.writeText` 写入（仅聊天窗口可调用，上限 20 万字符），没有桌面桥时仍回退原写法。Windows 体验未验证。验收：长按/右键一条消息选 Copy，粘贴到记事本能看到原文。另：消息「编辑」保存后界面毫无变化的根因是 `web_agent.py` 推送 `message_updated` 时 `text` 参数重复传入（TypeError，请求 500，聊天记录也未更新）；已修并加回归测试。收藏：聊天页顶部栏加了星标按钮「只看收藏」，按下后只显示已收藏的消息，再按恢复（位置是临时的，lan 之后整体改 UI）。下一个工单号 220。
+
+## 工单 218：Peter 能看懂小红书帖子的图片
+
+- `ticket/218-xiaohongshu-images`：`xiaohongshu` detail 额外取帖子前 3 张图（仅 xhscdn/xiaohongshu 域名，不带 cookie、不跟跳转、有大小上限），经现有桌面图片的临时图片消息送给模型；`observation_image_message` 支持多图和 webp；结果带 `image_total`/`images_shown`；超限或模型拒图时降级为文字并明说没看到。新增 3 项测试；Windows 实机和真实 CDN 下载未验证；费用约 +¥0.05–0.2/天（粗估）。验收见 `docs/tickets/218-xiaohongshu-images.md`。下一个工单号 220（219 已分给搜索替换）。
 
 ## 工单 217：活动页「执行结果」框滚动不再弹回
 

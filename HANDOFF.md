@@ -4,6 +4,11 @@
 - 编辑根因：`hub.push('message_updated', '', ..., text=...)` 重复传 `text`，TypeError，保存时请求失败。已改为位置参数传正文，加测试 `test_edit_and_favorite_actions_update_row_and_publish_event`。
 - 收藏入口：顶部栏星标按钮切换 `#col.only-favorites`，纯 CSS 过滤，不改数据；位置是临时的。Windows 体验未验证：右键一条消息收藏，点顶部星标只剩收藏消息，再点恢复。
 
+- 改动在 `xiaohongshu_tools.py`（`image_urls`/`fetch_images`/`XhsImageResult`）、`windows_observer.observation_image_message`（多图）、`veil_agent.py`（图片被省略/被拒时对 xiaohongshu 的提示）。
+- 未验证：真实 CDN 下载（上游字段 `note.imageList[].urlDefault` 已对照 v2.5.5 types.go）；`imageView2/.../format/jpg` 参数是否被 CDN 接受，不行会回退原 URL（可能是 webp，已支持）。
+- 下一步：Lan 更新后让 Peter 看一条图片帖；以他对图片内容的描述为准；`data/peter/tools.jsonl` 只能看到 detail 成功，核对 costs。
+- 下一个工单号 220（219 已分给搜索替换）。
+
 ## 工单 217 交接（2026-11-05）
 
 - 根因：活动页定时刷新时 `updateActivityRow` 对非乌有乡结果每次都 `replaceChildren` + 重写 `textContent`，重置 `pre` 的滚动位置。已改为仅在内容变化时更新并保留 scrollTop。
