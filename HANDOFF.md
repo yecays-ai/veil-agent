@@ -1,6 +1,6 @@
 ## 工单 218 交接（2026-11-05）
 
-- 复制改走 IPC `chat:copy-text` → Electron `clipboard.writeText`，只改桌面前端三个文件，无后端和费用影响。
+- 复制改走 IPC `chat:copy-text` → Electron `clipboard.writeText`，桌面前端改动，无费用影响。Windows 体验未验证：右键/长按消息选 Copy，粘贴到记事本看到原文；编辑：改字保存后气泡立刻更新。
 - 编辑根因：`hub.push('message_updated', '', ..., text=...)` 重复传 `text`，TypeError，保存时请求失败。已改为位置参数传正文，加测试 `test_edit_and_favorite_actions_update_row_and_publish_event`。
 - 未解决：收藏只有星标，没有收藏列表，待 lan 决定是否加「只看收藏」。
 
