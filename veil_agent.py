@@ -3948,14 +3948,23 @@ class Chat:
                 if fake_sticker and fake_sticker_retries < 2 and step + 1 < max_steps:
                     # Ticket 224: a plain reply that only looks like a sticker. The window cannot draw it,
                     # so tell Peter and let him choose again; nothing is saved or sent for him.
-                    fake_sticker_retries += 1
-                    loop_messages.append({'role': 'assistant', 'content': content})
-                    loop_messages.append({'role': 'system', 'content': (
-                        'Typing "[表情包：' + fake_sticker[0] + '/' + fake_sticker[1] + ']" in a reply does not send a '
-                        'sticker, and there is no such sticker in the library. Nothing was shown to Lan. To send a '
-                        'sticker, look at the packs with the stickers tool and use send_message with its sticker '
-                        'field; or answer with words only.')})
-                    continue
+                    # This is one more model request, so it is reserved like any other step. If it cannot be
+                    # reserved (budget), or the retries are used up, the reply is shown as written.
+                    try:
+                        next_cfg = (self.cfg if step + 1 == max_steps - 1 else replace(
+                            self.cfg, max_output_tokens=self.cfg.tools.get('max_output_tokens', self.cfg.max_output_tokens)))
+                        next_reservation = self.budget.reserve(next_cfg)[0]
+                    except BudgetExceeded:
+                        next_reservation = None
+                    if next_reservation:
+                        fake_sticker_retries += 1
+                        loop_messages.append({'role': 'assistant', 'content': content})
+                        loop_messages.append({'role': 'system', 'content': (
+                            'Typing "[表情包：' + fake_sticker[0] + '/' + fake_sticker[1] + ']" in a reply does not send '
+                            'a sticker, and there is no such sticker in the library. Nothing was shown to Lan. To send '
+                            'a sticker, look at the packs with the stickers tool and use send_message with its sticker '
+                            'field; or answer with words only.')})
+                        continue
                 if (not autonomy and not content.strip() and not mixed_sent_messages
                         and not self.reply_later_called and not self.silent_chosen):
                     # Ticket 153: silence is only Peter's when he calls stay_silent. An empty

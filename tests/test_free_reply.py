@@ -85,7 +85,7 @@ class FreeReplyTests(unittest.TestCase):
         library = StickerLibrary(self.root / 'stickers')
         library.add_bytes('peter', 'chair', b'\x89PNG\r\n\x1a\n' + b'0' * 20, create_pack=True)
         model = Mock(side_effect=[
-            (SimpleNamespace(content='[表情包：peter/被抓包]\n\nhamster eyes', tool_calls=[]), 10, 2, 0),
+            (SimpleNamespace(content='[表情包：peter/ghost]\n\nhamster eyes', tool_calls=[]), 10, 2, 0),
             (SimpleNamespace(content='hamster eyes', tool_calls=[]), 10, 2, 0)])
         chat = Chat(self.cfg, self.store, Budget(self.store), model, output=[].append)
         chat.sticker_library = library
@@ -95,6 +95,12 @@ class FreeReplyTests(unittest.TestCase):
         self.assertTrue(any('no such sticker' in str(m.get('content')) for m in sent_back))
         self.assertEqual([r['content'] for r in self.store.read('test/chat.jsonl') if r['role'] == 'assistant'],
                          ['hamster eyes'])
+        # after two retries the reply is shown as written, not dropped
+        fake = (SimpleNamespace(content='[表情包：peter/ghost] still', tool_calls=[]), 10, 2, 0)
+        chat3 = Chat(self.cfg, self.store, Budget(self.store), Mock(side_effect=[fake, fake, fake]), output=[].append)
+        chat3.sticker_library = library
+        self.assertEqual(chat3.send('third'), '[表情包：peter/ghost] still')
+        self.assertEqual(chat3.model.call_count, 3)
         # a sticker that exists is left alone
         chat2 = Chat(self.cfg, self.store, Budget(self.store),
                      Mock(return_value=(SimpleNamespace(content='[表情包：peter/chair]', tool_calls=[]), 10, 2, 0)),
