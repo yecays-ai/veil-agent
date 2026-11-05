@@ -496,7 +496,7 @@ function showMessageActions(event,node){
       if(action==='delete'){closeMessageActions();showMessageDeleteConfirm(node);return}
       if(action==='copy'){
         const content=node.dataset.messageText||'';closeMessageActions();
-        navigator.clipboard.writeText(content).then(()=>notify('消息已复制。')).catch(()=>notify('无法复制这条消息。','error'));
+        (window.veilDesktop?.copyText?window.veilDesktop.copyText(content):navigator.clipboard.writeText(content)).then(()=>notify('消息已复制。')).catch(()=>notify('无法复制这条消息。','error'));
         return;
       }
       if(action==='transcribe'){

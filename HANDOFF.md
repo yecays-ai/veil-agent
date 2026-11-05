@@ -1,3 +1,8 @@
+## 工单 218 交接（2026-11-05）
+
+- 复制改走 IPC `chat:copy-text` → Electron `clipboard.writeText`，只改桌面前端三个文件，无后端和费用影响。
+- 未解决：lan 反馈消息「编辑」保存后原样、「收藏」没有查看入口。后端 edit/favorite 逻辑和前端更新事件读代码都正常，但自主醒来或回复中（busy/autonomy_busy）会拒绝编辑并只弹一个错误提示，怀疑是这个；收藏目前只加星标，没有收藏列表。待 lan 确认弹出的提示文字。
+
 ## 工单 217 交接（2026-11-05）
 
 - 根因：活动页定时刷新时 `updateActivityRow` 对非乌有乡结果每次都 `replaceChildren` + 重写 `textContent`，重置 `pre` 的滚动位置。已改为仅在内容变化时更新并保留 scrollTop。
