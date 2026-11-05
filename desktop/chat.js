@@ -878,12 +878,26 @@ function updateActivityRow(row,item){
   const resultDetail=String(item.detail||state.text);
   const friendly=window.VeilNowhereActivity?.parse(item,toolActivity);
   if(friendly){
-    const rawWasOpen=row.values.resultContainer.querySelector('.nowhere-raw-result')?.open===true;
-    const rendered=renderNowhereResult(item,friendly);
-    const raw=rendered.querySelector('.nowhere-raw-result');if(raw)raw.open=rawWasOpen;
-    row.values.resultContainer.replaceChildren(rendered);
+    // 内容没变就复用现有 DOM，避免刷新时重建 <pre> 把滚动位置弹回顶部
+    const friendlyKey=String(item.detail||'')+'\u0000'+JSON.stringify(friendly);
+    if(row.friendlyKey!==friendlyKey||!row.values.resultContainer.querySelector('.nowhere-readable')){
+      const oldRaw=row.values.resultContainer.querySelector('.nowhere-raw-result');
+      const rawWasOpen=oldRaw?.open===true,rawTop=oldRaw?.querySelector('pre')?.scrollTop||0;
+      const rendered=renderNowhereResult(item,friendly);
+      const raw=rendered.querySelector('.nowhere-raw-result');if(raw)raw.open=rawWasOpen;
+      row.values.resultContainer.replaceChildren(rendered);
+      const newPre=raw?.querySelector('pre');if(newPre&&rawTop)newPre.scrollTop=rawTop;
+      row.friendlyKey=friendlyKey;
+    }
   }
-  else{row.values.resultContainer.replaceChildren(row.values.result);row.values.result.textContent=resultDetail+(resultNote&& !resultDetail.includes('结果已截断')?resultNote:'')}
+  else{
+    row.friendlyKey=null;
+    // 刷新时内容没变就不要动 DOM：重新挂载或重写 textContent 会把「执行结果」框的滚动位置弹回顶部
+    const container=row.values.resultContainer,pre=row.values.result;
+    if(container.firstElementChild!==pre||container.childNodes.length!==1)container.replaceChildren(pre);
+    const nextText=resultDetail+(resultNote&& !resultDetail.includes('结果已截断')?resultNote:'');
+    if(pre.textContent!==nextText){const top=pre.scrollTop;pre.textContent=nextText;pre.scrollTop=top}
+  }
 }
 function renderActivityTimeline(){
   const all=combinedActivity();
