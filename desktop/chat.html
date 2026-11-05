@@ -140,11 +140,22 @@
     <div id="selection-bar" class="selection-bar" hidden><span id="selection-count">已选 0 条</span><div><button id="selection-all" type="button">全选</button><button id="selection-delete" type="button" class="danger">删除</button><button id="selection-cancel" type="button">取消</button></div></div>
     <div id="quote-bar" class="chat-quote-bar" hidden><div class="chat-quote-preview"><strong id="quote-author"></strong><span id="quote-text"></span></div><button id="quote-cancel" type="button" aria-label="取消引用">×</button></div>
     <div id="image-preview" class="image-preview" hidden></div>
+    <section id="sticker-panel" class="sticker-panel" hidden aria-label="表情包">
+      <div class="sticker-head"><div id="sticker-packs" class="sticker-packs"></div><button id="sticker-manage" type="button">管理</button><button id="sticker-close" type="button" aria-label="关闭">×</button></div>
+      <div id="sticker-grid" class="sticker-grid"></div>
+      <div id="sticker-tools" class="sticker-tools" hidden>
+        <div class="sticker-row"><input id="sticker-new-pack" maxlength="30" placeholder="新图集名字，比如 丑猫"><button id="sticker-add-pack" type="button">新建图集</button></div>
+        <div class="sticker-row"><input id="sticker-pack-name" maxlength="30" placeholder="当前图集改名"><button id="sticker-rename-pack" type="button">改名</button><button id="sticker-delete-pack" type="button" class="danger">删除图集</button></div>
+        <textarea id="sticker-links" rows="4" placeholder="粘贴表情包链接，每行「名字：链接」；没写名字就用文件名。名字最多 10 个字。"></textarea>
+        <div class="sticker-row"><button id="sticker-add-links" type="button">添加到当前图集</button><input id="sticker-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden><button id="sticker-upload" type="button">上传本地图片</button><span id="sticker-status" role="status"></span></div>
+      </div>
+    </section>
     <div class="composer" id="composer">
       <div class="voice-tools">
         <button id="speech-toggle" type="button" aria-label="开始语音识别" aria-pressed="false" title="语音转文字">T</button>
         <input id="image-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
         <button id="image-button" type="button" aria-label="添加图片" title="添加图片"><span data-lucide="image-plus"></span></button>
+        <button id="sticker-button" type="button" aria-label="表情包" title="表情包" aria-expanded="false"><span data-lucide="smile"></span></button>
       </div>
       <span id="speech-status" role="status" aria-live="polite">点击麦克风开始录音；再次点击后用 SenseVoice 转成文字</span>
       <div class="chat-input-shell"><textarea id="box" rows="1" placeholder="和 Peter 说点什么…"></textarea><button id="voice-hold" type="button" aria-label="点击开始录音" aria-pressed="false" title="点击开始录音"><span data-lucide="mic"></span></button></div>

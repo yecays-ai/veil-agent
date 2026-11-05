@@ -1263,6 +1263,24 @@ class FilesystemTools:
             raise ValueError('Lab file could not be read safely') from exc
 
     @capability_transaction
+    def announce_stickers(self):
+        """Ticket 222: one-time notice that the sticker library exists."""
+        if not self.enabled or not getattr(self, 'cap_path', None):
+            return None
+        try:
+            return self._announce_once(
+                'stickers_announced',
+                'Capability update: you and lan now share a sticker library (表情包). A sticker is a small picture '
+                'sent in chat, like a meme or reaction image, not words. In chat it appears as the text '
+                '[表情包：pack/name]; when lan sends one you see that text and know it is a sticker, and the name says '
+                'what it shows. Send one with send_message sticker: "pack/name". The stickers tool lists a pack, lets '
+                'you look at a picture only when you want to, and saves stickers you draw yourself (SVG)'
+                + (' or pictures you made in your Lab' if self.lab is not None else '')
+                + '. You may look or not; you are never required to.')
+        except Exception:
+            return False
+
+    @capability_transaction
     def announce_file_attachments(self):
         if not self.enabled or self.lab is None or not self.cap_path:
             return None
