@@ -2128,11 +2128,28 @@ class Chat:
             import stickers as sticker_module
             if isinstance(args.get('text'), str) and args['text'].strip():
                 # Ticket 223: a sticker is always its own bubble. Words sent with it go out as the next message.
-                first = self.send_message(json.dumps({'sticker': sticker_ref}, ensure_ascii=False), request_id,
-                                          tool_call_id)
+                # Check everything for both bubbles first so a refusal never leaves only the sticker sent.
+                rest = {k: v for k, v in args.items() if k != 'sticker'}
+                if (not set(rest).issubset(allowed) or 'text' not in rest or not isinstance(rest['text'], str)
+                        or ('file' in rest and (not isinstance(rest['file'], str) or not rest['file'].strip()
+                                                or len(rest['file']) > 240))
+                        or ('done' in rest and type(rest['done']) is not bool)
+                        or any(name in rest and type(rest[name]) is not bool for name in self.away_channels)):
+                    return 'send_message arguments are invalid; nothing was sent.', '被拒绝', 'send_message'
+                if self.autonomy_mode:
+                    run_id = self.autonomy_run_id
+                    if sum(1 for row in self.store.read(self.path) if row.get('autonomy_run_id') == run_id) >= 2:
+                        return ('An autonomous wake may send at most three messages. A sticker with words is two '
+                                'messages, so nothing was sent.'), '被拒绝', 'send_message'
+                elif self.send_message_count >= 9:
+                    return ('You may send at most 10 messages since Lan last wrote. A sticker with words is two '
+                            'messages, so nothing was sent; its tool call remains in the conversation context.',
+                            '被拒绝', 'send_message')
+                sticker_args = {'sticker': sticker_ref,
+                                **{name: True for name in self.away_channels if rest.get(name) is True}}
+                first = self.send_message(json.dumps(sticker_args, ensure_ascii=False), request_id, tool_call_id)
                 if first[1] in ('被拒绝', '出错'):
                     return first
-                rest = {k: v for k, v in args.items() if k != 'sticker'}
                 return self.send_message(json.dumps(rest, ensure_ascii=False), request_id,
                                          f'{tool_call_id}:text' if tool_call_id else tool_call_id)
             args = {**args, 'text': sticker_module.marker(found['pack'], found['name'])}
