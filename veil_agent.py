@@ -2145,9 +2145,10 @@ class Chat:
                     return ('You may send at most 10 messages since Lan last wrote. A sticker with words is two '
                             'messages, so nothing was sent; its tool call remains in the conversation context.',
                             '被拒绝', 'send_message')
-                sticker_args = {'sticker': sticker_ref,
-                                **{name: True for name in self.away_channels if rest.get(name) is True}}
-                first = self.send_message(json.dumps(sticker_args, ensure_ascii=False), request_id, tool_call_id)
+                # Away channels (QQ/email) carry plain text only and cannot draw the sticker marker, so the
+                # channel flags stay on the text message.
+                first = self.send_message(json.dumps({'sticker': sticker_ref}, ensure_ascii=False), request_id,
+                                          tool_call_id)
                 if first[1] in ('被拒绝', '出错'):
                     return first
                 return self.send_message(json.dumps(rest, ensure_ascii=False), request_id,
