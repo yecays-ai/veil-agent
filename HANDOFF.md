@@ -2,7 +2,7 @@
 
 - 复制改走 IPC `chat:copy-text` → Electron `clipboard.writeText`，桌面前端改动，无费用影响。Windows 体验未验证：右键/长按消息选 Copy，粘贴到记事本看到原文；编辑：改字保存后气泡立刻更新。
 - 编辑根因：`hub.push('message_updated', '', ..., text=...)` 重复传 `text`，TypeError，保存时请求失败。已改为位置参数传正文，加测试 `test_edit_and_favorite_actions_update_row_and_publish_event`。
-- 未解决：收藏只有星标，没有收藏列表，待 lan 决定是否加「只看收藏」。
+- 收藏入口：顶部栏星标按钮切换 `#col.only-favorites`，纯 CSS 过滤，不改数据；位置是临时的。Windows 体验未验证：右键一条消息收藏，点顶部星标只剩收藏消息，再点恢复。
 
 ## 工单 217 交接（2026-11-05）
 

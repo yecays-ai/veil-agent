@@ -2,7 +2,7 @@
 
 ## 工单 218：消息菜单「复制」「编辑」修复
 
-- `ticket/218-message-copy`：聊天消息菜单的复制原先用页面里的 `navigator.clipboard`，桌面窗口的权限处理只放行麦克风，复制可能被拒绝而没写进剪贴板；改为 `veilDesktop.copyText` 经主进程 `clipboard.writeText` 写入（仅聊天窗口可调用，上限 20 万字符），没有桌面桥时仍回退原写法。Windows 体验未验证。验收：长按/右键一条消息选 Copy，粘贴到记事本能看到原文。另：消息「编辑」保存后界面毫无变化的根因是 `web_agent.py` 推送 `message_updated` 时 `text` 参数重复传入（TypeError，请求 500，聊天记录也未更新）；已修并加回归测试。收藏仍只有星标、没有收藏列表（待 lan 决定）。下一个工单号 219。
+- `ticket/218-message-copy`：聊天消息菜单的复制原先用页面里的 `navigator.clipboard`，桌面窗口的权限处理只放行麦克风，复制可能被拒绝而没写进剪贴板；改为 `veilDesktop.copyText` 经主进程 `clipboard.writeText` 写入（仅聊天窗口可调用，上限 20 万字符），没有桌面桥时仍回退原写法。Windows 体验未验证。验收：长按/右键一条消息选 Copy，粘贴到记事本能看到原文。另：消息「编辑」保存后界面毫无变化的根因是 `web_agent.py` 推送 `message_updated` 时 `text` 参数重复传入（TypeError，请求 500，聊天记录也未更新）；已修并加回归测试。收藏：聊天页顶部栏加了星标按钮「只看收藏」，按下后只显示已收藏的消息，再按恢复（位置是临时的，lan 之后整体改 UI）。下一个工单号 219。
 
 ## 工单 217：活动页「执行结果」框滚动不再弹回
 

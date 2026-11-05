@@ -465,6 +465,14 @@ function showMessageEditDialog(node){
   dialog.addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();close();return}if(event.key==='Tab'){const targets=[input,cancel,save],index=targets.indexOf(document.activeElement);if(event.shiftKey&&index===0){event.preventDefault();save.focus()}else if(!event.shiftKey&&index===2){event.preventDefault();input.focus()}}});
   buttons.append(cancel,save);dialog.append(title,input,buttons);layer.append(backdrop,dialog);document.body.appendChild(layer);input.focus();input.setSelectionRange(input.value.length,input.value.length);
 }
+{
+  const favoritesButton=$('favorites-filter');
+  if(favoritesButton)favoritesButton.onclick=()=>{
+    const on=!col.classList.contains('only-favorites');
+    col.classList.toggle('only-favorites',on);favoritesButton.setAttribute('aria-pressed',String(on));
+    if(!on)log.scrollTop=log.scrollHeight;
+  };
+}
 function showMessageActions(event,node){
   event.preventDefault();
   if(busy||sending||stopping||stopped||node.classList.contains('recalled')||!node.dataset.messageId)return;
