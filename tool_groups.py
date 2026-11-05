@@ -20,7 +20,7 @@ GROUP_SUMMARIES = {
     'web': 'web search, reading pages, browsing',
     'github': 'reading the GitHub project',
     'social': 'Xiaohongshu, the Galatea garden forum and drift bottle, Nowhere travel',
-    'desktop_control': 'launching apps, clicking, drawing, managing windows',
+    'desktop_control': 'launching apps, clicking, drawing, managing windows, arranging desktop icons',
 }
 TOOL_GROUPS = tuple(GROUP_SUMMARIES)
 # A group stays open for the request that opened it and this many later chat requests; an
