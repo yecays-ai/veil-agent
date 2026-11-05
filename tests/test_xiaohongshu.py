@@ -165,6 +165,10 @@ class XiaohongshuTests(unittest.TestCase):
         with patch('xiaohongshu_tools.urllib.request.build_opener', return_value=Bad()):
             self.assertEqual(xiaohongshu_tools.fetch_images(['https://sns.xhscdn.com/a'], threading.Event()), [])
 
+    def test_failed_picture_ends_the_list_so_order_stays_true(self):
+        with patch('xiaohongshu_tools._download_image', side_effect=['u1', None, 'u3']):
+            self.assertEqual(xiaohongshu_tools.fetch_images(['a', 'b', 'c'], threading.Event()), ['u1'])
+
     def test_multiple_note_pictures_become_one_transient_image_message(self):
         import base64
         uri = 'data:image/jpeg;base64,' + base64.b64encode(b'\xff\xd8\xff0000').decode()

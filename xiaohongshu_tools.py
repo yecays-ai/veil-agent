@@ -18,7 +18,6 @@ import time
 from contextlib import contextmanager
 from datetime import datetime
 import base64
-import http.client
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -349,9 +348,10 @@ def fetch_images(urls, cancelled, deadline=None):
             uri = _download_image(url, cancelled, deadline)
         except Exception:
             uri = None
-        if uri and total + len(uri) <= MAX_IMAGES_TOTAL:
-            images.append(uri)
-            total += len(uri)
+        if not uri or total + len(uri) > MAX_IMAGES_TOTAL:
+            break  # keep the pictures a strict prefix, so "first pictures, in order" stays true
+        images.append(uri)
+        total += len(uri)
     return images
 
 
