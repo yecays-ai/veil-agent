@@ -256,7 +256,8 @@ def send_message_schema(voice=False, channels=(), files=False, stickers=False):
         schema['function']['parameters']['properties']['sticker'] = {
             'type': 'string', 'maxLength': 80,
             'description': 'Optional sticker to send as this message, written "pack/name" (see the stickers tool). '
-                           'With a sticker, text may be left out.'}
+                           'A sticker always shows as its own bubble; any text sent with it appears as a '
+                           'separate bubble right after. You may reply with just a sticker.'}
         schema['function']['parameters']['required'] = []
     for name in channels:
         schema['function']['parameters']['properties'][name] = {
@@ -2125,9 +2126,34 @@ class Chat:
                 return ('No sticker "' + str(sticker_ref)[:80] + '"; nothing was sent. Use the stickers tool to list a '
                         'pack and copy "pack/name" exactly.'), '被拒绝', 'send_message'
             import stickers as sticker_module
-            caption = args.get('text') if isinstance(args.get('text'), str) else ''
-            args = {**args, 'text': sticker_module.marker(found['pack'], found['name'])
-                    + (('\n' + caption.strip()) if caption.strip() else '')}
+            if isinstance(args.get('text'), str) and args['text'].strip():
+                # Ticket 223: a sticker is always its own bubble. Words sent with it go out as the next message.
+                # Check everything for both bubbles first so a refusal never leaves only the sticker sent.
+                rest = {k: v for k, v in args.items() if k != 'sticker'}
+                if (not set(rest).issubset(allowed) or 'text' not in rest or not isinstance(rest['text'], str)
+                        or ('file' in rest and (not isinstance(rest['file'], str) or not rest['file'].strip()
+                                                or len(rest['file']) > 240))
+                        or ('done' in rest and type(rest['done']) is not bool)
+                        or any(name in rest and type(rest[name]) is not bool for name in self.away_channels)):
+                    return 'send_message arguments are invalid; nothing was sent.', '被拒绝', 'send_message'
+                if self.autonomy_mode:
+                    run_id = self.autonomy_run_id
+                    if sum(1 for row in self.store.read(self.path) if row.get('autonomy_run_id') == run_id) >= 2:
+                        return ('An autonomous wake may send at most three messages. A sticker with words is two '
+                                'messages, so nothing was sent.'), '被拒绝', 'send_message'
+                elif self.send_message_count >= 9:
+                    return ('You may send at most 10 messages since Lan last wrote. A sticker with words is two '
+                            'messages, so nothing was sent; its tool call remains in the conversation context.',
+                            '被拒绝', 'send_message')
+                # Away channels (QQ/email) carry plain text only and cannot draw the sticker marker, so the
+                # channel flags stay on the text message.
+                first = self.send_message(json.dumps({'sticker': sticker_ref}, ensure_ascii=False), request_id,
+                                          tool_call_id)
+                if first[1] in ('被拒绝', '出错'):
+                    return first
+                return self.send_message(json.dumps(rest, ensure_ascii=False), request_id,
+                                         f'{tool_call_id}:text' if tool_call_id else tool_call_id)
+            args = {**args, 'text': sticker_module.marker(found['pack'], found['name'])}
             del args['sticker']
             arguments = json.dumps(args, ensure_ascii=False)
         if (not isinstance(args, dict) or not set(args).issubset(allowed) or 'text' not in args or

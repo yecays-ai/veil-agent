@@ -1,3 +1,9 @@
+## 工单 223 交接（2026-11-05）
+
+- 改动：`desktop/chat.js`（`stickerBubble`）、`desktop/chat.css`（`.sticker-msg` 无框）、`veil_agent.py`（`sticker` 带 `text` 时自动拆成两条）、`tests/test_chat.py`。
+- 下一步：lan 更新后看表情包是否无框单独一条，核对 Peter 带文字发表情包时 chat.jsonl 里是两行（表情包、文字）。
+- 未验证：Windows 真机界面。
+
 ## 工单 222 交接（2026-11-05）
 
 - 改动：`stickers.py`（库、解析、下载、工具）、`veil_agent.py`（`stickers` 工具分发、`send_message` 的 `sticker` 参数）、`web_agent.py`（`/api/stickers`、`/api/stickers/upload`、`/sticker/<file>`）、`tools_agent.py`（一次性通知）、`desktop/`（`main.cjs` 白名单和 `chat:sticker-url`、面板 HTML/JS/CSS）、`windows_observer.py`（图片消息放行 gif）。`stickers` 工具没放进可展开的组，始终可用。
