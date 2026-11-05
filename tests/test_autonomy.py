@@ -180,6 +180,66 @@ daily_budget_cny = "2"
         self.assertNotIn('12', controller.rows[-1]['result_reason'])
         self.assertEqual(MAX_RUNTIME_SECONDS, 15 * 60)
 
+    def test_looking_back_at_own_state_does_not_use_the_twenty_steps(self):
+        # Ticket 215: autonomy_history is a read-only look at his own state; six of them are free.
+        self.activity.set(True)
+        cfg = replace(self.cfg, tools={'enabled': True, 'max_steps': 20, 'max_output_tokens': 50})
+        responses = []
+        for turn in range(3):
+            calls = [SimpleNamespace(id=f'look-{turn}-{index}', function=SimpleNamespace(
+                name='autonomy_history', arguments='{}')) for index in range(2)]
+            responses.append((SimpleNamespace(tool_calls=calls, content=None,
+                                              model_dump=lambda **_: {'role': 'assistant', 'tool_calls': []}), 10, 5, 0))
+        for turn in range(10):
+            calls = [SimpleNamespace(id=f'read-{turn}-{index}', function=SimpleNamespace(
+                name='read_text_file', arguments=json.dumps({'path': 'lab/note.md'})))
+                for index in range(2)]
+            responses.append((SimpleNamespace(tool_calls=calls, content=None,
+                                              model_dump=lambda **_: {'role': 'assistant', 'tool_calls': []}), 10, 5, 0))
+        responses.append((SimpleNamespace(tool_calls=[], content=(
+            'Decision: stop\nReason: limit\nFocus: fixture\nNext step: next wake')), 10, 5, 0))
+        model = Mock(side_effect=responses)
+        tools = SimpleNamespace(
+            tools=[SimpleNamespace(name='read_text_file', description='Read.', inputSchema={})],
+            capability_event=None, capability_event_model=None,
+            description='Authorized tools are available. ',
+            preview_summary=Mock(return_value='lab/note.md'),
+            invoke=Mock(return_value=('ok', '成功', 'lab/note.md')))
+        chat = Chat(cfg, self.store, self.budget, model, tools=tools, output=lambda *_: None)
+        controller = AutonomyController(chat, self.hub)
+
+        controller.run()
+
+        self.assertEqual(tools.invoke.call_count, 20)
+        done = [row['tool'] for row in self.store.read('test/tools.jsonl')
+                if row.get('state') == '成功']
+        self.assertEqual(done.count('autonomy_history'), 6)
+        self.assertEqual(controller.rows[-1]['result'], '搁置')
+
+    def test_free_review_calls_are_only_read_only_looks(self):
+        from veil_agent import is_free_review_call
+        self.assertTrue(is_free_review_call('autonomy_history', '{}'))
+        self.assertTrue(is_free_review_call('long_task_status', '{}'))
+        self.assertTrue(is_free_review_call('life_record', '{"action":"list"}'))
+        self.assertTrue(is_free_review_call('thought', '{"action":"list"}'))
+        self.assertFalse(is_free_review_call('life_record', '{"action":"create"}'))
+        self.assertFalse(is_free_review_call('thought', '{"action":"note","text":"x"}'))
+        self.assertFalse(is_free_review_call('life_record', 'not json'))
+        self.assertFalse(is_free_review_call('read_text_file', '{}'))
+        self.assertFalse(is_free_review_call('send_message', '{}'))
+
+    def test_untouched_long_task_counts_as_stale_but_stays_saved(self):
+        _, state, _ = self.chat.long_tasks.invoke('long_task_update', {
+            'action': 'create', 'title': 'Old hunt', 'goal': 'Finished long ago.'})
+        self.assertEqual(state, '成功')
+        task = self.chat.long_tasks.read()
+        self.assertIn(task['task_id'], self.controller._context())
+        later = datetime.now().astimezone() + timedelta(days=4)
+        self.assertTrue(self.controller._task_is_stale(task, later))
+        self.assertFalse(self.controller._task_is_stale(task, datetime.now().astimezone()))
+        self.assertFalse(self.controller._task_is_stale({**task, 'pending_action': {'operation_id': 'x'}}, later))
+        self.assertTrue(self.chat.long_tasks.read())
+
     def test_autonomous_message_gate_and_recovery_never_duplicate_a_saved_call(self):
         chat, model = self.autonomous_message_chat([])
         run_id = '2026-10-21T12:00:00+08:00'

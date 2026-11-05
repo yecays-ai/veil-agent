@@ -280,6 +280,27 @@ RECALL_MESSAGE = {'type': 'function', 'function': {
         'required': ['message_id'], 'additionalProperties': False},
 }}
 
+# Ticket 215: during an autonomous wake, looking back at his own state (activity history, long-task
+# status, life records and thoughts in list form) does not use up the tool steps meant for doing things.
+# These looks are capped separately, so a wake can never run unbounded.
+FREE_REVIEW_TOOLS = frozenset({'autonomy_history', 'capability_history', 'long_task_status'})
+FREE_REVIEW_LIST_TOOLS = frozenset({'life_record', 'thought'})
+FREE_REVIEW_CALLS = 6
+
+
+def is_free_review_call(name, arguments):
+    """True for a read-only look at Peter's own state that does not count toward the wake's step limit."""
+    if name in FREE_REVIEW_TOOLS:
+        return True
+    if name in FREE_REVIEW_LIST_TOOLS:
+        try:
+            parsed = json.loads(arguments or '{}')
+        except (ValueError, TypeError):
+            return False
+        return isinstance(parsed, dict) and parsed.get('action') == 'list'
+    return False
+
+
 CAPABILITY_HISTORY = {'type': 'function', 'function': {
     'name': 'capability_history',
     'description': ('Look up the dated record of when your abilities were added or changed. '
@@ -3601,8 +3622,10 @@ class Chat:
         autonomy_tool_limit = min(configured_steps, self.glance_tool_limit) if self.glance_mode else configured_steps
         # Keep one final model turn after the last autonomous tool so Peter can
         # leave the four-line handoff without sacrificing a usable tool step.
+        free_review_calls = 0
         max_steps = (1 if self.codex_watch_mode else
-                     configured_steps + 1 if autonomy else configured_steps)
+                     configured_steps + 1 + (0 if self.glance_mode else FREE_REVIEW_CALLS) if autonomy
+                     else configured_steps)
         def end_turn_here():
             # Ticket 138: Peter said done, or Lan pressed stop. The messages he already sent are the reply.
             if mixed_sent_messages:
@@ -3984,7 +4007,12 @@ class Chat:
                         self.budget.settle(next_reservation, next_cfg, 0, 0, 0)
                         break
                     if autonomy:
-                        autonomy_tool_steps += 1
+                        if (not self.glance_mode and free_review_calls < FREE_REVIEW_CALLS
+                                and is_free_review_call(self._resolve_tool_name(call.function.name, offered),
+                                                        call.function.arguments)):
+                            free_review_calls += 1
+                        else:
+                            autonomy_tool_steps += 1
                     call_id = f'{request_id}:{step}:{getattr(call, "id", None) or call_index}'
                     args = {}
                     try:

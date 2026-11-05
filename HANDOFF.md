@@ -1,3 +1,8 @@
+## 工单 215 交接（2026-11-05）
+
+- `veil_agent.py`：`FREE_REVIEW_TOOLS`/`FREE_REVIEW_LIST_TOOLS`/`FREE_REVIEW_CALLS=6` 和 `is_free_review_call`；自主醒来（非瞄一眼）时这些调用不加 `autonomy_tool_steps`，并把模型轮数上限放大 6，防止无界。`autonomy.py`：`STALE_TASK_DAYS=3` 与 `_task_is_stale`；醒来文字加一句中性提示。
+- 注意：醒来内容本来就已含长期任务、生活记录、实验室、想法、前几次活动，他是自己重复看；本单不改这些预载，只去掉旧任务并放宽步数。Windows 体验未验证。下一个工单号 216（按需展开工具、工具说明瘦身，等 215 上线后看 context-log 再定）。
+
 ## 工单 214 交接（2026-11-04）
 
 - 新增 `persona_versions.py`（`snapshot`/`list_versions`），`veil_agent.load_character` 读到非空人设后调用一次；重复内容不存，保存失败只在控制台打印一行提示、跳过备份（先写 `.partial` 再改名，写一半不会留下半份版本）。副本在 `persona/versions/peter.<UTC>.md`（已 gitignore）。`restore-persona.ps1` 用 SHA256 判断当前人设是否已在副本里，不在就先另存；用临时文件 + `File.Replace(..., [NullString]::Value)` 换文件（PowerShell 不能传 `$null`）。人设内容、聊天历史、记忆都不动。注意：改完人设必须重开 Peter 才生效；只有重开时才会存新版本。
