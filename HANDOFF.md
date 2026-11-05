@@ -1,3 +1,9 @@
+## 工单 224 交接（2026-11-05）
+
+- 改动：`stickers.py`（`unknown_marker`）、`veil_agent.py`（工具循环里的假表情包拦截，计数 `fake_sticker_retries`）、`tests/test_free_reply.py`。
+- 下一步：lan 更新后观察不再出现只剩一行标签字的表情包消息；`chat.jsonl`/`tools.jsonl` 里看他是否改用 `stickers`。
+- 未验证：Windows 真机；便宜模型是否因提醒学会先看图集。
+
 ## 工单 223 交接（2026-11-05）
 
 - 改动：`desktop/chat.js`（`stickerBubble`）、`desktop/chat.css`（`.sticker-msg` 无框）、`veil_agent.py`（`sticker` 带 `text` 时自动拆成两条）、`tests/test_chat.py`。

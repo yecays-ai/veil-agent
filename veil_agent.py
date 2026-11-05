@@ -3511,6 +3511,7 @@ class Chat:
         self._tick_expanded_groups(autonomy)
         output_recovered = False
         empty_retries = 0
+        fake_sticker_retries = 0
         mixed_sent_messages = []
         work_since_message = False  # a non-message tool ran after the last sent message
         result_summaries = {}
@@ -3943,6 +3944,27 @@ class Chat:
                         'Lan pressed Request Reply. This one request must produce actual message text. '
                         'reply_later is unavailable; use send_message with non-empty text before ending.')})
                     continue
+                fake_sticker = self.sticker_library.unknown_marker(content) if self.sticker_library is not None else None
+                if fake_sticker and fake_sticker_retries < 2 and step + 1 < max_steps:
+                    # Ticket 224: a plain reply that only looks like a sticker. The window cannot draw it,
+                    # so tell Peter and let him choose again; nothing is saved or sent for him.
+                    # This is one more model request, so it is reserved like any other step. If it cannot be
+                    # reserved (budget), or the retries are used up, the reply is shown as written.
+                    try:
+                        next_cfg = (self.cfg if step + 1 == max_steps - 1 else replace(
+                            self.cfg, max_output_tokens=self.cfg.tools.get('max_output_tokens', self.cfg.max_output_tokens)))
+                        next_reservation = self.budget.reserve(next_cfg)[0]
+                    except BudgetExceeded:
+                        next_reservation = None
+                    if next_reservation:
+                        fake_sticker_retries += 1
+                        loop_messages.append({'role': 'assistant', 'content': content})
+                        loop_messages.append({'role': 'system', 'content': (
+                            'Typing "[表情包：' + fake_sticker[0] + '/' + fake_sticker[1] + ']" in a reply does not send '
+                            'a sticker, and there is no such sticker in the library. Nothing was shown to Lan. To send '
+                            'a sticker, look at the packs with the stickers tool and use send_message with its sticker '
+                            'field; or answer with words only.')})
+                        continue
                 if (not autonomy and not content.strip() and not mixed_sent_messages
                         and not self.reply_later_called and not self.silent_chosen):
                     # Ticket 153: silence is only Peter's when he calls stay_silent. An empty

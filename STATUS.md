@@ -1,3 +1,7 @@
+## 工单 224：普通回复里假装发表情包
+
+- `ticket/224-fake-sticker-guard`：Peter 在普通回复开头打出库里不存在的 `[表情包：图集/名字]`（那一轮没有任何工具调用）时，这条回复不保存、不显示，程序提醒他「打字不会发表情包、库里没有这张，请用 stickers 工具或只用文字」，让他再答一次（每轮最多 2 次，需预留预算）。`stickers.py`、`veil_agent.py`、`tests/test_free_reply.py`。全量测试与 main 相同的云端环境类失败一致；Windows 实机未验证；多出的请求只在他假装时发生。验收见 `docs/tickets/224-fake-sticker-guard.md`。下一个工单号 225。
+
 ## 工单 223：表情包单独一个气泡
 
 - `ticket/223-sticker-bubble`：聊天里表情包消息去掉气泡框，图片单独一条；`send_message` 带 `sticker` 又带 `text` 时程序自动拆成两条（先表情包后文字），工具说明写明可以只回一个表情包。`desktop/chat.js`、`chat.css`、`veil_agent.py`、`tests/test_chat.py`。全量测试与 main 相同的云端环境类失败一致；Windows 真机未验证。验收见 `docs/tickets/223-sticker-bubble.md`。下一个工单号 224。

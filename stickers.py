@@ -481,6 +481,13 @@ class StickerLibrary:
         match = MARKER_RE.match(text or '')
         return self.find(match.group(1), match.group(2)) if match else None
 
+    def unknown_marker(self, text):
+        """A '[表情包：图集/名字]' at the start of a message that is not in the library -> (pack, name), else None."""
+        match = MARKER_RE.match(text or '')
+        if not match or self.find(match.group(1), match.group(2)):
+            return None
+        return match.group(1), match.group(2)
+
     def read_file(self, file_name):
         if not isinstance(file_name, str) or not FILE_RE.fullmatch(file_name):
             return None
