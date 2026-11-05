@@ -228,7 +228,7 @@ daily_budget_cny = "2"
         self.assertFalse(is_free_review_call('read_text_file', '{}'))
         self.assertFalse(is_free_review_call('send_message', '{}'))
 
-    def test_untouched_long_task_is_not_in_the_wake_but_stays_saved(self):
+    def test_untouched_long_task_counts_as_stale_but_stays_saved(self):
         _, state, _ = self.chat.long_tasks.invoke('long_task_update', {
             'action': 'create', 'title': 'Old hunt', 'goal': 'Finished long ago.'})
         self.assertEqual(state, '成功')
@@ -237,6 +237,7 @@ daily_budget_cny = "2"
         later = datetime.now().astimezone() + timedelta(days=4)
         self.assertTrue(self.controller._task_is_stale(task, later))
         self.assertFalse(self.controller._task_is_stale(task, datetime.now().astimezone()))
+        self.assertFalse(self.controller._task_is_stale({**task, 'pending_action': {'operation_id': 'x'}}, later))
         self.assertTrue(self.chat.long_tasks.read())
 
     def test_autonomous_message_gate_and_recovery_never_duplicate_a_saved_call(self):

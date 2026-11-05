@@ -806,6 +806,8 @@ class AutonomyController:
 
     @staticmethod
     def _task_is_stale(task, stamp):
+        if task.get('pending_action'):
+            return False  # an interrupted side effect must stay visible until its outcome is checked
         try:
             return stamp - datetime.fromisoformat(task['updated_at']) > timedelta(days=STALE_TASK_DAYS)
         except (KeyError, TypeError, ValueError):
