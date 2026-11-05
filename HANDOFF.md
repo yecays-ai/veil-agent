@@ -1,8 +1,10 @@
-## 工单 218 交接（2026-11-05）
+## 工单 220 交接（2026-11-05）
 
 - 复制改走 IPC `chat:copy-text` → Electron `clipboard.writeText`，桌面前端改动，无费用影响。Windows 体验未验证：右键/长按消息选 Copy，粘贴到记事本看到原文；编辑：改字保存后气泡立刻更新。
 - 编辑根因：`hub.push('message_updated', '', ..., text=...)` 重复传 `text`，TypeError，保存时请求失败。已改为位置参数传正文，加测试 `test_edit_and_favorite_actions_update_row_and_publish_event`。
 - 收藏入口：顶部栏星标按钮切换 `#col.only-favorites`，纯 CSS 过滤，不改数据；位置是临时的。Windows 体验未验证：右键一条消息收藏，点顶部星标只剩收藏消息，再点恢复。
+
+## 工单 218 交接（2026-11-05）
 
 - 改动在 `xiaohongshu_tools.py`（`image_urls`/`fetch_images`/`XhsImageResult`）、`windows_observer.observation_image_message`（多图）、`veil_agent.py`（图片被省略/被拒时对 xiaohongshu 的提示）。
 - 未验证：真实 CDN 下载（上游字段 `note.imageList[].urlDefault` 已对照 v2.5.5 types.go）；`imageView2/.../format/jpg` 参数是否被 CDN 接受，不行会回退原 URL（可能是 webp，已支持）。
