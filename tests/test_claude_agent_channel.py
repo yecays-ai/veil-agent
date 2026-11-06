@@ -333,5 +333,16 @@ class FindClaudeTests(unittest.TestCase):
             self.assertIsNone(channel.find_claude({}, None, {'LOCALAPPDATA': tmp}))
 
 
+class ProcessLaunchTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == 'nt', 'Windows process flags are only available on Windows')
+    def test_windows_claude_process_uses_existing_background_flags(self):
+        self.assertEqual(channel._process_group_options(), {
+            'creationflags': subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW})
+
+    def test_other_platforms_keep_their_process_group_behavior(self):
+        with mock.patch.object(channel.os, 'name', 'posix'):
+            self.assertEqual(channel._process_group_options(), {'start_new_session': True})
+
+
 if __name__ == '__main__':
     unittest.main()
