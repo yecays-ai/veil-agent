@@ -324,6 +324,10 @@ class FindClaudeTests(unittest.TestCase):
             mine.write_text('x', encoding='utf-8')
             self.assertEqual(channel.find_claude({}, None, {'LOCALAPPDATA': tmp, 'VEIL_CLAUDE_PATH': f'"{mine}"'}), str(mine))
 
+    def test_an_empty_environment_is_used_as_given(self):
+        with mock.patch('shutil.which', return_value=None), mock.patch.dict(os.environ, {'VEIL_CLAUDE_PATH': __file__}):
+            self.assertIsNone(channel.find_claude({}, None, {}))
+
     def test_nothing_found_is_none(self):
         with tempfile.TemporaryDirectory() as tmp, mock.patch('shutil.which', return_value=None):
             self.assertIsNone(channel.find_claude({}, None, {'LOCALAPPDATA': tmp}))

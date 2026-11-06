@@ -133,7 +133,7 @@ def desktop_app_claudes(environ=None):
 
 def find_claude(provider=None, env_file=None, environ=None):
     """A configured path wins when it exists; a wrong or stale one falls through to PATH and the desktop app's copy."""
-    path = (provider or {}).get('claude_path') or (environ or os.environ).get('VEIL_CLAUDE_PATH')
+    path = (provider or {}).get('claude_path') or (os.environ if environ is None else environ).get('VEIL_CLAUDE_PATH')
     if not path and env_file:
         try:
             from dotenv import dotenv_values
