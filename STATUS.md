@@ -1,6 +1,6 @@
 ## 工单 230：每单影响分析与联动修复 Skill
 
-- `ticket/230-impact-complete`：新增 `.agents/skills/impact-complete/SKILL.md`，并更新 `AGENTS.md` / `ticket` 工作流。每次代码/配置修改须搜索真实调用者、消费者、共享状态、副作用及用户旅程；发现由改动造成的关联故障必须在同 PR 内修复与回归，不允许让 lan 事后找 Bug。参考 Superpowers systematic-debugging 和 verification-before-completion，仅新增开发流程规则，无模型费用、无运行代码修改。新窗口 Codex/Claude 是否稳定执行仍待实际验证。**已知 CC 聊天导致自主活动报错尚未修复**；本单不声称修复了它。验收见 `docs/tickets/230-impact-complete.md`。下一工单号 231。
+- `ticket/230-impact-complete`：新增 `.agents/skills/impact-complete/SKILL.md`，并更新 `AGENTS.md` / `ticket` 工作流。每次代码/配置修改须搜索真实调用者、消费者、共享状态、副作用及用户旅程；发现由改动造成的关联故障必须在同 PR 内修复与回归，不允许让 lan 事后找 Bug。已直接复用 obra/superpowers 原版 `systematic-debugging`、`verification-before-completion` Skill、调试参考资料及 MIT 许可证；`impact-complete` 只补 VEIL 的全路径追踪与同 PR 联动修复要求。仅新增开发流程规则，无模型费用、无运行代码修改。新窗口 Codex/Claude 是否稳定执行仍待实际验证。**已知 CC 聊天导致自主活动报错尚未修复**；本单不声称修复了它。验收见 `docs/tickets/230-impact-complete.md`。下一工单号 231。
 
 ## 工单 229：自动找到 claude 命令
 
