@@ -949,9 +949,16 @@ class Hub(ScreenPopMixin):
         request_id = getattr(text, 'request_id', None)
         memory_refs = getattr(text, 'memory_refs', None)
         is_error = getattr(text, 'is_error', False)
+        trace = getattr(text, 'trace', None)
+        elapsed = getattr(text, 'elapsed', None)
         text = str(text)
         prefix = f'{self.name}: '
-        if text.startswith('新对话已开始；'):
+        if trace in ('thought', 'tool'):
+            # Ticket 226: tool lines and the model's reasoning are folded under the reply they belong to.
+            self.push('trace', text, trace=trace,
+                      **({'request_id': request_id} if isinstance(request_id, str) else {}),
+                      **({'elapsed': elapsed} if isinstance(elapsed, (int, float)) else {}))
+        elif text.startswith('新对话已开始；'):
             self.push('reset', text)
         elif text.startswith(prefix):
             voice = self.register_voice_media(media)

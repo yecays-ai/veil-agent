@@ -7,6 +7,7 @@ import os
 import re
 import signal
 import sys
+import time
 import tomllib
 from dataclasses import replace
 import uuid
@@ -3466,6 +3467,13 @@ class Chat:
             result, state, summary = 'The program rejected this call because the arguments are not a valid JSON object.', '被拒绝', call.function.name
         return _ToolExecution(result, state, summary, checkpoint_verified, activity_detail)
 
+    def _trace(self, text, trace):
+        """Ticket 226: show a tool line or the model's reasoning inside this reply's thinking block."""
+        from tools_agent import TraceLine
+        started = getattr(self, '_trace_started', None)
+        self.output(TraceLine(text, trace, getattr(self, '_trace_request_id', None),
+                              round(time.monotonic() - started, 1) if started is not None else None))
+
     def _record_tool_result(self, call, execution, result_state, display_detail, summaries, log_tool):
         from tools_agent import display_call
         name = call.function.name
@@ -3473,8 +3481,8 @@ class Chat:
         # Ticket 143: a successful message is already its own bubble, and choosing silence or a later reply
         # should leave nothing in Lan's chat; the activity page still records every call.
         if canonical_name not in ('send_message', 'stay_silent', 'reply_later') or result_state != '成功':
-            self.output(display_call(name, execution.summary, result_state,
-                                     (display_detail if result_state != '成功' else None)))
+            self._trace(display_call(name, execution.summary, result_state,
+                                     (display_detail if result_state != '成功' else None)), 'tool')
         delivery = {'result_state': result_state} if result_state != execution.state else {}
         summaries.append({'tool': name, 'path': execution.summary,
                           'state': execution.state, **delivery})
@@ -3482,11 +3490,12 @@ class Chat:
         log_tool(name, execution.summary, execution.state, **verified, **delivery)
 
     def _tool_chat(self, messages, request_id, history_count, history_start=None, autonomy=False):
-        from tools_agent import display_call
+        from tools_agent import display_call, reasoning_text
         from windows_interaction import WINDOWS_DESKTOP_TOOL_NAMES
         from windows_observer import observation_image_message
         summaries = []
         self.last_tool_summaries = summaries
+        self._trace_request_id, self._trace_started = request_id, time.monotonic()
         loop_messages = list(messages)
         pending_image_messages = []
         ephemeral_image_bindings = []
@@ -3900,6 +3909,9 @@ class Chat:
                 self.autonomy_interrupted = True
                 final = 'Autonomous activity yielded after the model request to let chat or a control action proceed.'
                 break
+            thought = reasoning_text(message)
+            if thought:
+                self._trace(thought, 'thought')
             if finish and finish[0] == 'length':
                 self.tool_stop_reason = '模型回复达到输出上限，结果不完整。'
             if finish and finish[0] == 'length' and message.tool_calls:
@@ -4074,7 +4086,7 @@ class Chat:
                                    if self.tools and call.function.name != 'send_message' else call.function.name)
                     except (ValueError, TypeError):
                         summary = call.function.name
-                    self.output(display_call(call.function.name, summary, '被拒绝', 'Continuing would exceed the spending limit.'))
+                    self._trace(display_call(call.function.name, summary, '被拒绝', 'Continuing would exceed the spending limit.'), 'tool')
                     log_tool(call.function.name, summary, '被拒绝',
                              call_id=f'{request_id}:{step}:{getattr(call, "id", None) or "budget"}',
                              detail='Continuing would exceed the spending limit.')
@@ -4112,7 +4124,7 @@ class Chat:
                             summary = None
                         summary = summary if isinstance(summary, str) else call.function.name
                         detail = '本轮工具结果仍超过输入长度上限；此工具未执行。'
-                        self.output(display_call(call.function.name, summary, '被拒绝', detail))
+                        self._trace(display_call(call.function.name, summary, '被拒绝', detail), 'tool')
                         summaries.append({'tool': call.function.name, 'path': summary, 'state': '被拒绝'})
                         log_tool(call.function.name, summary, '被拒绝',
                                  call_id=f'{request_id}:{step}:{getattr(call, "id", None) or "context"}',
@@ -4126,8 +4138,8 @@ class Chat:
                             self.autonomy_step_limited = True
                             detail = (f'Autonomous activity reached the {autonomy_tool_limit}-tool-step '
                                       'limit for this run; this message was not sent.')
-                            self.output(display_call(call.function.name, call.function.name,
-                                                     '被拒绝', detail))
+                            self._trace(display_call(call.function.name, call.function.name,
+                                                     '被拒绝', detail), 'tool')
                             summaries.append({'tool': call.function.name,
                                               'path': call.function.name, 'state': '被拒绝'})
                             log_tool(call.function.name, call.function.name, '被拒绝',

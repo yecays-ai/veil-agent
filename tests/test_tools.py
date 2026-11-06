@@ -549,8 +549,25 @@ max_result_bytes = 200
         second_messages = model.call_args_list[1].args[0]
         self.assertIn('reasoning_content', second_messages[-3])
         self.assertEqual([row['role'] for row in second_messages[-2:]], ['tool', 'tool'])
-        self.assertEqual(len(output), 2)
+        # Ticket 226: the reasoning text of each step comes first, then that step's tool lines.
+        self.assertEqual([(line.trace, line.request_id is not None) for line in output],
+                         [('thought', True), ('tool', True), ('tool', True), ('thought', True)])
+        self.assertEqual([str(line) for line in output if line.trace == 'thought'], ['thinking', 'thinking'])
+        self.assertTrue(all(isinstance(line.elapsed, float) for line in output))
         self.assertGreater(self.budget.totals()[0], 0)
+
+    def test_models_without_reasoning_text_only_show_tool_lines(self):
+        first = self.message([self.tool_call('read_text_file', '{"path":"one.txt"}', 'one')], reasoning=None)
+        final = self.message(content='Done.', reasoning=None)
+        model = Mock(side_effect=[(first, 100, 20, 0), (final, 150, 20, 0)])
+        tools = Mock()
+        tools.tools = [SimpleNamespace(name='read_text_file', description='Read', inputSchema={})]
+        tools.capability_event = None
+        tools.invoke.side_effect = [('one contents', '成功', 'one.txt')]
+        output = []
+        chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=output.append)
+        chat.send('read it')
+        self.assertEqual([line.trace for line in output], ['tool'])
 
 
     def test_program_tool_failures_are_actionable_english_for_model_and_user(self):

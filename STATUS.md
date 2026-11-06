@@ -1,3 +1,7 @@
+## 工单 226：思考和工具折叠显示
+
+- `ticket/226-thinking-fold`：聊天里每次回复前的工具提示和模型思考文字收进一个默认收起的灰字块（有思考文字写「思考了 N 秒 ›」，只有工具写「用了 N 个工具 ›」），点开按发生顺序看到思考文字和工具行；显示的是接口本来就返回的内容，不多发请求、不改思考开关，不写进聊天记录和记忆。`tools_agent.py`（`TraceLine`）、`veil_agent.py`、`web_agent.py`（新事件 `trace`）、`desktop/chat.js`、`chat.css`。新增 2 项测试，改 1 项；全量测试与 main 相同的云端环境类失败一致；Windows 实机未验证。重启 Peter 后折叠块不恢复（和原来的工具提示一样）。验收见 `docs/tickets/226-thinking-fold.md`。下一个工单号 227。
+
 ## 工单 225：自主醒来按花费停
 
 - `ticket/225-wake-cost-cap`：自主醒来不再在 20 个工具步骤就停，改成这次已花到 ¥0.25 就停，另有 60 步保险和原来的 15 分钟时限；每天 ¥3、每天 12 次不变，聊天和瞄一眼不变。`character.toml` 的 `[autonomy]` 新增 `run_budget_cny`、`max_tool_steps`，没写的角色行为不变；自主页的停止原因分花费 / 步数 / 15 分钟三种；去掉 215 的“看自己状态免费 6 次”规则（花费上限已覆盖）。`veil_agent.py`、`autonomy.py`、`tests/test_autonomy.py`。新增 4 项测试；全量测试与 main 相同的云端环境类失败一致；Windows 实机未验证；每次最多略超 ¥0.25 一次请求的费用。验收见 `docs/tickets/225-wake-cost-cap.md`。下一个工单号 226。

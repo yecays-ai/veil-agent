@@ -274,6 +274,15 @@ output_cny_per_million = "8"
         self.assertEqual(event['kind'], 'reset')
         self.assertIn('旧聊天保留', event['text'])
 
+    def test_trace_lines_become_trace_events_not_notices(self):
+        from tools_agent import TraceLine
+        self.hub.output(TraceLine('先想想', 'thought', 'req-1', 3.2))
+        self.hub.output(TraceLine('🔧 Peter 用了 web_search：x（成功）', 'tool', 'req-1', 4.0))
+        events = self.hub.snapshot(0)['events'][-2:]
+        self.assertEqual([(e['kind'], e['trace'], e['request_id']) for e in events],
+                         [('trace', 'thought', 'req-1'), ('trace', 'tool', 'req-1')])
+        self.assertEqual(events[1]['elapsed'], 4.0)
+
     def test_ombre_memory_catalog_and_read_endpoints_are_authenticated_and_read_only(self):
         calls = []
 
