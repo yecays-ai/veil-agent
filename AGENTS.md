@@ -8,7 +8,7 @@
 开工：
 1. 先拉取最新的 `main` 分支。
 2. 读 `STATUS.md` 和 `HANDOFF.md`，以仓库里的内容为准，不以聊天记录或记忆为准。要做的事有对应 skill 就读 `.agents/skills/<名字>/SKILL.md`。
-3. **任何改动先执行 `.agents/skills/impact-complete/SKILL.md`**：从用户日常行为出发，搜索改动的所有调用者、下游副作用、共享配置及旧功能；本次修改造成的连带问题必须在同一个 PR 修完并回归验证，不得让 lan 发现 Bug 后再开单补救。交付前根据实际 diff 再查一次影响范围。\n4. 核对上一张相关工单的 GitHub PR 状态、合并提交、最新 CI 和实际交付内容；以 GitHub 提交和检查为准，不凭聊天记录推断完成。
+3. **任何改动先执行 `.agents/skills/impact-complete/SKILL.md`，按需直接使用原版 `systematic-debugging`，交付前使用原版 `verification-before-completion`**：从用户日常行为出发，搜索改动的所有调用者、下游副作用、共享配置及旧功能；本次修改造成的连带问题必须在同一个 PR 修完并回归验证，不得让 lan 发现 Bug 后再开单补救。交付前根据实际 diff 再查一次影响范围。\n4. 核对上一张相关工单的 GitHub PR 状态、合并提交、最新 CI 和实际交付内容；以 GitHub 提交和检查为准，不凭聊天记录推断完成。
 5. 如果上一单已经合并而 `STATUS.md` 仍写施工中，在本次 PR 中改成真实状态；分别记录代码合并、自动检查通过、Windows 体验验收，不相互代替。
 6. 用两句话向 lan 复述：当前目标、你接下来要做什么。和 `STATUS.md` 对不上就先问。
 
