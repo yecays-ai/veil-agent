@@ -357,8 +357,12 @@ function add(kind,text,id,time,media,messageId,requestId,favorite=false,attachme
 }
 // Ticket 226: tool calls and the model's reasoning text sit in one folded block above the reply.
 function traceBlock(requestId){
-  let last=col.lastElementChild;if(last&&last===typing)last=last.previousElementSibling;
-  return last&&last.classList.contains('think-block')&&(last.dataset.requestId||'')===(requestId||'')?last:null;
+  // Approval cards and notices may sit between two steps of one reply; stop at a real chat bubble.
+  for(let node=col.lastElementChild;node;node=node.previousElementSibling){
+    if(node.classList.contains('think-block'))return (node.dataset.requestId||'')===(requestId||'')?node:null;
+    if(node.classList.contains('msg'))return null;
+  }
+  return null;
 }
 function traceTitle(block){
   const thought=Number(block.dataset.thoughts)>0,tools=Number(block.dataset.tools)||0,sec=Math.round(Number(block.dataset.elapsed)||0);
