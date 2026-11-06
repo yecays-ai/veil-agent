@@ -2943,13 +2943,13 @@ class Chat:
                 return self._send_with_stable_model(text, autonomy=autonomy, **kwargs)
         return self._send_with_stable_model(text, autonomy=autonomy, **kwargs)
 
-    def _glance_model(self):
-        """(provider name, provider) for this glance, or None when it follows Peter's chat model."""
+    def _activity_model(self, role):
+        """(provider name, provider) when an activity has a separate model from chat."""
         models = getattr(self.cfg, 'models', None)
         if models is None:
             return None
         try:
-            model_id, name, provider = models.chosen('glance')
+            model_id, name, provider = models.chosen(role)
             if model_id == models.chosen('peter')[0]:
                 return None
         except SettingsError as exc:
@@ -2958,27 +2958,31 @@ class Chat:
 
     def _send_with_stable_model(self, text, *, autonomy=False, **kwargs):
         self._apply_pending_model()
-        # Ticket 133: background requests (wakes, glances, Codex reminders) may use a larger
-        # input window than ordinary chat; chat keeps the provider limit and its cost.
-        glance_model = self._glance_model() if self.glance_mode else None
-        if glance_model is None:
+        # Ticket 133: activities following chat may use a larger input window; a separately
+        # selected provider still caps its own requests at that provider's context limit.
+        role = 'glance' if self.glance_mode else 'autonomy' if autonomy else None
+        activity_model = self._activity_model(role) if role else None
+        if activity_model is None:
             return self._send_with_input_limit(text, autonomy=autonomy, **kwargs)
-        # Ticket 211: this glance uses its own model. send() holds the model lock for the whole
-        # request, so no chat request can run while the provider is swapped; it is always put back.
-        name, provider = glance_model
+        # send() holds the model lock for the whole request, so no chat request can run while the
+        # provider is swapped; it is always put back.
+        name, provider = activity_model
         saved, saved_name = dict(self.cfg.provider), self.cfg.provider_name
         self.cfg.provider.clear()
         self.cfg.provider.update(provider)
         self.cfg.provider_name = name
         try:
-            return self._send_with_input_limit(text, autonomy=autonomy, **kwargs)
+            ceiling = provider['max_input_tokens'] if role == 'autonomy' else None
+            return self._send_with_input_limit(text, autonomy=autonomy, input_ceiling=ceiling, **kwargs)
         finally:
             self.cfg.provider.clear()
             self.cfg.provider.update(saved)
             self.cfg.provider_name = saved_name
 
-    def _send_with_input_limit(self, text, *, autonomy=False, **kwargs):
+    def _send_with_input_limit(self, text, *, autonomy=False, input_ceiling=None, **kwargs):
         limit = (self.cfg.autonomy or {}).get('max_input_tokens') if autonomy else None
+        if input_ceiling is not None:
+            limit = min(limit or input_ceiling, input_ceiling)
         if not limit or limit == self.cfg.provider['max_input_tokens']:
             return self._send(text, autonomy=autonomy, **kwargs)
         original = self.cfg

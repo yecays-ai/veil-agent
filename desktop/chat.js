@@ -1637,9 +1637,9 @@ function modelPrice(m){
   if(m.builtin)return '内置，价格在 character.toml';
   return m.billing==='call'?'每次 ¥'+m.cny_per_call:'输入 ¥'+m.input_cny_per_million+' / 输出 ¥'+m.output_cny_per_million+'（每百万 tokens）';
 }
-function fillModelSelect(select,view,value,followOption){
+function fillModelSelect(select,view,value,followOption,excludeKind){
   const follow=followOption?[(()=>{const o=document.createElement('option');o.value='follow-chat';o.textContent='跟随聊天模型';return o})()]:[];
-  select.replaceChildren(...follow,...view.models.map(m=>{const o=document.createElement('option');o.value=m.id;o.textContent=modelName(m)+(m.key_set?'':'（没有 key）');return o}));
+  select.replaceChildren(...follow,...view.models.filter(m=>!excludeKind||m.kind!==excludeKind).map(m=>{const o=document.createElement('option');o.value=m.id;o.textContent=modelName(m)+(m.key_set?'':'（没有 key）');return o}));
   select.value=value;
 }
 function modelItem(title,detail,onEdit,onDelete){
@@ -1658,7 +1658,7 @@ function renderModels(view){
   if(signature===modelsSignature)return;
   modelsSignature=signature;modelsView=view;
   fillModelSelect(sw,view,view.use.peter);
-  fillModelSelect($('use-peter'),view,view.use.peter);fillModelSelect($('use-background'),view,view.use.background);fillModelSelect($('use-glance'),view,view.use.glance,true);
+  fillModelSelect($('use-peter'),view,view.use.peter);fillModelSelect($('use-autonomy'),view,view.use.autonomy,false,'claude_agent');fillModelSelect($('use-background'),view,view.use.background);fillModelSelect($('use-glance'),view,view.use.glance,true);
   $('background-hint').textContent=view.background_restart?'记忆后台已改，完全退出 Peter 再打开才生效。':'Ombre 给记忆打标签、整理短期便签用这个。换了以后，完全退出 Peter 再打开才生效。';
   if(document.activeElement!==$('limit-daily'))$('limit-daily').value=view.limits.daily_cny;
   if(document.activeElement!==$('limit-monthly'))$('limit-monthly').value=view.limits.monthly_cny;
@@ -1673,9 +1673,10 @@ function renderModels(view){
 }
 function modelsPayload(){
   const v=modelsView;
+  const use={...v.use};if(!v.use_explicit?.autonomy)delete use.autonomy;
   return {endpoints:v.endpoints.map(e=>({id:e.id,name:e.name,base_url:e.base_url})),
     models:v.models.filter(m=>!m.builtin).map(m=>{const out={};for(const k of ['id','endpoint','model','label','thinking','billing','cny_per_call','input_cny_per_million','cached_input_cny_per_million','output_cny_per_million','max_input_tokens'])if(m[k]!==undefined)out[k]=m[k];return out}),
-    use:{...v.use},limits:{...v.limits}};
+    use,limits:{...v.limits}};
 }
 function showModelsError(text){const el=$('models-error');el.textContent=text||'';el.hidden=!text}
 async function saveModels(change,done){
@@ -1698,12 +1699,14 @@ async function useModel(role,id){
     modelsSignature='';renderModels(data.models);
     const m=data.models.models.find(x=>x.id===id);
     if(role==='glance'){add('notice',id==='follow-chat'?'瞄一眼改为跟随聊天模型，下一次瞄一眼生效。':'瞄一眼改用 '+modelName(m)+'，下一次瞄一眼生效。');return}
+    if(role==='autonomy'){add('notice','自主活动改用 '+modelName(m)+'，下一次自主活动开始生效。');return}
     add('notice',role==='peter'?'下一句开始，Peter 用 '+modelName(m)+'。':'记忆后台改成 '+modelName(m)+'，完全退出 Peter 再打开后生效。');
   }catch(e){add('error','切换模型失败，请检查本机 Agent 连接后重试。')}
   finally{modelsSaving=false;$('model-switch').disabled=stopping||stopped}
 }
 $('model-switch').onchange=e=>useModel('peter',e.target.value);
 $('use-peter').onchange=e=>useModel('peter',e.target.value);
+$('use-autonomy').onchange=e=>useModel('autonomy',e.target.value);
 $('use-background').onchange=e=>useModel('background',e.target.value);
 $('use-glance').onchange=e=>useModel('glance',e.target.value);
 $('save-limits').onclick=()=>saveModels({limits:{daily_cny:$('limit-daily').value,monthly_cny:$('limit-monthly').value}},'费用上限已保存。');

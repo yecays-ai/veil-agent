@@ -1,9 +1,8 @@
 """Ticket 134: Lan's own model list, kept on her computer.
 
 Endpoints (name, address, key) and models (name, price, thinking) live in
-data/<character>/models.json; keys go only into the project .env. Two jobs pick
-a model each: "peter" (chat, wakes, glances, QQ and email: everything he says)
-and "background" (Ombre tagging and short-term notes). The providers written in
+data/<character>/models.json; keys go only into the project .env. Roles pick models
+for chat, autonomous activity, glance, and background work. The providers written in
 character.toml stay available as built-in models and are the defaults.
 """
 import json
@@ -18,7 +17,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 BUILTIN_PREFIX = 'builtin:'
-ROLES = ('peter', 'background', 'glance')
+ROLES = ('peter', 'autonomy', 'background', 'glance')
 FOLLOW_CHAT = 'follow-chat'  # glance only: use whatever Peter's chat model is
 GLANCE_DEFAULT_MODEL = 'grok-4.6'  # Ticket 211: preferred glance model when Lan has configured it
 DEFAULT_DAILY = Decimal('10')
@@ -282,7 +281,7 @@ class ModelSettings:
         return provider is not None
 
     def selected(self, role):
-        """What the 模型 page shows for a role. For glance this can be FOLLOW_CHAT."""
+        """What the 模型 page shows for a role. Autonomy follows chat until explicitly selected."""
         with self.lock:
             if role == 'glance':
                 stored = self.data['use'].get('glance')
@@ -298,20 +297,38 @@ class ModelSettings:
                     if GLANCE_DEFAULT_MODEL in name.lower() or GLANCE_DEFAULT_MODEL in provider['model'].lower():
                         return BUILTIN_PREFIX + name
                 return FOLLOW_CHAT
+            if role == 'autonomy' and 'autonomy' not in self.data['use']:
+                chat_id = self.data['use'].get('peter', self.default)
+                if self._choice_ok(self.data, role, chat_id):
+                    return chat_id
+                if self._choice_ok(self.data, role, self.default):
+                    return self.default
+                for name in self.builtins:
+                    candidate = BUILTIN_PREFIX + name
+                    if self._choice_ok(self.data, role, candidate):
+                        return candidate
+                for item in self.data['models']:
+                    if self._choice_ok(self.data, role, item['id']):
+                        return item['id']
+                return None
             return self.data['use'].get(role, self.default)
 
     # ---- what the program uses ----------------------------------------
     def chosen(self, role):
-        """(model id, provider name for SYSTEM FACTS, provider dict) for 'peter', 'background' or 'glance'."""
+        """(model id, provider name for SYSTEM FACTS, provider dict) for a configured role."""
         with self.lock:
             if self.blocked:
                 raise SettingsError('模型设置保存未完成；已停止模型请求，请重启恢复。')
             model_id = self.selected(role)
             if model_id == FOLLOW_CHAT:
                 return self.chosen('peter')
+            if role == 'autonomy' and model_id is None:
+                raise SettingsError('自主活动尚无可用的 API 模型；请先添加或启用一个 API 模型。')
             provider = self._provider(self.data, model_id)
             if provider is None:
                 raise SettingsError(f'{role} 选中的模型无效；已停止模型请求。')
+            if role == 'autonomy' and provider.get('kind') == 'claude_agent':
+                raise SettingsError('自主活动需要 API 模型；Claude Code 通道仅用于聊天。')
             if model_id.startswith(BUILTIN_PREFIX):
                 name = model_id[len(BUILTIN_PREFIX):]
             else:
@@ -343,7 +360,8 @@ class ModelSettings:
                                   'key_set': bool(key), 'key_hint': ('…' + key[-4:]) if len(key) >= 8 else ''})
             models = []
             for name, provider in self.builtins.items():
-                models.append({'id': BUILTIN_PREFIX + name, 'builtin': True, 'label': f'{name}（内置）',
+                models.append({'id': BUILTIN_PREFIX + name, 'builtin': True,
+                               'label': f'{provider.get("label", name)}（内置）', 'kind': provider.get('kind'),
                                'model': provider['model'], 'endpoint_name': name,
                                'key_set': provider.get('kind') == 'claude_agent'
                                or bool((env.get(provider['api_key_env']) or '').strip())})
@@ -353,8 +371,10 @@ class ModelSettings:
                 models.append({**item, 'builtin': False, 'endpoint_name': names.get(item['endpoint'], ''),
                                'key_set': keys.get(item['endpoint'], False)})
             daily, monthly = self.limits()
-            use = {role: (self.chosen(role)[0] if role != 'glance' else self.selected(role)) for role in ROLES}
+            use = {role: (self.selected(role) if role in ('glance', 'autonomy') else self.chosen(role)[0])
+                   for role in ROLES}
             return {'endpoints': endpoints, 'models': models, 'use': use,
+                    'use_explicit': {role: role in self.data['use'] for role in ROLES},
                     'limits': {'daily_cny': str(daily), 'monthly_cny': str(monthly)}}
 
     # ---- changes from the settings page -------------------------------

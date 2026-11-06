@@ -30,11 +30,23 @@ input_cny_per_million = "4"
 cached_input_cny_per_million = "1"
 output_cny_per_million = "16"
 
-# Ticket 228: Claude Code answers the chat on Lan's own Claude login (no key, no token price here).
-# Pick it on the 模型 page. Autonomous wakes are not supported on this channel yet.
+# Ticket 232: These options use Claude Code's --model aliases; Sonnet is the explicit default.
 [providers.claude_agent]
 kind = "claude_agent"
-model = "claude-agent"
+label = "Claude Code · Sonnet（均衡）"
+model = "sonnet"
+max_input_tokens = 200000
+
+[providers.claude_agent_haiku]
+kind = "claude_agent"
+label = "Claude Code · Haiku（额度较省）"
+model = "haiku"
+max_input_tokens = 200000
+
+[providers.claude_agent_opus]
+kind = "claude_agent"
+label = "Claude Code · Opus（深度推理）"
+model = "opus"
 max_input_tokens = 200000
 
 [memory]
