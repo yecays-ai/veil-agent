@@ -1,3 +1,7 @@
+## 工单 225：自主醒来按花费停
+
+- `ticket/225-wake-cost-cap`：自主醒来不再在 20 个工具步骤就停，改成这次已花到 ¥0.25 就停，另有 60 步保险和原来的 15 分钟时限；每天 ¥3、每天 12 次不变，聊天和瞄一眼不变。`character.toml` 的 `[autonomy]` 新增 `run_budget_cny`、`max_tool_steps`，没写的角色行为不变；自主页的停止原因分花费 / 步数 / 15 分钟三种；去掉 215 的“看自己状态免费 6 次”规则（花费上限已覆盖）。`veil_agent.py`、`autonomy.py`、`tests/test_autonomy.py`。新增 4 项测试；全量测试与 main 相同的云端环境类失败一致；Windows 实机未验证；每次最多略超 ¥0.25 一次请求的费用。验收见 `docs/tickets/225-wake-cost-cap.md`。下一个工单号 226。
+
 ## 工单 224：普通回复里假装发表情包
 
 - `ticket/224-fake-sticker-guard`：Peter 在普通回复开头打出库里不存在的 `[表情包：图集/名字]`（那一轮没有任何工具调用）时，这条回复不保存、不显示，程序提醒他「打字不会发表情包、库里没有这张，请用 stickers 工具或只用文字」，让他再答一次（每轮最多 2 次，需预留预算）。`stickers.py`、`veil_agent.py`、`tests/test_free_reply.py`。全量测试与 main 相同的云端环境类失败一致；Windows 实机未验证；多出的请求只在他假装时发生。验收见 `docs/tickets/224-fake-sticker-guard.md`。下一个工单号 225。

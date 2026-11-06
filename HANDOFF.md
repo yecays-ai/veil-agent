@@ -1,3 +1,9 @@
+## 工单 225 交接（2026-11-06）
+
+- 改动：`veil_agent.py`（`[autonomy]` 解析 `run_budget_cny`/`max_tool_steps`；工具循环每步前用 `category_totals` 比较本次醒来已花费；删掉 `FREE_REVIEW_*`）、`autonomy.py`（停止原因三种）、`characters/peter/character.toml`、`tests/test_autonomy.py`。
+- 下一步：lan 更新后，我查 `data/peter/autonomy.jsonl` 的 `cost_cny`、`result_reason`，看醒来是否还撞步数、是否每次都撞 ¥0.25；同时核对 216 的 `tool_schema_bytes`。
+- 未验证：Windows 实机；真实模型下单次醒来的实际花费分布。
+
 ## 工单 224 交接（2026-11-05）
 
 - 改动：`stickers.py`（`unknown_marker`）、`veil_agent.py`（工具循环里的假表情包拦截，计数 `fake_sticker_retries`）、`tests/test_free_reply.py`。

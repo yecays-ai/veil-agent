@@ -287,27 +287,6 @@ RECALL_MESSAGE = {'type': 'function', 'function': {
         'required': ['message_id'], 'additionalProperties': False},
 }}
 
-# Ticket 215: during an autonomous wake, looking back at his own state (activity history, long-task
-# status, life records and thoughts in list form) does not use up the tool steps meant for doing things.
-# These looks are capped separately, so a wake can never run unbounded.
-FREE_REVIEW_TOOLS = frozenset({'autonomy_history', 'capability_history', 'long_task_status', 'expand_capability',
-                               'search_chat_history'})
-FREE_REVIEW_LIST_TOOLS = frozenset({'life_record', 'thought'})
-FREE_REVIEW_CALLS = 6
-
-
-def is_free_review_call(name, arguments):
-    """True for a read-only look at Peter's own state that does not count toward the wake's step limit."""
-    if name in FREE_REVIEW_TOOLS:
-        return True
-    if name in FREE_REVIEW_LIST_TOOLS:
-        try:
-            parsed = json.loads(arguments or '{}')
-        except (ValueError, TypeError):
-            return False
-        return isinstance(parsed, dict) and parsed.get('action') == 'list'
-    return False
-
 
 CAPABILITY_HISTORY = {'type': 'function', 'function': {
     'name': 'capability_history',
@@ -875,12 +854,18 @@ def load_character(root, character_id):
         if type(quiet_enabled) is not bool:
             raise ValueError('autonomy.quiet_hours_enabled must be boolean')
         autonomy_input = autonomy.get('max_input_tokens')
+        run_budget = autonomy.get('run_budget_cny')
+        max_tool_steps = autonomy.get('max_tool_steps')
         autonomy = {'interval_minutes': interval, 'daily_max_runs': daily_runs,
                     'daily_budget_cny': autonomy_daily,
                     'min_alarm_gap_minutes': min_alarm_gap,
                     'quiet_hours': quiet_hours, 'quiet_hours_enabled': quiet_enabled}
         if autonomy_input is not None:
             autonomy['max_input_tokens'] = positive_int(autonomy_input)
+        # Ticket 217: a wake stops by what it has spent, with a step count only as a safety ceiling.
+        if run_budget is not None:
+            autonomy['run_budget_cny'] = price(run_budget)
+            autonomy['max_tool_steps'] = positive_int(max_tool_steps if max_tool_steps is not None else 60)
         glance_config = dict(cfg.get('glance') or {})
         glance = None
         if glance_config:
@@ -1842,6 +1827,7 @@ class Chat:
         self.autonomy_message_output = None
         self.autonomy_message_lock = None
         self.autonomy_step_limited = False
+        self.autonomy_cost_limited = False
         self.autonomy_budget_limited = False
         self.tool_stop_reason = ''
         self.last_tool_summaries = []
@@ -3023,6 +3009,7 @@ class Chat:
             self.tools.set_autonomy(autonomy)
         self.autonomy_interrupted = False
         self.autonomy_step_limited = False
+        self.autonomy_cost_limited = False
         self.autonomy_budget_limited = False
         self.tool_stop_reason = ''
         self.last_tool_summaries = []
@@ -3753,13 +3740,16 @@ class Chat:
             return display_detail, result_state
 
         configured_steps = (self.cfg.tools or {}).get('max_steps', 1)
+        autonomy_config = self.cfg.autonomy or {}
+        # Ticket 217: a normal wake is limited by what it spends; the step count is only a safety ceiling.
+        run_cap = autonomy_config.get('run_budget_cny') if autonomy and not self.glance_mode else None
+        if run_cap is not None:
+            configured_steps = autonomy_config.get('max_tool_steps', configured_steps)
         autonomy_tool_limit = min(configured_steps, self.glance_tool_limit) if self.glance_mode else configured_steps
+        run_spend_start = (self.budget.clock()[:10], self.budget.category_totals(self.cfg.id)[0]) if run_cap is not None else None
         # Keep one final model turn after the last autonomous tool so Peter can
         # leave the four-line handoff without sacrificing a usable tool step.
-        free_review_calls = 0
-        max_steps = (1 if self.codex_watch_mode else
-                     configured_steps + 1 + (0 if self.glance_mode else FREE_REVIEW_CALLS) if autonomy
-                     else configured_steps)
+        max_steps = (1 if self.codex_watch_mode else configured_steps + 1 if autonomy else configured_steps)
         def end_turn_here():
             # Ticket 138: Peter said done, or Lan pressed stop. The messages he already sent are the reply.
             if mixed_sent_messages:
@@ -3799,6 +3789,15 @@ class Chat:
             autonomy_limit_reached = autonomy and autonomy_tool_steps >= autonomy_tool_limit
             if autonomy_limit_reached:
                 self.autonomy_step_limited = True
+            elif run_cap is not None and not self.autonomy_cost_limited:
+                # The day total restarts at midnight; a wake that crosses it counts from zero on the new day.
+                start_day, start_total = run_spend_start
+                spent = self.budget.category_totals(self.cfg.id)[0] - (
+                    start_total if self.budget.clock()[:10] == start_day else 0)
+                if spent >= run_cap:
+                    self.autonomy_cost_limited = True
+            if run_cap is not None and self.autonomy_cost_limited:
+                autonomy_limit_reached = True
             if autonomy and self.autonomy_should_yield and self.autonomy_should_yield():
                 self.autonomy_interrupted = True
                 final = 'Autonomous activity stopped before this tool step.'
@@ -4165,12 +4164,7 @@ class Chat:
                         self.budget.settle(next_reservation, next_cfg, 0, 0, 0)
                         break
                     if autonomy:
-                        if (not self.glance_mode and free_review_calls < FREE_REVIEW_CALLS
-                                and is_free_review_call(self._resolve_tool_name(call.function.name, offered),
-                                                        call.function.arguments)):
-                            free_review_calls += 1
-                        else:
-                            autonomy_tool_steps += 1
+                        autonomy_tool_steps += 1
                     call_id = f'{request_id}:{step}:{getattr(call, "id", None) or call_index}'
                     args = {}
                     try:
