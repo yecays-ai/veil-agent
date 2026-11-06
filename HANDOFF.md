@@ -1,3 +1,9 @@
+## 工单 226 交接（2026-11-06）
+
+- 改动：`tools_agent.py`（`TraceLine`、`reasoning_text`）、`veil_agent.py`（`_trace`；工具行和每步的 `reasoning_content`/`reasoning` 作为 TraceLine 输出）、`web_agent.py`（`trace` 事件）、`desktop/chat.js`（`addTrace`）、`chat.css`、`tests/test_tools.py`、`tests/test_web.py`。
+- 下一步：lan 更新后看回复前的灰字折叠块；若某个模型从不显示「思考了」，查 context-log/接口返回是否真带 `reasoning_content`（有些中转把思考放在 `content` 的 `<think>` 里，目前不处理）。
+- 未验证：Windows 实机界面；Claude 经中转是否返回思考文字。
+
 ## 工单 225 交接（2026-11-06）
 
 - 改动：`veil_agent.py`（`[autonomy]` 解析 `run_budget_cny`/`max_tool_steps`；工具循环每步前用 `category_totals` 比较本次醒来已花费；删掉 `FREE_REVIEW_*`）、`autonomy.py`（停止原因三种）、`characters/peter/character.toml`、`tests/test_autonomy.py`。

@@ -172,6 +172,7 @@ function showEvent(e){
     const pending=[...col.querySelectorAll('.msg')].find(node=>node.dataset.mediaId===e.media.id);
     if(pending)pending.remove();
   }
+  if(e.kind==='trace'){scrollIfFollowing(()=>addTrace(e));return}
   scrollIfFollowing(()=>add(e.kind,e.text,e.id,e.time,e.media,e.message_id,e.request_id,e.favorite,e.attachments));
   if(e.kind==='approval'&&e.id!==pendingApproval){
     const card=col.querySelector('.approval[data-id="'+e.id+'"]');
@@ -353,6 +354,38 @@ function add(kind,text,id,time,media,messageId,requestId,favorite=false,attachme
   } else {d.className=kind==='error'?'error':'notice';d.textContent=text}
   if(typing)col.insertBefore(d,typing);else col.appendChild(d);
   if(kind==='error')recentErrors.set(text,{at:Date.now(),count:1,node:d});
+}
+// Ticket 226: tool calls and the model's reasoning text sit in one folded block above the reply.
+function traceBlock(requestId){
+  // Approval cards and notices may sit between two steps of one reply; stop at a real chat bubble.
+  for(let node=col.lastElementChild;node;node=node.previousElementSibling){
+    if(node.classList.contains('think-block'))return (node.dataset.requestId||'')===(requestId||'')?node:null;
+    if(node.classList.contains('msg'))return null;
+  }
+  return null;
+}
+function traceTitle(block){
+  const thought=Number(block.dataset.thoughts)>0,tools=Number(block.dataset.tools)||0,sec=Math.round(Number(block.dataset.elapsed)||0);
+  if(thought)return '思考了 '+Math.max(1,sec)+' 秒';
+  return tools?'用了 '+tools+' 个工具':'思考中';
+}
+function addTrace(e){
+  let block=traceBlock(e.request_id);
+  if(!block){
+    block=document.createElement('details');block.className='think-block';block.dataset.requestId=e.request_id||'';
+    block.dataset.tools='0';block.dataset.thoughts='0';block.dataset.elapsed='0';
+    const summary=document.createElement('summary');const body=document.createElement('div');body.className='think-body';
+    block.append(summary,body);
+    if(typing)col.insertBefore(block,typing);else col.appendChild(block);
+  }
+  const item=document.createElement('div');
+  const isThought=e.trace==='thought';
+  item.className='think-item '+(isThought?'think-thought':'think-tool');
+  item.textContent=isThought?e.text:String(e.text).replace(/^🔧\s*/,'');
+  block.querySelector('.think-body').append(item);
+  const key=isThought?'thoughts':'tools';block.dataset[key]=String(Number(block.dataset[key])+1);
+  if(Number.isFinite(e.elapsed))block.dataset.elapsed=String(Math.max(Number(block.dataset.elapsed)||0,e.elapsed));
+  block.querySelector('summary').textContent=traceTitle(block);
 }
 let messageActionLayer=null;
 let selectedMessageIds=new Set();

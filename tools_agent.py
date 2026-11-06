@@ -192,6 +192,31 @@ def display_call(name, summary, state, reason=None):
     return f'{line}：{reason}' if reason else line
 
 
+class TraceLine(str):
+    """Ticket 226: an output line that belongs in the collapsible thinking block of one reply.
+
+    `trace` is 'thought' (the model's own reasoning text) or 'tool' (one tool call). It prints like
+    any other line in the terminal; the chat window folds it under the reply it belongs to.
+    """
+
+    def __new__(cls, text, trace, request_id=None, elapsed=None):
+        line = super().__new__(cls, text)
+        line.trace, line.request_id, line.elapsed = trace, request_id, elapsed
+        return line
+
+
+MAX_THOUGHT_CHARS = 8000
+
+
+def reasoning_text(message):
+    """The reasoning text a provider returned with this message, or ''."""
+    for key in ('reasoning_content', 'reasoning'):
+        value = getattr(message, key, None)
+        if isinstance(value, str) and value.strip():
+            return value.strip()[:MAX_THOUGHT_CHARS]
+    return ''
+
+
 class FilesystemTools:
     def __init__(self, root, cfg, store, *, web_factory=None):
         self.root = Path(root).resolve()
