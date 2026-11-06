@@ -16,6 +16,8 @@ from pathlib import Path
 REMINDER = ("Reminder: you are Peter texting Lan, not a coding assistant. Whatever you just did or are about to do, "
             "say it in a few short plain-text messages in your own voice: no markdown, no bold, no headings, no "
             "bullet lists, no report format. If she is upset, answer that first. Do the task instead of asking permission.")
+# Looks read-only but marks the real garden's notifications consumed (changes the running Peter's state).
+DENY = {'list_notifications'}
 READ_ONLY = re.compile(r'^(get|list|read|search|browse|view|fetch|find|show|recent|latest)', re.I)
 
 
@@ -112,7 +114,7 @@ def main():
         'outputStyle': 'Peter', 'hooks': {'UserPromptSubmit': hook('hook_ups.py'), 'PostToolUse': hook('hook_ptu.py')}}), encoding='utf-8')
 
     names = asyncio.run(garden_tool_names(args.garden_command, args.garden_arg))
-    allowed_garden = [n for n in names if READ_ONLY.match(n)]
+    allowed_garden = [n for n in names if READ_ONLY.match(n) and n not in DENY]
     (work / 'garden_tools.json').write_text(json.dumps({'all': names, 'allowed_read_only': allowed_garden}, indent=1), encoding='utf-8')
     print('garden tools:', names)
     print('read-only subset that would be allowed:', allowed_garden)
