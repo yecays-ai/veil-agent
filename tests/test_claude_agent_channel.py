@@ -290,11 +290,47 @@ class HookAndRulesTests(unittest.TestCase):
 
     def test_claude_path_is_read_from_the_env_file(self):
         with tempfile.TemporaryDirectory() as tmp:
+            exe = Path(tmp) / 'claude.exe'
+            exe.write_text('x', encoding='utf-8')
             env = Path(tmp) / '.env'
-            env.write_text('VEIL_CLAUDE_PATH=C:/x/claude.exe\n', encoding='utf-8')
-            with mock.patch.dict(os.environ, {}, clear=False):
-                os.environ.pop('VEIL_CLAUDE_PATH', None)
-                self.assertEqual(channel.find_claude({}, env), 'C:/x/claude.exe')
+            env.write_text(f'VEIL_CLAUDE_PATH={exe}\n', encoding='utf-8')
+            self.assertEqual(channel.find_claude({}, env, {}), str(exe))
+
+
+class FindClaudeTests(unittest.TestCase):
+    def _app(self, root, package, version, digest):
+        exe = Path(root) / 'Packages' / package / 'LocalCache' / 'Roaming' / 'Claude' / 'claude-code' / version / digest / 'claude.exe'
+        exe.parent.mkdir(parents=True)
+        exe.write_text('x', encoding='utf-8')
+        return str(exe)
+
+    def test_newest_desktop_app_copy_is_found_without_configuration(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch('shutil.which', return_value=None):
+            self._app(tmp, 'Claude_abc', '2.1.309', 'aaa')
+            newest = self._app(tmp, 'Claude_abc', '2.1.317', 'bbb')
+            self._app(tmp, 'Claude_abc', '2.1.99', 'ccc')
+            self.assertEqual(channel.find_claude({}, None, {'LOCALAPPDATA': tmp}), newest)
+
+    def test_a_wrong_configured_path_falls_back_instead_of_failing(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch('shutil.which', return_value=None):
+            real = self._app(tmp, 'Claude_abc', '2.1.317', 'bbb')
+            env = {'LOCALAPPDATA': tmp, 'VEIL_CLAUDE_PATH': str(Path(tmp) / 'typo' / 'claude.exe')}
+            self.assertEqual(channel.find_claude({}, None, env), real)
+
+    def test_an_existing_configured_path_wins(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch('shutil.which', return_value=None):
+            self._app(tmp, 'Claude_abc', '2.1.317', 'bbb')
+            mine = Path(tmp) / 'mine.exe'
+            mine.write_text('x', encoding='utf-8')
+            self.assertEqual(channel.find_claude({}, None, {'LOCALAPPDATA': tmp, 'VEIL_CLAUDE_PATH': f'"{mine}"'}), str(mine))
+
+    def test_an_empty_environment_is_used_as_given(self):
+        with mock.patch('shutil.which', return_value=None), mock.patch.dict(os.environ, {'VEIL_CLAUDE_PATH': __file__}):
+            self.assertIsNone(channel.find_claude({}, None, {}))
+
+    def test_nothing_found_is_none(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch('shutil.which', return_value=None):
+            self.assertIsNone(channel.find_claude({}, None, {'LOCALAPPDATA': tmp}))
 
 
 if __name__ == '__main__':
