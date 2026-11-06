@@ -1,3 +1,7 @@
+## 工单 227：Claude Code 接 VEIL 工具的隔离实验
+
+- `ticket/227-cc-bridge-experiment`：只做实验，不改正式运行代码。`experiments/cc-bridge/`（桥接 MCP 复用生产版 `send_message`，沙盒运行脚本含每次调用的回合数和折算价上限、整次运行总折算价上限，以及人工核对过的 10 个花园工具名白名单）、`tests/test_cc_bridge.py`（9 项）、报告 `experiments/cc-bridge/REPORT.md`。结论：真实花园读取、Claude Code 自主调用工具、多条独立气泡都在 lan 电脑上跑通；`Chat.tool_schemas()` 和 `_execute_tool_call()` 是现成的统一工具入口，设计上聊天历史和记忆留在 VEIL，订阅额度用完后换回 API 模型即可（正式通道的切换未验证，本轮只用沙盒里的快照）。另有真隔离验证（`experiments/cc-jail/`）：Docker 内部网络加白名单代理，CC 自己从 GitHub 链接调查、安装、接入 Time Server 并调用成功，5 回合 $0.079。风险：订阅额度能否撑住日常用量未验证，订阅额度本身没有硬限制；官方 SDK 文档对第三方使用订阅登录有限制；下拉里不能叫「Claude Code」。本轮出过一次循环失控（无回合上限），已修，正式接入必须保留。Windows 体验验收只有一次受控运行，无正式接入。验收见 `docs/tickets/227-cc-bridge-experiment.md`。下一个工单号 228。
+
 ## 工单 226：思考和工具折叠显示
 
 - `ticket/226-thinking-fold`：聊天里每次回复前的工具提示和模型思考文字收进一个默认收起的灰字块（有思考文字写「思考了 N 秒 ›」，只有工具写「用了 N 个工具 ›」），点开按发生顺序看到思考文字和工具行；显示的是接口本来就返回的内容，不多发请求、不改思考开关，不写进聊天记录和记忆。`tools_agent.py`（`TraceLine`）、`veil_agent.py`、`web_agent.py`（新事件 `trace`）、`desktop/chat.js`、`chat.css`。新增 2 项测试，改 1 项；全量测试与 main 相同的云端环境类失败一致；Windows 实机未验证。重启 Peter 后折叠块不恢复（和原来的工具提示一样）。验收见 `docs/tickets/226-thinking-fold.md`。下一个工单号 227。
