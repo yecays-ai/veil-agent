@@ -1,3 +1,10 @@
+## 工单 228：聊天里接入 Claude Code 通道
+
+- `ticket/228-cc-channel`（已在 lan 的 Windows 上冒烟：3 轮、1 张审批卡、hello.txt 建出，折算约 $0.675；订阅额度能否撑日常用量未验证）：模型页多一个内置条目「claude_agent」。选它后，Peter 在聊天里的回复由 Claude Code 完成：VEIL 照旧拼人设、事实、记忆、历史，每轮启动一次 `claude -p`；VEIL 的工具通过本机小桥交给它；它保留原生工具（命令行、读写文件、网页等）。它的权限提问变成聊天里的同意/拒绝卡片，你的回答再回给它。新增 `claude_agent_channel.py`、`claude_agent_bridge.py`，改动 `veil_agent.py`（`_send` 分支、`toml_provider`、`make_model`）、`model_settings.py`、`characters/peter/character.toml`，测试 `tests/test_claude_agent_channel.py`（用假的 claude 进程）。原生工具不受 VEIL 路径检查限制（设计如此，与 lan 电脑上的 Claude Code 同权），但给它加了 `.env` 和 secrets 目录的读写拒绝规则；叫停按钮会拒掉未回答的审批卡；该通道只能选给 Peter 聊天，不能选给后台或 glance；`claude` 路径可在 `.env` 里用 `VEIL_CLAUDE_PATH` 指定。
+- 限制：每轮 30 回合、$1.5（API 折算，订阅本身无逐 token 价格）、活动时间 900 秒（等你点卡片的时间不计）、同一调用重复超过 3 次或一轮超过 80 次工具调用就终止进程。点「停止」会终止进程；但已经弹出的审批卡仍要你点一下。自主醒来在这个通道上会提示不支持。轻量任务（短期便签、记忆标签）仍走你选的后台模型。
+- 未验证：订阅额度能否撑住日常；第三方使用订阅登录的政策；Windows 上找到 `claude` 的路径（找不到时在 `.env` 里写 `VEIL_CLAUDE_PATH=完整路径`）；你很久不点审批卡时的体验；图片消息目前只传文字部分。
+- 验收见 `docs/tickets/228-cc-channel.md`。下一个工单号 229。
+
 ## 工单 227：Claude Code 接 VEIL 工具的隔离实验
 
 - `ticket/227-cc-bridge-experiment`：只做实验，不改正式运行代码。`experiments/cc-bridge/`（桥接 MCP 复用生产版 `send_message`，沙盒运行脚本含每次调用的回合数和折算价上限、整次运行总折算价上限，以及人工核对过的 10 个花园工具名白名单）、`tests/test_cc_bridge.py`（9 项）、报告 `experiments/cc-bridge/REPORT.md`。结论：真实花园读取、Claude Code 自主调用工具、多条独立气泡都在 lan 电脑上跑通；`Chat.tool_schemas()` 和 `_execute_tool_call()` 是现成的统一工具入口，设计上聊天历史和记忆留在 VEIL，订阅额度用完后换回 API 模型即可（正式通道的切换未验证，本轮只用沙盒里的快照）。另有真隔离验证（`experiments/cc-jail/`）：Docker 内部网络加白名单代理，CC 自己从 GitHub 链接调查、安装、接入 Time Server 并调用成功，5 回合 $0.079。风险：订阅额度能否撑住日常用量未验证，订阅额度本身没有硬限制；官方 SDK 文档对第三方使用订阅登录有限制；下拉里不能叫「Claude Code」。本轮出过一次循环失控（无回合上限），已修，正式接入必须保留。Windows 体验验收只有一次受控运行，无正式接入。验收见 `docs/tickets/227-cc-bridge-experiment.md`。下一个工单号 228。

@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
+import claude_agent_channel
 import ledger_recovery
 import persona_versions
 from background import append_context_log, background_context, background_path, context_chars, request_kind
@@ -689,6 +690,15 @@ def price(value):
 
 def toml_provider(raw):
     provider = dict(raw)
+    if provider.get('kind') == 'claude_agent':
+        # Ticket 228: Claude Code answers on its own subscription login; no endpoint, key or token price.
+        if not isinstance(provider.get('model'), str) or not provider['model'].strip():
+            raise ValueError('model')
+        provider.update(base_url='', api_key_env='', thinking=provider.get('thinking', 'enabled'),
+                        max_input_tokens=positive_int(provider.get('max_input_tokens', 200000)),
+                        input_cny_per_million=Decimal(0), cached_input_cny_per_million=Decimal(0),
+                        output_cny_per_million=Decimal(0))
+        return provider
     for key in ('model', 'base_url', 'api_key_env'):
         if not isinstance(provider[key], str) or not provider[key].strip():
             raise ValueError(key)
@@ -1726,6 +1736,7 @@ class Chat:
                  voice=None, runtime_monitor=None, background_model=None):
         self.cfg, self.store, self.budget, self.model = cfg, store, budget, model
         self.pending_model = None
+        self._claude_agent = None  # ticket 228
         self.model_lock = threading.Lock()
         self.path = f'{cfg.id}/chat.jsonl'
         self.session_path = store.root / cfg.id / 'chat-session.json'
@@ -3204,7 +3215,10 @@ class Chat:
         try:
             self._capability_request_active = True
             self.last_self = description
-            if self.tool_mode:
+            if claude_agent_channel.is_channel(self.cfg.provider):
+                reply, tool_summaries = self._claude_agent_chat(messages, request_id, tool_cfg, tool_schema,
+                                                                autonomy=autonomy)
+            elif self.tool_mode:
                 reply, tool_summaries = self._tool_chat(messages, request_id, len(history), len(head),
                                                         autonomy=autonomy)
             else:
@@ -3246,7 +3260,7 @@ class Chat:
             if not isinstance(reply, str):
                 raise EmptyReplyError('接口没有返回文字回复；本次保留预留费用。')
             if not reply.strip():
-                if not autonomy and self.tool_mode and not self.force_reply:
+                if not autonomy and (self.tool_mode or claude_agent_channel.is_channel(self.cfg.provider)) and not self.force_reply:
                     self.reply_displayed = True
                     reply = ''
                 else:
@@ -3262,7 +3276,7 @@ class Chat:
                 if self.regeneration_parent_message_id:
                     event['regeneration_parent_message_id'] = self.regeneration_parent_message_id
                 self.store.append(self.path, event)
-            if not self.tool_mode:
+            if not self.tool_mode and not claude_agent_channel.is_channel(self.cfg.provider):
                 self.budget.settle(request_id, self.cfg, prompt, completion, cached, input_bytes=sent_bytes, tolerate_over_bound=True)
             # The event was included in the successful normal-chat request above.
             # Do not mark it delivered before the provider returns usable text:
@@ -3293,6 +3307,44 @@ class Chat:
                 acknowledge_glance_handoff(self.store, self.cfg, glance_handoff_id)
         self.autonomy_mode = False
         return reply
+
+    def _claude_agent_chat(self, messages, request_id, tool_cfg, tool_schema, autonomy=False):
+        """Ticket 228: Claude Code does this turn. VEIL's tools, history and approvals stay VEIL's."""
+        if autonomy:
+            self.budget.settle(request_id, tool_cfg, 0, 0, 0)
+            raise UserError('这个聊天通道暂时不支持自主醒来；请换一个模型再让他醒来。')
+        channel = self._claude_agent
+        if channel is None:
+            channel = self._claude_agent = claude_agent_channel.ClaudeAgentChannel(
+                self, self.store.root / self.cfg.id / 'claude-agent', self.cfg.provider)
+        system_text, prompt = claude_agent_channel.build_prompt(messages)
+        self._trace_request_id, self._trace_started = request_id, time.monotonic()
+        try:
+            summaries, result = channel.run_turn(system_text, prompt, request_id, tool_schema, autonomy=autonomy,
+                                                 extra_dirs=self._claude_agent_dirs())
+        except RuntimeError as exc:
+            self.budget.settle(request_id, tool_cfg, 0, 0, 0)
+            raise RequestFailed(str(exc)) from exc
+        except BaseException:
+            self.budget.settle(request_id, tool_cfg, 0, 0, 0)
+            raise
+        self.budget.settle(request_id, tool_cfg, 0, 0, 0)
+        # The subscription has no per-token price. The API-equivalent estimate is kept for reference only.
+        self.store.append(f'{self.cfg.id}/claude-agent-costs.jsonl', {
+            'request_id': request_id, 'time': now(), 'usd_estimate': result.get('total_cost_usd'),
+            'turns': result.get('num_turns'), 'duration_ms': result.get('duration_ms')})
+        self.last_tool_summaries = summaries
+        offered = {self.canonical_tool_name(item.get('function', {}).get('name')) for item in tool_schema or []}
+        if 'send_message' not in offered:  # no way to speak through a tool: his final text is the reply
+            return str(result.get('result') or ''), summaries
+        return '', summaries
+
+    def _claude_agent_dirs(self):
+        folder = (self.cfg.tools or {}).get('folder')
+        if not folder:
+            return ()
+        path = Path(folder)
+        return (path if path.is_absolute() else self.store.root.parent / path,)
 
     def _execute_tool_call(self, call, request_id, tool_call_id, autonomy,
                            offered=_UNSET_TOOL_SCHEMAS):
@@ -4285,7 +4337,12 @@ def make_model(root, cfg, provider=None):
     lock = threading.Lock()
 
     def current():
-        return provider if provider is not None else cfg.provider
+        chosen = provider if provider is not None else cfg.provider
+        if chosen.get('kind') == 'claude_agent':
+            # Ticket 228: Claude Code answers the chat turn itself. Small helper requests (notes, tagging) that
+            # share this call go to the background model Lan picked.
+            return getattr(cfg, 'background_provider', None) or chosen
+        return chosen
 
     def client_for(p):
         # No environment fallback or interpolation: key comes only from this file.

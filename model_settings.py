@@ -276,7 +276,10 @@ class ModelSettings:
     def _choice_ok(self, data, role, model_id):
         if role == 'glance' and model_id == FOLLOW_CHAT:
             return True
-        return self._provider(data, model_id) is not None
+        provider = self._provider(data, model_id)
+        if provider is not None and provider.get('kind') == 'claude_agent' and role != 'peter':
+            return False  # the Claude Code channel only works as Peter's chat model
+        return provider is not None
 
     def selected(self, role):
         """What the 模型 page shows for a role. For glance this can be FOLLOW_CHAT."""
@@ -342,7 +345,8 @@ class ModelSettings:
             for name, provider in self.builtins.items():
                 models.append({'id': BUILTIN_PREFIX + name, 'builtin': True, 'label': f'{name}（内置）',
                                'model': provider['model'], 'endpoint_name': name,
-                               'key_set': bool((env.get(provider['api_key_env']) or '').strip())})
+                               'key_set': provider.get('kind') == 'claude_agent'
+                               or bool((env.get(provider['api_key_env']) or '').strip())})
             names = {item['id']: item['name'] for item in endpoints}
             keys = {item['id']: item['key_set'] for item in endpoints}
             for item in self.data['models']:
