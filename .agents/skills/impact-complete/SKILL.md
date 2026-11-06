@@ -19,6 +19,12 @@ description: 每个开发任务开始和交付前必读的 VEIL Agent 适配：�
 4. **交付前用原版 Skill 验证**：按 `verification-before-completion` 运行新旧相关测试，检查完整退出码和实际输出；依照最终 Git diff 再查一遍新影响路径。PR 给出影响表、代码证据、实际测试结果与 Windows 用户体验验收步骤。无法实测的平台明确“待验”，不能说已完成。
 5. **出现故障用原版 Skill 定根因**：按 `systematic-debugging` 复现、追溯和修复；若影响正确性、权限、安全或数据的回归没解决，不合并。
 
+影响表使用 Markdown 表格：
+
+| 用户场景 | 代码证据 | 当前行为 | 预期行为 | 行动与验证 |
+| --- | --- | --- | --- | --- |
+| 逐项列出真实受影响的场景 | 文件/函数 | 改动前 | 改动后 | 修改或不变的依据、测试/验收状态 |
+
 ## 示例（不是只检查这些）
 
-工单 228 的 CC 通道只接聊天，但 `autonomy.py` 的 `chat.send(..., autonomy=True)` 会使用聊天 provider，`veil_agent.py` 的 `_claude_agent_chat` 拒绝自主活动。新通道上线前，应从“共享模型选择”往所有使用者追踪，保住既有自主活动，而非要求 lan 找到问题再开修复工单。此处作为**已知未修代码回归**记录，不能把新增 Skill 说成运行功能已经修好。
+工单 228 的 CC 通道只接聊天，但 `autonomy.py` 的 `chat.send(..., autonomy=True)` 会使用聊天 provider，`veil_agent.py` 的 `_claude_agent_chat` 拒绝自主活动。此缺陷不由本流程文档引起，需在实际修复聊天与自主活动模型耦合的工单中修复；本 Skill 只要求当前 PR 修复由当前变更造成的问题，不把已有缺陷记成已修。

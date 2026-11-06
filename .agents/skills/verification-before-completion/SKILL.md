@@ -97,7 +97,7 @@ Skip any step = lying, not verifying
 ❌ "Tests pass, phase complete"
 ```
 
-**Agent delegation:**
+**Reporting an agent's work as complete:**
 ```
 ✅ Agent reports success → Check VCS diff → Verify changes → Report actual state
 ❌ Trust agent report
@@ -111,7 +111,7 @@ Skip any step = lying, not verifying
 - ANY positive statement about work state
 - Committing, PR creation, task completion
 - Moving to next task
-- Delegating to agents
+- Reporting delegated work as complete
 
 **Rule applies to:**
 - Exact phrases

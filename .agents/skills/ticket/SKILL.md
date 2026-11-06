@@ -8,7 +8,8 @@ description: 开一张新工单并做到合并：写工单、开分支、实现�
 0. **开工**：拉取最新 `main`，读 `STATUS.md`、`HANDOFF.md`，核对上一张相关工单的 GitHub PR 状态、合并提交、最新 CI 和实际交付；若已合并但 `STATUS.md` 仍显示施工中，在本 PR 中纠正。分别记录合并、自动检查、Windows 体验验收。用两句话向 lan 复述当前目标和你要做什么（`AGENTS.md`“开工和收工”）。
 1. **过三问**（`AGENTS.md`）。任何一问答不上来，停下，告诉 lan 原因。
 2. **先查复用**：按 `reuse-first` skill 查有没有成熟实现。
-2.5. **查全影响并承担联动修复**：执行 `impact-complete` skill；修 Bug 按原版 `systematic-debugging` 查根因，完成前按原版 `verification-before-completion` 取得新证据，双向搜索要修改的代码、配置和状态的所有消费者及副作用，列出真实使用旅程。凡由本次变更造成的相邻功能回归，必须在**同一个 PR** 修复、回归验证；不能留给 lan 发现后再开新单。\n3. **写工单** `docs/tickets/<编号>-<短名>.md`，编号接着最大的往下排。只写三段：
+2.5. **查全影响并承担联动修复**：执行 `impact-complete` skill；修 Bug 按原版 `systematic-debugging` 查根因，完成前按原版 `verification-before-completion` 取得新证据，双向搜索要修改的代码、配置和状态的所有消费者及副作用，列出真实使用旅程。凡由本次变更造成的相邻功能回归，必须在**同一个 PR** 修复、回归验证；不能留给 lan 发现后再开新单。
+3. **写工单** `docs/tickets/<编号>-<短名>.md`，编号接着最大的往下排。只写三段：
    - 目标：做完 lan 能做到什么（一句话）。
    - 当前状态：现在缺什么，相关文件在哪。
    - 验收步骤：lan 在 Windows 上做的 1–3 步体验，不写“跑测试”。

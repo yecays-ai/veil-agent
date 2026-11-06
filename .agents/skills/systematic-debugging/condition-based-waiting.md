@@ -61,14 +61,14 @@ Generic polling function:
 ```typescript
 async function waitFor<T>(
   condition: () => T | undefined | null | false,
-  description: string,
+  description = 'condition',
   timeoutMs = 5000
 ): Promise<T> {
   const startTime = Date.now();
 
   while (true) {
     const result = condition();
-    if (result) return result;
+    if (result !== undefined && result !== null && result !== false) return result;
 
     if (Date.now() - startTime > timeoutMs) {
       throw new Error(`Timeout waiting for ${description} after ${timeoutMs}ms`);
@@ -79,7 +79,7 @@ async function waitFor<T>(
 }
 ```
 
-See `condition-based-waiting-example.ts` in this directory for complete implementation with domain-specific helpers (`waitForEvent`, `waitForEventCount`, `waitForEventMatch`) from actual debugging session.
+The helper above is complete; adapt the predicate to the event or state available in the test.
 
 ## Common Mistakes
 
@@ -96,7 +96,7 @@ See `condition-based-waiting-example.ts` in this directory for complete implemen
 
 ```typescript
 // Tool ticks every 100ms - need 2 ticks to verify partial output
-await waitForEvent(manager, 'TOOL_STARTED'); // First: wait for condition
+await waitFor(() => events.find(event => event.type === 'TOOL_STARTED'), 'tool start'); // First: wait for condition
 await new Promise(r => setTimeout(r, 200));   // Then: wait for timed behavior
 // 200ms = 2 ticks at 100ms intervals - documented and justified
 ```
@@ -106,10 +106,6 @@ await new Promise(r => setTimeout(r, 200));   // Then: wait for timed behavior
 2. Based on known timing (not guessing)
 3. Comment explaining WHY
 
-## Real-World Impact
+## Guidance
 
-From debugging session (2025-10-03):
-- Fixed 15 flaky tests across 3 files
-- Pass rate: 60% → 100%
-- Execution time: 40% faster
-- No more race conditions
+Use the condition that the test actually depends on; do not claim timing or pass-rate improvements without measuring them in this repository.

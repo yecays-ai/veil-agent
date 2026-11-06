@@ -1,13 +1,9 @@
-## 工单 230 交接（2026-11-07）
+## 工单 231 交接（2026-11-07）
 
-- 原样引入 MIT 许可的 obra/superpowers `systematic-debugging`、`verification-before-completion` 两个 Skill 和调试资料；`.agents/skills/impact-complete/SKILL.md` 仅补充本项目双向影响追踪、同单联动修复；更新 `AGENTS.md` 与 `.agents/skills/ticket/SKILL.md`，强制任何开发变更先追踪所有调用者及副作用、同 PR 修完连带故障，交付前复查 diff 和新旧使用旅程。只调整开发流程，不安装新运行依赖、不调用付费模型。
-- **待修运行缺陷**：自主活动通过 `chat.send(..., autonomy=True)` 使用聊天 provider，CC 聊天通道拒绝自主醒来；新增 Skill 不能替代运行代码修复。下一功能修复的验收应是聊天 CC、指定 API 模型自主醒来实际成功，且其他共享模型消费者不回归。
-- 下一个窗口：按 Skill 实测 Codex/Claude 在真实变更任务中的影响追踪和联动修复，标记尚未完成的 Windows 体验；不要把流程文档当做自动化验收通过。
-
-## 工单 229 交接（2026-11-06）
-
-- 改动：见 STATUS.md 工单 229，只改 `find_claude`（顺序：配置路径存在才用 → PATH → 桌面版目录里版本最新的 claude.exe）和测试。`ClaudeAgentChannel.run_turn` 的调用不变。
-- 已知限制：只认桌面版常见的两个目录；其他安装方式仍需在 `.env` 写 `VEIL_CLAUDE_PATH`。
+- 改动：将 PR #283 重编号为工单 231，合入 PR #284 之后的 main；修复工作流说明里的字面量换行、错误/缺失的示例、Node 路径前缀校验漏洞及不存在的 Skill 引用；影响检查 Skill 补上 Markdown 表格模板，并明确只要求修复本次改动引起的问题。PR 更新提交后的唯一一轮 CI 待完成。
+- 下一步：检查 PR #283 最新提交的必需 CI；通过后合并。之后开工单 232，为 Claude Code 通道加入可选模型，并在现有模型页中提供独立的自主活动模型选择。
+- 工单 230：PR #284 已合并为 `806e9f9`；Peter Windows 三条聊天、工具、审批、停止和退出清理验收仍待 Lan 操作。
+- 工单 229：PR #282 于 2026-11-06 以 `f6785def` 合并，CI 通过；`find_claude` 按设置路径、PATH、桌面版目录最新版本的顺序查找。Windows 实机验收待 Lan 更新并重启 Peter；其他安装目录仍可在 `.env` 指定 `VEIL_CLAUDE_PATH`。
 
 ## 工单 228 交接（2026-11-06）
 

@@ -85,23 +85,13 @@ You MUST complete each phase before proceeding to the next.
    ```
 
    **Example (multi-layer system):**
-   ```bash
-   # Layer 1: Workflow
-   echo "=== Secrets available in workflow: ==="
-   echo "IDENTITY: $([ -n "${IDENTITY:-}" ] && echo SET || echo UNSET)"
+   ```python
+   import os
 
-   # Layer 2: Build script
-   echo "=== Env vars in build script: ==="
-   printenv IDENTITY >/dev/null 2>&1 && echo "IDENTITY in environment" || echo "IDENTITY not in environment"
-
-   # Layer 3: Signing script
-   echo "=== Keychain state: ==="
-   security list-keychains
-   security find-identity -v
-
-   # Layer 4: Actual signing
-   codesign --sign "$IDENTITY" --verbose=4 "$APP"
+   # At each boundary, log whether expected configuration arrived.
+   print('Claude path configured:', bool(os.getenv('VEIL_CLAUDE_PATH')))
    ```
+   Then inspect the corresponding caller, service setup, and process launch separately; never print credentials or full secret values.
 
    **This reveals:** Which layer fails (secrets → workflow ✓, workflow → build ✗)
 
@@ -174,7 +164,7 @@ You MUST complete each phase before proceeding to the next.
    - Automated test if possible
    - One-off test script if no framework
    - MUST have before fixing
-   - Use the `superpowers:test-driven-development` skill for writing proper failing tests
+   - In this repository, add or update a focused `pytest` regression test before changing the code.
 
 2. **Implement Single Fix**
    - Address the root cause identified
@@ -186,7 +176,7 @@ You MUST complete each phase before proceeding to the next.
    - Test passes now?
    - No other tests broken?
    - Issue actually resolved?
-   - Use the `superpowers:verification-before-completion` skill before claiming success
+   - Use the local `verification-before-completion` skill before claiming success.
 
 4. **If Fix Doesn't Work**
    - STOP
@@ -228,7 +218,7 @@ If you catch yourself thinking:
 
 **ALL of these mean: STOP. Return to Phase 1.**
 
-**If 3+ fixes failed:** Question the architecture (see Phase 4.5)
+**If 3+ fixes failed:** Question the architecture (see Phase 4, step 5).
 
 ## your human partner's Signals You're Doing It Wrong
 

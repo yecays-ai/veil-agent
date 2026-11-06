@@ -53,13 +53,17 @@ function initializeWorkspace(projectDir: string, sessionId: string) {
 **Purpose:** Prevent dangerous operations in specific contexts
 
 ```typescript
+import * as path from 'node:path';
+import { tmpdir } from 'node:os';
+
 async function gitInit(directory: string) {
   // In tests, refuse git init outside temp directories
   if (process.env.NODE_ENV === 'test') {
-    const normalized = normalize(resolve(directory));
-    const tmpDir = normalize(resolve(tmpdir()));
+    const normalized = resolve(directory);
+    const tmpDir = resolve(tmpdir());
+    const relative = path.relative(tmpDir, normalized);
 
-    if (!normalized.startsWith(tmpDir)) {
+    if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
       throw new Error(
         `Refusing git init outside temp dir during tests: ${directory}`
       );
@@ -109,7 +113,7 @@ Bug: Empty `projectDir` caused `git init` in source code
 - Layer 3: `WorktreeManager` refuses git init outside tmpdir in tests
 - Layer 4: Stack trace logging before git init
 
-**Result:** All 1847 tests passed, bug impossible to reproduce
+**Result:** Record the actual test output and remaining bypass cases for the repository being investigated.
 
 ## Key Insight
 

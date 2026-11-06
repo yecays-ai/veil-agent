@@ -53,8 +53,8 @@ WorktreeManager.createSessionWorktree(projectDir, sessionId)
 ### 4. Keep Tracing Up
 **What value was passed?**
 - `projectDir = ''` (empty string!)
-- Empty string as `cwd` resolves to `process.cwd()`
-- That's the source code directory!
+- Node rejects an empty `cwd`; an omitted `cwd` defaults to `process.cwd()`.
+- Check whether the caller omitted the option or passed an empty value before tracing further.
 
 ### 5. Find Original Trigger
 **Where did empty string come from?**
@@ -65,7 +65,7 @@ Project.create('name', context.tempDir); // Accessed before beforeEach!
 
 ## Adding Stack Traces
 
-When you can't trace manually, add instrumentation:
+When you can't trace manually, add instrumentation. The example below is TypeScript-specific; in this Python repository use `logging` or a temporary `print(..., file=sys.stderr)` and run the relevant test with `pytest`.
 
 ```typescript
 // Before the problematic operation
@@ -82,11 +82,11 @@ async function gitInit(directory: string) {
 }
 ```
 
-**Critical:** Use `console.error()` in tests (not logger - may not show)
+**In TypeScript tests:** use `console.error()` when the test logger may be suppressed.
 
 **Run and capture:**
-```bash
-npm test 2>&1 | grep 'DEBUG git init'
+```powershell
+pytest -q tests -k 'suspected_test' -s 2>&1 | Select-String 'DEBUG git init'
 ```
 
 **Analyze stack traces:**
@@ -98,13 +98,13 @@ npm test 2>&1 | grep 'DEBUG git init'
 
 If something appears during tests but you don't know which test:
 
-Use the bisection script `find-polluter.sh` in this directory:
+Bisect the relevant tests with the test runner's selection options. For pytest, start with:
 
-```bash
-bash ./find-polluter.sh '.git' 'src/**/*.test.ts'
+```powershell
+pytest -q tests -k 'first_suspected_test'
 ```
 
-Runs tests one-by-one, stops at first polluter. See script for usage.
+Narrow the selected tests until the first polluting test is isolated; no helper script is included here.
 
 ## Real Example: Empty projectDir
 
@@ -155,15 +155,11 @@ digraph principle {
 
 ## Stack Trace Tips
 
-**In tests:** Use `console.error()` not logger - logger may be suppressed
+**In TypeScript tests:** Use `console.error()` when the test logger may be suppressed.
 **Before operation:** Log before the dangerous operation, not after it fails
 **Include context:** Directory, cwd, environment variables, timestamps
 **Capture stack:** `new Error().stack` shows complete call chain
 
-## Real-World Impact
+## Applying the Example
 
-From debugging session (2025-10-03):
-- Found root cause through 5-level trace
-- Fixed at source (getter validation)
-- Added 4 layers of defense
-- 1847 tests passed, zero pollution
+The trace above is a generic illustration. Verify every runtime claim against the language and repository under investigation before applying it.

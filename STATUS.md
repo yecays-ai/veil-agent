@@ -1,10 +1,16 @@
-## 工单 230：每单影响分析与联动修复 Skill
+## 工单 231：跨功能影响分析与联动修复
 
-- `ticket/230-impact-complete`：新增 `.agents/skills/impact-complete/SKILL.md`，并更新 `AGENTS.md` / `ticket` 工作流。每次代码/配置修改须搜索真实调用者、消费者、共享状态、副作用及用户旅程；发现由改动造成的关联故障必须在同 PR 内修复与回归，不允许让 lan 事后找 Bug。已直接复用 obra/superpowers 原版 `systematic-debugging`、`verification-before-completion` Skill、调试参考资料及 MIT 许可证；`impact-complete` 只补 VEIL 的全路径追踪与同 PR 联动修复要求。仅新增开发流程规则，无模型费用、无运行代码修改。新窗口 Codex/Claude 是否稳定执行仍待实际验证。**已知 CC 聊天导致自主活动报错尚未修复**；本单不声称修复了它。验收见 `docs/tickets/230-impact-complete.md`。下一工单号 231。
+- `ticket/231-impact-complete`：在 `AGENTS.md` 和工单流程中接入影响追踪、根因分析与完成前验证；修复文档断行、无效示例和路径安全示例。PR #283 已同步 PR #284 合并后的 main，审查意见已修正；本次提交的 CI 待跑。流程文档改动不直接修运行代码。
+- 验收：后续改动 PR 能列出真实调用路径和影响矩阵，提供新旧行为验证证据，并将 Windows 实机验收单独标注。下一个工单号 232（Claude 模型选择与自主活动独立模型）。
+
+## 工单 230：Claude Code 后台启动不弹终端窗
+
+- PR #284 已合并到 main（`806e9f9`）；启动参数定向单测通过。CI 检查曾通过（以 PR #284 当前检查为准）；Peter Windows 实机体验仍待 Lan 按下方步骤验收。
+- 验收：连续发三条消息，不弹终端窗；Peter 正常回复并可使用工具、通过权限审批；点停止可终止本轮；退出 Peter 后没有遗留 CC 进程。
 
 ## 工单 229：自动找到 claude 命令
 
-- `ticket/229-cc-find-claude`：`claude_agent_channel.find_claude` 现在的顺序是：`.env`/环境变量里的 `VEIL_CLAUDE_PATH`（文件存在才用，写错或过期会自动往下找）→ PATH 里的 `claude` → Claude 桌面版在 Windows 上放的 `claude.exe`（`%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude\claude-code\<版本>\<哈希>\claude.exe` 和 `%APPDATA%\Claude\claude-code\...`，取版本最新的）。桌面版升级后不用再改路径。新增 4 项测试，改 1 项。lan 的 `.env` 里原来路径少了一个字母，已由实机会话补正；本工单上线后即使写错也会自动找到。Windows 实机未验证（需更新后重启 Peter）。下一个工单号 230。
+- `ticket/229-cc-find-claude`（PR #282，合并提交 `f6785def`）：`find_claude` 依次查找配置路径、PATH 和 Claude 桌面版目录中的最新 `claude.exe`；配置路径写错时自动回退。新增 4 项测试，改 1 项，自动检查已通过。Lan 本机 `.env` 路径已在前一轮实机会话修正；本工单 Windows 验收仍待更新后重启 Peter 确认。
 
 ## 工单 228：聊天里接入 Claude Code 通道
 
