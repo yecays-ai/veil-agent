@@ -62,18 +62,23 @@ def main():
 
     chat = Chat(cfg, store, Budget(store), no_model, output=lambda out: (shown.append(str(out)), print('PETER:', str(out))),
                 approval=approval)
-    started = time.time()
-    for text in ("hey, quick check: are you there? answer in two short messages",
-                 "make a file called hello.txt in your workspace folder containing the word hi, use the shell",
-                 "now use the shell to fetch the first 80 characters of https://example.com and tell me what it says"):
-        print('\nLAN:', text)
-        chat.send(text)
-        print(f'(turn done, {time.time() - started:.0f}s since start)')
-    print('\n=== summary ===')
-    print('bubbles:', len(shown), '| approval cards:', len(asked))
-    print('costs:', store.read('test/claude-agent-costs.jsonl'))
-    print('workspace files:', [p.name for p in (root / 'data' / 'test' / 'workspace').rglob('*') if p.is_file()])
-    print('data folder:', root)
+    try:
+        started = time.time()
+        for text in ("hey, quick check: are you there? answer in two short messages",
+                     "make a file called hello.txt in your workspace folder containing the word hi, use the shell",
+                     "now use the shell to fetch the first 80 characters of https://example.com and tell me what it says"):
+            print('\nLAN:', text)
+            chat.send(text)
+            print(f'(turn done, {time.time() - started:.0f}s since start)')
+        print('\n=== summary ===')
+        print('bubbles:', len(shown), '| approval cards:', len(asked))
+        print('costs:', store.read('test/claude-agent-costs.jsonl'))
+        print('workspace files:', [p.name for p in (root / 'data' / 'test' / 'workspace').rglob('*') if p.is_file()])
+        print('data folder:', root)
+    finally:
+        if not args.keep:
+            import shutil
+            shutil.rmtree(root, ignore_errors=True)
     return 0
 
 

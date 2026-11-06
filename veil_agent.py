@@ -3322,7 +3322,7 @@ class Chat:
         try:
             summaries, result = channel.run_turn(system_text, prompt, request_id, tool_schema, autonomy=autonomy,
                                                  extra_dirs=self._claude_agent_dirs())
-        except RuntimeError as exc:
+        except (RuntimeError, OSError) as exc:
             self.budget.settle(request_id, tool_cfg, 0, 0, 0)
             raise RequestFailed(str(exc)) from exc
         except BaseException:
@@ -3334,6 +3334,9 @@ class Chat:
             'request_id': request_id, 'time': now(), 'usd_estimate': result.get('total_cost_usd'),
             'turns': result.get('num_turns'), 'duration_ms': result.get('duration_ms')})
         self.last_tool_summaries = summaries
+        offered = {self.canonical_tool_name(item.get('function', {}).get('name')) for item in tool_schema or []}
+        if 'send_message' not in offered:  # no way to speak through a tool: his final text is the reply
+            return str(result.get('result') or ''), summaries
         return '', summaries
 
     def _claude_agent_dirs(self):

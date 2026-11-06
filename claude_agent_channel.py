@@ -257,7 +257,22 @@ class ToolServer:
         call_id = body.get('id') or uuid.uuid4().hex
         call = SimpleNamespace(id=call_id, function=SimpleNamespace(
             name=name, arguments=json.dumps(arguments, ensure_ascii=False)))
-        execution = self.chat._execute_tool_call(call, state.request_id, call_id, state.autonomy, state.offered)
+        original = self.chat.approval
+
+        def timed_approval(prompt):  # time spent waiting for Lan does not count against the wall clock
+            started = time.monotonic()
+            state.waiting_for_lan += 1
+            try:
+                return original(prompt)
+            finally:
+                state.waiting_for_lan -= 1
+                state.waited += time.monotonic() - started
+
+        self.chat.approval = timed_approval
+        try:
+            execution = self.chat._execute_tool_call(call, state.request_id, call_id, state.autonomy, state.offered)
+        finally:
+            self.chat.approval = original
         text = model_tool_result(name, execution.result, execution.state)
         text = text if isinstance(text, str) else str(text)
         self.chat.store.append(f'{self.chat.cfg.id}/tools.jsonl', {
@@ -439,7 +454,7 @@ class ClaudeAgentChannel:
         self.chat.store.append(f'{self.chat.cfg.id}/tools.jsonl', {
             'request_id': state.request_id, 'tool': name, 'path': name, 'state': '已请求',
             'time': _now(), 'call_id': block.get('id'), 'channel': CHANNEL_KIND,
-            'detail': describe_request(name, block.get('input'))[:200]})
+            'detail': ''})  # the command itself may hold credentials; Lan saw it on the approval card
 
 
 def build_prompt(messages):
