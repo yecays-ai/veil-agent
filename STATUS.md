@@ -1,3 +1,7 @@
+## 工单 230：每单影响分析与联动修复 Skill
+
+- `ticket/230-impact-complete`：新增 `.agents/skills/impact-complete/SKILL.md`，并更新 `AGENTS.md` / `ticket` 工作流。每次代码/配置修改须搜索真实调用者、消费者、共享状态、副作用及用户旅程；发现由改动造成的关联故障必须在同 PR 内修复与回归，不允许让 lan 事后找 Bug。参考 Superpowers systematic-debugging 和 verification-before-completion，仅新增开发流程规则，无模型费用、无运行代码修改。新窗口 Codex/Claude 是否稳定执行仍待实际验证。**已知 CC 聊天导致自主活动报错尚未修复**；本单不声称修复了它。验收见 `docs/tickets/230-impact-complete.md`。下一工单号 231。
+
 ## 工单 229：自动找到 claude 命令
 
 - `ticket/229-cc-find-claude`：`claude_agent_channel.find_claude` 现在的顺序是：`.env`/环境变量里的 `VEIL_CLAUDE_PATH`（文件存在才用，写错或过期会自动往下找）→ PATH 里的 `claude` → Claude 桌面版在 Windows 上放的 `claude.exe`（`%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude\claude-code\<版本>\<哈希>\claude.exe` 和 `%APPDATA%\Claude\claude-code\...`，取版本最新的）。桌面版升级后不用再改路径。新增 4 项测试，改 1 项。lan 的 `.env` 里原来路径少了一个字母，已由实机会话补正；本工单上线后即使写错也会自动找到。Windows 实机未验证（需更新后重启 Peter）。下一个工单号 230。
