@@ -3746,7 +3746,7 @@ class Chat:
         if run_cap is not None:
             configured_steps = autonomy_config.get('max_tool_steps', configured_steps)
         autonomy_tool_limit = min(configured_steps, self.glance_tool_limit) if self.glance_mode else configured_steps
-        run_spend_start = sum(self.budget.category_totals(self.cfg.id)[:1]) if run_cap is not None else None
+        run_spend_start = (self.budget.clock()[:10], self.budget.category_totals(self.cfg.id)[0]) if run_cap is not None else None
         # Keep one final model turn after the last autonomous tool so Peter can
         # leave the four-line handoff without sacrificing a usable tool step.
         max_steps = (1 if self.codex_watch_mode else configured_steps + 1 if autonomy else configured_steps)
@@ -3790,7 +3790,10 @@ class Chat:
             if autonomy_limit_reached:
                 self.autonomy_step_limited = True
             elif run_cap is not None and not self.autonomy_cost_limited:
-                spent = self.budget.category_totals(self.cfg.id)[0] - run_spend_start
+                # The day total restarts at midnight; a wake that crosses it counts from zero on the new day.
+                start_day, start_total = run_spend_start
+                spent = self.budget.category_totals(self.cfg.id)[0] - (
+                    start_total if self.budget.clock()[:10] == start_day else 0)
                 if spent >= run_cap:
                     self.autonomy_cost_limited = True
             if run_cap is not None and self.autonomy_cost_limited:
