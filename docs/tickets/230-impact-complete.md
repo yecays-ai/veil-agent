@@ -4,7 +4,7 @@
 以后 Codex 和 Claude 每改 Peter 的一处功能、配置或接口，都要自己查所有受影响的现有使用场景，在同一任务里修复因该变更引起的连带故障，并提供回归证据；lan 不需要先遇到 Bug 才能安排修复。
 
 ## 当前状态
-仓库已有 `reuse-first`、工单和 PR 审查规范，但缺少“从真实代码双向追踪影响 → 同单修复 → 验证旧功能”的交付门槛。新增 `.agents/skills/impact-complete/SKILL.md`，在 `AGENTS.md`、`ticket` 流程中强制执行；不依赖固定功能名单、不安装新运行依赖。本单只调整开发工作流，不改 Peter 的运行代码。
+仓库已有 `reuse-first`、工单和 PR 审查规范，但缺少“从真实代码双向追踪影响 → 同单修复 → 验证旧功能”的交付门槛。原样引入 obra/superpowers 的 `systematic-debugging`、`verification-before-completion` 两个成熟 Skill 与前者的参考资料，保留 MIT 许可证；`.agents/skills/impact-complete/SKILL.md` 只作为 VEIL 特有的跨功能检查接线规则。`AGENTS.md`、`ticket` 流程调用它们。不依赖固定功能名单、不安装运行依赖。本单只调整开发工作流，不改 Peter 的运行代码。
 
 已知待修缺陷：工单 228 的 CC 聊天通道会使自主活动报“不支持”。这是新 Skill 应能主动识别的跨路径回归，但**本单不宣称已修复运行逻辑**。需要单独的修复代码和真实 Windows 验收。
 
