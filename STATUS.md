@@ -1,3 +1,7 @@
+## 工单 229：自动找到 claude 命令
+
+- `ticket/229-cc-find-claude`：`claude_agent_channel.find_claude` 现在的顺序是：`.env`/环境变量里的 `VEIL_CLAUDE_PATH`（文件存在才用，写错或过期会自动往下找）→ PATH 里的 `claude` → Claude 桌面版在 Windows 上放的 `claude.exe`（`%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude\claude-code\<版本>\<哈希>\claude.exe` 和 `%APPDATA%\Claude\claude-code\...`，取版本最新的）。桌面版升级后不用再改路径。新增 4 项测试，改 1 项。lan 的 `.env` 里原来路径少了一个字母，已由实机会话补正；本工单上线后即使写错也会自动找到。Windows 实机未验证（需更新后重启 Peter）。下一个工单号 230。
+
 ## 工单 228：聊天里接入 Claude Code 通道
 
 - `ticket/228-cc-channel`（已在 lan 的 Windows 上冒烟：3 轮、1 张审批卡、hello.txt 建出，折算约 $0.675；订阅额度能否撑日常用量未验证）：模型页多一个内置条目「claude_agent」。选它后，Peter 在聊天里的回复由 Claude Code 完成：VEIL 照旧拼人设、事实、记忆、历史，每轮启动一次 `claude -p`；VEIL 的工具通过本机小桥交给它；它保留原生工具（命令行、读写文件、网页等）。它的权限提问变成聊天里的同意/拒绝卡片，你的回答再回给它。新增 `claude_agent_channel.py`、`claude_agent_bridge.py`，改动 `veil_agent.py`（`_send` 分支、`toml_provider`、`make_model`）、`model_settings.py`、`characters/peter/character.toml`，测试 `tests/test_claude_agent_channel.py`（用假的 claude 进程）。原生工具不受 VEIL 路径检查限制（设计如此，与 lan 电脑上的 Claude Code 同权），但给它加了 `.env` 和 secrets 目录的读写拒绝规则；叫停按钮会拒掉未回答的审批卡；该通道只能选给 Peter 聊天，不能选给后台或 glance；`claude` 路径可在 `.env` 里用 `VEIL_CLAUDE_PATH` 指定。

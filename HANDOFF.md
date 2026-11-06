@@ -1,3 +1,8 @@
+## 工单 229 交接（2026-11-06）
+
+- 改动：见 STATUS.md 工单 229，只改 `find_claude`（顺序：配置路径存在才用 → PATH → 桌面版目录里版本最新的 claude.exe）和测试。`ClaudeAgentChannel.run_turn` 的调用不变。
+- 已知限制：只认桌面版常见的两个目录；其他安装方式仍需在 `.env` 写 `VEIL_CLAUDE_PATH`。
+
 ## 工单 228 交接（2026-11-06）
 
 - 改动：见 STATUS.md 工单 228。工具调用都在当前这一轮的线程里执行（`saving()` 只能在主线程用，桌面自动化也需要原线程）：本机小服务只排队，`ClaudeAgentChannel.run_turn` 在原线程逐个执行。

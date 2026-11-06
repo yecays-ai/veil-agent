@@ -104,15 +104,50 @@ def minimal_env(extra=None):
     return env
 
 
-def find_claude(provider=None, env_file=None):
-    path = (provider or {}).get('claude_path') or os.environ.get('VEIL_CLAUDE_PATH')
+def _version_key(path):
+    """Sort key from the version folder in .../claude-code/<version>/<hash>/claude.exe."""
+    for part in reversed(Path(path).parts):
+        if re.fullmatch(r'\d+(\.\d+)+', part):
+            return tuple(int(n) for n in part.split('.'))
+    return (0,)
+
+
+def desktop_app_claudes(environ=None):
+    """claude.exe copies the Claude desktop app keeps on Windows, newest version first. The version and hash folders
+    change with every app update, so nobody should have to type them."""
+    environ = os.environ if environ is None else environ
+    patterns = []
+    local, roaming = environ.get('LOCALAPPDATA'), environ.get('APPDATA')
+    if local:
+        patterns.append((Path(local), 'Packages/Claude_*/LocalCache/Roaming/Claude/claude-code/*/*/claude.exe'))
+    if roaming:
+        patterns.append((Path(roaming), 'Claude/claude-code/*/*/claude.exe'))
+    found = []
+    for base, pattern in patterns:
+        try:
+            found += [str(p) for p in base.glob(pattern) if p.is_file()]
+        except OSError:
+            continue
+    return sorted(found, key=_version_key, reverse=True)
+
+
+def find_claude(provider=None, env_file=None, environ=None):
+    """A configured path wins when it exists; a wrong or stale one falls through to PATH and the desktop app's copy."""
+    path = (provider or {}).get('claude_path') or (environ or os.environ).get('VEIL_CLAUDE_PATH')
     if not path and env_file:
         try:
             from dotenv import dotenv_values
             path = (dotenv_values(env_file, interpolate=False, encoding='utf-8-sig').get('VEIL_CLAUDE_PATH') or '').strip()
         except Exception:
             path = ''
-    return path or shutil.which('claude')
+    path = (path or '').strip().strip('"')
+    if path and (os.path.isfile(path) or shutil.which(path)):
+        return path
+    found = shutil.which('claude')
+    if not found:
+        candidates = desktop_app_claudes(environ)
+        found = candidates[0] if candidates else None
+    return found
 
 
 def kill_tree(process):
