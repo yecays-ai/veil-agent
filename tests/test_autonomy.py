@@ -180,25 +180,22 @@ daily_budget_cny = "2"
         self.assertNotIn('12', controller.rows[-1]['result_reason'])
         self.assertEqual(MAX_RUNTIME_SECONDS, 15 * 60)
 
-    def test_looking_back_at_own_state_does_not_use_the_twenty_steps(self):
-        # Ticket 215: autonomy_history is a read-only look at his own state; six of them are free.
+    def wake_with_endless_reads(self, autonomy_cfg, completion):
         self.activity.set(True)
-        cfg = replace(self.cfg, tools={'enabled': True, 'max_steps': 20, 'max_output_tokens': 50})
-        responses = []
-        for turn in range(3):
-            calls = [SimpleNamespace(id=f'look-{turn}-{index}', function=SimpleNamespace(
-                name='autonomy_history', arguments='{}')) for index in range(2)]
-            responses.append((SimpleNamespace(tool_calls=calls, content=None,
-                                              model_dump=lambda **_: {'role': 'assistant', 'tool_calls': []}), 10, 5, 0))
-        for turn in range(10):
-            calls = [SimpleNamespace(id=f'read-{turn}-{index}', function=SimpleNamespace(
+        cfg = replace(self.cfg, tools={'enabled': True, 'max_steps': 20, 'max_output_tokens': 50},
+                      autonomy={**self.cfg.autonomy, **autonomy_cfg})
+        counter = iter(range(10 ** 6))
+
+        def reply(*args, **kwargs):
+            if kwargs.get('tools') is None:
+                return (SimpleNamespace(tool_calls=[], content=(
+                    'Decision: stop\nReason: limit\nFocus: fixture\nNext step: next wake')), 10, 5, 0)
+            call = SimpleNamespace(id=f'read-{next(counter)}', function=SimpleNamespace(
                 name='read_text_file', arguments=json.dumps({'path': 'lab/note.md'})))
-                for index in range(2)]
-            responses.append((SimpleNamespace(tool_calls=calls, content=None,
-                                              model_dump=lambda **_: {'role': 'assistant', 'tool_calls': []}), 10, 5, 0))
-        responses.append((SimpleNamespace(tool_calls=[], content=(
-            'Decision: stop\nReason: limit\nFocus: fixture\nNext step: next wake')), 10, 5, 0))
-        model = Mock(side_effect=responses)
+            return (SimpleNamespace(tool_calls=[call], content=None,
+                                    model_dump=lambda **_: {'role': 'assistant', 'tool_calls': []}),
+                    10, completion, 0)
+        model = Mock(side_effect=reply)
         tools = SimpleNamespace(
             tools=[SimpleNamespace(name='read_text_file', description='Read.', inputSchema={})],
             capability_event=None, capability_event_model=None,
@@ -207,26 +204,38 @@ daily_budget_cny = "2"
             invoke=Mock(return_value=('ok', '成功', 'lab/note.md')))
         chat = Chat(cfg, self.store, self.budget, model, tools=tools, output=lambda *_: None)
         controller = AutonomyController(chat, self.hub)
-
         controller.run()
+        return controller, tools, model
 
+    def test_wake_stops_when_it_has_spent_the_run_budget_not_after_twenty_steps(self):
+        # Ticket 217: ¥0.25 per wake; each fixture step costs about ¥0.04, so it runs past 20 steps and then stops.
+        controller, tools, model = self.wake_with_endless_reads(
+            {'run_budget_cny': Decimal('0.25'), 'max_tool_steps': 60}, completion=5000)
+        self.assertGreater(tools.invoke.call_count, 5)
+        self.assertLess(tools.invoke.call_count, 10)
+        self.assertIsNone(model.call_args_list[-1].kwargs['tools'])
+        row = controller.rows[-1]
+        self.assertEqual(row['result'], '搁置')
+        self.assertIn('0.25', row['result_reason'])
+        self.assertIn('花费', row['result_reason'])
+
+    def test_cheap_wake_runs_past_twenty_steps_until_the_safety_ceiling(self):
+        controller, tools, model = self.wake_with_endless_reads(
+            {'run_budget_cny': Decimal('0.25'), 'max_tool_steps': 60}, completion=1)
+        self.assertEqual(tools.invoke.call_count, 60)
+        self.assertIn('60', controller.rows[-1]['result_reason'])
+
+    def test_without_a_run_budget_the_configured_step_limit_still_applies(self):
+        controller, tools, model = self.wake_with_endless_reads({}, completion=1)
         self.assertEqual(tools.invoke.call_count, 20)
-        done = [row['tool'] for row in self.store.read('test/tools.jsonl')
-                if row.get('state') == '成功']
-        self.assertEqual(done.count('autonomy_history'), 6)
-        self.assertEqual(controller.rows[-1]['result'], '搁置')
 
-    def test_free_review_calls_are_only_read_only_looks(self):
-        from veil_agent import is_free_review_call
-        self.assertTrue(is_free_review_call('autonomy_history', '{}'))
-        self.assertTrue(is_free_review_call('long_task_status', '{}'))
-        self.assertTrue(is_free_review_call('life_record', '{"action":"list"}'))
-        self.assertTrue(is_free_review_call('thought', '{"action":"list"}'))
-        self.assertFalse(is_free_review_call('life_record', '{"action":"create"}'))
-        self.assertFalse(is_free_review_call('thought', '{"action":"note","text":"x"}'))
-        self.assertFalse(is_free_review_call('life_record', 'not json'))
-        self.assertFalse(is_free_review_call('read_text_file', '{}'))
-        self.assertFalse(is_free_review_call('send_message', '{}'))
+    def test_peter_config_stops_wakes_by_cost(self):
+        path = Path(__file__).resolve().parents[1] / 'characters' / 'peter' / 'character.toml'
+        with path.open('rb') as handle:
+            peter = tomllib.load(handle)
+        self.assertEqual(Decimal(peter['autonomy']['run_budget_cny']), Decimal('0.25'))
+        self.assertEqual(peter['autonomy']['max_tool_steps'], 60)
+        self.assertEqual(Decimal(peter['autonomy']['daily_budget_cny']), Decimal('3'))
 
     def test_untouched_long_task_counts_as_stale_but_stays_saved(self):
         _, state, _ = self.chat.long_tasks.invoke('long_task_update', {

@@ -1076,9 +1076,15 @@ class AutonomyController:
             elif self.chat.autonomy_budget_limited:
                 record['result'] = '搁置'
                 record['result_reason'] = '后台预算池或程序总预算已到上限；正常聊天仍可继续。'
+            elif self.chat.autonomy_cost_limited and not self.chat.autonomy_step_limited:
+                record['result'] = '搁置'
+                cap = ((self.chat.cfg.autonomy or {}).get('run_budget_cny'))
+                record['result_reason'] = f'达到每次 ¥{cap} 的花费上限。'
             elif self.chat.autonomy_step_limited:
                 record['result'] = '搁置'
-                limit = (self.chat.cfg.tools or {}).get('max_steps', 1)
+                autonomy_cfg = self.chat.cfg.autonomy or {}
+                limit = (autonomy_cfg.get('max_tool_steps') if autonomy_cfg.get('run_budget_cny') is not None
+                         else (self.chat.cfg.tools or {}).get('max_steps', 1))
                 record['result_reason'] = f'达到每次 {limit} 个工具步骤的硬上限。'
             elif self.should_yield() and not self.activity.enabled():
                 record['result'] = '被打断'

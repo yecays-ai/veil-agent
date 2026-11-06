@@ -78,6 +78,9 @@ quiet_hours = "01:00-06:00"
 quiet_hours_enabled = true
 # Wakes, glances and Codex reminders may use a larger input window; ordinary chat keeps the provider limit.
 max_input_tokens = 65536
+# Ticket 217: one wake stops after spending this much (or 60 tool steps, or 15 minutes); the daily pool is unchanged.
+run_budget_cny = "0.25"
+max_tool_steps = 60
 
 [glance]
 enabled = true
