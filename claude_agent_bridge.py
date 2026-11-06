@@ -45,7 +45,10 @@ async def serve():
     async def call_tool(name, arguments):
         if name == 'approve':
             # Waits for Lan's answer; no timeout here, the program side decides when to give up.
-            answer = await asyncio.to_thread(post, '/approve', arguments, 24 * 3600)
+            try:
+                answer = await asyncio.to_thread(post, '/approve', arguments, 24 * 3600)
+            except Exception:  # a failed or timed-out question is a no, never an error Claude Code might retry around
+                answer = {'behavior': 'deny', 'message': 'Could not ask Lan. Do not try another way; tell her.'}
             return [types.TextContent(type='text', text=json.dumps(answer))]  # one text block: the format Claude Code requires
         answer = await asyncio.to_thread(post, '/call', {'name': name, 'arguments': arguments}, 3600)
         if 'error' in answer:

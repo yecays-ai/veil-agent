@@ -1,6 +1,6 @@
 ## 工单 228：聊天里接入 Claude Code 通道
 
-- `ticket/228-cc-channel`（代码已写，未在 lan 的 Windows 上真跑）：模型页多一个内置条目「claude_agent」。选它后，Peter 在聊天里的回复由 Claude Code 完成：VEIL 照旧拼人设、事实、记忆、历史，每轮启动一次 `claude -p`；VEIL 的工具通过本机小桥交给它；它保留原生工具（命令行、读写文件、网页等）。它的权限提问变成聊天里的同意/拒绝卡片，你的回答再回给它。新增 `claude_agent_channel.py`、`claude_agent_bridge.py`，改动 `veil_agent.py`（`_send` 分支、`toml_provider`、`make_model`）、`model_settings.py`、`characters/peter/character.toml`，测试 `tests/test_claude_agent_channel.py`（13 项，用假的 claude 进程）。
+- `ticket/228-cc-channel`（已在 lan 的 Windows 上冒烟：3 轮、1 张审批卡、hello.txt 建出，折算约 $0.675；订阅额度能否撑日常用量未验证）：模型页多一个内置条目「claude_agent」。选它后，Peter 在聊天里的回复由 Claude Code 完成：VEIL 照旧拼人设、事实、记忆、历史，每轮启动一次 `claude -p`；VEIL 的工具通过本机小桥交给它；它保留原生工具（命令行、读写文件、网页等）。它的权限提问变成聊天里的同意/拒绝卡片，你的回答再回给它。新增 `claude_agent_channel.py`、`claude_agent_bridge.py`，改动 `veil_agent.py`（`_send` 分支、`toml_provider`、`make_model`）、`model_settings.py`、`characters/peter/character.toml`，测试 `tests/test_claude_agent_channel.py`（用假的 claude 进程）。原生工具不受 VEIL 路径检查限制（设计如此，与 lan 电脑上的 Claude Code 同权），但给它加了 `.env` 和 secrets 目录的读写拒绝规则；叫停按钮会拒掉未回答的审批卡；该通道只能选给 Peter 聊天，不能选给后台或 glance；`claude` 路径可在 `.env` 里用 `VEIL_CLAUDE_PATH` 指定。
 - 限制：每轮 30 回合、$1.5（API 折算，订阅本身无逐 token 价格）、活动时间 900 秒（等你点卡片的时间不计）、同一调用重复超过 3 次或一轮超过 80 次工具调用就终止进程。点「停止」会终止进程；但已经弹出的审批卡仍要你点一下。自主醒来在这个通道上会提示不支持。轻量任务（短期便签、记忆标签）仍走你选的后台模型。
 - 未验证：订阅额度能否撑住日常；第三方使用订阅登录的政策；Windows 上找到 `claude` 的路径（找不到时在 `.env` 里写 `VEIL_CLAUDE_PATH=完整路径`）；你很久不点审批卡时的体验；图片消息目前只传文字部分。
 - 验收见 `docs/tickets/228-cc-channel.md`。下一个工单号 229。

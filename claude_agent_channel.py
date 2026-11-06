@@ -12,6 +12,7 @@ import queue
 import re
 import secrets
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -41,6 +42,12 @@ REMINDER = ("Reminder: you are Peter texting Lan, not a coding assistant. Whatev
             "instead of asking permission; the program asks her when her permission is needed.")
 
 # Claude Code's own prompt wording for each native tool, as one line for Lan's approval card.
+# Claude Code's own tools are not limited by VEIL's path checks (by design: the same ability as Claude Code on lan's
+# PC), but VEIL's keys and secrets are off limits to them.
+DENY_RULES = ['Read(**/.env)', 'Read(**/.env.*)', 'Edit(**/.env)', 'Edit(**/.env.*)', 'Write(**/.env)',
+              'Read(**/secrets/**)', 'Edit(**/secrets/**)', 'Write(**/secrets/**)']
+
+
 def describe_request(tool_name, tool_input):
     tool_input = tool_input if isinstance(tool_input, dict) else {}
     if tool_name == 'Bash':
@@ -61,14 +68,19 @@ def is_channel(provider):
     return isinstance(provider, dict) and provider.get('kind') == CHANNEL_KIND
 
 
-def stop_hook_source():
+def stop_hook_source(aliases=None):
     """PostToolUse hook: a turn that ended in VEIL (stay_silent, or send_message with done) ends in Claude Code too;
-    otherwise Claude Code keeps looping (ticket 227: about 730 stay_silent calls in one run)."""
+    otherwise Claude Code keeps looping (ticket 227: about 730 stay_silent calls in one run).
+    `aliases` maps canonical tool names to the model-facing aliases currently in use."""
+    aliases = aliases or {}
+    names = {key: sorted({key, aliases.get(key, key)}) for key in ('stay_silent', 'reply_later', 'send_message')}
+    ends = sorted({f'__{n}' for key in ('stay_silent', 'reply_later') for n in names[key]})
+    sends = sorted({f'__{n}' for n in names['send_message']})
     return ("import json,sys\n"
             "d=json.load(sys.stdin)\n"
             "n=str(d.get('tool_name',''))\n"
             "i=d.get('tool_input') or {}\n"
-            "if n.endswith('__stay_silent') or n.endswith('__reply_later') or (n.endswith('__send_message') and i.get('done') is True):\n"
+            f"if n.endswith(tuple({ends!r})) or (n.endswith(tuple({sends!r})) and i.get('done') is True):\n"
             "    print(json.dumps({'continue':False,'stopReason':'Peter ended his turn'}))\n"
             "else:\n"
             f"    print(json.dumps({{'hookSpecificOutput':{{'hookEventName':'PostToolUse','additionalContext':{REMINDER!r}}}}}))\n")
@@ -92,9 +104,15 @@ def minimal_env(extra=None):
     return env
 
 
-def find_claude(provider=None):
-    path = (provider or {}).get('claude_path') or os.environ.get('VEIL_CLAUDE_PATH') or shutil.which('claude')
-    return path
+def find_claude(provider=None, env_file=None):
+    path = (provider or {}).get('claude_path') or os.environ.get('VEIL_CLAUDE_PATH')
+    if not path and env_file:
+        try:
+            from dotenv import dotenv_values
+            path = (dotenv_values(env_file, interpolate=False, encoding='utf-8-sig').get('VEIL_CLAUDE_PATH') or '').strip()
+        except Exception:
+            path = ''
+    return path or shutil.which('claude')
 
 
 def kill_tree(process):
@@ -103,6 +121,8 @@ def kill_tree(process):
     try:
         if os.name == 'nt':
             subprocess.run(['taskkill', '/PID', str(process.pid), '/T', '/F'], capture_output=True, timeout=15)
+        elif hasattr(os, 'killpg') and process.pid > 1:
+            os.killpg(process.pid, signal.SIGKILL)  # the whole group: Claude Code's children too
         else:
             process.kill()
     except Exception:
@@ -280,6 +300,10 @@ class ClaudeAgentChannel:
         self.popen = popen
         self.server = None
 
+    @staticmethod
+    def _env_file():
+        return Path(__file__).resolve().parent / '.env'
+
     def ensure_server(self):
         if self.server is None:
             self.server = ToolServer(self.chat)
@@ -293,10 +317,12 @@ class ClaudeAgentChannel:
                  + system_text)
         (project / '.claude' / 'output-styles' / 'peter.md').write_text(style, encoding='utf-8')
         (self.run_dir / 'hook_prompt.py').write_text(prompt_hook_source(), encoding='utf-8')
-        (self.run_dir / 'hook_tool.py').write_text(stop_hook_source(), encoding='utf-8')
+        (self.run_dir / 'hook_tool.py').write_text(
+            stop_hook_source(getattr(self.chat, 'tool_aliases', None)), encoding='utf-8')
         hook = lambda name: [{'hooks': [{'type': 'command', 'command': f'"{sys.executable}" "{self.run_dir / name}"'}]}]
         (project / '.claude' / 'settings.json').write_text(json.dumps({
             'outputStyle': 'Peter',
+            'permissions': {'deny': DENY_RULES},
             'hooks': {'UserPromptSubmit': hook('hook_prompt.py'), 'PostToolUse': hook('hook_tool.py')}}),
             encoding='utf-8')
         server = self.ensure_server()
@@ -319,15 +345,17 @@ class ClaudeAgentChannel:
     # ---- one chat turn ---------------------------------------------------
     def run_turn(self, system_text, prompt, request_id, offered, autonomy=False, extra_dirs=()):
         """Returns (summaries, result_event). Raises RuntimeError with a message for Lan if the run cannot happen."""
-        claude = find_claude(self.provider)
+        claude = find_claude(self.provider, self._env_file())
         if not claude:
             raise RuntimeError('找不到 claude 命令。请先在这台电脑上安装并登录它，或在 .env 里设置 VEIL_CLAUDE_PATH。')
         project = self.prepare(system_text)
         server = self.ensure_server()
         state = TurnState(request_id, autonomy, offered)
         server.state = state
+        group = {'start_new_session': True} if os.name != 'nt' else {}
         process = self.popen(self.command(claude, extra_dirs), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                             stderr=subprocess.PIPE, cwd=project, env=minimal_env(), text=True, encoding='utf-8')
+                             stderr=subprocess.PIPE, cwd=project, env=minimal_env(), text=True, encoding='utf-8',
+                             **group)
         stderr_chunks = []
         threading.Thread(target=lambda: stderr_chunks.append(process.stderr.read()), daemon=True).start()
         threading.Thread(target=self._feed, args=(process, prompt), daemon=True).start()

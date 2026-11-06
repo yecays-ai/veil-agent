@@ -1403,6 +1403,8 @@ class Hub(ScreenPopMixin):
             if not self.busy or self.autonomy_busy or self.chat is None:
                 return False
             self.chat.user_stop.set()
+            if self.pending is not None:
+                self.answers.put('n')  # an open approval card must not keep the stopped turn waiting
             self.push('notice', '已叫停，等这一步说完就停。')
             return True
 

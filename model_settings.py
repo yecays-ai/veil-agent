@@ -276,7 +276,10 @@ class ModelSettings:
     def _choice_ok(self, data, role, model_id):
         if role == 'glance' and model_id == FOLLOW_CHAT:
             return True
-        return self._provider(data, model_id) is not None
+        provider = self._provider(data, model_id)
+        if provider is not None and provider.get('kind') == 'claude_agent' and role != 'peter':
+            return False  # the Claude Code channel only works as Peter's chat model
+        return provider is not None
 
     def selected(self, role):
         """What the 模型 page shows for a role. For glance this can be FOLLOW_CHAT."""

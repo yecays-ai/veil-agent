@@ -1,11 +1,13 @@
 """Ticket 228: the Claude Code chat channel. A fake `claude` process stands in for the real one; no network."""
 import json
+import os
 import subprocess
 import sys
 import tempfile
 import threading
 import unittest
 import urllib.request
+from unittest import mock
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -104,7 +106,7 @@ class ChannelChatTests(unittest.TestCase):
             return process
 
         original = channel.find_claude
-        channel.find_claude = lambda provider=None: 'claude'
+        channel.find_claude = lambda provider=None, env_file=None: 'claude'
         self.addCleanup(lambda: setattr(channel, 'find_claude', original))
         self.chat._claude_agent = channel.ClaudeAgentChannel(
             self.chat, Path(self.tmp.name) / 'data' / 'test' / 'claude-agent', self.chat.cfg.provider, popen=popen)
@@ -187,7 +189,9 @@ class ChannelChatTests(unittest.TestCase):
                                'result': "You've hit your session limit · resets 3am"}) + '\n'
             return FakeProcess(lambda: None, [line])
 
-        channel.find_claude = lambda provider=None: 'claude'
+        original = channel.find_claude
+        channel.find_claude = lambda provider=None, env_file=None: 'claude'
+        self.addCleanup(lambda: setattr(channel, 'find_claude', original))
         self.chat._claude_agent = channel.ClaudeAgentChannel(
             self.chat, Path(self.tmp.name) / 'cc', self.chat.cfg.provider, popen=popen)
         self.addCleanup(lambda: self.chat._claude_agent.server and self.chat._claude_agent.server.close())
@@ -257,6 +261,40 @@ class ProviderTests(unittest.TestCase):
             env = channel.minimal_env()
         self.assertNotIn('ANTHROPIC_API_KEY', env)
         self.assertNotIn('DEEPSEEK_API_KEY', env)
+
+
+
+class HookAndRulesTests(unittest.TestCase):
+    def test_the_stop_hook_knows_aliases(self):
+        source = channel.stop_hook_source({'stay_silent': 'rest', 'send_message': 'say'})
+        for name, tool_input, ends in (('mcp__veil__rest', {}, True), ('mcp__veil__say', {'done': True}, True),
+                                       ('mcp__veil__say', {'done': False}, False), ('mcp__veil__stay_silent', {}, True)):
+            out = subprocess.run([sys.executable, '-c', source], input=json.dumps({'tool_name': name, 'tool_input': tool_input}),
+                                 capture_output=True, text=True).stdout
+            self.assertEqual(json.loads(out).get('continue') is False, ends, name)
+
+    def test_channel_is_peter_only_in_model_settings(self):
+        from model_settings import ModelSettings
+        with tempfile.TemporaryDirectory() as tmp:
+            builtins = {'claude_agent': {'kind': 'claude_agent', 'model': 'claude-agent', 'api_key_env': '',
+                                         'base_url': '', 'max_input_tokens': 200000}}
+            settings = ModelSettings(Path(tmp), 'peter', builtins, 'claude_agent')
+            data = settings.data
+            self.assertTrue(settings._choice_ok(data, 'peter', 'builtin:claude_agent'))
+            self.assertFalse(settings._choice_ok(data, 'background', 'builtin:claude_agent'))
+            self.assertFalse(settings._choice_ok(data, 'glance', 'builtin:claude_agent'))
+
+    def test_secret_files_are_denied_to_native_tools(self):
+        self.assertIn('Read(**/.env)', channel.DENY_RULES)
+        self.assertIn('Read(**/secrets/**)', channel.DENY_RULES)
+
+    def test_claude_path_is_read_from_the_env_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env = Path(tmp) / '.env'
+            env.write_text('VEIL_CLAUDE_PATH=C:/x/claude.exe\n', encoding='utf-8')
+            with mock.patch.dict(os.environ, {}, clear=False):
+                os.environ.pop('VEIL_CLAUDE_PATH', None)
+                self.assertEqual(channel.find_claude({}, env), 'C:/x/claude.exe')
 
 
 if __name__ == '__main__':
