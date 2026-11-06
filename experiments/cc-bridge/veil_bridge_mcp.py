@@ -71,6 +71,8 @@ async def serve(chat, request_id):
 
     @server.call_tool()
     async def call_tool(name, arguments):
+        if chat.turn_done:  # same as VEIL: nothing more is sent once the turn has ended
+            raise ValueError('The turn has already ended.')
         if name == 'send_message':
             result, state, _ = chat.send_message(json.dumps(arguments), request_id)
         elif name == 'stay_silent':

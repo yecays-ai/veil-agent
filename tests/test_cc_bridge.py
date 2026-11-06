@@ -1,8 +1,11 @@
 """Ticket 227: the isolated Claude Code experiment (experiments/cc-bridge). Fake data only, no network."""
 import json
+import os
+import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 BRIDGE = Path(__file__).resolve().parents[1] / 'experiments' / 'cc-bridge'
@@ -54,19 +57,51 @@ class BridgeTests(unittest.TestCase):
 
 
 class GardenAllowlistTests(unittest.TestCase):
-    def allowed(self):
-        return [n for n in GARDEN_TOOLS if runner.READ_ONLY.match(n) and n not in runner.DENY]
-
     def test_nothing_that_writes_or_changes_state_is_allowed(self):
-        allowed = self.allowed()
+        allowed = runner.allowed_garden_tools(GARDEN_TOOLS)
         for name in ('join_game', 'start_game', 'submit_action', 'send_game_chat', 'send_chat_message',
                      'withdraw_chat_message', 'nostos_start', 'nostos_act', 'nostos_status', 'leave_waiting_game',
                      'update_profile', 'decorate_avatar', 'create_thread', 'create_reply', 'delete_thread',
                      'delete_reply', 'interact', 'review_drift_bottles', 'list_notifications'):
             self.assertNotIn(name, allowed)
-        self.assertIn('list_threads', allowed)
-        self.assertIn('get_thread', allowed)
+        self.assertEqual(sorted(allowed), sorted(runner.GARDEN_READ_ONLY))
         self.assertEqual(len(allowed), 10)
+
+    def test_a_new_tool_with_a_read_like_name_is_not_allowed(self):
+        discovered = ['get_thread', 'get_and_mark_everything_read', 'list_and_delete', 'search_posts']
+        self.assertEqual(runner.allowed_garden_tools(discovered), ['get_thread'])
+
+
+class StopHookTests(unittest.TestCase):
+    def run_hook(self, payload):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'hook.py'
+            path.write_text(runner.ptu_hook_source(), encoding='utf-8')
+            out = subprocess.run([sys.executable, '-I', str(path)], input=json.dumps(payload), capture_output=True,
+                                 text=True, check=True).stdout
+        return json.loads(out)
+
+    def test_both_ending_tools_stop_the_turn(self):
+        stay = self.run_hook({'tool_name': 'mcp__veil_bridge__stay_silent', 'tool_input': {}})
+        done = self.run_hook({'tool_name': 'mcp__veil_bridge__send_message', 'tool_input': {'text': 'x', 'done': True}})
+        for out in (stay, done):
+            self.assertIs(out['continue'], False)
+
+    def test_other_calls_only_get_the_reminder(self):
+        for payload in ({'tool_name': 'mcp__veil_bridge__send_message', 'tool_input': {'text': 'x'}},
+                        {'tool_name': 'mcp__galatea_garden__list_threads', 'tool_input': {}}):
+            out = self.run_hook(payload)
+            self.assertNotIn('continue', out)
+            self.assertEqual(out['hookSpecificOutput']['hookEventName'], 'PostToolUse')
+
+
+class EnvTests(unittest.TestCase):
+    def test_unrelated_credentials_are_not_passed_on(self):
+        with mock.patch.dict(os.environ, {'ANTHROPIC_API_KEY': 'k', 'OPENAI_API_KEY': 'k', 'GITHUB_TOKEN': 'k', 'PATH': '/bin'}):
+            env = runner.minimal_env()
+        for name in ('ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GITHUB_TOKEN'):
+            self.assertNotIn(name, env)
+        self.assertEqual(env['PATH'], '/bin')
 
 
 class StyleInputTests(unittest.TestCase):

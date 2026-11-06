@@ -16,9 +16,36 @@ from pathlib import Path
 REMINDER = ("Reminder: you are Peter texting Lan, not a coding assistant. Whatever you just did or are about to do, "
             "say it in a few short plain-text messages in your own voice: no markdown, no bold, no headings, no "
             "bullet lists, no report format. If she is upset, answer that first. Do the task instead of asking permission.")
-# Looks read-only but marks the real garden's notifications consumed (changes the running Peter's state).
-DENY = {'list_notifications'}
-READ_ONLY = re.compile(r'^(get|list|read|search|browse|view|fetch|find|show|recent|latest)', re.I)
+# Explicit allowlist of garden tools whose descriptions were checked by hand as read-only (2026-11-06). A name prefix
+# is NOT proof of read-only, so nothing outside this set is ever allowed, including tools added to the garden later.
+# list_notifications looks read-only but marks the real garden's notifications consumed, so it is left out on purpose.
+GARDEN_READ_ONLY = frozenset({'get_my_status', 'get_chat_messages', 'get_tool_schema', 'get_game_summary', 'get_self',
+                              'get_machine', 'list_games', 'list_threads', 'get_thread', 'list_activity'})
+
+
+def allowed_garden_tools(discovered_names):
+    return [n for n in discovered_names if n in GARDEN_READ_ONLY]
+
+
+def ptu_hook_source():
+    # After stay_silent or send_message(done) end the turn (VEIL's turn_done); otherwise remind after each tool call.
+    return ("import json,sys\n"
+            "d=json.load(sys.stdin)\n"
+            "n=str(d.get('tool_name',''))\n"
+            "i=d.get('tool_input') or {}\n"
+            "if n.endswith('stay_silent') or (n.endswith('send_message') and i.get('done') is True):\n"
+            "    print(json.dumps({'continue':False,'stopReason':'Peter ended his turn'}))\n"
+            "else:\n"
+            f"    print(json.dumps({{'hookSpecificOutput':{{'hookEventName':'PostToolUse','additionalContext':{REMINDER!r}}}}}))\n")
+
+
+def minimal_env():
+    # Only what Claude Code and the garden launcher need; other credentials in the parent environment are not passed on.
+    keep = ('PATH', 'PATHEXT', 'SYSTEMROOT', 'SystemRoot', 'COMSPEC', 'TEMP', 'TMP', 'USERPROFILE', 'HOME', 'APPDATA',
+            'LOCALAPPDATA', 'PROGRAMFILES', 'PROGRAMFILES(X86)', 'PROGRAMDATA', 'NUMBER_OF_PROCESSORS', 'LANG', 'TERM')
+    env = {k: v for k, v in os.environ.items() if k in keep}
+    env.update(MCP_TIMEOUT='90000', CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT='0', ENABLE_TOOL_SEARCH='false')
+    return env
 
 
 def tail_chat(path, n):
@@ -90,63 +117,59 @@ def main():
     p.add_argument('--model', default=None)
     p.add_argument('--list-only', action='store_true', help='only list the garden tools and the read-only subset, then stop')
     p.add_argument('--max-turns', type=int, default=14, help='hard cap per claude call')
-    p.add_argument('--max-budget-usd', type=float, default=1.0, help='hard cap per claude call (API-equivalent)')
+    p.add_argument('--max-budget-usd', type=float, default=1.0, help='cap per claude call (API-equivalent)')
+    p.add_argument('--total-budget-usd', type=float, default=1.5, help='cap over the whole run; later calls are skipped once reached')
     args = p.parse_args()
     work = Path(args.work).resolve()
+    if args.list_only:  # nothing private is read or written for a plain tool listing
+        names = asyncio.run(garden_tool_names(args.garden_command, args.garden_arg))
+        print('garden tools:', names)
+        print('allowed read-only subset:', allowed_garden_tools(names))
+        return
     proj = work / 'project'
     (proj / '.claude' / 'output-styles').mkdir(parents=True, exist_ok=True)
     (proj / '.claude' / 'output-styles' / 'peter.md').write_text(build_style(args), encoding='utf-8')
     (work / 'hook_ups.py').write_text("import json,sys\nsys.stdin.read()\nprint(json.dumps({'hookSpecificOutput':"
                                       f"{{'hookEventName':'UserPromptSubmit','additionalContext':{REMINDER!r}}}}}))\n", encoding='utf-8')
-    # PostToolUse: remind after each tool call; after stay_silent or send_message(done) end the turn (VEIL's turn_done).
-    (work / 'hook_ptu.py').write_text(
-        "import json,sys\n"
-        "d=json.load(sys.stdin)\n"
-        "n=str(d.get('tool_name',''))\n"
-        "i=d.get('tool_input') or {}\n"
-        "if n.endswith('stay_silent') or (n.endswith('send_message') and i.get('done') is True):\n"
-        "    print(json.dumps({'continue':False,'stopReason':'Peter ended his turn'}))\n"
-        "else:\n"
-        f"    print(json.dumps({{'hookSpecificOutput':{{'hookEventName':'PostToolUse','additionalContext':{REMINDER!r}}}}}))\n",
-        encoding='utf-8')
+    (work / 'hook_ptu.py').write_text(ptu_hook_source(), encoding='utf-8')
     hook = lambda f: [{'hooks': [{'type': 'command', 'command': f'"{sys.executable}" "{work / f}"'}]}]
     (proj / '.claude' / 'settings.json').write_text(json.dumps({
         'outputStyle': 'Peter', 'hooks': {'UserPromptSubmit': hook('hook_ups.py'), 'PostToolUse': hook('hook_ptu.py')}}), encoding='utf-8')
 
     names = asyncio.run(garden_tool_names(args.garden_command, args.garden_arg))
-    allowed_garden = [n for n in names if READ_ONLY.match(n) and n not in DENY]
+    allowed_garden = allowed_garden_tools(names)
     (work / 'garden_tools.json').write_text(json.dumps({'all': names, 'allowed_read_only': allowed_garden}, indent=1), encoding='utf-8')
     print('garden tools:', names)
-    print('read-only subset that would be allowed:', allowed_garden)
-    if args.list_only:
-        return
+    print('allowed read-only subset:', allowed_garden)
     if not allowed_garden:
-        raise SystemExit('no read-only garden tool found; see garden_tools.json')
+        raise SystemExit('no allowlisted garden tool found; see garden_tools.json')
 
     bridge_dir = work / 'bridge'
     bridge_dir.mkdir(exist_ok=True)
     user_text = args.prompt
     mcp_config = {'mcpServers': {
-        'veil_bridge': {'command': args.bridge_python, 'args': [str(Path(__file__).with_name('veil_bridge_mcp.py')),
+        'veil_bridge': {'command': args.bridge_python, 'args': [str(Path(__file__).resolve().with_name('veil_bridge_mcp.py')),
                         '--repo', str(Path(args.repo).resolve()), '--sandbox', str(bridge_dir), '--user-text', user_text]},
         args.garden_name: {'command': args.garden_command, 'args': args.garden_arg}}}
     (work / 'mcp.json').write_text(json.dumps(mcp_config), encoding='utf-8')
     allowed = ['mcp__veil_bridge__send_message', 'mcp__veil_bridge__stay_silent'] + [f'mcp__{args.garden_name}__{n}' for n in allowed_garden]
-    env = dict(os.environ, MCP_TIMEOUT='90000', CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT='0', ENABLE_TOOL_SEARCH='false')
-    env.pop('ANTHROPIC_API_KEY', None)
+    env = minimal_env()
     session = None
     transcript = work / 'transcript.jsonl'
     transcript.write_text('', encoding='utf-8')
+    spent = 0.0
     for i, prompt in enumerate([args.prompt] + args.followup):
+        if spent >= args.total_budget_usd:
+            print(f'total budget ${args.total_budget_usd} reached; skipping the remaining follow-ups')
+            break
         cmd = [args.claude, '-p', '--output-format', 'stream-json', '--verbose', '--mcp-config', str(work / 'mcp.json'),
                '--strict-mcp-config', '--setting-sources', 'project', '--max-turns', str(args.max_turns),
                '--max-budget-usd', str(args.max_budget_usd), '--allowedTools', *allowed]
         if args.model:
             cmd += ['--model', args.model]
         cmd += ['--resume', session] if session else []
-        if i > 0:
-            # a follow-up is Lan's next message; the bridge process restarts, so record it in its sandbox chat too
-            pass
+        # Known limit: a follow-up reaches Claude through --resume, but the restarted bridge only knows the first
+        # --user-text, so the sandbox chat.jsonl records bubbles against that first message only.
         proc = subprocess.run(cmd, input=prompt, capture_output=True, text=True, cwd=proj, env=env, encoding='utf-8', timeout=600)
         with transcript.open('a', encoding='utf-8') as handle:
             handle.write(json.dumps({'turn': i, 'prompt': prompt, 'returncode': proc.returncode}, ensure_ascii=False) + '\n')
@@ -158,10 +181,14 @@ def main():
                 continue
             if event.get('type') == 'system' and event.get('session_id'):
                 session = event['session_id']
-            if event.get('type') == 'result' and event.get('session_id'):
-                session = event['session_id']
+            if event.get('type') == 'result':
+                if event.get('session_id'):
+                    session = event['session_id']
+                spent += float(event.get('total_cost_usd') or 0)
         if proc.returncode:
             (work / 'stderr.txt').write_text(proc.stderr[-4000:], encoding='utf-8')
+            summarize(work, allowed_garden)
+            raise SystemExit(proc.returncode)
     summarize(work, allowed_garden)
 
 

@@ -1,6 +1,6 @@
 ## 工单 227：Claude Code 接 VEIL 工具的隔离实验
 
-- `ticket/227-cc-bridge-experiment`：只做实验，不改正式运行代码。`experiments/cc-bridge/`（桥接 MCP 复用生产版 `send_message`，沙盒运行脚本含回合/花费硬上限和花园只读白名单）、`tests/test_cc_bridge.py`（5 项）、报告 `experiments/cc-bridge/REPORT.md`。结论：真实花园读取、Claude Code 自主调用工具、多条独立气泡都在 lan 电脑上跑通；`Chat.tool_schemas()` 和 `_execute_tool_call()` 是现成的统一工具入口，聊天历史和记忆留在 VEIL，订阅额度用完后换回 API 模型即可，状态不丢。风险：订阅额度能否撑住日常用量未验证；官方 SDK 文档对第三方使用订阅登录有限制；下拉里不能叫「Claude Code」。本轮出过一次循环失控（无回合上限），已修，正式接入必须保留。Windows 体验验收只有一次受控运行，无正式接入。验收见 `docs/tickets/227-cc-bridge-experiment.md`。下一个工单号 228。
+- `ticket/227-cc-bridge-experiment`：只做实验，不改正式运行代码。`experiments/cc-bridge/`（桥接 MCP 复用生产版 `send_message`，沙盒运行脚本含每次调用的回合数和折算价上限、整次运行总折算价上限，以及人工核对过的 10 个花园工具名白名单）、`tests/test_cc_bridge.py`（9 项）、报告 `experiments/cc-bridge/REPORT.md`。结论：真实花园读取、Claude Code 自主调用工具、多条独立气泡都在 lan 电脑上跑通；`Chat.tool_schemas()` 和 `_execute_tool_call()` 是现成的统一工具入口，设计上聊天历史和记忆留在 VEIL，订阅额度用完后换回 API 模型即可（正式通道的切换未验证，本轮只用沙盒里的快照）。另有真隔离验证（`experiments/cc-jail/`）：Docker 内部网络加白名单代理，CC 自己从 GitHub 链接调查、安装、接入 Time Server 并调用成功，5 回合 $0.079。风险：订阅额度能否撑住日常用量未验证，订阅额度本身没有硬限制；官方 SDK 文档对第三方使用订阅登录有限制；下拉里不能叫「Claude Code」。本轮出过一次循环失控（无回合上限），已修，正式接入必须保留。Windows 体验验收只有一次受控运行，无正式接入。验收见 `docs/tickets/227-cc-bridge-experiment.md`。下一个工单号 228。
 
 ## 工单 226：思考和工具折叠显示
 

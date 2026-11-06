@@ -1,8 +1,8 @@
 ## 工单 227 交接（2026-11-06）
 
 - 改动：只有 `experiments/cc-bridge/`、`tests/test_cc_bridge.py`、`docs/tickets/227-cc-bridge-experiment.md`，没有动正式代码。
-- 下一步：lan 看报告后决定是否做「Claude Code 通道」。若做：第一张工单只接聊天（VEIL 内起本机 HTTP MCP 暴露 `tool_schemas()`/`_execute_tool_call()`，`Chat._send` 在该通道下启动 `claude -p`），带回合/花费硬上限和 `stay_silent`/`done` 停止钩子，先不接自主醒来。
-- 未验证：订阅额度能否撑住日常；第三方使用订阅登录的政策；`claude -p` 在 lan 电脑上需要一次 `auth login`（桌面应用自带的 `claude.exe` 默认没有登录）。lan 电脑 `E:\Peter-Agent\VEIL\cc-sandbox\` 下有实验产物（含人设和记忆摘录的副本），实验结束后可整个删除。
+- 下一步：lan 看报告后决定是否做「Claude Code 通道」。若做：第一张工单只接聊天（VEIL 内起本机 HTTP MCP 暴露 `tool_schemas()`/`_execute_tool_call()`，`Chat._send` 在该通道下启动 `claude -p`），带回合数和折算价上限（每次调用）和 `stay_silent`/`done` 停止钩子，先不接自主醒来。
+- 未验证：订阅额度能否撑住日常；第三方使用订阅登录的政策；`claude -p` 在 lan 电脑上需要一次 `auth login`（桌面应用自带的 `claude.exe` 默认没有登录）。实验产物含人设和记忆摘录的副本，实验结束后可在 lan 电脑上整体删除。
 
 ## 工单 226 交接（2026-11-06）
 
