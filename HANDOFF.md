@@ -3,7 +3,7 @@
 - 目标：Claude Code 在 Peter 聊天中后台运行，不再额外弹出标题为 `claude` 的终端窗口。
 - 改动：`ClaudeAgentChannel.run_turn` 的 Windows 启动参数复用 `web_launcher.start_service` 等现有机制的 `DETACHED_PROCESS | CREATE_NO_WINDOW`；标准输入、输出和错误仍走管道，停止仍经 `kill_tree` 结束进程树。启动参数两项定向单测已通过；完整 PR CI 与 Peter 实机验收待完成。
 - 下一步：核对本 PR 唯一一轮 CI 和 Cubic 评审；合并后请 Lan 按 STATUS.md 连续发送三条消息，再检查工具审批、停止和退出清理。
-- 工单 229：PR #282 已于 2026-11-06 合并为 `f6785def`，自动检查通过；Windows 实机验收待 Lan 更新并重启 Peter。
+- 工单 229：PR #282 于 2026-11-06 以 `f6785def` 合并，CI 通过；`find_claude` 按设置路径、PATH、桌面版目录最新版本的顺序查找。Windows 实机验收待 Lan 更新并重启 Peter；其他安装目录仍可在 `.env` 指定 `VEIL_CLAUDE_PATH`。
 
 ## 工单 228 交接（2026-11-06）
 
