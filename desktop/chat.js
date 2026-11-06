@@ -1673,9 +1673,10 @@ function renderModels(view){
 }
 function modelsPayload(){
   const v=modelsView;
+  const use={...v.use};if(!v.use_explicit?.autonomy)delete use.autonomy;
   return {endpoints:v.endpoints.map(e=>({id:e.id,name:e.name,base_url:e.base_url})),
     models:v.models.filter(m=>!m.builtin).map(m=>{const out={};for(const k of ['id','endpoint','model','label','thinking','billing','cny_per_call','input_cny_per_million','cached_input_cny_per_million','output_cny_per_million','max_input_tokens'])if(m[k]!==undefined)out[k]=m[k];return out}),
-    use:{...v.use},limits:{...v.limits}};
+    use,limits:{...v.limits}};
 }
 function showModelsError(text){const el=$('models-error');el.textContent=text||'';el.hidden=!text}
 async function saveModels(change,done){

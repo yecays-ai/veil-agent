@@ -335,6 +335,11 @@ class FindClaudeTests(unittest.TestCase):
 
 
 class ProcessLaunchTests(unittest.TestCase):
+    def test_legacy_model_placeholder_uses_sonnet(self):
+        claude = channel.ClaudeAgentChannel(None, Path('run'), provider={'model': 'claude-agent'})
+        cmd = claude.command('claude.exe')
+        self.assertEqual(cmd[cmd.index('--model') + 1], 'sonnet')
+
     @unittest.skipUnless(os.name == 'nt', 'Windows process flags are only available on Windows')
     def test_windows_claude_process_uses_existing_background_flags(self):
         self.assertEqual(channel._process_group_options(), {

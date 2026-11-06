@@ -310,7 +310,7 @@ class ModelSettings:
                 for item in self.data['models']:
                     if self._choice_ok(self.data, role, item['id']):
                         return item['id']
-                return self.default
+                return None
             return self.data['use'].get(role, self.default)
 
     # ---- what the program uses ----------------------------------------
@@ -322,6 +322,8 @@ class ModelSettings:
             model_id = self.selected(role)
             if model_id == FOLLOW_CHAT:
                 return self.chosen('peter')
+            if role == 'autonomy' and model_id is None:
+                raise SettingsError('自主活动尚无可用的 API 模型；请先添加或启用一个 API 模型。')
             provider = self._provider(self.data, model_id)
             if provider is None:
                 raise SettingsError(f'{role} 选中的模型无效；已停止模型请求。')
@@ -369,8 +371,10 @@ class ModelSettings:
                 models.append({**item, 'builtin': False, 'endpoint_name': names.get(item['endpoint'], ''),
                                'key_set': keys.get(item['endpoint'], False)})
             daily, monthly = self.limits()
-            use = {role: (self.selected(role) if role == 'glance' else self.chosen(role)[0]) for role in ROLES}
+            use = {role: (self.selected(role) if role in ('glance', 'autonomy') else self.chosen(role)[0])
+                   for role in ROLES}
             return {'endpoints': endpoints, 'models': models, 'use': use,
+                    'use_explicit': {role: role in self.data['use'] for role in ROLES},
                     'limits': {'daily_cny': str(daily), 'monthly_cny': str(monthly)}}
 
     # ---- changes from the settings page -------------------------------

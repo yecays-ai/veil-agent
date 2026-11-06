@@ -72,7 +72,14 @@ class GlanceModelTests(unittest.TestCase):
         cfg = load_character(self.root, 'test')
         _, chat_name, chat_provider = cfg.models.use('peter', 'builtin:claude')
         self.assertEqual(cfg.models.public()['use']['autonomy'], 'builtin:fake')
+        self.assertFalse(cfg.models.public()['use_explicit']['autonomy'])
+        cfg.models.save({'endpoints': [], 'models': [], 'use': {'peter': 'builtin:claude'}})
+        self.assertFalse(cfg.models.public()['use_explicit']['autonomy'])
+        cfg.models.use('peter', 'builtin:other')
+        self.assertEqual(cfg.models.public()['use']['autonomy'], 'builtin:other')
+        cfg.models.use('peter', 'builtin:claude')
         cfg.models.use('autonomy', 'builtin:fake')
+        self.assertTrue(cfg.models.public()['use_explicit']['autonomy'])
         self.assertEqual(load_character(self.root, 'test').models.public()['use']['autonomy'], 'builtin:fake')
         with self.assertRaises(SettingsError):
             cfg.models.use('autonomy', 'builtin:claude')
@@ -80,12 +87,32 @@ class GlanceModelTests(unittest.TestCase):
         store = Store(self.root / 'data')
         chat = Chat(cfg, store, Budget(store), Mock())
         chat.switch_model(chat_name, chat_provider)
+        cfg.autonomy['max_input_tokens'] = 10000
         seen = []
-        chat._send = lambda *a, **k: seen.append(cfg.provider['model']) or 'ok'
+        chat._send = lambda *a, **k: seen.append((cfg.provider['model'], cfg.provider['max_input_tokens'])) or 'ok'
         self.assertEqual(chat.send('wake', autonomy=True), 'ok')
         self.assertEqual(chat.send('hi'), 'ok')
-        self.assertEqual(seen, ['fake-model', 'sonnet'])
+        self.assertEqual(seen, [('fake-model', 6000), ('sonnet', 6000)])
         self.assertEqual(cfg.provider['model'], 'sonnet')
+
+    def test_autonomy_has_no_invalid_default_when_only_claude_is_configured(self):
+        toml = '''name = "Test"
+provider = "claude"
+persona = "persona/test.md"
+history_rounds = 20
+max_output_tokens = 50
+[providers.claude]
+kind = "claude_agent"
+model = "claude-agent"
+max_input_tokens = 60000
+'''
+        (self.root / 'characters' / 'test' / 'character.toml').write_text(toml, encoding='utf-8')
+        cfg = load_character(self.root, 'test')
+        view = cfg.models.public()
+        self.assertIsNone(view['use']['autonomy'])
+        self.assertFalse(view['use_explicit']['autonomy'])
+        with self.assertRaisesRegex(SettingsError, '添加或启用一个 API 模型'):
+            cfg.models.chosen('autonomy')
 
     def test_claude_code_model_aliases_are_visible_as_builtins(self):
         toml = TOML + '''

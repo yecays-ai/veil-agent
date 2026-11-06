@@ -2,8 +2,9 @@
 
 - 目标：模型页能选择 Claude Code 的 Sonnet/Haiku/Opus，并能为自主活动单独选 API 模型；聊天选 Claude Code 后后台自主活动仍可运行。
 - 影响路径：`autonomy.py` 的唤醒调用 `Chat.send(..., autonomy=True)`；`Chat._send_with_stable_model` 现有模型临时切换用于瞄一眼；`ModelSettings` 保存 `peter/background/glance` 三种用途；模型页 `/api/models/use` 通过 `Hub.use_model` 落盘。实现新增 `autonomy` 用途并复用 provider 切换；瞄一眼和聊天保持原行为；`ClaudeAgentChannel.command` 以 `--model` 传入当前 Claude 别名，保持权限桥、聊天工具和停止路径不变。
-- 已完成：独立 worktree `ticket/232-claude-models-autonomy`；实现模型别名、活动模型选择、回归测试和工单文档。专项检查通过：活动/瞄一眼测试 7 项，Claude 通道测试 24 项，模型设置兼容测试 4 项，`node --check desktop/chat.js` 与 `git diff --check` 通过。聊天/审批测试仅在允许本机回环端口后通过；完整测试套件未运行。
-- 下一步：提交代码、状态和交接文档后一次推 PR，只触发一轮 CI；合并前核对必需 CI 和评审；合并后请 Lan 在 Windows 验收。
+- 已完成：PR #285 首次提交后收到了 5 条有效审查意见，已在本地一并修复：无 API 模型时模型页可正常打开、常规设置保存不会固化隐式自主模型、旧 `claude-agent` 值映射 Sonnet、自主请求输入上限不超过所选模型，并更新当前状态描述。新增回归测试覆盖这些边界。
+- 验证：活动/瞄一眼 8 项、Claude 通道 25 项、模型设置 18 项通过；`node --check desktop/chat.js`、`git diff --check` 通过。首次 CI 中 Ubuntu 两版本、Windows 3.11、Windows desktop、Dependency security 通过；Windows 3.12 的一项未改动小红书超时测试偶发失败，本机复跑通过。
+- 下一步：将所有审查修正和此交接一次提交并推到 PR #285，作为最后一轮 CI；CI 通过后合并，合并后请 Lan 在 Windows 验收。不要再追加仅文档提交。
 - 工单 231：PR #283 已于 2026-11-07 合并为 `4ec3942`；Tests 与 Dependency security 通过。
 - 工单 230：PR #284 已合并为 `806e9f9`；Peter Windows 三条聊天、工具、审批、停止和退出清理验收仍待 Lan 操作。
 - 工单 229：PR #282 于 2026-11-06 以 `f6785def` 合并，CI 通过；`find_claude` 按设置路径、PATH、桌面版目录最新版本的顺序查找。Windows 实机验收待 Lan 更新并重启 Peter；其他安装目录仍可在 `.env` 指定 `VEIL_CLAUDE_PATH`。

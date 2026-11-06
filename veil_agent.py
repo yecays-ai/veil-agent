@@ -2980,6 +2980,8 @@ class Chat:
 
     def _send_with_input_limit(self, text, *, autonomy=False, **kwargs):
         limit = (self.cfg.autonomy or {}).get('max_input_tokens') if autonomy else None
+        if limit:
+            limit = min(limit, self.cfg.provider['max_input_tokens'])
         if not limit or limit == self.cfg.provider['max_input_tokens']:
             return self._send(text, autonomy=autonomy, **kwargs)
         original = self.cfg

@@ -388,8 +388,11 @@ class ClaudeAgentChannel:
         return project
 
     def command(self, claude, extra_dirs=()):
+        model = self.provider.get('model') or 'sonnet'
+        if model == 'claude-agent':  # Legacy placeholder from ticket 228 was never a CLI model alias.
+            model = 'sonnet'
         cmd = [claude, '-p', '--output-format', 'stream-json', '--verbose',
-               '--model', self.provider.get('model') or 'sonnet',
+               '--model', model,
                '--mcp-config', str(self.run_dir / 'mcp.json'), '--setting-sources', 'project',
                '--max-turns', str(MAX_TURNS), '--max-budget-usd', str(MAX_BUDGET_USD),
                '--permission-mode', 'acceptEdits', '--permission-prompt-tool', APPROVE_TOOL,
