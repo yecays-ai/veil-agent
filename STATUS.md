@@ -5,7 +5,7 @@
 
 ## 工单 229：自动找到 claude 命令
 
-- `ticket/229-cc-find-claude`（PR #282，合并提交 `f6785def`）：配置路径不存在时继续查 PATH 和 Claude 桌面版目录，并选版本最新的 `claude.exe`。自动检查已通过；Windows 实机验收仍待更新后重启 Peter 确认。
+- `ticket/229-cc-find-claude`（PR #282，合并提交 `f6785def`）：`find_claude` 依次查找配置路径、PATH 和 Claude 桌面版目录中的最新 `claude.exe`；配置路径写错时自动回退。新增 4 项测试，改 1 项，自动检查已通过。Lan 本机 `.env` 路径已在前一轮实机会话修正；本工单 Windows 验收仍待更新后重启 Peter 确认。
 
 ## 工单 228：聊天里接入 Claude Code 通道
 
