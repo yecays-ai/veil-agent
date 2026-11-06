@@ -66,6 +66,54 @@ class GlanceModelTests(unittest.TestCase):
         self.assertEqual(seen[1][0], 'fake-model')
         self.assertEqual(cfg.provider['model'], 'fake-model')
 
+    def test_autonomy_uses_an_api_model_when_chat_uses_claude(self):
+        toml = TOML + '[providers.claude]\nkind = "claude_agent"\nmodel = "sonnet"\nmax_input_tokens = 6000\n'
+        (self.root / 'characters' / 'test' / 'character.toml').write_text(toml, encoding='utf-8')
+        cfg = load_character(self.root, 'test')
+        _, chat_name, chat_provider = cfg.models.use('peter', 'builtin:claude')
+        self.assertEqual(cfg.models.public()['use']['autonomy'], 'builtin:fake')
+        cfg.models.use('autonomy', 'builtin:fake')
+        self.assertEqual(load_character(self.root, 'test').models.public()['use']['autonomy'], 'builtin:fake')
+        with self.assertRaises(SettingsError):
+            cfg.models.use('autonomy', 'builtin:claude')
+
+        store = Store(self.root / 'data')
+        chat = Chat(cfg, store, Budget(store), Mock())
+        chat.switch_model(chat_name, chat_provider)
+        seen = []
+        chat._send = lambda *a, **k: seen.append(cfg.provider['model']) or 'ok'
+        self.assertEqual(chat.send('wake', autonomy=True), 'ok')
+        self.assertEqual(chat.send('hi'), 'ok')
+        self.assertEqual(seen, ['fake-model', 'sonnet'])
+        self.assertEqual(cfg.provider['model'], 'sonnet')
+
+    def test_claude_code_model_aliases_are_visible_as_builtins(self):
+        toml = TOML + '''
+[providers.claude_agent]
+kind = "claude_agent"
+label = "Claude Code · Sonnet（均衡）"
+model = "sonnet"
+max_input_tokens = 200000
+[providers.claude_agent_haiku]
+kind = "claude_agent"
+label = "Claude Code · Haiku（额度较省）"
+model = "haiku"
+max_input_tokens = 200000
+[providers.claude_agent_opus]
+kind = "claude_agent"
+label = "Claude Code · Opus（深度推理）"
+model = "opus"
+max_input_tokens = 200000
+'''
+        (self.root / 'characters' / 'test' / 'character.toml').write_text(toml, encoding='utf-8')
+        view = load_character(self.root, 'test').models.public()
+        aliases = {item['label']: item['model'] for item in view['models'] if item.get('kind') == 'claude_agent'}
+        self.assertEqual(aliases, {
+            'Claude Code · Sonnet（均衡）（内置）': 'sonnet',
+            'Claude Code · Haiku（额度较省）（内置）': 'haiku',
+            'Claude Code · Opus（深度推理）（内置）': 'opus',
+        })
+
     def test_builtin_grok_is_the_default_when_configured(self):
         toml = TOML + '[providers.grok]\nmodel = "grok-4.6"\nbase_url = "https://g.invalid/v1"\n' \
             'api_key_env = "FAKE_KEY"\nmax_input_tokens = 6000\ninput_cny_per_million = "1"\n' \

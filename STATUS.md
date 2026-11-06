@@ -1,7 +1,11 @@
+## 工单 232：Claude 模型选择与自主活动独立模型
+
+- `ticket/232-claude-models-autonomy`：Claude Code 聊天显式传入所选模型（默认 Sonnet，可选 Haiku / Opus）；模型页新增自主活动模型选择，使用独立 API 模型运行，不受聊天切到 Claude Code 影响。瞄一眼原有独立选模保持不变。相关路径：`model_settings.py`、`veil_agent.py`、`claude_agent_channel.py`、`characters/peter/character.toml`、`desktop/chat.html`、`desktop/chat.js`、模型设置/通道/活动测试。实现和定向检查已完成；提交后由 PR CI 验证，Windows 实机待验收。
+- 验收：选 Claude Code Haiku 发送消息可正常回复；Peter 聊天保持 Claude Code 时，将自主活动选为 API 模型并等待下一次唤醒，确认成功完成；瞄一眼选模仍正常。具体步骤见 `docs/tickets/232-claude-models-autonomy.md`。下一个工单号 233。
+
 ## 工单 231：跨功能影响分析与联动修复
 
-- `ticket/231-impact-complete`：在 `AGENTS.md` 和工单流程中接入影响追踪、根因分析与完成前验证；修复文档断行、无效示例和路径安全示例。PR #283 已同步 PR #284 合并后的 main，审查意见已修正；本次提交的 CI 待跑。流程文档改动不直接修运行代码。
-- 验收：后续改动 PR 能列出真实调用路径和影响矩阵，提供新旧行为验证证据，并将 Windows 实机验收单独标注。下一个工单号 232（Claude 模型选择与自主活动独立模型）。
+- PR #283 已于 2026-11-07 合并（`4ec3942`）；最终提交的 Tests 和 Dependency security 均通过。工作流 Skills 与路径安全示例更新已进入 main；新流程的实际遵循情况由后续 PR 验证。
 
 ## 工单 230：Claude Code 后台启动不弹终端窗
 

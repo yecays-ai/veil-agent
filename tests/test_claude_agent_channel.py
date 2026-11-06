@@ -1,4 +1,4 @@
-"""Ticket 228: the Claude Code chat channel. A fake `claude` process stands in for the real one; no network."""
+"""Claude Code chat channel tests. A fake `claude` process stands in for the real one; no network."""
 import json
 import os
 import subprocess
@@ -23,7 +23,7 @@ history_rounds = 20
 max_output_tokens = 50
 [providers.cc]
 kind = "claude_agent"
-model = "claude-agent"
+model = "sonnet"
 max_input_tokens = 60000
 [tools]
 enabled = true
@@ -126,6 +126,7 @@ class ChannelChatTests(unittest.TestCase):
         rows = self.store.read('test/chat.jsonl')
         self.assertEqual([r['content'] for r in rows if r['role'] == 'assistant'], ['hey', 'you there', 'bye'])
         self.assertTrue(self.chat.turn_done)
+        self.assertEqual(holder['cmd'][holder['cmd'].index('--model') + 1], 'sonnet')
         cmd = holder['cmd']
         self.assertIn('--max-turns', cmd)
         self.assertEqual(cmd[cmd.index('--max-turns') + 1], '30')
@@ -199,10 +200,10 @@ class ChannelChatTests(unittest.TestCase):
             self.chat.send('hi')
         self.assertIn('额度', str(caught.exception))
 
-    def test_autonomous_wakes_are_not_supported_yet(self):
+    def test_autonomous_wake_requires_an_api_model_if_none_is_configured(self):
         with self.assertRaises(Exception) as caught:
             self.chat.send('wake', autonomy=True)
-        self.assertIn('自主醒来', str(caught.exception))
+        self.assertIn('API 模型', str(caught.exception))
 
 
 class PromptTests(unittest.TestCase):

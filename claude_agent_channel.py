@@ -389,6 +389,7 @@ class ClaudeAgentChannel:
 
     def command(self, claude, extra_dirs=()):
         cmd = [claude, '-p', '--output-format', 'stream-json', '--verbose',
+               '--model', self.provider.get('model') or 'sonnet',
                '--mcp-config', str(self.run_dir / 'mcp.json'), '--setting-sources', 'project',
                '--max-turns', str(MAX_TURNS), '--max-budget-usd', str(MAX_BUDGET_USD),
                '--permission-mode', 'acceptEdits', '--permission-prompt-tool', APPROVE_TOOL,

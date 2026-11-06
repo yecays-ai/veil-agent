@@ -1,7 +1,10 @@
-## 工单 231 交接（2026-11-07）
+## 工单 232 交接（2026-11-07）
 
-- 改动：将 PR #283 重编号为工单 231，合入 PR #284 之后的 main；修复工作流说明里的字面量换行、错误/缺失的示例、Node 路径前缀校验漏洞及不存在的 Skill 引用；影响检查 Skill 补上 Markdown 表格模板，并明确只要求修复本次改动引起的问题。PR 更新提交后的唯一一轮 CI 待完成。
-- 下一步：检查 PR #283 最新提交的必需 CI；通过后合并。之后开工单 232，为 Claude Code 通道加入可选模型，并在现有模型页中提供独立的自主活动模型选择。
+- 目标：模型页能选择 Claude Code 的 Sonnet/Haiku/Opus，并能为自主活动单独选 API 模型；聊天选 Claude Code 后后台自主活动仍可运行。
+- 影响路径：`autonomy.py` 的唤醒调用 `Chat.send(..., autonomy=True)`；`Chat._send_with_stable_model` 现有模型临时切换用于瞄一眼；`ModelSettings` 保存 `peter/background/glance` 三种用途；模型页 `/api/models/use` 通过 `Hub.use_model` 落盘。实现新增 `autonomy` 用途并复用 provider 切换；瞄一眼和聊天保持原行为；`ClaudeAgentChannel.command` 以 `--model` 传入当前 Claude 别名，保持权限桥、聊天工具和停止路径不变。
+- 已完成：独立 worktree `ticket/232-claude-models-autonomy`；实现模型别名、活动模型选择、回归测试和工单文档。专项检查通过：活动/瞄一眼测试 7 项，Claude 通道测试 24 项，模型设置兼容测试 4 项，`node --check desktop/chat.js` 与 `git diff --check` 通过。聊天/审批测试仅在允许本机回环端口后通过；完整测试套件未运行。
+- 下一步：提交代码、状态和交接文档后一次推 PR，只触发一轮 CI；合并前核对必需 CI 和评审；合并后请 Lan 在 Windows 验收。
+- 工单 231：PR #283 已于 2026-11-07 合并为 `4ec3942`；Tests 与 Dependency security 通过。
 - 工单 230：PR #284 已合并为 `806e9f9`；Peter Windows 三条聊天、工具、审批、停止和退出清理验收仍待 Lan 操作。
 - 工单 229：PR #282 于 2026-11-06 以 `f6785def` 合并，CI 通过；`find_claude` 按设置路径、PATH、桌面版目录最新版本的顺序查找。Windows 实机验收待 Lan 更新并重启 Peter；其他安装目录仍可在 `.env` 指定 `VEIL_CLAUDE_PATH`。
 
