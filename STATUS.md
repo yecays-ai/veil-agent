@@ -1,6 +1,11 @@
+## 工单 231：跨功能影响分析与联动修复
+
+- `ticket/231-impact-complete`：在 `AGENTS.md` 和工单流程中接入影响追踪、根因分析与完成前验证；修复文档断行、无效示例和路径安全示例。PR #283 已同步 PR #284 合并后的 main，审查意见已修正；本次提交的 CI 待跑。流程文档改动不直接修运行代码。
+- 验收：后续改动 PR 能列出真实调用路径和影响矩阵，提供新旧行为验证证据，并将 Windows 实机验收单独标注。下一个工单号 232（Claude 模型选择与自主活动独立模型）。
+
 ## 工单 230：Claude Code 后台启动不弹终端窗
 
-- `ticket/230-cc-no-terminal`：修复 `claude_agent_channel.py` 在 Windows 启动 Claude Code 时弹出黑色 `claude` 终端窗的问题；复用仓库已有的 `DETACHED_PROCESS | CREATE_NO_WINDOW` 启动方式，保留标准输入/输出管道和现有聊天、工具、审批、停止流程。启动参数单测 2 项通过；PR 自动检查与 Windows 实机体验尚待验证。
+- PR #284 已合并到 main（`806e9f9`）；启动参数定向单测通过。CI 检查曾通过（以 PR #284 当前检查为准）；Peter Windows 实机体验仍待 Lan 按下方步骤验收。
 - 验收：连续发三条消息，不弹终端窗；Peter 正常回复并可使用工具、通过权限审批；点停止可终止本轮；退出 Peter 后没有遗留 CC 进程。
 
 ## 工单 229：自动找到 claude 命令

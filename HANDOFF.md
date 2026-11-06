@@ -1,8 +1,8 @@
-## 工单 230 交接（2026-11-07）
+## 工单 231 交接（2026-11-07）
 
-- 目标：Claude Code 在 Peter 聊天中后台运行，不再额外弹出标题为 `claude` 的终端窗口。
-- 改动：`ClaudeAgentChannel.run_turn` 的 Windows 启动参数复用 `web_launcher.start_service` 等现有机制的 `DETACHED_PROCESS | CREATE_NO_WINDOW`；标准输入、输出和错误仍走管道，停止仍经 `kill_tree` 结束进程树。启动参数两项定向单测已通过；完整 PR CI 与 Peter 实机验收待完成。
-- 下一步：核对本 PR 唯一一轮 CI 和 Cubic 评审；合并后请 Lan 按 STATUS.md 连续发送三条消息，再检查工具审批、停止和退出清理。
+- 改动：将 PR #283 重编号为工单 231，合入 PR #284 之后的 main；修复工作流说明里的字面量换行、错误/缺失的示例、Node 路径前缀校验漏洞及不存在的 Skill 引用；影响检查 Skill 补上 Markdown 表格模板，并明确只要求修复本次改动引起的问题。PR 更新提交后的唯一一轮 CI 待完成。
+- 下一步：检查 PR #283 最新提交的必需 CI；通过后合并。之后开工单 232，为 Claude Code 通道加入可选模型，并在现有模型页中提供独立的自主活动模型选择。
+- 工单 230：PR #284 已合并为 `806e9f9`；Peter Windows 三条聊天、工具、审批、停止和退出清理验收仍待 Lan 操作。
 - 工单 229：PR #282 于 2026-11-06 以 `f6785def` 合并，CI 通过；`find_claude` 按设置路径、PATH、桌面版目录最新版本的顺序查找。Windows 实机验收待 Lan 更新并重启 Peter；其他安装目录仍可在 `.env` 指定 `VEIL_CLAUDE_PATH`。
 
 ## 工单 228 交接（2026-11-06）
