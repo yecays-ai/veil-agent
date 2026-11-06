@@ -1,3 +1,10 @@
+## 工单 228 交接（2026-11-06）
+
+- 改动：见 STATUS.md 工单 228。工具调用都在当前这一轮的线程里执行（`saving()` 只能在主线程用，桌面自动化也需要原线程）：本机小服务只排队，`ClaudeAgentChannel.run_turn` 在原线程逐个执行。
+- 关键约定：`provider.kind == "claude_agent"`；`Chat._claude_agent_chat` 里额度按 0 结算，API 折算价另记在 `data/<角色>/claude-agent-costs.jsonl`；工具调用记在 tools.jsonl，`channel` 字段为 `claude_agent`。传给 claude 的环境变量是白名单，不含任何 API Key。
+- 下一步：lan 在 Windows 上真跑验收；通过后再决定自主醒来、图片、更细的权限规则（目前 Claude Code 自己的权限模式 acceptEdits 决定哪些要问）。
+- 已知：审批等待没有超时（沿用 hub.approval），停止按钮不能撤销已弹出的卡片。
+
 ## 工单 227 交接（2026-11-06）
 
 - 改动：只有 `experiments/cc-bridge/`、`tests/test_cc_bridge.py`、`docs/tickets/227-cc-bridge-experiment.md`，没有动正式代码。

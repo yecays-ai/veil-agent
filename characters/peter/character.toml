@@ -30,6 +30,13 @@ input_cny_per_million = "4"
 cached_input_cny_per_million = "1"
 output_cny_per_million = "16"
 
+# Ticket 228: Claude Code answers the chat on Lan's own Claude login (no key, no token price here).
+# Pick it on the 模型 page. Autonomous wakes are not supported on this channel yet.
+[providers.claude_agent]
+kind = "claude_agent"
+model = "claude-agent"
+max_input_tokens = 200000
+
 [memory]
 enabled = true
 # Peter saves memories himself with the hold tool (ticket 007); "native" is the only mode.

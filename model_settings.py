@@ -342,7 +342,8 @@ class ModelSettings:
             for name, provider in self.builtins.items():
                 models.append({'id': BUILTIN_PREFIX + name, 'builtin': True, 'label': f'{name}（内置）',
                                'model': provider['model'], 'endpoint_name': name,
-                               'key_set': bool((env.get(provider['api_key_env']) or '').strip())})
+                               'key_set': provider.get('kind') == 'claude_agent'
+                               or bool((env.get(provider['api_key_env']) or '').strip())})
             names = {item['id']: item['name'] for item in endpoints}
             keys = {item['id']: item['key_set'] for item in endpoints}
             for item in self.data['models']:
