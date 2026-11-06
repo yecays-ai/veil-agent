@@ -3322,7 +3322,7 @@ class Chat:
         try:
             summaries, result = channel.run_turn(system_text, prompt, request_id, tool_schema, autonomy=autonomy,
                                                  extra_dirs=self._claude_agent_dirs())
-        except (RuntimeError, OSError) as exc:
+        except RuntimeError as exc:
             self.budget.settle(request_id, tool_cfg, 0, 0, 0)
             raise RequestFailed(str(exc)) from exc
         except BaseException:

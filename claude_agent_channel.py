@@ -363,14 +363,21 @@ class ClaudeAgentChannel:
         claude = find_claude(self.provider, self._env_file())
         if not claude:
             raise RuntimeError('找不到 claude 命令。请先在这台电脑上安装并登录它，或在 .env 里设置 VEIL_CLAUDE_PATH。')
-        project = self.prepare(system_text)
-        server = self.ensure_server()
+        try:
+            project = self.prepare(system_text)
+            server = self.ensure_server()
+        except OSError as exc:  # nothing has run yet, so this is a safe, plain failure
+            raise RuntimeError(f'Claude Code 的运行目录准备失败：{exc}') from exc
         state = TurnState(request_id, autonomy, offered)
         server.state = state
         group = {'start_new_session': True} if os.name != 'nt' else {}
-        process = self.popen(self.command(claude, extra_dirs), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                             stderr=subprocess.PIPE, cwd=project, env=minimal_env(), text=True, encoding='utf-8',
-                             **group)
+        try:
+            process = self.popen(self.command(claude, extra_dirs), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE, cwd=project, env=minimal_env(), text=True,
+                                 encoding='utf-8', **group)
+        except OSError as exc:
+            server.state = None
+            raise RuntimeError(f'没能启动 claude：{exc}') from exc
         stderr_chunks = []
         threading.Thread(target=lambda: stderr_chunks.append(process.stderr.read()), daemon=True).start()
         threading.Thread(target=self._feed, args=(process, prompt), daemon=True).start()
