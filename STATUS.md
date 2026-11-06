@@ -1,6 +1,6 @@
 ## 工单 232：Claude 模型选择与自主活动独立模型
 
-- `ticket/232-claude-models-autonomy`（PR #285）：Claude Code 聊天显式传入所选模型（默认 Sonnet，可选 Haiku / Opus）；模型页新增自主活动模型选择，使用独立 API 模型运行，不受聊天切到 Claude Code 影响。瞄一眼原有独立选模保持不变。首轮 CI 有一项未改动的小红书 Windows 3.12 测试失败，本机复跑通过；PR 正在集中修正审查意见后再跑最终 CI。Windows Peter 实机待验收。
+- `ticket/232-claude-models-autonomy`（PR #285）：Claude Code 聊天显式传入所选模型（默认 Sonnet，可选 Haiku / Opus）；模型页新增自主活动模型选择，使用独立 API 模型运行，不受聊天切到 Claude Code 影响。瞄一眼原有独立选模保持不变。审查意见已集中修复；CI 揭示并修复了自主活动沿用聊天模型时的大窗口回归，最终 CI 待本次修正提交后验证。Windows Peter 实机待验收。
 - 验收：选 Claude Code Haiku 发送消息可正常回复；Peter 聊天保持 Claude Code 时，将自主活动选为 API 模型并等待下一次唤醒，确认成功完成；瞄一眼选模仍正常。具体步骤见 `docs/tickets/232-claude-models-autonomy.md`。下一个工单号 233。
 
 ## 工单 231：跨功能影响分析与联动修复

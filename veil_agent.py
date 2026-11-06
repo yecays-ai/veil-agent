@@ -2958,8 +2958,8 @@ class Chat:
 
     def _send_with_stable_model(self, text, *, autonomy=False, **kwargs):
         self._apply_pending_model()
-        # Ticket 133: background requests (wakes, glances, Codex reminders) may use a larger
-        # input window than ordinary chat; chat keeps the provider limit and its cost.
+        # Ticket 133: activities following chat may use a larger input window; a separately
+        # selected provider still caps its own requests at that provider's context limit.
         role = 'glance' if self.glance_mode else 'autonomy' if autonomy else None
         activity_model = self._activity_model(role) if role else None
         if activity_model is None:
@@ -2972,16 +2972,17 @@ class Chat:
         self.cfg.provider.update(provider)
         self.cfg.provider_name = name
         try:
-            return self._send_with_input_limit(text, autonomy=autonomy, **kwargs)
+            ceiling = provider['max_input_tokens'] if role == 'autonomy' else None
+            return self._send_with_input_limit(text, autonomy=autonomy, input_ceiling=ceiling, **kwargs)
         finally:
             self.cfg.provider.clear()
             self.cfg.provider.update(saved)
             self.cfg.provider_name = saved_name
 
-    def _send_with_input_limit(self, text, *, autonomy=False, **kwargs):
+    def _send_with_input_limit(self, text, *, autonomy=False, input_ceiling=None, **kwargs):
         limit = (self.cfg.autonomy or {}).get('max_input_tokens') if autonomy else None
-        if limit:
-            limit = min(limit, self.cfg.provider['max_input_tokens'])
+        if input_ceiling is not None:
+            limit = min(limit or input_ceiling, input_ceiling)
         if not limit or limit == self.cfg.provider['max_input_tokens']:
             return self._send(text, autonomy=autonomy, **kwargs)
         original = self.cfg
