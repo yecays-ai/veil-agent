@@ -1,6 +1,11 @@
+## 工单 230：Claude Code 后台启动不弹终端窗
+
+- `ticket/230-cc-no-terminal`：修复 `claude_agent_channel.py` 在 Windows 启动 Claude Code 时弹出黑色 `claude` 终端窗的问题；复用仓库已有的 `DETACHED_PROCESS | CREATE_NO_WINDOW` 启动方式，保留标准输入/输出管道和现有聊天、工具、审批、停止流程。启动参数单测 2 项通过；PR 自动检查与 Windows 实机体验尚待验证。
+- 验收：连续发三条消息，不弹终端窗；Peter 正常回复并可使用工具、通过权限审批；点停止可终止本轮；退出 Peter 后没有遗留 CC 进程。
+
 ## 工单 229：自动找到 claude 命令
 
-- `ticket/229-cc-find-claude`：`claude_agent_channel.find_claude` 现在的顺序是：`.env`/环境变量里的 `VEIL_CLAUDE_PATH`（文件存在才用，写错或过期会自动往下找）→ PATH 里的 `claude` → Claude 桌面版在 Windows 上放的 `claude.exe`（`%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude\claude-code\<版本>\<哈希>\claude.exe` 和 `%APPDATA%\Claude\claude-code\...`，取版本最新的）。桌面版升级后不用再改路径。新增 4 项测试，改 1 项。lan 的 `.env` 里原来路径少了一个字母，已由实机会话补正；本工单上线后即使写错也会自动找到。Windows 实机未验证（需更新后重启 Peter）。下一个工单号 230。
+- `ticket/229-cc-find-claude`（PR #282，合并提交 `f6785def`）：`find_claude` 依次查找配置路径、PATH 和 Claude 桌面版目录中的最新 `claude.exe`；配置路径写错时自动回退。新增 4 项测试，改 1 项，自动检查已通过。Lan 本机 `.env` 路径已在前一轮实机会话修正；本工单 Windows 验收仍待更新后重启 Peter 确认。
 
 ## 工单 228：聊天里接入 Claude Code 通道
 

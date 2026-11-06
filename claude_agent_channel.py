@@ -167,6 +167,11 @@ def kill_tree(process):
             pass
 
 
+def _process_group_options():
+    return {'start_new_session': True} if os.name != 'nt' else {
+        'creationflags': getattr(subprocess, 'DETACHED_PROCESS', 0) | getattr(subprocess, 'CREATE_NO_WINDOW', 0)}
+
+
 class TurnState:
     """What one `claude -p` run is allowed to do and what it did."""
 
@@ -405,7 +410,7 @@ class ClaudeAgentChannel:
             raise RuntimeError(f'Claude Code 的运行目录准备失败：{exc}') from exc
         state = TurnState(request_id, autonomy, offered)
         server.state = state
-        group = {'start_new_session': True} if os.name != 'nt' else {}
+        group = _process_group_options()
         try:
             process = self.popen(self.command(claude, extra_dirs), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                  stderr=subprocess.PIPE, cwd=project, env=minimal_env(), text=True,

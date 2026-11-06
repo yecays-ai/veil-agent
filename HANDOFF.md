@@ -1,7 +1,9 @@
-## 工单 229 交接（2026-11-06）
+## 工单 230 交接（2026-11-07）
 
-- 改动：见 STATUS.md 工单 229，只改 `find_claude`（顺序：配置路径存在才用 → PATH → 桌面版目录里版本最新的 claude.exe）和测试。`ClaudeAgentChannel.run_turn` 的调用不变。
-- 已知限制：只认桌面版常见的两个目录；其他安装方式仍需在 `.env` 写 `VEIL_CLAUDE_PATH`。
+- 目标：Claude Code 在 Peter 聊天中后台运行，不再额外弹出标题为 `claude` 的终端窗口。
+- 改动：`ClaudeAgentChannel.run_turn` 的 Windows 启动参数复用 `web_launcher.start_service` 等现有机制的 `DETACHED_PROCESS | CREATE_NO_WINDOW`；标准输入、输出和错误仍走管道，停止仍经 `kill_tree` 结束进程树。启动参数两项定向单测已通过；完整 PR CI 与 Peter 实机验收待完成。
+- 下一步：核对本 PR 唯一一轮 CI 和 Cubic 评审；合并后请 Lan 按 STATUS.md 连续发送三条消息，再检查工具审批、停止和退出清理。
+- 工单 229：PR #282 于 2026-11-06 以 `f6785def` 合并，CI 通过；`find_claude` 按设置路径、PATH、桌面版目录最新版本的顺序查找。Windows 实机验收待 Lan 更新并重启 Peter；其他安装目录仍可在 `.env` 指定 `VEIL_CLAUDE_PATH`。
 
 ## 工单 228 交接（2026-11-06）
 
