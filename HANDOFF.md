@@ -1,3 +1,9 @@
+## 工单 230 交接（2026-11-07）
+
+- 新增通用 `.agents/skills/impact-complete/SKILL.md`；更新 `AGENTS.md` 与 `.agents/skills/ticket/SKILL.md`，强制任何开发变更先追踪所有调用者及副作用、同 PR 修完连带故障，交付前复查 diff 和新旧使用旅程。只调整开发流程，不安装新运行依赖、不调用付费模型。
+- **待修运行缺陷**：自主活动通过 `chat.send(..., autonomy=True)` 使用聊天 provider，CC 聊天通道拒绝自主醒来；新增 Skill 不能替代运行代码修复。下一功能修复的验收应是聊天 CC、指定 API 模型自主醒来实际成功，且其他共享模型消费者不回归。
+- 下一个窗口：按 Skill 实测 Codex/Claude 在真实变更任务中的影响追踪和联动修复，标记尚未完成的 Windows 体验；不要把流程文档当做自动化验收通过。
+
 ## 工单 229 交接（2026-11-06）
 
 - 改动：见 STATUS.md 工单 229，只改 `find_claude`（顺序：配置路径存在才用 → PATH → 桌面版目录里版本最新的 claude.exe）和测试。`ClaudeAgentChannel.run_turn` 的调用不变。
