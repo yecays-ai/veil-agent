@@ -39,6 +39,8 @@ from autonomy import AutonomyController, GlanceController
 from hub_screen_pop import ScreenPopMixin
 from codex_watch import CodexWatchController
 
+workbench_lock = threading.Lock()
+
 MAX_BODY = 200_000
 MAX_MEDIA_BYTES = MAX_PHOTO_BYTES
 MAX_VOICE_UPLOAD_BYTES = 10 * 1024 * 1024
@@ -2263,32 +2265,40 @@ def make_handler(hub, token):
                     self._send(500, {'error': 'MCP 配置保存失败。'})
 
         def _get_workbench(self):
+            if not self._guard(self.headers.get('X-Token')):
+                return
             try:
                 self._send(200, workbench_switch.status(ROOT))
             except (OSError, ValueError) as exc:
                 self._send(500, {'error': str(exc)})
 
         def _post_workbench(self, body):
+            if not self._guard(self.headers.get('X-Token')):
+                return
             try:
-                state = workbench_switch.load_state(ROOT)
-                if 'enabled' in body:
-                    if not isinstance(body['enabled'], bool):
-                        self._send(400, {'error': 'enabled'})
-                        return
-                    state['enabled'] = body['enabled']
-                if 'add' in body:
-                    ok, message = workbench_switch.add_folder(state, body['add'], ROOT) if isinstance(body['add'], str) else (False, 'add')
-                    if not ok:
-                        self._send(400, {'error': message})
-                        return
-                if 'remove' in body:
-                    if not isinstance(body['remove'], str) or not workbench_switch.remove_folder(state, body['remove']):
-                        self._send(400, {'error': 'remove'})
-                        return
-                workbench_switch.save_state(state, ROOT)
-                self._send(200, workbench_switch.status(ROOT))
+                with workbench_lock:
+                    self._save_workbench(body)
             except (OSError, ValueError) as exc:
                 self._send(500, {'error': str(exc)})
+
+        def _save_workbench(self, body):
+            state = workbench_switch.load_state(ROOT)
+            if 'enabled' in body:
+                if not isinstance(body['enabled'], bool):
+                    self._send(400, {'error': 'enabled'})
+                    return
+                state['enabled'] = body['enabled']
+            if 'add' in body:
+                ok, message = workbench_switch.add_folder(state, body['add'], ROOT) if isinstance(body['add'], str) else (False, 'add')
+                if not ok:
+                    self._send(400, {'error': message})
+                    return
+            if 'remove' in body:
+                if not isinstance(body['remove'], str) or not workbench_switch.remove_folder(state, body['remove']):
+                    self._send(400, {'error': 'remove'})
+                    return
+            workbench_switch.save_state(state, ROOT)
+            self._send(200, workbench_switch.status(ROOT))
 
         def _post_quiet_hours(self, body):
             enabled = body.get('enabled')

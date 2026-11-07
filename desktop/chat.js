@@ -1516,7 +1516,9 @@ function renderWorkbench(){
   }
   workbenchNote(s.enabled&&!s.image_ready?'还没有运行环境：双击 workbench-switch.cmd，选 1 做一次。':workbench.changed?'重开 Peter 后生效。':'');
 }
-async function saveWorkbench(change){
+let workbenchBusy=Promise.resolve();
+function saveWorkbench(change){workbenchBusy=workbenchBusy.then(()=>saveWorkbenchNow(change));return workbenchBusy}
+async function saveWorkbenchNow(change){
   try{
     const r=await api('/api/workbench',change);const data=await r.json();
     if(!r.ok){notify(data.error||'没有保存成功。','error');return}
@@ -1524,7 +1526,7 @@ async function saveWorkbench(change){
   }catch(error){notify(error.message||'没有保存成功。','error')}
 }
 async function loadWorkbench(){
-  try{const r=await api('/api/workbench');if(r.ok){workbench.state=await r.json();renderWorkbench()}}catch(error){}
+  try{const r=await api('/api/workbench');const data=await r.json();if(r.ok){workbench.state=data;renderWorkbench()}else workbenchNote(data.error||'读不到工作台设置，检查 data/peter/workbench.json。')}catch(error){workbenchNote('读不到工作台设置。')}
 }
 $('workbench-on').onclick=()=>saveWorkbench({enabled:true});
 $('workbench-off').onclick=()=>saveWorkbench({enabled:false});

@@ -56,7 +56,7 @@ def add_folder(state, folder, root=ROOT):
 
 def image_ready(image=IMAGE):
     try:
-        return subprocess.run(['docker', 'image', 'inspect', image], capture_output=True, timeout=15).returncode == 0
+        return subprocess.run(['docker', 'image', 'inspect', image], capture_output=True, timeout=60).returncode == 0
     except (OSError, subprocess.SubprocessError):
         return False
 

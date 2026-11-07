@@ -596,10 +596,6 @@ class ScopeTests(unittest.TestCase):
         self.assertEqual((project / 'a.txt').read_text(encoding='utf-8'), 'v1')
 
 
-if __name__ == '__main__':
-    unittest.main()
-
-
 class WorkbenchSwitchApiTests(unittest.TestCase):
     def test_state_round_trip_and_folder_rules(self):
         import workbench_switch as ws
@@ -630,3 +626,7 @@ class WorkbenchSwitchApiTests(unittest.TestCase):
             path.write_text('{"project_roots": "x"}', encoding='utf-8')
             with self.assertRaises(ValueError):
                 ws.load_state(root)
+
+
+if __name__ == '__main__':
+    unittest.main()
