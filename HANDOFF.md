@@ -1,7 +1,7 @@
 ## 当前工单 249（2026-11-07 UTC）
 
 - 目标：修复搜索文本里的 `git push` 等词误触发工作台审批，同时保持真正危险和复杂命令受控。
-- 分支 `ticket/249-opencode-approval-classification`，独立 worktree `E:\Peter-Agent\VEIL\veil-agent-codex-249`。实现提交 `be24ecccf9a19ab21b5b340d06213845f2b8a5d8` 已推送；正式运行目录未改动，原 `veil-agent-codex` 未提交改动原样保留。
+- 分支 `ticket/249-opencode-approval-classification`，独立 worktree `E:\Peter-Agent\VEIL\veil-agent-codex-249`。代码提交 `be24ecc` 及审批参数保护补充提交 `4fee53b` 均已推送；最新定向测试 45 项通过、2 项因未安装 OpenCode 跳过。正式运行目录未改动，原 `veil-agent-codex` 未提交改动原样保留。
 - 已确认旧实现会对 `grep -R "git push" .` 弹审批。新定向测试 45 项通过、2 项因 OpenCode 未安装而跳过；语法和 diff 检查通过。README 全套 1218 项中 2 项备份断言失败、1 项缺少 `docx` 模块报错、13 项跳过；失败项不在本工单改动路径。
 - 工单 248 / PR #300 已合并，合并提交 `b9695e52b34490ddbf51763ad9970f4b24874853`，Windows/Linux Python 3.11/3.12、审计和 scanner smoke 均通过；Windows Peter 实机体验验收未确认。
 - PR #303 已存在并指向上述分支；标题和模板正文已补全，含影响范围及本地检查证据。必需 CI 的部分检查仍运行，Cubic 检查仍运行，尚未合并。
