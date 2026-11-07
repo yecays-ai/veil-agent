@@ -14,7 +14,7 @@ from unittest.mock import Mock
 from tools_agent import (ALLOW, ASK, DENY, LAB_ONLY, OWN_WORK, FilesystemTools, checked_path,
                          permitted_tools, tool_policy)
 from veil_agent import (Budget, Chat, RequestFailed, Store, load_character,
-                        join_reply_continuation, model_tool_result, request_byte_size, run_chat)
+                        UserError, join_reply_continuation, model_tool_result, request_byte_size, run_chat)
 
 
 class ToolPolicyTests(unittest.TestCase):
@@ -768,6 +768,14 @@ max_result_bytes = 200
         self.assertEqual(assistant_rows[-1]['content'], reply)
         self.assertTrue(any(getattr(item, 'is_error', False) for item in output))
         self.assertEqual(chat.tool_stop_reason, str(output[-1]))
+
+    def test_continuation_does_not_swallow_dispatch_ledger_failure(self):
+        model = Mock(return_value=(self.message(content='A partial sentence'), 100, 50, 0, 'length'))
+        chat = Chat(self.cfg, self.store, self.budget, model, output=lambda _: None)
+        with patch.object(self.budget, 'mark_dispatched', side_effect=[None, UserError('ledger write failed')]):
+            with self.assertRaisesRegex(UserError, 'ledger write failed'):
+                chat.send('finish this')
+        model.assert_called_once()
 
     def test_cancelled_continuation_preserves_partial_reply(self):
         output = []

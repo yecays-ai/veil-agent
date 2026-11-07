@@ -4475,9 +4475,9 @@ class Chat:
                 break
             reservation = request_id if step == 0 else next_reservation
             sent_bytes = request_bytes(offered)
+            model_messages = alias_system_messages(loop_messages, self.tool_aliases)
+            self.budget.mark_dispatched(reservation)
             try:
-                model_messages = alias_system_messages(loop_messages, self.tool_aliases)
-                self.budget.mark_dispatched(reservation)
                 response = self.model(model_messages, tools=offered, message_output=True,
                                       max_tokens=step_cfg.max_output_tokens, detail=True)
             except (KeyboardInterrupt, EOFError):
@@ -4537,12 +4537,19 @@ class Chat:
                                     'clearly before discussing appearance. Use text diagnostics only and '
                                     'never claim visual verification.'),
                     })
+                    sent_bytes = request_bytes(offered)
+                    model_messages = alias_system_messages(loop_messages, self.tool_aliases)
+                    self.budget.mark_dispatched(reservation)
                     try:
-                        sent_bytes = request_bytes(offered)
-                        model_messages = alias_system_messages(loop_messages, self.tool_aliases)
-                        self.budget.mark_dispatched(reservation)
                         response = self.model(model_messages, tools=offered, message_output=True,
                                               max_tokens=step_cfg.max_output_tokens, detail=True)
+                    except (KeyboardInterrupt, EOFError):
+                        if continuation_prefix:
+                            self.tool_stop_reason = '回复续接已中断，已保留此前生成的内容。'
+                            self.output(ChatOutput(self.tool_stop_reason, request_id=request_id, is_error=True))
+                            final = continuation_prefix
+                            break
+                        raise
                     except RequestNotSent:
                         self.budget.release_not_sent(reservation)
                         raise
