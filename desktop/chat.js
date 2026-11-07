@@ -1963,3 +1963,25 @@ function enhanceVeilSelects(root=document){if(root.matches?.('select'))enhanceVe
 enhanceVeilSelects();new MutationObserver(records=>records.forEach(record=>record.addedNodes.forEach(node=>{if(node.nodeType===Node.ELEMENT_NODE)enhanceVeilSelects(node)}))).observe(document.body,{childList:true,subtree:true});
 document.addEventListener('click',event=>{if(!veilSelectCurrent)return;const state=veilSelectState.get(veilSelectCurrent);if(!state.menu.contains(event.target)&&!state.trigger.contains(event.target))closeVeilSelect()});
 window.addEventListener('resize',()=>closeVeilSelect());window.addEventListener('scroll',()=>closeVeilSelect(),true);
+
+(()=>{ // custom avatar: stored on this PC, shared by every VEIL window
+  const KEY='veil-avatar',apply=url=>document.querySelectorAll('img.peter-avatar').forEach(img=>{img.src=url||'assets/pep.png'});
+  try{const saved=localStorage.getItem(KEY);if(saved)apply(saved)}catch{}
+  const input=document.getElementById('avatar-file'),button=document.getElementById('avatar-change');
+  if(!input||!button)return;
+  button.onclick=()=>input.click();
+  input.onchange=()=>{
+    const file=input.files&&input.files[0];input.value='';if(!file)return;
+    if(file.size>8*1024*1024){notify('头像图片太大了，请选 8MB 以内的。');return}
+    const image=new Image(),url=URL.createObjectURL(file);
+    image.onload=()=>{
+      if(image.width*image.height>40e6){URL.revokeObjectURL(url);notify('头像图片像素太多，请换一张小一点的。');return}
+      const size=256,side=Math.min(image.width,image.height),canvas=document.createElement('canvas');canvas.width=canvas.height=size;
+      canvas.getContext('2d').drawImage(image,(image.width-side)/2,(image.height-side)/2,side,side,0,0,size,size);
+      URL.revokeObjectURL(url);const data=canvas.toDataURL('image/png');
+      try{localStorage.setItem(KEY,data)}catch{}apply(data);
+    };
+    image.onerror=()=>URL.revokeObjectURL(url);image.src=url;
+  };
+  window.addEventListener('storage',event=>{if(event.key===KEY)apply(event.newValue)});
+})();
