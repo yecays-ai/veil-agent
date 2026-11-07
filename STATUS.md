@@ -1,8 +1,7 @@
 ## 工单 237：桌面 UI 全状态整理与预览验收
 
-- PR #295 正在与最新 main（#294，`817de3c`）解决合并冲突。用户已确认生活记录截图预览并要求跟进合并；主窗七页、独立窗拆并和浮层的 Windows 逐项验收仍待完成，见 `docs/tickets/237-preview-manifest.md`。
-- Cubic 8 条意见均已逐条修复、回复并解决。最新分支 head 的 Windows desktop smoke 已通过；Tests 工作流待最终合并提交后确认。
-- 下一步：解决 STATUS/HANDOFF 冲突并推送，跟进最终 CI，通过后合并 PR #295；随后按清单做 Peter Windows 实机验收。
+- PR #295 head `716a5caf` 已与最新 main `817de3c` 合并；Windows desktop、Tests（四平台矩阵）和 Dependency security 均通过。用户已确认生活记录预览；主窗七页、独立窗拆并和浮层的 Windows 逐项验收仍待完成，见 `docs/tickets/237-preview-manifest.md`。
+- 下一步：squash merge PR #295；合并后由 Lan 按状态清单在 Peter 的 Windows 实机逐项验收。
 
 ## 工单 238：工作台自己找项目、快照、权限分级、密钥代理
 

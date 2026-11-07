@@ -1,10 +1,8 @@
 ## 工单 237 交接：桌面 UI 全状态整理与预览验收（2026-11-07）
 
-- PR #295 当前 head `28bcb93`，已开始合入最新 main `817de3c`（PR #294）；冲突只在 `STATUS.md` 和 `HANDOFF.md`，正在保留 main 中工作台工单记录的同时补入本 UI 工单状态。
-- Cubic 8 条意见已逐条修复、回复并解决。Windows desktop workflow 已通过；Windows smoke 中发现原测试错误期待 Peter 过滤结果为 0（日历当天有 Peter 自己的待办），已改成 Peter=1、Lan=0。最终 head 的 Tests 尚待通过。
-- UI 单测 9/9、`chat.js` 语法、差异检查通过；本地完整桌面测试有一项因 Agent 服务未就绪失败，本地复用 E 盘 Electron 启动 smoke 返回 `STATUS_BREAKPOINT`，不算通过。
-- 用户确认了生活记录截图预览并要求跟进合并；全主窗状态、独立窗口和浮层原生操作仍未逐项实机验收，按 `docs/tickets/237-preview-manifest.md` 保持待验，不用 CI 冒充。
-- 下一步：完成 STATUS/HANDOFF 冲突解决，推送并等最新 Tests；通过后 squash merge PR #295；随后 Lan 按清单在 Peter Windows 实机验收。
+- PR #295 head `716a5caf` 已与最新 main `817de3c` 合并；Cubic 意见已逐条修复并解决；Windows desktop、Tests 四平台矩阵、Dependency security 全部通过。PR 等待 squash merge。
+- 用户已确认生活记录截图预览；全主窗状态、独立窗口拆并和浮层的 Windows 原生操作仍未逐项实机验收，按 `docs/tickets/237-preview-manifest.md` 保持待验。
+- 下一步：squash merge PR #295；之后 Lan 按清单在 Peter Windows 实机逐项验收。
 
 ## 工单 238 交接（2026-11-07）
 
