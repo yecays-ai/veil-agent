@@ -1,3 +1,8 @@
+## 工单 235：界面去后台感
+
+- `ticket/235-calm-ui-pass`：窗口整体圆角（去掉外层尖角框）；去掉 VEIL 品牌行，头像可自己上传；收起侧栏头像和按钮不再重叠；自主活动、MCP、设置页删掉解释小字、卡片改细线；三栏宽度随窗口变化，窄时右栏隐藏、左栏自动收成图标。只改 desktop 样式、HTML 和头像脚本。
+- 验收见 `docs/tickets/235-calm-ui-pass.md`。下一个工单号 236。
+
 ## 工单 234：Claude Code 只读查询不再弹同意
 
 - `ticket/234-cc-readonly-allow`：Claude Code 通道把 Read、Grep、Glob 放进免询问列表，查文件、搜内容、列目录不再弹同意卡片；写文件、命令行、网页仍先问 lan。拒绝规则补了 `//**/.env`、`//**/.env.*`、`//**/secrets/**`（读、改、写），因为原来的 `**/.env` 只匹配 Claude Code 工作目录之内，用真实 claude 复现过：目录外的 `.env`、secrets 能被 Read 读到，补规则后被拒绝，Grep 和 Glob 的结果也不含这些文件。`claude_agent_channel.py`，测试 `tests/test_claude_agent_channel.py`（新增 1 项，共 28 项通过）。同一 PR 追加：`windows_observe` 取桌面锁由等 0.1 秒改为 3 秒（不超过观察总时限一半），并行观察第二个窗口遇到“每请求一张截图”上限时返回控件内容而不是报错（`windows_observer.py`，`tests/test_windows_observer.py`：1 项新增、1 项更新）。Windows 实机体验待 lan 验收；命令行 `cat .env` 之类仍会弹同意卡片，卡片里能看到完整命令。
