@@ -157,7 +157,9 @@ def diagnose(messages):
         for part in m.get('parts', []):
             if part.get('type') == 'tool':
                 state = part.get('state', {})
-                shown = str(state.get('input', {}).get('command') or state.get('input', {}).get('filePath') or '')[:80]
+                tool_input = state.get('input')
+                words = str(tool_input.get('command') or '').split() if isinstance(tool_input, dict) else []
+                shown = words[0][:30] if words else ''  # program name only: arguments may hold secrets
                 lines.append(f"{part.get('tool')} {state.get('status', '')} {shown}".strip())
     return '; '.join(lines[-6:])
 
