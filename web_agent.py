@@ -79,6 +79,9 @@ SENSEVOICE_EVENT_EMOJI_PREFIX = re.compile(rf'^(?:[{re.escape(SENSEVOICE_EVENT_E
 SENSEVOICE_EMOTION_EMOJI_SUFFIX = re.compile(rf'\s*[{re.escape(SENSEVOICE_EMOTION_EMOJI)}]+$')
 
 
+VOICE_NO_SPEECH_ERROR = '没有识别到说话内容；这段录音重启后会自动清掉。'
+
+
 def clean_voice_transcript(text):
     """Remove SenseVoice rich emotion/event markers from dictation text."""
     text = SENSEVOICE_METADATA_TAG.sub('', text).strip()
@@ -656,7 +659,8 @@ class Hub(ScreenPopMixin):
             transcript = result.get('text', '').strip() if isinstance(result, dict) else ''
             transcript = clean_voice_transcript(transcript)
             if not transcript:
-                raise ValueError('empty transcript')
+                logger.info('SenseVoice found no speech: audio_bytes=%d', len(raw))
+                return None, VOICE_NO_SPEECH_ERROR
             logger.info('SenseVoice transcription complete: elapsed_seconds=%.2f audio_bytes=%d trace_id=%s',
                         time.monotonic() - started, len(raw), trace_id or 'unavailable')
         except HTTPError as exc:
@@ -855,6 +859,10 @@ class Hub(ScreenPopMixin):
                 return
             row['transcript'] = transcript
             row['transcription_error'] = error
+            if error == VOICE_NO_SPEECH_ERROR:
+                row['no_speech'] = True
+            else:
+                row.pop('no_speech', None)
             self._rewrite_media_index()
 
     def mark_voice_unsent(self, media, error='语音没有交给 Peter；录音已保留，可以重试识别。'):
@@ -870,6 +878,20 @@ class Hub(ScreenPopMixin):
             row['delivery_error'] = error
             self.submissions.pop(media.get('request_id'), None)
             self._rewrite_media_index()
+
+    def discard_silent_voice(self, keep_ids):
+        """Delete unsent recordings in which no speech was found; there is nothing to retry."""
+        with self.media_lock:
+            silent = [row for row in self.media_index.values()
+                      if row.get('kind') == 'voice' and row.get('no_speech') is True
+                      and row['id'] not in keep_ids and not row.get('delivery_pending')]
+            if not silent:
+                return
+            for row in silent:
+                self.media_index.pop(row['id'], None)
+            self._rewrite_media_index()
+            for row in silent:
+                (self.media_root / row['filename']).unlink(missing_ok=True)
 
     def commit_media(self, media_id, request_id, submission_digest):
         """Move one uploaded image into durable history, or return an existing commit."""
@@ -2626,6 +2648,7 @@ def serve_chat(chat, hub, channels=()):
         message.get('media', {}).get('id') for message in chat.store.read(chat.path)
         if isinstance(message.get('media'), dict) and message['media'].get('kind') == 'voice'
     }
+    hub.discard_silent_voice(completed_voice_ids)
     for media in hub.media_index.values():
         if (media.get('kind') == 'voice' and media['id'] not in completed_voice_ids
                 and (media.get('request_id') == 'voice-' + media['id'] or media.get('delivery_pending'))):

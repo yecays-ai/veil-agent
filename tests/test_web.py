@@ -537,6 +537,28 @@ output_cny_per_million = "8"
         self.assertFalse(any(event.get('media', {}).get('id') == media_id for event in self.hub.events
                              if isinstance(event.get('media'), dict)))
 
+    def test_restart_discards_an_unsent_recording_without_speech(self):
+        class Response:
+            headers = {}
+            def __enter__(self): return self
+            def __exit__(self, *_): return False
+            def read(self): return b'{"text":""}'
+        silent = self.hub.save_voice('audio/webm', b'\x1a\x45\xdf\xa3fictional silence')
+        kept = self.hub.save_voice('audio/webm', b'\x1a\x45\xdf\xa3fictional network failure')
+        with patch('dotenv.dotenv_values', return_value={'EMBED_API_KEY': 'fictional'}), patch(
+                'web_agent.urlopen', return_value=Response()):
+            self.hub.transcribe_voice(silent['id'])
+        self.hub._record_voice_result(kept['id'], '', '语音识别服务返回 HTTP 500，请稍后重试。')
+        self.assertTrue(self.hub.media_index[silent['id']]['no_speech'])
+        chat = Chat(self.cfg, self.store, Budget(self.store), self.model)
+        with patch('web_agent.run_chat', return_value=None):
+            serve_chat(chat, self.hub)
+        pushed = {event['media']['id'] for event in self.hub.events if isinstance(event.get('media'), dict)}
+        self.assertNotIn(silent['id'], pushed)
+        self.assertIn(kept['id'], pushed)
+        self.assertNotIn(silent['id'], self.hub.media_index)
+        self.assertFalse((self.hub.media_root / silent['filename']).exists())
+
     def test_snapshot_exposes_the_same_capability_record_used_by_peter(self):
         record = 'CAPABILITY RECORD\n2026-10-22T00:00:00+00:00: Capability update: added fictional_tool.'
         self.hub.capability_record = lambda: record
