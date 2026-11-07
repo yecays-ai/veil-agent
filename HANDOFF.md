@@ -2,7 +2,7 @@
 
 - 新文件 `workbench_scope.py`（找项目、快照、还原）；`executor_opencode.py` 加 `KeyProxy`、`ASK_LAN`、`SAFE_COMMANDS`/`SECRET_GLOBS`；`veil_agent.py` 加 `_workbench_target`、`project_roots` 配置、`workbench` 的可选 `project` 参数。
 - `workbench-estimate` 加入 `ESTIMATE_ACCOUNTINGS`：运行中被强杀时按预留全额记账，不放回。
-- 未验证：容器隔离、Windows 上经密钥代理的真实模型运行；命令越权没有解决（见工单文档）。
+- 已验（2026-11-07，lan 的 Windows + Docker Desktop）：容器隔离、经密钥代理的真实模型整套任务、测试副本里 Peter 真实聊天。未验：自主醒来真机、Linux 主机。不用容器时命令越权仍未解决（见工单文档）；真实项目未开放，默认关闭。
 
 ## 工单 237 交接（2026-11-07）
 
