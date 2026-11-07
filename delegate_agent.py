@@ -58,7 +58,8 @@ def run(task, model, cfg, budget, tools, invoke, request_id, stopped=lambda: Fal
     for turn in range(MAX_TURNS):
         if stopped():
             return DelegateResult('委派任务已停止。', '已停止')
-        if clock() > deadline:
+        remaining = deadline - clock()
+        if remaining <= 0:
             return DelegateResult('委派任务达到时间上限。', '出错')
         offered = tools if turn < MAX_TURNS - 1 and tool_calls < MAX_TOOL_CALLS else None
         step_cfg = cfg
@@ -70,7 +71,8 @@ def run(task, model, cfg, budget, tools, invoke, request_id, stopped=lambda: Fal
             budget.mark_dispatched(reservation)
             message, prompt, completion, cached = model(
                 messages, tools=offered, message_output=True, detail=False,
-                max_tokens=min(step_cfg.max_output_tokens, MAX_OUTPUT_TOKENS))
+                max_tokens=min(step_cfg.max_output_tokens, MAX_OUTPUT_TOKENS),
+                request_timeout=min(45, remaining))
         except Exception as exc:
             from veil_agent import RequestNotSent
             if isinstance(exc, RequestNotSent):

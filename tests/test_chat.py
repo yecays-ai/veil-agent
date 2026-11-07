@@ -840,20 +840,40 @@ output_cny_per_million = "8"
         delegated.assert_called_once()
 
     def test_delegate_model_request_timeout_is_45_seconds(self):
-        from delegate_agent import DelegateResult
+        from delegate_agent import DelegateResult, READ_ONLY_TOOLS
         cfg = replace(self.cfg, tools={'enabled': True, 'max_steps': 2})
         chat = Chat(cfg, self.store, self.budget, self.model)
+        chat.tools = SimpleNamespace(tools=[
+            SimpleNamespace(name='read_text_file', description='Read file.', inputSchema={'type': 'object'}),
+            SimpleNamespace(name='write_file', description='Write file.', inputSchema={'type': 'object'}),
+        ])
         provider = {'model': 'fixture-delegate', 'max_input_tokens': 10000,
                     'cny_per_call': Decimal('0.06'), 'input_cny_per_million': Decimal(0),
                     'cached_input_cny_per_million': Decimal(0), 'output_cny_per_million': Decimal(0)}
         client = SimpleNamespace(close=Mock())
         with (patch.object(cfg.models, 'chosen', return_value=('fixture-id', 'fixture', provider)),
               patch('veil_agent.make_model', return_value=(client, Mock())) as make_model,
-              patch('delegate_agent.run', return_value=DelegateResult('Fixture result.', '成功'))):
+              patch('delegate_agent.run', return_value=DelegateResult('Fixture result.', '成功')) as run_delegate):
             result = chat._run_delegate('Find a public article.', 'parent-request')
         self.assertEqual(result.text, 'Fixture result.')
         self.assertEqual(make_model.call_args.kwargs['timeout'], 45)
+        offered = {schema['function']['name'] for schema in run_delegate.call_args.args[4]}
+        self.assertTrue(offered <= READ_ONLY_TOOLS)
+        self.assertIn('read_text_file', offered)
+        self.assertNotIn('write_file', offered)
         client.close.assert_called_once()
+
+    def test_delegate_startup_failure_is_not_logged_as_success(self):
+        cfg = replace(self.cfg, tools={'enabled': True, 'max_steps': 2})
+        chat = Chat(cfg, self.store, self.budget, self.model)
+        provider = {'model': 'fixture-delegate', 'max_input_tokens': 10000,
+                    'cny_per_call': Decimal('0.06'), 'input_cny_per_million': Decimal(0),
+                    'cached_input_cny_per_million': Decimal(0), 'output_cny_per_million': Decimal(0)}
+        with (patch.object(cfg.models, 'chosen', return_value=('fixture-id', 'fixture', provider)),
+              patch('veil_agent.make_model', side_effect=RuntimeError('fixture startup failure'))):
+            result = chat._run_delegate('Find a public article.', 'parent-request')
+        self.assertEqual(result.state, '出错')
+        self.assertIn('无法启动', result.text)
 
     def test_daily_and_monthly_limits_block_before_request(self):
         for daily, monthly in [('0.001', '300'), ('10', '0.001')]:
@@ -1136,7 +1156,7 @@ output_cny_per_million = "8"
             self.assertEqual(requests[2]['thinking'], {'type': 'disabled'})
             self.assertEqual((len(answer), answer[4]), (5, 'stop'))
             final = model([{'role': 'user', 'content': 'Finish without tools'}],
-                          message_output=True)
+                          message_output=True, request_timeout=12)
             self.assertEqual(final[0].content, '模拟回复')
             self.assertNotIn('tools', requests[3])
             fail.append(True)

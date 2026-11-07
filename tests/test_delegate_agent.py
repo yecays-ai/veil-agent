@@ -53,6 +53,7 @@ class DelegateAgentTests(unittest.TestCase):
         self.assertEqual(result.text, 'Fictional sourced summary.')
         self.assertEqual(result.state, '成功')
         self.assertEqual(model.call_count, 2)
+        self.assertEqual(model.call_args_list[0].kwargs['request_timeout'], 45)
         self.assertEqual(invoke.call_count, 1)
         self.assertEqual([row[1]['category'] for row in self.budget.reservations], ['delegate', 'delegate'])
         self.assertEqual(len(self.budget.settlements), 2)

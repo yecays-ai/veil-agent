@@ -4460,7 +4460,7 @@ def make_model(root, cfg, provider=None, timeout=MODEL_TIMEOUT_SECONDS):
     client_for(current())
 
     def call(messages, *, json_output=False, max_tokens=None, thinking=None, detail=False,
-             tools=None, message_output=False):
+             tools=None, message_output=False, request_timeout=None):
         models = getattr(cfg, 'models', None)
         if models is not None:
             with models.env_lock, models.lock:
@@ -4469,14 +4469,18 @@ def make_model(root, cfg, provider=None, timeout=MODEL_TIMEOUT_SECONDS):
                 except SettingsError as exc:
                     raise UserError(str(exc)) from None
                 return _call(messages, json_output=json_output, max_tokens=max_tokens,
-                             thinking=thinking, detail=detail, tools=tools, message_output=message_output)
+                             thinking=thinking, detail=detail, tools=tools, message_output=message_output,
+                             request_timeout=request_timeout)
         return _call(messages, json_output=json_output, max_tokens=max_tokens,
-                     thinking=thinking, detail=detail, tools=tools, message_output=message_output)
+                     thinking=thinking, detail=detail, tools=tools, message_output=message_output,
+                     request_timeout=request_timeout)
 
     def _call(messages, *, json_output=False, max_tokens=None, thinking=None, detail=False,
-              tools=None, message_output=False):
+              tools=None, message_output=False, request_timeout=None):
         p = current()
         client = client_for(p)
+        if request_timeout is not None:
+            client = client.with_options(timeout=max(0.001, min(timeout, request_timeout)))
         extra = {}
         if (thinking or p.get('thinking')) == 'disabled':
             extra['extra_body'] = {'thinking': {'type': 'disabled'}}
