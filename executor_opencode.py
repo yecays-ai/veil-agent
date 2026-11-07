@@ -80,8 +80,8 @@ DANGEROUS = re.compile(
 ASK_LAN = {
     'git': {'push', 'clone', 'fetch', 'pull'},
     'installers': {'pip', 'pip3', 'npm', 'pnpm', 'yarn', 'winget', 'choco', 'apt', 'apt-get',
-                   'brew', 'cargo', 'go'},
-    'network': {'curl', 'wget', 'iwr', 'invoke-webrequest', 'invoke-restmethod', 'irm'},
+                   'brew', 'cargo', 'go', 'bun'},
+    'network': {'curl', 'wget', 'iwr', 'invoke-webrequest', 'invoke-restmethod', 'irm', 'npx', 'pnpx', 'bunx'},
 }
 
 
@@ -109,12 +109,17 @@ def _bash_command_needs_lan(tokens):
     if not tokens:
         return False
     command = _command_name(tokens[0])
+    if command == 'git' and any(arg.casefold().startswith('alias.') and '=' in arg for arg in tokens[1:]):
+        return True
     if command in ASK_LAN['network']:
         return True
     if command == 'git':
         return _git_subcommand(tokens) in ASK_LAN['git']
     if command in ASK_LAN['installers']:
-        return any(arg.casefold() in {'install', 'add', 'get'} for arg in tokens[1:])
+        return any(arg.casefold() in {'install', 'add', 'get', 'i', 'ci', 'up', 'update', 'upgrade', 'dlx'}
+                   for arg in tokens[1:]) or (command == 'npm' and 'exec' in tokens[1:])
+    if re.fullmatch(r'pip\d*(?:\.\d+)*', command):
+        return any(arg.casefold() == 'install' for arg in tokens[1:])
     if command in {'python', 'python3'} and tokens[1:3] == ['-m', 'pip']:
         return any(arg.casefold() == 'install' for arg in tokens[3:])
     if re.fullmatch(r'python\d+(?:\.\d+)*', command) and tokens[1:3] == ['-m', 'pip']:

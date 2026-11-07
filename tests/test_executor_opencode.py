@@ -126,10 +126,12 @@ class DecisionTests(unittest.TestCase):
         wd = Path('/data/peter/workbench')
         for command in ('git push origin main', 'git -C /work/project push origin main',
                         'TOKEN=unused git push origin main', '"C:\\Program Files\\Git\\cmd\\git.exe" push origin main',
-                        'pip install requests',
-                        'npm --global install requests', 'pip --user install requests',
+                        'pip install requests', 'pip3.11 install requests',
+                        'npm --global install requests', 'npm i left-pad', 'npm ci', 'npm exec --package left-pad test',
+                        'npx left-pad', 'pnpm dlx left-pad', 'bun add left-pad', 'bunx left-pad',
+                        'pip --user install requests',
                         'python3.11 -m pip --user install requests', 'curl https://example.com', 'rm -r build',
-                        'rd /s /q build'):
+                        'rd /s /q build', 'git -c alias.p=push p origin main'):
             asked = []
             self.assertEqual(ex.decide('bash', [command], {'command': command}, wd, autonomy=False,
                                        ask=lambda p: asked.append(p) or 'y')[0], 'once', command)
@@ -160,6 +162,7 @@ class DecisionTests(unittest.TestCase):
                         'awk \'BEGIN { system("git push origin main") }\'',
                         'php -r \'system("git push origin main");\'',
                         'python -m something -c "import os; os.system(\'git push\')"',
+                        'python3.11 -c "import os; os.system(\'git push\')"',
                         'node --no-warnings --eval "process.exit(0)"',
                         'perl -I ./lib -e "system(\'git push\')"',
                         '"C:\\Python\\python.exe" -m something -c "import os; os.system(\'git push\')"'):
