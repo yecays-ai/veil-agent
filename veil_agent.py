@@ -956,8 +956,8 @@ def load_character(root, character_id):
                         'max_steps': positive_int(executor.get('max_steps', 30)),
                         'max_seconds': positive_int(executor.get('max_seconds', 600)),
                         'repeat_limit': positive_int(executor.get('repeat_limit', 3)),
-                        'run_budget_cny': str(executor.get('run_budget_cny', '0.5')),
-                        'wake_budget_cny': str(executor.get('wake_budget_cny', '0.3'))}
+                        'run_budget_cny': str(price(executor.get('run_budget_cny', '0.5'))),
+                        'wake_budget_cny': str(price(executor.get('wake_budget_cny', '0.3')))}
         return Character(character_id, str(cfg['name']), persona,
                          positive_int(cfg.get('history_rounds', 20)),
                          positive_int(cfg.get('max_output_tokens', 1024)), provider, provider_name,
@@ -1022,7 +1022,7 @@ class ActivityState:
 # an interruption keeps their full conservative charge. Every other kind of reservation is
 # charged in full only when mark_dispatched() recorded that its request was about to be sent.
 ESTIMATE_ACCOUNTINGS = frozenset({'embedding-estimate', 'ombre-model-estimate', 'memory-extraction',
-                                  'short-term-notes-extraction'})
+                                  'short-term-notes-extraction', 'workbench-estimate'})
 
 
 class MessageNotFound(UserError):
@@ -3641,15 +3641,17 @@ class Chat:
         def record_cost(cost):
             if settled:
                 return
-            settled.append(True)
             self.budget.settle_estimate(reservation, 'workbench-estimate',
                                         settled_amount=min(Decimal(cost), Decimal(reservation[1])))
+            settled.append(True)
 
         base = Path(self.store.root) / self.cfg.id / 'workbench'
+        stopped = lambda: (self.user_stop.is_set() or bool(
+            autonomy and self.autonomy_should_yield and self.autonomy_should_yield()))
         try:
             return ex.run(task, command=command, workdir=Path(base), home=Path(base).parent / 'workbench-home',
                           provider=provider, key=key, limits=limits, autonomy=autonomy, ask=self.approval,
-                          stopped=self.user_stop.is_set, record_cost=record_cost)
+                          stopped=stopped, record_cost=record_cost)
         finally:
             record_cost(Decimal(0))
 

@@ -74,6 +74,14 @@ def run(script, **overrides):
 
 
 class DecisionTests(unittest.TestCase):
+    def test_relative_and_prefix_paths_cannot_escape_workbench(self):
+        work = Path('/data/peter/workbench')
+        for target in ('../memory/notes.json', 'sub/../../x', '/data/peter/workbench-evil/x'):
+            reply, _ = ex.decide('edit', [target], {}, work, autonomy=False, ask=lambda _p: 'y')
+            self.assertEqual(reply, 'reject', target)
+        reply, _ = ex.decide('edit', ['sub/a.txt'], {}, work, autonomy=False, ask=lambda _p: 'n')
+        self.assertEqual(reply, 'once')
+
     def test_workbench_folder_work_is_allowed_without_asking(self):
         ask = Mock()
         wd = Path('/data/peter/workbench')

@@ -10,6 +10,7 @@ the tool just reports that; chat, memory and autonomous wakes are untouched.
 import base64
 import json
 import os
+import posixpath
 import re
 import secrets
 import shutil
@@ -67,11 +68,13 @@ def decide(permission, patterns, metadata, workdir, *, autonomy, ask):
         answer = ask(f'Peter 的工作台想访问工作台文件夹之外的位置：{shown}。同意这一次吗？y/N ')
         return ('once', 'Lan approved') if isinstance(answer, str) and answer.strip().casefold() == 'y' \
             else ('reject', 'Lan did not approve')
-    work = str(workdir).replace('\\', '/').lower()
+    work = posixpath.normpath(str(workdir).replace('\\', '/')).lower()
     for pattern in patterns:
         p = str(pattern).replace('\\', '/')
-        if permission in ('edit', 'write') and (p.startswith('/') or re.match(r'^[A-Za-z]:', p)):
-            if not p.lower().startswith(work):
+        if permission in ('edit', 'write'):
+            absolute = p.startswith('/') or re.match(r'^[A-Za-z]:', p)
+            target = posixpath.normpath(p if absolute else work + '/' + p).lower()
+            if target != work and not target.startswith(work.rstrip('/') + '/'):
                 return 'reject', 'write outside the workbench'
     if permission in ('bash', 'edit', 'write', 'webfetch', 'task', 'skill', 'todowrite', 'read', 'glob', 'grep'):
         return 'once', 'inside the workbench'
@@ -91,7 +94,7 @@ def estimate_cost(messages, price, steps):
             tout += int(t.get('output') or 0) + int(t.get('reasoning') or 0)
     if not tin and not tout and steps:
         chars = len(json.dumps(messages, ensure_ascii=False))
-        tin, tout = steps * chars // 3, chars // 6
+        tin, tout = steps * chars, chars // 2  # no usage reported: assume the worst, never undercount
     return tin, tout, Decimal(tin) / MILLION * price[0] + Decimal(tout) / MILLION * price[1]
 
 
@@ -111,10 +114,11 @@ def summarize(messages):
 
 
 def kill_tree(proc):
-    if proc is None or proc.poll() is not None:
+    if proc is None:
         return
     if _WINDOWS:
-        subprocess.run(['taskkill', '/F', '/T', '/PID', str(proc.pid)], capture_output=True)
+        if proc.poll() is None:
+            subprocess.run(['taskkill', '/F', '/T', '/PID', str(proc.pid)], capture_output=True)
     else:
         try:
             os.killpg(proc.pid, signal.SIGKILL)
@@ -177,7 +181,9 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
     key_env = 'VEIL_WORKBENCH_KEY'
     write_config(workdir, provider, key_env)
     port, password = free_port(), secrets.token_urlsafe(24)
-    env = {k: v for k, v in os.environ.items() if not k.upper().endswith(('_API_KEY', '_KEY', '_TOKEN', '_SECRET'))}
+    keep = {'PATH', 'PATHEXT', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'TEMP', 'TMP', 'TMPDIR', 'LANG', 'LC_ALL', 'PROGRAMFILES',
+            'PROGRAMFILES(X86)', 'PROGRAMDATA', 'APPDATA', 'LOCALAPPDATA', 'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE'}
+    env = {k: v for k, v in os.environ.items() if k.upper() in keep}
     env.update({key_env: key, 'OPENCODE_SERVER_PASSWORD': password, 'HOME': str(home), 'USERPROFILE': str(home),
                 'XDG_DATA_HOME': str(home / 'data'), 'XDG_CONFIG_HOME': str(home / 'config'),
                 'XDG_CACHE_HOME': str(home / 'cache'), 'XDG_STATE_HOME': str(home / 'state'),
@@ -206,7 +212,7 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
             if stopped():
                 stop = 'stopped by Lan'
             try:
-                for request in api.call('GET', '/permission') or []:
+                for request in ([] if stop else api.call('GET', '/permission') or []):
                     if request.get('sessionID') != session or request.get('id') in answered:
                         continue
                     answered.append(request.get('id'))
