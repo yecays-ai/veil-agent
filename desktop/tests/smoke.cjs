@@ -147,6 +147,8 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
     try { return await chat.webContents.executeJavaScript('document.body.textContent.includes("Fictional saved history")'); }
     catch { return false; }
   }, 'history missing');
+  assert.equal(await chat.webContents.executeJavaScript('getComputedStyle(document.querySelector("#voice-hold")).position'), 'static', 'voice-message control must stay in the composer grid');
+  assert.equal(await chat.webContents.executeJavaScript('document.querySelector("#voice-hold").getBoundingClientRect().width >= 30'), true, 'voice-message control must remain visible');
   await chat.webContents.executeJavaScript(`(()=>{
     const button=document.querySelector('#sidebar-toggle');
     const initial=document.body.classList.contains('sidebar-collapsed');

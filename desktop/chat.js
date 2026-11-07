@@ -118,7 +118,7 @@ async function startSpeech(){
     speechRecorder.ondataavailable=event=>{if(event.data?.size)speechChunks.push(event.data)};
     speechRecorder.onstop=finishSpeech;speechRecorder.start(500);
     speechTimer=setTimeout(()=>stopSpeech(false),120000);
-    setSpeechStatus('listening','正在录音；再次点击结束并转写。');
+    setSpeechStatus('listening','正在听写；再次点击结束并转成文字。');
   }catch(error){
     speechPermissionPending=false;speechSession=null;stopSpeechTracks();
     if(speechCancelled){speechCancelled=false;setSpeechStatus('idle','已取消录音。');return}
@@ -1170,7 +1170,7 @@ function voiceMime(){
   return '';
 }
 function stopVoiceTracks(){if(voiceStream){voiceStream.getTracks().forEach(track=>track.stop());voiceStream=null}}
-function resetVoiceButton(){clearInterval(voiceTimer);voiceTimer=null;voiceHold.dataset.recording='false';voiceHold.setAttribute('aria-pressed','false');voiceHold.setAttribute('aria-label','点击开始录音');voiceHold.title='点击开始录音';voiceHold.innerHTML=window.veilIcon('mic',18);$('voice-record-status').hidden=true;$('voice-record-cancel').hidden=true}
+function resetVoiceButton(){clearInterval(voiceTimer);voiceTimer=null;voiceHold.dataset.recording='false';voiceHold.setAttribute('aria-pressed','false');voiceHold.setAttribute('aria-label','录制语音消息');voiceHold.title='录制语音消息';voiceHold.innerHTML=window.veilIcon('mic',18);$('voice-record-status').hidden=true;$('voice-record-cancel').hidden=true}
 async function startVoice(){
   if(voiceRecorder||voicePermissionPending||voiceSending||busy||sending||stopping||stopped||speechIsActive())return;
   if(!navigator.mediaDevices?.getUserMedia||typeof MediaRecorder==='undefined'){add('error','当前环境不支持录音。');return}

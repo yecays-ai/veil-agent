@@ -102,6 +102,8 @@ test('desktop redesign keeps real pages in one shell with a collapsible draggabl
   assert.match(css, /--surface-2-rgb:251 248 243/);
   assert.match(css, /--veil-chat-canvas:#fbf8f3/);
   assert.match(css, /body\.detached-window \.topbar,body\.detached-window \.navigation,body\.detached-window \.desktop-rail/);
+  assert.match(css, /body\.detached-window\[data-current-page="chat"\] #voice-hold\{grid-column:3;position:static\}/);
+  assert.match(css, /body:not\(\.detached-window\) #voice-hold\{grid-column:3;position:static\}/);
   assert.match(js, /veil-sidebar-collapsed/);
   assert.match(js, /classList\.toggle\('tools-open'\)/);
   assert.match(js, /new MutationObserver\(syncDesktopRail\)/);
