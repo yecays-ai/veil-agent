@@ -89,6 +89,25 @@ test('every existing tab detaches into the shared chat view and can merge withou
   assert.doesNotMatch(main, /activity\.html/);
 });
 
+test('desktop redesign keeps real pages in one shell with a collapsible draggable sidebar and live rail', async () => {
+  const [html, css, js] = await Promise.all([read('chat.html'), read('desktop-redesign.css'), read('chat.js')]);
+  assert.match(html, /href="desktop-redesign\.css"/);
+  assert.match(html, /id="sidebar-toggle"/);
+  assert.match(html, /id="desktop-rail"/);
+  assert.match(html, /id="rail-approval"/);
+  assert.match(html, /<h1>Peter<\/h1>/);
+  assert.match(html, /data-page="chat"[^>]*><span data-lucide="message-square"><\/span>聊天/);
+  assert.doesNotMatch(html, /和 Peter 聊聊/);
+  assert.match(css, /grid-template-columns:232px minmax\(520px,1fr\) 304px/);
+  assert.match(css, /--surface-2-rgb:251 248 243/);
+  assert.match(css, /--veil-chat-canvas:#fbf8f3/);
+  assert.match(css, /body\.detached-window \.topbar,body\.detached-window \.navigation,body\.detached-window \.desktop-rail/);
+  assert.match(js, /veil-sidebar-collapsed/);
+  assert.match(js, /classList\.toggle\('tools-open'\)/);
+  assert.match(js, /new MutationObserver\(syncDesktopRail\)/);
+  assert.match(js, /const outside=event\.clientX<0\|\|event\.clientY<0\|\|event\.clientX>innerWidth\|\|event\.clientY>innerHeight/);
+});
+
 test('activity polling preserves expanded rows and restored detached windows remain usable', async () => {
   const [js, main] = await Promise.all([read('chat.js'), read('main.cjs')]);
   assert.match(js, /const activityRowNodes=new Map\(\)/);

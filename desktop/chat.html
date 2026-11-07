@@ -6,15 +6,16 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'nonce-veil-custom-css'; script-src 'self'; img-src 'self' data: blob: http://127.0.0.1:*; media-src 'self' blob: http://127.0.0.1:*; connect-src 'none';">
   <title>VEIL · Peter</title>
   <link rel="stylesheet" href="chat.css">
+  <link rel="stylesheet" href="desktop-redesign.css">
   <style id="custom-style" nonce="veil-custom-css"></style>
 </head>
 <body>
   <div id="window-background" aria-hidden="true"></div>
-  <header id="detached-header" class="detached-header" hidden><strong id="detached-title">Peter</strong><button id="merge-view" type="button">合并回主窗口</button></header>
+  <header id="detached-header" class="detached-header" hidden><div class="detached-person"><img src="assets/pep.png" alt=""><span><strong id="detached-title">Peter</strong><small>在这里 · 与你相伴</small></span></div><button id="merge-view" type="button">收回主窗口</button></header>
   <div id="ended">服务已退出。重新打开 Peter 可再次连接。</div>
   <div id="offline">和 Peter 的本机服务暂时断开。<button id="reconnect" type="button">重新连接</button></div>
   <header class="topbar">
-    <div class="identity"><img src="assets/pep.png" alt=""><h1 id="title">Peter</h1></div>
+    <div class="identity"><div><h1>Peter</h1><small id="header-model-name">正在连接</small><span id="title" hidden>Peter</span></div></div>
     <div class="header-status" aria-label="Peter 状态">
       <span class="header-status-item"><i id="autonomy-indicator" class="status-dot is-pending"></i><span>自主活动：<b id="header-autonomy-status">读取中</b></span></span>
       <span class="header-wake"><span data-lucide="clock" data-size="14"></span><span>下次唤醒</span><b id="header-next-wake">读取中…</b></span>
@@ -23,13 +24,17 @@
     <div class="top-actions"><button id="favorites-filter" type="button" aria-pressed="false" aria-label="只看收藏的消息" title="只看收藏的消息"><span data-lucide="star"></span></button><button id="expand" aria-label="铺满可用桌面区域，再点一次恢复小窗" title="铺满可用桌面区域，再点一次恢复小窗"><span data-lucide="maximize-2"></span></button><button id="collapse" aria-label="收起聊天窗口" title="收起"><span data-lucide="minimize-2"></span></button></div>
   </header>
   <nav class="navigation" aria-label="主要页面">
+    <div class="sidebar-brand"><span>V</span><div><b>VEIL</b><small>Peter 的桌面</small></div></div>
+    <div class="sidebar-person"><img src="assets/pep.png" alt=""><span><b>Peter</b><small>在这里 · 与你相伴</small></span><button id="sidebar-toggle" type="button" aria-label="收起侧栏" title="收起侧栏"><span data-lucide="panel-left-close"></span></button></div>
+    <p class="sidebar-label">你的空间</p>
     <button class="nav-item active" data-page="chat" aria-current="page" title="拖出可变成独立窗口"><span data-lucide="message-square"></span>聊天</button>
-    <button id="activity-tab" class="nav-item" data-page="activity" title="拖出可变成独立窗口"><span data-lucide="activity"></span>活动</button>
+    <button id="activity-tab" class="nav-item" data-page="activity" title="拖出可变成独立窗口"><span data-lucide="activity"></span>自主活动</button>
     <button class="nav-item" data-page="context" title="拖出可变成独立窗口"><span data-lucide="layers"></span>上下文</button>
     <button class="nav-item" data-page="memory" title="拖出可变成独立窗口"><span data-lucide="brain"></span>记忆</button>
-    <button class="nav-item" data-page="life" title="拖出可变成独立窗口"><span data-lucide="calendar-heart"></span>生活</button>
+    <button class="nav-item" data-page="life" title="拖出可变成独立窗口"><span data-lucide="calendar-heart"></span>生活记录</button>
     <button class="nav-item" data-page="mcp" title="拖出可变成独立窗口"><span data-lucide="plug"></span>MCP</button>
-    <button class="nav-item" data-page="more" title="拖出可变成独立窗口"><span data-lucide="more-horizontal"></span>更多</button>
+    <button class="nav-item" data-page="more" title="拖出可变成独立窗口"><span data-lucide="more-horizontal"></span>设置</button>
+    <div class="sidebar-foot"><span>下次唤醒</span><b id="sidebar-next-wake">读取中…</b></div>
   </nav>
   <div id="toasts" role="status" aria-live="polite"></div>
   <main id="log" class="page active" data-page-view="chat"><div class="col" id="col" aria-live="polite"></div></main>
@@ -79,7 +84,7 @@
     </form>
   </section>
   <section id="more-view" class="page" data-page-view="more" hidden>
-    <div class="page-heading"><div><p class="eyebrow">偏好与工具</p><h2>更多</h2></div></div>
+    <div class="page-heading"><div><p class="eyebrow">偏好与工具</p><h2>设置</h2></div></div>
     <article class="surface models-card" id="models-card"><div class="section-heading"><div><p class="eyebrow">MODELS</p><h3>模型</h3><p>先添加接口（中转站地址和 key），再在接口下添加模型。key 只存在这台电脑的 .env 里。</p></div></div>
       <p id="models-error" class="setting-hint models-error" role="alert" hidden></p>
       <div class="setting-row"><span>Peter 本人</span><select id="use-peter" aria-label="Peter 本人用的模型"></select></div>
@@ -127,7 +132,7 @@
         <label class="setting-row range-row" for="context-opacity"><span>上下文</span><input id="context-opacity" type="range" min="20" max="100" step="1"><output id="context-opacity-value"></output></label>
         <label class="setting-row range-row" for="memory-opacity"><span>记忆</span><input id="memory-opacity" type="range" min="20" max="100" step="1"><output id="memory-opacity-value"></output></label>
         <label class="setting-row range-row" for="mcp-opacity"><span>MCP</span><input id="mcp-opacity" type="range" min="20" max="100" step="1"><output id="mcp-opacity-value"></output></label>
-        <label class="setting-row range-row" for="more-opacity"><span>更多</span><input id="more-opacity" type="range" min="20" max="100" step="1"><output id="more-opacity-value"></output></label>
+        <label class="setting-row range-row" for="more-opacity"><span>设置</span><input id="more-opacity" type="range" min="20" max="100" step="1"><output id="more-opacity-value"></output></label>
       </div>
       <label class="setting-row range-row" for="bubble-opacity"><span>聊天气泡</span><input id="bubble-opacity" type="range" min="55" max="100" step="1"><output id="bubble-opacity-value"></output></label>
       <div class="background-settings"><div class="section-heading"><div><h3>背景图片</h3><p id="background-name">尚未选择图片</p></div><div><button id="choose-background" type="button">上传图片</button><button id="clear-background" type="button" disabled>移除</button></div></div>
@@ -155,8 +160,9 @@
       </div>
     </section>
     <div class="composer" id="composer">
+      <button id="composer-more" type="button" aria-label="添加内容" aria-expanded="false" title="添加内容"><span data-lucide="plus"></span></button>
       <div class="voice-tools">
-        <button id="speech-toggle" type="button" aria-label="开始语音识别" aria-pressed="false" title="语音转文字">T</button>
+        <button id="speech-toggle" type="button" aria-label="开始语音识别" aria-pressed="false" title="语音转文字"><span data-lucide="captions"></span></button>
         <input id="image-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
         <button id="image-button" type="button" aria-label="添加图片" title="添加图片"><span data-lucide="image-plus"></span></button>
         <button id="sticker-button" type="button" aria-label="表情包" title="表情包" aria-expanded="false"><span data-lucide="smile"></span></button>
@@ -168,6 +174,12 @@
       <button id="send" aria-label="发送"><span data-lucide="arrow-up"></span></button>
     </div>
   </footer>
+  <aside id="desktop-rail" class="desktop-rail" aria-label="今天与 Peter">
+    <header class="rail-date"><strong id="rail-date-label"></strong><span id="rail-weekday"></span></header>
+    <section class="rail-section rail-today"><div class="rail-heading"><h2>今天</h2><button type="button" data-rail-page="life">全部记录</button></div><button class="rail-row" type="button" data-rail-page="life"><span class="rail-dot warm"></span><span><b>生活记录</b><small id="rail-life-count">打开今天的记录</small></span><span data-lucide="chevron-right"></span></button></section>
+    <section class="rail-section"><div class="rail-heading"><h2>Peter 的活动</h2><button type="button" data-rail-page="activity">查看全部</button></div><button class="rail-row" type="button" data-rail-page="activity"><span id="rail-activity-dot" class="rail-dot"></span><span><b id="rail-activity-status">正在连接</b><small id="rail-activity-count">读取活动记录…</small></span><span data-lucide="chevron-right"></span></button><div class="rail-wake"><span>下次唤醒</span><b id="rail-next-wake">读取中…</b></div></section>
+    <section id="rail-approval" class="rail-section rail-approval" hidden><div class="rail-heading"><h2>等待处理</h2></div><button id="rail-approval-open" class="rail-row" type="button"><span class="rail-dot warm"></span><span><b>Peter 想运行一个操作</b><small>回到聊天中确认</small></span><span data-lucide="chevron-right"></span></button></section>
+  </aside>
   <script src="icons.js"></script>
   <script src="nowhere-activity.js"></script>
   <script src="chat.js"></script>
