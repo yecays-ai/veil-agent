@@ -152,6 +152,7 @@ class RunTests(unittest.TestCase):
             assistant(text='Git is clean.', finish='stop'),
         ]
         self.assertEqual(ex.summarize(messages), (2, 1, 1, 'Git is clean.'))
+        self.assertEqual(ex.summarize([assistant(text="I'll inspect.", tool=('bash', {'command': 'git status'}))])[3], '')
 
         incomplete = [{'info': {'role': 'assistant', 'finish': 'error'}, 'parts': [
             {'type': 'text', 'text': "I'll inspect the project."},
@@ -179,9 +180,16 @@ class RunTests(unittest.TestCase):
         result, _api, _costs, _kill = run([(recovered, [], False)] * 5)
         self.assertEqual(result.state, '成功')
         self.assertIn('ShellError', result.text)
+        self.assertTrue(result.text.startswith('[workbench tool diagnostics:'))
+        malformed = [{'info': {'role': 'assistant', 'finish': 'error',
+                               'error': {'name': 'APIError', 'data': 'bad'}}, 'parts': []}]
+        self.assertIn('APIError', ex.diagnose(malformed))
+        many = [{'info': {'role': 'assistant', 'finish': 'error'}, 'parts': [
+            {'type': 'tool', 'tool': 'bash', 'state': {'status': 'error'}} for _ in range(8)]}]
+        self.assertIn('did not finish normally (error)', ex.diagnose(many))
 
     def test_success_returns_report_and_settles_cost_once(self):
-        done = [assistant(text='All done: fixed calc.py', tool=('bash', {'command': 'pytest'}))]
+        done = [assistant(text='All done: fixed calc.py', tool=('bash', {'command': 'pytest'}), finish='stop')]
         result, api, costs, kill = run([(done, [], False)] * 5)
         self.assertEqual(result.state, '成功')
         self.assertIn('All done', result.text)
