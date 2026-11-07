@@ -258,27 +258,13 @@ def send_message_schema(voice=False, channels=(), files=False, stickers=False):
     properties = schema['function']['parameters']['properties']
     properties['transfer'] = {
         'type': 'object',
-        'description': ('Optional VEIL virtual transfer to Lan. No real money or payment. '
-                        'The card is its own bubble; any text is a separate bubble right after. '
-                        'You may send just the card.'),
-        'properties': {
-            'amount': {'type': 'number', 'exclusiveMinimum': 0, 'maximum': 1000000000000},
-            'note': {'type': 'string', 'maxLength': 240},
-        },
+        'properties': {'amount': {'type': 'number'}, 'note': {'type': 'string'}},
         'required': ['amount'],
-        'additionalProperties': False,
     }
     properties['gift'] = {
         'type': 'object',
-        'description': ('Optional VEIL virtual gift for Lan: a short icon (an emoji or mark, default 🎁) and your own '
-                        'description. Not a real purchase, delivery, or item. The card is its own bubble; any text is '
-                        'a separate bubble right after. You may send just the card.'),
-        'properties': {
-            'icon': {'type': 'string', 'maxLength': 24},
-            'content': {'type': 'string', 'minLength': 1, 'maxLength': 500},
-        },
+        'properties': {'icon': {'type': 'string'}, 'content': {'type': 'string'}},
         'required': ['content'],
-        'additionalProperties': False,
     }
     schema['function']['parameters']['required'] = []
     if stickers:
