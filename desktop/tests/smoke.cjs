@@ -163,10 +163,8 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   const contextWindow = () => BrowserWindow.getAllWindows().find(w => w !== pet && w !== chat && w.webContents.getURL().includes('view=context'));
   await wait(() => { const win = contextWindow(); return win && !win.webContents.isLoading(); }, 'context tab did not finish loading after detach');
   const detachedContext = contextWindow();
-  await wait(() => detachedContext.webContents.executeJavaScript('!!document.querySelector("#merge-view")'), 'detached context view did not render');
-  // Merging destroys this renderer before executeJavaScript can return.
-  void detachedContext.webContents.executeJavaScript('document.querySelector("#merge-view").click()').catch(() => {});
-  await wait(() => detachedContext.isDestroyed() && chat.webContents.executeJavaScript('!document.body.dataset.detachedViews.includes("context")'), 'detached context view did not merge');
+  detachedContext.close();
+  await wait(() => detachedContext.isDestroyed() && chat.webContents.executeJavaScript('!document.body.dataset.detachedViews.includes("context")'), 'drag-created context window did not close cleanly');
   await chat.webContents.executeJavaScript(`(()=>{const [status,count,dot]=window.__railOriginal;document.querySelector('#activity-work-status').textContent=status;document.querySelector('#activity-count').textContent=count;document.querySelector('#activity-work-dot').className=dot})()`);
   assert.ok(chat.webContents.getURL().startsWith('file:'), 'desktop chat must load its own local UI');
   const chatPrefs = chat.webContents.getLastWebPreferences();
