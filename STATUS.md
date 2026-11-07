@@ -1,3 +1,8 @@
+## 工单 234：Claude Code 只读查询不再弹同意
+
+- `ticket/234-cc-readonly-allow`：Claude Code 通道把 Read、Grep、Glob 放进免询问列表，查文件、搜内容、列目录不再弹同意卡片；写文件、命令行、网页仍先问 lan。拒绝规则补了 `//**/.env`、`//**/.env.*`、`//**/secrets/**`（读、改、写），因为原来的 `**/.env` 只匹配 Claude Code 工作目录之内，用真实 claude 复现过：目录外的 `.env`、secrets 能被 Read 读到，补规则后被拒绝，Grep 和 Glob 的结果也不含这些文件。`claude_agent_channel.py`，测试 `tests/test_claude_agent_channel.py`（新增 1 项，共 28 项通过）。Windows 实机体验待 lan 验收；命令行 `cat .env` 之类仍会弹同意卡片，卡片里能看到完整命令。
+- 验收见 `docs/tickets/234-cc-readonly-allow.md`。下一个工单号 235。
+
 ## 工单 233：委派只读搜索与阅读
 
 - `ticket/233-delegated-research-agent`（PR #287 开放）：主模型可把适合的搜索、阅读、代码只读调查或记忆检索交给独立配置的模型；根据任务能力和预计总成本决策，不自动选择。现有只读白名单、调用边界和共享预算保留；模型可见两端价格及单任务最大预留；无失败重试或主模型切换。等待更新后 CodeRabbit 与 CI 审查；Windows 体验待验。
