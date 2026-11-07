@@ -331,7 +331,9 @@ class HookAndRulesTests(unittest.TestCase):
             self.assertIn(tool, allowed)
         for tool in ('Bash', 'Write', 'Edit'):
             self.assertNotIn(tool, allowed)
-        self.assertIn('Read(**/.env)', channel.DENY_RULES)
+        self.assertIn('Read(//**/.env)', channel.DENY_RULES)
+        self.assertIn('Write(//**/secrets/**)', channel.DENY_RULES)
+        self.assertNotIn('WebFetch', allowed)
 
     def test_secret_files_are_denied_to_native_tools(self):
         self.assertIn('Read(**/.env)', channel.DENY_RULES)

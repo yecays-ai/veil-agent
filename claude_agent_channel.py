@@ -44,12 +44,15 @@ REMINDER = ("Reminder: you are Peter texting Lan, not a coding assistant. Whatev
 # Claude Code's own prompt wording for each native tool, as one line for Lan's approval card.
 # Looking things up (reading, searching, listing, web lookups) never asks Lan; writing files and running commands do.
 # The deny rules below still win over these, so .env and the secrets folder stay closed.
-READ_ONLY_TOOLS = ('Read', 'Grep', 'Glob', 'LS', 'WebSearch', 'WebFetch')
+READ_ONLY_TOOLS = ('Read', 'Grep', 'Glob', 'LS', 'WebSearch')  # not WebFetch: it can carry data out in a URL
 
 # Claude Code's own tools are not limited by VEIL's path checks (by design: the same ability as Claude Code on lan's
 # PC), but VEIL's keys and secrets are off limits to them.
-DENY_RULES = ['Read(**/.env)', 'Read(**/.env.*)', 'Edit(**/.env)', 'Edit(**/.env.*)', 'Write(**/.env)',
-              'Read(**/secrets/**)', 'Edit(**/secrets/**)', 'Write(**/secrets/**)']
+DENY_RULES = [rule for tool in ('Read', 'Edit', 'Write') for rule in (
+    # "//" = absolute path from the drive root: without it Claude Code only matches files inside its working
+    # directory, and a real .env elsewhere on the disk stayed readable.
+    f'{tool}(//**/.env)', f'{tool}(//**/.env.*)', f'{tool}(//**/secrets/**)',
+    f'{tool}(**/.env)', f'{tool}(**/.env.*)', f'{tool}(**/secrets/**)')]
 
 
 def describe_request(tool_name, tool_input):

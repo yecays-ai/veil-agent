@@ -1,6 +1,6 @@
 ## 工单 230：查东西不再弹同意卡
 
-- `ticket/230-cc-readonly-free`：Claude Code 通道里读文件、搜索、列目录、联网查资料（`Read`/`Grep`/`Glob`/`LS`/`WebSearch`/`WebFetch`）直接放行，不再每次弹卡片；写文件、执行命令仍然弹卡片。`.env` 和 secrets 目录的拒绝规则优先于放行（云端真 claude 实测：读普通文件通过，读 `.env` 被拒）。`claude_agent_channel.py`（`READ_ONLY_TOOLS`），新增 1 项测试。Windows 实机未验证（更新并重启 Peter 后，让他查一个小东西，应该不再弹卡）。下一个工单号 231。
+- `ticket/230-cc-readonly-free`：Claude Code 通道里读文件、搜索、列目录、搜索网页（`Read`/`Grep`/`Glob`/`LS`/`WebSearch`）直接放行，不再每次弹卡片；写文件、执行命令仍然弹卡片。不放行 `WebFetch`（能把数据带进网址）。`.env` 和 secrets 的拒绝规则优先于放行；另外补了 `//**/` 绝对路径写法：之前的规则只管 Claude Code 工作目录里的文件，目录外的 `.env` 能被读到（云端真 claude 复现并验证修法，读普通文件通过，读目录外 `.env`/secrets 被拒）。Bash 里 `cat .env` 仍不拦，会弹卡片，卡片里能看到命令。`claude_agent_channel.py`（`READ_ONLY_TOOLS`），新增 1 项测试。Windows 实机未验证（更新并重启 Peter 后，让他查一个小东西，应该不再弹卡）。下一个工单号 231。
 
 ## 工单 233：委派只读搜索与阅读
 
