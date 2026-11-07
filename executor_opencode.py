@@ -332,6 +332,7 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
                     'XDG_DATA_HOME': str(home / 'data'), 'XDG_CONFIG_HOME': str(home / 'config'),
                     'XDG_CACHE_HOME': str(home / 'cache'), 'XDG_STATE_HOME': str(home / 'state')})
     proc, messages, cost, steps, stop = None, [], Decimal(0), 0, ''
+    cleanup_warning = ''
     try:
         proc = popen(command if container else [command, 'serve', '--port', str(port)], cwd=str(workdir), env=env,
                      shell=_WINDOWS and not container, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -404,7 +405,7 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
             if container:
                 subprocess.run(['docker', 'kill', name], capture_output=True, timeout=30)
         except Exception:
-            pass
+            cleanup_warning = f' [warning: could not confirm container {name} stopped; check Docker]'
         try:
             proxy.close()
         except Exception:
@@ -414,7 +415,7 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
         except Exception:
             pass
     steps, calls, _repeat, text = summarize(messages)
-    note = f'[workbench: {steps} steps, about ¥{cost.quantize(Decimal("0.0001"))}, folder {workdir}]'
+    note = f'[workbench: {steps} steps, about ¥{cost.quantize(Decimal("0.0001"))}, folder {workdir}]' + cleanup_warning
     if stop:
         return ExecutorResult(f'The workbench was stopped: {stop}. Partial report:\n{text[:RESULT_CHARS]}\n{note}',
                               '出错', cost, steps)

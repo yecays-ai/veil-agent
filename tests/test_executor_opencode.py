@@ -386,6 +386,18 @@ max_steps = 4
         execution, seen = self.run_with_roots('fix it', project='phone-web')
         self.assertEqual(Path(seen['workdir']).name, 'phone-web')
 
+    def test_a_project_that_contains_veils_own_data_is_refused(self):
+        roots = f'project_roots = ["{self.root.as_posix()}"]\n'  # the VEIL folder itself holds data/ and package files
+        (self.root / 'package.json').write_text('{}', encoding='utf-8')
+        chat = self.chat(self.executor + roots)
+        chat.approval = lambda _p: 'y'
+        call = SimpleNamespace(id='c1', function=SimpleNamespace(
+            name='workbench', arguments=json.dumps({'task': 'fix it', 'project': self.root.name})))
+        with patch('veil_agent.ROOT', self.root), patch('executor_opencode.run') as run_mock:
+            execution = chat._execute_tool_call(call, 'req', 'step:0', False, chat.tool_schemas())
+        run_mock.assert_not_called()
+        self.assertEqual(execution.state, '被拒绝')
+
     def test_no_match_uses_the_workbench_folder_and_no_roots_means_isolated(self):
         self.make_project('garden', {})
         _execution, seen = self.run_with_roots('write a hello script')

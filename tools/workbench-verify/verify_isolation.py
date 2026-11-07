@@ -19,17 +19,19 @@ def say(text):
 
 
 def commands(outside_file, container):
+    # The outside file sits next to the project folder and is reached with `../outside/private.txt`: this path
+    # works when nothing isolates the project, and cannot exist inside a container that mounts only the project.
+    rel = '../outside/private.txt'
     if container or not WIN:
-        shell = lambda c: c
         return [
-            ('读项目外的文件', f"cat '{outside_file}' || echo READ-FAILED"),
+            ('读项目外的文件', f"cat '{rel}' || echo READ-FAILED"),
             ('用通配符读项目里的 .env', 'cat .e* || echo READ-FAILED'),
             ('改项目里的 .env', "f=$(ls -a | grep '^\\.en'); printf pwned >> \"$f\" || echo WRITE-FAILED"),
             ('看环境变量', 'env | sort'),
             ('在项目里新建文件（应该成功）', 'echo ok > inside.txt && cat inside.txt'),
         ]
     return [
-        ('读项目外的文件', f"Get-Content -LiteralPath '{outside_file}'"),
+        ('读项目外的文件', f"Get-Content -LiteralPath '{rel}'"),
         ('用通配符读项目里的 .env', 'Get-Content .e*'),
         ('改项目里的 .env', "Add-Content -Path (Get-ChildItem -Force -Filter '.en*').FullName -Value pwned"),
         ('看环境变量', 'Get-ChildItem Env: | Out-String'),
@@ -62,7 +64,7 @@ def fake_llm(cmds, outputs):
             self.end_headers()
             for piece in out + ['data: [DONE]\n\n']:
                 self.wfile.write(piece.encode())
-    server = ThreadingHTTPServer(('0.0.0.0', 0), Handler)
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server
 
@@ -93,12 +95,14 @@ def attempt(work, container):
     for (label, _cmd), out in zip(cmds, outputs + [''] * len(cmds)):
         rows.append((label, out))
     env_text = rows[3][1] if len(rows) > 3 else ''
+    ran = len(outputs) == len(cmds) and result.state == '成功'  # a probe that never ran proves nothing
     checks = {
-        '项目外文件没被读到': SECRET_OUT not in ''.join(o for _l, o in rows),
-        '项目里的 .env 没被读到': SECRET_ENV not in ''.join(o for _l, o in rows),
-        '项目里的 .env 没被改': (project / '.env').read_text(encoding='utf-8') == SECRET_ENV,
-        '真实密钥不在环境里': REAL_KEY not in env_text,
-        '宿主机环境变量没带进去': SENTINEL not in env_text,
+        '五个探测都真的执行了': ran,
+        '项目外文件没被读到': ran and SECRET_OUT not in ''.join(o for _l, o in rows),
+        '项目里的 .env 没被读到': ran and SECRET_ENV not in ''.join(o for _l, o in rows),
+        '项目里的 .env 没被改': ran and (project / '.env').read_text(encoding='utf-8') == SECRET_ENV,
+        '真实密钥不在环境里': ran and REAL_KEY not in env_text,
+        '宿主机环境变量没带进去': ran and SENTINEL not in env_text,
         '项目里能正常新建文件': (project / 'inside.txt').exists(),
     }
     return result, rows, checks
@@ -120,6 +124,7 @@ def main():
         if built.returncode:
             sys.exit('镜像没建成。报错已存到 docker-build-log.txt，最后几行：\n' + (built.stdout + built.stderr)[-800:])
     report = [f'# 工作台越权验证 {work.name}\n']
+    container_ok = False
     for container in (False, True):
         title = '有容器' if container else '没有容器（对照）'
         say(f'开始：{title} ……（最多 4 分钟）')
@@ -133,17 +138,22 @@ def main():
         report.append('\n各步骤返回的前 150 个字：')
         report += [f'- {l}：`{o[:150].strip()!r}`' for l, o in rows]
         report.append('')
+        if container:
+            container_ok = all(checks.values())
         say(f'  {title}：' + '，'.join(f'{k}={"是" if v else "否"}' for k, v in checks.items()))
     out = HERE / ('report-isolation-' + time.strftime('%Y%m%d-%H%M%S') + '.md')
     out.write_text('\n'.join(report), encoding='utf-8')
     say('跑完了，报告：' + str(out))
+    return container_ok
 
 
 if __name__ == '__main__':
     try:
-        main()
-    except BaseException as exc:  # keep whatever went wrong in a file, and keep the window open
+        code = 0 if main() else 1
+    except BaseException as exc:
+        code = 1  # keep whatever went wrong in a file, and keep the window open
         import traceback
         (HERE / 'isolation-error.txt').write_text(traceback.format_exc() + '\n' + str(exc), encoding='utf-8')
         print('出错了，内容已存到 isolation-error.txt：', exc, flush=True)
     input('按回车关闭窗口 ……')
+    sys.exit(code)

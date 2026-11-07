@@ -3687,6 +3687,10 @@ class Chat:
                                      'then call the workbench again with project set to that name.', '出错')
         if kind == 'none':
             return base, ''
+        data_dir, project_dir = Path(self.store.root).resolve(), Path(found['path']).resolve()
+        if data_dir == project_dir or data_dir in project_dir.parents or project_dir in data_dir.parents:
+            return ex.ExecutorResult(f"The workbench will not work in {found['name']}: it contains VEIL's own data "
+                                     '(memory, budget ledger). Pick another project.', '被拒绝')
         meta = scope.snapshot(found['path'], Path(base).parent / 'snapshots',
                               time.strftime('%Y%m%d-%H%M%S-') + f'{time.time_ns() % 10**6:06d}-' + found['name'])
         if meta['kind'] == 'none':
