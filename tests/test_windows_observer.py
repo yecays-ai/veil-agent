@@ -1,6 +1,7 @@
 import base64
 import json
 import threading
+import time
 import tempfile
 import tomllib
 import unittest
@@ -126,8 +127,9 @@ class WindowsObserverTests(unittest.TestCase):
         second, second_state, _ = tools.invoke('windows_observe', {
             'window_id': 'w-' + '1' * 24,
         })
-        self.assertEqual(second_state, '出错')
-        self.assertIn('limit', str(second))
+        self.assertEqual(second_state, '成功')  # the controls still come back, just without a second picture
+        self.assertIn('already used its one screenshot', str(second))
+        self.assertIsNone(getattr(second, 'image_data_uri', None))
         self.assertEqual(backend.capture_calls, 1)
 
         tools.begin_request()
@@ -265,6 +267,36 @@ class WindowsObserverTests(unittest.TestCase):
             'windows_observe', {'window_id': 'w-' + '1' * 24, 'visual_fallback': 'force'})
         self.assertIsNone(getattr(result, 'image_data_uri', None))
         self.assertIn('blank or black', str(result))
+
+    def test_a_second_window_in_one_request_returns_controls_without_a_picture(self):
+        backend = FakeBackend()
+        tools = self.make_tools(backend)
+        first, state1, _ = tools.invoke('windows_observe', {'window_id': 'w-' + '1' * 24, 'visual_fallback': 'force'})
+        second, state2, _ = tools.invoke('windows_observe', {'window_id': 'w-' + '1' * 24, 'visual_fallback': 'force'})
+        self.assertEqual((state1, state2), ('成功', '成功'))
+        self.assertEqual(backend.capture_calls, 1)
+        self.assertIsNone(getattr(second, 'image_data_uri', None))
+        self.assertIn('already used its one screenshot', str(second))
+        self.assertIn('A short note', str(second))
+
+    def test_a_briefly_busy_desktop_is_waited_for(self):
+        from desktop_access import desktop_access
+        backend = FakeBackend()
+        gate = threading.Event()
+
+        def hold():
+            with desktop_access():
+                gate.set()
+                time.sleep(0.5)
+
+        holder = threading.Thread(target=hold)
+        holder.start()
+        gate.wait(2)
+        result, state, _ = WindowsObservationTools(True, 8192, backend=backend, platform_enabled=True,
+                                                   timeout_seconds=6).invoke(
+            'windows_observe', {'window_id': 'w-' + '1' * 24, 'visual_fallback': 'never'})
+        holder.join()
+        self.assertEqual(state, '成功')
 
     def test_foreground_skips_veil_and_reports_the_window_behind_it(self):
         backend = FakeBackend(windows=[

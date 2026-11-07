@@ -32,6 +32,7 @@ MAX_TEXT_CHARS = 4000
 MAX_SCREENSHOT_BYTES = 5 * 1024 * 1024
 MAX_CAPTURE_PIXELS = 8_000_000
 OBSERVATION_TIMEOUT_SECONDS = 8
+DESKTOP_LOCK_WAIT_SECONDS = 3  # QQ and other desktop work hold the lock briefly; wait instead of bouncing at once
 UIA_SEARCH_TIMEOUT_SECONDS = 2
 
 PROTECTED_PROCESSES = frozenset({
@@ -335,7 +336,7 @@ class WindowsObservationTools:
 
         def worker():
             try:
-                with desktop_access(timeout=0.1):
+                with desktop_access(timeout=min(DESKTOP_LOCK_WAIT_SECONDS, max(0.1, self.timeout_seconds * 0.4))):
                     if stopped():
                         raise ObservationPaused('The autonomous activity was paused.')
                     result, state, actual_summary = self._operate(name, args, stopped)
@@ -472,11 +473,16 @@ class WindowsObservationTools:
             should_capture = False
         image = None
         visual_note = 'not requested'
+        visual_limited = False
         if should_capture:
             with self._visual_lock:
-                if self._visual_used:
-                    raise ObservationError('The visual fallback limit for this request has been reached.')
+                limit_reached = self._visual_used
                 self._visual_used = True
+            if limit_reached:
+                # Only one screenshot per request. A second window read still returns its controls; it just has no picture.
+                should_capture = False
+                visual_limited = True
+        if should_capture:
             if stopped():
                 raise ObservationPaused('The autonomous activity was paused.')
             try:
@@ -488,6 +494,8 @@ class WindowsObservationTools:
                 visual_note = 'screenshot unavailable: ' + _text(exc, 240)
             except Exception:
                 visual_note = 'screenshot unavailable; no image was attached'
+        elif visual_limited:
+            visual_note = 'screenshot skipped: this request already used its one screenshot'
         elif mode == 'never':
             visual_note = 'screenshot skipped by request'
         else:
