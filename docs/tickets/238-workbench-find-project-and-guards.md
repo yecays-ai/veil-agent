@@ -4,16 +4,19 @@
 
 ## 做了什么
 - **自己找项目**（`workbench_scope.py`）：只在 `[executor] project_roots` 列出的文件夹里找（默认空=只用工作台自己的文件夹，也就是只限隔离测试项目）。按任务文字或 Peter 填的 `project` 名字匹配；唯一就用，多个就让 Peter 按名字问 lan，没有就用工作台文件夹做新东西。
-- **快照**：有 Git 时在 `refs/veil-snapshots/<id>` 记一个引用（不动分支、暂存区、工作区、stash，不提交），未跟踪文件另存一份；没有 Git 时复制文件（上限 200 MB / 2 万个文件）。留不下退路时，聊天里问 lan，醒来里不做。`restore()` 可回滚。
-- **权限分级**：OpenCode 自己的 allow/ask/deny 规则放行 `git status/diff/log`、`ls`、跑测试等；读 `.env`、`secrets`、`.ssh`、浏览器密码库直接 deny；其余 ask 交给 VEIL。VEIL 对 `git push/clone/pull/fetch`、`pip/npm install`、`curl/wget`、递归删除，聊天里问 lan，醒来里拒绝并让 Peter 存进度。
-- **密钥代理**：VEIL 在本机回环开一个转发，OpenCode 和它跑的命令只拿到本次随机令牌，真实密钥只在 VEIL 进程里；令牌只对这一次有效，转发次数有上限。
+- **快照**：有 Git 时在 `refs/veil-snapshots/<id>` 记一个引用（不动分支、暂存区、工作区、stash，不提交），未跟踪文件另存一份；没有 Git 时复制文件（上限 200 MB / 2 万个文件）。留不下退路时，聊天里问 lan，醒来里不做。`restore()` 可回滚。符号链接不跟随；只保留最近 20 份快照。被 `.gitignore` 忽略的文件不在 Git 快照里（所以 Git 项目里被忽略的本地配置改坏了还原不了）；复制失败就算快照失败。
+- **权限分级**：OpenCode 自己的 allow/ask/deny 规则放行 `git status/diff/log`、`ls`、跑测试等；读 `.env`、`secrets`、`.ssh`、浏览器密码库直接 deny；命令、改文件、联网和项目外目录的请求交给 VEIL 决定（读文件由 OpenCode 的规则直接处理）。`git diff/log/show` 会输出文件内容，所以不在放行名单里。VEIL 对 `git push/clone/pull/fetch`、`pip/npm install`、`curl/wget`、递归删除，聊天里问 lan，醒来里拒绝并让 Peter 存进度。
+- **密钥代理**：VEIL 在本机开一个转发（不用容器时只监听回环；用容器时要让容器连得上，监听所有网卡，靠本次随机令牌挡住别人），OpenCode 和它跑的命令只拿到本次随机令牌，真实密钥只在 VEIL 进程里；令牌只对这一次有效，转发次数上限是 步数×3+5。命令进程能读到这个令牌，所以能在上限内直接调用模型，这是已知的小缺口，费用上限仍由 VEIL 按会话统计。
 
-- **容器隔离（可选，`[executor] container_image = "veil-workbench"`）**：OpenCode 在 Docker 容器里跑，只挂载项目文件夹；项目里 `.env`、`*.pem`、`id_rsa*` 这类文件用空文件盖住（只读）；不带宿主机环境变量，去掉所有权限，限内存和进程数。镜像见 `docker/workbench.Dockerfile`。配置是内联传给 OpenCode 的，不往项目里写文件，项目自己的 `opencode.json` 也松不开权限。
+- **容器隔离（可选，`[executor] container_image = "veil-workbench"`）**：OpenCode 在 Docker 容器里跑，只挂载项目文件夹；项目里（6 层目录内）的 `.env`、`*.pem`、`id_rsa*` 这类文件用空文件盖住（只读），更深的不会被盖住；不带宿主机环境变量，去掉所有权限，限内存和进程数。镜像见 `docker/workbench.Dockerfile`。配置是内联传给 OpenCode 的，不往项目里写文件，项目自己的 `opencode.json` 也松不开权限。
 
 ## 没做、也不能说已经解决的
-- **命令越权**：不用容器时，命令里的路径没法被程序完全解析，文件夹内批准的命令能读写文件夹外的文件（已用脚本实测复现：`验证脚本 verify_isolation.py` 的「没有容器」一栏）。容器方式是否真的挡住，**要在 lan 的 Windows + Docker Desktop 上跑 `run-isolation.cmd` 验证；验证通过之前不开放真实项目**。
+- **命令越权**：不用容器时，命令里的路径没法被程序完全解析，文件夹内批准的命令能读写文件夹外的文件（已用脚本实测复现：`tools/workbench-verify/verify_isolation.py` 的「没有容器」一栏）。容器方式是否真的挡住，**已在 lan 的 Windows + Docker Desktop 上验证（2026-11-07 20:03）：有容器时项目外文件读不到、`.env` 读不到也改不了、真实密钥和宿主机环境变量都不在容器里、正常修改项目不受影响；没有容器的对照组三项越权都成功**。仍未做：真实模型在容器里的整套任务、容器里的联网限制（容器能联网，下载和安装靠 VEIL 的审批挡，只能挡住识别得出的命令）。
 - 快照还原后，用户原来的「已暂存」状态不保留（文件内容保留）。
+- 快照在预算预留之前做，被费用上限挡下的调用会留下一份快照（保留 20 份后自动清理）；快照时间不计入 `max_seconds`，也不响应停止。
+- 容器里的文件属主取决于 Docker Desktop 的挂载方式；Windows 上验证可写，Linux 主机需另验。
+- 不在放行名单里的命令（如 `python -c`、`npm ci`）在聊天里不问你、醒来里也能执行：靠容器限制它能碰的文件，网络没有限制。
 - 项目名不出现在任务里时，Peter 要自己填 `project`；还没有「列出所有项目」的能力。
 
 ## 测试
-`tests/test_executor_opencode.py`：22 项（含真实 OpenCode 经密钥代理的集成测试，装了 OpenCode 才跑）。
+`tests/test_executor_opencode.py`：27 项（真实 OpenCode 的集成测试，包括「项目自带的 opencode.json 松不开权限」，没装 OpenCode 时跳过）。

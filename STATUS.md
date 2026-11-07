@@ -1,7 +1,8 @@
 ## 工单 238：工作台自己找项目、快照、权限分级、密钥代理
 
-- 见 `docs/tickets/238-workbench-find-project-and-guards.md`。同一分支接在 237 之后。默认仍关；`project_roots` 为空时只用工作台自己的文件夹。
-- 下一步：容器隔离（项目以外的文件根本不存在）和越权验证；通过之前不开放真实项目，也不合并。
+- 见 `docs/tickets/238-workbench-find-project-and-guards.md`。默认仍关；`project_roots` 为空时只用工作台自己的文件夹。
+- 现状：不用容器时，命令仍能读写项目外文件（已复现）；用容器时已在 Windows + Docker Desktop 上验证全部挡住。
+- 下一步：真实模型在容器里的整套任务验收；通过之前不开放真实项目，也不合并。
 - 验收：lan 说一个带项目名的问题，Peter 自己找到项目、改前留退路、联网/安装/推送问她。下一个工单号 239。
 
 ## 工单 237：工作台（OpenCode 执行后端）隔离原型

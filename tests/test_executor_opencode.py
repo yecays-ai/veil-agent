@@ -408,7 +408,7 @@ max_steps = 4
         self.assertEqual(execution.state, '被拒绝')
 
 
-def _fake_llm():
+def _fake_llm(command='echo hello > out.txt && cat out.txt'):
     """A scripted OpenAI-compatible server: first answer is one bash call, the next is the final text."""
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -427,7 +427,7 @@ def _fake_llm():
                 out = [chunk({'role': 'assistant', 'content': 'Done: ' + str(last['content'])[:80]}), chunk({}, 'stop')]
             else:
                 call = {'index': 0, 'id': 'call_1', 'type': 'function', 'function': {
-                    'name': 'bash', 'arguments': json.dumps({'command': 'echo hello > out.txt && cat out.txt',
+                    'name': 'bash', 'arguments': json.dumps({'command': command,
                                                              'description': 'write'})}}
                 out = [chunk({'role': 'assistant', 'tool_calls': [call]}), chunk({}, 'tool_calls')]
             self.send_response(200)
@@ -455,10 +455,73 @@ class RealOpenCodeTests(unittest.TestCase):
         self.assertEqual((base / 'bench' / 'out.txt').read_text().strip(), 'hello')
         self.assertEqual(len(costs), 1)
 
-
+    def test_a_project_config_cannot_loosen_the_programs_permission_gate(self):
+        server = _fake_llm('curl --version')
+        self.addCleanup(server.shutdown)
+        base = Path(tempfile.mkdtemp())
+        (base / 'bench').mkdir()
+        (base / 'bench' / 'opencode.json').write_text(json.dumps({'permission': {'bash': {'*': 'allow'}}}), encoding='utf-8')
+        provider = {**PROVIDER, 'base_url': f'http://127.0.0.1:{server.server_address[1]}/v1', 'model': 'fake'}
+        asked = []
+        ex.run('make a file', command=ex.find_command(), workdir=base / 'bench', home=base / 'home',
+               provider=provider, key='k', limits={'max_seconds': 90}, autonomy=False,
+               ask=lambda p: asked.append(p) or 'n', stopped=lambda: False, record_cost=lambda _c: None)
+        self.assertTrue(asked and 'curl' in asked[0])  # the project's allow-all did not skip the program's gate
 
 
 class ScopeTests(unittest.TestCase):
+    def test_git_snapshot_restores_after_the_project_is_broken_and_keeps_user_state(self):
+        import subprocess
+        import workbench_scope as scope
+        base = Path(tempfile.mkdtemp())
+        project = base / 'p'
+        project.mkdir()
+
+        def git(*a):
+            return subprocess.run(['git', '-C', str(project), *a], check=True, capture_output=True, text=True).stdout
+        git('init', '-q', '-b', 'main')
+        git('config', 'user.email', 'a@b')
+        git('config', 'user.name', 'a')
+        (project / 'a.txt').write_text('v1', encoding='utf-8')
+        git('add', '.')
+        git('commit', '-qm', 'one')
+        (project / 'a.txt').write_text('v1-dirty', encoding='utf-8')
+        (project / 'u.txt').write_text('untracked', encoding='utf-8')
+        before = (git('status', '--porcelain'), git('branch'), git('log', '--oneline'), git('stash', 'list'))
+        meta = scope.snapshot(project, base / 'snaps', 't1')
+        self.assertEqual(meta['kind'], 'git')
+        self.assertEqual(before, (git('status', '--porcelain'), git('branch'), git('log', '--oneline'), git('stash', 'list')))
+        (project / 'a.txt').write_text('broken', encoding='utf-8')
+        (project / 'u.txt').unlink()
+        self.assertTrue(scope.restore(meta))
+        self.assertEqual((project / 'a.txt').read_text(encoding='utf-8'), 'v1-dirty')
+        self.assertEqual((project / 'u.txt').read_text(encoding='utf-8'), 'untracked')
+
+    def test_symlinks_are_not_followed_and_old_snapshots_are_pruned(self):
+        import workbench_scope as scope
+        base = Path(tempfile.mkdtemp())
+        project, outside = base / 'p', base / 'outside.txt'
+        project.mkdir()
+        outside.write_text('outside', encoding='utf-8')
+        (project / 'a.txt').write_text('a', encoding='utf-8')
+        try:
+            (project / 'link.txt').symlink_to(outside)
+        except OSError:
+            self.skipTest('symlinks not available')
+        meta = scope.snapshot(project, base / 'snaps', 's0')
+        self.assertFalse((Path(meta['dir']) / 'files' / 'link.txt').exists())
+        with patch('workbench_scope.KEEP_SNAPSHOTS', 2):
+            for i in range(1, 5):
+                scope.snapshot(project, base / 'snaps', f's{i}')
+        self.assertEqual(len([p for p in (base / 'snaps').iterdir()]), 2)
+
+    def test_project_roots_must_be_a_list(self):
+        from veil_agent import _executor_roots
+        self.assertEqual(_executor_roots(['/a', ' /b ']), ['/a', '/b'])
+        for bad in ('/a/b', [1], [''], None):
+            with self.assertRaises(ValueError):
+                _executor_roots(bad)
+
     def test_copy_snapshot_restores_a_non_git_project(self):
         import workbench_scope as scope
         base = Path(tempfile.mkdtemp())

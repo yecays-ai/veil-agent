@@ -84,7 +84,7 @@ def choose_project(hint, roots):
 
 
 def _git(root, *args):
-    return subprocess.run(['git', '-C', str(root), *args], capture_output=True, text=True, timeout=60,
+    return subprocess.run(['git', '-C', str(root), *args], capture_output=True, encoding='utf-8', errors='replace', timeout=60,
                           env={**os.environ, **_GIT_ENV})
 
 
@@ -99,6 +99,8 @@ def _copy_tree(source, target, files=None):
         pairs = [Path(source) / f for f in files]
     for path in pairs:
         try:
+            if path.is_symlink():
+                continue
             total += path.stat().st_size
         except OSError:
             continue
@@ -109,10 +111,30 @@ def _copy_tree(source, target, files=None):
         dest = Path(target) / path.relative_to(source)
         dest.parent.mkdir(parents=True, exist_ok=True)
         try:
+            if path.is_symlink():  # a link is not followed: copying its target could overwrite something outside later
+                continue
             shutil.copy2(path, dest)
         except OSError:
-            pass
+            return False
     return True
+
+
+KEEP_SNAPSHOTS = 20
+
+
+def prune(store, keep=None):
+    """Keep the newest `keep` snapshots; older folders and their git refs are removed."""
+    keep = KEEP_SNAPSHOTS if keep is None else keep
+    folders = sorted((p for p in Path(store).iterdir() if (p / 'meta.json').exists()),
+                     key=lambda p: p.stat().st_mtime, reverse=True)
+    for old in folders[keep:]:
+        try:
+            meta = json.loads((old / 'meta.json').read_text(encoding='utf-8'))
+            if meta.get('kind') == 'git':
+                _git(meta['project'], 'update-ref', '-d', meta['ref'])
+        except (OSError, ValueError):
+            pass
+        shutil.rmtree(old, ignore_errors=True)
 
 
 def snapshot(project, store, task_id):
@@ -123,8 +145,12 @@ def snapshot(project, store, task_id):
     head = _git(project, 'rev-parse', '--verify', 'HEAD') if (project / '.git').exists() else None
     if head is not None and head.returncode == 0:
         # `git stash create` only builds a commit object of the tracked changes; it touches no branch, index or file.
-        stash = _git(project, 'stash', 'create').stdout.strip()
-        base = stash or head.stdout.strip()
+        made = _git(project, 'stash', 'create')
+        if made.returncode != 0:
+            meta.update(kind='none', note='git could not record the uncommitted changes')
+            (store / 'meta.json').write_text(json.dumps(meta), encoding='utf-8')
+            return meta
+        base = made.stdout.strip() or head.stdout.strip()
         ref = f'refs/veil-snapshots/{task_id}'
         if _git(project, 'update-ref', ref, base).returncode == 0:
             untracked = [f for f in _git(project, 'ls-files', '--others', '--exclude-standard', '-z').stdout.split('\0') if f]
@@ -140,6 +166,7 @@ def snapshot(project, store, task_id):
         shutil.rmtree(store / 'files', ignore_errors=True)
         meta.update(kind='none', note='project too large to copy')
     (store / 'meta.json').write_text(json.dumps(meta), encoding='utf-8')
+    prune(store.parent)
     return meta
 
 

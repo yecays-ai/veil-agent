@@ -32,10 +32,10 @@ DEFAULT_LIMITS = {'max_steps': 30, 'max_seconds': 600, 'repeat_limit': 3, 'run_b
 RESULT_CHARS = 4000
 _WINDOWS = os.name == 'nt'
 
-SAFE_COMMANDS = ('git status*', 'git diff*', 'git log*', 'git show*', 'git branch*', 'ls', 'ls *', 'dir', 'dir *',
+SAFE_COMMANDS = ('git status*', 'git branch*', 'ls', 'ls *', 'dir', 'dir *',
                  'pwd', 'python -m unittest*', 'python -m pytest*', 'pytest*', 'npm test*', 'node --test*')
-SECRET_GLOBS = ('*.env', '*.env.*', '*/secrets/*', '*\\secrets\\*', '*/.ssh/*', '*\\.ssh\\*', '*id_rsa*', '*id_ed25519*',
-                '*Login Data*', '*/Cookies', '*\\Cookies')
+SECRET_GLOBS = ('*.env', '*.env.*', 'secrets/*', '*/secrets/*', '*\\secrets\\*', '.ssh/*', '*/.ssh/*', '*\\.ssh\\*',
+                '*id_rsa*', '*id_ed25519*', '*Login Data*', 'Cookies', '*/Cookies', '*\\Cookies')
 
 TOOL_SCHEMA = {'type': 'function', 'function': {
     'name': TOOL_NAME,
@@ -159,6 +159,7 @@ class KeyProxy:
         self.token = secrets.token_urlsafe(24)
         self.upstream = upstream_base.rstrip('/')
         self.requests = 0
+        self.lock = threading.Lock()
         proxy = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -182,9 +183,10 @@ class KeyProxy:
             def _forward(self, method):
                 if self.headers.get('Authorization') != 'Bearer ' + proxy.token:
                     return self._deny(401, 'bad token')
-                if proxy.requests >= max_requests:
-                    return self._deny(429, 'request limit reached')
-                proxy.requests += 1
+                with proxy.lock:
+                    if proxy.requests >= max_requests:
+                        return self._deny(429, 'request limit reached')
+                    proxy.requests += 1
                 path = self.path[3:] if self.path.startswith('/v1') else self.path
                 body = self.rfile.read(int(self.headers.get('Content-Length') or 0)) if method == 'POST' else None
                 request = urllib.request.Request(proxy.upstream + path, data=body, method=method, headers={
@@ -268,7 +270,7 @@ def build_config(provider, token, base_url):
 SECRET_FILE = re.compile(r'^(\.env(\..*)?|.*\.pem|id_(rsa|ed25519).*|.*\.pfx|.*\.key)$', re.I)
 
 
-def secret_files(workdir, max_depth=2):
+def secret_files(workdir, max_depth=6):
     """Secret-looking files inside the project (shallow). In a container they are masked with an empty file."""
     found, root = [], Path(workdir)
     for base, dirs, names in os.walk(root):
@@ -303,7 +305,8 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
     price = (Decimal(str(provider.get('input_cny_per_million', 0))),
              Decimal(str(provider.get('output_cny_per_million', 0))))
     cap = Decimal(str(limits['run_budget_cny']))
-    proxy = (proxy_factory or KeyProxy)(provider['base_url'], key, **({'host': '0.0.0.0'} if container else {}))
+    proxy = (proxy_factory or KeyProxy)(provider['base_url'], key, max_requests=int(limits['max_steps']) * 3 + 5,
+                                        **({'host': '0.0.0.0'} if container else {}))
     config = build_config(provider, proxy.token, proxy.local_base('host.docker.internal' if container else '127.0.0.1'))
     port, password = free_port(), secrets.token_urlsafe(24)
     keep = {'PATH', 'PATHEXT', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'TEMP', 'TMP', 'TMPDIR', 'LANG', 'LC_ALL', 'PROGRAMFILES',
@@ -397,9 +400,15 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
         return ExecutorResult(return_text, '出错', cost, steps)
     finally:
         kill_tree(proc)
-        if container:
-            subprocess.run(['docker', 'kill', name], capture_output=True, timeout=30)
-        proxy.close()
+        try:
+            if container:
+                subprocess.run(['docker', 'kill', name], capture_output=True, timeout=30)
+        except Exception:
+            pass
+        try:
+            proxy.close()
+        except Exception:
+            pass
         try:
             record_cost(cost)
         except Exception:

@@ -715,6 +715,12 @@ def toml_provider(raw):
     return provider
 
 
+def _executor_roots(value):
+    if not isinstance(value, list) or not all(isinstance(r, str) and r.strip() for r in value):
+        raise ValueError('executor.project_roots must be a list of folder paths')
+    return [r.strip() for r in value]
+
+
 def load_character(root, character_id):
     if not re.fullmatch(r'[a-z0-9][a-z0-9_-]*', character_id):
         raise UserError('角色编号只能用小写英文、数字、下划线和短横线。')
@@ -958,7 +964,7 @@ def load_character(root, character_id):
                         'repeat_limit': positive_int(executor.get('repeat_limit', 3)),
                         'run_budget_cny': str(price(executor.get('run_budget_cny', '0.5'))),
                         'wake_budget_cny': str(price(executor.get('wake_budget_cny', '0.3'))),
-                        'project_roots': [str(r) for r in executor.get('project_roots', [])],
+                        'project_roots': _executor_roots(executor.get('project_roots', [])),
                         'container_image': str(executor.get('container_image', ''))}
         return Character(character_id, str(cfg['name']), persona,
                          positive_int(cfg.get('history_rounds', 20)),
@@ -3682,7 +3688,7 @@ class Chat:
         if kind == 'none':
             return base, ''
         meta = scope.snapshot(found['path'], Path(base).parent / 'snapshots',
-                              time.strftime('%Y%m%d-%H%M%S') + '-' + found['name'])
+                              time.strftime('%Y%m%d-%H%M%S-') + f'{time.time_ns() % 10**6:06d}-' + found['name'])
         if meta['kind'] == 'none':
             if autonomy:
                 return ex.ExecutorResult(f"Not started: no way back could be kept for {found['name']} "
