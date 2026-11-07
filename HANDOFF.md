@@ -3,6 +3,7 @@
 - 目标：Claude Code 通道里只读查询（Read、Grep、Glob）不弹同意卡片，写文件、命令行、网页仍弹。分支 `ticket/234-cc-readonly-allow` 基于 `main` `c0d0115`。
 - 改动只有 `claude_agent_channel.py`（`READ_ONLY_TOOLS` 加进 `--allowedTools`；`DENY_RULES` 增加 `//**/` 前缀的 Read/Edit/Write 规则）和 `tests/test_claude_agent_channel.py`。
 - 发现：原来的 `Read(**/.env)` 在 Claude Code 里只匹配工作目录之内的文件，实测目录外的 `.env`、secrets 能被读；`//**/` 前缀实测有效（读、写被拒，Grep/Glob 也不返回它们）。这点原来就存在，不是本工单引入的。
+- 同一 PR 追加：`windows_observe` 的桌面锁等待 3 秒、截图次数用完时降级为只返回控件（Peter 自己查 `tools.jsonl` 发现的两个偶发失败，已在代码核对）。`windows_interaction.py` 里还有一处 `desktop_access(timeout=0.1)`，没有证据显示它出过问题，没改。
 - 没做：命令行（Bash）读 `.env` 仍由同意卡片兜底，没有加规则。
 - 验收：见 `docs/tickets/234-cc-readonly-allow.md`；Windows 实机待 lan 验收。
 
