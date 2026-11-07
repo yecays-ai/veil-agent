@@ -350,7 +350,8 @@ class FilesystemTools:
                           if tool_policy(tool.name) != 'deny'
                           and tool.name not in WINDOWS_DESKTOP_TOOL_NAMES
                           and tool.name not in ('append_file', 'grant_append', 'create_directory', 'move_lab_file',
-                                                'delete_file', 'edit_file', 'lab_file_digest', 'preview_lab_page', 'run_lab_python'))
+                                                'delete_file', 'edit_file', 'lab_file_digest', 'preview_lab_page',
+                                                'open_lab_game', 'run_lab_python'))
         self._open_lab(settings)
         if self.lab:
             from lab_preview import LabPreview
@@ -1254,10 +1255,12 @@ class FilesystemTools:
         if (windows.drive or windows.root or Path(raw).is_absolute() or
                 any(lab_name_problem(part) for part in parts)):
             raise ValueError('use a safe relative workspace path')
-        root = self.workspace
+        boundary = self.workspace
+        if any(_redirected(path) for path in reversed((boundary, *boundary.parents))):
+            raise ValueError('workspace was redirected')
+        root = boundary.resolve(strict=True)
         if any(_redirected(path) for path in reversed((root, *root.parents))):
             raise ValueError('workspace was redirected')
-        root = root.resolve(strict=True)
         target = root
         for part in parts:
             # Windows treats case variants as the same file. Enforce that rule
@@ -1271,7 +1274,9 @@ class FilesystemTools:
                 raise ValueError('workspace links are not writable')
         if len(str(target)) > 240:
             raise ValueError('workspace path exceeds 240 characters')
-        resolved = checked_path(self.workspace, str(target))
+        resolved = checked_path(root, str(target))
+        if any(_redirected(path) for path in reversed((root, *root.parents))):
+            raise ValueError('workspace was redirected')
         if not resolved.is_relative_to(root) or resolved == root:
             raise ValueError('outside workspace')
         return resolved
