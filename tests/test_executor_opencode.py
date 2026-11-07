@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import executor_opencode as ex
-from veil_agent import Budget, Chat, Store, load_character
+from veil_agent import Budget, Chat, Store, UserError, load_character
 
 PROVIDER = {'model': 'fake-model', 'base_url': 'https://example.invalid/v1', 'max_input_tokens': 8000,
             'input_cny_per_million': '2', 'output_cny_per_million': '8'}
@@ -295,6 +295,55 @@ max_steps = 4
         self.assertNotIn('workbench', self.names(self.chat(missing)))
         off = self.executor.replace('enabled = true', 'enabled = false')
         self.assertNotIn('workbench', self.names(self.chat(off)))
+
+    def write_local(self, text):
+        path = self.root / 'data' / 'test'
+        path.mkdir(parents=True, exist_ok=True)
+        (path / 'workbench.json').write_text(text, encoding='utf-8')
+
+    def load(self, extra=''):
+        (self.root / 'characters' / 'test' / 'character.toml').write_text(self.toml + extra, encoding='utf-8')
+        return load_character(self.root, 'test')
+
+    def test_local_switch_turns_the_workbench_on_without_touching_character_toml(self):
+        self.assertIsNone(self.load().executor)
+        project = self.root / 'proj'
+        project.mkdir()
+        self.write_local(json.dumps({'enabled': True, 'project_roots': [str(project)], 'container_image': 'img'}))
+        executor = self.load().executor
+        self.assertTrue(executor['enabled'])
+        self.assertEqual(executor['project_roots'], [str(project)])
+        self.assertEqual(executor['container_image'], 'img')
+
+    def test_local_switch_overrides_only_its_own_keys(self):
+        self.write_local(json.dumps({'enabled': False}))
+        executor = self.load(self.executor).executor
+        self.assertFalse(executor['enabled'])
+        self.assertEqual(executor['run_budget_cny'], '0.2')  # budget still comes from character.toml
+
+    def test_bad_local_switch_is_refused_not_ignored(self):
+        for bad in ('{not json', '[]', json.dumps({'enabled': 'yes'}), json.dumps({'command': 'evil'}),
+                    json.dumps({'run_budget_cny': '99'})):
+            self.write_local(bad)
+            with self.assertRaises(UserError):
+                self.load()
+
+    def test_switch_script_state_round_trip_and_folder_rules(self):
+        import workbench_switch as sw
+        state = sw.load_state(self.root)
+        self.assertFalse(state['enabled'])
+        folder = self.root / 'mine'
+        folder.mkdir()
+        self.assertTrue(sw.add_folder(state, str(folder), self.root)[0])
+        self.assertFalse(sw.add_folder(state, str(folder), self.root)[0])            # duplicate
+        self.assertFalse(sw.add_folder(state, str(self.root / 'nope'), self.root)[0])  # missing
+        (self.root / 'data').mkdir(exist_ok=True)
+        self.assertFalse(sw.add_folder(state, str(self.root / 'data'), self.root)[0])  # VEIL's own data
+        self.assertFalse(sw.add_folder(state, str(self.root), self.root)[0])           # contains it
+        state['enabled'] = True
+        sw.save_state(state, self.root)
+        self.assertEqual(sw.load_state(self.root), state)
+        self.write_local((self.root / 'data' / 'peter' / 'workbench.json').read_text(encoding='utf-8'))  # valid for loader
 
     def test_call_runs_the_executor_and_books_the_cost(self):
         chat = self.chat(self.executor)

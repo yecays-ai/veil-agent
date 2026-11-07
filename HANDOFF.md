@@ -1,3 +1,8 @@
+## 工单 239 交接（2026-11-07）
+
+- `veil_agent.py` 的 `load_character` 读 `data/<角色>/workbench.json` 覆盖 `[executor]` 的 `enabled/project_roots/container_image`（其他键不认，坏文件报错）；新增 `workbench_switch.py` 和 `workbench-switch.cmd`。
+- 未验：lan 电脑上双击开关、构建镜像、真实项目验收。
+
 ## 工单 238 交接（2026-11-07）
 
 - 新文件 `workbench_scope.py`（找项目、快照、还原）；`executor_opencode.py` 加 `KeyProxy`、`ASK_LAN`、`SAFE_COMMANDS`/`SECRET_GLOBS`；`veil_agent.py` 加 `_workbench_target`、`project_roots` 配置、`workbench` 的可选 `project` 参数。

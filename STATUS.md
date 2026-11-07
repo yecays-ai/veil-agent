@@ -1,3 +1,9 @@
+## 工单 239：工作台的本地开关
+
+- 见 `docs/tickets/239-workbench-local-switch.md`。双击 `workbench-switch.cmd` 开关工作台、选项目文件夹，写在 `data/peter/workbench.json`，不改仓库文件，更新不会丢。默认仍关。
+- 下一步：lan 用真实项目走一遍验收；设置页界面开关待 lan 的本地 Codex。
+- 验收：双击开启（第一次会构建 Docker 镜像）、加一个项目文件夹、重开 Peter，说一个带项目名的问题。下一个工单号 240。
+
 ## 工单 238：工作台自己找项目、快照、权限分级、密钥代理
 
 - 见 `docs/tickets/238-workbench-find-project-and-guards.md`。默认仍关；`project_roots` 为空时只用工作台自己的文件夹。
