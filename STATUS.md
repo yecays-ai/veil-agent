@@ -1,3 +1,8 @@
+## 工单 237：工作台（OpenCode 执行后端）隔离原型
+
+- Peter 新增工具 `workbench`（默认关，`character.toml` 的 `[executor] enabled = true` 才开）：把需要命令行、改文件、跑程序、下载的活交给临时启动的 OpenCode，在 `data/<角色>/workbench` 文件夹里干活；权限由 VEIL 程序决定（文件夹内直接做，危险命令和密钥拒绝，文件夹之外聊天里问 lan、自主醒来里拒绝），步数、时间、重复调用、费用上限由 VEIL 卡并计入共享账本，lan 按停止立即中止。找不到 OpenCode 时工具不出现，聊天、记忆、自主活动不受影响。原型阶段，不合并，Windows 和真实中转的全套验收未完成。
+- 验收见 `docs/tickets/237-workbench-executor-prototype.md`。下一个工单号 238。
+
 ## 工单 236：Peter 能按关键词找 GitHub 仓库并比较
 
 - `github_read` 增加 `search_repositories`（只需关键词，可选排序 best_match/stars/updated/forks，翻页，每页 10 个，列名称、链接、描述、Stars、许可证、语言、更新时间、是否归档）和 `readme`（不用猜文件名）；候选仓库的许可证、目录、源码继续用原来的 `repository`/`tree`/`file`。仍然只读、只看公开仓库，聊天、自主活动、委派只读搜索共用，没有新依赖。Windows 实机待 lan 验收。`AGENTS.md` 有了面向开发 agent 的第一性原理规则。

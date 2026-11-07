@@ -1,3 +1,10 @@
+## 工单 237 交接（2026-11-07）
+
+- 目标：lan 批准做 OpenCode 接入 VEIL 的隔离原型：Peter 的聊天和自主醒来都能用；人格、记忆、审批、停止、费用归 VEIL；OpenCode 不可用时原有功能不受影响。不改正式运行目录，不急着合并。
+- 改动：`executor_opencode.py`（新）、`veil_agent.py`（`Character.executor`、`workbench_ready`、`_run_workbench`、工具分发）、`tests/test_executor_opencode.py`、工单文档、STATUS/HANDOFF。
+- 云端已验：单元测试和真实 OpenCode（脚本化假模型）集成测试。lan 电脑上已验：grok-4.6 经 OpenCode 的 4 个场景（`oc-test/run-grok.cmd`）。待验：`oc-test/run-executor.cmd`（真实中转加真实 OpenCode 跑 `executor_opencode.run`）。
+- 下一步：读 `report-exec-*.md`；通过后请 lan 决定是否把本分支放进开发 worktree 做 Peter 聊天加自主醒来的整套验收，再决定是否合并。已知取舍：自主醒来里工作台费用上限（默认 ¥0.3）可能让当次醒来超过每次 ¥0.25 的醒来上限，¥3/天总额仍有效；opencode 的 `read` 越界请求用 `external_directory` 权限，是否都走这条要看真实实测。
+
 ## 工单 236 交接（2026-11-07）
 
 - 目标：Peter 不知道仓库名也能搜 GitHub 并比较候选（lan 发现原来的 `github_read` 必须给准确 `owner/repo`）。分支 `claude/project-thread-50woji` 基于 `main` `6cc87d6`。
