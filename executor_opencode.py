@@ -144,6 +144,24 @@ def summarize(messages):
     return steps, calls, max(repeats.values(), default=0), '\n'.join(text).strip()
 
 
+def diagnose(messages):
+    """A short account of why a run ended without a report: model/API errors and the last tool calls."""
+    lines = []
+    for m in messages:
+        info = m.get('info', {})
+        error = info.get('error')
+        if info.get('role') == 'assistant' and error:
+            data = error.get('data', {}) if isinstance(error, dict) else {}
+            lines.append('model error: ' + str(error.get('name', '') if isinstance(error, dict) else error)[:60] + ' ' +
+                         str(data.get('message', '') if isinstance(data, dict) else '')[:200])
+        for part in m.get('parts', []):
+            if part.get('type') == 'tool':
+                state = part.get('state', {})
+                shown = str(state.get('input', {}).get('command') or state.get('input', {}).get('filePath') or '')[:80]
+                lines.append(f"{part.get('tool')} {state.get('status', '')} {shown}".strip())
+    return '; '.join(lines[-6:])
+
+
 def kill_tree(proc):
     if proc is None:
         return
@@ -428,5 +446,7 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
         return ExecutorResult(f'The workbench was stopped: {stop}. Partial report:\n{text[:RESULT_CHARS]}\n{note}',
                               '出错', cost, steps)
     if not text:
-        return ExecutorResult('The workbench finished without a report.\n' + note, '出错', cost, steps)
+        why = diagnose(messages)
+        return ExecutorResult('The workbench finished without a report.' + (f' ({why})' if why else '') + '\n' + note,
+                              '出错', cost, steps)
     return ExecutorResult(text[:RESULT_CHARS] + '\n' + note, '成功', cost, steps)
