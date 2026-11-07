@@ -422,7 +422,9 @@ persistent_append_file = "growth-journal.md"
                        check=True, capture_output=True)
         reopened = self.open_tools()
         self.assertIsNone(reopened.lab)
-        self.assertNotIn('create_directory', {t.name for t in reopened.tools})
+        names = {t.name for t in reopened.tools}
+        self.assertIn('create_directory', names)  # the unified workspace remains available without Lab
+        self.assertNotIn('open_lab_game', names)
         self.assertFalse(json.loads(reopened.cap_path.read_text(encoding='utf-8'))['lab'])
         self.assertIn('实验室不可用', reopened.startup_notice)
 

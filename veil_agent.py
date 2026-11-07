@@ -3702,10 +3702,11 @@ class Chat:
             autonomy and self.autonomy_should_yield and self.autonomy_should_yield()))
         try:
             journal = (self.cfg.tools or {}).get('persistent_append_file')
-            protect = [journal] if journal and Path(workdir) == workspace else []
+            same_workspace = Path(workdir).resolve() == workspace.resolve()
+            protect = [journal] if journal and same_workspace else []
             files = getattr(self.tools, 'files', None) or self.tools
             operation_lock = (getattr(files, 'workspace_operation_lock', None)
-                              if Path(workdir) == workspace else None)
+                              if same_workspace else None)
             with operation_lock if operation_lock else nullcontext():
                 outcome = ex.run(task, command=command, workdir=Path(workdir), home=role / 'workbench-home',
                                  provider=provider, key=key, limits=limits, autonomy=autonomy, ask=self.approval,

@@ -396,7 +396,7 @@ max_steps = 4
             self.assertEqual(task, 'make x')
             self.assertEqual(kwargs['key'], 'abc123456789')
             self.assertFalse(kwargs['autonomy'])
-            self.assertEqual(Path(kwargs['workdir']), self.root / 'data' / 'test' / 'workspace')  # ticket 247: one file root
+            self.assertEqual(Path(kwargs['workdir']).resolve(), (self.root / 'data' / 'test' / 'workspace').resolve())  # ticket 247: one file root
             return outcome
         with patch('veil_agent.ROOT', self.root), patch('executor_opencode.run', side_effect=fake_run):
             execution = chat._execute_tool_call(call, 'req', 'step:0', False, chat.tool_schemas())
@@ -494,7 +494,7 @@ max_steps = 4
         workspace.mkdir(parents=True, exist_ok=True)
         (workspace / 'poem.md').write_text('mine', encoding='utf-8')
         _execution, seen = self.run_with_roots('write a hello script', approval=lambda _p: self.fail('Lan is not asked about Peter\'s own space'))
-        self.assertEqual(Path(seen['workdir']), workspace)
+        self.assertEqual(Path(seen['workdir']).resolve(), workspace.resolve())
         snapshots = list((self.root / 'data' / 'test' / 'snapshots').glob('*-workspace'))
         self.assertEqual(len(snapshots), 1)
         self.assertEqual((snapshots[0] / 'files' / 'poem.md').read_text(encoding='utf-8'), 'mine')

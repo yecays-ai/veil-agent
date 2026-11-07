@@ -1255,8 +1255,9 @@ class FilesystemTools:
                 any(lab_name_problem(part) for part in parts)):
             raise ValueError('use a safe relative workspace path')
         root = self.workspace
-        if _redirected(root) or root.resolve() != root:
+        if any(_redirected(path) for path in reversed((root, *root.parents))):
             raise ValueError('workspace was redirected')
+        root = root.resolve(strict=True)
         target = root
         for part in parts:
             # Windows treats case variants as the same file. Enforce that rule
