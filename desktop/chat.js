@@ -1534,7 +1534,7 @@ $('workbench-add').onclick=async()=>{
   try{const folder=await window.veilDesktop.chooseFolder();if(folder)await saveWorkbench({add:folder})}
   catch(error){notify(error.message||'没有选成功。','error')}
 };
-loadWorkbench();
+workbenchBusy=workbenchBusy.then(loadWorkbench);
 function applyCustomCSS(value){
   const css=String(value||'');
   if(css.length>20000||/@import\b|url\s*\(|expression\s*\(|-moz-binding|behavior\s*:/i.test(css))throw new Error('自定义 CSS 不能加载外部资源或脚本，也不能超过 20,000 个字符。');
