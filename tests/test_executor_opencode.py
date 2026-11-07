@@ -125,9 +125,11 @@ class DecisionTests(unittest.TestCase):
     def test_publish_download_install_and_bulk_delete_ask_lan_and_park_in_a_wake(self):
         wd = Path('/data/peter/workbench')
         for command in ('git push origin main', 'git -C /work/project push origin main',
-                        'TOKEN=unused git push origin main', 'pip install requests',
+                        'TOKEN=unused git push origin main', '"C:\\Program Files\\Git\\cmd\\git.exe" push origin main',
+                        'pip install requests',
                         'npm --global install requests', 'pip --user install requests',
-                        'python3.11 -m pip --user install requests', 'curl https://example.com', 'rm -r build'):
+                        'python3.11 -m pip --user install requests', 'curl https://example.com', 'rm -r build',
+                        'rd /s /q build'):
             asked = []
             self.assertEqual(ex.decide('bash', [command], {'command': command}, wd, autonomy=False,
                                        ask=lambda p: asked.append(p) or 'y')[0], 'once', command)
@@ -149,6 +151,28 @@ class DecisionTests(unittest.TestCase):
 
         self.assertEqual(ex.decide('bash', patterns, {'command': 'grep -R "git push" . | git status'}, wd,
                                    autonomy=True, ask=lambda _p: self.fail('wake must not ask'))[0], 'reject')
+
+    def test_shell_substitutions_interpreters_and_script_sourcing_require_approval(self):
+        wd = Path('/data/peter/workbench')
+        for command in ('echo `git push origin main`', 'echo $(git push origin main)',
+                        'grep -R "safe" .\ngit push origin main',
+                        'source ./setup.sh', '. ./setup.sh',
+                        'awk \'BEGIN { system("git push origin main") }\'',
+                        'php -r \'system("git push origin main");\'',
+                        'python -m something -c "import os; os.system(\'git push\')"',
+                        'node --no-warnings --eval "process.exit(0)"',
+                        'perl -I ./lib -e "system(\'git push\')"',
+                        '"C:\\Python\\python.exe" -m something -c "import os; os.system(\'git push\')"'):
+            ask = Mock(return_value='n')
+            self.assertEqual(ex.decide('bash', [command], {'command': command}, wd, autonomy=False, ask=ask)[0],
+                             'reject', command)
+            ask.assert_called_once()
+
+        ask = Mock()
+        command = 'python -m unittest tests.test_executor_opencode'
+        self.assertEqual(ex.decide('bash', [command], {'command': command}, wd, autonomy=False, ask=ask)[0],
+                         'once')
+        ask.assert_not_called()
 
     def test_missing_command_metadata_is_conservative(self):
         ask = Mock(return_value='y')

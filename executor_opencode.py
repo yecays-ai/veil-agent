@@ -98,12 +98,17 @@ def _git_subcommand(tokens):
     return ''
 
 
+def _command_name(token):
+    name = posixpath.basename(token.replace('\\', '/')).casefold()
+    return re.sub(r'\.(exe|cmd|bat|com)$', '', name)
+
+
 def _bash_command_needs_lan(tokens):
     while tokens and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', tokens[0]):
         tokens = tokens[1:]
     if not tokens:
         return False
-    command = posixpath.basename(tokens[0]).casefold()
+    command = _command_name(tokens[0])
     if command in ASK_LAN['network']:
         return True
     if command == 'git':
@@ -120,8 +125,8 @@ def _bash_command_needs_lan(tokens):
                    for arg in tokens[1:])
     if command == 'remove-item':
         return any(arg.casefold() in {'-recurse', '-r'} for arg in tokens[1:])
-    if command in {'del', 'rmdir'}:
-        return any(arg.casefold() in {'/s', '/s/f', '/s/q'} for arg in tokens[1:])
+    if command in {'del', 'rmdir', 'rd'}:
+        return any(arg.casefold().startswith('/s') for arg in tokens[1:])
     return False
 
 
@@ -139,6 +144,8 @@ def _complex_bash_request(patterns, metadata):
         return True
     if len(commands) != len(patterns) or len(commands) != 1 or not commands[0]:
         return True
+    if '\n' in command or '\r' in command or '`' in command or '$(' in command:
+        return True
     if any(re.fullmatch(r'[;&|<>()]+', token) for token in shell_tokens):
         return True
     command_tokens = commands[0]
@@ -146,12 +153,18 @@ def _complex_bash_request(patterns, metadata):
         command_tokens = command_tokens[1:]
     if not command_tokens:
         return True
-    command_name = posixpath.basename(command_tokens[0]).casefold()
+    command_name = _command_name(command_tokens[0])
     if command_name in {'bash', 'sh', 'dash', 'zsh', 'fish', 'powershell', 'pwsh', 'cmd', 'xargs',
-                        'env', 'command', 'time', 'exec', 'busybox', 'nohup', 'nice', 'setsid', 'eval'}:
+                        'env', 'command', 'time', 'exec', 'busybox', 'nohup', 'nice', 'setsid', 'eval',
+                        'source', '.'}:
         return True
-    return command_name in {'python', 'python3', 'node', 'ruby', 'perl'} and \
-        any(arg in {'-c', '-e', '--eval'} for arg in command_tokens[1:3])
+    if command_name in {'python', 'python3'} and command_tokens[1:3] in (
+            ['-m', 'unittest'], ['-m', 'pytest']):
+        return False
+    if command_name in {'python', 'python3', 'node', 'nodejs', 'deno', 'bun', 'ruby', 'perl', 'awk',
+                        'gawk', 'mawk', 'php', 'osascript'} or re.fullmatch(r'python\d+(?:\.\d+)*', command_name):
+        return True
+    return False
 
 
 def decide(permission, patterns, metadata, workdir, *, autonomy, ask):
