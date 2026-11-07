@@ -1,6 +1,6 @@
 ## 工单 236：Peter 能按关键词找 GitHub 仓库并比较
 
-- `claude/project-thread-50woji`：`github_read` 增加 `search_repositories`（只需关键词，可选排序 best_match/stars/updated/forks，翻页，每页 10 个，列名称、链接、描述、Stars、许可证、语言、更新时间、是否归档）和 `readme`（不用猜文件名）；候选仓库的许可证、目录、源码继续用原来的 `repository`/`tree`/`file`。仍然只读、只看公开仓库，聊天、自主活动、委派只读搜索共用，没有新依赖。`github_readonly.py`，`tests/test_github_readonly.py` 新增 5 项（本机另有 1 项旧测试因云端 mcp 版本不同失败，与 main 一致）；用真实 GitHub 接口在云端跑通关键词搜索。Windows 实机待 lan 验收。同一 PR 在 AGENTS.md 增加第一性原理规则。
+- `github_read` 增加 `search_repositories`（只需关键词，可选排序 best_match/stars/updated/forks，翻页，每页 10 个，列名称、链接、描述、Stars、许可证、语言、更新时间、是否归档）和 `readme`（不用猜文件名）；候选仓库的许可证、目录、源码继续用原来的 `repository`/`tree`/`file`。仍然只读、只看公开仓库，聊天、自主活动、委派只读搜索共用，没有新依赖。Windows 实机待 lan 验收。`AGENTS.md` 有了面向开发 agent 的第一性原理规则。
 - 验收见 `docs/tickets/236-github-repo-search.md`。下一个工单号 237。
 
 ## 工单 235：界面去后台感

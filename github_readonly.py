@@ -118,7 +118,8 @@ class GitHubReadTools:
                 'ref': {'type': 'string', 'description': 'Branch/tag/commit; default branch if omitted.'},
                 'number': {'type': 'integer', 'minimum': 1},
                 'query': {'type': 'string', 'description': 'Literal search text, without GitHub qualifiers.'},
-                'page': {'type': 'integer', 'minimum': 1, 'maximum': 1000},
+                'page': {'type': 'integer', 'minimum': 1, 'maximum': 1000,
+                         'description': 'search_repositories allows pages 1 to 100.'},
                 'sort': {'type': 'string', 'enum': list(SORTS), 'description': 'search_repositories only.'},
                 'offset': {'type': 'integer', 'minimum': 0, 'description': 'Character offset in this result.'},
             }, 'required': ['resource'], 'additionalProperties': False})]
@@ -198,9 +199,9 @@ class GitHubReadTools:
             raise ValueError('search_repositories takes only query, sort, page and offset.')
         query = args.get('query', '')
         if (not isinstance(query, str) or not 1 <= len(query.strip()) <= 200
-                or any(c in query for c in '"\\') or any(ord(c) < 32 for c in query)
+                or any(c in query for c in ':"\\') or any(ord(c) < 32 for c in query)
                 or re.search(r'\b(?:OR|NOT)\b', query)):
-            raise ValueError('Use 1-200 characters of plain keywords without quotes or operators.')
+            raise ValueError('Use 1-200 characters of plain keywords without qualifiers, quotes or operators.')
         sort = args.get('sort', 'best_match')
         if sort not in SORTS:
             raise ValueError('sort must be one of: ' + ', '.join(SORTS) + '.')
@@ -212,6 +213,8 @@ class GitHubReadTools:
         if sort != 'best_match':
             params.update(sort=sort, order='desc')
         found = self.get('/search/repositories', params)
+        if should_stop and should_stop():
+            raise _GitHubStopped()
         items = [self._repo_hit(item) for item in found.get('items', []) if item.get('private') is False]
         value = {'query': query.strip(), 'sort': sort, 'page': page, 'total_count': found.get('total_count'),
                  'next_page': page + 1 if len(found.get('items', [])) == 10 and page < 100 else None,
@@ -255,7 +258,7 @@ class GitHubReadTools:
             raw = base64.b64decode(value.get('content', ''), validate=False)
             if len(raw) > MAX_FILE_BYTES or b'\0' in raw:
                 raise ValueError('The README is not bounded text.')
-            text = raw.decode('utf-8', errors='replace')
+            text = raw.decode('utf-8')
             return '\n'.join(f'{i}: {line}' for i, line in enumerate(text.splitlines(), 1)), (
                 value.get('html_url') or source)
         params = {'per_page': 10, 'page': page}

@@ -289,9 +289,6 @@ class GitHubWakeIntegrationTests(unittest.TestCase):
             self.assertNotIn('mcp__github__github_read', closed_chat.current_capability_snapshot())
 
 
-if __name__ == '__main__':
-    unittest.main()
-
 
 SEARCH_HIT = {
     'full_name': 'example/agent-kit', 'html_url': 'https://github.com/example/agent-kit', 'private': False,
@@ -333,7 +330,7 @@ class RepositoryDiscoveryTests(unittest.TestCase):
         self.tools.invoke('github_read', {'resource': 'search_repositories', 'query': 'agent'})
         self.assertNotIn('sort', self.get.call_args.args[1])
         for bad in ({'query': ''}, {'query': 'x', 'sort': 'random'}, {'query': 'x', 'page': 101},
-                    {'query': 'a OR b'}, {'query': 'x', 'repository': 'example/agent-kit'},
+                    {'query': 'a OR b'}, {'query': 'repo:owner/name'}, {'query': 'x', 'repository': 'example/agent-kit'},
                     {'query': 'x', 'url': 'https://evil'}):
             self.get.reset_mock()
             result, state, _ = self.tools.invoke('github_read', {'resource': 'search_repositories', **bad})
@@ -358,3 +355,7 @@ class RepositoryDiscoveryTests(unittest.TestCase):
             'resource': 'search_repositories', 'query': 'agent'}, should_stop=lambda: True)
         self.assertEqual(state, '被拒绝')
         self.get.assert_not_called()
+
+
+if __name__ == '__main__':
+    unittest.main()
