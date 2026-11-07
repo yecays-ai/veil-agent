@@ -15,13 +15,16 @@ PROVIDER = {'model': 'fake-model', 'base_url': 'https://example.invalid/v1', 'ma
             'input_cny_per_million': '2', 'output_cny_per_million': '8'}
 
 
-def assistant(tokens=(100, 10), text=None, tool=None):
+def assistant(tokens=(100, 10), text=None, tool=None, finish=None):
     parts = []
     if tool:
         parts.append({'type': 'tool', 'tool': tool[0], 'state': {'input': tool[1]}})
     if text:
         parts.append({'type': 'text', 'text': text})
-    return {'info': {'role': 'assistant', 'tokens': {'input': tokens[0], 'output': tokens[1], 'cache': {}}},
+    info = {'role': 'assistant', 'tokens': {'input': tokens[0], 'output': tokens[1], 'cache': {}}}
+    if finish:
+        info['finish'] = finish
+    return {'info': info,
             'parts': parts}
 
 
@@ -140,9 +143,53 @@ class RunTests(unittest.TestCase):
         self.assertEqual(result.state, '被拒绝')
         self.assertEqual(costs, [Decimal(0)])
         kill.assert_not_called()
+    def test_summary_uses_only_final_assistant_text_and_keeps_tool_diagnostics(self):
+        messages = [
+            {'info': {'role': 'assistant', 'finish': 'tool-calls'}, 'parts': [
+                {'type': 'text', 'text': "I'll inspect the project."},
+                {'type': 'tool', 'tool': 'bash', 'state': {'status': 'completed',
+                                                             'input': {'command': 'git status'}}}]},
+            assistant(text='Git is clean.', finish='stop'),
+        ]
+        self.assertEqual(ex.summarize(messages), (2, 1, 1, 'Git is clean.'))
+        self.assertEqual(ex.summarize([assistant(text="I'll inspect.", tool=('bash', {'command': 'git status'}))])[3], '')
+
+        incomplete = [{'info': {'role': 'assistant', 'finish': 'error'}, 'parts': [
+            {'type': 'text', 'text': "I'll inspect the project."},
+            {'type': 'tool', 'tool': 'bash', 'state': {'status': 'error',
+                                                         'error': {'name': 'CommandError'},
+                                                         'input': {'command': 'git push origin main'}}}]}]
+        _steps, calls, _repeat, text = ex.summarize(incomplete)
+        self.assertEqual((calls, text), (1, ''))
+        self.assertIn('did not finish normally (error)', ex.diagnose(incomplete))
+        self.assertIn('bash error git', ex.diagnose(incomplete))
+        self.assertIn('CommandError', ex.diagnose(incomplete))
+
+        result, _api, costs, _kill = run([(incomplete, [], False)] * 5)
+        self.assertEqual(result.state, '出错')
+        self.assertIn('without a report', result.text)
+        self.assertIn('bash error git', result.text)
+        self.assertEqual(len(costs), 1)
+
+        recovered = [assistant(text='Git status is available.', tool=('bash', {'command': 'git status'})),
+                     {'info': {'role': 'assistant', 'finish': 'stop'}, 'parts': [
+                         {'type': 'tool', 'tool': 'bash', 'state': {'status': 'error',
+                                                                      'error': {'type': 'ShellError'},
+                                                                      'input': {'command': 'git status'}}}]},
+                     assistant(text='Final report: git status could not run.', finish='stop')]
+        result, _api, _costs, _kill = run([(recovered, [], False)] * 5)
+        self.assertEqual(result.state, '成功')
+        self.assertIn('ShellError', result.text)
+        self.assertTrue(result.text.startswith('[workbench tool diagnostics:'))
+        malformed = [{'info': {'role': 'assistant', 'finish': 'error',
+                               'error': {'name': 'APIError', 'data': 'bad'}}, 'parts': []}]
+        self.assertIn('APIError', ex.diagnose(malformed))
+        many = [{'info': {'role': 'assistant', 'finish': 'error'}, 'parts': [
+            {'type': 'tool', 'tool': 'bash', 'state': {'status': 'error'}} for _ in range(8)]}]
+        self.assertIn('did not finish normally (error)', ex.diagnose(many))
 
     def test_success_returns_report_and_settles_cost_once(self):
-        done = [assistant(text='All done: fixed calc.py')]
+        done = [assistant(text='All done: fixed calc.py', tool=('bash', {'command': 'pytest'}), finish='stop')]
         result, api, costs, kill = run([(done, [], False)] * 5)
         self.assertEqual(result.state, '成功')
         self.assertIn('All done', result.text)
@@ -150,6 +197,15 @@ class RunTests(unittest.TestCase):
         self.assertGreater(costs[0], 0)
         self.assertEqual(api.posted[0]['model'], {'providerID': 'relay', 'modelID': 'fake-model'})
         kill.assert_called_once()
+
+    def test_text_without_a_tool_call_is_not_reported_as_completed_work(self):
+        done = [assistant(text="I'll start by inspecting the project directory and its git state.", finish='stop')]
+        result, _api, costs, _kill = run([(done, [], False)] * 5)
+        self.assertEqual(result.state, '出错')
+        self.assertIn('without executing any tools', result.text)
+        self.assertIn('no tools were executed', result.text)
+        self.assertIn('0 tool calls', result.text)
+        self.assertEqual(len(costs), 1)
 
     def test_permission_requests_are_answered_by_the_program(self):
         pending = [{'id': 'p1', 'permission': 'bash', 'patterns': ['python test.py']},

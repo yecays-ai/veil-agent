@@ -131,38 +131,53 @@ def estimate_cost(messages, price, steps):
 
 
 def summarize(messages):
-    steps, repeats, calls, text = 0, {}, 0, []
+    steps, repeats, calls, assistants = 0, {}, 0, []
     for m in messages:
-        if m.get('info', {}).get('role') == 'assistant':
+        info = m.get('info', {})
+        if info.get('role') == 'assistant' or info.get('type') == 'assistant':
             steps += 1
+            text = '\n'.join(p.get('text', '') for p in m.get('parts', []) if p.get('type') == 'text').strip()
+            assistants.append((info, text))
         for p in m.get('parts', []):
             if p.get('type') == 'tool':
                 calls += 1
-                key = (p.get('tool'), json.dumps(p.get('state', {}).get('input', {}), sort_keys=True))
+                key = (p.get('tool') or p.get('name'), json.dumps(p.get('state', {}).get('input', {}), sort_keys=True))
                 repeats[key] = repeats.get(key, 0) + 1
-            elif p.get('type') == 'text' and m.get('info', {}).get('role') == 'assistant':
-                text.append(p.get('text', ''))
-    return steps, calls, max(repeats.values(), default=0), '\n'.join(text).strip()
+    final = ''
+    if assistants and assistants[-1][0].get('finish') == 'stop':
+        final = assistants[-1][1]
+    return steps, calls, max(repeats.values(), default=0), final
 
 
 def diagnose(messages):
     """A short account of why a run ended without a report: model/API errors and the last tool calls."""
     lines = []
+    tool_lines = []
+    assistants = [m.get('info', {}) for m in messages
+                  if m.get('info', {}).get('role') == 'assistant' or m.get('info', {}).get('type') == 'assistant']
+    if assistants and assistants[-1].get('finish') not in (None, 'stop'):
+        lines.append('last assistant message did not finish normally (' + str(assistants[-1]['finish'])[:40] + ')')
     for m in messages:
         info = m.get('info', {})
         error = info.get('error')
-        if info.get('role') == 'assistant' and error:
+        if (info.get('role') == 'assistant' or info.get('type') == 'assistant') and error:
             data = error.get('data', {}) if isinstance(error, dict) else {}
-            lines.append('model error: ' + str(error.get('name', '') if isinstance(error, dict) else error)[:60] + ' ' +
-                         str(data.get('message', '') if isinstance(data, dict) else '')[:200])
+            name = (error.get('name') or error.get('type') or '') if isinstance(error, dict) else error
+            message = ((data.get('message') if isinstance(data, dict) else '') or error.get('message', '')) if isinstance(error, dict) else ''
+            lines.append('model error: ' + str(name)[:60] + ' ' + str(message)[:200])
         for part in m.get('parts', []):
             if part.get('type') == 'tool':
                 state = part.get('state', {})
                 tool_input = state.get('input')
                 words = str(tool_input.get('command') or '').split() if isinstance(tool_input, dict) else []
                 shown = words[0][:30] if words else ''  # program name only: arguments may hold secrets
-                lines.append(f"{part.get('tool')} {state.get('status', '')} {shown}".strip())
-    return '; '.join(lines[-6:])
+                tool = part.get('tool') or part.get('name') or 'tool'
+                error = state.get('error')
+                error_type = ((error.get('name') or error.get('type')) if isinstance(error, dict) else '')
+                tool_lines.append(f"{tool} {state.get('status', '')} {shown} {error_type}".strip())
+    if not any(p.get('type') == 'tool' for m in messages for p in m.get('parts', [])):
+        lines.append('no tools were executed')
+    return '; '.join(lines + tool_lines[-6:])
 
 
 def kill_tree(proc):
@@ -458,12 +473,22 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
         except Exception:
             pass
     steps, calls, _repeat, text = summarize(messages)
-    note = f'[workbench: {steps} steps, about ¥{cost.quantize(Decimal("0.0001"))}, folder {workdir}]' + cleanup_warning
+    note = f'[workbench: {steps} steps, {calls} tool calls, about ¥{cost.quantize(Decimal("0.0001"))}, folder {workdir}]' + cleanup_warning
     if stop:
-        return ExecutorResult(f'The workbench was stopped: {stop}. Partial report:\n{text[:RESULT_CHARS]}\n{note}',
+        partial = next(('\n'.join(p.get('text', '') for p in m.get('parts', []) if p.get('type') == 'text').strip()
+                        for m in reversed(messages) if m.get('info', {}).get('role') == 'assistant' or
+                        m.get('info', {}).get('type') == 'assistant'), '')
+        return ExecutorResult(f'The workbench was stopped: {stop}. {diagnose(messages)}\nPartial report:\n{partial[:RESULT_CHARS]}\n{note}',
                               '出错', cost, steps)
+    if not calls:
+        why = diagnose(messages)
+        return ExecutorResult(f'The workbench ended without executing any tools. Partial report:\n{text[:RESULT_CHARS]}\n'
+                              f'{why}\n{note}', '出错', cost, steps)
     if not text:
         why = diagnose(messages)
         return ExecutorResult('The workbench finished without a report.' + (f' ({why})' if why else '') + '\n' + note,
                               '出错', cost, steps)
+    if any(p.get('type') == 'tool' and p.get('state', {}).get('status') == 'error'
+           for m in messages for p in m.get('parts', [])):
+        text = '[workbench tool diagnostics: ' + diagnose(messages) + ']\n' + text
     return ExecutorResult(text[:RESULT_CHARS] + '\n' + note, '成功', cost, steps)
