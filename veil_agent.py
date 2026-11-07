@@ -721,6 +721,29 @@ def _executor_roots(value):
     return [r.strip() for r in value]
 
 
+WORKBENCH_LOCAL_KEYS = {'enabled': bool, 'project_roots': list, 'container_image': str}
+
+
+def workbench_local_path(root, character_id):
+    return Path(root) / 'data' / character_id / 'workbench.json'
+
+
+def workbench_local_settings(root, character_id):
+    """Ticket 239: the workbench switch lives in data/<character>/workbench.json (git-ignored, survives updates), so
+    turning it on never edits a tracked file. Only enabled, project_roots and container_image may be set here."""
+    path = workbench_local_path(root, character_id)
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding='utf-8-sig'))
+    except (OSError, ValueError) as exc:
+        raise UserError('工作台本地设置读不了，请删掉或修好 data 里的 workbench.json。') from exc
+    if not isinstance(data, dict) or any(k not in WORKBENCH_LOCAL_KEYS or type(v) is not WORKBENCH_LOCAL_KEYS[k]
+                                         for k, v in data.items()):
+        raise UserError('工作台本地设置字段无效，请删掉或修好 data 里的 workbench.json。')
+    return data
+
+
 def load_character(root, character_id):
     if not re.fullmatch(r'[a-z0-9][a-z0-9_-]*', character_id):
         raise UserError('角色编号只能用小写英文、数字、下划线和短横线。')
@@ -954,6 +977,9 @@ def load_character(root, character_id):
                    'xiaohongshu_readonly': xiaohongshu_readonly,
                    'github_repository': github_repository}
         executor = cfg.get('executor')
+        local = workbench_local_settings(root, character_id)  # ticket 239: lan's own switch, kept out of the repo
+        if local:
+            executor = {**(executor or {}), **local}
         if executor is not None:
             if type(executor.get('enabled', False)) is not bool:
                 raise ValueError('executor.enabled must be boolean')

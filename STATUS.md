@@ -1,9 +1,17 @@
-## 工单 239：通用电脑执行与权限架构调查
+## 工单 240：通用电脑执行与权限架构调查
 
 - 已完成全仓只读调用链、权限重复、开源方案和删除条件调查。结论：VEIL 保留身份/记忆/聊天/自主/预算/停止；OpenCode 只做容器内可替换任务循环，通过 VEIL 执行网关接受受限 Playwright 与 Windows UIA 适配器；不采用 UFO² 整套 Agent 核心。当前没有旧执行模块满足安全删除条件。
 - 工单 237/238 的 OpenCode 工作台已由 PR #294 合入 main；Docker 隔离、真实模型工作台和测试副本聊天有 Windows 证据。真实项目、自主醒来、Linux 宿主机和容器网络隔离仍未验；默认关闭。
-- 下一步：由工单 240 把工作台收敛为容器必需、模型无关的正式项目执行入口，建立共用 run/grant/budget/cancel/artifact 契约；不先重写桌面，不批量删旧工具。
-- 验收：Lan 阅读 `docs/reports/239-unified-execution-architecture.md` 的结论、权限矩阵、代码清单和迁移顺序，能直接决定先做 240；本工单没有实现通用执行能力，后续仍按真实 Windows 场景逐阶段验收。
+- 下一步：由工单 241 把工作台收敛为容器必需、模型无关的正式项目执行入口，建立共用 run/grant/budget/cancel/artifact 契约；不先重写桌面，不批量删旧工具。
+- 验收：Lan 阅读 `docs/reports/240-unified-execution-architecture.md` 的结论、权限矩阵、代码清单和迁移顺序，能直接决定先做 241；本工单没有实现通用执行能力，后续仍按真实 Windows 场景逐阶段验收。
+
+## 工单 239：工作台的本地开关
+
+- 见 `docs/tickets/239-workbench-local-switch.md`。双击 `workbench-switch.cmd` 开关工作台、选项目文件夹，写在 `data/peter/workbench.json`，不改仓库文件，更新不会丢。默认仍关。
+- 现状：后端开关做完，自动测试通过；设置页「工作台」开关随同加入，Windows 真机未验。下一个工单号 246。
+- 设置页「设置 → 工作台」有开/关和项目文件夹（选择框添加、移除），走 `/api/workbench`，与脚本共用 `workbench_switch.py`；改完重开 Peter 生效；第一次开要先双击脚本做运行环境。聊天记录和页面的滚动条已隐藏（鼠标滚轮照常）。
+- 下一步：lan 用真实项目走一遍验收。
+- 验收：双击开启（第一次会构建 Docker 镜像）、加一个项目文件夹、重开 Peter，说一个带项目名的问题。下一个工单号 246。
 
 ## 工单 237：桌面 UI 全状态整理与预览验收
 
@@ -19,8 +27,8 @@
 
 ## 工单 237：工作台（OpenCode 执行后端）隔离原型（已随 PR #294 合入，默认关闭）
 
-- Peter 新增工具 `workbench`（默认关，`character.toml` 的 `[executor] enabled = true` 才开）：把需要命令行、改文件、跑程序、下载的活交给临时启动的 OpenCode，在 `data/<角色>/workbench` 文件夹里干活；权限由 VEIL 程序决定（文件夹内直接做，危险命令和密钥拒绝，文件夹之外聊天里问 lan、自主醒来里拒绝），步数、时间、重复调用、费用上限由 VEIL 卡并计入共享账本，lan 按停止立即中止。找不到 OpenCode 时工具不出现，聊天、记忆、自主活动不受影响。代码已合入 main，仍是默认关闭的原型；Windows Docker 与真实聊天证据见 238，未完成项见工单 239。
-- 下一步：按工单 239 的迁移顺序生产化，不把“已合入”写成“通用执行已完成”。
+- Peter 新增工具 `workbench`（默认关，`character.toml` 的 `[executor] enabled = true` 才开）：把需要命令行、改文件、跑程序、下载的活交给临时启动的 OpenCode，在 `data/<角色>/workbench` 文件夹里干活；权限由 VEIL 程序决定（文件夹内直接做，危险命令和密钥拒绝，文件夹之外聊天里问 lan、自主醒来里拒绝），步数、时间、重复调用、费用上限由 VEIL 卡并计入共享账本，lan 按停止立即中止。找不到 OpenCode 时工具不出现，聊天、记忆、自主活动不受影响。代码已合入 main，仍是默认关闭的原型；Windows Docker 与真实聊天证据见 238，未完成项见工单 240。
+- 下一步：按工单 240 的迁移顺序生产化，不把“已合入”写成“通用执行已完成”。
 - 验收见 `docs/tickets/237-workbench-executor-prototype.md`。下一个工单号 238。
 
 ## 工单 236：Peter 能按关键词找 GitHub 仓库并比较
