@@ -238,6 +238,15 @@ body:not(.detached-window) .composer .chat-input-shell #voice-hold[aria-pressed=
 body:not(.detached-window) .composer>#request-reply,body.detached-window[data-current-page="chat"] .composer>#request-reply{position:static;inset:auto;display:grid;flex:0 0 40px;place-items:center;width:40px;height:40px;min-width:40px;margin:0;padding:0;border:0;border-radius:50%;background:transparent;color:var(--veil-soft);box-shadow:none}
 body:not(.detached-window) .composer>#request-reply:hover,body.detached-window[data-current-page="chat"] .composer>#request-reply:hover{background:var(--veil-accent-soft);color:var(--veil-accent)}
 @media(prefers-reduced-motion:reduce){body:not(.detached-window) .composer-tray,body:not(.detached-window) #composer-more{transition:none}}
+/* Narrow detached chat: keep one input row, tray underneath, no horizontal overflow. */
+body.detached-window[data-current-page="chat"] .composer{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+body.detached-window[data-current-page="chat"] .composer>#composer-more,
+body.detached-window[data-current-page="chat"] .composer>#request-reply,
+body.detached-window[data-current-page="chat"] .composer>#send{position:static;flex:0 0 36px;width:36px;height:36px;min-width:36px}
+body.detached-window[data-current-page="chat"] .composer>.chat-input-shell{flex:1 1 0;min-width:0;order:0}
+body.detached-window[data-current-page="chat"] #composer-tray{flex:1 0 100%;width:100%;min-width:0;overflow:hidden}
+body.detached-window[data-current-page="chat"] #composer-tray>button{min-width:0;overflow:hidden}
+body.detached-window[data-current-page="chat"] #composer-tray>button>[data-lucide]{width:32px;height:32px;max-width:100%}
 .virtual-card{width:min(320px,100%);padding:15px;border-radius:14px;background:rgb(var(--surface-rgb)/var(--view-alpha,var(--window-alpha)));box-shadow:0 4px 18px #29251f12}
 .virtual-card-head{display:flex;align-items:center;gap:10px;margin-bottom:12px;color:var(--veil-ink);font-weight:650}
 .virtual-card-icon{width:36px;height:36px;display:grid;place-items:center;border-radius:12px;background:var(--veil-accent-soft);color:var(--veil-accent)}
