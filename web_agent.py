@@ -321,7 +321,6 @@ class Hub(ScreenPopMixin):
                               '委派任务' if row.get('category') == 'delegate' else
                               '长期任务' if row['tool'].startswith('long_task_') else '聊天')
             item['category'] = ('glance' if str(row.get('autonomy_run_id') or '').startswith('glance:') else
-                                'delegate' if row.get('category') == 'delegate' else
                                 'memory' if row['tool'] in memory_names else
                                 'long_task' if row['tool'].startswith('long_task_') else 'tool')
             if row.get('autonomy_run_id'):

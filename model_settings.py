@@ -2,7 +2,7 @@
 
 Endpoints (name, address, key) and models (name, price, thinking) live in
 data/<character>/models.json; keys go only into the project .env. Roles pick models
-for chat, autonomous activity, glance, and background work. The providers written in
+for chat, delegated work, autonomous activity, glance, and background work. The providers written in
 character.toml stay available as built-in models and are the defaults.
 """
 import json

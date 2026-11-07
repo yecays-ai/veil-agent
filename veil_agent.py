@@ -1530,7 +1530,7 @@ class Budget:
                     periods[event['id']] = (event['period'], event.get('category', 'chat'))
                 elif event['type'] == 'settle' and 'prompt_tokens' in event:
                     period, category = periods.get(event['id'], ('', 'chat'))
-                    if category not in ('autonomy', 'glance', 'short_term_notes') and period[:10] == stamp[:10]:
+                    if category not in ('autonomy', 'glance', 'short_term_notes', 'delegate') and period[:10] == stamp[:10]:
                         # Legacy zeroes did not distinguish an explicit zero from an absent field.
                         reported = event.get('cache_reported')
                         if not event['prompt_tokens']:
@@ -1909,7 +1909,16 @@ class Chat:
         models = getattr(self.cfg, 'models', None)
         if (models is not None and self.tool_mode and not self.autonomy_mode and not self.glance_mode
                 and models.selected('delegate') is not None):
-            schemas.append(DELEGATE_TOOL)
+            try:
+                _, delegate_provider_name, delegate_provider = models.chosen('delegate')
+            except SettingsError:
+                pass
+            else:
+                schema = {'type': 'function', 'function': dict(DELEGATE_TOOL['function'])}
+                schema['function']['parameters'] = DELEGATE_TOOL['function']['parameters']
+                schema['function']['description'] += ' ' + self._delegate_cost_guidance(
+                    delegate_provider_name, delegate_provider, schemas)
+                schemas.append(schema)
         for schema in schemas:
             function = schema['function']
             if function['name'] in ('write_file', 'append_file', 'long_task_update', 'hold', 'trace', 'letter_write'):
@@ -1941,6 +1950,36 @@ class Chat:
         schemas, self.active_tool_aliases = alias_tool_schemas(
             schemas, self.tool_aliases, reserved_names)
         return schemas
+
+    def _delegate_cost_guidance(self, provider_name, provider, schemas):
+        from delegate_agent import READ_ONLY_TOOLS
+
+        def price(provider):
+            if provider.get('cny_per_call'):
+                return f"¥{provider['cny_per_call']}/次"
+            return ('每百万 token：输入 ¥{input}，缓存输入 ¥{cached}，输出 ¥{output}'.format(
+                input=provider['input_cny_per_million'],
+                cached=provider['cached_input_cny_per_million'],
+                output=provider['output_cny_per_million']))
+
+        delegate_model = provider.get('label') or provider['model']
+        if self.cfg.provider.get('kind') == 'claude_agent':
+            main_cost = '当前主模型使用 Claude Code 订阅，不能与 API token 单价直接比较'
+        else:
+            main_cost = price(self.cfg.provider)
+        max_output = min(self.cfg.max_output_tokens, 1200)
+        per_call = (provider['cny_per_call'] if provider.get('cny_per_call') else
+                    (provider['max_input_tokens'] * provider['input_cny_per_million']
+                     + max_output * provider['output_cny_per_million']) / MILLION)
+        available = sorted({schema['function']['name'] for schema in schemas
+                            if schema['function']['name'] in READ_ONLY_TOOLS})
+        allowed = ', '.join(available) if available else '本轮没有委派可用工具'
+        return (f'委派模型为 {delegate_model}（{provider_name}；{price(provider)}）；当前主模型 '
+                f'{self.cfg.provider["model"]} 的标价为 {main_cost}。委派最多 6 次模型请求、12 次只读工具调用；'
+                f'委派本轮实际可用的只读工具：{allowed}。'
+                f'每次费用预留上限约 ¥{per_call:.6f}，完整任务最多预留约 ¥{per_call * 6:.6f}，'
+                '实际按用量结算并计入共享预算，超限时请求会被拦截。根据任务所需能力和预计总成本决定是否委派；'
+                '无需因为单价较低就委派，主聊天模型与工具审批保持不变。')
 
     def expand_capability(self, arguments):
         args = json.loads(arguments or '{}')
@@ -3473,7 +3512,8 @@ class Chat:
                 if not isinstance(args, dict) or set(args) != {'task'} or not isinstance(args['task'], str):
                     result, state = 'Give delegate a self-contained task as text.', '被拒绝'
                 else:
-                    result, state = self._run_delegate(args['task'], request_id), '成功'
+                    outcome = self._run_delegate(args['task'], request_id)
+                    result, state = outcome.text, outcome.state
                 summary = 'delegate'
             else:
                 # Ticket 147: some models send empty or null arguments for tools without parameters.
@@ -3540,25 +3580,25 @@ class Chat:
         return _ToolExecution(result, state, summary, checkpoint_verified, activity_detail)
 
     def _run_delegate(self, task, request_id):
-        from delegate_agent import READ_ONLY_TOOLS, run as run_delegate
+        from delegate_agent import DelegateResult, READ_ONLY_TOOLS, run as run_delegate
         models = getattr(self.cfg, 'models', None)
         if models is None:
-            return '委派任务尚未配置模型。'
+            return DelegateResult('委派任务尚未配置模型。', '出错')
         try:
             _, provider_name, provider = models.chosen('delegate')
         except SettingsError as exc:
-            return str(exc)
+            return DelegateResult(str(exc), '出错')
         all_schemas = self.tool_schemas()
         offered = [schema for schema in all_schemas
                    if self._resolve_tool_name(schema['function']['name'], all_schemas) in READ_ONLY_TOOLS]
         if not offered:
-            return '当前没有可供委派任务使用的只读搜索、阅读或记忆工具。'
+            return DelegateResult('当前没有可供委派任务使用的只读搜索、阅读或记忆工具。', '被拒绝')
         step_cfg = replace(self.cfg, provider=provider, provider_name=provider_name,
                            max_output_tokens=min(self.cfg.max_output_tokens, 1200))
         try:
             clients, model = make_model(ROOT, step_cfg, provider=provider, timeout=45)
         except Exception as exc:
-            return '委派模型无法启动：' + str(exc)[:300]
+            return DelegateResult('委派模型无法启动：' + str(exc)[:300], '出错')
 
         def invoke(call, _args, parent_request_id, turn, count):
             execution = self._execute_tool_call(

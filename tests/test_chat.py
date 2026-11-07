@@ -796,6 +796,65 @@ output_cny_per_million = "8"
         self.assertEqual(self.budget.totals()[0], Decimal('0.000350'))
         self.assertIn('委派任务 ¥0.000350', self.budget.display(character='test'))
 
+        from agent_types import BudgetExceeded
+        capped = Budget(self.store, Decimal('0.0001'), Decimal('300'))
+        with self.assertRaises(BudgetExceeded):
+            capped.reserve(self.cfg, category='delegate')
+
+    def test_delegate_cache_usage_is_excluded_from_chat_cache_display(self):
+        reservation = self.budget.reserve(self.cfg, category='delegate')[0]
+        self.budget.mark_dispatched(reservation)
+        self.budget.settle(reservation, self.cfg, 100, 20, 80, category='delegate')
+        self.assertIn('还没有聊天模型的用量记录', self.budget.cache_display())
+
+    def test_api_tool_loop_can_call_selected_delegate_with_cost_guidance(self):
+        cfg = replace(self.cfg, tools={'enabled': True, 'max_steps': 2})
+        delegate = {'model': 'fixture-delegate', 'label': 'Fixture Delegate',
+            'max_input_tokens': 10000, 'cny_per_call': Decimal('0.06'),
+            'input_cny_per_million': Decimal(0), 'cached_input_cny_per_million': Decimal(0),
+            'output_cny_per_million': Decimal(0)}
+        call = SimpleNamespace(id='delegate-call', function=SimpleNamespace(
+            name='delegate', arguments='{"task":"Find a public travel article."}'))
+        first = SimpleNamespace(content=None, tool_calls=[call], model_dump=lambda exclude_none=True: {
+            'role': 'assistant', 'content': None, 'tool_calls': [{'id': 'delegate-call', 'type': 'function',
+                'function': {'name': 'delegate', 'arguments': call.function.arguments}}]})
+        final = SimpleNamespace(content='A fictional sourced summary.', tool_calls=[], model_dump=lambda exclude_none=True: {
+            'role': 'assistant', 'content': 'A fictional sourced summary.'})
+        model = Mock(side_effect=[(first, 100, 20, 0), (final, 130, 12, 0)])
+        chat = Chat(cfg, self.store, self.budget, model, output=lambda _: None)
+        delegated = Mock(return_value=SimpleNamespace(text='Fictional source result.', state='成功'))
+        chat._run_delegate = delegated
+        selected, chosen = cfg.models.selected, cfg.models.chosen
+
+        with (patch.object(cfg.models, 'selected', side_effect=lambda role: 'fixture-id'
+                           if role == 'delegate' else selected(role)),
+              patch.object(cfg.models, 'chosen', side_effect=lambda role: ('fixture-id', 'fixture', delegate)
+                           if role == 'delegate' else chosen(role))):
+            chat.send('Find a public travel article.')
+
+        self.assertEqual(cfg.provider['model'], 'fake-model')
+        offered = {item['function']['name']: item for item in model.call_args_list[0].kwargs['tools']}
+        self.assertIn('delegate', offered)
+        self.assertIn('Fixture Delegate', offered['delegate']['function']['description'])
+        self.assertIn('¥0.06/次', offered['delegate']['function']['description'])
+        delegated.assert_called_once()
+
+    def test_delegate_model_request_timeout_is_45_seconds(self):
+        from delegate_agent import DelegateResult
+        cfg = replace(self.cfg, tools={'enabled': True, 'max_steps': 2})
+        chat = Chat(cfg, self.store, self.budget, self.model)
+        provider = {'model': 'fixture-delegate', 'max_input_tokens': 10000,
+                    'cny_per_call': Decimal('0.06'), 'input_cny_per_million': Decimal(0),
+                    'cached_input_cny_per_million': Decimal(0), 'output_cny_per_million': Decimal(0)}
+        client = SimpleNamespace(close=Mock())
+        with (patch.object(cfg.models, 'chosen', return_value=('fixture-id', 'fixture', provider)),
+              patch('veil_agent.make_model', return_value=(client, Mock())) as make_model,
+              patch('delegate_agent.run', return_value=DelegateResult('Fixture result.', '成功'))):
+            result = chat._run_delegate('Find a public article.', 'parent-request')
+        self.assertEqual(result.text, 'Fixture result.')
+        self.assertEqual(make_model.call_args.kwargs['timeout'], 45)
+        client.close.assert_called_once()
+
     def test_daily_and_monthly_limits_block_before_request(self):
         for daily, monthly in [('0.001', '300'), ('10', '0.001')]:
             with self.subTest(daily=daily):

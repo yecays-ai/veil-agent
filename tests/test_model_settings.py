@@ -105,8 +105,21 @@ class ModelSettingsTests(unittest.TestCase):
         chat = Chat(chat_cfg, Store(self.root / 'data'), Budget(Store(self.root / 'data')), Mock())
         names = {schema['function']['name'] for schema in chat.tool_schemas()}
         self.assertNotIn('delegate', names)
+        main_model = chat_cfg.models.chosen('peter')[0]
         chat_cfg.models.use('delegate', model_id)
-        self.assertIn('delegate', {schema['function']['name'] for schema in chat.tool_schemas()})
+        schemas = chat.tool_schemas()
+        self.assertIn('delegate', {schema['function']['name'] for schema in schemas})
+        delegate_schema = next(s for s in schemas if s['function']['name'] == 'delegate')
+        self.assertIn('Sonnet', delegate_schema['function']['description'])
+        self.assertIn('¥0.06/次', delegate_schema['function']['description'])
+        self.assertIn('完整任务最多预留', delegate_schema['function']['description'])
+        self.assertEqual(chat_cfg.models.chosen('peter')[0], main_model)
+        claude_cfg = replace(chat_cfg, provider={'kind': 'claude_agent', 'model': 'sonnet'})
+        claude_chat = Chat(claude_cfg, Store(self.root / 'data'), Budget(Store(self.root / 'data')), Mock())
+        self.assertIn('delegate', {schema['function']['name'] for schema in claude_chat.tool_schemas()})
+        chat_cfg.models.use('delegate', '')
+        self.assertNotIn('delegate', {schema['function']['name'] for schema in chat.tool_schemas()})
+        self.assertNotIn('delegate', {schema['function']['name'] for schema in claude_chat.tool_schemas()})
 
     def test_corrupt_existing_config_never_falls_back_or_changes_file(self):
         path = self.root / 'data' / 'test' / 'models.json'
