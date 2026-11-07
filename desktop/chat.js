@@ -2051,10 +2051,10 @@ function renderStickers(){
   stickerPacks.replaceChildren();
   for(const p of stickerLib?.packs||[]){
     const b=document.createElement('button');b.type='button';b.className='sticker-tab';b.role='tab';b.setAttribute('aria-selected',String(p.id===stickerPackId));
-    b.textContent=p.name;b.title=`${p.name}，${p.stickers.length} 个表情`;b.onclick=()=>{stickerPackId=p.id;renderStickers()};stickerPacks.appendChild(b);
+    b.textContent=p.name;b.title=`${p.name}，${p.stickers.length} 个表情`;b.onclick=event=>{event.stopPropagation();stickerPackId=p.id;renderStickers()};stickerPacks.appendChild(b);
   }
   stickerGrid.replaceChildren();
-  if(!pack){const e=document.createElement('div');e.className='sticker-empty';const p=document.createElement('p');p.textContent='还没有表情包';const b=document.createElement('button');b.type='button';b.textContent='导入表情包';b.onclick=()=>{stickerManage=true;renderStickers()};e.append(p,b);stickerGrid.appendChild(e)}
+  if(!pack){const e=document.createElement('div');e.className='sticker-empty';const p=document.createElement('p');p.textContent='还没有表情包';const b=document.createElement('button');b.type='button';b.textContent='导入表情包';b.onclick=event=>{event.stopPropagation();stickerManage=true;renderStickers()};e.append(p,b);stickerGrid.appendChild(e)}
   else if(!pack.stickers.length){const e=document.createElement('p');e.className='sticker-empty';e.textContent='这个图集还没有表情，点右上角管理去添加。';stickerGrid.appendChild(e)}
   else for(const s of pack.stickers){
     const tile=document.createElement(stickerManage?'div':'button');tile.className=stickerManage?'sticker-tile':'sticker-cell';tile.title=s.name;
