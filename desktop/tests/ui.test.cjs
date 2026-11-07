@@ -95,6 +95,9 @@ test('desktop redesign keeps real pages in one shell with a collapsible draggabl
   assert.match(html, /id="sidebar-toggle"/);
   assert.match(html, /id="desktop-rail"/);
   assert.match(html, /id="rail-approval"/);
+  assert.match(html, /<h1>Peter<\/h1>/);
+  assert.match(html, /data-page="chat"[^>]*><span data-lucide="message-square"><\/span>聊天/);
+  assert.doesNotMatch(html, /和 Peter 聊聊/);
   assert.match(css, /grid-template-columns:232px minmax\(520px,1fr\) 304px/);
   assert.match(css, /--surface-2-rgb:251 248 243/);
   assert.match(css, /--veil-chat-canvas:#fbf8f3/);
