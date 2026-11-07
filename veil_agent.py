@@ -1365,7 +1365,7 @@ class Budget:
         event = {'type': 'reserve', 'id': request_id,
                           'period': self.clock(), 'amount': str(amount),
                           'character': cfg.id, 'model': p['model'],
-                          'provider_key': token_calibration_key(cfg.provider_name, p),
+                          'provider_key': token_calibration_key(getattr(cfg, 'provider_name', ''), p),
                           'category': category}
         if accounting:
             event['accounting'] = accounting
@@ -1533,7 +1533,7 @@ class Budget:
     def input_token_ratio(self, cfg):
         rows = self.store.read_incremental('costs.jsonl')
         reservations = {row.get('id'): row for row in rows if row.get('type') == 'reserve'}
-        provider_key = token_calibration_key(cfg.provider_name, cfg.provider)
+        provider_key = token_calibration_key(getattr(cfg, 'provider_name', ''), cfg.provider)
         highest_ratio = None
         for row in reversed(rows):
             if (row.get('type') != 'settle' or type(row.get('input_bytes')) is not int
