@@ -1972,8 +1972,10 @@ window.addEventListener('resize',()=>closeVeilSelect());window.addEventListener(
   button.onclick=()=>input.click();
   input.onchange=()=>{
     const file=input.files&&input.files[0];input.value='';if(!file)return;
+    if(file.size>8*1024*1024){notify('头像图片太大了，请选 8MB 以内的。');return}
     const image=new Image(),url=URL.createObjectURL(file);
     image.onload=()=>{
+      if(image.width*image.height>40e6){URL.revokeObjectURL(url);notify('头像图片像素太多，请换一张小一点的。');return}
       const size=256,side=Math.min(image.width,image.height),canvas=document.createElement('canvas');canvas.width=canvas.height=size;
       canvas.getContext('2d').drawImage(image,(image.width-side)/2,(image.height-side)/2,side,side,0,0,size,size);
       URL.revokeObjectURL(url);const data=canvas.toDataURL('image/jpeg',.9);

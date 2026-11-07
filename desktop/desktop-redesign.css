@@ -258,8 +258,6 @@ body.sidebar-collapsed .navigation{padding-top:22px}
 .activity-filters button{border:0;background:transparent;color:var(--veil-soft)}
 .activity-filters button.active{background:var(--veil-paper);color:var(--veil-clay);font-weight:600}
 .page[data-page-view="mcp"] .surface,.mcp-card{border:0!important;border-bottom:1px solid var(--veil-rule)!important;border-radius:0!important;background:transparent!important;padding:14px 0!important}
-.mcp-card .mcp-tools{display:none}
-.mcp-card:hover .mcp-tools{display:block}
 .page[data-page-view="more"] .surface{border:0;border-bottom:1px solid var(--veil-rule);border-radius:0;background:transparent!important;padding-inline:0}
 @media(max-width:860px){
   body:not(.detached-window){grid-template-columns:64px minmax(0,1fr)}
