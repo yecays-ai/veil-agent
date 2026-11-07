@@ -19,7 +19,7 @@
 
 ## PR #295 跟进
 
-- Cubic 的 8 条意见均已核对为有效并在本地修复；最新状态以 GitHub 上本 PR head 的检查为准。最初提交的 `Tests` 和 `Dependency security` 通过，`Windows desktop` 的 smoke 在生活记录标题字号断言（预期 15px、实际 13px）失败，需以修复后的新提交重跑结果为准。本地 UI 单测 9/9 通过、`chat.js` 语法检查通过；整套桌面 Node 测试 18/19，唯一失败是 `backend.test.cjs` 因 Agent 服务未就绪。复用 E 盘 Electron 本地启动 smoke 返回 `STATUS_BREAKPOINT`，不算通过。
+- Cubic 的 8 条意见均已核对为有效并修复。修复 head 的 `Tests` 工作流通过 Linux 项，Windows 项仍在运行；`Windows desktop` 暴露 smoke 原断言错误（Peter 筛选包含 Peter 自己的待办却期待 0 个日历标记），已将 smoke 改为核对 Peter 有 1 个标记、Lan 看不到 Peter 的标记，等待最新 head 重跑。本地 UI 单测 9/9 通过、`chat.js` 语法检查通过；整套桌面 Node 测试 18/19，唯一失败是 `backend.test.cjs` 因 Agent 服务未就绪。复用 E 盘 Electron 本地启动 smoke 返回 `STATUS_BREAKPOINT`，不算通过。
 - 影响范围：
 
 | 用户场景 | 代码证据 | 改后行为 | 验证 |

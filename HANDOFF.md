@@ -1,9 +1,9 @@
 ## 工单 237 交接（2026-11-07）
 
-- 分支 `ticket/237-desktop-ui-full-states`，PR #295 开放；用户已确认生活记录截图预览并要求跟进合并。PR 初始 head `a1577f0940d64011310967b58393575d190aa0a3` 的 `Tests`、`Dependency security` 通过，`Windows desktop` 因生活记录标题字体实际 13px、断言要求 15px 而失败。
+- 分支 `ticket/237-desktop-ui-full-states`，PR #295 开放；用户已确认生活记录截图预览并要求跟进合并。初始 head `a1577f0940d64011310967b58393575d190aa0a3` 的 `Tests`、`Dependency security` 通过，`Windows desktop` 因生活记录标题字体实际 13px、断言要求 15px 而失败；修复后 CI 还发现 smoke 对 Peter 筛选的日历 marker 错误期待 0（实际 Peter 自有待办应显示 1），已修正为 Peter=1、Lan=0，待推送后重跑。
 - 已核对 Cubic 8 条意见，修复：透明度变量、detached rail、展开导航内容 inset、窄窗导航/rail、每日待办标记计数、审批圆角裁切；补充透明度/布局/裁切断言，并把本机路径截图清单改为仓库内清单 `docs/tickets/237-preview-manifest.md`。UI 单测 9/9、JS 语法和差异检查通过；整套桌面测试 18/19，唯一失败为 Agent 服务未就绪的 backend 用例。本地复用 E 盘 Electron 启动返回 `STATUS_BREAKPOINT`，不算 smoke 通过。
 - 全页和原生窗口状态未由 Windows/Electron 实机逐项验收；按清单如实保留待验，不把浏览器预览或 CI 通过当成原生窗口验收。
-- 下一步：检查最终 diff；提交并推到 PR #295，追踪所有最新检查，逐条回复并解决审查线程；所有 required CI 通过且实质意见清空后 squash merge；合并后再按清单做 Windows 实机验收。
+- 下一步：推送 smoke 断言修正，追踪所有最新检查；审查线程已逐条回复并解决。所有 required CI 通过后 squash merge；合并后再按清单做 Windows 实机验收。
 
 ## 工单 234 交接（2026-11-07）
 

@@ -1,8 +1,8 @@
 ## 工单 237：桌面 UI 全状态整理与预览验收
 
 - PR #295 开放跟进。用户已确认生活记录截图预览并要求提交 PR；主窗七页、独立窗拆并和浮层的 Windows 逐项验收仍待完成，见 `docs/tickets/237-preview-manifest.md`。
-- Cubic 共 8 条有效审查意见，已在本地逐条修复并补回归断言。原始 head 的 `Tests`、`Dependency security` 通过；原始 `Windows desktop` 在字号断言失败。本地 UI 单测 9/9、脚本语法和 `git diff --check` 通过；全桌面测试有 1 项因 Agent 服务未就绪失败，本地 Electron smoke 启动返回 `STATUS_BREAKPOINT`。修复提交推送后等待新 CI。
-- 下一步：提交并推送修复；跟进最新 head 的 review 和 CI，通过后合并 PR #295；之后由 Lan 按状态清单在 Peter 的 Windows 实机验收。
+- Cubic 共 8 条有效审查意见，已修复并逐条回复解决。修复 head 的 `Tests` Linux 项通过，Windows 项仍在跑；`Windows desktop` smoke 发现原测试对 Peter 筛选结果的预期错误（自身待办误期待为 0 个标记），已修正为 Peter 可见、Lan 不可见，等待重跑。
+- 本地 UI 单测 9/9、脚本语法和 `git diff --check` 通过；全桌面测试有 1 项因 Agent 服务未就绪失败，本地复用 Electron smoke 进程返回 `STATUS_BREAKPOINT`。下一步推送该断言修正，确认最新全部 CI 后合并 PR #295；之后由 Lan 按状态清单实机验收。
 - 验收：先看 `docs/tickets/237-preview-manifest.md` 的已确认预览；Windows 实机须逐项打开主窗/独立页/菜单浮层并检查窗口尺寸、侧栏、滚动、越界和裁切，尚未核销的项目不得记为通过。
 
 ## 工单 235：界面去后台感
