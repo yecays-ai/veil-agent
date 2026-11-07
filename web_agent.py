@@ -1453,6 +1453,8 @@ class Hub(ScreenPopMixin):
     def snapshot(self, after):
         tool_activity = self.tool_activity()
         live_context = self.live_context(tool_activity)
+        current_capabilities = self.current_capabilities()
+        capability_record = self.capability_record()
         with self.cond:
             autonomy = self.autonomy.status() if self.autonomy else {}
             glance = self.glance.status() if self.glance else {}
@@ -1463,8 +1465,8 @@ class Hub(ScreenPopMixin):
                     'stopping': self.stopping and not self.stopped, 'stopped': self.stopped,
                     'name': self.name, 'pending': self.pending, 'ready': self.ready,
                     'activity_enabled': self.activity.enabled(),
-                    'current_capabilities': self.current_capabilities(),
-                    'capability_record': self.capability_record(),
+                    'current_capabilities': current_capabilities,
+                    'capability_record': capability_record,
                     'runtime_status': self.runtime_status(),
                     'tool_activity': tool_activity,
                     'live_context': live_context,
