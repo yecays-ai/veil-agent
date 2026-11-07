@@ -1063,7 +1063,7 @@ async function poll(){
     $('codex-watch-toggle').textContent=codexWatchEnabled?'暂停监视':'开启监视';
     $('codex-watch-toggle').disabled=stopping||stopped||exiting;
     $('exit-service').disabled=stopping||stopped||exiting;
-    document.title=s.name;$('title').textContent='Peter';$('header-model-name').textContent=s.name;
+    document.title=s.name;$('title').textContent=s.name;$('header-model-name').textContent=s.name;
     const capabilityText=s.capability_record||'No capability updates recorded yet.';
     if($('capability-record-text').textContent!==capabilityText)$('capability-record-text').textContent=capabilityText;
     const currentCapabilities=s.current_capabilities||'Current capabilities are not available.';
@@ -1504,14 +1504,16 @@ function syncDesktopRail(){
   syncText('rail-activity-status',$('activity-work-status').textContent);
   syncText('rail-activity-count',$('activity-count').textContent);
   syncText('rail-life-count',$('life-count').textContent);
-  const dotClass='rail-dot '+$('activity-work-dot').className.replace('status-dot','');if($('rail-activity-dot').className!==dotClass)$('rail-activity-dot').className=dotClass;
+  const dotClass='rail-dot '+$('activity-work-dot').className.replace('status-dot','').trim();if($('rail-activity-dot').className!==dotClass)$('rail-activity-dot').className=dotClass;
   const approval=[...document.querySelectorAll('.approval:not(.done)')].at(-1);
   $('rail-approval').hidden=!approval;
 }
 new MutationObserver(syncDesktopRail).observe(document.body,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['class']});
 $('rail-approval-open').onclick=()=>{setPage('chat');[...document.querySelectorAll('.approval:not(.done)')].at(-1)?.scrollIntoView({behavior:'smooth',block:'center'})};
 syncDesktopRail();
-const railNow=new Date();$('rail-date-label').textContent=`${railNow.getMonth()+1} 月 ${railNow.getDate()} 日`;$('rail-weekday').textContent='星期'+'日一二三四五六'[railNow.getDay()];
+let railDateTimer;
+function refreshRailDate(){const now=new Date();$('rail-date-label').textContent=`${now.getMonth()+1} 月 ${now.getDate()} 日`;$('rail-weekday').textContent='星期'+'日一二三四五六'[now.getDay()];clearTimeout(railDateTimer);railDateTimer=setTimeout(refreshRailDate,new Date(now.getFullYear(),now.getMonth(),now.getDate()+1).getTime()-now.getTime()+50)}
+refreshRailDate();
 const composerMore=$('composer-more'),composerNode=$('composer');
 composerMore.onclick=event=>{event.stopPropagation();const open=composerNode.classList.toggle('tools-open');composerMore.setAttribute('aria-expanded',String(open))};
 document.addEventListener('click',event=>{if(!composerNode.contains(event.target)){composerNode.classList.remove('tools-open');composerMore.setAttribute('aria-expanded','false')}});
@@ -1569,7 +1571,7 @@ window.veilDesktop.onShowView(view=>{setPage(view);if(view==='life')loadLife()})
 window.veilDesktop.onShowSettings(()=>setPage('more'));
 if(detachedView&&['chat','activity','context','memory','life','mcp','more'].includes(detachedView)){
   document.body.classList.add('detached-window');$('detached-header').hidden=false;
-  $('detached-title').textContent='Peter · '+({chat:'聊天',activity:'活动记录',context:'实时上下文',memory:'记忆',life:'生活',mcp:'MCP',more:'更多'}[detachedView]);setPage(detachedView);
+  $('detached-title').textContent='Peter · '+({chat:'聊天',activity:'活动记录',context:'实时上下文',memory:'记忆',life:'生活',mcp:'MCP',more:'设置'}[detachedView]);setPage(detachedView);
 }else{setPage('chat');box.focus()}
 setBusy(true);poll();
 

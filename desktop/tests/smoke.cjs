@@ -147,6 +147,25 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
     try { return await chat.webContents.executeJavaScript('document.body.textContent.includes("Fictional saved history")'); }
     catch { return false; }
   }, 'history missing');
+  await chat.webContents.executeJavaScript(`(()=>{
+    const button=document.querySelector('#sidebar-toggle');
+    const initial=document.body.classList.contains('sidebar-collapsed');
+    button.click();if(document.body.classList.contains('sidebar-collapsed')===initial)throw new Error('sidebar did not toggle');
+    button.click();if(document.body.classList.contains('sidebar-collapsed')!==initial)throw new Error('sidebar did not restore');
+    const status=document.querySelector('#activity-work-status'),count=document.querySelector('#activity-count'),dot=document.querySelector('#activity-work-dot');
+    window.__railOriginal=[status.textContent,count.textContent,dot.className];
+    status.textContent='Fictional rail update';count.textContent='7 条记录';dot.className='status-dot is-busy';
+    const tab=document.querySelector('[data-page="context"]');tab.setPointerCapture=()=>{};
+    tab.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerId:71,button:0,screenX:100,screenY:100,clientX:100,clientY:100}));
+    tab.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,pointerId:71,button:0,screenX:145,screenY:145,clientX:innerWidth+20,clientY:145}));
+  })()`);
+  await wait(() => chat.webContents.executeJavaScript(`document.querySelector('#rail-activity-status').textContent==='Fictional rail update'&&document.querySelector('#rail-activity-count').textContent==='7 条记录'&&document.querySelector('#rail-activity-dot').classList.contains('is-busy')&&document.body.dataset.detachedViews.includes('context')`), 'sidebar drag, rail sync, or context detach failed');
+  await wait(() => BrowserWindow.getAllWindows().some(w => w !== pet && w !== chat && w.webContents.getURL().includes('view=context')), 'context tab did not detach');
+  const detachedContext = BrowserWindow.getAllWindows().find(w => w !== pet && w !== chat && w.webContents.getURL().includes('view=context'));
+  await wait(() => detachedContext.webContents.executeJavaScript('!!document.querySelector("#merge-view")'), 'detached context view did not render');
+  await detachedContext.webContents.executeJavaScript('document.querySelector("#merge-view").click()');
+  await wait(() => detachedContext.isDestroyed() && chat.webContents.executeJavaScript('!document.body.dataset.detachedViews.includes("context")'), 'detached context view did not merge');
+  await chat.webContents.executeJavaScript(`(()=>{const [status,count,dot]=window.__railOriginal;document.querySelector('#activity-work-status').textContent=status;document.querySelector('#activity-count').textContent=count;document.querySelector('#activity-work-dot').className=dot})()`);
   assert.ok(chat.webContents.getURL().startsWith('file:'), 'desktop chat must load its own local UI');
   const chatPrefs = chat.webContents.getLastWebPreferences();
   assert.equal(chatPrefs.contextIsolation, true); assert.equal(chatPrefs.sandbox, true); assert.equal(chatPrefs.nodeIntegration, false);

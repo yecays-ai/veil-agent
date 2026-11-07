@@ -169,10 +169,14 @@ async function toggleChat() {
     if (!root) root = await selectRoot(); if (!root) return;
     agentEndpoint = await connect(root); if (quitting) return;
     const restored = settings.chatBounds && ['x', 'y', 'width', 'height'].every(key => Number.isFinite(settings.chatBounds[key]));
-    const chatBounds = restored ? { ...settings.chatBounds,
-      width: Math.max(1180, Math.round(settings.chatBounds.width)), height: Math.max(760, Math.round(settings.chatBounds.height)) }
-      : { x: 0, y: 0, width: 1440, height: 900 };
-    chat = new BrowserWindow({ ...chatBounds, minWidth: 1180, minHeight: 760,
+    const anchor = restored ? settings.chatBounds : pet && !pet.isDestroyed() ? pet.getBounds() : { x: 0, y: 0 };
+    const area = workAreaAt(anchor.x ?? 0, anchor.y ?? 0);
+    const minimum = { width: Math.min(1180, area.width), height: Math.min(760, area.height) };
+    const requested = restored ? settings.chatBounds : { x: area.x, y: area.y, width: 1440, height: 900 };
+    const chatWidth = Math.min(area.width, Math.max(minimum.width, Math.round(requested.width)));
+    const chatHeight = Math.min(area.height, Math.max(minimum.height, Math.round(requested.height)));
+    const chatBounds = { ...clampPosition(requested.x ?? area.x, requested.y ?? area.y, chatWidth, chatHeight, area), width: chatWidth, height: chatHeight };
+    chat = new BrowserWindow({ ...chatBounds, minWidth: minimum.width, minHeight: minimum.height,
       frame: false, transparent: true, backgroundColor: '#00000000', resizable: true,
       hasShadow: true, alwaysOnTop: true, skipTaskbar: true,
       title: 'VEIL · Peter', show: false,
@@ -182,13 +186,7 @@ async function toggleChat() {
     current.on('close', event => { if (!quitting) { event.preventDefault(); current.hide(); } });
     current.on('closed', () => { if (chat === current) chat = null; });
     await current.loadURL(chatURL);
-    if (restored) {
-      const area = workAreaAt(chatBounds.x, chatBounds.y);
-      chatBounds.width = Math.min(chatBounds.width, area.width);
-      chatBounds.height = Math.min(chatBounds.height, area.height);
-      const position = clampPosition(chatBounds.x, chatBounds.y, chatBounds.width, chatBounds.height, area);
-      current.setBounds({ ...position, width: chatBounds.width, height: chatBounds.height });
-    } else positionChat();
+    if (!restored) positionChat();
     settings.chatBounds = current.getBounds(); saveSoon();
     current.on('move', () => { settings.chatBounds = current.getBounds(); saveSoon(); });
     current.on('resize', () => { settings.chatBounds = current.getBounds(); saveSoon(); });
