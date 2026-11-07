@@ -163,7 +163,7 @@ body:not(.detached-window) #log{padding:28px 30px 22px;background:rgb(var(--veil
 /* Life uses the same left navigation and a calm two-pane record view. */
 .page[data-page-view="life"]{padding:0!important;background:rgb(var(--veil-canvas-rgb)/var(--view-alpha,var(--window-alpha)))!important}
 .life-shell{grid-template-columns:minmax(0,1fr) 310px;grid-template-rows:auto minmax(0,1fr);min-height:0;background:transparent;font-family:inherit}
-.life-nav{grid-column:1/-1;display:flex;flex-direction:row;align-items:center;gap:14px;margin:0;padding:10px 24px;border:0;border-bottom:1px solid var(--veil-rule);border-radius:0;background:transparent!important;box-shadow:none}
+.life-nav{grid-column:1/-1;display:flex;flex-flow:row wrap;align-items:center;gap:14px;margin:0;padding:10px 24px;border:0;border-bottom:1px solid var(--veil-rule);border-radius:0;background:transparent!important;box-shadow:none}
 .life-brand{display:none}.life-filter{flex:none}.life-section{display:flex;align-items:center;gap:2px}.life-section>small{display:none}.life-section button{white-space:nowrap;padding:8px}.life-date{display:flex;align-items:center;gap:8px;margin:0 0 0 auto;padding:0;border:0}.life-date input{max-width:150px}
 .life-main{padding:34px 32px}
 .life-header{align-items:center;padding-bottom:22px}.life-header .eyebrow,.life-header p:not(.eyebrow){display:none}.life-header h2{font:500 28px Georgia,"Songti SC",serif}
