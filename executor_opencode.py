@@ -171,7 +171,7 @@ def kill_tree(proc):
     if _WINDOWS:
         if proc.poll() is None:
             subprocess.run(['taskkill', '/F', '/T', '/PID', str(proc.pid)], capture_output=True,
-                           **({'creationflags': subprocess.CREATE_NO_WINDOW} if _WINDOWS else {}))
+                           **({'creationflags': getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)} if _WINDOWS else {}))
     else:
         try:
             os.killpg(proc.pid, signal.SIGKILL)

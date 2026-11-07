@@ -195,7 +195,7 @@ class ToolPolicyTests(unittest.TestCase):
         manager = self.journal_manager()
         target = self.workspace / 'Growth-Journal.md'
         target.write_text('keep', encoding='utf-8')
-        manager.cfg.tools['persistent_append_file'] = 'growth-journal.md'
+        manager.cfg.tools['persistent_append_file'] = 'Growth-Journal.md'
         result, state, _ = manager.invoke('write_file', {'path': 'growth-journal.md', 'content': 'replace'})
         self.assertEqual(state, '被拒绝', result)
         self.assertEqual(target.read_text(encoding='utf-8'), 'keep')
