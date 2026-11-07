@@ -1978,7 +1978,7 @@ window.addEventListener('resize',()=>closeVeilSelect());window.addEventListener(
       if(image.width*image.height>40e6){URL.revokeObjectURL(url);notify('头像图片像素太多，请换一张小一点的。');return}
       const size=256,side=Math.min(image.width,image.height),canvas=document.createElement('canvas');canvas.width=canvas.height=size;
       canvas.getContext('2d').drawImage(image,(image.width-side)/2,(image.height-side)/2,side,side,0,0,size,size);
-      URL.revokeObjectURL(url);const data=canvas.toDataURL('image/jpeg',.9);
+      URL.revokeObjectURL(url);const data=canvas.toDataURL('image/png');
       try{localStorage.setItem(KEY,data)}catch{}apply(data);
     };
     image.onerror=()=>URL.revokeObjectURL(url);image.src=url;
