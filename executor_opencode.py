@@ -37,6 +37,11 @@ SAFE_COMMANDS = ('git status*', 'git branch*', 'ls', 'ls *', 'dir', 'dir *',
 SECRET_GLOBS = ('*.env', '*.env.*', 'secrets/*', '*/secrets/*', '*\\secrets\\*', '.ssh/*', '*/.ssh/*', '*\\.ssh\\*',
                 '*id_rsa*', '*id_ed25519*', '*Login Data*', 'Cookies', '*/Cookies', '*\\Cookies')
 
+CONTAINER_NOTE = (
+    'Environment: you run in a Linux container with bash. The project is the current directory (/work). '
+    'Any Windows path or Windows command (cmd, findstr, dir) in the request below refers to the owner\'s PC '
+    'and does not exist here: use the current directory and Linux commands, and do not search for it elsewhere.\n\n')
+
 TOOL_SCHEMA = {'type': 'function', 'function': {
     'name': TOOL_NAME,
     'description': (
@@ -44,7 +49,8 @@ TOOL_SCHEMA = {'type': 'function', 'function': {
         'things to your workbench. The program finds the project the job is about (or uses the workbench '
         'folder for new work), keeps a way back before changing an existing project, and returns a report. '
         'Publishing, downloading, installing and bulk deletes are asked of Lan by the program. Give a '
-        'complete, self-contained task; you decide what to do with the result.'),
+        'complete, self-contained task in words (what is wrong, what to do, what to report); the workbench runs in '
+        'its own Linux folder, so do not give Windows paths or commands. You decide what to do with the result.'),
     'parameters': {'type': 'object', 'properties': {
         'task': {'type': 'string', 'minLength': 1, 'maxLength': 4000,
                  'description': 'What to do and what to report back.'},
@@ -348,8 +354,9 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
                     return ExecutorResult('The workbench could not start (OpenCode did not answer).', '出错')
                 sleep(1)
         session = api.call('POST', '/session', {'title': 'workbench'})['id']
+        text = (CONTAINER_NOTE + task) if container else task
         api.call('POST', f'/session/{session}/prompt_async', {
-            'parts': [{'type': 'text', 'text': task}], 'model': {'providerID': 'relay', 'modelID': provider['model']}})
+            'parts': [{'type': 'text', 'text': text}], 'model': {'providerID': 'relay', 'modelID': provider['model']}})
         started, idle, answered = clock(), 0, []
         while True:
             sleep(1)
