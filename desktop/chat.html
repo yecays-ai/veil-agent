@@ -154,31 +154,45 @@
     <div id="selection-bar" class="selection-bar" hidden><span id="selection-count">已选 0 条</span><div><button id="selection-all" type="button">全选</button><button id="selection-delete" type="button" class="danger">删除</button><button id="selection-cancel" type="button">取消</button></div></div>
     <div id="quote-bar" class="chat-quote-bar" hidden><div class="chat-quote-preview"><strong id="quote-author"></strong><span id="quote-text"></span></div><button id="quote-cancel" type="button" aria-label="取消引用">×</button></div>
     <div id="image-preview" class="image-preview" hidden></div>
-    <section id="sticker-panel" class="sticker-panel" hidden aria-label="表情包">
-      <div class="sticker-head"><div id="sticker-packs" class="sticker-packs"></div><button id="sticker-manage" type="button">管理</button><button id="sticker-close" type="button" aria-label="关闭">×</button></div>
-      <div id="sticker-grid" class="sticker-grid"></div>
-      <div id="sticker-tools" class="sticker-tools" hidden>
-        <div class="sticker-row"><input id="sticker-new-pack" maxlength="30" placeholder="新图集名字，比如 丑猫"><button id="sticker-add-pack" type="button">新建图集</button></div>
-        <div class="sticker-row"><input id="sticker-pack-name" maxlength="30" placeholder="当前图集改名"><button id="sticker-rename-pack" type="button">改名</button><button id="sticker-delete-pack" type="button" class="danger">删除图集</button></div>
-        <textarea id="sticker-links" rows="4" placeholder="粘贴表情包链接，每行「名字：链接」；没写名字就用文件名。名字最多 10 个字。"></textarea>
-        <div class="sticker-row"><button id="sticker-add-links" type="button">添加到当前图集</button><input id="sticker-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden><button id="sticker-upload" type="button">上传本地图片</button><span id="sticker-status" role="status"></span></div>
-      </div>
-    </section>
     <div class="composer" id="composer">
       <button id="composer-more" type="button" aria-label="添加内容" aria-expanded="false" title="添加内容"><span data-lucide="plus"></span></button>
-      <div class="voice-tools">
-        <button id="speech-toggle" type="button" aria-label="开始语音识别" aria-pressed="false" title="语音转文字"><span data-lucide="captions"></span></button>
-        <input id="image-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
-        <button id="image-button" type="button" aria-label="添加图片" title="添加图片"><span data-lucide="image-plus"></span></button>
-        <button id="sticker-button" type="button" aria-label="表情包" title="表情包" aria-expanded="false"><span data-lucide="smile"></span></button>
-      </div>
-      <span id="speech-status" role="status" aria-live="polite">点击麦克风开始录音；再次点击后用 SenseVoice 转成文字</span>
+      <input id="image-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
       <div class="chat-input-shell"><textarea id="box" rows="1" placeholder="和 Peter 说点什么…"></textarea><button id="voice-hold" type="button" aria-label="录制语音消息" aria-pressed="false" title="录制语音消息"><span data-lucide="mic"></span></button></div>
-      <span id="voice-record-status" class="voice-record-status" role="status" aria-live="polite" hidden><span id="voice-record-label"></span><button id="voice-record-cancel" type="button" aria-label="删除这条录音" title="删除这条录音" hidden>删除</button></span>
       <button id="request-reply" type="button" aria-label="请求回复" title="请求回复：让 Peter 现在回你"><span data-lucide="sparkles"></span></button>
       <button id="send" aria-label="发送"><span data-lucide="arrow-up"></span></button>
+      <span id="speech-status" role="status" aria-live="polite">点击麦克风开始录音；再次点击后用 SenseVoice 转成文字</span>
+      <span id="voice-record-status" class="voice-record-status" role="status" aria-live="polite" hidden><span id="voice-record-label"></span><button id="voice-record-cancel" type="button" aria-label="删除这条录音" title="删除这条录音" hidden>删除</button></span>
+      <section id="composer-tray" class="composer-tray" aria-label="添加内容" hidden>
+        <button id="sticker-button" type="button"><span data-lucide="smile"></span><span>表情包</span></button>
+        <button id="transfer-button" type="button"><span data-lucide="wallet"></span><span>虚拟转账</span></button>
+        <button id="gift-button" type="button"><span data-lucide="gift"></span><span>礼物</span></button>
+        <button id="image-button" type="button"><span data-lucide="image-plus"></span><span>图片</span></button>
+        <button id="speech-toggle" type="button" aria-label="开始语音识别" aria-pressed="false"><span data-lucide="captions"></span><span>语音转文字</span></button>
+      </section>
+      <section id="sticker-panel" class="composer-tray sticker-tray" hidden aria-label="表情包">
+        <div class="sticker-tabs"><div id="sticker-packs" class="sticker-tab-list" role="tablist" aria-label="图集"></div><button id="sticker-manage" class="sticker-manage" type="button" aria-label="管理表情包" title="管理表情包"><span data-lucide="settings-2"></span></button></div>
+        <p id="sticker-status" class="sticker-note" role="status" hidden></p>
+        <div id="sticker-grid" class="sticker-grid"></div>
+        <div id="sticker-tools" class="sticker-tools" hidden>
+          <div class="sticker-row"><input id="sticker-new-pack" maxlength="30" placeholder="新图集名字，比如 丑猫"><button id="sticker-add-pack" type="button">新建图集</button></div>
+          <div class="sticker-row"><input id="sticker-pack-name" maxlength="30" placeholder="当前图集改名"><button id="sticker-rename-pack" type="button">改名</button><button id="sticker-delete-pack" type="button" class="danger">删除图集</button></div>
+          <textarea id="sticker-links" rows="4" placeholder="粘贴表情包链接，每行「名字：链接」；没写名字就用文件名。名字最多 10 个字。"></textarea>
+          <div class="sticker-row"><button id="sticker-add-links" type="button">添加到当前图集</button><input id="sticker-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden><button id="sticker-upload" type="button">上传本地图片</button></div>
+        </div>
+      </section>
     </div>
   </footer>
+  <dialog id="virtual-card-dialog" class="virtual-card-dialog">
+    <form id="virtual-card-form">
+      <header><strong id="virtual-card-title"></strong><button type="button" id="virtual-card-close" aria-label="关闭">×</button></header>
+      <label id="virtual-card-amount-label">金额（仅虚拟）<input id="virtual-card-amount" type="number" min="0.01" max="1000000000000" step="0.01" inputmode="decimal"></label>
+      <label id="virtual-card-note-label">留言<input id="virtual-card-note" maxlength="240" placeholder="写一句话"></label>
+      <label id="virtual-card-icon-label" hidden>图标（表情或记号）<input id="virtual-card-icon" maxlength="24" value="🎁" placeholder="🎁"></label>
+      <label id="virtual-card-gift-label" hidden>礼物内容<textarea id="virtual-card-content" minlength="1" maxlength="500" rows="3" placeholder="写下礼物内容"></textarea></label>
+      <p>这是聊天里的虚拟互动，不涉及真实资金或实物。</p>
+      <footer><button type="submit" id="virtual-card-submit"></button></footer>
+    </form>
+  </dialog>
   <aside id="desktop-rail" class="desktop-rail" aria-label="今天与 Peter">
     <header class="rail-date"><strong id="rail-date-label"></strong><span id="rail-weekday"></span></header>
     <section class="rail-section rail-today"><div class="rail-heading"><h2>今天</h2><button type="button" data-rail-page="life">全部记录</button></div><button class="rail-row" type="button" data-rail-page="life"><span class="rail-dot warm"></span><span><b>生活记录</b><small id="rail-life-count">打开今天的记录</small></span><span data-lucide="chevron-right"></span></button></section>

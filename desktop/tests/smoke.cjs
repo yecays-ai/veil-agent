@@ -178,7 +178,7 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   await wait(()=>detachedChat.webContents.executeJavaScript('document.body.classList.contains("detached-window") && document.querySelector("#voice-hold").getBoundingClientRect().width>0'),'narrow detached chat did not finish rendering');
   assert.equal(await detachedChat.webContents.executeJavaScript('(()=>{const composer=document.querySelector(".composer").getBoundingClientRect(),shell=document.querySelector(".chat-input-shell").getBoundingClientRect(),mic=document.querySelector("#voice-hold").getBoundingClientRect(),send=document.querySelector("#send").getBoundingClientRect();return shell.width>100&&mic.right<=shell.right&&send.right<=composer.right&&getComputedStyle(document.querySelector("#voice-hold")).position==="absolute"})()'),true,'narrow detached composer must keep the voice control inside its input');
   await detachedChat.webContents.executeJavaScript('document.querySelector("#composer-more").click()');
-  assert.equal(await detachedChat.webContents.executeJavaScript('(()=>{const tools=document.querySelector(".voice-tools").getBoundingClientRect(),reply=document.querySelector("#request-reply").getBoundingClientRect();return getComputedStyle(document.querySelector(".voice-tools")).zIndex==="12"&&getComputedStyle(document.querySelector(".voice-record-status")).zIndex==="9"&&tools.right<=reply.left})()'),true,'voice and reply menus must remain accessible above recording status');
+  assert.equal(await detachedChat.webContents.executeJavaScript('(()=>{const trayEl=document.querySelector("#composer-tray"),tray=trayEl.getBoundingClientRect(),shell=document.querySelector(".chat-input-shell").getBoundingClientRect(),mic=document.querySelector("#voice-hold").getBoundingClientRect(),reply=document.querySelector("#request-reply").getBoundingClientRect();const ok=tray.top>=shell.bottom&&mic.right<=shell.right&&reply.left>=shell.right&&trayEl.scrollWidth<=trayEl.clientWidth;if(ok)return true;return JSON.stringify({trayTop:Math.round(tray.top),shellBottom:Math.round(shell.bottom),micRight:Math.round(mic.right),shellRight:Math.round(shell.right),replyLeft:Math.round(reply.left),scrollWidth:trayEl.scrollWidth,clientWidth:trayEl.clientWidth,hidden:trayEl.hidden,replyPos:getComputedStyle(reply).position});})()'),true,'narrow detached composer must keep the tray below the input and reply outside it');
   await detachedChat.webContents.executeJavaScript('document.querySelector("#composer-more").click();document.querySelector("#merge-view").click()');
   await wait(()=>detachedChat.isDestroyed()&&chat.webContents.executeJavaScript('!document.body.dataset.detachedViews.includes("chat")'),'detached chat did not merge cleanly');
   await chat.webContents.executeJavaScript('document.querySelector("[data-page=life]").click()');
@@ -206,7 +206,18 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
     tab.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerId:71,button:0,screenX:100,screenY:100,clientX:100,clientY:100}));
     tab.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,pointerId:71,button:0,screenX:145,screenY:145,clientX:innerWidth+20,clientY:145}));
   })()`);
-  await wait(() => chat.webContents.executeJavaScript(`document.querySelector('#rail-activity-status').textContent==='Fictional rail update'&&document.querySelector('#rail-activity-count').textContent==='7 条记录'&&document.querySelector('#rail-activity-dot').classList.contains('is-busy')&&document.body.dataset.detachedViews.includes('context')`), 'sidebar drag, rail sync, or context detach failed');
+  await wait(async () => {
+    const detail = await chat.webContents.executeJavaScript(`(()=>{
+      const status=document.querySelector('#activity-work-status'),count=document.querySelector('#activity-count'),dot=document.querySelector('#activity-work-dot');
+      status.textContent='Fictional rail update';count.textContent='7 条记录';dot.className='status-dot is-busy';
+      const rail=document.querySelector('#rail-activity-status').textContent, railCount=document.querySelector('#rail-activity-count').textContent, busy=document.querySelector('#rail-activity-dot').classList.contains('is-busy'), detached=document.body.dataset.detachedViews||'';
+      if(rail==='Fictional rail update'&&railCount==='7 条记录'&&busy&&detached.includes('context'))return 'ok';
+      return JSON.stringify({rail,railCount,busy,detached});
+    })()`);
+    if (detail === 'ok') return true;
+    wait.reason = detail;
+    return false;
+  }, () => `sidebar drag, rail sync, or context detach failed: ${wait.reason || 'no detail'}`);
   const contextWindow = () => BrowserWindow.getAllWindows().find(w => w !== pet && w !== chat && w.webContents.getURL().includes('view=context'));
   await wait(() => { const win = contextWindow(); return win && !win.webContents.isLoading(); }, 'context tab did not finish loading after detach');
   const detachedContext = contextWindow();

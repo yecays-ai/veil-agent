@@ -1362,6 +1362,17 @@ class FilesystemTools:
             return False
 
     @capability_transaction
+    def announce_virtual_cards(self):
+        """One-time notice that Lan and Peter can exchange virtual transfers and gifts."""
+        if not self.enabled or not getattr(self, 'cap_path', None):
+            return None
+        try:
+            from virtual_cards import ANNOUNCE_TEXT
+            return self._announce_once('virtual_cards_announced', ANNOUNCE_TEXT)
+        except Exception:
+            return False
+
+    @capability_transaction
     def announce_file_attachments(self):
         if not self.enabled or not self.client or not self.cap_path:
             return None
