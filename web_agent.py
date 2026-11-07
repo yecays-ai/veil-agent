@@ -300,7 +300,10 @@ class Hub(ScreenPopMixin):
             if removed:
                 for media_id in removed:
                     self.media_index.pop(media_id, None)
-                self._rewrite_media_index()
+                try:
+                    self._rewrite_media_index()
+                except OSError:
+                    logger.warning('Unsent voice index cleanup could not be persisted; it will be retried')
 
     def tool_activity(self, limit=240):
         """Project the append-only tool ledger into one current row per real call."""
