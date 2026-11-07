@@ -1289,10 +1289,13 @@ class FilesystemTools:
     def _version_store(self, target):
         """Where the previous version of a replaced or deleted file is kept (the lab store is unchanged)."""
         base = Path(self.store.root) / self.cfg.id / 'own-work-versions'
+        target = Path(target).resolve()
         lab = getattr(self, 'lab', None)
-        if lab and target.is_relative_to(lab):
-            return base / 'lab', target.relative_to(lab)
-        return base / 'workspace', target.relative_to(self.workspace)
+        if lab:
+            lab = Path(lab).resolve()
+            if target.is_relative_to(lab):
+                return base / 'lab', target.relative_to(lab)
+        return base / 'workspace', target.relative_to(Path(self.workspace).resolve())
 
     def read_lab_attachment(self, raw):
         """Read one verified, unlinked file from Lab for a durable send snapshot."""
@@ -1671,7 +1674,8 @@ class FilesystemTools:
         identity = _file_identity(target.stat())
         if name == 'grant_append':
             allowed = self.cfg.tools.get('persistent_append_file')
-            if not allowed or _path_key(target) != _path_key(checked_path(self.workspace, allowed)):
+            if (not allowed or _path_key(target).casefold() !=
+                    _path_key(checked_path(self.workspace, allowed)).casefold()):
                 return 'Persistent append authorization is limited to the configured growth journal. Use one-time approval for other files.', '被拒绝', summary
             answer = approval(f'允许 Peter 今后持续追加到 {summary} 吗？本次输入 y 后重启仍有效。y/N ')
             if answer == NOT_ASKED:
