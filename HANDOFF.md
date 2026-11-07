@@ -4,11 +4,11 @@
 - 分支 `ticket/249-opencode-approval-classification`，独立 worktree `E:\Peter-Agent\VEIL\veil-agent-codex-249`。实现提交 `be24ecccf9a19ab21b5b340d06213845f2b8a5d8` 已推送；正式运行目录未改动，原 `veil-agent-codex` 未提交改动原样保留。
 - 已确认旧实现会对 `grep -R "git push" .` 弹审批。新定向测试 45 项通过、2 项因 OpenCode 未安装而跳过；语法和 diff 检查通过。README 全套 1218 项中 2 项备份断言失败、1 项缺少 `docx` 模块报错、13 项跳过；失败项不在本工单改动路径。
 - 工单 248 / PR #300 已合并，合并提交 `b9695e52b34490ddbf51763ad9970f4b24874853`，Windows/Linux Python 3.11/3.12、审计和 scanner smoke 均通过；Windows Peter 实机体验验收未确认。
-- PR 尚未创建：GitHub 页面未登录、环境没有 `gh`，现有 GitHub 接口只有读取权限。Cubic 审查、PR CI 和合并均未发生。
+- PR #303 已存在并指向上述分支；标题和模板正文已补全，含影响范围及本地检查证据。必需 CI 的部分检查仍运行，Cubic 检查仍运行，尚未合并。
 
 ## 下一个窗口第一步
 
-取得 GitHub 写入会话后，从已推送分支 `ticket/249-opencode-approval-classification` 创建 PR，使用 `.github/pull_request_template.md` 并请求 Cubic 审查；检查最新必需 CI，处理实质性问题后再按分支保护规则合并。
+查看 PR #303 最新必需 CI 和 Cubic 审查；处理功能、安全、数据完整性或重大用户影响问题后，按实际分支保护规则合并。合并前确认 PR head 与分支最后提交一致。
 
 ## 背景和边界
 
