@@ -228,6 +228,7 @@ class FilesystemTools:
     def __init__(self, root, cfg, store, *, web_factory=None):
         self.root = Path(root).resolve()
         self.cfg, self.store = cfg, store
+        self.workspace_operation_lock = threading.RLock()
         role_path = Path(store.root) / cfg.id
         role_root = role_path.resolve()
         # Activity transitions write capability history even when file tools
@@ -353,7 +354,8 @@ class FilesystemTools:
         self._open_lab(settings)
         if self.lab:
             from lab_preview import LabPreview
-            self.lab_preview = LabPreview(self.workspace, platform_enabled=os.name == 'nt')
+            self.lab_preview = LabPreview(self.workspace, platform_enabled=os.name == 'nt',
+                                          legacy_lab_name=self.lab.name)
             self.tools.extend(self.lab_preview.tools)
             from lab_sandbox import LabPythonSandbox
             self.lab_sandbox = LabPythonSandbox(self.lab, enabled=settings.get('python_sandbox', False))
@@ -1026,7 +1028,7 @@ class FilesystemTools:
                       if name not in (WEB_TOOL_NAMES | GITHUB_TOOL_NAMES | BROWSER_TOOL_NAMES | XHS_TOOL_NAMES | WINDOWS_DESKTOP_TOOL_NAMES |
                                       DESKTOP_FILE_TOOL_NAMES | SCREEN_POP_TOOL_NAMES)]
         if file_names:
-            entries = [f'{name} (ask lan first)' if name in ASK else f'{name} (direct use)'
+            entries = [f'{name} (ask lan first)' if name in ASK - {'write_file', 'append_file'} else f'{name} (direct use)'
                        for name in file_names]
             description = f'You can use file tools only in the "{self.folder_name}" folder: ' + ', '.join(entries) + '. '
         else:
@@ -1084,7 +1086,7 @@ class FilesystemTools:
                 'research/v1.md, never workspace/research/v1.md), and the workbench works in the same folder. '
                 'Organize it yourself' + (f'; {lab}/ is where you keep experiments and works' if lab else '') + '. '
                 'Anywhere in it you may create directories, create files, overwrite with write_file, edit in place with '
-                'edit_file, append, move or rename with move_lab_file and delete with delete_file, all without asking; '
+                'edit_file, append, move or rename with move_lab_file and delete with delete_file; '
                 'the program keeps the previous version of anything you replace or delete. '
                 'Host scripts cannot be launched from these tools. '
                 + ('run_lab_python runs a Python script from lab/ in an isolated, network-disabled container sandbox '
@@ -1278,7 +1280,7 @@ class FilesystemTools:
         if not journal:
             return False
         try:
-            return _path_key(target) == _path_key(checked_path(self.workspace, journal))
+            return _path_key(target).casefold() == _path_key(checked_path(self.workspace, journal)).casefold()
         except (ValueError, OSError):
             return True
 
@@ -1477,6 +1479,9 @@ class FilesystemTools:
                 return 'A single lab file path is required.', '被拒绝', summary
             path = self._checked_own_path(args['path'])
             summary = _summary(self.workspace, path)
+            if not path.exists() and not path.is_symlink():
+                return (json.dumps({'path': summary.replace('\\', '/'), 'exists': False}, separators=(',', ':')),
+                        '成功', summary)
             if not path.is_file() or path.is_symlink() or _redirected(path):
                 return 'Only a regular file inside your workspace can be checked.', '被拒绝', summary
             before = path.stat(follow_symlinks=False)
@@ -1584,20 +1589,25 @@ class FilesystemTools:
 
     def _delete_own_file(self, raw, target, summary):
         """Ticket 247: Peter may delete his own files; the program keeps the last content as a previous version."""
-        if not target.is_file():
-            return 'Only an existing regular file can be deleted. Nothing was changed.', '被拒绝', summary
-        info = target.stat(follow_symlinks=False)
-        if _redirected(target) or not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
-            return 'Only an ordinary, unlinked file can be deleted. Nothing was changed.', '被拒绝', summary
-        old = target.read_bytes()
-        after = target.stat(follow_symlinks=False)
-        if (after.st_ino, after.st_size, after.st_mtime_ns) != (info.st_ino, info.st_size, info.st_mtime_ns):
-            return 'The file changed while it was being read. Nothing was deleted; try again.', '被拒绝', summary
-        root, relative = self._version_store(target)
-        keep_previous_version(root, relative, old)
-        self._checked_own_path(raw)
-        target.unlink()
-        return f'Deleted the file; the program kept its last content ({len(old)} bytes) as a previous version.', '成功', summary
+        with self.workspace_operation_lock:
+            if not target.is_file():
+                return 'Only an existing regular file can be deleted. Nothing was changed.', '被拒绝', summary
+            info = target.stat(follow_symlinks=False)
+            if _redirected(target) or not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                return 'Only an ordinary, unlinked file can be deleted. Nothing was changed.', '被拒绝', summary
+            if info.st_size > self.lab_max_write_bytes:
+                return f'The file exceeds the {self.lab_max_write_bytes}-byte file-operation limit. Nothing was changed.', '被拒绝', summary
+            identity = _file_identity(info)
+            old = target.read_bytes()
+            if _file_identity(target.stat(follow_symlinks=False)) != identity:
+                return 'The file changed while it was being read. Nothing was deleted; try again.', '被拒绝', summary
+            root, relative = self._version_store(target)
+            keep_previous_version(root, relative, old)
+            self._checked_own_path(raw)
+            if _file_identity(target.stat(follow_symlinks=False)) != identity:
+                return 'The file changed before deletion. Nothing was deleted; try again.', '被拒绝', summary
+            target.unlink()
+            return f'Deleted the file; the program kept its last content ({len(old)} bytes) as a previous version.', '成功', summary
 
     def _edit_own_file(self, raw, target, args, summary):
         """Ticket 247: in-place edit of one of Peter's own text files; the previous version is kept first."""
@@ -1609,11 +1619,13 @@ class FilesystemTools:
         info = target.stat(follow_symlinks=False)
         if _redirected(target) or not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
             return 'Only an ordinary, unlinked file can be edited. Nothing was changed.', '被拒绝', summary
+        if info.st_size > self.lab_max_write_bytes:
+            return f'The file exceeds the {self.lab_max_write_bytes}-byte file-operation limit. Nothing was changed.', '被拒绝', summary
         try:
             text = target.read_bytes().decode('utf-8')
         except UnicodeError:
             return 'Only UTF-8 text files can be edited. Nothing was changed.', '被拒绝', summary
-        updated = text.replace('\r\n', '\n') if '\r\n' not in text else text
+        updated = text.replace('\r\n', '\n') if '\r\n' in text else text
         for edit in edits:
             old, new = edit['oldText'], edit['newText']
             if not old or updated.count(old) != 1:
@@ -1625,21 +1637,29 @@ class FilesystemTools:
         data = updated.encode('utf-8')
         if len(data) > max(self.lab_max_write_bytes, len(text.encode('utf-8'))):
             return 'The edited file would exceed the per-operation size limit. Nothing was changed.', '被拒绝', summary
-        return self._rewrite_own_file(raw, target, data, summary)
+        return self._rewrite_own_file(raw, target, data, summary, expected_identity=_file_identity(info))
 
-    def _rewrite_own_file(self, raw, target, data, summary):
+    def _rewrite_own_file(self, raw, target, data, summary, expected_identity=None):
         """Ticket 133: Peter may rewrite his own lab files; the program keeps every previous version."""
         info = target.stat(follow_symlinks=False)
         if _redirected(target) or not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
             return 'Only an ordinary, unlinked lab file can be rewritten. Nothing was changed.', '被拒绝', summary
+        if expected_identity is not None and _file_identity(info) != expected_identity:
+            return 'The file changed while it was being edited. Nothing was written; re-read it and retry.', '被拒绝', summary
         old = target.read_bytes()
         after = target.stat(follow_symlinks=False)
         if (after.st_ino, after.st_size, after.st_mtime_ns) != (info.st_ino, info.st_size, info.st_mtime_ns):
             return 'The lab file changed while it was being read. Nothing was changed; try again.', '被拒绝', summary
-        root, relative = self._version_store(target)
-        keep_previous_version(root, relative, old)
-        self._checked_own_path(raw)
-        replace_file_bytes(target, data)
+        identity = _file_identity(info)
+        with self.workspace_operation_lock:
+            if _file_identity(target.stat(follow_symlinks=False)) != identity:
+                return 'The file changed before editing. Nothing was written; re-read it and retry.', '被拒绝', summary
+            root, relative = self._version_store(target)
+            keep_previous_version(root, relative, old)
+            self._checked_own_path(raw)
+            if _file_identity(target.stat(follow_symlinks=False)) != identity:
+                return 'The file changed before editing. Nothing was written; re-read it and retry.', '被拒绝', summary
+            replace_file_bytes(target, data)
         return (f'Rewrote the lab file ({len(data)} bytes, checked with SHA-256); the program kept the previous '
                 f'version ({len(old)} bytes).', '成功', summary)
 

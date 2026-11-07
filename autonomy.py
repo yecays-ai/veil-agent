@@ -1066,7 +1066,7 @@ class AutonomyController:
             record['tools'] = self.chat.last_tool_summaries
             record['lab_files_changed'] = [item.get('path') for item in record['tools']
                                            if item.get('state') == '成功' and self.chat.canonical_tool_name(item.get('tool')) in
-                                           ('write_file', 'append_file', 'create_directory', 'move_lab_file', 'edit_file', 'delete_file')]
+                                           ('write_file', 'append_file', 'create_directory', 'move_lab_file', 'edit_file')]
             if time.monotonic() >= self.deadline:
                 record['result'] = '失败'
                 record['result_reason'] = f'达到每次 {MAX_RUNTIME_SECONDS // 60} 分钟的硬时限。'

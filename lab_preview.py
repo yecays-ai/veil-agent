@@ -127,7 +127,7 @@ def _csp():
             "sandbox allow-scripts allow-same-origin")
 
 
-def _make_handler(lab: Path, origin_port: list[int], failed: list[str]):
+def _make_handler(lab: Path, origin_port: list[int], failed: list[str], legacy_lab_name='lab'):
     budget = {"requests": 0, "bytes": 0}
     budget_lock = threading.Lock()
 
@@ -157,7 +157,12 @@ def _make_handler(lab: Path, origin_port: list[int], failed: list[str]):
                 if raw_path == "/":
                     raw_path = "/index.html"
                 relative = raw_path.lstrip("/")
-                path = _safe_lab_file(lab, relative)
+                try:
+                    path = _safe_lab_file(lab, relative)
+                except ValueError as exc:
+                    if 'does not exist' not in str(exc):
+                        raise
+                    path = _safe_lab_file(lab, f'{legacy_lab_name}/{relative}')
                 with path.open("rb") as source:
                     body = source.read(MAX_PAGE_BYTES + 1)
                 if len(body) > MAX_PAGE_BYTES:
@@ -190,7 +195,7 @@ def _make_handler(lab: Path, origin_port: list[int], failed: list[str]):
     return Handler
 
 
-def _playwright_render(lab: Path, entry: Path, stopped):
+def _playwright_render(lab: Path, entry: Path, stopped, legacy_lab_name='lab'):
     """Render one page with a fresh, non-persistent Chromium context."""
     try:
         from playwright.sync_api import sync_playwright
@@ -202,7 +207,7 @@ def _playwright_render(lab: Path, entry: Path, stopped):
     server_failures = []
     port_holder = [0]
     server = http.server.ThreadingHTTPServer(
-        ("127.0.0.1", 0), _make_handler(lab, port_holder, server_failures))
+        ("127.0.0.1", 0), _make_handler(lab, port_holder, server_failures, legacy_lab_name))
     server.daemon_threads = True
     port_holder[0] = server.server_address[1]
     server_thread = threading.Thread(target=server.serve_forever, name="veil-lab-preview-http", daemon=True)
@@ -317,14 +322,14 @@ class LabPreview:
     """One character-scoped, two-preview-per-request Lab renderer."""
 
     def __init__(self, lab, *, platform_enabled=None, timeout_seconds=PREVIEW_TIMEOUT_SECONDS,
-                 runner=None):
+                 runner=None, legacy_lab_name='lab'):
         raw_lab = Path(lab).absolute()
         if _is_reparse_point(raw_lab):
             raise ValueError("The configured Lab folder cannot be a link or junction.")
         self.lab = raw_lab.resolve(strict=True)
         self.platform_enabled = (os.name == "nt") if platform_enabled is None else bool(platform_enabled)
         self.timeout_seconds = max(0.01, min(float(timeout_seconds), PREVIEW_TIMEOUT_SECONDS))
-        self.runner = runner or _playwright_render
+        self.runner = runner or (lambda root, entry, stopped: _playwright_render(root, entry, stopped, legacy_lab_name))
         self._lock = threading.Lock()
         self._used = 0
         self.tools = [type("Tool", (), {

@@ -58,6 +58,31 @@ class LabPreviewPathTests(unittest.TestCase):
 
 
 class LabPreviewServerTests(unittest.TestCase):
+    def test_root_absolute_resources_keep_legacy_lab_fallback(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            legacy = root / 'experiments'
+            legacy.mkdir()
+            (legacy / 'game.js').write_text('legacy', encoding='utf-8')
+            failures = []
+            handler_type = _make_handler(root, [0], failures, 'experiments')
+
+            def request():
+                handler = object.__new__(handler_type)
+                handler.path = '/game.js'
+                handler.wfile = io.BytesIO()
+                status = []
+                handler.send_response = status.append
+                handler.send_header = lambda *_args: None
+                handler.end_headers = lambda: None
+                handler.send_error = lambda code: status.append(code)
+                handler._serve(head=False)
+                return status[-1], handler.wfile.getvalue()
+
+            self.assertEqual(request(), (200, b'legacy'))
+            (root / 'game.js').write_text('workspace', encoding='utf-8')
+            self.assertEqual(request(), (200, b'workspace'))
+
     def test_temporary_server_serves_only_lab_files_with_a_browser_sandbox_policy(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

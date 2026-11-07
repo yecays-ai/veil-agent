@@ -67,6 +67,18 @@ class LabGameTests(unittest.TestCase):
         self.assertIn('%23', link)
         self.assertNotIn('游戏', link)
 
+    def test_custom_lab_root_keeps_legacy_game_ids_and_rejects_root_scores(self):
+        custom = self.lab.parent / 'experiments'
+        (custom / 'spider').mkdir(parents=True)
+        (custom / 'spider' / 'index.html').write_text('<html></html>', encoding='utf-8')
+        (custom / 'index.html').write_text('<html></html>', encoding='utf-8')
+        manager = LabGames(self.lab.parent, 9000, 'experiments')
+        link = manager.open('experiments/spider/index.html')
+        capability = urlsplit(link).path.split('/')[2]
+        self.assertEqual(manager._entry(capability)[2], 'spider/index.html')
+        with self.assertRaises(ValueError):
+            manager.open('experiments/index.html')
+
     def test_short_write_rolls_back_and_next_round_can_save(self):
         import os
         real_write = os.write

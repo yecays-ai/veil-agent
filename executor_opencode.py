@@ -170,7 +170,8 @@ def kill_tree(proc):
         return
     if _WINDOWS:
         if proc.poll() is None:
-            subprocess.run(['taskkill', '/F', '/T', '/PID', str(proc.pid)], capture_output=True)
+            subprocess.run(['taskkill', '/F', '/T', '/PID', str(proc.pid)], capture_output=True,
+                           **({'creationflags': subprocess.CREATE_NO_WINDOW} if _WINDOWS else {}))
     else:
         try:
             os.killpg(proc.pid, signal.SIGKILL)
@@ -276,10 +277,12 @@ def find_command(configured=''):
     return shutil.which('opencode')
 
 
-def build_config(provider, token, base_url):
+def build_config(provider, token, base_url, protect=()):
     """The OpenCode config, passed inline (OPENCODE_CONFIG_CONTENT) so nothing is written into the user's project
     and a project's own opencode.json cannot loosen it. `token` is the local proxy token, not the real key."""
     context = int(provider.get('max_input_tokens', 32768))
+    edit_permission = ('ask' if not protect else
+                       {'*': 'ask', **{Path(path).as_posix(): 'deny' for path in protect}})
     return {
         '$schema': 'https://opencode.ai/config.json',
         'provider': {'relay': {
@@ -290,7 +293,7 @@ def build_config(provider, token, base_url):
         # OpenCode's own rule engine settles the clear cases itself (last matching pattern wins); what is left
         # as `ask` comes to the program (`decide`). Reading secrets is denied outright.
         'permission': {'bash': {'*': 'ask', **{c: 'allow' for c in SAFE_COMMANDS}},
-                       'edit': 'ask', 'webfetch': 'ask', 'external_directory': 'ask',
+                       'edit': edit_permission, 'webfetch': 'ask', 'external_directory': 'ask',
                        'read': {'*': 'allow', **{g: 'deny' for g in SECRET_GLOBS}}},
         'share': 'disabled', 'autoupdate': False}
 
@@ -328,6 +331,12 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
     """Run one task. `record_cost(cost)` is called once with the estimated cost, whatever the outcome."""
     limits = {**DEFAULT_LIMITS, **(limits or {})}
     workdir, home = Path(workdir), Path(home)
+    if protect and not container:
+        try:
+            record_cost(Decimal(0))
+        except Exception:
+            pass
+        return ExecutorResult('The workbench cannot protect the growth journal without Docker isolation.', '被拒绝')
     workdir.mkdir(parents=True, exist_ok=True)
     home.mkdir(parents=True, exist_ok=True)
     price = (Decimal(str(provider.get('input_cny_per_million', 0))),
@@ -335,7 +344,8 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
     cap = Decimal(str(limits['run_budget_cny']))
     proxy = (proxy_factory or KeyProxy)(provider['base_url'], key, max_requests=int(limits['max_steps']) * 3 + 5,
                                         **({'host': '0.0.0.0'} if container else {}))
-    config = build_config(provider, proxy.token, proxy.local_base('host.docker.internal' if container else '127.0.0.1'))
+    config = build_config(provider, proxy.token, proxy.local_base('host.docker.internal' if container else '127.0.0.1'),
+                          protect=protect)
     port, password = free_port(), secrets.token_urlsafe(24)
     keep = {'PATH', 'PATHEXT', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'TEMP', 'TMP', 'TMPDIR', 'LANG', 'LC_ALL', 'PROGRAMFILES',
             'PROGRAMFILES(X86)', 'PROGRAMDATA', 'APPDATA', 'LOCALAPPDATA', 'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE'}
@@ -367,6 +377,7 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
     try:
         proc = popen(command if container else [command, 'serve', '--port', str(port)], cwd=str(workdir), env=env,
                      shell=_WINDOWS and not container, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     **({'creationflags': getattr(subprocess, 'CREATE_NO_WINDOW', 0)} if _WINDOWS else {}),
                      **({} if _WINDOWS else {'start_new_session': True}))
         api = (api_factory or Api)(f'http://127.0.0.1:{port}', password)
         started = clock()

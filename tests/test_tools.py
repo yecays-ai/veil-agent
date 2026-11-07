@@ -3,6 +3,7 @@ import json
 import os
 import shutil
 import tempfile
+import threading
 import unittest
 from decimal import Decimal
 from unittest.mock import patch
@@ -30,6 +31,7 @@ class ToolPolicyTests(unittest.TestCase):
         item.cfg = SimpleNamespace(id='test', tools={'max_result_bytes': 64})
         item.lab = None
         item.lab_max_write_bytes = 200000
+        item.workspace_operation_lock = threading.RLock()
         item.store = SimpleNamespace(root=self.root / 'data')
         item.tools = [SimpleNamespace(name=name) for name in ALLOW | ASK | DENY | OWN_WORK]
         item.client = Mock()
@@ -189,6 +191,15 @@ class ToolPolicyTests(unittest.TestCase):
         self.assertEqual(state, '被拒绝')
         self.assertEqual(target.read_text(encoding='utf-8'), 'replacement')
 
+    def test_journal_identity_is_case_insensitive_on_every_platform(self):
+        manager = self.journal_manager()
+        target = self.workspace / 'Growth-Journal.md'
+        target.write_text('keep', encoding='utf-8')
+        manager.cfg.tools['persistent_append_file'] = 'growth-journal.md'
+        result, state, _ = manager.invoke('write_file', {'path': 'growth-journal.md', 'content': 'replace'})
+        self.assertEqual(state, '被拒绝', result)
+        self.assertEqual(target.read_text(encoding='utf-8'), 'keep')
+
     def test_journal_tools_are_offered_when_filesystem_starts(self):
         store = Store(self.root / 'data')
         cfg = SimpleNamespace(id='test', tools={'enabled': True,
@@ -284,7 +295,7 @@ class ToolPolicyTests(unittest.TestCase):
         self.assertNotIn(str(self.root), json.dumps(manifest))
         self.assertTrue(manager.capability_event.startswith('Capability update:'))
         self.assertEqual(manager.capability_event_model, manager.capability_event)
-        self.assertIn('ask lan first', FilesystemTools._description(manager, ['write_file']))
+        self.assertIn('write_file (direct use)', FilesystemTools._description(manager, ['write_file']))
         manager.consume_capability_event()
         reopened = FilesystemTools.__new__(FilesystemTools)
         reopened.cfg, reopened.store = manager.cfg, store

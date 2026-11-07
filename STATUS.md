@@ -1,8 +1,9 @@
 ## 工单 247：统一 Peter 的工作空间，淘汰旧 Lab 限制
 
 - 见 `docs/tickets/247-unified-workspace.md`。Peter 只有一个文件根 `data/<角色>/workspace/`：直接文件工具在整个 workspace 里免确认能覆盖、`edit_file` 原地编辑、移动、`delete_file` 删除（改前旧版本留在 `own-work-versions/`，可恢复），旧"只能在 lab、不能覆盖/删除、只能搬 archive/trash"规则删除；成长日记仍只能追加。工作台也在这个文件夹里干活，旧 `data/<角色>/workbench/` 第一次使用时搬进 `workspace/from-workbench/`（不丢文件）。HTML 预览、小游戏、发送附件改用 workspace 相对路径。
-- 现状：自动测试通过（含新增覆盖、编辑、删除、移动、迁移、日记保护）；Windows 真机未验，工作台仍默认关闭。`run_lab_python`、桌面文件工具原样保留，等工作台真机验收覆盖后再按工单 240 删。下一个工单号 248（246 为录音修复 PR #298）。
-- 验收见工单文档：让 Peter 改一个 lab 里的旧文件并删一个没用的，不再被问、不再说不能覆盖；`workspace/from-workbench/` 里有以前 workbench 的文件。
+- 现状：PR #299 仍开放。已定位并在隔离分支处理 Cubic 的实质安全、数据和兼容问题；本地回归检查进行中。Windows 真机未验，工作台仍默认关闭。`run_lab_python`、桌面文件工具原样保留，等工作台真机验收覆盖后再按工单 240 删。
+- 下一步：完成针对性回归后更新 PR 分支，检查最新必需 CI 和 Cubic 意见，再决定合并。
+- 验收见工单文档：让 Peter 改一个 lab 里的旧文件并删一个没用的，不再被问；确认 `workspace/from-workbench/` 里有旧文件；连续执行三次工作台任务，Windows 不弹黑窗，任务完成且停止后无遗留进程；成长日记仍不可覆盖或删除。
 
 ## 工单 240：通用电脑执行与权限架构调查
 

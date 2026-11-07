@@ -229,6 +229,9 @@ persistent_append_file = "growth-journal.md"
             {'oldText': 'missing', 'newText': 'x'}]}, self.no_approval)[1], '被拒绝')
         self.assertEqual(self.call('delete_file', 'projects/page.html')[1], '成功')
         self.assertFalse((self.tools.workspace / 'projects/page.html').exists())
+        absent, state, _ = self.tools.invoke('lab_file_digest', {'path': 'projects/page.html'})
+        self.assertEqual(state, '成功')
+        self.assertEqual(json.loads(absent), {'path': 'projects/page.html', 'exists': False})
         kept = sorted(p.read_text(encoding='utf-8') for p in (versions / 'workspace/projects').iterdir())
         self.assertEqual(kept, ['<p>one</p>', '<p>three</p>', '<p>two</p>'])
         # Lab files use the same store as before.
@@ -237,6 +240,23 @@ persistent_append_file = "growth-journal.md"
         self.assertEqual([p.read_text(encoding='utf-8') for p in (versions / 'lab').iterdir()], ['a1'])
         self.assertEqual(self.call('delete_file', 'projects')[1], '被拒绝')
         self.assertEqual(self.call('delete_file', '../outside.md')[1], '被拒绝')
+
+    def test_edit_matches_lf_text_in_crlf_files_and_large_destructive_ops_are_refused(self):
+        target = self.tools.workspace / 'projects/lines.txt'
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b'first\r\nsecond\r\n')
+        result = self.tools.invoke('edit_file', {'path': 'projects/lines.txt', 'edits': [
+            {'oldText': 'first\nsecond\n', 'newText': 'updated'}]}, self.no_approval)
+        self.assertEqual(result[1], '成功', result)
+        self.assertEqual(target.read_text(encoding='utf-8'), 'updated')
+        target.write_bytes(b'too large')
+        self.tools.lab_max_write_bytes = 4
+        for name in ('edit_file', 'delete_file'):
+            args = {'path': 'projects/lines.txt', 'edits': [{'oldText': 'too large', 'newText': 'x'}]}
+            result = self.tools.invoke(name, args, self.no_approval)
+            self.assertEqual(result[1], '被拒绝')
+            self.assertTrue(target.exists())
+            self.assertEqual(target.read_bytes(), b'too large')
 
     def test_files_move_anywhere_in_the_workspace_without_overwriting(self):
         self.call('write_file', 'a/one.md', 'one')
@@ -358,8 +378,8 @@ persistent_append_file = "growth-journal.md"
         self.assertEqual(json.loads(result), {
             'path': 'lab/archive/large.bin', 'byte_length': len(content),
             'sha256': hashlib.sha256(content).hexdigest()})
-        denied, state, _ = self.tools.invoke('lab_file_digest', {'path': 'missing.bin'})
-        self.assertEqual(state, '被拒绝', denied)
+        absent, state, _ = self.tools.invoke('lab_file_digest', {'path': 'missing.bin'})
+        self.assertEqual((state, json.loads(absent)), ('成功', {'path': 'missing.bin', 'exists': False}))
         denied, state, _ = self.tools.invoke('lab_file_digest', {'path': '../outside.bin'})
         self.assertEqual(state, '被拒绝', denied)
 

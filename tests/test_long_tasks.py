@@ -237,6 +237,29 @@ class LongTaskTests(unittest.TestCase):
         blocked, _ = self.tasks.before_tool('write_file', 'lab/d.txt', True, {'content': 'y'})
         self.assertIn('is still unverified', blocked)
 
+    def test_uncertain_edit_and_delete_can_be_verified(self):
+        self.create()
+        target = 'lab/notes.txt'
+        self.assertEqual(self.tasks.before_tool('edit_file', target, True,
+            {'edits': [{'oldText': 'before', 'newText': 'after'}]}), (None, True))
+        self.tasks.finish_tool('edit_file', target, '出错')
+        self.tasks.set_tool_step(1)
+        self.tasks.observe_tool_result('read_text_file', target, '成功', 'after')
+        pending = self.tasks.read()['pending_action']
+        self.assertEqual((pending['verified_in_step'], pending['verified_by']), (1, 'read_text_file'))
+
+        task_id = self.tasks.read()['task_id']
+        self.tasks.invoke('long_task_update', {'action': 'update', 'task_id': task_id,
+            'status': 'active', 'resolve_pending': True,
+            'pending_operation_id': pending['operation_id'], 'progress_update': 'edit verified'})
+        self.assertEqual(self.tasks.before_tool('delete_file', target, True, {}), (None, True))
+        self.tasks.finish_tool('delete_file', target, '出错')
+        self.tasks.set_tool_step(2)
+        self.tasks.observe_tool_result('lab_file_digest', target, '成功',
+                                       json.dumps({'path': target, 'exists': False}))
+        pending = self.tasks.read()['pending_action']
+        self.assertEqual((pending['verified_in_step'], pending['verified_by']), (2, 'lab_file_digest'))
+
     def test_ambiguous_append_with_preexisting_matching_suffix_stays_pending(self):
         self.create()
         lab = Path(self.temp.name) / 'lab'

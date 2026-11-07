@@ -2534,7 +2534,7 @@ def serve_chat(chat, hub, channels=()):
         announce_stickers()
     if getattr(files, 'lab', None) is not None:
         from lab_games import LabGames
-        hub.game_manager = LabGames(files.workspace, hub.game_port)
+        hub.game_manager = LabGames(files.workspace, hub.game_port, files.lab.name)
         files.attach_game_manager(hub.game_manager)
     announce_free_reply = getattr(files, 'announce_free_reply', None)
     if callable(announce_free_reply):
@@ -2550,7 +2550,7 @@ def serve_chat(chat, hub, channels=()):
             announce_wake_freedom()
         chat.pending_capability_event = getattr(chat.tools, 'capability_event', None)
         chat.pending_capability_event_model = getattr(chat.tools, 'capability_event_model', None)
-    if (getattr(files, 'workspace', None) is not None and
+    if (getattr(files, 'workspace', None) is not None and getattr(files, 'client', None) is not None and
             callable(getattr(files, 'read_lab_attachment', None))):
         chat.attachment_reader = files.read_lab_attachment
         chat.attachment_saver = hub.save_attachment

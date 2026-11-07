@@ -11,8 +11,10 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import time
+import uuid
 from pathlib import Path
 
 MARKERS = ('.git', 'pyproject.toml', 'package.json', 'requirements.txt', 'Cargo.toml', 'go.mod', 'pom.xml')
@@ -194,7 +196,14 @@ def merge_legacy_workbench(old, workspace):
     workspace/from-workbench/ (nothing is overwritten or deleted; an entry that cannot move stays where it was).
     Returns the names that moved."""
     old, workspace = Path(old), Path(workspace)
-    if not old.is_dir() or old.is_symlink():
+    reparse = getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0x400)
+    def ordinary_dir(path):
+        try:
+            info = path.lstat()
+            return stat.S_ISDIR(info.st_mode) and not (getattr(info, 'st_file_attributes', 0) & reparse)
+        except OSError:
+            return False
+    if not ordinary_dir(old) or not ordinary_dir(workspace):
         return []
     try:
         names = os.listdir(old)
@@ -202,15 +211,34 @@ def merge_legacy_workbench(old, workspace):
         return []
     moved = []
     target = workspace / 'from-workbench'
+    if target.exists() or target.is_symlink():
+        if not ordinary_dir(target):
+            return []
     for name in names:
         source, dest = old / name, target / name
+        temp = target / ('.' + name + '.migrating-' + uuid.uuid4().hex)
         try:
-            if source.is_symlink() or dest.exists() or dest.is_symlink():
+            source_info = source.lstat()
+            if (source.is_symlink() or getattr(source_info, 'st_file_attributes', 0) & reparse
+                    or dest.exists() or dest.is_symlink()):
                 continue
             target.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(source), str(dest))
+            if not ordinary_dir(target):
+                continue
+            if source.is_dir():
+                shutil.copytree(source, temp, symlinks=True)
+                os.replace(temp, dest)
+                shutil.rmtree(source)
+            else:
+                shutil.copy2(source, temp)
+                os.replace(temp, dest)
+                source.unlink()
             moved.append(name)
         except OSError:
+            if temp.is_dir() and not temp.is_symlink():
+                shutil.rmtree(temp, ignore_errors=True)
+            else:
+                temp.unlink(missing_ok=True)
             continue
     try:
         old.rmdir()  # only succeeds when it is empty

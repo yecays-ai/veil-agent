@@ -1,11 +1,13 @@
-## 工单 247 交接：统一工作空间（2026-11-07）
+## 工单 247 交接：统一工作空间（2026-11-08）
 
 - 目标：lan 让开发 agent 处理"Lab、workspace、workbench 三个目录"的整合：Peter 只要一个文件根，淘汰旧 Lab 的不覆盖/不原地编辑/不删除限制和重复实现。
-- 改动：`tools_agent.py`（`OWN_WORK` 工具集、`_checked_own_path`、`_is_journal`、`_version_store`、`_delete_own_file`、`_edit_own_file`，`edit_file`/`delete_file` 新增，`move_lab_file` 去掉 archive/trash 限制，说明文字改写）；`executor_opencode.py`（`run(protect=)` 容器里屏蔽日记）；`workbench_scope.py`（`merge_legacy_workbench`）；`veil_agent.py`（`_run_workbench` 在 workspace 里干活并迁移旧目录、默认路径也留快照）；`lab_preview.py`/`lab_games.py`/`web_agent.py`（改为 workspace 根，路径不再要 `lab/` 前缀；`game_id` 沿用旧格式）；`long_tasks.py`/`autonomy.py`（登记 `edit_file`/`delete_file`）；`characters/peter/character.toml`（两个别名）；README；测试。
+- PR #299 的 Cubic 审查中有数据、安全和兼容问题；当前在隔离 worktree `E:\Peter-Agent\VEIL\worktrees\247-unified-workspace-followup`、分支 `ticket/247-unified-workspace-followup` 处理，未提交、未推送，未触发新 CI。
+- 跟进修复包含：限制编辑/删除文件大小；同步锁保护本地编辑/删除与工作台执行；拒绝迁移 junction/reparse 根并用临时副本完成迁移；容器保护缺失日记、宿主机模式在需保护日记时拒绝运行；修复 CRLF 编辑、任务恢复、删除回报、Lab 兼容路径/游戏分数、附件启动条件和临时测试残留。
+- 新增 Windows 工作台控制台处理：OpenCode/Docker 与 `taskkill` 使用 `CREATE_NO_WINDOW`；验收需连续执行三次任务并停止一次，确认无黑窗、任务正常、无遗留进程。
 - 安全边界：路径仍拒绝 `..`、链接、绝对路径、Windows 非法名；日记不可覆盖/编辑/删除/移动/附件，容器里被只读屏蔽；`.env*` 文件不能当附件发；`edit_file` 要求每段 oldText 恰好匹配一处。
 - 兼容：`own-work-versions/lab/` 照旧；新增 `own-work-versions/workspace/`。能力清单会给 Peter 一次英文通知（工具权限从 lab 变 workspace）。
-- 未验：Windows 真机；真实 `edit_file` 走 MCP 之外的本地实现，不依赖 npx。工作台仍默认关闭；真实项目未开放。
-- 下一步：lan 验收后，等工作台真机验收，再按工单 240 删 `run_lab_python`/桌面文件工具的重复部分。
+- 未验：本地针对性测试、PR 最新必需 CI、Windows 真机。工作台仍默认关闭；真实项目未开放。
+- 下一步：先跑相关回归并复核 diff；通过后更新 PR #299 分支，处理 Cubic 线程和最新检查，不在正式运行目录开发。
 
 ## 工单 240 交接（2026-11-07）
 

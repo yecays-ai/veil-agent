@@ -28,8 +28,9 @@ def _plain(path):
 
 
 class LabGames:
-    def __init__(self, lab, port):
+    def __init__(self, lab, port, lab_name='lab'):
         self.lab = Path(lab).resolve(strict=True)
+        self.lab_name = lab_name
         self.port = port
         self.entries = {}
         self.lock = threading.RLock()
@@ -41,7 +42,7 @@ class LabGames:
         subpath = relative
         entry = _safe_lab_file(self.lab, subpath, page=True)
         folder = entry.parent
-        if folder == self.lab or not _plain(folder):
+        if folder == self.lab or folder == self.lab / self.lab_name or not _plain(folder):
             raise ValueError('Put each game in its own plain folder.')
         score_file = folder / 'scores.jsonl'
         if score_file.exists() and (not _plain(score_file) or not score_file.is_file()):
@@ -49,7 +50,8 @@ class LabGames:
         capability = secrets.token_urlsafe(24)
         with self.lock:
             # Scores keep the id they always had: the path inside lab/ for lab games, else the workspace path.
-            game_id = subpath[4:] if subpath.casefold().startswith('lab/') else subpath
+            prefix = self.lab_name + '/'
+            game_id = subpath[len(prefix):] if subpath.casefold().startswith(prefix.casefold()) else subpath
             self.entries[capability] = (folder, entry, game_id)
             if len(self.entries) > 64:
                 self.entries.pop(next(iter(self.entries)))
