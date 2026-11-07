@@ -236,10 +236,7 @@ def card_context(events, character_name):
 
 CARD_ACTION = {'type': 'function', 'function': {
     'name': 'card_action',
-    'description': ('Receive, decline, or return a VEIL virtual transfer, or accept or decline a VEIL virtual gift, '
-                    'when it is addressed to you. Pass the exact message_id from the conversation. '
-                    'This changes only the in-chat card. It is not a real payment or delivery, and it does not '
-                    'require Lan to approve it.'),
+    'description': 'receive, decline, return, or accept a virtual card addressed to you.',
     'parameters': {'type': 'object', 'properties': {
         'message_id': {'type': 'string', 'minLength': 1, 'maxLength': 100},
         'action': {'type': 'string', 'enum': ['receive', 'decline', 'return', 'accept']},
