@@ -1,9 +1,30 @@
+## 工单 237 交接：桌面 UI 全状态整理与预览验收（2026-11-07）
+
+- PR #295 当前 head `28bcb93`，已开始合入最新 main `817de3c`（PR #294）；冲突只在 `STATUS.md` 和 `HANDOFF.md`，正在保留 main 中工作台工单记录的同时补入本 UI 工单状态。
+- Cubic 8 条意见已逐条修复、回复并解决。Windows desktop workflow 已通过；Windows smoke 中发现原测试错误期待 Peter 过滤结果为 0（日历当天有 Peter 自己的待办），已改成 Peter=1、Lan=0。最终 head 的 Tests 尚待通过。
+- UI 单测 9/9、`chat.js` 语法、差异检查通过；本地完整桌面测试有一项因 Agent 服务未就绪失败，本地复用 E 盘 Electron 启动 smoke 返回 `STATUS_BREAKPOINT`，不算通过。
+- 用户确认了生活记录截图预览并要求跟进合并；全主窗状态、独立窗口和浮层原生操作仍未逐项实机验收，按 `docs/tickets/237-preview-manifest.md` 保持待验，不用 CI 冒充。
+- 下一步：完成 STATUS/HANDOFF 冲突解决，推送并等最新 Tests；通过后 squash merge PR #295；随后 Lan 按清单在 Peter Windows 实机验收。
+
+## 工单 238 交接（2026-11-07）
+
+- 新文件 `workbench_scope.py`（找项目、快照、还原）；`executor_opencode.py` 加 `KeyProxy`、`ASK_LAN`、`SAFE_COMMANDS`/`SECRET_GLOBS`；`veil_agent.py` 加 `_workbench_target`、`project_roots` 配置、`workbench` 的可选 `project` 参数。
+- `workbench-estimate` 加入 `ESTIMATE_ACCOUNTINGS`：运行中被强杀时按预留全额记账，不放回。
+- 已验（2026-11-07，lan 的 Windows + Docker Desktop）：容器隔离、经密钥代理的真实模型整套任务、测试副本里 Peter 真实聊天。未验：自主醒来真机、Linux 主机。容器仍能联网，下载和安装只靠 VEIL 审批挡。不用容器时命令越权仍未解决（见工单文档）；真实项目未开放，默认关闭。
+
 ## 工单 237 交接（2026-11-07）
 
-- 分支 `ticket/237-desktop-ui-full-states`，PR #295 开放；用户已确认生活记录截图预览并要求跟进合并。初始 head `a1577f0940d64011310967b58393575d190aa0a3` 的 `Tests`、`Dependency security` 通过，`Windows desktop` 因生活记录标题字体实际 13px、断言要求 15px 而失败；修复后 CI 还发现 smoke 对 Peter 筛选的日历 marker 错误期待 0（实际 Peter 自有待办应显示 1），已修正为 Peter=1、Lan=0，待推送后重跑。
-- 已核对 Cubic 8 条意见，修复：透明度变量、detached rail、展开导航内容 inset、窄窗导航/rail、每日待办标记计数、审批圆角裁切；补充透明度/布局/裁切断言，并把本机路径截图清单改为仓库内清单 `docs/tickets/237-preview-manifest.md`。UI 单测 9/9、JS 语法和差异检查通过；整套桌面测试 18/19，唯一失败为 Agent 服务未就绪的 backend 用例。本地复用 E 盘 Electron 启动返回 `STATUS_BREAKPOINT`，不算 smoke 通过。
-- 全页和原生窗口状态未由 Windows/Electron 实机逐项验收；按清单如实保留待验，不把浏览器预览或 CI 通过当成原生窗口验收。
-- 下一步：推送 smoke 断言修正，追踪所有最新检查；审查线程已逐条回复并解决。所有 required CI 通过后 squash merge；合并后再按清单做 Windows 实机验收。
+- 目标：lan 批准做 OpenCode 接入 VEIL 的隔离原型：Peter 的聊天和自主醒来都能用；人格、记忆、审批、停止、费用归 VEIL；OpenCode 不可用时原有功能不受影响。不改正式运行目录，不急着合并。
+- 改动：`executor_opencode.py`（新）、`veil_agent.py`（`Character.executor`、`workbench_ready`、`_run_workbench`、工具分发）、`tests/test_executor_opencode.py`、工单文档、STATUS/HANDOFF。
+- 云端已验：单元测试和真实 OpenCode（脚本化假模型）集成测试。lan 电脑上已验：grok-4.6 经 OpenCode 的 4 个场景（`oc-test/run-grok.cmd`）。待验：`oc-test/run-executor.cmd`（真实中转加真实 OpenCode 跑 `executor_opencode.run`）。
+- 下一步：读 `report-exec-*.md`；通过后请 lan 决定是否把本分支放进开发 worktree 做 Peter 聊天加自主醒来的整套验收，再决定是否合并。已知取舍：自主醒来里工作台费用上限（默认 ¥0.3）可能让当次醒来超过每次 ¥0.25 的醒来上限，¥3/天总额仍有效；opencode 的 `read` 越界请求用 `external_directory` 权限，是否都走这条要看真实实测。
+
+## 工单 236 交接（2026-11-07）
+
+- 目标：Peter 不知道仓库名也能搜 GitHub 并比较候选（lan 发现原来的 `github_read` 必须给准确 `owner/repo`）。分支 `claude/project-thread-50woji` 基于 `main` `6cc87d6`。
+- 改动：`github_readonly.py`（`search_repositories`、`readme`，`repository` 改为非必填，其他资源仍校验）、`tests/test_github_readonly.py`、`docs/tickets/236-github-repo-search.md`、`STATUS.md`、`HANDOFF.md`，以及 `AGENTS.md` 新增的第一性原理规则。没有改权限、预算、工具分组；`github_read` 本来在 `github` 工具组里，需要时用 `expand_capability` 展开。
+- 未验证：Windows 实机；匿名 GitHub 速率限制在 lan 网络下是否够用（比较 5 个仓库约 15 次请求）。若常被限，再考虑可选只读 token（`VEIL_GITHUB_READONLY_TOKEN` 已存在于 `search_code`）。
+- 下一步：lan 验收；之后按计划单独做 OpenCode 隔离验证（另开分支和 PR，不混进本单）。
 
 ## 工单 234 交接（2026-11-07）
 
@@ -480,13 +501,3 @@
 - 工单 192：生活页改待办便签（圆圈打勾划掉、`repeat: daily` 每天 0 点复位、已完成一次性便签超过 30 条折叠）+ 日历心情；日记入口移除，旧日记记录保留但不显示；`life_record` 工具新增 `mood`、`repeat`，不能再新建日记；自主唤醒内容改为当天日历标题 + 全部未完成待办数。分支 `ticket/192-life-todo-calendar`；需要 update.bat；Windows 体验待 Lan 验收；`tests.test_autonomy` 4 项因既有 `test_tools` 导入错误失败（改动前后相同）。下一个工单号 193。
 - 工单 193：生活页待办改为便签卡（每件事单独勾选，底部可新增，勾掉划线保留）；`life_record` 说明要求每件待办单独一条。分支 `ticket/193-todo-sticky`；需要 update.bat；Windows 体验待 Lan 验收。下一个工单号 195。
 - 工单 198：待办便签可删除（两步确认，`/api/life` 收 `{id,delete:true}`，仅 Lan、仅 event/note，原记录写入 `life-records-deleted.jsonl`）；每日重复待办单独一张便签；便签顶部改通栏色片。分支 `ticket/198-sticky-delete`；需要 update.bat；Windows 体验待 Lan 验收。
-
-## 工单 237 交接（2026-11-07）
-
-- 分支 `ticket/237-desktop-ui-full-states`，在独立 worktree `worktrees/237-desktop-ui-full-states`。Lan 已确认当前月历预览并要求提交 PR。
-- 修改主窗口为浮动左侧导航 + 开合右侧活动面板；导航文字独立包裹，收起态图标实测居中误差 0px。修正生活页避让与框线，记忆刷新移进筛选工具行，按钮改轻量圆角/分段样式；默认暖米白配色恢复为工单 235 的旧配色。审批/通知本来由 `main.cjs` 限制 520×270；之前大截图错误用了整屏 Edge viewport，已按实际尺寸重做。
-- 核对 InternalBeyond commit `0bdac818e6c4815af2a562be1b1ad4e7c6157b16` 的月历、当天安排、“今天”和快速新增交互；仅借鉴交互。生活页日历已改为尺寸固定的独立卡片，日期格只用圆形选中态与记录圆点，事项数量留在当天清单。最新 1440×900 浏览器预览：`life-calendar-preview.png`（虚构内容）。
-- 截图目录和逐项清单：`C:\Users\Administrator\.codex\visualizations\2026\11\07\01a1b598-5f8a-7411-b78a-fc40b6066b62\preview-manifest.md`（70 PNG；七主页面三尺寸、七独立页默认/滚动、八选择器、菜单桌宠通知审批及状态图）。截图内容为虚构。
-- `node --test desktop/tests/ui.test.cjs` 9 项通过；`node --check desktop/chat.js`、预览脚本 `node --check`、`git diff --check` 通过。
-- 下一步处理 PR review，并继续完成真实 Windows 全状态验收；本地截图确认不等于 Windows 原生拖动/缩放验收。
-- 真实 Electron 本轮仍未启动；拖出/拖动/缩放/合并、真实菜单和 Windows 缩放尚未体验验收，不能据 Edge 截图声称这些通过。

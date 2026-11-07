@@ -1,9 +1,26 @@
 ## 工单 237：桌面 UI 全状态整理与预览验收
 
-- PR #295 开放跟进。用户已确认生活记录截图预览并要求提交 PR；主窗七页、独立窗拆并和浮层的 Windows 逐项验收仍待完成，见 `docs/tickets/237-preview-manifest.md`。
-- Cubic 共 8 条有效审查意见，已修复并逐条回复解决。修复 head 的 `Tests` Linux 项通过，Windows 项仍在跑；`Windows desktop` smoke 发现原测试对 Peter 筛选结果的预期错误（自身待办误期待为 0 个标记），已修正为 Peter 可见、Lan 不可见，等待重跑。
-- 本地 UI 单测 9/9、脚本语法和 `git diff --check` 通过；全桌面测试有 1 项因 Agent 服务未就绪失败，本地复用 Electron smoke 进程返回 `STATUS_BREAKPOINT`。下一步推送该断言修正，确认最新全部 CI 后合并 PR #295；之后由 Lan 按状态清单实机验收。
-- 验收：先看 `docs/tickets/237-preview-manifest.md` 的已确认预览；Windows 实机须逐项打开主窗/独立页/菜单浮层并检查窗口尺寸、侧栏、滚动、越界和裁切，尚未核销的项目不得记为通过。
+- PR #295 正在与最新 main（#294，`817de3c`）解决合并冲突。用户已确认生活记录截图预览并要求跟进合并；主窗七页、独立窗拆并和浮层的 Windows 逐项验收仍待完成，见 `docs/tickets/237-preview-manifest.md`。
+- Cubic 8 条意见均已逐条修复、回复并解决。最新分支 head 的 Windows desktop smoke 已通过；Tests 工作流待最终合并提交后确认。
+- 下一步：解决 STATUS/HANDOFF 冲突并推送，跟进最终 CI，通过后合并 PR #295；随后按清单做 Peter Windows 实机验收。
+
+## 工单 238：工作台自己找项目、快照、权限分级、密钥代理
+
+- 见 `docs/tickets/238-workbench-find-project-and-guards.md`。默认仍关；`project_roots` 为空时只用工作台自己的文件夹。
+- 现状：不用容器时，命令仍能读写项目外文件（已复现）；用容器时在 Windows + Docker Desktop 上验证通过（重跑后项目外文件、`.env` 读和改、真实密钥、宿主机环境变量全部挡住，正常修改不受影响）；真实模型在容器里的整套任务通过；测试副本里 Peter 真实聊天通过（自己按名字找项目、留快照、只改一行、不动 lan 的修改）。容器仍能联网，Linux 主机未验，自主醒来未在真机验。
+- 下一步：默认关闭；真实项目仍未开放，开放前再由 lan 决定范围。已知小问题：容器里文件权限让 git status 误显示 `.env`/测试文件被改。
+- 验收：lan 说一个带项目名的问题，Peter 自己找到项目、改前留退路、联网/安装/推送问她。下一个工单号 239。
+
+## 工单 237：工作台（OpenCode 执行后端）隔离原型
+
+- Peter 新增工具 `workbench`（默认关，`character.toml` 的 `[executor] enabled = true` 才开）：把需要命令行、改文件、跑程序、下载的活交给临时启动的 OpenCode，在 `data/<角色>/workbench` 文件夹里干活；权限由 VEIL 程序决定（文件夹内直接做，危险命令和密钥拒绝，文件夹之外聊天里问 lan、自主醒来里拒绝），步数、时间、重复调用、费用上限由 VEIL 卡并计入共享账本，lan 按停止立即中止。找不到 OpenCode 时工具不出现，聊天、记忆、自主活动不受影响。原型阶段，不合并，Windows 和真实中转的全套验收未完成。
+- 下一步：lan 在真实中转和 Windows 上完成验收后，再决定是否合并。
+- 验收见 `docs/tickets/237-workbench-executor-prototype.md`。下一个工单号 238。
+
+## 工单 236：Peter 能按关键词找 GitHub 仓库并比较
+
+- `github_read` 增加 `search_repositories`（只需关键词，可选排序 best_match/stars/updated/forks，翻页，每页 10 个，列名称、链接、描述、Stars、许可证、语言、更新时间、是否归档）和 `readme`（不用猜文件名）；候选仓库的许可证、目录、源码继续用原来的 `repository`/`tree`/`file`。仍然只读、只看公开仓库，聊天、自主活动、委派只读搜索共用，没有新依赖。Windows 实机待 lan 验收。`AGENTS.md` 有了面向开发 agent 的第一性原理规则。
+- 验收见 `docs/tickets/236-github-repo-search.md`。下一个工单号 237。
 
 ## 工单 235：界面去后台感
 
