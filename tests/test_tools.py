@@ -14,7 +14,7 @@ from unittest.mock import Mock
 from tools_agent import (ALLOW, ASK, DENY, LAB_ONLY, OWN_WORK, FilesystemTools, checked_path,
                          permitted_tools, tool_policy)
 from veil_agent import (Budget, Chat, RequestFailed, Store, load_character,
-                        model_tool_result, request_byte_size, run_chat)
+                        join_reply_continuation, model_tool_result, request_byte_size, run_chat)
 
 
 class ToolPolicyTests(unittest.TestCase):
@@ -737,6 +737,7 @@ max_result_bytes = 200
         self.assertEqual(self.budget.totals()[2], 0)
 
     def test_length_finish_keeps_text_when_no_tool_was_called(self):
+        self.cfg.tools['max_output_tokens'] = 10
         model = Mock(side_effect=[(self.message(content='A partial ans'), 100, 50, 0, 'length'),
                                  (self.message(content='answer.'), 120, 20, 0)])
         tools = Mock()
@@ -745,8 +746,62 @@ max_result_bytes = 200
         chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=lambda _: None)
         self.assertEqual(chat.send('explain this'), 'A partial answer.')
         self.assertEqual(model.call_count, 2)
+        self.assertEqual(model.call_args_list[1].kwargs['max_tokens'], self.cfg.max_output_tokens)
         self.assertEqual(chat.tool_stop_reason, '')
+        reservations = [row for row in self.store.read('costs.jsonl') if row.get('type') == 'reserve']
+        self.assertEqual(Decimal(reservations[1]['amount']),
+                         (self.cfg.provider['max_input_tokens'] * self.cfg.provider['input_cny_per_million']
+                          + self.cfg.max_output_tokens * self.cfg.provider['output_cny_per_million']) / Decimal(1_000_000))
         tools.invoke.assert_not_called()
+
+    def test_continuation_failure_preserves_partial_reply_and_reports_separately(self):
+        output = []
+        model = Mock(side_effect=[(self.message(content='A partial sentence'), 100, 50, 0, 'length'),
+                                 ValueError('maximum context length exceeded')])
+        chat = Chat(self.cfg, self.store, self.budget, model, output=output.append)
+
+        reply = chat.send('finish this')
+
+        self.assertEqual(reply, 'A partial sentence')
+        assistant_rows = [row for row in self.store.read('test/chat.jsonl')
+                          if row.get('role') == 'assistant']
+        self.assertEqual(assistant_rows[-1]['content'], reply)
+        self.assertTrue(any(getattr(item, 'is_error', False) for item in output))
+        self.assertEqual(chat.tool_stop_reason, str(output[-1]))
+
+    def test_cancelled_continuation_preserves_partial_reply(self):
+        output = []
+        model = Mock(side_effect=[(self.message(content='A partial sentence'), 100, 50, 0, 'length'),
+                                 KeyboardInterrupt()])
+        chat = Chat(self.cfg, self.store, self.budget, model, output=output.append)
+
+        self.assertEqual(chat.send('finish this'), 'A partial sentence')
+        self.assertEqual([row['content'] for row in self.store.read('test/chat.jsonl')
+                          if row.get('role') == 'assistant'], ['A partial sentence'])
+        self.assertTrue(any(getattr(item, 'is_error', False) for item in output))
+
+    def test_user_stop_during_continuation_keeps_returned_text(self):
+        output = []
+        calls = [0]
+        chat = None
+        def model(*_args, **_kwargs):
+            calls[0] += 1
+            if calls[0] == 2:
+                chat.user_stop.set()
+                return self.message(content='and finished.'), 120, 20, 0
+            return self.message(content='A partial sentence'), 100, 50, 0, 'length'
+        chat = Chat(self.cfg, self.store, self.budget, model, output=output.append)
+
+        self.assertEqual(chat.send('finish this'), 'A partial sentenceand finished.')
+        self.assertEqual([row['content'] for row in self.store.read('test/chat.jsonl')
+                          if row.get('role') == 'assistant'], ['A partial sentenceand finished.'])
+        self.assertTrue(any(getattr(item, 'is_error', False) for item in output))
+
+    def test_long_continuation_overlap_is_removed(self):
+        repeated = 'already said ' * 200
+        self.assertEqual(join_reply_continuation('Before. ' + repeated,
+                                                 repeated + 'and finished.'),
+                         'Before. ' + repeated + 'and finished.')
 
     def test_plain_reply_continuation_stops_after_one_retry(self):
         output = []

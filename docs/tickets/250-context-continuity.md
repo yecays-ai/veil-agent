@@ -7,7 +7,7 @@ Peter 在当前模型输入上限内能连续使用工具并自然完成回复�
 ## 当前状态
 
 - main 已包含 PR #305；本工单从合并提交 `5582474` 建立分支 `ticket/250-context-continuity`。
-- `Budget.input_token_ratio` 按角色和模型复用供应商实际用量；至少 16 KiB 的样本按实测高水位增加 20% 余量。无可靠样本时保留 0.4 回退，工具循环新字节使用 0.5 回退；较小请求只更新本轮已实测的增量/裁剪比例。
+- `Budget.input_token_ratio` 按角色、模型和 provider endpoint 身份复用实际用量；至少 16 KiB 的样本按实测高水位增加 20% 余量。无可靠样本时保留 0.4 回退；工具循环按消息结果和 Schema 分开估算，消息新增字节保留保守下限，Schema 使用已校准比例。
 - `_tool_chat` 的本地上下文停止原因通过 `ChatOutput(is_error=True)` 和前端独立错误事件显示，不会保存为 Peter 正文。`finish_reason=length` 的普通回复最多追加一次受预算约束的续接。
 - `context-log.jsonl` 记录模型、输入上限、估算和实际用量、Schema 字节及本地停止触发原因；供应商输入上限错误单独分类并记录，不重试。
 - 已查 GitHub 上通用 tokenizer/估算实现；当前供应商回报的实际用量是更贴近模型及工具 Schema 的校准来源，因此复用现有记账，不增加 tokenizer 依赖。
@@ -20,5 +20,5 @@ Peter 在当前模型输入上限内能连续使用工具并自然完成回复�
 
 ## 验证状态
 
-- 自动化回归覆盖校准阈值、social Schema 扩展、真实超限独立错误、供应商超限分类、普通回复限次续接及工具循环。
+- 自动化回归覆盖 provider 隔离、校准阈值、social Schema 扩展、真实超限独立错误、供应商超限分类、普通回复限次续接和失败保留，以及工具循环。
 - Windows Electron 实际聊天验收仍待 Lan 完成；自动化结果不替代实机体验。

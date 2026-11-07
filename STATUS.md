@@ -9,13 +9,13 @@
 ## 现状
 
 - PR #305（表情包网格）已 squash 合入 main，提交 `5582474`；Windows 体验验收仍待 Lan 确认。
-- 工单 250 在分支 `ticket/250-context-continuity`。已追到实际用量校准被 0.4 下限覆盖、工具新增内容按 0.5 下限估算，以及本地长度停止原因被作为普通回复返回。
+- 工单 250 的 PR #306 正在复审；修复已包含在分支 `ticket/250-context-continuity`。
 - 当前分支用至少 16 KiB 的实际用量和 20% 余量校准；小样本/无数据时使用保守回退。工具 Schema/结果新增内容在有可靠校准时复用该比例。上下文停止提示独立输出；输出截断最多续接一次。已添加模型、上限、估算/实际输入、Schema 字节和停止原因诊断。
-- 相关本地回归 `tests.test_chat tests.test_tools.ToolLoopTests tests.test_tool_groups tests.test_image_recovery_and_context`：138 项通过。扩展 Web 测试运行中出现 DNS/启动/端口相关失败并已中断，因此不记为通过；待 PR CI。Windows Electron 实际聊天体验仍待 Lan 验收。
+- 相关本地回归 `tests.test_chat tests.test_tools.ToolLoopTests tests.test_tool_groups tests.test_image_recovery_and_context`：142 项通过；PR 首轮 CI 全平台通过，审查意见已集中修复，等待更新后复查。Web 实机聊天体验仍待 Lan 验收。
 
 ## 下一步
 
-完成 diff 审查、提交并开 PR；等待 CI 和 Cubic 审查后合并，再请 Lan 按下方步骤在 Windows 上验收。
+等待 PR #306 更新后的 CI 和 Cubic 复审；合并后请 Lan 按下方步骤在 Windows 上验收。
 
 ## Lan 的 Windows 体验验收
 

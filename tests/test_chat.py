@@ -1297,7 +1297,7 @@ output_cny_per_million = "8"
         request_id, _ = self.budget.reserve(self.cfg)
         self.budget.settle(request_id, self.cfg, 12_000, 20, 0, input_bytes=60_000,
                            tolerate_over_bound=True)
-        self.assertAlmostEqual(self.budget.input_token_ratio('test', 'fake-model'), 0.2)
+        self.assertAlmostEqual(self.budget.input_token_ratio(self.cfg), 0.2)
         self.assertEqual(conservative_token_ratio(0.2), 0.24)
         self.assertEqual(conservative_token_ratio(None), 0.4)
         for i in range(20):
@@ -1317,14 +1317,18 @@ output_cny_per_million = "8"
             request_id, _ = self.budget.reserve(self.cfg)
             self.budget.settle(request_id, self.cfg, prompt, 20, 0, input_bytes=input_bytes,
                                tolerate_over_bound=True)
-        self.assertAlmostEqual(self.budget.input_token_ratio('test', 'fake-model'), 0.5)
-        self.assertIsNone(self.budget.input_token_ratio('other-character', 'fake-model'))
+        self.assertAlmostEqual(self.budget.input_token_ratio(self.cfg), 0.5)
+        other_character = replace(self.cfg, id='other-character')
+        self.assertIsNone(self.budget.input_token_ratio(other_character))
+        other_provider = replace(self.cfg, provider={**self.cfg.provider,
+                                                     'base_url': 'https://another.invalid/v1'})
+        self.assertIsNone(self.budget.input_token_ratio(other_provider))
 
     def test_small_provider_sample_keeps_the_conservative_fallback(self):
         request_id, _ = self.budget.reserve(self.cfg)
         self.budget.settle(request_id, self.cfg, 1200, 20, 0, input_bytes=6000,
                            tolerate_over_bound=True)
-        self.assertIsNone(self.budget.input_token_ratio('test', 'fake-model'))
+        self.assertIsNone(self.budget.input_token_ratio(self.cfg))
 
     def test_oversized_input_is_not_fatal_and_is_not_saved(self):
         output = []
@@ -1342,7 +1346,7 @@ output_cny_per_million = "8"
         messages = self.model.call_args.args[0]
         self.assertEqual(messages[1]['role'], 'system')
         old_messages = [messages[0], messages[-1]]
-        old_ratio = self.budget.input_token_ratio('test', 'fake-model')
+        old_ratio = self.budget.input_token_ratio(self.cfg)
         old_bound = estimate_request_tokens(old_messages, calibration=conservative_token_ratio(old_ratio))
         self.cfg.provider['max_input_tokens'] = old_bound
         self.model.reset_mock()
