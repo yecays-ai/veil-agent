@@ -84,6 +84,42 @@ class ModelSettingsTests(unittest.TestCase):
         self.assertEqual((cfg.provider_name, cfg.provider['model']), ('fake', 'fake-model'))
         self.assertEqual(cfg.background_provider['model'], 'fake-model')
         self.assertEqual(cfg.models.limits(), (Decimal('10'), Decimal('300')))
+        self.assertIsNone(cfg.models.public()['use']['delegate'])
+        with self.assertRaises(SettingsError):
+            cfg.models.chosen('delegate')
+
+    def test_delegate_requires_an_explicit_model_and_can_be_disabled(self):
+        cfg, model_id = self.add_relay()
+        _, name, provider = cfg.models.use('delegate', model_id)
+        self.assertEqual((name, provider['model']), ('relay', '[k]fake-sonnet'))
+        self.assertEqual(cfg.models.public()['use']['delegate'], model_id)
+        cfg.models.use('delegate', '')
+        self.assertIsNone(cfg.models.public()['use']['delegate'])
+        with self.assertRaises(SettingsError):
+            cfg.models.chosen('delegate')
+
+    def test_delegate_tool_is_only_offered_when_model_is_selected(self):
+        from dataclasses import replace
+        cfg, model_id = self.add_relay()
+        chat_cfg = replace(cfg, tools={'enabled': True, 'max_steps': 2})
+        chat = Chat(chat_cfg, Store(self.root / 'data'), Budget(Store(self.root / 'data')), Mock())
+        names = {schema['function']['name'] for schema in chat.tool_schemas()}
+        self.assertNotIn('delegate', names)
+        main_model = chat_cfg.models.chosen('peter')[0]
+        chat_cfg.models.use('delegate', model_id)
+        schemas = chat.tool_schemas()
+        self.assertIn('delegate', {schema['function']['name'] for schema in schemas})
+        delegate_schema = next(s for s in schemas if s['function']['name'] == 'delegate')
+        self.assertIn('Sonnet', delegate_schema['function']['description'])
+        self.assertIn('¥0.06/次', delegate_schema['function']['description'])
+        self.assertIn('完整任务最多预留', delegate_schema['function']['description'])
+        self.assertEqual(chat_cfg.models.chosen('peter')[0], main_model)
+        claude_cfg = replace(chat_cfg, provider={'kind': 'claude_agent', 'model': 'sonnet'})
+        claude_chat = Chat(claude_cfg, Store(self.root / 'data'), Budget(Store(self.root / 'data')), Mock())
+        self.assertIn('delegate', {schema['function']['name'] for schema in claude_chat.tool_schemas()})
+        chat_cfg.models.use('delegate', '')
+        self.assertNotIn('delegate', {schema['function']['name'] for schema in chat.tool_schemas()})
+        self.assertNotIn('delegate', {schema['function']['name'] for schema in claude_chat.tool_schemas()})
 
     def test_corrupt_existing_config_never_falls_back_or_changes_file(self):
         path = self.root / 'data' / 'test' / 'models.json'

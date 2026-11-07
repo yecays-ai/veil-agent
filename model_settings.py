@@ -2,7 +2,7 @@
 
 Endpoints (name, address, key) and models (name, price, thinking) live in
 data/<character>/models.json; keys go only into the project .env. Roles pick models
-for chat, autonomous activity, glance, and background work. The providers written in
+for chat, delegated work, autonomous activity, glance, and background work. The providers written in
 character.toml stay available as built-in models and are the defaults.
 """
 import json
@@ -17,7 +17,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 BUILTIN_PREFIX = 'builtin:'
-ROLES = ('peter', 'autonomy', 'background', 'glance')
+ROLES = ('peter', 'autonomy', 'background', 'glance', 'delegate')
 FOLLOW_CHAT = 'follow-chat'  # glance only: use whatever Peter's chat model is
 GLANCE_DEFAULT_MODEL = 'grok-4.6'  # Ticket 211: preferred glance model when Lan has configured it
 DEFAULT_DAILY = Decimal('10')
@@ -281,8 +281,10 @@ class ModelSettings:
         return provider is not None
 
     def selected(self, role):
-        """What the 模型 page shows for a role. Autonomy follows chat until explicitly selected."""
+        """What the 模型 page shows; delegate stays off until explicitly selected."""
         with self.lock:
+            if role == 'delegate':
+                return self.data['use'].get('delegate')
             if role == 'glance':
                 stored = self.data['use'].get('glance')
                 if stored is not None:
@@ -322,6 +324,8 @@ class ModelSettings:
             model_id = self.selected(role)
             if model_id == FOLLOW_CHAT:
                 return self.chosen('peter')
+            if role == 'delegate' and model_id is None:
+                raise SettingsError('请先在模型设置里选择“委派任务”使用的模型。')
             if role == 'autonomy' and model_id is None:
                 raise SettingsError('自主活动尚无可用的 API 模型；请先添加或启用一个 API 模型。')
             provider = self._provider(self.data, model_id)
@@ -371,7 +375,7 @@ class ModelSettings:
                 models.append({**item, 'builtin': False, 'endpoint_name': names.get(item['endpoint'], ''),
                                'key_set': keys.get(item['endpoint'], False)})
             daily, monthly = self.limits()
-            use = {role: (self.selected(role) if role in ('glance', 'autonomy') else self.chosen(role)[0])
+            use = {role: (self.selected(role) if role in ('glance', 'autonomy', 'delegate') else self.chosen(role)[0])
                    for role in ROLES}
             return {'endpoints': endpoints, 'models': models, 'use': use,
                     'use_explicit': {role: role in self.data['use'] for role in ROLES},
@@ -455,6 +459,12 @@ class ModelSettings:
         with self.lock:
             if self.blocked or self.journal.exists():
                 raise SettingsError('模型设置保存未完成；请重启恢复后再切换。')
+            if role == 'delegate' and model_id in (None, ''):
+                data = {**self.data, 'use': {key: value for key, value in self.data['use'].items()
+                                             if key != 'delegate'}}
+                self._write(data)
+                self.data = data
+                return None, None, None
             if not self._choice_ok(self.data, role, model_id):
                 raise SettingsError('这个模型已经不在列表里了。')
             data = {**self.data, 'use': {**self.data['use'], role: model_id}}

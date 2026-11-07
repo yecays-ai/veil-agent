@@ -853,7 +853,7 @@ function activityDetails(record){
   lines.push('本次费用：¥'+record.cost_cny);
   return lines.join('\n');
 }
-const TOOL_LABELS={read_text_file:'读取文件',read_multiple_files:'读取多个文件',write_file:'写入文件',append_file:'追加文件',list_directory:'查看文件夹',directory_tree:'查看目录树',search_files:'查找文件',get_file_info:'查看文件信息',create_directory:'创建文件夹',move_lab_file:'移动 Lab 文件',lab_file_digest:'核对 Lab 文件',hold:'保存记忆',breath_search:'查找记忆',trace:'更新记忆',dream:'整理记忆',letter_write:'写记忆信件',letter_read:'读记忆信件',memory_history:'查看记忆历史',memory_catalog:'查看记忆目录',memory_read:'读取记忆',long_task_status:'查看长期任务',long_task_update:'更新长期任务',web_search:'联网搜索',web_fetch:'读取网页',send_message:'发送消息',screen_pop:'屏幕弹出'};
+const TOOL_LABELS={delegate:'委派研究',read_text_file:'读取文件',read_multiple_files:'读取多个文件',write_file:'写入文件',append_file:'追加文件',list_directory:'查看文件夹',directory_tree:'查看目录树',search_files:'查找文件',get_file_info:'查看文件信息',create_directory:'创建文件夹',move_lab_file:'移动 Lab 文件',lab_file_digest:'核对 Lab 文件',hold:'保存记忆',breath_search:'查找记忆',trace:'更新记忆',dream:'整理记忆',letter_write:'写记忆信件',letter_read:'读记忆信件',memory_history:'查看记忆历史',memory_catalog:'查看记忆目录',memory_read:'读取记忆',long_task_status:'查看长期任务',long_task_update:'更新长期任务',web_search:'联网搜索',web_fetch:'读取网页',send_message:'发送消息',screen_pop:'屏幕弹出'};
 const NOWHERE_TOOL_LABELS={say:'记录乌有乡语录',quotes:'查看旅程语录',bury:'埋藏纪念品'};
 function activityStatus(state){
   if(state==='进行中')return {text:'进行中',className:'running'};
@@ -1702,8 +1702,10 @@ function modelPrice(m){
 }
 function fillModelSelect(select,view,value,followOption,excludeKind){
   const follow=followOption?[(()=>{const o=document.createElement('option');o.value='follow-chat';o.textContent='跟随聊天模型';return o})()]:[];
-  select.replaceChildren(...follow,...view.models.filter(m=>!excludeKind||m.kind!==excludeKind).map(m=>{const o=document.createElement('option');o.value=m.id;o.textContent=modelName(m)+(m.key_set?'':'（没有 key）');return o}));
-  select.value=value;syncVeilSelect(select);
+  const optional=select.id==='use-delegate'?[(()=>{const o=document.createElement('option');o.value='';o.textContent='关闭委派';return o})()]:[];
+  select.replaceChildren(...optional,...follow,...view.models.filter(m=>!excludeKind||m.kind!==excludeKind).map(m=>{const o=document.createElement('option');o.value=m.id;o.textContent=modelName(m)+(m.key_set?'':'（没有 key）');return o}));
+  select.value=value;
+  syncVeilSelect(select);
 }
 function modelItem(title,detail,onEdit,onDelete){
   const row=document.createElement('div');row.className='model-item';
@@ -1721,7 +1723,7 @@ function renderModels(view){
   if(signature===modelsSignature)return;
   modelsSignature=signature;modelsView=view;
   fillModelSelect(sw,view,view.use.peter);
-  fillModelSelect($('use-peter'),view,view.use.peter);fillModelSelect($('use-autonomy'),view,view.use.autonomy,false,'claude_agent');fillModelSelect($('use-background'),view,view.use.background);fillModelSelect($('use-glance'),view,view.use.glance,true);
+  fillModelSelect($('use-peter'),view,view.use.peter);fillModelSelect($('use-autonomy'),view,view.use.autonomy,false,'claude_agent');fillModelSelect($('use-delegate'),view,view.use.delegate||'',false,'claude_agent');fillModelSelect($('use-background'),view,view.use.background);fillModelSelect($('use-glance'),view,view.use.glance,true);
   $('background-hint').textContent=view.background_restart?'记忆后台已改，完全退出 Peter 再打开才生效。':'Ombre 给记忆打标签、整理短期便签用这个。换了以后，完全退出 Peter 再打开才生效。';
   if(document.activeElement!==$('limit-daily'))$('limit-daily').value=view.limits.daily_cny;
   if(document.activeElement!==$('limit-monthly'))$('limit-monthly').value=view.limits.monthly_cny;
@@ -1763,6 +1765,7 @@ async function useModel(role,id){
     const m=data.models.models.find(x=>x.id===id);
     if(role==='glance'){add('notice',id==='follow-chat'?'瞄一眼改为跟随聊天模型，下一次瞄一眼生效。':'瞄一眼改用 '+modelName(m)+'，下一次瞄一眼生效。');return}
     if(role==='autonomy'){add('notice','自主活动改用 '+modelName(m)+'，下一次自主活动开始生效。');return}
+    if(role==='delegate'){add('notice',id?'委派任务改用 '+modelName(m)+'。':'委派任务已关闭。');return}
     add('notice',role==='peter'?'下一句开始，Peter 用 '+modelName(m)+'。':'记忆后台改成 '+modelName(m)+'，完全退出 Peter 再打开后生效。');
   }catch(e){add('error','切换模型失败，请检查本机 Agent 连接后重试。')}
   finally{modelsSaving=false;$('model-switch').disabled=stopping||stopped}
@@ -1770,6 +1773,7 @@ async function useModel(role,id){
 $('model-switch').onchange=e=>useModel('peter',e.target.value);
 $('use-peter').onchange=e=>useModel('peter',e.target.value);
 $('use-autonomy').onchange=e=>useModel('autonomy',e.target.value);
+$('use-delegate').onchange=e=>useModel('delegate',e.target.value);
 $('use-background').onchange=e=>useModel('background',e.target.value);
 $('use-glance').onchange=e=>useModel('glance',e.target.value);
 $('save-limits').onclick=()=>saveModels({limits:{daily_cny:$('limit-daily').value,monthly_cny:$('limit-monthly').value}},'费用上限已保存。');

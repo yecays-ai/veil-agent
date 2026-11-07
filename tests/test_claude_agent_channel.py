@@ -147,6 +147,45 @@ class ChannelChatTests(unittest.TestCase):
         self.assertIn('send_message', seen['names'])
         self.assertIn('stay_silent', seen['names'])
 
+    def test_delegate_is_available_to_claude_code_only_when_selected(self):
+        from unittest.mock import Mock, patch
+        from types import SimpleNamespace
+        seen, delegated = {}, Mock(return_value=SimpleNamespace(
+            text='fictional research result', state='成功'))
+        self.chat._run_delegate = delegated
+        provider = {'model': 'fixture-research-model', 'label': 'Fixture Research',
+                    'max_input_tokens': 10000, 'max_output_tokens': 1200,
+                    'input_cny_per_million': 1, 'cached_input_cny_per_million': 0.5,
+                    'output_cny_per_million': 2}
+
+        class FakeChannel:
+            def run_turn(_self, _system, _prompt, request_id, schemas, **_kwargs):
+                seen['names'] = {schema['function']['name'] for schema in schemas}
+                call = SimpleNamespace(id='fixture-call', function=SimpleNamespace(
+                    name='delegate', arguments='{"task":"Find a public article about fictional garden design."}'))
+                execution = self.chat._execute_tool_call(call, request_id, 'fixture-call', False, schemas)
+                seen['result'] = execution.result
+                seen['state'] = execution.state
+                return [], {'result': '', 'total_cost_usd': 0, 'num_turns': 1, 'duration_ms': 1}
+
+        with (patch.object(self.chat.cfg.models, 'selected', return_value='explicit-delegate-model'),
+              patch.object(self.chat.cfg.models, 'chosen', return_value=(
+                  'explicit-delegate-model', 'fixture', provider))):
+            self.chat._claude_agent = FakeChannel()
+            self.chat._claude_agent_chat([{'role': 'system', 'content': 'test system'},
+                                         {'role': 'user', 'content': 'test request'}],
+                                         'fixture-request', self.chat.cfg,
+                                         self.chat.current_request_tool_schemas())
+
+        self.assertIn('delegate', seen['names'])
+        self.assertEqual(seen['result'], 'fictional research result')
+        self.assertEqual(seen['state'], '成功')
+        delegated.assert_called_once_with(
+            'Find a public article about fictional garden design.', 'fixture-request')
+
+    def test_delegate_is_not_offered_to_claude_code_when_disabled(self):
+        self.assertNotIn('delegate', {s['function']['name'] for s in self.chat.tool_schemas()})
+
     def test_wrong_token_is_refused(self):
         def script(server):
             with self.assertRaises(urllib.error.HTTPError) as caught:

@@ -4,7 +4,7 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from tool_groups import CHAT_WARM_REQUESTS, group_of
 from agent_types import UserError
@@ -78,6 +78,21 @@ tool_groups = ["web", "github"]
         self.assertEqual(expand['function']['parameters']['properties']['groups']['items']['enum'],
                          ['web', 'github'])
         self.assertIn('web (', expand['function']['description'])
+
+    def test_delegate_guidance_lists_only_tools_offered_after_group_collapsing(self):
+        provider = {'model': 'fixture-delegate', 'label': 'Fixture Delegate',
+                    'max_input_tokens': 10000, 'cny_per_call': 0.06,
+                    'input_cny_per_million': 0, 'cached_input_cny_per_million': 0,
+                    'output_cny_per_million': 0}
+        with (patch.object(self.cfg.models, 'selected', return_value='fixture-id'),
+              patch.object(self.cfg.models, 'chosen', return_value=('fixture-id', 'fixture', provider))):
+            schema = next(item for item in self.chat.tool_schemas()
+                          if item['function']['name'] == 'delegate')
+
+        description = schema['function']['description']
+        self.assertIn('read_text_file', description)
+        self.assertNotIn('web_search', description)
+        self.assertNotIn('github_read', description)
 
     def test_opening_a_group_offers_its_tools_and_keeps_permissions(self):
         result, state, _ = self.chat.expand_capability(json.dumps({'groups': ['web'], 'reason': 'look up'}))

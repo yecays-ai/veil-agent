@@ -113,7 +113,7 @@ test('desktop redesign keeps real pages in one shell with a collapsible draggabl
   assert.match(css, /\.veil-select-menu\.open\{display:block\}/);
   assert.match(js, /function enhanceVeilSelects\(root=document\)/);
   assert.match(js, /select\.dispatchEvent\(new Event\('change',\{bubbles:true\}\)\)/);
-  assert.equal([...html.matchAll(/<select\b/g)].length, 7, 'all static dropdowns are accounted for');
+  assert.equal([...html.matchAll(/<select\b/g)].length, 8, 'all static dropdowns are accounted for');
   assert.match(js, /id="lf-kind"[\s\S]*?id="lf-owner"[\s\S]*?id="lf-repeat"/);
   assert.match(css, /\.life-records\.life-overview\{grid-template-columns:minmax\(300px,\.95fr\) minmax\(310px,1\.05fr\)/);
   assert.match(css, /\.life-detail\{[^}]*background:rgb\(var\(--veil-canvas-rgb\)\/var\(--view-alpha,var\(--window-alpha\)\)\)!important/);
