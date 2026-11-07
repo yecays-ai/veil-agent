@@ -1201,6 +1201,9 @@ class FilesystemTools:
                     safe_args[key][index] = safe_value
             paths = [_summary(self.workspace, path) for path in resolved.values()]
             summary = ', '.join(paths)
+            if name == 'grant_append':
+                own = self._checked_own_path(args['path'])
+                return self._invoke_append(name, own, summary, args, approval)
             if name in ('write_file', 'append_file', 'create_directory', 'edit_file', 'delete_file'):
                 own = self._checked_own_path(args['path'])  # relative, no '..', no links
                 if not self._is_journal(own):
