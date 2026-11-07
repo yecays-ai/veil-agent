@@ -8,6 +8,9 @@
 - 双击 `workbench-switch.cmd`（`workbench_switch.py`）：开启、关闭、加项目文件夹、清空。开启时检查 Docker 里有没有 `veil-workbench` 镜像，没有就当场构建；Docker 不可用就不开启。项目文件夹必须存在，且不能包含或位于 Peter 自己的 `data` 文件夹。改完重开 Peter 生效。
 - 开启后仍是容器模式，改前自动快照，联网/安装/推送问 lan；见工单 238。
 
+- 设置页「工作台」卡片：开/关、项目文件夹列表（移除）、添加文件夹（Electron 选择框）。后端 `GET/POST /api/workbench` 与脚本共用 `workbench_switch.py`（还多拒绝 `characters`、`persona` 文件夹）。运行环境没做时卡片提示双击脚本。
+- 聊天记录与各页面的滚动条隐藏，鼠标滚轮照常（`desktop-visual-system.css`）。
+
 ## 没做
-- 设置页里的开关和选文件夹界面（界面改动在 lan 本地 Codex，这里没碰）。
+- 无。
 - 自主醒来在真机上的验收；Linux 主机未验。

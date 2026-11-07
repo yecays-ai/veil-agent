@@ -1502,6 +1502,37 @@ function setBackground(dataUrl,name){
 window.veilDesktop.getBackground().then(dataUrl=>setBackground(dataUrl,dataUrl?'已保存的背景图片':'' )).catch(()=>setBackground(null,''));
 $('choose-background').onclick=async()=>{try{const result=await window.veilDesktop.chooseBackground();if(result){setBackground(result.dataUrl,result.name);notify('背景图片已保存。')}}catch(error){notify(error.message||'背景图片读取失败。','error')}};
 $('clear-background').onclick=async()=>{if(await window.veilDesktop.clearBackground()){setBackground(null,'');notify('背景图片已移除。')}};
+const workbench={state:null,changed:false};
+function workbenchNote(text){const note=$('workbench-note');note.textContent=text||'';note.hidden=!text}
+function renderWorkbench(){
+  const s=workbench.state;if(!s)return;
+  $('workbench-on').setAttribute('aria-pressed',String(s.enabled));$('workbench-off').setAttribute('aria-pressed',String(!s.enabled));
+  const list=$('workbench-folders');list.textContent='';
+  for(const folder of s.project_roots){
+    const row=document.createElement('div');row.className='wb-folder';
+    const name=document.createElement('span');name.textContent=folder;name.title=folder;
+    const remove=document.createElement('button');remove.type='button';remove.textContent='移除';remove.onclick=()=>saveWorkbench({remove:folder});
+    row.append(name,remove);list.append(row);
+  }
+  workbenchNote(s.enabled&&!s.image_ready?'还没有运行环境：双击 workbench-switch.cmd，选 1 做一次。':workbench.changed?'重开 Peter 后生效。':'');
+}
+async function saveWorkbench(change){
+  try{
+    const r=await api('/api/workbench',change);const data=await r.json();
+    if(!r.ok){notify(data.error||'没有保存成功。','error');return}
+    workbench.state=data;workbench.changed=true;renderWorkbench();
+  }catch(error){notify(error.message||'没有保存成功。','error')}
+}
+async function loadWorkbench(){
+  try{const r=await api('/api/workbench');if(r.ok){workbench.state=await r.json();renderWorkbench()}}catch(error){}
+}
+$('workbench-on').onclick=()=>saveWorkbench({enabled:true});
+$('workbench-off').onclick=()=>saveWorkbench({enabled:false});
+$('workbench-add').onclick=async()=>{
+  try{const folder=await window.veilDesktop.chooseFolder();if(folder)await saveWorkbench({add:folder})}
+  catch(error){notify(error.message||'没有选成功。','error')}
+};
+loadWorkbench();
 function applyCustomCSS(value){
   const css=String(value||'');
   if(css.length>20000||/@import\b|url\s*\(|expression\s*\(|-moz-binding|behavior\s*:/i.test(css))throw new Error('自定义 CSS 不能加载外部资源或脚本，也不能超过 20,000 个字符。');

@@ -598,3 +598,35 @@ class ScopeTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class WorkbenchSwitchApiTests(unittest.TestCase):
+    def test_state_round_trip_and_folder_rules(self):
+        import workbench_switch as ws
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'proj').mkdir()
+            (root / 'characters').mkdir()
+            state = ws.load_state(root)
+            self.assertFalse(state['enabled'])
+            self.assertTrue(ws.add_folder(state, str(root / 'proj'), root)[0])
+            self.assertFalse(ws.add_folder(state, str(root / 'proj'), root)[0])
+            self.assertFalse(ws.add_folder(state, str(root / 'characters'), root)[0])
+            state['enabled'] = True
+            state['container_image'] = 'custom-image'
+            ws.save_state(state, root)
+            again = ws.load_state(root)
+            self.assertTrue(again['enabled'])
+            self.assertEqual(again['container_image'], 'custom-image')
+            self.assertTrue(ws.remove_folder(again, again['project_roots'][0]))
+            self.assertFalse(ws.remove_folder(again, 'nope'))
+
+    def test_bad_file_is_refused_not_coerced(self):
+        import workbench_switch as ws
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = ws.settings_path(root)
+            path.parent.mkdir(parents=True)
+            path.write_text('{"project_roots": "x"}', encoding='utf-8')
+            with self.assertRaises(ValueError):
+                ws.load_state(root)

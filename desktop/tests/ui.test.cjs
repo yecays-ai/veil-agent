@@ -191,3 +191,16 @@ test('live context view shows request activity above short-term notes and can be
   assert.match(js, /renderLiveContext\(s\.live_context\)/);
   assert.match(main, /detachedView === 'context' && !body && pathname\?\.startsWith\('\/api\/events\?'\)/);
 });
+
+test('settings page has a workbench switch with folder picker, and the chat log shows no scrollbar', async () => {
+  const [html, js, main, preload, css] = await Promise.all([read('chat.html'), read('chat.js'), read('main.cjs'), read('desktop-preload.cjs'), read('desktop-visual-system.css')]);
+  assert.match(html, /id="workbench-card"[\s\S]*?id="workbench-on"[\s\S]*?id="workbench-off"[\s\S]*?id="workbench-add"/);
+  assert.match(js, /api\('\/api\/workbench'/);
+  assert.match(js, /window\.veilDesktop\.chooseFolder\(\)/);
+  assert.match(preload, /chooseFolder: \(\) => ipcRenderer\.invoke\('chat:choose-folder'\)/);
+  assert.match(main, /ipcMain\.handle\('chat:choose-folder'[\s\S]*?openDirectory/);
+  assert.match(main, /url\.pathname === '\/api\/workbench'/);
+  assert.match(main, /'\/api\/mcp', '\/api\/workbench'/);
+  assert.match(css, /#log,\.page\{scrollbar-width:none\}/);
+  assert.match(css, /#log::-webkit-scrollbar,\.page::-webkit-scrollbar\{display:none/);
+});

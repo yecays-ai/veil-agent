@@ -34,6 +34,7 @@ from veil_agent import (ROOT, AUTONOMY_WAKE, CODEX_WATCH_WAKE, GLANCE_WAKE, MAX_
                         ActivityState, Budget, Chat, Store, UserError,
                         load_character, now, make_model, make_voice, run_chat,
                         safe_tool_activity_detail)
+import workbench_switch
 from autonomy import AutonomyController, GlanceController
 from hub_screen_pop import ScreenPopMixin
 from codex_watch import CodexWatchController
@@ -1911,6 +1912,8 @@ def make_handler(hub, token):
                 self._get_life()
             elif url.path == '/api/mcp':
                 self._get_mcp(query)
+            elif url.path == '/api/workbench':
+                self._get_workbench()
             elif url.path == '/api/screen-pop/next':
                 self._get_screen_pop_next(query)
             elif url.path == '/api/desktop-icons/snapshots':
@@ -2259,6 +2262,34 @@ def make_handler(hub, token):
                 except OSError:
                     self._send(500, {'error': 'MCP 配置保存失败。'})
 
+        def _get_workbench(self):
+            try:
+                self._send(200, workbench_switch.status(ROOT))
+            except (OSError, ValueError) as exc:
+                self._send(500, {'error': str(exc)})
+
+        def _post_workbench(self, body):
+            try:
+                state = workbench_switch.load_state(ROOT)
+                if 'enabled' in body:
+                    if not isinstance(body['enabled'], bool):
+                        self._send(400, {'error': 'enabled'})
+                        return
+                    state['enabled'] = body['enabled']
+                if 'add' in body:
+                    ok, message = workbench_switch.add_folder(state, body['add'], ROOT) if isinstance(body['add'], str) else (False, 'add')
+                    if not ok:
+                        self._send(400, {'error': message})
+                        return
+                if 'remove' in body:
+                    if not isinstance(body['remove'], str) or not workbench_switch.remove_folder(state, body['remove']):
+                        self._send(400, {'error': 'remove'})
+                        return
+                workbench_switch.save_state(state, ROOT)
+                self._send(200, workbench_switch.status(ROOT))
+            except (OSError, ValueError) as exc:
+                self._send(500, {'error': str(exc)})
+
         def _post_quiet_hours(self, body):
             enabled = body.get('enabled')
             if not isinstance(enabled, bool):
@@ -2458,6 +2489,8 @@ def make_handler(hub, token):
                 self._post_mcp(body)
             elif url.path == '/api/quiet-hours':
                 self._post_quiet_hours(body)
+            elif url.path == '/api/workbench':
+                self._post_workbench(body)
             elif url.path == '/api/codex-watch':
                 self._post_codex_watch(body)
             elif url.path == '/api/exit':
