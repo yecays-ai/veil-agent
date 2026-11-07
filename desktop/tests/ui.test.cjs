@@ -104,6 +104,12 @@ test('desktop redesign keeps real pages in one shell with a collapsible draggabl
   assert.match(css, /body\.detached-window \.topbar,body\.detached-window \.navigation,body\.detached-window \.desktop-rail/);
   assert.match(visual, /--veil-canvas:#fbf8f3/);
   assert.match(visual, /--veil-accent:#596f5b/);
+  assert.match(visual, /body:not\(\.detached-window\)\{[^}]*background:rgb\(var\(--veil-canvas-rgb\)\/var\(--window-alpha\)\)/);
+  assert.match(visual, /body:not\(\.detached-window\) \.topbar\{[^}]*background:rgb\(var\(--surface-rgb\)\/var\(--window-alpha\)\)/);
+  assert.match(visual, /body:not\(\.detached-window\) \.page\{[^}]*background:rgb\(var\(--veil-canvas-rgb\)\/var\(--view-alpha,var\(--window-alpha\)\)\)/);
+  assert.match(visual, /\.desktop-rail\{[^}]*background:rgb\(var\(--veil-rail-rgb\)\/var\(--window-alpha\)\)/);
+  assert.match(visual, /body\.rail-visible:not\(\.detached-window\) \.desktop-rail\{display:flex!important\}/);
+  assert.match(visual, /body:not\(\.sidebar-collapsed\):not\(\.detached-window\) #life-view\{padding-left:236px!important\}/);
   assert.match(visual, /body\.sidebar-collapsed \.navigation \.nav-item>\[data-lucide\]\{width:100%;height:100%;display:grid;place-items:center\}/);
   assert.match(visual, /body:not\(\.detached-window\) #life-view\{padding-left:82px!important\}/);
   assert.match(visual, /\.life-filter\{gap:3px;padding:0;border:0/);
@@ -122,9 +128,11 @@ test('desktop redesign keeps real pages in one shell with a collapsible draggabl
   assert.match(js, /select\.dispatchEvent\(new Event\('change',\{bubbles:true\}\)\)/);
   assert.equal([...html.matchAll(/<select\b/g)].length, 8, 'all static dropdowns are accounted for');
   assert.match(js, /id="lf-kind"[\s\S]*?id="lf-owner"[\s\S]*?id="lf-repeat"/);
+  assert.match(js, /x\.date===key\|\|x\.kind==='note'&&x\.repeat==='daily'\)\)\.length/);
   assert.match(visual, /\.life-records\.life-overview\{display:grid;grid-template-columns:minmax\(0,1fr\)[^}]*width:100%;max-width:none/);
   assert.match(css, /\.life-detail\{[^}]*background:rgb\(var\(--veil-canvas-rgb\)\/var\(--view-alpha,var\(--window-alpha\)\)\)!important/);
   assert.match(css, /#life-view \.life-sticky\{padding:18px 0 8px;[^}]*font:15px\/1\.5/);
+  assert.match(await read('screen-pop.css'), /border-radius: 12px; overflow: hidden/);
   assert.doesNotMatch(css, /Segoe Print/);
   assert.match(js, /veil-sidebar-collapsed/);
   assert.match(js, /veil-rail-visible/);

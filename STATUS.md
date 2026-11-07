@@ -1,3 +1,10 @@
+## 工单 237：桌面 UI 全状态整理与预览验收
+
+- PR #295 开放跟进。用户已确认生活记录截图预览并要求提交 PR；主窗七页、独立窗拆并和浮层的 Windows 逐项验收仍待完成，见 `docs/tickets/237-preview-manifest.md`。
+- Cubic 共 8 条有效审查意见，已在本地逐条修复并补回归断言。原始 head 的 `Tests`、`Dependency security` 通过；原始 `Windows desktop` 在字号断言失败。本地 UI 单测 9/9、脚本语法和 `git diff --check` 通过；全桌面测试有 1 项因 Agent 服务未就绪失败，本地 Electron smoke 启动返回 `STATUS_BREAKPOINT`。修复提交推送后等待新 CI。
+- 下一步：提交并推送修复；跟进最新 head 的 review 和 CI，通过后合并 PR #295；之后由 Lan 按状态清单在 Peter 的 Windows 实机验收。
+- 验收：先看 `docs/tickets/237-preview-manifest.md` 的已确认预览；Windows 实机须逐项打开主窗/独立页/菜单浮层并检查窗口尺寸、侧栏、滚动、越界和裁切，尚未核销的项目不得记为通过。
+
 ## 工单 235：界面去后台感
 
 - `ticket/235-calm-ui-pass`：窗口整体圆角（去掉外层尖角框）；去掉 VEIL 品牌行，头像可自己上传；收起侧栏头像和按钮不再重叠；自主活动、MCP、设置页删掉解释小字、卡片改细线；三栏宽度随窗口变化，窄时右栏隐藏、左栏自动收成图标。只改 desktop 样式、HTML 和头像脚本。

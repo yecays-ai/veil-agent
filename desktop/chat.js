@@ -772,7 +772,7 @@ function lifeCalendar(selected,records){
   for(let i=0;i<42;i++){
     const date=new Date(start);date.setDate(start.getDate()+i);const key=lifeDateKey(date),cell=document.createElement('button');cell.type='button';cell.className=date.getMonth()===month.getMonth()?'':'outside';
     const number=document.createElement('span');number.className='calendar-day-number';number.textContent=String(date.getDate());cell.append(number);
-    const count=records.filter(x=>(x.kind==='event'||x.kind==='note')&&(x.date===key||x.kind==='note'&&x.repeat==='daily'&&x.state!=='completed')).length;
+    const count=records.filter(x=>(x.kind==='event'||x.kind==='note')&&(x.date===key||x.kind==='note'&&x.repeat==='daily')).length;
     if(count){cell.classList.add('has-record');const marker=document.createElement('span');marker.className='calendar-day-marker';marker.setAttribute('aria-hidden','true');cell.append(marker)}
     if(key===lifeToday())cell.classList.add('today');if(key===lifeDay)cell.classList.add('selected');
     const aria=[date.toLocaleDateString('zh-CN',{year:'numeric',month:'long',day:'numeric'}),count?`${count} 项安排或待办`:''].filter(Boolean).join('，');
