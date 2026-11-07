@@ -170,9 +170,9 @@ async function toggleChat() {
     agentEndpoint = await connect(root); if (quitting) return;
     const restored = settings.chatBounds && ['x', 'y', 'width', 'height'].every(key => Number.isFinite(settings.chatBounds[key]));
     const chatBounds = restored ? { ...settings.chatBounds,
-      width: Math.max(430, Math.round(settings.chatBounds.width)), height: Math.max(480, Math.round(settings.chatBounds.height)) }
-      : { x: 0, y: 0, width: 560, height: 700 };
-    chat = new BrowserWindow({ ...chatBounds, minWidth: 430, minHeight: 480,
+      width: Math.max(1180, Math.round(settings.chatBounds.width)), height: Math.max(760, Math.round(settings.chatBounds.height)) }
+      : { x: 0, y: 0, width: 1440, height: 900 };
+    chat = new BrowserWindow({ ...chatBounds, minWidth: 1180, minHeight: 760,
       frame: false, transparent: true, backgroundColor: '#00000000', resizable: true,
       hasShadow: true, alwaysOnTop: true, skipTaskbar: true,
       title: 'VEIL · Peter', show: false,
@@ -687,7 +687,7 @@ ipcMain.on('desktop:expand', event => {
   const area = workAreaAt(bounds.x + Math.floor(bounds.width / 2), bounds.y + Math.floor(bounds.height / 2));
   const filled = Math.abs(bounds.x - area.x) <= 2 && Math.abs(bounds.y - area.y) <= 2 &&
     Math.abs(bounds.width - area.width) <= 2 && Math.abs(bounds.height - area.height) <= 2;
-  if (!chatExpandedFrom && filled) chatExpandedFrom = { x: area.x + Math.floor((area.width - 560) / 2), y: area.y + Math.floor((area.height - 700) / 2), width: Math.min(560, area.width), height: Math.min(700, area.height) };
+  if (!chatExpandedFrom && filled) chatExpandedFrom = { x: area.x + Math.floor((area.width - 1280) / 2), y: area.y + Math.floor((area.height - 820) / 2), width: Math.min(1280, area.width), height: Math.min(820, area.height) };
   if (chatExpandedFrom) {
     // Second click: go back to the size the window had before it was expanded.
     const saved = chatExpandedFrom; chatExpandedFrom = null;

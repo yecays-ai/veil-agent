@@ -1,6 +1,11 @@
 'use strict';
 (() => {
   const paths = {
+    plus: '<path d="M12 5v14M5 12h14"/>',
+    captions: '<rect width="20" height="14" x="2" y="5" rx="2"/><path d="M7 11h4M15 11h2M7 15h2M13 15h4"/>',
+    'calendar-heart': '<path d="M3 9h18M8 2v4M16 2v4"/><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M12 18s-3-1.8-3-4a1.8 1.8 0 0 1 3-1.3 1.8 1.8 0 0 1 3 1.3c0 2.2-3 4-3 4Z"/>',
+    'panel-left-close': '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18m7-6-3-3 3-3"/>',
+    'chevron-right': '<path d="m9 18 6-6-6-6"/>',
     activity: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
     'arrow-up': '<path d="m5 12 7-7 7 7"/><path d="M12 19V5"/>',
     layers: '<path d="m12 2 10 5-10 5L2 7z"/><path d="m2 12 10 5 10-5M2 17l10 5 10-5"/>',
