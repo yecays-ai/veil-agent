@@ -131,7 +131,10 @@ class DecisionTests(unittest.TestCase):
                         'npx left-pad', 'pnpm dlx left-pad', 'bun add left-pad', 'bunx left-pad',
                         'pip --user install requests',
                         'python3.11 -m pip --user install requests', 'curl https://example.com', 'rm -r build',
-                        'rd /s /q build', 'git -c alias.p=push p origin main'):
+                        'rd /s /q build', 'git -c alias.p=push p origin main',
+                        'git config alias.p push',
+                        'GIT_CONFIG_KEY_0=alias.p GIT_CONFIG_VALUE_0=push git p origin main',
+                        'git --config-env=alias.p=GIT_CONFIG_VALUE_0 p origin main'):
             asked = []
             self.assertEqual(ex.decide('bash', [command], {'command': command}, wd, autonomy=False,
                                        ask=lambda p: asked.append(p) or 'y')[0], 'once', command)

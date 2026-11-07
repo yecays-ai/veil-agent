@@ -104,12 +104,21 @@ def _command_name(token):
 
 
 def _bash_command_needs_lan(tokens):
+    git_config_alias = any(
+        re.match(r'^GIT_CONFIG_KEY_\d+=alias\.', token, re.I) or
+        token.casefold().startswith('git_config_parameters=')
+        for token in tokens)
     while tokens and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', tokens[0]):
         tokens = tokens[1:]
     if not tokens:
         return False
     command = _command_name(tokens[0])
-    if command == 'git' and any(arg.casefold().startswith('alias.') and '=' in arg for arg in tokens[1:]):
+    if command == 'git' and (git_config_alias or any(
+            arg.casefold().startswith('alias.') or
+            arg.casefold().startswith('--config-env=alias.') or
+            arg.casefold() == '--config-env' and index + 1 < len(tokens) and
+            tokens[index + 1].casefold().startswith('alias.')
+            for index, arg in enumerate(tokens[1:], 1))):
         return True
     if command in ASK_LAN['network']:
         return True
