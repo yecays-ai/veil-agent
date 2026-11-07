@@ -109,11 +109,11 @@ def _bash_command_needs_lan(tokens):
     if command == 'git':
         return _git_subcommand(tokens) in ASK_LAN['git']
     if command in ASK_LAN['installers']:
-        return len(tokens) > 1 and tokens[1].casefold() in {'install', 'add', 'get'}
+        return any(arg.casefold() in {'install', 'add', 'get'} for arg in tokens[1:])
     if command in {'python', 'python3'} and tokens[1:3] == ['-m', 'pip']:
-        return len(tokens) > 3 and tokens[3].casefold() == 'install'
+        return any(arg.casefold() == 'install' for arg in tokens[3:])
     if re.fullmatch(r'python\d+(?:\.\d+)*', command) and tokens[1:3] == ['-m', 'pip']:
-        return len(tokens) > 3 and tokens[3].casefold() == 'install'
+        return any(arg.casefold() == 'install' for arg in tokens[3:])
     if command == 'rm':
         return any(arg == '--recursive' or
                    (arg.startswith('-') and not arg.startswith('--') and 'r' in arg[1:].casefold())

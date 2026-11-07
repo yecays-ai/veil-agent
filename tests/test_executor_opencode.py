@@ -126,7 +126,8 @@ class DecisionTests(unittest.TestCase):
         wd = Path('/data/peter/workbench')
         for command in ('git push origin main', 'git -C /work/project push origin main',
                         'TOKEN=unused git push origin main', 'pip install requests',
-                        'python3.11 -m pip install requests', 'curl https://example.com', 'rm -r build'):
+                        'npm --global install requests', 'pip --user install requests',
+                        'python3.11 -m pip --user install requests', 'curl https://example.com', 'rm -r build'):
             asked = []
             self.assertEqual(ex.decide('bash', [command], {'command': command}, wd, autonomy=False,
                                        ask=lambda p: asked.append(p) or 'y')[0], 'once', command)
