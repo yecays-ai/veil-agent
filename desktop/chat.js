@@ -2069,7 +2069,8 @@ function renderStickers(){
       del.onclick=async()=>{if(del.dataset.sure!=='1'){del.dataset.sure='1';del.textContent='确定？';setTimeout(()=>{del.dataset.sure='';del.textContent='×'},3000);return}try{await stickerPost({action:'delete',id:s.id});renderStickers()}catch(e){stickerSay(e.message)}};
       tile.append(img,name,del);
     }else{
-      tile.append(img);tile.onclick=()=>{if(selectedImage){stickerSay('先发送或取消发送区里的图片，再发表情包。');return}if(stopping||stopped||sending||voiceSending||speechIsActive()){stickerSay('现在不能发送（正在发送或录音中），稍后再点。');return}send(`[表情包：${pack.name}/${s.name}]`)};
+      const label=document.createElement('span');label.textContent=s.name;
+      tile.append(img,label);tile.onclick=()=>{if(selectedImage){stickerSay('先发送或取消发送区里的图片，再发表情包。');return}if(stopping||stopped||sending||voiceSending||speechIsActive()){stickerSay('现在不能发送（正在发送或录音中），稍后再点。');return}send(`[表情包：${pack.name}/${s.name}]`)};
     }
     stickerGrid.appendChild(tile);
   }

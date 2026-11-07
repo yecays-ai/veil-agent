@@ -1,18 +1,18 @@
-## 当前工单 249（2026-11-07 UTC）
+# HANDOFF
 
-- 审批误判已由 PR #303 合入 main。本分支是桌面布局和双向虚拟转账、礼物，PR #302。
-- 左右栏改为布局列。矮窗口左栏可滚动，很窄时只留图标，右栏收起时隐藏开关。输入行在上，工具托盘在下；麦克风在框内，请求回复在框外。
-- 虚拟转账和礼物不是真实资金或物品。Lan 从加号托盘发送，Peter 用 `send_message` 的 `transfer` 或 `gift` 发送，用 `card_action` 处理发给自己的卡片。只有接收方能收下、拒绝；已接收的转账可以退回。结果另写一条消息。发送卡片不自动开新一轮回复。
-- 实现：`virtual_cards.py`、`veil_agent.py`、`web_agent.py`、`tools_agent.py`、`desktop/chat.js`、`desktop/chat.html`、`desktop/desktop-visual-system.css`。没有复制 InternalBeyond。
-- 本地检查：`tests/test_virtual_cards.py`、相关聊天测试、`node --check desktop/chat.js`、`desktop/tests/ui.test.cjs` 通过。Windows Electron 实机未验。不调用付费模型。
+## 上一位停在哪
+
+- Ticket 251，分支 `ticket/251-sticker-grid-display`，修复 PR 已提交；Windows Electron 源码实测已通过。
+- PR #305 引入的 `flex: 1 1 0` 会把内部 sticker grid 压成零高度；数据 API 和 195 个本地图片文件正常。本分支改为自然高度、面板滚动，图标 56px、名称常驻、间距 10px。
+- PR #306（Ticket 250）仍开放。本 PR 基于当前 main，等 #306 合并后检查冲突并解决。
+- 测试使用正式服务的只读 API，没有发消息、写索引或改图片。临时 Electron 测试文件和运行配置已清理；只保留面板预览图 `desktop/test-output/stickers-live.png`。
 
 ## 下一个窗口第一步
 
-PR #302 合并后，让 Lan 更新 Peter，按 `docs/tickets/249-desktop-composer-layout.md` 在 Windows 检查左栏、输入区、表情包和虚拟卡片。不要再改审批分类，除非实机发现新的误判。
+检查本 PR 的最新 review threads 和必需 CI；处理实质意见。PR #306 合并后把本分支同步到最新 main，解决冲突，重跑 UI 检查，再核对分支保护后合并。
 
-## 背景和边界
+## 注意
 
-- PR #303 已合并。下面是当时的审批分类记录，不要按其中「尚未合并」的句子再操作。
-- OpenCode v1.19.5 的 shell permission 请求 `patterns` 是逐条命令片段，`metadata.command` 是原始命令；复用现有请求机制，不新增权限系统。依据见 `docs/tickets/249-opencode-approval-classification.md`。
-- 聊天与自主活动共用 `executor_opencode.run` 权限回调；费用预算、Docker 隔离、密钥保护、停止和快照实现未改。
-- 未安装 OpenCode，真实 OpenCode API 集成测试和 Windows Peter 体验验收未完成；不调用付费模型，不操作真实项目。
+- 保持 `data/stickers/index.json` 和 `data/stickers/files` 不变。
+- PR #306 可能改 STATUS/HANDOFF；解决冲突时保留两张工单的当前状态。
+- 本次代码尚未更新到正式安装程序；合并后按 STATUS 的步骤验收。
