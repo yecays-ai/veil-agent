@@ -3,6 +3,12 @@
 - `veil_agent.py` 的 `load_character` 读 `data/<角色>/workbench.json` 覆盖 `[executor]` 的 `enabled/project_roots/container_image`（其他键不认，坏文件报错）；新增 `workbench_switch.py` 和 `workbench-switch.cmd`。
 - 未验：lan 电脑上双击开关、构建镜像、真实项目验收。
 
+## 工单 237 交接：桌面 UI 全状态整理与预览验收（2026-11-07）
+
+- PR #295 head `716a5caf` 已与最新 main `817de3c` 合并；Cubic 意见已逐条修复并解决；Windows desktop、Tests 四平台矩阵、Dependency security 全部通过。PR 等待 squash merge。
+- 用户已确认生活记录截图预览；全主窗状态、独立窗口拆并和浮层的 Windows 原生操作仍未逐项实机验收，按 `docs/tickets/237-preview-manifest.md` 保持待验。
+- 下一步：squash merge PR #295；之后 Lan 按清单在 Peter Windows 实机逐项验收。
+
 ## 工单 238 交接（2026-11-07）
 
 - 新文件 `workbench_scope.py`（找项目、快照、还原）；`executor_opencode.py` 加 `KeyProxy`、`ASK_LAN`、`SAFE_COMMANDS`/`SECRET_GLOBS`；`veil_agent.py` 加 `_workbench_target`、`project_roots` 配置、`workbench` 的可选 `project` 参数。

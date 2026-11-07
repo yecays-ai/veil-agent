@@ -4,6 +4,11 @@
 - 下一步：lan 用真实项目走一遍验收；设置页界面开关待 lan 的本地 Codex。
 - 验收：双击开启（第一次会构建 Docker 镜像）、加一个项目文件夹、重开 Peter，说一个带项目名的问题。下一个工单号 240。
 
+## 工单 237：桌面 UI 全状态整理与预览验收
+
+- PR #295 head `716a5caf` 已与最新 main `817de3c` 合并；Windows desktop、Tests（四平台矩阵）和 Dependency security 均通过。用户已确认生活记录预览；主窗七页、独立窗拆并和浮层的 Windows 逐项验收仍待完成，见 `docs/tickets/237-preview-manifest.md`。
+- 下一步：squash merge PR #295；合并后由 Lan 按状态清单在 Peter 的 Windows 实机逐项验收。
+
 ## 工单 238：工作台自己找项目、快照、权限分级、密钥代理
 
 - 见 `docs/tickets/238-workbench-find-project-and-guards.md`。默认仍关；`project_roots` 为空时只用工作台自己的文件夹。
