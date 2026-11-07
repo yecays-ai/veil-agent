@@ -2,7 +2,7 @@
 
 - 已完成全仓只读调用链、权限重复、开源方案和删除条件调查。结论：VEIL 保留身份/记忆/聊天/自主/预算/停止；OpenCode 只做容器内可替换任务循环，通过 VEIL 执行网关接受受限 Playwright 与 Windows UIA 适配器；不采用 UFO² 整套 Agent 核心。当前没有旧执行模块满足安全删除条件。
 - 工单 237/238 的 OpenCode 工作台已由 PR #294 合入 main；Docker 隔离、真实模型工作台和测试副本聊天有 Windows 证据。真实项目、自主醒来、Linux 宿主机和容器网络隔离仍未验；默认关闭。
-- 下一步：PR #297 等 UI PR #296 合并后再更新到最新 `main`、复查并合并；随后由工单 240 把工作台收敛为容器必需、模型无关的正式项目执行入口，建立共用 run/grant/budget/cancel/artifact 契约；不先重写桌面，不批量删旧工具。
+- 下一步：由工单 240 把工作台收敛为容器必需、模型无关的正式项目执行入口，建立共用 run/grant/budget/cancel/artifact 契约；不先重写桌面，不批量删旧工具。
 - 验收：Lan 阅读 `docs/reports/239-unified-execution-architecture.md` 的结论、权限矩阵、代码清单和迁移顺序，能直接决定先做 240；本工单没有实现通用执行能力，后续仍按真实 Windows 场景逐阶段验收。
 
 ## 工单 237：桌面 UI 全状态整理与预览验收

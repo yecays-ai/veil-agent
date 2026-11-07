@@ -8,7 +8,7 @@
 
 ## 工单 237 交接：桌面 UI 全状态整理与预览验收（2026-11-07）
 
-- PR #295 head `716a5caf` 已与最新 main `817de3c` 合并；Cubic 意见已逐条修复并解决；Windows desktop、Tests 四平台矩阵、Dependency security 全部通过。PR 等待 squash merge。
+- PR #295 已合并；合并前 Cubic 意见已逐条修复并解决，Windows desktop、Tests 四平台矩阵、Dependency security 全部通过。
 - 用户已确认生活记录截图预览；全主窗状态、独立窗口拆并和浮层的 Windows 原生操作仍未逐项实机验收，按 `docs/tickets/237-preview-manifest.md` 保持待验。
 - 下一步：PR #295 已合并；之后 Lan 按清单在 Peter Windows 实机逐项验收。
 
