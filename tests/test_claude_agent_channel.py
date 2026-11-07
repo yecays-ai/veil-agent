@@ -379,6 +379,18 @@ class ProcessLaunchTests(unittest.TestCase):
         cmd = claude.command('claude.exe')
         self.assertEqual(cmd[cmd.index('--model') + 1], 'sonnet')
 
+    def test_read_only_lookups_need_no_approval_but_writes_and_shell_still_ask(self):
+        claude = channel.ClaudeAgentChannel(None, Path('run'), provider={'model': 'sonnet'})
+        cmd = claude.command('claude.exe')
+        allowed = cmd[cmd.index('--allowedTools') + 1:]
+        for name in ('Read', 'Grep', 'Glob'):
+            self.assertIn(name, allowed)
+        for name in ('Bash', 'Write', 'Edit', 'MultiEdit', 'WebFetch', 'NotebookEdit'):
+            self.assertNotIn(name, allowed)
+        for tool in ('Read', 'Edit', 'Write'):  # `//**/` also covers files outside Claude Code's working folder
+            for target in ('.env', '.env.*', 'secrets/**'):
+                self.assertIn(f'{tool}(//**/{target})', channel.DENY_RULES)
+
     @unittest.skipUnless(os.name == 'nt', 'Windows process flags are only available on Windows')
     def test_windows_claude_process_uses_existing_background_flags(self):
         self.assertEqual(channel._process_group_options(), {

@@ -33,6 +33,9 @@ MAX_SCREENSHOT_BYTES = 5 * 1024 * 1024
 MAX_CAPTURE_PIXELS = 8_000_000
 OBSERVATION_TIMEOUT_SECONDS = 8
 UIA_SEARCH_TIMEOUT_SECONDS = 2
+# QQ holds the shared desktop gate for a moment while it works with the foreground window or clipboard; waiting a
+# few seconds avoids bouncing Peter's observation, but never more than half of the observation's own time limit.
+DESKTOP_LOCK_WAIT_SECONDS = 3
 
 PROTECTED_PROCESSES = frozenset({
     'consent.exe', 'credentialuibroker.exe', 'credwiz.exe', 'logonui.exe',
@@ -267,6 +270,7 @@ class WindowsObservationTools:
         self.application_id_for = application_id_for
         self.max_result_bytes = max(512, min(int(max_result_bytes), MAX_RESULT_BYTES))
         self.timeout_seconds = max(1, min(int(timeout_seconds), OBSERVATION_TIMEOUT_SECONDS))
+        self.lock_wait_seconds = min(DESKTOP_LOCK_WAIT_SECONDS, self.timeout_seconds / 2)
         self.tools = list(WINDOW_TOOL_SCHEMAS) if self.enabled and self.platform_enabled else []
         self._summary_lock = threading.Lock()
         self._window_summaries = {}
@@ -335,7 +339,7 @@ class WindowsObservationTools:
 
         def worker():
             try:
-                with desktop_access(timeout=0.1):
+                with desktop_access(timeout=self.lock_wait_seconds):
                     if stopped():
                         raise ObservationPaused('The autonomous activity was paused.')
                     result, state, actual_summary = self._operate(name, args, stopped)
@@ -474,20 +478,24 @@ class WindowsObservationTools:
         visual_note = 'not requested'
         if should_capture:
             with self._visual_lock:
-                if self._visual_used:
-                    raise ObservationError('The visual fallback limit for this request has been reached.')
+                over_limit = self._visual_used
                 self._visual_used = True
-            if stopped():
-                raise ObservationPaused('The autonomous activity was paused.')
-            try:
-                image = self.backend.capture_window(selected, stopped)
-                visual_note = 'screenshot attached to this request only'
-            except (ProtectedWindow, ObservationPaused):
-                raise
-            except ObservationError as exc:
-                visual_note = 'screenshot unavailable: ' + _text(exc, 240)
-            except Exception:
-                visual_note = 'screenshot unavailable; no image was attached'
+            if over_limit:
+                # Only one screenshot per request: give back the controls without a picture instead of an error.
+                visual_note = ('screenshot unavailable: only one screenshot is allowed per request, '
+                               'so only the readable controls are returned')
+            else:
+                if stopped():
+                    raise ObservationPaused('The autonomous activity was paused.')
+                try:
+                    image = self.backend.capture_window(selected, stopped)
+                    visual_note = 'screenshot attached to this request only'
+                except (ProtectedWindow, ObservationPaused):
+                    raise
+                except ObservationError as exc:
+                    visual_note = 'screenshot unavailable: ' + _text(exc, 240)
+                except Exception:
+                    visual_note = 'screenshot unavailable; no image was attached'
         elif mode == 'never':
             visual_note = 'screenshot skipped by request'
         else:

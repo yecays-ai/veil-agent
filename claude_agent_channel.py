@@ -44,8 +44,15 @@ REMINDER = ("Reminder: you are Peter texting Lan, not a coding assistant. Whatev
 # Claude Code's own prompt wording for each native tool, as one line for Lan's approval card.
 # Claude Code's own tools are not limited by VEIL's path checks (by design: the same ability as Claude Code on lan's
 # PC), but VEIL's keys and secrets are off limits to them.
-DENY_RULES = ['Read(**/.env)', 'Read(**/.env.*)', 'Edit(**/.env)', 'Edit(**/.env.*)', 'Write(**/.env)',
-              'Read(**/secrets/**)', 'Edit(**/secrets/**)', 'Write(**/secrets/**)']
+# Looking things up never changes anything, so these run without asking Lan. Writes, shell commands and web
+# access still ask. Claude Code applies DENY_RULES before this list, so .env and secrets stay unreadable.
+READ_ONLY_TOOLS = ['Read', 'Grep', 'Glob']
+# `//**/...` matches the file anywhere on the PC. Claude Code's plain `**/.env` only matches under its own working
+# folder, so on its own it would miss VEIL's real `.env` and secrets folder.
+DENY_RULES = [f'{tool}(//**/{target})' for tool in ('Read', 'Edit', 'Write')
+              for target in ('.env', '.env.*', 'secrets/**')] + [
+    'Read(**/.env)', 'Read(**/.env.*)', 'Edit(**/.env)', 'Edit(**/.env.*)', 'Write(**/.env)',
+    'Read(**/secrets/**)', 'Edit(**/secrets/**)', 'Write(**/secrets/**)']
 
 
 def describe_request(tool_name, tool_input):
@@ -396,7 +403,7 @@ class ClaudeAgentChannel:
                '--mcp-config', str(self.run_dir / 'mcp.json'), '--setting-sources', 'project',
                '--max-turns', str(MAX_TURNS), '--max-budget-usd', str(MAX_BUDGET_USD),
                '--permission-mode', 'acceptEdits', '--permission-prompt-tool', APPROVE_TOOL,
-               '--allowedTools', f'mcp__{SERVER_NAME}']
+               '--allowedTools', f'mcp__{SERVER_NAME}', *READ_ONLY_TOOLS]
         for directory in extra_dirs:
             cmd += ['--add-dir', str(directory)]
         return cmd

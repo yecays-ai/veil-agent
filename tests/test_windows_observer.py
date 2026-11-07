@@ -126,8 +126,10 @@ class WindowsObserverTests(unittest.TestCase):
         second, second_state, _ = tools.invoke('windows_observe', {
             'window_id': 'w-' + '1' * 24,
         })
-        self.assertEqual(second_state, '出错')
-        self.assertIn('limit', str(second))
+        self.assertEqual(second_state, '成功')  # no error: the controls come back, just without a picture
+        self.assertIn('only one screenshot', str(second))
+        self.assertIn('One visible label', str(second))
+        self.assertIsNone(getattr(second, 'image_data_uri', None))
         self.assertEqual(backend.capture_calls, 1)
 
         tools.begin_request()
@@ -136,6 +138,26 @@ class WindowsObserverTests(unittest.TestCase):
         })
         self.assertEqual(third_state, '成功')
         self.assertEqual(backend.capture_calls, 2)
+
+    def test_observation_waits_for_a_briefly_busy_desktop_gate(self):
+        backend = FakeBackend()
+        tools = self.make_tools(backend)
+        holder = threading.Event()
+        release = threading.Event()
+
+        def hold():
+            with desktop_access(timeout=0):
+                holder.set()
+                release.wait(5)
+
+        thread = threading.Thread(target=hold)
+        thread.start()
+        self.assertTrue(holder.wait(2))
+        threading.Timer(0.3, release.set).start()  # QQ lets go after a moment: well inside the wait
+        result, state, _ = tools.invoke('windows_list', {})
+        thread.join(5)
+        self.assertEqual(state, '成功')
+        self.assertEqual(backend.list_calls, 1)
 
     def test_complete_document_control_avoids_an_unneeded_screenshot(self):
         backend = FakeBackend(controls=[
