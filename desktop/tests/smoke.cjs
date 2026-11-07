@@ -206,7 +206,18 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
     tab.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerId:71,button:0,screenX:100,screenY:100,clientX:100,clientY:100}));
     tab.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,pointerId:71,button:0,screenX:145,screenY:145,clientX:innerWidth+20,clientY:145}));
   })()`);
-  await wait(() => chat.webContents.executeJavaScript(`document.querySelector('#rail-activity-status').textContent==='Fictional rail update'&&document.querySelector('#rail-activity-count').textContent==='7 条记录'&&document.querySelector('#rail-activity-dot').classList.contains('is-busy')&&document.body.dataset.detachedViews.includes('context')`), 'sidebar drag, rail sync, or context detach failed');
+  await wait(async () => {
+    const detail = await chat.webContents.executeJavaScript(`(()=>{
+      const status=document.querySelector('#activity-work-status'),count=document.querySelector('#activity-count'),dot=document.querySelector('#activity-work-dot');
+      status.textContent='Fictional rail update';count.textContent='7 条记录';dot.className='status-dot is-busy';
+      const rail=document.querySelector('#rail-activity-status').textContent, railCount=document.querySelector('#rail-activity-count').textContent, busy=document.querySelector('#rail-activity-dot').classList.contains('is-busy'), detached=document.body.dataset.detachedViews||'';
+      if(rail==='Fictional rail update'&&railCount==='7 条记录'&&busy&&detached.includes('context'))return 'ok';
+      return JSON.stringify({rail,railCount,busy,detached});
+    })()`);
+    if (detail === 'ok') return true;
+    wait.reason = detail;
+    return false;
+  }, () => `sidebar drag, rail sync, or context detach failed: ${wait.reason || 'no detail'}`);
   const contextWindow = () => BrowserWindow.getAllWindows().find(w => w !== pet && w !== chat && w.webContents.getURL().includes('view=context'));
   await wait(() => { const win = contextWindow(); return win && !win.webContents.isLoading(); }, 'context tab did not finish loading after detach');
   const detachedContext = contextWindow();
