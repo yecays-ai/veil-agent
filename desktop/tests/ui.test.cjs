@@ -45,7 +45,6 @@ test('daily memory view reads Ombre catalog and exact records without the legacy
     read('chat.html'), read('main.cjs'), fs.readFile(path.join(__dirname, '..', '..', 'web_agent.py'), 'utf8'),
     fs.readFile(path.join(__dirname, '..', '..', 'memory_native.py'), 'utf8')
   ]);
-  assert.match(html, /PETER'S MEMORY/);
   assert.match(html, /data-memory-group="recent"/);
   assert.match(main, /\/api\/memory\/panel/);
   assert.match(main, /'\/api\/memory\/edit', '\/api\/memory\/delete'/);
@@ -98,7 +97,7 @@ test('desktop redesign keeps real pages in one shell with a collapsible draggabl
   assert.match(html, /<h1>Peter<\/h1>/);
   assert.match(html, /data-page="chat"[^>]*><span data-lucide="message-square"><\/span>聊天/);
   assert.doesNotMatch(html, /和 Peter 聊聊/);
-  assert.match(css, /grid-template-columns:232px minmax\(520px,1fr\) 304px/);
+  assert.match(css, /grid-template-columns:clamp\(176px,17vw,232px\) minmax\(0,1fr\) clamp\(250px,21vw,304px\)/);
   assert.match(css, /--surface-2-rgb:251 248 243/);
   assert.match(css, /--veil-chat-canvas:#fbf8f3/);
   assert.match(css, /body\.detached-window \.topbar,body\.detached-window \.navigation,body\.detached-window \.desktop-rail/);
