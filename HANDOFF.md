@@ -1,3 +1,8 @@
+## 工单 239 交接（2026-11-07）
+
+- `veil_agent.py` 的 `load_character` 读 `data/<角色>/workbench.json` 覆盖 `[executor]` 的 `enabled/project_roots/container_image`（其他键不认，坏文件报错）；新增 `workbench_switch.py` 和 `workbench-switch.cmd`。
+- 未验：lan 电脑上双击开关、构建镜像、真实项目验收。
+
 ## 工单 237 交接：桌面 UI 全状态整理与预览验收（2026-11-07）
 
 - PR #295 head `716a5caf` 已与最新 main `817de3c` 合并；Cubic 意见已逐条修复并解决；Windows desktop、Tests 四平台矩阵、Dependency security 全部通过。PR 等待 squash merge。

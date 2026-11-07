@@ -208,3 +208,5 @@ body:not(.detached-window) .life-nav{border:0;border-radius:0;background:transpa
 @container (min-width:1120px){.life-agenda{grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:auto 1fr;column-gap:28px}.agenda-date{grid-column:1/-1}}
 @container (max-width:500px){.calendar-day-count{font-size:9px}.life-calendar-days{gap:3px}.life-calendar-days button{height:50px;padding-inline:0}.life-calendar-days>span{padding-inline:0}}
 @media(prefers-reduced-motion:reduce){.life-calendar-days button,.calendar-month-nav button,.agenda-add,.life-agenda{animation:none;transition:none}}
+#log,.page{scrollbar-width:none}
+#log::-webkit-scrollbar,.page::-webkit-scrollbar{display:none;width:0;height:0}

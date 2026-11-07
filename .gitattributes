@@ -1,2 +1,3 @@
 update-main.cmd text eol=crlf
 update.bat text eol=crlf
+workbench-switch.cmd text eol=crlf

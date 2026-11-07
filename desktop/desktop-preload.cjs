@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('veilDesktop', {
   petSize: () => ipcRenderer.invoke('chat:pet-size'),
   setPetSize: size => ipcRenderer.invoke('chat:set-pet-size', size),
   saveTheme: theme => ipcRenderer.invoke('chat:save-theme', theme),
+  chooseFolder: () => ipcRenderer.invoke('chat:choose-folder'),
   chooseBackground: () => ipcRenderer.invoke('chat:choose-background'),
   getBackground: () => ipcRenderer.invoke('chat:get-background'),
   clearBackground: () => ipcRenderer.invoke('chat:clear-background'),

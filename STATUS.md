@@ -1,3 +1,11 @@
+## 工单 239：工作台的本地开关
+
+- 见 `docs/tickets/239-workbench-local-switch.md`。双击 `workbench-switch.cmd` 开关工作台、选项目文件夹，写在 `data/peter/workbench.json`，不改仓库文件，更新不会丢。默认仍关。
+- 现状：后端开关做完，自动测试通过；设置页「工作台」开关随同加入，Windows 真机未验。下一个工单号 240。
+- 设置页「设置 → 工作台」有开/关和项目文件夹（选择框添加、移除），走 `/api/workbench`，与脚本共用 `workbench_switch.py`；改完重开 Peter 生效；第一次开要先双击脚本做运行环境。聊天记录和页面的滚动条已隐藏（鼠标滚轮照常）。
+- 下一步：lan 用真实项目走一遍验收。
+- 验收：双击开启（第一次会构建 Docker 镜像）、加一个项目文件夹、重开 Peter，说一个带项目名的问题。下一个工单号 240。
+
 ## 工单 237：桌面 UI 全状态整理与预览验收
 
 - PR #295 head `716a5caf` 已与最新 main `817de3c` 合并；Windows desktop、Tests（四平台矩阵）和 Dependency security 均通过。用户已确认生活记录预览；主窗七页、独立窗拆并和浮层的 Windows 逐项验收仍待完成，见 `docs/tickets/237-preview-manifest.md`。
