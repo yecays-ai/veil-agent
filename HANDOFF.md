@@ -473,3 +473,13 @@
 - 工单 192：生活页改待办便签（圆圈打勾划掉、`repeat: daily` 每天 0 点复位、已完成一次性便签超过 30 条折叠）+ 日历心情；日记入口移除，旧日记记录保留但不显示；`life_record` 工具新增 `mood`、`repeat`，不能再新建日记；自主唤醒内容改为当天日历标题 + 全部未完成待办数。分支 `ticket/192-life-todo-calendar`；需要 update.bat；Windows 体验待 Lan 验收；`tests.test_autonomy` 4 项因既有 `test_tools` 导入错误失败（改动前后相同）。下一个工单号 193。
 - 工单 193：生活页待办改为便签卡（每件事单独勾选，底部可新增，勾掉划线保留）；`life_record` 说明要求每件待办单独一条。分支 `ticket/193-todo-sticky`；需要 update.bat；Windows 体验待 Lan 验收。下一个工单号 195。
 - 工单 198：待办便签可删除（两步确认，`/api/life` 收 `{id,delete:true}`，仅 Lan、仅 event/note，原记录写入 `life-records-deleted.jsonl`）；每日重复待办单独一张便签；便签顶部改通栏色片。分支 `ticket/198-sticky-delete`；需要 update.bat；Windows 体验待 Lan 验收。
+
+## 工单 237 交接（2026-11-07）
+
+- 分支 `ticket/237-desktop-ui-full-states`，在独立 worktree `worktrees/237-desktop-ui-full-states`。Lan 已确认当前月历预览并要求提交 PR。
+- 修改主窗口为浮动左侧导航 + 开合右侧活动面板；导航文字独立包裹，收起态图标实测居中误差 0px。修正生活页避让与框线，记忆刷新移进筛选工具行，按钮改轻量圆角/分段样式；默认暖米白配色恢复为工单 235 的旧配色。审批/通知本来由 `main.cjs` 限制 520×270；之前大截图错误用了整屏 Edge viewport，已按实际尺寸重做。
+- 核对 InternalBeyond commit `0bdac818e6c4815af2a562be1b1ad4e7c6157b16` 的月历、当天安排、“今天”和快速新增交互；仅借鉴交互。生活页日历已改为尺寸固定的独立卡片，日期格只用圆形选中态与记录圆点，事项数量留在当天清单。最新 1440×900 浏览器预览：`life-calendar-preview.png`（虚构内容）。
+- 截图目录和逐项清单：`C:\Users\Administrator\.codex\visualizations\2026\11\07\01a1b598-5f8a-7411-b78a-fc40b6066b62\preview-manifest.md`（70 PNG；七主页面三尺寸、七独立页默认/滚动、八选择器、菜单桌宠通知审批及状态图）。截图内容为虚构。
+- `node --test desktop/tests/ui.test.cjs` 9 项通过；`node --check desktop/chat.js`、预览脚本 `node --check`、`git diff --check` 通过。
+- 下一步处理 PR review，并继续完成真实 Windows 全状态验收；本地截图确认不等于 Windows 原生拖动/缩放验收。
+- 真实 Electron 本轮仍未启动；拖出/拖动/缩放/合并、真实菜单和 Windows 缩放尚未体验验收，不能据 Edge 截图声称这些通过。

@@ -7,6 +7,7 @@
   <title>VEIL · Peter</title>
   <link rel="stylesheet" href="chat.css">
   <link rel="stylesheet" href="desktop-redesign.css">
+  <link rel="stylesheet" href="desktop-visual-system.css">
   <style id="custom-style" nonce="veil-custom-css"></style>
 </head>
 <body>
@@ -21,17 +22,17 @@
       <span class="header-wake"><span data-lucide="clock" data-size="14"></span><span>下次唤醒</span><b id="header-next-wake">读取中…</b></span>
       <label class="header-model" title="Peter 用哪个模型说话，下一句开始生效"><span data-lucide="cpu" data-size="14"></span><select id="model-switch" aria-label="Peter 用的模型" disabled><option>读取中…</option></select></label>
     </div>
-    <div class="top-actions"><button id="favorites-filter" type="button" aria-pressed="false" aria-label="只看收藏的消息" title="只看收藏的消息"><span data-lucide="star"></span></button><button id="expand" aria-label="铺满可用桌面区域，再点一次恢复小窗" title="铺满可用桌面区域，再点一次恢复小窗"><span data-lucide="maximize-2"></span></button><button id="collapse" aria-label="收起聊天窗口" title="收起"><span data-lucide="minimize-2"></span></button></div>
+    <div class="top-actions"><button id="favorites-filter" type="button" aria-pressed="false" aria-label="只看收藏的消息" title="只看收藏的消息"><span data-lucide="star"></span></button><button id="rail-toggle" type="button" aria-label="显示今日与 Peter 的活动" aria-pressed="false" title="显示今日与 Peter 的活动"><span data-lucide="panel-right-open"></span></button><button id="expand" aria-label="铺满可用桌面区域，再点一次恢复小窗" title="铺满可用桌面区域，再点一次恢复小窗"><span data-lucide="maximize-2"></span></button><button id="collapse" aria-label="收起聊天窗口" title="收起"><span data-lucide="minimize-2"></span></button></div>
   </header>
   <nav class="navigation" aria-label="主要页面">
-    <div class="sidebar-person"><button id="avatar-change" class="avatar-btn" type="button" aria-label="更换头像" title="点击更换头像"><img class="peter-avatar" src="assets/pep.png" alt=""></button><input id="avatar-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden><span><b>Peter</b></span><button id="sidebar-toggle" type="button" aria-label="收起侧栏" title="收起侧栏"><span data-lucide="panel-left-close"></span></button></div>
-    <button class="nav-item active" data-page="chat" aria-current="page" title="拖出可变成独立窗口"><span data-lucide="message-square"></span>聊天</button>
-    <button id="activity-tab" class="nav-item" data-page="activity" title="拖出可变成独立窗口"><span data-lucide="activity"></span>自主活动</button>
-    <button class="nav-item" data-page="context" title="拖出可变成独立窗口"><span data-lucide="layers"></span>上下文</button>
-    <button class="nav-item" data-page="memory" title="拖出可变成独立窗口"><span data-lucide="brain"></span>记忆</button>
-    <button class="nav-item" data-page="life" title="拖出可变成独立窗口"><span data-lucide="calendar-heart"></span>生活记录</button>
-    <button class="nav-item" data-page="mcp" title="拖出可变成独立窗口"><span data-lucide="plug"></span>MCP</button>
-    <button class="nav-item" data-page="more" title="拖出可变成独立窗口"><span data-lucide="more-horizontal"></span>设置</button>
+    <div class="sidebar-person"><button id="avatar-change" class="avatar-btn" type="button" aria-label="更换头像" title="点击更换头像"><img class="peter-avatar" src="assets/pep.png" alt=""></button><input id="avatar-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden><span><b>Peter</b></span><button id="sidebar-toggle" type="button" aria-label="展开侧栏" title="展开侧栏"><span data-lucide="panel-left-open"></span></button></div>
+    <button class="nav-item active" data-page="chat" aria-current="page" title="拖出可变成独立窗口"><span data-lucide="message-square"></span><span class="nav-label">聊天</span></button>
+    <button id="activity-tab" class="nav-item" data-page="activity" title="拖出可变成独立窗口"><span data-lucide="activity"></span><span class="nav-label">自主活动</span></button>
+    <button class="nav-item" data-page="context" title="拖出可变成独立窗口"><span data-lucide="layers"></span><span class="nav-label">上下文</span></button>
+    <button class="nav-item" data-page="memory" title="拖出可变成独立窗口"><span data-lucide="brain"></span><span class="nav-label">记忆</span></button>
+    <button class="nav-item" data-page="life" title="拖出可变成独立窗口"><span data-lucide="calendar-heart"></span><span class="nav-label">生活记录</span></button>
+    <button class="nav-item" data-page="mcp" title="拖出可变成独立窗口"><span data-lucide="plug"></span><span class="nav-label">MCP</span></button>
+    <button class="nav-item" data-page="more" title="拖出可变成独立窗口"><span data-lucide="more-horizontal"></span><span class="nav-label">设置</span></button>
     <div class="sidebar-foot"><span>下次唤醒</span><b id="sidebar-next-wake">读取中…</b></div>
   </nav>
   <div id="toasts" role="status" aria-live="polite"></div>
@@ -56,14 +57,14 @@
     <section class="surface context-block"><h3>短期便签 <small class="muted">进行中的会放进他的上下文</small></h3><div id="context-notes" class="context-list" aria-live="polite"><p class="muted">还没有便签。</p></div></section>
   </section>
   <section id="memory-view" class="page" data-page-view="memory" hidden>
-    <div class="page-heading"><div><h2 id="memory-heading">最近</h2></div><button id="memory-reload">刷新</button></div>
-    <div class="memory-groups" role="group" aria-label="记忆分组"><button class="active" data-memory-group="recent">最近</button><button data-memory-group="us">我们俩</button><button data-memory-group="peter">他自己</button><button data-memory-group="system">系统和能力</button></div>
+    <div class="page-heading"><div><h2 id="memory-heading">最近</h2></div></div>
+    <div class="memory-groups" role="group" aria-label="记忆分组"><button class="active" data-memory-group="recent">最近</button><button data-memory-group="us">我们俩</button><button data-memory-group="peter">他自己</button><button data-memory-group="system">系统和能力</button><button id="memory-reload" type="button" aria-label="刷新记忆" title="刷新记忆"><span data-lucide="rotate-ccw"></span></button></div>
     <div class="memory-toolbar"><label for="memory-search">搜索记忆</label><input id="memory-search" type="search" placeholder="搜索记忆…（标题、内容、标签都能搜）"></div>
     <div class="memory-layout"><section id="memory-list" class="surface memory-list" aria-label="Ombre 记忆列表"><p class="muted">正在读取 Ombre 记忆…</p></section><article id="memory-detail" class="surface memory-detail"><p class="muted">点上面一条记忆查看内容。</p></article></div>
     <div class="memory-footer"><span id="memory-count" class="muted">尚未读取</span><div><span id="memory-unavailable" class="muted" hidden>Ombre 记忆暂不可用</span><button id="memory-panel" hidden>高级管理 · Ombre Dashboard <span data-lucide="external-link" data-size="14"></span></button></div></div>
   </section>
   <section id="life-view" class="page" data-page-view="life" hidden>
-    <div class="life-shell"><aside class="life-nav surface"><div class="life-brand"><span>✦</span><div><b>生活记录中心</b><small>Peter &amp; Lan</small></div></div><div class="life-filter"><button data-life-owner="all" aria-pressed="true">共同空间</button><button data-life-owner="Peter" aria-pressed="false">Peter</button><button data-life-owner="Lan" aria-pressed="false">Lan</button></div><div class="life-section"><small>记录</small><button data-life-kind="all" class="active">◷　今日</button><button data-life-kind="event">▦　日历</button><button data-life-kind="note">☑　待办便签</button><button data-life-kind="plan">◇　长期计划</button><button data-life-kind="completed">✓　已完成</button></div><label class="life-date">查看日期<input id="life-day" type="date"></label></aside><section class="life-main"><header class="life-header"><div><h2 id="life-heading">生活记录</h2><p>把日子留在这里，之后还可以一起翻阅。</p></div><button class="life-add" id="life-new">＋　新记录</button></header><div class="life-toolbar"><span>日程和待办</span><span id="life-count">正在读取记录…</span></div><div id="life-records" class="life-records"></div></section><aside class="life-detail surface" id="life-detail"><div class="detail-empty"><span>✧</span><h3>留一点空间给今天</h3><p>选择一条记录，或者写下一个想记住的瞬间。</p><button id="life-detail-new">写一条记录　＋</button></div></aside></div>
+    <div class="life-shell"><aside class="life-nav surface"><div class="life-brand"><span>✦</span><div><b>生活记录中心</b><small>Peter &amp; Lan</small></div></div><div class="life-filter" role="group" aria-label="筛选记录归属"><button data-life-owner="all" aria-pressed="true">共同空间</button><button data-life-owner="Peter" aria-pressed="false">Peter</button><button data-life-owner="Lan" aria-pressed="false">Lan</button></div><div class="life-section" role="group" aria-label="记录视图"><small>记录</small><button data-life-kind="all" class="active">总览</button><button data-life-kind="event">日程</button><button data-life-kind="note">待办</button><button data-life-kind="plan">计划</button><button data-life-kind="completed">已完成</button></div><label class="life-date" hidden>查看日期<input id="life-day" type="date"></label></aside><section class="life-main"><header class="life-header"><div><h2 id="life-heading">生活记录</h2><p>把日子留在这里，之后还可以一起翻阅。</p></div><button class="life-add" id="life-new">新建记录</button></header><div class="life-toolbar"><span>日程和待办</span><span id="life-count">正在读取记录…</span></div><div id="life-records" class="life-records"></div></section><aside class="life-detail surface" id="life-detail"><div class="detail-empty"><span>✧</span><h3>留一点空间给今天</h3><p>选择一条记录，或者写下一个想记住的瞬间。</p><button id="life-detail-new">写一条记录　＋</button></div></aside></div>
   </section>
   <section id="mcp-view" class="page" data-page-view="mcp" hidden>
     <div class="page-heading"><div><h2>MCP</h2></div><button id="mcp-refresh" type="button">刷新</button></div>
