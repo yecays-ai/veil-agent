@@ -180,7 +180,8 @@ class ChannelChatTests(unittest.TestCase):
         self.assertIn('delegate', seen['names'])
         self.assertEqual(seen['result'], 'fictional research result')
         self.assertEqual(seen['state'], '成功')
-        delegated.assert_called_once()
+        delegated.assert_called_once_with(
+            'Find a public article about fictional garden design.', 'fixture-request')
 
     def test_delegate_is_not_offered_to_claude_code_when_disabled(self):
         self.assertNotIn('delegate', {s['function']['name'] for s in self.chat.tool_schemas()})
