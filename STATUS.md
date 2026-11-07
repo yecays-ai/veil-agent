@@ -1,3 +1,16 @@
+## 工单 238：工作台自己找项目、快照、权限分级、密钥代理
+
+- 见 `docs/tickets/238-workbench-find-project-and-guards.md`。默认仍关；`project_roots` 为空时只用工作台自己的文件夹。
+- 现状：不用容器时，命令仍能读写项目外文件（已复现）；用容器时在 Windows + Docker Desktop 上验证通过（重跑后项目外文件、`.env` 读和改、真实密钥、宿主机环境变量全部挡住，正常修改不受影响）；真实模型在容器里的整套任务通过；测试副本里 Peter 真实聊天通过（自己按名字找项目、留快照、只改一行、不动 lan 的修改）。容器仍能联网，Linux 主机未验，自主醒来未在真机验。
+- 下一步：默认关闭；真实项目仍未开放，开放前再由 lan 决定范围。已知小问题：容器里文件权限让 git status 误显示 `.env`/测试文件被改。
+- 验收：lan 说一个带项目名的问题，Peter 自己找到项目、改前留退路、联网/安装/推送问她。下一个工单号 239。
+
+## 工单 237：工作台（OpenCode 执行后端）隔离原型
+
+- Peter 新增工具 `workbench`（默认关，`character.toml` 的 `[executor] enabled = true` 才开）：把需要命令行、改文件、跑程序、下载的活交给临时启动的 OpenCode，在 `data/<角色>/workbench` 文件夹里干活；权限由 VEIL 程序决定（文件夹内直接做，危险命令和密钥拒绝，文件夹之外聊天里问 lan、自主醒来里拒绝），步数、时间、重复调用、费用上限由 VEIL 卡并计入共享账本，lan 按停止立即中止。找不到 OpenCode 时工具不出现，聊天、记忆、自主活动不受影响。原型阶段，不合并，Windows 和真实中转的全套验收未完成。
+- 下一步：lan 在真实中转和 Windows 上完成验收后，再决定是否合并。
+- 验收见 `docs/tickets/237-workbench-executor-prototype.md`。下一个工单号 238。
+
 ## 工单 236：Peter 能按关键词找 GitHub 仓库并比较
 
 - `github_read` 增加 `search_repositories`（只需关键词，可选排序 best_match/stars/updated/forks，翻页，每页 10 个，列名称、链接、描述、Stars、许可证、语言、更新时间、是否归档）和 `readme`（不用猜文件名）；候选仓库的许可证、目录、源码继续用原来的 `repository`/`tree`/`file`。仍然只读、只看公开仓库，聊天、自主活动、委派只读搜索共用，没有新依赖。Windows 实机待 lan 验收。`AGENTS.md` 有了面向开发 agent 的第一性原理规则。
