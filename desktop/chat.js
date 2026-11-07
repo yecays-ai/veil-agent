@@ -763,15 +763,24 @@ function lifeCalendar(selected,records){
   const prev=document.createElement('button');prev.type='button';prev.setAttribute('aria-label','上个月');prev.textContent='‹';
   const next=document.createElement('button');next.type='button';next.setAttribute('aria-label','下个月');next.textContent='›';
   const label=document.createElement('strong');label.textContent=month.toLocaleDateString('zh-CN',{year:'numeric',month:'long'});
+  const today=document.createElement('button');today.type='button';today.className='calendar-today';today.textContent='今天';today.onclick=()=>{lifeDay=lifeToday();$('life-day').value=lifeDay;renderLife()};
   prev.onclick=()=>{lifeDay=lifeDateKey(new Date(month.getFullYear(),month.getMonth()-1,1));$('life-day').value=lifeDay;renderLife()};
   next.onclick=()=>{lifeDay=lifeDateKey(new Date(month.getFullYear(),month.getMonth()+1,1));$('life-day').value=lifeDay;renderLife()};
-  heading.append(prev,label,next);grid.append(heading);
+  const monthNav=document.createElement('div');monthNav.className='calendar-month-nav';monthNav.append(prev,label,next);heading.append(monthNav,today);grid.append(heading);
   const days=document.createElement('div');days.className='life-calendar-days';
   for(const name of ['一','二','三','四','五','六','日']){const cell=document.createElement('span');cell.textContent=name;days.append(cell)}
-  for(let i=0;i<42;i++){const date=new Date(start);date.setDate(start.getDate()+i);const key=lifeDateKey(date);const cell=document.createElement('button');cell.type='button';cell.textContent=String(date.getDate());cell.className=date.getMonth()===month.getMonth()?'':'outside';if(key===lifeDay)cell.classList.add('selected');if(records.some(x=>x.kind==='event'&&x.date===key))cell.classList.add('has-record');cell.setAttribute('aria-label',date.toLocaleDateString('zh-CN',{year:'numeric',month:'long',day:'numeric'}));cell.setAttribute('aria-pressed',String(key===lifeDay));cell.onclick=()=>{lifeDay=key;$('life-day').value=key;renderLife()};days.append(cell)}
+  for(let i=0;i<42;i++){
+    const date=new Date(start);date.setDate(start.getDate()+i);const key=lifeDateKey(date),cell=document.createElement('button');cell.type='button';cell.className=date.getMonth()===month.getMonth()?'':'outside';
+    const number=document.createElement('span');number.className='calendar-day-number';number.textContent=String(date.getDate());cell.append(number);
+    const count=records.filter(x=>(x.kind==='event'||x.kind==='note')&&(x.date===key||x.kind==='note'&&x.repeat==='daily')).length;
+    if(count){cell.classList.add('has-record');const marker=document.createElement('span');marker.className='calendar-day-marker';marker.setAttribute('aria-hidden','true');cell.append(marker)}
+    if(key===lifeToday())cell.classList.add('today');if(key===lifeDay)cell.classList.add('selected');
+    const aria=[date.toLocaleDateString('zh-CN',{year:'numeric',month:'long',day:'numeric'}),count?`${count} 项安排或待办`:''].filter(Boolean).join('，');
+    cell.setAttribute('aria-label',aria);cell.setAttribute('aria-pressed',String(key===lifeDay));cell.onclick=()=>{lifeDay=key;$('life-day').value=key;renderLife()};days.append(cell)
+  }
   grid.append(days);return grid
 }
-function lifeAgendaRow(x,kind){const row=document.createElement('div');row.className='life-agenda-row';if(kind==='note'){const done=x.state==='completed';const box=document.createElement('button');box.type='button';box.className='agenda-check';box.textContent=done?'✓':'';box.setAttribute('aria-label',(done?'改回未完成：':'标记完成：')+x.title);box.onclick=()=>saveLife({id:x.id,state:done?'active':'completed'},true);row.append(box)}else{const dot=document.createElement('span');dot.className='agenda-dot';row.append(dot)}const title=document.createElement('button');title.type='button';title.className='agenda-title';title.textContent=x.title;title.onclick=()=>showLife(x);row.append(title);if(x.kind==='note'&&!x.source&&!x.read_only){const del=document.createElement('button');del.type='button';del.className='agenda-delete';del.textContent='×';del.title='删除这一条';del.onclick=()=>armDelete(del,x);row.append(del)}return row}
+function lifeAgendaRow(x,kind){const row=document.createElement('div');row.className='life-agenda-row';if(kind==='note'){const done=x.state==='completed';const box=document.createElement('button');box.type='button';box.className='agenda-check';box.textContent=done?'✓':'';box.setAttribute('aria-label',(done?'改回未完成：':'标记完成：')+x.title);box.onclick=()=>saveLife({id:x.id,state:done?'active':'completed'},true);row.append(box)}else{const dot=document.createElement('span');dot.className='agenda-dot';row.append(dot)}const title=document.createElement('button');title.type='button';title.className='agenda-title';title.textContent=x.title;title.onclick=()=>showLife(x);row.append(title);const owner=document.createElement('span');owner.className='agenda-owner';owner.textContent=x.owner||'共同';row.append(owner);if(x.kind==='note'&&!x.source&&!x.read_only){const del=document.createElement('button');del.type='button';del.className='agenda-delete';del.textContent='×';del.title='删除这一条';del.onclick=()=>armDelete(del,x);row.append(del)}return row}
 function renderLife(){
   const host=$('life-records'),today=lifeToday();host.replaceChildren();if(!lifeDay)lifeDay=today;$('life-day').value=lifeDay;
   const selected=new Date(lifeDay+'T12:00:00'),selectedLabel=selected.toLocaleDateString('zh-CN',{month:'long',day:'numeric'}),ownerFilter=x=>lifeOwner==='all'||x.owner===lifeOwner;
@@ -1524,9 +1533,28 @@ const sidebarToggle=$('sidebar-toggle');
 function setSidebarCollapsed(collapsed){
   document.body.classList.toggle('sidebar-collapsed',collapsed);
   sidebarToggle.setAttribute('aria-label',collapsed?'展开侧栏':'收起侧栏');sidebarToggle.title=collapsed?'展开侧栏':'收起侧栏';
+  sidebarToggle.firstElementChild.dataset.lucide=collapsed?'panel-left-open':'panel-left-close';window.veilIconify(sidebarToggle);
 }
-try{setSidebarCollapsed(localStorage.getItem('veil-sidebar-collapsed')==='1')}catch{}
+try{setSidebarCollapsed(localStorage.getItem('veil-sidebar-collapsed')==='1'||localStorage.getItem('veil-sidebar-collapsed')===null)}catch{setSidebarCollapsed(true)}
 sidebarToggle.onclick=()=>{const collapsed=!document.body.classList.contains('sidebar-collapsed');setSidebarCollapsed(collapsed);try{localStorage.setItem('veil-sidebar-collapsed',collapsed?'1':'0')}catch{}};
+const railToggle=$('rail-toggle');
+function setRailVisible(visible){
+  document.body.classList.toggle('rail-hidden',!visible);
+  document.body.classList.toggle('rail-visible',visible);
+  railToggle.setAttribute('aria-pressed',visible?'true':'false');
+  railToggle.title=visible?'隐藏今日与 Peter 的活动':'显示今日与 Peter 的活动';
+  railToggle.setAttribute('aria-label',railToggle.title);
+  railToggle.firstElementChild.dataset.lucide=visible?'panel-right-close':'panel-right-open';window.veilIconify(railToggle);
+}
+try{
+  const savedRail=localStorage.getItem('veil-rail-visible');
+  setRailVisible(savedRail==='1');
+}catch{setRailVisible(false)}
+railToggle.onclick=()=>{
+  const visible=railToggle.getAttribute('aria-pressed')!=='true';
+  setRailVisible(visible);
+  try{localStorage.setItem('veil-rail-visible',visible?'1':'0')}catch{}
+};
 function syncDesktopRail(){
   const syncText=(id,value)=>{if($(id).textContent!==value)$(id).textContent=value};
   syncText('sidebar-next-wake',$('header-next-wake').textContent);

@@ -4,22 +4,22 @@ body { font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif; }
 [hidden] { display: none !important; }
 .popup {
   width: 100%; height: 100%; display: flex; flex-direction: column;
-  color: #1b1b1b; background: #fff; border: 1px solid #777; border-radius: 3px;
-  box-shadow: 0 12px 36px rgba(0, 0, 0, .42);
+  color: #413f3a; background: #fffdfa; border: 1px solid #cfc6ba; border-radius: 12px; overflow: hidden;
+  box-shadow: 0 16px 44px rgba(8, 25, 36, .25);
 }
-.titlebar { height: 38px; flex: none; display: flex; align-items: center; justify-content: space-between; gap: 18px; padding-left: 14px; background: linear-gradient(#fff, #f1f1f1); border-bottom: 1px solid #dedede; }
-.titlebar h1 { margin: 0; color: #505050; font-size: 16px; font-weight: 400; }
-.titlebar #close { align-self: flex-start; width: 44px; height: 31px; border: 1px solid transparent; border-radius: 0 2px 0 0; background: transparent; color: #4b4b4b; font: 21px/1 "Segoe UI", sans-serif; cursor: pointer; }
-.titlebar #close:hover { border-color: #c42b1c; background: #e81123; color: white; }
-.popup-content { flex: 1; min-height: 0; display: flex; align-items: center; gap: 20px; padding: 22px 32px; }
-.info-icon { flex: none; width: 46px; height: 46px; display: grid; place-items: center; border: 2px solid rgba(255, 255, 255, .88); border-radius: 50%; background: linear-gradient(145deg, #5db7ff, #0877d1 62%, #0758a5); box-shadow: 0 2px 5px rgba(0, 0, 0, .28); color: white; font: italic 700 31px/1 Georgia, serif; text-shadow: 0 1px 1px rgba(0, 0, 0, .35); }
-.popup-content p { flex: 1; min-width: 0; max-height: 100%; margin: 0; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 17px; line-height: 1.5; }
-.popup-actions { height: 62px; flex: none; display: flex; align-items: center; justify-content: flex-end; padding: 0 24px; background: #f0f0f0; border-top: 1px solid #e4e4e4; }
-.confirm { min-width: 96px; height: 34px; padding: 0 18px; border: 1px solid #8c8c8c; border-radius: 2px; background: linear-gradient(#fff, #e5e5e5); box-shadow: inset 0 1px rgba(255, 255, 255, .9); color: #222; font: 15px "Segoe UI", "Microsoft YaHei UI", sans-serif; }
+.titlebar { height: 42px; flex: none; display: flex; align-items: center; justify-content: space-between; gap: 18px; padding-left: 16px; background: #f2eee7; border-bottom: 1px solid #ded7cd; }
+.titlebar h1 { margin: 0; color: #413f3a; font-size: 13px; font-weight: 650; }
+.titlebar #close { align-self: center; width: 34px; height: 32px; margin-right: 5px; border: 0; border-radius: 50%; background: transparent; color: #6f6b64; font: 20px/1 "Segoe UI", sans-serif; cursor: pointer; }
+.titlebar #close:hover { background: #f3e2dd; color: #a74448; }
+.popup-content { flex: 1; min-height: 0; display: flex; align-items: center; gap: 14px; padding: 16px 20px; }
+.info-icon { flex: none; width: 38px; height: 38px; display: grid; place-items: center; border: 0; border-radius: 50%; background: #e8ede4; color: #596f5b; font: 700 21px/1 "Segoe UI", sans-serif; }
+.popup-content p { flex: 1; min-width: 0; max-height: 100%; margin: 0; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 15px; line-height: 1.5; }
+.popup-actions { height: 52px; flex: none; display: flex; align-items: center; justify-content: flex-end; padding: 0 16px; background: #f2eee7; border-top: 1px solid #ded7cd; }
+.confirm { min-width: 92px; height: 34px; padding: 0 17px; border: 0; border-radius: 10px; background: #596f5b; color: #fffdfa; font: 600 13px "Segoe UI", "Microsoft YaHei UI", sans-serif; }
 .confirm:disabled { opacity: .65; }
 .confirm:not(:disabled) { cursor: pointer; }
-.confirm:not(:disabled):hover { border-color: #0078d4; background: linear-gradient(#f7fcff, #d9efff); }
-.confirm:not(:disabled):active { background: #cce4f7; }
+.confirm:not(:disabled):hover { background: #475b49; }
+.confirm:not(:disabled):active { background: #3c4d3e; }
 .danmaku { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
 .danmaku span {
   position: absolute; top: var(--position-y, 12%); left: 0; width: max-content; max-width: none; opacity: 0;
