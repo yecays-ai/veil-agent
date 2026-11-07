@@ -1296,7 +1296,60 @@ class Hub(ScreenPopMixin):
                 self.submission_pending = False
                 self.cond.notify_all()
 
-    def message_action(self, action, message_id=None, *, message_ids=None, content=None, favorite=None):
+    def message_action(self, action, message_id=None, *, message_ids=None, content=None, favorite=None, card=None):
+        if action in ('create_transfer', 'create_gift', 'card_accept', 'card_decline'):
+            if self.chat is None:
+                return '当前聊天不可用。'
+            with self.cond:
+                if self.stopping or self.stopped:
+                    return 'Agent 服务已退出。'
+                if self.busy or self.submission_pending or self.autonomy_busy:
+                    return 'Peter 正在处理消息，请稍后再试。'
+                self.busy = True
+            try:
+                if action in ('create_transfer', 'create_gift'):
+                    kind = 'transfer' if action == 'create_transfer' else 'gift'
+                    if not isinstance(card, dict) or set(card) - {'amount', 'note', 'content'}:
+                        raise UserError('卡片内容无效。')
+                    if kind == 'transfer':
+                        amount, note = card.get('amount'), card.get('note', '')
+                        if (not isinstance(amount, str) or not re.fullmatch(r'(?:0|[1-9]\d{0,11})(?:\.\d{1,2})?', amount)
+                                or float(amount) <= 0 or not isinstance(note, str) or len(note) > 240):
+                            raise UserError('金额或留言无效。')
+                        payload = {'type': kind, 'amount': amount, 'note': note.strip(), 'status': 'pending'}
+                        text = f'发出了一张虚拟转账卡片：¥{amount}'
+                    else:
+                        gift = card.get('content')
+                        if not isinstance(gift, str) or not 1 <= len(gift.strip()) <= 500:
+                            raise UserError('礼物内容请填写 1 至 500 个字符。')
+                        payload = {'type': kind, 'content': gift.strip(), 'status': 'pending'}
+                        text = '送出了一份虚拟礼物。'
+                    message_id = secrets.token_hex(16)
+                    row = {'role': 'user', 'content': text, 'message_id': message_id, 'virtual_card': payload}
+                    self.chat.store.append(self.chat.path, row)
+                    self.chat.history, self.chat.rounds = self.chat.recent()
+                    self.push('user', text, message_id=message_id, virtual_card=payload)
+                    return '虚拟卡片已发送。'
+                _, row = self.chat.message_record(message_id)
+                payload = row.get('virtual_card')
+                if not isinstance(payload, dict) or payload.get('type') not in ('transfer', 'gift'):
+                    raise UserError('找不到这张虚拟卡片。')
+                if payload.get('status') != 'pending':
+                    raise UserError('这张卡片已经处理过了。')
+                payload = {**payload, 'status': 'accepted' if action == 'card_accept' else 'declined'}
+                index, _ = self.chat.message_record(message_id)
+                self.chat.store.update_record(self.chat.path, index, {'virtual_card': payload})
+                self.chat.history, self.chat.rounds = self.chat.recent()
+                self.push('message_updated', '', message_id=message_id, virtual_card=payload)
+                return '虚拟卡片状态已更新。'
+            except UserError as exc:
+                return str(exc)
+            except OSError:
+                return '虚拟卡片未能安全保存，请保留数据后重试。'
+            finally:
+                with self.cond:
+                    self.busy = False
+                    self.cond.notify_all()
         allowed = ('delete', 'recall', 'regenerate', 'edit', 'favorite')
         if action not in allowed or self.chat is None:
             return '无效的消息操作。'
@@ -2128,9 +2181,11 @@ def make_handler(hub, token):
                     self._send(200, {'ok': True, 'items': items})
                 return
             result = hub.message_action(action, message_id, message_ids=body.get('message_ids'),
-                                        content=body.get('content'), favorite=body.get('favorite'))
+                                        content=body.get('content'), favorite=body.get('favorite'),
+                                        card=body.get('card'))
             accepted = result in ('已开始重新生成。', '消息已删除。', '已删除所选消息。', '消息已撤回。',
-                                  '消息已更新。', '已收藏消息。', '已取消收藏。')
+                                  '消息已更新。', '已收藏消息。', '已取消收藏。', '虚拟卡片已发送。',
+                                  '虚拟卡片状态已更新。')
             self._send(200 if accepted else 409,
                        {'ok': accepted, 'message': result, 'action': action if accepted else None})
             return
@@ -2648,7 +2703,8 @@ def serve_chat(chat, hub, channels=()):
                  favorite=message.get('favorite') is True,
                  memory_refs=message.get('memory_refs', []),
                  **({'attachments': attachments} if attachments else {}),
-                 **({'media': media} if media else {}))
+                 **({'media': media} if media else {}),
+                 **({'virtual_card': message['virtual_card']} if isinstance(message.get('virtual_card'), dict) else {}))
     # The UI history is a bounded window; replay decisions must use the durable
     # full chat log or an older successful voice send looks pending on restart.
     completed_voice_ids = {

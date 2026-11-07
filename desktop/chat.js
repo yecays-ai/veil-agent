@@ -153,6 +153,7 @@ function showEvent(e){
     const node=findMessageBubble(e.message_id);
     if(node){
       if(e.edited===true&&typeof e.text==='string'){node.dataset.messageText=e.text;node.replaceChildren();node.classList.remove('sticker-msg');if(!stickerBubble(node,e.text))node.innerHTML=render(e.text)}
+      if(e.virtual_card)renderVirtualCard(node,e.virtual_card);
       updateFavoriteBadge(node,e.favorite===true);
     }
     return;
@@ -174,7 +175,7 @@ function showEvent(e){
     if(pending)pending.remove();
   }
   if(e.kind==='trace'){scrollIfFollowing(()=>addTrace(e));return}
-  scrollIfFollowing(()=>add(e.kind,e.text,e.id,e.time,e.media,e.message_id,e.request_id,e.favorite,e.attachments));
+  scrollIfFollowing(()=>add(e.kind,e.text,e.id,e.time,e.media,e.message_id,e.request_id,e.favorite,e.attachments,e.virtual_card));
   if(e.kind==='approval'&&e.id!==pendingApproval){
     const card=col.querySelector('.approval[data-id="'+e.id+'"]');
     card.classList.add('done');card.querySelector('.status').textContent='审批已结束，请看后续聊天提示。';
@@ -305,7 +306,26 @@ function updateFavoriteBadge(node,favorite){
   if(favorite&&!badge){badge=document.createElement('span');badge.className='msg-favorite';badge.innerHTML=window.veilIcon('star',13);badge.title='Favorite';badge.setAttribute('aria-label','Favorite');node.appendChild(badge)}
   else if(!favorite&&badge)badge.remove();
 }
-function add(kind,text,id,time,media,messageId,requestId,favorite=false,attachments=[]){
+function renderVirtualCard(node,card){
+  if(!card||!['transfer','gift'].includes(card.type))return;
+  node.classList.add('virtual-card-message');
+  const cardNode=document.createElement('section');cardNode.className='virtual-card';
+  const head=document.createElement('div');head.className='virtual-card-head';
+  const icon=document.createElement('span');icon.className='virtual-card-icon';icon.innerHTML=window.veilIcon(card.type==='transfer'?'wallet':'gift',18);
+  const title=document.createElement('span');title.textContent=card.type==='transfer'?'虚拟转账':'虚拟礼物';head.append(icon,title);
+  const value=document.createElement('strong');value.className='virtual-card-value';value.textContent=card.type==='transfer'?`¥${card.amount||'0'}`:'送给 Peter 的礼物';cardNode.append(head,value);
+  const note=document.createElement('p');note.className='virtual-card-note';note.textContent=card.type==='transfer'?(card.note||'仅聊天虚拟互动'):card.content||'';cardNode.append(note);
+  const state=document.createElement('div');state.className='virtual-card-state';state.textContent=card.status==='accepted'?'已接受':card.status==='declined'?'已退回':'等待处理（虚拟）';cardNode.append(state);
+  if(card.status==='pending'){
+    const actions=document.createElement('div');actions.className='virtual-card-actions';
+    for(const [label,action] of (card.type==='transfer'?[['标记已收','card_accept'],['退回','card_decline']]:[['接受','card_accept'],['婉拒','card_decline']])){
+      const button=document.createElement('button');button.type='button';button.textContent=label;button.onclick=async()=>{button.disabled=true;const r=await api('/api/message/action',{action,message_id:node.dataset.messageId});if(!r.ok){button.disabled=false;add('error',r.message||'虚拟卡片操作失败，请重试。')}};actions.append(button)
+    }
+    cardNode.append(actions)
+  }
+  node.replaceChildren(cardNode);
+}
+function add(kind,text,id,time,media,messageId,requestId,favorite=false,attachments=[],virtualCard=null){
   if(kind==='error'){
     if(requestId&&displayedErrorRequests.has(requestId))return;
     if(id&&displayedEventIds.has(id))return;
@@ -339,7 +359,8 @@ function add(kind,text,id,time,media,messageId,requestId,favorite=false,attachme
     }else if(media&&media.id){
       const image=document.createElement('img');image.className='msg-image';if(canLoadChatMedia)window.veilDesktop.mediaUrl(media.filename).then(url=>{image.src=url}).catch(()=>{});image.alt=media.name||'图片';image.loading='lazy';d.appendChild(image);
       if(text&&text!=='[图片]'){const caption=document.createElement('div');caption.innerHTML=render(text);d.appendChild(caption)}
-    }else if(!stickerBubble(d,text))d.innerHTML=render(text);
+    }else if(virtualCard)renderVirtualCard(d,virtualCard);
+    else if(!stickerBubble(d,text))d.innerHTML=render(text);
     for(const attachment of Array.isArray(attachments)?attachments:[]){const card=createAttachmentCard(attachment);if(card)d.appendChild(card)}
     updateFavoriteBadge(d,d.dataset.favorite==='true');
     d.classList.toggle('is-selected',selectedMessageIds.has(messageId));
@@ -1196,7 +1217,7 @@ async function chooseImage(file){
   const cancel=document.createElement('button');cancel.type='button';cancel.textContent='取消';cancel.onclick=clearImage;selectedImage.cancel=cancel;imagePreview.appendChild(cancel);imagePreview.hidden=false;
 }
 imageButton.onclick=()=>imageFile.click();
-imageFile.onchange=()=>chooseImage(imageFile.files?.[0]);
+imageFile.onchange=()=>{setComposerPanel(null);chooseImage(imageFile.files?.[0])};
 ['dragenter','dragover'].forEach(type=>composer.addEventListener(type,e=>{e.preventDefault();composer.classList.add('image-drop-active')}));
 ['dragleave','drop'].forEach(type=>composer.addEventListener(type,e=>{e.preventDefault();if(type==='drop')chooseImage(e.dataTransfer?.files?.[0]);composer.classList.remove('image-drop-active')}));
 if(document.addEventListener)document.addEventListener('paste',e=>{
@@ -1606,8 +1627,37 @@ let railDateTimer;
 function refreshRailDate(){const now=new Date();$('rail-date-label').textContent=`${now.getMonth()+1} 月 ${now.getDate()} 日`;$('rail-weekday').textContent='星期'+'日一二三四五六'[now.getDay()];clearTimeout(railDateTimer);railDateTimer=setTimeout(refreshRailDate,new Date(now.getFullYear(),now.getMonth(),now.getDate()+1).getTime()-now.getTime()+50)}
 refreshRailDate();
 const composerMore=$('composer-more'),composerNode=$('composer');
-composerMore.onclick=event=>{event.stopPropagation();const open=composerNode.classList.toggle('tools-open');composerMore.setAttribute('aria-expanded',String(open))};
-document.addEventListener('click',event=>{if(!composerNode.contains(event.target)){composerNode.classList.remove('tools-open');composerMore.setAttribute('aria-expanded','false')}});
+const composerTray=$('composer-tray'),stickerPanel=$('sticker-panel');
+let composerPanel=null,composerFollowingBottom=true;
+function setComposerPanel(panel){composerPanel=panel;if(panel!=='stickers')stickerManage=false;composerNode.classList.toggle('tools-open',panel==='plus');composerNode.classList.toggle('stickers-open',panel==='stickers');composerMore.setAttribute('aria-expanded',String(panel!==null));composerTray.hidden=panel!=='plus';stickerPanel.hidden=panel!=='stickers';$('sticker-button').setAttribute('aria-expanded',String(panel==='stickers'))}
+box.addEventListener('focus',()=>{if(composerPanel)setComposerPanel(null)});
+imageFile.addEventListener('cancel',()=>setComposerPanel(null));
+composerMore.onclick=event=>{event.stopPropagation();setComposerPanel(composerPanel?null:'plus')};
+log.addEventListener('scroll',()=>{composerFollowingBottom=log.scrollHeight-log.scrollTop-log.clientHeight<80});
+new ResizeObserver(()=>{if(composerFollowingBottom)requestAnimationFrame(()=>{log.scrollTop=log.scrollHeight})}).observe($('composer-footer'));
+document.addEventListener('click',event=>{if(!composerNode.contains(event.target))setComposerPanel(null)});
+const virtualDialog=$('virtual-card-dialog'),virtualForm=$('virtual-card-form');
+let virtualCardKind='transfer';
+function openVirtualCard(kind){
+  virtualCardKind=kind;
+  const transfer=kind==='transfer';
+  $('virtual-card-title').textContent=transfer?'发送虚拟转账':'送一份虚拟礼物';
+  $('virtual-card-submit').textContent=transfer?'发送转账':'送出礼物';
+  $('virtual-card-amount-label').hidden=!transfer;$('virtual-card-note-label').hidden=!transfer;$('virtual-card-gift-label').hidden=transfer;
+  $('virtual-card-amount').required=transfer;$('virtual-card-content').required=!transfer;
+  $('virtual-card-amount').value='';$('virtual-card-note').value='';$('virtual-card-content').value='';
+  setComposerTray(false);virtualDialog.showModal();(transfer?$('virtual-card-amount'):$('virtual-card-content')).focus();
+}
+$('transfer-button').onclick=()=>openVirtualCard('transfer');
+$('gift-button').onclick=()=>openVirtualCard('gift');
+$('virtual-card-close').onclick=()=>virtualDialog.close();
+virtualForm.onsubmit=async event=>{
+  event.preventDefault();
+  const card=virtualCardKind==='transfer'?{amount:$('virtual-card-amount').value.trim(),note:$('virtual-card-note').value}:{content:$('virtual-card-content').value};
+  const submit=$('virtual-card-submit');submit.disabled=true;
+  try{const r=await api('/api/message/action',{action:virtualCardKind==='transfer'?'create_transfer':'create_gift',card});if(!r.ok){add('error',r.message||'虚拟卡片发送失败，请重试。');return}virtualDialog.close()}
+  finally{submit.disabled=false}
+};
 $('memory-panel').onclick=()=>window.veilDesktop.openMemory();
 document.querySelectorAll('[data-cmd="/cost"]').forEach(button=>button.onclick=()=>{setPage('chat');send('/cost')});
 $('memory-panel').title='在 Ombre Brain 中打开高级记忆管理';
@@ -1911,8 +1961,8 @@ function stickerBubble(d,text){
   loadStickers().then(lib=>{if(findSticker(lib,m[1],m[2]))show(lib);else loadStickers(true).then(show).catch(()=>{})}).catch(()=>{});
   return true;
 }
-const stickerPanel=$('sticker-panel'),stickerButton=$('sticker-button'),stickerPacks=$('sticker-packs'),stickerGrid=$('sticker-grid'),stickerTools=$('sticker-tools'),stickerStatus=$('sticker-status');
-function stickerSay(text){stickerStatus.textContent=text||''}
+const stickerButton=$('sticker-button'),stickerPacks=$('sticker-packs'),stickerGrid=$('sticker-grid'),stickerTools=$('sticker-tools'),stickerStatus=$('sticker-status');
+function stickerSay(text){stickerStatus.textContent=text||'';stickerStatus.hidden=!text}
 async function stickerPost(body){
   const r=await api('/api/stickers',body,120000);const d=await r.json();
   if(!r.ok)throw new Error(d.error||'没成功');
@@ -1923,14 +1973,15 @@ function renderStickers(){
   const pack=stickerCurrentPack();stickerPackId=pack?.id||null;
   stickerPacks.replaceChildren();
   for(const p of stickerLib?.packs||[]){
-    const b=document.createElement('button');b.type='button';b.className='sticker-pack'+(p.id===stickerPackId?' active':'');
-    b.textContent=`${p.name} ${p.stickers.length}`;b.onclick=()=>{stickerPackId=p.id;renderStickers()};stickerPacks.appendChild(b);
+    const b=document.createElement('button');b.type='button';b.className='sticker-tab';b.role='tab';b.setAttribute('aria-selected',String(p.id===stickerPackId));
+    b.textContent=p.name;b.title=`${p.name}，${p.stickers.length} 个表情`;b.onclick=()=>{stickerPackId=p.id;renderStickers()};stickerPacks.appendChild(b);
   }
   stickerGrid.replaceChildren();
-  if(!pack){const e=document.createElement('p');e.className='sticker-empty';e.textContent='还没有表情包。点「管理」新建图集，再粘贴链接添加。';stickerGrid.appendChild(e)}
-  else if(!pack.stickers.length){const e=document.createElement('p');e.className='sticker-empty';e.textContent='这个图集还是空的。';stickerGrid.appendChild(e)}
+  if(!pack){const e=document.createElement('div');e.className='sticker-empty';const p=document.createElement('p');p.textContent='还没有表情包';const b=document.createElement('button');b.type='button';b.textContent='导入表情包';b.onclick=()=>{stickerManage=true;renderStickers()};e.append(p,b);stickerGrid.appendChild(e)}
+  else if(!pack.stickers.length){const e=document.createElement('p');e.className='sticker-empty';e.textContent='这个图集还没有表情，点右上角管理去添加。';stickerGrid.appendChild(e)}
   else for(const s of pack.stickers){
-    const tile=document.createElement('div');tile.className='sticker-tile';
+    const tile=document.createElement(stickerManage?'div':'button');tile.className=stickerManage?'sticker-tile':'sticker-cell';tile.title=s.name;
+    if(!stickerManage){tile.type='button';tile.setAttribute('aria-label',`发送表情包 ${s.name}`)}
     const img=document.createElement('img');img.alt=s.name;img.loading='lazy';
     window.veilDesktop.stickerUrl(s.file).then(url=>{img.src=url}).catch(()=>{});
     if(stickerManage){
@@ -1941,22 +1992,22 @@ function renderStickers(){
       del.onclick=async()=>{if(del.dataset.sure!=='1'){del.dataset.sure='1';del.textContent='确定？';setTimeout(()=>{del.dataset.sure='';del.textContent='×'},3000);return}try{await stickerPost({action:'delete',id:s.id});renderStickers()}catch(e){stickerSay(e.message)}};
       tile.append(img,name,del);
     }else{
-      const cap=document.createElement('span');cap.textContent=s.name;
-      tile.append(img,cap);tile.onclick=()=>{if(selectedImage){stickerSay('先发送或取消发送区里的图片，再发表情包。');return}if(stopping||stopped||sending||voiceSending||speechIsActive()){stickerSay('现在不能发送（正在发送或录音中），稍后再点。');return}send(`[表情包：${pack.name}/${s.name}]`);closeStickerPanel()};
+      tile.append(img);tile.onclick=()=>{if(selectedImage){stickerSay('先发送或取消发送区里的图片，再发表情包。');return}if(stopping||stopped||sending||voiceSending||speechIsActive()){stickerSay('现在不能发送（正在发送或录音中），稍后再点。');return}send(`[表情包：${pack.name}/${s.name}]`)};
     }
     stickerGrid.appendChild(tile);
   }
-  stickerTools.hidden=!stickerManage;$('sticker-manage').textContent=stickerManage?'完成':'管理';
+  stickerTools.hidden=!stickerManage;$('sticker-manage').setAttribute('aria-label',stickerManage?'完成管理':'管理表情包');$('sticker-manage').title=stickerManage?'完成管理':'管理表情包';$('sticker-manage').innerHTML=window.veilIcon(stickerManage?'check':'settings-2',18);
   $('sticker-pack-name').value=pack?.name||'';
 }
 async function openStickerPanel(){
-  stickerPanel.hidden=false;stickerButton.setAttribute('aria-expanded','true');
+  setComposerPanel('stickers');
+  stickerSay('载入中…');
   try{await loadStickers(true)}catch(e){stickerSay(e.message);return}
+  stickerSay('');
   renderStickers();
 }
-function closeStickerPanel(){stickerPanel.hidden=true;stickerButton.setAttribute('aria-expanded','false');stickerManage=false}
-stickerButton.onclick=()=>{stickerPanel.hidden?openStickerPanel():closeStickerPanel()};
-$('sticker-close').onclick=closeStickerPanel;
+function closeStickerPanel(){setComposerPanel(null);stickerManage=false}
+stickerButton.onclick=()=>{composerPanel==='stickers'?closeStickerPanel():openStickerPanel()};
 $('sticker-manage').onclick=()=>{stickerManage=!stickerManage;stickerSay('');renderStickers()};
 $('sticker-add-pack').onclick=async()=>{
   const input=$('sticker-new-pack');if(!input.value.trim())return;
