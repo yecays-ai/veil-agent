@@ -79,7 +79,7 @@ SENSEVOICE_EVENT_EMOJI_PREFIX = re.compile(rf'^(?:[{re.escape(SENSEVOICE_EVENT_E
 SENSEVOICE_EMOTION_EMOJI_SUFFIX = re.compile(rf'\s*[{re.escape(SENSEVOICE_EMOTION_EMOJI)}]+$')
 
 
-VOICE_NO_SPEECH_ERROR = '没有识别到说话内容；这段录音重启后会自动清掉。'
+VOICE_NO_SPEECH_ERROR = '没有识别到说话内容；录音文件仍保留，重启后这条不再显示。'
 
 
 def clean_voice_transcript(text):
@@ -878,20 +878,6 @@ class Hub(ScreenPopMixin):
             row['delivery_error'] = error
             self.submissions.pop(media.get('request_id'), None)
             self._rewrite_media_index()
-
-    def discard_silent_voice(self, keep_ids):
-        """Delete unsent recordings in which no speech was found; there is nothing to retry."""
-        with self.media_lock:
-            silent = [row for row in self.media_index.values()
-                      if row.get('kind') == 'voice' and row.get('no_speech') is True
-                      and row['id'] not in keep_ids and not row.get('delivery_pending')]
-            if not silent:
-                return
-            for row in silent:
-                self.media_index.pop(row['id'], None)
-            self._rewrite_media_index()
-            for row in silent:
-                (self.media_root / row['filename']).unlink(missing_ok=True)
 
     def commit_media(self, media_id, request_id, submission_digest):
         """Move one uploaded image into durable history, or return an existing commit."""
@@ -2648,9 +2634,9 @@ def serve_chat(chat, hub, channels=()):
         message.get('media', {}).get('id') for message in chat.store.read(chat.path)
         if isinstance(message.get('media'), dict) and message['media'].get('kind') == 'voice'
     }
-    hub.discard_silent_voice(completed_voice_ids)
     for media in hub.media_index.values():
         if (media.get('kind') == 'voice' and media['id'] not in completed_voice_ids
+                and media.get('no_speech') is not True
                 and (media.get('request_id') == 'voice-' + media['id'] or media.get('delivery_pending'))):
             hub.push('user', media.get('transcript') or '', time=now(), history=True, media=dict(media))
     if hasattr(chat, 'recover_uncommitted_incoming'):

@@ -537,7 +537,7 @@ output_cny_per_million = "8"
         self.assertFalse(any(event.get('media', {}).get('id') == media_id for event in self.hub.events
                              if isinstance(event.get('media'), dict)))
 
-    def test_restart_discards_an_unsent_recording_without_speech(self):
+    def test_restart_does_not_replay_an_unsent_recording_without_speech(self):
         class Response:
             headers = {}
             def __enter__(self): return self
@@ -556,8 +556,7 @@ output_cny_per_million = "8"
         pushed = {event['media']['id'] for event in self.hub.events if isinstance(event.get('media'), dict)}
         self.assertNotIn(silent['id'], pushed)
         self.assertIn(kept['id'], pushed)
-        self.assertNotIn(silent['id'], self.hub.media_index)
-        self.assertFalse((self.hub.media_root / silent['filename']).exists())
+        self.assertTrue((self.hub.media_root / silent['filename']).exists())
 
     def test_snapshot_exposes_the_same_capability_record_used_by_peter(self):
         record = 'CAPABILITY RECORD\n2026-10-22T00:00:00+00:00: Capability update: added fictional_tool.'
