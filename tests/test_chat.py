@@ -788,6 +788,14 @@ output_cny_per_million = "8"
         self.assertEqual(month, day)
         self.assertEqual(pending, 0)
 
+    def test_delegate_spend_is_separate_but_stays_inside_shared_budget(self):
+        reservation = self.budget.reserve(self.cfg, category='delegate')
+        self.budget.mark_dispatched(reservation[0])
+        self.budget.settle(reservation[0], self.cfg, 100, 20, 10, category='delegate')
+        self.assertEqual(self.budget.category_totals('test', category='delegate')[0], Decimal('0.000350'))
+        self.assertEqual(self.budget.totals()[0], Decimal('0.000350'))
+        self.assertIn('委派任务 ¥0.000350', self.budget.display(character='test'))
+
     def test_daily_and_monthly_limits_block_before_request(self):
         for daily, monthly in [('0.001', '300'), ('10', '0.001')]:
             with self.subTest(daily=daily):

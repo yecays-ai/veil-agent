@@ -1,7 +1,12 @@
+## 工单 233：委派只读搜索与阅读
+
+- `ticket/233-delegated-research-agent`：Peter 可把多轮搜索、网页/文件阅读和记忆查询交给单独配置的低价模型；子 Agent 使用既有工具/MCP/费用入口，只给固定只读白名单，最多 6 次模型请求、12 次工具调用、90 秒；费用继续受共享总额约束并在 `/cost` 单独标为“委派任务”。定向测试、Python/前端语法及差异检查通过；PR CI、Windows 体验待验。
+- 验收见 `docs/tickets/233-delegated-research-agent.md`。下一个工单号 234。
+
 ## 工单 232：Claude 模型选择与自主活动独立模型
 
-- `ticket/232-claude-models-autonomy`（PR #285）：Claude Code 聊天显式传入所选模型（默认 Sonnet，可选 Haiku / Opus）；模型页新增自主活动模型选择，使用独立 API 模型运行，不受聊天切到 Claude Code 影响。瞄一眼原有独立选模保持不变。审查意见已集中修复；CI 揭示并修复了自主活动沿用聊天模型时的大窗口回归，最终 CI 待本次修正提交后验证。Windows Peter 实机待验收。
-- 验收：选 Claude Code Haiku 发送消息可正常回复；Peter 聊天保持 Claude Code 时，将自主活动选为 API 模型并等待下一次唤醒，确认成功完成；瞄一眼选模仍正常。具体步骤见 `docs/tickets/232-claude-models-autonomy.md`。下一个工单号 233。
+- PR #285 已合并到 main；Claude Code 聊天显式传入所选模型（默认 Sonnet，可选 Haiku / Opus），自主活动可单独选择 API 模型。CI 与 Windows 体验状态以合并 PR #285 为准。
+- 验收：选 Claude Code Haiku 发送消息可正常回复；Peter 聊天保持 Claude Code 时，将自主活动选为 API 模型并等待下一次唤醒，确认成功完成；瞄一眼选模仍正常。具体步骤见 `docs/tickets/232-claude-models-autonomy.md`。
 
 ## 工单 231：跨功能影响分析与联动修复
 

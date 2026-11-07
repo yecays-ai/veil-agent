@@ -84,6 +84,29 @@ class ModelSettingsTests(unittest.TestCase):
         self.assertEqual((cfg.provider_name, cfg.provider['model']), ('fake', 'fake-model'))
         self.assertEqual(cfg.background_provider['model'], 'fake-model')
         self.assertEqual(cfg.models.limits(), (Decimal('10'), Decimal('300')))
+        self.assertIsNone(cfg.models.public()['use']['delegate'])
+        with self.assertRaises(SettingsError):
+            cfg.models.chosen('delegate')
+
+    def test_delegate_requires_an_explicit_model_and_can_be_disabled(self):
+        cfg, model_id = self.add_relay()
+        _, name, provider = cfg.models.use('delegate', model_id)
+        self.assertEqual((name, provider['model']), ('relay', '[k]fake-sonnet'))
+        self.assertEqual(cfg.models.public()['use']['delegate'], model_id)
+        cfg.models.use('delegate', '')
+        self.assertIsNone(cfg.models.public()['use']['delegate'])
+        with self.assertRaises(SettingsError):
+            cfg.models.chosen('delegate')
+
+    def test_delegate_tool_is_only_offered_when_model_is_selected(self):
+        from dataclasses import replace
+        cfg, model_id = self.add_relay()
+        chat_cfg = replace(cfg, tools={'enabled': True, 'max_steps': 2})
+        chat = Chat(chat_cfg, Store(self.root / 'data'), Budget(Store(self.root / 'data')), Mock())
+        names = {schema['function']['name'] for schema in chat.tool_schemas()}
+        self.assertNotIn('delegate', names)
+        chat_cfg.models.use('delegate', model_id)
+        self.assertIn('delegate', {schema['function']['name'] for schema in chat.tool_schemas()})
 
     def test_corrupt_existing_config_never_falls_back_or_changes_file(self):
         path = self.root / 'data' / 'test' / 'models.json'
