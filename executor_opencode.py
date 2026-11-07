@@ -13,11 +13,14 @@ import os
 import posixpath
 import re
 import secrets
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import shutil
 import signal
 import socket
 import subprocess
 import time
+import urllib.error
 import urllib.request
 from decimal import Decimal
 from pathlib import Path
@@ -29,16 +32,25 @@ DEFAULT_LIMITS = {'max_steps': 30, 'max_seconds': 600, 'repeat_limit': 3, 'run_b
 RESULT_CHARS = 4000
 _WINDOWS = os.name == 'nt'
 
+SAFE_COMMANDS = ('git status*', 'git diff*', 'git log*', 'git show*', 'git branch*', 'ls', 'ls *', 'dir', 'dir *',
+                 'pwd', 'python -m unittest*', 'python -m pytest*', 'pytest*', 'npm test*', 'node --test*')
+SECRET_GLOBS = ('*.env', '*.env.*', '*/secrets/*', '*\\secrets\\*', '*/.ssh/*', '*\\.ssh\\*', '*id_rsa*', '*id_ed25519*',
+                '*Login Data*', '*/Cookies', '*\\Cookies')
+
 TOOL_SCHEMA = {'type': 'function', 'function': {
     'name': TOOL_NAME,
     'description': (
         'Hand a job that needs a shell, editing files, running programs, installing packages or downloading '
-        'things to your workbench. It works in its own folder (the workbench), can run commands and change '
-        'files there, and returns a report. Anything outside that folder is refused or asked of Lan by the '
-        'program. Give a complete, self-contained task; you decide what to do with the result.'),
+        'things to your workbench. The program finds the project the job is about (or uses the workbench '
+        'folder for new work), keeps a way back before changing an existing project, and returns a report. '
+        'Publishing, downloading, installing and bulk deletes are asked of Lan by the program. Give a '
+        'complete, self-contained task; you decide what to do with the result.'),
     'parameters': {'type': 'object', 'properties': {
         'task': {'type': 'string', 'minLength': 1, 'maxLength': 4000,
-                 'description': 'What to do and what to report back.'}},
+                 'description': 'What to do and what to report back.'},
+        'project': {'type': 'string', 'maxLength': 200,
+                    'description': 'Optional project name when you know which existing project the job is about. '
+                                   'The program finds it; nobody needs to give a path.'}},
         'required': ['task'], 'additionalProperties': False},
 }}
 
@@ -53,7 +65,12 @@ class ExecutorResult(NamedTuple):
 DANGEROUS = re.compile(
     r'(rm\s+-rf\s+(/|~|\$HOME)|rmdir\s+/s|\bdel\s+/[sfq]|\bformat\s+[a-z]:|\.env\b|[\\/]secrets\b|\.ssh|'
     r'\bsudo\b|\brunas\b|reg\s+(add|delete)|powershell.*-enc|\|\s*(sh|bash|iex)\b|invoke-expression|'
-    r'shutdown|net\s+user|schtasks|\bcipher\s+/w|git\s+push|git\s+remote\s+add)', re.I)
+    r'shutdown|net\s+user|schtasks|\bcipher\s+/w|git\s+remote\s+add|\bgit\s+config\s+--global)', re.I)
+
+# Not forbidden, but Lan decides (chat) or the job is parked (wake): publishing, downloading, installing, bulk deletes.
+ASK_LAN = re.compile(
+    r'(\bgit\s+(push|clone|fetch|pull)\b|\b(pip3?|npm|pnpm|yarn|winget|choco|apt(-get)?|brew|cargo|go)\s+(install|add|get)\b|'
+    r'\b(curl|wget|iwr|invoke-webrequest|invoke-restmethod|irm)\b|\brm\s+-[a-z]*r|\bremove-item\b.*-recurse|\bdel\s+/s|\brmdir\s+/s)', re.I)
 
 
 def decide(permission, patterns, metadata, workdir, *, autonomy, ask):
@@ -76,6 +93,13 @@ def decide(permission, patterns, metadata, workdir, *, autonomy, ask):
             target = posixpath.normpath(p if absolute else work + '/' + p).lower()
             if target != work and not target.startswith(work.rstrip('/') + '/'):
                 return 'reject', 'write outside the workbench'
+    if permission == 'bash' and ASK_LAN.search(text):
+        if autonomy:
+            return 'reject', 'needs Lan\'s approval; not asked during autonomous activity'
+        shown = ' '.join(str(p) for p in patterns)[:300]
+        answer = ask(f'Peter 的工作台想执行：{shown}。这会联网、安装、发布或批量删除。同意这一次吗？y/N ')
+        return ('once', 'Lan approved') if isinstance(answer, str) and answer.strip().casefold() == 'y' \
+            else ('reject', 'Lan did not approve')
     if permission in ('bash', 'edit', 'write', 'webfetch', 'task', 'skill', 'todowrite', 'read', 'glob', 'grep'):
         return 'once', 'inside the workbench'
     # Tools from other MCP servers (VEIL's own tools included) are never approved here: VEIL runs those itself.
@@ -126,6 +150,75 @@ def kill_tree(proc):
             proc.kill()
 
 
+class KeyProxy:
+    """A loopback relay in front of the model API. OpenCode (and every command it runs) only ever holds a random
+    local token; the real API key stays in this process and is added to forwarded requests. The token is only
+    valid for this run, and the proxy refuses to forward more than `max_requests` calls."""
+
+    def __init__(self, upstream_base, key, *, max_requests=400, host='127.0.0.1', timeout=180):
+        self.token = secrets.token_urlsafe(24)
+        self.upstream = upstream_base.rstrip('/')
+        self.requests = 0
+        proxy = self
+
+        class Handler(BaseHTTPRequestHandler):
+            protocol_version = 'HTTP/1.0'
+
+            def log_message(self, *_args):
+                pass
+
+            def _deny(self, code, text):
+                self.send_response(code)
+                self.send_header('Content-Length', str(len(text)))
+                self.end_headers()
+                self.wfile.write(text.encode())
+
+            def do_POST(self):
+                self._forward('POST')
+
+            def do_GET(self):
+                self._forward('GET')
+
+            def _forward(self, method):
+                if self.headers.get('Authorization') != 'Bearer ' + proxy.token:
+                    return self._deny(401, 'bad token')
+                if proxy.requests >= max_requests:
+                    return self._deny(429, 'request limit reached')
+                proxy.requests += 1
+                path = self.path[3:] if self.path.startswith('/v1') else self.path
+                body = self.rfile.read(int(self.headers.get('Content-Length') or 0)) if method == 'POST' else None
+                request = urllib.request.Request(proxy.upstream + path, data=body, method=method, headers={
+                    'Authorization': 'Bearer ' + key, 'Content-Type': self.headers.get('Content-Type', 'application/json'),
+                    'Accept': self.headers.get('Accept', '*/*')})
+                try:
+                    response = urllib.request.urlopen(request, timeout=timeout)
+                except urllib.error.HTTPError as exc:
+                    response = exc
+                except Exception as exc:
+                    return self._deny(502, 'upstream error: ' + type(exc).__name__)
+                self.send_response(response.status if hasattr(response, 'status') else response.code)
+                self.send_header('Content-Type', response.headers.get('Content-Type', 'application/json'))
+                self.end_headers()
+                while True:
+                    chunk = response.read(2048)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    self.wfile.flush()
+
+        self.server = ThreadingHTTPServer((host, 0), Handler)
+        self.port = self.server.server_address[1]
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+    def local_base(self, host='127.0.0.1'):
+        return f'http://{host}:{self.port}/v1'
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
 class Api:
     def __init__(self, base, password):
         self.base = base
@@ -153,23 +246,55 @@ def find_command(configured=''):
     return shutil.which('opencode')
 
 
-def write_config(workdir, provider, key_env_name):
+def build_config(provider, token, base_url):
+    """The OpenCode config, passed inline (OPENCODE_CONFIG_CONTENT) so nothing is written into the user's project
+    and a project's own opencode.json cannot loosen it. `token` is the local proxy token, not the real key."""
     context = int(provider.get('max_input_tokens', 32768))
-    config = {
+    return {
         '$schema': 'https://opencode.ai/config.json',
         'provider': {'relay': {
             'npm': '@ai-sdk/openai-compatible', 'name': 'Relay',
-            'options': {'baseURL': provider['base_url'], 'apiKey': '{env:' + key_env_name + '}'},
+            'options': {'baseURL': base_url, 'apiKey': token},
             'models': {provider['model']: {'name': provider['model'], 'tool_call': True,
                                            'limit': {'context': context, 'output': min(8192, context // 4)}}}}},
-        'permission': {'bash': 'ask', 'edit': 'ask', 'webfetch': 'ask', 'external_directory': 'ask',
-                       'read': {'*': 'allow', '*.env': 'deny', '*.env.*': 'deny'}},
+        # OpenCode's own rule engine settles the clear cases itself (last matching pattern wins); what is left
+        # as `ask` comes to the program (`decide`). Reading secrets is denied outright.
+        'permission': {'bash': {'*': 'ask', **{c: 'allow' for c in SAFE_COMMANDS}},
+                       'edit': 'ask', 'webfetch': 'ask', 'external_directory': 'ask',
+                       'read': {'*': 'allow', **{g: 'deny' for g in SECRET_GLOBS}}},
         'share': 'disabled', 'autoupdate': False}
-    (Path(workdir) / 'opencode.json').write_text(json.dumps(config, ensure_ascii=False, indent=1), encoding='utf-8')
+
+
+SECRET_FILE = re.compile(r'^(\.env(\..*)?|.*\.pem|id_(rsa|ed25519).*|.*\.pfx|.*\.key)$', re.I)
+
+
+def secret_files(workdir, max_depth=2):
+    """Secret-looking files inside the project (shallow). In a container they are masked with an empty file."""
+    found, root = [], Path(workdir)
+    for base, dirs, names in os.walk(root):
+        depth = len(Path(base).relative_to(root).parts)
+        dirs[:] = [d for d in dirs if d not in ('.git', 'node_modules') and depth < max_depth]
+        found += [Path(base) / n for n in names if SECRET_FILE.match(n)]
+    return found
+
+
+def container_command(container, *, name, workdir, port, env, masks):
+    """`docker run` for OpenCode: only the project is mounted (read-write); secret-looking files in it are masked by
+    empty read-only files; no host environment, no capabilities, bounded memory/processes. The server is published
+    on the host's loopback only."""
+    cmd = ['docker', 'run', '--rm', '--name', name, '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
+           '--pids-limit', '256', '--memory', container.get('memory', '2g'),
+           '--add-host', 'host.docker.internal:host-gateway',
+           '-p', f'127.0.0.1:{port}:{port}', '-v', f'{workdir}:/work', '-w', '/work']
+    for source, target in masks:
+        cmd += ['-v', f'{source}:/work/{target}:ro']
+    for key, value in env.items():
+        cmd += ['-e', f'{key}={value}']
+    return cmd + [container['image'], 'opencode', 'serve', '--hostname', '0.0.0.0', '--port', str(port)]
 
 
 def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, stopped, record_cost,
-        api_factory=None, popen=subprocess.Popen, clock=time.monotonic, sleep=time.sleep):
+        api_factory=None, proxy_factory=None, container=None, popen=subprocess.Popen, clock=time.monotonic, sleep=time.sleep):
     """Run one task. `record_cost(cost)` is called once with the estimated cost, whatever the outcome."""
     limits = {**DEFAULT_LIMITS, **(limits or {})}
     workdir, home = Path(workdir), Path(home)
@@ -178,20 +303,35 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
     price = (Decimal(str(provider.get('input_cny_per_million', 0))),
              Decimal(str(provider.get('output_cny_per_million', 0))))
     cap = Decimal(str(limits['run_budget_cny']))
-    key_env = 'VEIL_WORKBENCH_KEY'
-    write_config(workdir, provider, key_env)
+    proxy = (proxy_factory or KeyProxy)(provider['base_url'], key, **({'host': '0.0.0.0'} if container else {}))
+    config = build_config(provider, proxy.token, proxy.local_base('host.docker.internal' if container else '127.0.0.1'))
     port, password = free_port(), secrets.token_urlsafe(24)
     keep = {'PATH', 'PATHEXT', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'TEMP', 'TMP', 'TMPDIR', 'LANG', 'LC_ALL', 'PROGRAMFILES',
             'PROGRAMFILES(X86)', 'PROGRAMDATA', 'APPDATA', 'LOCALAPPDATA', 'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE'}
     env = {k: v for k, v in os.environ.items() if k.upper() in keep}
-    env.update({key_env: key, 'OPENCODE_SERVER_PASSWORD': password, 'HOME': str(home), 'USERPROFILE': str(home),
-                'XDG_DATA_HOME': str(home / 'data'), 'XDG_CONFIG_HOME': str(home / 'config'),
-                'XDG_CACHE_HOME': str(home / 'cache'), 'XDG_STATE_HOME': str(home / 'state'),
-                'OPENCODE_DISABLE_AUTOUPDATE': '1'})
+    shared = {'OPENCODE_SERVER_PASSWORD': password, 'OPENCODE_DISABLE_AUTOUPDATE': '1',
+              'OPENCODE_CONFIG_CONTENT': json.dumps(config)}
+    if container:
+        name = 'veil-workbench-' + secrets.token_hex(4)
+        masks = []
+        empty = home / 'empty-file'
+        empty.write_text('', encoding='utf-8')
+        for path in secret_files(workdir):
+            masks.append((str(empty), path.relative_to(workdir).as_posix()))
+        command = container_command(container, name=name, workdir=str(workdir), port=port, masks=masks,
+                                    env={**shared, 'HOME': '/tmp/home', 'XDG_DATA_HOME': '/tmp/home/data',
+                                         'XDG_CONFIG_HOME': '/tmp/home/config', 'XDG_CACHE_HOME': '/tmp/home/cache',
+                                         'XDG_STATE_HOME': '/tmp/home/state'})
+        env = {k: v for k, v in env.items() if k.upper() in ('PATH', 'PATHEXT', 'SYSTEMROOT', 'WINDIR', 'COMSPEC',
+                                                              'APPDATA', 'LOCALAPPDATA', 'USERPROFILE', 'HOME')}
+    else:
+        env.update({**shared, 'HOME': str(home), 'USERPROFILE': str(home),
+                    'XDG_DATA_HOME': str(home / 'data'), 'XDG_CONFIG_HOME': str(home / 'config'),
+                    'XDG_CACHE_HOME': str(home / 'cache'), 'XDG_STATE_HOME': str(home / 'state')})
     proc, messages, cost, steps, stop = None, [], Decimal(0), 0, ''
     try:
-        proc = popen([command, 'serve', '--port', str(port)], cwd=str(workdir), env=env, shell=_WINDOWS,
-                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        proc = popen(command if container else [command, 'serve', '--port', str(port)], cwd=str(workdir), env=env,
+                     shell=_WINDOWS and not container, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                      **({} if _WINDOWS else {'start_new_session': True}))
         api = (api_factory or Api)(f'http://127.0.0.1:{port}', password)
         started = clock()
@@ -257,6 +397,9 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
         return ExecutorResult(return_text, '出错', cost, steps)
     finally:
         kill_tree(proc)
+        if container:
+            subprocess.run(['docker', 'kill', name], capture_output=True, timeout=30)
+        proxy.close()
         try:
             record_cost(cost)
         except Exception:

@@ -1,3 +1,9 @@
+## 工单 238 交接（2026-11-07）
+
+- 新文件 `workbench_scope.py`（找项目、快照、还原）；`executor_opencode.py` 加 `KeyProxy`、`ASK_LAN`、`SAFE_COMMANDS`/`SECRET_GLOBS`；`veil_agent.py` 加 `_workbench_target`、`project_roots` 配置、`workbench` 的可选 `project` 参数。
+- `workbench-estimate` 加入 `ESTIMATE_ACCOUNTINGS`：运行中被强杀时按预留全额记账，不放回。
+- 未验证：容器隔离、Windows 上经密钥代理的真实模型运行；命令越权没有解决（见工单文档）。
+
 ## 工单 237 交接（2026-11-07）
 
 - 目标：lan 批准做 OpenCode 接入 VEIL 的隔离原型：Peter 的聊天和自主醒来都能用；人格、记忆、审批、停止、费用归 VEIL；OpenCode 不可用时原有功能不受影响。不改正式运行目录，不急着合并。
