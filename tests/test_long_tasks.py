@@ -504,6 +504,7 @@ max_result_bytes = 4096
         workspace.mkdir(parents=True)
         files = FilesystemTools.__new__(FilesystemTools)
         files.workspace, files.cfg, files.lab = workspace, cfg, None
+        files.lab_max_write_bytes, files.store = 200000, self.store
         files.tools = [
             SimpleNamespace(name='write_file', description='Write a fictional file.', inputSchema={}),
             SimpleNamespace(name='read_text_file', description='Read a fictional file.', inputSchema={}),

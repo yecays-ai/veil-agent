@@ -297,7 +297,7 @@ output_cny_per_million = "8"
                          'long_task_update', 'send_message'} <= offered)
         snapshot = chat.current_capability_snapshot(model.call_args.kwargs['tools'])
         self.assertIn('lab_file_digest', snapshot)
-        self.assertIn('Lab only', snapshot)
+        self.assertIn('anywhere in your own workspace', snapshot)
 
     def test_pure_send_message_calls_show_and_save_only_their_individual_bubbles(self):
         for count in (1, 2, 3, 10):
@@ -471,7 +471,7 @@ output_cny_per_million = "8"
         tools = SimpleNamespace(tools=[
             SimpleNamespace(name='search_files', description='Search allowed files.',
                             inputSchema={'type': 'object'}),
-            SimpleNamespace(name='edit_file', description='Must remain denied.',
+            SimpleNamespace(name='move_file', description='Must remain denied.',
                             inputSchema={'type': 'object'}),
             SimpleNamespace(name='future_private_tool', description='Unknown tool.',
                             inputSchema={'type': 'object'}),
@@ -482,9 +482,9 @@ output_cny_per_million = "8"
         offered = chat.tool_schemas()
         snapshot = chat.current_capability_snapshot(offered)
         self.assertIn('search_files', snapshot)
-        self.assertNotIn('edit_file', snapshot)
+        self.assertNotIn('move_file', snapshot)
         self.assertNotIn('future_private_tool', snapshot)
-        self.assertNotIn('edit_file', {item['function']['name'] for item in offered})
+        self.assertNotIn('move_file', {item['function']['name'] for item in offered})
 
     def test_final_tool_loop_request_and_live_panel_do_not_claim_tools_not_offered(self):
         tool_call = SimpleNamespace(id='digest-call', function=SimpleNamespace(
@@ -516,7 +516,7 @@ output_cny_per_million = "8"
         chat.send('Please calculate the fictional Lab file digest.')
 
         self.assertIn('lab_file_digest', calls[0][0])
-        self.assertIn('Lab only', calls[0][0])
+        self.assertIn('anywhere in your own workspace', calls[0][0])
         self.assertNotIn('lab_file_digest', calls[1][0])
         self.assertIn('No callable tools', calls[1][0])
         self.assertIsNone(calls[1][1])

@@ -1,3 +1,12 @@
+## 工单 247 交接：统一工作空间（2026-11-07）
+
+- 目标：lan 让开发 agent 处理"Lab、workspace、workbench 三个目录"的整合：Peter 只要一个文件根，淘汰旧 Lab 的不覆盖/不原地编辑/不删除限制和重复实现。
+- 改动：`tools_agent.py`（`OWN_WORK` 工具集、`_checked_own_path`、`_is_journal`、`_version_store`、`_delete_own_file`、`_edit_own_file`，`edit_file`/`delete_file` 新增，`move_lab_file` 去掉 archive/trash 限制，说明文字改写）；`executor_opencode.py`（`run(protect=)` 容器里屏蔽日记）；`workbench_scope.py`（`merge_legacy_workbench`）；`veil_agent.py`（`_run_workbench` 在 workspace 里干活并迁移旧目录、默认路径也留快照）；`lab_preview.py`/`lab_games.py`/`web_agent.py`（改为 workspace 根，路径不再要 `lab/` 前缀；`game_id` 沿用旧格式）；`long_tasks.py`/`autonomy.py`（登记 `edit_file`/`delete_file`）；`characters/peter/character.toml`（两个别名）；README；测试。
+- 安全边界：路径仍拒绝 `..`、链接、绝对路径、Windows 非法名；日记不可覆盖/编辑/删除/移动/附件，容器里被只读屏蔽；`.env*` 文件不能当附件发；`edit_file` 要求每段 oldText 恰好匹配一处。
+- 兼容：`own-work-versions/lab/` 照旧；新增 `own-work-versions/workspace/`。能力清单会给 Peter 一次英文通知（工具权限从 lab 变 workspace）。
+- 未验：Windows 真机；真实 `edit_file` 走 MCP 之外的本地实现，不依赖 npx。工作台仍默认关闭；真实项目未开放。
+- 下一步：lan 验收后，等工作台真机验收，再按工单 240 删 `run_lab_python`/桌面文件工具的重复部分。
+
 ## 工单 240 交接（2026-11-07）
 
 - 最新基准 `main` `473dabb`；执行架构调查基准为其父范围内的 `817de3c`，新增的 PR #295 只改桌面 UI/预览，不改变执行调用链。只改文档：新增工单和完整调查报告，纠正 OpenCode 工单 237“未合并”的过时状态；没有启用执行器、改代码/配置或读取私人数据。

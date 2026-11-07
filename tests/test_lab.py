@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from tools_agent import ALLOW, ASK, DENY, LAB_ONLY, FilesystemTools, _rename_noreplace, permitted_tools
+from tools_agent import ALLOW, ASK, DENY, LAB_ONLY, OWN_WORK, FilesystemTools, _rename_noreplace, permitted_tools
 from veil_agent import Budget, Chat, Store, UserError, load_character
 
 
@@ -41,7 +41,7 @@ persistent_append_file = "growth-journal.md"
         self.store = Store(self.root / 'data')
         self.worker = SimpleNamespace(tools=[SimpleNamespace(
             name=name, description=name, inputSchema={})
-            for name in (ALLOW | ASK | DENY | LAB_ONLY | {'delete_file', 'execute_script'})
+            for name in (ALLOW | ASK | DENY | LAB_ONLY | OWN_WORK | {'execute_script'})
             if name != 'preview_lab_page'],
             call=Mock(return_value='fictional read result'), close=Mock())
         self.no_approval = Mock(side_effect=AssertionError('lab must not ask'))
@@ -203,16 +203,48 @@ persistent_append_file = "growth-journal.md"
         self.assertEqual(self.tools.grant_path.read_bytes(), grant)
         self.assertEqual(journal.read_bytes(), b'original journal')
         self.assertEqual(self.call('append_file', 'growth-journal.md', '\nsecond', tools=self.open_tools())[1], '成功')
-        self.assertEqual(self.call('write_file', 'outside.md', 'new', approval=lambda _: 'n')[1], '被拒绝')
-        self.assertEqual(self.call('write_file', 'outside.md', 'new', approval=lambda _: 'y')[1], '成功')
-        self.assertEqual(self.call('append_file', 'outside.md', 'more', approval=lambda _: 'n')[1], '被拒绝')
-        self.assertEqual(self.call('create_directory', 'outside')[1], '被拒绝')
+        # Ticket 247: the rest of the workspace is Peter's too, directly and without asking.
+        self.assertEqual(self.call('write_file', 'outside.md', 'new')[1], '成功')
+        self.assertEqual(self.call('append_file', 'outside.md', 'more')[1], '成功')
+        self.assertEqual(self.call('create_directory', 'projects/game')[1], '成功')
+        # The journal keeps its own rules: no overwrite, edit, delete or move.
         self.assertEqual(self.call('write_file', 'growth-journal.md', 'overwrite')[1], '被拒绝')
-        for name in ('edit_file', 'move_file', 'delete_file', 'execute_script'):
+        for name in ('edit_file', 'delete_file'):
+            self.assertEqual(self.call(name, 'growth-journal.md')[1], '被拒绝')
+        for name in ('move_file', 'execute_script'):
             self.assertEqual(self.call(name, 'lab/notes.md', 'bad')[1], '被拒绝')
         self.assertEqual(self.move('growth-journal.md', 'lab/archive/growth-journal.md')[1], '被拒绝')
-        self.assertEqual(self.move('lab/notes.md', 'archive/notes.md')[1], '被拒绝')
+        self.assertEqual(self.move('lab/notes.md', 'growth-journal.md')[1], '被拒绝')
         self.assertEqual(journal.read_bytes(), b'original journal\nsecond')
+
+    def test_peter_can_edit_overwrite_and_delete_his_own_files_and_every_old_version_is_kept(self):
+        versions = self.root / 'data/test/own-work-versions'
+        self.assertEqual(self.call('write_file', 'projects/page.html', '<p>one</p>')[1], '成功')
+        self.assertEqual(self.call('write_file', 'projects/page.html', '<p>two</p>')[1], '成功')
+        edited = self.tools.invoke('edit_file', {'path': 'projects/page.html', 'edits': [
+            {'oldText': 'two', 'newText': 'three'}]}, self.no_approval)
+        self.assertEqual(edited[1], '成功', edited)
+        self.assertEqual((self.tools.workspace / 'projects/page.html').read_text(encoding='utf-8'), '<p>three</p>')
+        self.assertEqual(self.tools.invoke('edit_file', {'path': 'projects/page.html', 'edits': [
+            {'oldText': 'missing', 'newText': 'x'}]}, self.no_approval)[1], '被拒绝')
+        self.assertEqual(self.call('delete_file', 'projects/page.html')[1], '成功')
+        self.assertFalse((self.tools.workspace / 'projects/page.html').exists())
+        kept = sorted(p.read_text(encoding='utf-8') for p in (versions / 'workspace/projects').iterdir())
+        self.assertEqual(kept, ['<p>one</p>', '<p>three</p>', '<p>two</p>'])
+        # Lab files use the same store as before.
+        self.call('write_file', 'lab/a.md', 'a1')
+        self.assertEqual(self.call('delete_file', 'lab/a.md')[1], '成功')
+        self.assertEqual([p.read_text(encoding='utf-8') for p in (versions / 'lab').iterdir()], ['a1'])
+        self.assertEqual(self.call('delete_file', 'projects')[1], '被拒绝')
+        self.assertEqual(self.call('delete_file', '../outside.md')[1], '被拒绝')
+
+    def test_files_move_anywhere_in_the_workspace_without_overwriting(self):
+        self.call('write_file', 'a/one.md', 'one')
+        self.assertEqual(self.move('a/one.md', 'b/two.md')[1], '成功')
+        self.assertEqual((self.tools.workspace / 'b/two.md').read_text(encoding='utf-8'), 'one')
+        self.call('write_file', 'c.md', 'c')
+        self.assertEqual(self.move('b/two.md', 'c.md')[1], '被拒绝')
+        self.assertEqual(self.move('b/two.md', '../out.md')[1], '被拒绝')
 
     def test_archive_and_restore_preserve_complete_file_and_survive_reopen(self):
         self.call('create_directory', 'lab/play')
@@ -287,8 +319,7 @@ persistent_append_file = "growth-journal.md"
         (self.lab / 'play').mkdir()
         source = self.lab / 'play/item.md'
         source.write_bytes(b'original')
-        for destination in ('lab/archive/other/item.md', 'lab/other/item.md',
-                            '../outside.md', str(self.tools.workspace / 'outside.md')):
+        for destination in ('../outside.md', str(self.tools.workspace / 'outside.md')):
             result = self.move('lab/play/item.md', destination)
             self.assertEqual(result[1], '被拒绝', (destination, result))
             self.assertEqual(source.read_bytes(), b'original')
@@ -327,7 +358,9 @@ persistent_append_file = "growth-journal.md"
         self.assertEqual(json.loads(result), {
             'path': 'lab/archive/large.bin', 'byte_length': len(content),
             'sha256': hashlib.sha256(content).hexdigest()})
-        denied, state, _ = self.tools.invoke('lab_file_digest', {'path': 'growth-journal.md'})
+        denied, state, _ = self.tools.invoke('lab_file_digest', {'path': 'missing.bin'})
+        self.assertEqual(state, '被拒绝', denied)
+        denied, state, _ = self.tools.invoke('lab_file_digest', {'path': '../outside.bin'})
         self.assertEqual(state, '被拒绝', denied)
 
     def test_move_tool_is_lab_only_and_never_exposes_filesystem_server_move(self):
@@ -336,10 +369,10 @@ persistent_append_file = "growth-journal.md"
         self.assertIn('lab_file_digest', names)
         self.assertNotIn('move_file', {item['function']['name']
                                       for item in permitted_tools(self.tools.tools)})
+        # The workspace belongs to Peter whether or not the lab folder is enabled.
         self.cfg.tools['lab'] = False
-        disabled = self.open_tools()
-        self.assertNotIn('move_lab_file', {tool.name for tool in disabled.tools})
-        self.assertEqual(self.move('lab/a.md', 'lab/archive/a.md', tools=disabled)[1], '被拒绝')
+        still = self.open_tools()
+        self.assertIn('move_lab_file', {tool.name for tool in still.tools})
 
     def test_hardlink_cannot_use_lab_permission_to_append_journal(self):
         journal = self.tools.workspace / 'growth-journal.md'
@@ -383,7 +416,8 @@ persistent_append_file = "growth-journal.md"
             self.skipTest('symlinks unavailable')
         reopened = self.open_tools()
         self.assertIsNone(reopened.lab)
-        self.assertNotIn('create_directory', {t.name for t in reopened.tools})
+        self.assertEqual(self.call('write_file', 'lab/x.md', 'x', tools=reopened)[1], '被拒绝')
+        self.assertEqual(self.call('write_file', 'ordinary.md', 'x', tools=reopened)[1], '成功')
 
     @unittest.skipUnless(os.name == 'nt', 'Windows junction behavior')
     def test_windows_nested_junction_cannot_escape_to_journal(self):
@@ -412,11 +446,11 @@ persistent_append_file = "growth-journal.md"
     def test_capability_open_notice_is_delivered_once_and_instructions_are_complete(self):
         cap = json.loads(self.tools.cap_path.read_text(encoding='utf-8'))
         self.assertEqual(cap['lab'], {'folder': 'lab', 'max_write_bytes': 200000})
-        self.assertIn('Your lab folder "lab/" is available', self.tools.capability_event)
+        self.assertIn('Your workspace is yours, with "lab/" as the folder for experiments', self.tools.capability_event)
         self.tools.consume_capability_event()
         self.assertIsNone(self.open_tools().capability_event)
-        for text in ('lab/research/v1.md', 'rewrite existing files', 'lab/trash/', 'Nothing can be deleted',
-                     'independent', 'preview_lab_page', 'sandboxed Chromium', 'external network'):
+        for text in ('research/v1.md', 'overwrite with write_file', 'edit in place', 'delete with delete_file',
+                     'previous version', 'independent', 'preview_lab_page', 'sandboxed Chromium', 'external network'):
             self.assertIn(text, self.tools.description)
 
     def test_disabled_lab_removes_lab_only_tool_and_free_permissions(self):
@@ -424,12 +458,11 @@ persistent_append_file = "growth-journal.md"
         reopened = self.open_tools()
         self.assertIsNone(reopened.lab)
         disabled_names = {t['function']['name'] for t in permitted_tools(reopened.tools)}
-        self.assertNotIn('create_directory', disabled_names)
         self.assertNotIn('preview_lab_page', disabled_names)
-        asked = Mock(return_value='n')
-        result = self.call('write_file', 'lab/new.md', 'new', approval=asked, tools=reopened)
-        self.assertEqual(result[1], '被拒绝')
-        asked.assert_called_once()
+        self.assertNotIn('run_lab_python', disabled_names)
+        # Ticket 247: turning the lab folder off no longer takes Peter's workspace permissions away.
+        result = self.call('write_file', 'lab/new.md', 'new', tools=reopened)
+        self.assertEqual(result[1], '成功')
 
     def test_configuration_defaults_custom_name_and_invalid_values(self):
         self.assertEqual(self.cfg.tools['lab'], 'lab')

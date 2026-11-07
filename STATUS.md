@@ -1,3 +1,9 @@
+## 工单 247：统一 Peter 的工作空间，淘汰旧 Lab 限制
+
+- 见 `docs/tickets/247-unified-workspace.md`。Peter 只有一个文件根 `data/<角色>/workspace/`：直接文件工具在整个 workspace 里免确认能覆盖、`edit_file` 原地编辑、移动、`delete_file` 删除（改前旧版本留在 `own-work-versions/`，可恢复），旧"只能在 lab、不能覆盖/删除、只能搬 archive/trash"规则删除；成长日记仍只能追加。工作台也在这个文件夹里干活，旧 `data/<角色>/workbench/` 第一次使用时搬进 `workspace/from-workbench/`（不丢文件）。HTML 预览、小游戏、发送附件改用 workspace 相对路径。
+- 现状：自动测试通过（含新增覆盖、编辑、删除、移动、迁移、日记保护）；Windows 真机未验，工作台仍默认关闭。`run_lab_python`、桌面文件工具原样保留，等工作台真机验收覆盖后再按工单 240 删。下一个工单号 248（246 为录音修复 PR #298）。
+- 验收见工单文档：让 Peter 改一个 lab 里的旧文件并删一个没用的，不再被问、不再说不能覆盖；`workspace/from-workbench/` 里有以前 workbench 的文件。
+
 ## 工单 240：通用电脑执行与权限架构调查
 
 - 已完成全仓只读调用链、权限重复、开源方案和删除条件调查。结论：VEIL 保留身份/记忆/聊天/自主/预算/停止；OpenCode 只做容器内可替换任务循环，通过 VEIL 执行网关接受受限 Playwright 与 Windows UIA 适配器；不采用 UFO² 整套 Agent 核心。当前没有旧执行模块满足安全删除条件。

@@ -187,3 +187,33 @@ def restore(meta):
     if meta['kind'] == 'copy':
         return _copy_tree(Path(meta['dir']) / 'files', project)
     return False
+
+
+def merge_legacy_workbench(old, workspace):
+    """Ticket 247: Peter has one file root. Whatever the old separate workbench folder held moves into
+    workspace/from-workbench/ (nothing is overwritten or deleted; an entry that cannot move stays where it was).
+    Returns the names that moved."""
+    old, workspace = Path(old), Path(workspace)
+    if not old.is_dir() or old.is_symlink():
+        return []
+    try:
+        names = os.listdir(old)
+    except OSError:
+        return []
+    moved = []
+    target = workspace / 'from-workbench'
+    for name in names:
+        source, dest = old / name, target / name
+        try:
+            if source.is_symlink() or dest.exists() or dest.is_symlink():
+                continue
+            target.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(source), str(dest))
+            moved.append(name)
+        except OSError:
+            continue
+    try:
+        old.rmdir()  # only succeeds when it is empty
+    except OSError:
+        pass
+    return moved

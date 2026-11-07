@@ -71,7 +71,7 @@ def _safe_lab_file(lab: Path, relative: str, *, page=False) -> Path:
     if (not isinstance(relative, str) or not relative or "\x00" in relative
             or relative.startswith(("/", "\\")) or re.match(r"^[A-Za-z]:", relative)
             or "\\" in relative):
-        raise ValueError("The path must be relative to Lab and use forward slashes.")
+        raise ValueError("The path must be relative to your workspace and use forward slashes.")
     parts = relative.split("/")
     reserved = {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"}
     if (any(part in ("", ".", "..") for part in parts)
@@ -330,7 +330,7 @@ class LabPreview:
         self.tools = [type("Tool", (), {
             "name": "preview_lab_page",
             "description": (
-                "Render one HTML page from your own lab/ in a temporary isolated browser. "
+                "Render one HTML page from your own workspace in a temporary isolated browser. "
                 "The result includes a screenshot sent to your current model, JavaScript errors, "
                 "and failed local resources. External requests, local file access, downloads, "
                 "popups, and browser profile data are blocked. Files are limited to 5 MB each and "
@@ -338,7 +338,7 @@ class LabPreview:
             ),
             "inputSchema": {
                 "type": "object",
-                "properties": {"path": {"type": "string", "description": "Lab-relative HTML path, e.g. lab/game/index.html"}},
+                "properties": {"path": {"type": "string", "description": "Workspace-relative HTML path, e.g. lab/game/index.html"}},
                 "required": ["path"], "additionalProperties": False,
             },
         })()]
@@ -352,13 +352,10 @@ class LabPreview:
             return LabPreviewResult("Lab page preview is only available on Windows."), "被拒绝", "Lab preview"
         if (not isinstance(args, dict) or set(args) != {"path"}
                 or not isinstance(args.get("path"), str)):
-            return LabPreviewResult("Give one Lab-relative HTML path."), "被拒绝", "Lab preview"
-        prefix = self.lab.name + "/"
+            return LabPreviewResult("Give one workspace-relative HTML path."), "被拒绝", "Lab preview"
         requested_path = args["path"]
-        if not requested_path.casefold().startswith(prefix.casefold()):
-            return LabPreviewResult(f"Lab page rejected: path must start with {prefix}"), "被拒绝", requested_path[:180]
         try:
-            entry = _safe_lab_file(self.lab, requested_path[len(prefix):], page=True)
+            entry = _safe_lab_file(self.lab, requested_path, page=True)
         except (OSError, ValueError, RuntimeError) as exc:
             return LabPreviewResult(f"Lab page rejected: {exc}"), "被拒绝", args["path"][:180]
         with self._lock:

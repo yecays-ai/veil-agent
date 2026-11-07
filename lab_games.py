@@ -36,19 +36,21 @@ class LabGames:
 
     def open(self, relative):
         """Issue a session capability for one ordinary HTML entry inside one Lab game folder."""
-        if not isinstance(relative, str) or not relative.startswith(self.lab.name + '/'):
-            raise ValueError('Give a Lab-relative HTML path.')
-        subpath = relative[len(self.lab.name) + 1:]
+        if not isinstance(relative, str) or not relative:
+            raise ValueError('Give a workspace-relative HTML path.')
+        subpath = relative
         entry = _safe_lab_file(self.lab, subpath, page=True)
         folder = entry.parent
         if folder == self.lab or not _plain(folder):
-            raise ValueError('Put each game in its own plain Lab folder.')
+            raise ValueError('Put each game in its own plain folder.')
         score_file = folder / 'scores.jsonl'
         if score_file.exists() and (not _plain(score_file) or not score_file.is_file()):
             raise ValueError('The score file is unavailable.')
         capability = secrets.token_urlsafe(24)
         with self.lock:
-            self.entries[capability] = (folder, entry, subpath)
+            # Scores keep the id they always had: the path inside lab/ for lab games, else the workspace path.
+            game_id = subpath[4:] if subpath.casefold().startswith('lab/') else subpath
+            self.entries[capability] = (folder, entry, game_id)
             if len(self.entries) > 64:
                 self.entries.pop(next(iter(self.entries)))
         return f'http://127.0.0.1:{self.port}/game/{capability}/{quote(entry.name, safe="")}'

@@ -268,8 +268,8 @@ def send_message_schema(voice=False, channels=(), files=False, stickers=False):
     if files:
         schema['function']['parameters']['properties']['file'] = {
             'type': 'string', 'minLength': 1, 'maxLength': 240,
-            'description': ('Optional path to one ordinary file you created inside your own Lab, e.g. '
-                            '"lab/game.html". The program rejects paths outside Lab, links, unsupported '
+            'description': ('Optional path to one ordinary file inside your own workspace, e.g. '
+                            '"lab/game.html". The program rejects paths outside it, links, unsupported '
                             'types, non-UTF-8 text, and files over 5 MB. The sent copy is a snapshot. '
                             'If replying to email, attach at most three files in the whole response.')}
     if voice:
@@ -1987,8 +1987,8 @@ class Chat:
                 else:
                     kept.append(schema)
             schemas = kept + ([expand_schema(hidden)] if hidden else [])
-        from tools_agent import ALLOW, ASK, AUTONOMY_DIRECT, LAB_ONLY, NATIVE
-        reserved_names = (ALLOW | ASK | AUTONOMY_DIRECT | LAB_ONLY | NATIVE | {
+        from tools_agent import ALLOW, ASK, AUTONOMY_DIRECT, LAB_ONLY, NATIVE, OWN_WORK
+        reserved_names = (ALLOW | ASK | AUTONOMY_DIRECT | LAB_ONLY | OWN_WORK | NATIVE | {
             'send_message', 'recall_message', 'stay_silent', 'reply_later', 'screen_pop',
             'capability_history', 'autonomy_history', 'search_chat_history', 'profile_append', 'profile_replace',
             'thought', 'life_record', 'long_task_status', 'long_task_update', 'set_next_wake', 'set_wake_rhythm',
@@ -2107,8 +2107,10 @@ class Chat:
                 label = 'Create files in Lan\'s Windows folders; rewrite or trash only your own'
             elif policy == 'ask':
                 label = "Needs Lan's approval where policy requires it"
+            elif policy == 'workspace':
+                label = 'Direct use anywhere in your own workspace (replaced or deleted files keep a previous version)'
             elif policy == 'lab':
-                label = 'Lab only (no deletion or scripts)'
+                label = 'Direct use on workspace pages and Lab scripts (no host scripts)'
             elif canonical_name == 'trace':
                 label = "Deletion needs Lan's approval"
             else:
@@ -3667,7 +3669,14 @@ class Chat:
         key = (dotenv_values(ROOT / '.env', interpolate=False, encoding='utf-8-sig').get(provider['api_key_env']) or '').strip()
         if not key:
             return ex.ExecutorResult('The workbench has no API key for the current model.', '出错')
-        base = Path(self.store.root) / self.cfg.id / 'workbench'
+        # Ticket 247: one file root. The workbench works in Peter's workspace (the folder his file tools use);
+        # the old separate data/<role>/workbench folder is merged into it once.
+        role = Path(self.store.root) / self.cfg.id
+        workspace = (ROOT / (self.cfg.tools or {}).get('folder', f'data/{self.cfg.id}/workspace')).resolve()
+        workspace.mkdir(parents=True, exist_ok=True)
+        import workbench_scope
+        workbench_scope.merge_legacy_workbench(role / 'workbench', workspace)
+        base = workspace
         target = self._workbench_target(task, project, autonomy, base)
         if isinstance(target, ex.ExecutorResult):
             return target
@@ -3692,16 +3701,18 @@ class Chat:
         stopped = lambda: (self.user_stop.is_set() or bool(
             autonomy and self.autonomy_should_yield and self.autonomy_should_yield()))
         try:
-            outcome = ex.run(task, command=command, workdir=Path(workdir), home=Path(base).parent / 'workbench-home',
+            journal = (self.cfg.tools or {}).get('persistent_append_file')
+            protect = [journal] if journal and Path(workdir) == workspace else []
+            outcome = ex.run(task, command=command, workdir=Path(workdir), home=role / 'workbench-home',
                              provider=provider, key=key, limits=limits, autonomy=autonomy, ask=self.approval,
-                             stopped=stopped, record_cost=record_cost, container=container)
+                             stopped=stopped, record_cost=record_cost, container=container, protect=protect)
             return outcome._replace(text=outcome.text + note) if note else outcome
         finally:
             record_cost(Decimal(0))
 
     def _workbench_target(self, task, project, autonomy, base):
         """Where the workbench works. Peter's task (or his `project` name) picks one of the projects found under
-        the configured `project_roots`; Lan never gives a path. No roots, or no match: the workbench's own folder.
+        the configured `project_roots`; Lan never gives a path. No roots, or no match: Peter's own workspace.
         An existing project gets a snapshot first. Returns (folder, note) or an ExecutorResult explaining why not."""
         import executor_opencode as ex
         import workbench_scope as scope
@@ -3712,12 +3723,19 @@ class Chat:
             return ex.ExecutorResult(f'More than one project fits: {names}. Ask Lan which one (by name), '
                                      'then call the workbench again with project set to that name.', '出错')
         if kind == 'none':
-            return base, ''
+            # Peter's own workspace: a way back is kept when it is cheap to; Lan is never asked about his own space.
+            try:
+                meta = scope.snapshot(base, Path(self.store.root) / self.cfg.id / 'snapshots',
+                                      time.strftime('%Y%m%d-%H%M%S-') + f'{time.time_ns() % 10**6:06d}-workspace')
+            except Exception:
+                meta = {'kind': 'none'}
+            way = {'git': 'git snapshot', 'copy': 'file copy'}.get(meta['kind'])
+            return base, (f'\n[workspace: way back kept as a {way}, id {meta["id"]}]' if way else '')
         data_dir, project_dir = Path(self.store.root).resolve(), Path(found['path']).resolve()
         if data_dir == project_dir or data_dir in project_dir.parents or project_dir in data_dir.parents:
             return ex.ExecutorResult(f"The workbench will not work in {found['name']}: it contains VEIL's own data "
                                      '(memory, budget ledger). Pick another project.', '被拒绝')
-        meta = scope.snapshot(found['path'], Path(base).parent / 'snapshots',
+        meta = scope.snapshot(found['path'], Path(self.store.root) / self.cfg.id / 'snapshots',
                               time.strftime('%Y%m%d-%H%M%S-') + f'{time.time_ns() % 10**6:06d}-' + found['name'])
         if meta['kind'] == 'none':
             if autonomy:

@@ -171,7 +171,7 @@ class HonestApprovalTests(unittest.TestCase):
             (root / 'persona').mkdir()
             (root / 'persona/test.md').write_text('Fictional persona', encoding='utf-8')
             (root / 'characters/test/character.toml').write_text(
-                CONFIG.split('[autonomy]')[0] + '[tools]\nenabled = true\n', encoding='utf-8')
+                CONFIG.split('[autonomy]')[0] + '[tools]\nenabled = true\npersistent_append_file = "growth-journal.md"\n', encoding='utf-8')
             cfg = load_character(root, 'test')
             store = Store(root / 'data')
             worker = SimpleNamespace(tools=[SimpleNamespace(name=name, description=name, inputSchema={})
@@ -180,19 +180,20 @@ class HonestApprovalTests(unittest.TestCase):
             with patch('tools_agent.shutil.which', return_value='fake-node'), \
                     patch('tools_agent._McpWorker', return_value=worker):
                 tools = FilesystemTools(root, cfg, store)
-            result, state, _ = tools.invoke('write_file', {'path': 'note.md', 'content': 'x'}, not_asked)
+            result, state, _ = tools.invoke('write_file', {'path': 'growth-journal.md', 'content': 'x'}, not_asked)
             self.assertEqual((result, state), (NOT_ASKED_TEXT, '被拒绝'))
-            (tools.workspace / 'note.md').write_text('old', encoding='utf-8')
-            result, state, _ = tools.invoke('append_file', {'path': 'note.md', 'content': 'x'}, not_asked)
+            (tools.workspace / 'growth-journal.md').write_text('old', encoding='utf-8')
+            result, state, _ = tools.invoke('append_file', {'path': 'growth-journal.md', 'content': 'x'}, not_asked)
             self.assertEqual((result, state), (NOT_ASKED_TEXT, '被拒绝'))
-            result, _, _ = tools.invoke('append_file', {'path': 'note.md', 'content': 'x'}, lambda _: 'n')
+            result, _, _ = tools.invoke('append_file', {'path': 'growth-journal.md', 'content': 'x'}, lambda _: 'n')
             self.assertIn('Lan did not approve', result)
 
             # Lab trash: move in and back out, nothing deleted.
             (tools.lab / 'play').mkdir()
             (tools.lab / 'play/old.html').write_text('<p>old</p>', encoding='utf-8')
             move = lambda s, d: tools.invoke('move_lab_file', {'source': s, 'destination': d}, not_asked)
-            self.assertEqual(move('lab/play/old.html', 'lab/trash/other.html')[1], '被拒绝')
+            self.assertEqual(move('lab/play/old.html', 'lab/trash/other.html')[1], '成功')  # ticket 247: any place in the workspace
+            self.assertEqual(move('lab/trash/other.html', 'lab/play/old.html')[1], '成功')
             self.assertEqual(move('lab/play/old.html', 'lab/trash/play/old.html')[1], '成功')
             self.assertEqual((tools.lab / 'trash/play/old.html').read_text(encoding='utf-8'), '<p>old</p>')
             self.assertEqual(move('lab/trash/play/old.html', 'lab/play/old.html')[1], '成功')

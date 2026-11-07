@@ -46,8 +46,9 @@ TOOL_SCHEMA = {'type': 'function', 'function': {
     'name': TOOL_NAME,
     'description': (
         'Hand a job that needs a shell, editing files, running programs, installing packages or downloading '
-        'things to your workbench. The program finds the project the job is about (or uses the workbench '
-        'folder for new work), keeps a way back before changing an existing project, and returns a report. '
+        'things to your workbench. The program finds the project the job is about (or uses your own workspace '
+        'for new work, the same folder your file tools use), keeps a way back before changing an existing project, '
+        'and returns a report. '
         'Publishing, downloading, installing and bulk deletes are asked of Lan by the program. Give a '
         'complete, self-contained task in words (what is wrong, what to do, what to report); the workbench works in '
         'the project folder itself, so name the project rather than giving file paths or system commands. '
@@ -323,7 +324,7 @@ def container_command(container, *, name, workdir, port, env, masks):
 
 
 def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, stopped, record_cost,
-        api_factory=None, proxy_factory=None, container=None, popen=subprocess.Popen, clock=time.monotonic, sleep=time.sleep):
+        api_factory=None, proxy_factory=None, container=None, protect=(), popen=subprocess.Popen, clock=time.monotonic, sleep=time.sleep):
     """Run one task. `record_cost(cost)` is called once with the estimated cost, whatever the outcome."""
     limits = {**DEFAULT_LIMITS, **(limits or {})}
     workdir, home = Path(workdir), Path(home)
@@ -348,6 +349,9 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
         empty.write_text('', encoding='utf-8')
         for path in secret_files(workdir):
             masks.append((str(empty), path.relative_to(workdir).as_posix()))
+        for relative in protect:  # e.g. Peter's growth journal: it has its own append-only grant
+            if (workdir / relative).is_file() and all(target != Path(relative).as_posix() for _, target in masks):
+                masks.append((str(empty), Path(relative).as_posix()))
         command = container_command(container, name=name, workdir=str(workdir), port=port, masks=masks,
                                     env={**shared, 'HOME': '/tmp/home', 'XDG_DATA_HOME': '/tmp/home/data',
                                          'XDG_CONFIG_HOME': '/tmp/home/config', 'XDG_CACHE_HOME': '/tmp/home/cache',

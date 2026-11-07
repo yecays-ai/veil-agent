@@ -13,7 +13,8 @@ from agent_types import UserError, now
 
 TASK_STATUS = ('active', 'paused', 'blocked', 'completed')
 SIDE_EFFECT_TOOLS = {
-    'write_file', 'append_file', 'grant_append', 'create_directory', 'move_lab_file', 'run_lab_python', 'hold', 'trace',
+    'write_file', 'append_file', 'grant_append', 'create_directory', 'move_lab_file', 'edit_file', 'delete_file',
+    'run_lab_python', 'hold', 'trace',
     'letter_write', 'letter_lock_update', 'anchor', 'release', 'plan',
 }
 READ_ONLY_TOOLS = {
@@ -34,7 +35,7 @@ TASK_UPDATE_TOOL = SimpleNamespace(name='long_task_update', description=(
     '(an unfinished task cannot be replaced); action=update with its task_id adds confirmed progress, sets the '
     'next step, pauses, marks a blocker or completes the whole goal. Ending a session is not completion. '
     'If long_task_status shows a pending operation, first read its target (read_text_file, memory_read, or '
-    'lab_file_digest for large lab files), then resolve it with that operation_id; if it cannot be confirmed, '
+    'lab_file_digest for large files), then resolve it with that operation_id; if it cannot be confirmed, '
     'mark the task blocked instead of repeating it. '
     'This state does not grant file or memory permissions.'), inputSchema={
         'type': 'object', 'additionalProperties': False,
@@ -517,7 +518,7 @@ class LongTaskStore:
             content = result.encode('utf-8')
             effect = pending.get('expected_effect')
             if effect is None:
-                if pending['tool'] in ('write_file', 'append_file', 'move_lab_file') or not result.strip():
+                if pending['tool'] in ('write_file', 'append_file', 'move_lab_file', 'edit_file', 'delete_file') or not result.strip():
                     return
             else:
                 if pending['tool'] == 'move_lab_file' and (
