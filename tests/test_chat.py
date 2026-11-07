@@ -1295,9 +1295,11 @@ output_cny_per_million = "8"
 
     def test_provider_token_usage_calibrates_history_after_restart(self):
         request_id, _ = self.budget.reserve(self.cfg)
-        self.budget.settle(request_id, self.cfg, 1200, 20, 0, input_bytes=6000)
+        self.budget.settle(request_id, self.cfg, 12_000, 20, 0, input_bytes=60_000,
+                           tolerate_over_bound=True)
         self.assertAlmostEqual(self.budget.input_token_ratio('test', 'fake-model'), 0.2)
-        self.assertEqual(conservative_token_ratio(0.2), 0.4)
+        self.assertEqual(conservative_token_ratio(0.2), 0.24)
+        self.assertEqual(conservative_token_ratio(None), 0.4)
         for i in range(20):
             self.store.append('test/chat.jsonl', {'role': 'user', 'content': '用户' + '好' * 50})
             self.store.append('test/chat.jsonl', {'role': 'assistant', 'content': '回答' + '好' * 50})
@@ -1311,11 +1313,18 @@ output_cny_per_million = "8"
         self.assertGreater(settlement['input_bytes'], settlement['prompt_tokens'])
 
     def test_provider_token_ratio_uses_historical_high_water_mark(self):
-        for prompt, input_bytes in ((3000, 6000), (1200, 6000)):
+        for prompt, input_bytes in ((30_000, 60_000), (12_000, 60_000)):
             request_id, _ = self.budget.reserve(self.cfg)
-            self.budget.settle(request_id, self.cfg, prompt, 20, 0, input_bytes=input_bytes)
+            self.budget.settle(request_id, self.cfg, prompt, 20, 0, input_bytes=input_bytes,
+                               tolerate_over_bound=True)
         self.assertAlmostEqual(self.budget.input_token_ratio('test', 'fake-model'), 0.5)
         self.assertIsNone(self.budget.input_token_ratio('other-character', 'fake-model'))
+
+    def test_small_provider_sample_keeps_the_conservative_fallback(self):
+        request_id, _ = self.budget.reserve(self.cfg)
+        self.budget.settle(request_id, self.cfg, 1200, 20, 0, input_bytes=6000,
+                           tolerate_over_bound=True)
+        self.assertIsNone(self.budget.input_token_ratio('test', 'fake-model'))
 
     def test_oversized_input_is_not_fatal_and_is_not_saved(self):
         output = []

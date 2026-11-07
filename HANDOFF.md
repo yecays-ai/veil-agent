@@ -1,18 +1,17 @@
-## 当前工单 249（2026-11-07 UTC）
+## 当前工单 250（2026-11-08 UTC）
 
-- 审批误判已由 PR #303 合入 main。本分支是桌面布局和双向虚拟转账、礼物，PR #302。
-- 左右栏改为布局列。矮窗口左栏可滚动，很窄时只留图标，右栏收起时隐藏开关。输入行在上，工具托盘在下；麦克风在框内，请求回复在框外。
-- 虚拟转账和礼物不是真实资金或物品。Lan 从加号托盘发送，Peter 用 `send_message` 的 `transfer` 或 `gift` 发送，用 `card_action` 处理发给自己的卡片。只有接收方能收下、拒绝；已接收的转账可以退回。结果另写一条消息。发送卡片不自动开新一轮回复。
-- 实现：`virtual_cards.py`、`veil_agent.py`、`web_agent.py`、`tools_agent.py`、`desktop/chat.js`、`desktop/chat.html`、`desktop/desktop-visual-system.css`。没有复制 InternalBeyond。
-- 本地检查：`tests/test_virtual_cards.py`、相关聊天测试、`node --check desktop/chat.js`、`desktop/tests/ui.test.cjs` 通过。Windows Electron 实机未验。不调用付费模型。
+- PR #305 已 squash 合并到 main，提交 `5582474`；只改表情网格样式，Windows 验收未观察。
+- 新分支 `ticket/250-context-continuity` 从该提交建立。实现中：按当前角色与模型至少 16 KiB 的实际输入用量校准，估算增加 20% 余量；小样本/无数据时保留保守回退；工具循环新增内容在有可靠校准时用同一比例。
+- 本地长度停止原因通过错误事件单独显示，不保存成 Peter 正文。正常输出遇到 `length` 最多追加一次受预算约束的续接；真正本地或供应商上下文上限均停止，不循环重试。
+- `context-log.jsonl` 增加工具循环估算/实测输入、Schema 字节、模型上限和本地停止触发原因；供应商上下文拒绝写入独立诊断。
+- `tests.test_chat tests.test_tools.ToolLoopTests tests.test_tool_groups tests.test_image_recovery_and_context` 本地共 138 项通过。扩大到 Web 套件时出现 DNS/启动/端口相关失败，已中断该批次，不能记为通过。PR/Cubic 检查和 Windows Electron 实际体验尚未完成。
 
 ## 下一个窗口第一步
 
-PR #302 合并后，让 Lan 更新 Peter，按 `docs/tickets/249-desktop-composer-layout.md` 在 Windows 检查左栏、输入区、表情包和虚拟卡片。不要再改审批分类，除非实机发现新的误判。
+读取分支实际 diff 与新增回归用例，确认工具结果裁剪、预算预留、错误事件和回复续接的边界；提交并开 PR，等必需检查及 Cubic 审查，再按仓库规则合并。
 
 ## 背景和边界
 
-- PR #303 已合并。下面是当时的审批分类记录，不要按其中「尚未合并」的句子再操作。
-- OpenCode v1.19.5 的 shell permission 请求 `patterns` 是逐条命令片段，`metadata.command` 是原始命令；复用现有请求机制，不新增权限系统。依据见 `docs/tickets/249-opencode-approval-classification.md`。
-- 聊天与自主活动共用 `executor_opencode.run` 权限回调；费用预算、Docker 隔离、密钥保护、停止和快照实现未改。
-- 未安装 OpenCode，真实 OpenCode API 集成测试和 Windows Peter 体验验收未完成；不调用付费模型，不操作真实项目。
+- `Budget.input_token_ratio` 已按角色和模型记录实际供应商用量并保留历史高水位；估算器先前的 0.4 校准下限和工具循环的 0.5 新增字节下限会盖过较低的实际比例。
+- 65K 是用户确认的当前模型输入上限，本工单不改配置，不删除聊天、记忆、表情包或 MCP 工具。
+- 不调用付费模型；最终 Windows 体验由 Lan 验收，不把 CI 结果当作实机验收。
