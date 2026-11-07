@@ -166,7 +166,7 @@ body{isolation:isolate}
 
 #life-view .life-card.done .life-card-copy b,#life-view .life-card.done .life-summary{text-decoration:line-through;opacity:.55}#life-view .life-card-icon.life-check{font-size:19px;cursor:pointer;border:1px solid var(--line)}#life-view .life-card-icon.life-check:hover{background:var(--accent);color:var(--panel)}
 
-#life-view .life-sticky{position:relative;margin:6px 0 22px;padding:34px 28px 20px;border:1px solid var(--line);border-radius:6px;background:var(--panel);overflow:hidden;box-shadow:0 10px 22px #0000001f;font-family:"Segoe Print","Ma Shan Zheng","KaiTi","STKaiti","Kaiti SC",Georgia,serif;color:var(--text)}
+#life-view .life-sticky{position:relative;margin:6px 0 22px;padding:34px 28px 20px;border:1px solid var(--line);border-radius:6px;background:var(--panel);overflow:hidden;box-shadow:0 10px 22px #0000001f;font-family:"Segoe UI","Microsoft YaHei",sans-serif;color:var(--text)}
 #life-view .life-sticky::before{content:"";position:absolute;left:0;right:0;top:0;height:14px;background:var(--accent);opacity:.6}
 #life-view .life-sticky header{display:flex;align-items:baseline;gap:14px;margin-bottom:6px}#life-view .life-sticky header b{font:600 34px Georgia,serif}#life-view .life-sticky header span{color:var(--muted);font-size:12px;letter-spacing:1px}#life-view .life-sticky header em{margin-left:auto;font-style:normal;color:var(--accent);font-size:13px}
 #life-view .life-sticky h3{margin:8px 0 10px;font-size:20px;font-weight:500}
