@@ -1,3 +1,8 @@
+## 工单 236：Peter 能按关键词找 GitHub 仓库并比较
+
+- `github_read` 增加 `search_repositories`（只需关键词，可选排序 best_match/stars/updated/forks，翻页，每页 10 个，列名称、链接、描述、Stars、许可证、语言、更新时间、是否归档）和 `readme`（不用猜文件名）；候选仓库的许可证、目录、源码继续用原来的 `repository`/`tree`/`file`。仍然只读、只看公开仓库，聊天、自主活动、委派只读搜索共用，没有新依赖。Windows 实机待 lan 验收。`AGENTS.md` 有了面向开发 agent 的第一性原理规则。
+- 验收见 `docs/tickets/236-github-repo-search.md`。下一个工单号 237。
+
 ## 工单 235：界面去后台感
 
 - `ticket/235-calm-ui-pass`：窗口整体圆角（去掉外层尖角框）；去掉 VEIL 品牌行，头像可自己上传；收起侧栏头像和按钮不再重叠；自主活动、MCP、设置页删掉解释小字、卡片改细线；三栏宽度随窗口变化，窄时右栏隐藏、左栏自动收成图标。只改 desktop 样式、HTML 和头像脚本。

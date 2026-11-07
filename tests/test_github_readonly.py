@@ -289,5 +289,73 @@ class GitHubWakeIntegrationTests(unittest.TestCase):
             self.assertNotIn('mcp__github__github_read', closed_chat.current_capability_snapshot())
 
 
+
+SEARCH_HIT = {
+    'full_name': 'example/agent-kit', 'html_url': 'https://github.com/example/agent-kit', 'private': False,
+    'description': 'A mature agent runtime', 'stargazers_count': 4200, 'license': {'spdx_id': 'MIT'},
+    'language': 'Python', 'updated_at': '2026-11-01T00:00:00Z', 'pushed_at': '2026-11-01T00:00:00Z',
+    'archived': False, 'forks_count': 300, 'open_issues_count': 12}
+
+
+def discovery_get(path, params=None):
+    if path == '/search/repositories':
+        return {'total_count': 1, 'items': [SEARCH_HIT, {**SEARCH_HIT, 'full_name': 'example/secret', 'private': True}]}
+    if path == '/repos/example/agent-kit':
+        return {'private': False, 'visibility': 'public', 'default_branch': 'main',
+                'license': {'spdx_id': 'MIT'}, 'stargazers_count': 4200}
+    if path == '/repos/example/agent-kit/readme':
+        return {'encoding': 'base64', 'size': 11, 'content': base64.b64encode(b'# Agent Kit\nHi').decode(),
+                'html_url': 'https://github.com/example/agent-kit/blob/main/README.md'}
+    return fixture_get(path, params)
+
+
+class RepositoryDiscoveryTests(unittest.TestCase):
+    def setUp(self):
+        self.get = Mock(side_effect=discovery_get)
+        self.tools = GitHubReadTools(config(), get=self.get)
+
+    def test_search_needs_no_repository_and_lists_the_comparison_facts(self):
+        result, state, _ = self.tools.invoke('github_read', {
+            'resource': 'search_repositories', 'query': 'agent framework', 'sort': 'stars', 'page': 2})
+        self.assertEqual(state, '成功', result)
+        self.assertEqual(self.get.call_args.args[0], '/search/repositories')
+        self.assertEqual(self.get.call_args.args[1], {
+            'q': 'agent framework', 'per_page': 10, 'page': 2, 'sort': 'stars', 'order': 'desc'})
+        for expected in ('example/agent-kit', '4200', 'MIT', 'Python', '2026-11-01', 'https://github.com/example/agent-kit'):
+            self.assertIn(expected, result)
+        self.assertNotIn('example/secret', result)
+        self.assertIn('Untrusted', result)
+
+    def test_search_defaults_to_best_match_and_rejects_bad_input(self):
+        self.tools.invoke('github_read', {'resource': 'search_repositories', 'query': 'agent'})
+        self.assertNotIn('sort', self.get.call_args.args[1])
+        for bad in ({'query': ''}, {'query': 'x', 'sort': 'random'}, {'query': 'x', 'page': 101},
+                    {'query': 'a OR b'}, {'query': 'repo:owner/name'}, {'query': 'x', 'repository': 'example/agent-kit'},
+                    {'query': 'x', 'url': 'https://evil'}):
+            self.get.reset_mock()
+            result, state, _ = self.tools.invoke('github_read', {'resource': 'search_repositories', **bad})
+            self.assertEqual(state, '被拒绝', (bad, result))
+            self.get.assert_not_called()
+
+    def test_candidate_license_and_readme_are_readable_next(self):
+        meta, state, _ = self.tools.invoke('github_read', {'repository': 'example/agent-kit', 'resource': 'repository'})
+        self.assertEqual(state, '成功')
+        self.assertIn('"spdx_id": "MIT"', meta)
+        readme, state, _ = self.tools.invoke('github_read', {'repository': 'example/agent-kit', 'resource': 'readme'})
+        self.assertEqual(state, '成功', readme)
+        self.assertIn('1: # Agent Kit', readme)
+        self.assertIn('/blob/main/README.md', readme)
+
+    def test_other_resources_still_require_a_repository(self):
+        result, state, _ = self.tools.invoke('github_read', {'resource': 'file', 'path': 'a.py'})
+        self.assertEqual(state, '被拒绝')
+
+    def test_search_stops_when_asked(self):
+        result, state, _ = self.tools.invoke('github_read', {
+            'resource': 'search_repositories', 'query': 'agent'}, should_stop=lambda: True)
+        self.assertEqual(state, '被拒绝')
+        self.get.assert_not_called()
+
+
 if __name__ == '__main__':
     unittest.main()

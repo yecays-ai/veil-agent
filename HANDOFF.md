@@ -1,3 +1,10 @@
+## 工单 236 交接（2026-11-07）
+
+- 目标：Peter 不知道仓库名也能搜 GitHub 并比较候选（lan 发现原来的 `github_read` 必须给准确 `owner/repo`）。分支 `claude/project-thread-50woji` 基于 `main` `6cc87d6`。
+- 改动：`github_readonly.py`（`search_repositories`、`readme`，`repository` 改为非必填，其他资源仍校验）、`tests/test_github_readonly.py`、`docs/tickets/236-github-repo-search.md`、`STATUS.md`、`HANDOFF.md`，以及 `AGENTS.md` 新增的第一性原理规则。没有改权限、预算、工具分组；`github_read` 本来在 `github` 工具组里，需要时用 `expand_capability` 展开。
+- 未验证：Windows 实机；匿名 GitHub 速率限制在 lan 网络下是否够用（比较 5 个仓库约 15 次请求）。若常被限，再考虑可选只读 token（`VEIL_GITHUB_READONLY_TOKEN` 已存在于 `search_code`）。
+- 下一步：lan 验收；之后按计划单独做 OpenCode 隔离验证（另开分支和 PR，不混进本单）。
+
 ## 工单 234 交接（2026-11-07）
 
 - 目标：Claude Code 通道里只读查询（Read、Grep、Glob）不弹同意卡片，写文件、命令行、网页仍弹。分支 `ticket/234-cc-readonly-allow` 基于 `main` `c0d0115`。

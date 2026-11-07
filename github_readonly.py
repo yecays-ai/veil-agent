@@ -24,7 +24,9 @@ MCP_URL = 'https://api.githubcopilot.com/mcp/readonly'
 TOKEN_ENV = 'VEIL_GITHUB_READONLY_TOKEN'
 RESOURCES = ('repository', 'tree', 'file', 'issues', 'issue', 'issue_comments',
              'pulls', 'pull', 'pull_files', 'pull_comments', 'commits', 'commit',
-             'search_issues', 'search_pulls', 'search_commits', 'search_code')
+             'search_issues', 'search_pulls', 'search_commits', 'search_code', 'readme',
+             'search_repositories')
+SORTS = ('best_match', 'stars', 'updated', 'forks')
 
 
 class _GitHubStopped(Exception):
@@ -100,19 +102,27 @@ class GitHubReadTools:
             'Use ref=commit SHA for repeatable evidence. File output includes line numbers. '
             'Continue clipped output with next_offset and the same arguments/ref; lists use page. '
             'UTF-8 source files up to 1 MB are supported. '
+            'To find projects without knowing a name, use resource=search_repositories with query '
+            '(plain keywords, no repository needed), sort (best_match, stars, updated or forks) and page; '
+            'each hit lists name, description, stars, license, language, last push, archived flag and URL. '
+            'Then use resource=repository (license and activity), readme, tree and file on a chosen '
+            'owner/repository to compare candidates; cite their URLs. '
             'search_code without a dedicated token scans three text files per page under path; '
             'continue pages and use the returned SHA. With a dedicated read-only token it uses '
             'official MCP indexed search on the default branch (ref/path are not applied).'),
             inputSchema={'type': 'object', 'properties': {
-                'repository': {'type': 'string', 'description': 'Public owner/repository.'},
+                'repository': {'type': 'string', 'description': (
+                    'Public owner/repository. Not used by search_repositories, required by every other resource.')},
                 'resource': {'type': 'string', 'enum': list(RESOURCES)},
                 'path': {'type': 'string', 'description': 'File path or tree/search prefix; no URLs.'},
                 'ref': {'type': 'string', 'description': 'Branch/tag/commit; default branch if omitted.'},
                 'number': {'type': 'integer', 'minimum': 1},
                 'query': {'type': 'string', 'description': 'Literal search text, without GitHub qualifiers.'},
-                'page': {'type': 'integer', 'minimum': 1, 'maximum': 1000},
+                'page': {'type': 'integer', 'minimum': 1, 'maximum': 1000,
+                         'description': 'search_repositories allows pages 1 to 100.'},
+                'sort': {'type': 'string', 'enum': list(SORTS), 'description': 'search_repositories only.'},
                 'offset': {'type': 'integer', 'minimum': 0, 'description': 'Character offset in this result.'},
-            }, 'required': ['repository', 'resource'], 'additionalProperties': False})]
+            }, 'required': ['resource'], 'additionalProperties': False})]
 
     @staticmethod
     def preview_summary(_name, _arguments):
@@ -128,14 +138,16 @@ class GitHubReadTools:
             allowed = set(self.tools[0].inputSchema['properties'])
             if set(args) - allowed:
                 raise ValueError('Unknown arguments; no methods, URLs, bodies or tool names are accepted.')
+            resource = args.get('resource')
+            if resource not in RESOURCES:
+                raise ValueError('Only the listed read resources are allowed.')
+            if resource == 'search_repositories':
+                return self._search_repositories(args, should_stop), '成功', summary
             repo = args.get('repository', '')
             if not isinstance(repo, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9_.-]{1,100}', repo):
                 raise ValueError('Use a public owner/repository name.')
             if repo.split('/')[1] in {'.', '..'}:
                 raise ValueError('Invalid repository.')
-            resource = args.get('resource')
-            if resource not in RESOURCES:
-                raise ValueError('Only the listed read resources are allowed.')
             page = self._integer(args, 'page', 1, 1000, 1)
             offset = self._integer(args, 'offset', 0, 10_000_000, 0)
             number = self._integer(args, 'number', 1, 2**31, 1)
@@ -182,6 +194,46 @@ class GitHubReadTools:
             return _clip_utf8('GitHub could not be read (network, timeout or service error). '
                               'No write was attempted.', self.max_bytes), '出错', summary
 
+    def _search_repositories(self, args, should_stop):
+        if set(args) - {'resource', 'query', 'sort', 'page', 'offset'}:
+            raise ValueError('search_repositories takes only query, sort, page and offset.')
+        query = args.get('query', '')
+        if (not isinstance(query, str) or not 1 <= len(query.strip()) <= 200
+                or any(c in query for c in ':"\\') or any(ord(c) < 32 for c in query)
+                or re.search(r'\b(?:OR|NOT)\b', query)):
+            raise ValueError('Use 1-200 characters of plain keywords without qualifiers, quotes or operators.')
+        sort = args.get('sort', 'best_match')
+        if sort not in SORTS:
+            raise ValueError('sort must be one of: ' + ', '.join(SORTS) + '.')
+        page = self._integer(args, 'page', 1, 100, 1)
+        offset = self._integer(args, 'offset', 0, 10_000_000, 0)
+        if should_stop and should_stop():
+            raise _GitHubStopped()
+        params = {'q': query.strip(), 'per_page': 10, 'page': page}
+        if sort != 'best_match':
+            params.update(sort=sort, order='desc')
+        found = self.get('/search/repositories', params)
+        if should_stop and should_stop():
+            raise _GitHubStopped()
+        items = [self._repo_hit(item) for item in found.get('items', []) if item.get('private') is False]
+        value = {'query': query.strip(), 'sort': sort, 'page': page, 'total_count': found.get('total_count'),
+                 'next_page': page + 1 if len(found.get('items', [])) == 10 and page < 100 else None,
+                 'note': 'GitHub search for anonymous callers is rate limited and returns at most 1000 hits.',
+                 'repositories': items}
+        return self._page(json.dumps(value, ensure_ascii=False, indent=1),
+                          'https://github.com/search?type=repositories&q=' + quote(query.strip()), offset)
+
+    @staticmethod
+    def _repo_hit(item):
+        description = item.get('description') or ''
+        license_info = item.get('license') or {}
+        return {'repository': item.get('full_name'), 'url': item.get('html_url'),
+                'description': description[:300], 'stars': item.get('stargazers_count'),
+                'license': license_info.get('spdx_id') or license_info.get('name'),
+                'language': item.get('language'), 'updated_at': item.get('updated_at'),
+                'pushed_at': item.get('pushed_at'), 'archived': item.get('archived'),
+                'forks': item.get('forks_count'), 'open_issues': item.get('open_issues_count')}
+
     @staticmethod
     def _integer(args, key, minimum, maximum, default):
         value = args.get(key, default)
@@ -197,6 +249,18 @@ class GitHubReadTools:
         source = 'https://github.com/' + repo
         if resource == 'repository':
             return metadata, source
+        if resource == 'readme':
+            check_stop()
+            value = self.get(prefix + '/readme', {'ref': ref} if ref else None)
+            if (not isinstance(value, dict) or value.get('encoding') != 'base64'
+                    or value.get('size', MAX_RESPONSE) > MAX_FILE_BYTES):
+                raise ValueError('This repository has no README readable as UTF-8 text up to 1 MB.')
+            raw = base64.b64decode(value.get('content', ''), validate=False)
+            if len(raw) > MAX_FILE_BYTES or b'\0' in raw:
+                raise ValueError('The README is not bounded text.')
+            text = raw.decode('utf-8')
+            return '\n'.join(f'{i}: {line}' for i, line in enumerate(text.splitlines(), 1)), (
+                value.get('html_url') or source)
         params = {'per_page': 10, 'page': page}
         endpoints = {
             'issues': '/issues', 'issue': f'/issues/{number}',
