@@ -199,6 +199,13 @@ class ToolPolicyTests(unittest.TestCase):
         result, state, _ = manager.invoke('write_file', {'path': 'growth-journal.md', 'content': 'replace'})
         self.assertEqual(state, '被拒绝', result)
         self.assertEqual(target.read_text(encoding='utf-8'), 'keep')
+        result, state, _ = manager.invoke('grant_append', {'path': 'growth-journal.md'}, lambda _: 'y')
+        self.assertEqual(state, '成功', result)
+        result, state, _ = manager.invoke('append_file',
+            {'path': 'Growth-Journal.md', 'content': ' note'},
+            Mock(side_effect=AssertionError('grant should cover this path')))
+        self.assertEqual(state, '成功', result)
+        self.assertEqual(target.read_text(encoding='utf-8'), 'keep note')
 
     def test_journal_tools_are_offered_when_filesystem_starts(self):
         store = Store(self.root / 'data')

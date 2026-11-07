@@ -1208,7 +1208,7 @@ class FilesystemTools:
                 if name != 'write_file' and name != 'append_file':
                     return 'The growth journal can only be appended to (with its own grant).', '被拒绝', summary
             if name in ('append_file', 'grant_append'):
-                return self._invoke_append(name, next(iter(resolved.values())), summary, args, approval)
+                return self._invoke_append(name, own or next(iter(resolved.values())), summary, args, approval)
             if policy == 'ask':
                 target = own or next(iter(resolved.values()))
                 exists = target.exists()
@@ -1259,6 +1259,8 @@ class FilesystemTools:
         if any(_redirected(path) for path in reversed((boundary, *boundary.parents))):
             raise ValueError('workspace was redirected')
         root = boundary.resolve(strict=True)
+        if any(_redirected(path) for path in reversed((boundary, *boundary.parents))):
+            raise ValueError('workspace was redirected')
         if any(_redirected(path) for path in reversed((root, *root.parents))):
             raise ValueError('workspace was redirected')
         target = root
@@ -1703,13 +1705,16 @@ class FilesystemTools:
         except (OSError, ValueError, UnicodeError):
             return 'The persistent append authorization record could not be read. Check the character data folder.', '被拒绝', summary
         allowed = self.cfg.tools.get('persistent_append_file')
+        granted_path = grant.get('path') if isinstance(grant, dict) else None
         granted = (bool(allowed) and isinstance(grant, dict) and grant.get('version') == 1
-                   and grant.get('path') == summary
+                   and isinstance(granted_path, str)
+                   and granted_path.replace('\\', '/').casefold() == summary.replace('\\', '/').casefold()
                    and grant.get('device') == identity[0]
                    and grant.get('inode') == identity[1]
                    and grant.get('ctime_ns') == identity[2]
                    and grant.get('size') == identity[3]
-                   and _path_key(target) == _path_key(checked_path(self.workspace, allowed)))
+                   and _path_key(target).casefold() ==
+                   _path_key(checked_path(self.workspace, allowed)).casefold())
         answer = None if granted else approval(f'Peter 想追加内容到 {summary}。同意这一次吗？y/N ')
         if answer == NOT_ASKED:
             return NOT_ASKED_TEXT, '被拒绝', summary
