@@ -211,7 +211,7 @@ body .composer .sticker-tab{flex:0 0 auto;min-height:32px;padding:4px 12px;borde
 body .composer .sticker-tab[aria-selected="true"]{background:var(--veil-accent-soft);color:var(--veil-ink)}
 body .composer .sticker-manage{position:static;display:grid;flex:0 0 36px;place-items:center;width:36px;height:36px;min-width:36px;padding:0;border:0;border-radius:50%;background:transparent;color:var(--veil-soft)}
 body .composer .sticker-manage:hover{background:var(--veil-accent-soft);color:var(--veil-accent)}
-body .composer .sticker-grid{grid-template-columns:repeat(auto-fill,minmax(88px,1fr));gap:8px;min-width:0;min-height:0;overflow:visible}
+body .composer .sticker-grid{grid-template-columns:repeat(auto-fill,minmax(128px,1fr));gap:12px;min-width:0;min-height:0;flex:1 1 0;align-content:start;overflow-y:auto;overflow-x:hidden}
 body .composer .sticker-cell{display:grid;place-items:center;aspect-ratio:1;min-height:0;padding:4px;border:0;border-radius:10px;background:transparent;cursor:pointer}
 body .composer .sticker-cell:hover,body .composer .sticker-cell:focus-visible{background:var(--veil-accent-soft)}
 body .composer .sticker-cell img{width:100%;height:100%;max-width:100%;max-height:100%;object-fit:contain}
