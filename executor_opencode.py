@@ -49,8 +49,9 @@ TOOL_SCHEMA = {'type': 'function', 'function': {
         'things to your workbench. The program finds the project the job is about (or uses the workbench '
         'folder for new work), keeps a way back before changing an existing project, and returns a report. '
         'Publishing, downloading, installing and bulk deletes are asked of Lan by the program. Give a '
-        'complete, self-contained task in words (what is wrong, what to do, what to report); the workbench runs in '
-        'its own Linux folder, so do not give Windows paths or commands. You decide what to do with the result.'),
+        'complete, self-contained task in words (what is wrong, what to do, what to report); the workbench works in '
+        'the project folder itself, so name the project rather than giving file paths or system commands. '
+        'You decide what to do with the result.'),
     'parameters': {'type': 'object', 'properties': {
         'task': {'type': 'string', 'minLength': 1, 'maxLength': 4000,
                  'description': 'What to do and what to report back.'},
