@@ -109,12 +109,12 @@ test('desktop redesign keeps real pages in one shell with a collapsible draggabl
   assert.match(visual, /body:not\(\.detached-window\) \.page\{[^}]*background:rgb\(var\(--veil-canvas-rgb\)\/var\(--view-alpha,var\(--window-alpha\)\)\)/);
   assert.match(visual, /\.desktop-rail\{[^}]*background:rgb\(var\(--veil-rail-rgb\)\/var\(--window-alpha\)\)/);
   assert.match(visual, /body\.rail-visible:not\(\.detached-window\) \.desktop-rail\{display:flex!important\}/);
-  assert.match(visual, /body:not\(\.sidebar-collapsed\):not\(\.detached-window\) #life-view\{padding-left:236px!important\}/);
+  assert.match(visual, /body:not\(\.detached-window\) \.navigation\{position:static;inset:auto;transform:none;grid-column:1;grid-row:1\/4/);
   assert.match(visual, /body\.sidebar-collapsed \.navigation \.nav-item>\[data-lucide\]\{width:100%;height:100%;display:grid;place-items:center\}/);
-  assert.match(visual, /body:not\(\.detached-window\) #life-view\{padding-left:82px!important\}/);
+  assert.doesNotMatch(visual, /#life-view\{padding-left:/);
   assert.match(visual, /\.life-filter\{gap:3px;padding:0;border:0/);
   assert.match(visual, /grid-template-columns:208px minmax\(0,1fr\);grid-template-rows:64px/);
-  assert.match(visual, /\.desktop-rail\{position:fixed;z-index:40/);
+  assert.match(visual, /\.desktop-rail\{position:static;grid-column:3;grid-row:1\/4/);
   assert.match(css, /body\.detached-window\[data-current-page="chat"\] \.chat-input-shell\{grid-column:2;position:relative;display:flex/);
   assert.match(css, /body:not\(\.detached-window\) \.chat-input-shell\{grid-column:2;position:relative;display:flex/);
   assert.match(css, /grid-template-columns:36px minmax\(0,1fr\) 38px/);
@@ -138,7 +138,8 @@ test('desktop redesign keeps real pages in one shell with a collapsible draggabl
   assert.match(js, /veil-rail-visible/);
   assert.match(js, /railToggle\.onclick/);
   assert.match(js, /railToggle\.firstElementChild\.dataset\.lucide/);
-  assert.match(js, /classList\.toggle\('tools-open'\)/);
+  assert.match(js, /function setComposerPanel\(panel\)/);
+  assert.match(js, /composerTray\.hidden=panel!=='plus';stickerPanel\.hidden=panel!=='stickers'/);
   assert.match(js, /new MutationObserver\(syncDesktopRail\)/);
   assert.match(js, /const outside=event\.clientX<0\|\|event\.clientY<0\|\|event\.clientX>innerWidth\|\|event\.clientY>innerHeight/);
 });
