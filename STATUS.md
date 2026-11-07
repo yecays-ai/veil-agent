@@ -1,7 +1,14 @@
+## 工单 239：通用电脑执行与权限架构调查
+
+- `ticket/239-unified-execution-architecture`：基于最新 `main` `473dabb` 完成全仓只读调用链、权限重复、开源方案和删除条件调查；该提交相对执行架构基准 `817de3c` 只增加桌面 UI/预览文档，不改变本报告的执行调用链。结论：VEIL 保留身份/记忆/聊天/自主/预算/停止；OpenCode 只做容器内可替换任务循环，通过 VEIL 执行网关接受受限 Playwright 与 Windows UIA 适配器；不采用 UFO² 整套 Agent 核心。当前没有旧执行模块满足安全删除条件。
+- 工单 237/238 的 OpenCode 工作台已由 PR #294 合入 main；Docker 隔离、真实模型工作台和测试副本聊天有 Windows 证据。真实项目、自主醒来、Linux 宿主机和容器网络隔离仍未验；默认关闭。PR #294 的状态文档“原型不合并”措辞已过时，以本条和工单 239 报告为准。
+- 下一步：工单 240 先把工作台收敛为容器必需、模型无关的正式项目执行入口，建立共用 run/grant/budget/cancel/artifact 契约；不先重写桌面，不批量删旧工具。
+- 验收：Lan 阅读 `docs/reports/239-unified-execution-architecture.md` 的结论、权限矩阵、代码清单和迁移顺序，能直接决定先做 240；本工单没有实现通用执行能力，后续仍按真实 Windows 场景逐阶段验收。
+
 ## 工单 237：桌面 UI 全状态整理与预览验收
 
 - PR #295 head `716a5caf` 已与最新 main `817de3c` 合并；Windows desktop、Tests（四平台矩阵）和 Dependency security 均通过。用户已确认生活记录预览；主窗七页、独立窗拆并和浮层的 Windows 逐项验收仍待完成，见 `docs/tickets/237-preview-manifest.md`。
-- 下一步：squash merge PR #295；合并后由 Lan 按状态清单在 Peter 的 Windows 实机逐项验收。
+- 下一步：PR #295 已合并；由 Lan 按状态清单在 Peter 的 Windows 实机逐项验收。
 
 ## 工单 238：工作台自己找项目、快照、权限分级、密钥代理
 
@@ -10,10 +17,10 @@
 - 下一步：默认关闭；真实项目仍未开放，开放前再由 lan 决定范围。已知小问题：容器里文件权限让 git status 误显示 `.env`/测试文件被改。
 - 验收：lan 说一个带项目名的问题，Peter 自己找到项目、改前留退路、联网/安装/推送问她。下一个工单号 239。
 
-## 工单 237：工作台（OpenCode 执行后端）隔离原型
+## 工单 237：工作台（OpenCode 执行后端）隔离原型（已随 PR #294 合入，默认关闭）
 
-- Peter 新增工具 `workbench`（默认关，`character.toml` 的 `[executor] enabled = true` 才开）：把需要命令行、改文件、跑程序、下载的活交给临时启动的 OpenCode，在 `data/<角色>/workbench` 文件夹里干活；权限由 VEIL 程序决定（文件夹内直接做，危险命令和密钥拒绝，文件夹之外聊天里问 lan、自主醒来里拒绝），步数、时间、重复调用、费用上限由 VEIL 卡并计入共享账本，lan 按停止立即中止。找不到 OpenCode 时工具不出现，聊天、记忆、自主活动不受影响。原型阶段，不合并，Windows 和真实中转的全套验收未完成。
-- 下一步：lan 在真实中转和 Windows 上完成验收后，再决定是否合并。
+- Peter 新增工具 `workbench`（默认关，`character.toml` 的 `[executor] enabled = true` 才开）：把需要命令行、改文件、跑程序、下载的活交给临时启动的 OpenCode，在 `data/<角色>/workbench` 文件夹里干活；权限由 VEIL 程序决定（文件夹内直接做，危险命令和密钥拒绝，文件夹之外聊天里问 lan、自主醒来里拒绝），步数、时间、重复调用、费用上限由 VEIL 卡并计入共享账本，lan 按停止立即中止。找不到 OpenCode 时工具不出现，聊天、记忆、自主活动不受影响。代码已合入 main，仍是默认关闭的原型；Windows Docker 与真实聊天证据见 238，未完成项见工单 239。
+- 下一步：按工单 239 的迁移顺序生产化，不把“已合入”写成“通用执行已完成”。
 - 验收见 `docs/tickets/237-workbench-executor-prototype.md`。下一个工单号 238。
 
 ## 工单 236：Peter 能按关键词找 GitHub 仓库并比较

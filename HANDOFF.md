@@ -1,8 +1,15 @@
+## 工单 239 交接（2026-11-07）
+
+- 分支 `ticket/239-unified-execution-architecture`，最新基准 `main` `473dabb`；执行架构调查基准为其父范围内的 `817de3c`，新增的 PR #295 只改桌面 UI/预览，不改变执行调用链。只改文档：新增工单和完整调查报告，纠正 OpenCode 工单 237“未合并”的过时状态；没有启用执行器、改代码/配置或读取私人数据。
+- 结论：保留 VEIL 核心；OpenCode 只做容器内任务循环；后续通过 VEIL Execution Gateway 接受筛选后的 Playwright MCP 与 Windows UIA adapter；UFO² 只评估动作层，不引入整套 Agent 核心。当前没有可立即删除的旧执行模块。
+- 下一步第一项是工单 240：workspace adapter 生产化，容器必需、固定 OpenCode 版本、统一 run/grant/budget/cancel/artifact；完成 API/Claude、聊天/自主和 Windows 真实场景后才开始删旧入口。
+- 本轮无法重跑 OpenCode（PATH 中未安装）；GitHub 连接器没有返回 PR #294 合并提交的状态检查，因此只记录合并和历史 Windows 证据，不声称 CI 全绿。完整边界见 `docs/reports/239-unified-execution-architecture.md`。
+
 ## 工单 237 交接：桌面 UI 全状态整理与预览验收（2026-11-07）
 
 - PR #295 head `716a5caf` 已与最新 main `817de3c` 合并；Cubic 意见已逐条修复并解决；Windows desktop、Tests 四平台矩阵、Dependency security 全部通过。PR 等待 squash merge。
 - 用户已确认生活记录截图预览；全主窗状态、独立窗口拆并和浮层的 Windows 原生操作仍未逐项实机验收，按 `docs/tickets/237-preview-manifest.md` 保持待验。
-- 下一步：squash merge PR #295；之后 Lan 按清单在 Peter Windows 实机逐项验收。
+- 下一步：PR #295 已合并；之后 Lan 按清单在 Peter Windows 实机逐项验收。
 
 ## 工单 238 交接（2026-11-07）
 
