@@ -1185,6 +1185,7 @@ class FilesystemTools:
             return self._move_lab_file(args)
         if name == 'lab_file_digest':
             return self._lab_file_digest(args)
+        own = None
         try:
             resolved = {}
             for key, index, value in _path_arguments(name, args):
@@ -1208,7 +1209,7 @@ class FilesystemTools:
             if name in ('append_file', 'grant_append'):
                 return self._invoke_append(name, next(iter(resolved.values())), summary, args, approval)
             if policy == 'ask':
-                target = next(iter(resolved.values()))
+                target = own or next(iter(resolved.values()))
                 exists = target.exists()
                 if exists:
                     return 'The target already exists and overwriting is not allowed. Choose a new filename or use an authorized append operation.', '被拒绝', summary

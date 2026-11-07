@@ -133,7 +133,7 @@ class RunTests(unittest.TestCase):
             process = SimpleNamespace(poll=lambda: None, pid=123)
             with patch.object(ex.subprocess, 'run') as taskkill:
                 ex.kill_tree(process)
-        self.assertEqual(taskkill.call_args.kwargs['creationflags'], ex.subprocess.CREATE_NO_WINDOW)
+        self.assertEqual(taskkill.call_args.kwargs['creationflags'], 0x08000000)
 
     def test_host_workbench_refuses_to_run_when_it_must_protect_the_journal(self):
         result, _api, costs, kill = run([], protect=['growth-journal.md'])
