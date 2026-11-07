@@ -14,7 +14,7 @@ from unittest.mock import Mock
 from tools_agent import (ALLOW, ASK, DENY, LAB_ONLY, OWN_WORK, FilesystemTools, checked_path,
                          permitted_tools, tool_policy)
 from veil_agent import (Budget, Chat, RequestFailed, Store, load_character,
-                        model_tool_result, run_chat)
+                        UserError, join_reply_continuation, model_tool_result, request_byte_size, run_chat)
 
 
 class ToolPolicyTests(unittest.TestCase):
@@ -737,13 +737,93 @@ max_result_bytes = 200
         self.assertEqual(self.budget.totals()[2], 0)
 
     def test_length_finish_keeps_text_when_no_tool_was_called(self):
-        model = Mock(return_value=(self.message(content='A partial answer.'), 100, 50, 0, 'length'))
+        self.cfg.tools['max_output_tokens'] = 10
+        model = Mock(side_effect=[(self.message(content='A partial ans'), 100, 50, 0, 'length'),
+                                 (self.message(content='answer.'), 120, 20, 0)])
         tools = Mock()
         tools.tools = [SimpleNamespace(name='write_file', description='Write', inputSchema={})]
         tools.capability_event = None
-        chat = Chat(self.cfg, self.store, self.budget, model, tools=tools)
+        chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=lambda _: None)
         self.assertEqual(chat.send('explain this'), 'A partial answer.')
+        self.assertEqual(model.call_count, 2)
+        self.assertEqual(model.call_args_list[1].kwargs['max_tokens'], self.cfg.max_output_tokens)
+        self.assertEqual(chat.tool_stop_reason, '')
+        reservations = [row for row in self.store.read('costs.jsonl') if row.get('type') == 'reserve']
+        self.assertEqual(Decimal(reservations[1]['amount']),
+                         (self.cfg.provider['max_input_tokens'] * self.cfg.provider['input_cny_per_million']
+                          + self.cfg.max_output_tokens * self.cfg.provider['output_cny_per_million']) / Decimal(1_000_000))
         tools.invoke.assert_not_called()
+
+    def test_continuation_failure_preserves_partial_reply_and_reports_separately(self):
+        output = []
+        model = Mock(side_effect=[(self.message(content='A partial sentence'), 100, 50, 0, 'length'),
+                                 ValueError('maximum context length exceeded')])
+        chat = Chat(self.cfg, self.store, self.budget, model, output=output.append)
+
+        reply = chat.send('finish this')
+
+        self.assertEqual(reply, 'A partial sentence')
+        assistant_rows = [row for row in self.store.read('test/chat.jsonl')
+                          if row.get('role') == 'assistant']
+        self.assertEqual(assistant_rows[-1]['content'], reply)
+        self.assertTrue(any(getattr(item, 'is_error', False) for item in output))
+        self.assertEqual(chat.tool_stop_reason, str(output[-1]))
+
+    def test_continuation_does_not_swallow_dispatch_ledger_failure(self):
+        model = Mock(return_value=(self.message(content='A partial sentence'), 100, 50, 0, 'length'))
+        chat = Chat(self.cfg, self.store, self.budget, model, output=lambda _: None)
+        with patch.object(self.budget, 'mark_dispatched', side_effect=[None, UserError('ledger write failed')]):
+            with self.assertRaisesRegex(UserError, 'ledger write failed'):
+                chat.send('finish this')
+        model.assert_called_once()
+
+    def test_cancelled_continuation_preserves_partial_reply(self):
+        output = []
+        model = Mock(side_effect=[(self.message(content='A partial sentence'), 100, 50, 0, 'length'),
+                                 KeyboardInterrupt()])
+        chat = Chat(self.cfg, self.store, self.budget, model, output=output.append)
+
+        self.assertEqual(chat.send('finish this'), 'A partial sentence')
+        self.assertEqual([row['content'] for row in self.store.read('test/chat.jsonl')
+                          if row.get('role') == 'assistant'], ['A partial sentence'])
+        self.assertTrue(any(getattr(item, 'is_error', False) for item in output))
+
+    def test_user_stop_during_continuation_keeps_returned_text(self):
+        output = []
+        calls = [0]
+        chat = None
+        def model(*_args, **_kwargs):
+            calls[0] += 1
+            if calls[0] == 2:
+                chat.user_stop.set()
+                return self.message(content='and finished.'), 120, 20, 0
+            return self.message(content='A partial sentence'), 100, 50, 0, 'length'
+        chat = Chat(self.cfg, self.store, self.budget, model, output=output.append)
+
+        self.assertEqual(chat.send('finish this'), 'A partial sentenceand finished.')
+        self.assertEqual([row['content'] for row in self.store.read('test/chat.jsonl')
+                          if row.get('role') == 'assistant'], ['A partial sentenceand finished.'])
+        self.assertTrue(any(getattr(item, 'is_error', False) for item in output))
+
+    def test_long_continuation_overlap_is_removed(self):
+        repeated = 'already said ' * 200
+        self.assertEqual(join_reply_continuation('Before. ' + repeated,
+                                                 repeated + 'and finished.'),
+                         'Before. ' + repeated + 'and finished.')
+
+    def test_plain_reply_continuation_stops_after_one_retry(self):
+        output = []
+        model = Mock(side_effect=[(self.message(content='A partial answer.'), 100, 50, 0, 'length'),
+                                 (self.message(content=' Still incomplete.'), 120, 50, 0, 'length')])
+        chat = Chat(self.cfg, self.store, self.budget, model, output=output.append)
+
+        reply = chat.send('explain this')
+
+        self.assertEqual(reply, 'A partial answer. Still incomplete.')
+        self.assertEqual(model.call_count, 2)
+        self.assertEqual(chat.tool_stop_reason, '模型回复达到输出上限，结果不完整。')
+        self.assertEqual([str(item) for item in output if getattr(item, 'is_error', False)],
+                         ['模型回复达到输出上限，结果不完整。'])
 
     def test_chat_permission_still_needs_terminal_y_and_shows_refusal(self):
         tools = FilesystemTools.__new__(FilesystemTools)
@@ -940,7 +1020,7 @@ max_result_bytes = 200
 
     def test_eight_large_results_mask_older_results_and_keep_latest_before_send(self):
         self.cfg.tools['max_steps'] = 12
-        self.cfg.provider['max_input_tokens'] = 10000
+        self.cfg.provider['max_input_tokens'] = 18000
         calls = [self.message([self.tool_call('read_text_file', '{"path":"source-%d"}' % i,
                                                'read-%d' % i)]) for i in range(8)]
         calls += [self.message([self.tool_call('send_message',
@@ -948,9 +1028,9 @@ max_result_bytes = 200
                   self.message(content='I checked eight sources.')]
         responses = iter(calls)
         requests = []
-        def model(messages, **_kwargs):
+        def model(messages, **kwargs):
             requests.append(json.loads(json.dumps(messages, ensure_ascii=False)))
-            prompt_tokens = max(100, len(json.dumps(messages, ensure_ascii=False).encode('utf-8')) // 2)
+            prompt_tokens = max(100, request_byte_size(messages, kwargs.get('tools')) // 2)
             self.assertLessEqual(prompt_tokens, self.cfg.provider['max_input_tokens'])
             return next(responses), prompt_tokens, 20, 0
         tools = Mock()
@@ -1017,6 +1097,91 @@ max_result_bytes = 200
         self.assertEqual(reply, 'Found one source.')
         self.assertTrue(chat.reply_displayed)
         tools.invoke.assert_not_called()
+
+    def test_calibrated_social_schema_expansion_fits_the_65k_model_limit(self):
+        self.cfg.provider['max_input_tokens'] = 65_536
+        self.cfg.tools['tool_groups'] = ('social',)
+        request_id, _ = self.budget.reserve(self.cfg)
+        self.budget.settle(request_id, self.cfg, 12_000, 20, 0, input_bytes=60_000)
+
+        social_schema = {'type': 'function', 'function': {
+            'name': 'mcp__galatea_garden__get_thread', 'description': 'x' * 150_000,
+            'parameters': {'type': 'object', 'properties': {}}}}
+        expand = self.tool_call('expand_capability', '{"groups":["social"]}', 'expand')
+        read = self.tool_call('mcp__galatea_garden__get_thread', '{}', 'read')
+        responses = [self.message([expand]), self.message([read]),
+                     self.message(content='I read the posts and finished the reply.')]
+        requests = []
+
+        def model(messages, *, tools=None, **_kwargs):
+            requests.append(tools)
+            answer = responses[len(requests) - 1]
+            prompt_tokens = round(request_byte_size(messages, tools) * 0.2)
+            return answer, prompt_tokens, 20, 0
+
+        chat = Chat(self.cfg, self.store, self.budget, model, output=lambda _: None)
+        chat.mcp_services = Mock()
+        chat.mcp_services.schemas.return_value = [social_schema]
+        chat.mcp_services.needs_checkpoint.return_value = False
+        chat.mcp_services.invoke.return_value = ('Five fictional posts.', '成功', 'threads')
+        reply = chat.send('Read five Galatea Garden posts and summarize them.')
+
+        self.assertEqual(reply, 'I read the posts and finished the reply.')
+        self.assertEqual(len(requests), 3)
+        self.assertTrue(any(schema['function']['name'] == 'mcp__galatea_garden__get_thread'
+                            for schema in requests[1]),
+                        [schema['function']['name'] for schema in requests[1]])
+        chat.mcp_services.invoke.assert_called_once()
+        diagnostics = [row for row in self.store.read('test/context-log.jsonl')
+                       if row.get('kind') == 'tool_step_context']
+        expanded = next(row for row in diagnostics if row['tool_schema_bytes'] > 150_000)
+        self.assertEqual(expanded['model_input_limit'], 65_536)
+        self.assertLess(expanded['estimated_input_tokens'], expanded['model_input_limit'])
+        self.assertEqual(expanded['actual_input_tokens'], round(expanded['actual_input_bytes'] * 0.2))
+
+    def test_context_limit_stop_is_an_error_not_a_peter_reply(self):
+        self.cfg.tools['tool_groups'] = ('social',)
+        social_schema = {'type': 'function', 'function': {
+            'name': 'mcp__galatea_garden__get_thread', 'description': 'x' * 100_000,
+            'parameters': {'type': 'object', 'properties': {}}}}
+        model = Mock(return_value=(self.message([
+            self.tool_call('expand_capability', '{"groups":["social"]}', 'expand')]), 100, 20, 0))
+        output = []
+        chat = Chat(self.cfg, self.store, self.budget, model, output=output.append)
+        chat.mcp_services = Mock()
+        chat.mcp_services.schemas.return_value = [social_schema]
+
+        reply = chat.send('Read the source.')
+
+        self.assertEqual(reply, '')
+        self.assertTrue(chat.reply_displayed)
+        self.assertEqual([str(item) for item in output if getattr(item, 'is_error', False)],
+                         ['本轮上下文达到长度上限，已停止后续步骤。'])
+        assistant_rows = [row for row in self.store.read('test/chat.jsonl')
+                          if row.get('role') == 'assistant']
+        self.assertEqual(assistant_rows, [])
+        self.assertEqual(model.call_count, 1)
+        chat.mcp_services.invoke.assert_not_called()
+        stopped = next(row for row in self.store.read('test/context-log.jsonl')
+                       if row.get('local_limit_trigger') == 'local_preflight_after_tool_step')
+        self.assertGreater(stopped['estimated_input_tokens'], stopped['model_input_limit'])
+        self.assertEqual(stopped['actual_input_tokens'], None)
+        self.assertEqual(stopped['last_actual_input_tokens'], 100)
+        self.assertGreater(stopped['tool_schema_bytes'], 100_000)
+
+    def test_provider_input_limit_error_is_classified_without_retry(self):
+        model = Mock(side_effect=ValueError('maximum context length exceeded'))
+        chat = Chat(self.cfg, self.store, self.budget, model, output=lambda _: None)
+
+        with self.assertRaises(RequestFailed) as caught:
+            chat.send('Read within the configured limit.')
+
+        self.assertIn('模型输入上下文上限', str(caught.exception))
+        model.assert_called_once()
+        diagnostic = self.store.read('test/memory/_agent/diagnostics.jsonl')[-1]
+        self.assertEqual(diagnostic['code'], 'provider_input_context_limit')
+        error = self.store.read('test/provider-errors.jsonl')[-1]
+        self.assertTrue(error['input_context_limit'])
 
     def test_length_stop_still_executes_send_message_from_same_tool_batch(self):
         response = self.message([
