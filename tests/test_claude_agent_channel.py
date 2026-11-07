@@ -324,6 +324,15 @@ class HookAndRulesTests(unittest.TestCase):
             self.assertFalse(settings._choice_ok(data, 'background', 'builtin:claude_agent'))
             self.assertFalse(settings._choice_ok(data, 'glance', 'builtin:claude_agent'))
 
+    def test_looking_things_up_never_asks_but_writing_still_does(self):
+        cmd = channel.ClaudeAgentChannel(SimpleNamespace(), Path('.')).command('claude')
+        allowed = cmd[cmd.index('--allowedTools') + 1:]
+        for tool in ('Read', 'Grep', 'Glob'):
+            self.assertIn(tool, allowed)
+        for tool in ('Bash', 'Write', 'Edit'):
+            self.assertNotIn(tool, allowed)
+        self.assertIn('Read(**/.env)', channel.DENY_RULES)
+
     def test_secret_files_are_denied_to_native_tools(self):
         self.assertIn('Read(**/.env)', channel.DENY_RULES)
         self.assertIn('Read(**/secrets/**)', channel.DENY_RULES)

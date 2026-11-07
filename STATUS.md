@@ -1,3 +1,7 @@
+## 工单 230：查东西不再弹同意卡
+
+- `ticket/230-cc-readonly-free`：Claude Code 通道里读文件、搜索、列目录、联网查资料（`Read`/`Grep`/`Glob`/`LS`/`WebSearch`/`WebFetch`）直接放行，不再每次弹卡片；写文件、执行命令仍然弹卡片。`.env` 和 secrets 目录的拒绝规则优先于放行（云端真 claude 实测：读普通文件通过，读 `.env` 被拒）。`claude_agent_channel.py`（`READ_ONLY_TOOLS`），新增 1 项测试。Windows 实机未验证（更新并重启 Peter 后，让他查一个小东西，应该不再弹卡）。下一个工单号 231。
+
 ## 工单 233：委派只读搜索与阅读
 
 - `ticket/233-delegated-research-agent`（PR #287 开放）：主模型可把适合的搜索、阅读、代码只读调查或记忆检索交给独立配置的模型；根据任务能力和预计总成本决策，不自动选择。现有只读白名单、调用边界和共享预算保留；模型可见两端价格及单任务最大预留；无失败重试或主模型切换。等待更新后 CodeRabbit 与 CI 审查；Windows 体验待验。
