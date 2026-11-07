@@ -982,6 +982,8 @@ class Hub(ScreenPopMixin):
         request_id = getattr(text, 'request_id', None)
         memory_refs = getattr(text, 'memory_refs', None)
         is_error = getattr(text, 'is_error', False)
+        virtual_card = getattr(text, 'virtual_card', None)
+        virtual_card_event = getattr(text, 'virtual_card_event', None)
         trace = getattr(text, 'trace', None)
         elapsed = getattr(text, 'elapsed', None)
         text = str(text)
@@ -1007,7 +1009,9 @@ class Hub(ScreenPopMixin):
                       **({'attachments': safe_attachments} if safe_attachments else {}),
                       **({'message_id': message_id} if isinstance(message_id, str) else {}),
                       **({'request_id': request_id} if isinstance(request_id, str) else {}),
-                      **({'memory_refs': memory_refs} if isinstance(memory_refs, list) and memory_refs else {}))
+                      **({'memory_refs': memory_refs} if isinstance(memory_refs, list) and memory_refs else {}),
+                      **({'virtual_card': virtual_card} if isinstance(virtual_card, dict) else {}),
+                      **({'virtual_card_event': virtual_card_event} if isinstance(virtual_card_event, dict) else {}))
         elif (is_error or text.startswith(('请求失败', '当前输入及必要上下文',
                                             '这条输入加上人设和记忆太长', '工具说明和本轮上下文超过长度上限',
                                             '模型返回空内容'))):
@@ -1297,7 +1301,13 @@ class Hub(ScreenPopMixin):
                 self.cond.notify_all()
 
     def message_action(self, action, message_id=None, *, message_ids=None, content=None, favorite=None, card=None):
-        if action in ('create_transfer', 'create_gift', 'card_accept', 'card_decline'):
+        card_actions = {
+            'create_transfer': 'transfer', 'create_gift': 'gift',
+            'card_receive': 'receive', 'card_accept': 'accept',
+            'card_decline': 'decline', 'card_return': 'return',
+        }
+        if action in card_actions:
+            from virtual_cards import VirtualCardError, client_action_id
             if self.chat is None:
                 return '当前聊天不可用。'
             with self.cond:
@@ -1308,40 +1318,25 @@ class Hub(ScreenPopMixin):
                 self.busy = True
             try:
                 if action in ('create_transfer', 'create_gift'):
-                    kind = 'transfer' if action == 'create_transfer' else 'gift'
-                    if not isinstance(card, dict) or set(card) - {'amount', 'note', 'content'}:
+                    if not isinstance(card, dict):
                         raise UserError('卡片内容无效。')
-                    if kind == 'transfer':
-                        amount, note = card.get('amount'), card.get('note', '')
-                        if (not isinstance(amount, str) or not re.fullmatch(r'(?:0|[1-9]\d{0,11})(?:\.\d{1,2})?', amount)
-                                or float(amount) <= 0 or not isinstance(note, str) or len(note) > 240):
-                            raise UserError('金额或留言无效。')
-                        payload = {'type': kind, 'amount': amount, 'note': note.strip(), 'status': 'pending'}
-                        text = f'发出了一张虚拟转账卡片：¥{amount}'
-                    else:
-                        gift = card.get('content')
-                        if not isinstance(gift, str) or not 1 <= len(gift.strip()) <= 500:
-                            raise UserError('礼物内容请填写 1 至 500 个字符。')
-                        payload = {'type': kind, 'content': gift.strip(), 'status': 'pending'}
-                        text = '送出了一份虚拟礼物。'
-                    message_id = secrets.token_hex(16)
-                    row = {'role': 'user', 'content': text, 'message_id': message_id, 'virtual_card': payload}
-                    self.chat.store.append(self.chat.path, row)
-                    self.chat.history, self.chat.rounds = self.chat.recent()
-                    self.push('user', text, message_id=message_id, virtual_card=payload)
+                    client_id = client_action_id(card.get('client_id'))
+                    fields = {key: card.get(key) for key in ('amount', 'note', 'icon', 'content') if key in card}
+                    row, created = self.chat.create_virtual_card(
+                        'user', card_actions[action], fields, client_action_id=client_id)
+                    if created:
+                        self.push('user', row['content'], message_id=row['message_id'],
+                                  virtual_card=row['virtual_card'])
                     return '虚拟卡片已发送。'
-                _, row = self.chat.message_record(message_id)
-                payload = row.get('virtual_card')
-                if not isinstance(payload, dict) or payload.get('type') not in ('transfer', 'gift'):
-                    raise UserError('找不到这张虚拟卡片。')
-                if payload.get('status') != 'pending':
-                    raise UserError('这张卡片已经处理过了。')
-                payload = {**payload, 'status': 'accepted' if action == 'card_accept' else 'declined'}
-                index, _ = self.chat.message_record(message_id)
-                self.chat.store.update_record(self.chat.path, index, {'virtual_card': payload})
-                self.chat.history, self.chat.rounds = self.chat.recent()
-                self.push('message_updated', '', message_id=message_id, virtual_card=payload)
+                if not isinstance(message_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', message_id):
+                    return '无效的消息操作。'
+                updated, event, content = self.chat.act_on_virtual_card('user', message_id, card_actions[action])
+                self.push('message_updated', content, message_id=message_id, virtual_card=updated)
+                self.push(event['role'], event['content'], message_id=event['message_id'],
+                          virtual_card_event=event['virtual_card_event'])
                 return '虚拟卡片状态已更新。'
+            except VirtualCardError as exc:
+                return exc.zh
             except UserError as exc:
                 return str(exc)
             except OSError:
@@ -2616,6 +2611,15 @@ def serve_chat(chat, hub, channels=()):
     announce_stickers = getattr(files, 'announce_stickers', None)
     if hub.sticker_library is not None and callable(announce_stickers):
         announce_stickers()
+    announce_cards = getattr(files, 'announce_virtual_cards', None)
+    if callable(announce_cards) and announce_cards() and chat.tools is not None:
+        chat.pending_capability_event = getattr(chat.tools, 'capability_event', None)
+        chat.pending_capability_event_model = getattr(chat.tools, 'capability_event_model', None)
+
+    def publish_virtual_card(message_id, card, content=''):
+        hub.push('message_updated', content or '', message_id=message_id, virtual_card=card)
+
+    chat.virtual_card_changed = publish_virtual_card
     if getattr(files, 'lab', None) is not None:
         from lab_games import LabGames
         hub.game_manager = LabGames(files.workspace, hub.game_port, files.lab.name)
@@ -2704,7 +2708,8 @@ def serve_chat(chat, hub, channels=()):
                  memory_refs=message.get('memory_refs', []),
                  **({'attachments': attachments} if attachments else {}),
                  **({'media': media} if media else {}),
-                 **({'virtual_card': message['virtual_card']} if isinstance(message.get('virtual_card'), dict) else {}))
+                 **({'virtual_card': message['virtual_card']} if isinstance(message.get('virtual_card'), dict) else {}),
+                 **({'virtual_card_event': message['virtual_card_event']} if isinstance(message.get('virtual_card_event'), dict) else {}))
     # The UI history is a bounded window; replay decisions must use the durable
     # full chat log or an older successful voice send looks pending on restart.
     completed_voice_ids = {

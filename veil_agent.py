@@ -255,6 +255,32 @@ AWAY_CHANNEL_PARAMETERS = {
 
 def send_message_schema(voice=False, channels=(), files=False, stickers=False):
     schema = json.loads(json.dumps(SEND_MESSAGE))
+    properties = schema['function']['parameters']['properties']
+    properties['transfer'] = {
+        'type': 'object',
+        'description': ('Optional VEIL virtual transfer to Lan. No real money or payment. '
+                        'The card is its own bubble; any text is a separate bubble right after. '
+                        'You may send just the card.'),
+        'properties': {
+            'amount': {'type': 'number', 'exclusiveMinimum': 0, 'maximum': 1000000000000},
+            'note': {'type': 'string', 'maxLength': 240},
+        },
+        'required': ['amount'],
+        'additionalProperties': False,
+    }
+    properties['gift'] = {
+        'type': 'object',
+        'description': ('Optional VEIL virtual gift for Lan: a short icon (an emoji or mark, default 🎁) and your own '
+                        'description. Not a real purchase, delivery, or item. The card is its own bubble; any text is '
+                        'a separate bubble right after. You may send just the card.'),
+        'properties': {
+            'icon': {'type': 'string', 'maxLength': 24},
+            'content': {'type': 'string', 'minLength': 1, 'maxLength': 500},
+        },
+        'required': ['content'],
+        'additionalProperties': False,
+    }
+    schema['function']['parameters']['required'] = []
     if stickers:
         schema['function']['parameters']['properties']['sticker'] = {
             'type': 'string', 'maxLength': 80,
@@ -1771,7 +1797,7 @@ def collapse_all_history_photos(messages):
 
 class ChatOutput(str):
     def __new__(cls, text, media=None, message_id=None, request_id=None, memory_refs=None, attachments=None,
-                is_error=False):
+                is_error=False, *, virtual_card=None, virtual_card_event=None):
         value = super().__new__(cls, text)
         value.media = media
         value.message_id = message_id
@@ -1779,6 +1805,8 @@ class ChatOutput(str):
         value.memory_refs = list(memory_refs or [])
         value.attachments = list(attachments or [])
         value.is_error = bool(is_error)
+        value.virtual_card = virtual_card if isinstance(virtual_card, dict) else None
+        value.virtual_card_event = virtual_card_event if isinstance(virtual_card_event, dict) else None
         return value
 
 
@@ -1935,6 +1963,9 @@ class Chat:
                      RECALL_MESSAGE] if (
             (self.cfg.tools and self.cfg.tools.get('enabled', True))
             or (self.tools and self.tools.tools)) else []
+        if messaging:
+            from virtual_cards import CARD_ACTION
+            messaging.append(CARD_ACTION)
         if messaging and not self.force_reply:
             messaging.extend([STAY_SILENT, REPLY_LATER])
         if messaging and self.sticker_library is not None:
@@ -1989,7 +2020,7 @@ class Chat:
             schemas = kept + ([expand_schema(hidden)] if hidden else [])
         from tools_agent import ALLOW, ASK, AUTONOMY_DIRECT, LAB_ONLY, NATIVE, OWN_WORK
         reserved_names = (ALLOW | ASK | AUTONOMY_DIRECT | LAB_ONLY | OWN_WORK | NATIVE | {
-            'send_message', 'recall_message', 'stay_silent', 'reply_later', 'screen_pop',
+            'send_message', 'recall_message', 'card_action', 'stay_silent', 'reply_later', 'screen_pop',
             'capability_history', 'autonomy_history', 'search_chat_history', 'profile_append', 'profile_replace',
             'thought', 'life_record', 'long_task_status', 'long_task_update', 'set_next_wake', 'set_wake_rhythm',
             'expand_capability', 'stickers',
@@ -2207,6 +2238,198 @@ class Chat:
                 message['content'] = snapshot
                 break
 
+    def _send_virtual_card_message(self, args, allowed, request_id, tool_call_id):
+        from virtual_cards import VirtualCardError, build_card
+
+        if 'transfer' in args and 'gift' in args:
+            return 'Send a transfer or a gift, not both in one call. Nothing was sent.', '被拒绝', 'send_message'
+        if args.get('voice') is True or 'file' in args or 'sticker' in args:
+            return ('A virtual card cannot include voice, a file, or a sticker. Nothing was sent.',
+                    '被拒绝', 'send_message')
+        kind = 'transfer' if 'transfer' in args else 'gift'
+        try:
+            card = build_card(kind, args.get(kind), 'assistant')
+        except VirtualCardError as exc:
+            return f'{exc.en} Nothing was sent.', '被拒绝', 'send_message'
+        rest = {key: value for key, value in args.items() if key not in ('transfer', 'gift')}
+        has_text = isinstance(rest.get('text'), str) and rest['text'].strip()
+        if has_text:
+            if (not set(rest).issubset(allowed) or not isinstance(rest.get('text'), str)
+                    or ('file' in rest and (not isinstance(rest['file'], str) or not rest['file'].strip()
+                                            or len(rest['file']) > 240))
+                    or ('done' in rest and type(rest['done']) is not bool)
+                    or any(name in rest and type(rest[name]) is not bool for name in self.away_channels)):
+                return 'send_message arguments are invalid; nothing was sent.', '被拒绝', 'send_message'
+            if self.autonomy_mode:
+                run_id = self.autonomy_run_id
+                if sum(1 for row in self.store.read(self.path) if row.get('autonomy_run_id') == run_id) >= 2:
+                    return ('An autonomous wake may send at most three messages. A card with words is two '
+                            'messages, so nothing was sent.'), '被拒绝', 'send_message'
+            elif self.send_message_count >= 9:
+                return ('You may send at most 10 messages since Lan last wrote. A card with words is two '
+                        'messages, so nothing was sent; its tool call remains in the conversation context.',
+                        '被拒绝', 'send_message')
+            first = self._commit_assistant_card(card, request_id, tool_call_id, done=False)
+            if first[1] in ('被拒绝', '出错'):
+                return first
+            return self.send_message(json.dumps(rest, ensure_ascii=False), request_id,
+                                     f'{tool_call_id}:text' if tool_call_id else tool_call_id)
+        if rest:
+            if set(rest) - {'done'} or type(rest.get('done', False)) is not bool:
+                return 'A virtual card is its own message. Nothing was sent.', '被拒绝', 'send_message'
+        return self._commit_assistant_card(card, request_id, tool_call_id, done=args.get('done') is True)
+
+    def _commit_assistant_card(self, card, request_id, tool_call_id, done=False):
+        from virtual_cards import card_text
+
+        autonomy = self.autonomy_mode
+        if not autonomy:
+            if self.send_message_count >= 10:
+                return ('You may send at most 10 messages since Lan last wrote. This card was not sent; its tool call '
+                        'remains in the conversation context so you can continue in a later turn.',
+                        '被拒绝', 'send_message')
+            self.send_message_count += 1
+        gate = self.autonomy_message_lock if autonomy else None
+        with gate if gate is not None else nullcontext():
+            if autonomy and self.autonomy_should_yield and self.autonomy_should_yield():
+                self.autonomy_interrupted = True
+                return 'Autonomous activity yielded before sending this card; nothing was sent.', '被拒绝', 'send_message'
+            rows = self.store.read(self.path) if autonomy else []
+            run_id = self.autonomy_run_id if autonomy else None
+            if autonomy and (not isinstance(run_id, str) or not run_id or
+                             not isinstance(tool_call_id, str) or not tool_call_id):
+                return 'The current autonomous wake or tool-call identifier is missing; nothing was sent.', '被拒绝', 'send_message'
+            if autonomy:
+                existing = next((row for row in rows
+                                 if row.get('autonomy_run_id') == run_id
+                                 and row.get('autonomy_tool_call_id') == tool_call_id), None)
+                if existing:
+                    self.history, self.rounds = self.recent()
+                    return 'This card was already saved and will not be sent again.', '已存在', 'send_message'
+                if sum(1 for row in rows if row.get('autonomy_run_id') == run_id) >= 3:
+                    return 'An autonomous wake may send at most three messages. This card was not sent.', '被拒绝', 'send_message'
+            message_id = uuid.uuid4().hex
+            content = card_text(card, message_id, 'Lan', self.cfg.name)
+            event = {'role': 'assistant', 'content': content, 'request_id': request_id,
+                     'origin': 'reply', 'message_id': message_id,
+                     'memory_refs': list(getattr(self, 'turn_memory_refs', [])),
+                     'virtual_card': card}
+            regeneration_parent = getattr(self, 'regeneration_parent_message_id', None)
+            if isinstance(regeneration_parent, str) and regeneration_parent:
+                event['regeneration_parent_message_id'] = regeneration_parent
+            if autonomy:
+                event.update({'autonomy_run_id': run_id, 'autonomy_tool_call_id': tool_call_id})
+            with saving():
+                self.store.append(self.path, event)
+                self.sent_messages.append(content)
+                self.history, self.rounds = self.recent()
+                output = self.autonomy_message_output if autonomy else None
+                (output or self.output)(ChatOutput(
+                    f'{self.cfg.name}: {content}', message_id=message_id, request_id=request_id,
+                    memory_refs=getattr(self, 'turn_memory_refs', []), virtual_card=card))
+        result = (f'Sent a virtual {card["type"]} to Lan. message_id={message_id}. '
+                  'It is an in-chat gesture, not real money or property.')
+        if done and not autonomy:
+            self.turn_done = True
+            self.message_turn_done = True
+            result += ' Your turn ends here.'
+        elif not autonomy and self.send_message_count >= 10:
+            self.turn_done = True
+            self.message_turn_done = True
+            result += (' That was your 10th message since Lan last wrote, so your turn ends here. '
+                       'Anything unsaid can wait for her next message.')
+        return result, '成功', 'send_message'
+
+    def create_virtual_card(self, sender, kind, fields, client_action_id=None):
+        """Save one card from Lan or from a caller that is not inside send_message."""
+        from virtual_cards import build_card, card_text, client_action_id as normalize_client
+
+        client_action_id = normalize_client(client_action_id)
+        if client_action_id:
+            existing = next((row for row in reversed(self.store.read(self.path))
+                             if row.get('client_action_id') == client_action_id
+                             and isinstance(row.get('virtual_card'), dict)), None)
+            if existing:
+                return existing, False
+        card = build_card(kind, fields, sender)
+        message_id = uuid.uuid4().hex
+        content = card_text(card, message_id, 'Lan', self.cfg.name)
+        row = {'role': 'assistant' if sender == 'assistant' else 'user', 'content': content,
+               'message_id': message_id, 'origin': 'reply' if sender == 'assistant' else 'card',
+               'virtual_card': card}
+        if client_action_id:
+            row['client_action_id'] = client_action_id
+        self.store.append(self.path, row)
+        try:
+            self.history, self.rounds = self.recent()
+        except UserError:
+            pass
+        return row, True
+
+    def act_on_virtual_card(self, actor, message_id, action):
+        from virtual_cards import (MESSAGE_ID_RE, VirtualCardError, can_apply, card_text, event_payload,
+                                   event_text, next_status)
+
+        if not isinstance(message_id, str) or not MESSAGE_ID_RE.fullmatch(message_id):
+            raise VirtualCardError('无效的消息。', 'The message id is invalid.')
+        if not isinstance(action, str):
+            raise VirtualCardError('这个操作无效。', 'This card action is invalid.')
+        index, row = self.message_record(message_id)
+        card = row.get('virtual_card')
+        if not isinstance(card, dict) or card.get('type') not in ('transfer', 'gift'):
+            raise VirtualCardError('找不到这张虚拟卡片。', 'That virtual card was not found.')
+        if not can_apply(card, actor, action):
+            if card.get('sender') == actor and card.get('recipient') != actor:
+                raise VirtualCardError('这张卡片要等对方处理。', 'This card is addressed to the other person.')
+            raise VirtualCardError('现在不能这样处理这张卡片。', 'This card can no longer be changed that way.')
+        updated = {**card, 'status': next_status(card, action)}
+        content = card_text(updated, message_id, 'Lan', self.cfg.name)
+        self.store.update_record(self.path, index, {'virtual_card': updated, 'content': content})
+        event_id = uuid.uuid4().hex
+        payload = event_payload(updated, message_id, action, actor)
+        event = {'role': 'assistant' if actor == 'assistant' else 'user',
+                 'content': event_text(updated, message_id, action, actor, 'Lan', self.cfg.name),
+                 'message_id': event_id, 'origin': 'reply' if actor == 'assistant' else 'card',
+                 'virtual_card_event': payload}
+        self.store.append(self.path, event)
+        try:
+            self.history, self.rounds = self.recent()
+        except UserError:
+            pass
+        return updated, event, content
+
+    def card_action(self, arguments):
+        from virtual_cards import VirtualCardError
+
+        try:
+            args = json.loads(arguments or '{}')
+        except (ValueError, TypeError):
+            args = None
+        if (not isinstance(args, dict) or set(args) != {'message_id', 'action'}
+                or not isinstance(args.get('message_id'), str) or not isinstance(args.get('action'), str)):
+            return 'card_action needs a message_id and an action. Nothing was changed.', '被拒绝', 'card_action'
+        try:
+            with saving():
+                updated, event, content = self.act_on_virtual_card('assistant', args['message_id'], args['action'])
+        except VirtualCardError as exc:
+            return f'{exc.en} Nothing was changed.', '被拒绝', 'card_action'
+        except UserError as exc:
+            return f'{exc} Nothing was changed.', '被拒绝', 'card_action'
+        callback = getattr(self, 'virtual_card_changed', None)
+        if callable(callback):
+            callback(args['message_id'], updated, content)
+        output = self.autonomy_message_output if self.autonomy_mode else None
+        (output or self.output)(ChatOutput(
+            f'{self.cfg.name}: {event["content"]}', message_id=event['message_id'],
+            virtual_card_event=event['virtual_card_event']))
+        return (f'Updated the virtual card {args["message_id"]} with {args["action"]}. '
+                f'Result message_id={event["message_id"]}. No real money or property moved.',
+                '成功', 'card_action')
+
+    def virtual_card_context(self):
+        from virtual_cards import card_context
+        return card_context(self.history_events, self.cfg.name)
+
     def send_message(self, arguments, request_id, tool_call_id=None):
         try:
             args = json.loads(arguments)
@@ -2218,6 +2441,8 @@ class Chat:
             allowed.add('file')
         if self.sticker_library is not None:
             allowed.add('sticker')
+        if isinstance(args, dict) and ('transfer' in args or 'gift' in args):
+            return self._send_virtual_card_message(args, allowed, request_id, tool_call_id)
         if isinstance(args, dict) and 'sticker' in args and self.sticker_library is not None:
             # Ticket 222: a sticker is sent as the plain-text marker the chat window draws as a picture.
             if args.get('voice') is True:
@@ -2688,6 +2913,8 @@ class Chat:
         index, row = self.message_record(message_id)
         if row.get('role') not in ('user', 'assistant') or row.get('recalled'):
             raise UserError('这条消息不能编辑。')
+        if row.get('virtual_card') or row.get('virtual_card_event'):
+            raise UserError('虚拟卡片不能编辑。')
         if not isinstance(content, str) or not content.strip() or len(content) > 12000:
             raise UserError('消息内容不能为空或超过 12,000 个字符。')
         if row.get('media'):
@@ -2731,7 +2958,7 @@ class Chat:
         index, row = self.check_recallable(message_id, role)
         self.store.update_record(self.path, index, {
             'message_id': message_id, 'content': '[Message recalled]', 'recalled': True,
-            'media': None, 'attachments': [],
+            'media': None, 'attachments': [], 'virtual_card': None, 'virtual_card_event': None,
         })
         self.history, self.rounds = self.recent()
         return row
@@ -3199,6 +3426,7 @@ class Chat:
                                                   else (None, {'count': 0, 'characters': 0}))
         recalled_memories = list(recalled)
         recall_context_msg = {'role': 'system', 'content': self.recall_context()} if (self.current_request_tool_schemas() and self.recall_context()) else None
+        card_context_msg = {'role': 'system', 'content': self.virtual_card_context()} if (self.current_request_tool_schemas() and self.virtual_card_context()) else None
 
         runtime_auxiliary = []
         from recent_experiences import recent_experience_context
@@ -3216,6 +3444,7 @@ class Chat:
             *([background_message] if background_message else []),
             *([short_term_message] if short_term_message else []),
             *([recall_context_msg] if recall_context_msg else []),
+            *([card_context_msg] if card_context_msg else []),
             *runtime_auxiliary,
         ]
 
@@ -3482,6 +3711,8 @@ class Chat:
                 result, state, summary = self.reply_later(call.function.arguments)
             elif call.function.name == 'stay_silent':
                 result, state, summary = self.stay_silent()
+            elif call.function.name == 'card_action':
+                result, state, summary = self.card_action(call.function.arguments)
             elif call.function.name == 'recall_message':
                 args = json.loads(call.function.arguments or '{}')
                 message_id = args.get('message_id') if isinstance(args, dict) else None
