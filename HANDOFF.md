@@ -3,6 +3,7 @@
 - 分支 `ticket/239-unified-execution-architecture`，最新基准 `main` `473dabb`；执行架构调查基准为其父范围内的 `817de3c`，新增的 PR #295 只改桌面 UI/预览，不改变执行调用链。只改文档：新增工单和完整调查报告，纠正 OpenCode 工单 237“未合并”的过时状态；没有启用执行器、改代码/配置或读取私人数据。
 - 结论：保留 VEIL 核心；OpenCode 只做容器内任务循环；后续通过 VEIL Execution Gateway 接受筛选后的 Playwright MCP 与 Windows UIA adapter；UFO² 只评估动作层，不引入整套 Agent 核心。当前没有可立即删除的旧执行模块。
 - 下一步第一项是工单 240：workspace adapter 生产化，容器必需、固定 OpenCode 版本、统一 run/grant/budget/cancel/artifact；完成 API/Claude、聊天/自主和 Windows 真实场景后才开始删旧入口。
+- 合并顺序：PR #297 先保持打开，必须等 UI PR #296 合并；之后更新到最新 `main`、重新检查 CI/冲突，再合并 #297。不要提前合并。
 - 本轮无法重跑 OpenCode（PATH 中未安装）；GitHub 连接器没有返回 PR #294 合并提交的状态检查，因此只记录合并和历史 Windows 证据，不声称 CI 全绿。完整边界见 `docs/reports/239-unified-execution-architecture.md`。
 
 ## 工单 237 交接：桌面 UI 全状态整理与预览验收（2026-11-07）
