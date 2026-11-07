@@ -1,9 +1,26 @@
-## 工单 248：工作台提前结束仍报成功
+# 当前状态
 
-- 目标：工作台只有在收到最终报告后才报成功；没有最终回答、工具未运行或工具报错时，把明确状态交回 Peter。
-- 现状：PR #300 已基于最新 `main` `56df7f4` 更新。改动覆盖最终回答筛选、无工具调用失败、工具错误/停止诊断及费用显示；首轮必需 CI 全绿，Cubic 审查意见已集中修复，更新后的 CI 待确认，Windows Peter 实机待验。
-- 下一步：PR #300 必需 CI 通过后合并。
-- 验收：合并更新后，在带远程的临时 Git 仓库里让 Peter 执行 `git push` 并点拒绝，确认审批卡出现、结果说明被拒绝且远程未变化；再跑普通命令任务确认最终报告和费用正常。
+更新：2026-11-08 · 工单 249。
+
+## 当前目标与现状
+
+- 工单 249「修复 OpenCode 工作台审批误判」在独立 worktree `E:\Peter-Agent\VEIL\veil-agent-codex-249`、分支 `ticket/249-opencode-approval-classification` 开发；正式运行目录 `E:\Peter-Agent\VEIL\veil-agent` 未改动。原 worktree `veil-agent-codex` 的未提交改动保留。
+- 根因是 `executor_opencode.py` 把 OpenCode 的 patterns 与 metadata 一起做全文关键词匹配，搜索词会被误认成待执行命令。本工单复用 OpenCode 现有请求字段和审批机制，不新增权限系统。
+- 工单 248 / PR #300 已于 2026-11-07 合并，提交 `b9695e52b34490ddbf51763ad9970f4b24874853`；检查包括 Windows 与 Linux Python 3.11/3.12、审计和 scanner smoke 均通过。该 PR 修复最终结果汇总，没有修改权限分类。Windows Peter 实机体验验收尚未确认。
+- 本地复现确认旧分类会对 `grep -R "git push" .` 弹审批；修复后的 `python -m unittest tests.test_executor_opencode` 为 45 项通过、2 项跳过，`python -m py_compile executor_opencode.py tests/test_executor_opencode.py` 与 `git diff --check` 通过。
+- README 全套命令 `python -m unittest discover -s tests -v`：共 1218 项，2 项无关备份断言失败、1 项因缺少 `docx` 模块报错、13 项跳过；错误与本次改动文件无交集。PR 必需 CI、Cubic 审查及 Windows Peter 体验验收仍待完成，彼此分别记录，不相互替代。
+
+## 下一步
+
+完成审批分类和回归测试，推送 PR；处理实质性审查意见并确认该 PR 最新必需 CI，通过后按分支保护规则合并。合并后请 Lan 在 Peter 界面按下列步骤验收。
+
+## Lan 的 Windows 体验验收
+
+1. 在测试项目里搜索包含 `git push` 的普通文本，确认直接执行且没有发布审批卡。
+2. 在临时 Git 项目尝试 `git push`，拒绝审批后确认远端没有变化；检查复杂命令不会因含安全搜索而被直接放行。
+3. 再执行普通工作台任务，确认结果和费用正常；聊天及自主活动原有行为不回归。
+
+---
 
 ## 工单 246：每次打开都出现的空语音消息
 

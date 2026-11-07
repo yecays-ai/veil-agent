@@ -13,6 +13,7 @@ import os
 import posixpath
 import re
 import secrets
+import shlex
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import shutil
@@ -75,10 +76,82 @@ DANGEROUS = re.compile(
     r'\bsudo\b|\brunas\b|reg\s+(add|delete)|powershell.*-enc|\|\s*(sh|bash|iex)\b|invoke-expression|'
     r'shutdown|net\s+user|schtasks|\bcipher\s+/w|git\s+remote\s+add|\bgit\s+config\s+--global)', re.I)
 
-# Not forbidden, but Lan decides (chat) or the job is parked (wake): publishing, downloading, installing, bulk deletes.
-ASK_LAN = re.compile(
-    r'(\bgit\s+(push|clone|fetch|pull)\b|\b(pip3?|npm|pnpm|yarn|winget|choco|apt(-get)?|brew|cargo|go)\s+(install|add|get)\b|'
-    r'\b(curl|wget|iwr|invoke-webrequest|invoke-restmethod|irm)\b|\brm\s+-[a-z]*r|\bremove-item\b.*-recurse|\bdel\s+/s|\brmdir\s+/s)', re.I)
+# Not forbidden, but Lan decides (chat) or the job is parked (wake).
+ASK_LAN = {
+    'git': {'push', 'clone', 'fetch', 'pull'},
+    'installers': {'pip', 'pip3', 'npm', 'pnpm', 'yarn', 'winget', 'choco', 'apt', 'apt-get',
+                   'brew', 'cargo', 'go'},
+    'network': {'curl', 'wget', 'iwr', 'invoke-webrequest', 'invoke-restmethod', 'irm'},
+}
+
+
+def _git_subcommand(tokens):
+    value_options = {'-C', '-c', '--git-dir', '--work-tree', '--namespace'}
+    args = iter(tokens[1:])
+    for arg in args:
+        if arg in value_options:
+            next(args, None)
+        elif arg.startswith('-'):
+            continue
+        else:
+            return arg.casefold()
+    return ''
+
+
+def _bash_command_needs_lan(tokens):
+    while tokens and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', tokens[0]):
+        tokens = tokens[1:]
+    if not tokens:
+        return False
+    command = posixpath.basename(tokens[0]).casefold()
+    if command in ASK_LAN['network']:
+        return True
+    if command == 'git':
+        return _git_subcommand(tokens) in ASK_LAN['git']
+    if command in ASK_LAN['installers']:
+        return len(tokens) > 1 and tokens[1].casefold() in {'install', 'add', 'get'}
+    if command in {'python', 'python3'} and tokens[1:3] == ['-m', 'pip']:
+        return len(tokens) > 3 and tokens[3].casefold() == 'install'
+    if re.fullmatch(r'python\d+(?:\.\d+)*', command) and tokens[1:3] == ['-m', 'pip']:
+        return len(tokens) > 3 and tokens[3].casefold() == 'install'
+    if command == 'rm':
+        return any(arg == '--recursive' or
+                   (arg.startswith('-') and not arg.startswith('--') and 'r' in arg[1:].casefold())
+                   for arg in tokens[1:])
+    if command == 'remove-item':
+        return any(arg.casefold() in {'-recurse', '-r'} for arg in tokens[1:])
+    if command in {'del', 'rmdir'}:
+        return any(arg.casefold() in {'/s', '/s/f', '/s/q'} for arg in tokens[1:])
+    return False
+
+
+def _complex_bash_request(patterns, metadata):
+    # OpenCode supplies parsed command fragments in patterns and the original shell input in metadata.command.
+    command = metadata.get('command') if isinstance(metadata, dict) else None
+    if not isinstance(command, str) or not command.strip() or not isinstance(patterns, list) or not patterns:
+        return True
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=';&|<>()')
+        lexer.whitespace_split = True
+        shell_tokens = list(lexer)
+        commands = [shlex.split(pattern, posix=True) for pattern in patterns if isinstance(pattern, str)]
+    except ValueError:
+        return True
+    if len(commands) != len(patterns) or len(commands) != 1 or not commands[0]:
+        return True
+    if any(re.fullmatch(r'[;&|<>()]+', token) for token in shell_tokens):
+        return True
+    command_tokens = commands[0]
+    while command_tokens and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', command_tokens[0]):
+        command_tokens = command_tokens[1:]
+    if not command_tokens:
+        return True
+    command_name = posixpath.basename(command_tokens[0]).casefold()
+    if command_name in {'bash', 'sh', 'dash', 'zsh', 'fish', 'powershell', 'pwsh', 'cmd', 'xargs',
+                        'env', 'command', 'time', 'exec', 'busybox', 'nohup', 'nice', 'setsid', 'eval'}:
+        return True
+    return command_name in {'python', 'python3', 'node', 'ruby', 'perl'} and \
+        any(arg in {'-c', '-e', '--eval'} for arg in command_tokens[1:3])
 
 
 def decide(permission, patterns, metadata, workdir, *, autonomy, ask):
@@ -101,13 +174,48 @@ def decide(permission, patterns, metadata, workdir, *, autonomy, ask):
             target = posixpath.normpath(p if absolute else work + '/' + p).lower()
             if target != work and not target.startswith(work.rstrip('/') + '/'):
                 return 'reject', 'write outside the workbench'
-    if permission == 'bash' and ASK_LAN.search(text):
-        if autonomy:
-            return 'reject', 'needs Lan\'s approval; not asked during autonomous activity'
-        shown = ' '.join(str(p) for p in patterns)[:300]
-        answer = ask(f'Peter 的工作台想执行：{shown}。这会联网、安装、发布或批量删除。同意这一次吗？y/N ')
-        return ('once', 'Lan approved') if isinstance(answer, str) and answer.strip().casefold() == 'y' \
-            else ('reject', 'Lan did not approve')
+    if permission == 'bash':
+        needs_lan = False
+        complex_request = False
+        for pattern in patterns if isinstance(patterns, list) else ():
+            if not isinstance(pattern, str):
+                complex_request = True
+                break
+            try:
+                tokens = shlex.split(pattern, posix=True)
+            except ValueError:
+                complex_request = True
+                break
+            if not tokens:
+                complex_request = True
+                break
+            if _bash_command_needs_lan(tokens):
+                needs_lan = True
+                break
+        command = metadata.get('command') if isinstance(metadata, dict) else None
+        if isinstance(command, str):
+            try:
+                command_tokens = shlex.split(command, posix=True)
+            except ValueError:
+                complex_request = True
+            else:
+                if command_tokens:
+                    needs_lan = needs_lan or _bash_command_needs_lan(command_tokens)
+                else:
+                    complex_request = True
+        complex_request = complex_request or _complex_bash_request(patterns, metadata)
+        if needs_lan or complex_request:
+            if autonomy:
+                return 'reject', 'needs Lan\'s approval; not asked during autonomous activity'
+            command = metadata.get('command') if isinstance(metadata, dict) else None
+            shown = str(command if isinstance(command, str) else patterns)[:300]
+            if needs_lan:
+                prompt = f'Peter 的工作台想执行：{shown}。这会联网、安装、发布或批量删除。同意这一次吗？y/N '
+            else:
+                prompt = f'Peter 的工作台想执行一条复合或无法确认安全的命令：{shown}。只执行这一次吗？y/N '
+            answer = ask(prompt)
+            return ('once', 'Lan approved') if isinstance(answer, str) and answer.strip().casefold() == 'y' \
+                else ('reject', 'Lan did not approve')
     if permission in ('bash', 'edit', 'write', 'webfetch', 'task', 'skill', 'todowrite', 'read', 'glob', 'grep'):
         return 'once', 'inside the workbench'
     # Tools from other MCP servers (VEIL's own tools included) are never approved here: VEIL runs those itself.

@@ -1,11 +1,19 @@
+## 工单 249 交接（2026-11-08）
+
+- 工单 248 / PR #300 已合并，合并提交 `b9695e52b34490ddbf51763ad9970f4b24874853`；Windows/Linux Python 3.11/3.12、审计和 scanner smoke 检查均成功。PR 改的是最终报告汇总，审批分类未变；Windows Peter 实机体验验收仍未确认。
+- 工单 249 在独立 worktree `E:\Peter-Agent\VEIL\veil-agent-codex-249`、分支 `ticket/249-opencode-approval-classification` 施工。原 `veil-agent-codex` worktree 有未提交改动，不要覆盖或清理。
+- 复用 OpenCode v1.19.5 shell permission API：`patterns` 是逐条命令片段，`metadata.command` 是原始命令；结论见工单文档。无需新权限系统。
+- 当前改动修复了全字段关键词误判，复杂请求保守走审批。`python -m unittest tests.test_executor_opencode` 45 项通过、2 项跳过；完整 README 套件 1218 项中有 2 项备份断言失败、1 项缺少 `docx` 依赖报错（均与本次改动文件无交集），13 项跳过。语法和 diff 检查通过。
+- 下一步：交付前再按最终 diff 核验影响路径，创建 PR、请求 Cubic 审查并确认必需 CI。合并后按 `STATUS.md` 请 Lan 在 Windows 体验验收；未实测 OpenCode 联机流程，不调用付费模型。
+
 ## 工单 248 交接（2026-11-08）
 
-- PR #300 已提交，分支 `ticket/248-opencode-result` 同步到 GitHub main `56df7f4`；首轮必需 CI 全绿，Cubic 的有效意见已集中修复，更新后的 CI 待确认。
+- PR #300 已于 2026-11-07 合并，合并提交 `b9695e52b34490ddbf51763ad9970f4b24874853`；Windows/Linux Python 3.11/3.12、审计和 scanner smoke 检查成功。
 - 原运行证据已在前一窗口查明：workbench 被误记成功，只有中间开场话术；未达到费用/时间/步数上限；没有审批卡。OpenCode 会话未留存，所以不能追溯模型内部具体停止原因。first-light 不是独立 Git 仓库。
 - 本次修复：汇总只采最后一个 `finish=stop` assistant 回答；无工具调用或没有最终报告时失败并带诊断；有工具失败时把工具名、状态和安全的错误类型传回 Peter；保留命令参数脱敏、审批/停止和费用结算。
 - 影响路径：聊天与自主活动都从 `Chat._execute_tool_call` 调用 `_run_workbench` 和共享 executor；聊天审批与自主活动自动拒绝逻辑未改。既有入口/费用测试加本次失败、工具诊断回归。
-- 下一步：PR #300 更新后的必需 CI 通过后合并。合并后让 Lan 更新 Peter，在带远程的临时 Git 项目里测试推送审批拒绝，并跑一个普通命令验最终报告/费用。
-- 不调用付费模型。OpenCode 不在本机，因此不跑真实 OpenCode 集成用例；Windows 实机验收仍待合并更新后执行。
+- Windows Peter 实机体验验收仍未确认；PR #300 未更改审批分类，本工单继续处理该分类问题。
+- 不调用付费模型。OpenCode 不在本机，因此不跑真实 OpenCode 集成用例。
 
 ## 工单 246：每次打开都出现的空语音消息
 
