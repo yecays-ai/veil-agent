@@ -172,7 +172,7 @@ body:not(.detached-window) #log{padding:28px 30px 22px;background:rgb(var(--veil
 .life-card{align-items:center;padding:14px 4px;border:0;border-bottom:1px solid var(--veil-rule);border-radius:0;background:transparent!important;box-shadow:none;font-size:15px}
 .life-card:hover,.life-card[aria-current=true]{border-color:var(--veil-rule);background:#eee9df99!important;box-shadow:none;transform:none}
 .life-card strong{font-size:16px;font-weight:600}.life-card>span:not(.life-state){font-size:13px;color:var(--veil-soft)}.life-state{background:transparent;padding:4px;color:var(--veil-soft);font-size:12px}
-.life-detail{display:none;position:absolute;z-index:5;inset:70px 18px 18px auto;width:min(420px,calc(100% - 36px));margin:0;border-radius:12px;background:var(--veil-paper)!important;box-shadow:0 14px 38px rgba(61,52,42,.17)}.life-detail.open{display:block}
+.life-detail{display:none;position:absolute;z-index:5;inset:70px 18px 18px auto;width:min(420px,calc(100% - 36px));margin:0;border-radius:12px;background:rgb(var(--veil-canvas-rgb)/var(--view-alpha,var(--window-alpha)))!important;box-shadow:0 14px 38px rgba(61,52,42,.17)}.life-detail.open{display:block}
 .life-calendar{border:0!important;background:transparent!important;box-shadow:none!important}
 .life-calendar button{border-radius:50%!important}
 .life-records.life-overview{grid-template-columns:minmax(300px,.95fr) minmax(310px,1.05fr);align-items:start;gap:48px}

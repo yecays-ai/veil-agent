@@ -105,7 +105,8 @@ test('desktop redesign keeps real pages in one shell with a collapsible draggabl
   assert.match(css, /body\.detached-window\[data-current-page="chat"\] \.chat-input-shell\{grid-column:2;position:relative;display:flex/);
   assert.match(css, /body:not\(\.detached-window\) \.chat-input-shell\{grid-column:2;position:relative;display:flex/);
   assert.match(css, /grid-template-columns:36px minmax\(0,1fr\) 38px/);
-  assert.match(css, /#voice-hold\{position:absolute;right:2px;bottom:1px;width:32px;height:32px;min-width:32px\}/);
+  assert.match(css, /body\.detached-window\[data-current-page="chat"\] #voice-hold\{position:absolute;right:2px;bottom:1px;width:32px;height:32px;min-width:32px\}/);
+  assert.match(css, /body:not\(\.detached-window\) #voice-hold\{position:absolute;right:2px;bottom:1px;width:32px;height:32px;min-width:32px\}/);
   assert.match(css, /#send\{grid-column:3;width:38px;height:38px/);
   assert.match(css, /\.voice-tools\{display:none;position:absolute;z-index:12/);
   assert.match(css, /#request-reply\{display:none;position:absolute;z-index:12;left:136px/);
@@ -115,6 +116,7 @@ test('desktop redesign keeps real pages in one shell with a collapsible draggabl
   assert.equal([...html.matchAll(/<select\b/g)].length, 7, 'all static dropdowns are accounted for');
   assert.match(js, /id="lf-kind"[\s\S]*?id="lf-owner"[\s\S]*?id="lf-repeat"/);
   assert.match(css, /\.life-records\.life-overview\{grid-template-columns:minmax\(300px,\.95fr\) minmax\(310px,1\.05fr\)/);
+  assert.match(css, /\.life-detail\{[^}]*background:rgb\(var\(--veil-canvas-rgb\)\/var\(--view-alpha,var\(--window-alpha\)\)\)!important/);
   assert.match(css, /#life-view \.life-sticky\{padding:18px 0 8px;[^}]*font:15px\/1\.5/);
   assert.doesNotMatch(css, /Segoe Print/);
   assert.match(js, /veil-sidebar-collapsed/);
