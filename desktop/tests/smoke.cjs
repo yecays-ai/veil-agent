@@ -32,6 +32,13 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   let mcpRevision = 0;
   const media = new Map();
   const voiceFixture=wavFixture();
+  const day=new Date(Date.now()-new Date().getTimezoneOffset()*60000).toISOString().slice(0,10);
+  let lifeRecords=[
+    {id:'fictional-event',kind:'event',title:'Fictional afternoon walk',content:'Along the river',owner:'共同',date:day,state:'active',mood:'',repeat:'none'},
+    {id:'fictional-todo',kind:'note',title:'Fictional send weekly note',content:'',owner:'Peter',date:day,state:'active',mood:'',repeat:'none'},
+    {id:'fictional-daily',kind:'note',title:'Fictional daily stretch',content:'',owner:'共同',date:day,state:'active',mood:'',repeat:'daily'},
+    {id:'fictional-plan',kind:'plan',title:'Fictional organize the studio',content:'',owner:'Peter',date:day,state:'active',mood:'',repeat:'none'}
+  ];
   media.set('fictional-reply.wav',{id:'reply',filename:'fictional-reply.wav',type:'audio/wav',bytes:voiceFixture});
   const events = [
     { id: 1, message_id: 'fictional-history', request_id: 'fictional-history-request', kind: 'assistant', text: 'Fictional saved history', history: true, time: new Date().toISOString() },
@@ -109,6 +116,15 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
       else json(res, {error:'unsupported fictional action'}, 400);
     } else if (url.pathname === '/api/memory/read') {
       json(res, {version:'1',next_offset:null,text:'---\ncreated: 2026-10-26T12:30:00+08:00\ntags:\n- games\n- laughter\n---\nA fictional shared memory.'});
+    } else if (url.pathname === '/api/life') {
+      if(req.method==='POST'){
+        const body=await readBody(req),prior=lifeRecords.find(item=>item.id===body.id);
+        if(body.delete)lifeRecords=lifeRecords.filter(item=>item.id!==body.id);
+        else if(prior)Object.assign(prior,body);
+        else lifeRecords.push({id:'fictional-new-life',kind:body.kind||'note',title:body.title||'Fictional new note',content:body.content||'',owner:body.owner||'共同',date:body.date||day,state:body.state||'active',mood:'',repeat:body.repeat||'none'});
+        json(res,{record:lifeRecords.find(item=>item.id===body.id)||lifeRecords.at(-1)});return;
+      }
+      json(res,{records:lifeRecords,folded:0});
     } else if (url.pathname === '/api/mcp') {
       if(req.method==='POST'){
         const body=await readBody(req);
@@ -147,6 +163,35 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
     try { return await chat.webContents.executeJavaScript('document.body.textContent.includes("Fictional saved history")'); }
     catch { return false; }
   }, 'history missing');
+  assert.equal(await chat.webContents.executeJavaScript('getComputedStyle(document.querySelector("#voice-hold")).position'), 'absolute', 'voice-message control must sit inside the input field');
+  assert.equal(await chat.webContents.executeJavaScript('document.querySelector("#voice-hold").getBoundingClientRect().width >= 30'), true, 'voice-message control must remain visible');
+  assert.equal(await chat.webContents.executeJavaScript('document.querySelector("#voice-hold").parentElement.classList.contains("chat-input-shell")'),true,'voice-message control must stay attached to the text field');
+  assert.equal(await chat.webContents.executeJavaScript('document.querySelectorAll("select").length===document.querySelectorAll(".veil-select-trigger").length'),true,'every native select must have the consistent dropdown control');
+  await chat.webContents.executeJavaScript('document.querySelector("#mcp-permission").previousElementSibling.querySelector(".veil-select-trigger").click()');
+  assert.equal(await chat.webContents.executeJavaScript('document.querySelector("#mcp-permission").previousElementSibling.querySelector(".veil-select-trigger").getAttribute("aria-expanded")==="true" && document.querySelector(".veil-select-menu.open").children.length===2'),true,'custom dropdown must expose all options');
+  await chat.webContents.executeJavaScript('document.querySelector(".veil-select-menu.open").dispatchEvent(new KeyboardEvent("keydown",{key:"Escape",bubbles:true}))');
+  assert.equal(await chat.webContents.executeJavaScript('!document.querySelector(".veil-select-menu.open")'),true,'custom dropdown must close with Escape');
+  assert.equal(await chat.webContents.executeJavaScript('window.veilDesktop.detachView("chat",{x:800,y:400})'),true,'chat should detach');
+  let detachedChat;
+  await wait(()=>{detachedChat=BrowserWindow.getAllWindows().find(w=>w!==pet&&w!==chat&&w.webContents.getURL().includes('view=chat'));return detachedChat?.isVisible()},'detached chat window missing');
+  detachedChat.setSize(360,460);
+  await wait(()=>detachedChat.webContents.executeJavaScript('document.body.classList.contains("detached-window") && document.querySelector("#voice-hold").getBoundingClientRect().width>0'),'narrow detached chat did not finish rendering');
+  assert.equal(await detachedChat.webContents.executeJavaScript('(()=>{const composer=document.querySelector(".composer").getBoundingClientRect(),shell=document.querySelector(".chat-input-shell").getBoundingClientRect(),mic=document.querySelector("#voice-hold").getBoundingClientRect(),send=document.querySelector("#send").getBoundingClientRect();return shell.width>100&&mic.right<=shell.right&&send.right<=composer.right&&getComputedStyle(document.querySelector("#voice-hold")).position==="absolute"})()'),true,'narrow detached composer must keep the voice control inside its input');
+  await detachedChat.webContents.executeJavaScript('document.querySelector("#composer-more").click()');
+  assert.equal(await detachedChat.webContents.executeJavaScript('(()=>{const tools=document.querySelector(".voice-tools").getBoundingClientRect(),reply=document.querySelector("#request-reply").getBoundingClientRect();return getComputedStyle(document.querySelector(".voice-tools")).zIndex==="12"&&getComputedStyle(document.querySelector(".voice-record-status")).zIndex==="9"&&tools.right<=reply.left})()'),true,'voice and reply menus must remain accessible above recording status');
+  await detachedChat.webContents.executeJavaScript('document.querySelector("#composer-more").click();document.querySelector("#merge-view").click()');
+  await wait(()=>detachedChat.isDestroyed()&&chat.webContents.executeJavaScript('!document.body.dataset.detachedViews.includes("chat")'),'detached chat did not merge cleanly');
+  await chat.webContents.executeJavaScript('document.querySelector("[data-page=life]").click()');
+  await wait(()=>chat.webContents.executeJavaScript('!document.querySelector("#life-view").hidden && document.querySelector(".life-overview .life-calendar") && document.querySelector(".life-agenda").textContent.includes("Fictional afternoon walk")'),'life calendar and agenda did not render');
+  assert.equal(await chat.webContents.executeJavaScript('getComputedStyle(document.querySelector(".agenda-title")).fontSize'), '15px','life agenda text must remain readable at desktop size');
+  await chat.webContents.executeJavaScript('document.querySelector("[data-life-owner=Peter]").click()');
+  assert.equal(await chat.webContents.executeJavaScript('document.querySelectorAll(".life-calendar-days button.has-record").length'),0,'calendar dots must follow the selected owner');
+  await chat.webContents.executeJavaScript('document.querySelector("[data-life-owner=Lan]").click();document.querySelector("[data-life-kind=note]").click()');
+  assert.equal(await chat.webContents.executeJavaScript('document.querySelectorAll(".life-sticky .sticky-add input").length'),2,'Lan needs daily and one-off add forms even with no existing notes');
+  await chat.webContents.executeJavaScript('document.querySelector("[data-life-owner=all]").click();document.querySelector("[data-life-kind=all]").click()');
+  await fs.mkdir(path.join(__dirname, '../test-output'), { recursive: true });
+  await fs.writeFile(path.join(__dirname, '../test-output/life.png'), (await chat.webContents.capturePage()).toPNG());
+  await chat.webContents.executeJavaScript('document.querySelector("[data-page=chat]").click()');
   await chat.webContents.executeJavaScript(`(()=>{
     const button=document.querySelector('#sidebar-toggle');
     const initial=document.body.classList.contains('sidebar-collapsed');
@@ -304,7 +349,8 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   await wait(()=>{detachedMCP=BrowserWindow.getAllWindows().find(w=>w!==pet&&w!==chat&&w.webContents.getURL().includes('view=mcp'));return detachedMCP?.isVisible()},'MCP detached window missing');
   await wait(()=>detachedMCP.webContents.executeJavaScript('document.querySelector("#offline").style.display==="none"'),'detached MCP window lost Agent events');
   await wait(()=>detachedMCP.webContents.executeJavaScript('document.querySelector("#mcp-list").textContent.includes("echo")'),'detached MCP service list missing');
-  await detachedMCP.webContents.executeJavaScript('document.querySelector("#merge-view").click(); true');
+  assert.equal(await detachedMCP.webContents.executeJavaScript('!document.querySelector(".msg-voice audio[src], .msg-image[src], .msg-file-image[src], .msg-sticker[src]")'),true,'non-chat detached pages must not load hidden chat media');
+  await detachedMCP.webContents.executeJavaScript('setTimeout(()=>document.querySelector("#merge-view").click(),0); true');
   await wait(()=>detachedMCP.isDestroyed(),'MCP detached window did not merge');
   console.log('SMOKE PASS: local dark chat, history, audio-only permissions, >5 MB image compression and decode, automatic-language dictation, send-first voice with hidden transcript and appearance settings, right-click menu, audio loading, activity controls, hide/reopen, sandbox');
   clearTimeout(failSafe);
