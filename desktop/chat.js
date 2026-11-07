@@ -19,6 +19,7 @@ let quietEnabled=false;
 let activityFilter='all',toolActivity=[],autonomyActivity=[],glanceActivity=[],detachedViews=new Set();
 const activityRowNodes=new Map();
 const pageQuery=new URLSearchParams(location.search),detachedView=pageQuery.get('detached')==='1'?pageQuery.get('view'):null;
+const canLoadChatMedia=!detachedView||detachedView==='chat';
 let selectedImage=null;const awaitingImages=new Map();
 let voiceRecorder=null,voiceStream=null,voiceChunks=[],voiceStarted=0,voiceTimer=null,voiceCancelled=false,voiceSending=false,voicePermissionPending=false;
 const unsentVoiceBlobs=new Map();
@@ -247,7 +248,7 @@ function createVoiceBubble(kind,text,media){
   const status=document.createElement('span');status.className='voice-status';
   const audio=document.createElement('audio');audio.preload='metadata';audio.hidden=true;
   audio.setAttribute('aria-label',kind==='assistant'?'Peter 的语音消息':'语音消息');
-  if(media.localUrl)audio.src=media.localUrl;else window.veilDesktop.mediaUrl(media.filename).then(url=>{audio.src=url}).catch(()=>{});
+  if(media.localUrl)audio.src=media.localUrl;else if(canLoadChatMedia)window.veilDesktop.mediaUrl(media.filename).then(url=>{audio.src=url}).catch(()=>{});
   const updateDuration=()=>{if(Number.isFinite(audio.duration)&&audio.duration>0)clock.textContent=formatVoiceTime(audio.duration)};
   audio.onloadedmetadata=updateDuration;audio.ondurationchange=updateDuration;
   audio.onended=()=>{play.innerHTML=window.veilIcon('play',16);play.setAttribute('aria-label','播放语音');wrap.classList.remove('playing')};
@@ -273,7 +274,7 @@ function createAttachmentCard(attachment){
   heading.append(name,size);card.appendChild(heading);
   if(attachment.view==='image'&&['image/png','image/jpeg','image/gif','image/webp'].includes(attachment.mime)){
     const image=document.createElement('img');image.className='msg-file-image';image.alt=attachment.name||'图片';image.loading='lazy';
-    window.veilDesktop.mediaUrl(attachment.filename).then(url=>{image.src=url}).catch(()=>{image.alt='图片附件无法读取'});
+    if(canLoadChatMedia)window.veilDesktop.mediaUrl(attachment.filename).then(url=>{image.src=url}).catch(()=>{image.alt='图片附件无法读取'});
     card.appendChild(image);
   }else if(attachment.view==='html'&&attachment.mime==='text/html'){
     const open=document.createElement('button');open.type='button';open.className='msg-file-open';open.textContent='在浏览器中打开';
@@ -336,7 +337,7 @@ function add(kind,text,id,time,media,messageId,requestId,favorite=false,attachme
     }else if(media&&media.id&&media.mime?.startsWith('audio/')){
       d.appendChild(createVoiceBubble(kind,text,media));
     }else if(media&&media.id){
-      const image=document.createElement('img');image.className='msg-image';window.veilDesktop.mediaUrl(media.filename).then(url=>{image.src=url});image.alt=media.name||'图片';image.loading='lazy';d.appendChild(image);
+      const image=document.createElement('img');image.className='msg-image';if(canLoadChatMedia)window.veilDesktop.mediaUrl(media.filename).then(url=>{image.src=url}).catch(()=>{});image.alt=media.name||'图片';image.loading='lazy';d.appendChild(image);
       if(text&&text!=='[图片]'){const caption=document.createElement('div');caption.innerHTML=render(text);d.appendChild(caption)}
     }else if(!stickerBubble(d,text))d.innerHTML=render(text);
     for(const attachment of Array.isArray(attachments)?attachments:[]){const card=createAttachmentCard(attachment);if(card)d.appendChild(card)}
@@ -1831,6 +1832,7 @@ function findSticker(lib,pack,name){
   return p&&p.stickers.find(s=>s.name.toLowerCase()===name.trim().toLowerCase())||null;
 }
 function stickerBubble(d,text){
+  if(!canLoadChatMedia)return false;
   const m=STICKER_MARK.exec(text||'');if(!m)return false;
   d.classList.add('sticker-msg');
   const holder=document.createElement('div');holder.className='msg-sticker-wrap';
