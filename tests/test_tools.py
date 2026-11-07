@@ -3,6 +3,7 @@ import json
 import os
 import shutil
 import tempfile
+import threading
 import unittest
 from decimal import Decimal
 from unittest.mock import patch
@@ -10,7 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from tools_agent import (ALLOW, ASK, DENY, LAB_ONLY, FilesystemTools, checked_path,
+from tools_agent import (ALLOW, ASK, DENY, LAB_ONLY, OWN_WORK, FilesystemTools, checked_path,
                          permitted_tools, tool_policy)
 from veil_agent import (Budget, Chat, RequestFailed, Store, load_character,
                         model_tool_result, run_chat)
@@ -27,20 +28,26 @@ class ToolPolicyTests(unittest.TestCase):
     def manager(self):
         item = FilesystemTools.__new__(FilesystemTools)
         item.workspace = self.workspace
-        item.cfg = SimpleNamespace(tools={'max_result_bytes': 64})
-        item.tools = [SimpleNamespace(name=name) for name in ALLOW | ASK | DENY]
+        item.cfg = SimpleNamespace(id='test', tools={'max_result_bytes': 64})
+        item.lab = None
+        item.lab_max_write_bytes = 200000
+        item.workspace_operation_lock = threading.RLock()
+        item.store = SimpleNamespace(root=self.root / 'data')
+        item.tools = [SimpleNamespace(name=name) for name in ALLOW | ASK | DENY | OWN_WORK]
         item.client = Mock()
         return item
 
     def test_only_explicitly_allowed_tools_are_offered_to_model(self):
         server = [SimpleNamespace(name=name, description='desc', inputSchema={})
-                  for name in sorted(ALLOW | ASK | DENY | LAB_ONLY | {'unknown'})]
+                  for name in sorted(ALLOW | ASK | DENY | LAB_ONLY | OWN_WORK | {'unknown'})]
         result = permitted_tools(server)
         names = {item['function']['name'] for item in result}
-        self.assertEqual(names, ALLOW | ASK | LAB_ONLY)
+        self.assertEqual(names, ALLOW | ASK | LAB_ONLY | OWN_WORK)
         self.assertEqual(tool_policy('preview_lab_page'), 'lab')
         self.assertEqual(tool_policy('write_file'), 'ask')
-        self.assertEqual(tool_policy('edit_file'), 'deny')
+        self.assertEqual(tool_policy('edit_file'), 'workspace')
+        self.assertEqual(tool_policy('delete_file'), 'workspace')
+        self.assertEqual(tool_policy('move_file'), 'deny')
         self.assertEqual(tool_policy('unknown'), 'deny')
 
     def test_path_traversal_and_device_paths_are_rejected(self):
@@ -73,26 +80,45 @@ class ToolPolicyTests(unittest.TestCase):
         with self.assertRaisesRegex(UserError, '角色数据目录被重定向'):
             FilesystemTools(self.root, SimpleNamespace(id='test', tools=None), Store(data))
 
-    def test_write_requires_consent_and_never_overwrites(self):
+    def journal_manager(self):
         manager = self.manager()
+        manager.cfg = SimpleNamespace(id='test', tools={'max_result_bytes': 64,
+            'persistent_append_file': 'growth-journal.md'})
+        manager.grant_path = self.root / 'append-grant.json'
+        manager.tools += [SimpleNamespace(name='grant_append'), SimpleNamespace(name='append_file')]
+        return manager
+
+    def test_ordinary_workspace_files_are_written_without_asking(self):
+        manager = self.manager()
+        no_prompt = Mock(side_effect=AssertionError('the workspace is Peter\'s own; no approval'))
+        self.assertEqual(manager.invoke('write_file', {'path': 'summary.txt', 'content': 'one'}, no_prompt)[1], '成功')
+        self.assertEqual(manager.invoke('write_file', {'path': 'summary.txt', 'content': 'two'}, no_prompt)[1], '成功')
+        self.assertEqual((self.workspace / 'summary.txt').read_text(encoding='utf-8'), 'two')
+        self.assertEqual(manager.invoke('append_file', {'path': 'summary.txt', 'content': '!'}, no_prompt)[1], '成功')
+        self.assertEqual((self.workspace / 'summary.txt').read_text(encoding='utf-8'), 'two!')
+        manager.client.call.assert_not_called()
+
+    def test_journal_write_requires_consent_and_never_overwrites(self):
+        manager = self.journal_manager()
         manager.client.call.return_value = 'written'
         asked = Mock(return_value='n')
         result, state, path = manager.invoke('write_file',
-            {'path': 'summary.txt', 'content': 'fictional'}, asked)
+            {'path': 'growth-journal.md', 'content': 'fictional'}, asked)
         self.assertIn('Lan did not approve', result)
         self.assertEqual(state, '被拒绝')
         manager.client.call.assert_not_called()
         asked.assert_called_once()
         allowed = Mock(return_value='y')
         result, state, path = manager.invoke('write_file',
-            {'path': 'summary.txt', 'content': 'fictional'}, allowed)
-        self.assertEqual((result, state, path), ('The new file was created.', '成功', 'summary.txt'))
-        self.assertEqual((self.workspace / 'summary.txt').read_text(encoding='utf-8'), 'fictional')
+            {'path': 'growth-journal.md', 'content': 'fictional'}, allowed)
+        self.assertEqual((result, state, path), ('The new file was created.', '成功', 'growth-journal.md'))
+        self.assertEqual((self.workspace / 'growth-journal.md').read_text(encoding='utf-8'), 'fictional')
         manager.client.call.assert_not_called()
-        (self.workspace / 'summary.txt').write_text('old', encoding='utf-8')
+        (self.workspace / 'growth-journal.md').write_text('old', encoding='utf-8')
         manager.client.call.reset_mock()
-        manager.invoke('write_file', {'path': 'summary.txt', 'content': 'new'}, allowed)
+        manager.invoke('write_file', {'path': 'growth-journal.md', 'content': 'new'}, allowed)
         manager.client.call.assert_not_called()
+        self.assertEqual((self.workspace / 'growth-journal.md').read_text(encoding='utf-8'), 'old')
 
     def test_append_grant_is_scoped_persistent_and_keeps_original_bytes(self):
         target = self.workspace / 'growth-journal.md'
@@ -126,27 +152,24 @@ class ToolPolicyTests(unittest.TestCase):
         self.assertTrue(target.read_bytes().endswith(b'\n## 2026-10-21\nthird\n'))
         no_prompt.assert_not_called()
 
-    def test_append_other_file_asks_and_refusal_is_clear(self):
-        manager = self.manager()
-        manager.cfg = SimpleNamespace(tools={'max_result_bytes': 64,
-            'persistent_append_file': 'growth-journal.md'})
-        manager.grant_path = self.root / 'append-grant.json'
-        manager.tools += [SimpleNamespace(name='grant_append'), SimpleNamespace(name='append_file')]
+    def test_append_to_other_files_is_direct_and_grant_is_limited_to_the_journal(self):
+        manager = self.journal_manager()
         other = self.workspace / 'other.md'
         other.write_text('old', encoding='utf-8')
-        result, state, _ = manager.invoke('append_file',
-            {'path': 'other.md', 'content': 'new'}, lambda _: 'n')
-        self.assertEqual(state, '被拒绝')
-        self.assertIn('Lan did not approve', result)
-        self.assertEqual(other.read_text(encoding='utf-8'), 'old')
-        result, state, _ = manager.invoke('append_file',
-            {'path': 'other.md', 'content': 'new'}, lambda _: 'y')
+        no_prompt = Mock(side_effect=AssertionError('no approval for the rest of the workspace'))
+        result, state, _ = manager.invoke('append_file', {'path': 'other.md', 'content': 'new'}, no_prompt)
         self.assertEqual(state, '成功')
         self.assertEqual(other.read_text(encoding='utf-8'), 'oldnew')
         self.assertFalse(manager.grant_path.exists())
         result, state, _ = manager.invoke('grant_append', {'path': 'other.md'}, lambda _: 'y')
         self.assertEqual(state, '被拒绝')
         self.assertFalse(manager.grant_path.exists())
+        journal = self.workspace / 'growth-journal.md'
+        journal.write_text('j', encoding='utf-8')
+        result, state, _ = manager.invoke('append_file', {'path': 'growth-journal.md', 'content': 'x'}, lambda _: 'n')
+        self.assertEqual(state, '被拒绝')
+        self.assertIn('Lan did not approve', result)
+        self.assertEqual(journal.read_text(encoding='utf-8'), 'j')
 
     def test_append_never_creates_or_escapes_and_replaced_file_loses_grant(self):
         manager = self.manager()
@@ -155,7 +178,7 @@ class ToolPolicyTests(unittest.TestCase):
         manager.grant_path = self.root / 'append-grant.json'
         manager.tools += [SimpleNamespace(name='grant_append'), SimpleNamespace(name='append_file')]
         target = self.workspace / 'growth-journal.md'
-        for path in ('missing.md', '../outside.md'):
+        for path in ('missing.md', '../outside.md', 'growth-journal.md'):
             result, state, _ = manager.invoke('append_file',
                 {'path': path, 'content': 'new'}, lambda _: 'y')
             self.assertEqual(state, '被拒绝')
@@ -167,6 +190,22 @@ class ToolPolicyTests(unittest.TestCase):
             {'path': 'growth-journal.md', 'content': 'new'}, lambda _: 'n')
         self.assertEqual(state, '被拒绝')
         self.assertEqual(target.read_text(encoding='utf-8'), 'replacement')
+
+    def test_journal_identity_is_case_insensitive_on_every_platform(self):
+        manager = self.journal_manager()
+        target = self.workspace / 'Growth-Journal.md'
+        target.write_text('keep', encoding='utf-8')
+        manager.cfg.tools['persistent_append_file'] = 'growth-journal.md'
+        result, state, _ = manager.invoke('write_file', {'path': 'growth-journal.md', 'content': 'replace'})
+        self.assertEqual(state, '被拒绝', result)
+        self.assertEqual(target.read_text(encoding='utf-8'), 'keep')
+        result, state, _ = manager.invoke('grant_append', {'path': 'growth-journal.md'}, lambda _: 'y')
+        self.assertEqual(state, '成功', result)
+        result, state, _ = manager.invoke('append_file',
+            {'path': 'Growth-Journal.md', 'content': ' note'},
+            Mock(side_effect=AssertionError('grant should cover this path')))
+        self.assertEqual(state, '成功', result)
+        self.assertEqual(target.read_text(encoding='utf-8'), 'keep note')
 
     def test_journal_tools_are_offered_when_filesystem_starts(self):
         store = Store(self.root / 'data')
@@ -180,7 +219,7 @@ class ToolPolicyTests(unittest.TestCase):
             manager = FilesystemTools(self.root, cfg, store)
         names = {tool.name for tool in manager.tools}
         self.assertEqual(names, {'write_file', 'append_file', 'grant_append',
-                                 'create_directory', 'move_lab_file', 'lab_file_digest',
+                                 'create_directory', 'move_lab_file', 'lab_file_digest', 'delete_file', 'edit_file',
                                  'preview_lab_page', 'run_lab_python'})
         self.assertEqual({item['function']['name'] for item in permitted_tools(manager.tools)}, names)
         manager.attach_game_manager(object())
@@ -188,11 +227,8 @@ class ToolPolicyTests(unittest.TestCase):
         self.assertEqual(manager.grant_path, self.root / 'data/test/append-grant.json')
 
     def test_append_refuses_file_replaced_between_check_and_open(self):
-        manager = self.manager()
-        manager.cfg = SimpleNamespace(tools={'max_result_bytes': 64})
-        manager.grant_path = self.root / 'append-grant.json'
-        manager.tools += [SimpleNamespace(name='append_file')]
-        target = self.workspace / 'journal.md'
+        manager = self.journal_manager()
+        target = self.workspace / 'growth-journal.md'
         target.write_text('original', encoding='utf-8')
         real_open = os.open
         def replace_then_open(path, flags, *args, **kwargs):
@@ -202,25 +238,25 @@ class ToolPolicyTests(unittest.TestCase):
             return real_open(path, flags, *args, **kwargs)
         with patch('tools_agent.os.open', side_effect=replace_then_open):
             result, state, _ = manager.invoke('append_file',
-                {'path': 'journal.md', 'content': 'new'}, lambda _: 'y')
+                {'path': 'growth-journal.md', 'content': 'new'}, lambda _: 'y')
         self.assertEqual(state, '被拒绝')
         self.assertEqual(target.read_text(encoding='utf-8'), 'replacement')
 
     def test_exclusive_write_refuses_a_file_created_during_approval(self):
-        manager = self.manager()
-        target = self.workspace / 'summary.txt'
+        manager = self.journal_manager()
+        target = self.workspace / 'growth-journal.md'
         def approve(_):
             target.write_text('racing content', encoding='utf-8')
             return 'y'
         result, state, _ = manager.invoke('write_file',
-            {'path': 'summary.txt', 'content': 'new content'}, approve)
+            {'path': 'growth-journal.md', 'content': 'new content'}, approve)
         self.assertEqual(state, '被拒绝')
         self.assertIn('target already exists', result)
         self.assertEqual(target.read_text(encoding='utf-8'), 'racing content')
 
     def test_exclusive_create_does_not_overwrite_at_the_open_boundary(self):
-        manager = self.manager()
-        target = self.workspace / 'summary.txt'
+        manager = self.journal_manager()
+        target = self.workspace / 'growth-journal.md'
         original_open = Path.open
         def racing_open(path, mode='r', *args, **kwargs):
             if mode == 'x' and path.name == target.name:
@@ -229,14 +265,14 @@ class ToolPolicyTests(unittest.TestCase):
             return original_open(path, mode, *args, **kwargs)
         with patch.object(Path, 'open', racing_open):
             result, state, _ = manager.invoke('write_file',
-                {'path': 'summary.txt', 'content': 'new content'}, lambda _: 'y')
+                {'path': 'growth-journal.md', 'content': 'new content'}, lambda _: 'y')
         self.assertEqual(state, '被拒绝')
         self.assertIn('target already exists', result)
         self.assertEqual(target.read_text(encoding='utf-8'), 'racing content')
 
     def test_denied_tools_and_traversal_never_reach_server(self):
         manager = self.manager()
-        result, state, _ = manager.invoke('edit_file', {'path': 'a.txt', 'edits': []})
+        result, state, _ = manager.invoke('move_file', {'source': 'a.txt', 'destination': 'b.txt'})
         self.assertEqual(state, '被拒绝')
         result, state, _ = manager.invoke('read_text_file', {'path': '../secret.txt'})
         self.assertEqual(state, '被拒绝')
@@ -266,7 +302,7 @@ class ToolPolicyTests(unittest.TestCase):
         self.assertNotIn(str(self.root), json.dumps(manifest))
         self.assertTrue(manager.capability_event.startswith('Capability update:'))
         self.assertEqual(manager.capability_event_model, manager.capability_event)
-        self.assertIn('ask lan first', FilesystemTools._description(manager, ['write_file']))
+        self.assertIn('write_file (direct use)', FilesystemTools._description(manager, ['write_file']))
         manager.consume_capability_event()
         reopened = FilesystemTools.__new__(FilesystemTools)
         reopened.cfg, reopened.store = manager.cfg, store
@@ -295,7 +331,7 @@ class ToolPolicyTests(unittest.TestCase):
         self.assertNotRegex(event, r'[\u3400-\u9fff]')
         self.assertIn('lab_file_digest', event)
         self.assertIn('move_lab_file', event)
-        self.assertIn('direct use only inside the lab folder', event)
+        self.assertIn('direct use anywhere in your own workspace', event)
         self.assertEqual(manifest['pending_event'], event)
         self.assertEqual(manifest['pending_event_model'], event)
 
@@ -715,7 +751,7 @@ max_result_bytes = 200
         tools.workspace.mkdir()
         tools.tools = [SimpleNamespace(name='write_file', description='Write', inputSchema={})]
         tools.capability_event = None
-        tools.cfg = self.cfg
+        tools.cfg = SimpleNamespace(id='test', tools={**self.cfg.tools, 'persistent_append_file': 'growth-journal.md'})
         call = self.message([self.tool_call('write_file',
             '{"path":"growth-journal.md","content":"fictional entry"}', 'write')])
         for approval, expected_state in [('n', '被拒绝'), ('y', '成功')]:

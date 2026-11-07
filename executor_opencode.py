@@ -46,8 +46,9 @@ TOOL_SCHEMA = {'type': 'function', 'function': {
     'name': TOOL_NAME,
     'description': (
         'Hand a job that needs a shell, editing files, running programs, installing packages or downloading '
-        'things to your workbench. The program finds the project the job is about (or uses the workbench '
-        'folder for new work), keeps a way back before changing an existing project, and returns a report. '
+        'things to your workbench. The program finds the project the job is about (or uses your own workspace '
+        'for new work, the same folder your file tools use), keeps a way back before changing an existing project, '
+        'and returns a report. '
         'Publishing, downloading, installing and bulk deletes are asked of Lan by the program. Give a '
         'complete, self-contained task in words (what is wrong, what to do, what to report); the workbench works in '
         'the project folder itself, so name the project rather than giving file paths or system commands. '
@@ -169,7 +170,8 @@ def kill_tree(proc):
         return
     if _WINDOWS:
         if proc.poll() is None:
-            subprocess.run(['taskkill', '/F', '/T', '/PID', str(proc.pid)], capture_output=True)
+            subprocess.run(['taskkill', '/F', '/T', '/PID', str(proc.pid)], capture_output=True,
+                           **({'creationflags': getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)} if _WINDOWS else {}))
     else:
         try:
             os.killpg(proc.pid, signal.SIGKILL)
@@ -275,10 +277,12 @@ def find_command(configured=''):
     return shutil.which('opencode')
 
 
-def build_config(provider, token, base_url):
+def build_config(provider, token, base_url, protect=()):
     """The OpenCode config, passed inline (OPENCODE_CONFIG_CONTENT) so nothing is written into the user's project
     and a project's own opencode.json cannot loosen it. `token` is the local proxy token, not the real key."""
     context = int(provider.get('max_input_tokens', 32768))
+    edit_permission = ('ask' if not protect else
+                       {'*': 'ask', **{Path(path).as_posix(): 'deny' for path in protect}})
     return {
         '$schema': 'https://opencode.ai/config.json',
         'provider': {'relay': {
@@ -289,7 +293,7 @@ def build_config(provider, token, base_url):
         # OpenCode's own rule engine settles the clear cases itself (last matching pattern wins); what is left
         # as `ask` comes to the program (`decide`). Reading secrets is denied outright.
         'permission': {'bash': {'*': 'ask', **{c: 'allow' for c in SAFE_COMMANDS}},
-                       'edit': 'ask', 'webfetch': 'ask', 'external_directory': 'ask',
+                       'edit': edit_permission, 'webfetch': 'ask', 'external_directory': 'ask',
                        'read': {'*': 'allow', **{g: 'deny' for g in SECRET_GLOBS}}},
         'share': 'disabled', 'autoupdate': False}
 
@@ -323,10 +327,16 @@ def container_command(container, *, name, workdir, port, env, masks):
 
 
 def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, stopped, record_cost,
-        api_factory=None, proxy_factory=None, container=None, popen=subprocess.Popen, clock=time.monotonic, sleep=time.sleep):
+        api_factory=None, proxy_factory=None, container=None, protect=(), popen=subprocess.Popen, clock=time.monotonic, sleep=time.sleep):
     """Run one task. `record_cost(cost)` is called once with the estimated cost, whatever the outcome."""
     limits = {**DEFAULT_LIMITS, **(limits or {})}
     workdir, home = Path(workdir), Path(home)
+    if protect and not container:
+        try:
+            record_cost(Decimal(0))
+        except Exception:
+            pass
+        return ExecutorResult('The workbench cannot protect the growth journal without Docker isolation.', '被拒绝')
     workdir.mkdir(parents=True, exist_ok=True)
     home.mkdir(parents=True, exist_ok=True)
     price = (Decimal(str(provider.get('input_cny_per_million', 0))),
@@ -334,7 +344,8 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
     cap = Decimal(str(limits['run_budget_cny']))
     proxy = (proxy_factory or KeyProxy)(provider['base_url'], key, max_requests=int(limits['max_steps']) * 3 + 5,
                                         **({'host': '0.0.0.0'} if container else {}))
-    config = build_config(provider, proxy.token, proxy.local_base('host.docker.internal' if container else '127.0.0.1'))
+    config = build_config(provider, proxy.token, proxy.local_base('host.docker.internal' if container else '127.0.0.1'),
+                          protect=protect)
     port, password = free_port(), secrets.token_urlsafe(24)
     keep = {'PATH', 'PATHEXT', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'TEMP', 'TMP', 'TMPDIR', 'LANG', 'LC_ALL', 'PROGRAMFILES',
             'PROGRAMFILES(X86)', 'PROGRAMDATA', 'APPDATA', 'LOCALAPPDATA', 'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE'}
@@ -348,6 +359,9 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
         empty.write_text('', encoding='utf-8')
         for path in secret_files(workdir):
             masks.append((str(empty), path.relative_to(workdir).as_posix()))
+        for relative in protect:  # e.g. Peter's growth journal: it has its own append-only grant
+            if (workdir / relative).is_file() and all(target != Path(relative).as_posix() for _, target in masks):
+                masks.append((str(empty), Path(relative).as_posix()))
         command = container_command(container, name=name, workdir=str(workdir), port=port, masks=masks,
                                     env={**shared, 'HOME': '/tmp/home', 'XDG_DATA_HOME': '/tmp/home/data',
                                          'XDG_CONFIG_HOME': '/tmp/home/config', 'XDG_CACHE_HOME': '/tmp/home/cache',
@@ -363,6 +377,7 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
     try:
         proc = popen(command if container else [command, 'serve', '--port', str(port)], cwd=str(workdir), env=env,
                      shell=_WINDOWS and not container, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     **({'creationflags': getattr(subprocess, 'CREATE_NO_WINDOW', 0)} if _WINDOWS else {}),
                      **({} if _WINDOWS else {'start_new_session': True}))
         api = (api_factory or Api)(f'http://127.0.0.1:{port}', password)
         started = clock()

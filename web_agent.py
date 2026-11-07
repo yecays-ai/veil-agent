@@ -79,9 +79,6 @@ SENSEVOICE_EVENT_EMOJI_PREFIX = re.compile(rf'^(?:[{re.escape(SENSEVOICE_EVENT_E
 SENSEVOICE_EMOTION_EMOJI_SUFFIX = re.compile(rf'\s*[{re.escape(SENSEVOICE_EMOTION_EMOJI)}]+$')
 
 
-VOICE_NO_SPEECH_ERROR = '没有识别到说话内容，可以重试识别。'
-
-
 def clean_voice_transcript(text):
     """Remove SenseVoice rich emotion/event markers from dictation text."""
     text = SENSEVOICE_METADATA_TAG.sub('', text).strip()
@@ -209,7 +206,6 @@ class Hub(ScreenPopMixin):
         self.away = []   # tickets 098/102: an AwayBridge per configured channel (email, QQ)
         self.media_root = Path(media_root) if media_root else None
         self.media_index = {}
-        self.startup_media_ids = set()
         self.pending_media = OrderedDict()
         self.pending_media_times = {}
         self.media_lock = threading.RLock()
@@ -280,30 +276,6 @@ class Hub(ScreenPopMixin):
                 self._rewrite_media_index(index)
             for marker in self.media_root.glob('.' + ('[0-9a-f]' * 32) + '.voice-pending'):
                 marker.unlink(missing_ok=True)
-            self.startup_media_ids = set(self.media_index)
-
-    def discard_unsent_voice(self, keep_ids):
-        """Delete recordings that were never sent in an earlier run; they are not replayed."""
-        with self.media_lock:
-            unsent = [row for row in self.media_index.values()
-                      if row.get('kind') == 'voice' and row['id'] in self.startup_media_ids
-                      and row['id'] not in keep_ids and not row.get('delivery_pending')
-                      and row.get('request_id') == 'voice-' + row['id']]
-            removed = []
-            for row in unsent:
-                try:
-                    (self.media_root / row['filename']).unlink(missing_ok=True)
-                except OSError:
-                    logger.warning('Unsent voice recording could not be deleted: %s', row['id'])
-                    continue
-                removed.append(row['id'])
-            if removed:
-                for media_id in removed:
-                    self.media_index.pop(media_id, None)
-                try:
-                    self._rewrite_media_index()
-                except OSError:
-                    logger.warning('Unsent voice index cleanup could not be persisted; it will be retried')
 
     def tool_activity(self, limit=240):
         """Project the append-only tool ledger into one current row per real call."""
@@ -684,8 +656,7 @@ class Hub(ScreenPopMixin):
             transcript = result.get('text', '').strip() if isinstance(result, dict) else ''
             transcript = clean_voice_transcript(transcript)
             if not transcript:
-                logger.info('SenseVoice found no speech: audio_bytes=%d', len(raw))
-                return None, VOICE_NO_SPEECH_ERROR
+                raise ValueError('empty transcript')
             logger.info('SenseVoice transcription complete: elapsed_seconds=%.2f audio_bytes=%d trace_id=%s',
                         time.monotonic() - started, len(raw), trace_id or 'unavailable')
         except HTTPError as exc:
@@ -2563,7 +2534,7 @@ def serve_chat(chat, hub, channels=()):
         announce_stickers()
     if getattr(files, 'lab', None) is not None:
         from lab_games import LabGames
-        hub.game_manager = LabGames(files.lab, hub.game_port)
+        hub.game_manager = LabGames(files.workspace, hub.game_port, files.lab.name)
         files.attach_game_manager(hub.game_manager)
     announce_free_reply = getattr(files, 'announce_free_reply', None)
     if callable(announce_free_reply):
@@ -2579,7 +2550,7 @@ def serve_chat(chat, hub, channels=()):
             announce_wake_freedom()
         chat.pending_capability_event = getattr(chat.tools, 'capability_event', None)
         chat.pending_capability_event_model = getattr(chat.tools, 'capability_event_model', None)
-    if (getattr(files, 'lab', None) is not None and
+    if (getattr(files, 'workspace', None) is not None and getattr(files, 'client', None) is not None and
             callable(getattr(files, 'read_lab_attachment', None))):
         chat.attachment_reader = files.read_lab_attachment
         chat.attachment_saver = hub.save_attachment
@@ -2655,10 +2626,9 @@ def serve_chat(chat, hub, channels=()):
         message.get('media', {}).get('id') for message in chat.store.read(chat.path)
         if isinstance(message.get('media'), dict) and message['media'].get('kind') == 'voice'
     }
-    hub.discard_unsent_voice(completed_voice_ids)
     for media in hub.media_index.values():
         if (media.get('kind') == 'voice' and media['id'] not in completed_voice_ids
-                and media.get('delivery_pending')):
+                and (media.get('request_id') == 'voice-' + media['id'] or media.get('delivery_pending'))):
             hub.push('user', media.get('transcript') or '', time=now(), history=True, media=dict(media))
     if hasattr(chat, 'recover_uncommitted_incoming'):
         for row in chat.recover_uncommitted_incoming():

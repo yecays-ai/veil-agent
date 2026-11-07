@@ -13,7 +13,8 @@ from agent_types import UserError, now
 
 TASK_STATUS = ('active', 'paused', 'blocked', 'completed')
 SIDE_EFFECT_TOOLS = {
-    'write_file', 'append_file', 'grant_append', 'create_directory', 'move_lab_file', 'run_lab_python', 'hold', 'trace',
+    'write_file', 'append_file', 'grant_append', 'create_directory', 'move_lab_file', 'edit_file', 'delete_file',
+    'run_lab_python', 'hold', 'trace',
     'letter_write', 'letter_lock_update', 'anchor', 'release', 'plan',
 }
 READ_ONLY_TOOLS = {
@@ -34,7 +35,7 @@ TASK_UPDATE_TOOL = SimpleNamespace(name='long_task_update', description=(
     '(an unfinished task cannot be replaced); action=update with its task_id adds confirmed progress, sets the '
     'next step, pauses, marks a blocker or completes the whole goal. Ending a session is not completion. '
     'If long_task_status shows a pending operation, first read its target (read_text_file, memory_read, or '
-    'lab_file_digest for large lab files), then resolve it with that operation_id; if it cannot be confirmed, '
+    'lab_file_digest for large files), then resolve it with that operation_id; if it cannot be confirmed, '
     'mark the task blocked instead of repeating it. '
     'This state does not grant file or memory permissions.'), inputSchema={
         'type': 'object', 'additionalProperties': False,
@@ -130,10 +131,13 @@ class LongTaskStore:
                     and effect.get('byte_length') is None)
                 valid_effect = (
                     isinstance(effect, dict)
-                    and effect.get('kind') in ('exact', 'suffix', 'memory_body')
-                    and isinstance(effect.get('sha256'), str)
-                    and type(effect.get('byte_length')) is int
-                    and effect['byte_length'] >= 0)
+                    and ((effect.get('kind') in ('exact', 'suffix', 'memory_body')
+                          and isinstance(effect.get('sha256'), str)
+                          and type(effect.get('byte_length')) is int and effect['byte_length'] >= 0)
+                         or effect.get('kind') == 'deleted'
+                         or (effect.get('kind') == 'edits' and isinstance(effect.get('edits'), list)
+                             and all(isinstance(item, dict) and isinstance(item.get('oldText'), str)
+                                     and isinstance(item.get('newText'), str) for item in effect['edits']))))
                 if not (valid_effect or incomplete_move_effect):
                     return False
             if (not isinstance(pending, dict)
@@ -414,6 +418,14 @@ class LongTaskStore:
 
     @staticmethod
     def _expected_effect(name, args):
+        if name == 'delete_file':
+            return {'kind': 'deleted'}
+        if name == 'edit_file' and isinstance(args, dict) and isinstance(args.get('edits'), list):
+            edits = args['edits']
+            if edits and all(isinstance(item, dict) and isinstance(item.get('oldText'), str)
+                             and isinstance(item.get('newText'), str) for item in edits):
+                return {'kind': 'edits', 'edits': edits}
+            return None
         if name == 'move_lab_file' and isinstance(args, dict):
             if all(isinstance(args.get(key), str) for key in ('source', 'destination')):
                 # The successful move result carries the verified destination digest.
@@ -517,7 +529,7 @@ class LongTaskStore:
             content = result.encode('utf-8')
             effect = pending.get('expected_effect')
             if effect is None:
-                if pending['tool'] in ('write_file', 'append_file', 'move_lab_file') or not result.strip():
+                if pending['tool'] in ('write_file', 'append_file', 'move_lab_file', 'edit_file', 'delete_file') or not result.strip():
                     return
             else:
                 if pending['tool'] == 'move_lab_file' and (
@@ -542,6 +554,27 @@ class LongTaskStore:
                     except (TypeError, ValueError):
                         return
                     if hashlib.sha256(actual).hexdigest() != effect['sha256']:
+                        return
+                elif effect['kind'] == 'deleted':
+                    if name != 'lab_file_digest':
+                        return
+                    try:
+                        absent = json.loads(result)
+                    except (TypeError, ValueError):
+                        return
+                    if (not isinstance(absent, dict)
+                            or self._normalized_target(absent.get('path', '')) != expected
+                            or absent.get('exists') is not False):
+                        return
+                elif effect['kind'] == 'edits':
+                    if name != 'read_text_file' or state != '成功':
+                        return
+                    final_edits = [item for index, item in enumerate(effect['edits'])
+                                   if not any(later['oldText'] == item['newText']
+                                              for later in effect['edits'][index + 1:])]
+                    if not all(item['newText'] in result and
+                               (item['oldText'] not in result or item['oldText'] in item['newText'])
+                               for item in final_edits):
                         return
                 else:
                     if pending['tool'] == 'move_lab_file' and name == 'lab_file_digest':

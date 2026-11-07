@@ -121,6 +121,26 @@ class DecisionTests(unittest.TestCase):
 
 
 class RunTests(unittest.TestCase):
+    def test_windows_start_and_taskkill_hide_the_console(self):
+        seen = {}
+        def popen(_command, **kwargs):
+            seen.update(kwargs)
+            return fake_popen()
+        with patch.object(ex, '_WINDOWS', True), patch.object(ex.subprocess, 'CREATE_NO_WINDOW', 0x08000000,
+                                                              create=True):
+            run([([assistant(text='x')], [], False)] * 5, popen=popen)
+            self.assertEqual(seen['creationflags'], ex.subprocess.CREATE_NO_WINDOW)
+            process = SimpleNamespace(poll=lambda: None, pid=123)
+            with patch.object(ex.subprocess, 'run') as taskkill:
+                ex.kill_tree(process)
+        self.assertEqual(taskkill.call_args.kwargs['creationflags'], 0x08000000)
+
+    def test_host_workbench_refuses_to_run_when_it_must_protect_the_journal(self):
+        result, _api, costs, kill = run([], protect=['growth-journal.md'])
+        self.assertEqual(result.state, '被拒绝')
+        self.assertEqual(costs, [Decimal(0)])
+        kill.assert_not_called()
+
     def test_success_returns_report_and_settles_cost_once(self):
         done = [assistant(text='All done: fixed calc.py')]
         result, api, costs, kill = run([(done, [], False)] * 5)
@@ -207,6 +227,27 @@ class RunTests(unittest.TestCase):
         self.assertTrue(all(m.endswith(':ro') for m in mounts[1:]))
         self.assertIn('--cap-drop', cmd)
         self.assertEqual(cmd[-7:-1], ['veil-workbench', 'opencode', 'serve', '--hostname', '0.0.0.0', '--port'])
+
+
+class ProtectTests(unittest.TestCase):
+    def test_protected_files_are_masked_read_only_in_the_container(self):
+        work = Path(tempfile.mkdtemp())
+        (work / 'growth-journal.md').write_text('private', encoding='utf-8')
+        seen = {}
+
+        def popen(cmd, **kwargs):
+            seen['cmd'] = cmd
+            seen['env'] = kwargs['env']
+            return fake_popen()
+        run([([assistant(text='x')], [], False)] * 5, workdir=work, popen=popen,
+            container={'image': 'veil-workbench'}, protect=['growth-journal.md', 'missing.md'])
+        mounts = [seen['cmd'][i + 1] for i, c in enumerate(seen['cmd']) if c == '-v']
+        self.assertEqual([m for m in mounts if m.endswith('/work/growth-journal.md:ro')].__len__(), 1)
+        self.assertFalse(any('missing.md' in m for m in mounts))
+        config_json = next(value.partition('=')[2] for value in seen['cmd']
+                           if value.startswith('OPENCODE_CONFIG_CONTENT='))
+        config = json.loads(config_json)
+        self.assertEqual(config['permission']['edit']['missing.md'], 'deny')
 
 
 class KeyProxyTests(unittest.TestCase):
@@ -355,7 +396,7 @@ max_steps = 4
             self.assertEqual(task, 'make x')
             self.assertEqual(kwargs['key'], 'abc123456789')
             self.assertFalse(kwargs['autonomy'])
-            self.assertEqual(Path(kwargs['workdir']), self.root / 'data' / 'test' / 'workbench')
+            self.assertEqual(Path(kwargs['workdir']).resolve(), (self.root / 'data' / 'test' / 'workspace').resolve())  # ticket 247: one file root
             return outcome
         with patch('veil_agent.ROOT', self.root), patch('executor_opencode.run', side_effect=fake_run):
             execution = chat._execute_tool_call(call, 'req', 'step:0', False, chat.tool_schemas())
@@ -401,7 +442,7 @@ max_steps = 4
     def run_with_roots(self, task, project='', autonomy=False, approval='n'):
         roots = f'project_roots = ["{(self.root / "projects").as_posix()}"]\n'
         chat = self.chat(self.executor + roots)
-        chat.approval = lambda _p: approval
+        chat.approval = approval if callable(approval) else (lambda _p: approval)
         call = SimpleNamespace(id='c1', function=SimpleNamespace(
             name='workbench', arguments=json.dumps({'task': task, **({'project': project} if project else {})})))
         seen = {}
@@ -447,10 +488,71 @@ max_steps = 4
         run_mock.assert_not_called()
         self.assertEqual(execution.state, '被拒绝')
 
-    def test_no_match_uses_the_workbench_folder_and_no_roots_means_isolated(self):
+    def test_no_match_uses_peters_workspace_and_keeps_a_way_back_without_asking(self):
         self.make_project('garden', {})
-        _execution, seen = self.run_with_roots('write a hello script')
-        self.assertEqual(Path(seen['workdir']), self.root / 'data' / 'test' / 'workbench')
+        workspace = self.root / 'data' / 'test' / 'workspace'
+        workspace.mkdir(parents=True, exist_ok=True)
+        (workspace / 'poem.md').write_text('mine', encoding='utf-8')
+        _execution, seen = self.run_with_roots('write a hello script', approval=lambda _p: self.fail('Lan is not asked about Peter\'s own space'))
+        self.assertEqual(Path(seen['workdir']).resolve(), workspace.resolve())
+        snapshots = list((self.root / 'data' / 'test' / 'snapshots').glob('*-workspace'))
+        self.assertEqual(len(snapshots), 1)
+        self.assertEqual((snapshots[0] / 'files' / 'poem.md').read_text(encoding='utf-8'), 'mine')
+
+    def test_old_workbench_folder_is_merged_into_the_workspace_without_losing_anything(self):
+        import workbench_scope as scope
+        old = self.root / 'data' / 'test' / 'workbench'
+        (old / 'game').mkdir(parents=True)
+        (old / 'game' / 'index.html').write_text('<p>g</p>', encoding='utf-8')
+        (old / 'notes.txt').write_text('n', encoding='utf-8')
+        workspace = self.root / 'data' / 'test' / 'workspace'
+        (workspace / 'from-workbench').mkdir(parents=True)
+        (workspace / 'from-workbench' / 'notes.txt').write_text('already here', encoding='utf-8')
+        moved = scope.merge_legacy_workbench(old, workspace)
+        self.assertEqual(moved, ['game'])
+        self.assertEqual((workspace / 'from-workbench' / 'game' / 'index.html').read_text(encoding='utf-8'), '<p>g</p>')
+        self.assertEqual((workspace / 'from-workbench' / 'notes.txt').read_text(encoding='utf-8'), 'already here')
+        self.assertEqual((old / 'notes.txt').read_text(encoding='utf-8'), 'n')  # a collision stays where it was
+        (old / 'notes.txt').unlink()
+        self.assertEqual(scope.merge_legacy_workbench(old, workspace), [])
+        self.assertFalse(old.exists())  # emptied folder is removed
+        self.assertEqual(scope.merge_legacy_workbench(self.root / 'nothing', workspace), [])
+
+    def test_workbench_migration_rejects_reparse_roots_and_cleans_partial_copies(self):
+        import workbench_scope as scope
+        outside = self.root / 'outside'
+        (outside / 'notes').mkdir(parents=True)
+        (outside / 'notes' / 'secret.txt').write_text('keep', encoding='utf-8')
+        workspace = self.root / 'workspace'
+        workspace.mkdir()
+        old_link = self.root / 'old-link'
+        try:
+            old_link.symlink_to(outside, target_is_directory=True)
+        except OSError:
+            pass
+        else:
+            self.assertEqual(scope.merge_legacy_workbench(old_link, workspace), [])
+        target_link = workspace / 'from-workbench'
+        try:
+            target_link.symlink_to(self.root / 'other', target_is_directory=True)
+        except OSError:
+            pass
+        else:
+            self.assertEqual(scope.merge_legacy_workbench(outside, workspace), [])
+            self.assertEqual((outside / 'notes' / 'secret.txt').read_text(encoding='utf-8'), 'keep')
+            target_link.unlink()
+        old = self.root / 'old'
+        (old / 'game').mkdir(parents=True)
+        (old / 'game' / 'index.html').write_text('keep', encoding='utf-8')
+        def partial_copy(_source, destination, **_kwargs):
+            Path(destination).mkdir(parents=True)
+            (Path(destination) / 'partial').write_text('partial')
+            raise OSError('copy failed')
+        with patch('workbench_scope.shutil.copytree', side_effect=partial_copy):
+            self.assertEqual(scope.merge_legacy_workbench(old, workspace), [])
+        self.assertTrue((old / 'game' / 'index.html').exists())
+        self.assertFalse(any(workspace.joinpath('from-workbench').glob('*.migrating-*')))
+        self.assertEqual(scope.merge_legacy_workbench(old, workspace), ['game'])
 
     def test_project_without_a_possible_snapshot_needs_lan_and_never_in_a_wake(self):
         proj = self.make_project('big-app', {'a.txt': 'x'}, git=False)

@@ -537,25 +537,6 @@ output_cny_per_million = "8"
         self.assertFalse(any(event.get('media', {}).get('id') == media_id for event in self.hub.events
                              if isinstance(event.get('media'), dict)))
 
-    def test_restart_deletes_unsent_recordings_instead_of_replaying_them(self):
-        silent = self.hub.save_voice('audio/webm', b'\x1a\x45\xdf\xa3fictional silence')
-        failed = self.hub.save_voice('audio/webm', b'\x1a\x45\xdf\xa3fictional network failure')
-        self.hub._record_voice_result(failed['id'], '', '语音识别服务返回 HTTP 500，请稍后重试。')
-        sending = self.hub.save_voice('audio/webm', b'\x1a\x45\xdf\xa3fictional mid send')
-        self.hub.media_index[sending['id']].update(request_id='voice-send-x', delivery_pending=True)
-        self.hub._rewrite_media_index()
-        reopened = Hub('Test', ActivityState(self.store.root / 'test' / 'unsent-voice-state.json'),
-                       media_root=self.store.root / 'test' / 'media')
-        chat = Chat(self.cfg, self.store, Budget(self.store), self.model)
-        with patch('web_agent.run_chat', return_value=None):
-            serve_chat(chat, reopened)
-        pushed = {event['media']['id'] for event in reopened.events if isinstance(event.get('media'), dict)}
-        for gone in (silent, failed):
-            self.assertNotIn(gone['id'], pushed)
-            self.assertNotIn(gone['id'], reopened.media_index)
-            self.assertFalse((reopened.media_root / gone['filename']).exists())
-        self.assertIn(sending['id'], reopened.media_index)
-
     def test_snapshot_exposes_the_same_capability_record_used_by_peter(self):
         record = 'CAPABILITY RECORD\n2026-10-22T00:00:00+00:00: Capability update: added fictional_tool.'
         self.hub.capability_record = lambda: record

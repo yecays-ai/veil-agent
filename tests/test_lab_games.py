@@ -20,7 +20,7 @@ class LabGameTests(unittest.TestCase):
         self.game = self.lab / 'spider'
         self.game.mkdir(parents=True)
         (self.game / 'index.html').write_text('<html><head></head><body>Play</body></html>', encoding='utf-8')
-        self.service = LabGames(self.lab, 9000)
+        self.service = LabGames(self.lab.parent, 9000)
         self.url = self.service.open('lab/spider/index.html')
         self.capability = urlsplit(self.url).path.split('/')[2]
 
@@ -40,7 +40,7 @@ class LabGameTests(unittest.TestCase):
                          {'ok': True, 'duplicate': False})
         rows = [json.loads(line) for line in (self.game / 'scores.jsonl').read_text().splitlines()]
         self.assertEqual([row['score'] for row in rows], [10, 20])
-        restarted = LabGames(self.lab, 9001)
+        restarted = LabGames(self.lab.parent, 9001)
         new_capability = urlsplit(restarted.open('lab/spider/index.html')).path.split('/')[2]
         self.assertEqual(restarted.save(new_capability, self.score()), {'ok': True, 'duplicate': True})
 
@@ -66,6 +66,18 @@ class LabGameTests(unittest.TestCase):
         link = self.service.open('lab/spider/游戏 #1.html')
         self.assertIn('%23', link)
         self.assertNotIn('游戏', link)
+
+    def test_custom_lab_root_keeps_legacy_game_ids_and_rejects_root_scores(self):
+        custom = self.lab.parent / 'experiments'
+        (custom / 'spider').mkdir(parents=True)
+        (custom / 'spider' / 'index.html').write_text('<html></html>', encoding='utf-8')
+        (custom / 'index.html').write_text('<html></html>', encoding='utf-8')
+        manager = LabGames(self.lab.parent, 9000, 'experiments')
+        link = manager.open('experiments/spider/index.html')
+        capability = urlsplit(link).path.split('/')[2]
+        self.assertEqual(manager._entry(capability)[2], 'spider/index.html')
+        with self.assertRaises(ValueError):
+            manager.open('experiments/index.html')
 
     def test_short_write_rolls_back_and_next_round_can_save(self):
         import os
@@ -105,7 +117,7 @@ class LabGameTests(unittest.TestCase):
         server = start_server(hub, 'private-chat-token', 0)
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
-        hub.game_manager = LabGames(self.lab, server.server_address[1])
+        hub.game_manager = LabGames(self.lab.parent, server.server_address[1])
         url = hub.game_manager.open('lab/spider/index.html')
         try:
             with urlopen(url) as response:

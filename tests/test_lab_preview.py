@@ -54,10 +54,35 @@ class LabPreviewPathTests(unittest.TestCase):
     def test_lab_root_cannot_itself_be_a_link_or_junction(self):
         with patch("lab_preview._is_reparse_point", return_value=True):
             with self.assertRaisesRegex(ValueError, "configured Lab folder"):
-                LabPreview(self.lab, platform_enabled=True)
+                LabPreview(self.root, platform_enabled=True)
 
 
 class LabPreviewServerTests(unittest.TestCase):
+    def test_root_absolute_resources_keep_legacy_lab_fallback(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            legacy = root / 'experiments'
+            legacy.mkdir()
+            (legacy / 'game.js').write_text('legacy', encoding='utf-8')
+            failures = []
+            handler_type = _make_handler(root, [0], failures, 'experiments')
+
+            def request():
+                handler = object.__new__(handler_type)
+                handler.path = '/game.js'
+                handler.wfile = io.BytesIO()
+                status = []
+                handler.send_response = status.append
+                handler.send_header = lambda *_args: None
+                handler.end_headers = lambda: None
+                handler.send_error = lambda code: status.append(code)
+                handler._serve(head=False)
+                return status[-1], handler.wfile.getvalue()
+
+            self.assertEqual(request(), (200, b'legacy'))
+            (root / 'game.js').write_text('workspace', encoding='utf-8')
+            self.assertEqual(request(), (200, b'workspace'))
+
     def test_temporary_server_serves_only_lab_files_with_a_browser_sandbox_policy(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -120,7 +145,8 @@ class LabPreviewToolTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
-        self.lab = Path(self.temporary.name) / "lab"
+        self.root = Path(self.temporary.name)
+        self.lab = self.root / "lab"
         self.lab.mkdir()
         (self.lab / "game.html").write_text("<button>go</button>", encoding="utf-8")
 
@@ -136,7 +162,7 @@ class LabPreviewToolTests(unittest.TestCase):
                 "resource_failures": [], "screenshot": png,
             }
 
-        preview = LabPreview(self.lab, platform_enabled=True, runner=render)
+        preview = LabPreview(self.root, platform_enabled=True, runner=render)
         self.assertEqual(tool_policy("preview_lab_page"), "lab")
         self.assertIn("preview_lab_page", LAB_ONLY)
         self.assertEqual(permitted_tools(preview.tools)[0]["function"]["name"], "preview_lab_page")
@@ -164,7 +190,7 @@ class LabPreviewToolTests(unittest.TestCase):
         self.assertEqual(preview.invoke({"path": "lab/game.html"})[1], "成功")
 
     def test_invalid_input_and_non_windows_platform_fail_closed(self):
-        preview = LabPreview(self.lab, platform_enabled=False, runner=lambda *_: self.fail("runner called"))
+        preview = LabPreview(self.root, platform_enabled=False, runner=lambda *_: self.fail("runner called"))
         self.assertEqual(preview.invoke({"path": "lab/game.html"})[1], "被拒绝")
         preview.platform_enabled = True
         self.assertEqual(preview.invoke({"path": "../outside.html"})[1], "被拒绝")
@@ -176,7 +202,7 @@ class LabPreviewToolTests(unittest.TestCase):
             threading.Event().wait(0.2)
             return {"loaded": True, "errors": [], "blocked": [], "resource_failures": [], "screenshot": b"x"}
 
-        preview = LabPreview(self.lab, platform_enabled=True, timeout_seconds=0.02, runner=slow)
+        preview = LabPreview(self.root, platform_enabled=True, timeout_seconds=0.02, runner=slow)
         result, state, _ = preview.invoke({"path": "lab/game.html"})
         self.assertEqual(state, "超时")
         self.assertIn("timed out", result)
@@ -314,7 +340,7 @@ fetch('https://example.invalid/data').catch(() => {});
 fetch('file:///C:/Windows/win.ini').catch(() => {});
 setTimeout(() => { throw new Error('deliberate preview error'); }, 10);
 </script></body></html>""", encoding="utf-8")
-            preview = LabPreview(lab, platform_enabled=True)
+            preview = LabPreview(lab.parent, platform_enabled=True)
             result, state, _ = preview.invoke({"path": "lab/index.html"})
             self.assertEqual(state, "成功", str(result))
             self.assertIn("Page loaded: yes", result)

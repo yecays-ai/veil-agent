@@ -71,7 +71,7 @@ def _safe_lab_file(lab: Path, relative: str, *, page=False) -> Path:
     if (not isinstance(relative, str) or not relative or "\x00" in relative
             or relative.startswith(("/", "\\")) or re.match(r"^[A-Za-z]:", relative)
             or "\\" in relative):
-        raise ValueError("The path must be relative to Lab and use forward slashes.")
+        raise ValueError("The path must be relative to your workspace and use forward slashes.")
     parts = relative.split("/")
     reserved = {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"}
     if (any(part in ("", ".", "..") for part in parts)
@@ -127,7 +127,7 @@ def _csp():
             "sandbox allow-scripts allow-same-origin")
 
 
-def _make_handler(lab: Path, origin_port: list[int], failed: list[str]):
+def _make_handler(lab: Path, origin_port: list[int], failed: list[str], legacy_lab_name='lab'):
     budget = {"requests": 0, "bytes": 0}
     budget_lock = threading.Lock()
 
@@ -157,7 +157,12 @@ def _make_handler(lab: Path, origin_port: list[int], failed: list[str]):
                 if raw_path == "/":
                     raw_path = "/index.html"
                 relative = raw_path.lstrip("/")
-                path = _safe_lab_file(lab, relative)
+                try:
+                    path = _safe_lab_file(lab, relative)
+                except ValueError as exc:
+                    if 'does not exist' not in str(exc):
+                        raise
+                    path = _safe_lab_file(lab, f'{legacy_lab_name}/{relative}')
                 with path.open("rb") as source:
                     body = source.read(MAX_PAGE_BYTES + 1)
                 if len(body) > MAX_PAGE_BYTES:
@@ -190,7 +195,7 @@ def _make_handler(lab: Path, origin_port: list[int], failed: list[str]):
     return Handler
 
 
-def _playwright_render(lab: Path, entry: Path, stopped):
+def _playwright_render(lab: Path, entry: Path, stopped, legacy_lab_name='lab'):
     """Render one page with a fresh, non-persistent Chromium context."""
     try:
         from playwright.sync_api import sync_playwright
@@ -202,7 +207,7 @@ def _playwright_render(lab: Path, entry: Path, stopped):
     server_failures = []
     port_holder = [0]
     server = http.server.ThreadingHTTPServer(
-        ("127.0.0.1", 0), _make_handler(lab, port_holder, server_failures))
+        ("127.0.0.1", 0), _make_handler(lab, port_holder, server_failures, legacy_lab_name))
     server.daemon_threads = True
     port_holder[0] = server.server_address[1]
     server_thread = threading.Thread(target=server.serve_forever, name="veil-lab-preview-http", daemon=True)
@@ -317,20 +322,20 @@ class LabPreview:
     """One character-scoped, two-preview-per-request Lab renderer."""
 
     def __init__(self, lab, *, platform_enabled=None, timeout_seconds=PREVIEW_TIMEOUT_SECONDS,
-                 runner=None):
+                 runner=None, legacy_lab_name='lab'):
         raw_lab = Path(lab).absolute()
         if _is_reparse_point(raw_lab):
             raise ValueError("The configured Lab folder cannot be a link or junction.")
         self.lab = raw_lab.resolve(strict=True)
         self.platform_enabled = (os.name == "nt") if platform_enabled is None else bool(platform_enabled)
         self.timeout_seconds = max(0.01, min(float(timeout_seconds), PREVIEW_TIMEOUT_SECONDS))
-        self.runner = runner or _playwright_render
+        self.runner = runner or (lambda root, entry, stopped: _playwright_render(root, entry, stopped, legacy_lab_name))
         self._lock = threading.Lock()
         self._used = 0
         self.tools = [type("Tool", (), {
             "name": "preview_lab_page",
             "description": (
-                "Render one HTML page from your own lab/ in a temporary isolated browser. "
+                "Render one HTML page from your own workspace in a temporary isolated browser. "
                 "The result includes a screenshot sent to your current model, JavaScript errors, "
                 "and failed local resources. External requests, local file access, downloads, "
                 "popups, and browser profile data are blocked. Files are limited to 5 MB each and "
@@ -338,7 +343,7 @@ class LabPreview:
             ),
             "inputSchema": {
                 "type": "object",
-                "properties": {"path": {"type": "string", "description": "Lab-relative HTML path, e.g. lab/game/index.html"}},
+                "properties": {"path": {"type": "string", "description": "Workspace-relative HTML path, e.g. lab/game/index.html"}},
                 "required": ["path"], "additionalProperties": False,
             },
         })()]
@@ -352,13 +357,10 @@ class LabPreview:
             return LabPreviewResult("Lab page preview is only available on Windows."), "被拒绝", "Lab preview"
         if (not isinstance(args, dict) or set(args) != {"path"}
                 or not isinstance(args.get("path"), str)):
-            return LabPreviewResult("Give one Lab-relative HTML path."), "被拒绝", "Lab preview"
-        prefix = self.lab.name + "/"
+            return LabPreviewResult("Give one workspace-relative HTML path."), "被拒绝", "Lab preview"
         requested_path = args["path"]
-        if not requested_path.casefold().startswith(prefix.casefold()):
-            return LabPreviewResult(f"Lab page rejected: path must start with {prefix}"), "被拒绝", requested_path[:180]
         try:
-            entry = _safe_lab_file(self.lab, requested_path[len(prefix):], page=True)
+            entry = _safe_lab_file(self.lab, requested_path, page=True)
         except (OSError, ValueError, RuntimeError) as exc:
             return LabPreviewResult(f"Lab page rejected: {exc}"), "被拒绝", args["path"][:180]
         with self._lock:

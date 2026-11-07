@@ -72,12 +72,11 @@ Ombre 自带模型默认打开：每存一条记忆会用聊天同一个模型�
 
 ## Peter 的文件工具
 
-- 工具只访问 `data/peter/workspace/`，首次启动时自动创建。请只放假文件或你愿意让所选模型读取的文件；文件内容会发送给聊天模型供应商。
-- Peter 可直接列目录、查看目录树、查看目录大小、读文本文件、读多个文本文件、搜索文件和查看文件信息。lab 外创建新文件前，程序会显示目标并问你；输入 `y` 才执行，其他输入都拒绝。目标已存在时一律拒绝，不覆盖。
-- Peter 也可直接只读搜索公开网页、读取公开 HTTP(S) 页面；最多返回 5 条搜索结果，网页正文按 `max_result_bytes` 分段。网页内容是不可信数据，工具拒绝本机、局域网和非公开地址。首次安装或项目更新后重新运行 `setup.bat` 安装搜索和隔离的网页读取依赖。
-- 对 lab 外已存在的文件，Peter 可用 `append_file` 只在末尾追加；未授权时每次都须在终端输入 `y`。要让 Peter 持续续写 `growth-journal.md`，请先让他调用 `grant_append`，在终端输入一次 `y`；授权跨重启有效且只绑定这一个文件。文件被替换后需重新授权；授权记录位于该角色的 `data/` 目录。追加不会创建新文件，也不能编辑或删除旧内容。
-- 实验室默认位于 `data/<角色>/workspace/lab/`，工具路径写 `lab/...`。Peter 可以免确认地在里面建目录、新建文件、追加已有文件，也可以用 `write_file` 直接改写已有的实验室文件（改写前程序把旧版本存到 `data/<角色>/own-work-versions/lab/`，他看不到也删不掉）。可以把单个普通文件移入 `lab/archive/` 或垃圾桶 `lab/trash/`，并保留原相对目录，例如 `lab/play/v1.html` 移到 `lab/trash/play/v1.html`；两处的文件都可移回 lab 内其他目录。目标同名时拒绝。删除、移出 lab、移动文件夹和执行脚本仍被禁止。新建、追加、改写和移动后核对 SHA-256；单次默认最多 200000 个 UTF-8 字节，超限时零写入并明确提示拆文件或分段追加。日记留在 workspace 根目录，继续使用独立授权。`[tools] lab = "lab"` 可改为其他安全单级目录名，`lab = false` 关闭免确认实验室；`lab_max_write_bytes` 设置单次上限。lab 目录是符号链接或 junction 时关闭免确认权限。Peter 用 `desktop_create_file` 在你桌面/文档/图片里新建的文件记在 `data/<角色>/desktop-created.json`：只有这些、且你没改过的文件，他能用 `replace: true` 改写（旧版本存到 `own-work-versions/desktop/`），或用 `desktop_move_to_trash` 挪进 `lab/trash/desktop/`；你的文件一律不动。
-- `edit_file`、MCP 自带的 `move_file` 和未列出的工具禁止使用；专用 `move_lab_file` 只在 lab 启用时提供，并由程序限制为 archive/trash 与普通 lab 文件夹之间的单文件移动。路径会由程序在本地再次检查；越出工作区（包括 `..`、符号链接或联接点）会被拒绝。
+- 工具只访问 `data/peter/workspace/`，首次启动时自动创建。这是 Peter 唯一的文件根：自己的作品、实验、项目都放这里；`lab/` 只是其中一个分类（离线 Python 实验、HTML 页面、小游戏），不再是另一套文件系统。请只放假文件或你愿意让所选模型读取的文件；文件内容会发送给聊天模型供应商。
+- Peter 可直接列目录、查看目录树、读文本文件、搜索文件，也可以免确认地在整个 workspace 里新建目录和文件、用 `write_file` 覆盖、用 `edit_file` 原地编辑、追加、`move_lab_file` 移动/重命名、`delete_file` 删除。每次覆盖、编辑或删除之前，程序把旧版本存到 `data/<角色>/own-work-versions/`（lab 里的文件在 `lab/`，其余在 `workspace/`），他看不到也删不掉，可恢复。新建、追加、改写后核对 SHA-256；单次默认最多 200000 个 UTF-8 字节（`lab_max_write_bytes`），超限时零写入。路径越出工作区（包括 `..`、符号链接或联接点）会被拒绝；MCP 自带的 `move_file` 和未列出的工具仍禁止。
+- 例外只有成长日记 `growth-journal.md`：不能覆盖、编辑、删除或移动，只能用 `append_file` 追加，未授权时每次都须在终端输入 `y`；让 Peter 调用 `grant_append` 并输入一次 `y` 可持续授权（跨重启，只绑定这个文件，文件被替换后需重新授权）。
+- 工作台（见工单 237/238/247）开启后，OpenCode 也在同一个 workspace 里干活；改前自动留快照，日记在容器里被只读屏蔽。更早版本单独的 `data/<角色>/workbench/` 文件夹会在第一次使用工作台时整个搬进 `workspace/from-workbench/`，不覆盖、不丢文件。
+- `[tools] lab = "lab"` 可改为其他安全单级目录名，`lab = false` 关闭实验室功能（Python 实验、页面预览、小游戏），不影响 workspace 权限；lab 目录是符号链接或 junction 时实验室功能关闭。Peter 用 `desktop_create_file` 在你桌面/文档/图片里新建的文件记在 `data/<角色>/desktop-created.json`：只有这些、且你没改过的文件，他能用 `replace: true` 改写（旧版本存到 `own-work-versions/desktop/`），或用 `desktop_move_to_trash` 挪进 `lab/trash/desktop/`；你的文件一律不动。
 - 每轮最多 6 次模型步骤（`max_steps`），每次模型请求计入共用预算；单个工具结果最多带回 8192 字节，超出会截断并告知总字节数。达到步骤上限后会提示本次工具步骤用完。
 - 在 `characters/peter/character.toml` 的 `[tools]` 中可设置 `enabled = false` 关闭工具；`folder`、`max_steps` 和 `max_result_bytes` 是本地工具配置。程序权限白名单不由人设或配置改变。
 - 每次调用会在屏幕显示一行。工具过程保存在 `data/peter/tools.jsonl`，聊天记录仍只存你的消息和 Peter 最终回复。能力清单保存在 `data/peter/capabilities.json`，只写相对文件夹名和工具权限，不含本机完整路径。
