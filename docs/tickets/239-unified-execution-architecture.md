@@ -6,7 +6,7 @@ Lan 只交代一次完整任务，Peter 就能在受程序保护的范围内连�
 
 ## 当前状态
 
-已基于最新 `main` `473dabbf8c9400d200b490fcb5177da928f902b0` 完成全仓只读调用链调查，并核对工单 237/238 已由 PR #294（执行架构相关提交 `817de3c`）合入主线：容器隔离、真实模型工作台和测试副本聊天已有 Windows 证据；自主醒来、Linux 宿主机、容器网络隔离及真实项目开放仍未验。结论是保留 VEIL 核心，把 OpenCode 限定为容器内的可替换任务循环，通过 VEIL 执行网关接入受限的 Playwright 与 Windows UIA 适配器；不采用 UFO² 的整套 Agent 核心。当前没有旧执行工具满足安全删除条件。完整证据、权限矩阵、代码清单和分阶段迁移见 [`docs/reports/239-unified-execution-architecture.md`](../reports/239-unified-execution-architecture.md)。
+已基于最新 `main` 完成全仓只读调用链调查，并核对工单 237/238 已由 PR #294 合入主线：容器隔离、真实模型工作台和测试副本聊天已有 Windows 证据；自主醒来、Linux 宿主机、容器网络隔离及真实项目开放仍未验。完整证据、迁移决策、权限矩阵、代码清单和分阶段顺序见 [`docs/reports/239-unified-execution-architecture.md`](../reports/239-unified-execution-architecture.md)。
 
 ## 验收步骤
 
