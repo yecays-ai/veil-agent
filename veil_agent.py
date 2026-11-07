@@ -1907,6 +1907,7 @@ class Chat:
         schemas = [*existing_tools, *task_tools, *messaging, *history, *wake_tools, *profile, *thought, *([{'type': 'function', 'function': {'name': LIFE_TOOL.name, 'description': LIFE_TOOL.description, 'parameters': LIFE_TOOL.inputSchema}}] if self.cfg.id == 'peter' and self.task_tools_enabled and (self.cfg.tools or {}).get('enabled', True) else []),
                    *mcp_tools]
         models = getattr(self.cfg, 'models', None)
+        delegate_choice = None
         if (models is not None and self.tool_mode and not self.autonomy_mode and not self.glance_mode
                 and models.selected('delegate') is not None):
             try:
@@ -1914,11 +1915,8 @@ class Chat:
             except SettingsError:
                 pass
             else:
-                schema = {'type': 'function', 'function': dict(DELEGATE_TOOL['function'])}
-                schema['function']['parameters'] = DELEGATE_TOOL['function']['parameters']
-                schema['function']['description'] += ' ' + self._delegate_cost_guidance(
-                    delegate_provider_name, delegate_provider, schemas)
-                schemas.append(schema)
+                delegate_choice = (delegate_provider_name, delegate_provider)
+                schemas.append({'type': 'function', 'function': dict(DELEGATE_TOOL['function'])})
         for schema in schemas:
             function = schema['function']
             if function['name'] in ('write_file', 'append_file', 'long_task_update', 'hold', 'trace', 'letter_write'):
@@ -1949,6 +1947,12 @@ class Chat:
         })
         schemas, self.active_tool_aliases = alias_tool_schemas(
             schemas, self.tool_aliases, reserved_names)
+        if delegate_choice:
+            for schema in schemas:
+                if self._resolve_tool_name(schema['function']['name'], schemas) == 'delegate':
+                    schema['function']['description'] += ' ' + self._delegate_cost_guidance(
+                        *delegate_choice, schemas)
+                    break
         return schemas
 
     def _delegate_cost_guidance(self, provider_name, provider, schemas):
@@ -1971,8 +1975,9 @@ class Chat:
         per_call = (provider['cny_per_call'] if provider.get('cny_per_call') else
                     (provider['max_input_tokens'] * provider['input_cny_per_million']
                      + max_output * provider['output_cny_per_million']) / MILLION)
-        available = sorted({schema['function']['name'] for schema in schemas
-                            if schema['function']['name'] in READ_ONLY_TOOLS})
+        available = sorted({name for schema in schemas
+                            if (name := self._resolve_tool_name(schema['function']['name'], schemas))
+                            in READ_ONLY_TOOLS})
         allowed = ', '.join(available) if available else '本轮没有委派可用工具'
         return (f'委派模型为 {delegate_model}（{provider_name}；{price(provider)}）；当前主模型 '
                 f'{self.cfg.provider["model"]} 的标价为 {main_cost}。委派最多 6 次模型请求、12 次只读工具调用；'
