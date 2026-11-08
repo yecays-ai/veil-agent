@@ -36,6 +36,7 @@ const runtimeDataPath = process.env.VEIL_DESKTOP_DATA || (app.isPackaged
 app.setPath('userData', runtimeDataPath);
 app.setPath('sessionData', path.join(runtimeDataPath, 'session-data'));
 const settingsPath = () => path.join(app.getPath('userData'), 'desktop.json');
+function agentRoot() { return settings.root || process.env.VEIL_AGENT_ROOT || ''; }
 
 async function save() {
   const write = saveChain.then(async () => {
@@ -161,7 +162,7 @@ async function toggleChat() {
   if (chat && !chat.isDestroyed()) { if (chat.isVisible()) chat.hide(); else { chat.show(); chat.focus(); } return; }
   if (connecting) return; connecting = true;
   try {
-    let root = settings.root || process.env.VEIL_AGENT_ROOT;
+    let root = agentRoot();
     const adjacent = app.isPackaged
       ? path.resolve(path.dirname(process.execPath), '..', '..', '..', 'veil-agent')
       : path.resolve(__dirname, '..', 'veil-agent');
@@ -417,7 +418,7 @@ async function discoverRunningAgentForScreenPop() {
   const adjacent = app.isPackaged
     ? path.resolve(path.dirname(process.execPath), '..', '..', '..', 'veil-agent')
     : path.resolve(__dirname, '..', 'veil-agent');
-  const root = settings.root || adjacent;
+  const root = agentRoot() || adjacent;
   if (!await validRoot(root)) return;
   agentEndpoint = await readEndpoint(root, { requireReady: false });
 }
@@ -745,7 +746,7 @@ ipcMain.on('menu:action', async (event, action, value) => {
     try {
       await flushScreenPopWindows();
       if (!agentEndpoint) {
-        const root = settings.root || (app.isPackaged
+        const root = agentRoot() || (app.isPackaged
           ? path.resolve(path.dirname(process.execPath), '..', '..', '..')
           : path.resolve(__dirname, '..'));
         agentEndpoint = await readEndpoint(root);

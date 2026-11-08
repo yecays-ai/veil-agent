@@ -49,6 +49,10 @@ async function connect(root, launcher = launch) {
   if (!await validRoot(root)) throw new Error('请选择已经完成 setup.bat 安装的 VEIL Agent 文件夹。');
   let endpoint = await readEndpoint(root);
   if (!endpoint) {
+    if (process.env.VEIL_AGENT_DATA) {
+      // An acceptance window must never fall back to a normal Agent with production data.
+      throw new Error('验收实例的后端未运行；不会启动普通 Agent。');
+    }
     await launcher(root);
     endpoint = await readEndpoint(root);
   }

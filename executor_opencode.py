@@ -164,6 +164,10 @@ def _test_command_in_scope(tokens, workdir, current=None):
         return bool(args and args[0].casefold() in {'test', 't'})
     if command in {'python', 'python3'} or re.fullmatch(r'python\d+(?:\.\d+)*', command):
         if args[:2] in (['-m', 'unittest'], ['-m', 'pytest']):
+            for arg in args[2:]:
+                if not arg.startswith('-') and ('/' in arg or '\\' in arg or arg in {'.', '..'}):
+                    if _resolved_work_path(arg, workdir, current) is None:
+                        return False
             return True
         if not args or args[0].startswith('-') or not _is_test_script_name(args[0]):
             return False
@@ -176,6 +180,9 @@ def _git_write_request(tokens):
         tokens = tokens[1:]
     if not tokens or _command_name(tokens[0]) != 'git':
         return False
+    if any(re.match(r'^(?:--config-env=)?alias\.', token, re.I) or token.casefold().startswith('alias.')
+           for token in tokens[1:]):
+        return True
     subcommand = _git_subcommand(tokens)
     if subcommand in {'commit', 'push', 'pull', 'fetch', 'merge', 'rebase', 'cherry-pick', 'revert', 'reset',
                       'checkout', 'switch', 'clean', 'stash', 'tag', 'remote', 'config', 'submodule',
@@ -373,6 +380,7 @@ class TaskScope:
         self.written = set()
         self.grants = set()
         self.denied = set()
+        self.tests_granted = False
 
     @property
     def project_name(self):
@@ -386,7 +394,7 @@ class TaskScope:
 
     def permits_test(self, path):
         return bool(path and _is_test_script_name(path) and
-                    (path in self.initial_tests or path in self.written))
+                    (self.tests_granted or path in self.initial_tests or path in self.written))
 
 
 def _approval_key(permission, patterns, metadata):
@@ -440,18 +448,34 @@ def _approval_scope(permission, patterns, metadata):
                program in {'python', 'python3'} and tokens[1:3] == ['-m', 'pip'] or
                re.fullmatch(r'python\d+(?:\.\d+)*', program) and tokens[1:3] == ['-m', 'pip'])
     if permission == 'bash' and install:
-        # One approval for one package, not one approval for every later package install.
-        package = tuple(arg for arg in tokens[1:]
-                        if not arg.startswith('-') and arg.casefold() not in
-                        {'install', 'add', 'get', 'i', 'ci', 'up', 'update', 'upgrade', 'dlx', 'pip'})
-        return permission, 'install', (program, package[:3] or ('all',))
+        # One approval per exact package set, never a secret passed as an option value.
+        options_with_value = {'--token', '--index-url', '-i', '--extra-index-url', '--trusted-host',
+                              '--proxy', '--cert', '--client-cert', '--requirement', '-r', '--constraint', '-c'}
+        package, skip = [], False
+        for arg in tokens[1:]:
+            if skip:
+                skip = False
+                continue
+            if arg in options_with_value:
+                skip = True
+                continue
+            if arg.startswith('-') or arg.casefold() in {
+                    'install', 'add', 'get', 'i', 'ci', 'up', 'update', 'upgrade', 'dlx', 'pip'}:
+                continue
+            package.append(arg)
+        return permission, 'install', (program, tuple(package) or ('all',))
     if permission == 'bash' and _test_command(tokens):
         return permission, 'tests', 'project'
+    if permission == 'bash' and program in {'npx', 'pnpx', 'bunx'}:
+        return permission, 'network', (program, tuple(tokens[1:3]))
     if permission == 'bash' and (program in ASK_LAN['network'] or program == 'git' and _git_subcommand(tokens) in {'clone', 'fetch', 'pull'}):
         resources = tuple(sorted(re.findall(r'https?://([^/\s]+)', command or '', re.I)))
         return permission, 'network', resources or (program,)
     if permission == 'bash' and program == 'git' and _git_subcommand(tokens) == 'push':
-        return permission, 'publish', tuple(tokens[2:3]) or ('default-remote',)
+        refspec = tuple(arg for arg in tokens[1:] if not arg.startswith('-'))
+        force = ('force',) if any(arg in {'-f', '--force', '--force-with-lease', '--force-if-includes'}
+                                   for arg in tokens[1:]) else ()
+        return permission, 'publish', refspec + force
     if permission == 'webfetch':
         resources = tuple(sorted(re.findall(r'https?://([^/\s]+)', ' '.join(map(str, patterns)), re.I)))
         return permission, 'webfetch', resources or tuple(str(item) for item in patterns)
@@ -461,7 +485,10 @@ def _approval_scope(permission, patterns, metadata):
 
 
 def _safe_display(value):
-    return re.sub(r'(?i)(https?://)[^/@\s]+@', r'\1[redacted]@', str(value))[:300]
+    text = re.sub(r'(?i)(https?://)[^/@\s]+@', r'\1[redacted]@', str(value))
+    text = re.sub(r'(?i)(--?(?:token|password|passwd|secret|api[-_]?key)\s*[= ]\s*)(\S+)',
+                  r'\1[redacted]', text)
+    return text[:300]
 
 
 def _resolved_targets(permission, patterns, workdir):
@@ -539,23 +566,32 @@ def decide(permission, patterns, metadata, workdir, *, autonomy, ask, grants=Non
                 else:
                     complex_request = True
         if maintenance and (git_write or re.search(
-                r'\b(?:bash|sh|dash|zsh|cmd|powershell|pwsh)\b[^\n]{0,120}\bgit\s+'
-                r'(?:commit|push|pull|fetch|merge|rebase|reset|checkout|switch|tag|worktree)\b', text, re.I)):
+                r'\bgit\s+(?:commit|push|pull|fetch|merge|rebase|reset|checkout|switch|tag|worktree)\b', text, re.I)
+                or re.search(r'\b(?:bash|sh|dash|zsh|cmd|powershell|pwsh)\b[^\n]{0,120}\bgit\s+'
+                             r'(?:commit|push|pull|fetch|merge|rebase|reset|checkout|switch|tag|worktree)\b', text, re.I)):
             return 'reject', 'VEIL commits, pushes and creates the pull request; the workbench must not run git write commands'
-        if (task_scope is not None and command_tokens and _test_command(command_tokens)
-                and not _test_command_in_scope(command_tokens, workdir)):
-            return 'reject', 'test path or flag outside the workbench'
-        if (task_scope is not None and command_tokens and _test_command(command_tokens)
-                and _test_command_in_scope(command_tokens, workdir)):
-            if autonomy:
-                return 'reject', 'test execution needs Lan\'s approval; not asked during autonomous activity'
+        test_items = []
+        for pattern in patterns if isinstance(patterns, list) else ():
+            if isinstance(pattern, str):
+                try:
+                    tokens = shlex.split(pattern, posix=True)
+                except ValueError:
+                    tokens = []
+                if tokens and _test_command(tokens):
+                    test_items.append(tokens)
+        if task_scope is not None and test_items:
+            for tokens in test_items:
+                if not _test_command_in_scope(tokens, workdir):
+                    return 'reject', 'test path or flag outside the workbench'
             project = task_scope.project_name
             key = ('bash', 'tests', project)
-            reply, _why = _ask_lan(
+            reply, why = _ask_lan(
                 f'项目“{project}”的本次任务要运行项目测试。测试会执行项目代码，可能联网或读写文件；'
                 '批准后本次任务的测试命令继续使用这个授权。同意吗？y/N ',
                 'bash:tests', key, ask, grants, approvals, task_scope.denied)
-            return (reply, 'task-scoped test run') if reply == 'once' else (reply, _why)
+            if reply != 'once':
+                return reply, why
+            task_scope.tests_granted = True
         complex_request = complex_request or _complex_bash_request(
             patterns, metadata, workdir, test_scripts, task_scope)
         if needs_lan or complex_request:
@@ -911,7 +947,7 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
                             diagnostic({
                                 'permission': request.get('permission', ''),
                                 'patterns': request.get('patterns', []),
-                                'command': (request.get('metadata') or {}).get('command'),
+                                'command': _safe_display((request.get('metadata') or {}).get('command')),
                                 'workdir': str(workdir),
                                 'resolved_targets': _resolved_targets(
                                     request.get('permission', ''), request.get('patterns', []), workdir),

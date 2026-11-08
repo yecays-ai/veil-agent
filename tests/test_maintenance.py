@@ -48,10 +48,22 @@ class FakeGitHub:
         if argv[0] == 'git' and argv[1] == 'ls-remote':
             return 0, '', ''
         if argv[0] == 'git' and argv[1] == 'push':
+            assert 'origin' in argv, argv
+            assert any(str(arg).startswith('HEAD:ticket/') for arg in argv), argv
             self.head = _git(cwd, 'rev-parse', 'HEAD').strip()
             return 0, '', ''
         if argv[0] == 'gh':
             args = argv[1:]
+            if args[:2] == ['pr', 'create']:
+                assert '--repo' in args and args[args.index('--repo') + 1] == 'yecays-ai/veil-agent', args
+                assert '--base' in args and args[args.index('--base') + 1] == 'main', args
+                assert '--head' in args and args[args.index('--head') + 1].startswith('ticket/'), args
+            if args[:2] == ['pr', 'merge']:
+                assert '--repo' in args and args[args.index('--repo') + 1] == 'yecays-ai/veil-agent', args
+                assert args[2] == '1', args
+            if args[:2] == ['pr', 'view']:
+                assert '--repo' in args and args[args.index('--repo') + 1] == 'yecays-ai/veil-agent', args
+                assert args[2] == '1', args
             if args[:2] == ['pr', 'list']:
                 value = [{'number': 1, 'url': self._view()['url'], 'state': 'OPEN',
                           'headRefOid': self.head}] if self.pr_created else []
@@ -178,7 +190,7 @@ class MaintenanceTests(unittest.TestCase):
         self.manager.invoke('checks', {'task_id': task['task_id']})
         started = []
         self.manager.instance_factory = lambda record: SimpleNamespace(
-            start=lambda: maintenance.AcceptanceResult('http://127.0.0.1:1234/?t=x', [1], 'fixture'))
+            start=lambda: maintenance.AcceptanceResult('http://127.0.0.1:1234/?t=x', [], 'fixture', ''))
         text, state = self.manager.invoke('accept', {'task_id': task['task_id']})
         self.assertEqual(state, '成功', text)
         self.assertIn('http://127.0.0.1:1234', text)
@@ -200,27 +212,57 @@ class MaintenanceTests(unittest.TestCase):
         self.assertEqual(task['stage'], 'merged')
         self.assertEqual(task['acceptance']['status'], 'passed')
 
-    def test_acceptance_failure_never_merges(self):
+    def test_acceptance_failure_requires_an_explicit_lan_waiver(self):
         task = self.begin()
         self.develop(task)
         self.manager.invoke('deliver', {'task_id': task['task_id']})
         self.gh.ci = 'success'
         self.manager.invoke('checks', {'task_id': task['task_id']})
         self.manager.instance_factory = lambda record: SimpleNamespace(
-            start=lambda: maintenance.AcceptanceResult('http://127.0.0.1:1234/?t=x', [1], 'fixture'))
+            start=lambda: maintenance.AcceptanceResult('http://127.0.0.1:1234/?t=x', [], 'fixture', ''))
         self.manager.invoke('accept', {'task_id': task['task_id']})
         text, state = self.manager.invoke('accept', {'task_id': task['task_id'], 'result': 'failed',
                                                      'note': 'The button does nothing.'})
         self.assertEqual(state, '成功', text)
+        self.manager.approval = lambda _prompt: 'n'
+        text, state = self.manager.invoke('merge', {'task_id': task['task_id'], 'retry': True})
+        self.assertEqual(state, '被拒绝')
+        self.assertFalse(self.gh.merged)
         self.manager.approval = lambda _prompt: 'y'
         text, state = self.manager.invoke('merge', {'task_id': task['task_id'], 'retry': True})
-        # The program asks for an explicit waiver; this fixture says yes, but the recorded
-        # acceptance stays failed and is shown to Lan.
         self.assertEqual(state, '成功', text)
         task = self.manager.store.load(task['task_id'])
         self.assertEqual(task['acceptance']['status'], 'failed')
         self.assertTrue(task['acceptance']['waived'])
         self.assertTrue(self.gh.merged)
+
+    def test_lan_refusing_to_confirm_acceptance_keeps_it_not_yet(self):
+        task = self.begin()
+        self.develop(task)
+        self.manager.invoke('deliver', {'task_id': task['task_id']})
+        self.gh.ci = 'success'
+        self.manager.invoke('checks', {'task_id': task['task_id']})
+        self.manager.approval = lambda _prompt: 'n'
+        text, state = self.manager.invoke('accept', {'task_id': task['task_id'], 'result': 'passed'})
+        self.assertEqual(state, '被拒绝')
+        task = self.manager.store.load(task['task_id'])
+        self.assertEqual(task['acceptance']['status'], 'not_yet')
+
+    def test_changes_requested_review_blocks_checks_and_merge(self):
+        task = self.begin()
+        self.develop(task)
+        self.manager.invoke('deliver', {'task_id': task['task_id']})
+        self.gh.ci = 'success'
+        self.gh.reviews = [{'author': {'login': 'reviewer'}, 'state': 'CHANGES_REQUESTED',
+                            'body': 'P1: the button writes outside the project.'}]
+        text, state = self.manager.invoke('checks', {'task_id': task['task_id']})
+        self.assertEqual(state, '成功', text)
+        task = self.manager.store.load(task['task_id'])
+        self.assertEqual(task['review']['blocking'], ['reviewer'])
+        self.assertEqual(task['stage'], 'review_failed')
+        text, state = self.manager.invoke('merge', {'task_id': task['task_id']})
+        self.assertEqual(state, '被拒绝')
+        self.assertFalse(self.gh.merged)
 
     def test_stop_prevents_push_and_merge(self):
         task = self.begin()
@@ -242,6 +284,38 @@ class MaintenanceTests(unittest.TestCase):
         text, state = self.manager.invoke('resume', {'task_id': task['task_id']})
         self.assertEqual(state, '成功')
         self.assertIn('developing', text)
+
+    def test_begin_rejects_a_worktree_root_that_overlaps_veil_data(self):
+        manager = maintenance.MaintenanceManager(
+            self.store, 'test', repo_path=self.repo, worktree_root=self.store.root / 'worktrees',
+            approval=lambda _prompt: 'y', runner=self.gh)
+        text, state = manager.invoke('begin', {'title': 'X', 'goal': 'Y', 'ticket': 315})
+        self.assertEqual(state, '出错')
+        self.assertIn('overlap', text)
+        self.assertIsNone(manager.store.load())
+
+    def test_task_actions_require_an_explicit_task_id(self):
+        task = self.begin()
+        self.develop(task)
+        text, state = self.manager.invoke('deliver', {})
+        self.assertEqual(state, '出错')
+        self.assertIn('task_id', text)
+        self.assertFalse(self.gh.pr_created)
+
+    def test_stopped_task_cannot_be_revived_by_checks_or_accept(self):
+        task = self.begin()
+        self.develop(task)
+        self.manager.invoke('deliver', {'task_id': task['task_id']})
+        self.manager.invoke('stop', {'task_id': task['task_id']})
+        for action in ('checks', 'accept'):
+            text, state = self.manager.invoke(action, {'task_id': task['task_id']})
+            self.assertEqual(state, '被拒绝', (action, text))
+
+    def test_cleanup_is_refused_while_the_task_is_active(self):
+        task = self.begin()
+        text, state = self.manager.invoke('cleanup', {'task_id': task['task_id']})
+        self.assertEqual(state, '被拒绝')
+        self.assertTrue(Path(task['worktree']).exists())
 
     def test_sensitive_files_are_refused_before_commit(self):
         task = self.begin()

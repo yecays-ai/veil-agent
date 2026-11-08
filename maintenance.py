@@ -12,6 +12,7 @@ import os
 import re
 import secrets
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -38,6 +39,11 @@ FORBIDDEN_PATH = re.compile(
     r'(^|/)(\.env(\..*)?|persona/[^/]+\.md|data/|logs?/|memory/|.*\.(log|pem|pfx|key)|'
     r'id_(rsa|ed25519).*|cookies?|desktop/node_modules/|\.venv/|node_modules/)', re.I)
 ISSUE_LINE = re.compile(r'\b(P[0-3]|critical|security|bug)\b|错误|安全|数据|阻断', re.I)
+KEEP_ENV = {
+    'PATH', 'PATHEXT', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'TEMP', 'TMP', 'TMPDIR', 'LANG', 'LC_ALL',
+    'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE', 'PROGRAMFILES', 'PROGRAMFILES(X86)', 'PROGRAMDATA',
+    'APPDATA', 'LOCALAPPDATA', 'USERPROFILE',
+}
 
 
 def _now():
@@ -70,8 +76,7 @@ def _json(text):
 
 
 def _slug(title):
-    words = re.findall(r'[a-z0-9]+', (title or '').lower())
-    slug = '-'.join(words)[:40].strip('-')
+    slug = '-'.join(re.findall(r'[a-z0-9]+', (title or '').lower()))[:40].strip('-')
     return slug or 'task'
 
 
@@ -94,10 +99,8 @@ def _valid_task(task):
             return False
     if not isinstance(task.get('history'), list) or len(task['history']) > MAX_HISTORY:
         return False
-    if not all(isinstance(row, dict) and isinstance(row.get('at'), str) and isinstance(row.get('stage'), str)
-               for row in task['history']):
-        return False
-    return isinstance(task.get('blockers', []), list)
+    return all(isinstance(row, dict) and isinstance(row.get('at'), str) and isinstance(row.get('stage'), str)
+               for row in task['history']) and isinstance(task.get('blockers', []), list)
 
 
 class MaintenanceError(UserError):
@@ -119,6 +122,10 @@ class Runner:
         return finished.returncode, finished.stdout or '', finished.stderr or ''
 
 
+def _clean_env(extra=None):
+    return {k: v for k, v in os.environ.items() if k.upper() in KEEP_ENV} | (extra or {})
+
+
 class MaintenanceStore:
     """Atomic per-task JSON plus a one-line active task for the next request."""
 
@@ -137,10 +144,9 @@ class MaintenanceStore:
         path = self._path(task['task_id'])
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_suffix('.tmp')
-        payload = json.dumps(task, ensure_ascii=False, indent=2) + '\n'
         try:
             with temporary.open('w', encoding='utf-8', newline='\n') as handle:
-                handle.write(payload)
+                handle.write(json.dumps(task, ensure_ascii=False, indent=2) + '\n')
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(temporary, path)
@@ -151,8 +157,9 @@ class MaintenanceStore:
                 pass
             raise MaintenanceError('maintenance state could not be saved safely') from exc
         self.root.mkdir(parents=True, exist_ok=True)
-        (self.root / 'active.json').write_text(json.dumps({'task_id': task['task_id']}),
-                                                encoding='utf-8', newline='\n')
+        pointer, temporary = self.root / 'active.json', self.root / 'active.tmp'
+        temporary.write_text(json.dumps({'task_id': task['task_id']}), encoding='utf-8', newline='\n')
+        os.replace(temporary, pointer)
 
     def load(self, task_id=''):
         task_id = task_id or self.active_id()
@@ -189,16 +196,13 @@ class MaintenanceStore:
         return sorted(result, key=lambda item: item['updated_at'], reverse=True)
 
     def find_ticket(self, ticket):
-        for task in self.all():
-            if task['ticket'] == str(ticket) and task['stage'] not in {'merged', 'done', 'stopped'}:
-                return task
-        return None
+        return next((task for task in self.all() if task['ticket'] == str(ticket)), None)
 
 
 def _new_task(*, ticket, title, goal, repo, github_repo, worktree, branch, base_main,
               running_version, acceptance, hours):
-    task_id = f"m-{time.strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(3)}"
     now = _now()
+    task_id = f"m-{time.strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(3)}"
     deadline = (datetime.now().astimezone() + timedelta(hours=hours)).isoformat(timespec='seconds')
     return {
         'schema': 1, 'task_id': task_id, 'ticket': str(ticket), 'title': title, 'goal': goal,
@@ -212,7 +216,7 @@ def _new_task(*, ticket, title, goal, repo, github_repo, worktree, branch, base_
         'checks': {'state': 'none', 'required': [], 'failed': [], 'observed_at': '', 'head_sha': '', 'logs': ''},
         'review': {'blocking': [], 'unresolved': [], 'observed_at': '', 'head_sha': '', 'reviewed_sha': ''},
         'acceptance': {'status': 'not_yet', 'note': '', 'instance_url': '', 'pids': [], 'recorded_at': '',
-                       'waived': False},
+                       'waived': False, 'head_sha': '', 'config_dir': ''},
         'deployment': {'merged_commit': '', 'deployed': False},
         'development': {'cost_cny': '0', 'steps': 0, 'last_report': ''},
         'blockers': [], 'history': [{'at': now, 'stage': 'developing', 'note': 'created isolated worktree'}],
@@ -243,12 +247,9 @@ def _replace_section(path, ticket, block):
         text = Path(path).read_text(encoding='utf-8')
     except FileNotFoundError:
         text = ''
-    start = f'<!-- maintenance:{ticket}:start -->'
-    end = f'<!-- maintenance:{ticket}:end -->'
+    start, end = f'<!-- maintenance:{ticket}:start -->', f'<!-- maintenance:{ticket}:end -->'
     if start in text and end in text:
-        before = text.split(start, 1)[0]
-        after = text.split(end, 1)[1]
-        text = before.rstrip() + '\n\n' + block + '\n' + after.lstrip('\n')
+        text = text.split(start, 1)[0].rstrip() + '\n\n' + block + '\n' + text.split(end, 1)[1].lstrip('\n')
     else:
         text = text.rstrip() + '\n\n' + block + '\n'
     Path(path).write_text(text, encoding='utf-8', newline='\n')
@@ -259,20 +260,18 @@ class AcceptanceResult:
     url: str
     pids: list
     note: str = ''
+    config_dir: str = ''
 
 
 class AcceptanceInstance:
     """The worktree's own web service and desktop window, with copied config and test data."""
 
     def __init__(self, task, repo_path, *, python=None, electron=None, data_root=None):
-        self.task = task
         self.repo = Path(repo_path)
         self.worktree = Path(task['worktree'])
-        self.root = Path(data_root) if data_root else self.worktree / '.agents'
-        self.dir = self.root / f'acceptance-{task["ticket"]}'
-        self.config = self.dir / 'config'
-        self.data = self.config / 'data'
-        self.desktop = self.dir / 'desktop'
+        root = Path(data_root) if data_root else self.worktree / '.agents'
+        self.dir = root / f'acceptance-{task["ticket"]}'
+        self.config, self.data, self.desktop = self.dir / 'config', self.dir / 'config' / 'data', self.dir / 'desktop'
         self.python = Path(python) if python else self.repo / '.venv' / 'Scripts' / 'python.exe'
         if not self.python.exists():
             self.python = Path(sys.executable)
@@ -284,13 +283,16 @@ class AcceptanceInstance:
         self.dir.mkdir(parents=True, exist_ok=True)
         if self.config.exists():
             shutil.rmtree(self.config)
-        self.config.mkdir(parents=True)
         self.data.mkdir(parents=True)
         self.desktop.mkdir(parents=True, exist_ok=True)
-        for name in ('characters', 'persona'):
-            source = self.repo / name
-            if source.is_dir():
-                shutil.copytree(source, self.config / name)
+        characters = self.worktree / 'characters'
+        if not characters.is_dir():
+            characters = self.repo / 'characters'
+        if characters.is_dir():
+            shutil.copytree(characters, self.config / 'characters')
+        persona = self.repo / 'persona'
+        if persona.is_dir():
+            shutil.copytree(persona, self.config / 'persona')
         env_file = self.repo / '.env'
         if env_file.is_file():
             shutil.copy2(env_file, self.config / '.env')
@@ -300,7 +302,7 @@ class AcceptanceInstance:
         command = [str(self.python), str(self.worktree / 'web_agent.py'), '--acceptance',
                    '--config-root', str(self.config), '--data-dir', str(self.data), '--port', '0']
         backend = subprocess.Popen(
-            command, cwd=str(self.worktree), env={**os.environ, 'PYTHONUTF8': '1'},
+            command, cwd=str(self.worktree), env=_clean_env({'PYTHONUTF8': '1'}),
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             **hidden_subprocess_kwargs(windows=os.name == 'nt', module=subprocess))
         self.processes.append(backend)
@@ -318,7 +320,7 @@ class AcceptanceInstance:
             time.sleep(0.5)
         if not isinstance(state, dict) or not isinstance(state.get('port'), int):
             self.stop()
-            raise MaintenanceError('测试实例没有启动；请检查开发工作区的依赖和配置。')
+            raise MaintenanceError('test instance did not start; check the worktree dependencies and config')
         url = f"http://127.0.0.1:{state['port']}/?t={state['token']}"
         ready, deadline = False, time.monotonic() + 90
         while time.monotonic() < deadline:
@@ -336,20 +338,18 @@ class AcceptanceInstance:
             except (OSError, ValueError, urllib.error.URLError):
                 pass
             time.sleep(0.5)
-        try:
-            (self.config / '.env').unlink(missing_ok=True)
-        except OSError:
-            pass
         if not ready:
             self.stop()
-            raise MaintenanceError('测试实例没有就绪；请检查开发工作区的模型配置和依赖。')
+            raise MaintenanceError('test instance did not become ready; check the model config and dependencies')
         if self.electron.is_file():
             try:
                 window = subprocess.Popen(
                     [str(self.electron), str(self.worktree / 'desktop')], cwd=str(self.worktree / 'desktop'),
-                    env={**os.environ, 'VEIL_AGENT_ROOT': str(self.worktree),
-                         'VEIL_AGENT_DATA': str(self.data), 'VEIL_PYTHON': str(self.python),
-                         'VEIL_DESKTOP_DATA': str(self.desktop), 'VEIL_DESKTOP_TEST': '1'},
+                    env=_clean_env({'PATH': os.environ.get('PATH', ''), 'SYSTEMROOT': os.environ.get('SYSTEMROOT', ''),
+                                    'WINDIR': os.environ.get('WINDIR', ''),
+                                    'VEIL_AGENT_ROOT': str(self.worktree), 'VEIL_AGENT_DATA': str(self.data),
+                                    'VEIL_PYTHON': str(self.python), 'VEIL_DESKTOP_DATA': str(self.desktop),
+                                    'VEIL_DESKTOP_TEST': '1'}),
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 self.processes.append(window)
             except OSError:
@@ -357,7 +357,7 @@ class AcceptanceInstance:
         return AcceptanceResult(
             url, [process.pid for process in self.processes],
             'test instance uses the development worktree code and its own data; autonomy, external '
-            'channels, memory, voice and desktop control are disabled')
+            'channels, memory, voice and desktop control are disabled', str(self.config))
 
     def stop(self):
         for process in reversed(self.processes):
@@ -383,8 +383,9 @@ class MaintenanceManager:
                  github_repo=DEFAULT_GITHUB_REPO, approval=None, runner=None,
                  instance_factory=None, python=None, electron=None, hours=2):
         self.store = MaintenanceStore(store, character_id)
+        self.store_root = Path(store.root).resolve()
         self.character_id = character_id
-        self.data_root = Path(store.root) / character_id / 'maintenance'
+        self.data_root = self.store_root / character_id / 'maintenance'
         self.repo = Path(repo_path).resolve()
         self.worktree_root = Path(worktree_root or (self.repo.parent / 'worktrees')).resolve()
         self.github_repo = github_repo
@@ -398,9 +399,9 @@ class MaintenanceManager:
     def _run(self, argv, cwd=None, timeout=180, allow_fail=False):
         env = None
         if argv and str(argv[0]) == 'git':
-            env = {**os.environ, 'GIT_TERMINAL_PROMPT': '0', 'GCM_INTERACTIVE': 'never'}
+            env = _clean_env({'GIT_TERMINAL_PROMPT': '0', 'GCM_INTERACTIVE': 'never'})
         elif argv and str(argv[0]) == 'gh':
-            env = {**os.environ, 'GH_PROMPT_DISABLED': '1', 'GH_NO_UPDATE_NOTIFIER': '1'}
+            env = _clean_env({'GH_PROMPT_DISABLED': '1', 'GH_NO_UPDATE_NOTIFIER': '1'})
         code, out, err = self.runner.run(argv, cwd=cwd, timeout=timeout, env=env)
         if code and not allow_fail:
             raise MaintenanceError(_short(err or out or f'command failed: {argv[0]}', 700))
@@ -418,8 +419,7 @@ class MaintenanceManager:
     def _verify_repo(self):
         if not self.repo.is_dir():
             raise MaintenanceError('VEIL repository directory does not exist')
-        top = self._git('rev-parse', '--show-toplevel').strip()
-        if Path(top).resolve() != self.repo:
+        if Path(self._git('rev-parse', '--show-toplevel').strip()).resolve() != self.repo:
             raise MaintenanceError('maintenance must start from the VEIL repository root')
         if self._git('symbolic-ref', '--short', 'HEAD').strip() != 'main':
             raise MaintenanceError('the formal checkout is not on main; maintenance was not started')
@@ -450,15 +450,25 @@ class MaintenanceManager:
         numbers += [int(task['ticket']) for task in self.store.all() if task['ticket'].isdigit()]
         return max(numbers, default=0) + 1
 
+    def _check_worktree_root(self, worktree):
+        worktree = Path(worktree).resolve()
+        if worktree == self.repo or self.repo in worktree.parents:
+            raise MaintenanceError('maintenance worktree must not be inside the VEIL repository')
+        if worktree == self.store_root or self.store_root in worktree.parents or worktree in self.store_root.parents:
+            raise MaintenanceError('maintenance worktree must not overlap VEIL data')
+        return worktree
+
     # --- worktree and documents ---------------------------------------
     def _worktree_add(self, worktree, branch, base):
         worktree = Path(worktree)
         if worktree.exists():
-            top = self._git('rev-parse', '--show-toplevel', cwd=worktree).strip()
-            if Path(top).resolve() != worktree.resolve():
-                raise MaintenanceError('existing maintenance directory is not a Git worktree')
+            common = self._git('rev-parse', '--git-common-dir', cwd=worktree).strip()
+            if Path(common).resolve() != (self.repo / '.git').resolve():
+                raise MaintenanceError('existing maintenance directory is not a worktree of this repository')
             if self._git('symbolic-ref', '--short', 'HEAD', cwd=worktree).strip() != branch:
                 raise MaintenanceError('existing maintenance worktree is on another branch')
+            if self._git('status', '--porcelain', cwd=worktree).strip():
+                raise MaintenanceError('existing maintenance worktree has uncommitted changes; not reusing it')
             return 'reused'
         current = [line[9:] for line in self._git('worktree', 'list', '--porcelain').splitlines()
                    if line.startswith('worktree ')]
@@ -478,8 +488,7 @@ class MaintenanceManager:
         if not path.exists():
             acceptance = task.get('acceptance_note') or '1. Lan uses the test instance and confirms the result.'
             path.write_text(
-                f'# 工单 {ticket}：{task["title"]}\n\n'
-                f'## 目标\n\n{task["goal"]}\n\n'
+                f'# 工单 {ticket}：{task["title"]}\n\n## 目标\n\n{task["goal"]}\n\n'
                 f'## 当前状态\n\n分支 `{task["branch"]}`，从 `main` 的 `{task["base_main"][:8]}` 建立；'
                 '开发在独立 worktree 中进行，正式运行目录未改动。\n\n'
                 f'## 验收步骤\n\n{acceptance}\n', encoding='utf-8', newline='\n')
@@ -489,14 +498,13 @@ class MaintenanceManager:
     def _forbidden_changes(self, worktree):
         bad = []
         for line in self._git('status', '--porcelain', cwd=worktree).splitlines():
-            if len(line) < 4:
-                continue
-            path = line[3:].strip().strip('"').replace('\\', '/')
-            if path and FORBIDDEN_PATH.search(path) and not path.endswith('.example.md'):
-                bad.append(path)
+            if len(line) >= 4:
+                path = line[3:].strip().strip('"').replace('\\', '/')
+                if path and FORBIDDEN_PATH.search(path) and not path.endswith(('.example.md', '.env.example')):
+                    bad.append(path)
         for path in self._git('ls-files', cwd=worktree).splitlines():
             path = path.strip().strip('"').replace('\\', '/')
-            if path and FORBIDDEN_PATH.search(path) and not path.endswith('.example.md'):
+            if path and FORBIDDEN_PATH.search(path) and not path.endswith(('.example.md', '.env.example')):
                 bad.append(path)
         return sorted(set(bad))
 
@@ -517,8 +525,8 @@ class MaintenanceManager:
         worktree = Path(task['worktree'])
         branch = task['branch']
         local = self._git('rev-parse', 'HEAD', cwd=worktree).strip()
-        out = self._git('ls-remote', '--heads', 'origin', f'refs/heads/{branch}',
-                        cwd=worktree, allow_fail=True)
+        out = self._git('ls-remote', '--heads', 'origin', f'refs/heads/{branch}', cwd=worktree,
+                        allow_fail=True)
         remote = out.split()[0] if out.strip() else ''
         if remote != local:
             self._git('push', '-u', 'origin', f'HEAD:{branch}', cwd=worktree, timeout=300)
@@ -558,11 +566,15 @@ class MaintenanceManager:
         return number, self._pr_view(number)
 
     def _required_checks(self):
-        _code, out, _err = self._gh('api', f'repos/{self.github_repo}/branches/main/protection',
-                                    allow_fail=True)
+        code, out, err = self._gh('api', f'repos/{self.github_repo}/branches/main/protection',
+                                  allow_fail=True)
+        if code:
+            if '404' in (err or '') or 'Not Found' in (err or ''):
+                return []
+            raise MaintenanceError('cannot read branch protection; refusing to guess the required checks')
         value = _json(out)
         if not isinstance(value, dict):
-            return []
+            raise MaintenanceError('branch protection returned invalid data; refusing to guess')
         required = value.get('required_status_checks') or {}
         result = list(required.get('contexts') or []) if isinstance(required, dict) else []
         if isinstance(required, dict) and isinstance(required.get('checks'), list):
@@ -574,34 +586,36 @@ class MaintenanceManager:
     def _check_rows(view):
         rows = []
         for item in view.get('statusCheckRollup') or []:
-            if not isinstance(item, dict):
-                continue
-            rows.append({'name': item.get('name') or item.get('context') or '',
-                         'status': (item.get('status') or '').upper(),
-                         'conclusion': (item.get('conclusion') or item.get('state') or '').upper(),
-                         'url': item.get('detailsUrl') or item.get('targetUrl') or ''})
+            if isinstance(item, dict):
+                rows.append({'name': item.get('name') or item.get('context') or '',
+                             'status': (item.get('status') or '').upper(),
+                             'conclusion': (item.get('conclusion') or item.get('state') or '').upper(),
+                             'url': item.get('detailsUrl') or item.get('targetUrl') or ''})
         return rows
 
     def _failed_logs(self, failed):
         for row in failed:
             match = re.search(r'/actions/runs/(\d+)', row.get('url') or '')
-            if not match:
-                continue
-            _code, out, err = self._gh('run', 'view', match.group(1), '--repo', self.github_repo,
-                                       '--log-failed', allow_fail=True)
-            text = (out or err or '').strip()
-            if text:
-                return _short(text[-3500:], 3500)
+            if match:
+                _code, out, err = self._gh('run', 'view', match.group(1), '--repo', self.github_repo,
+                                           '--log-failed', allow_fail=True)
+                text = (out or err or '').strip()
+                if text:
+                    return _short(text[-3500:], 3500)
         return ''
 
     @staticmethod
     def _review_state(view):
-        blocking, advisory = [], []
         latest = {}
         for review in view.get('reviews') or []:
-            if isinstance(review, dict) and (review.get('author') or {}).get('login'):
-                latest[(review['author'] or {}).get('login')] = review.get('state') or ''
+            if not isinstance(review, dict):
+                continue
+            login = (review.get('author') or {}).get('login')
+            state = review.get('state') or ''
+            if login and state in {'APPROVED', 'CHANGES_REQUESTED', 'DISMISSED'}:
+                latest[login] = state
         blocking = [login for login, state in latest.items() if state == 'CHANGES_REQUESTED']
+        advisory = []
         for review in view.get('reviews') or []:
             if isinstance(review, dict) and (review.get('state') or '') == 'COMMENTED':
                 body = _short(review.get('body') or '', 300)
@@ -616,19 +630,14 @@ class MaintenanceManager:
         missing = [name for name in required if name not in names]
         required = [name for name in required if name in names]
         watched = required or [row['name'] for row in rows if row['conclusion'] != 'SKIPPED']
-        pending = [row for row in rows if row['name'] in watched and row['status'] and row['status'] != 'COMPLETED']
+        pending = [row for row in rows if row['name'] in watched and
+                   (row['status'] and row['status'] != 'COMPLETED' or
+                    row['conclusion'] in {'PENDING', 'EXPECTED', 'QUEUED', 'IN_PROGRESS'})]
         if missing:
             pending.append({'name': missing[0]})
         failed = [row for row in rows if row['name'] in watched and row['status'] in ('COMPLETED', '') and
-                  row['conclusion'] not in ('SUCCESS', 'NEUTRAL', 'SKIPPED')]
-        if failed:
-            state = 'failed'
-        elif pending:
-            state = 'pending'
-        elif watched:
-            state = 'passed'
-        else:
-            state = 'none'
+                  row['conclusion'] not in ('SUCCESS', 'NEUTRAL', 'SKIPPED', 'PENDING', 'EXPECTED')]
+        state = ('failed' if failed else 'pending' if pending else 'passed' if watched else 'none')
         head = view.get('headRefOid') or ''
         checks = {'state': state, 'required': required, 'failed': [row['name'] for row in failed],
                   'observed_at': _now(), 'head_sha': head, 'logs': ''}
@@ -657,8 +666,7 @@ class MaintenanceManager:
     def begin(self, args, *, autonomy=False):
         if autonomy:
             return 'autonomous activity cannot start a VEIL maintenance task; Lan must ask for it', '被拒绝'
-        title = str(args.get('title') or '').strip()
-        goal = str(args.get('goal') or '').strip()
+        title, goal = str(args.get('title') or '').strip(), str(args.get('goal') or '').strip()
         if not title or not goal:
             return 'maintenance begin needs title and goal', '被拒绝'
         title, goal = _short(title, MAX_TITLE), _short(goal, MAX_GOAL)
@@ -670,23 +678,21 @@ class MaintenanceManager:
             return 'invalid ticket number', '被拒绝'
         existing = self.store.find_ticket(ticket)
         if existing:
-            return (f"ticket {ticket} already has task {existing['task_id']} ({existing['stage']}); "
-                    'use action=resume instead of creating a second branch'), '出错'
+            return (f"ticket {ticket} is already used by task {existing['task_id']} ({existing['stage']}); "
+                    'use a new ticket or resume that task'), '出错'
         branch = _branch_name(ticket, title)
         if re.search(r'[^A-Za-z0-9._/-]', branch) or '..' in branch:
             return 'invalid branch name', '被拒绝'
-        worktree = (self.worktree_root / f'{ticket}-{_slug(title)}').resolve()
-        if self.worktree_root not in worktree.parents:
-            return 'maintenance worktree must stay under the configured worktrees directory', '被拒绝'
+        worktree = self._check_worktree_root(self.worktree_root / f'{ticket}-{_slug(title)}')
         scope = f'{self.github_repo}#{branch}'
         if not self._ask(f'开始工单 {ticket}「{title}」：允许 Peter 在独立工作区开发，并只对 '
                          f'{self.github_repo} 的 {branch} 分支推送、创建或更新 PR 吗？正式目录不会改动。y/N '):
             return 'Lan did not authorise pushing this branch; the task was not started', '被拒绝'
         self._worktree_add(worktree, branch, base)
         task = _new_task(ticket=ticket, title=title, goal=goal, repo=self.repo,
-                         github_repo=self.github_repo, worktree=worktree, branch=branch,
-                         base_main=base, running_version=running,
-                         acceptance=str(args.get('acceptance') or '')[:2000], hours=self.hours)
+                         github_repo=self.github_repo, worktree=worktree, branch=branch, base_main=base,
+                         running_version=running, acceptance=str(args.get('acceptance') or '')[:2000],
+                         hours=self.hours)
         task['authorization']['develop_deliver'] = {'scope': scope, 'at': _now()}
         self._write_documents(task)
         self.store.save(task)
@@ -695,11 +701,21 @@ class MaintenanceManager:
                 '下一步：先读 worktree 的 AGENTS.md、STATUS.md、HANDOFF.md，再用 workbench 并带上 task_id '
                 '完成代码修改和测试，然后 action=deliver。'), '成功'
 
-    def _task(self, args):
-        task = self.store.load(str(args.get('task_id') or ''))
+    def _task(self, args, *, require_id=False):
+        task_id = str(args.get('task_id') or '')
+        if require_id and not task_id:
+            raise MaintenanceError('task_id is required for this action')
+        task = self.store.load(task_id)
         if task is None:
             raise MaintenanceError('there is no maintenance task to continue')
         return task
+
+    @staticmethod
+    def _expired(task):
+        try:
+            return datetime.now().astimezone() > datetime.fromisoformat(task['deadline'])
+        except (KeyError, TypeError, ValueError):
+            return False
 
     def status(self, args, *, autonomy=False):
         task = self._task(args)
@@ -767,9 +783,11 @@ class MaintenanceManager:
     def deliver(self, args, *, autonomy=False):
         if autonomy:
             return 'autonomous activity cannot push or create a pull request', '被拒绝'
-        task = self._task(args)
+        task = self._task(args, require_id=True)
         if task['stage'] in {'stopped', 'merged', 'done'}:
             return f"task is {task['stage']}; it cannot be delivered again", '被拒绝'
+        if self._expired(task):
+            return 'maintenance task exceeded its time limit; ask Lan for a fresh task', '被拒绝'
         scope = f"{self.github_repo}#{task['branch']}"
         grant = task['authorization'].get('develop_deliver') or {}
         if grant.get('scope') != scope:
@@ -812,7 +830,9 @@ class MaintenanceManager:
                 f'共改动 {changed} 个文件。下一步 action=checks。'), '成功'
 
     def checks(self, args, *, autonomy=False):
-        task = self._task(args)
+        task = self._task(args, require_id=True)
+        if task['stage'] in {'stopped', 'merged', 'done'}:
+            return f"task is {task['stage']}; checks cannot revive it", '被拒绝'
         if not task['pull_request'].get('number'):
             return 'there is no pull request yet; use action=deliver first', '被拒绝'
         view = self._pr_view(task['pull_request']['number'])
@@ -830,7 +850,7 @@ class MaintenanceManager:
             stage, next_step = 'ci_pending', 'Wait for the required CI, then action=checks again.'
         elif blocking:
             stage, next_step = 'review_failed', 'Handle review comments that affect function, data or security.'
-        elif task['acceptance']['status'] == 'passed':
+        elif task['acceptance']['status'] == 'passed' and task['acceptance'].get('head_sha') == checks['head_sha']:
             stage, next_step = 'ready_to_merge', 'Acceptance and checks are satisfied; action=merge may proceed.'
         else:
             stage, next_step = 'awaiting_acceptance', 'Offer the test instance; unaccepted work must not merge.'
@@ -845,14 +865,14 @@ class MaintenanceManager:
             lines.append('review_notes=' + ' | '.join(advisory[:3]))
         if checks['state'] == 'failed' and checks['logs']:
             lines.append('failed_log_tail:\n' + checks['logs'][-1800:])
-        if checks['state'] == 'none':
-            lines.append('no required checks were found; verify branch protection before merging.')
         return '\n'.join(lines) + '\nnext: ' + next_step, '成功'
 
     def accept(self, args, *, autonomy=False):
-        task = self._task(args)
+        task = self._task(args, require_id=True)
         if autonomy:
             return 'autonomous activity cannot replace Lan\'s acceptance', '被拒绝'
+        if task['stage'] in {'stopped', 'merged', 'done'}:
+            return f"task is {task['stage']}; acceptance cannot revive it", '被拒绝'
         result = str(args.get('result') or '').strip().lower()
         if result not in {'passed', 'failed'}:
             if task['acceptance'].get('instance_url'):
@@ -868,7 +888,8 @@ class MaintenanceManager:
                 self.store.save(task)
                 return _short(f'无法启动独立测试实例：{exc}', 700), '出错'
             task['acceptance'].update({'instance_url': started.url, 'pids': started.pids,
-                                       'status': 'not_yet', 'recorded_at': _now()})
+                                       'config_dir': started.config_dir, 'status': 'not_yet',
+                                       'recorded_at': _now()})
             _event(task, 'awaiting_acceptance', 'test instance started')
             task['next_step'] = 'Lan uses the isolated test instance; unaccepted work must not merge.'
             self.store.save(task)
@@ -880,6 +901,7 @@ class MaintenanceManager:
         task['acceptance']['status'] = result
         task['acceptance']['note'] = _short(str(args.get('note') or ''), MAX_NOTE)
         task['acceptance']['recorded_at'] = _now()
+        task['acceptance']['head_sha'] = task['pull_request'].get('head_sha') or ''
         if result == 'passed' and task['checks']['state'] == 'passed' and not task['review']['blocking']:
             _event(task, 'ready_to_merge', 'acceptance passed and checks are green')
             task['next_step'] = 'Confirm merge authorisation, then action=merge.'
@@ -895,9 +917,11 @@ class MaintenanceManager:
     def merge(self, args, *, autonomy=False):
         if autonomy:
             return 'autonomous activity cannot merge a pull request', '被拒绝'
-        task = self._task(args)
+        task = self._task(args, require_id=True)
         if task['stage'] in {'stopped', 'merged', 'done'}:
             return f"task is {task['stage']}; it cannot be merged", '被拒绝'
+        if self._expired(task):
+            return 'maintenance task exceeded its time limit; ask Lan for a fresh task', '被拒绝'
         number = task['pull_request'].get('number')
         if not number:
             return 'there is no pull request yet; use action=deliver first', '被拒绝'
@@ -919,6 +943,8 @@ class MaintenanceManager:
         if blocking:
             return 'a review still requests changes', '被拒绝'
         acceptance = task['acceptance']['status']
+        if acceptance == 'passed' and task['acceptance'].get('head_sha') != head:
+            return 'Lan accepted an older commit; deliver and ask for fresh acceptance', '被拒绝'
         waiver = False
         authorization = task['authorization'].get('merge') or {}
         same_head = authorization.get('head_sha') == head and authorization.get('granted') is True
@@ -959,6 +985,7 @@ class MaintenanceManager:
                                      'url': after.get('url') or task['pull_request']['url']})
         task['deployment']['merged_commit'] = merge_commit
         _event(task, 'merged', f'PR #{number} merged')
+        self._stop_acceptance(task)
         cleanup = self._cleanup(task)
         task['next_step'] = 'Let Lan run update-main.cmd, restart, and confirm the feature.'
         self.store.save(task)
@@ -968,20 +995,47 @@ class MaintenanceManager:
                 '请 Lan 双击 update-main.cmd 更新正式版本，重启后按 STATUS.md 验收。'), '成功'
 
     def stop(self, args, *, autonomy=False):
-        task = self._task(args)
+        if autonomy:
+            return 'autonomous activity cannot stop Lan\'s maintenance task', '被拒绝'
+        task = self._task(args, require_id=True)
         if task['stage'] in {'merged', 'done'}:
             return 'the task is already merged and cannot be stopped', '被拒绝'
+        self._stop_acceptance(task)
         _event(task, 'stopped', 'Lan stopped the task')
         task['next_step'] = 'Stopped by Lan; no more commands, pushes or merges.'
         self.store.save(task)
         return '任务已停止；保留 worktree 和已有提交，不再自动执行。', '成功'
 
     def cleanup(self, args, *, autonomy=False):
-        task = self._task(args)
+        if autonomy:
+            return 'autonomous activity cannot clean up a maintenance worktree', '被拒绝'
+        task = self._task(args, require_id=True)
+        if task['stage'] not in {'merged', 'stopped', 'done'}:
+            return 'cleanup is only allowed after merge or stop', '被拒绝'
+        self._stop_acceptance(task)
         removed = self._cleanup(task)
         task['next_step'] = 'cleanup finished' if removed else 'worktree kept because it has uncommitted changes'
         self.store.save(task)
         return ('已清理本次 worktree。' if removed else 'worktree 仍有未提交改动，未删除。'), '成功'
+
+    def _stop_acceptance(self, task):
+        acceptance = task['acceptance']
+        for pid in acceptance.get('pids') or []:
+            try:
+                if os.name == 'nt':
+                    subprocess.run(['taskkill', '/F', '/T', '/PID', str(pid)], capture_output=True,
+                                   timeout=15, **hidden_subprocess_kwargs(windows=True, module=subprocess))
+                else:
+                    os.kill(int(pid), signal.SIGTERM)
+            except (OSError, ValueError, subprocess.TimeoutExpired):
+                pass
+        acceptance['pids'] = []
+        config_dir = acceptance.get('config_dir')
+        if config_dir:
+            try:
+                (Path(config_dir) / '.env').unlink(missing_ok=True)
+            except OSError:
+                pass
 
     def _cleanup(self, task):
         worktree = Path(task['worktree'])
@@ -1001,11 +1055,12 @@ class MaintenanceManager:
             raise MaintenanceError('maintenance task does not exist')
         if task['stage'] in {'stopped', 'merged', 'done'}:
             raise MaintenanceError(f"maintenance task is {task['stage']} and cannot be edited")
-        worktree = Path(task['worktree'])
+        if self._expired(task):
+            raise MaintenanceError('maintenance task exceeded its time limit')
+        worktree = self._check_worktree_root(task['worktree'])
         if not worktree.is_dir():
             raise MaintenanceError('maintenance worktree is missing; use action=resume first')
-        branch = self._git('symbolic-ref', '--short', 'HEAD', cwd=worktree).strip()
-        if branch != task['branch']:
+        if self._git('symbolic-ref', '--short', 'HEAD', cwd=worktree).strip() != task['branch']:
             raise MaintenanceError('maintenance worktree branch does not match the task')
         return task
 
@@ -1057,7 +1112,7 @@ TOOL_SCHEMA = {'type': 'function', 'function': {
     'parameters': {'type': 'object', 'properties': {
         'action': {'type': 'string', 'enum': ['begin', 'status', 'resume', 'deliver', 'checks',
                                               'accept', 'merge', 'stop', 'cleanup']},
-        'task_id': {'type': 'string', 'description': 'Task ID returned by begin or status.'},
+        'task_id': {'type': 'string', 'description': 'Task ID returned by begin or status; required for task actions.'},
         'title': {'type': 'string', 'description': 'Short feature title for begin.'},
         'goal': {'type': 'string', 'description': 'What Lan can do after this change, for begin.'},
         'acceptance': {'type': 'string', 'description': '1-3 steps Lan will perform in the test instance, for begin.'},

@@ -163,9 +163,10 @@ class ChatAction:
 class Hub(ScreenPopMixin):
     """Message list shared by the chat loop (main thread) and HTTP handlers."""
 
-    def __init__(self, name, activity, memory_port=None, media_root=None, data_root=None):
+    def __init__(self, name, activity, memory_port=None, media_root=None, data_root=None, config_root=None):
         self.name = name
         self.life_path = (Path(data_root) if data_root else ROOT / 'data') / 'life-records.json'
+        self.config_root = Path(config_root) if config_root else ROOT
         self.chat = None
         self.activity = activity
         self.memory_url = f'http://127.0.0.1:{memory_port}/dashboard' if memory_port else None
@@ -662,7 +663,7 @@ class Hub(ScreenPopMixin):
 
     def _transcribe_voice_bytes(self, raw, mime, name):
         from dotenv import dotenv_values
-        key = (dotenv_values(Path(ROOT) / '.env', interpolate=False, encoding='utf-8-sig')
+        key = (dotenv_values(Path(self.config_root) / '.env', interpolate=False, encoding='utf-8-sig')
                .get('EMBED_API_KEY') or '').strip()
         if not key:
             return None, '语音识别密钥未配置。'
@@ -2756,11 +2757,14 @@ def serve_chat(chat, hub, channels=(), acceptance=False):
                 hub.output(f'{channel.label}能力通知暂时无法保存；聊天仍可使用，下次启动会重试。')
             chat.pending_capability_event = getattr(chat.tools, 'capability_event', None)
             chat.pending_capability_event_model = getattr(chat.tools, 'capability_event_model', None)
-    hub.autonomy = AutonomyController(chat, hub)
-    hub.glance = GlanceController(chat, hub)
-    hub.autonomy.glance = hub.glance
-    hub.codex_watch = CodexWatchController(chat, hub, glance=hub.glance)
-    hub.autonomy.codex_watch = hub.codex_watch
+    if acceptance:
+        hub.autonomy = hub.glance = hub.codex_watch = None
+    else:
+        hub.autonomy = AutonomyController(chat, hub)
+        hub.glance = GlanceController(chat, hub)
+        hub.autonomy.glance = hub.glance
+        hub.codex_watch = CodexWatchController(chat, hub, glance=hub.glance)
+        hub.autonomy.codex_watch = hub.codex_watch
     hub.capability_record = lambda: chat.capability_history_record
     hub.activity_transition = lambda enabled: chat.set_activity_enabled(hub.activity, enabled)
     chat.activity_enabled = hub.activity.enabled
@@ -2817,11 +2821,15 @@ def main(argv=None):
     parser.add_argument('--acceptance', action='store_true',
                         help=argparse.SUPPRESS)  # no autonomy, external channels or memory side effects
     args = parser.parse_args(argv)
+    if args.acceptance and (not args.config_root or not args.data_dir):
+        parser.error('--acceptance requires --config-root and --data-dir')
     hub = None
     token = None
     server = None
     config_root = Path(args.config_root).resolve() if args.config_root else ROOT
     data_dir = Path(args.data_dir).resolve() if args.data_dir else ROOT / 'data'
+    if args.acceptance and (config_root == ROOT or data_dir == (ROOT / 'data').resolve()):
+        parser.error('--acceptance must not use the formal config or data directory')
     endpoint_path = data_dir / 'web_service.json'
     error_path = data_dir / 'web_service_error.txt'
     try:
@@ -2839,6 +2847,10 @@ def main(argv=None):
             if cfg.glance:
                 budget.glance_daily = cfg.glance['daily_budget_cny']
             budget.daily, budget.monthly = cfg.models.limits()
+            if args.acceptance:
+                from decimal import Decimal
+                budget.daily = min(budget.daily, Decimal('2'))
+                budget.monthly = min(budget.monthly, Decimal('20'))
             client, model = make_model(config_root, cfg)
             background_client, background_model = make_model(config_root, cfg, provider=cfg.background_provider)
             voice = make_voice(config_root, cfg, store, budget)
@@ -2851,7 +2863,8 @@ def main(argv=None):
             from runtime_monitor import RuntimeMonitor
             runtime_monitor = RuntimeMonitor(store, cfg.id, activity)
             memory_port = (cfg.memory or {}).get('ombre_port') if (cfg.memory or {}).get('enabled') else None
-            hub = Hub(cfg.name, activity, memory_port, store.root / cfg.id / 'media', data_root=data_dir)
+            hub = Hub(cfg.name, activity, memory_port, store.root / cfg.id / 'media',
+                      data_root=data_dir, config_root=config_root)
             from stickers import StickerLibrary
             hub.sticker_library = StickerLibrary(store.root / 'stickers')
             token = secrets.token_urlsafe(24)

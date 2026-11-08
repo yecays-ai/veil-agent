@@ -1920,7 +1920,7 @@ class Chat:
         # repository/GitHub action re-checks the real host state before it runs.
         self.maintenance = None
         executor = getattr(cfg, 'executor', None) or {}
-        if executor.get('enabled') and self.tool_mode:
+        if executor.get('enabled') and self.tool_mode and cfg.id == 'peter':
             from maintenance import MaintenanceManager
             self.maintenance = MaintenanceManager(
                 store, cfg.id, repo_path=executor.get('maintenance_repo') or ROOT,

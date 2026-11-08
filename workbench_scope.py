@@ -24,7 +24,8 @@ SKIP_DIRS = {'node_modules', '.venv', 'venv', '__pycache__', '.git', '.ssh', 'se
 COPY_SKIP = {'.git', 'node_modules', '__pycache__', '.venv', 'venv', '.local-tmp'}
 GENERIC_NAMES = {'assess', 'review', 'reviews', 'project', 'projects', 'setup', 'build', 'tests', 'test',
                  'notes', 'note', 'reports', 'report', 'code', 'source', 'app', 'apps', 'docs', 'documents',
-                 'files', 'archive', 'backup', 'temp', 'tmp', 'work', 'workspace'}
+                 'files', 'archive', 'backup', 'temp', 'tmp', 'work', 'workspace', 'tools', 'utils', 'server',
+                 'config', 'output', 'scripts'}
 MAX_COPY_BYTES = 200 * 1024 * 1024
 MAX_COPY_FILES = 20000
 _GIT_ENV = {'GIT_TERMINAL_PROMPT': '0'}
@@ -107,6 +108,8 @@ def find_named_workspace_folders(name, root):
             any(char in name for char in '/\\:*?[]{}')):
         return []
     wanted = name.casefold()
+    if wanted in GENERIC_NAMES:
+        return []
     found, stack = [], [(Path(root), 0)]
     while stack:
         folder, depth = stack.pop()
@@ -142,7 +145,8 @@ def find_task_named_workspace_folders(task, root):
             if name in SKIP_DIRS or child.name.startswith('.') or not _ordinary_dir(child):
                 continue
             if (len(name) >= 5 and name not in GENERIC_NAMES and
-                    re.search(r'(?<![0-9a-z])' + re.escape(name) + r'(?![0-9a-z])', text)):
+                    re.search(r'(?<![0-9a-z\u4e00-\u9fff])' + re.escape(name) +
+                              r'(?![0-9a-z\u4e00-\u9fff])', text)):
                 found.append(child)
             elif depth < 3:
                 stack.append((child, depth + 1))

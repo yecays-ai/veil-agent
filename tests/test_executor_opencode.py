@@ -491,7 +491,8 @@ class RunTests(unittest.TestCase):
         self.assertEqual(result.state, '成功')
         self.assertIn('decision=user_denied', result.text)
         self.assertIn('workbench=success', result.text)
-        self.assertEqual(diagnostics[0]['command'], 'pip install requests --token example-secret')
+        self.assertEqual(diagnostics[0]['command'], 'pip install requests --token [redacted]')
+        self.assertNotIn('example-secret', json.dumps(diagnostics[0]))
         self.assertEqual(diagnostics[0]['reason'], 'user_denied')
         self.assertEqual(diagnostics[0]['workdir'], str(Path(diagnostics[0]['workdir'])))
 
@@ -500,7 +501,8 @@ class RunTests(unittest.TestCase):
         scope = ex.TaskScope(wd)
         ask = Mock(side_effect=AssertionError('must not ask'))
         for command in ('git commit -m x', 'git push origin topic',
-                        'bash -c "git push origin main"'):
+                        'bash -c "git push origin main"', 'git -c alias.p=push p origin main',
+                        'python -c "import os; os.system(\'git push origin main\')"'):
             self.assertEqual(ex.decide('bash', [command], {'command': command}, wd, autonomy=False,
                                        ask=ask, task_scope=scope, maintenance=True)[0], 'reject', command)
         self.assertEqual(ex.decide('bash', ['python3 ../test_elsewhere.py'],

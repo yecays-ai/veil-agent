@@ -10,9 +10,9 @@ Lan 只在 Peter 的聊天窗口提出一项真实的 VEIL 开发需求，Peter 
 - 新增 `maintenance.py`：持久化任务状态；从正式仓库的最新 `main` 建立独立 worktree；通过主机侧 `git` 和已认证的 `gh` 提交、推送、创建/更新 PR；读取真实 CI、审查和失败日志；启动独立测试实例；按“验收 + 必需检查 + 审查 + 合并授权 + PR 状态”合并；支持停止、恢复和不重复执行。
 - `workbench` 可带 `task_id` 在维护 worktree 中开发；维护任务中拒绝所有 git 写命令，OpenCode 容器只挂载 worktree 文件，`.git` 文件被屏蔽，长期 GitHub 凭据不进入容器。
 - `web_agent.py` 支持验收实例：开发 worktree 的代码、复制的角色配置和独立测试数据；测试实例不启动自主活动、外部频道、记忆或桌面维护，不写正式聊天、记忆和凭据。
-- 复用调查：`gh` CLI（官方，MIT，46.9k stars）负责远程 PR 和检查；Git 原生 worktree 负责隔离；`kdcokenny/opencode-worktree`（722 stars）和 `coderabbitai/git-worktree-runner`（1809 stars）只借“worktree 放在仓库外、自动清理”的思路，前者已停止维护且仅支持 OpenCode V1，后者是 Bash，均不引入依赖。OpenCode 权限仍由 VEIL 的审批桥裁决，不依赖项目内配置。
-- 自动检查：`test_executor_opencode` 67 项通过（2 项按环境跳过）；`test_maintenance` 9 项通过；`test_chat`、`test_web`、`test_tools` 等 228 项通过（1 项跳过）；工具分组/别名/长期任务/更新入口 55 项通过；Hub 与停止相关 21 项通过；桌面 Node 后端测试 4 项通过；Python 编译和 `node --check` 通过。
-- 代码合并、自动检查、Windows 实际验收分别记录；本工单尚未开 PR，Windows 验收未开始。
+- 复用 `gh` CLI 和 Git 原生 worktree，不引入额外的 worktree 依赖；OpenCode 权限仍由 VEIL 的审批桥裁决，不依赖项目内配置。
+- 自动检查：`test_executor_opencode` 67 项通过（2 项按环境跳过）；`test_maintenance` 15 项通过；`test_chat`、`test_web`、`test_tools` 等 228 项通过（1 项跳过）；工具分组/别名/长期任务/更新入口 55 项通过；Hub 与停止相关 21 项通过；桌面 Node 后端测试 5 项通过；Python 编译和 `node --check` 通过。
+- 代码合并、自动检查、Windows 实际验收分别记录；PR #314 的 CI/审查仍在处理，Windows 验收未开始。
 
 ## 验收步骤
 
