@@ -100,6 +100,7 @@ VOICE_TRANSPORT_ERRORS = {
     'transport': '语音识别传输失败，请查看 Agent 日志中的异常类型。',
 }
 logger = logging.getLogger(__name__)
+APPROVAL_WAIT_SECONDS = 600
 
 
 def voice_transport_category(exc):
@@ -1455,6 +1456,7 @@ class Hub(ScreenPopMixin):
         for bridge in self.away:
             # Ticket 114: a task Lan gave on QQ can be approved from QQ too.
             bridge.approval_asked(prompt)
+        deadline = time.monotonic() + APPROVAL_WAIT_SECONDS
         while True:
             try:
                 answer = self.answers.get(timeout=0.5)
@@ -1462,11 +1464,16 @@ class Hub(ScreenPopMixin):
                 if self.stopping or self.stopped:
                     with self.cond:
                         self.pending = None
-                    return 'n'
+                    return 'cancel'
+                if time.monotonic() >= deadline:
+                    with self.cond:
+                        self.pending = None
+                        self.push('notice', '审批等待超时，操作没有执行。')
+                    return 'timeout'
                 continue
             with self.cond:
                 self.pending = None
-                self.push('notice', '已同意。' if answer == 'y' else '已拒绝。')
+                self.push('notice', '已同意。' if answer == 'y' else '已取消。' if answer == 'cancel' else '已拒绝。')
             return answer
 
     def answer(self, approval_id, answer):
@@ -1485,7 +1492,7 @@ class Hub(ScreenPopMixin):
                 return False
             self.chat.user_stop.set()
             if self.pending is not None:
-                self.answers.put('n')  # an open approval card must not keep the stopped turn waiting
+                self.answers.put('cancel')  # stopping is distinct from Lan clicking Reject
             self.push('notice', '已叫停，等这一步说完就停。')
             return True
 
@@ -2891,6 +2898,10 @@ def main(argv=None):
         if hub:
             hub.stop()
         return 0
+    except Exception as exc:
+        message = f'后台异常 {type(exc).__name__}: {str(exc)[:300]}'
+        logger.exception('VEIL desktop service stopped unexpectedly')
+        save_startup_error(error_path, message)
     finally:
         if server:
             if hub:

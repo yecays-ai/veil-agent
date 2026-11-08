@@ -164,6 +164,13 @@ test('activity polling preserves expanded rows and restored detached windows rem
   assert.match(main, /async function reconnectChat\(event\)[\s\S]*?fromChat\(event\) \|\| detachedViewFromEvent\(event\) === 'chat'/);
 });
 
+test('chat polling waits for repeated failures before showing a real disconnect', async () => {
+  const js = await read('chat.js');
+  assert.match(js, /pollFailures\s*=\s*0/);
+  assert.match(js, /pollFailures\s*>=\s*3/);
+  assert.match(js, /console\.warn\('event poll failed'/);
+});
+
 test('screen approval remains a compact fixed-size window with scrollable long text', async () => {
   const [main, css] = await Promise.all([read('main.cjs'), read('screen-pop.css')]);
   assert.match(main, /const width = Math\.min\(520, area\.width\), height = Math\.min\(270, area\.height\)/);

@@ -16,6 +16,7 @@ import subprocess
 import time
 import uuid
 from pathlib import Path
+from windows_process import hidden_subprocess_kwargs
 
 MARKERS = ('.git', 'pyproject.toml', 'package.json', 'requirements.txt', 'Cargo.toml', 'go.mod', 'pom.xml')
 SKIP_DIRS = {'node_modules', '.venv', 'venv', '__pycache__', '.git', '.ssh', 'secrets', 'appdata', '$recycle.bin',
@@ -24,6 +25,7 @@ COPY_SKIP = {'.git', 'node_modules', '__pycache__', '.venv', 'venv', '.local-tmp
 MAX_COPY_BYTES = 200 * 1024 * 1024
 MAX_COPY_FILES = 20000
 _GIT_ENV = {'GIT_TERMINAL_PROMPT': '0'}
+_WINDOWS = os.name == 'nt'
 
 
 def _tokens(text):
@@ -87,7 +89,8 @@ def choose_project(hint, roots):
 
 def _git(root, *args):
     return subprocess.run(['git', '-C', str(root), *args], capture_output=True, encoding='utf-8', errors='replace', timeout=60,
-                          env={**os.environ, **_GIT_ENV})
+                          env={**os.environ, **_GIT_ENV},
+                          **hidden_subprocess_kwargs(windows=_WINDOWS, module=subprocess))
 
 
 def _copy_tree(source, target, files=None):

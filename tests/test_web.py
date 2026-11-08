@@ -1237,6 +1237,23 @@ output_cny_per_million = "8"
         thread.join(5)
         self.assertEqual(result['a'], 'n')
 
+    def test_stopping_a_turn_marks_an_open_approval_as_cancelled(self):
+        result = {}
+        self.hub.busy = True
+        self.hub.chat = SimpleNamespace(user_stop=threading.Event())
+        thread = threading.Thread(target=lambda: result.update(a=self.hub.approval('approve me')))
+        thread.start()
+        self.assertTrue(self.wait(lambda: self.hub.pending is not None))
+        self.assertTrue(self.hub.stop_turn())
+        thread.join(5)
+        self.assertEqual(result['a'], 'cancel')
+
+    def test_open_approval_times_out_with_a_distinct_result(self):
+        with patch('web_agent.APPROVAL_WAIT_SECONDS', 0):
+            self.assertEqual(self.hub.approval('approve me'), 'timeout')
+        self.assertIsNone(self.hub.pending)
+        self.assertTrue(any(e['kind'] == 'notice' and '超时' in e['text'] for e in self.hub.events))
+
     def test_history_is_shown_on_open(self):
         self.store.append('test/chat.jsonl', {'role': 'user', 'content': 'earlier'})
         self.store.append('test/chat.jsonl', {'role': 'assistant', 'content': 'earlier reply'})

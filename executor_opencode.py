@@ -26,6 +26,7 @@ import urllib.request
 from decimal import Decimal
 from pathlib import Path
 from typing import NamedTuple
+from windows_process import hidden_subprocess_kwargs
 
 TOOL_NAME = 'workbench'
 MILLION = Decimal(1_000_000)
@@ -156,12 +157,17 @@ def _complex_bash_request(patterns, metadata):
         commands = [shlex.split(pattern, posix=True) for pattern in patterns if isinstance(pattern, str)]
     except ValueError:
         return True
-    if len(commands) != len(patterns) or len(commands) != 1 or not commands[0]:
+    if len(commands) != len(patterns) or not commands or any(not item for item in commands):
         return True
     if '\n' in command or '\r' in command or '`' in command or '$(' in command:
         return True
-    if any(re.fullmatch(r'[;&|<>()]+', token) for token in shell_tokens):
+    if any(re.fullmatch(r'[<>()]+', token) for token in shell_tokens):
         return True
+    operators = [token for token in shell_tokens if re.fullmatch(r'[;&|]+', token)]
+    if operators and len(commands) != len(operators) + 1:
+        return True
+    if len(commands) > 1:
+        return not all(_safe_project_command(item) for item in commands)
     command_tokens = commands[0]
     while command_tokens and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', command_tokens[0]):
         command_tokens = command_tokens[1:]
@@ -175,13 +181,55 @@ def _complex_bash_request(patterns, metadata):
     if command_name in {'python', 'python3'} and command_tokens[1:3] in (
             ['-m', 'unittest'], ['-m', 'pytest']):
         return False
+    if _safe_project_command(command_tokens):
+        return False
     if command_name in {'python', 'python3', 'node', 'nodejs', 'deno', 'bun', 'ruby', 'perl', 'awk',
                         'gawk', 'mawk', 'php', 'osascript'} or re.fullmatch(r'python\d+(?:\.\d+)*', command_name):
         return True
     return False
 
 
-def decide(permission, patterns, metadata, workdir, *, autonomy, ask):
+def _safe_project_command(tokens):
+    """Commands whose requested effect is inspection or running an explicitly named test file."""
+    while tokens and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', tokens[0]):
+        tokens = tokens[1:]
+    if not tokens:
+        return False
+    command = _command_name(tokens[0])
+    if command == 'git':
+        return _git_subcommand(tokens) in {'status', 'branch', 'diff', 'log', 'show', 'rev-parse', 'ls-files'}
+    if command in {'ls', 'dir', 'pwd', 'cat', 'type', 'head', 'tail', 'wc', 'stat', 'file', 'find', 'grep', 'rg'}:
+        return True
+    if command in {'python', 'python3'} or re.fullmatch(r'python\d+(?:\.\d+)*', command):
+        if len(tokens) < 2 or tokens[1].startswith('-'):
+            return False
+        name = posixpath.basename(tokens[1].replace('\\', '/')).casefold()
+        return name.startswith('test_') and name.endswith('.py') or name.endswith('_test.py')
+    return False
+
+
+def _approval_key(permission, patterns, metadata):
+    command = metadata.get('command') if isinstance(metadata, dict) else None
+    return permission, tuple(str(item) for item in patterns), command if isinstance(command, str) else ''
+
+
+def _ask_lan(prompt, operation, key, ask, grants, approvals):
+    if grants is not None and key in grants:
+        if approvals is not None:
+            approvals.append({'operation': operation, 'waiting': False, 'decision': 'approved_reused'})
+        return 'once', 'approved_reused'
+    answer = ask(prompt)
+    normalized = answer.strip().casefold() if isinstance(answer, str) else ''
+    decision = ('approved' if normalized == 'y' else 'cancelled' if normalized in {'cancel', 'cancelled'} else
+                'timed_out' if normalized in {'timeout', 'timed_out'} else 'user_denied')
+    if decision == 'approved' and grants is not None:
+        grants.add(key)
+    if approvals is not None:
+        approvals.append({'operation': operation, 'waiting': True, 'decision': decision})
+    return ('once', decision) if decision == 'approved' else ('reject', decision)
+
+
+def decide(permission, patterns, metadata, workdir, *, autonomy, ask, grants=None, approvals=None):
     """VEIL's own answer to an OpenCode permission request: (reply, reason). `ask` is Lan's approval card."""
     text = ' '.join(str(p) for p in patterns) + ' ' + json.dumps(metadata or {}, ensure_ascii=False)
     if DANGEROUS.search(text):
@@ -190,9 +238,8 @@ def decide(permission, patterns, metadata, workdir, *, autonomy, ask):
         if autonomy:
             return 'reject', 'outside the workbench; Lan is not asked during autonomous activity'
         shown = ', '.join(str(p) for p in patterns)[:300]
-        answer = ask(f'Peter 的工作台想访问工作台文件夹之外的位置：{shown}。同意这一次吗？y/N ')
-        return ('once', 'Lan approved') if isinstance(answer, str) and answer.strip().casefold() == 'y' \
-            else ('reject', 'Lan did not approve')
+        return _ask_lan(f'Peter 的工作台想访问工作台文件夹之外的位置：{shown}。同意这一次吗？y/N ',
+                        shown, _approval_key(permission, patterns, metadata), ask, grants, approvals)
     work = posixpath.normpath(str(workdir).replace('\\', '/')).lower()
     for pattern in patterns:
         p = str(pattern).replace('\\', '/')
@@ -240,9 +287,8 @@ def decide(permission, patterns, metadata, workdir, *, autonomy, ask):
                 prompt = f'Peter 的工作台想执行：{shown}。这会联网、安装、发布或批量删除。同意这一次吗？y/N '
             else:
                 prompt = f'Peter 的工作台想执行一条复合或无法确认安全的命令：{shown}。只执行这一次吗？y/N '
-            answer = ask(prompt)
-            return ('once', 'Lan approved') if isinstance(answer, str) and answer.strip().casefold() == 'y' \
-                else ('reject', 'Lan did not approve')
+            return _ask_lan(prompt, shown, _approval_key(permission, patterns, metadata),
+                            ask, grants, approvals)
     if permission in ('bash', 'edit', 'write', 'webfetch', 'task', 'skill', 'todowrite', 'read', 'glob', 'grep'):
         return 'once', 'inside the workbench'
     # Tools from other MCP servers (VEIL's own tools included) are never approved here: VEIL runs those itself.
@@ -321,7 +367,7 @@ def kill_tree(proc):
     if _WINDOWS:
         if proc.poll() is None:
             subprocess.run(['taskkill', '/F', '/T', '/PID', str(proc.pid)], capture_output=True,
-                           **({'creationflags': getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)} if _WINDOWS else {}))
+                           **hidden_subprocess_kwargs(windows=_WINDOWS, module=subprocess))
     else:
         try:
             os.killpg(proc.pid, signal.SIGKILL)
@@ -527,7 +573,7 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
     try:
         proc = popen(command if container else [command, 'serve', '--port', str(port)], cwd=str(workdir), env=env,
                      shell=_WINDOWS and not container, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                     **({'creationflags': getattr(subprocess, 'CREATE_NO_WINDOW', 0)} if _WINDOWS else {}),
+                     **hidden_subprocess_kwargs(windows=_WINDOWS, module=subprocess),
                      **({} if _WINDOWS else {'start_new_session': True}))
         api = (api_factory or Api)(f'http://127.0.0.1:{port}', password)
         started = clock()
@@ -543,7 +589,8 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
         text = (CONTAINER_NOTE + task) if container else task
         api.call('POST', f'/session/{session}/prompt_async', {
             'parts': [{'type': 'text', 'text': text}], 'model': {'providerID': 'relay', 'modelID': provider['model']}})
-        started, idle, answered = clock(), 0, []
+        started, idle, answered, grants, approvals = clock(), 0, [], set(), []
+        approval_stop = ''
         while True:
             sleep(1)
             if stopped():
@@ -553,9 +600,14 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
                     if request.get('sessionID') != session or request.get('id') in answered:
                         continue
                     answered.append(request.get('id'))
-                    reply, _why = decide(request.get('permission', ''), request.get('patterns', []),
-                                         request.get('metadata'), workdir, autonomy=autonomy, ask=ask)
+                    reply, why = decide(request.get('permission', ''), request.get('patterns', []),
+                                        request.get('metadata'), workdir, autonomy=autonomy, ask=ask,
+                                        grants=grants, approvals=approvals)
                     api.call('POST', f"/permission/{request['id']}/reply", {'reply': reply})
+                    if why in {'user_denied', 'cancelled', 'timed_out'}:
+                        approval_stop = why
+                        stop = 'approval ' + why
+                        break
                 messages = api.call('GET', f'/session/{session}/message') or []
             except Exception:
                 if proc.poll() is not None:
@@ -596,7 +648,8 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
         kill_tree(proc)
         try:
             if container:
-                subprocess.run(['docker', 'kill', name], capture_output=True, timeout=30)
+                subprocess.run(['docker', 'kill', name], capture_output=True, timeout=30,
+                               **hidden_subprocess_kwargs(windows=_WINDOWS, module=subprocess))
         except Exception:
             cleanup_warning = f' [warning: could not confirm container {name} stopped; check Docker]'
         try:
@@ -609,21 +662,33 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
             pass
     steps, calls, _repeat, text = summarize(messages)
     note = f'[workbench: {steps} steps, {calls} tool calls, about ¥{cost.quantize(Decimal("0.0001"))}, folder {workdir}]' + cleanup_warning
+    approval_note = '\n'.join(
+        f"[approval: operation={json.dumps(item['operation'], ensure_ascii=False)}, waiting={str(item['waiting']).lower()}, decision={item['decision']}]"
+        for item in approvals)
+    if approval_stop:
+        return ExecutorResult(f'{approval_note}\n[workbench=stopped; reason={approval_stop}]\n{note}',
+                              '被拒绝', cost, steps)
     if stop:
         partial = next(('\n'.join(p.get('text', '') for p in m.get('parts', []) if p.get('type') == 'text').strip()
                         for m in reversed(messages) if m.get('info', {}).get('role') == 'assistant' or
                         m.get('info', {}).get('type') == 'assistant'), '')
-        return ExecutorResult(f'The workbench was stopped: {stop}. {diagnose(messages)}\nPartial report:\n{partial[:RESULT_CHARS]}\n{note}',
+        status = (approval_note + '\n' if approval_note else '') + '[workbench=stopped]\n'
+        return ExecutorResult(status + f'The workbench was stopped: {stop}. {diagnose(messages)}\nPartial report:\n{partial[:RESULT_CHARS]}\n{note}',
                               '出错', cost, steps)
     if not calls:
         why = diagnose(messages)
-        return ExecutorResult(f'The workbench ended without executing any tools. Partial report:\n{text[:RESULT_CHARS]}\n'
+        status = (approval_note + '\n' if approval_note else '') + '[workbench=failed]\n'
+        return ExecutorResult(status + f'The workbench ended without executing any tools. Partial report:\n{text[:RESULT_CHARS]}\n'
                               f'{why}\n{note}', '出错', cost, steps)
     if not text:
         why = diagnose(messages)
-        return ExecutorResult('The workbench finished without a report.' + (f' ({why})' if why else '') + '\n' + note,
+        status = (approval_note + '\n' if approval_note else '') + '[workbench=failed]\n'
+        return ExecutorResult(status + 'The workbench finished without a report.' + (f' ({why})' if why else '') + '\n' + note,
                               '出错', cost, steps)
     if any(p.get('type') == 'tool' and p.get('state', {}).get('status') == 'error'
            for m in messages for p in m.get('parts', [])):
         text = '[workbench tool diagnostics: ' + diagnose(messages) + ']\n' + text
-    return ExecutorResult(text[:RESULT_CHARS] + '\n' + note, '成功', cost, steps)
+    result = text[:RESULT_CHARS] + '\n' + note
+    if approval_note:
+        result = approval_note + '\n[workbench=success]\n' + result
+    return ExecutorResult(result, '成功', cost, steps)
