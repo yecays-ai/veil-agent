@@ -101,6 +101,18 @@ class SnapshotGuardTests(unittest.TestCase):
 
 
 class UsageOverBoundTests(unittest.TestCase):
+    def test_embedding_actual_usage_cannot_settle_above_reservation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            budget = Budget(Store(Path(directory)))
+            reservation = budget.estimate('fixture', 'embedding', 100, Decimal(2))
+            from veil_agent import UserError
+            with self.assertRaises(UserError):
+                budget.settle_estimate(reservation, accounting='embedding-usage',
+                                       settled_amount=Decimal('0.001'), usage_tokens=1000)
+            settlements = [row for row in budget.store.read('costs.jsonl')
+                           if row.get('type') == 'settle']
+            self.assertEqual(settlements, [])
+
     def test_provider_usage_above_bounds_is_settled_not_fatal(self):
         with tempfile.TemporaryDirectory() as directory:
             budget = Budget(Store(Path(directory)))

@@ -1448,8 +1448,9 @@ class Budget:
         if any(row.get('type') == 'settle' and row.get('id') == request_id for row in rows):
             return False
         settled = Decimal(reserved_amount if settled_amount is None else settled_amount)
-        if (not settled.is_finite() or settled < 0 or
-                (settled > Decimal(reserved_amount) and usage_tokens is None)):
+        # The reservation is the hard cap: a settlement above it would release a negative amount
+        # and let a recorded usage report bypass the daily and monthly limits.
+        if not settled.is_finite() or settled < 0 or settled > Decimal(reserved_amount):
             raise UserError('预算结算金额超过预留或无效，已停止；请保留 data 文件夹。')
         if usage_tokens is not None and (type(usage_tokens) is not int or usage_tokens < 0):
             raise UserError('Embedding 接口用量无效；本次保留预算预留。')

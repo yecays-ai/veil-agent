@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 from veil_agent import Budget, Character, Chat, Store, history_keep, parse_cache_usage
@@ -117,6 +118,10 @@ class CacheOrderTests(unittest.TestCase):
         gemini = parse_cache_usage({}, 100, {'usageMetadata': {'cachedContentTokenCount': 40}})
         self.assertEqual((gemini.tokens, gemini.status, gemini.field),
                          (40, 'reported', 'usageMetadata.cachedContentTokenCount'))
+        gemini_sdk = parse_cache_usage({}, 100, SimpleNamespace(
+            usage_metadata=SimpleNamespace(cached_content_token_count=40)))
+        self.assertEqual((gemini_sdk.tokens, gemini_sdk.status, gemini_sdk.field),
+                         (40, 'reported', 'usage_metadata.cached_content_token_count'))
         conflicted = parse_cache_usage(
             {'prompt_cache_hit_tokens': 40, 'cache_read_input_tokens': 30}, 100)
         request_id, _ = self.budget.reserve(self.cfg)

@@ -84,7 +84,9 @@ class QueryEmbedder:
         response = self._client.embeddings.create(model=self.model, input=text[:4000])
         usage = getattr(response, 'usage', None)
         prompt_tokens = getattr(usage, 'prompt_tokens', None)
-        if type(prompt_tokens) is int and prompt_tokens >= 0:
+        # This request always sends non-empty text, so zero tokens is an impossible report.
+        # Treating it as real usage would release the whole reservation for a paid call.
+        if type(prompt_tokens) is int and prompt_tokens > 0:
             self.usage_tokens = prompt_tokens
         vector = list(response.data[0].embedding)
         if not vector:

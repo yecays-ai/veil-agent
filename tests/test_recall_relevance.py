@@ -100,6 +100,28 @@ class AssistedRecallTests(unittest.TestCase):
         self.assertEqual(settlement['usage_tokens'], 10)
         self.assertEqual(settlement['amount'], str(Decimal(10) * Decimal(2) / Decimal(1_000_000)))
 
+    def test_zero_or_overestimate_embedding_usage_keeps_reservation(self):
+        memory_text = context_text(RECENT, 'try again')
+        estimated_tokens = max(512, len(memory_text.encode('utf-8')))
+        expected_amount = Decimal(estimated_tokens) * Decimal(2) / Decimal(1_000_000)
+        for reported_tokens in (0, estimated_tokens + 1):
+            with self.subTest(reported_tokens=reported_tokens):
+                memory = self.memory(self.enabled())
+                memory.cfg.memory['input_cny_per_million'] = '2'
+                embedder = FakeEmbedder()
+                embedder.usage_tokens = reported_tokens
+                memory._embedder = embedder
+
+                self.text(memory, 'try again')
+
+                settlement = next(row for row in reversed(self.store.read('costs.jsonl'))
+                                  if row.get('type') == 'settle'
+                                  and row.get('accounting', '').startswith('embedding-'))
+                self.assertEqual(settlement['accounting'], 'embedding-estimate')
+                self.assertEqual(Decimal(settlement['amount']), expected_amount)
+                self.assertEqual(Decimal(settlement['released_amount']), 0)
+                self.assertNotIn('usage_tokens', settlement)
+
     def test_nothing_close_means_no_long_term_memory_at_all(self):
         memory = self.memory(self.enabled(min_similarity=0.99))
         memory._embedder = FakeEmbedder((0.6, 0.6))
@@ -168,6 +190,19 @@ class HelperTests(unittest.TestCase):
             embedder = QueryEmbedder('https://example.invalid/v1', 'fake-embedding', 'fake-key')
             self.assertEqual(embedder.embed('fictional query'), [1.0, 0.0])
         self.assertEqual(embedder.usage_tokens, 7)
+
+    def test_query_embedder_rejects_zero_reported_usage(self):
+        from types import SimpleNamespace
+        from recall_relevance import QueryEmbedder
+
+        client = Mock()
+        client.embeddings.create.return_value = SimpleNamespace(
+            data=[SimpleNamespace(embedding=[1.0, 0.0])],
+            usage=SimpleNamespace(prompt_tokens=0))
+        with unittest.mock.patch('openai.OpenAI', return_value=client):
+            embedder = QueryEmbedder('https://example.invalid/v1', 'fake-embedding', 'fake-key')
+            self.assertEqual(embedder.embed('fictional query'), [1.0, 0.0])
+        self.assertIsNone(embedder.usage_tokens)
 
     def test_vectors_and_cosine(self):
         self.assertEqual(decode_vector(array.array('f', [1.0, 2.0]).tobytes()), [1.0, 2.0])

@@ -1031,10 +1031,14 @@ class Memory:
         try:
             query_vector = embedder.embed(text)
             reported_tokens = getattr(embedder, 'usage_tokens', None)
-            if type(reported_tokens) is int and reported_tokens >= 0:
-                usage_tokens = reported_tokens
-                settled_amount = Decimal(reported_tokens) * rate / Decimal(1_000_000)
-                accounting = 'embedding-usage'
+            if type(reported_tokens) is int and reported_tokens > 0:
+                reported_amount = Decimal(reported_tokens) * rate / Decimal(1_000_000)
+                # The reservation is the hard cap. A zero or above-cap report cannot be settled as
+                # the real cost: keep the estimate, which charges the reserved upper bound.
+                if reported_amount <= reservation[1]:
+                    usage_tokens = reported_tokens
+                    settled_amount = reported_amount
+                    accounting = 'embedding-usage'
         finally:
             self.budget.settle_estimate(reservation, accounting=accounting,
                                         settled_amount=settled_amount, usage_tokens=usage_tokens)
