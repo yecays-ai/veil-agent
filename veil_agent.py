@@ -1,6 +1,7 @@
 """Local terminal chat. Private state stays beside this file."""
 import argparse
 import base64
+import hashlib
 import json
 import math
 import os
@@ -32,9 +33,15 @@ from delegate_agent import TOOL_SCHEMA as DELEGATE_TOOL
 
 ROOT = Path(__file__).resolve().parent
 MILLION = Decimal(1_000_000)
+MIN_TOKEN_CALIBRATION_BYTES = 16_384
 PHOTO_PLACEHOLDER = '[Lan sent a photo]'
 PHOTO_MIME_TYPES = {'image/png', 'image/jpeg', 'image/gif', 'image/webp'}
 MAX_PHOTO_BYTES = 5 * 1024 * 1024
+
+
+def token_calibration_key(provider_name, provider):
+    identity = f"{provider_name}\0{provider.get('base_url', '')}"
+    return hashlib.sha256(identity.encode('utf-8')).hexdigest()
 
 RAW_DSML_TOOL_CALL = re.compile(
     r'<\s*[|｜]+\s*DSML\s*[|｜]+\s*(?:tool_calls?|function_calls?|invoke|calls)\b', re.IGNORECASE)
@@ -1357,7 +1364,9 @@ class Budget:
         request_id = uuid.uuid4().hex
         event = {'type': 'reserve', 'id': request_id,
                           'period': self.clock(), 'amount': str(amount),
-                          'character': cfg.id, 'model': p['model'], 'category': category}
+                          'character': cfg.id, 'model': p['model'],
+                          'provider_key': token_calibration_key(getattr(cfg, 'provider_name', ''), p),
+                          'category': category}
         if accounting:
             event['accounting'] = accounting
         self.store.append('costs.jsonl', event)
@@ -1521,15 +1530,18 @@ class Budget:
                     and row.get('accounting') in accountings and row.get('id') not in settled])
 
     @synchronized
-    def input_token_ratio(self, character, model):
+    def input_token_ratio(self, cfg):
         rows = self.store.read_incremental('costs.jsonl')
         reservations = {row.get('id'): row for row in rows if row.get('type') == 'reserve'}
+        provider_key = token_calibration_key(getattr(cfg, 'provider_name', ''), cfg.provider)
         highest_ratio = None
         for row in reversed(rows):
-            if row.get('type') != 'settle' or type(row.get('input_bytes')) is not int or row['input_bytes'] <= 0:
+            if (row.get('type') != 'settle' or type(row.get('input_bytes')) is not int
+                    or row['input_bytes'] < MIN_TOKEN_CALIBRATION_BYTES):
                 continue
             reservation = reservations.get(row.get('id'), {})
-            if (reservation.get('character') != character or reservation.get('model') != model
+            if (reservation.get('character') != cfg.id or reservation.get('model') != cfg.provider['model']
+                    or reservation.get('provider_key') != provider_key
                     or type(row.get('prompt_tokens')) is not int or row['prompt_tokens'] <= 0):
                 continue
             ratio = row['prompt_tokens'] / row['input_bytes']
@@ -1757,7 +1769,29 @@ def estimate_request_tokens(messages, tools=None, calibration=0.4):
 def conservative_token_ratio(observed_ratio):
     if not isinstance(observed_ratio, (int, float)) or not math.isfinite(observed_ratio) or observed_ratio <= 0:
         return 0.4
-    return min(1.0, max(0.4, observed_ratio * 1.2))
+    return min(1.0, max(0.15, observed_ratio * 1.2))
+
+
+def join_reply_continuation(previous, continuation):
+    if not previous or not continuation:
+        return previous + continuation
+    prefix = [0] * len(continuation)
+    matched = 0
+    for index in range(1, len(continuation)):
+        while matched and continuation[index] != continuation[matched]:
+            matched = prefix[matched - 1]
+        if continuation[index] == continuation[matched]:
+            matched += 1
+        prefix[index] = matched
+    matched = 0
+    for index, char in enumerate(previous[-len(continuation):]):
+        while matched and char != continuation[matched]:
+            matched = prefix[matched - 1]
+        if char == continuation[matched]:
+            matched += 1
+            if matched == len(continuation) and index < min(len(previous), len(continuation)) - 1:
+                matched = prefix[matched - 1]
+    return previous + continuation[matched:]
 
 
 def collapse_latest_photo(messages):
@@ -3191,6 +3225,8 @@ class Chat:
         # Ticket 121: one line per request with sizes, ids and keywords only, never the text itself.
         row = {
             'kind': request_kind(self, text, autonomy), 'request_id': request_id,
+            'model': self.cfg.provider.get('model'),
+            'model_input_limit': self.cfg.provider.get('max_input_tokens'),
             'persona_chars': len(self.cfg.persona), 'about_lan_chars': len(profile_context or ''),
             'stable_chars': len(stable), 'history_rounds': sum(m.get('role') == 'user' for m in history),
             'history_chars': context_chars(history), 'memory_ids': list(self.turn_memory_refs),
@@ -3213,12 +3249,24 @@ class Chat:
                 else '超时' if 'Timeout' in type(exc).__name__
                 else '连不上接口' if 'Connection' in type(exc).__name__ else type(exc).__name__)
         detail = str(getattr(exc, 'message', None) or exc)
+        lowered = (str(getattr(exc, 'code', '') or '') + ' ' + detail).casefold()
+        input_limit = any(marker in lowered for marker in (
+            'context_length_exceeded', 'maximum context length', 'context window exceeded',
+            'prompt is too long', 'input token count exceeds', 'input tokens exceed',
+            '上下文长度超过', '超过最大上下文', '输入 token 超过'))
+        if input_limit:
+            kind = '模型输入上下文上限'
         detail = re.sub(r'(sk-|Bearer\s+)[A-Za-z0-9._-]+', r'\1***', detail)[:2000]
         try:
             self.store.append(f'{self.cfg.id}/provider-errors.jsonl', {
                 'time': now(), 'model': self.cfg.provider.get('model'),
                 'base_url': self.cfg.provider.get('base_url'), 'status': status,
+                'input_context_limit': input_limit,
                 'type': type(exc).__name__, 'detail': detail})
+            if input_limit:
+                self.store.append(f'{self.cfg.id}/memory/_agent/diagnostics.jsonl', {
+                    'time': now(), 'code': 'provider_input_context_limit',
+                    'model': self.cfg.provider.get('model'), 'status': status})
         except (OSError, UserError):
             pass
         return RequestFailed(f'请求失败，未自动重试；输入已保存，本次保留预留费用。（{kind}，'
@@ -3443,7 +3491,7 @@ class Chat:
         runtime_required.append({'role': 'system', 'content': changing})
 
         user = {'role': 'user', 'content': self._photo_content(text, media)}
-        observed_ratio = self.budget.input_token_ratio(self.cfg.id, self.cfg.provider['model'])
+        observed_ratio = self.budget.input_token_ratio(self.cfg)
         calibration = conservative_token_ratio(observed_ratio)
         limit = self.cfg.provider['max_input_tokens']
 
@@ -4050,6 +4098,7 @@ class Chat:
         autonomy_tool_steps = 0
         self._tick_expanded_groups(autonomy)
         output_recovered = False
+        continuation_prefix = ''
         empty_retries = 0
         fake_sticker_retries = 0
         mixed_sent_messages = []
@@ -4079,30 +4128,64 @@ class Chat:
         # Reuse provider-reported token usage from this model. A safety margin is
         # applied to new estimates; the exact measured ratio is used when removing
         # bytes already included in a previous request.
-        observed_ratio = self.budget.input_token_ratio(self.cfg.id, self.cfg.provider['model'])
+        observed_ratio = self.budget.input_token_ratio(self.cfg)
         measured_ratio = observed_ratio or 0.4
+        calibrated = observed_ratio is not None
         calibration = conservative_token_ratio(observed_ratio)
         measured_tokens = None
         measured_bytes = 0
+        measured_message_bytes = 0
+        measured_schema_bytes = 0
+
+        def request_message_bytes():
+            # Count each message once, including tool-call arguments and reasoning.
+            return sum(message_request_bytes(message)
+                       for message in [*loop_messages, *pending_image_messages])
+
+        def request_schema_bytes(offered):
+            return len(json.dumps(offered or [], ensure_ascii=False).encode('utf-8')) + 256
 
         def request_bytes(offered):
-            # Count each message once, including tool-call arguments and reasoning.
-            return request_byte_size([*loop_messages, *pending_image_messages], offered)
+            return request_message_bytes() + request_schema_bytes(offered)
 
         def request_size(offered):
-            size = request_bytes(offered)
+            message_bytes = request_message_bytes()
+            schema_bytes = request_schema_bytes(offered)
             if measured_tokens is None:
                 return estimate_request_tokens([*loop_messages, *pending_image_messages],
                                                offered, calibration)
-            # Preserve the measured baseline; new bytes use a safety margin and
-            # removed history uses the measured ratio.
-            delta = size - measured_bytes
-            # Newly returned tool records/results can differ from the plain-text
-            # prompt used for calibration. Keep their original conservative floor
-            # so a short or atypical first request cannot make oversized records
-            # look safe under the provider input limit.
-            rate = max(calibration, 0.5) if delta >= 0 else measured_ratio
-            return math.ceil(max(0, measured_tokens + delta * rate) * 1.05)
+            # Calibrate schemas against provider usage; keep a conservative floor
+            # for denser new message/tool-result bytes. Removals use measured usage.
+            message_delta = message_bytes - measured_message_bytes
+            schema_delta = schema_bytes - measured_schema_bytes
+            message_rate = max(calibration, 0.5) if calibrated else 0.5
+            schema_rate = calibration if calibrated else 0.5
+            estimate = (measured_tokens
+                        + max(0, message_delta) * message_rate
+                        + max(0, schema_delta) * schema_rate
+                        + min(0, message_delta) * measured_ratio
+                        + min(0, schema_delta) * measured_ratio)
+            return math.ceil(max(0, estimate) * 1.05)
+
+        def log_context_estimate(offered, step, estimated_tokens, *, actual_tokens=None,
+                                 actual_bytes=None, last_actual_tokens=None,
+                                 last_actual_bytes=None, local_limit_trigger=None):
+            row = {
+                'kind': 'tool_step_context', 'request_id': request_id, 'step': step,
+                'model': self.cfg.provider['model'],
+                'model_input_limit': self.cfg.provider['max_input_tokens'],
+                'estimated_input_tokens': estimated_tokens,
+                'estimated_input_bytes': request_bytes(offered),
+                'actual_input_tokens': actual_tokens, 'actual_input_bytes': actual_bytes,
+                'last_actual_input_tokens': last_actual_tokens,
+                'last_actual_input_bytes': last_actual_bytes,
+                'tool_schema_bytes': len(json.dumps(offered or [], ensure_ascii=False).encode('utf-8')),
+                'calibration_ratio': calibration, 'local_limit_trigger': local_limit_trigger,
+            }
+            try:
+                append_context_log(self.store, self.cfg.id, row)
+            except (OSError, UserError):
+                pass
 
         def fit_history(offered):
             nonlocal history_count
@@ -4360,31 +4443,64 @@ class Chat:
                         self.cfg, max_output_tokens=self.cfg.tools.get('max_output_tokens', self.cfg.max_output_tokens))
                     self.budget.settle(pending_reservation, pending_cfg, 0, 0, 0)
                 break
-            offered = None if step == max_steps - 1 or autonomy_limit_reached else self.tool_schemas()
+            offered = (None if step == max_steps - 1 or autonomy_limit_reached or continuation_prefix
+                       else self.tool_schemas())
             self._refresh_request_capabilities(loop_messages, offered)
             step_cfg = replace(self.cfg, max_output_tokens=self.cfg.tools.get('max_output_tokens', self.cfg.max_output_tokens)) if offered is not None else self.cfg
             fit_old_tool_results(offered)
             fit_history(offered)
-            if request_size(offered) > self.cfg.provider['max_input_tokens']:
+            estimated_input_tokens = request_size(offered)
+            if estimated_input_tokens > self.cfg.provider['max_input_tokens']:
+                trigger = ('local_preflight_before_first_model_call' if step == 0
+                           else 'local_preflight_after_tool_step')
+                log_context_estimate(offered, step, estimated_input_tokens,
+                                     last_actual_tokens=measured_tokens, last_actual_bytes=measured_bytes,
+                                     local_limit_trigger=trigger)
                 if step == 0:
                     self.budget.settle(request_id, step_cfg, 0, 0, 0)
                     raise TooLong('工具说明和本轮上下文超过长度上限，未调用工具；请缩短输入后再试。')
                 if next_reservation:
                     self.budget.settle(next_reservation, step_cfg, 0, 0, 0)
                 self.tool_stop_reason = '本轮上下文达到长度上限，已停止后续步骤。'
-                final = self.tool_stop_reason
+                if autonomy:
+                    final = self.tool_stop_reason
+                    self.output(final)
+                else:
+                    self.output(ChatOutput(self.tool_stop_reason, request_id=request_id, is_error=True))
+                    if continuation_prefix:
+                        final = continuation_prefix
+                    else:
+                        self.reply_displayed = True
+                        final = ''
                 break
             reservation = request_id if step == 0 else next_reservation
             sent_bytes = request_bytes(offered)
+            model_messages = alias_system_messages(loop_messages, self.tool_aliases)
+            self.budget.mark_dispatched(reservation)
             try:
-                model_messages = alias_system_messages(loop_messages, self.tool_aliases)
-                self.budget.mark_dispatched(reservation)
                 response = self.model(model_messages, tools=offered, message_output=True,
                                       max_tokens=step_cfg.max_output_tokens, detail=True)
+            except (KeyboardInterrupt, EOFError):
+                if continuation_prefix:
+                    self.tool_stop_reason = '回复续接已中断，已保留此前生成的内容。'
+                    self.output(ChatOutput(self.tool_stop_reason, request_id=request_id, is_error=True))
+                    final = continuation_prefix
+                    break
+                raise
             except RequestNotSent:
                 self.budget.release_not_sent(reservation)
+                if continuation_prefix:
+                    self.tool_stop_reason = '回复续接未发送，已保留此前生成的内容。'
+                    self.output(ChatOutput(self.tool_stop_reason, request_id=request_id, is_error=True))
+                    final = continuation_prefix
+                    break
                 raise
-            except UserError:
+            except UserError as exc:
+                if continuation_prefix:
+                    self.tool_stop_reason = str(exc)
+                    self.output(ChatOutput(self.tool_stop_reason, request_id=request_id, is_error=True))
+                    final = continuation_prefix
+                    break
                 raise
             except Exception as exc:
                 has_transient_images = any(
@@ -4421,12 +4537,19 @@ class Chat:
                                     'clearly before discussing appearance. Use text diagnostics only and '
                                     'never claim visual verification.'),
                     })
+                    sent_bytes = request_bytes(offered)
+                    model_messages = alias_system_messages(loop_messages, self.tool_aliases)
+                    self.budget.mark_dispatched(reservation)
                     try:
-                        sent_bytes = request_bytes(offered)
-                        model_messages = alias_system_messages(loop_messages, self.tool_aliases)
-                        self.budget.mark_dispatched(reservation)
                         response = self.model(model_messages, tools=offered, message_output=True,
                                               max_tokens=step_cfg.max_output_tokens, detail=True)
+                    except (KeyboardInterrupt, EOFError):
+                        if continuation_prefix:
+                            self.tool_stop_reason = '回复续接已中断，已保留此前生成的内容。'
+                            self.output(ChatOutput(self.tool_stop_reason, request_id=request_id, is_error=True))
+                            final = continuation_prefix
+                            break
+                        raise
                     except RequestNotSent:
                         self.budget.release_not_sent(reservation)
                         raise
@@ -4437,17 +4560,37 @@ class Chat:
                 else:
                     # Only the provider call is recoverable. Ledger, storage and tool
                     # integrity failures below must still stop the session.
+                    if continuation_prefix:
+                        failure = self._request_failed(exc)
+                        self.tool_stop_reason = str(failure)
+                        self.output(ChatOutput(self.tool_stop_reason, request_id=request_id, is_error=True))
+                        final = continuation_prefix
+                        break
                     raise self._request_failed(exc) from exc
             ephemeral_image_bindings.clear()
             message, prompt, completion, cached, *finish = response
             if isinstance(prompt, int) and prompt > 0:
-                measured_ratio = prompt / sent_bytes
-                calibration = max(calibration, conservative_token_ratio(measured_ratio))
+                current_ratio = prompt / sent_bytes
+                measured_ratio = max(measured_ratio, current_ratio)
+                if calibrated:
+                    calibration = conservative_token_ratio(measured_ratio)
+                elif sent_bytes >= MIN_TOKEN_CALIBRATION_BYTES:
+                    calibration = conservative_token_ratio(measured_ratio)
+                    calibrated = True
                 measured_tokens, measured_bytes = prompt, sent_bytes
+                measured_message_bytes = request_message_bytes()
+                measured_schema_bytes = request_schema_bytes(offered)
             self.budget.settle(reservation, step_cfg, prompt, completion, cached, input_bytes=sent_bytes, tolerate_over_bound=True)
+            log_context_estimate(offered, step, estimated_input_tokens,
+                                 actual_tokens=prompt, actual_bytes=sent_bytes)
             if not autonomy and self.user_stop.is_set():
                 # Lan pressed stop while this step was running: none of its tools run.
-                final = end_turn_here()
+                if continuation_prefix:
+                    final = join_reply_continuation(continuation_prefix, message.content or '')
+                    self.tool_stop_reason = '回复续接已中断，已保留已生成的内容。'
+                    self.output(ChatOutput(self.tool_stop_reason, request_id=request_id, is_error=True))
+                else:
+                    final = end_turn_here()
                 break
             if autonomy and self.autonomy_should_yield and self.autonomy_should_yield():
                 self.autonomy_interrupted = True
@@ -4490,8 +4633,42 @@ class Chat:
                 self.tool_stop_reason = final
                 self.output(final)
                 break
+            if finish and finish[0] == 'length' and not message.tool_calls:
+                content = message.content or ''
+                if content.strip() and not output_recovered and step + 1 < max_steps:
+                    try:
+                        next_cfg = self.cfg
+                        next_reservation = self.budget.reserve(next_cfg)[0]
+                    except BudgetExceeded:
+                        next_reservation = None
+                    if next_reservation:
+                        output_recovered = True
+                        continuation_prefix = content
+                        self.tool_stop_reason = ''
+                        loop_messages.append({'role': 'assistant', 'content': content})
+                        loop_messages.append({'role': 'system', 'content': (
+                            'Your reply reached the output limit. Continue from the exact end of your previous '
+                            'message without repeating its words. Finish the sentence and complete the reply; '
+                            'do not call tools in this continuation.')})
+                        self.store.append(f'{self.cfg.id}/memory/_agent/diagnostics.jsonl', {
+                            'time': now(), 'code': 'reply_output_continuation', 'attempt': 1,
+                            'prompt_tokens': prompt, 'completion_tokens': completion})
+                        continue
+                self.tool_stop_reason = '模型回复达到输出上限，结果不完整。'
+                if not autonomy:
+                    self.output(ChatOutput(self.tool_stop_reason, request_id=request_id, is_error=True))
+                else:
+                    self.output(self.tool_stop_reason)
+                final = join_reply_continuation(continuation_prefix, content) if continuation_prefix else content
+                if not final.strip() and not autonomy:
+                    self.reply_displayed = True
+                break
             if not message.tool_calls:
                 content = message.content or ''
+                if continuation_prefix:
+                    content = join_reply_continuation(continuation_prefix, content)
+                    continuation_prefix = ''
+                    self.tool_stop_reason = ''
                 if (not autonomy and self.force_reply and not content.strip()
                         and not mixed_sent_messages and step + 1 < max_steps):
                     loop_messages.append({'role': 'assistant', 'content': content})
