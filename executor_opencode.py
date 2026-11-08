@@ -335,6 +335,10 @@ def _safe_project_command(tokens, workdir=None, test_scripts=None, current=None,
             return False
         return (_git_subcommand(tokens) in {'status', 'branch', 'diff', 'log', 'show', 'rev-parse', 'ls-files'} and
                 not any(_outside_workdir_argument(arg, workdir, current) for arg in tokens[1:] if not arg.startswith('-')))
+    if command in {'echo', 'printf'}:
+        # Output-only commands never read or write a project path. Format strings and "$?" are not
+        # file arguments; treating a backslash/newline format as a path caused a false approval.
+        return True
     if command in SAFE_INSPECTION:
         if command == 'find' and any(arg.casefold() in {'-delete', '-exec', '-execdir', '-ok', '-okdir',
                                                          '-fprint', '-fprint0', '-fprintf', '-fls'} for arg in tokens[1:]):

@@ -348,6 +348,13 @@ class DecisionTests(unittest.TestCase):
                                    approvals=approvals, task_scope=scope,
                                    maintenance=True, isolated_tests=True)[0], 'once')
         ask.assert_not_called()
+        printed = "python3 -m unittest test_app; printf '\\nEXIT_CODE=%s\\n' \"$?\""
+        self.assertEqual(ex.decide('bash', ['python3 -m unittest test_app',
+                                            "printf '\\nEXIT_CODE=%s\\n' \"$?\""],
+                                   {'command': printed}, wd, autonomy=False, ask=ask,
+                                   task_scope=ex.TaskScope(wd), maintenance=True,
+                                   isolated_tests=True)[0], 'once')
+        ask.assert_not_called()
         for command in ('ssh example.invalid', 'nc example.invalid 80', 'rm important.txt'):
             asked = []
             self.assertEqual(ex.decide('bash', [command], {'command': command}, wd, autonomy=False,
