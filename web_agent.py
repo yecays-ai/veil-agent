@@ -167,6 +167,7 @@ class Hub(ScreenPopMixin):
         self.name = name
         self.life_path = (Path(data_root) if data_root else ROOT / 'data') / 'life-records.json'
         self.config_root = Path(config_root) if config_root else ROOT
+        self.acceptance_limits = None
         self.chat = None
         self.activity = activity
         self.memory_url = f'http://127.0.0.1:{memory_port}/dashboard' if memory_port else None
@@ -1208,7 +1209,11 @@ class Hub(ScreenPopMixin):
         with models.env_lock, models.lock:
             before = models.chosen('peter')
             models.save(payload)
-            self.chat.budget.daily, self.chat.budget.monthly = models.limits()
+            daily, monthly = models.limits()
+            if self.acceptance_limits:
+                daily = min(daily, self.acceptance_limits[0])
+                monthly = min(monthly, self.acceptance_limits[1])
+            self.chat.budget.daily, self.chat.budget.monthly = daily, monthly
             after = models.chosen('peter')
             if after[0] != before[0] or after[2] != before[2]:
                 self.chat.switch_model(after[1], after[2])
@@ -2865,6 +2870,8 @@ def main(argv=None):
             memory_port = (cfg.memory or {}).get('ombre_port') if (cfg.memory or {}).get('enabled') else None
             hub = Hub(cfg.name, activity, memory_port, store.root / cfg.id / 'media',
                       data_root=data_dir, config_root=config_root)
+            if args.acceptance:
+                hub.acceptance_limits = (Decimal('2'), Decimal('20'))
             from stickers import StickerLibrary
             hub.sticker_library = StickerLibrary(store.root / 'stickers')
             token = secrets.token_urlsafe(24)

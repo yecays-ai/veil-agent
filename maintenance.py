@@ -12,7 +12,6 @@ import os
 import re
 import secrets
 import shutil
-import signal
 import subprocess
 import sys
 import time
@@ -399,9 +398,9 @@ class MaintenanceManager:
     def _run(self, argv, cwd=None, timeout=180, allow_fail=False):
         env = None
         if argv and str(argv[0]) == 'git':
-            env = _clean_env({'GIT_TERMINAL_PROMPT': '0', 'GCM_INTERACTIVE': 'never'})
+            env = {**os.environ, 'GIT_TERMINAL_PROMPT': '0', 'GCM_INTERACTIVE': 'never'}
         elif argv and str(argv[0]) == 'gh':
-            env = _clean_env({'GH_PROMPT_DISABLED': '1', 'GH_NO_UPDATE_NOTIFIER': '1'})
+            env = {**os.environ, 'GH_PROMPT_DISABLED': '1', 'GH_NO_UPDATE_NOTIFIER': '1'}
         code, out, err = self.runner.run(argv, cwd=cwd, timeout=timeout, env=env)
         if code and not allow_fail:
             raise MaintenanceError(_short(err or out or f'command failed: {argv[0]}', 700))
@@ -1020,22 +1019,26 @@ class MaintenanceManager:
 
     def _stop_acceptance(self, task):
         acceptance = task['acceptance']
-        for pid in acceptance.get('pids') or []:
-            try:
-                if os.name == 'nt':
-                    subprocess.run(['taskkill', '/F', '/T', '/PID', str(pid)], capture_output=True,
-                                   timeout=15, **hidden_subprocess_kwargs(windows=True, module=subprocess))
-                else:
-                    os.kill(int(pid), signal.SIGTERM)
-            except (OSError, ValueError, subprocess.TimeoutExpired):
-                pass
-        acceptance['pids'] = []
         config_dir = acceptance.get('config_dir')
         if config_dir:
+            # Ask the instance's own authenticated endpoint to stop. Never kill an arbitrary PID,
+            # because an exited process id can be reused by an unrelated program.
+            try:
+                endpoint = Path(config_dir) / 'data' / 'web_service.json'
+                value = json.loads(endpoint.read_text(encoding='utf-8'))
+                request = urllib.request.Request(
+                    f"http://127.0.0.1:{int(value['port'])}/api/exit", method='POST',
+                    headers={'X-Token': str(value['token']), 'Content-Type': 'application/json'},
+                    data=b'{}')
+                with urllib.request.urlopen(request, timeout=5):
+                    pass
+            except (OSError, ValueError, TypeError, urllib.error.URLError):
+                pass
             try:
                 (Path(config_dir) / '.env').unlink(missing_ok=True)
             except OSError:
                 pass
+        acceptance['pids'] = []
 
     def _cleanup(self, task):
         worktree = Path(task['worktree'])
