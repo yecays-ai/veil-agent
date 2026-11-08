@@ -3990,19 +3990,26 @@ class Chat:
                                         settled_amount=min(Decimal(cost), Decimal(reservation[1])))
             settled.append(True)
 
+        def record_permission_diagnostic(event):
+            self.store.append(f'{self.cfg.id}/memory/_agent/workbench_permissions.jsonl', {
+                'time': now(), 'request_id': request_id, 'category': 'workbench_permission', **event,
+            })
+
         stopped = lambda: (self.user_stop.is_set() or bool(
             autonomy and self.autonomy_should_yield and self.autonomy_should_yield()))
         try:
             journal = (self.cfg.tools or {}).get('persistent_append_file')
+            inside_workspace = (Path(workdir).resolve() == workspace.resolve() or
+                                workspace.resolve() in Path(workdir).resolve().parents)
             same_workspace = Path(workdir).resolve() == workspace.resolve()
             protect = [journal] if journal and same_workspace else []
             files = getattr(self.tools, 'files', None) or self.tools
-            operation_lock = (getattr(files, 'workspace_operation_lock', None)
-                              if same_workspace else None)
+            operation_lock = getattr(files, 'workspace_operation_lock', None) if inside_workspace else None
             with operation_lock if operation_lock else nullcontext():
                 outcome = ex.run(task, command=command, workdir=Path(workdir), home=role / 'workbench-home',
                                  provider=provider, key=key, limits=limits, autonomy=autonomy, ask=self.approval,
-                                 stopped=stopped, record_cost=record_cost, container=container, protect=protect)
+                                 stopped=stopped, record_cost=record_cost, container=container, protect=protect,
+                                 diagnostic=record_permission_diagnostic)
             return outcome._replace(text=outcome.text + note) if note else outcome
         finally:
             record_cost(Decimal(0))
@@ -4015,8 +4022,22 @@ class Chat:
         import workbench_scope as scope
         roots = self.cfg.executor.get('project_roots') or []
         kind, found = scope.choose_project(project or task, roots) if roots else ('none', None)
+        if kind == 'none' and project:
+            local = scope.find_named_workspace_folders(project, base)
+            if len(local) == 1:
+                kind, found = 'one', {'name': local[0].name, 'path': str(local[0])}
+            elif local:
+                kind, found = 'many', [{'name': path.name, 'label': path.relative_to(base).as_posix(),
+                                        'path': str(path)} for path in local]
+        if kind == 'none' and not project:
+            local = scope.find_task_named_workspace_folders(task, base)
+            if len(local) == 1:
+                kind, found = 'one', {'name': local[0].name, 'path': str(local[0])}
+            elif local:
+                kind, found = 'many', [{'name': path.name, 'label': path.relative_to(base).as_posix(),
+                                        'path': str(path)} for path in local]
         if kind == 'many':
-            names = ', '.join(p['name'] for p in found)
+            names = ', '.join(p.get('label', p['name']) for p in found)
             return ex.ExecutorResult(f'More than one project fits: {names}. Ask Lan which one (by name), '
                                      'then call the workbench again with project set to that name.', '出错')
         if kind == 'none':
@@ -4029,7 +4050,9 @@ class Chat:
             way = {'git': 'git snapshot', 'copy': 'file copy'}.get(meta['kind'])
             return base, (f'\n[workspace: way back kept as a {way}, id {meta["id"]}]' if way else '')
         data_dir, project_dir = Path(self.store.root).resolve(), Path(found['path']).resolve()
-        if data_dir == project_dir or data_dir in project_dir.parents or project_dir in data_dir.parents:
+        inside_workspace = Path(base).resolve() in project_dir.parents
+        if (data_dir == project_dir or (data_dir in project_dir.parents and not inside_workspace) or
+                project_dir in data_dir.parents):
             return ex.ExecutorResult(f"The workbench will not work in {found['name']}: it contains VEIL's own data "
                                      '(memory, budget ledger). Pick another project.', '被拒绝')
         meta = scope.snapshot(found['path'], Path(self.store.root) / self.cfg.id / 'snapshots',

@@ -87,6 +87,49 @@ def choose_project(hint, roots):
     return 'many', [p for p in found if p['score'] == top['score']]
 
 
+def find_named_workspace_folders(name, root):
+    """Exact project-name matches inside Peter's workspace, including lightweight test projects."""
+    if (not isinstance(name, str) or not name.strip() or name in {'.', '..'} or
+            any(char in name for char in '/\\:*?[]{}')):
+        return []
+    found, stack = [], [(Path(root), 0)]
+    while stack:
+        folder, depth = stack.pop()
+        try:
+            children = list(folder.iterdir())
+        except OSError:
+            continue
+        for child in children:
+            if child.name.casefold() == name.casefold() and child.is_dir() and not child.is_symlink():
+                found.append(child)
+            elif (depth < 3 and child.is_dir() and not child.is_symlink() and
+                  child.name.casefold() not in SKIP_DIRS and not child.name.startswith('.')):
+                stack.append((child, depth + 1))
+    return found
+
+
+def find_task_named_workspace_folders(task, root):
+    """Use a workspace subproject only when its literal, non-generic folder name appears in the task."""
+    text = task.casefold() if isinstance(task, str) else ''
+    if not text:
+        return []
+    found, stack = [], [(Path(root), 0)]
+    while stack:
+        folder, depth = stack.pop()
+        try:
+            children = list(folder.iterdir())
+        except OSError:
+            continue
+        for child in children:
+            name = child.name.casefold()
+            if child.is_dir() and not child.is_symlink() and len(name) >= 5 and name in text:
+                found.append(child)
+            elif (depth < 3 and child.is_dir() and not child.is_symlink() and
+                  name not in SKIP_DIRS and not child.name.startswith('.')):
+                stack.append((child, depth + 1))
+    return found
+
+
 def _git(root, *args):
     return subprocess.run(['git', '-C', str(root), *args], capture_output=True, encoding='utf-8', errors='replace', timeout=60,
                           env={**os.environ, **_GIT_ENV},
