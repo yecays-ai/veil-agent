@@ -879,7 +879,7 @@ max_steps = 4
         with patch('veil_agent.ROOT', self.root), patch('executor_opencode.run', side_effect=fake_run):
             execution = chat._execute_tool_call(call, 'req', 'step:0', False, chat.tool_schemas())
 
-        self.assertEqual(Path(seen['workdir']), project)
+        self.assertTrue(Path(seen['workdir']).samefile(project))
         self.assertIn('calculator-test', execution.result)
         snapshots = list((self.root / 'data' / 'test' / 'snapshots').glob('*-calculator-test'))
         self.assertEqual(len(snapshots), 1)
@@ -902,7 +902,7 @@ max_steps = 4
         with patch('veil_agent.ROOT', self.root), patch('executor_opencode.run', side_effect=fake_run):
             chat._execute_tool_call(call, 'req', 'step:0', False, chat.tool_schemas())
 
-        self.assertEqual(Path(seen['workdir']), project)
+        self.assertTrue(Path(seen['workdir']).samefile(project))
 
     def test_workbench_permission_diagnostics_stay_in_agent_storage(self):
         chat = self.chat(self.executor)
