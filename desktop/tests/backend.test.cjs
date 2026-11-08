@@ -18,6 +18,17 @@ test('Windows launchers delegate to the hidden desktop entry', async () => {
   assert.match(webBat, /wscript\.exe "%~dp0start-desktop\.vbs"/);
 });
 
+test('the updater migrates the old desktop shortcut to the hidden entry', async () => {
+  const root = path.join(__dirname, '..', '..');
+  const [update, migration] = await Promise.all([
+    fs.readFile(path.join(root, 'update.bat'), 'utf8'),
+    fs.readFile(path.join(root, 'scripts', 'update-desktop-shortcut.ps1'), 'utf8')]);
+  assert.match(update, /update-desktop-shortcut\.ps1/);
+  assert.match(migration, /\$oldTarget = Join-Path \$root 'start-desktop\.bat'/i);
+  assert.match(migration, /\$shortcut\.TargetPath = Join-Path \$env:SystemRoot 'System32\\wscript\.exe'/i);
+  assert.match(migration, /\$shortcut\.Arguments = '\"' \+ \$script \+ '\"'/i);
+});
+
 test('reuses a ready authenticated service without launching or writing Agent data', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'veil-shell-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));

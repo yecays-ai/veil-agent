@@ -167,7 +167,17 @@ def _complex_bash_request(patterns, metadata, workdir=None, test_scripts=None):
     if operators and len(commands) != len(operators) + 1:
         return True
     if len(commands) > 1:
-        return not all(_safe_project_command(item, workdir, test_scripts) for item in commands)
+        current = workdir
+        for item in commands:
+            if _command_name(item[0]) == 'cd':
+                if len(item) != 2:
+                    return True
+                current = _resolved_work_path(item[1], workdir, current)
+                if current is None:
+                    return True
+            elif not _safe_project_command(item, workdir, test_scripts, current):
+                return True
+        return False
     command_tokens = commands[0]
     while command_tokens and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', command_tokens[0]):
         command_tokens = command_tokens[1:]
@@ -193,7 +203,7 @@ def _complex_bash_request(patterns, metadata, workdir=None, test_scripts=None):
 SAFE_INSPECTION = {'ls', 'dir', 'pwd', 'cat', 'type', 'head', 'tail', 'wc', 'stat', 'file', 'find', 'grep', 'rg'}
 
 
-def _safe_project_command(tokens, workdir=None, test_scripts=None):
+def _safe_project_command(tokens, workdir=None, test_scripts=None, current=None):
     """Commands whose requested effect is inspection or running an explicitly named test file."""
     while tokens and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', tokens[0]):
         tokens = tokens[1:]
@@ -202,35 +212,44 @@ def _safe_project_command(tokens, workdir=None, test_scripts=None):
     command = _command_name(tokens[0])
     if command == 'git':
         return (_git_subcommand(tokens) in {'status', 'branch', 'diff', 'log', 'show', 'rev-parse', 'ls-files'} and
-                not any(_outside_workdir_argument(arg, workdir) for arg in tokens[1:] if not arg.startswith('-')))
+                not any(_outside_workdir_argument(arg, workdir, current) for arg in tokens[1:] if not arg.startswith('-')))
     if command in SAFE_INSPECTION:
         if command == 'find' and any(arg.casefold() in {'-delete', '-exec', '-execdir', '-ok', '-okdir'} for arg in tokens[1:]):
             return False
-        return not any(_outside_workdir_argument(arg, workdir) for arg in tokens[1:] if not arg.startswith('-'))
+        return not any(_outside_workdir_argument(arg, workdir, current) for arg in tokens[1:] if not arg.startswith('-'))
     if command in {'python', 'python3'} or re.fullmatch(r'python\d+(?:\.\d+)*', command):
         if len(tokens) < 2 or tokens[1].startswith('-'):
             return False
-        path = _resolved_work_path(tokens[1], workdir)
+        path = _resolved_work_path(tokens[1], workdir, current)
         name = posixpath.basename(tokens[1].replace('\\', '/')).casefold()
         return bool(path and test_scripts is not None and path in test_scripts and
                     (name.startswith('test_') and name.endswith('.py') or name.endswith('_test.py')))
     return False
 
 
-def _resolved_work_path(value, workdir):
+def _resolved_work_path(value, workdir, current=None):
     if workdir is None or not isinstance(value, str):
         return None
     text = value.replace('\\', '/')
-    if text.startswith('/') or re.match(r'^[A-Za-z]:', text):
+    if any(char in text for char in '$~*?[]{}'):
         return None
     work = posixpath.normpath(str(workdir).replace('\\', '/')).casefold()
-    target = posixpath.normpath(work + '/' + text).casefold()
+    if text == '/work' or text.startswith('/work/'):
+        container = posixpath.normpath(text)
+        if container != '/work' and not container.startswith('/work/'):
+            return None
+        target = posixpath.normpath(work + container[5:]).casefold()
+    elif text.startswith('/') or re.match(r'^[A-Za-z]:', text):
+        return None
+    else:
+        base = posixpath.normpath(str(current or workdir).replace('\\', '/')).casefold()
+        target = posixpath.normpath(base + '/' + text).casefold()
     return target if target == work or target.startswith(work.rstrip('/') + '/') else None
 
 
-def _outside_workdir_argument(value, workdir):
+def _outside_workdir_argument(value, workdir, current=None):
     if value in {'.', '..'} or '/' in value or '\\' in value or re.match(r'^[A-Za-z]:', value):
-        return _resolved_work_path(value, workdir) is None
+        return _resolved_work_path(value, workdir, current) is None
     return False
 
 

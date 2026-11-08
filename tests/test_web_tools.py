@@ -4,6 +4,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+import web_tools
+
 from tools_agent import FilesystemTools
 from veil_agent import Store
 from web_tools import WebTools, public_http_url
@@ -39,6 +41,14 @@ class PublicUrlTests(unittest.TestCase):
 
 
 class WebToolsTests(unittest.TestCase):
+
+    def test_windows_fetch_uses_consoleless_python(self):
+        with tempfile.TemporaryDirectory() as temp:
+            scripts = Path(temp) / '.deps' / 'fetch' / 'venv' / 'Scripts'
+            scripts.mkdir(parents=True)
+            (scripts / 'python.exe').write_bytes(b'python')
+            (scripts / 'pythonw.exe').write_bytes(b'pythonw')
+            self.assertEqual(web_tools._fetch_python(temp, platform='nt'), scripts / 'pythonw.exe')
     def make_tools(self, *, worker=None, max_bytes=8192, enabled=True):
         root = Path(tempfile.mkdtemp())
         self.addCleanup(lambda: __import__('shutil').rmtree(root, ignore_errors=True))

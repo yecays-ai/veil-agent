@@ -82,10 +82,13 @@ def public_http_url(value, *, max_bytes=MAX_URL_BYTES):
     return urlunsplit((scheme, authority, parts.path or '/', parts.query, ''))
 
 
-def _fetch_python(root):
+def _fetch_python(root, platform=None):
     dep = Path(root) / '.deps' / 'fetch' / 'venv'
-    executable = 'Scripts/python.exe' if os.name == 'nt' else 'bin/python'
+    windows = (platform or os.name) == 'nt'
+    executable = 'Scripts/pythonw.exe' if windows else 'bin/python'
     candidate = dep / executable
+    if windows and not candidate.is_file():
+        candidate = dep / 'Scripts/python.exe'
     return candidate if candidate.is_file() else None
 
 

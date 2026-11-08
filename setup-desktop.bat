@@ -17,5 +17,7 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-echo Ready. Double-click start-desktop.bat in the Agent folder.
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\update-desktop-shortcut.ps1" -RepositoryPath "%~dp0."
+if errorlevel 1 echo Warning: the old Start Desktop shortcut could not be updated; use start-desktop.vbs directly.
+echo Ready. Double-click start-desktop.vbs in the Agent folder.
 pause

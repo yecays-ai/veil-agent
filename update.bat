@@ -72,10 +72,17 @@ if errorlevel 1 goto failed
 if errorlevel 1 goto failed
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%CD%\scripts\install-nowhere.ps1" -RepositoryPath "%CD%" -BootstrapPythonPath "%CD%\.venv\Scripts\python.exe"
 if errorlevel 1 echo Warning: Nowhere is unavailable; Peter can still use VEIL. Rerun setup.bat after resolving the Nowhere installation error.
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%CD%\scripts\update-desktop-shortcut.ps1" -RepositoryPath "%CD%"
+if errorlevel 1 echo Warning: the old Start Desktop shortcut could not be updated; use start-desktop.vbs directly.
 
 echo [3/4] Checking desktop components...
 where npm >nul 2>&1
 if errorlevel 1 goto no_node
+call npm ls --prefix ".deps\filesystem" --all --silent @modelcontextprotocol/server-filesystem@1.0.0 >nul 2>&1
+if errorlevel 1 (
+  call npm install --prefix ".deps\filesystem" --no-save --no-audit --no-fund @modelcontextprotocol/server-filesystem@1.0.0
+  if errorlevel 1 echo Warning: filesystem tools are unavailable; Peter and the desktop update will continue.
+)
 set "DESKTOP_DEPS_CHANGED="
 if not "%OLD%"=="%NEW%" for /f "delims=" %%F in ('git diff --name-only %OLD% %NEW% -- desktop/package-lock.json') do set "DESKTOP_DEPS_CHANGED=1"
 if not exist "desktop\node_modules\electron" set "DESKTOP_DEPS_CHANGED=1"
