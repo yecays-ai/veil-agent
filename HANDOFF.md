@@ -1,17 +1,17 @@
-## 当前工单 250（2026-11-08 UTC）
+# HANDOFF
 
-- PR #305 已 squash 合并到 main，提交 `5582474`；只改表情网格样式，Windows 验收未观察。
-- 新分支 `ticket/250-context-continuity` 从该提交建立。校准按角色、模型和 provider endpoint 身份区分；至少 16 KiB 的实际输入样本增加 20% 余量；工具循环分开估算消息和 Schema。
-- 本地长度停止原因通过错误事件单独显示，不保存成 Peter 正文。正常输出遇到 `length` 最多追加一次受预算约束的续接；真正本地或供应商上下文上限均停止，不循环重试。
-- `context-log.jsonl` 增加工具循环估算/实测输入、Schema 字节、模型上限和本地停止触发原因；供应商上下文拒绝写入独立诊断。
-- PR #306 最新已完成的 CI 四个平台和依赖检查全通过；Cubic 确认首轮 8 项已处理，后续审出 2 个新问题（dispatch 账本错误处理、回退文档），已修并加回归。本地相关回归现为 155 项通过；再做最后一轮 CI/Cubic 复查。此前一次 CI 的 4 项旧预算测试配置问题已修复。扩大 Web 套件时出现环境性失败并被中断，不记为通过。Windows Electron 实际聊天体验尚未完成。
+## 上一位停在哪
+
+- Ticket 251，PR #307，分支 `ticket/251-sticker-grid-display`，等待 Cubic 审查和必需 CI。
+- PR #306 已合并到 main（`828d76b`）。本分支已合入最新 main，解决 `STATUS.md`、`HANDOFF.md` 冲突。
+- 代码把贴图网格改为自然高度并由面板滚动；图片 56px、名称常驻、间距 10px。Windows Electron 连正式只读 API 检查 5 个图集、195 张图、无重叠且面板稳定；Peter SVG 与 GIF 消息图片加载成功。
+- 没有写索引或图片；临时 Electron 测试脚本与运行配置已清理。预览图保留在 `desktop/test-output/stickers-live.png`。
 
 ## 下一个窗口第一步
 
-推送当前两项复查修复；等待 CI 和 Cubic 复审通过后按仓库规则合并，再请 Lan 做 Windows 聊天验收。
+查看 PR #307 最新 review threads 和必需状态检查；处理实质意见并重跑检查，通过后按当前分支保护规则合并。
 
-## 背景和边界
+## 注意
 
-- provider 校准 key 使用 provider 名称与 endpoint 的 SHA-256，不把 endpoint 原文写入费用账本；旧费用行没有此 key，不参与校准。
-- 65K 是用户确认的当前模型输入上限，本工单不改配置，不删除聊天、记忆、表情包或 MCP 工具。
-- 不调用付费模型；最终 Windows 体验由 Lan 验收，不把 CI 结果当作实机验收。
+- 保持 `data/stickers/index.json` 和 `data/stickers/files` 不变。
+- 正式安装程序尚未更新；合并后按 STATUS 中的体验步骤验收。

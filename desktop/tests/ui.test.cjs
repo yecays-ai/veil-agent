@@ -6,6 +6,15 @@ const path = require('node:path');
 
 const read = file => fs.readFile(path.join(__dirname, '..', file), 'utf8');
 
+test('sticker grid keeps its image rows visible inside the scrolling panel', async () => {
+  const [css, js] = await Promise.all([read('desktop-visual-system.css'), read('chat.js')]);
+  assert.match(css, /\.composer \.sticker-grid\{[^}]*flex:0 0 auto[^}]*overflow:visible/);
+  assert.match(css, /\.composer \.sticker-grid\{[^}]*gap:10px/);
+  assert.match(css, /\.composer-tray[^}]*max-height:min\(40vh,320px\)[^}]*overflow-y:auto/);
+  assert.match(css, /\.composer \.sticker-cell img\{flex:none;width:56px;height:56px/);
+  assert.match(js, /const label=document\.createElement\('span'\);label\.textContent=s\.name;\s*tile\.append\(img,label\)/);
+});
+
 test('chat shell exposes appearance CSS, custom background, global and per-page opacity controls', async () => {
   const [html, css, js, main, preload] = await Promise.all([read('chat.html'), read('chat.css'), read('chat.js'), read('main.cjs'), read('desktop-preload.cjs')]);
   assert.deepEqual([...html.matchAll(/class="nav-item[^\"]*" data-page="([^"]+)"/g)].map(match => match[1]),
