@@ -1044,9 +1044,13 @@ class MaintenanceManager:
         try:
             if self._git('status', '--porcelain', cwd=worktree).strip():
                 return False
+            if task['stage'] != 'merged':
+                ahead = self._git('rev-list', '--count', f"{task['base_main']}..HEAD", cwd=worktree).strip()
+                if ahead and int(ahead) > 0:
+                    return False
             self._git('worktree', 'remove', str(worktree))
             return True
-        except MaintenanceError:
+        except (MaintenanceError, ValueError):
             return False
 
     def workbench_target(self, task_id):

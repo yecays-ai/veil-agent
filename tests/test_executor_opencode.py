@@ -505,9 +505,10 @@ class RunTests(unittest.TestCase):
                         'python -c "import os; os.system(\'git push origin main\')"'):
             self.assertEqual(ex.decide('bash', [command], {'command': command}, wd, autonomy=False,
                                        ask=ask, task_scope=scope, maintenance=True)[0], 'reject', command)
-        self.assertEqual(ex.decide('bash', ['python3 ../test_elsewhere.py'],
-                                   {'command': 'python3 ../test_elsewhere.py'}, wd, autonomy=False,
-                                   ask=ask, task_scope=scope)[0], 'reject')
+        for command in ('python3 ../test_elsewhere.py', 'python -m pytest /tmp/outside',
+                        'node --test --require=../../evil.js'):
+            self.assertEqual(ex.decide('bash', [command], {'command': command}, wd, autonomy=False,
+                                       ask=ask, task_scope=scope)[0], 'reject', command)
         ask.assert_not_called()
 
     def test_approval_display_redacts_url_credentials(self):
