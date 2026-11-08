@@ -17,6 +17,15 @@ MCP_PROBE_WAIT = 15
 RESIDENT_CLEANUP_WAIT = 5
 
 
+def _background_python(python, *, windows=None):
+    python = Path(python)
+    if (os.name == 'nt') if windows is None else windows:
+        pythonw = python.with_name('pythonw.exe')
+        if pythonw.is_file():
+            return pythonw
+    return python
+
+
 class ResidentError(RuntimeError):
     def __init__(self, stage):
         self.stage = stage
@@ -396,6 +405,7 @@ def start_or_connect(root, cfg, *, data_root=None, api_key_overrides=None,
     server = source / 'src' / 'server.py'
     entry = root / 'ombre_entry.py'
     python = dep / 'venv' / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
+    python = _background_python(python)
     port = cfg.memory['ombre_port']
     config_path = private / 'config.yaml'
     token_path = private / 'mcp-token'

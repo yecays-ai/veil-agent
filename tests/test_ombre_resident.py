@@ -8,12 +8,20 @@ from types import SimpleNamespace
 from ombre_entry import RestrictedHTTPApp
 from ombre_host import acquire, release
 from ombre_resident import (PINNED_OMBRE, ResidentError, _copy_first_backup,
-                            _environment, resident_config, start_or_connect)
+                            _background_python, _environment, resident_config,
+                            start_or_connect)
 from veil_agent import UserError, load_character
 from web_agent import Hub
 
 
 class OmbreResidentTests(unittest.TestCase):
+    def test_windows_background_python_uses_pythonw(self):
+        with tempfile.TemporaryDirectory() as directory:
+            python = Path(directory) / 'python.exe'
+            pythonw = Path(directory) / 'pythonw.exe'
+            pythonw.write_bytes(b'fixture')
+            self.assertEqual(_background_python(python, windows=True), pythonw)
+
     def test_mcp_probe_preserves_stages_wrapped_in_exception_groups(self):
         import asyncio
         import time

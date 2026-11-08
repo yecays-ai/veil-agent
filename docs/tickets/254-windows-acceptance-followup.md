@@ -6,7 +6,7 @@ Lan 从桌面启动 Peter 并运行普通 OpenCode 项目测试时，不再看�
 
 ## 当前状态
 
-PR #308 已合入并通过自动检查，但 Windows 实机仍确认三处缺口：旧 `Start Desktop.lnk` 继续指向 `.bat`；点击桌宠后 filesystem MCP 通过两层 `cmd / npx` 启动并阻塞聊天就绪；OpenCode 容器的固定 `/work` 挂载路径被当成主机工作区外路径。复用现有 VBS 隐藏入口、MCP 服务和审批分类，不引入新的桌面入口或权限系统。
+PR #309 已合入并修复快捷方式、filesystem MCP 与 `/work` 审批映射，但 Windows 复验仍确认 Ombre 的两层控制台 Python 进程会弹出黑窗；Galatea 等 `.cmd/.bat` MCP 入口也可能退回普通 CMD。后续补丁统一使用现有无窗口启动能力，不引入新的桌面入口或权限系统。
 
 ## 验收步骤
 

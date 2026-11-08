@@ -6,10 +6,10 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import threading
 import time
 from urllib.parse import urlsplit
-
 
 NAME = re.compile(r'^[a-z][a-z0-9_]{0,31}$')
 TOOL_PREFIX = 'mcp__'
@@ -17,6 +17,18 @@ CALL_TIMEOUT = 20
 # Ticket 200: starting a bridged service (cmd -> npx -> mcp-remote -> network) can take well over 10 seconds.
 START_TIMEOUT = 60
 START_WATCHDOG = START_TIMEOUT + 5
+
+
+def _stdio_server_command(command, args, *, windows=None):
+    if ((os.name == 'nt') if windows is None else windows) and Path(command).suffix.casefold() in {'.bat', '.cmd'}:
+        python = Path(sys.executable)
+        pythonw = python.with_name('pythonw.exe')
+        if not pythonw.is_file():
+            pythonw = python
+        return str(pythonw), [str(Path(__file__).with_name('mcp_hidden_stdio.py')),
+                              os.environ.get('COMSPEC', 'cmd.exe'), '/d', '/s', '/c',
+                              'call', command, *args]
+    return command, list(args)
 
 
 def _local_observer_url(instructions):
@@ -126,7 +138,8 @@ class _Worker:
             self.jobs = asyncio.Queue()
             if self.closing.is_set():
                 return
-            params = StdioServerParameters(command=self.service['command'], args=self.service['args'],
+            command, args = _stdio_server_command(self.service['command'], self.service['args'])
+            params = StdioServerParameters(command=command, args=args,
                                             cwd=self.service['cwd'], env=self.environment)
             async with stdio_client(params, errlog=subprocess.DEVNULL) as (read, write):
                 async with ClientSession(read, write) as session:
