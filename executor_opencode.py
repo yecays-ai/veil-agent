@@ -649,6 +649,12 @@ def _approved_hosts(patterns, command_tokens):
     return hosts
 
 
+def _ephemeral_container_path(pattern):
+    text = posixpath.normpath(str(pattern).replace('\\', '/'))
+    return (text == '/tmp' or text.startswith('/tmp/') or
+            text == '/var/tmp' or text.startswith('/var/tmp/'))
+
+
 def decide(permission, patterns, metadata, workdir, *, autonomy, ask, grants=None, approvals=None,
            test_scripts=None, task_scope=None, maintenance=False, allow_network=None, isolated_tests=False):
     """VEIL's own answer to an OpenCode permission request: (reply, reason). `ask` is Lan's approval card."""
@@ -660,6 +666,9 @@ def decide(permission, patterns, metadata, workdir, *, autonomy, ask, grants=Non
     if permission == 'external_directory':
         if autonomy:
             return 'reject', 'outside the workbench; Lan is not asked during autonomous activity'
+        if isolated_tests and patterns and all(_ephemeral_container_path(item) for item in patterns):
+            # /tmp inside the disposable container is not a host directory and holds no Lan data.
+            return 'once', 'ephemeral container temp directory'
         shown = _safe_display(', '.join(str(p) for p in patterns))
         key = _approval_scope(permission, patterns, metadata)
         return _ask_lan(f'Peter 的工作台想在本次任务中访问项目外的位置：{shown}。同意这项范围吗？y/N ',

@@ -400,6 +400,20 @@ class DecisionTests(unittest.TestCase):
                                        isolated_tests=True)[0], 'once', command)
         ask.assert_not_called()
 
+    def test_ephemeral_container_temp_directory_does_not_ask(self):
+        wd = Path(tempfile.mkdtemp())
+        ask = Mock(side_effect=AssertionError('container /tmp is not a host directory'))
+        for path in ('/tmp', '/tmp/*', '/var/tmp/*', '/var/tmp/test-output'):
+            self.assertEqual(ex.decide('external_directory', [path], {}, wd, autonomy=False,
+                                       ask=ask, task_scope=ex.TaskScope(wd),
+                                       isolated_tests=True)[0], 'once', path)
+        ask.assert_not_called()
+        for path in ('/etc/*', '/tmp/../etc'):
+            denied = Mock(return_value='n')
+            self.assertEqual(ex.decide('external_directory', [path], {}, wd, autonomy=False,
+                                       ask=denied, task_scope=ex.TaskScope(wd),
+                                       isolated_tests=True)[0], 'reject', path)
+
     def test_task_scoped_approval_reuses_same_package_but_asks_for_another(self):
         wd = Path('/data/peter/workbench')
         scope = ex.TaskScope(wd)
