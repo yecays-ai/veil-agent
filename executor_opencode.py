@@ -9,6 +9,7 @@ the tool just reports that; chat, memory and autonomous wakes are untouched.
 """
 import base64
 import hashlib
+import http.client
 import json
 import os
 import posixpath
@@ -21,9 +22,11 @@ import shutil
 import signal
 import socket
 import stat
+import select
 import subprocess
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from decimal import Decimal
 from pathlib import Path
@@ -287,17 +290,20 @@ def _complex_bash_request(patterns, metadata, workdir=None, test_scripts=None, t
     if command_name in {'python', 'python3'} and command_tokens[1:3] in (
             ['-m', 'unittest'], ['-m', 'pytest']):
         return False
-    if command_name in SAFE_INSPECTION or command_name in {'python', 'python3', 'node', 'npm', 'mkdir', 'touch', 'sort',
-                                                           'pytest', 'py.test'} or re.fullmatch(
+    if command_name in SAFE_INSPECTION or command_name in {'git', 'python', 'python3', 'node', 'npm', 'mkdir',
+                                                           'touch', 'sort', 'pytest', 'py.test'} or re.fullmatch(
             r'python\d+(?:\.\d+)*', command_name):
         return not _safe_project_command(command_tokens, workdir, test_scripts, task_scope=task_scope)
     if command_name in {'python', 'python3', 'node', 'nodejs', 'deno', 'bun', 'ruby', 'perl', 'awk',
                         'gawk', 'mawk', 'php', 'osascript'} or re.fullmatch(r'python\d+(?:\.\d+)*', command_name):
         return True
-    return False
+    # Default deny: only commands with an explicit, local, read-only/development rule above are safe.
+    # An unknown command (ssh, nc, mv, rm, a new tool) must be decided by Lan, never auto-allowed.
+    return True
 
 
-SAFE_INSPECTION = {'ls', 'dir', 'pwd', 'cat', 'type', 'head', 'tail', 'wc', 'stat', 'file', 'find', 'grep', 'rg'}
+SAFE_INSPECTION = {'ls', 'dir', 'pwd', 'cat', 'type', 'head', 'tail', 'wc', 'stat', 'file', 'find', 'grep', 'rg',
+                   'echo', 'printf', 'which'}
 
 
 def _safe_project_command(tokens, workdir=None, test_scripts=None, current=None, task_scope=None):
@@ -308,6 +314,10 @@ def _safe_project_command(tokens, workdir=None, test_scripts=None, current=None,
         return False
     command = _command_name(tokens[0])
     if command == 'git':
+        if _git_write_request(tokens):
+            return False
+        if any(arg == '--output' or arg.startswith('--output=') or arg == '--ext-diff' for arg in tokens[1:]):
+            return False
         return (_git_subcommand(tokens) in {'status', 'branch', 'diff', 'log', 'show', 'rev-parse', 'ls-files'} and
                 not any(_outside_workdir_argument(arg, workdir, current) for arg in tokens[1:] if not arg.startswith('-')))
     if command in SAFE_INSPECTION:
@@ -532,8 +542,88 @@ def _resolved_targets(permission, patterns, workdir):
     return sorted({path for value in values if (path := _resolved_work_path(value, workdir))})
 
 
+PACKAGE_HOSTS = {
+    'pip': {'pypi.org', 'files.pythonhosted.org', 'pypi.python.org'},
+    'npm': {'registry.npmjs.org', 'registry.yarnpkg.com'},
+    'apt': {'deb.debian.org', 'security.debian.org', 'archive.ubuntu.com', 'security.ubuntu.com'},
+    'cargo': {'crates.io', 'static.crates.io', 'index.crates.io'},
+    'go': {'proxy.golang.org', 'sum.golang.org'},
+}
+
+
+def _network_hosts(tokens, *, install=False):
+    """Hosts an approved network/install command may reach through the relay. Only the command's own
+    URLs and its package manager's registry hosts are opened; everything else stays blocked."""
+    hosts = set()
+    program = _command_name(tokens[0]) if tokens else ''
+    if install:
+        python_pip = (program in {'pip', 'pip3'} or re.fullmatch(r'pip\d+(?:\.\d+)*', program) or
+                      program in {'python', 'python3'} and tokens[1:3] == ['-m', 'pip'] or
+                      re.fullmatch(r'python\d+(?:\.\d+)*', program) and tokens[1:3] == ['-m', 'pip'])
+        if python_pip:
+            hosts |= PACKAGE_HOSTS['pip'] | {'github.com', 'codeload.github.com'}
+        if program in {'npm', 'pnpm', 'yarn', 'bun'}:
+            hosts |= PACKAGE_HOSTS['npm'] | {'github.com', 'codeload.github.com'}
+        if program in {'apt', 'apt-get'}:
+            hosts |= PACKAGE_HOSTS['apt']
+        if program == 'cargo':
+            hosts |= PACKAGE_HOSTS['cargo']
+        if program == 'go':
+            hosts |= PACKAGE_HOSTS['go']
+    if program in {'npx', 'pnpx', 'bunx'}:
+        hosts |= PACKAGE_HOSTS['npm']
+    for token in tokens:
+        if not isinstance(token, str):
+            continue
+        for match in re.findall(r'https?://[^\s"\'`<>]+', token, re.I):
+            try:
+                host = urllib.parse.urlsplit(match).hostname
+            except ValueError:
+                continue
+            if host:
+                hosts.add(host.casefold())
+    return {host for host in hosts if host and len(host) <= 253}
+
+
+def _allow_hosts(allow_network, tokens, *, install=False):
+    if allow_network is None:
+        return
+    hosts = _network_hosts(tokens, install=install)
+    if hosts:
+        allow_network(hosts)
+
+
+def _is_install_command(tokens):
+    while tokens and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', tokens[0]):
+        tokens = tokens[1:]
+    if not tokens:
+        return False
+    program = _command_name(tokens[0])
+    if program in ASK_LAN['installers'] or re.fullmatch(r'pip\d*(?:\.\d+)*', program):
+        return True
+    return (program in {'python', 'python3'} or bool(re.fullmatch(r'python\d+(?:\.\d+)*', program))) \
+        and tokens[1:3] == ['-m', 'pip']
+
+
+def _approved_hosts(patterns, command_tokens):
+    hosts = set()
+    items = []
+    for pattern in patterns if isinstance(patterns, list) else ():
+        if isinstance(pattern, str):
+            try:
+                items.append(shlex.split(pattern, posix=True))
+            except ValueError:
+                continue
+    if command_tokens:
+        items.append(command_tokens)
+    for tokens in items:
+        if tokens:
+            hosts |= _network_hosts(tokens, install=_is_install_command(tokens))
+    return hosts
+
+
 def decide(permission, patterns, metadata, workdir, *, autonomy, ask, grants=None, approvals=None,
-           test_scripts=None, task_scope=None, maintenance=False):
+           test_scripts=None, task_scope=None, maintenance=False, allow_network=None, isolated_tests=False):
     """VEIL's own answer to an OpenCode permission request: (reply, reason). `ask` is Lan's approval card."""
     if task_scope is not None:
         grants = task_scope.grants
@@ -609,15 +699,24 @@ def decide(permission, patterns, metadata, workdir, *, autonomy, ask, grants=Non
             for tokens in test_items:
                 if not _test_command_in_scope(tokens, workdir):
                     return 'reject', 'test path or flag outside the workbench'
-            project = task_scope.project_name
-            key = ('bash', 'tests', project)
-            reply, why = _ask_lan(
-                f'项目“{project}”的本次任务要运行项目测试。测试会执行项目代码，可能联网或读写文件；'
-                '批准后本次任务的测试命令继续使用这个授权。同意吗？y/N ',
-                'bash:tests', key, ask, grants, approvals, task_scope.denied)
-            if reply != 'once':
-                return reply, why
-            task_scope.tests_granted = True
+            if isolated_tests:
+                # The workbench container has the model relay as its only egress and runs as an
+                # unprivileged user, so tests are allowed to run without a card. The network lock is
+                # installed before OpenCode starts; this branch does not grant any network host.
+                task_scope.tests_granted = True
+                if approvals is not None:
+                    approvals.append({'operation': 'bash:tests', 'waiting': False,
+                                      'decision': 'auto_approved_isolated'})
+            else:
+                project = task_scope.project_name
+                key = ('bash', 'tests', project)
+                reply, why = _ask_lan(
+                    f'项目“{project}”的本次任务要运行项目测试。测试会执行项目代码，可能联网或读写文件；'
+                    '批准后本次任务的测试命令继续使用这个授权。同意吗？y/N ',
+                    'bash:tests', key, ask, grants, approvals, task_scope.denied)
+                if reply != 'once':
+                    return reply, why
+                task_scope.tests_granted = True
         complex_request = complex_request or _complex_bash_request(
             patterns, metadata, workdir, test_scripts, task_scope)
         if needs_lan or complex_request:
@@ -632,18 +731,34 @@ def decide(permission, patterns, metadata, workdir, *, autonomy, ask, grants=Non
                           '这会联网、安装、发布或批量删除；批准后只在此任务的相同风险范围内继续。同意吗？y/N ')
             else:
                 prompt = f'Peter 的工作台想执行一条复合或无法确认安全的项目命令：{shown}。同意这一次吗？y/N '
-            return _ask_lan(prompt, _operation_summary(permission, patterns, metadata),
-                            key, ask, grants, approvals,
-                            task_scope.denied if task_scope is not None else None)
+            reply, why = _ask_lan(prompt, _operation_summary(permission, patterns, metadata),
+                                  key, ask, grants, approvals,
+                                  task_scope.denied if task_scope is not None else None)
+            if reply == 'once' and allow_network is not None:
+                allow_network(_approved_hosts(patterns, command_tokens))
+            return reply, why
     if permission == 'webfetch':
         if autonomy:
             return 'reject', 'needs Lan\'s approval; not asked during autonomous activity'
         shown = _safe_display(', '.join(str(p) for p in patterns))
         key = _approval_scope(permission, patterns, metadata)
         project = task_scope.project_name if task_scope is not None else Path(workdir).name
-        return _ask_lan(f'Peter 的工作台想为项目“{project}”访问外部文档：{shown}。同意这项范围吗？y/N ',
-                        _operation_summary(permission, patterns, metadata), key, ask, grants, approvals,
-                        task_scope.denied if task_scope is not None else None)
+        reply, why = _ask_lan(f'Peter 的工作台想为项目“{project}”访问外部文档：{shown}。同意这项范围吗？y/N ',
+                              _operation_summary(permission, patterns, metadata), key, ask, grants, approvals,
+                              task_scope.denied if task_scope is not None else None)
+        if reply == 'once' and allow_network is not None:
+            hosts = set()
+            for pattern in patterns if isinstance(patterns, list) else ():
+                for match in re.findall(r'https?://[^\s"\'`<>]+', str(pattern), re.I):
+                    try:
+                        host = urllib.parse.urlsplit(match).hostname
+                    except ValueError:
+                        continue
+                    if host:
+                        hosts.add(host.casefold())
+            if hosts:
+                allow_network(hosts)
+        return reply, why
     if permission in ('bash', 'edit', 'write', 'task', 'skill', 'todowrite', 'read', 'glob', 'grep'):
         return 'once', 'inside the workbench'
     # Tools from other MCP servers (VEIL's own tools included) are never approved here: VEIL runs those itself.
@@ -764,15 +879,37 @@ def kill_tree(proc):
         pass
 
 
+def _relay(left, right, timeout=120):
+    try:
+        while True:
+            readable, _, _ = select.select([left, right], [], [], timeout)
+            if not readable:
+                return
+            for source in readable:
+                data = source.recv(65536)
+                if not data:
+                    return
+                (right if source is left else left).sendall(data)
+    except OSError:
+        return
+
+
 class KeyProxy:
     """A loopback relay in front of the model API. OpenCode (and every command it runs) only ever holds a random
     local token; the real API key stays in this process and is added to forwarded requests. The token is only
-    valid for this run, and the proxy refuses to forward more than `max_requests` calls."""
+    valid for this run, and the proxy refuses to forward more than `max_requests` calls.
+
+    It is also the only egress a container workbench has: an explicit per-task host allowlist opens an
+    HTTP/HTTPS tunnel for an approved install or network command. Tests and unknown commands never add hosts.
+    """
 
     def __init__(self, upstream_base, key, *, max_requests=400, host='127.0.0.1', timeout=180):
         self.token = secrets.token_urlsafe(24)
         self.upstream = upstream_base.rstrip('/')
         self.requests = 0
+        self.proxy_requests = 0
+        self.proxy_limit = 100
+        self.allowed_hosts = set()
         self.lock = threading.Lock()
         proxy = self
 
@@ -782,19 +919,72 @@ class KeyProxy:
             def log_message(self, *_args):
                 pass
 
-            def _deny(self, code, text):
+            def _deny(self, code, text, headers=None):
                 self.send_response(code)
+                for name, value in (headers or {}).items():
+                    self.send_header(name, value)
                 self.send_header('Content-Length', str(len(text)))
                 self.end_headers()
                 self.wfile.write(text.encode())
 
+            def _proxy_authenticated(self):
+                value = (self.headers.get('Proxy-Authorization') or '').strip()
+                if not value.casefold().startswith('basic '):
+                    return False
+                try:
+                    decoded = base64.b64decode(value.split(None, 1)[1]).decode('utf-8', 'replace')
+                except (ValueError, UnicodeError):
+                    return False
+                return secrets.compare_digest(decoded, 'veil:' + proxy.token)
+
+            def _host_allowed(self, host):
+                return bool(host and host.casefold().rstrip('.') in proxy.allowed_hosts)
+
+            def _take_proxy_slot(self):
+                with proxy.lock:
+                    if proxy.proxy_requests >= proxy.proxy_limit:
+                        return False
+                    proxy.proxy_requests += 1
+                    return True
+
+            def do_CONNECT(self):
+                if not self._proxy_authenticated():
+                    return self._deny(407, 'proxy authentication required',
+                                      {'Proxy-Authenticate': 'Basic realm="veil"'})
+                try:
+                    parts = urllib.parse.urlsplit('//' + self.path)
+                    host, port = parts.hostname, parts.port or 443
+                except ValueError:
+                    return self._deny(400, 'invalid tunnel target')
+                if not self._host_allowed(host):
+                    return self._deny(403, 'host was not approved for this task')
+                if not self._take_proxy_slot():
+                    return self._deny(429, 'network approval limit reached')
+                try:
+                    upstream = socket.create_connection((host, port), timeout=20)
+                except OSError as exc:
+                    return self._deny(502, 'upstream error: ' + type(exc).__name__)
+                self.send_response(200, 'Connection Established')
+                self.end_headers()
+                try:
+                    _relay(self.connection, upstream)
+                finally:
+                    try:
+                        upstream.close()
+                    except OSError:
+                        pass
+
             def do_POST(self):
-                self._forward('POST')
+                if self.path.startswith('/v1'):
+                    return self._forward('POST')
+                return self._forward_proxy('POST')
 
             def do_GET(self):
                 if self.path == '/_veil_health/' + proxy.token:
                     return self._deny(200, 'ok')
-                self._forward('GET')
+                if self.path.startswith('/v1'):
+                    return self._forward('GET')
+                return self._forward_proxy('GET')
 
             def _forward(self, method):
                 if self.headers.get('Authorization') != 'Bearer ' + proxy.token:
@@ -824,10 +1014,62 @@ class KeyProxy:
                     self.wfile.write(chunk)
                     self.wfile.flush()
 
+            def _forward_proxy(self, method):
+                if not self._proxy_authenticated():
+                    return self._deny(407, 'proxy authentication required',
+                                      {'Proxy-Authenticate': 'Basic realm="veil"'})
+                try:
+                    parts = urllib.parse.urlsplit(self.path)
+                    port = parts.port
+                except ValueError:
+                    return self._deny(400, 'invalid proxy URL')
+                if parts.scheme not in {'http', 'https'} or not parts.hostname:
+                    return self._deny(400, 'proxy request must be an absolute http(s) URL')
+                if not self._host_allowed(parts.hostname):
+                    return self._deny(403, 'host was not approved for this task')
+                if not self._take_proxy_slot():
+                    return self._deny(429, 'network approval limit reached')
+                port = port or (443 if parts.scheme == 'https' else 80)
+                body = self.rfile.read(int(self.headers.get('Content-Length') or 0)) if method == 'POST' else None
+                target = parts.path + (('?' + parts.query) if parts.query else '')
+                headers = {name: value for name, value in self.headers.items()
+                           if name.casefold() not in {'proxy-authorization', 'proxy-connection', 'connection',
+                                                      'content-length', 'transfer-encoding'}}
+                connection = None
+                try:
+                    connection = (http.client.HTTPSConnection(parts.hostname, port, timeout=timeout)
+                                  if parts.scheme == 'https' else
+                                  http.client.HTTPConnection(parts.hostname, port, timeout=timeout))
+                    connection.request(method, target, body=body, headers=headers)
+                    response = connection.getresponse()
+                    data = response.read()
+                except (OSError, http.client.HTTPException) as exc:
+                    return self._deny(502, 'upstream error: ' + type(exc).__name__)
+                finally:
+                    if connection is not None:
+                        try:
+                            connection.close()
+                        except OSError:
+                            pass
+                self.send_response(response.status)
+                for name, value in response.getheaders():
+                    if name.casefold() not in {'transfer-encoding', 'connection', 'content-length'}:
+                        self.send_header(name, value)
+                self.send_header('Content-Length', str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
         self.server = ThreadingHTTPServer((host, 0), Handler)
         self.port = self.server.server_address[1]
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
+
+    def allow_hosts(self, hosts):
+        for host in hosts:
+            value = str(host).strip().casefold().rstrip('.')
+            if value and (re.fullmatch(r'[a-z0-9.-]+', value) or re.fullmatch(r'[0-9a-f:.]+', value)):
+                self.allowed_hosts.add(value)
+
 
     def local_base(self, host='127.0.0.1'):
         return f'http://{host}:{self.port}/v1'
@@ -966,32 +1208,58 @@ sys.exit(code if code >= 0 else 1)
 '''
 
 
-def container_command(container, *, name, workdir, port, env, masks, bootstrap_git=False, watchdog=False):
+def container_command(container, *, name, workdir, port, env, masks, bootstrap_git=False, watchdog=False,
+                      network_lock=False):
     """`docker run` for OpenCode: only the project is mounted (read-write); secret-looking files in it are masked by
-    empty read-only files; no host environment, no capabilities, bounded memory/processes. The server is published
-    on the host's loopback only."""
+    empty read-only files; no host environment, bounded memory/processes. The server is published on the host's
+    loopback only. A container run additionally gets an egress firewall: the only allowed destination is the
+    local relay, so project tests cannot reach the network even though they run without an approval card."""
     cmd = ['docker', 'run', '--rm', '--name', name, '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
-           '--pids-limit', '256', '--memory', container.get('memory', '2g'),
-           '--add-host', 'host.docker.internal:host-gateway',
-           '-p', f'127.0.0.1:{port}:{port}', '-v', f'{workdir}:/work', '-w', '/work']
+           '--pids-limit', '256', '--memory', container.get('memory', '2g')]
+    if network_lock:
+        # The entrypoint needs these only long enough to install the rules, fix ownership and drop to node.
+        cmd += ['--cap-add', 'NET_ADMIN', '--cap-add', 'SETUID', '--cap-add', 'SETGID', '--cap-add', 'CHOWN',
+                '--user', 'root', '--add-host', 'veil-relay:host-gateway']
+    cmd += ['--add-host', 'host.docker.internal:host-gateway',
+            '-p', f'127.0.0.1:{port}:{port}', '-v', f'{workdir}:/work', '-w', '/work']
     for source, target in masks:
         cmd += ['-v', f'{source}:/work/{target}:ro']
     for key, value in env.items():
         cmd += ['-e', f'{key}={value}']
-    script = 'exec opencode serve --hostname 0.0.0.0 --port "$1"'
+    serve = 'opencode serve --hostname 0.0.0.0 --port "$1"'
+    prefix = ''
     if bootstrap_git:
-        script = ('set -eu; mkdir -p /tmp/home; '
+        prefix = ('set -eu; mkdir -p /tmp/home; '
                   'export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/tmp/home/.gitconfig; '
                   'git -C /tmp config --global --add safe.directory /work; '
                   'git --git-dir=/tmp/veil-git --work-tree=/work init -q -b veil-snapshot; '
                   'git --git-dir=/tmp/veil-git --work-tree=/work -c core.hooksPath=/dev/null add -A -- .; '
                   'git --git-dir=/tmp/veil-git --work-tree=/work -c core.hooksPath=/dev/null '
                   '-c user.name=VEIL -c user.email=veil-snapshot@example.invalid '
-                  'commit --allow-empty -qm "Isolated starting snapshot"; '
-                  + script)
+                  'commit --allow-empty -qm "Isolated starting snapshot"; ')
+    if network_lock:
+        script = (prefix +
+                  'set -eu; '
+                  'PROXY_IP=$(getent ahostsv4 veil-relay | awk "NR == 1 {print \\$1}"); '
+                  'test -n "$PROXY_IP"; '
+                  'iptables -A OUTPUT -d 127.0.0.11 -j REJECT; '
+                  'iptables -A OUTPUT -o lo -j ACCEPT; '
+                  'iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT; '
+                  'iptables -A OUTPUT -d "$PROXY_IP" -p tcp --dport "$VEIL_PROXY_PORT" -j ACCEPT; '
+                  'iptables -A OUTPUT -j REJECT; '
+                  'if command -v ip6tables >/dev/null 2>&1; then '
+                  'if ip6tables -L OUTPUT -n >/dev/null 2>&1; then '
+                  'ip6tables -A OUTPUT -o lo -j ACCEPT; '
+                  'ip6tables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT; '
+                  'ip6tables -A OUTPUT -j REJECT; fi; fi; '
+                  'mkdir -p /tmp/home; chown -R node:node /tmp/home /tmp/veil-git 2>/dev/null || true; '
+                  'exec setpriv --reuid=node --regid=node --init-groups --inh-caps=-all --ambient-caps=-all '
+                  '--bounding-set=-all ' + serve)
+    else:
+        script = prefix + 'exec ' + serve
     if watchdog:
         return cmd + [container['image'], 'python3', '-c', _CONTAINER_WATCHDOG, str(port), script]
-    if bootstrap_git:
+    if network_lock or bootstrap_git:
         return cmd + [container['image'], 'sh', '-c', script, 'veil-workbench', str(port)]
     return cmd + [container['image'], 'opencode', 'serve', '--hostname', '0.0.0.0', '--port', str(port)]
 
@@ -1039,22 +1307,52 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
         except Exception:
             pass
         return ExecutorResult('The workbench cannot safely protect project secrets: ' + str(exc)[:200], '被拒绝')
+    if container and popen is subprocess.Popen:
+        # Production path: fail closed if the image predates the network lock. Tests that inject a
+        # process factory inspect the command without starting Docker.
+        try:
+            probe = subprocess.run(
+                ['docker', 'run', '--rm', container['image'], 'sh', '-c',
+                 'command -v iptables >/dev/null 2>&1 && command -v setpriv >/dev/null 2>&1'],
+                capture_output=True, timeout=60,
+                **hidden_subprocess_kwargs(windows=_WINDOWS, module=subprocess))
+            ready = probe.returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            ready = False
+        if not ready:
+            try:
+                record_cost(Decimal(0))
+            except Exception:
+                pass
+            return ExecutorResult(
+                'The workbench image lacks the network-isolation tools. Rebuild veil-workbench from '
+                'docker/workbench.Dockerfile before running the container workbench.', '被拒绝',
+                reason='isolation_required')
     task_scope = TaskScope(workdir, approval_data=approval_data, save_approval=save_approval)
     price = (Decimal(str(provider.get('input_cny_per_million', 0))),
              Decimal(str(provider.get('output_cny_per_million', 0))))
     cap = Decimal(str(limits['run_budget_cny']))
     proxy = (proxy_factory or KeyProxy)(provider['base_url'], key, max_requests=int(limits['max_steps']) * 3 + 5,
                                         **({'host': '0.0.0.0'} if container else {}))
-    config = build_config(provider, proxy.token, proxy.local_base('host.docker.internal' if container else '127.0.0.1'),
-                          protect=protect)
+    def allow_network(hosts):
+        proxy.allow_hosts(hosts)
+    proxy_host = 'veil-relay' if container else '127.0.0.1'
+    config = build_config(provider, proxy.token, proxy.local_base(proxy_host), protect=protect)
     port, password = free_port(), secrets.token_urlsafe(24)
     keep = {'PATH', 'PATHEXT', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'TEMP', 'TMP', 'TMPDIR', 'LANG', 'LC_ALL', 'PROGRAMFILES',
             'PROGRAMFILES(X86)', 'PROGRAMDATA', 'APPDATA', 'LOCALAPPDATA', 'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE'}
     env = {k: v for k, v in os.environ.items() if k.upper() in keep}
     shared = {'OPENCODE_SERVER_PASSWORD': password, 'OPENCODE_DISABLE_AUTOUPDATE': '1',
               'OPENCODE_CONFIG_CONTENT': json.dumps(config)}
-    if container and maintenance:
-        shared['VEIL_WATCHDOG_URL'] = proxy.local_health('host.docker.internal')
+    if container:
+        proxy_url = f'http://veil:{proxy.token}@veil-relay:{proxy.port}'
+        shared.update({
+            'HTTP_PROXY': proxy_url, 'HTTPS_PROXY': proxy_url,
+            'http_proxy': proxy_url, 'https_proxy': proxy_url, 'ALL_PROXY': proxy_url,
+            'NO_PROXY': 'veil-relay,localhost,127.0.0.1,::1',
+            'VEIL_PROXY_PORT': str(proxy.port),
+            'VEIL_WATCHDOG_URL': proxy.local_health('veil-relay'),
+        })
     git_pointer, empty_secret_dir = None, None
     if container:
         name = container_name or 'veil-workbench-' + secrets.token_hex(4)
@@ -1084,7 +1382,7 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
                                     env={**shared, 'HOME': '/tmp/home', 'XDG_DATA_HOME': '/tmp/home/data',
                                          'XDG_CONFIG_HOME': '/tmp/home/config', 'XDG_CACHE_HOME': '/tmp/home/cache',
                                          'XDG_STATE_HOME': '/tmp/home/state'}, bootstrap_git=bool(git_pointer),
-                                    watchdog=maintenance)
+                                    watchdog=maintenance, network_lock=True)
         env = {k: v for k, v in env.items() if k.upper() in ('PATH', 'PATHEXT', 'SYSTEMROOT', 'WINDIR', 'COMSPEC',
                                                               'APPDATA', 'LOCALAPPDATA', 'USERPROFILE', 'HOME')}
     else:
@@ -1132,7 +1430,8 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
                     answered.append(request.get('id'))
                     reply, why = decide(request.get('permission', ''), request.get('patterns', []),
                                         request.get('metadata'), workdir, autonomy=autonomy, ask=ask,
-                                        approvals=approvals, task_scope=task_scope, maintenance=maintenance)
+                                        approvals=approvals, task_scope=task_scope, maintenance=maintenance,
+                                        allow_network=allow_network, isolated_tests=bool(container))
                     if stopped():
                         stop = 'stopped by Lan'
                         break

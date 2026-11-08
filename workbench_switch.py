@@ -57,8 +57,11 @@ def add_folder(state, folder, root=ROOT):
 
 def image_ready(image=IMAGE):
     try:
-        return subprocess.run(['docker', 'image', 'inspect', image], capture_output=True, timeout=60,
-                              **hidden_subprocess_kwargs(module=subprocess)).returncode == 0
+        finished = subprocess.run(
+            ['docker', 'image', 'inspect', '--format', '{{ index .Config.Labels "veil.workbench.network-lock" }}',
+             image], capture_output=True, text=True, timeout=60,
+            **hidden_subprocess_kwargs(module=subprocess))
+        return finished.returncode == 0 and finished.stdout.strip() == '1'
     except (OSError, subprocess.SubprocessError):
         return False
 

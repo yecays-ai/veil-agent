@@ -1,5 +1,7 @@
+import base64
 import json
 import secrets
+import socket
 import subprocess
 import sys
 import tempfile
@@ -326,6 +328,52 @@ class DecisionTests(unittest.TestCase):
             self.assertEqual(ex.decide('bash', patterns, {'command': command}, wd,
                                        autonomy=False, ask=ask, task_scope=scope)[0], 'once', command)
         self.assertEqual(len(asked), 1, 'test runners ask once per task, not once per command')
+
+    def test_maintenance_tests_run_without_a_card_but_unknown_network_and_delete_do_not(self):
+        wd = Path(tempfile.mkdtemp())
+        scope = ex.TaskScope(wd)
+        approvals = []
+        ask = Mock(side_effect=AssertionError('a maintenance test must not ask Lan'))
+        reply, why = ex.decide('bash', ['python3 -m unittest'], {'command': 'python3 -m unittest'}, wd,
+                               autonomy=False, ask=ask, approvals=approvals, task_scope=scope,
+                               maintenance=True, isolated_tests=True)
+        self.assertEqual((reply, why), ('once', 'inside the workbench'))
+        ask.assert_not_called()
+        self.assertEqual(approvals, [{'operation': 'bash:tests', 'waiting': False,
+                                      'decision': 'auto_approved_isolated'}])
+        for command in ('ssh example.invalid', 'nc example.invalid 80', 'rm important.txt'):
+            asked = []
+            self.assertEqual(ex.decide('bash', [command], {'command': command}, wd, autonomy=False,
+                                       ask=lambda prompt: asked.append(prompt) or 'n',
+                                       task_scope=scope, maintenance=True)[0], 'reject', command)
+            self.assertEqual(len(asked), 1, command)
+        for command in ('ssh example.invalid', 'nc example.invalid 80', 'rm important.txt',
+                        'git branch -d old', 'git diff --output=result.txt', 'git log --output=result.txt'):
+            self.assertEqual(ex.decide('bash', [command], {'command': command}, wd, autonomy=False,
+                                       ask=lambda _prompt: 'n', task_scope=ex.TaskScope(wd),
+                                       maintenance=True)[0], 'reject', command)
+
+    def test_network_approval_opens_only_the_requested_hosts(self):
+        wd = Path(tempfile.mkdtemp())
+        scope = ex.TaskScope(wd)
+        allowed = []
+        allow = lambda hosts: allowed.append(set(hosts))
+        command = 'curl https://example.com/data'
+        self.assertEqual(ex.decide('bash', [command], {'command': command}, wd, autonomy=False,
+                                   ask=lambda _prompt: 'y', task_scope=scope,
+                                   allow_network=allow)[0], 'once')
+        self.assertEqual(allowed, [{'example.com'}])
+        command = 'pip install requests'
+        self.assertEqual(ex.decide('bash', [command], {'command': command}, wd, autonomy=False,
+                                   ask=lambda _prompt: 'y', task_scope=scope,
+                                   allow_network=allow)[0], 'once')
+        self.assertIn('pypi.org', allowed[-1])
+        self.assertNotIn('example.org', allowed[-1])
+        before = len(allowed)
+        self.assertEqual(ex.decide('bash', ['python3 -m unittest'], {'command': 'python3 -m unittest'},
+                                   wd, autonomy=False, ask=lambda _prompt: 'y', task_scope=scope,
+                                   maintenance=True, allow_network=allow)[0], 'once')
+        self.assertEqual(len(allowed), before, 'a test must not open network hosts')
 
     def test_task_scoped_approval_reuses_same_package_but_asks_for_another(self):
         wd = Path('/data/peter/workbench')
@@ -834,6 +882,17 @@ class ProtectTests(unittest.TestCase):
 
 
 class MaintenanceContainerTests(unittest.TestCase):
+    def test_network_lock_command_drops_privileges_and_denies_unknown_egress(self):
+        cmd = ex.container_command({'image': 'veil-workbench'}, name='n', workdir=str(Path(tempfile.mkdtemp())),
+                                   port=4000, env={'VEIL_PROXY_PORT': '4010'}, masks=[], network_lock=True)
+        self.assertIn('NET_ADMIN', cmd)
+        self.assertIn('root', cmd)
+        script = cmd[-3]
+        self.assertIn('iptables -A OUTPUT -j REJECT', script)
+        self.assertIn('ip6tables -A OUTPUT -j REJECT', script)
+        self.assertIn('setpriv', script)
+        self.assertIn('--bounding-set=-all', script)
+
     def test_linked_worktree_git_file_is_hidden_from_the_container(self):
         work = Path(tempfile.mkdtemp())
         (work / '.git').write_text('gitdir: C:/Users/someone/veil/.git/worktrees/task', encoding='utf-8')
@@ -891,6 +950,78 @@ class KeyProxyTests(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError) as limited:
             post(proxy.token)
         self.assertEqual(limited.exception.code, 429)
+
+    @staticmethod
+    def _raw_proxy(proxy, request):
+        with socket.create_connection(('127.0.0.1', proxy.port), timeout=5) as connection:
+            connection.sendall(request)
+            chunks = []
+            while True:
+                data = connection.recv(65536)
+                if not data:
+                    break
+                chunks.append(data)
+            return b''.join(chunks)
+
+    def test_proxy_forwards_only_an_approved_http_host(self):
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        body = b'approved-proxy-ok'
+
+        class Target(BaseHTTPRequestHandler):
+            def log_message(self, *_a):
+                pass
+
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Target)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        proxy = ex.KeyProxy('https://example.invalid/v1', 'fake-key', host='127.0.0.1')
+        self.addCleanup(proxy.close)
+        auth = base64.b64encode(('veil:' + proxy.token).encode()).decode()
+        target = f'http://127.0.0.1:{server.server_address[1]}/'
+        request = (f'GET {target} HTTP/1.0\r\nHost: 127.0.0.1\r\n'
+                   f'Proxy-Authorization: Basic {auth}\r\n\r\n').encode()
+        self.assertIn(b' 403 ', self._raw_proxy(proxy, request).split(b'\r\n', 1)[0])
+        proxy.allow_hosts({'127.0.0.1'})
+        response = self._raw_proxy(proxy, request)
+        self.assertIn(b' 200 ', response.split(b'\r\n', 1)[0])
+        self.assertTrue(response.endswith(body))
+
+    def test_proxy_tunnel_requires_auth_and_an_approved_host(self):
+        listener = socket.socket()
+        listener.bind(('127.0.0.1', 0))
+        listener.listen(1)
+        self.addCleanup(listener.close)
+        port = listener.getsockname()[1]
+
+        def serve_once():
+            connection, _address = listener.accept()
+            try:
+                connection.sendall(b'tunnel-ok')
+            finally:
+                connection.close()
+        threading.Thread(target=serve_once, daemon=True).start()
+        proxy = ex.KeyProxy('https://example.invalid/v1', 'fake-key', host='127.0.0.1')
+        self.addCleanup(proxy.close)
+        auth = base64.b64encode(('veil:' + proxy.token).encode()).decode()
+        missing = f'CONNECT 127.0.0.1:{port} HTTP/1.0\r\n\r\n'.encode()
+        self.assertIn(b' 407 ', self._raw_proxy(proxy, missing).split(b'\r\n', 1)[0])
+        request = (f'CONNECT 127.0.0.1:{port} HTTP/1.0\r\n'
+                   f'Proxy-Authorization: Basic {auth}\r\n\r\n').encode()
+        self.assertIn(b' 403 ', self._raw_proxy(proxy, request).split(b'\r\n', 1)[0])
+        proxy.allow_hosts({'127.0.0.1'})
+        with socket.create_connection(('127.0.0.1', proxy.port), timeout=5) as connection:
+            connection.sendall(request)
+            header = b''
+            while b'\r\n\r\n' not in header:
+                header += connection.recv(4096)
+            self.assertIn(b' 200 ', header.split(b'\r\n', 1)[0])
+            self.assertEqual(connection.recv(4096), b'tunnel-ok')
 
 
 class ChatWiringTests(unittest.TestCase):
@@ -1374,6 +1505,32 @@ class RealOpenCodeTests(unittest.TestCase):
         leftover = ex.subprocess.run(['docker', 'ps', '-a', '--filter', 'name=^/' + launched[0] + '$',
                                       '--format', '{{.Names}}'], capture_output=True, text=True, timeout=15)
         self.assertEqual(leftover.stdout.strip(), '', 'the workbench container must be gone')
+
+    def test_maintenance_test_runs_without_a_card_and_direct_network_is_blocked(self):
+        if not _docker_workbench_available():
+            self.skipTest('VEIL workbench Docker image is unavailable')
+        base = Path(tempfile.mkdtemp())
+        workdir = base / 'bench'
+        workdir.mkdir()
+        (workdir / 'test_ok.py').write_text(
+            'import unittest\nclass T(unittest.TestCase):\n def test_ok(self): self.assertTrue(True)\n',
+            encoding='utf-8')
+        network = ("python3 -c \"import socket; socket.create_connection(('1.1.1.1', 80), 3); "
+                   "open('network-worked', 'w').write('x')\"")
+        server = _fake_llm([network, 'python3 -m unittest test_ok'])
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        provider = {**PROVIDER, 'base_url': f'http://127.0.0.1:{server.server_address[1]}/v1', 'model': 'fake'}
+        asked = []
+        result = ex.run('run the tests after a network probe', command='opencode', workdir=workdir,
+                        home=base / 'home', provider=provider, key='fake', limits={'max_seconds': 90},
+                        autonomy=False, ask=lambda prompt: asked.append(prompt) or 'y',
+                        stopped=lambda: False, record_cost=lambda _c: None,
+                        container={'image': 'veil-workbench'}, maintenance=True)
+        self.assertEqual(result.state, '成功', result.text)
+        self.assertIn('OK', result.text)
+        self.assertFalse((workdir / 'network-worked').exists(), 'the container must not reach the network')
+        self.assertEqual(len(asked), 1, asked)  # only the arbitrary network command asked
 
     def test_real_container_does_not_execute_after_stop_during_approval(self):
         if not _docker_workbench_available():
