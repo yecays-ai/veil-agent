@@ -4,9 +4,9 @@
 
 ## 启动与构建
 
-- 在 VEIL Agent 仓库目录双击 `start-desktop.bat`。如果同级 `..\desktop-app\VEIL Desktop\VEIL.exe` 已安装，启动它；否则启动本仓库构建的 `desktop\dist\VEIL-win32-x64\VEIL.exe`，开发环境下回退到 Electron 源码。
+- 在 VEIL Agent 仓库目录双击 `start-desktop.vbs`。如果本仓库已有打包版，启动 `desktop\dist\VEIL-win32-x64\VEIL.exe`，开发环境下回退到 Electron 源码。
 - 首次点击 Peter 时选择已有的 Agent 文件夹（含 `web_launcher.py` 和 `.venv`）。桌面程序调用原 `web_launcher.py --no-browser`，使用原 Python 环境、配置、聊天、记忆与权限。
-- 源码运行需要 Node.js 24：双击仓库根目录 `setup-desktop.bat`，然后双击 `start-desktop.bat`。构建时在 `desktop` 运行 `npm ci`、`node node_modules/electron/install.js`、`npm run package`。
+- 源码运行需要 Node.js 24：双击仓库根目录 `setup-desktop.bat`，然后双击 `start-desktop.vbs`。构建时在 `desktop` 运行 `npm ci`、`node node_modules/electron/install.js`、`npm run package`。
 - 发布时复制完整 `dist\VEIL-win32-x64` 文件夹；不能只复制 `VEIL.exe`。
 
 ## 使用

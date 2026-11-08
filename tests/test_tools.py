@@ -11,10 +11,43 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import tools_agent
 from tools_agent import (ALLOW, ASK, DENY, LAB_ONLY, OWN_WORK, FilesystemTools, checked_path,
                          permitted_tools, tool_policy)
 from veil_agent import (Budget, Chat, RequestFailed, Store, load_character,
                         UserError, join_reply_continuation, model_tool_result, request_byte_size, run_chat)
+
+
+class FilesystemServerLaunchTests(unittest.TestCase):
+    def test_windows_filesystem_server_uses_consoleless_local_package(self):
+        with tempfile.TemporaryDirectory() as temp:
+            scripts = Path(temp) / 'Scripts'
+            scripts.mkdir()
+            python = scripts / 'python.exe'
+            pythonw = scripts / 'pythonw.exe'
+            python.write_bytes(b'python')
+            pythonw.write_bytes(b'pythonw')
+            server = Path(temp) / '.deps' / 'filesystem' / 'node_modules' / '@modelcontextprotocol' / 'server-filesystem' / 'dist' / 'index.js'
+            server.parent.mkdir(parents=True)
+            server.write_text('fixture')
+            (server.parent.parent / 'package.json').write_text('{"version":"1.0.0"}')
+            command, args = tools_agent._filesystem_server_command(
+                Path(temp) / 'workspace', executable=python, platform='nt', root=temp)
+
+        self.assertEqual(Path(command), pythonw)
+        self.assertEqual(Path(args[0]).name, 'mcp_hidden_stdio.py')
+        self.assertEqual(args[1], 'node')
+        self.assertEqual(Path(args[2]), server)
+
+    def test_windows_filesystem_server_fails_closed_when_package_is_missing(self):
+        with tempfile.TemporaryDirectory() as temp:
+            scripts = Path(temp) / 'Scripts'
+            scripts.mkdir()
+            python = scripts / 'python.exe'
+            python.write_bytes(b'python')
+            with self.assertRaises(FileNotFoundError):
+                tools_agent._filesystem_server_command(
+                    Path(temp) / 'workspace', executable=python, platform='nt', root=temp)
 
 
 class ToolPolicyTests(unittest.TestCase):
@@ -1335,6 +1368,10 @@ class MultiMessageTests(unittest.TestCase):
                      'optional filesystem MCP integration requires Node.js LTS with npm/npx')
 class FilesystemServerTests(unittest.TestCase):
     def test_real_filesystem_server_lists_only_the_sandbox_folder(self):
+        if os.name == 'nt' and not (Path(__file__).resolve().parents[1] / '.deps' / 'filesystem' /
+                                    'node_modules' / '@modelcontextprotocol' / 'server-filesystem' /
+                                    'dist' / 'index.js').is_file():
+            self.skipTest('setup installs the Windows filesystem MCP package')
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         root = Path(temp.name)

@@ -173,6 +173,31 @@ class DecisionTests(unittest.TestCase):
                                        autonomy=False, ask=ask, test_scripts=scripts)[0], 'once', command)
         ask.assert_not_called()
 
+    def test_container_workdir_and_existing_test_script_do_not_ask(self):
+        wd = Path(tempfile.mkdtemp())
+        project = wd / 'lab' / 'calculator-test'
+        project.mkdir(parents=True)
+        (project / 'test_calculator.py').write_text('pass')
+        scripts = ex.existing_test_scripts(wd)
+        command = 'cd /work/lab/calculator-test && python3 test_calculator.py'
+        ask = Mock(side_effect=AssertionError('existing container test must continue'))
+
+        self.assertEqual(ex.decide('bash', ['cd /work/lab/calculator-test',
+                                            'python3 test_calculator.py'],
+                                   {'command': command}, wd, autonomy=False, ask=ask,
+                                   test_scripts=scripts)[0], 'once')
+        ask.assert_not_called()
+
+        for unsafe in ('cd /etc && python3 test_calculator.py',
+                       'cd /work/../etc && python3 test_calculator.py',
+                       'cd $HOME && python3 test_calculator.py',
+                       'cd /work/lab/calculator-test && python3 ../../../test_calculator.py'):
+            denied = Mock(return_value='n')
+            self.assertEqual(ex.decide('bash', unsafe.split(' && '),
+                                       {'command': unsafe}, wd, autonomy=False, ask=denied,
+                                       test_scripts=scripts)[0], 'reject')
+            denied.assert_called_once()
+
     def test_arbitrary_python_scripts_and_output_redirection_still_ask(self):
         wd = Path('/data/peter/workbench')
         for command in ('python3 deploy.py', 'python cleanup.py', 'git status > status.txt'):

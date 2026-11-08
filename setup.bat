@@ -6,10 +6,12 @@ set PYTHONUTF8=1
 if not exist ".local-tmp" mkdir ".local-tmp"
 set "TEMP=%CD%\.local-tmp"
 set "TMP=%TEMP%"
+set "HAS_NODE="
 where node >nul 2>&1
 if errorlevel 1 goto no_node
 where npx >nul 2>&1
 if errorlevel 1 goto no_node
+set "HAS_NODE=1"
 goto node_checked
 :no_node
 echo Node.js LTS with npm/npx not found. Peter will chat normally without file tools; install Node.js LTS to enable them.
@@ -28,6 +30,11 @@ if errorlevel 1 goto no_python
 if errorlevel 1 goto failed
 ".venv\Scripts\python.exe" -m pip install --no-cache-dir -r requirements.lock.txt
 if errorlevel 1 goto failed
+if defined HAS_NODE call npm ls --prefix ".deps\filesystem" --all --silent @modelcontextprotocol/server-filesystem@1.0.0 >nul 2>&1
+if defined HAS_NODE if errorlevel 1 (
+  call npm install --prefix ".deps\filesystem" --no-save --no-audit --no-fund @modelcontextprotocol/server-filesystem@1.0.0
+  if errorlevel 1 echo Warning: filesystem tools are unavailable; the rest of VEIL setup will continue.
+)
 echo Installing the pinned Nowhere runtime in an isolated Python environment...
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\install-nowhere.ps1" -RepositoryPath "%CD%" -BootstrapPythonPath "%CD%\.venv\Scripts\python.exe"
 if errorlevel 1 echo Warning: Nowhere is unavailable; the rest of VEIL setup will continue. Run setup.bat again after resolving the Nowhere installation error.

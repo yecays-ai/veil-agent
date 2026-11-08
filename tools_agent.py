@@ -9,6 +9,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 import threading
 from datetime import datetime, timezone
 from concurrent.futures import Future
@@ -1849,6 +1850,30 @@ class FilesystemTools:
                                if self.startup_notice else notice)
 
 
+def _filesystem_server_command(workspace, *, executable=None, platform=None, root=None):
+    root = Path(root or Path(__file__).parent)
+    server = root / '.deps' / 'filesystem' / 'node_modules' / '@modelcontextprotocol' / 'server-filesystem' / 'dist' / 'index.js'
+    windows = (platform or os.name) == 'nt'
+    try:
+        installed = server.is_file() and json.loads(
+            (server.parent.parent / 'package.json').read_text(encoding='utf-8')).get('version') == '1.0.0'
+    except (OSError, ValueError, TypeError):
+        installed = False
+    if not installed:
+        if windows:
+            raise FileNotFoundError('filesystem MCP is not installed')
+        return 'npx', ['-y', '@modelcontextprotocol/server-filesystem@1.0.0', str(workspace)]
+    args = ['node', str(server), str(workspace)]
+    if not windows:
+        return (args[0], args[1:])
+    python = Path(executable or sys.executable)
+    pythonw = python.with_name('pythonw.exe')
+    if not pythonw.is_file():
+        pythonw = python
+    proxy = Path(__file__).with_name('mcp_hidden_stdio.py')
+    return str(pythonw), [str(proxy), *args]
+
+
 class _McpWorker:
     def __init__(self, workspace):
         self.workspace = workspace
@@ -1869,12 +1894,8 @@ class _McpWorker:
             from mcp.client.stdio import stdio_client
             self.loop = asyncio.get_running_loop()
             self.requests = asyncio.Queue()
-            if os.name == 'nt':
-                params = StdioServerParameters(command='cmd', args=['/c', 'npx', '-y',
-                    '@modelcontextprotocol/server-filesystem@1.0.0', str(self.workspace)])
-            else:
-                params = StdioServerParameters(command='npx', args=['-y',
-                    '@modelcontextprotocol/server-filesystem@1.0.0', str(self.workspace)])
+            command, args = _filesystem_server_command(self.workspace)
+            params = StdioServerParameters(command=command, args=args)
             async with stdio_client(params, errlog=subprocess.DEVNULL) as (read, write):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
