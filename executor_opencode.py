@@ -263,7 +263,9 @@ def _complex_bash_request(patterns, metadata, workdir=None, test_scripts=None, t
     if any('<' in token or '>' in token for token in shell_tokens):
         return True
     operators = [token for token in shell_tokens if re.fullmatch(r'[;&|]+', token)]
-    if len(commands) == 1 and operators:
+    if operators:
+        # OpenCode can group several shell commands into one permission pattern. Rebuild the
+        # segments from the original command so every actual command is checked, not the grouping.
         rebuilt, current = [], []
         for token in shell_tokens:
             if re.fullmatch(r'[;&|]+', token):

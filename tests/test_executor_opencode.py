@@ -414,6 +414,17 @@ class DecisionTests(unittest.TestCase):
                                        ask=denied, task_scope=ex.TaskScope(wd),
                                        isolated_tests=True)[0], 'reject', path)
 
+    def test_grouped_read_only_git_commands_do_not_ask(self):
+        wd = Path(tempfile.mkdtemp())
+        ask = Mock(side_effect=AssertionError('grouped read-only git commands must not ask'))
+        command = "git status --short; echo '---'; git diff HEAD -- app.py; echo '---'; git log --oneline -3 -- app.py"
+        patterns = ["git status --short; echo '---'", "git diff HEAD -- app.py; echo '---'",
+                    'git log --oneline -3 -- app.py']
+        self.assertEqual(ex.decide('bash', patterns, {'command': command}, wd, autonomy=False,
+                                   ask=ask, task_scope=ex.TaskScope(wd), maintenance=True,
+                                   isolated_tests=True)[0], 'once')
+        ask.assert_not_called()
+
     def test_task_scoped_approval_reuses_same_package_but_asks_for_another(self):
         wd = Path('/data/peter/workbench')
         scope = ex.TaskScope(wd)
