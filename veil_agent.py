@@ -1164,6 +1164,13 @@ class _Unaggregated(Exception):
     """The ledger ends in a valid but unterminated row; callers fall back to a full pass."""
 
 
+@dataclass(frozen=True)
+class CacheUsage:
+    tokens: int | None
+    status: str
+    field: str | None = None
+
+
 class Budget:
     def __init__(self, store, daily=Decimal('10'), monthly=Decimal('300'), clock=now,
                  autonomy_daily=Decimal('2'), glance_daily=Decimal('1')):
@@ -1430,7 +1437,8 @@ class Budget:
         return request_id, amount
 
     @synchronized
-    def settle_estimate(self, reservation, accounting='embedding-estimate', *, settled_amount=None):
+    def settle_estimate(self, reservation, accounting='embedding-estimate', *, settled_amount=None,
+                        usage_tokens=None):
         request_id, reserved_amount = reservation
         rows = self.store.read_incremental('costs.jsonl')
         reserve = next((row for row in rows if row.get('type') == 'reserve'
@@ -1440,12 +1448,18 @@ class Budget:
         if any(row.get('type') == 'settle' and row.get('id') == request_id for row in rows):
             return False
         settled = Decimal(reserved_amount if settled_amount is None else settled_amount)
-        if (not settled.is_finite() or settled < 0 or settled > Decimal(reserved_amount)):
+        # The reservation is the hard cap: a settlement above it would release a negative amount
+        # and let a recorded usage report bypass the daily and monthly limits.
+        if not settled.is_finite() or settled < 0 or settled > Decimal(reserved_amount):
             raise UserError('预算结算金额超过预留或无效，已停止；请保留 data 文件夹。')
-        self.store.append('costs.jsonl', {'type': 'settle', 'id': request_id,
+        if usage_tokens is not None and (type(usage_tokens) is not int or usage_tokens < 0):
+            raise UserError('Embedding 接口用量无效；本次保留预算预留。')
+        settlement = {'type': 'settle', 'id': request_id,
             'amount': str(settled), 'reserved_amount': str(reserved_amount),
-            'released_amount': str(Decimal(reserved_amount) - settled),
-            'accounting': accounting})
+            'released_amount': str(Decimal(reserved_amount) - settled), 'accounting': accounting}
+        if usage_tokens is not None:
+            settlement['usage_tokens'] = usage_tokens
+        self.store.append('costs.jsonl', settlement)
         return True
 
     @synchronized
@@ -1551,7 +1565,13 @@ class Budget:
     @synchronized
     def settle(self, request_id, cfg, prompt, completion, cached, *, input_bytes=None,
                accounting=None, category=None, tolerate_over_bound=False):
-        cache_reported = cached is not None
+        cache_status = 'reported' if cached is not None else 'unreported'
+        cache_usage_field = None
+        if isinstance(cached, CacheUsage):
+            cache_status = cached.status
+            cache_usage_field = cached.field
+            cached = cached.tokens
+        cache_reported = cache_status == 'reported' and cached is not None
         if (any(type(n) is not int or n < 0 for n in (prompt, completion))
                 or (cache_reported and (type(cached) is not int or cached < 0 or cached > prompt))):
             raise UserError('接口未返回有效用量；本次保留预留费用。')
@@ -1576,7 +1596,9 @@ class Budget:
         settlement = {'type': 'settle', 'id': request_id,
                           'amount': str(amount), 'prompt_tokens': prompt,
                           'completion_tokens': completion, 'cached_tokens': cached,
-                          'cache_reported': cache_reported}
+                          'cache_reported': cache_reported, 'cache_status': cache_status}
+        if cache_usage_field:
+            settlement['cache_usage_field'] = cache_usage_field
         if category:
             settlement['category'] = category
         if accounting:
@@ -1592,7 +1614,7 @@ class Budget:
 
     @synchronized
     def cache_display(self, stamp=None):
-        """Today's share of chat-model input tokens the provider served from its cache."""
+        """Today's cache usage reported for direct Chat Completions requests."""
         stamp = stamp or self.clock()
         try:
             periods, prompt, cached, unknown = {}, 0, 0, 0
@@ -1600,13 +1622,16 @@ class Budget:
                 if event['type'] == 'reserve':
                     periods[event['id']] = (event['period'], event.get('category', 'chat'))
                 elif event['type'] == 'settle' and 'prompt_tokens' in event:
-                    period, category = periods.get(event['id'], ('', 'chat'))
-                    if category not in ('autonomy', 'glance', 'short_term_notes', 'delegate') and period[:10] == stamp[:10]:
+                    period, _ = periods.get(event['id'], ('', 'chat'))
+                    if period[:10] == stamp[:10]:
                         # Legacy zeroes did not distinguish an explicit zero from an absent field.
                         reported = event.get('cache_reported')
                         if not event['prompt_tokens']:
                             continue  # placeholder settlement for a request that never reached the provider
-                        if reported is False or (reported is None and event['cached_tokens'] == 0):
+                        status = event.get('cache_status')
+                        if status and status != 'reported':
+                            unknown += 1
+                        elif reported is False or (reported is None and event['cached_tokens'] == 0):
                             unknown += 1
                         else:
                             prompt += event['prompt_tokens']
@@ -1614,13 +1639,15 @@ class Budget:
         except (KeyError, TypeError) as exc:
             raise UserError('花费账本无法核对，已停止；请保留 data 文件夹，关闭 VEIL 后运行 .venv\\Scripts\\python.exe data_repair.py diagnose --file data\\costs.jsonl 查看。') from exc
         if not prompt and not unknown:
-            return '今天还没有聊天模型的用量记录，缓存命中率暂无。'
+            return '今天 VEIL 直连模型缓存命中率暂无可核对用量。'
         if not prompt:
-            return f'今天聊天缓存命中率暂无：{unknown} 次请求未报告缓存用量或为旧版无法核实的 0。'
-        result = f'今天聊天缓存命中 {cached * 100 / prompt:.0f}%（命中 {cached} / 已报告输入 {prompt} tokens）'
+            return (f'今天 VEIL 直连模型缓存命中率暂无：{unknown} 次请求未报告缓存用量、无效或无法核实。'
+                    'Ombre 子进程模型按估算记账，不包含在命中率内。')
+        result = (f'今天 VEIL 直连模型缓存命中 {cached * 100 / prompt:.0f}%'
+                  f'（命中 {cached} / 已报告输入 {prompt} tokens；覆盖聊天、自主、瞄一眼、短期便签和委派）')
         if unknown:
-            result += f'；另有 {unknown} 次请求未报告缓存用量或为旧版无法核实的 0'
-        return result + '。只统计聊天模型，不含记忆打标和向量。'
+            result += f'；另有 {unknown} 次请求未报告缓存用量、无效或无法核实'
+        return result + '。不含无缓存计量的向量、语音及 Ombre 子进程估算请求。'
 
     def display(self, stamp=None, character=None):
         day, month, pending = self.totals(stamp)
@@ -5063,12 +5090,7 @@ def make_model(root, cfg, provider=None, timeout=MODEL_TIMEOUT_SECONDS):
         usage = response.usage
         if usage is None:
             raise UserError('接口未返回用量；本次保留预留费用。')
-        details = getattr(usage, 'prompt_tokens_details', None)
-        cached = getattr(usage, 'prompt_cache_hit_tokens', None)
-        if cached is None:
-            cached = getattr(details, 'cached_tokens', None)
-        if cached is None:
-            cached = getattr(usage, 'total_cached_tokens', None)
+        cached = parse_cache_usage(usage, usage.prompt_tokens, response)
         choice = response.choices[0]
         if tools is not None or message_output:
             message = choice.message.model_dump(exclude_none=True)
@@ -5082,6 +5104,44 @@ def make_model(root, cfg, provider=None, timeout=MODEL_TIMEOUT_SECONDS):
         return result + (choice.finish_reason,) if detail else result
 
     return ModelClients(clients, lock), call
+
+
+def _usage_path(value, path):
+    for part in path.split('.'):
+        value = value.get(part) if isinstance(value, dict) else getattr(value, part, None)
+        if value is None:
+            return None
+    return value
+
+
+def parse_cache_usage(usage, prompt_tokens, response=None):
+    fields = (
+        ('prompt_cache_hit_tokens', usage, 'prompt_cache_hit_tokens'),
+        ('prompt_tokens_details.cached_tokens', usage, 'prompt_tokens_details.cached_tokens'),
+        ('input_tokens_details.cached_tokens', usage, 'input_tokens_details.cached_tokens'),
+        ('cache_read_input_tokens', usage, 'cache_read_input_tokens'),
+        ('total_cached_tokens', usage, 'total_cached_tokens'),
+        ('cached_content_token_count', usage, 'cached_content_token_count'),
+        ('usageMetadata.cachedContentTokenCount', response, 'usageMetadata.cachedContentTokenCount'),
+        ('usage_metadata.cached_content_token_count', response, 'usage_metadata.cached_content_token_count'),
+    )
+    found, invalid = [], []
+    for field, source, path in fields:
+        raw = _usage_path(source, path)
+        if raw is None:
+            continue
+        if type(raw) is not int or raw < 0 or type(prompt_tokens) is not int or raw > prompt_tokens:
+            invalid.append(field)
+        else:
+            found.append((field, raw))
+    if invalid:
+        return CacheUsage(None, 'invalid', invalid[0])
+    if not found:
+        return CacheUsage(None, 'unreported')
+    if len({tokens for _, tokens in found}) > 1:
+        return CacheUsage(None, 'conflicting')
+    field, tokens = found[0]
+    return CacheUsage(tokens, 'reported', field)
 
 
 class ModelClients:

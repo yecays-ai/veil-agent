@@ -445,11 +445,12 @@ daily_budget_cny = "2"
                 self.budget.reserve(self.cfg)
         self.model.assert_not_called()
 
-    def test_chat_cache_display_excludes_autonomy_requests(self):
+    def test_model_cache_display_includes_autonomy_requests(self):
         with self.budget.autonomous('test'):
             request_id, _ = self.budget.reserve(self.cfg)
             self.budget.settle(request_id, self.cfg, 100, 20, 50)
-        self.assertIn('还没有聊天模型的用量记录', self.budget.cache_display())
+        self.assertIn('50%', self.budget.cache_display())
+        self.assertIn('自主', self.budget.cache_display())
 
     def test_incomplete_autonomy_record_stops_safely(self):
         self.store.append('test/autonomy.jsonl', {'started_at': 'not-a-time', 'result': '搁置'})
