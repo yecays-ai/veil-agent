@@ -327,11 +327,16 @@ model = "sonnet"
 max_input_tokens = 200000
 '''
         (self.root / 'characters' / 'test' / 'character.toml').write_text(toml, encoding='utf-8')
+        path = self.root / 'data' / 'test' / 'models.json'
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps({'use': {'peter': 'builtin:claude_agent',
+                                            'background': 'builtin:claude_agent'}}), encoding='utf-8')
         cfg = load_character(self.root, 'test')
         self.assertTrue(cfg.provider.get('missing'))
         view = cfg.models.public()
         self.assertIsNone(view['use']['peter'])
-        self.assertIn('还没有可用的聊天模型', view['migration_notice'])
+        self.assertIn('没有可用的 API 模型', view['migration_notice'])
+        self.assertTrue(path.with_name('models.json.cc-removal-backup').exists())
         clients, call = make_model(self.root, cfg)
         with clients, self.assertRaises(UserError):
             call([{'role': 'user', 'content': 'fake'}])
