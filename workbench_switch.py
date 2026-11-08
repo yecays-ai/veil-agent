@@ -57,6 +57,10 @@ def add_folder(state, folder, root=ROOT):
 
 def image_ready(image=IMAGE):
     try:
+        if image != IMAGE:
+            # A user-provided workbench image is never rebuilt from our Dockerfile.
+            return subprocess.run(['docker', 'image', 'inspect', image], capture_output=True, timeout=60,
+                                  **hidden_subprocess_kwargs(module=subprocess)).returncode == 0
         finished = subprocess.run(
             ['docker', 'image', 'inspect', '--format', '{{ index .Config.Labels "veil.workbench.network-lock" }}',
              image], capture_output=True, text=True, timeout=60,
@@ -102,9 +106,14 @@ def main():
         print('\n1 开启   2 关闭   3 加一个项目文件夹   4 清空项目文件夹   0 退出（改完要重开 Peter）')
         choice = input('选哪个：').strip()
         if choice == '1':
-            if not image_ready(state['container_image']) and not build_image(image=state['container_image']):
-                print('运行环境没做成功（需要先装好并打开 Docker Desktop），没有开启。')
-                continue
+            image = state['container_image']
+            if not image_ready(image):
+                if image != IMAGE:
+                    print('你配置的自定义工作台镜像不存在；不会用默认 Dockerfile 覆盖它，请先自行构建。')
+                    continue
+                if not build_image(image=image):
+                    print('运行环境没做成功（需要先装好并打开 Docker Desktop），没有开启。')
+                    continue
             state['enabled'] = True
             save_state(state)
             print('已开启。')

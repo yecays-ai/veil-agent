@@ -388,6 +388,12 @@ class DecisionTests(unittest.TestCase):
                                    wd, autonomy=False, ask=lambda _prompt: 'y', task_scope=scope,
                                    maintenance=True, allow_network=allow)[0], 'once')
         self.assertEqual(len(allowed), before, 'a test must not open network hosts')
+        allowed.clear()
+        self.assertEqual(ex.decide('bash', ["bash -c 'echo https://evil.example'"],
+                                   {'command': "bash -c 'echo https://evil.example'"}, wd,
+                                   autonomy=False, ask=lambda _prompt: 'y', task_scope=scope,
+                                   allow_network=allow)[0], 'once')
+        self.assertEqual(allowed, [], 'a complex command must not add a network host')
 
     def test_environment_probe_commands_do_not_ask(self):
         wd = Path(tempfile.mkdtemp())
@@ -518,14 +524,21 @@ class RunTests(unittest.TestCase):
         self.assertEqual(costs, [Decimal(0)])
         kill.assert_not_called()
     def test_latest_real_test_exit_supersedes_an_earlier_failure(self):
-        def result(command, code):
+        def result(command, code, output=''):
             return {'info': {'role': 'assistant'}, 'parts': [{'type': 'tool', 'tool': 'bash',
-                    'state': {'status': 'completed', 'input': {'command': command}, 'metadata': {'exit': code}}}]}
+                    'state': {'status': 'completed', 'input': {'command': command},
+                              'output': output, 'metadata': {'exit': code}}}]}
         failed = result('python3 -m unittest', 1)
         passed = result('python3 -m unittest', 0)
         self.assertEqual(ex._last_test_exit([failed]), 1)
         self.assertEqual(ex._last_test_exit([failed, passed]), 0)
         self.assertIsNone(ex._last_test_exit([result('echo FAILED', 0)]))
+        self.assertEqual(ex._last_test_exit([result('timeout 120 python3 -m unittest', 1)]), 1)
+        self.assertEqual(ex._last_test_exit([result('set -o pipefail; python3 -m unittest | tee log', 1)]), 1)
+        wrapped = "python3 -m unittest; printf '\\nEXIT_CODE=%s\\n' \"$?\""
+        self.assertEqual(ex._last_test_exit([result(wrapped, 0, 'EXIT_CODE=1')]), 1)
+        self.assertEqual(ex._last_test_exit([result(wrapped, 0, 'EXIT_CODE=0')]), 0)
+        self.assertEqual(ex._last_test_exit([result(wrapped, 0)]), 1)
 
     def test_repeat_limit_counts_consecutive_calls_not_later_revisits(self):
         def tool(name, value):
@@ -1036,7 +1049,8 @@ class KeyProxyTests(unittest.TestCase):
         threading.Thread(target=server.serve_forever, daemon=True).start()
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
-        proxy = ex.KeyProxy('https://example.invalid/v1', 'fake-key', host='127.0.0.1')
+        proxy = ex.KeyProxy('https://example.invalid/v1', 'fake-key', host='127.0.0.1',
+                            allowed_ports={server.server_address[1]})
         self.addCleanup(proxy.close)
         auth = base64.b64encode(('veil:' + proxy.token).encode()).decode()
         target = f'http://127.0.0.1:{server.server_address[1]}/'
@@ -1063,7 +1077,8 @@ class KeyProxyTests(unittest.TestCase):
             finally:
                 connection.close()
         threading.Thread(target=serve_once, daemon=True).start()
-        proxy = ex.KeyProxy('https://example.invalid/v1', 'fake-key', host='127.0.0.1')
+        proxy = ex.KeyProxy('https://example.invalid/v1', 'fake-key', host='127.0.0.1',
+                            allowed_ports={port})
         self.addCleanup(proxy.close)
         auth = base64.b64encode(('veil:' + proxy.token).encode()).decode()
         missing = f'CONNECT 127.0.0.1:{port} HTTP/1.0\r\n\r\n'.encode()
@@ -1086,6 +1101,20 @@ class KeyProxyTests(unittest.TestCase):
                     break
                 received += chunk
             self.assertEqual(received, b'tunnel-ok')
+
+    def test_proxy_rejects_non_http_ports(self):
+        proxy = ex.KeyProxy('https://example.invalid/v1', 'fake-key', host='127.0.0.1')
+        self.addCleanup(proxy.close)
+        proxy.allow_hosts({'127.0.0.1'})
+        auth = base64.b64encode(('veil:' + proxy.token).encode()).decode()
+        for target in ('127.0.0.1:22', '127.0.0.1:8080'):
+            request = (f'CONNECT {target} HTTP/1.0\r\n'
+                       f'Proxy-Authorization: Basic {auth}\r\n\r\n').encode()
+            self.assertIn(b' 403 ', self._raw_proxy(proxy, request).split(b'\r\n', 1)[0])
+        request = (f'GET http://127.0.0.1:8080/ HTTP/1.0\r\nHost: 127.0.0.1\r\n'
+                   f'Proxy-Authorization: Basic {auth}\r\n\r\n').encode()
+        self.assertIn(b' 403 ', self._raw_proxy(proxy, request).split(b'\r\n', 1)[0])
+
 
 
 class ChatWiringTests(unittest.TestCase):
@@ -1635,10 +1664,15 @@ class RealOpenCodeTests(unittest.TestCase):
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
         provider = {**PROVIDER, 'base_url': f'http://127.0.0.1:{server.server_address[1]}/v1', 'model': 'fake'}
+        def proxy_factory(*args, **kwargs):
+            kwargs['allowed_ports'] = {port}
+            created = ex.KeyProxy(*args, **kwargs)
+            created.allow_hosts({'localtest.me'})
+            return created
         result = ex.run('fetch the approved local document', command='opencode', workdir=base / 'bench',
                         home=base / 'home', provider=provider, key='fake', limits={'max_seconds': 90},
                         autonomy=False, ask=lambda _p: 'y', stopped=lambda: False,
-                        record_cost=lambda _c: None,
+                        record_cost=lambda _c: None, proxy_factory=proxy_factory,
                         container={'image': 'veil-workbench'}, maintenance=True)
         self.assertEqual(result.state, '成功', result.text)
         self.assertIn('proxy-approved-ok', result.text)

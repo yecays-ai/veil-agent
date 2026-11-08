@@ -2,6 +2,7 @@ import json
 import io
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -364,6 +365,16 @@ class MaintenanceTests(unittest.TestCase):
             self.manager.store.save(stale)
         self.assertEqual(self.manager.store.load(task['task_id'])['stage'], 'stopped')
 
+    def test_stopped_task_status_survives_a_missing_worktree(self):
+        task = self.begin()
+        self.assertEqual(self.manager.invoke('stop', {'task_id': task['task_id']})[1], '成功')
+        shutil.rmtree(task['worktree'])
+        text, state = self.manager.invoke('status', {'task_id': task['task_id']})
+        self.assertEqual(state, '成功', text)
+        current = self.manager.store.load(task['task_id'])
+        self.assertEqual(current['stage'], 'stopped')
+        self.assertIn('worktree is missing', text)
+
     def test_stale_stop_cannot_overwrite_a_merged_task(self):
         task = self.begin()
         self.develop(task)
@@ -513,6 +524,19 @@ class MaintenanceTests(unittest.TestCase):
         self.assertEqual(state, '被拒绝', text)
         self.assertEqual(self.manager.store.load(task['task_id'])['acceptance']['status'], 'not_yet')
 
+    def test_acceptance_rejects_a_changed_remote_pr_head(self):
+        task = self.begin()
+        self.develop(task)
+        self.manager.invoke('deliver', {'task_id': task['task_id']})
+        self.manager.invoke('checks', {'task_id': task['task_id']})
+        self.gh.head = 'a-different-remote-head'
+        self.manager.instance_factory = Mock(side_effect=AssertionError('must not start a stale instance'))
+        text, state = self.manager.invoke('accept', {'task_id': task['task_id']})
+        self.assertEqual(state, '出错', text)
+        current = self.manager.store.load(task['task_id'])
+        self.assertEqual(current['acceptance']['status'], 'not_yet')
+        self.assertIn('head changed', ' '.join(current['blockers']))
+
     def test_acceptance_runs_from_a_snapshot_of_the_accepted_commit(self):
         task = self.begin()
         self.develop(task)
@@ -546,7 +570,10 @@ class MaintenanceTests(unittest.TestCase):
         archive = subprocess.run(['git', '-c', f'safe.directory={source.as_posix()}', '-C', str(source),
                                   'archive', '--format=tar', 'HEAD'], capture_output=True, timeout=60, check=True)
         with tarfile.open(fileobj=io.BytesIO(archive.stdout), mode='r:') as content:
-            content.extractall(self.repo, filter='data')
+            if sys.version_info >= (3, 12):
+                content.extractall(self.repo, filter='data')
+            else:
+                content.extractall(self.repo)
         character = self.repo / 'characters' / 'peter' / 'character.toml'
         character.parent.mkdir(parents=True, exist_ok=True)
         character.write_text('''name = "Peter"

@@ -962,6 +962,9 @@ class MaintenanceManager:
         worktree = Path(task['worktree'])
         if not worktree.exists():
             task['blockers'] = ['maintenance worktree is missing']
+            if task['stage'] in {'stopped', 'merged', 'done'}:
+                self.store.save(task)
+                return
             _event(task, 'blocked', 'worktree missing')
             self.store.save(task)
             return
@@ -972,6 +975,9 @@ class MaintenanceManager:
             return
         if branch != task['branch']:
             task['blockers'] = ['worktree branch does not match the task']
+            if task['stage'] in {'stopped', 'merged', 'done'}:
+                self.store.save(task)
+                return
             _event(task, 'blocked', 'branch mismatch')
             self.store.save(task)
             return
@@ -1122,6 +1128,15 @@ class MaintenanceManager:
         if (not task['pull_request'].get('head_sha') or head != task['pull_request']['head_sha'] or
                 self._git('status', '--porcelain', cwd=worktree).strip()):
             return 'worktree differs from the PR; deliver the exact code before acceptance', '被拒绝'
+        try:
+            view = self._pr_view(task['pull_request']['number'])
+        except MaintenanceError as exc:
+            return f'cannot verify the current pull request head: {_short(str(exc), 300)}', '出错'
+        if (view.get('headRefOid') != head or task['pull_request'].get('head_sha') != head):
+            task['blockers'] = ['the pull request head changed; deliver and start a fresh acceptance']
+            task['next_step'] = 'Do not accept an older snapshot; deliver the current PR head first.'
+            self.store.save(task)
+            return 'the pull request head changed; acceptance is invalid', '出错'
         result = str(args.get('result') or '').strip().lower()
         if result not in {'passed', 'failed'}:
             if task['acceptance'].get('instance_url'):

@@ -775,7 +775,7 @@ def decide(permission, patterns, metadata, workdir, *, autonomy, ask, grants=Non
             reply, why = _ask_lan(prompt, _operation_summary(permission, patterns, metadata),
                                   key, ask, grants, approvals,
                                   task_scope.denied if task_scope is not None else None)
-            if reply == 'once' and allow_network is not None:
+            if reply == 'once' and allow_network is not None and needs_lan:
                 allow_network(_approved_hosts(patterns, command_tokens))
             return reply, why
     if permission == 'webfetch':
@@ -842,8 +842,36 @@ def summarize(messages):
     return steps, calls, repeat, final
 
 
+def _wrapped_test_command(tokens):
+    while tokens and tokens[0] in {'timeout', 'time'}:
+        tokens = tokens[1:]
+        if tokens and not tokens[0].startswith('-') and re.fullmatch(r'\d+(?:\.\d+)?[smhd]?', tokens[0]):
+            tokens = tokens[1:]
+    if tokens and tokens[0] == 'env':
+        tokens = tokens[1:]
+        while tokens and (tokens[0].startswith('-') or re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', tokens[0])):
+            tokens = tokens[1:]
+    return _test_command(tokens)
+
+
+def _exit_from_output(state):
+    values = [state.get('output'), (state.get('metadata') or {}).get('output'),
+              (state.get('metadata') or {}).get('stdout')]
+    for value in values:
+        if not isinstance(value, str):
+            continue
+        matches = re.findall(r'(?:EXIT[_ ]?CODE|exit code)\s*[=: ]\s*(\d+)', value, re.I)
+        if matches:
+            return int(matches[-1])
+    return None
+
+
 def _last_test_exit(messages):
-    """Use OpenCode's numeric shell exit for a final test command, not model prose."""
+    """Use OpenCode's numeric shell exit for the last test command, including wrapped tests.
+
+    A shell exit from a trailing non-test command (for example `pytest; printf ...`) is not the
+    test's exit. If the command prints the real code, use it; otherwise fail closed instead of
+    reporting a failed test as success."""
     result = None
     for message in messages:
         for part in message.get('parts', []):
@@ -860,14 +888,24 @@ def _last_test_exit(messages):
                 tokens = list(lexer)
             except ValueError:
                 continue
-            last = []
+            segments, current = [], []
             for token in tokens:
                 if re.fullmatch(r'[;&|]+', token):
-                    last = []
+                    if current:
+                        segments.append(current)
+                        current = []
                 else:
-                    last.append(token)
-            if _test_command(last):
+                    current.append(token)
+            if current:
+                segments.append(current)
+            test_indexes = [index for index, segment in enumerate(segments) if _wrapped_test_command(segment)]
+            if not test_indexes:
+                continue
+            if max(test_indexes) == len(segments) - 1 or 'pipefail' in command.casefold():
                 result = exit_code
+                continue
+            printed = _exit_from_output(state)
+            result = printed if printed is not None else 1
     return result
 
 
@@ -944,12 +982,16 @@ class KeyProxy:
     HTTP/HTTPS tunnel for an approved install or network command. Tests and unknown commands never add hosts.
     """
 
-    def __init__(self, upstream_base, key, *, max_requests=400, host='127.0.0.1', timeout=180):
+    def __init__(self, upstream_base, key, *, max_requests=400, host='127.0.0.1', timeout=180,
+                 allowed_ports=None):
         self.token = secrets.token_urlsafe(24)
         self.upstream = upstream_base.rstrip('/')
+        self.allowed_ports = set(allowed_ports) if allowed_ports else {80, 443}
         self.requests = 0
         self.proxy_requests = 0
-        self.proxy_limit = 100
+        # A large pip/npm install can open many connections; this is a runaway guard, not a
+        # per-package quota. Model calls have their own max_requests limit.
+        self.proxy_limit = 1000
         self.allowed_hosts = set()
         self.lock = threading.Lock()
         proxy = self
@@ -981,6 +1023,9 @@ class KeyProxy:
             def _host_allowed(self, host):
                 return bool(host and host.casefold().rstrip('.') in proxy.allowed_hosts)
 
+            def _port_allowed(self, port):
+                return port in proxy.allowed_ports
+
             def _take_proxy_slot(self):
                 with proxy.lock:
                     if proxy.proxy_requests >= proxy.proxy_limit:
@@ -999,6 +1044,8 @@ class KeyProxy:
                     return self._deny(400, 'invalid tunnel target')
                 if not self._host_allowed(host):
                     return self._deny(403, 'host was not approved for this task')
+                if not self._port_allowed(port):
+                    return self._deny(403, 'only HTTP/HTTPS ports are allowed')
                 if not self._take_proxy_slot():
                     return self._deny(429, 'network approval limit reached')
                 try:
@@ -1068,9 +1115,11 @@ class KeyProxy:
                     return self._deny(400, 'proxy request must be an absolute http(s) URL')
                 if not self._host_allowed(parts.hostname):
                     return self._deny(403, 'host was not approved for this task')
+                port = port or (443 if parts.scheme == 'https' else 80)
+                if not self._port_allowed(port):
+                    return self._deny(403, 'only HTTP/HTTPS ports are allowed')
                 if not self._take_proxy_slot():
                     return self._deny(429, 'network approval limit reached')
-                port = port or (443 if parts.scheme == 'https' else 80)
                 body = self.rfile.read(int(self.headers.get('Content-Length') or 0)) if method == 'POST' else None
                 target = parts.path + (('?' + parts.query) if parts.query else '')
                 headers = {name: value for name, value in self.headers.items()
