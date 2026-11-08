@@ -14,7 +14,7 @@ from unittest.mock import Mock, patch
 from veil_agent import (Chat, Budget, Store, build_self_description, conservative_token_ratio,
                         estimate_request_tokens,
                         load_character, make_model, model_tool_result, run_chat, UserError,
-                        RequestFailed, TooLong, send_message_schema)
+                        RequestFailed, RequestNotSent, TooLong, send_message_schema)
 
 
 def sent_facts(messages):
@@ -431,6 +431,13 @@ output_cny_per_million = "8"
 
         self.assertTrue(any('接口没有返回文字回复' in str(item) for item in outputs))
         self.assertTrue(any('normal reply' in str(item) for item in outputs))
+
+    def test_model_configuration_error_keeps_run_chat_alive(self):
+        outputs = []
+        self.chat.send = Mock(side_effect=RequestNotSent('还没有可用的聊天模型；请先在模型设置里选择。'))
+        run_chat(self.chat, Mock(side_effect=['first request', '/quit']), outputs.append)
+        self.assertEqual(self.chat.send.call_count, 1)
+        self.assertTrue(any('还没有可用的聊天模型' in str(item) for item in outputs))
 
     def test_storage_user_error_propagates_out_of_run_chat(self):
         outputs = []

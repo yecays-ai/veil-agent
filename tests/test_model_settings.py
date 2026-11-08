@@ -243,7 +243,12 @@ output_cny_per_million = "2"
 kind = "claude_agent"
 label = "Claude Code · Sonnet（均衡）"
 model = "sonnet"
+base_url = "https://claude.invalid/v1"
+api_key_env = "FAKE_KEY"
 max_input_tokens = 200000
+input_cny_per_million = "1"
+cached_input_cny_per_million = "1"
+output_cny_per_million = "1"
 '''
         (self.root / 'characters' / 'test' / 'character.toml').write_text(toml, encoding='utf-8')
         view = load_character(self.root, 'test').models.public()
@@ -263,6 +268,44 @@ max_input_tokens = 200000
         self.assertEqual(cfg.provider['model'], 'fake-model')
         self.assertFalse([item for item in cfg.models.public()['models']
                           if item.get('kind') == 'claude_agent'])
+
+    def test_fallback_skips_invalid_provider_and_uses_the_next_valid_one(self):
+        toml = '''name = "Test"
+provider = "claude_agent"
+persona = "persona/test.md"
+history_rounds = 20
+max_output_tokens = 50
+[providers.claude_agent]
+kind = "claude_agent"
+model = "sonnet"
+[providers.broken]
+model = "broken-model"
+[providers.valid]
+model = "valid-model"
+base_url = "https://valid.invalid/v1"
+api_key_env = "FAKE_KEY"
+max_input_tokens = 6000
+input_cny_per_million = "1"
+cached_input_cny_per_million = "1"
+output_cny_per_million = "2"
+'''
+        (self.root / 'characters' / 'test' / 'character.toml').write_text(toml, encoding='utf-8')
+        cfg = load_character(self.root, 'test')
+        self.assertEqual(cfg.provider_name, 'valid')
+        self.assertEqual(cfg.provider['model'], 'valid-model')
+
+    def test_character_without_a_providers_table_starts_in_recovery(self):
+        toml = '''name = "Test"
+provider = "claude_agent"
+persona = "persona/test.md"
+history_rounds = 20
+max_output_tokens = 50
+'''
+        (self.root / 'characters' / 'test' / 'character.toml').write_text(toml, encoding='utf-8')
+        cfg = load_character(self.root, 'test')
+        self.assertTrue(cfg.provider.get('missing'))
+        self.assertIsNone(cfg.models.public()['use']['peter'])
+        self.assertIn('还没有可用的聊天模型', cfg.models.public()['migration_notice'])
 
     def test_migration_prefers_a_keyed_custom_model_when_default_key_is_missing(self):
         cfg, model_id = self.add_relay()
@@ -343,6 +386,40 @@ max_input_tokens = 200000
         store = Store(self.root / 'data')
         with self.assertRaises(UserError):
             Chat(cfg, store, Budget(store), Mock()).send('fake')
+
+    def test_saving_first_endpoint_and_model_works_without_a_chat_model(self):
+        from veil_agent import ActivityState
+        from web_agent import Hub
+
+        toml = '''name = "Test"
+provider = "claude_agent"
+persona = "persona/test.md"
+history_rounds = 20
+max_output_tokens = 50
+[providers.claude_agent]
+kind = "claude_agent"
+model = "sonnet"
+'''
+        (self.root / 'characters' / 'test' / 'character.toml').write_text(toml, encoding='utf-8')
+        cfg = load_character(self.root, 'test')
+        store = Store(self.root / 'data')
+        hub = Hub('Test', ActivityState(store.root / 'test' / 'resident-state.json'),
+                  media_root=store.root / 'test' / 'media')
+        hub.chat = Chat(cfg, store, Budget(store), Mock())
+        limits = {'daily_cny': '30', 'monthly_cny': '600'}
+        view = hub.save_models({'endpoints': [{'name': 'relay', 'base_url': 'https://relay.invalid/v1',
+                                               'key': 'sk-fake'}], 'models': [], 'limits': limits})
+        self.assertEqual(len(view['endpoints']), 1)
+        endpoint = view['endpoints'][0]['id']
+        view = hub.save_models({
+            'endpoints': [{'id': endpoint, 'name': 'relay', 'base_url': 'https://relay.invalid/v1'}],
+            'models': [{'endpoint': endpoint, 'model': 'relay-model', 'label': 'Relay',
+                        'billing': 'call', 'cny_per_call': '0.06'}],
+            'limits': limits})
+        self.assertEqual(len(view['models']), 1)
+        self.assertIsNone(view['use']['peter'])
+        hub.use_model('peter', view['models'][0]['id'])
+        self.assertEqual(hub.chat.pending_model[1]['model'], 'relay-model')
 
     def test_make_model_starts_without_a_key_but_the_request_explains_why(self):
         (self.root / '.env').write_text('OTHER_KEY=present\n', encoding='utf-8')

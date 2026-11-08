@@ -1207,15 +1207,15 @@ class Hub(ScreenPopMixin):
     def save_models(self, payload):
         models = self.chat.cfg.models
         with models.env_lock, models.lock:
-            before = models.chosen('peter')
+            before = models.startup_choice('peter')
             models.save(payload)
             daily, monthly = models.limits()
             if self.acceptance_limits:
                 daily = min(daily, self.acceptance_limits[0])
                 monthly = min(monthly, self.acceptance_limits[1])
             self.chat.budget.daily, self.chat.budget.monthly = daily, monthly
-            after = models.chosen('peter')
-            if after[0] != before[0] or after[2] != before[2]:
+            after = models.startup_choice('peter')
+            if after is not None and (before is None or after[0] != before[0] or after[2] != before[2]):
                 self.chat.switch_model(after[1], after[2])
         return self.refresh_models()
 
