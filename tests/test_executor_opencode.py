@@ -382,6 +382,17 @@ class DecisionTests(unittest.TestCase):
                                    maintenance=True, allow_network=allow)[0], 'once')
         self.assertEqual(len(allowed), before, 'a test must not open network hosts')
 
+    def test_environment_probe_commands_do_not_ask(self):
+        wd = Path(tempfile.mkdtemp())
+        ask = Mock(side_effect=AssertionError('a read-only environment probe must not ask'))
+        for command in ('pwd', 'python3 --version', 'node --version', 'npm --version',
+                        'git --version', 'git branch --show-current',
+                        'pwd && ls -la && git branch --show-current && python3 --version'):
+            self.assertEqual(ex.decide('bash', [command], {'command': command}, wd, autonomy=False,
+                                       ask=ask, task_scope=ex.TaskScope(wd), maintenance=True,
+                                       isolated_tests=True)[0], 'once', command)
+        ask.assert_not_called()
+
     def test_task_scoped_approval_reuses_same_package_but_asks_for_another(self):
         wd = Path('/data/peter/workbench')
         scope = ex.TaskScope(wd)

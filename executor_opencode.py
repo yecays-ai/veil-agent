@@ -263,6 +263,19 @@ def _complex_bash_request(patterns, metadata, workdir=None, test_scripts=None, t
     if any('<' in token or '>' in token for token in shell_tokens):
         return True
     operators = [token for token in shell_tokens if re.fullmatch(r'[;&|]+', token)]
+    if len(commands) == 1 and operators:
+        rebuilt, current = [], []
+        for token in shell_tokens:
+            if re.fullmatch(r'[;&|]+', token):
+                if current:
+                    rebuilt.append(current)
+                    current = []
+            else:
+                current.append(token)
+        if current:
+            rebuilt.append(current)
+        if rebuilt:
+            commands = rebuilt
     if operators and len(commands) != len(operators) + 1:
         return True
     if len(commands) > 1:
@@ -314,6 +327,8 @@ def _safe_project_command(tokens, workdir=None, test_scripts=None, current=None,
         return False
     command = _command_name(tokens[0])
     if command == 'git':
+        if tokens[1:] in (['--version'], ['--help'], ['-h']):
+            return True
         if _git_write_request(tokens):
             return False
         if any(arg == '--output' or arg.startswith('--output=') or arg == '--ext-diff' for arg in tokens[1:]):
@@ -338,16 +353,24 @@ def _safe_project_command(tokens, workdir=None, test_scripts=None, current=None,
     if command == 'touch':
         return (len(tokens) > 1 and
                 not any(_outside_workdir_argument(arg, workdir, current) for arg in tokens[1:] if not arg.startswith('-')))
+    if re.fullmatch(r'pip\d*(?:\.\d+)*', command) and tokens[1:] in (['--version'], ['-V']):
+        return True
     if command in {'pytest', 'py.test'}:
         return not any(_outside_workdir_argument(arg, workdir, current) for arg in tokens[1:] if not arg.startswith('-'))
     if command == 'node':
+        if len(tokens) == 2 and tokens[1] in {'--version', '-v', '--help', '-h'}:
+            return True
         if len(tokens) < 2 or tokens[1] != '--test' or '--eval' in tokens or '-e' in tokens:
             return False
         return not any(_outside_workdir_argument(arg, workdir, current)
                        for arg in tokens[2:] if not arg.startswith('-'))
     if command == 'npm':
+        if len(tokens) == 2 and tokens[1] in {'--version', '-v'}:
+            return True
         return len(tokens) >= 2 and tokens[1] in {'test', 't'}
     if command in {'python', 'python3'} or re.fullmatch(r'python\d+(?:\.\d+)*', command):
+        if len(tokens) == 2 and tokens[1] in {'--version', '-V', '--help', '-h'}:
+            return True
         if command and tokens[1:3] in (['-m', 'unittest'], ['-m', 'pytest']):
             return True
         if len(tokens) < 2 or tokens[1].startswith('-'):
