@@ -891,6 +891,13 @@ def build_config(provider, token, base_url, protect=()):
 SECRET_FILE = re.compile(r'^(.*\.env(\..*)?|.*\.pem|id_(rsa|ed25519).*|.*\.pfx|.*\.key|cookies|login data)$', re.I)
 
 
+def _link_like(path):
+    """A symlink or Windows reparse point (including a junction)."""
+    return bool(path.is_symlink() or
+                getattr(path.lstat(), 'st_file_attributes', 0) &
+                getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0x400))
+
+
 def secret_directories(workdir):
     """Protect whole secret directories, including their otherwise ordinary-looking filenames."""
     found = []
@@ -903,8 +910,7 @@ def secret_directories(workdir):
             if name.casefold() == '.git':
                 continue
             path = Path(base) / name
-            if (path.is_symlink() or getattr(path.lstat(), 'st_file_attributes', 0) &
-                    getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0x400)):
+            if _link_like(path):
                 if name.casefold() in {'secrets', '.ssh'} or not path.resolve().is_relative_to(root):
                     raise ValueError('cannot safely mount a project containing external directory links')
                 links.add(name)
@@ -916,15 +922,22 @@ def secret_directories(workdir):
 
 
 def secret_files(workdir, max_depth=None):
-    """Secret-looking files inside the project are masked with an empty file in the container."""
+    """Secret-looking files inside the project are masked with an empty file in the container. A link that
+    points outside the project is refused: the container must never expose a host file through one."""
     found, root = [], Path(workdir)
+    root_resolved = root.resolve()
     def fail_walk(error):
         raise error
     for base, dirs, names in os.walk(root, onerror=fail_walk):
         depth = len(Path(base).relative_to(root).parts)
         dirs[:] = [d for d in dirs if d.casefold() not in {'.git', 'secrets', '.ssh'}
                    and (max_depth is None or depth < max_depth)]
-        found += [Path(base) / n for n in names if SECRET_FILE.match(n)]
+        for name in names:
+            path = Path(base) / name
+            if _link_like(path) and not path.resolve().is_relative_to(root_resolved):
+                raise ValueError('cannot safely mount a project containing external file links')
+            if SECRET_FILE.match(name):
+                found.append(path)
     return found
 
 
@@ -1092,7 +1105,10 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
                 api.call('GET', '/session/status')
                 break
             except Exception:
-                if proc.poll() is not None or clock() - started > 60 or stopped():
+                if stopped():
+                    return ExecutorResult('[workbench=stopped; reason=user_stopped]', '出错',
+                                          reason='user_stopped')
+                if proc.poll() is not None or clock() - started > 60:
                     return ExecutorResult('The workbench could not start (OpenCode did not answer).', '出错')
                 sleep(1)
         if stopped():

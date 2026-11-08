@@ -696,6 +696,24 @@ class RunTests(unittest.TestCase):
         self.assertEqual(api.posted, [])
         self.assertEqual(costs, [Decimal(0)])
 
+    def test_stop_while_server_starts_is_recorded_as_user_stopped(self):
+        stopped = threading.Event()
+        class NotReady(FakeApi):
+            def call(self, method, path, body=None):
+                if path == '/session/status':
+                    raise OSError('not ready')
+                return super().call(method, path, body)
+        checks = []
+        def stop_after_the_initial_check():
+            checks.append(1)
+            return len(checks) > 1
+        result, api, costs, kill = run([], stopped=stop_after_the_initial_check,
+                                       api_factory=lambda *_: NotReady([]))
+        self.assertEqual(result.reason, 'user_stopped', result.text)
+        self.assertEqual(api.posted, [])
+        self.assertEqual(costs, [Decimal(0)])
+        kill.assert_called_once()
+
     def test_missing_server_is_reported_and_cost_still_settled(self):
         class Dead(FakeApi):
             def call(self, *_a, **_k):
@@ -775,6 +793,23 @@ class RunTests(unittest.TestCase):
         (base / 'linked').mkdir()
         with patch.object(Path, 'is_symlink', lambda path: path.name == 'linked'):
             self.assertEqual(ex.secret_directories(base), [])
+
+    def test_external_file_link_cannot_escape_container_project_scope(self):
+        base = Path(tempfile.mkdtemp())
+        (base / 'notes.txt').write_text('safe', encoding='utf-8')
+        actual_resolve = Path.resolve
+        def fake_resolve(path, *args, **kwargs):
+            return base.parent / 'outside-project' if path.name == 'notes.txt' else actual_resolve(path, *args, **kwargs)
+        with patch.object(Path, 'is_symlink', lambda path: path.name == 'notes.txt'), \
+                patch.object(Path, 'resolve', fake_resolve):
+            with self.assertRaises(ValueError):
+                ex.secret_files(base)
+
+    def test_internal_file_link_does_not_block_project(self):
+        base = Path(tempfile.mkdtemp())
+        (base / 'notes.txt').write_text('safe', encoding='utf-8')
+        with patch.object(Path, 'is_symlink', lambda path: path.name == 'notes.txt'):
+            self.assertEqual(ex.secret_files(base), [])
 
 
 class ProtectTests(unittest.TestCase):

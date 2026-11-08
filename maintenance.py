@@ -194,6 +194,8 @@ class MaintenanceStore:
                 observed_merge = (task.get('stage') == 'merged' and
                                   task.get('pull_request', {}).get('state') == 'MERGED' and
                                   task.get('deployment', {}).get('merged_commit'))
+                if current['stage'] in {'merged', 'done'} and task.get('stage') not in {'merged', 'done'}:
+                    raise MaintenanceError('the task is already merged; stale state cannot change it')
                 if current['stage'] == 'stopped' and task.get('stage') != 'stopped' and not observed_merge:
                     raise MaintenanceError('the task was stopped; stale state cannot resume it')
             return self._save(task)
@@ -1125,8 +1127,10 @@ class MaintenanceManager:
             if task['acceptance'].get('instance_url'):
                 return (f"test instance: {task['acceptance']['instance_url']}. After Lan uses it, record "
                         'result=passed or result=failed.'), '成功'
+            instance = None
             try:
-                started = self.instance_factory(task).start()
+                instance = self.instance_factory(task)
+                started = instance.start()
             except (MaintenanceError, OSError) as exc:
                 task['acceptance']['status'] = 'not_yet'
                 task['blockers'] = ['could not start an isolated test instance']
@@ -1134,12 +1138,31 @@ class MaintenanceManager:
                 task['next_step'] = 'Explain the limitation to Lan and wait for her delivery decision.'
                 self.store.save(task)
                 return _short(f'无法启动独立测试实例：{exc}', 700), '出错'
+            def discard_instance():
+                stop_instance = getattr(instance, 'stop', None)
+                if callable(stop_instance):
+                    try:
+                        stop_instance()
+                    except Exception:
+                        pass
+            try:
+                current = self.store.load(task['task_id'])
+                stopped_now = self.stopped() or not current or current['stage'] == 'stopped'
+            except MaintenanceError:
+                stopped_now = True
+            if stopped_now:
+                discard_instance()
+                return 'the task was stopped while the test instance was starting; no instance was kept', '被拒绝'
             task['acceptance'].update({'instance_url': started.url, 'pids': started.pids,
                                        'config_dir': started.config_dir, 'status': 'not_yet',
                                        'recorded_at': _now(), 'instance_head_sha': head})
             _event(task, 'awaiting_acceptance', 'test instance started')
             task['next_step'] = 'Lan uses the isolated test instance; unaccepted work must not merge.'
-            self.store.save(task)
+            try:
+                self.store.save(task)
+            except MaintenanceError:
+                discard_instance()
+                return 'the task changed while the test instance was starting; the instance was stopped', '被拒绝'
             return (f"独立测试实例已启动：{started.url}\n{started.note}\n"
                     '请 Lan 实际体验。通过后 action=accept result=passed，未通过用 failed。'), '成功'
         if not task['acceptance'].get('instance_url') or task['acceptance'].get('instance_head_sha') != head:

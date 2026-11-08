@@ -364,6 +364,44 @@ class MaintenanceTests(unittest.TestCase):
             self.manager.store.save(stale)
         self.assertEqual(self.manager.store.load(task['task_id'])['stage'], 'stopped')
 
+    def test_stale_stop_cannot_overwrite_a_merged_task(self):
+        task = self.begin()
+        self.develop(task)
+        self.assertEqual(self.manager.invoke('deliver', {'task_id': task['task_id']})[1], '成功')
+        self.assertEqual(self.manager.invoke('checks', {'task_id': task['task_id']})[1], '成功')
+        self.manager.instance_factory = lambda record: SimpleNamespace(
+            start=lambda: maintenance.AcceptanceResult('http://127.0.0.1:1234/?t=x', [], 'fixture', ''))
+        self.assertEqual(self.manager.invoke('accept', {'task_id': task['task_id']})[1], '成功')
+        self.assertEqual(self.manager.invoke('accept', {'task_id': task['task_id'], 'result': 'passed'})[1], '成功')
+        stale = self.manager.store.load(task['task_id'])
+        self.assertEqual(stale['stage'], 'ready_to_merge')
+        self.assertEqual(self.manager.invoke('merge', {'task_id': task['task_id']})[1], '成功')
+        stale['stage'] = 'stopped'
+        stale['next_step'] = 'Stopped by Lan; no more commands, pushes or merges.'
+        with self.assertRaises(maintenance.MaintenanceError):
+            self.manager.store.save(stale)
+        self.assertEqual(self.manager.store.load(task['task_id'])['stage'], 'merged')
+
+    def test_stop_during_test_instance_start_discards_the_instance(self):
+        task = self.begin()
+        self.develop(task)
+        self.assertEqual(self.manager.invoke('deliver', {'task_id': task['task_id']})[1], '成功')
+        stopped_calls = []
+        test_case, manager = self, self.manager
+        def factory(_task):
+            class Instance:
+                def start(self):
+                    test_case.assertEqual(manager.invoke('stop', {'task_id': task['task_id']})[1], '成功')
+                    return maintenance.AcceptanceResult('http://127.0.0.1:1234/?t=x', [1234], 'fixture', '/tmp/config')
+                def stop(self):
+                    stopped_calls.append(True)
+            return Instance()
+        self.manager.instance_factory = factory
+        text, state = self.manager.invoke('accept', {'task_id': task['task_id']})
+        self.assertEqual(state, '被拒绝', text)
+        self.assertEqual(stopped_calls, [True])
+        self.assertEqual(self.manager.store.load(task['task_id'])['stage'], 'stopped')
+
     def test_delivery_cannot_race_a_running_workbench_but_stop_can(self):
         task = self.begin()
         _target, lock = self.manager.claim_workbench(task['task_id'])
@@ -615,6 +653,63 @@ output_cny_per_million = "8"
         self.assertEqual(result.state, '成功', result.text)
         self.assertTrue((Path(task['worktree']) / 'test_feature.py').is_file())
         self.assertIn('OK', result.text)
+        text, state = self.manager.invoke('deliver', {'task_id': task['task_id']})
+        self.assertEqual(state, '成功', text)
+        self.assertTrue(self.gh.pr_created)
+        self.assertEqual(self.manager.invoke('checks', {'task_id': task['task_id']})[1], '成功')
+        self.manager.instance_factory = lambda record: SimpleNamespace(
+            start=lambda: maintenance.AcceptanceResult('http://127.0.0.1:1234/?t=x', [], 'fixture', ''))
+        self.assertEqual(self.manager.invoke('accept', {'task_id': task['task_id']})[1], '成功')
+        self.assertEqual(self.manager.invoke('accept', {'task_id': task['task_id'], 'result': 'passed'})[1], '成功')
+        self.assertEqual(self.manager.invoke('merge', {'task_id': task['task_id']})[1], '成功')
+        self.assertTrue(self.gh.merged)
+
+    def test_real_opencode_failure_then_fix_delivers_to_fake_github(self):
+        import executor_opencode as ex
+        from tests.test_executor_opencode import _docker_workbench_available, _fake_llm, PROVIDER
+        if not _docker_workbench_available():
+            self.skipTest('VEIL workbench Docker image is unavailable')
+        task = self.begin()
+        worktree = Path(task['worktree'])
+        (worktree / 'test_feature.py').write_text(
+            'import unittest\nclass FeatureTest(unittest.TestCase):\n'
+            ' def test_feature(self): self.assertEqual(1, 2)\n', encoding='utf-8')
+        failed_server = _fake_llm('python3 -m unittest test_feature')
+        self.addCleanup(failed_server.server_close)
+        self.addCleanup(failed_server.shutdown)
+        failed_provider = {**PROVIDER, 'base_url': f'http://127.0.0.1:{failed_server.server_address[1]}/v1',
+                           'model': 'fake'}
+        failed = ex.run('run the project tests', command='opencode', workdir=worktree,
+                        home=self.root / 'home', provider=failed_provider, key='fake',
+                        limits={'max_seconds': 90}, autonomy=False, ask=lambda _p: 'y',
+                        stopped=lambda: False, record_cost=lambda _c: None,
+                        container={'image': 'veil-workbench'}, maintenance=True)
+        self.assertEqual(failed.state, '出错', failed.text)
+        self.assertEqual(failed.reason, 'test_failed', failed.text)
+        self.manager.record_workbench(task['task_id'], cost=failed.cost, steps=failed.steps,
+                                      report=failed.text, state=failed.state, reason=failed.reason)
+        text, state = self.manager.invoke('deliver', {'task_id': task['task_id']})
+        self.assertEqual(state, '被拒绝', text)
+        self.assertFalse(self.gh.pr_created)
+        fixed_server = _fake_llm([
+            'python3 -m unittest test_feature',
+            "printf 'import unittest\\nclass FeatureTest(unittest.TestCase):\\n"
+            " def test_feature(self): self.assertEqual(2, 2)\\n' > test_feature.py && "
+            'python3 -m unittest test_feature',
+        ])
+        self.addCleanup(fixed_server.server_close)
+        self.addCleanup(fixed_server.shutdown)
+        fixed_provider = {**PROVIDER, 'base_url': f'http://127.0.0.1:{fixed_server.server_address[1]}/v1',
+                          'model': 'fake'}
+        fixed = ex.run('fix the failing test', command='opencode', workdir=worktree,
+                       home=self.root / 'home', provider=fixed_provider, key='fake',
+                       limits={'max_seconds': 90}, autonomy=False, ask=lambda _p: 'y',
+                       stopped=lambda: False, record_cost=lambda _c: None,
+                       container={'image': 'veil-workbench'}, maintenance=True)
+        self.assertEqual(fixed.state, '成功', fixed.text)
+        self.assertIn('OK', fixed.text)
+        self.manager.record_workbench(task['task_id'], cost=fixed.cost, steps=fixed.steps,
+                                      report=fixed.text, state=fixed.state, reason=fixed.reason)
         text, state = self.manager.invoke('deliver', {'task_id': task['task_id']})
         self.assertEqual(state, '成功', text)
         self.assertTrue(self.gh.pr_created)
