@@ -1020,6 +1020,7 @@ class KeyProxyTests(unittest.TestCase):
         def serve_once():
             connection, _address = listener.accept()
             try:
+                connection.recv(16)
                 connection.sendall(b'tunnel-ok')
             finally:
                 connection.close()
@@ -1039,7 +1040,14 @@ class KeyProxyTests(unittest.TestCase):
             while b'\r\n\r\n' not in header:
                 header += connection.recv(4096)
             self.assertIn(b' 200 ', header.split(b'\r\n', 1)[0])
-            self.assertEqual(connection.recv(4096), b'tunnel-ok')
+            connection.sendall(b'ping')
+            received = b''
+            while len(received) < len(b'tunnel-ok'):
+                chunk = connection.recv(4096)
+                if not chunk:
+                    break
+                received += chunk
+            self.assertEqual(received, b'tunnel-ok')
 
 
 class ChatWiringTests(unittest.TestCase):
