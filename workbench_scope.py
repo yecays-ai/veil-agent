@@ -22,10 +22,25 @@ MARKERS = ('.git', 'pyproject.toml', 'package.json', 'requirements.txt', 'Cargo.
 SKIP_DIRS = {'node_modules', '.venv', 'venv', '__pycache__', '.git', '.ssh', 'secrets', 'appdata', '$recycle.bin',
              'windows', 'program files', 'program files (x86)', '.local-tmp', 'site-packages'}
 COPY_SKIP = {'.git', 'node_modules', '__pycache__', '.venv', 'venv', '.local-tmp'}
+GENERIC_NAMES = {'assess', 'review', 'reviews', 'project', 'projects', 'setup', 'build', 'tests', 'test',
+                 'notes', 'note', 'reports', 'report', 'code', 'source', 'app', 'apps', 'docs', 'documents',
+                 'files', 'archive', 'backup', 'temp', 'tmp', 'work', 'workspace', 'tools', 'utils', 'server',
+                 'config', 'output', 'scripts'}
 MAX_COPY_BYTES = 200 * 1024 * 1024
 MAX_COPY_FILES = 20000
 _GIT_ENV = {'GIT_TERMINAL_PROMPT': '0'}
 _WINDOWS = os.name == 'nt'
+_REPARSE = getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0x400)
+
+
+def _ordinary_dir(path):
+    """A real directory, not a symlink or a Windows junction/reparse point."""
+    try:
+        info = path.lstat()
+    except OSError:
+        return False
+    return (stat.S_ISDIR(info.st_mode) and not Path(path).is_symlink()
+            and not (getattr(info, 'st_file_attributes', 0) & _REPARSE))
 
 
 def _tokens(text):
@@ -66,7 +81,7 @@ def find_projects(hint, roots, *, limit=5, max_depth=3):
                     child = folder / name
                     if name.lower() in SKIP_DIRS or name.startswith('.'):
                         continue
-                    if child.is_dir() and not child.is_symlink():
+                    if _ordinary_dir(child):
                         stack.append((child, depth + 1))
     found.sort(key=lambda p: (-p['score'], -p['touched']))
     return found[:limit]
@@ -85,6 +100,57 @@ def choose_project(hint, roots):
     if len(found) == 1 or found[1]['score'] < top['score']:
         return 'one', top
     return 'many', [p for p in found if p['score'] == top['score']]
+
+
+def find_named_workspace_folders(name, root):
+    """Exact project-name matches inside Peter's workspace, including lightweight test projects."""
+    if (not isinstance(name, str) or not name.strip() or name in {'.', '..'} or
+            any(char in name for char in '/\\:*?[]{}')):
+        return []
+    wanted = name.casefold()
+    if wanted in GENERIC_NAMES:
+        return []
+    found, stack = [], [(Path(root), 0)]
+    while stack:
+        folder, depth = stack.pop()
+        try:
+            children = list(folder.iterdir())
+        except OSError:
+            continue
+        for child in children:
+            child_name = child.name.casefold()
+            if child_name in SKIP_DIRS or child.name.startswith('.') or not _ordinary_dir(child):
+                continue
+            if child_name == wanted:
+                found.append(child)
+            elif depth < 3:
+                stack.append((child, depth + 1))
+    return found
+
+
+def find_task_named_workspace_folders(task, root):
+    """Use a workspace subproject only when its literal, non-generic folder name appears as a token in the task."""
+    text = task.casefold() if isinstance(task, str) else ''
+    if not text:
+        return []
+    found, stack = [], [(Path(root), 0)]
+    while stack:
+        folder, depth = stack.pop()
+        try:
+            children = list(folder.iterdir())
+        except OSError:
+            continue
+        for child in children:
+            name = child.name.casefold()
+            if name in SKIP_DIRS or child.name.startswith('.') or not _ordinary_dir(child):
+                continue
+            if (len(name) >= 5 and name not in GENERIC_NAMES and
+                    re.search(r'(?<![0-9a-z\u4e00-\u9fff])' + re.escape(name) +
+                              r'(?![0-9a-z\u4e00-\u9fff])', text)):
+                found.append(child)
+            elif depth < 3:
+                stack.append((child, depth + 1))
+    return found
 
 
 def _git(root, *args):

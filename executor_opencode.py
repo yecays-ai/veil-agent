@@ -34,8 +34,6 @@ DEFAULT_LIMITS = {'max_steps': 30, 'max_seconds': 600, 'repeat_limit': 3, 'run_b
 RESULT_CHARS = 4000
 _WINDOWS = os.name == 'nt'
 
-SAFE_COMMANDS = ('git status*', 'git branch*', 'ls', 'ls *', 'dir', 'dir *',
-                 'pwd', 'python -m unittest*', 'python -m pytest*', 'pytest*', 'npm test*', 'node --test*')
 SECRET_GLOBS = ('*.env', '*.env.*', 'secrets/*', '*/secrets/*', '*\\secrets\\*', '.ssh/*', '*/.ssh/*', '*\\.ssh\\*',
                 '*id_rsa*', '*id_ed25519*', '*Login Data*', 'Cookies', '*/Cookies', '*\\Cookies')
 
@@ -43,6 +41,19 @@ CONTAINER_NOTE = (
     'Environment: you run in a Linux container with bash. The project is the current directory (/work). '
     'Any Windows path or Windows command (cmd, findstr, dir) in the request below refers to the owner\'s PC '
     'and does not exist here: use the current directory and Linux commands, and do not search for it elsewhere.\n\n')
+
+MAINTENANCE_NOTE = (
+    'This is an isolated maintenance worktree for VEIL itself. Read AGENTS.md, STATUS.md and HANDOFF.md first. '
+    'Change only files under the current directory. '
+    'Do not run git commit, push, checkout, reset, merge or any other command that rewrites repository history: '
+    'VEIL commits, pushes and creates the pull request after your report. Run the project tests and report what '
+    'actually failed or passed. The project\'s git metadata is intentionally not available in this container.\n\n')
+
+TASK_SCOPE_NOTE = (
+    'Task scope: the current directory and its children are the only project files for this task. '
+    'You may read, create and modify project files, and run ordinary local tests there. '
+    'Network, installation, publishing, credentials, project-external paths and destructive operations are decided by VEIL. '
+    'This scope ends when this task ends, is stopped, or reaches its budget or time limit.\n\n')
 
 TOOL_SCHEMA = {'type': 'function', 'function': {
     'name': TOOL_NAME,
@@ -60,7 +71,9 @@ TOOL_SCHEMA = {'type': 'function', 'function': {
                  'description': 'What to do and what to report back.'},
         'project': {'type': 'string', 'maxLength': 200,
                     'description': 'Optional project name when you know which existing project the job is about. '
-                                   'The program finds it; nobody needs to give a path.'}},
+                                   'The program finds it; nobody needs to give a path.'},
+        'task_id': {'type': 'string', 'description': 'Optional VEIL maintenance task ID; works only in that task\'s '
+                                                     'isolated worktree. The program checks it.'}},
         'required': ['task'], 'additionalProperties': False},
 }}
 
@@ -104,6 +117,81 @@ def _command_name(token):
     return re.sub(r'\.(exe|cmd|bat|com)$', '', name)
 
 
+def _is_test_script_name(value):
+    name = posixpath.basename(str(value).replace('\\', '/')).casefold()
+    return name.startswith('test_') and name.endswith('.py') or name.endswith('_test.py')
+
+
+def _test_command(tokens):
+    """True when this single command runs project tests; the test grant is asked once per task."""
+    while tokens and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', tokens[0]):
+        tokens = tokens[1:]
+    if not tokens:
+        return False
+    command = _command_name(tokens[0])
+    args = tokens[1:]
+    if command in {'pytest', 'py.test'}:
+        return True
+    if command in {'python', 'python3'} or re.fullmatch(r'python\d+(?:\.\d+)*', command):
+        if args[:2] in (['-m', 'unittest'], ['-m', 'pytest']):
+            return True
+        return bool(args and not args[0].startswith('-') and _is_test_script_name(args[0]))
+    if command in {'node', 'nodejs'} and '--test' in args:
+        return True
+    if command == 'npm' and args and args[0].casefold() in {'test', 't'}:
+        return True
+    return False
+
+
+def _test_command_in_scope(tokens, workdir, current=None):
+    """Reject test runners that would load code or read files outside the worktree."""
+    while tokens and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', tokens[0]):
+        tokens = tokens[1:]
+    if not tokens:
+        return False
+    command = _command_name(tokens[0])
+    args = tokens[1:]
+    if command in {'node', 'nodejs'}:
+        for arg in args:
+            if arg == '--test':
+                continue
+            if arg.startswith('-'):
+                return False  # --eval, --require, --loader and other code-loading flags
+            if _resolved_work_path(arg, workdir, current) is None:
+                return False
+        return True
+    if command == 'npm':
+        return bool(args and args[0].casefold() in {'test', 't'})
+    if command in {'python', 'python3'} or re.fullmatch(r'python\d+(?:\.\d+)*', command):
+        if args[:2] in (['-m', 'unittest'], ['-m', 'pytest']):
+            for arg in args[2:]:
+                if not arg.startswith('-') and ('/' in arg or '\\' in arg or arg in {'.', '..'}):
+                    if _resolved_work_path(arg, workdir, current) is None:
+                        return False
+            return True
+        if not args or args[0].startswith('-') or not _is_test_script_name(args[0]):
+            return False
+        return _resolved_work_path(args[0], workdir, current) is not None
+    return not any(_outside_workdir_argument(arg, workdir, current) for arg in args if not arg.startswith('-'))
+
+
+def _git_write_request(tokens):
+    while tokens and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', tokens[0]):
+        tokens = tokens[1:]
+    if not tokens or _command_name(tokens[0]) != 'git':
+        return False
+    if any(re.match(r'^(?:--config-env=)?alias\.', token, re.I) or token.casefold().startswith('alias.')
+           for token in tokens[1:]):
+        return True
+    subcommand = _git_subcommand(tokens)
+    if subcommand in {'commit', 'push', 'pull', 'fetch', 'merge', 'rebase', 'cherry-pick', 'revert', 'reset',
+                      'checkout', 'switch', 'clean', 'stash', 'tag', 'remote', 'config', 'submodule',
+                      'worktree', 'gc', 'filter-branch', 'update-ref'}:
+        return True
+    return subcommand == 'branch' and any(arg in {'-d', '-D', '-m', '-M', '--delete', '--move'}
+                                           for arg in tokens[1:])
+
+
 def _bash_command_needs_lan(tokens):
     git_config_alias = any(
         re.match(r'^GIT_CONFIG_KEY_\d+=alias\.', token, re.I) or
@@ -145,7 +233,7 @@ def _bash_command_needs_lan(tokens):
     return False
 
 
-def _complex_bash_request(patterns, metadata, workdir=None, test_scripts=None):
+def _complex_bash_request(patterns, metadata, workdir=None, test_scripts=None, task_scope=None):
     # OpenCode supplies parsed command fragments in patterns and the original shell input in metadata.command.
     command = metadata.get('command') if isinstance(metadata, dict) else None
     if not isinstance(command, str) or not command.strip() or not isinstance(patterns, list) or not patterns:
@@ -175,7 +263,7 @@ def _complex_bash_request(patterns, metadata, workdir=None, test_scripts=None):
                 current = _resolved_work_path(item[1], workdir, current)
                 if current is None:
                     return True
-            elif not _safe_project_command(item, workdir, test_scripts, current):
+            elif not _safe_project_command(item, workdir, test_scripts, current, task_scope):
                 return True
         return False
     command_tokens = commands[0]
@@ -191,9 +279,10 @@ def _complex_bash_request(patterns, metadata, workdir=None, test_scripts=None):
     if command_name in {'python', 'python3'} and command_tokens[1:3] in (
             ['-m', 'unittest'], ['-m', 'pytest']):
         return False
-    if command_name in SAFE_INSPECTION or command_name in {'python', 'python3'} or re.fullmatch(
+    if command_name in SAFE_INSPECTION or command_name in {'python', 'python3', 'node', 'npm', 'mkdir', 'touch',
+                                                           'pytest', 'py.test'} or re.fullmatch(
             r'python\d+(?:\.\d+)*', command_name):
-        return not _safe_project_command(command_tokens, workdir, test_scripts)
+        return not _safe_project_command(command_tokens, workdir, test_scripts, task_scope=task_scope)
     if command_name in {'python', 'python3', 'node', 'nodejs', 'deno', 'bun', 'ruby', 'perl', 'awk',
                         'gawk', 'mawk', 'php', 'osascript'} or re.fullmatch(r'python\d+(?:\.\d+)*', command_name):
         return True
@@ -203,8 +292,8 @@ def _complex_bash_request(patterns, metadata, workdir=None, test_scripts=None):
 SAFE_INSPECTION = {'ls', 'dir', 'pwd', 'cat', 'type', 'head', 'tail', 'wc', 'stat', 'file', 'find', 'grep', 'rg'}
 
 
-def _safe_project_command(tokens, workdir=None, test_scripts=None, current=None):
-    """Commands whose requested effect is inspection or running an explicitly named test file."""
+def _safe_project_command(tokens, workdir=None, test_scripts=None, current=None, task_scope=None):
+    """Normal project work allowed inside this task's Docker-mounted project scope."""
     while tokens and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', tokens[0]):
         tokens = tokens[1:]
     if not tokens:
@@ -217,13 +306,31 @@ def _safe_project_command(tokens, workdir=None, test_scripts=None, current=None)
         if command == 'find' and any(arg.casefold() in {'-delete', '-exec', '-execdir', '-ok', '-okdir'} for arg in tokens[1:]):
             return False
         return not any(_outside_workdir_argument(arg, workdir, current) for arg in tokens[1:] if not arg.startswith('-'))
+    if command == 'mkdir':
+        return (all(arg in {'-p', '--parents'} or not arg.startswith('-') for arg in tokens[1:]) and
+                any(not arg.startswith('-') for arg in tokens[1:]) and
+                not any(_outside_workdir_argument(arg, workdir, current) for arg in tokens[1:] if not arg.startswith('-')))
+    if command == 'touch':
+        return (len(tokens) > 1 and
+                not any(_outside_workdir_argument(arg, workdir, current) for arg in tokens[1:] if not arg.startswith('-')))
+    if command in {'pytest', 'py.test'}:
+        return not any(_outside_workdir_argument(arg, workdir, current) for arg in tokens[1:] if not arg.startswith('-'))
+    if command == 'node':
+        if len(tokens) < 2 or tokens[1] != '--test' or '--eval' in tokens or '-e' in tokens:
+            return False
+        return not any(_outside_workdir_argument(arg, workdir, current)
+                       for arg in tokens[2:] if not arg.startswith('-'))
+    if command == 'npm':
+        return len(tokens) >= 2 and tokens[1] in {'test', 't'}
     if command in {'python', 'python3'} or re.fullmatch(r'python\d+(?:\.\d+)*', command):
+        if command and tokens[1:3] in (['-m', 'unittest'], ['-m', 'pytest']):
+            return True
         if len(tokens) < 2 or tokens[1].startswith('-'):
             return False
         path = _resolved_work_path(tokens[1], workdir, current)
-        name = posixpath.basename(tokens[1].replace('\\', '/')).casefold()
-        return bool(path and test_scripts is not None and path in test_scripts and
-                    (name.startswith('test_') and name.endswith('.py') or name.endswith('_test.py')))
+        if task_scope is not None:
+            return task_scope.permits_test(path)
+        return bool(path and test_scripts is not None and path in test_scripts and _is_test_script_name(tokens[1]))
     return False
 
 
@@ -265,12 +372,41 @@ def existing_test_scripts(workdir):
     return found
 
 
+class TaskScope:
+    """One workbench run's project boundary and approvals; never reused by another task."""
+    def __init__(self, workdir):
+        self.workdir = Path(workdir)
+        self.initial_tests = existing_test_scripts(workdir)
+        self.written = set()
+        self.grants = set()
+        self.denied = set()
+        self.tests_granted = False
+
+    @property
+    def project_name(self):
+        return self.workdir.name or '工作区'
+
+    def record_write(self, patterns):
+        for pattern in patterns if isinstance(patterns, list) else ():
+            path = _resolved_work_path(pattern, self.workdir)
+            if path:
+                self.written.add(path)
+
+    def permits_test(self, path):
+        return bool(path and _is_test_script_name(path) and
+                    (self.tests_granted or path in self.initial_tests or path in self.written))
+
+
 def _approval_key(permission, patterns, metadata):
     command = metadata.get('command') if isinstance(metadata, dict) else None
     return permission, tuple(str(item) for item in patterns), command if isinstance(command, str) else ''
 
 
-def _ask_lan(prompt, operation, key, ask, grants, approvals):
+def _ask_lan(prompt, operation, key, ask, grants, approvals, denied=None):
+    if denied is not None and key in denied:
+        if approvals is not None:
+            approvals.append({'operation': operation, 'waiting': False, 'decision': 'user_denied_reused'})
+        return 'reject', 'user_denied'
     if grants is not None and key in grants:
         if approvals is not None:
             approvals.append({'operation': operation, 'waiting': False, 'decision': 'approved_reused'})
@@ -281,6 +417,8 @@ def _ask_lan(prompt, operation, key, ask, grants, approvals):
                 'timed_out' if normalized in {'timeout', 'timed_out'} else 'user_denied')
     if decision == 'approved' and grants is not None:
         grants.add(key)
+    if decision == 'user_denied' and denied is not None:
+        denied.add(key)
     if approvals is not None:
         approvals.append({'operation': operation, 'waiting': True, 'decision': decision})
     return ('once', decision) if decision == 'approved' else ('reject', decision)
@@ -296,19 +434,94 @@ def _operation_summary(permission, patterns, metadata):
     return permission + (':' + program if program else '')
 
 
+def _approval_scope(permission, patterns, metadata):
+    """A task-local approval covers the same risk class, never a future workbench task."""
+    command = metadata.get('command') if isinstance(metadata, dict) else None
+    try:
+        tokens = shlex.split(command, posix=True) if isinstance(command, str) else []
+    except ValueError:
+        tokens = []
+    while tokens and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', tokens[0]):
+        tokens = tokens[1:]
+    program = _command_name(tokens[0]) if tokens else ''
+    install = (program in ASK_LAN['installers'] or re.fullmatch(r'pip\d*(?:\.\d+)*', program) or
+               program in {'python', 'python3'} and tokens[1:3] == ['-m', 'pip'] or
+               re.fullmatch(r'python\d+(?:\.\d+)*', program) and tokens[1:3] == ['-m', 'pip'])
+    if permission == 'bash' and install:
+        # One approval per exact package set, never a secret passed as an option value.
+        options_with_value = {'--token', '--index-url', '-i', '--extra-index-url', '--trusted-host',
+                              '--proxy', '--cert', '--client-cert', '--requirement', '-r', '--constraint', '-c'}
+        package, skip = [], False
+        for arg in tokens[1:]:
+            if skip:
+                skip = False
+                continue
+            if arg in options_with_value:
+                skip = True
+                continue
+            if arg.startswith('-') or arg.casefold() in {
+                    'install', 'add', 'get', 'i', 'ci', 'up', 'update', 'upgrade', 'dlx', 'pip'}:
+                continue
+            package.append(arg)
+        return permission, 'install', (program, tuple(package) or ('all',))
+    if permission == 'bash' and _test_command(tokens):
+        return permission, 'tests', 'project'
+    if permission == 'bash' and program in {'npx', 'pnpx', 'bunx'}:
+        return permission, 'network', (program, tuple(tokens[1:3]))
+    if permission == 'bash' and (program in ASK_LAN['network'] or program == 'git' and _git_subcommand(tokens) in {'clone', 'fetch', 'pull'}):
+        resources = tuple(sorted(re.findall(r'https?://([^/\s]+)', command or '', re.I)))
+        return permission, 'network', resources or (program,)
+    if permission == 'bash' and program == 'git' and _git_subcommand(tokens) == 'push':
+        refspec = tuple(arg for arg in tokens[1:] if not arg.startswith('-'))
+        force = ('force',) if any(arg in {'-f', '--force', '--force-with-lease', '--force-if-includes'}
+                                   for arg in tokens[1:]) else ()
+        return permission, 'publish', refspec + force
+    if permission == 'webfetch':
+        resources = tuple(sorted(re.findall(r'https?://([^/\s]+)', ' '.join(map(str, patterns)), re.I)))
+        return permission, 'webfetch', resources or tuple(str(item) for item in patterns)
+    if permission == 'external_directory':
+        return permission, tuple(str(item) for item in patterns)
+    return _approval_key(permission, patterns, metadata)
+
+
+def _safe_display(value):
+    text = re.sub(r'(?i)(https?://)[^/@\s]+@', r'\1[redacted]@', str(value))
+    text = re.sub(r'(?i)(--?(?:token|password|passwd|secret|api[-_]?key)\s*[= ]\s*)(\S+)',
+                  r'\1[redacted]', text)
+    return text[:300]
+
+
+def _resolved_targets(permission, patterns, workdir):
+    """Resolved project paths are diagnostics only; raw commands never go into chat results."""
+    if permission not in {'edit', 'write', 'bash'}:
+        return []
+    values = patterns if permission in {'edit', 'write'} else []
+    if permission == 'bash':
+        for pattern in patterns if isinstance(patterns, list) else ():
+            try:
+                values += [arg for arg in shlex.split(pattern, posix=True)[1:]
+                           if '/' in arg or '\\' in arg or arg in {'.', '..'}]
+            except ValueError:
+                continue
+    return sorted({path for value in values if (path := _resolved_work_path(value, workdir))})
+
+
 def decide(permission, patterns, metadata, workdir, *, autonomy, ask, grants=None, approvals=None,
-           test_scripts=None):
+           test_scripts=None, task_scope=None, maintenance=False):
     """VEIL's own answer to an OpenCode permission request: (reply, reason). `ask` is Lan's approval card."""
+    if task_scope is not None:
+        grants = task_scope.grants
     text = ' '.join(str(p) for p in patterns) + ' ' + json.dumps(metadata or {}, ensure_ascii=False)
     if DANGEROUS.search(text):
         return 'reject', 'dangerous command'
     if permission == 'external_directory':
         if autonomy:
             return 'reject', 'outside the workbench; Lan is not asked during autonomous activity'
-        shown = ', '.join(str(p) for p in patterns)[:300]
-        return _ask_lan(f'Peter 的工作台想访问工作台文件夹之外的位置：{shown}。同意这一次吗？y/N ',
-                        _operation_summary(permission, patterns, metadata),
-                        _approval_key(permission, patterns, metadata), ask, grants, approvals)
+        shown = _safe_display(', '.join(str(p) for p in patterns))
+        key = _approval_scope(permission, patterns, metadata)
+        return _ask_lan(f'Peter 的工作台想在本次任务中访问项目外的位置：{shown}。同意这项范围吗？y/N ',
+                        _operation_summary(permission, patterns, metadata), key, ask, grants, approvals,
+                        task_scope.denied if task_scope is not None else None)
     work = posixpath.normpath(str(workdir).replace('\\', '/')).lower()
     for pattern in patterns:
         p = str(pattern).replace('\\', '/')
@@ -317,9 +530,13 @@ def decide(permission, patterns, metadata, workdir, *, autonomy, ask, grants=Non
             target = posixpath.normpath(p if absolute else work + '/' + p).lower()
             if target != work and not target.startswith(work.rstrip('/') + '/'):
                 return 'reject', 'write outside the workbench'
+        if permission in ('edit', 'write') and task_scope is not None:
+            task_scope.record_write(patterns)
     if permission == 'bash':
         needs_lan = False
         complex_request = False
+        git_write = False
+        command_tokens = []
         for pattern in patterns if isinstance(patterns, list) else ():
             if not isinstance(pattern, str):
                 complex_request = True
@@ -332,6 +549,7 @@ def decide(permission, patterns, metadata, workdir, *, autonomy, ask, grants=Non
             if not tokens:
                 complex_request = True
                 break
+            git_write = git_write or _git_write_request(tokens)
             if _bash_command_needs_lan(tokens):
                 needs_lan = True
                 break
@@ -343,23 +561,64 @@ def decide(permission, patterns, metadata, workdir, *, autonomy, ask, grants=Non
                 complex_request = True
             else:
                 if command_tokens:
+                    git_write = git_write or _git_write_request(command_tokens)
                     needs_lan = needs_lan or _bash_command_needs_lan(command_tokens)
                 else:
                     complex_request = True
-        complex_request = complex_request or _complex_bash_request(patterns, metadata, workdir, test_scripts)
+        if maintenance and (git_write or re.search(
+                r'\bgit\s+(?:commit|push|pull|fetch|merge|rebase|reset|checkout|switch|tag|worktree)\b', text, re.I)
+                or re.search(r'\b(?:bash|sh|dash|zsh|cmd|powershell|pwsh)\b[^\n]{0,120}\bgit\s+'
+                             r'(?:commit|push|pull|fetch|merge|rebase|reset|checkout|switch|tag|worktree)\b', text, re.I)):
+            return 'reject', 'VEIL commits, pushes and creates the pull request; the workbench must not run git write commands'
+        test_items = []
+        for pattern in patterns if isinstance(patterns, list) else ():
+            if isinstance(pattern, str):
+                try:
+                    tokens = shlex.split(pattern, posix=True)
+                except ValueError:
+                    tokens = []
+                if tokens and _test_command(tokens):
+                    test_items.append(tokens)
+        if task_scope is not None and test_items:
+            for tokens in test_items:
+                if not _test_command_in_scope(tokens, workdir):
+                    return 'reject', 'test path or flag outside the workbench'
+            project = task_scope.project_name
+            key = ('bash', 'tests', project)
+            reply, why = _ask_lan(
+                f'项目“{project}”的本次任务要运行项目测试。测试会执行项目代码，可能联网或读写文件；'
+                '批准后本次任务的测试命令继续使用这个授权。同意吗？y/N ',
+                'bash:tests', key, ask, grants, approvals, task_scope.denied)
+            if reply != 'once':
+                return reply, why
+            task_scope.tests_granted = True
+        complex_request = complex_request or _complex_bash_request(
+            patterns, metadata, workdir, test_scripts, task_scope)
         if needs_lan or complex_request:
             if autonomy:
                 return 'reject', 'needs Lan\'s approval; not asked during autonomous activity'
             command = metadata.get('command') if isinstance(metadata, dict) else None
-            shown = str(command if isinstance(command, str) else patterns)[:300]
+            shown = _safe_display(command if isinstance(command, str) else patterns)
+            key = _approval_scope(permission, patterns, metadata)
+            project = task_scope.project_name if task_scope is not None else Path(workdir).name
             if needs_lan:
-                prompt = f'Peter 的工作台想执行：{shown}。这会联网、安装、发布或批量删除。同意这一次吗？y/N '
+                prompt = (f'Peter 的工作台想在项目“{project}”的本次任务中执行：{shown}。'
+                          '这会联网、安装、发布或批量删除；批准后只在此任务的相同风险范围内继续。同意吗？y/N ')
             else:
-                prompt = f'Peter 的工作台想执行一条复合或无法确认安全的命令：{shown}。只执行这一次吗？y/N '
+                prompt = f'Peter 的工作台想执行一条复合或无法确认安全的项目命令：{shown}。同意这一次吗？y/N '
             return _ask_lan(prompt, _operation_summary(permission, patterns, metadata),
-                            _approval_key(permission, patterns, metadata),
-                            ask, grants, approvals)
-    if permission in ('bash', 'edit', 'write', 'webfetch', 'task', 'skill', 'todowrite', 'read', 'glob', 'grep'):
+                            key, ask, grants, approvals,
+                            task_scope.denied if task_scope is not None else None)
+    if permission == 'webfetch':
+        if autonomy:
+            return 'reject', 'needs Lan\'s approval; not asked during autonomous activity'
+        shown = _safe_display(', '.join(str(p) for p in patterns))
+        key = _approval_scope(permission, patterns, metadata)
+        project = task_scope.project_name if task_scope is not None else Path(workdir).name
+        return _ask_lan(f'Peter 的工作台想为项目“{project}”访问外部文档：{shown}。同意这项范围吗？y/N ',
+                        _operation_summary(permission, patterns, metadata), key, ask, grants, approvals,
+                        task_scope.denied if task_scope is not None else None)
+    if permission in ('bash', 'edit', 'write', 'task', 'skill', 'todowrite', 'read', 'glob', 'grep'):
         return 'once', 'inside the workbench'
     # Tools from other MCP servers (VEIL's own tools included) are never approved here: VEIL runs those itself.
     return 'reject', 'not offered to the workbench'
@@ -443,6 +702,10 @@ def kill_tree(proc):
             os.killpg(proc.pid, signal.SIGKILL)
         except OSError:
             proc.kill()
+    try:
+        proc.wait(timeout=5)
+    except (AttributeError, subprocess.TimeoutExpired):
+        pass
 
 
 class KeyProxy:
@@ -556,9 +819,9 @@ def build_config(provider, token, base_url, protect=()):
             'options': {'baseURL': base_url, 'apiKey': token},
             'models': {provider['model']: {'name': provider['model'], 'tool_call': True,
                                            'limit': {'context': context, 'output': min(8192, context // 4)}}}}},
-        # OpenCode's own rule engine settles the clear cases itself (last matching pattern wins); what is left
-        # as `ask` comes to the program (`decide`). Reading secrets is denied outright.
-        'permission': {'bash': {'*': 'ask', **{c: 'allow' for c in SAFE_COMMANDS}},
+        # Every shell request reaches VEIL, which has the current task's project scope and approval state.
+        # Reading secrets is denied outright by OpenCode before it can expose them to the model.
+        'permission': {'bash': {'*': 'ask'},
                        'edit': edit_permission, 'webfetch': 'ask', 'external_directory': 'ask',
                        'read': {'*': 'allow', **{g: 'deny' for g in SECRET_GLOBS}}},
         'share': 'disabled', 'autoupdate': False}
@@ -593,7 +856,8 @@ def container_command(container, *, name, workdir, port, env, masks):
 
 
 def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, stopped, record_cost,
-        api_factory=None, proxy_factory=None, container=None, protect=(), popen=subprocess.Popen, clock=time.monotonic, sleep=time.sleep):
+        api_factory=None, proxy_factory=None, container=None, protect=(), popen=subprocess.Popen, clock=time.monotonic,
+        sleep=time.sleep, diagnostic=None, maintenance=False):
     """Run one task. `record_cost(cost)` is called once with the estimated cost, whatever the outcome."""
     limits = {**DEFAULT_LIMITS, **(limits or {})}
     workdir, home = Path(workdir), Path(home)
@@ -605,6 +869,7 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
         return ExecutorResult('The workbench cannot protect the growth journal without Docker isolation.', '被拒绝')
     workdir.mkdir(parents=True, exist_ok=True)
     home.mkdir(parents=True, exist_ok=True)
+    task_scope = TaskScope(workdir)
     price = (Decimal(str(provider.get('input_cny_per_million', 0))),
              Decimal(str(provider.get('output_cny_per_million', 0))))
     cap = Decimal(str(limits['run_budget_cny']))
@@ -625,6 +890,10 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
         empty.write_text('', encoding='utf-8')
         for path in secret_files(workdir):
             masks.append((str(empty), path.relative_to(workdir).as_posix()))
+        if (workdir / '.git').is_file():
+            # A linked worktree's .git file points at the main repository's metadata on the host.
+            # Hide it from the container: VEIL owns delivery, OpenCode only edits files.
+            masks.append((str(empty), '.git'))
         for relative in protect:  # e.g. Peter's growth journal: it has its own append-only grant
             if (workdir / relative).is_file() and all(target != Path(relative).as_posix() for _, target in masks):
                 masks.append((str(empty), Path(relative).as_posix()))
@@ -656,11 +925,10 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
                     return ExecutorResult('The workbench could not start (OpenCode did not answer).', '出错')
                 sleep(1)
         session = api.call('POST', '/session', {'title': 'workbench'})['id']
-        text = (CONTAINER_NOTE + task) if container else task
+        text = (CONTAINER_NOTE if container else '') + TASK_SCOPE_NOTE + (MAINTENANCE_NOTE if maintenance else '') + task
         api.call('POST', f'/session/{session}/prompt_async', {
             'parts': [{'type': 'text', 'text': text}], 'model': {'providerID': 'relay', 'modelID': provider['model']}})
-        started, idle, answered, grants, approvals = clock(), 0, [], set(), []
-        test_scripts, seen_calls = existing_test_scripts(workdir), 0
+        started, idle, answered, approvals = clock(), 0, [], []
         approval_stop = ''
         while True:
             sleep(1)
@@ -673,9 +941,24 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
                     answered.append(request.get('id'))
                     reply, why = decide(request.get('permission', ''), request.get('patterns', []),
                                         request.get('metadata'), workdir, autonomy=autonomy, ask=ask,
-                                        grants=grants, approvals=approvals, test_scripts=test_scripts)
+                                        approvals=approvals, task_scope=task_scope, maintenance=maintenance)
+                    if diagnostic is not None:
+                        try:
+                            diagnostic({
+                                'permission': request.get('permission', ''),
+                                'patterns': request.get('patterns', []),
+                                'command': _safe_display((request.get('metadata') or {}).get('command')),
+                                'workdir': str(workdir),
+                                'resolved_targets': _resolved_targets(
+                                    request.get('permission', ''), request.get('patterns', []), workdir),
+                                'approval_scope': _approval_scope(
+                                    request.get('permission', ''), request.get('patterns', []), request.get('metadata')),
+                                'reply': reply, 'reason': why,
+                            })
+                        except Exception:
+                            pass
                     api.call('POST', f"/permission/{request['id']}/reply", {'reply': reply})
-                    if why in {'user_denied', 'cancelled', 'timed_out'}:
+                    if why in {'cancelled', 'timed_out'}:
                         approval_stop = why
                         stop = 'approval ' + why
                         break
@@ -684,9 +967,6 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
                 if proc.poll() is not None:
                     stop = stop or 'OpenCode stopped unexpectedly'
             steps, calls, repeat, _text = summarize(messages)
-            if calls > seen_calls:
-                grants.clear()
-                seen_calls = calls
             _tin, _tout, cost = estimate_cost(messages, price, steps)
             if not stop:
                 if steps >= int(limits['max_steps']):

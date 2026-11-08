@@ -1,22 +1,21 @@
 # HANDOFF
 
-## 当前工单 253（2026-11-08 UTC）
+## 当前工单 314（2026-11-08 UTC）
 
-- PR #310 已合入 main（`0c76ade`）；Windows 桌面启动和连续工作台任务仍待 Lan 实机复验。工单 252 的 PR #308 也已合并（`548cfc1`，14 项检查通过）。
-- PR #312 在分支 `ticket/253-gemini-cache-accounting` 上开发，最新提交以 GitHub 为准；必需 CI 与 Cubic 复审完成后按分支保护合并。开发使用独立 worktree；按仓库规则不把本机路径写进提交文档。
-- `make_model()` 解析已知 OpenAI/LiteLLM 与 Gemini `usageMetadata.cachedContentTokenCount`、SDK `usage_metadata.cached_content_token_count`；缺失、无效、冲突状态不折扣，明确 0 与未报告不同。`/cost` 汇总聊天、自主、瞄一眼、短期便签和委派的直连模型请求。
-- `Chat.send()` 上下文顺序和工具 schema 未改；普通聊天、工具循环、短期便签提取、Autonomy/Glance、委派和 Garden MCP 继续复用原模型入口。记忆向量召回由独立 `QueryEmbedder` 请求；Ombre 子进程 usage 不回传，仍按估算记账，不计为缓存命中。
-- 记忆向量请求在响应有合法 `prompt_tokens` 时按实际 usage 结算；零报告或超过预留的用量保留估算，不释放预留，也不越过每日/每月上限。
-- Cubic 复审的三处问题（超预留结算、零 prompt tokens、Gemini SDK usage 覆盖）已修复并补测试；文档中的本机路径已移除。
-- 自动回归：缓存、预算、召回、记忆、账本与语音相关 206 项通过（1 项跳过）；`test_web.py` 未取得最终汇总，不重跑。中转站真实 `usage` 与对应费用行尚未取得，实际 Gemini 4A 命中改善和收费一致性均未验证。正式目录进程由 `web_agent.py` 启动，已保留未动。
+- 分支 `ticket/314-autonomous-maintenance` 从 `main` 的 `64648cb` 建立；PR #314：https://github.com/yecays-ai/veil-agent/pull/314。开发在独立 worktree 中；正式目录保持 `main`，未开发、未改源码。
+- 工单 313 的任务范围授权已并入本分支并收紧：项目测试首次运行需一次任务级授权；安装按具体包授权；拒绝在同一任务内复用；Windows junction/reparse point、隐藏目录、通用词和 VEIL 自身数据目录不能成为工作台范围。
+- 新增 `maintenance.py` 的维护任务状态、独立 worktree、主机侧 git/gh 交付、CI/审查读取、失败日志、独立测试实例、验收记录、合并门禁和恢复。
+- `workbench` 支持 `task_id`；维护任务拒绝 git 写命令；OpenCode 容器只挂载 worktree 文件并屏蔽 `.git`；GitHub 长期凭据不进入容器。
+- `web_agent.py` 支持 `--acceptance`/`--config-root`/`--data-dir`；桌面前端支持测试实例使用独立 userData 和后端数据目录；测试实例不启动自主活动、外部频道、记忆或桌面维护。
+- 已验证：executor 67 项（2 跳过）、maintenance 15 项、chat/web/tools 228 项（1 跳过）、支持模块 55 项、Hub/停止 21 项、桌面 Node 后端 5 项通过；编译和 JS 语法检查通过。Windows 实际验收未开始；PR #314 的 CI/Cubic 正在处理。
 
 ## 下一个窗口第一步
 
-查看 PR #312 最新 SHA、必需 CI 和 Cubic 复审；只处理功能、计费正确性、数据或安全方面的实质问题。满足当前分支保护后才能合并。`test_web.py` 没有最终结果，不要重跑；真实 Gemini 4A 实际命中仍待 Lan 按 `STATUS.md` 验收。
+审查 PR #314 的最新 SHA、必需 CI 和 Cubic 意见，只修功能、数据、安全或交付阻断问题。满足分支保护后合并，然后请 Lan 按 `STATUS.md` 的验收步骤体验；验收前不要把本工单写成完成。
 
-## 尚未解决
+## 已知风险与边界
 
-- 缺少 `api5.jiushi.cyou` 的脱敏真实响应 `usage` 和对应账单，不能判定 Gemini 4A 全额计费根因是代理字段映射、上游未命中还是代理计费。
-- Fake transport 证明 VEIL 解析和本地费用逻辑；真实连续请求是否利用了稳定前缀、工具结构是否影响上游缓存、实际账单是否一致，需在 Windows 体验验收。
-- `test_web.py` 没有最终结果，不重复启动；以当前证据标为未验证。
-- 正式运行目录及其现有服务、人设、真实聊天和记忆未改动。
+- 测试实例依赖正式目录的 Python 环境、`persona` 和 `.env`；`characters` 取自开发 worktree，配置和数据复制到隔离目录。`.env` 保留到实例停止或合并时删除，避免聊天请求中途失去密钥。启动失败会清理测试目录中的 `.env`，不写正式数据。
+- `maintenance.py` 的远程事实来自 `gh` 和 GitHub API；本机没有 `gh` 认证时应明确报告，不能假装 PR/CI 已存在。
+- 未在 Windows 上实际跑通完整“测试实例桌面窗口”路径；当前验证覆盖后端启动、隔离数据目录和桌面连接代码，Windows 实际体验待 Lan 验收。
+- 不删除正式目录或其他正在使用的 worktree；合并后仅在本次 worktree 无未提交改动时清理。

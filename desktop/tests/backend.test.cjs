@@ -71,6 +71,20 @@ test('reuses a ready authenticated service without launching or writing Agent da
   assert.equal(await readEndpoint(root), null);
 });
 
+test('acceptance data override never falls back to a normal launcher', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'veil-accept-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await fs.mkdir(path.join(root, '.venv/Scripts'), { recursive: true });
+  for (const file of ['web_launcher.py', 'web_agent.py', '.venv/Scripts/python.exe'])
+    await fs.writeFile(path.join(root, file), 'fake fixture');
+  const previous = process.env.VEIL_AGENT_DATA;
+  process.env.VEIL_AGENT_DATA = path.join(root, 'test-data');
+  t.after(() => { if (previous === undefined) delete process.env.VEIL_AGENT_DATA; else process.env.VEIL_AGENT_DATA = previous; });
+  let launches = 0;
+  await assert.rejects(connect(root, () => { launches++; }), /验收实例的后端未运行/);
+  assert.equal(launches, 0);
+});
+
 test('missing Agent installation fails before invoking a launcher', async () => {
   await assert.rejects(connect('relative', () => { throw new Error('must not launch'); }), /setup.bat/);
 });

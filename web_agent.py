@@ -163,9 +163,11 @@ class ChatAction:
 class Hub(ScreenPopMixin):
     """Message list shared by the chat loop (main thread) and HTTP handlers."""
 
-    def __init__(self, name, activity, memory_port=None, media_root=None):
+    def __init__(self, name, activity, memory_port=None, media_root=None, data_root=None, config_root=None):
         self.name = name
-        self.life_path = ROOT / 'data' / 'life-records.json'
+        self.life_path = (Path(data_root) if data_root else ROOT / 'data') / 'life-records.json'
+        self.config_root = Path(config_root) if config_root else ROOT
+        self.acceptance_limits = None
         self.chat = None
         self.activity = activity
         self.memory_url = f'http://127.0.0.1:{memory_port}/dashboard' if memory_port else None
@@ -662,7 +664,7 @@ class Hub(ScreenPopMixin):
 
     def _transcribe_voice_bytes(self, raw, mime, name):
         from dotenv import dotenv_values
-        key = (dotenv_values(Path(ROOT) / '.env', interpolate=False, encoding='utf-8-sig')
+        key = (dotenv_values(Path(self.config_root) / '.env', interpolate=False, encoding='utf-8-sig')
                .get('EMBED_API_KEY') or '').strip()
         if not key:
             return None, '语音识别密钥未配置。'
@@ -1207,7 +1209,11 @@ class Hub(ScreenPopMixin):
         with models.env_lock, models.lock:
             before = models.chosen('peter')
             models.save(payload)
-            self.chat.budget.daily, self.chat.budget.monthly = models.limits()
+            daily, monthly = models.limits()
+            if self.acceptance_limits:
+                daily = min(daily, self.acceptance_limits[0])
+                monthly = min(monthly, self.acceptance_limits[1])
+            self.chat.budget.daily, self.chat.budget.monthly = daily, monthly
             after = models.chosen('peter')
             if after[0] != before[0] or after[2] != before[2]:
                 self.chat.switch_model(after[1], after[2])
@@ -2604,7 +2610,7 @@ def start_server(hub, token, port):
     return server
 
 
-def serve_chat(chat, hub, channels=()):
+def serve_chat(chat, hub, channels=(), acceptance=False):
     hub.chat = chat
     chat.sticker_library = hub.sticker_library
     chat.claim_steer = hub.claim_steer
@@ -2756,11 +2762,14 @@ def serve_chat(chat, hub, channels=()):
                 hub.output(f'{channel.label}能力通知暂时无法保存；聊天仍可使用，下次启动会重试。')
             chat.pending_capability_event = getattr(chat.tools, 'capability_event', None)
             chat.pending_capability_event_model = getattr(chat.tools, 'capability_event_model', None)
-    hub.autonomy = AutonomyController(chat, hub)
-    hub.glance = GlanceController(chat, hub)
-    hub.autonomy.glance = hub.glance
-    hub.codex_watch = CodexWatchController(chat, hub, glance=hub.glance)
-    hub.autonomy.codex_watch = hub.codex_watch
+    if acceptance:
+        hub.autonomy = hub.glance = hub.codex_watch = None
+    else:
+        hub.autonomy = AutonomyController(chat, hub)
+        hub.glance = GlanceController(chat, hub)
+        hub.autonomy.glance = hub.glance
+        hub.codex_watch = CodexWatchController(chat, hub, glance=hub.glance)
+        hub.autonomy.codex_watch = hub.codex_watch
     hub.capability_record = lambda: chat.capability_history_record
     hub.activity_transition = lambda enabled: chat.set_activity_enabled(hub.activity, enabled)
     chat.activity_enabled = hub.activity.enabled
@@ -2771,7 +2780,8 @@ def serve_chat(chat, hub, channels=()):
         bridge.start()
     try:
         run_chat(chat, input_fn=hub.input_fn, output=hub.output, drop=lambda: False,
-                 activity=hub.activity, autonomy=hub.autonomy)
+                 activity=hub.activity, autonomy=None if acceptance else hub.autonomy,
+                 start_notes=not acceptance)
     finally:
         hub.request_stop()
 
@@ -2809,33 +2819,61 @@ def main(argv=None):
     parser.add_argument('--character', default='peter')
     parser.add_argument('--port', type=int, default=0)
     parser.add_argument('--no-browser', action='store_true', help=argparse.SUPPRESS)  # kept for older desktop builds
+    parser.add_argument('--config-root', default='',
+                        help=argparse.SUPPRESS)  # independent test instance: characters, persona and .env
+    parser.add_argument('--data-dir', default='',
+                        help=argparse.SUPPRESS)  # independent test instance: chat, memory, budget, endpoint
+    parser.add_argument('--acceptance', action='store_true',
+                        help=argparse.SUPPRESS)  # no autonomy, external channels or memory side effects
     args = parser.parse_args(argv)
+    if args.acceptance and (not args.config_root or not args.data_dir):
+        parser.error('--acceptance requires --config-root and --data-dir')
     hub = None
     token = None
     server = None
-    endpoint_path = ROOT / 'data' / 'web_service.json'
-    error_path = ROOT / 'data' / 'web_service_error.txt'
+    config_root = Path(args.config_root).resolve() if args.config_root else ROOT
+    data_dir = Path(args.data_dir).resolve() if args.data_dir else ROOT / 'data'
+    if args.acceptance and (config_root == ROOT or data_dir == (ROOT / 'data').resolve()):
+        parser.error('--acceptance must not use the formal config or data directory')
+    endpoint_path = data_dir / 'web_service.json'
+    error_path = data_dir / 'web_service_error.txt'
     try:
-        store = Store(ROOT / 'data')
+        store = Store(data_dir)
         with store.lock():
             budget = Budget(store)
-            cfg = load_character(ROOT, args.character)
+            cfg = load_character(config_root, args.character)
+            if args.acceptance:
+                from dataclasses import replace
+                cfg = replace(cfg, memory={}, voice=None, email=None, qq=None,
+                              windows_observation=None, windows_interaction=None,
+                              desktop_file_read=None, screen_pop=None, glance=None,
+                              executor={**(cfg.executor or {}), 'enabled': False})
             budget.autonomy_daily = cfg.autonomy['daily_budget_cny']
             if cfg.glance:
                 budget.glance_daily = cfg.glance['daily_budget_cny']
             budget.daily, budget.monthly = cfg.models.limits()
-            client, model = make_model(ROOT, cfg)
-            background_client, background_model = make_model(ROOT, cfg, provider=cfg.background_provider)
-            voice = make_voice(ROOT, cfg, store, budget)
+            acceptance_limits = None
+            if args.acceptance:
+                from decimal import Decimal
+                acceptance_limits = (Decimal('2'), Decimal('20'))
+                budget.daily = min(budget.daily, acceptance_limits[0])
+                budget.monthly = min(budget.monthly, acceptance_limits[1])
+            client, model = make_model(config_root, cfg)
+            background_client, background_model = make_model(config_root, cfg, provider=cfg.background_provider)
+            voice = make_voice(config_root, cfg, store, budget)
             from email_channel import EmailChannel
             from qq_channel import QQChannel
-            channels = [channel for channel in (EmailChannel.from_env(ROOT, cfg, store.root),
-                                                QQChannel.from_env(ROOT, cfg, store.root)) if channel]
+            channels = [] if args.acceptance else [
+                channel for channel in (EmailChannel.from_env(config_root, cfg, store.root),
+                                        QQChannel.from_env(config_root, cfg, store.root)) if channel]
             activity = ActivityState(store.root / cfg.id / 'resident-state.json')
             from runtime_monitor import RuntimeMonitor
             runtime_monitor = RuntimeMonitor(store, cfg.id, activity)
             memory_port = (cfg.memory or {}).get('ombre_port') if (cfg.memory or {}).get('enabled') else None
-            hub = Hub(cfg.name, activity, memory_port, store.root / cfg.id / 'media')
+            hub = Hub(cfg.name, activity, memory_port, store.root / cfg.id / 'media',
+                      data_root=data_dir, config_root=config_root)
+            if acceptance_limits is not None:
+                hub.acceptance_limits = acceptance_limits
             from stickers import StickerLibrary
             hub.sticker_library = StickerLibrary(store.root / 'stickers')
             token = secrets.token_urlsafe(24)
@@ -2850,10 +2888,10 @@ def main(argv=None):
                 with client, background_client:
                     from tools_agent import FilesystemTools
                     from web_tools import WebTools
-                    with FilesystemTools(ROOT, cfg, store, web_factory=WebTools) as tools:
+                    with FilesystemTools(config_root, cfg, store, web_factory=WebTools) as tools:
                         if cfg.memory and cfg.memory.get('enabled'):
                             from memory_agent import Memory, open_ombre
-                            with open_ombre(ROOT, cfg) as backend:
+                            with open_ombre(config_root, cfg) as backend:
                                 with Memory(cfg, store, budget, model, backend, runtime_monitor) as memory:
                                     from memory_native import NativeMemoryTools, ToolSet
                                     tools = ToolSet(tools, NativeMemoryTools(
@@ -2862,14 +2900,16 @@ def main(argv=None):
                                     serve_chat(Chat(cfg, store, budget, model, memory, tools,
                                                     approval=hub.approval, output=hub.output,
                                                     voice=voice, runtime_monitor=runtime_monitor,
-                                                    background_model=background_model), hub, channels)
+                                                    background_model=background_model), hub, channels,
+                                               acceptance=args.acceptance)
                                 for notice in memory.notices():
                                     hub.output(notice)
                         else:
                             serve_chat(Chat(cfg, store, budget, model, tools=tools,
                                             approval=hub.approval, output=hub.output,
                                             voice=voice, runtime_monitor=runtime_monitor,
-                                            background_model=background_model), hub, channels)
+                                            background_model=background_model), hub, channels,
+                                       acceptance=args.acceptance)
             except UserError as exc:
                 hub.push('error', str(exc))
                 save_startup_error(error_path, str(exc))
