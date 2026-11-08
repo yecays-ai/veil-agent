@@ -7,6 +7,17 @@ const path = require('node:path');
 const http = require('node:http');
 const { readEndpoint, connect } = require('../backend.cjs');
 
+test('Windows launchers delegate to the hidden desktop entry', async () => {
+  const root = path.join(__dirname, '..', '..');
+  const [script, desktopBat, webBat] = await Promise.all([
+    fs.readFile(path.join(root, 'start-desktop.vbs'), 'utf8'),
+    fs.readFile(path.join(root, 'start-desktop.bat'), 'utf8'),
+    fs.readFile(path.join(root, 'start-web.bat'), 'utf8')]);
+  assert.match(script, /shell\.Run command, 0, False/);
+  assert.match(desktopBat, /wscript\.exe "%~dp0start-desktop\.vbs"/);
+  assert.match(webBat, /wscript\.exe "%~dp0start-desktop\.vbs"/);
+});
+
 test('reuses a ready authenticated service without launching or writing Agent data', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'veil-shell-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));

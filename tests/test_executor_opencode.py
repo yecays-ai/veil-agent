@@ -146,16 +146,56 @@ class DecisionTests(unittest.TestCase):
 
     def test_complex_commands_require_approval_instead_of_automatic_allow(self):
         wd = Path('/data/peter/workbench')
-        patterns = ['grep -R "git push" .', 'git status']
+        patterns = ['grep -R "git push" .', 'xargs echo']
         ask = Mock(return_value='n')
-        reply, _ = ex.decide('bash', patterns, {'command': 'grep -R "git push" . | git status'}, wd,
+        reply, _ = ex.decide('bash', patterns, {'command': 'grep -R "git push" . | xargs echo'}, wd,
                              autonomy=False, ask=ask)
         self.assertEqual(reply, 'reject')
         ask.assert_called_once()
         self.assertIn('复合或无法确认安全', ask.call_args.args[0])
 
-        self.assertEqual(ex.decide('bash', patterns, {'command': 'grep -R "git push" . | git status'}, wd,
+        self.assertEqual(ex.decide('bash', patterns, {'command': 'grep -R "git push" . | xargs echo'}, wd,
                                    autonomy=True, ask=lambda _p: self.fail('wake must not ask'))[0], 'reject')
+
+    def test_read_only_compounds_and_named_test_scripts_do_not_ask(self):
+        wd = Path(tempfile.mkdtemp())
+        (wd / 'test_calculator.py').write_text('pass')
+        (wd / 'tests').mkdir()
+        (wd / 'tests' / 'calculator_test.py').write_text('pass')
+        scripts = ex.existing_test_scripts(wd)
+        ask = Mock(side_effect=AssertionError('safe project work must continue'))
+        for command, patterns in (
+                ('rg "TODO" src | head -20', ['rg "TODO" src', 'head -20']),
+                ('git status && git diff --stat', ['git status', 'git diff --stat']),
+                ('python3 test_calculator.py', ['python3 test_calculator.py']),
+                ('python tests/calculator_test.py -v', ['python tests/calculator_test.py -v'])):
+            self.assertEqual(ex.decide('bash', patterns, {'command': command}, wd,
+                                       autonomy=False, ask=ask, test_scripts=scripts)[0], 'once', command)
+        ask.assert_not_called()
+
+    def test_arbitrary_python_scripts_and_output_redirection_still_ask(self):
+        wd = Path('/data/peter/workbench')
+        for command in ('python3 deploy.py', 'python cleanup.py', 'git status > status.txt'):
+            ask = Mock(return_value='n')
+            self.assertEqual(ex.decide('bash', [command], {'command': command}, wd,
+                                       autonomy=False, ask=ask)[0], 'reject', command)
+            ask.assert_called_once()
+
+    def test_new_or_outside_test_scripts_and_mutating_read_commands_still_ask(self):
+        wd = Path(tempfile.mkdtemp())
+        (wd / 'existing_test.py').write_text('pass')
+        scripts = ex.existing_test_scripts(wd)
+        (wd / 'test_created.py').write_text('pass')
+        for command, patterns in (
+                ('python test_created.py', ['python test_created.py']),
+                ('python ../test_evil.py', ['python ../test_evil.py']),
+                ('cat ../persona/peter.md | head', ['cat ../persona/peter.md', 'head']),
+                ("git status; find . -name '*.log' -delete", ['git status', "find . -name '*.log' -delete"]),
+                ('echo hi &> /tmp/out', ['echo hi &> /tmp/out'])):
+            ask = Mock(return_value='n')
+            self.assertEqual(ex.decide('bash', patterns, {'command': command}, wd, autonomy=False,
+                                       ask=ask, test_scripts=scripts)[0], 'reject', command)
+            ask.assert_called_once()
 
     def test_shell_substitutions_interpreters_and_script_sourcing_require_approval(self):
         wd = Path('/data/peter/workbench')
@@ -298,6 +338,69 @@ class RunTests(unittest.TestCase):
         self.assertEqual(api.replies, [('p1', 'once'), ('p2', 'reject')])
         self.assertEqual(len(asks), 1)
         self.assertIn('git push origin main', asks[0])
+
+    def test_approved_operation_is_reused_and_denial_is_returned_structurally(self):
+        approved = {'id': 'p1', 'permission': 'external_directory', 'patterns': ['/outside/project'],
+                    'metadata': {}}
+        repeated = {**approved, 'id': 'p2'}
+        done = [assistant(text='push completed', tool=('bash', {'command': 'git push origin main'}), finish='stop')]
+        asks = []
+        result, api, _costs, _kill = run([
+            ([assistant()], [approved], True), ([assistant()], [repeated], True),
+            (done, [], False), (done, [], False), (done, [], False)],
+            ask=lambda prompt: asks.append(prompt) or 'y')
+        self.assertEqual(api.replies[:2], [('p1', 'once'), ('p2', 'once')])
+        self.assertEqual(len(asks), 1)
+        self.assertIn('decision=approved', result.text)
+        self.assertIn('workbench=success', result.text)
+
+        denied = {**approved, 'id': 'p3'}
+        result, api, _costs, _kill = run([([assistant()], [denied], True)] * 3,
+                                         ask=lambda _prompt: 'n')
+        self.assertEqual(api.replies, [('p3', 'reject')])
+        self.assertEqual(result.state, '被拒绝')
+        self.assertIn('decision=user_denied', result.text)
+        self.assertIn('workbench=stopped', result.text)
+        self.assertNotIn('bash error', result.text)
+
+    def test_approval_is_not_reused_after_a_tool_executes_and_operation_is_redacted(self):
+        first = {'id': 'p1', 'permission': 'bash', 'patterns': ['git push https://token@example.invalid/repo'],
+                 'metadata': {'command': 'git push https://token@example.invalid/repo'}}
+        second = {**first, 'id': 'p2'}
+        ran = [assistant(tool=('bash', {'command': 'git push origin main'}))]
+        done = [assistant(text='done', tool=('bash', {'command': 'git status'}), finish='stop')]
+        asks = []
+        result, api, _costs, _kill = run([
+            ([assistant()], [first], True), (ran, [], True), (ran, [second], True),
+            (done, [], False), (done, [], False), (done, [], False)],
+            ask=lambda prompt: asks.append(prompt) or 'y')
+        self.assertEqual(api.replies[:2], [('p1', 'once'), ('p2', 'once')])
+        self.assertEqual(len(asks), 2, (asks, api.replies, result.text))
+        self.assertIn('operation="bash:git"', result.text)
+        self.assertNotIn('token@example', result.text)
+
+    def test_cancelled_approval_is_not_reported_as_user_denial(self):
+        pending = {'id': 'p1', 'permission': 'bash', 'patterns': ['git push origin main'],
+                   'metadata': {'command': 'git push origin main'}}
+        result, _api, _costs, _kill = run([([assistant()], [pending], True)] * 3,
+                                           ask=lambda _prompt: 'cancel')
+        self.assertEqual(result.state, '被拒绝')
+        self.assertIn('decision=cancelled', result.text)
+
+    def test_windows_git_and_docker_cleanup_hide_the_console(self):
+        import workbench_scope as scope
+        with patch.object(scope, '_WINDOWS', True), patch.object(scope.subprocess, 'CREATE_NO_WINDOW', 0x08000000,
+                                                                 create=True), patch.object(scope.subprocess, 'run') as git:
+            scope._git(Path('C:/project'), 'status')
+        self.assertEqual(git.call_args.kwargs['creationflags'], 0x08000000)
+
+        container = {'image': 'veil-workbench'}
+        with patch.object(ex, '_WINDOWS', True), patch.object(ex.subprocess, 'CREATE_NO_WINDOW', 0x08000000,
+                                                              create=True), patch.object(ex.subprocess, 'run') as cleanup:
+            run([([assistant(text='done', tool=('bash', {'command': 'git status'}), finish='stop')], [], False)] * 4,
+                container=container)
+        docker_kill = [call for call in cleanup.call_args_list if call.args[0][:2] == ['docker', 'kill']]
+        self.assertEqual(docker_kill[0].kwargs['creationflags'], 0x08000000)
 
     def test_each_hard_limit_aborts_and_kills(self):
         same = {'command': 'ls'}

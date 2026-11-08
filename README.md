@@ -1,6 +1,6 @@
 # VEIL Agent：本机文字聊天
 
-Windows 桌面版 0.1：透明 Peter 可拖动、调整大小，点击收放原 Agent 的真实聊天。打包版完整解压后双击 `VEIL.exe`，首次选择已有 Agent 文件夹；源码版运行 `setup-desktop.bat` 后用 `start-desktop.bat` 启动。安装、数据边界和体验步骤见 [桌面版说明](desktop/README.md)。Memory / Ombre、Lab 桌面入口尚未接通；真实 Windows 体验待验收。
+Windows 桌面版 0.1：透明 Peter 可拖动、调整大小，点击收放原 Agent 的真实聊天。打包版完整解压后双击 `VEIL.exe`，首次选择已有 Agent 文件夹；源码版运行 `setup-desktop.bat` 后双击无命令窗口的 `start-desktop.vbs`（原 `start-desktop.bat` 仍兼容）。安装、数据边界和体验步骤见 [桌面版说明](desktop/README.md)。Memory / Ombre、Lab 桌面入口尚未接通；真实 Windows 体验待验收。
 
 双击启动文字聊天，关掉再开接上最近对话。工单 005 增加后台补记和长期记忆；工单 006 让 Peter 在自己的测试文件夹里读文件，并在你同意后新建文件。
 
@@ -36,7 +36,7 @@ Windows 桌面版 0.1：透明 Peter 可拖动、调整大小，点击收放原 
 
 更新：先退出 Peter，再双击根目录 `update.bat`（拉新代码、补装组件、桌面代码有变化时重新打包 `VEIL.exe`，然后打开 Peter）。只 `git pull` 不会更新桌面软件。
 
-日常聊天用桌面版：双击 `start-desktop.bat`（首次先运行 `setup.bat` 和 `setup-desktop.bat`，见 `desktop/README.md`）。桌面版在后台用 `web_launcher.py` 启动本机聊天服务（`web_agent.py`，只监听 `127.0.0.1`，带一次性令牌），聊天、记忆、花费和 `/memory` 等命令与终端版共用同一套代码。浏览器网页 `web/index.html` 已删除；`start-web.bat` 现在直接打开桌面版。桌面版和终端版共用聊天锁，同一时间只能开一个。
+日常聊天用桌面版：双击 `start-desktop.vbs`（首次先运行 `setup.bat` 和 `setup-desktop.bat`，见 `desktop/README.md`）。桌面版在后台用 `web_launcher.py` 启动本机聊天服务（`web_agent.py`，只监听 `127.0.0.1`，带一次性令牌），聊天、记忆、花费和 `/memory` 等命令与终端版共用同一套代码。浏览器网页 `web/index.html` 已删除；`start-web.bat` 现在直接打开桌面版。桌面版和终端版共用聊天锁，同一时间只能开一个。
 
 ## 配置与预算
 

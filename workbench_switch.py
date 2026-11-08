@@ -5,6 +5,7 @@ import subprocess
 import sys
 import traceback
 from pathlib import Path
+from windows_process import hidden_subprocess_kwargs
 
 ROOT = Path(__file__).resolve().parent
 CHARACTER = 'peter'
@@ -56,7 +57,8 @@ def add_folder(state, folder, root=ROOT):
 
 def image_ready(image=IMAGE):
     try:
-        return subprocess.run(['docker', 'image', 'inspect', image], capture_output=True, timeout=60).returncode == 0
+        return subprocess.run(['docker', 'image', 'inspect', image], capture_output=True, timeout=60,
+                              **hidden_subprocess_kwargs(module=subprocess)).returncode == 0
     except (OSError, subprocess.SubprocessError):
         return False
 

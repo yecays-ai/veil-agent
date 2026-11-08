@@ -8,6 +8,7 @@ let speechRecorder=null,speechStream=null,speechChunks=[],speechSession=null,spe
 let after=0, busy=true, transcribingVoice=false, stopping=false, stopped=false, typing=null, sending=false;
 let revealQueue=[], revealTimer=null, roundStartedAt=0, roundHasReply=false, previousMessage=null;
 let pendingApproval=null, activityEnabled=false, codexWatchEnabled=false, exiting=false;
+let pollFailures=0;
 const recentErrors=new Map();
 const displayedErrorRequests=new Set();
 const displayedEventIds=new Set();
@@ -1134,10 +1135,13 @@ function renderLiveContext(live){
   }
 }
 async function poll(){
+  let pollPhase='fetch';
   try{
     const r=await api('/api/events?after='+after);
     if(!r.ok)throw new Error(r.status);
     const s=await r.json();
+    pollPhase='render';
+    pollFailures=0;
     $('offline').style.display='none';
     if(detachedView==='mcp'){
       $('ended').style.display=s.stopped?'block':'none';
@@ -1221,7 +1225,13 @@ async function poll(){
     });
     transcribingVoice=s.transcribing_voice===true;setBusy(s.busy);
     if(s.events.length&&stick)log.scrollTop=log.scrollHeight;
-  }catch(e){$('offline').style.display='block';$('service-status').textContent='服务：连接中断';$('service-status-detail').textContent='服务运行状态：连接中断';$('activity-toggle').disabled=true;$('exit-service').disabled=true}
+  }catch(e){
+    if(pollPhase==='render')console.error('event update failed',e);
+    else{
+      pollFailures++;if(pollFailures===1||pollFailures===3)console.warn('event poll failed',pollFailures,e?.name||'Error',e?.message||String(e));
+      if(pollFailures>=3){$('offline').style.display='block';$('service-status').textContent='服务：连接中断';$('service-status-detail').textContent='服务运行状态：连接中断';$('activity-toggle').disabled=true;$('exit-service').disabled=true}
+    }
+  }
   setTimeout(poll,600);
 }
 function clearImage(invalidate=true){

@@ -10,6 +10,7 @@ import time
 from ctypes import wintypes
 from urllib.error import URLError
 from urllib.request import Request, urlopen
+from windows_process import hidden_subprocess_kwargs
 
 ROOT = Path(__file__).resolve().parent
 ENDPOINT = ROOT / 'data' / 'web_service.json'
@@ -125,7 +126,8 @@ def _service_environment(environment=None, platform_name=None):
 def start_service(character, port):
     pythonw = Path(sys.executable).with_name('pythonw.exe')
     executable = str(pythonw if pythonw.exists() else Path(sys.executable))
-    flags = getattr(subprocess, 'DETACHED_PROCESS', 0) | getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+    flags = getattr(subprocess, 'DETACHED_PROCESS', 0) | hidden_subprocess_kwargs(
+        module=subprocess).get('creationflags', 0)
     return subprocess.Popen([executable, str(ROOT / 'web_agent.py'), '--character', character,
                       '--port', str(port), '--no-browser'],
                      cwd=ROOT, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
