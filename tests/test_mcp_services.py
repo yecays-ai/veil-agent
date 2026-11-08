@@ -5,16 +5,45 @@ import threading
 import unittest
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import mcp_services
 from mcp_services import MCPConfigError, MCPConflict, MCPServices
+from windows_process import hidden_subprocess_kwargs
 
 
 FIXTURE = Path(__file__).parent / 'fixtures' / 'mcp_echo_server.py'
 
 
 class MCPServicesTest(unittest.TestCase):
+    def test_windows_hidden_process_also_requests_hidden_window(self):
+        class Startup:
+            dwFlags = 0
+            wShowWindow = None
+
+        module = SimpleNamespace(CREATE_NO_WINDOW=8, STARTUPINFO=Startup,
+                                 STARTF_USESHOWWINDOW=1, SW_HIDE=0)
+        options = hidden_subprocess_kwargs(windows=True, module=module)
+        self.assertEqual(options['creationflags'], 8)
+        self.assertEqual(options['startupinfo'].dwFlags, 1)
+        self.assertEqual(options['startupinfo'].wShowWindow, 0)
+
+    def test_windows_batch_service_uses_explicit_command_interpreter(self):
+        with tempfile.TemporaryDirectory(dir=Path(__file__).parent) as directory:
+            python = Path(directory) / 'python.exe'
+            pythonw = Path(directory) / 'pythonw.exe'
+            pythonw.touch()
+            command, args = mcp_services._stdio_server_command(
+                'E:/Peter-Agent/secrets/galatea-mcp.cmd', ['value & more'], windows=True,
+                executable=python)
+        self.assertEqual(Path(command), pythonw)
+        self.assertEqual(Path(args[0]).name, 'mcp_hidden_stdio.py')
+        self.assertEqual(Path(args[1]).name.casefold(), 'cmd.exe')
+        self.assertEqual(args[2:5], ['/d', '/s', '/c'])
+        self.assertIn('galatea-mcp.cmd', args[5])
+        self.assertIn('"value & more"', args[5])
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(dir=Path(__file__).parent)
         self.manager = MCPServices(Path(self.tmp.name) / 'mcp.json')
