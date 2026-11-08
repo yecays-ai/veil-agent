@@ -2,7 +2,7 @@
 
 ## 当前工单 314（2026-11-08 UTC）
 
-- 分支 `ticket/314-autonomous-maintenance` 从 `main` 的 `64648cb` 建立，开发在独立 worktree 中；正式目录保持 `main`，未开发、未改源码。
+- 分支 `ticket/314-autonomous-maintenance` 从 `main` 的 `64648cb` 建立；PR #314：https://github.com/yecays-ai/veil-agent/pull/314。开发在独立 worktree 中；正式目录保持 `main`，未开发、未改源码。
 - 工单 313 的任务范围授权已并入本分支并收紧：项目测试首次运行需一次任务级授权；安装按具体包授权；拒绝在同一任务内复用；Windows junction/reparse point、隐藏目录、通用词和 VEIL 自身数据目录不能成为工作台范围。
 - 新增 `maintenance.py` 的维护任务状态、独立 worktree、主机侧 git/gh 交付、CI/审查读取、失败日志、独立测试实例、验收记录、合并门禁和恢复。
 - `workbench` 支持 `task_id`；维护任务拒绝 git 写命令；OpenCode 容器只挂载 worktree 文件并屏蔽 `.git`；GitHub 长期凭据不进入容器。
