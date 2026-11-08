@@ -2616,7 +2616,8 @@ def serve_chat(chat, hub, channels=(), acceptance=False):
     chat.claim_steer = hub.claim_steer
     chat.steer_pending = hub.steer_pending
     if getattr(chat.cfg, 'models', None) is not None:
-        hub.background_running = chat.cfg.models.chosen('background')[0]
+        background = chat.cfg.models.startup_choice('background')
+        hub.background_running = background[0] if background else None
         hub.refresh_models()
     chat.screen_pop_handler = hub.request_screen_pop
     files = getattr(chat.tools, 'files', None) if chat.tools else None

@@ -1206,8 +1206,10 @@ output_cny_per_million = "8"
 
     def test_system_environment_key_is_not_used(self):
         with patch.dict('os.environ', {'FAKE_KEY': 'fake-env-only'}):
-            with self.assertRaises(UserError):
-                make_model(self.root, self.cfg)
+            clients, call = make_model(self.root, self.cfg)
+            with clients, self.assertRaises(UserError) as result:
+                call([{'role': 'user', 'content': 'fake'}])
+        self.assertIn('本机 .env', str(result.exception))
 
     def test_role_paths_cannot_escape_character_directory(self):
         for character in ['../test', 'test/../../test', 'TEST', 'C:test']:

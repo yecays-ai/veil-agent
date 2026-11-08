@@ -1901,7 +1901,8 @@ function modelPrice(m){
 function fillModelSelect(select,view,value,followOption){
   const follow=followOption?[(()=>{const o=document.createElement('option');o.value='follow-chat';o.textContent='跟随聊天模型';return o})()]:[];
   const optional=select.id==='use-delegate'?[(()=>{const o=document.createElement('option');o.value='';o.textContent='关闭委派';return o})()]:[];
-  select.replaceChildren(...optional,...follow,...view.models.map(m=>{const o=document.createElement('option');o.value=m.id;o.textContent=modelName(m)+(m.key_set?'':'（没有 key）');return o}));
+  const placeholder=!value&&select.id!=='use-delegate'?[(()=>{const o=document.createElement('option');o.value='';o.textContent='请选择模型';o.disabled=true;return o})()]:[];
+  select.replaceChildren(...optional,...placeholder,...follow,...view.models.map(m=>{const o=document.createElement('option');o.value=m.id;o.textContent=modelName(m)+(m.key_set?'':'（没有 key）');return o}));
   select.value=value;
   syncVeilSelect(select);
 }

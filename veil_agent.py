@@ -724,6 +724,16 @@ def toml_provider(raw):
     return provider
 
 
+# Ticket 317: a placeholder only for the "no API model configured" startup path. It is never listed as a
+# model or treated as callable; requests fail with a clear "choose a model" message until Lan picks one.
+MISSING_PROVIDER = {
+    'model': '未选择模型', 'base_url': '', 'api_key_env': '', 'thinking': 'enabled',
+    'max_input_tokens': 4096, 'input_cny_per_million': Decimal(0),
+    'cached_input_cny_per_million': Decimal(0), 'output_cny_per_million': Decimal(0),
+    'label': '未选择模型', 'missing': True,
+}
+
+
 def _executor_roots(value):
     if not isinstance(value, list) or not all(isinstance(r, str) and r.strip() for r in value):
         raise ValueError('executor.project_roots must be a list of folder paths')
@@ -770,19 +780,40 @@ def load_character(root, character_id):
         if not persona:
             raise UserError('人设文件为空，请填写后重开。')
         persona_versions.snapshot(persona_path)  # ticket 214: never raises
-        provider = toml_provider(cfg['providers'][cfg['provider']])
-        builtins = {cfg['provider']: provider}
-        for name, raw in cfg['providers'].items():
-            if name not in builtins:
-                try:
-                    builtins[name] = toml_provider(raw)
-                except (KeyError, ValueError, TypeError, ArithmeticError):
-                    continue  # an unused, broken profile must not stop Peter
+        providers = cfg['providers']
+        default_name = cfg.get('provider')
+        selected = providers.get(default_name)
+        if selected is None or selected.get('kind') == 'claude_agent':
+            # Ticket 317: an old character.toml may still point at the removed channel or a missing
+            # provider. Prefer the first normal API provider instead of stopping Peter.
+            default_name = next((name for name, raw in providers.items()
+                                 if raw.get('kind') != 'claude_agent'), None)
+        if default_name is None:
+            # No API provider exists at all. Start with an explicit non-callable placeholder so Lan can
+            # still open settings and add one; it is never listed or used as an available model.
+            default_name = '__missing__'
+            provider = dict(MISSING_PROVIDER)
+            builtins = {}
+        else:
+            provider = toml_provider(providers[default_name])
+            builtins = {default_name: provider}
+            for name, raw in providers.items():
+                if name not in builtins:
+                    try:
+                        builtins[name] = toml_provider(raw)
+                    except (KeyError, ValueError, TypeError, ArithmeticError):
+                        continue  # an unused, broken profile must not stop Peter
         from model_settings import ModelSettings
         # Ticket 134: Lan's own model list on this computer picks Peter's and the background's models.
-        models = ModelSettings(root, character_id, builtins, cfg['provider'])
-        _, provider_name, provider = models.chosen('peter')
-        _, _, background_provider = models.chosen('background')
+        models = ModelSettings(root, character_id, builtins, default_name)
+        peter_choice = models.startup_choice('peter')
+        if peter_choice is None:
+            provider_name, provider = '', dict(MISSING_PROVIDER)
+        else:
+            _, provider_name, provider = peter_choice
+        background_choice = models.startup_choice('background')
+        background_provider = (dict(MISSING_PROVIDER) if background_choice is None
+                               else background_choice[2])
         tools = dict(cfg['tools']) if 'tools' in cfg else None
         raw_tools = dict(tools) if tools is not None else {}
         if tools is not None:
@@ -5065,6 +5096,8 @@ def make_model(root, cfg, provider=None, timeout=MODEL_TIMEOUT_SECONDS):
         return provider if provider is not None else cfg.provider
 
     def client_for(p):
+        if p.get('missing'):
+            raise UserError('请先在模型设置里选择一个可用的 API 模型。')
         # No environment fallback or interpolation: key comes only from this file.
         values = dotenv_values(Path(root) / '.env', interpolate=False, encoding='utf-8-sig')
         key = values.get(p['api_key_env'])
@@ -5077,7 +5110,13 @@ def make_model(root, cfg, provider=None, timeout=MODEL_TIMEOUT_SECONDS):
                                             max_retries=0, timeout=timeout)
             return clients[cache_key]
 
-    client_for(current())
+    if not current().get('missing'):
+        try:
+            client_for(current())
+        except RequestNotSent:
+            # Ticket 317: a missing key must not stop Peter from opening settings. The first request
+            # still fails with the same clear "fill the key" message through _call().
+            pass
 
     def call(messages, *, json_output=False, max_tokens=None, thinking=None, detail=False,
              tools=None, message_output=False, request_timeout=None):
@@ -5098,6 +5137,8 @@ def make_model(root, cfg, provider=None, timeout=MODEL_TIMEOUT_SECONDS):
     def _call(messages, *, json_output=False, max_tokens=None, thinking=None, detail=False,
               tools=None, message_output=False, request_timeout=None):
         p = current()
+        if p.get('missing'):
+            raise UserError('请先在模型设置里选择一个可用的 API 模型。')
         client = client_for(p)
         if request_timeout is not None:
             client = client.with_options(timeout=max(0.001, min(timeout, request_timeout)))

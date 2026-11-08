@@ -107,6 +107,38 @@ class ModelSettings:
         except OSError as exc:
             raise SettingsError('模型配置迁移前无法保留备份；原文件未改动，请检查磁盘权限。') from exc
 
+    def _fallback_choice(self, raw):
+        """The first structurally valid API model, preferring one whose API Key is present.
+
+        A keyless model is still a valid startup choice (Peter starts and tells Lan to fill the key),
+        but it must never be described as an available model. A missing default must not stop startup
+        when another configured API model exists.
+        """
+        try:
+            probe = self._clean({**raw, 'use': {}, 'migration': None})
+        except SettingsError:
+            probe = {'models': [], 'endpoints': []}
+        candidates = [self.default]
+        candidates.extend(BUILTIN_PREFIX + name for name in self.builtins)
+        raw_ids = {item.get('id') for item in raw.get('models') or [] if isinstance(item, dict)}
+        candidates.extend(item['id'] for item in probe.get('models', []) if item['id'] in raw_ids)
+        env = self._env_values()
+        structural, seen = [], set()
+        for model_id in candidates:
+            if model_id in seen:
+                continue
+            seen.add(model_id)
+            provider = self._provider(probe, model_id)
+            if provider is None:
+                continue
+            label = provider.get('label') or provider.get('model') or model_id
+            key_env = provider.get('api_key_env') or ''
+            structural.append((model_id, label, bool((env.get(key_env) or '').strip())))
+        usable = [item for item in structural if item[2]]
+        if usable:
+            return usable[0]
+        return structural[0] if structural else (None, '', False)
+
     def _migrate_retired_cc_choices(self, raw):
         """Replace only retired Claude Code model references, atomically and once.
 
@@ -120,17 +152,23 @@ class ModelSettings:
         affected = [role for role in ROLES if self._retired_cc_ref(use.get(role))]
         if not affected:
             return raw
+        fallback, fallback_label, fallback_keyed = self._fallback_choice(raw)
         new_use = dict(use)
         for role in affected:
             if role in ('peter', 'background'):
-                # The character's configured API provider is the existing valid fallback.
-                new_use[role] = self.default
+                # Prefer an existing keyed API model; a keyless one still starts, with a warning.
+                if fallback:
+                    new_use[role] = fallback
+                else:
+                    new_use.pop(role, None)
             else:
                 # Autonomy inherits the chat model, glance follows chat/grok, and delegate stays opt-in.
                 new_use.pop(role, None)
         migrated = dict(raw)
         migrated['use'] = new_use
-        migrated['migration'] = {'cc_removed': {'roles': affected}}
+        migrated['migration'] = {'cc_removed': {'roles': affected, 'fallback': fallback,
+                                                'fallback_label': fallback_label,
+                                                'fallback_keyed': fallback_keyed}}
         self._clean(migrated)  # validate before touching the real file
         self._backup_before_cc_migration()
         self._atomic_bytes(self.path, (json.dumps(migrated, ensure_ascii=False, indent=2) + '\n').encode('utf-8'))
@@ -160,7 +198,17 @@ class ModelSettings:
         recovered = [role for role in roles if role != 'delegate']
         if recovered:
             names = '、'.join(ROLE_LABELS[role] for role in recovered)
-            parts.append(f'Claude Code 专用模型已下线；{names}已恢复为可用的 API 模型。')
+            fallback = record.get('fallback')
+            label = record.get('fallback_label') or fallback or '默认模型'
+            if not any(role in roles for role in ('peter', 'background')):
+                parts.append(f'Claude Code 专用模型已下线；{names}已恢复默认选择。')
+            elif not fallback:
+                parts.append('Claude Code 专用模型已下线；没有可用的 API 模型，请先在模型设置里添加并选择。')
+            elif record.get('fallback_keyed'):
+                parts.append(f'Claude Code 专用模型已下线；{names}已恢复为可用的 API 模型「{label}」。')
+            else:
+                parts.append(f'Claude Code 专用模型已下线；没有找到已填写 Key 的 API 模型，'
+                             f'{names}暂用「{label}」，请填写 Key 或在模型设置里重新选择。')
         if 'delegate' in roles:
             parts.append('委派任务原先选择的 Claude Code 模型已失效，委派已暂时关闭；请重新选择委派模型。')
         return ''.join(parts)
@@ -412,12 +460,35 @@ class ModelSettings:
                 raise SettingsError('自主活动尚无可用的 API 模型；请先添加或启用一个 API 模型。')
             provider = self._provider(self.data, model_id)
             if provider is None:
+                if role == 'peter':
+                    raise SettingsError('还没有可用的聊天模型；请先在模型设置里选择。')
+                if role == 'background':
+                    raise SettingsError('还没有可用的记忆后台模型；请先在模型设置里选择。')
                 raise SettingsError(f'{role} 选中的模型无效；已停止模型请求。')
             if model_id.startswith(BUILTIN_PREFIX):
                 name = model_id[len(BUILTIN_PREFIX):]
             else:
                 name = provider['endpoint_name']
             return model_id, name, provider
+
+    def startup_choice(self, role):
+        """Like chosen(), but None instead of an exception when Lan has no usable model yet.
+
+        Peter must still be able to start and open the settings page after the old CC model is gone.
+        A blocked settings transaction still raises; an empty selection is not an error at startup.
+        """
+        with self.lock:
+            if self.blocked:
+                raise SettingsError('模型设置保存未完成；已停止模型请求，请重启恢复。')
+            if self._provider(self.data, self.selected(role)) is None:
+                return None
+            return self.chosen(role)
+
+    def _public_use(self, role):
+        if role in ('glance', 'autonomy', 'delegate'):
+            return self.selected(role)
+        choice = self.startup_choice(role)
+        return None if choice is None else choice[0]
 
     def limits(self):
         with self.lock:
@@ -454,11 +525,13 @@ class ModelSettings:
                 models.append({**item, 'builtin': False, 'endpoint_name': names.get(item['endpoint'], ''),
                                'key_set': keys.get(item['endpoint'], False)})
             daily, monthly = self.limits()
-            use = {role: (self.selected(role) if role in ('glance', 'autonomy', 'delegate') else self.chosen(role)[0])
-                   for role in ROLES}
+            use = {role: self._public_use(role) for role in ROLES}
+            notice = self._migration_notice(self.data.get('migration'))
+            if not notice and self.startup_choice('peter') is None:
+                notice = '还没有可用的聊天模型；请在模型设置里添加接口和模型。'
             return {'endpoints': endpoints, 'models': models, 'use': use,
                     'use_explicit': {role: role in self.data['use'] for role in ROLES},
-                    'migration_notice': self._migration_notice(self.data.get('migration')),
+                    'migration_notice': notice,
                     'limits': {'daily_cny': str(daily), 'monthly_cny': str(monthly)}}
 
     # ---- changes from the settings page -------------------------------

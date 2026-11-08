@@ -249,6 +249,105 @@ max_input_tokens = 200000
         view = load_character(self.root, 'test').models.public()
         self.assertFalse([item for item in view['models'] if item.get('kind') == 'claude_agent'])
 
+    def test_old_cc_default_provider_falls_back_to_a_normal_api_provider(self):
+        toml = TOML.replace('provider = "fake"', 'provider = "claude_agent"') + '''
+[providers.claude_agent]
+kind = "claude_agent"
+label = "Claude Code · Sonnet（均衡）"
+model = "sonnet"
+max_input_tokens = 200000
+'''
+        (self.root / 'characters' / 'test' / 'character.toml').write_text(toml, encoding='utf-8')
+        cfg = load_character(self.root, 'test')
+        self.assertEqual(cfg.provider_name, 'fake')
+        self.assertEqual(cfg.provider['model'], 'fake-model')
+        self.assertFalse([item for item in cfg.models.public()['models']
+                          if item.get('kind') == 'claude_agent'])
+
+    def test_migration_prefers_a_keyed_custom_model_when_default_key_is_missing(self):
+        cfg, model_id = self.add_relay()
+        env = self.root / '.env'
+        kept = [line for line in env.read_text(encoding='utf-8').splitlines()
+                if not line.startswith('FAKE_KEY=')]
+        env.write_text('\n'.join(kept) + '\n', encoding='utf-8')
+        raw = json.loads(cfg.models.path.read_text(encoding='utf-8'))
+        raw['use'] = {'peter': 'builtin:claude_agent', 'background': 'builtin:claude_agent_haiku'}
+        cfg.models.path.write_text(json.dumps(raw), encoding='utf-8')
+
+        cfg = load_character(self.root, 'test')
+        view = cfg.models.public()
+        self.assertEqual(cfg.provider['model'], '[k]fake-sonnet')
+        self.assertEqual(cfg.background_provider['model'], '[k]fake-sonnet')
+        self.assertEqual(view['use']['peter'], model_id)
+        self.assertEqual(view['use']['background'], model_id)
+        self.assertIn('已恢复为可用的 API 模型「Sonnet」', view['migration_notice'])
+        self.assertNotIn('没有找到已填写 Key', view['migration_notice'])
+
+    def test_migration_does_not_claim_a_model_is_available_when_every_key_is_missing(self):
+        (self.root / '.env').write_text('UNRELATED=fake\n', encoding='utf-8')
+        path, _ = self._write_legacy_models({
+            'peter': 'builtin:claude_agent',
+            'background': 'builtin:claude_agent_opus',
+        })
+        cfg = load_character(self.root, 'test')
+        view = cfg.models.public()
+        self.assertEqual(cfg.provider['model'], 'fake-model')
+        self.assertEqual(view['use']['peter'], 'builtin:fake')
+        self.assertIn('没有找到已填写 Key 的 API 模型', view['migration_notice'])
+        self.assertIn('暂用「fake-model」', view['migration_notice'])
+        self.assertNotIn('已恢复为可用的 API 模型', view['migration_notice'])
+        fake = next(item for item in view['models'] if item['id'] == 'builtin:fake')
+        self.assertFalse(fake['key_set'])
+
+    def test_migration_recovers_when_the_default_model_is_not_available(self):
+        other = {'model': 'other-model', 'base_url': 'https://other.invalid/v1',
+                 'api_key_env': 'OTHER_KEY', 'thinking': 'enabled', 'max_input_tokens': 6000,
+                 'input_cny_per_million': Decimal('1'), 'cached_input_cny_per_million': Decimal('1'),
+                 'output_cny_per_million': Decimal('2')}
+        (self.root / '.env').write_text('OTHER_KEY=present\n', encoding='utf-8')
+        self._write_legacy_models({
+            'peter': 'builtin:claude_agent',
+            'background': 'builtin:claude_agent_haiku',
+        })
+        settings = ModelSettings(self.root, 'test', {'other': other}, 'missing-default')
+        view = settings.public()
+        self.assertEqual(view['use']['peter'], 'builtin:other')
+        self.assertEqual(view['use']['background'], 'builtin:other')
+        self.assertIn('已恢复为可用的 API 模型「other-model」', view['migration_notice'])
+
+    def test_only_cc_providers_start_without_a_model_and_keep_settings_usable(self):
+        toml = '''name = "Test"
+provider = "claude_agent"
+persona = "persona/test.md"
+history_rounds = 20
+max_output_tokens = 50
+[providers.claude_agent]
+kind = "claude_agent"
+model = "sonnet"
+max_input_tokens = 200000
+'''
+        (self.root / 'characters' / 'test' / 'character.toml').write_text(toml, encoding='utf-8')
+        cfg = load_character(self.root, 'test')
+        self.assertTrue(cfg.provider.get('missing'))
+        view = cfg.models.public()
+        self.assertIsNone(view['use']['peter'])
+        self.assertIn('还没有可用的聊天模型', view['migration_notice'])
+        clients, call = make_model(self.root, cfg)
+        with clients, self.assertRaises(UserError):
+            call([{'role': 'user', 'content': 'fake'}])
+        store = Store(self.root / 'data')
+        with self.assertRaises(UserError):
+            Chat(cfg, store, Budget(store), Mock()).send('fake')
+
+    def test_make_model_starts_without_a_key_but_the_request_explains_why(self):
+        (self.root / '.env').write_text('OTHER_KEY=present\n', encoding='utf-8')
+        cfg = load_character(self.root, 'test')
+        self.assertEqual(cfg.provider['model'], 'fake-model')
+        clients, call = make_model(self.root, cfg)
+        with clients, self.assertRaises(UserError) as result:
+            call([{'role': 'user', 'content': 'fake'}])
+        self.assertIn('API Key', str(result.exception))
+
     def test_invalid_unrelated_choice_blocks_migration_without_touching_file(self):
         path, raw = self._write_legacy_models({
             'peter': 'builtin:claude_agent',

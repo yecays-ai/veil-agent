@@ -8,7 +8,7 @@ Lan 在 Peter 的模型设置里不再看到 Claude Code 专用 Sonnet、Haiku�
 
 - 删除纯 CC 文件：`claude_agent_channel.py`、`claude_agent_bridge.py`、`scripts/claude_agent_smoke.py`、对应测试，以及 `experiments/cc-bridge/`、`experiments/cc-jail/`。
 - `veil_agent.py` 删除 CC 导入、`toml_provider()` 的 CC 特殊配置、聊天执行器、成本日志写入、空回复、工作台、后台模型和委派成本里的 CC 分支。
-- `model_settings.py` 删除 CC 用途限制和密钥状态；`models.json` 启动时只迁移已确认的 CC 内置 provider 引用，先写 `models.json.cc-removal-backup`，再原子替换，其他用途、自定义模型、接口、Key 和费用上限保留。
+- `model_settings.py` 删除 CC 用途限制和密钥状态；`models.json` 启动时只迁移已确认的 CC 内置 provider 引用，先写 `models.json.cc-removal-backup`，再原子替换，其他用途、自定义模型、接口、Key 和费用上限保留。恢复时优先选已填 Key 的 API 模型；全部 Key 缺失时不虚报可用；没有可用 API 模型时以显式“未选择模型”启动，仍能打开设置。
 - `characters/peter/character.toml` 删除三个 CC provider，保留普通 Anthropic API 和其他 provider。
 - 桌面端删除 CC 筛选和提示，模型卡片显示一次迁移提示。
 - 本单依赖 316（PR #315）。316 合并后解决 `STATUS.md`、`HANDOFF.md` 和 `veil_agent.py` 的冲突，再审查合并本单。
