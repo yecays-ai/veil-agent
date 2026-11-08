@@ -3,7 +3,7 @@
 ## 当前工单 254（2026-11-08 UTC）
 
 - PR #309 已合入 main（`ae33b69`），但 Lan 更新后点击桌宠仍看到两个黑窗。后续补丁分支为 `ticket/254-windows-console-followup`。
-- 桌面旧快捷方式仍指向 `.bat`，更新时将精确迁移到 `wscript + start-desktop.vbs`。点击桌宠后的两个黑窗已由进程树确定为 filesystem MCP 的两层 `cmd / npx`；固定 MCP 包改为安装期落到 `.deps/filesystem`，运行期由 `pythonw` 无窗口代理直接启动 Node 入口。
+- PR #309 已完成快捷方式迁移、filesystem MCP 本地固定安装与 `/work` 审批路径映射；相关修复已由实机更新验证，但点击桌宠后仍发现其他服务启动控制台。
 - `desktop/chat.js` 连续 3 次（约 1.8 秒）轮询失败才显示断线，成功即清零；失败次数和异常写控制台。`web_agent.py` 把未知后台异常写入现有 `data/web_service_error.txt`。
 - `executor_opencode.py` 将 OpenCode 容器固定 `/work` 挂载点安全映射回主机 workdir，并跟踪复合命令中的项目内 `cd`；目录外、逃逸和新建脚本仍审批。
 - 18:28 实机进程树确认新黑窗来自 Ombre 的控制台版宿主/服务；同时发现 Galatea `.cmd` MCP 仍可能退回普通 CMD。后续补丁让 Ombre 两层都用 `pythonw`，批处理 MCP 经现有无窗口代理和 `SW_HIDE` 启动。相关 162 项通过（3 项跳过）；本地批处理 MCP stdio 正常且 CMD 主窗口句柄为 0。

@@ -19,15 +19,17 @@ START_TIMEOUT = 60
 START_WATCHDOG = START_TIMEOUT + 5
 
 
-def _stdio_server_command(command, args, *, windows=None):
+def _stdio_server_command(command, args, *, windows=None, executable=None):
     if ((os.name == 'nt') if windows is None else windows) and Path(command).suffix.casefold() in {'.bat', '.cmd'}:
-        python = Path(sys.executable)
+        python = Path(executable or sys.executable)
         pythonw = python.with_name('pythonw.exe')
         if not pythonw.is_file():
             pythonw = python
+        cmd_args = ['call', command, *args]
+        command_line = subprocess.list2cmdline(cmd_args)
         return str(pythonw), [str(Path(__file__).with_name('mcp_hidden_stdio.py')),
                               os.environ.get('COMSPEC', 'cmd.exe'), '/d', '/s', '/c',
-                              'call', command, *args]
+                              command_line]
     return command, list(args)
 
 

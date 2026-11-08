@@ -30,13 +30,19 @@ class MCPServicesTest(unittest.TestCase):
         self.assertEqual(options['startupinfo'].wShowWindow, 0)
 
     def test_windows_batch_service_uses_explicit_command_interpreter(self):
-        command, args = mcp_services._stdio_server_command(
-            'E:/Peter-Agent/secrets/galatea-mcp.cmd', ['value with spaces'], windows=True)
-        self.assertEqual(Path(command).name.casefold(), 'pythonw.exe')
+        with tempfile.TemporaryDirectory(dir=Path(__file__).parent) as directory:
+            python = Path(directory) / 'python.exe'
+            pythonw = Path(directory) / 'pythonw.exe'
+            pythonw.touch()
+            command, args = mcp_services._stdio_server_command(
+                'E:/Peter-Agent/secrets/galatea-mcp.cmd', ['value & more'], windows=True,
+                executable=python)
+        self.assertEqual(Path(command), pythonw)
         self.assertEqual(Path(args[0]).name, 'mcp_hidden_stdio.py')
         self.assertEqual(Path(args[1]).name.casefold(), 'cmd.exe')
-        self.assertEqual(args[2:6], ['/d', '/s', '/c', 'call'])
-        self.assertEqual(args[6:], ['E:/Peter-Agent/secrets/galatea-mcp.cmd', 'value with spaces'])
+        self.assertEqual(args[2:5], ['/d', '/s', '/c'])
+        self.assertIn('galatea-mcp.cmd', args[5])
+        self.assertIn('"value & more"', args[5])
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(dir=Path(__file__).parent)
