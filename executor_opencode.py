@@ -248,7 +248,7 @@ def _complex_bash_request(patterns, metadata, workdir=None, test_scripts=None, t
         return True
     # Only discard a standalone stderr-to-null redirection; all file writes still need approval.
     def strip_stderr(value):
-        return re.sub(r'(?<!\S)(?:2>/dev/null|2>&1)(?=\s|$)', '', value)
+        return re.sub(r'(?<!\S)(?:2>/dev/null|2>&1)(?=\s|$|[;&|])', '', value)
     try:
         lexer = shlex.shlex(strip_stderr(command), posix=True, punctuation_chars=';&|<>()')
         lexer.whitespace_split = True

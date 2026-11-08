@@ -341,6 +341,13 @@ class DecisionTests(unittest.TestCase):
         ask.assert_not_called()
         self.assertEqual(approvals, [{'operation': 'bash:tests', 'waiting': False,
                                       'decision': 'auto_approved_isolated'}])
+        approvals.clear()
+        redirected = 'python3 -m unittest 2>&1; echo "EXIT_CODE=$?"'
+        self.assertEqual(ex.decide('bash', ['python3 -m unittest 2>&1', 'echo "EXIT_CODE=$?"'],
+                                   {'command': redirected}, wd, autonomy=False, ask=ask,
+                                   approvals=approvals, task_scope=scope,
+                                   maintenance=True, isolated_tests=True)[0], 'once')
+        ask.assert_not_called()
         for command in ('ssh example.invalid', 'nc example.invalid 80', 'rm important.txt'):
             asked = []
             self.assertEqual(ex.decide('bash', [command], {'command': command}, wd, autonomy=False,
