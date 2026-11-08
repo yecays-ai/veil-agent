@@ -296,6 +296,27 @@ def _operation_summary(permission, patterns, metadata):
     return permission + (':' + program if program else '')
 
 
+def _approval_diagnostic(permission, patterns, metadata, workdir, test_scripts,
+                         needs_lan, complex_request):
+    command = metadata.get('command') if isinstance(metadata, dict) else None
+    try:
+        tokens = shlex.split(command, posix=True) if isinstance(command, str) else []
+    except ValueError:
+        tokens = []
+    if not tokens or _command_name(tokens[0]) not in {'python', 'python3'}:
+        return None
+    script = tokens[1] if len(tokens) > 1 and not tokens[1].startswith('-') else ''
+    path = _resolved_work_path(script, workdir) if script else None
+    matched = bool(path and test_scripts is not None and path in test_scripts)
+    redact = re.compile(r'(?i)((?:--?)?(?:token|secret|password|api[_-]?key|credential))(=|\s+)([^\s,;]+)')
+    safe_command = redact.sub(r'\1\2[redacted]', command[:500]) if isinstance(command, str) else ''
+    safe_patterns = [redact.sub(r'\1\2[redacted]', str(item)[:300]) for item in patterns[:8]]
+    return {'permission': permission, 'patterns': safe_patterns, 'command': safe_command,
+            'needs_lan': needs_lan, 'complex_request': complex_request,
+            'test_script': Path(script.replace('\\', '/')).name if script else '',
+            'test_script_path_matched': matched}
+
+
 def decide(permission, patterns, metadata, workdir, *, autonomy, ask, grants=None, approvals=None,
            test_scripts=None):
     """VEIL's own answer to an OpenCode permission request: (reply, reason). `ask` is Lan's approval card."""
@@ -356,9 +377,15 @@ def decide(permission, patterns, metadata, workdir, *, autonomy, ask, grants=Non
                 prompt = f'Peter 的工作台想执行：{shown}。这会联网、安装、发布或批量删除。同意这一次吗？y/N '
             else:
                 prompt = f'Peter 的工作台想执行一条复合或无法确认安全的命令：{shown}。只执行这一次吗？y/N '
-            return _ask_lan(prompt, _operation_summary(permission, patterns, metadata),
-                            _approval_key(permission, patterns, metadata),
-                            ask, grants, approvals)
+            reply, reason = _ask_lan(prompt, _operation_summary(permission, patterns, metadata),
+                                     _approval_key(permission, patterns, metadata),
+                                     ask, grants, approvals)
+            if approvals is not None and approvals and approvals[-1]['operation'].startswith('bash:python'):
+                diagnostic = _approval_diagnostic(permission, patterns, metadata, workdir, test_scripts,
+                                                  needs_lan, complex_request)
+                if diagnostic:
+                    approvals[-1]['diagnostic'] = diagnostic
+            return reply, reason
     if permission in ('bash', 'edit', 'write', 'webfetch', 'task', 'skill', 'todowrite', 'read', 'glob', 'grep'):
         return 'once', 'inside the workbench'
     # Tools from other MCP servers (VEIL's own tools included) are never approved here: VEIL runs those itself.
@@ -738,6 +765,8 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
     note = f'[workbench: {steps} steps, {calls} tool calls, about ¥{cost.quantize(Decimal("0.0001"))}, folder {workdir}]' + cleanup_warning
     approval_note = '\n'.join(
         f"[approval: operation={json.dumps(item['operation'], ensure_ascii=False)}, waiting={str(item['waiting']).lower()}, decision={item['decision']}]"
+        + (f"\n[approval_diagnostic: {json.dumps(item['diagnostic'], ensure_ascii=False)}]"
+           if item.get('diagnostic') else '')
         for item in approvals)
     if approval_stop:
         return ExecutorResult(f'{approval_note}\n[workbench=stopped; reason={approval_stop}]\n{note}',
