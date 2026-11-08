@@ -1,6 +1,6 @@
 # 当前状态
 
-更新：2026-11-08 UTC · Copilot。
+更新：2026-11-08 UTC · agent（接手 PR #312）。
 
 ## 当前目标
 
@@ -8,15 +8,16 @@
 
 ## 现状
 
-- 工单 252 的 PR #308 已合入 main（`548cfc1`，14 项检查通过）；工单 254 的 PR #310 已合入 main（`0c76ade`，4 个 Windows/Linux × Python 3.11/3.12 checks 成功）。PR #310 修复启动黑窗与容器测试误审批；Windows 实际复验仍待 Lan 完成。
-- 工单 253 在独立 worktree `E:\Peter-Agent\VEIL\worktrees\253-gemini-cache-accounting`、分支 `ticket/253-gemini-cache-accounting`，已 rebase、提交、推送；PR #312 已创建，等待必需 CI 和 Cubic 审查。
-- 已修复已知缓存 usage 字段归一化、缺失/无效/冲突状态记录、VEIL 直连模型各类别缓存统计，以及记忆 embedding 响应提供实际 usage 时的费用结算。未改变模型请求、消息顺序、人设、记忆上下文或工具 schema；未新增依赖或调用真实付费模型。
-- 自动回归通过：聊天/SDK 88、缓存链路 8、自主活动 40、记忆召回 13、委派 9、模型设置 20、Native Memory 63、Memory 32、工具循环 71、瞄一眼 8、账本增量读取 11、账本恢复 22 项；Gemini usageMetadata 的 OpenAI SDK 单测另通过 1 项。
-- `test_web.py` 未取得最终汇总，状态未验证且不重跑。没有中转站真实 `usage` JSON 或逐请求账单，Gemini 4A 实际缓存命中是否改善、实际收费是否一致均未验证。Ombre 子进程模型继续按估算记账，不纳入缓存命中统计。
+- 工单 253 在分支 `ticket/253-gemini-cache-accounting` 上开发，PR #312 尚未合并；代码合并、自动检查通过、Windows 体验验收分别记录。
+- 已完成：已知缓存 usage 字段归一化（OpenAI/LiteLLM、Gemini `usageMetadata` 与 SDK snake_case 对象）、缺失/无效/冲突状态记录、VEIL 直连模型各类别缓存统计，以及记忆 embedding 响应提供实际 usage 时的费用结算。
+- Cubic 复审指出的问题已修复：embedding 结算不得超过预留（否则 `released_amount` 为负、绕过每日/每月上限）；非空 embedding 请求报告 `prompt_tokens=0` 时保留估算、不按零费用结算；补 Gemini SDK usage 对象与零用量的回归测试。
+- 未改变模型请求、消息顺序、人设、记忆上下文或工具 schema；未新增依赖或调用真实付费模型。
+- 本机自动回归：缓存、预算、召回、记忆、账本与语音相关 206 项通过（1 项跳过）；`test_web.py` 未取得最终汇总，未重跑。必需 CI 以 PR #312 的 GitHub 检查为准。
+- 未取得中转站真实 usage JSON 或逐请求账单；Gemini 4A 实际缓存命中是否改善、实际收费是否一致均未验证。Ombre 子进程模型继续按估算记账，不纳入缓存命中统计。
 
 ## 下一步
 
-核对 PR #312 的最新必需 CI 与 Cubic 审查，修复实质问题后按分支保护决定是否合并。不得把缓存统计和本地假数据测试表述为真实 Gemini 命中已修复。
+查看 PR #312 最新必需 CI 与 Cubic 复审；只处理功能、计费正确性、数据或安全方面的实质问题，满足当前分支保护后合并。
 
 ## Lan 的 Windows 体验验收
 
