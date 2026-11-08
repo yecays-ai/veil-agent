@@ -127,7 +127,7 @@ def start_service(character, port):
     pythonw = Path(sys.executable).with_name('pythonw.exe')
     executable = str(pythonw if pythonw.exists() else Path(sys.executable))
     flags = getattr(subprocess, 'DETACHED_PROCESS', 0) | hidden_subprocess_kwargs(
-        windows=True, module=subprocess)['creationflags']
+        module=subprocess).get('creationflags', 0)
     return subprocess.Popen([executable, str(ROOT / 'web_agent.py'), '--character', character,
                       '--port', str(port), '--no-browser'],
                      cwd=ROOT, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,

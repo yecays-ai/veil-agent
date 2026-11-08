@@ -1,2 +1,2 @@
 @echo off
-start "" wscript.exe //B "%~dp0start-desktop.vbs"
+start "" wscript.exe "%~dp0start-desktop.vbs"

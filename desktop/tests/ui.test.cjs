@@ -169,6 +169,7 @@ test('chat polling waits for repeated failures before showing a real disconnect'
   assert.match(js, /pollFailures\s*=\s*0/);
   assert.match(js, /pollFailures\s*>=\s*3/);
   assert.match(js, /console\.warn\('event poll failed'/);
+  assert.match(js, /console\.error\('event update failed'/);
 });
 
 test('screen approval remains a compact fixed-size window with scrollable long text', async () => {

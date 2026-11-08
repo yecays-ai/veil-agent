@@ -14,8 +14,8 @@ test('Windows launchers delegate to the hidden desktop entry', async () => {
     fs.readFile(path.join(root, 'start-desktop.bat'), 'utf8'),
     fs.readFile(path.join(root, 'start-web.bat'), 'utf8')]);
   assert.match(script, /shell\.Run command, 0, False/);
-  assert.match(desktopBat, /wscript\.exe \/\/B/);
-  assert.match(webBat, /wscript\.exe \/\/B/);
+  assert.match(desktopBat, /wscript\.exe "%~dp0start-desktop\.vbs"/);
+  assert.match(webBat, /wscript\.exe "%~dp0start-desktop\.vbs"/);
 });
 
 test('reuses a ready authenticated service without launching or writing Agent data', async t => {

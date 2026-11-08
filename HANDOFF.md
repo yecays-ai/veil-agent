@@ -5,8 +5,8 @@
 - PR #308，分支 `ticket/252-windows-opencode-reliability`，已 rebase 到最新 main `35c0aee`。范围只含 Windows 后台窗口、桌面断线去抖、OpenCode 审批分类/复用/结果回传和相邻诊断。
 - `windows_process.py` 统一提供 Windows `CREATE_NO_WINDOW` 参数，已接到 OpenCode 启动/停止、Git 快照、Docker 检查/构建/清理和 Web 后台启动。`start-desktop.vbs` 是无控制台日常入口；两个旧 `.bat` 转交给它。
 - `desktop/chat.js` 连续 3 次（约 1.8 秒）轮询失败才显示断线，成功即清零；失败次数和异常写控制台。`web_agent.py` 把未知后台异常写入现有 `data/web_service_error.txt`。
-- `executor_opencode.py` 只放行只读命令组合和明确命名的 Python 测试文件。审批批准仅在本次 `run()` 内按完整操作键复用；拒绝、取消、10 分钟超时立即 abort，并返回 `user_denied` / `cancelled` / `timed_out` 和 `workbench=stopped`。批准与最终成功/失败分开记录。
-- 回归证据：`tests.test_executor_opencode` 52 项通过、2 项真实 OpenCode 因未安装跳过；`tests.test_web` 67 项通过；rebase 后桌面 `backend.test.cjs` + `ui.test.cjs` 15 项通过；相关 Python 文件 `py_compile` 通过。
+- `executor_opencode.py` 只放行不逃逸、不含变更参数的只读组合和任务开始前已存在于项目内的命名 Python 测试文件。审批批准仅在本次 `run()` 内按完整操作键复用，任何工具执行后失效；拒绝、取消、10 分钟超时立即 abort。回传操作只有权限类型和程序名，不含命令参数。
+- 回归证据：`tests.test_executor_opencode` 运行 53 项无失败，其中 2 项真实 OpenCode 因未安装跳过；`tests.test_web` 67 项通过；rebase 后桌面 `backend.test.cjs` + `ui.test.cjs` 15 项通过；相关 Python 文件 `py_compile` 通过。
 
 ## 下一个窗口第一步
 

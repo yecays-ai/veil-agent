@@ -6,7 +6,7 @@ Lan 启动 Peter 和连续交代开发任务时不再处理黑色命令窗口或
 
 ## 当前状态
 
-桌面轮询首次失败就显示断线；OpenCode 的 Git 快照和 Docker 清理没有统一隐藏 Windows 子进程窗口；审批桥丢弃批准/拒绝原因且同一任务不复用批准。工单 249 已修复危险命令与搜索文本的基础分类，但只读复合命令和明确的测试脚本仍会过度询问。本次复用现有 `web_launcher.py`、`executor_opencode.py`、`workbench_scope.py` 和桌面轮询，不引入新权限系统或外部依赖。
+桌面轮询首次失败就显示断线；OpenCode 的 Git 快照和 Docker 清理没有统一隐藏 Windows 子进程窗口；审批桥丢弃批准/拒绝原因且同一任务不复用批准。工单 249 已修复危险命令与搜索文本的基础分类，但安全的只读复合命令和项目内已有测试脚本仍会过度询问。本次复用现有 `web_launcher.py`、`executor_opencode.py`、`workbench_scope.py` 和桌面轮询，不引入新权限系统或外部依赖。
 
 ## 验收步骤
 

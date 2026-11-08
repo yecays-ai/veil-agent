@@ -145,7 +145,7 @@ def _bash_command_needs_lan(tokens):
     return False
 
 
-def _complex_bash_request(patterns, metadata):
+def _complex_bash_request(patterns, metadata, workdir=None, test_scripts=None):
     # OpenCode supplies parsed command fragments in patterns and the original shell input in metadata.command.
     command = metadata.get('command') if isinstance(metadata, dict) else None
     if not isinstance(command, str) or not command.strip() or not isinstance(patterns, list) or not patterns:
@@ -161,13 +161,13 @@ def _complex_bash_request(patterns, metadata):
         return True
     if '\n' in command or '\r' in command or '`' in command or '$(' in command:
         return True
-    if any(re.fullmatch(r'[<>()]+', token) for token in shell_tokens):
+    if any('<' in token or '>' in token for token in shell_tokens):
         return True
     operators = [token for token in shell_tokens if re.fullmatch(r'[;&|]+', token)]
     if operators and len(commands) != len(operators) + 1:
         return True
     if len(commands) > 1:
-        return not all(_safe_project_command(item) for item in commands)
+        return not all(_safe_project_command(item, workdir, test_scripts) for item in commands)
     command_tokens = commands[0]
     while command_tokens and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', command_tokens[0]):
         command_tokens = command_tokens[1:]
@@ -181,15 +181,19 @@ def _complex_bash_request(patterns, metadata):
     if command_name in {'python', 'python3'} and command_tokens[1:3] in (
             ['-m', 'unittest'], ['-m', 'pytest']):
         return False
-    if _safe_project_command(command_tokens):
-        return False
+    if command_name in SAFE_INSPECTION or command_name in {'python', 'python3'} or re.fullmatch(
+            r'python\d+(?:\.\d+)*', command_name):
+        return not _safe_project_command(command_tokens, workdir, test_scripts)
     if command_name in {'python', 'python3', 'node', 'nodejs', 'deno', 'bun', 'ruby', 'perl', 'awk',
                         'gawk', 'mawk', 'php', 'osascript'} or re.fullmatch(r'python\d+(?:\.\d+)*', command_name):
         return True
     return False
 
 
-def _safe_project_command(tokens):
+SAFE_INSPECTION = {'ls', 'dir', 'pwd', 'cat', 'type', 'head', 'tail', 'wc', 'stat', 'file', 'find', 'grep', 'rg'}
+
+
+def _safe_project_command(tokens, workdir=None, test_scripts=None):
     """Commands whose requested effect is inspection or running an explicitly named test file."""
     while tokens and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', tokens[0]):
         tokens = tokens[1:]
@@ -197,15 +201,49 @@ def _safe_project_command(tokens):
         return False
     command = _command_name(tokens[0])
     if command == 'git':
-        return _git_subcommand(tokens) in {'status', 'branch', 'diff', 'log', 'show', 'rev-parse', 'ls-files'}
-    if command in {'ls', 'dir', 'pwd', 'cat', 'type', 'head', 'tail', 'wc', 'stat', 'file', 'find', 'grep', 'rg'}:
-        return True
+        return (_git_subcommand(tokens) in {'status', 'branch', 'diff', 'log', 'show', 'rev-parse', 'ls-files'} and
+                not any(_outside_workdir_argument(arg, workdir) for arg in tokens[1:] if not arg.startswith('-')))
+    if command in SAFE_INSPECTION:
+        if command == 'find' and any(arg.casefold() in {'-delete', '-exec', '-execdir', '-ok', '-okdir'} for arg in tokens[1:]):
+            return False
+        return not any(_outside_workdir_argument(arg, workdir) for arg in tokens[1:] if not arg.startswith('-'))
     if command in {'python', 'python3'} or re.fullmatch(r'python\d+(?:\.\d+)*', command):
         if len(tokens) < 2 or tokens[1].startswith('-'):
             return False
+        path = _resolved_work_path(tokens[1], workdir)
         name = posixpath.basename(tokens[1].replace('\\', '/')).casefold()
-        return name.startswith('test_') and name.endswith('.py') or name.endswith('_test.py')
+        return bool(path and test_scripts is not None and path in test_scripts and
+                    (name.startswith('test_') and name.endswith('.py') or name.endswith('_test.py')))
     return False
+
+
+def _resolved_work_path(value, workdir):
+    if workdir is None or not isinstance(value, str):
+        return None
+    text = value.replace('\\', '/')
+    if text.startswith('/') or re.match(r'^[A-Za-z]:', text):
+        return None
+    work = posixpath.normpath(str(workdir).replace('\\', '/')).casefold()
+    target = posixpath.normpath(work + '/' + text).casefold()
+    return target if target == work or target.startswith(work.rstrip('/') + '/') else None
+
+
+def _outside_workdir_argument(value, workdir):
+    if value in {'.', '..'} or '/' in value or '\\' in value or re.match(r'^[A-Za-z]:', value):
+        return _resolved_work_path(value, workdir) is None
+    return False
+
+
+def existing_test_scripts(workdir):
+    found = set()
+    for base, dirs, files in os.walk(workdir):
+        dirs[:] = [item for item in dirs if item not in {'.git', 'node_modules', '.venv', 'venv', '__pycache__'}]
+        for name in files:
+            lower = name.casefold()
+            path = Path(base, name)
+            if not path.is_symlink() and (lower.startswith('test_') and lower.endswith('.py') or lower.endswith('_test.py')):
+                found.add(posixpath.normpath(str(path).replace('\\', '/')).casefold())
+    return found
 
 
 def _approval_key(permission, patterns, metadata):
@@ -229,7 +267,18 @@ def _ask_lan(prompt, operation, key, ask, grants, approvals):
     return ('once', decision) if decision == 'approved' else ('reject', decision)
 
 
-def decide(permission, patterns, metadata, workdir, *, autonomy, ask, grants=None, approvals=None):
+def _operation_summary(permission, patterns, metadata):
+    command = metadata.get('command') if isinstance(metadata, dict) else None
+    try:
+        tokens = shlex.split(command, posix=True) if isinstance(command, str) else []
+    except ValueError:
+        tokens = []
+    program = _command_name(tokens[0]) if tokens else ''
+    return permission + (':' + program if program else '')
+
+
+def decide(permission, patterns, metadata, workdir, *, autonomy, ask, grants=None, approvals=None,
+           test_scripts=None):
     """VEIL's own answer to an OpenCode permission request: (reply, reason). `ask` is Lan's approval card."""
     text = ' '.join(str(p) for p in patterns) + ' ' + json.dumps(metadata or {}, ensure_ascii=False)
     if DANGEROUS.search(text):
@@ -239,7 +288,8 @@ def decide(permission, patterns, metadata, workdir, *, autonomy, ask, grants=Non
             return 'reject', 'outside the workbench; Lan is not asked during autonomous activity'
         shown = ', '.join(str(p) for p in patterns)[:300]
         return _ask_lan(f'Peter 的工作台想访问工作台文件夹之外的位置：{shown}。同意这一次吗？y/N ',
-                        shown, _approval_key(permission, patterns, metadata), ask, grants, approvals)
+                        _operation_summary(permission, patterns, metadata),
+                        _approval_key(permission, patterns, metadata), ask, grants, approvals)
     work = posixpath.normpath(str(workdir).replace('\\', '/')).lower()
     for pattern in patterns:
         p = str(pattern).replace('\\', '/')
@@ -277,7 +327,7 @@ def decide(permission, patterns, metadata, workdir, *, autonomy, ask, grants=Non
                     needs_lan = needs_lan or _bash_command_needs_lan(command_tokens)
                 else:
                     complex_request = True
-        complex_request = complex_request or _complex_bash_request(patterns, metadata)
+        complex_request = complex_request or _complex_bash_request(patterns, metadata, workdir, test_scripts)
         if needs_lan or complex_request:
             if autonomy:
                 return 'reject', 'needs Lan\'s approval; not asked during autonomous activity'
@@ -287,7 +337,8 @@ def decide(permission, patterns, metadata, workdir, *, autonomy, ask, grants=Non
                 prompt = f'Peter 的工作台想执行：{shown}。这会联网、安装、发布或批量删除。同意这一次吗？y/N '
             else:
                 prompt = f'Peter 的工作台想执行一条复合或无法确认安全的命令：{shown}。只执行这一次吗？y/N '
-            return _ask_lan(prompt, shown, _approval_key(permission, patterns, metadata),
+            return _ask_lan(prompt, _operation_summary(permission, patterns, metadata),
+                            _approval_key(permission, patterns, metadata),
                             ask, grants, approvals)
     if permission in ('bash', 'edit', 'write', 'webfetch', 'task', 'skill', 'todowrite', 'read', 'glob', 'grep'):
         return 'once', 'inside the workbench'
@@ -590,6 +641,7 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
         api.call('POST', f'/session/{session}/prompt_async', {
             'parts': [{'type': 'text', 'text': text}], 'model': {'providerID': 'relay', 'modelID': provider['model']}})
         started, idle, answered, grants, approvals = clock(), 0, [], set(), []
+        test_scripts, seen_calls = existing_test_scripts(workdir), 0
         approval_stop = ''
         while True:
             sleep(1)
@@ -602,7 +654,7 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
                     answered.append(request.get('id'))
                     reply, why = decide(request.get('permission', ''), request.get('patterns', []),
                                         request.get('metadata'), workdir, autonomy=autonomy, ask=ask,
-                                        grants=grants, approvals=approvals)
+                                        grants=grants, approvals=approvals, test_scripts=test_scripts)
                     api.call('POST', f"/permission/{request['id']}/reply", {'reply': reply})
                     if why in {'user_denied', 'cancelled', 'timed_out'}:
                         approval_stop = why
@@ -613,6 +665,9 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
                 if proc.poll() is not None:
                     stop = stop or 'OpenCode stopped unexpectedly'
             steps, calls, repeat, _text = summarize(messages)
+            if calls > seen_calls:
+                grants.clear()
+                seen_calls = calls
             _tin, _tout, cost = estimate_cost(messages, price, steps)
             if not stop:
                 if steps >= int(limits['max_steps']):

@@ -67,8 +67,7 @@ def build_image(root=ROOT, image=IMAGE):
     print('第一次要做运行环境（需要联网，几分钟），请别关窗口 ……', flush=True)
     try:
         return subprocess.run(['docker', 'build', '-t', image, '-f', str(Path(root) / 'docker' / 'workbench.Dockerfile'),
-                               str(Path(root) / 'docker')],
-                              **hidden_subprocess_kwargs(module=subprocess)).returncode == 0
+                               str(Path(root) / 'docker')]).returncode == 0
     except OSError:
         return False
 

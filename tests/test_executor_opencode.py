@@ -158,7 +158,11 @@ class DecisionTests(unittest.TestCase):
                                    autonomy=True, ask=lambda _p: self.fail('wake must not ask'))[0], 'reject')
 
     def test_read_only_compounds_and_named_test_scripts_do_not_ask(self):
-        wd = Path('/data/peter/workbench')
+        wd = Path(tempfile.mkdtemp())
+        (wd / 'test_calculator.py').write_text('pass')
+        (wd / 'tests').mkdir()
+        (wd / 'tests' / 'calculator_test.py').write_text('pass')
+        scripts = ex.existing_test_scripts(wd)
         ask = Mock(side_effect=AssertionError('safe project work must continue'))
         for command, patterns in (
                 ('rg "TODO" src | head -20', ['rg "TODO" src', 'head -20']),
@@ -166,7 +170,7 @@ class DecisionTests(unittest.TestCase):
                 ('python3 test_calculator.py', ['python3 test_calculator.py']),
                 ('python tests/calculator_test.py -v', ['python tests/calculator_test.py -v'])):
             self.assertEqual(ex.decide('bash', patterns, {'command': command}, wd,
-                                       autonomy=False, ask=ask)[0], 'once', command)
+                                       autonomy=False, ask=ask, test_scripts=scripts)[0], 'once', command)
         ask.assert_not_called()
 
     def test_arbitrary_python_scripts_and_output_redirection_still_ask(self):
@@ -175,6 +179,22 @@ class DecisionTests(unittest.TestCase):
             ask = Mock(return_value='n')
             self.assertEqual(ex.decide('bash', [command], {'command': command}, wd,
                                        autonomy=False, ask=ask)[0], 'reject', command)
+            ask.assert_called_once()
+
+    def test_new_or_outside_test_scripts_and_mutating_read_commands_still_ask(self):
+        wd = Path(tempfile.mkdtemp())
+        (wd / 'existing_test.py').write_text('pass')
+        scripts = ex.existing_test_scripts(wd)
+        (wd / 'test_created.py').write_text('pass')
+        for command, patterns in (
+                ('python test_created.py', ['python test_created.py']),
+                ('python ../test_evil.py', ['python ../test_evil.py']),
+                ('cat ../persona/peter.md | head', ['cat ../persona/peter.md', 'head']),
+                ("git status; find . -name '*.log' -delete", ['git status', "find . -name '*.log' -delete"]),
+                ('echo hi &> /tmp/out', ['echo hi &> /tmp/out'])):
+            ask = Mock(return_value='n')
+            self.assertEqual(ex.decide('bash', patterns, {'command': command}, wd, autonomy=False,
+                                       ask=ask, test_scripts=scripts)[0], 'reject', command)
             ask.assert_called_once()
 
     def test_shell_substitutions_interpreters_and_script_sourcing_require_approval(self):
@@ -320,8 +340,8 @@ class RunTests(unittest.TestCase):
         self.assertIn('git push origin main', asks[0])
 
     def test_approved_operation_is_reused_and_denial_is_returned_structurally(self):
-        approved = {'id': 'p1', 'permission': 'bash', 'patterns': ['git push origin main'],
-                    'metadata': {'command': 'git push origin main'}}
+        approved = {'id': 'p1', 'permission': 'external_directory', 'patterns': ['/outside/project'],
+                    'metadata': {}}
         repeated = {**approved, 'id': 'p2'}
         done = [assistant(text='push completed', tool=('bash', {'command': 'git push origin main'}), finish='stop')]
         asks = []
@@ -342,6 +362,22 @@ class RunTests(unittest.TestCase):
         self.assertIn('decision=user_denied', result.text)
         self.assertIn('workbench=stopped', result.text)
         self.assertNotIn('bash error', result.text)
+
+    def test_approval_is_not_reused_after_a_tool_executes_and_operation_is_redacted(self):
+        first = {'id': 'p1', 'permission': 'bash', 'patterns': ['git push https://token@example.invalid/repo'],
+                 'metadata': {'command': 'git push https://token@example.invalid/repo'}}
+        second = {**first, 'id': 'p2'}
+        ran = [assistant(tool=('bash', {'command': 'git push origin main'}))]
+        done = [assistant(text='done', tool=('bash', {'command': 'git status'}), finish='stop')]
+        asks = []
+        result, api, _costs, _kill = run([
+            ([assistant()], [first], True), (ran, [], True), (ran, [second], True),
+            (done, [], False), (done, [], False), (done, [], False)],
+            ask=lambda prompt: asks.append(prompt) or 'y')
+        self.assertEqual(api.replies[:2], [('p1', 'once'), ('p2', 'once')])
+        self.assertEqual(len(asks), 2, (asks, api.replies, result.text))
+        self.assertIn('operation="bash:git"', result.text)
+        self.assertNotIn('token@example', result.text)
 
     def test_cancelled_approval_is_not_reported_as_user_denial(self):
         pending = {'id': 'p1', 'permission': 'bash', 'patterns': ['git push origin main'],
