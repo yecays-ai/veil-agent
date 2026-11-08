@@ -306,7 +306,8 @@ def _complex_bash_request(patterns, metadata, workdir=None, test_scripts=None, t
             ['-m', 'unittest'], ['-m', 'pytest']):
         return False
     if command_name in SAFE_INSPECTION or command_name in {'git', 'python', 'python3', 'node', 'npm', 'mkdir',
-                                                           'touch', 'sort', 'pytest', 'py.test'} or re.fullmatch(
+                                                           'touch', 'sort', 'pytest', 'py.test', 'true', 'false',
+                                                           ':'} or re.fullmatch(
             r'python\d+(?:\.\d+)*', command_name):
         return not _safe_project_command(command_tokens, workdir, test_scripts, task_scope=task_scope)
     if command_name in {'python', 'python3', 'node', 'nodejs', 'deno', 'bun', 'ruby', 'perl', 'awk',
@@ -340,6 +341,8 @@ def _safe_project_command(tokens, workdir=None, test_scripts=None, current=None,
     if command in {'echo', 'printf'}:
         # Output-only commands never read or write a project path. Format strings and "$?" are not
         # file arguments; treating a backslash/newline format as a path caused a false approval.
+        return True
+    if command in {'true', 'false', ':'}:
         return True
     if command in SAFE_INSPECTION:
         if command == 'find' and any(arg.casefold() in {'-delete', '-exec', '-execdir', '-ok', '-okdir',

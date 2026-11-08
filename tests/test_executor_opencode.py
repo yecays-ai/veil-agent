@@ -424,6 +424,12 @@ class DecisionTests(unittest.TestCase):
                                    ask=ask, task_scope=ex.TaskScope(wd), maintenance=True,
                                    isolated_tests=True)[0], 'once')
         ask.assert_not_called()
+        probe = 'ls -la; echo "---"; ls -la test_app.py 2>/dev/null || true'
+        self.assertEqual(ex.decide('bash', ['ls -la', 'echo "---"', 'ls -la test_app.py 2>/dev/null || true'],
+                                   {'command': probe}, wd, autonomy=False, ask=ask,
+                                   task_scope=ex.TaskScope(wd), maintenance=True,
+                                   isolated_tests=True)[0], 'once')
+        ask.assert_not_called()
 
     def test_task_scoped_approval_reuses_same_package_but_asks_for_another(self):
         wd = Path('/data/peter/workbench')
