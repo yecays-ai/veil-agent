@@ -3,18 +3,23 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 
+function pythonPath(root) {
+  return process.env.VEIL_PYTHON || path.join(root, '.venv/Scripts/python.exe');
+}
+
 async function validRoot(root) {
   if (typeof root !== 'string' || !path.isAbsolute(root)) return false;
   try {
-    await Promise.all(['web_launcher.py', 'web_agent.py', '.venv/Scripts/python.exe']
-      .map(file => fs.access(path.join(root, file))));
+    await Promise.all(['web_launcher.py', 'web_agent.py'].map(file => fs.access(path.join(root, file))));
+    await fs.access(pythonPath(root));
     return true;
   } catch { return false; }
 }
 
 async function readEndpoint(root, { requireReady = true } = {}) {
   try {
-    const value = JSON.parse(await fs.readFile(path.join(root, 'data/web_service.json'), 'utf8'));
+    const dataRoot = process.env.VEIL_AGENT_DATA || path.join(root, 'data');
+    const value = JSON.parse(await fs.readFile(path.join(dataRoot, 'web_service.json'), 'utf8'));
     if (!Number.isInteger(value.port) || value.port < 1 || value.port > 65535 ||
         typeof value.token !== 'string' || !/^[A-Za-z0-9_-]{16,256}$/.test(value.token)) return null;
     const origin = `http://127.0.0.1:${value.port}`;
@@ -30,7 +35,7 @@ async function readEndpoint(root, { requireReady = true } = {}) {
 
 function launch(root) {
   return new Promise((resolve, reject) => {
-    const child = spawn(path.join(root, '.venv/Scripts/python.exe'),
+    const child = spawn(pythonPath(root),
       [path.join(root, 'web_launcher.py'), '--no-browser'], {
         cwd: root, windowsHide: true, stdio: 'ignore', shell: false,
         env: { ...process.env, PYTHONUTF8: '1' }

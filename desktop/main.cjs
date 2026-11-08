@@ -30,9 +30,9 @@ function canCheckChatMedia(contents, permission, details, currentChat = chat) {
     (detachedChat && !detachedChat.isDestroyed() && contents === detachedChat.webContents && details?.requestingUrl === viewURL('chat'));
   return Boolean(allowedWindow && permission === 'media' && details?.mediaType === 'audio' && details?.isMainFrame === true);
 }
-const runtimeDataPath = app.isPackaged
+const runtimeDataPath = process.env.VEIL_DESKTOP_DATA || (app.isPackaged
   ? path.join(app.getPath('appData'), 'VEIL Desktop')
-  : path.join(__dirname, '.runtime-data');
+  : path.join(__dirname, '.runtime-data'));
 app.setPath('userData', runtimeDataPath);
 app.setPath('sessionData', path.join(runtimeDataPath, 'session-data'));
 const settingsPath = () => path.join(app.getPath('userData'), 'desktop.json');
@@ -161,7 +161,7 @@ async function toggleChat() {
   if (chat && !chat.isDestroyed()) { if (chat.isVisible()) chat.hide(); else { chat.show(); chat.focus(); } return; }
   if (connecting) return; connecting = true;
   try {
-    let root = settings.root;
+    let root = settings.root || process.env.VEIL_AGENT_ROOT;
     const adjacent = app.isPackaged
       ? path.resolve(path.dirname(process.execPath), '..', '..', '..', 'veil-agent')
       : path.resolve(__dirname, '..', 'veil-agent');
@@ -761,7 +761,7 @@ ipcMain.on('menu:action', async (event, action, value) => {
   }
 });
 
-if (!app.requestSingleInstanceLock()) app.quit();
+if (!process.env.VEIL_DESKTOP_TEST && !app.requestSingleInstanceLock()) app.quit();
 else {
   app.on('second-instance', () => { if (pet) pet.showInactive(); });
   app.whenReady().then(async () => {

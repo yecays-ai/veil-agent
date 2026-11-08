@@ -90,11 +90,24 @@ class DecisionTests(unittest.TestCase):
         wd = Path('/data/peter/workbench')
         cases = (('bash', ['python -m unittest'], {'command': 'python -m unittest'}),
                  ('edit', ['calc.py'], {}), ('edit', ['/data/peter/workbench/x.py'], {}),
-                 ('webfetch', ['https://example.com'], {}))
+                 ('read', ['README.md'], {}))
         for perm, pats, metadata in cases:
             self.assertEqual(ex.decide(perm, pats, metadata, wd, autonomy=False, ask=ask)[0], 'once',
                              (perm, pats))
         ask.assert_not_called()
+
+    def test_external_document_fetch_requires_task_scoped_approval(self):
+        asked = []
+        scope = ex.TaskScope('/data/peter/workbench')
+        reply, _ = ex.decide('webfetch', ['https://docs.example.com/mcp'], {}, Path('/data/peter/workbench'),
+                             autonomy=False, ask=lambda prompt: asked.append(prompt) or 'y', task_scope=scope)
+        self.assertEqual(reply, 'once')
+        self.assertEqual(len(asked), 1)
+        self.assertIn('外部文档', asked[0])
+        self.assertEqual(ex.decide('webfetch', ['https://docs.example.com/reference'], {},
+                                   Path('/data/peter/workbench'), autonomy=False,
+                                   ask=lambda _prompt: self.fail('same documentation host must be reused'),
+                                   task_scope=scope)[0], 'once')
 
     def test_dangerous_and_foreign_requests_are_rejected(self):
         wd = Path('/data/peter/workbench')
@@ -222,6 +235,77 @@ class DecisionTests(unittest.TestCase):
                                        ask=ask, test_scripts=scripts)[0], 'reject', command)
             ask.assert_called_once()
 
+    def test_task_scope_requires_one_test_grant_including_task_written_tests(self):
+        wd = Path(tempfile.mkdtemp())
+        scope = ex.TaskScope(wd)
+        asked = []
+        ask = lambda prompt: asked.append(prompt) or 'y'
+        self.assertEqual(ex.decide('write', ['tests/test_new.py'], {}, wd, autonomy=False, ask=ask,
+                                   task_scope=scope)[0], 'once')
+        (wd / 'tests').mkdir()
+        (wd / 'tests' / 'test_new.py').write_text('pass', encoding='utf-8')
+        self.assertEqual(ex.decide('bash', ['python3 tests/test_new.py'],
+                                   {'command': 'python3 tests/test_new.py'}, wd,
+                                   autonomy=False, ask=ask, task_scope=scope)[0], 'once')
+        self.assertEqual(len(asked), 1)
+        (wd / 'test_untracked.py').write_text('pass', encoding='utf-8')
+        self.assertEqual(ex.decide('bash', ['python3 test_untracked.py'],
+                                   {'command': 'python3 test_untracked.py'}, wd,
+                                   autonomy=False, ask=ask, task_scope=scope)[0], 'once')
+        self.assertEqual(len(asked), 1, 'the task test grant is reused instead of prompting per file')
+        denied_scope = ex.TaskScope(wd)
+        denied = Mock(return_value='n')
+        self.assertEqual(ex.decide('bash', ['python3 tests/test_new.py'],
+                                   {'command': 'python3 tests/test_new.py'}, wd,
+                                   autonomy=False, ask=denied, task_scope=denied_scope)[0], 'reject')
+        denied.assert_called_once()
+
+    def test_task_scope_allows_local_development_compounds_and_asks_once_for_tests(self):
+        wd = Path(tempfile.mkdtemp())
+        (wd / 'src').mkdir()
+        (wd / 'tests').mkdir()
+        (wd / 'tests' / 'test_app.py').write_text('pass', encoding='utf-8')
+        scope = ex.TaskScope(wd)
+        asked = []
+        ask = lambda prompt: asked.append(prompt) or 'y'
+        cases = (
+            ('mkdir -p src/new && git status && python -m unittest',
+             ['mkdir -p src/new', 'git status', 'python -m unittest']),
+            ('cd tests && python3 test_app.py', ['cd tests', 'python3 test_app.py']),
+            ('node --test', ['node --test']),
+            ('npm test -- --runInBand', ['npm test -- --runInBand']),
+        )
+        for command, patterns in cases:
+            self.assertEqual(ex.decide('bash', patterns, {'command': command}, wd,
+                                       autonomy=False, ask=ask, task_scope=scope)[0], 'once', command)
+        self.assertEqual(len(asked), 1, 'test runners ask once per task, not once per command')
+
+    def test_task_scoped_approval_reuses_same_package_but_asks_for_another(self):
+        wd = Path('/data/peter/workbench')
+        scope = ex.TaskScope(wd)
+        asked = []
+        ask = lambda prompt: asked.append(prompt) or 'y'
+        command = 'pip install requests'
+        self.assertEqual(ex.decide('bash', [command], {'command': command}, wd, autonomy=False,
+                                   ask=ask, task_scope=scope)[0], 'once')
+        self.assertEqual(ex.decide('bash', [command], {'command': command}, wd, autonomy=False,
+                                   ask=lambda _prompt: self.fail('same package must reuse its approval'),
+                                   task_scope=scope)[0], 'once')
+        self.assertEqual(len(asked), 1)
+        self.assertEqual(ex.decide('bash', ['pip install rich'], {'command': 'pip install rich'}, wd,
+                                   autonomy=False, ask=ask, task_scope=scope)[0], 'once')
+        self.assertEqual(len(asked), 2, 'a second package needs its own approval')
+        denied_scope = ex.TaskScope(wd)
+        denied = Mock(return_value='n')
+        self.assertEqual(ex.decide('bash', [command], {'command': command}, wd, autonomy=False,
+                                   ask=denied, task_scope=denied_scope)[0], 'reject')
+        self.assertEqual(ex.decide('bash', ['pip install rich'], {'command': 'pip install rich'}, wd,
+                                   autonomy=False, ask=denied, task_scope=denied_scope)[0], 'reject')
+        self.assertEqual(denied.call_count, 2)
+        self.assertEqual(ex.decide('bash', [command], {'command': command}, wd, autonomy=False,
+                                   ask=lambda _prompt: self.fail('denied package must not reprompt'),
+                                   task_scope=denied_scope)[0], 'reject')
+
     def test_shell_substitutions_interpreters_and_script_sourcing_require_approval(self):
         wd = Path('/data/peter/workbench')
         for command in ('echo `git push origin main`', 'echo $(git push origin main)',
@@ -275,10 +359,12 @@ class RunTests(unittest.TestCase):
                                                               create=True):
             run([([assistant(text='x')], [], False)] * 5, popen=popen)
             self.assertEqual(seen['creationflags'], ex.subprocess.CREATE_NO_WINDOW)
-            process = SimpleNamespace(poll=lambda: None, pid=123)
+            waited = Mock()
+            process = SimpleNamespace(poll=lambda: None, pid=123, wait=waited)
             with patch.object(ex.subprocess, 'run') as taskkill:
                 ex.kill_tree(process)
         self.assertEqual(taskkill.call_args.kwargs['creationflags'], 0x08000000)
+        waited.assert_called_once_with(timeout=5)
 
     def test_host_workbench_refuses_to_run_when_it_must_protect_the_journal(self):
         result, _api, costs, kill = run([], protect=['growth-journal.md'])
@@ -380,15 +466,54 @@ class RunTests(unittest.TestCase):
         self.assertIn('workbench=success', result.text)
 
         denied = {**approved, 'id': 'p3'}
-        result, api, _costs, _kill = run([([assistant()], [denied], True)] * 3,
+        safe_done = [assistant(text='The declined operation was skipped.', tool=('bash', {'command': 'git status'}), finish='stop')]
+        result, api, _costs, _kill = run([([assistant()], [denied], True)] + [(safe_done, [], False)] * 3,
                                          ask=lambda _prompt: 'n')
         self.assertEqual(api.replies, [('p3', 'reject')])
-        self.assertEqual(result.state, '被拒绝')
+        self.assertEqual(result.state, '成功')
         self.assertIn('decision=user_denied', result.text)
-        self.assertIn('workbench=stopped', result.text)
+        self.assertIn('workbench=success', result.text)
         self.assertNotIn('bash error', result.text)
 
-    def test_approval_is_not_reused_after_a_tool_executes_and_operation_is_redacted(self):
+    def test_denied_external_operation_does_not_stop_safe_work_and_records_private_diagnostics(self):
+        denied = {'id': 'p1', 'permission': 'bash', 'patterns': ['pip install requests'],
+                  'metadata': {'command': 'pip install requests --token example-secret'}}
+        safe = {'id': 'p2', 'permission': 'bash', 'patterns': ['git status'],
+                'metadata': {'command': 'git status'}}
+        done = [assistant(text='The install was declined; the project is otherwise ready.',
+                          tool=('bash', {'command': 'git status'}), finish='stop')]
+        diagnostics = []
+        result, api, _costs, _kill = run([
+            ([assistant()], [denied], True), ([assistant()], [safe], True),
+            (done, [], False), (done, [], False), (done, [], False)],
+            ask=lambda _prompt: 'n', diagnostic=diagnostics.append)
+        self.assertEqual(api.replies[:2], [('p1', 'reject'), ('p2', 'once')])
+        self.assertEqual(result.state, '成功')
+        self.assertIn('decision=user_denied', result.text)
+        self.assertIn('workbench=success', result.text)
+        self.assertEqual(diagnostics[0]['command'], 'pip install requests --token example-secret')
+        self.assertEqual(diagnostics[0]['reason'], 'user_denied')
+        self.assertEqual(diagnostics[0]['workdir'], str(Path(diagnostics[0]['workdir'])))
+
+    def test_maintenance_rejects_git_writes_and_out_of_scope_test_paths(self):
+        wd = Path(tempfile.mkdtemp())
+        scope = ex.TaskScope(wd)
+        ask = Mock(side_effect=AssertionError('must not ask'))
+        for command in ('git commit -m x', 'git push origin topic',
+                        'bash -c "git push origin main"'):
+            self.assertEqual(ex.decide('bash', [command], {'command': command}, wd, autonomy=False,
+                                       ask=ask, task_scope=scope, maintenance=True)[0], 'reject', command)
+        self.assertEqual(ex.decide('bash', ['python3 ../test_elsewhere.py'],
+                                   {'command': 'python3 ../test_elsewhere.py'}, wd, autonomy=False,
+                                   ask=ask, task_scope=scope)[0], 'reject')
+        ask.assert_not_called()
+
+    def test_approval_display_redacts_url_credentials(self):
+        shown = ex._safe_display('git push https://user:fixture-secret@example.invalid/repo')
+        self.assertIn('[redacted]@', shown)
+        self.assertNotIn('fixture-secret', shown)
+
+    def test_task_scoped_approval_is_reused_after_safe_work_and_operation_is_redacted(self):
         first = {'id': 'p1', 'permission': 'bash', 'patterns': ['git push https://token@example.invalid/repo'],
                  'metadata': {'command': 'git push https://token@example.invalid/repo'}}
         second = {**first, 'id': 'p2'}
@@ -400,8 +525,9 @@ class RunTests(unittest.TestCase):
             (done, [], False), (done, [], False), (done, [], False)],
             ask=lambda prompt: asks.append(prompt) or 'y')
         self.assertEqual(api.replies[:2], [('p1', 'once'), ('p2', 'once')])
-        self.assertEqual(len(asks), 2, (asks, api.replies, result.text))
+        self.assertEqual(len(asks), 1, (asks, api.replies, result.text))
         self.assertIn('operation="bash:git"', result.text)
+        self.assertIn('decision=approved_reused', result.text)
         self.assertNotIn('token@example', result.text)
 
     def test_cancelled_approval_is_not_reported_as_user_denial(self):
@@ -479,6 +605,7 @@ class RunTests(unittest.TestCase):
         self.assertNotIn('secret-key-123', json.dumps(config))
         self.assertEqual(config['permission']['read']['*.env'], 'deny')
         self.assertEqual(config['permission']['bash']['*'], 'ask')
+        self.assertEqual(config['permission']['bash'], {'*': 'ask'})
 
     def test_container_command_mounts_only_the_project_and_masks_secrets(self):
         base = Path(tempfile.mkdtemp())
@@ -517,6 +644,21 @@ class ProtectTests(unittest.TestCase):
                            if value.startswith('OPENCODE_CONFIG_CONTENT='))
         config = json.loads(config_json)
         self.assertEqual(config['permission']['edit']['missing.md'], 'deny')
+
+
+class MaintenanceContainerTests(unittest.TestCase):
+    def test_linked_worktree_git_file_is_hidden_from_the_container(self):
+        work = Path(tempfile.mkdtemp())
+        (work / '.git').write_text('gitdir: C:/Users/someone/veil/.git/worktrees/task', encoding='utf-8')
+        seen = {}
+
+        def popen(cmd, **kwargs):
+            seen['cmd'] = cmd
+            return fake_popen()
+        run([([assistant(text='x')], [], False)] * 5, workdir=work, popen=popen,
+            container={'image': 'veil-workbench'}, maintenance=True)
+        mounts = [seen['cmd'][i + 1] for i, c in enumerate(seen['cmd']) if c == '-v']
+        self.assertTrue(any(mount.endswith(':/work/.git:ro') for mount in mounts), mounts)
 
 
 class KeyProxyTests(unittest.TestCase):
@@ -768,6 +910,82 @@ max_steps = 4
         self.assertEqual(len(snapshots), 1)
         self.assertEqual((snapshots[0] / 'files' / 'poem.md').read_text(encoding='utf-8'), 'mine')
 
+    def test_explicit_workspace_project_selects_nested_folder_without_project_markers(self):
+        workspace = self.root / 'data' / 'test' / 'workspace'
+        project = workspace / 'lab' / 'calculator-test'
+        project.mkdir(parents=True)
+        (project / 'test_calculator.py').write_text('pass', encoding='utf-8')
+        chat = self.chat(self.executor)
+        call = SimpleNamespace(id='c1', function=SimpleNamespace(
+            name='workbench', arguments=json.dumps({'task': 'run the existing tests', 'project': 'calculator-test'})))
+        seen = {}
+
+        def fake_run(_task, **kwargs):
+            seen.update(kwargs)
+            kwargs['record_cost'](Decimal(0))
+            return ex.ExecutorResult('ok', '成功')
+
+        with patch('veil_agent.ROOT', self.root), patch('executor_opencode.run', side_effect=fake_run):
+            execution = chat._execute_tool_call(call, 'req', 'step:0', False, chat.tool_schemas())
+
+        self.assertTrue(Path(seen['workdir']).samefile(project))
+        self.assertIn('calculator-test', execution.result)
+        snapshots = list((self.root / 'data' / 'test' / 'snapshots').glob('*-calculator-test'))
+        self.assertEqual(len(snapshots), 1)
+
+    def test_workspace_project_named_in_task_selects_nested_folder(self):
+        workspace = self.root / 'data' / 'test' / 'workspace'
+        project = workspace / 'lab' / 'calculator-test'
+        project.mkdir(parents=True)
+        (project / 'test_calculator.py').write_text('pass', encoding='utf-8')
+        chat = self.chat(self.executor)
+        call = SimpleNamespace(id='c1', function=SimpleNamespace(
+            name='workbench', arguments=json.dumps({'task': 'Fix calculator-test and run its tests'})))
+        seen = {}
+
+        def fake_run(_task, **kwargs):
+            seen.update(kwargs)
+            kwargs['record_cost'](Decimal(0))
+            return ex.ExecutorResult('ok', '成功')
+
+        with patch('veil_agent.ROOT', self.root), patch('executor_opencode.run', side_effect=fake_run):
+            chat._execute_tool_call(call, 'req', 'step:0', False, chat.tool_schemas())
+
+        self.assertTrue(Path(seen['workdir']).samefile(project))
+
+    def test_workbench_permission_diagnostics_stay_in_agent_storage(self):
+        chat = self.chat(self.executor)
+        call = SimpleNamespace(id='c1', function=SimpleNamespace(
+            name='workbench', arguments=json.dumps({'task': 'inspect the project'})))
+
+        def fake_run(_task, **kwargs):
+            kwargs['diagnostic']({'permission': 'bash', 'command': 'pip install fixture-secret',
+                                  'reason': 'user_denied', 'reply': 'reject'})
+            kwargs['record_cost'](Decimal(0))
+            return ex.ExecutorResult('[approval: operation="bash:pip", waiting=true, decision=user_denied]', '成功')
+
+        with patch('veil_agent.ROOT', self.root), patch('executor_opencode.run', side_effect=fake_run):
+            execution = chat._execute_tool_call(call, 'req-1', 'step:0', False, chat.tool_schemas())
+
+        rows = chat.store.read('test/memory/_agent/workbench_permissions.jsonl')
+        self.assertEqual(rows[-1]['request_id'], 'req-1')
+        self.assertEqual(rows[-1]['command'], 'pip install fixture-secret')
+
+    def test_ambiguous_explicit_workspace_project_does_not_run_either_match(self):
+        workspace = self.root / 'data' / 'test' / 'workspace'
+        for path in (workspace / 'lab' / 'calculator-test', workspace / 'archive' / 'calculator-test'):
+            path.mkdir(parents=True)
+        chat = self.chat(self.executor)
+        call = SimpleNamespace(id='c1', function=SimpleNamespace(
+            name='workbench', arguments=json.dumps({'task': 'run tests', 'project': 'calculator-test'})))
+
+        with patch('veil_agent.ROOT', self.root), patch('executor_opencode.run') as run_mock:
+            execution = chat._execute_tool_call(call, 'req', 'step:0', False, chat.tool_schemas())
+
+        run_mock.assert_not_called()
+        self.assertIn('lab/calculator-test', execution.result)
+        self.assertIn('archive/calculator-test', execution.result)
+
     def test_old_workbench_folder_is_merged_into_the_workspace_without_losing_anything(self):
         import workbench_scope as scope
         old = self.root / 'data' / 'test' / 'workbench'
@@ -872,10 +1090,25 @@ def _fake_llm(command='echo hello > out.txt && cat out.txt'):
     return server
 
 
-@unittest.skipUnless(ex.find_command(), 'OpenCode is not installed here')
+_DOCKER_AVAILABLE = {}
+
+
+def _docker_workbench_available():
+    if 'value' not in _DOCKER_AVAILABLE:
+        try:
+            _DOCKER_AVAILABLE['value'] = ex.subprocess.run(
+                ['docker', 'image', 'inspect', 'veil-workbench'], capture_output=True,
+                timeout=10).returncode == 0
+        except Exception:
+            _DOCKER_AVAILABLE['value'] = False
+    return _DOCKER_AVAILABLE['value']
+
+
 class RealOpenCodeTests(unittest.TestCase):
+    @unittest.skipUnless(ex.find_command(), 'OpenCode is not installed here')
     def test_real_server_runs_a_task_through_the_program_approval(self):
         server = _fake_llm()
+        self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
         base = Path(tempfile.mkdtemp())
         provider = {**PROVIDER, 'base_url': f'http://127.0.0.1:{server.server_address[1]}/v1', 'model': 'fake'}
@@ -887,8 +1120,10 @@ class RealOpenCodeTests(unittest.TestCase):
         self.assertEqual((base / 'bench' / 'out.txt').read_text().strip(), 'hello')
         self.assertEqual(len(costs), 1)
 
+    @unittest.skipUnless(ex.find_command(), 'OpenCode is not installed here')
     def test_a_project_config_cannot_loosen_the_programs_permission_gate(self):
         server = _fake_llm('curl --version')
+        self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
         base = Path(tempfile.mkdtemp())
         (base / 'bench').mkdir()
@@ -899,6 +1134,24 @@ class RealOpenCodeTests(unittest.TestCase):
                provider=provider, key='k', limits={'max_seconds': 90}, autonomy=False,
                ask=lambda p: asked.append(p) or 'n', stopped=lambda: False, record_cost=lambda _c: None)
         self.assertTrue(asked and 'curl' in asked[0])  # the project's allow-all did not skip the program's gate
+
+    def test_real_container_runs_a_scoped_local_task(self):
+        if not _docker_workbench_available():
+            self.skipTest('VEIL workbench Docker image is unavailable')
+        server = _fake_llm('mkdir -p build && touch build/out.txt && ls build')
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        base = Path(tempfile.mkdtemp())
+        provider = {**PROVIDER, 'base_url': f'http://127.0.0.1:{server.server_address[1]}/v1', 'model': 'fake'}
+        result = ex.run('make a file', command='opencode', workdir=base / 'bench', home=base / 'home',
+                        provider=provider, key='k', limits={'max_seconds': 90}, autonomy=False,
+                        ask=lambda _p: 'n', stopped=lambda: False, record_cost=lambda _c: None,
+                        container={'image': 'veil-workbench'})
+        self.assertEqual(result.state, '成功', result.text)
+        self.assertTrue((base / 'bench' / 'build' / 'out.txt').is_file())
+        leftover = ex.subprocess.run(['docker', 'ps', '-a', '--filter', 'name=veil-workbench-',
+                                      '--format', '{{.Names}}'], capture_output=True, text=True, timeout=15)
+        self.assertEqual(leftover.stdout.strip(), '', 'the workbench container must be gone')
 
 
 class ScopeTests(unittest.TestCase):
