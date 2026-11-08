@@ -2852,10 +2852,12 @@ def main(argv=None):
             if cfg.glance:
                 budget.glance_daily = cfg.glance['daily_budget_cny']
             budget.daily, budget.monthly = cfg.models.limits()
+            acceptance_limits = None
             if args.acceptance:
                 from decimal import Decimal
-                budget.daily = min(budget.daily, Decimal('2'))
-                budget.monthly = min(budget.monthly, Decimal('20'))
+                acceptance_limits = (Decimal('2'), Decimal('20'))
+                budget.daily = min(budget.daily, acceptance_limits[0])
+                budget.monthly = min(budget.monthly, acceptance_limits[1])
             client, model = make_model(config_root, cfg)
             background_client, background_model = make_model(config_root, cfg, provider=cfg.background_provider)
             voice = make_voice(config_root, cfg, store, budget)
@@ -2870,8 +2872,8 @@ def main(argv=None):
             memory_port = (cfg.memory or {}).get('ombre_port') if (cfg.memory or {}).get('enabled') else None
             hub = Hub(cfg.name, activity, memory_port, store.root / cfg.id / 'media',
                       data_root=data_dir, config_root=config_root)
-            if args.acceptance:
-                hub.acceptance_limits = (Decimal('2'), Decimal('20'))
+            if acceptance_limits is not None:
+                hub.acceptance_limits = acceptance_limits
             from stickers import StickerLibrary
             hub.sticker_library = StickerLibrary(store.root / 'stickers')
             token = secrets.token_urlsafe(24)

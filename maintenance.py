@@ -125,6 +125,20 @@ def _clean_env(extra=None):
     return {k: v for k, v in os.environ.items() if k.upper() in KEEP_ENV} | (extra or {})
 
 
+def _host_env(extra=None):
+    """Host delivery keeps credentials and proxy settings but drops Git redirection variables."""
+    env = dict(os.environ)
+    blocked = {'GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY',
+               'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_COMMON_DIR', 'GIT_NAMESPACE', 'GIT_PREFIX',
+               'GIT_SSH', 'GIT_SSH_COMMAND', 'GIT_ASKPASS', 'SSH_ASKPASS'}
+    for key in list(env):
+        upper = key.upper()
+        if upper in blocked or upper.startswith('GIT_CONFIG_'):
+            env.pop(key, None)
+    env.update(extra or {})
+    return env
+
+
 class MaintenanceStore:
     """Atomic per-task JSON plus a one-line active task for the next request."""
 
@@ -398,9 +412,9 @@ class MaintenanceManager:
     def _run(self, argv, cwd=None, timeout=180, allow_fail=False):
         env = None
         if argv and str(argv[0]) == 'git':
-            env = {**os.environ, 'GIT_TERMINAL_PROMPT': '0', 'GCM_INTERACTIVE': 'never'}
+            env = _host_env({'GIT_TERMINAL_PROMPT': '0', 'GCM_INTERACTIVE': 'never'})
         elif argv and str(argv[0]) == 'gh':
-            env = {**os.environ, 'GH_PROMPT_DISABLED': '1', 'GH_NO_UPDATE_NOTIFIER': '1'}
+            env = _host_env({'GH_PROMPT_DISABLED': '1', 'GH_NO_UPDATE_NOTIFIER': '1'})
         code, out, err = self.runner.run(argv, cwd=cwd, timeout=timeout, env=env)
         if code and not allow_fail:
             raise MaintenanceError(_short(err or out or f'command failed: {argv[0]}', 700))
