@@ -43,7 +43,8 @@ CONTAINER_NOTE = (
     'and does not exist here: use the current directory and Linux commands, and do not search for it elsewhere.\n\n')
 
 MAINTENANCE_NOTE = (
-    'This is an isolated maintenance worktree for VEIL itself. Change only files under the current directory. '
+    'This is an isolated maintenance worktree for VEIL itself. Read AGENTS.md, STATUS.md and HANDOFF.md first. '
+    'Change only files under the current directory. '
     'Do not run git commit, push, checkout, reset, merge or any other command that rewrites repository history: '
     'VEIL commits, pushes and creates the pull request after your report. Run the project tests and report what '
     'actually failed or passed. The project\'s git metadata is intentionally not available in this container.\n\n')

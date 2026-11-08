@@ -2832,6 +2832,8 @@ def main(argv=None):
             if args.acceptance:
                 from dataclasses import replace
                 cfg = replace(cfg, memory={}, voice=None, email=None, qq=None,
+                              windows_observation=None, windows_interaction=None,
+                              desktop_file_read=None, screen_pop=None, glance=None,
                               executor={**(cfg.executor or {}), 'enabled': False})
             budget.autonomy_daily = cfg.autonomy['daily_budget_cny']
             if cfg.glance:

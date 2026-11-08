@@ -205,7 +205,7 @@ def _new_task(*, ticket, title, goal, repo, github_repo, worktree, branch, base_
         'repo': str(repo), 'github_repo': github_repo, 'worktree': str(worktree), 'branch': branch,
         'base_main': base_main, 'running_version': running_version, 'stage': 'developing',
         'created_at': now, 'updated_at': now, 'deadline': deadline,
-        'next_step': 'Read the code and tests in the isolated worktree, then edit and test.',
+        'next_step': 'Read AGENTS.md, STATUS.md and HANDOFF.md in the worktree, then edit and test.',
         'authorization': {'develop_deliver': {}, 'merge': {}, 'denials': {}, 'merge_denied': {}},
         'git': {'last_commit': '', 'pushed_sha': '', 'files': 0},
         'pull_request': {'number': 0, 'url': '', 'state': '', 'head_sha': '', 'mergeable': '', 'base': 'main'},
@@ -354,8 +354,10 @@ class AcceptanceInstance:
                 self.processes.append(window)
             except OSError:
                 pass
-        return AcceptanceResult(url, [process.pid for process in self.processes],
-                                'test instance uses the development worktree code and its own data')
+        return AcceptanceResult(
+            url, [process.pid for process in self.processes],
+            'test instance uses the development worktree code and its own data; autonomy, external '
+            'channels, memory, voice and desktop control are disabled')
 
     def stop(self):
         for process in reversed(self.processes):
@@ -690,7 +692,8 @@ class MaintenanceManager:
         self.store.save(task)
         return (f'维护任务 {task["task_id"]} 已开始。工单 {ticket}，分支 {branch}，独立 worktree 已建立，'
                 f'基于 main {base[:8]}。正式运行版本 {running[:8]}。{warning}\n'
-                '下一步：用 workbench 并带上 task_id 完成代码修改和测试，然后 action=deliver。'), '成功'
+                '下一步：先读 worktree 的 AGENTS.md、STATUS.md、HANDOFF.md，再用 workbench 并带上 task_id '
+                '完成代码修改和测试，然后 action=deliver。'), '成功'
 
     def _task(self, args):
         task = self.store.load(str(args.get('task_id') or ''))
