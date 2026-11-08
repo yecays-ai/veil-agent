@@ -801,11 +801,12 @@ output_cny_per_million = "8"
         with self.assertRaises(BudgetExceeded):
             capped.reserve(self.cfg, category='delegate')
 
-    def test_delegate_cache_usage_is_excluded_from_chat_cache_display(self):
+    def test_delegate_cache_usage_is_included_in_model_cache_display(self):
         reservation = self.budget.reserve(self.cfg, category='delegate')[0]
         self.budget.mark_dispatched(reservation)
         self.budget.settle(reservation, self.cfg, 100, 20, 80, category='delegate')
-        self.assertIn('还没有聊天模型的用量记录', self.budget.cache_display())
+        self.assertIn('80%', self.budget.cache_display())
+        self.assertIn('委派', self.budget.cache_display())
 
     def test_api_tool_loop_can_call_selected_delegate_with_cost_guidance(self):
         cfg = replace(self.cfg, tools={'enabled': True, 'max_steps': 2})
@@ -1164,6 +1165,44 @@ output_cny_per_million = "8"
                 chat.send('not retried')
             self.assertNotIn('secret', str(result.exception))
         self.assertEqual(len(requests), 5)
+
+    def test_real_sdk_accounts_cache_read_input_tokens_from_proxy(self):
+        import httpx2
+        from openai import OpenAI
+        (self.root / '.env').write_text('FAKE_KEY=fake-test-only\n', encoding='utf-8')
+
+        replies = [
+            {'usage': {'prompt_tokens': 100, 'completion_tokens': 20, 'total_tokens': 120,
+                       'cache_read_input_tokens': 40}},
+            {'usage': {'prompt_tokens': 100, 'completion_tokens': 20, 'total_tokens': 120},
+             'usageMetadata': {'cachedContentTokenCount': 40}},
+        ]
+
+        def transport(_request):
+            return httpx2.Response(200, json={
+                'id': 'fake', 'object': 'chat.completion', 'created': 0, 'model': 'fake-model',
+                'choices': [{'index': 0, 'finish_reason': 'stop',
+                             'message': {'role': 'assistant', 'content': '模拟回复'}}],
+                **replies.pop(0)})
+
+        def factory(**kwargs):
+            return OpenAI(**kwargs, http_client=httpx2.Client(transport=httpx2.MockTransport(transport)))
+
+        with patch('openai.OpenAI', side_effect=factory):
+            clients, model = make_model(self.root, self.cfg)
+        with clients:
+            chat = Chat(self.cfg, self.store, self.budget, model)
+            chat.send('虚构测试一')
+            chat.send('虚构测试二')
+
+        settlements = [row for row in self.store.read('costs.jsonl')
+                       if row.get('type') == 'settle' and 'prompt_tokens' in row]
+        self.assertEqual([row['cache_usage_field'] for row in settlements],
+                         ['cache_read_input_tokens', 'usageMetadata.cachedContentTokenCount'])
+        self.assertTrue(all(row['cached_tokens'] == 40 and row['cache_reported'] is True
+                            for row in settlements))
+        self.assertTrue(all(row['amount'] == str((60 * 2 + 40 * 1 + 20 * 8) / 1_000_000)
+                            for row in settlements))
 
     def test_system_environment_key_is_not_used(self):
         with patch.dict('os.environ', {'FAKE_KEY': 'fake-env-only'}):

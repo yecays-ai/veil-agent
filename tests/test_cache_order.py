@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock
 
-from veil_agent import Budget, Character, Chat, Store, history_keep
+from veil_agent import Budget, Character, Chat, Store, history_keep, parse_cache_usage
 
 
 class CacheOrderTests(unittest.TestCase):
@@ -92,6 +92,50 @@ class CacheOrderTests(unittest.TestCase):
         self.assertIs(self.store.read('costs.jsonl')[-1]['cache_reported'], True)
         self.assertIn('已报告输入 1000 tokens', self.budget.cache_display())
         self.assertIn('另有 1 次', self.budget.cache_display())
+
+    def test_usage_field_variants_and_ambiguous_values(self):
+        cases = [
+            ({'prompt_cache_hit_tokens': 40}, (40, 'reported', 'prompt_cache_hit_tokens')),
+            ({'prompt_tokens_details': {'cached_tokens': 40}},
+             (40, 'reported', 'prompt_tokens_details.cached_tokens')),
+            ({'input_tokens_details': {'cached_tokens': 40}},
+             (40, 'reported', 'input_tokens_details.cached_tokens')),
+            ({'cache_read_input_tokens': 40}, (40, 'reported', 'cache_read_input_tokens')),
+            ({'total_cached_tokens': 40}, (40, 'reported', 'total_cached_tokens')),
+            ({'prompt_cache_hit_tokens': 0}, (0, 'reported', 'prompt_cache_hit_tokens')),
+            ({}, (None, 'unreported', None)),
+            ({'prompt_cache_hit_tokens': 40, 'cache_read_input_tokens': 30},
+             (None, 'conflicting', None)),
+            ({'prompt_cache_hit_tokens': True}, (None, 'invalid', 'prompt_cache_hit_tokens')),
+            ({'prompt_cache_hit_tokens': 101}, (None, 'invalid', 'prompt_cache_hit_tokens')),
+        ]
+        for usage, expected in cases:
+            with self.subTest(usage=usage):
+                result = parse_cache_usage(usage, 100)
+                self.assertEqual((result.tokens, result.status, result.field), expected)
+
+        gemini = parse_cache_usage({}, 100, {'usageMetadata': {'cachedContentTokenCount': 40}})
+        self.assertEqual((gemini.tokens, gemini.status, gemini.field),
+                         (40, 'reported', 'usageMetadata.cachedContentTokenCount'))
+        conflicted = parse_cache_usage(
+            {'prompt_cache_hit_tokens': 40, 'cache_read_input_tokens': 30}, 100)
+        request_id, _ = self.budget.reserve(self.cfg)
+        self.budget.settle(request_id, self.cfg, 100, 20, conflicted)
+        row = self.store.read('costs.jsonl')[-1]
+        self.assertEqual(row['cache_status'], 'conflicting')
+        self.assertIs(row['cache_reported'], False)
+        self.assertEqual(row['cached_tokens'], 0)
+        self.assertEqual(row['amount'], str((100 * 2 + 20 * 8) / 1_000_000))
+
+    def test_cache_display_includes_all_direct_model_categories(self):
+        for category in ('chat', 'autonomy', 'glance', 'short_term_notes', 'delegate'):
+            request_id, _ = self.budget.reserve(self.cfg, category=category)
+            self.budget.settle(request_id, self.cfg, 100, 20, 50, category=category)
+
+        text = self.budget.cache_display()
+        self.assertIn('50%', text)
+        self.assertIn('250 / 已报告输入 500 tokens', text)
+        self.assertIn('聊天、自主、瞄一眼、短期便签和委派', text)
 
 
 if __name__ == '__main__':

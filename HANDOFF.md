@@ -1,20 +1,24 @@
 # HANDOFF
 
-## 当前工单 254（2026-11-08 UTC）
+# HANDOFF
 
-- PR #309 已合入 main（`ae33b69`），但 Lan 更新后点击桌宠仍看到两个黑窗。后续补丁分支为 `ticket/254-windows-console-followup`。
-- PR #309 已完成快捷方式迁移、filesystem MCP 本地固定安装与 `/work` 审批路径映射；相关修复已由实机更新验证，但点击桌宠后仍发现其他服务启动控制台。
-- `desktop/chat.js` 连续 3 次（约 1.8 秒）轮询失败才显示断线，成功即清零；失败次数和异常写控制台。`web_agent.py` 把未知后台异常写入现有 `data/web_service_error.txt`。
-- `executor_opencode.py` 将 OpenCode 容器固定 `/work` 挂载点安全映射回主机 workdir，并跟踪复合命令中的项目内 `cd`；目录外、逃逸和新建脚本仍审批。
-- 18:28 实机进程树确认新黑窗来自 Ombre 的控制台版宿主/服务；同时发现 Galatea `.cmd` MCP 仍可能退回普通 CMD。后续补丁让 Ombre 两层都用 `pythonw`，批处理 MCP 经现有无窗口代理和 `SW_HIDE` 启动。相关 162 项通过（3 项跳过）；本地批处理 MCP stdio 正常且 CMD 主窗口句柄为 0。
+## 当前工单 253（2026-11-08 UTC）
+
+- PR #310 已合入 main（`0c76ade`），GitHub API 显示 4 个 Windows/Linux × Python 3.11/3.12 checks 成功；Windows 桌面启动和连续工作台任务仍待 Lan 实机复验。工单 252 的 PR #308 也已合并（`548cfc1`，14 项检查通过）。
+- 分支 `ticket/253-gemini-cache-accounting` 已 rebase 到最新 main 并提交，随后应推送并创建 PR。worktree 为 `E:\Peter-Agent\VEIL\worktrees\253-gemini-cache-accounting`。
+- `make_model()` 解析已知 OpenAI/LiteLLM 与 Gemini `usageMetadata.cachedContentTokenCount` 形式；缺失、无效、冲突状态不折扣，明确 0 与未报告不同。`/cost` 汇总聊天、自主、瞄一眼、短期便签和委派的直连模型请求。
+- `Chat.send()` 上下文顺序和工具 schema 未改；普通聊天、工具循环、记忆提取、Autonomy/Glance、委派和 Garden MCP 继续复用原模型入口。Ombre 子进程 usage 不回传，仍按估算记账，不计为缓存命中。
+- 记忆向量请求在响应有合法 `prompt_tokens` 时按实际 usage 结算；无报告/失败时走原估算，不新增请求。
+- 自动回归通过：聊天/SDK 88、缓存链路 8、自主 40、记忆召回 13、委派 9、模型设置 20、Native Memory 63、Memory 32、工具循环 71、瞄一眼 8、账本增量读取 11、账本恢复 22 项；Gemini `usageMetadata` 的 SDK 单测另通过 1 项。
+- `test_web.py` 未取得最终摘要，不重跑；中转站真实 `usage` 与对应费用行尚未取得，实际 Gemini 4A 命中改善和收费一致性均未验证。正式目录进程由 `web_agent.py` 启动，已保留未动。
 
 ## 下一个窗口第一步
 
-提交后续补丁，处理实质审查与 CI；合并前不得把自动化结果写成完整 Windows 实机验收。
+用 `git status` 确认 rebase 已完成且工作树仅含工单 253，再推送并创建 PR。PR 描述包含影响矩阵、测试结果及 `test_web.py` / 真实代理证据的未验证项；等待必需 CI 和 Cubic 实质审查，修复阻断问题后按分支保护合并。任何状态都不得把缓存统计修复表述为真实 Gemini 命中已解决。
 
-## 注意
+## 尚未解决
 
-- #309 后实机进程时间证据：Ombre 宿主 18:28:47、服务 18:28:48，各自生成 conhost；Galatea CMD 18:28:51。不要再归因于 filesystem MCP 或第二套桌面入口。
-- PR #303 的危险命令/搜索文本基础分类已在 main，本单只补实机暴露的复合只读、命名测试脚本、审批复用和状态闭环。
-- 未安装 OpenCode，无法在当前开发目录跑真实 OpenCode API 集成；隔离 worktree也没有 Electron 依赖，正式 Windows 启动、批准/拒绝和三次任务清理必须在合并后由 Lan 验收。
-- 没有改费用上限、模型、快照语义、Docker 隔离、密钥代理、手机端或自主活动专项。
+- 缺少 `api5.jiushi.cyou` 的脱敏真实响应 `usage` 和对应账单，不能判定 Gemini 4A 全额计费根因是代理字段映射、上游未命中还是代理计费。
+- Fake transport 证明 VEIL 解析和本地费用逻辑；真实连续请求是否利用了稳定前缀、工具结构是否影响上游缓存、实际账单是否一致，需在 Windows 体验验收。
+- `test_web.py` 没有最终结果，不重复启动；以当前证据标为未验证。
+- 正式运行目录及其现有服务、人设、真实聊天和记忆未改动。

@@ -1025,11 +1025,19 @@ class Memory:
         tokens = max(512, len(text.encode('utf-8')))
         rate = Decimal(str(self.cfg.memory['input_cny_per_million']))
         reservation = self.budget.estimate(self.cfg.id, self.cfg.memory['model'], tokens, rate)
+        settled_amount = Decimal(tokens) * rate / Decimal(1_000_000)
+        usage_tokens = None
+        accounting = 'embedding-estimate'
         try:
             query_vector = embedder.embed(text)
+            reported_tokens = getattr(embedder, 'usage_tokens', None)
+            if type(reported_tokens) is int and reported_tokens >= 0:
+                usage_tokens = reported_tokens
+                settled_amount = Decimal(reported_tokens) * rate / Decimal(1_000_000)
+                accounting = 'embedding-usage'
         finally:
-            self.budget.settle_estimate(reservation, accounting='embedding-estimate',
-                                        settled_amount=Decimal(tokens) * rate / Decimal(1_000_000))
+            self.budget.settle_estimate(reservation, accounting=accounting,
+                                        settled_amount=settled_amount, usage_tokens=usage_tokens)
         vectors = load_vectors(vault_path(self.store.root, self.cfg.id) / 'embeddings.db', list(candidates))
         scored = sorted(((cosine(query_vector, vectors[key]), key) for key in candidates if key in vectors),
                         reverse=True)

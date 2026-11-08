@@ -73,13 +73,19 @@ class QueryEmbedder:
     def __init__(self, base_url, model, api_key, timeout=20):
         self.base_url, self.model, self.api_key, self.timeout = base_url, model, api_key, timeout
         self._client = None
+        self.usage_tokens = None
 
     def embed(self, text):
+        self.usage_tokens = None
         if self._client is None:
             from openai import OpenAI
             self._client = OpenAI(api_key=self.api_key, base_url=self.base_url, timeout=self.timeout,
                                   max_retries=0)
         response = self._client.embeddings.create(model=self.model, input=text[:4000])
+        usage = getattr(response, 'usage', None)
+        prompt_tokens = getattr(usage, 'prompt_tokens', None)
+        if type(prompt_tokens) is int and prompt_tokens >= 0:
+            self.usage_tokens = prompt_tokens
         vector = list(response.data[0].embedding)
         if not vector:
             raise ValueError('empty embedding')

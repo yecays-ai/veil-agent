@@ -17,6 +17,7 @@ from veil_agent import Budget, Character, Store
 class FakeEmbedder:
     def __init__(self, vector=(1.0, 0.0), fail=False):
         self.vector, self.fail, self.texts = list(vector), fail, []
+        self.usage_tokens = None
 
     def embed(self, text):
         self.texts.append(text)
@@ -84,6 +85,21 @@ class AssistedRecallTests(unittest.TestCase):
         self.assertIn('try again', memory._embedder.texts[0])
         self.assertEqual(memory.last_assisted['kept'], ['garden'])
 
+    def test_reported_embedding_usage_settles_actual_cost(self):
+        memory = self.memory(self.enabled())
+        memory.cfg.memory['input_cny_per_million'] = '2'
+        embedder = FakeEmbedder()
+        embedder.usage_tokens = 10
+        memory._embedder = embedder
+
+        self.text(memory, 'try again')
+
+        settlement = next(row for row in reversed(self.store.read('costs.jsonl'))
+                          if row.get('type') == 'settle' and row.get('usage_tokens') is not None)
+        self.assertEqual(settlement['accounting'], 'embedding-usage')
+        self.assertEqual(settlement['usage_tokens'], 10)
+        self.assertEqual(settlement['amount'], str(Decimal(10) * Decimal(2) / Decimal(1_000_000)))
+
     def test_nothing_close_means_no_long_term_memory_at_all(self):
         memory = self.memory(self.enabled(min_similarity=0.99))
         memory._embedder = FakeEmbedder((0.6, 0.6))
@@ -140,6 +156,19 @@ class AssistedRecallTests(unittest.TestCase):
 
 
 class HelperTests(unittest.TestCase):
+    def test_query_embedder_keeps_provider_reported_usage(self):
+        from types import SimpleNamespace
+        from recall_relevance import QueryEmbedder
+
+        client = Mock()
+        client.embeddings.create.return_value = SimpleNamespace(
+            data=[SimpleNamespace(embedding=[1.0, 0.0])],
+            usage=SimpleNamespace(prompt_tokens=7))
+        with unittest.mock.patch('openai.OpenAI', return_value=client):
+            embedder = QueryEmbedder('https://example.invalid/v1', 'fake-embedding', 'fake-key')
+            self.assertEqual(embedder.embed('fictional query'), [1.0, 0.0])
+        self.assertEqual(embedder.usage_tokens, 7)
+
     def test_vectors_and_cosine(self):
         self.assertEqual(decode_vector(array.array('f', [1.0, 2.0]).tobytes()), [1.0, 2.0])
         self.assertEqual(decode_vector('[1, 2]'), [1.0, 2.0])
