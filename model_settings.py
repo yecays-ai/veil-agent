@@ -19,6 +19,11 @@ from pathlib import Path
 BUILTIN_PREFIX = 'builtin:'
 ROLES = ('peter', 'autonomy', 'background', 'glance', 'delegate')
 FOLLOW_CHAT = 'follow-chat'  # glance only: use whatever Peter's chat model is
+# Ticket 317: Claude Code built-in providers were removed. Only these confirmed provider names are
+# migrated; a user's own API model that merely contains "claude" in its name is left untouched.
+RETIRED_CC_BUILTINS = frozenset({'claude_agent', 'claude_agent_haiku', 'claude_agent_opus', 'claude'})
+ROLE_LABELS = {'peter': '聊天', 'autonomy': '自主活动', 'background': '记忆后台',
+               'glance': '瞄一眼', 'delegate': '委派任务'}
 GLANCE_DEFAULT_MODEL = 'grok-4.6'  # Ticket 211: preferred glance model when Lan has configured it
 DEFAULT_DAILY = Decimal('10')
 DEFAULT_MONTHLY = Decimal('300')
@@ -82,7 +87,83 @@ class ModelSettings:
         self.blocked = False
         with _ENV_LOCK:
             self._recover()
-        self.data = self._clean(self._read())
+        raw = self._migrate_retired_cc_choices(self._read())
+        self.data = self._clean(raw)
+
+    # ---- ticket 317: old Claude Code choices ---------------------------------
+    def _retired_cc_ref(self, value):
+        """True only for a confirmed retired Claude Code built-in, never for a normal Anthropic model."""
+        if not isinstance(value, str):
+            return False
+        name = value[len(BUILTIN_PREFIX):] if value.startswith(BUILTIN_PREFIX) else value
+        return name in RETIRED_CC_BUILTINS and name not in self.builtins
+
+    def _backup_before_cc_migration(self):
+        backup = self.path.with_name(self.path.name + '.cc-removal-backup')
+        if backup.exists():
+            return
+        try:
+            self._atomic_bytes(backup, self.path.read_bytes())
+        except OSError as exc:
+            raise SettingsError('模型配置迁移前无法保留备份；原文件未改动，请检查磁盘权限。') from exc
+
+    def _migrate_retired_cc_choices(self, raw):
+        """Replace only retired Claude Code model references, atomically and once.
+
+        The original file is backed up first. Other roles, custom models, endpoints, keys, limits and
+        already-valid API choices are preserved. The change is written only after the migrated data
+        passes the same validation as a normal load, so a failed migration leaves the original intact.
+        """
+        if not isinstance(raw, dict) or not isinstance(raw.get('use'), dict):
+            return raw
+        use = raw['use']
+        affected = [role for role in ROLES if self._retired_cc_ref(use.get(role))]
+        if not affected:
+            return raw
+        new_use = dict(use)
+        for role in affected:
+            if role in ('peter', 'background'):
+                # The character's configured API provider is the existing valid fallback.
+                new_use[role] = self.default
+            else:
+                # Autonomy inherits the chat model, glance follows chat/grok, and delegate stays opt-in.
+                new_use.pop(role, None)
+        migrated = dict(raw)
+        migrated['use'] = new_use
+        migrated['migration'] = {'cc_removed': {'roles': affected}}
+        self._clean(migrated)  # validate before touching the real file
+        self._backup_before_cc_migration()
+        self._atomic_bytes(self.path, (json.dumps(migrated, ensure_ascii=False, indent=2) + '\n').encode('utf-8'))
+        return migrated
+
+    @staticmethod
+    def _forget_migration_role(data, role):
+        migration = data.get('migration')
+        record = migration.get('cc_removed') if isinstance(migration, dict) else None
+        if not isinstance(record, dict):
+            return
+        roles = [item for item in record.get('roles') or [] if item != role]
+        if roles:
+            data['migration'] = {'cc_removed': {**record, 'roles': roles}}
+        else:
+            data.pop('migration', None)
+
+    @staticmethod
+    def _migration_notice(migration):
+        record = migration.get('cc_removed') if isinstance(migration, dict) else None
+        if not isinstance(record, dict):
+            return ''
+        roles = [role for role in record.get('roles') or [] if role in ROLES]
+        if not roles:
+            return ''
+        parts = []
+        recovered = [role for role in roles if role != 'delegate']
+        if recovered:
+            names = '、'.join(ROLE_LABELS[role] for role in recovered)
+            parts.append(f'Claude Code 专用模型已下线；{names}已恢复为可用的 API 模型。')
+        if 'delegate' in roles:
+            parts.append('委派任务原先选择的 Claude Code 模型已失效，委派已暂时关闭；请重新选择委派模型。')
+        return ''.join(parts)
 
     # ---- reading -------------------------------------------------------
     @staticmethod
@@ -192,6 +273,9 @@ class ModelSettings:
             data['limits'] = self._limits(limits) if limits else {}
         except SettingsError as exc:
             raise SettingsError(f'模型配置 models.json 的费用上限无效：{exc}；原文件已保留。') from None
+        migration = raw.get('migration')
+        if isinstance(migration, dict) and migration:
+            data['migration'] = migration
         return data
 
     def _endpoint(self, item, existing):
@@ -276,8 +360,6 @@ class ModelSettings:
         if role == 'glance' and model_id == FOLLOW_CHAT:
             return True
         provider = self._provider(data, model_id)
-        if provider is not None and provider.get('kind') == 'claude_agent' and role != 'peter':
-            return False  # the Claude Code channel only works as Peter's chat model
         return provider is not None
 
     def selected(self, role):
@@ -331,8 +413,6 @@ class ModelSettings:
             provider = self._provider(self.data, model_id)
             if provider is None:
                 raise SettingsError(f'{role} 选中的模型无效；已停止模型请求。')
-            if role == 'autonomy' and provider.get('kind') == 'claude_agent':
-                raise SettingsError('自主活动需要 API 模型；Claude Code 通道仅用于聊天。')
             if model_id.startswith(BUILTIN_PREFIX):
                 name = model_id[len(BUILTIN_PREFIX):]
             else:
@@ -367,8 +447,7 @@ class ModelSettings:
                 models.append({'id': BUILTIN_PREFIX + name, 'builtin': True,
                                'label': f'{provider.get("label", name)}（内置）', 'kind': provider.get('kind'),
                                'model': provider['model'], 'endpoint_name': name,
-                               'key_set': provider.get('kind') == 'claude_agent'
-                               or bool((env.get(provider['api_key_env']) or '').strip())})
+                               'key_set': bool((env.get(provider['api_key_env']) or '').strip())})
             names = {item['id']: item['name'] for item in endpoints}
             keys = {item['id']: item['key_set'] for item in endpoints}
             for item in self.data['models']:
@@ -379,6 +458,7 @@ class ModelSettings:
                    for role in ROLES}
             return {'endpoints': endpoints, 'models': models, 'use': use,
                     'use_explicit': {role: role in self.data['use'] for role in ROLES},
+                    'migration_notice': self._migration_notice(self.data.get('migration')),
                     'limits': {'daily_cny': str(daily), 'monthly_cny': str(monthly)}}
 
     # ---- changes from the settings page -------------------------------
@@ -462,12 +542,14 @@ class ModelSettings:
             if role == 'delegate' and model_id in (None, ''):
                 data = {**self.data, 'use': {key: value for key, value in self.data['use'].items()
                                              if key != 'delegate'}}
+                self._forget_migration_role(data, role)
                 self._write(data)
                 self.data = data
                 return None, None, None
             if not self._choice_ok(self.data, role, model_id):
                 raise SettingsError('这个模型已经不在列表里了。')
             data = {**self.data, 'use': {**self.data['use'], role: model_id}}
+            self._forget_migration_role(data, role)
             self._write(data)
             self.data = data
             return self.chosen(role)

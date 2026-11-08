@@ -5,7 +5,7 @@ from decimal import Decimal
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from model_settings import ModelSettings, SettingsError
+from model_settings import FOLLOW_CHAT, ModelSettings, SettingsError
 from veil_agent import Budget, Chat, Store, background_cfg, load_character, make_model
 from agent_types import UserError
 
@@ -114,12 +114,8 @@ class ModelSettingsTests(unittest.TestCase):
         self.assertIn('¥0.06/次', delegate_schema['function']['description'])
         self.assertIn('完整任务最多预留', delegate_schema['function']['description'])
         self.assertEqual(chat_cfg.models.chosen('peter')[0], main_model)
-        claude_cfg = replace(chat_cfg, provider={'kind': 'claude_agent', 'model': 'sonnet'})
-        claude_chat = Chat(claude_cfg, Store(self.root / 'data'), Budget(Store(self.root / 'data')), Mock())
-        self.assertIn('delegate', {schema['function']['name'] for schema in claude_chat.tool_schemas()})
         chat_cfg.models.use('delegate', '')
         self.assertNotIn('delegate', {schema['function']['name'] for schema in chat.tool_schemas()})
-        self.assertNotIn('delegate', {schema['function']['name'] for schema in claude_chat.tool_schemas()})
 
     def test_corrupt_existing_config_never_falls_back_or_changes_file(self):
         path = self.root / 'data' / 'test' / 'models.json'
@@ -148,6 +144,121 @@ class ModelSettingsTests(unittest.TestCase):
         self.assertEqual(cfg.provider['model'], 'old-model')
         self.assertEqual(cfg.provider['cached_input_cny_per_million'], Decimal('1'))
         self.assertEqual(cfg.provider['max_input_tokens'], 32768)
+
+    def _write_legacy_models(self, use, models=None):
+        path = self.root / 'data' / 'test' / 'models.json'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        raw = {'endpoints': [{'id': 'eabcdef', 'name': 'old', 'base_url': 'https://old.invalid/v1'}],
+               'models': models if models is not None else [
+                   {'id': 'mabcdef', 'endpoint': 'eabcdef', 'model': 'plain-api', 'label': '普通 API',
+                    'billing': 'tokens', 'input_cny_per_million': '1', 'output_cny_per_million': '2'}],
+               'use': use, 'limits': {'daily_cny': '30', 'monthly_cny': '600'}}
+        path.write_text(json.dumps(raw), encoding='utf-8')
+        return path, raw
+
+    def test_retired_claude_code_choices_are_migrated_once_with_backup(self):
+        path, raw = self._write_legacy_models({
+            'peter': 'builtin:claude_agent',
+            'autonomy': 'builtin:claude_agent_opus',
+            'background': 'builtin:claude_agent_haiku',
+            'glance': 'builtin:claude',
+            'delegate': 'builtin:claude_agent',
+        })
+        before = path.read_bytes()
+        cfg = load_character(self.root, 'test')
+        view = cfg.models.public()
+        self.assertEqual(cfg.provider['model'], 'fake-model')
+        self.assertEqual(cfg.background_provider['model'], 'fake-model')
+        self.assertEqual(view['use']['peter'], 'builtin:fake')
+        self.assertEqual(view['use']['background'], 'builtin:fake')
+        self.assertEqual(view['use']['autonomy'], 'builtin:fake')
+        self.assertEqual(view['use']['glance'], FOLLOW_CHAT)
+        self.assertIsNone(view['use']['delegate'])
+        self.assertEqual(len(view['endpoints']), 1)
+        self.assertEqual(len(view['models']), 3)  # fake, other and the preserved custom API model
+        self.assertEqual(view['limits'], {'daily_cny': '30', 'monthly_cny': '600'})
+        self.assertIn('Claude Code 专用模型已下线', view['migration_notice'])
+        self.assertIn('请重新选择委派模型', view['migration_notice'])
+        backup = path.with_name('models.json.cc-removal-backup')
+        self.assertTrue(backup.exists())
+        self.assertEqual(backup.read_bytes(), before)
+        self.assertNotIn('builtin:claude_agent', path.read_text(encoding='utf-8'))
+        # A second start does not migrate again, recreate the old models or overwrite a later manual choice.
+        cfg.models.use('peter', 'mabcdef')
+        self.assertEqual(load_character(self.root, 'test').provider['model'], 'plain-api')
+        self.assertEqual(backup.read_bytes(), before)
+        again = load_character(self.root, 'test').models.public()
+        self.assertEqual(again['use']['peter'], 'mabcdef')
+        self.assertNotIn('Claude Code 专用模型已下线；聊天', again['migration_notice'])
+
+    def test_normal_anthropic_api_model_named_claude_is_kept(self):
+        toml = TOML + '''
+[providers.claude]
+model = "claude-api-model"
+base_url = "https://claude.invalid/v1"
+api_key_env = "FAKE_KEY"
+max_input_tokens = 6000
+input_cny_per_million = "1"
+cached_input_cny_per_million = "1"
+output_cny_per_million = "2"
+'''
+        (self.root / 'characters' / 'test' / 'character.toml').write_text(toml, encoding='utf-8')
+        path, _ = self._write_legacy_models({'peter': 'builtin:claude'})
+        cfg = load_character(self.root, 'test')
+        self.assertEqual(cfg.provider['model'], 'claude-api-model')
+        self.assertEqual(cfg.models.public()['use']['peter'], 'builtin:claude')
+        self.assertEqual(cfg.models.public()['migration_notice'], '')
+        self.assertFalse(path.with_name('models.json.cc-removal-backup').exists())
+
+    def test_custom_api_model_with_claude_in_its_name_is_kept(self):
+        models = [{'id': 'mabcdef', 'endpoint': 'eabcdef', 'model': '[k]claude-sonnet-5.5',
+                   'label': 'Claude Sonnet API', 'billing': 'tokens',
+                   'input_cny_per_million': '1', 'output_cny_per_million': '2'}]
+        path, _ = self._write_legacy_models({'peter': 'mabcdef'}, models)
+        cfg = load_character(self.root, 'test')
+        self.assertEqual(cfg.provider['model'], '[k]claude-sonnet-5.5')
+        self.assertEqual(cfg.models.public()['use']['peter'], 'mabcdef')
+        self.assertFalse(path.with_name('models.json.cc-removal-backup').exists())
+
+    def test_valid_choices_for_other_roles_survive_cc_migration(self):
+        path, _ = self._write_legacy_models({
+            'peter': 'builtin:fake',
+            'autonomy': 'builtin:claude_agent_haiku',
+            'background': 'builtin:other',
+            'glance': 'builtin:other',
+            'delegate': 'builtin:claude_agent',
+        })
+        cfg = load_character(self.root, 'test')
+        view = cfg.models.public()
+        self.assertEqual(view['use']['peter'], 'builtin:fake')
+        self.assertEqual(view['use']['background'], 'builtin:other')
+        self.assertEqual(view['use']['glance'], 'builtin:other')
+        self.assertEqual(view['use']['autonomy'], 'builtin:fake')
+        self.assertIsNone(view['use']['delegate'])
+        self.assertTrue(path.with_name('models.json.cc-removal-backup').exists())
+
+    def test_stale_cc_provider_in_character_toml_is_not_registered(self):
+        toml = TOML + '''
+[providers.claude_agent]
+kind = "claude_agent"
+label = "Claude Code · Sonnet（均衡）"
+model = "sonnet"
+max_input_tokens = 200000
+'''
+        (self.root / 'characters' / 'test' / 'character.toml').write_text(toml, encoding='utf-8')
+        view = load_character(self.root, 'test').models.public()
+        self.assertFalse([item for item in view['models'] if item.get('kind') == 'claude_agent'])
+
+    def test_invalid_unrelated_choice_blocks_migration_without_touching_file(self):
+        path, raw = self._write_legacy_models({
+            'peter': 'builtin:claude_agent',
+            'background': 'not-a-model',
+        })
+        before = path.read_bytes()
+        with self.assertRaises(UserError):
+            load_character(self.root, 'test')
+        self.assertEqual(path.read_bytes(), before)
+        self.assertFalse(path.with_name('models.json.cc-removal-backup').exists())
 
     def test_key_and_model_transaction_recovers_after_second_write_failure(self):
         cfg = load_character(self.root, 'test')

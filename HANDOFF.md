@@ -1,21 +1,11 @@
 # HANDOFF
 
-## 当前工单 314（2026-11-08 UTC）
+## 当前工单 317（2026-11-09）
 
-- 分支 `ticket/314-autonomous-maintenance` 从 `main` 的 `64648cb` 建立；PR #314：https://github.com/yecays-ai/veil-agent/pull/314。开发在独立 worktree 中；正式目录保持 `main`，未开发、未改源码。
-- 工单 313 的任务范围授权已并入本分支并收紧：项目测试首次运行需一次任务级授权；安装按具体包授权；拒绝在同一任务内复用；Windows junction/reparse point、隐藏目录、通用词和 VEIL 自身数据目录不能成为工作台范围。
-- 新增 `maintenance.py` 的维护任务状态、独立 worktree、主机侧 git/gh 交付、CI/审查读取、失败日志、独立测试实例、验收记录、合并门禁和恢复。
-- `workbench` 支持 `task_id`；维护任务拒绝 git 写命令；OpenCode 容器只挂载 worktree 文件并屏蔽 `.git`；GitHub 长期凭据不进入容器。
-- `web_agent.py` 支持 `--acceptance`/`--config-root`/`--data-dir`；桌面前端支持测试实例使用独立 userData 和后端数据目录；测试实例不启动自主活动、外部频道、记忆或桌面维护。
-- 已验证：executor 67 项（2 跳过）、maintenance 15 项、chat/web/tools 228 项（1 跳过）、支持模块 55 项、Hub/停止 21 项、桌面 Node 后端 5 项通过；编译和 JS 语法检查通过。Windows 实际验收未开始；PR #314 的 CI/Cubic 正在处理。
-
-## 下一个窗口第一步
-
-审查 PR #314 的最新 SHA、必需 CI 和 Cubic 意见，只修功能、数据、安全或交付阻断问题。满足分支保护后合并，然后请 Lan 按 `STATUS.md` 的验收步骤体验；验收前不要把本工单写成完成。
-
-## 已知风险与边界
-
-- 测试实例依赖正式目录的 Python 环境、`persona` 和 `.env`；`characters` 取自开发 worktree，配置和数据复制到隔离目录。`.env` 保留到实例停止或合并时删除，避免聊天请求中途失去密钥。启动失败会清理测试目录中的 `.env`，不写正式数据。
-- `maintenance.py` 的远程事实来自 `gh` 和 GitHub API；本机没有 `gh` 认证时应明确报告，不能假装 PR/CI 已存在。
-- 未在 Windows 上实际跑通完整“测试实例桌面窗口”路径；当前验证覆盖后端启动、隔离数据目录和桌面连接代码，Windows 实际体验待 Lan 验收。
-- 不删除正式目录或其他正在使用的 worktree；合并后仅在本次 worktree 无未提交改动时清理。
+- 分支 `ticket/317-remove-claude-code`，从 `main` 的 `b7847ca` 建立；开发在 `.agents/worktrees/ticket-317-remove-claude-code`，正式运行目录未动。
+- 已完成：删除 `claude_agent_channel.py`、`claude_agent_bridge.py`、`scripts/claude_agent_smoke.py`、两个专属测试、`experiments/cc-bridge/`、`experiments/cc-jail/`；`veil_agent.py` 去掉 CC 导入、provider 配置、聊天执行器、成本写入、空回复、工作台、后台模型和委派成本分支；`model_settings.py` 去掉 CC 用途限制/密钥状态，并加旧 `models.json` 的一次性安全迁移；`character.toml` 删除三个 CC provider；桌面端删除 CC 筛选和提示并显示迁移提示。
+- 自动检查：model_settings 26 项、glance_model 6 项、chat 88 项、web 67 项、tools 73 项（1 跳过）、delegate 9 项、autonomy 40 项、background 19 项、glance 3 项、executor_opencode 67 项（2 跳过）、maintenance 15 项、mcp_services 23 项、tool_groups 10 项、tool_aliases 11 项、long_tasks 23 项、turn_stop 7 项、free_reply 31 项、cache_order 8 项、capability_transactions 7 项通过；Python 编译和 `node --check desktop/chat.js` 通过。
+- 卡点：316（PR #315）仍是草稿，等待 Lan 验收；本单 PR 暂不合并。316 合并后需要解决 `STATUS.md`、`HANDOFF.md` 和 `veil_agent.py` 的冲突。
+- 下一个窗口第一步：拉取最新 `main`，确认 316 已合并；把最新 `main` 合入本分支解决冲突，重跑受影响测试，请求 Cubic 审查，满足门禁后合并，再请 Lan 按 `STATUS.md` 验收。
+- 未验证：真实付费 API、真实 OpenCode 工作台授权/停止、Windows 桌面实际点击；不能把自动测试当作桌面体验验收。
+- 数据安全：迁移只处理确认过的 CC 内置 provider 引用，先写 `models.json.cc-removal-backup` 再原子替换；历史 `claude-agent-costs.jsonl` 和聊天/记忆数据不删除、不改写。不要卸载或修改本机的 Claude Code / Claude Desktop。

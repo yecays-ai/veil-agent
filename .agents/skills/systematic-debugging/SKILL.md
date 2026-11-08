@@ -89,7 +89,7 @@ You MUST complete each phase before proceeding to the next.
    import os
 
    # At each boundary, log whether expected configuration arrived.
-   print('Claude path configured:', bool(os.getenv('VEIL_CLAUDE_PATH')))
+   print('API key configured:', bool(os.getenv('DEEPSEEK_API_KEY')))
    ```
    Then inspect the corresponding caller, service setup, and process launch separately; never print credentials or full secret values.
 
