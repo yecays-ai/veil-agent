@@ -8,6 +8,7 @@ into the shared ledger, and kills the whole process tree when the run ends. If O
 the tool just reports that; chat, memory and autonomous wakes are untouched.
 """
 import base64
+import hashlib
 import json
 import os
 import posixpath
@@ -19,6 +20,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import shutil
 import signal
 import socket
+import stat
 import subprocess
 import time
 import urllib.error
@@ -47,7 +49,9 @@ MAINTENANCE_NOTE = (
     'Change only files under the current directory. '
     'Do not run git commit, push, checkout, reset, merge or any other command that rewrites repository history: '
     'VEIL commits, pushes and creates the pull request after your report. Run the project tests and report what '
-    'actually failed or passed. The project\'s git metadata is intentionally not available in this container.\n\n')
+    'actually failed or passed. Host Git metadata is hidden. Git in this container uses a disposable snapshot: '
+    'status and diff reflect changes since this run started, while HEAD and history are synthetic. '
+    'Use the verified host Git facts below for the real branch and commit.\n\n')
 
 TASK_SCOPE_NOTE = (
     'Task scope: the current directory and its children are the only project files for this task. '
@@ -83,6 +87,7 @@ class ExecutorResult(NamedTuple):
     state: str
     cost: Decimal = Decimal(0)
     steps: int = 0
+    reason: str = ''
 
 
 DANGEROUS = re.compile(
@@ -238,11 +243,14 @@ def _complex_bash_request(patterns, metadata, workdir=None, test_scripts=None, t
     command = metadata.get('command') if isinstance(metadata, dict) else None
     if not isinstance(command, str) or not command.strip() or not isinstance(patterns, list) or not patterns:
         return True
+    # Only discard a standalone stderr-to-null redirection; all file writes still need approval.
+    def strip_stderr(value):
+        return re.sub(r'(?<!\S)(?:2>/dev/null|2>&1)(?=\s|$)', '', value)
     try:
-        lexer = shlex.shlex(command, posix=True, punctuation_chars=';&|<>()')
+        lexer = shlex.shlex(strip_stderr(command), posix=True, punctuation_chars=';&|<>()')
         lexer.whitespace_split = True
         shell_tokens = list(lexer)
-        commands = [shlex.split(pattern, posix=True) for pattern in patterns if isinstance(pattern, str)]
+        commands = [shlex.split(strip_stderr(pattern), posix=True) for pattern in patterns if isinstance(pattern, str)]
     except ValueError:
         return True
     if len(commands) != len(patterns) or not commands or any(not item for item in commands):
@@ -279,7 +287,7 @@ def _complex_bash_request(patterns, metadata, workdir=None, test_scripts=None, t
     if command_name in {'python', 'python3'} and command_tokens[1:3] in (
             ['-m', 'unittest'], ['-m', 'pytest']):
         return False
-    if command_name in SAFE_INSPECTION or command_name in {'python', 'python3', 'node', 'npm', 'mkdir', 'touch',
+    if command_name in SAFE_INSPECTION or command_name in {'python', 'python3', 'node', 'npm', 'mkdir', 'touch', 'sort',
                                                            'pytest', 'py.test'} or re.fullmatch(
             r'python\d+(?:\.\d+)*', command_name):
         return not _safe_project_command(command_tokens, workdir, test_scripts, task_scope=task_scope)
@@ -303,9 +311,16 @@ def _safe_project_command(tokens, workdir=None, test_scripts=None, current=None,
         return (_git_subcommand(tokens) in {'status', 'branch', 'diff', 'log', 'show', 'rev-parse', 'ls-files'} and
                 not any(_outside_workdir_argument(arg, workdir, current) for arg in tokens[1:] if not arg.startswith('-')))
     if command in SAFE_INSPECTION:
-        if command == 'find' and any(arg.casefold() in {'-delete', '-exec', '-execdir', '-ok', '-okdir'} for arg in tokens[1:]):
+        if command == 'find' and any(arg.casefold() in {'-delete', '-exec', '-execdir', '-ok', '-okdir',
+                                                         '-fprint', '-fprint0', '-fprintf', '-fls'} for arg in tokens[1:]):
             return False
         return not any(_outside_workdir_argument(arg, workdir, current) for arg in tokens[1:] if not arg.startswith('-'))
+    if command == 'sort':
+        safe_flags = {'-', '--', '-b', '-d', '-f', '-g', '-h', '-i', '-M', '-n', '-r', '-s', '-u', '-V', '-z',
+                      '--ignore-leading-blanks', '--dictionary-order', '--ignore-case', '--numeric-sort',
+                      '--reverse', '--stable', '--unique', '--version-sort', '--zero-terminated'}
+        return all(arg in safe_flags if arg.startswith('-') else not _outside_workdir_argument(arg, workdir, current)
+                   for arg in tokens[1:])
     if command == 'mkdir':
         return (all(arg in {'-p', '--parents'} or not arg.startswith('-') for arg in tokens[1:]) and
                 any(not arg.startswith('-') for arg in tokens[1:]) and
@@ -372,14 +387,38 @@ def existing_test_scripts(workdir):
     return found
 
 
+class _PersistedApprovalSet:
+    """Remember only opaque approval fingerprints for this maintenance task."""
+    def __init__(self, kind, values, save):
+        self.kind, self.save = kind, save
+        self.values = set(value for value in values if isinstance(value, str) and
+                          re.fullmatch(r'[0-9a-f]{64}', value))
+
+    @staticmethod
+    def fingerprint(key):
+        return hashlib.sha256(json.dumps(key, ensure_ascii=False, sort_keys=True).encode('utf-8')).hexdigest()
+
+    def __contains__(self, key):
+        return self.fingerprint(key) in self.values
+
+    def add(self, key):
+        value = self.fingerprint(key)
+        if value not in self.values:
+            self.save(self.kind, value)
+            self.values.add(value)
+
+
 class TaskScope:
     """One workbench run's project boundary and approvals; never reused by another task."""
-    def __init__(self, workdir):
+    def __init__(self, workdir, *, approval_data=None, save_approval=None):
         self.workdir = Path(workdir)
         self.initial_tests = existing_test_scripts(workdir)
         self.written = set()
-        self.grants = set()
-        self.denied = set()
+        data = approval_data if isinstance(approval_data, dict) else {}
+        self.grants = (_PersistedApprovalSet('approved', data.get('approved', []), save_approval)
+                       if save_approval else set())
+        self.denied = (_PersistedApprovalSet('denied', data.get('denied', []), save_approval)
+                       if save_approval else set())
         self.tests_granted = False
 
     @property
@@ -448,29 +487,16 @@ def _approval_scope(permission, patterns, metadata):
                program in {'python', 'python3'} and tokens[1:3] == ['-m', 'pip'] or
                re.fullmatch(r'python\d+(?:\.\d+)*', program) and tokens[1:3] == ['-m', 'pip'])
     if permission == 'bash' and install:
-        # One approval per exact package set, never a secret passed as an option value.
-        options_with_value = {'--token', '--index-url', '-i', '--extra-index-url', '--trusted-host',
-                              '--proxy', '--cert', '--client-cert', '--requirement', '-r', '--constraint', '-c'}
-        package, skip = [], False
-        for arg in tokens[1:]:
-            if skip:
-                skip = False
-                continue
-            if arg in options_with_value:
-                skip = True
-                continue
-            if arg.startswith('-') or arg.casefold() in {
-                    'install', 'add', 'get', 'i', 'ci', 'up', 'update', 'upgrade', 'dlx', 'pip'}:
-                continue
-            package.append(arg)
-        return permission, 'install', (program, tuple(package) or ('all',))
+        # Scope must include requirement files and options without exposing credentials in diagnostics.
+        digest = hashlib.sha256(json.dumps(tokens, ensure_ascii=False).encode('utf-8')).hexdigest()
+        return permission, 'install', (program, digest)
     if permission == 'bash' and _test_command(tokens):
         return permission, 'tests', 'project'
     if permission == 'bash' and program in {'npx', 'pnpx', 'bunx'}:
         return permission, 'network', (program, tuple(tokens[1:3]))
     if permission == 'bash' and (program in ASK_LAN['network'] or program == 'git' and _git_subcommand(tokens) in {'clone', 'fetch', 'pull'}):
-        resources = tuple(sorted(re.findall(r'https?://([^/\s]+)', command or '', re.I)))
-        return permission, 'network', resources or (program,)
+        digest = hashlib.sha256(json.dumps(tokens, ensure_ascii=False).encode('utf-8')).hexdigest()
+        return permission, 'network', (program, digest)
     if permission == 'bash' and program == 'git' and _git_subcommand(tokens) == 'push':
         refspec = tuple(arg for arg in tokens[1:] if not arg.startswith('-'))
         force = ('force',) if any(arg in {'-f', '--force', '--force-with-lease', '--force-if-includes'}
@@ -641,7 +667,7 @@ def estimate_cost(messages, price, steps):
 
 
 def summarize(messages):
-    steps, repeats, calls, assistants = 0, {}, 0, []
+    steps, repeat, last, calls, assistants = 0, 0, None, 0, []
     for m in messages:
         info = m.get('info', {})
         if info.get('role') == 'assistant' or info.get('type') == 'assistant':
@@ -652,11 +678,41 @@ def summarize(messages):
             if p.get('type') == 'tool':
                 calls += 1
                 key = (p.get('tool') or p.get('name'), json.dumps(p.get('state', {}).get('input', {}), sort_keys=True))
-                repeats[key] = repeats.get(key, 0) + 1
+                repeat = repeat + 1 if key == last else 1
+                last = key
     final = ''
     if assistants and assistants[-1][0].get('finish') == 'stop':
         final = assistants[-1][1]
-    return steps, calls, max(repeats.values(), default=0), final
+    return steps, calls, repeat, final
+
+
+def _last_test_exit(messages):
+    """Use OpenCode's numeric shell exit for a final test command, not model prose."""
+    result = None
+    for message in messages:
+        for part in message.get('parts', []):
+            state = part.get('state') or {}
+            if part.get('type') != 'tool' or part.get('tool') != 'bash' or state.get('status') != 'completed':
+                continue
+            command = (state.get('input') or {}).get('command')
+            exit_code = (state.get('metadata') or {}).get('exit')
+            if not isinstance(command, str) or type(exit_code) is not int:
+                continue
+            try:
+                lexer = shlex.shlex(command, posix=True, punctuation_chars=';&|')
+                lexer.whitespace_split = True
+                tokens = list(lexer)
+            except ValueError:
+                continue
+            last = []
+            for token in tokens:
+                if re.fullmatch(r'[;&|]+', token):
+                    last = []
+                else:
+                    last.append(token)
+            if _test_command(last):
+                result = exit_code
+    return result
 
 
 def diagnose(messages):
@@ -736,6 +792,8 @@ class KeyProxy:
                 self._forward('POST')
 
             def do_GET(self):
+                if self.path == '/_veil_health/' + proxy.token:
+                    return self._deny(200, 'ok')
                 self._forward('GET')
 
             def _forward(self, method):
@@ -773,6 +831,9 @@ class KeyProxy:
 
     def local_base(self, host='127.0.0.1'):
         return f'http://{host}:{self.port}/v1'
+
+    def local_health(self, host='127.0.0.1'):
+        return f'http://{host}:{self.port}/_veil_health/{self.token}'
 
     def close(self):
         self.server.shutdown()
@@ -827,20 +888,72 @@ def build_config(provider, token, base_url, protect=()):
         'share': 'disabled', 'autoupdate': False}
 
 
-SECRET_FILE = re.compile(r'^(\.env(\..*)?|.*\.pem|id_(rsa|ed25519).*|.*\.pfx|.*\.key)$', re.I)
+SECRET_FILE = re.compile(r'^(.*\.env(\..*)?|.*\.pem|id_(rsa|ed25519).*|.*\.pfx|.*\.key|cookies|login data)$', re.I)
 
 
-def secret_files(workdir, max_depth=6):
-    """Secret-looking files inside the project (shallow). In a container they are masked with an empty file."""
+def secret_directories(workdir):
+    """Protect whole secret directories, including their otherwise ordinary-looking filenames."""
+    found = []
+    root = Path(workdir).resolve()
+    def fail_walk(error):
+        raise error
+    for base, dirs, _names in os.walk(workdir, onerror=fail_walk):
+        links = set()
+        for name in dirs:
+            if name.casefold() == '.git':
+                continue
+            path = Path(base) / name
+            if (path.is_symlink() or getattr(path.lstat(), 'st_file_attributes', 0) &
+                    getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0x400)):
+                if name.casefold() in {'secrets', '.ssh'} or not path.resolve().is_relative_to(root):
+                    raise ValueError('cannot safely mount a project containing external directory links')
+                links.add(name)
+                continue
+            if name.casefold() in {'secrets', '.ssh'}:
+                found.append(path)
+        dirs[:] = [name for name in dirs if name not in links and name.casefold() not in {'.git', 'secrets', '.ssh'}]
+    return found
+
+
+def secret_files(workdir, max_depth=None):
+    """Secret-looking files inside the project are masked with an empty file in the container."""
     found, root = [], Path(workdir)
-    for base, dirs, names in os.walk(root):
+    def fail_walk(error):
+        raise error
+    for base, dirs, names in os.walk(root, onerror=fail_walk):
         depth = len(Path(base).relative_to(root).parts)
-        dirs[:] = [d for d in dirs if d not in ('.git', 'node_modules') and depth < max_depth]
+        dirs[:] = [d for d in dirs if d.casefold() not in {'.git', 'secrets', '.ssh'}
+                   and (max_depth is None or depth < max_depth)]
         found += [Path(base) / n for n in names if SECRET_FILE.match(n)]
     return found
 
 
-def container_command(container, *, name, workdir, port, env, masks):
+_CONTAINER_WATCHDOG = '''import os, signal, subprocess, sys, time, urllib.request
+child = subprocess.Popen(['sh', '-c', sys.argv[2], 'veil-workbench', sys.argv[1]], start_new_session=True)
+failures = 0
+try:
+    while child.poll() is None:
+        try:
+            with urllib.request.urlopen(os.environ['VEIL_WATCHDOG_URL'], timeout=2) as response:
+                if response.status != 200:
+                    raise OSError('host heartbeat failed')
+            failures = 0
+        except Exception:
+            failures += 1
+        if failures >= 5:
+            os.killpg(child.pid, signal.SIGKILL)
+            break
+        time.sleep(2)
+    code = child.wait()
+finally:
+    if child.poll() is None:
+        os.killpg(child.pid, signal.SIGKILL)
+        child.wait()
+sys.exit(code if code >= 0 else 1)
+'''
+
+
+def container_command(container, *, name, workdir, port, env, masks, bootstrap_git=False, watchdog=False):
     """`docker run` for OpenCode: only the project is mounted (read-write); secret-looking files in it are masked by
     empty read-only files; no host environment, no capabilities, bounded memory/processes. The server is published
     on the host's loopback only."""
@@ -852,15 +965,44 @@ def container_command(container, *, name, workdir, port, env, masks):
         cmd += ['-v', f'{source}:/work/{target}:ro']
     for key, value in env.items():
         cmd += ['-e', f'{key}={value}']
+    script = 'exec opencode serve --hostname 0.0.0.0 --port "$1"'
+    if bootstrap_git:
+        script = ('set -eu; mkdir -p /tmp/home; '
+                  'export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/tmp/home/.gitconfig; '
+                  'git -C /tmp config --global --add safe.directory /work; '
+                  'git --git-dir=/tmp/veil-git --work-tree=/work init -q -b veil-snapshot; '
+                  'git --git-dir=/tmp/veil-git --work-tree=/work -c core.hooksPath=/dev/null add -A -- .; '
+                  'git --git-dir=/tmp/veil-git --work-tree=/work -c core.hooksPath=/dev/null '
+                  '-c user.name=VEIL -c user.email=veil-snapshot@example.invalid '
+                  'commit --allow-empty -qm "Isolated starting snapshot"; '
+                  + script)
+    if watchdog:
+        return cmd + [container['image'], 'python3', '-c', _CONTAINER_WATCHDOG, str(port), script]
+    if bootstrap_git:
+        return cmd + [container['image'], 'sh', '-c', script, 'veil-workbench', str(port)]
     return cmd + [container['image'], 'opencode', 'serve', '--hostname', '0.0.0.0', '--port', str(port)]
 
 
 def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, stopped, record_cost,
         api_factory=None, proxy_factory=None, container=None, protect=(), popen=subprocess.Popen, clock=time.monotonic,
-        sleep=time.sleep, diagnostic=None, maintenance=False):
+        sleep=time.sleep, diagnostic=None, maintenance=False, approval_data=None, save_approval=None,
+        container_name=None):
     """Run one task. `record_cost(cost)` is called once with the estimated cost, whatever the outcome."""
     limits = {**DEFAULT_LIMITS, **(limits or {})}
     workdir, home = Path(workdir), Path(home)
+    if maintenance and not container:
+        try:
+            record_cost(Decimal(0))
+        except Exception:
+            pass
+        return ExecutorResult('VEIL maintenance requires the isolated workbench container.',
+                              '被拒绝', reason='isolation_required')
+    if container_name is not None and not re.fullmatch(r'veil-workbench-[0-9a-f]{8,32}', container_name):
+        try:
+            record_cost(Decimal(0))
+        except Exception:
+            pass
+        return ExecutorResult('Invalid workbench container identity.', '被拒绝', reason='invalid_container')
     if protect and not container:
         try:
             record_cost(Decimal(0))
@@ -869,7 +1011,22 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
         return ExecutorResult('The workbench cannot protect the growth journal without Docker isolation.', '被拒绝')
     workdir.mkdir(parents=True, exist_ok=True)
     home.mkdir(parents=True, exist_ok=True)
-    task_scope = TaskScope(workdir)
+    if stopped():
+        try:
+            record_cost(Decimal(0))
+        except Exception:
+            pass
+        return ExecutorResult('[workbench=stopped; reason=user_stopped]', '出错', reason='user_stopped')
+    try:
+        protected_dirs = secret_directories(workdir) if container else []
+        protected_files = secret_files(workdir) if container else []
+    except (OSError, ValueError) as exc:
+        try:
+            record_cost(Decimal(0))
+        except Exception:
+            pass
+        return ExecutorResult('The workbench cannot safely protect project secrets: ' + str(exc)[:200], '被拒绝')
+    task_scope = TaskScope(workdir, approval_data=approval_data, save_approval=save_approval)
     price = (Decimal(str(provider.get('input_cny_per_million', 0))),
              Decimal(str(provider.get('output_cny_per_million', 0))))
     cap = Decimal(str(limits['run_budget_cny']))
@@ -883,24 +1040,38 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
     env = {k: v for k, v in os.environ.items() if k.upper() in keep}
     shared = {'OPENCODE_SERVER_PASSWORD': password, 'OPENCODE_DISABLE_AUTOUPDATE': '1',
               'OPENCODE_CONFIG_CONTENT': json.dumps(config)}
+    if container and maintenance:
+        shared['VEIL_WATCHDOG_URL'] = proxy.local_health('host.docker.internal')
+    git_pointer, empty_secret_dir = None, None
     if container:
-        name = 'veil-workbench-' + secrets.token_hex(4)
+        name = container_name or 'veil-workbench-' + secrets.token_hex(4)
         masks = []
         empty = home / 'empty-file'
         empty.write_text('', encoding='utf-8')
-        for path in secret_files(workdir):
+        for path in protected_files:
             masks.append((str(empty), path.relative_to(workdir).as_posix()))
+        if protected_dirs:
+            empty_secret_dir = home / ('empty-secret-dir-' + secrets.token_hex(8))
+            empty_secret_dir.mkdir()
+            for path in protected_dirs:
+                masks.append((str(empty_secret_dir), path.relative_to(workdir).as_posix()))
         if (workdir / '.git').is_file():
             # A linked worktree's .git file points at the main repository's metadata on the host.
-            # Hide it from the container: VEIL owns delivery, OpenCode only edits files.
-            masks.append((str(empty), '.git'))
+            # Mount only a disposable in-container snapshot, never the host repository metadata.
+            if maintenance:
+                git_pointer = home / ('git-pointer-' + secrets.token_hex(8))
+                git_pointer.write_text('gitdir: /tmp/veil-git\n', encoding='utf-8')
+                masks.append((str(git_pointer), '.git'))
+            else:
+                masks.append((str(empty), '.git'))
         for relative in protect:  # e.g. Peter's growth journal: it has its own append-only grant
             if (workdir / relative).is_file() and all(target != Path(relative).as_posix() for _, target in masks):
                 masks.append((str(empty), Path(relative).as_posix()))
         command = container_command(container, name=name, workdir=str(workdir), port=port, masks=masks,
                                     env={**shared, 'HOME': '/tmp/home', 'XDG_DATA_HOME': '/tmp/home/data',
                                          'XDG_CONFIG_HOME': '/tmp/home/config', 'XDG_CACHE_HOME': '/tmp/home/cache',
-                                         'XDG_STATE_HOME': '/tmp/home/state'})
+                                         'XDG_STATE_HOME': '/tmp/home/state'}, bootstrap_git=bool(git_pointer),
+                                    watchdog=maintenance)
         env = {k: v for k, v in env.items() if k.upper() in ('PATH', 'PATHEXT', 'SYSTEMROOT', 'WINDIR', 'COMSPEC',
                                                               'APPDATA', 'LOCALAPPDATA', 'USERPROFILE', 'HOME')}
     else:
@@ -924,7 +1095,11 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
                 if proc.poll() is not None or clock() - started > 60 or stopped():
                     return ExecutorResult('The workbench could not start (OpenCode did not answer).', '出错')
                 sleep(1)
+        if stopped():
+            return ExecutorResult('[workbench=stopped; reason=user_stopped]', '出错', reason='user_stopped')
         session = api.call('POST', '/session', {'title': 'workbench'})['id']
+        if stopped():
+            return ExecutorResult('[workbench=stopped; reason=user_stopped]', '出错', reason='user_stopped')
         text = (CONTAINER_NOTE if container else '') + TASK_SCOPE_NOTE + (MAINTENANCE_NOTE if maintenance else '') + task
         api.call('POST', f'/session/{session}/prompt_async', {
             'parts': [{'type': 'text', 'text': text}], 'model': {'providerID': 'relay', 'modelID': provider['model']}})
@@ -942,6 +1117,9 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
                     reply, why = decide(request.get('permission', ''), request.get('patterns', []),
                                         request.get('metadata'), workdir, autonomy=autonomy, ask=ask,
                                         approvals=approvals, task_scope=task_scope, maintenance=maintenance)
+                    if stopped():
+                        stop = 'stopped by Lan'
+                        break
                     if diagnostic is not None:
                         try:
                             diagnostic({
@@ -1010,6 +1188,16 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
             proxy.close()
         except Exception:
             pass
+        if git_pointer is not None:
+            try:
+                git_pointer.unlink(missing_ok=True)
+            except OSError:
+                cleanup_warning += ' [warning: could not remove temporary Git pointer]'
+        if empty_secret_dir is not None:
+            try:
+                empty_secret_dir.rmdir()
+            except OSError:
+                cleanup_warning += ' [warning: could not remove temporary secret mask]'
         try:
             record_cost(cost)
         except Exception:
@@ -1021,14 +1209,16 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
         for item in approvals)
     if approval_stop:
         return ExecutorResult(f'{approval_note}\n[workbench=stopped; reason={approval_stop}]\n{note}',
-                              '被拒绝', cost, steps)
+                              '被拒绝', cost, steps, approval_stop)
     if stop:
         partial = next(('\n'.join(p.get('text', '') for p in m.get('parts', []) if p.get('type') == 'text').strip()
                         for m in reversed(messages) if m.get('info', {}).get('role') == 'assistant' or
                         m.get('info', {}).get('type') == 'assistant'), '')
         status = (approval_note + '\n' if approval_note else '') + '[workbench=stopped]\n'
+        reason = ('user_stopped' if stop == 'stopped by Lan' else
+                  'repeated_call' if stop.startswith('the same call was repeated') else 'limit_or_failure')
         return ExecutorResult(status + f'The workbench was stopped: {stop}. {diagnose(messages)}\nPartial report:\n{partial[:RESULT_CHARS]}\n{note}',
-                              '出错', cost, steps)
+                              '出错', cost, steps, reason)
     if not calls:
         why = diagnose(messages)
         status = (approval_note + '\n' if approval_note else '') + '[workbench=failed]\n'
@@ -1039,6 +1229,10 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
         status = (approval_note + '\n' if approval_note else '') + '[workbench=failed]\n'
         return ExecutorResult(status + 'The workbench finished without a report.' + (f' ({why})' if why else '') + '\n' + note,
                               '出错', cost, steps)
+    if (test_exit := _last_test_exit(messages)) is not None and test_exit != 0:
+        return ExecutorResult((approval_note + '\n' if approval_note else '') +
+                              f'[workbench=failed; reason=test_failed; exit={test_exit}]\n' +
+                              text[:RESULT_CHARS] + '\n' + note, '出错', cost, steps, 'test_failed')
     if any(p.get('type') == 'tool' and p.get('state', {}).get('status') == 'error'
            for m in messages for p in m.get('parts', [])):
         text = '[workbench tool diagnostics: ' + diagnose(messages) + ']\n' + text

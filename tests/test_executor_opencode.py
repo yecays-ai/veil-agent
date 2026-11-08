@@ -1,7 +1,10 @@
 import json
+import secrets
+import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from decimal import Decimal
 from pathlib import Path
@@ -77,6 +80,50 @@ def run(script, **overrides):
 
 
 class DecisionTests(unittest.TestCase):
+    def test_task_approvals_and_denials_survive_workbench_restart(self):
+        wd = Path(tempfile.mkdtemp())
+        persisted = {'approved': [], 'denied': []}
+        def save(kind, fingerprint):
+            persisted[kind].append(fingerprint)
+        first = ex.TaskScope(wd, approval_data=persisted, save_approval=save)
+        install = 'pip install requests'
+        self.assertEqual(ex.decide('bash', [install], {'command': install}, wd, autonomy=False,
+                                   ask=lambda _p: 'n', task_scope=first)[0], 'reject')
+        second = ex.TaskScope(wd, approval_data=persisted, save_approval=save)
+        self.assertEqual(ex.decide('bash', [install], {'command': install}, wd, autonomy=False,
+                                   ask=Mock(side_effect=AssertionError('must reuse denial')),
+                                   task_scope=second), ('reject', 'user_denied'))
+        allowed = 'pip install rich'
+        self.assertEqual(ex.decide('bash', [allowed], {'command': allowed}, wd, autonomy=False,
+                                   ask=lambda _p: 'y', task_scope=second)[0], 'once')
+        third = ex.TaskScope(wd, approval_data=persisted, save_approval=save)
+        self.assertEqual(ex.decide('bash', [allowed], {'command': allowed}, wd, autonomy=False,
+                                   ask=Mock(side_effect=AssertionError('must reuse approval')),
+                                   task_scope=third)[0], 'once')
+        self.assertNotIn('requests', json.dumps(persisted))
+    def test_read_only_pipeline_with_stderr_suppression_does_not_ask(self):
+        wd = Path(tempfile.mkdtemp())
+        command = 'ls -la /work 2>/dev/null | head -50'
+        patterns = ['ls -la /work 2>/dev/null', 'head -50']
+        reply, why = ex.decide('bash', patterns, {'command': command}, wd, autonomy=False,
+                               ask=Mock(side_effect=AssertionError('read-only pipeline should not ask')),
+                               task_scope=ex.TaskScope(wd))
+        self.assertEqual(reply, 'once', why)
+        unsafe = 'ls /work > output.txt'
+        reply, why = ex.decide('bash', [unsafe], {'command': unsafe}, wd, autonomy=False,
+                               ask=lambda _p: 'n', task_scope=ex.TaskScope(wd))
+        self.assertEqual(reply, 'reject')
+
+    def test_read_only_find_sort_pipeline_is_allowed_but_writing_find_is_not(self):
+        wd = Path(tempfile.mkdtemp())
+        safe = "find /work -maxdepth 2 -name '*.md' -printf '%f\\n' 2>/dev/null | sort -u"
+        patterns = ["find /work -maxdepth 2 -name '*.md' -printf '%f\\n' 2>/dev/null", 'sort -u']
+        self.assertEqual(ex.decide('bash', patterns, {'command': safe}, wd, autonomy=False,
+                                   ask=Mock(side_effect=AssertionError('read-only pipeline should not ask')),
+                                   task_scope=ex.TaskScope(wd))[0], 'once')
+        for command in ('find /work -fprint /work/output.txt', 'sort -o output.txt input.txt'):
+            self.assertEqual(ex.decide('bash', [command], {'command': command}, wd, autonomy=False,
+                                       ask=lambda _p: 'n', task_scope=ex.TaskScope(wd))[0], 'reject')
     def test_relative_and_prefix_paths_cannot_escape_workbench(self):
         work = Path('/data/peter/workbench')
         for target in ('../memory/notes.json', 'sub/../../x', '/data/peter/workbench-evil/x'):
@@ -306,6 +353,16 @@ class DecisionTests(unittest.TestCase):
                                    ask=lambda _prompt: self.fail('denied package must not reprompt'),
                                    task_scope=denied_scope)[0], 'reject')
 
+    def test_different_requirement_files_and_network_methods_need_separate_approval(self):
+        wd = Path('/data/peter/workbench')
+        scope = ex.TaskScope(wd)
+        ask = Mock(return_value='y')
+        for command in ('pip install -r requirements-a.txt', 'pip install -r requirements-b.txt',
+                        'curl https://example.com/data', 'curl -X POST https://example.com/data'):
+            self.assertEqual(ex.decide('bash', [command], {'command': command}, wd,
+                                       autonomy=False, ask=ask, task_scope=scope)[0], 'once')
+        self.assertEqual(ask.call_count, 4)
+
     def test_shell_substitutions_interpreters_and_script_sourcing_require_approval(self):
         wd = Path('/data/peter/workbench')
         for command in ('echo `git push origin main`', 'echo $(git push origin main)',
@@ -350,6 +407,32 @@ class DecisionTests(unittest.TestCase):
 
 
 class RunTests(unittest.TestCase):
+    def test_maintenance_never_runs_on_host_without_container_isolation(self):
+        result, _api, costs, kill = run([], maintenance=True, container=None)
+        self.assertEqual(result.state, '被拒绝')
+        self.assertEqual(result.reason, 'isolation_required')
+        self.assertEqual(costs, [Decimal(0)])
+        kill.assert_not_called()
+    def test_latest_real_test_exit_supersedes_an_earlier_failure(self):
+        def result(command, code):
+            return {'info': {'role': 'assistant'}, 'parts': [{'type': 'tool', 'tool': 'bash',
+                    'state': {'status': 'completed', 'input': {'command': command}, 'metadata': {'exit': code}}}]}
+        failed = result('python3 -m unittest', 1)
+        passed = result('python3 -m unittest', 0)
+        self.assertEqual(ex._last_test_exit([failed]), 1)
+        self.assertEqual(ex._last_test_exit([failed, passed]), 0)
+        self.assertIsNone(ex._last_test_exit([result('echo FAILED', 0)]))
+
+    def test_repeat_limit_counts_consecutive_calls_not_later_revisits(self):
+        def tool(name, value):
+            return {'type': 'tool', 'tool': name, 'state': {'input': {'file': value}}}
+        messages = [{'info': {'role': 'assistant'}, 'parts': [
+            tool('read', 'a'), tool('read', 'a'), tool('edit', 'a'), tool('read', 'a'), tool('read', 'a')]}]
+        self.assertEqual(ex.summarize(messages)[2], 2)
+        progressed = [{'info': {'role': 'assistant'}, 'parts': [
+            tool('read', 'a'), tool('read', 'a'), tool('read', 'a'), tool('read', 'a'), tool('edit', 'a')]}]
+        self.assertEqual(ex.summarize(progressed)[2], 1)
+
     def test_windows_start_and_taskkill_hide_the_console(self):
         seen = {}
         def popen(_command, **kwargs):
@@ -580,6 +663,39 @@ class RunTests(unittest.TestCase):
         result, api, _c, _k = run([([assistant()], [], True)] * 5, stopped=flag.is_set)
         self.assertEqual(result.state, '出错')
 
+    def test_stop_during_approval_never_releases_the_pending_command(self):
+        flag = threading.Event()
+        pending = {'id': 'p1', 'permission': 'bash', 'patterns': ['curl https://example.invalid'],
+                   'metadata': {'command': 'curl https://example.invalid'}}
+        def approve_after_stop(_prompt):
+            flag.set()
+            return 'y'
+        result, api, _costs, _kill = run([([assistant()], [pending], True)] * 5,
+                                         stopped=flag.is_set, ask=approve_after_stop)
+        self.assertNotIn(('p1', 'once'), api.replies)
+        self.assertTrue(api.aborted)
+        self.assertEqual(result.reason, 'user_stopped')
+
+    def test_stop_before_or_during_start_never_sends_model_prompt(self):
+        stopped = threading.Event()
+        stopped.set()
+        result, api, costs, _kill = run([], stopped=stopped.is_set)
+        self.assertEqual(result.reason, 'user_stopped')
+        self.assertEqual(api.posted, [])
+        self.assertEqual(costs, [Decimal(0)])
+        stopped.clear()
+        class StopOnSession(FakeApi):
+            def call(self, method, path, body=None):
+                result = super().call(method, path, body)
+                if method == 'POST' and path == '/session':
+                    stopped.set()
+                return result
+        api = StopOnSession([])
+        result, _unused, costs, _kill = run([], stopped=stopped.is_set, api_factory=lambda *_: api)
+        self.assertEqual(result.reason, 'user_stopped')
+        self.assertEqual(api.posted, [])
+        self.assertEqual(costs, [Decimal(0)])
+
     def test_missing_server_is_reported_and_cost_still_settled(self):
         class Dead(FakeApi):
             def call(self, *_a, **_k):
@@ -627,6 +743,39 @@ class RunTests(unittest.TestCase):
         self.assertIn('--cap-drop', cmd)
         self.assertEqual(cmd[-7:-1], ['veil-workbench', 'opencode', 'serve', '--hostname', '0.0.0.0', '--port'])
 
+    def test_secret_mask_discovers_deep_and_dependency_secrets(self):
+        base = Path(tempfile.mkdtemp())
+        deep = base / 'a' / 'b' / 'c' / 'd' / 'e' / 'f' / 'g'
+        deep.mkdir(parents=True)
+        (deep / '.env').write_text('FAKE=private', encoding='utf-8')
+        dependency = base / 'node_modules' / 'pkg'
+        dependency.mkdir(parents=True)
+        (dependency / 'service.key').write_text('fictional-key', encoding='utf-8')
+        (dependency / 'project.env').write_text('FAKE=private', encoding='utf-8')
+        (dependency / 'Cookies').write_text('fictional-cookie', encoding='utf-8')
+        found = {path.relative_to(base).as_posix() for path in ex.secret_files(base)}
+        self.assertIn('a/b/c/d/e/f/g/.env', found)
+        self.assertIn('node_modules/pkg/service.key', found)
+        self.assertIn('node_modules/pkg/project.env', found)
+        self.assertIn('node_modules/pkg/Cookies', found)
+
+    def test_linked_directory_cannot_escape_container_project_scope(self):
+        base = Path(tempfile.mkdtemp())
+        (base / 'linked').mkdir()
+        actual_resolve = Path.resolve
+        def fake_resolve(path, *args, **kwargs):
+            return base.parent / 'outside-project' if path.name == 'linked' else actual_resolve(path, *args, **kwargs)
+        with patch.object(Path, 'is_symlink', lambda path: path.name == 'linked'), \
+                patch.object(Path, 'resolve', fake_resolve):
+            with self.assertRaises(ValueError):
+                ex.secret_directories(base)
+
+    def test_internal_directory_link_does_not_block_project(self):
+        base = Path(tempfile.mkdtemp())
+        (base / 'linked').mkdir()
+        with patch.object(Path, 'is_symlink', lambda path: path.name == 'linked'):
+            self.assertEqual(ex.secret_directories(base), [])
+
 
 class ProtectTests(unittest.TestCase):
     def test_protected_files_are_masked_read_only_in_the_container(self):
@@ -665,6 +814,13 @@ class MaintenanceContainerTests(unittest.TestCase):
 
 
 class KeyProxyTests(unittest.TestCase):
+    def test_local_liveness_check_does_not_use_a_model_request(self):
+        import urllib.request
+        proxy = ex.KeyProxy('https://example.invalid/v1', 'fake-key', max_requests=1)
+        self.addCleanup(proxy.close)
+        with urllib.request.urlopen(proxy.local_health(), timeout=5) as response:
+            self.assertEqual(response.status, 200)
+        self.assertEqual(proxy.requests, 0)
     def test_proxy_adds_the_real_key_only_for_its_own_token_and_limits_calls(self):
         import urllib.error, urllib.request
         from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -821,6 +977,28 @@ max_steps = 4
         settle = [r for r in rows if r.get('type') == 'settle'][-1]
         self.assertEqual(Decimal(settle['amount']), Decimal('0.0123'))
         self.assertEqual(Decimal(settle['reserved_amount']), Decimal('0.2'))
+
+    def test_maintenance_context_and_stop_are_forwarded_to_workbench(self):
+        chat = self.chat(self.executor)
+        manager = Mock()
+        manager.claim_workbench.return_value = ({
+            'ticket': '315', 'branch': 'ticket/315-example', 'worktree': str(self.root / 'project'),
+            'authorization': {},
+            'workbench_git': {'branch': 'ticket/315-example', 'head': 'abc123',
+                              'base_main': 'def456', 'has_changes': True}}, Mock())
+        manager.store.load.return_value = {'stage': 'developing'}
+        chat.maintenance = manager
+        def fake_run(task, **kwargs):
+            self.assertIn('abc123', task)
+            self.assertIn('metadata is intentionally hidden', task)
+            self.assertFalse(kwargs['stopped']())
+            manager.store.load.return_value = {'stage': 'stopped'}
+            self.assertTrue(kwargs['stopped']())
+            return ex.ExecutorResult('stopped', '出错', Decimal(0), 1, 'user_stopped')
+        with patch('veil_agent.ROOT', self.root), patch('executor_opencode.run', side_effect=fake_run):
+            result = chat._run_workbench('do it', 'req', False, task_id='fixture')
+        self.assertEqual(result.reason, 'user_stopped')
+        self.assertEqual(manager.record_workbench.call_args.kwargs['reason'], 'user_stopped')
 
     def test_wake_run_is_marked_autonomous_and_capped_lower(self):
         chat = self.chat(self.executor + 'wake_budget_cny = "0.05"\n')
@@ -1062,8 +1240,9 @@ max_steps = 4
 
 
 def _fake_llm(command='echo hello > out.txt && cat out.txt'):
-    """A scripted OpenAI-compatible server: first answer is one bash call, the next is the final text."""
+    """A scripted OpenAI-compatible server: execute the given bash calls, then report the last result."""
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    commands = command if isinstance(command, list) else [command]
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_a):
@@ -1076,11 +1255,12 @@ def _fake_llm(command='echo hello > out.txt && cat out.txt'):
             def chunk(delta, finish=None):
                 return 'data: ' + json.dumps({'id': 'x', 'object': 'chat.completion.chunk', 'model': 'fake',
                                               'choices': [{'index': 0, 'delta': delta, 'finish_reason': finish}]}) + '\n\n'
-            if last['role'] == 'tool':
-                out = [chunk({'role': 'assistant', 'content': 'Done: ' + str(last['content'])[:80]}), chunk({}, 'stop')]
+            completed = sum(1 for message in body['messages'] if message.get('role') == 'tool')
+            if completed >= len(commands):
+                out = [chunk({'role': 'assistant', 'content': 'Done: ' + str(last['content'])[:1000]}), chunk({}, 'stop')]
             else:
-                call = {'index': 0, 'id': 'call_1', 'type': 'function', 'function': {
-                    'name': 'bash', 'arguments': json.dumps({'command': command,
+                call = {'index': 0, 'id': f'call_{completed + 1}', 'type': 'function', 'function': {
+                    'name': 'bash', 'arguments': json.dumps({'command': commands[completed],
                                                              'description': 'write'})}}
                 out = [chunk({'role': 'assistant', 'tool_calls': [call]}), chunk({}, 'tool_calls')]
             self.send_response(200)
@@ -1146,15 +1326,143 @@ class RealOpenCodeTests(unittest.TestCase):
         self.addCleanup(server.shutdown)
         base = Path(tempfile.mkdtemp())
         provider = {**PROVIDER, 'base_url': f'http://127.0.0.1:{server.server_address[1]}/v1', 'model': 'fake'}
+        launched = []
+        def capture_popen(command, **kwargs):
+            launched.append(command[command.index('--name') + 1])
+            return ex.subprocess.Popen(command, **kwargs)
         result = ex.run('make a file', command='opencode', workdir=base / 'bench', home=base / 'home',
                         provider=provider, key='k', limits={'max_seconds': 90}, autonomy=False,
                         ask=lambda _p: 'n', stopped=lambda: False, record_cost=lambda _c: None,
-                        container={'image': 'veil-workbench'})
+                        container={'image': 'veil-workbench'}, popen=capture_popen)
         self.assertEqual(result.state, '成功', result.text)
         self.assertTrue((base / 'bench' / 'build' / 'out.txt').is_file())
-        leftover = ex.subprocess.run(['docker', 'ps', '-a', '--filter', 'name=veil-workbench-',
+        leftover = ex.subprocess.run(['docker', 'ps', '-a', '--filter', 'name=^/' + launched[0] + '$',
                                       '--format', '{{.Names}}'], capture_output=True, text=True, timeout=15)
         self.assertEqual(leftover.stdout.strip(), '', 'the workbench container must be gone')
+
+    def test_real_container_does_not_execute_after_stop_during_approval(self):
+        if not _docker_workbench_available():
+            self.skipTest('VEIL workbench Docker image is unavailable')
+        server = _fake_llm("python3 -c \"open('must-not-exist','w').write('bad')\"")
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        base = Path(tempfile.mkdtemp())
+        provider = {**PROVIDER, 'base_url': f'http://127.0.0.1:{server.server_address[1]}/v1', 'model': 'fake'}
+        stopped = threading.Event()
+        def stop_during_approval(_prompt):
+            stopped.set()
+            return 'y'
+        result = ex.run('create a file', command='opencode', workdir=base / 'bench', home=base / 'home',
+                        provider=provider, key='k', limits={'max_seconds': 90}, autonomy=False,
+                        ask=stop_during_approval, stopped=stopped.is_set, record_cost=lambda _c: None,
+                        container={'image': 'veil-workbench'})
+        self.assertEqual(result.reason, 'user_stopped', result.text)
+        self.assertFalse((base / 'bench' / 'must-not-exist').exists())
+
+    def test_real_container_denial_is_reported_and_command_does_not_run(self):
+        if not _docker_workbench_available():
+            self.skipTest('VEIL workbench Docker image is unavailable')
+        server = _fake_llm("python3 -c \"open('must-not-exist','w').write('bad')\"")
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        base = Path(tempfile.mkdtemp())
+        provider = {**PROVIDER, 'base_url': f'http://127.0.0.1:{server.server_address[1]}/v1', 'model': 'fake'}
+        result = ex.run('create a file', command='opencode', workdir=base / 'bench', home=base / 'home',
+                        provider=provider, key='k', limits={'max_seconds': 90}, autonomy=False,
+                        ask=lambda _p: 'n', stopped=lambda: False, record_cost=lambda _c: None,
+                        container={'image': 'veil-workbench'})
+        self.assertIn('decision=user_denied', result.text)
+        self.assertFalse((base / 'bench' / 'must-not-exist').exists())
+
+    def test_real_container_test_failure_is_not_reported_as_success(self):
+        if not _docker_workbench_available():
+            self.skipTest('VEIL workbench Docker image is unavailable')
+        server = _fake_llm('python3 -m unittest missing_test_for_fixture')
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        base = Path(tempfile.mkdtemp())
+        provider = {**PROVIDER, 'base_url': f'http://127.0.0.1:{server.server_address[1]}/v1', 'model': 'fake'}
+        captured = []
+        class CaptureApi(ex.Api):
+            def call(self, method, path, body=None):
+                value = super().call(method, path, body)
+                if path.endswith('/message') and isinstance(value, list):
+                    captured[:] = value
+                return value
+        result = ex.run('run the tests', command='opencode', workdir=base / 'bench', home=base / 'home',
+                        provider=provider, key='k', limits={'max_seconds': 90}, autonomy=False,
+                        ask=lambda _p: 'y', stopped=lambda: False, record_cost=lambda _c: None,
+                        container={'image': 'veil-workbench'}, api_factory=CaptureApi)
+        states = [p.get('state') for m in captured for p in m.get('parts', []) if p.get('type') == 'tool']
+        self.assertEqual(result.state, '出错', result.text + '\n' + repr(states))
+        self.assertIn('FAILED', result.text)
+
+    def test_real_container_fails_test_then_fixes_and_retests(self):
+        if not _docker_workbench_available():
+            self.skipTest('VEIL workbench Docker image is unavailable')
+        base = Path(tempfile.mkdtemp())
+        workdir = base / 'bench'
+        workdir.mkdir()
+        (workdir / 'test_feature.py').write_text(
+            'import unittest\nclass FeatureTest(unittest.TestCase):\n def test_feature(self): self.assertEqual(1, 2)\n',
+            encoding='utf-8')
+        server = _fake_llm(['python3 -m unittest test_feature',
+                            "printf 'import unittest\\nclass FeatureTest(unittest.TestCase):\\n def test_feature(self): self.assertEqual(2, 2)\\n' > test_feature.py && python3 -m unittest test_feature"])
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        provider = {**PROVIDER, 'base_url': f'http://127.0.0.1:{server.server_address[1]}/v1', 'model': 'fake'}
+        result = ex.run('fix the failing test', command='opencode', workdir=workdir, home=base / 'home',
+                        provider=provider, key='k', limits={'max_seconds': 90}, autonomy=False,
+                        ask=lambda _p: 'y', stopped=lambda: False, record_cost=lambda _c: None,
+                        container={'image': 'veil-workbench'})
+        self.assertEqual(result.state, '成功', result.text)
+        self.assertIn('OK', result.text)
+        self.assertIn('self.assertEqual(2, 2)', (workdir / 'test_feature.py').read_text(encoding='utf-8'))
+
+    def test_maintenance_container_stops_after_host_process_crash(self):
+        if not _docker_workbench_available():
+            self.skipTest('VEIL workbench Docker image is unavailable')
+        server = _fake_llm("python3 -c \"import time; open('running','w').write('yes'); time.sleep(90)\"")
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        base = Path(tempfile.mkdtemp())
+        name = 'veil-workbench-' + secrets.token_hex(8)
+        script = ('import sys; from pathlib import Path; import executor_opencode as e; '
+                  'p={"model":"fake","base_url":sys.argv[3],"max_input_tokens":8000, '
+                  '"input_cny_per_million":"2","output_cny_per_million":"8"}; '
+                  'e.run("run",command="opencode",workdir=Path(sys.argv[1]),home=Path(sys.argv[2]),'
+                  'provider=p,key="fake",limits={"max_seconds":90},autonomy=False,ask=lambda p:"y",'
+                  'stopped=lambda:False,record_cost=lambda c:None,container={"image":"veil-workbench"},'
+                  'maintenance=True,container_name=sys.argv[4])')
+        process = subprocess.Popen([sys.executable, '-c', script, str(base / 'bench'), str(base / 'home'),
+                                    f'http://127.0.0.1:{server.server_address[1]}/v1', name],
+                                   cwd=str(Path(ex.__file__).resolve().parent),
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        def cleanup():
+            if process.poll() is None:
+                process.kill()
+            process.communicate(timeout=10)
+            subprocess.run(['docker', 'kill', name], capture_output=True, timeout=15)
+        self.addCleanup(cleanup)
+        deadline = time.monotonic() + 45
+        while time.monotonic() < deadline and not (base / 'bench' / 'running').is_file():
+            if process.poll() is not None:
+                self.fail('fake host exited before workbench started: ' + process.stderr.read().decode('utf-8', 'replace'))
+            time.sleep(0.25)
+        self.assertTrue((base / 'bench' / 'running').is_file(), 'test command did not start')
+        process.kill()
+        process.wait(timeout=10)
+        deadline = time.monotonic() + 25
+        while time.monotonic() < deadline:
+            check = subprocess.run(['docker', 'inspect', name], capture_output=True, timeout=10)
+            if check.returncode != 0 and (b'no such object' in check.stderr.lower() or
+                                          b'no such container' in check.stderr.lower()):
+                break
+            time.sleep(0.5)
+        else:
+            logs = subprocess.run(['docker', 'logs', name], capture_output=True, timeout=10)
+            self.fail('owned workbench container survived its host process: ' +
+                      (logs.stdout + logs.stderr).decode('utf-8', 'replace')[-2000:])
 
 
 class ScopeTests(unittest.TestCase):
