@@ -1532,6 +1532,54 @@ class RealOpenCodeTests(unittest.TestCase):
         self.assertFalse((workdir / 'network-worked').exists(), 'the container must not reach the network')
         self.assertEqual(len(asked), 1, asked)  # only the arbitrary network command asked
 
+    def test_maintenance_approved_network_uses_the_relay_allowlist(self):
+        if not _docker_workbench_available():
+            self.skipTest('VEIL workbench Docker image is unavailable')
+        try:
+            if socket.gethostbyname('localtest.me') != '127.0.0.1':
+                self.skipTest('localtest.me is not available for the loopback proxy test')
+        except OSError:
+            self.skipTest('localtest.me is not available for the loopback proxy test')
+        import urllib.request
+        base = Path(tempfile.mkdtemp())
+        web = base / 'web'
+        web.mkdir()
+        (web / 'index.html').write_text('proxy-approved-ok', encoding='utf-8')
+        with socket.socket() as probe:
+            probe.bind(('127.0.0.1', 0))
+            port = probe.getsockname()[1]
+        name = 'veil-proxy-target-' + secrets.token_hex(4)
+        target = subprocess.run(
+            ['docker', 'run', '-d', '--rm', '--name', name, '-p', f'127.0.0.1:{port}:8000',
+             '-v', f'{web}:/srv:ro', 'veil-workbench', 'python3', '-m', 'http.server', '8000',
+             '--directory', '/srv'], capture_output=True, text=True, timeout=180)
+        self.addCleanup(lambda: subprocess.run(['docker', 'kill', name], capture_output=True, timeout=30))
+        self.assertEqual(target.returncode, 0, target.stderr)
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            try:
+                with urllib.request.urlopen(f'http://127.0.0.1:{port}/', timeout=2) as response:
+                    if response.read() == b'proxy-approved-ok':
+                        break
+            except OSError:
+                time.sleep(0.2)
+        else:
+            self.fail('the proxy target did not start')
+        command = (f"python3 -c \"import urllib.request; "
+                   f"print(urllib.request.urlopen('http://localtest.me:{port}/', timeout=10).read().decode())\"")
+        server = _fake_llm([command])
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        provider = {**PROVIDER, 'base_url': f'http://127.0.0.1:{server.server_address[1]}/v1', 'model': 'fake'}
+        result = ex.run('fetch the approved local document', command='opencode', workdir=base / 'bench',
+                        home=base / 'home', provider=provider, key='fake', limits={'max_seconds': 90},
+                        autonomy=False, ask=lambda _p: 'y', stopped=lambda: False,
+                        record_cost=lambda _c: None,
+                        container={'image': 'veil-workbench'}, maintenance=True)
+        self.assertEqual(result.state, '成功', result.text)
+        self.assertIn('proxy-approved-ok', result.text)
+        self.assertIn('decision=approved', result.text)
+
     def test_real_container_does_not_execute_after_stop_during_approval(self):
         if not _docker_workbench_available():
             self.skipTest('VEIL workbench Docker image is unavailable')

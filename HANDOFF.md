@@ -17,10 +17,10 @@
 
 ## 验证证据
 
-- 专项：`python -m unittest tests.test_maintenance tests.test_executor_opencode -q` —— **136 项通过，2 项按环境跳过**（215.9s）。
+- 专项：`python -m unittest tests.test_maintenance tests.test_executor_opencode -q` —— **137 项通过，2 项按环境跳过**（222.3s）。
 - 全量相关回归：`python -m unittest tests.test_maintenance tests.test_executor_opencode tests.test_chat tests.test_web tests.test_tools -q` —— **364 项通过，3 项按环境跳过**（309.6s，退出码 0）。
-- 最终提交上复跑代理/网络锁定向测试：`KeyProxyTests`、`MaintenanceContainerTests`、真实容器“测试自动放行且直接联网被阻断”共 7 项通过。
-- 真实 OpenCode 容器：测试命令自动放行、直接联网被阻断、失败修复重测、拒绝、审批中停止、Git 快照、敏感目录遮蔽、宿主崩溃看门狗均通过。
+- 最终提交上复跑代理/网络锁定向测试：`KeyProxyTests`、`MaintenanceContainerTests`、真实容器“测试自动放行且直接联网被阻断”、真实容器“批准的网络经中继访问本机目标”共 8 项通过。
+- 真实 OpenCode 容器：测试命令自动放行、直接联网被阻断、批准的网络经中继访问批准主机、失败修复重测、拒绝、审批中停止、Git 快照、敏感目录遮蔽、宿主崩溃看门狗均通过。
 - 真实 Windows：从提交快照启动验收后端和真实 Electron 外壳，2 个进程存活、窗口出现，停止后无残留测试进程、容器或临时目录。未做桌面点击/聊天体验验收。
 - 未调用真实付费模型；未使用真实 GitHub 写入；依赖 Docker 的测试在无 Docker 环境跳过。
 
