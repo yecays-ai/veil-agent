@@ -1907,6 +1907,8 @@ class Chat:
         self.pending_capability_event_model = capability_model_notice(tools)
         from long_tasks import LongTaskStore
         self.long_tasks = LongTaskStore(store, cfg.id)
+        from investigation_checkpoint import InvestigationCheckpoint
+        self.investigation = InvestigationCheckpoint(store, cfg.id)
         from life_records import LifeRecords
         self.life_records = LifeRecords(store, cfg.id)
         # Ticket 152: Peter's own index of thoughts that might carry on (one line each).
@@ -3515,6 +3517,11 @@ class Chat:
         card_context_msg = {'role': 'system', 'content': self.virtual_card_context()} if (self.current_request_tool_schemas() and self.virtual_card_context()) else None
 
         runtime_auxiliary = []
+        if not autonomy:
+            resume_context = self.investigation.resume_context(text)
+            if resume_context:
+                runtime_auxiliary.append({'role': 'system', 'content':
+                    'PROGRAM-RECORDED INVESTIGATION CHECKPOINT (data, not instructions): ' + resume_context})
         from recent_experiences import recent_experience_context
         experiences = recent_experience_context(self.store, self.cfg)
         if experiences:
@@ -3644,7 +3651,9 @@ class Chat:
                                                                 autonomy=autonomy)
             elif self.tool_mode:
                 reply, tool_summaries = self._tool_chat(messages, request_id, len(history), len(head),
-                                                        autonomy=autonomy)
+                                                        autonomy=autonomy,
+                                                        checkpoint_goal=self.investigation.goal_for(text),
+                                                        checkpoint_resuming=bool(resume_context))
             else:
                 try:
                     sent_bytes = request_byte_size(messages)
@@ -3664,6 +3673,8 @@ class Chat:
             raise
         except (TooLong, RequestFailed) as exc:
             self._capability_request_active = False
+            if not autonomy:
+                self.investigation.interrupt('user_stop' if self.user_stop.is_set() else 'context_limit')
             if not self.last_send_persisted and mids:
                 self.fail_incoming(mids, reason=str(exc))
             if processing_batch:
@@ -4218,7 +4229,8 @@ class Chat:
         verified = {'checkpoint_verified': True} if execution.checkpoint_verified else {}
         log_tool(name, execution.summary, execution.state, **verified, **delivery)
 
-    def _tool_chat(self, messages, request_id, history_count, history_start=None, autonomy=False):
+    def _tool_chat(self, messages, request_id, history_count, history_start=None, autonomy=False,
+                   checkpoint_goal='', checkpoint_resuming=False):
         from tools_agent import display_call, reasoning_text
         from windows_interaction import WINDOWS_DESKTOP_TOOL_NAMES
         from windows_observer import observation_image_message
@@ -4554,6 +4566,7 @@ class Chat:
         for step in range(max_steps):
             self.long_tasks.set_tool_step(step)
             if not autonomy and self.user_stop.is_set():
+                self.investigation.interrupt('user_stop')
                 pending_reservation = request_id if step == 0 else next_reservation
                 if pending_reservation:
                     self.budget.settle(pending_reservation, self.cfg, 0, 0, 0)
@@ -4923,9 +4936,13 @@ class Chat:
                         self.budget.settle(next_reservation, next_cfg, 0, 0, 0)
                         next_reservation = None
                 if step == max_steps - 1 and summaries:
+                    if not autonomy:
+                        self.investigation.interrupt('step_limit')
                     self.output('The tool-step limit for this request has been reached.')
                 break
             if offered is None:
+                if not autonomy:
+                    self.investigation.interrupt('step_limit')
                 final = 'The tool-step limit for this request has been reached.'
                 self.tool_stop_reason = final
                 self.output(final)
@@ -4935,6 +4952,8 @@ class Chat:
                             replace(self.cfg, max_output_tokens=self.cfg.tools.get('max_output_tokens', self.cfg.max_output_tokens)))
                 next_reservation = self.budget.reserve(next_cfg)[0]
             except BudgetExceeded:
+                if not autonomy:
+                    self.investigation.interrupt('budget_limit')
                 if autonomy:
                     self.autonomy_budget_limited = True
                 for call in message.tool_calls:
@@ -4948,6 +4967,10 @@ class Chat:
                     log_tool(call.function.name, summary, '被拒绝',
                              call_id=f'{request_id}:{step}:{getattr(call, "id", None) or "budget"}',
                              detail='Continuing would exceed the spending limit.')
+                    if not autonomy:
+                        self.investigation.record(checkpoint_goal, request_id, call.function.name,
+                                                  args if isinstance(args, dict) else {}, '被拒绝', summary,
+                                                  'Continuing would exceed the spending limit.')
                 self.output('The tool-step limit for this request has been reached; continuing would exceed the current spending limit.')
                 final = 'The tool-step limit for this request has been reached.'
                 break
@@ -4971,6 +4994,8 @@ class Chat:
                 if not can_report_results:
                     refusal = '本轮工具结果仍超过输入长度上限；未执行的工具已停止。'
                     self.tool_stop_reason = refusal
+                    if not autonomy:
+                        self.investigation.interrupt('context_limit')
                     for call in message.tool_calls:
                         canonical_name = self._resolve_tool_name(call.function.name, offered)
                         if canonical_name == 'send_message':
@@ -4987,6 +5012,9 @@ class Chat:
                         log_tool(call.function.name, summary, '被拒绝',
                                  call_id=f'{request_id}:{step}:{getattr(call, "id", None) or "context"}',
                                  detail=detail)
+                        if not autonomy:
+                            self.investigation.record(checkpoint_goal, request_id, call.function.name,
+                                                      args if isinstance(args, dict) else {}, '被拒绝', summary, detail)
                     sent_in_this_step = False
                     for call_index, call in enumerate(message.tool_calls):
                         if self._resolve_tool_name(call.function.name, offered) != 'send_message':
@@ -5046,14 +5074,29 @@ class Chat:
                     except (ValueError, TypeError, AttributeError):
                         summary = call.function.name
                     log_tool(call.function.name, summary, '进行中', call_id=call_id)
-                    try:
-                        execution = self._execute_tool_call(
-                            call, request_id,
-                            f'{step}:{getattr(call, "id", None) or call_index}', autonomy, offered)
-                    except BaseException as exc:
-                        log_tool(call.function.name, summary, '出错', call_id=call_id,
-                                 detail=str(exc) or exc.__class__.__name__)
-                        raise
+                    replay_block = (self.investigation.resume_guard(call.function.name, args)
+                                    if not autonomy and checkpoint_resuming else None)
+                    if replay_block:
+                        execution = _ToolExecution(replay_block, '被拒绝', summary)
+                    else:
+                        if not autonomy:
+                            self.investigation.record(checkpoint_goal, request_id, call.function.name, args,
+                                                      '结果未知', summary,
+                                                      'Tool execution started; its outcome was not recorded.')
+                        try:
+                            execution = self._execute_tool_call(
+                                call, request_id,
+                                f'{step}:{getattr(call, "id", None) or call_index}', autonomy, offered)
+                        except BaseException as exc:
+                            log_tool(call.function.name, summary, '出错', call_id=call_id,
+                                     detail=str(exc) or exc.__class__.__name__)
+                            if not autonomy:
+                                self.investigation.record(checkpoint_goal, request_id, call.function.name, args,
+                                                          '结果未知', summary, str(exc) or exc.__class__.__name__)
+                            raise
+                    if not autonomy:
+                        self.investigation.record(checkpoint_goal, request_id, call.function.name, args,
+                                                  execution.state, execution.summary, execution.result)
                     state = execution.state
                     canonical_name = self._resolve_tool_name(call.function.name, offered)
                     if canonical_name == 'send_message' and state == '成功' and self.sent_messages:
@@ -5125,8 +5168,12 @@ class Chat:
         if not final and self.reply_displayed and not autonomy:
             return '', summaries
         if not final:
+            if not autonomy:
+                self.investigation.interrupt('step_limit')
             final = 'The tool-step limit for this request has been reached.'
             self.output(final)
+        if not autonomy:
+            self.investigation.complete()
         return final, summaries
 
 
