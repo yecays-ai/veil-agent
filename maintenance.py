@@ -8,12 +8,15 @@ credential or the main repository's git metadata.
 from __future__ import annotations
 
 import json
+import io
+import hashlib
 import os
 import re
 import secrets
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -106,19 +109,46 @@ class MaintenanceError(UserError):
     pass
 
 
+_TASK_STATE_LOCK = threading.RLock()
+_TASK_EXECUTION_LOCKS = {}
+
+
 class Runner:
-    def run(self, argv, cwd=None, timeout=180, input_text=None, env=None):
+    def run(self, argv, cwd=None, timeout=180, input_text=None, env=None, stopped=None):
+        stopped = stopped or (lambda: False)
+        if stopped():
+            raise MaintenanceError('operation stopped; check remote state before retrying')
         try:
-            finished = subprocess.run(
+            process = subprocess.Popen(
                 [str(item) for item in argv], cwd=str(cwd) if cwd else None,
-                capture_output=True, text=True, encoding='utf-8', errors='replace',
-                input=input_text, timeout=timeout, env=env,
-                **hidden_subprocess_kwargs(windows=os.name == 'nt', module=subprocess))
+                stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='replace',
+                env=env, **hidden_subprocess_kwargs(windows=os.name == 'nt', module=subprocess),
+                **({} if os.name == 'nt' else {'start_new_session': True}))
         except FileNotFoundError as exc:
             raise MaintenanceError(f'missing command: {argv[0]}') from exc
-        except subprocess.TimeoutExpired as exc:
-            raise MaintenanceError(f'command timed out: {argv[0]}') from exc
-        return finished.returncode, finished.stdout or '', finished.stderr or ''
+        deadline = time.monotonic() + timeout
+        pending_input = input_text
+        try:
+            while True:
+                if stopped():
+                    raise MaintenanceError('operation stopped; check remote state before retrying')
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise MaintenanceError(f'command timed out: {argv[0]}')
+                try:
+                    out, err = process.communicate(input=pending_input, timeout=min(0.25, remaining))
+                    return process.returncode, out or '', err or ''
+                except subprocess.TimeoutExpired:
+                    pending_input = None
+        finally:
+            if process.poll() is None:
+                from executor_opencode import kill_tree
+                kill_tree(process)
+            try:
+                process.communicate(timeout=5)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
 
 
 def _clean_env(extra=None):
@@ -152,6 +182,25 @@ class MaintenanceStore:
         return self.tasks / f'{task_id}.json'
 
     def save(self, task):
+        with _TASK_STATE_LOCK:
+            path = self._path(task.get('task_id', '') if isinstance(task, dict) else '')
+            if path.exists():
+                try:
+                    current = json.loads(path.read_text(encoding='utf-8'))
+                except (OSError, ValueError, UnicodeError) as exc:
+                    raise MaintenanceError('maintenance state cannot be verified; refusing overwrite') from exc
+                if not _valid_task(current):
+                    raise MaintenanceError('maintenance state is incomplete; refusing overwrite')
+                observed_merge = (task.get('stage') == 'merged' and
+                                  task.get('pull_request', {}).get('state') == 'MERGED' and
+                                  task.get('deployment', {}).get('merged_commit'))
+                if current['stage'] in {'merged', 'done'} and task.get('stage') not in {'merged', 'done'}:
+                    raise MaintenanceError('the task is already merged; stale state cannot change it')
+                if current['stage'] == 'stopped' and task.get('stage') != 'stopped' and not observed_merge:
+                    raise MaintenanceError('the task was stopped; stale state cannot resume it')
+            return self._save(task)
+
+    def _save(self, task):
         if not _valid_task(task):
             raise MaintenanceError('maintenance state is incomplete; the previous version was kept')
         path = self._path(task['task_id'])
@@ -285,6 +334,8 @@ class AcceptanceInstance:
         root = Path(data_root) if data_root else self.worktree / '.agents'
         self.dir = root / f'acceptance-{task["ticket"]}'
         self.config, self.data, self.desktop = self.dir / 'config', self.dir / 'config' / 'data', self.dir / 'desktop'
+        self.code = self.dir / 'code'
+        self.commit = (task.get('pull_request') or {}).get('head_sha') or ''
         self.python = Path(python) if python else self.repo / '.venv' / 'Scripts' / 'python.exe'
         if not self.python.exists():
             self.python = Path(sys.executable)
@@ -292,15 +343,118 @@ class AcceptanceInstance:
                          self.repo / 'desktop' / 'node_modules' / 'electron' / 'dist' / 'electron.exe')
         self.processes = []
 
+    def _tree_entries(self):
+        tree = subprocess.run(['git', 'ls-tree', '-rz', '--full-tree', self.commit], cwd=str(self.worktree),
+                              capture_output=True, timeout=60, env=_host_env(),
+                              **hidden_subprocess_kwargs(windows=os.name == 'nt', module=subprocess))
+        if tree.returncode:
+            raise MaintenanceError('cannot verify acceptance snapshot against the PR commit')
+        entries = []
+        try:
+            for entry in tree.stdout.split(b'\0'):
+                if entry:
+                    header, name = entry.split(b'\t', 1)
+                    mode, kind, oid = header.split(b' ', 2)
+                    relative = name.decode('utf-8')
+                    if (kind != b'blob' or mode not in {b'100644', b'100755', b'120000'} or
+                            not re.fullmatch(rb'[0-9a-f]{40}|[0-9a-f]{64}', oid) or
+                            not relative or any(part in {'', '.', '..'} for part in relative.split('/')) or
+                            '\\' in relative or ':' in relative):
+                        raise ValueError('unsupported tracked object or path')
+                    entries.append((mode, oid, relative))
+        except (UnicodeError, ValueError) as exc:
+            raise MaintenanceError('cannot safely materialize the PR commit') from exc
+        return entries
+
+    def _verify_snapshot(self, entries):
+        expected = set()
+        try:
+            for mode, oid, relative in entries:
+                path = self.code / relative
+                if not path.resolve().is_relative_to(self.code.resolve()):
+                    raise ValueError('snapshot path escaped its directory')
+                expected.add(relative)
+                if mode == b'120000':
+                    if not path.is_symlink():
+                        raise ValueError('tracked link not preserved')
+                    content = os.readlink(path).encode('utf-8')
+                    size = len(content)
+                else:
+                    if path.is_symlink() or not path.is_file():
+                        raise ValueError('tracked file missing or replaced')
+                    content = None
+                    info = path.stat()
+                    size = info.st_size
+                    if os.name != 'nt' and bool(info.st_mode & 0o111) != (mode == b'100755'):
+                        raise ValueError('tracked file executable mode differs')
+                digest = hashlib.sha1() if len(oid) == 40 else hashlib.sha256() if len(oid) == 64 else None
+                if digest is None:
+                    raise ValueError('unsupported Git object hash')
+                digest.update(b'blob ' + str(size).encode('ascii') + b'\0')
+                if content is not None:
+                    digest.update(content)
+                else:
+                    with path.open('rb') as source:
+                        for chunk in iter(lambda: source.read(1024 * 1024), b''):
+                            digest.update(chunk)
+                if digest.hexdigest().encode('ascii') != oid:
+                    raise ValueError('snapshot file differs from the commit: ' + relative)
+            actual = {path.relative_to(self.code).as_posix() for path in self.code.rglob('*')
+                      if path.is_file() or path.is_symlink()}
+            if actual != expected:
+                raise ValueError('snapshot contains missing or unexpected files')
+        except (OSError, UnicodeError, ValueError) as exc:
+            raise MaintenanceError('acceptance snapshot does not exactly match the PR commit: ' + str(exc)[:300]) from exc
+
     def _prepare(self):
         self.dir.mkdir(parents=True, exist_ok=True)
+        if not re.fullmatch(r'[0-9a-fA-F]{40,64}', self.commit):
+            raise MaintenanceError('test instance requires a verified PR commit')
+        if self.code.exists():
+            shutil.rmtree(self.code)
+        self.code.mkdir()
+        entries = self._tree_entries()
+        blobs = subprocess.run(['git', 'cat-file', '--batch'], cwd=str(self.worktree),
+                               input=b''.join(oid + b'\n' for _, oid, _ in entries),
+                               capture_output=True, timeout=60, env=_host_env(),
+                               **hidden_subprocess_kwargs(windows=os.name == 'nt', module=subprocess))
+        if blobs.returncode:
+            raise MaintenanceError('could not read PR commit files for acceptance')
+        try:
+            stream = io.BytesIO(blobs.stdout)
+            for mode, oid, relative in entries:
+                header = stream.readline().rstrip(b'\n').split(b' ')
+                if len(header) != 3 or header[0] != oid or header[1] != b'blob':
+                    raise ValueError('unexpected Git object response')
+                size = int(header[2])
+                content = stream.read(size)
+                if len(content) != size or stream.read(1) != b'\n':
+                    raise ValueError('incomplete Git object response')
+                path = self.code / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                if not path.parent.resolve().is_relative_to(self.code.resolve()):
+                    raise ValueError('snapshot parent escaped its directory')
+                if mode == b'120000':
+                    target = content.decode('utf-8')
+                    if (os.path.isabs(target) or '\\' in target or ':' in target or
+                            not (path.parent / target).resolve().is_relative_to(self.code.resolve())):
+                        raise ValueError('unsafe tracked link')
+                    os.symlink(target, path)
+                else:
+                    with path.open('xb') as output:
+                        output.write(content)
+                    if os.name != 'nt' and mode == b'100755':
+                        path.chmod(path.stat().st_mode | 0o111)
+            if stream.read(1):
+                raise ValueError('unexpected extra Git object data')
+        except (OSError, UnicodeError, ValueError) as exc:
+            raise MaintenanceError('could not safely materialize the PR commit for acceptance') from exc
+        self._verify_snapshot(entries)
         if self.config.exists():
             shutil.rmtree(self.config)
         self.data.mkdir(parents=True)
         self.desktop.mkdir(parents=True, exist_ok=True)
-        characters = self.worktree / 'characters'
-        if not characters.is_dir():
-            characters = self.repo / 'characters'
+        characters = self.code / 'characters'
         if characters.is_dir():
             shutil.copytree(characters, self.config / 'characters')
         persona = self.repo / 'persona'
@@ -312,10 +466,10 @@ class AcceptanceInstance:
 
     def start(self):
         self._prepare()
-        command = [str(self.python), str(self.worktree / 'web_agent.py'), '--acceptance',
+        command = [str(self.python), str(self.code / 'web_agent.py'), '--acceptance',
                    '--config-root', str(self.config), '--data-dir', str(self.data), '--port', '0']
         backend = subprocess.Popen(
-            command, cwd=str(self.worktree), env=_clean_env({'PYTHONUTF8': '1'}),
+            command, cwd=str(self.code), env=_clean_env({'PYTHONUTF8': '1'}),
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             **hidden_subprocess_kwargs(windows=os.name == 'nt', module=subprocess))
         self.processes.append(backend)
@@ -357,10 +511,10 @@ class AcceptanceInstance:
         if self.electron.is_file():
             try:
                 window = subprocess.Popen(
-                    [str(self.electron), str(self.worktree / 'desktop')], cwd=str(self.worktree / 'desktop'),
+                    [str(self.electron), str(self.code / 'desktop')], cwd=str(self.code / 'desktop'),
                     env=_clean_env({'PATH': os.environ.get('PATH', ''), 'SYSTEMROOT': os.environ.get('SYSTEMROOT', ''),
                                     'WINDIR': os.environ.get('WINDIR', ''),
-                                    'VEIL_AGENT_ROOT': str(self.worktree), 'VEIL_AGENT_DATA': str(self.data),
+                                    'VEIL_AGENT_ROOT': str(self.code), 'VEIL_AGENT_DATA': str(self.data),
                                     'VEIL_PYTHON': str(self.python), 'VEIL_DESKTOP_DATA': str(self.desktop),
                                     'VEIL_DESKTOP_TEST': '1'}),
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -369,7 +523,7 @@ class AcceptanceInstance:
                 pass
         return AcceptanceResult(
             url, [process.pid for process in self.processes],
-            'test instance uses the development worktree code and its own data; autonomy, external '
+            'test instance uses the verified PR commit snapshot and its own data; autonomy, external '
             'channels, memory, voice and desktop control are disabled', str(self.config))
 
     def stop(self):
@@ -382,6 +536,7 @@ class AcceptanceInstance:
                                        **hidden_subprocess_kwargs(windows=True, module=subprocess))
                     else:
                         process.terminate()
+                process.wait(timeout=5)
             except (OSError, subprocess.TimeoutExpired):
                 pass
         self.processes = []
@@ -394,7 +549,7 @@ class AcceptanceInstance:
 class MaintenanceManager:
     def __init__(self, store, character_id, *, repo_path, worktree_root=None,
                  github_repo=DEFAULT_GITHUB_REPO, approval=None, runner=None,
-                 instance_factory=None, python=None, electron=None, hours=2):
+                 instance_factory=None, python=None, electron=None, hours=2, stopped=None):
         self.store = MaintenanceStore(store, character_id)
         self.store_root = Path(store.root).resolve()
         self.character_id = character_id
@@ -404,6 +559,8 @@ class MaintenanceManager:
         self.github_repo = github_repo
         self.approval = approval
         self.runner = runner or Runner()
+        self.stopped = stopped or (lambda: False)
+        self._running = threading.local()
         self.instance_factory = instance_factory or (lambda task: AcceptanceInstance(
             task, self.repo, python=python, electron=electron, data_root=self.data_root))
         self.hours = hours
@@ -415,7 +572,23 @@ class MaintenanceManager:
             env = _host_env({'GIT_TERMINAL_PROMPT': '0', 'GCM_INTERACTIVE': 'never'})
         elif argv and str(argv[0]) == 'gh':
             env = _host_env({'GH_PROMPT_DISABLED': '1', 'GH_NO_UPDATE_NOTIFIER': '1'})
-        code, out, err = self.runner.run(argv, cwd=cwd, timeout=timeout, env=env)
+        def cancelled():
+            if self.stopped():
+                return True
+            task_id = getattr(self._running, 'task_id', '')
+            if task_id:
+                try:
+                    current = self.store.load(task_id)
+                    return not current or current['stage'] == 'stopped'
+                except MaintenanceError:
+                    return True
+            return False
+        options = {'stopped': cancelled} if isinstance(self.runner, Runner) else {}
+        if cancelled():
+            raise MaintenanceError('operation stopped; check remote state before retrying')
+        code, out, err = self.runner.run(argv, cwd=cwd, timeout=timeout, env=env, **options)
+        if cancelled():
+            raise MaintenanceError('operation stopped; check remote state before retrying')
         if code and not allow_fail:
             raise MaintenanceError(_short(err or out or f'command failed: {argv[0]}', 700))
         return code, out, err
@@ -547,10 +720,12 @@ class MaintenanceManager:
 
     # --- pull request --------------------------------------------------
     def _pr_list(self, task):
-        _code, out, _err = self._gh('pr', 'list', '--repo', self.github_repo, '--head', task['branch'],
+        code, out, err = self._gh('pr', 'list', '--repo', self.github_repo, '--head', task['branch'],
                                     '--state', 'all', '--json', 'number,url,state,headRefOid', allow_fail=True)
         values = _json(out)
-        return values if isinstance(values, list) else []
+        if code or not isinstance(values, list):
+            raise MaintenanceError(_short(err or 'cannot verify existing pull requests', 500))
+        return values
 
     def _pr_view(self, number):
         fields = ('number,url,state,isDraft,mergeable,mergeStateStatus,headRefOid,baseRefName,'
@@ -662,7 +837,9 @@ class MaintenanceManager:
     def invoke(self, action, args, *, autonomy=False):
         if not isinstance(args, dict):
             return 'invalid maintenance arguments', '被拒绝'
+        execution_lock = None
         try:
+            self._running.task_id = str(args.get('task_id') or '') if action in {'deliver', 'checks', 'accept', 'merge'} else ''
             handler = {
                 'begin': self.begin, 'status': self.status, 'resume': self.resume,
                 'deliver': self.deliver, 'checks': self.checks, 'accept': self.accept,
@@ -670,11 +847,31 @@ class MaintenanceManager:
             }.get(action)
             if handler is None:
                 return 'unknown maintenance action', '被拒绝'
+            if self._running.task_id:
+                lock = self._execution_lock(self._running.task_id)
+                if not lock.acquire(blocking=False):
+                    return 'this maintenance task is already running; wait or stop it', '被拒绝'
+                execution_lock = lock
             return handler(args, autonomy=autonomy)
         except MaintenanceError as exc:
+            task_id = getattr(self._running, 'task_id', '')
+            if task_id and self.stopped():
+                try:
+                    task = self.store.load(task_id)
+                    if task and task['stage'] not in {'stopped', 'merged', 'done'}:
+                        _event(task, 'stopped', 'user stopped an in-flight maintenance action')
+                        task['blockers'] = ['user_stopped; remote operation may already have reached GitHub']
+                        task['next_step'] = 'Stopped; verify the remote state before any future retry.'
+                        self.store.save(task)
+                except MaintenanceError:
+                    pass
             return _short(str(exc), 900), '出错'
         except (OSError, ValueError, TypeError, KeyError):
             return 'maintenance action could not continue', '出错'
+        finally:
+            if execution_lock is not None:
+                execution_lock.release()
+            self._running.task_id = ''
 
     def begin(self, args, *, autonomy=False):
         if autonomy:
@@ -765,6 +962,9 @@ class MaintenanceManager:
         worktree = Path(task['worktree'])
         if not worktree.exists():
             task['blockers'] = ['maintenance worktree is missing']
+            if task['stage'] in {'stopped', 'merged', 'done'}:
+                self.store.save(task)
+                return
             _event(task, 'blocked', 'worktree missing')
             self.store.save(task)
             return
@@ -775,10 +975,33 @@ class MaintenanceManager:
             return
         if branch != task['branch']:
             task['blockers'] = ['worktree branch does not match the task']
+            if task['stage'] in {'stopped', 'merged', 'done'}:
+                self.store.save(task)
+                return
             _event(task, 'blocked', 'branch mismatch')
             self.store.save(task)
             return
         task['git']['last_commit'] = head
+        was_delivering = any(row.get('stage') == 'delivering' for row in task.get('history', []))
+        if (task['stage'] == 'delivering' or task['stage'] == 'stopped' and was_delivering) and not task['pull_request'].get('number'):
+            try:
+                existing = self._pr_list(task)
+                open_pr = next((row for row in existing if row.get('state') == 'OPEN'), None)
+                if open_pr:
+                    view = self._pr_view(int(open_pr['number']))
+                    if view.get('headRefOid') != head:
+                        raise MaintenanceError('existing PR head differs from the worktree; inspect before continuing')
+                    task['pull_request'].update({'number': int(open_pr['number']), 'url': view.get('url') or '',
+                                                 'state': view.get('state') or '', 'head_sha': head,
+                                                 'mergeable': view.get('mergeable') or ''})
+                    if task['stage'] != 'stopped':
+                        _event(task, 'pr_open', 'recovered the existing pull request')
+                        task['next_step'] = 'Check the required PR CI and substantive review comments.'
+                self.store.save(task)
+            except MaintenanceError as exc:
+                task['blockers'] = [_short(str(exc), 400)]
+                self.store.save(task)
+                return
         if task['pull_request'].get('number'):
             try:
                 view = self._pr_view(task['pull_request']['number'])
@@ -799,8 +1022,16 @@ class MaintenanceManager:
         task = self._task(args, require_id=True)
         if task['stage'] in {'stopped', 'merged', 'done'}:
             return f"task is {task['stage']}; it cannot be delivered again", '被拒绝'
+        if task['development'].get('state') in {'出错', '被拒绝'}:
+            return 'the last workbench run did not succeed; resolve its result before delivery', '被拒绝'
         if self._expired(task):
             return 'maintenance task exceeded its time limit; ask Lan for a fresh task', '被拒绝'
+        if task['pull_request'].get('number') and not self._git(
+                'status', '--porcelain', cwd=task['worktree']).strip():
+            head = self._git('rev-parse', 'HEAD', cwd=task['worktree']).strip()
+            view = self._pr_view(task['pull_request']['number'])
+            if view.get('state') == 'OPEN' and view.get('headRefOid') == head:
+                return f"PR #{task['pull_request']['number']} is already up to date; no new commit or push.", '成功'
         scope = f"{self.github_repo}#{task['branch']}"
         grant = task['authorization'].get('develop_deliver') or {}
         if grant.get('scope') != scope:
@@ -819,6 +1050,12 @@ class MaintenanceManager:
         commit = self._commit(task, f"工单 {task['ticket']}: {task['title']}")
         if commit:
             task['git']['last_commit'] = commit
+            if task['acceptance'].get('instance_head_sha') != commit:
+                self._stop_acceptance(task)
+                task['acceptance'].update({'status': 'not_yet', 'note': '', 'instance_url': '',
+                                           'instance_head_sha': '', 'head_sha': '', 'config_dir': '',
+                                           'waived': False})
+                self.store.save(task)
         head = self._push(task)
         task['git']['pushed_sha'] = head
         diff = self._git('diff', '--stat', f"{task['base_main']}...HEAD", cwd=task['worktree']).strip()
@@ -886,13 +1123,29 @@ class MaintenanceManager:
             return 'autonomous activity cannot replace Lan\'s acceptance', '被拒绝'
         if task['stage'] in {'stopped', 'merged', 'done'}:
             return f"task is {task['stage']}; acceptance cannot revive it", '被拒绝'
+        worktree = task['worktree']
+        head = self._git('rev-parse', 'HEAD', cwd=worktree).strip()
+        if (not task['pull_request'].get('head_sha') or head != task['pull_request']['head_sha'] or
+                self._git('status', '--porcelain', cwd=worktree).strip()):
+            return 'worktree differs from the PR; deliver the exact code before acceptance', '被拒绝'
+        try:
+            view = self._pr_view(task['pull_request']['number'])
+        except MaintenanceError as exc:
+            return f'cannot verify the current pull request head: {_short(str(exc), 300)}', '出错'
+        if (view.get('headRefOid') != head or task['pull_request'].get('head_sha') != head):
+            task['blockers'] = ['the pull request head changed; deliver and start a fresh acceptance']
+            task['next_step'] = 'Do not accept an older snapshot; deliver the current PR head first.'
+            self.store.save(task)
+            return 'the pull request head changed; acceptance is invalid', '出错'
         result = str(args.get('result') or '').strip().lower()
         if result not in {'passed', 'failed'}:
             if task['acceptance'].get('instance_url'):
                 return (f"test instance: {task['acceptance']['instance_url']}. After Lan uses it, record "
                         'result=passed or result=failed.'), '成功'
+            instance = None
             try:
-                started = self.instance_factory(task).start()
+                instance = self.instance_factory(task)
+                started = instance.start()
             except (MaintenanceError, OSError) as exc:
                 task['acceptance']['status'] = 'not_yet'
                 task['blockers'] = ['could not start an isolated test instance']
@@ -900,14 +1153,35 @@ class MaintenanceManager:
                 task['next_step'] = 'Explain the limitation to Lan and wait for her delivery decision.'
                 self.store.save(task)
                 return _short(f'无法启动独立测试实例：{exc}', 700), '出错'
+            def discard_instance():
+                stop_instance = getattr(instance, 'stop', None)
+                if callable(stop_instance):
+                    try:
+                        stop_instance()
+                    except Exception:
+                        pass
+            try:
+                current = self.store.load(task['task_id'])
+                stopped_now = self.stopped() or not current or current['stage'] == 'stopped'
+            except MaintenanceError:
+                stopped_now = True
+            if stopped_now:
+                discard_instance()
+                return 'the task was stopped while the test instance was starting; no instance was kept', '被拒绝'
             task['acceptance'].update({'instance_url': started.url, 'pids': started.pids,
                                        'config_dir': started.config_dir, 'status': 'not_yet',
-                                       'recorded_at': _now()})
+                                       'recorded_at': _now(), 'instance_head_sha': head})
             _event(task, 'awaiting_acceptance', 'test instance started')
             task['next_step'] = 'Lan uses the isolated test instance; unaccepted work must not merge.'
-            self.store.save(task)
+            try:
+                self.store.save(task)
+            except MaintenanceError:
+                discard_instance()
+                return 'the task changed while the test instance was starting; the instance was stopped', '被拒绝'
             return (f"独立测试实例已启动：{started.url}\n{started.note}\n"
                     '请 Lan 实际体验。通过后 action=accept result=passed，未通过用 failed。'), '成功'
+        if not task['acceptance'].get('instance_url') or task['acceptance'].get('instance_head_sha') != head:
+            return 'no test instance exists for the current PR commit; start it before acceptance', '被拒绝'
         if not self._ask(f'工单 {task["ticket"]} 的功能，你在独立测试实例中实际用过并确认'
                          f'{"符合需求" if result == "passed" else "不符合需求"}吗？y/N '):
             return 'Lan did not confirm the acceptance result; it stays unaccepted', '被拒绝'
@@ -1010,13 +1284,19 @@ class MaintenanceManager:
     def stop(self, args, *, autonomy=False):
         if autonomy:
             return 'autonomous activity cannot stop Lan\'s maintenance task', '被拒绝'
-        task = self._task(args, require_id=True)
-        if task['stage'] in {'merged', 'done'}:
-            return 'the task is already merged and cannot be stopped', '被拒绝'
+        with _TASK_STATE_LOCK:
+            task = self._task(args, require_id=True)
+            if task['stage'] in {'merged', 'done'}:
+                return 'the task is already merged and cannot be stopped', '被拒绝'
+            _event(task, 'stopped', 'Lan stopped the task')
+            task['next_step'] = 'Stopped by Lan; no more commands, pushes or merges.'
+            self.store.save(task)
         self._stop_acceptance(task)
-        _event(task, 'stopped', 'Lan stopped the task')
-        task['next_step'] = 'Stopped by Lan; no more commands, pushes or merges.'
-        self.store.save(task)
+        with _TASK_STATE_LOCK:
+            current = self.store.load(task['task_id'])
+            if current and current['stage'] == 'stopped':
+                current['acceptance']['pids'] = []
+                self.store.save(current)
         return '任务已停止；保留 worktree 和已有提交，不再自动执行。', '成功'
 
     def cleanup(self, args, *, autonomy=False):
@@ -1070,6 +1350,21 @@ class MaintenanceManager:
         except (MaintenanceError, ValueError):
             return False
 
+    def _execution_lock(self, task_id):
+        path = str(self.store._path(task_id).resolve())
+        with _TASK_STATE_LOCK:
+            return _TASK_EXECUTION_LOCKS.setdefault(path, threading.Lock())
+
+    def claim_workbench(self, task_id):
+        lock = self._execution_lock(task_id)
+        if not lock.acquire(blocking=False):
+            raise MaintenanceError('this maintenance task is already running; wait or stop it')
+        try:
+            return self.workbench_target(task_id), lock
+        except Exception:
+            lock.release()
+            raise
+
     def workbench_target(self, task_id):
         task = self.store.load(task_id)
         if task is None:
@@ -1083,19 +1378,65 @@ class MaintenanceManager:
             raise MaintenanceError('maintenance worktree is missing; use action=resume first')
         if self._git('symbolic-ref', '--short', 'HEAD', cwd=worktree).strip() != task['branch']:
             raise MaintenanceError('maintenance worktree branch does not match the task')
+        changes = self._git('status', '--porcelain', cwd=worktree).strip()
+        task['workbench_git'] = {
+            'branch': task['branch'],
+            'head': self._git('rev-parse', 'HEAD', cwd=worktree).strip(),
+            'base_main': task['base_main'],
+            'has_changes': bool(changes),
+            'changes': _short(changes, 3000),
+        }
         return task
 
-    def record_workbench(self, task_id, *, cost, steps, report=''):
+    def record_workbench_approval(self, task_id, kind, fingerprint):
+        with _TASK_STATE_LOCK:
+            return self._record_workbench_approval(task_id, kind, fingerprint)
+
+    def _record_workbench_approval(self, task_id, kind, fingerprint):
+        if kind not in {'approved', 'denied'} or not re.fullmatch(r'[0-9a-f]{64}', fingerprint):
+            raise MaintenanceError('invalid approval fingerprint')
+        task = self.store.load(task_id)
+        if not task or task['stage'] in {'stopped', 'merged', 'done'} or self._expired(task):
+            raise MaintenanceError('task is no longer authorised for workbench operations')
+        approvals = task['authorization'].setdefault('workbench', {'approved': [], 'denied': []})
+        values = approvals.get(kind)
+        if not isinstance(values, list):
+            raise MaintenanceError('workbench approval state is invalid')
+        if fingerprint not in values:
+            values.append(fingerprint)
+            self.store.save(task)
+
+    def record_workbench(self, task_id, *, cost, steps, report='', state='', reason=''):
+        with _TASK_STATE_LOCK:
+            return self._record_workbench(task_id, cost=cost, steps=steps, report=report,
+                                          state=state, reason=reason)
+
+    def _record_workbench(self, task_id, *, cost, steps, report='', state='', reason=''):
         try:
             task = self.store.load(task_id)
         except MaintenanceError:
             return
         if not task:
             return
-        task['development'] = {'cost_cny': str(cost), 'steps': int(steps), 'last_report': _short(report, 1200)}
+        task['development'] = {'cost_cny': str(cost), 'steps': int(steps), 'last_report': _short(report, 1200),
+                               'state': state, 'reason': reason}
         task['updated_at'] = _now()
+        if reason == 'user_stopped':
+            _event(task, 'stopped', 'workbench stopped by Lan')
+            task['blockers'] = ['user_stopped']
+            task['next_step'] = 'Stopped by Lan; keep existing changes and wait for a new instruction.'
+            self.store.save(task)
+            return
         if task['stage'] == 'developing':
-            task['next_step'] = 'Fix failures from the test run; when done, action=deliver.'
+            task['next_step'] = {
+                'user_stopped': 'Stopped by Lan; keep existing changes and wait for a new instruction.',
+                'repeated_call': 'Inspect the repeated call and existing changes before resuming.',
+                'test_failed': 'Read the test failure, fix it and rerun the tests before delivery.',
+                'cancelled': 'Approval was cancelled; keep the changes and wait for a new instruction.',
+                'timed_out': 'Approval timed out; keep the changes and wait for a new instruction.',
+            }.get(reason, 'Verify the workbench result and tests before delivery.' if state == '成功'
+                  else 'Review the workbench result and existing changes before continuing.')
+            task['blockers'] = [] if state == '成功' else [reason or 'workbench_failed']
         self.store.save(task)
 
     def active_summary(self):

@@ -8,6 +8,8 @@ into the shared ledger, and kills the whole process tree when the run ends. If O
 the tool just reports that; chat, memory and autonomous wakes are untouched.
 """
 import base64
+import hashlib
+import http.client
 import json
 import os
 import posixpath
@@ -19,9 +21,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import shutil
 import signal
 import socket
+import stat
+import select
 import subprocess
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from decimal import Decimal
 from pathlib import Path
@@ -47,7 +52,9 @@ MAINTENANCE_NOTE = (
     'Change only files under the current directory. '
     'Do not run git commit, push, checkout, reset, merge or any other command that rewrites repository history: '
     'VEIL commits, pushes and creates the pull request after your report. Run the project tests and report what '
-    'actually failed or passed. The project\'s git metadata is intentionally not available in this container.\n\n')
+    'actually failed or passed. Host Git metadata is hidden. Git in this container uses a disposable snapshot: '
+    'status and diff reflect changes since this run started, while HEAD and history are synthetic. '
+    'Use the verified host Git facts below for the real branch and commit.\n\n')
 
 TASK_SCOPE_NOTE = (
     'Task scope: the current directory and its children are the only project files for this task. '
@@ -83,6 +90,7 @@ class ExecutorResult(NamedTuple):
     state: str
     cost: Decimal = Decimal(0)
     steps: int = 0
+    reason: str = ''
 
 
 DANGEROUS = re.compile(
@@ -238,11 +246,14 @@ def _complex_bash_request(patterns, metadata, workdir=None, test_scripts=None, t
     command = metadata.get('command') if isinstance(metadata, dict) else None
     if not isinstance(command, str) or not command.strip() or not isinstance(patterns, list) or not patterns:
         return True
+    # Only discard a standalone stderr-to-null redirection; all file writes still need approval.
+    def strip_stderr(value):
+        return re.sub(r'(?<!\S)(?:2>/dev/null|2>&1)(?=\s|$|[;&|])', '', value)
     try:
-        lexer = shlex.shlex(command, posix=True, punctuation_chars=';&|<>()')
+        lexer = shlex.shlex(strip_stderr(command), posix=True, punctuation_chars=';&|<>()')
         lexer.whitespace_split = True
         shell_tokens = list(lexer)
-        commands = [shlex.split(pattern, posix=True) for pattern in patterns if isinstance(pattern, str)]
+        commands = [shlex.split(strip_stderr(pattern), posix=True) for pattern in patterns if isinstance(pattern, str)]
     except ValueError:
         return True
     if len(commands) != len(patterns) or not commands or any(not item for item in commands):
@@ -252,6 +263,21 @@ def _complex_bash_request(patterns, metadata, workdir=None, test_scripts=None, t
     if any('<' in token or '>' in token for token in shell_tokens):
         return True
     operators = [token for token in shell_tokens if re.fullmatch(r'[;&|]+', token)]
+    if operators:
+        # OpenCode can group several shell commands into one permission pattern. Rebuild the
+        # segments from the original command so every actual command is checked, not the grouping.
+        rebuilt, current = [], []
+        for token in shell_tokens:
+            if re.fullmatch(r'[;&|]+', token):
+                if current:
+                    rebuilt.append(current)
+                    current = []
+            else:
+                current.append(token)
+        if current:
+            rebuilt.append(current)
+        if rebuilt:
+            commands = rebuilt
     if operators and len(commands) != len(operators) + 1:
         return True
     if len(commands) > 1:
@@ -279,17 +305,21 @@ def _complex_bash_request(patterns, metadata, workdir=None, test_scripts=None, t
     if command_name in {'python', 'python3'} and command_tokens[1:3] in (
             ['-m', 'unittest'], ['-m', 'pytest']):
         return False
-    if command_name in SAFE_INSPECTION or command_name in {'python', 'python3', 'node', 'npm', 'mkdir', 'touch',
-                                                           'pytest', 'py.test'} or re.fullmatch(
+    if command_name in SAFE_INSPECTION or command_name in {'git', 'python', 'python3', 'node', 'npm', 'mkdir',
+                                                           'touch', 'sort', 'pytest', 'py.test', 'true', 'false',
+                                                           ':'} or re.fullmatch(
             r'python\d+(?:\.\d+)*', command_name):
         return not _safe_project_command(command_tokens, workdir, test_scripts, task_scope=task_scope)
     if command_name in {'python', 'python3', 'node', 'nodejs', 'deno', 'bun', 'ruby', 'perl', 'awk',
                         'gawk', 'mawk', 'php', 'osascript'} or re.fullmatch(r'python\d+(?:\.\d+)*', command_name):
         return True
-    return False
+    # Default deny: only commands with an explicit, local, read-only/development rule above are safe.
+    # An unknown command (ssh, nc, mv, rm, a new tool) must be decided by Lan, never auto-allowed.
+    return True
 
 
-SAFE_INSPECTION = {'ls', 'dir', 'pwd', 'cat', 'type', 'head', 'tail', 'wc', 'stat', 'file', 'find', 'grep', 'rg'}
+SAFE_INSPECTION = {'ls', 'dir', 'pwd', 'cat', 'type', 'head', 'tail', 'wc', 'stat', 'file', 'find', 'grep', 'rg',
+                   'echo', 'printf', 'which'}
 
 
 def _safe_project_command(tokens, workdir=None, test_scripts=None, current=None, task_scope=None):
@@ -300,12 +330,31 @@ def _safe_project_command(tokens, workdir=None, test_scripts=None, current=None,
         return False
     command = _command_name(tokens[0])
     if command == 'git':
+        if tokens[1:] in (['--version'], ['--help'], ['-h']):
+            return True
+        if _git_write_request(tokens):
+            return False
+        if any(arg == '--output' or arg.startswith('--output=') or arg == '--ext-diff' for arg in tokens[1:]):
+            return False
         return (_git_subcommand(tokens) in {'status', 'branch', 'diff', 'log', 'show', 'rev-parse', 'ls-files'} and
                 not any(_outside_workdir_argument(arg, workdir, current) for arg in tokens[1:] if not arg.startswith('-')))
+    if command in {'echo', 'printf'}:
+        # Output-only commands never read or write a project path. Format strings and "$?" are not
+        # file arguments; treating a backslash/newline format as a path caused a false approval.
+        return True
+    if command in {'true', 'false', ':'}:
+        return True
     if command in SAFE_INSPECTION:
-        if command == 'find' and any(arg.casefold() in {'-delete', '-exec', '-execdir', '-ok', '-okdir'} for arg in tokens[1:]):
+        if command == 'find' and any(arg.casefold() in {'-delete', '-exec', '-execdir', '-ok', '-okdir',
+                                                         '-fprint', '-fprint0', '-fprintf', '-fls'} for arg in tokens[1:]):
             return False
         return not any(_outside_workdir_argument(arg, workdir, current) for arg in tokens[1:] if not arg.startswith('-'))
+    if command == 'sort':
+        safe_flags = {'-', '--', '-b', '-d', '-f', '-g', '-h', '-i', '-M', '-n', '-r', '-s', '-u', '-V', '-z',
+                      '--ignore-leading-blanks', '--dictionary-order', '--ignore-case', '--numeric-sort',
+                      '--reverse', '--stable', '--unique', '--version-sort', '--zero-terminated'}
+        return all(arg in safe_flags if arg.startswith('-') else not _outside_workdir_argument(arg, workdir, current)
+                   for arg in tokens[1:])
     if command == 'mkdir':
         return (all(arg in {'-p', '--parents'} or not arg.startswith('-') for arg in tokens[1:]) and
                 any(not arg.startswith('-') for arg in tokens[1:]) and
@@ -313,16 +362,24 @@ def _safe_project_command(tokens, workdir=None, test_scripts=None, current=None,
     if command == 'touch':
         return (len(tokens) > 1 and
                 not any(_outside_workdir_argument(arg, workdir, current) for arg in tokens[1:] if not arg.startswith('-')))
+    if re.fullmatch(r'pip\d*(?:\.\d+)*', command) and tokens[1:] in (['--version'], ['-V']):
+        return True
     if command in {'pytest', 'py.test'}:
         return not any(_outside_workdir_argument(arg, workdir, current) for arg in tokens[1:] if not arg.startswith('-'))
     if command == 'node':
+        if len(tokens) == 2 and tokens[1] in {'--version', '-v', '--help', '-h'}:
+            return True
         if len(tokens) < 2 or tokens[1] != '--test' or '--eval' in tokens or '-e' in tokens:
             return False
         return not any(_outside_workdir_argument(arg, workdir, current)
                        for arg in tokens[2:] if not arg.startswith('-'))
     if command == 'npm':
+        if len(tokens) == 2 and tokens[1] in {'--version', '-v'}:
+            return True
         return len(tokens) >= 2 and tokens[1] in {'test', 't'}
     if command in {'python', 'python3'} or re.fullmatch(r'python\d+(?:\.\d+)*', command):
+        if len(tokens) == 2 and tokens[1] in {'--version', '-V', '--help', '-h'}:
+            return True
         if command and tokens[1:3] in (['-m', 'unittest'], ['-m', 'pytest']):
             return True
         if len(tokens) < 2 or tokens[1].startswith('-'):
@@ -372,14 +429,38 @@ def existing_test_scripts(workdir):
     return found
 
 
+class _PersistedApprovalSet:
+    """Remember only opaque approval fingerprints for this maintenance task."""
+    def __init__(self, kind, values, save):
+        self.kind, self.save = kind, save
+        self.values = set(value for value in values if isinstance(value, str) and
+                          re.fullmatch(r'[0-9a-f]{64}', value))
+
+    @staticmethod
+    def fingerprint(key):
+        return hashlib.sha256(json.dumps(key, ensure_ascii=False, sort_keys=True).encode('utf-8')).hexdigest()
+
+    def __contains__(self, key):
+        return self.fingerprint(key) in self.values
+
+    def add(self, key):
+        value = self.fingerprint(key)
+        if value not in self.values:
+            self.save(self.kind, value)
+            self.values.add(value)
+
+
 class TaskScope:
     """One workbench run's project boundary and approvals; never reused by another task."""
-    def __init__(self, workdir):
+    def __init__(self, workdir, *, approval_data=None, save_approval=None):
         self.workdir = Path(workdir)
         self.initial_tests = existing_test_scripts(workdir)
         self.written = set()
-        self.grants = set()
-        self.denied = set()
+        data = approval_data if isinstance(approval_data, dict) else {}
+        self.grants = (_PersistedApprovalSet('approved', data.get('approved', []), save_approval)
+                       if save_approval else set())
+        self.denied = (_PersistedApprovalSet('denied', data.get('denied', []), save_approval)
+                       if save_approval else set())
         self.tests_granted = False
 
     @property
@@ -448,29 +529,16 @@ def _approval_scope(permission, patterns, metadata):
                program in {'python', 'python3'} and tokens[1:3] == ['-m', 'pip'] or
                re.fullmatch(r'python\d+(?:\.\d+)*', program) and tokens[1:3] == ['-m', 'pip'])
     if permission == 'bash' and install:
-        # One approval per exact package set, never a secret passed as an option value.
-        options_with_value = {'--token', '--index-url', '-i', '--extra-index-url', '--trusted-host',
-                              '--proxy', '--cert', '--client-cert', '--requirement', '-r', '--constraint', '-c'}
-        package, skip = [], False
-        for arg in tokens[1:]:
-            if skip:
-                skip = False
-                continue
-            if arg in options_with_value:
-                skip = True
-                continue
-            if arg.startswith('-') or arg.casefold() in {
-                    'install', 'add', 'get', 'i', 'ci', 'up', 'update', 'upgrade', 'dlx', 'pip'}:
-                continue
-            package.append(arg)
-        return permission, 'install', (program, tuple(package) or ('all',))
+        # Scope must include requirement files and options without exposing credentials in diagnostics.
+        digest = hashlib.sha256(json.dumps(tokens, ensure_ascii=False).encode('utf-8')).hexdigest()
+        return permission, 'install', (program, digest)
     if permission == 'bash' and _test_command(tokens):
         return permission, 'tests', 'project'
     if permission == 'bash' and program in {'npx', 'pnpx', 'bunx'}:
         return permission, 'network', (program, tuple(tokens[1:3]))
     if permission == 'bash' and (program in ASK_LAN['network'] or program == 'git' and _git_subcommand(tokens) in {'clone', 'fetch', 'pull'}):
-        resources = tuple(sorted(re.findall(r'https?://([^/\s]+)', command or '', re.I)))
-        return permission, 'network', resources or (program,)
+        digest = hashlib.sha256(json.dumps(tokens, ensure_ascii=False).encode('utf-8')).hexdigest()
+        return permission, 'network', (program, digest)
     if permission == 'bash' and program == 'git' and _git_subcommand(tokens) == 'push':
         refspec = tuple(arg for arg in tokens[1:] if not arg.startswith('-'))
         force = ('force',) if any(arg in {'-f', '--force', '--force-with-lease', '--force-if-includes'}
@@ -506,8 +574,94 @@ def _resolved_targets(permission, patterns, workdir):
     return sorted({path for value in values if (path := _resolved_work_path(value, workdir))})
 
 
+PACKAGE_HOSTS = {
+    'pip': {'pypi.org', 'files.pythonhosted.org', 'pypi.python.org'},
+    'npm': {'registry.npmjs.org', 'registry.yarnpkg.com'},
+    'apt': {'deb.debian.org', 'security.debian.org', 'archive.ubuntu.com', 'security.ubuntu.com'},
+    'cargo': {'crates.io', 'static.crates.io', 'index.crates.io'},
+    'go': {'proxy.golang.org', 'sum.golang.org'},
+}
+
+
+def _network_hosts(tokens, *, install=False):
+    """Hosts an approved network/install command may reach through the relay. Only the command's own
+    URLs and its package manager's registry hosts are opened; everything else stays blocked."""
+    hosts = set()
+    program = _command_name(tokens[0]) if tokens else ''
+    if install:
+        python_pip = (program in {'pip', 'pip3'} or re.fullmatch(r'pip\d+(?:\.\d+)*', program) or
+                      program in {'python', 'python3'} and tokens[1:3] == ['-m', 'pip'] or
+                      re.fullmatch(r'python\d+(?:\.\d+)*', program) and tokens[1:3] == ['-m', 'pip'])
+        if python_pip:
+            hosts |= PACKAGE_HOSTS['pip'] | {'github.com', 'codeload.github.com'}
+        if program in {'npm', 'pnpm', 'yarn', 'bun'}:
+            hosts |= PACKAGE_HOSTS['npm'] | {'github.com', 'codeload.github.com'}
+        if program in {'apt', 'apt-get'}:
+            hosts |= PACKAGE_HOSTS['apt']
+        if program == 'cargo':
+            hosts |= PACKAGE_HOSTS['cargo']
+        if program == 'go':
+            hosts |= PACKAGE_HOSTS['go']
+    if program in {'npx', 'pnpx', 'bunx'}:
+        hosts |= PACKAGE_HOSTS['npm']
+    for token in tokens:
+        if not isinstance(token, str):
+            continue
+        for match in re.findall(r'https?://[^\s"\'`<>]+', token, re.I):
+            try:
+                host = urllib.parse.urlsplit(match).hostname
+            except ValueError:
+                continue
+            if host:
+                hosts.add(host.casefold())
+    return {host for host in hosts if host and len(host) <= 253}
+
+
+def _allow_hosts(allow_network, tokens, *, install=False):
+    if allow_network is None:
+        return
+    hosts = _network_hosts(tokens, install=install)
+    if hosts:
+        allow_network(hosts)
+
+
+def _is_install_command(tokens):
+    while tokens and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', tokens[0]):
+        tokens = tokens[1:]
+    if not tokens:
+        return False
+    program = _command_name(tokens[0])
+    if program in ASK_LAN['installers'] or re.fullmatch(r'pip\d*(?:\.\d+)*', program):
+        return True
+    return (program in {'python', 'python3'} or bool(re.fullmatch(r'python\d+(?:\.\d+)*', program))) \
+        and tokens[1:3] == ['-m', 'pip']
+
+
+def _approved_hosts(patterns, command_tokens):
+    hosts = set()
+    items = []
+    for pattern in patterns if isinstance(patterns, list) else ():
+        if isinstance(pattern, str):
+            try:
+                items.append(shlex.split(pattern, posix=True))
+            except ValueError:
+                continue
+    if command_tokens:
+        items.append(command_tokens)
+    for tokens in items:
+        if tokens:
+            hosts |= _network_hosts(tokens, install=_is_install_command(tokens))
+    return hosts
+
+
+def _ephemeral_container_path(pattern):
+    text = posixpath.normpath(str(pattern).replace('\\', '/'))
+    return (text == '/tmp' or text.startswith('/tmp/') or
+            text == '/var/tmp' or text.startswith('/var/tmp/'))
+
+
 def decide(permission, patterns, metadata, workdir, *, autonomy, ask, grants=None, approvals=None,
-           test_scripts=None, task_scope=None, maintenance=False):
+           test_scripts=None, task_scope=None, maintenance=False, allow_network=None, isolated_tests=False):
     """VEIL's own answer to an OpenCode permission request: (reply, reason). `ask` is Lan's approval card."""
     if task_scope is not None:
         grants = task_scope.grants
@@ -517,6 +671,9 @@ def decide(permission, patterns, metadata, workdir, *, autonomy, ask, grants=Non
     if permission == 'external_directory':
         if autonomy:
             return 'reject', 'outside the workbench; Lan is not asked during autonomous activity'
+        if isolated_tests and patterns and all(_ephemeral_container_path(item) for item in patterns):
+            # /tmp inside the disposable container is not a host directory and holds no Lan data.
+            return 'once', 'ephemeral container temp directory'
         shown = _safe_display(', '.join(str(p) for p in patterns))
         key = _approval_scope(permission, patterns, metadata)
         return _ask_lan(f'Peter 的工作台想在本次任务中访问项目外的位置：{shown}。同意这项范围吗？y/N ',
@@ -583,15 +740,24 @@ def decide(permission, patterns, metadata, workdir, *, autonomy, ask, grants=Non
             for tokens in test_items:
                 if not _test_command_in_scope(tokens, workdir):
                     return 'reject', 'test path or flag outside the workbench'
-            project = task_scope.project_name
-            key = ('bash', 'tests', project)
-            reply, why = _ask_lan(
-                f'项目“{project}”的本次任务要运行项目测试。测试会执行项目代码，可能联网或读写文件；'
-                '批准后本次任务的测试命令继续使用这个授权。同意吗？y/N ',
-                'bash:tests', key, ask, grants, approvals, task_scope.denied)
-            if reply != 'once':
-                return reply, why
-            task_scope.tests_granted = True
+            if isolated_tests:
+                # The workbench container has the model relay as its only egress and runs as an
+                # unprivileged user, so tests are allowed to run without a card. The network lock is
+                # installed before OpenCode starts; this branch does not grant any network host.
+                task_scope.tests_granted = True
+                if approvals is not None:
+                    approvals.append({'operation': 'bash:tests', 'waiting': False,
+                                      'decision': 'auto_approved_isolated'})
+            else:
+                project = task_scope.project_name
+                key = ('bash', 'tests', project)
+                reply, why = _ask_lan(
+                    f'项目“{project}”的本次任务要运行项目测试。测试会执行项目代码，可能联网或读写文件；'
+                    '批准后本次任务的测试命令继续使用这个授权。同意吗？y/N ',
+                    'bash:tests', key, ask, grants, approvals, task_scope.denied)
+                if reply != 'once':
+                    return reply, why
+                task_scope.tests_granted = True
         complex_request = complex_request or _complex_bash_request(
             patterns, metadata, workdir, test_scripts, task_scope)
         if needs_lan or complex_request:
@@ -606,18 +772,34 @@ def decide(permission, patterns, metadata, workdir, *, autonomy, ask, grants=Non
                           '这会联网、安装、发布或批量删除；批准后只在此任务的相同风险范围内继续。同意吗？y/N ')
             else:
                 prompt = f'Peter 的工作台想执行一条复合或无法确认安全的项目命令：{shown}。同意这一次吗？y/N '
-            return _ask_lan(prompt, _operation_summary(permission, patterns, metadata),
-                            key, ask, grants, approvals,
-                            task_scope.denied if task_scope is not None else None)
+            reply, why = _ask_lan(prompt, _operation_summary(permission, patterns, metadata),
+                                  key, ask, grants, approvals,
+                                  task_scope.denied if task_scope is not None else None)
+            if reply == 'once' and allow_network is not None and needs_lan:
+                allow_network(_approved_hosts(patterns, command_tokens))
+            return reply, why
     if permission == 'webfetch':
         if autonomy:
             return 'reject', 'needs Lan\'s approval; not asked during autonomous activity'
         shown = _safe_display(', '.join(str(p) for p in patterns))
         key = _approval_scope(permission, patterns, metadata)
         project = task_scope.project_name if task_scope is not None else Path(workdir).name
-        return _ask_lan(f'Peter 的工作台想为项目“{project}”访问外部文档：{shown}。同意这项范围吗？y/N ',
-                        _operation_summary(permission, patterns, metadata), key, ask, grants, approvals,
-                        task_scope.denied if task_scope is not None else None)
+        reply, why = _ask_lan(f'Peter 的工作台想为项目“{project}”访问外部文档：{shown}。同意这项范围吗？y/N ',
+                              _operation_summary(permission, patterns, metadata), key, ask, grants, approvals,
+                              task_scope.denied if task_scope is not None else None)
+        if reply == 'once' and allow_network is not None:
+            hosts = set()
+            for pattern in patterns if isinstance(patterns, list) else ():
+                for match in re.findall(r'https?://[^\s"\'`<>]+', str(pattern), re.I):
+                    try:
+                        host = urllib.parse.urlsplit(match).hostname
+                    except ValueError:
+                        continue
+                    if host:
+                        hosts.add(host.casefold())
+            if hosts:
+                allow_network(hosts)
+        return reply, why
     if permission in ('bash', 'edit', 'write', 'task', 'skill', 'todowrite', 'read', 'glob', 'grep'):
         return 'once', 'inside the workbench'
     # Tools from other MCP servers (VEIL's own tools included) are never approved here: VEIL runs those itself.
@@ -641,7 +823,7 @@ def estimate_cost(messages, price, steps):
 
 
 def summarize(messages):
-    steps, repeats, calls, assistants = 0, {}, 0, []
+    steps, repeat, last, calls, assistants = 0, 0, None, 0, []
     for m in messages:
         info = m.get('info', {})
         if info.get('role') == 'assistant' or info.get('type') == 'assistant':
@@ -652,11 +834,79 @@ def summarize(messages):
             if p.get('type') == 'tool':
                 calls += 1
                 key = (p.get('tool') or p.get('name'), json.dumps(p.get('state', {}).get('input', {}), sort_keys=True))
-                repeats[key] = repeats.get(key, 0) + 1
+                repeat = repeat + 1 if key == last else 1
+                last = key
     final = ''
     if assistants and assistants[-1][0].get('finish') == 'stop':
         final = assistants[-1][1]
-    return steps, calls, max(repeats.values(), default=0), final
+    return steps, calls, repeat, final
+
+
+def _wrapped_test_command(tokens):
+    while tokens and tokens[0] in {'timeout', 'time'}:
+        tokens = tokens[1:]
+        if tokens and not tokens[0].startswith('-') and re.fullmatch(r'\d+(?:\.\d+)?[smhd]?', tokens[0]):
+            tokens = tokens[1:]
+    if tokens and tokens[0] == 'env':
+        tokens = tokens[1:]
+        while tokens and (tokens[0].startswith('-') or re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', tokens[0])):
+            tokens = tokens[1:]
+    return _test_command(tokens)
+
+
+def _exit_from_output(state):
+    values = [state.get('output'), (state.get('metadata') or {}).get('output'),
+              (state.get('metadata') or {}).get('stdout')]
+    for value in values:
+        if not isinstance(value, str):
+            continue
+        matches = re.findall(r'(?:EXIT[_ ]?CODE|exit code)\s*[=: ]\s*(\d+)', value, re.I)
+        if matches:
+            return int(matches[-1])
+    return None
+
+
+def _last_test_exit(messages):
+    """Use OpenCode's numeric shell exit for the last test command, including wrapped tests.
+
+    A shell exit from a trailing non-test command (for example `pytest; printf ...`) is not the
+    test's exit. If the command prints the real code, use it; otherwise fail closed instead of
+    reporting a failed test as success."""
+    result = None
+    for message in messages:
+        for part in message.get('parts', []):
+            state = part.get('state') or {}
+            if part.get('type') != 'tool' or part.get('tool') != 'bash' or state.get('status') != 'completed':
+                continue
+            command = (state.get('input') or {}).get('command')
+            exit_code = (state.get('metadata') or {}).get('exit')
+            if not isinstance(command, str) or type(exit_code) is not int:
+                continue
+            try:
+                lexer = shlex.shlex(command, posix=True, punctuation_chars=';&|')
+                lexer.whitespace_split = True
+                tokens = list(lexer)
+            except ValueError:
+                continue
+            segments, current = [], []
+            for token in tokens:
+                if re.fullmatch(r'[;&|]+', token):
+                    if current:
+                        segments.append(current)
+                        current = []
+                else:
+                    current.append(token)
+            if current:
+                segments.append(current)
+            test_indexes = [index for index, segment in enumerate(segments) if _wrapped_test_command(segment)]
+            if not test_indexes:
+                continue
+            if max(test_indexes) == len(segments) - 1 or 'pipefail' in command.casefold():
+                result = exit_code
+                continue
+            printed = _exit_from_output(state)
+            result = printed if printed is not None else 1
+    return result
 
 
 def diagnose(messages):
@@ -708,15 +958,41 @@ def kill_tree(proc):
         pass
 
 
+def _relay(left, right, timeout=120):
+    try:
+        while True:
+            readable, _, _ = select.select([left, right], [], [], timeout)
+            if not readable:
+                return
+            for source in readable:
+                data = source.recv(65536)
+                if not data:
+                    return
+                (right if source is left else left).sendall(data)
+    except OSError:
+        return
+
+
 class KeyProxy:
     """A loopback relay in front of the model API. OpenCode (and every command it runs) only ever holds a random
     local token; the real API key stays in this process and is added to forwarded requests. The token is only
-    valid for this run, and the proxy refuses to forward more than `max_requests` calls."""
+    valid for this run, and the proxy refuses to forward more than `max_requests` calls.
 
-    def __init__(self, upstream_base, key, *, max_requests=400, host='127.0.0.1', timeout=180):
+    It is also the only egress a container workbench has: an explicit per-task host allowlist opens an
+    HTTP/HTTPS tunnel for an approved install or network command. Tests and unknown commands never add hosts.
+    """
+
+    def __init__(self, upstream_base, key, *, max_requests=400, host='127.0.0.1', timeout=180,
+                 allowed_ports=None):
         self.token = secrets.token_urlsafe(24)
         self.upstream = upstream_base.rstrip('/')
+        self.allowed_ports = set(allowed_ports) if allowed_ports else {80, 443}
         self.requests = 0
+        self.proxy_requests = 0
+        # A large pip/npm install can open many connections; this is a runaway guard, not a
+        # per-package quota. Model calls have their own max_requests limit.
+        self.proxy_limit = 1000
+        self.allowed_hosts = set()
         self.lock = threading.Lock()
         proxy = self
 
@@ -726,17 +1002,77 @@ class KeyProxy:
             def log_message(self, *_args):
                 pass
 
-            def _deny(self, code, text):
+            def _deny(self, code, text, headers=None):
                 self.send_response(code)
+                for name, value in (headers or {}).items():
+                    self.send_header(name, value)
                 self.send_header('Content-Length', str(len(text)))
                 self.end_headers()
                 self.wfile.write(text.encode())
 
+            def _proxy_authenticated(self):
+                value = (self.headers.get('Proxy-Authorization') or '').strip()
+                if not value.casefold().startswith('basic '):
+                    return False
+                try:
+                    decoded = base64.b64decode(value.split(None, 1)[1]).decode('utf-8', 'replace')
+                except (ValueError, UnicodeError):
+                    return False
+                return secrets.compare_digest(decoded, 'veil:' + proxy.token)
+
+            def _host_allowed(self, host):
+                return bool(host and host.casefold().rstrip('.') in proxy.allowed_hosts)
+
+            def _port_allowed(self, port):
+                return port in proxy.allowed_ports
+
+            def _take_proxy_slot(self):
+                with proxy.lock:
+                    if proxy.proxy_requests >= proxy.proxy_limit:
+                        return False
+                    proxy.proxy_requests += 1
+                    return True
+
+            def do_CONNECT(self):
+                if not self._proxy_authenticated():
+                    return self._deny(407, 'proxy authentication required',
+                                      {'Proxy-Authenticate': 'Basic realm="veil"'})
+                try:
+                    parts = urllib.parse.urlsplit('//' + self.path)
+                    host, port = parts.hostname, parts.port or 443
+                except ValueError:
+                    return self._deny(400, 'invalid tunnel target')
+                if not self._host_allowed(host):
+                    return self._deny(403, 'host was not approved for this task')
+                if not self._port_allowed(port):
+                    return self._deny(403, 'only HTTP/HTTPS ports are allowed')
+                if not self._take_proxy_slot():
+                    return self._deny(429, 'network approval limit reached')
+                try:
+                    upstream = socket.create_connection((host, port), timeout=20)
+                except OSError as exc:
+                    return self._deny(502, 'upstream error: ' + type(exc).__name__)
+                self.send_response(200, 'Connection Established')
+                self.end_headers()
+                try:
+                    _relay(self.connection, upstream)
+                finally:
+                    try:
+                        upstream.close()
+                    except OSError:
+                        pass
+
             def do_POST(self):
-                self._forward('POST')
+                if self.path.startswith('/v1'):
+                    return self._forward('POST')
+                return self._forward_proxy('POST')
 
             def do_GET(self):
-                self._forward('GET')
+                if self.path == '/_veil_health/' + proxy.token:
+                    return self._deny(200, 'ok')
+                if self.path.startswith('/v1'):
+                    return self._forward('GET')
+                return self._forward_proxy('GET')
 
             def _forward(self, method):
                 if self.headers.get('Authorization') != 'Bearer ' + proxy.token:
@@ -766,13 +1102,70 @@ class KeyProxy:
                     self.wfile.write(chunk)
                     self.wfile.flush()
 
+            def _forward_proxy(self, method):
+                if not self._proxy_authenticated():
+                    return self._deny(407, 'proxy authentication required',
+                                      {'Proxy-Authenticate': 'Basic realm="veil"'})
+                try:
+                    parts = urllib.parse.urlsplit(self.path)
+                    port = parts.port
+                except ValueError:
+                    return self._deny(400, 'invalid proxy URL')
+                if parts.scheme not in {'http', 'https'} or not parts.hostname:
+                    return self._deny(400, 'proxy request must be an absolute http(s) URL')
+                if not self._host_allowed(parts.hostname):
+                    return self._deny(403, 'host was not approved for this task')
+                port = port or (443 if parts.scheme == 'https' else 80)
+                if not self._port_allowed(port):
+                    return self._deny(403, 'only HTTP/HTTPS ports are allowed')
+                if not self._take_proxy_slot():
+                    return self._deny(429, 'network approval limit reached')
+                body = self.rfile.read(int(self.headers.get('Content-Length') or 0)) if method == 'POST' else None
+                target = parts.path + (('?' + parts.query) if parts.query else '')
+                headers = {name: value for name, value in self.headers.items()
+                           if name.casefold() not in {'proxy-authorization', 'proxy-connection', 'connection',
+                                                      'content-length', 'transfer-encoding'}}
+                connection = None
+                try:
+                    connection = (http.client.HTTPSConnection(parts.hostname, port, timeout=timeout)
+                                  if parts.scheme == 'https' else
+                                  http.client.HTTPConnection(parts.hostname, port, timeout=timeout))
+                    connection.request(method, target, body=body, headers=headers)
+                    response = connection.getresponse()
+                    data = response.read()
+                except (OSError, http.client.HTTPException) as exc:
+                    return self._deny(502, 'upstream error: ' + type(exc).__name__)
+                finally:
+                    if connection is not None:
+                        try:
+                            connection.close()
+                        except OSError:
+                            pass
+                self.send_response(response.status)
+                for name, value in response.getheaders():
+                    if name.casefold() not in {'transfer-encoding', 'connection', 'content-length'}:
+                        self.send_header(name, value)
+                self.send_header('Content-Length', str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
         self.server = ThreadingHTTPServer((host, 0), Handler)
         self.port = self.server.server_address[1]
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
 
+    def allow_hosts(self, hosts):
+        for host in hosts:
+            value = str(host).strip().casefold().rstrip('.')
+            if value and (re.fullmatch(r'[a-z0-9.-]+', value) or re.fullmatch(r'[0-9a-f:.]+', value)):
+                self.allowed_hosts.add(value)
+
+
     def local_base(self, host='127.0.0.1'):
         return f'http://{host}:{self.port}/v1'
+
+    def local_health(self, host='127.0.0.1'):
+        return f'http://{host}:{self.port}/_veil_health/{self.token}'
 
     def close(self):
         self.server.shutdown()
@@ -827,40 +1220,160 @@ def build_config(provider, token, base_url, protect=()):
         'share': 'disabled', 'autoupdate': False}
 
 
-SECRET_FILE = re.compile(r'^(\.env(\..*)?|.*\.pem|id_(rsa|ed25519).*|.*\.pfx|.*\.key)$', re.I)
+SECRET_FILE = re.compile(r'^(.*\.env(\..*)?|.*\.pem|id_(rsa|ed25519).*|.*\.pfx|.*\.key|cookies|login data)$', re.I)
 
 
-def secret_files(workdir, max_depth=6):
-    """Secret-looking files inside the project (shallow). In a container they are masked with an empty file."""
-    found, root = [], Path(workdir)
-    for base, dirs, names in os.walk(root):
-        depth = len(Path(base).relative_to(root).parts)
-        dirs[:] = [d for d in dirs if d not in ('.git', 'node_modules') and depth < max_depth]
-        found += [Path(base) / n for n in names if SECRET_FILE.match(n)]
+def _link_like(path):
+    """A symlink or Windows reparse point (including a junction)."""
+    return bool(path.is_symlink() or
+                getattr(path.lstat(), 'st_file_attributes', 0) &
+                getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0x400))
+
+
+def secret_directories(workdir):
+    """Protect whole secret directories, including their otherwise ordinary-looking filenames."""
+    found = []
+    root = Path(workdir).resolve()
+    def fail_walk(error):
+        raise error
+    for base, dirs, _names in os.walk(workdir, onerror=fail_walk):
+        links = set()
+        for name in dirs:
+            if name.casefold() == '.git':
+                continue
+            path = Path(base) / name
+            if _link_like(path):
+                if name.casefold() in {'secrets', '.ssh'} or not path.resolve().is_relative_to(root):
+                    raise ValueError('cannot safely mount a project containing external directory links')
+                links.add(name)
+                continue
+            if name.casefold() in {'secrets', '.ssh'}:
+                found.append(path)
+        dirs[:] = [name for name in dirs if name not in links and name.casefold() not in {'.git', 'secrets', '.ssh'}]
     return found
 
 
-def container_command(container, *, name, workdir, port, env, masks):
+def secret_files(workdir, max_depth=None):
+    """Secret-looking files inside the project are masked with an empty file in the container. A link that
+    points outside the project is refused: the container must never expose a host file through one."""
+    found, root = [], Path(workdir)
+    root_resolved = root.resolve()
+    def fail_walk(error):
+        raise error
+    for base, dirs, names in os.walk(root, onerror=fail_walk):
+        depth = len(Path(base).relative_to(root).parts)
+        dirs[:] = [d for d in dirs if d.casefold() not in {'.git', 'secrets', '.ssh'}
+                   and (max_depth is None or depth < max_depth)]
+        for name in names:
+            path = Path(base) / name
+            if _link_like(path) and not path.resolve().is_relative_to(root_resolved):
+                raise ValueError('cannot safely mount a project containing external file links')
+            if SECRET_FILE.match(name):
+                found.append(path)
+    return found
+
+
+_CONTAINER_WATCHDOG = '''import os, signal, subprocess, sys, time, urllib.request
+child = subprocess.Popen(['sh', '-c', sys.argv[2], 'veil-workbench', sys.argv[1]], start_new_session=True)
+failures = 0
+try:
+    while child.poll() is None:
+        try:
+            with urllib.request.urlopen(os.environ['VEIL_WATCHDOG_URL'], timeout=2) as response:
+                if response.status != 200:
+                    raise OSError('host heartbeat failed')
+            failures = 0
+        except Exception:
+            failures += 1
+        if failures >= 5:
+            os.killpg(child.pid, signal.SIGKILL)
+            break
+        time.sleep(2)
+    code = child.wait()
+finally:
+    if child.poll() is None:
+        os.killpg(child.pid, signal.SIGKILL)
+        child.wait()
+sys.exit(code if code >= 0 else 1)
+'''
+
+
+def container_command(container, *, name, workdir, port, env, masks, bootstrap_git=False, watchdog=False,
+                      network_lock=False):
     """`docker run` for OpenCode: only the project is mounted (read-write); secret-looking files in it are masked by
-    empty read-only files; no host environment, no capabilities, bounded memory/processes. The server is published
-    on the host's loopback only."""
+    empty read-only files; no host environment, bounded memory/processes. The server is published on the host's
+    loopback only. A container run additionally gets an egress firewall: the only allowed destination is the
+    local relay, so project tests cannot reach the network even though they run without an approval card."""
     cmd = ['docker', 'run', '--rm', '--name', name, '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
-           '--pids-limit', '256', '--memory', container.get('memory', '2g'),
-           '--add-host', 'host.docker.internal:host-gateway',
-           '-p', f'127.0.0.1:{port}:{port}', '-v', f'{workdir}:/work', '-w', '/work']
+           '--pids-limit', '256', '--memory', container.get('memory', '2g')]
+    if network_lock:
+        # The entrypoint needs these only long enough to install the rules, fix ownership and drop to node.
+        cmd += ['--cap-add', 'NET_ADMIN', '--cap-add', 'SETUID', '--cap-add', 'SETGID', '--cap-add', 'CHOWN',
+                '--user', 'root', '--add-host', 'veil-relay:host-gateway']
+    cmd += ['--add-host', 'host.docker.internal:host-gateway',
+            '-p', f'127.0.0.1:{port}:{port}', '-v', f'{workdir}:/work', '-w', '/work']
     for source, target in masks:
         cmd += ['-v', f'{source}:/work/{target}:ro']
     for key, value in env.items():
         cmd += ['-e', f'{key}={value}']
+    serve = 'opencode serve --hostname 0.0.0.0 --port "$1"'
+    prefix = ''
+    if bootstrap_git:
+        prefix = ('set -eu; mkdir -p /tmp/home; '
+                  'export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/tmp/home/.gitconfig; '
+                  'git -C /tmp config --global --add safe.directory /work; '
+                  'git --git-dir=/tmp/veil-git --work-tree=/work init -q -b veil-snapshot; '
+                  'git --git-dir=/tmp/veil-git --work-tree=/work -c core.hooksPath=/dev/null add -A -- .; '
+                  'git --git-dir=/tmp/veil-git --work-tree=/work -c core.hooksPath=/dev/null '
+                  '-c user.name=VEIL -c user.email=veil-snapshot@example.invalid '
+                  'commit --allow-empty -qm "Isolated starting snapshot"; ')
+    if network_lock:
+        script = (prefix +
+                  'set -eu; '
+                  'PROXY_IP=$(getent ahostsv4 veil-relay | awk "NR == 1 {print \\$1}"); '
+                  'test -n "$PROXY_IP"; '
+                  'iptables -A OUTPUT -d 127.0.0.11 -j REJECT; '
+                  'iptables -A OUTPUT -o lo -j ACCEPT; '
+                  'iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT; '
+                  'iptables -A OUTPUT -d "$PROXY_IP" -p tcp --dport "$VEIL_PROXY_PORT" -j ACCEPT; '
+                  'iptables -A OUTPUT -j REJECT; '
+                  'if command -v ip6tables >/dev/null 2>&1; then '
+                  'if ip6tables -L OUTPUT -n >/dev/null 2>&1; then '
+                  'ip6tables -A OUTPUT -o lo -j ACCEPT; '
+                  'ip6tables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT; '
+                  'ip6tables -A OUTPUT -j REJECT; fi; fi; '
+                  'mkdir -p /tmp/home; chown -R node:node /tmp/home /tmp/veil-git 2>/dev/null || true; '
+                  'exec setpriv --reuid=node --regid=node --init-groups --inh-caps=-all --ambient-caps=-all '
+                  '--bounding-set=-all ' + serve)
+    else:
+        script = prefix + 'exec ' + serve
+    if watchdog:
+        return cmd + [container['image'], 'python3', '-c', _CONTAINER_WATCHDOG, str(port), script]
+    if network_lock or bootstrap_git:
+        return cmd + [container['image'], 'sh', '-c', script, 'veil-workbench', str(port)]
     return cmd + [container['image'], 'opencode', 'serve', '--hostname', '0.0.0.0', '--port', str(port)]
 
 
 def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, stopped, record_cost,
         api_factory=None, proxy_factory=None, container=None, protect=(), popen=subprocess.Popen, clock=time.monotonic,
-        sleep=time.sleep, diagnostic=None, maintenance=False):
+        sleep=time.sleep, diagnostic=None, maintenance=False, approval_data=None, save_approval=None,
+        container_name=None):
     """Run one task. `record_cost(cost)` is called once with the estimated cost, whatever the outcome."""
     limits = {**DEFAULT_LIMITS, **(limits or {})}
     workdir, home = Path(workdir), Path(home)
+    if maintenance and not container:
+        try:
+            record_cost(Decimal(0))
+        except Exception:
+            pass
+        return ExecutorResult('VEIL maintenance requires the isolated workbench container.',
+                              '被拒绝', reason='isolation_required')
+    if container_name is not None and not re.fullmatch(r'veil-workbench-[0-9a-f]{8,32}', container_name):
+        try:
+            record_cost(Decimal(0))
+        except Exception:
+            pass
+        return ExecutorResult('Invalid workbench container identity.', '被拒绝', reason='invalid_container')
     if protect and not container:
         try:
             record_cost(Decimal(0))
@@ -869,14 +1382,52 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
         return ExecutorResult('The workbench cannot protect the growth journal without Docker isolation.', '被拒绝')
     workdir.mkdir(parents=True, exist_ok=True)
     home.mkdir(parents=True, exist_ok=True)
-    task_scope = TaskScope(workdir)
+    if stopped():
+        try:
+            record_cost(Decimal(0))
+        except Exception:
+            pass
+        return ExecutorResult('[workbench=stopped; reason=user_stopped]', '出错', reason='user_stopped')
+    try:
+        protected_dirs = secret_directories(workdir) if container else []
+        protected_files = secret_files(workdir) if container else []
+    except (OSError, ValueError) as exc:
+        try:
+            record_cost(Decimal(0))
+        except Exception:
+            pass
+        return ExecutorResult('The workbench cannot safely protect project secrets: ' + str(exc)[:200], '被拒绝')
+    if container and popen is subprocess.Popen:
+        # Production path: fail closed if the image predates the network lock. Tests that inject a
+        # process factory inspect the command without starting Docker.
+        try:
+            probe = subprocess.run(
+                ['docker', 'run', '--rm', container['image'], 'sh', '-c',
+                 'command -v iptables >/dev/null 2>&1 && command -v setpriv >/dev/null 2>&1'],
+                capture_output=True, timeout=60,
+                **hidden_subprocess_kwargs(windows=_WINDOWS, module=subprocess))
+            ready = probe.returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            ready = False
+        if not ready:
+            try:
+                record_cost(Decimal(0))
+            except Exception:
+                pass
+            return ExecutorResult(
+                'The workbench image lacks the network-isolation tools. Rebuild veil-workbench from '
+                'docker/workbench.Dockerfile before running the container workbench.', '被拒绝',
+                reason='isolation_required')
+    task_scope = TaskScope(workdir, approval_data=approval_data, save_approval=save_approval)
     price = (Decimal(str(provider.get('input_cny_per_million', 0))),
              Decimal(str(provider.get('output_cny_per_million', 0))))
     cap = Decimal(str(limits['run_budget_cny']))
     proxy = (proxy_factory or KeyProxy)(provider['base_url'], key, max_requests=int(limits['max_steps']) * 3 + 5,
                                         **({'host': '0.0.0.0'} if container else {}))
-    config = build_config(provider, proxy.token, proxy.local_base('host.docker.internal' if container else '127.0.0.1'),
-                          protect=protect)
+    def allow_network(hosts):
+        proxy.allow_hosts(hosts)
+    proxy_host = 'veil-relay' if container else '127.0.0.1'
+    config = build_config(provider, proxy.token, proxy.local_base(proxy_host), protect=protect)
     port, password = free_port(), secrets.token_urlsafe(24)
     keep = {'PATH', 'PATHEXT', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'TEMP', 'TMP', 'TMPDIR', 'LANG', 'LC_ALL', 'PROGRAMFILES',
             'PROGRAMFILES(X86)', 'PROGRAMDATA', 'APPDATA', 'LOCALAPPDATA', 'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE'}
@@ -884,23 +1435,44 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
     shared = {'OPENCODE_SERVER_PASSWORD': password, 'OPENCODE_DISABLE_AUTOUPDATE': '1',
               'OPENCODE_CONFIG_CONTENT': json.dumps(config)}
     if container:
-        name = 'veil-workbench-' + secrets.token_hex(4)
+        proxy_url = f'http://veil:{proxy.token}@veil-relay:{proxy.port}'
+        shared.update({
+            'HTTP_PROXY': proxy_url, 'HTTPS_PROXY': proxy_url,
+            'http_proxy': proxy_url, 'https_proxy': proxy_url, 'ALL_PROXY': proxy_url,
+            'NO_PROXY': 'veil-relay,localhost,127.0.0.1,::1',
+            'VEIL_PROXY_PORT': str(proxy.port),
+            'VEIL_WATCHDOG_URL': proxy.local_health('veil-relay'),
+        })
+    git_pointer, empty_secret_dir = None, None
+    if container:
+        name = container_name or 'veil-workbench-' + secrets.token_hex(4)
         masks = []
         empty = home / 'empty-file'
         empty.write_text('', encoding='utf-8')
-        for path in secret_files(workdir):
+        for path in protected_files:
             masks.append((str(empty), path.relative_to(workdir).as_posix()))
+        if protected_dirs:
+            empty_secret_dir = home / ('empty-secret-dir-' + secrets.token_hex(8))
+            empty_secret_dir.mkdir()
+            for path in protected_dirs:
+                masks.append((str(empty_secret_dir), path.relative_to(workdir).as_posix()))
         if (workdir / '.git').is_file():
             # A linked worktree's .git file points at the main repository's metadata on the host.
-            # Hide it from the container: VEIL owns delivery, OpenCode only edits files.
-            masks.append((str(empty), '.git'))
+            # Mount only a disposable in-container snapshot, never the host repository metadata.
+            if maintenance:
+                git_pointer = home / ('git-pointer-' + secrets.token_hex(8))
+                git_pointer.write_text('gitdir: /tmp/veil-git\n', encoding='utf-8')
+                masks.append((str(git_pointer), '.git'))
+            else:
+                masks.append((str(empty), '.git'))
         for relative in protect:  # e.g. Peter's growth journal: it has its own append-only grant
             if (workdir / relative).is_file() and all(target != Path(relative).as_posix() for _, target in masks):
                 masks.append((str(empty), Path(relative).as_posix()))
         command = container_command(container, name=name, workdir=str(workdir), port=port, masks=masks,
                                     env={**shared, 'HOME': '/tmp/home', 'XDG_DATA_HOME': '/tmp/home/data',
                                          'XDG_CONFIG_HOME': '/tmp/home/config', 'XDG_CACHE_HOME': '/tmp/home/cache',
-                                         'XDG_STATE_HOME': '/tmp/home/state'})
+                                         'XDG_STATE_HOME': '/tmp/home/state'}, bootstrap_git=bool(git_pointer),
+                                    watchdog=maintenance, network_lock=True)
         env = {k: v for k, v in env.items() if k.upper() in ('PATH', 'PATHEXT', 'SYSTEMROOT', 'WINDIR', 'COMSPEC',
                                                               'APPDATA', 'LOCALAPPDATA', 'USERPROFILE', 'HOME')}
     else:
@@ -921,10 +1493,17 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
                 api.call('GET', '/session/status')
                 break
             except Exception:
-                if proc.poll() is not None or clock() - started > 60 or stopped():
+                if stopped():
+                    return ExecutorResult('[workbench=stopped; reason=user_stopped]', '出错',
+                                          reason='user_stopped')
+                if proc.poll() is not None or clock() - started > 60:
                     return ExecutorResult('The workbench could not start (OpenCode did not answer).', '出错')
                 sleep(1)
+        if stopped():
+            return ExecutorResult('[workbench=stopped; reason=user_stopped]', '出错', reason='user_stopped')
         session = api.call('POST', '/session', {'title': 'workbench'})['id']
+        if stopped():
+            return ExecutorResult('[workbench=stopped; reason=user_stopped]', '出错', reason='user_stopped')
         text = (CONTAINER_NOTE if container else '') + TASK_SCOPE_NOTE + (MAINTENANCE_NOTE if maintenance else '') + task
         api.call('POST', f'/session/{session}/prompt_async', {
             'parts': [{'type': 'text', 'text': text}], 'model': {'providerID': 'relay', 'modelID': provider['model']}})
@@ -941,7 +1520,11 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
                     answered.append(request.get('id'))
                     reply, why = decide(request.get('permission', ''), request.get('patterns', []),
                                         request.get('metadata'), workdir, autonomy=autonomy, ask=ask,
-                                        approvals=approvals, task_scope=task_scope, maintenance=maintenance)
+                                        approvals=approvals, task_scope=task_scope, maintenance=maintenance,
+                                        allow_network=allow_network, isolated_tests=bool(container))
+                    if stopped():
+                        stop = 'stopped by Lan'
+                        break
                     if diagnostic is not None:
                         try:
                             diagnostic({
@@ -1010,6 +1593,16 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
             proxy.close()
         except Exception:
             pass
+        if git_pointer is not None:
+            try:
+                git_pointer.unlink(missing_ok=True)
+            except OSError:
+                cleanup_warning += ' [warning: could not remove temporary Git pointer]'
+        if empty_secret_dir is not None:
+            try:
+                empty_secret_dir.rmdir()
+            except OSError:
+                cleanup_warning += ' [warning: could not remove temporary secret mask]'
         try:
             record_cost(cost)
         except Exception:
@@ -1021,14 +1614,16 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
         for item in approvals)
     if approval_stop:
         return ExecutorResult(f'{approval_note}\n[workbench=stopped; reason={approval_stop}]\n{note}',
-                              '被拒绝', cost, steps)
+                              '被拒绝', cost, steps, approval_stop)
     if stop:
         partial = next(('\n'.join(p.get('text', '') for p in m.get('parts', []) if p.get('type') == 'text').strip()
                         for m in reversed(messages) if m.get('info', {}).get('role') == 'assistant' or
                         m.get('info', {}).get('type') == 'assistant'), '')
         status = (approval_note + '\n' if approval_note else '') + '[workbench=stopped]\n'
+        reason = ('user_stopped' if stop == 'stopped by Lan' else
+                  'repeated_call' if stop.startswith('the same call was repeated') else 'limit_or_failure')
         return ExecutorResult(status + f'The workbench was stopped: {stop}. {diagnose(messages)}\nPartial report:\n{partial[:RESULT_CHARS]}\n{note}',
-                              '出错', cost, steps)
+                              '出错', cost, steps, reason)
     if not calls:
         why = diagnose(messages)
         status = (approval_note + '\n' if approval_note else '') + '[workbench=failed]\n'
@@ -1039,6 +1634,10 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
         status = (approval_note + '\n' if approval_note else '') + '[workbench=failed]\n'
         return ExecutorResult(status + 'The workbench finished without a report.' + (f' ({why})' if why else '') + '\n' + note,
                               '出错', cost, steps)
+    if (test_exit := _last_test_exit(messages)) is not None and test_exit != 0:
+        return ExecutorResult((approval_note + '\n' if approval_note else '') +
+                              f'[workbench=failed; reason=test_failed; exit={test_exit}]\n' +
+                              text[:RESULT_CHARS] + '\n' + note, '出错', cost, steps, 'test_failed')
     if any(p.get('type') == 'tool' and p.get('state', {}).get('status') == 'error'
            for m in messages for p in m.get('parts', [])):
         text = '[workbench tool diagnostics: ' + diagnose(messages) + ']\n' + text
