@@ -427,6 +427,12 @@ class ModelSettings:
         if not 4096 <= max_input <= 2_000_000:
             raise SettingsError('最长输入要在 4096 到 2000000 tokens 之间。')
         model['max_input_tokens'] = max_input
+        modalities = item.get('input_modalities')
+        if modalities is not None:
+            if (not isinstance(modalities, list) or not modalities or 'text' not in modalities
+                    or any(value not in ('text', 'image') for value in modalities)):
+                raise SettingsError('输入能力只能是 text 或 image，且必须包含 text。')
+            model['input_modalities'] = modalities
         return model
 
     @staticmethod
@@ -452,6 +458,8 @@ class ModelSettings:
                     'thinking': 'enabled' if model['thinking'] else 'disabled',
                     'max_input_tokens': model['max_input_tokens'],
                     'label': model['label'] or model['model'], 'endpoint_name': endpoint['name']}
+        if model.get('input_modalities'):
+            provider['input_modalities'] = model['input_modalities']
         if model['billing'] == 'call':
             provider['cny_per_call'] = Decimal(model['cny_per_call'])
             for key in ('input_cny_per_million', 'cached_input_cny_per_million', 'output_cny_per_million'):

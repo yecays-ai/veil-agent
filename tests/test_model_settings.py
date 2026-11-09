@@ -72,6 +72,14 @@ class ModelSettingsTests(unittest.TestCase):
         self.assertEqual(view['endpoints'][0]['key_hint'], '…1234')
         self.assertEqual(view['endpoints'][0]['base_url'], 'https://relay.invalid/v1')
 
+    def test_custom_model_keeps_explicit_image_input_capability(self):
+        cfg, model_id = self.add_relay()
+        data = cfg.models.data
+        data['models'][0]['input_modalities'] = ['text', 'image']
+        cfg.models.save(data)
+        cfg.models.use('peter', model_id)
+        self.assertEqual(cfg.models.chosen('peter')[2]['input_modalities'], ['text', 'image'])
+
     def test_new_endpoint_needs_key_and_https(self):
         cfg = load_character(self.root, 'test')
         with self.assertRaises(SettingsError):
