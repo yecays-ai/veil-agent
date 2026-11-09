@@ -472,6 +472,79 @@ model = "sonnet"
         self.assertEqual(path.read_bytes(), before)
         self.assertFalse(path.with_name('models.json.cc-removal-backup').exists())
 
+    def test_stale_instance_can_reload_and_edit_again(self):
+        first = load_character(self.root, 'test')
+        second = load_character(self.root, 'test')
+        first.models.save(RELAY)
+        with self.assertRaisesRegex(SettingsError, '另一个进程'):
+            second.models.save(RELAY)
+        view = second.models.reload()
+        self.assertEqual(view['limits'], {'daily_cny': '30', 'monthly_cny': '600'})
+        second.models.use('peter', 'builtin:other')
+        self.assertEqual(second.models.public()['use']['peter'], 'builtin:other')
+
+    def test_initialization_and_save_do_not_deadlock(self):
+        import threading
+
+        cfg = load_character(self.root, 'test')
+        barrier = threading.Barrier(4)
+        errors = []
+
+        def init_loop():
+            barrier.wait()
+            for _ in range(20):
+                try:
+                    ModelSettings(self.root, 'test', cfg.models.builtins, cfg.provider_name)
+                except Exception as exc:
+                    errors.append(exc)
+
+        def save_loop():
+            barrier.wait()
+            for _ in range(20):
+                try:
+                    with cfg.models.env_lock, cfg.models.lock:
+                        cfg.models.save(RELAY)
+                except Exception as exc:
+                    errors.append(exc)
+
+        def use_loop():
+            barrier.wait()
+            for _ in range(20):
+                try:
+                    with cfg.models.env_lock, cfg.models.lock:
+                        cfg.models.use('peter', 'builtin:fake')
+                except Exception as exc:
+                    errors.append(exc)
+
+        init_thread = threading.Thread(target=init_loop, daemon=True)
+        save_thread = threading.Thread(target=save_loop, daemon=True)
+        use_thread = threading.Thread(target=use_loop, daemon=True)
+        for thread in (init_thread, save_thread, use_thread):
+            thread.start()
+        barrier.wait()
+        for thread in (init_thread, save_thread, use_thread):
+            thread.join(10)
+            self.assertFalse(thread.is_alive(), 'model settings lock deadlocked')
+        self.assertEqual(errors, [])
+
+    def test_reload_syncs_chat_provider_to_new_chat_model(self):
+        from veil_agent import ActivityState
+        from web_agent import Hub
+
+        first = load_character(self.root, 'test')
+        second = load_character(self.root, 'test')
+        store = Store(self.root / 'data')
+        hub = Hub('Test', ActivityState(store.root / 'test' / 'resident-state.json'),
+                  media_root=store.root / 'test' / 'media')
+        hub.chat = Chat(second, store, Budget(store), Mock())
+        first.models.use('peter', 'builtin:other')
+        hub.refresh_models(reload=True)
+        self.assertEqual(hub.models_view['use']['peter'], 'builtin:other')
+        self.assertIsNotNone(hub.chat.pending_model)
+        self.assertEqual(hub.chat.pending_model[1]['model'], 'other-model')
+        hub.chat._apply_pending_model()
+        self.assertEqual(hub.chat.cfg.provider['model'], 'other-model')
+
     def test_stale_instance_cannot_overwrite_newer_models(self):
         first = load_character(self.root, 'test')
         second = load_character(self.root, 'test')

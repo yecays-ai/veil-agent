@@ -1,17 +1,12 @@
 # HANDOFF
 
-## 工单 318：普通聊天调查续接（2026-11-09 +08）
+## 当前工单 319（PR #318，2026-11-09 10:55 +08）
 
-- 分支 `ticket/318-chat-investigation-resume`，PR #317。PR #316 已合并至 `main` 的 `3af0092bd677bfcce2807f7fb8db7ce11e0fa2b3`；本分支已合并该 main 并解决 `STATUS.md`、`HANDOFF.md` 冲突，`veil_agent.py` 自动合并后需以回归确认两边功能。
-- 检查点存角色本地最多 16 条真实工具状态与有限清理证据，不存模型计划或原始大文件；续接从目标和证据重新规划。副作用恢复仍受预算、工具权限、审批和重复执行保护。
-- 上一轮追查 PR CI 确认自主运行的 `resume_context` 未初始化；修复提交 `0334b8e` 已在原 PR，针对性 91 项通过。合并 #316 后的最终合并提交尚需完整验证。
-
-## 下一个窗口第一步
-
-查看 PR #317 最新 CI 和 Cubic 实质评论；修复必要问题，满足分支保护后合并，不把自动测试当作 Windows 实际验收。
-
-## Windows 体验验收
-
-1. `characters/peter/character.toml` 的 `[tools] max_steps` 临时改为 3，做四步以上公开调查，观察中断交接。
-2. 说“继续刚才的调查”，重启后再续接；验证 15 分钟内只读证据不重查、过期证据按需重查、普通聊天不覆盖检查点；完成后恢复原配置。
-3. 拒绝或停止审批动作后续接，确认不重放且仍受费用和权限限制。
+- 分支 `ticket/318-model-config-concurrency`，PR #318（草稿）：https://github.com/yecays-ai/veil-agent/pull/318。独立 worktree：`.agents/worktrees/ticket-318-model-config-concurrency`；正式运行目录未动。
+- 工单 318（普通聊天调查续接，PR #317）已合并为 `19b8d5b`；本分支已同步该 `main`，解决 `STATUS.md`、`HANDOFF.md` 冲突，`veil_agent.py` 等代码自动合并。本单实际编号为 319，PR 编号仍是 318。
+- 问题确认：`ModelSettings.__init__` 原先按文件锁 → `_ENV_LOCK` 获取；`Hub.save_models` / `use_model` 先持有 `models.env_lock` 和 `models.lock`，再进入 `save()` / `use()` 取文件锁，存在循环等待。
+- 修复：统一 `_ENV_LOCK` → `self.lock` → `models.json` 文件锁；初始化、保存、选模和重新加载同序。新增 `ModelSettings.reload()`，重读磁盘最新配置、刷新内存快照和旧快照标识。
+- 恢复路径：旧实例保存/选模发现“另一个进程修改”时自动 `reload()` 并刷新模型视图；桌面初始事件快照在空闲时重载模型设置。刷新页面即可继续编辑保存，不需要重启 Peter。重载后聊天模型变化会通过 `switch_model` 同步到下一次聊天请求。
+- 测试：`test_model_settings` 41 项通过（含旧实例重载、并发初始化/保存/选模、重载后 provider 同步）；`test_web` 67 项通过。未重跑整套测试。
+- 下一个窗口第一步：推送合并提交，等 PR #318 最新 CI 全绿并确认分支保护后合并；合并后请 Lan 按 `STATUS.md` 做 Windows 双实例验收。
+- 未验证：真实 Windows 双实例桌面操作。数据安全：模型、API Key、费用上限不丢失；迁移备份和原子写保持不变。

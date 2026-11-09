@@ -119,9 +119,8 @@ class ModelSettings:
         self.env_lock = _ENV_LOCK
         self.blocked = False
         self._source_bytes = None
-        with _exclusive_file_lock(self.path.with_name('models.json.lock')):
-            with _ENV_LOCK:
-                self._recover()
+        with _ENV_LOCK, self.lock, _exclusive_file_lock(self.path.with_name('models.json.lock')):
+            self._recover()
             raw = self._migrate_retired_cc_choices(self._read())
             self.data = self._clean(raw)
             self._source_bytes = self._current_bytes()
@@ -131,6 +130,16 @@ class ModelSettings:
             return self.path.read_bytes()
         except FileNotFoundError:
             return None
+
+    def reload(self):
+        """Re-read models.json so an instance that lost a race can edit again after a refresh."""
+        with _ENV_LOCK, self.lock, _exclusive_file_lock(self.path.with_name('models.json.lock')):
+            if self.blocked or self.journal.exists():
+                self._recover()
+            raw = self._migrate_retired_cc_choices(self._read())
+            self.data = self._clean(raw)
+            self._source_bytes = self._current_bytes()
+        return self.public()
 
 
     # ---- ticket 317: old Claude Code choices ---------------------------------
@@ -598,7 +607,7 @@ class ModelSettings:
         if (not isinstance(endpoints_in, list) or not isinstance(models_in, list)
                 or len(endpoints_in) > MAX_ENDPOINTS or len(models_in) > MAX_MODELS):
             raise SettingsError('接口或模型太多了。')
-        with _exclusive_file_lock(self.path.with_name('models.json.lock')), _ENV_LOCK, self.lock:
+        with _ENV_LOCK, self.lock, _exclusive_file_lock(self.path.with_name('models.json.lock')):
             if self.blocked or self.journal.exists():
                 self._recover()
                 self._source_bytes = self._current_bytes()
@@ -671,7 +680,7 @@ class ModelSettings:
     def use(self, role, model_id):
         if role not in ROLES:
             raise SettingsError('不认识的用途。')
-        with _exclusive_file_lock(self.path.with_name('models.json.lock')), self.lock:
+        with _ENV_LOCK, self.lock, _exclusive_file_lock(self.path.with_name('models.json.lock')):
             if self.blocked or self.journal.exists():
                 raise SettingsError('模型设置保存未完成；请重启恢复后再切换。')
             if self._current_bytes() != self._source_bytes:
