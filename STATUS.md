@@ -8,21 +8,15 @@
 
 ## 现状
 
-- 工单 320 在 `ticket/320-browser-continuous-execution`，PR #319：https://github.com/yecays-ai/veil-agent/pull/319；基于远端 `main` 的 `8b39f0d`。旧主聊天 `browser` 入口保留。
-- 工作台为每次非维护任务临时注入带随机令牌的 MCP 浏览器服务；Docker 只额外放行同一 host-gateway 上的本次随机端口。角色/任务边界、预算、停止、人工接管和旧浏览器入口不变。
-- 本次在原有实现上补齐并验证：
-  - 公开搜索只能填写最新快照里的文本/搜索框，提交只限公开 GET 表单；隐藏 input 不再造成控件索引错位。
-  - 快照超限时不会无限循环，优先保留可用控件。
-  - 提交搜索会等待导航完成，并支持 `<input type=submit>`。
-  - 工作台工具说明明确告知模型一次调用可完成多页公开研究。
-  - 容器 `NO_PROXY` 包含 `host.docker.internal`，MCP 请求不会被模型中继代理拦截。
-  - 人工鼠标/键盘接管、用户停止、步数/时间/费用/重复调用限额都会不可逆地关闭本次浏览网关。
-- 自动检查已在真实 Windows 宿主通过：Docker Desktop 29.9.2，`veil-workbench` 内 OpenCode 1.19.5，宿主 Playwright Chromium。容器内 OpenCode 实际发现并调用 `veil_browser_public_browser`，完整跑通“打开公开页 → 填公开搜索框 → 提交 GET 搜索 → 读取结果页 → 输出报告”。非自主模式未弹审批卡。
-- Windows 体验验收尚未进行；不能把自动检查当作 lan 的体验验收。
+- 工单 320 在 `ticket/320-browser-continuous-execution`，PR #319：https://github.com/yecays-ai/veil-agent/pull/319。旧主聊天 `browser` 入口保留。
+- 工作台每次非维护任务使用一次性随机令牌保护的 MCP 浏览器服务，复用现有隔离浏览器；容器只额外放行本次端口；停止、人工接管和内部限额都会关闭网关。
+- 公开搜索只接受最新快照里的文本/搜索框控件，提交只限同源公开 GET 表单；`_blank`、凭据字段、非提交按钮和越权动作被拒绝。
+- 自动检查已在真实 Windows 宿主通过：Docker Desktop + `veil-workbench`（OpenCode 1.19.5）+ 宿主 Chromium，完整跑通打开、填公开搜索、提交、读结果和报告；非自主模式未弹审批卡。
+- 详细修复记录见 `HANDOFF.md` 与 PR #319。Windows 体验验收尚未进行；不能把自动检查当作 lan 的体验验收。
 
 ## 下一步
 
-创建 PR，按 Cubic 流程处理审查并等待必需 CI；合并后请 lan 按下面步骤体验。
+PR 已创建，处理 Cubic 审查并等待必需 CI；合并后请 lan 按下面步骤体验。
 
 ## Lan 的 Windows 体验验收
 

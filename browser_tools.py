@@ -503,6 +503,7 @@ class BrowserWorkbenchGateway:
 
         class Handler(BaseHTTPRequestHandler):
             protocol_version = 'HTTP/1.1'
+            timeout = 10  # idle or slow unauthenticated clients must not hold a worker thread
 
             def log_message(self, *_args):
                 pass
@@ -512,6 +513,10 @@ class BrowserWorkbenchGateway:
                 self.send_response(status)
                 self.send_header('Content-Type', 'application/json')
                 self.send_header('Content-Length', str(len(data)))
+                if status >= 400:
+                    # The request body may be unread (401/413); never parse it as the next request.
+                    self.send_header('Connection', 'close')
+                    self.close_connection = True
                 if session:
                     self.send_header('Mcp-Session-Id', session)
                 self.end_headers()

@@ -72,10 +72,10 @@ TOOL_SCHEMA = {'type': 'function', 'function': {
         'Publishing, downloading, installing and bulk deletes are asked of Lan by the program. Give a '
         'complete, self-contained task in words (what is wrong, what to do, what to report); the workbench works in '
         'the project folder itself, so name the project rather than giving file paths or system commands. '
-        'It also has an isolated public browser for research: it can open public HTTPS pages, follow links, scroll, '
-        'fill a public search box and submit public GET searches in one run, without login, upload, download or '
-        'private-network access. For a several-page public research job, hand it over once and ask for a report. '
-        'You decide what to do with the result.'),
+        'When isolated browsing is enabled for this role, it also has a public browser for research: it can open '
+        'public HTTPS pages, follow links, scroll, fill a public search box and submit public GET searches in one '
+        'run, without login, upload, download or private-network access. For a several-page public research job, '
+        'hand it over once and ask for a report. You decide what to do with the result.'),
     'parameters': {'type': 'object', 'properties': {
         'task': {'type': 'string', 'minLength': 1, 'maxLength': 4000,
                  'description': 'What to do and what to report back.'},
