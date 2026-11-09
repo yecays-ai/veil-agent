@@ -3517,6 +3517,7 @@ class Chat:
         card_context_msg = {'role': 'system', 'content': self.virtual_card_context()} if (self.current_request_tool_schemas() and self.virtual_card_context()) else None
 
         runtime_auxiliary = []
+        resume_context = ''
         if not autonomy:
             resume_context = self.investigation.resume_context(text)
             if resume_context:
