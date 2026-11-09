@@ -4110,12 +4110,15 @@ class Chat:
             checkpoint, host_gateways = None, ()
             if host:
                 # The checkpoint protects the journal on the host (the container masked it before).
-                checkpoint, host_gateways = host_executor.prepare(
-                    workdir=Path(workdir), home=role / 'workbench-home', veil_root=ROOT, ask=self.approval,
-                    autonomy=autonomy, stopped=stopped, protect=protect,
-                    # Autonomous activity never takes over her desktop; it keeps the background browser.
-                    desktop=bool(settings.get('host_desktop', True)) and not autonomy,
-                    browser=settings.get('host_browser', 'msedge'))
+                try:
+                    checkpoint, host_gateways = host_executor.prepare(
+                        workdir=Path(workdir), home=role / 'workbench-home', veil_root=ROOT, ask=self.approval,
+                        autonomy=autonomy, stopped=stopped, protect=protect,
+                        # Autonomous activity never takes over her desktop; it keeps the background browser.
+                        desktop=bool(settings.get('host_desktop', True)) and not autonomy,
+                        browser=settings.get('host_browser', 'msedge'))
+                except host_executor.HostRefused as exc:
+                    return ex.ExecutorResult(str(exc), '被拒绝', reason='host_refused')
                 protect = []
             files = getattr(self.tools, 'files', None) or self.tools
             operation_lock = getattr(files, 'workspace_operation_lock', None) if inside_workspace else None

@@ -35,6 +35,10 @@ TOOL_DESCRIPTION = (
     'paths or commands. You decide what to do with the result.')
 
 
+class HostRefused(ValueError):
+    """This task cannot run on the host path; the message says why."""
+
+
 def check_opencode(command):
     """'' when `command` is the pinned OpenCode, else why not."""
     if not command:
@@ -88,9 +92,13 @@ def _log_path(home):
 def prepare(*, workdir, home, veil_root, ask, autonomy, stopped, protect=(), desktop=True, browser='msedge',
             services=None):
     """(checkpoint, gateways) for one host run. Nothing starts until `executor_opencode.run` enters the gateways."""
+    if os.name != 'nt' and services is None:
+        raise HostRefused('The host path runs only on Windows; use the container workbench here.')
     checkpoint = vc.Checkpoint(workdir, ask=ask, autonomy=autonomy, log_path=_log_path(home),
                                forbidden=vc.forbidden_roots(veil_root), protect=protect)
-    checkpoint.log(kind='start', workdir=str(workdir), pinned=PINNED)
+    checkpoint.log(kind='start', workdir=str(workdir), pinned=PINNED, refusal=checkpoint.refusal)
+    if checkpoint.refusal:
+        raise HostRefused(checkpoint.refusal)
     services = upstream_services(home, desktop=desktop, browser=browser) if services is None else services
     environment = {'ANONYMIZED_TELEMETRY': 'false', 'WINDOWS_MCP_DEBUG': 'false', 'NO_COLOR': '1'}
     gateways = [VeilMcpGateway(server_id, service, checkpoint, offered, should_stop=stopped, environment=environment)

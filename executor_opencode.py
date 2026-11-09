@@ -62,6 +62,10 @@ TASK_SCOPE_NOTE = (
     'Network, installation, publishing, credentials, project-external paths and destructive operations are decided by VEIL. '
     'This scope ends when this task ends, is stopped, or reaches its budget or time limit.\n\n')
 
+# Host runs have no container masking: every secret-file class of SECRET_FILE is unreadable by OpenCode itself.
+HOST_SECRET_GLOBS = ('*.pem', '*.pfx', '*.key', '*.p12', '*id_rsa*', '*id_ed25519*', '*.env', '*.env.*',
+                     '*Login Data*', '*Cookies*', '*/.ssh/*', '*\\.ssh\\*', '*/secrets/*', '*\\secrets\\*')
+
 HOST_NOTE = (
     'Environment: you run directly on the owner\'s Windows PC. VEIL rules every operation. '
     'veil_browser_* is your own background browser (headless, fresh profile, never on her screen): use it for '
@@ -1275,6 +1279,7 @@ def build_config(provider, token, base_url, protect=(), browser_gateway=None, wi
         # arguments (OpenCode's own MCP permission request carries none). OpenCode's grep tool is off on the
         # host because it reads secret files and its permission request cannot be answered over HTTP
         # (OpenCode 1.19.5 returns 400 for it); the question tool would wait for a person forever.
+        config['permission']['read'].update({glob: 'deny' for glob in HOST_SECRET_GLOBS})
         config['permission'].update({'grep': 'deny', 'question': 'deny',
                                      **{name + '_*': 'allow' for name in host_mcp}})
         # A refusal is an answer to that one call, not the end of the task (OpenCode ends the loop otherwise).
@@ -1609,6 +1614,8 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
             except Exception:
                 pass
         if isinstance(setup_error, HostGatewayError):
+            if checkpoint is not None:
+                checkpoint.log(kind='end', stop=str(setup_error), steps=0, cost_cny='0')
             try:
                 proxy.close()
             except Exception:

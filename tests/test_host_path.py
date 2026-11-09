@@ -8,6 +8,7 @@ import urllib.request
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import executor_opencode as ex
 import host_executor
@@ -65,9 +66,36 @@ class CheckpointShellTests(unittest.TestCase):
 
     def test_unknown_permissions_are_refused_and_every_decision_is_logged(self):
         self.assertEqual(self.cp.opencode_permission('websearch', ['x'], {})[0], 'reject')
-        self.assertEqual(self.cp.opencode_permission('veil_computer_Click', ['*'], {})[0], 'once')
+        self.assertEqual(self.bash('cat .env')[0], 'reject')
         lines = [json.loads(line) for line in (self.root / 'log.jsonl').read_text(encoding='utf-8').splitlines()]
-        self.assertTrue(all(item['kind'] == 'decision' and item['cls'] in vc.CLASSES for item in lines))
+        self.assertEqual([(item['kind'], item['decision']) for item in lines], [('decision', 'deny')] * 2)
+        self.assertTrue(all(item['cls'] in vc.CLASSES for item in lines))
+        self.assertIn('websearch', lines[0]['operation'])
+
+    def test_windows_paths_and_environment_variables_keep_their_meaning(self):
+        self.assertEqual(self.bash('type ..\\memory\\notes.jsonl')[0], 'reject')
+        self.assertEqual(self.bash('type src\\a.py')[0], 'once')
+        with patch.dict('os.environ', {'VEILHOME': str(self.root / 'home')}):
+            self.assertEqual(self.bash('cat $env:VEILHOME/.ssh/id_x')[0], 'reject')
+            self.assertEqual(self.bash('type %VEILHOME%\\.ssh\\x')[0], 'reject')
+        self.assertEqual(self.bash('cat $env:NOT_SET_ANYWHERE/x')[0], 'reject')
+
+    def test_links_out_of_the_project_or_veil_root_refuse_the_host_run(self):
+        self.assertEqual(self.cp.refusal, '')
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        veil = Path(tmp.name) / 'veil'
+        (veil / 'data').mkdir(parents=True)
+        cp = vc.Checkpoint(veil, ask=lambda _p: 'n', autonomy=False, log_path=Path(tmp.name) / 'l.jsonl',
+                           forbidden=vc.forbidden_roots(veil, home=Path(tmp.name) / 'h'))
+        self.assertIn("VEIL's own data", cp.refusal)
+        try:
+            (self.work / 'out').symlink_to(self.root / 'home', target_is_directory=True)
+        except OSError:
+            self.skipTest('symlinks unavailable')
+        (self.root / 'home').mkdir()
+        cp = vc.Checkpoint(self.work, ask=lambda _p: 'n', autonomy=False, log_path=self.root / 'l2.jsonl')
+        self.assertTrue(cp.refusal)
 
     def test_protected_journal_cannot_be_written(self):
         tmp = tempfile.TemporaryDirectory()
@@ -99,6 +127,12 @@ class CheckpointToolTests(unittest.TestCase):
         self.assertFalse(call(vc.COMPUTER_SERVER, 'App', {'mode': 'launch_executable',
                                                            'executable': 'C:/Windows/System32/cmd.exe'})[0])
         self.assertFalse(call(vc.COMPUTER_SERVER, 'App', {'mode': 'launch', 'name': 'regedit'})[0])
+
+    def test_no_typing_into_her_own_browser_and_typed_text_is_not_logged(self):
+        cp, _, _ = make_checkpoint(self.root, foreground=lambda: ('chrome.exe', 'Sign in - Google'))
+        self.assertFalse(cp.tool_call(vc.COMPUTER_SERVER, 'Type', {'text': 'hunter2', 'loc': [1, 2]})[0])
+        self.assertTrue(cp.tool_call(vc.COMPUTER_SERVER, 'Click', {'loc': [1, 2]})[0])
+        self.assertNotIn('hunter2', (self.root / 'log.jsonl').read_text(encoding='utf-8'))
 
     def test_no_input_into_password_or_uac_windows(self):
         cp, _, _ = make_checkpoint(self.root, foreground=lambda: ('consent.exe', 'User Account Control'))
@@ -186,12 +220,35 @@ class HostRunTests(unittest.TestCase):
         self.assertNotIn('grep', old['permission'])
 
     def test_checkpoint_never_runs_with_container_or_old_gateways(self):
-        costs = []
-        result = ex.run('t', command='docker', workdir=tempfile.mkdtemp(), home=tempfile.mkdtemp(),
-                        provider={'model': 'm', 'base_url': 'http://x'}, key='k', limits={}, autonomy=False,
-                        ask=lambda _p: 'n', stopped=lambda: False, record_cost=costs.append,
-                        container={'image': 'x'}, checkpoint=object())
-        self.assertEqual((result.state, result.reason, costs), ('被拒绝', 'invalid_host_run', [Decimal(0)]))
+        for extra in ({'container': {'image': 'x'}}, {'browser_gateway': object()}, {'windows_gateway': object()}):
+            costs = []
+            result = ex.run('t', command='docker', workdir=tempfile.mkdtemp(), home=tempfile.mkdtemp(),
+                            provider={'model': 'm', 'base_url': 'http://x'}, key='k', limits={}, autonomy=False,
+                            ask=lambda _p: 'n', stopped=lambda: False, record_cost=costs.append,
+                            checkpoint=object(), **extra)
+            self.assertEqual((result.state, result.reason, costs), ('被拒绝', 'invalid_host_run', [Decimal(0)]))
+
+    def test_host_opencode_never_loads_project_plugins_or_config(self):
+        seen = {}
+
+        def popen(command, **kwargs):
+            seen.update(kwargs['env'])
+            raise OSError('stop here')
+        with tempfile.TemporaryDirectory() as tmp:
+            cp, work, _ = make_checkpoint(Path(tmp))
+            proxy = SimpleNamespace(token='t', port=1, local_base=lambda host: 'http://x', close=lambda: None,
+                                    allow_hosts=lambda hosts: None, local_health=lambda host: '')
+            ex.run('t', command='opencode', workdir=work, home=Path(tmp) / 'home',
+                   provider={'model': 'm', 'base_url': 'http://x'}, key='k', limits={}, autonomy=False,
+                   ask=lambda _p: 'n', stopped=lambda: False, record_cost=lambda _c: None,
+                   proxy_factory=lambda *a, **k: proxy, popen=popen, checkpoint=cp)
+        for flag in ('OPENCODE_PURE', 'OPENCODE_DISABLE_PROJECT_CONFIG', 'OPENCODE_DISABLE_CLAUDE_CODE',
+                     'OPENCODE_DISABLE_EXTERNAL_SKILLS'):
+            self.assertEqual(seen.get(flag), '1', flag)
+        config = json.loads(seen['OPENCODE_CONFIG_CONTENT'])
+        self.assertEqual(config['permission']['read']['*.pem'], 'deny')
+        self.assertTrue(config['experimental']['continue_loop_on_deny'])
+        self.assertNotIn('k', json.dumps(seen.get('OPENCODE_CONFIG_CONTENT')).split('"apiKey": ')[-1][:4])
 
     def test_gateway_start_failure_is_reported_not_raised(self):
         class Broken:
@@ -221,7 +278,12 @@ class HostRunTests(unittest.TestCase):
         self.assertIn('@playwright/mcp@' + host_executor.PINNED['playwright-mcp'], browser)
         self.assertIn('--headless', browser)
         self.assertIn('--isolated', browser)
-        self.assertEqual(vc.COMPUTER_SERVER in services, __import__('os').name == 'nt')
+        with patch.object(host_executor.os, 'name', 'nt'):
+            only_uvx = lambda name: '/bin/uvx' if name == 'uvx' else None
+            desktop = host_executor.upstream_services('h', which=only_uvx)[vc.COMPUTER_SERVER][0]['args']
+        self.assertEqual(desktop[:4], ['--python', '3.14', '--from', 'windows-mcp==0.8.8'])
+        self.assertEqual(desktop[-1].split(','), sorted(vc.COMPUTER_TOOLS))
+        self.assertNotIn('PowerShell', desktop[-1])
         self.assertEqual(host_executor.upstream_services(tempfile.mkdtemp(), which=lambda name: None), {})
 
 

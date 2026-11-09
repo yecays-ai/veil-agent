@@ -9,10 +9,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import secrets
 import threading
+import time
+
+import executor_opencode as ex
 
 from mcp_services import START_TIMEOUT, _Worker
 
 MAX_RESTARTS = 2
+QUEUE_SECONDS = 90
 
 
 class VeilMcpGateway:
@@ -49,6 +53,11 @@ class VeilMcpGateway:
         worker = self.worker
         if worker is not None and worker.thread.is_alive() and not worker.closing.is_set():
             return worker
+        if worker is not None:
+            worker.close()  # the old upstream process is gone before a new one starts
+            if worker.thread.is_alive():
+                raise RuntimeError(f'{self.server_id} did not stop; not starting a second copy.')
+            self.worker = None
         if self.restarts >= MAX_RESTARTS:
             raise RuntimeError(f'{self.server_id} stopped and was already restarted {MAX_RESTARTS} times.')
         self.restarts += 1
@@ -68,19 +77,31 @@ class VeilMcpGateway:
             return 'The task is stopped; nothing was done.', True
         if name not in self.offered:
             return f'{name} is not offered.', True
-        allowed, why = self.checkpoint.tool_call(self.server_id, name, arguments)
-        if not allowed:
-            return f'VEIL did not allow this ({why}).', True
-        if self.stopped():
-            return 'The task is stopped; nothing was done.', True
         # One action at a time per server: parallel calls queue (the desktop and the browser page are shared).
-        with self.lock:
+        # The wait is bounded, and the ruling happens after the wait, right before the action, so it sees the
+        # current foreground window and a stop that came while queued.
+        deadline = time.monotonic() + QUEUE_SECONDS
+        while not self.lock.acquire(timeout=0.25):
+            if self.stopped():
+                return 'The task is stopped; nothing was done.', True
+            if time.monotonic() >= deadline:
+                return 'Another action on this server took too long; nothing was done.', True
+        try:
+            if self.stopped():
+                return 'The task is stopped; nothing was done.', True
+            allowed, why = self.checkpoint.tool_call(self.server_id, name, arguments)
+            if not allowed:
+                return f'VEIL did not allow this ({why}).', True
+            if self.stopped():
+                return 'The task is stopped; nothing was done.', True
             try:
                 text = self._live_worker().call(name, arguments, should_stop=self.stopped)
             except Exception as exc:
-                detail = str(exc) or type(exc).__name__
+                detail = ex._safe_display(str(exc) or type(exc).__name__)
                 self.checkpoint.log(kind='tool_error', server=self.server_id, tool=name, error=detail[:2000])
                 return detail[:2000], True
+        finally:
+            self.lock.release()
         return text, False
 
     # ---- MCP endpoint for OpenCode ----------------------------------------------------------------------

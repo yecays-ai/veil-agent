@@ -26,13 +26,18 @@ def load_state(root=ROOT):
     image = data.get('container_image', IMAGE)
     if not isinstance(data, dict) or not isinstance(roots, list) or not isinstance(image, str):
         raise ValueError('workbench.json 格式不对')
-    return {'enabled': data.get('enabled') is True, 'project_roots': [str(x) for x in roots], 'container_image': image}
+    state = {'enabled': data.get('enabled') is True, 'project_roots': [str(x) for x in roots], 'container_image': image}
+    if isinstance(data.get('host_mode'), bool):  # ticket 329: kept through every save
+        state['host_mode'] = data['host_mode']
+    return state
 
 
 def save_state(state, root=ROOT):
     path = settings_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
     clean = {k: state[k] for k in KEYS}
+    if isinstance(state.get('host_mode'), bool):
+        clean['host_mode'] = state['host_mode']
     tmp = path.with_suffix('.tmp')
     tmp.write_text(json.dumps(clean, ensure_ascii=False, indent=2), encoding='utf-8')
     tmp.replace(path)

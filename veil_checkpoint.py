@@ -20,7 +20,7 @@ import threading
 
 import executor_opencode as ex
 from web_tools import public_http_url
-from windows_observer import PROTECTED_PROCESSES, SENSITIVE_LABEL
+from windows_observer import BROWSER_PROCESSES, PROTECTED_PROCESSES, SENSITIVE_LABEL
 
 COMPUTER, FILES_CODE, NETWORK_BROWSER, SYSTEM = 'computer', 'files_code', 'network_browser', 'system'
 CLASSES = (COMPUTER, FILES_CODE, NETWORK_BROWSER, SYSTEM)
@@ -56,6 +56,27 @@ CONTENT_READERS = frozenset({'grep', 'egrep', 'fgrep', 'rg', 'ag', 'ack', 'cat',
                              'sha256sum', 'git'})
 RECURSIVE_FLAG = re.compile(r'^-(?:[a-zA-Z]*[rR][a-zA-Z]*|-recursive|-dereference-recursive|recurse|s)$')
 BROWSER_PASSWORD_FIELD = re.compile(r'password|passwd|密码|口令|pin\b|otp|验证码|card\s*number|cvv|cvc|卡号', re.I)
+
+
+SENSITIVE_ARGUMENTS = frozenset({'text', 'value', 'values', 'fields', 'shortcut_text', 'code', 'function'})
+
+
+def _expand(text):
+    """Environment variables in any shell syntax ($env:NAME, %NAME%, $NAME, ${NAME}, ~) resolved for path checks."""
+    text = re.sub(r'\$env:([A-Za-z_][A-Za-z0-9_]*)', lambda m: os.environ.get(m.group(1), m.group(0)), text, flags=re.I)
+    text = re.sub(r'%([A-Za-z_][A-Za-z0-9_]*)%', lambda m: os.environ.get(m.group(1), m.group(0)), text)
+    return os.path.expanduser(os.path.expandvars(text))
+
+
+def windows_safe(command):
+    """A host command with backslashes as slashes, so POSIX splitting keeps Windows paths intact for the checks."""
+    return str(command).replace('\\', '/')
+
+
+def redacted(arguments):
+    """Tool arguments for the log, without what Peter typed or filled in."""
+    return {key: (f'[{len(str(value))} chars]' if key in SENSITIVE_ARGUMENTS else value)
+            for key, value in (arguments or {}).items()}
 
 
 def _now():
@@ -130,8 +151,14 @@ class Checkpoint:
         try:
             self.secret_files = [_norm(path.resolve()) for path in ex.secret_files(self.workdir)]
             self.secret_dirs = [_norm(path.resolve()) for path in ex.secret_directories(self.workdir)]
-        except (OSError, ValueError):
-            self.secret_files, self.secret_dirs = None, None  # unknown: recursive reads ask Lan
+            self.refusal = ''
+        except (OSError, ValueError) as exc:
+            # A link out of the project would let OpenCode's own reads leave it unchecked: no host run then.
+            self.secret_files, self.secret_dirs = None, None
+            self.refusal = 'The project cannot run on the host: ' + str(exc)[:200]
+        if any(self._inside(root, _norm(self.workdir)) for root in self.forbidden):
+            self.refusal = "The project contains VEIL's own data or keys; it cannot run on the host."
+
 
     # ---- log -------------------------------------------------------------------------------------------
     def log(self, **event):
@@ -150,10 +177,10 @@ class Checkpoint:
 
     # ---- paths -----------------------------------------------------------------------------------------
     def _resolve(self, value, current=None):
-        text = str(value).strip().strip('"\'')
+        text = windows_safe(str(value).strip().strip('"\''))
         if not text or text.startswith('-'):
             return None
-        text = os.path.expandvars(os.path.expanduser(text))
+        text = _expand(text)
         path = Path(text)
         if not path.is_absolute():
             path = Path(current or self.workdir) / path
@@ -167,8 +194,12 @@ class Checkpoint:
 
     def forbidden_path(self, value, current=None):
         """Why `value` must never be read or written, or ''."""
-        if Path(str(value).strip().strip('"\'')).name and ex.SECRET_FILE.match(Path(str(value).strip().strip('"\'')).name):
+        name = Path(windows_safe(str(value).strip().strip('"\''))).name
+        if name and ex.SECRET_FILE.match(name):
             return 'secret file'
+        if re.search(r'\$env:|%[A-Za-z_][A-Za-z0-9_]*%|\$\{?[A-Za-z_]', str(value), re.I) and \
+                re.search(r'\$env:|%[A-Za-z_][A-Za-z0-9_]*%|\$\{?[A-Za-z_]', _expand(str(value)), re.I):
+            return 'unresolved environment variable in a path'
         path = self._resolve(value, current)
         if path is None:
             return ''
@@ -252,6 +283,11 @@ class Checkpoint:
         """(reply, reason) for one OpenCode permission request; reply is 'once' or 'reject'."""
         patterns = patterns if isinstance(patterns, list) else []
         metadata = metadata if isinstance(metadata, dict) else {}
+        if permission == 'bash':
+            # Windows paths keep their meaning for every check below (POSIX splitting drops backslashes).
+            patterns = [windows_safe(item) if isinstance(item, str) else item for item in patterns]
+            if isinstance(metadata.get('command'), str):
+                metadata = {**metadata, 'command': windows_safe(metadata['command'])}
         cls = self.classify_permission(permission, patterns, metadata)
         command = metadata.get('command') if isinstance(metadata, dict) else None
         operation = permission + ': ' + (command if isinstance(command, str) else ', '.join(map(str, patterns)))
@@ -302,13 +338,16 @@ class Checkpoint:
         return reply, why
 
     # ---- desktop and browser tool calls (VEIL MCP gateway) -----------------------------------------------
-    def _sensitive_foreground(self):
+    def _sensitive_foreground(self, typing=False):
         window = self.foreground() if self.foreground else None
         if not window:
-            return ''
+            # Typing blind could land in a password field; on Windows that is refused.
+            return 'the window in front cannot be read' if typing and os.name == 'nt' else ''
         process, title = window
         if str(process).casefold() in PROTECTED_PROCESSES or SENSITIVE_LABEL.search(str(title or '')):
             return 'a password, security or credential window is in front'
+        if typing and str(process).casefold() in BROWSER_PROCESSES:
+            return "typing into Lan's own browser (her accounts); use the background browser instead"
         if re.search(r'用户帐户控制|用户账户控制|user account control|支付|付款|收银台|checkout|payment', str(title or ''), re.I):
             return 'a security or payment window is in front'
         return ''
@@ -316,7 +355,7 @@ class Checkpoint:
     def tool_call(self, server, name, arguments):
         """(allowed: bool, reason) for one desktop/browser tool call with its real arguments."""
         arguments = arguments if isinstance(arguments, dict) else {}
-        operation = f'{server}.{name} ' + json.dumps(arguments, ensure_ascii=False)[:300]
+        operation = f'{server}.{name} ' + json.dumps(redacted(arguments), ensure_ascii=False)[:300]
         if server == COMPUTER_SERVER:
             answer, why = self._computer(name, arguments, operation)
         elif server == BROWSER_SERVER:
@@ -348,8 +387,8 @@ class Checkpoint:
             if mode in {'launch', 'resize', 'switch'}:
                 return self._record(COMPUTER, operation, ALLOW, 'open or arrange an app')
             return self._record(COMPUTER, operation, DENY, 'unknown app mode')
-        # Mouse and keyboard: never into password, security or payment windows.
-        if why := self._sensitive_foreground():
+        # Mouse and keyboard: never into password, security or payment windows, nor typing into her browser.
+        if why := self._sensitive_foreground(typing=name in {'Type', 'Shortcut'}):
             return self._record(COMPUTER, operation, DENY, why)
         if name in {'Scroll', 'Move', 'Click'}:
             return self._record(COMPUTER, operation, ALLOW, 'pointer')
