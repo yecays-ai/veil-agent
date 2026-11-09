@@ -87,6 +87,16 @@ def _norm(path):
     return os.path.normcase(os.path.normpath(str(path)))
 
 
+def _forms(path):
+    """The normalized path as given and as resolved (they differ for links and Windows short names)."""
+    forms = [_norm(path)]
+    try:
+        forms.append(_norm(path.resolve()))
+    except (OSError, RuntimeError, ValueError):
+        pass
+    return list(dict.fromkeys(forms))
+
+
 def forbidden_roots(veil_root, home=None):
     """Paths no host run may touch: VEIL's own data (memory, ledgers, logs), keys, SSH and browser profiles."""
     veil_root = Path(veil_root)
@@ -140,7 +150,8 @@ class Checkpoint:
         self.ask = ask
         self.autonomy = bool(autonomy)
         self.log_path = Path(log_path)
-        self.forbidden = [_norm(Path(path)) for path in forbidden]
+        # Both the given and the resolved form: Windows may report one folder by its short (8.3) or long name.
+        self.forbidden = list(dict.fromkeys(form for path in forbidden for form in _forms(Path(path))))
         self.task_scope = task_scope
         self.allow_network = allow_network
         self.foreground = foreground
@@ -177,17 +188,17 @@ class Checkpoint:
 
     # ---- paths -----------------------------------------------------------------------------------------
     def _resolve(self, value, current=None):
+        return (self._candidates(value, current) or [None])[-1]
+
+    def _candidates(self, value, current=None):
+        """The path as written (made absolute) and as resolved; [] for an option or empty text."""
         text = windows_safe(str(value).strip().strip('"\''))
         if not text or text.startswith('-'):
-            return None
-        text = _expand(text)
-        path = Path(text)
+            return []
+        path = Path(_expand(text))
         if not path.is_absolute():
             path = Path(current or self.workdir) / path
-        try:
-            return _norm(path.resolve())
-        except (OSError, RuntimeError, ValueError):
-            return _norm(path)
+        return _forms(path)
 
     def _inside(self, path, root):
         return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
@@ -200,24 +211,25 @@ class Checkpoint:
         if re.search(r'\$env:|%[A-Za-z_][A-Za-z0-9_]*%|\$\{?[A-Za-z_]', str(value), re.I) and \
                 re.search(r'\$env:|%[A-Za-z_][A-Za-z0-9_]*%|\$\{?[A-Za-z_]', _expand(str(value)), re.I):
             return 'unresolved environment variable in a path'
-        path = self._resolve(value, current)
-        if path is None:
+        paths = self._candidates(value, current)
+        if not paths:
             return ''
-        work = _norm(self.workdir)
-        for root in self.forbidden:
-            if self._inside(path, root) and not self._inside(path, work):
-                return 'VEIL data, keys or browser passwords'
-        for root in self.forbidden:
-            # A project inside VEIL's data (Peter's own workspace) may still not reach memory or ledgers.
-            if self._inside(work, root) and not self._inside(path, work) and self._inside(path, root):
-                return 'VEIL data, keys or browser passwords'
-        parts = {part.casefold() for part in Path(path).parts}
-        if '.ssh' in parts or 'secrets' in parts:
-            return 'secret folder'
-        if any(path == item for item in self.protect):
-            return 'protected file'
-        if self.secret_files and path in self.secret_files:
-            return 'secret file'
+        works = _forms(self.workdir)
+        for path in paths:
+            inside_work = any(self._inside(path, work) for work in works)
+            for root in self.forbidden:
+                if self._inside(path, root) and not inside_work:
+                    return 'VEIL data, keys or browser passwords'
+                # A project inside VEIL's data (Peter's own workspace) may still not reach memory or ledgers.
+                if any(self._inside(work, root) for work in works) and not inside_work and self._inside(path, root):
+                    return 'VEIL data, keys or browser passwords'
+            parts = {part.casefold() for part in Path(path).parts}
+            if '.ssh' in parts or 'secrets' in parts:
+                return 'secret folder'
+            if any(path == item for item in self.protect):
+                return 'protected file'
+            if self.secret_files and path in self.secret_files:
+                return 'secret file'
         return ''
 
     def _reads_secrets_recursively(self, tokens, current=None):
