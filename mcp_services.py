@@ -26,7 +26,20 @@ def _stdio_server_command(command, args, *, windows=None, executable=None):
         if not pythonw.is_file():
             pythonw = python
         cmd_args = ['call', command, *args]
-        command_line = subprocess.list2cmdline(cmd_args)
+        pieces = []
+        for arg in cmd_args:
+            piece = subprocess.list2cmdline([str(arg)])
+            # list2cmdline only quotes spaces; cmd.exe also reads < > | & ^ outside quotes (a `<x>` argument
+            # became "read input from file x"), so those get quotes too. An embedded double quote would leave
+            # the quote count unbalanced, so such an argument is refused instead of guessed at.
+            if any(char in str(arg) for char in '<>|&^'):
+                if '"' in str(arg):
+                    raise MCPConfigError('A server argument has a double quote next to a cmd.exe special '
+                                         f'character: {str(arg)[:80]!r}.')
+                if not piece.startswith('"'):
+                    piece = '"' + piece + '"'
+            pieces.append(piece)
+        command_line = ' '.join(pieces)
         return str(pythonw), [str(Path(__file__).with_name('mcp_hidden_stdio.py')),
                               os.environ.get('COMSPEC', 'cmd.exe'), '/d', '/s', '/c',
                               command_line]

@@ -264,7 +264,7 @@ class HostRunTests(unittest.TestCase):
         self.assertTrue(config['experimental']['continue_loop_on_deny'])
         self.assertEqual(config['provider']['relay']['options']['apiKey'], 't')
 
-    def test_gateway_start_failure_is_reported_not_raised(self):
+    def test_one_tool_failing_to_start_only_removes_that_tool(self):
         class Broken:
             server_id = 'veil_browser'
 
@@ -273,17 +273,27 @@ class HostRunTests(unittest.TestCase):
 
             def __exit__(self, *_):
                 pass
-        costs = []
+        sent = {}
+
+        def popen(command, **kwargs):
+            sent.update(kwargs['env'])
+            raise OSError('stop here')
         with tempfile.TemporaryDirectory() as tmp:
             cp, work, _ = make_checkpoint(Path(tmp))
+            good = VeilMcpGateway(vc.COMPUTER_SERVER, {'command': 'x'}, cp, vc.COMPUTER_TOOLS,
+                                  should_stop=lambda: False, worker_factory=FakeWorker)
             proxy = SimpleNamespace(token='t', port=1, local_base=lambda host: 'http://x', close=lambda: None,
                                     allow_hosts=lambda hosts: None, local_health=lambda host: '')
-            result = ex.run('t', command='opencode', workdir=work, home=Path(tmp) / 'home',
-                            provider={'model': 'm', 'base_url': 'http://x'}, key='k', limits={}, autonomy=False,
-                            ask=lambda _p: 'n', stopped=lambda: False, record_cost=costs.append,
-                            proxy_factory=lambda *a, **k: proxy, checkpoint=cp, host_gateways=[Broken()])
-        self.assertEqual((result.state, result.reason), ('出错', 'gateway_failed'))
-        self.assertIn('npx not found', result.text)
+            ex.run('t', command='opencode', workdir=work, home=Path(tmp) / 'home',
+                   provider={'model': 'm', 'base_url': 'http://x'}, key='k', limits={}, autonomy=False,
+                   ask=lambda _p: 'n', stopped=lambda: False, record_cost=lambda _c: None,
+                   proxy_factory=lambda *a, **k: proxy, popen=popen, checkpoint=cp,
+                   host_gateways=[Broken(), good])
+            log = (Path(tmp) / 'log.jsonl').read_text(encoding='utf-8')
+        config = json.loads(sent['OPENCODE_CONFIG_CONTENT'])
+        self.assertEqual(list(config['mcp']), [vc.COMPUTER_SERVER])
+        self.assertIn('tool_unavailable', log)
+        self.assertIn('npx not found', log)
 
     def test_upstream_services_are_pinned_and_desktop_is_windows_only(self):
         which = lambda name: '/bin/' + name
@@ -291,7 +301,8 @@ class HostRunTests(unittest.TestCase):
         services = host_executor.upstream_services(tempfile.mkdtemp(), which=which, proxy_port=4321)
         browser = services[vc.BROWSER_SERVER][0]['args']
         self.assertEqual(browser[browser.index('--proxy-server') + 1], 'http://127.0.0.1:4321')
-        self.assertEqual(browser[browser.index('--proxy-bypass') + 1], '<-loopback>')
+        # No `<`/`>` on the command line: cmd.exe (npx is a .cmd) would read them as redirections.
+        self.assertFalse(any(ch in arg for arg in browser for ch in '<>|&^'), browser)
         settings = json.loads(Path(browser[browser.index('--config') + 1]).read_text(encoding='utf-8'))
         self.assertIn('--webrtc-ip-handling-policy=disable_non_proxied_udp', settings['browser']['launchOptions']['args'])
         self.assertIn('@playwright/mcp@' + host_executor.PINNED['playwright-mcp'], browser)
@@ -300,10 +311,15 @@ class HostRunTests(unittest.TestCase):
         with patch.object(host_executor.os, 'name', 'nt'):
             only_uvx = lambda name: '/bin/uvx' if name == 'uvx' else None
             desktop = host_executor.upstream_services('h', which=only_uvx)[vc.COMPUTER_SERVER][0]['args']
+            # pip-installed uv that is not on PATH is still found
+            found = host_executor.upstream_services('h', which=lambda name: None,
+                                                    find_script=lambda name: '/scripts/uvx')
+            self.assertEqual(found[vc.COMPUTER_SERVER][0]['command'], '/scripts/uvx')
         self.assertEqual(desktop[:4], ['--python', '3.14', '--from', 'windows-mcp==0.8.8'])
         self.assertEqual(desktop[-1].split(','), sorted(vc.COMPUTER_TOOLS))
         self.assertNotIn('PowerShell', desktop[-1])
-        self.assertEqual(host_executor.upstream_services(tempfile.mkdtemp(), which=lambda name: None), {})
+        self.assertEqual(host_executor.upstream_services(tempfile.mkdtemp(), which=lambda name: None,
+                                                       find_script=lambda name: None), {})
 
 
 class BrowserNetworkTests(unittest.TestCase):

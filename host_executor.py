@@ -92,11 +92,31 @@ def check_opencode(command):
     return ''
 
 
-def upstream_services(home, *, desktop=True, browser='msedge', which=shutil.which, proxy_port=None):
+def _python_script(name):
+    """A tool pip installed for this Python (its Scripts folder, system or per-user, is often not on PATH)."""
+    import site
+    import sys
+    roots = [sys.prefix, sys.base_prefix, str(Path(sys.executable).parent)]
+    try:
+        user = Path(site.getusersitepackages()).parent
+        roots += [str(user), str(user.parent)]
+    except Exception:
+        pass
+    for root in dict.fromkeys(roots):
+        for folder in (Path(root) / 'Scripts', Path(root)):
+            for candidate in (folder / (name + '.exe'), folder / name):
+                if candidate.is_file():
+                    return str(candidate)
+    return None
+
+
+def upstream_services(home, *, desktop=True, browser='msedge', which=shutil.which, proxy_port=None,
+                      find_script=_python_script):
     """{server_id: (service, offered tools)} for the MCP servers this computer can start.
 
-    The browser is offered only behind VEIL's public-only proxy (`proxy_port`); `<-loopback>` makes even
-    localhost go through it (the browser would skip the proxy for loopback otherwise)."""
+    The browser is offered only behind VEIL's public-only proxy (`proxy_port`). Playwright itself adds the
+    `<-loopback>` bypass rule, so even localhost goes through the proxy (no `<`/`>` on our command line: on
+    Windows npx is a .cmd file run by cmd.exe, which reads them as redirections)."""
     services = {}
     npx = which('npx')
     if npx and proxy_port:
@@ -112,9 +132,9 @@ def upstream_services(home, *, desktop=True, browser='msedge', which=shutil.whic
             'args': ['-y', f'@playwright/mcp@{PINNED["playwright-mcp"]}', '--headless', '--isolated',
                      '--browser', browser, '--image-responses', 'omit',
                      '--output-dir', str(output), '--config', str(settings),
-                     '--proxy-server', f'http://127.0.0.1:{int(proxy_port)}', '--proxy-bypass', '<-loopback>']},
+                     '--proxy-server', f'http://127.0.0.1:{int(proxy_port)}']},
             vc.BROWSER_TOOLS)
-    uvx = which('uvx')
+    uvx = which('uvx') or find_script('uvx')
     if desktop and os.name == 'nt' and uvx:
         services[vc.COMPUTER_SERVER] = ({
             'command': uvx,

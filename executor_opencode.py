@@ -105,8 +105,13 @@ TOOL_SCHEMA = {'type': 'function', 'function': {
 }}
 
 
-class HostGatewayError(RuntimeError):
-    """A VEIL MCP gateway of the host path could not start (its upstream server did not answer)."""
+def error_text(exc):
+    """The real cause of `exc`: an ExceptionGroup (anyio TaskGroup) is opened down to its first leaf."""
+    seen = 0
+    while getattr(exc, 'exceptions', None) and seen < 10:
+        exc, seen = exc.exceptions[0], seen + 1
+    text = str(exc) or type(exc).__name__
+    return text if text.startswith(type(exc).__name__) else f'{type(exc).__name__}: {text}'
 
 
 class ExecutorResult(NamedTuple):
@@ -576,11 +581,11 @@ def _approval_scope(permission, patterns, metadata):
     return _approval_key(permission, patterns, metadata)
 
 
-def _safe_display(value):
+def _safe_display(value, limit=300):
     text = re.sub(r'(?i)(https?://)[^/@\s]+@', r'\1[redacted]@', str(value))
     text = re.sub(r'(?i)(--?(?:token|password|passwd|secret|api[-_]?key)\s*[= ]\s*)(\S+)',
                   r'\1[redacted]', text)
-    return text[:300]
+    return text[:limit]
 
 
 def _resolved_targets(permission, patterns, workdir):
@@ -1545,7 +1550,7 @@ def _run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, 
     proxy_host = 'veil-relay' if container else '127.0.0.1'
     gateway = browser_gateway(stopped, bool(container)) if browser_gateway is not None else None
     desktop_gateway = windows_gateway(stopped, bool(container)) if windows_gateway is not None else None
-    entered = []
+    entered, unavailable = [], []
     try:
         bridge = gateway.__enter__() if gateway is not None else None
         desktop_bridge = desktop_gateway.__enter__() if desktop_gateway is not None else None
@@ -1553,8 +1558,12 @@ def _run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, 
             try:
                 entered.append(host_gateway.__enter__())
             except Exception as exc:
-                raise HostGatewayError(f'{host_gateway.server_id} could not start: '
-                                       + (str(exc) or type(exc).__name__)[:300]) from exc
+                # One tool failing to start only takes that tool away; the rest of the run goes on, and the
+                # model is told what is missing this time.
+                reason = error_text(exc)[:300]
+                unavailable.append(f'{host_gateway.server_id} ({reason})')
+                if checkpoint is not None:
+                    checkpoint.log(kind='tool_unavailable', server=host_gateway.server_id, error=reason)
         config = build_config(provider, proxy.token, proxy.local_base(proxy_host), protect=protect,
                               browser_gateway=bridge, windows_gateway=desktop_bridge,
                               host_mcp=({item.server_id: item.config() for item in entered}
@@ -1635,18 +1644,6 @@ def _run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, 
                 desktop_gateway.__exit__(None, None, None)
             except Exception:
                 pass
-        if isinstance(setup_error, HostGatewayError):
-            if checkpoint is not None:
-                checkpoint.log(kind='end', stop=str(setup_error), steps=0, cost_cny='0')
-            try:
-                proxy.close()
-            except Exception:
-                pass
-            try:
-                record_cost(Decimal(0))
-            except Exception:
-                pass
-            return ExecutorResult(str(setup_error), '出错', reason='gateway_failed')
         raise
     proc, messages, cost, steps, stop = None, [], Decimal(0), 0, ''
     cleanup_warning = ''
@@ -1673,7 +1670,9 @@ def _run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, 
         session = api.call('POST', '/session', {'title': 'workbench'})['id']
         if stopped():
             return ExecutorResult('[workbench=stopped; reason=user_stopped]', '出错', reason='user_stopped')
-        text = (CONTAINER_NOTE if container else HOST_NOTE if checkpoint is not None else '') + TASK_SCOPE_NOTE + (MAINTENANCE_NOTE if maintenance else '') + task
+        missing = ('Not available this time (it failed to start; do not try it, and tell the owner if the job needs '
+                   'it): ' + ', '.join(unavailable) + '.\n\n') if unavailable else ''
+        text = (CONTAINER_NOTE if container else HOST_NOTE if checkpoint is not None else '') + missing + TASK_SCOPE_NOTE + (MAINTENANCE_NOTE if maintenance else '') + task
         api.call('POST', f'/session/{session}/prompt_async', {
             'parts': [{'type': 'text', 'text': text}], 'model': {'providerID': 'relay', 'modelID': provider['model']}})
         started, idle, answered, approvals = clock(), 0, [], []

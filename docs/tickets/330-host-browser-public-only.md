@@ -6,7 +6,7 @@
 
 ## 做法
 
-- 后台浏览器（Playwright MCP 0.0.84）启动时加 `--proxy-server http://127.0.0.1:<端口>` 和 `--proxy-bypass <-loopback>`。这个代理复用 `browser_tools.PublicProxy`：只接受到公网 IP 443 端口的 CONNECT，由代理自己解析 DNS 并固定 IP（防 DNS 重绑定）。单次运行最多 100 MB。
+- 后台浏览器（Playwright MCP 0.0.84）启动时加 `--proxy-server http://127.0.0.1:<端口>` （Playwright 自己会加 `<-loopback>` 规则；命令行里不放 `<` `>`，因为 Windows 的 cmd 会把它们当成重定向）。这个代理复用 `browser_tools.PublicProxy`：只接受到公网 IP 443 端口的 CONNECT，由代理自己解析 DNS 并固定 IP（防 DNS 重绑定）。单次运行最多 100 MB。
 - 代理在 `host_executor.prepare` 里启动（`BrowserNetwork`），跟着浏览器网关一起关闭。代理起不来，这次运行就不提供浏览器。
 - 明文 HTTP 网站打不开（只走 HTTPS）。
 
