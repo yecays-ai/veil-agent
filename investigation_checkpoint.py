@@ -124,9 +124,14 @@ class InvestigationCheckpoint:
         return None
 
     def record(self, goal, request_id, name, arguments, state, summary, result, resuming=False,
-               side_effect=None):
-        if not goal or name in {'stay_silent', 'reply_later', 'card_action', 'recall_message',
-                                'long_task_status', 'long_task_update'}:
+               side_effect=None, canonical_name=None):
+        # Ticket 321: the model calls the role's alias (for example read_the_notes), while
+        # the permission and read-only tables use the canonical name (read_text_file).
+        # Classify with the canonical name, but keep the model-facing name in the evidence
+        # so the continuation guard still matches the same call signature.
+        canonical = canonical_name or name
+        if not goal or canonical in {'stay_silent', 'reply_later', 'card_action', 'recall_message',
+                                     'long_task_status', 'long_task_update'}:
             return
         with self.store.mutex:
             task = self._read()
@@ -138,10 +143,10 @@ class InvestigationCheckpoint:
             from veil_agent import safe_tool_activity_detail
             from windows_interaction import WINDOWS_INTERACTION_TOOL_NAMES
             if side_effect is None:
-                side_effect = name not in READ_ONLY_TOOLS | {'browser', 'web_search'}
-                if name in WINDOWS_INTERACTION_TOOL_NAMES and name not in READ_ONLY_TOOLS:
+                side_effect = canonical not in READ_ONLY_TOOLS | {'browser', 'web_search'}
+                if canonical in WINDOWS_INTERACTION_TOOL_NAMES and canonical not in READ_ONLY_TOOLS:
                     side_effect = True
-                if name.startswith('mcp__'):
+                if canonical.startswith('mcp__'):
                     side_effect = True
             item = {'time': now(), 'tool': name, 'call': _signature(name, arguments),
                     'state': state, 'read_only': not side_effect,
