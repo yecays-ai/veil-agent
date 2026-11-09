@@ -16,7 +16,7 @@ INTERRUPTED = {'step_limit', 'context_limit', 'budget_limit', 'user_stop'}
 
 
 def _signature(name, arguments):
-    encoded = json.dumps(arguments if isinstance(arguments, dict) else {}, ensure_ascii=False,
+    encoded = json.dumps(arguments, ensure_ascii=False,
                          sort_keys=True, separators=(',', ':')).encode('utf-8')
     return name + ':' + hashlib.sha256(encoded).hexdigest()[:16]
 
@@ -66,7 +66,8 @@ class InvestigationCheckpoint:
     @staticmethod
     def resume_requested(text):
         return isinstance(text, str) and bool(__import__('re').match(
-            r'^\s*(继续|接着|续接|continue\b)', text, __import__('re').I))
+            r'^\s*(继续刚才的调查|继续调查|接着调查|续接调查|continue (?:the )?investigation)(?:\b|[，。！! ]|$)',
+            text, __import__('re').I))
 
     def resume_context(self, text):
         if not self.resume_requested(text):
@@ -112,7 +113,7 @@ class InvestigationCheckpoint:
         if not item:
             return None
         if not item.get('read_only') and item.get('state') in ('成功', '被拒绝', '已停止', '结果未知'):
-            return 'This side effect was previously rejected, stopped, or has an unknown outcome; do not replay it automatically.'
+            return 'This side effect was already completed, rejected, stopped, or has an unknown outcome; do not replay it automatically.'
         if item.get('read_only') and item.get('state') == '成功':
             try:
                 fresh = datetime.fromisoformat(item['time']) >= datetime.now(timezone.utc) - FRESH_FOR
@@ -128,15 +129,18 @@ class InvestigationCheckpoint:
             return
         with self.store.mutex:
             task = self._read()
-            if task and task['status'] == 'interrupted' and request_id != task['request_id'] and not resuming:
+            if task and task['status'] in ('active', 'interrupted') and request_id != task['request_id'] and not resuming:
                 return
             if not task or task['status'] == 'completed':
                 task = {'id': uuid.uuid4().hex, 'goal': goal[:2000], 'request_id': request_id,
                         'status': 'active', 'reason': '', 'evidence': [], 'updated_at': now()}
             from veil_agent import safe_tool_activity_detail
             from windows_interaction import WINDOWS_INTERACTION_TOOL_NAMES
-            side_effect = (name in WINDOWS_INTERACTION_TOOL_NAMES or name.startswith('mcp__')
-                           or name not in READ_ONLY_TOOLS | {'browser', 'web_search'})
+            side_effect = name not in READ_ONLY_TOOLS | {'browser', 'web_search'}
+            if name in WINDOWS_INTERACTION_TOOL_NAMES:
+                side_effect = True
+            if name.startswith('mcp__'):
+                side_effect = True
             item = {'time': now(), 'tool': name, 'call': _signature(name, arguments),
                     'state': state, 'read_only': not side_effect,
                     'source': str(summary)[:240], 'evidence': safe_tool_activity_detail(result, limit=600)}

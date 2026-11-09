@@ -32,7 +32,7 @@ from attachment_utils import (ATTACHMENT_EXTENSIONS, MAX_ATTACHMENT_BYTES,
                               inspect_attachment, redirected_path, valid_attachment_row)
 from veil_agent import (ROOT, AUTONOMY_WAKE, CODEX_WATCH_WAKE, GLANCE_WAKE, MAX_PHOTO_BYTES,
                         ActivityState, Budget, Chat, Store, UserError,
-                        load_character, now, make_model, make_voice, run_chat,
+                        load_character, memory_available, now, make_model, make_voice, run_chat,
                         safe_tool_activity_detail)
 import workbench_switch
 from autonomy import AutonomyController, GlanceController
@@ -1207,15 +1207,15 @@ class Hub(ScreenPopMixin):
     def save_models(self, payload):
         models = self.chat.cfg.models
         with models.env_lock, models.lock:
-            before = models.chosen('peter')
+            before = models.startup_choice('peter')
             models.save(payload)
             daily, monthly = models.limits()
             if self.acceptance_limits:
                 daily = min(daily, self.acceptance_limits[0])
                 monthly = min(monthly, self.acceptance_limits[1])
             self.chat.budget.daily, self.chat.budget.monthly = daily, monthly
-            after = models.chosen('peter')
-            if after[0] != before[0] or after[2] != before[2]:
+            after = models.startup_choice('peter')
+            if after is not None and (before is None or after[0] != before[0] or after[2] != before[2]):
                 self.chat.switch_model(after[1], after[2])
         return self.refresh_models()
 
@@ -2616,7 +2616,8 @@ def serve_chat(chat, hub, channels=(), acceptance=False):
     chat.claim_steer = hub.claim_steer
     chat.steer_pending = hub.steer_pending
     if getattr(chat.cfg, 'models', None) is not None:
-        hub.background_running = chat.cfg.models.chosen('background')[0]
+        background = chat.cfg.models.startup_choice('background')
+        hub.background_running = background[0] if background else None
         hub.refresh_models()
     chat.screen_pop_handler = hub.request_screen_pop
     files = getattr(chat.tools, 'files', None) if chat.tools else None
@@ -2869,9 +2870,12 @@ def main(argv=None):
             activity = ActivityState(store.root / cfg.id / 'resident-state.json')
             from runtime_monitor import RuntimeMonitor
             runtime_monitor = RuntimeMonitor(store, cfg.id, activity)
-            memory_port = (cfg.memory or {}).get('ombre_port') if (cfg.memory or {}).get('enabled') else None
+            use_memory = memory_available(cfg)
+            memory_port = (cfg.memory or {}).get('ombre_port') if use_memory else None
             hub = Hub(cfg.name, activity, memory_port, store.root / cfg.id / 'media',
                       data_root=data_dir, config_root=config_root)
+            if cfg.memory and cfg.memory.get('enabled') and not use_memory:
+                hub.push('notice', '模型还没有选择，记忆后台暂未启动；请在设置里选择模型后重启。')
             if acceptance_limits is not None:
                 hub.acceptance_limits = acceptance_limits
             from stickers import StickerLibrary
@@ -2889,7 +2893,7 @@ def main(argv=None):
                     from tools_agent import FilesystemTools
                     from web_tools import WebTools
                     with FilesystemTools(config_root, cfg, store, web_factory=WebTools) as tools:
-                        if cfg.memory and cfg.memory.get('enabled'):
+                        if use_memory:
                             from memory_agent import Memory, open_ombre
                             with open_ombre(config_root, cfg) as backend:
                                 with Memory(cfg, store, budget, model, backend, runtime_monitor) as memory:

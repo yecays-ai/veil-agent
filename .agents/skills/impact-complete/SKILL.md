@@ -27,4 +27,4 @@ description: 每个开发任务开始和交付前必读的 VEIL Agent 适配：�
 
 ## 示例（不是只检查这些）
 
-工单 228 的 CC 通道只接聊天，但 `autonomy.py` 的 `chat.send(..., autonomy=True)` 会使用聊天 provider，`veil_agent.py` 的 `_claude_agent_chat` 拒绝自主活动。此缺陷不由本流程文档引起，需在实际修复聊天与自主活动模型耦合的工单中修复；本 Skill 只要求当前 PR 修复由当前变更造成的问题，不把已有缺陷记成已修。
+工单 228 的旧聊天通道只接聊天，但 `autonomy.py` 的 `chat.send(..., autonomy=True)` 会使用聊天 provider，旧通道当时拒绝自主活动。此缺陷不由本流程文档引起，需在实际修复聊天与自主活动模型耦合的工单中修复；本 Skill 只要求当前 PR 修复由当前变更造成的问题，不把已有缺陷记成已修。

@@ -66,80 +66,38 @@ class GlanceModelTests(unittest.TestCase):
         self.assertEqual(seen[1][0], 'fake-model')
         self.assertEqual(cfg.provider['model'], 'fake-model')
 
-    def test_autonomy_uses_an_api_model_when_chat_uses_claude(self):
-        toml = TOML + '[providers.claude]\nkind = "claude_agent"\nmodel = "sonnet"\nmax_input_tokens = 6000\n'
-        (self.root / 'characters' / 'test' / 'character.toml').write_text(toml, encoding='utf-8')
+    def test_autonomy_follows_chat_until_explicitly_selected(self):
         cfg = load_character(self.root, 'test')
-        _, chat_name, chat_provider = cfg.models.use('peter', 'builtin:claude')
-        self.assertEqual(cfg.models.public()['use']['autonomy'], 'builtin:fake')
-        self.assertFalse(cfg.models.public()['use_explicit']['autonomy'])
-        cfg.models.save({'endpoints': [], 'models': [], 'use': {'peter': 'builtin:claude'}})
+        self.assertEqual(cfg.models.public()['use']['autonomy'], FOLLOW_CHAT)
         self.assertFalse(cfg.models.public()['use_explicit']['autonomy'])
         cfg.models.use('peter', 'builtin:other')
-        self.assertEqual(cfg.models.public()['use']['autonomy'], 'builtin:other')
-        cfg.models.use('peter', 'builtin:claude')
+        self.assertEqual(cfg.models.public()['use']['autonomy'], FOLLOW_CHAT)
         cfg.models.use('autonomy', 'builtin:fake')
         self.assertTrue(cfg.models.public()['use_explicit']['autonomy'])
-        self.assertEqual(load_character(self.root, 'test').models.public()['use']['autonomy'], 'builtin:fake')
-        with self.assertRaises(SettingsError):
-            cfg.models.use('autonomy', 'builtin:claude')
+        self.assertEqual(cfg.models.public()['use']['autonomy'], 'builtin:fake')
+        cfg.models.use('autonomy', FOLLOW_CHAT)
+        self.assertFalse(cfg.models.public()['use_explicit']['autonomy'])
+        self.assertEqual(cfg.models.public()['use']['autonomy'], FOLLOW_CHAT)
+        self.assertEqual(cfg.models.chosen('autonomy')[0], cfg.models.chosen('peter')[0])
+        again = load_character(self.root, 'test')
+        self.assertEqual(again.models.public()['use']['autonomy'], FOLLOW_CHAT)
+        self.assertFalse(again.models.public()['use_explicit']['autonomy'])
 
+    def test_autonomy_uses_its_api_model_and_restores_chat(self):
+        cfg = load_character(self.root, 'test')
+        _, chat_name, chat_provider = cfg.models.use('peter', 'builtin:other')
+        cfg.models.use('autonomy', 'builtin:fake')
         store = Store(self.root / 'data')
         chat = Chat(cfg, store, Budget(store), Mock())
         chat.switch_model(chat_name, chat_provider)
         cfg.autonomy['max_input_tokens'] = 10000
         seen = []
-        chat._send = lambda *a, **k: seen.append((cfg.provider['model'], cfg.provider['max_input_tokens'])) or 'ok'
+        chat._send = lambda *a, **k: seen.append(
+            (cfg.provider['model'], cfg.provider['max_input_tokens'])) or 'ok'
         self.assertEqual(chat.send('wake', autonomy=True), 'ok')
         self.assertEqual(chat.send('hi'), 'ok')
-        self.assertEqual(seen, [('fake-model', 6000), ('sonnet', 6000)])
-        self.assertEqual(cfg.provider['model'], 'sonnet')
-
-    def test_autonomy_has_no_invalid_default_when_only_claude_is_configured(self):
-        toml = '''name = "Test"
-provider = "claude"
-persona = "persona/test.md"
-history_rounds = 20
-max_output_tokens = 50
-[providers.claude]
-kind = "claude_agent"
-model = "claude-agent"
-max_input_tokens = 60000
-'''
-        (self.root / 'characters' / 'test' / 'character.toml').write_text(toml, encoding='utf-8')
-        cfg = load_character(self.root, 'test')
-        view = cfg.models.public()
-        self.assertIsNone(view['use']['autonomy'])
-        self.assertFalse(view['use_explicit']['autonomy'])
-        with self.assertRaisesRegex(SettingsError, '添加或启用一个 API 模型'):
-            cfg.models.chosen('autonomy')
-
-    def test_claude_code_model_aliases_are_visible_as_builtins(self):
-        toml = TOML + '''
-[providers.claude_agent]
-kind = "claude_agent"
-label = "Claude Code · Sonnet（均衡）"
-model = "sonnet"
-max_input_tokens = 200000
-[providers.claude_agent_haiku]
-kind = "claude_agent"
-label = "Claude Code · Haiku（额度较省）"
-model = "haiku"
-max_input_tokens = 200000
-[providers.claude_agent_opus]
-kind = "claude_agent"
-label = "Claude Code · Opus（深度推理）"
-model = "opus"
-max_input_tokens = 200000
-'''
-        (self.root / 'characters' / 'test' / 'character.toml').write_text(toml, encoding='utf-8')
-        view = load_character(self.root, 'test').models.public()
-        aliases = {item['label']: item['model'] for item in view['models'] if item.get('kind') == 'claude_agent'}
-        self.assertEqual(aliases, {
-            'Claude Code · Sonnet（均衡）（内置）': 'sonnet',
-            'Claude Code · Haiku（额度较省）（内置）': 'haiku',
-            'Claude Code · Opus（深度推理）（内置）': 'opus',
-        })
+        self.assertEqual(seen, [('fake-model', 6000), ('other-model', 6000)])
+        self.assertEqual(cfg.provider['model'], 'other-model')
 
     def test_builtin_grok_is_the_default_when_configured(self):
         toml = TOML + '[providers.grok]\nmodel = "grok-4.6"\nbase_url = "https://g.invalid/v1"\n' \
