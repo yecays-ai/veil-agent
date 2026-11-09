@@ -326,6 +326,26 @@ class BrowserSafetyTests(unittest.TestCase):
         self.assertIn('show must be', browser.invoke(
             'browser', {'action': 'open', 'url': 'https://example.com/', 'show': 'yes'})[0])
 
+    def test_unexpected_failure_keeps_a_diagnosable_reason_without_paths_or_credentials(self):
+        class Error(Exception):
+            pass
+        text = ('Page.goto: net::ERR_NAME_NOT_RESOLVED at https://user:pw@example.com/a?token=abc#x\n'
+                'Call log:\n  - C:\\Users\\lan\\AppData\\ms-playwright\\chromium-1248\\chrome.exe')
+        reason = browser_tools.failure_reason(Error(text))
+        self.assertEqual(reason, 'Error: Page.goto: net::ERR_NAME_NOT_RESOLVED at https://example.com/a')
+        for secret in ('pw', 'token=abc', 'lan'):
+            self.assertNotIn(secret, reason)
+        path_reason = browser_tools.failure_reason(Error("Executable doesn't exist at C:\\Users\\lan\\x\\chrome.exe"))
+        self.assertEqual(path_reason, "Error: Executable doesn't exist at <path>")
+        self.assertEqual(browser_tools.failure_reason(Error('/home/lan/.cache/chrome failed')), 'Error: <path> failed')
+        self.assertEqual(browser_tools.failure_reason(Error()), 'Error')
+        browser = BrowserTools(CFG, platform_enabled=True, monitor=Idle())
+        self.addCleanup(browser.close)
+        browser.begin_request()
+        with patch.object(BrowserTools, '_operate', side_effect=Error('Page.goto: net::ERR_TIMED_OUT at https://example.com/')):
+            result, state, _ = browser.invoke('browser', {'action': 'open', 'url': 'https://example.com/'})
+        self.assertIn('Error: Page.goto: net::ERR_TIMED_OUT', result)
+
     def test_cjk_evidence_is_kept_and_wrapped_as_untrusted(self):
         result = model_tool_result('browser', '视频页面已准备，播放未确认', '成功')
         self.assertIn('视频页面', result)
