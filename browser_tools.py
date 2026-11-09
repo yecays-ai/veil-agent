@@ -163,6 +163,20 @@ SUBMIT_FORM = """(element, expected) => { const form = element.form;
  form.submit(); return true; }"""
 
 
+def failure_reason(exc):
+    """Class name plus the first line of the library's message, so a failure can be diagnosed from the log
+    (Playwright's own exception class is just `Error`). Local paths and URL credentials/queries are hidden."""
+    text = (str(exc).strip().splitlines() or [''])[0]
+    text = re.sub(r'(?i)\b([a-z][a-z0-9+.-]*://)[^/\s]*@', r'\1', text)
+    text = re.sub(r'(?i)(https?://[^\s?#]+)[?#]\S*', r'\1', text)
+    # A Windows path may contain spaces (a profile like "John Doe"), so it is hidden to the end of the line.
+    text = re.sub(r'(?i)\b[a-z]:[\\/][^\'"\r\n]*', '<path>', text)
+    text = re.sub(r'(?i)\bfile:/{1,3}[^\s\'"]*', '<path>', text)
+    text = re.sub(r'(?<![\w:/])/(?:home|users|root|opt|usr|var|tmp|mnt)/[^\s\'"]*', '<path>', text, flags=re.I)
+    name = type(exc).__name__
+    return f'{name}: {text[:200]}' if text else name
+
+
 class BrowserTools:
     def __init__(self, cfg, *, platform_enabled=None, headless=None, monitor=None):
         self.enabled = bool((getattr(cfg, 'web', None) or {}).get('enabled') is True
@@ -481,8 +495,7 @@ class BrowserTools:
             if args.get('action') == 'open' if isinstance(args, dict) else False:
                 # A failed open does not change the mode; the next open relaunches if they differ.
                 self.visible = previous_visible
-            # Do not expose arbitrary browser/network exception text or local installation paths.
-            reason = str(exc) if isinstance(exc, ValueError) else type(exc).__name__
+            reason = str(exc) if isinstance(exc, ValueError) else failure_reason(exc)
             return 'Browser action failed or was interrupted: ' + reason[:300], '被拒绝', summary
         finally:
             self.gate.release()
