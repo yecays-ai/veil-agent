@@ -908,10 +908,15 @@ max_result_bytes = 200
         tools.invoke.return_value = ('contents', '成功', 'one.txt')
         output = []
         chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=output.append)
-        self.assertEqual(chat.send('read it'), 'The tool-step limit for this request has been reached.')
+        chat.investigation.record('Investigate A.', 'request-0', 'read_text_file',
+                                  {'path': 'old.txt'}, '成功', 'old.txt', 'confirmed fact')
+        chat.investigation.interrupt('step_limit', 'request-0')
+        self.assertEqual(chat.send('继续'), 'The tool-step limit for this request has been reached.')
         self.assertEqual(model.call_count, 2)
         self.assertEqual(tools.invoke.call_count, 1)
         self.assertIn('The tool-step limit for this request has been reached.', output)
+        self.assertEqual(chat.investigation.read()['status'], 'interrupted')
+        self.assertEqual(chat.investigation.read()['reason'], 'step_limit')
 
     def test_final_step_uses_existing_tool_results_without_offering_more_tools(self):
         self.cfg.tools['max_steps'] = 2
@@ -1129,6 +1134,7 @@ max_result_bytes = 200
 
         self.assertEqual(reply, 'Found one source.')
         self.assertTrue(chat.reply_displayed)
+        self.assertEqual(chat.investigation.read()['status'], 'interrupted')
         tools.invoke.assert_not_called()
 
     def test_calibrated_social_schema_expansion_fits_the_65k_model_limit(self):
@@ -1232,6 +1238,12 @@ max_result_bytes = 200
 
         self.assertEqual(reply, 'The result is ready.')
         self.assertEqual(chat.send_message_count, 1)
+        send = next(row for row in chat.investigation.read()['evidence']
+                    if row['tool'] == 'send_message')
+        self.assertEqual(send['state'], '成功')
+        self.assertFalse(send['read_only'])
+        self.assertIn('already completed', chat.investigation.resume_guard(
+            'send_message', {'text': 'The result is ready.'}))
         tools.invoke.assert_not_called()
 
     def test_tool_result_drops_oldest_history_round_before_reply(self):

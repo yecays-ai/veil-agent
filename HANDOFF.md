@@ -1,20 +1,17 @@
 # HANDOFF
 
-## 当前工单 317（2026-11-09 08:20 +08）
+## 工单 318：普通聊天调查续接（2026-11-09 +08）
 
-- 分支 `ticket/317-remove-claude-code`，PR #316：https://github.com/yecays-ai/veil-agent/pull/316。开发在 `.agents/worktrees/ticket-317-remove-claude-code`，正式运行目录未动；没有修改或重新测试工单 315 的验收工作区。
-- 工单 316（PR #315）已合并为 `b70ddaa`。本分支已同步该提交，解决 `STATUS.md`、`HANDOFF.md` 冲突；`veil_agent.py` 自动合并，已分别核对 316 的维护任务/工作台代码与 317 的 CC 移除。
-- CC 撤除已完成：删除 `claude_agent_channel.py`、`claude_agent_bridge.py`、`scripts/claude_agent_smoke.py`、两个专属测试、`experiments/cc-bridge/`、`experiments/cc-jail/`；`veil_agent.py` 去掉 CC 导入、provider 配置、聊天执行器、成本写入、空回复、工作台、后台模型和委派成本分支；`model_settings.py` 去掉 CC 用途限制/密钥状态并加旧 `models.json` 一次性迁移；`character.toml` 删除三个 CC provider；桌面端删除 CC 筛选和提示。
-- 审查修复已完成：无聊天模型时设置页可保存首个接口/模型；缺少 `providers` 表、provider 无效或只剩 CC provider 时可恢复启动；缺模型/Key 改为可恢复的 `RequestNotSent`，聊天循环和桌面服务不退出；带完整 API 字段的旧 `claude_agent` provider 不注册。`models.json` 的迁移、保存和切换已用跨进程文件锁串行，并在写入前检查旧快照，发现另一个进程已修改时拒绝覆盖。
-- 合并后工作台回归：`test_executor_opencode` 100 项通过（2 项跳过）、`test_maintenance` 43 项、`test_workbench_switch` 2 项、`test_turn_stop` 7 项通过。其他受影响：model_settings 38、chat 90、web 67、tools 73（1 跳过）、autonomy 40、background 19、glance_model 7、delegate 9、mcp_services 23、tool_groups 10、tool_aliases 11、long_tasks 23、free_reply 31、cache_order 8、capability_transactions 7 项通过；Python 编译和 `node --check desktop/chat.js` 通过。
-- 下一个窗口第一步：推送当前合并提交和文档，等 PR #316 最新 CI 全绿，确认必需检查和实际分支保护；满足后由 agent 合并。合并后按 `STATUS.md` 请 Lan 验收，不再开新 PR。
-- 未验证：真实付费 API、真实 OpenCode 交互授权/停止、Windows 桌面实际点击；不能把自动测试当作桌面体验验收。
-- 数据安全：迁移只处理确认过的 CC 内置 provider 引用，先写 `models.json.cc-removal-backup` 再原子替换；历史 `claude-agent-costs.jsonl`、聊天和记忆数据不删除、不改写。不要卸载或修改本机的 Claude Code / Claude Desktop。
+- 分支 `ticket/318-chat-investigation-resume`，PR #317。PR #316 已合并至 `main` 的 `3af0092bd677bfcce2807f7fb8db7ce11e0fa2b3`；本分支已合并该 main 并解决 `STATUS.md`、`HANDOFF.md` 冲突，`veil_agent.py` 自动合并后需以回归确认两边功能。
+- 检查点存角色本地最多 16 条真实工具状态与有限清理证据，不存模型计划或原始大文件；续接从目标和证据重新规划。副作用恢复仍受预算、工具权限、审批和重复执行保护。
+- 上一轮追查 PR CI 确认自主运行的 `resume_context` 未初始化；修复提交 `0334b8e` 已在原 PR，针对性 91 项通过。合并 #316 后的最终合并提交尚需完整验证。
 
-## 316 合并后仍适用的限制
+## 下一个窗口第一步
 
-- 真实 GitHub 写入、真实 GitHub 账号/权限/分支保护下的任务交付仍未验证；本地假 PR 不能替代。
-- 模型中继只允许 HTTP/HTTPS 端口 80/443；`ssh`/`nc` 等非 HTTP 协议即使批准也会被防火墙拒绝。
-- 旧工作台镜像必须重建；自定义镜像不会被默认 Dockerfile 覆盖，缺失时开启脚本会提示自行构建。
-- 非容器工作台仍会在首次测试时询问一次，且没有容器网络隔离。
-- 容器看门狗在宿主长时间卡顿（约 10 秒以上无法响应健康检查）时可能误停工作台。
+查看 PR #317 最新 CI 和 Cubic 实质评论；修复必要问题，满足分支保护后合并，不把自动测试当作 Windows 实际验收。
+
+## Windows 体验验收
+
+1. `characters/peter/character.toml` 的 `[tools] max_steps` 临时改为 3，做四步以上公开调查，观察中断交接。
+2. 说“继续刚才的调查”，重启后再续接；验证 15 分钟内只读证据不重查、过期证据按需重查、普通聊天不覆盖检查点；完成后恢复原配置。
+3. 拒绝或停止审批动作后续接，确认不重放且仍受费用和权限限制。
