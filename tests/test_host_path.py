@@ -33,7 +33,7 @@ def make_checkpoint(root, *, answers=(), autonomy=False, foreground=None, protec
     checkpoint = vc.Checkpoint(work, ask=ask, autonomy=autonomy, log_path=root / 'log.jsonl',
                                forbidden=vc.forbidden_roots(root / 'veil', home=root / 'home'),
                                foreground=foreground or (lambda: ('notepad.exe', 'Untitled - Notepad')),
-                               protect=protect)
+                               protect=protect, window_rect=lambda: (0, 0, 10 ** 6, 10 ** 6), read_focus=lambda: None)
     return checkpoint, work, asked
 
 
