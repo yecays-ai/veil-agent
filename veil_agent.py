@@ -5668,7 +5668,8 @@ def main():
             with client, background_client:
                 from tools_agent import FilesystemTools
                 from web_tools import WebTools
-                with FilesystemTools(ROOT, cfg, store, web_factory=WebTools) as tools:
+                with FilesystemTools(ROOT, cfg, store, web_factory=lambda root, config: WebTools(
+                        root, config, budget=budget)) as tools:
                     if use_memory:
                         from memory_agent import Memory, open_ombre
                         with open_ombre(ROOT, cfg) as backend:

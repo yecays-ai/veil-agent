@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -122,6 +123,91 @@ class WebToolsTests(unittest.TestCase):
         with patch('web_tools.DDGS', return_value=ddgs):
             tools.invoke('web_search', {'query': 'topic'})
         self.assertEqual([c.kwargs['backend'] for c in ddgs.text.call_args_list], ['mojeek'])
+
+    def deepseek_tools(self):
+        root, _, tools, _ = self.make_tools(worker=Mock())
+        (root / '.env').write_text('DEEPSEEK_API_KEY=sk-test-secret\n', encoding='utf-8')
+        tools.budget = Mock()
+        tools.budget.reserve_amount.return_value = ('rid', web_tools.DEEPSEEK_SEARCH_CNY)
+        return tools
+
+    def test_deepseek_search_is_tried_first_with_the_saved_key_and_its_price_is_recorded(self):
+        tools = self.deepseek_tools()
+        ddgs = Mock()
+        found = [{'title': 'T', 'href': 'https://ok.example/a', 'body': 'summary'}]
+        with patch('web_tools.deepseek_search', return_value=found) as search, \
+                patch('web_tools.DDGS', return_value=ddgs):
+            result, state, _ = tools.invoke('web_search', {'query': 'topic'})
+        self.assertEqual(state, '成功', result)
+        self.assertIn('https://ok.example/a', result)
+        self.assertEqual(search.call_args.args, ('topic', 'sk-test-secret'))
+        ddgs.text.assert_not_called()
+        tools.budget.reserve_amount.assert_called_once_with(
+            'test', 'deepseek-search', web_tools.DEEPSEEK_SEARCH_CNY, 'deepseek-search')
+        tools.budget.settle_estimate.assert_called_once_with(
+            ('rid', web_tools.DEEPSEEK_SEARCH_CNY), 'deepseek-search', settled_amount=web_tools.DEEPSEEK_SEARCH_CNY)
+
+    def test_failed_or_empty_deepseek_search_costs_nothing_and_falls_back_without_leaking_the_key(self):
+        tools = self.deepseek_tools()
+        ddgs = Mock()
+        ddgs.text.return_value = [{'title': 'Hit', 'href': 'https://ok.example/b', 'body': 'x'}]
+        with patch('web_tools.deepseek_search', side_effect=OSError('401 for sk-test-secret')), \
+                patch('web_tools.DDGS', return_value=ddgs):
+            result, state, _ = tools.invoke('web_search', {'query': 'topic'})
+        self.assertEqual(state, '成功', result)
+        self.assertEqual(tools.budget.settle_estimate.call_args.kwargs['settled_amount'], 0)
+        self.assertEqual(tools.budget.settle_estimate.call_args.args[1], 'deepseek-search-failed')
+        tools.budget.reset_mock()
+        tools.budget.reserve_amount.return_value = ('rid2', web_tools.DEEPSEEK_SEARCH_CNY)
+        tools._last_engine = None
+        ddgs.text.side_effect = TimeoutError()
+        with patch('web_tools.deepseek_search', side_effect=OSError('bad sk-test-secret')), \
+                patch('web_tools.DDGS', return_value=ddgs):
+            result, state, _ = tools.invoke('web_search', {'query': 'topic'})
+        self.assertEqual(state, '出错')
+        self.assertNotIn('sk-test-secret', result)
+        self.assertIn('deepseek: OSError: bad <key>', result)
+        tools.budget.reset_mock()
+        tools.budget.reserve_amount.return_value = ('rid3', web_tools.DEEPSEEK_SEARCH_CNY)
+        tools._last_engine = None
+        ddgs.text.side_effect = None
+        with patch('web_tools.deepseek_search', return_value=[]), patch('web_tools.DDGS', return_value=ddgs):
+            tools.invoke('web_search', {'query': 'topic'})
+        self.assertEqual(tools.budget.settle_estimate.call_args.kwargs['settled_amount'], 0)
+
+    def test_a_search_over_the_budget_is_skipped_not_fatal(self):
+        tools = self.deepseek_tools()
+        tools.budget.reserve_amount.side_effect = RuntimeError('over budget')
+        ddgs = Mock()
+        ddgs.text.return_value = [{'title': 'Hit', 'href': 'https://ok.example/c', 'body': 'x'}]
+        with patch('web_tools.deepseek_search') as search, patch('web_tools.DDGS', return_value=ddgs):
+            result, state, _ = tools.invoke('web_search', {'query': 'topic'})
+        self.assertEqual(state, '成功', result)
+        search.assert_not_called()
+
+    def test_deepseek_search_request_and_response_shape(self):
+        response = Mock(status=200)
+        response.read.return_value = json.dumps({'results': [
+            {'title': 'A', 'url': 'https://a.example/', 'snippet': 'sn', 'summary': 'long summary'},
+            {'title': 'B', 'url': 'https://b.example/', 'snippet': 'only snippet', 'summary': ''}]}).encode()
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=False)
+        opener = Mock()
+        opener.open.return_value = response
+        with patch('web_tools.urllib.request.build_opener', return_value=opener):
+            found = web_tools.deepseek_search('查' * 300, 'sk-k', timeout=7)
+        self.assertEqual(found, [{'title': 'A', 'href': 'https://a.example/', 'body': 'long summary'},
+                                 {'title': 'B', 'href': 'https://b.example/', 'body': 'only snippet'}])
+        request = opener.open.call_args.args[0]
+        self.assertEqual(request.full_url, 'https://api.deepseek.com/v1/tools/search')
+        self.assertEqual(request.get_header('Authorization'), 'Bearer sk-k')
+        sent = json.loads(request.data)
+        self.assertEqual(sent, {'query': '查' * 128, 'count': 8, 'need_content': False})
+        self.assertEqual(opener.open.call_args.kwargs['timeout'], 7)
+        response.read.return_value = b'{"error": 1}'
+        with patch('web_tools.urllib.request.build_opener', return_value=opener), \
+                self.assertRaises(OSError):
+            web_tools.deepseek_search('q', 'sk-k')
 
     def test_failure_reason_hides_proxy_credentials(self):
         _, _, tools, _ = self.make_tools(worker=Mock())
