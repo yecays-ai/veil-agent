@@ -9,6 +9,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import browser_tools
 from browser_tools import (BrowserTools, BrowserWorkbenchGateway, PublicProxy, public_addresses, public_url,
                            MAX_BYTES, MAX_MCP_REQUEST_BYTES)
 from veil_agent import model_tool_result
@@ -106,11 +107,39 @@ class BrowserWorkbenchGatewayTests(unittest.TestCase):
         browser = SimpleNamespace(begin_request=lambda: None, invoke=lambda *_args, **_kwargs: ('', '成功', ''),
                                   monitor=Idle())
         gateway = BrowserWorkbenchGateway(browser, lambda: False)
-        with patch.object(threading.Thread, 'start', side_effect=RuntimeError('no thread')):
-            with self.assertRaises(RuntimeError):
-                gateway.__enter__()
+        closed = []
+        original_close = browser_tools.ThreadingHTTPServer.server_close
+
+        def close(server):
+            closed.append(True)
+            original_close(server)
+
+        outcome = {}
+
+        def worker():
+            with patch.object(threading.Thread, 'start', side_effect=RuntimeError('no thread')), \
+                    patch.object(browser_tools.ThreadingHTTPServer, 'server_close', close):
+                try:
+                    gateway.__enter__()
+                except RuntimeError as exc:
+                    outcome['error'] = exc
+
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+        thread.join(5)
+        self.assertFalse(thread.is_alive(), 'a failed serve-thread start must not hang')
+        self.assertIn('error', outcome)
+        self.assertEqual(closed, [True])
         self.assertIsNone(gateway.thread)
         self.assertIsNone(gateway.server)
+
+    def test_gateway_rejects_non_object_params_with_400(self):
+        browser = SimpleNamespace(begin_request=lambda: None, invoke=lambda *_args, **_kwargs: ('', '成功', ''),
+                                  monitor=Idle())
+        with BrowserWorkbenchGateway(browser, lambda: False) as gateway:
+            with self.assertRaises(urllib.error.HTTPError) as rejected:
+                self.request(gateway, {'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call', 'params': None})
+        self.assertEqual(rejected.exception.code, 400)
 
     def test_a_new_gateway_closes_the_previous_tasks_idle_page(self):
         closed = []

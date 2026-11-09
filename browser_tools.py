@@ -525,10 +525,15 @@ class BrowserWorkbenchGateway:
                 try:
                     size = gateway.request_size(self.headers.get('Content-Length'))
                     request = json.loads(self.rfile.read(size))
+                    if not isinstance(request, dict) or not isinstance(request.get('method'), str):
+                        raise ValueError('invalid request')
+                    params = request.get('params') or {}
+                    if not isinstance(params, dict):
+                        raise ValueError('invalid params')
                     method, request_id = request['method'], request.get('id')
                     if method == 'initialize':
                         return self._send({'jsonrpc': '2.0', 'id': request_id, 'result': {
-                            'protocolVersion': request.get('params', {}).get('protocolVersion', '2025-03-26'),
+                            'protocolVersion': params.get('protocolVersion', '2025-03-26'),
                             'capabilities': {'tools': {}}, 'serverInfo': {'name': 'veil-browser', 'version': '1'}}},
                             session=gateway.token)
                     if method == 'notifications/initialized':
@@ -548,7 +553,6 @@ class BrowserWorkbenchGateway:
                                  'required': ['action'], 'additionalProperties': False}}
                         ]}})
                     if method == 'tools/call':
-                        params = request.get('params', {})
                         arguments = params.get('arguments', {})
                         if params.get('name') != 'public_browser':
                             raise ValueError('unknown tool')
