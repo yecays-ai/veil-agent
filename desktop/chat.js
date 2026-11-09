@@ -1898,10 +1898,11 @@ function modelPrice(m){
   if(m.builtin)return '内置，价格在 character.toml';
   return m.billing==='call'?'每次 ¥'+m.cny_per_call:'输入 ¥'+m.input_cny_per_million+' / 输出 ¥'+m.output_cny_per_million+'（每百万 tokens）';
 }
-function fillModelSelect(select,view,value,followOption,excludeKind){
+function fillModelSelect(select,view,value,followOption){
   const follow=followOption?[(()=>{const o=document.createElement('option');o.value='follow-chat';o.textContent='跟随聊天模型';return o})()]:[];
   const optional=select.id==='use-delegate'?[(()=>{const o=document.createElement('option');o.value='';o.textContent='关闭委派';return o})()]:[];
-  select.replaceChildren(...optional,...follow,...view.models.filter(m=>!excludeKind||m.kind!==excludeKind).map(m=>{const o=document.createElement('option');o.value=m.id;o.textContent=modelName(m)+(m.key_set?'':'（没有 key）');return o}));
+  const placeholder=!value&&select.id!=='use-delegate'?[(()=>{const o=document.createElement('option');o.value='';o.textContent='请选择模型';o.disabled=true;return o})()]:[];
+  select.replaceChildren(...optional,...placeholder,...follow,...view.models.map(m=>{const o=document.createElement('option');o.value=m.id;o.textContent=modelName(m)+(m.key_set?'':'（没有 key）');return o}));
   select.value=value;
   syncVeilSelect(select);
 }
@@ -1921,7 +1922,8 @@ function renderModels(view){
   if(signature===modelsSignature)return;
   modelsSignature=signature;modelsView=view;
   fillModelSelect(sw,view,view.use.peter);
-  fillModelSelect($('use-peter'),view,view.use.peter);fillModelSelect($('use-autonomy'),view,view.use.autonomy,false,'claude_agent');fillModelSelect($('use-delegate'),view,view.use.delegate||'',false,'claude_agent');fillModelSelect($('use-background'),view,view.use.background);fillModelSelect($('use-glance'),view,view.use.glance,true);
+  fillModelSelect($('use-peter'),view,view.use.peter);fillModelSelect($('use-autonomy'),view,view.use.autonomy,true);fillModelSelect($('use-delegate'),view,view.use.delegate||'');fillModelSelect($('use-background'),view,view.use.background);fillModelSelect($('use-glance'),view,view.use.glance,true);
+  $('models-migration').textContent=view.migration_notice||'';$('models-migration').hidden=!view.migration_notice;
   $('background-hint').textContent=view.background_restart?'记忆后台已改，完全退出 Peter 再打开才生效。':'Ombre 给记忆打标签、整理短期便签用这个。换了以后，完全退出 Peter 再打开才生效。';
   if(document.activeElement!==$('limit-daily'))$('limit-daily').value=view.limits.daily_cny;
   if(document.activeElement!==$('limit-monthly'))$('limit-monthly').value=view.limits.monthly_cny;

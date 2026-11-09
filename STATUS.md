@@ -1,33 +1,27 @@
 # 当前状态
 
-更新：2026-11-09 08:05 (+08) · 工单 316（Windows 验收通过，Cubic 实质意见已处理，待最终 CI 与合并）。
+更新：2026-11-09 08:35 (+08) · 工单 317。
 
 ## 当前目标
 
-修复自主维护从任务、工作台、交付到停止、恢复和验收的执行契约，并让容器工作区的普通开发、测试能连续完成而不牺牲网络和数据边界。
+完成 Claude Code 专用接入撤除并合入 `main`：模型设置不再出现 CC 模型和通道，正式运行不再查找、启动或管理 Claude CLI，同时保留 API 聊天、工具、记忆、OpenCode 工作台和五类独立选模。
 
 ## 现状
 
-- PR #315（工单 316，分支 `ticket/316-maintenance-execution-contract`，基于 `b7847ca`）已从草稿转为可合并审查；合并由 agent 在最终 CI、Cubic 实质意见和实际分支保护满足后执行，合并提交以 GitHub `main` 为准。工单 315（复制消息时间）的 worktree 和已有内容未动。
-- **Lan 的 Windows 体验验收已通过（2026-11-09）**：真实模型在隔离容器 workbench 里修改 `app.py` 并运行 `python3 -m unittest test_app`，退出码 0，普通测试没有误弹审批卡；模拟 PR 交付、未授权合并保护、运行中停止、重启后保持停止均符合预期。
-- **真实 GitHub 写入未验证**：验收任务使用的是本地假 GitHub/假 PR，不能把模拟交付写成真实 GitHub 交付已验证。PR #315 本身的合并是独立的真实 GitHub 操作。
-- 安全与状态机复核已修复：
-  - 容器测试自动放行，出口防火墙只允许模型中继和本次任务已批准的主机；测试不能直接访问任意网络。
-  - 权限默认拒绝；`ssh`、`nc`、`rm`、git 写操作等未知/写命令先问 Lan。
-  - 输出型命令（`echo`/`printf`）、只读探针、分组只读命令、容器 `/tmp` 不再误触发审批；重定向、命令替换仍被拒绝。
-  - 代理只允许已批准主机，并限制在 HTTP/HTTPS 端口（80/443）；代理主机授权只来自明确的联网/安装命令，不再由任意复杂命令扩大。
-  - 测试退出码覆盖标准、`timeout`、`pipefail` 和打印 `$?` 的包装命令；无法确认真实退出码时失败关闭，不把失败报告成成功。
-  - 同时修复：自定义工作台镜像不被默认 Dockerfile 覆盖；Python 3.11 的 tar 解压兼容；验收前重新核对远端 PR head；工作台 prompt 不再把仓库文件名当指令；已停止任务在 worktree 缺失/分支不符时仍可查看；代理突发额度提高到更适合大安装的值。
-- **残余风险**：测试代码与 OpenCode 同用户运行，能读取模型代理令牌，因而可调用本次模型 API（受请求上限和预算约束），但不能访问任意主机。要彻底隔离需要独立测试用户/网络命名空间，不在本单实现；这与“普通测试不弹审批”的产品取舍有关，已记录。
-- 分支保护：仓库使用 ruleset `VEIL Main Protection`，要求 `audit`、四个 `offline-chat` 矩阵和 `scanner-report-smoke` 全部通过，且要求分支与 `main` 同步；Cubic 的 `COMMENTED` review 不是 required check。
-- 最终提交的必需 CI 以 GitHub PR #315 检查为准；本地相关回归最近一次为 143 项通过、2 项按环境跳过。
+- 工单 317 在 `ticket/317-remove-claude-code`，PR #316：https://github.com/yecays-ai/veil-agent/pull/316。分支已同步 `main` 的 `b70ddaa`；PR 等待最新 CI 和实际分支保护满足后合并。
+- 已删除 CC 独立执行器、MCP 桥、Claude CLI 发现、后台子进程、专属实验、冒烟脚本和专属测试；`veil_agent.py`、`model_settings.py`、`characters/peter/character.toml` 与桌面端已完成定向删除。OpenCode、维护任务、MCP、委派、费用和工具等共享基础设施保留。
+- 旧 `data/<角色>/models.json` 中已确认的 CC 内置模型引用会迁移：先保留 `models.json.cc-removal-backup`，再原子替换。聊天和记忆后台优先恢复已填写 Key 的 API 模型；没有 Key 时明确提示；没有普通 API 模型时以显式“未选择模型”启动，设置页仍可保存首个接口和模型。自主活动和瞄一眼恢复默认选择，委派清空并提示重选；其他用途、自定义模型、接口、API Key、价格和费用上限不变。
+- 缺少 `providers` 表或默认 provider 被删除/是 CC 时可恢复启动；普通默认 provider 本身配置无效时仍报明确配置错误，不会静默换到另一个付费模型。缺模型/Key 按可恢复请求错误处理，聊天循环和桌面服务不退出；此时模型相关的 Ombre 记忆后台暂不启动，并提示选择模型后重启。
+- `models.json` 的迁移、保存和模型切换通过同一跨进程文件锁串行；保存/切换前检查文件是否已被另一个进程修改，发现旧快照会拒绝覆盖并提示刷新。锁文件是 `data/<角色>/models.json.lock`，不写入用户配置。
+- 合并后工作台回归：`executor_opencode` 100 项通过（2 项按环境跳过）、`maintenance` 43 项通过、`workbench_switch` 2 项通过、`turn_stop` 7 项通过；覆盖维护任务启动、执行、停止、取消、状态写回、资源清理及工作台切换。另有 model_settings 38、chat 90、web 67、tools 73（1 跳过）、autonomy 40、background 19、glance_model 7、delegate 9、mcp_services 23、tool_groups 10、tool_aliases 11、long_tasks 23、free_reply 31、cache_order 8、capability_transactions 7 项通过；Python 编译和 `node --check desktop/chat.js` 通过。
+- 未完成：真实付费 API、真实 OpenCode 交互授权/停止、Windows 桌面实际点击未验证。代码合并、自动检查通过、Windows 体验验收分别记录，不相互代替。
 
 ## 下一步
 
-若 PR 尚未合并：推送最终文档提交，等最新 CI 全绿，逐条回复并解决 Cubic 实质评论，确认 ruleset 和 PR 可合并后由 agent 合并。若已合并：本文件随合并进入 `main`，下一步只按下面的验收范围补真实 GitHub 交付验证。
+等 PR #316 最新 CI 全绿，确认必需检查与实际分支保护后合并。合并后请 Lan 按下面步骤验收。
 
-## 验收步骤
+## Lan 的 Windows 体验验收
 
-1. Windows 体验验收已完成：普通修改/测试不再误审批；风险命令仍会先问。
-2. 模拟 PR 的未授权合并保护、运行中停止、重启后保持停止已完成。
-3. 真实 GitHub 写入、真实分支保护下的任务交付仍未验证；需要后续用真实测试仓库单独验收，不能拿本地假 PR 代替。
+1. 重启 Peter，打开设置 → 模型：Claude Code 的 Sonnet、Haiku、Opus 和通道入口消失；普通 API 模型、自定义模型、接口、API Key、价格和费用上限还在。
+2. 用现有 API 模型聊一句，并让它读一条记忆、存一条记忆；分别切换聊天、自主活动、记忆后台、瞄一眼、委派模型，重启后确认各自仍然保留。
+3. 用非 CC API 模型跑一次只读委派任务；再打开 OpenCode 工作台读取、修改一个测试文件、执行一次测试并停止；确认任务栏和进程里没有 VEIL 启动的 Claude CLI。

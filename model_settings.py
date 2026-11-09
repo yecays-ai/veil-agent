@@ -13,12 +13,18 @@ import base64
 import shutil
 import stat
 import threading
+from contextlib import contextmanager
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 BUILTIN_PREFIX = 'builtin:'
 ROLES = ('peter', 'autonomy', 'background', 'glance', 'delegate')
 FOLLOW_CHAT = 'follow-chat'  # glance only: use whatever Peter's chat model is
+# Ticket 317: Claude Code built-in providers were removed. Only these confirmed provider names are
+# migrated; a user's own API model that merely contains "claude" in its name is left untouched.
+RETIRED_CC_BUILTINS = frozenset({'claude_agent', 'claude_agent_haiku', 'claude_agent_opus', 'claude'})
+ROLE_LABELS = {'peter': '聊天', 'autonomy': '自主活动', 'background': '记忆后台',
+               'glance': '瞄一眼', 'delegate': '委派任务'}
 GLANCE_DEFAULT_MODEL = 'grok-4.6'  # Ticket 211: preferred glance model when Lan has configured it
 DEFAULT_DAILY = Decimal('10')
 DEFAULT_MONTHLY = Decimal('300')
@@ -68,6 +74,38 @@ def _key(value):
     return value
 
 
+@contextmanager
+def _exclusive_file_lock(path):
+    """Cross-process lock for models.json, so migration and saves cannot interleave."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = path.open('a+b')
+    try:
+        handle.seek(0, os.SEEK_END)
+        if handle.tell() == 0:
+            handle.write(b'0')
+            handle.flush()
+            os.fsync(handle.fileno())
+        handle.seek(0)
+        if os.name == 'nt':
+            import msvcrt
+            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            handle.seek(0)
+            if os.name == 'nt':
+                import msvcrt
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            handle.close()
+
+
 class ModelSettings:
     def __init__(self, root, character_id, builtins, default_name):
         self.root = Path(root)
@@ -80,9 +118,146 @@ class ModelSettings:
         self.lock = threading.RLock()
         self.env_lock = _ENV_LOCK
         self.blocked = False
-        with _ENV_LOCK:
-            self._recover()
-        self.data = self._clean(self._read())
+        self._source_bytes = None
+        with _exclusive_file_lock(self.path.with_name('models.json.lock')):
+            with _ENV_LOCK:
+                self._recover()
+            raw = self._migrate_retired_cc_choices(self._read())
+            self.data = self._clean(raw)
+            self._source_bytes = self._current_bytes()
+
+    def _current_bytes(self):
+        try:
+            return self.path.read_bytes()
+        except FileNotFoundError:
+            return None
+
+
+    # ---- ticket 317: old Claude Code choices ---------------------------------
+    def _retired_cc_ref(self, value):
+        """True only for a confirmed retired Claude Code built-in, never for a normal Anthropic model."""
+        if not isinstance(value, str):
+            return False
+        name = value[len(BUILTIN_PREFIX):] if value.startswith(BUILTIN_PREFIX) else value
+        return name in RETIRED_CC_BUILTINS and name not in self.builtins
+
+    def _backup_before_cc_migration(self):
+        backup = self.path.with_name(self.path.name + '.cc-removal-backup')
+        if backup.exists():
+            return
+        try:
+            self._atomic_bytes(backup, self.path.read_bytes())
+        except OSError as exc:
+            raise SettingsError('模型配置迁移前无法保留备份；原文件未改动，请检查磁盘权限。') from exc
+
+    def _key_available(self, provider, env=None):
+        env = self._env_values() if env is None else env
+        return bool((env.get(provider.get('api_key_env') or '') or '').strip())
+
+    def _fallback_choice(self, raw):
+        """The first structurally valid API model, preferring one whose API Key is present.
+
+        A keyless model is still a valid startup choice (Peter starts and tells Lan to fill the key),
+        but it must never be described as an available model. A missing default must not stop startup
+        when another configured API model exists.
+        """
+        try:
+            probe = self._clean({**raw, 'use': {}, 'migration': None})
+        except SettingsError:
+            probe = {'models': [], 'endpoints': []}
+        candidates = [self.default]
+        candidates.extend(BUILTIN_PREFIX + name for name in self.builtins)
+        raw_ids = {item.get('id') for item in raw.get('models') or [] if isinstance(item, dict)}
+        candidates.extend(item['id'] for item in probe.get('models', []) if item['id'] in raw_ids)
+        env = self._env_values()
+        structural, seen = [], set()
+        for model_id in candidates:
+            if model_id in seen:
+                continue
+            seen.add(model_id)
+            provider = self._provider(probe, model_id)
+            if provider is None:
+                continue
+            label = provider.get('label') or provider.get('model') or model_id
+            structural.append((model_id, label, self._key_available(provider, env)))
+        usable = [item for item in structural if item[2]]
+        if usable:
+            return usable[0]
+        return structural[0] if structural else (None, '', False)
+
+    def _migrate_retired_cc_choices(self, raw):
+        """Replace only retired Claude Code model references, atomically and once.
+
+        The original file is backed up first. Other roles, custom models, endpoints, keys, limits and
+        already-valid API choices are preserved. The change is written only after the migrated data
+        passes the same validation as a normal load, so a failed migration leaves the original intact.
+        """
+        if not isinstance(raw, dict) or not isinstance(raw.get('use'), dict):
+            return raw
+        use = raw['use']
+        affected = [role for role in ROLES if self._retired_cc_ref(use.get(role))]
+        if not affected:
+            return raw
+        fallback, fallback_label, fallback_keyed = self._fallback_choice(raw)
+        new_use = dict(use)
+        for role in affected:
+            if role in ('peter', 'background'):
+                # Prefer an existing keyed API model; a keyless one still starts, with a warning.
+                if fallback:
+                    new_use[role] = fallback
+                else:
+                    new_use.pop(role, None)
+            else:
+                # Autonomy inherits the chat model, glance follows chat/grok, and delegate stays opt-in.
+                new_use.pop(role, None)
+        migrated = dict(raw)
+        migrated['use'] = new_use
+        migrated['migration'] = {'cc_removed': {'roles': affected, 'fallback': fallback,
+                                                'fallback_label': fallback_label,
+                                                'fallback_keyed': fallback_keyed}}
+        self._clean(migrated)  # validate before touching the real file
+        self._backup_before_cc_migration()
+        self._atomic_bytes(self.path, (json.dumps(migrated, ensure_ascii=False, indent=2) + '\n').encode('utf-8'))
+        return migrated
+
+    @staticmethod
+    def _forget_migration_role(data, role):
+        migration = data.get('migration')
+        record = migration.get('cc_removed') if isinstance(migration, dict) else None
+        if not isinstance(record, dict):
+            return
+        roles = [item for item in record.get('roles') or [] if item != role]
+        if roles:
+            data['migration'] = {'cc_removed': {**record, 'roles': roles}}
+        else:
+            data.pop('migration', None)
+
+    @staticmethod
+    def _migration_notice(migration):
+        record = migration.get('cc_removed') if isinstance(migration, dict) else None
+        if not isinstance(record, dict):
+            return ''
+        roles = [role for role in record.get('roles') or [] if role in ROLES]
+        if not roles:
+            return ''
+        parts = []
+        recovered = [role for role in roles if role != 'delegate']
+        if recovered:
+            names = '、'.join(ROLE_LABELS[role] for role in recovered)
+            fallback = record.get('fallback')
+            label = record.get('fallback_label') or fallback or '默认模型'
+            if not any(role in roles for role in ('peter', 'background')):
+                parts.append(f'Claude Code 专用模型已下线；{names}已恢复默认选择。')
+            elif not fallback:
+                parts.append('Claude Code 专用模型已下线；没有可用的 API 模型，请先在模型设置里添加并选择。')
+            elif record.get('fallback_keyed'):
+                parts.append(f'Claude Code 专用模型已下线；{names}已恢复为可用的 API 模型「{label}」。')
+            else:
+                parts.append(f'Claude Code 专用模型已下线；没有找到已填写 Key 的 API 模型，'
+                             f'{names}暂用「{label}」，请填写 Key 或在模型设置里重新选择。')
+        if 'delegate' in roles:
+            parts.append('委派任务原先选择的 Claude Code 模型已失效，委派已暂时关闭；请重新选择委派模型。')
+        return ''.join(parts)
 
     # ---- reading -------------------------------------------------------
     @staticmethod
@@ -184,6 +359,8 @@ class ModelSettings:
         use = raw.get('use') if isinstance(raw.get('use'), dict) else {}
         for role in ROLES:
             if role in use:
+                if role == 'autonomy' and use[role] == FOLLOW_CHAT:
+                    continue  # follow-chat is the absence of an explicit autonomy choice
                 if not self._choice_ok(data, role, use[role]):
                     raise SettingsError(f'模型配置 models.json 中 {role} 选中的模型不存在或无效；原文件已保留。')
                 data['use'][role] = use[role]
@@ -192,6 +369,9 @@ class ModelSettings:
             data['limits'] = self._limits(limits) if limits else {}
         except SettingsError as exc:
             raise SettingsError(f'模型配置 models.json 的费用上限无效：{exc}；原文件已保留。') from None
+        migration = raw.get('migration')
+        if isinstance(migration, dict) and migration:
+            data['migration'] = migration
         return data
 
     def _endpoint(self, item, existing):
@@ -273,11 +453,9 @@ class ModelSettings:
         return provider
 
     def _choice_ok(self, data, role, model_id):
-        if role == 'glance' and model_id == FOLLOW_CHAT:
+        if role in ('glance', 'autonomy') and model_id == FOLLOW_CHAT:
             return True
         provider = self._provider(data, model_id)
-        if provider is not None and provider.get('kind') == 'claude_agent' and role != 'peter':
-            return False  # the Claude Code channel only works as Peter's chat model
         return provider is not None
 
     def selected(self, role):
@@ -330,14 +508,37 @@ class ModelSettings:
                 raise SettingsError('自主活动尚无可用的 API 模型；请先添加或启用一个 API 模型。')
             provider = self._provider(self.data, model_id)
             if provider is None:
+                if role == 'peter':
+                    raise SettingsError('还没有可用的聊天模型；请先在模型设置里选择。')
+                if role == 'background':
+                    raise SettingsError('还没有可用的记忆后台模型；请先在模型设置里选择。')
                 raise SettingsError(f'{role} 选中的模型无效；已停止模型请求。')
-            if role == 'autonomy' and provider.get('kind') == 'claude_agent':
-                raise SettingsError('自主活动需要 API 模型；Claude Code 通道仅用于聊天。')
             if model_id.startswith(BUILTIN_PREFIX):
                 name = model_id[len(BUILTIN_PREFIX):]
             else:
                 name = provider['endpoint_name']
             return model_id, name, provider
+
+    def startup_choice(self, role):
+        """Like chosen(), but None instead of an exception when Lan has no usable model yet.
+
+        Peter must still be able to start and open the settings page after the old CC model is gone.
+        A blocked settings transaction still raises; an empty selection is not an error at startup.
+        """
+        with self.lock:
+            if self.blocked:
+                raise SettingsError('模型设置保存未完成；已停止模型请求，请重启恢复。')
+            if self._provider(self.data, self.selected(role)) is None:
+                return None
+            return self.chosen(role)
+
+    def _public_use(self, role):
+        if role == 'autonomy':
+            return self.selected(role) if 'autonomy' in self.data['use'] else FOLLOW_CHAT
+        if role in ('glance', 'delegate'):
+            return self.selected(role)
+        choice = self.startup_choice(role)
+        return None if choice is None else choice[0]
 
     def limits(self):
         with self.lock:
@@ -367,18 +568,24 @@ class ModelSettings:
                 models.append({'id': BUILTIN_PREFIX + name, 'builtin': True,
                                'label': f'{provider.get("label", name)}（内置）', 'kind': provider.get('kind'),
                                'model': provider['model'], 'endpoint_name': name,
-                               'key_set': provider.get('kind') == 'claude_agent'
-                               or bool((env.get(provider['api_key_env']) or '').strip())})
+                               'key_set': bool((env.get(provider['api_key_env']) or '').strip())})
             names = {item['id']: item['name'] for item in endpoints}
             keys = {item['id']: item['key_set'] for item in endpoints}
             for item in self.data['models']:
                 models.append({**item, 'builtin': False, 'endpoint_name': names.get(item['endpoint'], ''),
                                'key_set': keys.get(item['endpoint'], False)})
             daily, monthly = self.limits()
-            use = {role: (self.selected(role) if role in ('glance', 'autonomy', 'delegate') else self.chosen(role)[0])
-                   for role in ROLES}
+            use = {role: self._public_use(role) for role in ROLES}
+            notice = self._migration_notice(self.data.get('migration'))
+            if not notice:
+                choice = self.startup_choice('peter')
+                if choice is None:
+                    notice = '还没有可用的聊天模型；请在模型设置里添加接口和模型。'
+                elif not self._key_available(choice[2]):
+                    notice = '当前聊天模型缺少 API Key；请填写 Key 或在模型设置里重新选择。'
             return {'endpoints': endpoints, 'models': models, 'use': use,
                     'use_explicit': {role: role in self.data['use'] for role in ROLES},
+                    'migration_notice': notice,
                     'limits': {'daily_cny': str(daily), 'monthly_cny': str(monthly)}}
 
     # ---- changes from the settings page -------------------------------
@@ -391,9 +598,12 @@ class ModelSettings:
         if (not isinstance(endpoints_in, list) or not isinstance(models_in, list)
                 or len(endpoints_in) > MAX_ENDPOINTS or len(models_in) > MAX_MODELS):
             raise SettingsError('接口或模型太多了。')
-        with _ENV_LOCK, self.lock:
+        with _exclusive_file_lock(self.path.with_name('models.json.lock')), _ENV_LOCK, self.lock:
             if self.blocked or self.journal.exists():
                 self._recover()
+                self._source_bytes = self._current_bytes()
+            if self._current_bytes() != self._source_bytes:
+                raise SettingsError('模型配置已被另一个进程修改；请刷新模型设置后重试。')
             endpoints, new_keys = [], {}
             known = {item['id']: item for item in self.data['endpoints']}
             taken = set(known)
@@ -425,12 +635,15 @@ class ModelSettings:
             use = payload.get('use') if isinstance(payload.get('use'), dict) else self.data['use']
             for role in ROLES:
                 model_id = use.get(role, self.data['use'].get(role))
+                if role == 'autonomy' and model_id == FOLLOW_CHAT:
+                    continue
                 if self._choice_ok(data, role, model_id):
                     data['use'][role] = model_id
             removed = [item['key_env'] for item in self.data['endpoints'] if item['id'] not in endpoint_ids]
             if not new_keys and not removed:
                 self._write(data)
                 self.data = data
+                self._source_bytes = self._current_bytes()
                 return self.public()
             record = {'state': 'prepared', 'env': self._snapshot(self.env_path),
                       'models': self._snapshot(self.path),
@@ -442,8 +655,10 @@ class ModelSettings:
                 self._atomic_bytes(self.journal, json.dumps({**record, 'state': 'committed'}).encode('utf-8'))
             except Exception:
                 self._recover()
+                self._source_bytes = self._current_bytes()
                 raise
             self.data = data
+            self._source_bytes = self._current_bytes()
             try:
                 self.journal.unlink()
                 self._sync_directory(self.journal.parent)
@@ -456,20 +671,34 @@ class ModelSettings:
     def use(self, role, model_id):
         if role not in ROLES:
             raise SettingsError('不认识的用途。')
-        with self.lock:
+        with _exclusive_file_lock(self.path.with_name('models.json.lock')), self.lock:
             if self.blocked or self.journal.exists():
                 raise SettingsError('模型设置保存未完成；请重启恢复后再切换。')
+            if self._current_bytes() != self._source_bytes:
+                raise SettingsError('模型配置已被另一个进程修改；请刷新模型设置后重试。')
             if role == 'delegate' and model_id in (None, ''):
                 data = {**self.data, 'use': {key: value for key, value in self.data['use'].items()
                                              if key != 'delegate'}}
+                self._forget_migration_role(data, role)
                 self._write(data)
                 self.data = data
+                self._source_bytes = self._current_bytes()
+                return None, None, None
+            if role == 'autonomy' and model_id == FOLLOW_CHAT:
+                data = {**self.data, 'use': {key: value for key, value in self.data['use'].items()
+                                             if key != 'autonomy'}}
+                self._forget_migration_role(data, role)
+                self._write(data)
+                self.data = data
+                self._source_bytes = self._current_bytes()
                 return None, None, None
             if not self._choice_ok(self.data, role, model_id):
                 raise SettingsError('这个模型已经不在列表里了。')
             data = {**self.data, 'use': {**self.data['use'], role: model_id}}
+            self._forget_migration_role(data, role)
             self._write(data)
             self.data = data
+            self._source_bytes = self._current_bytes()
             return self.chosen(role)
 
     def _write(self, data):

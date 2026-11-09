@@ -18,7 +18,6 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
-import claude_agent_channel
 import ledger_recovery
 import persona_versions
 from background import append_context_log, background_context, background_path, context_chars, request_kind
@@ -712,15 +711,6 @@ def price(value):
 
 def toml_provider(raw):
     provider = dict(raw)
-    if provider.get('kind') == 'claude_agent':
-        # Ticket 228: Claude Code answers on its own subscription login; no endpoint, key or token price.
-        if not isinstance(provider.get('model'), str) or not provider['model'].strip():
-            raise ValueError('model')
-        provider.update(base_url='', api_key_env='', thinking=provider.get('thinking', 'enabled'),
-                        max_input_tokens=positive_int(provider.get('max_input_tokens', 200000)),
-                        input_cny_per_million=Decimal(0), cached_input_cny_per_million=Decimal(0),
-                        output_cny_per_million=Decimal(0))
-        return provider
     for key in ('model', 'base_url', 'api_key_env'):
         if not isinstance(provider[key], str) or not provider[key].strip():
             raise ValueError(key)
@@ -732,6 +722,16 @@ def toml_provider(raw):
         raise ValueError('cached rate exceeds regular rate')
     provider['max_input_tokens'] = positive_int(provider['max_input_tokens'])
     return provider
+
+
+# Ticket 317: a placeholder only for the "no API model configured" startup path. It is never listed as a
+# model or treated as callable; requests fail with a clear "choose a model" message until Lan picks one.
+MISSING_PROVIDER = {
+    'model': '未选择模型', 'base_url': '', 'api_key_env': '', 'thinking': 'enabled',
+    'max_input_tokens': 4096, 'input_cny_per_million': Decimal(0),
+    'cached_input_cny_per_million': Decimal(0), 'output_cny_per_million': Decimal(0),
+    'label': '未选择模型', 'missing': True,
+}
 
 
 def _executor_roots(value):
@@ -780,19 +780,56 @@ def load_character(root, character_id):
         if not persona:
             raise UserError('人设文件为空，请填写后重开。')
         persona_versions.snapshot(persona_path)  # ticket 214: never raises
-        provider = toml_provider(cfg['providers'][cfg['provider']])
-        builtins = {cfg['provider']: provider}
-        for name, raw in cfg['providers'].items():
-            if name not in builtins:
+        providers = cfg.get('providers')
+        if not isinstance(providers, dict):
+            providers = {}
+        default_name = cfg.get('provider')
+        provider = None
+        selected = providers.get(default_name)
+        if isinstance(selected, dict) and selected.get('kind') != 'claude_agent':
+            # A normal default must stay explicit: a broken one is a real config error, not a cue
+            # to silently switch Peter to another paid provider.
+            provider = toml_provider(selected)
+        elif isinstance(selected, dict) or not providers:
+            # Ticket 317: an old character.toml may point at the removed channel or have no provider
+            # table. Use the first provider that actually parses; skip invalid ones.
+            for name, raw in providers.items():
+                if not isinstance(raw, dict) or raw.get('kind') == 'claude_agent':
+                    continue
+                try:
+                    candidate = toml_provider(raw)
+                except (KeyError, ValueError, TypeError, ArithmeticError):
+                    continue
+                default_name, provider = name, candidate
+                break
+        else:
+            raise ValueError(f'provider {default_name!r} does not exist')
+        if provider is None:
+            # No API provider exists at all. Start with an explicit non-callable placeholder so Lan can
+            # still open settings and add one; it is never listed or used as an available model.
+            default_name = '__missing__'
+            provider = dict(MISSING_PROVIDER)
+            builtins = {}
+        else:
+            builtins = {default_name: provider}
+            for name, raw in providers.items():
+                if not isinstance(raw, dict) or name in builtins or raw.get('kind') == 'claude_agent':
+                    continue
                 try:
                     builtins[name] = toml_provider(raw)
                 except (KeyError, ValueError, TypeError, ArithmeticError):
                     continue  # an unused, broken profile must not stop Peter
         from model_settings import ModelSettings
         # Ticket 134: Lan's own model list on this computer picks Peter's and the background's models.
-        models = ModelSettings(root, character_id, builtins, cfg['provider'])
-        _, provider_name, provider = models.chosen('peter')
-        _, _, background_provider = models.chosen('background')
+        models = ModelSettings(root, character_id, builtins, default_name)
+        peter_choice = models.startup_choice('peter')
+        if peter_choice is None:
+            provider_name, provider = '', dict(MISSING_PROVIDER)
+        else:
+            _, provider_name, provider = peter_choice
+        background_choice = models.startup_choice('background')
+        background_provider = (dict(MISSING_PROVIDER) if background_choice is None
+                               else background_choice[2])
         tools = dict(cfg['tools']) if 'tools' in cfg else None
         raw_tools = dict(tools) if tools is not None else {}
         if tools is not None:
@@ -1867,7 +1904,6 @@ class Chat:
                  voice=None, runtime_monitor=None, background_model=None):
         self.cfg, self.store, self.budget, self.model = cfg, store, budget, model
         self.pending_model = None
-        self._claude_agent = None  # ticket 228
         self.model_lock = threading.Lock()
         self.path = f'{cfg.id}/chat.jsonl'
         self.session_path = store.root / cfg.id / 'chat-session.json'
@@ -2119,10 +2155,7 @@ class Chat:
                 output=provider['output_cny_per_million']))
 
         delegate_model = provider.get('label') or provider['model']
-        if self.cfg.provider.get('kind') == 'claude_agent':
-            main_cost = '当前主模型使用 Claude Code 订阅，不能与 API token 单价直接比较'
-        else:
-            main_cost = price(self.cfg.provider)
+        main_cost = price(self.cfg.provider)
         max_output = min(self.cfg.max_output_tokens, 1200)
         per_call = (provider['cny_per_call'] if provider.get('cny_per_call') else
                     (provider['max_input_tokens'] * provider['input_cny_per_million']
@@ -3356,7 +3389,7 @@ class Chat:
                 try:
                     models.chosen('peter')
                 except SettingsError as exc:
-                    raise UserError(str(exc)) from None
+                    raise RequestNotSent(str(exc)) from None
                 return self._send_with_stable_model(text, autonomy=autonomy, **kwargs)
         return self._send_with_stable_model(text, autonomy=autonomy, **kwargs)
 
@@ -3639,10 +3672,7 @@ class Chat:
         try:
             self._capability_request_active = True
             self.last_self = description
-            if claude_agent_channel.is_channel(self.cfg.provider):
-                reply, tool_summaries = self._claude_agent_chat(messages, request_id, tool_cfg, tool_schema,
-                                                                autonomy=autonomy)
-            elif self.tool_mode:
+            if self.tool_mode:
                 reply, tool_summaries = self._tool_chat(messages, request_id, len(history), len(head),
                                                         autonomy=autonomy)
             else:
@@ -3662,7 +3692,7 @@ class Chat:
         except (KeyboardInterrupt, EOFError):
             self._capability_request_active = False
             raise
-        except (TooLong, RequestFailed) as exc:
+        except (TooLong, RequestFailed, RequestNotSent) as exc:
             self._capability_request_active = False
             if not self.last_send_persisted and mids:
                 self.fail_incoming(mids, reason=str(exc))
@@ -3684,7 +3714,7 @@ class Chat:
             if not isinstance(reply, str):
                 raise EmptyReplyError('接口没有返回文字回复；本次保留预留费用。')
             if not reply.strip():
-                if not autonomy and (self.tool_mode or claude_agent_channel.is_channel(self.cfg.provider)) and not self.force_reply:
+                if not autonomy and self.tool_mode and not self.force_reply:
                     self.reply_displayed = True
                     reply = ''
                 else:
@@ -3700,7 +3730,7 @@ class Chat:
                 if self.regeneration_parent_message_id:
                     event['regeneration_parent_message_id'] = self.regeneration_parent_message_id
                 self.store.append(self.path, event)
-            if not self.tool_mode and not claude_agent_channel.is_channel(self.cfg.provider):
+            if not self.tool_mode:
                 self.budget.settle(request_id, self.cfg, prompt, completion, cached, input_bytes=sent_bytes, tolerate_over_bound=True)
             # The event was included in the successful normal-chat request above.
             # Do not mark it delivered before the provider returns usable text:
@@ -3731,44 +3761,6 @@ class Chat:
                 acknowledge_glance_handoff(self.store, self.cfg, glance_handoff_id)
         self.autonomy_mode = False
         return reply
-
-    def _claude_agent_chat(self, messages, request_id, tool_cfg, tool_schema, autonomy=False):
-        """Ticket 228: Claude Code does this turn. VEIL's tools, history and approvals stay VEIL's."""
-        if autonomy:
-            self.budget.settle(request_id, tool_cfg, 0, 0, 0)
-            raise UserError('这个聊天通道暂时不支持自主醒来；请换一个模型再让他醒来。')
-        channel = self._claude_agent
-        if channel is None:
-            channel = self._claude_agent = claude_agent_channel.ClaudeAgentChannel(
-                self, self.store.root / self.cfg.id / 'claude-agent', self.cfg.provider)
-        system_text, prompt = claude_agent_channel.build_prompt(messages)
-        self._trace_request_id, self._trace_started = request_id, time.monotonic()
-        try:
-            summaries, result = channel.run_turn(system_text, prompt, request_id, tool_schema, autonomy=autonomy,
-                                                 extra_dirs=self._claude_agent_dirs())
-        except RuntimeError as exc:
-            self.budget.settle(request_id, tool_cfg, 0, 0, 0)
-            raise RequestFailed(str(exc)) from exc
-        except BaseException:
-            self.budget.settle(request_id, tool_cfg, 0, 0, 0)
-            raise
-        self.budget.settle(request_id, tool_cfg, 0, 0, 0)
-        # The subscription has no per-token price. The API-equivalent estimate is kept for reference only.
-        self.store.append(f'{self.cfg.id}/claude-agent-costs.jsonl', {
-            'request_id': request_id, 'time': now(), 'usd_estimate': result.get('total_cost_usd'),
-            'turns': result.get('num_turns'), 'duration_ms': result.get('duration_ms')})
-        self.last_tool_summaries = summaries
-        offered = {self.canonical_tool_name(item.get('function', {}).get('name')) for item in tool_schema or []}
-        if 'send_message' not in offered:  # no way to speak through a tool: his final text is the reply
-            return str(result.get('result') or ''), summaries
-        return '', summaries
-
-    def _claude_agent_dirs(self):
-        folder = (self.cfg.tools or {}).get('folder')
-        if not folder:
-            return ()
-        path = Path(folder)
-        return (path if path.is_absolute() else self.store.root.parent / path,)
 
     def _execute_tool_call(self, call, request_id, tool_call_id, autonomy,
                            offered=_UNSET_TOOL_SCHEMAS):
@@ -3979,7 +3971,7 @@ class Chat:
 
     def workbench_ready(self):
         settings = getattr(self.cfg, 'executor', None) or {}
-        if not settings.get('enabled') or self.cfg.provider.get('kind') == 'claude_agent':
+        if not settings.get('enabled'):
             return False
         if settings.get('container_image'):
             import shutil
@@ -5143,14 +5135,11 @@ def make_model(root, cfg, provider=None, timeout=MODEL_TIMEOUT_SECONDS):
     lock = threading.Lock()
 
     def current():
-        chosen = provider if provider is not None else cfg.provider
-        if chosen.get('kind') == 'claude_agent':
-            # Ticket 228: Claude Code answers the chat turn itself. Small helper requests (notes, tagging) that
-            # share this call go to the background model Lan picked.
-            return getattr(cfg, 'background_provider', None) or chosen
-        return chosen
+        return provider if provider is not None else cfg.provider
 
     def client_for(p):
+        if p.get('missing'):
+            raise RequestNotSent('请先在模型设置里选择一个可用的 API 模型。')
         # No environment fallback or interpolation: key comes only from this file.
         values = dotenv_values(Path(root) / '.env', interpolate=False, encoding='utf-8-sig')
         key = values.get(p['api_key_env'])
@@ -5163,7 +5152,13 @@ def make_model(root, cfg, provider=None, timeout=MODEL_TIMEOUT_SECONDS):
                                             max_retries=0, timeout=timeout)
             return clients[cache_key]
 
-    client_for(current())
+    if not current().get('missing'):
+        try:
+            client_for(current())
+        except RequestNotSent:
+            # Ticket 317: a missing key must not stop Peter from opening settings. The first request
+            # still fails with the same clear "fill the key" message through _call().
+            pass
 
     def call(messages, *, json_output=False, max_tokens=None, thinking=None, detail=False,
              tools=None, message_output=False, request_timeout=None):
@@ -5184,6 +5179,8 @@ def make_model(root, cfg, provider=None, timeout=MODEL_TIMEOUT_SECONDS):
     def _call(messages, *, json_output=False, max_tokens=None, thinking=None, detail=False,
               tools=None, message_output=False, request_timeout=None):
         p = current()
+        if p.get('missing'):
+            raise RequestNotSent('请先在模型设置里选择一个可用的 API 模型。')
         client = client_for(p)
         if request_timeout is not None:
             client = client.with_options(timeout=max(0.001, min(timeout, request_timeout)))
@@ -5278,6 +5275,17 @@ def background_cfg(cfg):
     """Ticket 134: the configuration Ombre tagging and short-term notes are priced and called with."""
     background = getattr(cfg, 'background_provider', None)
     return cfg if not background else replace(cfg, provider=background)
+
+
+def models_available(cfg):
+    """False only for the explicit no-model recovery placeholder (ticket 317)."""
+    return not ((getattr(cfg, 'provider', None) or {}).get('missing')
+                or (getattr(cfg, 'background_provider', None) or {}).get('missing'))
+
+
+def memory_available(cfg):
+    """Model-dependent Ombre must not start while Lan still has to choose an API model."""
+    return bool((getattr(cfg, 'memory', None) or {}).get('enabled')) and models_available(cfg)
 
 
 def make_voice(root, cfg, store, budget):
@@ -5475,6 +5483,12 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead, activity=N
                     output(ChatOutput(str(exc), request_id=message_id, is_error=True))
                     notify_dropped()
                     continue
+                except RequestNotSent as exc:
+                    # Ticket 317: missing model/key is a configuration error Lan can fix in settings;
+                    # keep the chat loop and desktop service running instead of exiting the process.
+                    output(ChatOutput(str(exc), request_id=message_id, is_error=True))
+                    notify_dropped()
+                    continue
                 if not chat.reply_displayed:
                     output(ChatOutput(f'{chat.cfg.name}: {reply}', message_id=chat.last_reply_message_id,
                                       request_id=chat.last_reply_request_id,
@@ -5512,11 +5526,14 @@ def main():
             client, model = make_model(ROOT, cfg)
             background_client, background_model = make_model(ROOT, cfg, provider=cfg.background_provider)
             voice = make_voice(ROOT, cfg, store, budget)
+            use_memory = memory_available(cfg)
+            if (cfg.memory and cfg.memory.get('enabled')) and not use_memory:
+                print('记忆后台需要先选择 API 模型；请打开设置选择后重启。')
             with client, background_client:
                 from tools_agent import FilesystemTools
                 from web_tools import WebTools
                 with FilesystemTools(ROOT, cfg, store, web_factory=WebTools) as tools:
-                    if cfg.memory and cfg.memory.get('enabled'):
+                    if use_memory:
                         from memory_agent import Memory, open_ombre
                         with open_ombre(ROOT, cfg) as backend:
                             with Memory(cfg, store, budget, model, backend) as memory:

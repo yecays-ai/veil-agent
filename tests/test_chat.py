@@ -14,7 +14,7 @@ from unittest.mock import Mock, patch
 from veil_agent import (Chat, Budget, Store, build_self_description, conservative_token_ratio,
                         estimate_request_tokens,
                         load_character, make_model, model_tool_result, run_chat, UserError,
-                        RequestFailed, TooLong, send_message_schema)
+                        RequestFailed, RequestNotSent, TooLong, send_message_schema)
 
 
 def sent_facts(messages):
@@ -431,6 +431,21 @@ output_cny_per_million = "8"
 
         self.assertTrue(any('接口没有返回文字回复' in str(item) for item in outputs))
         self.assertTrue(any('normal reply' in str(item) for item in outputs))
+
+    def test_model_configuration_error_keeps_run_chat_alive(self):
+        outputs = []
+        self.chat.send = Mock(side_effect=RequestNotSent('还没有可用的聊天模型；请先在模型设置里选择。'))
+        run_chat(self.chat, Mock(side_effect=['first request', '/quit']), outputs.append)
+        self.assertEqual(self.chat.send.call_count, 1)
+        self.assertTrue(any('还没有可用的聊天模型' in str(item) for item in outputs))
+
+    def test_request_not_sent_marks_processing_failed_and_reloads_history(self):
+        self.chat.model = Mock(side_effect=RequestNotSent('本机 .env 缺少所选接口的 API Key。'))
+        with self.assertRaises(RequestNotSent):
+            self.chat.send('fake request')
+        rows = self.store.read('test/message-processing.jsonl')
+        self.assertEqual(rows[-1]['state'], 'failed')
+        self.assertEqual(self.chat.history[-1]['content'], 'fake request')
 
     def test_storage_user_error_propagates_out_of_run_chat(self):
         outputs = []
@@ -1206,8 +1221,10 @@ output_cny_per_million = "8"
 
     def test_system_environment_key_is_not_used(self):
         with patch.dict('os.environ', {'FAKE_KEY': 'fake-env-only'}):
-            with self.assertRaises(UserError):
-                make_model(self.root, self.cfg)
+            clients, call = make_model(self.root, self.cfg)
+            with clients, self.assertRaises(UserError) as result:
+                call([{'role': 'user', 'content': 'fake'}])
+        self.assertIn('本机 .env', str(result.exception))
 
     def test_role_paths_cannot_escape_character_directory(self):
         for character in ['../test', 'test/../../test', 'TEST', 'C:test']:
