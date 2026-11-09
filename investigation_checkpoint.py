@@ -160,7 +160,9 @@ class InvestigationCheckpoint:
             return
         with self.store.mutex:
             task = self._read()
-            if task and task['status'] == 'active' and (request_id is None or task['request_id'] == request_id or resuming):
+            if task and ((task['status'] == 'active' and
+                          (request_id is None or task['request_id'] == request_id or resuming)) or
+                         (task['status'] == 'interrupted' and resuming)):
                 task['status'], task['reason'], task['updated_at'] = 'interrupted', reason, now()
                 self._save(task)
 

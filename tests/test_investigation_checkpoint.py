@@ -51,6 +51,21 @@ class InvestigationCheckpointTests(unittest.TestCase):
         self.assertTrue(InvestigationCheckpoint.resume_requested('继续刚才的调查'))
         self.assertFalse(InvestigationCheckpoint.resume_requested('继续聊电影'))
 
+    def test_resumed_execution_records_unknown_outcome_and_latest_stop_reason(self):
+        checkpoint = InvestigationCheckpoint(self.store, 'test')
+        checkpoint.record('Investigate A.', 'request-1', 'write_file', {'path': 'a.txt'},
+                          '结果未知', 'a.txt', 'execution started')
+        checkpoint.interrupt('step_limit')
+
+        checkpoint.record('Investigate A.', 'request-2', 'write_file', {'path': 'a.txt'},
+                          '结果未知', 'a.txt', 'resumed execution started', resuming=True)
+        checkpoint.interrupt('user_stop', 'request-2', resuming=True)
+
+        saved = checkpoint.read()
+        self.assertEqual(saved['reason'], 'user_stop')
+        self.assertEqual(saved['evidence'][-1]['state'], '结果未知')
+        self.assertIn('unknown outcome', checkpoint.resume_guard('write_file', {'path': 'a.txt'}))
+
 
 if __name__ == '__main__':
     unittest.main()
