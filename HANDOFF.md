@@ -1,5 +1,11 @@
 # HANDOFF
 
+## 工单 328（2026-11-10）：搜索先走 DeepSeek 官网搜索接口
+
+- 依据：326/327 后 Lan 电脑的免费引擎仍多数失败（加速器出口被当成机器人）。DeepSeek 官网搜索接口 `POST https://api.deepseek.com/v1/tools/search`（文档 `api-docs.deepseek.com/guides/search`，用同一把 DeepSeek key，公布价每千次成功 5 元，失败/超时/空结果不收费）在 Lan 电脑经加速器实测 10 次全部 HTTP 200、每次 8 条、1.1–1.3 秒。
+- 改动：`web_tools.deepseek_search`；`WebTools._find_results` 在本机 `.env` 有 `DEEPSEEK_API_KEY` 时把 `deepseek` 排在免费引擎前；通过 `Budget.reserve_amount/settle_estimate` 记账，超预算或失败就跳过；报错里替换掉 key；不跟随重定向（防止 key 被带到别的网站）；DeepSeek 始终排第一，“上次成功的引擎先试”只在免费引擎之间排序。新增测试在 `tests/test_web_tools.py`。
+- 未验证：实际扣费（10 次前后 `/user/balance` 都是 8.54 元，显示精度 0.01 元，预期约扣 0.05 元），等真实搜索累计后再对账。工作台容器里的 OpenCode 不走这条搜索。
+
 ## 工单 327（2026-11-10）：浏览器失败原因进日志
 
 - 依据：326 合并后 Lan 电脑 `tools.jsonl` 23:56:54–23:57:03 浏览器连续失败 4 次，日志只有 `Error`。`BrowserTools.invoke` 对非 `ValueError` 的异常只返回类名，Playwright 的异常类就叫 `Error`。

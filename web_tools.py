@@ -1,6 +1,7 @@
 """Read-only public web search and fetching for configured character tools."""
 import asyncio
 import ipaddress
+import json
 import os
 import re
 import subprocess
@@ -8,6 +9,7 @@ import threading
 import time
 import urllib.request
 from concurrent.futures import Future, ThreadPoolExecutor
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import urlsplit, urlunsplit
@@ -26,6 +28,14 @@ WEB_TOOL_NAMES = frozenset({'web_search', 'web_fetch', 'web_research'})
 SEARCH_ENGINES = ('brave', 'yahoo', 'mojeek', 'startpage', 'duckduckgo')
 # The whole search gives up after this long, however many engines are left to try.
 SEARCH_TOTAL_SECONDS = 20
+# DeepSeek's own search service (api.deepseek.com, the same key Lan already uses for the DeepSeek model).
+# It is the official, mainland-reachable path, so it is tried first whenever that key is saved.
+# Published price: ¥5 per 1000 successful requests; failures, timeouts and empty results are not billed.
+DEEPSEEK_SEARCH_URL = 'https://api.deepseek.com/v1/tools/search'
+DEEPSEEK_SEARCH_CNY = Decimal('0.005')
+DEEPSEEK_KEY_ENV = 'DEEPSEEK_API_KEY'
+DEEPSEEK_QUERY_CHARS = 128
+DEEPSEEK_MAX_RESPONSE_BYTES = 1024 * 1024
 SEARCH_RESULT_LIMIT = 8
 SEARCH_ENGINE_TIMEOUT_SECONDS = 8
 RESEARCH_DEFAULT_PAGES = 3
@@ -56,6 +66,34 @@ def search_proxy():
 def _redact_userinfo(text):
     """Hide user:password in any URL (for example a proxy address quoted in an error)."""
     return re.sub(r'(?i)\b([a-z][a-z0-9+.-]*://)[^/@\s:]+(?::[^/@\s]*)?@', r'\1***@', text)
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Never follow a redirect: it would carry the DeepSeek key's Authorization header to another host."""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def deepseek_search(query, key, *, proxy=None, timeout=8):
+    """One DeepSeek search request: [{'title','href','body'}] (the summary is written for models)."""
+    payload = json.dumps({'query': query[:DEEPSEEK_QUERY_CHARS], 'count': SEARCH_RESULT_LIMIT,
+                          'need_content': False}).encode('utf-8')
+    request = urllib.request.Request(
+        DEEPSEEK_SEARCH_URL, data=payload, method='POST',
+        headers={'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json'})
+    handlers = [_NoRedirect()]
+    if proxy:
+        handlers.append(urllib.request.ProxyHandler({'http': proxy, 'https': proxy}))
+    with urllib.request.build_opener(*handlers).open(request, timeout=timeout) as response:
+        if response.status != 200:
+            raise OSError(f'HTTP {response.status}')
+        body = json.loads(response.read(DEEPSEEK_MAX_RESPONSE_BYTES).decode('utf-8'))
+    results = body.get('results') if isinstance(body, dict) else None
+    if not isinstance(results, list):
+        raise OSError('unexpected response shape')
+    return [{'title': item.get('title') or '', 'href': item.get('url'),
+             'body': item.get('summary') or item.get('snippet') or ''}
+            for item in results if isinstance(item, dict)]
 
 
 def _clip_utf8(value, max_bytes):
@@ -217,9 +255,10 @@ class _FetchWorker:
 
 
 class WebTools:
-    def __init__(self, root, cfg, *, worker_factory=_FetchWorker):
+    def __init__(self, root, cfg, *, worker_factory=_FetchWorker, budget=None):
         self.root = Path(root).resolve()
         self.cfg = cfg
+        self.budget = budget
         self.tools = []
         self.fetch_worker = None
         self.startup_notice = None
@@ -319,12 +358,42 @@ class WebTools:
     # timeout once, not on every search.
     _last_engine = None
 
+    def _deepseek_key(self):
+        """The DeepSeek key from the local .env only (no environment fallback, like the model keys)."""
+        try:
+            from dotenv import dotenv_values
+            value = dotenv_values(self.root / '.env', interpolate=False, encoding='utf-8-sig').get(DEEPSEEK_KEY_ENV)
+        except Exception:
+            return None
+        return value.strip() if isinstance(value, str) and value.strip() else None
+
+    def _deepseek_results(self, query, key, proxy, timeout):
+        """Search through DeepSeek and record its price in the shared cost ledger."""
+        budget, reservation = self.budget, None
+        if budget is not None:
+            reservation = budget.reserve_amount(
+                getattr(self.cfg, 'id', 'peter'), 'deepseek-search', DEEPSEEK_SEARCH_CNY, 'deepseek-search')
+            budget.mark_dispatched(reservation[0])
+        try:
+            found = deepseek_search(query, key, proxy=proxy, timeout=timeout)
+        except BaseException:
+            if reservation is not None:
+                budget.settle_estimate(reservation, 'deepseek-search-failed', settled_amount=Decimal(0))
+            raise
+        if reservation is not None:
+            budget.settle_estimate(reservation, 'deepseek-search',
+                                   settled_amount=DEEPSEEK_SEARCH_CNY if found else Decimal(0))
+        return found
+
     def _find_results(self, query):
         """Try each engine in turn; return (results, last failure reason or None)."""
         query = query.strip()
         reason, answered, failures = None, False, []
         proxy = search_proxy()
-        engines = sorted(SEARCH_ENGINES, key=lambda engine: engine != self._last_engine)
+        key = self._deepseek_key()
+        # DeepSeek always goes first when its key is saved; the last-engine shortcut only reorders the free engines.
+        engines = (('deepseek',) if key else ()) + tuple(
+            sorted(SEARCH_ENGINES, key=lambda engine: engine != self._last_engine))
         started = time.monotonic()
         for engine in engines:
             remaining = SEARCH_TOTAL_SECONDS - (time.monotonic() - started)
@@ -333,13 +402,18 @@ class WebTools:
                 break
             try:
                 timeout = int(min(SEARCH_ENGINE_TIMEOUT_SECONDS, remaining))
-                found = list(DDGS(proxy=proxy, timeout=timeout).text(
-                    query, backend=engine, max_results=SEARCH_RESULT_LIMIT))
+                if engine == 'deepseek':
+                    found = self._deepseek_results(query, key, proxy, timeout)
+                else:
+                    found = list(DDGS(proxy=proxy, timeout=timeout).text(
+                        query, backend=engine, max_results=SEARCH_RESULT_LIMIT))
             except Exception as exc:
                 # Say what actually failed (class + short reason, never the query) so a blocked
                 # network is told apart from a library problem.
-                reason = _clip_utf8(_redact_userinfo(
-                    f'{type(exc).__name__}: {exc}'.replace(query, '<query>')), 200)
+                reason = f'{type(exc).__name__}: {exc}'.replace(query, '<query>')
+                if key:
+                    reason = reason.replace(key, '<key>')
+                reason = _clip_utf8(_redact_userinfo(reason), 200)
                 failures.append(f'{engine}: ' + _clip_utf8(reason, 80))
                 continue
             answered = True
