@@ -35,3 +35,6 @@ desktop/.runtime-data/
 
 persona/versions/
 tests/tmp*/
+
+# uv's Python/tools/cache for the host desktop service (ticket 334)
+/.uv/

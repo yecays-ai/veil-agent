@@ -92,6 +92,19 @@ def check_opencode(command):
     return ''
 
 
+_OPENCODE_OK = {}
+
+
+def opencode_problem(command, now=time.monotonic):
+    """check_opencode, remembered for a minute: the chat asks on every step, and the check starts a process."""
+    hit = _OPENCODE_OK.get(command)
+    if hit and now() - hit[0] < 60:
+        return hit[1]
+    value = check_opencode(command)
+    _OPENCODE_OK[command] = (now(), value)
+    return value
+
+
 def _python_script(name):
     """A tool pip installed for this Python (its Scripts folder, system or per-user, is often not on PATH)."""
     import site
@@ -144,6 +157,35 @@ def upstream_services(home, *, desktop=True, browser='msedge', which=shutil.whic
     return services
 
 
+_AVAILABLE = {}
+
+
+def available(*, desktop=True, which=shutil.which, find_script=_python_script, now=time.monotonic):
+    """(browser, desktop): which of the two host servers this computer can start (Node for the browser, uv on Windows
+    for the desktop). The chat hides its old browser/desktop-action tools only for what is really offered, so a PC
+    that cannot start one keeps the old tool for it. Cached for a minute (tool lists are built every step)."""
+    key = (desktop, which is shutil.which)
+    hit = _AVAILABLE.get(key)
+    if hit and now() - hit[0] < 60:
+        return hit[1]
+    value = (bool(which('npx')),
+             bool(desktop and os.name == 'nt' and (which('uvx') or find_script('uvx'))))
+    _AVAILABLE[key] = (now(), value)
+    return value
+
+
+def uv_environment(veil_root):
+    """uv keeps its downloaded Python, tools and cache in one folder next to VEIL.
+
+    The MCP client hands a server only a short list of inherited variables, so uv otherwise falls back to
+    %APPDATA%\\uv; on Lan's PC that broke the install of Python 3.14 with `os error 17` (the temp folder and the
+    target sit on different drives) and the desktop never started. One folder on VEIL's own drive avoids it (and
+    keeps the C drive free)."""
+    base = Path(veil_root) / '.uv'
+    return {'UV_PYTHON_INSTALL_DIR': str(base / 'python'), 'UV_CACHE_DIR': str(base / 'cache'),
+            'UV_TOOL_DIR': str(base / 'tools')}
+
+
 def _log_path(home):
     folder = Path(home) / 'host-runs'
     folder.mkdir(parents=True, exist_ok=True)
@@ -182,7 +224,9 @@ def prepare(*, workdir, home, veil_root, ask, autonomy, stopped, protect=(), des
                 network.close()
             raise
     environment = {'ANONYMIZED_TELEMETRY': 'false', 'WINDOWS_MCP_DEBUG': 'false', 'NO_COLOR': '1'}
-    gateways = [VeilMcpGateway(server_id, service, checkpoint, offered, should_stop=stopped, environment=environment,
+    gateways = [VeilMcpGateway(server_id, service, checkpoint, offered, should_stop=stopped,
+                               environment={**environment, **(uv_environment(veil_root)
+                                                              if server_id == vc.COMPUTER_SERVER else {})},
                                companions=[network] if network and server_id == vc.BROWSER_SERVER else ())
                 for server_id, (service, offered) in services.items()]
     if network and not any(gateway.companions for gateway in gateways):

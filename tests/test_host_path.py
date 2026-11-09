@@ -460,5 +460,27 @@ class BrowserNetworkTests(unittest.TestCase):
         self.assertTrue(closed)
 
 
+class UvEnvironmentTests(unittest.TestCase):
+    def test_desktop_service_gets_uv_folders_next_to_veil_and_the_browser_does_not(self):
+        import host_executor
+        import veil_checkpoint as vc
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / 'veil'
+            work = Path(tmp) / 'work'
+            root.mkdir()
+            work.mkdir()
+            env = host_executor.uv_environment(root)
+            self.assertEqual(set(env), {'UV_PYTHON_INSTALL_DIR', 'UV_CACHE_DIR', 'UV_TOOL_DIR'})
+            self.assertTrue(all(Path(v).parent == root / '.uv' for v in env.values()))
+            services = {vc.COMPUTER_SERVER: ({'command': 'x', 'args': []}, vc.COMPUTER_TOOLS),
+                        vc.BROWSER_SERVER: ({'command': 'y', 'args': []}, vc.BROWSER_TOOLS)}
+            _, gateways = host_executor.prepare(
+                workdir=work, home=Path(tmp) / 'home', veil_root=root, ask=lambda *_: False, autonomy=False,
+                stopped=lambda: False, services=services)
+            by = {g.server_id: g.environment for g in gateways}
+            self.assertEqual(by[vc.COMPUTER_SERVER]['UV_PYTHON_INSTALL_DIR'], env['UV_PYTHON_INSTALL_DIR'])
+            self.assertNotIn('UV_PYTHON_INSTALL_DIR', by[vc.BROWSER_SERVER])
+
+
 if __name__ == '__main__':
     unittest.main()
