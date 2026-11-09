@@ -8,7 +8,7 @@
 
 ## 现状
 
-- 工单 320 在 `ticket/320-browser-continuous-execution`，基于远端 `main` 的 `8b39f0d`；PR 创建后在此补链接。旧主聊天 `browser` 入口保留。
+- 工单 320 在 `ticket/320-browser-continuous-execution`，PR #319：https://github.com/yecays-ai/veil-agent/pull/319；基于远端 `main` 的 `8b39f0d`。旧主聊天 `browser` 入口保留。
 - 工作台为每次非维护任务临时注入带随机令牌的 MCP 浏览器服务；Docker 只额外放行同一 host-gateway 上的本次随机端口。角色/任务边界、预算、停止、人工接管和旧浏览器入口不变。
 - 本次在原有实现上补齐并验证：
   - 公开搜索只能填写最新快照里的文本/搜索框，提交只限公开 GET 表单；隐藏 input 不再造成控件索引错位。
