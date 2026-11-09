@@ -294,6 +294,27 @@ output_cny_per_million = "2"
         self.assertEqual(cfg.provider_name, 'valid')
         self.assertEqual(cfg.provider['model'], 'valid-model')
 
+    def test_broken_non_cc_default_provider_still_reports_an_error(self):
+        toml = '''name = "Test"
+provider = "broken"
+persona = "persona/test.md"
+history_rounds = 20
+max_output_tokens = 50
+[providers.broken]
+model = "broken-model"
+[providers.valid]
+model = "valid-model"
+base_url = "https://valid.invalid/v1"
+api_key_env = "FAKE_KEY"
+max_input_tokens = 6000
+input_cny_per_million = "1"
+cached_input_cny_per_million = "1"
+output_cny_per_million = "2"
+'''
+        (self.root / 'characters' / 'test' / 'character.toml').write_text(toml, encoding='utf-8')
+        with self.assertRaises(UserError):
+            load_character(self.root, 'test')
+
     def test_character_without_a_providers_table_starts_in_recovery(self):
         toml = '''name = "Test"
 provider = "claude_agent"
@@ -342,6 +363,13 @@ max_output_tokens = 50
         fake = next(item for item in view['models'] if item['id'] == 'builtin:fake')
         self.assertFalse(fake['key_set'])
 
+    def test_saving_settings_keeps_a_missing_key_warning(self):
+        (self.root / '.env').write_text('UNRELATED=fake\n', encoding='utf-8')
+        cfg = load_character(self.root, 'test')
+        cfg.models.save({'endpoints': [], 'models': [],
+                         'limits': {'daily_cny': '30', 'monthly_cny': '600'}})
+        self.assertIn('缺少 API Key', cfg.models.public()['migration_notice'])
+
     def test_migration_recovers_when_the_default_model_is_not_available(self):
         other = {'model': 'other-model', 'base_url': 'https://other.invalid/v1',
                  'api_key_env': 'OTHER_KEY', 'thinking': 'enabled', 'max_input_tokens': 6000,
@@ -380,6 +408,9 @@ max_input_tokens = 200000
         self.assertIsNone(view['use']['peter'])
         self.assertIn('没有可用的 API 模型', view['migration_notice'])
         self.assertTrue(path.with_name('models.json.cc-removal-backup').exists())
+        from dataclasses import replace
+        from veil_agent import memory_available
+        self.assertFalse(memory_available(replace(cfg, memory={'enabled': True})))
         clients, call = make_model(self.root, cfg)
         with clients, self.assertRaises(UserError):
             call([{'role': 'user', 'content': 'fake'}])

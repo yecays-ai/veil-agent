@@ -32,7 +32,7 @@ from attachment_utils import (ATTACHMENT_EXTENSIONS, MAX_ATTACHMENT_BYTES,
                               inspect_attachment, redirected_path, valid_attachment_row)
 from veil_agent import (ROOT, AUTONOMY_WAKE, CODEX_WATCH_WAKE, GLANCE_WAKE, MAX_PHOTO_BYTES,
                         ActivityState, Budget, Chat, Store, UserError,
-                        load_character, now, make_model, make_voice, run_chat,
+                        load_character, memory_available, now, make_model, make_voice, run_chat,
                         safe_tool_activity_detail)
 import workbench_switch
 from autonomy import AutonomyController, GlanceController
@@ -2870,9 +2870,12 @@ def main(argv=None):
             activity = ActivityState(store.root / cfg.id / 'resident-state.json')
             from runtime_monitor import RuntimeMonitor
             runtime_monitor = RuntimeMonitor(store, cfg.id, activity)
-            memory_port = (cfg.memory or {}).get('ombre_port') if (cfg.memory or {}).get('enabled') else None
+            use_memory = memory_available(cfg)
+            memory_port = (cfg.memory or {}).get('ombre_port') if use_memory else None
             hub = Hub(cfg.name, activity, memory_port, store.root / cfg.id / 'media',
                       data_root=data_dir, config_root=config_root)
+            if cfg.memory and cfg.memory.get('enabled') and not use_memory:
+                hub.push('notice', '模型还没有选择，记忆后台暂未启动；请在设置里选择模型后重启。')
             if acceptance_limits is not None:
                 hub.acceptance_limits = acceptance_limits
             from stickers import StickerLibrary
@@ -2890,7 +2893,7 @@ def main(argv=None):
                     from tools_agent import FilesystemTools
                     from web_tools import WebTools
                     with FilesystemTools(config_root, cfg, store, web_factory=WebTools) as tools:
-                        if cfg.memory and cfg.memory.get('enabled'):
+                        if use_memory:
                             from memory_agent import Memory, open_ombre
                             with open_ombre(config_root, cfg) as backend:
                                 with Memory(cfg, store, budget, model, backend, runtime_monitor) as memory:

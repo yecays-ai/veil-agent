@@ -787,13 +787,12 @@ def load_character(root, character_id):
         provider = None
         selected = providers.get(default_name)
         if isinstance(selected, dict) and selected.get('kind') != 'claude_agent':
-            try:
-                provider = toml_provider(selected)
-            except (KeyError, ValueError, TypeError, ArithmeticError):
-                provider = None
-        if provider is None:
-            # Ticket 317: an old character.toml may point at the removed channel, a missing provider
-            # or an invalid one. Use the first provider that actually parses instead of stopping Peter.
+            # A normal default must stay explicit: a broken one is a real config error, not a cue
+            # to silently switch Peter to another paid provider.
+            provider = toml_provider(selected)
+        elif isinstance(selected, dict) or not providers:
+            # Ticket 317: an old character.toml may point at the removed channel or have no provider
+            # table. Use the first provider that actually parses; skip invalid ones.
             for name, raw in providers.items():
                 if not isinstance(raw, dict) or raw.get('kind') == 'claude_agent':
                     continue
@@ -803,6 +802,8 @@ def load_character(root, character_id):
                     continue
                 default_name, provider = name, candidate
                 break
+        else:
+            raise ValueError(f'provider {default_name!r} does not exist')
         if provider is None:
             # No API provider exists at all. Start with an explicit non-callable placeholder so Lan can
             # still open settings and add one; it is never listed or used as an available model.
@@ -3691,7 +3692,7 @@ class Chat:
         except (KeyboardInterrupt, EOFError):
             self._capability_request_active = False
             raise
-        except (TooLong, RequestFailed) as exc:
+        except (TooLong, RequestFailed, RequestNotSent) as exc:
             self._capability_request_active = False
             if not self.last_send_persisted and mids:
                 self.fail_incoming(mids, reason=str(exc))
@@ -5276,6 +5277,17 @@ def background_cfg(cfg):
     return cfg if not background else replace(cfg, provider=background)
 
 
+def models_available(cfg):
+    """False only for the explicit no-model recovery placeholder (ticket 317)."""
+    return not ((getattr(cfg, 'provider', None) or {}).get('missing')
+                or (getattr(cfg, 'background_provider', None) or {}).get('missing'))
+
+
+def memory_available(cfg):
+    """Model-dependent Ombre must not start while Lan still has to choose an API model."""
+    return bool((getattr(cfg, 'memory', None) or {}).get('enabled')) and models_available(cfg)
+
+
 def make_voice(root, cfg, store, budget):
     from voice_output import MiniMaxVoice, load_voice_config
     if not cfg.voice or cfg.voice.get('provider') != 'minimax':
@@ -5514,11 +5526,14 @@ def main():
             client, model = make_model(ROOT, cfg)
             background_client, background_model = make_model(ROOT, cfg, provider=cfg.background_provider)
             voice = make_voice(ROOT, cfg, store, budget)
+            use_memory = memory_available(cfg)
+            if (cfg.memory and cfg.memory.get('enabled')) and not use_memory:
+                print('记忆后台需要先选择 API 模型；请打开设置选择后重启。')
             with client, background_client:
                 from tools_agent import FilesystemTools
                 from web_tools import WebTools
                 with FilesystemTools(ROOT, cfg, store, web_factory=WebTools) as tools:
-                    if cfg.memory and cfg.memory.get('enabled'):
+                    if use_memory:
                         from memory_agent import Memory, open_ombre
                         with open_ombre(ROOT, cfg) as backend:
                             with Memory(cfg, store, budget, model, backend) as memory:

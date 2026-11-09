@@ -439,6 +439,14 @@ output_cny_per_million = "8"
         self.assertEqual(self.chat.send.call_count, 1)
         self.assertTrue(any('还没有可用的聊天模型' in str(item) for item in outputs))
 
+    def test_request_not_sent_marks_processing_failed_and_reloads_history(self):
+        self.chat.model = Mock(side_effect=RequestNotSent('本机 .env 缺少所选接口的 API Key。'))
+        with self.assertRaises(RequestNotSent):
+            self.chat.send('fake request')
+        rows = self.store.read('test/message-processing.jsonl')
+        self.assertEqual(rows[-1]['state'], 'failed')
+        self.assertEqual(self.chat.history[-1]['content'], 'fake request')
+
     def test_storage_user_error_propagates_out_of_run_chat(self):
         outputs = []
         cfg = replace(self.cfg, tools=None)

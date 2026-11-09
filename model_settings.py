@@ -107,6 +107,10 @@ class ModelSettings:
         except OSError as exc:
             raise SettingsError('模型配置迁移前无法保留备份；原文件未改动，请检查磁盘权限。') from exc
 
+    def _key_available(self, provider, env=None):
+        env = self._env_values() if env is None else env
+        return bool((env.get(provider.get('api_key_env') or '') or '').strip())
+
     def _fallback_choice(self, raw):
         """The first structurally valid API model, preferring one whose API Key is present.
 
@@ -132,8 +136,7 @@ class ModelSettings:
             if provider is None:
                 continue
             label = provider.get('label') or provider.get('model') or model_id
-            key_env = provider.get('api_key_env') or ''
-            structural.append((model_id, label, bool((env.get(key_env) or '').strip())))
+            structural.append((model_id, label, self._key_available(provider, env)))
         usable = [item for item in structural if item[2]]
         if usable:
             return usable[0]
@@ -527,8 +530,12 @@ class ModelSettings:
             daily, monthly = self.limits()
             use = {role: self._public_use(role) for role in ROLES}
             notice = self._migration_notice(self.data.get('migration'))
-            if not notice and self.startup_choice('peter') is None:
-                notice = '还没有可用的聊天模型；请在模型设置里添加接口和模型。'
+            if not notice:
+                choice = self.startup_choice('peter')
+                if choice is None:
+                    notice = '还没有可用的聊天模型；请在模型设置里添加接口和模型。'
+                elif not self._key_available(choice[2]):
+                    notice = '当前聊天模型缺少 API Key；请填写 Key 或在模型设置里重新选择。'
             return {'endpoints': endpoints, 'models': models, 'use': use,
                     'use_explicit': {role: role in self.data['use'] for role in ROLES},
                     'migration_notice': notice,

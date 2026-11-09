@@ -79,6 +79,22 @@ class GlanceModelTests(unittest.TestCase):
         again = load_character(self.root, 'test')
         self.assertEqual(again.models.public()['use']['autonomy'], 'builtin:fake')
 
+    def test_autonomy_uses_its_api_model_and_restores_chat(self):
+        cfg = load_character(self.root, 'test')
+        _, chat_name, chat_provider = cfg.models.use('peter', 'builtin:other')
+        cfg.models.use('autonomy', 'builtin:fake')
+        store = Store(self.root / 'data')
+        chat = Chat(cfg, store, Budget(store), Mock())
+        chat.switch_model(chat_name, chat_provider)
+        cfg.autonomy['max_input_tokens'] = 10000
+        seen = []
+        chat._send = lambda *a, **k: seen.append(
+            (cfg.provider['model'], cfg.provider['max_input_tokens'])) or 'ok'
+        self.assertEqual(chat.send('wake', autonomy=True), 'ok')
+        self.assertEqual(chat.send('hi'), 'ok')
+        self.assertEqual(seen, [('fake-model', 6000), ('other-model', 6000)])
+        self.assertEqual(cfg.provider['model'], 'other-model')
+
     def test_builtin_grok_is_the_default_when_configured(self):
         toml = TOML + '[providers.grok]\nmodel = "grok-4.6"\nbase_url = "https://g.invalid/v1"\n' \
             'api_key_env = "FAKE_KEY"\nmax_input_tokens = 6000\ninput_cny_per_million = "1"\n' \
