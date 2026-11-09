@@ -113,6 +113,11 @@ def bing_search(query, *, proxy, timeout):
     return results[:SEARCH_RESULT_LIMIT]
 
 
+def _redact_userinfo(text):
+    """Hide user:password in any URL (for example a proxy address quoted in an error)."""
+    return re.sub(r'(?i)\b([a-z][a-z0-9+.-]*://)[^/@\s:]+(?::[^/@\s]*)?@', r'\1***@', text)
+
+
 def _clip_utf8(value, max_bytes):
     raw = str(value).encode('utf-8')
     if len(raw) <= max_bytes:
@@ -396,7 +401,8 @@ class WebTools:
             except Exception as exc:
                 # Say what actually failed (class + short reason, never the query) so a blocked
                 # network is told apart from a library problem.
-                reason = _clip_utf8(f'{type(exc).__name__}: {exc}'.replace(query, '<query>'), 200)
+                reason = _clip_utf8(_redact_userinfo(
+                    f'{type(exc).__name__}: {exc}'.replace(query, '<query>')), 200)
                 failures.append(f'{engine}: ' + _clip_utf8(reason, 80))
                 continue
             answered = True

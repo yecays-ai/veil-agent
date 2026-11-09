@@ -128,6 +128,16 @@ class WebToolsTests(unittest.TestCase):
             tools.invoke('web_search', {'query': 'topic'})
         self.assertEqual([c.kwargs['backend'] for c in ddgs.text.call_args_list], ['mojeek'])
 
+    def test_failure_reason_hides_proxy_credentials(self):
+        _, _, tools, _ = self.make_tools(worker=Mock())
+        ddgs = Mock()
+        ddgs.text.side_effect = OSError('cannot reach http://user:secret@proxy.example:8080 now')
+        with patch('web_tools.DDGS', return_value=ddgs):
+            result, state, _ = tools.invoke('web_search', {'query': 'topic'})
+        self.assertEqual(state, '出错')
+        self.assertNotIn('secret', result)
+        self.assertIn('http://***@proxy.example:8080', result)
+
     def test_search_reports_error_only_after_every_engine_failed(self):
         _, _, tools, _ = self.make_tools(worker=Mock())
         ddgs = Mock()

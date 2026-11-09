@@ -420,6 +420,10 @@ class BrowserTools:
                 show = None
             if required is None or set(args) != required | {'action'}:
                 raise ValueError('Unsupported action or arguments.')
+            if background and self.visible:
+                # The chat is showing a page on Lan's screen; background work must not drive or close it.
+                raise ValueError("The browser is showing a page on Lan's screen; background browsing is "
+                                 'unavailable until that page is closed.')
             if action == 'open':
                 public_url(args['url'])
                 # A plain open keeps the current mode; only an explicit show changes it.
@@ -442,7 +446,7 @@ class BrowserTools:
             if action == 'close':
                 # Showing a page ends with its window; the next open is in the background again.
                 self.visible = False
-            human_priority = self.visible and not background and action != 'close'
+            human_priority = self.visible and action != 'close'
             snapshot = self.monitor.snapshot() if human_priority else None
             if human_priority:
                 self.monitor.require_idle(3)

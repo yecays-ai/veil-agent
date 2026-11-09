@@ -308,7 +308,11 @@ class BrowserSafetyTests(unittest.TestCase):
         browser.invoke('browser', {'action': 'close'})
         self.assertFalse(browser.visible)
         browser.visible = True
-        self.assertNotIn('human priority', browser.invoke('browser', {'action': 'observe'}, background=True)[0])
+        for action in ({'action': 'observe'}, {'action': 'close'}):
+            result, state, _ = browser.invoke('browser', action, background=True)
+            self.assertEqual(state, '被拒绝', result)
+            self.assertIn("showing a page on Lan's screen", result)
+        self.assertTrue(browser.visible)
         browser.visible = False
         self.assertIn('show must be', browser.invoke(
             'browser', {'action': 'open', 'url': 'https://example.com/', 'show': 'yes'})[0])
