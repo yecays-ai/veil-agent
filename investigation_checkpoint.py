@@ -7,7 +7,7 @@ from pathlib import Path
 import uuid
 
 from agent_types import UserError, now
-from long_tasks import LongTaskStore
+from long_tasks import LongTaskStore, READ_ONLY_TOOLS
 
 
 MAX_EVIDENCE = 16
@@ -40,6 +40,11 @@ class InvestigationCheckpoint:
             raise UserError('Investigation checkpoint is incomplete; keep the data folder intact.')
         if value['status'] not in ('active', 'interrupted', 'completed') or not isinstance(value.get('evidence'), list):
             raise UserError('Investigation checkpoint is invalid; keep the data folder intact.')
+        required = ('time', 'tool', 'call', 'state', 'source', 'evidence')
+        if (len(value['evidence']) > MAX_EVIDENCE or any(not isinstance(row, dict)
+                or not all(isinstance(row.get(key), str) for key in required)
+                or type(row.get('read_only')) is not bool for row in value['evidence'])):
+            raise UserError('Investigation checkpoint evidence is invalid; keep the data folder intact.')
         return value
 
     def read(self):
@@ -71,7 +76,7 @@ class InvestigationCheckpoint:
             return ''
         cutoff = datetime.now(timezone.utc) - FRESH_FOR
         evidence = []
-        for item in task['evidence'][-8:]:
+        for item in task['evidence'][-MAX_EVIDENCE:]:
             item = dict(item)
             item['evidence'] = item.get('evidence', '')[:240]
             if item.get('state') == '成功' and item.get('read_only'):
@@ -90,6 +95,8 @@ class InvestigationCheckpoint:
                           separators=(',', ':'))
 
     def goal_for(self, text):
+        if not self.resume_requested(text):
+            return text
         task = self.read()
         if self.resume_requested(text) and task and task['status'] in ('active', 'interrupted'):
             return task['goal']
@@ -104,7 +111,7 @@ class InvestigationCheckpoint:
         item = next((row for row in reversed(task['evidence']) if row.get('call') == call), None)
         if not item:
             return None
-        if not item.get('read_only') and item.get('state') in ('被拒绝', '已停止', '结果未知'):
+        if not item.get('read_only') and item.get('state') in ('成功', '被拒绝', '已停止', '结果未知'):
             return 'This side effect was previously rejected, stopped, or has an unknown outcome; do not replay it automatically.'
         if item.get('read_only') and item.get('state') == '成功':
             try:
@@ -115,17 +122,21 @@ class InvestigationCheckpoint:
                 return 'This successful read-only evidence is still fresh; use the checkpoint evidence instead of repeating it.'
         return None
 
-    def record(self, goal, request_id, name, arguments, state, summary, result):
-        if not goal or name in {'send_message', 'stay_silent', 'reply_later', 'card_action',
-                                'recall_message', 'long_task_status', 'long_task_update'}:
+    def record(self, goal, request_id, name, arguments, state, summary, result, resuming=False):
+        if not goal or name in {'stay_silent', 'reply_later', 'card_action', 'recall_message',
+                                'long_task_status', 'long_task_update'}:
             return
         with self.store.mutex:
             task = self._read()
+            if task and task['status'] == 'interrupted' and request_id != task['request_id'] and not resuming:
+                return
             if not task or task['status'] == 'completed':
                 task = {'id': uuid.uuid4().hex, 'goal': goal[:2000], 'request_id': request_id,
                         'status': 'active', 'reason': '', 'evidence': [], 'updated_at': now()}
             from veil_agent import safe_tool_activity_detail
-            side_effect = LongTaskStore.is_side_effect(name) or name.startswith('mcp__')
+            from windows_interaction import WINDOWS_INTERACTION_TOOL_NAMES
+            side_effect = (name in WINDOWS_INTERACTION_TOOL_NAMES or name.startswith('mcp__')
+                           or name not in READ_ONLY_TOOLS | {'browser', 'web_search'})
             item = {'time': now(), 'tool': name, 'call': _signature(name, arguments),
                     'state': state, 'read_only': not side_effect,
                     'source': str(summary)[:240], 'evidence': safe_tool_activity_detail(result, limit=600)}
@@ -138,18 +149,18 @@ class InvestigationCheckpoint:
             task['updated_at'] = now()
             self._save(task)
 
-    def interrupt(self, reason):
+    def interrupt(self, reason, request_id=None, resuming=False):
         if reason not in INTERRUPTED:
             return
         with self.store.mutex:
             task = self._read()
-            if task and task['status'] == 'active':
+            if task and task['status'] == 'active' and (request_id is None or task['request_id'] == request_id or resuming):
                 task['status'], task['reason'], task['updated_at'] = 'interrupted', reason, now()
                 self._save(task)
 
     def complete(self):
         with self.store.mutex:
             task = self._read()
-            if task and task['status'] == 'active':
+            if task and task['status'] in ('active', 'interrupted'):
                 task['status'], task['updated_at'] = 'completed', now()
                 self._save(task)
