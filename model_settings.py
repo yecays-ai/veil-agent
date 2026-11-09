@@ -427,6 +427,12 @@ class ModelSettings:
         if not 4096 <= max_input <= 2_000_000:
             raise SettingsError('最长输入要在 4096 到 2000000 tokens 之间。')
         model['max_input_tokens'] = max_input
+        modalities = item.get('input_modalities')
+        if modalities is not None:
+            if (not isinstance(modalities, list) or not modalities or 'text' not in modalities
+                    or any(value not in ('text', 'image') for value in modalities)):
+                raise SettingsError('输入能力只能是 text 或 image，且必须包含 text。')
+            model['input_modalities'] = modalities
         return model
 
     @staticmethod
@@ -452,6 +458,8 @@ class ModelSettings:
                     'thinking': 'enabled' if model['thinking'] else 'disabled',
                     'max_input_tokens': model['max_input_tokens'],
                     'label': model['label'] or model['model'], 'endpoint_name': endpoint['name']}
+        if model.get('input_modalities'):
+            provider['input_modalities'] = model['input_modalities']
         if model['billing'] == 'call':
             provider['cny_per_call'] = Decimal(model['cny_per_call'])
             for key in ('input_cny_per_million', 'cached_input_cny_per_million', 'output_cny_per_million'):
@@ -633,9 +641,14 @@ class ModelSettings:
                 raise SettingsError('两个接口不能使用相同 ID。')
             endpoint_ids = {item['id'] for item in endpoints}
             models = []
+            previous_models = {item['id']: item for item in self.data['models']}
             for item in models_in:
                 if not isinstance(item, dict):
                     raise SettingsError('设置格式不对。')
+                previous = previous_models.get(item.get('id'), {}) if isinstance(item.get('id'), str) else {}
+                if ('input_modalities' not in item and 'input_modalities' in previous
+                        and all(item.get(key) == previous.get(key) for key in ('endpoint', 'model'))):
+                    item = {**item, 'input_modalities': previous['input_modalities']}
                 models.append(self._model(item, endpoint_ids))
             if len({item['id'] for item in models}) != len(models):
                 raise SettingsError('两个模型不能使用相同 ID。')

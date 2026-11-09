@@ -1,14 +1,22 @@
 # HANDOFF
 
-## 当前工单 321（PR #322，2026-11-09 15:10 +08）
+## 当前工单 322（2026-11-09）
 
-- 分支 `ticket/321-investigation-alias`；PR #322：https://github.com/yecays-ai/veil-agent/pull/322。独立 worktree 为本单新建，正式运行目录未动。
-- 已用 `git merge origin/main` 合入 `1e66d70` 解决 PR #322 冲突，保留本分支提交历史；没有 rebase、没有强制推送。
-- 上一单：工单 319（PR #318）合并 `8b39f0d`，Windows 双实例验收待 Lan；工单 320（PR #319）合并 `1e66d70`，Windows 工作台验收待 Lan。
-- 缺陷：`investigation_checkpoint.record()` 用模型侧别名判断只读，只读集合却是规范名；生产别名下的成功读取被记录成 `read_only: false`，续接不能正确复用新鲜证据，也会挡住过期重查。
-- 修复：`record()` 新增 `canonical_name`，只读/副作用/排除判断全部用规范名；证据仍保存模型侧调用名，`resume_guard` 签名不变。`veil_agent._tool_chat` 所有记录点先解析规范名，MCP 的 `needs_checkpoint` 也用规范名。
-- 联动修复：最后一步工具已收起时，模型仍输出文本工具调用会被 `raw_tool_call_text_format` 误判为 `tool_failure`；现在按 `step_limit` 记录并保留可续接检查点。
-- 回归：`tests.test_tools`、`tests.test_chat`、`tests.test_investigation_checkpoint`、`tests.test_tool_aliases`、`tests.test_mcp_services` 共 209 项通过。
-- Windows 真实验收：独立 `--acceptance` 实例（`max_steps=3`）、真实 deepseek、真实 `pythonw → mcp_hidden_stdio.py → node` MCP 文件工具；四场景均有执行证据。证据在仓库外的 `acceptance-321/evidence/`（未提交），包括检查点、工具账本、聊天记录、模型计费账本和进程树。34 次真实模型调用，约 ¥0.105。
-- 下一个窗口第一步：push 合并提交，等 PR #322 最新必需 CI 全绿、Cubic 实质意见处理完并确认分支保护后合并；合并后请 Lan 按 `STATUS.md` 验收。
-- 未验证：其他角色、Linux 宿主、Docker 路径；本轮未重建 Docker。
+- 分支 `ticket/322-windows-continuous-execution`，PR #321；复用原独立工作树，没有创建或清理其他工作树。已同步包含 PR #322 的 main，文档以本次真实状态为准。
+- 工作台复用原 OpenCode 循环和 Windows observer/interaction/discovery。仅开放发现、列窗、目标观察/截图、启动/切换与 UIA 控件动作；不新增 Agent 或视觉坐标执行器。
+- 本轮接手修复：桌面停止向外层执行器传播，不能误报成功；任务首次读取/操作桌面前审批，拒绝粘性停止；串行接纳动作直到未知结果停止落地，拒绝并发越过边界；审批期间保留显式停止、正确处理审批输入，之后恢复人工接管；每次观察可重新取得目标截图。
+- 同时修复模型设置编辑遗漏隐藏 `input_modalities` 时丢失视觉能力的问题；只有同一接口/模型保留旧声明，显式修改及换模型仍按新配置。
+- 一次性诊断和验收材料保留在未跟踪测试目录，不提交任何真实配置、凭据、模型原始请求或本机路径。原有临时目录未清理。
+- 本轮键鼠事件诊断确认持续变化包含实际输入事件，不能证明是远程会话故障；不忽略未知注入、不关闭人工接管。
+- 验收区分：假模型回归、真实 Docker/宿主链路、Lan 体验分别记录。此前控制台编码错误的探针不作成功证据；最终独立联测结果见下文。
+- 下一步：推送最后的真实 UIA 修复，核对最新 CI/Cubic，并保持 PR 不合并。需再操作桌面时先取得 Lan 空闲窗口，不在她使用电脑时重复发起任务。
+
+## 最终代码与验证
+
+- 使用项目运行环境，相关回归 424 项（3 跳过）无失败；最后的标准 UIA 聚焦回退经 75 项窗口专项验证，无失败。不要使用缺少 Playwright 的系统解释器冒充项目运行环境。
+- 真实独立测试聊天使用当前视觉模型，自动只委派一次 workbench；同一 Docker/OpenCode 任务完成公开网页 open/observe、notepad launch/list/observe、set_text、activate、第二次 observe。9 个内部模型步骤、8 次工具调用，全部成功；两次目标窗口 PNG 均传入模型，独立 UIA 读回测试文字一致。工作台估算费用约 0.0046 元，不代表包含主聊天的完整账单。
+- 真实联测中定位并修复：DocumentControl 的只读属性属于 ValuePattern，不是控件自身属性；旧 AttachThreadInput 激活会挂起，普通 SetForegroundWindow 又可能被系统拒绝，改为复用现有 UIA SetFocus 回退，必须核对实际前台句柄，不伪造输入。已确认 UIA 聚焦能在该测试窗口生效。
+- 之前一次激活结果未知时，网关撤销并让外层工作台返回 desktop_stopped，没有重试或记成成功；此失败证据不替代最终成功联测。
+- 一次性文档与原始测试结果仅留在未跟踪测试目录，不提交本机路径、真实配置、凭据或模型原始请求。正式数据未改，测试文档未保存，不清理其他工作树。
+- 本轮接手修复与 main 同步提交为 3793c1f，其 Tests/Dependency security 已通过；后续两处真实 UIA 修复的最终 CI 仍须按最终 head 核对。
+- 剩余：最新 CI/Cubic 与 Lan 正式 Peter 窗口的体验。保持 PR #321 不合并，不把独立测试聊天当 Lan 已验收。首次桌面任务授权和保存/覆盖审批的 UI 点击体验仍由最终体验确认；程序边界已有专项回归。

@@ -74,8 +74,11 @@ TOOL_SCHEMA = {'type': 'function', 'function': {
         'the project folder itself, so name the project rather than giving file paths or system commands. '
         'When isolated browsing is enabled for this role, it also has a public browser for research: it can open '
         'public HTTPS pages, follow links, scroll, fill a public search box and submit public GET searches in one '
-        'run, without login, upload, download or private-network access. For a several-page public research job, '
-        'hand it over once and ask for a report. You decide what to do with the result.'),
+        'run, without login, upload, download or private-network access. When Windows UIA is enabled, it can also '
+        'discover an allowed app, observe one exact window (including a transient target-window screenshot when '
+        'needed), type through a fresh UIA control, switch back and verify the result in the same run. For a '
+        'several-step public research or Windows software task, hand it over once and ask for a report; do not split '
+        'it into chat-level browser or desktop micro-actions. You decide what to do with the result.'),
     'parameters': {'type': 'object', 'properties': {
         'task': {'type': 'string', 'minLength': 1, 'maxLength': 4000,
                  'description': 'What to do and what to report back.'},
@@ -1202,29 +1205,38 @@ def find_command(configured=''):
     return shutil.which('opencode')
 
 
-def build_config(provider, token, base_url, protect=(), browser_gateway=None):
+def build_config(provider, token, base_url, protect=(), browser_gateway=None, windows_gateway=None):
     """The OpenCode config, passed inline (OPENCODE_CONFIG_CONTENT) so nothing is written into the user's project
     and a project's own opencode.json cannot loosen it. `token` is the local proxy token, not the real key."""
     context = int(provider.get('max_input_tokens', 32768))
     edit_permission = ('ask' if not protect else
                        {'*': 'ask', **{Path(path).as_posix(): 'deny' for path in protect}})
+    model = {'name': provider['model'], 'tool_call': True,
+             'limit': {'context': context, 'output': min(8192, context // 4)}}
+    if provider.get('input_modalities'):
+        model['modalities'] = {'input': list(provider['input_modalities']), 'output': ['text']}
     config = {
         '$schema': 'https://opencode.ai/config.json',
         'provider': {'relay': {
             'npm': '@ai-sdk/openai-compatible', 'name': 'Relay',
             'options': {'baseURL': base_url, 'apiKey': token},
-            'models': {provider['model']: {'name': provider['model'], 'tool_call': True,
-                                           'limit': {'context': context, 'output': min(8192, context // 4)}}}}},
+            'models': {provider['model']: model}}},
         # Every shell request reaches VEIL, which has the current task's project scope and approval state.
         # Reading secrets is denied outright by OpenCode before it can expose them to the model.
         'permission': {'bash': {'*': 'ask'},
                        'edit': edit_permission, 'webfetch': 'ask', 'external_directory': 'ask',
                        'read': {'*': 'allow', **{g: 'deny' for g in SECRET_GLOBS}}},
         'share': 'disabled', 'autoupdate': False}
+    if browser_gateway is not None or windows_gateway is not None:
+        config['mcp'] = {}
     if browser_gateway is not None:
-        config['mcp'] = {'veil_browser': {
+        config['mcp']['veil_browser'] = {
             'type': 'remote', 'url': browser_gateway.url, 'oauth': False,
-            'headers': {'Authorization': 'Bearer ' + browser_gateway.token}}}
+            'headers': {'Authorization': 'Bearer ' + browser_gateway.token}}
+    if windows_gateway is not None:
+        config['mcp']['veil_windows'] = {
+            'type': 'remote', 'url': windows_gateway.url, 'oauth': False,
+            'headers': {'Authorization': 'Bearer ' + windows_gateway.token}}
     return config
 
 
@@ -1345,6 +1357,7 @@ def container_command(container, *, name, workdir, port, env, masks, bootstrap_g
                   'iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT; '
                   'iptables -A OUTPUT -d "$PROXY_IP" -p tcp --dport "$VEIL_PROXY_PORT" -j ACCEPT; '
                   'if test -n "${VEIL_BROWSER_PORT:-}"; then iptables -A OUTPUT -d "$PROXY_IP" -p tcp --dport "$VEIL_BROWSER_PORT" -j ACCEPT; fi; '
+                  'if test -n "${VEIL_WINDOWS_PORT:-}"; then iptables -A OUTPUT -d "$PROXY_IP" -p tcp --dport "$VEIL_WINDOWS_PORT" -j ACCEPT; fi; '
                   'iptables -A OUTPUT -j REJECT; '
                   'if command -v ip6tables >/dev/null 2>&1; then '
                   'if ip6tables -L OUTPUT -n >/dev/null 2>&1; then '
@@ -1366,7 +1379,7 @@ def container_command(container, *, name, workdir, port, env, masks, bootstrap_g
 def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, stopped, record_cost,
         api_factory=None, proxy_factory=None, container=None, protect=(), popen=subprocess.Popen, clock=time.monotonic,
         sleep=time.sleep, diagnostic=None, maintenance=False, approval_data=None, save_approval=None,
-        container_name=None, browser_gateway=None):
+        container_name=None, browser_gateway=None, windows_gateway=None):
     """Run one task. `record_cost(cost)` is called once with the estimated cost, whatever the outcome."""
     limits = {**DEFAULT_LIMITS, **(limits or {})}
     workdir, home = Path(workdir), Path(home)
@@ -1437,10 +1450,12 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
         proxy.allow_hosts(hosts)
     proxy_host = 'veil-relay' if container else '127.0.0.1'
     gateway = browser_gateway(stopped, bool(container)) if browser_gateway is not None else None
+    desktop_gateway = windows_gateway(stopped, bool(container)) if windows_gateway is not None else None
     try:
         bridge = gateway.__enter__() if gateway is not None else None
+        desktop_bridge = desktop_gateway.__enter__() if desktop_gateway is not None else None
         config = build_config(provider, proxy.token, proxy.local_base(proxy_host), protect=protect,
-                              browser_gateway=bridge)
+                              browser_gateway=bridge, windows_gateway=desktop_bridge)
         port, password = free_port(), secrets.token_urlsafe(24)
         keep = {'PATH', 'PATHEXT', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'TEMP', 'TMP', 'TMPDIR', 'LANG', 'LC_ALL', 'PROGRAMFILES',
                 'PROGRAMFILES(X86)', 'PROGRAMDATA', 'APPDATA', 'LOCALAPPDATA', 'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE'}
@@ -1458,6 +1473,8 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
             })
             if bridge is not None:
                 shared['VEIL_BROWSER_PORT'] = str(bridge.server.server_address[1])
+            if desktop_bridge is not None:
+                shared['VEIL_WINDOWS_PORT'] = str(desktop_bridge.server.server_address[1])
         git_pointer, empty_secret_dir = None, None
         if container:
             name = container_name or 'veil-workbench-' + secrets.token_hex(4)
@@ -1500,6 +1517,11 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
                 gateway.__exit__(None, None, None)
             except Exception:
                 pass
+        if desktop_gateway is not None:
+            try:
+                desktop_gateway.__exit__(None, None, None)
+            except Exception:
+                pass
         raise
     proc, messages, cost, steps, stop = None, [], Decimal(0), 0, ''
     cleanup_warning = ''
@@ -1537,6 +1559,8 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
                 stop = 'stopped by Lan'
                 if gateway is not None:
                     gateway.stop()
+                if desktop_gateway is not None:
+                    desktop_gateway.stop()
             try:
                 for request in ([] if stop else api.call('GET', '/permission') or []):
                     if request.get('sessionID') != session or request.get('id') in answered:
@@ -1575,6 +1599,8 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
                     stop = stop or 'OpenCode stopped unexpectedly'
             steps, calls, repeat, _text = summarize(messages)
             _tin, _tout, cost = estimate_cost(messages, price, steps)
+            if not stop and desktop_gateway is not None and desktop_gateway.stopped():
+                stop = 'Windows task stopped or its action outcome is uncertain'
             if not stop:
                 if steps >= int(limits['max_steps']):
                     stop = f'reached the {limits["max_steps"]}-step limit'
@@ -1587,6 +1613,8 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
             if stop:
                 if gateway is not None:
                     gateway.stop()
+                if desktop_gateway is not None:
+                    desktop_gateway.stop()
                 try:
                     api.call('POST', f'/session/{session}/abort')
                 except Exception:
@@ -1624,6 +1652,11 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
                 gateway.__exit__(None, None, None)
             except Exception:
                 cleanup_warning += ' [warning: could not stop the public browser gateway]'
+        if desktop_gateway is not None:
+            try:
+                desktop_gateway.__exit__(None, None, None)
+            except Exception:
+                cleanup_warning += ' [warning: could not stop the Windows UIA gateway]'
         if git_pointer is not None:
             try:
                 git_pointer.unlink(missing_ok=True)
@@ -1652,6 +1685,7 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
                         m.get('info', {}).get('type') == 'assistant'), '')
         status = (approval_note + '\n' if approval_note else '') + '[workbench=stopped]\n'
         reason = ('user_stopped' if stop == 'stopped by Lan' else
+                  'desktop_stopped' if stop == 'Windows task stopped or its action outcome is uncertain' else
                   'repeated_call' if stop.startswith('the same call was repeated') else 'limit_or_failure')
         return ExecutorResult(status + f'The workbench was stopped: {stop}. {diagnose(messages)}\nPartial report:\n{partial[:RESULT_CHARS]}\n{note}',
                               '出错', cost, steps, reason)
