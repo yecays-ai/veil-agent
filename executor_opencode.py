@@ -72,6 +72,9 @@ TOOL_SCHEMA = {'type': 'function', 'function': {
         'Publishing, downloading, installing and bulk deletes are asked of Lan by the program. Give a '
         'complete, self-contained task in words (what is wrong, what to do, what to report); the workbench works in '
         'the project folder itself, so name the project rather than giving file paths or system commands. '
+        'It also has an isolated public browser for research: it can open public HTTPS pages, follow links, scroll, '
+        'fill a public search box and submit public GET searches in one run, without login, upload, download or '
+        'private-network access. For a several-page public research job, hand it over once and ask for a report. '
         'You decide what to do with the result.'),
     'parameters': {'type': 'object', 'properties': {
         'task': {'type': 'string', 'minLength': 1, 'maxLength': 4000,
@@ -1199,13 +1202,13 @@ def find_command(configured=''):
     return shutil.which('opencode')
 
 
-def build_config(provider, token, base_url, protect=()):
+def build_config(provider, token, base_url, protect=(), browser_gateway=None):
     """The OpenCode config, passed inline (OPENCODE_CONFIG_CONTENT) so nothing is written into the user's project
     and a project's own opencode.json cannot loosen it. `token` is the local proxy token, not the real key."""
     context = int(provider.get('max_input_tokens', 32768))
     edit_permission = ('ask' if not protect else
                        {'*': 'ask', **{Path(path).as_posix(): 'deny' for path in protect}})
-    return {
+    config = {
         '$schema': 'https://opencode.ai/config.json',
         'provider': {'relay': {
             'npm': '@ai-sdk/openai-compatible', 'name': 'Relay',
@@ -1218,6 +1221,11 @@ def build_config(provider, token, base_url, protect=()):
                        'edit': edit_permission, 'webfetch': 'ask', 'external_directory': 'ask',
                        'read': {'*': 'allow', **{g: 'deny' for g in SECRET_GLOBS}}},
         'share': 'disabled', 'autoupdate': False}
+    if browser_gateway is not None:
+        config['mcp'] = {'veil_browser': {
+            'type': 'remote', 'url': browser_gateway.url, 'oauth': False,
+            'headers': {'Authorization': 'Bearer ' + browser_gateway.token}}}
+    return config
 
 
 SECRET_FILE = re.compile(r'^(.*\.env(\..*)?|.*\.pem|id_(rsa|ed25519).*|.*\.pfx|.*\.key|cookies|login data)$', re.I)
@@ -1336,6 +1344,7 @@ def container_command(container, *, name, workdir, port, env, masks, bootstrap_g
                   'iptables -A OUTPUT -o lo -j ACCEPT; '
                   'iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT; '
                   'iptables -A OUTPUT -d "$PROXY_IP" -p tcp --dport "$VEIL_PROXY_PORT" -j ACCEPT; '
+                  'if test -n "${VEIL_BROWSER_PORT:-}"; then iptables -A OUTPUT -d "$PROXY_IP" -p tcp --dport "$VEIL_BROWSER_PORT" -j ACCEPT; fi; '
                   'iptables -A OUTPUT -j REJECT; '
                   'if command -v ip6tables >/dev/null 2>&1; then '
                   'if ip6tables -L OUTPUT -n >/dev/null 2>&1; then '
@@ -1357,7 +1366,7 @@ def container_command(container, *, name, workdir, port, env, masks, bootstrap_g
 def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, stopped, record_cost,
         api_factory=None, proxy_factory=None, container=None, protect=(), popen=subprocess.Popen, clock=time.monotonic,
         sleep=time.sleep, diagnostic=None, maintenance=False, approval_data=None, save_approval=None,
-        container_name=None):
+        container_name=None, browser_gateway=None):
     """Run one task. `record_cost(cost)` is called once with the estimated cost, whatever the outcome."""
     limits = {**DEFAULT_LIMITS, **(limits or {})}
     workdir, home = Path(workdir), Path(home)
@@ -1427,7 +1436,10 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
     def allow_network(hosts):
         proxy.allow_hosts(hosts)
     proxy_host = 'veil-relay' if container else '127.0.0.1'
-    config = build_config(provider, proxy.token, proxy.local_base(proxy_host), protect=protect)
+    gateway = browser_gateway(stopped, bool(container)) if browser_gateway is not None else None
+    bridge = gateway.__enter__() if gateway is not None else None
+    config = build_config(provider, proxy.token, proxy.local_base(proxy_host), protect=protect,
+                          browser_gateway=bridge)
     port, password = free_port(), secrets.token_urlsafe(24)
     keep = {'PATH', 'PATHEXT', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'TEMP', 'TMP', 'TMPDIR', 'LANG', 'LC_ALL', 'PROGRAMFILES',
             'PROGRAMFILES(X86)', 'PROGRAMDATA', 'APPDATA', 'LOCALAPPDATA', 'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE'}
@@ -1439,10 +1451,12 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
         shared.update({
             'HTTP_PROXY': proxy_url, 'HTTPS_PROXY': proxy_url,
             'http_proxy': proxy_url, 'https_proxy': proxy_url, 'ALL_PROXY': proxy_url,
-            'NO_PROXY': 'veil-relay,localhost,127.0.0.1,::1',
+            'NO_PROXY': 'veil-relay,host.docker.internal,localhost,127.0.0.1,::1',
             'VEIL_PROXY_PORT': str(proxy.port),
             'VEIL_WATCHDOG_URL': proxy.local_health('veil-relay'),
         })
+        if bridge is not None:
+            shared['VEIL_BROWSER_PORT'] = str(bridge.server.server_address[1])
     git_pointer, empty_secret_dir = None, None
     if container:
         name = container_name or 'veil-workbench-' + secrets.token_hex(4)
@@ -1513,6 +1527,8 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
             sleep(1)
             if stopped():
                 stop = 'stopped by Lan'
+                if gateway is not None:
+                    gateway.stop()
             try:
                 for request in ([] if stop else api.call('GET', '/permission') or []):
                     if request.get('sessionID') != session or request.get('id') in answered:
@@ -1561,6 +1577,8 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
                 elif repeat > int(limits['repeat_limit']):
                     stop = f'the same call was repeated more than {limits["repeat_limit"]} times'
             if stop:
+                if gateway is not None:
+                    gateway.stop()
                 try:
                     api.call('POST', f'/session/{session}/abort')
                 except Exception:
@@ -1593,6 +1611,8 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
             proxy.close()
         except Exception:
             pass
+        if gateway is not None:
+            gateway.__exit__(None, None, None)
         if git_pointer is not None:
             try:
                 git_pointer.unlink(missing_ok=True)

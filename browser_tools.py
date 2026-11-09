@@ -8,6 +8,8 @@ import re
 import socket
 import threading
 import time
+import secrets
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 from urllib.parse import urlsplit, unquote
 
@@ -20,6 +22,7 @@ MAX_STEPS = 20
 MAX_SECONDS = 300
 MAX_BYTES = 8192
 TEXT_BYTES = 4500
+MAX_MCP_REQUEST_BYTES = 64 * 1024
 FORBIDDEN = re.compile(
     r'login|signin|signout|logout|passport|oauth|account|checkout|purchase|delete|'
     r'download|upload|publish|comment|reply|like|favorite|coin|subscribe|message|send|'
@@ -132,6 +135,10 @@ SNAPSHOT = """() => {
    text: (document.body?.innerText || '').slice(0,3000),
    links: [...document.querySelectorAll('a[href]')].filter(visible).slice(0,60)
      .map(e=>({text:(e.innerText || e.getAttribute('title') || e.getAttribute('aria-label') || '').trim().slice(0,100), url:e.href})),
+   controls: [...document.querySelectorAll('input,textarea,button')]
+     .map((e,index)=>({index, visible:visible(e), tag:e.tagName.toLowerCase(), type:(e.type || '').toLowerCase(),
+       name:(e.name || '').slice(0,80), label:(e.getAttribute('aria-label') || e.placeholder || e.innerText || '').trim().slice(0,100),
+       formAction:e.form?.action || '', formMethod:(e.form?.method || 'get').toLowerCase()})).filter(e=>e.visible).slice(0,40),
    videos:[...document.querySelectorAll('video')].slice(0,3).map(v=>({
      readyState:v.readyState, paused:v.paused, currentTime:v.currentTime,
      error:v.error?.code || null, visible:visible(v)}))};
@@ -152,6 +159,7 @@ class BrowserTools:
         self.steps = 0
         self.deadline = 0
         self.links = {}
+        self.controls = {}
         self.page = self.context = self.engine = self.runtime = self.proxy = None
         self.serial = 0
         self.quarantined = False
@@ -177,6 +185,7 @@ class BrowserTools:
 
     async def _release(self):
         self.links = {}
+        self.controls = {}
         try:
             if self.engine:
                 await self.engine.close()
@@ -227,6 +236,7 @@ class BrowserTools:
         data['text'] = data['text'].encode('utf-8', 'ignore')[:TEXT_BYTES].decode('utf-8', 'ignore')
         self.serial += 1
         self.links = {}
+        self.controls = {}
         result_links = []
         for item in data.pop('links'):
             try:
@@ -242,11 +252,39 @@ class BrowserTools:
                 break
             result_links.append(candidate)
             self.links[link_id] = (self.page.url, url)
-        result = {**data, 'url': self.page.url, 'links': result_links,
+        result_controls = []
+        for item in data.pop('controls'):
+            # Search input only: no passwords, file fields, hidden state or form submits other than GET.
+            if (item['tag'] not in {'input', 'textarea', 'button'} or item['type'] in {'password', 'file', 'hidden'}
+                    or FORBIDDEN.search(item['name'] + ' ' + item['label'])):
+                continue
+            if item['tag'] == 'button' and (item['formMethod'] != 'get' or not item['formAction']):
+                continue
+            try:
+                if item['formAction']:
+                    public_url(item['formAction'])
+            except ValueError:
+                continue
+            control_id = f'{self.serial}-c{len(result_controls)}'
+            result_controls.append({'control_id': control_id, 'kind': item['tag'], 'type': item['type'],
+                                    'name': item['name'], 'label': item['label']})
+            self.controls[control_id] = (self.page.url, item)
+        result = {**data, 'url': self.page.url, 'links': result_links, 'controls': result_controls,
                 'evidence': 'Page ready is document state only; video playing is unconfirmed. '
                 'Video fields are point-in-time observations, not proof playback advanced.'}
         while len(json.dumps(result, ensure_ascii=False).encode('utf-8')) > MAX_BYTES:
-            result['text'] = result['text'][:len(result['text']) // 2]
+            if result['text']:
+                result['text'] = result['text'][:len(result['text']) // 2]
+            elif result_links:
+                # Controls stay usable longest: a long query string can make both lists exceed the
+                # budget, and dropping the search box would silently remove the only next action.
+                dropped = result_links.pop()
+                self.links.pop(dropped['link_id'], None)
+            elif result_controls:
+                dropped = result_controls.pop()
+                self.controls.pop(dropped['control_id'], None)
+            else:
+                break
         return result
 
     async def _operate(self, args, stopped):
@@ -279,6 +317,26 @@ class BrowserTools:
                 elif action == 'scroll':
                     await self.page.evaluate('(dy) => window.scrollBy(0, dy)',
                                              -600 if args['direction'] == 'up' else 600)
+                elif action in {'fill', 'submit'}:
+                    source, control = self.controls.get(args['control_id'], (None, None))
+                    if source != self.page.url or control is None:
+                        raise ValueError('Stale or unknown control_id. Observe again.')
+                    locator = self.page.locator('input,textarea,button').nth(control['index'])
+                    if action == 'fill':
+                        if control['tag'] not in {'input', 'textarea'} or control['type'] not in {
+                                '', 'text', 'search', 'textarea'}:
+                            raise ValueError('Only observed public text/search fields can be filled.')
+                        await locator.fill(args['text'])
+                    else:
+                        if control['tag'] not in {'button', 'input'}:
+                            raise ValueError('Only observed public GET search forms can be submitted.')
+                        if control['formMethod'] != 'get' or not control['formAction']:
+                            raise ValueError('Only observed public GET search forms can be submitted.')
+                        if control['tag'] == 'input' and control['type'] not in {'submit', 'image'}:
+                            raise ValueError('Only observed submit controls can be submitted.')
+                        # Native submit bypasses page handlers; routing still blocks every non-GET request.
+                        async with self.page.expect_navigation(wait_until='domcontentloaded', timeout=12000):
+                            await locator.evaluate('(element) => element.form.submit()')
                 if stopped():
                     raise ValueError('Interrupted; navigation may have occurred. Observe again when idle.')
                 return await self._snapshot()
@@ -302,13 +360,18 @@ class BrowserTools:
             if self.quarantined and action != 'close':
                 raise ValueError('Browser cleanup is incomplete; restart VEIL before browsing again.')
             required = {'open': {'url'}, 'observe': set(), 'click': {'link_id'},
-                        'scroll': {'direction'}, 'close': set()}.get(action)
+                        'scroll': {'direction'}, 'fill': {'control_id', 'text'},
+                        'submit': {'control_id'}, 'close': set()}.get(action)
             if required is None or set(args) != required | {'action'}:
                 raise ValueError('Unsupported action or arguments.')
             if action == 'open':
                 public_url(args['url'])
             if action == 'click' and not isinstance(args['link_id'], str):
                 raise ValueError('link_id must come from the latest observation.')
+            if action in {'fill', 'submit'} and not isinstance(args['control_id'], str):
+                raise ValueError('control_id must come from the latest observation.')
+            if action == 'fill' and (not isinstance(args['text'], str) or len(args['text']) > 300):
+                raise ValueError('Search text must be at most 300 characters.')
             if action == 'scroll' and args['direction'] not in ('up', 'down'):
                 raise ValueError('direction must be up or down.')
             if not self.deadline:
@@ -359,3 +422,132 @@ class BrowserTools:
             finally:
                 self.loop.call_soon_threadsafe(self.loop.stop)
                 self.thread.join(timeout=2)
+
+    def workbench_gateway(self, should_stop, container=False):
+        """A one-run MCP bridge.  It deliberately exposes no selectors, scripts or host paths."""
+        return BrowserWorkbenchGateway(self, should_stop, container=container)
+
+
+class BrowserWorkbenchGateway:
+    """Task-local Streamable HTTP MCP service for the already-isolated public browser."""
+    def __init__(self, browser, should_stop, *, container=False):
+        self.browser = browser
+        self.should_stop = should_stop
+        self.token = secrets.token_urlsafe(24)
+        self.host = '0.0.0.0' if container else '127.0.0.1'
+        self.server = self.thread = None
+        self.cancelled = threading.Event()
+        self.monitor_snapshot = None
+
+    def stop(self):
+        self.cancelled.set()
+
+    def stopped(self):
+        if self.cancelled.is_set() or self.should_stop():
+            return True
+        if self.monitor_snapshot is not None and self.browser.monitor.changed_since(self.monitor_snapshot):
+            self.cancelled.set()
+            return True
+        return False
+
+    @staticmethod
+    def request_size(value):
+        try:
+            size = int(value or 0)
+        except (TypeError, ValueError):
+            raise ValueError('invalid Content-Length') from None
+        if size < 0:
+            raise ValueError('invalid Content-Length')
+        if size > MAX_MCP_REQUEST_BYTES:
+            raise OverflowError('MCP request body is too large')
+        return size
+
+    def __enter__(self):
+        gateway = self
+
+        class Handler(BaseHTTPRequestHandler):
+            protocol_version = 'HTTP/1.1'
+
+            def log_message(self, *_args):
+                pass
+
+            def _send(self, body, status=200, session=None):
+                data = json.dumps(body, ensure_ascii=False).encode('utf-8')
+                self.send_response(status)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(data)))
+                if session:
+                    self.send_header('Mcp-Session-Id', session)
+                self.end_headers()
+                self.wfile.write(data)
+
+            def do_POST(self):
+                if self.path != '/mcp' or not secrets.compare_digest(
+                        self.headers.get('Authorization', ''), 'Bearer ' + gateway.token):
+                    return self._send({'error': {'code': -32001, 'message': 'unauthorized'}}, 401)
+                try:
+                    size = gateway.request_size(self.headers.get('Content-Length'))
+                    request = json.loads(self.rfile.read(size))
+                    method, request_id = request['method'], request.get('id')
+                    if method == 'initialize':
+                        return self._send({'jsonrpc': '2.0', 'id': request_id, 'result': {
+                            'protocolVersion': request.get('params', {}).get('protocolVersion', '2025-03-26'),
+                            'capabilities': {'tools': {}}, 'serverInfo': {'name': 'veil-browser', 'version': '1'}}},
+                            session=gateway.token)
+                    if method == 'notifications/initialized':
+                        return self._send({}, 202)
+                    if method == 'tools/list':
+                        return self._send({'jsonrpc': '2.0', 'id': request_id, 'result': {'tools': [
+                            {'name': 'public_browser', 'description': (
+                                'Use the isolated public browser to open HTTPS pages, observe, follow a fresh '
+                                'public link, scroll, fill an observed non-sensitive search field, or submit an '
+                                'observed GET search form. No login, upload, download, JavaScript, files or private '
+                                'network access is available.'),
+                             'inputSchema': {'type': 'object', 'properties': {
+                                 'action': {'type': 'string', 'enum': ['open', 'observe', 'click', 'scroll', 'fill', 'submit']},
+                                 'url': {'type': 'string'}, 'link_id': {'type': 'string'},
+                                 'control_id': {'type': 'string'}, 'text': {'type': 'string'},
+                                 'direction': {'type': 'string', 'enum': ['up', 'down']}},
+                                 'required': ['action'], 'additionalProperties': False}}
+                        ]}})
+                    if method == 'tools/call':
+                        params = request.get('params', {})
+                        if params.get('name') != 'public_browser':
+                            raise ValueError('unknown tool')
+                        text, state, _summary = gateway.browser.invoke(
+                            'browser', params.get('arguments', {}), should_stop=gateway.stopped)
+                        result = {'content': [{'type': 'text', 'text': text}],
+                                  'isError': state != '成功'}
+                        return self._send({'jsonrpc': '2.0', 'id': request_id, 'result': result})
+                    return self._send({'jsonrpc': '2.0', 'id': request_id,
+                                       'error': {'code': -32601, 'message': 'method not found'}})
+                except OverflowError:
+                    return self._send({'jsonrpc': '2.0', 'id': None,
+                                       'error': {'code': -32600, 'message': 'request body too large'}}, 413)
+                except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                    return self._send({'jsonrpc': '2.0', 'id': None,
+                                       'error': {'code': -32602, 'message': str(exc)[:200]}}, 400)
+
+        try:
+            self.server = ThreadingHTTPServer((self.host, 0), Handler)
+            self.thread = threading.Thread(target=self.server.serve_forever, daemon=True, name='veil-browser-mcp')
+            self.thread.start()
+            self.monitor_snapshot = self.browser.monitor.snapshot()
+            self.browser.begin_request()
+            return self
+        except Exception:
+            self.__exit__(None, None, None)
+            raise
+
+    @property
+    def url(self):
+        host = 'host.docker.internal' if self.host == '0.0.0.0' else '127.0.0.1'
+        return f'http://{host}:{self.server.server_address[1]}/mcp'
+
+    def __exit__(self, *_args):
+        self.stop()
+        if self.server is not None:
+            self.server.shutdown()
+            self.server.server_close()
+        if self.thread is not None:
+            self.thread.join(timeout=2)

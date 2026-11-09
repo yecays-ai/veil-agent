@@ -1,12 +1,11 @@
 # HANDOFF
 
-## 当前工单 319（PR #318，2026-11-09 10:55 +08）
+## 当前工单 320（2026-11-09）
 
-- 分支 `ticket/318-model-config-concurrency`，PR #318（草稿）：https://github.com/yecays-ai/veil-agent/pull/318。独立 worktree：`.agents/worktrees/ticket-318-model-config-concurrency`；正式运行目录未动。
-- 工单 318（普通聊天调查续接，PR #317）已合并为 `19b8d5b`；本分支已同步该 `main`，解决 `STATUS.md`、`HANDOFF.md` 冲突，`veil_agent.py` 等代码自动合并。本单实际编号为 319，PR 编号仍是 318。
-- 问题确认：`ModelSettings.__init__` 原先按文件锁 → `_ENV_LOCK` 获取；`Hub.save_models` / `use_model` 先持有 `models.env_lock` 和 `models.lock`，再进入 `save()` / `use()` 取文件锁，存在循环等待。
-- 修复：统一 `_ENV_LOCK` → `self.lock` → `models.json` 文件锁；初始化、保存、选模和重新加载同序。新增 `ModelSettings.reload()`，重读磁盘最新配置、刷新内存快照和旧快照标识。
-- 恢复路径：旧实例保存/选模发现“另一个进程修改”时自动 `reload()` 并刷新模型视图；桌面初始事件快照在空闲时重载模型设置。刷新页面即可继续编辑保存，不需要重启 Peter。重载后聊天模型变化会通过 `switch_model` 同步到下一次聊天请求。
-- 测试：`test_model_settings` 41 项通过（含旧实例重载、并发初始化/保存/选模、重载后 provider 同步）；`test_web` 67 项通过。未重跑整套测试。
-- 下一个窗口第一步：推送合并提交，等 PR #318 最新 CI 全绿并确认分支保护后合并；合并后请 Lan 按 `STATUS.md` 做 Windows 双实例验收。
-- 未验证：真实 Windows 双实例桌面操作。数据安全：模型、API Key、费用上限不丢失；迁移备份和原子写保持不变。
+- 分支 `ticket/320-browser-continuous-execution`，工作区目录沿用 `.agents/worktrees/ticket-319-browser-continuous-execution`（历史目录名；不要另建工作区覆盖这些修改）；基于远端 `main` 的 `8b39f0d`。
+- 实现：每次非维护工作台任务临时启动随机令牌保护的 MCP 浏览器网关，只暴露 `public_browser` 的 open/observe/click/scroll/fill/submit；容器 iptables 只放行本次网关端口；停止、人工接管、内部限额都会关闭网关。旧主聊天 `browser` 入口未删。
+- 本次修复：快照超限死循环；提交搜索等待导航并支持 `<input type=submit>`；容器 `NO_PROXY` 加 `host.docker.internal`；移除 OpenCode 不支持的 `codemode` 配置；工作台工具说明写明可做多页公开研究；修正被 loopback 限制掩盖的网关测试断言。
+- 自动检查（真实宿主已通过）：`tests.test_browser_tools` 17 项（含 5 项真实 Chromium）、`tests.test_executor_opencode` 103 项（含真实 Docker OpenCode 与新增 MCP 容器测试）、`tests.test_tools/test_web_tools/test_workbench_switch/test_tool_groups/test_maintenance` 合计 142 项；`py_compile` 与 `git diff --check` 通过。
+- 真实链路已验证：Docker Desktop + `veil-workbench`（OpenCode 1.19.5）+ 宿主 Chromium，容器内 OpenCode 调用 `veil_browser_public_browser`，完成打开、填公开搜索框、提交 GET 搜索、读结果并输出报告；非自主模式不需要审批卡。未做 lan 的真实 Peter 聊天体验验收。
+- 下一步：创建 PR、请求 Cubic、等待必需 CI，处理实质问题后由 agent 合并；合并后请 lan 按 `STATUS.md` 的三个体验步骤验收。真实验收发现问题就开新工单，不在本分支反复改。
+- 未完成 lan 体验验收前，不得删除旧 `browser` 主聊天入口。

@@ -14,6 +14,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import executor_opencode as ex
+import browser_tools
 from veil_agent import Budget, Chat, Store, UserError, load_character
 
 PROVIDER = {'model': 'fake-model', 'base_url': 'https://example.invalid/v1', 'max_input_tokens': 8000,
@@ -79,6 +80,42 @@ def run(script, **overrides):
     with patch('executor_opencode.kill_tree') as kill:
         result = ex.run('do it', **kwargs)
     return result, api, costs, kill
+
+
+class BrowserGatewayConfigTests(unittest.TestCase):
+    def test_workbench_config_injects_only_the_task_local_browser_service(self):
+        gateway = SimpleNamespace(url='http://host.docker.internal:4567/mcp', token='run-token')
+        config = ex.build_config(PROVIDER, 'relay-token', 'http://relay/v1', browser_gateway=gateway)
+        server = config['mcp']['veil_browser']
+        self.assertEqual(server['url'], gateway.url)
+        self.assertEqual(server['headers'], {'Authorization': 'Bearer run-token'})
+        self.assertFalse(server['oauth'])
+        self.assertNotIn('codemode', server)
+
+    def test_workbench_limit_and_startup_failure_stop_and_close_the_browser_gateway(self):
+        events = []
+        class Gateway:
+            url, token = 'http://127.0.0.1:9/mcp', 'token'
+            def __enter__(self):
+                events.append('enter')
+                return self
+            def __exit__(self, *_args):
+                events.append('close')
+            def stop(self):
+                events.append('stop')
+        factory = lambda *_args: Gateway()
+        done = [assistant(text='done', tool=('read', {'file': 'x'}), finish='stop')]
+        result, _api, _costs, _kill = run([(done, [], False)] * 3,
+                                           limits={'max_steps': 1}, browser_gateway=factory)
+        self.assertEqual(result.reason, 'limit_or_failure')
+        self.assertEqual(events, ['enter', 'stop', 'close'])
+
+        events.clear()
+        with patch('executor_opencode.KeyProxy.close'):
+            result, _api, _costs, _kill = run([], browser_gateway=factory,
+                                               popen=Mock(side_effect=OSError('start failed')))
+        self.assertEqual(result.state, '出错')
+        self.assertEqual(events, ['enter', 'close'])
 
 
 class DecisionTests(unittest.TestCase):
@@ -1535,6 +1572,46 @@ def _fake_llm(command='echo hello > out.txt && cat out.txt'):
 _DOCKER_AVAILABLE = {}
 
 
+def _fake_browser_llm():
+    """A scripted OpenAI-compatible server whose first tool call is the task's own browser MCP tool."""
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    names, results = [], []
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_a):
+            pass
+
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+            tools = [tool.get('function', {}).get('name', '') for tool in body.get('tools') or []]
+            if tools:
+                names[:] = tools
+            browser_tools_ = [name for name in tools if 'browser' in name.lower()]
+            completed = [message for message in body['messages'] if message.get('role') == 'tool']
+            if completed:
+                results[:] = [message.get('content') for message in completed]
+                delta = {'role': 'assistant', 'content': 'Browser report: ' + str(completed[-1]['content'])[:400]}
+                finish = 'stop'
+            elif browser_tools_:
+                delta = {'role': 'assistant', 'tool_calls': [{
+                    'index': 0, 'id': 'call_1', 'type': 'function',
+                    'function': {'name': browser_tools_[0], 'arguments': json.dumps(
+                        {'action': 'open', 'url': 'https://example.com/'})}}]}
+                finish = 'tool_calls'
+            else:
+                delta = {'role': 'assistant', 'content': 'no browser tool'}
+                finish = 'stop'
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/event-stream')
+            self.end_headers()
+            frame = {'id': 'x', 'object': 'chat.completion.chunk', 'model': 'fake',
+                     'choices': [{'index': 0, 'delta': delta, 'finish_reason': finish}]}
+            self.wfile.write(('data: ' + json.dumps(frame) + '\n\ndata: [DONE]\n\n').encode())
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, names, results
+
+
 def _docker_workbench_available():
     if 'value' not in _DOCKER_AVAILABLE:
         try:
@@ -1598,6 +1675,35 @@ class RealOpenCodeTests(unittest.TestCase):
         leftover = ex.subprocess.run(['docker', 'ps', '-a', '--filter', 'name=^/' + launched[0] + '$',
                                       '--format', '{{.Names}}'], capture_output=True, text=True, timeout=15)
         self.assertEqual(leftover.stdout.strip(), '', 'the workbench container must be gone')
+
+    def test_real_container_calls_the_task_local_browser_mcp(self):
+        if not _docker_workbench_available():
+            self.skipTest('VEIL workbench Docker image is unavailable')
+        server, names, _results = _fake_browser_llm()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        calls = []
+        def invoke(name, args, **kwargs):
+            calls.append(args)
+            return json.dumps({'url': 'https://example.com/', 'text': 'Example Domain from VEIL',
+                               'links': [], 'controls': []}), '成功', 'browser'
+        browser = SimpleNamespace(begin_request=lambda: None, invoke=invoke,
+                                  monitor=SimpleNamespace(snapshot=lambda: 1, changed_since=lambda _s: False))
+        asked = []
+        base = Path(tempfile.mkdtemp())
+        provider = {**PROVIDER, 'base_url': f'http://127.0.0.1:{server.server_address[1]}/v1', 'model': 'fake'}
+        result = ex.run('research the public page', command='opencode', workdir=base / 'bench', home=base / 'home',
+                        provider=provider, key='k', limits={'max_seconds': 120}, autonomy=False,
+                        ask=lambda prompt: asked.append(prompt) or 'n', stopped=lambda: False,
+                        record_cost=lambda _c: None, container={'image': 'veil-workbench'},
+                        browser_gateway=lambda stopped, container: browser_tools.BrowserWorkbenchGateway(
+                            browser, stopped, container=container))
+        self.assertEqual(result.state, '成功', result.text)
+        self.assertIn('veil_browser_public_browser', names)
+        self.assertEqual(calls, [{'action': 'open', 'url': 'https://example.com/'}])
+        self.assertEqual(asked, [], 'the isolated public browser must not ask for a card')
+        self.assertNotIn('workbench tool diagnostics', result.text)
+        self.assertIn('Example Domain from VEIL', result.text)
 
     def test_maintenance_test_runs_without_a_card_and_direct_network_is_blocked(self):
         if not _docker_workbench_available():
