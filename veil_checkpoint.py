@@ -230,7 +230,7 @@ class Checkpoint:
                     return 'VEIL data, keys or browser passwords'
             parts = {part.casefold() for part in Path(path).parts}
             if parts & {'.ssh', 'secrets', '.aws', '.azure', '.gnupg', '.kube'} or \
-                    Path(path).name.casefold() in CREDENTIAL_FILES:
+                    any(fnmatch.fnmatchcase(item, Path(path).name.casefold()) for item in CREDENTIAL_FILES):
                 return 'secret folder'
             if any(ch in path for ch in '*?[') and self._glob_reaches_forbidden(path):
                 return 'VEIL data, keys or browser passwords'

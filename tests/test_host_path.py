@@ -64,6 +64,7 @@ class CheckpointShellTests(unittest.TestCase):
             'read', [str(self.root / 'veil' / 'data' / 'peter' / 'memory' / 'x')], {})[0], 'reject')
         self.assertEqual(self.bash('cat .aws/credentials')[0], 'reject')
         self.assertEqual(self.bash('cat .git-credentials')[0], 'reject')
+        self.assertEqual(self.bash('cat credentials*')[0], 'reject')
         self.assertEqual(self.bash('cat src/credentials_example.py')[0], 'once')
         local = self.root / 'local'
         with patch.dict('os.environ', {'LOCALAPPDATA': str(local)}):
