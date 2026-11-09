@@ -1,8 +1,8 @@
 # HANDOFF
 
-## 当前工单 321（PR 待创建，2026-11-09 15:05 +08）
+## 当前工单 321（PR #322，2026-11-09 15:05 +08）
 
-- 分支 `ticket/321-investigation-alias`；独立 worktree：`E:\Peter-Agent\VEIL\worktrees\321-investigation-alias`；正式运行目录未动。
+- 分支 `ticket/321-investigation-alias`；PR #322：https://github.com/yecays-ai/veil-agent/pull/322。独立 worktree：`E:\Peter-Agent\VEIL\worktrees\321-investigation-alias`；正式运行目录未动。
 - 缺陷：`investigation_checkpoint.record()` 用模型侧别名判断只读，只读集合却是规范名；生产别名下的成功读取被记录成 `read_only: false`，续接不能正确复用新鲜证据，也会挡住过期重查。
 - 修复：`record()` 新增 `canonical_name`，只读/副作用/排除判断全部用规范名；证据仍保存模型侧调用名，`resume_guard` 签名不变。`veil_agent._tool_chat` 所有记录点先解析规范名，MCP 的 `needs_checkpoint` 也用规范名。
 - 联动修复：最后一步工具已收起时，模型仍输出文本工具调用会被 `raw_tool_call_text_format` 误判为 `tool_failure`；现在按 `step_limit` 记录并保留可续接检查点。
