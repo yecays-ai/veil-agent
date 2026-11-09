@@ -90,7 +90,7 @@ class BrowserGatewayConfigTests(unittest.TestCase):
         self.assertEqual(server['url'], gateway.url)
         self.assertEqual(server['headers'], {'Authorization': 'Bearer run-token'})
         self.assertFalse(server['oauth'])
-        self.assertNotIn('codemode', server)
+        self.assertNotIn('codemode', json.dumps(config))
 
     def test_workbench_limit_and_startup_failure_stop_and_close_the_browser_gateway(self):
         events = []

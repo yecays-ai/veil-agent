@@ -27,6 +27,8 @@ FORBIDDEN = re.compile(
     r'login|signin|signout|logout|passport|oauth|account|checkout|purchase|delete|'
     r'download|upload|publish|comment|reply|like|favorite|coin|subscribe|message|send|'
     r'登录|登陆|退出|账号|账户|支付|购买|删除|下载|上传|发布|投稿|评论|回复|点赞|收藏|投币|关注|消息|发送', re.I)
+CREDENTIAL = re.compile(r'password|passwd|pwd|passcode|密码|口令', re.I)
+SELF_TARGETS = frozenset({'', '_self', '_top'})
 
 TOOL = SimpleNamespace(
     name='browser',
@@ -137,12 +139,23 @@ SNAPSHOT = """() => {
      .map(e=>({text:(e.innerText || e.getAttribute('title') || e.getAttribute('aria-label') || '').trim().slice(0,100), url:e.href})),
    controls: [...document.querySelectorAll('input,textarea,button')]
      .map((e,index)=>({index, visible:visible(e), tag:e.tagName.toLowerCase(), type:(e.type || '').toLowerCase(),
-       name:(e.name || '').slice(0,80), label:(e.getAttribute('aria-label') || e.placeholder || e.innerText || '').trim().slice(0,100),
-       formAction:e.form?.action || '', formMethod:(e.form?.method || 'get').toLowerCase()})).filter(e=>e.visible).slice(0,40),
+       name:(e.name || '').slice(0,80), label:(e.getAttribute('aria-label') || e.placeholder || e.value || e.innerText || '').trim().slice(0,100),
+       formAction:e.form?.action || '', formMethod:(e.form?.method || 'get').toLowerCase(),
+       formTarget:(e.form?.target || '').toLowerCase()})).filter(e=>e.visible).slice(0,40),
    videos:[...document.querySelectorAll('video')].slice(0,3).map(v=>({
      readyState:v.readyState, paused:v.paused, currentTime:v.currentTime,
      error:v.error?.code || null, visible:visible(v)}))};
 }"""
+
+
+LIVE_CONTROL = """(element) => ({tag: element.tagName.toLowerCase(),
+ type: (element.type || '').toLowerCase(), name: element.name || '',
+ action: element.form?.action || '', method: (element.form?.method || 'get').toLowerCase(),
+ target: (element.form?.target || '').toLowerCase()})"""
+
+SUBMIT_FORM = """(element, expected) => { const form = element.form;
+ if (!form || form.action !== expected || (form.method || 'get').toLowerCase() !== 'get') return false;
+ form.submit(); return true; }"""
 
 
 class BrowserTools:
@@ -237,6 +250,9 @@ class BrowserTools:
         self.serial += 1
         self.links = {}
         self.controls = {}
+        # Remove controls before sizing links: otherwise the raw control list can fill the trial
+        # budget and the first candidate would drop every navigation link.
+        raw_controls = data.pop('controls')
         result_links = []
         for item in data.pop('links'):
             try:
@@ -253,11 +269,14 @@ class BrowserTools:
             result_links.append(candidate)
             self.links[link_id] = (self.page.url, url)
         result_controls = []
-        for item in data.pop('controls'):
+        for item in raw_controls:
             # Search input only: no passwords, file fields, hidden state or form submits other than GET.
             if (item['tag'] not in {'input', 'textarea', 'button'} or item['type'] in {'password', 'file', 'hidden'}
-                    or FORBIDDEN.search(item['name'] + ' ' + item['label'])):
+                    or FORBIDDEN.search(item['name'] + ' ' + item['label'])
+                    or CREDENTIAL.search(item['name'] + ' ' + item['label'])):
                 continue
+            if item.get('formTarget', '') not in SELF_TARGETS:
+                continue  # a _blank/named-target form would navigate a page that _launch closes
             if item['tag'] == 'button' and (item['formMethod'] != 'get' or not item['formAction']):
                 continue
             try:
@@ -322,21 +341,37 @@ class BrowserTools:
                     if source != self.page.url or control is None:
                         raise ValueError('Stale or unknown control_id. Observe again.')
                     locator = self.page.locator('input,textarea,button').nth(control['index'])
+                    # nth() resolves against the live DOM; re-read it so a mutation between snapshot
+                    # and action cannot turn a search box into another field or another form.
+                    live = await locator.evaluate(LIVE_CONTROL)
+                    if (live['tag'] != control['tag'] or live['type'] != control['type']
+                            or live['name'] != control['name']):
+                        raise ValueError('Page changed; observe again.')
                     if action == 'fill':
-                        if control['tag'] not in {'input', 'textarea'} or control['type'] not in {
+                        if live['tag'] not in {'input', 'textarea'} or live['type'] not in {
                                 '', 'text', 'search', 'textarea'}:
                             raise ValueError('Only observed public text/search fields can be filled.')
+                        if CREDENTIAL.search(live['name']) or FORBIDDEN.search(live['name']):
+                            raise ValueError('Credential-like fields are not available.')
                         await locator.fill(args['text'])
                     else:
-                        if control['tag'] not in {'button', 'input'}:
+                        if live['tag'] not in {'button', 'input'}:
                             raise ValueError('Only observed public GET search forms can be submitted.')
-                        if control['formMethod'] != 'get' or not control['formAction']:
-                            raise ValueError('Only observed public GET search forms can be submitted.')
-                        if control['tag'] == 'input' and control['type'] not in {'submit', 'image'}:
+                        if live['tag'] == 'button' and live['type'] != 'submit':
                             raise ValueError('Only observed submit controls can be submitted.')
+                        if live['tag'] == 'input' and live['type'] not in {'submit', 'image'}:
+                            raise ValueError('Only observed submit controls can be submitted.')
+                        if live['method'] != 'get' or not live['action']:
+                            raise ValueError('Only observed public GET search forms can be submitted.')
+                        if live['action'] != control['formAction'] or live['target'] not in SELF_TARGETS:
+                            raise ValueError('Page changed; observe again.')
+                        if urlsplit(live['action']).netloc != urlsplit(self.page.url).netloc:
+                            raise ValueError('Only same-site public GET search forms can be submitted.')
                         # Native submit bypasses page handlers; routing still blocks every non-GET request.
                         async with self.page.expect_navigation(wait_until='domcontentloaded', timeout=12000):
-                            await locator.evaluate('(element) => element.form.submit()')
+                            submitted = await locator.evaluate(SUBMIT_FORM, live['action'])
+                            if not submitted:
+                                raise ValueError('Page changed; observe again.')
                 if stopped():
                     raise ValueError('Interrupted; navigation may have occurred. Observe again when idle.')
                 return await self._snapshot()
@@ -514,10 +549,15 @@ class BrowserWorkbenchGateway:
                         ]}})
                     if method == 'tools/call':
                         params = request.get('params', {})
+                        arguments = params.get('arguments', {})
                         if params.get('name') != 'public_browser':
                             raise ValueError('unknown tool')
+                        if (not isinstance(arguments, dict)
+                                or arguments.get('action') not in {'open', 'observe', 'click', 'scroll',
+                                                                  'fill', 'submit'}):
+                            raise ValueError('unsupported browser action')
                         text, state, _summary = gateway.browser.invoke(
-                            'browser', params.get('arguments', {}), should_stop=gateway.stopped)
+                            'browser', arguments, should_stop=gateway.stopped)
                         result = {'content': [{'type': 'text', 'text': text}],
                                   'isError': state != '成功'}
                         return self._send({'jsonrpc': '2.0', 'id': request_id, 'result': result})
@@ -531,6 +571,10 @@ class BrowserWorkbenchGateway:
                                        'error': {'code': -32602, 'message': str(exc)[:200]}}, 400)
 
         try:
+            if getattr(self.browser, 'page', None) is not None and hasattr(self.browser, 'close'):
+                # Every workbench task starts from a fresh isolated context: an idle page left by
+                # the previous task must not be observable by the next one.
+                self.browser.close()
             self.server = ThreadingHTTPServer((self.host, 0), Handler)
             self.thread = threading.Thread(target=self.server.serve_forever, daemon=True, name='veil-browser-mcp')
             self.thread.start()

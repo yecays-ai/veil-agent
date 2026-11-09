@@ -1437,62 +1437,70 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
         proxy.allow_hosts(hosts)
     proxy_host = 'veil-relay' if container else '127.0.0.1'
     gateway = browser_gateway(stopped, bool(container)) if browser_gateway is not None else None
-    bridge = gateway.__enter__() if gateway is not None else None
-    config = build_config(provider, proxy.token, proxy.local_base(proxy_host), protect=protect,
-                          browser_gateway=bridge)
-    port, password = free_port(), secrets.token_urlsafe(24)
-    keep = {'PATH', 'PATHEXT', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'TEMP', 'TMP', 'TMPDIR', 'LANG', 'LC_ALL', 'PROGRAMFILES',
-            'PROGRAMFILES(X86)', 'PROGRAMDATA', 'APPDATA', 'LOCALAPPDATA', 'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE'}
-    env = {k: v for k, v in os.environ.items() if k.upper() in keep}
-    shared = {'OPENCODE_SERVER_PASSWORD': password, 'OPENCODE_DISABLE_AUTOUPDATE': '1',
-              'OPENCODE_CONFIG_CONTENT': json.dumps(config)}
-    if container:
-        proxy_url = f'http://veil:{proxy.token}@veil-relay:{proxy.port}'
-        shared.update({
-            'HTTP_PROXY': proxy_url, 'HTTPS_PROXY': proxy_url,
-            'http_proxy': proxy_url, 'https_proxy': proxy_url, 'ALL_PROXY': proxy_url,
-            'NO_PROXY': 'veil-relay,host.docker.internal,localhost,127.0.0.1,::1',
-            'VEIL_PROXY_PORT': str(proxy.port),
-            'VEIL_WATCHDOG_URL': proxy.local_health('veil-relay'),
-        })
-        if bridge is not None:
-            shared['VEIL_BROWSER_PORT'] = str(bridge.server.server_address[1])
-    git_pointer, empty_secret_dir = None, None
-    if container:
-        name = container_name or 'veil-workbench-' + secrets.token_hex(4)
-        masks = []
-        empty = home / 'empty-file'
-        empty.write_text('', encoding='utf-8')
-        for path in protected_files:
-            masks.append((str(empty), path.relative_to(workdir).as_posix()))
-        if protected_dirs:
-            empty_secret_dir = home / ('empty-secret-dir-' + secrets.token_hex(8))
-            empty_secret_dir.mkdir()
-            for path in protected_dirs:
-                masks.append((str(empty_secret_dir), path.relative_to(workdir).as_posix()))
-        if (workdir / '.git').is_file():
-            # A linked worktree's .git file points at the main repository's metadata on the host.
-            # Mount only a disposable in-container snapshot, never the host repository metadata.
-            if maintenance:
-                git_pointer = home / ('git-pointer-' + secrets.token_hex(8))
-                git_pointer.write_text('gitdir: /tmp/veil-git\n', encoding='utf-8')
-                masks.append((str(git_pointer), '.git'))
-            else:
-                masks.append((str(empty), '.git'))
-        for relative in protect:  # e.g. Peter's growth journal: it has its own append-only grant
-            if (workdir / relative).is_file() and all(target != Path(relative).as_posix() for _, target in masks):
-                masks.append((str(empty), Path(relative).as_posix()))
-        command = container_command(container, name=name, workdir=str(workdir), port=port, masks=masks,
-                                    env={**shared, 'HOME': '/tmp/home', 'XDG_DATA_HOME': '/tmp/home/data',
-                                         'XDG_CONFIG_HOME': '/tmp/home/config', 'XDG_CACHE_HOME': '/tmp/home/cache',
-                                         'XDG_STATE_HOME': '/tmp/home/state'}, bootstrap_git=bool(git_pointer),
-                                    watchdog=maintenance, network_lock=True)
-        env = {k: v for k, v in env.items() if k.upper() in ('PATH', 'PATHEXT', 'SYSTEMROOT', 'WINDIR', 'COMSPEC',
-                                                              'APPDATA', 'LOCALAPPDATA', 'USERPROFILE', 'HOME')}
-    else:
-        env.update({**shared, 'HOME': str(home), 'USERPROFILE': str(home),
-                    'XDG_DATA_HOME': str(home / 'data'), 'XDG_CONFIG_HOME': str(home / 'config'),
-                    'XDG_CACHE_HOME': str(home / 'cache'), 'XDG_STATE_HOME': str(home / 'state')})
+    try:
+        bridge = gateway.__enter__() if gateway is not None else None
+        config = build_config(provider, proxy.token, proxy.local_base(proxy_host), protect=protect,
+                              browser_gateway=bridge)
+        port, password = free_port(), secrets.token_urlsafe(24)
+        keep = {'PATH', 'PATHEXT', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'TEMP', 'TMP', 'TMPDIR', 'LANG', 'LC_ALL', 'PROGRAMFILES',
+                'PROGRAMFILES(X86)', 'PROGRAMDATA', 'APPDATA', 'LOCALAPPDATA', 'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE'}
+        env = {k: v for k, v in os.environ.items() if k.upper() in keep}
+        shared = {'OPENCODE_SERVER_PASSWORD': password, 'OPENCODE_DISABLE_AUTOUPDATE': '1',
+                  'OPENCODE_CONFIG_CONTENT': json.dumps(config)}
+        if container:
+            proxy_url = f'http://veil:{proxy.token}@veil-relay:{proxy.port}'
+            shared.update({
+                'HTTP_PROXY': proxy_url, 'HTTPS_PROXY': proxy_url,
+                'http_proxy': proxy_url, 'https_proxy': proxy_url, 'ALL_PROXY': proxy_url,
+                'NO_PROXY': 'veil-relay,host.docker.internal,localhost,127.0.0.1,::1',
+                'VEIL_PROXY_PORT': str(proxy.port),
+                'VEIL_WATCHDOG_URL': proxy.local_health('veil-relay'),
+            })
+            if bridge is not None:
+                shared['VEIL_BROWSER_PORT'] = str(bridge.server.server_address[1])
+        git_pointer, empty_secret_dir = None, None
+        if container:
+            name = container_name or 'veil-workbench-' + secrets.token_hex(4)
+            masks = []
+            empty = home / 'empty-file'
+            empty.write_text('', encoding='utf-8')
+            for path in protected_files:
+                masks.append((str(empty), path.relative_to(workdir).as_posix()))
+            if protected_dirs:
+                empty_secret_dir = home / ('empty-secret-dir-' + secrets.token_hex(8))
+                empty_secret_dir.mkdir()
+                for path in protected_dirs:
+                    masks.append((str(empty_secret_dir), path.relative_to(workdir).as_posix()))
+            if (workdir / '.git').is_file():
+                # A linked worktree's .git file points at the main repository's metadata on the host.
+                # Mount only a disposable in-container snapshot, never the host repository metadata.
+                if maintenance:
+                    git_pointer = home / ('git-pointer-' + secrets.token_hex(8))
+                    git_pointer.write_text('gitdir: /tmp/veil-git\n', encoding='utf-8')
+                    masks.append((str(git_pointer), '.git'))
+                else:
+                    masks.append((str(empty), '.git'))
+            for relative in protect:  # e.g. Peter's growth journal: it has its own append-only grant
+                if (workdir / relative).is_file() and all(target != Path(relative).as_posix() for _, target in masks):
+                    masks.append((str(empty), Path(relative).as_posix()))
+            command = container_command(container, name=name, workdir=str(workdir), port=port, masks=masks,
+                                        env={**shared, 'HOME': '/tmp/home', 'XDG_DATA_HOME': '/tmp/home/data',
+                                             'XDG_CONFIG_HOME': '/tmp/home/config', 'XDG_CACHE_HOME': '/tmp/home/cache',
+                                             'XDG_STATE_HOME': '/tmp/home/state'}, bootstrap_git=bool(git_pointer),
+                                        watchdog=maintenance, network_lock=True)
+            env = {k: v for k, v in env.items() if k.upper() in ('PATH', 'PATHEXT', 'SYSTEMROOT', 'WINDIR', 'COMSPEC',
+                                                                  'APPDATA', 'LOCALAPPDATA', 'USERPROFILE', 'HOME')}
+        else:
+            env.update({**shared, 'HOME': str(home), 'USERPROFILE': str(home),
+                        'XDG_DATA_HOME': str(home / 'data'), 'XDG_CONFIG_HOME': str(home / 'config'),
+                        'XDG_CACHE_HOME': str(home / 'cache'), 'XDG_STATE_HOME': str(home / 'state')})
+    except BaseException:
+        if gateway is not None:
+            try:
+                gateway.__exit__(None, None, None)
+            except Exception:
+                pass
+        raise
     proc, messages, cost, steps, stop = None, [], Decimal(0), 0, ''
     cleanup_warning = ''
     try:
@@ -1612,7 +1620,10 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
         except Exception:
             pass
         if gateway is not None:
-            gateway.__exit__(None, None, None)
+            try:
+                gateway.__exit__(None, None, None)
+            except Exception:
+                cleanup_warning += ' [warning: could not stop the public browser gateway]'
         if git_pointer is not None:
             try:
                 git_pointer.unlink(missing_ok=True)

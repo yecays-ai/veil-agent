@@ -112,6 +112,27 @@ class BrowserWorkbenchGatewayTests(unittest.TestCase):
         self.assertIsNone(gateway.thread)
         self.assertIsNone(gateway.server)
 
+    def test_a_new_gateway_closes_the_previous_tasks_idle_page(self):
+        closed = []
+        browser = SimpleNamespace(page=object(), close=lambda: closed.append(True), begin_request=lambda: None,
+                                  invoke=lambda *_args, **_kwargs: ('', '成功', ''), monitor=Idle())
+        with BrowserWorkbenchGateway(browser, lambda: False):
+            pass
+        self.assertEqual(closed, [True])
+
+    def test_gateway_refuses_actions_outside_the_advertised_enum(self):
+        calls = []
+        def invoke(*args, **kwargs):
+            calls.append(args)
+            return '', '成功', ''
+        browser = SimpleNamespace(begin_request=lambda: None, invoke=invoke, monitor=Idle())
+        with BrowserWorkbenchGateway(browser, lambda: False) as gateway:
+            with self.assertRaises(urllib.error.HTTPError) as rejected:
+                self.request(gateway, {'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call', 'params': {
+                    'name': 'public_browser', 'arguments': {'action': 'close'}}})
+        self.assertEqual(rejected.exception.code, 400)
+        self.assertEqual(calls, [])
+
 
 class BrowserSafetyTests(unittest.TestCase):
     def test_failed_and_cancelled_operations_release_their_stop_callback(self):
@@ -136,21 +157,47 @@ class BrowserSafetyTests(unittest.TestCase):
         asyncio.run(scenario())
 
     def test_snapshot_size_limit_terminates_and_keeps_usable_controls(self):
-        async def scenario():
-            browser = BrowserTools(CFG, platform_enabled=True, monitor=Idle())
-            controls = [{'index': index, 'visible': True, 'tag': 'input', 'type': 'text',
-                         'name': f'field{index}', 'label': 'L' * 100,
-                         'formAction': 'https://example.com/search', 'formMethod': 'get'} for index in range(40)]
-            links = [{'text': 'T' * 100, 'url': 'https://example.com/' + 'p' * 150 + str(index)}
-                     for index in range(60)]
-            browser.page = SimpleNamespace(url='https://example.com/', evaluate=AsyncMock(return_value={
-                'text': 'X' * 12000, 'links': links, 'controls': controls, 'title': 't', 'videos': []}))
-            result = await browser._snapshot()
-            self.assertLessEqual(len(json.dumps(result, ensure_ascii=False).encode('utf-8')), MAX_BYTES)
-            self.assertTrue(result['controls'])
-            for control in result['controls']:
-                self.assertIn(control['control_id'], browser.controls)
-        asyncio.run(scenario())
+        outcome = {}
+
+        def worker():
+            async def scenario():
+                browser = BrowserTools(CFG, platform_enabled=True, monitor=Idle())
+                controls = [{'index': index, 'visible': True, 'tag': 'input', 'type': 'text',
+                             'name': f'field{index}', 'label': 'L' * 60, 'formAction': 'https://example.com/search',
+                             'formMethod': 'get', 'formTarget': ''} for index in range(12)]
+                controls += [
+                    {'index': 12, 'visible': True, 'tag': 'input', 'type': 'text', 'name': 'password',
+                     'label': 'Password', 'formAction': 'https://example.com/search', 'formMethod': 'get',
+                     'formTarget': ''},
+                    {'index': 13, 'visible': True, 'tag': 'input', 'type': 'text', 'name': 'q2',
+                     'label': 'Search', 'formAction': 'https://example.com/search', 'formMethod': 'get',
+                     'formTarget': '_blank'}]
+                links = [{'text': 'T' * 100, 'url': 'https://example.com/' + 'p' * 150 + str(index)}
+                         for index in range(60)]
+                browser.page = SimpleNamespace(url='https://example.com/', evaluate=AsyncMock(return_value={
+                    'text': 'X' * 12000, 'links': links, 'controls': controls, 'title': 't', 'videos': []}))
+                return browser, await browser._snapshot()
+
+            try:
+                outcome['value'] = asyncio.run(scenario())
+            except BaseException as exc:  # surfaced after the join so a hang still fails cleanly
+                outcome['error'] = exc
+
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+        thread.join(10)
+        self.assertFalse(thread.is_alive(), 'the snapshot size loop must terminate')
+        if 'error' in outcome:
+            raise outcome['error']
+        browser, result = outcome['value']
+        self.assertLessEqual(len(json.dumps(result, ensure_ascii=False).encode('utf-8')), MAX_BYTES)
+        self.assertTrue(result['links'], 'links must survive a long control list')
+        self.assertTrue(result['controls'])
+        names = {control['name'] for control in result['controls']}
+        self.assertNotIn('password', names)
+        self.assertNotIn('q2', names)
+        for control in result['controls']:
+            self.assertIn(control['control_id'], browser.controls)
 
     def test_unsafe_urls_and_write_parameters_are_refused(self):
         for url in ['file:///secret', 'http://example.com', 'https://127.0.0.1',
