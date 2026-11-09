@@ -1792,7 +1792,9 @@ class WindowsWorkbenchGateway:
         self.input_snapshot = None
         self.approval_pending = threading.Event()
         self.action_lock = threading.Lock()
-        self.authorized = False
+        self.queue_wait_seconds = 60
+        # One desktop grant covers every workbench call of the same chat request.
+        self.authorized = bool(getattr(interaction, 'workbench_desktop_authorized', False))
 
     def stop(self):
         self.cancelled.set()
@@ -1825,8 +1827,20 @@ class WindowsWorkbenchGateway:
             self.approval_pending.clear()
 
     def invoke(self, name, arguments):
-        if not self.action_lock.acquire(blocking=False):
-            return 'A desktop operation or approval is pending; no parallel action was started.', '搁置'
+        # Parallel tool calls from the model queue here instead of failing; a stop or an uncertain result
+        # (which stops the task before the lock is released) is seen by every queued call.
+        # The wait is bounded (an approval card the human is still answering does not count), so a call the
+        # MCP client already gave up on cannot run a stale desktop action much later; timing out stops the task.
+        deadline = time.monotonic() + self.queue_wait_seconds
+        while not self.action_lock.acquire(timeout=0.25):
+            if self.stopped():
+                return 'The Windows task is stopped; no desktop action was started.', '中断'
+            if self.approval_pending.is_set():
+                deadline = time.monotonic() + self.queue_wait_seconds
+            elif time.monotonic() >= deadline:
+                self.stop()
+                return ('Another desktop action took too long; the Windows task is stopped and no further '
+                        'desktop action was started.'), '中断'
         try:
             if self.stopped():
                 return 'The Windows task is stopped; no desktop action was started.', '中断'
@@ -1835,6 +1849,7 @@ class WindowsWorkbenchGateway:
                 if str(answer or '').strip().casefold() != 'y':
                     return 'Desktop access for this workbench task was not approved.', '被拒绝'
                 self.authorized = True
+                self.interaction.workbench_desktop_authorized = True
             if self.stopped():
                 return 'The Windows task is stopped; no desktop action was started.', '中断'
             if name in WINDOWS_OBSERVATION_TOOL_NAMES:
