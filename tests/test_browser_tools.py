@@ -2,12 +2,16 @@
 import asyncio
 import json
 import os
+import threading
 import time
+import urllib.request
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from browser_tools import BrowserTools, PublicProxy, public_addresses, public_url, MAX_BYTES
+import browser_tools
+from browser_tools import (BrowserTools, BrowserWorkbenchGateway, PublicProxy, public_addresses, public_url,
+                           MAX_BYTES, MAX_MCP_REQUEST_BYTES)
 from veil_agent import model_tool_result
 
 
@@ -18,6 +22,146 @@ class Idle:
     def snapshot(self): return 1
     def changed_since(self, snapshot): return False
     def require_idle(self, minimum): pass
+
+
+class BrowserWorkbenchGatewayTests(unittest.TestCase):
+    def request(self, gateway, body, token=True):
+        request = urllib.request.Request(
+            gateway.url.replace('host.docker.internal', '127.0.0.1'), method='POST',
+            data=json.dumps(body).encode(), headers={'Content-Type': 'application/json',
+                **({'Authorization': 'Bearer ' + gateway.token} if token else {})})
+        try:
+            with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request) as response:
+                return response.status, json.loads(response.read())
+        except urllib.error.URLError as exc:
+            if getattr(exc.reason, 'winerror', None) == 10013:
+                self.skipTest('the restricted test environment blocks loopback client connections')
+            raise
+
+    def test_gateway_only_exposes_the_task_local_public_browser_tool(self):
+        calls = []
+        def invoke(*args, **kwargs):
+            calls.append((args, kwargs))
+            return 'snapshot', '成功', 'browser'
+        browser = SimpleNamespace(begin_request=lambda: calls.append('begin'), invoke=invoke, monitor=Idle())
+        with BrowserWorkbenchGateway(browser, lambda: False) as gateway:
+            status, initialized = self.request(gateway, {'jsonrpc': '2.0', 'id': 1, 'method': 'initialize',
+                                                           'params': {'protocolVersion': '2025-03-26'}})
+            self.assertEqual((status, initialized['result']['serverInfo']['name']), (200, 'veil-browser'))
+            _status, tools = self.request(gateway, {'jsonrpc': '2.0', 'id': 2, 'method': 'tools/list'})
+            self.assertEqual([tool['name'] for tool in tools['result']['tools']], ['public_browser'])
+            _status, result = self.request(gateway, {'jsonrpc': '2.0', 'id': 3, 'method': 'tools/call', 'params': {
+                'name': 'public_browser', 'arguments': {'action': 'open', 'url': 'https://example.com/'}}})
+            self.assertEqual(result['result']['content'][0]['text'], 'snapshot')
+            self.assertEqual(calls[0], 'begin')
+            self.assertEqual(calls[1][0], ('browser', {'action': 'open', 'url': 'https://example.com/'}))
+            self.assertFalse(calls[1][1]['should_stop']())
+        self.assertTrue(gateway.stopped(), 'closing the gateway must revoke later MCP calls')
+
+    def test_gateway_rejects_missing_task_token(self):
+        browser = SimpleNamespace(begin_request=lambda: None, invoke=lambda *_args, **_kwargs: ('', '成功', ''), monitor=Idle())
+        with BrowserWorkbenchGateway(browser, lambda: False) as gateway:
+            request = urllib.request.Request(gateway.url.replace('host.docker.internal', '127.0.0.1'), method='POST',
+                data=b'{}', headers={'Content-Type': 'application/json'})
+            try:
+                with self.assertRaises(urllib.error.HTTPError) as denied:
+                    urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request)
+            except urllib.error.URLError as exc:
+                if getattr(exc.reason, 'winerror', None) == 10013:
+                    self.skipTest('the restricted test environment blocks loopback client connections')
+                raise
+        self.assertEqual(denied.exception.code, 401)
+
+    def test_gateway_rejects_oversized_request_before_parsing_it(self):
+        browser = SimpleNamespace(begin_request=lambda: None, invoke=lambda *_args, **_kwargs: ('', '成功', ''), monitor=Idle())
+        with BrowserWorkbenchGateway(browser, lambda: False) as gateway:
+            request = urllib.request.Request(gateway.url.replace('host.docker.internal', '127.0.0.1'), method='POST',
+                data=b'x' * (MAX_MCP_REQUEST_BYTES + 1), headers={'Content-Type': 'application/json',
+                'Authorization': 'Bearer ' + gateway.token})
+            try:
+                with self.assertRaises(urllib.error.HTTPError) as rejected:
+                    urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request)
+            except urllib.error.URLError as exc:
+                if getattr(exc.reason, 'winerror', None) == 10013:
+                    self.skipTest('the restricted test environment blocks loopback client connections')
+                raise
+        self.assertEqual(rejected.exception.code, 413)
+
+    def test_human_takeover_revokes_the_whole_gateway_and_request_size_is_bounded(self):
+        changed = [False]
+        monitor = SimpleNamespace(snapshot=lambda: 'before', changed_since=lambda _snapshot: changed[0])
+        browser = SimpleNamespace(begin_request=lambda: None, invoke=lambda *_args, **_kwargs: ('', '成功', ''), monitor=monitor)
+        with BrowserWorkbenchGateway(browser, lambda: False) as gateway:
+            self.assertFalse(gateway.stopped())
+            changed[0] = True
+            self.assertTrue(gateway.stopped())
+            changed[0] = False
+            self.assertTrue(gateway.stopped(), 'human takeover must not be cleared between MCP calls')
+        self.assertEqual(BrowserWorkbenchGateway.request_size(str(MAX_MCP_REQUEST_BYTES)), MAX_MCP_REQUEST_BYTES)
+        with self.assertRaises(OverflowError):
+            BrowserWorkbenchGateway.request_size(str(MAX_MCP_REQUEST_BYTES + 1))
+        with self.assertRaises(ValueError):
+            BrowserWorkbenchGateway.request_size('not-a-size')
+
+    def test_failed_serve_thread_start_closes_the_server_without_hanging(self):
+        browser = SimpleNamespace(begin_request=lambda: None, invoke=lambda *_args, **_kwargs: ('', '成功', ''),
+                                  monitor=Idle())
+        gateway = BrowserWorkbenchGateway(browser, lambda: False)
+        closed = []
+        original_close = browser_tools.ThreadingHTTPServer.server_close
+
+        def close(server):
+            closed.append(True)
+            original_close(server)
+
+        outcome = {}
+
+        def worker():
+            with patch.object(threading.Thread, 'start', side_effect=RuntimeError('no thread')), \
+                    patch.object(browser_tools.ThreadingHTTPServer, 'server_close', close):
+                try:
+                    gateway.__enter__()
+                except RuntimeError as exc:
+                    outcome['error'] = exc
+
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+        thread.join(5)
+        self.assertFalse(thread.is_alive(), 'a failed serve-thread start must not hang')
+        self.assertIn('error', outcome)
+        self.assertEqual(closed, [True])
+        self.assertIsNone(gateway.thread)
+        self.assertIsNone(gateway.server)
+
+    def test_gateway_rejects_non_object_params_with_400(self):
+        browser = SimpleNamespace(begin_request=lambda: None, invoke=lambda *_args, **_kwargs: ('', '成功', ''),
+                                  monitor=Idle())
+        with BrowserWorkbenchGateway(browser, lambda: False) as gateway:
+            with self.assertRaises(urllib.error.HTTPError) as rejected:
+                self.request(gateway, {'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call',
+                                       'params': ['public_browser']})
+        self.assertEqual(rejected.exception.code, 400)
+
+    def test_a_new_gateway_closes_the_previous_tasks_idle_page(self):
+        closed = []
+        browser = SimpleNamespace(page=object(), close=lambda: closed.append(True), begin_request=lambda: None,
+                                  invoke=lambda *_args, **_kwargs: ('', '成功', ''), monitor=Idle())
+        with BrowserWorkbenchGateway(browser, lambda: False):
+            pass
+        self.assertEqual(closed, [True])
+
+    def test_gateway_refuses_actions_outside_the_advertised_enum(self):
+        calls = []
+        def invoke(*args, **kwargs):
+            calls.append(args)
+            return '', '成功', ''
+        browser = SimpleNamespace(begin_request=lambda: None, invoke=invoke, monitor=Idle())
+        with BrowserWorkbenchGateway(browser, lambda: False) as gateway:
+            with self.assertRaises(urllib.error.HTTPError) as rejected:
+                self.request(gateway, {'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call', 'params': {
+                    'name': 'public_browser', 'arguments': {'action': 'close'}}})
+        self.assertEqual(rejected.exception.code, 400)
+        self.assertEqual(calls, [])
 
 
 class BrowserSafetyTests(unittest.TestCase):
@@ -41,6 +185,56 @@ class BrowserSafetyTests(unittest.TestCase):
                 await task
             self.assertFalse(browser.stopped())
         asyncio.run(scenario())
+
+    def test_snapshot_size_limit_terminates_and_keeps_usable_controls(self):
+        outcome = {}
+
+        def worker():
+            async def scenario():
+                browser = BrowserTools(CFG, platform_enabled=True, monitor=Idle())
+                controls = [{'index': index, 'visible': True, 'tag': 'input', 'type': 'text',
+                             'name': f'field{index}', 'label': 'L' * 60, 'formAction': 'https://example.com/search',
+                             'formMethod': 'get', 'formTarget': ''} for index in range(12)]
+                controls += [
+                    {'index': 12, 'visible': True, 'tag': 'input', 'type': 'text', 'name': 'password',
+                     'label': 'Password', 'formAction': 'https://example.com/search', 'formMethod': 'get',
+                     'formTarget': ''},
+                    {'index': 13, 'visible': True, 'tag': 'input', 'type': 'text', 'name': 'q2',
+                     'label': 'Search', 'formAction': 'https://example.com/search', 'formMethod': 'get',
+                     'formTarget': '_blank'}]
+                links = [{'text': 'T' * 100, 'url': 'https://example.com/' + 'p' * 150 + str(index)}
+                         for index in range(60)]
+                browser.page = SimpleNamespace(url='https://example.com/', evaluate=AsyncMock(return_value={
+                    'text': 'X' * 12000, 'links': links, 'controls': controls, 'title': 't', 'videos': []}))
+                return browser, await browser._snapshot()
+
+            try:
+                outcome['value'] = asyncio.run(scenario())
+            except BaseException as exc:  # surfaced after the join so a hang still fails cleanly
+                outcome['error'] = exc
+
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+        thread.join(10)
+        self.assertFalse(thread.is_alive(), 'the snapshot size loop must terminate')
+        if 'error' in outcome:
+            raise outcome['error']
+        browser, result = outcome['value']
+        self.assertLessEqual(len(json.dumps(result, ensure_ascii=False).encode('utf-8')), MAX_BYTES)
+        self.assertTrue(result['links'], 'links must survive a long control list')
+        self.assertTrue(result['controls'])
+        names = {control['name'] for control in result['controls']}
+        self.assertNotIn('password', names)
+        self.assertNotIn('q2', names)
+        for control in result['controls']:
+            self.assertIn(control['control_id'], browser.controls)
+
+    def test_close_clears_the_worker_loop_for_a_later_reuse(self):
+        browser = BrowserTools(CFG, platform_enabled=True, monitor=Idle())
+        browser._start_loop()
+        browser.close()
+        self.assertIsNone(browser.loop)
+        self.assertIsNone(browser.thread)
 
     def test_unsafe_urls_and_write_parameters_are_refused(self):
         for url in ['file:///secret', 'http://example.com', 'https://127.0.0.1',
@@ -220,6 +414,48 @@ class BrowserChromiumTests(unittest.TestCase):
             self.assertEqual(await browser.context.cookies(), [])
         self.browser._start_loop()
         asyncio.run_coroutine_threadsafe(scenario(), self.browser.loop).result(timeout=30)
+
+    def test_hidden_field_before_search_input_keeps_the_control_reference_aligned(self):
+        async def scenario():
+            browser = self.browser
+            await browser._launch()
+            async def fixture(route):
+                await route.fulfill(status=200, content_type='text/html', body=(
+                    '<form action="/results" method="get"><input type="hidden" name="token" value="x">'
+                    '<input type="search" name="q" aria-label="Search"><button>Search</button></form>'))
+            await browser.context.route('https://example.com/**', fixture)
+            page = await browser._operate({'action': 'open', 'url': 'https://example.com/search'}, lambda: False)
+            field = next(item for item in page['controls'] if item['name'] == 'q')
+            await browser._operate({'action': 'fill', 'control_id': field['control_id'], 'text': 'VEIL'}, lambda: False)
+            self.assertEqual(await browser.page.locator('input[name=q]').input_value(), 'VEIL')
+        self.browser._start_loop()
+        asyncio.run_coroutine_threadsafe(scenario(), self.browser.loop).result(timeout=20)
+
+    def test_fill_and_submit_a_public_search_form_and_read_the_result_page(self):
+        async def scenario():
+            browser = self.browser
+            await browser._launch()
+            async def fixture(route):
+                if '/results' in route.request.url:
+                    html = '<title>Results</title><h1>Science results</h1><p>Result body</p>'
+                else:
+                    html = ('<title>Public search</title>'
+                            '<form action="/results" method="get"><input type="hidden" name="token" value="x">'
+                            '<input type="search" name="q" aria-label="Search">'
+                            '<input type="submit" value="Search"></form>')
+                await route.fulfill(status=200, content_type='text/html', body=html)
+            await browser.context.route('https://example.com/**', fixture)
+            page = await browser._operate({'action': 'open', 'url': 'https://example.com/search'}, lambda: False)
+            field = next(item for item in page['controls'] if item['name'] == 'q')
+            page = await browser._operate({'action': 'fill', 'control_id': field['control_id'],
+                                           'text': 'VEIL'}, lambda: False)
+            submit = next(item for item in page['controls'] if item['kind'] == 'input' and item['type'] == 'submit')
+            result = await browser._operate({'action': 'submit', 'control_id': submit['control_id']}, lambda: False)
+            self.assertIn('q=VEIL', browser.page.url)
+            self.assertEqual(result['title'], 'Results')
+            self.assertIn('Result body', result['text'])
+        self.browser._start_loop()
+        asyncio.run_coroutine_threadsafe(scenario(), self.browser.loop).result(timeout=20)
 
     def test_stop_cancels_inflight_action_and_closes_browser(self):
         async def slow(args, stopped):
