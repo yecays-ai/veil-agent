@@ -11,7 +11,7 @@
 - 本单修复 `investigation_checkpoint.record()` 的别名分类：分类使用规范名（如 `read_text_file`），证据仍保留模型侧调用名（如 `read_the_notes`），防重放签名不变。
 - 同时修复最后一步工具已收起时，模型仍输出文本工具调用被误记为 `tool_failure` 的问题；现在按 `step_limit` 保留检查点，继续后可接着做剩余工作。
 - 新增生产别名只读/副作用/排除测试、Chat 级别名检查点测试、最后一步文本工具调用测试；相关 209 项测试通过。
-- 本单的 Windows 真实模型/MCP 验收已完成：独立 `--acceptance` 实例、真实 deepseek 模型、真实 `pythonw → mcp_hidden_stdio.py → node` MCP 文件工具；四场景均有执行证据。本轮共 34 次真实模型调用，约 ¥0.105。Lan 的 Windows 体验验收仍待进行。
+- agent 已完成本单的 Windows 真实模型/MCP 链路检查：独立 `--acceptance` 实例、真实 deepseek 模型、真实 `pythonw → mcp_hidden_stdio.py → node` MCP 文件工具；四场景均有执行证据。本轮共 34 次真实模型调用，约 ¥0.105。Lan 的 Windows 体验验收仍待进行。
 - 未验证：其他角色、Linux 宿主、Docker 路径；本轮未重建 Docker。
 
 ## 下一步
