@@ -2,7 +2,7 @@
 
 ## 工单 326（2026-11-09）：后台浏览、搜索代理、错误原文日志
 
-- 依据：执行层审计报告（项目共享文件 `audit/peter-execution-permission-audit-2026-11-09.md`）第 3 节（Lan 本机日志）。21:25 那次请求共 8 分 10 秒；搜索的 5 个境外引擎全部超时。远程控制只读实测：Lan 电脑的系统代理是关的（代理软件没在运行），5 个引擎直连都在 8 秒时超时；`ddgs` 把 Bing 标为停用，指定 Bing 会悄悄改成所有引擎并发，所以不用它。不开代理时的搜索，Lan 选了“两个都要”（开代理时用免费引擎，不开时用付费接口兜底），付费接口另开工单，先报价；浏览器和工作台网关只要检测到 Lan 的任何输入就停。
+- 依据：执行层审计报告（项目共享文件 `audit/peter-execution-permission-audit-2026-11-09.md`）第 3 节（Lan 本机日志）。21:25 那次请求共 8 分 10 秒；搜索的 5 个境外引擎全部超时。远程控制只读实测：Lan 电脑的系统代理是关的（代理软件没在运行），5 个引擎直连都在 8 秒时超时；`ddgs` 把 Bing 标为停用，指定 Bing 会悄悄改成所有引擎并发，所以不用它。直接用 urllib 访问 www.bing.com，2.4 秒就能连上。Lan 先选了付费接口兜底，后来改口说暂不做付费（不想注册和下载），所以改成用 `bing_search()` 直接读 Bing 结果页并解析 `li.b_algo`、还原 `ck/a` 跳转链接，排在第一位；结果页为空（可能是验证页）时报错，换下一个引擎；浏览器和工作台网关只要检测到 Lan 的任何输入就停。
 - 改动：`browser_tools.py` 默认无窗口、不检查输入，`open` 加 `show`，显示模式下保留人优先；`BrowserWorkbenchGateway` 只在显示模式下检查输入，并去掉 `show`。`web_tools.py`：`search_proxy()`（`DDGS_PROXY` 或系统代理）、上次成功的引擎排在最前、总时限 20 秒、报错写明每个引擎的失败原因。`veil_agent.py`：浏览器和桌面工具失败时，日志记录失败原文。`executor_opencode.py`：`save_run_log`（`workbench-home/runs`，保留 30 份，每份不超过 2MB），`diagnose` 带上 `veil_*` 工具的错误原文。
 - 测试：全量 `unittest discover`，改动前后的失败列表相同（都是本机缺 Node、网络或 SDK 造成的旧失败），新增 2 项测试。
 - Lan 已定方向 A：OpenCode 跑在宿主机上，VEIL 统一裁决权限，不直接交出原始的 Windows-MCP、Playwright MCP 或不受限的 PowerShell；Docker 只用来隔离不可信代码。阶段 1 在测试副本里进行。

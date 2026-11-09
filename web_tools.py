@@ -1,5 +1,6 @@
 """Read-only public web search and fetching for configured character tools."""
 import asyncio
+import base64
 import ipaddress
 import os
 import re
@@ -10,7 +11,7 @@ import urllib.request
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
 
 try:
     from ddgs import DDGS
@@ -21,9 +22,18 @@ except ImportError:  # Setup remains recoverable if the optional web dependency 
 WEB_TOOL_NAMES = frozenset({'web_search', 'web_fetch', 'web_research'})
 # Engines are tried one after another; the first one with usable results wins. A single engine that is
 # unreachable from the user's network must not fail the whole search.
-# These engines usually need a proxy from mainland China. (The library marks Bing disabled; asking for it
-# silently runs every engine at once, so it is not listed.)
-SEARCH_ENGINES = ('brave', 'yahoo', 'mojeek', 'startpage', 'duckduckgo')
+# Bing is read directly over the user's own connection (it is reachable from mainland China without a
+# proxy); the others go through the search library and usually need a proxy there. The library's own Bing
+# backend is disabled upstream (asking for it silently runs every engine at once), hence the direct reader.
+SEARCH_ENGINES = ('bing', 'brave', 'yahoo', 'mojeek', 'startpage', 'duckduckgo')
+BING_SEARCH_URL = 'https://www.bing.com/search'
+BING_MAX_PAGE_BYTES = 2 * 1024 * 1024
+BING_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) '
+                  'Chrome/130.0.0.0 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml',
+    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+}
 # The whole search gives up after this long, however many engines are left to try.
 SEARCH_TOTAL_SECONDS = 20
 SEARCH_RESULT_LIMIT = 8
@@ -51,6 +61,56 @@ def search_proxy():
     if not value:
         return None
     return value if '://' in value else 'http://' + value
+
+
+def _unwrap_bing_url(href):
+    """Bing wraps result links as bing.com/ck/a?...&u=a1<base64 of the real URL>."""
+    if not href.startswith(('https://www.bing.com/ck/a?', 'https://cn.bing.com/ck/a?')):
+        return href
+    value = parse_qs(urlsplit(href).query).get('u', [''])[0]
+    if len(value) <= 2:
+        return None
+    try:
+        return base64.urlsafe_b64decode(value[2:] + '=' * (-len(value[2:]) % 4)).decode('utf-8')
+    except (ValueError, UnicodeDecodeError):
+        return None
+
+
+def parse_bing_results(page):
+    """Organic results from a Bing result page as dicts like the search library returns."""
+    from lxml import html as lxml_html
+    try:
+        tree = lxml_html.fromstring(page)
+    except Exception:
+        return []
+    results = []
+    for item in tree.xpath("//li[contains(concat(' ', normalize-space(@class), ' '), ' b_algo ')]"):
+        links = item.xpath('.//h2/a[@href]')
+        if not links:
+            continue
+        href = _unwrap_bing_url(links[0].get('href', ''))
+        if not href or '/aclick?' in href:
+            continue
+        title = ' '.join(''.join(links[0].itertext()).split())
+        body = ' '.join(' '.join(item.xpath(".//p//text()")).split())
+        results.append({'title': title, 'href': href, 'body': body})
+    return results
+
+
+def bing_search(query, *, proxy, timeout):
+    """Read one Bing result page over the user's own connection (system proxy if set, else direct)."""
+    handlers = [urllib.request.ProxyHandler({'http': proxy, 'https': proxy})] if proxy else []
+    opener = urllib.request.build_opener(*handlers)
+    request = urllib.request.Request(f'{BING_SEARCH_URL}?{urlencode({"q": query})}', headers=BING_HEADERS)
+    with opener.open(request, timeout=timeout) as response:
+        if response.status != 200:
+            raise OSError(f'HTTP {response.status}')
+        page = response.read(BING_MAX_PAGE_BYTES).decode('utf-8', errors='replace')
+    results = parse_bing_results(page)
+    if not results:
+        # Also what a verification page looks like; report it so the next engine is tried with a reason.
+        raise OSError('no results on the Bing page')
+    return results[:SEARCH_RESULT_LIMIT]
 
 
 def _clip_utf8(value, max_bytes):
@@ -327,8 +387,12 @@ class WebTools:
                 failures.append('time limit reached')
                 break
             try:
-                found = list(DDGS(proxy=proxy, timeout=int(min(SEARCH_ENGINE_TIMEOUT_SECONDS, remaining))).text(
-                    query, backend=engine, max_results=SEARCH_RESULT_LIMIT))
+                timeout = int(min(SEARCH_ENGINE_TIMEOUT_SECONDS, remaining))
+                if engine == 'bing':
+                    found = bing_search(query, proxy=proxy, timeout=timeout)
+                else:
+                    found = list(DDGS(proxy=proxy, timeout=timeout).text(
+                        query, backend=engine, max_results=SEARCH_RESULT_LIMIT))
             except Exception as exc:
                 # Say what actually failed (class + short reason, never the query) so a blocked
                 # network is told apart from a library problem.

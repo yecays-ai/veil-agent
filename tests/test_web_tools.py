@@ -41,6 +41,11 @@ class PublicUrlTests(unittest.TestCase):
 
 
 class WebToolsTests(unittest.TestCase):
+    def setUp(self):
+        # Bing is read over the network directly; these tests cover the library engines behind it.
+        bing = patch('web_tools.bing_search', side_effect=OSError('offline'))
+        self.bing = bing.start()
+        self.addCleanup(bing.stop)
 
     def test_windows_fetch_uses_consoleless_python(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -131,14 +136,29 @@ class WebToolsTests(unittest.TestCase):
             result, state, _ = tools.invoke('web_search', {'query': 'topic'})
         self.assertEqual(state, '出错')
         self.assertEqual(ddgs.text.call_count, 5)
+        self.assertIn('bing: OSError: offline', result)
         self.assertIn('brave: TimeoutError', result)
         self.assertIn('duckduckgo: TimeoutError', result)
+
+    def test_bing_is_tried_first_and_remembered_when_it_answers(self):
+        _, _, tools, _ = self.make_tools(worker=Mock())
+        self.bing.side_effect = None
+        self.bing.return_value = [{'title': 'Bing hit', 'href': 'https://news.example/a', 'body': 'b'}]
+        ddgs = Mock()
+        with patch('web_tools.DDGS', return_value=ddgs):
+            result, state, _ = tools.invoke('web_search', {'query': 'topic'})
+            tools.invoke('web_search', {'query': 'topic'})
+        self.assertEqual(state, '成功', result)
+        self.assertIn('https://news.example/a', result)
+        ddgs.text.assert_not_called()
+        self.assertEqual(self.bing.call_count, 2)
+        self.assertEqual(self.bing.call_args.args, ('topic',))
 
     def test_search_uses_the_system_proxy_and_stops_at_the_total_time_limit(self):
         _, _, tools, _ = self.make_tools(worker=Mock())
         ddgs = Mock()
         ddgs.text.side_effect = TimeoutError()
-        clock = iter([0, 0, 25, 25, 25])
+        clock = iter([0, 0, 0, 25, 25, 25])
         with patch.dict('os.environ', {'DDGS_PROXY': ''}), \
                 patch('web_tools.urllib.request.getproxies', return_value={'http': 'http://127.0.0.1:7890'}), \
                 patch('web_tools.time.monotonic', side_effect=lambda: next(clock)), \
@@ -224,6 +244,41 @@ class WebToolsTests(unittest.TestCase):
         self.assertEqual([tool.name for tool in degraded.tools], ['web_search'])
         self.assertNotIn('web_research', [tool.name for tool in degraded.tools])
         self.assertIn('run setup.bat', degraded.startup_notice)
+
+
+class BingReaderTests(unittest.TestCase):
+    PAGE = '''<html><body><ol id="b_results">
+      <li class="b_algo"><h2><a href="https://www.bing.com/ck/a?!&&p=x&u=a1aHR0cHM6Ly9leGFtcGxlLmNvbS9uZXdz&ntb=1">
+        Example <strong>news</strong></a></h2><div class="b_caption"><p>Today's <b>tech</b> news</p></div></li>
+      <li class="b_algo b_vtl"><h2><a href="https://plain.example/page">Plain</a></h2><p>Second</p></li>
+      <li class="b_ad"><h2><a href="https://ads.example/">Ad</a></h2></li>
+      <li class="b_algo"><h2><a href="https://www.bing.com/aclick?ld=1">Sponsored</a></h2></li>
+    </ol></body></html>'''
+
+    def test_organic_results_are_read_and_wrapped_links_unwrapped(self):
+        self.assertEqual(web_tools.parse_bing_results(self.PAGE), [
+            {'title': 'Example news', 'href': 'https://example.com/news', 'body': "Today's tech news"},
+            {'title': 'Plain', 'href': 'https://plain.example/page', 'body': 'Second'}])
+        self.assertEqual(web_tools.parse_bing_results('<html>captcha</html>'), [])
+
+    def test_request_uses_given_proxy_and_timeout(self):
+        response = Mock(status=200)
+        response.read.return_value = self.PAGE.encode('utf-8')
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=False)
+        opener = Mock()
+        opener.open.return_value = response
+        with patch('web_tools.urllib.request.build_opener', return_value=opener) as build:
+            results = web_tools.bing_search('今天 科技', proxy='http://127.0.0.1:7890', timeout=8)
+        self.assertEqual(len(results), 2)
+        handler = build.call_args.args[0]
+        self.assertEqual(handler.proxies['https'], 'http://127.0.0.1:7890')
+        request = opener.open.call_args.args[0]
+        self.assertTrue(request.full_url.startswith('https://www.bing.com/search?q=%E4%BB%8A'))
+        self.assertEqual(opener.open.call_args.kwargs['timeout'], 8)
+        with patch('web_tools.urllib.request.build_opener', return_value=opener) as build:
+            web_tools.bing_search('q', proxy=None, timeout=8)
+        self.assertEqual(build.call_args.args, ())
 
 
 class FilesystemWebToolIntegrationTests(unittest.TestCase):
