@@ -66,6 +66,14 @@ class InvestigationCheckpointTests(unittest.TestCase):
         self.assertEqual(saved['evidence'][-1]['state'], '结果未知')
         self.assertIn('unknown outcome', checkpoint.resume_guard('write_file', {'path': 'a.txt'}))
 
+    def test_rejected_stopped_and_unknown_side_effects_are_blocked(self):
+        checkpoint = InvestigationCheckpoint(self.store, 'test')
+        for state, path in (('被拒绝', 'rejected.txt'), ('已停止', 'stopped.txt'),
+                            ('结果未知', 'unknown.txt')):
+            checkpoint.record('Investigate A.', 'request-1', 'write_file', {'path': path},
+                              state, path, 'synthetic outcome')
+            self.assertIn('do not replay', checkpoint.resume_guard('write_file', {'path': path}))
+
 
 if __name__ == '__main__':
     unittest.main()

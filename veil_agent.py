@@ -4954,6 +4954,7 @@ class Chat:
                 if autonomy:
                     self.autonomy_budget_limited = True
                 for call in message.tool_calls:
+                    args = {}
                     try:
                         args = json.loads(call.function.arguments or '{}') or {}
                         summary = (self.tools.preview_summary(call.function.name, args)
