@@ -2,7 +2,7 @@
 
 ## 工单 318：普通聊天调查续接（2026-11-09 +08）
 
-- 分支 `ticket/318-chat-investigation-resume` 基于 `b70ddaa`；正式运行目录未改。远端唯一未合并 PR 是 #316（工单 317），后续开 PR 前需再核对其是否合并和 `veil_agent.py` 冲突。
+- 分支 `ticket/318-chat-investigation-resume` 基于 `b70ddaa`；PR #317 已创建且不自动合并；正式运行目录未改。PR #316（工单 317）仍可能与 `veil_agent.py` 冲突。
 - 新增 `investigation_checkpoint.py`，角色本地原子检查点仅保存原目标、最多 16 条工具状态/有限已清理证据与停止原因；不会保存模型计划、原始大结果或增加模型调用。
 - `veil_agent.py` 在普通聊天工具执行前写“结果未知”，结果返回后替换为成功、失败或拒绝；步骤、上下文、预算、停止边界标记中断。明确“继续”才注入检查点；不相关聊天不删除它。
 - 已运行 `python -m unittest tests.test_investigation_checkpoint tests.test_chat`：90 项通过。Windows 实际体验和 PR CI 尚未运行。
@@ -10,7 +10,7 @@
 ## 下一个窗口第一步
 
 1. 复跑专项测试和完整相关工具循环测试，审查最终 diff 的预算、审批与停止路径。
-2. 更新到届时 `main`，解决 #316 如已合并造成的冲突，创建 PR；不自动合并。
+2. 在合并前更新到届时 `main`，解决 #316 如已合并造成的冲突，检查 PR #317 的 CI；不自动合并。
 
 ## 已知边界
 
