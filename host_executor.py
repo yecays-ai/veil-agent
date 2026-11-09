@@ -174,6 +174,18 @@ def available(*, desktop=True, which=shutil.which, find_script=_python_script, n
     return value
 
 
+def uv_environment(veil_root):
+    """uv keeps its downloaded Python, tools and cache in one folder next to VEIL.
+
+    The MCP client hands a server only a short list of inherited variables, so uv otherwise falls back to
+    %APPDATA%\\uv; on Lan's PC that broke the install of Python 3.14 with `os error 17` (the temp folder and the
+    target sit on different drives) and the desktop never started. One folder on VEIL's own drive avoids it (and
+    keeps the C drive free)."""
+    base = Path(veil_root) / '.uv'
+    return {'UV_PYTHON_INSTALL_DIR': str(base / 'python'), 'UV_CACHE_DIR': str(base / 'cache'),
+            'UV_TOOL_DIR': str(base / 'tools')}
+
+
 def _log_path(home):
     folder = Path(home) / 'host-runs'
     folder.mkdir(parents=True, exist_ok=True)
@@ -212,7 +224,9 @@ def prepare(*, workdir, home, veil_root, ask, autonomy, stopped, protect=(), des
                 network.close()
             raise
     environment = {'ANONYMIZED_TELEMETRY': 'false', 'WINDOWS_MCP_DEBUG': 'false', 'NO_COLOR': '1'}
-    gateways = [VeilMcpGateway(server_id, service, checkpoint, offered, should_stop=stopped, environment=environment,
+    gateways = [VeilMcpGateway(server_id, service, checkpoint, offered, should_stop=stopped,
+                               environment={**environment, **(uv_environment(veil_root)
+                                                              if server_id == vc.COMPUTER_SERVER else {})},
                                companions=[network] if network and server_id == vc.BROWSER_SERVER else ())
                 for server_id, (service, offered) in services.items()]
     if network and not any(gateway.companions for gateway in gateways):
