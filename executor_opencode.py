@@ -62,6 +62,22 @@ TASK_SCOPE_NOTE = (
     'Network, installation, publishing, credentials, project-external paths and destructive operations are decided by VEIL. '
     'This scope ends when this task ends, is stopped, or reaches its budget or time limit.\n\n')
 
+# Host runs have no container masking: every secret-file class of SECRET_FILE is unreadable by OpenCode itself.
+HOST_SECRET_GLOBS = ('*.pem', '*.pfx', '*.key', '*.p12', '*id_rsa*', '*id_ed25519*', '*.env', '*.env.*',
+                     '*Login Data*', '*Cookies*', '*/.ssh/*', '*\\.ssh\\*', '*/secrets/*', '*\\secrets\\*',
+                     '*/.aws/*', '*\\.aws\\*', '*/.azure/*', '*\\.azure\\*', '*/.gnupg/*', '*\\.gnupg\\*',
+                     '*/.kube/*', '*\\.kube\\*', '*/.docker/config.json', '*\\.docker\\config.json',
+                     '*credentials*', '*.npmrc', '*.pypirc', '*.netrc', '*_netrc', '*.git-credentials',
+                     '*.kdbx', '*.ppk')
+
+HOST_NOTE = (
+    'Environment: you run directly on the owner\'s Windows PC. VEIL rules every operation. '
+    'veil_browser_* is your own background browser (headless, fresh profile, never on her screen): use it for '
+    'searching and reading pages. veil_computer_* operates her real desktop (look with Snapshot, then App, Click, '
+    'Type, Shortcut): use it only when the task needs a Windows app or asks you to show or open something for her. '
+    'Never start desktop apps or browsers from the shell. Saving, sending, closing and system changes are asked '
+    'of her by VEIL; a refusal is final for that action, so report it instead of working around it.\n\n')
+
 TOOL_SCHEMA = {'type': 'function', 'function': {
     'name': TOOL_NAME,
     'description': (
@@ -87,6 +103,10 @@ TOOL_SCHEMA = {'type': 'function', 'function': {
                                                      'isolated worktree. The program checks it.'}},
         'required': ['task'], 'additionalProperties': False},
 }}
+
+
+class HostGatewayError(RuntimeError):
+    """A VEIL MCP gateway of the host path could not start (its upstream server did not answer)."""
 
 
 class ExecutorResult(NamedTuple):
@@ -1236,7 +1256,7 @@ def find_command(configured=''):
     return shutil.which('opencode')
 
 
-def build_config(provider, token, base_url, protect=(), browser_gateway=None, windows_gateway=None):
+def build_config(provider, token, base_url, protect=(), browser_gateway=None, windows_gateway=None, host_mcp=None):
     """The OpenCode config, passed inline (OPENCODE_CONFIG_CONTENT) so nothing is written into the user's project
     and a project's own opencode.json cannot loosen it. `token` is the local proxy token, not the real key."""
     context = int(provider.get('max_input_tokens', 32768))
@@ -1258,6 +1278,20 @@ def build_config(provider, token, base_url, protect=(), browser_gateway=None, wi
                        'edit': edit_permission, 'webfetch': 'ask', 'external_directory': 'ask',
                        'read': {'*': 'allow', **{g: 'deny' for g in SECRET_GLOBS}}},
         'share': 'disabled', 'autoupdate': False}
+    if host_mcp is not None:
+        # Ticket 329 host path: VEIL's gateways are the only MCP servers and rule every call with its real
+        # arguments (OpenCode's own MCP permission request carries none). OpenCode's grep tool is off on the
+        # host because it reads secret files and its permission request cannot be answered over HTTP
+        # (OpenCode 1.19.5 returns 400 for it); the question tool would wait for a person forever.
+        config['permission']['read'].update({glob: 'deny' for glob in HOST_SECRET_GLOBS})
+        config['permission'].update({'grep': 'deny', 'question': 'deny',
+                                     **{name + '_*': 'allow' for name in host_mcp}})
+        # A refusal is an answer to that one call, not the end of the task (OpenCode ends the loop otherwise).
+        config.update({'formatter': False, 'lsp': False,
+                       'experimental': {'continue_loop_on_deny': True, 'mcp_timeout': 120000}})
+        if host_mcp:
+            config['mcp'] = dict(host_mcp)
+        return config
     if browser_gateway is not None or windows_gateway is not None:
         config['mcp'] = {}
     if browser_gateway is not None:
@@ -1410,10 +1444,19 @@ def container_command(container, *, name, workdir, port, env, masks, bootstrap_g
 def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, stopped, record_cost,
         api_factory=None, proxy_factory=None, container=None, protect=(), popen=subprocess.Popen, clock=time.monotonic,
         sleep=time.sleep, diagnostic=None, maintenance=False, approval_data=None, save_approval=None,
-        container_name=None, browser_gateway=None, windows_gateway=None):
-    """Run one task. `record_cost(cost)` is called once with the estimated cost, whatever the outcome."""
+        container_name=None, browser_gateway=None, windows_gateway=None, checkpoint=None, host_gateways=()):
+    """Run one task. `record_cost(cost)` is called once with the estimated cost, whatever the outcome.
+    Ticket 329: with `checkpoint` (host path), every OpenCode permission request is ruled by that
+    `veil_checkpoint.Checkpoint`, and `host_gateways` (VEIL MCP gateways) are the only MCP servers."""
     limits = {**DEFAULT_LIMITS, **(limits or {})}
     workdir, home = Path(workdir), Path(home)
+    if checkpoint is not None and (container or maintenance or browser_gateway or windows_gateway):
+        try:
+            record_cost(Decimal(0))
+        except Exception:
+            pass
+        return ExecutorResult('The host path runs without the container, maintenance or the old gateways.',
+                              '被拒绝', reason='invalid_host_run')
     if maintenance and not container:
         try:
             record_cost(Decimal(0))
@@ -1479,14 +1522,25 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
                                         **({'host': '0.0.0.0'} if container else {}))
     def allow_network(hosts):
         proxy.allow_hosts(hosts)
+    if checkpoint is not None:
+        checkpoint.task_scope, checkpoint.allow_network = task_scope, allow_network
     proxy_host = 'veil-relay' if container else '127.0.0.1'
     gateway = browser_gateway(stopped, bool(container)) if browser_gateway is not None else None
     desktop_gateway = windows_gateway(stopped, bool(container)) if windows_gateway is not None else None
+    entered = []
     try:
         bridge = gateway.__enter__() if gateway is not None else None
         desktop_bridge = desktop_gateway.__enter__() if desktop_gateway is not None else None
+        for host_gateway in host_gateways:
+            try:
+                entered.append(host_gateway.__enter__())
+            except Exception as exc:
+                raise HostGatewayError(f'{host_gateway.server_id} could not start: '
+                                       + (str(exc) or type(exc).__name__)[:300]) from exc
         config = build_config(provider, proxy.token, proxy.local_base(proxy_host), protect=protect,
-                              browser_gateway=bridge, windows_gateway=desktop_bridge)
+                              browser_gateway=bridge, windows_gateway=desktop_bridge,
+                              host_mcp=({item.server_id: item.config() for item in entered}
+                                        if checkpoint is not None else None))
         port, password = free_port(), secrets.token_urlsafe(24)
         keep = {'PATH', 'PATHEXT', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'TEMP', 'TMP', 'TMPDIR', 'LANG', 'LC_ALL', 'PROGRAMFILES',
                 'PROGRAMFILES(X86)', 'PROGRAMDATA', 'APPDATA', 'LOCALAPPDATA', 'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE'}
@@ -1539,10 +1593,20 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
             env = {k: v for k, v in env.items() if k.upper() in ('PATH', 'PATHEXT', 'SYSTEMROOT', 'WINDIR', 'COMSPEC',
                                                                   'APPDATA', 'LOCALAPPDATA', 'USERPROFILE', 'HOME')}
         else:
+            # On the host OpenCode must not run a project's own plugins, custom tools, MCP servers or config
+            # (verified on 1.19.5: a project's .opencode/plugin ran on the host without any permission request).
+            shared.update({'OPENCODE_DISABLE_PROJECT_CONFIG': '1', 'OPENCODE_PURE': '1',
+                           'OPENCODE_DISABLE_CLAUDE_CODE': '1', 'OPENCODE_DISABLE_EXTERNAL_SKILLS': '1',
+                           'OPENCODE_DISABLE_LSP_DOWNLOAD': '1', 'OPENCODE_DISABLE_MODELS_FETCH': '1'})
             env.update({**shared, 'HOME': str(home), 'USERPROFILE': str(home),
                         'XDG_DATA_HOME': str(home / 'data'), 'XDG_CONFIG_HOME': str(home / 'config'),
                         'XDG_CACHE_HOME': str(home / 'cache'), 'XDG_STATE_HOME': str(home / 'state')})
-    except BaseException:
+    except BaseException as setup_error:
+        for host_gateway in entered:
+            try:
+                host_gateway.__exit__(None, None, None)
+            except Exception:
+                pass
         if gateway is not None:
             try:
                 gateway.__exit__(None, None, None)
@@ -1553,6 +1617,18 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
                 desktop_gateway.__exit__(None, None, None)
             except Exception:
                 pass
+        if isinstance(setup_error, HostGatewayError):
+            if checkpoint is not None:
+                checkpoint.log(kind='end', stop=str(setup_error), steps=0, cost_cny='0')
+            try:
+                proxy.close()
+            except Exception:
+                pass
+            try:
+                record_cost(Decimal(0))
+            except Exception:
+                pass
+            return ExecutorResult(str(setup_error), '出错', reason='gateway_failed')
         raise
     proc, messages, cost, steps, stop = None, [], Decimal(0), 0, ''
     cleanup_warning = ''
@@ -1579,7 +1655,7 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
         session = api.call('POST', '/session', {'title': 'workbench'})['id']
         if stopped():
             return ExecutorResult('[workbench=stopped; reason=user_stopped]', '出错', reason='user_stopped')
-        text = (CONTAINER_NOTE if container else '') + TASK_SCOPE_NOTE + (MAINTENANCE_NOTE if maintenance else '') + task
+        text = (CONTAINER_NOTE if container else HOST_NOTE if checkpoint is not None else '') + TASK_SCOPE_NOTE + (MAINTENANCE_NOTE if maintenance else '') + task
         api.call('POST', f'/session/{session}/prompt_async', {
             'parts': [{'type': 'text', 'text': text}], 'model': {'providerID': 'relay', 'modelID': provider['model']}})
         started, idle, answered, approvals = clock(), 0, [], []
@@ -1592,15 +1668,22 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
                     gateway.stop()
                 if desktop_gateway is not None:
                     desktop_gateway.stop()
+                for host_gateway in entered:
+                    host_gateway.stop()
             try:
                 for request in ([] if stop else api.call('GET', '/permission') or []):
                     if request.get('sessionID') != session or request.get('id') in answered:
                         continue
                     answered.append(request.get('id'))
-                    reply, why = decide(request.get('permission', ''), request.get('patterns', []),
-                                        request.get('metadata'), workdir, autonomy=autonomy, ask=ask,
-                                        approvals=approvals, task_scope=task_scope, maintenance=maintenance,
-                                        allow_network=allow_network, isolated_tests=bool(container))
+                    if checkpoint is not None:
+                        reply, why = checkpoint.opencode_permission(
+                            request.get('permission', ''), request.get('patterns', []), request.get('metadata'))
+                        approvals[:] = checkpoint.approvals
+                    else:
+                        reply, why = decide(request.get('permission', ''), request.get('patterns', []),
+                                            request.get('metadata'), workdir, autonomy=autonomy, ask=ask,
+                                            approvals=approvals, task_scope=task_scope, maintenance=maintenance,
+                                            allow_network=allow_network, isolated_tests=bool(container))
                     if stopped():
                         stop = 'stopped by Lan'
                         break
@@ -1619,7 +1702,9 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
                             })
                         except Exception:
                             pass
-                    api.call('POST', f"/permission/{request['id']}/reply", {'reply': reply})
+                    api.call('POST', f"/permission/{request['id']}/reply",
+                             {'reply': reply, 'message': f'VEIL refused this: {why}.'}
+                             if checkpoint is not None and reply == 'reject' else {'reply': reply})
                     if why in {'cancelled', 'timed_out'}:
                         approval_stop = why
                         stop = 'approval ' + why
@@ -1646,6 +1731,8 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
                     gateway.stop()
                 if desktop_gateway is not None:
                     desktop_gateway.stop()
+                for host_gateway in entered:
+                    host_gateway.stop()
                 try:
                     api.call('POST', f'/session/{session}/abort')
                 except Exception:
@@ -1689,6 +1776,13 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
                 desktop_gateway.__exit__(None, None, None)
             except Exception:
                 cleanup_warning += ' [warning: could not stop the Windows UIA gateway]'
+        for host_gateway in entered:
+            try:
+                host_gateway.__exit__(None, None, None)
+            except Exception:
+                cleanup_warning += f' [warning: could not stop {host_gateway.server_id}]'
+        if checkpoint is not None:
+            checkpoint.log(kind='end', stop=stop, steps=steps, cost_cny=str(cost))
         if git_pointer is not None:
             try:
                 git_pointer.unlink(missing_ok=True)

@@ -1,5 +1,15 @@
 # HANDOFF
 
+## 工单 329（2026-11-10）：宿主机执行通道（阶段 1，默认关）
+
+- 新文件：`veil_checkpoint.py`（4 类裁决、禁区路径、日志）、`veil_mcp_gateway.py`（包住上游 MCP，只开放白名单工具，复用 `mcp_services._Worker`）、`host_executor.py`（固定版本、上游启动命令、`prepare`、命令行开发自测 `python host_executor.py --workdir <目录> "任务"`）。`executor_opencode.run` 新增 `checkpoint`/`host_gateways`，不传时行为不变。
+- 云端用真实 OpenCode 1.19.5 实测发现并处理：项目里的 `.opencode/plugin` 会在宿主机直接运行（加 `OPENCODE_PURE`、`OPENCODE_DISABLE_PROJECT_CONFIG` 等，旧宿主模式也加了）；OpenCode 的 `grep` 工具能读出 `.env`，而且它的审批请求经 HTTP 列表会 400（宿主通道关掉 grep；`grep -r`/`rg`/`cat *` 覆盖到密钥文件时检查点拒绝）；MCP 的审批请求不带参数（所以由 VEIL 网关按真实参数裁决）；拒绝一次默认会结束整个任务（开 `experimental.continue_loop_on_deny`，拒绝原因回给模型）。Playwright MCP 的 `filename` 参数能写任意文件、`browser_tabs` 带 `url` 能绕过网址检查：都拦了。
+- 人优先：VEIL 不再因 Lan 的输入停整次任务；动鼠标键盘那一刻交给 Windows-MCP 自带的控制协调（区分注入与物理输入，未在真机验证）。自主醒来时不开桌面，只有后台浏览器。
+- 审查（Cubic）后补上：Windows 反斜杠路径和 `$env:`/`%VAR%` 路径也按禁区检查；不往 Lan 自己的浏览器里打字，读不到前台窗口时不打字；日志不记输入的文字；`.pem/.pfx/.key` 等在宿主读取策略里也拒绝；项目里有指向外部的链接或包含 VEIL 自己的数据就不在宿主运行；网关排队有上限，排到后再裁决；非 Windows 不走宿主通道；`workbench.json` 保存时保留 `host_mode`。
+- 已知未解决（需 Lan 定）：后台浏览器里点链接或被重定向时不再检查目标是不是内网地址（只检查显式打开的网址）。浏览器是全新配置、没有登录任何账号，风险是读到局域网里的网页（如路由器页面）。
+- 未做（阶段 2/3）：主聊天工具收缩、删旧代码。旧容器宿主模式的 grep 仍开着（Lan 用 Docker，不受影响）。
+- 下一步第一件事：远程控制在测试副本跑 5 个场景（见工单）。电脑需要 `uv`（uvx 会下载 Python 3.14 和 windows-mcp）、Node（npx 下载 @playwright/mcp）、`npm i -g opencode-ai@1.19.5`；首次下载慢，先手动跑一次预热。
+
 ## 工单 328（2026-11-10）：搜索先走 DeepSeek 官网搜索接口
 
 - 依据：326/327 后 Lan 电脑的免费引擎仍多数失败（加速器出口被当成机器人）。DeepSeek 官网搜索接口 `POST https://api.deepseek.com/v1/tools/search`（文档 `api-docs.deepseek.com/guides/search`，用同一把 DeepSeek key，公布价每千次成功 5 元，失败/超时/空结果不收费）在 Lan 电脑经加速器实测 10 次全部 HTTP 200、每次 8 条、1.1–1.3 秒。
