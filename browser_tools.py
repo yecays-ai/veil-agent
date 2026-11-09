@@ -394,12 +394,14 @@ class BrowserTools:
             # Human input/deadlines stop Peter's operation, not the page left for Lan.
             self.stopped = lambda: False
 
-    def invoke(self, name, args, approval=None, *, should_stop=None):
+    def invoke(self, name, args, approval=None, *, should_stop=None, background=False):
+        """`background` (the workbench): never show a window, never wait on Lan's input."""
         summary = 'isolated public browser'
         if not self.enabled or name not in BROWSER_TOOL_NAMES:
             return 'Isolated browsing is unavailable for this role/platform.', '被拒绝', summary
         if not self.gate.acquire(blocking=False):
             return 'Browser is busy; no additional action was queued.', '被拒绝', summary
+        previous_visible = self.visible
         try:
             if not isinstance(args, dict):
                 raise ValueError('Expected browser action arguments.')
@@ -421,7 +423,9 @@ class BrowserTools:
             if action == 'open':
                 public_url(args['url'])
                 # A plain open keeps the current mode; only an explicit show changes it.
-                if show is not None:
+                if background:
+                    self.visible = False
+                elif show is not None:
                     self.visible = show
             if action == 'click' and not isinstance(args['link_id'], str):
                 raise ValueError('link_id must come from the latest observation.')
@@ -435,7 +439,10 @@ class BrowserTools:
                 self.begin_request()
             if action != 'close' and (self.steps >= MAX_STEPS or time.monotonic() >= self.deadline):
                 raise ValueError('Browser request step/time limit reached.')
-            human_priority = self.visible and action != 'close'
+            if action == 'close':
+                # Showing a page ends with its window; the next open is in the background again.
+                self.visible = False
+            human_priority = self.visible and not background and action != 'close'
             snapshot = self.monitor.snapshot() if human_priority else None
             if human_priority:
                 self.monitor.require_idle(3)
@@ -467,6 +474,9 @@ class BrowserTools:
                         self.quarantined = False
                         raise ValueError('Interrupted; isolated browser closed. No next action was queued.')
         except Exception as exc:
+            if args.get('action') == 'open' if isinstance(args, dict) else False:
+                # A failed open does not change the mode; the next open relaunches if they differ.
+                self.visible = previous_visible
             # Do not expose arbitrary browser/network exception text or local installation paths.
             reason = str(exc) if isinstance(exc, ValueError) else type(exc).__name__
             return 'Browser action failed or was interrupted: ' + reason[:300], '被拒绝', summary
@@ -502,19 +512,14 @@ class BrowserWorkbenchGateway:
         self.server = self.thread = None
         self.started = False
         self.cancelled = threading.Event()
-        self.monitor_snapshot = None
 
     def stop(self):
         self.cancelled.set()
 
     def stopped(self):
-        if self.cancelled.is_set() or self.should_stop():
-            return True
-        if (getattr(self.browser, 'visible', False) and self.monitor_snapshot is not None
-                and self.browser.monitor.changed_since(self.monitor_snapshot)):
-            self.cancelled.set()
-            return True
-        return False
+        # The workbench browses in the background, so Lan using her computer never stops it; only the
+        # stop button, pause, limits or the end of the run do.
+        return self.cancelled.is_set() or self.should_stop()
 
     @staticmethod
     def request_size(value):
@@ -598,7 +603,7 @@ class BrowserWorkbenchGateway:
                         # The workbench browses in the background only; it never puts a window on Lan's screen.
                         arguments = {key: value for key, value in arguments.items() if key != 'show'}
                         text, state, _summary = gateway.browser.invoke(
-                            'browser', arguments, should_stop=gateway.stopped)
+                            'browser', arguments, should_stop=gateway.stopped, background=True)
                         result = {'content': [{'type': 'text', 'text': text}],
                                   'isError': state != '成功'}
                         return self._send({'jsonrpc': '2.0', 'id': request_id, 'result': result})
@@ -616,13 +621,10 @@ class BrowserWorkbenchGateway:
                 # Every workbench task starts from a fresh isolated context: an idle page left by
                 # the previous task must not be observable by the next one.
                 self.browser.close()
-            if hasattr(self.browser, 'visible'):
-                self.browser.visible = False
             self.server = ThreadingHTTPServer((self.host, 0), Handler)
             self.thread = threading.Thread(target=self.server.serve_forever, daemon=True, name='veil-browser-mcp')
             self.thread.start()
             self.started = True
-            self.monitor_snapshot = self.browser.monitor.snapshot()
             self.browser.begin_request()
             return self
         except Exception:

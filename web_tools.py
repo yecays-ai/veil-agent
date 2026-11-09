@@ -47,7 +47,7 @@ def search_proxy():
         proxies = urllib.request.getproxies()
     except Exception:
         return None
-    value = proxies.get('http') or proxies.get('https')
+    value = proxies.get('http') or proxies.get('https') or proxies.get('all')
     if not value:
         return None
     return value if '://' in value else 'http://' + value
@@ -322,17 +322,18 @@ class WebTools:
         engines = sorted(SEARCH_ENGINES, key=lambda engine: engine != self._last_engine)
         started = time.monotonic()
         for engine in engines:
-            if time.monotonic() - started >= SEARCH_TOTAL_SECONDS:
+            remaining = SEARCH_TOTAL_SECONDS - (time.monotonic() - started)
+            if remaining < 1:
                 failures.append('time limit reached')
                 break
             try:
-                found = list(DDGS(proxy=proxy, timeout=SEARCH_ENGINE_TIMEOUT_SECONDS).text(
+                found = list(DDGS(proxy=proxy, timeout=int(min(SEARCH_ENGINE_TIMEOUT_SECONDS, remaining))).text(
                     query, backend=engine, max_results=SEARCH_RESULT_LIMIT))
             except Exception as exc:
                 # Say what actually failed (class + short reason, never the query) so a blocked
                 # network is told apart from a library problem.
                 reason = _clip_utf8(f'{type(exc).__name__}: {exc}'.replace(query, '<query>'), 200)
-                failures.append(f'{engine}: {type(exc).__name__}')
+                failures.append(f'{engine}: ' + _clip_utf8(reason, 80))
                 continue
             answered = True
             self._last_engine = engine

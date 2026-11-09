@@ -1665,6 +1665,7 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
                 break
     except Exception as exc:
         return_text = 'The workbench failed: ' + str(exc)[:300]
+        stop = stop or return_text  # the run log in `finally` records why
         return ExecutorResult(return_text, '出错', cost, steps)
     finally:
         kill_tree(proc)

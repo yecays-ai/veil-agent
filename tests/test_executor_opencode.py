@@ -2150,9 +2150,6 @@ class WorkbenchSwitchApiTests(unittest.TestCase):
                 ws.load_state(root)
 
 
-if __name__ == '__main__':
-    unittest.main()
-
 
 class RunLogTests(unittest.TestCase):
     def test_run_log_keeps_the_session_and_bridged_errors_are_readable(self):
@@ -2173,3 +2170,7 @@ class RunLogTests(unittest.TestCase):
             saved = json.loads(logs[-1].read_text(encoding='utf-8'))
             self.assertEqual(saved['stop'], 'stopped by Lan')
             self.assertEqual(saved['messages'], messages)
+
+
+if __name__ == '__main__':
+    unittest.main()
