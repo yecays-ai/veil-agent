@@ -33,7 +33,7 @@ def make_checkpoint(root, *, answers=(), autonomy=False, foreground=None, protec
     checkpoint = vc.Checkpoint(work, ask=ask, autonomy=autonomy, log_path=root / 'log.jsonl',
                                forbidden=vc.forbidden_roots(root / 'veil', home=root / 'home'),
                                foreground=foreground or (lambda: ('notepad.exe', 'Untitled - Notepad')),
-                               protect=protect)
+                               protect=protect, window_rect=lambda: (0, 0, 10 ** 6, 10 ** 6), read_focus=lambda: None)
     return checkpoint, work, asked
 
 
@@ -197,13 +197,15 @@ class FakeWorker:
         self.ready.set_result(True)
         self.calls = []
         tool = lambda name: SimpleNamespace(name=name, description=name, inputSchema={'type': 'object'})
-        self.tools = [tool('Snapshot'), tool('Click'), tool('PowerShell')]
+        self.tools = [tool('Snapshot'), tool('Click'), tool('PowerShell'), tool('Type')]
 
     def call(self, name, args, should_stop=None):
         self.calls.append((name, args))
         if name == 'Click':
             raise RuntimeError('MCP 工具返回错误：element 7 not found')
-        return 'desktop tree'
+        if name == 'Type':
+            return 'Typed.'
+        return getattr(self, 'snapshot', 'desktop tree')
 
     def close(self):
         self.closing.set()
@@ -223,7 +225,7 @@ class GatewayTests(unittest.TestCase):
             with VeilMcpGateway(vc.COMPUTER_SERVER, {'command': 'x', 'args': []}, cp, vc.COMPUTER_TOOLS,
                                 should_stop=lambda: False, worker_factory=FakeWorker) as gateway:
                 names = [tool['name'] for tool in self.rpc(gateway, 'tools/list')['result']['tools']]
-                self.assertEqual(names, ['Snapshot', 'Click'])
+                self.assertEqual(names, ['Snapshot', 'Click', 'Type'])
                 ok = self.rpc(gateway, 'tools/call', {'name': 'Snapshot', 'arguments': {}})['result']
                 self.assertEqual((ok['isError'], ok['content'][0]['text']), (False, 'desktop tree'))
                 refused = self.rpc(gateway, 'tools/call', {'name': 'PowerShell', 'arguments': {'command': 'dir'}})
@@ -238,6 +240,58 @@ class GatewayTests(unittest.TestCase):
                 self.assertTrue(stopped['isError'])
             log = (Path(tmp) / 'log.jsonl').read_text(encoding='utf-8')
             self.assertIn('element 7 not found', log)
+
+    def type_through_gateway(self, cp, snapshot='desktop tree', **arguments):
+        with VeilMcpGateway(vc.COMPUTER_SERVER, {'command': 'x', 'args': []}, cp, vc.COMPUTER_TOOLS,
+                            should_stop=lambda: False, worker_factory=FakeWorker) as gateway:
+            gateway.worker.snapshot = snapshot
+            return self.rpc(gateway, 'tools/call', {'name': 'Type', 'arguments': arguments})['result']
+
+    def test_type_is_refused_outside_the_front_window(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cp, _, _ = make_checkpoint(Path(tmp))
+            cp.window_rect = lambda: (100, 100, 800, 600)
+            ok, why = cp.tool_call(vc.COMPUTER_SERVER, 'Type', {'text': 'hello', 'loc': [200, 200]})
+            self.assertTrue(ok)
+            ok, why = cp.tool_call(vc.COMPUTER_SERVER, 'Type', {'text': 'hello', 'loc': [1018, 872]})
+            self.assertFalse(ok)
+            self.assertIn('outside the window in front', why)
+            self.assertFalse(cp.tool_call(vc.COMPUTER_SERVER, 'Type', {'text': 'hello', 'loc': '[1018, 872]'})[0])
+            self.assertFalse(cp.tool_call(vc.COMPUTER_SERVER, 'Type', {'text': 'hello', 'loc': [10 ** 400, 1]})[0])
+
+    def test_type_result_follows_what_the_field_really_holds(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cp, _, _ = make_checkpoint(Path(tmp))
+            cp.read_focus = lambda: ''
+            empty = self.type_through_gateway(cp, text='hello', loc=[1, 1])
+            self.assertTrue(empty['isError'])
+            self.assertIn('did not take effect', empty['content'][0]['text'])
+            texts = iter(['old', 'old\r\nhello'])
+            cp.read_focus = lambda: next(texts)
+            done = self.type_through_gateway(cp, text='hello', loc=[1, 1])
+            self.assertEqual((done['isError'], done['content'][0]['text']), (False, 'Typed.'))
+            cp.read_focus = lambda: 'hello'  # the text was there before and nothing was added
+            stale = self.type_through_gateway(cp, text='hello', loc=[1, 1])
+            self.assertTrue(stale['isError'])
+
+    def test_unreadable_field_uses_before_after_snapshots_and_never_claims_success(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cp, _, _ = make_checkpoint(Path(tmp))
+            cp.read_focus = lambda: None
+            snaps = iter(['Edit | ', 'Edit | hello'])
+            with VeilMcpGateway(vc.COMPUTER_SERVER, {'command': 'x', 'args': []}, cp, vc.COMPUTER_TOOLS,
+                                should_stop=lambda: False, worker_factory=FakeWorker) as gateway:
+                gateway.worker.call = lambda name, args, should_stop=None: 'Typed.' if name == 'Type' else next(snaps)
+                seen = self.rpc(gateway, 'tools/call', {'name': 'Type', 'arguments': {'text': 'hello', 'loc': [1, 1]}})['result']
+            self.assertEqual((seen['isError'], seen['content'][0]['text']), (False, 'Typed.'))
+            unseen = self.type_through_gateway(cp, snapshot='Edit | hello', text='hello', loc=[1, 1])
+            self.assertFalse(unseen['isError'])
+            self.assertIn('NOT confirmed', unseen['content'][0]['text'])
+            blank = self.type_through_gateway(cp, text='  ', loc=[1, 1])
+            self.assertIn('NOT confirmed', blank['content'][0]['text'])
+            cp.ask = lambda _p: 'y'
+            entered = self.type_through_gateway(cp, text='hello', loc=[1, 1], press_enter=True)
+            self.assertIn('NOT confirmed', entered['content'][0]['text'])
 
 
 class HostRunTests(unittest.TestCase):

@@ -75,6 +75,8 @@ HOST_NOTE = (
     'veil_browser_* is your own background browser (headless, fresh profile, never on her screen): use it for '
     'searching and reading pages. veil_computer_* operates her real desktop (look with Snapshot, then App, Click, '
     'Type, Shortcut): use it only when the task needs a Windows app or asks you to show or open something for her. '
+    'Before Type, switch to the target window and take a Snapshot; type at a point inside it. After Type, trust VEIL\'s read-back result; report missing or unconfirmed input, and never claim this Type succeeded unless its result or a Snapshot taken after Type confirms the text. '
+    'When you have enough information to be useful, write the result into a file first, then keep verifying. '
     'Never start desktop apps or browsers from the shell. Saving, sending, closing and system changes are asked '
     'of her by VEIL; a refusal is final for that action, so report it instead of working around it.\n\n')
 

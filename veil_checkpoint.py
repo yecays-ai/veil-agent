@@ -148,6 +148,58 @@ def foreground_window():
         return None
 
 
+def foreground_rect():
+    """(left, top, right, bottom) of the foreground window on screen; None elsewhere or when it cannot be read."""
+    if os.name != 'nt':
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.windll.user32
+        hwnd = user32.GetForegroundWindow()
+        rect = wintypes.RECT()
+        if not hwnd or not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+            return None
+        return rect.left, rect.top, rect.right, rect.bottom
+    except Exception:
+        return None
+
+
+def focused_text():
+    """Text of the control that has the keyboard focus in the foreground window (classic edit and rich edit
+    controls answer WM_GETTEXT); None when it cannot be read (browsers, many modern controls, non-Windows)."""
+    if os.name != 'nt':
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class GUIThreadInfo(ctypes.Structure):
+            _fields_ = [('cbSize', wintypes.DWORD), ('flags', wintypes.DWORD), ('hwndActive', wintypes.HWND),
+                        ('hwndFocus', wintypes.HWND), ('hwndCapture', wintypes.HWND),
+                        ('hwndMenuOwner', wintypes.HWND), ('hwndMoveSize', wintypes.HWND),
+                        ('hwndCaret', wintypes.HWND), ('rcCaret', wintypes.RECT)]
+
+        user32 = ctypes.windll.user32
+        hwnd = user32.GetForegroundWindow()
+        if not hwnd:
+            return None
+        info = GUIThreadInfo()
+        info.cbSize = ctypes.sizeof(info)
+        if not user32.GetGUIThreadInfo(user32.GetWindowThreadProcessId(hwnd, None), ctypes.byref(info)) \
+                or not info.hwndFocus:
+            return None
+        limit = 65536
+        buffer = ctypes.create_unicode_buffer(limit)
+        result = ctypes.c_size_t()
+        # WM_GETTEXT = 0x0D, SMTO_ABORTIFHUNG | SMTO_BLOCK = 0x3
+        if not user32.SendMessageTimeoutW(info.hwndFocus, 0x0D, limit, buffer, 0x3, 1000, ctypes.byref(result)):
+            return None
+        return buffer.value if result.value or buffer.value else None
+    except Exception:
+        return None
+
+
 def _is_installed_program(target, which=None):
     """A program in Windows or Program Files (a bare name like notepad.exe is looked up on PATH first and must
     land there); anything from a user-writable place (Downloads, any Temp folder, her projects) still asks."""
@@ -174,7 +226,7 @@ class Checkpoint:
     """One host run's permission checkpoint. `ask(prompt)` is Lan's approval card ('y' approves)."""
 
     def __init__(self, workdir, *, ask, autonomy, log_path, forbidden=(), task_scope=None, allow_network=None,
-                 foreground=foreground_window, protect=()):
+                 foreground=foreground_window, protect=(), window_rect=foreground_rect, read_focus=focused_text):
         self.workdir = Path(workdir).resolve()
         self.ask = ask
         self.autonomy = bool(autonomy)
@@ -184,6 +236,8 @@ class Checkpoint:
         self.task_scope = task_scope
         self.allow_network = allow_network
         self.foreground = foreground
+        self.window_rect = window_rect
+        self.read_focus = read_focus
         self.protect = [_norm(self.workdir / item) for item in protect]
         self.approvals = []
         self.grants, self.denied = set(), set()
@@ -406,6 +460,33 @@ class Checkpoint:
             return 'a security or payment window is in front'
         return ''
 
+    def _outside_foreground(self, args):
+        """Typing clicks the given point first; a point outside the window in front would type into another window
+        (or nothing). The model must switch to the target window first."""
+        loc = args.get('loc')
+        if isinstance(loc, str):
+            try:
+                loc = json.loads(loc)
+            except ValueError:
+                loc = None
+        rect = self.window_rect() if self.window_rect else None
+        if not isinstance(loc, (list, tuple)) or len(loc) != 2:
+            return ''
+        if not rect:
+            return 'the position of the window in front cannot be read' if self.window_rect and os.name == 'nt' else ''
+        try:
+            x, y = float(loc[0]), float(loc[1])
+        except (TypeError, ValueError, OverflowError):
+            return 'the point is not a valid screen position'
+        left, top, right, bottom = rect
+        if left <= x < right and top <= y < bottom:
+            return ''
+        window = self.foreground() if self.foreground else None
+        title = ex._safe_display(window[1])[:60] if window else ''
+        return (f'the point ({int(x)},{int(y)}) is outside the window in front ("{title}", '
+                f'{left},{top} to {right},{bottom}); open or switch to the target window first (App), '
+                'take a Snapshot, then type into a point inside it')
+
     def tool_call(self, server, name, arguments):
         """(allowed: bool, reason) for one desktop/browser tool call with its real arguments."""
         arguments = arguments if isinstance(arguments, dict) else {}
@@ -449,6 +530,8 @@ class Checkpoint:
         if name in {'Scroll', 'Move', 'Click'}:
             return self._record(COMPUTER, operation, ALLOW, 'pointer')
         if name == 'Type':
+            if why := self._outside_foreground(args):
+                return self._record(COMPUTER, operation, DENY, why)
             if str(args.get('press_enter', '')).casefold() in {'true', '1'}:
                 return self._ask(COMPUTER, 'Peter 想输入文字并按回车提交（可能发送或提交内容）。同意吗？y/N ',
                                  ('type', 'submit'), 'type:submit')
