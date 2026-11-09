@@ -134,7 +134,8 @@ class _StderrTail:
         self.sink = os.fdopen(write_fd, 'wb')
         self.keep, self.data = keep, b''
         self.lock = threading.Lock()
-        threading.Thread(target=self._pump, args=(read_fd,), daemon=True).start()
+        self.pump = threading.Thread(target=self._pump, args=(read_fd,), daemon=True)
+        self.pump.start()
 
     def _pump(self, read_fd):
         with os.fdopen(read_fd, 'rb') as source:
@@ -152,6 +153,8 @@ class _StderrTail:
             pass
 
     def text(self):
+        self.close()  # EOF for the reader once the child is gone, so its last lines have been read
+        self.pump.join(0.5)
         with self.lock:
             raw = self.data
         for encoding in ('utf-8', 'gbk'):
