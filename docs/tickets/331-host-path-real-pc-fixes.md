@@ -8,9 +8,9 @@
 2. 日志只有 `unhandled errors in a TaskGroup (1 sub-exception)`：`executor_opencode.error_text` 展开 ExceptionGroup，写出第一个具体异常。
 3. `uvx` 被 pip 装在 Python 的 Scripts 目录，不在 PATH：`host_executor._python_script` 也在当前 Python 的 Scripts 里找，避免桌面悄悄关掉。
 
-## 未改（等 Lan 定）
+## 一个工具起不来，只少这一个
 
-后台浏览器起不来时整个任务停止，桌面能力也用不了。是否改成只关浏览器、其余照常继续。
+以前浏览器或桌面任何一个启动失败，整个任务就判失败。现在只丢掉起不来的那个，记 `tool_unavailable` 日志，并告诉模型“这次没有 X”，其余照常跑（Lan 明确要求）。
 
 ## 验收
 

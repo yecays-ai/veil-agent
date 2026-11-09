@@ -5,7 +5,7 @@
 - 真机（Lan 的 Windows）跑 329/330 的场景，后台浏览器起不来：`npx` 在 Windows 上是 `.cmd`，经 `cmd /c` 执行，而 `--proxy-bypass <-loopback>` 里的 `<` `>` 被当成重定向。已去掉这个参数（Playwright 自己会加），`mcp_services._stdio_server_command` 也改成给含 `< > | & ^` 的参数加引号，同类问题一起解决。
 - 日志里只有 `unhandled errors in a TaskGroup (1 sub-exception)`，真正原因被吞掉：`executor_opencode.error_text` 把 ExceptionGroup 展开到第一个具体异常，网关启动失败和 `start_error` 日志都用它。
 - uv 用 pip 装在 Python 的 Scripts 目录，这个目录不在 PATH 里，`shutil.which('uvx')` 找不到，桌面会悄悄关掉：`host_executor._python_script` 也会在当前 Python 的 Scripts 里找。
-- 未改：浏览器起不来时整个任务停止（桌面也用不了）。要不要改成只关浏览器继续，等 Lan 定。
+- 一个工具起不来不再拖垮整个任务（Lan 明确要求）：`executor_opencode.run` 只丢掉起不来的那个，写一条 `tool_unavailable` 日志，并在任务开头告诉模型“这次没有 X”；桌面、浏览器、文件互不影响。
 
 ## 工单 330（2026-11-10）：后台浏览器只能上公网
 

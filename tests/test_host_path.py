@@ -264,7 +264,7 @@ class HostRunTests(unittest.TestCase):
         self.assertTrue(config['experimental']['continue_loop_on_deny'])
         self.assertEqual(config['provider']['relay']['options']['apiKey'], 't')
 
-    def test_gateway_start_failure_is_reported_not_raised(self):
+    def test_one_tool_failing_to_start_only_removes_that_tool(self):
         class Broken:
             server_id = 'veil_browser'
 
@@ -273,17 +273,27 @@ class HostRunTests(unittest.TestCase):
 
             def __exit__(self, *_):
                 pass
-        costs = []
+        sent = {}
+
+        def popen(command, **kwargs):
+            sent.update(kwargs['env'])
+            raise OSError('stop here')
         with tempfile.TemporaryDirectory() as tmp:
             cp, work, _ = make_checkpoint(Path(tmp))
+            good = VeilMcpGateway(vc.COMPUTER_SERVER, {'command': 'x'}, cp, vc.COMPUTER_TOOLS,
+                                  should_stop=lambda: False, worker_factory=FakeWorker)
             proxy = SimpleNamespace(token='t', port=1, local_base=lambda host: 'http://x', close=lambda: None,
                                     allow_hosts=lambda hosts: None, local_health=lambda host: '')
-            result = ex.run('t', command='opencode', workdir=work, home=Path(tmp) / 'home',
-                            provider={'model': 'm', 'base_url': 'http://x'}, key='k', limits={}, autonomy=False,
-                            ask=lambda _p: 'n', stopped=lambda: False, record_cost=costs.append,
-                            proxy_factory=lambda *a, **k: proxy, checkpoint=cp, host_gateways=[Broken()])
-        self.assertEqual((result.state, result.reason), ('出错', 'gateway_failed'))
-        self.assertIn('npx not found', result.text)
+            ex.run('t', command='opencode', workdir=work, home=Path(tmp) / 'home',
+                   provider={'model': 'm', 'base_url': 'http://x'}, key='k', limits={}, autonomy=False,
+                   ask=lambda _p: 'n', stopped=lambda: False, record_cost=lambda _c: None,
+                   proxy_factory=lambda *a, **k: proxy, popen=popen, checkpoint=cp,
+                   host_gateways=[Broken(), good])
+            log = (Path(tmp) / 'log.jsonl').read_text(encoding='utf-8')
+        config = json.loads(sent['OPENCODE_CONFIG_CONTENT'])
+        self.assertEqual(list(config['mcp']), [vc.COMPUTER_SERVER])
+        self.assertIn('tool_unavailable', log)
+        self.assertIn('npx not found', log)
 
     def test_upstream_services_are_pinned_and_desktop_is_windows_only(self):
         which = lambda name: '/bin/' + name
