@@ -85,10 +85,10 @@ def run(script, **overrides):
 
 
 class BrowserGatewayConfigTests(unittest.TestCase):
-    def test_workbench_description_routes_multi_step_windows_tasks_to_one_run(self):
+    def test_workbench_description_keeps_windows_software_work_in_chat(self):
         description = ex.TOOL_SCHEMA['function']['description']
-        self.assertIn('Windows UIA', description)
-        self.assertIn('do not split', description)
+        self.assertIn('cannot see or operate Windows apps', description)
+        self.assertNotIn('Windows UIA', description)
 
     def test_workbench_config_injects_only_the_task_local_browser_service(self):
         gateway = SimpleNamespace(url='http://host.docker.internal:4567/mcp', token='run-token')
@@ -1263,7 +1263,7 @@ max_steps = 4
         off = self.executor.replace('enabled = true', 'enabled = false')
         self.assertNotIn('workbench', self.names(self.chat(off)))
 
-    def test_desktop_actions_leave_chat_when_workbench_runs_them(self):
+    def test_desktop_actions_stay_in_chat_when_workbench_is_on(self):
         schema = {'type': 'object', 'properties': {}}
         desktop = [SimpleNamespace(name=name, description='d', inputSchema=schema) for name in
                    ('windows_observe', 'windows_launch', 'windows_manage', 'windows_control_action')]
@@ -1276,15 +1276,11 @@ max_steps = 4
                 chat.tools.windows_interaction_tools = SimpleNamespace(tools=desktop[1:])
             return {s['function']['name'] for s in chat.tool_schemas()}
 
+        actions = {'windows_observe', 'windows_launch', 'windows_manage', 'windows_control_action'}
         with_workbench = names(self.executor)
         self.assertIn('workbench', with_workbench)
-        self.assertIn('windows_observe', with_workbench)
-        for name in ('windows_launch', 'windows_manage', 'windows_control_action'):
-            self.assertNotIn(name, with_workbench)
-        without_workbench = names('')
-        self.assertTrue({'windows_launch', 'windows_manage', 'windows_control_action'} <= without_workbench)
-        no_desktop_bridge = names(self.executor, with_desktop=False)
-        self.assertIn('windows_launch', no_desktop_bridge)
+        self.assertTrue(actions <= with_workbench)  # ticket 325: desktop work stays in main chat
+        self.assertTrue(actions <= names(''))
 
     def write_local(self, text):
         path = self.root / 'data' / 'test'

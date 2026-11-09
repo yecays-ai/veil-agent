@@ -74,11 +74,9 @@ TOOL_SCHEMA = {'type': 'function', 'function': {
         'the project folder itself, so name the project rather than giving file paths or system commands. '
         'When isolated browsing is enabled for this role, it also has a public browser for research: it can open '
         'public HTTPS pages, follow links, scroll, fill a public search box and submit public GET searches in one '
-        'run, without login, upload, download or private-network access. When Windows UIA is enabled, it can also '
-        'discover an allowed app, observe one exact window (including a transient target-window screenshot when '
-        'needed), type through a fresh UIA control, switch back and verify the result in the same run. For a '
-        'several-step public research or Windows software task, hand it over once and ask for a report; do not split '
-        'it into chat-level browser or desktop micro-actions. You decide what to do with the result.'),
+        'run, without login, upload, download or private-network access. For several-step public research, hand it '
+        'over once and ask for a report. It cannot see or operate Windows apps; do Windows software work yourself '
+        'with your desktop tools. You decide what to do with the result.'),
     'parameters': {'type': 'object', 'properties': {
         'task': {'type': 'string', 'minLength': 1, 'maxLength': 4000,
                  'description': 'What to do and what to report back.'},

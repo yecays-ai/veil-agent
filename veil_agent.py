@@ -1890,9 +1890,6 @@ def collapse_all_history_photos(messages):
             message['content'] = PHOTO_PLACEHOLDER + (('\n' + text) if text else '')
 
 
-# Desktop actions that run inside the workbench task (same names as WindowsWorkbenchGateway).
-WORKBENCH_DESKTOP_ACTIONS = frozenset({'windows_launch', 'windows_manage', 'windows_control_action'})
-
 class ChatOutput(str):
     def __new__(cls, text, media=None, message_id=None, request_id=None, memory_refs=None, attachments=None,
                 is_error=False, *, virtual_card=None, virtual_card_event=None):
@@ -2109,14 +2106,6 @@ class Chat:
         if self.workbench_ready() and self.tool_mode and not self.glance_mode:
             from executor_opencode import TOOL_SCHEMA as WORKBENCH_TOOL
             schemas.append({'type': 'function', 'function': dict(WORKBENCH_TOOL['function'])})
-            # Multi-step desktop work belongs to the workbench's own loop; keep read-only looking in chat.
-            files = getattr(self.tools, 'files', None) or self.tools
-            observer = getattr(files, 'windows_tools', None)
-            interaction = getattr(files, 'windows_interaction_tools', None)
-            if (observer is not None and interaction is not None
-                    and getattr(observer, 'tools', None) and getattr(interaction, 'tools', None)):
-                schemas = [item for item in schemas
-                           if item['function']['name'] not in WORKBENCH_DESKTOP_ACTIONS]
         if self.maintenance is not None and not self.glance_mode:
             from maintenance import TOOL_SCHEMA as MAINTENANCE_TOOL
             schema = {'type': 'function', 'function': dict(MAINTENANCE_TOOL['function'])}
@@ -4101,14 +4090,9 @@ class Chat:
             files = getattr(self.tools, 'files', None) or self.tools
             operation_lock = getattr(files, 'workspace_operation_lock', None) if inside_workspace else None
             browser = getattr(files, 'browser_tools', None)
-            windows_observer = getattr(files, 'windows_tools', None)
-            windows_interaction = getattr(files, 'windows_interaction_tools', None)
+            # Ticket 325: Windows desktop work stays in main chat until the workbench desktop path passes a real
+            # end-to-end run on Lan's PC; the workbench gets no desktop gateway (code, files and public browser only).
             windows_gateway = None
-            if (not maintenance and windows_observer is not None and windows_interaction is not None
-                    and windows_observer.tools and windows_interaction.tools):
-                from windows_interaction import WindowsWorkbenchGateway
-                windows_gateway = lambda stop, container: WindowsWorkbenchGateway(
-                    windows_observer, windows_interaction, stop, self.approval, container=container)
             with operation_lock if operation_lock else nullcontext():
                 outcome = ex.run(task, command=command, workdir=Path(workdir), home=role / 'workbench-home',
                                  provider=provider, key=key, limits=limits, autonomy=autonomy, ask=self.approval,
