@@ -105,6 +105,15 @@ TOOL_SCHEMA = {'type': 'function', 'function': {
 }}
 
 
+def error_text(exc):
+    """The real cause of `exc`: an ExceptionGroup (anyio TaskGroup) is opened down to its first leaf."""
+    seen = 0
+    while getattr(exc, 'exceptions', None) and seen < 10:
+        exc, seen = exc.exceptions[0], seen + 1
+    text = str(exc) or type(exc).__name__
+    return text if text.startswith(type(exc).__name__) else f'{type(exc).__name__}: {text}'
+
+
 class HostGatewayError(RuntimeError):
     """A VEIL MCP gateway of the host path could not start (its upstream server did not answer)."""
 
@@ -1554,7 +1563,7 @@ def _run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, 
                 entered.append(host_gateway.__enter__())
             except Exception as exc:
                 raise HostGatewayError(f'{host_gateway.server_id} could not start: '
-                                       + (str(exc) or type(exc).__name__)[:300]) from exc
+                                       + error_text(exc)[:300]) from exc
         config = build_config(provider, proxy.token, proxy.local_base(proxy_host), protect=protect,
                               browser_gateway=bridge, windows_gateway=desktop_bridge,
                               host_mcp=({item.server_id: item.config() for item in entered}

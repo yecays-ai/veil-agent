@@ -291,7 +291,8 @@ class HostRunTests(unittest.TestCase):
         services = host_executor.upstream_services(tempfile.mkdtemp(), which=which, proxy_port=4321)
         browser = services[vc.BROWSER_SERVER][0]['args']
         self.assertEqual(browser[browser.index('--proxy-server') + 1], 'http://127.0.0.1:4321')
-        self.assertEqual(browser[browser.index('--proxy-bypass') + 1], '<-loopback>')
+        # No `<`/`>` on the command line: cmd.exe (npx is a .cmd) would read them as redirections.
+        self.assertFalse(any(ch in arg for arg in browser for ch in '<>|&^'), browser)
         settings = json.loads(Path(browser[browser.index('--config') + 1]).read_text(encoding='utf-8'))
         self.assertIn('--webrtc-ip-handling-policy=disable_non_proxied_udp', settings['browser']['launchOptions']['args'])
         self.assertIn('@playwright/mcp@' + host_executor.PINNED['playwright-mcp'], browser)

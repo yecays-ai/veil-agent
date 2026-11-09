@@ -1,8 +1,15 @@
 # HANDOFF
 
+## 工单 331（2026-11-10）：真机实测发现的两个问题
+
+- 真机（Lan 的 Windows）跑 329/330 的场景，后台浏览器起不来：`npx` 在 Windows 上是 `.cmd`，经 `cmd /c` 执行，而 `--proxy-bypass <-loopback>` 里的 `<` `>` 被当成重定向。已去掉这个参数（Playwright 自己会加），`mcp_services._stdio_server_command` 也改成给含 `< > | & ^` 的参数加引号，同类问题一起解决。
+- 日志里只有 `unhandled errors in a TaskGroup (1 sub-exception)`，真正原因被吞掉：`executor_opencode.error_text` 把 ExceptionGroup 展开到第一个具体异常，网关启动失败和 `start_error` 日志都用它。
+- uv 用 pip 装在 Python 的 Scripts 目录，这个目录不在 PATH 里，`shutil.which('uvx')` 找不到，桌面会悄悄关掉：`host_executor._python_script` 也会在当前 Python 的 Scripts 里找。
+- 未改：浏览器起不来时整个任务停止（桌面也用不了）。要不要改成只关浏览器继续，等 Lan 定。
+
 ## 工单 330（2026-11-10）：后台浏览器只能上公网
 
-- 宿主通道的后台浏览器（Playwright MCP）现在只经 VEIL 的公网代理出网（复用 `browser_tools.PublicProxy`：只放行公网 IP 的 HTTPS 443，DNS 由代理解析并固定），并加 `--proxy-bypass <-loopback>`。点链接、重定向、脚本、iframe 都走这条路，到不了家里的内网、本机或明文 HTTP。WebRTC 用 `--config` 加 `--webrtc-ip-handling-policy=disable_non_proxied_udp`（不走代理的 UDP 关掉；云端已确认这两个参数和代理参数一起出现在浏览器进程上）。
+- 宿主通道的后台浏览器（Playwright MCP）现在只经 VEIL 的公网代理出网（复用 `browser_tools.PublicProxy`：只放行公网 IP 的 HTTPS 443，DNS 由代理解析并固定），（Playwright 自己会加 `<-loopback>`，所以连 localhost 也走代理；命令行里不能出现 `<` `>`，Windows 的 cmd 会当成重定向，真机实测因此起不来）。点链接、重定向、脚本、iframe 都走这条路，到不了家里的内网、本机或明文 HTTP。WebRTC 用 `--config` 加 `--webrtc-ip-handling-policy=disable_non_proxied_udp`（不走代理的 UDP 关掉；云端已确认这两个参数和代理参数一起出现在浏览器进程上）。
 - `host_executor.BrowserNetwork` 在 `prepare` 里启动，挂在浏览器网关上，网关退出时关闭；代理起不来就不提供浏览器（只记一条说明）。`executor_opencode.run` 无论从哪里返回（包括提前拒绝、已停止）都会对所有宿主网关调用 `__exit__`（没进入的也会关掉它带的代理）。
 - 云端用 Chromium 实测：经这个代理访问 127.0.0.1 上的网页会失败（ERR_EMPTY_RESPONSE）。未验证：Lan 电脑上的 Edge。
 
