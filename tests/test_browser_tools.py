@@ -2,6 +2,7 @@
 import asyncio
 import json
 import os
+import threading
 import time
 import urllib.request
 import unittest
@@ -100,6 +101,16 @@ class BrowserWorkbenchGatewayTests(unittest.TestCase):
             BrowserWorkbenchGateway.request_size(str(MAX_MCP_REQUEST_BYTES + 1))
         with self.assertRaises(ValueError):
             BrowserWorkbenchGateway.request_size('not-a-size')
+
+    def test_failed_serve_thread_start_closes_the_server_without_hanging(self):
+        browser = SimpleNamespace(begin_request=lambda: None, invoke=lambda *_args, **_kwargs: ('', '成功', ''),
+                                  monitor=Idle())
+        gateway = BrowserWorkbenchGateway(browser, lambda: False)
+        with patch.object(threading.Thread, 'start', side_effect=RuntimeError('no thread')):
+            with self.assertRaises(RuntimeError):
+                gateway.__enter__()
+        self.assertIsNone(gateway.thread)
+        self.assertIsNone(gateway.server)
 
 
 class BrowserSafetyTests(unittest.TestCase):

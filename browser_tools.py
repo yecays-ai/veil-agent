@@ -436,6 +436,7 @@ class BrowserWorkbenchGateway:
         self.token = secrets.token_urlsafe(24)
         self.host = '0.0.0.0' if container else '127.0.0.1'
         self.server = self.thread = None
+        self.started = False
         self.cancelled = threading.Event()
         self.monitor_snapshot = None
 
@@ -533,6 +534,7 @@ class BrowserWorkbenchGateway:
             self.server = ThreadingHTTPServer((self.host, 0), Handler)
             self.thread = threading.Thread(target=self.server.serve_forever, daemon=True, name='veil-browser-mcp')
             self.thread.start()
+            self.started = True
             self.monitor_snapshot = self.browser.monitor.snapshot()
             self.browser.begin_request()
             return self
@@ -546,11 +548,16 @@ class BrowserWorkbenchGateway:
         return f'http://{host}:{self.server.server_address[1]}/mcp'
 
     def __exit__(self, *_args):
+        started = self.started
         self.stop()
         if self.server is not None:
-            if self.thread is not None:
-                # shutdown() waits for serve_forever(); never call it when the thread never started.
+            if started:
+                # shutdown() waits for serve_forever(); a failed thread start never runs it.
                 self.server.shutdown()
             self.server.server_close()
+            self.server = None
         if self.thread is not None:
-            self.thread.join(timeout=2)
+            if started:
+                self.thread.join(timeout=2)
+            self.thread = None
+        self.started = False
