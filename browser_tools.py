@@ -525,7 +525,7 @@ class BrowserWorkbenchGateway:
                 except OverflowError:
                     return self._send({'jsonrpc': '2.0', 'id': None,
                                        'error': {'code': -32600, 'message': 'request body too large'}}, 413)
-                except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                except (TypeError, ValueError, KeyError, json.JSONDecodeError) as exc:
                     return self._send({'jsonrpc': '2.0', 'id': None,
                                        'error': {'code': -32602, 'message': str(exc)[:200]}}, 400)
 
