@@ -30,6 +30,7 @@ from urllib.error import HTTPError, URLError
 
 from attachment_utils import (ATTACHMENT_EXTENSIONS, MAX_ATTACHMENT_BYTES,
                               inspect_attachment, redirected_path, valid_attachment_row)
+from model_settings import SettingsError
 from veil_agent import (ROOT, AUTONOMY_WAKE, CODEX_WATCH_WAKE, GLANCE_WAKE, MAX_PHOTO_BYTES,
                         ActivityState, Budget, Chat, Store, UserError,
                         load_character, memory_available, now, make_model, make_voice, run_chat,
@@ -1191,12 +1192,14 @@ class Hub(ScreenPopMixin):
                 return False
             return self.autonomy.set_quiet_enabled(enabled)
 
-    def refresh_models(self):
+    def refresh_models(self, reload=False):
         """Ticket 134: rebuild the 模型 card's data; called at start and after every change."""
         models = getattr(getattr(self.chat, 'cfg', None), 'models', None)
         if models is None:
             self.models_view = None
             return None
+        if reload:
+            models.reload()
         view = models.public()
         view['background_running'] = self.background_running
         view['background_restart'] = (self.background_running is not None
@@ -1206,25 +1209,37 @@ class Hub(ScreenPopMixin):
 
     def save_models(self, payload):
         models = self.chat.cfg.models
-        with models.env_lock, models.lock:
-            before = models.startup_choice('peter')
-            models.save(payload)
-            daily, monthly = models.limits()
-            if self.acceptance_limits:
-                daily = min(daily, self.acceptance_limits[0])
-                monthly = min(monthly, self.acceptance_limits[1])
-            self.chat.budget.daily, self.chat.budget.monthly = daily, monthly
-            after = models.startup_choice('peter')
-            if after is not None and (before is None or after[0] != before[0] or after[2] != before[2]):
-                self.chat.switch_model(after[1], after[2])
+        try:
+            with models.env_lock, models.lock:
+                before = models.startup_choice('peter')
+                models.save(payload)
+                daily, monthly = models.limits()
+                if self.acceptance_limits:
+                    daily = min(daily, self.acceptance_limits[0])
+                    monthly = min(monthly, self.acceptance_limits[1])
+                self.chat.budget.daily, self.chat.budget.monthly = daily, monthly
+                after = models.startup_choice('peter')
+                if after is not None and (before is None or after[0] != before[0] or after[2] != before[2]):
+                    self.chat.switch_model(after[1], after[2])
+        except SettingsError as exc:
+            if '另一个进程' in str(exc):
+                models.reload()
+                self.refresh_models()
+            raise
         return self.refresh_models()
 
     def use_model(self, role, model_id):
         models = self.chat.cfg.models
-        with models.env_lock, models.lock:
-            model_id, name, provider = models.use(role, model_id)
-            if role == 'peter':
-                self.chat.switch_model(name, provider)
+        try:
+            with models.env_lock, models.lock:
+                model_id, name, provider = models.use(role, model_id)
+                if role == 'peter':
+                    self.chat.switch_model(name, provider)
+        except SettingsError as exc:
+            if '另一个进程' in str(exc):
+                models.reload()
+                self.refresh_models()
+            raise
         return self.refresh_models()
 
     def set_codex_watch(self, enabled):
@@ -1753,6 +1768,11 @@ def make_handler(hub, token):
                     after = max(0, int((query.get('after') or ['0'])[0]))
                 except ValueError:
                     after = 0
+                if after == 0 and not hub.busy:
+                    try:
+                        hub.refresh_models(reload=True)
+                    except SettingsError:
+                        pass
                 self._send(200, hub.snapshot(after))
 
         def _get_stickers(self):
