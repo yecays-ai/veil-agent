@@ -14,7 +14,7 @@ from unittest.mock import Mock, patch
 from veil_agent import (Chat, Budget, Store, build_self_description, conservative_token_ratio,
                         estimate_request_tokens,
                         load_character, make_model, model_tool_result, run_chat, UserError,
-                        RequestFailed, RequestNotSent, TooLong, send_message_schema)
+                        RequestFailed, RequestNotSent, TooLong, send_message_schema, toml_provider)
 
 
 def sent_facts(messages):
@@ -68,6 +68,15 @@ output_cny_per_million = "8"
         rows = self.store.read('test/chat.jsonl')
         self.assertEqual([r['role'] for r in rows], ['user', 'assistant', 'user', 'assistant'])
         self.assertTrue(all(r['time'] for r in rows))
+
+    def test_provider_keeps_explicit_image_input_capability(self):
+        provider = toml_provider({
+            'model': 'vision-fixture', 'base_url': 'https://example.invalid/v1', 'api_key_env': 'KEY',
+            'max_input_tokens': 1000, 'input_cny_per_million': '2',
+            'cached_input_cny_per_million': '1', 'output_cny_per_million': '8',
+            'input_modalities': ['text', 'image'],
+        })
+        self.assertEqual(provider['input_modalities'], ['text', 'image'])
 
     def test_recent_keeps_multiple_assistant_messages_in_one_user_round(self):
         for role, content in [('user', 'fictional question'),

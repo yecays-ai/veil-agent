@@ -74,8 +74,11 @@ TOOL_SCHEMA = {'type': 'function', 'function': {
         'the project folder itself, so name the project rather than giving file paths or system commands. '
         'When isolated browsing is enabled for this role, it also has a public browser for research: it can open '
         'public HTTPS pages, follow links, scroll, fill a public search box and submit public GET searches in one '
-        'run, without login, upload, download or private-network access. For a several-page public research job, '
-        'hand it over once and ask for a report. You decide what to do with the result.'),
+        'run, without login, upload, download or private-network access. When Windows UIA is enabled, it can also '
+        'discover an allowed app, observe one exact window (including a transient target-window screenshot when '
+        'needed), type through a fresh UIA control, switch back and verify the result in the same run. For a '
+        'several-step public research or Windows software task, hand it over once and ask for a report; do not split '
+        'it into chat-level browser or desktop micro-actions. You decide what to do with the result.'),
     'parameters': {'type': 'object', 'properties': {
         'task': {'type': 'string', 'minLength': 1, 'maxLength': 4000,
                  'description': 'What to do and what to report back.'},
@@ -1208,13 +1211,16 @@ def build_config(provider, token, base_url, protect=(), browser_gateway=None, wi
     context = int(provider.get('max_input_tokens', 32768))
     edit_permission = ('ask' if not protect else
                        {'*': 'ask', **{Path(path).as_posix(): 'deny' for path in protect}})
+    model = {'name': provider['model'], 'tool_call': True,
+             'limit': {'context': context, 'output': min(8192, context // 4)}}
+    if provider.get('input_modalities'):
+        model['modalities'] = {'input': list(provider['input_modalities']), 'output': ['text']}
     config = {
         '$schema': 'https://opencode.ai/config.json',
         'provider': {'relay': {
             'npm': '@ai-sdk/openai-compatible', 'name': 'Relay',
             'options': {'baseURL': base_url, 'apiKey': token},
-            'models': {provider['model']: {'name': provider['model'], 'tool_call': True,
-                                           'limit': {'context': context, 'output': min(8192, context // 4)}}}}},
+            'models': {provider['model']: model}}},
         # Every shell request reaches VEIL, which has the current task's project scope and approval state.
         # Reading secrets is denied outright by OpenCode before it can expose them to the model.
         'permission': {'bash': {'*': 'ask'},

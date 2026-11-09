@@ -721,6 +721,12 @@ def toml_provider(raw):
     if provider['cached_input_cny_per_million'] > provider['input_cny_per_million']:
         raise ValueError('cached rate exceeds regular rate')
     provider['max_input_tokens'] = positive_int(provider['max_input_tokens'])
+    modalities = provider.get('input_modalities')
+    if modalities is not None:
+        if (not isinstance(modalities, list) or not modalities
+                or any(item not in ('text', 'image') for item in modalities)
+                or 'text' not in modalities):
+            raise ValueError('input_modalities')
     return provider
 
 

@@ -4,6 +4,7 @@
 
 - 分支 `ticket/322-windows-continuous-execution`，PR #321：https://github.com/yecays-ai/veil-agent/pull/321，独立工作树 `E:\Peter-Agent\VEIL\worktrees\322-windows-continuous-execution`，基于合并 PR #319 后的 `main` (`1e66d70`)。
 - 实现：`WindowsWorkbenchGateway` 复用既有 Windows observer、discovery 和 interaction；工作台只收到发现应用、列窗/观察、启动/切换及 UIA 控件动作。每个任务独立令牌，Docker 只放行本次 `VEIL_WINDOWS_PORT`；停止和所有工作台限制会关闭网关。
-- 没有替换 UIA 底层，也没有接入画布坐标、桌面图标或自绘界面视觉定位。`windows_observe` 在该通道固定为 UIA，不传截图；UIA 无法识别时会按原规则停止。
-- 自动检查：`python -m unittest -v tests.test_executor_opencode tests.test_windows_interaction` 在本机环境为 156 通过、13 跳过；`py_compile` 已通过。还没有真实 Peter/记事本体验，也没有真实容器调用 Windows MCP 的验收。
-- 下一步：等待 Lan 按 `STATUS.md` 的三步做 Windows 体验验收；未通过前不合并。只处理 PR 的实质审查问题。
+- 没有替换 UIA 底层，也没有接入画布坐标、桌面图标或自绘界面视觉定位。`windows_observe` 保留原有目标窗口截图回退，并把 PNG 以 MCP 图像内容给工作台模型；模型不能安全判读或定位时，仍必须停止。
+- 本次补强：工作台说明要求把多步 Windows 任务一次交给工作台；网关在任务开始记录输入快照，任何后续人工输入都会粘性停止整项任务。既有 `DesktopInputMonitor` 的 Peter 自身输入排除逻辑未变。
+- 已实测 Docker→OpenCode→Windows MCP 的截图内容抵达下一模型请求（本机 Docker 镜像）。历史自动检查为 156 通过、13 跳过；这不等同真实 Peter/记事本。当前活跃 `deepseek-flash` 只有文本输入；`gpt-4.1-mini` 已明确配置 `input_modalities = ["text", "image"]`，但不得自动切换。
+- 下一步：Lan 明确选择视觉模型后，运行真实记事本全链路、浏览器→记事本同任务，并请 Lan 实际移动鼠标/按键验证不可伪造的人工接管；PR #321 持续不合并。

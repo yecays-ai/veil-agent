@@ -23,7 +23,7 @@ from windows_interaction import (
     load_application_allowlist,
     validate_applications,
 )
-from windows_observer import ObservationError, WINDOW_TOOL_SCHEMAS
+from windows_observer import ObservationError, WINDOW_TOOL_SCHEMAS, WindowsToolResult
 
 
 WINDOW_ID = 'w-' + '1' * 24
@@ -1427,15 +1427,17 @@ max_steps = 3
             backend.apply_canvas_action({'handle': 12345}, 'stroke', {'points': [[50, 60]]}, lambda: False, monitor, None)
 
 class WindowsWorkbenchGatewayTests(unittest.TestCase):
-    def test_gateway_exposes_only_uia_task_tools_and_disables_visual_fallback(self):
+    def test_gateway_exposes_only_uia_task_tools_and_returns_target_window_screenshot(self):
         calls = []
         observer = SimpleNamespace(
             tools=WINDOW_TOOL_SCHEMAS,
             begin_request=lambda: None,
-            invoke=lambda name, args, **_kwargs: (calls.append((name, args)) or ('observed', '成功', name)),
+            invoke=lambda name, args, **_kwargs: (calls.append((name, args)) or (
+                WindowsToolResult('observed', image_data_uri='data:image/png;base64,c2NyZWVuc2hvdA=='), '成功', name)),
         )
         interaction = SimpleNamespace(
             tools=WINDOWS_INTERACTION_TOOL_SCHEMAS,
+            input_monitor=FakeInputMonitor(),
             invoke=lambda name, args, *_args, **_kwargs: ('acted', '成功', name),
         )
         with WindowsWorkbenchGateway(observer, interaction, lambda: False, lambda _prompt: 'n') as gateway:
@@ -1450,7 +1452,9 @@ class WindowsWorkbenchGatewayTests(unittest.TestCase):
             self.assertNotIn('windows_canvas_action', {item['name'] for item in listed})
             result = call('tools/call', {'name': 'windows_observe', 'arguments': {'window_id': WINDOW_ID}})
             self.assertFalse(result['result']['isError'])
-        self.assertEqual(calls, [('windows_observe', {'window_id': WINDOW_ID, 'visual_fallback': 'never'})])
+            self.assertEqual(result['result']['content'][1], {
+                'type': 'image', 'data': 'c2NyZWVuc2hvdA==', 'mimeType': 'image/png'})
+        self.assertEqual(calls, [('windows_observe', {'window_id': WINDOW_ID})])
 
     def test_uncertain_desktop_result_stops_following_gateway_calls(self):
         calls = []
@@ -1460,6 +1464,7 @@ class WindowsWorkbenchGatewayTests(unittest.TestCase):
             invoke=lambda name, args, **_kwargs: (calls.append((name, args)) or ('unknown', '结果不确定', name)),
         )
         interaction = SimpleNamespace(tools=WINDOWS_INTERACTION_TOOL_SCHEMAS,
+                                      input_monitor=FakeInputMonitor(),
                                       invoke=lambda *_args, **_kwargs: ('acted', '成功', 'action'))
         with WindowsWorkbenchGateway(observer, interaction, lambda: False, lambda _prompt: 'n') as gateway:
             def call():
@@ -1471,6 +1476,16 @@ class WindowsWorkbenchGatewayTests(unittest.TestCase):
             self.assertTrue(call()['isError'])
             self.assertIn('stopped', call()['content'][0]['text'])
         self.assertEqual(len(calls), 1)
+
+    def test_human_input_between_actions_stays_stopped_after_the_desktop_is_idle(self):
+        monitor = FakeInputMonitor()
+        observer = SimpleNamespace(tools=WINDOW_TOOL_SCHEMAS, begin_request=lambda: None)
+        interaction = SimpleNamespace(tools=WINDOWS_INTERACTION_TOOL_SCHEMAS, input_monitor=monitor)
+        with WindowsWorkbenchGateway(observer, interaction, lambda: False, lambda _prompt: 'n') as gateway:
+            monitor.version += 1  # Lan moves the mouse between two otherwise independent MCP calls.
+            self.assertTrue(gateway.stopped())
+            monitor.idle = True
+            self.assertTrue(gateway.stopped())
 
 
 class OwnInputMonitorTests(unittest.TestCase):

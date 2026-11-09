@@ -1787,12 +1787,18 @@ class WindowsWorkbenchGateway:
         self.server = self.thread = None
         self.started = False
         self.cancelled = threading.Event()
+        self.input_snapshot = None
 
     def stop(self):
         self.cancelled.set()
 
     def stopped(self):
-        return self.cancelled.is_set() or self.should_stop()
+        if self.cancelled.is_set() or self.should_stop():
+            return True
+        if self.input_snapshot is not None and self.interaction.input_monitor.changed_since(self.input_snapshot):
+            self.cancelled.set()
+            return True
+        return False
 
     def __enter__(self):
         gateway = self
@@ -1852,9 +1858,6 @@ class WindowsWorkbenchGateway:
                         if gateway.stopped():
                             text, state = ('The Windows task is stopped. Observe again only in a new task; '
                                            'no desktop action was started.'), '中断'
-                        elif name == 'windows_observe':
-                            arguments = {**arguments, 'visual_fallback': 'never'}
-                            text, state, _summary = gateway.observer.invoke(name, arguments, should_stop=gateway.stopped)
                         elif name in WINDOWS_OBSERVATION_TOOL_NAMES:
                             text, state, _summary = gateway.observer.invoke(name, arguments, should_stop=gateway.stopped)
                         else:
@@ -1862,8 +1865,12 @@ class WindowsWorkbenchGateway:
                                 name, arguments, gateway.approval, should_stop=gateway.stopped)
                         if state in ('中断', '结果不确定'):
                             gateway.stop()
+                        content = [{'type': 'text', 'text': str(text)}]
+                        image = getattr(text, 'image_data_uri', None)
+                        if isinstance(image, str) and image.startswith('data:image/png;base64,'):
+                            content.append({'type': 'image', 'data': image.split(',', 1)[1], 'mimeType': 'image/png'})
                         return self.send_json({'jsonrpc': '2.0', 'id': request_id, 'result': {
-                            'content': [{'type': 'text', 'text': str(text)}], 'isError': state != '成功'}})
+                            'content': content, 'isError': state != '成功'}})
                     return self.send_json({'jsonrpc': '2.0', 'id': request_id,
                                            'error': {'code': -32601, 'message': 'method not found'}})
                 except (TypeError, ValueError, KeyError, json.JSONDecodeError) as exc:
@@ -1875,6 +1882,7 @@ class WindowsWorkbenchGateway:
             self.thread = threading.Thread(target=self.server.serve_forever, daemon=True, name='veil-windows-mcp')
             self.thread.start()
             self.started = True
+            self.input_snapshot = self.interaction.input_monitor.snapshot()
             self.observer.begin_request()
             return self
         except Exception:
