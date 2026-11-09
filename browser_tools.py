@@ -483,7 +483,8 @@ class BrowserWorkbenchGateway:
 
             def do_POST(self):
                 if self.path != '/mcp' or not secrets.compare_digest(
-                        self.headers.get('Authorization', ''), 'Bearer ' + gateway.token):
+                        self.headers.get('Authorization', '').encode('utf-8', 'ignore'),
+                        ('Bearer ' + gateway.token).encode()):
                     return self._send({'error': {'code': -32001, 'message': 'unauthorized'}}, 401)
                 try:
                     size = gateway.request_size(self.headers.get('Content-Length'))
@@ -547,7 +548,9 @@ class BrowserWorkbenchGateway:
     def __exit__(self, *_args):
         self.stop()
         if self.server is not None:
-            self.server.shutdown()
+            if self.thread is not None:
+                # shutdown() waits for serve_forever(); never call it when the thread never started.
+                self.server.shutdown()
             self.server.server_close()
         if self.thread is not None:
             self.thread.join(timeout=2)
