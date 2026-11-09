@@ -3,7 +3,7 @@
 ## 工单 326（2026-11-09）：后台浏览、搜索代理、错误原文日志
 
 - 依据：执行层审计报告（项目共享文件 `audit/peter-execution-permission-audit-2026-11-09.md`）第 3 节（Lan 本机日志）。21:25 那次请求共 8 分 10 秒；搜索的 5 个境外引擎全部超时；改动前浏览器和工作台网关只要检测到 Lan 的任何输入就停。
-- 搜索实测（2026-11-09，远程控制只读）：这台电脑的出口 IP 属于美国云机房（ipinfo：UpCloud USA），本机没有代理进程，WinHTTP 直连。`ddgs` 的 duckduckgo 超时、brave 无结果；`ddgs` 把 Bing 标为停用（指定 Bing 会悄悄改成所有引擎并发）。直接读 Bing 结果页（urllib 或无头 Chromium 都试过）2–7 秒能返回，但多词中文查询的结果大多不相关；百度、搜狗几次后出验证码；360 结果相关但每次 13–57 秒；DuckDuckGo html 版返回拦截页。结论：机房出口 IP 被各家当成机器流量，免费抓取类搜索在这台电脑上都不可靠，所以本单不加任何新引擎，只保证快速报错并写清原因；搜索质量另开工单。
+- 搜索实测（2026-11-09，远程控制只读）：这台电脑（实体台式机）开着加速器（进程 FastOrange，OpenVPN TAP 网卡，0/1+128/1 全局路由），出口 IP 属于美国云机房（ipinfo：UpCloud USA）；系统代理关闭，WinHTTP 直连。`ddgs` 的 duckduckgo 超时、brave 无结果；`ddgs` 把 Bing 标为停用（指定 Bing 会悄悄改成所有引擎并发）。直接读 Bing 结果页（urllib 或无头 Chromium 都试过）2–7 秒能返回，但多词中文查询的结果大多不相关；百度、搜狗几次后出验证码；360 结果相关但每次 13–57 秒；DuckDuckGo html 版返回拦截页。结论：加速器全局模式下的机房出口 IP 被各家当成机器流量，免费抓取类搜索都不可靠；关掉加速器后的国内出口尚未实测，所以本单不加任何新引擎，只保证快速报错并写清原因；搜索质量另开工单。
 - 改动：`browser_tools.py` 默认无窗口、不检查输入，`open` 加 `show`，显示模式下保留人优先；`BrowserWorkbenchGateway` 始终后台、不检查人工输入，只响应停止、暂停和上限，并去掉 `show`；主聊天正把页面显示在 Lan 屏幕上时，工作台的浏览动作一律拒绝，不碰她正在看的窗口。搜索报错里的网址会隐去用户名和密码。`web_tools.py`：`search_proxy()`（`DDGS_PROXY` 或系统代理）、上次成功的引擎排在最前、总时限 20 秒、报错写明每个引擎的失败原因。`veil_agent.py`：浏览器和桌面工具失败时，日志记录失败原文。`executor_opencode.py`：`save_run_log`（`workbench-home/runs`，保留 30 份，每份不超过 2MB），`diagnose` 带上 `veil_*` 工具的错误原文。
 - 测试：全量 `unittest discover`，改动前后的失败列表相同（都是本机缺 Node、网络或 SDK 造成的旧失败），新增 2 项测试。
 - Lan 已定方向 A：OpenCode 跑在宿主机上，VEIL 统一裁决权限，不直接交出原始的 Windows-MCP、Playwright MCP 或不受限的 PowerShell；Docker 只用来隔离不可信代码。阶段 1 在测试副本里进行。
