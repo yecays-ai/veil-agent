@@ -14,8 +14,9 @@ import fnmatch
 import json
 import os
 import posixpath
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import re
+import shutil
 import shlex
 import threading
 
@@ -147,15 +148,19 @@ def foreground_window():
         return None
 
 
-def _is_installed_program(target):
-    """A bare program name (notepad.exe, found through PATH) or a file under Windows or Program Files; anything
-    from a user-writable place (Downloads, Temp, her projects) still asks."""
+def _is_installed_program(target, which=None):
+    """A program in Windows or Program Files (a bare name like notepad.exe is looked up on PATH first and must
+    land there); anything from a user-writable place (Downloads, any Temp folder, her projects) still asks."""
     text = str(target or '').strip().strip('"')
     if not text:
         return False
     if not re.search(r'[\\/]', text):
-        return True
+        text = (which or shutil.which)(text) or ''
+        if not text:
+            return False
     path = posixpath.normpath(text.replace('\\', '/')).casefold()
+    if any(part in ('temp', 'tmp', 'downloads', 'appdata') for part in path.split('/')):
+        return False
     roots = [os.environ.get(name) for name in ('SystemRoot', 'ProgramFiles', 'ProgramFiles(x86)')]
     roots += ['c:/windows', 'c:/program files', 'c:/program files (x86)']
     for root in roots:
@@ -425,8 +430,8 @@ class Checkpoint:
                              ('process', 'kill', str(args.get('name') or args.get('pid'))), 'process:kill')
         if name == 'App':
             mode = args.get('mode', 'launch')
-            target = str(args.get('executable') or args.get('name') or '')
-            if Path(target).name.casefold() in ELEVATED_PROGRAMS or ELEVATION.search(target):
+            target = str(args.get('executable') or args.get('name') or '').strip().strip('"')
+            if PureWindowsPath(target).name.casefold() in ELEVATED_PROGRAMS or ELEVATION.search(target):
                 return self._record(SYSTEM, operation, DENY, 'system tool or shell')
             if why := (self.forbidden_path(target) if mode == 'launch_executable' else ''):
                 return self._record(SYSTEM, operation, DENY, why)

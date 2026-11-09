@@ -1256,7 +1256,7 @@ class PermissionEvents:
     def __init__(self, base, password, opener=None):
         self.base, self.opener = base, opener or urllib.request.urlopen
         self.auth = 'Basic ' + base64.b64encode(('opencode:' + password).encode()).decode()
-        self.requests, self.connected, self.closed = [], False, False
+        self.requests, self.connected, self.closed, self.gap = [], False, False, False
         self.lock = threading.Lock()
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()
@@ -1275,6 +1275,8 @@ class PermissionEvents:
                             self._accept(line[5:].strip())
             except Exception:
                 pass
+            if self.connected:
+                self.gap = True  # anything raised while disconnected is not replayed
             self.connected = False
             if not self.closed:
                 time.sleep(1)
@@ -1719,6 +1721,10 @@ def _run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, 
         if stopped():
             return ExecutorResult('[workbench=stopped; reason=user_stopped]', '出错', reason='user_stopped')
         session = api.call('POST', '/session', {'title': 'workbench'})['id']
+        list_failures, last_list_error = 0, ''
+        # Listening starts before the prompt, so a request raised at once is not missed.
+        events = (events_factory or (PermissionEvents if api_factory is None else (lambda *_: None)))(
+            f'http://127.0.0.1:{port}', password)
         if stopped():
             return ExecutorResult('[workbench=stopped; reason=user_stopped]', '出错', reason='user_stopped')
         missing = ('Not available this time (it failed to start; do not try it, and tell the owner if the job needs '
@@ -1727,9 +1733,6 @@ def _run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, 
         api.call('POST', f'/session/{session}/prompt_async', {
             'parts': [{'type': 'text', 'text': text}], 'model': {'providerID': 'relay', 'modelID': provider['model']}})
         started, idle, answered, approvals = clock(), 0, [], []
-        list_failures, last_list_error = 0, ''
-        events = (events_factory or (PermissionEvents if api_factory is None else (lambda *_: None)))(
-            f'http://127.0.0.1:{port}', password)
         approval_stop = ''
         while True:
             sleep(1)
@@ -1752,7 +1755,7 @@ def _run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, 
                         last_list_error = error_text(exc)
                         if proc.poll() is not None:
                             raise
-                        if list_failures >= 30 and not (events is not None and events.connected):
+                        if list_failures >= 30 and not (events is not None and events.connected and not events.gap):
                             stop = 'cannot read OpenCode permission requests: ' + last_list_error[:200]
                     listed = list(listed) + (events.take() if events is not None else [])
                 for request in ([] if stop else listed):

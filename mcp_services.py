@@ -7,7 +7,6 @@ from pathlib import Path
 import re
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 from urllib.parse import urlsplit
@@ -126,6 +125,43 @@ def _startup_failure_message(exc):
     return str(exc) or 'MCP 服务启动失败。'
 
 
+class _StderrTail:
+    """The last bytes a server process wrote to stderr, kept in memory (a pipe read by a thread), so a startup
+    failure can say what the process complained about without any file growing."""
+
+    def __init__(self, keep=1200):
+        read_fd, write_fd = os.pipe()
+        self.sink = os.fdopen(write_fd, 'wb')
+        self.keep, self.data = keep, b''
+        self.lock = threading.Lock()
+        threading.Thread(target=self._pump, args=(read_fd,), daemon=True).start()
+
+    def _pump(self, read_fd):
+        with os.fdopen(read_fd, 'rb') as source:
+            while True:
+                chunk = source.read1(4096) if hasattr(source, 'read1') else source.read(4096)
+                if not chunk:
+                    return
+                with self.lock:
+                    self.data = (self.data + chunk)[-self.keep:]
+
+    def close(self):
+        try:
+            self.sink.close()
+        except OSError:
+            pass
+
+    def text(self):
+        with self.lock:
+            raw = self.data
+        for encoding in ('utf-8', 'gbk'):
+            try:
+                return ' '.join(raw.decode(encoding).split())[-400:]
+            except UnicodeDecodeError:
+                continue
+        return ' '.join(raw.decode('utf-8', 'replace').split())[-400:]
+
+
 class _Worker:
     def __init__(self, service, environment=None):
         self.service = service
@@ -141,7 +177,7 @@ class _Worker:
         self.tools = []
         self.tool_limit_hit = False
         self.closing = threading.Event()
-        self.stderr_file = None
+        self.stderr_tail = None
         self.call_timeout = None  # None: the module's CALL_TIMEOUT, read at call time
         self.started_at = time.monotonic()
         self.thread = threading.Thread(target=self._thread, daemon=True, name='mcp-' + service['id'])
@@ -159,8 +195,8 @@ class _Worker:
             command, args = _stdio_server_command(self.service['command'], self.service['args'])
             params = StdioServerParameters(command=command, args=args,
                                             cwd=self.service['cwd'], env=self.environment)
-            self.stderr_file = tempfile.TemporaryFile()
-            async with stdio_client(params, errlog=self.stderr_file) as (read, write):
+            self.stderr_tail = _StderrTail()
+            async with stdio_client(params, errlog=self.stderr_tail.sink) as (read, write):
                 async with ClientSession(read, write) as session:
                     async with asyncio.timeout(START_TIMEOUT):
                         initialized = await session.initialize()
@@ -216,29 +252,18 @@ class _Worker:
         except BaseException as exc:
             if not self.ready.done():
                 message = 'MCP 服务已停用。' if self.closing.is_set() else _startup_failure_message(exc)
-                tail = '' if self.closing.is_set() else self._stderr_tail()
-                self.ready.set_exception(RuntimeError(message[:300] + (' | 服务输出：' + tail if tail else '')))
+                tail = '' if self.closing.is_set() or self.stderr_tail is None else self.stderr_tail.text()
+                # 300 characters is what the callers keep, so the server's own words must fit inside them.
+                self.ready.set_exception(RuntimeError(
+                    message[:90] + (' | 服务输出：' + tail[-170:] if tail else '') if tail else message[:300]))
         finally:
+            if self.stderr_tail is not None:
+                self.stderr_tail.close()
             if self.jobs is not None:
                 while not self.jobs.empty():
                     job = self.jobs.get_nowait()
                     if job is not None:
                         self._finish(job[2], error=RuntimeError('MCP 服务已断开。'))
-
-    def _stderr_tail(self):
-        """What the server process wrote to stderr (a `cmd.exe` complaint, a traceback), last 400 characters."""
-        try:
-            self.stderr_file.seek(0)
-            raw = self.stderr_file.read()[-1200:]
-            for encoding in ('utf-8', 'gbk'):
-                try:
-                    text = raw.decode(encoding)
-                    break
-                except UnicodeDecodeError:
-                    text = raw.decode('utf-8', 'replace')
-            return ' '.join(text.split())[-400:]
-        except Exception:
-            return ''
 
     def _finish(self, reply, value=None, error=None):
         with self.pending_lock:

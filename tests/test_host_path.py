@@ -4,6 +4,7 @@ import json
 import tempfile
 import threading
 import unittest
+from unittest import mock
 import urllib.request
 from decimal import Decimal
 from pathlib import Path
@@ -145,13 +146,18 @@ class CheckpointToolTests(unittest.TestCase):
     def test_launching_an_installed_program_does_not_ask_but_a_downloaded_one_does(self):
         cp, _, asked = make_checkpoint(self.root)
         call = cp.tool_call
-        self.assertTrue(call(vc.COMPUTER_SERVER, 'App', {'mode': 'launch_executable', 'executable': 'notepad.exe'})[0])
-        self.assertTrue(call(vc.COMPUTER_SERVER, 'App', {'mode': 'launch_executable',
-                                                          'executable': 'C:\\Program Files\\App\\app.exe'})[0])
-        self.assertEqual(asked, [])
-        self.assertFalse(call(vc.COMPUTER_SERVER, 'App', {'mode': 'launch_executable',
-                                                           'executable': 'C:\\Users\\x\\Downloads\\setup.exe'})[0])
-        self.assertEqual(len(asked), 1)
+        with mock.patch.object(vc.shutil, 'which', lambda name: {'notepad.exe': 'C:\\Windows\\System32\\notepad.exe',
+                                                                 'evil.exe': 'C:\\Users\\x\\bin\\evil.exe'}.get(name)):
+            self.assertTrue(call(vc.COMPUTER_SERVER, 'App', {'mode': 'launch_executable', 'executable': 'notepad.exe'})[0])
+            self.assertTrue(call(vc.COMPUTER_SERVER, 'App', {'mode': 'launch_executable',
+                                                              'executable': 'C:\\Program Files\\App\\app.exe'})[0])
+            self.assertEqual(asked, [])
+            for target in ('evil.exe', 'unknown.exe', 'C:\\Users\\x\\Downloads\\setup.exe', 'C:\\Windows\\Temp\\tool.exe'):
+                self.assertFalse(call(vc.COMPUTER_SERVER, 'App', {'mode': 'launch_executable', 'executable': target})[0], target)
+            self.assertEqual(len(asked), 4)
+            self.assertFalse(call(vc.COMPUTER_SERVER, 'App', {'mode': 'launch_executable',
+                                                               'executable': '"C:\\Windows\\System32\\cmd.exe"'})[0])
+            self.assertEqual(len(asked), 4)
 
     def test_no_typing_into_her_own_browser_and_typed_text_is_not_logged(self):
         cp, _, _ = make_checkpoint(self.root, foreground=lambda: ('chrome.exe', 'Sign in - Google'))
