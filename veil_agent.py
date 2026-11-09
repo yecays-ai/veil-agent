@@ -5085,15 +5085,18 @@ class Chat:
                             log_tool(call.function.name, summary, '出错', call_id=call_id,
                                      detail=str(exc) or exc.__class__.__name__)
                             if not autonomy:
+                                mcp_side_effect = (self.mcp_services.needs_checkpoint(call.function.name)
+                                                   if call.function.name.startswith('mcp__') else None)
                                 self.investigation.record(checkpoint_goal, request_id, call.function.name, args,
-                                                          '结果未知', summary, str(exc) or exc.__class__.__name__)
+                                                          '结果未知', summary, str(exc) or exc.__class__.__name__,
+                                                          checkpoint_resuming, mcp_side_effect)
                             raise
                     if not autonomy and not replay_block:
-                        mcp_read_only = (self.mcp_services.needs_checkpoint(call.function.name) is False
-                                         if call.function.name.startswith('mcp__') else None)
+                        mcp_side_effect = (self.mcp_services.needs_checkpoint(call.function.name)
+                                           if call.function.name.startswith('mcp__') else None)
                         self.investigation.record(checkpoint_goal, request_id, call.function.name, args,
                                                   execution.state, execution.summary, execution.result,
-                                                  checkpoint_resuming, mcp_read_only)
+                                                  checkpoint_resuming, mcp_side_effect)
                     state = execution.state
                     canonical_name = self._resolve_tool_name(call.function.name, offered)
                     if canonical_name == 'send_message' and state == '成功' and self.sent_messages:
