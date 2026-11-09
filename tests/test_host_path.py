@@ -311,10 +311,15 @@ class HostRunTests(unittest.TestCase):
         with patch.object(host_executor.os, 'name', 'nt'):
             only_uvx = lambda name: '/bin/uvx' if name == 'uvx' else None
             desktop = host_executor.upstream_services('h', which=only_uvx)[vc.COMPUTER_SERVER][0]['args']
+            # pip-installed uv that is not on PATH is still found
+            found = host_executor.upstream_services('h', which=lambda name: None,
+                                                    find_script=lambda name: '/scripts/uvx')
+            self.assertEqual(found[vc.COMPUTER_SERVER][0]['command'], '/scripts/uvx')
         self.assertEqual(desktop[:4], ['--python', '3.14', '--from', 'windows-mcp==0.8.8'])
         self.assertEqual(desktop[-1].split(','), sorted(vc.COMPUTER_TOOLS))
         self.assertNotIn('PowerShell', desktop[-1])
-        self.assertEqual(host_executor.upstream_services(tempfile.mkdtemp(), which=lambda name: None), {})
+        self.assertEqual(host_executor.upstream_services(tempfile.mkdtemp(), which=lambda name: None,
+                                                       find_script=lambda name: None), {})
 
 
 class BrowserNetworkTests(unittest.TestCase):

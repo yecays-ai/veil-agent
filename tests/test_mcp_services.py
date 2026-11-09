@@ -50,6 +50,8 @@ class MCPServicesTest(unittest.TestCase):
                 'C:/node/npx.CMD', ['--proxy-bypass', '<-loopback>', 'a|b', 'plain'], windows=True,
                 executable=Path(directory) / 'python.exe')
         self.assertTrue(args[5].endswith('--proxy-bypass "<-loopback>" "a|b" plain'), args[5])
+        with self.assertRaises(mcp_services.MCPConfigError):
+            mcp_services._stdio_server_command('C:/node/npx.CMD', ['say "hi" & more'], windows=True)
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(dir=Path(__file__).parent)
