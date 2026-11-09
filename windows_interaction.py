@@ -778,8 +778,17 @@ class WindowsInteractionBackend(WindowsDesktopBackend):
                     self._require_unchanged_input(input_monitor, input_snapshot)
                     self._cancelled(stopped)
                     auto = self._uia()
-                    with auto.UIAutomationInitializerInThread():
-                        auto.ControlFromHandle(hwnd).SetFocus()
+                    try:
+                        with auto.UIAutomationInitializerInThread():
+                            root = auto.ControlFromHandle(hwnd)
+                            if not root:
+                                raise InteractionUncertain('UIA could not focus the selected window; foreground is unconfirmed.')
+                            if root.SetFocus() is False:
+                                raise InteractionUncertain('UIA focus fallback failed; foreground is unconfirmed.')
+                    except InteractionError:
+                        raise
+                    except Exception as exc:
+                        raise InteractionUncertain('UIA focus fallback failed; foreground is unconfirmed.') from exc
             deadline = time.monotonic() + 1.0
             while time.monotonic() < deadline:
                 self._cancelled(stopped)

@@ -191,6 +191,23 @@ class WindowsInteractionTests(unittest.TestCase):
                 self.assertEqual(focus.call_count, int(denied))
                 api.AttachThreadInput.assert_not_called()
 
+    def test_failed_uia_focus_fallback_is_uncertain_not_ordinary_error(self):
+        for focus in (Mock(side_effect=RuntimeError('boom')), Mock(return_value=False)):
+            with self.subTest(focus=focus):
+                state = {'foreground': 200}
+                api = SimpleNamespace(IsWindow=lambda _: True, IsIconic=lambda _: False,
+                    GetForegroundWindow=lambda: state['foreground'], SetForegroundWindow=Mock())
+                backend = WindowsInteractionBackend()
+                backend._revalidate = lambda selected, _: selected
+                backend._check_default_desktop = lambda: None
+                backend._window_api = lambda: api
+                backend._foreground_window = api.GetForegroundWindow
+                backend._uia = lambda: SimpleNamespace(UIAutomationInitializerInThread=contextlib.nullcontext,
+                    ControlFromHandle=lambda _: SimpleNamespace(SetFocus=focus))
+                with self.assertRaises(InteractionUncertain):
+                    backend.manage_window({'id': WINDOW_ID, 'handle': 100}, 'activate',
+                                          lambda: False, FakeInputMonitor(), 0)
+
     def test_live_document_reads_readonly_from_value_pattern(self):
         from windows_observer import _control_identity
         pattern = SimpleNamespace(IsReadOnly=False)
