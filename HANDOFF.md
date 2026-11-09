@@ -1,22 +1,19 @@
 # HANDOFF
 
-## 当前工单 322（2026-11-09）
+## 当前工单 323（2026-11-09）：状态对齐与工程规则
 
-- 分支 `ticket/322-windows-continuous-execution`，PR #321；复用原独立工作树，没有创建或清理其他工作树。已同步包含 PR #322 的 main，文档以本次真实状态为准。
-- 工作台复用原 OpenCode 循环和 Windows observer/interaction/discovery。仅开放发现、列窗、目标观察/截图、启动/切换与 UIA 控件动作；不新增 Agent 或视觉坐标执行器。
-- 本轮接手修复：桌面停止向外层执行器传播，不能误报成功；任务首次读取/操作桌面前审批，拒绝粘性停止；串行接纳动作直到未知结果停止落地，拒绝并发越过边界；审批期间保留显式停止、正确处理审批输入，之后恢复人工接管；每次观察可重新取得目标截图。
-- 同时修复模型设置编辑遗漏隐藏 `input_modalities` 时丢失视觉能力的问题；只有同一接口/模型保留旧声明，显式修改及换模型仍按新配置。
-- 一次性诊断和验收材料保留在未跟踪测试目录，不提交任何真实配置、凭据、模型原始请求或本机路径。原有临时目录未清理。
-- 本轮键鼠事件诊断确认持续变化包含实际输入事件，不能证明是远程会话故障；不忽略未知注入、不关闭人工接管。
-- 验收区分：假模型回归、真实 Docker/宿主链路、Lan 体验分别记录。此前控制台编码错误的探针不作成功证据；最终独立联测结果见下文。
-- 下一步：推送最后的真实 UIA 修复，核对最新 CI/Cubic，并保持 PR 不合并。需再操作桌面时先取得 Lan 空闲窗口，不在她使用电脑时重复发起任务。
+- 范围：更新 `STATUS.md`、`HANDOFF.md`；加入 `integration-complete` 规则（`AGENTS.md`、PR 模板、`ticket` 与 `integration-complete` 技能）；`veil_agent.py` 的 `tool_schemas()` 在工作台可用且桌面观察/交互通道都启用时，隐藏 `windows_launch`/`windows_manage`/`windows_control_action`（常量 `WORKBENCH_DESKTOP_ACTIONS`，与 `WindowsWorkbenchGateway` 的动作一致）。只读观察、画布、桌面图标入口不动。测试：`tests.test_executor_opencode.ChatWiringTests`。
+- 目的：之前的 STATUS 把开发侧已完成的验收也写成“待 Lan”，并保留已过期的“等待 PR #322”。现在开发验收与 Lan 体验分开写。
 
-## 最终代码与验证
+## 工单 322 正式使用观察（2026-11-09，来自 `data/peter/tools.jsonl` 与 Lan 截图）
 
-- 使用项目运行环境，相关回归 424 项（3 跳过）无失败；最后的标准 UIA 聚焦回退经 75 项窗口专项验证，无失败。不要使用缺少 Playwright 的系统解释器冒充项目运行环境。
-- 真实独立测试聊天使用当前视觉模型，自动只委派一次 workbench；同一 Docker/OpenCode 任务完成公开网页 open/observe、notepad launch/list/observe、set_text、activate、第二次 observe。9 个内部模型步骤、8 次工具调用，全部成功；两次目标窗口 PNG 均传入模型，独立 UIA 读回测试文字一致。工作台估算费用约 0.0046 元，不代表包含主聊天的完整账单。
-- 真实联测中定位并修复：DocumentControl 的只读属性属于 ValuePattern，不是控件自身属性；旧 AttachThreadInput 激活会挂起，普通 SetForegroundWindow 又可能被系统拒绝，改为复用现有 UIA SetFocus 回退，必须核对实际前台句柄，不伪造输入。已确认 UIA 聚焦能在该测试窗口生效。
-- 之前一次激活结果未知时，网关撤销并让外层工作台返回 desktop_stopped，没有重试或记成成功；此失败证据不替代最终成功联测。
-- 一次性文档与原始测试结果仅留在未跟踪测试目录，不提交本机路径、真实配置、凭据或模型原始请求。正式数据未改，测试文档未保存，不清理其他工作树。
-- 本轮接手修复与 main 同步提交为 3793c1f，其 Tests/Dependency security 已通过；后续两处真实 UIA 修复的最终 CI 仍须按最终 head 核对。
-- 剩余：最新 CI/Cubic 与 Lan 正式 Peter 窗口的体验。保持 PR #321 不合并，不把独立测试聊天当 Lan 已验收。首次桌面任务授权和保存/覆盖审批的 UI 点击体验仍由最终体验确认；程序边界已有专项回归。
+- 20:07 首次：主聊天旧 `windows_*` 微动作连续出现多次“结果不确定”（`windows_control_action`、`windows_manage` 超时），文字实际已写入记事本；20:08:45 才调用 `workbench`，20:08:58 返回 `1 steps, 0 tool calls`、原因“桌面任务已停止或结果不确定”。停止原因日志里无法区分：人工输入接管、取消标志、主聊天停止。该判断未验证。
+- 20:14 第二次：Peter 用 `field_trip` 浏览器和 `windows_*` 完成读页、新标签写摘要、不保存；没有 `workbench` 调用。其间 `windows_launch`、`windows_manage`、`windows_control_action` 各出现一次“结果不确定”，靠重新观察绕过。
+- 在允许的软件里普通输入无需审批是 2026-10-25 的决定；只有保存、发送、覆盖确认才问。所以往已打开文档输入不弹审批符合规则，不是缺陷。
+- 两次都说明旧的主聊天桌面微动作入口仍被优先使用。Lan 已决定收起，本工单 323 做了最小版本（只收动作类，保留只读观察）；其余旧入口的彻底撤除仍是审计工单四，等新通道验收后再做。
+
+## 其他待办
+
+- 工单 320 的三个缺口见 `STATUS.md`。
+- 审计的“成果保存与安全续接”（工单三）未开始。
+- 工单 318/319 无 Lan 真实体验证据。
