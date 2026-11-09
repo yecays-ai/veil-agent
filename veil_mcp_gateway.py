@@ -227,5 +227,6 @@ class VeilMcpGateway:
         while self.companions:
             try:
                 self.companions.pop().close()
-            except Exception:
-                pass
+            except Exception as exc:
+                self.checkpoint.log(kind='cleanup_error', server=self.server_id,
+                                    error=(str(exc) or type(exc).__name__)[:300])

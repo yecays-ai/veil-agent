@@ -2,8 +2,8 @@
 
 ## 工单 330（2026-11-10）：后台浏览器只能上公网
 
-- 宿主通道的后台浏览器（Playwright MCP）现在只经 VEIL 的公网代理出网（复用 `browser_tools.PublicProxy`：只放行公网 IP 的 HTTPS 443，DNS 由代理解析并固定），并加 `--proxy-bypass <-loopback>`。点链接、重定向、脚本、iframe 都走这条路，到不了家里的内网、本机或明文 HTTP。
-- `host_executor.BrowserNetwork` 在 `prepare` 里启动，挂在浏览器网关上，网关退出时关闭；代理起不来就不提供浏览器（只记一条说明）。`executor_opencode.run` 的清理改为对所有宿主网关调用 `__exit__`（没进入的也会关掉它带的代理）。
+- 宿主通道的后台浏览器（Playwright MCP）现在只经 VEIL 的公网代理出网（复用 `browser_tools.PublicProxy`：只放行公网 IP 的 HTTPS 443，DNS 由代理解析并固定），并加 `--proxy-bypass <-loopback>`。点链接、重定向、脚本、iframe 都走这条路，到不了家里的内网、本机或明文 HTTP。WebRTC 用 `--config` 加 `--webrtc-ip-handling-policy=disable_non_proxied_udp`（不走代理的 UDP 关掉；云端已确认这两个参数和代理参数一起出现在浏览器进程上）。
+- `host_executor.BrowserNetwork` 在 `prepare` 里启动，挂在浏览器网关上，网关退出时关闭；代理起不来就不提供浏览器（只记一条说明）。`executor_opencode.run` 无论从哪里返回（包括提前拒绝、已停止）都会对所有宿主网关调用 `__exit__`（没进入的也会关掉它带的代理）。
 - 云端用 Chromium 实测：经这个代理访问 127.0.0.1 上的网页会失败（ERR_EMPTY_RESPONSE）。未验证：Lan 电脑上的 Edge。
 
 ## 工单 329（2026-11-10）：宿主机执行通道（阶段 1，默认关）

@@ -292,6 +292,8 @@ class HostRunTests(unittest.TestCase):
         browser = services[vc.BROWSER_SERVER][0]['args']
         self.assertEqual(browser[browser.index('--proxy-server') + 1], 'http://127.0.0.1:4321')
         self.assertEqual(browser[browser.index('--proxy-bypass') + 1], '<-loopback>')
+        settings = json.loads(Path(browser[browser.index('--config') + 1]).read_text(encoding='utf-8'))
+        self.assertIn('--webrtc-ip-handling-policy=disable_non_proxied_udp', settings['browser']['launchOptions']['args'])
         self.assertIn('@playwright/mcp@' + host_executor.PINNED['playwright-mcp'], browser)
         self.assertIn('--headless', browser)
         self.assertIn('--isolated', browser)
@@ -338,6 +340,15 @@ class BrowserNetworkTests(unittest.TestCase):
             gateway.__exit__(None, None, None)
             gateway.__exit__(None, None, None)
         self.assertEqual(closed, [1])
+
+    def test_run_closes_host_gateways_on_every_early_return(self):
+        closed = []
+        gateway = SimpleNamespace(__exit__=lambda *a: closed.append(1), server_id='veil_browser')
+        result = ex.run('t', command='opencode', workdir=Path('.'), home=Path('.'), provider={}, key='k', limits={},
+                        autonomy=False, ask=lambda _p: 'n', stopped=lambda: False, record_cost=lambda _c: None,
+                        container=object(), checkpoint=object(), host_gateways=[gateway])
+        self.assertEqual(result.reason, 'invalid_host_run')
+        self.assertTrue(closed)
 
 
 if __name__ == '__main__':

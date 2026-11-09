@@ -8,6 +8,7 @@ Dev-side check on a real PC (no chat needed):
     python host_executor.py --workdir <folder> "task in words"
 """
 import asyncio
+import json
 import os
 from pathlib import Path
 import re
@@ -101,11 +102,16 @@ def upstream_services(home, *, desktop=True, browser='msedge', which=shutil.whic
     if npx and proxy_port:
         output = Path(home) / 'browser-output'
         output.mkdir(parents=True, exist_ok=True)
+        # WebRTC may otherwise use UDP straight from the network card, around the proxy.
+        settings = output / 'veil-browser.json'
+        settings.write_text(json.dumps({'browser': {'launchOptions': {'args': [
+            '--webrtc-ip-handling-policy=disable_non_proxied_udp', '--force-webrtc-ip-handling-policy']}}}),
+            encoding='utf-8')
         services[vc.BROWSER_SERVER] = ({
             'command': npx, 'cwd': str(output),
             'args': ['-y', f'@playwright/mcp@{PINNED["playwright-mcp"]}', '--headless', '--isolated',
                      '--browser', browser, '--image-responses', 'omit',
-                     '--output-dir', str(output),
+                     '--output-dir', str(output), '--config', str(settings),
                      '--proxy-server', f'http://127.0.0.1:{int(proxy_port)}', '--proxy-bypass', '<-loopback>']},
             vc.BROWSER_TOOLS)
     uvx = which('uvx')
@@ -131,7 +137,8 @@ def _log_path(home):
 
 def prepare(*, workdir, home, veil_root, ask, autonomy, stopped, protect=(), desktop=True, browser='msedge',
             services=None):
-    """(checkpoint, gateways) for one host run. Nothing starts until `executor_opencode.run` enters the gateways."""
+    """(checkpoint, gateways) for one host run. Only the browser's network guard (a loopback proxy) starts here;
+    the MCP servers start when `executor_opencode.run` enters the gateways, and `run` closes them all."""
     if os.name != 'nt' and services is None:
         raise HostRefused('The host path runs only on Windows; use the container workbench here.')
     checkpoint = vc.Checkpoint(workdir, ask=ask, autonomy=autonomy, log_path=_log_path(home),
@@ -147,8 +154,13 @@ def prepare(*, workdir, home, veil_root, ask, autonomy, stopped, protect=(), des
             except Exception as exc:
                 checkpoint.log(kind='note', text='background browser off: its network guard did not start: '
                                + (str(exc) or type(exc).__name__)[:300])
-        services = upstream_services(home, desktop=desktop, browser=browser,
-                                     proxy_port=network.port if network else None)
+        try:
+            services = upstream_services(home, desktop=desktop, browser=browser,
+                                         proxy_port=network.port if network else None)
+        except BaseException:
+            if network is not None:
+                network.close()
+            raise
     environment = {'ANONYMIZED_TELEMETRY': 'false', 'WINDOWS_MCP_DEBUG': 'false', 'NO_COLOR': '1'}
     gateways = [VeilMcpGateway(server_id, service, checkpoint, offered, should_stop=stopped, environment=environment,
                                companions=[network] if network and server_id == vc.BROWSER_SERVER else ())
@@ -162,7 +174,6 @@ def prepare(*, workdir, home, veil_root, ask, autonomy, stopped, protect=(), des
 
 def main(argv=None):
     import argparse
-    import json
     from decimal import Decimal
     from dotenv import dotenv_values
     parser = argparse.ArgumentParser(description='Run one host workbench task (dev check).')

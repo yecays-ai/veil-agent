@@ -1441,7 +1441,20 @@ def container_command(container, *, name, workdir, port, env, masks, bootstrap_g
     return cmd + [container['image'], 'opencode', 'serve', '--hostname', '0.0.0.0', '--port', str(port)]
 
 
-def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, stopped, record_cost,
+def run(task, **kwargs):
+    """One workbench task (see `_run`). Whatever path it ends on, every host gateway is closed afterwards,
+    with what it holds (the background browser's network guard), even ones that were never started."""
+    try:
+        return _run(task, **kwargs)
+    finally:
+        for host_gateway in kwargs.get('host_gateways') or ():
+            try:
+                host_gateway.__exit__(None, None, None)
+            except Exception:
+                pass
+
+
+def _run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, stopped, record_cost,
         api_factory=None, proxy_factory=None, container=None, protect=(), popen=subprocess.Popen, clock=time.monotonic,
         sleep=time.sleep, diagnostic=None, maintenance=False, approval_data=None, save_approval=None,
         container_name=None, browser_gateway=None, windows_gateway=None, checkpoint=None, host_gateways=()):
