@@ -1890,6 +1890,9 @@ def collapse_all_history_photos(messages):
             message['content'] = PHOTO_PLACEHOLDER + (('\n' + text) if text else '')
 
 
+# Desktop actions that run inside the workbench task (same names as WindowsWorkbenchGateway).
+WORKBENCH_DESKTOP_ACTIONS = frozenset({'windows_launch', 'windows_manage', 'windows_control_action'})
+
 class ChatOutput(str):
     def __new__(cls, text, media=None, message_id=None, request_id=None, memory_refs=None, attachments=None,
                 is_error=False, *, virtual_card=None, virtual_card_event=None):
@@ -2106,6 +2109,14 @@ class Chat:
         if self.workbench_ready() and self.tool_mode and not self.glance_mode:
             from executor_opencode import TOOL_SCHEMA as WORKBENCH_TOOL
             schemas.append({'type': 'function', 'function': dict(WORKBENCH_TOOL['function'])})
+            # Multi-step desktop work belongs to the workbench's own loop; keep read-only looking in chat.
+            files = getattr(self.tools, 'files', None) or self.tools
+            observer = getattr(files, 'windows_tools', None)
+            interaction = getattr(files, 'windows_interaction_tools', None)
+            if (observer is not None and interaction is not None
+                    and getattr(observer, 'tools', None) and getattr(interaction, 'tools', None)):
+                schemas = [item for item in schemas
+                           if item['function']['name'] not in WORKBENCH_DESKTOP_ACTIONS]
         if self.maintenance is not None and not self.glance_mode:
             from maintenance import TOOL_SCHEMA as MAINTENANCE_TOOL
             schema = {'type': 'function', 'function': dict(MAINTENANCE_TOOL['function'])}

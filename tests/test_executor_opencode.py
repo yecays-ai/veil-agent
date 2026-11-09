@@ -1263,6 +1263,29 @@ max_steps = 4
         off = self.executor.replace('enabled = true', 'enabled = false')
         self.assertNotIn('workbench', self.names(self.chat(off)))
 
+    def test_desktop_actions_leave_chat_when_workbench_runs_them(self):
+        schema = {'type': 'object', 'properties': {}}
+        desktop = [SimpleNamespace(name=name, description='d', inputSchema=schema) for name in
+                   ('windows_observe', 'windows_launch', 'windows_manage', 'windows_control_action')]
+
+        def names(extra, with_desktop=True):
+            chat = self.chat(extra)
+            chat.tools.tools = chat.tools.tools + desktop
+            if with_desktop:
+                chat.tools.windows_tools = SimpleNamespace(tools=desktop[:1])
+                chat.tools.windows_interaction_tools = SimpleNamespace(tools=desktop[1:])
+            return {s['function']['name'] for s in chat.tool_schemas()}
+
+        with_workbench = names(self.executor)
+        self.assertIn('workbench', with_workbench)
+        self.assertIn('windows_observe', with_workbench)
+        for name in ('windows_launch', 'windows_manage', 'windows_control_action'):
+            self.assertNotIn(name, with_workbench)
+        without_workbench = names('')
+        self.assertTrue({'windows_launch', 'windows_manage', 'windows_control_action'} <= without_workbench)
+        no_desktop_bridge = names(self.executor, with_desktop=False)
+        self.assertIn('windows_launch', no_desktop_bridge)
+
     def write_local(self, text):
         path = self.root / 'data' / 'test'
         path.mkdir(parents=True, exist_ok=True)
