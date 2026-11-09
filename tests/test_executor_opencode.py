@@ -92,6 +92,15 @@ class BrowserGatewayConfigTests(unittest.TestCase):
         self.assertFalse(server['oauth'])
         self.assertNotIn('codemode', json.dumps(config))
 
+    def test_workbench_config_keeps_browser_and_windows_services_task_local(self):
+        browser = SimpleNamespace(url='http://host.docker.internal:4567/mcp', token='browser-token')
+        windows = SimpleNamespace(url='http://host.docker.internal:4568/mcp', token='windows-token')
+        config = ex.build_config(PROVIDER, 'relay-token', 'http://relay/v1',
+                                 browser_gateway=browser, windows_gateway=windows)
+        self.assertEqual(set(config['mcp']), {'veil_browser', 'veil_windows'})
+        self.assertEqual(config['mcp']['veil_windows']['url'], windows.url)
+        self.assertEqual(config['mcp']['veil_windows']['headers'], {'Authorization': 'Bearer windows-token'})
+
     def test_workbench_limit_and_startup_failure_stop_and_close_the_browser_gateway(self):
         events = []
         class Gateway:
@@ -116,6 +125,27 @@ class BrowserGatewayConfigTests(unittest.TestCase):
                                                popen=Mock(side_effect=OSError('start failed')))
         self.assertEqual(result.state, '出错')
         self.assertEqual(events, ['enter', 'close'])
+
+    def test_workbench_limit_stops_and_closes_both_task_local_gateways(self):
+        events = []
+        class Gateway:
+            url, token = 'http://127.0.0.1:9/mcp', 'token'
+            def __init__(self, kind):
+                self.kind = kind
+            def __enter__(self):
+                events.append(self.kind + ':enter')
+                return self
+            def __exit__(self, *_args):
+                events.append(self.kind + ':close')
+            def stop(self):
+                events.append(self.kind + ':stop')
+        done = [assistant(text='done', tool=('read', {'file': 'x'}), finish='stop')]
+        result, _api, _costs, _kill = run([(done, [], False)] * 3, limits={'max_steps': 1},
+                                           browser_gateway=lambda *_: Gateway('browser'),
+                                           windows_gateway=lambda *_: Gateway('windows'))
+        self.assertEqual(result.reason, 'limit_or_failure')
+        self.assertEqual(events, ['browser:enter', 'windows:enter', 'browser:stop', 'windows:stop',
+                                  'browser:close', 'windows:close'])
 
 
 class DecisionTests(unittest.TestCase):

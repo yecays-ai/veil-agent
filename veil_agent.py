@@ -4084,6 +4084,14 @@ class Chat:
             files = getattr(self.tools, 'files', None) or self.tools
             operation_lock = getattr(files, 'workspace_operation_lock', None) if inside_workspace else None
             browser = getattr(files, 'browser_tools', None)
+            windows_observer = getattr(files, 'windows_tools', None)
+            windows_interaction = getattr(files, 'windows_interaction_tools', None)
+            windows_gateway = None
+            if (not maintenance and windows_observer is not None and windows_interaction is not None
+                    and windows_observer.tools and windows_interaction.tools):
+                from windows_interaction import WindowsWorkbenchGateway
+                windows_gateway = lambda stop, container: WindowsWorkbenchGateway(
+                    windows_observer, windows_interaction, stop, self.approval, container=container)
             with operation_lock if operation_lock else nullcontext():
                 outcome = ex.run(task, command=command, workdir=Path(workdir), home=role / 'workbench-home',
                                  provider=provider, key=key, limits=limits, autonomy=autonomy, ask=self.approval,
@@ -4094,7 +4102,8 @@ class Chat:
                                  save_approval=(lambda kind, fingerprint: self.maintenance.record_workbench_approval(
                                      task_id, kind, fingerprint)) if maintenance else None,
                                  browser_gateway=(browser.workbench_gateway
-                                                  if browser is not None and browser.enabled and not maintenance else None))
+                                                  if browser is not None and browser.enabled and not maintenance else None),
+                                 windows_gateway=windows_gateway)
             if maintenance and self.maintenance is not None:
                 self.maintenance.record_workbench(task_id, cost=outcome.cost, steps=outcome.steps,
                                                   report=outcome.text, state=outcome.state, reason=outcome.reason)

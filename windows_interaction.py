@@ -16,6 +16,8 @@ import threading
 import time
 import tomllib
 import guest_profiles
+import secrets
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1765,3 +1767,134 @@ class WindowsInteractionTools:
 
         return WindowsToolResult('This interaction tool is not registered.',
                                  activity_detail=f'{summary} 工具未注册。'), '被拒绝'
+
+
+class WindowsWorkbenchGateway:
+    """One task-local MCP bridge for the existing Windows UIA tools."""
+
+    names = frozenset({
+        'windows_discover_apps', 'windows_list', 'windows_foreground', 'windows_observe',
+        'windows_launch', 'windows_manage', 'windows_control_action',
+    })
+
+    def __init__(self, observer, interaction, should_stop, approval, *, container=False):
+        self.observer = observer
+        self.interaction = interaction
+        self.should_stop = should_stop
+        self.approval = approval
+        self.token = secrets.token_urlsafe(24)
+        self.host = '0.0.0.0' if container else '127.0.0.1'
+        self.server = self.thread = None
+        self.started = False
+        self.cancelled = threading.Event()
+
+    def stop(self):
+        self.cancelled.set()
+
+    def stopped(self):
+        return self.cancelled.is_set() or self.should_stop()
+
+    def __enter__(self):
+        gateway = self
+
+        class Handler(BaseHTTPRequestHandler):
+            protocol_version = 'HTTP/1.1'
+            timeout = 10
+
+            def log_message(self, *_args):
+                pass
+
+            def send_json(self, body, status=200, session=None):
+                data = json.dumps(body, ensure_ascii=False).encode('utf-8')
+                self.send_response(status)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(data)))
+                if status >= 400:
+                    self.send_header('Connection', 'close')
+                    self.close_connection = True
+                if session:
+                    self.send_header('Mcp-Session-Id', session)
+                self.end_headers()
+                self.wfile.write(data)
+
+            def do_POST(self):
+                if self.path != '/mcp' or not secrets.compare_digest(
+                        self.headers.get('Authorization', '').encode('utf-8', 'ignore'),
+                        ('Bearer ' + gateway.token).encode()):
+                    return self.send_json({'error': {'code': -32001, 'message': 'unauthorized'}}, 401)
+                try:
+                    size = int(self.headers.get('Content-Length') or 0)
+                    if size < 0 or size > 65536:
+                        raise ValueError('invalid request size')
+                    request = json.loads(self.rfile.read(size))
+                    if not isinstance(request, dict) or not isinstance(request.get('method'), str):
+                        raise ValueError('invalid request')
+                    params, method, request_id = request.get('params') or {}, request['method'], request.get('id')
+                    if not isinstance(params, dict):
+                        raise ValueError('invalid params')
+                    if method == 'initialize':
+                        return self.send_json({'jsonrpc': '2.0', 'id': request_id, 'result': {
+                            'protocolVersion': params.get('protocolVersion', '2025-03-26'),
+                            'capabilities': {'tools': {}}, 'serverInfo': {'name': 'veil-windows', 'version': '1'}}},
+                            session=gateway.token)
+                    if method == 'notifications/initialized':
+                        return self.send_json({}, 202)
+                    if method == 'tools/list':
+                        schemas = [tool for tool in gateway.observer.tools + gateway.interaction.tools
+                                   if tool.name in gateway.names]
+                        return self.send_json({'jsonrpc': '2.0', 'id': request_id, 'result': {'tools': [
+                            {'name': tool.name, 'description': tool.description,
+                             'inputSchema': tool.inputSchema} for tool in schemas]}})
+                    if method == 'tools/call':
+                        name, arguments = params.get('name'), params.get('arguments', {})
+                        if name not in gateway.names or not isinstance(arguments, dict):
+                            raise ValueError('unknown Windows tool or invalid arguments')
+                        if gateway.stopped():
+                            text, state = ('The Windows task is stopped. Observe again only in a new task; '
+                                           'no desktop action was started.'), '中断'
+                        elif name == 'windows_observe':
+                            arguments = {**arguments, 'visual_fallback': 'never'}
+                            text, state, _summary = gateway.observer.invoke(name, arguments, should_stop=gateway.stopped)
+                        elif name in WINDOWS_OBSERVATION_TOOL_NAMES:
+                            text, state, _summary = gateway.observer.invoke(name, arguments, should_stop=gateway.stopped)
+                        else:
+                            text, state, _summary = gateway.interaction.invoke(
+                                name, arguments, gateway.approval, should_stop=gateway.stopped)
+                        if state in ('中断', '结果不确定'):
+                            gateway.stop()
+                        return self.send_json({'jsonrpc': '2.0', 'id': request_id, 'result': {
+                            'content': [{'type': 'text', 'text': str(text)}], 'isError': state != '成功'}})
+                    return self.send_json({'jsonrpc': '2.0', 'id': request_id,
+                                           'error': {'code': -32601, 'message': 'method not found'}})
+                except (TypeError, ValueError, KeyError, json.JSONDecodeError) as exc:
+                    return self.send_json({'jsonrpc': '2.0', 'id': None,
+                                           'error': {'code': -32602, 'message': str(exc)[:200]}}, 400)
+
+        try:
+            self.server = ThreadingHTTPServer((self.host, 0), Handler)
+            self.thread = threading.Thread(target=self.server.serve_forever, daemon=True, name='veil-windows-mcp')
+            self.thread.start()
+            self.started = True
+            self.observer.begin_request()
+            return self
+        except Exception:
+            self.__exit__(None, None, None)
+            raise
+
+    @property
+    def url(self):
+        host = 'host.docker.internal' if self.host == '0.0.0.0' else '127.0.0.1'
+        return f'http://{host}:{self.server.server_address[1]}/mcp'
+
+    def __exit__(self, *_args):
+        self.stop()
+        if self.server is not None:
+            if self.started:
+                self.server.shutdown()
+            self.server.server_close()
+            self.server = None
+        if self.thread is not None:
+            if self.started:
+                self.thread.join(timeout=2)
+            self.thread = None
+        self.started = False

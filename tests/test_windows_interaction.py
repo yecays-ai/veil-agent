@@ -3,6 +3,7 @@ import json
 import os
 import tempfile
 import unittest
+import urllib.request
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -18,10 +19,11 @@ from windows_interaction import (
     WINDOWS_INTERACTION_TOOL_SCHEMAS,
     WindowsInteractionBackend,
     WindowsInteractionTools,
+    WindowsWorkbenchGateway,
     load_application_allowlist,
     validate_applications,
 )
-from windows_observer import ObservationError
+from windows_observer import ObservationError, WINDOW_TOOL_SCHEMAS
 
 
 WINDOW_ID = 'w-' + '1' * 24
@@ -1424,7 +1426,51 @@ max_steps = 3
         with self.assertRaises(ObservationError):
             backend.apply_canvas_action({'handle': 12345}, 'stroke', {'points': [[50, 60]]}, lambda: False, monitor, None)
 
+class WindowsWorkbenchGatewayTests(unittest.TestCase):
+    def test_gateway_exposes_only_uia_task_tools_and_disables_visual_fallback(self):
+        calls = []
+        observer = SimpleNamespace(
+            tools=WINDOW_TOOL_SCHEMAS,
+            begin_request=lambda: None,
+            invoke=lambda name, args, **_kwargs: (calls.append((name, args)) or ('observed', '成功', name)),
+        )
+        interaction = SimpleNamespace(
+            tools=WINDOWS_INTERACTION_TOOL_SCHEMAS,
+            invoke=lambda name, args, *_args, **_kwargs: ('acted', '成功', name),
+        )
+        with WindowsWorkbenchGateway(observer, interaction, lambda: False, lambda _prompt: 'n') as gateway:
+            def call(method, params):
+                request = urllib.request.Request(
+                    gateway.url, data=json.dumps({'jsonrpc': '2.0', 'id': 1, 'method': method,
+                                                   'params': params}).encode(),
+                    headers={'Authorization': 'Bearer ' + gateway.token, 'Content-Type': 'application/json'})
+                return json.loads(urllib.request.urlopen(request, timeout=2).read())
+            listed = call('tools/list', {})['result']['tools']
+            self.assertEqual({item['name'] for item in listed}, WindowsWorkbenchGateway.names)
+            self.assertNotIn('windows_canvas_action', {item['name'] for item in listed})
+            result = call('tools/call', {'name': 'windows_observe', 'arguments': {'window_id': WINDOW_ID}})
+            self.assertFalse(result['result']['isError'])
+        self.assertEqual(calls, [('windows_observe', {'window_id': WINDOW_ID, 'visual_fallback': 'never'})])
 
+    def test_uncertain_desktop_result_stops_following_gateway_calls(self):
+        calls = []
+        observer = SimpleNamespace(
+            tools=WINDOW_TOOL_SCHEMAS,
+            begin_request=lambda: None,
+            invoke=lambda name, args, **_kwargs: (calls.append((name, args)) or ('unknown', '结果不确定', name)),
+        )
+        interaction = SimpleNamespace(tools=WINDOWS_INTERACTION_TOOL_SCHEMAS,
+                                      invoke=lambda *_args, **_kwargs: ('acted', '成功', 'action'))
+        with WindowsWorkbenchGateway(observer, interaction, lambda: False, lambda _prompt: 'n') as gateway:
+            def call():
+                request = urllib.request.Request(
+                    gateway.url, data=json.dumps({'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call',
+                                                   'params': {'name': 'windows_list', 'arguments': {}}}).encode(),
+                    headers={'Authorization': 'Bearer ' + gateway.token, 'Content-Type': 'application/json'})
+                return json.loads(urllib.request.urlopen(request, timeout=2).read())['result']
+            self.assertTrue(call()['isError'])
+            self.assertIn('stopped', call()['content'][0]['text'])
+        self.assertEqual(len(calls), 1)
 
 
 class OwnInputMonitorTests(unittest.TestCase):
