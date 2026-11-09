@@ -123,7 +123,8 @@ class InvestigationCheckpoint:
                 return 'This successful read-only evidence is still fresh; use the checkpoint evidence instead of repeating it.'
         return None
 
-    def record(self, goal, request_id, name, arguments, state, summary, result, resuming=False):
+    def record(self, goal, request_id, name, arguments, state, summary, result, resuming=False,
+               side_effect=None):
         if not goal or name in {'stay_silent', 'reply_later', 'card_action', 'recall_message',
                                 'long_task_status', 'long_task_update'}:
             return
@@ -136,11 +137,12 @@ class InvestigationCheckpoint:
                         'status': 'active', 'reason': '', 'evidence': [], 'updated_at': now()}
             from veil_agent import safe_tool_activity_detail
             from windows_interaction import WINDOWS_INTERACTION_TOOL_NAMES
-            side_effect = name not in READ_ONLY_TOOLS | {'browser', 'web_search'}
-            if name in WINDOWS_INTERACTION_TOOL_NAMES:
-                side_effect = True
-            if name.startswith('mcp__'):
-                side_effect = True
+            if side_effect is None:
+                side_effect = name not in READ_ONLY_TOOLS | {'browser', 'web_search'}
+                if name in WINDOWS_INTERACTION_TOOL_NAMES and name not in READ_ONLY_TOOLS:
+                    side_effect = True
+                if name.startswith('mcp__'):
+                    side_effect = True
             item = {'time': now(), 'tool': name, 'call': _signature(name, arguments),
                     'state': state, 'read_only': not side_effect,
                     'source': str(summary)[:240], 'evidence': safe_tool_activity_detail(result, limit=600)}
