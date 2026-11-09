@@ -138,7 +138,8 @@ class BrowserWorkbenchGatewayTests(unittest.TestCase):
                                   monitor=Idle())
         with BrowserWorkbenchGateway(browser, lambda: False) as gateway:
             with self.assertRaises(urllib.error.HTTPError) as rejected:
-                self.request(gateway, {'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call', 'params': None})
+                self.request(gateway, {'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call',
+                                       'params': ['public_browser']})
         self.assertEqual(rejected.exception.code, 400)
 
     def test_a_new_gateway_closes_the_previous_tasks_idle_page(self):
@@ -227,6 +228,13 @@ class BrowserSafetyTests(unittest.TestCase):
         self.assertNotIn('q2', names)
         for control in result['controls']:
             self.assertIn(control['control_id'], browser.controls)
+
+    def test_close_clears_the_worker_loop_for_a_later_reuse(self):
+        browser = BrowserTools(CFG, platform_enabled=True, monitor=Idle())
+        browser._start_loop()
+        browser.close()
+        self.assertIsNone(browser.loop)
+        self.assertIsNone(browser.thread)
 
     def test_unsafe_urls_and_write_parameters_are_refused(self):
         for url in ['file:///secret', 'http://example.com', 'https://127.0.0.1',

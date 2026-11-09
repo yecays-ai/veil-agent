@@ -451,12 +451,18 @@ class BrowserTools:
             self.gate.release()
 
     def close(self):
-        if self.loop and self.thread and self.thread.is_alive():
-            try:
-                asyncio.run_coroutine_threadsafe(self._release(), self.loop).result(timeout=8)
-            finally:
-                self.loop.call_soon_threadsafe(self.loop.stop)
-                self.thread.join(timeout=2)
+        loop, thread = self.loop, self.thread
+        try:
+            if loop and thread and thread.is_alive():
+                try:
+                    asyncio.run_coroutine_threadsafe(self._release(), loop).result(timeout=8)
+                finally:
+                    loop.call_soon_threadsafe(loop.stop)
+                    thread.join(timeout=2)
+        finally:
+            # A closed instance must not look like a running worker: the next invoke starts a fresh loop.
+            self.loop = None
+            self.thread = None
 
     def workbench_gateway(self, should_stop, container=False):
         """A one-run MCP bridge.  It deliberately exposes no selectors, scripts or host paths."""
