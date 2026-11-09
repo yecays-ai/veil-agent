@@ -539,6 +539,9 @@ class BrowserWorkbenchGateway:
 
     def __enter__(self):
         gateway = self
+        gate = getattr(self.browser, 'gate', None)
+        if gate is not None and not gate.acquire(blocking=False):
+            raise RuntimeError('Browser is busy; the workbench browser gateway was not started.')
 
         class Handler(BaseHTTPRequestHandler):
             protocol_version = 'HTTP/1.1'
@@ -634,6 +637,9 @@ class BrowserWorkbenchGateway:
         except Exception:
             self.__exit__(None, None, None)
             raise
+        finally:
+            if gate is not None:
+                gate.release()
 
     @property
     def url(self):

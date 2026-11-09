@@ -7,7 +7,7 @@ import time
 import urllib.request
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import browser_tools
 from browser_tools import (BrowserTools, BrowserWorkbenchGateway, PublicProxy, public_addresses, public_url,
@@ -155,6 +155,15 @@ class BrowserWorkbenchGatewayTests(unittest.TestCase):
         with BrowserWorkbenchGateway(browser, lambda: False):
             pass
         self.assertEqual(closed, [True])
+
+    def test_gateway_does_not_close_a_browser_action_in_progress(self):
+        browser = SimpleNamespace(page=object(), close=Mock(), begin_request=Mock(), gate=threading.Lock())
+        browser.gate.acquire()
+        self.addCleanup(browser.gate.release)
+        with self.assertRaisesRegex(RuntimeError, 'Browser is busy'):
+            BrowserWorkbenchGateway(browser, lambda: False).__enter__()
+        browser.close.assert_not_called()
+        browser.begin_request.assert_not_called()
 
     def test_gateway_refuses_actions_outside_the_advertised_enum(self):
         calls = []
