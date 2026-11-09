@@ -527,6 +527,24 @@ model = "sonnet"
             self.assertFalse(thread.is_alive(), 'model settings lock deadlocked')
         self.assertEqual(errors, [])
 
+    def test_reload_syncs_chat_provider_to_new_chat_model(self):
+        from veil_agent import ActivityState
+        from web_agent import Hub
+
+        first = load_character(self.root, 'test')
+        second = load_character(self.root, 'test')
+        store = Store(self.root / 'data')
+        hub = Hub('Test', ActivityState(store.root / 'test' / 'resident-state.json'),
+                  media_root=store.root / 'test' / 'media')
+        hub.chat = Chat(second, store, Budget(store), Mock())
+        first.models.use('peter', 'builtin:other')
+        hub.refresh_models(reload=True)
+        self.assertEqual(hub.models_view['use']['peter'], 'builtin:other')
+        self.assertIsNotNone(hub.chat.pending_model)
+        self.assertEqual(hub.chat.pending_model[1]['model'], 'other-model')
+        hub.chat._apply_pending_model()
+        self.assertEqual(hub.chat.cfg.provider['model'], 'other-model')
+
     def test_stale_instance_cannot_overwrite_newer_models(self):
         first = load_character(self.root, 'test')
         second = load_character(self.root, 'test')

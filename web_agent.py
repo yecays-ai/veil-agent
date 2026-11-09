@@ -1192,6 +1192,14 @@ class Hub(ScreenPopMixin):
                 return False
             return self.autonomy.set_quiet_enabled(enabled)
 
+    def _sync_chat_model(self, before):
+        models = getattr(getattr(self.chat, 'cfg', None), 'models', None)
+        if models is None:
+            return
+        after = models.startup_choice('peter')
+        if after is not None and (before is None or after[0] != before[0] or after[2] != before[2]):
+            self.chat.switch_model(after[1], after[2])
+
     def refresh_models(self, reload=False):
         """Ticket 134: rebuild the 模型 card's data; called at start and after every change."""
         models = getattr(getattr(self.chat, 'cfg', None), 'models', None)
@@ -1199,7 +1207,9 @@ class Hub(ScreenPopMixin):
             self.models_view = None
             return None
         if reload:
+            before = models.startup_choice('peter')
             models.reload()
+            self._sync_chat_model(before)
         view = models.public()
         view['background_running'] = self.background_running
         view['background_restart'] = (self.background_running is not None
@@ -1209,6 +1219,7 @@ class Hub(ScreenPopMixin):
 
     def save_models(self, payload):
         models = self.chat.cfg.models
+        before = None
         try:
             with models.env_lock, models.lock:
                 before = models.startup_choice('peter')
@@ -1224,12 +1235,14 @@ class Hub(ScreenPopMixin):
         except SettingsError as exc:
             if '另一个进程' in str(exc):
                 models.reload()
+                self._sync_chat_model(before)
                 self.refresh_models()
             raise
         return self.refresh_models()
 
     def use_model(self, role, model_id):
         models = self.chat.cfg.models
+        before = models.startup_choice('peter')
         try:
             with models.env_lock, models.lock:
                 model_id, name, provider = models.use(role, model_id)
@@ -1238,6 +1251,7 @@ class Hub(ScreenPopMixin):
         except SettingsError as exc:
             if '另一个进程' in str(exc):
                 models.reload()
+                self._sync_chat_model(before)
                 self.refresh_models()
             raise
         return self.refresh_models()

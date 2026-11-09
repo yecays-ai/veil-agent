@@ -12,7 +12,8 @@
 - 工单 318 在 `ticket/318-model-config-concurrency` 上开发，基于最新 `main`，PR #318（草稿）：https://github.com/yecays-ai/veil-agent/pull/318。本单只修锁顺序和旧实例重新加载，不重构模型设置。
 - 锁顺序已统一为 `_ENV_LOCK` → `self.lock` → `models.json` 文件锁；初始化、保存、选模和 `reload()` 一致，`Hub` 外层锁顺序保持不变。
 - 新增 `ModelSettings.reload()`：重新读取最新 `models.json`、完成必要迁移、更新内存快照和旧快照标识；旧实例保存/选模遇到“另一个进程修改”时自动重载，刷新页面也不再一直使用旧配置。
-- 回归覆盖：旧实例拒绝覆盖后重载并继续保存；初始化、保存、选模并发不卡死。`test_model_settings` 40 项、`test_web` 67 项通过。
+- 重载后如果聊天模型发生变化，`Hub` 会把新的 provider 同步到下一次聊天请求（`switch_model`），避免页面显示新模型、实际仍调用旧模型。
+- 回归覆盖：旧实例拒绝覆盖后重载并继续保存；初始化、保存、选模并发不卡死；重载后聊天 provider 同步。`test_model_settings` 41 项、`test_web` 67 项通过。
 - 未验证：真实 Windows 双实例桌面操作；留待 Lan 验收。PR #318 已提交，等待 CI 和 Lan 验收，不自行合并。
 
 ## 下一步
