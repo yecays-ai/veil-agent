@@ -13,6 +13,7 @@ import base64
 import shutil
 import stat
 import threading
+from contextlib import contextmanager
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -73,6 +74,38 @@ def _key(value):
     return value
 
 
+@contextmanager
+def _exclusive_file_lock(path):
+    """Cross-process lock for models.json, so migration and saves cannot interleave."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = path.open('a+b')
+    try:
+        handle.seek(0, os.SEEK_END)
+        if handle.tell() == 0:
+            handle.write(b'0')
+            handle.flush()
+            os.fsync(handle.fileno())
+        handle.seek(0)
+        if os.name == 'nt':
+            import msvcrt
+            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            handle.seek(0)
+            if os.name == 'nt':
+                import msvcrt
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            handle.close()
+
+
 class ModelSettings:
     def __init__(self, root, character_id, builtins, default_name):
         self.root = Path(root)
@@ -85,10 +118,20 @@ class ModelSettings:
         self.lock = threading.RLock()
         self.env_lock = _ENV_LOCK
         self.blocked = False
-        with _ENV_LOCK:
-            self._recover()
-        raw = self._migrate_retired_cc_choices(self._read())
-        self.data = self._clean(raw)
+        self._source_bytes = None
+        with _exclusive_file_lock(self.path.with_name('models.json.lock')):
+            with _ENV_LOCK:
+                self._recover()
+            raw = self._migrate_retired_cc_choices(self._read())
+            self.data = self._clean(raw)
+            self._source_bytes = self._current_bytes()
+
+    def _current_bytes(self):
+        try:
+            return self.path.read_bytes()
+        except FileNotFoundError:
+            return None
+
 
     # ---- ticket 317: old Claude Code choices ---------------------------------
     def _retired_cc_ref(self, value):
@@ -555,9 +598,12 @@ class ModelSettings:
         if (not isinstance(endpoints_in, list) or not isinstance(models_in, list)
                 or len(endpoints_in) > MAX_ENDPOINTS or len(models_in) > MAX_MODELS):
             raise SettingsError('接口或模型太多了。')
-        with _ENV_LOCK, self.lock:
+        with _exclusive_file_lock(self.path.with_name('models.json.lock')), _ENV_LOCK, self.lock:
             if self.blocked or self.journal.exists():
                 self._recover()
+                self._source_bytes = self._current_bytes()
+            if self._current_bytes() != self._source_bytes:
+                raise SettingsError('模型配置已被另一个进程修改；请刷新模型设置后重试。')
             endpoints, new_keys = [], {}
             known = {item['id']: item for item in self.data['endpoints']}
             taken = set(known)
@@ -597,6 +643,7 @@ class ModelSettings:
             if not new_keys and not removed:
                 self._write(data)
                 self.data = data
+                self._source_bytes = self._current_bytes()
                 return self.public()
             record = {'state': 'prepared', 'env': self._snapshot(self.env_path),
                       'models': self._snapshot(self.path),
@@ -608,8 +655,10 @@ class ModelSettings:
                 self._atomic_bytes(self.journal, json.dumps({**record, 'state': 'committed'}).encode('utf-8'))
             except Exception:
                 self._recover()
+                self._source_bytes = self._current_bytes()
                 raise
             self.data = data
+            self._source_bytes = self._current_bytes()
             try:
                 self.journal.unlink()
                 self._sync_directory(self.journal.parent)
@@ -622,15 +671,18 @@ class ModelSettings:
     def use(self, role, model_id):
         if role not in ROLES:
             raise SettingsError('不认识的用途。')
-        with self.lock:
+        with _exclusive_file_lock(self.path.with_name('models.json.lock')), self.lock:
             if self.blocked or self.journal.exists():
                 raise SettingsError('模型设置保存未完成；请重启恢复后再切换。')
+            if self._current_bytes() != self._source_bytes:
+                raise SettingsError('模型配置已被另一个进程修改；请刷新模型设置后重试。')
             if role == 'delegate' and model_id in (None, ''):
                 data = {**self.data, 'use': {key: value for key, value in self.data['use'].items()
                                              if key != 'delegate'}}
                 self._forget_migration_role(data, role)
                 self._write(data)
                 self.data = data
+                self._source_bytes = self._current_bytes()
                 return None, None, None
             if role == 'autonomy' and model_id == FOLLOW_CHAT:
                 data = {**self.data, 'use': {key: value for key, value in self.data['use'].items()
@@ -638,6 +690,7 @@ class ModelSettings:
                 self._forget_migration_role(data, role)
                 self._write(data)
                 self.data = data
+                self._source_bytes = self._current_bytes()
                 return None, None, None
             if not self._choice_ok(self.data, role, model_id):
                 raise SettingsError('这个模型已经不在列表里了。')
@@ -645,6 +698,7 @@ class ModelSettings:
             self._forget_migration_role(data, role)
             self._write(data)
             self.data = data
+            self._source_bytes = self._current_bytes()
             return self.chosen(role)
 
     def _write(self, data):

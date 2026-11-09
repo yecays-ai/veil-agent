@@ -12,7 +12,8 @@
 - 已删除 CC 独立执行器、MCP 桥、Claude CLI 发现、后台子进程、专属实验、冒烟脚本和专属测试；`veil_agent.py`、`model_settings.py`、`characters/peter/character.toml` 与桌面端已完成定向删除。OpenCode、维护任务、MCP、委派、费用和工具等共享基础设施保留。
 - 旧 `data/<角色>/models.json` 中已确认的 CC 内置模型引用会迁移：先保留 `models.json.cc-removal-backup`，再原子替换。聊天和记忆后台优先恢复已填写 Key 的 API 模型；没有 Key 时明确提示；没有普通 API 模型时以显式“未选择模型”启动，设置页仍可保存首个接口和模型。自主活动和瞄一眼恢复默认选择，委派清空并提示重选；其他用途、自定义模型、接口、API Key、价格和费用上限不变。
 - 缺少 `providers` 表或默认 provider 被删除/是 CC 时可恢复启动；普通默认 provider 本身配置无效时仍报明确配置错误，不会静默换到另一个付费模型。缺模型/Key 按可恢复请求错误处理，聊天循环和桌面服务不退出；此时模型相关的 Ombre 记忆后台暂不启动，并提示选择模型后重启。
-- 合并后工作台回归：`executor_opencode` 100 项通过（2 项按环境跳过）、`maintenance` 43 项通过、`workbench_switch` 2 项通过、`turn_stop` 7 项通过；覆盖维护任务启动、执行、停止、取消、状态写回、资源清理及工作台切换。另有 model_settings 35、chat 89、web 67、tools 73（1 跳过）、autonomy 40、background 19、glance_model 6、delegate 9、mcp_services 23、tool_groups 10、tool_aliases 11、long_tasks 23、free_reply 31、cache_order 8、capability_transactions 7 项通过；Python 编译和 `node --check desktop/chat.js` 通过。
+- `models.json` 的迁移、保存和模型切换通过同一跨进程文件锁串行；保存/切换前检查文件是否已被另一个进程修改，发现旧快照会拒绝覆盖并提示刷新。锁文件是 `data/<角色>/models.json.lock`，不写入用户配置。
+- 合并后工作台回归：`executor_opencode` 100 项通过（2 项按环境跳过）、`maintenance` 43 项通过、`workbench_switch` 2 项通过、`turn_stop` 7 项通过；覆盖维护任务启动、执行、停止、取消、状态写回、资源清理及工作台切换。另有 model_settings 38、chat 90、web 67、tools 73（1 跳过）、autonomy 40、background 19、glance_model 7、delegate 9、mcp_services 23、tool_groups 10、tool_aliases 11、long_tasks 23、free_reply 31、cache_order 8、capability_transactions 7 项通过；Python 编译和 `node --check desktop/chat.js` 通过。
 - 未完成：真实付费 API、真实 OpenCode 交互授权/停止、Windows 桌面实际点击未验证。代码合并、自动检查通过、Windows 体验验收分别记录，不相互代替。
 
 ## 下一步

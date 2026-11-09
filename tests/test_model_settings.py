@@ -472,6 +472,18 @@ model = "sonnet"
         self.assertEqual(path.read_bytes(), before)
         self.assertFalse(path.with_name('models.json.cc-removal-backup').exists())
 
+    def test_stale_instance_cannot_overwrite_newer_models(self):
+        first = load_character(self.root, 'test')
+        second = load_character(self.root, 'test')
+        first.models.save(RELAY)
+        before = first.models.path.read_bytes()
+        with self.assertRaisesRegex(SettingsError, '另一个进程'):
+            second.models.save(RELAY)
+        self.assertEqual(first.models.path.read_bytes(), before)
+        with self.assertRaisesRegex(SettingsError, '另一个进程'):
+            second.models.use('peter', 'builtin:other')
+        self.assertEqual(first.models.path.read_bytes(), before)
+
     def test_key_and_model_transaction_recovers_after_second_write_failure(self):
         cfg = load_character(self.root, 'test')
         initial_env = (self.root / '.env').read_bytes()
@@ -613,7 +625,7 @@ model = "sonnet"
         record = {'state': 'prepared', 'env': base64.b64encode(initial_env).decode('ascii'), 'models': None}
         cfg.models._atomic_bytes(cfg.models.journal, json.dumps(record).encode())
         (self.root / '.env').write_text('FAKE_KEY=half-new\n', encoding='utf-8')
-        cfg.models.path.parent.mkdir(parents=True)
+        cfg.models.path.parent.mkdir(parents=True, exist_ok=True)
         cfg.models.path.write_text('{"use": {"peter": "mabcdef"}}', encoding='utf-8')
         restarted = load_character(self.root, 'test')
         self.assertEqual((self.root / '.env').read_bytes(), initial_env)
