@@ -127,7 +127,7 @@ class _Worker:
         self.tools = []
         self.tool_limit_hit = False
         self.closing = threading.Event()
-        self.call_timeout = CALL_TIMEOUT
+        self.call_timeout = None  # None: the module's CALL_TIMEOUT, read at call time
         self.started_at = time.monotonic()
         self.thread = threading.Thread(target=self._thread, daemon=True, name='mcp-' + service['id'])
         self.thread.start()
@@ -178,7 +178,7 @@ class _Worker:
                             continue
                         self.active_reply = reply
                         try:
-                            async with asyncio.timeout(self.call_timeout):
+                            async with asyncio.timeout(self.call_timeout or CALL_TIMEOUT):
                                 response = await session.call_tool(name, args)
                             if response.isError:
                                 detail = '\n'.join(str(getattr(block, 'text', '')) for block in response.content)
@@ -234,7 +234,7 @@ class _Worker:
             with self.pending_lock:
                 self.pending.discard(reply)
             raise RuntimeError('MCP 服务已断开。') from exc
-        deadline = time.monotonic() + self.call_timeout + 3
+        deadline = time.monotonic() + (self.call_timeout or CALL_TIMEOUT) + 3
         try:
             while True:
                 if reply.done():
