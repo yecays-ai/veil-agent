@@ -1268,8 +1268,9 @@ max_steps = 4
         desktop = [SimpleNamespace(name=name, description='d', inputSchema=schema) for name in
                    ('windows_observe', 'windows_launch', 'windows_manage', 'windows_control_action')]
 
-        def names(extra, with_desktop=True):
+        def names(extra, with_desktop=True, autonomy=False):
             chat = self.chat(extra)
+            chat.autonomy_mode = autonomy
             chat.tools.tools = chat.tools.tools + desktop
             if with_desktop:
                 chat.tools.windows_tools = SimpleNamespace(tools=desktop[:1])
@@ -1281,6 +1282,7 @@ max_steps = 4
         self.assertIn('workbench', with_workbench)
         self.assertTrue(actions <= with_workbench)  # ticket 325: desktop work stays in main chat
         self.assertTrue(actions <= names(''))
+        self.assertTrue(actions <= names(self.executor, autonomy=True))  # autonomous wakes keep them too
 
     def write_local(self, text):
         path = self.root / 'data' / 'test'
