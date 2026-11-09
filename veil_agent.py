@@ -746,7 +746,7 @@ def _executor_roots(value):
     return [r.strip() for r in value]
 
 
-WORKBENCH_LOCAL_KEYS = {'enabled': bool, 'project_roots': list, 'container_image': str}
+WORKBENCH_LOCAL_KEYS = {'enabled': bool, 'project_roots': list, 'container_image': str, 'host_mode': bool}
 
 
 def workbench_local_path(root, character_id):
@@ -1045,6 +1045,8 @@ def load_character(root, character_id):
         if executor is not None:
             if type(executor.get('enabled', False)) is not bool:
                 raise ValueError('executor.enabled must be boolean')
+            if type(executor.get('host_mode', False)) is not bool or type(executor.get('host_desktop', True)) is not bool:
+                raise ValueError('executor.host_mode and executor.host_desktop must be boolean')
             executor = {'enabled': executor.get('enabled', False),
                         'command': str(executor.get('command', '')),
                         'max_steps': positive_int(executor.get('max_steps', 30)),
@@ -1057,7 +1059,11 @@ def load_character(root, character_id):
                         'maintenance_repo': str(executor.get('maintenance_repo') or root),
                         'worktree_root': str(executor.get('worktree_root') or (Path(root).parent / 'worktrees')),
                         'github_repo': str(executor.get('github_repo') or 'yecays-ai/veil-agent'),
-                        'maintenance_hours': positive_int(executor.get('maintenance_hours', 2))}
+                        'maintenance_hours': positive_int(executor.get('maintenance_hours', 2)),
+                        # Ticket 329: the host execution path (OpenCode on Windows + VEIL checkpoint), off by default.
+                        'host_mode': executor.get('host_mode', False),
+                        'host_desktop': executor.get('host_desktop', True),
+                        'host_browser': str(executor.get('host_browser', 'msedge'))}
         return Character(character_id, str(cfg['name']), persona,
                          positive_int(cfg.get('history_rounds', 20)),
                          positive_int(cfg.get('max_output_tokens', 1024)), provider, provider_name,
@@ -2105,7 +2111,11 @@ class Chat:
                 schemas.append({'type': 'function', 'function': dict(DELEGATE_TOOL['function'])})
         if self.workbench_ready() and self.tool_mode and not self.glance_mode:
             from executor_opencode import TOOL_SCHEMA as WORKBENCH_TOOL
-            schemas.append({'type': 'function', 'function': dict(WORKBENCH_TOOL['function'])})
+            workbench_schema = {'type': 'function', 'function': dict(WORKBENCH_TOOL['function'])}
+            if (getattr(self.cfg, 'executor', None) or {}).get('host_mode'):
+                from host_executor import TOOL_DESCRIPTION as HOST_WORKBENCH_DESCRIPTION
+                workbench_schema['function']['description'] = HOST_WORKBENCH_DESCRIPTION
+            schemas.append(workbench_schema)
         if self.maintenance is not None and not self.glance_mode:
             from maintenance import TOOL_SCHEMA as MAINTENANCE_TOOL
             schema = {'type': 'function', 'function': dict(MAINTENANCE_TOOL['function'])}
@@ -3995,6 +4005,9 @@ class Chat:
         settings = getattr(self.cfg, 'executor', None) or {}
         if not settings.get('enabled'):
             return False
+        if settings.get('host_mode'):
+            from executor_opencode import find_command
+            return find_command(settings.get('command', '')) is not None
         if settings.get('container_image'):
             import shutil
             return shutil.which('docker') is not None
@@ -4005,10 +4018,17 @@ class Chat:
         from dotenv import dotenv_values
         import executor_opencode as ex
         settings = self.cfg.executor
-        container = {'image': settings['container_image']} if settings.get('container_image') else None
+        # Ticket 329: the host path serves Peter's own tasks; VEIL maintenance keeps the isolated container.
+        host = bool(settings.get('host_mode')) and not task_id
+        container = ({'image': settings['container_image']} if settings.get('container_image') and not host
+                     else None)
         command = 'docker' if container else ex.find_command(settings.get('command', ''))
         if command is None:
             return ex.ExecutorResult('The workbench is not installed on this computer.', '出错')
+        if host:
+            import host_executor
+            if why := host_executor.check_opencode(command):
+                return ex.ExecutorResult(why, '出错')
         provider = self.cfg.provider
         key = (dotenv_values(ROOT / '.env', interpolate=False, encoding='utf-8-sig').get(provider['api_key_env']) or '').strip()
         if not key:
@@ -4087,6 +4107,16 @@ class Chat:
                                 workspace.resolve() in Path(workdir).resolve().parents)
             same_workspace = Path(workdir).resolve() == workspace.resolve()
             protect = [journal] if journal and same_workspace else []
+            checkpoint, host_gateways = None, ()
+            if host:
+                # The checkpoint protects the journal on the host (the container masked it before).
+                checkpoint, host_gateways = host_executor.prepare(
+                    workdir=Path(workdir), home=role / 'workbench-home', veil_root=ROOT, ask=self.approval,
+                    autonomy=autonomy, stopped=stopped, protect=protect,
+                    # Autonomous activity never takes over her desktop; it keeps the background browser.
+                    desktop=bool(settings.get('host_desktop', True)) and not autonomy,
+                    browser=settings.get('host_browser', 'msedge'))
+                protect = []
             files = getattr(self.tools, 'files', None) or self.tools
             operation_lock = getattr(files, 'workspace_operation_lock', None) if inside_workspace else None
             browser = getattr(files, 'browser_tools', None)
@@ -4103,8 +4133,9 @@ class Chat:
                                  save_approval=(lambda kind, fingerprint: self.maintenance.record_workbench_approval(
                                      task_id, kind, fingerprint)) if maintenance else None,
                                  browser_gateway=(browser.workbench_gateway
-                                                  if browser is not None and browser.enabled and not maintenance else None),
-                                 windows_gateway=windows_gateway)
+                                                  if browser is not None and browser.enabled and not maintenance
+                                                  and not host else None),
+                                 windows_gateway=windows_gateway, checkpoint=checkpoint, host_gateways=host_gateways)
             if maintenance and self.maintenance is not None:
                 self.maintenance.record_workbench(task_id, cost=outcome.cost, steps=outcome.steps,
                                                   report=outcome.text, state=outcome.state, reason=outcome.reason)
