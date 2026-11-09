@@ -460,10 +460,6 @@ class BrowserNetworkTests(unittest.TestCase):
         self.assertTrue(closed)
 
 
-if __name__ == '__main__':
-    unittest.main()
-
-
 class UvEnvironmentTests(unittest.TestCase):
     def test_desktop_service_gets_uv_folders_next_to_veil_and_the_browser_does_not(self):
         import host_executor
@@ -484,3 +480,7 @@ class UvEnvironmentTests(unittest.TestCase):
             by = {g.server_id: g.environment for g in gateways}
             self.assertEqual(by[vc.COMPUTER_SERVER]['UV_PYTHON_INSTALL_DIR'], env['UV_PYTHON_INSTALL_DIR'])
             self.assertNotIn('UV_PYTHON_INSTALL_DIR', by[vc.BROWSER_SERVER])
+
+
+if __name__ == '__main__':
+    unittest.main()
