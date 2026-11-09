@@ -1,5 +1,10 @@
 # HANDOFF
 
+## 工单 333（2026-11-10）：输入读回
+
+- 见 docs/tickets/333-host-input-verify.md。代码在 veil_checkpoint.py（foreground_rect、focused_text、_outside_foreground）与 veil_mcp_gateway.py（_verify_typed）。
+- 状态：云端单元测试通过；真机（测试副本跑记事本 hello）未验证。
+
 ## 工单 332（2026-11-10）：第二轮真机实测
 
 - 网页场景卡死 10 分钟的根因是 OpenCode 1.19.5 的 `GET /permission` 整个列表格式错误（见工单文件），已改读事件流并在读不到时明确停下；云端真实 OpenCode 复现并验证。

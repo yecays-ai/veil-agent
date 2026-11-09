@@ -7,6 +7,7 @@ Errors are returned and logged with their own text.
 """
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import re
 import secrets
 import threading
 import time
@@ -18,6 +19,14 @@ from mcp_services import START_TIMEOUT, _Worker
 
 MAX_RESTARTS = 2
 QUEUE_SECONDS = 90
+
+
+def server_is_computer(server_id):
+    return server_id == vc.COMPUTER_SERVER
+
+
+def _squash(value):
+    return re.sub(r'\s+', ' ', str(value or '')).strip()
 
 
 class VeilMcpGateway:
@@ -115,9 +124,43 @@ class VeilMcpGateway:
                 detail = ex._safe_display(detail)
                 self.checkpoint.log(kind='tool_error', server=self.server_id, tool=name, error=detail[:2000])
                 return detail[:2000], True
+            if server_is_computer(self.server_id) and name == 'Type':
+                text, failed = self._verify_typed(arguments, text)
+                if failed:
+                    return text, True
         finally:
             self.lock.release()
         return text, False
+
+    def _verify_typed(self, arguments, text):
+        """Read the field back after Type (never from the model's say-so). (text for the model, failed)."""
+        typed = _squash(arguments.get('text'))
+        if not typed:
+            return text, False
+        if str(arguments.get('press_enter', '')).casefold() in {'true', '1'}:
+            return text + ' VEIL could not check the result because Enter was pressed; confirm with a Snapshot ' \
+                'before saying it worked.', False
+        seen = self.checkpoint.read_focus() if self.checkpoint.read_focus else None
+        if seen is not None:
+            ok = typed in _squash(seen)
+            self.checkpoint.log(kind='readback', server=self.server_id, method='control', typed_chars=len(typed),
+                                ok=ok)
+            if ok:
+                return text, False
+            return ('Input did not take effect: after typing, the field in front does not contain the text. '
+                    'Nothing was confirmed; do not report it as typed. Check the window with a Snapshot, '
+                    'click the right field, and try again, or report the failure.'), True
+        try:
+            snapshot = self._live_worker().call('Snapshot', {}, should_stop=self.stopped)
+        except Exception as exc:
+            snapshot = None
+            self.checkpoint.log(kind='readback_error', server=self.server_id, error=(str(exc) or type(exc).__name__)[:300])
+        if snapshot is not None and typed in _squash(snapshot):
+            self.checkpoint.log(kind='readback', server=self.server_id, method='snapshot', typed_chars=len(typed), ok=True)
+            return text, False
+        self.checkpoint.log(kind='readback', server=self.server_id, method='snapshot', typed_chars=len(typed), ok=None)
+        return (text + ' VEIL could not see the typed text afterwards, so it is NOT confirmed. Take a Screenshot or '
+                'Snapshot and check the field before saying it worked; if it is not there, report the failure.'), False
 
     # ---- MCP endpoint for OpenCode ----------------------------------------------------------------------
     def __enter__(self):
