@@ -7,7 +7,7 @@ import time
 import urllib.request
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import browser_tools
 from browser_tools import (BrowserTools, BrowserWorkbenchGateway, PublicProxy, public_addresses, public_url,
@@ -87,16 +87,22 @@ class BrowserWorkbenchGatewayTests(unittest.TestCase):
                 raise
         self.assertEqual(rejected.exception.code, 413)
 
-    def test_human_takeover_revokes_the_whole_gateway_and_request_size_is_bounded(self):
+    def test_only_a_stop_revokes_the_background_gateway_and_request_size_is_bounded(self):
         changed = [False]
         monitor = SimpleNamespace(snapshot=lambda: 'before', changed_since=lambda _snapshot: changed[0])
-        browser = SimpleNamespace(begin_request=lambda: None, invoke=lambda *_args, **_kwargs: ('', '成功', ''), monitor=monitor)
+        browser = SimpleNamespace(begin_request=lambda: None, invoke=lambda *_args, **_kwargs: ('', '成功', ''),
+                                  monitor=monitor, visible=True)
         with BrowserWorkbenchGateway(browser, lambda: False) as gateway:
-            self.assertFalse(gateway.stopped())
+            # The workbench browses in the background: Lan using her computer does not stop it,
+            # even while the chat has a page shown on her screen.
             changed[0] = True
+            self.assertFalse(gateway.stopped())
+            browser.visible = True
+            self.assertFalse(gateway.stopped())
+            gateway.stop()
             self.assertTrue(gateway.stopped())
             changed[0] = False
-            self.assertTrue(gateway.stopped(), 'human takeover must not be cleared between MCP calls')
+            self.assertTrue(gateway.stopped(), 'a stop must not be cleared between MCP calls')
         self.assertEqual(BrowserWorkbenchGateway.request_size(str(MAX_MCP_REQUEST_BYTES)), MAX_MCP_REQUEST_BYTES)
         with self.assertRaises(OverflowError):
             BrowserWorkbenchGateway.request_size(str(MAX_MCP_REQUEST_BYTES + 1))
@@ -149,6 +155,15 @@ class BrowserWorkbenchGatewayTests(unittest.TestCase):
         with BrowserWorkbenchGateway(browser, lambda: False):
             pass
         self.assertEqual(closed, [True])
+
+    def test_gateway_does_not_close_a_browser_action_in_progress(self):
+        browser = SimpleNamespace(page=object(), close=Mock(), begin_request=Mock(), gate=threading.Lock())
+        browser.gate.acquire()
+        self.addCleanup(browser.gate.release)
+        with self.assertRaisesRegex(RuntimeError, 'Browser is busy'):
+            BrowserWorkbenchGateway(browser, lambda: False).__enter__()
+        browser.close.assert_not_called()
+        browser.begin_request.assert_not_called()
 
     def test_gateway_refuses_actions_outside_the_advertised_enum(self):
         calls = []
@@ -292,8 +307,24 @@ class BrowserSafetyTests(unittest.TestCase):
             browser.gate.release()
         browser.begin_request()
         browser.monitor.require_idle = lambda _: (_ for _ in ()).throw(ValueError('human priority'))
+        self.addCleanup(browser.close)
+        # A background browser never waits for Lan to stop using her computer.
+        self.assertNotIn('human priority', browser.invoke('browser', {'action': 'observe'})[0])
+        # A browser she asked to see on her screen gives way to her input.
+        browser.visible = True
         self.assertIn('human priority', browser.invoke('browser', {'action': 'observe'})[0])
-        self.assertIsNone(browser.loop)
+        # Closing the shown page returns the browser to the background.
+        browser.invoke('browser', {'action': 'close'})
+        self.assertFalse(browser.visible)
+        browser.visible = True
+        for action in ({'action': 'observe'}, {'action': 'close'}):
+            result, state, _ = browser.invoke('browser', action, background=True)
+            self.assertEqual(state, '被拒绝', result)
+            self.assertIn("showing a page on Lan's screen", result)
+        self.assertTrue(browser.visible)
+        browser.visible = False
+        self.assertIn('show must be', browser.invoke(
+            'browser', {'action': 'open', 'url': 'https://example.com/', 'show': 'yes'})[0])
 
     def test_cjk_evidence_is_kept_and_wrapped_as_untrusted(self):
         result = model_tool_result('browser', '视频页面已准备，播放未确认', '成功')

@@ -2150,5 +2150,27 @@ class WorkbenchSwitchApiTests(unittest.TestCase):
                 ws.load_state(root)
 
 
+
+class RunLogTests(unittest.TestCase):
+    def test_run_log_keeps_the_session_and_bridged_errors_are_readable(self):
+        import tempfile
+        messages = [{'info': {'role': 'assistant'}, 'parts': [
+            {'type': 'tool', 'tool': 'veil_windows_windows_launch',
+             'state': {'status': 'error', 'error': 'Notepad launch result is uncertain; not retried.'}},
+            {'type': 'tool', 'tool': 'bash',
+             'state': {'status': 'error', 'input': {'command': 'cat secret.txt'}, 'error': 'TOP SECRET'}}]}]
+        text = ex.diagnose(messages)
+        self.assertIn('Notepad launch result is uncertain', text)
+        self.assertNotIn('TOP SECRET', text)
+        with tempfile.TemporaryDirectory() as home:
+            for _ in range(ex.RUN_LOG_KEEP + 2):
+                ex.save_run_log(home, messages, stop='stopped by Lan', steps=1)
+            logs = sorted((Path(home) / 'runs').glob('*.json'))
+            self.assertEqual(len(logs), ex.RUN_LOG_KEEP)
+            saved = json.loads(logs[-1].read_text(encoding='utf-8'))
+            self.assertEqual(saved['stop'], 'stopped by Lan')
+            self.assertEqual(saved['messages'], messages)
+
+
 if __name__ == '__main__':
     unittest.main()

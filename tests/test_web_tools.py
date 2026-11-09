@@ -116,6 +116,22 @@ class WebToolsTests(unittest.TestCase):
         self.assertIn('https://ok.example/a', result)
         self.assertEqual([c.kwargs['backend'] for c in ddgs.text.call_args_list],
                          ['brave', 'yahoo', 'mojeek'])
+        # The engine that answered is tried first on the next search.
+        ddgs.text.reset_mock()
+        ddgs.text.side_effect = [[{'title': 'Hit', 'href': 'https://ok.example/b', 'body': 'x'}]]
+        with patch('web_tools.DDGS', return_value=ddgs):
+            tools.invoke('web_search', {'query': 'topic'})
+        self.assertEqual([c.kwargs['backend'] for c in ddgs.text.call_args_list], ['mojeek'])
+
+    def test_failure_reason_hides_proxy_credentials(self):
+        _, _, tools, _ = self.make_tools(worker=Mock())
+        ddgs = Mock()
+        ddgs.text.side_effect = OSError('cannot reach http://user:secret@proxy.example:8080 now')
+        with patch('web_tools.DDGS', return_value=ddgs):
+            result, state, _ = tools.invoke('web_search', {'query': 'topic'})
+        self.assertEqual(state, '出错')
+        self.assertNotIn('secret', result)
+        self.assertIn('http://***@proxy.example:8080', result)
 
     def test_search_reports_error_only_after_every_engine_failed(self):
         _, _, tools, _ = self.make_tools(worker=Mock())
@@ -125,6 +141,23 @@ class WebToolsTests(unittest.TestCase):
             result, state, _ = tools.invoke('web_search', {'query': 'topic'})
         self.assertEqual(state, '出错')
         self.assertEqual(ddgs.text.call_count, 5)
+        self.assertIn('brave: TimeoutError', result)
+        self.assertIn('duckduckgo: TimeoutError', result)
+
+    def test_search_uses_the_system_proxy_and_stops_at_the_total_time_limit(self):
+        _, _, tools, _ = self.make_tools(worker=Mock())
+        ddgs = Mock()
+        ddgs.text.side_effect = TimeoutError()
+        clock = iter([0, 0, 25, 25, 25])
+        with patch.dict('os.environ', {'DDGS_PROXY': ''}), \
+                patch('web_tools.urllib.request.getproxies', return_value={'http': 'http://127.0.0.1:7890'}), \
+                patch('web_tools.time.monotonic', side_effect=lambda: next(clock)), \
+                patch('web_tools.DDGS', return_value=ddgs) as factory:
+            result, state, _ = tools.invoke('web_search', {'query': 'topic'})
+        self.assertEqual(state, '出错')
+        self.assertEqual(factory.call_args.kwargs['proxy'], 'http://127.0.0.1:7890')
+        self.assertEqual(ddgs.text.call_count, 1)
+        self.assertIn('time limit reached', result)
 
     def test_research_searches_and_reads_top_pages_with_bounded_output(self):
         worker = Mock()

@@ -5188,6 +5188,11 @@ class Chat:
                             else 'Windows desktop action completed.'))
                     if result_state == '结果过长' and canonical_name not in DESKTOP_FILE_READ_TOOL_NAMES:
                         log_detail = display_detail
+                    if ((canonical_name in WINDOWS_DESKTOP_TOOL_NAMES or canonical_name == 'browser')
+                            and state != '成功'):
+                        # Keep the program's own failure text, so a refusal or error can be diagnosed
+                        # from the log. Successful results stay out: they can hold page or window text.
+                        log_detail = f'{log_detail} {str(execution.result)[:400]}'
                     activity_metadata = nowhere_activity_metadata(
                         canonical_name or call.function.name, call.function.name,
                         args, execution.result, state)

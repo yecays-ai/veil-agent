@@ -1,6 +1,7 @@
 """Public browsing in a fresh Playwright context, never a user's browser profile."""
 import asyncio
 import concurrent.futures
+import contextlib
 import ipaddress
 import json
 import os
@@ -33,17 +34,21 @@ SELF_TARGETS = frozenset({'', '_self', '_top'})
 TOOL = SimpleNamespace(
     name='browser',
     description=(
-        'Browse public HTTPS pages in your own isolated visible browser, also during autonomous wakes. '
+        'Browse public HTTPS pages in your own isolated browser, also during autonomous wakes. It runs in the '
+        'background: no window on Lan\'s screen, and her using the computer does not interrupt it. '
+        'Only when Lan wants to see a page herself, open it with show: true; that browser window appears on her '
+        'screen and her keyboard or mouse input then takes priority over your next step. '
         'Use web_search for discovery, then open a URL, click a fresh link_id, or scroll to see more. '
         'open, click and scroll each already return the page text and links, so do not call observe right after them; '
         'observe only re-reads the current page. '
         'click navigates an anchor URL; no buttons/forms, login, accounts, social actions or downloads. '
         'Only page/link text and measured video state are evidence: page ready does NOT mean video playing. '
-        'Human input, stop/pause, 20 steps and 5 minutes take priority. close releases your browser.'),
+        'Stop/pause, 20 steps and 5 minutes take priority. close releases your browser.'),
     inputSchema={'type': 'object', 'properties': {
         'action': {'type': 'string', 'enum': ['open', 'observe', 'click', 'scroll', 'close']},
         'url': {'type': 'string'}, 'link_id': {'type': 'string'},
         'direction': {'type': 'string', 'enum': ['up', 'down']},
+        'show': {'type': 'boolean', 'description': 'open only: put the browser on Lan\'s screen for her to see.'},
     }, 'required': ['action'], 'additionalProperties': False})
 
 
@@ -159,13 +164,17 @@ SUBMIT_FORM = """(element, expected) => { const form = element.form;
 
 
 class BrowserTools:
-    def __init__(self, cfg, *, platform_enabled=None, headless=False, monitor=None):
+    def __init__(self, cfg, *, platform_enabled=None, headless=None, monitor=None):
         self.enabled = bool((getattr(cfg, 'web', None) or {}).get('enabled') is True
                             and (getattr(cfg, 'web', None) or {}).get('browser_interaction') is True
                             and (os.name == 'nt' if platform_enabled is None else platform_enabled))
         self.tools = [TOOL] if self.enabled else []
         self.monitor = monitor or DesktopInputMonitor()
+        # None: background (headless) unless an open asks for show; True forces headless (tests).
         self.headless = headless
+        # Whether the current browser window is on Lan's screen. Only then does her input take priority:
+        # a background browser never touches her mouse, keyboard or foreground window.
+        self.visible = False
         self.loop = None
         self.thread = None
         self.gate = threading.Lock()
@@ -175,6 +184,7 @@ class BrowserTools:
         self.controls = {}
         self.page = self.context = self.engine = self.runtime = self.proxy = None
         self.serial = 0
+        self.launched_visible = None
         self.quarantined = False
         self.stopped = lambda: False
 
@@ -216,8 +226,9 @@ class BrowserTools:
         self.runtime = await async_playwright().start()
         environment = {key: value for key, value in os.environ.items()
                        if key.upper() in {'PATH', 'SYSTEMROOT', 'WINDIR', 'TEMP', 'TMP'}}
+        self.launched_visible = self.visible
         self.engine = await self.runtime.chromium.launch(
-            headless=self.headless, env=environment, chromium_sandbox=True,
+            headless=True if self.headless else not self.visible, env=environment, chromium_sandbox=True,
             proxy={'server': f'http://127.0.0.1:{port}', 'bypass': '<-loopback>'},
             args=['--disable-quic', '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
                   '--disable-background-networking'])
@@ -309,14 +320,15 @@ class BrowserTools:
     async def _operate(self, args, stopped):
         self.stopped = stopped
         try:
-            with desktop_access():
+            with desktop_access() if self.visible else contextlib.nullcontext():
                 if stopped():
                     raise ValueError('Stopped: human input or stop/pause has priority.')
                 action = args['action']
                 if action == 'close':
                     await self._release()
                     return {'closed': True}
-                if self.page is None or self.page.is_closed():
+                if self.page is None or self.page.is_closed() or (
+                        action == 'open' and self.launched_visible != self.visible):
                     if action != 'open':
                         raise ValueError('Open a public page first.')
                     await self._release()
@@ -382,12 +394,14 @@ class BrowserTools:
             # Human input/deadlines stop Peter's operation, not the page left for Lan.
             self.stopped = lambda: False
 
-    def invoke(self, name, args, approval=None, *, should_stop=None):
+    def invoke(self, name, args, approval=None, *, should_stop=None, background=False):
+        """`background` (the workbench): never show a window, never wait on Lan's input."""
         summary = 'isolated public browser'
         if not self.enabled or name not in BROWSER_TOOL_NAMES:
             return 'Isolated browsing is unavailable for this role/platform.', '被拒绝', summary
         if not self.gate.acquire(blocking=False):
             return 'Browser is busy; no additional action was queued.', '被拒绝', summary
+        previous_visible = self.visible
         try:
             if not isinstance(args, dict):
                 raise ValueError('Expected browser action arguments.')
@@ -397,10 +411,26 @@ class BrowserTools:
             required = {'open': {'url'}, 'observe': set(), 'click': {'link_id'},
                         'scroll': {'direction'}, 'fill': {'control_id', 'text'},
                         'submit': {'control_id'}, 'close': set()}.get(action)
+            if action == 'open' and 'show' in args:
+                if not isinstance(args['show'], bool):
+                    raise ValueError('show must be true or false.')
+                args = dict(args)
+                show = args.pop('show')
+            else:
+                show = None
             if required is None or set(args) != required | {'action'}:
                 raise ValueError('Unsupported action or arguments.')
+            if background and self.visible:
+                # The chat is showing a page on Lan's screen; background work must not drive or close it.
+                raise ValueError("The browser is showing a page on Lan's screen; background browsing is "
+                                 'unavailable until that page is closed.')
             if action == 'open':
                 public_url(args['url'])
+                # A plain open keeps the current mode; only an explicit show changes it.
+                if background:
+                    self.visible = False
+                elif show is not None:
+                    self.visible = show
             if action == 'click' and not isinstance(args['link_id'], str):
                 raise ValueError('link_id must come from the latest observation.')
             if action in {'fill', 'submit'} and not isinstance(args['control_id'], str):
@@ -413,13 +443,17 @@ class BrowserTools:
                 self.begin_request()
             if action != 'close' and (self.steps >= MAX_STEPS or time.monotonic() >= self.deadline):
                 raise ValueError('Browser request step/time limit reached.')
-            snapshot = self.monitor.snapshot()
-            if action != 'close':
+            if action == 'close':
+                # Showing a page ends with its window; the next open is in the background again.
+                self.visible = False
+            human_priority = self.visible and action != 'close'
+            snapshot = self.monitor.snapshot() if human_priority else None
+            if human_priority:
                 self.monitor.require_idle(3)
             def stopped():
                 return (bool(should_stop and should_stop())
-                        or (action != 'close' and (self.monitor.changed_since(snapshot)
-                                                  or time.monotonic() >= self.deadline)))
+                        or (action != 'close' and time.monotonic() >= self.deadline)
+                        or (human_priority and self.monitor.changed_since(snapshot)))
             if not self.loop:
                 self._start_loop()
             self.steps += 1
@@ -444,6 +478,9 @@ class BrowserTools:
                         self.quarantined = False
                         raise ValueError('Interrupted; isolated browser closed. No next action was queued.')
         except Exception as exc:
+            if args.get('action') == 'open' if isinstance(args, dict) else False:
+                # A failed open does not change the mode; the next open relaunches if they differ.
+                self.visible = previous_visible
             # Do not expose arbitrary browser/network exception text or local installation paths.
             reason = str(exc) if isinstance(exc, ValueError) else type(exc).__name__
             return 'Browser action failed or was interrupted: ' + reason[:300], '被拒绝', summary
@@ -479,18 +516,14 @@ class BrowserWorkbenchGateway:
         self.server = self.thread = None
         self.started = False
         self.cancelled = threading.Event()
-        self.monitor_snapshot = None
 
     def stop(self):
         self.cancelled.set()
 
     def stopped(self):
-        if self.cancelled.is_set() or self.should_stop():
-            return True
-        if self.monitor_snapshot is not None and self.browser.monitor.changed_since(self.monitor_snapshot):
-            self.cancelled.set()
-            return True
-        return False
+        # The workbench browses in the background, so Lan using her computer never stops it; only the
+        # stop button, pause, limits or the end of the run do.
+        return self.cancelled.is_set() or self.should_stop()
 
     @staticmethod
     def request_size(value):
@@ -506,6 +539,9 @@ class BrowserWorkbenchGateway:
 
     def __enter__(self):
         gateway = self
+        gate = getattr(self.browser, 'gate', None)
+        if gate is not None and not gate.acquire(blocking=False):
+            raise RuntimeError('Browser is busy; the workbench browser gateway was not started.')
 
         class Handler(BaseHTTPRequestHandler):
             protocol_version = 'HTTP/1.1'
@@ -571,8 +607,10 @@ class BrowserWorkbenchGateway:
                                 or arguments.get('action') not in {'open', 'observe', 'click', 'scroll',
                                                                   'fill', 'submit'}):
                             raise ValueError('unsupported browser action')
+                        # The workbench browses in the background only; it never puts a window on Lan's screen.
+                        arguments = {key: value for key, value in arguments.items() if key != 'show'}
                         text, state, _summary = gateway.browser.invoke(
-                            'browser', arguments, should_stop=gateway.stopped)
+                            'browser', arguments, should_stop=gateway.stopped, background=True)
                         result = {'content': [{'type': 'text', 'text': text}],
                                   'isError': state != '成功'}
                         return self._send({'jsonrpc': '2.0', 'id': request_id, 'result': result})
@@ -594,12 +632,14 @@ class BrowserWorkbenchGateway:
             self.thread = threading.Thread(target=self.server.serve_forever, daemon=True, name='veil-browser-mcp')
             self.thread.start()
             self.started = True
-            self.monitor_snapshot = self.browser.monitor.snapshot()
             self.browser.begin_request()
             return self
         except Exception:
             self.__exit__(None, None, None)
             raise
+        finally:
+            if gate is not None:
+                gate.release()
 
     @property
     def url(self):
