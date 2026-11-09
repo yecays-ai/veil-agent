@@ -1284,6 +1284,49 @@ max_steps = 4
         self.assertTrue(actions <= names(''))
         self.assertTrue(actions <= names(self.executor, autonomy=True))  # autonomous wakes keep them too
 
+    def test_host_path_hands_browser_and_desktop_actions_to_the_workbench(self):
+        """Ticket 334: host_mode on -> chat keeps looking/searching, the workbench does browsing and app actions."""
+        schema = {'type': 'object', 'properties': {}}
+        names_all = ('windows_observe', 'windows_launch', 'windows_manage', 'windows_control_action',
+                     'windows_canvas_action', 'desktop_icons_arrange', 'browser', 'web_search')
+        host = self.executor + 'host_mode = true\n'
+
+        def chat_for(extra, available=(True, True), autonomy=False, glance=False):
+            chat = self.chat(extra)
+            chat.autonomy_mode, chat.glance_mode = autonomy, glance
+            chat.tools.tools = chat.tools.tools + [
+                SimpleNamespace(name=n, description='d', inputSchema=schema) for n in names_all]
+            return chat
+
+        def names(chat, available=(True, True)):
+            with patch('host_executor.available', return_value=available):
+                return {s['function']['name'] for s in chat.tool_schemas()}
+
+        old = names(chat_for(self.executor))
+        self.assertTrue({'browser', 'windows_launch', 'windows_manage'} <= old)
+        got = names(chat_for(host))
+        self.assertIn('workbench', got)
+        self.assertTrue({'windows_observe', 'web_search'} <= got)
+        self.assertFalse({'browser', 'windows_launch', 'windows_manage', 'windows_control_action',
+                          'windows_canvas_action', 'desktop_icons_arrange'} & got)
+        # only what this computer can start is handed over
+        self.assertIn('browser', names(chat_for(host), available=(False, True)))
+        no_desktop = names(chat_for(host), available=(True, False))
+        self.assertIn('windows_launch', no_desktop)
+        self.assertNotIn('browser', no_desktop)
+        # escape hatch, autonomous wakes and glances keep the old tools
+        keep = names(chat_for(host + 'host_keep_old_tools = true\n'))
+        self.assertTrue({'browser', 'windows_launch'} <= keep)
+        self.assertTrue({'browser', 'windows_launch'} <= names(chat_for(host, autonomy=True)))
+        self.assertTrue({'browser', 'windows_launch'} <= names(chat_for(host, glance=True)))
+
+    def test_host_handover_note_names_only_what_is_hidden(self):
+        from tool_groups import host_handover_note, host_hidden_names
+        self.assertEqual(host_hidden_names(False, False), frozenset())
+        note = host_handover_note(host_hidden_names(True, False))
+        self.assertIn('browser', note)
+        self.assertNotIn('windows_launch', note)
+
     def write_local(self, text):
         path = self.root / 'data' / 'test'
         path.mkdir(parents=True, exist_ok=True)

@@ -23,6 +23,21 @@ GROUP_SUMMARIES = {
     'desktop_control': 'launching apps, clicking, drawing, managing windows, arranging desktop icons',
 }
 TOOL_GROUPS = tuple(GROUP_SUMMARIES)
+# Ticket 334: with the host path on, these chat tools are hidden because the workbench does the same jobs behind
+# VEIL's single checkpoint: the foreground/background browser and the desktop actions. Read-only looking at the
+# screen, search and page reading stay in chat. Hidden, not deleted: `host_keep_old_tools` brings them back.
+HOST_PATH_HIDDEN_BROWSER = frozenset({'browser'})
+HOST_PATH_HIDDEN_DESKTOP = frozenset({'windows_discover_apps', 'windows_launch', 'windows_manage',
+                                      'windows_control_action', 'windows_canvas_action',
+                                      'desktop_icons_arrange', 'desktop_icons_restore'})
+HOST_PATH_HIDDEN = HOST_PATH_HIDDEN_BROWSER | HOST_PATH_HIDDEN_DESKTOP
+
+
+def host_hidden_names(browser, desktop):
+    # Only what the host path really offers on this computer is handed over; the rest stays as it was.
+    return (HOST_PATH_HIDDEN_BROWSER if browser else frozenset()) | (
+        HOST_PATH_HIDDEN_DESKTOP if desktop else frozenset())
+
 # A group stays open for the request that opened it and this many later chat requests; an
 # autonomous wake keeps it until that wake ends.
 CHAT_WARM_REQUESTS = 3
@@ -60,3 +75,12 @@ def announce_text(groups):
             'list until you open them with expand_capability, which lists the groups. Nothing was removed and '
             'permissions are unchanged. An opened group stays available for the rest of an autonomous wake, or for '
             'a few more chat turns.')
+
+
+def host_handover_note(hidden):
+    """One stable sentence for the system prompt: the tools described above that this turn does not offer, and where
+    their jobs went. Names come from what is really hidden, so the text never claims more than the list."""
+    names = ', '.join(sorted(hidden))
+    return ('In this chat the workbench tool does the browsing and Windows app work: ' + names + ' are not in your '
+            'tool list, so hand those jobs to the workbench (it opens apps, looks, clicks and types, and browses '
+            'in a background browser). Looking at the screen, web_search and web_fetch stay as they are.')

@@ -144,6 +144,23 @@ def upstream_services(home, *, desktop=True, browser='msedge', which=shutil.whic
     return services
 
 
+_AVAILABLE = {}
+
+
+def available(*, desktop=True, which=shutil.which, find_script=_python_script, now=time.monotonic):
+    """(browser, desktop): which of the two host servers this computer can start (Node for the browser, uv on Windows
+    for the desktop). The chat hides its old browser/desktop-action tools only for what is really offered, so a PC
+    that cannot start one keeps the old tool for it. Cached for a minute (tool lists are built every step)."""
+    key = (desktop, which is shutil.which)
+    hit = _AVAILABLE.get(key)
+    if hit and now() - hit[0] < 60:
+        return hit[1]
+    value = (bool(which('npx')),
+             bool(desktop and os.name == 'nt' and (which('uvx') or find_script('uvx'))))
+    _AVAILABLE[key] = (now(), value)
+    return value
+
+
 def _log_path(home):
     folder = Path(home) / 'host-runs'
     folder.mkdir(parents=True, exist_ok=True)

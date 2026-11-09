@@ -29,6 +29,8 @@ def load_state(root=ROOT):
     state = {'enabled': data.get('enabled') is True, 'project_roots': [str(x) for x in roots], 'container_image': image}
     if isinstance(data.get('host_mode'), bool):  # ticket 329: kept through every save
         state['host_mode'] = data['host_mode']
+    if isinstance(data.get('host_keep_old_tools'), bool):
+        state['host_keep_old_tools'] = data['host_keep_old_tools']
     return state
 
 
@@ -38,6 +40,8 @@ def save_state(state, root=ROOT):
     clean = {k: state[k] for k in KEYS}
     if isinstance(state.get('host_mode'), bool):
         clean['host_mode'] = state['host_mode']
+    if isinstance(state.get('host_keep_old_tools'), bool):
+        clean['host_keep_old_tools'] = state['host_keep_old_tools']
     tmp = path.with_suffix('.tmp')
     tmp.write_text(json.dumps(clean, ensure_ascii=False, indent=2), encoding='utf-8')
     tmp.replace(path)
@@ -99,6 +103,7 @@ def status(root=ROOT):
 
 def show(state):
     print('\n工作台现在：' + ('开' if state['enabled'] else '关'))
+    print('新通道（直接在你的 Windows 上做事）：' + ('开' if state.get('host_mode') else '关'))
     print('可以动的项目文件夹：' + ('（还没设置，只能用工作台自己的文件夹）' if not state['project_roots'] else ''))
     for item in state['project_roots']:
         print('  ' + item)
@@ -108,7 +113,8 @@ def main():
     state = load_state()
     while True:
         show(state)
-        print('\n1 开启   2 关闭   3 加一个项目文件夹   4 清空项目文件夹   0 退出（改完要重开 Peter）')
+        print('\n1 开启   2 关闭   3 加一个项目文件夹   4 清空项目文件夹   '
+              '5 开启新通道   6 关闭新通道（回到旧的）   0 退出（改完要重开 Peter）')
         choice = input('选哪个：').strip()
         if choice == '1':
             image = state['container_image']
@@ -135,10 +141,19 @@ def main():
             state['project_roots'] = []
             save_state(state)
             print('已清空。')
+        elif choice == '5':
+            state['enabled'] = True
+            state['host_mode'] = True
+            save_state(state)
+            print('已开启新通道：浏览和操作软件都由工作台在你电脑上做。')
+        elif choice == '6':
+            state['host_mode'] = False
+            save_state(state)
+            print('已关闭新通道，旧的浏览器和桌面工具恢复。')
         elif choice == '0':
             return
         else:
-            print('请输入 0 到 4。')
+            print('请输入 0 到 6。')
 
 
 if __name__ == '__main__':

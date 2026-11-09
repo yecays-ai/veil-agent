@@ -746,7 +746,8 @@ def _executor_roots(value):
     return [r.strip() for r in value]
 
 
-WORKBENCH_LOCAL_KEYS = {'enabled': bool, 'project_roots': list, 'container_image': str, 'host_mode': bool}
+WORKBENCH_LOCAL_KEYS = {'enabled': bool, 'project_roots': list, 'container_image': str, 'host_mode': bool,
+                        'host_keep_old_tools': bool}
 
 
 def workbench_local_path(root, character_id):
@@ -1045,8 +1046,9 @@ def load_character(root, character_id):
         if executor is not None:
             if type(executor.get('enabled', False)) is not bool:
                 raise ValueError('executor.enabled must be boolean')
-            if type(executor.get('host_mode', False)) is not bool or type(executor.get('host_desktop', True)) is not bool:
-                raise ValueError('executor.host_mode and executor.host_desktop must be boolean')
+            if any(type(executor.get(key, default)) is not bool for key, default in (
+                    ('host_mode', False), ('host_desktop', True), ('host_keep_old_tools', False))):
+                raise ValueError('executor.host_mode, host_desktop and host_keep_old_tools must be boolean')
             executor = {'enabled': executor.get('enabled', False),
                         'command': str(executor.get('command', '')),
                         'max_steps': positive_int(executor.get('max_steps', 30)),
@@ -1063,6 +1065,9 @@ def load_character(root, character_id):
                         # Ticket 329: the host execution path (OpenCode on Windows + VEIL checkpoint), off by default.
                         'host_mode': executor.get('host_mode', False),
                         'host_desktop': executor.get('host_desktop', True),
+                        # Ticket 334: with the host path on, the old chat browser/desktop-action tools are hidden
+                        # (not deleted); this brings them back.
+                        'host_keep_old_tools': executor.get('host_keep_old_tools', False),
                         'host_browser': str(executor.get('host_browser', 'msedge'))}
         return Character(character_id, str(cfg['name']), persona,
                          positive_int(cfg.get('history_rounds', 20)),
@@ -1754,6 +1759,16 @@ def memory_mode(memory):
 CHANNEL_NAMES = {'qq': 'QQ', 'email': 'email'}
 
 
+def schema_top(schemas, count=10):
+    """Ticket 334: the heaviest tool definitions of a request, so the log shows where the tool text goes."""
+    sizes = {}
+    for schema in schemas or []:
+        function = schema.get('function') if isinstance(schema, dict) else None
+        if isinstance(function, dict) and isinstance(function.get('name'), str):
+            sizes[function['name']] = len(json.dumps(schema, ensure_ascii=False).encode('utf-8'))
+    return dict(sorted(sizes.items(), key=lambda item: -item[1])[:count])
+
+
 def self_facts(cfg, budget, memory=False, capabilities=None, voice=False, channels=(), maintenance=''):
     """(stable, changing): the stable part is identical every request so the provider can cache it;
     the changing part (time, spending ledger) is sent after the chat history."""
@@ -2116,6 +2131,8 @@ class Chat:
                 from host_executor import TOOL_DESCRIPTION as HOST_WORKBENCH_DESCRIPTION
                 workbench_schema['function']['description'] = HOST_WORKBENCH_DESCRIPTION
             schemas.append(workbench_schema)
+        if hidden_now := self.host_hidden_tools():
+            schemas = [schema for schema in schemas if schema['function']['name'] not in hidden_now]
         if self.maintenance is not None and not self.glance_mode:
             from maintenance import TOOL_SCHEMA as MAINTENANCE_TOOL
             schema = {'type': 'function', 'function': dict(MAINTENANCE_TOOL['function'])}
@@ -3336,6 +3353,7 @@ class Chat:
             'short_term_notes': short_term_details,
             'runtime_chars': context_chars(runtime_context),
             'tool_schema_bytes': len(json.dumps(tool_schema or [], ensure_ascii=False).encode('utf-8')),
+            'tool_schema_top': schema_top(tool_schema),
             'user_chars': context_chars([user]), 'estimated_input_tokens': estimate,
         }
         try:
@@ -3534,6 +3552,9 @@ class Chat:
                                       self.voice is not None and self.tools is not None,
                                       tuple(sorted(self.away_channels)),
                                       self.maintenance.active_summary() if self.maintenance else '')
+        if hidden_now := self.host_hidden_tools():
+            from tool_groups import host_handover_note
+            stable += '\n' + host_handover_note(hidden_now)
         if self.autonomy_controller is not None and not autonomy:
             changing += '\n' + self.autonomy_controller.wake_count_text()
         description = stable + '\n' + changing
@@ -4001,6 +4022,18 @@ class Chat:
             result, state, summary = 'The program rejected this call because the arguments are not a valid JSON object.', '被拒绝', call.function.name
         return _ToolExecution(result, state, summary, checkpoint_verified, activity_detail)
 
+    def host_hidden_tools(self):
+        """Ticket 334: in a normal chat turn with the host path ready, browsing and desktop actions go through the
+        workbench (one VEIL checkpoint); the old chat tools for exactly what this computer can start there are
+        hidden. Autonomous wakes, glances and the container path keep the old tools."""
+        settings = getattr(self.cfg, 'executor', None) or {}
+        if not (settings.get('host_mode') and not settings.get('host_keep_old_tools') and self.tool_mode
+                and not self.autonomy_mode and not self.glance_mode and self.workbench_ready()):
+            return frozenset()
+        import host_executor
+        from tool_groups import host_hidden_names
+        return host_hidden_names(*host_executor.available(desktop=bool(settings.get('host_desktop', True))))
+
     def workbench_ready(self):
         settings = getattr(self.cfg, 'executor', None) or {}
         if not settings.get('enabled'):
@@ -4374,6 +4407,7 @@ class Chat:
                 'last_actual_input_tokens': last_actual_tokens,
                 'last_actual_input_bytes': last_actual_bytes,
                 'tool_schema_bytes': len(json.dumps(offered or [], ensure_ascii=False).encode('utf-8')),
+                'tool_schema_top': schema_top(offered),
                 'calibration_ratio': calibration, 'local_limit_trigger': local_limit_trigger,
             }
             try:
