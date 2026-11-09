@@ -257,6 +257,7 @@ class GatewayTests(unittest.TestCase):
             self.assertFalse(ok)
             self.assertIn('outside the window in front', why)
             self.assertFalse(cp.tool_call(vc.COMPUTER_SERVER, 'Type', {'text': 'hello', 'loc': '[1018, 872]'})[0])
+            self.assertFalse(cp.tool_call(vc.COMPUTER_SERVER, 'Type', {'text': 'hello', 'loc': [10 ** 400, 1]})[0])
 
     def test_type_result_follows_what_the_field_really_holds(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -265,22 +266,32 @@ class GatewayTests(unittest.TestCase):
             empty = self.type_through_gateway(cp, text='hello', loc=[1, 1])
             self.assertTrue(empty['isError'])
             self.assertIn('did not take effect', empty['content'][0]['text'])
-            cp.read_focus = lambda: 'old\r\nhello'
+            texts = iter(['old', 'old\r\nhello'])
+            cp.read_focus = lambda: next(texts)
             done = self.type_through_gateway(cp, text='hello', loc=[1, 1])
             self.assertEqual((done['isError'], done['content'][0]['text']), (False, 'Typed.'))
+            cp.read_focus = lambda: 'hello'  # the text was there before and nothing was added
+            stale = self.type_through_gateway(cp, text='hello', loc=[1, 1])
+            self.assertTrue(stale['isError'])
 
-    def test_unreadable_field_falls_back_to_snapshot_and_never_claims_success(self):
+    def test_unreadable_field_uses_before_after_snapshots_and_never_claims_success(self):
         with tempfile.TemporaryDirectory() as tmp:
             cp, _, _ = make_checkpoint(Path(tmp))
             cp.read_focus = lambda: None
-            seen = self.type_through_gateway(cp, snapshot='Edit | hello world', text='hello', loc=[1, 1])
-            self.assertEqual(seen['content'][0]['text'], 'Typed.')
-            unseen = self.type_through_gateway(cp, snapshot='Edit | ', text='hello', loc=[1, 1])
+            snaps = iter(['Edit | ', 'Edit | hello'])
+            with VeilMcpGateway(vc.COMPUTER_SERVER, {'command': 'x', 'args': []}, cp, vc.COMPUTER_TOOLS,
+                                should_stop=lambda: False, worker_factory=FakeWorker) as gateway:
+                gateway.worker.call = lambda name, args, should_stop=None: 'Typed.' if name == 'Type' else next(snaps)
+                seen = self.rpc(gateway, 'tools/call', {'name': 'Type', 'arguments': {'text': 'hello', 'loc': [1, 1]}})['result']
+            self.assertEqual((seen['isError'], seen['content'][0]['text']), (False, 'Typed.'))
+            unseen = self.type_through_gateway(cp, snapshot='Edit | hello', text='hello', loc=[1, 1])
             self.assertFalse(unseen['isError'])
             self.assertIn('NOT confirmed', unseen['content'][0]['text'])
+            blank = self.type_through_gateway(cp, text='  ', loc=[1, 1])
+            self.assertIn('NOT confirmed', blank['content'][0]['text'])
             cp.ask = lambda _p: 'y'
             entered = self.type_through_gateway(cp, text='hello', loc=[1, 1], press_enter=True)
-            self.assertIn('could not check', entered['content'][0]['text'])
+            self.assertIn('NOT confirmed', entered['content'][0]['text'])
 
 
 class HostRunTests(unittest.TestCase):

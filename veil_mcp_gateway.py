@@ -112,6 +112,7 @@ class VeilMcpGateway:
             allowed, why = self.checkpoint.tool_call(self.server_id, name, arguments)
             if not allowed:
                 return f'VEIL did not allow this ({why}).', True
+            before = self._look('before') if server_is_computer(self.server_id) and name == 'Type' else (None, None)
             if self.stopped():
                 return 'The task is stopped; nothing was done.', True
             try:
@@ -125,42 +126,56 @@ class VeilMcpGateway:
                 self.checkpoint.log(kind='tool_error', server=self.server_id, tool=name, error=detail[:2000])
                 return detail[:2000], True
             if server_is_computer(self.server_id) and name == 'Type':
-                text, failed = self._verify_typed(arguments, text)
+                text, failed = self._verify_typed(arguments, text, before)
                 if failed:
                     return text, True
         finally:
             self.lock.release()
         return text, False
 
-    def _verify_typed(self, arguments, text):
-        """Read the field back after Type (never from the model's say-so). (text for the model, failed)."""
-        typed = _squash(arguments.get('text'))
-        if not typed:
-            return text, False
-        if str(arguments.get('press_enter', '')).casefold() in {'true', '1'}:
-            return text + ' VEIL could not check the result because Enter was pressed; confirm with a Snapshot ' \
-                'before saying it worked.', False
+    def _look(self, name):
+        """What the desktop shows now: (control text or None, snapshot text or None); only when Snapshot is offered."""
         seen = self.checkpoint.read_focus() if self.checkpoint.read_focus else None
-        if seen is not None:
-            ok = typed in _squash(seen)
-            self.checkpoint.log(kind='readback', server=self.server_id, method='control', typed_chars=len(typed),
-                                ok=ok)
-            if ok:
-                return text, False
-            return ('Input did not take effect: after typing, the field in front does not contain the text. '
-                    'Nothing was confirmed; do not report it as typed. Check the window with a Snapshot, '
-                    'click the right field, and try again, or report the failure.'), True
+        if seen is not None or 'Snapshot' not in self.offered:
+            return seen, None
         try:
-            snapshot = self._live_worker().call('Snapshot', {}, should_stop=self.stopped)
+            return None, str(self._live_worker().call('Snapshot', {}, should_stop=self.stopped))
         except Exception as exc:
-            snapshot = None
             self.checkpoint.log(kind='readback_error', server=self.server_id, error=(str(exc) or type(exc).__name__)[:300])
-        if snapshot is not None and typed in _squash(snapshot):
-            self.checkpoint.log(kind='readback', server=self.server_id, method='snapshot', typed_chars=len(typed), ok=True)
+            return None, None
+
+    def _verify_typed(self, arguments, text, before):
+        """Read the field back after Type (never from the model's say-so). (text for the model, failed).
+        Success needs the typed text to appear more often than before this Type, so text that was already
+        there cannot count."""
+        raw = str(arguments.get('text') or '')
+        typed = _squash(raw)
+        unsure = ' VEIL could not confirm it, so it is NOT confirmed. Take a Screenshot or Snapshot and check the ' \
+                 'field before saying it worked; if it is not there, report the failure.'
+        if not raw:
             return text, False
-        self.checkpoint.log(kind='readback', server=self.server_id, method='snapshot', typed_chars=len(typed), ok=None)
-        return (text + ' VEIL could not see the typed text afterwards, so it is NOT confirmed. Take a Screenshot or '
-                'Snapshot and check the field before saying it worked; if it is not there, report the failure.'), False
+        if not typed or str(arguments.get('press_enter', '')).casefold() in {'true', '1'}:
+            return text + unsure, False
+        seen, snapshot = self._look('after')
+        old_seen, old_snapshot = before
+        if seen is not None and old_seen is not None:
+            ok = _squash(seen).count(typed) > _squash(old_seen).count(typed)
+            method = 'control'
+        elif snapshot is not None and old_snapshot is not None:
+            ok = _squash(snapshot).count(typed) > _squash(old_snapshot).count(typed)
+            method = 'snapshot'
+            if not ok:
+                self.checkpoint.log(kind='readback', server=self.server_id, method=method, typed_chars=len(typed), ok=None)
+                return text + unsure, False
+        else:
+            self.checkpoint.log(kind='readback', server=self.server_id, method='none', typed_chars=len(typed), ok=None)
+            return text + unsure, False
+        self.checkpoint.log(kind='readback', server=self.server_id, method=method, typed_chars=len(typed), ok=ok)
+        if ok:
+            return text, False
+        return ('Input did not take effect: after typing, the field in front does not show the new text. '
+                'Nothing was confirmed; do not report it as typed. Check the window with a Snapshot, '
+                'click the right field, and try again, or report the failure.'), True
 
     # ---- MCP endpoint for OpenCode ----------------------------------------------------------------------
     def __enter__(self):

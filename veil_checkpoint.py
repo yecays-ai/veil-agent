@@ -470,12 +470,14 @@ class Checkpoint:
             except ValueError:
                 loc = None
         rect = self.window_rect() if self.window_rect else None
-        if not rect or not isinstance(loc, (list, tuple)) or len(loc) != 2:
+        if not isinstance(loc, (list, tuple)) or len(loc) != 2:
             return ''
+        if not rect:
+            return 'the position of the window in front cannot be read' if self.window_rect and os.name == 'nt' else ''
         try:
             x, y = float(loc[0]), float(loc[1])
-        except (TypeError, ValueError):
-            return ''
+        except (TypeError, ValueError, OverflowError):
+            return 'the point is not a valid screen position'
         left, top, right, bottom = rect
         if left <= x < right and top <= y < bottom:
             return ''
