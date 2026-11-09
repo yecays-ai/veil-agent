@@ -196,7 +196,7 @@ class VeilMcpGateway:
             self.thread.start()
             return self
         except BaseException as exc:
-            self.checkpoint.log(kind='start_error', server=self.server_id, error=ex._safe_display(ex.error_text(exc))[:2000])
+            self.checkpoint.log(kind='start_error', server=self.server_id, error=ex._safe_display(ex.error_text(exc), 2000))
             self.__exit__(None, None, None)
             raise
 

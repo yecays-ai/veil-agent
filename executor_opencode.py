@@ -581,11 +581,11 @@ def _approval_scope(permission, patterns, metadata):
     return _approval_key(permission, patterns, metadata)
 
 
-def _safe_display(value):
+def _safe_display(value, limit=300):
     text = re.sub(r'(?i)(https?://)[^/@\s]+@', r'\1[redacted]@', str(value))
     text = re.sub(r'(?i)(--?(?:token|password|passwd|secret|api[-_]?key)\s*[= ]\s*)(\S+)',
                   r'\1[redacted]', text)
-    return text[:300]
+    return text[:limit]
 
 
 def _resolved_targets(permission, patterns, workdir):
