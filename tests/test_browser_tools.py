@@ -338,6 +338,9 @@ class BrowserSafetyTests(unittest.TestCase):
         path_reason = browser_tools.failure_reason(Error("Executable doesn't exist at C:\\Users\\lan\\x\\chrome.exe"))
         self.assertEqual(path_reason, "Error: Executable doesn't exist at <path>")
         self.assertEqual(browser_tools.failure_reason(Error('/home/lan/.cache/chrome failed')), 'Error: <path> failed')
+        self.assertEqual(browser_tools.failure_reason(Error('Launch failed: C:\\Users\\John Doe\\AppData\\chrome.exe')),
+                         'Error: Launch failed: <path>')
+        self.assertEqual(browser_tools.failure_reason(Error('bad file:///home/lan/x y')), 'Error: bad <path> y')
         self.assertEqual(browser_tools.failure_reason(Error()), 'Error')
         browser = BrowserTools(CFG, platform_enabled=True, monitor=Idle())
         self.addCleanup(browser.close)
