@@ -29,8 +29,9 @@ def load_state(root=ROOT):
     state = {'enabled': data.get('enabled') is True, 'project_roots': [str(x) for x in roots], 'container_image': image}
     if isinstance(data.get('host_mode'), bool):  # ticket 329: kept through every save
         state['host_mode'] = data['host_mode']
-    if isinstance(data.get('host_keep_old_tools'), bool):
-        state['host_keep_old_tools'] = data['host_keep_old_tools']
+    for key in ('host_keep_old_tools', 'host_desktop_handover'):
+        if isinstance(data.get(key), bool):
+            state[key] = data[key]
     return state
 
 
@@ -40,8 +41,9 @@ def save_state(state, root=ROOT):
     clean = {k: state[k] for k in KEYS}
     if isinstance(state.get('host_mode'), bool):
         clean['host_mode'] = state['host_mode']
-    if isinstance(state.get('host_keep_old_tools'), bool):
-        clean['host_keep_old_tools'] = state['host_keep_old_tools']
+    for key in ('host_keep_old_tools', 'host_desktop_handover'):
+        if isinstance(state.get(key), bool):
+            clean[key] = state[key]
     tmp = path.with_suffix('.tmp')
     tmp.write_text(json.dumps(clean, ensure_ascii=False, indent=2), encoding='utf-8')
     tmp.replace(path)

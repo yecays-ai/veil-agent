@@ -747,7 +747,8 @@ def _executor_roots(value):
 
 
 WORKBENCH_LOCAL_KEYS = {'enabled': bool, 'project_roots': list, 'container_image': str, 'host_mode': bool,
-                        'host_keep_old_tools': bool}
+                        'host_keep_old_tools': bool,
+                        'host_desktop_handover': bool}
 
 
 def workbench_local_path(root, character_id):
@@ -1047,7 +1048,8 @@ def load_character(root, character_id):
             if type(executor.get('enabled', False)) is not bool:
                 raise ValueError('executor.enabled must be boolean')
             if any(type(executor.get(key, default)) is not bool for key, default in (
-                    ('host_mode', False), ('host_desktop', True), ('host_keep_old_tools', False))):
+                    ('host_mode', False), ('host_desktop', True), ('host_keep_old_tools', False),
+                    ('host_desktop_handover', False))):
                 raise ValueError('executor.host_mode, host_desktop and host_keep_old_tools must be boolean')
             executor = {'enabled': executor.get('enabled', False),
                         'command': str(executor.get('command', '')),
@@ -1068,6 +1070,7 @@ def load_character(root, character_id):
                         # Ticket 334: with the host path on, the old chat browser/desktop-action tools are hidden
                         # (not deleted); this brings them back.
                         'host_keep_old_tools': executor.get('host_keep_old_tools', False),
+                        'host_desktop_handover': executor.get('host_desktop_handover', False),
                         'host_browser': str(executor.get('host_browser', 'msedge'))}
         return Character(character_id, str(cfg['name']), persona,
                          positive_int(cfg.get('history_rounds', 20)),
@@ -4036,7 +4039,10 @@ class Chat:
         # An outdated or wrong OpenCode cannot run the host path (_run_workbench refuses it): keep the old tools.
         if host_executor.opencode_problem(find_command(settings.get('command', ''))):
             return frozenset()
-        return host_hidden_names(*host_executor.available(desktop=bool(settings.get('host_desktop', True))))
+        browser, desktop = host_executor.available(desktop=bool(settings.get('host_desktop', True)))
+        # The desktop actions move over only when asked for (`host_desktop_handover`): until the host desktop passes
+        # on Lan's PC, the chat's own actions are the working path and stay.
+        return host_hidden_names(browser, desktop and bool(settings.get('host_desktop_handover', False)))
 
     def workbench_ready(self):
         settings = getattr(self.cfg, 'executor', None) or {}

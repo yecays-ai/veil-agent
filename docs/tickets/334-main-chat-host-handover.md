@@ -4,7 +4,8 @@
 
 宿主通道（`executor.host_mode`）开着时，Peter 的日常聊天里：
 - 浏览网页、操作 Windows 软件只经过 `workbench` 一条路，由 VEIL 检查点统一裁决、统一日志、统一停止；
-- 聊天里原来的 `browser`（独立浏览器）、`windows_launch`、`windows_manage`、`windows_control_action`、`windows_canvas_action`、`windows_discover_apps`、`desktop_icons_arrange`、`desktop_icons_restore` 不再提供给模型；
+- 默认只交出浏览器：聊天里原来的 `browser`（独立浏览器）不再提供。桌面动作（下面一行）要设 `host_desktop_handover: true` 才交出，因为宿主桌面在 Lan 电脑上还没跑通（见 HANDOFF），聊天自带的桌面动作是现在能用的路。
+- 桌面动作交出后收起：`windows_launch`、`windows_manage`、`windows_control_action`、`windows_canvas_action`、`windows_discover_apps`、`desktop_icons_arrange`、`desktop_icons_restore` 不再提供给模型；
 - 看屏幕（`windows_observe` 等）、`web_search`、`web_fetch`、文件、记忆、消息不变。
 
 ## 做法

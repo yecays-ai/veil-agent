@@ -1290,7 +1290,8 @@ max_steps = 4
         names_all = ('windows_observe', 'windows_launch', 'windows_manage', 'windows_control_action',
                      'windows_canvas_action', 'desktop_icons_arrange', 'desktop_icons_restore',
                      'windows_discover_apps', 'browser', 'web_search')
-        host = self.executor + 'host_mode = true\n'
+        host = self.executor + 'host_mode = true\nhost_desktop_handover = true\n'
+        browser_only = self.executor + 'host_mode = true\n'
 
         def chat_for(extra, available=(True, True), autonomy=False, glance=False):
             chat = self.chat(extra)
@@ -1321,6 +1322,9 @@ max_steps = 4
                 patch('host_executor.opencode_problem', return_value='too old'):
             outdated = {s['function']['name'] for s in chat_for(host).tool_schemas()}
         self.assertTrue({'browser', 'windows_launch'} <= outdated)  # a workbench that cannot start hides nothing
+        default = names(chat_for(browser_only))
+        self.assertNotIn('browser', default)  # default: only the browser moves over
+        self.assertTrue({'windows_launch', 'windows_manage', 'windows_control_action'} <= default)
         # escape hatch, autonomous wakes and glances keep the old tools
         keep = names(chat_for(host + 'host_keep_old_tools = true\n'))
         self.assertTrue({'browser', 'windows_launch'} <= keep)
