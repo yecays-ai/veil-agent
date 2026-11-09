@@ -9,13 +9,13 @@
 ## 现状
 
 - 工单 320（PR #319）已合并；浏览器连续执行通道仍保留。
-- 工单 322 在 `ticket/322-windows-continuous-execution`：任务本地 Windows MCP 服务只暴露应用发现、窗口列举/观察、启动/切换和 UIA 控件动作；不暴露画布坐标、桌面图标或宿主命令。
+- 工单 322 在 `ticket/322-windows-continuous-execution`，PR #321：https://github.com/yecays-ai/veil-agent/pull/321。任务本地 Windows MCP 服务只暴露应用发现、窗口列举/观察、启动/切换和 UIA 控件动作；不暴露画布坐标、桌面图标或宿主命令。
 - 服务使用每次任务随机令牌，容器仅放行本次 Windows 服务端口；工作台停止、人工接管、步数/时间/费用限制和退出都会撤销服务。现有窗口身份复核、敏感窗口保护、保存/发送/覆盖审批及结果不确定不重试均由原 UIA 实现继续执行。
 - 自动检查：`tests.test_executor_opencode` 与 `tests.test_windows_interaction` 共 156 项通过，13 项因本机没有可选 OpenCode/Docker 条件跳过。真实 Windows 用户体验验收尚未进行。
 
 ## 下一步
 
-创建 PR，处理实质审查问题后等待真实 Windows 体验验收。
+等待真实 Windows 体验验收；未通过前不合并。
 
 ## Lan 的 Windows 体验验收
 
