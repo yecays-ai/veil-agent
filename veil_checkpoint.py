@@ -60,6 +60,9 @@ RECURSIVE_FLAG = re.compile(r'^-(?:[a-zA-Z]*[rR][a-zA-Z]*|-recursive|-dereferenc
 BROWSER_PASSWORD_FIELD = re.compile(r'password|passwd|密码|口令|pin\b|otp|验证码|card\s*number|cvv|cvc|卡号', re.I)
 
 
+CREDENTIAL_FILES = frozenset({'credentials', 'credentials.json', 'credentials.xml', '.git-credentials',
+                              'git-credentials', '.netrc', '_netrc', '.npmrc', '.pypirc'})
+
 SENSITIVE_ARGUMENTS = frozenset({'text', 'value', 'values', 'fields', 'shortcut_text', 'code', 'function'})
 
 
@@ -227,13 +230,25 @@ class Checkpoint:
                     return 'VEIL data, keys or browser passwords'
             parts = {part.casefold() for part in Path(path).parts}
             if parts & {'.ssh', 'secrets', '.aws', '.azure', '.gnupg', '.kube'} or \
-                    'credentials' in Path(path).name.casefold():
+                    Path(path).name.casefold() in CREDENTIAL_FILES:
                 return 'secret folder'
+            if any(ch in path for ch in '*?[') and self._glob_reaches_forbidden(path):
+                return 'VEIL data, keys or browser passwords'
             if any(path == item for item in self.protect):
                 return 'protected file'
             if self.secret_files and path in self.secret_files:
                 return 'secret file'
         return ''
+
+    def _glob_reaches_forbidden(self, pattern):
+        """A wildcard path that can name a forbidden root or something inside it (User* -> User Data)."""
+        wanted = Path(pattern).parts
+        for root in self.forbidden:
+            have = Path(root).parts
+            if len(wanted) >= len(have) and any(ch in ''.join(wanted[:len(have)]) for ch in '*?[') and all(
+                    fnmatch.fnmatchcase(part, pat) for part, pat in zip(have, wanted)):
+                return True
+        return False
 
     def _reads_secrets_recursively(self, tokens, current=None):
         """A recursive or wildcard read (grep -r, rg, cat *) whose target holds secret files."""

@@ -12,6 +12,7 @@ import threading
 import time
 
 import executor_opencode as ex
+import veil_checkpoint as vc
 
 from mcp_services import START_TIMEOUT, _Worker
 
@@ -106,7 +107,11 @@ class VeilMcpGateway:
             try:
                 text = self._live_worker().call(name, arguments, should_stop=self.stopped)
             except Exception as exc:
-                detail = ex._safe_display(str(exc) or type(exc).__name__)
+                detail = str(exc) or type(exc).__name__
+                for key, value in arguments.items():  # an upstream error may echo what Peter typed
+                    if key in vc.SENSITIVE_ARGUMENTS and len(str(value)) >= 3:
+                        detail = detail.replace(str(value), f'[{len(str(value))} chars]')
+                detail = ex._safe_display(detail)
                 self.checkpoint.log(kind='tool_error', server=self.server_id, tool=name, error=detail[:2000])
                 return detail[:2000], True
         finally:

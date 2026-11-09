@@ -63,6 +63,16 @@ class CheckpointShellTests(unittest.TestCase):
         self.assertEqual(self.cp.opencode_permission(
             'read', [str(self.root / 'veil' / 'data' / 'peter' / 'memory' / 'x')], {})[0], 'reject')
         self.assertEqual(self.bash('cat .aws/credentials')[0], 'reject')
+        self.assertEqual(self.bash('cat .git-credentials')[0], 'reject')
+        self.assertEqual(self.bash('cat src/credentials_example.py')[0], 'once')
+        local = self.root / 'local'
+        with patch.dict('os.environ', {'LOCALAPPDATA': str(local)}):
+            cp, _, _ = make_checkpoint(self.root / 'again')
+            for target in (local / 'Microsoft' / 'Edge' / 'User*' / 'Default' / 'Login*',
+                           local / 'Microsoft' / '*' / 'User Data'):
+                command = f'Get-Content "{target}"'
+                self.assertEqual(cp.opencode_permission('bash', [command], {'command': command})[0], 'reject',
+                                 command)
         self.assertEqual(self.asked, [])
 
     def test_unknown_permissions_are_refused_and_every_decision_is_logged(self):
@@ -251,7 +261,7 @@ class HostRunTests(unittest.TestCase):
         config = json.loads(seen['OPENCODE_CONFIG_CONTENT'])
         self.assertEqual(config['permission']['read']['*.pem'], 'deny')
         self.assertTrue(config['experimental']['continue_loop_on_deny'])
-        self.assertNotIn('k', json.dumps(seen.get('OPENCODE_CONFIG_CONTENT')).split('"apiKey": ')[-1][:4])
+        self.assertEqual(config['provider']['relay']['options']['apiKey'], 't')
 
     def test_gateway_start_failure_is_reported_not_raised(self):
         class Broken:
