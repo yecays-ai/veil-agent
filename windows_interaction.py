@@ -559,7 +559,9 @@ class WindowsInteractionBackend(WindowsDesktopBackend):
                         'patterns': _control_patterns(control),
                     }
                     if kind in ('EditControl', 'DocumentControl'):
-                        metadata['read_only'] = bool(control.IsReadOnly)
+                        value_pattern = control.GetValuePattern()
+                        metadata['read_only'] = (bool(value_pattern.IsReadOnly) if value_pattern
+                                                 else bool(getattr(control, 'IsReadOnly', True)))
                     if kind in ('ListItemControl', 'TabItemControl', 'RadioButtonControl'):
                         metadata['selected'] = bool(control.IsSelected)
                     if 'toggle' in metadata['patterns']:
@@ -753,12 +755,6 @@ class WindowsInteractionBackend(WindowsDesktopBackend):
         user32.ShowWindow.restype = ctypes.wintypes.BOOL
         user32.SetForegroundWindow.argtypes = [ctypes.wintypes.HWND]
         user32.SetForegroundWindow.restype = ctypes.wintypes.BOOL
-        user32.BringWindowToTop.argtypes = [ctypes.wintypes.HWND]
-        user32.BringWindowToTop.restype = ctypes.wintypes.BOOL
-        user32.GetWindowThreadProcessId.argtypes = [ctypes.wintypes.HWND, ctypes.POINTER(ctypes.wintypes.DWORD)]
-        user32.GetWindowThreadProcessId.restype = ctypes.wintypes.DWORD
-        user32.AttachThreadInput.argtypes = [ctypes.wintypes.DWORD, ctypes.wintypes.DWORD, ctypes.wintypes.BOOL]
-        user32.AttachThreadInput.restype = ctypes.wintypes.BOOL
         return user32
 
     def manage_window(self, selected, action, stopped, input_monitor, input_snapshot):
@@ -775,18 +771,15 @@ class WindowsInteractionBackend(WindowsDesktopBackend):
                 user32.ShowWindow(hwnd, 9)  # SW_RESTORE
             self._require_unchanged_input(input_monitor, input_snapshot)
             self._cancelled(stopped)
-            cur_tid = ctypes.windll.kernel32.GetCurrentThreadId()
-            fg_hwnd = user32.GetForegroundWindow()
-            fg_tid = user32.GetWindowThreadProcessId(fg_hwnd, None) if fg_hwnd else 0
-            attached = False
-            if fg_tid and cur_tid != fg_tid:
-                attached = bool(user32.AttachThreadInput(cur_tid, fg_tid, True))
-            try:
-                user32.BringWindowToTop(hwnd)
+            # Attaching input queues can hang activation; request it normally and verify asynchronously.
+            if self._foreground_window() != hwnd:
                 user32.SetForegroundWindow(hwnd)
-            finally:
-                if attached:
-                    user32.AttachThreadInput(cur_tid, fg_tid, False)
+                if self._foreground_window() != hwnd:
+                    self._require_unchanged_input(input_monitor, input_snapshot)
+                    self._cancelled(stopped)
+                    auto = self._uia()
+                    with auto.UIAutomationInitializerInThread():
+                        auto.ControlFromHandle(hwnd).SetFocus()
             deadline = time.monotonic() + 1.0
             while time.monotonic() < deadline:
                 self._cancelled(stopped)

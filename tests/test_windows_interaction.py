@@ -164,6 +164,51 @@ class FakeInteractionBackend:
 
 
 class WindowsInteractionTests(unittest.TestCase):
+    def test_activation_never_attaches_input_queues_and_skips_foreground_noop(self):
+        for foreground, denied in ((100, False), (200, False), (200, True)):
+            with self.subTest(foreground=foreground, denied=denied):
+                state = {'foreground': foreground}
+                api = SimpleNamespace(IsWindow=lambda _: True, IsIconic=lambda _: False,
+                    GetForegroundWindow=lambda: state['foreground'],
+                    GetWindowThreadProcessId=lambda *_: 2,
+                    AttachThreadInput=Mock(side_effect=RuntimeError('input queue attachment may hang')),
+                    BringWindowToTop=Mock(),
+                    SetForegroundWindow=Mock(side_effect=lambda hwnd: None if denied else state.update(foreground=hwnd)))
+                focus = Mock(side_effect=lambda: state.update(foreground=100))
+                backend = WindowsInteractionBackend()
+                backend._revalidate = lambda selected, _: selected
+                backend._check_default_desktop = lambda: None
+                backend._window_api = lambda: api
+                backend._foreground_window = api.GetForegroundWindow
+                backend._uia = lambda: SimpleNamespace(UIAutomationInitializerInThread=contextlib.nullcontext,
+                    ControlFromHandle=lambda _: SimpleNamespace(SetFocus=focus))
+                with patch('windows_interaction.ctypes.windll', SimpleNamespace(
+                        kernel32=SimpleNamespace(GetCurrentThreadId=lambda: 1)), create=True):
+                    result = backend.manage_window({'id': WINDOW_ID, 'handle': 100}, 'activate',
+                                                   lambda: False, FakeInputMonitor(), 0)
+                self.assertTrue(result['confirmed'])
+                self.assertEqual(api.SetForegroundWindow.call_count, int(foreground != 100))
+                self.assertEqual(focus.call_count, int(denied))
+                api.AttachThreadInput.assert_not_called()
+
+    def test_live_document_reads_readonly_from_value_pattern(self):
+        from windows_observer import _control_identity
+        pattern = SimpleNamespace(IsReadOnly=False)
+        control = SimpleNamespace(ControlTypeName='DocumentControl', Name='Test document',
+            AutomationId='editor', IsPassword=False, IsEnabled=True, IsOffscreen=False,
+            GetRuntimeId=lambda: [1, 2], GetChildren=lambda: [], GetValuePattern=lambda: pattern)
+        backend = WindowsInteractionBackend()
+        selected = {'id': WINDOW_ID, 'handle': 100}
+        backend._revalidate = lambda *_: selected
+        backend._uia = lambda: SimpleNamespace(ControlFromHandle=lambda _: control)
+        token = _control_identity(WINDOW_ID, control, ())
+        _, metadata = backend._find_control(selected, token, lambda: False)
+        self.assertFalse(metadata['read_only'])
+        pattern.IsReadOnly = True
+        self.assertTrue(backend._find_control(selected, token, lambda: False)[1]['read_only'])
+        control.GetValuePattern = lambda: None
+        self.assertTrue(backend._find_control(selected, token, lambda: False)[1]['read_only'])
+
     def make_tools(self, *, monitor=None, backend=None, timeout_seconds=2):
         applications = validate_applications({
             'notepad': {
