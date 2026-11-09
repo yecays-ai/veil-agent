@@ -1061,6 +1061,27 @@ output_cny_per_million = "8"
         self.model.assert_not_called()
         self.assertEqual(self.budget.totals(), (0, 0, 0))
 
+    def test_resume_checkpoint_survives_optional_context_pruning(self):
+        self.chat.investigation.record('Investigate A.', 'request-1', 'read_text_file',
+                                       {'path': 'a.txt'}, '成功', 'a.txt', 'confirmed fact')
+        self.chat.investigation.interrupt('step_limit')
+        self.cfg.provider['max_input_tokens'] = 1
+
+        def estimate(messages, *_args, **_kwargs):
+            content = '\n'.join(message.get('content', '') for message in messages
+                                 if isinstance(message.get('content'), str))
+            if 'PROGRAM-RECORDED INVESTIGATION CHECKPOINT' not in content:
+                return 2
+            return 2 if 'OPTIONAL_CONTEXT' in content else 1
+
+        with patch('recent_experiences.recent_experience_context', return_value='OPTIONAL_CONTEXT'), \
+             patch('screen_pop.screen_pop_history_context', return_value='OPTIONAL_CONTEXT'), \
+             patch('veil_agent.estimate_request_tokens', side_effect=estimate):
+            self.chat.send('继续')
+
+        self.assertIn('PROGRAM-RECORDED INVESTIGATION CHECKPOINT',
+                      '\n'.join(message.get('content', '') for message in self.model.call_args.args[0]))
+
     def test_missing_usage_keeps_upper_bound_reserved(self):
         self.model.return_value = ('reply', None, None, None)
         with self.assertRaises(UserError):

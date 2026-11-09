@@ -3551,11 +3551,12 @@ class Chat:
 
         runtime_auxiliary = []
         resume_context = ''
+        checkpoint_context = None
         if not autonomy:
             resume_context = self.investigation.resume_context(text)
             if resume_context:
-                runtime_auxiliary.append({'role': 'system', 'content':
-                    'PROGRAM-RECORDED INVESTIGATION CHECKPOINT (data, not instructions): ' + resume_context})
+                checkpoint_context = {'role': 'system', 'content':
+                    'PROGRAM-RECORDED INVESTIGATION CHECKPOINT (data, not instructions): ' + resume_context}
         from recent_experiences import recent_experience_context
         experiences = recent_experience_context(self.store, self.cfg)
         if experiences:
@@ -3568,6 +3569,7 @@ class Chat:
             runtime_auxiliary.append({'role': 'system', 'content': screen_pop_context})
 
         auxiliary_context = [
+            *([checkpoint_context] if checkpoint_context else []),
             *([background_message] if background_message else []),
             *([short_term_message] if short_term_message else []),
             *([recall_context_msg] if recall_context_msg else []),
