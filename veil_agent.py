@@ -3705,7 +3705,9 @@ class Chat:
         except (TooLong, RequestFailed, RequestNotSent) as exc:
             self._capability_request_active = False
             if not autonomy:
-                self.investigation.interrupt('user_stop' if self.user_stop.is_set() else 'context_limit')
+                reason = ('user_stop' if self.user_stop.is_set() else
+                          'context_limit' if isinstance(exc, TooLong) else 'tool_failure')
+                self.investigation.interrupt(reason, request_id, bool(resume_context))
             if not self.last_send_persisted and mids:
                 self.fail_incoming(mids, reason=str(exc))
             if processing_batch:

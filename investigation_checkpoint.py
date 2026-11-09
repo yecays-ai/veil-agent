@@ -12,7 +12,7 @@ from long_tasks import LongTaskStore, READ_ONLY_TOOLS
 
 MAX_EVIDENCE = 16
 FRESH_FOR = timedelta(minutes=15)
-INTERRUPTED = {'step_limit', 'context_limit', 'budget_limit', 'user_stop'}
+INTERRUPTED = {'step_limit', 'context_limit', 'budget_limit', 'user_stop', 'tool_failure'}
 
 
 def _signature(name, arguments):
