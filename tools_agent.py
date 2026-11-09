@@ -1117,6 +1117,9 @@ class FilesystemTools:
         windows_tools = getattr(self, 'windows_tools', None)
         if windows_tools:
             windows_tools.begin_request()
+        interaction_tools = getattr(self, 'windows_interaction_tools', None)
+        if interaction_tools is not None:
+            interaction_tools.workbench_desktop_authorized = False
 
     def attach_game_manager(self, manager):
         if getattr(self, 'lab', None) is None or getattr(self, 'game_tool_schema', None) is None:

@@ -1,5 +1,6 @@
 import contextlib
 import concurrent.futures
+import time
 import json
 import os
 import tempfile
@@ -1578,13 +1579,32 @@ class WindowsWorkbenchGatewayTests(unittest.TestCase):
             with concurrent.futures.ThreadPoolExecutor() as pool:
                 pending = pool.submit(gateway.invoke, 'windows_control_action', {})
                 self.assertTrue(entered.wait(2))
-                try:
-                    self.assertEqual(gateway.invoke('windows_control_action', {})[1], '搁置')
-                finally:
-                    release.set()
+                queued = pool.submit(gateway.invoke, 'windows_control_action', {})
+                time.sleep(0.4)
+                self.assertFalse(queued.done())  # waits its turn instead of failing
+                release.set()
                 self.assertEqual(pending.result(timeout=2)[1], '结果不确定')
+                self.assertEqual(queued.result(timeout=2)[1], '中断')
             self.assertEqual(gateway.invoke('windows_control_action', {})[1], '中断')
             self.assertEqual(calls, ['windows_control_action'])
+
+    def test_one_desktop_grant_covers_later_workbench_calls_of_the_same_request(self):
+        asked = []
+        observer = SimpleNamespace(tools=WINDOW_TOOL_SCHEMAS, begin_request=lambda: None,
+                                   invoke=lambda name, args, **_kw: ('ok', '成功', name))
+        interaction = SimpleNamespace(tools=WINDOWS_INTERACTION_TOOL_SCHEMAS, input_monitor=FakeInputMonitor())
+        def approve(prompt):
+            asked.append(prompt)
+            return 'y'
+        with WindowsWorkbenchGateway(observer, interaction, lambda: False, approve) as first:
+            self.assertEqual(first.invoke('windows_list', {})[1], '成功')
+        with WindowsWorkbenchGateway(observer, interaction, lambda: False, approve) as second:
+            self.assertEqual(second.invoke('windows_list', {})[1], '成功')
+        self.assertEqual(len(asked), 1)
+        interaction.workbench_desktop_authorized = False  # next chat request
+        with WindowsWorkbenchGateway(observer, interaction, lambda: False, approve) as third:
+            third.invoke('windows_list', {})
+        self.assertEqual(len(asked), 2)
 
     def test_human_input_between_actions_stays_stopped_after_the_desktop_is_idle(self):
         monitor = FakeInputMonitor()
