@@ -3,7 +3,7 @@
 ## 工单 334（2026-11-10）：主聊天交给宿主通道（阶段 2）
 
 - 改动见 `docs/tickets/334-main-chat-host-handover.md`。旧代码未删。自主醒来、瞥一眼、`host_mode` 关时行为不变。
-- 状态：真机验证结果见 PR 描述；通过前不切换 Lan 的正式 Peter。
+- 状态：测试副本真机——后台浏览器场景通过（读 example.com 写进 notes.md）；桌面场景（记事本 hello）在能找到 uv 的环境里还没重跑，通过前不切换 Lan 的正式 Peter。下一步第一件事：用 Lan 平时启动 Peter 的 Python 环境重跑桌面场景。
 
 ## 工单 332（2026-11-10）：第二轮真机实测
 

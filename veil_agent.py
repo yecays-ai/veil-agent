@@ -4031,7 +4031,11 @@ class Chat:
                 and not self.autonomy_mode and not self.glance_mode and self.workbench_ready()):
             return frozenset()
         import host_executor
+        from executor_opencode import find_command
         from tool_groups import host_hidden_names
+        # An outdated or wrong OpenCode cannot run the host path (_run_workbench refuses it): keep the old tools.
+        if host_executor.opencode_problem(find_command(settings.get('command', ''))):
+            return frozenset()
         return host_hidden_names(*host_executor.available(desktop=bool(settings.get('host_desktop', True))))
 
     def workbench_ready(self):

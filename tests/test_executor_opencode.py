@@ -1288,7 +1288,8 @@ max_steps = 4
         """Ticket 334: host_mode on -> chat keeps looking/searching, the workbench does browsing and app actions."""
         schema = {'type': 'object', 'properties': {}}
         names_all = ('windows_observe', 'windows_launch', 'windows_manage', 'windows_control_action',
-                     'windows_canvas_action', 'desktop_icons_arrange', 'browser', 'web_search')
+                     'windows_canvas_action', 'desktop_icons_arrange', 'desktop_icons_restore',
+                     'windows_discover_apps', 'browser', 'web_search')
         host = self.executor + 'host_mode = true\n'
 
         def chat_for(extra, available=(True, True), autonomy=False, glance=False):
@@ -1299,7 +1300,8 @@ max_steps = 4
             return chat
 
         def names(chat, available=(True, True)):
-            with patch('host_executor.available', return_value=available):
+            with patch('host_executor.available', return_value=available), \
+                    patch('host_executor.opencode_problem', return_value=''):
                 return {s['function']['name'] for s in chat.tool_schemas()}
 
         old = names(chat_for(self.executor))
@@ -1308,12 +1310,17 @@ max_steps = 4
         self.assertIn('workbench', got)
         self.assertTrue({'windows_observe', 'web_search'} <= got)
         self.assertFalse({'browser', 'windows_launch', 'windows_manage', 'windows_control_action',
-                          'windows_canvas_action', 'desktop_icons_arrange'} & got)
+                          'windows_canvas_action', 'desktop_icons_arrange', 'desktop_icons_restore',
+                          'windows_discover_apps'} & got)
         # only what this computer can start is handed over
         self.assertIn('browser', names(chat_for(host), available=(False, True)))
         no_desktop = names(chat_for(host), available=(True, False))
         self.assertIn('windows_launch', no_desktop)
         self.assertNotIn('browser', no_desktop)
+        with patch('host_executor.available', return_value=(True, True)), \
+                patch('host_executor.opencode_problem', return_value='too old'):
+            outdated = {s['function']['name'] for s in chat_for(host).tool_schemas()}
+        self.assertTrue({'browser', 'windows_launch'} <= outdated)  # a workbench that cannot start hides nothing
         # escape hatch, autonomous wakes and glances keep the old tools
         keep = names(chat_for(host + 'host_keep_old_tools = true\n'))
         self.assertTrue({'browser', 'windows_launch'} <= keep)
@@ -1326,6 +1333,7 @@ max_steps = 4
         note = host_handover_note(host_hidden_names(True, False))
         self.assertIn('browser', note)
         self.assertNotIn('windows_launch', note)
+        self.assertNotIn('Windows app work', note)
 
     def write_local(self, text):
         path = self.root / 'data' / 'test'

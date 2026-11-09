@@ -92,6 +92,19 @@ def check_opencode(command):
     return ''
 
 
+_OPENCODE_OK = {}
+
+
+def opencode_problem(command, now=time.monotonic):
+    """check_opencode, remembered for a minute: the chat asks on every step, and the check starts a process."""
+    hit = _OPENCODE_OK.get(command)
+    if hit and now() - hit[0] < 60:
+        return hit[1]
+    value = check_opencode(command)
+    _OPENCODE_OK[command] = (now(), value)
+    return value
+
+
 def _python_script(name):
     """A tool pip installed for this Python (its Scripts folder, system or per-user, is often not on PATH)."""
     import site

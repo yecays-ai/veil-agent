@@ -144,10 +144,13 @@ def main():
         elif choice == '5':
             state['enabled'] = True
             state['host_mode'] = True
+            state.pop('host_keep_old_tools', None)
             save_state(state)
             print('已开启新通道：浏览和操作软件都由工作台在你电脑上做。')
         elif choice == '6':
             state['host_mode'] = False
+            if not image_ready(state['container_image']):
+                state['enabled'] = False  # no container image to fall back on: do not leave a broken workbench on
             save_state(state)
             print('已关闭新通道，旧的浏览器和桌面工具恢复。')
         elif choice == '0':

@@ -79,8 +79,12 @@ def announce_text(groups):
 
 def host_handover_note(hidden):
     """One stable sentence for the system prompt: the tools described above that this turn does not offer, and where
-    their jobs went. Names come from what is really hidden, so the text never claims more than the list."""
-    names = ', '.join(sorted(hidden))
-    return ('In this chat the workbench tool does the browsing and Windows app work: ' + names + ' are not in your '
-            'tool list, so hand those jobs to the workbench (it opens apps, looks, clicks and types, and browses '
-            'in a background browser). Looking at the screen, web_search and web_fetch stay as they are.')
+    their jobs went. Built from what is really hidden, so it never claims more than the workbench can do here."""
+    jobs = []
+    if hidden & HOST_PATH_HIDDEN_BROWSER:
+        jobs.append('browsing (it uses a background browser)')
+    if hidden & HOST_PATH_HIDDEN_DESKTOP:
+        jobs.append('Windows app work (it opens apps, looks, clicks and types)')
+    return ('In this chat the workbench tool does ' + ' and '.join(jobs) + ': ' + ', '.join(sorted(hidden))
+            + ' are not in your tool list, so hand those jobs to the workbench. Looking at the screen, '
+            'web_search and web_fetch stay as they are.')
