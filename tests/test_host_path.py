@@ -142,6 +142,17 @@ class CheckpointToolTests(unittest.TestCase):
                                                            'executable': 'C:/Windows/System32/cmd.exe'})[0])
         self.assertFalse(call(vc.COMPUTER_SERVER, 'App', {'mode': 'launch', 'name': 'regedit'})[0])
 
+    def test_launching_an_installed_program_does_not_ask_but_a_downloaded_one_does(self):
+        cp, _, asked = make_checkpoint(self.root)
+        call = cp.tool_call
+        self.assertTrue(call(vc.COMPUTER_SERVER, 'App', {'mode': 'launch_executable', 'executable': 'notepad.exe'})[0])
+        self.assertTrue(call(vc.COMPUTER_SERVER, 'App', {'mode': 'launch_executable',
+                                                          'executable': 'C:\\Program Files\\App\\app.exe'})[0])
+        self.assertEqual(asked, [])
+        self.assertFalse(call(vc.COMPUTER_SERVER, 'App', {'mode': 'launch_executable',
+                                                           'executable': 'C:\\Users\\x\\Downloads\\setup.exe'})[0])
+        self.assertEqual(len(asked), 1)
+
     def test_no_typing_into_her_own_browser_and_typed_text_is_not_logged(self):
         cp, _, _ = make_checkpoint(self.root, foreground=lambda: ('chrome.exe', 'Sign in - Google'))
         self.assertFalse(cp.tool_call(vc.COMPUTER_SERVER, 'Type', {'text': 'hunter2', 'loc': [1, 2]})[0])
@@ -320,6 +331,28 @@ class HostRunTests(unittest.TestCase):
         self.assertNotIn('PowerShell', desktop[-1])
         self.assertEqual(host_executor.upstream_services(tempfile.mkdtemp(), which=lambda name: None,
                                                        find_script=lambda name: None), {})
+
+
+class PermissionEventTests(unittest.TestCase):
+    def test_permission_asked_events_are_collected_in_either_envelope(self):
+        events = ex.PermissionEvents.__new__(ex.PermissionEvents)
+        events.requests, events.lock = [], __import__('threading').Lock()
+        events._accept(json.dumps({'type': 'permission.asked', 'properties': {'id': 'a', 'sessionID': 's'}}))
+        events._accept(json.dumps({'payload': {'type': 'permission.asked', 'properties': {'id': 'b'}}}))
+        events._accept(json.dumps({'type': 'message.updated', 'properties': {'id': 'c'}}))
+        events._accept('not json')
+        self.assertEqual([item['id'] for item in events.take()], ['a', 'b'])
+        self.assertEqual(events.take(), [])
+
+
+class HiddenStdioTests(unittest.TestCase):
+    def test_cmd_line_is_one_string_so_paths_with_spaces_survive(self):
+        import mcp_hidden_stdio as hidden
+        argv = ['C:\\Windows\\cmd.exe', '/d', '/s', '/c', 'call "E:\\Program Files\\npx.CMD" -y x']
+        self.assertEqual(hidden.command_for_call(argv, windows=True),
+                         '"C:\\Windows\\cmd.exe" /d /s /c "call "E:\\Program Files\\npx.CMD" -y x"')
+        self.assertEqual(hidden.command_for_call(argv, windows=False), argv)
+        self.assertEqual(hidden.command_for_call(['python', 'x.py'], windows=True), ['python', 'x.py'])
 
 
 class BrowserNetworkTests(unittest.TestCase):

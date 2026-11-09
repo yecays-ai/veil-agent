@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 import fnmatch
 import json
 import os
+import posixpath
 from pathlib import Path
 import re
 import shlex
@@ -144,6 +145,24 @@ def foreground_window():
         return process, title
     except Exception:
         return None
+
+
+def _is_installed_program(target):
+    """A bare program name (notepad.exe, found through PATH) or a file under Windows or Program Files; anything
+    from a user-writable place (Downloads, Temp, her projects) still asks."""
+    text = str(target or '').strip().strip('"')
+    if not text:
+        return False
+    if not re.search(r'[\\/]', text):
+        return True
+    path = posixpath.normpath(text.replace('\\', '/')).casefold()
+    roots = [os.environ.get(name) for name in ('SystemRoot', 'ProgramFiles', 'ProgramFiles(x86)')]
+    roots += ['c:/windows', 'c:/program files', 'c:/program files (x86)']
+    for root in roots:
+        root = posixpath.normpath(str(root or '').replace('\\', '/')).casefold()
+        if root not in ('', '.') and path.startswith(root + '/'):
+            return True
+    return False
 
 
 class Checkpoint:
@@ -411,6 +430,8 @@ class Checkpoint:
                 return self._record(SYSTEM, operation, DENY, 'system tool or shell')
             if why := (self.forbidden_path(target) if mode == 'launch_executable' else ''):
                 return self._record(SYSTEM, operation, DENY, why)
+            if mode == 'launch_executable' and _is_installed_program(target):
+                return self._record(COMPUTER, operation, ALLOW, 'open an installed app')
             if mode == 'launch_executable':
                 return self._ask(SYSTEM, f'Peter 想直接运行程序：{ex._safe_display(target)}。同意吗？y/N ',
                                  ('app', 'exe', _norm(target)), 'app:launch_executable')

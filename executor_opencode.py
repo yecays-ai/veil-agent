@@ -1248,6 +1248,56 @@ class Api:
         return json.loads(text) if text.strip() else None
 
 
+class PermissionEvents:
+    """Permission requests from OpenCode's event stream. `GET /permission` returns a schema error for the whole
+    list when one pending request has a field it cannot serialise (seen in 1.19.5 with webfetch), which would
+    leave every request unanswered; the stream carries each request on its own."""
+
+    def __init__(self, base, password, opener=None):
+        self.base, self.opener = base, opener or urllib.request.urlopen
+        self.auth = 'Basic ' + base64.b64encode(('opencode:' + password).encode()).decode()
+        self.requests, self.connected, self.closed = [], False, False
+        self.lock = threading.Lock()
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+
+    def _run(self):
+        while not self.closed:
+            try:
+                request = urllib.request.Request(self.base + '/event', headers={'Authorization': self.auth})
+                with self.opener(request, timeout=30) as response:
+                    self.connected = True
+                    for raw in response:
+                        if self.closed:
+                            break
+                        line = raw.decode('utf-8', 'replace').strip()
+                        if line.startswith('data:'):
+                            self._accept(line[5:].strip())
+            except Exception:
+                pass
+            self.connected = False
+            if not self.closed:
+                time.sleep(1)
+
+    def _accept(self, text):
+        try:
+            event = json.loads(text)
+        except ValueError:
+            return
+        event = event.get('payload', event) if isinstance(event, dict) else {}
+        if event.get('type') == 'permission.asked' and isinstance(event.get('properties'), dict):
+            with self.lock:
+                self.requests.append(event['properties'])
+
+    def take(self):
+        with self.lock:
+            taken, self.requests = self.requests, []
+        return taken
+
+    def close(self):
+        self.closed = True
+
+
 def free_port():
     with socket.socket() as s:
         s.bind(('127.0.0.1', 0))
@@ -1460,7 +1510,7 @@ def run(task, **kwargs):
 
 
 def _run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, stopped, record_cost,
-        api_factory=None, proxy_factory=None, container=None, protect=(), popen=subprocess.Popen, clock=time.monotonic,
+        api_factory=None, events_factory=None, proxy_factory=None, container=None, protect=(), popen=subprocess.Popen, clock=time.monotonic,
         sleep=time.sleep, diagnostic=None, maintenance=False, approval_data=None, save_approval=None,
         container_name=None, browser_gateway=None, windows_gateway=None, checkpoint=None, host_gateways=()):
     """Run one task. `record_cost(cost)` is called once with the estimated cost, whatever the outcome.
@@ -1646,6 +1696,7 @@ def _run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, 
                 pass
         raise
     proc, messages, cost, steps, stop = None, [], Decimal(0), 0, ''
+    events = None
     cleanup_warning = ''
     try:
         proc = popen(command if container else [command, 'serve', '--port', str(port)], cwd=str(workdir), env=env,
@@ -1676,6 +1727,9 @@ def _run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, 
         api.call('POST', f'/session/{session}/prompt_async', {
             'parts': [{'type': 'text', 'text': text}], 'model': {'providerID': 'relay', 'modelID': provider['model']}})
         started, idle, answered, approvals = clock(), 0, [], []
+        list_failures, last_list_error = 0, ''
+        events = (events_factory or (PermissionEvents if api_factory is None else (lambda *_: None)))(
+            f'http://127.0.0.1:{port}', password)
         approval_stop = ''
         while True:
             sleep(1)
@@ -1688,7 +1742,20 @@ def _run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, 
                 for host_gateway in entered:
                     host_gateway.stop()
             try:
-                for request in ([] if stop else api.call('GET', '/permission') or []):
+                listed = []
+                if not stop:
+                    try:
+                        listed = api.call('GET', '/permission') or []
+                        list_failures = 0
+                    except Exception as exc:
+                        list_failures += 1
+                        last_list_error = error_text(exc)
+                        if proc.poll() is not None:
+                            raise
+                        if list_failures >= 30 and not (events is not None and events.connected):
+                            stop = 'cannot read OpenCode permission requests: ' + last_list_error[:200]
+                    listed = list(listed) + (events.take() if events is not None else [])
+                for request in ([] if stop else listed):
                     if request.get('sessionID') != session or request.get('id') in answered:
                         continue
                     answered.append(request.get('id'))
@@ -1758,7 +1825,10 @@ def _run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, 
             try:
                 status = api.call('GET', '/session/status') or {}
                 busy = status.get(session, {}).get('type') not in (None, 'idle')
-                pending = any(r.get('sessionID') == session for r in (api.call('GET', '/permission') or []))
+                try:
+                    pending = any(r.get('sessionID') == session for r in (api.call('GET', '/permission') or []))
+                except Exception:
+                    pending = bool(events is not None and events.requests)
             except Exception:
                 busy, pending = True, False
                 if proc.poll() is not None:
@@ -1772,6 +1842,8 @@ def _run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, 
         stop = stop or return_text  # the run log in `finally` records why
         return ExecutorResult(return_text, '出错', cost, steps)
     finally:
+        if events is not None:
+            events.close()
         kill_tree(proc)
         try:
             if container:
