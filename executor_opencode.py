@@ -1455,6 +1455,11 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
             record_cost(Decimal(0))
         except Exception:
             pass
+        for host_gateway in host_gateways:
+            try:
+                host_gateway.__exit__(None, None, None)
+            except Exception:
+                pass
         return ExecutorResult('The host path runs without the container, maintenance or the old gateways.',
                               '被拒绝', reason='invalid_host_run')
     if maintenance and not container:
@@ -1602,7 +1607,7 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
                         'XDG_DATA_HOME': str(home / 'data'), 'XDG_CONFIG_HOME': str(home / 'config'),
                         'XDG_CACHE_HOME': str(home / 'cache'), 'XDG_STATE_HOME': str(home / 'state')})
     except BaseException as setup_error:
-        for host_gateway in entered:
+        for host_gateway in host_gateways:  # an unentered gateway still closes what it holds
             try:
                 host_gateway.__exit__(None, None, None)
             except Exception:
@@ -1776,7 +1781,7 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
                 desktop_gateway.__exit__(None, None, None)
             except Exception:
                 cleanup_warning += ' [warning: could not stop the Windows UIA gateway]'
-        for host_gateway in entered:
+        for host_gateway in host_gateways:
             try:
                 host_gateway.__exit__(None, None, None)
             except Exception:
