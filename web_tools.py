@@ -21,8 +21,9 @@ except ImportError:  # Setup remains recoverable if the optional web dependency 
 WEB_TOOL_NAMES = frozenset({'web_search', 'web_fetch', 'web_research'})
 # Engines are tried one after another; the first one with usable results wins. A single engine that is
 # unreachable from the user's network must not fail the whole search.
-# Bing is reachable from mainland China without a proxy; the others usually need one.
-SEARCH_ENGINES = ('brave', 'bing', 'yahoo', 'mojeek', 'startpage', 'duckduckgo')
+# These engines usually need a proxy from mainland China. (The library marks Bing disabled; asking for it
+# silently runs every engine at once, so it is not listed.)
+SEARCH_ENGINES = ('brave', 'yahoo', 'mojeek', 'startpage', 'duckduckgo')
 # The whole search gives up after this long, however many engines are left to try.
 SEARCH_TOTAL_SECONDS = 20
 SEARCH_RESULT_LIMIT = 8

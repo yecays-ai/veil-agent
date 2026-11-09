@@ -226,6 +226,7 @@ class BrowserTools:
         self.runtime = await async_playwright().start()
         environment = {key: value for key, value in os.environ.items()
                        if key.upper() in {'PATH', 'SYSTEMROOT', 'WINDIR', 'TEMP', 'TMP'}}
+        self.launched_visible = self.visible
         self.engine = await self.runtime.chromium.launch(
             headless=True if self.headless else not self.visible, env=environment, chromium_sandbox=True,
             proxy={'server': f'http://127.0.0.1:{port}', 'bypass': '<-loopback>'},
@@ -332,7 +333,6 @@ class BrowserTools:
                         raise ValueError('Open a public page first.')
                     await self._release()
                     await self._launch()
-                    self.launched_visible = self.visible
                 if stopped():
                     raise ValueError('Stopped before navigation.')
                 if action == 'open':
