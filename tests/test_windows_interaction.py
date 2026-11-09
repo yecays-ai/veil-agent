@@ -1,7 +1,9 @@
 import contextlib
+import concurrent.futures
 import json
 import os
 import tempfile
+import threading
 import unittest
 import urllib.request
 from pathlib import Path
@@ -1429,9 +1431,10 @@ max_steps = 3
 class WindowsWorkbenchGatewayTests(unittest.TestCase):
     def test_gateway_exposes_only_uia_task_tools_and_returns_target_window_screenshot(self):
         calls = []
+        observations = []
         observer = SimpleNamespace(
             tools=WINDOW_TOOL_SCHEMAS,
-            begin_request=lambda: None,
+            begin_request=lambda: observations.append('reset'),
             invoke=lambda name, args, **_kwargs: (calls.append((name, args)) or (
                 WindowsToolResult('observed', image_data_uri='data:image/png;base64,c2NyZWVuc2hvdA=='), '成功', name)),
         )
@@ -1440,7 +1443,7 @@ class WindowsWorkbenchGatewayTests(unittest.TestCase):
             input_monitor=FakeInputMonitor(),
             invoke=lambda name, args, *_args, **_kwargs: ('acted', '成功', name),
         )
-        with WindowsWorkbenchGateway(observer, interaction, lambda: False, lambda _prompt: 'n') as gateway:
+        with WindowsWorkbenchGateway(observer, interaction, lambda: False, lambda _prompt: 'y') as gateway:
             def call(method, params):
                 request = urllib.request.Request(
                     gateway.url, data=json.dumps({'jsonrpc': '2.0', 'id': 1, 'method': method,
@@ -1448,34 +1451,78 @@ class WindowsWorkbenchGatewayTests(unittest.TestCase):
                     headers={'Authorization': 'Bearer ' + gateway.token, 'Content-Type': 'application/json'})
                 return json.loads(urllib.request.urlopen(request, timeout=2).read())
             listed = call('tools/list', {})['result']['tools']
-            self.assertEqual({item['name'] for item in listed}, WindowsWorkbenchGateway.names)
+            self.assertEqual({item['name'] for item in listed}, {
+                'windows_discover_apps', 'windows_list', 'windows_foreground', 'windows_observe',
+                'windows_launch', 'windows_manage', 'windows_control_action',
+            })
             self.assertNotIn('windows_canvas_action', {item['name'] for item in listed})
             result = call('tools/call', {'name': 'windows_observe', 'arguments': {'window_id': WINDOW_ID}})
             self.assertFalse(result['result']['isError'])
             self.assertEqual(result['result']['content'][1], {
                 'type': 'image', 'data': 'c2NyZWVuc2hvdA==', 'mimeType': 'image/png'})
-        self.assertEqual(calls, [('windows_observe', {'window_id': WINDOW_ID})])
+            repeated = call('tools/call', {'name': 'windows_observe', 'arguments': {'window_id': WINDOW_ID}})
+            self.assertEqual(repeated['result']['content'][1]['type'], 'image')
+        self.assertEqual(calls, [('windows_observe', {'window_id': WINDOW_ID})] * 2)
+        self.assertEqual(len(observations), 3)
 
     def test_uncertain_desktop_result_stops_following_gateway_calls(self):
         calls = []
         observer = SimpleNamespace(
             tools=WINDOW_TOOL_SCHEMAS,
             begin_request=lambda: None,
-            invoke=lambda name, args, **_kwargs: (calls.append((name, args)) or ('unknown', '结果不确定', name)),
+            invoke=lambda *_args, **_kwargs: ('observed', '成功', 'windows_list'),
         )
         interaction = SimpleNamespace(tools=WINDOWS_INTERACTION_TOOL_SCHEMAS,
                                       input_monitor=FakeInputMonitor(),
-                                      invoke=lambda *_args, **_kwargs: ('acted', '成功', 'action'))
-        with WindowsWorkbenchGateway(observer, interaction, lambda: False, lambda _prompt: 'n') as gateway:
+                                      invoke=lambda name, args, *_a, **_kw: (
+                                          calls.append((name, args)) or ('unknown', '结果不确定', name)))
+        with WindowsWorkbenchGateway(observer, interaction, lambda: False, lambda _prompt: 'y') as gateway:
             def call():
                 request = urllib.request.Request(
                     gateway.url, data=json.dumps({'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call',
-                                                   'params': {'name': 'windows_list', 'arguments': {}}}).encode(),
+                                                   'params': {'name': 'windows_control_action', 'arguments': {}}}).encode(),
                     headers={'Authorization': 'Bearer ' + gateway.token, 'Content-Type': 'application/json'})
                 return json.loads(urllib.request.urlopen(request, timeout=2).read())['result']
             self.assertTrue(call()['isError'])
             self.assertIn('stopped', call()['content'][0]['text'])
         self.assertEqual(len(calls), 1)
+
+    def test_no_desktop_observation_before_task_authorization(self):
+        observed, asked = [], []
+        observer = SimpleNamespace(tools=WINDOW_TOOL_SCHEMAS, begin_request=lambda: None,
+                                   invoke=lambda *_a, **_kw: observed.append('read'))
+        interaction = SimpleNamespace(tools=WINDOWS_INTERACTION_TOOL_SCHEMAS,
+                                      input_monitor=FakeInputMonitor())
+        with WindowsWorkbenchGateway(observer, interaction, lambda: False,
+                lambda prompt: asked.append(prompt) or 'n') as gateway:
+            text, state = gateway.invoke('windows_observe', {'window_id': WINDOW_ID})
+            self.assertEqual(state, '被拒绝')
+            self.assertTrue(gateway.stopped())
+            self.assertEqual(observed, [])
+            self.assertEqual(len(asked), 1)
+
+    def test_parallel_call_cannot_pass_an_uncertain_action(self):
+        entered, release = threading.Event(), threading.Event()
+        calls = []
+        def action(name, args, *_a, **_kw):
+            calls.append(name)
+            entered.set()
+            self.assertTrue(release.wait(2))
+            return 'unknown', '结果不确定', name
+        observer = SimpleNamespace(tools=WINDOW_TOOL_SCHEMAS, begin_request=lambda: None)
+        interaction = SimpleNamespace(tools=WINDOWS_INTERACTION_TOOL_SCHEMAS,
+                                      input_monitor=FakeInputMonitor(), invoke=action)
+        with WindowsWorkbenchGateway(observer, interaction, lambda: False, lambda _: 'y') as gateway:
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                pending = pool.submit(gateway.invoke, 'windows_control_action', {})
+                self.assertTrue(entered.wait(2))
+                try:
+                    self.assertEqual(gateway.invoke('windows_control_action', {})[1], '搁置')
+                finally:
+                    release.set()
+                self.assertEqual(pending.result(timeout=2)[1], '结果不确定')
+            self.assertEqual(gateway.invoke('windows_control_action', {})[1], '中断')
+            self.assertEqual(calls, ['windows_control_action'])
 
     def test_human_input_between_actions_stays_stopped_after_the_desktop_is_idle(self):
         monitor = FakeInputMonitor()
@@ -1485,6 +1532,30 @@ class WindowsWorkbenchGatewayTests(unittest.TestCase):
             monitor.version += 1  # Lan moves the mouse between two otherwise independent MCP calls.
             self.assertTrue(gateway.stopped())
             monitor.idle = True
+            self.assertTrue(gateway.stopped())
+
+    def test_approval_click_is_not_a_task_takeover_but_stop_is_not_cleared(self):
+        monitor = FakeInputMonitor()
+        observer = SimpleNamespace(tools=WINDOW_TOOL_SCHEMAS, begin_request=lambda: None)
+        interaction = SimpleNamespace(tools=WINDOWS_INTERACTION_TOOL_SCHEMAS, input_monitor=monitor)
+        def approve(_prompt):
+            monitor.version += 1
+            self.assertFalse(gateway.stopped(), 'the approval gesture is expected input')
+            return 'y'
+        with WindowsWorkbenchGateway(observer, interaction, lambda: False, approve) as gateway:
+            self.assertEqual(gateway.approve('Save the test document?'), 'y')
+            self.assertFalse(gateway.stopped())
+            monitor.version += 1
+            self.assertTrue(gateway.stopped(), 'later human input must still stop the task')
+            gateway.approve('Save the test document?')
+            self.assertTrue(gateway.stopped(), 'approval must never clear a stopped task')
+
+    def test_rejected_approval_revokes_further_desktop_actions(self):
+        observer = SimpleNamespace(tools=WINDOW_TOOL_SCHEMAS, begin_request=lambda: None)
+        interaction = SimpleNamespace(tools=WINDOWS_INTERACTION_TOOL_SCHEMAS,
+                                      input_monitor=FakeInputMonitor())
+        with WindowsWorkbenchGateway(observer, interaction, lambda: False, lambda _: 'n') as gateway:
+            self.assertEqual(gateway.approve('Save?'), 'n')
             self.assertTrue(gateway.stopped())
 
 

@@ -1788,6 +1788,9 @@ class WindowsWorkbenchGateway:
         self.started = False
         self.cancelled = threading.Event()
         self.input_snapshot = None
+        self.approval_pending = threading.Event()
+        self.action_lock = threading.Lock()
+        self.authorized = False
 
     def stop(self):
         self.cancelled.set()
@@ -1795,10 +1798,59 @@ class WindowsWorkbenchGateway:
     def stopped(self):
         if self.cancelled.is_set() or self.should_stop():
             return True
-        if self.input_snapshot is not None and self.interaction.input_monitor.changed_since(self.input_snapshot):
+        if (not self.approval_pending.is_set() and self.input_snapshot is not None
+                and self.interaction.input_monitor.changed_since(self.input_snapshot)):
             self.cancelled.set()
             return True
         return False
+
+    def approve(self, prompt):
+        if self.stopped():
+            return 'n'
+        self.approval_pending.set()
+        try:
+            answer = self.approval(prompt)
+            if str(answer or '').strip().casefold() == 'y':
+                # The requested approval gesture is expected; later input still stops the task.
+                self.input_snapshot = self.interaction.input_monitor.snapshot()
+            else:
+                self.stop()
+            return answer
+        except BaseException:
+            self.stop()
+            raise
+        finally:
+            self.approval_pending.clear()
+
+    def invoke(self, name, arguments):
+        if not self.action_lock.acquire(blocking=False):
+            return 'A desktop operation or approval is pending; no parallel action was started.', '搁置'
+        try:
+            if self.stopped():
+                return 'The Windows task is stopped; no desktop action was started.', '中断'
+            if not self.authorized:
+                answer = self.approve('本次工作台任务需要读取普通 Windows 窗口（含截图）并操作已授权软件。允许本次任务访问桌面吗？y/N ')
+                if str(answer or '').strip().casefold() != 'y':
+                    return 'Desktop access for this workbench task was not approved.', '被拒绝'
+                self.authorized = True
+            if self.stopped():
+                return 'The Windows task is stopped; no desktop action was started.', '中断'
+            if name in WINDOWS_OBSERVATION_TOOL_NAMES:
+                if name == 'windows_observe':
+                    # One target screenshot per observation; the executor bounds total steps and cost.
+                    self.observer.begin_request()
+                text, state, _summary = self.observer.invoke(name, arguments, should_stop=self.stopped)
+            else:
+                text, state, _summary = self.interaction.invoke(
+                    name, arguments, self.approve, should_stop=self.stopped)
+            if state in ('中断', '结果不确定'):
+                self.stop()
+            return text, state
+        except BaseException:
+            self.stop()
+            raise
+        finally:
+            self.action_lock.release()
 
     def __enter__(self):
         gateway = self
@@ -1855,16 +1907,7 @@ class WindowsWorkbenchGateway:
                         name, arguments = params.get('name'), params.get('arguments', {})
                         if name not in gateway.names or not isinstance(arguments, dict):
                             raise ValueError('unknown Windows tool or invalid arguments')
-                        if gateway.stopped():
-                            text, state = ('The Windows task is stopped. Observe again only in a new task; '
-                                           'no desktop action was started.'), '中断'
-                        elif name in WINDOWS_OBSERVATION_TOOL_NAMES:
-                            text, state, _summary = gateway.observer.invoke(name, arguments, should_stop=gateway.stopped)
-                        else:
-                            text, state, _summary = gateway.interaction.invoke(
-                                name, arguments, gateway.approval, should_stop=gateway.stopped)
-                        if state in ('中断', '结果不确定'):
-                            gateway.stop()
+                        text, state = gateway.invoke(name, arguments)
                         content = [{'type': 'text', 'text': str(text)}]
                         image = getattr(text, 'image_data_uri', None)
                         if isinstance(image, str) and image.startswith('data:image/png;base64,'):

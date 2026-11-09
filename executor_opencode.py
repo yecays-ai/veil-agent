@@ -1599,6 +1599,8 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
                     stop = stop or 'OpenCode stopped unexpectedly'
             steps, calls, repeat, _text = summarize(messages)
             _tin, _tout, cost = estimate_cost(messages, price, steps)
+            if not stop and desktop_gateway is not None and desktop_gateway.stopped():
+                stop = 'Windows task stopped or its action outcome is uncertain'
             if not stop:
                 if steps >= int(limits['max_steps']):
                     stop = f'reached the {limits["max_steps"]}-step limit'
@@ -1683,6 +1685,7 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
                         m.get('info', {}).get('type') == 'assistant'), '')
         status = (approval_note + '\n' if approval_note else '') + '[workbench=stopped]\n'
         reason = ('user_stopped' if stop == 'stopped by Lan' else
+                  'desktop_stopped' if stop == 'Windows task stopped or its action outcome is uncertain' else
                   'repeated_call' if stop.startswith('the same call was repeated') else 'limit_or_failure')
         return ExecutorResult(status + f'The workbench was stopped: {stop}. {diagnose(messages)}\nPartial report:\n{partial[:RESULT_CHARS]}\n{note}',
                               '出错', cost, steps, reason)

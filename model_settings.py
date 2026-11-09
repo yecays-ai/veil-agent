@@ -641,9 +641,14 @@ class ModelSettings:
                 raise SettingsError('两个接口不能使用相同 ID。')
             endpoint_ids = {item['id'] for item in endpoints}
             models = []
+            previous_models = {item['id']: item for item in self.data['models']}
             for item in models_in:
                 if not isinstance(item, dict):
                     raise SettingsError('设置格式不对。')
+                previous = previous_models.get(item.get('id'), {}) if isinstance(item.get('id'), str) else {}
+                if ('input_modalities' not in item and 'input_modalities' in previous
+                        and all(item.get(key) == previous.get(key) for key in ('endpoint', 'model'))):
+                    item = {**item, 'input_modalities': previous['input_modalities']}
                 models.append(self._model(item, endpoint_ids))
             if len({item['id'] for item in models}) != len(models):
                 raise SettingsError('两个模型不能使用相同 ID。')

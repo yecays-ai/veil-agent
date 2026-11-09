@@ -80,6 +80,22 @@ class ModelSettingsTests(unittest.TestCase):
         cfg.models.use('peter', model_id)
         self.assertEqual(cfg.models.chosen('peter')[2]['input_modalities'], ['text', 'image'])
 
+    def test_settings_edit_preserves_hidden_modalities_only_for_the_same_model(self):
+        cfg, _ = self.add_relay()
+        payload = json.loads(json.dumps(cfg.models.data))
+        payload['models'][0]['input_modalities'] = ['text', 'image']
+        cfg.models.save(payload)
+        payload['models'][0].pop('input_modalities')  # Desktop editor does not submit this hidden field.
+        cfg.models.save(payload)
+        self.assertEqual(cfg.models.data['models'][0]['input_modalities'], ['text', 'image'])
+        payload['models'][0]['input_modalities'] = ['text']
+        cfg.models.save(payload)
+        self.assertEqual(cfg.models.data['models'][0]['input_modalities'], ['text'])
+        payload['models'][0].pop('input_modalities')
+        payload['models'][0]['model'] = 'different-text-model'
+        cfg.models.save(payload)
+        self.assertNotIn('input_modalities', cfg.models.data['models'][0])
+
     def test_new_endpoint_needs_key_and_https(self):
         cfg = load_character(self.root, 'test')
         with self.assertRaises(SettingsError):

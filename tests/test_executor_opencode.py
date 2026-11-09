@@ -146,6 +146,8 @@ class BrowserGatewayConfigTests(unittest.TestCase):
                 events.append(self.kind + ':close')
             def stop(self):
                 events.append(self.kind + ':stop')
+            def stopped(self):
+                return False
         done = [assistant(text='done', tool=('read', {'file': 'x'}), finish='stop')]
         result, _api, _costs, _kill = run([(done, [], False)] * 3, limits={'max_steps': 1},
                                            browser_gateway=lambda *_: Gateway('browser'),
@@ -153,6 +155,27 @@ class BrowserGatewayConfigTests(unittest.TestCase):
         self.assertEqual(result.reason, 'limit_or_failure')
         self.assertEqual(events, ['browser:enter', 'windows:enter', 'browser:stop', 'windows:stop',
                                   'browser:close', 'windows:close'])
+
+    def test_stopped_windows_gateway_cannot_be_reported_as_success(self):
+        events = []
+        class Gateway:
+            url, token = 'http://127.0.0.1:9/mcp', 'token'
+            def __enter__(self):
+                return self
+            def __exit__(self, *_args):
+                events.append('closed')
+            def stopped(self):
+                return True
+            def stop(self):
+                events.append('stopped')
+        done = [assistant(text='Desktop task complete', tool=('veil_windows_windows_list', {}), finish='stop')]
+        result, api, costs, _kill = run([(done, [], False)] * 3,
+                                        windows_gateway=lambda *_: Gateway())
+        self.assertNotEqual(result.state, '成功')
+        self.assertEqual(result.reason, 'desktop_stopped')
+        self.assertTrue(api.aborted)
+        self.assertEqual(len(costs), 1)
+        self.assertEqual(events, ['stopped', 'closed'])
 
 
 class DecisionTests(unittest.TestCase):
@@ -1798,7 +1821,7 @@ class RealOpenCodeTests(unittest.TestCase):
                         ask=lambda _p: 'n', stopped=lambda: False, record_cost=lambda _c: None,
                         container={'image': 'veil-workbench'},
                         windows_gateway=lambda stopped, container: WindowsWorkbenchGateway(
-                            observer, interaction, stopped, lambda _p: 'n', container=container))
+                            observer, interaction, stopped, lambda _p: 'y', container=container))
         self.assertEqual(result.state, '成功', result.text)
         self.assertIn('veil_windows_windows_observe', names)
         self.assertTrue(results)
