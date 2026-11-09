@@ -171,7 +171,7 @@ class ModelSettingsTests(unittest.TestCase):
         self.assertEqual(cfg.background_provider['model'], 'fake-model')
         self.assertEqual(view['use']['peter'], 'builtin:fake')
         self.assertEqual(view['use']['background'], 'builtin:fake')
-        self.assertEqual(view['use']['autonomy'], 'builtin:fake')
+        self.assertEqual(view['use']['autonomy'], FOLLOW_CHAT)
         self.assertEqual(view['use']['glance'], FOLLOW_CHAT)
         self.assertIsNone(view['use']['delegate'])
         self.assertEqual(len(view['endpoints']), 1)
@@ -233,7 +233,7 @@ output_cny_per_million = "2"
         self.assertEqual(view['use']['peter'], 'builtin:fake')
         self.assertEqual(view['use']['background'], 'builtin:other')
         self.assertEqual(view['use']['glance'], 'builtin:other')
-        self.assertEqual(view['use']['autonomy'], 'builtin:fake')
+        self.assertEqual(view['use']['autonomy'], FOLLOW_CHAT)
         self.assertIsNone(view['use']['delegate'])
         self.assertTrue(path.with_name('models.json.cc-removal-backup').exists())
 

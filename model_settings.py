@@ -316,6 +316,8 @@ class ModelSettings:
         use = raw.get('use') if isinstance(raw.get('use'), dict) else {}
         for role in ROLES:
             if role in use:
+                if role == 'autonomy' and use[role] == FOLLOW_CHAT:
+                    continue  # follow-chat is the absence of an explicit autonomy choice
                 if not self._choice_ok(data, role, use[role]):
                     raise SettingsError(f'模型配置 models.json 中 {role} 选中的模型不存在或无效；原文件已保留。')
                 data['use'][role] = use[role]
@@ -408,7 +410,7 @@ class ModelSettings:
         return provider
 
     def _choice_ok(self, data, role, model_id):
-        if role == 'glance' and model_id == FOLLOW_CHAT:
+        if role in ('glance', 'autonomy') and model_id == FOLLOW_CHAT:
             return True
         provider = self._provider(data, model_id)
         return provider is not None
@@ -488,7 +490,9 @@ class ModelSettings:
             return self.chosen(role)
 
     def _public_use(self, role):
-        if role in ('glance', 'autonomy', 'delegate'):
+        if role == 'autonomy':
+            return self.selected(role) if 'autonomy' in self.data['use'] else FOLLOW_CHAT
+        if role in ('glance', 'delegate'):
             return self.selected(role)
         choice = self.startup_choice(role)
         return None if choice is None else choice[0]
@@ -585,6 +589,8 @@ class ModelSettings:
             use = payload.get('use') if isinstance(payload.get('use'), dict) else self.data['use']
             for role in ROLES:
                 model_id = use.get(role, self.data['use'].get(role))
+                if role == 'autonomy' and model_id == FOLLOW_CHAT:
+                    continue
                 if self._choice_ok(data, role, model_id):
                     data['use'][role] = model_id
             removed = [item['key_env'] for item in self.data['endpoints'] if item['id'] not in endpoint_ids]
@@ -622,6 +628,13 @@ class ModelSettings:
             if role == 'delegate' and model_id in (None, ''):
                 data = {**self.data, 'use': {key: value for key, value in self.data['use'].items()
                                              if key != 'delegate'}}
+                self._forget_migration_role(data, role)
+                self._write(data)
+                self.data = data
+                return None, None, None
+            if role == 'autonomy' and model_id == FOLLOW_CHAT:
+                data = {**self.data, 'use': {key: value for key, value in self.data['use'].items()
+                                             if key != 'autonomy'}}
                 self._forget_migration_role(data, role)
                 self._write(data)
                 self.data = data

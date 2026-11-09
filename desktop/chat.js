@@ -1922,7 +1922,7 @@ function renderModels(view){
   if(signature===modelsSignature)return;
   modelsSignature=signature;modelsView=view;
   fillModelSelect(sw,view,view.use.peter);
-  fillModelSelect($('use-peter'),view,view.use.peter);fillModelSelect($('use-autonomy'),view,view.use.autonomy);fillModelSelect($('use-delegate'),view,view.use.delegate||'');fillModelSelect($('use-background'),view,view.use.background);fillModelSelect($('use-glance'),view,view.use.glance,true);
+  fillModelSelect($('use-peter'),view,view.use.peter);fillModelSelect($('use-autonomy'),view,view.use.autonomy,true);fillModelSelect($('use-delegate'),view,view.use.delegate||'');fillModelSelect($('use-background'),view,view.use.background);fillModelSelect($('use-glance'),view,view.use.glance,true);
   $('models-migration').textContent=view.migration_notice||'';$('models-migration').hidden=!view.migration_notice;
   $('background-hint').textContent=view.background_restart?'记忆后台已改，完全退出 Peter 再打开才生效。':'Ombre 给记忆打标签、整理短期便签用这个。换了以后，完全退出 Peter 再打开才生效。';
   if(document.activeElement!==$('limit-daily'))$('limit-daily').value=view.limits.daily_cny;

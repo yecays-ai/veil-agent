@@ -68,16 +68,20 @@ class GlanceModelTests(unittest.TestCase):
 
     def test_autonomy_follows_chat_until_explicitly_selected(self):
         cfg = load_character(self.root, 'test')
-        self.assertEqual(cfg.models.public()['use']['autonomy'], 'builtin:fake')
+        self.assertEqual(cfg.models.public()['use']['autonomy'], FOLLOW_CHAT)
         self.assertFalse(cfg.models.public()['use_explicit']['autonomy'])
         cfg.models.use('peter', 'builtin:other')
-        self.assertEqual(cfg.models.public()['use']['autonomy'], 'builtin:other')
+        self.assertEqual(cfg.models.public()['use']['autonomy'], FOLLOW_CHAT)
         cfg.models.use('autonomy', 'builtin:fake')
-        cfg.models.use('peter', 'builtin:other')
         self.assertTrue(cfg.models.public()['use_explicit']['autonomy'])
         self.assertEqual(cfg.models.public()['use']['autonomy'], 'builtin:fake')
+        cfg.models.use('autonomy', FOLLOW_CHAT)
+        self.assertFalse(cfg.models.public()['use_explicit']['autonomy'])
+        self.assertEqual(cfg.models.public()['use']['autonomy'], FOLLOW_CHAT)
+        self.assertEqual(cfg.models.chosen('autonomy')[0], cfg.models.chosen('peter')[0])
         again = load_character(self.root, 'test')
-        self.assertEqual(again.models.public()['use']['autonomy'], 'builtin:fake')
+        self.assertEqual(again.models.public()['use']['autonomy'], FOLLOW_CHAT)
+        self.assertFalse(again.models.public()['use_explicit']['autonomy'])
 
     def test_autonomy_uses_its_api_model_and_restores_chat(self):
         cfg = load_character(self.root, 'test')
