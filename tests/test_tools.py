@@ -1238,6 +1238,12 @@ max_result_bytes = 200
 
         self.assertEqual(reply, 'The result is ready.')
         self.assertEqual(chat.send_message_count, 1)
+        send = next(row for row in chat.investigation.read()['evidence']
+                    if row['tool'] == 'send_message')
+        self.assertEqual(send['state'], '成功')
+        self.assertFalse(send['read_only'])
+        self.assertIn('already completed', chat.investigation.resume_guard(
+            'send_message', {'text': 'The result is ready.'}))
         tools.invoke.assert_not_called()
 
     def test_tool_result_drops_oldest_history_round_before_reply(self):

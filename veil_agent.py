@@ -5047,9 +5047,30 @@ class Chat:
                         except (ValueError, TypeError):
                             args, summary = {}, call.function.name
                         log_tool(call.function.name, summary, '进行中', call_id=call_id)
-                        execution = self._execute_tool_call(
-                            call, request_id,
-                            f'{step}:{getattr(call, "id", None) or call_index}', autonomy, offered)
+                        replay_block = (self.investigation.resume_guard(call.function.name, args)
+                                        if not autonomy and checkpoint_resuming else None)
+                        if replay_block:
+                            execution = _ToolExecution(replay_block, '被拒绝', summary)
+                        else:
+                            if not autonomy:
+                                self.investigation.record(checkpoint_goal, request_id, call.function.name, args,
+                                                          '结果未知', summary,
+                                                          'Tool execution started; its outcome was not recorded.',
+                                                          checkpoint_resuming)
+                            try:
+                                execution = self._execute_tool_call(
+                                    call, request_id,
+                                    f'{step}:{getattr(call, "id", None) or call_index}', autonomy, offered)
+                            except BaseException as exc:
+                                if not autonomy:
+                                    self.investigation.record(checkpoint_goal, request_id, call.function.name, args,
+                                                              '结果未知', summary,
+                                                              str(exc) or exc.__class__.__name__, checkpoint_resuming)
+                                raise
+                            if not autonomy:
+                                self.investigation.record(checkpoint_goal, request_id, call.function.name, args,
+                                                          execution.state, execution.summary, execution.result,
+                                                          checkpoint_resuming)
                         if execution.state == '成功' and self.sent_messages:
                             mixed_sent_messages.append(self.sent_messages[-1])
                             sent_in_this_step = True
