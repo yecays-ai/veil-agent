@@ -74,6 +74,17 @@ class InvestigationCheckpointTests(unittest.TestCase):
                               state, path, 'synthetic outcome')
             self.assertIn('do not replay', checkpoint.resume_guard('write_file', {'path': path}))
 
+    def test_interruption_survives_completion_unless_its_owner_resumes(self):
+        checkpoint = InvestigationCheckpoint(self.store, 'test')
+        checkpoint.record('Investigate A.', 'request-1', 'read_text_file',
+                          {'path': 'a.txt'}, '成功', 'a.txt', 'confirmed fact')
+        checkpoint.interrupt('step_limit', 'request-1')
+
+        checkpoint.complete('unrelated-request')
+        self.assertEqual(checkpoint.read()['status'], 'interrupted')
+        checkpoint.complete('request-2', resuming=True)
+        self.assertEqual(checkpoint.read()['status'], 'completed')
+
 
 if __name__ == '__main__':
     unittest.main()

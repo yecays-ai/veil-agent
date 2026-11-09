@@ -166,9 +166,12 @@ class InvestigationCheckpoint:
                 task['status'], task['reason'], task['updated_at'] = 'interrupted', reason, now()
                 self._save(task)
 
-    def complete(self):
+    def complete(self, request_id=None, resuming=False):
         with self.store.mutex:
             task = self._read()
-            if task and task['status'] in ('active', 'interrupted'):
+            owns_active = (task and task['status'] == 'active' and
+                           (request_id is None or task['request_id'] == request_id or resuming))
+            owns_resumed = task and task['status'] == 'interrupted' and resuming
+            if owns_active or owns_resumed:
                 task['status'], task['updated_at'] = 'completed', now()
                 self._save(task)

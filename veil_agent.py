@@ -5180,7 +5180,7 @@ class Chat:
             final = 'The tool-step limit for this request has been reached.'
             self.output(final)
         if not autonomy:
-            self.investigation.complete()
+            self.investigation.complete(request_id, checkpoint_resuming)
         return final, summaries
 
 
