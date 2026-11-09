@@ -5,6 +5,8 @@ import os
 import re
 import subprocess
 import threading
+import time
+import urllib.request
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,7 +21,10 @@ except ImportError:  # Setup remains recoverable if the optional web dependency 
 WEB_TOOL_NAMES = frozenset({'web_search', 'web_fetch', 'web_research'})
 # Engines are tried one after another; the first one with usable results wins. A single engine that is
 # unreachable from the user's network must not fail the whole search.
-SEARCH_ENGINES = ('brave', 'yahoo', 'mojeek', 'startpage', 'duckduckgo')
+# Bing is reachable from mainland China without a proxy; the others usually need one.
+SEARCH_ENGINES = ('brave', 'bing', 'yahoo', 'mojeek', 'startpage', 'duckduckgo')
+# The whole search gives up after this long, however many engines are left to try.
+SEARCH_TOTAL_SECONDS = 20
 SEARCH_RESULT_LIMIT = 8
 SEARCH_ENGINE_TIMEOUT_SECONDS = 8
 RESEARCH_DEFAULT_PAGES = 3
@@ -28,6 +33,23 @@ RESEARCH_RESULT_BYTES = 12288
 MAX_QUERY_CHARS = 500
 MAX_URL_BYTES = 2048
 FETCH_CALL_TIMEOUT_SECONDS = 45
+
+
+def search_proxy():
+    """The proxy search requests should use: DDGS_PROXY, else the system proxy (on Windows the one set in
+    Internet Options, which tools such as Clash use). The search library does not read the system setting
+    itself, while page reading does, so without this a search could fail where reading the same page works."""
+    configured = os.environ.get('DDGS_PROXY')
+    if configured:
+        return configured
+    try:
+        proxies = urllib.request.getproxies()
+    except Exception:
+        return None
+    value = proxies.get('http') or proxies.get('https')
+    if not value:
+        return None
+    return value if '://' in value else 'http://' + value
 
 
 def _clip_utf8(value, max_bytes):
@@ -287,21 +309,32 @@ class WebTools:
             received = received[:197] + '...'
         return f'Search query must contain 1 to 500 characters. Received query parameter: {received}'
 
-    @staticmethod
-    def _find_results(query):
+    # The engine that answered last is tried first next time, so one unreachable engine costs its
+    # timeout once, not on every search.
+    _last_engine = None
+
+    def _find_results(self, query):
         """Try each engine in turn; return (results, last failure reason or None)."""
         query = query.strip()
-        reason, answered = None, False
-        for engine in SEARCH_ENGINES:
+        reason, answered, failures = None, False, []
+        proxy = search_proxy()
+        engines = sorted(SEARCH_ENGINES, key=lambda engine: engine != self._last_engine)
+        started = time.monotonic()
+        for engine in engines:
+            if time.monotonic() - started >= SEARCH_TOTAL_SECONDS:
+                failures.append('time limit reached')
+                break
             try:
-                found = list(DDGS(timeout=SEARCH_ENGINE_TIMEOUT_SECONDS).text(
+                found = list(DDGS(proxy=proxy, timeout=SEARCH_ENGINE_TIMEOUT_SECONDS).text(
                     query, backend=engine, max_results=SEARCH_RESULT_LIMIT))
             except Exception as exc:
                 # Say what actually failed (class + short reason, never the query) so a blocked
                 # network is told apart from a library problem.
                 reason = _clip_utf8(f'{type(exc).__name__}: {exc}'.replace(query, '<query>'), 200)
+                failures.append(f'{engine}: {type(exc).__name__}')
                 continue
             answered = True
+            self._last_engine = engine
             usable, seen = [], set()
             for result in found:
                 href = public_http_url(result.get('href') or result.get('url'), max_bytes=MAX_URL_BYTES)
@@ -312,7 +345,10 @@ class WebTools:
             if usable:
                 return usable, None
         # A reason is reported only when no engine answered at all.
-        return [], (None if answered else reason)
+        if answered:
+            return [], None
+        return [], _clip_utf8('; '.join(failures) + (f'. Last error: {reason}' if reason else '') +
+                              ('' if proxy else '. No system proxy was found.'), 400)
 
     def _search(self, arguments):
         problem = self._query_problem(arguments)

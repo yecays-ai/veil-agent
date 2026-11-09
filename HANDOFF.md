@@ -1,5 +1,12 @@
 # HANDOFF
 
+## 工单 326（2026-11-09）：后台浏览、搜索代理、错误原文日志
+
+- 依据：审计报告 `/mnt/project-files/audit/peter-execution-permission-audit-2026-11-09.md` 第 3 节（Lan 本机日志）。21:25 那次请求共 8 分 10 秒；搜索的 5 个境外引擎全部超时（`ddgs` 不读 Windows 系统代理，`web_fetch` 会读，属于推断，待在 Lan 电脑上实测）；浏览器和工作台网关只要检测到 Lan 的任何输入就停。
+- 改动：`browser_tools.py` 默认无窗口、不检查输入，`open` 加 `show`，显示模式下保留人优先；`BrowserWorkbenchGateway` 只在显示模式下检查输入，并去掉 `show`。`web_tools.py`：`search_proxy()`（`DDGS_PROXY` 或系统代理）、加入 Bing、上次成功的引擎排在最前、总时限 20 秒、报错写明每个引擎的失败原因。`veil_agent.py`：浏览器和桌面工具失败时，日志记录失败原文。`executor_opencode.py`：`save_run_log`（`workbench-home/runs`，保留 30 份，每份不超过 2MB），`diagnose` 带上 `veil_*` 工具的错误原文。
+- 测试：全量 `unittest discover`，改动前后的失败列表相同（都是本机缺 Node、网络或 SDK 造成的旧失败），新增 2 项测试。
+- Lan 已定方向 A：OpenCode 跑在宿主机上，VEIL 统一裁决权限，不直接交出原始的 Windows-MCP、Playwright MCP 或不受限的 PowerShell；Docker 只用来隔离不可信代码。阶段 1 在测试副本里进行。
+
 ## 工单 325（2026-11-09）：桌面动作退回主聊天
 
 - 现象（`data/peter/tools.jsonl` 21:25–21:30，324 合并后）：只弹一张桌面授权卡；首个工作台调用里 `veil_browser_public_browser` 4 次 error、`veil_windows_windows_launch` error，被判“桌面任务已停止或结果不确定”；同一次请求之后的工作台调用都以 `0 tool calls` 立即停止（原因未验证）。主聊天 `web_fetch`、`windows_observe`、`peek_screen` 成功。

@@ -5186,6 +5186,10 @@ class Chat:
                         log_detail = (execution.activity_detail or (
                             'Isolated public browser step.' if canonical_name == 'browser'
                             else 'Windows desktop action completed.'))
+                        if state != '成功':
+                            # Keep the program's own failure text, so a refusal or error can be diagnosed
+                            # from the log. Successful results stay out: they can hold page or window text.
+                            log_detail = f'{log_detail} {str(execution.result)[:400]}'
                     if result_state == '结果过长' and canonical_name not in DESKTOP_FILE_READ_TOOL_NAMES:
                         log_detail = display_detail
                     activity_metadata = nowhere_activity_metadata(

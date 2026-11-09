@@ -90,8 +90,15 @@ class BrowserWorkbenchGatewayTests(unittest.TestCase):
     def test_human_takeover_revokes_the_whole_gateway_and_request_size_is_bounded(self):
         changed = [False]
         monitor = SimpleNamespace(snapshot=lambda: 'before', changed_since=lambda _snapshot: changed[0])
-        browser = SimpleNamespace(begin_request=lambda: None, invoke=lambda *_args, **_kwargs: ('', '成功', ''), monitor=monitor)
+        browser = SimpleNamespace(begin_request=lambda: None, invoke=lambda *_args, **_kwargs: ('', '成功', ''),
+                                  monitor=monitor, visible=True)
         with BrowserWorkbenchGateway(browser, lambda: False) as gateway:
+            # The workbench browses in the background: Lan using her computer does not stop it.
+            self.assertFalse(browser.visible)
+            changed[0] = True
+            self.assertFalse(gateway.stopped())
+            changed[0] = False
+            browser.visible = True
             self.assertFalse(gateway.stopped())
             changed[0] = True
             self.assertTrue(gateway.stopped())
@@ -292,8 +299,14 @@ class BrowserSafetyTests(unittest.TestCase):
             browser.gate.release()
         browser.begin_request()
         browser.monitor.require_idle = lambda _: (_ for _ in ()).throw(ValueError('human priority'))
+        # A background browser never waits for Lan to stop using her computer.
+        self.assertNotIn('human priority', browser.invoke('browser', {'action': 'observe'})[0])
+        # A browser she asked to see on her screen gives way to her input.
+        browser.visible = True
         self.assertIn('human priority', browser.invoke('browser', {'action': 'observe'})[0])
-        self.assertIsNone(browser.loop)
+        browser.visible = False
+        self.assertIn('show must be', browser.invoke(
+            'browser', {'action': 'open', 'url': 'https://example.com/', 'show': 'yes'})[0])
 
     def test_cjk_evidence_is_kept_and_wrapped_as_untrusted(self):
         result = model_tool_result('browser', '视频页面已准备，播放未确认', '成功')

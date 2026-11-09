@@ -913,6 +913,31 @@ def _last_test_exit(messages):
     return result
 
 
+RUN_LOG_KEEP = 30
+RUN_LOG_MAX_BYTES = 2 * 1024 * 1024
+
+
+def save_run_log(home, messages, *, stop='', steps=0, cost=Decimal(0)):
+    """Keep the OpenCode session of one run (every step, tool input/output and error text) in
+    `<home>/runs/`, because the session itself disappears with the container. Local diagnosis only;
+    the newest RUN_LOG_KEEP runs are kept. Never raises."""
+    try:
+        folder = Path(home) / 'runs'
+        folder.mkdir(parents=True, exist_ok=True)
+        body = json.dumps({'time': time.strftime('%Y-%m-%dT%H:%M:%S%z'), 'stop': stop, 'steps': steps,
+                           'cost_cny': str(cost), 'messages': messages}, ensure_ascii=False, default=str)
+        if len(body.encode('utf-8')) > RUN_LOG_MAX_BYTES:
+            body = json.dumps({'time': time.strftime('%Y-%m-%dT%H:%M:%S%z'), 'stop': stop, 'steps': steps,
+                               'cost_cny': str(cost), 'truncated': True,
+                               'diagnosis': diagnose(messages)}, ensure_ascii=False)
+        name = time.strftime('%Y%m%d-%H%M%S') + '-' + secrets.token_hex(3) + '.json'
+        (folder / name).write_text(body, encoding='utf-8')
+        for old in sorted(folder.glob('*.json'))[:-RUN_LOG_KEEP]:
+            old.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
 def diagnose(messages):
     """A short account of why a run ended without a report: model/API errors and the last tool calls."""
     lines = []
@@ -938,7 +963,15 @@ def diagnose(messages):
                 tool = part.get('tool') or part.get('name') or 'tool'
                 error = state.get('error')
                 error_type = ((error.get('name') or error.get('type')) if isinstance(error, dict) else '')
-                tool_lines.append(f"{tool} {state.get('status', '')} {shown} {error_type}".strip())
+                # VEIL's own bridged tools (veil_*) answer with program text, so their error is shown; shell and
+                # file errors can echo file contents or arguments and stay reduced to their type.
+                error_text = ''
+                if str(tool).startswith('veil_') and state.get('status') == 'error':
+                    raw = error.get('message', '') if isinstance(error, dict) else error
+                    if not raw:
+                        raw = state.get('output', '')
+                    error_text = ('(' + ' '.join(str(raw or '').split())[:160] + ')') if raw else ''
+                tool_lines.append(f"{tool} {state.get('status', '')} {shown} {error_type} {error_text}".strip())
     if not any(p.get('type') == 'tool' for m in messages for p in m.get('parts', [])):
         lines.append('no tools were executed')
     return '; '.join(lines + tool_lines[-6:])
@@ -1665,6 +1698,7 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
                 empty_secret_dir.rmdir()
             except OSError:
                 cleanup_warning += ' [warning: could not remove temporary secret mask]'
+        save_run_log(home, messages, stop=stop, steps=steps, cost=cost)
         try:
             record_cost(cost)
         except Exception:
