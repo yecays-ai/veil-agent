@@ -46,6 +46,11 @@ class InvestigationCheckpointTests(unittest.TestCase):
         self.assertEqual(checkpoint.read()['goal'], 'Investigate A.')
         self.assertEqual(checkpoint.read()['reason'], 'context_limit')
 
+    def test_plain_continue_resumes_but_continue_on_another_topic_does_not(self):
+        self.assertTrue(InvestigationCheckpoint.resume_requested('继续'))
+        self.assertTrue(InvestigationCheckpoint.resume_requested('继续刚才的调查'))
+        self.assertFalse(InvestigationCheckpoint.resume_requested('继续聊电影'))
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -66,7 +66,7 @@ class InvestigationCheckpoint:
     @staticmethod
     def resume_requested(text):
         return isinstance(text, str) and bool(__import__('re').match(
-            r'^\s*(继续刚才的调查|继续调查|接着调查|续接调查|continue (?:the )?investigation)(?:\b|[，。！! ]|$)',
+            r'^\s*(继续刚才的调查|继续调查|接着调查|续接调查|继续|continue (?:the )?investigation)(?:\b|[，。！! ]|$)',
             text, __import__('re').I))
 
     def resume_context(self, text):
