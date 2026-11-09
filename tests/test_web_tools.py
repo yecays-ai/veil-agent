@@ -142,6 +142,7 @@ class WebToolsTests(unittest.TestCase):
         self.assertIn('https://ok.example/a', result)
         self.assertEqual(search.call_args.args, ('topic', 'sk-test-secret'))
         ddgs.text.assert_not_called()
+        tools.budget.mark_dispatched.assert_called_once_with('rid')
         tools.budget.reserve_amount.assert_called_once_with(
             'test', 'deepseek-search', web_tools.DEEPSEEK_SEARCH_CNY, 'deepseek-search')
         tools.budget.settle_estimate.assert_called_once_with(
@@ -157,6 +158,15 @@ class WebToolsTests(unittest.TestCase):
         self.assertEqual(state, '成功', result)
         self.assertEqual(tools.budget.settle_estimate.call_args.kwargs['settled_amount'], 0)
         self.assertEqual(tools.budget.settle_estimate.call_args.args[1], 'deepseek-search-failed')
+        # A free engine answering does not push DeepSeek out of first place next time.
+        self.assertEqual(tools._last_engine, 'brave')
+        with patch('web_tools.deepseek_search', return_value=[{'title': 'T', 'href': 'https://ok.example/d',
+                                                                'body': 's'}]) as search, \
+                patch('web_tools.DDGS', return_value=ddgs):
+            ddgs.text.reset_mock()
+            tools.invoke('web_search', {'query': 'topic'})
+        search.assert_called_once()
+        ddgs.text.assert_not_called()
         tools.budget.reset_mock()
         tools.budget.reserve_amount.return_value = ('rid2', web_tools.DEEPSEEK_SEARCH_CNY)
         tools._last_engine = None
@@ -194,8 +204,12 @@ class WebToolsTests(unittest.TestCase):
         response.__exit__ = Mock(return_value=False)
         opener = Mock()
         opener.open.return_value = response
-        with patch('web_tools.urllib.request.build_opener', return_value=opener):
+        with patch('web_tools.urllib.request.build_opener', return_value=opener) as build:
             found = web_tools.deepseek_search('查' * 300, 'sk-k', timeout=7)
+        # Redirects are refused so the Authorization header never reaches another host.
+        self.assertTrue(any(isinstance(h, web_tools._NoRedirect) for h in build.call_args.args))
+        self.assertIsNone(web_tools._NoRedirect().redirect_request(
+            Mock(), None, 302, 'Found', {}, 'https://evil.example/'))
         self.assertEqual(found, [{'title': 'A', 'href': 'https://a.example/', 'body': 'long summary'},
                                  {'title': 'B', 'href': 'https://b.example/', 'body': 'only snippet'}])
         request = opener.open.call_args.args[0]

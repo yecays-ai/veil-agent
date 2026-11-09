@@ -68,6 +68,12 @@ def _redact_userinfo(text):
     return re.sub(r'(?i)\b([a-z][a-z0-9+.-]*://)[^/@\s:]+(?::[^/@\s]*)?@', r'\1***@', text)
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Never follow a redirect: it would carry the DeepSeek key's Authorization header to another host."""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 def deepseek_search(query, key, *, proxy=None, timeout=8):
     """One DeepSeek search request: [{'title','href','body'}] (the summary is written for models)."""
     payload = json.dumps({'query': query[:DEEPSEEK_QUERY_CHARS], 'count': SEARCH_RESULT_LIMIT,
@@ -75,7 +81,9 @@ def deepseek_search(query, key, *, proxy=None, timeout=8):
     request = urllib.request.Request(
         DEEPSEEK_SEARCH_URL, data=payload, method='POST',
         headers={'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json'})
-    handlers = [urllib.request.ProxyHandler({'http': proxy, 'https': proxy})] if proxy else []
+    handlers = [_NoRedirect()]
+    if proxy:
+        handlers.append(urllib.request.ProxyHandler({'http': proxy, 'https': proxy}))
     with urllib.request.build_opener(*handlers).open(request, timeout=timeout) as response:
         if response.status != 200:
             raise OSError(f'HTTP {response.status}')
@@ -383,8 +391,9 @@ class WebTools:
         reason, answered, failures = None, False, []
         proxy = search_proxy()
         key = self._deepseek_key()
-        engines = sorted((('deepseek',) if key else ()) + SEARCH_ENGINES,
-                         key=lambda engine: engine != self._last_engine)
+        # DeepSeek always goes first when its key is saved; the last-engine shortcut only reorders the free engines.
+        engines = (('deepseek',) if key else ()) + tuple(
+            sorted(SEARCH_ENGINES, key=lambda engine: engine != self._last_engine))
         started = time.monotonic()
         for engine in engines:
             remaining = SEARCH_TOTAL_SECONDS - (time.monotonic() - started)
