@@ -64,7 +64,11 @@ TASK_SCOPE_NOTE = (
 
 # Host runs have no container masking: every secret-file class of SECRET_FILE is unreadable by OpenCode itself.
 HOST_SECRET_GLOBS = ('*.pem', '*.pfx', '*.key', '*.p12', '*id_rsa*', '*id_ed25519*', '*.env', '*.env.*',
-                     '*Login Data*', '*Cookies*', '*/.ssh/*', '*\\.ssh\\*', '*/secrets/*', '*\\secrets\\*')
+                     '*Login Data*', '*Cookies*', '*/.ssh/*', '*\\.ssh\\*', '*/secrets/*', '*\\secrets\\*',
+                     '*/.aws/*', '*\\.aws\\*', '*/.azure/*', '*\\.azure\\*', '*/.gnupg/*', '*\\.gnupg\\*',
+                     '*/.kube/*', '*\\.kube\\*', '*/.docker/config.json', '*\\.docker\\config.json',
+                     '*credentials*', '*.npmrc', '*.pypirc', '*.netrc', '*_netrc', '*.git-credentials',
+                     '*.kdbx', '*.ppk')
 
 HOST_NOTE = (
     'Environment: you run directly on the owner\'s Windows PC. VEIL rules every operation. '

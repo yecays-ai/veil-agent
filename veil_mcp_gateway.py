@@ -42,7 +42,16 @@ class VeilMcpGateway:
         worker = self.worker_factory(self.service, self.environment)
         worker.call_timeout = self.call_timeout
         try:
-            worker.ready.result(timeout=START_TIMEOUT + 5)
+            deadline = time.monotonic() + START_TIMEOUT + 5
+            while True:  # a stop while the upstream server starts ends the wait at once
+                if self.stopped():
+                    raise RuntimeError('The task is stopped; ' + self.server_id + ' was not started.')
+                try:
+                    worker.ready.result(timeout=min(0.25, max(0.01, deadline - time.monotonic())))
+                    break
+                except TimeoutError:
+                    if time.monotonic() >= deadline:
+                        raise
         except BaseException:
             worker.close()
             raise

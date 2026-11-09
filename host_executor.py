@@ -49,8 +49,8 @@ def check_opencode(command):
                               **hidden_subprocess_kwargs(windows=os.name == 'nt', module=subprocess))
     except (OSError, subprocess.TimeoutExpired) as exc:
         return 'OpenCode did not answer: ' + str(exc)[:200]
-    found = re.search(r'\d+\.\d+\.\d+', (done.stdout or '') + (done.stderr or ''))
-    if not found or found.group(0) != PINNED['opencode']:
+    found = re.search(r'\d+\.\d+\.\d+[\w.+-]*', (done.stdout or '') + (done.stderr or ''))
+    if done.returncode != 0 or not found or found.group(0) != PINNED['opencode']:
         return (f'OpenCode {found.group(0) if found else "(unknown version)"} is installed; the workbench needs '
                 f'{PINNED["opencode"]} (npm install -g opencode-ai@{PINNED["opencode"]}).')
     return ''

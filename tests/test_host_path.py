@@ -62,6 +62,7 @@ class CheckpointShellTests(unittest.TestCase):
             'external_directory', [str(self.root / 'home' / '.ssh' / '*')], {})[0], 'reject')
         self.assertEqual(self.cp.opencode_permission(
             'read', [str(self.root / 'veil' / 'data' / 'peter' / 'memory' / 'x')], {})[0], 'reject')
+        self.assertEqual(self.bash('cat .aws/credentials')[0], 'reject')
         self.assertEqual(self.asked, [])
 
     def test_unknown_permissions_are_refused_and_every_decision_is_logged(self):
@@ -122,6 +123,8 @@ class CheckpointToolTests(unittest.TestCase):
         self.assertTrue(call(vc.COMPUTER_SERVER, 'Type', {'text': 'hello', 'loc': [1, 2]})[0])
         self.assertTrue(call(vc.COMPUTER_SERVER, 'Shortcut', {'shortcut': 'ctrl+s'})[0])  # asked: y
         self.assertFalse(call(vc.COMPUTER_SERVER, 'Type', {'text': 'hi', 'loc': [1, 2], 'press_enter': True})[0])
+        self.assertEqual(len(asked), 2)
+        self.assertFalse(call(vc.COMPUTER_SERVER, 'Shortcut', {'shortcut': 'ctrl+shift+enter'})[0])
         self.assertEqual(len(asked), 2)
         self.assertFalse(call(vc.COMPUTER_SERVER, 'PowerShell', {'command': 'dir'})[0])
         self.assertFalse(call(vc.COMPUTER_SERVER, 'App', {'mode': 'launch_executable',

@@ -41,6 +41,8 @@ COMMIT_SHORTCUT = re.compile(
     r'^(?:ctrl\+(?:shift\+)?s|ctrl\+enter|ctrl\+return|alt\+s|alt\+f4|ctrl\+w|enter|return|'
     r'(?:shift\+)?(?:delete|del)|ctrl\+d|ctrl\+p|win\+r|win\+x|win\+l|ctrl\+shift\+(?:esc|escape|delete|del)|'
     r'ctrl\+alt\+(?:delete|del))$', re.I)
+# Shortcuts that run the selected program as administrator (Start search / Run box): never.
+ELEVATION_SHORTCUT = re.compile(r'^(?:ctrl\+shift\+(?:enter|return)|shift\+ctrl\+(?:enter|return))$', re.I)
 ELEVATION = re.compile(
     r'(?:\brunas\b|-verb\s+runas|\bsudo\b|\bgsudo\b|\bpsexec|\bschtasks\b|set-mppreference|'
     r'disable-?(?:realtime|windowsdefender)|\bbcdedit\b|\bdiskpart\b|\bformat(?:\.com)?\s+[a-z]:|'
@@ -224,7 +226,8 @@ class Checkpoint:
                 if any(self._inside(work, root) for work in works) and not inside_work and self._inside(path, root):
                     return 'VEIL data, keys or browser passwords'
             parts = {part.casefold() for part in Path(path).parts}
-            if '.ssh' in parts or 'secrets' in parts:
+            if parts & {'.ssh', 'secrets', '.aws', '.azure', '.gnupg', '.kube'} or \
+                    'credentials' in Path(path).name.casefold():
                 return 'secret folder'
             if any(path == item for item in self.protect):
                 return 'protected file'
@@ -411,6 +414,8 @@ class Checkpoint:
             return self._record(COMPUTER, operation, ALLOW, 'type')
         if name == 'Shortcut':
             keys = re.sub(r'\s+', '', str(args.get('shortcut', ''))).casefold()
+            if ELEVATION_SHORTCUT.match(keys):
+                return self._record(SYSTEM, operation, DENY, 'runs a program as administrator')
             if COMMIT_SHORTCUT.match(keys):
                 return self._ask(COMPUTER, f'Peter 想按 {ex._safe_display(keys)}（可能保存、发送、关闭或删除）。同意吗？y/N ',
                                  ('shortcut', keys), 'shortcut:' + keys)
