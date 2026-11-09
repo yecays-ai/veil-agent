@@ -4240,6 +4240,7 @@ class Chat:
         if history_start is None:
             history_start = len(messages) - history_count - 1
         final = ''
+        checkpoint_interrupted = False
         next_reservation = None
         autonomy_tool_steps = 0
         self._tick_expanded_groups(autonomy)
@@ -4564,6 +4565,7 @@ class Chat:
             self.long_tasks.set_tool_step(step)
             if not autonomy and self.user_stop.is_set():
                 self.investigation.interrupt('user_stop', request_id, checkpoint_resuming)
+                checkpoint_interrupted = True
                 pending_reservation = request_id if step == 0 else next_reservation
                 if pending_reservation:
                     self.budget.settle(pending_reservation, self.cfg, 0, 0, 0)
@@ -4613,6 +4615,8 @@ class Chat:
                     final = self.tool_stop_reason
                     self.output(final)
                 else:
+                    self.investigation.interrupt('context_limit', request_id, checkpoint_resuming)
+                    checkpoint_interrupted = True
                     self.output(ChatOutput(self.tool_stop_reason, request_id=request_id, is_error=True))
                     if continuation_prefix:
                         final = continuation_prefix
@@ -4935,11 +4939,13 @@ class Chat:
                 if step == max_steps - 1 and summaries:
                     if not autonomy:
                         self.investigation.interrupt('step_limit', request_id, checkpoint_resuming)
+                        checkpoint_interrupted = True
                     self.output('The tool-step limit for this request has been reached.')
                 break
             if offered is None:
                 if not autonomy:
                     self.investigation.interrupt('step_limit', request_id, checkpoint_resuming)
+                    checkpoint_interrupted = True
                 final = 'The tool-step limit for this request has been reached.'
                 self.tool_stop_reason = final
                 self.output(final)
@@ -4951,6 +4957,7 @@ class Chat:
             except BudgetExceeded:
                 if not autonomy:
                     self.investigation.interrupt('budget_limit', request_id, checkpoint_resuming)
+                    checkpoint_interrupted = True
                 if autonomy:
                     self.autonomy_budget_limited = True
                 for call in message.tool_calls:
@@ -4994,6 +5001,7 @@ class Chat:
                     self.tool_stop_reason = refusal
                     if not autonomy:
                         self.investigation.interrupt('context_limit', request_id, checkpoint_resuming)
+                        checkpoint_interrupted = True
                     for call in message.tool_calls:
                         canonical_name = self._resolve_tool_name(call.function.name, offered)
                         if canonical_name == 'send_message':
@@ -5173,13 +5181,16 @@ class Chat:
                 self.budget.settle(next_reservation, next_cfg, 0, 0, 0)
                 raise
         if not final and self.reply_displayed and not autonomy:
+            if not checkpoint_interrupted:
+                self.investigation.complete(request_id, checkpoint_resuming)
             return '', summaries
         if not final:
             if not autonomy:
                 self.investigation.interrupt('step_limit', request_id, checkpoint_resuming)
+                checkpoint_interrupted = True
             final = 'The tool-step limit for this request has been reached.'
             self.output(final)
-        if not autonomy:
+        if not autonomy and not checkpoint_interrupted:
             self.investigation.complete(request_id, checkpoint_resuming)
         return final, summaries
 
