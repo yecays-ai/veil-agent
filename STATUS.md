@@ -11,7 +11,7 @@
 - 工单 320 在 `ticket/320-browser-continuous-execution`，PR #319：https://github.com/yecays-ai/veil-agent/pull/319。旧主聊天 `browser` 入口保留。
 - 工作台每次非维护任务使用一次性随机令牌保护的 MCP 浏览器服务，复用现有隔离浏览器；容器只额外放行本次端口；停止、人工接管和内部限额都会关闭网关。
 - 公开搜索只接受最新快照里的文本/搜索框控件，提交只限同源公开 GET 表单；`_blank`、凭据字段、非提交按钮和越权动作被拒绝。
-- 自动检查已在真实 Windows 宿主通过：Docker Desktop + `veil-workbench`（OpenCode 1.19.5）+ 宿主 Chromium，完整跑通打开、填公开搜索、提交、读结果和报告；非自主模式未弹审批卡。
+- 自动检查已在真实 Windows 宿主通过（代码提交 `435a980`）：Docker Desktop + `veil-workbench`（OpenCode 1.19.5）+ 宿主 Chromium，完整跑通打开、填公开搜索、提交、读结果和报告；非自主模式未弹审批卡。
 - 详细修复记录见 `HANDOFF.md` 与 PR #319。Windows 体验验收尚未进行；不能把自动检查当作 lan 的体验验收。
 
 ## 下一步
