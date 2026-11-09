@@ -1588,6 +1588,30 @@ class WindowsWorkbenchGatewayTests(unittest.TestCase):
             self.assertEqual(gateway.invoke('windows_control_action', {})[1], '中断')
             self.assertEqual(calls, ['windows_control_action'])
 
+    def test_parallel_call_queues_and_runs_after_a_successful_action(self):
+        entered, release = threading.Event(), threading.Event()
+        calls = []
+        def action(name, args, *_a, **_kw):
+            calls.append(name)
+            if len(calls) == 1:
+                entered.set()
+                self.assertTrue(release.wait(2))
+            return 'done', '成功', name
+        observer = SimpleNamespace(tools=WINDOW_TOOL_SCHEMAS, begin_request=lambda: None)
+        interaction = SimpleNamespace(tools=WINDOWS_INTERACTION_TOOL_SCHEMAS,
+                                      input_monitor=FakeInputMonitor(), invoke=action)
+        with WindowsWorkbenchGateway(observer, interaction, lambda: False, lambda _: 'y') as gateway:
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                first = pool.submit(gateway.invoke, 'windows_launch', {})
+                self.assertTrue(entered.wait(2))
+                queued = pool.submit(gateway.invoke, 'windows_control_action', {})
+                time.sleep(0.4)
+                self.assertFalse(queued.done())
+                release.set()
+                self.assertEqual(first.result(timeout=2)[1], '成功')
+                self.assertEqual(queued.result(timeout=2)[1], '成功')
+        self.assertEqual(calls, ['windows_launch', 'windows_control_action'])
+
     def test_queued_call_that_waits_too_long_stops_the_task_instead_of_running_late(self):
         entered, release = threading.Event(), threading.Event()
         calls = []
