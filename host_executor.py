@@ -7,12 +7,15 @@ Docker stays for the old container workbench (untrusted code, VEIL maintenance).
 Dev-side check on a real PC (no chat needed):
     python host_executor.py --workdir <folder> "task in words"
 """
+import asyncio
+import json
 import os
 from pathlib import Path
 import re
 import secrets
 import shutil
 import subprocess
+import threading
 import time
 
 import executor_opencode as ex
@@ -39,6 +42,39 @@ class HostRefused(ValueError):
     """This task cannot run on the host path; the message says why."""
 
 
+class BrowserNetwork:
+    """The background browser's only way out: VEIL's public-only proxy (browser_tools.PublicProxy) on loopback.
+
+    Every request the page makes goes through it, including links, redirects, scripts and frames, so no page
+    can reach Lan's home network, the PC itself or plain HTTP; DNS is resolved by the proxy and pinned."""
+
+    def __init__(self, proxy_factory=None):
+        if proxy_factory is None:
+            from browser_tools import PublicProxy as proxy_factory
+        self.proxy = proxy_factory()
+        self.loop = asyncio.new_event_loop()
+        self.thread = threading.Thread(target=self.loop.run_forever, daemon=True, name='veil-browser-network')
+        self.thread.start()
+        try:
+            self.port = asyncio.run_coroutine_threadsafe(self.proxy.start(), self.loop).result(10)
+        except BaseException:
+            self.close()
+            raise
+
+    def close(self):
+        if self.loop.is_closed():
+            return
+        try:
+            if getattr(self.proxy, 'server', None) is not None:
+                asyncio.run_coroutine_threadsafe(self.proxy.close(), self.loop).result(5)
+        except Exception:
+            pass
+        self.loop.call_soon_threadsafe(self.loop.stop)
+        self.thread.join(timeout=5)
+        if not self.thread.is_alive():
+            self.loop.close()
+
+
 def check_opencode(command):
     """'' when `command` is the pinned OpenCode, else why not."""
     if not command:
@@ -56,18 +92,28 @@ def check_opencode(command):
     return ''
 
 
-def upstream_services(home, *, desktop=True, browser='msedge', which=shutil.which):
-    """{server_id: (service, offered tools)} for the MCP servers this computer can start."""
+def upstream_services(home, *, desktop=True, browser='msedge', which=shutil.which, proxy_port=None):
+    """{server_id: (service, offered tools)} for the MCP servers this computer can start.
+
+    The browser is offered only behind VEIL's public-only proxy (`proxy_port`); `<-loopback>` makes even
+    localhost go through it (the browser would skip the proxy for loopback otherwise)."""
     services = {}
     npx = which('npx')
-    if npx:
+    if npx and proxy_port:
         output = Path(home) / 'browser-output'
         output.mkdir(parents=True, exist_ok=True)
+        # WebRTC may otherwise use UDP straight from the network card, around the proxy.
+        settings = output / 'veil-browser.json'
+        settings.write_text(json.dumps({'browser': {'launchOptions': {'args': [
+            '--webrtc-ip-handling-policy=disable_non_proxied_udp', '--force-webrtc-ip-handling-policy']}}}),
+            encoding='utf-8')
         services[vc.BROWSER_SERVER] = ({
             'command': npx, 'cwd': str(output),
             'args': ['-y', f'@playwright/mcp@{PINNED["playwright-mcp"]}', '--headless', '--isolated',
                      '--browser', browser, '--image-responses', 'omit',
-                     '--output-dir', str(output)]}, vc.BROWSER_TOOLS)
+                     '--output-dir', str(output), '--config', str(settings),
+                     '--proxy-server', f'http://127.0.0.1:{int(proxy_port)}', '--proxy-bypass', '<-loopback>']},
+            vc.BROWSER_TOOLS)
     uvx = which('uvx')
     if desktop and os.name == 'nt' and uvx:
         services[vc.COMPUTER_SERVER] = ({
@@ -91,7 +137,8 @@ def _log_path(home):
 
 def prepare(*, workdir, home, veil_root, ask, autonomy, stopped, protect=(), desktop=True, browser='msedge',
             services=None):
-    """(checkpoint, gateways) for one host run. Nothing starts until `executor_opencode.run` enters the gateways."""
+    """(checkpoint, gateways) for one host run. Only the browser's network guard (a loopback proxy) starts here;
+    the MCP servers start when `executor_opencode.run` enters the gateways, and `run` closes them all."""
     if os.name != 'nt' and services is None:
         raise HostRefused('The host path runs only on Windows; use the container workbench here.')
     checkpoint = vc.Checkpoint(workdir, ask=ask, autonomy=autonomy, log_path=_log_path(home),
@@ -99,10 +146,27 @@ def prepare(*, workdir, home, veil_root, ask, autonomy, stopped, protect=(), des
     checkpoint.log(kind='start', workdir=str(workdir), pinned=PINNED, refusal=checkpoint.refusal)
     if checkpoint.refusal:
         raise HostRefused(checkpoint.refusal)
-    services = upstream_services(home, desktop=desktop, browser=browser) if services is None else services
+    network = None
+    if services is None:
+        if shutil.which('npx'):
+            try:
+                network = BrowserNetwork()
+            except Exception as exc:
+                checkpoint.log(kind='note', text='background browser off: its network guard did not start: '
+                               + (str(exc) or type(exc).__name__)[:300])
+        try:
+            services = upstream_services(home, desktop=desktop, browser=browser,
+                                         proxy_port=network.port if network else None)
+        except BaseException:
+            if network is not None:
+                network.close()
+            raise
     environment = {'ANONYMIZED_TELEMETRY': 'false', 'WINDOWS_MCP_DEBUG': 'false', 'NO_COLOR': '1'}
-    gateways = [VeilMcpGateway(server_id, service, checkpoint, offered, should_stop=stopped, environment=environment)
+    gateways = [VeilMcpGateway(server_id, service, checkpoint, offered, should_stop=stopped, environment=environment,
+                               companions=[network] if network and server_id == vc.BROWSER_SERVER else ())
                 for server_id, (service, offered) in services.items()]
+    if network and not any(gateway.companions for gateway in gateways):
+        network.close()
     if not gateways:
         checkpoint.log(kind='note', text='no desktop or browser server is installed; shell and files only')
     return checkpoint, gateways
@@ -110,7 +174,6 @@ def prepare(*, workdir, home, veil_root, ask, autonomy, stopped, protect=(), des
 
 def main(argv=None):
     import argparse
-    import json
     from decimal import Decimal
     from dotenv import dotenv_values
     parser = argparse.ArgumentParser(description='Run one host workbench task (dev check).')

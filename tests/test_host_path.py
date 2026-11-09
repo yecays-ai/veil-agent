@@ -287,8 +287,13 @@ class HostRunTests(unittest.TestCase):
 
     def test_upstream_services_are_pinned_and_desktop_is_windows_only(self):
         which = lambda name: '/bin/' + name
-        services = host_executor.upstream_services(tempfile.mkdtemp(), which=which)
+        self.assertNotIn(vc.BROWSER_SERVER, host_executor.upstream_services(tempfile.mkdtemp(), which=which))
+        services = host_executor.upstream_services(tempfile.mkdtemp(), which=which, proxy_port=4321)
         browser = services[vc.BROWSER_SERVER][0]['args']
+        self.assertEqual(browser[browser.index('--proxy-server') + 1], 'http://127.0.0.1:4321')
+        self.assertEqual(browser[browser.index('--proxy-bypass') + 1], '<-loopback>')
+        settings = json.loads(Path(browser[browser.index('--config') + 1]).read_text(encoding='utf-8'))
+        self.assertIn('--webrtc-ip-handling-policy=disable_non_proxied_udp', settings['browser']['launchOptions']['args'])
         self.assertIn('@playwright/mcp@' + host_executor.PINNED['playwright-mcp'], browser)
         self.assertIn('--headless', browser)
         self.assertIn('--isolated', browser)
@@ -299,6 +304,51 @@ class HostRunTests(unittest.TestCase):
         self.assertEqual(desktop[-1].split(','), sorted(vc.COMPUTER_TOOLS))
         self.assertNotIn('PowerShell', desktop[-1])
         self.assertEqual(host_executor.upstream_services(tempfile.mkdtemp(), which=lambda name: None), {})
+
+
+class BrowserNetworkTests(unittest.TestCase):
+    def proxy_answer(self, port, request):
+        import socket
+        with socket.create_connection(('127.0.0.1', port), timeout=10) as sock:
+            sock.sendall(request)
+            sock.settimeout(10)
+            try:
+                return sock.recv(200)
+            except OSError:
+                return b''
+
+    def test_browser_cannot_reach_local_network_through_its_proxy(self):
+        network = host_executor.BrowserNetwork()
+        try:
+            for target in (b'127.0.0.1:443', b'192.168.1.1:443', b'localhost:443', b'10.0.0.1:443',
+                           b'example.com:80'):
+                answer = self.proxy_answer(network.port, b'CONNECT ' + target + b' HTTP/1.1\r\nHost: x\r\n\r\n')
+                self.assertNotIn(b'200', answer, target)
+            plain = self.proxy_answer(network.port, b'GET http://192.168.1.1/ HTTP/1.1\r\nHost: 192.168.1.1\r\n\r\n')
+            self.assertEqual(plain, b'')
+        finally:
+            network.close()
+        self.assertFalse(network.thread.is_alive())
+
+    def test_gateway_closes_the_browser_network_even_when_never_started(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cp, _, _ = make_checkpoint(Path(tmp))
+            closed = []
+            gateway = VeilMcpGateway(vc.BROWSER_SERVER, {'command': 'x'}, cp, vc.BROWSER_TOOLS,
+                                     should_stop=lambda: False, worker_factory=FakeWorker,
+                                     companions=[SimpleNamespace(close=lambda: closed.append(1))])
+            gateway.__exit__(None, None, None)
+            gateway.__exit__(None, None, None)
+        self.assertEqual(closed, [1])
+
+    def test_run_closes_host_gateways_on_every_early_return(self):
+        closed = []
+        gateway = SimpleNamespace(__exit__=lambda *a: closed.append(1), server_id='veil_browser')
+        result = ex.run('t', command='opencode', workdir=Path('.'), home=Path('.'), provider={}, key='k', limits={},
+                        autonomy=False, ask=lambda _p: 'n', stopped=lambda: False, record_cost=lambda _c: None,
+                        container=object(), checkpoint=object(), host_gateways=[gateway])
+        self.assertEqual(result.reason, 'invalid_host_run')
+        self.assertTrue(closed)
 
 
 if __name__ == '__main__':

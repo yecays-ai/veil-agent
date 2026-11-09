@@ -1441,7 +1441,20 @@ def container_command(container, *, name, workdir, port, env, masks, bootstrap_g
     return cmd + [container['image'], 'opencode', 'serve', '--hostname', '0.0.0.0', '--port', str(port)]
 
 
-def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, stopped, record_cost,
+def run(task, **kwargs):
+    """One workbench task (see `_run`). Whatever path it ends on, every host gateway is closed afterwards,
+    with what it holds (the background browser's network guard), even ones that were never started."""
+    try:
+        return _run(task, **kwargs)
+    finally:
+        for host_gateway in kwargs.get('host_gateways') or ():
+            try:
+                host_gateway.__exit__(None, None, None)
+            except Exception:
+                pass
+
+
+def _run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, stopped, record_cost,
         api_factory=None, proxy_factory=None, container=None, protect=(), popen=subprocess.Popen, clock=time.monotonic,
         sleep=time.sleep, diagnostic=None, maintenance=False, approval_data=None, save_approval=None,
         container_name=None, browser_gateway=None, windows_gateway=None, checkpoint=None, host_gateways=()):
@@ -1455,6 +1468,11 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
             record_cost(Decimal(0))
         except Exception:
             pass
+        for host_gateway in host_gateways:
+            try:
+                host_gateway.__exit__(None, None, None)
+            except Exception:
+                pass
         return ExecutorResult('The host path runs without the container, maintenance or the old gateways.',
                               '被拒绝', reason='invalid_host_run')
     if maintenance and not container:
@@ -1602,7 +1620,7 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
                         'XDG_DATA_HOME': str(home / 'data'), 'XDG_CONFIG_HOME': str(home / 'config'),
                         'XDG_CACHE_HOME': str(home / 'cache'), 'XDG_STATE_HOME': str(home / 'state')})
     except BaseException as setup_error:
-        for host_gateway in entered:
+        for host_gateway in host_gateways:  # an unentered gateway still closes what it holds
             try:
                 host_gateway.__exit__(None, None, None)
             except Exception:
@@ -1776,7 +1794,7 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
                 desktop_gateway.__exit__(None, None, None)
             except Exception:
                 cleanup_warning += ' [warning: could not stop the Windows UIA gateway]'
-        for host_gateway in entered:
+        for host_gateway in host_gateways:
             try:
                 host_gateway.__exit__(None, None, None)
             except Exception:

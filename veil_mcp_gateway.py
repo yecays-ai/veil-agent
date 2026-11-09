@@ -22,7 +22,7 @@ QUEUE_SECONDS = 90
 
 class VeilMcpGateway:
     def __init__(self, server_id, service, checkpoint, offered, *, should_stop, environment=None,
-                 call_timeout=60, worker_factory=_Worker):
+                 call_timeout=60, worker_factory=_Worker, companions=()):
         self.server_id = server_id
         self.service = {'id': server_id, 'cwd': None, **service}
         self.checkpoint = checkpoint
@@ -31,6 +31,7 @@ class VeilMcpGateway:
         self.environment = environment
         self.call_timeout = call_timeout
         self.worker_factory = worker_factory
+        self.companions = list(companions)  # closed with the gateway (the browser's network guard)
         self.token = secrets.token_urlsafe(24)
         self.server = self.thread = self.worker = None
         self.restarts = 0
@@ -223,3 +224,9 @@ class VeilMcpGateway:
             except Exception:
                 pass
             self.worker = None
+        while self.companions:
+            try:
+                self.companions.pop().close()
+            except Exception as exc:
+                self.checkpoint.log(kind='cleanup_error', server=self.server_id,
+                                    error=(str(exc) or type(exc).__name__)[:300])
