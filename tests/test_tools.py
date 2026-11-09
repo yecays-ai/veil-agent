@@ -918,6 +918,46 @@ max_result_bytes = 200
         self.assertEqual(chat.investigation.read()['status'], 'interrupted')
         self.assertEqual(chat.investigation.read()['reason'], 'step_limit')
 
+    def test_raw_tool_text_on_the_last_step_is_a_step_limit(self):
+        self.cfg.tools['max_steps'] = 2
+        first = self.message([self.tool_call('read_text_file', '{"path":"one.txt"}', 'one')])
+        raw = self.message(content='<|DSML|tool_calls><|DSML|invoke name="read_the_notes">')
+        model = Mock(side_effect=[(first, 100, 20, 0), (raw, 100, 20, 0)])
+        tools = Mock()
+        tools.tools = [SimpleNamespace(name='read_text_file', description='Read', inputSchema={})]
+        tools.capability_event = None
+        tools.preview_summary.return_value = 'one.txt'
+        tools.invoke.return_value = ('contents', '成功', 'one.txt')
+        chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=lambda *_: None)
+
+        self.assertEqual(chat.send('read it'), 'The tool-step limit for this request has been reached.')
+        self.assertEqual(tools.invoke.call_count, 1)
+        saved = chat.investigation.read()
+        self.assertEqual(saved['status'], 'interrupted')
+        self.assertEqual(saved['reason'], 'step_limit')
+
+    def test_production_alias_is_recorded_as_read_only_in_checkpoint(self):
+        self.cfg.tool_aliases = {'read_text_file': 'read_the_notes'}
+        self.cfg.tools['max_steps'] = 2
+        first = self.message([self.tool_call('read_the_notes', '{"path":"one.txt"}', 'one')])
+        second = self.message([self.tool_call('read_the_notes', '{"path":"two.txt"}', 'two')])
+        model = Mock(side_effect=[(first, 100, 20, 0), (second, 100, 20, 0)])
+        tools = Mock()
+        tools.tools = [SimpleNamespace(name='read_text_file', description='Read', inputSchema={})]
+        tools.capability_event = None
+        tools.preview_summary.return_value = 'one.txt'
+        tools.invoke.return_value = ('contents', '成功', 'one.txt')
+        chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=lambda *_: None)
+        chat.send('read it')
+
+        saved = chat.investigation.read()
+        self.assertEqual(saved['status'], 'interrupted')
+        self.assertEqual(saved['evidence'][0]['tool'], 'read_the_notes')
+        self.assertTrue(saved['evidence'][0]['read_only'])
+        self.assertEqual(tools.invoke.call_args.args[0], 'read_text_file')
+        self.assertIn('fresh', chat.investigation.resume_guard(
+            'read_the_notes', {'path': 'one.txt'}))
+
     def test_final_step_uses_existing_tool_results_without_offering_more_tools(self):
         self.cfg.tools['max_steps'] = 2
         first = self.message([self.tool_call('read_text_file', '{"path":"one.txt"}', 'one')])

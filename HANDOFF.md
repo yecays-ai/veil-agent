@@ -1,12 +1,14 @@
 # HANDOFF
 
-## 当前工单 320（2026-11-09）
+## 当前工单 321（PR #322，2026-11-09 15:10 +08）
 
-- 分支 `ticket/320-browser-continuous-execution`，PR #319：https://github.com/yecays-ai/veil-agent/pull/319。工作区目录沿用 `.agents/worktrees/ticket-319-browser-continuous-execution`（历史目录名；不要另建工作区覆盖这些修改）；基于远端 `main` 的 `8b39f0d`。
-- 实现：每次非维护工作台任务临时启动随机令牌保护的 MCP 浏览器网关，只暴露 `public_browser` 的 open/observe/click/scroll/fill/submit；容器 iptables 只放行本次网关端口；停止、人工接管、内部限额都会关闭网关。旧主聊天 `browser` 入口未删。
-- 本次修复：快照超限死循环；提交搜索等待导航并支持 `<input type=submit>`；容器 `NO_PROXY` 加 `host.docker.internal`；移除 OpenCode 不支持的 `codemode` 配置；工作台工具说明写明可做多页公开研究；修正被 loopback 限制掩盖的网关测试断言。
-- 自动检查（真实宿主已通过）：`tests.test_browser_tools` 20 项（含 5 项真实 Chromium）、`tests.test_executor_opencode` 103 项（含真实 Docker OpenCode 与新增 MCP 容器测试）、`tests.test_tools/test_web_tools/test_workbench_switch/test_tool_groups/test_maintenance` 合计 142 项；`py_compile` 与 `git diff --check` 通过。
-- 真实链路已验证（代码提交 `435a980`）：Docker Desktop + `veil-workbench`（OpenCode 1.19.5）+ 宿主 Chromium，容器内 OpenCode 调用 `veil_browser_public_browser`，完成打开、填公开搜索框、提交 GET 搜索、读结果并输出报告；非自主模式不需要审批卡。未做 lan 的真实 Peter 聊天体验验收。
-- 下一步：创建 PR、请求 Cubic、等待必需 CI，处理实质问题后由 agent 合并；合并后请 lan 按 `STATUS.md` 的三个体验步骤验收。真实验收发现问题就开新工单，不在本分支反复改。
-- 上一单 319（模型配置并发，PR #318）的真实 Windows 双实例验收仍未完成，不能因本单合并视为通过；lan 验收本单时可一并检查。
-- 未完成 lan 体验验收前，不得删除旧 `browser` 主聊天入口。
+- 分支 `ticket/321-investigation-alias`；PR #322：https://github.com/yecays-ai/veil-agent/pull/322。独立 worktree 为本单新建，正式运行目录未动。
+- 已用 `git merge origin/main` 合入 `1e66d70` 解决 PR #322 冲突，保留本分支提交历史；没有 rebase、没有强制推送。
+- 上一单：工单 319（PR #318）合并 `8b39f0d`，Windows 双实例验收待 Lan；工单 320（PR #319）合并 `1e66d70`，Windows 工作台验收待 Lan。
+- 缺陷：`investigation_checkpoint.record()` 用模型侧别名判断只读，只读集合却是规范名；生产别名下的成功读取被记录成 `read_only: false`，续接不能正确复用新鲜证据，也会挡住过期重查。
+- 修复：`record()` 新增 `canonical_name`，只读/副作用/排除判断全部用规范名；证据仍保存模型侧调用名，`resume_guard` 签名不变。`veil_agent._tool_chat` 所有记录点先解析规范名，MCP 的 `needs_checkpoint` 也用规范名。
+- 联动修复：最后一步工具已收起时，模型仍输出文本工具调用会被 `raw_tool_call_text_format` 误判为 `tool_failure`；现在按 `step_limit` 记录并保留可续接检查点。
+- 回归：`tests.test_tools`、`tests.test_chat`、`tests.test_investigation_checkpoint`、`tests.test_tool_aliases`、`tests.test_mcp_services` 共 209 项通过。
+- Windows 真实验收：独立 `--acceptance` 实例（`max_steps=3`）、真实 deepseek、真实 `pythonw → mcp_hidden_stdio.py → node` MCP 文件工具；四场景均有执行证据。证据在仓库外的 `acceptance-321/evidence/`（未提交），包括检查点、工具账本、聊天记录、模型计费账本和进程树。34 次真实模型调用，约 ¥0.105。
+- 下一个窗口第一步：push 合并提交，等 PR #322 最新必需 CI 全绿、Cubic 实质意见处理完并确认分支保护后合并；合并后请 Lan 按 `STATUS.md` 验收。
+- 未验证：其他角色、Linux 宿主、Docker 路径；本轮未重建 Docker。

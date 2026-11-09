@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from investigation_checkpoint import InvestigationCheckpoint
@@ -84,6 +85,43 @@ class InvestigationCheckpointTests(unittest.TestCase):
         self.assertEqual(checkpoint.read()['status'], 'interrupted')
         checkpoint.complete('request-2', resuming=True)
         self.assertEqual(checkpoint.read()['status'], 'completed')
+
+    def test_production_alias_is_classified_by_canonical_name(self):
+        checkpoint = InvestigationCheckpoint(self.store, 'test')
+        checkpoint.record('Read the notes.', 'request-1', 'read_the_notes',
+                          {'path': 'notes.txt'}, '成功', 'notes.txt', 'confirmed fact',
+                          canonical_name='read_text_file')
+        checkpoint.interrupt('step_limit', 'request-1')
+
+        saved = checkpoint.read()
+        self.assertTrue(saved['evidence'][0]['read_only'])
+        self.assertIn('fresh', checkpoint.resume_guard('read_the_notes', {'path': 'notes.txt'}))
+
+        # A stale read-only result must be allowed through for an on-demand recheck.
+        with checkpoint.store.mutex:
+            saved = checkpoint._read()
+            saved['evidence'][0]['time'] = (
+                datetime.now(timezone.utc) - timedelta(minutes=20)).isoformat()
+            checkpoint._save(saved)
+        self.assertIsNone(checkpoint.resume_guard('read_the_notes', {'path': 'notes.txt'}))
+
+    def test_production_alias_side_effect_is_still_blocked(self):
+        checkpoint = InvestigationCheckpoint(self.store, 'test')
+        checkpoint.record('Write the answer.', 'request-1', 'scribble',
+                          {'path': 'answer.txt'}, '成功', 'answer.txt', 'written',
+                          canonical_name='write_file')
+        checkpoint.interrupt('step_limit', 'request-1')
+
+        saved = checkpoint.read()
+        self.assertFalse(saved['evidence'][0]['read_only'])
+        self.assertIn('already completed',
+                      checkpoint.resume_guard('scribble', {'path': 'answer.txt'}))
+
+    def test_production_alias_exclusion_uses_canonical_name(self):
+        checkpoint = InvestigationCheckpoint(self.store, 'test')
+        checkpoint.record('Stay quiet.', 'request-1', 'ghost_mode', {},
+                          '成功', 'silence', '', canonical_name='stay_silent')
+        self.assertIsNone(checkpoint.read())
 
 
 if __name__ == '__main__':

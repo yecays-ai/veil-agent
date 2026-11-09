@@ -4894,6 +4894,16 @@ class Chat:
                             # The messages he already sent this turn are the reply.
                             self.reply_displayed = True
                             final = mixed_sent_messages[-1]
+                        elif offered is None:
+                            # Ticket 321: the last allowed model step has no tools. A model that
+                            # still emits a textual tool call hit the step limit, not a provider
+                            # failure; keep the checkpoint resumable for the remaining work.
+                            self.investigation.interrupt('step_limit', request_id, checkpoint_resuming)
+                            checkpoint_interrupted = True
+                            final = 'The tool-step limit for this request has been reached.'
+                            self.tool_stop_reason = final
+                            self.output(final)
+                            break
                         else:
                             # A failure, not a reply: nothing is saved as his words, and a
                             # regeneration keeps the reply it was replacing.
@@ -4976,9 +4986,14 @@ class Chat:
                              call_id=f'{request_id}:{step}:{getattr(call, "id", None) or "budget"}',
                              detail='Continuing would exceed the spending limit.')
                     if not autonomy:
+                        checkpoint_name = self._resolve_tool_name(call.function.name, offered) or call.function.name
+                        mcp_name = (checkpoint_name if checkpoint_name.startswith('mcp__')
+                                    else call.function.name if call.function.name.startswith('mcp__') else None)
+                        mcp_side_effect = self.mcp_services.needs_checkpoint(mcp_name) if mcp_name else None
                         self.investigation.record(checkpoint_goal, request_id, call.function.name,
                                                   args if isinstance(args, dict) else {}, '被拒绝', summary,
-                                                  'Continuing would exceed the spending limit.', checkpoint_resuming)
+                                                  'Continuing would exceed the spending limit.', checkpoint_resuming,
+                                                  mcp_side_effect, checkpoint_name)
                 self.output('The tool-step limit for this request has been reached; continuing would exceed the current spending limit.')
                 final = 'The tool-step limit for this request has been reached.'
                 break
@@ -5023,9 +5038,13 @@ class Chat:
                                  call_id=f'{request_id}:{step}:{getattr(call, "id", None) or "context"}',
                                  detail=detail)
                         if not autonomy:
+                            checkpoint_name = canonical_name or call.function.name
+                            mcp_name = (checkpoint_name if checkpoint_name.startswith('mcp__')
+                                        else call.function.name if call.function.name.startswith('mcp__') else None)
+                            mcp_side_effect = self.mcp_services.needs_checkpoint(mcp_name) if mcp_name else None
                             self.investigation.record(checkpoint_goal, request_id, call.function.name,
                                                       args if isinstance(args, dict) else {}, '被拒绝', summary, detail,
-                                                      checkpoint_resuming)
+                                                      checkpoint_resuming, mcp_side_effect, checkpoint_name)
                     sent_in_this_step = False
                     for call_index, call in enumerate(message.tool_calls):
                         if self._resolve_tool_name(call.function.name, offered) != 'send_message':
@@ -5050,6 +5069,10 @@ class Chat:
                         except (ValueError, TypeError):
                             args, summary = {}, call.function.name
                         log_tool(call.function.name, summary, '进行中', call_id=call_id)
+                        checkpoint_name = self._resolve_tool_name(call.function.name, offered) or call.function.name
+                        mcp_name = (checkpoint_name if checkpoint_name.startswith('mcp__')
+                                    else call.function.name if call.function.name.startswith('mcp__') else None)
+                        mcp_side_effect = self.mcp_services.needs_checkpoint(mcp_name) if mcp_name else None
                         replay_block = (self.investigation.resume_guard(call.function.name, args)
                                         if not autonomy and checkpoint_resuming else None)
                         if replay_block:
@@ -5059,7 +5082,7 @@ class Chat:
                                 self.investigation.record(checkpoint_goal, request_id, call.function.name, args,
                                                           '结果未知', summary,
                                                           'Tool execution started; its outcome was not recorded.',
-                                                          checkpoint_resuming)
+                                                          checkpoint_resuming, mcp_side_effect, checkpoint_name)
                             try:
                                 execution = self._execute_tool_call(
                                     call, request_id,
@@ -5068,12 +5091,13 @@ class Chat:
                                 if not autonomy:
                                     self.investigation.record(checkpoint_goal, request_id, call.function.name, args,
                                                               '结果未知', summary,
-                                                              str(exc) or exc.__class__.__name__, checkpoint_resuming)
+                                                              str(exc) or exc.__class__.__name__, checkpoint_resuming,
+                                                              mcp_side_effect, checkpoint_name)
                                 raise
                             if not autonomy:
                                 self.investigation.record(checkpoint_goal, request_id, call.function.name, args,
                                                           execution.state, execution.summary, execution.result,
-                                                          checkpoint_resuming)
+                                                          checkpoint_resuming, mcp_side_effect, checkpoint_name)
                         if execution.state == '成功' and self.sent_messages:
                             mixed_sent_messages.append(self.sent_messages[-1])
                             sent_in_this_step = True
@@ -5096,10 +5120,15 @@ class Chat:
                     if autonomy:
                         autonomy_tool_steps += 1
                     call_id = f'{request_id}:{step}:{getattr(call, "id", None) or call_index}'
+                    canonical_name = self._resolve_tool_name(call.function.name, offered)
+                    checkpoint_name = canonical_name or call.function.name
+                    mcp_name = (checkpoint_name if checkpoint_name.startswith('mcp__')
+                                else call.function.name if call.function.name.startswith('mcp__') else None)
+                    mcp_side_effect = self.mcp_services.needs_checkpoint(mcp_name) if mcp_name else None
                     args = {}
                     try:
                         args = json.loads(call.function.arguments or '{}')
-                        preview_name = self._resolve_tool_name(call.function.name, offered)
+                        preview_name = canonical_name
                         summary = (self.tools.preview_summary(preview_name, args)
                                    if self.tools and preview_name not in (None, 'send_message')
                                    else call.function.name)
@@ -5115,7 +5144,7 @@ class Chat:
                             self.investigation.record(checkpoint_goal, request_id, call.function.name, args,
                                                       '结果未知', summary,
                                                       'Tool execution started; its outcome was not recorded.',
-                                                      checkpoint_resuming)
+                                                      checkpoint_resuming, mcp_side_effect, checkpoint_name)
                         try:
                             execution = self._execute_tool_call(
                                 call, request_id,
@@ -5124,20 +5153,15 @@ class Chat:
                             log_tool(call.function.name, summary, '出错', call_id=call_id,
                                      detail=str(exc) or exc.__class__.__name__)
                             if not autonomy:
-                                mcp_side_effect = (self.mcp_services.needs_checkpoint(call.function.name)
-                                                   if call.function.name.startswith('mcp__') else None)
                                 self.investigation.record(checkpoint_goal, request_id, call.function.name, args,
                                                           '结果未知', summary, str(exc) or exc.__class__.__name__,
-                                                          checkpoint_resuming, mcp_side_effect)
+                                                          checkpoint_resuming, mcp_side_effect, checkpoint_name)
                             raise
                     if not autonomy and not replay_block:
-                        mcp_side_effect = (self.mcp_services.needs_checkpoint(call.function.name)
-                                           if call.function.name.startswith('mcp__') else None)
                         self.investigation.record(checkpoint_goal, request_id, call.function.name, args,
                                                   execution.state, execution.summary, execution.result,
-                                                  checkpoint_resuming, mcp_side_effect)
+                                                  checkpoint_resuming, mcp_side_effect, checkpoint_name)
                     state = execution.state
-                    canonical_name = self._resolve_tool_name(call.function.name, offered)
                     if canonical_name == 'send_message' and state == '成功' and self.sent_messages:
                         mixed_sent_messages.append(self.sent_messages[-1])
                         work_since_message = False
