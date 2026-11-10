@@ -397,5 +397,106 @@ class MCPServicesTest(unittest.TestCase):
         self.assertTrue(all(result[1] == '出错' for result in results))
 
 
+class MCPSelfHealTest(unittest.TestCase):
+    """Ticket 343: a dropped service is noticed, retried by the program and reported to Peter."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(dir=Path(__file__).parent)
+        root = Path(self.tmp.name)
+        self.gate = root / 'gate'
+        launcher = root / 'launch.py'
+        launcher.write_text(
+            'import runpy, sys\nfrom pathlib import Path\n'
+            f'if not Path(r"{self.gate}").exists():\n    sys.exit(3)\n'
+            f'sys.argv = [r"{FIXTURE}"]\nrunpy.run_path(r"{FIXTURE}", run_name="__main__")\n', encoding='utf-8')
+        self.manager = MCPServices(root / 'mcp.json')
+        self.manager.save({'enabled': True, 'services': [{
+            'id': 'echo', 'command': sys.executable, 'args': [str(launcher)],
+            'cwd': None, 'enabled': True, 'permission': 'direct'}]})
+
+    def tearDown(self):
+        self.manager.close()
+        self.tmp.cleanup()
+
+    def wait_for(self, check, what):
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            self.manager.schemas()
+            self.manager.heal_due()
+            if check():
+                return
+            time.sleep(0.1)
+        self.fail(f'{what}: {self.manager.view()}')
+
+    def status(self):
+        return self.manager.view()['services'][0]['status']
+
+    def test_no_note_when_nothing_is_wrong(self):
+        self.gate.write_text('open')
+        self.wait_for(lambda: self.status() == 'connected', 'connect')
+        self.assertIsNone(self.manager.problem_note())
+
+    def test_broken_service_is_noticed_retried_and_recovers_by_itself(self):
+        self.wait_for(lambda: self.status() == 'error', 'fail')
+        note = self.manager.problem_note()
+        self.assertIn('echo is disconnected', note)
+        self.assertIn('mcp_status', note)
+        refused = self.manager.invoke('mcp__echo__echo', {}, lambda _p: 'y')
+        self.assertIn('自动重试', refused[0])
+        self.assertIn('mcp_status', refused[0])
+        # Nothing changes until the schedule is due, then the program retries on its own.
+        self.manager.heal[('echo')]['next_at'] = 0
+        self.gate.write_text('open')
+        self.wait_for(lambda: self.status() == 'connected', 'self-heal')
+        self.assertIn('reconnected by itself', self.manager.problem_note())
+        self.assertNotIn('echo', self.manager.heal)
+
+    def test_retry_schedule_backs_off(self):
+        self.wait_for(lambda: self.status() == 'error', 'fail')
+        before = self.manager.heal['echo']['attempts']
+        self.manager.heal['echo']['next_at'] = 0
+        self.assertEqual(self.manager.heal_due(), ['echo'])
+        entry = self.manager.heal['echo']
+        self.assertEqual(entry['attempts'], before + 1)
+        self.assertGreater(entry['next_at'], time.monotonic())
+        self.assertEqual(self.manager.heal_due(), [])  # not due again yet
+
+    def test_status_tool_lists_and_reconnects_now(self):
+        self.wait_for(lambda: self.status() == 'error', 'fail')
+        text, state, _ = self.manager.status_tool('{}')
+        self.assertEqual(state, '成功')
+        self.assertIn('echo: error', text)
+        self.assertIn('next automatic retry', text)
+        self.gate.write_text('open')
+        text, state, _ = self.manager.status_tool('{"retry": "echo"}')
+        self.assertEqual(state, '成功')
+        self.assertIn('echo: connected', text)
+        again, _state, _ = self.manager.status_tool('{"retry": "echo"}')
+        self.assertIn('already connected', again)
+
+    def test_status_tool_rejects_unknown_service_and_extra_fields(self):
+        self.assertEqual(self.manager.status_tool('{"retry": "nope"}')[1], '被拒绝')
+        self.assertEqual(self.manager.status_tool('{"restart": true}')[1], '被拒绝')
+
+    def test_disabled_service_is_not_retried(self):
+        self.wait_for(lambda: self.status() == 'error', 'fail')
+        config = json.loads(json.dumps({'enabled': True, 'services': self.manager.config['services']}))
+        config['services'][0]['enabled'] = False
+        self.manager.save(config)
+        self.assertEqual(self.manager.heal_due(), [])
+        self.assertIsNone(self.manager.problem_note())
+
+    def test_background_thread_heals_without_any_request(self):
+        with patch.object(mcp_services, 'HEAL_POLL', 0.05), patch.object(mcp_services, 'HEAL_DELAYS', (0.1,)):
+            self.manager.start_healing()
+            deadline = time.monotonic() + 20
+            while time.monotonic() < deadline and self.manager.heal.get('echo') is None:
+                time.sleep(0.05)
+            self.gate.write_text('open')
+            while time.monotonic() < deadline and self.status() != 'connected':
+                time.sleep(0.1)
+            self.assertEqual(self.status(), 'connected')
+
+
 if __name__ == '__main__':
     unittest.main()
