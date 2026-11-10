@@ -787,7 +787,7 @@ class KeyProxyTests(unittest.TestCase):
         self.assertEqual(seen, [('/v1/chat/completions', 'Bearer REAL-KEY', b'{"a":1}')])
         with self.assertRaises(urllib.error.HTTPError) as limited:
             post(proxy.token)
-        self.assertEqual(limited.exception.code, 429)
+        self.assertEqual(limited.exception.code, 403)
 
     @staticmethod
     def _raw_proxy(proxy, request):
