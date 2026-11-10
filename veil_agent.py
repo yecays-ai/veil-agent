@@ -3726,7 +3726,7 @@ class Chat:
         except (KeyboardInterrupt, EOFError):
             self._capability_request_active = False
             raise
-        except (TooLong, RequestFailed, RequestNotSent) as exc:
+        except (TooLong, RequestFailed, RequestNotSent, BudgetExceeded) as exc:
             self._capability_request_active = False
             if not autonomy:
                 reason = ('user_stop' if self.user_stop.is_set() else
@@ -5628,6 +5628,13 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead, activity=N
                     notify_dropped()
                     continue
                 except EmptyReplyError as exc:
+                    chat.history, chat.rounds = chat.recent()
+                    output(ChatOutput(str(exc), request_id=message_id, is_error=True))
+                    notify_dropped()
+                    continue
+                except BudgetExceeded as exc:
+                    # The daily/monthly cap refused the request before sending: tell Lan and keep the
+                    # session alive. Letting it escape closed the whole service and killed every retry.
                     chat.history, chat.rounds = chat.recent()
                     output(ChatOutput(str(exc), request_id=message_id, is_error=True))
                     notify_dropped()
