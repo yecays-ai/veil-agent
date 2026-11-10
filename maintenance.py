@@ -169,6 +169,24 @@ def _host_env(extra=None):
     return env
 
 
+TOKEN_PATTERN = re.compile(r'(github_pat_|gh[pousr]_)[A-Za-z0-9_]{20,}')
+TOKEN_FILE_NAME = 'github-token.txt'
+
+
+def read_github_token(path):
+    """Lan's own fine-grained GitHub token, kept in her secrets folder. It never goes into the repository, a
+    prompt, a log or the container: only the host-side git/gh calls below receive it."""
+    try:
+        text = Path(path).read_text(encoding='utf-8-sig')
+    except (OSError, ValueError):
+        return ''
+    for line in text.splitlines():
+        line = line.strip()
+        if line and TOKEN_PATTERN.fullmatch(line):
+            return line
+    return ''
+
+
 class MaintenanceStore:
     """Atomic per-task JSON plus a one-line active task for the next request."""
 
@@ -549,7 +567,8 @@ class AcceptanceInstance:
 class MaintenanceManager:
     def __init__(self, store, character_id, *, repo_path, worktree_root=None,
                  github_repo=DEFAULT_GITHUB_REPO, approval=None, runner=None,
-                 instance_factory=None, python=None, electron=None, hours=2, stopped=None):
+                 instance_factory=None, python=None, electron=None, hours=2, stopped=None, token_file=None):
+        self.token_file = Path(token_file) if token_file else None
         self.store = MaintenanceStore(store, character_id)
         self.store_root = Path(store.root).resolve()
         self.character_id = character_id
@@ -566,12 +585,22 @@ class MaintenanceManager:
         self.hours = hours
 
     # --- host commands -------------------------------------------------
+    def _token_env(self):
+        """With a token file, git and gh both use that token (gh is git's credential helper); without one they
+        keep using whatever the PC is already signed in with."""
+        token = read_github_token(self.token_file) if self.token_file else ''
+        if not token:
+            return {}
+        return {'GH_TOKEN': token, 'GITHUB_TOKEN': token, 'GIT_CONFIG_COUNT': '2',
+                'GIT_CONFIG_KEY_0': 'credential.helper', 'GIT_CONFIG_VALUE_0': '',
+                'GIT_CONFIG_KEY_1': 'credential.helper', 'GIT_CONFIG_VALUE_1': '!gh auth git-credential'}
+
     def _run(self, argv, cwd=None, timeout=180, allow_fail=False):
         env = None
         if argv and str(argv[0]) == 'git':
-            env = _host_env({'GIT_TERMINAL_PROMPT': '0', 'GCM_INTERACTIVE': 'never'})
+            env = _host_env({'GIT_TERMINAL_PROMPT': '0', 'GCM_INTERACTIVE': 'never', **self._token_env()})
         elif argv and str(argv[0]) == 'gh':
-            env = _host_env({'GH_PROMPT_DISABLED': '1', 'GH_NO_UPDATE_NOTIFIER': '1'})
+            env = _host_env({'GH_PROMPT_DISABLED': '1', 'GH_NO_UPDATE_NOTIFIER': '1', **self._token_env()})
         def cancelled():
             if self.stopped():
                 return True
@@ -881,6 +910,9 @@ class MaintenanceManager:
             return 'maintenance begin needs title and goal', '被拒绝'
         title, goal = _short(title, MAX_TITLE), _short(goal, MAX_GOAL)
         running = self._verify_repo()
+        problem = self._github_ready()
+        if problem:
+            return problem, '被拒绝'
         base, warning = self._sync_main()
         try:
             ticket = int(args.get('ticket') or self._next_ticket(base))
@@ -910,6 +942,16 @@ class MaintenanceManager:
                 f'基于 main {base[:8]}。正式运行版本 {running[:8]}。{warning}\n'
                 '下一步：先读 worktree 的 AGENTS.md、STATUS.md、HANDOFF.md，再用 workbench 并带上 task_id '
                 '完成代码修改和测试，然后 action=deliver。'), '成功'
+
+    def _github_ready(self):
+        """One clear sentence for Lan when gh or the token is missing, before any worktree or card exists."""
+        code, _out, err = self._run(['gh', 'auth', 'status'], cwd=self.repo, timeout=30, allow_fail=True)
+        if code == 0:
+            return ''
+        shown = str(self.token_file) if self.token_file else 'the secrets folder'
+        return ('GitHub is not ready: ' + _short(err or 'gh is not signed in', 200) + ' Tell Lan: install GitHub CLI '
+                '(winget install GitHub.cli) and save a fine-grained token for ' + self.github_repo +
+                f' (Contents and Pull requests: read and write) into {shown} by running github-token.cmd.')
 
     def _task(self, args, *, require_id=False):
         task_id = str(args.get('task_id') or '')

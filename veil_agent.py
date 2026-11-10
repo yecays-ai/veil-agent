@@ -1060,6 +1060,7 @@ def load_character(root, character_id):
                         'maintenance_repo': str(executor.get('maintenance_repo') or root),
                         'worktree_root': str(executor.get('worktree_root') or (Path(root).parent / 'worktrees')),
                         'github_repo': str(executor.get('github_repo') or 'yecays-ai/veil-agent'),
+                        'github_token_file': str(executor.get('github_token_file') or ''),
                         'maintenance_hours': positive_int(executor.get('maintenance_hours', 2))}
         return Character(character_id, str(cfg['name']), persona,
                          positive_int(cfg.get('history_rounds', 20)),
@@ -1984,6 +1985,7 @@ class Chat:
                 worktree_root=executor.get('worktree_root'),
                 github_repo=executor.get('github_repo') or 'yecays-ai/veil-agent',
                 approval=self.approval, hours=executor.get('maintenance_hours', 2),
+                token_file=executor.get('github_token_file') or Path(ROOT).resolve().parent.parent / 'secrets' / 'github-token.txt',
                 stopped=lambda: bool(getattr(self, 'user_stop', None) and self.user_stop.is_set()))
         if self.task_tools_enabled and tools and hasattr(tools, 'announce_long_tasks'):
             tools.announce_long_tasks()
