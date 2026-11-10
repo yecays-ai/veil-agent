@@ -1063,6 +1063,56 @@ max_steps = 4
         self.assertTrue(seen['autonomy'])
         self.assertEqual(Decimal(seen['limits']['run_budget_cny']), Decimal('0.05'))
 
+    def run_with_budget(self, chat, budget, answer, autonomy=False):
+        call = SimpleNamespace(id='c1', function=SimpleNamespace(
+            name='workbench', arguments=json.dumps({'task': 'big job', 'budget_cny': budget})))
+        seen, asked = {}, []
+
+        def fake_run(task, **kwargs):
+            seen.update(kwargs)
+            kwargs['record_cost'](Decimal(0))
+            return ex.ExecutorResult('ok', '成功')
+        chat.approval = lambda prompt: asked.append(prompt) or answer
+        with patch('veil_agent.ROOT', self.root), patch('executor_opencode.run', side_effect=fake_run):
+            execution = chat._execute_tool_call(call, 'req', 'step:0', autonomy, chat.tool_schemas())
+        return execution, seen, asked
+
+    def test_higher_run_budget_needs_lans_yes_and_lasts_one_job(self):
+        chat = self.chat(self.executor)
+        execution, seen, asked = self.run_with_budget(chat, 2, 'y')
+        self.assertEqual(len(asked), 1)
+        self.assertEqual(Decimal(seen['limits']['run_budget_cny']), Decimal('2.00'))
+        self.assertEqual(chat.budget.daily_limit(), chat.budget.daily)  # fits today's limit: nothing else raised
+        execution, seen, asked = self.run_with_budget(chat, None, 'y')
+        self.assertEqual(asked, [])
+        self.assertNotEqual(Decimal(seen['limits']['run_budget_cny']), Decimal('2.00'))
+
+    def test_refused_run_budget_does_not_run_the_job(self):
+        chat = self.chat(self.executor)
+        execution, seen, asked = self.run_with_budget(chat, 2, 'n')
+        self.assertEqual(execution.state, '被拒绝')
+        self.assertEqual(seen, {})
+        self.assertEqual(chat.budget.daily_limit(), chat.budget.daily)
+
+    def test_run_budget_that_does_not_fit_today_raises_only_today_by_the_shortfall(self):
+        chat = self.chat(self.executor)
+        room = chat.budget.headroom()[0]
+        execution, seen, asked = self.run_with_budget(chat, float(room + 3), 'y')
+        self.assertIn('仅限今天', asked[0])
+        self.assertEqual(chat.budget.daily_limit(), chat.budget.daily + Decimal('3.00'))
+        self.assertEqual(Decimal(seen['limits']['run_budget_cny']), (room + 3).quantize(Decimal('0.01')))
+
+    def test_autonomous_wake_never_asks_for_more_budget(self):
+        chat = self.chat(self.executor)
+        execution, seen, asked = self.run_with_budget(chat, 5, 'y', autonomy=True)
+        self.assertEqual(asked, [])
+        self.assertLessEqual(Decimal(seen['limits']['run_budget_cny']), Decimal('0.3'))
+
+    def test_absurd_run_budget_is_rejected_without_asking(self):
+        chat = self.chat(self.executor)
+        execution, seen, asked = self.run_with_budget(chat, 5000, 'y')
+        self.assertEqual((execution.state, asked, seen), ('被拒绝', [], {}))
+
     def make_project(self, name, files, git=True):
         import subprocess
         folder = self.root / 'projects' / name
