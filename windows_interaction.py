@@ -1101,7 +1101,9 @@ class WindowsInteractionTools:
             return WindowsToolResult('This app is not on the allowlist and no approval can be asked here.',
                                      activity_detail=f'{summary} 软件未获批准。'), '被拒绝'
         try:
-            answer = approval(f'Peter 想操作「{candidate["label"]}」（{candidate["pattern"]}）。'
+            title = str(selected.get('title') or '').strip()[:40]
+            shown = f'{title}（{candidate["label"]}）' if title else candidate['label']
+            answer = approval(f'Peter 想操作「{shown}」：点击这个软件的按钮、切换和展开窗口，不输入文字。'
                               '同意后会记住，以后不再问。同意吗？y/N ')
         except Exception:
             return WindowsToolResult('VEIL could not collect approval; the window was not changed.',
