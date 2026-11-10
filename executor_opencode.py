@@ -45,7 +45,9 @@ _WINDOWS = os.name == 'nt'
 CONTAINER_NOTE = (
     'Environment: you run in a Linux container with bash. The project is the current directory (/work). '
     'Any Windows path or Windows command (cmd, findstr, dir) in the request below refers to the owner\'s PC '
-    'and does not exist here: use the current directory and Linux commands, and do not search for it elsewhere.\n\n')
+    'and does not exist here: use the current directory and Linux commands, and do not search for it elsewhere. '
+    'Secret files such as .env, keys and credentials look empty in the shell. To read one, use the file read tool '
+    '(not cat/grep): that asks the owner, and once she approves the real content is there for this task.\n\n')
 
 MAINTENANCE_NOTE = (
     'This is an isolated maintenance worktree for VEIL itself. Read AGENTS.md, STATUS.md and HANDOFF.md first. '
@@ -219,10 +221,36 @@ def _approval_scope(permission, patterns, metadata):
         return permission, 'webfetch', resources or tuple(str(item) for item in patterns)
     if permission == 'bash':  # a command may carry a credential: only its fingerprint goes into keys and logs
         command = metadata.get('command') if isinstance(metadata, dict) else None
+        family = _install_scope(shlex_tokens(command))
+        if family:  # pip / pip3 / python -m pip / --user ... are one decision, not one card per spelling
+            return permission, 'install', family
         digest = hashlib.sha256(json.dumps([list(map(str, patterns)), command], ensure_ascii=False).encode('utf-8')).hexdigest()
         return permission, 'command', digest
     return _approval_key(permission, patterns, metadata)
 
+
+
+_INSTALL_FAMILY = {'pip': 'pip', 'pip3': 'pip', 'npm': 'npm', 'pnpm': 'npm', 'yarn': 'npm', 'bun': 'npm',
+                   'apt': 'apt', 'apt-get': 'apt', 'cargo': 'cargo', 'go': 'go'}
+
+
+def _install_scope(tokens):
+    """Approval group of an install command: the package ecosystem plus any host beyond that ecosystem's own
+    registries (so a command that reaches a new host still asks). None for anything else."""
+    while tokens and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', tokens[0]):
+        tokens = tokens[1:]
+    if not tokens or not _is_install_command(tokens):
+        return None
+    program = _command_name(tokens[0])
+    if program in {'python', 'python3'} or re.fullmatch(r'python\d+(?:\.\d+)*', program) or             re.fullmatch(r'pip\d*(?:\.\d+)*', program):
+        family = 'pip'
+    else:
+        family = _INSTALL_FAMILY.get(program)
+    if family is None:
+        return None
+    known = PACKAGE_HOSTS.get(family if family != 'npm' else 'npm', set()) | {'github.com', 'codeload.github.com'}
+    extra = sorted(_network_hosts(tokens, install=True) - known)
+    return family, tuple(extra)
 
 
 def _approval_key(permission, patterns, metadata):
@@ -362,7 +390,7 @@ def _ephemeral_container_path(pattern):
 
 
 def decide(permission, patterns, metadata, workdir, *, autonomy, ask, approvals=None, task_scope=None,
-           allow_network=None, isolated_tests=False):
+           allow_network=None, isolated_tests=False, reveal=None):
     """VEIL's answer to an OpenCode permission request: (reply, reason). OpenCode only raises what the config
     marks "ask" (a push, an install, a download, a path outside the project, a secret file), so each request is
     one card for Lan. During autonomous activity nobody is there to ask, so it is refused."""
@@ -386,6 +414,8 @@ def decide(permission, patterns, metadata, workdir, *, autonomy, ask, approvals=
                           _approval_scope(permission, patterns, metadata), ask,
                           task_scope.grants if task_scope is not None else None, approvals,
                           task_scope.denied if task_scope is not None else None)
+    if reply == 'once' and reveal is not None and permission == 'read':
+        reveal(patterns)  # Lan approved reading this secret file: show its real content for this task only
     if reply == 'once' and allow_network is not None and permission in {'bash', 'webfetch'}:
         hosts = set()
         if permission == 'bash':
@@ -518,7 +548,21 @@ RUN_LOG_KEEP = 30
 RUN_LOG_MAX_BYTES = 2 * 1024 * 1024
 
 
-def save_run_log(home, messages, *, stop='', steps=0, cost=Decimal(0)):
+SECRET_REVEAL_MAX = 64 * 1024
+
+
+def _redact_secrets(body, texts):
+    """Values of an approved-and-shown secret file never go into the on-disk run log."""
+    for text in texts:
+        for line in text.splitlines():
+            value = line.split('=', 1)[1].strip().strip('"' + "'") if '=' in line else ''
+            if len(value) >= 4:
+                for form in {value, json.dumps(value, ensure_ascii=False)[1:-1]}:
+                    body = body.replace(form, '[redacted]')
+    return body
+
+
+def save_run_log(home, messages, *, stop='', steps=0, cost=Decimal(0), redact=()):
     """Keep the OpenCode session of one run (every step, tool input/output and error text) in
     `<home>/runs/`, because the session itself disappears with the container. Local diagnosis only;
     the newest RUN_LOG_KEEP runs are kept. Never raises."""
@@ -527,6 +571,7 @@ def save_run_log(home, messages, *, stop='', steps=0, cost=Decimal(0)):
         folder.mkdir(parents=True, exist_ok=True)
         body = json.dumps({'time': time.strftime('%Y-%m-%dT%H:%M:%S%z'), 'stop': stop, 'steps': steps,
                            'cost_cny': str(cost), 'messages': messages}, ensure_ascii=False, default=str)
+        body = _redact_secrets(body, redact)
         if len(body.encode('utf-8')) > RUN_LOG_MAX_BYTES:
             body = json.dumps({'time': time.strftime('%Y-%m-%dT%H:%M:%S%z'), 'stop': stop, 'steps': steps,
                                'cost_cny': str(cost), 'truncated': True,
@@ -1181,13 +1226,34 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
             if bridge is not None:
                 shared['VEIL_BROWSER_PORT'] = str(bridge.server.server_address[1])
         git_pointer, empty_secret_dir = None, None
+        secret_masks, revealed = {}, []
+
+        def reveal(patterns):
+            """After Lan approves a read of a secret file, put its real content behind the mask (task-local)."""
+            for pattern in patterns if isinstance(patterns, list) else ():
+                text = str(pattern).replace(chr(92), '/')
+                for relative, (source, mask) in secret_masks.items():
+                    if text.casefold() in (relative, '/work/' + relative) or text.casefold().endswith('/' + relative):
+                        try:
+                            data = source.read_bytes()[:SECRET_REVEAL_MAX]
+                            with open(mask, 'r+b') as handle:  # in place: the container sees the same file
+                                handle.write(data)
+                                handle.truncate()
+                            revealed.append(data.decode('utf-8', 'replace'))
+                        except OSError:
+                            pass
         if container:
             name = container_name or 'veil-workbench-' + secrets.token_hex(4)
             masks = []
             empty = home / 'empty-file'
             empty.write_text('', encoding='utf-8')
-            for path in protected_files:
-                masks.append((str(empty), path.relative_to(workdir).as_posix()))
+            for index, path in enumerate(protected_files):
+                # one mask file per secret, so an approved read can fill in just that one for this task
+                mask = home / f'secret-mask-{secrets.token_hex(4)}-{index}'
+                mask.write_text('', encoding='utf-8')
+                relative = path.relative_to(workdir).as_posix()
+                secret_masks[relative.casefold()] = (path, mask)
+                masks.append((str(mask), relative))
             if protected_dirs:
                 empty_secret_dir = home / ('empty-secret-dir-' + secrets.token_hex(8))
                 empty_secret_dir.mkdir()
@@ -1285,7 +1351,8 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
                     reply, why = decide(request.get('permission', ''), request.get('patterns', []),
                                         request.get('metadata'), workdir, autonomy=autonomy, ask=ask,
                                         approvals=approvals, task_scope=task_scope,
-                                        allow_network=allow_network, isolated_tests=bool(container))
+                                        allow_network=allow_network, isolated_tests=bool(container),
+                                        reveal=reveal if container else None)
                     if stopped():
                         stop = 'stopped by Lan'
                         break
@@ -1372,12 +1439,17 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
                 git_pointer.unlink(missing_ok=True)
             except OSError:
                 cleanup_warning += ' [warning: could not remove temporary Git pointer]'
+        for _source, mask in secret_masks.values():
+            try:
+                mask.unlink(missing_ok=True)
+            except OSError:
+                cleanup_warning += ' [warning: could not remove a temporary secret mask]'
         if empty_secret_dir is not None:
             try:
                 empty_secret_dir.rmdir()
             except OSError:
                 cleanup_warning += ' [warning: could not remove temporary secret mask]'
-        save_run_log(home, messages, stop=stop, steps=steps, cost=cost)
+        save_run_log(home, messages, stop=stop, steps=steps, cost=cost, redact=revealed)
         try:
             record_cost(cost)
         except Exception:

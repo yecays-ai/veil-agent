@@ -6,6 +6,21 @@
 - 改动：`build_config` 给每条 `git <子命令>` 规则多加一条 `git -* <子命令>`（选项必须以 `-` 开头，不会误伤 `git log`）。
 - 未验证：真实 OpenCode 对 `*` 跨空格匹配的行为只靠文档，测试副本的远程控制会话当时不可用，没有真机验证。
 - 停止/日志核对：现有代码里主聊天停止、浏览器、工作台、委派调查、长任务已经共用同一个 `user_stop` 事件；工作台结束前已存 `save_run_log`；浏览器/桌面失败原因已写进 `tools.jsonl`。审计里"各自一套"的描述已经过时，没有可安全删除的重复。
+## 工单 346（2026-11-11）：工作台装包一次一张卡、批准后能装上；.env 批准后能看到内容
+
+- 装包：镜像里加 Python 虚拟环境（`/opt/venv`，排在 PATH 最前），`pip` / `pip3` / `python3 -m pip` 直接装得上，不再被 Debian 的 externally-managed 限制挡住。镜像加标签 `veil.workbench.install-env=1`，`workbench_switch.image_ready` 两个标签都有才算就绪，旧镜像会被提示重建。
+- 授权卡：同一次任务里同一生态（pip 系 / npm 系 / apt / cargo / go）的安装命令算一个授权，换写法、换包不再重复弹卡；命令里出现生态官方源之外的新地址仍单独弹卡。联网命令（curl 等）和其他命令不变。
+- .env：每个秘密文件有自己的遮盖文件；用读文件工具读取并被批准后，把真实内容写进该遮盖文件（只在本次任务容器里可见，任务结束删除）。拒绝则仍是空的。工作台说明里告诉模型“秘密文件在 shell 里看起来是空的，要读请用读文件工具”。落盘的运行日志会把已展示过的秘密值替换成 [redacted]。
+- 真机验收（测试副本，真实 Docker + 真实模型，约 ¥0.13）：pip 装 rich 一张卡装成；读 .env 一张卡，GREETING 读到真实值；日志里没有假密钥。
+- 未做：用 bash（cat/grep）读 .env 仍是空的、不弹卡（有意：只有读文件工具走批准）；真实密钥不能用来调用服务这点靠现有联网白名单，没有新增限制。
+- `test_real_server_runs_a_task_through_the_program_approval` 仍失败（#334 之前就有，Windows 路径问题）。
+## 工单 347（2026-11-11）：MCP 客户端合并（审计第 9 项）
+
+- 依据：包装层审计第 9 项。`web_tools._FetchWorker`、`tools_agent._McpWorker` 与 `mcp_services._Worker` 是三份同类的 stdio MCP 客户端；`veil_mcp_gateway` 已在 #336 删除，所以实际是 4 合 1。
+- 改动：`mcp_services._Worker` 增加 `start_timeout`、`call_timeout`、`survive_timeout`（单次调用超时只让这次失败，不关服务，保持原抓取/文件系统行为）、`result_limit`（None 不截断）；新增 `open_stdio_client()`。`_FetchWorker`、`_McpWorker` 改成调用它的几行函数（名字保留，测试补丁点不变）。文件系统的错误文字仍统一为 `MCP tool failed`。
+- 行为差异（已知，很小）：抓取现在和 MCP 服务一样串行排队、带连接探测；空目录读取会返回 `{"content": ""}` 而不是空串。
+- 验证：相关单元测试 202 个通过；用生产 `.deps` 里的真实 fetch/filesystem 服务跑通抓取、出错后继续可用、列目录、关闭。
+- 未验证：测试副本真实聊天里搜索/读网页/读写文件的新旧对比。
 
 ## 工单 339（2026-11-10）：权限分类合成一张表；去掉重复的步数/时间上限
 

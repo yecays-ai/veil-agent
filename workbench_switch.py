@@ -1,6 +1,7 @@
 """Ticket 239: turn Peter's workbench on or off and choose which project folders it may work in.
 Writes data/<character>/workbench.json (git-ignored), so updating the repo never undoes it. Restart Peter afterwards."""
 import json
+import re
 import subprocess
 import sys
 import traceback
@@ -10,7 +11,9 @@ from windows_process import hidden_subprocess_kwargs
 ROOT = Path(__file__).resolve().parent
 CHARACTER = 'peter'
 IMAGE = 'veil-workbench'
-KEYS = ('enabled', 'project_roots', 'container_image')
+KEYS = ('enabled', 'project_roots', 'container_image', 'web_hosts')
+HOST_PATTERN = re.compile(r'[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?')
+MAX_HOSTS = 50
 
 
 def settings_path(root=ROOT):
@@ -20,13 +23,15 @@ def settings_path(root=ROOT):
 def load_state(root=ROOT):
     path = settings_path(root)
     if not path.exists():
-        return {'enabled': False, 'project_roots': [], 'container_image': IMAGE}
+        return {'enabled': False, 'project_roots': [], 'container_image': IMAGE, 'web_hosts': []}
     data = json.loads(path.read_text(encoding='utf-8-sig'))
     roots = data.get('project_roots', [])
     image = data.get('container_image', IMAGE)
-    if not isinstance(data, dict) or not isinstance(roots, list) or not isinstance(image, str):
+    hosts = data.get('web_hosts', [])
+    if not isinstance(data, dict) or not isinstance(roots, list) or not isinstance(image, str) or not isinstance(hosts, list):
         raise ValueError('workbench.json 格式不对')
-    return {'enabled': data.get('enabled') is True, 'project_roots': [str(x) for x in roots], 'container_image': image}
+    return {'enabled': data.get('enabled') is True, 'project_roots': [str(x) for x in roots], 'container_image': image,
+            'web_hosts': [str(x) for x in hosts]}
 
 
 def save_state(state, root=ROOT):
@@ -55,6 +60,28 @@ def add_folder(state, folder, root=ROOT):
     return True, f'已加入：{text}'
 
 
+def add_host(state, host):
+    """Returns (ok, message). Accepts a bare host name or a pasted address; keeps only the host name."""
+    text = str(host).strip().casefold()
+    text = re.sub(r'^[a-z][a-z0-9+.-]*://', '', text).split('/')[0].split('?')[0].split('#')[0].rsplit('@', 1)[-1]
+    text = text.split(':')[0].strip('.')
+    if not text or not HOST_PATTERN.fullmatch(text) or '.' not in text:
+        return False, '请填网站地址，例如 github.com。'
+    if text in state['web_hosts']:
+        return False, '已经在列表里了。'
+    if len(state['web_hosts']) >= MAX_HOSTS:
+        return False, f'最多放 {MAX_HOSTS} 个网站。'
+    state['web_hosts'].append(text)
+    return True, f'已加入：{text}'
+
+
+def remove_host(state, host):
+    if host in state['web_hosts']:
+        state['web_hosts'].remove(host)
+        return True
+    return False
+
+
 def image_ready(image=IMAGE):
     try:
         if image != IMAGE:
@@ -62,10 +89,10 @@ def image_ready(image=IMAGE):
             return subprocess.run(['docker', 'image', 'inspect', image], capture_output=True, timeout=60,
                                   **hidden_subprocess_kwargs(module=subprocess)).returncode == 0
         finished = subprocess.run(
-            ['docker', 'image', 'inspect', '--format', '{{ index .Config.Labels "veil.workbench.network-lock" }}',
+            ['docker', 'image', 'inspect', '--format', '{{ index .Config.Labels "veil.workbench.network-lock" }}/{{ index .Config.Labels "veil.workbench.install-env" }}',
              image], capture_output=True, text=True, timeout=60,
             **hidden_subprocess_kwargs(module=subprocess))
-        return finished.returncode == 0 and finished.stdout.strip() == '1'
+        return finished.returncode == 0 and finished.stdout.strip() == '1/1'
     except (OSError, subprocess.SubprocessError):
         return False
 
