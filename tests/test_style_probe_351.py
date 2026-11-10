@@ -43,6 +43,25 @@ class StyleProbeTests(unittest.TestCase):
         self.assertTrue(all('想你' in line for line in lines))
         self.assertEqual(len(set(lines)), 4)  # duplicate line dropped, four different days
 
+    def test_exchange_segments_keep_back_and_forth(self):
+        rows = [{'role': 'user', 'content': '你又迟到了，哼'},
+                {'role': 'assistant', 'content': '错了错了，给你剥个橘子赔罪'},
+                {'role': 'tool', 'content': '{"ok": true}'},
+                {'role': 'assistant', 'content': ''},
+                {'role': 'user', 'content': '这还差不多'}]
+        with tempfile.TemporaryDirectory() as tmp:
+            chat = Path(tmp) / 'chat.jsonl'
+            chat.write_text('\n'.join(json.dumps(r, ensure_ascii=False) for r in rows), encoding='utf-8')
+            segs = probe.exchange_segments(chat, '1-5')
+            with self.assertRaises(ValueError):
+                probe.exchange_segments(chat, '4-9')
+        self.assertEqual([m['who'] for m in segs[0]], ['lan', 'peter', 'lan'])
+        block = probe.snippet_block('Peter', segs, 'Lan')
+        self.assertIn('Lan：你又迟到了，哼\nPeter：错了错了', block)
+        self.assertIn('不要照抄', block)
+        msgs = probe.build_messages('人设', None, segs, 'Peter', '你好', 'Lan')
+        self.assertIn('几小段来回', msgs[1]['content'])
+
     def test_parse_numbers(self):
         self.assertEqual(probe.parse_numbers('1 3，5-7、3', 10), [1, 3, 5, 6, 7])
         with self.assertRaises(ValueError):

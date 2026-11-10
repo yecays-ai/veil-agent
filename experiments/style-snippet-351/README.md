@@ -6,10 +6,12 @@
 
 ```
 python experiments/style-snippet-351/style_probe.py candidates --chat <只读的 chat.jsonl> --out <输出目录>
+#   或：由人在本机读聊天后给出几段行号，切成来回片段做候选
+python experiments/style-snippet-351/style_probe.py exchanges --chat <chat.jsonl> --ranges "120-125 300-303" --out <输出目录>
 #   Lan 打开 <输出目录>/candidates.html，挑 20–30 句，报编号
 python experiments/style-snippet-351/style_probe.py select --out <输出目录> --numbers "1 3 5-9"
 python experiments/style-snippet-351/style_probe.py run --out <输出目录> --persona <人设> --profile <关于 Lan 的笔记> \
-    --name Peter --models <models.json> --env <测试副本 .env>
+    --name Peter --user-name Lan --models <models.json> --env <测试副本 .env>
 python experiments/style-snippet-351/style_probe.py page --out <输出目录> --models <models.json>
 #   Lan 打开 compare.html，回复如 "1X 2Y 3一样 ..."
 python experiments/style-snippet-351/style_probe.py reveal --out <输出目录> --answers "1X 2Y ..."

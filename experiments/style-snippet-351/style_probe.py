@@ -4,6 +4,7 @@ Runs only on Lan's computer. Real chat lines, the persona and every reply stay i
 folder (outside the repository); nothing here writes Peter's data, memory or persona.
 
   candidates  pick ~40 candidate lines Peter said, numbered, for Lan to tick
+  exchanges   or: cut short back-and-forth segments (given chat line ranges) as candidates
   select      keep the numbers Lan ticked as the read-only snippet file
   run         6 fixed scenarios x models x (without / with snippets), capped at a CNY budget
   page        blind side-by-side page; which group had snippets and which model wrote what are hidden
@@ -92,6 +93,44 @@ def candidate_lines(rows, count=40, seed=351):
     return picked
 
 
+SEGMENT_MAX_MESSAGES, MESSAGE_MAX_CHARS = 8, 300
+
+
+def exchange_segments(path, ranges):
+    """ranges like '120-125 300-303' (1-based chat.jsonl line numbers) -> list of segments, each a
+    list of {'who': 'lan'|'peter', 'text'}; tool calls, cards and empty rows are left out."""
+    lines = Path(path).read_text(encoding='utf-8-sig').splitlines()
+    segments = []
+    for part in ranges.split():
+        span = re.fullmatch(r'(\d+)-(\d+)', part)
+        if not span or int(span[1]) < 1 or int(span[2]) < int(span[1]) or int(span[2]) > len(lines):
+            raise ValueError(f'看不懂的行号范围：{part}')
+        segment = []
+        for raw in lines[int(span[1]) - 1:int(span[2])]:
+            try:
+                row = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(row, dict) or row.get('role') not in ('user', 'assistant'):
+                continue
+            text = text_of(row.get('content')).strip()
+            if not text:
+                continue
+            if len(text) > MESSAGE_MAX_CHARS:
+                text = text[:MESSAGE_MAX_CHARS] + '…'
+            segment.append({'who': 'lan' if row['role'] == 'user' else 'peter', 'text': text})
+        if not segment or len(segment) > SEGMENT_MAX_MESSAGES:
+            raise ValueError(f'{part} 里有 {len(segment)} 条消息，要 1–{SEGMENT_MAX_MESSAGES} 条')
+        segments.append(segment)
+    return segments
+
+
+def format_item(item, name, user_name):
+    if isinstance(item, str):
+        return f'- {item}'
+    return '\n'.join(f'{name if m["who"] == "peter" else user_name}：{m["text"]}' for m in item)
+
+
 def parse_numbers(text, limit):
     numbers = []
     for part in re.split(r'[\s,，、;；]+', text.strip()):
@@ -109,19 +148,24 @@ def parse_numbers(text, limit):
     return numbers
 
 
-def snippet_block(name, snippets):
-    lines = '\n'.join(f'- {s}' for s in snippets)
-    return (f'以下是{name}过去在真实聊天里亲口说过的一些话，只用来提醒你自己平时说话的语气和习惯。'
-            '它们不是这次要说的内容：不要照抄、不要复述，也不要提起这段参考。\n' + lines)
+def snippet_block(name, snippets, user_name='她'):
+    if all(isinstance(s, str) for s in snippets):
+        lines = '\n'.join(format_item(s, name, user_name) for s in snippets)
+        return (f'以下是{name}过去在真实聊天里亲口说过的一些话，只用来提醒你自己平时说话的语气和习惯。'
+                '它们不是这次要说的内容：不要照抄、不要复述，也不要提起这段参考。\n' + lines)
+    lines = '\n\n'.join(format_item(s, name, user_name) for s in snippets)
+    return (f'以下是{name}过去和{user_name}真实聊天里的几小段来回，{name}的话是你亲口说过的，'
+            '只用来提醒你自己平时怎么回应她、接梗、斗嘴、关心和表达不同意见。'
+            '它们不是这次要说的内容：不要照抄、不要复述，也不要提起这段参考。\n\n' + lines)
 
 
-def build_messages(persona, profile, snippets, name, user_text):
+def build_messages(persona, profile, snippets, name, user_text, user_name='她'):
     """Same stable order as real chat: persona, notes about Lan, then (new) snippets; all cacheable."""
     messages = [{'role': 'system', 'content': persona}]
     if profile:
         messages.append({'role': 'system', 'content': profile})
     if snippets:
-        messages.append({'role': 'system', 'content': snippet_block(name, snippets)})
+        messages.append({'role': 'system', 'content': snippet_block(name, snippets, user_name)})
     messages.append({'role': 'user', 'content': user_text})
     return messages
 
@@ -188,7 +232,7 @@ def openai_caller(model, env_file):
     return call
 
 
-def run(persona, profile, snippets, name, models, scenarios, out_dir, callers, max_tokens=600):
+def run(persona, profile, snippets, name, models, scenarios, out_dir, callers, max_tokens=600, user_name='她'):
     """callers: label -> call(messages, max_tokens) -> (reply, usage). Resumable: done cells are kept."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -202,7 +246,7 @@ def run(persona, profile, snippets, name, models, scenarios, out_dir, callers, m
                 if cell in results:
                     continue
                 messages = build_messages(persona, profile, snippets if with_snippets else None,
-                                          name, scenario['message'])
+                                          name, scenario['message'], user_name)
                 if not ledger.allow(Ledger.worst(model, messages, max_tokens)):
                     print(f'到达 ¥{ledger.cap} 上限，停在 {cell}；已花 ¥{ledger.spent:.4f}')
                     return results, ledger.spent
@@ -275,6 +319,10 @@ def main(argv=None):
     c.add_argument('--out', required=True)
     c.add_argument('--count', type=int, default=40)
     c.add_argument('--seed', type=int, default=351)
+    e = sub.add_parser('exchanges')
+    e.add_argument('--chat', required=True)
+    e.add_argument('--out', required=True)
+    e.add_argument('--ranges', required=True, help="chat.jsonl 行号范围，如 '120-125 300-303'")
     s = sub.add_parser('select')
     s.add_argument('--out', required=True)
     s.add_argument('--numbers', required=True)
@@ -283,6 +331,7 @@ def main(argv=None):
     r.add_argument('--persona', required=True)
     r.add_argument('--profile')
     r.add_argument('--name', default='你')
+    r.add_argument('--user-name', default='她')
     r.add_argument('--models', required=True)
     r.add_argument('--env', required=True)
     p = sub.add_parser('page')
@@ -308,6 +357,21 @@ def main(argv=None):
             '<p>挑 20 到 30 句你认可的，把编号发给我，例如 <code>1 3 5-9 12</code>。</p>'
             f'<ol>{body}</ol>', encoding='utf-8')
         print(f'{len(lines)} 条候选 → {out / "candidates.html"}')
+    elif args.cmd == 'exchanges':
+        segments = exchange_segments(args.chat, args.ranges)
+        (out / 'candidates.json').write_text(json.dumps(segments, ensure_ascii=False, indent=1), encoding='utf-8')
+        body = ''.join('<li value="%d">%s</li>' % (n, ''.join(
+            '<p class="%s"><b>%s</b>%s</p>' % (m['who'], '你：' if m['who'] == 'lan' else 'Peter：',
+                                              html.escape(m['text'])) for m in seg))
+            for n, seg in enumerate(segments, 1))
+        (out / 'candidates.html').write_text(
+            '<!doctype html><meta charset="utf-8"><title>勾选你们的对话片段</title>'
+            '<style>body{font:17px/1.7 system-ui,sans-serif;max-width:800px;margin:auto;padding:16px}'
+            'li{margin:14px 0;padding:8px 12px;border:1px solid #ddd;border-radius:8px}p{margin:4px 0;white-space:pre-wrap}'
+            '.lan{color:#345}</style><h1>哪几段像你们平时的样子？</h1>'
+            '<p>挑你认可的片段，把编号发给我，例如 <code>1 3 5-9</code>。</p>'
+            f'<ol>{body}</ol>', encoding='utf-8')
+        print(f'{len(segments)} 段候选 → {out / "candidates.html"}')
     elif args.cmd == 'select':
         lines = json.loads((out / 'candidates.json').read_text(encoding='utf-8'))
         chosen = [lines[n - 1] for n in parse_numbers(args.numbers, len(lines))]
@@ -319,7 +383,8 @@ def main(argv=None):
         profile = Path(args.profile).read_text(encoding='utf-8-sig').strip() if args.profile else None
         models = load_models(args.models)
         callers = {m['label']: openai_caller(m, args.env) for m in models}
-        _, spent = run(persona, profile, snippets, args.name, models, scenarios, out, callers)
+        _, spent = run(persona, profile, snippets, args.name, models, scenarios, out, callers,
+                       user_name=args.user_name)
         print(f'完成，本次实验累计花费 ¥{spent:.4f}')
     elif args.cmd == 'page':
         results = json.loads((out / 'results.json').read_text(encoding='utf-8'))
