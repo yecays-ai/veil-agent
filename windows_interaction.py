@@ -1113,6 +1113,30 @@ class WindowsInteractionTools:
         label = str(window.get('app') or window.get('process') or stem)[:60]
         return {'app_id': stem, 'label': label, 'pattern': pattern}
 
+    def list_candidates(self):
+        """Open apps that are not on the list yet and could be added from settings: [{app_id, label}]."""
+        try:
+            windows = self.backend.list_windows(lambda: False)
+        except Exception:
+            return []
+        found = {}
+        for window in windows:
+            candidate = self.candidate_for_window(window)
+            if candidate:
+                found.setdefault(candidate['app_id'], {'app_id': candidate['app_id'], 'label': candidate['label'],
+                                                       'pattern': candidate['pattern']})
+        return list(found.values())
+
+    def approve_open_app(self, app_id):
+        """Lan picked an open app in settings: allow it the same way the card's "always" does."""
+        candidate = next((c for c in self.list_candidates() if c['app_id'] == app_id), None)
+        if candidate is None:
+            return False
+        self.applications.update(validate_applications({app_id: {
+            'label': candidate['label'], 'process_paths': [candidate['pattern']], 'actions': self.APPROVED_ACTIONS}}))
+        self._save_approved_app(app_id, candidate['label'], candidate['pattern'])
+        return True
+
     def _ensure_approved(self, app_id, window_id, approval, stopped, summary):
         """If app_id names an open, not yet allowlisted window, ask Lan once; "y" stores it. Returns a refusal or None."""
         if self.get_app(app_id) or not self._valid_window_id(window_id):

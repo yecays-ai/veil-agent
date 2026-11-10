@@ -1597,6 +1597,18 @@ class ApprovedAppCardTests(unittest.TestCase):
             self.assertEqual(list_approved_apps(path), [])
             self.assertEqual(list_approved_apps(Path(directory) / 'missing.json'), [])
 
+    def test_settings_page_can_add_an_open_app_without_a_card(self):
+        from windows_interaction import list_approved_apps
+        with tempfile.TemporaryDirectory() as directory:
+            tools, _backend, _approval, asked = self.make(directory, [])
+            self.assertEqual([c['app_id'] for c in tools.list_candidates()], ['fastorange'])
+            self.assertFalse(tools.approve_open_app('notopen'))
+            self.assertTrue(tools.approve_open_app('fastorange'))
+            self.assertIn('fastorange', tools.applications)
+            self.assertEqual(tools.list_candidates(), [])
+            self.assertEqual([a['app_id'] for a in list_approved_apps(Path(directory) / 'approved.json')], ['fastorange'])
+            self.assertEqual(asked, [])
+
 
 if __name__ == '__main__':
     unittest.main()

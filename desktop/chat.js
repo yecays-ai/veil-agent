@@ -1611,6 +1611,13 @@ function renderWorkbench(){
     const remove=document.createElement('button');remove.type='button';remove.textContent='移除';remove.onclick=()=>saveWorkbench({remove:folder});
     row.append(name,remove);list.append(row);
   }
+  const hosts=$('workbench-hosts');hosts.textContent='';
+  for(const host of s.web_hosts||[]){
+    const row=document.createElement('div');row.className='wb-folder';
+    const name=document.createElement('span');name.textContent=host;
+    const remove=document.createElement('button');remove.type='button';remove.textContent='移除';remove.onclick=()=>saveWorkbench({remove_host:host});
+    row.append(name,remove);hosts.append(row);
+  }
   workbenchNote(s.enabled&&!s.image_ready?'还没有运行环境：双击 workbench-switch.cmd，选 1 做一次。':workbench.changed?'重开 Peter 后生效。':'');
 }
 let workbenchBusy=Promise.resolve();
@@ -1625,6 +1632,7 @@ async function saveWorkbenchNow(change){
 async function loadWorkbench(){
   try{const r=await api('/api/workbench');const data=await r.json();if(r.ok){workbench.state=data;renderWorkbench()}else workbenchNote(data.error||'读不到工作台设置，检查 data/peter/workbench.json。')}catch(error){workbenchNote('读不到工作台设置。')}
 }
+$('workbench-host-form').onsubmit=async event=>{event.preventDefault();const input=$('workbench-host-input');const value=input.value.trim();if(!value)return;await saveWorkbench({add_host:value});input.value=''};
 $('workbench-on').onclick=()=>saveWorkbench({enabled:true});
 $('workbench-off').onclick=()=>saveWorkbench({enabled:false});
 $('workbench-add').onclick=async()=>{
@@ -1632,18 +1640,23 @@ $('workbench-add').onclick=async()=>{
   catch(error){notify(error.message||'没有选成功。','error')}
 };
 workbenchBusy=workbenchBusy.then(loadWorkbench);
-function renderWindowsApps(apps){
-  const list=$('windows-apps-list');list.textContent='';
-  $('windows-apps-card').hidden=!apps.length;
-  for(const app of apps){
-    const row=document.createElement('div');row.className='wb-folder';
-    const name=document.createElement('span');name.textContent=app.label;
-    const remove=document.createElement('button');remove.type='button';remove.textContent='撤销';
-    remove.onclick=async()=>{try{const r=await api('/api/windows-apps',{remove:app.app_id});const data=await r.json();if(!r.ok){notify(data.error||'没有撤销成功。','error');return}renderWindowsApps(data.apps)}catch(error){notify(error.message||'没有撤销成功。','error')}};
-    row.append(name,remove);list.append(row);
-  }
+async function changeWindowsApp(change){
+  try{const r=await api('/api/windows-apps',change);const data=await r.json();if(!r.ok){notify(data.error||'没有保存成功。','error');return}renderWindowsApps(data)}catch(error){notify(error.message||'没有保存成功。','error')}
 }
-async function loadWindowsApps(){try{const r=await api('/api/windows-apps');const data=await r.json();if(r.ok)renderWindowsApps(data.apps)}catch(error){}}
+function windowsAppRow(app,text,handler){
+  const row=document.createElement('div');row.className='wb-folder';
+  const name=document.createElement('span');name.textContent=app.label;row.append(name);
+  if(text){const button=document.createElement('button');button.type='button';button.textContent=text;button.onclick=handler;row.append(button)}
+  return row;
+}
+function renderWindowsApps(data){
+  const list=$('windows-apps-list');list.textContent='';
+  for(const app of data.builtin||[])list.append(windowsAppRow(app,'',null));
+  for(const app of data.apps||[])list.append(windowsAppRow(app,'撤销',()=>changeWindowsApp({remove:app.app_id})));
+  const found=$('windows-apps-candidates');found.textContent='';
+  for(const app of data.candidates||[])found.append(windowsAppRow(app,'添加',()=>changeWindowsApp({add:app.app_id})));
+}
+async function loadWindowsApps(){try{const r=await api('/api/windows-apps');const data=await r.json();if(r.ok)renderWindowsApps(data)}catch(error){}}
 loadWindowsApps();
 function applyCustomCSS(value){
   const css=String(value||'');

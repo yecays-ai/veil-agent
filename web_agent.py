@@ -2399,25 +2399,39 @@ def make_handler(hub, token):
             interaction = getattr(files, 'windows_interaction_tools', None)
             return getattr(interaction, 'approved_apps_path', None), interaction
 
+        def _windows_apps_view(self, path, interaction):
+            from windows_interaction import list_approved_apps
+            approved = list_approved_apps(path) if path else []
+            ids = {row['app_id'] for row in approved}
+            builtin, candidates = [], []
+            if interaction is not None:
+                builtin = [{'app_id': a, 'label': app['label']} for a, app in interaction.applications.items() if a not in ids]
+                candidates = interaction.list_candidates()
+            return {'apps': approved, 'builtin': builtin, 'candidates': candidates}
+
         def _get_windows_apps(self):
             if not self._guard(self.headers.get('X-Token')):
                 return
-            path, _interaction = self._windows_apps_path()
-            from windows_interaction import list_approved_apps
-            self._send(200, {'apps': list_approved_apps(path) if path else []})
+            path, interaction = self._windows_apps_path()
+            self._send(200, self._windows_apps_view(path, interaction))
 
         def _post_windows_apps(self, body):
-            """Lan revokes an app she approved from a card (removing it takes effect at once)."""
+            """Lan adds an open app to Peter's list, or removes one she added (both take effect at once)."""
             if not self._guard(self.headers.get('X-Token')):
                 return
             path, interaction = self._windows_apps_path()
-            app_id = body.get('remove') if isinstance(body, dict) else None
-            from windows_interaction import list_approved_apps, remove_approved_app
-            if path is None or not isinstance(app_id, str) or not remove_approved_app(path, app_id):
+            body = body if isinstance(body, dict) else {}
+            from windows_interaction import remove_approved_app
+            if path is not None and isinstance(body.get('add'), str):
+                if interaction is None or not interaction.approve_open_app(body['add']):
+                    self._send(400, {'error': '没找到这个软件的窗口，请先把它打开再添加。'})
+                    return
+            elif path is not None and isinstance(body.get('remove'), str) and remove_approved_app(path, body['remove']):
+                interaction.applications.pop(body['remove'], None)
+            else:
                 self._send(400, {'error': 'remove'})
                 return
-            interaction.applications.pop(app_id, None)
-            self._send(200, {'apps': list_approved_apps(path)})
+            self._send(200, self._windows_apps_view(path, interaction))
 
         def _get_workbench(self):
             if not self._guard(self.headers.get('X-Token')):
@@ -2451,6 +2465,15 @@ def make_handler(hub, token):
             if 'remove' in body:
                 if not isinstance(body['remove'], str) or not workbench_switch.remove_folder(state, body['remove']):
                     self._send(400, {'error': 'remove'})
+                    return
+            if 'add_host' in body:
+                ok, message = workbench_switch.add_host(state, body['add_host']) if isinstance(body['add_host'], str) else (False, 'add_host')
+                if not ok:
+                    self._send(400, {'error': message})
+                    return
+            if 'remove_host' in body:
+                if not isinstance(body['remove_host'], str) or not workbench_switch.remove_host(state, body['remove_host']):
+                    self._send(400, {'error': 'remove_host'})
                     return
             workbench_switch.save_state(state, ROOT)
             self._send(200, workbench_switch.status(ROOT))
