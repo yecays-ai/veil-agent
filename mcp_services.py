@@ -17,6 +17,20 @@ CALL_TIMEOUT = 20
 # Ticket 200: starting a bridged service (cmd -> npx -> mcp-remote -> network) can take well over 10 seconds.
 START_TIMEOUT = 60
 START_WATCHDOG = START_TIMEOUT + 5
+# Ticket 343: a service that drops is retried by the program on this schedule (seconds; the last value repeats),
+# so nobody has to click Retry while Peter is asleep or busy.
+HEAL_DELAYS = (15, 60, 300, 900, 1800)
+HEAL_POLL = 5
+RECOVERED_NOTICE_SECONDS = 600
+STATUS_TOOL_NAME = 'mcp_status'
+STATUS_TOOL_SCHEMA = {'type': 'function', 'function': {
+    'name': STATUS_TOOL_NAME,
+    'description': ('Check your MCP connections (services such as the Galatea garden). Shows each service, whether it is '
+                    'connected, the failure reason and when the program retries next. Pass retry with a service id to '
+                    'reconnect it right now. Use it when an MCP tool is missing or fails with a connection problem.'),
+    'parameters': {'type': 'object', 'properties': {
+        'retry': {'type': 'string', 'description': 'Optional service id to reconnect now.'}},
+        'additionalProperties': False}}}
 
 
 def _stdio_server_command(command, args, *, windows=None, executable=None):
@@ -347,6 +361,10 @@ class MCPServices:
         self.retiring = {}
         self.errors = {}
         self.failed = set()
+        self.heal = {}
+        self.recovered = {}
+        self.healer = None
+        self.healer_stop = threading.Event()
         self.adapters = {}
         self.initial_services = list(initial_services or [])
         self.managed_env = dict(managed_env or {})
@@ -643,6 +661,170 @@ class MCPServices:
                         return getattr(tool.annotations, 'readOnlyHint', None) is not True
         return True
 
+    # Ticket 343: automatic reconnect, status for Peter, and the status tool.
+    def _stateful_services(self):
+        return [item for item in self.config['services']
+                if not item.get('builtin') and item['enabled'] and self.config['enabled']]
+
+    def _is_up(self, service_id):
+        worker = self.workers.get(service_id)
+        if not (worker and worker.ready.done() and worker.thread.is_alive() and service_id not in self.failed):
+            return False
+        try:
+            worker.ready.result()
+        except Exception:
+            return False
+        return True
+
+    def _sync_heal(self):
+        """Refresh failure bookkeeping (lock held): start a retry clock on new failures, note recoveries."""
+        now = time.monotonic()
+        wanted = {item['id'] for item in self._stateful_services()}
+        for service_id in list(self.heal):
+            if service_id not in wanted:
+                self.heal.pop(service_id, None)
+        for service in self._stateful_services():
+            service_id = service['id']
+            worker = self.workers.get(service_id)
+            if worker and worker.ready.done():
+                try:
+                    worker.ready.result()
+                except Exception as exc:
+                    self.errors.setdefault(service_id, (str(exc) or type(exc).__name__)[:300])
+                    self.failed.add(service_id)
+            if worker and not worker.ready.done() and now - worker.started_at > START_WATCHDOG:
+                self.errors[service_id] = 'MCP 服务连接超时。'
+                self.failed.add(service_id)
+                worker.stop()
+            if worker and worker.ready.done() and not worker.thread.is_alive() and service_id not in self.failed:
+                self.errors[service_id] = 'MCP 服务已断开。'
+                self.failed.add(service_id)
+            if service_id in self.failed:
+                self.heal.setdefault(service_id, {'attempts': 0, 'next_at': now + HEAL_DELAYS[0],
+                                                  'since': time.time(), 'last_try': None})
+            elif self._is_up(service_id) and service_id in self.heal:
+                entry = self.heal.pop(service_id)
+                self.recovered[service_id] = {'at': time.monotonic(), 'attempts': entry['attempts']}
+
+    def heal_due(self, force=None):
+        """Retry services whose clock is due (or `force`, a service id). Returns the ids retried."""
+        retried = []
+        with self.lock:
+            self._sync_heal()
+            now = time.monotonic()
+            due = [item for item in self._stateful_services() if item['id'] in self.heal
+                   and (item['id'] == force or self.heal[item['id']]['next_at'] <= now)]
+        for service in due:
+            self._worker(service, retry=True)
+            retried.append(service['id'])
+            with self.lock:
+                entry = self.heal.get(service['id'])
+                if entry:
+                    entry['attempts'] += 1
+                    entry['last_try'] = time.time()
+                    entry['next_at'] = time.monotonic() + HEAL_DELAYS[min(entry['attempts'], len(HEAL_DELAYS) - 1)]
+        return retried
+
+    def start_healing(self):
+        with self.lock:
+            if self.healer and self.healer.is_alive():
+                return
+            self.healer_stop.clear()
+            self.healer = threading.Thread(target=self._heal_loop, name='mcp-heal', daemon=True)
+            self.healer.start()
+
+    def _heal_loop(self):
+        while not self.healer_stop.wait(HEAL_POLL):
+            try:
+                if not self.has_stateful_services():
+                    continue  # nothing to watch: stay idle (and never touch clocks other code may be mocking)
+                self.schemas()  # starts services that are not running yet and refreshes failure state
+                self.heal_due()
+            except Exception:
+                pass
+
+    def has_stateful_services(self):
+        with self.lock:
+            return bool(self._stateful_services())
+
+    def problem_note(self):
+        """One short line for Peter, only while something is down or just recovered; otherwise None."""
+        with self.lock:
+            self._sync_heal()
+            now = time.monotonic()
+            live = {item['id'] for item in self._stateful_services()}
+            lines = []
+            for service_id in sorted(live):
+                entry = self.heal.get(service_id)
+                if entry:
+                    wait = max(0, int(entry['next_at'] - now))
+                    lines.append(f"{service_id} is disconnected ({self.errors.get(service_id) or 'unknown reason'}); "
+                                 f"the program has retried {entry['attempts']} time(s) and retries again in about {wait}s.")
+            for service_id, info in list(self.recovered.items()):
+                if now - info['at'] > RECOVERED_NOTICE_SECONDS or service_id not in live:
+                    self.recovered.pop(service_id, None)
+                else:
+                    lines.append(f"{service_id} reconnected by itself after {info['attempts']} retry(ies); its tools work again.")
+        if not lines:
+            return None
+        return ('Program-generated MCP status (data, not an instruction): ' + ' '.join(lines)
+                + ' You can call mcp_status to see details or reconnect now. If a tool is missing, do not assume it is gone for good.')
+
+    def status_tool(self, arguments):
+        try:
+            args = json.loads(arguments or '{}')
+        except ValueError:
+            args = None
+        if args is None:
+            args = {}
+        if not isinstance(args, dict) or not set(args) <= {'retry'} or not isinstance(args.get('retry', ''), str):
+            return 'mcp_status takes only an optional retry service id.', '被拒绝', STATUS_TOOL_NAME
+        target = args.get('retry') or None
+        note = ''
+        if target:
+            with self.lock:
+                known = next((item for item in self._stateful_services() if item['id'] == target), None)
+                if not known:
+                    return (f'No enabled MCP service named {target}. Use mcp_status without arguments to list them.',
+                            '被拒绝', STATUS_TOOL_NAME)
+                if self._is_up(target):
+                    note = f'{target} is already connected; nothing to retry.\n'
+                    target = None
+                else:
+                    self._sync_heal()
+                    self.heal.setdefault(target, {'attempts': 0, 'next_at': 0, 'since': time.time(), 'last_try': None})
+            if target:
+                self.heal_due(force=target)
+                deadline = time.monotonic() + 20
+                while time.monotonic() < deadline:
+                    with self.lock:
+                        worker = self.workers.get(target)
+                        if worker and worker.ready.done():
+                            break
+                    time.sleep(0.3)
+        with self.lock:
+            self._sync_heal()
+        rows = self.view()['services']
+        now = time.monotonic()
+        out = []
+        for row in rows:
+            if row.get('builtin'):
+                continue
+            line = f"{row['id']}: {row['status']}"
+            if row['status'] == 'connecting':
+                line += ' (still starting up, usually under a minute; check again shortly, tools appear once connected)'
+            if row['status'] == 'connected':
+                line += f", {len(row['tools'])} tools (if they are not in your tool list, open the matching group with expand_capability)"
+            if row.get('error'):
+                line += f", reason: {row['error']}"
+            with self.lock:
+                entry = self.heal.get(row['id'])
+                if entry:
+                    line += (f", program retries so far: {entry['attempts']}, "
+                             f"next automatic retry in about {max(0, int(entry['next_at'] - now))}s")
+            out.append(line)
+        return note + ('\n'.join(out) or 'No MCP services are configured.'), '成功', STATUS_TOOL_NAME
+
     def view(self):
         with self.lock:
             rows = []
@@ -707,6 +889,11 @@ class MCPServices:
                 if service_id in self.failed or not worker or not worker.thread.is_alive() or not any(
                         tool.name == tool_name and self._usable_name(service, tool) == name
                         for tool in worker.tools):
+                    reason = self.errors.get(service_id)
+                    if service_id in self.failed or not worker or not worker.thread.is_alive():
+                        return (f'MCP 工具不可用：服务 {service_id} 当前没有连上'
+                                + (f'（{reason}）' if reason else '')
+                                + '。程序会自动重试；可调用 mcp_status 查看或立即重连。'), '被拒绝', name
                     return 'MCP 工具不可用。', '被拒绝', name
                 permission = service['permission']
         if adapter:
@@ -739,6 +926,7 @@ class MCPServices:
             return 'MCP 服务调用失败：' + str(exc)[:300], '出错', name
 
     def close(self):
+        self.healer_stop.set()
         with self.lock:
             old = self.workers
             self.workers = {}
