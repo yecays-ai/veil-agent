@@ -746,8 +746,16 @@ def _executor_roots(value):
     return [r.strip() for r in value]
 
 
-WORKBENCH_LOCAL_KEYS = {'enabled': bool, 'project_roots': list, 'container_image': str}
+WORKBENCH_LOCAL_KEYS = {'enabled': bool, 'project_roots': list, 'container_image': str, 'web_hosts': list}
 REMOVED_WORKBENCH_KEYS = {'host_mode', 'host_keep_old_tools', 'host_desktop_handover'}
+
+
+def _web_hosts(value):
+    """Sites the workbench's headless browser may open (host names only; empty = no browsing)."""
+    if not isinstance(value, list) or len(value) > 50 or any(
+            not isinstance(h, str) or not re.fullmatch(r'[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?', h.casefold()) for h in value):
+        raise ValueError('executor.web_hosts must be a list of host names')
+    return [h.casefold() for h in value]
 
 
 def workbench_local_path(root, character_id):
@@ -1057,6 +1065,7 @@ def load_character(root, character_id):
                         'wake_budget_cny': str(price(executor.get('wake_budget_cny', '0.3'))),
                         'project_roots': _executor_roots(executor.get('project_roots', [])),
                         'container_image': str(executor.get('container_image', '')),
+                        'web_hosts': _web_hosts(executor.get('web_hosts', [])),
                         'maintenance_repo': str(executor.get('maintenance_repo') or root),
                         'worktree_root': str(executor.get('worktree_root') or (Path(root).parent / 'worktrees')),
                         'github_repo': str(executor.get('github_repo') or 'yecays-ai/veil-agent'),
@@ -4188,6 +4197,7 @@ class Chat:
                                                 if maintenance else None),
                                  save_approval=(lambda kind, fingerprint: self.maintenance.record_workbench_approval(
                                      task_id, kind, fingerprint)) if maintenance else None,
+                                 web_hosts=(settings.get('web_hosts') or None) if container and not maintenance else None,
                                  browser_gateway=(browser.workbench_gateway
                                                   if browser is not None and browser.enabled and not maintenance else None))
             if maintenance and self.maintenance is not None:
