@@ -9,20 +9,12 @@ from types import SimpleNamespace
 import uuid
 
 from agent_types import UserError, now
+from tool_access import tools_with
 
 
 TASK_STATUS = ('active', 'paused', 'blocked', 'completed')
-SIDE_EFFECT_TOOLS = {
-    'write_file', 'append_file', 'grant_append', 'create_directory', 'move_lab_file', 'edit_file', 'delete_file',
-    'run_lab_python', 'hold', 'trace',
-    'letter_write', 'letter_lock_update', 'anchor', 'release', 'plan',
-}
-READ_ONLY_TOOLS = {
-    'list_directory', 'directory_tree', 'read_text_file', 'read_multiple_files',
-    'get_file_info', 'search_files', 'list_directory_with_sizes', 'lab_file_digest', 'breath_search',
-    'dream', 'letter_read', 'memory_history', 'memory_catalog', 'memory_read', 'pulse',
-    'windows_discover_apps',
-}
+SIDE_EFFECT_TOOLS = tools_with('w')
+READ_ONLY_TOOLS = tools_with('r')
 MAX_PROGRESS_ITEMS = 40
 MAX_TOOL_EVENTS = 12
 

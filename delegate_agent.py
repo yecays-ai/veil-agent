@@ -3,6 +3,8 @@ import json
 import time
 from typing import NamedTuple
 
+from tool_access import tools_with
+
 
 class DelegateResult(NamedTuple):
     text: str
@@ -16,17 +18,7 @@ MAX_RESULT_CHARS = 16000
 MAX_TOOL_RESULT_CHARS = 4000
 MAX_OUTPUT_TOKENS = 1200
 
-READ_ONLY_TOOLS = frozenset({
-    'web_search', 'web_fetch', 'web_research', 'github_read', 'search_chat_history',
-    'memory_catalog', 'memory_read', 'memory_history', 'breath_search',
-    'read_text_file', 'read_multiple_files', 'list_directory', 'list_directory_with_sizes',
-    'directory_tree', 'search_files', 'get_file_info', 'mcp__github__github_read',
-    'mcp__galatea_garden__get_my_status', 'mcp__galatea_garden__get_chat_messages',
-    'mcp__galatea_garden__get_tool_schema', 'mcp__galatea_garden__get_game_summary',
-    'mcp__galatea_garden__get_self', 'mcp__galatea_garden__get_machine',
-    'mcp__galatea_garden__list_games', 'mcp__galatea_garden__list_threads',
-    'mcp__galatea_garden__get_thread', 'mcp__galatea_garden__list_activity',
-})
+READ_ONLY_TOOLS = tools_with('d')
 
 TOOL_SCHEMA = {'type': 'function', 'function': {
     'name': 'delegate',

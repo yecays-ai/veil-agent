@@ -43,7 +43,7 @@ class BrowserWorkbenchGatewayTests(unittest.TestCase):
         def invoke(*args, **kwargs):
             calls.append((args, kwargs))
             return 'snapshot', '成功', 'browser'
-        browser = SimpleNamespace(begin_request=lambda: calls.append('begin'), invoke=invoke, monitor=Idle())
+        browser = SimpleNamespace(invoke=invoke, monitor=Idle())
         with BrowserWorkbenchGateway(browser, lambda: False) as gateway:
             status, initialized = self.request(gateway, {'jsonrpc': '2.0', 'id': 1, 'method': 'initialize',
                                                            'params': {'protocolVersion': '2025-03-26'}})
@@ -53,13 +53,12 @@ class BrowserWorkbenchGatewayTests(unittest.TestCase):
             _status, result = self.request(gateway, {'jsonrpc': '2.0', 'id': 3, 'method': 'tools/call', 'params': {
                 'name': 'public_browser', 'arguments': {'action': 'open', 'url': 'https://example.com/'}}})
             self.assertEqual(result['result']['content'][0]['text'], 'snapshot')
-            self.assertEqual(calls[0], 'begin')
-            self.assertEqual(calls[1][0], ('browser', {'action': 'open', 'url': 'https://example.com/'}))
-            self.assertFalse(calls[1][1]['should_stop']())
+            self.assertEqual(calls[0][0], ('browser', {'action': 'open', 'url': 'https://example.com/'}))
+            self.assertFalse(calls[0][1]['should_stop']())
         self.assertTrue(gateway.stopped(), 'closing the gateway must revoke later MCP calls')
 
     def test_gateway_rejects_missing_task_token(self):
-        browser = SimpleNamespace(begin_request=lambda: None, invoke=lambda *_args, **_kwargs: ('', '成功', ''), monitor=Idle())
+        browser = SimpleNamespace(invoke=lambda *_args, **_kwargs: ('', '成功', ''), monitor=Idle())
         with BrowserWorkbenchGateway(browser, lambda: False) as gateway:
             request = urllib.request.Request(gateway.url.replace('host.docker.internal', '127.0.0.1'), method='POST',
                 data=b'{}', headers={'Content-Type': 'application/json'})
@@ -73,7 +72,7 @@ class BrowserWorkbenchGatewayTests(unittest.TestCase):
         self.assertEqual(denied.exception.code, 401)
 
     def test_gateway_rejects_oversized_request_before_parsing_it(self):
-        browser = SimpleNamespace(begin_request=lambda: None, invoke=lambda *_args, **_kwargs: ('', '成功', ''), monitor=Idle())
+        browser = SimpleNamespace(invoke=lambda *_args, **_kwargs: ('', '成功', ''), monitor=Idle())
         with BrowserWorkbenchGateway(browser, lambda: False) as gateway:
             request = urllib.request.Request(gateway.url.replace('host.docker.internal', '127.0.0.1'), method='POST',
                 data=b'x' * (MAX_MCP_REQUEST_BYTES + 1), headers={'Content-Type': 'application/json',
@@ -90,7 +89,7 @@ class BrowserWorkbenchGatewayTests(unittest.TestCase):
     def test_only_a_stop_revokes_the_background_gateway_and_request_size_is_bounded(self):
         changed = [False]
         monitor = SimpleNamespace(snapshot=lambda: 'before', changed_since=lambda _snapshot: changed[0])
-        browser = SimpleNamespace(begin_request=lambda: None, invoke=lambda *_args, **_kwargs: ('', '成功', ''),
+        browser = SimpleNamespace(invoke=lambda *_args, **_kwargs: ('', '成功', ''),
                                   monitor=monitor, visible=True)
         with BrowserWorkbenchGateway(browser, lambda: False) as gateway:
             # The workbench browses in the background: Lan using her computer does not stop it,
@@ -110,7 +109,7 @@ class BrowserWorkbenchGatewayTests(unittest.TestCase):
             BrowserWorkbenchGateway.request_size('not-a-size')
 
     def test_failed_serve_thread_start_closes_the_server_without_hanging(self):
-        browser = SimpleNamespace(begin_request=lambda: None, invoke=lambda *_args, **_kwargs: ('', '成功', ''),
+        browser = SimpleNamespace(invoke=lambda *_args, **_kwargs: ('', '成功', ''),
                                   monitor=Idle())
         gateway = BrowserWorkbenchGateway(browser, lambda: False)
         closed = []
@@ -140,7 +139,7 @@ class BrowserWorkbenchGatewayTests(unittest.TestCase):
         self.assertIsNone(gateway.server)
 
     def test_gateway_rejects_non_object_params_with_400(self):
-        browser = SimpleNamespace(begin_request=lambda: None, invoke=lambda *_args, **_kwargs: ('', '成功', ''),
+        browser = SimpleNamespace(invoke=lambda *_args, **_kwargs: ('', '成功', ''),
                                   monitor=Idle())
         with BrowserWorkbenchGateway(browser, lambda: False) as gateway:
             with self.assertRaises(urllib.error.HTTPError) as rejected:
@@ -150,27 +149,26 @@ class BrowserWorkbenchGatewayTests(unittest.TestCase):
 
     def test_a_new_gateway_closes_the_previous_tasks_idle_page(self):
         closed = []
-        browser = SimpleNamespace(page=object(), close=lambda: closed.append(True), begin_request=lambda: None,
+        browser = SimpleNamespace(page=object(), close=lambda: closed.append(True), 
                                   invoke=lambda *_args, **_kwargs: ('', '成功', ''), monitor=Idle())
         with BrowserWorkbenchGateway(browser, lambda: False):
             pass
         self.assertEqual(closed, [True])
 
     def test_gateway_does_not_close_a_browser_action_in_progress(self):
-        browser = SimpleNamespace(page=object(), close=Mock(), begin_request=Mock(), gate=threading.Lock())
+        browser = SimpleNamespace(page=object(), close=Mock(), gate=threading.Lock())
         browser.gate.acquire()
         self.addCleanup(browser.gate.release)
         with self.assertRaisesRegex(RuntimeError, 'Browser is busy'):
             BrowserWorkbenchGateway(browser, lambda: False).__enter__()
         browser.close.assert_not_called()
-        browser.begin_request.assert_not_called()
 
     def test_gateway_refuses_actions_outside_the_advertised_enum(self):
         calls = []
         def invoke(*args, **kwargs):
             calls.append(args)
             return '', '成功', ''
-        browser = SimpleNamespace(begin_request=lambda: None, invoke=invoke, monitor=Idle())
+        browser = SimpleNamespace(invoke=invoke, monitor=Idle())
         with BrowserWorkbenchGateway(browser, lambda: False) as gateway:
             with self.assertRaises(urllib.error.HTTPError) as rejected:
                 self.request(gateway, {'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call', 'params': {
@@ -294,18 +292,11 @@ class BrowserSafetyTests(unittest.TestCase):
         self.assertEqual(disabled.tools, [])
         self.assertEqual(disabled.invoke('browser', {'action': 'observe'})[1], '被拒绝')
         browser = BrowserTools(CFG, platform_enabled=True, monitor=Idle())
-        browser.begin_request()
-        browser.steps = 20
-        self.assertIn('limit', browser.invoke('browser', {'action': 'observe'})[0])
-        browser.begin_request()
-        browser.deadline = time.monotonic() - 1
-        self.assertIn('limit', browser.invoke('browser', {'action': 'observe'})[0])
         browser.gate.acquire()
         try:
             self.assertIn('queued', browser.invoke('browser', {'action': 'observe'})[0])
         finally:
             browser.gate.release()
-        browser.begin_request()
         browser.monitor.require_idle = lambda _: (_ for _ in ()).throw(ValueError('human priority'))
         self.addCleanup(browser.close)
         # A background browser never waits for Lan to stop using her computer.
@@ -344,7 +335,6 @@ class BrowserSafetyTests(unittest.TestCase):
         self.assertEqual(browser_tools.failure_reason(Error()), 'Error')
         browser = BrowserTools(CFG, platform_enabled=True, monitor=Idle())
         self.addCleanup(browser.close)
-        browser.begin_request()
         with patch.object(BrowserTools, '_operate', side_effect=Error('Page.goto: net::ERR_TIMED_OUT at https://example.com/')):
             result, state, _ = browser.invoke('browser', {'action': 'open', 'url': 'https://example.com/'})
         self.assertIn('Error: Page.goto: net::ERR_TIMED_OUT', result)
@@ -400,7 +390,6 @@ class BrowserLoopIntegrationTests(unittest.TestCase):
 class BrowserChromiumTests(unittest.TestCase):
     def setUp(self):
         self.browser = BrowserTools(CFG, platform_enabled=True, headless=True, monitor=Idle())
-        self.browser.begin_request()
 
     def tearDown(self):
         self.browser.close()
