@@ -34,6 +34,9 @@ class FakeGitHub:
         self.ci = ci
         self.reviews = list(reviews)
         self.calls = []
+        self.signed_in = True
+        self.last_pr_body = ''
+        self.envs = []
 
     def _view(self):
         checks = ([{'name': 'test', 'status': 'IN_PROGRESS' if self.ci == 'pending' else 'COMPLETED',
@@ -50,6 +53,7 @@ class FakeGitHub:
 
     def run(self, argv, cwd=None, timeout=180, input_text=None, env=None):
         self.calls.append(list(argv))
+        self.envs.append(env)
         if argv[0] == 'git' and argv[1] in {'fetch'}:
             return 1, '', 'offline fixture'
         if argv[0] == 'git' and argv[1] == 'ls-remote':
@@ -61,6 +65,8 @@ class FakeGitHub:
             return 0, '', ''
         if argv[0] == 'gh':
             args = argv[1:]
+            if args[:2] == ['auth', 'status']:
+                return (0, '', '') if self.signed_in else (1, '', 'You are not logged into any GitHub hosts.')
             if args[:2] == ['pr', 'create']:
                 assert '--repo' in args and args[args.index('--repo') + 1] == 'yecays-ai/veil-agent', args
                 assert '--base' in args and args[args.index('--base') + 1] == 'main', args
@@ -76,6 +82,7 @@ class FakeGitHub:
                           'headRefOid': self.head}] if self.pr_created else []
                 return 0, json.dumps(value), ''
             if args[:2] == ['pr', 'create']:
+                self.last_pr_body = args[args.index('--body') + 1]
                 self.pr_created = True
                 return 0, self._view()['url'] + '\n', ''
             if args[:2] == ['pr', 'edit']:
@@ -180,6 +187,52 @@ class MaintenanceTests(unittest.TestCase):
     def develop(self, task, name='feature.py', content='VALUE = 1\n'):
         worktree = Path(task['worktree'])
         (worktree / name).write_text(content, encoding='utf-8')
+
+    def test_begin_explains_missing_github_login_before_asking_or_creating_anything(self):
+        self.gh.signed_in = False
+        text, state = self.manager.invoke('begin', {'title': 'Add greeting', 'goal': 'g', 'ticket': 314})
+        self.assertEqual(state, '被拒绝')
+        self.assertIn('github-token.cmd', text)
+        self.assertEqual(self.approvals, [])
+        self.assertFalse((self.root / 'worktrees').exists())
+
+    def test_token_file_feeds_git_and_gh_only_through_environment(self):
+        token = 'github_pat_' + 'A1b2C3d4' * 5
+        token_file = self.root / 'github-token.txt'
+        token_file.write_text('\n' + token + '\n', encoding='utf-8')
+        self.manager.token_file = token_file
+        task = self.begin()
+        self.develop(task)
+        self.manager.invoke('deliver', {'task_id': task['task_id']})
+        pushes = [env for call, env in zip(self.gh.calls, self.gh.envs) if call[:2] == ['git', 'push']]
+        self.assertTrue(pushes)
+        self.assertEqual(pushes[0]['GH_TOKEN'], token)
+        self.assertEqual(pushes[0]['GIT_CONFIG_VALUE_1'], '!gh auth git-credential')
+        self.assertFalse(any(token in ' '.join(call) for call in self.gh.calls))
+        self.assertNotIn(token, json.dumps(self.manager.store.load(task['task_id'])))
+
+    def test_status_lists_the_real_worktree_changes(self):
+        task = self.begin()
+        self.develop(task, 'docs/note.md', 'one line\n')
+        text, state = self.manager.invoke('status', {'task_id': task['task_id']})
+        self.assertEqual(state, '成功', text)
+        self.assertIn('worktree_changes=', text)
+        self.assertIn('docs/note.md', text)
+
+    def test_a_failed_workbench_run_does_not_block_delivery_but_a_stop_does(self):
+        task = self.begin()
+        self.develop(task)
+        self.manager._record_workbench(task['task_id'], cost=0, steps=1, state='出错', reason='test_failed')
+        text, state = self.manager.invoke('deliver', {'task_id': task['task_id']})
+        self.assertEqual(state, '成功', text)
+        self.assertTrue(self.gh.pr_created)
+        self.assertIn('以 PR 的 CI 结果为准', self.gh.last_pr_body)
+
+    def test_malformed_token_file_is_ignored(self):
+        token_file = self.root / 'github-token.txt'
+        token_file.write_text('not a token', encoding='utf-8')
+        self.assertEqual(maintenance.read_github_token(token_file), '')
+        self.assertEqual(maintenance.read_github_token(self.root / 'missing.txt'), '')
 
     def test_begin_creates_an_isolated_worktree_and_documents_without_touching_main(self):
         task = self.begin()
@@ -650,18 +703,6 @@ output_cny_per_million = "8"
         self.assertNotIn('test run', result['next_step'])
         with self.assertRaises(maintenance.MaintenanceError):
             self.manager.workbench_target(task['task_id'])
-
-    def test_failed_tests_block_delivery_until_a_successful_workbench_result(self):
-        task = self.begin()
-        self.develop(task)
-        self.manager.record_workbench(task['task_id'], cost=0, steps=1, report='tests failed',
-                                      state='出错', reason='test_failed')
-        text, state = self.manager.invoke('deliver', {'task_id': task['task_id']})
-        self.assertEqual(state, '被拒绝', text)
-        self.assertFalse(self.gh.pr_created)
-        self.manager.record_workbench(task['task_id'], cost=0, steps=1, report='tests pass',
-                                      state='成功', reason='')
-        self.assertEqual(self.manager.invoke('deliver', {'task_id': task['task_id']})[1], '成功')
 
     def test_real_opencode_to_fake_github_delivery(self):
         import executor_opencode as ex

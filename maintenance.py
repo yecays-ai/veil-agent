@@ -169,6 +169,24 @@ def _host_env(extra=None):
     return env
 
 
+TOKEN_PATTERN = re.compile(r'(github_pat_|gh[pousr]_)[A-Za-z0-9_]{20,}')
+TOKEN_FILE_NAME = 'github-token.txt'
+
+
+def read_github_token(path):
+    """Lan's own fine-grained GitHub token, kept in her secrets folder. It never goes into the repository, a
+    prompt, a log or the container: only the host-side git/gh calls below receive it."""
+    try:
+        text = Path(path).read_text(encoding='utf-8-sig')
+    except (OSError, ValueError):
+        return ''
+    for line in text.splitlines():
+        line = line.strip()
+        if line and TOKEN_PATTERN.fullmatch(line):
+            return line
+    return ''
+
+
 class MaintenanceStore:
     """Atomic per-task JSON plus a one-line active task for the next request."""
 
@@ -549,7 +567,8 @@ class AcceptanceInstance:
 class MaintenanceManager:
     def __init__(self, store, character_id, *, repo_path, worktree_root=None,
                  github_repo=DEFAULT_GITHUB_REPO, approval=None, runner=None,
-                 instance_factory=None, python=None, electron=None, hours=2, stopped=None):
+                 instance_factory=None, python=None, electron=None, hours=2, stopped=None, token_file=None):
+        self.token_file = Path(token_file) if token_file else None
         self.store = MaintenanceStore(store, character_id)
         self.store_root = Path(store.root).resolve()
         self.character_id = character_id
@@ -566,12 +585,22 @@ class MaintenanceManager:
         self.hours = hours
 
     # --- host commands -------------------------------------------------
+    def _token_env(self):
+        """With a token file, git and gh both use that token (gh is git's credential helper); without one they
+        keep using whatever the PC is already signed in with."""
+        token = read_github_token(self.token_file) if self.token_file else ''
+        if not token:
+            return {}
+        return {'GH_TOKEN': token, 'GITHUB_TOKEN': token, 'GIT_CONFIG_COUNT': '2',
+                'GIT_CONFIG_KEY_0': 'credential.helper', 'GIT_CONFIG_VALUE_0': '',
+                'GIT_CONFIG_KEY_1': 'credential.helper', 'GIT_CONFIG_VALUE_1': '!gh auth git-credential'}
+
     def _run(self, argv, cwd=None, timeout=180, allow_fail=False):
         env = None
         if argv and str(argv[0]) == 'git':
-            env = _host_env({'GIT_TERMINAL_PROMPT': '0', 'GCM_INTERACTIVE': 'never'})
+            env = _host_env({'GIT_TERMINAL_PROMPT': '0', 'GCM_INTERACTIVE': 'never', **self._token_env()})
         elif argv and str(argv[0]) == 'gh':
-            env = _host_env({'GH_PROMPT_DISABLED': '1', 'GH_NO_UPDATE_NOTIFIER': '1'})
+            env = _host_env({'GH_PROMPT_DISABLED': '1', 'GH_NO_UPDATE_NOTIFIER': '1', **self._token_env()})
         def cancelled():
             if self.stopped():
                 return True
@@ -881,6 +910,9 @@ class MaintenanceManager:
             return 'maintenance begin needs title and goal', '被拒绝'
         title, goal = _short(title, MAX_TITLE), _short(goal, MAX_GOAL)
         running = self._verify_repo()
+        problem = self._github_ready()
+        if problem:
+            return problem, '被拒绝'
         base, warning = self._sync_main()
         try:
             ticket = int(args.get('ticket') or self._next_ticket(base))
@@ -910,6 +942,16 @@ class MaintenanceManager:
                 f'基于 main {base[:8]}。正式运行版本 {running[:8]}。{warning}\n'
                 '下一步：先读 worktree 的 AGENTS.md、STATUS.md、HANDOFF.md，再用 workbench 并带上 task_id '
                 '完成代码修改和测试，然后 action=deliver。'), '成功'
+
+    def _github_ready(self):
+        """One clear sentence for Lan when gh or the token is missing, before any worktree or card exists."""
+        code, _out, err = self._run(['gh', 'auth', 'status'], cwd=self.repo, timeout=30, allow_fail=True)
+        if code == 0:
+            return ''
+        shown = str(self.token_file) if self.token_file else 'the secrets folder'
+        return ('GitHub is not ready: ' + _short(err or 'gh is not signed in', 200) + ' Tell Lan: install GitHub CLI '
+                '(winget install GitHub.cli) and save a fine-grained token for ' + self.github_repo +
+                f' (Contents and Pull requests: read and write) into {shown} by running github-token.cmd.')
 
     def _task(self, args, *, require_id=False):
         task_id = str(args.get('task_id') or '')
@@ -952,6 +994,11 @@ class MaintenanceManager:
             f"acceptance={acceptance['status']} {'(waived)' if acceptance.get('waived') else ''}",
             f"age_hours={age:.1f} next={task['next_step']}",
         ]
+        if Path(task['worktree']).exists() and task['stage'] not in {'merged', 'done'}:
+            # The workbench container only shows a synthetic snapshot; this is the real worktree on the host.
+            changes = self._git('status', '--porcelain', cwd=task['worktree'], allow_fail=True).splitlines()
+            lines.append('worktree_changes=' + (', '.join(c.strip() for c in changes[:12]) or 'none') +
+                         (f' (+{len(changes) - 12} more)' if len(changes) > 12 else ''))
         if age >= 1:
             lines.append('time_check: over one hour; report the state and blockers to Lan.')
         if task['blockers']:
@@ -1022,8 +1069,10 @@ class MaintenanceManager:
         task = self._task(args, require_id=True)
         if task['stage'] in {'stopped', 'merged', 'done'}:
             return f"task is {task['stage']}; it cannot be delivered again", '被拒绝'
-        if task['development'].get('state') in {'出错', '被拒绝'}:
-            return 'the last workbench run did not succeed; resolve its result before delivery', '被拒绝'
+        # The last workbench run does not gate delivery: its tests can fail for the container's own reasons
+        # (missing dependencies, the per-run budget). The PR's CI is the judge, and merging requires it green.
+        development = task['development']
+        tests_red = development.get('state') in {'出错', '被拒绝'}
         if self._expired(task):
             return 'maintenance task exceeded its time limit; ask Lan for a fresh task', '被拒绝'
         if task['pull_request'].get('number') and not self._git(
@@ -1064,6 +1113,9 @@ class MaintenanceManager:
         task['git']['files'] = changed
         verification = _short(str(args.get('verification') or
                                   'The development workbench ran local checks; the PR CI is the external evidence.'), 1500)
+        if tests_red:
+            verification += ('\n\n本地容器里最后一次工作台运行没有成功（常见原因是容器缺依赖或超出单次预算，不一定是这次改动），'
+                             '以 PR 的 CI 结果为准。')
         body = (f"## 工单\n\n{task['goal']}\n\n## 改动\n\n```\n{diff[-3000:]}\n```\n\n"
                 f"## 验证\n\n{verification}\n\n## 验收\n\n")
         body += ('Lan 已在独立测试实例中验收通过。\n' if task['acceptance']['status'] == 'passed'
