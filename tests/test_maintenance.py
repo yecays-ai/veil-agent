@@ -209,6 +209,17 @@ class MaintenanceTests(unittest.TestCase):
         self.assertFalse(any(token in ' '.join(call) for call in self.gh.calls))
         self.assertNotIn(token, json.dumps(self.manager.store.load(task['task_id'])))
 
+    def test_red_local_tests_do_not_block_a_docs_only_delivery(self):
+        task = self.begin()
+        self.develop(task, 'docs/note.md', 'one line\n')
+        self.manager._record_workbench(task['task_id'], cost=0, steps=1, state='出错', reason='limit_or_failure')
+        text, state = self.manager.invoke('deliver', {'task_id': task['task_id']})
+        self.assertEqual(state, '被拒绝', text)
+        self.manager._record_workbench(task['task_id'], cost=0, steps=1, state='出错', reason='test_failed')
+        text, state = self.manager.invoke('deliver', {'task_id': task['task_id']})
+        self.assertEqual(state, '成功', text)
+        self.assertTrue(self.gh.pr_created)
+
     def test_malformed_token_file_is_ignored(self):
         token_file = self.root / 'github-token.txt'
         token_file.write_text('not a token', encoding='utf-8')
