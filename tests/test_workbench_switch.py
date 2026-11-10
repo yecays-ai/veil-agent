@@ -22,3 +22,18 @@ class ImageReadyTests(unittest.TestCase):
         self.assertFalse(workbench_switch.image_ready())
         run.return_value = SimpleNamespace(returncode=0, stdout='1/1\n')
         self.assertTrue(workbench_switch.image_ready())
+
+
+class WebHostTests(unittest.TestCase):
+    def test_hosts_can_be_added_removed_and_survive_a_save(self):
+        import tempfile
+        state = workbench_switch.load_state(tempfile.gettempdir() + '/none-here')
+        self.assertEqual(workbench_switch.add_host(state, 'https://GitHub.com/a/b?x=1'), (True, '已加入：github.com'))
+        self.assertFalse(workbench_switch.add_host(state, 'github.com')[0])
+        self.assertFalse(workbench_switch.add_host(state, 'not a host')[0])
+        self.assertFalse(workbench_switch.add_host(state, 'localhost')[0])
+        with tempfile.TemporaryDirectory() as directory:
+            workbench_switch.save_state(state, directory)
+            self.assertEqual(workbench_switch.load_state(directory)['web_hosts'], ['github.com'])
+            self.assertTrue(workbench_switch.remove_host(state, 'github.com'))
+            self.assertFalse(workbench_switch.remove_host(state, 'github.com'))
