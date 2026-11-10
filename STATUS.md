@@ -32,3 +32,11 @@ Peter 今天能稳定操作 Windows 软件（主聊天桌面动作）；工作�
 2. 对已有内容的文档，确认 Peter 只在新标签或新文档输入，不保存；保存、覆盖仍弹审批。
 3. 让 Peter 查资料、读两个网页，期间正常打字、动鼠标：不弹浏览器窗口，也不中途报错停下。
 4. 对 Peter 说“帮我查一下今天有什么科技新闻，读两个网页告诉我”：能搜到并读到网页；`/cost` 今天按模型里出现 `deepseek-search`，一次约 ¥0.005。
+
+<!-- maintenance:337:start -->
+## 工单 337（待检查）
+- 目标：Lan can open a new docs/ note in the veil-agent repo that states one small, useful rule borrowed from sindresorhus/slash's path normalization: guard the Windows path normalization by the exact extended-length prefix, and leave everything else untouched.
+- 分支：`ticket/337-docs-add-path-normalization-guard-note-t`，使用独立 worktree；正式运行目录未改动。
+- 状态：delivering；Commit and push the development branch, then create or update the PR.
+- PR：尚未创建；验收：not_yet。
+<!-- maintenance:337:end -->

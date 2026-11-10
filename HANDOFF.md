@@ -62,3 +62,11 @@
 - 工单 320 的三个缺口见 `STATUS.md`。
 - 审计的“成果保存与安全续接”（工单三）未开始。
 - 工单 318/319 无 Lan 真实体验证据。
+
+<!-- maintenance:337:start -->
+## 工单 337（待检查）
+- 目标：Lan can open a new docs/ note in the veil-agent repo that states one small, useful rule borrowed from sindresorhus/slash's path normalization: guard the Windows path normalization by the exact extended-length prefix, and leave everything else untouched.
+- 分支：`ticket/337-docs-add-path-normalization-guard-note-t`，使用独立 worktree；正式运行目录未改动。
+- 状态：delivering；Commit and push the development branch, then create or update the PR.
+- PR：尚未创建；验收：not_yet。
+<!-- maintenance:337:end -->
