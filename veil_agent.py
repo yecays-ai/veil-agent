@@ -1982,6 +1982,8 @@ class Chat:
             managed_env['nowhere'] = service_environment(store.root / cfg.id / 'nowhere')
         self.mcp_services = MCPServices(store.root / cfg.id / 'mcp-services.json', integrations,
                                         initial_services=initial_services, managed_env=managed_env)
+        if (cfg.tools or {}).get('enabled', True):
+            self.mcp_services.start_healing()  # ticket 343: dropped MCP services are retried without anyone clicking
         if filesystem_tools:
             if getattr(filesystem_tools, 'github_tools', None):
                 self.mcp_services.register_adapter('github', filesystem_tools.github_tools)
@@ -2133,6 +2135,9 @@ class Chat:
         from life_records import LIFE_TOOL
         thought = [THOUGHT_TOOL] if history else []
         mcp_tools = self.mcp_services.schemas() if (self.cfg.tools or {}).get('enabled', True) else []
+        if mcp_tools or (self.cfg.tools or {}).get('enabled', True) and self.mcp_services.has_stateful_services() is True:
+            from mcp_services import STATUS_TOOL_SCHEMA
+            mcp_tools = [*mcp_tools, STATUS_TOOL_SCHEMA]
         schemas = [*existing_tools, *task_tools, *messaging, *history, *wake_tools, *profile, *thought, *([{'type': 'function', 'function': {'name': LIFE_TOOL.name, 'description': LIFE_TOOL.description, 'parameters': LIFE_TOOL.inputSchema}}] if self.cfg.id == 'peter' and self.task_tools_enabled and (self.cfg.tools or {}).get('enabled', True) else []),
                    *mcp_tools]
         models = getattr(self.cfg, 'models', None)
@@ -2181,7 +2186,7 @@ class Chat:
             'send_message', 'recall_message', 'card_action', 'stay_silent', 'reply_later', 'screen_pop',
             'capability_history', 'autonomy_history', 'search_chat_history', 'profile_append', 'profile_replace',
             'thought', 'life_record', 'long_task_status', 'long_task_update', 'set_next_wake', 'set_wake_rhythm',
-            'expand_capability', 'stickers', 'maintenance',
+            'expand_capability', 'stickers', 'maintenance', 'mcp_status',
             'delegate',
         })
         schemas, self.active_tool_aliases = alias_tool_schemas(
@@ -3631,6 +3636,9 @@ class Chat:
         if isinstance(self.pending_capability_event_model, str) and self.pending_capability_event_model and not autonomy:
             runtime_required.append({'role': 'system', 'content':
                 'Program-generated capability update: ' + self.pending_capability_event_model})
+        mcp_problem = self.mcp_services.problem_note() if (self.cfg.tools or {}).get('enabled', True) else None
+        if isinstance(mcp_problem, str) and mcp_problem:  # ticket 343: only while an MCP service is down or just recovered
+            runtime_required.append({'role': 'system', 'content': mcp_problem})
         if reply_later_batch and extra_context:
             runtime_required.append({'role': 'system', 'content': extra_context})
         runtime_required.append({'role': 'system', 'content': changing})
@@ -3874,6 +3882,8 @@ class Chat:
                 summary = 'recall_message'
             elif call.function.name == 'expand_capability':
                 result, state, summary = self.expand_capability(call.function.arguments)
+            elif call.function.name == 'mcp_status':
+                result, state, summary = self.mcp_services.status_tool(call.function.arguments)
             elif call.function.name == 'capability_history':
                 result = self.capability_history_record or 'No capability changes are recorded yet.'
                 state, summary = '成功', 'capability_history'
