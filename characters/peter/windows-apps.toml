@@ -24,12 +24,3 @@ process_paths = [
 ]
 actions = []
 public_web = true
-
-# FastOrange (the VPN, "快橙"): a ClickOnce app, so its folder changes on every update and Peter cannot start it
-# himself; it must already be running. He can read its window and press the connect/disconnect button.
-[applications.fastorange]
-label = "FastOrange"
-process_paths = [
-  "%LocalAppData%\\Apps\\2.0\\*\\*\\fast*\\FastOrange.exe",
-]
-actions = ["activate", "restore", "invoke"]

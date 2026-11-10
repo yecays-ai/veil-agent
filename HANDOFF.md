@@ -4,7 +4,7 @@
 
 - 依据：Lan 要求把分散在 14 处的权限统一、删重复实现；审计 `peter-execution-permission-audit-2026-11-09.md` 里的删除项 #336 之后基本未做（主程序 37,265 行，与审计当日 37,309 行相比几乎没变）。
 - 本步删除：工作台桌面网关 `WindowsWorkbenchGateway`（#325 以后无调用者）及 `executor_opencode` 里的 `windows_gateway`/`desktop_gateway`、`veil_windows` MCP 配置、`VEIL_WINDOWS_PORT` 放行规则、`desktop_stopped` 原因，对应测试。主聊天里"Lan 碰电脑 Peter 让位"和浏览器 `show:true` 让位保持原样，未改。
-- 新增：`windows-apps.toml` 可登记不带 `launch_path` 的软件（只能操作已在运行的窗口，Peter 不能自己启动）；登记了 FastOrange（快橙，ClickOnce，路径带通配），动作 `activate`/`restore`/`invoke`，用于"看梯子断没断、点连接"。未在真机验证。
+- 新增：白名单由 Lan 自己选。`windows_list` 里没登记但已打开的软件会带一个 `app_id` 和 `needs_lan_approval`；Peter 用它调 `windows_manage`/`windows_control_action` 时弹一张卡「同意后会记住」，选 y 就写进 `data/peter/<角色>/windows-approved-apps.json`（不动被 git 跟踪的 `windows-apps.toml`，更新不冲突；删掉某一项即撤销）。ClickOnce 软件（如 FastOrange）按 `Apps\2.0\*\<exe名>` 通配识别，不需要启动路径，Peter 不能自己启动它。授权后的动作：activate/minimize/restore/invoke/select/toggle/expand/collapse（不含 set_text）。仍然硬拦：命令行、安装程序、浏览器、凭据类程序（沿用 `is_blocked_window_exe` 与不可信路径规则）。未在真机验证。
 - 全量测试：1362 个，失败项与改动前完全相同（16 失败 15 错误，均为云端沙盒环境原因）。
 - 未做（等 Lan/GPT 审计方案或测试副本验收）：工具说明瘦身（Lan 已叫停）、权限合成一张表、浏览器/桌面换成 Playwright MCP/Windows-MCP、统一停止与日志、步数上限合并、Docker 常驻。
 

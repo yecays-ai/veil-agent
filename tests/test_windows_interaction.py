@@ -1535,5 +1535,56 @@ class OptionalLaunchPathTests(unittest.TestCase):
         with self.assertRaises(ObservationError):
             WindowsInteractionBackend().start_application(apps['fastorange'], lambda: False, None, None)
 
+
+class ApprovedAppCardTests(unittest.TestCase):
+    PATH = 'c:\\users\\x\\appdata\\local\\apps\\2.0\\ab\\cd\\ef\\fast..tion_1\\fastorange.exe'
+    WID = 'w-' + '4' * 24
+
+    def make(self, directory, answers):
+        backend = FakeInteractionBackend(FakeInputMonitor())
+        backend.windows.append({'id': self.WID, 'handle': 101, 'pid': 201, 'created': 301,
+                                'process_path': self.PATH, 'process': 'fastorange.exe', 'app': 'FastOrange',
+                                'title': '', 'state': 'visible', 'foreground': False})
+        applications = validate_applications({'notepad': {
+            'label': 'Notepad', 'launch_path': NOTEPAD_PATH, 'process_paths': [NOTEPAD_PATH], 'actions': ['activate']}})
+        tools = WindowsInteractionTools(True, applications, backend=backend, platform_enabled=True,
+                                        input_monitor=FakeInputMonitor(),
+                                        approved_apps_path=Path(directory) / 'approved.json')
+        asked = []
+        def approval(prompt):
+            asked.append(prompt)
+            return answers.pop(0)
+        return tools, backend, approval, asked
+
+    def test_unlisted_open_app_asks_once_then_is_remembered_across_restarts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tools, _backend, approval, asked = self.make(directory, ['y'])
+            window = tools.backend.list_windows(None)[1]
+            self.assertEqual(tools.candidate_for_window(window)['app_id'], 'fastorange')
+            self.assertEqual(tools.candidate_for_window(window)['pattern'],
+                             'c:\\users\\x\\appdata\\local\\apps\\2.0\\*\\fastorange.exe')
+            args = {'app_id': 'fastorange', 'window_id': self.WID, 'action': 'activate'}
+            _result, state, _ = tools.invoke('windows_manage', args, approval)
+            self.assertEqual(state, '成功')
+            self.assertEqual(len(asked), 1)
+            self.assertIn('fastorange', (Path(directory) / 'approved.json').read_text(encoding='utf-8'))
+            _result, state, _ = tools.invoke('windows_manage', args, approval)
+            self.assertEqual(len(asked), 1, 'approved apps must not ask again')
+            again, _b, approval2, asked2 = self.make(directory, [])
+            self.assertIn('fastorange', again.applications)
+            _result, state, _ = again.invoke('windows_manage', args, approval2)
+            self.assertEqual((state, asked2), ('成功', []))
+
+    def test_declining_stores_nothing_and_blocked_apps_are_never_offered(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tools, backend, approval, asked = self.make(directory, ['n'])
+            args = {'app_id': 'fastorange', 'window_id': self.WID, 'action': 'activate'}
+            _result, state, _ = tools.invoke('windows_manage', args, approval)
+            self.assertEqual(state, '被拒绝')
+            self.assertFalse((Path(directory) / 'approved.json').exists())
+            backend.windows[1]['process_path'] = 'c:\\windows\\system32\\cmd.exe'
+            self.assertIsNone(tools.candidate_for_window(backend.windows[1]))
+
+
 if __name__ == '__main__':
     unittest.main()

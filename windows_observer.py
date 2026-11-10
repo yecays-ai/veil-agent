@@ -268,6 +268,7 @@ class WindowsObservationTools:
         self.platform_enabled = (os.name == 'nt') if platform_enabled is None else bool(platform_enabled)
         self.backend = backend or WindowsDesktopBackend()
         self.application_id_for = application_id_for
+        self.candidate_for_window = None
         self.max_result_bytes = max(512, min(int(max_result_bytes), MAX_RESULT_BYTES))
         self.timeout_seconds = max(1, min(int(timeout_seconds), OBSERVATION_TIMEOUT_SECONDS))
         self.lock_wait_seconds = min(DESKTOP_LOCK_WAIT_SECONDS, self.timeout_seconds / 2)
@@ -416,6 +417,15 @@ class WindowsObservationTools:
                     app_id = None
                 if app_id:
                     row['app_id'] = _text(app_id, 40)
+                elif self.candidate_for_window:
+                    try:
+                        candidate = self.candidate_for_window(item)
+                    except Exception:
+                        candidate = None
+                    if candidate:
+                        # Not allowlisted yet: using this app_id makes VEIL ask Lan once and remember her answer.
+                        row['app_id'] = _text(candidate['app_id'], 40)
+                        row['needs_lan_approval'] = True
                 rows.append(row)
             result = {
                 'windows': rows,

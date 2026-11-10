@@ -363,8 +363,8 @@ def validate_applications(applications):
         label, launch_path = item.get('label'), item.get('launch_path')
         if not isinstance(label, str) or not label.strip() or len(label) > 100:
             raise ValueError(f'{app_id} needs a short display label.')
-        # No launch_path: an app Peter works with but cannot start himself (e.g. a ClickOnce app whose folder
-        # changes on every update); it must already be running.
+        # No launch_path: an app Peter works with but cannot start himself (a ClickOnce app, or one Lan approved
+        # from a card); it must already be running.
         launch = None
         if launch_path is not None:
             launch = _expand_windows_path(launch_path)
@@ -1004,12 +1004,14 @@ class WindowsInteractionTools:
     def __init__(self, enabled, applications, *, max_result_bytes=8192, backend=None,
                  platform_enabled=None, idle_seconds=3, timeout_seconds=8,
                  input_monitor=None, discovery=None, desktop_icons_manager=None,
-                 desktop_icons_backend=None, store=None, character_id=None, lab=None):
+                 desktop_icons_backend=None, store=None, character_id=None, lab=None, approved_apps_path=None):
         self.enabled = enabled is True
         self.platform_enabled = (os.name == 'nt') if platform_enabled is None else bool(platform_enabled)
         self.applications = applications or {}
         self.discovery = discovery or WindowsAppDiscovery()
         self.discovered_applications = {}
+        self.approved_apps_path = Path(approved_apps_path) if approved_apps_path else None
+        self._load_approved_apps()
         self.backend = backend or WindowsInteractionBackend()
         self.max_result_bytes = max(512, min(int(max_result_bytes), MAX_RESULT_BYTES))
         self.idle_seconds = max(1, min(int(idle_seconds), 30))
@@ -1034,6 +1036,86 @@ class WindowsInteractionTools:
 
         self.tools = (list(WINDOWS_INTERACTION_TOOL_SCHEMAS)
                       if self.enabled and self.platform_enabled else [])
+
+    # Apps Lan approved from a card ("always"): stored in a data file (not the tracked windows-apps.toml) so an
+    # update never conflicts. Remove an entry from that file to revoke it.
+    APPROVED_ACTIONS = ['activate', 'minimize', 'restore', 'invoke', 'select', 'toggle', 'expand', 'collapse']
+
+    def _load_approved_apps(self):
+        path = self.approved_apps_path
+        if path is None or not path.is_file():
+            return
+        try:
+            rows = json.loads(path.read_text(encoding='utf-8'))
+            loaded = validate_applications({
+                app_id: {'label': row['label'], 'process_paths': row['process_paths'], 'actions': self.APPROVED_ACTIONS}
+                for app_id, row in rows.items()})
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
+            return
+        for app_id, app in loaded.items():
+            self.applications.setdefault(app_id, app)
+
+    def _save_approved_app(self, app_id, label, pattern):
+        path = self.approved_apps_path
+        if path is None:
+            return
+        try:
+            rows = json.loads(path.read_text(encoding='utf-8')) if path.is_file() else {}
+        except (OSError, ValueError):
+            rows = {}
+        rows[app_id] = {'label': label, 'process_paths': [pattern]}
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix('.tmp')
+        tmp.write_text(json.dumps(rows, ensure_ascii=False, indent=1), encoding='utf-8')
+        os.replace(tmp, path)
+
+    def candidate_for_window(self, window):
+        """An open window whose app is not allowlisted yet but could be, after Lan approves it: id, label, path pattern."""
+        path = str(window.get('process_path', '') or '')
+        if not path or self.application_id_for(window):
+            return None
+        normalized = ntpath.normcase(ntpath.normpath(path))
+        if is_blocked_window_exe(normalized) or UNTRUSTED_PATH_PATTERN.search(normalized):
+            return None
+        exe = ntpath.basename(normalized)
+        stem = re.sub(r'[^a-z0-9_-]', '', ntpath.splitext(exe)[0].casefold())[:31]
+        if not _APP_ID.fullmatch(stem) or stem in self.applications or stem in self.discovered_applications:
+            return None
+        pattern = path
+        # ClickOnce apps live under Apps\2.0\<random>\<random>\<random>\ and change folder on every update.
+        match = re.fullmatch(r'(?i)(.*\\apps\\2\.0\\)(?:[^\\]+\\)+([^\\]+\.exe)', path)
+        if match:
+            pattern = match.group(1) + '*\\' + match.group(2)
+        label = str(window.get('app') or window.get('process') or stem)[:60]
+        return {'app_id': stem, 'label': label, 'pattern': pattern}
+
+    def _ensure_approved(self, app_id, window_id, approval, stopped, summary):
+        """If app_id names an open, not yet allowlisted window, ask Lan once; "y" stores it. Returns a refusal or None."""
+        if self.get_app(app_id) or not self._valid_window_id(window_id):
+            return None
+        selected = next((item for item in self.backend.list_windows(stopped) if item.get('id') == window_id), None)
+        candidate = self.candidate_for_window(selected) if selected else None
+        if candidate is None or candidate['app_id'] != app_id:
+            return None
+        if approval is None:
+            return WindowsToolResult('This app is not on the allowlist and no approval can be asked here.',
+                                     activity_detail=f'{summary} 软件未获批准。'), '被拒绝'
+        try:
+            answer = approval(f'Peter 想操作「{candidate["label"]}」（{candidate["pattern"]}）。'
+                              '同意后会记住，以后不再问。同意吗？y/N ')
+        except Exception:
+            return WindowsToolResult('VEIL could not collect approval; the window was not changed.',
+                                     activity_detail=f'{summary} 无法取得 Lan 批准；未操作。'), '被拒绝'
+        if answer == NOT_ASKED:
+            return WindowsToolResult(NOT_ASKED_TEXT + ' The window was not changed.',
+                                     activity_detail=f'{summary} 自主活动时不询问 Lan；未操作。'), '被拒绝'
+        if str(answer or '').strip().casefold() != 'y':
+            return WindowsToolResult('Lan did not approve this app; nothing was done.',
+                                     activity_detail=f'{summary} Lan 未批准该软件；未操作。'), '被拒绝'
+        self.applications.update(validate_applications({app_id: {
+            'label': candidate['label'], 'process_paths': [candidate['pattern']], 'actions': self.APPROVED_ACTIONS}}))
+        self._save_approved_app(app_id, candidate['label'], candidate['pattern'])
+        return None
 
     def get_app(self, app_id):
         if not app_id:
@@ -1456,6 +1538,9 @@ class WindowsInteractionTools:
                     or args.get('action') not in ('activate', 'minimize', 'restore')):
                 return WindowsToolResult('Use an allowlisted app_id, exact window_id, and activate/minimize/restore action.',
                                          activity_detail='参数无效。'), '被拒绝'
+            refusal = self._ensure_approved(args['app_id'], args['window_id'], approval, should_stop or (lambda: False), summary)
+            if refusal is not None:
+                return refusal
             app = self.get_app(args['app_id'])
             if app is None or args['action'] not in app['actions']:
                 return WindowsToolResult('This app or window action is not authorized by the program allowlist.',
@@ -1496,6 +1581,9 @@ class WindowsInteractionTools:
                                              activity_detail='文本输入参数无效。'), '被拒绝'
             elif 'text' in args:
                 return WindowsToolResult('text is accepted only for set_text.', activity_detail='参数无效。'), '被拒绝'
+            refusal = self._ensure_approved(args['app_id'], args['window_id'], approval, should_stop or (lambda: False), summary)
+            if refusal is not None:
+                return refusal
             app = self.get_app(args['app_id'])
             if app is None or action not in app['actions']:
                 return WindowsToolResult('This app or UIA action is not authorized by the program allowlist.',
