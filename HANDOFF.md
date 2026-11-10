@@ -7,6 +7,20 @@
 - 删除：浏览器自己的 20 步和 5 分钟上限（主聊天的步数和预算已经限制了调用次数），连同 `begin_request`；工作台的 30 步上限（`max_steps`），代理 key 的请求数改为固定的防失控值 600。工作台仍保留费用上限（唯一的硬限）、10 分钟看门狗（免费模型不会触发费用上限）和同一调用重复上限。
 - 没动：主聊天的 `tools.max_steps`、自主醒来的 60 步/¥0.25/15 分钟、桌面动作 8 秒、「Lan 碰电脑 Peter 让位」。
 - 未做：浏览器换 Playwright MCP、桌面换 Windows-MCP（要在测试副本对着真实场景新旧对比）。
+## 工单 340（2026-11-10）：Peter 申请加预算
+
+- 设计：不新建预算或审批系统。`Budget` 加 `raise_today`/`daily_limit`/`monthly_limit`/`headroom`（当天有效、只在内存，重启回到配置值），四处上限检查改读有效上限；`workbench` 新参数 `budget_cny` 走 `Chat._approve_run_budget`，用现有 `self.approval` 卡（网页、QQ 都能批）。
+- 选择：加价只管这一次任务（单次上限）；日/月上限只在装不下时按差额提高且只限当天；自主活动不弹卡（和现有“自主不问人”一致）。
+- 未做：聊天本身把当天额度用光时没有申请入口（那时模型已发不出请求），仍是 #341 的一句提示。
+- 未验证：测试副本真机弹卡与 QQ 收卡。
+
+## 工单 339（2026-11-10）：自主上下文超限与预算耗尽崩溃
+
+- 现象：19:52 自主活动 ¥0 失败，提示"自主活动上下文超过安全限制"。`autonomy.py` 的 `MAX_CONTEXT_BYTES` 原为 12KB，只会依次删更早活动、生活记录、实验室、旅行，上一次活动（19:28 记了 60 个成功工具，约 6.5KB）和长任务状态不裁，最后直接 `raise UserError`。
+- 改动：上限 32KB；上一次活动 `successful_tools` 只带最近 10 个并加 `successful_tool_count`，`unconfirmed_tools` 最多 12 个；仍超限时依次去掉 thoughts、把上一次活动换成"用 autonomy_history 读取"，不再报错。`recent_activity_context`（聊天侧，1500 字节）超长时丢弃工具列表而不是报错。
+- 预算耗尽：`run_chat` 普通发送分支补 `except BudgetExceeded`（提示后继续循环），`Chat.send` 的清理分支同样处理，避免异常冒出去关掉服务。
+- 验证：`tests/test_autonomy.py`、`tests/test_chat.py` 新增用例通过；其余 4 个 `test_autonomy` 旧错误在改动前就存在（本环境缺 Windows 依赖），不是本次引入。
+- 未验证：Lan 电脑上下一次自主活动和预算耗尽场景的真机表现。
 
 ## 工单 338（2026-11-10）：统一权限与删重复，第一步
 

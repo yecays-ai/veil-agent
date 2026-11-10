@@ -448,6 +448,16 @@ output_cny_per_million = "8"
         self.assertEqual(self.chat.send.call_count, 1)
         self.assertTrue(any('还没有可用的聊天模型' in str(item) for item in outputs))
 
+    def test_budget_exceeded_keeps_run_chat_alive_and_allows_next_message(self):
+        from agent_types import BudgetExceeded
+        outputs = []
+        self.chat.send = Mock(side_effect=[BudgetExceeded('本次费用上限会超过 ¥10/天，未发送。'), 'ok again'])
+        self.chat.apply_pending_recall = Mock()
+        self.chat.reply_displayed = True
+        run_chat(self.chat, Mock(side_effect=['first request', 'second request', '/quit']), outputs.append)
+        self.assertEqual(self.chat.send.call_count, 2)
+        self.assertTrue(any('未发送' in str(item) for item in outputs))
+
     def test_request_not_sent_marks_processing_failed_and_reloads_history(self):
         self.chat.model = Mock(side_effect=RequestNotSent('本机 .env 缺少所选接口的 API Key。'))
         with self.assertRaises(RequestNotSent):

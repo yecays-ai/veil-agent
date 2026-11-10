@@ -13,8 +13,9 @@ from agent_types import BudgetExceeded, RequestFailed, TooLong, UserError, now, 
 
 
 MAX_RUNTIME_SECONDS = 15 * 60
-MAX_CONTEXT_BYTES = 12 * 1024
+MAX_CONTEXT_BYTES = 32 * 1024
 MAX_CHAT_CONTEXT_BYTES = 1500
+WAKE_PREVIOUS_TOOL_LIMIT = 10   # last activity's tool list in the next wake prompt; a 60-tool wake must not crowd it out
 MAX_ALARM_DAYS = 7
 MAX_ALARM_REASON_CHARS = 300
 ALARM_STATES = {'pending', 'consumed', 'missed', 'cancelled'}
@@ -84,8 +85,8 @@ def _activity_summary(row):
     status_labels = {'成功': 'succeeded', '被拒绝': 'rejected', '出错': 'failed',
                      '已存在': 'already exists', '结果过长': 'result too long'}
     actions_to_show = list(row['tools'][:2])
-    actions_to_show.extend(item for item in row['tools'][2:]
-                           if isinstance(item, dict) and item.get('state') == '结果未确认')
+    actions_to_show.extend([item for item in row['tools'][2:]
+                            if isinstance(item, dict) and item.get('state') == '结果未确认'][:6])
     for item in actions_to_show:
         if not isinstance(item, dict) or not all(isinstance(item.get(key), str)
                                                  for key in ('tool', 'path', 'state')):
@@ -120,7 +121,12 @@ def recent_activity_context(store, cfg):
     started_at = rows[-1]['started_at']
     encoded = json.dumps(summary, ensure_ascii=False, separators=(',', ':'))
     if len(encoded.encode('utf-8')) > MAX_CHAT_CONTEXT_BYTES:
-        raise UserError('自主活动摘要超出聊天上下文限制，已停止；请保留 data 文件夹。')
+        # Never fail the chat over a long record: keep the first actions, then drop them.
+        for keep in (2, 0):
+            summary['tool_actions'] = summary['tool_actions'][:keep]
+            encoded = json.dumps(summary, ensure_ascii=False, separators=(',', ':'))
+            if len(encoded.encode('utf-8')) <= MAX_CHAT_CONTEXT_BYTES:
+                break
     context = (
         f'System record | Last autonomous activity | Occurred at: {summary["started_at"]}\n'
         f'This is the most recent completed autonomous activity record supplied by the program for {cfg.name}. '
@@ -876,9 +882,11 @@ class AutonomyController:
                     'current_focus': previous.get('current_focus'), 'next_step': previous.get('next_step'),
                     'result': previous.get('result'), 'result_reason': previous.get('result_reason'),
                     'successful_tools': [{**item, 'state': 'succeeded'} for item in previous.get('tools', [])
-                                         if item.get('state') == '成功'],
+                                         if item.get('state') == '成功'][-WAKE_PREVIOUS_TOOL_LIMIT:],
+                    'successful_tool_count': sum(1 for item in previous.get('tools', [])
+                                                 if item.get('state') == '成功'),
                     'unconfirmed_tools': [item for item in previous.get('tools', [])
-                                          if item.get('state') == '结果未确认'],
+                                          if item.get('state') == '结果未确认'][:12],
                     'saved_files': previous.get('lab_files_changed', [])},
                     ensure_ascii=False))
         earlier_text = ''
@@ -976,8 +984,12 @@ class AutonomyController:
                 'Recent lab output: use the available read-only tools to inspect it as needed while preserving task and prior activity context.')
             if len(text.encode('utf-8')) > MAX_CONTEXT_BYTES and travel_option:
                 text = text.replace(travel_option, '')
-            if len(text.encode('utf-8')) > MAX_CONTEXT_BYTES:
-                raise UserError('自主活动上下文超过安全限制，已停止；任务与活动记录仍保存在 data 文件夹。')
+            if len(text.encode('utf-8')) > MAX_CONTEXT_BYTES and thought_text:
+                text = text.replace(thought_text, '')
+            if len(text.encode('utf-8')) > MAX_CONTEXT_BYTES and previous_text:
+                # Last resort: the earlier activity is still readable through autonomy_history.
+                text = text.replace(previous_text,
+                                    'Last autonomous activity: use autonomy_history to read it.')
         return text
 
     def _missed_alarm_text(self):

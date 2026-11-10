@@ -85,6 +85,10 @@ TOOL_SCHEMA = {'type': 'function', 'function': {
         'project': {'type': 'string', 'maxLength': 200,
                     'description': 'Optional project name when you know which existing project the job is about. '
                                    'The program finds it; nobody needs to give a path.'},
+        'budget_cny': {'type': 'number', 'exclusiveMinimum': 0,
+                       'description': 'Optional. Cost limit in yuan for this one job. Leave it out normally; the '
+                                      'default is enough for most jobs. For a clearly bigger job, ask for more: Lan '
+                                      'is asked to approve and the job does not run if she says no.'},
         'task_id': {'type': 'string', 'description': 'Optional VEIL maintenance task ID; works only in that task\'s '
                                                      'isolated worktree. The program checks it.'}},
         'required': ['task'], 'additionalProperties': False},
@@ -1291,7 +1295,8 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
                 if clock() - started > int(limits['max_seconds']):
                     stop = f'reached the {int(limits["max_seconds"]) // 60}-minute limit'
                 elif cost >= cap:
-                    stop = f'reached the cost limit (¥{cap})'
+                    stop = (f'reached the cost limit (¥{cap}); if the job is worth more, run it again with a higher '
+                            'budget_cny and Lan is asked to approve')
                 elif repeat > int(limits['repeat_limit']):
                     stop = f'the same call was repeated more than {limits["repeat_limit"]} times'
             if stop:
