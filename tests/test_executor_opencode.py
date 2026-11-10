@@ -409,6 +409,9 @@ class RunTests(unittest.TestCase):
         self.assertEqual(bash['*'], 'allow')
         for risky in ('git push *', 'pip *', 'npm install *', 'curl *', 'sudo *', 'rm -r *', 'git clean *'):
             self.assertEqual(bash[risky], 'ask', risky)
+        for spaced in ('git -* push', 'git -* push *', 'git -* clone *', 'git -* config --global *'):
+            self.assertEqual(bash[spaced], 'ask', spaced)
+        self.assertNotIn('git -* log *', bash)
         self.assertEqual(config['permission']['edit'], 'allow')
         self.assertTrue(config['experimental']['continue_loop_on_deny'])
         self.assertEqual(config['permission']['external_directory'], 'ask')
