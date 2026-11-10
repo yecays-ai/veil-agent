@@ -1107,9 +1107,6 @@ class FilesystemTools:
         xhs = getattr(self, 'xiaohongshu_tools', None)
         if xhs:
             xhs.begin_request()
-        browser = getattr(self, 'browser_tools', None)
-        if browser:
-            browser.begin_request()
         lab_preview = getattr(self, 'lab_preview', None)
         if lab_preview:
             lab_preview.begin_request()

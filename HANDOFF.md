@@ -1,5 +1,13 @@
 # HANDOFF
 
+## 工单 339（2026-11-10）：权限分类合成一张表；去掉重复的步数/时间上限
+
+- 依据：Lan 要求统一权限、合并上限（审计 4.1、4.2）。
+- 新增 `tool_access.py`：一张表记每个工具「长任务里只读（r）/有副作用（w）/委派调查可用（d）」。`long_tasks.READ_ONLY_TOOLS`、`SIDE_EFFECT_TOOLS` 和 `delegate_agent.READ_ONLY_TOOLS` 改为从它派生，内容与改前逐项相同（`tests/test_tool_access.py`）。它不决定允许/询问/拒绝，那仍在 `tools_agent.tool_policy` 和各工具里；`tool_policy` 的九种返回值同时是发给 Peter 的「当前能力」文字，没动。
+- 删除：浏览器自己的 20 步和 5 分钟上限（主聊天的步数和预算已经限制了调用次数），连同 `begin_request`；工作台的 30 步上限（`max_steps`），代理 key 的请求数改为固定的防失控值 600。工作台仍保留费用上限（唯一的硬限）、10 分钟看门狗（免费模型不会触发费用上限）和同一调用重复上限。
+- 没动：主聊天的 `tools.max_steps`、自主醒来的 60 步/¥0.25/15 分钟、桌面动作 8 秒、「Lan 碰电脑 Peter 让位」。
+- 未做：浏览器换 Playwright MCP、桌面换 Windows-MCP（要在测试副本对着真实场景新旧对比）。
+
 ## 工单 338（2026-11-10）：统一权限与删重复，第一步
 
 - 依据：Lan 要求把分散在 14 处的权限统一、删重复实现；审计 `peter-execution-permission-audit-2026-11-09.md` 里的删除项 #336 之后基本未做（主程序 37,265 行，与审计当日 37,309 行相比几乎没变）。

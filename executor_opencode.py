@@ -35,7 +35,9 @@ from windows_process import hidden_subprocess_kwargs
 
 TOOL_NAME = 'workbench'
 MILLION = Decimal(1_000_000)
-DEFAULT_LIMITS = {'max_steps': 30, 'max_seconds': 600, 'repeat_limit': 3, 'run_budget_cny': '0.5'}
+# The cost cap is the hard limit; the time and repeat limits only catch a stuck run (a free model never reaches the cost cap).
+DEFAULT_LIMITS = {'max_seconds': 600, 'repeat_limit': 3, 'run_budget_cny': '0.5'}
+PROXY_MAX_REQUESTS = 600  # runaway guard for the API key, not a task limit
 RESULT_CHARS = 4000
 _WINDOWS = os.name == 'nt'
 
@@ -1125,7 +1127,7 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
     price = (Decimal(str(provider.get('input_cny_per_million', 0))),
              Decimal(str(provider.get('output_cny_per_million', 0))))
     cap = Decimal(str(limits['run_budget_cny']))
-    proxy = (proxy_factory or KeyProxy)(provider['base_url'], key, max_requests=int(limits['max_steps']) * 3 + 5,
+    proxy = (proxy_factory or KeyProxy)(provider['base_url'], key, max_requests=PROXY_MAX_REQUESTS,
                                         **({'host': '0.0.0.0'} if container else {}))
     def allow_network(hosts):
         proxy.allow_hosts(hosts)
@@ -1286,9 +1288,7 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
             steps, calls, repeat, _text = summarize(messages)
             _tin, _tout, cost = estimate_cost(messages, price, steps)
             if not stop:
-                if steps >= int(limits['max_steps']):
-                    stop = f'reached the {limits["max_steps"]}-step limit'
-                elif clock() - started > int(limits['max_seconds']):
+                if clock() - started > int(limits['max_seconds']):
                     stop = f'reached the {int(limits["max_seconds"]) // 60}-minute limit'
                 elif cost >= cap:
                     stop = f'reached the cost limit (¥{cap})'

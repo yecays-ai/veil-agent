@@ -19,8 +19,6 @@ from web_tools import public_http_url
 from windows_interaction import DesktopInputMonitor
 
 BROWSER_TOOL_NAMES = frozenset({'browser'})
-MAX_STEPS = 20
-MAX_SECONDS = 300
 MAX_BYTES = 8192
 TEXT_BYTES = 4500
 MAX_MCP_REQUEST_BYTES = 64 * 1024
@@ -192,8 +190,6 @@ class BrowserTools:
         self.loop = None
         self.thread = None
         self.gate = threading.Lock()
-        self.steps = 0
-        self.deadline = 0
         self.links = {}
         self.controls = {}
         self.page = self.context = self.engine = self.runtime = self.proxy = None
@@ -201,11 +197,6 @@ class BrowserTools:
         self.launched_visible = None
         self.quarantined = False
         self.stopped = lambda: False
-
-    def begin_request(self):
-        # Chat/wake already enforces its model budget and total step count.
-        self.steps = 0
-        self.deadline = time.monotonic() + MAX_SECONDS
 
     def _start_loop(self):
         ready = threading.Event()
@@ -453,10 +444,6 @@ class BrowserTools:
                 raise ValueError('Search text must be at most 300 characters.')
             if action == 'scroll' and args['direction'] not in ('up', 'down'):
                 raise ValueError('direction must be up or down.')
-            if not self.deadline:
-                self.begin_request()
-            if action != 'close' and (self.steps >= MAX_STEPS or time.monotonic() >= self.deadline):
-                raise ValueError('Browser request step/time limit reached.')
             if action == 'close':
                 # Showing a page ends with its window; the next open is in the background again.
                 self.visible = False
@@ -466,11 +453,9 @@ class BrowserTools:
                 self.monitor.require_idle(3)
             def stopped():
                 return (bool(should_stop and should_stop())
-                        or (action != 'close' and time.monotonic() >= self.deadline)
                         or (human_priority and self.monitor.changed_since(snapshot)))
             if not self.loop:
                 self._start_loop()
-            self.steps += 1
             future = asyncio.run_coroutine_threadsafe(
                 asyncio.wait_for(self._operate(args, stopped), 22), self.loop)
             while True:
@@ -645,7 +630,6 @@ class BrowserWorkbenchGateway:
             self.thread = threading.Thread(target=self.server.serve_forever, daemon=True, name='veil-browser-mcp')
             self.thread.start()
             self.started = True
-            self.browser.begin_request()
             return self
         except Exception:
             self.__exit__(None, None, None)

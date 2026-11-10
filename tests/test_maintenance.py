@@ -659,7 +659,7 @@ output_cny_per_million = "8"
         provider = {**PROVIDER, 'base_url': f'http://127.0.0.1:{server.server_address[1]}/v1', 'model': 'fake'}
         cfg.provider.update(provider)
         cfg.executor = {'enabled': True, 'container_image': 'veil-workbench', 'command': '',
-                        'max_steps': 30, 'max_seconds': 90, 'repeat_limit': 3, 'run_budget_cny': '0.5'}
+                        'max_seconds': 90, 'repeat_limit': 3, 'run_budget_cny': '0.5'}
         store = Store(self.root / 'data')
         asked = []
         chat = Chat(cfg, store, Budget(store), Mock(), approval=lambda p: asked.append(p) or 'y',

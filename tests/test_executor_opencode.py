@@ -109,9 +109,9 @@ class BrowserGatewayConfigTests(unittest.TestCase):
             def stop(self):
                 events.append('stop')
         factory = lambda *_args: Gateway()
-        done = [assistant(text='done', tool=('read', {'file': 'x'}), finish='stop')]
-        result, _api, _costs, _kill = run([(done, [], False)] * 3,
-                                           limits={'max_steps': 1}, browser_gateway=factory)
+        over_budget = [assistant(tokens=(100000, 1000))]
+        result, _api, _costs, _kill = run([(over_budget, [], True)] * 3,
+                                           limits={'run_budget_cny': '0.0001'}, browser_gateway=factory)
         self.assertEqual(result.reason, 'limit_or_failure')
         self.assertEqual(events, ['enter', 'stop', 'close'])
 
@@ -529,7 +529,6 @@ class RunTests(unittest.TestCase):
     def test_each_hard_limit_aborts_and_kills(self):
         same = {'command': 'ls'}
         cases = [
-            ({'max_steps': 2}, [([assistant(tool=('bash', {'n': i})) for i in range(3)], [], True)], 'step'),
             ({'repeat_limit': 2}, [([assistant(tool=('bash', same)) for _ in range(3)], [], True)], 'repeated'),
             ({'run_budget_cny': '0.0001'}, [([assistant(tokens=(100000, 1000))], [], True)], 'cost limit'),
         ]

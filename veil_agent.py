@@ -1050,7 +1050,6 @@ def load_character(root, character_id):
                 raise ValueError('executor.enabled must be boolean')
             executor = {'enabled': executor.get('enabled', False),
                         'command': str(executor.get('command', '')),
-                        'max_steps': positive_int(executor.get('max_steps', 30)),
                         'max_seconds': positive_int(executor.get('max_seconds', 600)),
                         'repeat_limit': positive_int(executor.get('repeat_limit', 3)),
                         'run_budget_cny': str(price(executor.get('run_budget_cny', '0.5'))),
@@ -4063,7 +4062,7 @@ class Chat:
             if isinstance(target, ex.ExecutorResult):
                 return target
             workdir, note = target
-        limits = {k: settings[k] for k in ('max_steps', 'max_seconds', 'repeat_limit', 'run_budget_cny')}
+        limits = {k: settings[k] for k in ('max_seconds', 'repeat_limit', 'run_budget_cny')}
         if autonomy:
             limits['run_budget_cny'] = min(Decimal(limits['run_budget_cny']), Decimal(settings['wake_budget_cny']))
         try:
