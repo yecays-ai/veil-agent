@@ -715,7 +715,7 @@ class KeyProxy:
                     return self._deny(401, 'bad token')
                 with proxy.lock:
                     if proxy.requests >= max_requests:
-                        return self._deny(429, 'request limit reached')
+                        return self._deny(403, 'request limit reached')
                     proxy.requests += 1
                 path = self.path[3:] if self.path.startswith('/v1') else self.path
                 body = self.rfile.read(int(self.headers.get('Content-Length') or 0)) if method == 'POST' else None
@@ -887,7 +887,8 @@ def find_command(configured=''):
     return shutil.which('opencode')
 
 
-def build_config(provider, token, base_url, protect=(), browser_gateway=None, maintenance=False, isolated=True):
+def build_config(provider, token, base_url, protect=(), browser_gateway=None, maintenance=False, isolated=True,
+                 web_browser=False):
     """The OpenCode config, passed inline (OPENCODE_CONFIG_CONTENT) so nothing is written into the user's project
     and a project's own opencode.json cannot loosen it. `token` is the local proxy token, not the real key."""
     context = int(provider.get('max_input_tokens', 32768))
@@ -923,6 +924,12 @@ def build_config(provider, token, base_url, protect=(), browser_gateway=None, ma
         config['mcp']['veil_browser'] = {
             'type': 'remote', 'url': browser_gateway.url, 'oauth': False,
             'headers': {'Authorization': 'Bearer ' + browser_gateway.token}}
+    if web_browser:
+        # Playwright MCP runs headless inside the container; its config (proxy -> the VEIL relay) is written
+        # to /tmp/pw.json by the container entrypoint from VEIL_PW_CONFIG.
+        config['permission']['webfetch'] = 'deny'  # one way onto the web: the headless browser, not an approval card
+        config.setdefault('mcp', {})['playwright'] = {
+            'type': 'local', 'command': ['playwright-mcp', '--config', '/tmp/pw.json']}
     return config
 
 
@@ -1049,6 +1056,8 @@ def container_command(container, *, name, workdir, port, env, masks, bootstrap_g
                   'ip6tables -A OUTPUT -o lo -j ACCEPT; '
                   'ip6tables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT; '
                   'ip6tables -A OUTPUT -j REJECT; fi; fi; '
+                  'if test -n "${VEIL_PW_CONFIG:-}"; then printf %s "$VEIL_PW_CONFIG" > /tmp/pw.json; '
+                  'chmod 644 /tmp/pw.json; fi; '
                   'mkdir -p /tmp/home; chown -R node:node /tmp/home /tmp/veil-git 2>/dev/null || true; '
                   'exec setpriv --reuid=node --regid=node --init-groups --inh-caps=-all --ambient-caps=-all '
                   '--bounding-set=-all ' + serve)
@@ -1064,7 +1073,7 @@ def container_command(container, *, name, workdir, port, env, masks, bootstrap_g
 def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, stopped, record_cost,
         api_factory=None, events_factory=None, proxy_factory=None, container=None, protect=(), popen=subprocess.Popen, clock=time.monotonic,
         sleep=time.sleep, diagnostic=None, maintenance=False, approval_data=None, save_approval=None,
-        container_name=None, browser_gateway=None):
+        container_name=None, browser_gateway=None, web_hosts=None):
     """Run one task. `record_cost(cost)` is called once with the estimated cost, whatever the outcome."""
     limits = {**DEFAULT_LIMITS, **(limits or {})}
     workdir, home = Path(workdir), Path(home)
@@ -1133,12 +1142,16 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
                                         **({'host': '0.0.0.0'} if container else {}))
     def allow_network(hosts):
         proxy.allow_hosts(hosts)
+    web_browser = bool(container and web_hosts)
+    if web_browser:  # only these sites are reachable by the container's headless browser
+        proxy.allow_hosts(web_hosts)
     proxy_host = 'veil-relay' if container else '127.0.0.1'
     gateway = browser_gateway(stopped, bool(container)) if browser_gateway is not None else None
     try:
         bridge = gateway.__enter__() if gateway is not None else None
         config = build_config(provider, proxy.token, proxy.local_base(proxy_host), protect=protect,
-                              browser_gateway=bridge, maintenance=maintenance, isolated=bool(container))
+                              browser_gateway=bridge, maintenance=maintenance, isolated=bool(container),
+                              web_browser=web_browser)
         port, password = free_port(), secrets.token_urlsafe(24)
         keep = {'PATH', 'PATHEXT', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'TEMP', 'TMP', 'TMPDIR', 'LANG', 'LC_ALL', 'PROGRAMFILES',
                 'PROGRAMFILES(X86)', 'PROGRAMDATA', 'APPDATA', 'LOCALAPPDATA', 'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE'}
@@ -1154,6 +1167,11 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
                 'VEIL_PROXY_PORT': str(proxy.port),
                 'VEIL_WATCHDOG_URL': proxy.local_health('veil-relay'),
             })
+            if web_browser:
+                shared['VEIL_PW_CONFIG'] = json.dumps({'browser': {'browserName': 'chromium', 'launchOptions': {
+                    'headless': True, 'chromiumSandbox': False,
+                    'proxy': {'server': f'http://veil-relay:{proxy.port}', 'username': 'veil',
+                              'password': proxy.token}}}})
             if bridge is not None:
                 shared['VEIL_BROWSER_PORT'] = str(bridge.server.server_address[1])
         git_pointer, empty_secret_dir = None, None
