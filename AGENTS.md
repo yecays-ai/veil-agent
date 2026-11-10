@@ -1,13 +1,13 @@
 # VEIL Agent · 仓库规则
 
 本仓库做本地 Windows 上的 AI 伴侣（第一个角色 Peter，之后 Ghost）。
-完整路线见 [重建计划](https://claude.ai/code/artifact/0c29eb8c-d095-4575-9449-18e3f0efdd00)；当前进度只看 `STATUS.md`。
+长期产品方向见 [`docs/PRODUCT_PREMISE.md`](docs/PRODUCT_PREMISE.md)（五条线、两条验收场景、阶段顺序）；当前进度只看 `STATUS.md`。
 
 ## 开工和收工（每个窗口必做）
 
 开工：
 1. 先拉取最新的 `main` 分支。
-2. 读 `STATUS.md` 和 `HANDOFF.md`，以仓库里的内容为准，不以聊天记录或记忆为准。要做的事有对应 skill 就读 `.agents/skills/<名字>/SKILL.md`。
+2. 先读 `docs/PRODUCT_PREMISE.md`，弄清这次工作属于哪一格、两条验收场景还差哪几格；再读 `STATUS.md` 和 `HANDOFF.md`，以仓库里的内容为准，不以聊天记录或记忆为准。要做的事有对应 skill 就读 `.agents/skills/<名字>/SKILL.md`。
 3. **任何改动先执行 `.agents/skills/impact-complete/SKILL.md`，按需直接使用原版 `systematic-debugging`，交付前使用原版 `verification-before-completion`**：从用户日常行为出发，搜索改动的所有调用者、下游副作用、共享配置及旧功能；本次修改造成的连带问题必须在同一个 PR 修完并回归验证，不得让 lan 发现 Bug 后再开单补救。交付前根据实际 diff 再查一次影响范围。
    **开发新功能、新工具、新通道时，另按 `.agents/skills/integration-complete/SKILL.md` 做系统接入评估**（入口、停止与恢复、权限、费用、数据、状态可见、升级回滚、真实环境八项，相关项才施工；先确认工单字面没有偏离 lan 真正要的能力）。
 4. 核对上一张相关工单的 GitHub PR 状态、合并提交、最新 CI 和实际交付内容；以 GitHub 提交和检查为准，不凭聊天记录推断完成。
