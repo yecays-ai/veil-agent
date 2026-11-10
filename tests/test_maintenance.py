@@ -35,6 +35,7 @@ class FakeGitHub:
         self.reviews = list(reviews)
         self.calls = []
         self.signed_in = True
+        self.last_pr_body = ''
         self.envs = []
 
     def _view(self):
@@ -81,6 +82,7 @@ class FakeGitHub:
                           'headRefOid': self.head}] if self.pr_created else []
                 return 0, json.dumps(value), ''
             if args[:2] == ['pr', 'create']:
+                self.last_pr_body = args[args.index('--body') + 1]
                 self.pr_created = True
                 return 0, self._view()['url'] + '\n', ''
             if args[:2] == ['pr', 'edit']:
@@ -217,16 +219,14 @@ class MaintenanceTests(unittest.TestCase):
         self.assertIn('worktree_changes=', text)
         self.assertIn('docs/note.md', text)
 
-    def test_red_local_tests_do_not_block_a_docs_only_delivery(self):
+    def test_a_failed_workbench_run_does_not_block_delivery_but_a_stop_does(self):
         task = self.begin()
-        self.develop(task, 'docs/note.md', 'one line\n')
-        self.manager._record_workbench(task['task_id'], cost=0, steps=1, state='出错', reason='limit_or_failure')
-        text, state = self.manager.invoke('deliver', {'task_id': task['task_id']})
-        self.assertEqual(state, '被拒绝', text)
+        self.develop(task)
         self.manager._record_workbench(task['task_id'], cost=0, steps=1, state='出错', reason='test_failed')
         text, state = self.manager.invoke('deliver', {'task_id': task['task_id']})
         self.assertEqual(state, '成功', text)
         self.assertTrue(self.gh.pr_created)
+        self.assertIn('以 PR 的 CI 结果为准', self.gh.last_pr_body)
 
     def test_malformed_token_file_is_ignored(self):
         token_file = self.root / 'github-token.txt'
@@ -703,18 +703,6 @@ output_cny_per_million = "8"
         self.assertNotIn('test run', result['next_step'])
         with self.assertRaises(maintenance.MaintenanceError):
             self.manager.workbench_target(task['task_id'])
-
-    def test_failed_tests_block_delivery_until_a_successful_workbench_result(self):
-        task = self.begin()
-        self.develop(task)
-        self.manager.record_workbench(task['task_id'], cost=0, steps=1, report='tests failed',
-                                      state='出错', reason='test_failed')
-        text, state = self.manager.invoke('deliver', {'task_id': task['task_id']})
-        self.assertEqual(state, '被拒绝', text)
-        self.assertFalse(self.gh.pr_created)
-        self.manager.record_workbench(task['task_id'], cost=0, steps=1, report='tests pass',
-                                      state='成功', reason='')
-        self.assertEqual(self.manager.invoke('deliver', {'task_id': task['task_id']})[1], '成功')
 
     def test_real_opencode_to_fake_github_delivery(self):
         import executor_opencode as ex

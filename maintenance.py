@@ -943,16 +943,6 @@ class MaintenanceManager:
                 '下一步：先读 worktree 的 AGENTS.md、STATUS.md、HANDOFF.md，再用 workbench 并带上 task_id '
                 '完成代码修改和测试，然后 action=deliver。'), '成功'
 
-    def _docs_only(self, task):
-        """True when every change in the worktree (committed or not) is a Markdown file or under docs/."""
-        worktree = task['worktree']
-        paths = set(self._git('diff', '--name-only', f"{task['base_main']}...HEAD", cwd=worktree).splitlines())
-        for line in self._git('status', '--porcelain', cwd=worktree).splitlines():
-            if len(line) >= 4:
-                paths.add(line[3:].strip().strip('"').split(' -> ')[-1])
-        paths = {p.replace('\\', '/') for p in paths if p}
-        return bool(paths) and all(p.startswith('docs/') or p.endswith('.md') for p in paths)
-
     def _github_ready(self):
         """One clear sentence for Lan when gh or the token is missing, before any worktree or card exists."""
         code, _out, err = self._run(['gh', 'auth', 'status'], cwd=self.repo, timeout=30, allow_fail=True)
@@ -1079,12 +1069,10 @@ class MaintenanceManager:
         task = self._task(args, require_id=True)
         if task['stage'] in {'stopped', 'merged', 'done'}:
             return f"task is {task['stage']}; it cannot be delivered again", '被拒绝'
+        # The last workbench run does not gate delivery: its tests can fail for the container's own reasons
+        # (missing dependencies, the per-run budget). The PR's CI is the judge, and merging requires it green.
         development = task['development']
-        # A red local test run does not stop a change that only touches documents (the container may lack
-        # optional dependencies, and the tests cannot be affected by it). Any code change still needs green tests.
-        tests_red = development.get('reason') == 'test_failed' and self._docs_only(task)
-        if development.get('state') in {'出错', '被拒绝'} and not tests_red:
-            return 'the last workbench run did not succeed; resolve its result before delivery', '被拒绝'
+        tests_red = development.get('state') in {'出错', '被拒绝'}
         if self._expired(task):
             return 'maintenance task exceeded its time limit; ask Lan for a fresh task', '被拒绝'
         if task['pull_request'].get('number') and not self._git(
@@ -1126,7 +1114,7 @@ class MaintenanceManager:
         verification = _short(str(args.get('verification') or
                                   'The development workbench ran local checks; the PR CI is the external evidence.'), 1500)
         if tests_red:
-            verification += ('\n\n本地容器里的测试运行失败（常见原因是容器缺可选依赖，不一定是这次改动），'
+            verification += ('\n\n本地容器里最后一次工作台运行没有成功（常见原因是容器缺依赖或超出单次预算，不一定是这次改动），'
                              '以 PR 的 CI 结果为准。')
         body = (f"## 工单\n\n{task['goal']}\n\n## 改动\n\n```\n{diff[-3000:]}\n```\n\n"
                 f"## 验证\n\n{verification}\n\n## 验收\n\n")
