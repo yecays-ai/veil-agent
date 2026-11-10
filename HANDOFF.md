@@ -1,5 +1,13 @@
 # HANDOFF
 
+## 工单 339（2026-11-10）：自主上下文超限与预算耗尽崩溃
+
+- 现象：19:52 自主活动 ¥0 失败，提示"自主活动上下文超过安全限制"。`autonomy.py` 的 `MAX_CONTEXT_BYTES` 原为 12KB，只会依次删更早活动、生活记录、实验室、旅行，上一次活动（19:28 记了 60 个成功工具，约 6.5KB）和长任务状态不裁，最后直接 `raise UserError`。
+- 改动：上限 32KB；上一次活动 `successful_tools` 只带最近 10 个并加 `successful_tool_count`，`unconfirmed_tools` 最多 12 个；仍超限时依次去掉 thoughts、把上一次活动换成"用 autonomy_history 读取"，不再报错。`recent_activity_context`（聊天侧，1500 字节）超长时丢弃工具列表而不是报错。
+- 预算耗尽：`run_chat` 普通发送分支补 `except BudgetExceeded`（提示后继续循环），`Chat.send` 的清理分支同样处理，避免异常冒出去关掉服务。
+- 验证：`tests/test_autonomy.py`、`tests/test_chat.py` 新增用例通过；其余 4 个 `test_autonomy` 旧错误在改动前就存在（本环境缺 Windows 依赖），不是本次引入。
+- 未验证：Lan 电脑上下一次自主活动和预算耗尽场景的真机表现。
+
 ## 工单 338（2026-11-10）：统一权限与删重复，第一步
 
 - 依据：Lan 要求把分散在 14 处的权限统一、删重复实现；审计 `peter-execution-permission-audit-2026-11-09.md` 里的删除项 #336 之后基本未做（主程序 37,265 行，与审计当日 37,309 行相比几乎没变）。

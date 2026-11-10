@@ -731,22 +731,31 @@ daily_budget_cny = "2"
                    next_step='步' * 300, result='部分完成', result_reason='错' * 400,
                    tools=[{'tool': 'append_file', 'path': 'lab/已保存.md', 'state': '成功'}] * 3,
                    lab_files_changed=['lab/已保存.md'])
-        self.controller._lab_context = Mock(return_value='LAB_TEXT' + 'x' * 5990)
+        self.controller._lab_context = Mock(return_value='LAB_TEXT' + 'x' * 35000)
         text = self.controller._context()
         self.assertNotIn('LAB_TEXT', text)
         self.assertIn('lab/已保存.md', text)
         self.assertIn('步' * 300, text)
         self.assertIn("When you're done, leave yourself a short note for next time", text)
         self.assertIn('Decision: ...\nReason: ...\nFocus: ...\nNext step: ...', text)
-        self.assertLessEqual(len(text.encode('utf-8')), 12 * 1024)
+        self.assertLessEqual(len(text.encode('utf-8')), 32 * 1024)
 
-    def test_oversized_state_stops_without_sending_an_oversized_wake(self):
+    def test_oversized_state_is_trimmed_instead_of_stopping_the_wake(self):
         self.controller.run()
         self.controller.rows[-1]['decision'] = '不可丢失的状态' * 3000
-        self.model.reset_mock()
-        with self.assertRaisesRegex(UserError, '活动记录仍保存在'):
-            self.controller._context()
-        self.model.assert_not_called()
+        text = self.controller._context()
+        self.assertLessEqual(len(text.encode('utf-8')), 32 * 1024)
+        self.assertIn('Decision: ...', text)
+
+    def test_long_previous_wake_tool_list_does_not_block_the_next_wake(self):
+        tools = [{'tool': 'read_text_file', 'path': 'lab/' + 'x' * 60 + str(i), 'state': '成功'} for i in range(120)]
+        self.store.append('test/autonomy.jsonl', {
+            'started_at': '2099-01-01T00:00:00+00:00', 'finished_at': '2099-01-01T00:01:00+00:00',
+            'decision': 'd', 'reason': 'r', 'tools': tools, 'lab_files_changed': [], 'result': '完成',
+            'result_reason': 'ok', 'current_focus': 'f', 'next_step': 'n', 'cost_cny': '0'})
+        context = AutonomyController(self.chat, self.hub)._context()
+        self.assertIn('"successful_tool_count": 120', context)
+        self.assertLess(context.count('read_text_file'), 20)
 
     def test_large_receipt_cannot_erase_confirmed_write_when_recovering(self):
         from test_tools import ToolLoopTests
