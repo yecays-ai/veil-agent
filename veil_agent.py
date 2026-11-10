@@ -747,6 +747,7 @@ def _executor_roots(value):
 
 
 WORKBENCH_LOCAL_KEYS = {'enabled': bool, 'project_roots': list, 'container_image': str}
+REMOVED_WORKBENCH_KEYS = {'host_mode', 'host_keep_old_tools', 'host_desktop_handover'}
 
 
 def workbench_local_path(root, character_id):
@@ -763,6 +764,8 @@ def workbench_local_settings(root, character_id):
         data = json.loads(path.read_text(encoding='utf-8-sig'))
     except (OSError, ValueError) as exc:
         raise UserError('工作台本地设置读不了，请删掉或修好 data 里的 workbench.json。') from exc
+    if isinstance(data, dict):  # host-path switches (tickets 329-334) were removed; old files may still carry them
+        data = {k: v for k, v in data.items() if k not in REMOVED_WORKBENCH_KEYS}
     if not isinstance(data, dict) or any(k not in WORKBENCH_LOCAL_KEYS or type(v) is not WORKBENCH_LOCAL_KEYS[k]
                                          for k, v in data.items()):
         raise UserError('工作台本地设置字段无效，请删掉或修好 data 里的 workbench.json。')

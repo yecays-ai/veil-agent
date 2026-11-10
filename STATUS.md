@@ -18,7 +18,7 @@ Peter 今天能稳定操作 Windows 软件（主聊天桌面动作）；工作�
 - 工单 328：本机 `.env` 有 `DEEPSEEK_API_KEY` 时，`web_search`/`web_research` 先用 DeepSeek 官网搜索接口（Lan 电脑经加速器实测 10/10 成功，每次 8 条、约 1.2 秒），失败再退回原来的免费引擎；每次成功按 ¥0.005 记入 `costs.jsonl`（`deepseek-search`），受共享预算约束。未验证：DeepSeek 实际扣费（10 次前后余额都显示 8.54 元，显示精度 0.01 元）。
 - 当前实现：工单 323 的 `integration-complete` 规则及其接入保留；本工单（325）主聊天恢复 `windows_launch`、`windows_manage`、`windows_control_action`，工作台不再接桌面网关，说明改为不能操作 Windows 软件；网关代码和测试保留（经过见 `HANDOFF.md`）。
 
-- 工单 336：删除宿主通道（329–334 的 `host_executor.py`、`veil_checkpoint.py`、`veil_mcp_gateway.py` 及各处 `host_mode` 分支，草稿 #335 作废）；工作台权限不再由自建命令分类器决定，改用 OpenCode 原生规则：推送/克隆/拉取、装依赖、下载联网、项目外路径、敏感文件、危险系统命令都是 `ask`（弹你的批准卡，自主醒来一律拒绝），其余命令和编辑直接允许；不再硬拦密码文件和已有文件。预算上限、批准卡、容器隔离不变。真机验证记录见 `HANDOFF.md`。
+- 工单 336：删除宿主通道（329–334 的 `host_executor.py`、`veil_checkpoint.py`、`veil_mcp_gateway.py` 及各处 `host_mode` 分支，草稿 #335 作废）；工作台权限不再由自建命令分类器决定，改用 OpenCode 原生规则：推送/克隆/拉取、装依赖、下载联网、项目外路径、敏感文件、危险系统命令都是 `ask`（弹你的批准卡，自主醒来一律拒绝），其余命令和编辑直接允许；不再硬拦密码文件和已有文件。预算上限、批准卡、容器隔离不变。真机验收进行中，结果记入 `HANDOFF.md`，未记录前不算通过。
 
 ## 下一步
 

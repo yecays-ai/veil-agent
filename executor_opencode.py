@@ -168,16 +168,26 @@ class _PersistedApprovalSet:
 # What OpenCode asks about is decided by the permission config (`build_config`); VEIL only answers the requests
 # it raises. Everything that is not listed there runs without a question.
 INSTALLERS = {'pip', 'pip3', 'npm', 'pnpm', 'yarn', 'winget', 'choco', 'apt', 'apt-get', 'brew', 'cargo', 'go', 'bun'}
-ASK_COMMANDS = ('git push', 'git clone', 'git fetch', 'git pull', 'git remote add', 'git config --global',
-                'python -m pip', 'python3 -m pip', 'py -m pip', 'curl', 'wget', 'iwr', 'irm', 'Invoke-WebRequest',
-                'Invoke-RestMethod', 'npx', 'pnpx', 'bunx', 'sudo', 'runas', 'shutdown', 'schtasks', 'net user',
-                'reg add', 'reg delete', 'rm -rf', 'rmdir /s', 'del /s', 'del /f', 'del /q', 'format',
-                *sorted(INSTALLERS))
+ASK_COMMANDS = ('git push', 'git clone', 'git fetch', 'git pull', 'git remote add', 'git config --global', 'git clean',
+                'pip', 'pip3', 'python -m pip', 'python3 -m pip', 'py -m pip', 'curl', 'wget', 'iwr', 'irm',
+                'Invoke-WebRequest', 'Invoke-RestMethod', 'npx', 'pnpx', 'bunx', 'sudo', 'runas', 'shutdown',
+                'schtasks', 'net user', 'reg add', 'reg delete', 'rm -r', 'rm -rf', 'rm -fr', 'rmdir /s', 'del /s',
+                'del /f', 'del /q', 'format',
+                # installers ask only for the subcommands that fetch or change packages (npm test / go test run)
+                *(f'{tool} {sub}' for tool in ('npm', 'pnpm', 'yarn', 'bun')
+                  for sub in ('install', 'i', 'add', 'ci', 'update', 'upgrade', 'remove', 'uninstall', 'create')),
+                *(f'{tool} {sub}' for tool in ('apt', 'apt-get') for sub in ('install', 'update', 'upgrade', 'remove')),
+                *(f'{tool} {sub}' for tool in ('winget', 'choco', 'brew') for sub in ('install', 'upgrade', 'uninstall')),
+                *(f'cargo {sub}' for sub in ('install', 'add', 'fetch', 'update')),
+                *(f'go {sub}' for sub in ('get', 'install', 'mod download')))
 MAINTENANCE_DENY = ('git commit', 'git push', 'git pull', 'git fetch', 'git merge', 'git rebase', 'git reset',
                     'git checkout', 'git switch', 'git tag', 'git worktree')
 SECRET_READ_GLOBS = ('*.pem', '*.pfx', '*.key', '*.p12', '*id_rsa*', '*id_ed25519*', '*.env', '*.env.*',
                      '*Login Data*', '*Cookies*', '*/.ssh/*', '*\\.ssh\\*', '*/secrets/*', '*\\secrets\\*',
-                     '*credentials*', '*.npmrc', '*.pypirc', '*.netrc', '*.git-credentials', '*.kdbx')
+                     '*credentials*', '*.npmrc', '*.pypirc', '*.netrc', '*.git-credentials', '*.kdbx',
+                     'secrets/*', '.ssh/*', '.aws/*', '.azure/*', '.gnupg/*', '.kube/*', '*/.aws/*', '*/.azure/*',
+                     '*/.gnupg/*', '*/.kube/*', '*\\.aws\\*', '*\\.azure\\*', '*\\.gnupg\\*', '*\\.kube\\*',
+                     '*/.docker/config.json')
 KNOWN_ASKED = {'bash', 'edit', 'write', 'read', 'glob', 'grep', 'webfetch', 'external_directory'}
 
 
@@ -871,13 +881,14 @@ def find_command(configured=''):
     return shutil.which('opencode')
 
 
-def build_config(provider, token, base_url, protect=(), browser_gateway=None, windows_gateway=None, maintenance=False):
+def build_config(provider, token, base_url, protect=(), browser_gateway=None, windows_gateway=None, maintenance=False, isolated=True):
     """The OpenCode config, passed inline (OPENCODE_CONFIG_CONTENT) so nothing is written into the user's project
     and a project's own opencode.json cannot loosen it. `token` is the local proxy token, not the real key."""
     context = int(provider.get('max_input_tokens', 32768))
     edit_permission = ('allow' if not protect else
                        {'*': 'allow', **{Path(path).as_posix(): 'deny' for path in protect}})
-    bash_rules = {'*': 'allow'}
+    # Inside the container commands run; on the host (no container) an unlisted command is asked too.
+    bash_rules = {'*': 'allow' if isolated else 'ask'}
     for command in ASK_COMMANDS:
         bash_rules.update({command: 'ask', command + ' *': 'ask'})
     if maintenance:  # VEIL commits, pushes and opens the pull request itself
@@ -1126,7 +1137,7 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
         bridge = gateway.__enter__() if gateway is not None else None
         desktop_bridge = desktop_gateway.__enter__() if desktop_gateway is not None else None
         config = build_config(provider, proxy.token, proxy.local_base(proxy_host), protect=protect,
-                              browser_gateway=bridge, windows_gateway=desktop_bridge, maintenance=maintenance)
+                              browser_gateway=bridge, windows_gateway=desktop_bridge, maintenance=maintenance, isolated=bool(container))
         port, password = free_port(), secrets.token_urlsafe(24)
         keep = {'PATH', 'PATHEXT', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'TEMP', 'TMP', 'TMPDIR', 'LANG', 'LC_ALL', 'PROGRAMFILES',
                 'PROGRAMFILES(X86)', 'PROGRAMDATA', 'APPDATA', 'LOCALAPPDATA', 'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE'}

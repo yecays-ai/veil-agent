@@ -464,15 +464,28 @@ class RunTests(unittest.TestCase):
         config = ex.build_config(PROVIDER, 'token', 'http://127.0.0.1:1/v1')
         bash = config['permission']['bash']
         self.assertEqual(bash['*'], 'allow')
-        for risky in ('git push *', 'pip *', 'npm *', 'curl *', 'sudo *'):
+        for risky in ('git push *', 'pip *', 'npm install *', 'curl *', 'sudo *', 'rm -r *', 'git clean *'):
             self.assertEqual(bash[risky], 'ask', risky)
         self.assertEqual(config['permission']['edit'], 'allow')
         self.assertEqual(config['permission']['external_directory'], 'ask')
         self.assertNotIn('git commit *', bash)
+        self.assertNotIn('npm *', bash)
+        self.assertEqual(bash['npm install *'], 'ask')
+        self.assertEqual(config['permission']['read']['.aws/*'], 'ask')
+        self.assertEqual(ex.build_config(PROVIDER, 'token', 'http://127.0.0.1:1/v1', isolated=False)
+                         ['permission']['bash']['*'], 'ask')
         maintenance = ex.build_config(PROVIDER, 'token', 'http://127.0.0.1:1/v1', maintenance=True)
         self.assertEqual(maintenance['permission']['bash']['git commit *'], 'deny')
         protected = ex.build_config(PROVIDER, 'token', 'http://127.0.0.1:1/v1', protect=['/data/journal.jsonl'])
         self.assertEqual(protected['permission']['edit']['/data/journal.jsonl'], 'deny')
+
+    def test_old_workbench_json_with_removed_host_keys_still_loads(self):
+        from veil_agent import workbench_local_settings
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / 'data' / 'peter' / 'workbench.json'
+            path.parent.mkdir(parents=True)
+            path.write_text(json.dumps({'enabled': True, 'host_mode': True, 'host_desktop_handover': False}))
+            self.assertEqual(workbench_local_settings(root, 'peter'), {'enabled': True})
 
     def test_autonomous_activity_refuses_instead_of_asking(self):
         reply, _why = ex.decide('bash', ['git push'], {'command': 'git push'}, Path('/w'), autonomy=True,
@@ -672,7 +685,7 @@ class RunTests(unittest.TestCase):
         config = json.loads(env['OPENCODE_CONFIG_CONTENT'])
         self.assertNotIn('secret-key-123', json.dumps(config))
         self.assertEqual(config['permission']['read']['*.env'], 'ask')
-        self.assertEqual(config['permission']['bash']['*'], 'allow')
+        self.assertEqual(config['permission']['bash']['*'], 'ask')  # no container in this run: the host asks
 
     def test_container_command_mounts_only_the_project_and_masks_secrets(self):
         base = Path(tempfile.mkdtemp())
