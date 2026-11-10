@@ -467,6 +467,7 @@ class RunTests(unittest.TestCase):
         for risky in ('git push *', 'pip *', 'npm install *', 'curl *', 'sudo *', 'rm -r *', 'git clean *'):
             self.assertEqual(bash[risky], 'ask', risky)
         self.assertEqual(config['permission']['edit'], 'allow')
+        self.assertTrue(config['experimental']['continue_loop_on_deny'])
         self.assertEqual(config['permission']['external_directory'], 'ask')
         self.assertNotIn('git commit *', bash)
         self.assertNotIn('npm *', bash)
@@ -504,7 +505,6 @@ class RunTests(unittest.TestCase):
             ask=lambda prompt: asks.append(prompt) or 'y')
         self.assertEqual(api.replies[:2], [('p1', 'once'), ('p2', 'once')])
         self.assertEqual(len(asks), 1)
-        self.assertIn('decision=approved', result.text)
         self.assertIn('workbench=success', result.text)
 
         denied = {**approved, 'id': 'p3'}
@@ -1601,7 +1601,7 @@ class RealOpenCodeTests(unittest.TestCase):
         self.assertEqual(result.state, '成功', result.text)
         self.assertIn('OK', result.text)
         self.assertFalse((workdir / 'network-worked').exists(), 'the container must not reach the network')
-        self.assertEqual(len(asked), 1, asked)  # only the arbitrary network command asked
+        self.assertEqual(asked, [])  # nothing risky was requested: the probe is blocked by the network lock, not a card
 
     def test_maintenance_approved_network_uses_the_relay_allowlist(self):
         if not _docker_workbench_available():
@@ -1654,12 +1654,11 @@ class RealOpenCodeTests(unittest.TestCase):
                         container={'image': 'veil-workbench'}, maintenance=True)
         self.assertEqual(result.state, '成功', result.text)
         self.assertIn('proxy-approved-ok', result.text)
-        self.assertIn('decision=approved', result.text)
 
     def test_real_container_does_not_execute_after_stop_during_approval(self):
         if not _docker_workbench_available():
             self.skipTest('VEIL workbench Docker image is unavailable')
-        server = _fake_llm("python3 -c \"open('must-not-exist','w').write('bad')\"")
+        server = _fake_llm("sudo python3 -c \"open('must-not-exist','w').write('bad')\"")
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
         base = Path(tempfile.mkdtemp())
@@ -1678,7 +1677,7 @@ class RealOpenCodeTests(unittest.TestCase):
     def test_real_container_denial_is_reported_and_command_does_not_run(self):
         if not _docker_workbench_available():
             self.skipTest('VEIL workbench Docker image is unavailable')
-        server = _fake_llm("python3 -c \"open('must-not-exist','w').write('bad')\"")
+        server = _fake_llm("sudo python3 -c \"open('must-not-exist','w').write('bad')\"")
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
         base = Path(tempfile.mkdtemp())

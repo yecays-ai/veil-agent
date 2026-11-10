@@ -910,6 +910,8 @@ def build_config(provider, token, base_url, protect=(), browser_gateway=None, wi
         # project, a secret file. Everything else runs. VEIL only answers the ones marked "ask" (the approval card).
         'permission': {'bash': bash_rules, 'edit': edit_permission, 'webfetch': 'ask', 'external_directory': 'ask',
                        'read': {'*': 'allow', **{g: 'ask' for g in SECRET_READ_GLOBS}}},
+        # A refusal answers that one request; the task goes on with something else instead of ending.
+        'experimental': {'continue_loop_on_deny': True},
         'share': 'disabled', 'autoupdate': False}
     if browser_gateway is not None or windows_gateway is not None:
         config['mcp'] = {}
