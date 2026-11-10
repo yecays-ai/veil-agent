@@ -26,17 +26,26 @@ TOOL_GROUPS = tuple(GROUP_SUMMARIES)
 # Ticket 334: with the host path on, these chat tools are hidden because the workbench does the same jobs behind
 # VEIL's single checkpoint: the foreground/background browser and the desktop actions. Read-only looking at the
 # screen, search and page reading stay in chat. Hidden, not deleted: `host_keep_old_tools` brings them back.
-HOST_PATH_HIDDEN_BROWSER = frozenset({'browser'})
+# The chat's `browser` stays, but only for showing a page on Lan's screen (open with show: true, then click/scroll):
+# background research moves to the workbench. A phone message like "open a page on my PC and pick a video"
+# keeps working.
+BROWSER_SHOW_ONLY_DESCRIPTION = (
+    'Show a public HTTPS page on Lan\'s screen: open it with show: true, then click a fresh link_id or scroll '
+    'while she watches; her keyboard or mouse input takes priority over your next step. This is only for showing '
+    'her something. Research, lookups and reading pages in the background go to the workbench, not here. '
+    'open, click and scroll each already return the page text and links, so do not call observe right after them. '
+    'click navigates an anchor URL; no buttons/forms, login, accounts, social actions or downloads. '
+    'Only page/link text and measured video state are evidence: page ready does NOT mean video playing. '
+    'Stop/pause, 20 steps and 5 minutes take priority. close releases your browser.')
 HOST_PATH_HIDDEN_DESKTOP = frozenset({'windows_discover_apps', 'windows_launch', 'windows_manage',
                                       'windows_control_action', 'windows_canvas_action',
                                       'desktop_icons_arrange', 'desktop_icons_restore'})
-HOST_PATH_HIDDEN = HOST_PATH_HIDDEN_BROWSER | HOST_PATH_HIDDEN_DESKTOP
+HOST_PATH_HIDDEN = HOST_PATH_HIDDEN_DESKTOP
 
 
 def host_hidden_names(browser, desktop):
     # Only what the host path really offers on this computer is handed over; the rest stays as it was.
-    return (HOST_PATH_HIDDEN_BROWSER if browser else frozenset()) | (
-        HOST_PATH_HIDDEN_DESKTOP if desktop else frozenset())
+    return HOST_PATH_HIDDEN_DESKTOP if desktop else frozenset()
 
 # A group stays open for the request that opened it and this many later chat requests; an
 # autonomous wake keeps it until that wake ends.
@@ -77,14 +86,14 @@ def announce_text(groups):
             'a few more chat turns.')
 
 
-def host_handover_note(hidden):
-    """One stable sentence for the system prompt: the tools described above that this turn does not offer, and where
-    their jobs went. Built from what is really hidden, so it never claims more than the workbench can do here."""
-    jobs = []
-    if hidden & HOST_PATH_HIDDEN_BROWSER:
-        jobs.append('browsing (it uses a background browser)')
-    if hidden & HOST_PATH_HIDDEN_DESKTOP:
-        jobs.append('Windows app work (it opens apps, looks, clicks and types)')
-    return ('In this chat the workbench tool does ' + ' and '.join(jobs) + ': ' + ', '.join(sorted(hidden))
-            + ' are not in your tool list, so hand those jobs to the workbench. Looking at the screen, '
-            'web_search and web_fetch stay as they are.')
+def host_handover_note(hidden, browser_show_only=False):
+    """One stable sentence for the system prompt: what the workbench does in this chat now. Built from what is
+    really handed over, so it never claims more than the workbench can do here."""
+    parts = []
+    if browser_show_only:
+        parts.append('Browsing and reading pages in the background is done by the workbench tool (a background '
+                     'browser); your browser tool is only for showing a page on Lan\'s screen with show: true')
+    if hidden:
+        parts.append('Windows app work is done by the workbench tool (it opens apps, looks, clicks and types): '
+                     + ', '.join(sorted(hidden)) + ' are not in your tool list')
+    return ('In this chat: ' + '. '.join(parts) + '. Looking at the screen, web_search and web_fetch stay as they are.')

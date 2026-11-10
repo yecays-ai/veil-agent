@@ -2136,6 +2136,11 @@ class Chat:
             schemas.append(workbench_schema)
         if hidden_now := self.host_hidden_tools():
             schemas = [schema for schema in schemas if schema['function']['name'] not in hidden_now]
+        if self.host_browser_show_only():
+            from tool_groups import BROWSER_SHOW_ONLY_DESCRIPTION
+            for schema in schemas:
+                if schema['function']['name'] == 'browser':
+                    schema['function'] = {**schema['function'], 'description': BROWSER_SHOW_ONLY_DESCRIPTION}
         if self.maintenance is not None and not self.glance_mode:
             from maintenance import TOOL_SCHEMA as MAINTENANCE_TOOL
             schema = {'type': 'function', 'function': dict(MAINTENANCE_TOOL['function'])}
@@ -3555,9 +3560,10 @@ class Chat:
                                       self.voice is not None and self.tools is not None,
                                       tuple(sorted(self.away_channels)),
                                       self.maintenance.active_summary() if self.maintenance else '')
-        if hidden_now := self.host_hidden_tools():
+        hidden_now, show_only = self.host_hidden_tools(), self.host_browser_show_only()
+        if hidden_now or show_only:
             from tool_groups import host_handover_note
-            stable += '\n' + host_handover_note(hidden_now)
+            stable += '\n' + host_handover_note(hidden_now, show_only)
         if self.autonomy_controller is not None and not autonomy:
             changing += '\n' + self.autonomy_controller.wake_count_text()
         description = stable + '\n' + changing
@@ -4025,24 +4031,31 @@ class Chat:
             result, state, summary = 'The program rejected this call because the arguments are not a valid JSON object.', '被拒绝', call.function.name
         return _ToolExecution(result, state, summary, checkpoint_verified, activity_detail)
 
-    def host_hidden_tools(self):
-        """Ticket 334: in a normal chat turn with the host path ready, browsing and desktop actions go through the
-        workbench (one VEIL checkpoint); the old chat tools for exactly what this computer can start there are
-        hidden. Autonomous wakes, glances and the container path keep the old tools."""
+    def _host_handover(self):
+        """(browser, desktop) handed to the host workbench in this turn, or (False, False). Ticket 334: only in a
+        normal chat turn with the host path ready, only for what this computer can start there; autonomous wakes,
+        glances and the container path keep the old tools."""
         settings = getattr(self.cfg, 'executor', None) or {}
         if not (settings.get('host_mode') and not settings.get('host_keep_old_tools') and self.tool_mode
                 and not self.autonomy_mode and not self.glance_mode and self.workbench_ready()):
-            return frozenset()
+            return False, False
         import host_executor
         from executor_opencode import find_command
-        from tool_groups import host_hidden_names
         # An outdated or wrong OpenCode cannot run the host path (_run_workbench refuses it): keep the old tools.
         if host_executor.opencode_problem(find_command(settings.get('command', ''))):
-            return frozenset()
+            return False, False
         browser, desktop = host_executor.available(desktop=bool(settings.get('host_desktop', True)))
         # The desktop actions move over only when asked for (`host_desktop_handover`): until the host desktop passes
         # on Lan's PC, the chat's own actions are the working path and stay.
-        return host_hidden_names(browser, desktop and bool(settings.get('host_desktop_handover', False)))
+        return browser, desktop and bool(settings.get('host_desktop_handover', False))
+
+    def host_hidden_tools(self):
+        from tool_groups import host_hidden_names
+        return host_hidden_names(*self._host_handover())
+
+    def host_browser_show_only(self):
+        """The chat's browser tool stays for showing a page on Lan's screen; background browsing is the workbench's."""
+        return self._host_handover()[0]
 
     def workbench_ready(self):
         settings = getattr(self.cfg, 'executor', None) or {}

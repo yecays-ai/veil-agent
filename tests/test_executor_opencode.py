@@ -1309,21 +1309,18 @@ max_steps = 4
         self.assertTrue({'browser', 'windows_launch', 'windows_manage'} <= old)
         got = names(chat_for(host))
         self.assertIn('workbench', got)
-        self.assertTrue({'windows_observe', 'web_search'} <= got)
-        self.assertFalse({'browser', 'windows_launch', 'windows_manage', 'windows_control_action',
+        self.assertTrue({'windows_observe', 'web_search', 'browser'} <= got)  # browser stays: showing a page to Lan
+        self.assertFalse({'windows_launch', 'windows_manage', 'windows_control_action',
                           'windows_canvas_action', 'desktop_icons_arrange', 'desktop_icons_restore',
                           'windows_discover_apps'} & got)
         # only what this computer can start is handed over
-        self.assertIn('browser', names(chat_for(host), available=(False, True)))
         no_desktop = names(chat_for(host), available=(True, False))
         self.assertIn('windows_launch', no_desktop)
-        self.assertNotIn('browser', no_desktop)
         with patch('host_executor.available', return_value=(True, True)), \
                 patch('host_executor.opencode_problem', return_value='too old'):
             outdated = {s['function']['name'] for s in chat_for(host).tool_schemas()}
         self.assertTrue({'browser', 'windows_launch'} <= outdated)  # a workbench that cannot start hides nothing
         default = names(chat_for(browser_only))
-        self.assertNotIn('browser', default)  # default: only the browser moves over
         self.assertTrue({'windows_launch', 'windows_manage', 'windows_control_action'} <= default)
         # escape hatch, autonomous wakes and glances keep the old tools
         keep = names(chat_for(host + 'host_keep_old_tools = true\n'))
@@ -1331,13 +1328,31 @@ max_steps = 4
         self.assertTrue({'browser', 'windows_launch'} <= names(chat_for(host, autonomy=True)))
         self.assertTrue({'browser', 'windows_launch'} <= names(chat_for(host, glance=True)))
 
-    def test_host_handover_note_names_only_what_is_hidden(self):
+    def test_host_path_keeps_the_browser_only_for_showing_a_page(self):
+        schema = {'type': 'object', 'properties': {}}
+        chat = self.chat(self.executor + 'host_mode = true\n')
+        chat.tools.tools = chat.tools.tools + [SimpleNamespace(name='browser', description='old', inputSchema=schema)]
+        with patch('host_executor.available', return_value=(True, False)), \
+                patch('host_executor.opencode_problem', return_value=''):
+            text = next(s['function']['description'] for s in chat.tool_schemas()
+                        if s['function']['name'] == 'browser')
+        self.assertIn('show: true', text)
+        self.assertIn('workbench', text)
+        old = self.chat(self.executor)
+        old.tools.tools = old.tools.tools + [SimpleNamespace(name='browser', description='old', inputSchema=schema)]
+        self.assertEqual(next(s['function']['description'] for s in old.tool_schemas()
+                              if s['function']['name'] == 'browser'), 'old')
+
+    def test_host_handover_note_names_only_what_is_handed_over(self):
         from tool_groups import host_handover_note, host_hidden_names
         self.assertEqual(host_hidden_names(False, False), frozenset())
-        note = host_handover_note(host_hidden_names(True, False))
-        self.assertIn('browser', note)
+        note = host_handover_note(host_hidden_names(True, False), browser_show_only=True)
+        self.assertIn('show: true', note)
         self.assertNotIn('windows_launch', note)
         self.assertNotIn('Windows app work', note)
+        desktop = host_handover_note(host_hidden_names(False, True))
+        self.assertIn('windows_launch', desktop)
+        self.assertNotIn('background browser', desktop)
 
     def write_local(self, text):
         path = self.root / 'data' / 'test'

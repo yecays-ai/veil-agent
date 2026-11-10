@@ -8,7 +8,7 @@ Peter 今天能稳定操作 Windows 软件（主聊天桌面动作）；工作�
 
 ## 现状
 
-- 工单 334（阶段 2）：宿主通道开着时，主聊天收起旧的 `browser` 和桌面动作工具，浏览和操作软件只经 `workbench`（VEIL 检查点）；`host_keep_old_tools` 可退回；默认仍关。开发验收和 Lan 验收见 `docs/tickets/334-main-chat-host-handover.md` 与 `HANDOFF.md`。
+- 工单 334/335（阶段 2）：宿主通道开着时，后台查资料和读网页交给 `workbench`（VEIL 检查点），聊天里的 `browser` 只留作“把网页显示在 Lan 屏幕上”（`show: true`）；桌面动作默认仍是聊天自带的（`host_desktop_handover` 才交出）；`host_keep_old_tools` 可全部退回；默认仍关。开发验收和 Lan 验收见 `docs/tickets/334-main-chat-host-handover.md` 与 `HANDOFF.md`。
 
 - 已合并：工单 316/317/318/319/320/321/322（PR #315–#322 范围内）。工作台默认关，需在设置页「工作台」开启后重启。
 - 工单 320：Lan 正式使用中第一次失败（工作台浏览器 MCP 报错，Peter 改用 `web_fetch`），后续重试有成功；完整场景和后台无干扰运行仍未通过。
