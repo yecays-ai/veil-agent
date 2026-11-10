@@ -1585,6 +1585,18 @@ class ApprovedAppCardTests(unittest.TestCase):
             backend.windows[1]['process_path'] = 'c:\\windows\\system32\\cmd.exe'
             self.assertIsNone(tools.candidate_for_window(backend.windows[1]))
 
+    def test_settings_page_can_list_and_revoke_approved_apps(self):
+        from windows_interaction import list_approved_apps, remove_approved_app
+        with tempfile.TemporaryDirectory() as directory:
+            tools, _backend, approval, _asked = self.make(directory, ['y'])
+            tools.invoke('windows_manage', {'app_id': 'fastorange', 'window_id': self.WID, 'action': 'activate'}, approval)
+            path = Path(directory) / 'approved.json'
+            self.assertEqual([a['app_id'] for a in list_approved_apps(path)], ['fastorange'])
+            self.assertFalse(remove_approved_app(path, 'nope'))
+            self.assertTrue(remove_approved_app(path, 'fastorange'))
+            self.assertEqual(list_approved_apps(path), [])
+            self.assertEqual(list_approved_apps(Path(directory) / 'missing.json'), [])
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -392,6 +392,30 @@ def validate_applications(applications):
     return result
 
 
+def list_approved_apps(path):
+    """The apps Lan approved from a card, for the settings page: [{app_id, label}]."""
+    try:
+        rows = json.loads(Path(path).read_text(encoding='utf-8'))
+        return [{'app_id': app_id, 'label': str(row.get('label', app_id))[:60]} for app_id, row in rows.items()]
+    except (OSError, ValueError, AttributeError):
+        return []
+
+
+def remove_approved_app(path, app_id):
+    path = Path(path)
+    try:
+        rows = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(rows, dict) or app_id not in rows:
+        return False
+    del rows[app_id]
+    tmp = path.with_suffix('.tmp')
+    tmp.write_text(json.dumps(rows, ensure_ascii=False, indent=1), encoding='utf-8')
+    os.replace(tmp, path)
+    return True
+
+
 def load_application_allowlist(root, character_id, settings):
     if not isinstance(settings, dict) or settings.get('enabled') is not True:
         return {}

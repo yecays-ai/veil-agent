@@ -1632,6 +1632,19 @@ $('workbench-add').onclick=async()=>{
   catch(error){notify(error.message||'没有选成功。','error')}
 };
 workbenchBusy=workbenchBusy.then(loadWorkbench);
+function renderWindowsApps(apps){
+  const list=$('windows-apps-list');list.textContent='';
+  $('windows-apps-card').hidden=!apps.length;
+  for(const app of apps){
+    const row=document.createElement('div');row.className='wb-folder';
+    const name=document.createElement('span');name.textContent=app.label;
+    const remove=document.createElement('button');remove.type='button';remove.textContent='撤销';
+    remove.onclick=async()=>{try{const r=await api('/api/windows-apps',{remove:app.app_id});const data=await r.json();if(!r.ok){notify(data.error||'没有撤销成功。','error');return}renderWindowsApps(data.apps)}catch(error){notify(error.message||'没有撤销成功。','error')}};
+    row.append(name,remove);list.append(row);
+  }
+}
+async function loadWindowsApps(){try{const r=await api('/api/windows-apps');const data=await r.json();if(r.ok)renderWindowsApps(data.apps)}catch(error){}}
+loadWindowsApps();
 function applyCustomCSS(value){
   const css=String(value||'');
   if(css.length>20000||/@import\b|url\s*\(|expression\s*\(|-moz-binding|behavior\s*:/i.test(css))throw new Error('自定义 CSS 不能加载外部资源或脚本，也不能超过 20,000 个字符。');
