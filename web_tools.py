@@ -1,14 +1,11 @@
 """Read-only public web search and fetching for configured character tools."""
-import asyncio
 import ipaddress
 import json
 import os
 import re
-import subprocess
-import threading
 import time
 import urllib.request
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -158,100 +155,25 @@ def _fetch_python(root, platform=None):
     return candidate if candidate.is_file() else None
 
 
-class _FetchWorker:
-    """Own one stdio MCP fetch process on a background asyncio loop."""
-
-    def __init__(self, python):
-        self.python = Path(python)
-        self.ready = Future()
-        self.requests = None
-        self.thread = threading.Thread(target=self._serve, daemon=True)
-        self.thread.start()
-        try:
-            self.ready.result(timeout=45)
-        except Exception:
-            self.close()
-            raise
-
-    @staticmethod
-    def _server_environment():
-        # The fetch subprocess only needs the runtime path, UTF-8, and standard
-        # proxy settings. In particular, do not pass provider credentials.
-        keys = ('HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy',
-                'ALL_PROXY', 'all_proxy', 'NO_PROXY', 'no_proxy')
-        environment = {key: os.environ[key] for key in keys if key in os.environ}
-        for key in ('PATH', 'SYSTEMROOT'):
-            if key in os.environ:
-                environment[key] = os.environ[key]
-        environment.update({'PYTHONIOENCODING': 'utf-8', 'PYTHONUTF8': '1'})
-        return environment
-
-    def _serve(self):
-        async def run():
-            from mcp import ClientSession, StdioServerParameters
-            from mcp.client.stdio import stdio_client
-
-            self.loop = asyncio.get_running_loop()
-            self.requests = asyncio.Queue()
-            params = StdioServerParameters(
-                command=str(self.python), args=['-m', 'mcp_server_fetch'],
-                env=self._server_environment())
-            async with stdio_client(params, errlog=subprocess.DEVNULL) as (read, write):
-                async with ClientSession(read, write) as session:
-                    await session.initialize()
-                    listed = await session.list_tools()
-                    if 'fetch' not in {tool.name for tool in listed.tools}:
-                        raise RuntimeError('fetch MCP server has no fetch tool')
-                    self.ready.set_result(True)
-                    running = set()
-
-                    async def handle(name, arguments, future):
-                        try:
-                            async with asyncio.timeout(FETCH_CALL_TIMEOUT_SECONDS):
-                                response = await session.call_tool(name, arguments)
-                            text = '\n'.join(block.text for block in response.content
-                                             if hasattr(block, 'text'))
-                            if response.isError:
-                                raise RuntimeError(text or 'fetch failed')
-                            future.set_result(text)
-                        except Exception as exc:
-                            future.set_exception(exc)
-
-                    while True:
-                        job = await self.requests.get()
-                        if job is None:
-                            break
-                        task = asyncio.create_task(handle(*job))
-                        running.add(task)
-                        task.add_done_callback(running.discard)
-                    if running:
-                        await asyncio.gather(*running, return_exceptions=True)
-
-        def thread_main():
-            try:
-                asyncio.run(run())
-            except BaseException:
-                if not self.ready.done():
-                    self.ready.set_exception(RuntimeError('fetch MCP startup failed'))
-                while self.requests is not None and not self.requests.empty():
-                    job = self.requests.get_nowait()
-                    if job is not None and not job[2].done():
-                        job[2].set_exception(RuntimeError('fetch MCP stopped'))
-
-        self.thread = threading.current_thread()
-        thread_main()
-
-    def call(self, name, arguments):
-        if not self.thread.is_alive():
-            raise RuntimeError('fetch MCP stopped')
-        future = Future()
-        self.loop.call_soon_threadsafe(self.requests.put_nowait, (name, arguments, future))
-        return future.result(timeout=FETCH_CALL_TIMEOUT_SECONDS + 5)
-
-    def close(self):
-        if self.thread.is_alive() and self.requests is not None:
-            self.loop.call_soon_threadsafe(self.requests.put_nowait, None)
-            self.thread.join(timeout=10)
+def _FetchWorker(python):
+    """Start the pinned mcp-server-fetch process on the shared MCP client."""
+    from mcp_services import open_stdio_client
+    # The fetch subprocess only needs the runtime path, UTF-8, and standard proxy settings.
+    # In particular, do not pass provider credentials.
+    keys = ('HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy',
+            'ALL_PROXY', 'all_proxy', 'NO_PROXY', 'no_proxy')
+    environment = {key: os.environ[key] for key in keys if key in os.environ}
+    for key in ('PATH', 'SYSTEMROOT'):
+        if key in os.environ:
+            environment[key] = os.environ[key]
+    environment.update({'PYTHONIOENCODING': 'utf-8', 'PYTHONUTF8': '1'})
+    worker = open_stdio_client('fetch', str(python), ['-m', 'mcp_server_fetch'], environment=environment,
+                               start_timeout=45, call_timeout=FETCH_CALL_TIMEOUT_SECONDS,
+                               survive_timeout=True)
+    if 'fetch' not in {tool.name for tool in worker.tools}:
+        worker.close()
+        raise RuntimeError('fetch MCP server has no fetch tool')
+    return worker
 
 
 class WebTools:

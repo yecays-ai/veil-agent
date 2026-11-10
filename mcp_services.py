@@ -180,9 +180,13 @@ class _StderrTail:
 
 
 class _Worker:
-    def __init__(self, service, environment=None):
+    def __init__(self, service, environment=None, *, start_timeout=None, call_timeout=None,
+                 survive_timeout=False, result_limit=16000):
         self.service = service
         self.environment = environment
+        self.start_timeout = start_timeout
+        self.survive_timeout = survive_timeout  # a slow call fails alone instead of ending the server
+        self.result_limit = result_limit        # None: keep the whole reply
         self.observer_url = None
         self.ready = Future()
         self.loop = None
@@ -195,7 +199,7 @@ class _Worker:
         self.tool_limit_hit = False
         self.closing = threading.Event()
         self.stderr_tail = None
-        self.call_timeout = None  # None: the module's CALL_TIMEOUT, read at call time
+        self.call_timeout = call_timeout  # None: the module's CALL_TIMEOUT, read at call time
         self.started_at = time.monotonic()
         self.thread = threading.Thread(target=self._thread, daemon=True, name='mcp-' + service['id'])
         self.thread.start()
@@ -215,7 +219,7 @@ class _Worker:
             self.stderr_tail = _StderrTail()
             async with stdio_client(params, errlog=self.stderr_tail.sink) as (read, write):
                 async with ClientSession(read, write) as session:
-                    async with asyncio.timeout(START_TIMEOUT):
+                    async with asyncio.timeout(self.start_timeout or START_TIMEOUT):
                         initialized = await session.initialize()
                         self.observer_url = _local_observer_url(
                             getattr(initialized, 'instructions', None)
@@ -255,11 +259,12 @@ class _Worker:
                             value = '\n'.join(str(getattr(block, 'text', '')) for block in response.content)
                             if not value and response.structuredContent is not None:
                                 value = json.dumps(response.structuredContent, ensure_ascii=False)
-                            self._finish(reply, value=value[:16000])
+                            self._finish(reply, value=value if self.result_limit is None else value[:self.result_limit])
                         except TimeoutError:
                             self._finish(reply, error=RuntimeError('MCP 工具调用超时，执行结果未知。'))
-                            self.closing.set()
-                            return
+                            if not self.survive_timeout:
+                                self.closing.set()
+                                return
                         except Exception as exc:
                             self._finish(reply, error=exc)
                         finally:
@@ -322,7 +327,8 @@ class _Worker:
                 if remaining <= 0:
                     with self.pending_lock:
                         reply.cancel()
-                    self.close()
+                    if not self.survive_timeout:
+                        self.close()
                     raise RuntimeError('MCP 工具调用超时，执行结果未知。')
                 try:
                     return reply.result(timeout=min(0.2, remaining))
@@ -351,6 +357,23 @@ class _Worker:
         self.stop()
         if self.thread.is_alive():
             self.thread.join(timeout=3)
+
+
+def open_stdio_client(name, command, args, *, environment=None, cwd=None, start_timeout=None,
+                      call_timeout=None, survive_timeout=False, result_limit=None):
+    """Start one MCP server for a built-in feature (web fetch, filesystem) and wait until it is ready.
+
+    Built-in features share the worker used for user-added MCP services, so process start, hidden
+    cmd.exe handling, shutdown and error text live in one place."""
+    worker = _Worker({'id': name, 'command': command, 'args': list(args), 'cwd': cwd}, environment,
+                     start_timeout=start_timeout, call_timeout=call_timeout,
+                     survive_timeout=survive_timeout, result_limit=result_limit)
+    try:
+        worker.ready.result(timeout=(start_timeout or START_TIMEOUT) + 5)
+    except BaseException:
+        worker.close()
+        raise
+    return worker
 
 
 class MCPServices:
