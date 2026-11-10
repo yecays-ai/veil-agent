@@ -1,5 +1,4 @@
 """Bounded MCP filesystem access and application-enforced tool policy."""
-import asyncio
 import ctypes
 import errno
 import hashlib
@@ -8,11 +7,9 @@ import os
 import re
 import shutil
 import stat
-import subprocess
 import sys
 import threading
 from datetime import datetime, timezone
-from concurrent.futures import Future
 from pathlib import Path, PureWindowsPath
 from types import SimpleNamespace
 
@@ -1881,71 +1878,19 @@ def _filesystem_server_command(workspace, *, executable=None, platform=None, roo
     return str(pythonw), [str(proxy), *args]
 
 
-class _McpWorker:
-    def __init__(self, workspace):
-        self.workspace = workspace
-        self.ready = Future()
-        self.requests = None
-        self.thread = threading.Thread(target=self._serve, daemon=True)
-        self.thread.start()
+def _McpWorker(workspace):
+    """Start the pinned filesystem MCP server on the shared MCP client."""
+    from mcp_services import open_stdio_client
+    command, args = _filesystem_server_command(workspace)
+    worker = open_stdio_client('filesystem', command, args, start_timeout=120, call_timeout=60,
+                               survive_timeout=True)
+    raw_call = worker.call
+
+    def call(name, arguments, should_stop=None):
         try:
-            # A fresh npx cache may need to download the pinned server first.
-            self.ready.result(timeout=120)
+            return raw_call(name, arguments, should_stop)
         except Exception:
-            self.close()
-            raise
+            raise RuntimeError('MCP tool failed') from None
 
-    def _serve(self):
-        async def run():
-            from mcp import ClientSession, StdioServerParameters
-            from mcp.client.stdio import stdio_client
-            self.loop = asyncio.get_running_loop()
-            self.requests = asyncio.Queue()
-            command, args = _filesystem_server_command(self.workspace)
-            params = StdioServerParameters(command=command, args=args)
-            async with stdio_client(params, errlog=subprocess.DEVNULL) as (read, write):
-                async with ClientSession(read, write) as session:
-                    await session.initialize()
-                    tools = await session.list_tools()
-                    self.tools = tools.tools
-                    self.ready.set_result(True)
-                    while True:
-                        job = await self.requests.get()
-                        if job is None:
-                            return
-                        name, args, future = job
-                        try:
-                            async with asyncio.timeout(60):
-                                response = await session.call_tool(name, args)
-                            if response.isError:
-                                raise RuntimeError('MCP tool failed')
-                            future.set_result('\n'.join(block.text for block in response.content
-                                                       if hasattr(block, 'text')))
-                        except Exception:
-                            future.set_exception(RuntimeError('MCP tool failed'))
-        def thread_main():
-            try:
-                asyncio.run(run())
-            except BaseException:
-                if not self.ready.done():
-                    self.ready.set_exception(RuntimeError('filesystem server unavailable'))
-                while self.requests is not None and not self.requests.empty():
-                    job = self.requests.get_nowait()
-                    if job is not None and not job[2].done():
-                        job[2].set_exception(RuntimeError('filesystem server stopped'))
-        self.thread = threading.current_thread()
-        thread_main()
-
-    def call(self, name, args):
-        if not self.thread.is_alive():
-            raise RuntimeError('filesystem server stopped')
-        result = Future()
-        self.loop.call_soon_threadsafe(self.requests.put_nowait, (name, args, result))
-        return result.result(timeout=65)
-
-    def close(self):
-        if self.thread.is_alive() and self.requests is not None:
-            self.loop.call_soon_threadsafe(self.requests.put_nowait, None)
-            self.thread.join(timeout=10)
-
-
+    worker.call = call
+    return worker
