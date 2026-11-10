@@ -736,6 +736,8 @@ class MCPServices:
     def _heal_loop(self):
         while not self.healer_stop.wait(HEAL_POLL):
             try:
+                if not self.has_stateful_services():
+                    continue  # nothing to watch: stay idle (and never touch clocks other code may be mocking)
                 self.schemas()  # starts services that are not running yet and refreshes failure state
                 self.heal_due()
             except Exception:
