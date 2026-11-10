@@ -1248,6 +1248,8 @@ class Budget:
         self._raise = (day, previous + amount)
 
     def _raised(self):
+        if not self._raise[1]:
+            return Decimal(0)  # nothing approved: leave the clock alone
         return self._raise[1] if self._raise[0] == self.clock()[:10] else Decimal(0)
 
     def daily_limit(self):
