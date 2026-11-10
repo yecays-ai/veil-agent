@@ -26,24 +26,13 @@ def load_state(root=ROOT):
     image = data.get('container_image', IMAGE)
     if not isinstance(data, dict) or not isinstance(roots, list) or not isinstance(image, str):
         raise ValueError('workbench.json 格式不对')
-    state = {'enabled': data.get('enabled') is True, 'project_roots': [str(x) for x in roots], 'container_image': image}
-    if isinstance(data.get('host_mode'), bool):  # ticket 329: kept through every save
-        state['host_mode'] = data['host_mode']
-    for key in ('host_keep_old_tools', 'host_desktop_handover'):
-        if isinstance(data.get(key), bool):
-            state[key] = data[key]
-    return state
+    return {'enabled': data.get('enabled') is True, 'project_roots': [str(x) for x in roots], 'container_image': image}
 
 
 def save_state(state, root=ROOT):
     path = settings_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
     clean = {k: state[k] for k in KEYS}
-    if isinstance(state.get('host_mode'), bool):
-        clean['host_mode'] = state['host_mode']
-    for key in ('host_keep_old_tools', 'host_desktop_handover'):
-        if isinstance(state.get(key), bool):
-            clean[key] = state[key]
     tmp = path.with_suffix('.tmp')
     tmp.write_text(json.dumps(clean, ensure_ascii=False, indent=2), encoding='utf-8')
     tmp.replace(path)
@@ -105,7 +94,6 @@ def status(root=ROOT):
 
 def show(state):
     print('\n工作台现在：' + ('开' if state['enabled'] else '关'))
-    print('新通道（直接在你的 Windows 上做事）：' + ('开' if state.get('host_mode') else '关'))
     print('可以动的项目文件夹：' + ('（还没设置，只能用工作台自己的文件夹）' if not state['project_roots'] else ''))
     for item in state['project_roots']:
         print('  ' + item)
@@ -115,8 +103,7 @@ def main():
     state = load_state()
     while True:
         show(state)
-        print('\n1 开启   2 关闭   3 加一个项目文件夹   4 清空项目文件夹   '
-              '5 开启新通道   6 关闭新通道（回到旧的）   0 退出（改完要重开 Peter）')
+        print('\n1 开启   2 关闭   3 加一个项目文件夹   4 清空项目文件夹   0 退出（改完要重开 Peter）')
         choice = input('选哪个：').strip()
         if choice == '1':
             image = state['container_image']
@@ -143,22 +130,10 @@ def main():
             state['project_roots'] = []
             save_state(state)
             print('已清空。')
-        elif choice == '5':
-            state['enabled'] = True
-            state['host_mode'] = True
-            state.pop('host_keep_old_tools', None)
-            save_state(state)
-            print('已开启新通道：浏览和操作软件都由工作台在你电脑上做。')
-        elif choice == '6':
-            state['host_mode'] = False
-            if not image_ready(state['container_image']):
-                state['enabled'] = False  # no container image to fall back on: do not leave a broken workbench on
-            save_state(state)
-            print('已关闭新通道，旧的浏览器和桌面工具恢复。')
         elif choice == '0':
             return
         else:
-            print('请输入 0 到 6。')
+            print('请输入 0 到 4。')
 
 
 if __name__ == '__main__':

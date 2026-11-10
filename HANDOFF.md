@@ -1,45 +1,16 @@
 # HANDOFF
 
-## 工单 334（2026-11-10）：主聊天交给宿主通道（阶段 2）
+## 工单 336（2026-11-10）：删宿主通道，工作台权限用 OpenCode 原生规则
 
-- 改动见 `docs/tickets/334-main-chat-host-handover.md`。旧代码未删。自主醒来、瞥一眼、`host_mode` 关时行为不变。
-- 真机桌面（记事本 hello，也是 333 的真机验收）两轮：第一轮 uv 在 C 盘装 Python 3.14 跨盘失败（os error 17，已修：uv 目录固定在 VEIL 旁的 `.uv`）；第二轮桌面服务起来了，但 Peter 14 步 13 次工具调用没输入就撞到 ¥0.5 上限，日志无 Type。结论：宿主桌面还不可靠，所以 334 默认只交出浏览器，桌面动作保留聊天自带的（`host_desktop_handover` 可开）。
-- 状态：测试副本真机——后台浏览器场景通过（读 example.com 写进 notes.md）；桌面场景（记事本 hello）在能找到 uv 的环境里还没重跑，通过前不切换 Lan 的正式 Peter。下一步第一件事：用 Lan 平时启动 Peter 的 Python 环境重跑桌面场景。
+- 依据：Lan 2026-11-10 的决定：Peter 要像 Claude Code 一样自己查、读仓库、跑代码；密码和已有文件不再硬拦，每个有风险的动作弹一次授权卡，唯一硬限制是预算上限。两天的宿主通道（#329–#334）没有给她带来可见变化，整体删除。
+- 删除：`host_executor.py`、`veil_checkpoint.py`、`veil_mcp_gateway.py`、`tests/test_host_path.py`、`docs/tickets/329–334`，以及 `executor_opencode.py`、`veil_agent.py`、`tool_groups.py`、`workbench_switch.py` 里只服务宿主通道的分支（`host_mode`、`host_desktop`、`host_keep_old_tools`、`host_desktop_handover`、`HOST_*`、选项 5/6）。工作台里自建的命令分类器（`_safe_project_command`、`_complex_bash_request`、`DANGEROUS`、测试脚本白名单等约 550 行）一并删除。
+- 保留（对旧路径同样有用）：事件流取权限请求 `PermissionEvents`、`mcp_services` 的 cmd 参数加引号和服务 stderr 尾巴、`mcp_hidden_stdio.command_for_call`、`error_text`、`schema_top`。
+- 新规则：`build_config` 写 OpenCode 原生权限：`bash` 默认 allow，`git push/clone/fetch/pull`、各类安装器、`curl/wget/npx`、`sudo` 等为 ask；`read` 敏感文件 ask；`edit` 默认 allow（日志文件仍 deny）；`webfetch`、项目外路径 ask。`decide()` 只剩一件事：对 ask 弹批准卡（自主醒来拒绝，已批准的同一请求本任务内不重复问），批准联网后仍只开放该命令用到的主机。维护任务里 git 提交/推送等仍 deny（由 VEIL 自己提交）。容器隔离、密钥代理、预算上限不变。
+- 草稿 #335 关闭，因为它修的是被删的东西。
 
-## 工单 333（2026-11-10）：输入读回
-
-- 见 docs/tickets/333-host-input-verify.md。代码在 veil_checkpoint.py（foreground_rect、focused_text、_outside_foreground）与 veil_mcp_gateway.py（_verify_typed）。
-- 状态：云端单元测试通过；真机（测试副本跑记事本 hello）未验证。
-
-## 工单 332（2026-11-10）：第二轮真机实测
-
-- 网页场景卡死 10 分钟的根因是 OpenCode 1.19.5 的 `GET /permission` 整个列表格式错误（见工单文件），已改读事件流并在读不到时明确停下；云端真实 OpenCode 复现并验证。
-- 浏览器路径带空格（`Program Files`）起不来：`mcp_hidden_stdio.py` 现在把 cmd 命令行作为整串交给系统；MCP 服务的 stderr 尾部会写进启动错误。
-- 已安装程序（记事本等）直接打开不再询问，下载/临时/项目目录里的程序仍询问。
-- 状态：这几项都要在测试副本重跑两个场景才算通过；重跑前 329/330/331/332 仍未通过真机验收。
-
-## 工单 331（2026-11-10）：真机实测发现的两个问题
-
-- 真机（Lan 的 Windows）跑 329/330 的场景，后台浏览器起不来：`npx` 在 Windows 上是 `.cmd`，经 `cmd /c` 执行，而 `--proxy-bypass <-loopback>` 里的 `<` `>` 被当成重定向。已去掉这个参数（Playwright 自己会加），`mcp_services._stdio_server_command` 也改成给含 `< > | & ^` 的参数加引号，同类问题一起解决。
-- 日志里只有 `unhandled errors in a TaskGroup (1 sub-exception)`，真正原因被吞掉：`executor_opencode.error_text` 把 ExceptionGroup 展开到第一个具体异常，网关启动失败和 `start_error` 日志都用它。
-- uv 用 pip 装在 Python 的 Scripts 目录，这个目录不在 PATH 里，`shutil.which('uvx')` 找不到，桌面会悄悄关掉：`host_executor._python_script` 也会在当前 Python 的 Scripts 里找。
-- 一个工具起不来不再拖垮整个任务（Lan 明确要求）：`executor_opencode.run` 只丢掉起不来的那个，写一条 `tool_unavailable` 日志，并在任务开头告诉模型“这次没有 X”；桌面和浏览器互不影响。范围：只覆盖宿主通道（`host_mode`）里的网关，旧通道不变。状态：修后两个真机场景（无桌面网页查资料写 notes.md、记事本输入 hello 不保存）还没在测试副本重跑，重跑通过前 329/330 仍算未通过真机验收。
-
-## 工单 330（2026-11-10）：后台浏览器只能上公网
-
-- 宿主通道的后台浏览器（Playwright MCP）现在只经 VEIL 的公网代理出网（复用 `browser_tools.PublicProxy`：只放行公网 IP 的 HTTPS 443，DNS 由代理解析并固定），（Playwright 自己会加 `<-loopback>`，所以连 localhost 也走代理；命令行里不能出现 `<` `>`，Windows 的 cmd 会当成重定向，真机实测因此起不来）。点链接、重定向、脚本、iframe 都走这条路，到不了家里的内网、本机或明文 HTTP。WebRTC 用 `--config` 加 `--webrtc-ip-handling-policy=disable_non_proxied_udp`（不走代理的 UDP 关掉；云端已确认这两个参数和代理参数一起出现在浏览器进程上）。
-- `host_executor.BrowserNetwork` 在 `prepare` 里启动，挂在浏览器网关上，网关退出时关闭；代理起不来就不提供浏览器（只记一条说明）。`executor_opencode.run` 无论从哪里返回（包括提前拒绝、已停止）都会对所有宿主网关调用 `__exit__`（没进入的也会关掉它带的代理）。
-- 云端用 Chromium 实测：经这个代理访问 127.0.0.1 上的网页会失败（ERR_EMPTY_RESPONSE）。未验证：Lan 电脑上的 Edge。
-
-## 工单 329（2026-11-10）：宿主机执行通道（阶段 1，默认关）
-
-- 新文件：`veil_checkpoint.py`（4 类裁决、禁区路径、日志）、`veil_mcp_gateway.py`（包住上游 MCP，只开放白名单工具，复用 `mcp_services._Worker`）、`host_executor.py`（固定版本、上游启动命令、`prepare`、命令行开发自测 `python host_executor.py --workdir <目录> "任务"`）。`executor_opencode.run` 新增 `checkpoint`/`host_gateways`，不传时行为不变。
-- 云端用真实 OpenCode 1.19.5 实测发现并处理：项目里的 `.opencode/plugin` 会在宿主机直接运行（加 `OPENCODE_PURE`、`OPENCODE_DISABLE_PROJECT_CONFIG` 等，旧宿主模式也加了）；OpenCode 的 `grep` 工具能读出 `.env`，而且它的审批请求经 HTTP 列表会 400（宿主通道关掉 grep；`grep -r`/`rg`/`cat *` 覆盖到密钥文件时检查点拒绝）；MCP 的审批请求不带参数（所以由 VEIL 网关按真实参数裁决）；拒绝一次默认会结束整个任务（开 `experimental.continue_loop_on_deny`，拒绝原因回给模型）。Playwright MCP 的 `filename` 参数能写任意文件、`browser_tabs` 带 `url` 能绕过网址检查：都拦了。
-- 人优先：VEIL 不再因 Lan 的输入停整次任务；动鼠标键盘那一刻交给 Windows-MCP 自带的控制协调（区分注入与物理输入，未在真机验证）。自主醒来时不开桌面，只有后台浏览器。
-- 审查（Cubic）后补上：Windows 反斜杠路径和 `$env:`/`%VAR%` 路径也按禁区检查；不往 Lan 自己的浏览器里打字，读不到前台窗口时不打字；日志不记输入的文字；`.pem/.pfx/.key` 等在宿主读取策略里也拒绝；项目里有指向外部的链接或包含 VEIL 自己的数据就不在宿主运行；网关排队有上限，排到后再裁决；非 Windows 不走宿主通道；`workbench.json` 保存时保留 `host_mode`。
-- 后台浏览器点链接、被重定向时进内网的问题：工单 330 已解决（只经公网代理出网）。
-- 未做（阶段 2/3）：主聊天工具收缩、删旧代码。旧容器宿主模式的 grep 仍开着（Lan 用 Docker，不受影响）。
-- 下一步第一件事：远程控制在测试副本跑 5 个场景（见工单）。电脑需要 `uv`（uvx 会下载 Python 3.14 和 windows-mcp）、Node（npx 下载 @playwright/mcp）、`npm i -g opencode-ai@1.19.5`；首次下载慢，先手动跑一次预热。
+- 真机验收（测试副本 veil-agent-hosttest，真实 Docker 工作台 + 真实模型，共约 ¥0.55）：建文件并运行 Python、读回，0 张卡；拒绝 pip install 后任务继续并自己写了后备文件（加了 `continue_loop_on_deny`）；批准 pip install 可装成，但容器系统 Python 受 PEP 668 限制，模型连换 3 种命令就弹了 3 张卡（镜像问题，未处理）；读 `.env` 弹 1 张询问卡，批准后容器里仍是空文件（容器遮盖秘密文件，未改）；`web_search` 3 秒返回；可见浏览器 show:true/false 都能打开页面；旧 `workbench.json` 里残留 `host_mode` 能正常加载；`tests.test_executor_opencode` 92 项仅剩 `test_real_server_runs_a_task_through_the_program_approval` 一项，该项在 #334 之前就失败。日志在测试副本 `test-work\336`。
+- 下一步第一件事：Lan 更新后做一次日常任务；另开小事让容器里的 pip 能直接装（镜像配置），并决定读 `.env` 批准后是否让容器看到真内容。
+- 已知边界：`sh -c "..."` 这类包装命令是否被 OpenCode 拆开检查「未验证」；容器里联网仍由网络锁和批准卡共同限制。
 
 ## 工单 328（2026-11-10）：搜索先走 DeepSeek 官网搜索接口
 
