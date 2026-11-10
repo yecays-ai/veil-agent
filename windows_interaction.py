@@ -363,9 +363,13 @@ def validate_applications(applications):
         label, launch_path = item.get('label'), item.get('launch_path')
         if not isinstance(label, str) or not label.strip() or len(label) > 100:
             raise ValueError(f'{app_id} needs a short display label.')
-        launch = _expand_windows_path(launch_path)
-        if ntpath.splitext(launch)[1].casefold() != '.exe':
-            raise ValueError(f'{app_id} launch_path must point to one .exe file.')
+        # No launch_path: an app Peter works with but cannot start himself (e.g. a ClickOnce app whose folder
+        # changes on every update); it must already be running.
+        launch = None
+        if launch_path is not None:
+            launch = _expand_windows_path(launch_path)
+            if ntpath.splitext(launch)[1].casefold() != '.exe':
+                raise ValueError(f'{app_id} launch_path must point to one .exe file.')
         process_paths = item.get('process_paths')
         if (not isinstance(process_paths, list) or not process_paths
                 or any(not isinstance(path, str) for path in process_paths)):
@@ -945,6 +949,8 @@ class WindowsInteractionBackend(WindowsDesktopBackend):
 
     def start_application(self, app, stopped, input_monitor, input_snapshot, *, url=None):
         launch_path = app['launch_path']
+        if launch_path is None:
+            raise ObservationError(f'{app["label"]} cannot be started by Peter; ask Lan to open it, then try again.')
         if os.name != 'nt' or not os.path.isfile(launch_path):
             if app.get('public_web') is True:
                 raise ObservationError(
@@ -1769,200 +1775,3 @@ class WindowsInteractionTools:
 
         return WindowsToolResult('This interaction tool is not registered.',
                                  activity_detail=f'{summary} 工具未注册。'), '被拒绝'
-
-
-class WindowsWorkbenchGateway:
-    """One task-local MCP bridge for the existing Windows UIA tools."""
-
-    names = frozenset({
-        'windows_discover_apps', 'windows_list', 'windows_foreground', 'windows_observe',
-        'windows_launch', 'windows_manage', 'windows_control_action',
-    })
-
-    def __init__(self, observer, interaction, should_stop, approval, *, container=False):
-        self.observer = observer
-        self.interaction = interaction
-        self.should_stop = should_stop
-        self.approval = approval
-        self.token = secrets.token_urlsafe(24)
-        self.host = '0.0.0.0' if container else '127.0.0.1'
-        self.server = self.thread = None
-        self.started = False
-        self.cancelled = threading.Event()
-        self.input_snapshot = None
-        self.approval_pending = threading.Event()
-        self.action_lock = threading.Lock()
-        self.queue_wait_seconds = 60
-        # One desktop grant covers every workbench call of the same chat request.
-        self.authorized = bool(getattr(interaction, 'workbench_desktop_authorized', False))
-
-    def stop(self):
-        self.cancelled.set()
-
-    def stopped(self):
-        if self.cancelled.is_set() or self.should_stop():
-            return True
-        if (not self.approval_pending.is_set() and self.input_snapshot is not None
-                and self.interaction.input_monitor.changed_since(self.input_snapshot)):
-            self.cancelled.set()
-            return True
-        return False
-
-    def approve(self, prompt):
-        if self.stopped():
-            return 'n'
-        self.approval_pending.set()
-        try:
-            answer = self.approval(prompt)
-            if str(answer or '').strip().casefold() == 'y':
-                # The requested approval gesture is expected; later input still stops the task.
-                self.input_snapshot = self.interaction.input_monitor.snapshot()
-            else:
-                self.stop()
-            return answer
-        except BaseException:
-            self.stop()
-            raise
-        finally:
-            self.approval_pending.clear()
-
-    def invoke(self, name, arguments):
-        # Parallel tool calls from the model queue here instead of failing; a stop or an uncertain result
-        # (which stops the task before the lock is released) is seen by every queued call.
-        # The wait is bounded (an approval card the human is still answering does not count), so a call the
-        # MCP client already gave up on cannot run a stale desktop action much later; timing out stops the task.
-        deadline = time.monotonic() + self.queue_wait_seconds
-        while not self.action_lock.acquire(timeout=0.25):
-            if self.stopped():
-                return 'The Windows task is stopped; no desktop action was started.', '中断'
-            if self.approval_pending.is_set():
-                deadline = time.monotonic() + self.queue_wait_seconds
-            elif time.monotonic() >= deadline:
-                self.stop()
-                return ('Another desktop action took too long; the Windows task is stopped and no further '
-                        'desktop action was started.'), '中断'
-        try:
-            if self.stopped():
-                return 'The Windows task is stopped; no desktop action was started.', '中断'
-            if not self.authorized:
-                answer = self.approve('本次工作台任务需要读取普通 Windows 窗口（含截图）并操作已授权软件。允许本次任务访问桌面吗？y/N ')
-                if str(answer or '').strip().casefold() != 'y':
-                    return 'Desktop access for this workbench task was not approved.', '被拒绝'
-                self.authorized = True
-                self.interaction.workbench_desktop_authorized = True
-            if self.stopped():
-                return 'The Windows task is stopped; no desktop action was started.', '中断'
-            if name in WINDOWS_OBSERVATION_TOOL_NAMES:
-                if name == 'windows_observe':
-                    # One target screenshot per observation; the executor bounds total steps and cost.
-                    self.observer.begin_request()
-                text, state, _summary = self.observer.invoke(name, arguments, should_stop=self.stopped)
-            else:
-                text, state, _summary = self.interaction.invoke(
-                    name, arguments, self.approve, should_stop=self.stopped)
-            if state in ('中断', '结果不确定'):
-                self.stop()
-            return text, state
-        except BaseException:
-            self.stop()
-            raise
-        finally:
-            self.action_lock.release()
-
-    def __enter__(self):
-        gateway = self
-
-        class Handler(BaseHTTPRequestHandler):
-            protocol_version = 'HTTP/1.1'
-            timeout = 10
-
-            def log_message(self, *_args):
-                pass
-
-            def send_json(self, body, status=200, session=None):
-                data = json.dumps(body, ensure_ascii=False).encode('utf-8')
-                self.send_response(status)
-                self.send_header('Content-Type', 'application/json')
-                self.send_header('Content-Length', str(len(data)))
-                if status >= 400:
-                    self.send_header('Connection', 'close')
-                    self.close_connection = True
-                if session:
-                    self.send_header('Mcp-Session-Id', session)
-                self.end_headers()
-                self.wfile.write(data)
-
-            def do_POST(self):
-                if self.path != '/mcp' or not secrets.compare_digest(
-                        self.headers.get('Authorization', '').encode('utf-8', 'ignore'),
-                        ('Bearer ' + gateway.token).encode()):
-                    return self.send_json({'error': {'code': -32001, 'message': 'unauthorized'}}, 401)
-                try:
-                    size = int(self.headers.get('Content-Length') or 0)
-                    if size < 0 or size > 65536:
-                        raise ValueError('invalid request size')
-                    request = json.loads(self.rfile.read(size))
-                    if not isinstance(request, dict) or not isinstance(request.get('method'), str):
-                        raise ValueError('invalid request')
-                    params, method, request_id = request.get('params') or {}, request['method'], request.get('id')
-                    if not isinstance(params, dict):
-                        raise ValueError('invalid params')
-                    if method == 'initialize':
-                        return self.send_json({'jsonrpc': '2.0', 'id': request_id, 'result': {
-                            'protocolVersion': params.get('protocolVersion', '2025-03-26'),
-                            'capabilities': {'tools': {}}, 'serverInfo': {'name': 'veil-windows', 'version': '1'}}},
-                            session=gateway.token)
-                    if method == 'notifications/initialized':
-                        return self.send_json({}, 202)
-                    if method == 'tools/list':
-                        schemas = [tool for tool in gateway.observer.tools + gateway.interaction.tools
-                                   if tool.name in gateway.names]
-                        return self.send_json({'jsonrpc': '2.0', 'id': request_id, 'result': {'tools': [
-                            {'name': tool.name, 'description': tool.description,
-                             'inputSchema': tool.inputSchema} for tool in schemas]}})
-                    if method == 'tools/call':
-                        name, arguments = params.get('name'), params.get('arguments', {})
-                        if name not in gateway.names or not isinstance(arguments, dict):
-                            raise ValueError('unknown Windows tool or invalid arguments')
-                        text, state = gateway.invoke(name, arguments)
-                        content = [{'type': 'text', 'text': str(text)}]
-                        image = getattr(text, 'image_data_uri', None)
-                        if isinstance(image, str) and image.startswith('data:image/png;base64,'):
-                            content.append({'type': 'image', 'data': image.split(',', 1)[1], 'mimeType': 'image/png'})
-                        return self.send_json({'jsonrpc': '2.0', 'id': request_id, 'result': {
-                            'content': content, 'isError': state != '成功'}})
-                    return self.send_json({'jsonrpc': '2.0', 'id': request_id,
-                                           'error': {'code': -32601, 'message': 'method not found'}})
-                except (TypeError, ValueError, KeyError, json.JSONDecodeError) as exc:
-                    return self.send_json({'jsonrpc': '2.0', 'id': None,
-                                           'error': {'code': -32602, 'message': str(exc)[:200]}}, 400)
-
-        try:
-            self.server = ThreadingHTTPServer((self.host, 0), Handler)
-            self.thread = threading.Thread(target=self.server.serve_forever, daemon=True, name='veil-windows-mcp')
-            self.thread.start()
-            self.started = True
-            self.input_snapshot = self.interaction.input_monitor.snapshot()
-            self.observer.begin_request()
-            return self
-        except Exception:
-            self.__exit__(None, None, None)
-            raise
-
-    @property
-    def url(self):
-        host = 'host.docker.internal' if self.host == '0.0.0.0' else '127.0.0.1'
-        return f'http://{host}:{self.server.server_address[1]}/mcp'
-
-    def __exit__(self, *_args):
-        self.stop()
-        if self.server is not None:
-            if self.started:
-                self.server.shutdown()
-            self.server.server_close()
-            self.server = None
-        if self.thread is not None:
-            if self.started:
-                self.thread.join(timeout=2)
-            self.thread = None
-        self.started = False

@@ -4104,9 +4104,6 @@ class Chat:
             files = getattr(self.tools, 'files', None) or self.tools
             operation_lock = getattr(files, 'workspace_operation_lock', None) if inside_workspace else None
             browser = getattr(files, 'browser_tools', None)
-            # Ticket 325: Windows desktop work stays in main chat until the workbench desktop path passes a real
-            # end-to-end run on Lan's PC; the workbench gets no desktop gateway (code, files and public browser only).
-            windows_gateway = None
             with operation_lock if operation_lock else nullcontext():
                 outcome = ex.run(task, command=command, workdir=Path(workdir), home=role / 'workbench-home',
                                  provider=provider, key=key, limits=limits, autonomy=autonomy, ask=self.approval,
@@ -4117,8 +4114,7 @@ class Chat:
                                  save_approval=(lambda kind, fingerprint: self.maintenance.record_workbench_approval(
                                      task_id, kind, fingerprint)) if maintenance else None,
                                  browser_gateway=(browser.workbench_gateway
-                                                  if browser is not None and browser.enabled and not maintenance else None),
-                                 windows_gateway=windows_gateway)
+                                                  if browser is not None and browser.enabled and not maintenance else None))
             if maintenance and self.maintenance is not None:
                 self.maintenance.record_workbench(task_id, cost=outcome.cost, steps=outcome.steps,
                                                   report=outcome.text, state=outcome.state, reason=outcome.reason)

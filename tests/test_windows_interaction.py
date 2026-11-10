@@ -22,7 +22,6 @@ from windows_interaction import (
     WINDOWS_INTERACTION_TOOL_SCHEMAS,
     WindowsInteractionBackend,
     WindowsInteractionTools,
-    WindowsWorkbenchGateway,
     load_application_allowlist,
     validate_applications,
 )
@@ -1491,203 +1490,6 @@ max_steps = 3
         with self.assertRaises(ObservationError):
             backend.apply_canvas_action({'handle': 12345}, 'stroke', {'points': [[50, 60]]}, lambda: False, monitor, None)
 
-class WindowsWorkbenchGatewayTests(unittest.TestCase):
-    def test_gateway_exposes_only_uia_task_tools_and_returns_target_window_screenshot(self):
-        calls = []
-        observations = []
-        observer = SimpleNamespace(
-            tools=WINDOW_TOOL_SCHEMAS,
-            begin_request=lambda: observations.append('reset'),
-            invoke=lambda name, args, **_kwargs: (calls.append((name, args)) or (
-                WindowsToolResult('observed', image_data_uri='data:image/png;base64,c2NyZWVuc2hvdA=='), '成功', name)),
-        )
-        interaction = SimpleNamespace(
-            tools=WINDOWS_INTERACTION_TOOL_SCHEMAS,
-            input_monitor=FakeInputMonitor(),
-            invoke=lambda name, args, *_args, **_kwargs: ('acted', '成功', name),
-        )
-        with WindowsWorkbenchGateway(observer, interaction, lambda: False, lambda _prompt: 'y') as gateway:
-            def call(method, params):
-                request = urllib.request.Request(
-                    gateway.url, data=json.dumps({'jsonrpc': '2.0', 'id': 1, 'method': method,
-                                                   'params': params}).encode(),
-                    headers={'Authorization': 'Bearer ' + gateway.token, 'Content-Type': 'application/json'})
-                return json.loads(urllib.request.urlopen(request, timeout=2).read())
-            listed = call('tools/list', {})['result']['tools']
-            self.assertEqual({item['name'] for item in listed}, {
-                'windows_discover_apps', 'windows_list', 'windows_foreground', 'windows_observe',
-                'windows_launch', 'windows_manage', 'windows_control_action',
-            })
-            self.assertNotIn('windows_canvas_action', {item['name'] for item in listed})
-            result = call('tools/call', {'name': 'windows_observe', 'arguments': {'window_id': WINDOW_ID}})
-            self.assertFalse(result['result']['isError'])
-            self.assertEqual(result['result']['content'][1], {
-                'type': 'image', 'data': 'c2NyZWVuc2hvdA==', 'mimeType': 'image/png'})
-            repeated = call('tools/call', {'name': 'windows_observe', 'arguments': {'window_id': WINDOW_ID}})
-            self.assertEqual(repeated['result']['content'][1]['type'], 'image')
-        self.assertEqual(calls, [('windows_observe', {'window_id': WINDOW_ID})] * 2)
-        self.assertEqual(len(observations), 3)
-
-    def test_uncertain_desktop_result_stops_following_gateway_calls(self):
-        calls = []
-        observer = SimpleNamespace(
-            tools=WINDOW_TOOL_SCHEMAS,
-            begin_request=lambda: None,
-            invoke=lambda *_args, **_kwargs: ('observed', '成功', 'windows_list'),
-        )
-        interaction = SimpleNamespace(tools=WINDOWS_INTERACTION_TOOL_SCHEMAS,
-                                      input_monitor=FakeInputMonitor(),
-                                      invoke=lambda name, args, *_a, **_kw: (
-                                          calls.append((name, args)) or ('unknown', '结果不确定', name)))
-        with WindowsWorkbenchGateway(observer, interaction, lambda: False, lambda _prompt: 'y') as gateway:
-            def call():
-                request = urllib.request.Request(
-                    gateway.url, data=json.dumps({'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call',
-                                                   'params': {'name': 'windows_control_action', 'arguments': {}}}).encode(),
-                    headers={'Authorization': 'Bearer ' + gateway.token, 'Content-Type': 'application/json'})
-                return json.loads(urllib.request.urlopen(request, timeout=2).read())['result']
-            self.assertTrue(call()['isError'])
-            self.assertIn('stopped', call()['content'][0]['text'])
-        self.assertEqual(len(calls), 1)
-
-    def test_no_desktop_observation_before_task_authorization(self):
-        observed, asked = [], []
-        observer = SimpleNamespace(tools=WINDOW_TOOL_SCHEMAS, begin_request=lambda: None,
-                                   invoke=lambda *_a, **_kw: observed.append('read'))
-        interaction = SimpleNamespace(tools=WINDOWS_INTERACTION_TOOL_SCHEMAS,
-                                      input_monitor=FakeInputMonitor())
-        with WindowsWorkbenchGateway(observer, interaction, lambda: False,
-                lambda prompt: asked.append(prompt) or 'n') as gateway:
-            text, state = gateway.invoke('windows_observe', {'window_id': WINDOW_ID})
-            self.assertEqual(state, '被拒绝')
-            self.assertTrue(gateway.stopped())
-            self.assertEqual(observed, [])
-            self.assertEqual(len(asked), 1)
-
-    def test_parallel_call_cannot_pass_an_uncertain_action(self):
-        entered, release = threading.Event(), threading.Event()
-        calls = []
-        def action(name, args, *_a, **_kw):
-            calls.append(name)
-            entered.set()
-            self.assertTrue(release.wait(2))
-            return 'unknown', '结果不确定', name
-        observer = SimpleNamespace(tools=WINDOW_TOOL_SCHEMAS, begin_request=lambda: None)
-        interaction = SimpleNamespace(tools=WINDOWS_INTERACTION_TOOL_SCHEMAS,
-                                      input_monitor=FakeInputMonitor(), invoke=action)
-        with WindowsWorkbenchGateway(observer, interaction, lambda: False, lambda _: 'y') as gateway:
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                pending = pool.submit(gateway.invoke, 'windows_control_action', {})
-                self.assertTrue(entered.wait(2))
-                queued = pool.submit(gateway.invoke, 'windows_control_action', {})
-                time.sleep(0.4)
-                self.assertFalse(queued.done())  # waits its turn instead of failing
-                release.set()
-                self.assertEqual(pending.result(timeout=2)[1], '结果不确定')
-                self.assertEqual(queued.result(timeout=2)[1], '中断')
-            self.assertEqual(gateway.invoke('windows_control_action', {})[1], '中断')
-            self.assertEqual(calls, ['windows_control_action'])
-
-    def test_parallel_call_queues_and_runs_after_a_successful_action(self):
-        entered, release = threading.Event(), threading.Event()
-        calls = []
-        def action(name, args, *_a, **_kw):
-            calls.append(name)
-            if len(calls) == 1:
-                entered.set()
-                self.assertTrue(release.wait(2))
-            return 'done', '成功', name
-        observer = SimpleNamespace(tools=WINDOW_TOOL_SCHEMAS, begin_request=lambda: None)
-        interaction = SimpleNamespace(tools=WINDOWS_INTERACTION_TOOL_SCHEMAS,
-                                      input_monitor=FakeInputMonitor(), invoke=action)
-        with WindowsWorkbenchGateway(observer, interaction, lambda: False, lambda _: 'y') as gateway:
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                first = pool.submit(gateway.invoke, 'windows_launch', {})
-                self.assertTrue(entered.wait(2))
-                queued = pool.submit(gateway.invoke, 'windows_control_action', {})
-                time.sleep(0.4)
-                self.assertFalse(queued.done())
-                release.set()
-                self.assertEqual(first.result(timeout=2)[1], '成功')
-                self.assertEqual(queued.result(timeout=2)[1], '成功')
-        self.assertEqual(calls, ['windows_launch', 'windows_control_action'])
-
-    def test_queued_call_that_waits_too_long_stops_the_task_instead_of_running_late(self):
-        entered, release = threading.Event(), threading.Event()
-        calls = []
-        def action(name, args, *_a, **_kw):
-            calls.append(name)
-            entered.set()
-            self.assertTrue(release.wait(3))
-            return 'done', '成功', name
-        observer = SimpleNamespace(tools=WINDOW_TOOL_SCHEMAS, begin_request=lambda: None)
-        interaction = SimpleNamespace(tools=WINDOWS_INTERACTION_TOOL_SCHEMAS,
-                                      input_monitor=FakeInputMonitor(), invoke=action)
-        with WindowsWorkbenchGateway(observer, interaction, lambda: False, lambda _: 'y') as gateway:
-            gateway.queue_wait_seconds = 0.3
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                pending = pool.submit(gateway.invoke, 'windows_control_action', {})
-                self.assertTrue(entered.wait(2))
-                queued = pool.submit(gateway.invoke, 'windows_launch', {})
-                self.assertEqual(queued.result(timeout=2)[1], '中断')
-                release.set()
-                pending.result(timeout=2)
-            self.assertEqual(calls, ['windows_control_action'])
-            self.assertEqual(gateway.invoke('windows_launch', {})[1], '中断')
-
-    def test_one_desktop_grant_covers_later_workbench_calls_of_the_same_request(self):
-        asked = []
-        observer = SimpleNamespace(tools=WINDOW_TOOL_SCHEMAS, begin_request=lambda: None,
-                                   invoke=lambda name, args, **_kw: ('ok', '成功', name))
-        interaction = SimpleNamespace(tools=WINDOWS_INTERACTION_TOOL_SCHEMAS, input_monitor=FakeInputMonitor())
-        def approve(prompt):
-            asked.append(prompt)
-            return 'y'
-        with WindowsWorkbenchGateway(observer, interaction, lambda: False, approve) as first:
-            self.assertEqual(first.invoke('windows_list', {})[1], '成功')
-        with WindowsWorkbenchGateway(observer, interaction, lambda: False, approve) as second:
-            self.assertEqual(second.invoke('windows_list', {})[1], '成功')
-        self.assertEqual(len(asked), 1)
-        FilesystemTools.begin_request(SimpleNamespace(windows_interaction_tools=interaction))  # next chat request
-        with WindowsWorkbenchGateway(observer, interaction, lambda: False, approve) as third:
-            third.invoke('windows_list', {})
-        self.assertEqual(len(asked), 2)
-
-    def test_human_input_between_actions_stays_stopped_after_the_desktop_is_idle(self):
-        monitor = FakeInputMonitor()
-        observer = SimpleNamespace(tools=WINDOW_TOOL_SCHEMAS, begin_request=lambda: None)
-        interaction = SimpleNamespace(tools=WINDOWS_INTERACTION_TOOL_SCHEMAS, input_monitor=monitor)
-        with WindowsWorkbenchGateway(observer, interaction, lambda: False, lambda _prompt: 'n') as gateway:
-            monitor.version += 1  # Lan moves the mouse between two otherwise independent MCP calls.
-            self.assertTrue(gateway.stopped())
-            monitor.idle = True
-            self.assertTrue(gateway.stopped())
-
-    def test_approval_click_is_not_a_task_takeover_but_stop_is_not_cleared(self):
-        monitor = FakeInputMonitor()
-        observer = SimpleNamespace(tools=WINDOW_TOOL_SCHEMAS, begin_request=lambda: None)
-        interaction = SimpleNamespace(tools=WINDOWS_INTERACTION_TOOL_SCHEMAS, input_monitor=monitor)
-        def approve(_prompt):
-            monitor.version += 1
-            self.assertFalse(gateway.stopped(), 'the approval gesture is expected input')
-            return 'y'
-        with WindowsWorkbenchGateway(observer, interaction, lambda: False, approve) as gateway:
-            self.assertEqual(gateway.approve('Save the test document?'), 'y')
-            self.assertFalse(gateway.stopped())
-            monitor.version += 1
-            self.assertTrue(gateway.stopped(), 'later human input must still stop the task')
-            gateway.approve('Save the test document?')
-            self.assertTrue(gateway.stopped(), 'approval must never clear a stopped task')
-
-    def test_rejected_approval_revokes_further_desktop_actions(self):
-        observer = SimpleNamespace(tools=WINDOW_TOOL_SCHEMAS, begin_request=lambda: None)
-        interaction = SimpleNamespace(tools=WINDOWS_INTERACTION_TOOL_SCHEMAS,
-                                      input_monitor=FakeInputMonitor())
-        with WindowsWorkbenchGateway(observer, interaction, lambda: False, lambda _: 'n') as gateway:
-            self.assertEqual(gateway.approve('Save?'), 'n')
-            self.assertTrue(gateway.stopped())
-
-
 class OwnInputMonitorTests(unittest.TestCase):
     def make(self):
         from windows_interaction import DesktopInputMonitor
@@ -1722,6 +1524,16 @@ class OwnInputMonitorTests(unittest.TestCase):
             clock['now'] = clock['last'] = 1200
         self.assertEqual(monitor.snapshot(), 1100)
 
+
+
+class OptionalLaunchPathTests(unittest.TestCase):
+    def test_app_without_launch_path_is_allowed_but_cannot_be_started(self):
+        apps = validate_applications({'fastorange': {
+            'label': 'FastOrange', 'actions': ['invoke'],
+            'process_paths': ['C:\\Users\\x\\AppData\\Local\\Apps\\2.0\\*\\*\\fast*\\FastOrange.exe']}})
+        self.assertIsNone(apps['fastorange']['launch_path'])
+        with self.assertRaises(ObservationError):
+            WindowsInteractionBackend().start_application(apps['fastorange'], lambda: False, None, None)
 
 if __name__ == '__main__':
     unittest.main()

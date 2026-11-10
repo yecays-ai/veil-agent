@@ -15,8 +15,6 @@ from unittest.mock import Mock, patch
 
 import executor_opencode as ex
 import browser_tools
-from windows_interaction import WindowsWorkbenchGateway
-from windows_observer import WINDOW_TOOL_SCHEMAS, WindowsToolResult
 from veil_agent import Budget, Chat, Store, UserError, load_character
 
 PROVIDER = {'model': 'fake-model', 'base_url': 'https://example.invalid/v1', 'max_input_tokens': 8000,
@@ -99,15 +97,6 @@ class BrowserGatewayConfigTests(unittest.TestCase):
         self.assertFalse(server['oauth'])
         self.assertNotIn('codemode', json.dumps(config))
 
-    def test_workbench_config_keeps_browser_and_windows_services_task_local(self):
-        browser = SimpleNamespace(url='http://host.docker.internal:4567/mcp', token='browser-token')
-        windows = SimpleNamespace(url='http://host.docker.internal:4568/mcp', token='windows-token')
-        config = ex.build_config(PROVIDER, 'relay-token', 'http://relay/v1',
-                                 browser_gateway=browser, windows_gateway=windows)
-        self.assertEqual(set(config['mcp']), {'veil_browser', 'veil_windows'})
-        self.assertEqual(config['mcp']['veil_windows']['url'], windows.url)
-        self.assertEqual(config['mcp']['veil_windows']['headers'], {'Authorization': 'Bearer windows-token'})
-
     def test_workbench_limit_and_startup_failure_stop_and_close_the_browser_gateway(self):
         events = []
         class Gateway:
@@ -133,52 +122,6 @@ class BrowserGatewayConfigTests(unittest.TestCase):
         self.assertEqual(result.state, '出错')
         self.assertEqual(events, ['enter', 'close'])
 
-    def test_workbench_limit_stops_and_closes_both_task_local_gateways(self):
-        events = []
-        class Gateway:
-            url, token = 'http://127.0.0.1:9/mcp', 'token'
-            def __init__(self, kind):
-                self.kind = kind
-            def __enter__(self):
-                events.append(self.kind + ':enter')
-                return self
-            def __exit__(self, *_args):
-                events.append(self.kind + ':close')
-            def stop(self):
-                events.append(self.kind + ':stop')
-            def stopped(self):
-                return False
-        done = [assistant(text='done', tool=('read', {'file': 'x'}), finish='stop')]
-        result, _api, _costs, _kill = run([(done, [], False)] * 3, limits={'max_steps': 1},
-                                           browser_gateway=lambda *_: Gateway('browser'),
-                                           windows_gateway=lambda *_: Gateway('windows'))
-        self.assertEqual(result.reason, 'limit_or_failure')
-        self.assertEqual(events, ['browser:enter', 'windows:enter', 'browser:stop', 'windows:stop',
-                                  'browser:close', 'windows:close'])
-
-    def test_stopped_windows_gateway_cannot_be_reported_as_success(self):
-        events = []
-        class Gateway:
-            url, token = 'http://127.0.0.1:9/mcp', 'token'
-            def __enter__(self):
-                return self
-            def __exit__(self, *_args):
-                events.append('closed')
-            def stopped(self):
-                return True
-            def stop(self):
-                events.append('stopped')
-        done = [assistant(text='Desktop task complete', tool=('veil_windows_windows_list', {}), finish='stop')]
-        result, api, costs, _kill = run([(done, [], False)] * 3,
-                                        windows_gateway=lambda *_: Gateway())
-        self.assertNotEqual(result.state, '成功')
-        self.assertEqual(result.reason, 'desktop_stopped')
-        self.assertTrue(api.aborted)
-        self.assertEqual(len(costs), 1)
-        self.assertEqual(events, ['stopped', 'closed'])
-
-
-class DecisionTests(unittest.TestCase):
     def test_task_approvals_and_denials_survive_workbench_restart(self):
         wd = Path(tempfile.mkdtemp())
         persisted = {'approved': [], 'denied': []}
@@ -1422,41 +1365,6 @@ def _fake_browser_llm():
     return server, names, results
 
 
-def _fake_windows_llm():
-    """A fake model that proves an OpenCode container returns an MCP screenshot to its next model turn."""
-    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-    names, results = [], []
-
-    class Handler(BaseHTTPRequestHandler):
-        def log_message(self, *_a):
-            pass
-
-        def do_POST(self):
-            body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
-            tools = [tool.get('function', {}).get('name', '') for tool in body.get('tools') or []]
-            if tools:
-                names[:] = tools
-            completed = [message for message in body['messages'] if message.get('role') == 'tool']
-            if completed:
-                results[:] = body['messages']
-                delta, finish = {'role': 'assistant', 'content': 'Windows report received.'}, 'stop'
-            else:
-                observe = next(name for name in tools if name.endswith('windows_observe'))
-                delta, finish = {'role': 'assistant', 'tool_calls': [{
-                    'index': 0, 'id': 'call_1', 'type': 'function',
-                    'function': {'name': observe, 'arguments': json.dumps({'window_id': 'w-' + '1' * 24,
-                                                                            'visual_fallback': 'force'})}}]}, 'tool_calls'
-            self.send_response(200)
-            self.send_header('Content-Type', 'text/event-stream')
-            self.end_headers()
-            frame = {'id': 'x', 'object': 'chat.completion.chunk', 'model': 'fake',
-                     'choices': [{'index': 0, 'delta': delta, 'finish_reason': finish}]}
-            self.wfile.write(('data: ' + json.dumps(frame) + '\n\ndata: [DONE]\n\n').encode())
-    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    return server, names, results
-
-
 def _docker_workbench_available():
     if 'value' not in _DOCKER_AVAILABLE:
         try:
@@ -1549,33 +1457,6 @@ class RealOpenCodeTests(unittest.TestCase):
         self.assertEqual(asked, [], 'the isolated public browser must not ask for a card')
         self.assertNotIn('workbench tool diagnostics', result.text)
         self.assertIn('Example Domain from VEIL', result.text)
-
-    def test_real_container_returns_windows_target_screenshot_to_the_model(self):
-        if not _docker_workbench_available():
-            self.skipTest('VEIL workbench Docker image is unavailable')
-        server, names, results = _fake_windows_llm()
-        self.addCleanup(server.server_close)
-        self.addCleanup(server.shutdown)
-        image = ('data:image/png;base64,'
-                 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=')
-        observer = SimpleNamespace(
-            tools=WINDOW_TOOL_SCHEMAS, begin_request=lambda: None,
-            invoke=lambda *_args, **_kwargs: (WindowsToolResult('observed', image_data_uri=image), '成功', 'Notepad'))
-        interaction = SimpleNamespace(tools=[], input_monitor=SimpleNamespace(snapshot=lambda: 1,
-                                                                                 changed_since=lambda _s: False))
-        base = Path(tempfile.mkdtemp())
-        provider = {**PROVIDER, 'base_url': f'http://127.0.0.1:{server.server_address[1]}/v1', 'model': 'fake',
-                    'input_modalities': ['text', 'image']}
-        result = ex.run('observe the Windows test window', command='opencode', workdir=base / 'bench', home=base / 'home',
-                        provider=provider, key='k', limits={'max_seconds': 120}, autonomy=False,
-                        ask=lambda _p: 'n', stopped=lambda: False, record_cost=lambda _c: None,
-                        container={'image': 'veil-workbench'},
-                        windows_gateway=lambda stopped, container: WindowsWorkbenchGateway(
-                            observer, interaction, stopped, lambda _p: 'y', container=container))
-        self.assertEqual(result.state, '成功', result.text)
-        self.assertIn('veil_windows_windows_observe', names)
-        self.assertTrue(results)
-        self.assertIn('image_url', json.dumps(results))
 
     def test_maintenance_test_runs_without_a_card_and_direct_network_is_blocked(self):
         if not _docker_workbench_available():

@@ -20,6 +20,8 @@ Peter 今天能稳定操作 Windows 软件（主聊天桌面动作）；工作�
 
 - 工单 336：删除宿主通道（329–334 的 `host_executor.py`、`veil_checkpoint.py`、`veil_mcp_gateway.py` 及各处 `host_mode` 分支，草稿 #335 作废）；工作台权限不再由自建命令分类器决定，改用 OpenCode 原生规则：推送/克隆/拉取、装依赖、下载联网、项目外路径、敏感文件、危险系统命令都是 `ask`（弹你的批准卡，自主醒来一律拒绝），其余命令和编辑直接允许；不再硬拦密码文件和已有文件。预算上限、批准卡、容器隔离不变。测试副本真机验收已通过（结果与两处遗留问题见 `HANDOFF.md`）；Lan 正式使用的体验还没有验证。
 
+- 工单 338（进行中）：统一权限与删重复第一步，删掉无调用者的工作台桌面网关；`windows-apps.toml` 加入 FastOrange（只能操作已运行的窗口）。其余删除项见 `HANDOFF.md`。
+
 ## 下一步
 
 0. 工单 327/328 合并后：Lan 让 Peter 读一个打不开的网页，看 `tools.jsonl` 里是不是有具体原因；让 Peter 查资料，确认能搜到；几天后对账 DeepSeek 余额和 `/cost` 里的 `deepseek-search`。
