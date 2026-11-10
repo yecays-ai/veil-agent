@@ -7,8 +7,9 @@
 - 保留（对旧路径同样有用）：事件流取权限请求 `PermissionEvents`、`mcp_services` 的 cmd 参数加引号和服务 stderr 尾巴、`mcp_hidden_stdio.command_for_call`、`error_text`、`schema_top`。
 - 新规则：`build_config` 写 OpenCode 原生权限：`bash` 默认 allow，`git push/clone/fetch/pull`、各类安装器、`curl/wget/npx`、`sudo` 等为 ask；`read` 敏感文件 ask；`edit` 默认 allow（日志文件仍 deny）；`webfetch`、项目外路径 ask。`decide()` 只剩一件事：对 ask 弹批准卡（自主醒来拒绝，已批准的同一请求本任务内不重复问），批准联网后仍只开放该命令用到的主机。维护任务里 git 提交/推送等仍 deny（由 VEIL 自己提交）。容器隔离、密钥代理、预算上限不变。
 - 草稿 #335 关闭，因为它修的是被删的东西。
-- 状态：代码已改，单元测试和 CI 通过；测试副本真机验收（工作台建文件+跑 Python 不弹卡、装依赖弹一次卡、读 .env 弹卡、搜索、可见浏览器）进行中，结果未记录前不算通过。
-- 下一步第一件事：在测试副本跑完上述场景，把结果追加到本段。
+
+- 真机验收（测试副本 veil-agent-hosttest，真实 Docker 工作台 + 真实模型，共约 ¥0.55）：建文件并运行 Python、读回，0 张卡；拒绝 pip install 后任务继续并自己写了后备文件（加了 `continue_loop_on_deny`）；批准 pip install 可装成，但容器系统 Python 受 PEP 668 限制，模型连换 3 种命令就弹了 3 张卡（镜像问题，未处理）；读 `.env` 弹 1 张询问卡，批准后容器里仍是空文件（容器遮盖秘密文件，未改）；`web_search` 3 秒返回；可见浏览器 show:true/false 都能打开页面；旧 `workbench.json` 里残留 `host_mode` 能正常加载；`tests.test_executor_opencode` 92 项仅剩 `test_real_server_runs_a_task_through_the_program_approval` 一项，该项在 #334 之前就失败。日志在测试副本 `test-work\336`。
+- 下一步第一件事：Lan 更新后做一次日常任务；另开小事让容器里的 pip 能直接装（镜像配置），并决定读 `.env` 批准后是否让容器看到真内容。
 - 已知边界：`sh -c "..."` 这类包装命令是否被 OpenCode 拆开检查「未验证」；容器里联网仍由网络锁和批准卡共同限制。
 
 ## 工单 328（2026-11-10）：搜索先走 DeepSeek 官网搜索接口
