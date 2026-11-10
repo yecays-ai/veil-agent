@@ -7,6 +7,9 @@
 - 保留（对旧路径同样有用）：事件流取权限请求 `PermissionEvents`、`mcp_services` 的 cmd 参数加引号和服务 stderr 尾巴、`mcp_hidden_stdio.command_for_call`、`error_text`、`schema_top`。
 - 新规则：`build_config` 写 OpenCode 原生权限：`bash` 默认 allow，`git push/clone/fetch/pull`、各类安装器、`curl/wget/npx`、`sudo` 等为 ask；`read` 敏感文件 ask；`edit` 默认 allow（日志文件仍 deny）；`webfetch`、项目外路径 ask。`decide()` 只剩一件事：对 ask 弹批准卡（自主醒来拒绝，已批准的同一请求本任务内不重复问），批准联网后仍只开放该命令用到的主机。维护任务里 git 提交/推送等仍 deny（由 VEIL 自己提交）。容器隔离、密钥代理、预算上限不变。
 - 草稿 #335 关闭，因为它修的是被删的东西。
+- 状态：代码已改，单元测试和 CI 通过；测试副本真机验收（工作台建文件+跑 Python 不弹卡、装依赖弹一次卡、读 .env 弹卡、搜索、可见浏览器）进行中，结果未记录前不算通过。
+- 下一步第一件事：在测试副本跑完上述场景，把结果追加到本段。
+- 已知边界：`sh -c "..."` 这类包装命令是否被 OpenCode 拆开检查「未验证」；容器里联网仍由网络锁和批准卡共同限制。
 
 ## 工单 328（2026-11-10）：搜索先走 DeepSeek 官网搜索接口
 

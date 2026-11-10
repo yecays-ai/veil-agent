@@ -360,6 +360,8 @@ def decide(permission, patterns, metadata, workdir, *, autonomy, ask, approvals=
     """VEIL's answer to an OpenCode permission request: (reply, reason). OpenCode only raises what the config
     marks "ask" (a push, an install, a download, a path outside the project, a secret file), so each request is
     one card for Lan. During autonomous activity nobody is there to ask, so it is refused."""
+    if permission in {'task', 'skill', 'todowrite'}:
+        return 'once', 'inside the workbench'
     if permission not in KNOWN_ASKED:
         # Tools of other MCP servers (VEIL's own tools included) are never approved here: VEIL runs those itself.
         return 'reject', 'not offered to the workbench'
