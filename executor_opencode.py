@@ -945,6 +945,10 @@ def build_config(provider, token, base_url, protect=(), browser_gateway=None, ma
     bash_rules = {'*': 'allow' if isolated else 'ask'}
     for command in ASK_COMMANDS:
         bash_rules.update({command: 'ask', command + ' *': 'ask'})
+        if command.startswith('git '):
+            # `git -c k=v -C dir push ...`: options between `git` and the subcommand must not skip the card.
+            spaced = 'git -* ' + command[4:]
+            bash_rules.update({spaced: 'ask', spaced + ' *': 'ask'})
     if maintenance:  # VEIL commits, pushes and opens the pull request itself
         for command in MAINTENANCE_DENY:
             bash_rules.update({command: 'deny', command + ' *': 'deny'})
