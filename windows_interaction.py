@@ -363,9 +363,13 @@ def validate_applications(applications):
         label, launch_path = item.get('label'), item.get('launch_path')
         if not isinstance(label, str) or not label.strip() or len(label) > 100:
             raise ValueError(f'{app_id} needs a short display label.')
-        launch = _expand_windows_path(launch_path)
-        if ntpath.splitext(launch)[1].casefold() != '.exe':
-            raise ValueError(f'{app_id} launch_path must point to one .exe file.')
+        # No launch_path: an app Peter works with but cannot start himself (a ClickOnce app, or one Lan approved
+        # from a card); it must already be running.
+        launch = None
+        if launch_path is not None:
+            launch = _expand_windows_path(launch_path)
+            if ntpath.splitext(launch)[1].casefold() != '.exe':
+                raise ValueError(f'{app_id} launch_path must point to one .exe file.')
         process_paths = item.get('process_paths')
         if (not isinstance(process_paths, list) or not process_paths
                 or any(not isinstance(path, str) for path in process_paths)):
@@ -386,6 +390,30 @@ def validate_applications(applications):
         if type(result[app_id]['public_web']) is not bool:
             raise ValueError(f'{app_id} public_web must be boolean.')
     return result
+
+
+def list_approved_apps(path):
+    """The apps Lan approved from a card, for the settings page: [{app_id, label}]."""
+    try:
+        rows = json.loads(Path(path).read_text(encoding='utf-8'))
+        return [{'app_id': app_id, 'label': str(row.get('label', app_id))[:60]} for app_id, row in rows.items()]
+    except (OSError, ValueError, AttributeError):
+        return []
+
+
+def remove_approved_app(path, app_id):
+    path = Path(path)
+    try:
+        rows = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(rows, dict) or app_id not in rows:
+        return False
+    del rows[app_id]
+    tmp = path.with_suffix('.tmp')
+    tmp.write_text(json.dumps(rows, ensure_ascii=False, indent=1), encoding='utf-8')
+    os.replace(tmp, path)
+    return True
 
 
 def load_application_allowlist(root, character_id, settings):
@@ -945,6 +973,8 @@ class WindowsInteractionBackend(WindowsDesktopBackend):
 
     def start_application(self, app, stopped, input_monitor, input_snapshot, *, url=None):
         launch_path = app['launch_path']
+        if launch_path is None:
+            raise ObservationError(f'{app["label"]} cannot be started by Peter; ask Lan to open it, then try again.')
         if os.name != 'nt' or not os.path.isfile(launch_path):
             if app.get('public_web') is True:
                 raise ObservationError(
@@ -998,12 +1028,14 @@ class WindowsInteractionTools:
     def __init__(self, enabled, applications, *, max_result_bytes=8192, backend=None,
                  platform_enabled=None, idle_seconds=3, timeout_seconds=8,
                  input_monitor=None, discovery=None, desktop_icons_manager=None,
-                 desktop_icons_backend=None, store=None, character_id=None, lab=None):
+                 desktop_icons_backend=None, store=None, character_id=None, lab=None, approved_apps_path=None):
         self.enabled = enabled is True
         self.platform_enabled = (os.name == 'nt') if platform_enabled is None else bool(platform_enabled)
         self.applications = applications or {}
         self.discovery = discovery or WindowsAppDiscovery()
         self.discovered_applications = {}
+        self.approved_apps_path = Path(approved_apps_path) if approved_apps_path else None
+        self._load_approved_apps()
         self.backend = backend or WindowsInteractionBackend()
         self.max_result_bytes = max(512, min(int(max_result_bytes), MAX_RESULT_BYTES))
         self.idle_seconds = max(1, min(int(idle_seconds), 30))
@@ -1028,6 +1060,88 @@ class WindowsInteractionTools:
 
         self.tools = (list(WINDOWS_INTERACTION_TOOL_SCHEMAS)
                       if self.enabled and self.platform_enabled else [])
+
+    # Apps Lan approved from a card ("always"): stored in a data file (not the tracked windows-apps.toml) so an
+    # update never conflicts. Remove an entry from that file to revoke it.
+    APPROVED_ACTIONS = ['activate', 'minimize', 'restore', 'invoke', 'select', 'toggle', 'expand', 'collapse']
+
+    def _load_approved_apps(self):
+        path = self.approved_apps_path
+        if path is None or not path.is_file():
+            return
+        try:
+            rows = json.loads(path.read_text(encoding='utf-8'))
+            loaded = validate_applications({
+                app_id: {'label': row['label'], 'process_paths': row['process_paths'], 'actions': self.APPROVED_ACTIONS}
+                for app_id, row in rows.items()})
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
+            return
+        for app_id, app in loaded.items():
+            self.applications.setdefault(app_id, app)
+
+    def _save_approved_app(self, app_id, label, pattern):
+        path = self.approved_apps_path
+        if path is None:
+            return
+        try:
+            rows = json.loads(path.read_text(encoding='utf-8')) if path.is_file() else {}
+        except (OSError, ValueError):
+            rows = {}
+        rows[app_id] = {'label': label, 'process_paths': [pattern]}
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix('.tmp')
+        tmp.write_text(json.dumps(rows, ensure_ascii=False, indent=1), encoding='utf-8')
+        os.replace(tmp, path)
+
+    def candidate_for_window(self, window):
+        """An open window whose app is not allowlisted yet but could be, after Lan approves it: id, label, path pattern."""
+        path = str(window.get('process_path', '') or '')
+        if not path or self.application_id_for(window):
+            return None
+        normalized = ntpath.normcase(ntpath.normpath(path))
+        if is_blocked_window_exe(normalized) or UNTRUSTED_PATH_PATTERN.search(normalized):
+            return None
+        exe = ntpath.basename(normalized)
+        stem = re.sub(r'[^a-z0-9_-]', '', ntpath.splitext(exe)[0].casefold())[:31]
+        if not _APP_ID.fullmatch(stem) or stem in self.applications or stem in self.discovered_applications:
+            return None
+        pattern = path
+        # ClickOnce apps live under Apps\2.0\<random>\<random>\<random>\ and change folder on every update.
+        match = re.fullmatch(r'(?i)(.*\\apps\\2\.0\\)(?:[^\\]+\\)+([^\\]+\.exe)', path)
+        if match:
+            pattern = match.group(1) + '*\\' + match.group(2)
+        label = str(window.get('app') or window.get('process') or stem)[:60]
+        return {'app_id': stem, 'label': label, 'pattern': pattern}
+
+    def _ensure_approved(self, app_id, window_id, approval, stopped, summary):
+        """If app_id names an open, not yet allowlisted window, ask Lan once; "y" stores it. Returns a refusal or None."""
+        if self.get_app(app_id) or not self._valid_window_id(window_id):
+            return None
+        selected = next((item for item in self.backend.list_windows(stopped) if item.get('id') == window_id), None)
+        candidate = self.candidate_for_window(selected) if selected else None
+        if candidate is None or candidate['app_id'] != app_id:
+            return None
+        if approval is None:
+            return WindowsToolResult('This app is not on the allowlist and no approval can be asked here.',
+                                     activity_detail=f'{summary} 软件未获批准。'), '被拒绝'
+        try:
+            title = str(selected.get('title') or '').strip()[:40]
+            shown = f'{title}（{candidate["label"]}）' if title else candidate['label']
+            answer = approval(f'Peter 想操作「{shown}」：点击这个软件的按钮、切换和展开窗口，不输入文字。'
+                              '同意后会记住，以后不再问。同意吗？y/N ')
+        except Exception:
+            return WindowsToolResult('VEIL could not collect approval; the window was not changed.',
+                                     activity_detail=f'{summary} 无法取得 Lan 批准；未操作。'), '被拒绝'
+        if answer == NOT_ASKED:
+            return WindowsToolResult(NOT_ASKED_TEXT + ' The window was not changed.',
+                                     activity_detail=f'{summary} 自主活动时不询问 Lan；未操作。'), '被拒绝'
+        if str(answer or '').strip().casefold() != 'y':
+            return WindowsToolResult('Lan did not approve this app; nothing was done.',
+                                     activity_detail=f'{summary} Lan 未批准该软件；未操作。'), '被拒绝'
+        self.applications.update(validate_applications({app_id: {
+            'label': candidate['label'], 'process_paths': [candidate['pattern']], 'actions': self.APPROVED_ACTIONS}}))
+        self._save_approved_app(app_id, candidate['label'], candidate['pattern'])
+        return None
 
     def get_app(self, app_id):
         if not app_id:
@@ -1450,6 +1564,9 @@ class WindowsInteractionTools:
                     or args.get('action') not in ('activate', 'minimize', 'restore')):
                 return WindowsToolResult('Use an allowlisted app_id, exact window_id, and activate/minimize/restore action.',
                                          activity_detail='参数无效。'), '被拒绝'
+            refusal = self._ensure_approved(args['app_id'], args['window_id'], approval, should_stop or (lambda: False), summary)
+            if refusal is not None:
+                return refusal
             app = self.get_app(args['app_id'])
             if app is None or args['action'] not in app['actions']:
                 return WindowsToolResult('This app or window action is not authorized by the program allowlist.',
@@ -1490,6 +1607,9 @@ class WindowsInteractionTools:
                                              activity_detail='文本输入参数无效。'), '被拒绝'
             elif 'text' in args:
                 return WindowsToolResult('text is accepted only for set_text.', activity_detail='参数无效。'), '被拒绝'
+            refusal = self._ensure_approved(args['app_id'], args['window_id'], approval, should_stop or (lambda: False), summary)
+            if refusal is not None:
+                return refusal
             app = self.get_app(args['app_id'])
             if app is None or action not in app['actions']:
                 return WindowsToolResult('This app or UIA action is not authorized by the program allowlist.',
@@ -1769,200 +1889,3 @@ class WindowsInteractionTools:
 
         return WindowsToolResult('This interaction tool is not registered.',
                                  activity_detail=f'{summary} 工具未注册。'), '被拒绝'
-
-
-class WindowsWorkbenchGateway:
-    """One task-local MCP bridge for the existing Windows UIA tools."""
-
-    names = frozenset({
-        'windows_discover_apps', 'windows_list', 'windows_foreground', 'windows_observe',
-        'windows_launch', 'windows_manage', 'windows_control_action',
-    })
-
-    def __init__(self, observer, interaction, should_stop, approval, *, container=False):
-        self.observer = observer
-        self.interaction = interaction
-        self.should_stop = should_stop
-        self.approval = approval
-        self.token = secrets.token_urlsafe(24)
-        self.host = '0.0.0.0' if container else '127.0.0.1'
-        self.server = self.thread = None
-        self.started = False
-        self.cancelled = threading.Event()
-        self.input_snapshot = None
-        self.approval_pending = threading.Event()
-        self.action_lock = threading.Lock()
-        self.queue_wait_seconds = 60
-        # One desktop grant covers every workbench call of the same chat request.
-        self.authorized = bool(getattr(interaction, 'workbench_desktop_authorized', False))
-
-    def stop(self):
-        self.cancelled.set()
-
-    def stopped(self):
-        if self.cancelled.is_set() or self.should_stop():
-            return True
-        if (not self.approval_pending.is_set() and self.input_snapshot is not None
-                and self.interaction.input_monitor.changed_since(self.input_snapshot)):
-            self.cancelled.set()
-            return True
-        return False
-
-    def approve(self, prompt):
-        if self.stopped():
-            return 'n'
-        self.approval_pending.set()
-        try:
-            answer = self.approval(prompt)
-            if str(answer or '').strip().casefold() == 'y':
-                # The requested approval gesture is expected; later input still stops the task.
-                self.input_snapshot = self.interaction.input_monitor.snapshot()
-            else:
-                self.stop()
-            return answer
-        except BaseException:
-            self.stop()
-            raise
-        finally:
-            self.approval_pending.clear()
-
-    def invoke(self, name, arguments):
-        # Parallel tool calls from the model queue here instead of failing; a stop or an uncertain result
-        # (which stops the task before the lock is released) is seen by every queued call.
-        # The wait is bounded (an approval card the human is still answering does not count), so a call the
-        # MCP client already gave up on cannot run a stale desktop action much later; timing out stops the task.
-        deadline = time.monotonic() + self.queue_wait_seconds
-        while not self.action_lock.acquire(timeout=0.25):
-            if self.stopped():
-                return 'The Windows task is stopped; no desktop action was started.', '中断'
-            if self.approval_pending.is_set():
-                deadline = time.monotonic() + self.queue_wait_seconds
-            elif time.monotonic() >= deadline:
-                self.stop()
-                return ('Another desktop action took too long; the Windows task is stopped and no further '
-                        'desktop action was started.'), '中断'
-        try:
-            if self.stopped():
-                return 'The Windows task is stopped; no desktop action was started.', '中断'
-            if not self.authorized:
-                answer = self.approve('本次工作台任务需要读取普通 Windows 窗口（含截图）并操作已授权软件。允许本次任务访问桌面吗？y/N ')
-                if str(answer or '').strip().casefold() != 'y':
-                    return 'Desktop access for this workbench task was not approved.', '被拒绝'
-                self.authorized = True
-                self.interaction.workbench_desktop_authorized = True
-            if self.stopped():
-                return 'The Windows task is stopped; no desktop action was started.', '中断'
-            if name in WINDOWS_OBSERVATION_TOOL_NAMES:
-                if name == 'windows_observe':
-                    # One target screenshot per observation; the executor bounds total steps and cost.
-                    self.observer.begin_request()
-                text, state, _summary = self.observer.invoke(name, arguments, should_stop=self.stopped)
-            else:
-                text, state, _summary = self.interaction.invoke(
-                    name, arguments, self.approve, should_stop=self.stopped)
-            if state in ('中断', '结果不确定'):
-                self.stop()
-            return text, state
-        except BaseException:
-            self.stop()
-            raise
-        finally:
-            self.action_lock.release()
-
-    def __enter__(self):
-        gateway = self
-
-        class Handler(BaseHTTPRequestHandler):
-            protocol_version = 'HTTP/1.1'
-            timeout = 10
-
-            def log_message(self, *_args):
-                pass
-
-            def send_json(self, body, status=200, session=None):
-                data = json.dumps(body, ensure_ascii=False).encode('utf-8')
-                self.send_response(status)
-                self.send_header('Content-Type', 'application/json')
-                self.send_header('Content-Length', str(len(data)))
-                if status >= 400:
-                    self.send_header('Connection', 'close')
-                    self.close_connection = True
-                if session:
-                    self.send_header('Mcp-Session-Id', session)
-                self.end_headers()
-                self.wfile.write(data)
-
-            def do_POST(self):
-                if self.path != '/mcp' or not secrets.compare_digest(
-                        self.headers.get('Authorization', '').encode('utf-8', 'ignore'),
-                        ('Bearer ' + gateway.token).encode()):
-                    return self.send_json({'error': {'code': -32001, 'message': 'unauthorized'}}, 401)
-                try:
-                    size = int(self.headers.get('Content-Length') or 0)
-                    if size < 0 or size > 65536:
-                        raise ValueError('invalid request size')
-                    request = json.loads(self.rfile.read(size))
-                    if not isinstance(request, dict) or not isinstance(request.get('method'), str):
-                        raise ValueError('invalid request')
-                    params, method, request_id = request.get('params') or {}, request['method'], request.get('id')
-                    if not isinstance(params, dict):
-                        raise ValueError('invalid params')
-                    if method == 'initialize':
-                        return self.send_json({'jsonrpc': '2.0', 'id': request_id, 'result': {
-                            'protocolVersion': params.get('protocolVersion', '2025-03-26'),
-                            'capabilities': {'tools': {}}, 'serverInfo': {'name': 'veil-windows', 'version': '1'}}},
-                            session=gateway.token)
-                    if method == 'notifications/initialized':
-                        return self.send_json({}, 202)
-                    if method == 'tools/list':
-                        schemas = [tool for tool in gateway.observer.tools + gateway.interaction.tools
-                                   if tool.name in gateway.names]
-                        return self.send_json({'jsonrpc': '2.0', 'id': request_id, 'result': {'tools': [
-                            {'name': tool.name, 'description': tool.description,
-                             'inputSchema': tool.inputSchema} for tool in schemas]}})
-                    if method == 'tools/call':
-                        name, arguments = params.get('name'), params.get('arguments', {})
-                        if name not in gateway.names or not isinstance(arguments, dict):
-                            raise ValueError('unknown Windows tool or invalid arguments')
-                        text, state = gateway.invoke(name, arguments)
-                        content = [{'type': 'text', 'text': str(text)}]
-                        image = getattr(text, 'image_data_uri', None)
-                        if isinstance(image, str) and image.startswith('data:image/png;base64,'):
-                            content.append({'type': 'image', 'data': image.split(',', 1)[1], 'mimeType': 'image/png'})
-                        return self.send_json({'jsonrpc': '2.0', 'id': request_id, 'result': {
-                            'content': content, 'isError': state != '成功'}})
-                    return self.send_json({'jsonrpc': '2.0', 'id': request_id,
-                                           'error': {'code': -32601, 'message': 'method not found'}})
-                except (TypeError, ValueError, KeyError, json.JSONDecodeError) as exc:
-                    return self.send_json({'jsonrpc': '2.0', 'id': None,
-                                           'error': {'code': -32602, 'message': str(exc)[:200]}}, 400)
-
-        try:
-            self.server = ThreadingHTTPServer((self.host, 0), Handler)
-            self.thread = threading.Thread(target=self.server.serve_forever, daemon=True, name='veil-windows-mcp')
-            self.thread.start()
-            self.started = True
-            self.input_snapshot = self.interaction.input_monitor.snapshot()
-            self.observer.begin_request()
-            return self
-        except Exception:
-            self.__exit__(None, None, None)
-            raise
-
-    @property
-    def url(self):
-        host = 'host.docker.internal' if self.host == '0.0.0.0' else '127.0.0.1'
-        return f'http://{host}:{self.server.server_address[1]}/mcp'
-
-    def __exit__(self, *_args):
-        self.stop()
-        if self.server is not None:
-            if self.started:
-                self.server.shutdown()
-            self.server.server_close()
-            self.server = None
-        if self.thread is not None:
-            if self.started:
-                self.thread.join(timeout=2)
-            self.thread = None
-        self.started = False

@@ -273,8 +273,10 @@ class FilesystemTools:
             store=store,
             character_id=cfg.id,
             lab=self.lab,
+            approved_apps_path=Path(store.root) / cfg.id / 'windows-approved-apps.json',
         )
         self.windows_tools.application_id_for = self.windows_interaction_tools.application_id_for
+        self.windows_tools.candidate_for_window = self.windows_interaction_tools.candidate_for_window
         self.tools.extend(self.windows_tools.tools)
         self.tools.extend(self.windows_interaction_tools.tools)
         self.desktop_files = DesktopFileTools(

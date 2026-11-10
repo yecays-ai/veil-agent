@@ -2040,6 +2040,8 @@ def make_handler(hub, token):
                 self._get_mcp(query)
             elif url.path == '/api/workbench':
                 self._get_workbench()
+            elif url.path == '/api/windows-apps':
+                self._get_windows_apps()
             elif url.path == '/api/screen-pop/next':
                 self._get_screen_pop_next(query)
             elif url.path == '/api/desktop-icons/snapshots':
@@ -2390,6 +2392,33 @@ def make_handler(hub, token):
                 except OSError:
                     self._send(500, {'error': 'MCP 配置保存失败。'})
 
+        def _windows_apps_path(self):
+            chat = hub.chat
+            tools = getattr(chat, 'tools', None) if chat else None
+            files = getattr(tools, 'files', None) or tools
+            interaction = getattr(files, 'windows_interaction_tools', None)
+            return getattr(interaction, 'approved_apps_path', None), interaction
+
+        def _get_windows_apps(self):
+            if not self._guard(self.headers.get('X-Token')):
+                return
+            path, _interaction = self._windows_apps_path()
+            from windows_interaction import list_approved_apps
+            self._send(200, {'apps': list_approved_apps(path) if path else []})
+
+        def _post_windows_apps(self, body):
+            """Lan revokes an app she approved from a card (removing it takes effect at once)."""
+            if not self._guard(self.headers.get('X-Token')):
+                return
+            path, interaction = self._windows_apps_path()
+            app_id = body.get('remove') if isinstance(body, dict) else None
+            from windows_interaction import list_approved_apps, remove_approved_app
+            if path is None or not isinstance(app_id, str) or not remove_approved_app(path, app_id):
+                self._send(400, {'error': 'remove'})
+                return
+            interaction.applications.pop(app_id, None)
+            self._send(200, {'apps': list_approved_apps(path)})
+
         def _get_workbench(self):
             if not self._guard(self.headers.get('X-Token')):
                 return
@@ -2627,6 +2656,8 @@ def make_handler(hub, token):
                 self._post_quiet_hours(body)
             elif url.path == '/api/workbench':
                 self._post_workbench(body)
+            elif url.path == '/api/windows-apps':
+                self._post_windows_apps(body)
             elif url.path == '/api/codex-watch':
                 self._post_codex_watch(body)
             elif url.path == '/api/exit':
