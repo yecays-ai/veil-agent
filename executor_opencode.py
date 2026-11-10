@@ -39,8 +39,6 @@ DEFAULT_LIMITS = {'max_steps': 30, 'max_seconds': 600, 'repeat_limit': 3, 'run_b
 RESULT_CHARS = 4000
 _WINDOWS = os.name == 'nt'
 
-SECRET_GLOBS = ('*.env', '*.env.*', 'secrets/*', '*/secrets/*', '*\\secrets\\*', '.ssh/*', '*/.ssh/*', '*\\.ssh\\*',
-                '*id_rsa*', '*id_ed25519*', '*Login Data*', 'Cookies', '*/Cookies', '*\\Cookies')
 
 CONTAINER_NOTE = (
     'Environment: you run in a Linux container with bash. The project is the current directory (/work). '
@@ -62,23 +60,7 @@ TASK_SCOPE_NOTE = (
     'Network, installation, publishing, credentials, project-external paths and destructive operations are decided by VEIL. '
     'This scope ends when this task ends, is stopped, or reaches its budget or time limit.\n\n')
 
-# Host runs have no container masking: every secret-file class of SECRET_FILE is unreadable by OpenCode itself.
-HOST_SECRET_GLOBS = ('*.pem', '*.pfx', '*.key', '*.p12', '*id_rsa*', '*id_ed25519*', '*.env', '*.env.*',
-                     '*Login Data*', '*Cookies*', '*/.ssh/*', '*\\.ssh\\*', '*/secrets/*', '*\\secrets\\*',
-                     '*/.aws/*', '*\\.aws\\*', '*/.azure/*', '*\\.azure\\*', '*/.gnupg/*', '*\\.gnupg\\*',
-                     '*/.kube/*', '*\\.kube\\*', '*/.docker/config.json', '*\\.docker\\config.json',
-                     '*credentials*', '*.npmrc', '*.pypirc', '*.netrc', '*_netrc', '*.git-credentials',
-                     '*.kdbx', '*.ppk')
 
-HOST_NOTE = (
-    'Environment: you run directly on the owner\'s Windows PC. VEIL rules every operation. '
-    'veil_browser_* is your own background browser (headless, fresh profile, never on her screen): use it for '
-    'searching and reading pages. veil_computer_* operates her real desktop (look with Snapshot, then App, Click, '
-    'Type, Shortcut): use it only when the task needs a Windows app or asks you to show or open something for her. '
-    'Before Type, switch to the target window and take a Snapshot; type at a point inside it. After Type, trust VEIL\'s read-back result; report missing or unconfirmed input, and never claim this Type succeeded unless its result or a Snapshot taken after Type confirms the text. '
-    'When you have enough information to be useful, write the result into a file first, then keep verifying. '
-    'Never start desktop apps or browsers from the shell. Saving, sending, closing and system changes are asked '
-    'of her by VEIL; a refusal is final for that action, so report it instead of working around it.\n\n')
 
 TOOL_SCHEMA = {'type': 'function', 'function': {
     'name': TOOL_NAME,
@@ -124,31 +106,9 @@ class ExecutorResult(NamedTuple):
     reason: str = ''
 
 
-DANGEROUS = re.compile(
-    r'(rm\s+-rf\s+(/|~|\$HOME)|rmdir\s+/s|\bdel\s+/[sfq]|\bformat\s+[a-z]:|\.env\b|[\\/]secrets\b|\.ssh|'
-    r'\bsudo\b|\brunas\b|reg\s+(add|delete)|powershell.*-enc|\|\s*(sh|bash|iex)\b|invoke-expression|'
-    r'shutdown|net\s+user|schtasks|\bcipher\s+/w|git\s+remote\s+add|\bgit\s+config\s+--global)', re.I)
-
-# Not forbidden, but Lan decides (chat) or the job is parked (wake).
-ASK_LAN = {
-    'git': {'push', 'clone', 'fetch', 'pull'},
-    'installers': {'pip', 'pip3', 'npm', 'pnpm', 'yarn', 'winget', 'choco', 'apt', 'apt-get',
-                   'brew', 'cargo', 'go', 'bun'},
-    'network': {'curl', 'wget', 'iwr', 'invoke-webrequest', 'invoke-restmethod', 'irm', 'npx', 'pnpx', 'bunx'},
-}
 
 
-def _git_subcommand(tokens):
-    value_options = {'-C', '-c', '--git-dir', '--work-tree', '--namespace'}
-    args = iter(tokens[1:])
-    for arg in args:
-        if arg in value_options:
-            next(args, None)
-        elif arg.startswith('-'):
-            continue
-        else:
-            return arg.casefold()
-    return ''
+
 
 
 def _command_name(token):
@@ -182,284 +142,6 @@ def _test_command(tokens):
     return False
 
 
-def _test_command_in_scope(tokens, workdir, current=None):
-    """Reject test runners that would load code or read files outside the worktree."""
-    while tokens and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', tokens[0]):
-        tokens = tokens[1:]
-    if not tokens:
-        return False
-    command = _command_name(tokens[0])
-    args = tokens[1:]
-    if command in {'node', 'nodejs'}:
-        for arg in args:
-            if arg == '--test':
-                continue
-            if arg.startswith('-'):
-                return False  # --eval, --require, --loader and other code-loading flags
-            if _resolved_work_path(arg, workdir, current) is None:
-                return False
-        return True
-    if command == 'npm':
-        return bool(args and args[0].casefold() in {'test', 't'})
-    if command in {'python', 'python3'} or re.fullmatch(r'python\d+(?:\.\d+)*', command):
-        if args[:2] in (['-m', 'unittest'], ['-m', 'pytest']):
-            for arg in args[2:]:
-                if not arg.startswith('-') and ('/' in arg or '\\' in arg or arg in {'.', '..'}):
-                    if _resolved_work_path(arg, workdir, current) is None:
-                        return False
-            return True
-        if not args or args[0].startswith('-') or not _is_test_script_name(args[0]):
-            return False
-        return _resolved_work_path(args[0], workdir, current) is not None
-    return not any(_outside_workdir_argument(arg, workdir, current) for arg in args if not arg.startswith('-'))
-
-
-def _git_write_request(tokens):
-    while tokens and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', tokens[0]):
-        tokens = tokens[1:]
-    if not tokens or _command_name(tokens[0]) != 'git':
-        return False
-    if any(re.match(r'^(?:--config-env=)?alias\.', token, re.I) or token.casefold().startswith('alias.')
-           for token in tokens[1:]):
-        return True
-    subcommand = _git_subcommand(tokens)
-    if subcommand in {'commit', 'push', 'pull', 'fetch', 'merge', 'rebase', 'cherry-pick', 'revert', 'reset',
-                      'checkout', 'switch', 'clean', 'stash', 'tag', 'remote', 'config', 'submodule',
-                      'worktree', 'gc', 'filter-branch', 'update-ref'}:
-        return True
-    return subcommand == 'branch' and any(arg in {'-d', '-D', '-m', '-M', '--delete', '--move'}
-                                           for arg in tokens[1:])
-
-
-def _bash_command_needs_lan(tokens):
-    git_config_alias = any(
-        re.match(r'^GIT_CONFIG_KEY_\d+=alias\.', token, re.I) or
-        token.casefold().startswith('git_config_parameters=')
-        for token in tokens)
-    while tokens and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', tokens[0]):
-        tokens = tokens[1:]
-    if not tokens:
-        return False
-    command = _command_name(tokens[0])
-    if command == 'git' and (git_config_alias or any(
-            arg.casefold().startswith('alias.') or
-            arg.casefold().startswith('--config-env=alias.') or
-            arg.casefold() == '--config-env' and index + 1 < len(tokens) and
-            tokens[index + 1].casefold().startswith('alias.')
-            for index, arg in enumerate(tokens[1:], 1))):
-        return True
-    if command in ASK_LAN['network']:
-        return True
-    if command == 'git':
-        return _git_subcommand(tokens) in ASK_LAN['git']
-    if command in ASK_LAN['installers']:
-        return any(arg.casefold() in {'install', 'add', 'get', 'i', 'ci', 'up', 'update', 'upgrade', 'dlx'}
-                   for arg in tokens[1:]) or (command == 'npm' and 'exec' in tokens[1:])
-    if re.fullmatch(r'pip\d*(?:\.\d+)*', command):
-        return any(arg.casefold() == 'install' for arg in tokens[1:])
-    if command in {'python', 'python3'} and tokens[1:3] == ['-m', 'pip']:
-        return any(arg.casefold() == 'install' for arg in tokens[3:])
-    if re.fullmatch(r'python\d+(?:\.\d+)*', command) and tokens[1:3] == ['-m', 'pip']:
-        return any(arg.casefold() == 'install' for arg in tokens[3:])
-    if command == 'rm':
-        return any(arg == '--recursive' or
-                   (arg.startswith('-') and not arg.startswith('--') and 'r' in arg[1:].casefold())
-                   for arg in tokens[1:])
-    if command == 'remove-item':
-        return any(arg.casefold() in {'-recurse', '-r'} for arg in tokens[1:])
-    if command in {'del', 'rmdir', 'rd'}:
-        return any(arg.casefold().startswith('/s') for arg in tokens[1:])
-    return False
-
-
-def _complex_bash_request(patterns, metadata, workdir=None, test_scripts=None, task_scope=None):
-    # OpenCode supplies parsed command fragments in patterns and the original shell input in metadata.command.
-    command = metadata.get('command') if isinstance(metadata, dict) else None
-    if not isinstance(command, str) or not command.strip() or not isinstance(patterns, list) or not patterns:
-        return True
-    # Only discard a standalone stderr-to-null redirection; all file writes still need approval.
-    def strip_stderr(value):
-        return re.sub(r'(?<!\S)(?:2>/dev/null|2>&1)(?=\s|$|[;&|])', '', value)
-    try:
-        lexer = shlex.shlex(strip_stderr(command), posix=True, punctuation_chars=';&|<>()')
-        lexer.whitespace_split = True
-        shell_tokens = list(lexer)
-        commands = [shlex.split(strip_stderr(pattern), posix=True) for pattern in patterns if isinstance(pattern, str)]
-    except ValueError:
-        return True
-    if len(commands) != len(patterns) or not commands or any(not item for item in commands):
-        return True
-    if '\n' in command or '\r' in command or '`' in command or '$(' in command:
-        return True
-    if any('<' in token or '>' in token for token in shell_tokens):
-        return True
-    operators = [token for token in shell_tokens if re.fullmatch(r'[;&|]+', token)]
-    if operators:
-        # OpenCode can group several shell commands into one permission pattern. Rebuild the
-        # segments from the original command so every actual command is checked, not the grouping.
-        rebuilt, current = [], []
-        for token in shell_tokens:
-            if re.fullmatch(r'[;&|]+', token):
-                if current:
-                    rebuilt.append(current)
-                    current = []
-            else:
-                current.append(token)
-        if current:
-            rebuilt.append(current)
-        if rebuilt:
-            commands = rebuilt
-    if operators and len(commands) != len(operators) + 1:
-        return True
-    if len(commands) > 1:
-        current = workdir
-        for item in commands:
-            if _command_name(item[0]) == 'cd':
-                if len(item) != 2:
-                    return True
-                current = _resolved_work_path(item[1], workdir, current)
-                if current is None:
-                    return True
-            elif not _safe_project_command(item, workdir, test_scripts, current, task_scope):
-                return True
-        return False
-    command_tokens = commands[0]
-    while command_tokens and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', command_tokens[0]):
-        command_tokens = command_tokens[1:]
-    if not command_tokens:
-        return True
-    command_name = _command_name(command_tokens[0])
-    if command_name in {'bash', 'sh', 'dash', 'zsh', 'fish', 'powershell', 'pwsh', 'cmd', 'xargs',
-                        'env', 'command', 'time', 'exec', 'busybox', 'nohup', 'nice', 'setsid', 'eval',
-                        'source', '.'}:
-        return True
-    if command_name in {'python', 'python3'} and command_tokens[1:3] in (
-            ['-m', 'unittest'], ['-m', 'pytest']):
-        return False
-    if command_name in SAFE_INSPECTION or command_name in {'git', 'python', 'python3', 'node', 'npm', 'mkdir',
-                                                           'touch', 'sort', 'pytest', 'py.test', 'true', 'false',
-                                                           ':'} or re.fullmatch(
-            r'python\d+(?:\.\d+)*', command_name):
-        return not _safe_project_command(command_tokens, workdir, test_scripts, task_scope=task_scope)
-    if command_name in {'python', 'python3', 'node', 'nodejs', 'deno', 'bun', 'ruby', 'perl', 'awk',
-                        'gawk', 'mawk', 'php', 'osascript'} or re.fullmatch(r'python\d+(?:\.\d+)*', command_name):
-        return True
-    # Default deny: only commands with an explicit, local, read-only/development rule above are safe.
-    # An unknown command (ssh, nc, mv, rm, a new tool) must be decided by Lan, never auto-allowed.
-    return True
-
-
-SAFE_INSPECTION = {'ls', 'dir', 'pwd', 'cat', 'type', 'head', 'tail', 'wc', 'stat', 'file', 'find', 'grep', 'rg',
-                   'echo', 'printf', 'which'}
-
-
-def _safe_project_command(tokens, workdir=None, test_scripts=None, current=None, task_scope=None):
-    """Normal project work allowed inside this task's Docker-mounted project scope."""
-    while tokens and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', tokens[0]):
-        tokens = tokens[1:]
-    if not tokens:
-        return False
-    command = _command_name(tokens[0])
-    if command == 'git':
-        if tokens[1:] in (['--version'], ['--help'], ['-h']):
-            return True
-        if _git_write_request(tokens):
-            return False
-        if any(arg == '--output' or arg.startswith('--output=') or arg == '--ext-diff' for arg in tokens[1:]):
-            return False
-        return (_git_subcommand(tokens) in {'status', 'branch', 'diff', 'log', 'show', 'rev-parse', 'ls-files'} and
-                not any(_outside_workdir_argument(arg, workdir, current) for arg in tokens[1:] if not arg.startswith('-')))
-    if command in {'echo', 'printf'}:
-        # Output-only commands never read or write a project path. Format strings and "$?" are not
-        # file arguments; treating a backslash/newline format as a path caused a false approval.
-        return True
-    if command in {'true', 'false', ':'}:
-        return True
-    if command in SAFE_INSPECTION:
-        if command == 'find' and any(arg.casefold() in {'-delete', '-exec', '-execdir', '-ok', '-okdir',
-                                                         '-fprint', '-fprint0', '-fprintf', '-fls'} for arg in tokens[1:]):
-            return False
-        return not any(_outside_workdir_argument(arg, workdir, current) for arg in tokens[1:] if not arg.startswith('-'))
-    if command == 'sort':
-        safe_flags = {'-', '--', '-b', '-d', '-f', '-g', '-h', '-i', '-M', '-n', '-r', '-s', '-u', '-V', '-z',
-                      '--ignore-leading-blanks', '--dictionary-order', '--ignore-case', '--numeric-sort',
-                      '--reverse', '--stable', '--unique', '--version-sort', '--zero-terminated'}
-        return all(arg in safe_flags if arg.startswith('-') else not _outside_workdir_argument(arg, workdir, current)
-                   for arg in tokens[1:])
-    if command == 'mkdir':
-        return (all(arg in {'-p', '--parents'} or not arg.startswith('-') for arg in tokens[1:]) and
-                any(not arg.startswith('-') for arg in tokens[1:]) and
-                not any(_outside_workdir_argument(arg, workdir, current) for arg in tokens[1:] if not arg.startswith('-')))
-    if command == 'touch':
-        return (len(tokens) > 1 and
-                not any(_outside_workdir_argument(arg, workdir, current) for arg in tokens[1:] if not arg.startswith('-')))
-    if re.fullmatch(r'pip\d*(?:\.\d+)*', command) and tokens[1:] in (['--version'], ['-V']):
-        return True
-    if command in {'pytest', 'py.test'}:
-        return not any(_outside_workdir_argument(arg, workdir, current) for arg in tokens[1:] if not arg.startswith('-'))
-    if command == 'node':
-        if len(tokens) == 2 and tokens[1] in {'--version', '-v', '--help', '-h'}:
-            return True
-        if len(tokens) < 2 or tokens[1] != '--test' or '--eval' in tokens or '-e' in tokens:
-            return False
-        return not any(_outside_workdir_argument(arg, workdir, current)
-                       for arg in tokens[2:] if not arg.startswith('-'))
-    if command == 'npm':
-        if len(tokens) == 2 and tokens[1] in {'--version', '-v'}:
-            return True
-        return len(tokens) >= 2 and tokens[1] in {'test', 't'}
-    if command in {'python', 'python3'} or re.fullmatch(r'python\d+(?:\.\d+)*', command):
-        if len(tokens) == 2 and tokens[1] in {'--version', '-V', '--help', '-h'}:
-            return True
-        if command and tokens[1:3] in (['-m', 'unittest'], ['-m', 'pytest']):
-            return True
-        if len(tokens) < 2 or tokens[1].startswith('-'):
-            return False
-        path = _resolved_work_path(tokens[1], workdir, current)
-        if task_scope is not None:
-            return task_scope.permits_test(path)
-        return bool(path and test_scripts is not None and path in test_scripts and _is_test_script_name(tokens[1]))
-    return False
-
-
-def _resolved_work_path(value, workdir, current=None):
-    if workdir is None or not isinstance(value, str):
-        return None
-    text = value.replace('\\', '/')
-    if any(char in text for char in '$~*?[]{}'):
-        return None
-    work = posixpath.normpath(str(workdir).replace('\\', '/')).casefold()
-    if text == '/work' or text.startswith('/work/'):
-        container = posixpath.normpath(text)
-        if container != '/work' and not container.startswith('/work/'):
-            return None
-        target = posixpath.normpath(work + container[5:]).casefold()
-    elif text.startswith('/') or re.match(r'^[A-Za-z]:', text):
-        return None
-    else:
-        base = posixpath.normpath(str(current or workdir).replace('\\', '/')).casefold()
-        target = posixpath.normpath(base + '/' + text).casefold()
-    return target if target == work or target.startswith(work.rstrip('/') + '/') else None
-
-
-def _outside_workdir_argument(value, workdir, current=None):
-    if value in {'.', '..'} or '/' in value or '\\' in value or re.match(r'^[A-Za-z]:', value):
-        return _resolved_work_path(value, workdir, current) is None
-    return False
-
-
-def existing_test_scripts(workdir):
-    found = set()
-    for base, dirs, files in os.walk(workdir):
-        dirs[:] = [item for item in dirs if item not in {'.git', 'node_modules', '.venv', 'venv', '__pycache__'}]
-        for name in files:
-            lower = name.casefold()
-            path = Path(base, name)
-            if not path.is_symlink() and (lower.startswith('test_') and lower.endswith('.py') or lower.endswith('_test.py')):
-                found.add(posixpath.normpath(str(path).replace('\\', '/')).casefold())
-    return found
-
-
 class _PersistedApprovalSet:
     """Remember only opaque approval fingerprints for this maintenance task."""
     def __init__(self, kind, values, save):
@@ -481,32 +163,50 @@ class _PersistedApprovalSet:
             self.values.add(value)
 
 
+
+
+# What OpenCode asks about is decided by the permission config (`build_config`); VEIL only answers the requests
+# it raises. Everything that is not listed there runs without a question.
+INSTALLERS = {'pip', 'pip3', 'npm', 'pnpm', 'yarn', 'winget', 'choco', 'apt', 'apt-get', 'brew', 'cargo', 'go', 'bun'}
+ASK_COMMANDS = ('git push', 'git clone', 'git fetch', 'git pull', 'git remote add', 'git config --global',
+                'python -m pip', 'python3 -m pip', 'py -m pip', 'curl', 'wget', 'iwr', 'irm', 'Invoke-WebRequest',
+                'Invoke-RestMethod', 'npx', 'pnpx', 'bunx', 'sudo', 'runas', 'shutdown', 'schtasks', 'net user',
+                'reg add', 'reg delete', 'rm -rf', 'rmdir /s', 'del /s', 'del /f', 'del /q', 'format',
+                *sorted(INSTALLERS))
+MAINTENANCE_DENY = ('git commit', 'git push', 'git pull', 'git fetch', 'git merge', 'git rebase', 'git reset',
+                    'git checkout', 'git switch', 'git tag', 'git worktree')
+SECRET_READ_GLOBS = ('*.pem', '*.pfx', '*.key', '*.p12', '*id_rsa*', '*id_ed25519*', '*.env', '*.env.*',
+                     '*Login Data*', '*Cookies*', '*/.ssh/*', '*\\.ssh\\*', '*/secrets/*', '*\\secrets\\*',
+                     '*credentials*', '*.npmrc', '*.pypirc', '*.netrc', '*.git-credentials', '*.kdbx')
+KNOWN_ASKED = {'bash', 'edit', 'write', 'read', 'glob', 'grep', 'webfetch', 'external_directory'}
+
+
 class TaskScope:
-    """One workbench run's project boundary and approvals; never reused by another task."""
+    """One workbench run's approvals; never reused by another task."""
     def __init__(self, workdir, *, approval_data=None, save_approval=None):
         self.workdir = Path(workdir)
-        self.initial_tests = existing_test_scripts(workdir)
-        self.written = set()
         data = approval_data if isinstance(approval_data, dict) else {}
         self.grants = (_PersistedApprovalSet('approved', data.get('approved', []), save_approval)
                        if save_approval else set())
         self.denied = (_PersistedApprovalSet('denied', data.get('denied', []), save_approval)
                        if save_approval else set())
-        self.tests_granted = False
 
     @property
     def project_name(self):
         return self.workdir.name or '工作区'
 
-    def record_write(self, patterns):
-        for pattern in patterns if isinstance(patterns, list) else ():
-            path = _resolved_work_path(pattern, self.workdir)
-            if path:
-                self.written.add(path)
 
-    def permits_test(self, path):
-        return bool(path and _is_test_script_name(path) and
-                    (self.tests_granted or path in self.initial_tests or path in self.written))
+def _approval_scope(permission, patterns, metadata):
+    """A task-local approval covers the same request again, never a future workbench task."""
+    if permission == 'webfetch':
+        resources = tuple(sorted(re.findall(r'https?://([^/\s]+)', ' '.join(map(str, patterns)), re.I)))
+        return permission, 'webfetch', resources or tuple(str(item) for item in patterns)
+    if permission == 'bash':  # a command may carry a credential: only its fingerprint goes into keys and logs
+        command = metadata.get('command') if isinstance(metadata, dict) else None
+        digest = hashlib.sha256(json.dumps([list(map(str, patterns)), command], ensure_ascii=False).encode('utf-8')).hexdigest()
+        return permission, 'command', digest
+    return _approval_key(permission, patterns, metadata)
+
 
 
 def _approval_key(permission, patterns, metadata):
@@ -546,41 +246,6 @@ def _operation_summary(permission, patterns, metadata):
     return permission + (':' + program if program else '')
 
 
-def _approval_scope(permission, patterns, metadata):
-    """A task-local approval covers the same risk class, never a future workbench task."""
-    command = metadata.get('command') if isinstance(metadata, dict) else None
-    try:
-        tokens = shlex.split(command, posix=True) if isinstance(command, str) else []
-    except ValueError:
-        tokens = []
-    while tokens and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', tokens[0]):
-        tokens = tokens[1:]
-    program = _command_name(tokens[0]) if tokens else ''
-    install = (program in ASK_LAN['installers'] or re.fullmatch(r'pip\d*(?:\.\d+)*', program) or
-               program in {'python', 'python3'} and tokens[1:3] == ['-m', 'pip'] or
-               re.fullmatch(r'python\d+(?:\.\d+)*', program) and tokens[1:3] == ['-m', 'pip'])
-    if permission == 'bash' and install:
-        # Scope must include requirement files and options without exposing credentials in diagnostics.
-        digest = hashlib.sha256(json.dumps(tokens, ensure_ascii=False).encode('utf-8')).hexdigest()
-        return permission, 'install', (program, digest)
-    if permission == 'bash' and _test_command(tokens):
-        return permission, 'tests', 'project'
-    if permission == 'bash' and program in {'npx', 'pnpx', 'bunx'}:
-        return permission, 'network', (program, tuple(tokens[1:3]))
-    if permission == 'bash' and (program in ASK_LAN['network'] or program == 'git' and _git_subcommand(tokens) in {'clone', 'fetch', 'pull'}):
-        digest = hashlib.sha256(json.dumps(tokens, ensure_ascii=False).encode('utf-8')).hexdigest()
-        return permission, 'network', (program, digest)
-    if permission == 'bash' and program == 'git' and _git_subcommand(tokens) == 'push':
-        refspec = tuple(arg for arg in tokens[1:] if not arg.startswith('-'))
-        force = ('force',) if any(arg in {'-f', '--force', '--force-with-lease', '--force-if-includes'}
-                                   for arg in tokens[1:]) else ()
-        return permission, 'publish', refspec + force
-    if permission == 'webfetch':
-        resources = tuple(sorted(re.findall(r'https?://([^/\s]+)', ' '.join(map(str, patterns)), re.I)))
-        return permission, 'webfetch', resources or tuple(str(item) for item in patterns)
-    if permission == 'external_directory':
-        return permission, tuple(str(item) for item in patterns)
-    return _approval_key(permission, patterns, metadata)
 
 
 def _safe_display(value, limit=300):
@@ -590,19 +255,6 @@ def _safe_display(value, limit=300):
     return text[:limit]
 
 
-def _resolved_targets(permission, patterns, workdir):
-    """Resolved project paths are diagnostics only; raw commands never go into chat results."""
-    if permission not in {'edit', 'write', 'bash'}:
-        return []
-    values = patterns if permission in {'edit', 'write'} else []
-    if permission == 'bash':
-        for pattern in patterns if isinstance(patterns, list) else ():
-            try:
-                values += [arg for arg in shlex.split(pattern, posix=True)[1:]
-                           if '/' in arg or '\\' in arg or arg in {'.', '..'}]
-            except ValueError:
-                continue
-    return sorted({path for value in values if (path := _resolved_work_path(value, workdir))})
 
 
 PACKAGE_HOSTS = {
@@ -662,7 +314,7 @@ def _is_install_command(tokens):
     if not tokens:
         return False
     program = _command_name(tokens[0])
-    if program in ASK_LAN['installers'] or re.fullmatch(r'pip\d*(?:\.\d+)*', program):
+    if program in INSTALLERS or re.fullmatch(r'pip\d*(?:\.\d+)*', program):
         return True
     return (program in {'python', 'python3'} or bool(re.fullmatch(r'python\d+(?:\.\d+)*', program))) \
         and tokens[1:3] == ['-m', 'pip']
@@ -691,136 +343,37 @@ def _ephemeral_container_path(pattern):
             text == '/var/tmp' or text.startswith('/var/tmp/'))
 
 
-def decide(permission, patterns, metadata, workdir, *, autonomy, ask, grants=None, approvals=None,
-           test_scripts=None, task_scope=None, maintenance=False, allow_network=None, isolated_tests=False):
-    """VEIL's own answer to an OpenCode permission request: (reply, reason). `ask` is Lan's approval card."""
-    if task_scope is not None:
-        grants = task_scope.grants
-    text = ' '.join(str(p) for p in patterns) + ' ' + json.dumps(metadata or {}, ensure_ascii=False)
-    if DANGEROUS.search(text):
-        return 'reject', 'dangerous command'
-    if permission == 'external_directory':
-        if autonomy:
-            return 'reject', 'outside the workbench; Lan is not asked during autonomous activity'
-        if isolated_tests and patterns and all(_ephemeral_container_path(item) for item in patterns):
-            # /tmp inside the disposable container is not a host directory and holds no Lan data.
-            return 'once', 'ephemeral container temp directory'
-        shown = _safe_display(', '.join(str(p) for p in patterns))
-        key = _approval_scope(permission, patterns, metadata)
-        return _ask_lan(f'Peter 的工作台想在本次任务中访问项目外的位置：{shown}。同意这项范围吗？y/N ',
-                        _operation_summary(permission, patterns, metadata), key, ask, grants, approvals,
-                        task_scope.denied if task_scope is not None else None)
-    work = posixpath.normpath(str(workdir).replace('\\', '/')).lower()
-    for pattern in patterns:
-        p = str(pattern).replace('\\', '/')
-        if permission in ('edit', 'write'):
-            absolute = p.startswith('/') or re.match(r'^[A-Za-z]:', p)
-            target = posixpath.normpath(p if absolute else work + '/' + p).lower()
-            if target != work and not target.startswith(work.rstrip('/') + '/'):
-                return 'reject', 'write outside the workbench'
-        if permission in ('edit', 'write') and task_scope is not None:
-            task_scope.record_write(patterns)
-    if permission == 'bash':
-        needs_lan = False
-        complex_request = False
-        git_write = False
-        command_tokens = []
-        for pattern in patterns if isinstance(patterns, list) else ():
-            if not isinstance(pattern, str):
-                complex_request = True
-                break
-            try:
-                tokens = shlex.split(pattern, posix=True)
-            except ValueError:
-                complex_request = True
-                break
-            if not tokens:
-                complex_request = True
-                break
-            git_write = git_write or _git_write_request(tokens)
-            if _bash_command_needs_lan(tokens):
-                needs_lan = True
-                break
-        command = metadata.get('command') if isinstance(metadata, dict) else None
-        if isinstance(command, str):
-            try:
-                command_tokens = shlex.split(command, posix=True)
-            except ValueError:
-                complex_request = True
-            else:
-                if command_tokens:
-                    git_write = git_write or _git_write_request(command_tokens)
-                    needs_lan = needs_lan or _bash_command_needs_lan(command_tokens)
-                else:
-                    complex_request = True
-        if maintenance and (git_write or re.search(
-                r'\bgit\s+(?:commit|push|pull|fetch|merge|rebase|reset|checkout|switch|tag|worktree)\b', text, re.I)
-                or re.search(r'\b(?:bash|sh|dash|zsh|cmd|powershell|pwsh)\b[^\n]{0,120}\bgit\s+'
-                             r'(?:commit|push|pull|fetch|merge|rebase|reset|checkout|switch|tag|worktree)\b', text, re.I)):
-            return 'reject', 'VEIL commits, pushes and creates the pull request; the workbench must not run git write commands'
-        test_items = []
-        for pattern in patterns if isinstance(patterns, list) else ():
-            if isinstance(pattern, str):
-                try:
-                    tokens = shlex.split(pattern, posix=True)
-                except ValueError:
-                    tokens = []
-                if tokens and _test_command(tokens):
-                    test_items.append(tokens)
-        if task_scope is not None and test_items:
-            for tokens in test_items:
-                if not _test_command_in_scope(tokens, workdir):
-                    return 'reject', 'test path or flag outside the workbench'
-            if isolated_tests:
-                # The workbench container has the model relay as its only egress and runs as an
-                # unprivileged user, so tests are allowed to run without a card. The network lock is
-                # installed before OpenCode starts; this branch does not grant any network host.
-                task_scope.tests_granted = True
-                if approvals is not None:
-                    approvals.append({'operation': 'bash:tests', 'waiting': False,
-                                      'decision': 'auto_approved_isolated'})
-            else:
-                project = task_scope.project_name
-                key = ('bash', 'tests', project)
-                reply, why = _ask_lan(
-                    f'项目“{project}”的本次任务要运行项目测试。测试会执行项目代码，可能联网或读写文件；'
-                    '批准后本次任务的测试命令继续使用这个授权。同意吗？y/N ',
-                    'bash:tests', key, ask, grants, approvals, task_scope.denied)
-                if reply != 'once':
-                    return reply, why
-                task_scope.tests_granted = True
-        complex_request = complex_request or _complex_bash_request(
-            patterns, metadata, workdir, test_scripts, task_scope)
-        if needs_lan or complex_request:
-            if autonomy:
-                return 'reject', 'needs Lan\'s approval; not asked during autonomous activity'
-            command = metadata.get('command') if isinstance(metadata, dict) else None
-            shown = _safe_display(command if isinstance(command, str) else patterns)
-            key = _approval_scope(permission, patterns, metadata)
-            project = task_scope.project_name if task_scope is not None else Path(workdir).name
-            if needs_lan:
-                prompt = (f'Peter 的工作台想在项目“{project}”的本次任务中执行：{shown}。'
-                          '这会联网、安装、发布或批量删除；批准后只在此任务的相同风险范围内继续。同意吗？y/N ')
-            else:
-                prompt = f'Peter 的工作台想执行一条复合或无法确认安全的项目命令：{shown}。同意这一次吗？y/N '
-            reply, why = _ask_lan(prompt, _operation_summary(permission, patterns, metadata),
-                                  key, ask, grants, approvals,
-                                  task_scope.denied if task_scope is not None else None)
-            if reply == 'once' and allow_network is not None and needs_lan:
-                allow_network(_approved_hosts(patterns, command_tokens))
-            return reply, why
-    if permission == 'webfetch':
-        if autonomy:
-            return 'reject', 'needs Lan\'s approval; not asked during autonomous activity'
-        shown = _safe_display(', '.join(str(p) for p in patterns))
-        key = _approval_scope(permission, patterns, metadata)
-        project = task_scope.project_name if task_scope is not None else Path(workdir).name
-        reply, why = _ask_lan(f'Peter 的工作台想为项目“{project}”访问外部文档：{shown}。同意这项范围吗？y/N ',
-                              _operation_summary(permission, patterns, metadata), key, ask, grants, approvals,
-                              task_scope.denied if task_scope is not None else None)
-        if reply == 'once' and allow_network is not None:
-            hosts = set()
-            for pattern in patterns if isinstance(patterns, list) else ():
+
+
+def decide(permission, patterns, metadata, workdir, *, autonomy, ask, approvals=None, task_scope=None,
+           allow_network=None, isolated_tests=False):
+    """VEIL's answer to an OpenCode permission request: (reply, reason). OpenCode only raises what the config
+    marks "ask" (a push, an install, a download, a path outside the project, a secret file), so each request is
+    one card for Lan. During autonomous activity nobody is there to ask, so it is refused."""
+    if permission not in KNOWN_ASKED:
+        # Tools of other MCP servers (VEIL's own tools included) are never approved here: VEIL runs those itself.
+        return 'reject', 'not offered to the workbench'
+    if permission == 'external_directory' and isolated_tests and patterns and all(
+            _ephemeral_container_path(item) for item in patterns):
+        return 'once', 'ephemeral container temp directory'  # /tmp in the disposable container holds no Lan data
+    if autonomy:
+        return 'reject', 'needs Lan\'s approval; not asked during autonomous activity'
+    command = metadata.get('command') if isinstance(metadata, dict) else None
+    shown = _safe_display(command if isinstance(command, str) else ', '.join(str(p) for p in patterns))
+    project = task_scope.project_name if task_scope is not None else Path(workdir).name
+    what = {'bash': '执行命令', 'webfetch': '访问外部地址', 'external_directory': '访问项目外的位置',
+            'read': '读取敏感文件', 'edit': '修改文件', 'write': '写入文件'}.get(permission, '操作')
+    reply, why = _ask_lan(f'Peter 的工作台想在项目“{project}”的本次任务中{what}：{shown}。同意吗？y/N ',
+                          _operation_summary(permission, patterns, metadata),
+                          _approval_scope(permission, patterns, metadata), ask,
+                          task_scope.grants if task_scope is not None else None, approvals,
+                          task_scope.denied if task_scope is not None else None)
+    if reply == 'once' and allow_network is not None and permission in {'bash', 'webfetch'}:
+        hosts = set()
+        if permission == 'bash':
+            hosts = _approved_hosts(patterns, shlex_tokens(command))
+        else:
+            for pattern in patterns:
                 for match in re.findall(r'https?://[^\s"\'`<>]+', str(pattern), re.I):
                     try:
                         host = urllib.parse.urlsplit(match).hostname
@@ -828,13 +381,16 @@ def decide(permission, patterns, metadata, workdir, *, autonomy, ask, grants=Non
                         continue
                     if host:
                         hosts.add(host.casefold())
-            if hosts:
-                allow_network(hosts)
-        return reply, why
-    if permission in ('bash', 'edit', 'write', 'task', 'skill', 'todowrite', 'read', 'glob', 'grep'):
-        return 'once', 'inside the workbench'
-    # Tools from other MCP servers (VEIL's own tools included) are never approved here: VEIL runs those itself.
-    return 'reject', 'not offered to the workbench'
+        if hosts:
+            allow_network(hosts)
+    return reply, why
+
+
+def shlex_tokens(command):
+    try:
+        return shlex.split(command, posix=True) if isinstance(command, str) else []
+    except ValueError:
+        return []
 
 
 def estimate_cost(messages, price, steps):
@@ -1315,12 +871,18 @@ def find_command(configured=''):
     return shutil.which('opencode')
 
 
-def build_config(provider, token, base_url, protect=(), browser_gateway=None, windows_gateway=None, host_mcp=None):
+def build_config(provider, token, base_url, protect=(), browser_gateway=None, windows_gateway=None, maintenance=False):
     """The OpenCode config, passed inline (OPENCODE_CONFIG_CONTENT) so nothing is written into the user's project
     and a project's own opencode.json cannot loosen it. `token` is the local proxy token, not the real key."""
     context = int(provider.get('max_input_tokens', 32768))
-    edit_permission = ('ask' if not protect else
-                       {'*': 'ask', **{Path(path).as_posix(): 'deny' for path in protect}})
+    edit_permission = ('allow' if not protect else
+                       {'*': 'allow', **{Path(path).as_posix(): 'deny' for path in protect}})
+    bash_rules = {'*': 'allow'}
+    for command in ASK_COMMANDS:
+        bash_rules.update({command: 'ask', command + ' *': 'ask'})
+    if maintenance:  # VEIL commits, pushes and opens the pull request itself
+        for command in MAINTENANCE_DENY:
+            bash_rules.update({command: 'deny', command + ' *': 'deny'})
     model = {'name': provider['model'], 'tool_call': True,
              'limit': {'context': context, 'output': min(8192, context // 4)}}
     if provider.get('input_modalities'):
@@ -1331,26 +893,11 @@ def build_config(provider, token, base_url, protect=(), browser_gateway=None, wi
             'npm': '@ai-sdk/openai-compatible', 'name': 'Relay',
             'options': {'baseURL': base_url, 'apiKey': token},
             'models': {provider['model']: model}}},
-        # Every shell request reaches VEIL, which has the current task's project scope and approval state.
-        # Reading secrets is denied outright by OpenCode before it can expose them to the model.
-        'permission': {'bash': {'*': 'ask'},
-                       'edit': edit_permission, 'webfetch': 'ask', 'external_directory': 'ask',
-                       'read': {'*': 'allow', **{g: 'deny' for g in SECRET_GLOBS}}},
+        # OpenCode's own permission rules decide what is asked: a push, an install, a download, a path outside the
+        # project, a secret file. Everything else runs. VEIL only answers the ones marked "ask" (the approval card).
+        'permission': {'bash': bash_rules, 'edit': edit_permission, 'webfetch': 'ask', 'external_directory': 'ask',
+                       'read': {'*': 'allow', **{g: 'ask' for g in SECRET_READ_GLOBS}}},
         'share': 'disabled', 'autoupdate': False}
-    if host_mcp is not None:
-        # Ticket 329 host path: VEIL's gateways are the only MCP servers and rule every call with its real
-        # arguments (OpenCode's own MCP permission request carries none). OpenCode's grep tool is off on the
-        # host because it reads secret files and its permission request cannot be answered over HTTP
-        # (OpenCode 1.19.5 returns 400 for it); the question tool would wait for a person forever.
-        config['permission']['read'].update({glob: 'deny' for glob in HOST_SECRET_GLOBS})
-        config['permission'].update({'grep': 'deny', 'question': 'deny',
-                                     **{name + '_*': 'allow' for name in host_mcp}})
-        # A refusal is an answer to that one call, not the end of the task (OpenCode ends the loop otherwise).
-        config.update({'formatter': False, 'lsp': False,
-                       'experimental': {'continue_loop_on_deny': True, 'mcp_timeout': 120000}})
-        if host_mcp:
-            config['mcp'] = dict(host_mcp)
-        return config
     if browser_gateway is not None or windows_gateway is not None:
         config['mcp'] = {}
     if browser_gateway is not None:
@@ -1500,40 +1047,13 @@ def container_command(container, *, name, workdir, port, env, masks, bootstrap_g
     return cmd + [container['image'], 'opencode', 'serve', '--hostname', '0.0.0.0', '--port', str(port)]
 
 
-def run(task, **kwargs):
-    """One workbench task (see `_run`). Whatever path it ends on, every host gateway is closed afterwards,
-    with what it holds (the background browser's network guard), even ones that were never started."""
-    try:
-        return _run(task, **kwargs)
-    finally:
-        for host_gateway in kwargs.get('host_gateways') or ():
-            try:
-                host_gateway.__exit__(None, None, None)
-            except Exception:
-                pass
-
-
-def _run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, stopped, record_cost,
+def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, stopped, record_cost,
         api_factory=None, events_factory=None, proxy_factory=None, container=None, protect=(), popen=subprocess.Popen, clock=time.monotonic,
         sleep=time.sleep, diagnostic=None, maintenance=False, approval_data=None, save_approval=None,
-        container_name=None, browser_gateway=None, windows_gateway=None, checkpoint=None, host_gateways=()):
-    """Run one task. `record_cost(cost)` is called once with the estimated cost, whatever the outcome.
-    Ticket 329: with `checkpoint` (host path), every OpenCode permission request is ruled by that
-    `veil_checkpoint.Checkpoint`, and `host_gateways` (VEIL MCP gateways) are the only MCP servers."""
+        container_name=None, browser_gateway=None, windows_gateway=None):
+    """Run one task. `record_cost(cost)` is called once with the estimated cost, whatever the outcome."""
     limits = {**DEFAULT_LIMITS, **(limits or {})}
     workdir, home = Path(workdir), Path(home)
-    if checkpoint is not None and (container or maintenance or browser_gateway or windows_gateway):
-        try:
-            record_cost(Decimal(0))
-        except Exception:
-            pass
-        for host_gateway in host_gateways:
-            try:
-                host_gateway.__exit__(None, None, None)
-            except Exception:
-                pass
-        return ExecutorResult('The host path runs without the container, maintenance or the old gateways.',
-                              '被拒绝', reason='invalid_host_run')
     if maintenance and not container:
         try:
             record_cost(Decimal(0))
@@ -1599,29 +1119,14 @@ def _run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, 
                                         **({'host': '0.0.0.0'} if container else {}))
     def allow_network(hosts):
         proxy.allow_hosts(hosts)
-    if checkpoint is not None:
-        checkpoint.task_scope, checkpoint.allow_network = task_scope, allow_network
     proxy_host = 'veil-relay' if container else '127.0.0.1'
     gateway = browser_gateway(stopped, bool(container)) if browser_gateway is not None else None
     desktop_gateway = windows_gateway(stopped, bool(container)) if windows_gateway is not None else None
-    entered, unavailable = [], []
     try:
         bridge = gateway.__enter__() if gateway is not None else None
         desktop_bridge = desktop_gateway.__enter__() if desktop_gateway is not None else None
-        for host_gateway in host_gateways:
-            try:
-                entered.append(host_gateway.__enter__())
-            except Exception as exc:
-                # One tool failing to start only takes that tool away; the rest of the run goes on, and the
-                # model is told what is missing this time.
-                reason = error_text(exc)[:300]
-                unavailable.append(f'{host_gateway.server_id} ({reason})')
-                if checkpoint is not None:
-                    checkpoint.log(kind='tool_unavailable', server=host_gateway.server_id, error=reason)
         config = build_config(provider, proxy.token, proxy.local_base(proxy_host), protect=protect,
-                              browser_gateway=bridge, windows_gateway=desktop_bridge,
-                              host_mcp=({item.server_id: item.config() for item in entered}
-                                        if checkpoint is not None else None))
+                              browser_gateway=bridge, windows_gateway=desktop_bridge, maintenance=maintenance)
         port, password = free_port(), secrets.token_urlsafe(24)
         keep = {'PATH', 'PATHEXT', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'TEMP', 'TMP', 'TMPDIR', 'LANG', 'LC_ALL', 'PROGRAMFILES',
                 'PROGRAMFILES(X86)', 'PROGRAMDATA', 'APPDATA', 'LOCALAPPDATA', 'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE'}
@@ -1674,20 +1179,10 @@ def _run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, 
             env = {k: v for k, v in env.items() if k.upper() in ('PATH', 'PATHEXT', 'SYSTEMROOT', 'WINDIR', 'COMSPEC',
                                                                   'APPDATA', 'LOCALAPPDATA', 'USERPROFILE', 'HOME')}
         else:
-            # On the host OpenCode must not run a project's own plugins, custom tools, MCP servers or config
-            # (verified on 1.19.5: a project's .opencode/plugin ran on the host without any permission request).
-            shared.update({'OPENCODE_DISABLE_PROJECT_CONFIG': '1', 'OPENCODE_PURE': '1',
-                           'OPENCODE_DISABLE_CLAUDE_CODE': '1', 'OPENCODE_DISABLE_EXTERNAL_SKILLS': '1',
-                           'OPENCODE_DISABLE_LSP_DOWNLOAD': '1', 'OPENCODE_DISABLE_MODELS_FETCH': '1'})
             env.update({**shared, 'HOME': str(home), 'USERPROFILE': str(home),
                         'XDG_DATA_HOME': str(home / 'data'), 'XDG_CONFIG_HOME': str(home / 'config'),
                         'XDG_CACHE_HOME': str(home / 'cache'), 'XDG_STATE_HOME': str(home / 'state')})
-    except BaseException as setup_error:
-        for host_gateway in host_gateways:  # an unentered gateway still closes what it holds
-            try:
-                host_gateway.__exit__(None, None, None)
-            except Exception:
-                pass
+    except BaseException:
         if gateway is not None:
             try:
                 gateway.__exit__(None, None, None)
@@ -1729,9 +1224,7 @@ def _run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, 
             f'http://127.0.0.1:{port}', password)
         if stopped():
             return ExecutorResult('[workbench=stopped; reason=user_stopped]', '出错', reason='user_stopped')
-        missing = ('Not available this time (it failed to start; do not try it, and tell the owner if the job needs '
-                   'it): ' + ', '.join(unavailable) + '.\n\n') if unavailable else ''
-        text = (CONTAINER_NOTE if container else HOST_NOTE if checkpoint is not None else '') + missing + TASK_SCOPE_NOTE + (MAINTENANCE_NOTE if maintenance else '') + task
+        text = (CONTAINER_NOTE if container else '') + TASK_SCOPE_NOTE + (MAINTENANCE_NOTE if maintenance else '') + task
         api.call('POST', f'/session/{session}/prompt_async', {
             'parts': [{'type': 'text', 'text': text}], 'model': {'providerID': 'relay', 'modelID': provider['model']}})
         started, idle, answered, approvals = clock(), 0, [], []
@@ -1744,8 +1237,6 @@ def _run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, 
                     gateway.stop()
                 if desktop_gateway is not None:
                     desktop_gateway.stop()
-                for host_gateway in entered:
-                    host_gateway.stop()
             try:
                 listed = []
                 if not stop:
@@ -1764,15 +1255,10 @@ def _run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, 
                     if request.get('sessionID') != session or request.get('id') in answered:
                         continue
                     answered.append(request.get('id'))
-                    if checkpoint is not None:
-                        reply, why = checkpoint.opencode_permission(
-                            request.get('permission', ''), request.get('patterns', []), request.get('metadata'))
-                        approvals[:] = checkpoint.approvals
-                    else:
-                        reply, why = decide(request.get('permission', ''), request.get('patterns', []),
-                                            request.get('metadata'), workdir, autonomy=autonomy, ask=ask,
-                                            approvals=approvals, task_scope=task_scope, maintenance=maintenance,
-                                            allow_network=allow_network, isolated_tests=bool(container))
+                    reply, why = decide(request.get('permission', ''), request.get('patterns', []),
+                                        request.get('metadata'), workdir, autonomy=autonomy, ask=ask,
+                                        approvals=approvals, task_scope=task_scope,
+                                        allow_network=allow_network, isolated_tests=bool(container))
                     if stopped():
                         stop = 'stopped by Lan'
                         break
@@ -1783,17 +1269,13 @@ def _run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, 
                                 'patterns': request.get('patterns', []),
                                 'command': _safe_display((request.get('metadata') or {}).get('command')),
                                 'workdir': str(workdir),
-                                'resolved_targets': _resolved_targets(
-                                    request.get('permission', ''), request.get('patterns', []), workdir),
                                 'approval_scope': _approval_scope(
                                     request.get('permission', ''), request.get('patterns', []), request.get('metadata')),
                                 'reply': reply, 'reason': why,
                             })
                         except Exception:
                             pass
-                    api.call('POST', f"/permission/{request['id']}/reply",
-                             {'reply': reply, 'message': f'VEIL refused this: {why}.'}
-                             if checkpoint is not None and reply == 'reject' else {'reply': reply})
+                    api.call('POST', f"/permission/{request['id']}/reply", {'reply': reply})
                     if why in {'cancelled', 'timed_out'}:
                         approval_stop = why
                         stop = 'approval ' + why
@@ -1820,8 +1302,6 @@ def _run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, 
                     gateway.stop()
                 if desktop_gateway is not None:
                     desktop_gateway.stop()
-                for host_gateway in entered:
-                    host_gateway.stop()
                 try:
                     api.call('POST', f'/session/{session}/abort')
                 except Exception:
@@ -1870,13 +1350,6 @@ def _run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, 
                 desktop_gateway.__exit__(None, None, None)
             except Exception:
                 cleanup_warning += ' [warning: could not stop the Windows UIA gateway]'
-        for host_gateway in host_gateways:
-            try:
-                host_gateway.__exit__(None, None, None)
-            except Exception:
-                cleanup_warning += f' [warning: could not stop {host_gateway.server_id}]'
-        if checkpoint is not None:
-            checkpoint.log(kind='end', stop=stop, steps=steps, cost_cny=str(cost))
         if git_pointer is not None:
             try:
                 git_pointer.unlink(missing_ok=True)
