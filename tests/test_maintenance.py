@@ -209,6 +209,14 @@ class MaintenanceTests(unittest.TestCase):
         self.assertFalse(any(token in ' '.join(call) for call in self.gh.calls))
         self.assertNotIn(token, json.dumps(self.manager.store.load(task['task_id'])))
 
+    def test_status_lists_the_real_worktree_changes(self):
+        task = self.begin()
+        self.develop(task, 'docs/note.md', 'one line\n')
+        text, state = self.manager.invoke('status', {'task_id': task['task_id']})
+        self.assertEqual(state, '成功', text)
+        self.assertIn('worktree_changes=', text)
+        self.assertIn('docs/note.md', text)
+
     def test_red_local_tests_do_not_block_a_docs_only_delivery(self):
         task = self.begin()
         self.develop(task, 'docs/note.md', 'one line\n')

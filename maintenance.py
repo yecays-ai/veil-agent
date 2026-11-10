@@ -1004,6 +1004,11 @@ class MaintenanceManager:
             f"acceptance={acceptance['status']} {'(waived)' if acceptance.get('waived') else ''}",
             f"age_hours={age:.1f} next={task['next_step']}",
         ]
+        if Path(task['worktree']).exists() and task['stage'] not in {'merged', 'done'}:
+            # The workbench container only shows a synthetic snapshot; this is the real worktree on the host.
+            changes = self._git('status', '--porcelain', cwd=task['worktree'], allow_fail=True).splitlines()
+            lines.append('worktree_changes=' + (', '.join(c.strip() for c in changes[:12]) or 'none') +
+                         (f' (+{len(changes) - 12} more)' if len(changes) > 12 else ''))
         if age >= 1:
             lines.append('time_check: over one hour; report the state and blockers to Lan.')
         if task['blockers']:
