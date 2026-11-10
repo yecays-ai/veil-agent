@@ -16,9 +16,11 @@ class ImageReadyTests(unittest.TestCase):
 
     @patch('workbench_switch.subprocess.run')
     def test_default_image_requires_the_network_lock_label(self, run):
-        run.return_value = SimpleNamespace(returncode=0, stdout='None\n')
+        run.return_value = SimpleNamespace(returncode=0, stdout='None/None\n')
         self.assertFalse(workbench_switch.image_ready())
-        run.return_value = SimpleNamespace(returncode=0, stdout='1\n')
+        run.return_value = SimpleNamespace(returncode=0, stdout='1/None\n')  # built before the install venv
+        self.assertFalse(workbench_switch.image_ready())
+        run.return_value = SimpleNamespace(returncode=0, stdout='1/1\n')
         self.assertTrue(workbench_switch.image_ready())
 
 
