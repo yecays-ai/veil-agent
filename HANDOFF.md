@@ -1,5 +1,12 @@
 # HANDOFF
 
+## C1 工单 356：iPhone 接入审计（2026-11-12）
+
+- 只改文档，没有实施手机端。审计报告是 `docs/tickets/356-iphone-access-audit.md`，下一张最小开发工单是 `docs/tickets/357-iphone-dual-chat.md`。
+- 推荐 Tailscale Serve：Windows/iPhone 加入同一 tailnet，Safari 访问 tailnet 内 HTTPS；不启用 Funnel，不把当前 `X-Token` 给手机，不整体放行现有 `/api/*`。Cloudflare Tunnel + Access 作为以后无需 iPhone VPN 客户端的备选。
+- 代码结论：`web_agent.py` 只监听 loopback，且 `_guard` 固定本机 Host/Origin/Token；`desktop/chat.js` 依赖 Electron preload，不能原样跑 Safari。可复用 `Hub.snapshot`、`Hub.submit`、持久记录、事件游标、busy 与 request ID 去重。
+- 下一个窗口第一步：等 Lan 明确审阅通过后才开工单 357；先在 Lan 真机确认 Tailscale 身份、Serve 实际身份头和 Windows 重启恢复，再写业务代码。审阅前不得施工。
+
 ## 记忆与人格连续性工单（2026-11-11）
 
 - 记忆审计结论：保留 Ombre，不迁移。根因是普通聊天没有时间感和生活状态、没有按时间排的记忆、自动想起没有冷却且排序信号是常数。真实数据和代码位置都在 `docs/tickets/350-memory-continuity-plan.md`。
