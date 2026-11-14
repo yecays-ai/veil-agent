@@ -1,9 +1,24 @@
 # HANDOFF
 
+## 工单 353（2026-11-14）：修自动想起的重复和遗漏
+
+- 工单原文 `docs/tickets/353-recall-cooldown-and-dedup.md`（已列出记忆的 7 个维度，对比要逐项报）。新增 `recall_rotation.py`（冷却、去重、轮换、摘录、随机想起的纯函数），`memory_agent.Memory.context()` 用它；冷却状态存 `data/<角色>/memory/_agent/recall-rotation.jsonl`（只存编号和轮数）；回复记录多一个 `memory_ref_kinds` 供面板标注来源。`tests/test_recall_rotation.py` 是确定性夹具（假 Ombre、假时钟式轮数、固定随机种子）。已有的三组测试（`test_recall_relevance`、`test_hidden_memory_context`、`test_background`）为了逐轮比较，在测试配置里把冷却设成 0。
+- 真实模型对比：`experiments/recall-353/run_compare.py`（不进 CI；用 017 的预算代理，隔离 Ombre，硬上限 ¥2，不启动 Peter）。第一版冷却 6 轮把她追问旧事的两轮挡住了，改成 3 轮并对「还记得/上次/那次」放行后复跑，结果见 STATUS.md。结果文件在测试副本 `.local-tmp/recall-353/`；测试副本里有一份从正式环境只读复制的 `.deps/ombre`（被 git 忽略）。
+- 遗留：随机想起没在真实对比中触发过；借上文搜索没标定出可用阈值（仍关）；不同记忆条数变少；真实 170 条库里「一条出现在 30% 请求」能不能被压下去，没法在不读真实记忆的前提下验证，待 Lan 日常体验。
+- 下一个窗口第一步：Lan 用几天后看「Recall Memory」面板，如果觉得想不起旧事，先把 `cooldown_turns` 调小或设 0，再回来查。
+
+## 工单 352（2026-11-11）：时间感和生活状态接进普通聊天
+
+- 工单原文在 `docs/tickets/352-time-and-life-state-in-chat.md`（PR #350），共同规则见同处 350。
+- 新增 `life_state.py`：`gap_text()` 从聊天记录时间戳算 Lan 上次发消息距今（排除本轮消息；Peter 自主发的消息单独计数，不重置 Lan 的时间；<60 分钟返回空），`state_text()` 把长期任务、长期任务历史、生活记录（日程/待办/计划）和 Ombre 计划按状态分成进行中、暂停/阻塞、最近已完成。`Chat.life_state_context()` 每轮普通聊天调用，结果拼进 `changing`（末段）；自主醒来、看一眼、Codex 提醒不加。自主醒来原来手写的生活记录段改用 `state_text()`。
+- 夹具：`tests/test_life_state.py`（假时钟、虚构聊天、假模型；10 分钟/3 小时/隔夜/2 天，任务进行中/暂停/完成，日程与待办勾选状态，缓存前缀不变）。
+- 真实模型对比脚本：`experiments/352-time-gap/compare.py`（不进 CI）。只读测试副本的 `.env`、人设和模型设置，全部数据在临时文件夹，不写测试副本的数据和备份；每次运行费用上限 ¥0.9。
+- 真实对比（2026-11-14，DeepSeek 官方，约 ¥0.095，详见 PR #351 评论）：问手上还有什么事，说出没勾待办 0/5 → 5/5；隔 2 天第一句误以为刚说完晚安 5/5 → 0/5；报时长词数统计变多但大多是复述 Lan 的话。Lan 决定不再做第二轮调参，直接合并。未做：Lan 真机体验；Peter 在连聊里偶尔编自己的活动（改动前也有）。
+
 ## 记忆与人格连续性工单（2026-11-11）
 
 - 记忆审计结论：保留 Ombre，不迁移。根因是普通聊天没有时间感和生活状态、没有按时间排的记忆、自动想起没有冷却且排序信号是常数。真实数据和代码位置都在 `docs/tickets/350-memory-continuity-plan.md`。
-- 工单 351 已做完实验（脚本在 `experiments/style-snippet-351/`，结果见 STATUS.md）；352–355 只写了文档（352 另有进行中的 PR），没有其他代码改动。各工单由不同窗口施工；先读 350 的共同规则（放哪一层、先交夹具、合并前 DeepSeek 前后对比且上限 ¥2、不批量改记忆）。
+- 工单 351 已做完实验（脚本在 `experiments/style-snippet-351/`，结果见 STATUS.md「现状」和 PR #353）；355 只写了文档，未施工，要等 354 之后整体做（要点：样例去说话人标签、按气泡拆开、带开关；闲聊回短、问句用问号、被指错先核对再改口、多用表情写进人设规则；grok 冷硬需要补「软下来」的样例）。
 - 下一个窗口第一步：领到哪张就读那张和 350；354 开工前先把每日费用估算报给 Lan。
 - 注意：测试副本 `veil-agent-hosttest` 的备份目录设置可能与正式环境相同，跑对比前先确认。
 

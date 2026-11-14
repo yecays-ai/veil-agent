@@ -55,6 +55,8 @@ class AssistedRecallTests(unittest.TestCase):
                     'base_url': 'https://example.invalid/v1'}
         if recall_context is not None:
             settings['recall_context'] = recall_context
+        # These tests compare candidate selection turn by turn; ticket 353's cooldown is tested on its own.
+        settings['recall'] = {'cooldown_turns': 0}
         cfg = Character('fake', 'Example', 'fictional persona', 20, 1024, provider, 'fake', settings)
         memory = Memory(cfg, self.store, Budget(self.store), Mock(), self.backend)
         self.addCleanup(memory.__exit__, None, None, None)
