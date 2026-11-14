@@ -64,6 +64,26 @@ class CacheOrderTests(unittest.TestCase):
         self.assertLessEqual(len(starts), 10)
         self.assertTrue(all(len(v) >= 5 or v[0] <= 20 for v in starts.values() if v[-1] < 56))
 
+    def test_peter_window_of_80_rounds_drops_20_at_a_time(self):
+        # Ticket 356: with 80 rounds the start of the request stays put for 20 messages in a row.
+        starts = {}
+        for total in range(1, 241):
+            keep = history_keep(total, 80)
+            self.assertLessEqual(keep, 80)
+            self.assertGreaterEqual(keep, min(total, 61))
+            starts.setdefault(total - keep, []).append(total)
+        self.assertEqual(sorted(starts)[:4], [0, 20, 40, 60])
+        self.assertTrue(all(len(v) == 20 for start, v in starts.items() if 0 < start < 160))
+
+    def test_peter_config_carries_80_rounds_and_100k_input(self):
+        import tomllib
+        from pathlib import Path
+        cfg = tomllib.loads((Path(__file__).resolve().parents[1] / 'characters/peter/character.toml')
+                            .read_text(encoding='utf-8'))
+        self.assertEqual(cfg['history_rounds'], 80)
+        self.assertEqual(cfg['providers']['deepseek']['max_input_tokens'], 100000)
+        self.assertEqual(cfg['autonomy']['max_input_tokens'], 100000)
+
     def test_small_windows_keep_plain_sliding(self):
         self.assertEqual([history_keep(t, 3) for t in range(1, 8)], [1, 2, 3, 3, 3, 3, 3])
         self.assertEqual(history_keep(5, 2), 2)

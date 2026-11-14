@@ -2,7 +2,8 @@ name = "Peter"
 # Change this one line to "gpt" to select the complete alternate profile.
 provider = "deepseek"
 persona = "persona/peter.md"
-history_rounds = 20
+# Ticket 356: about one day of Lan's chat (median 82 rounds a day); the window drops 20 old rounds at a time.
+history_rounds = 80
 max_output_tokens = 1024
 
 [voice]
@@ -13,7 +14,7 @@ model = "deepseek-flash"
 thinking = "enabled"
 base_url = "https://api.deepseek.com"
 api_key_env = "DEEPSEEK_API_KEY"
-max_input_tokens = 65536
+max_input_tokens = 100000
 # CNY per million tokens, peak rates; off-peak savings are not assumed.
 # Verify against https://api-docs.deepseek.com/zh-cn/quick_start/pricing/
 input_cny_per_million = "2"
@@ -102,7 +103,7 @@ min_alarm_gap_minutes = 15
 quiet_hours = "01:00-06:00"
 quiet_hours_enabled = true
 # Wakes, glances and Codex reminders may use a larger input window; ordinary chat keeps the provider limit.
-max_input_tokens = 65536
+max_input_tokens = 100000
 # Ticket 225: one wake stops after spending this much (or 60 tool steps, or 15 minutes); the daily pool is unchanged.
 run_budget_cny = "0.25"
 max_tool_steps = 60
