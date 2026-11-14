@@ -1,5 +1,12 @@
 # HANDOFF
 
+## 工单 353（2026-11-14）：修自动想起的重复和遗漏
+
+- 工单原文 `docs/tickets/353-recall-cooldown-and-dedup.md`（已列出记忆的 7 个维度，对比要逐项报）。新增 `recall_rotation.py`（冷却、去重、轮换、摘录、随机想起的纯函数），`memory_agent.Memory.context()` 用它；冷却状态存 `data/<角色>/memory/_agent/recall-rotation.jsonl`（只存编号和轮数）；回复记录多一个 `memory_ref_kinds` 供面板标注来源。`tests/test_recall_rotation.py` 是确定性夹具（假 Ombre、假时钟式轮数、固定随机种子）。已有的三组测试（`test_recall_relevance`、`test_hidden_memory_context`、`test_background`）为了逐轮比较，在测试配置里把冷却设成 0。
+- 真实模型对比：`experiments/recall-353/run_compare.py`（不进 CI；用 017 的预算代理，隔离 Ombre，硬上限 ¥2，不启动 Peter）。第一版冷却 6 轮把她追问旧事的两轮挡住了，改成 3 轮并对「还记得/上次/那次」放行后复跑，结果见 STATUS.md。结果文件在测试副本 `.local-tmp/recall-353/`；测试副本里有一份从正式环境只读复制的 `.deps/ombre`（被 git 忽略）。
+- 遗留：随机想起没在真实对比中触发过；借上文搜索没标定出可用阈值（仍关）；不同记忆条数变少；真实 170 条库里「一条出现在 30% 请求」能不能被压下去，没法在不读真实记忆的前提下验证，待 Lan 日常体验。
+- 下一个窗口第一步：Lan 用几天后看「Recall Memory」面板，如果觉得想不起旧事，先把 `cooldown_turns` 调小或设 0，再回来查。
+
 ## 工单 352（2026-11-11）：时间感和生活状态接进普通聊天
 
 - 工单原文在 `docs/tickets/352-time-and-life-state-in-chat.md`（PR #350），共同规则见同处 350。
