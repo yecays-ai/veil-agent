@@ -388,6 +388,17 @@ def _ps_literal(value):
     return "'" + str(value).replace("'", "''") + "'"
 
 
+def memory_ref_fields(chat):
+    """Ticket 353: the memories a reply was given and how each was chosen, for the recall panel."""
+    refs = list(getattr(chat, 'turn_memory_refs', []) or [])
+    kinds = getattr(chat, 'turn_memory_kinds', {}) or {}
+    fields = {'memory_refs': refs}
+    labelled = {key: kinds[key] for key in refs if isinstance(kinds.get(key), str)}
+    if labelled:
+        fields['memory_ref_kinds'] = labelled
+    return fields
+
+
 class Store:
     def __init__(self, root):
         self.mutex = threading.RLock()
@@ -2480,7 +2491,7 @@ class Chat:
             content = card_text(card, message_id, 'Lan', self.cfg.name)
             event = {'role': 'assistant', 'content': content, 'request_id': request_id,
                      'origin': 'reply', 'message_id': message_id,
-                     'memory_refs': list(getattr(self, 'turn_memory_refs', [])),
+                     **memory_ref_fields(self),
                      'virtual_card': card}
             regeneration_parent = getattr(self, 'regeneration_parent_message_id', None)
             if isinstance(regeneration_parent, str) and regeneration_parent:
@@ -2734,7 +2745,7 @@ class Chat:
             message_id = uuid.uuid4().hex
             event = {'role': 'assistant', 'content': displayed_text,
                      'request_id': request_id, 'origin': 'reply', 'message_id': message_id,
-                     'memory_refs': list(getattr(self, 'turn_memory_refs', []))}
+                     **memory_ref_fields(self)}
             regeneration_parent = getattr(self, 'regeneration_parent_message_id', None)
             if isinstance(regeneration_parent, str) and regeneration_parent:
                 event['regeneration_parent_message_id'] = regeneration_parent
@@ -3562,10 +3573,15 @@ class Chat:
         # Ticket 194: a glance's request text is a fixed sentence (the screen is in extra_context), so
         # recalling with it returned the same few memories every time. Peter can still search himself.
         skip_recall = self.codex_watch_mode or self.glance_mode
-        recalled = (self.memory.context(text, include_opening=opening_turn, recent=self.history[-8:])
+        # Ticket 353: an autonomous wake's text names no topic, so its memories rotate instead of
+        # repeating the same best matches for that fixed text.
+        recalled = (self.memory.context(text, include_opening=opening_turn, recent=self.history[-8:],
+                                        rotate=bool(autonomy))
                     if self.memory and not skip_recall else [])
         memory_refs = getattr(self.memory, 'last_context_refs', []) if self.memory and not skip_recall else []
         self.turn_memory_refs = list(memory_refs) if isinstance(memory_refs, list) else []
+        memory_kinds = getattr(self.memory, 'last_context_kinds', {}) if self.memory and not skip_recall else {}
+        self.turn_memory_kinds = dict(memory_kinds) if isinstance(memory_kinds, dict) else {}
         recalled_memory_refs = list(self.turn_memory_refs)
         autonomy_handoff_id = None
         glance_handoff_id = None
@@ -3808,7 +3824,7 @@ class Chat:
                 event = {'role': 'assistant', 'content': reply,
                     'request_id': request_id, 'origin': 'reply',
                     'message_id': self.last_reply_message_id,
-                    'memory_refs': list(self.turn_memory_refs)}
+                    **memory_ref_fields(self)}
                 if self.regeneration_parent_message_id:
                     event['regeneration_parent_message_id'] = self.regeneration_parent_message_id
                 self.store.append(self.path, event)

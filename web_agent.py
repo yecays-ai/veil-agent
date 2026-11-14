@@ -1456,6 +1456,21 @@ class Hub(ScreenPopMixin):
         return list(dict.fromkeys(ref for ref in refs
                                   if isinstance(ref, str) and re.fullmatch(r'[A-Za-z0-9_-]{1,100}', ref)))[:6]
 
+    MEMORY_KIND_LABELS = {'search': '搜索命中', 'feel': '情绪相关', 'context': '借上文命中',
+                          'opening': '开场', 'rotation': '轮换选出', 'random': '随机想起'}
+
+    def message_memory_kinds(self, message_id, items):
+        """Ticket 353: how each recalled memory was chosen, as a short Chinese label; may be empty."""
+        try:
+            _, row = self.chat.message_record(message_id)
+        except Exception:
+            return {}
+        kinds = row.get('memory_ref_kinds')
+        if not isinstance(kinds, dict):
+            return {}
+        return {key: self.MEMORY_KIND_LABELS[kinds[key]] for key in items
+                if isinstance(kinds.get(key), str) and kinds[key] in self.MEMORY_KIND_LABELS}
+
     def _remove_unreferenced_media(self, media):
         candidates = media if isinstance(media, list) else [media]
         media_ids = {item.get('id') for item in candidates
@@ -2222,7 +2237,8 @@ def make_handler(hub, token):
                 except UserError as exc:
                     self._send(409, {'ok': False, 'message': str(exc)})
                 else:
-                    self._send(200, {'ok': True, 'items': items})
+                    self._send(200, {'ok': True, 'items': items,
+                                     'kinds': hub.message_memory_kinds(message_id, items)})
                 return
             result = hub.message_action(action, message_id, message_ids=body.get('message_ids'),
                                         content=body.get('content'), favorite=body.get('favorite'),

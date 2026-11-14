@@ -567,7 +567,7 @@ async function showMessageMemory(node){
           if(typeof page.text!=='string'||typeof page.version!=='string')throw new Error('记忆内容格式无法识别。');
           version=page.version;text+=page.text;offset=page.next_offset;
         }while(offset!==null);
-        const memory=memoryDisplay(text);heading.textContent=[memory.date,...memory.tags].filter(Boolean).join(' · ')||'Memory';
+        const memory=memoryDisplay(text);const kind=data.kinds&&typeof data.kinds[memoryId]==='string'?data.kinds[memoryId]:'';heading.textContent=[kind,memory.date,...memory.tags].filter(Boolean).join(' · ')||'Memory';
         body.textContent=memory.body||'（空记忆）';
       }catch(error){body.textContent=error.message||'这条记忆暂时无法读取。'}
     }
