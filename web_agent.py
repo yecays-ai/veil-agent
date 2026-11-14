@@ -1729,7 +1729,15 @@ def make_handler(hub, token):
                 self._send(404, {'error': 'Ombre memory is not available.'})
                 return
             try:
-                self._send(200, hub.memory_tools.panel_entries())
+                panel = hub.memory_tools.panel_entries()
+                # Ticket 354: mark what the program wrote for Peter, and show the switch and its last result.
+                experience = getattr(hub.chat, 'experience', None)
+                if experience is not None:
+                    written = experience.entry_ids()
+                    for item in panel['items']:
+                        item['auto'] = item['memory_id'] in written
+                    panel['experience'] = experience.status()
+                self._send(200, panel)
             except Exception:
                 self._send(503, {'error': 'Ombre 记忆暂时无法读取。'})
 
@@ -2507,6 +2515,20 @@ def make_handler(hub, token):
                 except UserError as exc:
                     self._send(500, {'error': str(exc)})
 
+        def _post_experience_memory(self, body):
+            enabled = body.get('enabled')
+            experience = getattr(hub.chat, 'experience', None)
+            if not isinstance(enabled, bool):
+                self._send(400, {'error': 'enabled'})
+            elif experience is None:
+                self._send(409, {'error': 'unavailable'})
+            else:
+                try:
+                    experience.set_enabled(enabled)
+                    self._send(200, {'ok': True, 'experience': experience.status()})
+                except (OSError, UserError) as exc:
+                    self._send(500, {'error': str(exc)})
+
         def _post_codex_watch(self, body):
             enabled = body.get('enabled')
             if not isinstance(enabled, bool):
@@ -2693,6 +2715,8 @@ def make_handler(hub, token):
                 self._post_mcp(body)
             elif url.path == '/api/quiet-hours':
                 self._post_quiet_hours(body)
+            elif url.path == '/api/experience-memory':
+                self._post_experience_memory(body)
             elif url.path == '/api/workbench':
                 self._post_workbench(body)
             elif url.path == '/api/windows-apps':
