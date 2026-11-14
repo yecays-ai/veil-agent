@@ -19,9 +19,8 @@ TOOL_SCHEMA = {'type': 'function', 'function': {
     'name': TOOL_NAME,
     'description': ('Search the saved chat log with lan by clue words when you cannot recall something she '
                     'mentions; returns the matching messages with time and the messages around them. '
-                    'When she says yesterday, the day before, last Friday and so on, work out the date from '
-                    'the local time yourself and pass it as since/until. With since/until and no keywords you '
-                    'get an overview of what was said in that period. Read-only.'),
+                    'For "yesterday" etc. work out the date yourself; since/until alone gives an overview. '
+                    'Read-only.'),
     'parameters': {'type': 'object', 'properties': {
         'keywords': {'type': 'array', 'items': {'type': 'string', 'maxLength': 40},
                      'maxItems': MAX_KEYWORDS,
