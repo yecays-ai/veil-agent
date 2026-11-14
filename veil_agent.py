@@ -2989,6 +2989,32 @@ class Chat:
         return [{**row, 'message_id': self._message_id(row, index)} for index, row in enumerate(rows)]
 
 
+    def life_state_context(self, exclude_ids=()):
+        """Ticket 352: program-computed time gap and current task/life state for ordinary chat."""
+        from life_state import MAX_FINISHED, gap_text, state_text
+        stamp = self.budget.clock()
+        parts = []
+        try:
+            rows = self.history_events
+            excluded = set(exclude_ids)
+            if not any(row.get('role') == 'user' and row.get('message_id') not in excluded for row in rows):
+                rows = self.store.read(self.path)  # a new conversation keeps no history rounds
+            parts.append(gap_text(rows, stamp, exclude_ids))
+        except (OSError, UserError, AttributeError):
+            pass
+        try:
+            native = getattr(self.tools, 'native', None)
+            plans = native.plan_entries() if callable(getattr(native, 'plan_entries', None)) else []
+        except (OSError, ValueError, UnicodeError, UserError):
+            plans = []
+        try:
+            parts.append(state_text(self.long_tasks.read(),
+                                    self.store.read(f'{self.cfg.id}/long-task-history.jsonl')[-MAX_FINISHED:],
+                                    self.life_records.read(), plans, stamp[:10]))
+        except (OSError, ValueError, UnicodeError, UserError, KeyError, TypeError):
+            pass
+        return '\n'.join(part for part in parts if part)
+
     def recent(self):
         groups = []
         events = self.store.read(self.path)
@@ -3583,6 +3609,13 @@ class Chat:
                                       self.maintenance.active_summary() if self.maintenance else '')
         if self.autonomy_controller is not None and not autonomy:
             changing += '\n' + self.autonomy_controller.wake_count_text()
+        if not autonomy and not skip_recall:
+            # Ticket 352: gap since Lan last wrote and the saved task/life state, in the per-turn tail.
+            current_ids = [row.get('message_id') for row in user_events if isinstance(row, dict)] \
+                if isinstance(user_events, list) else []
+            life_note = self.life_state_context([message_id, *current_ids])
+            if life_note:
+                changing += '\n' + life_note
         description = stable + '\n' + changing
         # Order matters for the provider's prefix cache: everything that stays the same between requests
         # comes first, then the chat history, then what changes every request (recalled memories,
