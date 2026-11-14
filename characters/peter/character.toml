@@ -46,6 +46,15 @@ dimensions = 1024
 # Official price checked 2026-10-19: https://siliconflow.cn/pricing
 # This is the free model, NOT Pro/BAAI/bge-m3. Update together when switching.
 input_cny_per_million = "0"
+# Ticket 353: automatic recall rotation. On by default with these values; to change one, add the table
+# right here, after the [memory] keys and before the next section. enabled = false restores the old behaviour.
+# [memory.recall]
+# cooldown_turns = 6        # a memory shown automatically skips the next 6 turns (0 = off); kept across restarts
+# dedup = true              # one memory per event: Ombre same_event/continuation links or stored vectors >= dedup_similarity
+# dedup_similarity = 0.88
+# excerpt_chars = 600       # longer memories show title, date and the first 600 characters (0 = full text)
+# random_chance = 0.1       # when the search found fewer than 3, chance to add one of Ombre's random recollections (0 = off)
+# rotation_candidates = 8   # autonomous wakes pick 3 of this many, least recently shown first
 # Ticket 187: for a short message that needs the last rounds ("try again"), search again with those rounds
 # and keep only memories whose stored vector is close to that text; none may remain. OFF until
 # min_similarity is calibrated on real memory text. To turn it on, add this table right here, after the

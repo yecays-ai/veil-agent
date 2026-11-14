@@ -1159,30 +1159,14 @@ class Memory:
             return recall_cfg['dedup'] and any(
                 same_event(key, other, metas, vectors, threshold, cosine) for other, _ in kept)
 
-        if opening_visible:
-            pinned = [item for item in opening_visible if '核心准则' in item[1].split('\n', 1)[0]
-                      or str(metas.get(item[0], {}).get('pinned', '')).lower() == 'true']
-            rest = [item for item in opening_visible if item not in pinned]
-            opening_shown = []
-            for key, body in pinned + rotated(rest, metas, self.rotation.last):
-                if len(opening_shown) >= 3:
-                    break
-                if not duplicate(key, opening_shown):
-                    opening_shown.append((key, body))
-        else:
-            opening_shown = []
-        for key, _ in opening_shown:
-            kinds[key] = 'opening'
         kept = []
         for key, body in candidates:
             if len(kept) >= 3:
                 break
-            if any(key == other for other, _ in opening_shown):
-                continue
             if self.rotation.cooled(key, cooldown):
                 self.last_recall_skipped['cooldown'] += 1
                 continue
-            if duplicate(key, kept + opening_shown):
+            if duplicate(key, kept):
                 self.last_recall_skipped['same_event'] += 1
                 continue
             kept.append((key, body))
@@ -1191,13 +1175,29 @@ class Memory:
         if (drift and len(kept) < 3 and recall_cfg['random_chance']
                 and self.rng.random() < recall_cfg['random_chance']):
             for key, body in self.context_visible(drift, failure_stage='recall_visibility'):
-                shown = {other for other, _ in kept + opening_shown}
+                shown = {other for other, _ in kept}
                 if (key not in shown and not self.rotation.cooled(key, cooldown)
-                        and not duplicate(key, kept + opening_shown)):
+                        and not duplicate(key, kept)):
                     kept.append((key, '(Random recollection, not a search hit: an old memory that surfaced '
                                       'on its own.)\n' + body))
                     kinds[key] = 'random'
                     break
+        if opening_visible:
+            pinned = [item for item in opening_visible if '核心准则' in item[1].split('\n', 1)[0]
+                      or str(metas.get(item[0], {}).get('pinned', '')).lower() == 'true']
+            rest = [item for item in opening_visible if item not in pinned]
+            recalled_keys = {other for other, _ in kept}
+            opening_shown = []
+            for key, body in pinned + rotated(rest, metas, self.rotation.last):
+                if len(opening_shown) >= 3:
+                    break
+                # A memory also recalled this turn is shown once, as the (fresher) recall.
+                if key not in recalled_keys and not duplicate(key, kept + opening_shown):
+                    opening_shown.append((key, body))
+        else:
+            opening_shown = []
+        for key, _ in opening_shown:
+            kinds[key] = 'opening'
         limit = recall_cfg['excerpt_chars']
         recall = [excerpt(key, body, metas.get(key, {}), limit) for key, body in kept]
         opening = [excerpt(key, body, metas.get(key, {}), limit) for key, body in opening_shown]
