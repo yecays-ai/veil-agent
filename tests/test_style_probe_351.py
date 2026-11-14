@@ -98,7 +98,7 @@ class StyleProbeTests(unittest.TestCase):
 
     def test_budget_cap_stops_before_overspending(self):
         with tempfile.TemporaryDirectory() as tmp:
-            big = [dict(MODELS[0], output_cny_per_million=Decimal(1_000_000))]  # 600 tokens = ¥600 worst case
+            big = [dict(MODELS[0], output_cny_per_million=Decimal(1_000_000))]  # 1500 tokens = ¥1500 worst case
             results, spent = probe.run('人设', None, ['原话'], 'Peter', big, SCENARIOS, tmp,
                                        {'m1': FakeModel('m1')})
             self.assertEqual(results, {})

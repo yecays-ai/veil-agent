@@ -151,10 +151,10 @@ def parse_numbers(text, limit):
 def snippet_block(name, snippets, user_name='她'):
     if all(isinstance(s, str) for s in snippets):
         lines = '\n'.join(format_item(s, name, user_name) for s in snippets)
-        return (f'以下是{name}过去在真实聊天里亲口说过的一些话，只用来提醒你自己平时说话的语气和习惯。'
+        return (f'以下是{name}过去亲口说过的一些话，只用来提醒你自己平时说话的语气和习惯。'
                 '它们不是这次要说的内容：不要照抄、不要复述，也不要提起这段参考。\n' + lines)
     lines = '\n\n'.join(format_item(s, name, user_name) for s in snippets)
-    return (f'以下是{name}过去和{user_name}真实聊天里的几小段来回，{name}的话是你亲口说过的，'
+    return (f'以下是{name}过去和{user_name}聊天时的几小段来回，{name}的话是你亲口说过的，'
             '只用来提醒你自己平时怎么回应她、接梗、斗嘴、关心和表达不同意见。'
             '它们不是这次要说的内容：不要照抄、不要复述，也不要提起这段参考。\n\n' + lines)
 
@@ -232,7 +232,7 @@ def openai_caller(model, env_file):
     return call
 
 
-def run(persona, profile, snippets, name, models, scenarios, out_dir, callers, max_tokens=600, user_name='她'):
+def run(persona, profile, snippets, name, models, scenarios, out_dir, callers, max_tokens=1500, user_name='她'):
     """callers: label -> call(messages, max_tokens) -> (reply, usage). Resumable: done cells are kept."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
