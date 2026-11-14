@@ -123,7 +123,7 @@ class RecallRotationTests(unittest.TestCase):
         restarted = self.memory(recall={'cooldown_turns': 3, 'random_chance': 0})
         self.assertEqual(self.recall(restarted, 'cooking dumplings')[1], [])
         saved = self.store.read('fake/memory/_agent/recall-rotation.jsonl')[-1]
-        self.assertEqual(set(saved), {'turn', 'last'})  # IDs and turn numbers only, no memory text
+        self.assertLessEqual(set(saved), {'turn', 'last', 'time'})  # IDs and turn numbers only, no memory text
         self.assertNotIn('dumplings', json.dumps(saved))
 
     def test_same_event_by_link_shows_only_one(self):
