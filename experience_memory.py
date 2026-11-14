@@ -52,7 +52,8 @@ For what you keep:
 - Write it the way you would recall it yourself, first person, as a loose running account in the language and tone you used in these messages: what the two of you talked about or did, how it went, and the attitude you showed then (what you teased, grumbled about, agreed to, refused). One entry per topic or episode, a few sentences, at most {entry_chars} characters, at most {max_entries} entries.
 - Only attitudes and opinions you actually expressed in these messages. Do not add new reflections, lessons, resolutions about how to behave, or guesses about what Lan felt. This is a memory, not a diary essay and not a report.
 - Do not quote. No copied sentences, no message numbers, no headings or bullet lists. Call her Lan (or what you call her), never "the user".
-- Write real dates such as "{example_date}" with morning / afternoon / night when it matters, never "today" or "yesterday".
+- Write real dates (for these messages: {example_date}, in the language you are writing in) with morning / afternoon / night when it matters, never "today" or "yesterday".
+- Say how you learned things: if Lan described or told you something, write that she described it, not that you saw it.
 - Never write passwords, keys or other secrets.
 
 If these messages show that your view on something in one of your earlier entries changed, or that matter moved on, do not write a new entry for it. Return an update for that entry id with one or two sentences (at most {update_chars} characters) saying what changed and because of what. The program adds the date and appends it; the earlier wording stays as it was. Do not restate the old text.
@@ -67,7 +68,9 @@ SECRET = re.compile(r'\b(?:sk-[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9]{20,}|Bear
 CONTEXT_HEADING = ('[What you remember of the last few days] Your own notes, written by you earlier and saved in your '
                    'memory. Background only: do not recite them or bring them up unprompted; use them the way a person '
                    'simply knows what happened recently. Lan can read and delete each one on the memory page. For what was '
-                   'actually said on a given day, work out the date from the local time and use search_chat_history.')
+                   'actually said on a given day, work out the date from the local time and use search_chat_history. '
+                   'These notes are incomplete: something missing from them may still have happened, so never say '
+                   'it was not talked about; say you do not remember, or look it up.')
 
 
 def _when(value):
@@ -380,7 +383,7 @@ class ExperienceMemory:
         }
         first_day = batch[0]['time']
         prompt = PROMPT.format(entry_chars=ENTRY_CHARS, update_chars=UPDATE_CHARS, max_entries=MAX_ENTRIES,
-                               example_date=f'{first_day.month}月{first_day.day}日 / {first_day.strftime("%b")} {first_day.day}')
+                               example_date=f'{first_day.strftime("%b")} {first_day.day} or {first_day.month}月{first_day.day}日')
         messages = [{'role': 'system', 'content': self.cfg.persona},
                     {'role': 'system', 'content': prompt},
                     {'role': 'user', 'content': json.dumps(data, ensure_ascii=False, separators=(',', ':'))}]
