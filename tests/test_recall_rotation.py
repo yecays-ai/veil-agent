@@ -13,7 +13,7 @@ from pathlib import Path
 from unittest.mock import Mock
 
 from memory_agent import Memory, vault_path
-from recall_rotation import Cooldown, drift_hits, excerpt, front_matter, rotate, settings
+from recall_rotation import Cooldown, asks_about_past, drift_hits, excerpt, front_matter, rotate, settings
 from veil_agent import Budget, Character, Store, memory_ref_fields
 
 
@@ -110,6 +110,13 @@ class RecallRotationTests(unittest.TestCase):
         self.assertEqual(self.recall(memory, 'train window')[1], [])
         self.assertEqual(self.recall(memory, 'train coast')[1], [])
         self.assertEqual(self.recall(memory, 'train again')[1], ['train'])
+
+    def test_asking_about_the_past_gets_through_the_cooldown(self):
+        memory = self.memory(recall={'cooldown_turns': 5, 'random_chance': 0})
+        self.assertEqual(self.recall(memory, 'train trip')[1], ['train'])
+        self.assertEqual(self.recall(memory, 'train window')[1], [])           # unprompted: cooled
+        self.assertEqual(self.recall(memory, '还记得 train 那次吗')[1], ['train'])  # she asks: shown
+        self.assertEqual(self.recall(memory, 'remember train trip')[1], ['train'])
 
     def test_no_relevant_memory_returns_none(self):
         memory = self.memory(recall={'random_chance': 0})
@@ -225,7 +232,7 @@ class RecallRotationTests(unittest.TestCase):
 
 class HelperTests(unittest.TestCase):
     def test_settings_defaults_and_bad_values(self):
-        self.assertEqual(settings({})['cooldown_turns'], 6)
+        self.assertEqual(settings({})['cooldown_turns'], 3)
         self.assertEqual(settings({'recall': {'cooldown_turns': -1, 'random_chance': 3}})['random_chance'], 0.1)
         self.assertEqual(settings({'recall': {'enabled': False}})['random_chance'], 0.0)
 
@@ -247,6 +254,12 @@ class HelperTests(unittest.TestCase):
         order = rotate([('a', ''), ('b', ''), ('c', '')], metas, {'a': 3})
         self.assertEqual([key for key, _ in order], ['c', 'b', 'a'])
         self.assertEqual(excerpt('k', '[bucket_id:k]\nshort', {}, 600), '[bucket_id:k]\nshort')
+
+    def test_past_reference_detector(self):
+        for text in ('你还记得去年那张贺卡吗', '按钮那次是你自己修好的吧', 'do you remember it', 'last time we talked'):
+            self.assertTrue(asks_about_past(text), text)
+        for text in ('今天好热', '我的多肉长高了', '晚安', 'hello'):
+            self.assertFalse(asks_about_past(text), text)
 
     def test_cooldown_ignores_damaged_state(self):
         state = Cooldown({'turn': 'x', 'last': {'a': 99, 'b': 'y'}})

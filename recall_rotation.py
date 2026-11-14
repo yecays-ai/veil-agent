@@ -18,7 +18,7 @@ decides which of the candidates Ombre already returned are shown this turn, and 
 import re
 
 DEFAULTS = {
-    'cooldown_turns': 6,
+    'cooldown_turns': 3,
     'dedup': True,
     'dedup_similarity': 0.88,
     'excerpt_chars': 600,
@@ -57,6 +57,19 @@ def settings(memory_cfg):
     if result['excerpt_chars'] and result['excerpt_chars'] < 120:
         result['excerpt_chars'] = 120  # shorter than this cannot carry a recognisable opening
     return result
+
+
+_PAST = re.compile(
+    r'记得|还记不记得|想起来|上次|上回|那次|那天|那晚|那时|当时|去年|前年|以前|之前|刚才说|'
+    r'remember|recall|last time|that time|back when|earlier|you said|we talked', re.I)
+
+
+def asks_about_past(text):
+    """The user is pointing at something that already happened ("还记得…", "上次那次…").
+
+    Cooldown only exists so unrelated old memories do not keep coming back unasked; when she asks
+    about the past herself, hiding the memory she means is the worse failure, so it is let through."""
+    return bool(isinstance(text, str) and _PAST.search(text))
 
 
 def drift_hits(text):

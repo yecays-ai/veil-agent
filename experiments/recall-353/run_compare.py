@@ -193,24 +193,46 @@ def run(runtime, work, label, assisted, replies):
     (work / f'result-{label}.json').write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding='utf-8')
 
 
+PAST = None
+
+
+def asks_about_past(text):
+    """Local copy of the "she asks about the past" cue, so main (which lacks the feature) is scored too."""
+    import re
+    global PAST
+    if PAST is None:
+        PAST = re.compile(r'记得|想起来|上次|上回|那次|那天|那晚|当时|去年|以前|之前|remember|last time', re.I)
+    return bool(PAST.search(text))
+
+
 def summary(result):
+    """One number per memory dimension (ticket 353 lists them); read all of them, not just one."""
     rows = result['rows'][1:]  # turn 0 carries the opening; recall is compared from turn 1
     counts = {}
     for row in rows:
         for key in row['refs']:
             counts[key] = counts.get(key, 0) + 1
     shown = sum(counts.values())
-    relevant = sum(1 for row in rows for t in row['ref_topics'] if row['topic'] and t == row['topic'])
-    off = sum(1 for row in rows for t in row['ref_topics'] if not row['topic'] or t != row['topic'])
-    small_talk = [row for row in rows if not row['topic']]
+    on_topic = sum(1 for row in rows for t in row['ref_topics'] if row['topic'] and t == row['topic'])
+    topic_rows = [row for row in rows if row['topic']]
+    past_rows = [row for row in topic_rows if asks_about_past(row['text'])]
+    hit = lambda row: row['topic'] in row['ref_topics']
+    previous, repeats = set(), 0
+    for row in rows:
+        repeats += len(previous & set(row['refs']))
+        previous = set(row['refs'])
     return {
-        'distinct_memories': len(counts),
-        'top_share': round(max(counts.values()) / shown, 3) if shown else 0,
-        'empty_turns': sum(1 for row in rows if not row['refs']),
-        'empty_topic_turns': sum(1 for row in rows if row['topic'] and not row['refs']),
-        'avg_recall_chars': round(sum(row['recall_chars'] for row in rows) / len(rows)),
-        'shown': shown, 'on_topic': relevant, 'off_topic': off,
-        'small_talk_with_memories': sum(1 for row in small_talk if row['refs']),
+        '1_asked_and_recalled_right': f"{sum(hit(r) for r in topic_rows)}/{len(topic_rows)} topic turns",
+        '1b_asked_about_past_and_recalled': f"{sum(hit(r) for r in past_rows)}/{len(past_rows)} past-question turns",
+        '2_same_memory_in_consecutive_turns': repeats,
+        '2b_distinct_memories': len(counts),
+        '2c_top_memory_share': round(max(counts.values()) / shown, 3) if shown else 0,
+        '3_off_topic_memories': sum(1 for row in rows for t in row['ref_topics'] if not row['topic'] or t != row['topic']),
+        '3b_small_talk_turns_with_memory': sum(1 for row in rows if not row['topic'] and row['refs']),
+        '3c_on_topic_memories': on_topic, '3d_memories_shown': shown,
+        '4_random_recollections': sum(1 for row in rows for k in row['kinds'].values() if k == 'random'),
+        '5_avg_recall_chars': round(sum(row['recall_chars'] for row in rows) / len(rows)),
+        '5b_turns_without_any_memory': sum(1 for row in rows if not row['refs']),
         'paid_requests': result['paid_requests'], 'cost_cny': result['cost_cny']}
 
 

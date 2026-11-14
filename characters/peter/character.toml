@@ -49,7 +49,7 @@ input_cny_per_million = "0"
 # Ticket 353: automatic recall rotation. On by default with these values; to change one, add the table
 # right here, after the [memory] keys and before the next section. enabled = false restores the old behaviour.
 # [memory.recall]
-# cooldown_turns = 6        # a memory shown automatically skips the next 6 turns (0 = off); kept across restarts
+# cooldown_turns = 3        # a memory shown automatically skips the next 3 turns unless Lan asks about the past (0 = off); kept across restarts
 # dedup = true              # one memory per event: Ombre same_event/continuation links or stored vectors >= dedup_similarity
 # dedup_similarity = 0.88
 # excerpt_chars = 600       # longer memories show title, date and the first 600 characters (0 = full text)

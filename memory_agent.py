@@ -1099,14 +1099,14 @@ class Memory:
     def context(self, query, *, include_opening=True, recent=None, rotate=False):
         """This turn's automatic memories. `rotate` is for wakes whose text names no topic (ticket 353)."""
         from recall_relevance import cosine
-        from recall_rotation import drift_hits, excerpt, rotate as rotated, same_event
+        from recall_rotation import asks_about_past, drift_hits, excerpt, rotate as rotated, same_event
         self._turn_notice_local.seen = set()
         self.last_context_refs = []
         self.last_context_kinds = {}
         self.last_assisted = None
         self.last_recall_skipped = {'cooldown': 0, 'same_event': 0}
         recall_cfg = self.recall_settings
-        cooldown = recall_cfg['cooldown_turns']
+        cooldown = 0 if asks_about_past(query) and not rotate else recall_cfg['cooldown_turns']
         widen = rotate and recall_cfg['rotation_candidates'] > 3
         with self.mutex:
             self.rotation.turn += 1
