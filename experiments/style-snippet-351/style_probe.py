@@ -31,6 +31,14 @@ MIN_CHARS, MAX_CHARS = 8, 100
 CAP_CNY = Decimal('2')
 
 
+def say(text):
+    """print that never crashes on a console that cannot show Chinese (e.g. a cp1252 CI shell)."""
+    try:
+        print(text)
+    except UnicodeEncodeError:
+        print(text.encode('ascii', 'replace').decode('ascii'))
+
+
 def text_of(content):
     if isinstance(content, str):
         return content
@@ -248,7 +256,7 @@ def run(persona, profile, snippets, name, models, scenarios, out_dir, callers, m
                 messages = build_messages(persona, profile, snippets if with_snippets else None,
                                           name, scenario['message'], user_name)
                 if not ledger.allow(Ledger.worst(model, messages, max_tokens)):
-                    print(f'到达 ¥{ledger.cap} 上限，停在 {cell}；已花 ¥{ledger.spent:.4f}')
+                    say(f'到达 ¥{ledger.cap} 上限，停在 {cell}；已花 ¥{ledger.spent:.4f}')
                     return results, ledger.spent
                 reply, usage = callers[model['label']](messages, max_tokens)
                 ledger.record(model['label'], Ledger.actual(model, usage), usage)
@@ -356,7 +364,7 @@ def main(argv=None):
             'li{margin:6px 0}</style><h1>哪些像 Peter 平时说话？</h1>'
             '<p>挑 20 到 30 句你认可的，把编号发给我，例如 <code>1 3 5-9 12</code>。</p>'
             f'<ol>{body}</ol>', encoding='utf-8')
-        print(f'{len(lines)} 条候选 → {out / "candidates.html"}')
+        say(f'{len(lines)} 条候选 → {out / "candidates.html"}')
     elif args.cmd == 'exchanges':
         segments = exchange_segments(args.chat, args.ranges)
         (out / 'candidates.json').write_text(json.dumps(segments, ensure_ascii=False, indent=1), encoding='utf-8')
@@ -371,12 +379,12 @@ def main(argv=None):
             '.lan{color:#345}</style><h1>哪几段像你们平时的样子？</h1>'
             '<p>挑你认可的片段，把编号发给我，例如 <code>1 3 5-9</code>。</p>'
             f'<ol>{body}</ol>', encoding='utf-8')
-        print(f'{len(segments)} 段候选 → {out / "candidates.html"}')
+        say(f'{len(segments)} 段候选 → {out / "candidates.html"}')
     elif args.cmd == 'select':
         lines = json.loads((out / 'candidates.json').read_text(encoding='utf-8'))
         chosen = [lines[n - 1] for n in parse_numbers(args.numbers, len(lines))]
         (out / 'snippets.json').write_text(json.dumps(chosen, ensure_ascii=False, indent=1), encoding='utf-8')
-        print(f'选中 {len(chosen)} 句')
+        say(f'选中 {len(chosen)} 句')
     elif args.cmd == 'run':
         snippets = json.loads((out / 'snippets.json').read_text(encoding='utf-8'))
         persona = Path(args.persona).read_text(encoding='utf-8-sig').strip()
@@ -385,17 +393,17 @@ def main(argv=None):
         callers = {m['label']: openai_caller(m, args.env) for m in models}
         _, spent = run(persona, profile, snippets, args.name, models, scenarios, out, callers,
                        user_name=args.user_name)
-        print(f'完成，本次实验累计花费 ¥{spent:.4f}')
+        say(f'完成，本次实验累计花费 ¥{spent:.4f}')
     elif args.cmd == 'page':
         results = json.loads((out / 'results.json').read_text(encoding='utf-8'))
         seed = int(hashlib.sha256((out / 'results.json').read_bytes()).hexdigest()[:8], 16)
         page, key = blind_page(results, load_models(args.models), scenarios, seed)
         (out / 'compare.html').write_text(page, encoding='utf-8')
         (out / 'key.json').write_text(json.dumps(key, ensure_ascii=False, indent=1), encoding='utf-8')
-        print(f'对比页 → {out / "compare.html"}')
+        say(f'对比页 → {out / "compare.html"}')
     elif args.cmd == 'reveal':
         key = json.loads((out / 'key.json').read_text(encoding='utf-8'))
-        print(json.dumps(reveal(key, args.answers), ensure_ascii=False))
+        say(json.dumps(reveal(key, args.answers), ensure_ascii=False))
     return 0
 
 
