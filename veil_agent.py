@@ -1753,19 +1753,21 @@ class Budget:
         all_glance, _ = self.category_totals(None, stamp, 'glance')
         all_short_term, _ = self.category_totals(None, stamp, 'short_term_notes')
         all_delegate, _ = self.category_totals(None, stamp, 'delegate')
+        all_experience, _ = self.category_totals(None, stamp, 'experience_memory')
         autonomy = all_autonomy if character is None else self.category_totals(character, stamp)[0]
         glance = all_glance if character is None else self.category_totals(character, stamp, 'glance')[0]
         short_term = (all_short_term if character is None else
                       self.category_totals(character, stamp, 'short_term_notes')[0])
         delegate = (all_delegate if character is None else
                     self.category_totals(character, stamp, 'delegate')[0])
-        chat = day - all_autonomy - all_glance - all_short_term - all_delegate
+        chat = day - all_autonomy - all_glance - all_short_term - all_delegate - all_experience
         warning = ('【费用账本有待核实的记录，已暂停所有付费请求；见 data_repair.py ledger-status】'
                    if ledger_recovery.is_unverified(self.store.root) else '')
         return (warning + f'今天 ¥{day:.6f} / {self.daily_limit()}；本月 ¥{month:.6f} / {self.monthly_limit()}；'
                 f'待核对预留 ¥{pending:.6f}；其中聊天 ¥{chat:.6f}，自主 ¥{autonomy:.6f} / '
                 f'{self.autonomy_daily}/日（自主是上限，不是消费目标），瞄一眼 ¥{glance:.6f} / '
-                f'{self.glance_daily}/日，委派任务 ¥{delegate:.6f}，短期便签提取 ¥{short_term:.6f}')
+                f'{self.glance_daily}/日，委派任务 ¥{delegate:.6f}，短期便签提取 ¥{short_term:.6f}'
+                + (f'，经历整理 ¥{all_experience:.6f}' if all_experience else ''))
 
     @synchronized
     def model_display(self, stamp=None):
@@ -2113,14 +2115,26 @@ class Chat:
             from short_term_notes import ShortTermNotes
             self.short_term_notes = ShortTermNotes(
                 background_cfg(cfg), store, budget, background_model or model, self.path, self.session_path)
+        # Ticket 354: the program's fallback memory of what Peter and Lan went through, written by the
+        # chat model itself from the visible chat only. Present only when [memory.experience] is configured.
+        self.experience = None
+        experience_config = (getattr(cfg, 'memory', None) or {}).get('experience')
+        if experience_config is not None and self.memory is not None and hasattr(self.memory, 'begin_write'):
+            from experience_memory import ExperienceMemory, load_settings
+            self.experience = ExperienceMemory(cfg, store, budget, model, self.path, self.memory,
+                                               load_settings(experience_config))
 
     def start_short_term_notes_scheduler(self):
         if self.short_term_notes:
             self.short_term_notes.start()
+        if self.experience:
+            self.experience.start()
 
     def stop_short_term_notes_scheduler(self):
         if self.short_term_notes:
             self.short_term_notes.stop()
+        if self.experience:
+            self.experience.stop()
 
     def tool_schemas(self):
         from tools_agent import permitted_tools
@@ -3417,6 +3431,8 @@ class Chat:
             'history_chars': context_chars(history), 'memory_ids': list(self.turn_memory_refs),
             'memory_chars': context_chars(recalled), 'background': background_details,
             'short_term_notes': short_term_details,
+            'experience_chars': context_chars(head[-1:]) if head[-1].get('content', '').startswith(
+                '[What you remember of the last few days]') else 0,
             'runtime_chars': context_chars(runtime_context),
             'tool_schema_bytes': len(json.dumps(tool_schema or [], ensure_ascii=False).encode('utf-8')),
             'tool_schema_top': schema_top(tool_schema),
@@ -3643,6 +3659,12 @@ class Chat:
         if profile_context:
             head.append({'role': 'system', 'content': profile_context})
         head.append({'role': 'system', 'content': stable})
+        # Ticket 354: his own notes on the last few days sit after the cached prefix and before the
+        # history. They change only when a new note is written (a few times a day at most).
+        experience_message = (self.experience.context()
+                              if getattr(self, 'experience', None) and not skip_recall else None)
+        if experience_message:
+            head.append(experience_message)
         tool_schema = self.current_request_tool_schemas()
         self._active_capability_schemas = tool_schema
         # Tool definitions already tell the model what it can use. Peter gets the one-time update

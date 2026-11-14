@@ -55,6 +55,9 @@ input_cny_per_million = "0"
 # excerpt_chars = 600       # longer memories show title, date and the first 600 characters (0 = full text)
 # random_chance = 0.1       # when the search found fewer than 3, chance to add one of Ombre's random recollections (0 = off)
 # rotation_candidates = 8   # autonomous wakes pick 3 of this many, least recently shown first
+# Ticket 354: the program's fallback memory. When enough new chat has piled up and you two have gone quiet,
+# the chat model (as Peter) reads only the messages you sent each other and writes down what he would remember,
+# or nothing. Lan's switch on the memory page overrides `enabled`. This table must stay below the [memory] keys.
 # Ticket 187: for a short message that needs the last rounds ("try again"), search again with those rounds
 # and keep only memories whose stored vector is close to that text; none may remain. OFF until
 # min_similarity is calibrated on real memory text. To turn it on, add this table right here, after the
@@ -64,6 +67,17 @@ input_cny_per_million = "0"
 # min_similarity = <fill in the calibrated value; the table is ignored without a number>
 # short_chars = 12
 # rounds = 2
+
+[memory.experience]
+enabled = true
+min_chars = 3000            # new visible chat needed before he tidies it (then he waits until you are quiet)
+idle_minutes = 30
+floor_chars = 200           # less than this is never looked at, even at the end of the day
+day_end = "23:30"           # after this (or once the date has changed) a smaller amount is looked at too
+day_end_idle_minutes = 10
+daily_budget_cny = "1"      # Lan 2026-11-14: chat model, at most ¥1 a day
+recent_days = 3             # entries this new are placed before the chat history; 0 = only normal recall
+recent_chars = 1500
 
 [tools]
 max_output_tokens = 4096

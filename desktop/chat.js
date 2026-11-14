@@ -747,7 +747,7 @@ function renderMemoryList(){
     const button=document.createElement('button');button.type='button';button.className='memory-entry';
     const top=document.createElement('span');top.className='memory-entry-top';
     const title=document.createElement('span');title.className='memory-entry-title';title.textContent=item.surprise?'🎁 '+item.title:item.title;
-    const time=document.createElement('time');time.textContent=memoryTime(item.created);top.append(title,time);
+    const time=document.createElement('time');time.textContent=(item.auto?'自动整理 · ':'')+memoryTime(item.created);top.append(title,time);
     const preview=document.createElement('span');preview.className='memory-entry-preview';
     preview.textContent=item.surprise?'Peter 给你准备的惊喜，先不剧透。':(item.body||item.why).replace(/\s+/g,' ').slice(0,90);
     button.append(top,preview);
@@ -758,6 +758,29 @@ function renderMemoryList(){
   const total=memoryItems.filter(item=>!item.source_record).length;
   $('memory-count').textContent=group.domains||query?`显示 ${filtered.length} 条 · 共 ${total} 条记忆`:`共 ${total} 条记忆`;
 }
+// Ticket 354: the program writes down what Peter would remember of the chat; Lan can see the last result and switch it off.
+let experienceEnabled=false;
+function renderExperience(x){
+  const row=$('experience-row');if(!x||x.available!==true){row.hidden=true;return}
+  row.hidden=false;experienceEnabled=x.enabled===true;
+  let last='还没有整理过';
+  if(x.last){const at=new Date(x.last.time);const when=Number.isNaN(at.getTime())?'':`${at.getMonth()+1}月${at.getDate()}日 ${memoryTime(x.last.time)}`;
+    if(x.last.kind==='budget')last=when+' 今天已到 ¥'+x.daily_budget_cny+' 上限，没有再整理';
+    else if(x.last.kind==='error')last=when+' 整理失败，下次再试';
+    else if(x.last.written||x.last.updated)last=when+' 记了 '+(x.last.written||0)+' 条'+(x.last.updated?'，补充了 '+x.last.updated+' 条':'');
+    else last=when+' 看过了，他觉得没什么要记的';}
+  $('experience-status').textContent=experienceEnabled
+    ?'自动整理经历：开 · 上次：'+last+' · 攒了 '+x.pending_chars+' / '+x.min_chars+' 字 · 今天花了 ¥'+(x.spent_today||'?')+'（上限 ¥'+x.daily_budget_cny+'）'
+    :'自动整理经历：关（不会再写新的，也不会把近几天的放进聊天；已经写下的还在，可以逐条删）';
+  $('experience-toggle').textContent=experienceEnabled?'关闭自动整理':'开启自动整理';
+}
+$('experience-toggle').onclick=async()=>{
+  $('experience-toggle').disabled=true;
+  try{const r=await api('/api/experience-memory',{enabled:!experienceEnabled});const d=await r.json();
+    if(!r.ok)throw new Error(d.error||'');renderExperience(d.experience)}
+  catch(e){notify('自动整理的开关没有保存成功，请稍后再试。','error')}
+  finally{$('experience-toggle').disabled=false}
+};
 async function loadMemoryCatalog(reset=false){
   if(memoryLoading)return;
   memoryLoading=true;memoryCursor='';
@@ -768,7 +791,7 @@ async function loadMemoryCatalog(reset=false){
     if(!data||!Array.isArray(data.items))throw new Error('Ombre 返回的记忆格式无法识别。');
     memoryItems=data.items.filter(item=>item&&typeof item.memory_id==='string'&&typeof item.title==='string')
       .map(item=>({...item,domain:Array.isArray(item.domain)?item.domain:[],tags:Array.isArray(item.tags)?item.tags:[]}));
-    memoryLoaded=true;memoryAvailable=true;renderMemoryList();
+    memoryLoaded=true;memoryAvailable=true;renderExperience(data.experience);renderMemoryList();
     const current=memoryItems.find(item=>item.memory_id===$('memory-detail').dataset.memoryId);if(current)readMemory(current);
   }catch(error){
     memoryLoaded=true;$('memory-list').textContent=error.message||'Ombre 记忆暂时无法读取。';$('memory-unavailable').hidden=false;

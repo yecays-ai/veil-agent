@@ -9,6 +9,7 @@ from datetime import datetime
 CONTEXT_EACH_SIDE = 2
 MAX_EXCERPTS = 5
 MAX_KEYWORDS = 6
+BROWSE_MESSAGES = 30
 MESSAGE_CHARS = 200
 RESULT_BYTES = 8000  # same ceiling as other tool results (max_result_bytes 8192)
 NEIGHBOUR_WINDOW = 3  # keywords found within this many messages of each other count as appearing together
@@ -18,14 +19,15 @@ TOOL_SCHEMA = {'type': 'function', 'function': {
     'name': TOOL_NAME,
     'description': ('Search the saved chat log with lan by clue words when you cannot recall something she '
                     'mentions; returns the matching messages with time and the messages around them. '
+                    'For "yesterday" etc. work out the date yourself; since/until alone gives an overview. '
                     'Read-only.'),
     'parameters': {'type': 'object', 'properties': {
-        'keywords': {'type': 'array', 'items': {'type': 'string', 'maxLength': 40}, 'minItems': 1,
+        'keywords': {'type': 'array', 'items': {'type': 'string', 'maxLength': 40},
                      'maxItems': MAX_KEYWORDS,
                      'description': 'One to a few clue words; add synonyms or variants as extra words.'},
         'since': {'type': 'string', 'maxLength': 32, 'description': 'Optional, YYYY-MM-DD, local date.'},
         'until': {'type': 'string', 'maxLength': 32, 'description': 'Optional, YYYY-MM-DD, local date.'},
-    }, 'required': ['keywords'], 'additionalProperties': False},
+    }, 'additionalProperties': False},
 }}
 
 
@@ -72,14 +74,44 @@ def _shorten(text, words):
     return ('…' if start else '') + text[start:start + MESSAGE_CHARS] + ('…' if start + MESSAGE_CHARS < len(text) else '')
 
 
+def _browse(rows, first, last):
+    """Ticket 354: what was said in a period, without clue words: evenly spaced messages, in order."""
+    picked = []
+    for row in rows:
+        content = row.get('content') if isinstance(row, dict) else None
+        if row.get('role') not in ('user', 'assistant') or not isinstance(content, str) or row.get('recalled'):
+            continue
+        when = _local(row.get('time'))
+        if not when or (first and when.date() < first) or (last and when.date() > last):
+            continue
+        picked.append((when, row))
+    scope = f'{first or "the start"} to {last or "now"}'
+    if not picked:
+        return (f'No saved messages from {scope}. Tell lan you found nothing for that time; do not guess '
+                'what was said.'), False
+    step = max(1, -(-len(picked) // BROWSE_MESSAGES))
+    shown = picked[::step]
+    lines = [f'Saved chat from {scope}: {len(picked)} messages, showing {len(shown)} evenly spaced, in order. '
+             'Search with keywords in the same period for the exact part you need.']
+    for when, row in shown:
+        who = 'lan' if row['role'] == 'user' else 'you'
+        lines.append(f'{when.strftime("%Y-%m-%d %H:%M")} {who}: {_shorten(row["content"], [])}')
+    text = '\n'.join(lines)
+    if len(text.encode('utf-8')) > RESULT_BYTES:
+        text = text.encode('utf-8')[:RESULT_BYTES].decode('utf-8', 'ignore').rstrip() + '\n…(cut; narrow the dates)'
+    return text, True
+
+
 def search_chat(rows, keywords, since=None, until=None):
     """Return (text, found). `rows` is the chat log in order; each row has role, content, time."""
     words = split_keywords(keywords)
-    if not words:
-        return 'Give at least one keyword.', False
     first, last = _parse_day(since), _parse_day(until)
     if first is False or last is False:
         return 'since and until must look like 2026-11-05.', False
+    if not words:
+        if not (first or last):
+            return 'Give at least one keyword, or a date in since/until.', False
+        return _browse(rows, first, last)
     folded = [w.casefold() for w in words]
     usable = []
     for index, row in enumerate(rows):

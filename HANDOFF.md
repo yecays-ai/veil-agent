@@ -1,5 +1,18 @@
 # HANDOFF
 
+## 工单 354（2026-11-14）：Peter 自己整理的经历记忆（原「每日小结」）
+
+- Lan 当天否掉了原工单的设计（每天一篇、带原话和消息编号、写「我当时怎么想」）：那是日志，不帮人格；事后反思会让他变成「善于反思的叙述者」。她要的是活人感：按量触发、第一人称流水账加当时的态度、可以不记、存进记忆库、态度变了能追加。工单文件已整体重写，旧设计不要再施工。
+- 新增 `experience_memory.py`（`ExperienceMemory`）。账本 `data/<角色>/experience-memory.jsonl`（start / attempt / checkpoint / entry / update / error / budget），开关 `data/<角色>/experience-memory.json`。`Chat.__init__` 在配置了 `[memory.experience]` 且有 Ombre 时创建，随短期便签的定时线程一起启停（每 5 分钟看一次是否到条件）。写入直接调 `Memory.call('hold')` / `call('trace', content=旧文+追加)`，旧版本写进 `memory-versions.jsonl`；不经过 `NativeMemoryTools`，所以不受「必须先被展示过才能改」的限制，只能改账本里记录过的自己写的条目。
+- 用聊天模型而不是后台模型（Lan 定），调用方式和普通聊天一样（不开 JSON 模式、不改思考开关），这样中转站模型也能用；返回用 `short_term_notes._parse_json_object` 宽松解析。预留额按本次请求的实际字节数算，不按整个窗口。
+- 上下文：`Chat.send` 在 `stable` 之后、历史之前加一条 `[What you remember of the last few days]`；只在账本变长、换日或隐藏集合变化时重建，`tests/test_experience_memory.py::ChatPlacementTests` 守着前缀不变。瞄一眼和 Codex 提醒不带。
+- `chat_search.search_chat` 关键词可为空（必须给日期），走 `_browse`。
+- 记忆页：`/api/memory/panel` 多返回每条的 `auto` 和 `experience` 状态；`POST /api/experience-memory {enabled}` 切换开关。没有新的删除入口，删除走记忆页原有的。
+- 真实模型对比脚本 `experiments/experience-354/compare.py`（不进 CI，上限每次 ¥0.9，`--fake` 不花钱）：不启动 Peter、不起 Ombre、数据全在临时文件夹，只读测试副本的 `.env`、人设和模型设置，所以不会写进测试副本或 `D:\Peter backup`。
+- 真实模型对比已做（2026-11-14，6 次运行约 ¥0.17，逐项结果在 PR #355）。Lan 电脑上留有两个工作树 `E:\Peter-Agent\VEIL\worktrees\cmp354-main`、`cmp354-branch` 和结果文件夹 `E:\Peter-Agent\VEIL\cmp354-out\`（只含虚构聊天的结果），不用了可以删。对比后改过一次提示词（日期跟着条目语言写、写明是 Lan 描述的还是他看到的、近几天的块声明「不完整，没写的不等于没聊过」）。
+- 已知问题，都没解决：①记什么由模型决定，每次不一样；grok 记得少，第二轮两个模型都漏了「周六带团子体检」这种将来的安排。一批聊天只问一次，漏了就只能靠查聊天记录。想改可以在提示词里点名「约好的事、将来的安排」，但要重新对比。②条目写「Lan 描述了」，回答时模型仍可能说成「你发了照片」。③grok 被问到没记的事会说「没聊过」「我找过了」，main 上同样如此。④grok（中转站）在对比脚本里会把 `bubble_up` 工具调用原文或 `<think>` 当成回复文字发出来，main 上同样出现；真实 Peter 里是否出现没验证，属于 355 或中转站适配，不属于本功能。⑤Ombre 的 `hold` 可能把新条目合并进已有记忆（账本 `merged: true`，不进「近几天」的块）；自动条目没有条数上限和自动合并（有意不批量改记忆）；记忆页开关和标记没在真机点过。
+- 下一个窗口第一步：等 Lan 真机验收。她觉得他老提旧事，先把 `recent_days` 设 0；觉得记得太多太碎，调大 `min_chars`；觉得漏记，看上面的①。
+
 ## 工单 353（2026-11-14）：修自动想起的重复和遗漏
 
 - 工单原文 `docs/tickets/353-recall-cooldown-and-dedup.md`（已列出记忆的 7 个维度，对比要逐项报）。新增 `recall_rotation.py`（冷却、去重、轮换、摘录、随机想起的纯函数），`memory_agent.Memory.context()` 用它；冷却状态存 `data/<角色>/memory/_agent/recall-rotation.jsonl`（只存编号和轮数）；回复记录多一个 `memory_ref_kinds` 供面板标注来源。`tests/test_recall_rotation.py` 是确定性夹具（假 Ombre、假时钟式轮数、固定随机种子）。已有的三组测试（`test_recall_relevance`、`test_hidden_memory_context`、`test_background`）为了逐轮比较，在测试配置里把冷却设成 0。
