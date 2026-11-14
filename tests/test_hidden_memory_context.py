@@ -21,7 +21,9 @@ class HiddenMemoryContextTests(unittest.TestCase):
                     'input_cny_per_million': Decimal(2), 'output_cny_per_million': Decimal(8),
                     'cached_input_cny_per_million': Decimal(1)}
         self.cfg = Character('fake', 'Example', 'fictional persona', 20, 1024, provider, 'fake',
-                             {'model': 'fake-embedding', 'input_cny_per_million': '0.07', 'mode': 'native'})
+                             {'model': 'fake-embedding', 'input_cny_per_million': '0.07', 'mode': 'native',
+                              # Visibility is checked turn after turn; ticket 353's cooldown is tested on its own.
+                              'recall': {'cooldown_turns': 0}})
         self.backend = Backend(self.store.root / 'fake' / 'memory' / 'dynamic')
         self.backend.rows = {'secret': {'content': 'FICTIONAL_HIDDEN_MARKER'},
                              'normal': {'content': 'FICTIONAL_VISIBLE_MARKER'}}
