@@ -1,5 +1,11 @@
 # HANDOFF
 
+## 357 的后续修正（2026-11-15，随 355 的 PR）
+
+- 故障：357 把「工具清单」放进了状态轮询，轮询线程直接调用 `Chat.tool_schemas()`。这个函数会拿模型设置锁（查委派模型），聊天请求进行时锁被占着，轮询就排队，桌面断线。358 用「拿不到锁就用旧清单」止住了断线。
+- 这次的改法：轮询线程不再调用 `tool_schemas()`。清单由聊天线程每次请求时生成一份放在 `chat.tool_inventory_snapshot`（`Chat.refresh_tool_inventory`，启动时也生成一次），页面只读这份成品和工具日志。原因除了锁，还有 `tool_schemas()` 里的 `mcp_services.schemas()` 可能启动 MCP 进程，不该由轮询线程触发。358 对能力清单、模型刷新、健康检查的修正都保留。
+- 规矩：状态轮询（`Hub.snapshot`、`live_context`）里只读现成数据，不调用 Chat 里会拿锁或启动东西的函数。
+
 ## 工单 358（2026-11-15）：忙碌聊天时连接断开
 
 - Lan 在聊天中允许 Peter 去小岛玩，桌面断开后后台仍继续调用工具。真实 Windows 现场抓到多个 `/api/events` 请求停在 `Hub.tool_inventory -> Chat.tool_schemas -> ModelSettings.selected`；聊天主线程持有模型设置锁等待模型网络请求。357 的新工具清单使每次上下文日志变化后状态查询也会等待该锁。

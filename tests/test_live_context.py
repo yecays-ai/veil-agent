@@ -57,7 +57,7 @@ class LiveContextTest(unittest.TestCase):
         from tool_groups import inventory
         schemas = [{'type': 'function', 'function': {'name': name, 'description': 'x', 'parameters': {}}}
                    for name in ('hold', 'trace')]
-        self.chat.tool_schemas = lambda inventory_only=False, **kwargs: inventory(schemas, ('memory_admin',))
+        self.chat.tool_inventory_snapshot = inventory(schemas, ('memory_admin',))
         self.store.append('peter/context-log.jsonl', {'kind': 'chat', 'request_id': 'r1'})
         for tool, state in (('trace', '成功'), ('trace', '进行中'), ('hold', '成功'), ('hold', '失败')):
             self.store.append('peter/tools.jsonl', {'tool': tool, 'state': state})
@@ -68,6 +68,7 @@ class LiveContextTest(unittest.TestCase):
         self.assertEqual((rows['hold']['group'], rows['hold']['recent_calls']), (None, 2))
         self.assertEqual((rows['trace']['group'], rows['trace']['recent_calls']), ('memory_admin', 1))
         self.assertEqual(listed['recent_call_total'], 3)
+        self.assertNotIn('recent_calls', self.chat.tool_inventory_snapshot['rows'][0])  # the chat's copy is not touched
 
     def test_hub_shows_the_voice_reference_with_its_text_and_switch(self):
         from voice_style import VoiceStyle

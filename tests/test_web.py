@@ -121,17 +121,15 @@ output_cny_per_million = "8"
     def test_model_request_does_not_block_chat_poll_or_lose_model_refresh(self):
         models = SimpleNamespace(lock=threading.RLock(), env_lock=threading.RLock())
         cfg = SimpleNamespace(id='test', models=models)
-        def tool_schemas(**_):
-            with models.lock:
-                return {'rows': [], 'recent_call_total': 0}
+        tool_schemas = Mock(side_effect=AssertionError('the polling thread must not build the tool list'))
         def capabilities():
             with models.lock:
                 return 'fresh capabilities'
         self.hub.chat = SimpleNamespace(cfg=cfg, store=self.store, short_term_notes=None,
-                                        tool_schemas=tool_schemas)
+                                        tool_schemas=tool_schemas,
+                                        tool_inventory_snapshot={'rows': [{'name': 'listed', 'tool': 'listed'}]})
         self.hub.busy = False
         self.hub.ready = True
-        self.hub._tool_inventory_cache = (('old',), {'rows': [{'name': 'cached'}]})
         self.hub._current_capabilities_cache = 'cached capabilities'
         self.hub.current_capabilities = capabilities
         refresh = Mock()
@@ -149,7 +147,8 @@ output_cny_per_million = "8"
             status, body = self.call('/api/events?after=0')
             self.assertLess(time.monotonic() - started, 2)
             self.assertEqual(status, 200)
-            self.assertEqual(body['live_context']['tool_inventory']['rows'], [{'name': 'cached'}])
+            self.assertEqual([row['name'] for row in body['live_context']['tool_inventory']['rows']], ['listed'])
+            tool_schemas.assert_not_called()
             self.assertEqual(body['current_capabilities'], 'cached capabilities')
             refresh.assert_not_called()
         finally:

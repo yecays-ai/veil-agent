@@ -2142,6 +2142,14 @@ class Chat:
         if self.experience:
             self.experience.stop()
 
+    def refresh_tool_inventory(self):
+        """Ticket 357: keep a finished copy of the tool list for the desktop page. Called on the chat's own
+        thread; the page's polling thread only reads the copy. Never raises."""
+        try:
+            self.tool_inventory_snapshot = self.tool_schemas(inventory=True)
+        except Exception:
+            pass
+
     def tool_schemas(self, inventory=False):
         from tools_agent import permitted_tools
         task_tools = [{'type': 'function', 'function': {
@@ -3831,6 +3839,7 @@ class Chat:
                     'batch_id': processing_batch, 'message_ids': [row.get('message_id') for row in rows],
                     'state': 'pending', 'at': now()})
                 self.last_send_persisted = True
+        self.refresh_tool_inventory()
         self._log_context(text, autonomy, request_id, head, profile_context, stable, history, recalled_memories,
                           background_details, short_term_details, [*auxiliary_context, *runtime_required], tool_schema, user,
                           bound(history))

@@ -106,6 +106,14 @@ output_cny_per_million = "8"
         self.chat.send('and again')
         self.assertFalse(any(m['content'].startswith(FRAME) for m in self.seen[-1] if m['role'] == 'system'))
 
+    def test_each_request_leaves_a_finished_tool_list_for_the_page(self):
+        self.assertFalse(hasattr(self.chat, 'tool_inventory_snapshot'))
+        self.chat.send('hello')
+        self.assertIn('rows', self.chat.tool_inventory_snapshot)
+        self.chat.tool_schemas = lambda **_: 1 / 0
+        self.chat.refresh_tool_inventory()  # a failure keeps the last list and never reaches the chat
+        self.assertIn('rows', self.chat.tool_inventory_snapshot)
+
     def test_context_log_records_only_the_size(self):
         (self.root / 'persona' / 'test.voice.md').write_text(SAMPLE.replace('Peter', 'Test'), encoding='utf-8')
         self.chat.send('hello')
