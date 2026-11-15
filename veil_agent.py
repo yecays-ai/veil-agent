@@ -20,6 +20,7 @@ from decimal import Decimal
 from pathlib import Path
 import ledger_recovery
 import persona_versions
+from voice_style import FRAME as VOICE_FRAME, VoiceStyle, voice_path
 from background import append_context_log, background_context, background_path, context_chars, request_kind
 from contextlib import contextmanager, nullcontext
 
@@ -678,6 +679,7 @@ class Character:
     screen_pop: dict = None
     glance: dict = None
     background: str = None
+    voice_style: str = None  # ticket 355: local file next to the persona
     short_term_notes: dict = None
     # Ticket 134: Ombre tagging and short-term notes use this model; None means the chat model.
     background_provider: dict = None
@@ -1087,6 +1089,7 @@ def load_character(root, character_id):
                          memory, tools, autonomy, voice, profile, email, qq, web, windows_observation,
                          windows_interaction, desktop_file_read, screen_pop, glance,
                          background=str(background_path(persona_path)),
+                         voice_style=str(voice_path(persona_path)),
                          short_term_notes=short_term_notes,
                          background_provider=background_provider, models=models,
                          tool_aliases=tool_aliases, executor=executor)
@@ -2060,6 +2063,9 @@ class Chat:
             tools.announce_glance()
             self.pending_capability_event = tools.capability_event
             self.pending_capability_event_model = capability_model_notice(tools)
+        # Ticket 355: Lan's rules and sample exchanges for how he talks, the same for every model.
+        self.voice_style = (VoiceStyle(store, cfg.id, cfg.voice_style, cfg.name)
+                            if getattr(cfg, 'voice_style', None) else None)
         self.profile = None
         if getattr(cfg, 'profile', None):
             from profile_notes import ProfileNotes
@@ -3433,6 +3439,8 @@ class Chat:
             'model': self.cfg.provider.get('model'),
             'model_input_limit': self.cfg.provider.get('max_input_tokens'),
             'persona_chars': len(self.cfg.persona), 'about_lan_chars': len(profile_context or ''),
+            'voice_style_chars': sum(len(m.get('content', '')) for m in head[1:2]
+                                     if m.get('content', '').startswith(VOICE_FRAME[:12])),
             'stable_chars': len(stable), 'history_rounds': sum(m.get('role') == 'user' for m in history),
             'history_chars': context_chars(history), 'memory_ids': list(self.turn_memory_refs),
             'memory_chars': context_chars(recalled), 'background': background_details,
@@ -3659,6 +3667,10 @@ class Chat:
         # comes first, then the chat history, then what changes every request (recalled memories,
         # capability notice, time and ledger) right before the user's message.
         head = [{'role': 'system', 'content': self.cfg.persona}]
+        # Ticket 355: how he talks sits right after the persona; it changes only when Lan edits it.
+        voice_message = self.voice_style.context() if getattr(self, 'voice_style', None) else None
+        if voice_message:
+            head.append(voice_message)
         # Ticket 096: the role's own notes about the user sit right after the persona. They change
         # only when edited, so the cached prefix holds between edits.
         profile_context = self.profile.context() if self.profile else None

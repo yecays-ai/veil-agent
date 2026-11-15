@@ -54,6 +54,7 @@
   <section id="context-view" class="page" data-page-view="context" hidden>
     <div class="page-heading"><div><h2>实时上下文</h2></div><span id="context-notes-next" class="muted"></span></div>
     <section class="surface context-block"><h3>聊天时活动 <small class="muted">最近 10 次请求</small></h3><div id="context-turns" class="context-list" aria-live="polite"><p class="muted">还没有记录。</p></div></section>
+    <section class="surface context-block" id="voice-style-block" hidden><h3>他平时怎么说话 <small id="voice-style-summary" class="muted"></small></h3><p class="muted">每次请求都带在人设后面，换哪个模型都一样。上面写规则，下面写样例：「&gt;」开头是你说的话，其余每一行是他的一个气泡，空一行是另一段。改完点保存，下一句话就生效。</p><textarea id="voice-style-text" class="voice-style-text" spellcheck="false" rows="14"></textarea><div class="memory-footer"><span id="voice-style-note" class="muted"></span><div><button id="voice-style-toggle" type="button"></button> <button id="voice-style-save" type="button">保存</button></div></div></section>
     <section class="surface context-block"><h3>工具清单 <small id="context-tools-summary" class="muted"></small></h3><div id="context-tools" class="context-list" aria-live="polite"><p class="muted">还没有记录。</p></div></section>
     <section class="surface context-block"><h3>短期便签 <small class="muted">进行中的会放进他的上下文</small></h3><div id="context-notes" class="context-list" aria-live="polite"><p class="muted">还没有便签。</p></div></section>
   </section>

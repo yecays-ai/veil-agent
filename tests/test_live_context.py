@@ -69,6 +69,18 @@ class LiveContextTest(unittest.TestCase):
         self.assertEqual((rows['trace']['group'], rows['trace']['recent_calls']), ('memory_admin', 1))
         self.assertEqual(listed['recent_call_total'], 3)
 
+    def test_hub_shows_the_voice_reference_with_its_text_and_switch(self):
+        from voice_style import VoiceStyle
+        path = Path(self.temp.name) / 'fake.voice.md'
+        path.write_text('> hi\nFake: hello you\n', encoding='utf-8')
+        self.chat.voice_style = VoiceStyle(self.store, 'peter', path, 'Fake')
+        hub = Hub.__new__(Hub)
+        hub.chat = self.chat
+        shown = hub.live_context([])['voice_style']
+        self.assertEqual((shown['enabled'], shown['samples'], shown['text']), (True, 1, '> hi\nhello you'))
+        self.chat.voice_style.set_enabled(False)
+        self.assertFalse(hub.live_context([])['voice_style']['enabled'])
+
     def test_hub_joins_context_rows_with_their_tool_calls(self):
         self.store.append('peter/context-log.jsonl', {
             'kind': 'chat', 'request_id': 'r1', 'history_rounds': 20, 'memory_ids': ['m1', 'm2'],

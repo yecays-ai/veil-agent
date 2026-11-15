@@ -1154,6 +1154,30 @@ function renderToolInventory(inv){
       lines:[['meta',items.map(row=>`${row.name} ${kb(row.bytes||0)}`+(row.recent_calls?` ×${row.recent_calls}`:'')).join('、')]]}));
   }
 }
+let voiceStyleEnabled=false,voiceStyleSaved=null;
+function renderVoiceStyle(v){
+  // Ticket 355: Lan's rules and sample exchanges for how he talks; never overwrite text she is editing.
+  const block=$('voice-style-block');if(!block)return;
+  if(!v||v.available!==true){block.hidden=true;return}
+  block.hidden=false;voiceStyleEnabled=v.enabled===true;
+  $('voice-style-summary').textContent=(voiceStyleEnabled?'开着':'已关闭')+` · ${v.samples||0} 段样例 · ${v.characters||0} / ${v.limit||0} 字`;
+  $('voice-style-toggle').textContent=voiceStyleEnabled?'关闭':'开启';
+  const box=$('voice-style-text'),text=typeof v.text==='string'?v.text:'';
+  if(voiceStyleSaved===null||box.value===voiceStyleSaved)box.value=text;
+  voiceStyleSaved=text;
+}
+async function postVoiceStyle(body,done){
+  const note=$('voice-style-note');note.textContent='';
+  try{const r=await api('/api/voice-style',body);const d=await r.json();
+    if(!r.ok)throw new Error(d.error||'没有保存成功');
+    if(body.text!==undefined)voiceStyleSaved=null;
+    renderVoiceStyle(d.voice_style);note.textContent=done}
+  catch(e){note.textContent=e.message||'没有保存成功'}
+}
+if($('voice-style-toggle')){
+  $('voice-style-toggle').onclick=()=>postVoiceStyle({enabled:!voiceStyleEnabled},voiceStyleEnabled?'已关闭，下一句话起不再带。':'已开启。');
+  $('voice-style-save').onclick=()=>postVoiceStyle({text:$('voice-style-text').value},'已保存，旧版本留在 persona/versions 里。');
+}
 function renderLiveContext(live){
   live=live||{};const key=JSON.stringify(live);if(key===liveContextKey)return;liveContextKey=key;
   const turns=Array.isArray(live.turns)?live.turns:[],turnList=$('context-turns');turnList.replaceChildren();
@@ -1167,6 +1191,7 @@ function renderLiveContext(live){
         ['meta',toolText?'工具：'+toolText:'']]}));
   }
   renderToolInventory(live.tool_inventory);
+  renderVoiceStyle(live.voice_style);
   const notes=live.notes,noteList=$('context-notes');noteList.replaceChildren();
   if(!notes){$('context-notes-next').textContent='';const p=document.createElement('p');p.className='muted';p.textContent='短期便签没有开启。';noteList.appendChild(p);return}
   const next=shortTime(notes.next_extraction_at);$('context-notes-next').textContent=next?`下次整理便签约 ${next}`:'';
