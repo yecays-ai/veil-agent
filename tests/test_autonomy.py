@@ -67,7 +67,7 @@ daily_budget_cny = "2"
         self.assertEqual(peter['autonomy']['daily_max_runs'], 12)
         self.assertEqual(Decimal(peter['autonomy']['daily_budget_cny']), Decimal('3'))
         self.assertEqual(peter['autonomy']['quiet_hours'], '01:00-06:00')
-        self.assertEqual(peter['autonomy']['max_input_tokens'], 65536)
+        self.assertEqual(peter['autonomy']['max_input_tokens'], 100000)
         self.assertEqual(peter['autonomy']['min_alarm_gap_minutes'], 15)
         self.assertEqual(peter['tools']['max_steps'], 20)
 
