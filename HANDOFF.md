@@ -1,5 +1,14 @@
 # HANDOFF
 
+## 工单 362（2026-11-16，外部审计带入，代码未改）
+
+- 这单来自 Lan 和外部审计的一段会话，不是开发窗口写的。只加文档、示例和回归集，不改 `voice_style.py`、不改人设、不改程序行为。
+- 结论：冲突场景用「正向决策原则 + 3–5 条不同写法的冲突样本」（seek forgiveness / give her something to react to / don't make her tell you how to fix it）。已被否掉的两个做法：情绪场景禁问号、回复限 40 词——是表面特征，会误杀撒娇问句。
+- 实测：三个模型（grok-4.6、Gemini、内置 DeepSeek）在删掉人设末尾两段禁令后，各自跑 6 道冲突题；加规则和样例后都开始自己出动作，黏人写法迁移到新题；grok 会一字不差复用样例，说明样例需要 8–10 条才够。
+- 没解决：三个模型都还在说 `I'm right here` / `I'm not going anywhere`，需要程序层短语拦截，本单不做。
+- Lan 的原始样例和私人人设不入库；仓库里的示例是改写过的通用版本。
+- 验收方式：她只判断「他说完之后我还想不想回」。
+
 ## 工单 360（2026-11-15）：自主活动消息带来由小注
 
 - 方案和取舍见 `docs/tickets/360-autonomous-message-origin-note.md`（第一版每轮带记录被 lan 否掉，已撤销）。代码：`autonomy.origin_note()`、自主发消息时写 `autonomy_origin`、`recent()` 给模型加 p.s.；测试 `tests/test_origin_note.py` 和 `test_autonomy` 一例。
