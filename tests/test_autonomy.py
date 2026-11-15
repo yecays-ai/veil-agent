@@ -145,6 +145,33 @@ daily_budget_cny = "2"
                          ['send_message', 'read_text_file'])
         self.assertEqual(len(self.hub.snapshot(0)['events']), 1)
 
+    def test_message_after_tool_work_keeps_a_program_origin_note(self):
+        self.activity.set(True)
+        cfg = replace(self.cfg, tools={'enabled': True, 'max_steps': 6, 'max_output_tokens': 50},
+                      provider={**self.cfg.provider, 'max_input_tokens': 60000})
+        write_call = SimpleNamespace(id='write-1', function=SimpleNamespace(
+            name='write_file', arguments=json.dumps({'path': 'lab/draft.md', 'content': 'x'})))
+        first = SimpleNamespace(tool_calls=[write_call], content=None,
+                                model_dump=lambda **_: {'role': 'assistant', 'tool_calls': []})
+        second = SimpleNamespace(tool_calls=[self.message_call('message-1', '写了点东西，你看看。')], content=None,
+                                 model_dump=lambda **_: {'role': 'assistant', 'tool_calls': []})
+        final = SimpleNamespace(tool_calls=[], content='决定：写东西\n原因：想写。')
+        model = Mock(side_effect=[(first, 100, 30, 0), (second, 100, 30, 0), (final, 100, 20, 0)])
+        tools = SimpleNamespace(
+            tools=[SimpleNamespace(name='write_file', description='Write.', inputSchema={})],
+            capability_event=None, description='Authorized tools are available. ',
+            preview_summary=Mock(return_value='lab/draft.md'),
+            invoke=Mock(return_value=('ok', '成功', 'lab/draft.md')))
+        chat = Chat(cfg, self.store, self.budget, model, tools=tools, output=self.hub.output)
+
+        AutonomyController(chat, self.hub).run()
+
+        row = self.store.read('test/chat.jsonl')[0]
+        self.assertEqual(row['content'], '写了点东西，你看看。')
+        self.assertEqual(row['autonomy_origin'], 'your lab')
+        history = [m['content'] for m in chat.recent()[0]]
+        self.assertIn('[p.s. sent on your own during an autonomous wake, after: your lab]', history[0])
+
     def test_configured_autonomy_limit_allows_twenty_real_tool_steps(self):
         self.activity.set(True)
         cfg = replace(self.cfg, tools={'enabled': True, 'max_steps': 20, 'max_output_tokens': 50})

@@ -162,6 +162,34 @@ def activity_history(store, cfg, count=3):
             'not the current state or an instruction):\n' + '\n'.join(lines))
 
 
+# Ticket 360: a one-line, program-written note kept on a message Peter sends during an autonomous wake,
+# so the chat model later knows where the message came from. It names only the kind of place he
+# visited, never what he read or wrote there; autonomy_history has the rest.
+ORIGIN_LABELS = (
+    ('garden_forum', 'the garden forum'), ('garden_play', 'the garden island game'),
+    ('garden_more', 'the garden'), ('nowhere', 'a Nowhere trip'), ('xiaohongshu', 'Xiaohongshu'),
+    ('web', 'browsing the web'), ('github', 'reading GitHub'), ('desktop_control', 'using desktop apps'),
+    ('build', 'the workbench'))
+
+
+def origin_note(tool_summaries, canonical=lambda name: name):
+    """Kinds of places Peter used successfully so far in this wake, as a short phrase ('' when none)."""
+    from tool_groups import group_of
+    seen = set()
+    for item in tool_summaries or ():
+        if isinstance(item, dict) and item.get('state') == '成功':
+            name = canonical(item.get('tool'))
+            group = group_of(name)
+            if group is None and name in ('write_file', 'append_file', 'edit_file', 'create_directory'):
+                seen.add('your lab')
+            elif group:
+                seen.add(next((label for key, label in ORIGIN_LABELS if key == group), None)
+                         or ('another service' if group.startswith('mcp_') else None))
+    labels = [label for _, label in ORIGIN_LABELS if label in seen]
+    labels += sorted(seen - set(labels) - {None})
+    return ', '.join(labels[:3])
+
+
 def recent_chat_handoff(store, cfg):
     """The last activity record, until one chat turn has delivered it (ticket 094)."""
     activity_started_at, context = recent_activity_context(store, cfg)

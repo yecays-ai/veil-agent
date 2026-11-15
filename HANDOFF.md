@@ -1,5 +1,12 @@
 # HANDOFF
 
+## 工单 360（2026-11-15）：自主活动消息带来由小注
+
+- 方案和取舍见 `docs/tickets/360-autonomous-message-origin-note.md`（第一版每轮带记录被 lan 否掉，已撤销）。代码：`autonomy.origin_note()`、自主发消息时写 `autonomy_origin`、`recent()` 给模型加 p.s.；测试 `tests/test_origin_note.py` 和 `test_autonomy` 一例。
+- 没读 lan 真实聊天确认那次现场；没做真实模型对比。要看模型会不会把 `[p.s.` 学进回复，需 lan 同意花费和用电脑。
+- 瞄一眼的留存记录（`recent_experiences.py`）是每轮带、直到下一次瞄一眼才换，原文弹幕文字一直在；这次只加了一句说明来由。瞄一眼关闭时那条会一直留着，只有时间戳说明它多旧，没处理。
+- 本环境缺 `openai`，`test_autonomy` 有 4 个、glance 相关 2 个错误，改动前就存在。
+
 ## 工单 355（2026-11-15）：说话样例机制已做，样例未启用
 
 - 已做：`voice_style.py`（本机 `persona/<角色>.voice.md`，人设后面的一条 system 消息，去标签，开关存 `data/<角色>/voice-style.json`，保存留旧版本）、「上下文」页的卡片和 `/api/voice-style`、`tests/test_voice_style.py`、对比脚本 `experiments/voice-style-355/compare.py`（run / page / reveal）。

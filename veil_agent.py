@@ -2790,6 +2790,10 @@ class Chat:
             if autonomy:
                 event.update({'autonomy_run_id': run_id,
                               'autonomy_tool_call_id': tool_call_id})
+                from autonomy import origin_note
+                note = origin_note(self.last_tool_summaries, self.canonical_tool_name)
+                if note:
+                    event['autonomy_origin'] = note  # ticket 360: shown to the model only
             committed = False
             try:
                 with saving():
@@ -3118,6 +3122,10 @@ class Chat:
                         content = fallback
                 else:
                     content = fallback
+            if (message['role'] == 'assistant' and message.get('autonomy_run_id')
+                    and isinstance(message.get('autonomy_origin'), str) and message['autonomy_origin']):
+                # Ticket 360: a short p.s. for the model only (the chat window shows the text as sent).
+                content += f"\n[p.s. sent on your own during an autonomous wake, after: {message['autonomy_origin']}]"
             model_history.append({'role': message['role'], 'content':
                                   '[Message recalled]' if message.get('recalled') else content})
         return model_history, sum(any(m['role'] == 'assistant' for m in g) for g in groups)
