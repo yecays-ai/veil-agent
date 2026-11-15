@@ -6,6 +6,7 @@ import ssl
 import sys
 import tempfile
 import threading
+import time
 from datetime import datetime, timezone
 from types import SimpleNamespace
 import unittest
@@ -120,25 +121,33 @@ output_cny_per_million = "8"
     def test_model_request_does_not_block_chat_poll_or_lose_model_refresh(self):
         models = SimpleNamespace(lock=threading.RLock(), env_lock=threading.RLock())
         cfg = SimpleNamespace(id='test', models=models)
+        def tool_schemas(**_):
+            with models.lock:
+                return {'rows': [], 'recent_call_total': 0}
+        def capabilities():
+            with models.lock:
+                return 'fresh capabilities'
         self.hub.chat = SimpleNamespace(cfg=cfg, store=self.store, short_term_notes=None,
-                                        tool_schemas=lambda **_: {'rows': [], 'recent_call_total': 0})
+                                        tool_schemas=tool_schemas)
         self.hub.busy = False
         self.hub.ready = True
         self.hub._tool_inventory_cache = (('old',), {'rows': [{'name': 'cached'}]})
         self.hub._current_capabilities_cache = 'cached capabilities'
-        self.hub.current_capabilities = lambda: 'fresh capabilities'
+        self.hub.current_capabilities = capabilities
         refresh = Mock()
         self.hub.refresh_models = refresh
         held, release = threading.Event(), threading.Event()
         def request_in_progress():
             with models.env_lock, models.lock:
                 held.set()
-                release.wait(5)
+                release.wait(10)
         request = threading.Thread(target=request_in_progress)
         request.start()
         try:
             self.assertTrue(held.wait(2))
+            started = time.monotonic()
             status, body = self.call('/api/events?after=0')
+            self.assertLess(time.monotonic() - started, 2)
             self.assertEqual(status, 200)
             self.assertEqual(body['live_context']['tool_inventory']['rows'], [{'name': 'cached'}])
             self.assertEqual(body['current_capabilities'], 'cached capabilities')
