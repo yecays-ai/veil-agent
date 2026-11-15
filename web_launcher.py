@@ -8,7 +8,7 @@ import subprocess
 import sys
 import time
 from ctypes import wintypes
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from windows_process import hidden_subprocess_kwargs
 
@@ -56,10 +56,17 @@ def read_endpoint(require_ready=False):
         port, token = value.get('port'), value.get('token')
         if not isinstance(port, int) or not 1 <= port <= 65535 or not isinstance(token, str):
             return None
-        request = Request(f'http://127.0.0.1:{port}/api/events?after=0',
-                          headers={'X-Token': token})
-        with urlopen(request, timeout=1) as response:
-            state = json.loads(response.read())
+        origin = f'http://127.0.0.1:{port}'
+        try:
+            request = Request(f'{origin}/api/health', headers={'X-Token': token})
+            with urlopen(request, timeout=1) as response:
+                state = json.loads(response.read())
+        except HTTPError as exc:
+            if exc.code != 404:
+                raise
+            request = Request(f'{origin}/api/events?after=0', headers={'X-Token': token})
+            with urlopen(request, timeout=1) as response:
+                state = json.loads(response.read())
         if state.get('stopped') is not False:
             return None
         if require_ready and state.get('ready') is not True:
