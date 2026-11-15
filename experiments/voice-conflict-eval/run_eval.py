@@ -50,7 +50,14 @@ def targets(role):
                 model = re.search(r'model\s*=\s*"([^"]+)"', block.group(1))
                 if base and model:
                     out.append(('deepseek (builtin)', base.group(1), env['DEEPSEEK_API_KEY'], model.group(1)))
-    return out
+    unique, seen = [], set()
+    for item in out:
+        key = (str(item[1]).rstrip('/').lower(), str(item[3]))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+    return unique
 
 
 def ask(base, key, model, messages, tries=2):
