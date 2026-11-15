@@ -27,6 +27,7 @@ from contextlib import contextmanager, nullcontext
 from agent_types import (AUTONOMY_WAKE, BudgetExceeded, CODEX_WATCH_WAKE, EmptyReplyError,
                          GLANCE_WAKE, RequestFailed, TooLong, UserError, now)
 from desktop_files import DESKTOP_FILE_READ_TOOL_NAMES
+from bubble_split import MAX_BUBBLES, split_bubbles
 from tool_aliases import alias_system_messages, alias_tool_schemas, resolve_tool_name, validate_tool_aliases
 from model_settings import SettingsError
 from delegate_agent import TOOL_SCHEMA as DELEGATE_TOOL
@@ -869,9 +870,13 @@ def load_character(root, character_id):
             python_sandbox = tools.get('python_sandbox', False)
             if type(python_sandbox) is not bool:
                 raise ValueError('tools.python_sandbox must be boolean')
+            split_paragraphs = tools.get('split_bubbles', True)
+            if type(split_paragraphs) is not bool:
+                raise ValueError('tools.split_bubbles must be boolean')
             tools = {
                 'enabled': enabled,
                 'python_sandbox': python_sandbox,
+                'split_bubbles': split_paragraphs,
                 'folder': str(tools.get('folder', f'data/{character_id}/workspace')),
                 'max_steps': positive_int(tools.get('max_steps', 6)),
                 'max_result_bytes': positive_int(tools.get('max_result_bytes', 8192)),
@@ -2486,7 +2491,7 @@ class Chat:
             if first[1] in ('被拒绝', '出错'):
                 return first
             return self.send_message(json.dumps(rest, ensure_ascii=False), request_id,
-                                     f'{tool_call_id}:text' if tool_call_id else tool_call_id)
+                                     f'{tool_call_id}:text' if tool_call_id else tool_call_id, split=False)
         if rest:
             if set(rest) - {'done'} or type(rest.get('done', False)) is not bool:
                 return 'A virtual card is its own message. Nothing was sent.', '被拒绝', 'send_message'
@@ -2643,11 +2648,35 @@ class Chat:
         from virtual_cards import card_context
         return card_context(self.history_events, self.cfg.name)
 
-    def send_message(self, arguments, request_id, tool_call_id=None):
+    def _paragraph_bubbles(self, args):
+        """The text of a plain message cut into bubbles at blank lines, or None when it goes out whole."""
+        if (self.autonomy_mode or not (self.cfg.tools or {}).get('split_bubbles', True)
+                or not isinstance(args, dict) or not set(args) <= {'text', 'done'}
+                or not isinstance(args.get('done', True), bool)):
+            return None
+        # Never plan more bubbles than the send limit still allows, or the tail would be dropped.
+        room = 10 - self.send_message_count
+        parts = split_bubbles(args.get('text'), limit=min(MAX_BUBBLES, room))
+        return parts if len(parts) > 1 else None
+
+    def send_message(self, arguments, request_id, tool_call_id=None, split=True):
         try:
             args = json.loads(arguments)
         except (ValueError, TypeError):
             args = None
+        parts = self._paragraph_bubbles(args) if split else None
+        if parts:
+            # Ticket 355: each paragraph is its own message; "done" belongs to the last one.
+            outcome = None
+            for index, part in enumerate(parts):
+                last = index == len(parts) - 1
+                piece = {'text': part, **({'done': args['done']} if last and 'done' in args else {})}
+                outcome = self.send_message(json.dumps(piece, ensure_ascii=False), request_id,
+                                            f'{tool_call_id}:{index}' if tool_call_id else tool_call_id,
+                                            split=False)
+                if outcome[1] in ('被拒绝', '出错') or self.turn_done:
+                    break
+            return outcome
         allowed = {'text', 'voice', 'done'} if self.voice is not None else {'text', 'done'}
         allowed.update(self.away_channels)
         if callable(self.attachment_reader) and callable(self.attachment_saver):
@@ -2693,7 +2722,7 @@ class Chat:
                 if first[1] in ('被拒绝', '出错'):
                     return first
                 return self.send_message(json.dumps(rest, ensure_ascii=False), request_id,
-                                         f'{tool_call_id}:text' if tool_call_id else tool_call_id)
+                                         f'{tool_call_id}:text' if tool_call_id else tool_call_id, split=False)
             args = {**args, 'text': sticker_module.marker(found['pack'], found['name'])}
             del args['sticker']
             arguments = json.dumps(args, ensure_ascii=False)

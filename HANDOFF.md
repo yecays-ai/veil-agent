@@ -1,5 +1,12 @@
 # HANDOFF
 
+## 355 补丁：空行拆气泡（2026-11-15，未真机验收）
+
+- 起因：Lan 盲看第二、三轮对比，DeepSeek 常把几段话空行隔开写进一条消息，不分气泡；它们不爱用发消息的工具，靠提示词管不住。
+- 做法：`bubble_split.py`；`Chat.send_message` 开头，非自主醒来、只带 text 和 done 的消息，按空行切成最多 4 段，每段单独发，done 只跟最后一段；多出的段并进第 4 个气泡；带代码块的整条不拆。开关 `[tools] split_bubbles`（默认开）。`tests/test_bubble_split.py` 11 项。
+- 完整测试前后失败的是同一批（云端环境的语音、代理、MCP 测试），本改动没有新增失败。
+- 没做：人设和样例文件不放进正式 Peter，Lan 说要再琢磨。grok 经中转把发消息动作打成文字（已知问题 4）这次没碰。
+
 ## 工单 355（2026-11-15）：说话样例机制已做，样例未启用
 
 - 已做：`voice_style.py`（本机 `persona/<角色>.voice.md`，人设后面的一条 system 消息，去标签，开关存 `data/<角色>/voice-style.json`，保存留旧版本）、「上下文」页的卡片和 `/api/voice-style`、`tests/test_voice_style.py`、对比脚本 `experiments/voice-style-355/compare.py`（run / page / reveal）。
