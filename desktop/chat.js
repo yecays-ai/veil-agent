@@ -1132,6 +1132,28 @@ function contextRow(parts){
   for(const [cls,text] of parts.lines){if(!text)continue;const el=document.createElement('div');el.className=cls;el.textContent=text;row.appendChild(el)}
   return row;
 }
+const TOOL_GROUP_LABELS={web:'上网',github:'GitHub',desktop_control:'操控桌面',memory_admin:'整理记忆',build:'干活',desktop_files:'桌面文件',garden_forum:'花园论坛',garden_play:'花园游戏',garden_more:'花园其他',nowhere:'乌有乡',xiaohongshu:'小红书',social:'社交',other:'未分组的新工具'};
+function kb(bytes){return (bytes/1024).toFixed(1)+'KB'}
+function toolGroupLabel(group){return group?(TOOL_GROUP_LABELS[group]||group.replace(/^mcp_/,'服务 ')):'一直带着'}
+function renderToolInventory(inv){
+  // Ticket 357: every tool, its size, whether each request carries it, and how often it was used lately.
+  const list=$('context-tools'),summary=$('context-tools-summary');if(!list||!summary)return;
+  list.replaceChildren();
+  const rows=inv&&Array.isArray(inv.rows)?inv.rows:[];
+  if(!rows.length){summary.textContent='';const p=document.createElement('p');p.className='muted';p.textContent='还没有记录。';list.appendChild(p);return}
+  const budget=inv.budget||{},over=Array.isArray(inv.over)?inv.over:[];
+  summary.textContent=`一直带着 ${kb(inv.always_on_bytes||0)}`+(budget.always_on?` / 上限 ${kb(budget.always_on)}`:'')+` · 调用次数取最近 ${inv.recent_call_total||0} 次工具调用`;
+  for(const item of over){
+    const text=item.kind==='always_on'?`一直带着的工具超出上限：${kb(item.bytes)} / ${kb(item.limit)}`:`「${toolGroupLabel(item.group)}」这一组超出上限：${kb(item.bytes)} / ${kb(item.limit)}`;
+    list.appendChild(contextRow({head:[['span','note-status active','超出预算']],lines:[['meta',text]]}));
+  }
+  const groups=new Map();for(const row of rows){const key=row.group||'';if(!groups.has(key))groups.set(key,[]);groups.get(key).push(row)}
+  for(const [group,items] of groups){
+    const total=items.reduce((sum,row)=>sum+(row.bytes||0),0);
+    list.appendChild(contextRow({head:[['strong','',toolGroupLabel(group)],['time','',`${items.length} 个 · ${kb(total)}`+(group?' · 要用时展开':'')]],
+      lines:[['meta',items.map(row=>`${row.name} ${kb(row.bytes||0)}`+(row.recent_calls?` ×${row.recent_calls}`:'')).join('、')]]}));
+  }
+}
 function renderLiveContext(live){
   live=live||{};const key=JSON.stringify(live);if(key===liveContextKey)return;liveContextKey=key;
   const turns=Array.isArray(live.turns)?live.turns:[],turnList=$('context-turns');turnList.replaceChildren();
@@ -1144,6 +1166,7 @@ function renderLiveContext(live){
       lines:[['meta',`原文 ${turn.history_rounds??0} 轮 · 背景 ${turn.background_count||0} 段 · 长期记忆 ${turn.memory_count||0} 条 · 便签 ${turn.notes_count||0} 条`+(turn.estimated_input_tokens?` · 约 ${turn.estimated_input_tokens} tokens`:'')],
         ['meta',toolText?'工具：'+toolText:'']]}));
   }
+  renderToolInventory(live.tool_inventory);
   const notes=live.notes,noteList=$('context-notes');noteList.replaceChildren();
   if(!notes){$('context-notes-next').textContent='';const p=document.createElement('p');p.className='muted';p.textContent='短期便签没有开启。';noteList.appendChild(p);return}
   const next=shortTime(notes.next_extraction_at);$('context-notes-next').textContent=next?`下次整理便签约 ${next}`:'';

@@ -88,8 +88,10 @@ lab_max_write_bytes = 200000
 enabled = true
 folder = "data/peter/workspace"
 max_steps = 20
-# Ticket 216: these abilities are opened by Peter with expand_capability; the rest are always offered.
-tool_groups = ["web", "github", "social", "desktop_control"]
+# Tickets 216 and 357: these abilities are opened by Peter with expand_capability; tool_groups.py says which tools
+# are always offered. To go back to the grouping before ticket 357, use the next line instead:
+# tool_groups = ["web", "github", "social", "desktop_control"]
+tool_groups = ["web", "github", "desktop_control", "memory_admin", "build", "desktop_files", "garden_forum", "garden_play", "garden_more", "nowhere", "xiaohongshu", "other"]
 max_result_bytes = 8192
 python_sandbox = true
 

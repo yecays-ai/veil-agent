@@ -2136,7 +2136,7 @@ class Chat:
         if self.experience:
             self.experience.stop()
 
-    def tool_schemas(self):
+    def tool_schemas(self, inventory=False):
         from tools_agent import permitted_tools
         task_tools = [{'type': 'function', 'function': {
             'name': tool.name, 'description': tool.description, 'parameters': tool.inputSchema}}
@@ -2203,12 +2203,18 @@ class Chat:
                     f'{(self.cfg.tools or {}).get("max_output_tokens", self.cfg.max_output_tokens)} tokens); '
                     'write long work in slices, never whole files.')
                 schema['function'] = function
+        if inventory:
+            from tool_groups import inventory as tool_inventory
+            return tool_inventory(schemas, self.tool_groups, self.tool_aliases)
         if self.tool_groups:
-            from tool_groups import expand_schema, group_of
+            from tool_groups import effective_group, expand_schema
+            # Ticket 357: a tool with work in progress stays offered even when its group is closed.
+            pinned = {'maintenance'} if self.maintenance is not None and self.maintenance.active_summary() else set()
             kept, hidden = [], []
             for schema in schemas:
-                group = group_of(schema['function']['name'])
-                if group in self.tool_groups and group not in self.expanded_groups:
+                name = schema['function']['name']
+                group = effective_group(name, self.tool_groups)
+                if group is not None and group not in self.expanded_groups and name not in pinned:
                     if group not in hidden:
                         hidden.append(group)
                 else:
@@ -2266,15 +2272,15 @@ class Chat:
         if (not isinstance(groups, list) or not groups or not set(args) <= {'groups', 'reason'}
                 or any(not isinstance(item, str) for item in groups)):
             return 'expand_capability needs a list of group names.', '被拒绝', 'expand_capability'
-        from tool_groups import CHAT_WARM_REQUESTS, group_of
-        opened = [item for item in dict.fromkeys(groups) if item in self.tool_groups]
+        from tool_groups import CHAT_WARM_REQUESTS, effective_group, groups_named
+        opened = groups_named(groups, self.tool_groups)
         if not opened:
             return ('None of those groups can be opened. Choose from the groups in this tool\'s description.',
                     '被拒绝', 'expand_capability')
         for group in opened:
             self.expanded_groups[group] = 1 if self.autonomy_mode else CHAT_WARM_REQUESTS + 1
         names = [schema['function']['name'] for schema in self.tool_schemas()
-                 if group_of(self.canonical_tool_name(schema['function']['name'])) in opened]
+                 if effective_group(self.canonical_tool_name(schema['function']['name']), self.tool_groups) in opened]
         return (f'Opened: {", ".join(opened)}. Available from your next step: {", ".join(names) or "none"}.',
                 '成功', 'expand_capability')
 
