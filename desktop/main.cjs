@@ -420,7 +420,8 @@ async function discoverRunningAgentForScreenPop() {
     : path.resolve(__dirname, '..', 'veil-agent');
   const root = agentRoot() || adjacent;
   if (!await validRoot(root)) return;
-  agentEndpoint = await readEndpoint(root, { requireReady: false });
+  const endpoint = await readEndpoint(root, { requireReady: false });
+  if (!agentEndpoint && endpoint && !quitting) agentEndpoint = endpoint;
 }
 async function pollScreenPop() {
   if (screenPopPolling || quitting) return;
