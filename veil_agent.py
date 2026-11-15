@@ -27,7 +27,7 @@ from contextlib import contextmanager, nullcontext
 from agent_types import (AUTONOMY_WAKE, BudgetExceeded, CODEX_WATCH_WAKE, EmptyReplyError,
                          GLANCE_WAKE, RequestFailed, TooLong, UserError, now)
 from desktop_files import DESKTOP_FILE_READ_TOOL_NAMES
-from bubble_split import split_bubbles
+from bubble_split import MAX_BUBBLES, split_bubbles
 from tool_aliases import alias_system_messages, alias_tool_schemas, resolve_tool_name, validate_tool_aliases
 from model_settings import SettingsError
 from delegate_agent import TOOL_SCHEMA as DELEGATE_TOOL
@@ -2491,7 +2491,7 @@ class Chat:
             if first[1] in ('被拒绝', '出错'):
                 return first
             return self.send_message(json.dumps(rest, ensure_ascii=False), request_id,
-                                     f'{tool_call_id}:text' if tool_call_id else tool_call_id)
+                                     f'{tool_call_id}:text' if tool_call_id else tool_call_id, split=False)
         if rest:
             if set(rest) - {'done'} or type(rest.get('done', False)) is not bool:
                 return 'A virtual card is its own message. Nothing was sent.', '被拒绝', 'send_message'
@@ -2651,17 +2651,20 @@ class Chat:
     def _paragraph_bubbles(self, args):
         """The text of a plain message cut into bubbles at blank lines, or None when it goes out whole."""
         if (self.autonomy_mode or not (self.cfg.tools or {}).get('split_bubbles', True)
-                or not isinstance(args, dict) or not set(args) <= {'text', 'done'}):
+                or not isinstance(args, dict) or not set(args) <= {'text', 'done'}
+                or not isinstance(args.get('done', True), bool)):
             return None
-        parts = split_bubbles(args.get('text'))
+        # Never plan more bubbles than the send limit still allows, or the tail would be dropped.
+        room = 10 - self.send_message_count
+        parts = split_bubbles(args.get('text'), limit=min(MAX_BUBBLES, room))
         return parts if len(parts) > 1 else None
 
-    def send_message(self, arguments, request_id, tool_call_id=None):
+    def send_message(self, arguments, request_id, tool_call_id=None, split=True):
         try:
             args = json.loads(arguments)
         except (ValueError, TypeError):
             args = None
-        parts = self._paragraph_bubbles(args)
+        parts = self._paragraph_bubbles(args) if split else None
         if parts:
             # Ticket 355: each paragraph is its own message; "done" belongs to the last one.
             outcome = None
@@ -2669,7 +2672,8 @@ class Chat:
                 last = index == len(parts) - 1
                 piece = {'text': part, **({'done': args['done']} if last and 'done' in args else {})}
                 outcome = self.send_message(json.dumps(piece, ensure_ascii=False), request_id,
-                                            f'{tool_call_id}:{index}' if tool_call_id else tool_call_id)
+                                            f'{tool_call_id}:{index}' if tool_call_id else tool_call_id,
+                                            split=False)
                 if outcome[1] in ('被拒绝', '出错') or self.turn_done:
                     break
             return outcome
@@ -2718,7 +2722,7 @@ class Chat:
                 if first[1] in ('被拒绝', '出错'):
                     return first
                 return self.send_message(json.dumps(rest, ensure_ascii=False), request_id,
-                                         f'{tool_call_id}:text' if tool_call_id else tool_call_id)
+                                         f'{tool_call_id}:text' if tool_call_id else tool_call_id, split=False)
             args = {**args, 'text': sticker_module.marker(found['pack'], found['name'])}
             del args['sticker']
             arguments = json.dumps(args, ensure_ascii=False)

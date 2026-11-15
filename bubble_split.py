@@ -13,7 +13,7 @@ _BLANK = re.compile(r'\n[ \t]*\n+')
 
 def split_bubbles(text, limit=MAX_BUBBLES):
     """Return the paragraphs of text as at most limit bubbles; one item when it should not be split."""
-    if not isinstance(text, str) or '```' in text:
+    if not isinstance(text, str) or '```' in text or '~~~' in text or limit < 2:
         return [text]
     paragraphs = [part.strip() for part in _BLANK.split(text.strip()) if part.strip()]
     if len(paragraphs) < 2:

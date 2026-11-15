@@ -22,6 +22,10 @@ class SplitTests(unittest.TestCase):
         text = 'look\n\n```\na\n\nb\n```'
         self.assertEqual(split_bubbles(text), [text])
 
+    def test_tilde_fence_text_is_never_split(self):
+        text = '~~~python\nx = 1\n\ny = 2\n~~~'
+        self.assertEqual(split_bubbles(text), [text])
+
     def test_more_than_four_paragraphs_keep_the_rest_together_in_the_last_bubble(self):
         parts = split_bubbles('a\n\nb\n\nc\n\nd\n\ne\n\nf')
         self.assertEqual(len(parts), MAX_BUBBLES)
@@ -92,6 +96,21 @@ output_cny_per_million = "8"
     def test_autonomous_wake_messages_are_not_split(self):
         self.chat.autonomy_mode = True
         self.assertIsNone(self.chat._paragraph_bubbles({'text': 'first\n\nsecond'}))
+
+    def test_six_paragraphs_make_exactly_four_messages(self):
+        self.send({'text': 'a\n\nb\n\nc\n\nd\n\ne\n\nf'})
+        self.assertEqual(self.chat.sent_messages, ['a', 'b', 'c', 'd\n\ne\n\nf'])
+
+    def test_split_fits_in_the_send_limit_left(self):
+        self.chat.send_message_count = 8
+        self.send({'text': 'a\n\nb\n\nc\n\nd', 'done': True})
+        self.assertEqual(self.chat.sent_messages, ['a', 'b\n\nc\n\nd'])
+        self.assertTrue(self.chat.turn_done)
+
+    def test_bad_done_is_refused_before_anything_is_sent(self):
+        result = self.send({'text': 'first\n\nsecond', 'done': 'true'})
+        self.assertEqual(result[1], '被拒绝')
+        self.assertEqual(self.chat.sent_messages, [])
 
 
 if __name__ == '__main__':
