@@ -108,6 +108,22 @@ class FreeReplyTests(unittest.TestCase):
         chat2.sticker_library = library
         self.assertEqual(chat2.send('again'), '[表情包：peter/chair]')
 
+    def test_retry_after_a_fake_sticker_keeps_the_reasoning_of_that_reply(self):
+        # DeepSeek's thinking mode answers 400 when the reasoning of a reply put back in the request is missing.
+        from stickers import StickerLibrary
+        library = StickerLibrary(self.root / 'stickers')
+        library.add_bytes('peter', 'chair', b'\x89PNG\r\n\x1a\n' + b'0' * 20, create_pack=True)
+        model = Mock(side_effect=[
+            (SimpleNamespace(content='[表情包：peter/ghost] hi', tool_calls=[],
+                             reasoning_content='she is grumpy'), 10, 2, 0),
+            (SimpleNamespace(content='hi', tool_calls=[], reasoning_content='words only'), 10, 2, 0)])
+        chat = Chat(self.cfg, self.store, Budget(self.store), model, output=[].append)
+        chat.sticker_library = library
+        self.assertEqual(chat.send('hello'), 'hi')
+        put_back = [m for m in model.call_args_list[1].args[0]
+                    if m.get('role') == 'assistant' and m.get('content') == '[表情包：peter/ghost] hi']
+        self.assertEqual(put_back[0].get('reasoning_content'), 'she is grumpy')
+
     def test_empty_answer_twice_fails_visibly_instead_of_silence(self):
         model = Mock(return_value=(SimpleNamespace(content='', tool_calls=[]), 10, 2, 0))
         chat = Chat(self.cfg, self.store, Budget(self.store), model, output=[].append)
