@@ -5,7 +5,28 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const http = require('node:http');
+const vm = require('node:vm');
 const { readEndpoint, connect } = require('../backend.cjs');
+
+test('a slow screen-pop discovery cannot erase a newer chat connection', async () => {
+  const source = await fs.readFile(path.join(__dirname, '..', 'main.cjs'), 'utf8');
+  const start = source.indexOf('async function discoverRunningAgentForScreenPop()');
+  const end = source.indexOf('\nasync function pollScreenPop()', start);
+  assert.ok(start >= 0 && end > start);
+  let finish;
+  const context = { agentEndpoint: null, quitting: false, app: { isPackaged: false },
+    path, __dirname: path.join(__dirname, '..'), agentRoot: () => 'root',
+    validRoot: async () => true, readEndpoint: () => new Promise(resolve => { finish = resolve; }) };
+  vm.createContext(context);
+  const discover = vm.runInContext(`(${source.slice(start, end)})`, context);
+  const pending = discover();
+  await new Promise(resolve => setImmediate(resolve));
+  const connected = { origin: 'new-service' };
+  context.agentEndpoint = connected;
+  finish(null);
+  await pending;
+  assert.equal(context.agentEndpoint, connected);
+});
 
 test('Windows launchers delegate to the hidden desktop entry', async () => {
   const root = path.join(__dirname, '..', '..');
@@ -37,10 +58,11 @@ test('reuses a ready authenticated service without launching or writing Agent da
   for (const file of ['web_launcher.py', 'web_agent.py', '.venv/Scripts/python.exe'])
     await fs.writeFile(path.join(root, file), 'fake fixture');
   const token = 'fictional_token_123456789';
-  let ready = true, stopped = false;
+  let ready = true, stopped = false, legacy = false;
   const server = http.createServer((req, res) => {
     assert.equal(req.headers['x-token'], token);
-    assert.equal(req.url, '/api/events?after=0');
+    if (legacy && req.url === '/api/health') { res.writeHead(404); res.end(); return; }
+    assert.equal(req.url, legacy ? '/api/events?after=0' : '/api/health');
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({ name: 'Fictional', ready, stopped }));
   });
@@ -56,6 +78,9 @@ test('reuses a ready authenticated service without launching or writing Agent da
   const endpoint = await connect(root, launcher);
   assert.equal(launches, 0);
   assert.equal(new URL(endpoint.url).hostname, '127.0.0.1');
+  legacy = true;
+  assert.ok(await readEndpoint(root));
+  legacy = false;
   ready = false;
   assert.equal(await readEndpoint(root), null);
   await connect(root, launcher);

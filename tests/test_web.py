@@ -6,6 +6,7 @@ import ssl
 import sys
 import tempfile
 import threading
+import time
 from datetime import datetime, timezone
 from types import SimpleNamespace
 import unittest
@@ -88,6 +89,76 @@ output_cny_per_million = "8"
         status, body = self.call('/api/life')
         self.assertEqual(status, 503)
         self.assertEqual(body['error'], '服务尚未就绪，请稍后重试。')
+
+    def test_health_does_not_wait_for_chat_snapshot_and_requires_token(self):
+        self.hub.ready = True
+        with patch.object(self.hub, 'snapshot', side_effect=AssertionError('snapshot should not run')):
+            status, body = self.call('/api/health')
+            self.assertEqual(status, 200)
+            self.assertEqual(body, {'name': 'Test', 'ready': True, 'stopped': False})
+            self.assertEqual(self.call('/api/health', token='wrong')[0], 403)
+
+    def test_slow_status_does_not_lock_chat_events(self):
+        entered, release, published = threading.Event(), threading.Event(), threading.Event()
+        def slow_status():
+            entered.set()
+            release.wait(5)
+            return {}
+        self.hub.codex_watch = SimpleNamespace(status=slow_status)
+        snapshot = threading.Thread(target=self.hub.snapshot, args=(0,))
+        snapshot.start()
+        try:
+            self.assertTrue(entered.wait(2))
+            publisher = threading.Thread(target=lambda: (self.hub.push('notice', 'test'), published.set()))
+            publisher.start()
+            self.assertTrue(published.wait(1), 'slow status blocked chat event publication')
+        finally:
+            release.set()
+            snapshot.join(5)
+            if 'publisher' in locals():
+                publisher.join(5)
+
+    def test_model_request_does_not_block_chat_poll_or_lose_model_refresh(self):
+        models = SimpleNamespace(lock=threading.RLock(), env_lock=threading.RLock())
+        cfg = SimpleNamespace(id='test', models=models)
+        def tool_schemas(**_):
+            with models.lock:
+                return {'rows': [], 'recent_call_total': 0}
+        def capabilities():
+            with models.lock:
+                return 'fresh capabilities'
+        self.hub.chat = SimpleNamespace(cfg=cfg, store=self.store, short_term_notes=None,
+                                        tool_schemas=tool_schemas)
+        self.hub.busy = False
+        self.hub.ready = True
+        self.hub._tool_inventory_cache = (('old',), {'rows': [{'name': 'cached'}]})
+        self.hub._current_capabilities_cache = 'cached capabilities'
+        self.hub.current_capabilities = capabilities
+        refresh = Mock()
+        self.hub.refresh_models = refresh
+        held, release = threading.Event(), threading.Event()
+        def request_in_progress():
+            with models.env_lock, models.lock:
+                held.set()
+                release.wait(10)
+        request = threading.Thread(target=request_in_progress)
+        request.start()
+        try:
+            self.assertTrue(held.wait(2))
+            started = time.monotonic()
+            status, body = self.call('/api/events?after=0')
+            self.assertLess(time.monotonic() - started, 2)
+            self.assertEqual(status, 200)
+            self.assertEqual(body['live_context']['tool_inventory']['rows'], [{'name': 'cached'}])
+            self.assertEqual(body['current_capabilities'], 'cached capabilities')
+            refresh.assert_not_called()
+        finally:
+            release.set()
+            request.join(5)
+        status, body = self.call('/api/events?after=1')
+        self.assertEqual(status, 200)
+        self.assertEqual(body['current_capabilities'], 'fresh capabilities')
+        refresh.assert_called_once_with(reload=True)
 
     def test_lab_attachment_survives_restart_and_is_served_as_safe_content(self):
         raw = b'<html><script>window.bad=true</script><body>game</body></html>'
@@ -1363,6 +1434,19 @@ class StartupErrorTests(unittest.TestCase):
                 self.assertIsNotNone(web_launcher.read_endpoint(require_ready=True))
                 hub.stop()
                 waiter.join(5)
+
+    def test_launcher_uses_old_events_endpoint_for_an_older_running_service(self):
+        import io
+        import web_launcher
+        with tempfile.TemporaryDirectory() as tmp:
+            endpoint = Path(tmp) / 'web_service.json'
+            endpoint.write_text(json.dumps({'port': 12345, 'token': TOKEN}), encoding='utf-8')
+            old_service = io.BytesIO(b'{"ready": true, "stopped": false}')
+            missing = urllib.error.HTTPError('http://127.0.0.1:12345/api/health', 404, 'not found', {}, None)
+            with patch.object(web_launcher, 'ENDPOINT', endpoint), \
+                 patch.object(web_launcher, 'urlopen', side_effect=[missing, old_service]) as request:
+                self.assertIsNotNone(web_launcher.read_endpoint(require_ready=True))
+                self.assertTrue(request.call_args_list[1].args[0].full_url.endswith('/api/events?after=0'))
 
     def wait_for(self, condition):
         import time

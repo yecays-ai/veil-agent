@@ -200,6 +200,7 @@ class Hub(ScreenPopMixin):
         self.glance = None
         self.codex_watch = None
         self.models_view = None       # ticket 134: what the 模型 settings card shows
+        self.models_reload_pending = False
         self.background_running = None
         self.capability_record = lambda: None
         self.defer_outputs = False
@@ -452,10 +453,18 @@ class Hub(ScreenPopMixin):
         cached = getattr(self, '_tool_inventory_cache', None)
         if key is not None and cached and cached[0] == key:
             return cached[1]
+        models = getattr(chat.cfg, 'models', None)
+        lock = getattr(models, 'lock', None)
+        # A chat request holds this lock across model and tool calls; polling must not wait for it.
+        if lock is not None and not lock.acquire(blocking=False):
+            return cached[1] if cached else None
         try:
             result = chat.tool_schemas(inventory=True)
         except Exception:
             return None
+        finally:
+            if lock is not None:
+                lock.release()
         counts, seen = {}, 0
         try:
             for row in chat.store.read_tail(f'{chat.cfg.id}/tools.jsonl', self.TOOL_USE_ROWS):
@@ -1621,21 +1630,33 @@ class Hub(ScreenPopMixin):
     def snapshot(self, after):
         tool_activity = self.tool_activity()
         live_context = self.live_context(tool_activity)
-        current_capabilities = self.current_capabilities()
+        models = getattr(getattr(self.chat, 'cfg', None), 'models', None)
+        lock = getattr(models, 'lock', None)
+        if lock is not None and not lock.acquire(blocking=False):
+            current_capabilities = getattr(self, '_current_capabilities_cache', None)
+        else:
+            try:
+                current_capabilities = self.current_capabilities()
+                self._current_capabilities_cache = current_capabilities
+            finally:
+                if lock is not None:
+                    lock.release()
         capability_record = self.capability_record()
+        autonomy = self.autonomy.status() if self.autonomy else {}
+        glance = self.glance.status() if self.glance else {}
+        codex_watch = self.codex_watch.status() if self.codex_watch else {}
+        activity_enabled = self.activity.enabled()
+        runtime_status = self.runtime_status()
         with self.cond:
-            autonomy = self.autonomy.status() if self.autonomy else {}
-            glance = self.glance.status() if self.glance else {}
-            codex_watch = self.codex_watch.status() if self.codex_watch else {}
             return {'events': self.events_after(after), 'busy': self.busy and not self.autonomy_busy,
                     'transcribing_voice': self.transcribing_voice,
                     'user_typing': self.user_typing,
                     'stopping': self.stopping and not self.stopped, 'stopped': self.stopped,
                     'name': self.name, 'pending': self.pending, 'ready': self.ready,
-                    'activity_enabled': self.activity.enabled(),
+                    'activity_enabled': activity_enabled,
                     'current_capabilities': current_capabilities,
                     'capability_record': capability_record,
-                    'runtime_status': self.runtime_status(),
+                    'runtime_status': runtime_status,
                     'tool_activity': tool_activity,
                     'live_context': live_context,
                     'memory_panel_url': self.memory_url,
@@ -1836,11 +1857,26 @@ def make_handler(hub, token):
                     after = max(0, int((query.get('after') or ['0'])[0]))
                 except ValueError:
                     after = 0
-                if after == 0 and not hub.busy:
-                    try:
-                        hub.refresh_models(reload=True)
-                    except SettingsError:
-                        pass
+                if after == 0:
+                    hub.models_reload_pending = True
+                if hub.models_reload_pending and not hub.busy:
+                    models = getattr(getattr(hub.chat, 'cfg', None), 'models', None)
+                    env_lock = getattr(models, 'env_lock', None)
+                    lock = getattr(models, 'lock', None)
+                    if env_lock is None or env_lock.acquire(blocking=False):
+                        try:
+                            if lock is None or lock.acquire(blocking=False):
+                                try:
+                                    hub.refresh_models(reload=True)
+                                    hub.models_reload_pending = False
+                                except SettingsError:
+                                    hub.models_reload_pending = False
+                                finally:
+                                    if lock is not None:
+                                        lock.release()
+                        finally:
+                            if env_lock is not None:
+                                env_lock.release()
                 self._send(200, hub.snapshot(after))
 
         def _get_stickers(self):
@@ -2074,7 +2110,10 @@ def make_handler(hub, token):
         def do_GET(self):
             url = urlparse(self.path)
             query = parse_qs(url.query)
-            if url.path.startswith('/game/'):
+            if url.path == '/api/health':
+                if self._guard(self.headers.get('X-Token')):
+                    self._send(200, {'name': hub.name, 'ready': hub.ready, 'stopped': hub.stopped})
+            elif url.path.startswith('/game/'):
                 self._get_game(url)
             elif url.path == '/api/memory/panel':
                 self._get_memory_panel()

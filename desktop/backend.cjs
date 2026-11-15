@@ -23,7 +23,10 @@ async function readEndpoint(root, { requireReady = true } = {}) {
     if (!Number.isInteger(value.port) || value.port < 1 || value.port > 65535 ||
         typeof value.token !== 'string' || !/^[A-Za-z0-9_-]{16,256}$/.test(value.token)) return null;
     const origin = `http://127.0.0.1:${value.port}`;
-    const response = await fetch(`${origin}/api/events?after=0`, {
+    let response = await fetch(`${origin}/api/health`, {
+      headers: { 'X-Token': value.token }, signal: AbortSignal.timeout(1500), redirect: 'error'
+    });
+    if (response.status === 404) response = await fetch(`${origin}/api/events?after=0`, {
       headers: { 'X-Token': value.token }, signal: AbortSignal.timeout(1500), redirect: 'error'
     });
     if (!response.ok) return null;
