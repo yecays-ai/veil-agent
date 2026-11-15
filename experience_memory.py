@@ -433,7 +433,9 @@ class ExperienceMemory:
         events = self._events()
         last = batch[-1]
         candidates = self._candidates(events)
-        candidates += self._library(batch, {candidate['id'] for candidate in candidates})
+        if Decimal(str(self.settings['daily_budget_cny'])) > self.spent_today():
+            # Searching costs a little embedding money: not once the day's ceiling is reached.
+            candidates += self._library(batch, {candidate['id'] for candidate in candidates})
         zone = last['time'].tzinfo
         data = {
             'local_time_now': self._now().astimezone(zone).strftime('%Y-%m-%d %H:%M'),

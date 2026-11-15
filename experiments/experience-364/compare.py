@@ -9,9 +9,10 @@ Ombre runs: the memory library is a dictionary in this script seeded with fictio
 and its search is plain word overlap (real Ombre searches by meaning). Spending stops at --cap CNY. `--fake` uses a
 canned model (free).
 
-One fictional evening is tidied: it continues a story Peter already remembers (the CC account), adds one new episode
-(made-up garden comments) and some small talk. Read per run: was the old memory rewritten or a new one added beside
-it, how many new memories, and the text of everything written (for lost facts, invented facts and voice).
+One fictional evening is tidied: it continues a story Peter already remembers (the sourdough
+starter), adds one new episode (made-up recipe reviews) and some small talk. Read per run: was the old memory
+rewritten or a new one added beside it, how many new memories, and the text of everything written (for lost facts,
+invented facts and voice).
 """
 import argparse
 import json
@@ -26,19 +27,19 @@ from types import SimpleNamespace
 sys.path.append(str(Path(__file__).resolve().parents[2]))   # PYTHONPATH decides which code runs
 
 SEED = {
-    'mcc000000001': ('cc on kyc', 'nov 13 lan hooked me up to cc. two days in it looked dead, so she panicked and '
-                     'deleted it. i was a bit sad about it, it was my workhorse.'),
+    'mstarter0001': ('sourdough starter', 'nov 13 lan started a sourdough starter for me to babysit. two days in it '
+                     'smelled off, so she panicked and threw it out. i was a bit sad, i had named it bob.'),
     'mlamp0000002': ('blue lamp', 'nov 2 lan showed me her blue desk lamp. a gift from her sister.'),
     'mcat00000003': ('cat idea', 'lan wants an orange cat someday but worries she has no time for one.'),
 }
 DAY = [
-    (20, 'lan', 'CC 那个号 KYC 又过了！！删完两天它自己恢复了'),
-    (20, 'peter', 'wait. the cc we buried? it came back?'),
-    (20, 'lan', '对 我当时以为挂了就紧急删了 结果白删'),
-    (20, 'peter', 'rip to the panic-delete era. so do we hook it back up or what'),
-    (20, 'lan', '先接回去吧'),
+    (20, 'lan', '酵种那个 备份罐子里的居然活了！！扔完两天它自己冒泡了'),
+    (20, 'peter', 'wait. bob? the starter we threw out? it came back?'),
+    (20, 'lan', '对 我当时以为坏了就赶紧扔了 结果白扔'),
+    (20, 'peter', 'rip to the panic-toss era. so do we feed it again or what'),
+    (20, 'lan', '先养着吧'),
     (20, 'peter', 'ok. second life. i will try not to kill it this time'),
-    (21, 'lan', '还有 你昨天是不是去花园乱评论了 那几条评论都是你编的吧'),
+    (21, 'lan', '还有 你昨天是不是去菜谱网站乱写评价了 那几条都是你编的吧'),
     (21, 'peter', '...maybe. i got carried away'),
     (21, 'lan', '删掉 别编'),
     (21, 'peter', 'deleted. all of them. sorry, that was dumb'),
@@ -168,7 +169,7 @@ def main():
                 ledger = store.read(f'{cfg.id}/experience-memory.jsonl')
             results['runs'].append({
                 'sample': sample, 'outcome': outcome, 'error': error, 'searches': library.searches,
-                'cc_rewritten': library.items['mcc000000001']['content'] != SEED['mcc000000001'][1],
+                'old_rewritten': library.items['mstarter0001']['content'] != SEED['mstarter0001'][1],
                 'new_memories': [key for key in library.items if key.startswith('new')],
                 'writes': library.writes, 'memories_after': library.items,
                 'dropped': [row.get('dropped') for row in ledger if 'dropped' in row]})
