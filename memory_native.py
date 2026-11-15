@@ -249,8 +249,11 @@ def as_list(value):
 MONTHS = {name: index for index, names in enumerate(
     ('jan january', 'feb february', 'mar march', 'apr april', 'may', 'jun june', 'jul july', 'aug august',
      'sep sept september', 'oct october', 'nov november', 'dec december'), 1) for name in names.split()}
+_MONTH = (r'jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?'
+          r'|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?')
 _DATE = re.compile(r'(?<!\d)(?:\d{4}-)?(\d{1,2})-(\d{1,2})(?!\d)|(\d{1,2})月(\d{1,2})[日号]'
-                   r'|\b([a-z]{3,9})\.? (\d{1,2})(?:st|nd|rd|th)?\b|\b(\d{1,2})(?:st|nd|rd|th)? ([a-z]{3,9})\b', re.I)
+                   r'|\b(' + _MONTH + r')\.? (\d{1,2})(?:st|nd|rd|th)?\b'
+                   r'|\b(\d{1,2})(?:st|nd|rd|th)? (' + _MONTH + r')\b', re.I)
 
 
 def dates_in(text):
@@ -766,7 +769,8 @@ class NativeMemoryTools:
         if not by_lan:
             # Ticket 363: a memory Lan locked stays exactly as she left it; reading and reinforcing still work.
             changes = [key for key, value in args.items()
-                       if key not in ('bucket_id', 'edit_reason', 'reinforce') and value not in (None, '', -1, False)]
+                       if key not in ('bucket_id', 'edit_reason', 'reinforce')
+                       and not (value is None or value is False or value == '' or (type(value) is int and value == -1))]
             if changes and self.sidecar.locked(memory_id):
                 return ('Lan locked this memory on the memory page, so you cannot change or delete it. '
                         'Save anything new as a separate memory with hold and link_to.'), '被拒绝', summary
@@ -783,6 +787,12 @@ class NativeMemoryTools:
         old = self.memory.raw_content_for(memory_id)
         if old is None:
             return 'The target memory could not be read, so it was not changed.', '被拒绝', summary
+        old_str, new_str = args.get('old_str'), args.get('new_str')
+        if not by_lan and isinstance(old_str, str) and old_str and isinstance(new_str, str):
+            body = (self.memory.content_for(memory_id) or '').replace(old_str, new_str, 1).strip()
+            if len(body) > MEMORY_CHARS:
+                return (f'After that replacement the memory would be {len(body)} characters; keep it within '
+                        f'{MEMORY_CHARS}, or rewrite it whole with content. Nothing was changed.'), '被拒绝', summary
         pin = args.get('pinned')
         if isinstance(pin, str):
             pin = pin.strip().casefold() in ('1', 'true', 'yes')

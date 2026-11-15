@@ -235,6 +235,21 @@ class WritingTests(Fixture):
         versions = self.store.read('fake/memory-versions.jsonl')
         self.assertIn('觉得这想法有点怪', versions[-1]['old_content'])   # the earlier version is archived
 
+    def test_lans_edit_made_while_the_model_was_thinking_is_not_overwritten(self):
+        self.first_entry()
+        self.add(long_talk('2026-11-20', 14))
+        self.clock[0] = '2026-11-20T16:00:00+08:00'
+        self.reply(updates=[{'id': 'm1', 'text': '11月18日到20日，我对记忆系统改了主意。'}])
+        ombre, replies = self.ombre, self.replies
+
+        class EditFirst(list):
+            def pop(self, index=-1):
+                ombre.items['m1']['content'] = 'Lan 改的：11月18日的事。'
+                return replies.pop(index)
+        self.replies = EditFirst()
+        self.assertNotEqual(self.feature.run_if_due(), 'error')
+        self.assertEqual(self.ombre.items['m1']['content'], 'Lan 改的：11月18日的事。')
+
     def test_quotes_secrets_and_unknown_targets_are_dropped(self):
         self.add(long_talk(DAY1))
         self.clock[0] = f'{DAY1}T12:00:00+08:00'

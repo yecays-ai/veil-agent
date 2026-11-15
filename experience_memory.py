@@ -357,14 +357,15 @@ class ExperienceMemory:
                                       'time': self.budget.clock()})
         return memory_id
 
-    def _save_update(self, update):
-        """Ticket 363: the entry is rewritten whole; the old version goes to the version record."""
+    def _save_update(self, update, seen=None):
+        """Ticket 363: the entry is rewritten whole; the old version goes to the version record. `seen` is the
+        text the model rewrote from: if Lan changed the entry meanwhile, her text wins and this rewrite is dropped."""
         memory_id = update['id']
         if not self._alive(memory_id) or self.sidecar.locked(memory_id):
             return False
         previous = self.memory.content_for(memory_id, refresh=True)
         document = self.memory.raw_content_for(memory_id)
-        if not previous or document is None:
+        if not previous or document is None or (seen is not None and previous.strip() != seen.strip()):
             return False
         text = update['text'].strip()
         if text == previous.strip():
@@ -428,7 +429,8 @@ class ExperienceMemory:
         try:
             entries, updates, dropped = self._validated(self._call_model(messages), batch, candidates)
             for update in updates:
-                updated += bool(self._save_update(update))
+                updated += bool(self._save_update(update, next(
+                    (c['text'] for c in candidates if c['id'] == update['id']), None)))
             for entry in entries:
                 written += self._save_entry(entry, span) is not None
         except Exception as exc:

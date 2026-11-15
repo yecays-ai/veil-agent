@@ -225,3 +225,16 @@ test('settings page has a workbench switch with folder picker, and the chat log 
   assert.match(css, /#log,\.page\{scrollbar-width:none\}/);
   assert.match(css, /#log::-webkit-scrollbar,\.page::-webkit-scrollbar\{display:none/);
 });
+
+test('every memory page action the renderer posts is allowed by the main process and served by Python', async () => {
+  const [js, main, web] = await Promise.all([read('chat.js'), read('main.cjs'),
+    fs.readFile(path.join(__dirname, '..', '..', 'web_agent.py'), 'utf8')]);
+  const allowed = [...main.match(/const MEMORY_POSTS = \[([^\]]*)\]/)[1].matchAll(/'([^']+)'/g)].map(m => m[1]);
+  const served = [...web.match(/MEMORY_CHANGE_PATHS = \(([^)]*)\)/)[1].matchAll(/'([^']+)'/g)].map(m => m[1]);
+  const posted = [...new Set([...js.matchAll(/api\('(\/api\/memory\/[a-z-]+)',\s*\{/g)].map(m => m[1]))];
+  assert.ok(posted.includes('/api/memory/archived'));
+  for (const route of posted) {
+    assert.ok(allowed.includes(route), `${route} is not allowed by main.cjs`);
+    assert.ok(served.includes(route), `${route} is not served by web_agent.py`);
+  }
+});

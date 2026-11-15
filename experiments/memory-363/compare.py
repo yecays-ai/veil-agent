@@ -141,9 +141,11 @@ def main():
             raise Cap()
         response = call(messages, **kwargs)
         prompt, completion, cached = response[1], response[2], getattr(response[3], 'tokens', response[3]) or 0
-        spent[0] += (Decimal(prompt - cached) * Decimal(str(price['input_cny_per_million']))
-                     + Decimal(cached) * Decimal(str(price['cached_input_cny_per_million']))
-                     + Decimal(completion) * Decimal(str(price['output_cny_per_million']))) / 1_000_000
+        per_call = price.get('cny_per_call')
+        spent[0] += Decimal(str(per_call)) if per_call else (
+            (Decimal(prompt - cached) * Decimal(str(price['input_cny_per_million']))
+             + Decimal(cached) * Decimal(str(price['cached_input_cny_per_million']))
+             + Decimal(completion) * Decimal(str(price['output_cny_per_million']))) / 1_000_000)
         return response
 
     def run(text):

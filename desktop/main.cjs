@@ -460,6 +460,9 @@ function detachedViewFromEvent(event) {
   return null;
 }
 const fromChatPage = event => fromChat(event) || detachedViewFromEvent(event) !== null;
+// Memory page actions the renderer may post (ticket 363 added versions, archive, lock and seen).
+const MEMORY_POSTS = ['/api/memory/edit', '/api/memory/delete', '/api/memory/versions', '/api/memory/restore-version',
+  '/api/memory/archived', '/api/memory/unarchive', '/api/memory/lock', '/api/memory/seen'];
 function allowedChatRequest(pathname, method) {
   if (method === 'GET') {
     let url;
@@ -482,7 +485,7 @@ function allowedChatRequest(pathname, method) {
   }
   return method === 'POST' && ['/api/send', '/api/media', '/api/voice', '/api/voice/retry',
     '/api/transcribe', '/api/approve', '/api/activity', '/api/glance', '/api/codex-watch', '/api/quiet-hours', '/api/exit',
-    '/api/message/action', '/api/memory/edit', '/api/memory/delete', '/api/models', '/api/models/use', '/api/stop',
+    '/api/message/action', ...MEMORY_POSTS, '/api/models', '/api/models/use', '/api/stop',
     '/api/typing', '/api/request-reply', '/api/mcp', '/api/workbench', '/api/windows-apps', '/api/life', '/api/stickers', '/api/stickers/upload',
     '/api/voice-style'].includes(pathname);
 }
@@ -493,7 +496,7 @@ ipcMain.handle('chat:request', async (event, pathname, body, timeoutMs) => {
     (detachedView === 'context' && !body && pathname?.startsWith('/api/events?')) ||
     (detachedView === 'mcp' && ((!body && pathname?.startsWith('/api/events?')) || pathname === '/api/mcp' || (!body && pathname === '/api/mcp?retry=1'))) ||
     (detachedView === 'memory' && ((!body && (pathname?.startsWith('/api/events?') || pathname?.startsWith('/api/memory/'))) ||
-      (body && ['/api/memory/edit', '/api/memory/delete'].includes(pathname)))) ||
+      (body && MEMORY_POSTS.includes(pathname)))) ||
     (detachedView === 'life' && ((!body && (pathname?.startsWith('/api/events?') || pathname === '/api/life')) || (body && pathname === '/api/life'))) ||
     (detachedView === 'more' && ((!body && (pathname?.startsWith('/api/events?') || pathname === '/api/workbench' || pathname === '/api/windows-apps')) || (body && ['/api/exit', '/api/models', '/api/models/use', '/api/workbench', '/api/windows-apps'].includes(pathname))));
   if (!fromChatPage(event) || typeof pathname !== 'string' || !allowedChatRequest(pathname, body ? 'POST' : 'GET') || !detachedAllowed)

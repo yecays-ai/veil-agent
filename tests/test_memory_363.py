@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import Mock
 
+from agent_types import UserError
 from memory_agent import Memory
 from memory_native import MEMORY_CHARS, NativeMemoryTools, ToolSet, dates_in
 from ombre_resident import resident_config
@@ -162,6 +163,25 @@ class RewriteTests(Fixture):
         self.native.panel_lock(self.a, False)
         self.assertEqual(self.native._trace({'bucket_id': self.a, 'content': 'on 11-06 mine'}, None)[1], '成功')
 
+    def test_lock_also_blocks_zero_and_false_values(self):
+        self.native.panel_lock(self.a, True)
+        self.assertEqual(self.native._trace({'bucket_id': self.a, 'resolved': 0}, None)[1], '被拒绝')
+        self.assertEqual(self.native._trace({'bucket_id': self.a, 'pinned': 0}, None)[1], '被拒绝')
+
+    def test_a_damaged_sidecar_does_not_read_as_unlocked(self):
+        self.native.panel_lock(self.a, True)
+        with open(self.store.root / 'fake' / 'memory-sidecar.jsonl', 'a', encoding='utf-8') as file:
+            file.write('{broken')
+        with self.assertRaises(UserError):                               # stops like any damaged ledger
+            self.native._trace({'bucket_id': self.a, 'content': 'changed'}, None)
+        self.assertNotEqual(self.backend.rows[self.a]['content'], 'changed')
+
+    def test_a_replacement_cannot_grow_a_memory_past_the_limit(self):
+        result, state, _ = self.native._trace(
+            {'bucket_id': self.a, 'old_str': 'fog tide', 'new_str': 'z' * MEMORY_CHARS}, None)
+        self.assertEqual(state, '被拒绝', result)
+        self.assertIn(str(MEMORY_CHARS), result)
+
     def test_peter_changing_what_lan_corrected_is_flagged_until_she_looks(self):
         self.native.panel_edit(self.a, {'content': 'Lan fixed this: on 11-06 fog tide.'})
         self.tools.invoke('breath_search', {'query': 'fog'}, None)
@@ -190,6 +210,7 @@ class SmallPieces(unittest.TestCase):
         self.assertEqual(dates_in('10-31, 2026-11-05, 10月25日, oct 3, 12 november'),
                          {(10, 31), (11, 5), (10, 25), (10, 3), (11, 12)})
         self.assertEqual(dates_in('no dates here, rank 12:30'), set())
+        self.assertEqual(dates_in('since 11-06 we'), {(11, 6)})          # an ordinary word must not eat the date
 
     def test_ombre_merge_is_off_unless_asked_for(self):
         cfg = SimpleNamespace(name='Peter', provider={'model': 'm', 'base_url': 'https://x'},

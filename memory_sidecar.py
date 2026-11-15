@@ -28,11 +28,14 @@ class Sidecar:
         with self.lock:
             self.store.append(self.path, {'memory_id': memory_id, 'kind': kind, **fields})
 
-    def all(self):
-        """{memory_id: summary} folded from the whole log, oldest event first."""
+    def all(self, strict=False):
+        """{memory_id: summary} folded from the whole log, oldest event first. strict: a log that cannot be read
+        raises instead of reading as empty, so a lock is never lost to a damaged file."""
         try:
             rows = self.store.read(self.path)
         except Exception:
+            if strict:
+                raise
             rows = []
         out = {}
         for row in rows:
@@ -69,7 +72,7 @@ class Sidecar:
                                           'links': [], 'sources': [], 'merged_into': None})
 
     def locked(self, memory_id):
-        return self.get(memory_id)['locked']
+        return bool(self.all(strict=True).get(memory_id, {}).get('locked'))
 
     def set_locked(self, memory_id, locked):
         self._add(memory_id, 'lock' if locked else 'unlock')
