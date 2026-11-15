@@ -34,8 +34,8 @@ HOLD = SimpleNamespace(name='hold', inputSchema={
     'type': 'object', 'required': ['content'], 'additionalProperties': False,
     'properties': {
         'content': {'type': 'string', 'description':
-            'The whole memory in your own words, at most ' + str(MEMORY_CHARS) + ' characters. With target_id it '
-            'replaces the old text entirely: keep what still matters, drop repeats.'},
+            'The whole memory in your own words, at most ' + str(MEMORY_CHARS) + ' characters; say when it happened '
+            '(e.g. 11-16). With target_id it replaces the old text entirely: keep what still matters, drop repeats.'},
         'title': {'type': 'string', 'description':
             'Short title; required for a new memory. With target_id a new title replaces the old one.'},
         'target_id': {'type': 'string', 'description':
@@ -56,8 +56,9 @@ HOLD = SimpleNamespace(name='hold', inputSchema={
         'experiences, decisions and why, the relationship, your own changes of mind, and talk about your memory, '
         'abilities or upgrades. Not memories: small talk, game ledgers, to-dos (use plan), status reports, '
         'transcripts. Write it as you would recall it: first person, what happened and what you thought of it. '
-        'Before a new memory is saved the program shows related ones; then choose: the same event -> target_id, '
-        'rewriting that memory whole; a later stage of an earlier experience -> link_to; unrelated -> send the '
+        'Before a new memory is saved the program shows related ones; then choose: the same event or more of it '
+        '(new details, or a part of it not yet written) -> target_id, rewriting that memory whole; what happened '
+        'afterwards because of it, on a later occasion -> link_to; unrelated -> send the '
         'same hold again. Only say you remembered it if this tool succeeded.'))
 SEARCH = SimpleNamespace(name='breath_search', inputSchema={
     'type': 'object', 'required': ['query'], 'additionalProperties': False,
