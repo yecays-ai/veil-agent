@@ -439,7 +439,36 @@ class Hub(ScreenPopMixin):
                 notes = short_term.snapshot()
             except (OSError, UserError, ValueError, TypeError):
                 notes = None
-        return {'turns': turns, 'notes': notes}
+        return {'turns': turns, 'notes': notes, 'tool_inventory': self.tool_inventory(key)}
+
+    TOOL_USE_ROWS = 6000
+
+    def tool_inventory(self, key):
+        """Ticket 357: every tool definition with its size, where it sits, and how often it was used lately.
+        Recomputed only when the context log changes."""
+        chat = self.chat
+        cached = getattr(self, '_tool_inventory_cache', None)
+        if key is not None and cached and cached[0] == key:
+            return cached[1]
+        try:
+            result = chat.tool_schemas(inventory=True)
+        except Exception:
+            return None
+        counts, seen = {}, 0
+        try:
+            for row in chat.store.read_tail(f'{chat.cfg.id}/tools.jsonl', self.TOOL_USE_ROWS):
+                if isinstance(row, dict) and isinstance(row.get('tool'), str) and row.get('state') != '进行中':
+                    counts[row['tool']] = counts.get(row['tool'], 0) + 1
+                    seen += 1
+        except (OSError, UserError, ValueError):
+            counts, seen = {}, 0
+        for row in result['rows']:
+            row['recent_calls'] = counts.get(row['name'], 0) + (
+                counts.get(row['tool'], 0) if row['tool'] != row['name'] else 0)
+        result['recent_call_total'] = seen
+        if key is not None:
+            self._tool_inventory_cache = (key, result)
+        return result
 
     sticker_library = None  # ticket 222; set at startup
 

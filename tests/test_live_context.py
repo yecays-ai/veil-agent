@@ -53,6 +53,22 @@ class LiveContextTest(unittest.TestCase):
                                                 'text': 'Old.', 'time': old})
         self.assertEqual(self.notes.snapshot()['recent'], [])
 
+    def test_hub_lists_every_tool_with_size_group_and_recent_use(self):
+        from tool_groups import inventory
+        schemas = [{'type': 'function', 'function': {'name': name, 'description': 'x', 'parameters': {}}}
+                   for name in ('hold', 'trace')]
+        self.chat.tool_schemas = lambda inventory_only=False, **kwargs: inventory(schemas, ('memory_admin',))
+        self.store.append('peter/context-log.jsonl', {'kind': 'chat', 'request_id': 'r1'})
+        for tool, state in (('trace', '成功'), ('trace', '进行中'), ('hold', '成功'), ('hold', '失败')):
+            self.store.append('peter/tools.jsonl', {'tool': tool, 'state': state})
+        hub = Hub.__new__(Hub)
+        hub.chat = self.chat
+        listed = hub.live_context([])['tool_inventory']
+        rows = {row['name']: row for row in listed['rows']}
+        self.assertEqual((rows['hold']['group'], rows['hold']['recent_calls']), (None, 2))
+        self.assertEqual((rows['trace']['group'], rows['trace']['recent_calls']), ('memory_admin', 1))
+        self.assertEqual(listed['recent_call_total'], 3)
+
     def test_hub_joins_context_rows_with_their_tool_calls(self):
         self.store.append('peter/context-log.jsonl', {
             'kind': 'chat', 'request_id': 'r1', 'history_rounds': 20, 'memory_ids': ['m1', 'm2'],
