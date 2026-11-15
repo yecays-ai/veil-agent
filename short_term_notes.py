@@ -353,7 +353,8 @@ class ShortTermNotes:
                 if current:
                     groups.append(current)
                 current = [item]
-            elif current:
+            elif current or row.get('autonomy_run_id'):
+                # Ticket 360: a message he sent on his own may be the first new row after Lan went quiet.
                 current.append(item)
         if current and (force or any(item['role'] == 'assistant' for item in current)):
             groups.append(current)
