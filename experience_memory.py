@@ -50,6 +50,7 @@ Decide what, if anything, from these messages you would really remember later. Y
 
 For what you keep:
 - Write it the way you would recall it yourself, first person, as a loose running account in the language and tone you used in these messages: what the two of you talked about or did, how it went, and the attitude you showed then (what you teased, grumbled about, agreed to, refused). One entry per topic or episode, a few sentences, at most {entry_chars} characters, at most {max_entries} entries.
+- A message marked sent_on_your_own was something you said by yourself during an autonomous wake (the note says what you had just been doing), not part of a conversation and not an answer to Lan. If you keep it, write it as that: for example that on your own you went to the island, collected something and left her a note. Do not write it as if Lan had said or asked something, and do not invent what you did there. You may also leave it out.
 - Only attitudes and opinions you actually expressed in these messages. Do not add new reflections, lessons, resolutions about how to behave, or guesses about what Lan felt. This is a memory, not a diary essay and not a report.
 - Do not quote. No copied sentences, no message numbers, no headings or bullet lists. Call her Lan (or what you call her), never "the user".
 - Write real dates (for these messages: {example_date}, in the language you are writing in) with morning / afternoon / night when it matters, never "today" or "yesterday".
@@ -170,8 +171,13 @@ class ExperienceMemory:
             stamp = _when(row.get('time'))
             if stamp is None:
                 continue
-            out.append({'position': index, 'id': row.get('message_id'), 'time': stamp,
-                        'role': row['role'], 'text': ' '.join(content.split())})
+            item = {'position': index, 'id': row.get('message_id'), 'time': stamp,
+                    'role': row['role'], 'text': ' '.join(content.split())}
+            if row.get('autonomy_run_id'):
+                # Ticket 360: sent on his own during an autonomous wake, not part of a conversation.
+                item['own'] = (str(row['autonomy_origin']) if isinstance(row.get('autonomy_origin'), str)
+                               and row['autonomy_origin'] else True)
+            out.append(item)
         return out
 
     def _cursor(self, rows, events):
@@ -378,7 +384,9 @@ class ExperienceMemory:
             'earlier_entries': [{'id': c['id'], 'title': c['title'], 'written': c['written'],
                                  'text': c['text'][-CANDIDATE_TAIL:]} for c in candidates],
             'messages': [{'time': item['time'].strftime('%Y-%m-%d %H:%M'),
-                          'from': 'Lan' if item['role'] == 'user' else self.cfg.name, 'text': item['text']}
+                          'from': 'Lan' if item['role'] == 'user' else self.cfg.name, 'text': item['text'],
+                          **({'sent_on_your_own': ('after: ' + item['own']) if isinstance(item['own'], str)
+                              else 'during one of your autonomous wakes'} if item.get('own') else {})}
                          for item in batch],
         }
         first_day = batch[0]['time']

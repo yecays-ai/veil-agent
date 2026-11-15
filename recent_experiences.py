@@ -96,6 +96,8 @@ def recent_experience_context(store, cfg):
         return None
     return (
         'Your LAST glance between chat turns (program-maintained; each time field is the actual event time). '
+        'A glance is a short look at Lan\'s screen that the program starts for you at random moments while she is at '
+        'the computer; it was your own idea in that moment, not a reply to anything she said. '
         'Retained until the next glance starts, then replaced; this is not a new event on each chat turn. '
         'These are your own actions and observations, continuous with this conversation. '
         'Use them to understand references to what you just saw or said; no history lookup is needed '

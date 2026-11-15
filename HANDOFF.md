@@ -1,5 +1,13 @@
 # HANDOFF
 
+## 工单 360（2026-11-15）：自主活动消息带来由小注
+
+- 方案和取舍见 `docs/tickets/360-autonomous-message-origin-note.md`（第一版每轮带记录被 lan 否掉，已撤销）。代码：`autonomy.origin_note()`、自主发消息时写 `autonomy_origin`、`recent()` 给模型加 p.s.；测试 `tests/test_origin_note.py` 和 `test_autonomy` 一例。
+- 记忆整理程序：`experience_memory._visible/_digest`（消息带 `sent_on_your_own`）和 `short_term_notes._new_groups`（`sent_on_his_own_after`）识别 `autonomy_run_id`，提示词各加一句；测试 `test_experience_memory` 一例（需 `PYTHONPATH=.:tests` 运行）。短期便签没有现成测试文件，只手动验证了分组。真实模型是否按提示写还没验证。
+- 没读 lan 真实聊天确认那次现场；没做真实模型对比。要看模型会不会把 `[p.s.` 学进回复，需 lan 同意花费和用电脑。
+- 瞄一眼的留存记录（`recent_experiences.py`）是每轮带、直到下一次瞄一眼才换，原文弹幕文字一直在；这次只加了一句说明来由。瞄一眼关闭时那条会一直留着，只有时间戳说明它多旧，没处理。
+- 本环境缺 `openai`，`test_autonomy` 有 4 个、glance 相关 2 个错误，改动前就存在。
+
 ## 355 补丁：空行拆气泡（2026-11-15，未真机验收）
 
 - 起因：Lan 盲看第二、三轮对比，DeepSeek 常把几段话空行隔开写进一条消息，不分气泡；它们不爱用发消息的工具，靠提示词管不住。
