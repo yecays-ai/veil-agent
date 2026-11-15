@@ -26,11 +26,16 @@ class FakeOmbre:
 
     def __init__(self):
         self.items, self.calls, self.hidden = {}, [], set()
+        self.searches, self.found = [], []   # library search: queries asked, ids it returns
 
     def begin_write(self, args):
         return f'op{len(self.calls)}', None
 
     def call(self, name, args, *, write_operation=None):
+        if name == 'breath_search':
+            self.searches.append(args['query'])
+            return ''.join(f'[bucket_id:{key}] {self.items[key]["content"]}\n' for key in self.found) + (
+                '=== ombre:result-ids ===\n```json\n' + json.dumps({'bucket_ids': self.found}) + '\n```')
         self.calls.append((name, dict(args)))
         if name == 'hold':
             memory_id = f'm{len(self.items) + 1}'
@@ -250,6 +255,40 @@ class WritingTests(Fixture):
         self.assertNotEqual(self.feature.run_if_due(), 'error')
         self.assertEqual(self.ombre.items['m1']['content'], 'Lan 改的：11月18日的事。')
 
+    def test_a_memory_he_saved_himself_is_found_and_rewritten_instead_of_saving_a_new_one(self):
+        # 2026-11-15 Lan: the KYC story already had a memory, so the next part goes into it, not beside it.
+        self.ombre.items['kyc'] = {'title': 'CC', 'content': '11月13日 Lan 给我接了 CC，两天后以为挂了就删了。'}
+        self.ombre.found = ['kyc']
+        self.add(long_talk(DAY1))
+        self.clock[0] = f'{DAY1}T12:00:00+08:00'
+        story = '11月13日 Lan 给我接了 CC，两天后以为挂了就删了；结果删完 KYC 又过了，又恢复了。我有点哭笑不得。'
+        self.reply(updates=[{'id': 'kyc', 'text': story}])
+        self.assertEqual(self.feature.run_if_due(), 'written')
+        self.assertTrue(self.ombre.searches)
+        self.assertIn('kyc', [item['id'] for item in self.sent()['earlier_entries']])
+        self.assertEqual(self.ombre.items['kyc']['content'], story)
+        self.assertEqual(len(self.ombre.items), 1)                      # nothing new saved beside it
+
+    def test_locked_or_overlong_library_memories_are_not_offered(self):
+        self.ombre.items['locked'] = {'title': 'a', 'content': '她改过并锁定的一条。'}
+        self.ombre.items['long'] = {'title': 'b', 'content': '账' * 2000}
+        self.ombre.found = ['locked', 'long']
+        self.feature.sidecar.set_locked('locked', True)
+        self.add(long_talk(DAY1))
+        self.clock[0] = f'{DAY1}T12:00:00+08:00'
+        self.reply()
+        self.feature.run_if_due()
+        self.assertEqual(self.sent()['earlier_entries'], [])
+
+    def test_a_failed_library_search_still_lets_the_entry_be_written(self):
+        def broken(name, args, *, write_operation=None, original=self.ombre.call):
+            if name == 'breath_search':
+                raise RuntimeError('search down')
+            return original(name, args, write_operation=write_operation)
+        self.ombre.call = broken
+        self.first_entry()
+        self.assertEqual(len(self.ombre.items), 1)
+
     def test_quotes_secrets_and_unknown_targets_are_dropped(self):
         self.add(long_talk(DAY1))
         self.clock[0] = f'{DAY1}T12:00:00+08:00'
@@ -383,7 +422,7 @@ class RealMemoryTests(unittest.TestCase):
         self.assertIn('---\n后来觉得还不错。', stored)
         self.assertNotIn('old memory body', stored)
         self.assertIn('old memory body', self.store.read('fake/memory-versions.jsonl')[0]['old_content'])
-        self.assertEqual([name for name, _ in self.backend.calls], ['trace'])
+        self.assertEqual([name for name, _ in self.backend.calls if name != 'breath_search'], ['trace'])
         self.assertIn('后来觉得还不错', feature.context()['content'])
 
 
