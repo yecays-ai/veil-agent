@@ -3048,6 +3048,13 @@ class Chat:
         except (OSError, UserError, AttributeError):
             pass
         try:
+            # Ticket 360: why he messaged her on his own (all chat rows, not just the history window).
+            from life_state import own_contact_text
+            parts.append(own_contact_text(self.store.read(self.path),
+                                          self.store.read(f'{self.cfg.id}/autonomy.jsonl'), exclude_ids))
+        except (OSError, UserError, AttributeError, TypeError):
+            pass
+        try:
             native = getattr(self.tools, 'native', None)
             plans = native.plan_entries() if callable(getattr(native, 'plan_entries', None)) else []
         except (OSError, ValueError, UnicodeError, UserError):
