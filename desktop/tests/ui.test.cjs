@@ -208,6 +208,9 @@ test('live context view shows request activity above short-term notes and can be
   assert.match(html, /id="context-view"[\s\S]*?id="context-turns"[\s\S]*?id="context-notes"/);
   assert.match(js, /renderLiveContext\(s\.live_context\)/);
   assert.match(main, /detachedView === 'context' && !body && pathname\?\.startsWith\('\/api\/events\?'\)/);
+  assert.match(js, /api\('\/api\/voice-style'/);
+  assert.match(main, /'\/api\/voice-style'\]\.includes\(pathname\)/);
+  assert.match(js, /if\(detachedView\)\{\$\('voice-style-toggle'\)\.hidden=\$\('voice-style-save'\)\.hidden=true/);
 });
 
 test('settings page has a workbench switch with folder picker, and the chat log shows no scrollbar', async () => {

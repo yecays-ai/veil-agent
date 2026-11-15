@@ -440,29 +440,26 @@ class Hub(ScreenPopMixin):
                 notes = short_term.snapshot()
             except (OSError, UserError, ValueError, TypeError):
                 notes = None
-        return {'turns': turns, 'notes': notes, 'tool_inventory': self.tool_inventory(key)}
+        voice_style = getattr(chat, 'voice_style', None)
+        return {'turns': turns, 'notes': notes, 'tool_inventory': self.tool_inventory(key),
+                'voice_style': voice_style.status(with_text=True) if voice_style is not None else None}
 
     TOOL_USE_ROWS = 6000
 
     def tool_inventory(self, key):
         """Ticket 357: every tool definition with its size, where it sits, and how often it was used lately.
-        Recomputed only when the context log changes."""
+
+        The list itself is built by the chat on its own thread (Chat.refresh_tool_inventory, once per
+        request). This runs on the polling thread, so it only reads that finished list and the tool log:
+        building it here would wait on the model-settings lock and could start MCP workers."""
         chat = self.chat
-        cached = getattr(self, '_tool_inventory_cache', None)
-        if key is not None and cached and cached[0] == key:
-            return cached[1]
-        models = getattr(chat.cfg, 'models', None)
-        lock = getattr(models, 'lock', None)
-        # A chat request holds this lock across model and tool calls; polling must not wait for it.
-        if lock is not None and not lock.acquire(blocking=False):
-            return cached[1] if cached else None
-        try:
-            result = chat.tool_schemas(inventory=True)
-        except Exception:
+        listed = getattr(chat, 'tool_inventory_snapshot', None)
+        if not isinstance(listed, dict):
             return None
-        finally:
-            if lock is not None:
-                lock.release()
+        cached = getattr(self, '_tool_inventory_cache', None)
+        if key is not None and cached and cached[0] == (key, id(listed)):
+            return cached[1]
+        result = {**listed, 'rows': [dict(row) for row in listed.get('rows', [])]}
         counts, seen = {}, 0
         try:
             for row in chat.store.read_tail(f'{chat.cfg.id}/tools.jsonl', self.TOOL_USE_ROWS):
@@ -476,7 +473,7 @@ class Hub(ScreenPopMixin):
                 counts.get(row['tool'], 0) if row['tool'] != row['name'] else 0)
         result['recent_call_total'] = seen
         if key is not None:
-            self._tool_inventory_cache = (key, result)
+            self._tool_inventory_cache = ((key, id(listed)), result)
         return result
 
     sticker_library = None  # ticket 222; set at startup
@@ -2597,6 +2594,27 @@ def make_handler(hub, token):
                 except (OSError, UserError) as exc:
                     self._send(500, {'error': str(exc)})
 
+        def _post_voice_style(self, body):
+            # Ticket 355: Lan switches his "how I talk" reference on or off, or saves an edited text.
+            voice_style = getattr(hub.chat, 'voice_style', None)
+            enabled, text = body.get('enabled'), body.get('text')
+            if (enabled is None) == (text is None) or (enabled is not None and not isinstance(enabled, bool)) \
+                    or (text is not None and not isinstance(text, str)):
+                self._send(400, {'error': 'enabled or text'})
+            elif voice_style is None:
+                self._send(409, {'error': 'unavailable'})
+            else:
+                try:
+                    if text is not None:
+                        voice_style.save(text)
+                    else:
+                        voice_style.set_enabled(enabled)
+                    self._send(200, {'ok': True, 'voice_style': voice_style.status(with_text=True)})
+                except UserError as exc:
+                    self._send(400, {'error': str(exc)})
+                except OSError as exc:
+                    self._send(500, {'error': str(exc)})
+
         def _post_codex_watch(self, body):
             enabled = body.get('enabled')
             if not isinstance(enabled, bool):
@@ -2785,6 +2803,8 @@ def make_handler(hub, token):
                 self._post_quiet_hours(body)
             elif url.path == '/api/experience-memory':
                 self._post_experience_memory(body)
+            elif url.path == '/api/voice-style':
+                self._post_voice_style(body)
             elif url.path == '/api/workbench':
                 self._post_workbench(body)
             elif url.path == '/api/windows-apps':
@@ -2808,6 +2828,8 @@ def start_server(hub, token, port):
 
 def serve_chat(chat, hub, channels=(), acceptance=False):
     hub.chat = chat
+    if hasattr(chat, 'refresh_tool_inventory'):
+        chat.refresh_tool_inventory()  # before any poll; later refreshed by each request
     chat.sticker_library = hub.sticker_library
     chat.claim_steer = hub.claim_steer
     chat.steer_pending = hub.steer_pending

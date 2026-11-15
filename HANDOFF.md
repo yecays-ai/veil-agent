@@ -1,5 +1,19 @@
 # HANDOFF
 
+## 工单 355（2026-11-15）：说话样例机制已做，样例未启用
+
+- 已做：`voice_style.py`（本机 `persona/<角色>.voice.md`，人设后面的一条 system 消息，去标签，开关存 `data/<角色>/voice-style.json`，保存留旧版本）、「上下文」页的卡片和 `/api/voice-style`、`tests/test_voice_style.py`、对比脚本 `experiments/voice-style-355/compare.py`（run / page / reveal）。
+- 样例草稿在项目共享文件夹 `style-355/peter.voice.md` 和 Lan 电脑测试用的 `cmp355-out` 文件夹。内容以 Lan 写的为准：她烦或受伤时不追问事实；「往桌面放东西」那段是她要的，不许改；规则不许和人设、关于她的笔记重复（核对过，只留问号和表情两条）。
+- 对比结果和五处变差见工单。等 Lan：盲看 27 题；是否在规则里加「她烦或受伤时不提问」；是否让程序把一条消息里空行隔开的几段拆成气泡；再跑一轮约 ¥1.3（本单已花 ¥1.28，共同规则上限 ¥2，超出要她同意）。
+- 没解决：闲聊变长（357 之后 Lan 也感到话多）；样例被当成真事（2/27）。
+- 待办：「花园其他」组 15.5KB 超单组上限，需要她电脑「工具清单」里这一组的工具名才能拆；cubic 限额期间 PR 手动请 CodeRabbit 审。
+
+## 357 的后续修正（2026-11-15，随 355 的 PR）
+
+- 故障：357 把「工具清单」放进了状态轮询，轮询线程直接调用 `Chat.tool_schemas()`。这个函数会拿模型设置锁（查委派模型），聊天请求进行时锁被占着，轮询就排队，桌面断线。358 用「拿不到锁就用旧清单」止住了断线。
+- 这次的改法：轮询线程不再调用 `tool_schemas()`。清单由聊天线程每次请求时生成一份放在 `chat.tool_inventory_snapshot`（`Chat.refresh_tool_inventory`，启动时也生成一次），页面只读这份成品和工具日志。原因除了锁，还有 `tool_schemas()` 里的 `mcp_services.schemas()` 可能启动 MCP 进程，不该由轮询线程触发。358 对能力清单、模型刷新、健康检查的修正都保留。
+- 规矩：状态轮询（`Hub.snapshot`、`live_context`）里只读现成数据，不调用 Chat 里会拿锁或启动东西的函数。
+
 ## 工单 358（2026-11-15）：忙碌聊天时连接断开
 
 - Lan 在聊天中允许 Peter 去小岛玩，桌面断开后后台仍继续调用工具。真实 Windows 现场抓到多个 `/api/events` 请求停在 `Hub.tool_inventory -> Chat.tool_schemas -> ModelSettings.selected`；聊天主线程持有模型设置锁等待模型网络请求。357 的新工具清单使每次上下文日志变化后状态查询也会等待该锁。
