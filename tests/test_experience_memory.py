@@ -171,6 +171,21 @@ class InputTests(Fixture):
         self.assertEqual(self.requests[0][0], {'role': 'system', 'content': 'fictional persona'})
         self.assertNotIn('message_id', text)
 
+    def test_autonomous_messages_are_marked_as_sent_on_his_own(self):
+        self.add(long_talk(DAY1))
+        self.add([row(DAY1, '10:50', 'assistant', '我去岛上收了东西，给你留了言', 'own1',
+                      autonomy_run_id='r1', autonomy_origin='the garden island game'),
+                  row(DAY1, '10:51', 'assistant', '另一条', 'own2', autonomy_run_id='r2')])
+        self.clock[0] = f'{DAY1}T12:00:00+08:00'
+        self.reply()
+        self.feature.run_if_due()
+        messages = self.sent()['messages']
+        marked = [m for m in messages if 'sent_on_your_own' in m]
+        self.assertEqual([m['sent_on_your_own'] for m in marked],
+                         ['after: the garden island game', 'during one of your autonomous wakes'])
+        self.assertEqual(len(marked), 2)  # ordinary chat lines carry no mark
+        self.assertIn('sent_on_your_own', self.requests[0][1]['content'])
+
     def test_only_new_messages_are_read_next_time(self):
         self.add(long_talk(DAY1))
         self.clock[0] = f'{DAY1}T12:00:00+08:00'
