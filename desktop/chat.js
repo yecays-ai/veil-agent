@@ -14,7 +14,7 @@ const displayedErrorRequests=new Set();
 const displayedEventIds=new Set();
 let memoryAvailable=false,memoryLoaded=false,memoryLoading=false,memoryCursor='',memoryItems=[],memoryGroup='recent',memoryShown=50;
 // Display-only groups over Ombre's own categories; Ombre's files keep their tags and categories.
-const MEMORY_GROUPS={recent:{label:'最近',domains:null},us:{label:'我们俩',domains:['恋爱','人际']},peter:{label:'他自己',domains:['内心','心理','兴趣','游戏']},system:{label:'系统和能力',domains:['数字','AI','编程','工作']}};
+const MEMORY_GROUPS={recent:{label:'最近',domains:null},us:{label:'我们俩',domains:['恋爱','人际']},peter:{label:'他自己',domains:['内心','心理','兴趣','游戏']},system:{label:'系统和能力',domains:['数字','AI','编程','工作']},archived:{label:'已归档',domains:null,archived:true}};
 let pendingQuote=null;
 let quietEnabled=false;
 let activityFilter='all',toolActivity=[],autonomyActivity=[],glanceActivity=[],detachedViews=new Set();
@@ -736,6 +736,7 @@ function memoryMatches(item,query){
   return fields.some(text=>String(text||'').toLocaleLowerCase().includes(query));
 }
 function renderMemoryList(){
+  if(MEMORY_GROUPS[memoryGroup].archived){renderArchivedList();return}
   const list=$('memory-list'),query=$('memory-search').value.trim().toLocaleLowerCase(),group=MEMORY_GROUPS[memoryGroup];list.replaceChildren();
   $('memory-heading').textContent=group.label;
   const filtered=memoryItems.filter(item=>!item.source_record&&(!group.domains||item.domain.some(name=>group.domains.includes(name)))&&memoryMatches(item,query));
@@ -747,7 +748,7 @@ function renderMemoryList(){
     const button=document.createElement('button');button.type='button';button.className='memory-entry';
     const top=document.createElement('span');top.className='memory-entry-top';
     const title=document.createElement('span');title.className='memory-entry-title';title.textContent=item.surprise?'🎁 '+item.title:item.title;
-    const time=document.createElement('time');time.textContent=(item.auto?'自动整理 · ':'')+memoryTime(item.created);top.append(title,time);
+    const time=document.createElement('time');time.textContent=(item.locked?'🔒 ':'')+(item.peter_after_lan?'他改过你改的 · ':'')+(item.auto?'自动整理 · ':'')+memoryTime(item.created);top.append(title,time);
     const preview=document.createElement('span');preview.className='memory-entry-preview';
     preview.textContent=item.surprise?'Peter 给你准备的惊喜，先不剧透。':(item.body||item.why).replace(/\s+/g,' ').slice(0,90);
     button.append(top,preview);
@@ -757,6 +758,24 @@ function renderMemoryList(){
   if(filtered.length>memoryShown){const more=document.createElement('button');more.type='button';more.className='memory-entry more';more.textContent=`看更早的（还有 ${filtered.length-memoryShown} 条）`;more.onclick=()=>{memoryShown+=50;renderMemoryList()};list.appendChild(more)}
   const total=memoryItems.filter(item=>!item.source_record).length;
   $('memory-count').textContent=group.domains||query?`显示 ${filtered.length} 条 · 共 ${total} 条记忆`:`共 ${total} 条记忆`;
+}
+// Ticket 363: memories folded into another one (or let fade by Ombre) are archived, not deleted; Lan can bring one back.
+async function renderArchivedList(){
+  const list=$('memory-list');$('memory-heading').textContent='已归档';list.textContent='正在读取已归档的记忆…';
+  try{const r=await api('/api/memory/archived',{id:''});const d=await r.json();if(!r.ok)throw new Error(d.error||'读取失败');
+    list.replaceChildren();
+    if(!d.items.length){const empty=document.createElement('p');empty.className='muted';empty.textContent='没有已归档的记忆。';list.appendChild(empty)}
+    for(const item of d.items){const box=document.createElement('div');box.className='memory-entry';
+      const top=document.createElement('span');top.className='memory-entry-top';const title=document.createElement('span');title.className='memory-entry-title';title.textContent=item.title;
+      const time=document.createElement('time');time.textContent=memoryTime(item.created);top.append(title,time);
+      const preview=document.createElement('span');preview.className='memory-entry-preview';
+      preview.textContent=(item.merged_into?'并进了「'+(item.merged_into_title||item.merged_into)+'」 · ':'')+item.body.replace(/\s+/g,' ').slice(0,140);
+      const back=document.createElement('button');back.type='button';back.textContent='恢复';
+      back.onclick=async()=>{back.disabled=true;try{const r2=await api('/api/memory/unarchive',{id:item.memory_id});const d2=await r2.json();if(!r2.ok)throw new Error(d2.error||'没能恢复。');notify(d2.message||'已恢复。');memoryItems=[];await loadMemoryCatalog(true)}
+        catch(error){notify(error.message||'没能恢复。','error');back.disabled=false}};
+      box.append(top,preview,back);list.appendChild(box)}
+    $('memory-count').textContent=`已归档 ${d.items.length} 条`;
+  }catch(error){list.textContent=error.message||'读取失败'}
 }
 // Ticket 354: the program writes down what Peter would remember of the chat; Lan can see the last result and switch it off.
 let experienceEnabled=false;
@@ -862,7 +881,37 @@ function readMemory(item){
   raw.ontoggle=async()=>{if(!raw.open||pre.dataset.loaded)return;pre.textContent='正在读取…';
     try{pre.textContent=await readRawMemory(item.memory_id);pre.dataset.loaded='true'}catch(error){pre.textContent=error.message||'这条记忆暂时无法读取。'}};
   const hint=document.createElement('p');hint.className='memory-hint';hint.textContent='保存会把旧版本留档；删除不能恢复。Peter 不会收到通知。';
-  detail.replaceChildren(eyebrow,heading,facts,title.wrap,why.wrap,body.wrap,actions,status,hint,raw);
+  // Ticket 363: links, lock, earlier versions, and a flag when he rewrote something Lan had corrected.
+  const lock=document.createElement('button');lock.type='button';lock.textContent=item.locked?'解锁':'锁定（他不能改）';actions.append(lock);
+  lock.onclick=async()=>{lock.disabled=true;try{const r=await api('/api/memory/lock',{id:item.memory_id,locked:!item.locked});const d=await r.json();
+    if(!r.ok)throw new Error(d.error||'没能保存。');await loadMemoryCatalog(false);const after=$('memory-detail').querySelector('.memory-status');if(after)after.textContent=d.message||''}
+    catch(error){status.textContent=error.message||'没能保存。';lock.disabled=false}};
+  const extra=[];
+  if(item.peter_after_lan){const flag=document.createElement('p');flag.className='memory-surprise';flag.textContent='你改过这条之后，他又改了它。不满意可以在下面「历史版本」里恢复你的版本，或者锁定。';
+    const ok=document.createElement('button');ok.type='button';ok.textContent='知道了';ok.onclick=async()=>{await api('/api/memory/seen',{id:item.memory_id});await loadMemoryCatalog(false)};flag.append(' ',ok);extra.push(flag)}
+  const relations=[];
+  for(const link of item.links||[])relations.push('接着「'+link.title+'」');
+  for(const link of item.continued_by||[])relations.push('后来的「'+link.title+'」');
+  if(item.merged_from)relations.push('并进来 '+item.merged_from+' 条重复（在「已归档」里）');
+  if(Array.isArray(item.sources)&&item.sources.length){const last=new Date(item.sources[item.sources.length-1].time);if(!Number.isNaN(last.getTime()))relations.push(`最近一次写于 ${last.getMonth()+1}月${last.getDate()}日 ${memoryTime(item.sources[item.sources.length-1].time)}`)}
+  if(relations.length){const rel=document.createElement('p');rel.className='memory-facts';rel.textContent=relations.join('　');extra.push(rel)}
+  const history=document.createElement('details');history.className='memory-raw';
+  const historySummary=document.createElement('summary');historySummary.textContent='历史版本';const historyBody=document.createElement('div');history.append(historySummary,historyBody);
+  history.ontoggle=async()=>{if(!history.open||historyBody.dataset.loaded)return;historyBody.textContent='正在读取…';
+    try{const r=await api('/api/memory/versions',{id:item.memory_id});const d=await r.json();if(!r.ok)throw new Error(d.error||'读取失败');
+      historyBody.replaceChildren();historyBody.dataset.loaded='true';
+      if(!d.versions.length){historyBody.textContent='还没有旧版本。';return}
+      for(const version of d.versions){const box=document.createElement('div');box.className='memory-version';
+        const when=new Date(version.time);const head=document.createElement('p');head.className='memory-facts';
+        head.textContent=(Number.isNaN(when.getTime())?'':`${when.getMonth()+1}月${when.getDate()}日 ${memoryTime(version.time)} 之前的样子`)+(version.reason?' · '+version.reason:'');
+        const text=document.createElement('pre');text.textContent=(version.title?version.title+'\n\n':'')+version.body;
+        const back=document.createElement('button');back.type='button';back.textContent='恢复成这个版本';
+        back.onclick=async()=>{back.disabled=true;try{const r2=await api('/api/memory/restore-version',{id:item.memory_id,index:version.index});const d2=await r2.json();
+          if(!r2.ok)throw new Error(d2.error||'没能恢复。');await loadMemoryCatalog(false);const after=$('memory-detail').querySelector('.memory-status');if(after)after.textContent=d2.message||'已恢复。'}
+          catch(error){status.textContent=error.message||'没能恢复。';back.disabled=false}};
+        box.append(head,text,back);historyBody.appendChild(box)}
+    }catch(error){historyBody.textContent=error.message||'读取失败'}};
+  detail.replaceChildren(eyebrow,heading,facts,...extra,title.wrap,why.wrap,body.wrap,actions,status,hint,history,raw);
 }
 const LIFE_LABEL={event:'日历记录',note:'待办便签',plan:'长期计划',diary:'日记'};let lifeRows=[],lifeOwner='all',lifeKind='all',lifeDay='';const lifeDateKey=d=>d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');const lifeToday=()=>lifeDateKey(new Date());
 let lifeRevision=0,lifeLoadRevision=0,lifeFolded=0;
@@ -979,6 +1028,7 @@ function activityStatus(state){
   if(state==='进行中')return {text:'进行中',className:'running'};
   if(state==='成功')return {text:'成功',className:'success'};
   if(state==='被拒绝')return {text:'权限拒绝',className:'failure'};
+  if(state==='待选择')return {text:'待他选择',className:'running'};
   if(state==='出错'||state==='失败')return {text:'失败',className:'failure'};
   return {text:state||'未知',className:'failure'};
 }

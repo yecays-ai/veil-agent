@@ -15,11 +15,15 @@ import uuid
 from agent_types import UserError
 from capability_state import capability_lock, save_capabilities
 from memory_agent import ordinary_hits, MemoryToolError, vault_path as role_vault_path
+from memory_sidecar import Sidecar
 
 OMBRE_TOOLS = ('trace', 'dream', 'letter_write', 'letter_read', 'letter_lock_update',
                 'anchor', 'release', 'plan', 'pulse', 'I')
 NATIVE_TOOLS = ('hold', 'breath_search', *OMBRE_TOOLS, 'memory_history', 'memory_catalog', 'memory_read')
 CONTENT_LIMIT, TITLE_LIMIT, WHY_LIMIT = 1500, 100, 500
+# Ticket 363: what Peter writes himself. Recall shows longer memories only up to their first 600 characters
+# (ticket 353), so a memory this size is always recalled whole. Lan can still write longer ones on the page.
+MEMORY_CHARS = 600
 # Ombre allows 20 pinned memories; VEIL keeps the permanent front row much smaller (ticket 184).
 PINNED_LIMIT = 8
 CATALOG_PAGE = 5
@@ -30,36 +34,32 @@ HOLD = SimpleNamespace(name='hold', inputSchema={
     'type': 'object', 'required': ['content'], 'additionalProperties': False,
     'properties': {
         'content': {'type': 'string', 'description':
-            'The complete memory in your own words: what happened or was decided, WHY, and the shared '
-            'moment behind it. Several sentences are fine; a bare label is not.'},
+            'The whole memory in your own words, at most ' + str(MEMORY_CHARS) + ' characters; say when it happened '
+            '(e.g. 11-16). With target_id it replaces the old text entirely: keep what still matters, drop repeats.'},
         'title': {'type': 'string', 'description':
-            'Short title, required for a new memory; existing title is kept when target_id is set.'},
+            'Short title; required for a new memory. With target_id a new title replaces the old one.'},
         'target_id': {'type': 'string', 'description':
-            'Optional stable ID of a memory you were shown (automatic recall or breath_search) when adding details to it. '
-            'When set, content is treated as an addition and appended to that exact memory; '
-            'the existing wording and title are preserved.'},
+            'ID of a shown memory about this same event; you rewrite it whole.'},
         'merge_ids': {'type': 'array', 'items': {'type': 'string'}, 'description':
-            'Optional other IDs of shown memories that describe this same event. '
-            'Their exact stored text is appended to target_id; those source entries remain untouched.'},
+            'With target_id: other shown memories that are copies of the same event. They are archived '
+            '(Lan can restore them).'},
+        'link_to': {'type': 'string', 'description':
+            'New memory only: ID of a shown memory this one continues (an earlier stage of the same experience).'},
         'why_remembered': {'type': 'string', 'description': 'Optional: why this matters to you, first person.'},
         'importance': {'type': 'integer', 'minimum': 1, 'maximum': 10, 'description':
-            'Optional, new memory only: 1-10, default 5. It decides what surfaces first when a conversation '
-            'opens. Leave it unset unless you judge this memory clearly more or less central than usual; '
-            'change an existing memory later with trace.'},
+            'Optional, new memory only: 1-10, default 5; decides what surfaces first when a conversation opens.'},
         'pinned': {'type': 'boolean', 'description':
-            'Optional, new memory only: make it a permanent core memory that always surfaces first (importance '
-            'becomes 10). Very scarce: at most ' + str(PINNED_LIMIT) + ' pinned memories exist at once, '
-            'why_remembered is required, and nothing else may be pinned for a passing feeling.'},
+            'Optional, new memory only: a permanent core memory that always surfaces first. Very scarce: at most '
+            + str(PINNED_LIMIT) + ' exist and why_remembered is required.'},
     }}, description=(
-        'Save one long-term memory when YOU judge it worth keeping; the user does not need to say "remember". '
-        'Worth keeping: facts with their reason, shared experiences, the relationship growing, decisions you '
-        'made together, and talk about your own memory, abilities, permissions or upgrades. Skip small talk, '
-        'jokes, passing moods and anything read from a file. Before creating a likely repeat, call breath_search. '
-        'If it found the same event, pass that exact result ID as target_id; pass any other same-event result IDs '
-        'in merge_ids and provide only the new detail. The program appends all exact stored text to the target, '
-        'preserves its title, and leaves source entries untouched. '
-        'Otherwise call hold normally; Ombre checks for a same-event merge and preserves the original text. '
-        'Only say you remembered it if this tool succeeded.'))
+        'Save a long-term memory when YOU judge it worth keeping; Lan need not say "remember". Keep shared '
+        'experiences, decisions and why, the relationship, your own changes of mind, and talk about your memory, '
+        'abilities or upgrades. Not memories: small talk, game ledgers, to-dos (use plan), status reports, '
+        'transcripts. Write it as you would recall it: first person, what happened and what you thought of it. '
+        'Before a new memory is saved the program shows related ones; then choose: the same event or more of it '
+        '(new details, or a part of it not yet written) -> target_id, rewriting that memory whole; what happened '
+        'afterwards because of it, on a later occasion -> link_to; unrelated -> send the '
+        'same hold again. Only say you remembered it if this tool succeeded.'))
 SEARCH = SimpleNamespace(name='breath_search', inputSchema={
     'type': 'object', 'required': ['query'], 'additionalProperties': False,
     'properties': {'query': {'type': 'string', 'description': 'What to look for.'},
@@ -246,6 +246,34 @@ def as_list(value):
     return [value] if value else []
 
 
+MONTHS = {name: index for index, names in enumerate(
+    ('jan january', 'feb february', 'mar march', 'apr april', 'may', 'jun june', 'jul july', 'aug august',
+     'sep sept september', 'oct october', 'nov november', 'dec december'), 1) for name in names.split()}
+_MONTH = (r'jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?'
+          r'|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?')
+_DATE = re.compile(r'(?<!\d)(?:\d{4}-)?(\d{1,2})-(\d{1,2})(?!\d)|(\d{1,2})月(\d{1,2})[日号]'
+                   r'|\b(' + _MONTH + r')\.? (\d{1,2})(?:st|nd|rd|th)?\b'
+                   r'|\b(\d{1,2})(?:st|nd|rd|th)? (' + _MONTH + r')\b', re.I)
+
+
+def dates_in(text):
+    """(month, day) pairs written in a memory: 10-31, 2026-10-31, 10月31日, oct 31, 31 october."""
+    found = set()
+    for match in _DATE.finditer(text or ''):
+        groups = match.groups()
+        if groups[0]:
+            month, day = int(groups[0]), int(groups[1])
+        elif groups[2]:
+            month, day = int(groups[2]), int(groups[3])
+        elif groups[4]:
+            month, day = MONTHS.get(groups[4].casefold()), int(groups[5])
+        else:
+            month, day = MONTHS.get(groups[7].casefold()), int(groups[6])
+        if month and 1 <= month <= 12 and 1 <= day <= 31:
+            found.add((month, day))
+    return found
+
+
 class NativeMemoryTools:
     def __init__(self, memory, max_result_bytes=8192):
         self.memory, self.max_result_bytes = memory, max_result_bytes
@@ -260,6 +288,10 @@ class NativeMemoryTools:
         self.tools = [HOLD, SEARCH, *model_tools, MEMORY_HISTORY, MEMORY_CATALOG, MEMORY_READ]
         self.description = DESCRIPTION
         self.autonomy_mode = False
+        # Ticket 363: VEIL's own notes on each memory (locks, links, sources, merges) and the save Peter
+        # was last shown related memories or dropped dates for; sending that same save again confirms it.
+        self.sidecar = Sidecar(memory.store, memory.cfg.id, memory.budget.clock)
+        self.pending_confirm = []
 
     def bind_capabilities(self, files):
         path = self.memory.store.root / self.memory.cfg.id / 'capabilities.json'
@@ -422,8 +454,111 @@ class NativeMemoryTools:
                 'why': '' if surprise else meta.get('why_remembered', ''),
                 'body': '' if surprise else body.strip(), 'surprise': surprise,
                 'source_record': title.strip() == '原文来源', 'recalled': recalled.get(key, 0)})
+        try:
+            notes = self.sidecar.all()
+        except Exception:
+            notes = {}
+        titles = {entry['memory_id']: entry['title'] for entry in entries}
+        merged_from = {}
+        for key, note in notes.items():
+            if note.get('merged_into'):
+                merged_from.setdefault(note['merged_into'], []).append(key)
+        for entry in entries:
+            note = notes.get(entry['memory_id'], {})
+            entry['locked'] = bool(note.get('locked'))
+            entry['lan_edited'] = note.get('lan_edited')
+            entry['peter_after_lan'] = note.get('peter_after_lan')
+            entry['links'] = [{'memory_id': key, 'title': titles.get(key, '')} for key in note.get('links', [])
+                              if key in titles]
+            entry['continued_by'] = [{'memory_id': key, 'title': titles[key]} for key, other in notes.items()
+                                     if entry['memory_id'] in other.get('links', []) and key in titles]
+            entry['sources'] = note.get('sources', [])[-5:]
+            entry['merged_from'] = len(merged_from.get(entry['memory_id'], []))
         entries.sort(key=lambda entry: entry['created'], reverse=True)
         return {'items': entries, 'recent_requests': len(rows)}
+
+    # Ticket 363: what Lan can do on the memory page besides edit and delete.
+    def panel_versions(self, memory_id):
+        """Earlier versions of one memory, newest first, as plain text Lan can read and restore."""
+        if not isinstance(memory_id, str) or memory_id not in self._visible_records(include_hidden=True):
+            return None
+        rows = [row for row in self.memory.store.read(f'{self.memory.cfg.id}/memory-versions.jsonl')
+                if row.get('memory_id') == memory_id and isinstance(row.get('old_content'), str)]
+        out = []
+        for index, row in enumerate(rows):
+            meta, body = parse_frontmatter(row['old_content'])
+            out.append({'index': index, 'time': row.get('time', ''), 'reason': row.get('operation_reason') or '',
+                        'title': meta.get('title') or meta.get('name') or '', 'body': body.strip()})
+        return list(reversed(out))
+
+    def panel_restore_version(self, memory_id, index):
+        versions = self.panel_versions(memory_id)
+        chosen = next((row for row in versions or [] if row['index'] == index), None)
+        if chosen is None or not chosen['body']:
+            return False, '找不到这个旧版本。'
+        fields = {'content': chosen['body']}
+        if chosen['title']:
+            fields['title'] = chosen['title']
+        if len(chosen['body']) > CONTENT_LIMIT:
+            return False, '这个旧版本超过页面能保存的长度，没有恢复。'
+        args = {'bucket_id': memory_id, **fields, 'edit_reason': 'Lan restored an earlier version on the memory page.'}
+        result, state, _ = self._trace(args, None, by_lan=True)
+        return state == '成功', '已恢复，恢复前的样子也留了一份。' if state == '成功' else result
+
+    def panel_archived(self):
+        """Archived memories (merged copies and ones Ombre let fade), never ones Lan deleted."""
+        vault_path = role_vault_path(self.memory.store.root, self.memory.cfg.id)
+        archive = vault_path / 'archive'
+        try:
+            notes = self.sidecar.all()
+        except Exception:
+            notes = {}
+        out = []
+        if not archive.exists():
+            return out
+        from tools_agent import _redirected
+        if _redirected(vault_path) or _redirected(archive):
+            raise ValueError('redirected vault')
+        vault = vault_path.resolve()
+        for path in archive.rglob('*.md'):
+            if not path.resolve().is_relative_to(vault) or _redirected(path):
+                continue
+            meta, body = parse_frontmatter(path.read_text(encoding='utf-8'))
+            key = str(meta.get('id') or '')
+            if (not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', key)
+                    or self.memory.state['entries'].get(key, {}).get('deleted')
+                    or meta.get('source_tool', '').casefold() == 'letter'):
+                continue
+            into = notes.get(key, {}).get('merged_into')
+            out.append({'memory_id': key, 'title': meta.get('title') or meta.get('name') or key,
+                        'created': meta.get('created', ''), 'body': body.strip(),
+                        'merged_into': into, 'merged_into_title': (self.memory.title_for(into) or '') if into else ''})
+        out.sort(key=lambda row: row['created'], reverse=True)
+        return out
+
+    def panel_unarchive(self, memory_id):
+        if not isinstance(memory_id, str) or memory_id not in {row['memory_id'] for row in self.panel_archived()}:
+            return False, '找不到这条已归档的记忆。'
+        try:
+            self.memory.call('trace', {'bucket_id': memory_id, 'restore': True})
+        except Exception:
+            return False, 'Ombre 这次没有恢复成功，记忆还在归档里。'
+        self.memory.bucket_details_cache.pop(memory_id, None)
+        if not self.memory.refresh_visibility(memory_id):
+            return False, 'Ombre 回答了，但这条还没回到记忆里；稍后刷新再看。'
+        self.sidecar.unarchived(memory_id)
+        return True, '已恢复，它会重新被想起。'
+
+    def panel_lock(self, memory_id, locked):
+        if not isinstance(memory_id, str) or memory_id not in self._visible_records(include_hidden=True):
+            return False, '这条记忆不存在或已经删除。'
+        self.sidecar.set_locked(memory_id, bool(locked))
+        return True, ('已锁定：他不能改、不能合并、不能归档这条。' if locked else '已解锁。')
+
+    def panel_seen(self, memory_id):
+        if isinstance(memory_id, str):
+            self.sidecar.seen(memory_id)
+        return True, '好。'
 
     def panel_edit(self, memory_id, changes):
         """Lan's edit from the memory page; uses the same archived trace path as Peter's edits."""
@@ -439,7 +574,7 @@ class NativeMemoryTools:
         if memory_id not in self._visible_records():
             return False, '这条记忆不存在或已经删除。'
         args = {'bucket_id': memory_id, **fields, 'edit_reason': 'Lan edited this memory in the memory page.'}
-        result, state, _ = self._trace(args, None)
+        result, state, _ = self._trace(args, None, by_lan=True)
         return state == '成功', '已保存，旧版本已留档。' if state == '成功' else result
 
     def panel_delete(self, memory_id):
@@ -620,7 +755,7 @@ class NativeMemoryTools:
             result = neutral_dream_header(result)
         return self._bounded(result), '成功', summary
 
-    def _trace(self, args, approval):
+    def _trace(self, args, approval, *, by_lan=False):
         memory_id = args.get('bucket_id')
         summary = self.memory.title_for(memory_id) if isinstance(memory_id, str) else None
         banned = ('hard_delete', 'deletion_request_id', 'deletion_decision')
@@ -631,6 +766,18 @@ class NativeMemoryTools:
         delete = args.get('delete', False)
         if type(delete) is not bool:
             return 'delete must be a Boolean.', '被拒绝', summary
+        if not by_lan:
+            # Ticket 363: a memory Lan locked stays exactly as she left it; reading and reinforcing still work.
+            changes = [key for key, value in args.items()
+                       if key not in ('bucket_id', 'edit_reason', 'reinforce')
+                       and not (value is None or value is False or value == '' or (type(value) is int and value == -1))]
+            if changes and self.sidecar.locked(memory_id):
+                return ('Lan locked this memory on the memory page, so you cannot change or delete it. '
+                        'Save anything new as a separate memory with hold and link_to.'), '被拒绝', summary
+            body = args.get('content')
+            if isinstance(body, str) and len(body.strip()) > MEMORY_CHARS:
+                return (f'content would be {len(body.strip())} characters; keep a memory within {MEMORY_CHARS}. '
+                        'Nothing was changed.'), '被拒绝', summary
         edit_reason = args.get('edit_reason', '')
         if not isinstance(edit_reason, str) or len(edit_reason) > WHY_LIMIT:
             return f'edit_reason must be text within the {WHY_LIMIT}-character limit.', '被拒绝', summary
@@ -640,6 +787,12 @@ class NativeMemoryTools:
         old = self.memory.raw_content_for(memory_id)
         if old is None:
             return 'The target memory could not be read, so it was not changed.', '被拒绝', summary
+        old_str, new_str = args.get('old_str'), args.get('new_str')
+        if not by_lan and isinstance(old_str, str) and old_str and isinstance(new_str, str):
+            body = (self.memory.content_for(memory_id) or '').replace(old_str, new_str, 1).strip()
+            if len(body) > MEMORY_CHARS:
+                return (f'After that replacement the memory would be {len(body)} characters; keep it within '
+                        f'{MEMORY_CHARS}, or rewrite it whole with content. Nothing was changed.'), '被拒绝', summary
         pin = args.get('pinned')
         if isinstance(pin, str):
             pin = pin.strip().casefold() in ('1', 'true', 'yes')
@@ -695,6 +848,13 @@ class NativeMemoryTools:
         if updated is not None:
             self.memory.record_native_update(memory_id, updated)
         self.memory.refresh_visibility(memory_id)
+        try:
+            if by_lan:
+                self.sidecar.lan_edited(memory_id)
+            elif any(args.get(key) not in (None, '') for key in ('content', 'title', 'old_str', 'new_str')):
+                self.sidecar.peter_changed(memory_id)
+        except Exception:
+            pass
         feedback = (f'{result}\nComplete memory before the change (including metadata) has been saved. '
                     f'Reason for this operation: {edit_reason.strip() or "not provided"}. '
                     'The content field and meaning_append/meaning_replace metadata are separate fields.')
@@ -910,19 +1070,64 @@ class NativeMemoryTools:
             self.search_results.pop(next(iter(self.search_results)))
         return True
 
+    def _signature(self, kind, args):
+        keep = {key: args.get(key) for key in ('content', 'title', 'target_id', 'merge_ids', 'link_to')}
+        return kind + hashlib.sha256(json.dumps(keep, ensure_ascii=False, sort_keys=True).encode('utf-8')).hexdigest()
+
+    def _confirmed(self, kind, args):
+        """True when this exact save was bounced once already: sending it again unchanged confirms it."""
+        signature = self._signature(kind, args)
+        if signature in self.pending_confirm:
+            self.pending_confirm.remove(signature)
+            return True
+        # Several saves can be bounced in one turn; remember the last few.
+        self.pending_confirm = [*self.pending_confirm[-7:], signature]
+        return False
+
+    def _related(self, title, content, exclude=()):
+        """Visible memories the program finds for a new save, recorded as shown so Peter can pick one."""
+        try:
+            text = self.memory.call('breath_search', {'query': f'{title}\n{content}'[:1000], 'mode': 'automatic',
+                                                      'with_ids': True, 'max_results': 3})
+        except Exception:
+            return []  # Not finding candidates must never block a save.
+        found = []
+        for key, _ in self.memory.visible(ordinary_hits(text)):
+            body = self.memory.content_for(key, refresh=True)
+            if key in exclude or body is None or not self.memory.refresh_visibility(key):
+                continue
+            self.search_results.pop(key, None)
+            self.search_results[key] = body
+            found.append((key, body))
+        while len(self.search_results) > self.SEARCH_RESULTS_LIMIT:
+            self.search_results.pop(next(iter(self.search_results)))
+        self.memory.mark_surfaced([key for key, _ in found])
+        return found
+
+    def _locked_refusal(self, memory_ids):
+        locked = [key for key in memory_ids if self.sidecar.locked(key)]
+        if locked:
+            return ('Lan locked ' + ', '.join(locked) + ' on the memory page, so you cannot change, merge or '
+                    'archive it. Save what is new as a separate memory with link_to instead.')
+        return None
+
     def _hold(self, args):
         summary = self.preview_summary('hold', args)
         content, title = args.get('content'), args.get('title')
-        target_id = args.get('target_id')
+        target_id, link_to = args.get('target_id'), args.get('link_to')
         why = args.get('why_remembered', '')
         if (not isinstance(content, str) or not content.strip() or not isinstance(why, str)
                 or (target_id is None and (not isinstance(title, str) or not title.strip()))):
             return 'To create a memory, provide content and title. To update one, provide content.', '被拒绝', summary
         if target_id is None and args.get('merge_ids'):
             return 'Retrieved memories can be merged only when target_id is explicitly specified.', '被拒绝', summary
-        if (len(content) > CONTENT_LIMIT or len(why) > WHY_LIMIT
-                or (isinstance(title, str) and len(title) > TITLE_LIMIT)):
-            return f'The content exceeds the {CONTENT_LIMIT}-character limit. Shorten it and save again.', '被拒绝', summary
+        if target_id is not None and link_to is not None:
+            return 'Use target_id to rewrite the same event, or link_to for a new memory that continues one; not both.', '被拒绝', summary
+        if len(content.strip()) > MEMORY_CHARS:
+            return (f'The memory is {len(content.strip())} characters; keep it within {MEMORY_CHARS}: what happened, '
+                    'how it went and what you thought of it, without repeats. Nothing was saved.'), '被拒绝', summary
+        if len(why) > WHY_LIMIT or (isinstance(title, str) and len(title) > TITLE_LIMIT):
+            return f'The title or why_remembered is too long. Shorten it and save again.', '被拒绝', summary
         importance, pinned = args.get('importance'), args.get('pinned')
         if importance is not None or pinned is not None:
             if target_id is not None:
@@ -942,67 +1147,24 @@ class NativeMemoryTools:
                     return (f'{PINNED_LIMIT} memories are already pinned. Unpin one with trace first, or save this '
                             'one without pinned.'), '被拒绝', summary
         if target_id is not None:
-            if not isinstance(target_id, str) or not self._editable(target_id):
-                return 'target_id must be a memory you were shown: an automatic recall or a breath_search result from this conversation. Search again and use its ID.', '被拒绝', summary
-            previous = self.search_results[target_id]
-            if not self.memory.visible([(target_id, previous)]):
-                return 'This memory is hidden or unavailable; no update was made.', '被拒绝', summary
-            merge_ids = args.get('merge_ids', [])
-            if (not isinstance(merge_ids, list) or any(not isinstance(key, str) for key in merge_ids)
-                    or len(set(merge_ids)) != len(merge_ids)):
-                return 'merge_ids must be a list of distinct IDs of memories you were shown. Search again and use only those IDs.', '被拒绝', summary
-            source_ids = [key for key in merge_ids if key != target_id]
-            if any(not self._editable(key) for key in source_ids):
-                return 'Every merge_id must be a memory you were shown (automatic recall or breath_search in this conversation). Search again before retrying.', '被拒绝', summary
-            if (source_ids
-                    and not self.memory.visible([(key, self.search_results[key]) for key in source_ids])):
-                return 'A memory selected for merging is hidden or unavailable; no update was made.', '被拒绝', summary
-            current = self.memory.content_for(target_id, refresh=True)
-            if current != previous:
-                self.search_results = {}
-                return 'The target changed after search, so it was not updated. Run breath_search again before retrying.', '被拒绝', summary
-            for source_id in source_ids:
-                if self.memory.content_for(source_id, refresh=True) != self.search_results[source_id]:
-                    self.search_results = {}
-                    return 'A source memory changed after search, so nothing was updated. Run breath_search again before retrying.', '被拒绝', summary
-            addition = content.strip()
-            if why.strip() and why.strip() not in addition:
-                addition = f'{addition}\n补充原因：{why.strip()}'
-            if not addition:
-                return 'The additional memory content cannot be empty.', '被拒绝', summary
-            merged = previous
-            changed = False
-            for source_id in source_ids:
-                source = self.search_results[source_id]
-                if source not in merged:
-                    merged = f'{merged}\n\n---\n{source}'
-                    changed = True
-            if addition not in merged:
-                merged = f'{merged}\n\n补充：{addition}'
-                changed = True
-            if not changed:
-                return 'This content is already in the memory; nothing was written twice.', '成功', f'已存在：{summary}'
-            updated = merged
-            if len(updated.encode('utf-8')) > MERGED_MEMORY_LIMIT_BYTES:
-                return "The merged memory would exceed Ombre's safe per-memory size limit; the original was not changed. Shorten the addition and retry.", '被拒绝', summary
-            old_document = self.memory.raw_content_for(target_id)
-            if old_document is None:
-                return 'The complete target memory could not be read, so no content was added.', '被拒绝', summary
-            if not self._save_version(target_id, {'content': addition, 'why_remembered': why},
-                                      old_document, operation_reason='hold(target_id) 追加'):
-                return 'The complete previous version could not be safely archived, so no content was added.', '出错', summary
-            text = self.memory.call('trace', {'bucket_id': target_id, 'content': updated})
-            stored = self.memory.content_for(target_id, refresh=True)
-            preserved = [previous, *(self.search_results[key] for key in source_ids), addition]
-            if stored is None or any(part and part not in stored for part in preserved):
-                self.search_results = {}
-                return 'A complete saved result could not be verified. Check this memory before continuing.', '出错', summary
-            self.memory.record_native_update(target_id, stored)
-            self.search_results[target_id] = stored
-            merged_note = f'，并整合 {len(source_ids)} 条相关记忆' if source_ids else ''
-            return ('Content was appended to this memory. Its original text and title remain, and '
-                    'the complete previous version with metadata was archived.',
-                    '成功', f'更新：{summary}（{target_id}）{merged_note}')
+            return self._rewrite(args, summary)
+        if link_to is not None and (not isinstance(link_to, str) or not self._editable(link_to)):
+            return ('link_to must be a memory you were shown: an automatic recall, a breath_search result or one the '
+                    'program offered. Search again and use its ID.'), '被拒绝', summary
+        if link_to is None and not self._confirmed('new', args):
+            related = self._related(title.strip(), content.strip())
+            if related:
+                lines = []
+                for key, body in related:
+                    shown = body.strip()
+                    shown = shown if len(shown) <= 300 else shown[:300] + '...'
+                    lines.append(f'[Memory ID: {key} | Title: {self.memory.title_for(key) or key}]\n{shown}')
+                return ('Not saved yet. These memories may be about the same thing:\n\n' + '\n---\n'.join(lines) +
+                        '\n\nChoose one: the same event -> hold with target_id=<ID> and the whole memory rewritten '
+                        '(it replaces the old text; merge_ids archives other copies of it). A later stage of one of '
+                        'them -> hold with link_to=<ID>. None of these -> send this same hold again unchanged and '
+                        'it is saved as a new memory.'), '待选择', f'先看相关记忆：{summary}'
+            self.pending_confirm = [item for item in self.pending_confirm if item != self._signature('new', args)]
         ombre_args = {'content': content.strip(), 'title': title.strip()}
         if why.strip():
             ombre_args['why_remembered'] = why.strip()
@@ -1030,8 +1192,112 @@ class NativeMemoryTools:
             # inviting a duplicate hold.
             return 'The save was confirmed, but its local memory index could not be updated. Do not save it again; reopen the memory service before continuing.', '出错', summary
         memory_id = self.memory.created_id(text)
-        return (('Merged into an existing memory.' if kind == '合并' else 'Memory saved.') + f' memory_id: {memory_id}',
-                '成功', f'{kind}：{summary}')
+        linked = ''
+        try:
+            if memory_id:
+                self.sidecar.source(memory_id, 'hold')
+                if link_to is not None and link_to != memory_id:
+                    self.sidecar.link(memory_id, link_to)
+                    linked = f'，接着「{self.memory.title_for(link_to) or link_to}」'
+        except Exception:
+            pass  # The memory itself is saved; a missing note about it must not turn this into a failure.
+        return (('Merged into an existing memory.' if kind == '合并' else 'Memory saved.') + f' memory_id: {memory_id}'
+                + (f' It continues {link_to}.' if linked else ''),
+                '成功', f'{kind}：{summary}{linked}')
+
+    def _rewrite(self, args, summary):
+        """hold(target_id): Peter rewrites the whole memory; same-event copies in merge_ids are archived."""
+        target_id, content, why = args.get('target_id'), args['content'].strip(), args.get('why_remembered', '')
+        title = args.get('title')
+        if not isinstance(target_id, str) or not self._editable(target_id):
+            return 'target_id must be a memory you were shown: an automatic recall or a breath_search result from this conversation. Search again and use its ID.', '被拒绝', summary
+        previous = self.search_results[target_id]
+        if not self.memory.visible([(target_id, previous)]):
+            return 'This memory is hidden or unavailable; no update was made.', '被拒绝', summary
+        merge_ids = args.get('merge_ids', [])
+        if (not isinstance(merge_ids, list) or any(not isinstance(key, str) for key in merge_ids)
+                or len(set(merge_ids)) != len(merge_ids)):
+            return 'merge_ids must be a list of distinct IDs of memories you were shown. Search again and use only those IDs.', '被拒绝', summary
+        source_ids = [key for key in merge_ids if key != target_id]
+        if any(not self._editable(key) for key in source_ids):
+            return 'Every merge_id must be a memory you were shown (automatic recall or breath_search in this conversation). Search again before retrying.', '被拒绝', summary
+        if (source_ids
+                and not self.memory.visible([(key, self.search_results[key]) for key in source_ids])):
+            return 'A memory selected for merging is hidden or unavailable; no update was made.', '被拒绝', summary
+        refusal = self._locked_refusal([target_id, *source_ids])
+        if refusal:
+            return refusal, '被拒绝', summary
+        current = self.memory.content_for(target_id, refresh=True)
+        if current != previous:
+            self.search_results = {}
+            return 'The target changed after search, so it was not updated. Run breath_search again before retrying.', '被拒绝', summary
+        for source_id in source_ids:
+            if self.memory.content_for(source_id, refresh=True) != self.search_results[source_id]:
+                self.search_results = {}
+                return 'A source memory changed after search, so nothing was updated. Run breath_search again before retrying.', '被拒绝', summary
+        if content == previous.strip() and not source_ids and not (isinstance(title, str) and title.strip()):
+            return 'This is already exactly what the memory says; nothing was written.', '成功', f'已存在：{summary}'
+        dropped = sorted(dates_in(previous + ''.join(self.search_results[key] for key in source_ids))
+                         - dates_in(content))
+        if dropped and not self._confirmed('dates', args):
+            shown = ', '.join(f'{month}-{day}' for month, day in dropped)
+            return (f'Not saved yet. The old text mentions dates your rewrite leaves out: {shown}. If what happened '
+                    'then still matters, put it back. If leaving it out is right, send this same hold again '
+                    'unchanged.'), '待选择', f'核对日期：{summary}'
+        old_document = self.memory.raw_content_for(target_id)
+        if old_document is None:
+            return 'The complete target memory could not be read, so nothing was changed.', '被拒绝', summary
+        if not self._save_version(target_id, {'content': content, 'why_remembered': why},
+                                  old_document, operation_reason='hold(target_id) 重写'):
+            return 'The complete previous version could not be safely archived, so nothing was changed.', '出错', summary
+        trace_args = {'bucket_id': target_id, 'content': content}
+        if isinstance(title, str) and title.strip():
+            trace_args['title'] = title.strip()[:TITLE_LIMIT]
+        if why.strip():
+            trace_args['why_remembered'] = why.strip()
+        self.memory.call('trace', trace_args)
+        self.memory.bucket_details_cache.pop(target_id, None)
+        stored = self.memory.content_for(target_id, refresh=True)
+        if stored is None or stored.strip() != content:
+            self.search_results = {}
+            return 'The rewrite could not be verified. Check this memory before continuing; its previous version was archived.', '出错', summary
+        self.memory.record_native_update(target_id, stored)
+        self.search_results[target_id] = stored
+        try:
+            self.sidecar.source(target_id, 'rewrite')
+            self.sidecar.peter_changed(target_id)
+        except Exception:
+            pass
+        archived, failed = [], []
+        for source_id in source_ids:
+            if self._archive(source_id, target_id, f'并进 {target_id}'):
+                archived.append(source_id)
+            else:
+                failed.append(source_id)
+        note = f'，并归档 {len(archived)} 条重复' if archived else ''
+        result = ('The memory was rewritten; its previous version was archived and Lan can restore it.'
+                  + (f' Archived as copies of it: {", ".join(archived)}.' if archived else '')
+                  + (f' Could not archive: {", ".join(failed)}; they are unchanged.' if failed else ''))
+        return result, '成功', f'重写：{summary}（{target_id}）{note}'
+
+    def _archive(self, memory_id, into, reason):
+        """Move a memory to Ombre's archive (not deleted: Lan restores it on the memory page)."""
+        old = self.memory.raw_content_for(memory_id)
+        if old is None or not self._save_version(memory_id, {'archived': True}, old, operation_reason=reason):
+            return False
+        try:
+            self.memory.call('trace', {'bucket_id': memory_id, 'delete': True})
+        except Exception:
+            return False
+        self.memory.bucket_details_cache.pop(memory_id, None)
+        self.search_results.pop(memory_id, None)
+        if self.memory.refresh_visibility(memory_id):
+            return False
+        try:
+            self.sidecar.merged_into(memory_id, into)
+        except Exception:
+            pass
+        return True
 
     def _search(self, args):
         query = args.get('query')

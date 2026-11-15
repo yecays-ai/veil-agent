@@ -57,6 +57,12 @@ def resident_config(cfg, vault, token):
                       'base_url': settings['base_url'], 'dim': int(settings.get('dimensions', 1024)),
                       'timeout_seconds': 20},
     }
+    if not settings.get('ombre_auto_merge', False):
+        # Ticket 363: Ombre's own hold glues a "same event" text onto the end of an existing memory (and
+        # retitles it) without Peter knowing. Peter now decides: the program shows him related memories and he
+        # rewrites one, links a new one or saves it as new. A threshold above any score turns Ombre's merge off
+        # (0 would fall back to its default 75). Byte-identical saves are still merged by Ombre.
+        config['merge_threshold'] = 1000
     if 'deepseek' in _model_provider(cfg)['base_url'] and settings.get('ombre_model', True):
         config['dehydration']['extra_body'] = {'thinking': {'type': 'disabled'}}
     return config

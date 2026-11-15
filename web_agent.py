@@ -43,6 +43,9 @@ from codex_watch import CodexWatchController
 workbench_lock = threading.Lock()
 
 MAX_BODY = 200_000
+MEMORY_CHANGE_PATHS = ('/api/memory/edit', '/api/memory/delete', '/api/memory/versions',
+                       '/api/memory/restore-version', '/api/memory/archived', '/api/memory/unarchive',
+                       '/api/memory/lock', '/api/memory/seen')
 MAX_MEDIA_BYTES = MAX_PHOTO_BYTES
 MAX_VOICE_UPLOAD_BYTES = 10 * 1024 * 1024
 MAX_ACTIVE_VOICE_TRANSCRIPTIONS = 4
@@ -2216,14 +2219,32 @@ def make_handler(hub, token):
                 self._send(404, {'error': 'Ombre 记忆暂不可用。'})
                 return
             try:
+                tools = hub.memory_tools
+                extra = {}
                 if url.path == '/api/memory/edit':
-                    ok, message = hub.memory_tools.panel_edit(body['id'], body.get('changes') or {}
-                                                              if isinstance(body.get('changes'), dict) else {})
+                    ok, message = tools.panel_edit(body['id'], body.get('changes') or {}
+                                                   if isinstance(body.get('changes'), dict) else {})
+                elif url.path == '/api/memory/delete':
+                    ok, message = tools.panel_delete(body['id'])
+                # Ticket 363: history, archive and lock on the memory page.
+                elif url.path == '/api/memory/versions':
+                    versions = tools.panel_versions(body['id'])
+                    ok, message, extra = versions is not None, '这条记忆不存在或已经删除。', {'versions': versions or []}
+                elif url.path == '/api/memory/restore-version':
+                    index = body.get('index')
+                    ok, message = (tools.panel_restore_version(body['id'], index) if type(index) is int
+                                   else (False, '无效请求。'))
+                elif url.path == '/api/memory/archived':
+                    ok, message, extra = True, '', {'items': tools.panel_archived()}
+                elif url.path == '/api/memory/unarchive':
+                    ok, message = tools.panel_unarchive(body['id'])
+                elif url.path == '/api/memory/lock':
+                    ok, message = tools.panel_lock(body['id'], body.get('locked') is True)
                 else:
-                    ok, message = hub.memory_tools.panel_delete(body['id'])
+                    ok, message = tools.panel_seen(body['id'])
             except Exception:
-                ok, message = False, 'Ombre 暂时没有响应，这次没有改动。'
-            self._send(200 if ok else 409, {'ok': True, 'message': message} if ok else {'error': message})
+                ok, message, extra = False, 'Ombre 暂时没有响应，这次没有改动。', {}
+            self._send(200 if ok else 409, {'ok': True, 'message': message, **extra} if ok else {'error': message})
             return
 
         def _post_media(self):
@@ -2741,7 +2762,7 @@ def make_handler(hub, token):
             if url.path in ('/api/screen-pop/claim', '/api/screen-pop/event'):
                 self._post_screen_pop(url)
                 return
-            if url.path in ('/api/memory/edit', '/api/memory/delete'):
+            if url.path in MEMORY_CHANGE_PATHS:
                 self._post_memory_change(url)
                 return
             if url.path == '/api/life':

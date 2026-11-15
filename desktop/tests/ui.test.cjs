@@ -107,7 +107,7 @@ test('desktop redesign keeps real pages in one shell with a collapsible draggabl
   assert.match(html, /id="rail-approval"/);
   assert.match(html, /<h1>Peter<\/h1>/);
   assert.match(html, /data-page="chat"[^>]*><span data-lucide="message-square"><\/span><span class="nav-label">聊天<\/span>/);
-  assert.match(html, /data-memory-group="system">系统和能力<\/button><button id="memory-reload"/);
+  assert.match(html, /data-memory-group="system">系统和能力<\/button><button data-memory-group="archived">已归档<\/button><button id="memory-reload"/);
   assert.doesNotMatch(html, /和 Peter 聊聊/);
   assert.match(css, /grid-template-columns:clamp\(176px,17vw,232px\) minmax\(0,1fr\) clamp\(250px,21vw,304px\)/);
   assert.match(css, /body\.detached-window \.topbar,body\.detached-window \.navigation,body\.detached-window \.desktop-rail/);
@@ -224,4 +224,17 @@ test('settings page has a workbench switch with folder picker, and the chat log 
   assert.match(main, /'\/api\/mcp', '\/api\/workbench'/);
   assert.match(css, /#log,\.page\{scrollbar-width:none\}/);
   assert.match(css, /#log::-webkit-scrollbar,\.page::-webkit-scrollbar\{display:none/);
+});
+
+test('every memory page action the renderer posts is allowed by the main process and served by Python', async () => {
+  const [js, main, web] = await Promise.all([read('chat.js'), read('main.cjs'),
+    fs.readFile(path.join(__dirname, '..', '..', 'web_agent.py'), 'utf8')]);
+  const allowed = [...main.match(/const MEMORY_POSTS = \[([^\]]*)\]/)[1].matchAll(/'([^']+)'/g)].map(m => m[1]);
+  const served = [...web.match(/MEMORY_CHANGE_PATHS = \(([^)]*)\)/)[1].matchAll(/'([^']+)'/g)].map(m => m[1]);
+  const posted = [...new Set([...js.matchAll(/api\('(\/api\/memory\/[a-z-]+)',\s*\{/g)].map(m => m[1]))];
+  assert.ok(posted.includes('/api/memory/archived'));
+  for (const route of posted) {
+    assert.ok(allowed.includes(route), `${route} is not allowed by main.cjs`);
+    assert.ok(served.includes(route), `${route} is not served by web_agent.py`);
+  }
 });

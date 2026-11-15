@@ -82,7 +82,7 @@ def _activity_summary(row):
     row = activity_view(row)
 
     actions = []
-    status_labels = {'成功': 'succeeded', '被拒绝': 'rejected', '出错': 'failed',
+    status_labels = {'成功': 'succeeded', '被拒绝': 'rejected', '出错': 'failed', '待选择': 'waiting for your choice',
                      '已存在': 'already exists', '结果过长': 'result too long'}
     actions_to_show = list(row['tools'][:2])
     actions_to_show.extend([item for item in row['tools'][2:]

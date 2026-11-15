@@ -22,6 +22,7 @@ from decimal import Decimal
 
 from agent_types import RequestFailed, UserError
 from short_term_notes import _parse_json_object
+from memory_sidecar import Sidecar
 
 COST_CATEGORY = 'experience_memory'
 COST_ACCOUNTING = 'experience-memory'
@@ -30,12 +31,12 @@ MAX_ENTRIES = 3
 MAX_UPDATES = 3
 TITLE_CHARS = 60
 ENTRY_CHARS = 500
-UPDATE_CHARS = 300
+UPDATE_CHARS = 500       # ticket 363: an update is the whole entry rewritten, same size as an entry
 MESSAGE_CHARS = 1500      # one pasted wall of text is clipped, not allowed to crowd out the rest
 REQUEST_CHARS = 12000     # visible chat text per model call; the rest waits for the next tick
 MAX_OUTPUT_TOKENS = 3000  # room for a thinking model's reasoning; the entries themselves are short
 CANDIDATES = 12           # his latest entries offered for an update
-CANDIDATE_TAIL = 400
+CANDIDATE_CHARS = 1200    # ticket 363: he rewrites an entry, so he sees it whole (older appended ones are clipped)
 VERBATIM_RUN = 24         # an entry repeating this many characters of a message in a row is a quote, not a memory
 BACKFILL = timedelta(days=3)
 DEFAULTS = {'enabled': False, 'min_chars': 3000, 'floor_chars': 200, 'idle_minutes': 30,
@@ -57,7 +58,7 @@ For what you keep:
 - Say how you learned things: if Lan described or told you something, write that she described it, not that you saw it.
 - Never write passwords, keys or other secrets.
 
-If these messages show that your view on something in one of your earlier entries changed, or that matter moved on, do not write a new entry for it. Return an update for that entry id with one or two sentences (at most {update_chars} characters) saying what changed and because of what. The program adds the date and appends it; the earlier wording stays as it was. Do not restate the old text.
+If these messages continue something in one of your earlier entries (the matter moved on, or your view on it changed), do not write a new entry for it. Return an update for that entry id: the whole entry rewritten as you would now recall it, at most {update_chars} characters, folding in what happened since and, if your view changed, what you thought before and what changed it. It replaces the old text (the old version is kept where Lan can restore it), so keep what still matters from it.
 
 Return exactly one JSON object and nothing else:
 {{"entries":[{{"title":"short title","text":"..."}}],"updates":[{{"id":"entry id from earlier_entries","text":"..."}}]}}"""
@@ -115,6 +116,7 @@ class ExperienceMemory:
         self._stop = threading.Event()
         self._thread = None
         self._context_cache = None
+        self.sidecar = Sidecar(store, cfg.id, budget.clock)
         if getattr(self.budget, 'reconcile_unsettled', None):
             self.budget.reconcile_unsettled({COST_ACCOUNTING})
 
@@ -345,32 +347,45 @@ class ExperienceMemory:
         text = self.memory.call('hold', args, write_operation=operation)
         kind = self.memory.record_native(args, text)
         memory_id = self.memory.created_id(text)
+        try:
+            if memory_id:
+                self.sidecar.source(memory_id, 'experience')
+        except Exception:
+            pass
         self.store.append(self.path, {'kind': 'entry', 'memory_id': memory_id, 'title': entry['title'],
                                       'text': entry['text'], 'merged': kind == '合并', 'covers': span,
                                       'time': self.budget.clock()})
         return memory_id
 
-    def _save_update(self, update):
+    def _save_update(self, update, seen=None):
+        """Ticket 363: the entry is rewritten whole; the old version goes to the version record. `seen` is the
+        text the model rewrote from: if Lan changed the entry meanwhile, her text wins and this rewrite is dropped."""
         memory_id = update['id']
-        if not self._alive(memory_id):
+        if not self._alive(memory_id) or self.sidecar.locked(memory_id):
             return False
         previous = self.memory.content_for(memory_id, refresh=True)
         document = self.memory.raw_content_for(memory_id)
-        if not previous or document is None:
+        if not previous or document is None or (seen is not None and previous.strip() != seen.strip()):
             return False
-        day = self._now()
-        addition = f'[{day.strftime("%Y-%m-%d")}] {update["text"]}'
-        merged = f'{previous.rstrip()}\n\n{addition}'
+        text = update['text'].strip()
+        if text == previous.strip():
+            return False
         # Same archive Peter's own edits use, so Lan can see and restore the earlier wording.
         self.store.append(f'{self.cfg.id}/memory-versions.jsonl', {
-            'memory_id': memory_id, 'fields': ['content'], 'operation_reason': '经历整理：追加后来的变化',
+            'memory_id': memory_id, 'fields': ['content'], 'operation_reason': '经历整理：按后来的变化重写',
             'why_remembered': '', 'old_content': document})
-        self.memory.call('trace', {'bucket_id': memory_id, 'content': merged})
+        self.memory.call('trace', {'bucket_id': memory_id, 'content': text})
+        getattr(self.memory, 'bucket_details_cache', {}).pop(memory_id, None)
         stored = self.memory.content_for(memory_id, refresh=True)
-        if stored is None or previous.strip() not in stored or addition not in stored:
-            raise UserError('经历整理的追加没有得到确认；原记忆的旧版本已存档。')
+        if stored is None or stored.strip() != text:
+            raise UserError('经历整理的重写没有得到确认；原记忆的旧版本已存档。')
         self.memory.record_native_update(memory_id, stored)
-        self.store.append(self.path, {'kind': 'update', 'memory_id': memory_id, 'text': addition,
+        try:
+            self.sidecar.source(memory_id, 'experience-rewrite')
+            self.sidecar.peter_changed(memory_id)
+        except Exception:
+            pass
+        self.store.append(self.path, {'kind': 'update', 'memory_id': memory_id, 'text': text,
                                       'time': self.budget.clock()})
         return True
 
@@ -382,7 +397,7 @@ class ExperienceMemory:
         data = {
             'local_time_now': self._now().astimezone(zone).strftime('%Y-%m-%d %H:%M'),
             'earlier_entries': [{'id': c['id'], 'title': c['title'], 'written': c['written'],
-                                 'text': c['text'][-CANDIDATE_TAIL:]} for c in candidates],
+                                 'text': c['text'][:CANDIDATE_CHARS]} for c in candidates],
             'messages': [{'time': item['time'].strftime('%Y-%m-%d %H:%M'),
                           'from': 'Lan' if item['role'] == 'user' else self.cfg.name, 'text': item['text'],
                           **({'sent_on_your_own': ('after: ' + item['own']) if isinstance(item['own'], str)
@@ -414,7 +429,8 @@ class ExperienceMemory:
         try:
             entries, updates, dropped = self._validated(self._call_model(messages), batch, candidates)
             for update in updates:
-                updated += bool(self._save_update(update))
+                updated += bool(self._save_update(update, next(
+                    (c['text'] for c in candidates if c['id'] == update['id']), None)))
             for entry in entries:
                 written += self._save_entry(entry, span) is not None
         except Exception as exc:
