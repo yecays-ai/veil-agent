@@ -7,6 +7,7 @@ persona so every model sees the same reference. It can be switched off and edite
 import json
 import os
 import re
+import uuid
 from pathlib import Path
 
 from agent_types import UserError
@@ -91,9 +92,12 @@ class VoiceStyle:
             raise UserError(f'说话样例太长（{len(cleaned)} 字），最多 {MAX_CHARS} 字；它每次请求都会带上。')
         import persona_versions
         persona_versions.snapshot(self.path)  # keep the version being replaced; never raises
-        temp = self.path.with_name(self.path.name + '.tmp')
-        temp.write_text(cleaned + ('\n' if cleaned else ''), encoding='utf-8')
-        os.replace(temp, self.path)
+        temp = self.path.with_name(f'{self.path.name}.{uuid.uuid4().hex}.tmp')  # one per save: two saves never share it
+        try:
+            temp.write_text(cleaned + ('\n' if cleaned else ''), encoding='utf-8')
+            os.replace(temp, self.path)
+        finally:
+            temp.unlink(missing_ok=True)
         return self.status()
 
     def context(self):

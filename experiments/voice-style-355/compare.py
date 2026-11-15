@@ -113,7 +113,14 @@ def run(args, out):
     results = json.loads(result_path.read_text(encoding='utf-8')) if result_path.exists() else {'runs': []}
     done = {(r['model'], r['scenario'], r['variant']) for r in results['runs'] if not r.get('error')}
     results['runs'] = [r for r in results['runs'] if not r.get('error')]
-    spent = [Decimal(str(results.get('spent_cny', '0')))]
+    # Money already spent or promised survives a crash: the ledger is written before every paid request.
+    ledger_path = out / 'spend.json'
+    ledger = json.loads(ledger_path.read_text(encoding='utf-8')) if ledger_path.exists() else {}
+    spent = [max(Decimal(str(results.get('spent_cny', '0'))),
+                 Decimal(str(ledger.get('spent_cny', '0'))) + Decimal(str(ledger.get('reserved_cny', '0'))))]
+
+    def write_ledger(reserved):
+        ledger_path.write_text(json.dumps({'spent_cny': str(spent[0]), 'reserved_cny': str(reserved)}), encoding='utf-8')
     picks = [p for p in (args.pick or '').split(',') if p.strip()]
     stopped = None
     for label, provider in providers(cfg, args.models_json, picks):
@@ -126,18 +133,29 @@ def run(args, out):
                 return SimpleNamespace(content='ok（fake）', tool_calls=None), 10, 2, 0
         else:
             _, call = make_model(Path(args.env).resolve().parent if args.env else Path(args.root), role)
-        used = []
+        used, capped = [], []
 
-        def model(messages, **kwargs):
-            if spent[0] >= args.cap:
+        ceiling = (Decimal(provider['max_input_tokens']) * Decimal(str(provider['input_cny_per_million']))
+                   + Decimal(max(role.max_output_tokens, int((role.tools or {}).get('max_output_tokens') or 0))) * Decimal(str(provider['output_cny_per_million']))) / 1_000_000
+
+        def model(messages, call=call, provider=provider, ceiling=ceiling, used=used, capped=capped, **kwargs):
+            if spent[0] + ceiling > Decimal(str(args.cap)):  # the next request could pass the cap: do not send it
+                capped.append(True)  # Chat reports a raised error as a failed request, so keep a flag too
                 raise Cap()
-            response = call(messages, **kwargs)
+            write_ledger(ceiling)
+            try:
+                response = call(messages, **kwargs)
+            except Exception:
+                spent[0] += ceiling  # unknown whether it was billed: count the worst case
+                write_ledger(0)
+                raise
             prompt, completion = response[1], response[2]
             cached = getattr(response[3], 'tokens', response[3]) or 0
             used.append(prompt)
             spent[0] += (Decimal(prompt - cached) * Decimal(str(provider['input_cny_per_million']))
                          + Decimal(cached) * Decimal(str(provider['cached_input_cny_per_million']))
                          + Decimal(completion) * Decimal(str(provider['output_cny_per_million']))) / 1_000_000
+            write_ledger(0)
             return response
         try:
             for scenario, kind, turns in SCENARIOS:
@@ -169,6 +187,8 @@ def run(args, out):
                                    and r['content'].strip()]
                         earlier = [r['content'] for r in rows[:max(last_user, 0)]
                                    if r.get('role') in ('user', 'assistant') and isinstance(r.get('content'), str)]
+                    if capped:  # this run was cut short by the cap: not a result
+                        raise Cap()
                     results['runs'].append({
                         'model': label, 'model_name': provider.get('model'), 'scenario': scenario, 'kind': kind,
                         'variant': variant, 'lan': turns[-1], 'earlier': earlier, 'bubbles': bubbles,

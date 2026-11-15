@@ -1162,6 +1162,7 @@ function renderVoiceStyle(v){
   block.hidden=false;voiceStyleEnabled=v.enabled===true;
   $('voice-style-summary').textContent=(voiceStyleEnabled?'开着':'已关闭')+` · ${v.samples||0} 段样例 · ${v.characters||0} / ${v.limit||0} 字`;
   $('voice-style-toggle').textContent=voiceStyleEnabled?'关闭':'开启';
+  if(detachedView){$('voice-style-toggle').hidden=$('voice-style-save').hidden=true;$('voice-style-text').readOnly=true} // a detached context window only reads
   const box=$('voice-style-text'),text=typeof v.text==='string'?v.text:'';
   if(voiceStyleSaved===null||box.value===voiceStyleSaved)box.value=text;
   voiceStyleSaved=text;
@@ -1170,7 +1171,7 @@ async function postVoiceStyle(body,done){
   const note=$('voice-style-note');note.textContent='';
   try{const r=await api('/api/voice-style',body);const d=await r.json();
     if(!r.ok)throw new Error(d.error||'没有保存成功');
-    if(body.text!==undefined)voiceStyleSaved=null;
+    if(body.text!==undefined&&$('voice-style-text').value===body.text)voiceStyleSaved=null;
     renderVoiceStyle(d.voice_style);note.textContent=done}
   catch(e){note.textContent=e.message||'没有保存成功'}
 }
