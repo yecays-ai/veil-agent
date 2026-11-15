@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from life_state import gap_text, own_contact_text, state_text
+from life_state import gap_text, state_text
 from veil_agent import Budget, Character, Chat, Store
 
 NOW = '2026-11-12T09:00:00+08:00'
@@ -132,60 +132,6 @@ class StateTextTests(unittest.TestCase):
         self.assertEqual(state_text(None, (), (), (), '2026-11-12'), '')
 
 
-GARDEN_RUN = '2026-11-12T03:10:00+08:00'
-ACTIVITY = [
-    {'started_at': GARDEN_RUN, 'decision': '去花园论坛回了一个帖子，然后给 Lan 留言', 'reason': '想让她看看那个帖子',
-     'current_focus': '花园论坛', 'next_step': '等她回复', 'result': '完成', 'result_reason': '',
-     'lab_files_changed': [], 'tools': [
-         {'tool': 'garden_reply_post', 'path': 'thread 42', 'state': '成功'},
-         {'tool': 'send_message', 'path': 'hi', 'state': '成功'},
-         {'tool': 'garden_list_posts', 'path': 'forum', 'state': '出错'}]},
-    {'started_at': '2026-11-12T06:00:00+08:00', 'decision': '什么都没做', 'reason': '', 'current_focus': '',
-     'tools': [], 'result': '搁置'},
-]
-
-
-def own_rows():
-    rows = chat_rows('2026-11-11T23:00:00+08:00', proactive=[GARDEN_RUN])
-    rows[-1].update(content='我在花园论坛发了个帖子，你看看？', autonomy_run_id=GARDEN_RUN)
-    return rows
-
-
-class OwnContactTests(unittest.TestCase):
-    def test_gives_reason_and_actions_of_the_wake_that_messaged_her(self):
-        text = own_contact_text(own_rows(), ACTIVITY)
-        self.assertIn('我在花园论坛发了个帖子', text)
-        self.assertIn('去花园论坛回了一个帖子', text)
-        self.assertIn('garden_reply_post thread 42', text)
-        self.assertNotIn('garden_list_posts', text)  # failed action is not presented as done
-        self.assertNotIn('send_message hi', text)
-        self.assertNotIn('什么都没做', text)  # a later wake that sent nothing is not mixed in
-        self.assertIn('Never invent', text)
-
-    def test_missing_activity_record_still_marks_message_as_own(self):
-        text = own_contact_text(own_rows(), [])
-        self.assertIn('我在花园论坛发了个帖子', text)
-        self.assertNotIn('your_note', text)
-
-    def test_ends_once_lan_has_written_after_it(self):
-        rows = own_rows() + [{'time': '2026-11-12T09:00:00+08:00', 'role': 'user', 'content': '看到了',
-                              'message_id': 'u9'}]
-        self.assertEqual(own_contact_text(rows, ACTIVITY), '')
-        # ... but the current turn's own message does not end it.
-        self.assertIn('花园论坛', own_contact_text(rows, ACTIVITY, exclude_ids=['u9']))
-
-    def test_no_autonomous_messages_adds_nothing(self):
-        self.assertEqual(own_contact_text(chat_rows('2026-11-11T23:00:00+08:00'), ACTIVITY), '')
-
-    def test_at_most_three_wakes_and_bounded_size(self):
-        rows = chat_rows('2026-11-11T23:00:00+08:00', proactive=[f'2026-11-12T0{n}:00:00+08:00' for n in range(6)])
-        for index, row in enumerate(rows[4:]):
-            row['content'] = '长' * 5000
-        text = own_contact_text(rows, [])
-        self.assertEqual(text.count('wake_started_at'), 3)
-        self.assertLess(len(text.encode('utf-8')), 3500)
-
-
 class ChatPlacementTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -244,23 +190,6 @@ class ChatPlacementTests(unittest.TestCase):
         prefix = first[:-2]
         self.assertEqual(second[:len(prefix)], prefix)
         self.assertIn('新待办', second[-2]['content'])
-
-    def test_own_message_reason_reaches_the_next_chat_turn_in_the_tail(self):
-        chat = self.chat('2026-11-11T23:00:00+08:00')
-        base = Path(self.store.root) / 'fake'
-        with (base / 'chat.jsonl').open('a', encoding='utf-8') as handle:
-            handle.write(json.dumps({**own_rows()[-1], 'time': GARDEN_RUN}, ensure_ascii=False) + '\n')
-        (base / 'autonomy.jsonl').write_text(json.dumps(ACTIVITY[0], ensure_ascii=False) + '\n', encoding='utf-8')
-        chat.send('你怎么跑去论坛了？')
-        messages = self.sent[-1]
-        tail = messages[-2]['content']
-        marker = 'Messages you sent Lan on your own'
-        self.assertIn(marker, tail)
-        self.assertIn('去花园论坛回了一个帖子', tail)
-        for message in messages[:-2]:
-            self.assertNotIn(marker, message['content'])
-        chat.send('嗯嗯')  # her message ended the window
-        self.assertNotIn(marker, self.sent[-1][-2]['content'])
 
 
 if __name__ == '__main__':

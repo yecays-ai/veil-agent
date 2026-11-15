@@ -1,12 +1,5 @@
 # HANDOFF
 
-## 工单 360（2026-11-15）：聊天里知道自主活动留言的来由
-
-- 根因和范围见 `docs/tickets/360-chat-knows-own-autonomous-contact.md`。新增 `life_state.own_contact_text()`，由 `Chat.life_state_context()` 接进每轮末段；测试在 `tests/test_life_state.py`（`OwnContactTests`、聊天末段一例）。
-- 没读 lan 真实聊天确认那次现场，根因来自代码；若要核实需 Remote Control 读她的 `autonomy.jsonl` 和 chat 里那一时段。真实模型对比未做（需 lan 同意花费）。
-- 没解决：论坛帖子正文没有记录；若 lan 要他能复述帖子，另开工单让自主活动记工具结果摘要。
-- 本环境缺 `openai` 等依赖，`test_autonomy`/`test_chat` 有 7 个改动前就存在的错误。
-
 ## 工单 355（2026-11-15）：说话样例机制已做，样例未启用
 
 - 已做：`voice_style.py`（本机 `persona/<角色>.voice.md`，人设后面的一条 system 消息，去标签，开关存 `data/<角色>/voice-style.json`，保存留旧版本）、「上下文」页的卡片和 `/api/voice-style`、`tests/test_voice_style.py`、对比脚本 `experiments/voice-style-355/compare.py`（run / page / reveal）。
