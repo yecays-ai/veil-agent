@@ -1,5 +1,13 @@
 # HANDOFF
 
+## 工单 363（2026-11-16）：记忆不再越整理越长（三步里的第 1 步）
+
+- 方案、Lan 的决定和验收在 `docs/tickets/363-memory-rewrite-not-append.md`。路线的另两步：②自动想起带出一条时附这段经历的目录（必须排在③前面，否则 353 的「同一事件只带一条」会把连起来的经历压成一片）③整理旧的 193 条（审计找到的 28 段经历由 Lan 勾选后再连；最肿的先缩写逐条对比；26 条非记忆逐条给去处）。
+- 代码：`memory_native.py`（`_hold` 先找候选、`_rewrite`、`_archive`、`dates_in`、锁定检查、记忆页的 `panel_versions / panel_restore_version / panel_archived / panel_unarchive / panel_lock / panel_seen`）、新文件 `memory_sidecar.py`（VEIL 自己的锁定、接续、写入时间、并进哪条，只追加，不含正文）、`ombre_resident.resident_config`（`merge_threshold`）、`experience_memory._save_update`（重写）、`web_agent.py` 新接口、`desktop/chat.js` 记忆页。测试 `tests/test_memory_363.py`。
+- 注意：Ombre 的配置只在 Ombre 启动时写，Ombre 还在跑时更新代码不生效；`record_native_update` 会重建 state 条目，所以新字段放侧车，不放 state。
+- 全量测试改前 35 项失败（云端环境），改后多 1 项 `test_watcher_cleans_each_browser_after_it_exits`，单独重跑 3 次都通过，是计时不稳，与本单无关。
+- 对比脚本 `experiments/memory-363/compare.py`（假 Ombre、虚构 4 条记忆、5 个场景；PYTHONPATH 指向 main 跑 `--label before`，指向分支跑 `--label after`）。
+
 ## 工单 362（2026-11-16，外部审计带入，代码未改）
 
 - 这单来自 Lan 和外部审计的一段会话，不是开发窗口写的。只加文档、示例和回归集，不改 `voice_style.py`、不改人设、不改程序行为。

@@ -222,15 +222,15 @@ class WritingTests(Fixture):
         self.reply([{'title': '她想换记忆系统', 'text': '11月12日上午 Lan 想把我的记忆整个换掉，我没同意，觉得这想法有点怪。'}])
         self.feature.run_if_due()
 
-    def test_a_changed_mind_is_appended_with_its_date_and_the_old_words_stay(self):
+    def test_a_changed_mind_rewrites_the_entry_and_the_old_version_is_kept(self):
+        # Ticket 363: an update is the whole entry rewritten (Lan 2026-11-15), not a dated line appended.
         self.first_entry()
         self.add(long_talk('2026-11-20', 14))
         self.clock[0] = '2026-11-20T16:00:00+08:00'
-        self.reply(updates=[{'id': 'm1', 'text': '看了她做的样子以后改主意了，现在觉得还蛮不错的。'}])
+        rewritten = '11月18日蓝想改记忆系统，我起初觉得这想法有点怪；20日看了她做的样子以后改主意了，现在觉得还蛮不错的。'
+        self.reply(updates=[{'id': 'm1', 'text': rewritten}])
         self.assertEqual(self.feature.run_if_due(), 'written')
-        content = self.ombre.items['m1']['content']
-        self.assertIn('觉得这想法有点怪。', content)
-        self.assertTrue(content.endswith('[2026-11-20] 看了她做的样子以后改主意了，现在觉得还蛮不错的。'))
+        self.assertEqual(self.ombre.items['m1']['content'], rewritten)
         self.assertEqual(len(self.ombre.items), 1)
         versions = self.store.read('fake/memory-versions.jsonl')
         self.assertIn('觉得这想法有点怪', versions[-1]['old_content'])   # the earlier version is archived
@@ -350,7 +350,7 @@ class RealMemoryTests(unittest.TestCase):
     """The append path against the real memory_agent.Memory (fake Ombre child process)."""
     setUp = test_native_memory.OmbreToolGuardTests.setUp
 
-    def test_update_appends_through_trace_and_archives_the_old_version(self):
+    def test_update_rewrites_through_trace_and_archives_the_old_version(self):
         clock = ['2026-11-20T16:00:00+08:00']
         budget = Budget(self.store, clock=lambda: clock[0])
         reply = json.dumps({'entries': [], 'updates': [{'id': 'mem001', 'text': '后来觉得还不错。'}]},
@@ -365,7 +365,8 @@ class RealMemoryTests(unittest.TestCase):
             self.store.append('fake/chat.jsonl', item)
         self.assertEqual(feature.run_if_due(), 'written')
         stored = self.path.read_text(encoding='utf-8')
-        self.assertIn('old memory body\n\n[2026-11-20] 后来觉得还不错。', stored)
+        self.assertIn('---\n后来觉得还不错。', stored)
+        self.assertNotIn('old memory body', stored)
         self.assertIn('old memory body', self.store.read('fake/memory-versions.jsonl')[0]['old_content'])
         self.assertEqual([name for name, _ in self.backend.calls], ['trace'])
         self.assertIn('后来觉得还不错', feature.context()['content'])

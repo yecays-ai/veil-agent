@@ -262,15 +262,17 @@ class NativeMemoryTests(unittest.TestCase):
         self.assertIn('lamp memory', text)
         self.assertIn(f'Memory ID: {key}', text)
         self.assertIn('Title: a', text)
-        self.tools.invoke('hold', {'target_id': key, 'content': 'It was a gift from her sister.'})
+        # Ticket 363: hold(target_id) rewrites the whole memory instead of appending to it.
+        self.tools.invoke('hold', {'target_id': key, 'content': 'lamp memory: it was a gift from her sister.'})
         self.assertEqual(len(self.backend.rows), 1)
-        self.assertIn('lamp memory', self.backend.rows[key]['content'])
-        self.assertIn('It was a gift from her sister.', self.backend.rows[key]['content'])
+        self.assertEqual(self.backend.rows[key]['content'], 'lamp memory: it was a gift from her sister.')
         self.memory.command(f'/delete {key}')
         self.memory.command(f'/delete {key} 确认')
         text, _, _ = self.tools.invoke('breath_search', {'query': 'lamp'})
         self.assertEqual(text, 'No relevant memories were found.')
-        self.tools.invoke('hold', {'title': 'b', 'content': 'long ' * 200})
+        self.tools.invoke('hold', {'title': 'b', 'content': 'long ' * 110})
+        self.tools.invoke('hold', {'title': 'c', 'content': 'long ' * 110 + 'again'})
+        self.tools.invoke('hold', {'title': 'c', 'content': 'long ' * 110 + 'again'})
         text, _, _ = self.tools.invoke('breath_search', {'query': 'long'})
         self.assertIn('[已截断]', text)
 
@@ -755,17 +757,17 @@ class OmbreToolGuardTests(unittest.TestCase):
                                                'why_remembered': 'the event matters'})
 
         self.assertEqual(state, '成功')
-        self.assertIn('complete previous version with metadata was archived', result)
+        self.assertIn('previous version was archived', result)
         versions = self.store.read('fake/memory-versions.jsonl')
         self.assertEqual(len(versions), 1)
         self.assertEqual(versions[0]['old_content'], original)
-        self.assertEqual(versions[0]['operation_reason'], 'hold(target_id) 追加')
+        self.assertEqual(versions[0]['operation_reason'], 'hold(target_id) 重写')
         self.assertEqual(versions[0]['why_remembered'], 'the event matters')
         self.assertIn('added detail', self.path.read_text(encoding='utf-8'))
         history, history_state, _ = self.call('memory_history', {'memory_id': 'mem001'})
         self.assertEqual(history_state, '成功')
         self.assertIn('old meaning metadata', history)
-        self.assertIn('Reason for this operation: hold(target_id) 追加', history)
+        self.assertIn('Reason for this operation: hold(target_id) 重写', history)
         self.assertIn('Why this memory matters (why_remembered): the event matters', history)
 
     def test_hold_target_accepts_automatically_recalled_memory_but_not_unseen_ones(self):
@@ -829,7 +831,7 @@ class OmbreToolGuardTests(unittest.TestCase):
         result, state, _ = self.call('hold', {'target_id': 'mem001', 'content': 'added detail'})
 
         self.assertEqual(state, '出错')
-        self.assertIn('no content was added', result)
+        self.assertIn('nothing was changed', result)
         self.assertEqual(self.path.read_text(encoding='utf-8'), original)
         self.assertEqual(self.backend.calls, [])
 
@@ -874,12 +876,12 @@ if __name__ == '__main__':
 SAMPLES = {
     # (persona, old memory, thinking, discussion, limits, tokens per UTF-8 byte a real provider would report)
     'zh': ('他是 lan 的男朋友和 AI 伴侣，说话温柔。' * 90, '一起经历过的事和原因。' * 60,
-           '他想了想这件事要不要记下来。' * 70, '我们聊了记忆能不能编辑、合并。' * 90, '每条记忆最多 1500 字。' * 90, 0.4),
+           '他想了想这件事要不要记下来。' * 70, '我们聊了记忆能不能编辑、合并。' * 40, '每条记忆最多 600 字。' * 40, 0.4),
     'en': ('He is lan\'s boyfriend and AI companion and speaks warmly. ' * 80,
            'Things we went through together and the reasons behind them. ' * 40,
            'He thought about whether this is worth remembering for the long term. ' * 70,
-           'We talked about whether memories can be edited or merged. ' * 25,
-           'Each memory is limited to fifteen hundred characters in length. ' * 22, 0.3),
+           'We talked about whether memories can be edited or merged. ' * 10,
+           'Each memory is limited to six hundred characters in length. ' * 9, 0.3),
 }
 
 
@@ -928,6 +930,9 @@ class SearchThenSaveTests(unittest.TestCase):
             self.message([self.call('breath_search', {'query': '重复 记忆'}, 's2')]),
             self.message([self.call('hold', {'title': '关于记忆的讨论', 'content': self.talk}, 'h1'),
                           self.call('hold', {'title': '记忆长度', 'content': self.limit_text}, 'h2')]),
+            # Ticket 363: the program showed related memories; sending the same save again keeps it as new.
+            self.message([self.call('hold', {'title': '关于记忆的讨论', 'content': self.talk}, 'h3')]),
+            self.message([self.call('hold', {'title': '记忆长度', 'content': self.limit_text}, 'h4')]),
             self.message(content='好，我都记下了。'),
         ]
         requests = []
@@ -940,7 +945,7 @@ class SearchThenSaveTests(unittest.TestCase):
         output = []
         chat = Chat(self.cfg, self.store, self.budget, model, self.memory, self.tools, output=output.append)
         self.assertEqual(chat.send('你能删除、编辑、合并重复的记忆吗？每条有长度限制吗？'), '好，我都记下了。')
-        self.assertEqual(len(requests), 4)
+        self.assertEqual(len(requests), 6)
         self.assertEqual(len([n for n, _ in self.backend.calls if n == 'hold']), 2)
         self.assertFalse(any('被拒绝' in line for line in output))
         request_bytes = len(json.dumps(requests[2], ensure_ascii=False).encode('utf-8'))

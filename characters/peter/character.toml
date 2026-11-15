@@ -39,6 +39,9 @@ enabled = true
 mode = "native"
 # Ombre's own tagging and same-event merge use the chat model and key; false keeps default tags only.
 ombre_model = true
+# Ticket 363: Ombre no longer glues a "same event" text onto an old memory by itself; Peter is shown related
+# memories and rewrites, links or saves new. true restores Ombre's own merge (takes effect when Ombre restarts).
+ombre_auto_merge = false
 # Role-local Ombre HTTP listener; future roles must choose a distinct port.
 ombre_port = 18011
 model = "BAAI/bge-m3"
