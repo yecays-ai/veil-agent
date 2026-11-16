@@ -6,6 +6,12 @@
 - 代码：`memory_native.py` 的 `panel_restore_version`（改用 `MERGED_MEMORY_LIMIT_BYTES`，超 600 字提示）；`memory_agent.py` 传完整 created 给目录；`recall_rotation.py` 新 `created_key` 排序；`desktop/chat.css` 末尾 `#voice-style-block{flex:0 0 auto;min-height:auto}`。测试：`tests/test_memory_363.py`（长旧版本恢复、超 Ombre 上限不恢复）、`tests/test_recall_rotation.py`（同日三段顺序，已确认在旧代码上会失败）、`desktop/tests/ui.test.cjs`。静态页面截图确认修改前按钮被盖（卡片底部 682px、下一张卡顶部 519px），修改后不重叠。
 - 提醒：整理第一批的教训（给后续批次）：旧库里 7 条 `feel_` 是单独的向量召回通道（相似度 ≥0.65，召回第 2 位），归档它们等于拆掉了「前」里问事实题的主要入口；整理要看每条在召回里承担的作用，不是只看内容是否重复。
 
+## DeepSeek 重写回复报错（2026-11-16）
+
+- 根因：`veil_agent.py` 的工具循环里，输出上限续写、要求回复、假表情包重试三处把他的回复放回请求时只带 `content`，丢了 `reasoning_content`；DeepSeek 思考模式要求带回，报 400。改为共用 `assistant_retry_turn()`。其它放回助手消息的路径（工具调用、她插话）原本就带。测试 `tests/test_free_reply.py` 一例。
+- 现场证据：Lan 电脑 `data/peter/provider-errors.jsonl` 11-16 06:35:57，第一步已结算（costs.jsonl），没有工具调用，紧接着第二次请求被拒。
+- 未处理：DeepSeek 不调用工具。历史里他发过的消息和表情包（`[表情包：图集/名字]`）都以纯文字给模型，80 轮历史 + 本机说话样例都是纯文字，DeepSeek 照着打字。Lan 的 Peter 请求统计：11-08 DeepSeek 10/11 次用了工具，11-13 起 5/11、2/5、1/3、11-16 0 次；grok 一直几乎每次都用。方案待和 Lan 讨论。
+
 ## 工单 363（2026-11-16）：记忆不再越整理越长（三步里的第 1 步）
 
 - 方案、Lan 的决定和验收在 `docs/tickets/363-memory-rewrite-not-append.md`。路线的另两步：②自动想起带出一条时附这段经历的目录（必须排在③前面，否则 353 的「同一事件只带一条」会把连起来的经历压成一片）③整理旧的 193 条（审计找到的 28 段经历由 Lan 勾选后再连；最肿的先缩写逐条对比；26 条非记忆逐条给去处）。
