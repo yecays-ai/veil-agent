@@ -44,6 +44,10 @@ QUESTIONS = (
     ('asks_middle', 'what happened after i ripped out those rows on the scarf?'),
     ('unrelated', 'i want noodles for dinner tonight, any ideas?'),
 )
+READ_TOOL = {'type': 'function', 'function': {
+    'name': 'memory_read', 'description': 'Read the full text of one memory by its memory_id.',
+    'parameters': {'type': 'object', 'required': ['memory_id'], 'additionalProperties': False,
+                   'properties': {'memory_id': {'type': 'string'}}}}}
 STOP = set('a an and the to of i it is was me my she her we on in for so at be that this what or no do not you '
            'did after those about any want tonight'.split())
 STAGE_WORDS = (('stage1', ('grey', 'rib', 'first snow')),
@@ -116,19 +120,39 @@ def main():
                     if spent[0] >= args.cap:
                         raise StopIteration
                     block = memory.context(question, include_opening=False)[-1]
-                    response = call([{'role': 'system', 'content': cfg.persona}, block,
-                                     {'role': 'user', 'content': question}], max_output_tokens=300)
-                    answer, prompt, completion = response[0], response[1], response[2]
-                    per_call = price.get('cny_per_call')
-                    spent[0] += Decimal(str(per_call)) if per_call else (
-                        Decimal(prompt) * Decimal(str(price['input_cny_per_million']))
-                        + Decimal(completion) * Decimal(str(price['output_cny_per_million']))) / 1_000_000
+                    messages = [{'role': 'system', 'content': cfg.persona}, block,
+                                {'role': 'user', 'content': question}]
+                    reads = []
+                    for _ in range(3):      # the real chat loop: answer, or read a memory and answer again
+                        response = call(messages, max_tokens=300, tools=[READ_TOOL])
+                        message, prompt, completion = response[0], response[1], response[2]
+                        per_call = price.get('cny_per_call')
+                        spent[0] += Decimal(str(per_call)) if per_call else (
+                            Decimal(prompt) * Decimal(str(price['input_cny_per_million']))
+                            + Decimal(completion) * Decimal(str(price['output_cny_per_million']))) / 1_000_000
+                        tool_calls = getattr(message, 'tool_calls', None) or []
+                        if not tool_calls:
+                            break
+                        messages.append({'role': 'assistant', 'content': message.content or '', 'tool_calls': [
+                            {'id': t.id, 'type': 'function',
+                             'function': {'name': t.function.name, 'arguments': t.function.arguments}}
+                            for t in tool_calls]})
+                        for t in tool_calls:
+                            try:
+                                key = json.loads(t.function.arguments).get('memory_id')
+                            except ValueError:
+                                key = None
+                            reads.append(key)
+                            row = ROWS.get(key)
+                            messages.append({'role': 'tool', 'tool_call_id': t.id, 'content': (
+                                f'{row[0]} ({row[1][:10]})\n{row[2]}' if row else 'This memory does not exist.')})
+                    answer = (message if isinstance(message, str) else message.content) or ''
                     low = answer.lower()
                     results['runs'].append({
                         'sample': sample, 'question': name, 'recalled': list(memory.last_context_refs),
                         'directory_in_block': 'longer experience' in block['content'],
                         'stages_covered': [label for label, words in STAGE_WORDS if any(w in low for w in words)],
-                        'block_chars': len(block['content']), 'answer': answer})
+                        'block_chars': len(block['content']), 'memory_reads': reads, 'answer': answer})
                 memory.__exit__(None, None, None)
     except StopIteration:
         results['stopped'] = f'cost cap {args.cap} reached'
