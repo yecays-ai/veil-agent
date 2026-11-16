@@ -124,6 +124,8 @@ def main():
                                 {'role': 'user', 'content': question}]
                     reads = []
                     for _ in range(3):      # the real chat loop: answer, or read a memory and answer again
+                        if spent[0] >= args.cap:
+                            raise StopIteration
                         response = call(messages, max_tokens=300, tools=[READ_TOOL])
                         message, prompt, completion = response[0], response[1], response[2]
                         per_call = price.get('cny_per_call')

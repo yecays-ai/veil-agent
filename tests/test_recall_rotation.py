@@ -284,6 +284,13 @@ class RecallRotationTests(unittest.TestCase):
         self.assertNotIn('spiral', text)
         self.assertNotIn('one stage of a longer experience', text)   # nothing left to list
 
+    def test_a_stage_hidden_on_the_memory_page_is_not_listed(self):
+        memory = self.story(recall={'random_chance': 0})
+        memory.state['entries']['story_b'] = {'title': 'The letter', 'time': 'x', 'hidden': True, 'text': ''}
+        text, _ = self.recall(memory, 'domino stacked')
+        self.assertNotIn('The letter', text)
+        self.assertIn('Waking up to the spiral', text)     # the other stage is still there
+
     def test_the_directory_can_be_turned_off(self):
         memory = self.story(recall={'random_chance': 0, 'directory': False})
         text, refs = self.recall(memory, 'domino stacked')

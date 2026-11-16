@@ -1174,7 +1174,10 @@ class Memory:
                         if 'title' not in meta and 'name' not in meta:
                             continue  # no such memory file
                         if member not in cache:
-                            cache[member] = self.refresh_visibility(member)
+                            # Ombre's own lifecycle flags, then the local ones (hidden on the memory page,
+                            # folded into another): the same two checks automatic recall itself applies.
+                            cache[member] = bool(self.refresh_visibility(member)
+                                                 and self.visible([(member, '')]))
                         if not cache[member]:
                             continue
                     meta = meta_of(key if member == key else member)
