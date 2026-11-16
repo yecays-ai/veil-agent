@@ -1,5 +1,10 @@
 # HANDOFF
 
+## 工单 369 交接
+- 去重判定改在 `recall_rotation.py`（`REPEAT_LINKS` 只含 same_event；`EVENT_LINKS` 仍是整段经历用于目录）和 `memory_agent.py` 的 `context()` 里 `duplicate()`/`same_experience()`；`stage_slots` 默认 2。说明在 `docs/tickets/369-recall-keeps-adjacent-stages.md`。
+- 待 lan 真机验收：问「拒绝写入、又让他覆盖第一个文件那次」两段是否都想得起；日常单话题不应出现同一经历占满名额。
+- 已知限制：G1 原问法检索不到闸门（检索未命中，另议）。
+
 ## 工单 368（2026-11-16）：自动整理写入前先看 Peter 已存过什么
 
 - 说明在 `docs/tickets/368-experience-tidy-checks-before-writing.md`。代码在 `experience_memory.py`（`_offer/_own_saves/_library/_drafts_related/_validated`、`_digest` 里的第二次询问）和 `memory_agent.py` 的 `experience_stages`（供整理用，和 365 目录同一条关联链）。
