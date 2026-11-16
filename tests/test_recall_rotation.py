@@ -293,6 +293,22 @@ class RecallRotationTests(unittest.TestCase):
         self.assertEqual(memory.last_recall_skipped['stage_cap'], 1)
         self.assertIn('Domino night', text)                     # the blocked stage is still in the directory line
 
+    def test_stage_cap_follows_ombre_continuation_links_through_a_chain(self):
+        """Ticket 369 review: A <- B <- C joined only by Ombre continuation links is one experience of three
+        stages; with two slots the third hit is held back, not recalled because it only touches B directly."""
+        rows = {
+            'ca': {'content': 'kite flying first attempt windy hill', 'title': 'Kite one', 'created': '2026-11-01T08:00:00'},
+            'cb': {'content': 'kite flying second attempt string snapped', 'title': 'Kite two',
+                   'created': '2026-11-02T08:00:00', 'links': [('ca', 'continuation_of')]},
+            'cc': {'content': 'kite flying third attempt finally soared', 'title': 'Kite three',
+                   'created': '2026-11-03T08:00:00', 'links': [('cb', 'continuation_of')]},
+        }
+        memory = self.memory(rows=rows, recall={'random_chance': 0})
+        text, refs = self.recall(memory, 'kite flying attempt')
+        self.assertEqual(len(refs), 2)
+        self.assertEqual(memory.last_recall_skipped['stage_cap'], 1)
+        self.assertEqual(memory.last_recall_skipped['same_event'], 0)
+
     def test_ombre_event_links_make_a_directory_too_and_a_lone_memory_gets_none(self):
         memory = self.memory(recall={'random_chance': 0})
         text, refs = self.recall(memory, 'garden roses planted spring')

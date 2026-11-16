@@ -1240,7 +1240,7 @@ class Memory:
         """This turn's automatic memories. `rotate` is for wakes whose text names no topic (ticket 353)."""
         from recall_relevance import cosine
         from recall_rotation import (EVENT_LINKS, asks_about_past, drift_hits, excerpt, experience_chain,
-                                     linked_as_event, rotate as rotated, same_event)
+                                     front_matter, rotate as rotated, same_event)
         self._turn_notice_local.seen = set()
         self.last_context_refs = []
         self.last_context_kinds = {}
@@ -1298,11 +1298,27 @@ class Memory:
 
         adjacency = self._event_adjacency() if recall_cfg['dedup'] or recall_cfg['directory'] else {}
 
+        inbound = self._ombre_event_sources() if recall_cfg['dedup'] else {}
+        link_cache = {}
+
+        def own_links(node):
+            if node not in link_cache:
+                links = metas.get(node, {}).get('links')
+                if links is None:
+                    try:
+                        links = front_matter(self.raw_content_for(node))['links']
+                    except Exception:
+                        links = []
+                link_cache[node] = {target for target, kind in links if kind in EVENT_LINKS}
+            return link_cache[node]
+
+        def neighbours(node):
+            # Ticket 369: Peter's link_to notes (sidecar) and Ombre's continuation links, both directions, so a
+            # stage reached only through Ombre's links counts toward the same experience as the directory shows.
+            return set(adjacency.get(node, ())) | inbound.get(node, set()) | own_links(node)
+
         def same_experience(key, other):
-            # Ticket 365: stages Peter linked as one experience (the sidecar is where his link_to notes live; Ombre's
-            # own relation_links never saw them) and Ombre's continuation links.
-            return (key == other or other in experience_chain(key, lambda node: adjacency.get(node, ()))
-                    or linked_as_event(key, other, metas, EVENT_LINKS))
+            return key == other or other in experience_chain(key, neighbours)
 
         def duplicate(key, kept):
             # Ticket 369: only a repeat (Ombre's same_event, near-identical text) is dropped. Another stage of the
