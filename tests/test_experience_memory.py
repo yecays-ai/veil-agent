@@ -269,16 +269,108 @@ class WritingTests(Fixture):
         self.assertEqual(self.ombre.items['kyc']['content'], story)
         self.assertEqual(len(self.ombre.items), 1)                      # nothing new saved beside it
 
-    def test_locked_or_overlong_library_memories_are_not_offered(self):
+    def test_locked_memories_are_not_offered_and_overlong_ones_only_to_continue(self):
+        # Ticket 368: a memory too long to be read whole may be continued but never rewritten from a clipped view.
         self.ombre.items['locked'] = {'title': 'a', 'content': '她改过并锁定的一条。'}
         self.ombre.items['long'] = {'title': 'b', 'content': '账' * 2000}
         self.ombre.found = ['locked', 'long']
         self.feature.sidecar.set_locked('locked', True)
         self.add(long_talk(DAY1))
         self.clock[0] = f'{DAY1}T12:00:00+08:00'
+        self.reply([{'title': '后来', 'text': '11月13日又有了新的进展，我记着。', 'continues': 'long'}],
+                   updates=[{'id': 'long', 'text': '想用一小段把两千字的旧账重写掉'}])
+        self.feature.run_if_due()
+        offered = self.sent()['earlier_entries']
+        self.assertEqual([item['id'] for item in offered], ['long'])
+        self.assertTrue(offered[0]['too_long_to_rewrite'])
+        self.assertEqual(len(offered[0]['text']), 1200)
+        self.assertEqual(self.ombre.items['long']['content'], '账' * 2000)   # not rewritten
+        new = self.ombre.items['m3']                                         # the continuation was saved
+        self.assertEqual(new['title'], '后来')
+        self.assertIn('long', self.feature.sidecar.get('m3')['links'])
+
+    def test_the_model_sees_how_often_a_memory_was_rewritten_and_its_other_stages(self):
+        self.ombre.items['a'] = {'title': '围巾', 'content': '11月1日说起围巾。'}
+        self.ombre.found = ['a']
+        self.ombre.title_for = lambda key: self.ombre.items[key]['title']
+        self.ombre.experience_stages = lambda key: ['b'] if key == 'a' else []
+        self.ombre.items['b'] = {'title': '围巾后来', 'content': '后来织好了。'}
+        self.store.append('fake/memory-versions.jsonl', {'memory_id': 'a', 'old_content': '更早的写法'})
+        self.add(long_talk(DAY1))
+        self.clock[0] = f'{DAY1}T12:00:00+08:00'
         self.reply()
         self.feature.run_if_due()
-        self.assertEqual(self.sent()['earlier_entries'], [])
+        offered = {item['id']: item for item in self.sent()['earlier_entries']}
+        self.assertEqual(offered['a']['rewritten_times'], 1)
+        self.assertEqual(offered['a']['stages'], [{'id': 'b', 'title': '围巾后来'}])
+        self.assertIn('b', offered)                       # the other stage is offered too, not only the hit
+
+    def test_a_memory_he_saved_himself_lately_is_offered_even_if_the_search_misses_it(self):
+        # 11-15: Peter saved "tool drawers" himself at 09:16; the tidying found nothing and saved it again at 11:30.
+        self.ombre.items['drawers'] = {'title': 'tool drawers', 'content': '11月15日上午我把工具放进了新的抽屉。'}
+        self.feature.sidecar._add('drawers', 'source', via='hold', time=f'{DAY1}T08:00:00+08:00')
+        self.ombre.items['old'] = {'title': 'x', 'content': '很久以前自己存的。'}
+        self.feature.sidecar._add('old', 'source', via='hold', time='2026-09-01T08:00:00+08:00')
+        self.add(long_talk(DAY1))
+        self.clock[0] = f'{DAY1}T12:00:00+08:00'
+        self.reply(updates=[{'id': 'drawers', 'text': '11月15日上午我把工具放进新抽屉，下午又被绊了一脚。'}])
+        self.assertEqual(self.feature.run_if_due(), 'written')
+        self.assertEqual([item['id'] for item in self.sent()['earlier_entries']], ['drawers'])
+        self.assertEqual(len(self.ombre.items), 2)                       # nothing new saved beside it
+        self.assertIn('下午又被绊了一脚', self.ombre.items['drawers']['content'])
+
+    def test_a_draft_that_matches_an_unoffered_memory_is_looked_at_again_before_saving(self):
+        self.ombre.items['kept'] = {'title': 'drawers', 'content': '我自己存的：新抽屉。'}
+        real = self.ombre.call
+
+        def search(name, args, *, write_operation=None):
+            if name == 'breath_search' and args['query'].startswith('抽屉草稿'):
+                self.ombre.found = ['kept']
+            elif name == 'breath_search':
+                self.ombre.found = []
+            return real(name, args, write_operation=write_operation)
+        self.ombre.call = search
+        self.add(long_talk(DAY1))
+        self.clock[0] = f'{DAY1}T12:00:00+08:00'
+        self.reply([{'title': '抽屉草稿', 'text': '我被新抽屉绊了一下。'}])
+        self.reply(updates=[{'id': 'kept', 'text': '新抽屉：我自己存过，后来又被它绊了一下。'}])
+        self.assertEqual(self.feature.run_if_due(), 'written')
+        self.assertEqual(len(self.requests), 2)
+        self.assertEqual([item['id'] for item in self.sent()['earlier_entries']], ['kept'])
+        self.assertEqual(len(self.ombre.items), 1)
+        self.assertIn('被它绊了一下', self.ombre.items['kept']['content'])
+
+    def test_when_looking_again_fails_the_first_answer_is_still_saved(self):
+        self.ombre.items['kept'] = {'title': 'drawers', 'content': '我自己存的：新抽屉。'}
+        real = self.ombre.call
+
+        def search(name, args, *, write_operation=None):
+            if name == 'breath_search':
+                self.ombre.found = ['kept'] if args['query'].startswith('抽屉草稿') else []
+            return real(name, args, write_operation=write_operation)
+        self.ombre.call = search
+        self.add(long_talk(DAY1))
+        self.clock[0] = f'{DAY1}T12:00:00+08:00'
+        self.reply([{'title': '抽屉草稿', 'text': '我被新抽屉绊了一下。'}])
+        self.replies.append('not json')
+        self.assertEqual(self.feature.run_if_due(), 'written')
+        self.assertEqual(len(self.ombre.items), 2)                        # nothing is lost by looking again
+
+    def test_an_overlong_entry_is_told_once_and_the_shortened_one_is_saved(self):
+        self.add(long_talk(DAY1))
+        self.clock[0] = f'{DAY1}T12:00:00+08:00'
+        self.reply([{'title': '太长', 'text': '长' * 650}])
+        self.reply([{'title': '太长', 'text': '这次短了：11月12日聊了换记忆系统，我没同意。'}])
+        self.assertEqual(self.feature.run_if_due(), 'written')
+        self.assertEqual(self.sent()['last_time_too_long'], [{'title': '太长', 'characters': 650, 'limit': 600}])
+        self.assertEqual(self.ombre.items['m1']['content'], '这次短了：11月12日聊了换记忆系统，我没同意。')
+
+    def test_an_unknown_continues_id_is_ignored_and_the_entry_is_still_saved(self):
+        self.add(long_talk(DAY1))
+        self.clock[0] = f'{DAY1}T12:00:00+08:00'
+        self.reply([{'title': '新事', 'text': '11月12日聊了新的事。', 'continues': 'invented'}])
+        self.assertEqual(self.feature.run_if_due(), 'written')
+        self.assertEqual(self.feature.sidecar.get('m1')['links'], [])
 
     def test_a_failed_library_search_still_lets_the_entry_be_written(self):
         def broken(name, args, *, write_operation=None, original=self.ombre.call):
@@ -295,7 +387,7 @@ class WritingTests(Fixture):
         quoted = '她说：第3句：我想把你的记忆系统整个换掉，说明说明说明说明说明说明说明'
         self.reply([{'title': '照抄', 'text': quoted},
                     {'title': '密码', 'text': '她把 password: hunter2secret 告诉我了。'},
-                    {'title': '太长', 'text': '长' * 501}],
+                    {'title': '太长', 'text': '长' * 601}],
                    updates=[{'id': 'not-mine', 'text': '改别人的记忆'}])
         self.assertEqual(self.feature.run_if_due(), 'skipped')
         self.assertEqual(self.ombre.calls, [])

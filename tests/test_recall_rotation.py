@@ -292,6 +292,15 @@ class RecallRotationTests(unittest.TestCase):
         self.assertNotIn('one stage of a longer experience', self.recall(self.story(recall={'random_chance': 0}),
                                                                           'teapots lone')[0])
 
+    def test_experience_stages_gives_the_other_stages_both_ways_and_skips_hidden_ones(self):
+        """Ticket 368: the tidying asks for the same chain the recall directory uses."""
+        memory = self.story(recall={'random_chance': 0})
+        self.assertEqual(sorted(memory.experience_stages('story_a')), ['story_b', 'story_c'])
+        self.assertEqual(sorted(memory.experience_stages('story_c')), ['story_a', 'story_b'])
+        memory.state['entries']['story_b'] = {'title': 'The letter', 'time': 'x', 'hidden': True, 'text': ''}
+        self.assertNotIn('story_b', memory.experience_stages('story_a'))
+        self.assertEqual(memory.experience_stages('nobody'), [])
+
     def test_archived_or_missing_stages_are_not_listed(self):
         memory = self.story(recall={'random_chance': 0})
         path = self.backend.vault / 'story_b.md'

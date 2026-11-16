@@ -32,7 +32,7 @@ TICK_SECONDS = 300
 MAX_ENTRIES = 2           # 2026-11-15 Lan: small things may simply be forgotten
 MAX_UPDATES = 3
 TITLE_CHARS = 60
-ENTRY_CHARS = 500
+ENTRY_CHARS = 600         # ticket 368: one cap for Peter's own saves and this tidying (was 500 here)
 UPDATE_CHARS = 600       # ticket 363: an update is the whole memory rewritten, same cap as Peter's own hold
 MESSAGE_CHARS = 1500      # one pasted wall of text is clipped, not allowed to crowd out the rest
 REQUEST_CHARS = 12000     # visible chat text per model call; the rest waits for the next tick
@@ -41,6 +41,8 @@ CANDIDATES = 12           # his latest entries offered for an update
 LIBRARY_QUERIES = 4       # 2026-11-15: the chat is also searched against the whole memory library, in this many
 LIBRARY_QUERY_CHARS = 800 # pieces of this size, so a memory Peter saved himself can be updated too
 LIBRARY_HITS = 6          # at most this many library memories are added to the candidates
+STAGE_HITS = 4            # ticket 368: and this many more, the other stages of an experience a hit belongs to
+OWN_SAVES = 3             # ticket 368: and the memories Peter saved or rewrote himself most recently
 CANDIDATE_CHARS = 1200    # ticket 363: he rewrites an entry, so he sees it whole (older appended ones are clipped)
 VERBATIM_RUN = 24         # an entry repeating this many characters of a message in a row is a quote, not a memory
 BACKFILL = timedelta(days=3)
@@ -63,10 +65,10 @@ For what you keep:
 - Say how you learned things: if Lan described or told you something, write that she described it, not that you saw it.
 - Never write passwords, keys or other secrets.
 
-earlier_entries are memories you already have that may be about the same things (your own earlier notes and memories found in your library). If these messages are about the same matter as one of them (it went on, turned out differently, or your view changed), do not write a new entry: return an update for that id, the whole memory rewritten as one short paragraph telling the story as you would now recall it, at most {update_chars} characters, keeping what still matters from the old text (its dates too) and folding in what happened since. It replaces the old text; the old version is kept where Lan can restore it. Only something with no earlier memory becomes a new entry.
+earlier_entries are memories you already have that may be about the same things (your own earlier notes and memories found in your library). If these messages are about the same matter as one of them (it went on, turned out differently, or your view changed), do not write a new entry: return an update for that id, the whole memory rewritten as one short paragraph telling the story as you would now recall it, at most {update_chars} characters, keeping what still matters from the old text (its dates too) and folding in what happened since. It replaces the old text; the old version is kept where Lan can restore it. If it is a later stage of one of them rather than the same stage again (a new development, a different attitude at a later time), write a new entry and put that memory's id in its \"continues\"; the stages already linked to a memory are listed under its \"stages\". Only something with no earlier memory becomes a new entry.
 
 Return exactly one JSON object and nothing else:
-{{"entries":[{{"title":"short title","text":"..."}}],"updates":[{{"id":"entry id from earlier_entries","text":"..."}}]}}"""
+{{"entries":[{{"title":"short title","text":"...","continues":"id, only if it is a later stage"}}],"updates":[{{"id":"entry id from earlier_entries","text":"..."}}]}}"""
 
 # Conservative local filter (same idea as the old veil phone's sensitiveMemoryText), not a promise to catch every secret.
 SECRET = re.compile(r'\b(?:sk-[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9]{20,}|Bearer\s+\S+|'
@@ -261,38 +263,96 @@ class ExperienceMemory:
         """Still stored and not hidden, archived or deleted (a memory Lan deleted is simply gone)."""
         return self.memory.raw_content_for(memory_id) is not None and self.memory.refresh_visibility(memory_id)
 
+    def _offer(self, memory_id):
+        """One candidate as the model sees it, read fresh from the library: its text, how often it was rewritten and
+        the other stages it is linked to. None for what is gone, hidden, archived or locked by Lan. A memory too long
+        to rewrite whole is shown clipped and marked: it can be continued but not rewritten."""
+        try:
+            if not self._alive(memory_id) or self.sidecar.locked(memory_id):
+                return None
+            body = self.memory.content_for(memory_id, refresh=True)
+            if not body:
+                return None
+            versions = sum(1 for row in self.store.read(f'{self.cfg.id}/memory-versions.jsonl')
+                           if row.get('memory_id') == memory_id)
+        except Exception:
+            return None
+        titled = getattr(self.memory, 'title_for', None)
+        stages = getattr(self.memory, 'experience_stages', None)
+        item = {'id': memory_id, 'title': (titled(memory_id) if titled else '') or '', 'written': '',
+                'text': body[:CANDIDATE_CHARS], 'whole': len(body) <= CANDIDATE_CHARS, 'versions': versions,
+                'stages': [{'id': other, 'title': (titled(other) if titled else '') or ''}
+                           for other in (stages(memory_id) if stages else [])][:4]}
+        return item
+
+    def _own_saves(self):
+        """Memories Peter saved or rewrote himself in the last few days, newest first (the sidecar notes them)."""
+        try:
+            since = datetime.fromisoformat(self.budget.clock()) - BACKFILL
+            rows = []
+            for memory_id, note in self.sidecar.all().items():
+                if note.get('merged_into'):
+                    continue
+                times = [source['time'] for source in note.get('sources', [])
+                         if source.get('via') in ('hold', 'rewrite') and source.get('time')
+                         and datetime.fromisoformat(source['time']) >= since]
+                if times:
+                    rows.append((max(times), memory_id))
+            return [memory_id for _, memory_id in sorted(rows, reverse=True)[:OWN_SAVES]]
+        except Exception:
+            return []
+
+    def _search_ids(self, query):
+        try:
+            return [memory_id for memory_id, _ in ordinary_hits(self.memory.call('breath_search', {
+                'query': query, 'mode': 'automatic', 'with_ids': True, 'max_results': 3}), limit=3)]
+        except Exception:
+            return []  # a failed search only means fewer candidates
+
     def _library(self, batch, skip):
         """2026-11-15 (Lan): memories anywhere in the library about what these messages talk about, so the same
-        matter is rewritten instead of saved again. The chat is searched in a few pieces; a failed search only means
-        fewer candidates. Locked memories and ones too long to rewrite whole are not offered."""
+        matter is rewritten instead of saved again. Ticket 368 adds, without another model call: the other stages of
+        an experience a hit belongs to, and what Peter himself saved lately. Locked memories are never offered."""
         text = '\n'.join(item['text'] for item in batch)
         step = max(LIBRARY_QUERY_CHARS, -(-len(text) // LIBRARY_QUERIES))
         found = []
         for start in range(0, len(text), step):
             query = text[start:start + LIBRARY_QUERY_CHARS].strip()
-            if not query:
-                continue
-            try:
-                hits = ordinary_hits(self.memory.call('breath_search', {
-                    'query': query, 'mode': 'automatic', 'with_ids': True, 'max_results': 3}), limit=3)
-            except Exception:
-                continue
-            for memory_id, _ in hits:
-                if memory_id in skip or memory_id in found:
-                    continue
-                found.append(memory_id)
-        out = []
+            if query:
+                found += [memory_id for memory_id in self._search_ids(query)
+                          if memory_id not in skip and memory_id not in found]
+        out, taken = [], set(skip)
+
+        def add(memory_id, limit):
+            if memory_id in taken or len(out) >= limit:
+                return
+            item = self._offer(memory_id)
+            taken.add(memory_id)
+            if item:
+                out.append(item)
         for memory_id in found:
-            if len(out) >= LIBRARY_HITS:
-                break
-            try:
-                if not self._alive(memory_id) or self.sidecar.locked(memory_id):
+            add(memory_id, LIBRARY_HITS)
+        hits = len(out)
+        for item in list(out):
+            for stage in item['stages']:
+                add(stage['id'], hits + STAGE_HITS)
+        for memory_id in self._own_saves():
+            add(memory_id, len(out) + 1)
+        return out
+
+    def _drafts_related(self, entries, offered):
+        """Ticket 368: before anything is written, what the library already holds about each new entry's own
+        words. Only memories not already offered are returned."""
+        taken = {item['id'] for item in offered}
+        out = []
+        for entry in entries:
+            for memory_id in self._search_ids(f'{entry["title"]}\n{entry["text"]}'[:1000]):
+                if memory_id in taken:
                     continue
-            except Exception:
-                continue
-            body = self.memory.content_for(memory_id, refresh=True)
-            if body and len(body) <= CANDIDATE_CHARS:
-                out.append({'id': memory_id, 'title': '', 'written': '', 'text': body})
+                taken.add(memory_id)
+                item = self._offer(memory_id)
+                if item:
+                    out.append(item)
         return out
 
     def _candidates(self, events):
@@ -303,13 +363,11 @@ class ExperienceMemory:
             if event.get('kind') != 'entry' or not isinstance(memory_id, str) or memory_id in seen:
                 continue
             seen.add(memory_id)
-            if not self._alive(memory_id):
+            item = self._offer(memory_id)
+            if item is None:
                 continue
-            text = self.memory.content_for(memory_id, refresh=True)
-            if not text:
-                continue
-            out.append({'id': memory_id, 'title': event.get('title', ''), 'written': str(event.get('time', ''))[:10],
-                        'text': text})
+            item['title'], item['written'] = event.get('title') or item['title'], str(event.get('time', ''))[:10]
+            out.append(item)
             if len(out) >= CANDIDATES:
                 break
         return out
@@ -352,34 +410,48 @@ class ExperienceMemory:
                 return True
         return False
 
-    def _validated(self, output, batch, candidates):
+    def _validated(self, output, batch, candidates, final=True):
+        """(entries, updates, dropped, too_long). Over-long texts are not silently lost: when `final` is false they
+        are returned in `too_long` so the model can be told once and shorten or split them (ticket 368)."""
         payload = _parse_json_object(output)
         if not isinstance(payload, dict):
             raise UserError('经历整理没有返回可用的结果；聊天记录不受影响，稍后重试。')
-        entries, updates, dropped = [], [], 0
+        entries, updates, dropped, too_long = [], [], 0, []
         raw_entries, raw_updates = payload.get('entries') or [], payload.get('updates') or []
         if not isinstance(raw_entries, list) or not isinstance(raw_updates, list):
             raise UserError('经历整理结果格式无效；聊天记录不受影响，稍后重试。')
         dropped += max(0, len(raw_entries) - MAX_ENTRIES) + max(0, len(raw_updates) - MAX_UPDATES)
+        known = {candidate['id'] for candidate in candidates}
+        rewritable = {candidate['id'] for candidate in candidates if candidate.get('whole', True)}
         for item in raw_entries[:MAX_ENTRIES]:
             title = ' '.join(str((item or {}).get('title') or '').split())[:TITLE_CHARS] if isinstance(item, dict) else ''
             text = str(item.get('text') or '').strip() if isinstance(item, dict) else ''
+            if title and len(text) > ENTRY_CHARS and not final and not SECRET.search(text):
+                too_long.append({'title': title, 'characters': len(text), 'limit': ENTRY_CHARS})
+                continue
             if not title or not text or len(text) > ENTRY_CHARS or SECRET.search(text) or self._quotes(text, batch):
                 dropped += 1
                 continue
-            entries.append({'title': title, 'text': text})
-        known = {candidate['id'] for candidate in candidates}
+            entry = {'title': title, 'text': text}
+            continues = item.get('continues')
+            if isinstance(continues, str) and continues in known:
+                entry['continues'] = continues   # an id the model was shown; anything else is ignored
+            entries.append(entry)
         for item in raw_updates[:MAX_UPDATES]:
             memory_id = item.get('id') if isinstance(item, dict) else None
             text = str(item.get('text') or '').strip() if isinstance(item, dict) else ''
-            if (memory_id not in known or not text or len(text) > UPDATE_CHARS or SECRET.search(text)
+            if memory_id in rewritable and len(text) > UPDATE_CHARS and not final and not SECRET.search(text):
+                too_long.append({'id': memory_id, 'characters': len(text), 'limit': UPDATE_CHARS})
+                continue
+            if (memory_id not in rewritable or not text or len(text) > UPDATE_CHARS or SECRET.search(text)
                     or self._quotes(text, batch) or any(update['id'] == memory_id for update in updates)):
                 dropped += 1
                 continue
             updates.append({'id': memory_id, 'text': text})
-        return entries, updates, dropped
+        return entries, updates, dropped, too_long
 
     def _save_entry(self, entry, span):
+        continues = entry.get('continues')
         args = {'content': entry['text'], 'title': entry['title']}
         operation, duplicate = self.memory.begin_write(args)
         if duplicate is not None:
@@ -390,10 +462,12 @@ class ExperienceMemory:
         try:
             if memory_id:
                 self.sidecar.source(memory_id, 'experience')
+                if continues and continues != memory_id:
+                    self.sidecar.link(memory_id, continues)   # a later stage: the same link Peter's link_to makes
         except Exception:
             pass
         self.store.append(self.path, {'kind': 'entry', 'memory_id': memory_id, 'title': entry['title'],
-                                      'text': entry['text'], 'merged': kind == '合并', 'covers': span,
+                                      'text': entry['text'], 'merged': kind == '合并', 'covers': span, 'continues': continues,
                                       'time': self.budget.clock()})
         return memory_id
 
@@ -437,22 +511,35 @@ class ExperienceMemory:
             # Searching costs a little embedding money: not once the day's ceiling is reached.
             candidates += self._library(batch, {candidate['id'] for candidate in candidates})
         zone = last['time'].tzinfo
-        data = {
-            'local_time_now': self._now().astimezone(zone).strftime('%Y-%m-%d %H:%M'),
-            'earlier_entries': [{'id': c['id'], 'title': c['title'], 'written': c['written'],
-                                 'text': c['text'][:CANDIDATE_CHARS]} for c in candidates],
-            'messages': [{'time': item['time'].strftime('%Y-%m-%d %H:%M'),
+
+        def shown(c):
+            item = {'id': c['id'], 'title': c['title'], 'written': c['written'], 'text': c['text'][:CANDIDATE_CHARS]}
+            if c.get('versions'):
+                item['rewritten_times'] = c['versions']
+            if c.get('stages'):
+                item['stages'] = c['stages']
+            if not c.get('whole', True):
+                item['too_long_to_rewrite'] = True   # can be continued, not rewritten
+            return item
+
+        def build(candidates, problems=()):
+            data = {
+                'local_time_now': self._now().astimezone(zone).strftime('%Y-%m-%d %H:%M'),
+                'earlier_entries': [shown(c) for c in candidates],
+                **({'last_time_too_long': list(problems)} if problems else {}),
+                'messages': [{'time': item['time'].strftime('%Y-%m-%d %H:%M'),
                           'from': 'Lan' if item['role'] == 'user' else self.cfg.name, 'text': item['text'],
                           **({'sent_on_your_own': ('after: ' + item['own']) if isinstance(item['own'], str)
                               else 'during one of your autonomous wakes'} if item.get('own') else {})}
-                         for item in batch],
-        }
+                             for item in batch],
+            }
+            return [{'role': 'system', 'content': self.cfg.persona},
+                    {'role': 'system', 'content': prompt},
+                    {'role': 'user', 'content': json.dumps(data, ensure_ascii=False, separators=(',', ':'))}]
         first_day = batch[0]['time']
         prompt = PROMPT.format(entry_chars=ENTRY_CHARS, update_chars=UPDATE_CHARS, max_entries=MAX_ENTRIES,
                                example_date=f'{first_day.strftime("%b")} {first_day.day} or {first_day.month}月{first_day.day}日')
-        messages = [{'role': 'system', 'content': self.cfg.persona},
-                    {'role': 'system', 'content': prompt},
-                    {'role': 'user', 'content': json.dumps(data, ensure_ascii=False, separators=(',', ':'))}]
+        messages = build(candidates)
         cap = Decimal(str(self.settings['daily_budget_cny']))
         provider = self._request_cfg(messages).provider
         worst = provider.get('cny_per_call') or (
@@ -470,7 +557,24 @@ class ExperienceMemory:
         span = [batch[0]['time'].isoformat(timespec='minutes'), last['time'].isoformat(timespec='minutes')]
         written = updated = 0
         try:
-            entries, updates, dropped = self._validated(self._call_model(messages), batch, candidates)
+            entries, updates, dropped, too_long = self._validated(
+                self._call_model(messages), batch, candidates, final=False)
+            # Ticket 368: before writing, look at what the library holds about the drafts themselves, and tell
+            # the model once about a text that was too long. One more call at most, within the same daily ceiling;
+            # if it fails, the first answer is used (nothing is lost by looking again).
+            extra = self._drafts_related(entries, candidates) if entries else []
+            if (extra or too_long) and self.spent_today() + worst <= cap:
+                first = (entries, updates, dropped)
+                try:
+                    second = candidates + extra
+                    entries, updates, dropped, _ = self._validated(
+                        self._call_model(build(second, too_long)), batch, second)
+                    candidates = second
+                except Exception:
+                    entries, updates, dropped = first
+                    dropped += len(too_long)
+            elif too_long:
+                dropped += len(too_long)
             for update in updates:
                 updated += bool(self._save_update(update, next(
                     (c['text'] for c in candidates if c['id'] == update['id']), None)))

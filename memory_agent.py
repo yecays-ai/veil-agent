@@ -1142,6 +1142,31 @@ class Memory:
         self._event_sources_cache = (signature, sources)
         return sources
 
+    def experience_stages(self, key):
+        """Ticket 368: the other visible memories that are stages of the same experience as `key` (Peter's own
+        link_to notes in both directions, Ombre's same_event / continuation links), nearest first. Any failure
+        only means no stages are shown."""
+        from recall_rotation import EVENT_LINKS, experience_chain, front_matter
+        try:
+            adjacency, inbound, metas = self._event_adjacency(), self._ombre_event_sources(), {}
+
+            def links_of(memory_id):
+                if memory_id not in metas:
+                    try:
+                        metas[memory_id] = front_matter(self.raw_content_for(memory_id))
+                    except Exception:
+                        metas[memory_id] = {'links': []}
+                return metas[memory_id]['links']
+
+            def neighbours(memory_id):
+                return (set(adjacency.get(memory_id, ())) | inbound.get(memory_id, set())
+                        | {target for target, kind in links_of(memory_id) if kind in EVENT_LINKS})
+            return [member for member in experience_chain(key, neighbours)[1:]
+                    if self.refresh_visibility(member) and self.visible([(member, '')])]
+        except Exception as exc:
+            self.retrieval_failure('experience_stages', exc)
+            return []
+
     def _experience_directories(self, kept, metas, adjacency, size):
         """Ticket 365: {memory_id: one line} for each recalled memory that is one stage of a longer experience: the
         others' dates and titles, so Peter sees the whole thing instead of one slice. Hidden, archived or deleted
