@@ -1918,6 +1918,16 @@ def conservative_token_ratio(observed_ratio):
     return min(1.0, max(0.15, observed_ratio * 1.2))
 
 
+def assistant_retry_turn(message, content):
+    """His reply put back before the program asks him to try again. DeepSeek's thinking mode refuses the next
+    request unless the reasoning of that reply comes back with it, so it is kept when the provider gave one."""
+    turn = {'role': 'assistant', 'content': content}
+    reasoning = getattr(message, 'reasoning_content', None)
+    if reasoning is not None:
+        turn['reasoning_content'] = reasoning
+    return turn
+
+
 def join_reply_continuation(previous, continuation):
     if not previous or not continuation:
         return previous + continuation
@@ -5039,7 +5049,7 @@ class Chat:
                         output_recovered = True
                         continuation_prefix = content
                         self.tool_stop_reason = ''
-                        loop_messages.append({'role': 'assistant', 'content': content})
+                        loop_messages.append(assistant_retry_turn(message, content))
                         loop_messages.append({'role': 'system', 'content': (
                             'Your reply reached the output limit. Continue from the exact end of your previous '
                             'message without repeating its words. Finish the sentence and complete the reply; '
@@ -5065,7 +5075,7 @@ class Chat:
                     self.tool_stop_reason = ''
                 if (not autonomy and self.force_reply and not content.strip()
                         and not mixed_sent_messages and step + 1 < max_steps):
-                    loop_messages.append({'role': 'assistant', 'content': content})
+                    loop_messages.append(assistant_retry_turn(message, content))
                     loop_messages.append({'role': 'system', 'content': (
                         'Lan pressed Request Reply. This one request must produce actual message text. '
                         'reply_later is unavailable; use send_message with non-empty text before ending.')})
@@ -5084,7 +5094,7 @@ class Chat:
                         next_reservation = None
                     if next_reservation:
                         fake_sticker_retries += 1
-                        loop_messages.append({'role': 'assistant', 'content': content})
+                        loop_messages.append(assistant_retry_turn(message, content))
                         loop_messages.append({'role': 'system', 'content': (
                             'Typing "[表情包：' + fake_sticker[0] + '/' + fake_sticker[1] + ']" in a reply does not send '
                             'a sticker, and there is no such sticker in the library. Nothing was shown to Lan. To send '
