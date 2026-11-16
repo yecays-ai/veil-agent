@@ -338,6 +338,9 @@ class WritingTests(Fixture):
         self.assertEqual(len(self.requests), 2)
         self.assertEqual([item['id'] for item in self.sent()['earlier_entries']], ['kept'])
         self.assertEqual(len(self.ombre.items), 1)
+        draft = self.sent()['your_first_draft']                # looking again revises the first answer, not a new draw
+        self.assertEqual(draft['entries'], [{'title': '抽屉草稿', 'text': '我被新抽屉绊了一下。'}])
+        self.assertEqual(draft['matched_by_each_entry'], {'抽屉草稿': ['kept']})
         self.assertIn('被它绊了一下', self.ombre.items['kept']['content'])
 
     def test_when_looking_again_fails_the_first_answer_is_still_saved(self):

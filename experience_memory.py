@@ -67,6 +67,8 @@ For what you keep:
 
 earlier_entries are memories you already have that may be about the same things (your own earlier notes and memories found in your library). If these messages are about the same matter as one of them (it went on, turned out differently, or your view changed), do not write a new entry: return an update for that id, the whole memory rewritten as one short paragraph telling the story as you would now recall it, at most {update_chars} characters, keeping what still matters from the old text (its dates too) and folding in what happened since. It replaces the old text; the old version is kept where Lan can restore it. If it is a later stage of one of them rather than the same stage again (a new development, a different attitude at a later time), write a new entry and put that memory's id in its \"continues\"; the stages already linked to a memory are listed under its \"stages\". Only something with no earlier memory becomes a new entry.
 
+If your_first_draft is present, it is what you answered a moment ago, and earlier_entries now also holds the memories its entries' own words matched (matched_by_each_entry): look again, keeping what was right, and return the final answer in the same form.
+
 Return exactly one JSON object and nothing else:
 {{"entries":[{{"title":"short title","text":"...","continues":"id, only if it is a later stage"}}],"updates":[{{"id":"entry id from earlier_entries","text":"..."}}]}}"""
 
@@ -342,18 +344,19 @@ class ExperienceMemory:
 
     def _drafts_related(self, entries, offered):
         """Ticket 368: before anything is written, what the library already holds about each new entry's own
-        words. Only memories not already offered are returned."""
+        words. Returns (memories not offered yet, {entry title: ids of all the memories its words matched})."""
         taken = {item['id'] for item in offered}
-        out = []
+        out, matches = [], {}
         for entry in entries:
             for memory_id in self._search_ids(f'{entry["title"]}\n{entry["text"]}'[:1000]):
-                if memory_id in taken:
-                    continue
-                taken.add(memory_id)
-                item = self._offer(memory_id)
-                if item:
-                    out.append(item)
-        return out
+                if memory_id not in taken:
+                    taken.add(memory_id)
+                    item = self._offer(memory_id)
+                    if item:
+                        out.append(item)
+                if any(item['id'] == memory_id for item in [*offered, *out]):
+                    matches.setdefault(entry['title'], []).append(memory_id)
+        return out, matches
 
     def _candidates(self, events):
         """His latest entries that still exist and are not hidden, newest first."""
@@ -522,11 +525,12 @@ class ExperienceMemory:
                 item['too_long_to_rewrite'] = True   # can be continued, not rewritten
             return item
 
-        def build(candidates, problems=()):
+        def build(candidates, problems=(), draft=None):
             data = {
                 'local_time_now': self._now().astimezone(zone).strftime('%Y-%m-%d %H:%M'),
                 'earlier_entries': [shown(c) for c in candidates],
                 **({'last_time_too_long': list(problems)} if problems else {}),
+                **({'your_first_draft': draft} if draft else {}),
                 'messages': [{'time': item['time'].strftime('%Y-%m-%d %H:%M'),
                           'from': 'Lan' if item['role'] == 'user' else self.cfg.name, 'text': item['text'],
                           **({'sent_on_your_own': ('after: ' + item['own']) if isinstance(item['own'], str)
@@ -562,13 +566,14 @@ class ExperienceMemory:
             # Ticket 368: before writing, look at what the library holds about the drafts themselves, and tell
             # the model once about a text that was too long. One more call at most, within the same daily ceiling;
             # if it fails, the first answer is used (nothing is lost by looking again).
-            extra = self._drafts_related(entries, candidates) if entries else []
+            extra, matches = self._drafts_related(entries, candidates) if entries else ([], {})
             if (extra or too_long) and self.spent_today() + worst <= cap:
-                first = (entries, updates, dropped)
+                first, first_draft = (entries, updates, dropped), [dict(entry) for entry in entries]
                 try:
                     second = candidates + extra
                     entries, updates, dropped, _ = self._validated(
-                        self._call_model(build(second, too_long)), batch, second)
+                        self._call_model(build(second, too_long, {'entries': first_draft, 'updates': updates,
+                                                              'matched_by_each_entry': matches})), batch, second)
                     candidates = second
                 except Exception:
                     entries, updates, dropped = first
