@@ -1181,7 +1181,7 @@ class Memory:
                         if not cache[member]:
                             continue
                     meta = meta_of(key if member == key else member)
-                    entries.append((member, (meta.get('created') or '')[:10],
+                    entries.append((member, meta.get('created') or '',
                                     meta.get('title') or meta.get('name') or ''))
                 line = directory_line(key, entries, size)
                 if line:

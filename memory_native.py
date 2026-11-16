@@ -499,11 +499,19 @@ class NativeMemoryTools:
         fields = {'content': chosen['body']}
         if chosen['title']:
             fields['title'] = chosen['title']
-        if len(chosen['body']) > CONTENT_LIMIT:
-            return False, '这个旧版本超过页面能保存的长度，没有恢复。'
+        # Restoring puts back exactly what was there: the page's 1500-character box is for typing by hand, and
+        # recall showing only the first 600 characters (ticket 353) never touches what is stored. Only what Ombre
+        # itself would refuse (its per-memory byte limit) stops a restore.
+        if len(chosen['body'].encode('utf-8')) > MERGED_MEMORY_LIMIT_BYTES:
+            return False, '这个旧版本超过记忆库能保存的长度，没有恢复。'
         args = {'bucket_id': memory_id, **fields, 'edit_reason': 'Lan restored an earlier version on the memory page.'}
         result, state, _ = self._trace(args, None, by_lan=True)
-        return state == '成功', '已恢复，恢复前的样子也留了一份。' if state == '成功' else result
+        if state != '成功':
+            return False, result
+        note = '已恢复，恢复前的样子也留了一份。'
+        if len(chosen['body']) > MEMORY_CHARS:
+            note += f'这条超过 {MEMORY_CHARS} 字，自动想起时只显示开头，想看全文要让他用 memory_read。'
+        return True, note
 
     def panel_archived(self):
         """Archived memories (merged copies and ones Ombre let fade), never ones Lan deleted."""
