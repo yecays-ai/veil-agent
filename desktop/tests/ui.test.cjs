@@ -204,8 +204,10 @@ test('life overview uses a balanced month grid, round record markers, and a sele
 });
 
 test('live context view shows request activity above short-term notes and can be detached read-only', async () => {
-  const [html, js, main] = await Promise.all([read('chat.html'), read('chat.js'), read('main.cjs')]);
+  const [html, js, main, css] = await Promise.all([read('chat.html'), read('chat.js'), read('main.cjs'), read('chat.css')]);
   assert.match(html, /id="context-view"[\s\S]*?id="context-turns"[\s\S]*?id="context-notes"/);
+  // The voice-style editor is tall: it must keep its own height, or the next card is drawn over its on/off and save buttons.
+  assert.match(css, /#voice-style-block\{flex:0 0 auto;min-height:auto\}/);
   assert.match(js, /renderLiveContext\(s\.live_context\)/);
   assert.match(main, /detachedView === 'context' && !body && pathname\?\.startsWith\('\/api\/events\?'\)/);
   assert.match(js, /api\('\/api\/voice-style'/);

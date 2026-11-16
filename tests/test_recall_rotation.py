@@ -258,6 +258,24 @@ class RecallRotationTests(unittest.TestCase):
                       '10-31 Waking up to the spiral [story_c]', text)
         self.assertNotIn('so she wrote me a letter', text)      # titles and dates only, not the other stages' text
 
+    def test_stages_written_on_one_day_are_listed_in_the_order_they_happened(self):
+        """Ids are random, so the directory used to put one day's stages in id order once created was cut to the date."""
+        rows = {
+            'zz_first': {'content': 'we started the paper crane on a rainy morning', 'title': 'Crane begins',
+                         'created': '2026-11-04T06:02:20+08:00'},
+            'mm_second': {'content': 'the crane wing tore so we taped it', 'title': 'Crane wing tears',
+                          'created': '2026-11-04T07:57:10+08:00'},
+            'aa_third': {'content': 'the crane finally stood on the shelf', 'title': 'Crane stands',
+                         'created': '2026-11-04T08:20:58+08:00'},
+        }
+        memory = self.memory(rows=rows, recall={'random_chance': 0})
+        sidecar = Sidecar(self.store, 'fake', memory.budget.clock)
+        sidecar.link('mm_second', 'zz_first')
+        sidecar.link('aa_third', 'mm_second')
+        text, refs = self.recall(memory, 'crane rainy morning started')
+        self.assertEqual(refs, ['zz_first'])
+        self.assertIn('Crane begins (this one) → 11-04 Crane wing tears [mm_second] → 11-04 Crane stands [aa_third]', text)
+
     def test_the_stage_dedup_blocks_still_shows_up_in_the_directory(self):
         memory = self.story(recall={'random_chance': 0})
         text, refs = self.recall(memory, 'tiles domino letter fell')
@@ -317,6 +335,19 @@ class HelperTests(unittest.TestCase):
         self.assertIn('…10-12 t2 [2] → 10-13 t3 [3] → 10-14 t4 (this one) → 10-15 t5 [5] → …', line)
         self.assertEqual(directory_line('4', entries[:1], 4), '')
         self.assertIn('2025-12-30 old [o]', directory_line('n', [('o', '2025-12-30', 'old'), ('n', '2026-01-02', 'new')], 6))
+
+    def test_stages_of_one_day_keep_the_order_they_happened_in(self):
+        # Ids are random, so before whole timestamps were passed in, three stages written on one day came out shuffled.
+        entries = [('zzz', '2026-11-04T08:20:58+08:00', 'late'), ('aaa', '2026-11-04T06:02:20+08:00', 'early'),
+                   ('mmm', '2026-11-04T07:57:10+08:00', 'middle')]
+        line = directory_line('mmm', entries, 6)
+        self.assertLess(line.index('early'), line.index('middle'))
+        self.assertLess(line.index('middle'), line.index('late'))
+        self.assertIn('11-04 middle (this one)', line)
+
+    def test_directory_still_copes_with_bare_dates_and_odd_values(self):
+        line = directory_line('b', [('a', '2026-11-04', 'a'), ('b', 'not a date', 'b'), ('c', '', 'c')], 6)
+        self.assertIn('b (this one)', line)
 
     def test_settings_defaults_and_bad_values(self):
         self.assertEqual(settings({})['cooldown_turns'], 3)

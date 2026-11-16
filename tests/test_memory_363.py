@@ -200,6 +200,27 @@ class RewriteTests(Fixture):
         self.assertTrue(ok, message)
         self.assertEqual(self.backend.rows[self.a]['content'], versions[0]['body'])
 
+    def test_a_long_old_version_is_restored_whole_not_refused_or_cut(self):
+        long_text = ('on 11-06 ' + 'fog tide, again and again. ' * 120).strip()   # well past the page box (1500) and recall (600)
+        self.assertGreater(len(long_text), 1500)
+        self.hold(target_id=self.a, content='on 11-06 something else entirely.')
+        versions = self.native.panel_versions(self.a)
+        versions[0]['body'] = long_text                      # as if that earlier version had been this long
+        self.native.panel_versions = lambda memory_id: versions
+        ok, message = self.native.panel_restore_version(self.a, versions[0]['index'])
+        self.assertTrue(ok, message)
+        self.assertEqual(self.backend.rows[self.a]['content'].strip(), long_text)
+        self.assertIn('memory_read', message)
+
+    def test_a_version_ombre_itself_would_refuse_is_not_restored(self):
+        self.hold(target_id=self.a, content='on 11-06 something else entirely.')
+        versions = self.native.panel_versions(self.a)
+        versions[0]['body'] = 'x' * (48 * 1024 + 1)
+        self.native.panel_versions = lambda memory_id: versions
+        ok, message = self.native.panel_restore_version(self.a, versions[0]['index'])
+        self.assertFalse(ok)
+        self.assertIn('没有恢复', message)
+
     def test_peters_trace_cannot_grow_a_memory_past_the_limit(self):
         result, state, _ = self.native._trace({'bucket_id': self.a, 'content': 'y' * (MEMORY_CHARS + 1)}, None)
         self.assertEqual(state, '被拒绝')

@@ -16,6 +16,7 @@ decides which of the candidates Ombre already returned are shown this turn, and 
   three hits, may contribute one memory, labelled as random.
 """
 import re
+from datetime import datetime, timezone
 
 DEFAULTS = {
     'cooldown_turns': 3,
@@ -165,13 +166,25 @@ def experience_chain(key, neighbours, limit=12):
     return order
 
 
+def created_key(created):
+    """Sort key for a memory's creation time. Whole timestamps, so stages written on the same day keep the order
+    they happened in; a bare date or something unreadable still sorts (by its text) instead of raising."""
+    try:
+        moment = datetime.fromisoformat(created)
+    except (TypeError, ValueError):
+        return (1, 0.0, str(created))
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return (0, moment.timestamp(), '')
+
+
 def directory_line(key, entries, size):
     """One line listing the other memories of the experience `key` belongs to: date and title only, oldest first,
     at most `size` of them around `key`. `entries` are (memory_id, created, title). Empty when `key` stands alone."""
     if len(entries) < 2:
         return ''
     year = next((created[:4] for memory_id, created, _ in entries if memory_id == key and created), '')
-    ordered = sorted(entries, key=lambda item: (not item[1], item[1], item[0]))
+    ordered = sorted(entries, key=lambda item: (not item[1], created_key(item[1]), item[0]))
     position = next(index for index, item in enumerate(ordered) if item[0] == key)
     start = max(0, min(position - size // 2, len(ordered) - size))
     parts = []

@@ -210,3 +210,6 @@ body{isolation:isolate}
 #col.only-favorites .think-block{display:none}
 .experience-row{min-height:0}.experience-row .muted{font-size:11px;line-height:1.5}.experience-row button{height:31px;border:1px solid var(--line);border-radius:9px;background:var(--panel-2);padding:0 11px;color:var(--text);font-size:12px;white-space:nowrap}
 .voice-style-text{width:100%;min-height:220px;resize:vertical;border:1px solid var(--line);border-radius:10px;padding:10px;background:rgb(var(--surface-2-rgb)/var(--view-alpha,var(--window-alpha)));color:var(--text);font:12px/1.6 Consolas,monospace;outline:none;box-sizing:border-box}.voice-style-text:focus{border-color:var(--accent)}
+/* The voice-style card holds a tall editor: let it take the height it needs and let the page scroll, instead of
+   being squeezed to a share of the window and drawn over the tool list below it (its on/off and save buttons were hidden). */
+#voice-style-block{flex:0 0 auto;min-height:auto}
