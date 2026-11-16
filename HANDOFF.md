@@ -5,6 +5,13 @@
 - 待 lan 真机验收：问「拒绝写入、又让他覆盖第一个文件那次」两段是否都想得起；日常单话题不应出现同一经历占满名额。
 - 已知限制：G1 原问法检索不到闸门（检索未命中，另议）。
 
+## 旧记忆整理第一批（2026-11-16，写入正式库，纯数据）
+
+- 实验脚本、报告、草稿都在 Lan 电脑 `experiments/consolidate-367/out/batchA/`（report.md、report2.md、drafts.json），含私人聊天，不入库。写前备份 `veil-agent/backups-batchA/20261117T042039-prewrite/`（再早一份 `20261117T035125/`）；恢复：退出 Peter，把 memory 目录、memory-sidecar.jsonl、memory-versions.jsonl 拷回 `data/peter/`。
+- 三层会让旧记忆想不起来，后续每批都要先查：①Ombre 的 `digested: true`（自动检索排除）②VEIL `state.jsonl` 的 `sources` 表（值里的 ID 由 `hidden_ids()` 隐藏，读、改、召回结果都过滤）③同一事件去重 `_event_adjacency`（sidecar 里任何 link 连通的都算同一件事，只留一条）。测试副本必须完整复制正式库状态（含 state.jsonl），第一次缺来源表的测试结论全部作废。
+- 做法（Lan 定）：原文来源不就地改写，整理后的经历新建并用接续连起来，原文继续隐藏；已有的可见小结就地改写吸收。会把独立记忆压掉的关联解除，但只解一条不够（经共同的「相关」仍连通），所以闸门题记为已知限制，等去重工单。
+- 启动 Ombre 会把已晋升的 I-dream 候选归档（例：086be8383afc），正常流程。
+
 ## 工单 368（2026-11-16）：自动整理写入前先看 Peter 已存过什么
 
 - 说明在 `docs/tickets/368-experience-tidy-checks-before-writing.md`。代码在 `experience_memory.py`（`_offer/_own_saves/_library/_drafts_related/_validated`、`_digest` 里的第二次询问）和 `memory_agent.py` 的 `experience_stages`（供整理用，和 365 目录同一条关联链）。
