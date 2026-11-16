@@ -41,6 +41,7 @@ CANDIDATES = 12           # his latest entries offered for an update
 LIBRARY_QUERIES = 4       # 2026-11-15: the chat is also searched against the whole memory library, in this many
 LIBRARY_QUERY_CHARS = 800 # pieces of this size, so a memory Peter saved himself can be updated too
 LIBRARY_HITS = 6          # at most this many library memories are added to the candidates
+LOOKS = 2                # ticket 368: at most this many more asks after the first answer (the 2nd shows the exact problem again)
 STAGE_HITS = 4            # ticket 368: and this many more, the other stages of an experience a hit belongs to
 OWN_SAVES = 3             # ticket 368: and the memories Peter saved or rewrote himself most recently
 CANDIDATE_CHARS = 1200    # ticket 363: he rewrites an entry, so he sees it whole (older appended ones are clipped)
@@ -596,8 +597,9 @@ class ExperienceMemory:
             # first answer is still saved (nothing is lost by looking again).
             drafted = entries + [item['entry'] for item in flagged if 'entry' in item]
             extra, matches = self._drafts_related(drafted, candidates) if drafted else ([], {})
-            if (extra or flagged) and self.spent_today() + worst <= cap:
-                first = (entries, updates, dropped)
+            looks = 0
+            while (extra or flagged) and looks < LOOKS and self.spent_today() + worst <= cap:
+                looks += 1
                 draft = {'entries': [*entries, *({**item['entry'], 'problem': item['problem']}
                                                  for item in flagged if 'entry' in item)],
                          'updates': [*updates, *({**item['update'], 'problem': item['problem']}
@@ -605,16 +607,17 @@ class ExperienceMemory:
                          'matched_by_each_entry': matches}
                 notes = [{**({'title': item['entry']['title']} if 'entry' in item else {'id': item['update']['id']}),
                           'problem': item['problem']} for item in flagged]
+                kept = (entries, updates, dropped, flagged)
                 try:
-                    second = candidates + extra
-                    entries, updates, dropped, _ = self._validated(
-                        self._call_model(build(second, notes, draft)), batch, second)
-                    candidates = second
+                    candidates_now = candidates + extra
+                    entries, updates, dropped, flagged = self._validated(
+                        self._call_model(build(candidates_now, notes, draft)), batch, candidates_now,
+                        final=looks == LOOKS)
+                    candidates, extra = candidates_now, []
                 except Exception:
-                    entries, updates, dropped = first
-                    dropped += len(flagged)
-            else:
-                dropped += len(flagged)
+                    entries, updates, dropped, flagged = kept
+                    break
+            dropped += len(flagged)
             for update in updates:
                 updated += bool(self._save_update(update, next(
                     (c['text'] for c in candidates if c['id'] == update['id']), None)))

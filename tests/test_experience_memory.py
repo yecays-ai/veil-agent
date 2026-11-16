@@ -396,6 +396,21 @@ class WritingTests(Fixture):
         self.assertIn('word for word', self.sent()['your_first_draft']['entries'][0]['problem'])
         self.assertEqual(self.ombre.items['m1']['content'], '11月12日她又提了要换掉记忆系统，我还是不同意。')
 
+    def test_a_text_a_few_characters_over_after_the_first_fix_gets_one_more_look(self):
+        # Real comparison 2026-11-16: the fixes came back at 613, 615 and 603 characters and were dropped.
+        self.ombre.items['old'] = {'title': 'drawers', 'content': '11月15日我把工具放进了新抽屉。'}
+        self.ombre.found = ['old']
+        self.add(long_talk(DAY1))
+        self.clock[0] = f'{DAY1}T12:00:00+08:00'
+        self.reply([{'title': '被绊了', 'text': '长' * 700, 'continues': 'old'}])
+        self.reply([{'title': '被绊了', 'text': '长' * 603, 'continues': 'old'}])
+        self.reply([{'title': '被绊了', 'text': '三次被新抽屉绊了。', 'continues': 'old'}])
+        self.assertEqual(self.feature.run_if_due(), 'written')
+        self.assertEqual(len(self.requests), 3)
+        self.assertIn('603 characters', self.sent()['your_first_draft']['entries'][0]['problem'])
+        self.assertEqual(self.ombre.items['m2']['content'], '三次被新抽屉绊了。')
+        self.assertEqual(self.feature.sidecar.get('m2')['links'], ['old'])
+
     def test_still_flawed_after_the_second_look_it_is_dropped_and_counted(self):
         self.add(long_talk(DAY1))
         self.clock[0] = f'{DAY1}T12:00:00+08:00'
