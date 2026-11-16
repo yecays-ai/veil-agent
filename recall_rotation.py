@@ -24,6 +24,8 @@ DEFAULTS = {
     'excerpt_chars': 600,
     'random_chance': 0.1,
     'rotation_candidates': 8,
+    'directory': True,
+    'directory_members': 6,
 }
 EVENT_LINKS = frozenset({'same_event', 'continuation_of', 'continues'})
 HISTORY_LIMIT = 400
@@ -43,13 +45,17 @@ def settings(memory_cfg):
     result = dict(DEFAULTS)
     if raw.get('enabled') is False:
         return {**result, 'cooldown_turns': 0, 'dedup': False, 'excerpt_chars': 0,
-                'random_chance': 0.0, 'rotation_candidates': 0}
+                'random_chance': 0.0, 'rotation_candidates': 0, 'directory': False}
     for key in ('cooldown_turns', 'excerpt_chars', 'rotation_candidates'):
         value = raw.get(key)
         if type(value) is int and 0 <= value <= 10_000:
             result[key] = value
-    if type(raw.get('dedup')) is bool:
-        result['dedup'] = raw['dedup']
+    for key in ('dedup', 'directory'):
+        if type(raw.get(key)) is bool:
+            result[key] = raw[key]
+    members = raw.get('directory_members')
+    if type(members) is int and 2 <= members <= 12:
+        result['directory_members'] = members
     for key in ('dedup_similarity', 'random_chance'):
         value = raw.get(key)
         if type(value) in (int, float) and 0 <= value <= 1:
@@ -103,7 +109,7 @@ def front_matter(raw):
         if not sep or line[:1].isspace():
             continue
         key, value = key.strip(), value.strip()
-        if key in ('title', 'name', 'created', 'importance', 'pinned', 'type'):
+        if key in ('id', 'title', 'name', 'created', 'importance', 'pinned', 'type'):
             meta[key] = value.strip('\'"')
         elif key == 'relation_links' and not value:
             current = None
@@ -144,6 +150,39 @@ def same_event(a, b, metas, vectors, threshold, cosine):
         except ValueError:
             return False
     return False
+
+
+def experience_chain(key, neighbours, limit=12):
+    """Ticket 365: every memory reachable from `key` through same-experience links, `key` first, at most `limit`.
+    `neighbours(id)` returns the ids linked to one memory in either direction."""
+    order = [key]
+    seen = {key}
+    for node in order:
+        for other in sorted(neighbours(node)):
+            if other not in seen and len(seen) < limit:
+                seen.add(other)
+                order.append(other)
+    return order
+
+
+def directory_line(key, entries, size):
+    """One line listing the other memories of the experience `key` belongs to: date and title only, oldest first,
+    at most `size` of them around `key`. `entries` are (memory_id, created, title). Empty when `key` stands alone."""
+    if len(entries) < 2:
+        return ''
+    year = next((created[:4] for memory_id, created, _ in entries if memory_id == key and created), '')
+    ordered = sorted(entries, key=lambda item: (not item[1], item[1], item[0]))
+    position = next(index for index, item in enumerate(ordered) if item[0] == key)
+    start = max(0, min(position - size // 2, len(ordered) - size))
+    parts = []
+    for memory_id, created, title in ordered[start:start + size]:
+        date = created[:10] if created[:4] != year else created[5:10]
+        label = ' '.join(part for part in (date, ' '.join(title.split())[:24]) if part) or memory_id
+        parts.append(f'{label} (this one)' if memory_id == key else f'{label} [{memory_id}]')
+    more = '…' if start else ''
+    after = ' → …' if start + size < len(ordered) else ''
+    return ('(This memory is one stage of a longer experience, oldest first: ' + more
+            + ' → '.join(parts) + after + '. Titles and dates only; memory_read an ID to read that stage.)')
 
 
 def rotate(candidates, metas, history):
