@@ -1142,6 +1142,52 @@ class Memory:
         self._event_sources_cache = (signature, sources)
         return sources
 
+    def recently_created(self, since, limit=8):
+        """Ticket 368: ids of the memories created at or after `since` (a datetime), newest first, from the vault's
+        own front matter. The sidecar only began noting Peter's saves recently, so this is what finds the older
+        ones. Any failure only means none."""
+        from recall_rotation import created_key, front_matter
+        vault = self.store.root / self.cfg.id / 'memory'
+        floor = created_key(since.isoformat())
+        try:
+            rows = []
+            for path in vault.rglob('*.md'):
+                if path.is_symlink():
+                    continue
+                meta = front_matter(path.read_text(encoding='utf-8'))
+                key = created_key(meta.get('created'))
+                if key[0] == 0 and key >= floor:      # a creation time that cannot be read never counts as recent
+                    rows.append((key, meta.get('id') or path.stem.rpartition('_')[2] or path.stem))
+            return [memory_id for _, memory_id in sorted(rows, reverse=True)[:limit]]
+        except Exception as exc:
+            self.retrieval_failure('recently_created', exc)
+            return []
+
+    def experience_stages(self, key):
+        """Ticket 368: the other visible memories that are stages of the same experience as `key` (Peter's own
+        link_to notes in both directions, Ombre's same_event / continuation links), nearest first. Any failure
+        only means no stages are shown."""
+        from recall_rotation import EVENT_LINKS, experience_chain, front_matter
+        try:
+            adjacency, inbound, metas = self._event_adjacency(), self._ombre_event_sources(), {}
+
+            def links_of(memory_id):
+                if memory_id not in metas:
+                    try:
+                        metas[memory_id] = front_matter(self.raw_content_for(memory_id))
+                    except Exception:
+                        metas[memory_id] = {'links': []}
+                return metas[memory_id]['links']
+
+            def neighbours(memory_id):
+                return (set(adjacency.get(memory_id, ())) | inbound.get(memory_id, set())
+                        | {target for target, kind in links_of(memory_id) if kind in EVENT_LINKS})
+            return [member for member in experience_chain(key, neighbours)[1:]
+                    if self.refresh_visibility(member) and self.visible([(member, '')])]
+        except Exception as exc:
+            self.retrieval_failure('experience_stages', exc)
+            return []
+
     def _experience_directories(self, kept, metas, adjacency, size):
         """Ticket 365: {memory_id: one line} for each recalled memory that is one stage of a longer experience: the
         others' dates and titles, so Peter sees the whole thing instead of one slice. Hidden, archived or deleted
