@@ -1142,6 +1142,27 @@ class Memory:
         self._event_sources_cache = (signature, sources)
         return sources
 
+    def recently_created(self, since, limit=8):
+        """Ticket 368: ids of the memories created at or after `since` (a datetime), newest first, from the vault's
+        own front matter. The sidecar only began noting Peter's saves recently, so this is what finds the older
+        ones. Any failure only means none."""
+        from recall_rotation import created_key, front_matter
+        vault = self.store.root / self.cfg.id / 'memory'
+        floor = created_key(since.isoformat())
+        try:
+            rows = []
+            for path in vault.rglob('*.md'):
+                if path.is_symlink():
+                    continue
+                meta = front_matter(path.read_text(encoding='utf-8'))
+                key = created_key(meta.get('created'))
+                if key[0] == 0 and key >= floor:      # a creation time that cannot be read never counts as recent
+                    rows.append((key, meta.get('id') or path.stem.rpartition('_')[2] or path.stem))
+            return [memory_id for _, memory_id in sorted(rows, reverse=True)[:limit]]
+        except Exception as exc:
+            self.retrieval_failure('recently_created', exc)
+            return []
+
     def experience_stages(self, key):
         """Ticket 368: the other visible memories that are stages of the same experience as `key` (Peter's own
         link_to notes in both directions, Ombre's same_event / continuation links), nearest first. Any failure

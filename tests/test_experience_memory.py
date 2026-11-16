@@ -319,6 +319,15 @@ class WritingTests(Fixture):
         self.assertEqual(len(self.ombre.items), 2)                       # nothing new saved beside it
         self.assertIn('下午又被绊了一脚', self.ombre.items['drawers']['content'])
 
+    def test_a_memory_saved_before_the_sidecar_noted_saves_is_found_by_its_creation_time(self):
+        self.ombre.items['early'] = {'title': 'drawers', 'content': '11月15日上午我把工具放进了新抽屉。'}
+        self.ombre.recently_created = lambda since: ['early']
+        self.add(long_talk(DAY1))
+        self.clock[0] = f'{DAY1}T12:00:00+08:00'
+        self.reply()
+        self.feature.run_if_due()
+        self.assertEqual([item['id'] for item in self.sent()['earlier_entries']], ['early'])
+
     def test_a_draft_that_matches_an_unoffered_memory_is_looked_at_again_before_saving(self):
         self.ombre.items['kept'] = {'title': 'drawers', 'content': '我自己存的：新抽屉。'}
         real = self.ombre.call
@@ -359,14 +368,41 @@ class WritingTests(Fixture):
         self.assertEqual(self.feature.run_if_due(), 'written')
         self.assertEqual(len(self.ombre.items), 2)                        # nothing is lost by looking again
 
-    def test_an_overlong_entry_is_told_once_and_the_shortened_one_is_saved(self):
+    def test_an_overlong_later_stage_is_shown_back_with_its_text_and_continues_and_the_fix_is_linked(self):
+        # Real comparison 2026-11-16: a correct "new + continues" draft that ran past 600 characters used to be dropped
+        # from the first draft, so the second answer started from nothing and lost the link.
+        self.ombre.items['old'] = {'title': 'drawers', 'content': '11月15日我把工具放进了新抽屉。'}
+        self.ombre.found = ['old']
+        self.add(long_talk(DAY1))
+        self.clock[0] = f'{DAY1}T12:00:00+08:00'
+        self.reply([{'title': '被绊了', 'text': '长' * 650, 'continues': 'old'}])
+        self.reply([{'title': '被绊了', 'text': '后来我被新抽屉绊了三次。', 'continues': 'old'}])
+        self.assertEqual(self.feature.run_if_due(), 'written')
+        sent = self.sent()
+        shown = sent['your_first_draft']['entries'][0]
+        self.assertEqual((shown['text'], shown['continues']), ('长' * 650, 'old'))
+        self.assertIn('650 characters', shown['problem'])
+        self.assertEqual(sent['problems_with_your_first_draft'][0]['title'], '被绊了')
+        self.assertEqual(self.ombre.items['m2']['content'], '后来我被新抽屉绊了三次。')
+        self.assertEqual(self.feature.sidecar.get('m2')['links'], ['old'])
+
+    def test_a_draft_that_copies_the_chat_is_shown_back_once_and_the_retelling_is_saved(self):
+        self.add(long_talk(DAY1))
+        self.clock[0] = f'{DAY1}T12:00:00+08:00'
+        quoted = '她说：第3句：我想把你的记忆系统整个换掉，说明说明说明说明说明说明说明'
+        self.reply([{'title': '照抄', 'text': quoted}])
+        self.reply([{'title': '照抄', 'text': '11月12日她又提了要换掉记忆系统，我还是不同意。'}])
+        self.assertEqual(self.feature.run_if_due(), 'written')
+        self.assertIn('word for word', self.sent()['your_first_draft']['entries'][0]['problem'])
+        self.assertEqual(self.ombre.items['m1']['content'], '11月12日她又提了要换掉记忆系统，我还是不同意。')
+
+    def test_still_flawed_after_the_second_look_it_is_dropped_and_counted(self):
         self.add(long_talk(DAY1))
         self.clock[0] = f'{DAY1}T12:00:00+08:00'
         self.reply([{'title': '太长', 'text': '长' * 650}])
-        self.reply([{'title': '太长', 'text': '这次短了：11月12日聊了换记忆系统，我没同意。'}])
-        self.assertEqual(self.feature.run_if_due(), 'written')
-        self.assertEqual(self.sent()['last_time_too_long'], [{'title': '太长', 'characters': 650, 'limit': 600}])
-        self.assertEqual(self.ombre.items['m1']['content'], '这次短了：11月12日聊了换记忆系统，我没同意。')
+        self.reply([{'title': '太长', 'text': '长' * 700}])
+        self.assertEqual(self.feature.run_if_due(), 'skipped')
+        self.assertEqual(self.store.read('fake/experience-memory.jsonl')[-1]['dropped'], 1)
 
     def test_an_unknown_continues_id_is_ignored_and_the_entry_is_still_saved(self):
         self.add(long_talk(DAY1))

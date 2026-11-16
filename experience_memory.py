@@ -288,9 +288,14 @@ class ExperienceMemory:
         return item
 
     def _own_saves(self):
-        """Memories Peter saved or rewrote himself in the last few days, newest first (the sidecar notes them)."""
+        """Memories Peter saved or rewrote himself in the last few days, newest first: the sidecar notes them, and the
+        vault's own creation times find the ones saved before the sidecar began noting (ticket 368)."""
         try:
             since = datetime.fromisoformat(self.budget.clock()) - BACKFILL
+        except ValueError:
+            return []
+        found = []
+        try:
             rows = []
             for memory_id, note in self.sidecar.all().items():
                 if note.get('merged_into'):
@@ -300,9 +305,14 @@ class ExperienceMemory:
                          and datetime.fromisoformat(source['time']) >= since]
                 if times:
                     rows.append((max(times), memory_id))
-            return [memory_id for _, memory_id in sorted(rows, reverse=True)[:OWN_SAVES]]
+            found = [memory_id for _, memory_id in sorted(rows, reverse=True)]
         except Exception:
-            return []
+            pass
+        recent = getattr(self.memory, 'recently_created', None)
+        for memory_id in (recent(since) if recent else []):
+            if memory_id not in found:
+                found.append(memory_id)
+        return found
 
     def _search_ids(self, query):
         try:
@@ -338,8 +348,13 @@ class ExperienceMemory:
         for item in list(out):
             for stage in item['stages']:
                 add(stage['id'], hits + STAGE_HITS)
+        own = 0
         for memory_id in self._own_saves():
+            before = len(out)
             add(memory_id, len(out) + 1)
+            own += len(out) - before
+            if own >= OWN_SAVES:
+                break
         return out
 
     def _drafts_related(self, entries, offered):
@@ -414,44 +429,56 @@ class ExperienceMemory:
         return False
 
     def _validated(self, output, batch, candidates, final=True):
-        """(entries, updates, dropped, too_long). Over-long texts are not silently lost: when `final` is false they
-        are returned in `too_long` so the model can be told once and shorten or split them (ticket 368)."""
+        """(entries, updates, dropped, flagged). A text that is too long or copies the chat is not silently lost:
+        when `final` is false it comes back in `flagged` (with its text and its `continues`) so the model can be
+        shown it once and fix it, instead of starting over and losing what was right in it (ticket 368)."""
         payload = _parse_json_object(output)
         if not isinstance(payload, dict):
             raise UserError('经历整理没有返回可用的结果；聊天记录不受影响，稍后重试。')
-        entries, updates, dropped, too_long = [], [], 0, []
+        entries, updates, dropped, flagged = [], [], 0, []
         raw_entries, raw_updates = payload.get('entries') or [], payload.get('updates') or []
         if not isinstance(raw_entries, list) or not isinstance(raw_updates, list):
             raise UserError('经历整理结果格式无效；聊天记录不受影响，稍后重试。')
         dropped += max(0, len(raw_entries) - MAX_ENTRIES) + max(0, len(raw_updates) - MAX_UPDATES)
         known = {candidate['id'] for candidate in candidates}
         rewritable = {candidate['id'] for candidate in candidates if candidate.get('whole', True)}
+
+        def problem(text, limit):
+            if SECRET.search(text):
+                return None   # never shown back to the model
+            if len(text) > limit:
+                return f'{len(text)} characters; the most is {limit}. Shorten it, or keep what belongs to this stage ' \
+                       'and leave the rest out (a later stage can be its own entry with "continues").'
+            if self._quotes(text, batch):
+                return 'repeats a stretch of a message word for word; say it in your own words.'
+            return None
         for item in raw_entries[:MAX_ENTRIES]:
             title = ' '.join(str((item or {}).get('title') or '').split())[:TITLE_CHARS] if isinstance(item, dict) else ''
             text = str(item.get('text') or '').strip() if isinstance(item, dict) else ''
-            if title and len(text) > ENTRY_CHARS and not final and not SECRET.search(text):
-                too_long.append({'title': title, 'characters': len(text), 'limit': ENTRY_CHARS})
+            continues = item.get('continues') if isinstance(item, dict) else None
+            continues = continues if isinstance(continues, str) and continues in known else None
+            fault = problem(text, ENTRY_CHARS) if title and text else None
+            if fault and not final:
+                flagged.append({'entry': {'title': title, 'text': text, **({'continues': continues} if continues else {})},
+                                'problem': fault})
                 continue
-            if not title or not text or len(text) > ENTRY_CHARS or SECRET.search(text) or self._quotes(text, batch):
+            if not title or not text or fault or SECRET.search(text):
                 dropped += 1
                 continue
-            entry = {'title': title, 'text': text}
-            continues = item.get('continues')
-            if isinstance(continues, str) and continues in known:
-                entry['continues'] = continues   # an id the model was shown; anything else is ignored
-            entries.append(entry)
+            entries.append({'title': title, 'text': text, **({'continues': continues} if continues else {})})
         for item in raw_updates[:MAX_UPDATES]:
             memory_id = item.get('id') if isinstance(item, dict) else None
             text = str(item.get('text') or '').strip() if isinstance(item, dict) else ''
-            if memory_id in rewritable and len(text) > UPDATE_CHARS and not final and not SECRET.search(text):
-                too_long.append({'id': memory_id, 'characters': len(text), 'limit': UPDATE_CHARS})
+            fault = problem(text, UPDATE_CHARS) if memory_id in rewritable and text else None
+            if fault and not final and not any(update['id'] == memory_id for update in updates):
+                flagged.append({'update': {'id': memory_id, 'text': text}, 'problem': fault})
                 continue
-            if (memory_id not in rewritable or not text or len(text) > UPDATE_CHARS or SECRET.search(text)
-                    or self._quotes(text, batch) or any(update['id'] == memory_id for update in updates)):
+            if (memory_id not in rewritable or not text or fault
+                    or any(update['id'] == memory_id for update in updates)):
                 dropped += 1
                 continue
             updates.append({'id': memory_id, 'text': text})
-        return entries, updates, dropped, too_long
+        return entries, updates, dropped, flagged
 
     def _save_entry(self, entry, span):
         continues = entry.get('continues')
@@ -529,7 +556,7 @@ class ExperienceMemory:
             data = {
                 'local_time_now': self._now().astimezone(zone).strftime('%Y-%m-%d %H:%M'),
                 'earlier_entries': [shown(c) for c in candidates],
-                **({'last_time_too_long': list(problems)} if problems else {}),
+                **({'problems_with_your_first_draft': list(problems)} if problems else {}),
                 **({'your_first_draft': draft} if draft else {}),
                 'messages': [{'time': item['time'].strftime('%Y-%m-%d %H:%M'),
                           'from': 'Lan' if item['role'] == 'user' else self.cfg.name, 'text': item['text'],
@@ -561,25 +588,33 @@ class ExperienceMemory:
         span = [batch[0]['time'].isoformat(timespec='minutes'), last['time'].isoformat(timespec='minutes')]
         written = updated = 0
         try:
-            entries, updates, dropped, too_long = self._validated(
+            entries, updates, dropped, flagged = self._validated(
                 self._call_model(messages), batch, candidates, final=False)
-            # Ticket 368: before writing, look at what the library holds about the drafts themselves, and tell
-            # the model once about a text that was too long. One more call at most, within the same daily ceiling;
-            # if it fails, the first answer is used (nothing is lost by looking again).
-            extra, matches = self._drafts_related(entries, candidates) if entries else ([], {})
-            if (extra or too_long) and self.spent_today() + worst <= cap:
-                first, first_draft = (entries, updates, dropped), [dict(entry) for entry in entries]
+            # Ticket 368: before writing, look at what the library holds about the drafts themselves (all of
+            # them, including one that needs fixing), and show a flawed draft back once. One more call at most,
+            # within the same daily ceiling, working from the first draft; if it fails, whatever was fine in the
+            # first answer is still saved (nothing is lost by looking again).
+            drafted = entries + [item['entry'] for item in flagged if 'entry' in item]
+            extra, matches = self._drafts_related(drafted, candidates) if drafted else ([], {})
+            if (extra or flagged) and self.spent_today() + worst <= cap:
+                first = (entries, updates, dropped)
+                draft = {'entries': [*entries, *({**item['entry'], 'problem': item['problem']}
+                                                 for item in flagged if 'entry' in item)],
+                         'updates': [*updates, *({**item['update'], 'problem': item['problem']}
+                                                 for item in flagged if 'update' in item)],
+                         'matched_by_each_entry': matches}
+                notes = [{**({'title': item['entry']['title']} if 'entry' in item else {'id': item['update']['id']}),
+                          'problem': item['problem']} for item in flagged]
                 try:
                     second = candidates + extra
                     entries, updates, dropped, _ = self._validated(
-                        self._call_model(build(second, too_long, {'entries': first_draft, 'updates': updates,
-                                                              'matched_by_each_entry': matches})), batch, second)
+                        self._call_model(build(second, notes, draft)), batch, second)
                     candidates = second
                 except Exception:
                     entries, updates, dropped = first
-                    dropped += len(too_long)
-            elif too_long:
-                dropped += len(too_long)
+                    dropped += len(flagged)
+            else:
+                dropped += len(flagged)
             for update in updates:
                 updated += bool(self._save_update(update, next(
                     (c['text'] for c in candidates if c['id'] == update['id']), None)))

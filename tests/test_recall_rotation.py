@@ -301,6 +301,14 @@ class RecallRotationTests(unittest.TestCase):
         self.assertNotIn('story_b', memory.experience_stages('story_a'))
         self.assertEqual(memory.experience_stages('nobody'), [])
 
+    def test_recently_created_finds_memories_by_their_creation_time_newest_first(self):
+        """Ticket 368: the tidying finds what Peter saved lately even where the sidecar has no note of it."""
+        from datetime import datetime, timezone
+        memory = self.story(recall={'random_chance': 0})
+        found = memory.recently_created(datetime(2026, 10, 27, tzinfo=timezone.utc))
+        self.assertEqual(found, ['story_c', 'story_b'])           # 10-31 then 10-28; 10-25 is before the cut
+        self.assertEqual(memory.recently_created(datetime(2027, 1, 1, tzinfo=timezone.utc)), [])
+
     def test_archived_or_missing_stages_are_not_listed(self):
         memory = self.story(recall={'random_chance': 0})
         path = self.backend.vault / 'story_b.md'
