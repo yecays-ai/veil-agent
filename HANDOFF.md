@@ -1,5 +1,10 @@
 # HANDOFF
 
+## 工单 369 交接
+- 去重判定改在 `recall_rotation.py`（`REPEAT_LINKS` 只含 same_event；`EVENT_LINKS` 仍是整段经历用于目录）和 `memory_agent.py` 的 `context()` 里 `duplicate()`/`same_experience()`；`stage_slots` 默认 2。说明在 `docs/tickets/369-recall-keeps-adjacent-stages.md`。
+- 待 lan 真机验收：问「拒绝写入、又让他覆盖第一个文件那次」两段是否都想得起；日常单话题不应出现同一经历占满名额。
+- 已知限制：G1 原问法检索不到闸门（检索未命中，另议）。
+
 ## 旧记忆整理第一批（2026-11-16，写入正式库，纯数据）
 
 - 实验脚本、报告、草稿都在 Lan 电脑 `experiments/consolidate-367/out/batchA/`（report.md、report2.md、drafts.json），含私人聊天，不入库。写前备份 `veil-agent/backups-batchA/20261117T042039-prewrite/`（再早一份 `20261117T035125/`）；恢复：退出 Peter，把 memory 目录、memory-sidecar.jsonl、memory-versions.jsonl 拷回 `data/peter/`。

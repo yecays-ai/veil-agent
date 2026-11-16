@@ -5,9 +5,11 @@ decides which of the candidates Ombre already returned are shown this turn, and 
 
 - Cooldown: a memory shown automatically is not shown automatically again for `cooldown_turns`
   turns. A cooled candidate is dropped, not replaced by a weaker one, so a turn may show none.
-- Same event: two candidates count as one event when Ombre linked them (`same_event`,
-  `continuation_of`, `continues`) or their stored content vectors are at least
-  `dedup_similarity` apart; only the first is shown.
+- Same event: two candidates count as one event (a repeat) when Ombre linked them as `same_event` or their
+  stored content vectors are at least `dedup_similarity` apart; only the first is shown.
+- Stages (ticket 369): memories joined by `continuation_of`, `continues` or Peter's own link_to notes are
+  different stages of one experience, not repeats. Each may be recalled when it is itself a hit, but one
+  experience takes at most `stage_slots` of the recalled memories (the rest stay in the directory line).
 - Rotation (opening and autonomous wakes, whose query does not name a topic): candidates are
   ordered by importance, and among equal importance the one shown longest ago comes first.
 - Long memories: only the title, date and opening of the body are shown, with a pointer to
@@ -27,8 +29,10 @@ DEFAULTS = {
     'rotation_candidates': 8,
     'directory': True,
     'directory_members': 6,
+    'stage_slots': 2,
 }
-EVENT_LINKS = frozenset({'same_event', 'continuation_of', 'continues'})
+EVENT_LINKS = frozenset({'same_event', 'continuation_of', 'continues'})   # everything that joins an experience
+REPEAT_LINKS = frozenset({'same_event'})                                # the same thing twice: shown once
 HISTORY_LIMIT = 400
 
 
@@ -57,6 +61,9 @@ def settings(memory_cfg):
     members = raw.get('directory_members')
     if type(members) is int and 2 <= members <= 12:
         result['directory_members'] = members
+    slots = raw.get('stage_slots')
+    if type(slots) is int and 1 <= slots <= 3:
+        result['stage_slots'] = slots
     for key in ('dedup_similarity', 'random_chance'):
         value = raw.get(key)
         if type(value) in (int, float) and 0 <= value <= 1:
@@ -134,10 +141,10 @@ def front_matter(raw):
     return meta
 
 
-def linked_as_event(a, b, metas):
+def linked_as_event(a, b, metas, kinds=REPEAT_LINKS):
     for left, right in ((a, b), (b, a)):
         for target, kind in metas.get(left, {}).get('links', []):
-            if target == right and kind in EVENT_LINKS:
+            if target == right and kind in kinds:
                 return True
     return False
 
