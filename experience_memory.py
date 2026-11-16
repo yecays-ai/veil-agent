@@ -68,10 +68,15 @@ For what you keep:
 
 earlier_entries are memories you already have that may be about the same things (your own earlier notes and memories found in your library). If these messages are about the same matter as one of them (it went on, turned out differently, or your view changed), do not write a new entry: return an update for that id, the whole memory rewritten as one short paragraph telling the story as you would now recall it, at most {update_chars} characters, keeping what still matters from the old text (its dates too) and folding in what happened since. It replaces the old text; the old version is kept where Lan can restore it. If it is a later stage of one of them rather than the same stage again (a new development, a different attitude at a later time), write a new entry and put that memory's id in its \"continues\"; the stages already linked to a memory are listed under its \"stages\". Only something with no earlier memory becomes a new entry.
 
-If your_first_draft is present, it is what you answered a moment ago, and earlier_entries now also holds the memories its entries' own words matched (matched_by_each_entry): look again, keeping what was right, and return the final answer in the same form.
-
 Return exactly one JSON object and nothing else:
 {{"entries":[{{"title":"short title","text":"...","continues":"id, only if it is a later stage"}}],"updates":[{{"id":"entry id from earlier_entries","text":"..."}}]}}"""
+
+FIX_PROMPT = """The text above is who you are. This call is not a chat: you are tidying your own memory. A moment ago you \
+wrote the memory drafts below, and each has one problem, named in "problem". Return each one corrected: the same memory, \
+about the same thing, keeping what happened, how it turned out and the attitude you showed, in your own words and the \
+language it is in; change only what the problem says. Do not decide anything else about it.
+
+Return exactly one JSON object and nothing else: {{"fixes":[{{"ref":"the draft's ref","text":"..."}}]}}"""
 
 # Conservative local filter (same idea as the old veil phone's sensitiveMemoryText), not a promise to catch every secret.
 SECRET = re.compile(r'\b(?:sk-[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9]{20,}|Bearer\s+\S+|'
@@ -358,22 +363,6 @@ class ExperienceMemory:
                 break
         return out
 
-    def _drafts_related(self, entries, offered):
-        """Ticket 368: before anything is written, what the library already holds about each new entry's own
-        words. Returns (memories not offered yet, {entry title: ids of all the memories its words matched})."""
-        taken = {item['id'] for item in offered}
-        out, matches = [], {}
-        for entry in entries:
-            for memory_id in self._search_ids(f'{entry["title"]}\n{entry["text"]}'[:1000]):
-                if memory_id not in taken:
-                    taken.add(memory_id)
-                    item = self._offer(memory_id)
-                    if item:
-                        out.append(item)
-                if any(item['id'] == memory_id for item in [*offered, *out]):
-                    matches.setdefault(entry['title'], []).append(memory_id)
-        return out, matches
-
     def _candidates(self, events):
         """His latest entries that still exist and are not hidden, newest first."""
         seen, out = set(), []
@@ -429,6 +418,32 @@ class ExperienceMemory:
                 return True
         return False
 
+    def _problem(self, text, limit, batch):
+        """What is wrong with a text that cannot be written as it is, or None. Never shows a secret back."""
+        if SECRET.search(text):
+            return None
+        if len(text) > limit:
+            return (f'{len(text)} characters; the most is {limit}. Shorten it, keeping the facts and the attitude; '
+                    'what belongs to a later stage is not part of this one.')
+        if self._quotes(text, batch):
+            return 'repeats a stretch of a message word for word; say it in your own words.'
+        return None
+
+    def _fix(self, pending):
+        """Ticket 368: the flawed drafts only, shown back with their problem. The model returns corrected text and
+        nothing else: which memory it is about, whether it continues one and what the entry is called are kept by the
+        program from the first answer."""
+        data = {'drafts': [{'ref': item['ref'], 'title': item.get('title') or '', 'text': item['text'],
+                            'problem': item['problem']} for item in pending]}
+        messages = [{'role': 'system', 'content': self.cfg.persona},
+                    {'role': 'system', 'content': FIX_PROMPT},
+                    {'role': 'user', 'content': json.dumps(data, ensure_ascii=False, separators=(',', ':'))}]
+        payload = _parse_json_object(self._call_model(messages))
+        fixes = payload.get('fixes') if isinstance(payload, dict) else None
+        if not isinstance(fixes, list):
+            raise UserError('经历整理的修改没有返回可用的结果。')
+        return {str(item.get('ref')): str(item.get('text') or '').strip() for item in fixes if isinstance(item, dict)}
+
     def _validated(self, output, batch, candidates, final=True):
         """(entries, updates, dropped, flagged). A text that is too long or copies the chat is not silently lost:
         when `final` is false it comes back in `flagged` (with its text and its `continues`) so the model can be
@@ -444,24 +459,14 @@ class ExperienceMemory:
         known = {candidate['id'] for candidate in candidates}
         rewritable = {candidate['id'] for candidate in candidates if candidate.get('whole', True)}
 
-        def problem(text, limit):
-            if SECRET.search(text):
-                return None   # never shown back to the model
-            if len(text) > limit:
-                return f'{len(text)} characters; the most is {limit}. Shorten it, or keep what belongs to this stage ' \
-                       'and leave the rest out (a later stage can be its own entry with "continues").'
-            if self._quotes(text, batch):
-                return 'repeats a stretch of a message word for word; say it in your own words.'
-            return None
         for item in raw_entries[:MAX_ENTRIES]:
             title = ' '.join(str((item or {}).get('title') or '').split())[:TITLE_CHARS] if isinstance(item, dict) else ''
             text = str(item.get('text') or '').strip() if isinstance(item, dict) else ''
             continues = item.get('continues') if isinstance(item, dict) else None
             continues = continues if isinstance(continues, str) and continues in known else None
-            fault = problem(text, ENTRY_CHARS) if title and text else None
+            fault = self._problem(text, ENTRY_CHARS, batch) if title and text else None
             if fault and not final:
-                flagged.append({'entry': {'title': title, 'text': text, **({'continues': continues} if continues else {})},
-                                'problem': fault})
+                flagged.append({'kind': 'entry', 'title': title, 'text': text, 'continues': continues, 'problem': fault})
                 continue
             if not title or not text or fault or SECRET.search(text):
                 dropped += 1
@@ -470,9 +475,9 @@ class ExperienceMemory:
         for item in raw_updates[:MAX_UPDATES]:
             memory_id = item.get('id') if isinstance(item, dict) else None
             text = str(item.get('text') or '').strip() if isinstance(item, dict) else ''
-            fault = problem(text, UPDATE_CHARS) if memory_id in rewritable and text else None
+            fault = self._problem(text, UPDATE_CHARS, batch) if memory_id in rewritable and text else None
             if fault and not final and not any(update['id'] == memory_id for update in updates):
-                flagged.append({'update': {'id': memory_id, 'text': text}, 'problem': fault})
+                flagged.append({'kind': 'update', 'id': memory_id, 'text': text, 'problem': fault})
                 continue
             if (memory_id not in rewritable or not text or fault
                     or any(update['id'] == memory_id for update in updates)):
@@ -553,12 +558,10 @@ class ExperienceMemory:
                 item['too_long_to_rewrite'] = True   # can be continued, not rewritten
             return item
 
-        def build(candidates, problems=(), draft=None):
+        def build(candidates):
             data = {
                 'local_time_now': self._now().astimezone(zone).strftime('%Y-%m-%d %H:%M'),
                 'earlier_entries': [shown(c) for c in candidates],
-                **({'problems_with_your_first_draft': list(problems)} if problems else {}),
-                **({'your_first_draft': draft} if draft else {}),
                 'messages': [{'time': item['time'].strftime('%Y-%m-%d %H:%M'),
                           'from': 'Lan' if item['role'] == 'user' else self.cfg.name, 'text': item['text'],
                           **({'sent_on_your_own': ('after: ' + item['own']) if isinstance(item['own'], str)
@@ -588,36 +591,39 @@ class ExperienceMemory:
         self.store.append(self.path, {'kind': 'attempt', **mark, 'time': self.budget.clock()})
         span = [batch[0]['time'].isoformat(timespec='minutes'), last['time'].isoformat(timespec='minutes')]
         written = updated = 0
+        failed = []
         try:
             entries, updates, dropped, flagged = self._validated(
                 self._call_model(messages), batch, candidates, final=False)
-            # Ticket 368: before writing, look at what the library holds about the drafts themselves (all of
-            # them, including one that needs fixing), and show a flawed draft back once. One more call at most,
-            # within the same daily ceiling, working from the first draft; if it fails, whatever was fine in the
-            # first answer is still saved (nothing is lost by looking again).
-            drafted = entries + [item['entry'] for item in flagged if 'entry' in item]
-            extra, matches = self._drafts_related(drafted, candidates) if drafted else ([], {})
-            looks = 0
-            while (extra or flagged) and looks < LOOKS and self.spent_today() + worst <= cap:
-                looks += 1
-                draft = {'entries': [*entries, *({**item['entry'], 'problem': item['problem']}
-                                                 for item in flagged if 'entry' in item)],
-                         'updates': [*updates, *({**item['update'], 'problem': item['problem']}
-                                                 for item in flagged if 'update' in item)],
-                         'matched_by_each_entry': matches}
-                notes = [{**({'title': item['entry']['title']} if 'entry' in item else {'id': item['update']['id']}),
-                          'problem': item['problem']} for item in flagged]
-                kept = (entries, updates, dropped, flagged)
+            # Ticket 368: what the first answer decided (update / continue / new, and which memory) is kept as it is.
+            # A draft that is fine is saved at once. One that is too long or copies the chat is shown back with its
+            # problem, and only its text may change (at most LOOKS tries, within the daily ceiling); one that cannot
+            # be fixed is not saved and is reported in the ledger.
+            for number, item in enumerate(flagged):
+                item['ref'] = f'd{number}'
+            pending, tries = flagged, 0
+            while pending and tries < LOOKS and self.spent_today() + worst <= cap:
+                tries += 1
                 try:
-                    candidates_now = candidates + extra
-                    entries, updates, dropped, flagged = self._validated(
-                        self._call_model(build(candidates_now, notes, draft)), batch, candidates_now,
-                        final=looks == LOOKS)
-                    candidates, extra = candidates_now, []
+                    fixed = self._fix(pending)
                 except Exception:
-                    entries, updates, dropped, flagged = kept
                     break
-            dropped += len(flagged)
+                still = []
+                for item in pending:
+                    text = fixed.get(item['ref'])
+                    fault = self._problem(text, ENTRY_CHARS if item['kind'] == 'entry' else UPDATE_CHARS, batch) \
+                        if text else 'came back empty'
+                    if text and not fault and item['kind'] == 'entry':
+                        entries.append({'title': item['title'], 'text': text,
+                                        **({'continues': item['continues']} if item['continues'] else {})})
+                    elif text and not fault and not any(u['id'] == item['id'] for u in updates):
+                        updates.append({'id': item['id'], 'text': text})
+                    else:
+                        still.append({**item, 'text': text or item['text'], 'problem': fault or 'already rewritten'})
+                pending = still
+            failed = [{**({'title': item['title']} if item['kind'] == 'entry' else {'id': item['id']}),
+                       'problem': item['problem']} for item in pending]
+            dropped += len(pending)
             for update in updates:
                 updated += bool(self._save_update(update, next(
                     (c['text'] for c in candidates if c['id'] == update['id']), None)))
@@ -632,7 +638,8 @@ class ExperienceMemory:
             # Something was already saved: move on rather than write the same thing twice next time.
             dropped = 0
         self.store.append(self.path, {'kind': 'checkpoint', **mark, 'written': written, 'updated': updated,
-                                      'dropped': dropped, 'time': self.budget.clock()})
+                                      'dropped': dropped, 'time': self.budget.clock(),
+                                      **({'unfixed': failed} if failed else {})})
         self._context_cache = None
         return 'written' if written or updated else 'skipped'
 

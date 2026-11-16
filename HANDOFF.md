@@ -3,7 +3,7 @@
 ## 工单 368（2026-11-16）：自动整理写入前先看 Peter 已存过什么
 
 - 说明在 `docs/tickets/368-experience-tidy-checks-before-writing.md`。代码在 `experience_memory.py`（`_offer/_own_saves/_library/_drafts_related/_validated`、`_digest` 里的第二次询问）和 `memory_agent.py` 的 `experience_stages`（供整理用，和 365 目录同一条关联链）。
-- 整理的第二次询问条件：新建草稿搜出没给过的相关记忆，或有文字超过 600 字。最多多一次调用，仍受每日预算；失败就用第一次的答案。
+- 职责分离（11-16 Lan 定）：第一次回答的决定（更新/接续/新建和 ID）由程序保留；合格草稿直接保存；只有超 600 字或抄聊天原句的草稿才进 `_fix`（只返回修改后的正文，最多 `LOOKS`=2 次，受每日预算限制），修不好不保存，原因写进整理记录 `unfixed`。已验证过「搜到相关记忆就再问一次」不稳定，已去掉，别再加回来。
 - 没做：Peter 主动存和整理共用同一个写入函数（两边最底层写入已相同；差别在「他展示过才能重写」和确认法，整理线程没有，故整理只对自己读到的候选重写）。若以后要合并，要先定 `_rewrite` 的展示规则。
 - 同期调查（只读，在 Lan 电脑 `experiments/consolidate-367/out/batch5/recall-chain.md`）：召回排序里文本门（≥50）条目会挤掉只过向量门的条目（综合分 36 排第 7，只取前 3）；没标签的记忆几乎只靠向量。给旧记忆补标签对召回有用。这条没有改 Ombre。
 
