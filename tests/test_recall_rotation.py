@@ -273,16 +273,25 @@ class RecallRotationTests(unittest.TestCase):
         sidecar.link('mm_second', 'zz_first')
         sidecar.link('aa_third', 'mm_second')
         text, refs = self.recall(memory, 'crane rainy morning started')
-        self.assertEqual(refs, ['zz_first'])
+        self.assertEqual(refs[0], 'zz_first')                   # ticket 369: other stages that are hits may join
+        self.assertLessEqual(len(refs), 2)
         self.assertIn('Crane begins (this one) → 11-04 Crane wing tears [mm_second] → 11-04 Crane stands [aa_third]', text)
 
     def test_the_stage_dedup_blocks_still_shows_up_in_the_directory(self):
         memory = self.story(recall={'random_chance': 0})
         text, refs = self.recall(memory, 'tiles domino letter fell')
-        self.assertEqual(len(refs), 1)                          # one stage of the experience per turn
-        self.assertEqual(memory.last_recall_skipped['same_event'], 1)
+        self.assertEqual(len(refs), 2)                          # ticket 369: both stages that were hits come
+        self.assertEqual(memory.last_recall_skipped['same_event'], 0)
         self.assertIn('The letter', text)
         self.assertIn('Domino night', text)
+
+    def test_stage_slots_cap_one_experience(self):
+        """Ticket 369: linked stages are not repeats, yet one experience does not fill every recalled slot."""
+        memory = self.story(recall={'random_chance': 0, 'stage_slots': 1})
+        text, refs = self.recall(memory, 'tiles domino letter fell')
+        self.assertEqual(len(refs), 1)
+        self.assertEqual(memory.last_recall_skipped['stage_cap'], 1)
+        self.assertIn('Domino night', text)                     # the blocked stage is still in the directory line
 
     def test_ombre_event_links_make_a_directory_too_and_a_lone_memory_gets_none(self):
         memory = self.memory(recall={'random_chance': 0})

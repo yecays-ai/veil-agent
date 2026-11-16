@@ -511,7 +511,7 @@ class Memory:
         self.rotation = Cooldown(saved[-1] if saved else None)
         self.rng = random.Random()
         self.last_context_kinds = {}
-        self.last_recall_skipped = {'cooldown': 0, 'same_event': 0}
+        self.last_recall_skipped = {'cooldown': 0, 'same_event': 0, 'stage_cap': 0}
         self.bucket_details_cache = {}
         self.native_hidden = set()
         try:
@@ -1239,13 +1239,13 @@ class Memory:
     def context(self, query, *, include_opening=True, recent=None, rotate=False):
         """This turn's automatic memories. `rotate` is for wakes whose text names no topic (ticket 353)."""
         from recall_relevance import cosine
-        from recall_rotation import (asks_about_past, drift_hits, excerpt, experience_chain, rotate as rotated,
-                                     same_event)
+        from recall_rotation import (EVENT_LINKS, asks_about_past, drift_hits, excerpt, experience_chain,
+                                     linked_as_event, rotate as rotated, same_event)
         self._turn_notice_local.seen = set()
         self.last_context_refs = []
         self.last_context_kinds = {}
         self.last_assisted = None
-        self.last_recall_skipped = {'cooldown': 0, 'same_event': 0}
+        self.last_recall_skipped = {'cooldown': 0, 'same_event': 0, 'stage_cap': 0}
         recall_cfg = self.recall_settings
         cooldown = 0 if asks_about_past(query) and not rotate else recall_cfg['cooldown_turns']
         widen = rotate and recall_cfg['rotation_candidates'] > 3
@@ -1299,14 +1299,21 @@ class Memory:
         adjacency = self._event_adjacency() if recall_cfg['dedup'] or recall_cfg['directory'] else {}
 
         def same_experience(key, other):
-            # Ticket 365: stages Peter linked as one experience count as the same event too (the sidecar is where
-            # his link_to notes live; Ombre's own relation_links never saw them).
-            return key == other or other in experience_chain(key, lambda node: adjacency.get(node, ()))
+            # Ticket 365: stages Peter linked as one experience (the sidecar is where his link_to notes live; Ombre's
+            # own relation_links never saw them) and Ombre's continuation links.
+            return (key == other or other in experience_chain(key, lambda node: adjacency.get(node, ()))
+                    or linked_as_event(key, other, metas, EVENT_LINKS))
 
         def duplicate(key, kept):
-            return recall_cfg['dedup'] and any(
-                same_event(key, other, metas, vectors, threshold, cosine) or same_experience(key, other)
-                for other, _ in kept)
+            # Ticket 369: only a repeat (Ombre's same_event, near-identical text) is dropped. Another stage of the
+            # same experience is a different memory and may be recalled itself, up to stage_slots of them.
+            if not recall_cfg['dedup']:
+                return None
+            if any(same_event(key, other, metas, vectors, threshold, cosine) for other, _ in kept):
+                return 'same_event'
+            if sum(same_experience(key, other) for other, _ in kept) >= recall_cfg['stage_slots']:
+                return 'stage_cap'
+            return None
 
         kept = []
         for key, body in candidates:
@@ -1315,8 +1322,9 @@ class Memory:
             if self.rotation.cooled(key, cooldown):
                 self.last_recall_skipped['cooldown'] += 1
                 continue
-            if duplicate(key, kept):
-                self.last_recall_skipped['same_event'] += 1
+            skipped = duplicate(key, kept)
+            if skipped:
+                self.last_recall_skipped[skipped] += 1
                 continue
             kept.append((key, body))
             if widen:
