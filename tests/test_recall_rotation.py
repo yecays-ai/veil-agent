@@ -13,7 +13,9 @@ from pathlib import Path
 from unittest.mock import Mock
 
 from memory_agent import Memory, vault_path
-from recall_rotation import Cooldown, asks_about_past, drift_hits, excerpt, front_matter, rotate, settings
+from memory_sidecar import Sidecar
+from recall_rotation import (Cooldown, asks_about_past, directory_line, drift_hits, excerpt, experience_chain,
+                             front_matter, rotate, settings)
 from veil_agent import Budget, Character, Store, memory_ref_fields
 
 
@@ -223,14 +225,92 @@ class RecallRotationTests(unittest.TestCase):
             return counts, chars
 
         before, before_chars = run({'enabled': False})
-        after, after_chars = run(None)
+        # Ticket 365's experience directory adds a line to linked memories, which is not what this compares.
+        after, after_chars = run({'directory': False})
         top_before = max(before.values()) / sum(before.values())
         top_after = max(after.values()) / sum(after.values())
         self.assertLess(top_after, top_before + 1e-9)
         self.assertLess(after_chars, before_chars)
 
+    STORY = {
+        'story_a': {'content': 'domino night we stacked tiles until dawn', 'title': 'Domino night',
+                    'created': '2026-10-25T21:00:00'},
+        'story_b': {'content': 'tiles fell so she wrote me a letter about it', 'title': 'The letter',
+                    'created': '2026-10-28T09:00:00'},
+        'story_c': {'content': 'she woke up and found the finished spiral', 'title': 'Waking up to the spiral',
+                    'created': '2026-10-31T08:00:00'},
+        'lonely': {'content': 'a lone fictional memory about teapots', 'title': 'Teapots'},
+    }
+
+    def story(self, **kwargs):
+        memory = self.memory(rows=self.STORY, **kwargs)
+        sidecar = Sidecar(self.store, 'fake', memory.budget.clock)
+        sidecar.link('story_b', 'story_a')
+        sidecar.link('story_c', 'story_b')
+        return memory
+
+    def test_a_stage_of_a_longer_experience_comes_with_the_others_dates_and_titles(self):
+        """Ticket 365: Peter's own link_to chain (sidecar) is listed, oldest first, with this stage marked."""
+        memory = self.story(recall={'random_chance': 0})
+        text, refs = self.recall(memory, 'domino stacked')
+        self.assertEqual(refs, ['story_a'])
+        self.assertIn('10-25 Domino night (this one) → 10-28 The letter [story_b] → '
+                      '10-31 Waking up to the spiral [story_c]', text)
+        self.assertNotIn('so she wrote me a letter', text)      # titles and dates only, not the other stages' text
+
+    def test_the_stage_dedup_blocks_still_shows_up_in_the_directory(self):
+        memory = self.story(recall={'random_chance': 0})
+        text, refs = self.recall(memory, 'tiles domino letter fell')
+        self.assertEqual(len(refs), 1)                          # one stage of the experience per turn
+        self.assertEqual(memory.last_recall_skipped['same_event'], 1)
+        self.assertIn('The letter', text)
+        self.assertIn('Domino night', text)
+
+    def test_ombre_event_links_make_a_directory_too_and_a_lone_memory_gets_none(self):
+        memory = self.memory(recall={'random_chance': 0})
+        text, refs = self.recall(memory, 'garden roses planted spring')
+        self.assertEqual(refs, ['garden'])
+        self.assertIn('(this one)', text)
+        self.assertNotIn('one stage of a longer experience', self.recall(self.story(recall={'random_chance': 0}),
+                                                                          'teapots lone')[0])
+
+    def test_archived_or_missing_stages_are_not_listed(self):
+        memory = self.story(recall={'random_chance': 0})
+        path = self.backend.vault / 'story_b.md'
+        path.write_text(path.read_text(encoding='utf-8').replace('type: dynamic', 'type: archived'), encoding='utf-8')
+        (self.backend.vault / 'story_c.md').unlink()
+        text, _ = self.recall(memory, 'domino stacked')
+        self.assertNotIn('The letter', text)
+        self.assertNotIn('spiral', text)
+        self.assertNotIn('one stage of a longer experience', text)   # nothing left to list
+
+    def test_the_directory_can_be_turned_off(self):
+        memory = self.story(recall={'random_chance': 0, 'directory': False})
+        text, refs = self.recall(memory, 'domino stacked')
+        self.assertEqual(refs, ['story_a'])
+        self.assertNotIn('one stage of a longer experience', text)
+        self.assertFalse(settings({'recall': {'enabled': False}})['directory'])
+
+    def test_a_damaged_sidecar_only_means_no_directory(self):
+        memory = self.story(recall={'random_chance': 0})
+        (self.store.root / 'fake' / 'memory-sidecar.jsonl').write_text('{not json', encoding='utf-8')
+        text, refs = self.recall(memory, 'domino stacked')
+        self.assertEqual(refs, ['story_a'])
+        self.assertNotIn('one stage of a longer experience', text)
+
 
 class HelperTests(unittest.TestCase):
+    def test_experience_chain_and_directory_line(self):
+        graph = {'a': {'b'}, 'b': {'a', 'c'}, 'c': {'b'}, 'x': set()}
+        self.assertEqual(experience_chain('a', lambda key: graph.get(key, set())), ['a', 'b', 'c'])
+        self.assertEqual(experience_chain('a', lambda key: graph.get(key, set()), limit=2), ['a', 'b'])
+        self.assertEqual(experience_chain('x', lambda key: graph.get(key, set())), ['x'])
+        entries = [(str(i), f'2026-10-{10 + i}', f't{i}') for i in range(9)]
+        line = directory_line('4', entries, 4)
+        self.assertIn('…10-12 t2 [2] → 10-13 t3 [3] → 10-14 t4 (this one) → 10-15 t5 [5] → …', line)
+        self.assertEqual(directory_line('4', entries[:1], 4), '')
+        self.assertIn('2025-12-30 old [o]', directory_line('n', [('o', '2025-12-30', 'old'), ('n', '2026-01-02', 'new')], 6))
+
     def test_settings_defaults_and_bad_values(self):
         self.assertEqual(settings({})['cooldown_turns'], 3)
         self.assertEqual(settings({'recall': {'cooldown_turns': -1, 'random_chance': 3}})['random_chance'], 0.1)

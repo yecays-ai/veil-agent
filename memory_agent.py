@@ -1096,10 +1096,102 @@ class Memory:
             # Losing the cooldown after a restart only means a memory may come back sooner.
             self.retrieval_failure('rotation_state', exc)
 
+    def _event_adjacency(self):
+        """Ticket 365: {memory_id: ids it shares an experience with} from Peter's own link_to notes (sidecar), both
+        directions. Merged-away memories are left out. A damaged sidecar only means no chains this turn."""
+        from memory_sidecar import Sidecar
+        try:
+            notes = Sidecar(self.store, self.cfg.id, self.budget.clock).all()
+        except Exception:
+            return {}
+        adjacency = {}
+        for key, note in notes.items():
+            if note.get('merged_into'):
+                continue
+            for target in note.get('links', []):
+                if notes.get(target, {}).get('merged_into'):
+                    continue
+                adjacency.setdefault(key, set()).add(target)
+                adjacency.setdefault(target, set()).add(key)
+        return adjacency
+
+    def _ombre_event_sources(self):
+        """Ticket 365: {memory_id: ids whose Ombre relation_links point at it with an event type}. Ombre writes a
+        link on the newer memory, so reading only a memory's own links would never find the stages after it. The
+        vault is re-read only when a file was added, removed or changed."""
+        from recall_rotation import EVENT_LINKS, front_matter
+        vault = self.store.root / self.cfg.id / 'memory'
+        try:
+            files = [path for path in vault.rglob('*.md') if not path.is_symlink()]
+            signature = (len(files), sum(path.stat().st_mtime_ns for path in files))
+        except OSError:
+            return {}
+        cached = getattr(self, '_event_sources_cache', None)
+        if cached and cached[0] == signature:
+            return cached[1]
+        sources = {}
+        for path in files:
+            try:
+                meta = front_matter(path.read_text(encoding='utf-8'))
+            except (OSError, UnicodeError):
+                continue
+            own = meta.get('id') or path.stem.rpartition('_')[2] or path.stem
+            for target, kind in meta['links']:
+                if kind in EVENT_LINKS:
+                    sources.setdefault(target, set()).add(own)
+        self._event_sources_cache = (signature, sources)
+        return sources
+
+    def _experience_directories(self, kept, metas, adjacency, size):
+        """Ticket 365: {memory_id: one line} for each recalled memory that is one stage of a longer experience: the
+        others' dates and titles, so Peter sees the whole thing instead of one slice. Hidden, archived or deleted
+        stages are left out; any failure just means no line for that memory."""
+        from recall_rotation import EVENT_LINKS, directory_line, experience_chain, front_matter
+        cache = {}
+        inbound = self._ombre_event_sources()
+
+        def meta_of(key):
+            if key not in metas:
+                try:
+                    metas[key] = front_matter(self.raw_content_for(key))
+                except Exception:
+                    metas[key] = {'links': []}
+            return metas[key]
+
+        def neighbours(key):
+            found = set(adjacency.get(key, ())) | inbound.get(key, set())
+            found.update(target for target, kind in meta_of(key)['links'] if kind in EVENT_LINKS)
+            return found
+
+        lines = {}
+        for key, _ in kept:
+            try:
+                members = experience_chain(key, neighbours)
+                entries = []
+                for member in members:
+                    if member != key:
+                        meta = meta_of(member)
+                        if 'title' not in meta and 'name' not in meta:
+                            continue  # no such memory file
+                        if member not in cache:
+                            cache[member] = self.refresh_visibility(member)
+                        if not cache[member]:
+                            continue
+                    meta = meta_of(key if member == key else member)
+                    entries.append((member, (meta.get('created') or '')[:10],
+                                    meta.get('title') or meta.get('name') or ''))
+                line = directory_line(key, entries, size)
+                if line:
+                    lines[key] = line
+            except Exception as exc:
+                self.retrieval_failure('experience_directory', exc)
+        return lines
+
     def context(self, query, *, include_opening=True, recent=None, rotate=False):
         """This turn's automatic memories. `rotate` is for wakes whose text names no topic (ticket 353)."""
         from recall_relevance import cosine
-        from recall_rotation import asks_about_past, drift_hits, excerpt, rotate as rotated, same_event
+        from recall_rotation import (asks_about_past, drift_hits, excerpt, experience_chain, rotate as rotated,
+                                     same_event)
         self._turn_notice_local.seen = set()
         self.last_context_refs = []
         self.last_context_kinds = {}
@@ -1155,9 +1247,17 @@ class Memory:
                    if recall_cfg['dedup'] else {})
         threshold = recall_cfg['dedup_similarity']
 
+        adjacency = self._event_adjacency() if recall_cfg['dedup'] or recall_cfg['directory'] else {}
+
+        def same_experience(key, other):
+            # Ticket 365: stages Peter linked as one experience count as the same event too (the sidecar is where
+            # his link_to notes live; Ombre's own relation_links never saw them).
+            return key == other or other in experience_chain(key, lambda node: adjacency.get(node, ()))
+
         def duplicate(key, kept):
             return recall_cfg['dedup'] and any(
-                same_event(key, other, metas, vectors, threshold, cosine) for other, _ in kept)
+                same_event(key, other, metas, vectors, threshold, cosine) or same_experience(key, other)
+                for other, _ in kept)
 
         kept = []
         for key, body in candidates:
@@ -1199,7 +1299,10 @@ class Memory:
         for key, _ in opening_shown:
             kinds[key] = 'opening'
         limit = recall_cfg['excerpt_chars']
-        recall = [excerpt(key, body, metas.get(key, {}), limit) for key, body in kept]
+        directories = (self._experience_directories(kept, metas, adjacency, recall_cfg['directory_members'])
+                       if recall_cfg['directory'] else {})
+        recall = [excerpt(key, body, metas.get(key, {}), limit)
+                  + (('\n' + directories[key]) if key in directories else '') for key, body in kept]
         opening = [excerpt(key, body, metas.get(key, {}), limit) for key, body in opening_shown]
         self.last_context_refs = list(dict.fromkeys(
             [key for key, _ in opening_shown] + [key for key, _ in kept]))
