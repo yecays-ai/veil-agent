@@ -116,6 +116,73 @@ class TurnStopTests(unittest.TestCase):
         self.assertEqual(self.assistant_rows(), [])
         self.assertTrue(self.balanced())
 
+    def test_stop_abandons_a_model_request_that_is_still_waiting(self):
+        import threading
+        import time
+        release = threading.Event()
+        self.addCleanup(release.set)
+        chat = None
+
+        def model(*args, **kwargs):
+            threading.Timer(0.3, chat.user_stop.set).start()  # Lan presses stop during the relay wait
+            release.wait(30)
+            return sends({'text': 'too late'}), 100, 20, 0
+        chat = Chat(self.cfg, self.store, self.budget, model, output=[].append)
+        started = time.monotonic()
+        with self.assertRaises(RequestFailed) as result:
+            chat.send('fictional')
+        self.assertLess(time.monotonic() - started, 5)
+        self.assertIn('已停止', str(result.exception))
+        self.assertEqual(self.assistant_rows(), [])
+        # The provider may already have the request, so its reservation is kept, not released.
+        self.assertFalse(self.balanced())
+        release.set()
+        chat.model = Mock(side_effect=[(SimpleNamespace(content='fresh', tool_calls=[]), 100, 5, 0)])
+        self.assertEqual(chat.send('again'), 'fresh')
+
+    def test_stop_during_a_later_step_keeps_the_bubbles_already_sent(self):
+        import threading
+        release = threading.Event()
+        self.addCleanup(release.set)
+        chat = None
+
+        def model(*args, **kwargs):
+            model.calls += 1
+            if model.calls == 1:
+                return sends({'text': 'bubble 1'}, step=1), 100, 20, 0
+            threading.Timer(0.3, chat.user_stop.set).start()
+            release.wait(30)
+            return sends({'text': 'too late'}, step=2), 100, 20, 0
+        model.calls = 0
+        chat = Chat(self.cfg, self.store, self.budget, model, output=[].append)
+        self.assertEqual(chat.send('fictional'), 'bubble 1')
+        self.assertEqual(self.assistant_rows(), ['bubble 1'])
+
+    def test_abandonable_request_gets_the_provider_snapshot_before_it_starts(self):
+        seen = {}
+
+        def raw(messages, **kwargs):
+            seen.update(kwargs)
+            return SimpleNamespace(content='ok', tool_calls=[]), 100, 5, 0
+
+        def model(*args, **kwargs):
+            raise AssertionError('the locked wrapper must not be used from the helper thread')
+        model.raw = raw
+        chat = Chat(self.cfg, self.store, self.budget, model, output=[].append)
+        self.assertEqual(chat.send('fictional'), 'ok')
+        self.assertEqual(seen['_provider']['model'], 'fake-model')
+        self.assertIsNot(seen['_provider'], self.cfg.provider)
+
+    def test_hub_exit_request_also_stops_a_waiting_turn(self):
+        from veil_agent import ActivityState
+        from web_agent import Hub
+        hub = Hub('Test', ActivityState(self.store.root / 'test' / 'resident-state.json'),
+                  media_root=self.store.root / 'test' / 'media')
+        hub.chat = Chat(self.cfg, self.store, self.budget, Mock(), output=[].append)
+        hub.busy = True
+        self.assertEqual(hub.request_stop(), 'accepted')
+        self.assertTrue(hub.chat.user_stop.is_set())
+
     def test_hub_stop_only_while_replying(self):
         from veil_agent import ActivityState
         from web_agent import Hub

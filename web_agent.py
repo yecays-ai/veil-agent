@@ -1193,6 +1193,9 @@ class Hub(ScreenPopMixin):
             self.stopping = True
             self.pending = None
             self.autonomy_interrupted.set()
+            if self.chat is not None and self.busy and not self.autonomy_busy:
+                # Exit also abandons a model request Peter is still waiting on.
+                self.chat.user_stop.set()
             self.cond.notify_all()
             return 'accepted'
 

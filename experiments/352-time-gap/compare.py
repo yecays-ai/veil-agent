@@ -47,7 +47,7 @@ def main():
     def model(messages, **kwargs):
         if spent[0] >= args.cap:
             raise Cap()
-        response = call(messages, **kwargs)
+        response = getattr(call, 'raw', call)(messages, **kwargs)  # the chat turn already holds the model locks
         prompt, completion, cached = response[1], response[2], getattr(response[3], 'tokens', response[3]) or 0
         spent[0] += (Decimal(prompt - cached) * Decimal(str(price['input_cny_per_million']))
                      + Decimal(cached) * Decimal(str(price['cached_input_cny_per_million']))

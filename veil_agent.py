@@ -1164,6 +1164,10 @@ class RecallRejected(UserError):
     """A message cannot be recalled right now (too old, wrong sender, already handled)."""
 
 
+class ModelStopped(RequestFailed):
+    """Lan pressed stop while a model request was still in flight; the request was abandoned."""
+
+
 class RequestNotSent(UserError):
     """The provider request failed locally before anything was sent, so nothing was charged."""
 
@@ -3512,6 +3516,35 @@ class Chat:
         except (OSError, UserError):
             pass
 
+    def _model_call(self, *args, **kwargs):
+        """Call the model, but give up waiting as soon as Lan presses stop (ticket: stop during a slow relay).
+
+        The request runs on a helper thread and is abandoned (its answer is dropped) on stop; its
+        reservation stays charged because the provider may have received it. The turn already holds
+        the model-settings locks, so the helper calls the lock-free request function directly."""
+        if self.autonomy_mode:
+            return self.model(*args, **kwargs)
+        fn = getattr(self.model, '__dict__', {}).get('raw') or self.model
+        if fn is not self.model:
+            kwargs['_provider'] = dict(self.cfg.provider)
+        box, done = {}, threading.Event()
+
+        def run():
+            try:
+                box['result'] = fn(*args, **kwargs)
+            except BaseException as exc:  # handed back to the waiting thread
+                box['error'] = exc
+            finally:
+                done.set()
+
+        threading.Thread(target=run, name='veil-model-call', daemon=True).start()
+        while not done.wait(0.25):
+            if self.user_stop.is_set():
+                raise ModelStopped('已停止：Peter 这一轮还没有发出消息。')
+        if 'error' in box:
+            raise box['error']
+        return box['result']
+
     def _request_failed(self, exc):
         """Ticket 135: say which kind of provider failure it was and keep the provider's own words
         in a local file (keys redacted) so a wrong relay setting can be diagnosed."""
@@ -3902,7 +3935,7 @@ class Chat:
                 try:
                     sent_bytes = request_byte_size(messages)
                     self.budget.mark_dispatched(request_id)
-                    reply, prompt, completion, cached = self.model(messages)
+                    reply, prompt, completion, cached = self._model_call(messages)
                 except RequestNotSent:
                     self.budget.release_not_sent(request_id)
                     raise
@@ -4882,8 +4915,21 @@ class Chat:
             model_messages = alias_system_messages(loop_messages, self.tool_aliases)
             self.budget.mark_dispatched(reservation)
             try:
-                response = self.model(model_messages, tools=offered, message_output=True,
-                                      max_tokens=step_cfg.max_output_tokens, detail=True)
+                response = self._model_call(model_messages, tools=offered, message_output=True,
+                                            max_tokens=step_cfg.max_output_tokens, detail=True)
+            except ModelStopped:
+                # Lan pressed stop while the relay was still answering: the request is abandoned and
+                # its reservation stays charged (the provider may already have it).
+                if not autonomy:
+                    self.investigation.interrupt('user_stop', request_id, checkpoint_resuming)
+                    checkpoint_interrupted = True
+                if continuation_prefix:
+                    self.tool_stop_reason = '回复续接已中断，已保留此前生成的内容。'
+                    self.output(ChatOutput(self.tool_stop_reason, request_id=request_id, is_error=True))
+                    final = continuation_prefix
+                else:
+                    final = end_turn_here()
+                break
             except (KeyboardInterrupt, EOFError):
                 if continuation_prefix:
                     self.tool_stop_reason = '回复续接已中断，已保留此前生成的内容。'
@@ -4945,8 +4991,8 @@ class Chat:
                     model_messages = alias_system_messages(loop_messages, self.tool_aliases)
                     self.budget.mark_dispatched(reservation)
                     try:
-                        response = self.model(model_messages, tools=offered, message_output=True,
-                                              max_tokens=step_cfg.max_output_tokens, detail=True)
+                        response = self._model_call(model_messages, tools=offered, message_output=True,
+                                                    max_tokens=step_cfg.max_output_tokens, detail=True)
                     except (KeyboardInterrupt, EOFError):
                         if continuation_prefix:
                             self.tool_stop_reason = '回复续接已中断，已保留此前生成的内容。'
@@ -4954,6 +5000,17 @@ class Chat:
                             final = continuation_prefix
                             break
                         raise
+                    except ModelStopped:
+                        if not autonomy:
+                            self.investigation.interrupt('user_stop', request_id, checkpoint_resuming)
+                            checkpoint_interrupted = True
+                        if continuation_prefix:
+                            self.tool_stop_reason = '回复续接已中断，已保留此前生成的内容。'
+                            self.output(ChatOutput(self.tool_stop_reason, request_id=request_id, is_error=True))
+                            final = continuation_prefix
+                        else:
+                            final = end_turn_here()
+                        break
                     except RequestNotSent:
                         self.budget.release_not_sent(reservation)
                         raise
@@ -5553,8 +5610,10 @@ def make_model(root, cfg, provider=None, timeout=MODEL_TIMEOUT_SECONDS):
                      request_timeout=request_timeout)
 
     def _call(messages, *, json_output=False, max_tokens=None, thinking=None, detail=False,
-              tools=None, message_output=False, request_timeout=None):
-        p = current()
+              tools=None, message_output=False, request_timeout=None, _provider=None):
+        # `_provider` is a snapshot taken before an abandonable request starts, so a model Lan switches
+        # to after pressing stop is never read by the abandoned request.
+        p = dict(_provider if _provider is not None else current())
         if p.get('missing'):
             raise RequestNotSent('请先在模型设置里选择一个可用的 API 模型。')
         client = client_for(p)
@@ -5586,6 +5645,7 @@ def make_model(root, cfg, provider=None, timeout=MODEL_TIMEOUT_SECONDS):
         result = (choice.message.content, usage.prompt_tokens, usage.completion_tokens, cached)
         return result + (choice.finish_reason,) if detail else result
 
+    call.raw = _call  # lock-free; callers that already hold the model-settings locks use it
     return ModelClients(clients, lock), call
 
 
