@@ -1293,7 +1293,7 @@ class Memory:
         pool = []
         settings = self.assisted_settings(query, recent) if not rotate else None
         # Ticket 382: the relevance judge only serves a real sentence of hers, never a wake or the short-context path.
-        judge = (self.judge if self.judge is not None and not widen and not settings and query.strip() else None)
+        judge = (self.judge if self.judge is not None and not rotate and not widen and not settings and query.strip() else None)
         prefetched = None
         if judge is not None and judge.active():
             prefetched = judge.prefetch(query)   # embedding her sentence overlaps with Ombre's own search below
@@ -1320,6 +1320,7 @@ class Memory:
                 # "None fits" is an answer: nothing is filled back from Ombre. Only a technical failure
                 # (JudgeFailed) keeps today's recall for this turn.
                 normal = judge.choose(query, pool, prefetched)
+                drift = []   # a recollection nobody judged would be a way around "none fits"
             except JudgeFailed:
                 pass
             except Exception as exc:
