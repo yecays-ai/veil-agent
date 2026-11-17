@@ -135,6 +135,31 @@ class RecallRotationTests(unittest.TestCase):
         self.assertLessEqual(set(saved), {'turn', 'last', 'time'})  # IDs and turn numbers only, no memory text
         self.assertNotIn('dumplings', json.dumps(saved))
 
+    def test_rollback_gives_back_the_cooldown_of_a_turn_that_delivered_nothing(self):
+        memory = self.memory(recall={'cooldown_turns': 3, 'random_chance': 0})
+        self.assertEqual(self.recall(memory, 'cooking dumplings')[1], ['cooking'])
+        memory.rollback_recall()  # ticket 380: that turn produced no reply
+        self.assertEqual(self.recall(memory, 'cooking dumplings')[1], ['cooking'])
+        restarted = self.memory(recall={'cooldown_turns': 3, 'random_chance': 0})
+        memory.rollback_recall()
+        memory.rollback_recall()  # nothing left to undo: harmless
+        self.assertEqual(self.recall(restarted, 'cooking dumplings')[1], [])  # the delivered turn still counts
+
+    def test_rollback_restores_the_earlier_mark_not_nothing(self):
+        memory = self.memory(recall={'cooldown_turns': 1, 'random_chance': 0})
+        self.recall(memory, 'cooking dumplings')
+        first = dict(memory.rotation.last)
+        self.recall(memory, 'remember cooking dumplings')  # she asks: shown again, mark moves forward
+        memory.rollback_recall()
+        self.assertEqual(memory.rotation.last, first)
+
+    def test_release_lets_a_regenerated_turn_recall_again(self):
+        memory = self.memory(recall={'cooldown_turns': 3, 'random_chance': 0})
+        self.recall(memory, 'cooking dumplings')
+        self.assertEqual(self.recall(memory, 'cooking dumplings')[1], [])
+        memory.release_recall(['cooking'])
+        self.assertEqual(self.recall(memory, 'cooking dumplings')[1], ['cooking'])
+
     def test_same_event_by_link_shows_only_one(self):
         memory = self.memory(recall={'random_chance': 0})
         refs = self.recall(memory, 'garden roses')[1]

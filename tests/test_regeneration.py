@@ -68,6 +68,31 @@ class RegenerationTests(unittest.TestCase):
         with self.assertRaises(UserError):
             chat.prepare_regeneration('a1')
 
+    def test_regeneration_collects_the_memories_the_replaced_reply_was_given(self):
+        chat = self.chat([
+            {'role': 'user', 'content': 'q', 'request_id': 'r1', 'message_id': 'u1'},
+            {'role': 'assistant', 'content': 'a', 'request_id': 'r1', 'message_id': 'a1',
+             'memory_refs': ['m1', 'm2']}])
+        chat.prepare_regeneration('a1')
+        self.assertEqual(chat.regeneration_release_refs, ['m1', 'm2'])
+
+    def test_a_turn_that_delivers_nothing_gives_back_its_recall_cooldown(self):
+        chat = self.chat([])
+        chat.memory = Mock()
+        chat.memory.last_recall_marks = {'m1': None}
+
+        def failing(*args, **kwargs):
+            chat.memory.last_recall_marks = {'m1': None}
+            raise UserError('boom')
+        chat._send_under_model_lock = failing
+        with self.assertRaises(UserError):
+            chat.send('hi')
+        chat.memory.rollback_recall.assert_called_once()
+        chat.memory.rollback_recall.reset_mock()
+        chat._send_under_model_lock = lambda *a, **k: setattr(chat, 'last_reply_message_id', 'x') or 'ok'
+        chat.send('hi')
+        chat.memory.rollback_recall.assert_not_called()
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -1,5 +1,10 @@
 # HANDOFF
 
+## 工单 379 交接
+- 冷却回退：`memory_agent.py` 的 `release_recall()`/`rollback_recall()`，调用点在 `veil_agent.py` 的 `Chat.send()`（无回复则撤销）、`_send()`（重新生成时放出 `regeneration_release_refs`，由 `prepare_regeneration` 从被替换回复行的 `memory_refs` 收集；输入裁剪后释放）。
+- 待 lan 真机验收，见 STATUS 验收步骤。
+- 未处理的相邻点：「11 月 13 号……后来怎么样」这类带日期、「后来」的问法不触发 `asks_about_past` 豁免（`recall_rotation._PAST`），要不要加另议。
+
 ## 工单 369 交接
 - 去重判定改在 `recall_rotation.py`（`REPEAT_LINKS` 只含 same_event；`EVENT_LINKS` 仍是整段经历用于目录）和 `memory_agent.py` 的 `context()` 里 `duplicate()`/`same_experience()`；`stage_slots` 默认 2。说明在 `docs/tickets/369-recall-keeps-adjacent-stages.md`。
 - 待 lan 真机验收：问「拒绝写入、又让他覆盖第一个文件那次」两段是否都想得起；日常单话题不应出现同一经历占满名额。
