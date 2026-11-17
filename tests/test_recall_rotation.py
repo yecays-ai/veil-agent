@@ -12,7 +12,7 @@ from decimal import Decimal
 from pathlib import Path
 from unittest.mock import Mock
 
-from memory_agent import Memory, vault_path
+from memory_agent import SEARCH_SPARE_HITS, Memory, vault_path
 from memory_sidecar import Sidecar
 from recall_rotation import (Cooldown, asks_about_past, directory_line, drift_hits, excerpt, experience_chain,
                              front_matter, rotate, settings)
@@ -33,7 +33,7 @@ class FictionalOmbre:
                 f"created: '{row.get('created', '2026-10-20T10:00:00')}'\n"
                 f'importance: {row.get("importance", 5)}\n'
                 + (f'relation_links:\n{links}' if links else '')
-                + f'type: dynamic\n---\n{row["content"]}', encoding='utf-8')
+                + f'type: {row.get("type", "dynamic")}\n---\n{row["content"]}', encoding='utf-8')
 
     def render(self, keys):
         return '\n'.join(f'[bucket_id:{key}]\n{self.rows[key]["content"]}' for key in keys)
@@ -106,6 +106,31 @@ class RecallRotationTests(unittest.TestCase):
         rows = memory.context(query, include_opening=False, **kwargs)
         return rows[-1]['content'], list(memory.last_context_refs)
 
+    def test_an_archived_hit_does_not_use_up_one_of_the_three_slots(self):
+        """Ticket 381: Ombre returns archived memories too; they must be dropped BEFORE the first three are chosen."""
+        rows = {'gone': {'content': 'alpha beta gamma delta epsilon', 'type': 'archived'},
+                'a1': {'content': 'alpha beta gamma delta'}, 'a2': {'content': 'alpha beta gamma'},
+                'a3': {'content': 'alpha beta'}, 'a4': {'content': 'alpha'}}
+        memory = self.memory(rows, recall={'cooldown_turns': 0, 'random_chance': 0})
+        _, refs = self.recall(memory, 'alpha beta gamma delta epsilon')
+        self.assertEqual(['a1', 'a2', 'a3'], refs)
+        asked = [args['max_results'] for name, args in self.backend.calls if name == 'breath_search']
+        self.assertEqual([3 + SEARCH_SPARE_HITS], asked)
+
+    def test_with_fewer_than_three_visible_hits_nothing_is_padded(self):
+        rows = {'gone': {'content': 'alpha beta gamma', 'type': 'archived'},
+                'gone2': {'content': 'alpha beta', 'type': 'archived'},
+                'a1': {'content': 'alpha'}, 'other': {'content': 'unrelated words only'}}
+        memory = self.memory(rows, recall={'cooldown_turns': 0, 'random_chance': 0})
+        _, refs = self.recall(memory, 'alpha beta gamma')
+        self.assertEqual(['a1'], refs)
+
+    def test_a_search_that_only_finds_archived_memories_recalls_nothing(self):
+        rows = {'gone': {'content': 'alpha beta gamma', 'type': 'archived'}, 'other': {'content': 'unrelated words only'}}
+        memory = self.memory(rows, recall={'cooldown_turns': 0, 'random_chance': 0})
+        _, refs = self.recall(memory, 'alpha beta gamma')
+        self.assertEqual([], refs)
+
     def test_a_memory_is_not_shown_again_during_its_cooldown_and_the_slot_stays_empty(self):
         memory = self.memory(recall={'cooldown_turns': 2, 'random_chance': 0})
         self.assertEqual(self.recall(memory, 'train trip')[1], ['train'])
@@ -134,6 +159,31 @@ class RecallRotationTests(unittest.TestCase):
         saved = self.store.read('fake/memory/_agent/recall-rotation.jsonl')[-1]
         self.assertLessEqual(set(saved), {'turn', 'last', 'time'})  # IDs and turn numbers only, no memory text
         self.assertNotIn('dumplings', json.dumps(saved))
+
+    def test_rollback_gives_back_the_cooldown_of_a_turn_that_delivered_nothing(self):
+        memory = self.memory(recall={'cooldown_turns': 3, 'random_chance': 0})
+        self.assertEqual(self.recall(memory, 'cooking dumplings')[1], ['cooking'])
+        memory.rollback_recall()  # ticket 380: that turn produced no reply
+        self.assertEqual(self.recall(memory, 'cooking dumplings')[1], ['cooking'])
+        restarted = self.memory(recall={'cooldown_turns': 3, 'random_chance': 0})
+        memory.rollback_recall()
+        memory.rollback_recall()  # nothing left to undo: harmless
+        self.assertEqual(self.recall(restarted, 'cooking dumplings')[1], [])  # the delivered turn still counts
+
+    def test_rollback_restores_the_earlier_mark_not_nothing(self):
+        memory = self.memory(recall={'cooldown_turns': 1, 'random_chance': 0})
+        self.recall(memory, 'cooking dumplings')
+        first = dict(memory.rotation.last)
+        self.recall(memory, 'remember cooking dumplings')  # she asks: shown again, mark moves forward
+        memory.rollback_recall()
+        self.assertEqual(memory.rotation.last, first)
+
+    def test_release_lets_a_regenerated_turn_recall_again(self):
+        memory = self.memory(recall={'cooldown_turns': 3, 'random_chance': 0})
+        self.recall(memory, 'cooking dumplings')
+        self.assertEqual(self.recall(memory, 'cooking dumplings')[1], [])
+        memory.release_recall(['cooking'])
+        self.assertEqual(self.recall(memory, 'cooking dumplings')[1], ['cooking'])
 
     def test_same_event_by_link_shows_only_one(self):
         memory = self.memory(recall={'random_chance': 0})

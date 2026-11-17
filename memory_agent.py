@@ -441,6 +441,8 @@ def ordinary_hits(text, limit=3):
     return [(key, found[key]) for key in allowed if key in found]
 
 
+# Extra Ombre hits asked for beyond the three slots, so archived or hidden ones can be dropped without emptying a slot.
+SEARCH_SPARE_HITS = 5
 ERASE_NOTE = '记忆文件和程序保存的旧版本都已从硬盘抹掉。'
 
 
@@ -512,6 +514,7 @@ class Memory:
         self.rng = random.Random()
         self.last_context_kinds = {}
         self.last_recall_skipped = {'cooldown': 0, 'same_event': 0, 'stage_cap': 0}
+        self.last_recall_marks = None
         self.bucket_details_cache = {}
         self.native_hidden = set()
         try:
@@ -1032,8 +1035,9 @@ class Memory:
         from recall_relevance import context_text, cosine, load_vectors
         text = context_text(recent, query, settings['rounds'])
         embedder = self.embedder()  # a missing key fails here, before any extra search, reservation or request
-        extra = ordinary_hits(self.call('breath_search', {
-            'query': text, 'mode': 'automatic', 'with_ids': True, 'max_results': 3}))
+        extra = self.context_visible(ordinary_hits(self.call('breath_search', {
+            'query': text, 'mode': 'automatic', 'with_ids': True, 'max_results': 3 + SEARCH_SPARE_HITS}),
+            limit=3 + SEARCH_SPARE_HITS))[:3]
         candidates = dict(normal + extra + emotional)
         tokens = max(512, len(text.encode('utf-8')))
         rate = Decimal(str(self.cfg.memory['input_cny_per_million']))
@@ -1088,6 +1092,32 @@ class Memory:
             return load_vectors(vault_path(self.store.root, self.cfg.id) / 'embeddings.db', list(keys))
         except Exception:
             return {}
+
+    def release_recall(self, keys):
+        """Ticket 379: these memories count as not shown lately (a regenerated turn, or ones that never reached
+        the model), so the next recall may bring them back. Nothing is rewritten."""
+        with self.mutex:
+            changed = False
+            for key in keys or ():
+                if key in self.rotation.last:
+                    self.rotation.forget(key)
+                    changed = True
+        if changed:
+            self._save_rotation()
+
+    def rollback_recall(self):
+        """Ticket 379: the last recall's cooldown marks are undone, because that turn delivered no reply."""
+        with self.mutex:
+            marks, self.last_recall_marks = self.last_recall_marks, None
+            if not marks:
+                return
+            for key, previous in marks.items():
+                if previous is None:
+                    self.rotation.forget(key)
+                else:
+                    self.rotation.last.pop(key, None)
+                    self.rotation.last[key] = previous
+        self._save_rotation()
 
     def _save_rotation(self):
         try:
@@ -1246,6 +1276,7 @@ class Memory:
         self.last_context_kinds = {}
         self.last_assisted = None
         self.last_recall_skipped = {'cooldown': 0, 'same_event': 0, 'stage_cap': 0}
+        self.last_recall_marks = None
         recall_cfg = self.recall_settings
         cooldown = 0 if asks_about_past(query) and not rotate else recall_cfg['cooldown_turns']
         widen = rotate and recall_cfg['rotation_candidates'] > 3
@@ -1256,10 +1287,15 @@ class Memory:
         emotional = []
         drift = []
         try:
+            # Ticket 381: Ombre also returns archived memories, and its top three are cut before we look at
+            # visibility, so an archived hit used up a slot and was then dropped. Ask for a few spare hits,
+            # drop what Peter may not see, and only then keep the first three.
+            asked = recall_cfg['rotation_candidates'] if widen else 3 + SEARCH_SPARE_HITS
             raw = self.call('breath_search', {
-                'query': query, 'mode': 'automatic', 'with_ids': True,
-                'max_results': recall_cfg['rotation_candidates'] if widen else 3})
-            normal = ordinary_hits(raw, limit=recall_cfg['rotation_candidates'] if widen else 3)
+                'query': query, 'mode': 'automatic', 'with_ids': True, 'max_results': asked})
+            normal = ordinary_hits(raw, limit=asked)
+            if not widen:
+                normal = self.context_visible(normal, failure_stage='recall_visibility')[:3]
             drift = drift_hits(raw)
         except Exception as exc:
             self.retrieval_failure('breath_search', exc)
@@ -1382,6 +1418,8 @@ class Memory:
         self.last_context_kinds = {key: kinds.get(key, 'search') for key in self.last_context_refs}
         self.mark_surfaced(self.last_context_refs)
         with self.mutex:
+            # Ticket 379: remember what each mark replaced, so a turn that delivers nothing can take it back.
+            self.last_recall_marks = {key: self.rotation.last.get(key) for key in self.last_context_refs}
             self.rotation.mark(self.last_context_refs)
         self._save_rotation()
         recalled = [{'role': 'system', 'content':
