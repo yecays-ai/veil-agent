@@ -3525,6 +3525,8 @@ class Chat:
         if self.autonomy_mode:
             return self.model(*args, **kwargs)
         fn = getattr(self.model, '__dict__', {}).get('raw') or self.model
+        if fn is not self.model:
+            kwargs['_provider'] = dict(self.cfg.provider)
         box, done = {}, threading.Event()
 
         def run():
@@ -5608,9 +5610,10 @@ def make_model(root, cfg, provider=None, timeout=MODEL_TIMEOUT_SECONDS):
                      request_timeout=request_timeout)
 
     def _call(messages, *, json_output=False, max_tokens=None, thinking=None, detail=False,
-              tools=None, message_output=False, request_timeout=None):
-        # Snapshot: an abandoned request must not read a model Lan switches to afterwards.
-        p = dict(current())
+              tools=None, message_output=False, request_timeout=None, _provider=None):
+        # `_provider` is a snapshot taken before an abandonable request starts, so a model Lan switches
+        # to after pressing stop is never read by the abandoned request.
+        p = dict(_provider if _provider is not None else current())
         if p.get('missing'):
             raise RequestNotSent('请先在模型设置里选择一个可用的 API 模型。')
         client = client_for(p)
