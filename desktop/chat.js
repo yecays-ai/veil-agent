@@ -713,8 +713,8 @@ function setBusy(b){
 }
 // Ticket 138: Lan can stop a reply that keeps going; Peter stops before his next step.
 async function stopTurn(e){
-  const button=e.currentTarget;button.disabled=true;
-  try{const r=await api('/api/stop',{});if(!r.ok)button.disabled=false}catch(err){button.disabled=false}
+  const button=e.currentTarget;button.disabled=true;const label=button.textContent;button.textContent='正在停…';
+  try{const r=await api('/api/stop',{});if(!r.ok){button.disabled=false;button.textContent=label}}catch(err){button.disabled=false;button.textContent=label}
 }
 async function api(path,body,timeoutMs=30000){
   const result=await window.veilDesktop.request(path,body,timeoutMs);

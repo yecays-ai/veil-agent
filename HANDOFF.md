@@ -335,3 +335,10 @@
 ## 工单 337（2026-11-10）
 
 - 工单 337（草稿，未真机验收）：Peter 自己提 PR 的链路 #314 已存在；补 GitHub 令牌文件（`github-token.cmd`）与开始前的登录检查。真实 GitHub 写入仍待在测试副本验证。
+
+## 停下按钮修复（2026-11-17）
+
+- 根因：`stop_turn` 只置位 `user_stop`，循环只在每步开头和模型回话之后检查；`_call` 是不流式的单次 HTTP 请求（超时 180 秒），期间不检查。Lan 日志：10:49:01 grok-4.6 请求到 10:52:01 才报 `APITimeoutError`；11:11 一次 128 秒。窗口是外壳，后台 `web_launcher.py` 独立进程，关窗口不影响。
+- 改动：`veil_agent.py` 新增 `ModelStopped`（RequestFailed 子类）和 `Chat._model_call`：非自主活动时把模型请求放进后台线程等待，每 0.25 秒看 `user_stop`，置位即放弃（预留费用保留，重启按 `-recovered` 保守结算）。`make_model` 给 `call` 挂 `raw`（不取锁的 `_call`）：整个 `send()` 已持有 `models.env_lock/lock`（RLock，按线程），后台线程不能再取，所以直接调 raw；被放弃的线程最多再活到 HTTP 超时，不占锁。`web_agent.Hub.request_stop`（退出菜单）同时置位 `chat.user_stop`。`desktop/chat.js` 点停下后按钮改成「正在停…」。
+- 没做：不缩短 180 秒超时；自主活动的停止不动（`stop_turn` 在自主活动时仍返回 409）；`send()` 整轮持有模型设置锁的设计不变（设置页读取已用非阻塞获取）。
+- 未验证：真机慢模型下的实际体感。
