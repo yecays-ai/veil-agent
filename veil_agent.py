@@ -3439,6 +3439,8 @@ class Chat:
             raise UserError('找不到这轮回复对应的用户消息。')
         user = dict(rows[user_index])
         removed = [rows[index]['message_id'] for index in turn_indexes]
+        self.regeneration_release_refs = [ref for index in turn_indexes
+                                          for ref in (rows[index].get('memory_refs') or []) if isinstance(ref, str)]
         # Keep the old reply durable until the new reply commits. Exclude the
         # current user turn and its assistant output from this request's context.
         last_user = next((index for index in range(len(self.history) - 1, -1, -1)
@@ -3603,6 +3605,18 @@ class Chat:
             self.cfg.provider_name = name
 
     def send(self, text, *, autonomy=False, **kwargs):
+        # Ticket 379: automatic recall marks memories as shown (cooldown). A turn that delivers nothing, by
+        # error, stop or an empty answer, gives those marks back, so retrying or regenerating it still recalls.
+        if self.memory is not None:
+            self.memory.last_recall_marks = None
+        try:
+            return self._send_under_model_lock(text, autonomy=autonomy, **kwargs)
+        finally:
+            delivered = bool(self.sent_messages or getattr(self, 'reply_row_saved', False))
+            if not delivered and self.memory is not None and getattr(self.memory, 'last_recall_marks', None):
+                self.memory.rollback_recall()
+
+    def _send_under_model_lock(self, text, *, autonomy=False, **kwargs):
         models = getattr(self.cfg, 'models', None)
         if models is not None:
             with models.env_lock, models.lock:
@@ -3701,6 +3715,7 @@ class Chat:
         self.last_tool_summaries = []
         self.last_reply_message_id = None
         self.last_reply_request_id = None
+        self.reply_row_saved = False
         self.regeneration_parent_message_id = (regeneration_parent_message_id
                                                if isinstance(regeneration_parent_message_id, str)
                                                else None)
@@ -3719,6 +3734,10 @@ class Chat:
         skip_recall = self.codex_watch_mode or self.glance_mode
         # Ticket 353: an autonomous wake's text names no topic, so its memories rotate instead of
         # repeating the same best matches for that fixed text.
+        if self.memory and self.regeneration_parent_message_id:
+            # Ticket 379: regenerating redoes a turn; what that turn was given counts as not shown yet.
+            self.memory.release_recall(getattr(self, 'regeneration_release_refs', []))
+        self.regeneration_release_refs = []
         recalled = (self.memory.context(text, include_opening=opening_turn, recent=self.history[-8:],
                                         rotate=bool(autonomy))
                     if self.memory and not skip_recall else [])
@@ -3856,6 +3875,12 @@ class Chat:
             recalled_memories.pop()
         self.turn_memory_refs = (recalled_memory_refs if len(recalled_memories) == len(recalled)
                                  else [])
+        if self.memory and len(recalled_memories) != len(recalled):
+            # Cut for size: not shown, so not cooled down. The opening group comes first and is cut last, so while
+            # any message survives, only the automatic recall (not the opening memories) was dropped.
+            kinds = getattr(self.memory, 'last_context_kinds', {}) or {}
+            self.memory.release_recall([key for key in recalled_memory_refs
+                                        if not recalled_memories or kinds.get(key) != 'opening'])
 
         while auxiliary_context and bound(history, recalled_memories, auxiliary_context) > limit:
             auxiliary_context.pop()
@@ -3990,6 +4015,7 @@ class Chat:
                 if self.regeneration_parent_message_id:
                     event['regeneration_parent_message_id'] = self.regeneration_parent_message_id
                 self.store.append(self.path, event)
+                self.reply_row_saved = True
             if not self.tool_mode:
                 self.budget.settle(request_id, self.cfg, prompt, completion, cached, input_bytes=sent_bytes, tolerate_over_bound=True)
             # The event was included in the successful normal-chat request above.
