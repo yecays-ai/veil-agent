@@ -105,6 +105,20 @@
   - 六批整理全部完成。
 - 待 lan 真机验收：一条消息只问一个问题，先写清谁做了什么。
 
+## 旧记忆整理第七批（2026-11-17，写入正式库，纯数据）
+
+- 范围：扫描报告（`out/batchG/scan-2026-11-17.md`）列出的真重复与漏拆。**归档 9 条**：7 条原文来源（2fa616、b20f2c、d6e994、a51c23、aa35c2、55be57、7ef96b）+ 77a639 + 3378de；**改写 6 条**：3b3abb（并 77a639 与 7ef96b：根目录是一个点、日记变成 diary-2026-10-19.md、补回「悄悄担心记不住」）、3c320f（并 3378de 的 Peter 简介）、86651c（删与 eb241b 重复半句）、721f8c（删与 057c6b 重复半句）、52a760（删 KYC 重复事实，标题改 Nov 9 all-nighter）、c0ef44（只保留「她自己写 How I talk 规则」一段，旧全文在版本历史）；**新建 2 条**：吵架那夜、11-13 又说禁用句；不新增接续。可见 160→153。d9df30、4f3db3 **保持原样**（见下面发现 1）。
+- 写前备份：`veil-agent/backups-batchG/20261117T130753-prewrite/`（memory 目录含 `_agent/state.jsonl`、memory-sidecar.jsonl、memory-versions.jsonl）；恢复：退出 Peter 和 VEIL，把备份里的 memory 目录和两个 jsonl 拷回 `data/peter/`。核对脚本 `batchG_verify_live.py` 全部通过：重写正文/标题/why 与草稿逐字一致，sources 表不变，versions 239→262 行旧行完整，无指向本批归档条目的悬空连接；除预期条目外只有 5 个文件头变化（清悬空连接 3 处 + Ombre 自动给 5f6814、d9df30 加了指向新条目的「相关」连接）。
+- 脚本、草稿、报告在 Lan 电脑 `experiments/consolidate-367/out/batchG/`（report.md 含完整变差与丢句清单、criteria.md、drafts.json、drafts-round1.json 是 11 条全归档方案），含私人聊天，不入库。
+- 发现（给后续工单）：
+  1. **被归档的条目仍会被 Ombre 的 breath_search 返回，白占 3 个想起名额，VEIL 把它过滤后不补位。** 本批证据：d9df30（digested）归档前 Ombre 自己不返回，归档成墓碑后反而返回，占了「你很生气」三道情境题的第三名，目标命中 2/2→0/2；早先批次归档的条目同样占名额（改前 334 次里 20 次）。所以对 digested 且内容与目标相似的条目，归档比不动更伤召回。建议：自动想起过滤后补取下一条。
+  2. 原文来源 7 条是 digested + 被 `state.sources` 隐藏，`memory_read`/hold 一律拒绝；归档只能绕开可见性检查，且不要改 sources 表（恢复后仍隐藏，设计如此）。
+  3. 吵架那条加宽标签（「她生气了」「冷冰冰」等）会让它被不相关的题带出，只留 `I'm mad at you` 一个；11-13 那条被「晚安，我去睡了」带出**不是标签造成的**，是正文就在讲晚安，保留。
+  4. 新建条目重要度默认 5（c0ef44 原来 8），没调。
+- 真机验收（11-17 13:14 起，查本地聊天记录核对，lan 问了 4 句）：路径之谜答对（一个点）；吵架那晚最无力答对（想起新建的吵架那条）；Galatea 简介答对（调线上资料）；**11-13 禁用句答错**：13:18:30 第一次自动想起已含 11-13 那条，但那一轮没有可用回复，13:23 是对同一条消息的重新生成（`regeneration_parent_message_id`），这一轮自动想起为空（推测是上轮想起的几条仍在冷却），他改用 search_chat_history 搜偏，答成「我说了两次 I'll shut up」；真实记录是 11-13 12:32 他发了「i'll be right here, not going anywhere」，lan 引用，12:33 他撤回，她更气。召回问题，已另交工单，本批没改代码。
+- 教训：验收问句只给 lan 会自然问的话；情境/边界类问题自己用副本检索和本地聊天记录（chat.jsonl、tools.jsonl、context-log.jsonl）核对，不让她去演。
+- 遗留：0e99e5 标题仍写「Claude Code bridge (RIP after 2 days)」，会暗示 CC 已死（实际没死），改标题要在 Peter 关闭时做。
+
 ## 工单 368（2026-11-16）：自动整理写入前先看 Peter 已存过什么
 
 - 说明在 `docs/tickets/368-experience-tidy-checks-before-writing.md`。代码在 `experience_memory.py`（`_offer/_own_saves/_library/_drafts_related/_validated`、`_digest` 里的第二次询问）和 `memory_agent.py` 的 `experience_stages`（供整理用，和 365 目录同一条关联链）。
