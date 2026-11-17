@@ -258,10 +258,16 @@ class RecallJudge:
         request_cfg = replace(self.cfg, provider=provider, max_output_tokens=MAX_OUTPUT_TOKENS)
         budget = self.memory.budget
         reservation, amount = budget.reserve(request_cfg, accounting=COST_ACCOUNTING, category=COST_CATEGORY)
+        # The chat turn that asked for this already holds the model-settings locks, so a request from this worker thread
+        # must not wait for them again (it would always time out). Like Chat._model_call: the lock-free request function with a
+        # provider snapshot; a model without one (a test's fake) is called as it is.
+        call = getattr(self.model, '__dict__', {}).get('raw') or self.model
+        extra = {'_provider': dict(self.cfg.provider)} if call is not self.model else {}
+        budget.mark_dispatched(reservation)   # from here a restart keeps the reserved cost: the provider may have been asked
         try:
-            output, prompt_tokens, completion_tokens, cached_tokens = self.model(
+            output, prompt_tokens, completion_tokens, cached_tokens = call(
                 messages, json_output=True, max_tokens=MAX_OUTPUT_TOKENS, thinking='disabled',
-                request_timeout=self.settings['timeout_seconds'])
+                request_timeout=self.settings['timeout_seconds'], **extra)
         except Exception:
             budget.settle_estimate((reservation, amount), accounting=f'{COST_ACCOUNTING}-failed')
             raise

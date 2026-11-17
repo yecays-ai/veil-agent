@@ -2,6 +2,7 @@
 
 ## 工单 382 交接
 - 代码：`recall_judge.py`（判官本体：候选、提示词、解析、超时、连续故障暂停、开关、状态）；接线在 `memory_agent.py`（`Memory.attach_recall_judge()`，只有运行中的程序调用，测试不调；`context()` 里先预取向量、再 Ombre 搜索、再 `judge.choose()`；`JudgeFailed` 才退回规则 A）、`veil_agent.py` 和 `web_agent.py`（接线、`/api/recall-judge`、记忆页面板 `recall_judge` 字段）、`desktop/chat.html|js`（开关那一行）。费用类别 `recall_judge`，`/cost` 里显示为「想起判官」。
+- 注意（评审发现，已修）：判官的模型请求在后台线程里发，而聊天这一轮已持有模型设置锁，所以必须像 `Chat._model_call` 那样走 `call.raw` 加 provider 快照（`recall_judge._ask`），否则每次都会等锁超时；测试 `test_the_judge_uses_the_lock_free_request_function_while_the_chat_turn_holds_the_model_locks` 覆盖。请求发出前 `mark_dispatched`，重启后已发出的请求保留预留费用。判官成功回答后清掉 Ombre 的「随机浮现」（不然会绕过「没有就没有」）；自主唤醒（`rotate`）不走判官。
 - 开关：`data/<角色>/recall-judge.json` `{"enabled": true/false}`，每条消息读，优先于 `[memory.recall_judge] enabled`；默认开。关掉就是规则 A（工单 381）。
 - 设计取舍（lan 2026-11-17）：判官说「没有」不回填；只有技术故障才退回规则 A；不加稳定性保护。冻结 60 句稳定性：相关句三次选择完全一致 12/30，部分一致 15/30，不一致 3/30；漏掉规则 A 原本命中的 5/90 次；无关句 90 次里 5 次带出旧事。
 - 待 lan 真机验收，见 STATUS。看点：随口说话时他有没有带着共同经历（不要求讲出来）；闲聊有没有被旧事带偏；记忆页那一行的结果是否合理；有没有「没成功」的频繁出现（说明超时偏紧或网络慢）。
