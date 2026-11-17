@@ -4998,6 +4998,17 @@ class Chat:
                             final = continuation_prefix
                             break
                         raise
+                    except ModelStopped:
+                        if not autonomy:
+                            self.investigation.interrupt('user_stop', request_id, checkpoint_resuming)
+                            checkpoint_interrupted = True
+                        if continuation_prefix:
+                            self.tool_stop_reason = '回复续接已中断，已保留此前生成的内容。'
+                            self.output(ChatOutput(self.tool_stop_reason, request_id=request_id, is_error=True))
+                            final = continuation_prefix
+                        else:
+                            final = end_turn_here()
+                        break
                     except RequestNotSent:
                         self.budget.release_not_sent(reservation)
                         raise
@@ -5598,7 +5609,8 @@ def make_model(root, cfg, provider=None, timeout=MODEL_TIMEOUT_SECONDS):
 
     def _call(messages, *, json_output=False, max_tokens=None, thinking=None, detail=False,
               tools=None, message_output=False, request_timeout=None):
-        p = current()
+        # Snapshot: an abandoned request must not read a model Lan switches to afterwards.
+        p = dict(current())
         if p.get('missing'):
             raise RequestNotSent('请先在模型设置里选择一个可用的 API 模型。')
         client = client_for(p)
