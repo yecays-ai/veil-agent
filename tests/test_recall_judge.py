@@ -53,8 +53,8 @@ class FakeEmbedder:
 class FakeJudgeModel:
     """Answers like the real judge: JSON with the letters of the cards that contain `pick` words. Records every call."""
 
-    def __init__(self, pick=(), delay=0.0, error=None, raw=None, usage=(900, 7, 0)):
-        self.pick, self.delay, self.error, self.raw, self.usage = list(pick), delay, error, raw, usage
+    def __init__(self, pick=(), delay=0.0, error=None, answer=None, usage=(900, 7, 0)):
+        self.pick, self.delay, self.error, self.answer, self.usage = list(pick), delay, error, answer, usage
         self.calls = []
 
     def __call__(self, messages, **kwargs):
@@ -63,8 +63,8 @@ class FakeJudgeModel:
             time.sleep(self.delay)
         if self.error:
             raise self.error
-        if self.raw is not None:
-            return (self.raw, *self.usage)
+        if self.answer is not None:
+            return (self.answer, *self.usage)
         letters = [line[0] for line in messages[1]['content'].splitlines()
                    if re.match(r'^[A-Z]\) ', line) and any(word in line for word in self.pick)]
         return (json.dumps({'ids': letters}), *self.usage)
@@ -76,9 +76,9 @@ class RecallJudgeTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.store = Store(Path(self.temp.name) / 'data')
 
-    def memory(self, rows=ROWS, judge=True, model=None, embedder=None, settings=None, recall=None):
+    def memory(self, rows=ROWS, judge=True, model=None, embedder=None, settings=None, recall=None, drift=()):
         vault = vault_path(self.store.root, 'fake')
-        self.backend = FictionalOmbre(vault / 'dynamic', rows)
+        self.backend = FictionalOmbre(vault / 'dynamic', rows, drift)
         # the files the fake Ombre wrote: make `hidden` hidden and `digested` digested the way Ombre does
         (vault / 'dynamic' / 'hidden.md').write_text(
             '---\nid: hidden\ntitle: Hidden plants\ndont_surface: true\ntype: dynamic\n---\nhidden succulent story', encoding='utf-8')
@@ -178,11 +178,11 @@ class RecallJudgeTests(unittest.TestCase):
         self.assert_falls_back(self.memory(model=FakeJudgeModel(error=ConnectionError('network is down'))), 'request_error')
 
     def test_broken_json_keeps_todays_recall(self):
-        self.assert_falls_back(self.memory(model=FakeJudgeModel(raw='sure! {"ids": [')), 'bad_json')
+        self.assert_falls_back(self.memory(model=FakeJudgeModel(answer='sure! {"ids": [')), 'bad_json')
 
     def test_wrong_shape_or_an_unoffered_letter_keeps_todays_recall(self):
-        self.assert_falls_back(self.memory(model=FakeJudgeModel(raw='{"ids": "A"}')), 'bad_format')
-        self.assert_falls_back(self.memory(model=FakeJudgeModel(raw='{"ids": ["Z"]}')), 'bad_format')
+        self.assert_falls_back(self.memory(model=FakeJudgeModel(answer='{"ids": "A"}')), 'bad_format')
+        self.assert_falls_back(self.memory(model=FakeJudgeModel(answer='{"ids": ["Z"]}')), 'bad_format')
 
     def test_no_embedding_keeps_todays_recall(self):
         self.assert_falls_back(self.memory(embedder=FakeEmbedder(error=ConnectionError('no route'))), 'embedding_error')
@@ -288,6 +288,55 @@ class RecallJudgeTests(unittest.TestCase):
         self.assertEqual(1, len(settle))
         self.assertGreater(Decimal(settle[0]['amount']), 0)
         self.assertGreater(Decimal(memory.judge.status()['spent_today']), 0)
+
+    # --- the real chat turn already holds the model-settings locks (CodeRabbit, PR 382) -----------------------------
+    def test_the_judge_uses_the_lock_free_request_function_while_the_chat_turn_holds_the_model_locks(self):
+        import threading
+        lock = threading.Lock()
+        fake = FakeJudgeModel(pick=['Kills plants'])
+        seen = []
+
+        def locked_call(messages, **kwargs):
+            with lock:                       # what make_model's call does: wait for the settings locks
+                return fake(messages, **kwargs)
+
+        def raw(messages, **kwargs):
+            seen.append(kwargs.get('_provider'))
+            return fake(messages, **{key: value for key, value in kwargs.items() if key != '_provider'})
+        locked_call.raw = raw
+        memory = self.memory(model=locked_call)
+        with lock:                           # the chat turn holds them for its whole length
+            started = time.monotonic()
+            refs, _ = self.recall(memory)
+            self.assertLess(time.monotonic() - started, 1.0)
+        self.assertEqual(['cactus'], refs)
+        self.assertEqual(1, len(seen))
+        self.assertEqual('fake', seen[0]['model'])   # a snapshot of the background provider
+
+    def test_the_request_is_marked_as_dispatched_before_it_is_sent(self):
+        memory = self.memory()
+        self.recall(memory)
+        events = [json.loads(line) for line in (self.store.root / 'costs.jsonl').read_text(encoding='utf-8').splitlines()]
+        reserve = next(event for event in events if event['type'] == 'reserve' and event.get('category') == 'recall_judge')
+        self.assertIn({'type': 'dispatch', 'id': reserve['id']}, [{'type': e['type'], 'id': e.get('id')} for e in events])
+
+    def test_a_random_recollection_is_not_added_after_the_judge_has_answered(self):
+        rows = {key: ROWS[key] for key in ('cactus', 'junk', 'quake', 'second')}
+        rows['wander'] = {'content': 'an old wandering memory about nothing', 'title': 'Wander'}
+        recall = {'cooldown_turns': 0, 'random_chance': 1}
+        empty = self.memory(rows, model=FakeJudgeModel(pick=[]), recall=recall, drift=['wander'])
+        self.assertEqual([], self.recall(empty)[0])                  # "none fits" stays none
+        self.setUp()
+        picked = self.memory(rows, recall=recall, drift=['wander'])
+        self.assertEqual(['cactus'], self.recall(picked)[0])          # nothing unjudged is added to what it picked
+        self.setUp()
+        failed = self.memory(rows, model=FakeJudgeModel(error=ConnectionError('down')), recall=recall, drift=['wander'])
+        self.assertIn('wander', self.recall(failed)[0])               # a technical failure keeps today's recall, random one included
+
+    def test_a_wake_with_three_or_fewer_candidates_does_not_use_the_judge_either(self):
+        memory = self.memory(recall={'cooldown_turns': 0, 'random_chance': 0, 'rotation_candidates': 3})
+        memory.context('a wake text that names a topic', include_opening=False, rotate=True)
+        self.assertEqual([], self.model.calls)
 
     def test_wakes_and_the_short_context_path_do_not_use_the_judge(self):
         memory = self.memory(recall={'cooldown_turns': 0, 'random_chance': 0, 'rotation_candidates': 8})
