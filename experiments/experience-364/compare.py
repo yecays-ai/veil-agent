@@ -134,7 +134,7 @@ def main():
     def model(messages, **kwargs):
         if spent[0] >= args.cap:
             raise Cap()
-        response = call(messages, **kwargs)
+        response = getattr(call, 'raw', call)(messages, **kwargs)  # the chat turn already holds the model locks
         prompt, completion, cached = response[1], response[2], getattr(response[3], 'tokens', response[3]) or 0
         per_call = price.get('cny_per_call')
         spent[0] += Decimal(str(per_call)) if per_call else (

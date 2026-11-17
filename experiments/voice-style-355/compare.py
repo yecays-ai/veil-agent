@@ -144,7 +144,7 @@ def run(args, out):
                 raise Cap()
             write_ledger(ceiling)
             try:
-                response = call(messages, **kwargs)
+                response = getattr(call, 'raw', call)(messages, **kwargs)  # the chat turn already holds the model locks
             except Exception:
                 spent[0] += ceiling  # unknown whether it was billed: count the worst case
                 write_ledger(0)

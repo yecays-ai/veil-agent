@@ -157,7 +157,7 @@ def main():
             seen_notes[1] += 1
             seen_notes[0] += any(isinstance(m.get('content'), str) and m['content'].startswith('[What you remember')
                                  for m in messages)
-        response = call(messages, **kwargs)
+        response = getattr(call, 'raw', call)(messages, **kwargs)  # the chat turn already holds the model locks
         prompt, completion, cached = response[1], response[2], getattr(response[3], 'tokens', response[3]) or 0
         spent[0] += (Decimal(prompt - cached) * Decimal(str(price['input_cny_per_million']))
                      + Decimal(cached) * Decimal(str(price['cached_input_cny_per_million']))
