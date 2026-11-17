@@ -158,6 +158,21 @@ class TurnStopTests(unittest.TestCase):
         self.assertEqual(chat.send('fictional'), 'bubble 1')
         self.assertEqual(self.assistant_rows(), ['bubble 1'])
 
+    def test_abandonable_request_gets_the_provider_snapshot_before_it_starts(self):
+        seen = {}
+
+        def raw(messages, **kwargs):
+            seen.update(kwargs)
+            return SimpleNamespace(content='ok', tool_calls=[]), 100, 5, 0
+
+        def model(*args, **kwargs):
+            raise AssertionError('the locked wrapper must not be used from the helper thread')
+        model.raw = raw
+        chat = Chat(self.cfg, self.store, self.budget, model, output=[].append)
+        self.assertEqual(chat.send('fictional'), 'ok')
+        self.assertEqual(seen['_provider']['model'], 'fake-model')
+        self.assertIsNot(seen['_provider'], self.cfg.provider)
+
     def test_hub_exit_request_also_stops_a_waiting_turn(self):
         from veil_agent import ActivityState
         from web_agent import Hub
