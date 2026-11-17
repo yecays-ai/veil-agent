@@ -1,5 +1,13 @@
 # HANDOFF
 
+## 工单 382 交接
+- 代码：`recall_judge.py`（判官本体：候选、提示词、解析、超时、连续故障暂停、开关、状态）；接线在 `memory_agent.py`（`Memory.attach_recall_judge()`，只有运行中的程序调用，测试不调；`context()` 里先预取向量、再 Ombre 搜索、再 `judge.choose()`；`JudgeFailed` 才退回规则 A）、`veil_agent.py` 和 `web_agent.py`（接线、`/api/recall-judge`、记忆页面板 `recall_judge` 字段）、`desktop/chat.html|js`（开关那一行）。费用类别 `recall_judge`，`/cost` 里显示为「想起判官」。
+- 开关：`data/<角色>/recall-judge.json` `{"enabled": true/false}`，每条消息读，优先于 `[memory.recall_judge] enabled`；默认开。关掉就是规则 A（工单 381）。
+- 设计取舍（lan 2026-11-17）：判官说「没有」不回填；只有技术故障才退回规则 A；不加稳定性保护。冻结 60 句稳定性：相关句三次选择完全一致 12/30，部分一致 15/30，不一致 3/30；漏掉规则 A 原本命中的 5/90 次；无关句 90 次里 5 次带出旧事。
+- 待 lan 真机验收，见 STATUS。看点：随口说话时他有没有带着共同经历（不要求讲出来）；闲聊有没有被旧事带偏；记忆页那一行的结果是否合理；有没有「没成功」的频繁出现（说明超时偏紧或网络慢）。
+- **独立问题（不在本单）**：「你一个人在电脑里的时候都在干嘛」这类问题，他会编具体活动（例如「看了四十分钟等离子体」），没有记忆依据；判官没选相关记忆时更明显，但没有判官时也会。要查他的人设/档案里有没有鼓励这样答，另开工单。
+- 未做：中文场景标签（等判官稳定后；做法是从 `chat.jsonl` 里挖她真说过的词，用没见过的新问法验证）；判官选择的稳定性保护（lan 暂不要）；Peter 自己的搜记忆工具、自动整理的相关记忆查找仍是先取 3 再过滤（工单 381 已记）。
+
 ## 工单 381 交接
 - 改动在 `memory_agent.py`：`SEARCH_SPARE_HITS = 5`，`context()` 里 `asked = 3 + SEARCH_SPARE_HITS`，`ordinary_hits` 之后立刻 `context_visible(...)[:3]`；`assisted_recall()` 同样。widen（自主唤醒轮换）路径本来就多取候选，不变。测试在 `tests/test_recall_rotation.py`（三条新用例）。
 - 验证（副本，真实 Ombre，不写正式库）：124 句新旧代码对比，只有 2 句召回变了（S06 多出相关的一条；U19 无关句多带 1 条万能旧事，回复没受影响）；记录在 Lan 电脑 `experiments/consolidate-367/out/batchG/ruleA/`。

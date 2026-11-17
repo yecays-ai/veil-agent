@@ -59,6 +59,18 @@ input_cny_per_million = "0"
 # excerpt_chars = 600       # longer memories show title, date and the first 600 characters (0 = full text)
 # random_chance = 0.1       # when the search found fewer than 3, chance to add one of Ombre's random recollections (0 = off)
 # rotation_candidates = 8   # autonomous wakes pick 3 of this many, least recently shown first
+# Ticket 382: a small relevance judge for automatic recall. ON by default. Lan's switch on the memory page ("想起判官")
+# overrides `enabled` and acts at once; turning it off restores ticket 381's recall and changes no memory.
+# The judge looks at Ombre's hits plus the five nearest memories by vector and picks at most two that bear directly on her
+# sentence (or none: then nothing is recalled). Any technical failure (timeout, request error, bad answer) keeps ticket 381's
+# recall for that turn; three in a row pause the judge for breaker_seconds. To change a value, add this table right here:
+# [memory.recall_judge]
+# enabled = true
+# timeout_seconds = 4.0     # longest the judge may add to one message when it fails (normal: about 1.1-1.5 s; the first message after start up to ~3 s)
+# ombre_candidates = 5
+# vector_candidates = 5
+# breaker_failures = 3
+# breaker_seconds = 300
 # Ticket 354: the program's fallback memory. When enough new chat has piled up and you two have gone quiet,
 # the chat model (as Peter) reads only the messages you sent each other and writes down what he would remember,
 # or nothing. Lan's switch on the memory page overrides `enabled`. This table must stay below the [memory] keys.

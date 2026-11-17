@@ -800,6 +800,28 @@ $('experience-toggle').onclick=async()=>{
   catch(e){notify('自动整理的开关没有保存成功，请稍后再试。','error')}
   finally{$('experience-toggle').disabled=false}
 };
+// Ticket 382: a small judge picks which memories fit what she just said; Lan can see its last result and switch it off.
+let judgeEnabled=true;
+function renderJudge(x){
+  const row=$('judge-row');if(!x||x.available!==true){row.hidden=true;return}
+  row.hidden=false;judgeEnabled=x.enabled===true;
+  let last='还没有判断过';
+  if(x.last){const at=new Date(x.last.time);const when=Number.isNaN(at.getTime())?'':memoryTime(x.last.time);
+    if(x.last.kind==='failed')last=when+' 判官没成功（'+(x.last.reason||'')+'），这一轮照旧想起';
+    else if(x.last.kind==='empty')last=when+' 他觉得没有哪条相关，这一轮没带旧事';
+    else last=when+' 选了 '+(x.last.picked||0)+' 条';}
+  $('judge-status').textContent=judgeEnabled
+    ?'想起判官：开 · 上次：'+last+(x.breaker_open?' · 连续失败，暂停几分钟':'')+' · 今天花了 ¥'+(x.spent_today||'?')
+    :'想起判官：关（回到原来的想起方式，不改任何记忆）';
+  $('judge-toggle').textContent=judgeEnabled?'关闭想起判官':'开启想起判官';
+}
+$('judge-toggle').onclick=async()=>{
+  $('judge-toggle').disabled=true;
+  try{const r=await api('/api/recall-judge',{enabled:!judgeEnabled});const d=await r.json();
+    if(!r.ok)throw new Error(d.error||'');renderJudge(d.recall_judge)}
+  catch(e){notify('想起判官的开关没有保存成功，请稍后再试。','error')}
+  finally{$('judge-toggle').disabled=false}
+};
 async function loadMemoryCatalog(reset=false){
   if(memoryLoading)return;
   memoryLoading=true;memoryCursor='';
@@ -810,7 +832,7 @@ async function loadMemoryCatalog(reset=false){
     if(!data||!Array.isArray(data.items))throw new Error('Ombre 返回的记忆格式无法识别。');
     memoryItems=data.items.filter(item=>item&&typeof item.memory_id==='string'&&typeof item.title==='string')
       .map(item=>({...item,domain:Array.isArray(item.domain)?item.domain:[],tags:Array.isArray(item.tags)?item.tags:[]}));
-    memoryLoaded=true;memoryAvailable=true;renderExperience(data.experience);renderMemoryList();
+    memoryLoaded=true;memoryAvailable=true;renderExperience(data.experience);renderJudge(data.recall_judge);renderMemoryList();
     const current=memoryItems.find(item=>item.memory_id===$('memory-detail').dataset.memoryId);if(current)readMemory(current);
   }catch(error){
     memoryLoaded=true;$('memory-list').textContent=error.message||'Ombre 记忆暂时无法读取。';$('memory-unavailable').hidden=false;

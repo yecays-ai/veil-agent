@@ -1766,20 +1766,22 @@ class Budget:
         all_short_term, _ = self.category_totals(None, stamp, 'short_term_notes')
         all_delegate, _ = self.category_totals(None, stamp, 'delegate')
         all_experience, _ = self.category_totals(None, stamp, 'experience_memory')
+        all_judge, _ = self.category_totals(None, stamp, 'recall_judge')
         autonomy = all_autonomy if character is None else self.category_totals(character, stamp)[0]
         glance = all_glance if character is None else self.category_totals(character, stamp, 'glance')[0]
         short_term = (all_short_term if character is None else
                       self.category_totals(character, stamp, 'short_term_notes')[0])
         delegate = (all_delegate if character is None else
                     self.category_totals(character, stamp, 'delegate')[0])
-        chat = day - all_autonomy - all_glance - all_short_term - all_delegate - all_experience
+        chat = day - all_autonomy - all_glance - all_short_term - all_delegate - all_experience - all_judge
         warning = ('【费用账本有待核实的记录，已暂停所有付费请求；见 data_repair.py ledger-status】'
                    if ledger_recovery.is_unverified(self.store.root) else '')
         return (warning + f'今天 ¥{day:.6f} / {self.daily_limit()}；本月 ¥{month:.6f} / {self.monthly_limit()}；'
                 f'待核对预留 ¥{pending:.6f}；其中聊天 ¥{chat:.6f}，自主 ¥{autonomy:.6f} / '
                 f'{self.autonomy_daily}/日（自主是上限，不是消费目标），瞄一眼 ¥{glance:.6f} / '
                 f'{self.glance_daily}/日，委派任务 ¥{delegate:.6f}，短期便签提取 ¥{short_term:.6f}'
-                + (f'，经历整理 ¥{all_experience:.6f}' if all_experience else ''))
+                + (f'，经历整理 ¥{all_experience:.6f}' if all_experience else '')
+                + (f'，想起判官 ¥{all_judge:.6f}' if all_judge else ''))
 
     @synchronized
     def model_display(self, stamp=None):
@@ -6007,6 +6009,8 @@ def main():
                         from memory_agent import Memory, open_ombre
                         with open_ombre(ROOT, cfg) as backend:
                             with Memory(cfg, store, budget, model, backend) as memory:
+                                # Ticket 382: Peter's background model judges which memories fit what she just said.
+                                memory.attach_recall_judge(background_cfg(cfg), background_model or model, warm=True)
                                 from memory_native import NativeMemoryTools, ToolSet
                                 tools = ToolSet(tools, NativeMemoryTools(
                                     memory, cfg.tools['max_result_bytes']))

@@ -1,0 +1,354 @@
+"""Ticket 382: a small relevance judge for automatic recall.
+
+Ombre's automatic search is a keyword search with a vector side channel that almost never opens (docs/tickets/382). Lan's
+everyday sentences rarely repeat the words a memory was written with, so memories that fit are missed while weakly related
+ones fill the three slots. The judge looks at a short list (Ombre's visible hits plus the nearest memories by vector) and says
+which of them bear directly on what she just said, at most two, or none. It only chooses memories; it never writes, edits or
+hides one, and it says nothing about how Peter should answer.
+
+Failure rule (Lan, 2026-11-17): the judge answering "none" means no memory this turn, nothing is filled back from Ombre.
+Only a technical failure (timeout, request error, broken JSON, no embedding, budget) falls back to today's recall (ticket 381).
+Three failures in a row switch the judge off for a few minutes so a dead provider cannot slow every message.
+"""
+import hashlib
+import json
+import re
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
+from dataclasses import replace
+from decimal import Decimal
+
+from recall_relevance import all_vectors, cosine
+
+COST_CATEGORY = 'recall_judge'
+COST_ACCOUNTING = 'recall-judge'
+MAX_OUTPUT_TOKENS = 60
+QUERY_CHARS = 600
+CARD_CHARS = 200
+MAX_PICKS = 2
+SKIPPED_TYPES = ('feel', 'plan', 'letter')
+
+DEFAULTS = {'enabled': True, 'timeout_seconds': 4.0, 'ombre_candidates': 5, 'vector_candidates': 5,
+            'breaker_failures': 3, 'breaker_seconds': 300}
+
+PROMPT = (
+    "You help Peter, an AI companion, decide which of his saved memories bear on what his partner Lan just said to him.\n"
+    "A memory bears on her message only when it is DIRECTLY about the same situation, thing, person or recurring pattern she is "
+    "talking about now, so that Peter would handle this moment differently for knowing it. A shared theme such as tiredness, "
+    "sleep, games, money or mood is NOT enough.\n"
+    "Pick at most 2, best first. Most messages have none: greetings, small talk, generic questions, practical requests, facts, "
+    "and anything about the outside world have none. When unsure, pick none.\n"
+    'Answer with JSON only: {"ids": ["A"]} or {"ids": []}.')
+
+
+def load_settings(raw):
+    """[memory.recall_judge]; a bad value falls back to its default and never stops Peter from starting."""
+    settings = dict(DEFAULTS)
+    raw = raw if isinstance(raw, dict) else {}
+    if type(raw.get('enabled')) is bool:
+        settings['enabled'] = raw['enabled']
+    value = raw.get('timeout_seconds')
+    if type(value) in (int, float) and 0.5 <= value <= 10:
+        settings['timeout_seconds'] = float(value)
+    for key, low, high in (('ombre_candidates', 0, 8), ('vector_candidates', 0, 8), ('breaker_failures', 1, 20),
+                           ('breaker_seconds', 5, 3600)):
+        value = raw.get(key)
+        if type(value) is int and low <= value <= high:
+            settings[key] = value
+    return settings
+
+
+class JudgeFailed(Exception):
+    """A technical failure: the caller keeps today's recall."""
+
+    def __init__(self, reason, detail=''):
+        super().__init__(f'{reason}: {detail}' if detail else reason)
+        self.reason, self.detail = reason, detail
+
+
+def card_text(raw):
+    """Title, tags and the Chinese keyword line of one memory file: all the judge reads of it."""
+    if not isinstance(raw, str):
+        return ''
+    head, _, body = raw.partition('\n---\n')
+    title = re.search(r'^title:\s*(.*)$', head, re.M)
+    tags, inside = [], False
+    for line in head.splitlines():
+        if line.startswith('tags:'):
+            inside = True
+            continue
+        if inside:
+            if line.startswith('- '):
+                tags.append(line[2:].strip().strip('\'"'))
+            else:
+                inside = False
+    keywords = re.search(r'(?:关键词|检索词)[：:](.*)', body)
+    parts = [(title.group(1).strip().strip('\'"') if title else ''), ' '.join(tags),
+             keywords.group(1).strip() if keywords else '']
+    return ' | '.join(part for part in parts if part)[:CARD_CHARS]
+
+
+def parse_choice(text, letters):
+    """The picked ids, or JudgeFailed when the answer is not what was asked for. [] is a valid answer."""
+    try:
+        data = json.loads(text)
+    except (TypeError, ValueError) as exc:
+        raise JudgeFailed('bad_json') from exc
+    ids = data.get('ids') if isinstance(data, dict) else None
+    if not isinstance(ids, list) or any(not isinstance(item, str) for item in ids):
+        raise JudgeFailed('bad_format')
+    picked = [letters[item] for item in dict.fromkeys(ids) if item in letters][:MAX_PICKS]
+    if ids and not picked:
+        raise JudgeFailed('bad_format', 'none of the letters was offered')
+    return picked
+
+
+class RecallJudge:
+    def __init__(self, memory, cfg, model, settings):
+        self.memory, self.cfg, self.model, self.settings = memory, cfg, model, settings
+        self.switch_path = f'{memory.cfg.id}/recall-judge.json'
+        self.clock = time.monotonic
+        self.failures = 0
+        self.open_until = 0.0
+        self.last = None
+        self._embedder = None
+        self._files = {}
+        self._lock = threading.Lock()
+        self._pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix='recall-judge')
+
+    # --- the switch (Lan's): a file read every turn, so turning it off acts at once, nothing else changes ---
+    def enabled(self):
+        try:
+            state = json.loads((self.memory.store.root / self.switch_path).read_text(encoding='utf-8'))
+            if isinstance(state, dict) and type(state.get('enabled')) is bool:
+                return state['enabled']
+        except (OSError, ValueError):
+            pass
+        return bool(self.settings['enabled'])
+
+    def set_enabled(self, enabled):
+        self.memory.store.replace(self.switch_path, {'enabled': bool(enabled)})
+        if enabled:
+            with self._lock:
+                self.failures, self.open_until = 0, 0.0
+        return self.enabled()
+
+    def breaker_open(self):
+        return self.clock() < self.open_until
+
+    def active(self):
+        return bool(self.enabled() and self.model is not None and not self.breaker_open())
+
+    def close(self):
+        self._pool.shutdown(wait=False)
+
+    # --- one turn ---------------------------------------------------------------------------------------
+    def make_embedder(self):
+        from dotenv import dotenv_values
+        from pathlib import Path
+        from recall_relevance import QueryEmbedder
+        key = dotenv_values(Path(__file__).resolve().parent / '.env', interpolate=False,
+                            encoding='utf-8-sig').get('EMBED_API_KEY')
+        if not key or not key.strip():
+            raise JudgeFailed('no_embedding_key')
+        memory_cfg = self.memory.cfg.memory
+        return QueryEmbedder(memory_cfg['base_url'], memory_cfg['model'], key.strip(),
+                             timeout=self.settings['timeout_seconds'])
+
+    def _embed(self, text):
+        """One embedding request, booked like every other vector request (estimate first, settled with the reported usage), so
+        a paid embedding model could not slip past the daily ceiling. A refusal by the budget is a failure of the judge only."""
+        if self._embedder is None:
+            self._embedder = self.make_embedder()   # kept: its connection is reused on the next turn
+        memory_cfg = self.memory.cfg.memory
+        rate = Decimal(str(memory_cfg['input_cny_per_million']))
+        text = text[:QUERY_CHARS]
+        tokens = max(512, len(text.encode('utf-8')))
+        budget = self.memory.budget
+        reservation = budget.estimate(self.memory.cfg.id, memory_cfg['model'], tokens, rate)
+        settled, usage, accounting = Decimal(tokens) * rate / Decimal(1_000_000), None, 'embedding-estimate'
+        try:
+            vector = self._embedder.embed(text)
+            reported = getattr(self._embedder, 'usage_tokens', None)
+            if type(reported) is int and reported > 0:
+                amount = Decimal(reported) * rate / Decimal(1_000_000)
+                if amount <= reservation[1]:
+                    settled, usage, accounting = amount, reported, 'embedding-usage'
+            return vector
+        finally:
+            budget.settle_estimate(reservation, accounting=accounting, settled_amount=settled, usage_tokens=usage)
+
+    def warm(self):
+        """Build the embedder and open its connection in the background right after start, so the first message does not pay."""
+        def build():
+            try:
+                self._embed('hello')
+            except Exception:
+                pass
+        self._pool.submit(build)
+
+    def prefetch(self, query):
+        """Start embedding her sentence now, so it overlaps with Ombre's own search instead of adding to it."""
+        return self._pool.submit(self._embed, query)
+
+    def _scan(self):
+        """One pass over the library per turn: {memory id: file} for what is not in the archive folder, so the judge does
+        not re-scan the whole folder for every candidate."""
+        from memory_agent import vault_path
+        vault = vault_path(self.memory.store.root, self.memory.cfg.id)
+        index = {}
+        for path in vault.rglob('*.md'):
+            relative = path.relative_to(vault).parts
+            if relative[0] in ('archive', '_agent', '_sources', '_ledger', '_media') or path.is_symlink():
+                continue
+            index[path.stem] = path
+            match = re.search(r'_([0-9A-Za-z-]+)$', path.stem)
+            if match:
+                index[match.group(1)] = path
+        return index
+
+    def _raw(self, key):
+        path = self._files.get(key)
+        if path is None:
+            return None
+        try:
+            return path.read_text(encoding='utf-8')
+        except OSError:
+            return None
+
+    def _eligible(self, key):
+        """The memory's front matter when Peter may be shown it, else None. A cheap read of the file first; the program's own
+        visibility check (hidden on the memory page, sources, archived, dont_surface) has the last word."""
+        from recall_rotation import front_matter
+        raw = self._raw(key)
+        if raw is None:
+            return None
+        meta = front_matter(raw)
+        head = raw.partition('\n---\n')[0]
+        if (meta.get('type') in SKIPPED_TYPES + ('archived',) or re.search(r'^(digested|dont_surface|tombstone):\s*true', head, re.M)
+                or re.search(r'^deleted_at:', head, re.M) or re.search(r'^source_tool:\s*letter', head, re.M)):
+            return None   # what Ombre's automatic search never offers either
+        if not self.memory.refresh_visibility(key) or not self.memory.visible([(key, '')]):
+            return None
+        return meta
+
+    def _vector_candidates(self, query_vector, taken):
+        from pathlib import Path
+        from memory_agent import vault_path
+        vectors = all_vectors(vault_path(self.memory.store.root, self.memory.cfg.id) / 'embeddings.db')
+        ranked = sorted(((cosine(query_vector, vector), key) for key, vector in vectors.items()), reverse=True)
+        found, checked = [], 0
+        for _, key in ranked:
+            if len(found) >= self.settings['vector_candidates'] or checked >= 30:
+                break
+            if key in taken or key in found:
+                continue
+            checked += 1
+            meta = self._eligible(key)
+            if meta is not None:
+                found.append((key, f'[bucket_id:{key}]\n{(meta.get("body") or "").strip()}'))
+        return found
+
+    def _ask(self, messages):
+        """Runs in a worker: reserve, one call, settle. A late answer after the caller gave up is still settled."""
+        provider = dict(self.cfg.provider)
+        size = len(json.dumps(messages, ensure_ascii=False).encode('utf-8'))
+        provider['max_input_tokens'] = min(provider['max_input_tokens'], size + 512)
+        request_cfg = replace(self.cfg, provider=provider, max_output_tokens=MAX_OUTPUT_TOKENS)
+        budget = self.memory.budget
+        reservation, amount = budget.reserve(request_cfg, accounting=COST_ACCOUNTING, category=COST_CATEGORY)
+        try:
+            output, prompt_tokens, completion_tokens, cached_tokens = self.model(
+                messages, json_output=True, max_tokens=MAX_OUTPUT_TOKENS, thinking='disabled',
+                request_timeout=self.settings['timeout_seconds'])
+        except Exception:
+            budget.settle_estimate((reservation, amount), accounting=f'{COST_ACCOUNTING}-failed')
+            raise
+        try:
+            budget.settle(reservation, request_cfg, prompt_tokens, completion_tokens, cached_tokens,
+                          accounting=COST_ACCOUNTING, category=COST_CATEGORY)
+        except Exception:
+            budget.settle_estimate((reservation, amount), accounting=f'{COST_ACCOUNTING}-usage-invalid')
+        return output
+
+    def choose(self, query, pool, prefetched):
+        """(key, body) pairs the judge picked, best first; [] when it says none. Raises JudgeFailed on a technical failure."""
+        started = self.clock()
+        deadline = started + self.settings['timeout_seconds'] + 0.5
+        candidates, picked = [], []
+        try:
+            self._files = self._scan()
+            pool = list(pool)[:self.settings['ombre_candidates']]
+            try:
+                query_vector = prefetched.result(timeout=max(0.05, deadline - self.clock()))
+            except FutureTimeout as exc:
+                raise JudgeFailed('timeout', 'embedding') from exc
+            except JudgeFailed:
+                raise
+            except Exception as exc:
+                raise JudgeFailed('embedding_error', type(exc).__name__) from exc
+            try:
+                extra = self._vector_candidates(query_vector, {key for key, _ in pool})
+            except JudgeFailed:
+                raise
+            except Exception as exc:
+                raise JudgeFailed('vectors_unreadable', type(exc).__name__) from exc
+            candidates = pool + extra
+            if not candidates:
+                self._record('empty', started, candidates=0, picked=0)
+                return []
+            order = sorted(candidates, key=lambda item: hashlib.md5((query + item[0]).encode()).hexdigest())
+            letters = {chr(65 + index): key for index, (key, _) in enumerate(order)}
+            lines = []
+            for letter, key in letters.items():
+                lines.append(f'{letter}) {card_text(self._raw(key) or self.memory.raw_content_for(key))}')
+            messages = [{'role': 'system', 'content': PROMPT},
+                        {'role': 'user', 'content': 'Lan just said: "%s"\n\nSaved memories:\n%s' % (
+                            query[:QUERY_CHARS], '\n'.join(lines))}]
+            future = self._pool.submit(self._ask, messages)
+            try:
+                text = future.result(timeout=max(0.05, deadline - self.clock()))
+            except FutureTimeout as exc:
+                raise JudgeFailed('timeout', 'model') from exc
+            except JudgeFailed:
+                raise
+            except Exception as exc:
+                raise JudgeFailed('request_error', type(exc).__name__) from exc
+            keys = parse_choice(text, letters)
+            bodies = dict(candidates)
+            picked = [(key, bodies[key]) for key in keys]
+        except JudgeFailed as failure:
+            self._failed(failure.reason, started, len(candidates), failure.detail)
+            raise
+        with self._lock:
+            self.failures = 0
+        self._record('ok' if picked else 'empty', started, candidates=len(candidates), picked=len(picked))
+        return picked
+
+    # --- bookkeeping --------------------------------------------------------------------------------------
+    def _failed(self, reason, started, candidates, detail=''):
+        with self._lock:
+            self.failures += 1
+            if self.failures >= self.settings['breaker_failures']:
+                self.open_until = self.clock() + self.settings['breaker_seconds']
+        self._record('failed', started, reason=reason, detail=detail, candidates=candidates, picked=0)
+
+    def _record(self, kind, started, **detail):
+        seconds = round(self.clock() - started, 3)
+        self.last = {'time': self.memory.budget.clock(), 'kind': kind, 'seconds': seconds, **detail}
+        try:
+            self.memory.store.append(self.memory.diagnostics, {'time': self.last['time'], 'code': 'recall_judge',
+                                                                'kind': kind, 'seconds': seconds, **detail})
+        except Exception:
+            pass
+
+    def status(self):
+        try:
+            day, waiting = self.memory.budget.category_totals(self.memory.cfg.id, None, COST_CATEGORY)
+            spent = str((day + waiting).quantize(Decimal('0.0001')))
+        except Exception:
+            spent = None
+        return {'enabled': self.enabled(), 'available': True, 'breaker_open': self.breaker_open(),
+                'timeout_seconds': self.settings['timeout_seconds'], 'last': dict(self.last) if self.last else None,
+                'spent_today': spent}

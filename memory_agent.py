@@ -17,6 +17,7 @@ import threading
 import uuid
 
 from agent_types import UserError
+from recall_judge import JudgeFailed
 
 
 def vault_path(root, character):
@@ -517,6 +518,7 @@ class Memory:
         self.last_recall_marks = None
         self.bucket_details_cache = {}
         self.native_hidden = set()
+        self.judge = None   # ticket 382: attached by the running app only (attach_recall_judge)
         try:
             self.opening = self.call('breath', {})
         except Exception as exc:
@@ -530,6 +532,8 @@ class Memory:
         return self
 
     def __exit__(self, *_):
+        if getattr(self, 'judge', None) is not None:
+            self.judge.close()
         embedder = getattr(self, '_embedder', None)
         if embedder is not None and hasattr(embedder, 'close'):
             embedder.close()
@@ -1286,6 +1290,13 @@ class Memory:
         normal = []
         emotional = []
         drift = []
+        pool = []
+        settings = self.assisted_settings(query, recent) if not rotate else None
+        # Ticket 382: the relevance judge only serves a real sentence of hers, never a wake or the short-context path.
+        judge = (self.judge if self.judge is not None and not widen and not settings and query.strip() else None)
+        prefetched = None
+        if judge is not None and judge.active():
+            prefetched = judge.prefetch(query)   # embedding her sentence overlaps with Ombre's own search below
         try:
             # Ticket 381: Ombre also returns archived memories, and its top three are cut before we look at
             # visibility, so an archived hit used up a slot and was then dropped. Ask for a few spare hits,
@@ -1295,7 +1306,8 @@ class Memory:
                 'query': query, 'mode': 'automatic', 'with_ids': True, 'max_results': asked})
             normal = ordinary_hits(raw, limit=asked)
             if not widen:
-                normal = self.context_visible(normal, failure_stage='recall_visibility')[:3]
+                pool = self.context_visible(normal, failure_stage='recall_visibility')
+                normal = pool[:3]
             drift = drift_hits(raw)
         except Exception as exc:
             self.retrieval_failure('breath_search', exc)
@@ -1303,9 +1315,17 @@ class Memory:
             emotional = blocks(self.call('feel', {'query': query}))
         except Exception as exc:
             self.retrieval_failure('feel', exc)
+        if prefetched is not None:
+            try:
+                # "None fits" is an answer: nothing is filled back from Ombre. Only a technical failure
+                # (JudgeFailed) keeps today's recall for this turn.
+                normal = judge.choose(query, pool, prefetched)
+            except JudgeFailed:
+                pass
+            except Exception as exc:
+                self.retrieval_failure('recall_judge', exc)
         kinds = {key: 'search' for key, _ in normal}
         kinds.update({key: 'feel' for key, _ in emotional if key not in kinds})
-        settings = self.assisted_settings(query, recent) if not rotate else None
         if settings:
             try:
                 normal, emotional = self.assisted_recall(query, recent, settings, normal, emotional), []
@@ -1445,6 +1465,17 @@ class Memory:
                     self.surfaced_ids[key] = True
             while len(self.surfaced_ids) > self.SURFACED_LIMIT:
                 self.surfaced_ids.pop(next(iter(self.surfaced_ids)))
+
+    def attach_recall_judge(self, cfg, model, settings=None, warm=False):
+        """Ticket 382: the running app turns the relevance judge on. Tests and tools that build a Memory never call this."""
+        from recall_judge import RecallJudge, load_settings as judge_settings
+        if self.judge is not None:
+            self.judge.close()
+        raw = (self.cfg.memory or {}).get('recall_judge')
+        self.judge = RecallJudge(self, cfg, model, settings if settings is not None else judge_settings(raw))
+        if warm:
+            self.judge.warm()
+        return self.judge
 
     def refresh_opening(self):
         """Fetch a fresh opening for a new conversation, without reusing the prior one on failure."""

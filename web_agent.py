@@ -33,7 +33,7 @@ from attachment_utils import (ATTACHMENT_EXTENSIONS, MAX_ATTACHMENT_BYTES,
 from model_settings import SettingsError
 from veil_agent import (ROOT, AUTONOMY_WAKE, CODEX_WATCH_WAKE, GLANCE_WAKE, MAX_PHOTO_BYTES,
                         ActivityState, Budget, Chat, Store, UserError,
-                        load_character, memory_available, now, make_model, make_voice, run_chat,
+                        background_cfg, load_character, memory_available, now, make_model, make_voice, run_chat,
                         safe_tool_activity_detail)
 import workbench_switch
 from autonomy import AutonomyController, GlanceController
@@ -1790,6 +1790,10 @@ def make_handler(hub, token):
                     for item in panel['items']:
                         item['auto'] = item['memory_id'] in written
                     panel['experience'] = experience.status()
+                # Ticket 382: the relevance judge's switch and its last result.
+                judge = getattr(getattr(hub.chat, 'memory', None), 'judge', None)
+                if judge is not None:
+                    panel['recall_judge'] = judge.status()
                 self._send(200, panel)
             except Exception:
                 self._send(503, {'error': 'Ombre 记忆暂时无法读取。'})
@@ -2618,6 +2622,20 @@ def make_handler(hub, token):
                 except (OSError, UserError) as exc:
                     self._send(500, {'error': str(exc)})
 
+        def _post_recall_judge(self, body):
+            enabled = body.get('enabled')
+            judge = getattr(getattr(hub.chat, 'memory', None), 'judge', None)
+            if not isinstance(enabled, bool):
+                self._send(400, {'error': 'enabled'})
+            elif judge is None:
+                self._send(409, {'error': 'unavailable'})
+            else:
+                try:
+                    judge.set_enabled(enabled)
+                    self._send(200, {'ok': True, 'recall_judge': judge.status()})
+                except (OSError, UserError) as exc:
+                    self._send(500, {'error': str(exc)})
+
         def _post_voice_style(self, body):
             # Ticket 355: Lan switches his "how I talk" reference on or off, or saves an edited text.
             voice_style = getattr(hub.chat, 'voice_style', None)
@@ -2827,6 +2845,8 @@ def make_handler(hub, token):
                 self._post_quiet_hours(body)
             elif url.path == '/api/experience-memory':
                 self._post_experience_memory(body)
+            elif url.path == '/api/recall-judge':
+                self._post_recall_judge(body)
             elif url.path == '/api/voice-style':
                 self._post_voice_style(body)
             elif url.path == '/api/workbench':
@@ -3140,6 +3160,8 @@ def main(argv=None):
                             from memory_agent import Memory, open_ombre
                             with open_ombre(config_root, cfg) as backend:
                                 with Memory(cfg, store, budget, model, backend, runtime_monitor) as memory:
+                                    # Ticket 382: Peter's background model judges which memories fit what she just said.
+                                    memory.attach_recall_judge(background_cfg(cfg), background_model or model, warm=True)
                                     from memory_native import NativeMemoryTools, ToolSet
                                     tools = ToolSet(tools, NativeMemoryTools(
                                         memory, cfg.tools['max_result_bytes']))

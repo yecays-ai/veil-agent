@@ -42,6 +42,23 @@ def cosine(a, b):
     return dot / (na * nb) if na and nb else 0.0
 
 
+def all_vectors(db_path):
+    """Every stored content vector, read-only (ticket 382). A missing database is an error."""
+    if not Path(db_path).is_file():
+        raise FileNotFoundError('embeddings.db is missing')
+    conn = sqlite3.connect(Path(db_path).resolve().as_uri() + '?mode=ro', uri=True, timeout=5)
+    found = {}
+    try:
+        for bucket_id, raw in conn.execute('SELECT bucket_id, embedding FROM embeddings'):
+            try:
+                found[bucket_id] = decode_vector(raw)
+            except (ValueError, TypeError, json.JSONDecodeError):
+                continue
+    finally:
+        conn.close()
+    return found
+
+
 def load_vectors(db_path, ids):
     """Read the stored content vectors of the given memories, read-only. Memories without a vector are left out;
     a missing database is an error, so the caller keeps today's recall."""
