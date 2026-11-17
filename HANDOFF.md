@@ -1,5 +1,11 @@
 # HANDOFF
 
+## 工单 381 交接
+- 改动在 `memory_agent.py`：`SEARCH_SPARE_HITS = 5`，`context()` 里 `asked = 3 + SEARCH_SPARE_HITS`，`ordinary_hits` 之后立刻 `context_visible(...)[:3]`；`assisted_recall()` 同样。widen（自主唤醒轮换）路径本来就多取候选，不变。测试在 `tests/test_recall_rotation.py`（三条新用例）。
+- 验证（副本，真实 Ombre，不写正式库）：124 句新旧代码对比，只有 2 句召回变了（S06 多出相关的一条；U19 无关句多带 1 条万能旧事，回复没受影响）；记录在 Lan 电脑 `experiments/consolidate-367/out/batchG/ruleA/`。
+- 同类路径未改：`memory_native._search`（Peter 自己搜记忆）和 `experience_memory.py` 的相关记忆查找也是先取 3 再过滤，要不要一起改另议。
+- 下一步（lan 已同意）：小判官对照验证（只在副本做实验）：方式 X = 保留 Ombre 已召回的、判官只补漏；方式 Y = 判官统一筛选；用冻结的未见过句子比较，不上线；中文场景标签放在判官方案定了之后。
+
 ## 工单 379 交接
 - 冷却回退：`memory_agent.py` 的 `release_recall()`/`rollback_recall()`，调用点在 `veil_agent.py` 的 `Chat.send()`（无回复则撤销）、`_send()`（重新生成时放出 `regeneration_release_refs`，由 `prepare_regeneration` 从被替换回复行的 `memory_refs` 收集；输入裁剪后释放）。
 - 待 lan 真机验收，见 STATUS 验收步骤。
