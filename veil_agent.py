@@ -3612,7 +3612,7 @@ class Chat:
         try:
             return self._send_under_model_lock(text, autonomy=autonomy, **kwargs)
         finally:
-            delivered = bool(self.sent_messages or self.last_reply_message_id)
+            delivered = bool(self.sent_messages or getattr(self, 'reply_row_saved', False))
             if not delivered and self.memory is not None and getattr(self.memory, 'last_recall_marks', None):
                 self.memory.rollback_recall()
 
@@ -3715,6 +3715,7 @@ class Chat:
         self.last_tool_summaries = []
         self.last_reply_message_id = None
         self.last_reply_request_id = None
+        self.reply_row_saved = False
         self.regeneration_parent_message_id = (regeneration_parent_message_id
                                                if isinstance(regeneration_parent_message_id, str)
                                                else None)
@@ -3875,7 +3876,11 @@ class Chat:
         self.turn_memory_refs = (recalled_memory_refs if len(recalled_memories) == len(recalled)
                                  else [])
         if self.memory and len(recalled_memories) != len(recalled):
-            self.memory.release_recall(recalled_memory_refs)  # cut for size: not shown, so not cooled down
+            # Cut for size: not shown, so not cooled down. The opening group comes first and is cut last, so while
+            # any message survives, only the automatic recall (not the opening memories) was dropped.
+            kinds = getattr(self.memory, 'last_context_kinds', {}) or {}
+            self.memory.release_recall([key for key in recalled_memory_refs
+                                        if not recalled_memories or kinds.get(key) != 'opening'])
 
         while auxiliary_context and bound(history, recalled_memories, auxiliary_context) > limit:
             auxiliary_context.pop()
@@ -4010,6 +4015,7 @@ class Chat:
                 if self.regeneration_parent_message_id:
                     event['regeneration_parent_message_id'] = self.regeneration_parent_message_id
                 self.store.append(self.path, event)
+                self.reply_row_saved = True
             if not self.tool_mode:
                 self.budget.settle(request_id, self.cfg, prompt, completion, cached, input_bytes=sent_bytes, tolerate_over_bound=True)
             # The event was included in the successful normal-chat request above.

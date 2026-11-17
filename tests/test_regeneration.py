@@ -89,7 +89,7 @@ class RegenerationTests(unittest.TestCase):
             chat.send('hi')
         chat.memory.rollback_recall.assert_called_once()
         chat.memory.rollback_recall.reset_mock()
-        chat._send_under_model_lock = lambda *a, **k: setattr(chat, 'last_reply_message_id', 'x') or 'ok'
+        chat._send_under_model_lock = lambda *a, **k: setattr(chat, 'reply_row_saved', True) or 'ok'
         chat.send('hi')
         chat.memory.rollback_recall.assert_not_called()
 
