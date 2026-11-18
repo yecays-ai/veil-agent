@@ -51,6 +51,7 @@ LOOKS = 2                # ticket 368: at most this many more asks after the fir
 STAGE_HITS = 4            # ticket 368: and this many more, the other stages of an experience a hit belongs to
 OWN_SAVES = 3             # ticket 368: and the memories Peter saved or rewrote himself most recently
 CANDIDATE_CHARS = 1200    # ticket 363: he rewrites an entry, so he sees it whole (older appended ones are clipped)
+FIX_MARGIN = 100          # ticket 386: an overlong draft is asked for about this much under the cap
 VERBATIM_RUN = 24         # an entry repeating this many characters of a message in a row is a quote, not a memory
 BACKFILL = timedelta(days=3)
 DEFAULTS = {'enabled': False, 'min_chars': 3000, 'floor_chars': 200, 'idle_minutes': 30,
@@ -516,7 +517,10 @@ class ExperienceMemory:
         if SECRET.search(text):
             return None
         if len(text) > limit:
-            return (f'{len(text)} characters; the most is {limit}. Shorten it, keeping the facts and the attitude; '
+            # Ticket 386: "shorten it" alone left 4 of 6 drafts still 8 to 99 characters over after two tries
+            # (11-17 to 11-18); aiming well under the cap leaves room for miscounting. The cap itself is unchanged.
+            return (f'{len(text)} characters; the most is {limit}. Rewrite it to about {limit - FIX_MARGIN} characters '
+                    '(well under the limit, since counting is easy to get wrong), keeping the facts and the attitude; '
                     'what belongs to a later stage is not part of this one.')
         if self._quotes(text, batch):
             return 'repeats a stretch of a message word for word; say it in your own words.'

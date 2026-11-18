@@ -358,6 +358,7 @@ class WritingTests(Fixture):
         draft = self.sent()['drafts'][0]
         self.assertEqual((draft['ref'], draft['text'], draft['title']), ('d0', '长' * 650, '被绊了'))
         self.assertIn('650 characters', draft['problem'])
+        self.assertIn('about 500 characters', draft['problem'])   # ticket 386: aimed under the cap, which stays 600
         self.assertNotIn('earlier_entries', self.sent())                  # the fix call is not a second tidy
         self.assertEqual(self.ombre.items['m2'], {'title': '被绊了', 'content': '后来我被新抽屉绊了三次。'})
         self.assertEqual(self.feature.sidecar.get('m2')['links'], ['old'])
