@@ -273,6 +273,11 @@ class NativeMemoryTests(unittest.TestCase):
         self.tools.invoke('hold', {'title': 'b', 'content': 'long ' * 110})
         self.tools.invoke('hold', {'title': 'c', 'content': 'long ' * 110 + 'again'})
         self.tools.invoke('hold', {'title': 'c', 'content': 'long ' * 110 + 'again'})
+        # Ticket 384: a hit is shown only once its file on disk says it is current, as in automatic recall.
+        for other, row in self.backend.rows.items():
+            if other != key:
+                (bucket_file.parent / f'memory_{other}.md').write_text(
+                    f'---\nid: {other}\ntitle: t\n---\n' + row['content'], encoding='utf-8')
         text, _, _ = self.tools.invoke('breath_search', {'query': 'long'})
         self.assertIn('[已截断]', text)
 

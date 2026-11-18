@@ -14,7 +14,7 @@ import uuid
 
 from agent_types import UserError
 from capability_state import capability_lock, save_capabilities
-from memory_agent import ordinary_hits, MemoryToolError, vault_path as role_vault_path
+from memory_agent import ordinary_hits, MemoryToolError, SEARCH_SPARE_HITS, vault_path as role_vault_path
 from memory_sidecar import Sidecar
 
 OMBRE_TOOLS = ('trace', 'dream', 'letter_write', 'letter_read', 'letter_lock_update',
@@ -1096,11 +1096,12 @@ class NativeMemoryTools:
         """Visible memories the program finds for a new save, recorded as shown so Peter can pick one."""
         try:
             text = self.memory.call('breath_search', {'query': f'{title}\n{content}'[:1000], 'mode': 'automatic',
-                                                      'with_ids': True, 'max_results': 3})
+                                                      'with_ids': True, 'max_results': 3 + SEARCH_SPARE_HITS})
         except Exception:
             return []  # Not finding candidates must never block a save.
         found = []
-        for key, _ in self.memory.visible(ordinary_hits(text)):
+        # Ticket 384: same order as automatic recall (381): drop archived and hidden hits first, then keep three.
+        for key, _ in self.memory.context_visible(ordinary_hits(text, limit=3 + SEARCH_SPARE_HITS))[:3]:
             body = self.memory.content_for(key, refresh=True)
             if key in exclude or body is None or not self.memory.refresh_visibility(key):
                 continue
@@ -1311,7 +1312,7 @@ class NativeMemoryTools:
         query = args.get('query')
         if not isinstance(query, str) or not query.strip():
             return 'The search query must be non-empty text.', '被拒绝', 'breath_search'
-        ombre_args = {'query': query.strip(), 'mode': 'automatic', 'with_ids': True, 'max_results': 3}
+        ombre_args = {'query': query.strip(), 'mode': 'automatic', 'with_ids': True, 'max_results': 3 + SEARCH_SPARE_HITS}
         try:
             start = self._date_bound(args.get('date_from'), upper=False)
             end = self._date_bound(args.get('date_to'), upper=True)
@@ -1324,7 +1325,9 @@ class NativeMemoryTools:
         if end:
             ombre_args['date_to'] = args['date_to'].strip()
         text = self.memory.call('breath_search', ombre_args)
-        found = self.memory.visible(ordinary_hits(text))
+        # Ticket 384: Ombre returns archived memories too. Check each hit's current state on disk first, then keep
+        # three, so an archived old version neither takes a slot nor is shown to Peter (same order as recall, 381).
+        found = self.memory.context_visible(ordinary_hits(text, limit=3 + SEARCH_SPARE_HITS))[:3]
         # Keep earlier results so a memory found a moment ago can still be extended (ticket 183).
         self.memory.mark_surfaced([key for key, _ in found])
         rendered = []
