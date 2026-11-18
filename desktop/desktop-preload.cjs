@@ -23,6 +23,8 @@ contextBridge.exposeInMainWorld('veilDesktop', {
   detachView: (view, point) => ipcRenderer.invoke('view:detach', view, point),
   mergeView: view => ipcRenderer.invoke('view:merge', view),
   focusView: view => ipcRenderer.invoke('view:focus', view),
+  openLifeRecord: id => ipcRenderer.invoke('life:open-record', id),
+  onOpenLifeRecord: callback => ipcRenderer.on('desktop:open-life-record', (_event, id) => callback(id)),
   detachedViews: () => ipcRenderer.invoke('view:states'),
   onDetachedViews: callback => ipcRenderer.on('view:states', (_event, views) => callback(views)),
   onShowActivity: callback => ipcRenderer.on('desktop:show-activity', () => callback()),

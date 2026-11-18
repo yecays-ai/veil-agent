@@ -1028,6 +1028,7 @@ class Hub(ScreenPopMixin):
         virtual_card_event = getattr(text, 'virtual_card_event', None)
         trace = getattr(text, 'trace', None)
         elapsed = getattr(text, 'elapsed', None)
+        life_id = getattr(text, 'life_id', None)   # ticket 385: a notice about a calendar record
         text = str(text)
         prefix = f'{self.name}: '
         if trace in ('thought', 'tool'):
@@ -1066,7 +1067,7 @@ class Hub(ScreenPopMixin):
         elif text.startswith('接上了'):
             self.push('notice', text.split('。')[0] + '。')   # drop the terminal-only command hints
         else:
-            self.push('notice', text)
+            self.push('notice', text, **({'life_id': life_id} if isinstance(life_id, str) else {}))
 
     def output(self, text):
         with self.cond:
@@ -2015,7 +2016,11 @@ def make_handler(hub, token):
                 if hub.memory_tools is not None:
                     rows.extend(hub.memory_tools.plan_entries())
                 rows, folded = fold_completed(rows)
-                self._send(200, {'records': rows, 'folded': folded})
+                # Ticket 385: the two daily moods and the daily to-do log travel with the records.
+                life = chat.life_records if chat is not None else None
+                self._send(200, {'records': rows, 'folded': folded,
+                                 'moods': life.moods() if life is not None else {},
+                                 'daily_checks': life.daily_checks() if life is not None else {'started': None, 'days': {}}})
             except (OSError, ValueError, UnicodeError, UserError):
                 self._send(500, {'error': '生活记录无法安全读取。'})
 
@@ -2696,6 +2701,33 @@ def make_handler(hub, token):
                 self._send(409, {'error':'Peter 尚未就绪。'})
                 return
             source_id=body.get('id')
+            if 'find' in body:
+                # Ticket 385: a notice names one record; it may be an old completed note folded out of the list.
+                key=body.get('find')
+                if set(body)!={'find'} or not isinstance(key,str) or not key:
+                    self._send(400, {'error':'invalid lookup'}); return
+                try:
+                    from life_records import effective
+                    row=next((r for r in hub.chat.life_records.read() if isinstance(r,dict) and r.get('id')==key and r.get('kind')!='diary'),None)
+                except (OSError,ValueError,UnicodeError):
+                    self._send(500, {'error':'生活记录无法安全读取。'}); return
+                self._send(200, {'found':row is not None,'record':effective(row) if row else None})
+                return
+            if 'mood' in body:
+                # Ticket 385: Lan sets only her own slot; Peter sets his through his tool.
+                try:
+                    mood=body['mood']
+                    if set(body)!={'mood'} or not isinstance(mood,dict) or set(mood)-{'date','emoji'}:
+                        raise ValueError('invalid mood')
+                    emoji=mood.get('emoji') or ''
+                    if not isinstance(emoji,str): raise ValueError('invalid mood')
+                    slot=hub.chat.life_records.set_mood(mood.get('date'),'Lan',emoji.strip())
+                    self._send(200, {'ok':True,'date':mood.get('date'),'moods':slot})
+                except (OSError,UnicodeError):
+                    self._send(500, {'error':'心情没能安全保存。'})
+                except ValueError as exc:
+                    self._send(400, {'error':str(exc)})
+                return
             if isinstance(source_id,str) and source_id.startswith('long-task:'):
                 task_id=source_id.split(':',1)[1]
                 try:

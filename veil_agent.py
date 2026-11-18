@@ -1977,6 +1977,14 @@ def collapse_all_history_photos(messages):
             message['content'] = PHOTO_PLACEHOLDER + (('\n' + text) if text else '')
 
 
+class LifeNotice(str):
+    """Ticket 385: a grey notice about a shared calendar record; `life_id` lets the chat open it."""
+    def __new__(cls, text, life_id=None):
+        value = super().__new__(cls, text)
+        value.life_id = life_id if isinstance(life_id, str) else None
+        return value
+
+
 class ChatOutput(str):
     def __new__(cls, text, media=None, message_id=None, request_id=None, memory_refs=None, attachments=None,
                 is_error=False, *, virtual_card=None, virtual_card_event=None):
@@ -2042,6 +2050,13 @@ class Chat:
         self.investigation = InvestigationCheckpoint(store, cfg.id)
         from life_records import LifeRecords
         self.life_records = LifeRecords(store, cfg.id)
+        # Ticket 385: Peter may edit what Lan wrote in the shared calendar; she is told in the chat (a notice line that
+        # never enters his history), and the record keeps every earlier version.
+        self.life_records.on_lan_record_changed = self._notify_lan_record_changed
+        try:
+            self.life_records.ensure_checks_started()
+        except OSError:
+            pass
         # Ticket 152: Peter's own index of thoughts that might carry on (one line each).
         from thoughts import ThoughtIndex
         self.thoughts = ThoughtIndex(store, cfg.id)
@@ -3104,10 +3119,32 @@ class Chat:
         try:
             parts.append(state_text(self.long_tasks.read(),
                                     self.store.read(f'{self.cfg.id}/long-task-history.jsonl')[-MAX_FINISHED:],
-                                    self.life_records.read(), plans, stamp[:10]))
+                                    self.life_records.read(), plans, stamp[:10], moods=self.life_records.moods()))
         except (OSError, ValueError, UnicodeError, UserError, KeyError, TypeError):
             pass
         return '\n'.join(part for part in parts if part)
+
+    def _notify_lan_record_changed(self, before, after):
+        """Ticket 385: one grey line in the chat when Peter changed a calendar record Lan wrote."""
+        def label(row):
+            when = ' '.join(part for part in (str(row.get('date') or '')[5:].replace('-', '/'), row.get('time') or '') if part)
+            return (when + ' ' if when else '') + str(row.get('title') or '')
+        if (after.get('repeat') == 'daily' and before.get('state') != after.get('state')
+                and all(before.get(k) == after.get(k) for k in ('title', 'content', 'date', 'time', 'kind', 'repeat'))):
+            return   # ticking a daily to-do is what it is for; Lan asked for no report of that
+        kind = {'event': '日程', 'note': '待办'}.get(after.get('kind'), '记录')
+        if before.get('state') != after.get('state') and label(before) == label(after):
+            change = label(after) + ('（标成已完成）' if after.get('state') == 'completed' else '（改回未完成）')
+        elif label(before) != label(after):
+            change = label(before) + ' → ' + label(after)
+        elif before.get('repeat') != after.get('repeat') or before.get('kind') != after.get('kind'):
+            change = label(after) + ('（改成每天重复）' if after.get('repeat') == 'daily' else
+                                     '（改成不重复）' if before.get('repeat') == 'daily' else '（改成' + kind + '）')
+        else:
+            change = label(after) + '（改了内容）'
+        # During autonomy the ordinary output is muted; like send_message, the notice uses the channel kept for it.
+        output = self.autonomy_message_output if self.autonomy_mode else None
+        (output or self.output)(LifeNotice(f'Peter 改了你的{kind}：{change}', after.get('id')))
 
     def recent(self):
         groups = []

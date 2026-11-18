@@ -90,6 +90,30 @@ output_cny_per_million = "8"
         self.assertEqual(status, 503)
         self.assertEqual(body['error'], '服务尚未就绪，请稍后重试。')
 
+    def test_life_page_shares_moods_daily_log_and_tells_lan_when_peter_edits_hers(self):
+        # Ticket 385
+        chat = Chat(self.cfg, self.store, Budget(self.store), self.model, output=self.hub.output)
+        self.hub.chat = chat
+        today = datetime.now().astimezone().date().isoformat()
+        hers = chat.life_records.write({'kind': 'event', 'title': '体检', 'date': today, 'time': '09:30'}, 'Lan')
+        status, body = self.call('/api/life', {'mood': {'date': today, 'emoji': '🥰'}})
+        self.assertEqual((status, body['moods']['Lan']['emoji']), (200, '🥰'))
+        self.assertEqual(self.call('/api/life', {'mood': {'date': today, 'emoji': 'hi'}})[0], 400)
+        self.assertEqual(self.call('/api/life', {'mood': {'date': today, 'emoji': '🥰'}, 'id': 'x'})[0], 400)
+        status, body = self.call('/api/life')
+        self.assertEqual(status, 200)
+        self.assertEqual(body['moods'][today]['Lan']['emoji'], '🥰')
+        self.assertEqual(body['daily_checks']['started'], today)
+        self.assertEqual(body['records'][0]['time'], '09:30')
+        chat.life_records.invoke({'action': 'update', 'id': hers['id'], 'time': '10:00'})
+        notices = [e for e in self.hub.events if e['kind'] == 'notice' and e.get('life_id') == hers['id']]
+        self.assertEqual(len(notices), 1)
+        self.assertIn('09:30 体检 →', notices[0]['text'])
+        status, body = self.call('/api/life', {'find': hers['id']})
+        self.assertEqual((status, body['found'], body['record']['time']), (200, True, '10:00'))
+        self.assertEqual(self.call('/api/life', {'find': 'nope'})[1]['found'], False)
+        self.assertEqual(self.call('/api/life', {'find': hers['id'], 'id': 'x'})[0], 400)
+
     def test_health_does_not_wait_for_chat_snapshot_and_requires_token(self):
         self.hub.ready = True
         with patch.object(self.hub, 'snapshot', side_effect=AssertionError('snapshot should not run')):

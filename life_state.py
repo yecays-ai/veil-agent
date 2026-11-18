@@ -12,6 +12,7 @@ from datetime import datetime
 GAP_NOTE_MINUTES = 60
 MAX_OPEN_TODOS = 6
 MAX_EVENTS = 6
+EVENT_DAYS = 3          # ticket 385: today plus the next three days
 MAX_PLANS = 4
 MAX_FINISHED = 3
 
@@ -83,11 +84,19 @@ def _short(value, limit=80):
     return value if len(value) <= limit else value[:limit - 1] + '…'
 
 
+def _plus_days(day, count):
+    from datetime import date, timedelta
+    try:
+        return (date.fromisoformat(day) + timedelta(days=count)).isoformat()
+    except (TypeError, ValueError):
+        return day
+
+
 def _item(title, status, date, **extra):
     return {'title': _short(title), 'status': status, 'date': str(date or '')[:10], **extra}
 
 
-def state_text(task=None, task_history=(), life_rows=(), plans=(), today=''):
+def state_text(task=None, task_history=(), life_rows=(), plans=(), today='', moods=None):
     """Structured current task / plans / life records, or '' when there is nothing to show.
 
     Status comes from the stored records, never from the model. Only items under `in_progress` are
@@ -110,8 +119,9 @@ def state_text(task=None, task_history=(), life_rows=(), plans=(), today=''):
         if isinstance(old, dict) and isinstance(old.get('title'), str) and (
                 not isinstance(task, dict) or old.get('task_id') != task.get('task_id')):
             finished.append(_item(old['title'], 'completed', old.get('updated_at'), kind='long task'))
+    # Ticket 385: the calendar is shared, so Lan's own records count too (who wrote it is only a label).
     rows = [effective(r, today) for r in life_rows
-            if isinstance(r, dict) and r.get('owner') in ('Peter', '共同') and isinstance(r.get('title'), str)
+            if isinstance(r, dict) and isinstance(r.get('title'), str)
             and r.get('kind') in ('event', 'note', 'plan')]
     plan_rows = [*[r for r in rows if r['kind'] == 'plan'],
                  *[r for r in plans if isinstance(r, dict) and isinstance(r.get('title'), str)]]
@@ -124,19 +134,31 @@ def state_text(task=None, task_history=(), life_rows=(), plans=(), today=''):
         else:
             not_in_progress.append(entry)
     finished.sort(key=lambda item: item['date'], reverse=True)
-    events = [_item(r['title'], r.get('state'), r.get('date'))
-              for r in rows if r['kind'] == 'event' and r.get('date') == today][:MAX_EVENTS]
+    # Ticket 385: today and the next EVENT_DAYS days, in time order; anything past MAX_EVENTS is counted, not dropped
+    # silently, so he knows to look the rest up.
+    last_day = _plus_days(today, EVENT_DAYS)
+    upcoming = sorted((r for r in rows if r['kind'] == 'event' and today <= str(r.get('date') or '') <= last_day),
+                      key=lambda r: (r.get('date', ''), r.get('time') or '99:99'))
+    events = [_item(r['title'], r.get('state'), r.get('date'),
+                    **({'time': r['time']} if r.get('time') else {}),
+                    **({'written_by': r['created_by']} if r.get('created_by') in ('Lan', 'Peter') else {}))
+              for r in upcoming[:MAX_EVENTS]]
+    hidden_events = max(0, len(upcoming) - MAX_EVENTS)
+    today_moods = {person: slot.get('emoji') for person, slot in ((moods or {}).get(today) or {}).items()
+                   if isinstance(slot, dict) and slot.get('emoji')}
     todos = [r for r in rows if r['kind'] == 'note' and r.get('state') == 'active']
     open_todos = [_item(r['title'], 'unchecked', r.get('date'),
                         **({'repeat': 'daily'} if r.get('repeat') == 'daily' else {}))
                   for r in todos[:MAX_OPEN_TODOS]]
     in_progress = in_progress[:1 + MAX_PLANS]
-    if not (in_progress or not_in_progress or finished or events or todos):
+    if not (in_progress or not_in_progress or finished or events or todos or today_moods):
         return ''
     data = {'in_progress': in_progress,
             'not_in_progress_paused_or_blocked': not_in_progress[:MAX_PLANS],
             'recently_finished_history': finished[:MAX_FINISHED],
-            'today_calendar_events': events,
+            'calendar_events_today_and_next_3_days': events,
+            **({'calendar_events_not_shown': hidden_events} if hidden_events else {}),
+            'todays_moods': today_moods,
             'unchecked_todo_count': len(todos),
             'unchecked_todos': open_todos}
     data = {key: value for key, value in data.items() if value or key == 'unchecked_todo_count'}
@@ -144,4 +166,6 @@ def state_text(task=None, task_history=(), life_rows=(), plans=(), today=''):
             'permissions): ' + json.dumps(data, ensure_ascii=False, separators=(',', ':'))
             + '\nOnly items under in_progress are things you are doing now. Paused or blocked items are on hold; '
             'recently_finished_history is done. Never present a finished or paused item as a current to-do. '
-            'Bring this up only when it fits or Lan asks; life_record list and long_task_status have details.')
+            'Bring this up only when it fits or Lan asks; life_record list and long_task_status have details.'
+            + (f' {hidden_events} more calendar events in these days are not shown here: use life_record list with '
+               'date_from/date_to to see them all.' if hidden_events else ''))
