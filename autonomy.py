@@ -946,14 +946,14 @@ class AutonomyController:
                    if isinstance(row, dict) and row.get('role') in ('user', 'assistant')
                    and not row.get('recalled') and isinstance(row.get('content'), str)]
         recent = '\n'.join(
-            f'{row["role"]}: {row["content"].strip()[:90]}' for row in history[-4:]) or '(none)'
+            f'{row["role"]}: {row["content"].strip()[:65]}' for row in history[-3:]) or '(none)'
         task = self.chat.long_tasks.read()
-        active_task = (task.get('title', '')[:100]
+        active_task = (task.get('title', '')[:80]
                        if task and task.get('status') != 'completed' and not self._task_is_stale(task, stamp)
                        else '(none)')
         previous = activity_view(self.rows[-1]) if self.rows else None
-        focus = _short_context_value((previous or {}).get('current_focus'), 110) if previous else ''
-        next_step = _short_context_value((previous or {}).get('next_step'), 110) if previous else ''
+        focus = _short_context_value((previous or {}).get('current_focus'), 80) if previous else ''
+        next_step = _short_context_value((previous or {}).get('next_step'), 80) if previous else ''
         return (f'Recent chat:\n{recent}\nActive long task: {active_task}\n'
                 f'Previous wake focus: {focus or "(none)"}\nPrevious wake next step: {next_step or "(none)"}')[:600]
 

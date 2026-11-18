@@ -2,7 +2,7 @@
 
 ## 工单 388 交接（自主活动与相关记忆）
 - 自主唤醒提示在 `autonomy.py` `AutonomyController._context()`：三种选择同等有效（自主研究/创作、想联系 Lan、休息或不做事）；不因醒来或完成工作而报告，消息沿用现有人设。
-- 记忆检索查询由 `AutonomyController._recall_query()` 从最近四条双方聊天、未过期长任务标题、上一次自主活动的重点和下一步组成。`veil_agent.py` 将其作为 `memory_query` 单独交给 `Memory.context(..., wake=True)`，不会挤进 Peter 的完整自主活动正文。
+- 记忆检索查询由 `AutonomyController._recall_query()` 从最近三条双方聊天、未过期长任务标题、上一次自主活动的重点和下一步组成，各部分保留在 600 字上限内。`veil_agent.py` 将其作为 `memory_query` 单独交给 `Memory.context(..., wake=True)`，不会挤进 Peter 的完整自主活动正文。
 - `memory_agent.py` 唤醒路径取至多 `rotation_candidates` 条可见候选（默认 8），`recall_judge.py` 直接挑最多 3 条；没有相关项就为空。判官未启用或失败时退回普通 Ombre 检索前三条；自主唤醒不使用随机浮现和轮换。普通聊天仍最多 2 条、沿用原有故障回退。
 - 判官每次自主活动约增加 ¥0.001，记入现有 `recall_judge` 费用类别，受原预算和开关控制；不写入或改动任何记忆。
 - 本轮没有新增或运行自动化测试。PR 检查会由远端工作流自动运行；Lan 更新重启后需按 `docs/tickets/388-autonomy-relevant-memory.md` 验收自然消息、相关记忆、空命中，以及开关/故障回退。
