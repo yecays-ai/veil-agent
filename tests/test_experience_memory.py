@@ -8,9 +8,11 @@ sit after the cached prefix and before the history."""
 import json
 import tempfile
 import unittest
+from unittest import mock
 from decimal import Decimal
 from pathlib import Path
 
+from agent_types import UserError
 import test_native_memory
 from chat_search import search_chat
 from experience_memory import COST_CATEGORY, ExperienceMemory, load_settings
@@ -589,6 +591,13 @@ class WritingTests(Fixture):
         self.assertEqual(self.feature.run_if_due(), 'budget')
         self.assertEqual(self.requests, [])
         self.assertEqual(self.feature.due(), 'volume')   # the chat is still there for tomorrow
+
+    def test_fix_request_checks_its_own_cost_against_daily_ceiling(self):
+        self.feature = self.make(daily_budget_cny='0.01')
+        with mock.patch.object(self.feature, '_worst_for', return_value=Decimal('0.02')):
+            with self.assertRaises(UserError):
+                self.feature._request([{'role': 'user', 'content': 'draft'}], 'fix')
+        self.assertEqual(self.requests, [])
 
     def test_cost_is_booked_under_its_own_category(self):
         self.first_entry()

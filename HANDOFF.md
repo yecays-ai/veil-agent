@@ -1,6 +1,7 @@
 # HANDOFF
 
 ## 工单 386 交接（自动整理失败）
+- 每次整理、重试及草稿修改请求发出前，按该请求自身的消息长度重新估算并检查每日上限；草稿修改超预算时保留未修复草稿。
 - 代码：`experience_memory.py` 的 `_request`（一次调用，`detail=True` 拿 finish_reason，可传 `thinking='disabled'`）、`_call_model`（截断就关思考重试一次；`self._retried` 为真时这一轮后续调用直接关思考）、`_record_failure` / `failures()`（`<角色>/experience-memory-failures.jsonl`，`FAILURES_KEPT=20`、`FAILURE_CHARS=4000`）、`retry_at()`（最近一个 checkpoint/start 之后的 error 数：30 分钟、2 小时、第二天 0 点；`run_if_due(force=True)` 不受限）、`_problem` 超长时要求 `limit - FIX_MARGIN`（500）。状态多了 `retry_at`、`failures_kept`、`last.retried_without_thinking`、`last.unfixed`；`desktop/chat.js` `renderExperience` 用它们出一句话。
 - 对比脚本 `experiments/experience-386/compare.py`（`--list`、`--probe`、`--squeeze N`）；lan 电脑上留着 worktree `veil-agent-386`、`veil-agent-386-main` 和结果 `.local-tmp/386-compare/`，可删。注意 `--cap` 要高于预算检查的最坏估计（8000 输出后 deepseek 约 ¥0.12）才会发请求。
 - 待真机：deepseek-flash 长聊天下 8000 是否够；gemini 中转（ckffai）接不接受关思考（11-18 测时中转本身 500）。

@@ -453,6 +453,8 @@ class ExperienceMemory:
 
     def _request(self, messages, stage, thinking=None):
         """One model call: (text, finish_reason, completion_tokens)."""
+        if self.spent_today() + self._worst_for(messages) > Decimal(str(self.settings['daily_budget_cny'])):
+            raise UserError('经历整理今天的花费上限不够再发一次请求；聊天记录不受影响。')
         request_cfg = self._request_cfg(messages)
         reservation, amount = self.budget.reserve(request_cfg, accounting=COST_ACCOUNTING, category=COST_CATEGORY)
         try:
