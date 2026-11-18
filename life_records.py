@@ -150,6 +150,7 @@ class LifeRecords:
             # The log is compared with what it already says for today, not only with the record's previous state:
             # a tick saved while the log could not be written is caught up on the next save, and a note that just
             # became daily gets its first line. Repeating the same save adds nothing.
+            if original and original.get('repeat')=='daily': self._catch_up_last_day(original,stamp[:10])
             if repeat=='daily' and self._logged_today(row['id'],stamp[:10])!=_check_state(state):
                 self._log_check(row,state,actor,stamp)
         if (actor=='Peter' and prior and prior.get('created_by')=='Lan' and callable(self.on_lan_record_changed)
@@ -179,6 +180,23 @@ class LifeRecords:
             handle.write(json.dumps({'day':stamp[:10],'id':row['id'],'title':row['title'],
                                      'state':_check_state(state),'at':stamp,'by':actor},ensure_ascii=False)+'\n')
             handle.flush(); os.fsync(handle.fileno())
+    def _catch_up_last_day(self, original, today):
+        """The record as last saved is how that day ended. If that day is already over and its log line was
+        lost (the save went through but the log could not be written), write it in for that day, with the
+        time it really happened, so a tick from yesterday is not missing from yesterday nor moved to today."""
+        day=str(original.get('updated_at') or '')[:10]
+        started=self._log_started()
+        if not day or day>=today or not started or day<started: return
+        done=original.get('state')=='completed' and str(original.get('completed_at') or '')[:10]==day
+        if self._logged_today(original['id'],day)!=_check_state('completed' if done else 'active'):
+            self._log_check(original,'completed' if done else 'active',original.get('updated_by'),
+                            original['completed_at'] if done else original['updated_at'])
+    def _log_started(self):
+        if not self.checks_path.exists(): return None
+        with self.checks_path.open(encoding='utf-8') as handle:
+            try: first=json.loads(handle.readline() or 'null')
+            except ValueError: return None
+        return first.get('started') if isinstance(first,dict) else None
     def _logged_today(self, key, day):
         """What the log last says about this daily to-do today; nothing logged counts as unchecked."""
         last='unchecked'
