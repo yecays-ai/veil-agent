@@ -1499,7 +1499,8 @@ class Hub(ScreenPopMixin):
                                   if isinstance(ref, str) and re.fullmatch(r'[A-Za-z0-9_-]{1,100}', ref)))[:6]
 
     MEMORY_KIND_LABELS = {'search': '搜索命中', 'feel': '情绪相关', 'context': '借上文命中',
-                          'opening': '开场', 'rotation': '轮换选出', 'random': '随机想起'}
+                          'opening': '开场', 'rotation': '轮换选出', 'random': '随机想起',
+                          'relevant': '相关记忆'}
 
     def message_memory_kinds(self, message_id, items):
         """Ticket 353: how each recalled memory was chosen, as a short Chinese label; may be empty."""
