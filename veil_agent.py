@@ -3718,7 +3718,7 @@ class Chat:
 
     def _send(self, text, *, autonomy=False, extra_context=None, media=None, message_id=None,
               persist_user=True, regeneration_parent_message_id=None, force_reply=False,
-              reply_later_batch=None, user_events=None):
+              reply_later_batch=None, user_events=None, memory_query=None):
         # Per-call durability fact used by UI adapters when failures can occur
         # both before and after the user row is appended.
         self.last_send_persisted = False
@@ -3772,14 +3772,15 @@ class Chat:
         # Ticket 194: a glance's request text is a fixed sentence (the screen is in extra_context), so
         # recalling with it returned the same few memories every time. Peter can still search himself.
         skip_recall = self.codex_watch_mode or self.glance_mode
-        # Ticket 353: an autonomous wake's text names no topic, so its memories rotate instead of
-        # repeating the same best matches for that fixed text.
+        # Ticket 388: autonomous recall uses recent chat, active task and previous wake context.
         if self.memory and self.regeneration_parent_message_id:
             # Ticket 379: regenerating redoes a turn; what that turn was given counts as not shown yet.
             self.memory.release_recall(getattr(self, 'regeneration_release_refs', []))
         self.regeneration_release_refs = []
-        recalled = (self.memory.context(text, include_opening=opening_turn, recent=self.history[-8:],
-                                        rotate=bool(autonomy))
+        recall_query = memory_query if autonomy and isinstance(memory_query, str) else text
+        recall_mode = {'wake': True} if autonomy and isinstance(memory_query, str) else {'rotate': bool(autonomy)}
+        recalled = (self.memory.context(recall_query, include_opening=opening_turn,
+                                        recent=self.history[-8:], **recall_mode)
                     if self.memory and not skip_recall else [])
         memory_refs = getattr(self.memory, 'last_context_refs', []) if self.memory and not skip_recall else []
         self.turn_memory_refs = list(memory_refs) if isinstance(memory_refs, list) else []

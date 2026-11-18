@@ -1270,8 +1270,8 @@ class Memory:
                 self.retrieval_failure('experience_directory', exc)
         return lines
 
-    def context(self, query, *, include_opening=True, recent=None, rotate=False):
-        """This turn's automatic memories. `rotate` is for wakes whose text names no topic (ticket 353)."""
+    def context(self, query, *, include_opening=True, recent=None, rotate=False, wake=False):
+        """This turn's automatic memories. `wake` selects related context for an autonomous activity."""
         from recall_relevance import cosine
         from recall_rotation import (EVENT_LINKS, asks_about_past, drift_hits, excerpt, experience_chain,
                                      front_matter, rotate as rotated, same_event)
@@ -1282,8 +1282,8 @@ class Memory:
         self.last_recall_skipped = {'cooldown': 0, 'same_event': 0, 'stage_cap': 0}
         self.last_recall_marks = None
         recall_cfg = self.recall_settings
-        cooldown = 0 if asks_about_past(query) and not rotate else recall_cfg['cooldown_turns']
-        widen = rotate and recall_cfg['rotation_candidates'] > 3
+        cooldown = 0 if asks_about_past(query) and not (rotate or wake) else recall_cfg['cooldown_turns']
+        widen = (rotate or wake) and recall_cfg['rotation_candidates'] > 3
         with self.mutex:
             self.rotation.turn += 1
         opening = []
@@ -1291,9 +1291,9 @@ class Memory:
         emotional = []
         drift = []
         pool = []
-        settings = self.assisted_settings(query, recent) if not rotate else None
-        # Ticket 382: the relevance judge only serves a real sentence of hers, never a wake or the short-context path.
-        judge = (self.judge if self.judge is not None and not rotate and not widen and not settings and query.strip() else None)
+        settings = self.assisted_settings(query, recent) if not (rotate or wake) else None
+        judge = (self.judge if self.judge is not None and (wake or not rotate and not widen and not settings)
+                 and query.strip() else None)
         prefetched = None
         if judge is not None and judge.active():
             prefetched = judge.prefetch(query)   # embedding her sentence overlaps with Ombre's own search below
@@ -1305,26 +1305,34 @@ class Memory:
             raw = self.call('breath_search', {
                 'query': query, 'mode': 'automatic', 'with_ids': True, 'max_results': asked})
             normal = ordinary_hits(raw, limit=asked)
+            pool = self.context_visible(normal, failure_stage='recall_visibility')
             if not widen:
-                pool = self.context_visible(normal, failure_stage='recall_visibility')
                 normal = pool[:3]
+            elif wake:
+                normal = pool
             drift = drift_hits(raw)
         except Exception as exc:
             self.retrieval_failure('breath_search', exc)
-        try:
-            emotional = blocks(self.call('feel', {'query': query}))
-        except Exception as exc:
-            self.retrieval_failure('feel', exc)
+        if not wake:
+            try:
+                emotional = blocks(self.call('feel', {'query': query}))
+            except Exception as exc:
+                self.retrieval_failure('feel', exc)
         if prefetched is not None:
             try:
                 # "None fits" is an answer: nothing is filled back from Ombre. Only a technical failure
                 # (JudgeFailed) keeps today's recall for this turn.
-                normal = judge.choose(query, pool, prefetched)
+                normal = judge.choose(query, pool, prefetched, wake=wake,
+                                      max_picks=3 if wake else 2,
+                                      candidate_limit=recall_cfg['rotation_candidates'] if wake else None)
                 drift = []   # a recollection nobody judged would be a way around "none fits"
             except JudgeFailed:
-                pass
+                if wake:
+                    normal, drift = pool[:3], []
             except Exception as exc:
                 self.retrieval_failure('recall_judge', exc)
+                if wake:
+                    normal, drift = pool[:3], []
         kinds = {key: 'search' for key, _ in normal}
         kinds.update({key: 'feel' for key, _ in emotional if key not in kinds})
         if settings:
@@ -1344,7 +1352,9 @@ class Memory:
             opening_candidates = []
         opening_visible = self.context_visible(opening_candidates, failure_stage='opening_visibility')
         metas = self._recall_meta([key for key, _ in combined + opening_visible + drift])
-        if widen:
+        if wake:
+            candidates = list(dict(combined).items())[:3]
+        elif widen:
             candidates = rotated(list(dict(combined).items()), metas, self.rotation.last)
         else:
             # Only today's first three candidates: a cooled one leaves its slot empty.
@@ -1400,9 +1410,11 @@ class Memory:
                 self.last_recall_skipped[skipped] += 1
                 continue
             kept.append((key, body))
-            if widen:
+            if wake:
+                kinds[key] = 'relevant'
+            elif widen:
                 kinds[key] = 'rotation'
-        if (drift and len(kept) < 3 and recall_cfg['random_chance']
+        if (not wake and drift and len(kept) < 3 and recall_cfg['random_chance']
                 and self.rng.random() < recall_cfg['random_chance']):
             for key, body in self.context_visible(drift, failure_stage='recall_visibility'):
                 shown = {other for other, _ in kept}
