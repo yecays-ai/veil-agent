@@ -23,7 +23,9 @@ class LifeRecordsTest(unittest.TestCase):
             self.assertEqual(LifeRecords(store,'peter').read()[0]['state'],'completed')
             self.assertEqual(len(records.read()),1)
             private=records.write({'kind':'note','title':'Lan diary','owner':'Lan'},'Lan')
-            with self.assertRaises(ValueError): records.write({'id':private['id'],'title':'Changed'},'Peter')
+            # Ticket 385: the calendar is shared; Peter may edit what Lan wrote (she is told) but not delete it.
+            self.assertEqual(records.write({'id':private['id'],'title':'Lan diary'},'Peter')['created_by'],'Lan')
+            with self.assertRaises(ValueError): records.delete(private['id'],'Peter')
             with self.assertRaises(ValueError): records.write({'kind':'plan','title':'Duplicate plan'},'Peter')
             with self.assertRaises(ValueError): records.write({'id':private['id'],'kind':'plan'},'Peter')
             with self.assertRaises(ValueError): records.write({'kind':'event','title':'Bad date','date':'2026-02-31'},'Lan')
@@ -50,8 +52,9 @@ class LifeRecordsTest(unittest.TestCase):
             self.assertEqual(effective(again)['state'],'completed')
             with self.assertRaises(ValueError): records.write({'kind':'event','title':'x','repeat':'daily'},'Lan')
             with self.assertRaises(ValueError): records.write({'kind':'diary','title':'new diary'},'Lan')
+            # Ticket 385: moods moved to the two daily slots; a record no longer takes one, old text is kept.
             event=records.write({'kind':'event','title':'Out','mood':'😊','date':'2026-11-03'},'Peter')
-            self.assertEqual(event['mood'],'😊')
+            self.assertEqual(event['mood'],'')
             rows=[{'id':str(i),'kind':'note','state':'completed','completed_at':'2026-11-%02dT10:00:00'%(i%28+1)} for i in range(35)]
             visible,folded=fold_completed(rows)
             self.assertEqual((len(visible),folded),(30,5))

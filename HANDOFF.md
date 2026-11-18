@@ -1,5 +1,13 @@
 # HANDOFF
 
+## 工单 385 交接（日历第一步：界面）
+- 数据：`life_records.py` 新增 `time`（只给日程，`TIME_RE`）、`life-daily-checks.jsonl`（每次每日待办状态变化追加 `{day,id,title,state,at,by}`，首行 `{started}`；`daily_checks()` 对 started 之前的日子用记录历史里的 completed 版本补，标 `reconstructed`）、`life-moods.json`（`{days:{day:{Lan|Peter:{emoji,at}}}}`，`set_mood` 只认自己的槽、拒绝未来日期、`valid_emoji` 按 Unicode 类别判断，任意 emoji 都行、文字不行）。owner 字段保留但不再写入新值，谁写的看 `created_by`。
+- 权限：`delete(key, actor)` 里 Peter 删 created_by=Lan 的记录被拒；Peter 改她的记录时 `on_lan_record_changed` → `Chat._notify_lan_record_changed` 输出 `LifeNotice`（带 life_id 的 str），`web_agent._publish_output` 推成 notice 事件，前端点击调用 `openLifeRecord`。
+- 上下文：`life_state.state_text(..., moods=)` 今天到 +3 天的日程，最多 `MAX_EVENTS=6`，多出的写明条数并提示 `life_record list date_from/date_to`；`autonomy.py` 同样传心情。
+- 界面：`desktop/chat.js` 生活页整段（`lifeCalendar`、`lifeMoodSection`、`openMoodPicker`、`lifeDailySection`、`lifeForm`、`openLifeRecord`）；emoji 面板打开时 15 秒刷新不重画（`lifeRenderDeferred`）；最近用过存 localStorage `veil-life-recent-emoji`。完整列表 `desktop/emoji-data.js` 由 `scripts/gen_emoji_data.py` 从 npm 包 unicode-emoji-json 0.9.0（MIT）生成，只保留 Emoji 15.0 及以前（Windows 字体画不出更新的）；CSP 只许本地脚本，所以不能走 CDN。
+- 测试：`tests/test_life_calendar_385.py`（含「更多 emoji」里每一个都能存）、`tests/test_life_state.py`、`tests/test_life_records.py`、`tests/test_web.py` 生活页用例、`desktop/tests/ui.test.cjs` 新增 385 用例。
+- 第二步（等这一步验收）：到点提醒（不受免打扰，关机错过按是否过期补发或显示错过）、23:30 每日待办提醒（在忙等 20 分钟没动静）、自动记约定（灰色小字可撤、删掉的不再加回、三类都记）；动手前先查自动整理 18 次里 8 次「没有返回可用的结果」。
+
 ## 工单 384 交接
 - 改动：`memory_native.py` 的 `_search`（Peter 的 breath_search）和 `_related`（新存前的候选）改为 `max_results = 3 + SEARCH_SPARE_HITS`，再 `Memory.context_visible(...)[:3]`（逐条读硬盘上的 dont_surface/tombstone/deleted_at/type 判断）；`experience_memory._search_ids` 同样多要 5 条，用 `_alive` 过滤后取 3。测试 `tests/test_search_archived_384.py`（假 Ombre 像真的一样返回归档条目）；`tests/test_native_memory.py` 的截断用例补写了记忆文件（没有文件的命中现在不显示，和自动想起一致）。
 - 来源：2026-11-18 外部记忆审计的「小口子 1」核对属实；其中「归档条目能被接着改」不成立（`_editable` 一直会拒绝），测试里保留了这一条。

@@ -111,13 +111,29 @@ class StateTextTests(unittest.TestCase):
 
     def test_life_records_today(self):
         data = data_of(state_text(None, (), LIFE, (), '2026-11-12'))
-        self.assertEqual([e['title'] for e in data['today_calendar_events']], ['下午和 Lan 一起看电影'])
-        # n1 unchecked, n3 is daily and was ticked yesterday so it is unchecked again; n2 done; n4 is Lan's.
-        self.assertEqual(data['unchecked_todo_count'], 2)
-        self.assertEqual({t['title'] for t in data['unchecked_todos']}, {'给多肉浇水', '每天读一页书'})
+        self.assertEqual([e['title'] for e in data['calendar_events_today_and_next_3_days']], ['下午和 Lan 一起看电影'])
+        # n1 unchecked, n3 is daily and was ticked yesterday so it is unchecked again; n2 done; n4 is Lan's and,
+        # since ticket 385 (one shared calendar), he sees it too.
+        self.assertEqual(data['unchecked_todo_count'], 3)
+        self.assertEqual({t['title'] for t in data['unchecked_todos']}, {'给多肉浇水', '每天读一页书', 'Lan 自己的待办'})
         self.assertTrue(all(t['date'] for t in data['unchecked_todos']))
         self.assertNotIn('写完那首诗', json.dumps(data, ensure_ascii=False))
-        self.assertNotIn('Lan 自己的待办', json.dumps(data, ensure_ascii=False))
+
+    def test_next_three_days_in_time_order_with_the_rest_counted(self):
+        # Ticket 385: today plus three days, sorted by date then time; past MAX_EVENTS he is told how many more.
+        events = [{'id': f'x{i}', 'kind': 'event', 'title': f'事{i}', 'date': f'2026-11-1{2 + i % 4}',
+                   'time': f'{9 + i:02d}:00', 'state': 'active', 'created_by': 'Lan'} for i in range(8)]
+        events.append({'id': 'late', 'kind': 'event', 'title': '四天后', 'date': '2026-11-16', 'state': 'active'})
+        text = state_text(None, (), events, (), '2026-11-12', moods={'2026-11-12': {'Lan': {'emoji': '🥰'}}})
+        data = data_of(text)
+        shown = data['calendar_events_today_and_next_3_days']
+        self.assertEqual(len(shown), 6)
+        self.assertEqual([(e['date'], e['time']) for e in shown], sorted((e['date'], e['time']) for e in shown))
+        self.assertEqual(shown[0]['written_by'], 'Lan')
+        self.assertEqual(data['calendar_events_not_shown'], 2)
+        self.assertIn('2 more calendar events', text)
+        self.assertNotIn('四天后', text)
+        self.assertEqual(data['todays_moods'], {'Lan': '🥰'})
 
     def test_plans_split_by_status(self):
         plans = [{'title': '学吉他', 'state': 'active', 'date': '2026-11-01'},
@@ -190,6 +206,24 @@ class ChatPlacementTests(unittest.TestCase):
         prefix = first[:-2]
         self.assertEqual(second[:len(prefix)], prefix)
         self.assertIn('新待办', second[-2]['content'])
+
+    def test_peter_changing_lans_record_tells_her_in_a_notice_not_in_his_history(self):
+        # Ticket 385: one grey line for Lan; ticking her daily to-do sends nothing.
+        from veil_agent import LifeNotice
+        chat = self.chat('2026-11-12T08:55:00+08:00')
+        shown = []
+        chat.output = shown.append
+        hers = chat.life_records.write({'kind': 'event', 'title': '带团子体检', 'date': '2026-11-22'}, 'Lan')
+        chat.life_records.invoke({'action': 'update', 'id': hers['id'], 'date': '2026-11-23'})
+        self.assertEqual(len(shown), 1)
+        self.assertIsInstance(shown[0], LifeNotice)
+        self.assertEqual(shown[0].life_id, hers['id'])
+        self.assertIn('Peter 改了你的日程：11/22 带团子体检 → 11/23 带团子体检', shown[0])
+        daily = chat.life_records.write({'kind': 'note', 'title': '写日记', 'repeat': 'daily'}, 'Lan')
+        chat.life_records.invoke({'action': 'update', 'id': daily['id'], 'state': 'completed'})
+        self.assertEqual(len(shown), 1)
+        chat.send('hi')
+        self.assertNotIn('Peter 改了你的', json.dumps(self.sent[-1], ensure_ascii=False))
 
 
 if __name__ == '__main__':

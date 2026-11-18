@@ -942,7 +942,8 @@ class AutonomyController:
         try:
             # Ticket 352: same structured life-record text as ordinary chat (status and date on each row).
             from life_state import state_text
-            life_text = state_text(life_rows=self.chat.life_records.read(), today=stamp.date().isoformat())
+            life_text = state_text(life_rows=self.chat.life_records.read(), today=stamp.date().isoformat(),
+                                   moods=self.chat.life_records.moods())
             life_text = life_text + '\n' if life_text else ''
         except (OSError, ValueError, AttributeError):
             pass
