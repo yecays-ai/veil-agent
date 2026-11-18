@@ -202,7 +202,7 @@ class LifeRecords:
                             original['completed_at'] if done else original['updated_at'])
     def _log_started(self):
         if not self.checks_path.exists(): return None
-        with self.checks_path.open(encoding='utf-8') as handle:
+        with self.checks_path.open(encoding='utf-8', errors='replace') as handle:
             try: first=json.loads(handle.readline() or 'null')
             except ValueError: return None
         return first.get('started') if isinstance(first,dict) else None
@@ -210,9 +210,9 @@ class LifeRecords:
         """What the log last says about this daily to-do today; nothing logged counts as unchecked."""
         last='unchecked'
         if self.checks_path.exists():
-            for line in self.checks_path.read_text(encoding='utf-8').splitlines():
-                try: item=json.loads(line)
-                except ValueError: continue
+            for line in self.checks_path.read_bytes().splitlines():
+                try: item=json.loads(line.decode('utf-8'))
+                except (ValueError,UnicodeError): continue
                 if isinstance(item,dict) and item.get('day')==day and item.get('id')==key:
                     last=item.get('state') or last
         return last
@@ -237,12 +237,12 @@ class LifeRecords:
         """{'started': day or None, 'days': {day: {id: {'state','at','by','title'}}}} — last entry per day wins.
         Before the log started, completions found in the records' own history are added as evidence."""
         with self.store.mutex:
-            lines=self.checks_path.read_text(encoding='utf-8').splitlines() if self.checks_path.exists() else []
+            lines=self.checks_path.read_bytes().splitlines() if self.checks_path.exists() else []
             rows=self.read()
         started=None; days={}
         for line in lines:
-            try: item=json.loads(line)
-            except ValueError: continue
+            try: item=json.loads(line.decode('utf-8'))
+            except (ValueError,UnicodeError): continue
             if not isinstance(item,dict): continue
             if 'started' in item:
                 started=started or item['started']; continue

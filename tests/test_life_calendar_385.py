@@ -169,6 +169,22 @@ class DailyLogTests(unittest.TestCase):
         days = self.records.daily_checks()['days']
         self.assertEqual(days['2026-11-18'][todo['id']]['at'], '2026-11-18T23:50:00+08:00')
 
+    def test_truncated_chinese_log_line_does_not_block_read_or_retry(self):
+        self.records.ensure_checks_started('2026-11-18')
+        todo = self.records.write({'kind': 'note', 'title': '写日记', 'repeat': 'daily'}, 'Lan')
+        def half_written(records, row, state, actor, stamp):
+            with records.checks_path.open('ab') as handle:
+                handle.write(b'{"title":"\xe5\x86')
+            raise OSError('disk full')
+        with mock.patch.object(life_records, 'now', return_value='2026-11-18T23:50:00+08:00'):
+            with mock.patch.object(LifeRecords, '_log_check', half_written):
+                with self.assertRaises(OSError):
+                    self.records.write({'id': todo['id'], 'state': 'completed'}, 'Lan')
+        self.assertEqual(self.records.daily_checks()['started'], '2026-11-18')
+        with mock.patch.object(life_records, 'now', return_value='2026-11-19T09:00:00+08:00'):
+            self.records.write({'id': todo['id'], 'title': '睡前写日记'}, 'Lan')
+        self.assertEqual(self.records.daily_checks()['days']['2026-11-18'][todo['id']]['state'], 'completed')
+
     def test_an_untick_whose_log_line_failed_is_corrected_on_its_own_day(self):
         self.records.ensure_checks_started('2026-11-18')
         todo = self.records.write({'kind': 'note', 'title': '写日记', 'repeat': 'daily'}, 'Lan')
