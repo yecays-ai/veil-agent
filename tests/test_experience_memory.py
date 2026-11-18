@@ -8,9 +8,11 @@ sit after the cached prefix and before the history."""
 import json
 import tempfile
 import unittest
+from unittest import mock
 from decimal import Decimal
 from pathlib import Path
 
+from agent_types import UserError
 import test_native_memory
 from chat_search import search_chat
 from experience_memory import COST_CATEGORY, ExperienceMemory, load_settings
@@ -96,11 +98,15 @@ class Fixture(unittest.TestCase):
         self.budget = Budget(self.store, clock=lambda: self.clock[0])
         self.cfg = Character('fake', 'Peter', 'fictional persona', 20, 1024, dict(PROVIDER), 'fake')
         self.ombre = FakeOmbre()
-        self.requests, self.replies = [], []
+        self.requests, self.replies, self.kwargs = [], [], []
 
         def model(messages, **kwargs):
             self.requests.append(messages)
-            return self.replies.pop(0), 2000, 200, 0
+            self.kwargs.append(kwargs)
+            reply = self.replies.pop(0)
+            if isinstance(reply, tuple):   # (text, finish_reason): a real call made with detail=True
+                return reply[0], 2000, 3000, 0, reply[1]
+            return reply, 2000, 200, 0
         self.model = model
         self.feature = self.make()
 
@@ -354,6 +360,7 @@ class WritingTests(Fixture):
         draft = self.sent()['drafts'][0]
         self.assertEqual((draft['ref'], draft['text'], draft['title']), ('d0', '长' * 650, '被绊了'))
         self.assertIn('650 characters', draft['problem'])
+        self.assertIn('about 500 characters', draft['problem'])   # ticket 386: aimed under the cap, which stays 600
         self.assertNotIn('earlier_entries', self.sent())                  # the fix call is not a second tidy
         self.assertEqual(self.ombre.items['m2'], {'title': '被绊了', 'content': '后来我被新抽屉绊了三次。'})
         self.assertEqual(self.feature.sidecar.get('m2')['links'], ['old'])
@@ -486,6 +493,97 @@ class WritingTests(Fixture):
         self.assertEqual(self.feature.due(), 'volume')
         self.assertEqual(self.feature.status()['last']['kind'], 'error')
 
+    # --- ticket 386: a thinking model that used the whole output limit, and what is kept when a run fails ----
+    def failure_rows(self):
+        return self.store.read('fake/experience-memory-failures.jsonl')
+
+    def test_a_reply_cut_off_while_thinking_is_asked_again_without_thinking_and_saved(self):
+        self.add(long_talk(DAY1))
+        self.clock[0] = f'{DAY1}T12:00:00+08:00'
+        self.replies.append(('', 'length'))
+        self.reply([{'title': '换记忆系统', 'text': '上午蓝想把我的记忆系统整个换掉，我没同意。'}])
+        self.assertEqual(self.feature.run_if_due(), 'written')
+        self.assertEqual(len(self.ombre.items), 1)
+        self.assertEqual(self.kwargs[0]['max_tokens'], 8000)
+        self.assertNotIn('thinking', self.kwargs[0])           # the first try thinks as the model is set
+        self.assertEqual(self.kwargs[1]['thinking'], 'disabled')
+        self.assertTrue(self.kwargs[0]['detail'])
+        last = self.store.read('fake/experience-memory.jsonl')[-1]
+        self.assertEqual((last['kind'], last['retried_without_thinking']), ('checkpoint', 1))
+        rows = self.failure_rows()
+        self.assertEqual([(r['stage'], r['what'], r['finish_reason'], r['completion_tokens']) for r in rows],
+                         [('first', 'cut_off', 'length', 3000)])
+        self.assertEqual(self.feature.status()['last']['retried_without_thinking'], 1)
+
+    def test_a_reply_cut_off_twice_says_so_keeps_both_and_waits_longer_each_time(self):
+        self.add(long_talk(DAY1))
+        self.clock[0] = f'{DAY1}T12:00:00+08:00'
+        self.replies += [('{"entries":[{"title":"半', 'length'), ('', 'length')]
+        with self.assertRaises(Exception):
+            self.feature.run_if_due()
+        self.assertEqual(self.ombre.items, {})
+        status = self.feature.status()
+        self.assertIn('思考用完了字数', status['last']['detail'])
+        self.assertEqual(status['retry_at'], f'{DAY1}T12:30+08:00')
+        rows = self.failure_rows()
+        self.assertEqual([r.get('thinking') for r in rows], [None, 'disabled'])
+        self.assertEqual(rows[0]['output'], '{"entries":[{"title":"半')
+        # Not asked again every five minutes: 30 minutes, then 2 hours, then the next day. Never skipped.
+        self.clock[0] = f'{DAY1}T12:20:00+08:00'
+        self.assertEqual(self.feature.run_if_due(), 'waiting')
+        self.assertEqual(len(self.requests), 2)
+        self.clock[0] = f'{DAY1}T12:31:00+08:00'
+        self.replies.append('no json here')
+        with self.assertRaises(Exception):
+            self.feature.run_if_due()
+        self.assertEqual(self.feature.status()['retry_at'], f'{DAY1}T14:31+08:00')
+        self.assertEqual(self.failure_rows()[-1]['what'], 'unreadable')   # not cut off: no second try
+        self.assertEqual(len(self.requests), 3)
+        self.clock[0] = f'{DAY1}T14:32:00+08:00'
+        self.replies.append('still nothing')
+        with self.assertRaises(Exception):
+            self.feature.run_if_due()
+        self.assertEqual(self.feature.status()['retry_at'], '2026-11-13T00:00+08:00')
+        self.clock[0] = f'{DAY1}T23:59:00+08:00'
+        self.assertEqual(self.feature.run_if_due(), 'waiting')
+        self.clock[0] = '2026-11-13T00:01:00+08:00'
+        self.reply()
+        self.assertEqual(self.feature.run_if_due(), 'skipped')
+        self.assertIsNone(self.feature.status()['retry_at'])   # a finished run starts the count again
+
+    def test_a_retry_cut_off_inside_its_outer_object_is_not_taken_for_an_empty_answer(self):
+        # Review of 386: '{"entries":[{"title":..,"text":..}' parses to the complete inner object only.
+        self.add(long_talk(DAY1))
+        self.clock[0] = f'{DAY1}T12:00:00+08:00'
+        self.replies += [('', 'length'), ('{"entries":[{"title":"新事","text":"一段有效记忆。"}', 'length')]
+        with self.assertRaises(Exception):
+            self.feature.run_if_due()
+        self.assertEqual(self.feature.due(), 'volume')                   # the chat is still waiting, not marked done
+        self.assertEqual(self.feature.status()['last']['kind'], 'error')
+
+    def test_after_a_cut_off_the_fixes_skip_thinking_and_an_unfixable_draft_keeps_its_text(self):
+        self.add(long_talk(DAY1))
+        self.clock[0] = f'{DAY1}T12:00:00+08:00'
+        self.replies.append(('', 'length'))
+        self.reply([{'title': '太长', 'text': '长' * 650}])
+        self.replies.append(json.dumps({'fixes': [{'ref': 'd0', 'text': '长' * 640}]}))
+        self.replies.append(json.dumps({'fixes': [{'ref': 'd0', 'text': '长' * 630}]}))
+        self.assertEqual(self.feature.run_if_due(), 'skipped')
+        self.assertEqual(self.kwargs[2]['thinking'], 'disabled')
+        self.assertEqual(self.kwargs[3]['thinking'], 'disabled')   # once cut off, the rest of the run skips thinking
+        unfixed = [r for r in self.failure_rows() if r['what'] == 'unfixed_draft']
+        self.assertEqual((unfixed[0]['title'], unfixed[0]['draft']), ('太长', '长' * 630))
+        self.assertIn('630 characters', unfixed[0]['problem'])
+        self.assertEqual(self.feature.status()['last']['unfixed'], 1)
+
+    def test_only_the_newest_failures_are_kept(self):
+        for number in range(25):
+            self.feature._record_failure('first', 'unreadable', output=f'reply {number} ' + 'x' * 5000)
+        rows = self.failure_rows()
+        self.assertEqual(len(rows), 20)
+        self.assertTrue(rows[0]['output'].startswith('reply 5 '))
+        self.assertEqual(len(rows[-1]['output']), 4000)
+
     def test_daily_ceiling_stops_the_request(self):
         self.feature = self.make(daily_budget_cny='0.01')
         self.add(long_talk(DAY1))
@@ -493,6 +591,13 @@ class WritingTests(Fixture):
         self.assertEqual(self.feature.run_if_due(), 'budget')
         self.assertEqual(self.requests, [])
         self.assertEqual(self.feature.due(), 'volume')   # the chat is still there for tomorrow
+
+    def test_fix_request_checks_its_own_cost_against_daily_ceiling(self):
+        self.feature = self.make(daily_budget_cny='0.01')
+        with mock.patch.object(self.feature, '_worst_for', return_value=Decimal('0.02')):
+            with self.assertRaises(UserError):
+                self.feature._request([{'role': 'user', 'content': 'draft'}], 'fix')
+        self.assertEqual(self.requests, [])
 
     def test_cost_is_booked_under_its_own_category(self):
         self.first_entry()

@@ -36,7 +36,13 @@ ENTRY_CHARS = 600         # ticket 368: one cap for Peter's own saves and this t
 UPDATE_CHARS = 600       # ticket 363: an update is the whole memory rewritten, same cap as Peter's own hold
 MESSAGE_CHARS = 1500      # one pasted wall of text is clipped, not allowed to crowd out the rest
 REQUEST_CHARS = 12000     # visible chat text per model call; the rest waits for the next tick
-MAX_OUTPUT_TOKENS = 3000  # room for a thinking model's reasoning; the entries themselves are short
+MAX_OUTPUT_TOKENS = 8000  # ticket 386: a thinking model's reasoning counts here too; at 3000 deepseek-flash often
+                          # thought until the limit and never wrote the entries (7 failures in a row on 11-16)
+FAILURES_PATH_SUFFIX = 'experience-memory-failures.jsonl'
+FAILURES_KEPT = 20        # ticket 386: what the model actually sent back when a run failed, newest kept
+FAILURE_CHARS = 4000      # of each reply kept there
+BACKOFF = (timedelta(minutes=30), timedelta(hours=2))  # ticket 386: after the 1st and 2nd failure in a row; from
+                          # the 3rd on, the next try waits for the next day. The chat is never skipped.
 CANDIDATES = 12           # his latest entries offered for an update
 LIBRARY_QUERIES = 4       # 2026-11-15: the chat is also searched against the whole memory library, in this many
 LIBRARY_QUERY_CHARS = 800 # pieces of this size, so a memory Peter saved himself can be updated too
@@ -45,6 +51,7 @@ LOOKS = 2                # ticket 368: at most this many more asks after the fir
 STAGE_HITS = 4            # ticket 368: and this many more, the other stages of an experience a hit belongs to
 OWN_SAVES = 3             # ticket 368: and the memories Peter saved or rewrote himself most recently
 CANDIDATE_CHARS = 1200    # ticket 363: he rewrites an entry, so he sees it whole (older appended ones are clipped)
+FIX_MARGIN = 100          # ticket 386: an overlong draft is asked for about this much under the cap
 VERBATIM_RUN = 24         # an entry repeating this many characters of a message in a row is a quote, not a memory
 BACKFILL = timedelta(days=3)
 DEFAULTS = {'enabled': False, 'min_chars': 3000, 'floor_chars': 200, 'idle_minutes': 30,
@@ -127,6 +134,9 @@ class ExperienceMemory:
         self.chat_path, self.memory, self.settings = chat_path, memory, settings
         self.path = f'{cfg.id}/experience-memory.jsonl'
         self.switch_path = f'{cfg.id}/experience-memory.json'
+        self.failures_path = f'{cfg.id}/{FAILURES_PATH_SUFFIX}'
+        self._worst = None      # the most one call may cost, set by _digest; the cut-off retry checks it
+        self._retried = 0       # cut-off answers asked again without thinking during this run
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread = None
@@ -244,13 +254,51 @@ class ExperienceMemory:
             return 'day_end'
         return ''
 
+    def retry_at(self, events=None):
+        """Ticket 386: after failures in a row, the earliest time the same chat is tried again, or None."""
+        failures = []
+        for event in reversed(self._events() if events is None else events):
+            if event.get('kind') in ('checkpoint', 'start'):
+                break
+            if event.get('kind') == 'error':
+                failures.append(event)
+        last = _when(failures[0].get('time')) if failures else None
+        if last is None:
+            return None
+        if len(failures) <= len(BACKOFF):
+            return last + BACKOFF[len(failures) - 1]
+        local = last.astimezone(self._now().tzinfo)
+        return datetime.combine(local.date() + timedelta(days=1), datetime.min.time(), tzinfo=local.tzinfo)
+
+    def _record_failure(self, stage, what, **fields):
+        """Ticket 386: keep what the model actually answered when a run fails, on Lan's computer only (the newest
+        FAILURES_KEPT). Never lets a logging problem take the run down."""
+        try:
+            for key in ('output', 'draft'):
+                if isinstance(fields.get(key), str):
+                    fields[key] = fields[key][:FAILURE_CHARS]
+            self.store.append(self.failures_path, {
+                'time': self.budget.clock(), 'stage': stage, 'what': what,
+                'model': str((self.cfg.provider or {}).get('model') or ''), **fields})
+            rows = self.store.read(self.failures_path)
+            if len(rows) > FAILURES_KEPT:
+                self.store.remove_records(self.failures_path, range(len(rows) - FAILURES_KEPT))
+        except Exception:
+            pass
+
+    def failures(self):
+        try:
+            return self.store.read(self.failures_path)
+        except Exception:
+            return []
+
     def spent_today(self):
         day, waiting = self.budget.category_totals(self.cfg.id, None, COST_CATEGORY)
         return day + waiting
 
     # --- one run ------------------------------------------------------------------------------
     def run_if_due(self, force=False):
-        """Returns 'off', 'not_due', 'budget', 'skipped', or 'written'."""
+        """Returns 'off', 'not_due', 'waiting', 'budget', 'skipped', or 'written'."""
         if not self.enabled() or self.memory is None:
             return 'off'
         with self._lock:
@@ -258,6 +306,10 @@ class ExperienceMemory:
             reason = 'forced' if force and pending else self.due(pending)
             if not reason:
                 return 'not_due'
+            retry_at = self.retry_at()
+            if not force and retry_at is not None and self._now() < retry_at:
+                # Ticket 386: a failed run is not asked again every 5 minutes (each try costs money).
+                return 'waiting'
             batch, used = [], 0
             for item in pending:
                 text = item['text'] if len(item['text']) <= MESSAGE_CHARS else item['text'][:MESSAGE_CHARS] + ' …'
@@ -399,25 +451,79 @@ class ExperienceMemory:
         provider['max_input_tokens'] = min(provider['max_input_tokens'], size + 512)
         return replace(self.cfg, provider=provider, max_output_tokens=MAX_OUTPUT_TOKENS)
 
-    def _call_model(self, messages):
+    def _request(self, messages, stage, thinking=None):
+        """One model call: (text, finish_reason, completion_tokens)."""
+        if self.spent_today() + self._worst_for(messages) > Decimal(str(self.settings['daily_budget_cny'])):
+            raise UserError('经历整理今天的花费上限不够再发一次请求；聊天记录不受影响。')
         request_cfg = self._request_cfg(messages)
         reservation, amount = self.budget.reserve(request_cfg, accounting=COST_ACCOUNTING, category=COST_CATEGORY)
         try:
-            # Called exactly like a chat turn (no JSON mode, no thinking override): whichever chat model
-            # Lan picks, relays included, accepts it. The reply is parsed leniently instead.
-            output, prompt_tokens, completion_tokens, cached_tokens = self.model(
-                messages, max_tokens=MAX_OUTPUT_TOKENS)
+            # Called like a chat turn (no JSON mode): whichever chat model Lan picks, relays included, accepts
+            # it. The reply is parsed leniently instead. Thinking is only switched off for the retry of a reply
+            # that was cut off (ticket 386).
+            result = self.model(messages, max_tokens=MAX_OUTPUT_TOKENS, detail=True,
+                                **({'thinking': thinking} if thinking else {}))
+            output, prompt_tokens, completion_tokens, cached_tokens = result[:4]
+            finish = result[4] if len(result) > 4 else None
         except Exception as exc:
             self.budget.settle_estimate((reservation, amount), accounting=f'{COST_ACCOUNTING}-failed')
+            self._record_failure(stage, 'request_failed', thinking=thinking or 'as_set', error=type(exc).__name__,
+                                 detail=str(exc)[:300])
             if isinstance(exc, UserError):
                 raise
-            raise RequestFailed('经历整理请求失败；没有自动重试，聊天记录不受影响。') from exc
+            raise RequestFailed('经历整理请求失败；聊天记录不受影响，稍后再试。') from exc
         try:
             self.budget.settle(reservation, request_cfg, prompt_tokens, completion_tokens, cached_tokens,
                                accounting=COST_ACCOUNTING, category=COST_CATEGORY)
         except UserError:
             self.budget.settle_estimate((reservation, amount), accounting=f'{COST_ACCOUNTING}-usage-invalid')
-        return output
+        return output, finish, completion_tokens
+
+    def _worst_for(self, messages):
+        """The most one call with these messages may cost (as reserved), for this feature's own daily ceiling."""
+        provider = self._request_cfg(messages).provider
+        return provider.get('cny_per_call') or (
+            provider['max_input_tokens'] * Decimal(str(provider['input_cny_per_million']))
+            + MAX_OUTPUT_TOKENS * Decimal(str(provider['output_cny_per_million']))) / Decimal(1_000_000)
+
+    def _call_model(self, messages, stage='first', expect=('entries', 'updates')):
+        """The reply text. Ticket 386: a reply cut off before it holds a JSON object (a thinking model that used the
+        whole output limit on its reasoning) is asked once more at once with thinking off; both are kept in the
+        failure record, and one still unusable after that says plainly that it was cut off."""
+        def usable(text):
+            # Only the whole answer counts: a reply cut off inside its outer object can still hold a complete inner
+            # one ({"title":..,"text":..}), which must not pass for an answer with nothing to keep (review of 386).
+            payload = _parse_json_object(text)
+            return isinstance(payload, dict) and any(key in payload for key in expect)
+
+        if self._retried:
+            # Already cut off once in this run: the fix asks go without thinking straight away (11-18 real run:
+            # each fix was cut off again and needed its own retry).
+            output, finish, used = self._request(messages, stage, thinking='disabled')
+            if usable(output):
+                return output
+            self._record_failure(stage, 'cut_off' if finish == 'length' else 'unreadable', thinking='disabled',
+                                 finish_reason=finish, completion_tokens=used,
+                                 output=output if isinstance(output, str) else '')
+            raise UserError('经历整理的修改没有返回可用的结果。')
+        output, finish, used = self._request(messages, stage)
+        if usable(output):
+            return output
+        cut = finish == 'length'
+        self._record_failure(stage, 'cut_off' if cut else 'unreadable', finish_reason=finish,
+                             completion_tokens=used, output=output if isinstance(output, str) else '')
+        if not cut:
+            return output
+        if self.spent_today() + self._worst_for(messages) > Decimal(str(self.settings['daily_budget_cny'])):
+            raise UserError('经历整理被截断：思考用完了字数，今天的花费上限不够再试一次；聊天记录不受影响。')
+        self._retried += 1
+        output, finish, used = self._request(messages, stage, thinking='disabled')
+        if usable(output):
+            return output
+        self._record_failure(stage, 'cut_off' if finish == 'length' else 'unreadable', thinking='disabled',
+                             finish_reason=finish, completion_tokens=used,
+                             output=output if isinstance(output, str) else '')
+        raise UserError('经历整理被截断：思考用完了字数，关掉思考重试也没写出结果；聊天记录不受影响。')
 
     @staticmethod
     def _quotes(text, batch):
@@ -435,7 +541,10 @@ class ExperienceMemory:
         if SECRET.search(text):
             return None
         if len(text) > limit:
-            return (f'{len(text)} characters; the most is {limit}. Shorten it, keeping the facts and the attitude; '
+            # Ticket 386: "shorten it" alone left 4 of 6 drafts still 8 to 99 characters over after two tries
+            # (11-17 to 11-18); aiming well under the cap leaves room for miscounting. The cap itself is unchanged.
+            return (f'{len(text)} characters; the most is {limit}. Rewrite it to about {limit - FIX_MARGIN} characters '
+                    '(well under the limit, since counting is easy to get wrong), keeping the facts and the attitude; '
                     'what belongs to a later stage is not part of this one.')
         if self._quotes(text, batch):
             return 'repeats a stretch of a message word for word; say it in your own words.'
@@ -450,7 +559,7 @@ class ExperienceMemory:
         messages = [{'role': 'system', 'content': self.cfg.persona},
                     {'role': 'system', 'content': FIX_PROMPT},
                     {'role': 'user', 'content': json.dumps(data, ensure_ascii=False, separators=(',', ':'))}]
-        payload = _parse_json_object(self._call_model(messages))
+        payload = _parse_json_object(self._call_model(messages, stage='fix', expect=('fixes',)))
         fixes = payload.get('fixes') if isinstance(payload, dict) else None
         if not isinstance(fixes, list):
             raise UserError('经历整理的修改没有返回可用的结果。')
@@ -461,7 +570,7 @@ class ExperienceMemory:
         when `final` is false it comes back in `flagged` (with its text and its `continues`) so the model can be
         shown it once and fix it, instead of starting over and losing what was right in it (ticket 368)."""
         payload = _parse_json_object(output)
-        if not isinstance(payload, dict):
+        if not isinstance(payload, dict) or not ({'entries', 'updates'} & set(payload)):
             raise UserError('经历整理没有返回可用的结果；聊天记录不受影响，稍后重试。')
         entries, updates, dropped, flagged = [], [], 0, []
         raw_entries, raw_updates = payload.get('entries') or [], payload.get('updates') or []
@@ -588,10 +697,8 @@ class ExperienceMemory:
                                example_date=f'{first_day.strftime("%b")} {first_day.day} or {first_day.month}月{first_day.day}日')
         messages = build(candidates)
         cap = Decimal(str(self.settings['daily_budget_cny']))
-        provider = self._request_cfg(messages).provider
-        worst = provider.get('cny_per_call') or (
-            provider['max_input_tokens'] * Decimal(str(provider['input_cny_per_million']))
-            + MAX_OUTPUT_TOKENS * Decimal(str(provider['output_cny_per_million']))) / Decimal(1_000_000)
+        worst = self._worst_for(messages)
+        self._worst, self._retried = worst, 0
         if self.spent_today() + worst > cap:
             # Lan's daily ceiling for this feature: nothing is sent, the chat waits for tomorrow, one line per day.
             today = self.budget.clock()[:10]
@@ -636,6 +743,11 @@ class ExperienceMemory:
             failed = [{**({'title': item['title']} if item['kind'] == 'entry' else {'id': item['id']}),
                        'problem': item['problem']} for item in pending]
             dropped += len(pending)
+            for item in pending:
+                # Ticket 386: a draft that could not be fixed is not saved, but its text is not lost either.
+                self._record_failure('fix', 'unfixed_draft', kind=item['kind'], problem=item['problem'],
+                                     draft=item['text'], **({'title': item['title']} if item['kind'] == 'entry'
+                                                             else {'id': item['id']}))
             for update in updates:
                 updated += bool(self._save_update(update, next(
                     (c['text'] for c in candidates if c['id'] == update['id']), None)))
@@ -644,14 +756,18 @@ class ExperienceMemory:
         except Exception as exc:
             self.store.append(self.path, {'kind': 'error', 'reason': type(exc).__name__,
                                           'detail': str(exc)[:300] if isinstance(exc, UserError) else '',
-                                          'written': written, 'updated': updated, 'time': self.budget.clock()})
+                                          'written': written, 'updated': updated, 'time': self.budget.clock(),
+                                          **({'retried_without_thinking': self._retried} if self._retried else {})})
+            if not isinstance(exc, UserError):
+                self._record_failure('save', 'error', error=type(exc).__name__, detail=str(exc)[:300])
             if not (written or updated):
                 raise
             # Something was already saved: move on rather than write the same thing twice next time.
             dropped = 0
         self.store.append(self.path, {'kind': 'checkpoint', **mark, 'written': written, 'updated': updated,
                                       'dropped': dropped, 'time': self.budget.clock(),
-                                      **({'unfixed': failed} if failed else {})})
+                                      **({'unfixed': failed} if failed else {}),
+                                      **({'retried_without_thinking': self._retried} if self._retried else {})})
         self._context_cache = None
         return 'written' if written or updated else 'skipped'
 
@@ -717,7 +833,11 @@ class ExperienceMemory:
             spent = None
         return {'enabled': self.enabled(), 'available': self.memory is not None,
                 'last': ({'kind': last['kind'], 'time': last.get('time'), 'written': last.get('written', 0),
-                          'updated': last.get('updated', 0), 'detail': last.get('detail', '')} if last else None),
+                          'updated': last.get('updated', 0), 'detail': last.get('detail', ''),
+                          'retried_without_thinking': last.get('retried_without_thinking', 0),
+                          'unfixed': len(last.get('unfixed') or [])} if last else None),
+                'retry_at': (lambda at: at.isoformat(timespec='minutes') if at else None)(self.retry_at(events)),
+                'failures_kept': len(self.failures()),
                 'pending_chars': sum(len(item['text']) for item in pending),
                 'min_chars': self.settings['min_chars'], 'spent_today': spent,
                 'daily_budget_cny': str(self.settings['daily_budget_cny']),
