@@ -23,7 +23,7 @@ from decimal import Decimal
 
 from agent_types import RequestFailed, UserError
 from short_term_notes import _parse_json_object
-from memory_agent import ordinary_hits
+from memory_agent import SEARCH_SPARE_HITS, ordinary_hits
 from memory_sidecar import Sidecar
 
 COST_CATEGORY = 'experience_memory'
@@ -321,11 +321,23 @@ class ExperienceMemory:
         return found
 
     def _search_ids(self, query):
+        # Ticket 384: ask for spare hits and drop archived, hidden or deleted ones before keeping three (as in 381).
         try:
-            return [memory_id for memory_id, _ in ordinary_hits(self.memory.call('breath_search', {
-                'query': query, 'mode': 'automatic', 'with_ids': True, 'max_results': 3}), limit=3)]
+            hits = ordinary_hits(self.memory.call('breath_search', {
+                'query': query, 'mode': 'automatic', 'with_ids': True, 'max_results': 3 + SEARCH_SPARE_HITS}),
+                limit=3 + SEARCH_SPARE_HITS)
         except Exception:
             return []  # a failed search only means fewer candidates
+        found = []
+        for memory_id, _ in hits:
+            try:
+                if self._alive(memory_id):
+                    found.append(memory_id)
+            except Exception:
+                continue  # an unreadable one is simply not offered
+            if len(found) == 3:
+                break
+        return found
 
     def _library(self, batch, skip):
         """2026-11-15 (Lan): memories anywhere in the library about what these messages talk about, so the same
