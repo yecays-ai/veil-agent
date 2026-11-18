@@ -3098,10 +3098,10 @@ class Chat:
         return [{**row, 'message_id': self._message_id(row, index)} for index, row in enumerate(rows)]
 
 
-    def life_state_context(self, exclude_ids=()):
+    def life_state_context(self, exclude_ids=(), stamp=None):
         """Ticket 352: program-computed time gap and current task/life state for ordinary chat."""
         from life_state import MAX_FINISHED, gap_text, state_text
-        stamp = self.budget.clock()
+        stamp = stamp or self.budget.clock()
         parts = []
         try:
             rows = self.history_events
@@ -3204,10 +3204,11 @@ class Chat:
                         content = fallback
                 else:
                     content = fallback
-            if (message['role'] == 'assistant' and message.get('autonomy_run_id')
-                    and isinstance(message.get('autonomy_origin'), str) and message['autonomy_origin']):
+            if message['role'] == 'assistant' and message.get('autonomy_run_id') and not message.get('recalled'):
                 # Ticket 360: a short p.s. for the model only (the chat window shows the text as sent).
-                content += f"\n[p.s. sent on your own during an autonomous wake, after: {message['autonomy_origin']}]"
+                origin = message.get('autonomy_origin')
+                place = f', after: {origin}' if isinstance(origin, str) and origin else ''
+                content += f"\n[p.s. sent on your own at {message.get('time', 'unknown time')} during an autonomous wake{place}]"
             model_history.append({'role': message['role'], 'content':
                                   '[Message recalled]' if message.get('recalled') else content})
         return model_history, sum(any(m['role'] == 'assistant' for m in g) for g in groups)
@@ -3787,11 +3788,50 @@ class Chat:
         recalled_memory_refs = list(self.turn_memory_refs)
         autonomy_handoff_id = None
         glance_handoff_id = None
+        return_activity = None
+        return_gap = ''
+        incoming_times = {}
         if not autonomy:
             # Ticket 094: the last activity record is given once after a wake; afterwards Peter
             # looks it up himself with autonomy_history.
-            from autonomy import recent_chat_handoff, recent_glance_handoff
+            from autonomy import activities_since, recent_chat_handoff, recent_glance_handoff
+            from life_state import _time, return_window
             autonomy_handoff_id, handoff = recent_chat_handoff(self.store, self.cfg)
+            stamp = self.budget.clock()
+            current_ids = {item for item in (message_id, self.regeneration_parent_message_id) if item}
+            current_ids.update(row.get('message_id') for row in (user_events or [])
+                               if isinstance(row, dict) and row.get('message_id'))
+            for row in self.store.read(f'{self.cfg.id}/incoming-submissions.jsonl'):
+                if (isinstance(row, dict) and row.get('state') == 'received' and row.get('message_id') in current_ids
+                        and _time(row.get('time'))):
+                    incoming_times[row['message_id']] = row['time']
+            for row in self.history_events:
+                if row.get('message_id') in current_ids and _time(row.get('time')):
+                    incoming_times.setdefault(row['message_id'], row['time'])
+            if self.regeneration_parent_message_id:
+                parent = next((r for r in self.history_events if r.get('message_id') == self.regeneration_parent_message_id), None)
+                if parent and _time(parent.get('time')):
+                    stamp = parent['time']
+            elif incoming_times:
+                stamp = min(incoming_times.values(), key=_time)
+            chat_rows = self.store.read(self.path)
+            window = return_window(chat_rows, stamp, current_ids)
+            if window:
+                return_activity = activities_since(self.store, self.cfg, *window)
+                return_ids = [r.get('message_id') for r in chat_rows if isinstance(r, dict)
+                              and r.get('role') == 'user' and _time(r.get('time'))
+                              and _time(r['time']) >= _time(window[1])]
+                from life_state import gap_text
+                return_gap = gap_text(chat_rows, window[1], [*current_ids, *return_ids])
+                if _time(autonomy_handoff_id) and _time(autonomy_handoff_id) <= _time(window[1]):
+                    handoff = None
+            if autonomy_handoff_id:
+                activity = next((r for r in self.store.read(f'{self.cfg.id}/autonomy.jsonl')
+                                 if r.get('started_at') == autonomy_handoff_id), None)
+                finished = _time((activity or {}).get('finished_at') or (activity or {}).get('time'))
+                if finished is None or finished > _time(stamp):
+                    handoff = None
+                    autonomy_handoff_id = None
             glance_handoff_id, glance_handoff = recent_glance_handoff(self.store, self.cfg)
             handoffs = [item for item in (extra_context, handoff, glance_handoff) if item]
             extra_context = '\n\n'.join(handoffs) if handoffs else None
@@ -3805,9 +3845,16 @@ class Chat:
             # Ticket 352: gap since Lan last wrote and the saved task/life state, in the per-turn tail.
             current_ids = [row.get('message_id') for row in user_events if isinstance(row, dict)] \
                 if isinstance(user_events, list) else []
-            life_note = self.life_state_context([message_id, *current_ids])
+            life_note = self.life_state_context([message_id, self.regeneration_parent_message_id, *current_ids], stamp)
             if life_note:
                 changing += '\n' + life_note
+            if return_gap and 'Time since Lan last wrote' not in life_note:
+                changing += '\nEarlier in this conversation, when she returned: ' + return_gap
+            from life_state import time_separator
+            past = [row for row in self.history_events if row.get('message_id') not in {message_id, *current_ids,
+                    self.regeneration_parent_message_id} and _time(row.get('time')) and _time(row['time']) < _time(stamp)]
+            if past and (boundary := time_separator(past[-1]['time'], stamp)):
+                changing += '\nTime before the current message: ' + boundary
         description = stable + '\n' + changing
         # Order matters for the provider's prefix cache: everything that stays the same between requests
         # comes first, then the chat history, then what changes every request (recalled memories,
@@ -3865,6 +3912,8 @@ class Chat:
         screen_pop_context = screen_pop_history_context(self.store, self.cfg)
         if screen_pop_context:
             runtime_auxiliary.append({'role': 'system', 'content': screen_pop_context})
+        if return_activity and not reply_later_batch:
+            runtime_auxiliary.append({'role': 'system', 'content': return_activity})
 
         auxiliary_context = [
             *([checkpoint_context] if checkpoint_context else []),
@@ -3902,9 +3951,19 @@ class Chat:
             return estimate_request_tokens([*head, *h, *curr_tail, user], tool_schema, calibration)
 
         history = [dict(message) for message in self.history]
+        from life_state import time_separator
+        for index, row in enumerate(self.history_events[:len(history)]):
+            if index and (separator := time_separator(self.history_events[index - 1].get('time'), row.get('time'))):
+                content = history[index].get('content')
+                if isinstance(content, str):
+                    history[index]['content'] = separator + '\n' + content
+                elif isinstance(content, list):
+                    history[index]['content'] = [{'type': 'text', 'text': separator}, *content]
         collapse_all_history_photos(history)
 
         # Progressively prune croppable context: history -> memories -> auxiliary context
+        if return_activity and bound(history, recalled_memories, auxiliary_context) > limit:
+            auxiliary_context = [item for item in auxiliary_context if item.get('content') != return_activity]
         while history and bound(history, recalled_memories, auxiliary_context) > limit:
             history.pop(0)
             while history and history[0]['role'] != 'user':
@@ -3971,6 +4030,8 @@ class Chat:
                 for row in rows:
                     event = {'role': 'user', 'content': row['content'], 'request_id': request_id,
                              'message_id': row.get('message_id') or uuid.uuid4().hex}
+                    if event['message_id'] in incoming_times:
+                        event['time'] = incoming_times[event['message_id']]
                     row_media = row.get('media')
                     if isinstance(row_media, dict):
                         event['media'] = {key: row_media[key] for key in ('id', 'filename', 'mime', 'name', 'kind', 'transcript')

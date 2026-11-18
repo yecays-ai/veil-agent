@@ -27,6 +27,8 @@ def _time(value):
 
 def _rough(minutes):
     """A rounded length for the model's own understanding; it is told not to repeat it."""
+    if minutes < 60:
+        return f'about {max(0, round(minutes))} minutes'
     if minutes < 90:
         return 'about an hour'
     hours = minutes / 60
@@ -37,7 +39,7 @@ def _rough(minutes):
     return f'about {round(hours / 24)} days'
 
 
-def gap_text(rows, stamp, exclude_ids=()):
+def gap_text(rows, stamp, exclude_ids=(), minimum=GAP_NOTE_MINUTES):
     """Time since Lan's last message before this one, or '' when it was under an hour ago.
 
     `rows` are chat-log events (oldest first) carrying the `time` Store.append wrote. Peter's own
@@ -48,12 +50,18 @@ def gap_text(rows, stamp, exclude_ids=()):
     excluded = {item for item in exclude_ids if item}
     last_lan = None
     proactive = []
-    for row in reversed(rows):
+    last_index = None
+    for index in range(len(rows) - 1, -1, -1):
+        row = rows[index]
         if not isinstance(row, dict):
             continue
-        if row.get('role') == 'user' and row.get('message_id') not in excluded:
+        row_time = _time(row.get('time'))
+        if row_time is not None and row_time > current:
+            continue
+        if row.get('role') == 'user' and not row.get('recalled') and row.get('message_id') not in excluded:
             last_lan = _time(row.get('time'))
             if last_lan is not None:
+                last_index = index
                 break
         elif row.get('role') == 'assistant' and row.get('autonomy_run_id'):
             sent = _time(row.get('time'))
@@ -62,7 +70,7 @@ def gap_text(rows, stamp, exclude_ids=()):
     if last_lan is None:
         return ''
     minutes = (current - last_lan).total_seconds() / 60
-    if minutes < GAP_NOTE_MINUTES:
+    if minutes < minimum:
         return ''
     local_last = last_lan.astimezone(current.tzinfo)
     days = (current.date() - local_last.date()).days
@@ -72,11 +80,67 @@ def gap_text(rows, stamp, exclude_ids=()):
     if proactive:
         latest = max(proactive).astimezone(current.tzinfo)
         text += (f' Since then you messaged her on your own {len(proactive)} time(s), the latest at '
-                 f'{latest.strftime("%Y-%m-%d %H:%M")}; she may be replying to those.')
-    text += (' Let this shape how you open and your tone, the way someone would after that much time apart. '
-             'Do not state the length of the gap or count hours or days in your reply, and do not bring time up '
-             'every turn; one natural passing mention is fine. Her not writing does not mean she was upset.')
+                 f'{latest.strftime("%Y-%m-%d %H:%M")}.')
+    last_messages = []
+    for item in reversed(rows[:last_index + 1]):
+        if not isinstance(item, dict) or item.get('role') != 'user':
+            break
+        if not item.get('recalled') and item.get('message_id') not in excluded:
+            last_messages.append(str(item.get('content') or ''))
+        if len(last_messages) == 3:
+            break
+    original = ' / '.join(reversed(last_messages))[:120]
+    text += ' Her last visible messages were: ' + json.dumps(original, ensure_ascii=False) + '.'
+    text += (' Before this turn, no later message from her was recorded. Her activity or sleep after that message is unknown. '
+             'Use the time naturally when relevant; '
+             'you may state the duration, especially when asked, but need not mention it every turn. '
+             'Her not writing does not mean she was upset.')
     return text
+
+
+def time_separator(previous, current):
+    """A historical boundary from message timestamps, without changing stored messages."""
+    before, after = _time(previous), _time(current)
+    if before is None or after is None:
+        return ''
+    minutes = (after - before).total_seconds() / 60
+    if minutes < GAP_NOTE_MINUTES:
+        return ''
+    local = after.astimezone()
+    return f'— {_rough(minutes)} later · {local.strftime("%a %Y-%m-%d %H:%M")} —'
+
+
+def return_window(rows, stamp, exclude_ids=(), followups=2):
+    """Find the last long absence at the current or two preceding user turns."""
+    current = _time(stamp)
+    if current is None:
+        return None
+    excluded = {value for value in exclude_ids if value}
+    turns = []
+    previous_role = None
+    previous_request = None
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        when = _time(row.get('time'))
+        if when is None or when >= current or row.get('message_id') in excluded:
+            continue
+        if row.get('role') == 'user' and not row.get('recalled'):
+            request = row.get('request_id')
+            same_batch = request == previous_request if request or previous_request else True
+            if previous_role == 'user' and turns and same_batch and (when - turns[-1][1]).total_seconds() < 3600:
+                turns[-1] = (turns[-1][0], when)
+            else:
+                turns.append((when, when))
+            previous_role = 'user'
+            previous_request = request
+        elif row.get('role') == 'assistant':
+            previous_role = 'assistant'
+    turns.append((current, current))
+    for index in range(len(turns) - 1, max(0, len(turns) - followups - 2), -1):
+        if (turns[index][0] - turns[index - 1][1]).total_seconds() >= GAP_NOTE_MINUTES * 60:
+            return turns[index - 1][1].isoformat(), turns[index][0].isoformat()
+    return None
 
 
 def _short(value, limit=80):
