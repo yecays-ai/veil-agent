@@ -1044,7 +1044,7 @@ class AutonomyController:
             f'remaining: CNY {remaining:.6f}. This run is capped at CNY {self.daily_budget}/day.\n'
             f'{self.wake_count_text()}\n'
             f'{missed_text}'
-            'This time is yours. Nobody is waiting on you. Make something, read, write to Lan, rest, or nothing at all. '
+            'This time is yours. Nobody is waiting on you. You can make something, read, write to Lan, rest, or nothing at all. '
             'All are equally valid. Keep your current persona and voice. Never report just because you woke or finished '
             'something; only message if you actually want to share, otherwise stay quiet. '
             'You can use your tools for any activity you choose: '
