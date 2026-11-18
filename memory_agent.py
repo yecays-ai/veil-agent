@@ -1324,7 +1324,7 @@ class Memory:
                 # (JudgeFailed) keeps today's recall for this turn.
                 normal = judge.choose(query, pool, prefetched, wake=wake,
                                       max_picks=3 if wake else 2,
-                                      candidate_limit=recall_cfg['rotation_candidates'] if wake else None)
+                                      candidate_limit=max(3, recall_cfg['rotation_candidates']) if wake else None)
                 drift = []   # a recollection nobody judged would be a way around "none fits"
             except JudgeFailed:
                 if wake:
