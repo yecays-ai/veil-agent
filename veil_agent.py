@@ -3130,16 +3130,21 @@ class Chat:
             when = ' '.join(part for part in (str(row.get('date') or '')[5:].replace('-', '/'), row.get('time') or '') if part)
             return (when + ' ' if when else '') + str(row.get('title') or '')
         if (after.get('repeat') == 'daily' and before.get('state') != after.get('state')
-                and all(before.get(k) == after.get(k) for k in ('title', 'content', 'date', 'time'))):
+                and all(before.get(k) == after.get(k) for k in ('title', 'content', 'date', 'time', 'kind', 'repeat'))):
             return   # ticking a daily to-do is what it is for; Lan asked for no report of that
         kind = {'event': '日程', 'note': '待办'}.get(after.get('kind'), '记录')
         if before.get('state') != after.get('state') and label(before) == label(after):
             change = label(after) + ('（标成已完成）' if after.get('state') == 'completed' else '（改回未完成）')
         elif label(before) != label(after):
             change = label(before) + ' → ' + label(after)
+        elif before.get('repeat') != after.get('repeat') or before.get('kind') != after.get('kind'):
+            change = label(after) + ('（改成每天重复）' if after.get('repeat') == 'daily' else
+                                     '（改成不重复）' if before.get('repeat') == 'daily' else '（改成' + kind + '）')
         else:
             change = label(after) + '（改了内容）'
-        self.output(LifeNotice(f'Peter 改了你的{kind}：{change}', after.get('id')))
+        # During autonomy the ordinary output is muted; like send_message, the notice uses the channel kept for it.
+        output = self.autonomy_message_output if self.autonomy_mode else None
+        (output or self.output)(LifeNotice(f'Peter 改了你的{kind}：{change}', after.get('id')))
 
     def recent(self):
         groups = []

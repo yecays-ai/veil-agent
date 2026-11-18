@@ -263,6 +263,11 @@ test('life calendar shares records, shows two moods a day, and keeps daily todos
   assert.match(js, /panel\.append\(agenda,lifeDailySection\(dailies,lifeDay,today\)\)/);
   assert.match(js, /note\.textContent='没有记录'/);
   assert.match(js, /line\.onclick=\(\)=>openLifeRecord\(e\.life_id\)/);
+  assert.match(js, /window\.veilDesktop\.openLifeRecord\?\.\(id\)/);
+  assert.match(js, /api\('\/api\/life',\{find:id\}\)/);
+  const [main, preload] = await Promise.all([read('main.cjs'), read('desktop-preload.cjs')]);
+  assert.match(main, /ipcMain\.handle\('life:open-record'[\s\S]*?fromChatPage\(event\)[\s\S]*?'desktop:open-life-record'/);
+  assert.match(preload, /onOpenLifeRecord: callback => ipcRenderer\.on\('desktop:open-life-record'/);
   assert.match(css, /\.life-day-panel\{min-width:0;display:flex;flex-direction:column/);
   assert.match(css, /\.life-calendar-days \.calendar-day-line\{display:flex/);
   assert.match(css, /\.mood-choice\[aria-pressed="true"\]/);

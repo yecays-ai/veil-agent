@@ -55,6 +55,12 @@ class SharedCalendarTests(unittest.TestCase):
         self.records.write({'id': hers['id'], 'title': '她自己改'}, 'Peter')   # nothing actually changed
         self.assertEqual(self.changes, [])
 
+    def test_turning_lans_note_into_a_daily_one_is_reported(self):
+        note = self.records.write({'kind': 'note', 'title': '喝水'}, 'Lan')
+        self.records.write({'id': note['id'], 'repeat': 'daily'}, 'Peter')
+        self.assertEqual(len(self.changes), 1)
+        self.assertEqual(self.changes[0][1]['repeat'], 'daily')
+
     def test_time_is_optional_events_only_and_checked(self):
         event = self.records.write({'kind': 'event', 'title': '看电影', 'date': '2026-11-20', 'time': '19:05'}, 'Lan')
         self.assertEqual(event['time'], '19:05')
@@ -94,6 +100,38 @@ class DailyLogTests(unittest.TestCase):
         self.assertEqual(checks['days']['2026-11-18'][todo['id']]['state'], 'completed')
         self.assertEqual(checks['days']['2026-11-18'][todo['id']]['by'], 'Peter')
         self.assertEqual(checks['days']['2026-11-19'][todo['id']]['state'], 'unchecked')
+
+    def test_a_tick_whose_log_line_failed_is_logged_when_saved_again_and_only_once(self):
+        self.records.ensure_checks_started('2026-11-18')
+        todo = self.records.write({'kind': 'note', 'title': '写日记', 'repeat': 'daily'}, 'Lan')
+        with mock.patch.object(life_records, 'now', return_value='2026-11-18T21:00:00+08:00'):
+            with mock.patch.object(LifeRecords, '_log_check', side_effect=OSError('locked')):
+                with self.assertRaises(OSError):
+                    self.records.write({'id': todo['id'], 'state': 'completed'}, 'Lan')
+            self.assertNotIn('2026-11-18', self.records.daily_checks()['days'])
+            self.records.write({'id': todo['id'], 'state': 'completed'}, 'Lan')
+            self.records.write({'id': todo['id'], 'state': 'completed'}, 'Lan')
+        lines = [l for l in self.records.checks_path.read_text(encoding='utf-8').splitlines() if '"day"' in l]
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(self.records.daily_checks()['days']['2026-11-18'][todo['id']]['state'], 'completed')
+
+    def test_a_done_note_that_becomes_daily_gets_its_first_log_line(self):
+        self.records.ensure_checks_started('2026-11-18')
+        with mock.patch.object(life_records, 'now', return_value='2026-11-18T09:00:00+08:00'):
+            note = self.records.write({'kind': 'note', 'title': '拉伸', 'state': 'completed'}, 'Lan')
+            self.records.write({'id': note['id'], 'repeat': 'daily'}, 'Lan')
+        self.assertEqual(self.records.daily_checks()['days']['2026-11-18'][note['id']]['state'], 'completed')
+
+    def test_ticks_made_on_the_start_day_before_the_log_existed_are_kept(self):
+        with mock.patch.object(life_records, 'now', return_value='2026-11-18T08:00:00+08:00'):
+            todo = self.records.write({'kind': 'note', 'title': '写日记', 'repeat': 'daily'}, 'Lan')
+            self.records.write({'id': todo['id'], 'state': 'completed'}, 'Peter')
+        self.records.checks_path.unlink()   # as on the day of the update: ticked before the log started
+        with mock.patch.object(life_records, 'now', return_value='2026-11-18T12:00:00+08:00'):
+            self.records.ensure_checks_started()
+        checks = self.records.daily_checks()
+        self.assertEqual(checks['started'], '2026-11-18')
+        self.assertEqual(checks['days']['2026-11-18'][todo['id']]['by'], 'Peter')
 
     def test_days_before_the_log_are_rebuilt_from_record_history_only_as_completions(self):
         row = {'id': 'd1', 'kind': 'note', 'title': '成长日记', 'repeat': 'daily', 'owner': '共同', 'date': '2026-11-01',

@@ -1122,13 +1122,17 @@ function lifeForm(x={}){const d=$('life-detail');d.classList.add('open');d.inner
     saveLife({...(x.id?{id:x.id}:{}),kind,title:d.querySelector('#lf-title').value,content:d.querySelector('#lf-content').value,date,time,repeat:d.querySelector('#lf-repeat').value})}}
 async function saveLife(x,quiet){lifeRevision++;let r,d;try{r=await api('/api/life',x);d=await r.json()}catch(e){notify('保存结果未确认，请刷新生活页核对后再试。','error');await loadLife();return null}if(r.status===0){notify('保存结果未确认，请刷新生活页核对后再试。','error');await loadLife();return null}if(!r.ok){notify(d.error||'保存失败','error');return false}if(!d.record){await loadLife();return true}const i=lifeRows.findIndex(y=>y.id===d.record.id);if(i<0)lifeRows.unshift(d.record);else lifeRows[i]=d.record;renderLife();if(quiet){await loadLife();return true}showLife(d.record);return true}
 // A grey line in chat says Peter changed one of Lan's records; clicking it opens that record on the life page.
+// When the life page lives in its own window, or this is a detached chat window, the window that shows it opens it.
 async function openLifeRecord(id){
-  if(detachedViews.has('life')){window.veilDesktop.focusView('life');return}
+  if((detachedViews.has('life')&&detachedView!=='life')||(detachedView&&detachedView!=='life')){window.veilDesktop.openLifeRecord?.(id);return}
   setPage('life');lifeKind='all';document.querySelectorAll('[data-life-kind]').forEach(x=>x.classList.toggle('active',x.dataset.lifeKind==='all'));
-  await loadLife();const row=lifeRows.find(x=>x.id===id);
-  if(!row){notify('这条记录已经不在了。','error');return}
+  await loadLife();let row=lifeRows.find(x=>x.id===id);
+  // An old completed note can be folded out of the list; ask for it by id before saying it is gone.
+  if(!row){try{const r=await api('/api/life',{find:id});const d=await r.json();if(r.ok&&d.found)row=d.record}catch(e){}}
+  if(!row){notify('这条记录已经删掉了。','error');return}
   if(row.date&&row.repeat!=='daily'){lifeDay=row.date;renderLife()}showLife(row)
 }
+window.veilDesktop.onOpenLifeRecord?.(id=>{if(typeof id==='string')openLifeRecord(id)});
 document.querySelectorAll('[data-life-kind]').forEach(b=>b.onclick=()=>{lifeKind=b.dataset.lifeKind;document.querySelectorAll('[data-life-kind]').forEach(x=>x.classList.toggle('active',x===b));renderLife()});document.querySelectorAll('[data-life-owner]').forEach(b=>b.onclick=()=>{lifeOwner=b.dataset.lifeOwner;document.querySelectorAll('[data-life-owner]').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));renderLife()});$('life-new').onclick=$('life-detail-new').onclick=()=>lifeForm();$('life-day').onchange=()=>{lifeDay=$('life-day').value;renderLife()};
 async function approve(card,status,answer,id){
   if(card.dataset.sending==='true'||card.classList.contains('done'))return;

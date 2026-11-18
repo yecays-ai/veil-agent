@@ -682,6 +682,14 @@ ipcMain.handle('view:focus', (event, view) => {
   if (!fromChat(event) || !VIEW_NAMES.has(view) || !win || win.isDestroyed()) return false;
   win.show(); win.focus(); return true;
 });
+// Ticket 385: a notice about a calendar record opens it in whichever window shows the life page.
+ipcMain.handle('life:open-record', (event, id) => {
+  if (!fromChatPage(event) || typeof id !== 'string' || !/^[\w:.-]{1,120}$/.test(id)) return false;
+  const life = detachedWindows.get('life');
+  const target = life && !life.isDestroyed() ? life : chat && !chat.isDestroyed() ? chat : null;
+  if (!target) return false;
+  target.show(); target.focus(); target.webContents.send('desktop:open-life-record', id); return true;
+});
 ipcMain.handle('view:states', event => fromChatPage(event) ? detachedViewNames() : []);
 ipcMain.on('desktop:collapse', () => { if (chat) chat.hide(); });
 ipcMain.handle('chat:reconnect', event => reconnectChat(event));

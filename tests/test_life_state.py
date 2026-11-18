@@ -207,6 +207,16 @@ class ChatPlacementTests(unittest.TestCase):
         self.assertEqual(second[:len(prefix)], prefix)
         self.assertIn('新待办', second[-2]['content'])
 
+    def test_a_notice_from_autonomy_uses_the_channel_kept_for_it(self):
+        # During autonomy the ordinary output is muted; the notice must still reach Lan.
+        chat = self.chat('2026-11-12T08:55:00+08:00')
+        muted, kept = [], []
+        chat.output, chat.autonomy_message_output, chat.autonomy_mode = muted.append, kept.append, True
+        hers = chat.life_records.write({'kind': 'event', 'title': '体检', 'date': '2026-11-22'}, 'Lan')
+        chat.life_records.invoke({'action': 'update', 'id': hers['id'], 'time': '09:00'})
+        self.assertEqual((len(muted), len(kept)), (0, 1))
+        self.assertEqual(kept[0].life_id, hers['id'])
+
     def test_peter_changing_lans_record_tells_her_in_a_notice_not_in_his_history(self):
         # Ticket 385: one grey line for Lan; ticking her daily to-do sends nothing.
         from veil_agent import LifeNotice

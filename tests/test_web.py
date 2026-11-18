@@ -109,6 +109,10 @@ output_cny_per_million = "8"
         notices = [e for e in self.hub.events if e['kind'] == 'notice' and e.get('life_id') == hers['id']]
         self.assertEqual(len(notices), 1)
         self.assertIn('09:30 体检 →', notices[0]['text'])
+        status, body = self.call('/api/life', {'find': hers['id']})
+        self.assertEqual((status, body['found'], body['record']['time']), (200, True, '10:00'))
+        self.assertEqual(self.call('/api/life', {'find': 'nope'})[1]['found'], False)
+        self.assertEqual(self.call('/api/life', {'find': hers['id'], 'id': 'x'})[0], 400)
 
     def test_health_does_not_wait_for_chat_snapshot_and_requires_token(self):
         self.hub.ready = True

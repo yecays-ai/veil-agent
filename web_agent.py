@@ -2701,6 +2701,18 @@ def make_handler(hub, token):
                 self._send(409, {'error':'Peter 尚未就绪。'})
                 return
             source_id=body.get('id')
+            if 'find' in body:
+                # Ticket 385: a notice names one record; it may be an old completed note folded out of the list.
+                key=body.get('find')
+                if set(body)!={'find'} or not isinstance(key,str) or not key:
+                    self._send(400, {'error':'invalid lookup'}); return
+                try:
+                    from life_records import effective
+                    row=next((r for r in hub.chat.life_records.read() if isinstance(r,dict) and r.get('id')==key and r.get('kind')!='diary'),None)
+                except (OSError,ValueError,UnicodeError):
+                    self._send(500, {'error':'生活记录无法安全读取。'}); return
+                self._send(200, {'found':row is not None,'record':effective(row) if row else None})
+                return
             if 'mood' in body:
                 # Ticket 385: Lan sets only her own slot; Peter sets his through his tool.
                 try:

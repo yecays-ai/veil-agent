@@ -72,6 +72,10 @@ def valid_emoji(value):
     return any(_emoji_category(ch) in ('So','Sm') or ch in EMOJI_PUNCTUATION for ch in value) or keycap
 
 
+def _check_state(state):
+    return 'completed' if state=='completed' else 'unchecked'
+
+
 def _ok_date(value):
     if not isinstance(value,str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}',value):
         return False
@@ -143,10 +147,13 @@ class LifeRecords:
             if prior: rows[rows.index(original)]=row
             else: rows.append(row)
             self._save(rows)
-            if repeat=='daily' and (not prior or prior.get('state')!=state):
+            # The log is compared with what it already says for today, not only with the record's previous state:
+            # a tick saved while the log could not be written is caught up on the next save, and a note that just
+            # became daily gets its first line. Repeating the same save adds nothing.
+            if repeat=='daily' and self._logged_today(row['id'],stamp[:10])!=_check_state(state):
                 self._log_check(row,state,actor,stamp)
         if (actor=='Peter' and prior and prior.get('created_by')=='Lan' and callable(self.on_lan_record_changed)
-                and any(prior.get(k)!=row.get(k) for k in ('title','content','date','time','state'))):
+                and any(prior.get(k)!=row.get(k) for k in ('title','content','date','time','state','kind','repeat'))):
             try: self.on_lan_record_changed(prior,row)
             except Exception: pass   # a missed notice never undoes the edit; the history still shows it
         return row
@@ -170,16 +177,35 @@ class LifeRecords:
         self.checks_path.parent.mkdir(parents=True,exist_ok=True)
         with self.checks_path.open('a',encoding='utf-8') as handle:
             handle.write(json.dumps({'day':stamp[:10],'id':row['id'],'title':row['title'],
-                                     'state':'completed' if state=='completed' else 'unchecked',
-                                     'at':stamp,'by':actor},ensure_ascii=False)+'\n')
+                                     'state':_check_state(state),'at':stamp,'by':actor},ensure_ascii=False)+'\n')
             handle.flush(); os.fsync(handle.fileno())
+    def _logged_today(self, key, day):
+        """What the log last says about this daily to-do today; nothing logged counts as unchecked."""
+        last='unchecked'
+        if self.checks_path.exists():
+            for line in self.checks_path.read_text(encoding='utf-8').splitlines():
+                try: item=json.loads(line)
+                except ValueError: continue
+                if isinstance(item,dict) and item.get('day')==day and item.get('id')==key:
+                    last=item.get('state') or last
+        return last
     def ensure_checks_started(self, today=None):
-        """The day the log starts: before it a past day can only be partly reconstructed."""
+        """The day the log starts: before it a past day can only be partly reconstructed. Daily to-dos already
+        ticked that day are written in as the log's first lines, so the start day keeps them too."""
         with self.store.mutex:
             if self.checks_path.exists(): return
+            day=today or now()[:10]
+            ticked=[r for r in (effective(r) for r in self.read()) if r.get('kind')=='note' and r.get('repeat')=='daily'
+                    and r.get('state')=='completed' and str(r.get('completed_at') or '')[:10]==day]
             self.checks_path.parent.mkdir(parents=True,exist_ok=True)
-            with self.checks_path.open('a',encoding='utf-8') as handle:
-                handle.write(json.dumps({'started':today or now()[:10]})+'\n')
+            temp=self.checks_path.with_suffix('.tmp')
+            with temp.open('w',encoding='utf-8') as handle:
+                handle.write(json.dumps({'started':day})+'\n')
+                for row in ticked:
+                    handle.write(json.dumps({'day':day,'id':row['id'],'title':row.get('title'),'state':'completed',
+                                             'at':row['completed_at'],'by':row.get('updated_by')},ensure_ascii=False)+'\n')
+                handle.flush(); os.fsync(handle.fileno())
+            os.replace(temp,self.checks_path)
     def daily_checks(self):
         """{'started': day or None, 'days': {day: {id: {'state','at','by','title'}}}} — last entry per day wins.
         Before the log started, completions found in the records' own history are added as evidence."""
