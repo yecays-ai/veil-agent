@@ -178,7 +178,14 @@ class LifeRecords:
     # --- daily to-do log (ticket 385): one line per tick or untick, so a past day can be shown as it was ---
     def _log_check(self, row, state, actor, stamp):
         self.checks_path.parent.mkdir(parents=True,exist_ok=True)
+        # A line cut short by an earlier failed write (disk full, say) is closed off first, so this line stays
+        # whole and readable; the broken piece is skipped when read.
+        broken=False
+        if self.checks_path.exists() and self.checks_path.stat().st_size:
+            with self.checks_path.open('rb') as handle:
+                handle.seek(-1,os.SEEK_END); broken=handle.read(1)!=b'\n'
         with self.checks_path.open('a',encoding='utf-8') as handle:
+            if broken: handle.write('\n')
             handle.write(json.dumps({'day':stamp[:10],'id':row['id'],'title':row['title'],
                                      'state':_check_state(state),'at':stamp,'by':actor},ensure_ascii=False)+'\n')
             handle.flush(); os.fsync(handle.fileno())

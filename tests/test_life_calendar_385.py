@@ -150,6 +150,25 @@ class DailyLogTests(unittest.TestCase):
         self.assertEqual(days['2026-11-18'][todo['id']]['at'], '2026-11-18T23:50:00+08:00')
         self.assertEqual(days['2026-11-19'][todo['id']]['state'], 'completed')
 
+    def test_a_line_cut_short_by_a_failed_write_does_not_swallow_the_retry(self):
+        self.records.ensure_checks_started('2026-11-18')
+        todo = self.records.write({'kind': 'note', 'title': '写日记', 'repeat': 'daily'}, 'Lan')
+        real = LifeRecords._log_check
+
+        def half_written(records, row, state, actor, stamp):
+            with records.checks_path.open('a', encoding='utf-8') as handle:
+                handle.write('{"day":"2026-11-18","id":"' + row['id'] + '","sta')
+            raise OSError('disk full')
+        with mock.patch.object(life_records, 'now', return_value='2026-11-18T23:50:00+08:00'):
+            with mock.patch.object(LifeRecords, '_log_check', half_written):
+                with self.assertRaises(OSError):
+                    self.records.write({'id': todo['id'], 'state': 'completed'}, 'Lan')
+        with mock.patch.object(life_records, 'now', return_value='2026-11-19T09:00:00+08:00'):
+            self.records.write({'id': todo['id'], 'title': '写日记（睡前）'}, 'Lan')
+        self.assertIs(LifeRecords._log_check, real)
+        days = self.records.daily_checks()['days']
+        self.assertEqual(days['2026-11-18'][todo['id']]['at'], '2026-11-18T23:50:00+08:00')
+
     def test_an_untick_whose_log_line_failed_is_corrected_on_its_own_day(self):
         self.records.ensure_checks_started('2026-11-18')
         todo = self.records.write({'kind': 'note', 'title': '写日记', 'repeat': 'daily'}, 'Lan')
