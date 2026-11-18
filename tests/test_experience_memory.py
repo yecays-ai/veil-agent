@@ -549,6 +549,16 @@ class WritingTests(Fixture):
         self.assertEqual(self.feature.run_if_due(), 'skipped')
         self.assertIsNone(self.feature.status()['retry_at'])   # a finished run starts the count again
 
+    def test_a_retry_cut_off_inside_its_outer_object_is_not_taken_for_an_empty_answer(self):
+        # Review of 386: '{"entries":[{"title":..,"text":..}' parses to the complete inner object only.
+        self.add(long_talk(DAY1))
+        self.clock[0] = f'{DAY1}T12:00:00+08:00'
+        self.replies += [('', 'length'), ('{"entries":[{"title":"新事","text":"一段有效记忆。"}', 'length')]
+        with self.assertRaises(Exception):
+            self.feature.run_if_due()
+        self.assertEqual(self.feature.due(), 'volume')                   # the chat is still waiting, not marked done
+        self.assertEqual(self.feature.status()['last']['kind'], 'error')
+
     def test_after_a_cut_off_the_fixes_skip_thinking_and_an_unfixable_draft_keeps_its_text(self):
         self.add(long_talk(DAY1))
         self.clock[0] = f'{DAY1}T12:00:00+08:00'

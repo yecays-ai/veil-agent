@@ -477,34 +477,46 @@ class ExperienceMemory:
             self.budget.settle_estimate((reservation, amount), accounting=f'{COST_ACCOUNTING}-usage-invalid')
         return output, finish, completion_tokens
 
-    def _call_model(self, messages, stage='first'):
+    def _worst_for(self, messages):
+        """The most one call with these messages may cost (as reserved), for this feature's own daily ceiling."""
+        provider = self._request_cfg(messages).provider
+        return provider.get('cny_per_call') or (
+            provider['max_input_tokens'] * Decimal(str(provider['input_cny_per_million']))
+            + MAX_OUTPUT_TOKENS * Decimal(str(provider['output_cny_per_million']))) / Decimal(1_000_000)
+
+    def _call_model(self, messages, stage='first', expect=('entries', 'updates')):
         """The reply text. Ticket 386: a reply cut off before it holds a JSON object (a thinking model that used the
         whole output limit on its reasoning) is asked once more at once with thinking off; both are kept in the
         failure record, and one still unusable after that says plainly that it was cut off."""
+        def usable(text):
+            # Only the whole answer counts: a reply cut off inside its outer object can still hold a complete inner
+            # one ({"title":..,"text":..}), which must not pass for an answer with nothing to keep (review of 386).
+            payload = _parse_json_object(text)
+            return isinstance(payload, dict) and any(key in payload for key in expect)
+
         if self._retried:
             # Already cut off once in this run: the fix asks go without thinking straight away (11-18 real run:
             # each fix was cut off again and needed its own retry).
             output, finish, used = self._request(messages, stage, thinking='disabled')
-            if isinstance(_parse_json_object(output), dict):
+            if usable(output):
                 return output
             self._record_failure(stage, 'cut_off' if finish == 'length' else 'unreadable', thinking='disabled',
                                  finish_reason=finish, completion_tokens=used,
                                  output=output if isinstance(output, str) else '')
             raise UserError('经历整理的修改没有返回可用的结果。')
         output, finish, used = self._request(messages, stage)
-        if isinstance(_parse_json_object(output), dict):
+        if usable(output):
             return output
         cut = finish == 'length'
         self._record_failure(stage, 'cut_off' if cut else 'unreadable', finish_reason=finish,
                              completion_tokens=used, output=output if isinstance(output, str) else '')
         if not cut:
             return output
-        worst = self._worst or Decimal(0)
-        if self.spent_today() + worst > Decimal(str(self.settings['daily_budget_cny'])):
+        if self.spent_today() + self._worst_for(messages) > Decimal(str(self.settings['daily_budget_cny'])):
             raise UserError('经历整理被截断：思考用完了字数，今天的花费上限不够再试一次；聊天记录不受影响。')
         self._retried += 1
         output, finish, used = self._request(messages, stage, thinking='disabled')
-        if isinstance(_parse_json_object(output), dict):
+        if usable(output):
             return output
         self._record_failure(stage, 'cut_off' if finish == 'length' else 'unreadable', thinking='disabled',
                              finish_reason=finish, completion_tokens=used,
@@ -545,7 +557,7 @@ class ExperienceMemory:
         messages = [{'role': 'system', 'content': self.cfg.persona},
                     {'role': 'system', 'content': FIX_PROMPT},
                     {'role': 'user', 'content': json.dumps(data, ensure_ascii=False, separators=(',', ':'))}]
-        payload = _parse_json_object(self._call_model(messages, stage='fix'))
+        payload = _parse_json_object(self._call_model(messages, stage='fix', expect=('fixes',)))
         fixes = payload.get('fixes') if isinstance(payload, dict) else None
         if not isinstance(fixes, list):
             raise UserError('经历整理的修改没有返回可用的结果。')
@@ -556,7 +568,7 @@ class ExperienceMemory:
         when `final` is false it comes back in `flagged` (with its text and its `continues`) so the model can be
         shown it once and fix it, instead of starting over and losing what was right in it (ticket 368)."""
         payload = _parse_json_object(output)
-        if not isinstance(payload, dict):
+        if not isinstance(payload, dict) or not ({'entries', 'updates'} & set(payload)):
             raise UserError('经历整理没有返回可用的结果；聊天记录不受影响，稍后重试。')
         entries, updates, dropped, flagged = [], [], 0, []
         raw_entries, raw_updates = payload.get('entries') or [], payload.get('updates') or []
@@ -683,10 +695,7 @@ class ExperienceMemory:
                                example_date=f'{first_day.strftime("%b")} {first_day.day} or {first_day.month}月{first_day.day}日')
         messages = build(candidates)
         cap = Decimal(str(self.settings['daily_budget_cny']))
-        provider = self._request_cfg(messages).provider
-        worst = provider.get('cny_per_call') or (
-            provider['max_input_tokens'] * Decimal(str(provider['input_cny_per_million']))
-            + MAX_OUTPUT_TOKENS * Decimal(str(provider['output_cny_per_million']))) / Decimal(1_000_000)
+        worst = self._worst_for(messages)
         self._worst, self._retried = worst, 0
         if self.spent_today() + worst > cap:
             # Lan's daily ceiling for this feature: nothing is sent, the chat waits for tomorrow, one line per day.

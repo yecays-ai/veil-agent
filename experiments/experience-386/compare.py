@@ -213,7 +213,12 @@ def main():
     spent, calls = [Decimal(0)], []
 
     def model(messages, **kwargs):
-        if spent[0] >= args.cap:
+        # The most this call can cost, checked against what all samples together have spent (review of 386).
+        size = len(json.dumps(messages, ensure_ascii=False).encode('utf-8'))
+        bound = Decimal(str(provider['cny_per_call'])) if provider.get('cny_per_call') else (
+            Decimal(size) * Decimal(str(provider['input_cny_per_million']))
+            + Decimal(kwargs.get('max_tokens') or 8000) * Decimal(str(provider['output_cny_per_million']))) / 1_000_000
+        if spent[0] + bound > args.cap:
             raise Cap()
         asked_detail = kwargs.pop('detail', False)
         if args.squeeze and kwargs.get('thinking') != 'disabled':
