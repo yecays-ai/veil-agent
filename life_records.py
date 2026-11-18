@@ -50,19 +50,26 @@ MAX_MOOD_CHARS=16
 EMOJI_PUNCTUATION='\u303d\u2139\u203c\u2049\u3030'   # emoji whose base character is a letter or punctuation
 
 
+def _emoji_category(ch):
+    # Python's own Unicode tables lag behind (3.11 knows Unicode 14): a newer emoji such as 🫨 reads as unassigned.
+    # The pictograph planes hold nothing but symbols, so an unassigned code point there counts as one.
+    kind=unicodedata.category(ch)
+    return 'So' if kind=='Cn' and 0x1F000<=ord(ch)<=0x1FAFF else kind
+
+
 def valid_emoji(value):
     """Any emoji (ticket 385: no fixed list), including skin tones, ZWJ families, flags and keycaps; no words."""
     if not isinstance(value,str) or not value or len(value)>MAX_MOOD_CHARS:
         return False
     keycap='\u20e3' in value
     for ch in value:
-        kind=unicodedata.category(ch)
+        kind=_emoji_category(ch)
         if (kind[0] in 'SPM' and not ch.isascii()) or ch=='\u200d' or ch in EMOJI_PUNCTUATION or 0xE0020<=ord(ch)<=0xE007F:
             continue
         if keycap and ch in '0123456789#*':
             continue
         return False
-    return any(unicodedata.category(ch) in ('So','Sm') or ch in EMOJI_PUNCTUATION for ch in value) or keycap
+    return any(_emoji_category(ch) in ('So','Sm') or ch in EMOJI_PUNCTUATION for ch in value) or keycap
 
 
 def _ok_date(value):
