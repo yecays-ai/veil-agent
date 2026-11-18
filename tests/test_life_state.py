@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from life_state import gap_text, state_text, time_separator
+from life_state import gap_text, state_text, time_separator, return_window
 from veil_agent import Budget, Character, Chat, Store
 
 NOW = '2026-11-12T09:00:00+08:00'
@@ -102,6 +102,44 @@ class GapTextTests(unittest.TestCase):
     def test_history_boundary_uses_actual_gap(self):
         self.assertIn('about 3 hours later', time_separator('2026-11-12T06:00:00+08:00', NOW))
         self.assertEqual(time_separator('2026-11-12T08:30:00+08:00', NOW), '')
+
+    def test_return_window_keeps_two_followups_and_then_expires(self):
+        rows = chat_rows('2026-11-12T03:00:00+08:00')
+        self.assertEqual(return_window(rows, NOW), ('2026-11-12T03:00:00+08:00', NOW))
+        for minute in range(3):
+            rows.extend([{'role': 'user', 'content': '话', 'time': f'2026-11-12T09:0{minute}:00+08:00'},
+                         {'role': 'assistant', 'content': '答', 'time': f'2026-11-12T09:0{minute}:10+08:00'}])
+            found = return_window(rows, f'2026-11-12T09:0{minute + 1}:00+08:00')
+            if minute < 2:
+                self.assertEqual(found, ('2026-11-12T03:00:00+08:00', NOW))
+            else:
+                self.assertIsNone(found)
+
+    def test_failed_activity_separates_failure_from_plan(self):
+        from autonomy import activities_since
+        import tempfile
+        from pathlib import Path
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as folder:
+            store = Store(Path(folder))
+            store.append('fake/autonomy.jsonl', {
+                'started_at': '2026-11-12T05:00:00+08:00', 'finished_at': '2026-11-12T06:00:00+08:00',
+                'decision': 'build a rocket', 'reason': '',
+                'tools': [{'tool': 'write_file', 'path': 'blueprint', 'state': '出错'}],
+                'lab_files_changed': [], 'result': '失败', 'result_reason': 'write failed',
+                'current_focus': 'rocket', 'next_step': 'repair the blueprint'})
+            text = activities_since(store, SimpleNamespace(id='fake'), '2026-11-12T03:00:00+08:00', NOW)
+            self.assertIn('[failed]', text)
+            self.assertIn('failed or interrupted', text)
+            self.assertIn('planned next step', text)
+            self.assertNotIn('completed tool actions', text)
+            self.assertLessEqual(len(text), 300)
+            future = {'started_at': '2026-11-12T08:30:00+08:00', 'finished_at': '2026-11-12T09:30:00+08:00',
+                      'decision': 'future', 'reason': '', 'tools': [], 'lab_files_changed': [], 'result': '完成',
+                      'result_reason': '', 'current_focus': '', 'next_step': ''}
+            store.append('fake/autonomy.jsonl', future)
+            self.assertNotIn('future', activities_since(store, SimpleNamespace(id='fake'),
+                                                       '2026-11-12T03:00:00+08:00', NOW))
 
 
 class StateTextTests(unittest.TestCase):
@@ -204,7 +242,8 @@ class ChatPlacementTests(unittest.TestCase):
     def test_returning_chat_receives_only_activities_during_absence(self):
         chat = self.chat('2026-11-12T03:00:00+08:00')
         def activity(stamp, decision):
-            return {'started_at': stamp, 'decision': decision, 'reason': '', 'tools': [],
+            return {'started_at': stamp, 'finished_at': stamp, 'decision': decision, 'reason': '', 'tools': [
+                        {'tool': 'write_file', 'path': decision, 'state': '成功'}],
                     'lab_files_changed': [], 'result': '完成', 'result_reason': '',
                     'current_focus': '', 'next_step': ''}
         self.store.append('fake/autonomy.jsonl', activity('2026-11-12T02:00:00+08:00', 'old'))
@@ -212,7 +251,7 @@ class ChatPlacementTests(unittest.TestCase):
         chat.send('我回来了')
         prompt = json.dumps(self.sent[-1], ensure_ascii=False)
         self.assertIn('finished a drawing', prompt)
-        self.assertNotIn('[completed] old', prompt)
+        self.assertNotIn('write_file old', prompt)
         self.assertIn('about 6 hours', prompt)
         saved = [json.loads(line) for line in (Path(self.store.root) / 'fake' / 'chat.jsonl').read_text(
             encoding='utf-8').splitlines()]
@@ -220,7 +259,7 @@ class ChatPlacementTests(unittest.TestCase):
         last_user = next(row for row in reversed(saved) if row['role'] == 'user')
         self.clock[0] = (datetime.fromisoformat(last_user['time']) + timedelta(minutes=1)).isoformat()
         chat.send('接着聊')
-        self.assertNotIn('Your recorded activities while Lan was away', json.dumps(self.sent[-1], ensure_ascii=False))
+        self.assertIn('finished a drawing', json.dumps(self.sent[-1], ensure_ascii=False))
 
     def test_history_gap_is_shown_to_model_without_changing_log(self):
         chat = self.chat('2026-11-10T08:30:00+08:00')
@@ -231,8 +270,10 @@ class ChatPlacementTests(unittest.TestCase):
     def test_regeneration_uses_original_return_time_and_activity_window(self):
         chat = self.chat('2026-11-12T03:00:00+08:00')
         self.store.append('fake/autonomy.jsonl', {
-            'started_at': '2026-11-12T05:00:00+08:00', 'decision': 'made a drawing', 'reason': '',
-            'tools': [], 'lab_files_changed': [], 'result': '完成', 'result_reason': '',
+            'started_at': '2026-11-12T05:00:00+08:00', 'finished_at': '2026-11-12T06:00:00+08:00',
+            'decision': 'made a drawing', 'reason': '',
+            'tools': [{'tool': 'write_file', 'path': 'made a drawing', 'state': '成功'}],
+            'lab_files_changed': [], 'result': '完成', 'result_reason': '',
             'current_focus': '', 'next_step': ''})
         path = Path(self.store.root) / 'fake' / 'chat.jsonl'
         with path.open('a', encoding='utf-8') as handle:
@@ -249,7 +290,21 @@ class ChatPlacementTests(unittest.TestCase):
         self.assertIn('made a drawing', prompt)
         self.assertNotIn('about 1 day', prompt)
 
-    def test_next_turn_minutes_later_has_no_gap_note(self):
+    def test_followup_retains_the_original_absence_without_guessing_sleep(self):
+        chat = self.chat('2026-11-12T03:00:00+08:00')
+        path = Path(self.store.root) / 'fake' / 'chat.jsonl'
+        with path.open('a', encoding='utf-8') as handle:
+            handle.write(json.dumps({'time': NOW, 'role': 'user', 'content': 'back', 'message_id': 'u2'}) + '\n')
+            handle.write(json.dumps({'time': NOW, 'role': 'assistant', 'content': 'hello', 'message_id': 'a2'}) + '\n')
+        chat.history, chat.rounds = chat.recent()
+        self.clock[0] = '2026-11-12T09:02:00+08:00'
+        chat.send('我不是回来了么？')
+        prompt = json.dumps(self.sent[-1], ensure_ascii=False)
+        self.assertIn('Earlier in this conversation, when she returned', prompt)
+        self.assertIn('about 6 hours', prompt)
+        self.assertIn('sleep after that message is unknown', prompt)
+
+    def test_next_turn_keeps_return_gap_without_claiming_a_new_absence(self):
         chat = self.chat('2026-11-10T08:30:00+08:00')
         chat.send('我回来了')
         self.assertIn('Time since Lan last wrote', self.sent[-1][-2]['content'])
@@ -259,7 +314,7 @@ class ChatPlacementTests(unittest.TestCase):
         from datetime import datetime, timedelta
         self.clock[0] = (datetime.fromisoformat(last) + timedelta(minutes=10)).isoformat()
         chat.send('刚才在忙')
-        self.assertNotIn('Time since Lan last wrote', self.sent[-1][-2]['content'])
+        self.assertIn('Earlier in this conversation, when she returned', self.sent[-1][-2]['content'])
 
     def test_cached_prefix_is_unchanged_by_the_note(self):
         chat = self.chat('2026-11-12T08:55:00+08:00')

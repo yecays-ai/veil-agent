@@ -3789,11 +3789,12 @@ class Chat:
         autonomy_handoff_id = None
         glance_handoff_id = None
         return_activity = None
+        return_gap = ''
         if not autonomy:
             # Ticket 094: the last activity record is given once after a wake; afterwards Peter
             # looks it up himself with autonomy_history.
             from autonomy import activities_since, recent_chat_handoff, recent_glance_handoff
-            from life_state import _time, gap_text
+            from life_state import _time, return_window
             autonomy_handoff_id, handoff = recent_chat_handoff(self.store, self.cfg)
             stamp = self.budget.clock()
             if self.regeneration_parent_message_id:
@@ -3803,13 +3804,18 @@ class Chat:
             current_ids = {message_id, self.regeneration_parent_message_id}
             current_ids.update(row.get('message_id') for row in (user_events or []) if isinstance(row, dict))
             chat_rows = self.store.read(self.path)
-            prior = [r for r in chat_rows if isinstance(r, dict) and r.get('role') == 'user'
-                     and not r.get('recalled') and r.get('message_id') not in current_ids
-                     and _time(r.get('time')) is not None and _time(r.get('time')) < _time(stamp)]
-            if prior and gap_text(chat_rows, stamp, current_ids):
-                return_activity = activities_since(self.store, self.cfg, prior[-1]['time'], stamp)
-                handoff = None
-                if _time(autonomy_handoff_id) and _time(autonomy_handoff_id) > _time(stamp):
+            window = return_window(chat_rows, stamp, current_ids)
+            if window:
+                return_activity = activities_since(self.store, self.cfg, *window)
+                return_ids = [r.get('message_id') for r in chat_rows if isinstance(r, dict)
+                              and r.get('role') == 'user' and _time(r.get('time'))
+                              and _time(r['time']) >= _time(window[1])]
+                from life_state import gap_text
+                return_gap = gap_text(chat_rows, window[1], [*current_ids, *return_ids])
+                if _time(autonomy_handoff_id) and _time(autonomy_handoff_id) <= _time(window[1]):
+                    handoff = None
+                elif self.regeneration_parent_message_id:
+                    handoff = None
                     autonomy_handoff_id = None
             glance_handoff_id, glance_handoff = recent_glance_handoff(self.store, self.cfg)
             handoffs = [item for item in (extra_context, handoff, glance_handoff) if item]
@@ -3827,6 +3833,8 @@ class Chat:
             life_note = self.life_state_context([message_id, self.regeneration_parent_message_id, *current_ids], stamp)
             if life_note:
                 changing += '\n' + life_note
+            if return_gap and 'Time since Lan last wrote' not in life_note:
+                changing += '\nEarlier in this conversation, when she returned: ' + return_gap
             from life_state import time_separator
             past = [row for row in self.history_events if row.get('message_id') not in {message_id, *current_ids,
                     self.regeneration_parent_message_id} and _time(row.get('time')) and _time(row['time']) < _time(stamp)]

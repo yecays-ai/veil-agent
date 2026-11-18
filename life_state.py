@@ -110,6 +110,35 @@ def time_separator(previous, current):
     return f'— {_rough(minutes)} later · {local.strftime("%a %Y-%m-%d %H:%M")} —'
 
 
+def return_window(rows, stamp, exclude_ids=(), followups=2):
+    """Find the last long absence at the current or two preceding user turns."""
+    current = _time(stamp)
+    if current is None:
+        return None
+    excluded = {value for value in exclude_ids if value}
+    turns = []
+    previous_role = None
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        when = _time(row.get('time'))
+        if when is None or when >= current or row.get('message_id') in excluded:
+            continue
+        if row.get('role') == 'user' and not row.get('recalled'):
+            if previous_role == 'user' and turns and (when - turns[-1][1]).total_seconds() < 3600:
+                turns[-1] = (turns[-1][0], when)
+            else:
+                turns.append((when, when))
+            previous_role = 'user'
+        elif row.get('role') == 'assistant':
+            previous_role = 'assistant'
+    turns.append((current, current))
+    for index in range(len(turns) - 1, max(0, len(turns) - followups - 2), -1):
+        if (turns[index][0] - turns[index - 1][1]).total_seconds() >= GAP_NOTE_MINUTES * 60:
+            return turns[index - 1][1].isoformat(), turns[index][0].isoformat()
+    return None
+
+
 def _short(value, limit=80):
     value = str(value or '').strip().replace('\n', ' ')
     return value if len(value) <= limit else value[:limit - 1] + '…'
