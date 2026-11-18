@@ -11,7 +11,8 @@ One fictional day (about 3,000 characters; the real batches that failed were 3,9
 Recorded per model call: max_tokens asked, thinking override, finish_reason, completion tokens. Per run: outcome,
 error, retried without thinking, written/updated/unfixed, the failure record, and the text of every write (read it
 for voice, invented facts and lost facts). `--probe` only sends one tiny request with thinking switched off, to see
-whether the endpoint accepts that switch (for relays).
+whether the endpoint accepts that switch (for relays). `--squeeze N` caps the calls that still think at N tokens
+to reproduce a reply cut off while thinking; the retry without thinking keeps the normal limit.
 """
 import argparse
 import json
@@ -182,6 +183,8 @@ def main():
     parser.add_argument('--out', default='.local-tmp/386-compare')
     parser.add_argument('--list', action='store_true')
     parser.add_argument('--probe', action='store_true')
+    parser.add_argument('--squeeze', type=int, help='cap max_tokens of calls that still think to this, to make the '
+                        'reasoning use the whole limit like the 11-16 failures (the retry without thinking is not capped)')
     args = parser.parse_args()
     from experience_memory import ExperienceMemory, load_settings
     from veil_agent import Budget, Store, load_character, make_model
@@ -213,6 +216,8 @@ def main():
         if spent[0] >= args.cap:
             raise Cap()
         asked_detail = kwargs.pop('detail', False)
+        if args.squeeze and kwargs.get('thinking') != 'disabled':
+            kwargs['max_tokens'] = min(kwargs.get('max_tokens') or args.squeeze, args.squeeze)
         response = raw(messages, detail=True, **kwargs)
         prompt, completion, cached = response[1], response[2], getattr(response[3], 'tokens', response[3]) or 0
         calls.append({'max_tokens': kwargs.get('max_tokens'), 'thinking': kwargs.get('thinking'),
