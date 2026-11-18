@@ -118,6 +118,7 @@ def return_window(rows, stamp, exclude_ids=(), followups=2):
     excluded = {value for value in exclude_ids if value}
     turns = []
     previous_role = None
+    previous_request = None
     for row in rows:
         if not isinstance(row, dict):
             continue
@@ -125,11 +126,14 @@ def return_window(rows, stamp, exclude_ids=(), followups=2):
         if when is None or when >= current or row.get('message_id') in excluded:
             continue
         if row.get('role') == 'user' and not row.get('recalled'):
-            if previous_role == 'user' and turns and (when - turns[-1][1]).total_seconds() < 3600:
+            request = row.get('request_id')
+            same_batch = request == previous_request if request or previous_request else True
+            if previous_role == 'user' and turns and same_batch and (when - turns[-1][1]).total_seconds() < 3600:
                 turns[-1] = (turns[-1][0], when)
             else:
                 turns.append((when, when))
             previous_role = 'user'
+            previous_request = request
         elif row.get('role') == 'assistant':
             previous_role = 'assistant'
     turns.append((current, current))

@@ -3790,6 +3790,7 @@ class Chat:
         glance_handoff_id = None
         return_activity = None
         return_gap = ''
+        incoming_times = {}
         if not autonomy:
             # Ticket 094: the last activity record is given once after a wake; afterwards Peter
             # looks it up himself with autonomy_history.
@@ -3797,12 +3798,22 @@ class Chat:
             from life_state import _time, return_window
             autonomy_handoff_id, handoff = recent_chat_handoff(self.store, self.cfg)
             stamp = self.budget.clock()
+            current_ids = {item for item in (message_id, self.regeneration_parent_message_id) if item}
+            current_ids.update(row.get('message_id') for row in (user_events or [])
+                               if isinstance(row, dict) and row.get('message_id'))
+            for row in self.store.read(f'{self.cfg.id}/incoming-submissions.jsonl'):
+                if (isinstance(row, dict) and row.get('state') == 'received' and row.get('message_id') in current_ids
+                        and _time(row.get('time'))):
+                    incoming_times[row['message_id']] = row['time']
+            for row in self.history_events:
+                if row.get('message_id') in current_ids and _time(row.get('time')):
+                    incoming_times.setdefault(row['message_id'], row['time'])
             if self.regeneration_parent_message_id:
                 parent = next((r for r in self.history_events if r.get('message_id') == self.regeneration_parent_message_id), None)
                 if parent and _time(parent.get('time')):
                     stamp = parent['time']
-            current_ids = {message_id, self.regeneration_parent_message_id}
-            current_ids.update(row.get('message_id') for row in (user_events or []) if isinstance(row, dict))
+            elif incoming_times:
+                stamp = min(incoming_times.values(), key=_time)
             chat_rows = self.store.read(self.path)
             window = return_window(chat_rows, stamp, current_ids)
             if window:
@@ -3814,7 +3825,11 @@ class Chat:
                 return_gap = gap_text(chat_rows, window[1], [*current_ids, *return_ids])
                 if _time(autonomy_handoff_id) and _time(autonomy_handoff_id) <= _time(window[1]):
                     handoff = None
-                elif self.regeneration_parent_message_id:
+            if autonomy_handoff_id:
+                activity = next((r for r in self.store.read(f'{self.cfg.id}/autonomy.jsonl')
+                                 if r.get('started_at') == autonomy_handoff_id), None)
+                finished = _time((activity or {}).get('finished_at') or (activity or {}).get('time'))
+                if finished is None or finished > _time(stamp):
                     handoff = None
                     autonomy_handoff_id = None
             glance_handoff_id, glance_handoff = recent_glance_handoff(self.store, self.cfg)
@@ -4015,6 +4030,8 @@ class Chat:
                 for row in rows:
                     event = {'role': 'user', 'content': row['content'], 'request_id': request_id,
                              'message_id': row.get('message_id') or uuid.uuid4().hex}
+                    if event['message_id'] in incoming_times:
+                        event['time'] = incoming_times[event['message_id']]
                     row_media = row.get('media')
                     if isinstance(row_media, dict):
                         event['media'] = {key: row_media[key] for key in ('id', 'filename', 'mime', 'name', 'kind', 'transcript')

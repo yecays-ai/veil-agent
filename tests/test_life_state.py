@@ -115,6 +115,15 @@ class GapTextTests(unittest.TestCase):
             else:
                 self.assertIsNone(found)
 
+    def test_return_window_counts_silent_requests_but_groups_a_batch(self):
+        rows = chat_rows('2026-11-12T03:00:00+08:00')
+        rows.extend([{'role': 'user', 'time': '2026-11-12T09:00:00+08:00', 'request_id': 'one'},
+                     {'role': 'user', 'time': '2026-11-12T09:00:01+08:00', 'request_id': 'one'},
+                     {'role': 'user', 'time': '2026-11-12T09:01:00+08:00', 'request_id': 'two'},
+                     {'role': 'user', 'time': '2026-11-12T09:02:00+08:00', 'request_id': 'three'}])
+        self.assertIsNone(return_window(rows, '2026-11-12T09:03:00+08:00'))
+        self.assertIsNotNone(return_window(rows[:-1], '2026-11-12T09:02:00+08:00'))
+
     def test_failed_activity_separates_failure_from_plan(self):
         from autonomy import activities_since
         import tempfile
@@ -303,6 +312,77 @@ class ChatPlacementTests(unittest.TestCase):
         self.assertIn('Earlier in this conversation, when she returned', prompt)
         self.assertIn('about 6 hours', prompt)
         self.assertIn('sleep after that message is unknown', prompt)
+
+    def test_queued_message_uses_received_time_even_after_long_lock_wait(self):
+        chat = self.chat('2026-11-12T08:50:00+08:00')
+        self.store.append('fake/incoming-submissions.jsonl', {
+            'state': 'received', 'time': NOW, 'content': 'hello', 'message_id': 'queued'})
+        self.store.append('fake/autonomy.jsonl', {
+            'started_at': '2026-11-12T10:00:00+08:00', 'finished_at': '2026-11-12T10:05:00+08:00',
+            'decision': 'later activity', 'reason': '', 'tools': [], 'lab_files_changed': [],
+            'result': '完成', 'result_reason': '', 'current_focus': '', 'next_step': ''})
+        self.clock[0] = '2026-11-12T11:00:00+08:00'
+        chat.send('hello', message_id='queued', user_events=[{'content': 'hello', 'message_id': 'queued',
+                                                               'persisted': True}])
+        self.assertNotIn('about 2 hours', json.dumps(self.sent[-1], ensure_ascii=False))
+        self.assertNotIn('later activity', json.dumps(self.sent[-1], ensure_ascii=False))
+        saved = self.store.read('fake/chat.jsonl')
+        self.assertEqual(next(row['time'] for row in saved if row.get('message_id') == 'queued'), NOW)
+
+    def test_regeneration_excludes_later_activity_even_without_a_return_gap(self):
+        chat = self.chat('2026-11-12T08:50:00+08:00')
+        path = Path(self.store.root) / 'fake' / 'chat.jsonl'
+        with path.open('a', encoding='utf-8') as handle:
+            handle.write(json.dumps({'time': NOW, 'role': 'user', 'content': 'hello', 'message_id': 'u2',
+                                     'request_id': 'r2'}) + '\n')
+            handle.write(json.dumps({'time': NOW, 'role': 'assistant', 'content': 'hi', 'message_id': 'a2',
+                                     'request_id': 'r2'}) + '\n')
+        self.store.append('fake/autonomy.jsonl', {
+            'started_at': '2026-11-12T10:00:00+08:00', 'finished_at': '2026-11-12T10:05:00+08:00',
+            'decision': 'future activity', 'reason': '', 'tools': [], 'lab_files_changed': [],
+            'result': '完成', 'result_reason': '', 'current_focus': '', 'next_step': ''})
+        chat.history, chat.rounds = chat.recent()
+        chat.prepare_regeneration('a2')
+        self.clock[0] = '2026-11-12T11:00:00+08:00'
+        chat.send('hello', persist_user=False, regeneration_parent_message_id='u2')
+        self.assertNotIn('future activity', json.dumps(self.sent[-1], ensure_ascii=False))
+        self.assertEqual(self.store.read('fake/autonomy-chat-handoffs.jsonl'), [])
+
+    def test_regeneration_excludes_activity_started_before_but_finished_after_reply(self):
+        chat = self.chat('2026-11-12T08:50:00+08:00')
+        path = Path(self.store.root) / 'fake' / 'chat.jsonl'
+        with path.open('a', encoding='utf-8') as handle:
+            handle.write(json.dumps({'time': NOW, 'role': 'user', 'content': 'hello', 'message_id': 'u2',
+                                     'request_id': 'r2'}) + '\n')
+            handle.write(json.dumps({'time': NOW, 'role': 'assistant', 'content': 'hi', 'message_id': 'a2',
+                                     'request_id': 'r2'}) + '\n')
+        self.store.append('fake/autonomy.jsonl', {
+            'started_at': '2026-11-12T08:55:00+08:00', 'finished_at': '2026-11-12T09:05:00+08:00',
+            'decision': 'finished later', 'reason': '', 'tools': [], 'lab_files_changed': [],
+            'result': '完成', 'result_reason': '', 'current_focus': '', 'next_step': ''})
+        chat.history, chat.rounds = chat.recent()
+        chat.prepare_regeneration('a2')
+        self.clock[0] = '2026-11-12T11:00:00+08:00'
+        chat.send('hello', persist_user=False, regeneration_parent_message_id='u2')
+        self.assertNotIn('finished later', json.dumps(self.sent[-1], ensure_ascii=False))
+
+    def test_regeneration_keeps_activity_completed_before_original_turn(self):
+        chat = self.chat('2026-11-12T08:50:00+08:00')
+        path = Path(self.store.root) / 'fake' / 'chat.jsonl'
+        with path.open('a', encoding='utf-8') as handle:
+            handle.write(json.dumps({'time': NOW, 'role': 'user', 'content': 'hello', 'message_id': 'u2',
+                                     'request_id': 'r2'}) + '\n')
+            handle.write(json.dumps({'time': NOW, 'role': 'assistant', 'content': 'hi', 'message_id': 'a2',
+                                     'request_id': 'r2'}) + '\n')
+        self.store.append('fake/autonomy.jsonl', {
+            'started_at': '2026-11-12T08:51:00+08:00', 'finished_at': '2026-11-12T08:55:00+08:00',
+            'decision': 'before original', 'reason': '', 'tools': [], 'lab_files_changed': [],
+            'result': '完成', 'result_reason': '', 'current_focus': '', 'next_step': ''})
+        chat.history, chat.rounds = chat.recent()
+        chat.prepare_regeneration('a2')
+        self.clock[0] = '2026-11-12T11:00:00+08:00'
+        chat.send('hello', persist_user=False, regeneration_parent_message_id='u2')
+        self.assertIn('before original', json.dumps(self.sent[-1], ensure_ascii=False))
 
     def test_next_turn_keeps_return_gap_without_claiming_a_new_absence(self):
         chat = self.chat('2026-11-10T08:30:00+08:00')
