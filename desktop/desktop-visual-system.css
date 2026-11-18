@@ -172,9 +172,9 @@ body:not(.detached-window) .life-nav{border:0;border-radius:0;background:transpa
 .agenda-empty{margin:0;padding:6px 0;color:var(--veil-soft);font-size:12px}
 .agenda-add{width:max-content;margin:10px 0 0 8px;border:0;border-radius:9px;background:var(--veil-accent-soft);padding:9px 13px;color:var(--veil-accent);font-size:12px;transition:background .16s,color .16s}
 .agenda-add:hover{background:color-mix(in srgb,var(--veil-accent) 16%,var(--veil-paper))}
-.life-calendar-days button{position:relative}
-.life-calendar-days .calendar-day-moods{position:absolute;top:3px;right:3px;display:flex;flex-direction:column;align-items:center;gap:1px;padding:0;line-height:1;font-size:10px;pointer-events:none}
-.life-calendar-days .calendar-mood{display:block;min-height:11px;padding:0;font-size:10px;font-family:"Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",sans-serif}
+.life-calendar-days .calendar-day-line{display:flex;align-items:center;justify-content:center;gap:1px;height:13px;padding:0;line-height:1}
+.life-calendar-days .calendar-mood{display:block;padding:0;font:11px/1 "Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",sans-serif}
+.life-calendar-days .calendar-day-line .calendar-day-marker{margin-left:2px}
 .agenda-time{flex:none;min-width:38px;color:var(--veil-accent);font-size:12px;font-variant-numeric:tabular-nums}
 .mood-slots{display:flex;gap:10px}
 .mood-slot{display:flex;align-items:center;gap:7px;min-height:40px;padding:4px 12px 4px 6px;border:1px solid var(--veil-rule);border-radius:999px;background:transparent;color:var(--veil-soft);font-size:12px;transition:background .15s,border-color .15s}

@@ -971,8 +971,10 @@ function lifeCalendar(selected,records){
     const number=document.createElement('span');number.className='calendar-day-number';number.textContent=String(date.getDate());cell.append(number);
     // A dot only where someone wrote something for that day: an event, a one-off todo, or a mood. Daily todos never add one.
     const count=records.filter(x=>(x.kind==='event'||lifeOneOffNote(x))&&x.date===key).length,mood=lifeMoodsFor(key),moodText=[mood.Lan&&'Lan '+mood.Lan.emoji,mood.Peter&&'Peter '+mood.Peter.emoji].filter(Boolean);
-    if(count||moodText.length){cell.classList.add('has-record');const marker=document.createElement('span');marker.className='calendar-day-marker';marker.setAttribute('aria-hidden','true');cell.append(marker)}
-    if(moodText.length){const stack=document.createElement('span');stack.className='calendar-day-moods';stack.setAttribute('aria-hidden','true');for(const person of ['Lan','Peter']){const slot=document.createElement('span');slot.className='calendar-mood '+person.toLowerCase();slot.textContent=mood[person]?.emoji||'';stack.append(slot)}cell.append(stack)}
+    // Under the number: the two moods in one line (Lan, then Peter), with the dot after them when something is written.
+    if(count||moodText.length){cell.classList.add('has-record');const line=document.createElement('span');line.className='calendar-day-line';line.setAttribute('aria-hidden','true');
+      for(const person of ['Lan','Peter'])if(mood[person]){const face=document.createElement('span');face.className='calendar-mood '+person.toLowerCase();face.textContent=mood[person].emoji;line.append(face)}
+      if(count){const marker=document.createElement('span');marker.className='calendar-day-marker';line.append(marker)}cell.append(line)}
     if(key===lifeToday())cell.classList.add('today');if(key===lifeDay)cell.classList.add('selected');
     const aria=[date.toLocaleDateString('zh-CN',{year:'numeric',month:'long',day:'numeric'}),count?`${count} 项安排或待办`:'',moodText.length?'心情 '+moodText.join('、'):''].filter(Boolean).join('，');
     cell.setAttribute('aria-label',aria);cell.setAttribute('aria-pressed',String(key===lifeDay));cell.onclick=()=>{lifeDay=key;$('life-day').value=key;renderLife()};days.append(cell)
