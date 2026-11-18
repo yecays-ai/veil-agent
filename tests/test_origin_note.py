@@ -67,16 +67,17 @@ class HistoryTests(unittest.TestCase):
         chat.send('你怎么想起发这个')
         contents = [m['content'] for m in self.sent[-1]]
         own = next(c for c in contents if c.startswith('你看看那个帖子？'))
-        self.assertIn('[p.s. sent on your own during an autonomous wake, after: the garden forum]', own)
+        self.assertIn('[p.s. sent on your own at 2026-11-12T03:10:00+08:00 during an autonomous wake, after: the garden forum]', own)
         self.assertIn('普通回复', contents)  # an ordinary reply gets no note
         stored = [json.loads(l) for l in (Path(self.store.root) / 'fake' / 'chat.jsonl').read_text(
             encoding='utf-8').splitlines()]
         self.assertEqual(stored[0]['content'], '你看看那个帖子？')
 
-    def test_message_without_origin_is_unchanged(self):
+    def test_message_without_origin_still_shows_wake_time(self):
         chat = self.chat('')
         chat.send('hi')
-        self.assertIn('你看看那个帖子？', [m['content'] for m in self.sent[-1]])
+        self.assertTrue(any('你看看那个帖子？\n[p.s. sent on your own at 2026-11-12T03:10:00+08:00' in m['content']
+                            for m in self.sent[-1]))
 
 
 if __name__ == '__main__':

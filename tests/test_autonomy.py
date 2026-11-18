@@ -71,6 +71,20 @@ daily_budget_cny = "2"
         self.assertEqual(peter['autonomy']['min_alarm_gap_minutes'], 15)
         self.assertEqual(peter['tools']['max_steps'], 20)
 
+    def test_wake_knows_how_long_user_was_away_despite_own_messages(self):
+        path = self.store.root / 'test' / 'chat.jsonl'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().astimezone()
+        rows = [{'role': 'user', 'content': 'going to sleep', 'time': (stamp - timedelta(hours=6)).isoformat()},
+                {'role': 'assistant', 'content': 'hi', 'time': (stamp - timedelta(minutes=5)).isoformat(),
+                 'autonomy_run_id': 'wake1'}]
+        path.write_text(''.join(json.dumps(row) + '\n' for row in rows), encoding='utf-8')
+        text = self.controller._context()
+        self.assertIn('about 6 hours', text)
+        self.assertIn('going to sleep', text)
+        self.assertIn('sleep after that message is unknown', text)
+        self.assertIn('on your own 1 time(s)', text)
+
     @staticmethod
     def message_call(call_id, text):
         return SimpleNamespace(id=call_id, function=SimpleNamespace(
@@ -91,7 +105,7 @@ daily_budget_cny = "2"
         self.assertEqual(len({row['autonomy_tool_call_id'] for row in rows}), 1)
         self.assertEqual([(event['kind'], event['text']) for event in self.hub.snapshot(0)['events']],
                          [('assistant', text)])
-        self.assertEqual([message['content'] for message in chat.history], [text])
+        self.assertTrue(chat.history[0]['content'].startswith(text + '\n[p.s. sent on your own at '))
         self.assertEqual(len(self.store.read('test/autonomy.jsonl')), 1)
         self.assertEqual(model.call_count, 2)
         self.assertEqual(controller.rows[-1]['current_focus'], '实验室整理')
@@ -170,7 +184,7 @@ daily_budget_cny = "2"
         self.assertEqual(row['content'], '写了点东西，你看看。')
         self.assertEqual(row['autonomy_origin'], 'your lab')
         history = [m['content'] for m in chat.recent()[0]]
-        self.assertIn('[p.s. sent on your own during an autonomous wake, after: your lab]', history[0])
+        self.assertIn('during an autonomous wake, after: your lab]', history[0])
 
     def test_configured_autonomy_limit_allows_twenty_real_tool_steps(self):
         self.activity.set(True)
@@ -691,7 +705,7 @@ daily_budget_cny = "2"
         self.assertIn('Decision: ...\nReason: ...\nFocus: ...\nNext step: ...', prompt)
         self.assertIn('This time is yours. Nobody is waiting on you.', prompt)
         self.assertIn('make something, read, write to Lan, rest, or nothing at all.', prompt)
-        self.assertIn('If you want to talk to Lan, use send_message (up to three per wake).', prompt)
+        self.assertIn('Talk naturally as yourself; you do not need to report', prompt)
         self.assertIn("It's for you, not a report.", prompt)
         self.assertNotIn('Choose a safe, useful task to continue', prompt)
         self.assertNotIn('Do not force activity just to produce output.', prompt)

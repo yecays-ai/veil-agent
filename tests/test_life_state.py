@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from life_state import gap_text, state_text
+from life_state import gap_text, state_text, time_separator
 from veil_agent import Budget, Character, Chat, Store
 
 NOW = '2026-11-12T09:00:00+08:00'
@@ -56,7 +56,7 @@ class GapTextTests(unittest.TestCase):
         text = gap_text(chat_rows('2026-11-12T06:00:00+08:00'), NOW)
         self.assertIn('about 3 hours', text)
         self.assertIn('her last message was today at 06:00', text)
-        self.assertIn('Do not state the length of the gap', text)
+        self.assertIn('may state the duration', text)
         self.assertIn('does not mean she was upset', text)
 
     def test_two_days(self):
@@ -76,6 +76,13 @@ class GapTextTests(unittest.TestCase):
         self.assertIn('about 2 days', text)
         self.assertIn('on your own 2 time(s), the latest at 2026-11-12 07:30', text)
 
+    def test_regular_proactive_messages_do_not_hide_a_long_absence(self):
+        rows = chat_rows('2026-11-12T03:00:00+08:00', [f'2026-11-12T0{hour}:00:00+08:00' for hour in range(4, 9)])
+        text = gap_text(rows, NOW)
+        self.assertIn('about 6 hours', text)
+        self.assertIn('on your own 5 time(s)', text)
+        self.assertIn('sleep after that message is unknown', text)
+
     def test_current_message_is_excluded(self):
         rows = chat_rows('2026-11-10T08:30:00+08:00') + [
             {'time': NOW, 'role': 'user', 'content': '我回来了', 'message_id': 'now'}]
@@ -85,6 +92,16 @@ class GapTextTests(unittest.TestCase):
     def test_no_previous_message_or_bad_time(self):
         self.assertEqual(gap_text([], NOW), '')
         self.assertEqual(gap_text([{'role': 'user', 'time': 'broken'}], NOW), '')
+
+    def test_recalled_user_message_does_not_reset_absence(self):
+        rows = chat_rows('2026-11-10T08:30:00+08:00') + [
+            {'time': '2026-11-12T08:55:00+08:00', 'role': 'user', 'content': 'hidden', 'recalled': True}]
+        self.assertIn('about 2 days', gap_text(rows, NOW))
+        self.assertNotIn('hidden', gap_text(rows, NOW))
+
+    def test_history_boundary_uses_actual_gap(self):
+        self.assertIn('about 3 hours later', time_separator('2026-11-12T06:00:00+08:00', NOW))
+        self.assertEqual(time_separator('2026-11-12T08:30:00+08:00', NOW), '')
 
 
 class StateTextTests(unittest.TestCase):
@@ -183,6 +200,54 @@ class ChatPlacementTests(unittest.TestCase):
         for message in messages[:-2]:
             self.assertNotIn('Time since Lan last wrote', message['content'])
             self.assertNotIn('整理实验室旧文件', message['content'])
+
+    def test_returning_chat_receives_only_activities_during_absence(self):
+        chat = self.chat('2026-11-12T03:00:00+08:00')
+        def activity(stamp, decision):
+            return {'started_at': stamp, 'decision': decision, 'reason': '', 'tools': [],
+                    'lab_files_changed': [], 'result': '完成', 'result_reason': '',
+                    'current_focus': '', 'next_step': ''}
+        self.store.append('fake/autonomy.jsonl', activity('2026-11-12T02:00:00+08:00', 'old'))
+        self.store.append('fake/autonomy.jsonl', activity('2026-11-12T05:00:00+08:00', 'finished a drawing'))
+        chat.send('我回来了')
+        prompt = json.dumps(self.sent[-1], ensure_ascii=False)
+        self.assertIn('finished a drawing', prompt)
+        self.assertNotIn('[completed] old', prompt)
+        self.assertIn('about 6 hours', prompt)
+        saved = [json.loads(line) for line in (Path(self.store.root) / 'fake' / 'chat.jsonl').read_text(
+            encoding='utf-8').splitlines()]
+        from datetime import datetime, timedelta
+        last_user = next(row for row in reversed(saved) if row['role'] == 'user')
+        self.clock[0] = (datetime.fromisoformat(last_user['time']) + timedelta(minutes=1)).isoformat()
+        chat.send('接着聊')
+        self.assertNotIn('Your recorded activities while Lan was away', json.dumps(self.sent[-1], ensure_ascii=False))
+
+    def test_history_gap_is_shown_to_model_without_changing_log(self):
+        chat = self.chat('2026-11-10T08:30:00+08:00')
+        chat.send('我回来了')
+        self.assertIn('later ·', json.dumps(self.sent[-1], ensure_ascii=False))
+        self.assertNotIn('later ·', (Path(self.store.root) / 'fake' / 'chat.jsonl').read_text(encoding='utf-8'))
+
+    def test_regeneration_uses_original_return_time_and_activity_window(self):
+        chat = self.chat('2026-11-12T03:00:00+08:00')
+        self.store.append('fake/autonomy.jsonl', {
+            'started_at': '2026-11-12T05:00:00+08:00', 'decision': 'made a drawing', 'reason': '',
+            'tools': [], 'lab_files_changed': [], 'result': '完成', 'result_reason': '',
+            'current_focus': '', 'next_step': ''})
+        path = Path(self.store.root) / 'fake' / 'chat.jsonl'
+        with path.open('a', encoding='utf-8') as handle:
+            handle.write(json.dumps({'time': NOW, 'role': 'user', 'content': 'back', 'message_id': 'u2',
+                                     'request_id': 'r2'}) + '\n')
+            handle.write(json.dumps({'time': NOW, 'role': 'assistant', 'content': 'hello', 'message_id': 'a2',
+                                     'request_id': 'r2'}) + '\n')
+        chat.history, chat.rounds = chat.recent()
+        chat.prepare_regeneration('a2')
+        self.clock[0] = '2026-11-13T09:00:00+08:00'
+        chat.send('back', persist_user=False, regeneration_parent_message_id='u2')
+        prompt = json.dumps(self.sent[-1], ensure_ascii=False)
+        self.assertIn('about 6 hours', prompt)
+        self.assertIn('made a drawing', prompt)
+        self.assertNotIn('about 1 day', prompt)
 
     def test_next_turn_minutes_later_has_no_gap_note(self):
         chat = self.chat('2026-11-10T08:30:00+08:00')

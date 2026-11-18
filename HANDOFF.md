@@ -1,5 +1,11 @@
 # HANDOFF
 
+## 工单 387 交接（时间与自主活动连续性）
+- `life_state.gap_text` 按用户消息独立计算并忽略撤回；聊天历史按相邻消息时间插分隔，自主消息小注带时间；`autonomy.activities_since` 只按离开时段记录构造一次性摘要，重新生成以原用户消息时间为界。
+- 自主醒来复用间隔计算，并提示消息可以自然交流，不必汇报；不修改自主次数、睡眠设置、人设或预算。活动摘要优先于聊天历史裁剪。
+- 自动化测试为虚构数据；真实模型和 Lan 真机验收待做，特别观察是否仍催睡、连续聊天是否机械报时、自主消息是否像本人。QQ/邮件路径需独立核实。
+- 日历第二步：用户要求先完成时间连续性；开工时按原方案，并按实际日期计算星期，修改或取消约定有歧义时不操作。
+
 ## 工单 386 交接（自动整理失败）
 - 每次整理、重试及草稿修改请求发出前，按该请求自身的消息长度重新估算并检查每日上限；草稿修改超预算时保留未修复草稿。
 - 代码：`experience_memory.py` 的 `_request`（一次调用，`detail=True` 拿 finish_reason，可传 `thinking='disabled'`）、`_call_model`（截断就关思考重试一次；`self._retried` 为真时这一轮后续调用直接关思考）、`_record_failure` / `failures()`（`<角色>/experience-memory-failures.jsonl`，`FAILURES_KEPT=20`、`FAILURE_CHARS=4000`）、`retry_at()`（最近一个 checkpoint/start 之后的 error 数：30 分钟、2 小时、第二天 0 点；`run_if_due(force=True)` 不受限）、`_problem` 超长时要求 `limit - FIX_MARGIN`（500）。状态多了 `retry_at`、`failures_kept`、`last.retried_without_thinking`、`last.unfixed`；`desktop/chat.js` `renderExperience` 用它们出一句话。
