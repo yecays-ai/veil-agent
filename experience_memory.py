@@ -481,6 +481,16 @@ class ExperienceMemory:
         """The reply text. Ticket 386: a reply cut off before it holds a JSON object (a thinking model that used the
         whole output limit on its reasoning) is asked once more at once with thinking off; both are kept in the
         failure record, and one still unusable after that says plainly that it was cut off."""
+        if self._retried:
+            # Already cut off once in this run: the fix asks go without thinking straight away (11-18 real run:
+            # each fix was cut off again and needed its own retry).
+            output, finish, used = self._request(messages, stage, thinking='disabled')
+            if isinstance(_parse_json_object(output), dict):
+                return output
+            self._record_failure(stage, 'cut_off' if finish == 'length' else 'unreadable', thinking='disabled',
+                                 finish_reason=finish, completion_tokens=used,
+                                 output=output if isinstance(output, str) else '')
+            raise UserError('经历整理的修改没有返回可用的结果。')
         output, finish, used = self._request(messages, stage)
         if isinstance(_parse_json_object(output), dict):
             return output

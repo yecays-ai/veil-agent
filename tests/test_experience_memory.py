@@ -549,15 +549,16 @@ class WritingTests(Fixture):
         self.assertEqual(self.feature.run_if_due(), 'skipped')
         self.assertIsNone(self.feature.status()['retry_at'])   # a finished run starts the count again
 
-    def test_a_cut_off_fix_is_retried_too_and_an_unfixable_draft_keeps_its_text(self):
+    def test_after_a_cut_off_the_fixes_skip_thinking_and_an_unfixable_draft_keeps_its_text(self):
         self.add(long_talk(DAY1))
         self.clock[0] = f'{DAY1}T12:00:00+08:00'
-        self.reply([{'title': '太长', 'text': '长' * 650}])
         self.replies.append(('', 'length'))
+        self.reply([{'title': '太长', 'text': '长' * 650}])
         self.replies.append(json.dumps({'fixes': [{'ref': 'd0', 'text': '长' * 640}]}))
         self.replies.append(json.dumps({'fixes': [{'ref': 'd0', 'text': '长' * 630}]}))
         self.assertEqual(self.feature.run_if_due(), 'skipped')
         self.assertEqual(self.kwargs[2]['thinking'], 'disabled')
+        self.assertEqual(self.kwargs[3]['thinking'], 'disabled')   # once cut off, the rest of the run skips thinking
         unfixed = [r for r in self.failure_rows() if r['what'] == 'unfixed_draft']
         self.assertEqual((unfixed[0]['title'], unfixed[0]['draft']), ('太长', '长' * 630))
         self.assertIn('630 characters', unfixed[0]['problem'])
