@@ -144,13 +144,15 @@ class LifeRecords:
                     'date':original.get('date'),'time':original.get('time','')}] if original else [])[-50:],
                 'completed_at':stamp if state=='completed' and (not prior or prior.get('state')!='completed') else
                     prior.get('completed_at') if prior and state=='completed' else None}
+            # A lost log line from the record's last day is written before the record moves on: if that fails too,
+            # nothing is saved, so the next attempt still sees how that day ended and tries again.
+            if original and original.get('repeat')=='daily': self._catch_up_last_day(original,stamp[:10])
             if prior: rows[rows.index(original)]=row
             else: rows.append(row)
             self._save(rows)
             # The log is compared with what it already says for today, not only with the record's previous state:
             # a tick saved while the log could not be written is caught up on the next save, and a note that just
             # became daily gets its first line. Repeating the same save adds nothing.
-            if original and original.get('repeat')=='daily': self._catch_up_last_day(original,stamp[:10])
             if repeat=='daily' and self._logged_today(row['id'],stamp[:10])!=_check_state(state):
                 self._log_check(row,state,actor,stamp)
         if (actor=='Peter' and prior and prior.get('created_by')=='Lan' and callable(self.on_lan_record_changed)

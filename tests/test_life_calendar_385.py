@@ -132,6 +132,24 @@ class DailyLogTests(unittest.TestCase):
         lines = [l for l in self.records.checks_path.read_text(encoding='utf-8').splitlines() if '"day"' in l]
         self.assertEqual(len(lines), 1)
 
+    def test_when_putting_yesterdays_line_back_fails_again_nothing_moves_on_and_the_next_save_retries(self):
+        self.records.ensure_checks_started('2026-11-18')
+        todo = self.records.write({'kind': 'note', 'title': '写日记', 'repeat': 'daily'}, 'Lan')
+        with mock.patch.object(life_records, 'now', return_value='2026-11-18T23:50:00+08:00'):
+            with mock.patch.object(LifeRecords, '_log_check', side_effect=OSError('locked')):
+                with self.assertRaises(OSError):
+                    self.records.write({'id': todo['id'], 'state': 'completed'}, 'Lan')
+        with mock.patch.object(life_records, 'now', return_value='2026-11-19T09:00:00+08:00'):
+            with mock.patch.object(LifeRecords, '_log_check', side_effect=OSError('locked')):
+                with self.assertRaises(OSError):
+                    self.records.write({'id': todo['id'], 'state': 'completed'}, 'Lan')
+            saved = next(r for r in self.records.read() if r['id'] == todo['id'])
+            self.assertEqual(saved['updated_at'], '2026-11-18T23:50:00+08:00')   # the record did not move on
+            self.records.write({'id': todo['id'], 'state': 'completed'}, 'Lan')
+        days = self.records.daily_checks()['days']
+        self.assertEqual(days['2026-11-18'][todo['id']]['at'], '2026-11-18T23:50:00+08:00')
+        self.assertEqual(days['2026-11-19'][todo['id']]['state'], 'completed')
+
     def test_an_untick_whose_log_line_failed_is_corrected_on_its_own_day(self):
         self.records.ensure_checks_started('2026-11-18')
         todo = self.records.write({'kind': 'note', 'title': '写日记', 'repeat': 'daily'}, 'Lan')
