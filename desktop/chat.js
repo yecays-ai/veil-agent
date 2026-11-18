@@ -792,9 +792,19 @@ function renderExperience(x){
   let last='还没有整理过';
   if(x.last){const at=new Date(x.last.time);const when=Number.isNaN(at.getTime())?'':`${at.getMonth()+1}月${at.getDate()}日 ${memoryTime(x.last.time)}`;
     if(x.last.kind==='budget')last=when+' 今天已到 ¥'+x.daily_budget_cny+' 上限，没有再整理';
-    else if(x.last.kind==='error')last=when+' 整理失败，下次再试';
+    else if(x.last.kind==='error'){
+      // Ticket 386: say why in one line, and when it is tried again (30 minutes, 2 hours, then the next day).
+      const detail=String(x.last.detail||'');
+      const why=detail.includes('思考用完了字数')?(x.last.retried_without_thinking?'思考用完了字数，关掉思考重试也没成':'思考用完了字数，今天的上限不够再试')
+        :detail.includes('请求失败')?'模型请求失败':'模型没有写出能用的结果';
+      let again='下次再试';
+      if(x.retry_at){const r=new Date(x.retry_at);if(!Number.isNaN(r.getTime()))again=(r.getDate()!==new Date().getDate()?'明天':memoryTime(x.retry_at))+' 再试'}
+      last=when+' 没整理成：'+why+'，'+again;}
     else if(x.last.written||x.last.updated)last=when+' 记了 '+(x.last.written||0)+' 条'+(x.last.updated?'，补充了 '+x.last.updated+' 条':'');
-    else last=when+' 看过了，他觉得没什么要记的';}
+    else if(!x.last.unfixed)last=when+' 看过了，他觉得没什么要记的';
+    else last=when+' 看过了';
+    if(x.last.kind==='checkpoint'&&x.last.retried_without_thinking)last+='（第一次思考用完了字数，关掉思考重试成功）';
+    if(x.last.kind==='checkpoint'&&x.last.unfixed)last+='；有 '+x.last.unfixed+' 条草稿修不好没存上，原文留在失败记录里';}
   $('experience-status').textContent=experienceEnabled
     ?'自动整理经历：开 · 上次：'+last+' · 攒了 '+x.pending_chars+' / '+x.min_chars+' 字 · 今天花了 ¥'+(x.spent_today||'?')+'（上限 ¥'+x.daily_budget_cny+'）'
     :'自动整理经历：关（不会再写新的，也不会把近几天的放进聊天；已经写下的还在，可以逐条删）';
