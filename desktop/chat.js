@@ -1128,8 +1128,8 @@ async function openLifeRecord(id){
   setPage('life');lifeKind='all';document.querySelectorAll('[data-life-kind]').forEach(x=>x.classList.toggle('active',x.dataset.lifeKind==='all'));
   await loadLife();let row=lifeRows.find(x=>x.id===id);
   // An old completed note can be folded out of the list; ask for it by id before saying it is gone.
-  if(!row){try{const r=await api('/api/life',{find:id});const d=await r.json();if(r.ok&&d.found)row=d.record}catch(e){}}
-  if(!row){notify('这条记录已经删掉了。','error');return}
+  if(!row){let gone=false;try{const r=await api('/api/life',{find:id});const d=await r.json();if(r.ok&&d.found)row=d.record;else if(r.ok&&d.found===false)gone=true}catch(e){}
+    if(!row){notify(gone?'这条记录已经删掉了。':'没能读取这条记录，请稍后再点一次。','error');return}}
   if(row.date&&row.repeat!=='daily'){lifeDay=row.date;renderLife()}showLife(row)
 }
 window.veilDesktop.onOpenLifeRecord?.(id=>{if(typeof id==='string')openLifeRecord(id)});
