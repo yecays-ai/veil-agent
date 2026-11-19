@@ -4037,9 +4037,11 @@ class Chat:
 
         while recalled_memories and bound(history, recalled_memories, auxiliary_context) > limit:
             recalled_memories.pop()
-        if self.memory is not None and len(recalled_memories) != len(recalled):
+        if len(recalled_memories) != len(recalled) and self.memory is not None:
             # Ticket 391: say plainly that these were dropped only for length, not because they were irrelevant.
-            self.memory.note_budget_dropped(recalled_memory_refs)
+            note = getattr(self.memory, 'note_budget_dropped', None)
+            if callable(note):
+                note(recalled_memory_refs)
         self.turn_memory_refs = (recalled_memory_refs if len(recalled_memories) == len(recalled)
                                  else [])
         if self.memory and len(recalled_memories) != len(recalled):
@@ -4117,10 +4119,11 @@ class Chat:
         self._log_context(text, autonomy, request_id, head, profile_context, stable, history, recalled_memories,
                           background_details, short_term_details, [*auxiliary_context, *runtime_required], tool_schema, user,
                           bound(history))
-        if self.memory is not None and not skip_recall:
+        save_debug = getattr(self.memory, 'save_recall_debug', None) if self.memory is not None else None
+        if callable(save_debug) and not skip_recall:
             # Ticket 391: IDs only, no query or memory text; the panel reads this next to the context log.
             try:
-                self.memory.save_recall_debug(request_id)
+                save_debug(request_id)
             except UserError:
                 pass
         try:
