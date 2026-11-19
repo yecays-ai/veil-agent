@@ -1,5 +1,10 @@
 # HANDOFF
 
+## 工单 399 交接（自主活动预检与参数容错）
+- `Chat.tool_schemas`：自主模式下检测 Docker；不可用移除 `run_lab_python`。
+- `Chat.tool_arguments`：JSON → `ast.literal_eval`；`profile_append` 纯文本转 text。
+- 不改权限、记忆、召回。
+
 ## 工单 398 交接（自主活动红字最小修复）
 - `set_next_wake` 太近：夹到最早允许时间，结果里说明；超过 7 天/静默/暂停仍拒绝。
 - `send_message` 表情包不存在：错误里附前 12 个可用 `pack/name`。
