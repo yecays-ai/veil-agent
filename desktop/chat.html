@@ -8,68 +8,69 @@
   <link rel="stylesheet" href="chat.css">
   <link rel="stylesheet" href="desktop-redesign.css">
   <link rel="stylesheet" href="desktop-visual-system.css">
+  <link rel="stylesheet" href="glass.css">
   <style id="custom-style" nonce="veil-custom-css"></style>
 </head>
 <body>
   <div id="window-background" aria-hidden="true"></div>
   <header id="detached-header" class="detached-header" hidden><div class="detached-person"><img class="peter-avatar" src="assets/pep.png" alt=""><span><strong id="detached-title">Peter</strong></span></div><button id="merge-view" type="button">收回主窗口</button></header>
-  <div id="ended">服务已退出。重新打开 Peter 可再次连接。</div>
-  <div id="offline">和 Peter 的本机服务暂时断开。<button id="reconnect" type="button">重新连接</button></div>
+  <div id="ended">服务已退出</div>
+  <div id="offline">本机服务断开<button id="reconnect" type="button">重新连接</button></div>
   <header class="topbar">
     <div class="identity"><div><h1>Peter</h1><small id="header-model-name">正在连接</small><span id="title" hidden>Peter</span></div></div>
     <div class="header-status" aria-label="Peter 状态">
       <span class="header-status-item"><i id="autonomy-indicator" class="status-dot is-pending"></i><span>自主活动：<b id="header-autonomy-status">读取中</b></span></span>
       <span class="header-wake"><span data-lucide="clock" data-size="14"></span><span>下次唤醒</span><b id="header-next-wake">读取中…</b></span>
-      <label class="header-model" title="Peter 用哪个模型说话，下一句开始生效"><span data-lucide="cpu" data-size="14"></span><select id="model-switch" aria-label="Peter 用的模型" disabled><option>读取中…</option></select></label>
+      <label class="header-model" title="下一句生效"><span data-lucide="cpu" data-size="14"></span><select id="model-switch" aria-label="Peter 用的模型" disabled><option>读取中…</option></select></label>
     </div>
-    <div class="top-actions"><button id="favorites-filter" type="button" aria-pressed="false" aria-label="只看收藏的消息" title="只看收藏的消息"><span data-lucide="star"></span></button><button id="rail-toggle" type="button" aria-label="显示今日与 Peter 的活动" aria-pressed="false" title="显示今日与 Peter 的活动"><span data-lucide="panel-right-open"></span></button><button id="expand" aria-label="铺满可用桌面区域，再点一次恢复小窗" title="铺满可用桌面区域，再点一次恢复小窗"><span data-lucide="maximize-2"></span></button><button id="collapse" aria-label="收起聊天窗口" title="收起"><span data-lucide="minimize-2"></span></button></div>
+    <div class="top-actions"><button id="favorites-filter" type="button" aria-pressed="false" aria-label="只看收藏的消息" title="只看收藏的消息"><span data-lucide="star"></span></button><button id="rail-toggle" type="button" aria-label="显示今日与 Peter 的活动" aria-pressed="false" title="显示今日与 Peter 的活动"><span data-lucide="panel-right-open"></span></button><button id="expand" aria-label="铺满桌面，再点恢复小窗" title="铺满桌面，再点恢复小窗"><span data-lucide="maximize-2"></span></button><button id="collapse" aria-label="收起聊天窗口" title="收起"><span data-lucide="minimize-2"></span></button></div>
   </header>
   <nav class="navigation" aria-label="主要页面">
     <div class="sidebar-person"><button id="avatar-change" class="avatar-btn" type="button" aria-label="更换头像" title="点击更换头像"><img class="peter-avatar" src="assets/pep.png" alt=""></button><input id="avatar-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden><span><b>Peter</b></span><button id="sidebar-toggle" type="button" aria-label="展开侧栏" title="展开侧栏"><span data-lucide="panel-left-open"></span></button></div>
-    <button class="nav-item active" data-page="chat" aria-current="page" title="拖出可变成独立窗口"><span data-lucide="message-square"></span><span class="nav-label">聊天</span></button>
-    <button id="activity-tab" class="nav-item" data-page="activity" title="拖出可变成独立窗口"><span data-lucide="activity"></span><span class="nav-label">自主活动</span></button>
-    <button class="nav-item" data-page="context" title="拖出可变成独立窗口"><span data-lucide="layers"></span><span class="nav-label">上下文</span></button>
-    <button class="nav-item" data-page="memory" title="拖出可变成独立窗口"><span data-lucide="brain"></span><span class="nav-label">记忆</span></button>
-    <button class="nav-item" data-page="life" title="拖出可变成独立窗口"><span data-lucide="calendar-heart"></span><span class="nav-label">生活记录</span></button>
-    <button class="nav-item" data-page="mcp" title="拖出可变成独立窗口"><span data-lucide="plug"></span><span class="nav-label">MCP</span></button>
-    <button class="nav-item" data-page="more" title="拖出可变成独立窗口"><span data-lucide="more-horizontal"></span><span class="nav-label">设置</span></button>
+    <button class="nav-item active" data-page="chat" aria-current="page" title="拖出成独立窗口"><span data-lucide="message-square"></span><span class="nav-label">聊天</span></button>
+    <button id="activity-tab" class="nav-item" data-page="activity" title="拖出成独立窗口"><span data-lucide="activity"></span><span class="nav-label">自主活动</span></button>
+    <button class="nav-item" data-page="context" title="拖出成独立窗口"><span data-lucide="layers"></span><span class="nav-label">上下文</span></button>
+    <button class="nav-item" data-page="memory" title="拖出成独立窗口"><span data-lucide="brain"></span><span class="nav-label">记忆</span></button>
+    <button class="nav-item" data-page="life" title="拖出成独立窗口"><span data-lucide="calendar-heart"></span><span class="nav-label">生活记录</span></button>
+    <button class="nav-item" data-page="mcp" title="拖出成独立窗口"><span data-lucide="plug"></span><span class="nav-label">MCP</span></button>
+    <button class="nav-item" data-page="more" title="拖出成独立窗口"><span data-lucide="more-horizontal"></span><span class="nav-label">设置</span></button>
     <div class="sidebar-foot"><span>下次唤醒</span><b id="sidebar-next-wake">读取中…</b></div>
   </nav>
   <div id="toasts" role="status" aria-live="polite"></div>
   <main id="log" class="page active" data-page-view="chat"><div class="col" id="col" aria-live="polite"></div></main>
   <section id="activity-view" class="page" data-page-view="activity" hidden>
     <div class="page-heading activity-heading"><div><h2>Peter · 活动记录</h2></div><div class="activity-heading-actions"><span id="activity-state" class="state-pill">读取中…</span><button id="merge-activity" type="button" hidden>合并回主窗口</button></div></div>
-    <article class="surface activity-overview"><div><span class="status-dot is-pending" id="activity-work-dot"></span><strong id="activity-work-status">等待下一次工具调用</strong></div><span id="activity-count">0 条记录</span></article>
-    <div class="activity-runtime"><div><span class="label">自主活动</span><strong id="activity-status">状态正在同步</strong></div><div><span class="label">下次唤醒</span><strong id="next-wake">正在读取…</strong><span id="next-wake-reason" hidden></span></div><button id="activity-toggle" disabled>读取中…</button></div>
+    <article class="surface activity-overview"><div><span class="status-dot is-pending" id="activity-work-dot"></span><strong id="activity-work-status">等待工具调用</strong></div><span id="activity-count">0 条记录</span></article>
+    <div class="activity-runtime"><div><span class="label">自主活动</span><strong id="activity-status">状态同步中</strong></div><div><span class="label">下次唤醒</span><strong id="next-wake">正在读取…</strong><span id="next-wake-reason" hidden></span></div><button id="activity-toggle" disabled>读取中…</button></div>
     <div class="activity-runtime"><div><span class="label">今天已醒</span><strong id="wakes-today">正在读取…</strong></div><div><span class="label">夜间安静</span><strong id="quiet-status">正在读取…</strong></div><button id="quiet-toggle" disabled>读取中…</button></div>
-    <div class="activity-runtime"><div><span class="label">主动瞄一眼</span><strong id="glance-status">状态正在同步</strong></div><div><span class="label">下次瞄一眼</span><strong id="glance-next">等待同步…</strong></div><button id="glance-toggle" disabled>读取中…</button></div>
-    <div class="activity-runtime"><div><span class="label">Codex 监视</span><strong id="codex-watch-status">状态正在同步</strong></div><div><span class="label">检查间隔</span><strong>10 秒</strong></div><button id="codex-watch-toggle" disabled>读取中…</button></div>
+    <div class="activity-runtime"><div><span class="label">主动瞄一眼</span><strong id="glance-status">状态同步中</strong></div><div><span class="label">下次瞄一眼</span><strong id="glance-next">等待同步…</strong></div><button id="glance-toggle" disabled>读取中…</button></div>
+    <div class="activity-runtime"><div><span class="label">Codex 监视</span><strong id="codex-watch-status">状态同步中</strong></div><div><span class="label">检查间隔</span><strong>10 秒</strong></div><button id="codex-watch-toggle" disabled>读取中…</button></div>
     <div class="activity-filters" role="group" aria-label="筛选活动记录">
       <button class="active" data-activity-filter="all">全部</button><button data-activity-filter="tool">工具调用</button><button data-activity-filter="memory">记忆活动</button><button data-activity-filter="autonomy">自主活动</button><button data-activity-filter="glance">瞄一眼</button><button data-activity-filter="long_task">长期任务</button>
     </div>
-    <section id="activity-timeline" class="activity-timeline" aria-live="polite"><p class="muted">还没有工具或自主活动记录。</p></section>
+    <section id="activity-timeline" class="activity-timeline" aria-live="polite"><p class="muted">还没有记录</p></section>
     <div id="activity-history" hidden></div><span id="last-activity-time" hidden></span><span id="last-activity-summary" hidden></span><pre id="activity-record" hidden></pre><details id="activity-details" hidden></details>
-    <div class="runtime-row"><span id="service-status-detail">服务运行状态：正在连接…</span><span id="service-status" hidden>服务：连接中…</span><button id="exit-service" disabled>退出 Agent 服务</button></div>
+    <div class="runtime-row"><span id="service-status-detail">服务：连接中…</span><span id="service-status" hidden>服务：连接中…</span><button id="exit-service" disabled>退出 Agent 服务</button></div>
   </section>
   <section id="context-view" class="page" data-page-view="context" hidden>
     <div class="page-heading"><div><h2>实时上下文</h2></div><span id="context-notes-next" class="muted"></span></div>
     <section class="surface context-block" id="work-checkpoint-block" hidden><h3>工作断点 <small id="work-checkpoint-summary" class="muted"></small></h3><div id="work-checkpoint" class="context-list" aria-live="polite"></div><button id="work-checkpoint-close" class="menu_button" hidden>结束这个断点</button></section>
     <section class="surface context-block"><h3>聊天时活动 <small class="muted">最近 10 次请求</small></h3><div id="context-turns" class="context-list" aria-live="polite"><p class="muted">还没有记录。</p></div></section>
-    <section class="surface context-block" id="voice-style-block" hidden><h3>他平时怎么说话 <small id="voice-style-summary" class="muted"></small></h3><p class="muted">每次请求都带在人设后面，换哪个模型都一样。上面写规则，下面写样例：「&gt;」开头是你说的话，其余每一行是他的一个气泡，空一行是另一段。改完点保存，下一句话就生效。</p><textarea id="voice-style-text" class="voice-style-text" spellcheck="false" rows="14"></textarea><div class="memory-footer"><span id="voice-style-note" class="muted"></span><div><button id="voice-style-toggle" type="button"></button> <button id="voice-style-save" type="button">保存</button></div></div></section>
+    <section class="surface context-block" id="voice-style-block" hidden><h3>他平时怎么说话 <small id="voice-style-summary" class="muted"></small></h3><p class="muted">「&gt;」是你，其余每行一个气泡，空行分段。改完保存，下一句生效。</p><textarea id="voice-style-text" class="voice-style-text" spellcheck="false" rows="14"></textarea><div class="memory-footer"><span id="voice-style-note" class="muted"></span><div><button id="voice-style-toggle" type="button"></button> <button id="voice-style-save" type="button">保存</button></div></div></section>
     <section class="surface context-block"><h3>工具清单 <small id="context-tools-summary" class="muted"></small></h3><div id="context-tools" class="context-list" aria-live="polite"><p class="muted">还没有记录。</p></div></section>
-    <section class="surface context-block"><h3>短期便签 <small class="muted">进行中的会放进他的上下文</small></h3><div id="context-notes" class="context-list" aria-live="polite"><p class="muted">还没有便签。</p></div></section>
+    <section class="surface context-block"><h3>短期便签 <small class="muted">进行中的会进上下文</small></h3><div id="context-notes" class="context-list" aria-live="polite"><p class="muted">还没有便签。</p></div></section>
   </section>
   <section id="memory-view" class="page" data-page-view="memory" hidden>
     <div class="page-heading"><div><h2 id="memory-heading">最近</h2></div></div>
     <div class="memory-groups" role="group" aria-label="记忆分组"><button class="active" data-memory-group="recent">最近</button><button data-memory-group="us">我们俩</button><button data-memory-group="peter">他自己</button><button data-memory-group="system">系统和能力</button><button data-memory-group="archived">已归档</button><button id="memory-reload" type="button" aria-label="刷新记忆" title="刷新记忆"><span data-lucide="rotate-ccw"></span></button></div>
-    <div class="memory-toolbar"><label for="memory-search">搜索记忆</label><input id="memory-search" type="search" placeholder="搜索记忆…（标题、内容、标签都能搜）"></div>
-    <div class="memory-layout"><section id="memory-list" class="surface memory-list" aria-label="Ombre 记忆列表"><p class="muted">正在读取 Ombre 记忆…</p></section><article id="memory-detail" class="surface memory-detail"><p class="muted">点上面一条记忆查看内容。</p></article></div>
+    <div class="memory-toolbar"><label for="memory-search">搜索记忆</label><input id="memory-search" type="search" placeholder="搜索记忆…"></div>
+    <div class="memory-layout"><section id="memory-list" class="surface memory-list" aria-label="Ombre 记忆列表"><p class="muted">读取记忆中…</p></section><article id="memory-detail" class="surface memory-detail"><p class="muted">点上面一条看内容</p></article></div>
     <div id="experience-row" class="memory-footer experience-row" hidden><span id="experience-status" class="muted"></span><div><button id="experience-toggle" type="button"></button></div></div>
     <div id="judge-row" class="memory-footer experience-row" hidden><span id="judge-status" class="muted"></span><div><button id="judge-toggle" type="button"></button></div></div>
-    <div class="memory-footer"><span id="memory-count" class="muted">尚未读取</span><div><span id="memory-unavailable" class="muted" hidden>Ombre 记忆暂不可用</span><button id="memory-panel" hidden>高级管理 · Ombre Dashboard <span data-lucide="external-link" data-size="14"></span></button></div></div>
+    <div class="memory-footer"><span id="memory-count" class="muted">尚未读取</span><div><span id="memory-unavailable" class="muted" hidden>记忆暂不可用</span><button id="memory-panel" hidden>高级管理 · Ombre Dashboard <span data-lucide="external-link" data-size="14"></span></button></div></div>
   </section>
   <section id="life-view" class="page" data-page-view="life" hidden>
-    <div class="life-shell"><aside class="life-nav surface"><div class="life-brand"><span>✦</span><div><b>生活记录中心</b><small>Peter &amp; Lan</small></div></div><div class="life-filter" role="group" aria-label="只看谁写的"><button data-life-owner="all" aria-pressed="true" title="两个人写的都显示">全部</button><button data-life-owner="Peter" aria-pressed="false" title="只看 Peter 写的">Peter</button><button data-life-owner="Lan" aria-pressed="false" title="只看你写的">Lan</button></div><div class="life-section" role="group" aria-label="记录视图"><small>记录</small><button data-life-kind="all" class="active">总览</button><button data-life-kind="event">日程</button><button data-life-kind="note">待办</button><button data-life-kind="plan">计划</button><button data-life-kind="completed">已完成</button></div><label class="life-date" hidden>查看日期<input id="life-day" type="date"></label></aside><section class="life-main"><header class="life-header"><div><h2 id="life-heading">生活记录</h2><p>把日子留在这里，之后还可以一起翻阅。</p></div><button class="life-add" id="life-new">新建记录</button></header><div class="life-toolbar"><span>日程和待办</span><span id="life-count">正在读取记录…</span></div><div id="life-records" class="life-records"></div></section><aside class="life-detail surface" id="life-detail"><div class="detail-empty"><span>✧</span><h3>留一点空间给今天</h3><p>选择一条记录，或者写下一个想记住的瞬间。</p><button id="life-detail-new">写一条记录　＋</button></div></aside></div>
+    <div class="life-shell"><aside class="life-nav surface"><div class="life-brand"><span>✦</span><div><b>生活记录中心</b><small>Peter &amp; Lan</small></div></div><div class="life-filter" role="group" aria-label="只看谁写的"><button data-life-owner="all" aria-pressed="true" title="两个人写的都显示">全部</button><button data-life-owner="Peter" aria-pressed="false" title="只看 Peter 写的">Peter</button><button data-life-owner="Lan" aria-pressed="false" title="只看你写的">Lan</button></div><div class="life-section" role="group" aria-label="记录视图"><small>记录</small><button data-life-kind="all" class="active">总览</button><button data-life-kind="event">日程</button><button data-life-kind="note">待办</button><button data-life-kind="plan">计划</button><button data-life-kind="completed">已完成</button></div><label class="life-date" hidden>查看日期<input id="life-day" type="date"></label></aside><section class="life-main"><header class="life-header"><div><h2 id="life-heading">生活记录</h2><p>把日子留在这里</p></div><button class="life-add" id="life-new">新建记录</button></header><div class="life-toolbar"><span>日程和待办</span><span id="life-count">读取记录中…</span></div><div id="life-records" class="life-records"></div></section><aside class="life-detail surface" id="life-detail"><div class="detail-empty"><span>✧</span><h3>留一点空间给今天</h3><p>选一条，或写一条</p><button id="life-detail-new">写一条记录　＋</button></div></aside></div>
   </section>
   <section id="mcp-view" class="page" data-page-view="mcp" hidden>
     <div class="page-heading"><div><h2>MCP</h2></div><button id="mcp-refresh" type="button">刷新</button></div>
@@ -78,12 +79,12 @@
     <button id="mcp-add" type="button">添加服务</button>
     <form id="mcp-form" class="surface model-form" hidden>
       <h3 id="mcp-form-heading">添加本地服务</h3>
-      <label>服务 ID<input id="mcp-id" required pattern="(?!.*__)[a-z](?:[a-z0-9_]*[a-z0-9])?" maxlength="32" title="小写字母开头，只含小写字母、数字和单下划线，且不以下划线结尾" placeholder="例如 local_tools"></label>
+      <label>服务 ID<input id="mcp-id" required pattern="(?!.*__)[a-z](?:[a-z0-9_]*[a-z0-9])?" maxlength="32" title="小写开头，a-z 0-9 _，不以 _ 结尾" placeholder="例如 local_tools"></label>
       <label>启动命令<input id="mcp-command" required maxlength="500" placeholder="例如 python"></label>
       <label>参数（每行一个）<textarea id="mcp-args" rows="4" placeholder="-m&#10;your_mcp_server"></textarea></label>
       <label>工作目录（可选）<input id="mcp-cwd" maxlength="1000"></label>
       <label>调用权限<select id="mcp-permission"><option value="ask">每次询问</option><option value="direct">直接调用</option></select></label>
-      <p class="muted">直接调用允许该服务的全部工具执行，包括可能修改文件或向外发送数据的工具。</p>
+      <p class="muted">全部工具含改文件、发数据</p>
       <div class="tool-row"><button type="submit">保存服务</button><button id="mcp-cancel" type="button">取消</button></div>
     </form>
   </section>
@@ -93,23 +94,23 @@
       <p id="models-error" class="setting-hint models-error" role="alert" hidden></p>
       <p id="models-migration" class="muted" role="status" hidden></p>
       <div class="setting-row"><span>Peter 本人</span><select id="use-peter" aria-label="Peter 本人用的模型"></select></div>
-      <p class="setting-hint">聊天、QQ 和邮件用这个，下一句开始生效。</p>
+      <p class="setting-hint">下一句生效</p>
       <div class="setting-row"><span>自主活动</span><select id="use-autonomy" aria-label="自主活动用的模型"></select></div>
-      <p class="setting-hint">自主活动单独用这个 API 模型；没有单独选择时跟随聊天模型。</p>
+      <p class="setting-hint">留空跟随聊天模型</p>
       <div class="setting-row"><span>委派任务</span><select id="use-delegate" aria-label="委派任务用的模型"></select></div>
-      <p class="setting-hint">多轮搜索、阅读和记忆查询交给单独模型；只读工具，费用计入共享上限。留空可关闭。</p>
+      <p class="setting-hint">留空关闭</p>
       <div class="setting-row"><span>瞄一眼</span><select id="use-glance" aria-label="瞄一眼用的模型"></select></div>
-      <p class="setting-hint">瞄一眼只用这个模型，聊天不受影响，下一次瞄一眼开始生效。</p>
+      <p class="setting-hint">只用于瞄一眼</p>
       <div class="setting-row"><span>记忆后台</span><select id="use-background" aria-label="记忆后台用的模型"></select></div>
-      <p class="setting-hint" id="background-hint">Ombre 给记忆打标签、整理短期便签用这个。换了以后，完全退出 Peter 再打开才生效。</p>
+      <p class="setting-hint" id="background-hint">重启后生效</p>
       <div class="setting-row"><span>费用上限</span><label>每天 ¥<input id="limit-daily" type="number" min="1" max="1000" step="1" inputmode="decimal"></label><label>每月 ¥<input id="limit-monthly" type="number" min="1" max="30000" step="1" inputmode="decimal"></label><button id="save-limits" type="button">保存</button></div>
-      <h4>接口</h4><div id="endpoint-list" class="model-list"><p class="muted">还没有添加接口。</p></div>
+      <h4>接口</h4><div id="endpoint-list" class="model-list"><p class="muted">还没有接口</p></div>
       <button id="add-endpoint" type="button">添加接口</button>
       <form id="endpoint-form" class="model-form" hidden>
         <label>名字<input id="endpoint-name" maxlength="40" placeholder="例如 jiushi"></label>
         <label>接口地址<input id="endpoint-url" maxlength="300" placeholder="https://xxx.com/v1"></label>
         <label>API Key<input id="endpoint-key" type="password" maxlength="500" autocomplete="off" placeholder="sk-…"></label>
-        <p class="setting-hint" id="endpoint-key-hint">编辑时 key 留空就保持原来的。</p>
+        <p class="setting-hint" id="endpoint-key-hint">留空即保持原 key</p>
         <div class="tool-row"><button type="submit">保存接口</button><button type="button" id="endpoint-cancel">取消</button></div>
       </form>
       <h4>模型</h4><div id="model-list" class="model-list"></div>
@@ -121,10 +122,10 @@
         <div class="segmented" role="group" aria-label="计费方式"><button type="button" data-billing="call">按次</button><button type="button" data-billing="tokens">按 token</button></div>
         <label data-billing-field="call">每次 ¥<input id="model-per-call" type="number" min="0" step="any" inputmode="decimal" placeholder="0.06"></label>
         <label data-billing-field="tokens">输入 ¥/百万 tokens<input id="model-input-price" type="number" min="0" step="any" inputmode="decimal"></label>
-        <label data-billing-field="tokens">缓存输入 ¥/百万 tokens（不知道就留空）<input id="model-cached-price" type="number" min="0" step="any" inputmode="decimal"></label>
+        <label data-billing-field="tokens">缓存输入 ¥/百万 tokens<input id="model-cached-price" type="number" min="0" step="any" inputmode="decimal"></label>
         <label data-billing-field="tokens">输出 ¥/百万 tokens<input id="model-output-price" type="number" min="0" step="any" inputmode="decimal"></label>
         <label>最长输入（tokens）<input id="model-max-input" type="number" min="4096" max="2000000" step="1" value="32768"></label>
-        <label class="check-row"><input id="model-thinking" type="checkbox" checked>思考模式（DeepSeek 一定要开）</label>
+        <label class="check-row"><input id="model-thinking" type="checkbox" checked>思考模式（DeepSeek 必开）</label>
         <div class="tool-row"><button type="submit">保存模型</button><button type="button" id="model-cancel">取消</button></div>
       </form>
     </article>
@@ -132,16 +133,16 @@
       <div class="segmented" role="group" aria-label="工作台开关"><button type="button" id="workbench-on" aria-pressed="false">开</button><button type="button" id="workbench-off" aria-pressed="true">关</button></div></div>
       <div id="workbench-folders" class="model-list"></div>
       <button id="workbench-add" type="button">添加项目文件夹</button>
-      <h4>Peter 在工作台里可以上的网站</h4>
+      <h4>工作台里能上的网站</h4>
       <div id="workbench-hosts" class="model-list"></div>
       <form id="workbench-host-form" class="tool-row"><input id="workbench-host-input" type="text" placeholder="例如 github.com" aria-label="网站地址"><button type="submit">添加网站</button></form>
       <p id="workbench-note" class="wb-note" role="status" hidden></p>
     </article>
-    <article class="surface models-card" id="windows-apps-card"><div class="section-heading"><div><h3>Peter 可以操作的软件</h3></div></div>
+    <article class="surface models-card" id="windows-apps-card"><div class="section-heading"><div><h3>可操作的软件</h3></div></div>
       <div id="windows-apps-list" class="model-list"></div>
-      <h4>现在打开着、可以添加的软件</h4>
+      <h4>现在打开着的软件</h4>
       <div id="windows-apps-candidates" class="model-list"></div>
-      <p class="wb-note">想添加的软件，先在电脑上打开它，再点「添加」。</p>
+      <p class="wb-note">先在电脑上打开它，再添加</p>
     </article>
     <article class="surface appearance-card"><div class="section-heading"><div><h3>外观</h3></div><button id="reset-appearance" class="quiet-button">恢复默认</button></div>
       <div class="setting-row"><span>主题</span><div class="segmented" role="group" aria-label="主题"><button data-theme-choice="light">日间</button><button data-theme-choice="dark">夜间</button></div></div>
@@ -155,15 +156,15 @@
         <label class="setting-row range-row" for="more-opacity"><span>设置</span><input id="more-opacity" type="range" min="20" max="100" step="1"><output id="more-opacity-value"></output></label>
       </div>
       <label class="setting-row range-row" for="bubble-opacity"><span>聊天气泡</span><input id="bubble-opacity" type="range" min="55" max="100" step="1"><output id="bubble-opacity-value"></output></label>
-      <div class="background-settings"><div class="section-heading"><div><h3>背景图片</h3><p id="background-name">尚未选择图片</p></div><div><button id="choose-background" type="button">上传图片</button><button id="clear-background" type="button" disabled>移除</button></div></div>
+      <div class="background-settings"><div class="section-heading"><div><h3>背景图片</h3><p id="background-name">还没选图片</p></div><div><button id="choose-background" type="button">上传图片</button><button id="clear-background" type="button" disabled>移除</button></div></div>
         <label class="setting-row range-row" for="background-opacity"><span>图片透明度</span><input id="background-opacity" type="range" min="0" max="100" step="1"><output id="background-opacity-value"></output></label>
       </div>
       <label class="custom-css-label" for="custom-css">自定义 CSS</label><textarea id="custom-css" spellcheck="false" placeholder="/* 例如：修改界面圆角或文字颜色 */&#10;.surface { border-radius: 18px; }" maxlength="20000"></textarea>
       <div class="custom-css-actions"><button id="apply-css" type="button">应用 CSS</button></div>
       <label class="setting-row range-row" for="pet-size"><span>Peter 大小</span><input id="pet-size" type="range" min="160" max="720" step="1"><output id="pet-size-value"></output></label>
-      <p class="setting-hint">Peter 也可以直接拖动四角调整大小，人物比例会保持不变。</p>
+      <p class="setting-hint">拖四角可调大小</p>
     </article>
-    <article class="surface tools-card"><h3>常用工具</h3><div class="tool-row"><button id="new-chat" title="保留旧聊天，开始一段新聊天">新对话</button><button data-cmd="/cost">花费</button><button id="capability-record">能力记录</button></div><details id="capability-details"><summary>查看 Peter 的能力与更新历史</summary><h4>当前能力</h4><pre id="current-capabilities-text"></pre><h4>能力更新记录</h4><pre id="capability-record-text"></pre></details><p class="runtime-detail" id="runtime-status">服务状态：正在连接…</p><details id="runtime-details" hidden><summary>查看持续性故障详情</summary><pre id="runtime-detail-text"></pre></details></article>
+    <article class="surface tools-card"><h3>常用工具</h3><div class="tool-row"><button id="new-chat" title="新聊天，旧聊天保留">新对话</button><button data-cmd="/cost">花费</button><button id="capability-record">能力记录</button></div><details id="capability-details"><summary>查看能力与更新</summary><h4>当前能力</h4><pre id="current-capabilities-text"></pre><h4>能力更新记录</h4><pre id="capability-record-text"></pre></details><p class="runtime-detail" id="runtime-status">服务状态：连接中…</p><details id="runtime-details" hidden><summary>查看故障详情</summary><pre id="runtime-detail-text"></pre></details></article>
   </section>
   <footer id="composer-footer">
     <div id="selection-bar" class="selection-bar" hidden><span id="selection-count">已选 0 条</span><div><button id="selection-all" type="button">全选</button><button id="selection-delete" type="button" class="danger">删除</button><button id="selection-cancel" type="button">取消</button></div></div>
@@ -173,9 +174,9 @@
       <button id="composer-more" type="button" aria-label="添加内容" aria-expanded="false" title="添加内容"><span data-lucide="plus"></span></button>
       <input id="image-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
       <div class="chat-input-shell"><textarea id="box" rows="1" placeholder="和 Peter 说点什么…"></textarea><button id="voice-hold" type="button" aria-label="录制语音消息" aria-pressed="false" title="录制语音消息"><span data-lucide="mic"></span></button></div>
-      <button id="request-reply" type="button" aria-label="请求回复" title="请求回复：让 Peter 现在回你"><span data-lucide="sparkles"></span></button>
-      <button id="send" aria-label="发送"><span data-lucide="arrow-up"></span></button>
-      <span id="speech-status" role="status" aria-live="polite">点击麦克风开始录音；再次点击后用 SenseVoice 转成文字</span>
+      <button id="request-reply" type="button" aria-label="请求回复" title="请求回复"><span data-lucide="sparkles"></span></button>
+      <button id="send" aria-label="发送"><span data-lucide="send"></span></button>
+      <span id="speech-status" role="status" aria-live="polite">点麦克风录音，再点转文字</span>
       <span id="voice-record-status" class="voice-record-status" role="status" aria-live="polite" hidden><span id="voice-record-label"></span><button id="voice-record-cancel" type="button" aria-label="删除这条录音" title="删除这条录音" hidden>删除</button></span>
       <section id="composer-tray" class="composer-tray" aria-label="添加内容" hidden>
         <button id="sticker-button" type="button"><span data-lucide="smile"></span><span>表情包</span></button>
@@ -191,7 +192,7 @@
         <div id="sticker-tools" class="sticker-tools" hidden>
           <div class="sticker-row"><input id="sticker-new-pack" maxlength="30" placeholder="新图集名字，比如 丑猫"><button id="sticker-add-pack" type="button">新建图集</button></div>
           <div class="sticker-row"><input id="sticker-pack-name" maxlength="30" placeholder="当前图集改名"><button id="sticker-rename-pack" type="button">改名</button><button id="sticker-delete-pack" type="button" class="danger">删除图集</button></div>
-          <textarea id="sticker-links" rows="4" placeholder="粘贴表情包链接，每行「名字：链接」；没写名字就用文件名。名字最多 10 个字。"></textarea>
+          <textarea id="sticker-links" rows="4" placeholder="每行「名字：链接」"></textarea>
           <div class="sticker-row"><button id="sticker-add-links" type="button">添加到当前图集</button><input id="sticker-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden><button id="sticker-upload" type="button">上传本地图片</button></div>
         </div>
       </section>
@@ -204,7 +205,7 @@
       <label id="virtual-card-note-label">留言<input id="virtual-card-note" maxlength="240" placeholder="写一句话"></label>
       <label id="virtual-card-icon-label" hidden>图标（表情或记号）<input id="virtual-card-icon" maxlength="24" value="🎁" placeholder="🎁"></label>
       <label id="virtual-card-gift-label" hidden>礼物内容<textarea id="virtual-card-content" minlength="1" maxlength="500" rows="3" placeholder="写下礼物内容"></textarea></label>
-      <p>这是聊天里的虚拟互动，不涉及真实资金或实物。</p>
+      <p>仅虚拟互动</p>
       <footer><button type="submit" id="virtual-card-submit"></button></footer>
     </form>
   </dialog>
@@ -212,11 +213,12 @@
     <header class="rail-date"><strong id="rail-date-label"></strong><span id="rail-weekday"></span></header>
     <section class="rail-section rail-today"><div class="rail-heading"><h2>今天</h2><button type="button" data-rail-page="life">全部记录</button></div><button class="rail-row" type="button" data-rail-page="life"><span class="rail-dot warm"></span><span><b>生活记录</b><small id="rail-life-count">打开今天的记录</small></span><span data-lucide="chevron-right"></span></button></section>
     <section class="rail-section"><div class="rail-heading"><h2>Peter 的活动</h2><button type="button" data-rail-page="activity">查看全部</button></div><button class="rail-row" type="button" data-rail-page="activity"><span id="rail-activity-dot" class="rail-dot"></span><span><b id="rail-activity-status">正在连接</b><small id="rail-activity-count">读取活动记录…</small></span><span data-lucide="chevron-right"></span></button><div class="rail-wake"><span>下次唤醒</span><b id="rail-next-wake">读取中…</b></div></section>
-    <section id="rail-approval" class="rail-section rail-approval" hidden><div class="rail-heading"><h2>等待处理</h2></div><button id="rail-approval-open" class="rail-row" type="button"><span class="rail-dot warm"></span><span><b>Peter 想运行一个操作</b><small>回到聊天中确认</small></span><span data-lucide="chevron-right"></span></button></section>
+    <section id="rail-approval" class="rail-section rail-approval" hidden><div class="rail-heading"><h2>等待处理</h2></div><button id="rail-approval-open" class="rail-row" type="button"><span class="rail-dot warm"></span><span><b>Peter 想运行一个操作</b><small>回聊天里确认</small></span><span data-lucide="chevron-right"></span></button></section>
   </aside>
   <script src="icons.js"></script>
   <script src="nowhere-activity.js"></script>
   <script src="emoji-data.js"></script>
   <script src="chat.js"></script>
+  <script src="fold-settings.js"></script>
 </body>
 </html>
