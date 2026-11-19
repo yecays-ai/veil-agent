@@ -5,7 +5,7 @@
 - 接线：`AutonomyController._threads_text()` / `_reads_text()` 仅在 `cfg.autonomy['threads']`（默认 True）时生成；`_context()` 放在「上次活动 + 前 2 次」之后；32KB 裁剪时先丢「已读未变」，再走原有 earlier/life/lab/travel/thoughts，最后才丢线索和上次活动。
 - 配置：`veil_agent.py` 解析 `[autonomy] threads`（非 bool 直接报错）；`characters/peter/character.toml` 写 `threads = true`。
 - 测试：`tests/test_autonomy.py` 新增 7 项（跨 4 次醒来、失败不说完成、未确认动作、单次不生成、可关闭、未变/变化文件、截断/状态工具/越界路径）。本机 DSH 沙箱会拒绝 `tempfile` 的 0700 目录，测试用 `.local-tmp/run_tests.py`（不提交）：autonomy 50/50 通过。
-- 真实模型：`.local-tmp/389/compare_389.py` 只用本机 `DEEPSEEK_API_KEY`、只发合成活动记录，基线/带线索各 3 次，约 ¥0.016；结论写进 `STATUS.md`。要点：基线有一次准备直接重做上次失败的写入；带线索的三次都先核实未确认状态，没有一次把失败说成完成，其中一次自己说「四个醒来一直在同一条下巴/嘴上打转」而选择休息。
+- 真实模型：`.local-tmp/389/compare_389.py` 只用本机 `DEEPSEEK_API_KEY`、只发合成活动记录，两轮共 12 次、约 ¥0.031（最终一轮 6 次、¥0.016，含「已读未变」块）；结论写进 `STATUS.md`。要点：基线有一次准备直接重做上次失败的写入；带线索的三次都先核实未确认状态，没有一次把失败说成完成，其中一次自己说「四个醒来一直在同一条下巴/嘴上打转」而选择休息。
 - 待真机：连续 4 次以上醒来的实际体验；Lan 电脑上真实路径/mtime 是否如预期；夜间醒来多时线索行是否显得重复（每次重算，内容稳定）。
 - 明确没做：不强制阻止重读（只给证据，保留实时状态核实）；没有给线索加「别再继续」的判断；`lab/diary` 这类单文件项目在有 3 个更新项目时会被挤掉。
 - 回退：`[autonomy] threads = false` 重开，即与合并前一致；无数据迁移。
