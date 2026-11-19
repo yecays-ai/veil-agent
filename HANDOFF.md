@@ -1,5 +1,15 @@
 # HANDOFF
 
+## 工单 391 交接（召回逐候选诊断）
+- 代码：`memory_agent.Memory.context` 每轮建 `last_recall_debug`（query 长度 + sha256 前 12 位、Ombre 候选 id、visibility 排除 id+原因、向量候选、判官候选/选中、去重/冷却 id+原因、注入、开场、budget_dropped、failure）；新增 `visibility_reason()`（archived/tombstone/dont_surface/deleted/source/hidden/missing/unavailable）、`note_budget_dropped()`、`save_recall_debug()`（`data/<角色>/recall-diagnostics.jsonl`，滚动 200 行）。
+- `recall_judge.RecallJudge.last_choice`：status（skipped/running/chosen/empty/failed）、candidates 数、picked ids、vector ids；`_failed` 也会标 failed。
+- 接线：`Chat` 在 `_log_context` 之后调用 `save_recall_debug(request_id)`；因长度 pop 记忆时先 `note_budget_dropped(recalled_memory_refs)`。自主活动/瞄一眼不走这条（没有普通聊天 UI 用途）。
+- 页面：`web_agent.live_context` 把 `recall-diagnostics` 按 request_id 并进每轮 `recall`；`desktop/chat.js` 显示一行中文摘要，`<details>候选明细` 默认收起，展开才显示 id 与原因。
+- 测试：`tests/test_recall_diagnostics.py`（5 项）、`tests/test_recall_judge.py` 断言 last_choice、`tests/test_live_context.py` 并表；相关 113 项通过。
+- 已知限制：Ombre 不返回逐条分数，诊断只能说明"进没进候选"，不能给相关性分数；判官只读卡片，诊断不含正文，无法解释"判官为什么没选"；feel 情绪记忆、开场记忆只记 id，不逐个说明可见性；自主活动不记。
+- 回退：删除 `recall-diagnostics.jsonl` 即清空；没有配置开关，不影响召回。
+- 下一步（B1 判断）：需要固定问题集 + 完整记忆副本的隔离实验，确认"漏在候选发现"的比例；本轮没有跑，不能据此改召回。
+
 ## 工单 390 交接（普通聊天工作断点）
 - 代码：新增 `work_checkpoint.py`（`WorkCheckpoint`）。`capture()` 从 `InvestigationCheckpoint` 的 goal + evidence 和 `LongTaskStore` 投影：只把 `read_only=False` 且 `state=成功` 记为已确认，`结果未知` 记为未确认，`被拒绝/出错/已停止` 记为失败；没有调查目标时用长期任务 title，没有 `next_step` 就留空。只读轮不生成断点；长期任务 completed 会把已有断点置为 closed。
 - 注入：`Chat._conversation_key()` = 会话 `start` 游标；`context()` 在新对话首个请求注入一次，历史 `recent()` 每丢一块（`history_window.dropped_rounds` 增加）再注入一次；48 小时未更新视为 expired；closed 不注入。注入块放在 auxiliary 第一位（裁剪最后才动）。

@@ -1431,6 +1431,43 @@ if($('work-checkpoint-close')){
     finally{workCheckpointClosing=false;if(liveCheckpoint)renderWorkCheckpoint(liveCheckpoint)}
   };
 }
+function recallDetails(r){
+  const n=v=>Array.isArray(v)?v.length:0;
+  const ids=v=>Array.isArray(v)?v.join(', '):'';
+  const lines=[];
+  if(r.query_chars)lines.push(`这句 ${r.query_chars} 字符（hash ${r.query_hash||'?'}）`);
+  if(n(r.ombre))lines.push(`Ombre 返回：${ids(r.ombre)}`);
+  if(n(r.hidden))lines.push('不可见：'+r.hidden.map(x=>`${x.id}（${x.reason||'?'}）`).join('；'));
+  if(n(r.vector))lines.push(`向量候选：${ids(r.vector)}`);
+  const j=r.judge||{};
+  if(j.candidates!==undefined)lines.push(`判官候选 ${j.candidates} 条，选中：${ids(j.picked)||'无'}`);
+  if(n(r.dropped))lines.push('去重/冷却：'+r.dropped.map(x=>`${x.id}（${x.reason||'?'}）`).join('；'));
+  if(n(r.injected))lines.push(`注入：${ids(r.injected)}`);
+  if(n(r.opening))lines.push(`开场：${ids(r.opening)}`);
+  if(n(r.budget_dropped))lines.push(`字数裁掉：${ids(r.budget_dropped)}`);
+  if(r.failure)lines.push('检索故障：'+r.failure);
+  return lines.join('\n')||'这一轮没有记忆诊断。';
+}
+function recallText(r){
+  if(!r)return '';
+  const n=v=>Array.isArray(v)?v.length:0;
+  const parts=[];
+  parts.push(`Ombre ${n(r.ombre)} 条`);
+  if(n(r.hidden)){
+    const reasons=[...new Set((r.hidden||[]).map(x=>x&&x.reason).filter(Boolean))];
+    parts.push(`不可见 ${n(r.hidden)} 条${reasons.length?'（'+reasons.join('/')+'）':''}`);
+  }
+  const j=r.judge||{};
+  if(j.status==='failed')parts.push('判官失败，按普通检索');
+  else if(j.status==='empty')parts.push('判官看过，没有直接相关');
+  else if(j.status==='chosen')parts.push(`判官选 ${n(j.picked)} 条`);
+  else parts.push('没用判官');
+  parts.push(`注入 ${n(r.injected)} 条`);
+  if(n(r.dropped))parts.push(`去重/冷却 ${n(r.dropped)} 条`);
+  if(n(r.budget_dropped))parts.push(`字数裁掉 ${n(r.budget_dropped)} 条`);
+  if(r.failure)parts.push('检索故障：'+r.failure);
+  return '记忆：'+parts.join('；');
+}
 let liveCheckpoint=null;
 function renderLiveContext(live){
   live=live||{};liveCheckpoint=live.work_checkpoint||null;renderWorkCheckpoint(liveCheckpoint);const key=JSON.stringify(live);if(key===liveContextKey)return;liveContextKey=key;
@@ -1440,10 +1477,18 @@ function renderLiveContext(live){
     const tools=Array.isArray(turn.tools)?turn.tools:[];
     const counts={};for(const item of tools){const name=item.tool||'?';counts[name]=(counts[name]||0)+1}
     const toolText=Object.entries(counts).map(([name,count])=>count>1?`${name} ×${count}`:name).join('、');
-    turnList.appendChild(contextRow({head:[['time','',shortTime(turn.time)],['strong','',CONTEXT_KINDS[turn.kind]||turn.kind||'请求']],
+    const row = contextRow({head:[['time','',shortTime(turn.time)],['strong','',CONTEXT_KINDS[turn.kind]||turn.kind||'请求']],
       lines:[[ 'meta',(turn.history_dropped_rounds>0?`原文 ${turn.history_rounds??0} 轮（共 ${turn.history_total_rounds??'?'} 轮，未带 ${turn.history_dropped_rounds} 轮${turn.history_dropped_since?'，最早 '+shortTime(turn.history_dropped_since):''}）`:`原文 ${turn.history_rounds??0} 轮`)+` · 背景 ${turn.background_count||0} 段 · 长期记忆 ${turn.memory_count||0} 条 · 便签 ${turn.notes_count||0} 条`+(turn.estimated_input_tokens?` · 约 ${turn.estimated_input_tokens} tokens`:'')],
         ['meta',turn.trim_note||''],
-        ['meta',toolText?'工具：'+toolText:'']]}));
+        ['meta',recallText(turn.recall)],
+        ['meta',toolText?'工具：'+toolText:'']]});
+    if(turn.recall){
+      const details=document.createElement('details');
+      const summary=document.createElement('summary');summary.className='meta';summary.textContent='候选明细（默认收起，展开看记忆 id）';
+      const body=document.createElement('div');body.className='meta';body.style.whiteSpace='pre-wrap';body.textContent=recallDetails(turn.recall);
+      details.append(summary,body);row.appendChild(details);
+    }
+    turnList.appendChild(row);
   }
   renderToolInventory(live.tool_inventory);
   renderVoiceStyle(live.voice_style);

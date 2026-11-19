@@ -416,6 +416,23 @@ class Hub(ScreenPopMixin):
                 rows = []
             if key is not None:
                 self._context_log_cache = (key, rows)
+        diagnostics = {}
+        try:
+            for item in chat.store.read_tail(f'{chat.cfg.id}/recall-diagnostics.jsonl', 40):
+                if isinstance(item, dict) and item.get('request_id'):
+                    diagnostics[item['request_id']] = {
+                        'ombre': list(item.get('ombre') or []),
+                        'hidden': list(item.get('hidden') or []),
+                        'vector': list(item.get('vector') or []),
+                        'judge': item.get('judge') if isinstance(item.get('judge'), dict) else {},
+                        'dropped': list(item.get('dropped') or []),
+                        'injected': list(item.get('injected') or []),
+                        'opening': list(item.get('opening') or []),
+                        'budget_dropped': list(item.get('budget_dropped') or []),
+                        'failure': item.get('failure') or '',
+                    }
+        except (OSError, UserError, ValueError):
+            diagnostics = {}
         by_request = {}
         for item in tools or []:
             if item.get('request_id'):
@@ -439,6 +456,7 @@ class Hub(ScreenPopMixin):
                 'notes_count': notes.get('count', 0),
                 'estimated_input_tokens': row.get('estimated_input_tokens'),
                 'tools': by_request.get(row.get('request_id'), []),
+                'recall': diagnostics.get(row.get('request_id')),
             })
         notes = None
         short_term = getattr(chat, 'short_term_notes', None)

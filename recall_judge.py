@@ -119,6 +119,8 @@ class RecallJudge:
         self.failures = 0
         self.open_until = 0.0
         self.last = None
+        # Ticket 391: IDs the judge was shown and picked, for the read-only recall panel (never text).
+        self.last_choice = {'status': 'skipped', 'candidates': 0, 'picked': [], 'vector': []}
         self._embedder = None
         self._files = {}
         self._lock = threading.Lock()
@@ -290,6 +292,7 @@ class RecallJudge:
         started = self.clock()
         deadline = started + self.settings['timeout_seconds'] + 0.5
         candidates, picked = [], []
+        self.last_choice = {'status': 'running', 'candidates': 0, 'picked': [], 'vector': []}
         try:
             self._files = self._scan()
             pool = list(pool)[:self.settings['ombre_candidates'] if candidate_limit is None else candidate_limit]
@@ -308,7 +311,10 @@ class RecallJudge:
             except Exception as exc:
                 raise JudgeFailed('vectors_unreadable', type(exc).__name__) from exc
             candidates = pool + extra
+            vector_keys = [key for key, _ in extra]
+            self.last_choice.update({'candidates': len(candidates), 'vector': vector_keys})
             if not candidates:
+                self.last_choice.update({'status': 'empty'})
                 self._record('empty', started, candidates=0, picked=0)
                 return []
             order = sorted(candidates, key=lambda item: hashlib.md5((query + item[0]).encode()).hexdigest())
@@ -333,6 +339,8 @@ class RecallJudge:
             keys = parse_choice(text, letters, max_picks=max_picks)
             bodies = dict(candidates)
             picked = [(key, bodies[key]) for key in keys]
+            self.last_choice.update({'status': 'chosen' if picked else 'empty',
+                                     'candidates': len(candidates), 'picked': list(keys), 'vector': vector_keys})
         except JudgeFailed as failure:
             self._failed(failure.reason, started, len(candidates), failure.detail)
             raise
@@ -343,6 +351,7 @@ class RecallJudge:
 
     # --- bookkeeping --------------------------------------------------------------------------------------
     def _failed(self, reason, started, candidates, detail=''):
+        self.last_choice.update({'status': 'failed', 'candidates': candidates, 'picked': []})
         with self._lock:
             self.failures += 1
             if self.failures >= self.settings['breaker_failures']:
