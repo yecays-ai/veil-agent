@@ -1804,7 +1804,7 @@ async function send(text){
       awaitingImages.delete(requestId);
       if(attachedImage&&result.error==='invalid media')attachedImage.media=null;
       const errMsg = r.status===409&&result.error==='busy'
-        ?'没发送，输入已保留'
+        ?'正在处理上一条消息，没发送'
         :(result.error==='invalid media'
           ?'图片读不了，未发送'
           :((result.error==='storage'||result.error==='media_storage')&&result.message
