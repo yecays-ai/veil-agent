@@ -99,12 +99,12 @@ class WorkCheckpoint:
                 confirmed.append(self._row(item))
             elif state == '结果未知':
                 unconfirmed.append(self._row(item))
-            elif state in ('被拒绝', '出错', '已停止'):
+            elif state in ('被拒绝', '出错', '已停止') and item.get('read_only') is False:
                 failed.append(self._row(item))
         completed_signal = bool(long_task and long_task.get('status') == 'completed')
-        if not (confirmed or unconfirmed or active_task):
-            # A read-only turn is not work worth carrying forward; a completed long task only closes an
-            # existing checkpoint, it never creates a new one.
+        if not (confirmed or unconfirmed or failed):
+            # Only a turn that actually changed (or may have changed) something becomes work. A read-only turn
+            # and an idle long task are not work; a completed long task only closes an existing checkpoint.
             if not completed_signal:
                 return None
             try:

@@ -59,7 +59,7 @@ class WorkCheckpointTests(unittest.TestCase):
     def test_goal_comes_from_the_long_task_and_brings_its_next_step(self):
         self.long_tasks.task = {'task_id': 't1', 'title': 'Six-day hunt', 'goal': 'finish', 'status': 'active',
                                 'next_step': 'check the third clue', 'updated_at': now()}
-        self.make([])
+        self.make([evidence()])
         saved = self.checkpoint.capture()
         self.assertEqual(saved['goal'], 'Six-day hunt')
         self.assertEqual(saved['goal_source'], 'long_task')
@@ -74,7 +74,7 @@ class WorkCheckpointTests(unittest.TestCase):
     def test_a_completed_long_task_closes_the_checkpoint(self):
         self.long_tasks.task = {'task_id': 't1', 'title': 'Done thing', 'goal': 'x', 'status': 'active',
                                 'next_step': '', 'updated_at': now()}
-        self.make([])
+        self.make([evidence()])
         self.checkpoint.capture()
         self.long_tasks.task['status'] = 'completed'
         saved = self.checkpoint.capture()
