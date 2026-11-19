@@ -239,3 +239,19 @@ body{isolation:isolate}
 .peter-ongoing-meta button{border:0;background:transparent;color:var(--muted);font-size:11px;padding:2px 4px}
 .peter-ongoing-meta button:hover{color:var(--danger)}
 .peter-dirty{outline:1px solid var(--accent);outline-offset:2px}
+/* Ticket 396: flatten the page. One canvas, dividers, no card-in-card. */
+#peter-view{max-width:920px;margin:0 auto;padding:0 2px 40px}
+#peter-view .peter-card{background:transparent!important;border:0!important;border-top:1px solid var(--line)!important;border-radius:0!important;box-shadow:none!important;padding:18px 2px!important}
+#peter-view .peter-card:first-of-type{border-top:0!important;padding-top:4px!important}
+#peter-view .peter-card>header{align-items:baseline;margin-bottom:10px}
+#peter-view .peter-card h3{font-size:16px;letter-spacing:.01em}
+#peter-view .peter-card h4{margin:20px 0 6px;font-size:13px}
+#peter-view .peter-textarea{background:var(--panel);border-color:var(--line)}
+#peter-view .peter-ongoing-item{background:transparent!important;border:0!important;border-bottom:1px solid var(--line)!important;border-radius:0!important;padding:10px 0!important}
+#peter-view .peter-ongoing-item:last-child{border-bottom:0!important}
+#peter-view .peter-actions{gap:10px}
+#peter-view .peter-actions button{background:transparent;border-color:var(--line)}
+#peter-view .peter-actions button:hover{border-color:var(--accent);color:var(--accent)}
+#peter-view .peter-error{background:color-mix(in srgb,var(--danger) 8%,transparent);border-left:3px solid var(--danger);border-radius:0 8px 8px 0}
+#peter-view .peter-card>footer{border-top:1px solid var(--line);padding-top:10px}
+@media(max-width:760px){#peter-view{padding:0 10px 32px}}

@@ -113,3 +113,17 @@ test('acceptance data override never falls back to a normal launcher', async t =
 test('missing Agent installation fails before invoking a launcher', async () => {
   await assert.rejects(connect('relative', () => { throw new Error('must not launch'); }), /setup.bat/);
 });
+
+test('Peter page API is allowed for the main and detached window', async () => {
+  const source = await fs.readFile(path.join(__dirname, '..', 'main.cjs'), 'utf8');
+  const start = source.indexOf('const MEMORY_POSTS');
+  const end = source.indexOf("ipcMain.handle('chat:request'", start);
+  assert.ok(start >= 0 && end > start);
+  const context = { URL };
+  vm.createContext(context);
+  const allowed = vm.runInContext(source.slice(start, end) + '; allowedChatRequest', context);
+  assert.equal(allowed('/api/peter-page', 'GET'), true);
+  assert.equal(allowed('/api/peter-page', 'POST'), true);
+  assert.equal(allowed('/api/peter-page?x=1', 'GET'), false);
+  assert.equal(allowed('/api/not-peter', 'GET'), false);
+});

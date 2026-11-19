@@ -1,5 +1,10 @@
 # HANDOFF
 
+## 工单 396 交接（Peter 页请求未允许）
+- 根因：`/api/peter-page` 没进 `desktop/main.cjs` 的 `allowedChatRequest`；IPC 返回 403「请求未允许。」，页面空白。
+- 修复：放行 GET/POST 和 detached `peter`；页面 CSS 去掉外层卡片，改分栏；`desktop/tests/backend.test.cjs` 加白名单测试。
+- 待真机：更新后打开 Peter 页，确认内容出来、不再嵌套框。
+
 ## 工单 394 交接（Peter 页 + Learned Context）
 - 代码：`learned_context.py`（facts/growth/ongoing，迁移、共享 4,000 字节、版本、错误日志）、`learned_tools.py`（带 section 的 profile 工具 + ongoing_update）、`user_persona.py`（Lan 人设）、`veil_agent.py`（LearnedContext 注入、ongoing 动态位置、user persona、reload_persona）、`web_agent.py`（`/api/peter-page`）、`desktop/peter-page.js` + Peter 页 HTML/CSS。
 - 注入：facts/growth 在稳定前缀；ongoing 在 runtime 的末尾（历史之后、用户消息前），避免频繁更新破坏前缀缓存。
