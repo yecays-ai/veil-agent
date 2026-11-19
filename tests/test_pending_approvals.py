@@ -24,6 +24,8 @@ class PendingApprovalsTests(unittest.TestCase):
         self.assertEqual(decided['status'], 'approved')
         context = self.pending.context()
         self.assertIn('Lan approved', context)
+        self.assertIn('Lan approved', self.pending.context())  # still not delivered
+        self.pending.mark_told()
         self.assertEqual(self.pending.context(), '')  # told once
         with self.assertRaises(UserError):
             self.pending.decide(item['id'], 'approved')
@@ -33,6 +35,14 @@ class PendingApprovalsTests(unittest.TestCase):
         b = self.pending.add('same prompt')
         self.assertEqual(a['id'], b['id'])
         self.assertEqual(len(self.pending.list()['items']), 1)
+
+    def test_all_pending_survive_many_decided(self):
+        for index in range(25):
+            item = self.pending.add(f'old {index}')
+            self.pending.decide(item['id'], 'denied')
+        pending = self.pending.add('important pending')
+        items = self.pending.list()['items']
+        self.assertIn(pending['id'], [item['id'] for item in items])
 
     def test_expired_is_not_pending(self):
         item = self.pending.add('old request')

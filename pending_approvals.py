@@ -107,11 +107,12 @@ class PendingApprovals:
         with self.lock:
             data = self._read()
             self._expire(data)
-            items = data['items']
+            pending = [item for item in data['items'] if item.get('status') == 'pending']
+            decided = [item for item in data['items'] if item.get('status') != 'pending']
+            items = list(reversed(decided[-20:])) + list(reversed(pending))
             if not include_decided:
-                items = [item for item in items if item.get('status') == 'pending']
-            return {'items': list(reversed(items[-20:])), 'pending': sum(
-                1 for item in data['items'] if item.get('status') == 'pending')}
+                items = list(reversed(pending))
+            return {'items': items, 'pending': len(pending)}
 
     def context(self):
         """Facts for the next wake; approved/denied are told once."""
@@ -129,6 +130,17 @@ class PendingApprovals:
             for item in unseen[-5:]:
                 word = 'approved' if item['status'] == 'approved' else 'denied'
                 lines.append(f'- Lan {word}: {item["prompt"]}')
-                item['told_at'] = _now().isoformat(timespec='seconds')
-            self._write(data)
             return '\n'.join(lines)
+
+    def mark_told(self):
+        """Confirm decisions only after the wake request actually went out."""
+        with self.lock:
+            data = self._read()
+            unseen = [item for item in data['items']
+                      if item.get('status') in ('approved', 'denied') and not item.get('told_at')]
+            if not unseen:
+                return
+            now = _now().isoformat(timespec='seconds')
+            for item in unseen:
+                item['told_at'] = now
+            self._write(data)

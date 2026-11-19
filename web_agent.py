@@ -2330,6 +2330,8 @@ def make_handler(hub, token):
             elif url.path == '/api/peter-page':
                 self._get_peter_page()
             elif url.path == '/api/pending-approvals':
+                if not self._guard(self.headers.get('X-Token')):
+                    return
                 try:
                     self._send(200, hub.pending_approvals())
                 except UserError as exc:

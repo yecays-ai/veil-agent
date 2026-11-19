@@ -2164,8 +2164,10 @@ function syncDesktopRail(){
   const approval=[...document.querySelectorAll('.approval:not(.done)')].at(-1);
   const pending=Array.isArray(pendingApprovalItems)?pendingApprovalItems.filter(x=>x.status==='pending'):[];
   $('rail-approval').hidden=!approval&&!pending.length;
-  if(pending.length){$('rail-approval').querySelector('b').textContent=pending.length+' 件需要你决定';$('rail-approval').querySelector('small').textContent='打开活动页处理';}
-  else {$('rail-approval').querySelector('b').textContent='Peter 想运行一个操作';$('rail-approval').querySelector('small').textContent='回聊天里确认';}
+  const railB=$('rail-approval').querySelector('b'),railSmall=$('rail-approval').querySelector('small');
+  const setRailText=(el,value)=>{if(el&&el.textContent!==value)el.textContent=value};
+  if(pending.length){setRailText(railB,pending.length+' 件需要你决定');setRailText(railSmall,'打开活动页处理');}
+  else {setRailText(railB,'Peter 想运行一个操作');setRailText(railSmall,'回聊天里确认');}
 }
 new MutationObserver(syncDesktopRail).observe(document.body,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['class']});
 $('rail-approval-open').onclick=()=>{if(pendingApprovalItems.filter(x=>x.status==='pending').length){setPage('activity');return}setPage('chat');[...document.querySelectorAll('.approval:not(.done)')].at(-1)?.scrollIntoView({behavior:'smooth',block:'center'})};
