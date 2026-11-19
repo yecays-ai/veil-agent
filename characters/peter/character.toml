@@ -143,10 +143,17 @@ max_steps = 4
 daily_budget_cny = "1"
 
 [profile]
-# Ticket 096: Peter's own notes about Lan, written by him with profile_append / profile_replace
-# and sent right after the persona every request. Lives at data/peter/<file>.
-file = "about-lan.md"
-max_bytes = 3000
+# Ticket 394: Learned Context replaces the single about-lan.md blob. The old file is kept as the
+# migration source; facts, growth and ongoing share one 4,000-byte budget.
+file = "learned-context.json"
+learned = true
+legacy_file = "about-lan.md"
+max_bytes = 4000
+
+[user_persona]
+# Ticket 394: Lan's own persona, separate from Peter's notes about her.
+file = "lan.md"
+max_bytes = 4000
 
 [email]
 # Ticket 098: Peter and Lan talk by email (QQ Mail IMAP/SMTP). Inert until the three

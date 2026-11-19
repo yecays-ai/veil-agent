@@ -44,7 +44,7 @@ function notify(text,kind='notice'){
   setTimeout(()=>node.remove(),Math.min(15000,Math.max(2000,text.length*80)));
 }
 function setPage(name){
-  if(!['chat','activity','context','memory','mcp','more','life'].includes(name))return;
+  if(!['chat','activity','context','memory','mcp','more','life','peter'].includes(name))return;
   if(detachedView&&name!==detachedView)return;
   document.body.dataset.currentPage=name;
   document.querySelectorAll('[data-page]').forEach(button=>{
@@ -2061,12 +2061,17 @@ document.querySelectorAll('[data-memory-group]').forEach(button=>button.onclick=
   document.querySelectorAll('[data-memory-group]').forEach(other=>other.classList.toggle('active',other===button));renderMemoryList();
 });
 $('memory-reload').onclick=()=>{memoryItems=[];memoryCursor='';memoryLoaded=false;loadMemoryCatalog(true)};
-document.querySelectorAll('[data-page]').forEach(button=>button.onclick=()=>{
+document.querySelectorAll('[data-page]').forEach(button=>button.onclick=async()=>{
   if(detachedViews.has(button.dataset.page)){window.veilDesktop.focusView(button.dataset.page);return}
+  if(document.body.dataset.currentPage==='peter'&&button.dataset.page!=='peter'&&window.peterLeaveGuard){
+    const choice=await window.peterLeaveGuard();
+    if(choice==='cancel')return;
+  }
   setPage(button.dataset.page);
   if(button.dataset.page==='memory'&&memoryAvailable&&!memoryLoaded&&!memoryLoading)loadMemoryCatalog(true);
   if(button.dataset.page==='mcp')loadMCP();
   if(button.dataset.page==='life')loadLife();
+  if(button.dataset.page==='peter'&&window.peterLoadPage)window.peterLoadPage();
 });
 document.querySelectorAll('[data-rail-page]').forEach(button=>button.onclick=()=>{
   const page=button.dataset.railPage;

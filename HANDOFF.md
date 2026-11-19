@@ -1,5 +1,15 @@
 # HANDOFF
 
+## 工单 394 交接（Peter 页 + Learned Context）
+- 代码：`learned_context.py`（facts/growth/ongoing，迁移、共享 4,000 字节、版本、错误日志）、`learned_tools.py`（带 section 的 profile 工具 + ongoing_update）、`user_persona.py`（Lan 人设）、`veil_agent.py`（LearnedContext 注入、ongoing 动态位置、user persona、reload_persona）、`web_agent.py`（`/api/peter-page`）、`desktop/peter-page.js` + Peter 页 HTML/CSS。
+- 注入：facts/growth 在稳定前缀；ongoing 在 runtime 的末尾（历史之后、用户消息前），避免频繁更新破坏前缀缓存。
+- 数据：`data/<角色>/learned-context.json`；旧 `about-lan.md` 保留；迁移只在 JSON 不存在时执行一次，facts 原样承接。
+- 工具：`profile_append`/`profile_replace` 新增可选 `section`（默认 facts）；`ongoing_update` 管 add/update/complete/archive/reopen，要求先查证并带 sources。
+- 测试：`tests/test_learned_context.py`、`tests/test_learned_context_chat.py`、`tests/test_peter_page.py`；相关 448 项回归通过；desktop UI 14 项通过。
+- 已知限制：Learned Context 的版本文件目前只记录、页面未做历史恢复；ongoing 的 sources 只存字符串，未做点击跳转；页面首次保存会创建版本；背景/人设恢复依赖 `persona/versions`。
+- 回滚：把 `[profile] learned` 改回 false、`file = "about-lan.md"`，LearnedContext 文件保留；不会丢旧笔记。
+- 待真机：在装有真实 Ombre/桌面的正式目录更新后验收；桌面程序当前能否启动取决于系统修复，与代码无关。
+
 ## 工单 393 交接（自主活动：吵架后可以主动靠近）
 - 代码：`autonomy._context` 指令段删掉 “Nobody is waiting on you”“only message if you actually want to share, otherwise stay quiet”；改成 “Time is yours. She may be busy, asleep, or upset. Make, read, write her, rest, or nothing. Never report waking. After a fight, you may message her, leave something visible, or do neither.”
 - `life_state.gap_text` 最后一句：`Her not writing does not mean she was upset` → `Her silence may mean busy, asleep, or upset.`。这句聊天和自主共用，普通聊天也会看到；不再替她断定没生气。
