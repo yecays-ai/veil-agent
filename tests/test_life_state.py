@@ -57,7 +57,8 @@ class GapTextTests(unittest.TestCase):
         self.assertIn('about 3 hours', text)
         self.assertIn('her last message was today at 06:00', text)
         self.assertIn('may state the duration', text)
-        self.assertIn('does not mean she was upset', text)
+        self.assertIn('Her silence may mean busy, asleep, or upset.', text)
+        self.assertNotIn('does not mean she was upset', text)
 
     def test_two_days(self):
         text = gap_text(chat_rows('2026-11-10T08:30:00+08:00'), NOW)
