@@ -430,6 +430,10 @@ class Hub(ScreenPopMixin):
             turns.append({
                 'time': row.get('time'), 'kind': row.get('kind'),
                 'history_rounds': row.get('history_rounds'),
+                'history_total_rounds': row.get('history_total_rounds'),
+                'history_dropped_rounds': row.get('history_dropped_rounds') or 0,
+                'history_dropped_since': row.get('history_dropped_since') or '',
+                'trim_note': row.get('trim_note') or '',
                 'memory_count': len(row.get('memory_ids') or []),
                 'background_count': len(background.get('paragraphs') or []) + len(background.get('core') or []),
                 'notes_count': notes.get('count', 0),
@@ -444,8 +448,14 @@ class Hub(ScreenPopMixin):
             except (OSError, UserError, ValueError, TypeError):
                 notes = None
         voice_style = getattr(chat, 'voice_style', None)
+        checkpoint = getattr(chat, 'work_checkpoint', None)
+        try:
+            checkpoint_view = checkpoint.view() if checkpoint is not None else None
+        except UserError:
+            checkpoint_view = None
         return {'turns': turns, 'notes': notes, 'tool_inventory': self.tool_inventory(key),
-                'voice_style': voice_style.status(with_text=True) if voice_style is not None else None}
+                'voice_style': voice_style.status(with_text=True) if voice_style is not None else None,
+                'work_checkpoint': checkpoint_view}
 
     TOOL_USE_ROWS = 6000
 
@@ -2642,6 +2652,19 @@ def make_handler(hub, token):
                 except (OSError, UserError) as exc:
                     self._send(500, {'error': str(exc)})
 
+        def _post_work_checkpoint(self, body):
+            checkpoint = getattr(hub.chat, 'work_checkpoint', None)
+            if checkpoint is None:
+                self._send(409, {'error': 'unavailable'})
+            elif body.get('action') != 'close':
+                self._send(400, {'error': 'action'})
+            else:
+                try:
+                    checkpoint.close()
+                    self._send(200, {'ok': True, 'work_checkpoint': checkpoint.view()})
+                except (OSError, UserError) as exc:
+                    self._send(500, {'error': str(exc)})
+
         def _post_voice_style(self, body):
             # Ticket 355: Lan switches his "how I talk" reference on or off, or saves an edited text.
             voice_style = getattr(hub.chat, 'voice_style', None)
@@ -2880,6 +2903,8 @@ def make_handler(hub, token):
                 self._post_experience_memory(body)
             elif url.path == '/api/recall-judge':
                 self._post_recall_judge(body)
+            elif url.path == '/api/work-checkpoint':
+                self._post_work_checkpoint(body)
             elif url.path == '/api/voice-style':
                 self._post_voice_style(body)
             elif url.path == '/api/workbench':
