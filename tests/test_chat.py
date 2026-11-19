@@ -107,6 +107,7 @@ output_cny_per_million = "8"
         missing, state, _ = chat.send_message(json.dumps({'sticker': '丑猫/没有'}), 'request-sticker-missing')
         self.assertEqual(state, '被拒绝')
         self.assertIn('stickers tool', missing)
+        self.assertIn('丑猫/打人', missing)
         voice, state, _ = chat.send_message(json.dumps({'sticker': '丑猫/打人', 'voice': True}), 'request-sticker-voice')
         self.assertEqual(state, '被拒绝')
         result, state, _ = chat.send_message(json.dumps({'sticker': '丑猫/打人'}), 'request-sticker')

@@ -1,5 +1,10 @@
 # HANDOFF
 
+## 工单 398 交接（自主活动红字最小修复）
+- `set_next_wake` 太近：夹到最早允许时间，结果里说明；超过 7 天/静默/暂停仍拒绝。
+- `send_message` 表情包不存在：错误里附前 12 个可用 `pack/name`。
+- 明确不修：Docker/脚本、jot JSON、hold、文件读写、长任务、UIO、3 条上限。
+
 ## 工单 397 交接（Peter 页清理 + 待批准队列）
 - 页面：`desktop/chat.html` 去解释段落/短按钮；`desktop/chat.css` 去 sticky、单层分栏。
 - 审批：`pending_approvals.py`（持久 JSON）、`autonomy._capture_approval` 记录、`veil_agent` 注入 `APPROVALS FROM LAN`、`web_agent` 的 `/api/pending-approvals`、`chat.js` 右侧栏/活动页卡片。

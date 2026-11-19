@@ -536,15 +536,16 @@ daily_budget_cny = "2"
         self.assertEqual(state, '成功')
         self.assertEqual(restarted.status()['next_wake_reason'], 'Check the new measurements.')
 
-    def test_next_wake_rejects_too_soon_and_more_than_seven_days(self):
+    def test_next_wake_moves_too_soon_to_earliest_and_rejects_over_seven_days(self):
         self.activity.set(True)
-        for delta, expected in ((timedelta(minutes=14), 'at least'),
-                                (timedelta(days=8), 'more than 7 days')):
-            result, state, _ = self.controller.set_next_wake({
-                'at': (datetime.now().astimezone() + delta).isoformat(), 'reason': 'Continue research.'})
-            self.assertEqual(state, '被拒绝')
-            self.assertIn(expected, result)
-        self.assertFalse((self.store.root / 'test' / 'autonomy-alarm.json').exists())
+        result, state, _ = self.controller.set_next_wake({
+            'at': (datetime.now().astimezone() + timedelta(minutes=14)).isoformat(), 'reason': 'Continue research.'})
+        self.assertEqual(state, '成功')
+        self.assertIn('moved to the earliest allowed time', result)
+        result, state, _ = self.controller.set_next_wake({
+            'at': (datetime.now().astimezone() + timedelta(days=8)).isoformat(), 'reason': 'Continue research.'})
+        self.assertEqual(state, '被拒绝')
+        self.assertIn('more than 7 days', result)
         _, state, _ = self.controller.set_next_wake({
             'at': (datetime.now().astimezone() + timedelta(minutes=16)).isoformat(),
             'reason': 'Finish what I was saying.'})
