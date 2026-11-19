@@ -271,6 +271,6 @@
       showError(error.message);
     }
   }
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bind);
-  else bind();
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { bind(); if (document.body.dataset.currentPage === 'peter') load(); });
+  else { bind(); if (document.body.dataset.currentPage === 'peter') load(); }
 })();
