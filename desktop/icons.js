@@ -2,6 +2,8 @@
 (() => {
   const paths = {
     plus: '<path d="M12 5v14M5 12h14"/>',
+    // 工单 392：发送键换成纸飞机，和其余图标同一套描边；原来的 arrow-up 只有一个箭头。
+    send: '<path d="M14.5 21.7a.5.5 0 0 0 .94-.02l6.5-19a.5.5 0 0 0-.63-.64l-19 6.5a.5.5 0 0 0-.02.94l7.93 3.18a2 2 0 0 1 1.11 1.11z"/><path d="m21.85 2.15-10.94 10.94"/>',
     captions: '<rect width="20" height="14" x="2" y="5" rx="2"/><path d="M7 11h4M15 11h2M7 15h2M13 15h4"/>',
     'calendar-heart': '<path d="M3 9h18M8 2v4M16 2v4"/><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M12 18s-3-1.8-3-4a1.8 1.8 0 0 1 3-1.3 1.8 1.8 0 0 1 3 1.3c0 2.2-3 4-3 4Z"/>',
     'panel-left-close': '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18m7-6-3-3 3-3"/>',
