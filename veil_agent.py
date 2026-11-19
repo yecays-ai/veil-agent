@@ -1,5 +1,6 @@
 """Local terminal chat. Private state stays beside this file."""
 import argparse
+import ast
 import base64
 import hashlib
 import json
@@ -2243,6 +2244,15 @@ class Chat:
             'name': tool.name, 'description': tool.description, 'parameters': tool.inputSchema}}
             for tool in self.long_tasks.tools] if self.task_tools_enabled else []
         existing_tools = permitted_tools(self.tools.tools if self.tools else [])
+        if self.autonomy_mode and self.tools and getattr(self.tools, 'lab_sandbox', None):
+            try:
+                from lab_sandbox import check_docker_available
+                if not check_docker_available()[0]:
+                    # Ticket 399: Docker is down; do not offer a tool that can only fail this wake.
+                    existing_tools = [tool for tool in existing_tools
+                                      if tool.get('function', {}).get('name') != 'run_lab_python']
+            except Exception:
+                pass
         messaging = [send_message_schema(self.voice is not None, tuple(self.away_channels),
                                          files=callable(self.attachment_reader)
                                          and callable(self.attachment_saver),
@@ -4302,6 +4312,20 @@ class Chat:
         self.autonomy_mode = False
         return reply
 
+    @staticmethod
+    def tool_arguments(raw):
+        """Ticket 399: accept JSON, Python-style dicts, or a plain string for profile_append."""
+        raw = raw or '{}'
+        try:
+            return json.loads(raw)
+        except (ValueError, TypeError):
+            try:
+                return ast.literal_eval(raw)
+            except (ValueError, SyntaxError, TypeError) as exc:
+                if isinstance(raw, str) and not raw.lstrip().startswith(('{', '[')):
+                    return raw
+                raise ValueError('invalid tool arguments') from exc
+
     def _execute_tool_call(self, call, request_id, tool_call_id, autonomy,
                            offered=_UNSET_TOOL_SCHEMAS):
         from windows_interaction import WINDOWS_DESKTOP_TOOL_NAMES
@@ -4365,7 +4389,9 @@ class Chat:
                         autonomy_run_id=self.autonomy_run_id if autonomy else None,
                         handler=self.screen_pop_handler)
             elif self.profile and call.function.name in ('profile_append', 'profile_replace', 'ongoing_update'):
-                args = json.loads(call.function.arguments or '{}')
+                args = self.tool_arguments(call.function.arguments)
+                if isinstance(args, str) and call.function.name == 'profile_append':
+                    args = {'text': args}
                 if not isinstance(args, dict):
                     result, state, summary = 'arguments must be an object.', '被拒绝', call.function.name
                 else:

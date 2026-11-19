@@ -28,6 +28,14 @@ def recovered_spend(store):
                and Decimal(row['amount']) > 0 for row in store.read('costs.jsonl'))
 
 
+class ToolArgumentTests(unittest.TestCase):
+    def test_python_style_dict_and_plain_text(self):
+        self.assertEqual(Chat.tool_arguments("{'text': 'x'}"), {'text': 'x'})
+        self.assertEqual(Chat.tool_arguments('plain text'), 'plain text')
+        with self.assertRaises(ValueError):
+            Chat.tool_arguments('{broken')
+
+
 class ChatTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
