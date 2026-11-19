@@ -2779,8 +2779,16 @@ class Chat:
             pack_name, _, sticker_name = (sticker_ref.partition('/') if isinstance(sticker_ref, str) else ('', '', ''))
             found = self.sticker_library.find(pack_name, sticker_name) if sticker_name else None
             if not found:
+                available = []
+                try:
+                    for pack in self.sticker_library.snapshot().get('packs', []):
+                        for sticker in pack.get('stickers', []):
+                            available.append(f"{pack['name']}/{sticker['name']}")
+                except Exception:
+                    available = []
+                hint = (' Available: ' + ', '.join(available[:12]) + '.' if available else '')
                 return ('No sticker "' + str(sticker_ref)[:80] + '"; nothing was sent. Use the stickers tool to list a '
-                        'pack and copy "pack/name" exactly.'), '被拒绝', 'send_message'
+                        'pack and copy "pack/name" exactly.' + hint), '被拒绝', 'send_message'
             import stickers as sticker_module
             if isinstance(args.get('text'), str) and args['text'].strip():
                 # Ticket 223: a sticker is always its own bubble. Words sent with it go out as the next message.

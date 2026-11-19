@@ -596,9 +596,12 @@ class AutonomyController:
         current_time = datetime.now().astimezone()
         earliest = current_time + self.min_alarm_gap
         latest = current_time + timedelta(days=MAX_ALARM_DAYS)
+        moved = False
         if scheduled < earliest:
-            return (f'The scheduled time must be at least {int(self.min_alarm_gap.total_seconds() // 60)} '
-                    'minutes from now.', '被拒绝', 'set_next_wake')
+            # Ticket 398: a too-soon request is moved to the earliest allowed time instead of becoming a red
+            # rejection Peter cannot learn from. The reason is kept; the result states the real time.
+            scheduled = earliest
+            moved = True
         if scheduled > latest:
             return f'The scheduled time cannot be more than {MAX_ALARM_DAYS} days from now.', '被拒绝', 'set_next_wake'
         if self.quiet_enabled() and self._quiet_bounds(scheduled):
@@ -621,7 +624,9 @@ class AutonomyController:
         else:
             note = (f' That day has {self.daily_max_runs - used} of {self.daily_max_runs} wakes left so far; '
                     'regular wakes use them too.')
-        return (f'Wake {alarm["alarm_id"]} is scheduled for {scheduled.isoformat()}. Your note: {reason}' + note
+        moved_note = (' The requested time was too soon; it was moved to the earliest allowed time.'
+                      if moved else '')
+        return (f'Wake {alarm["alarm_id"]} is scheduled for {scheduled.isoformat()}. Your note: {reason}' + note + moved_note
                 + ' It rings even if your natural rhythm is set to quiet or off.',
                 '成功', f'{scheduled.isoformat()} | {reason}')
 
