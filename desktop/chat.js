@@ -7,7 +7,7 @@ const speechDraftKey='veil-speech-draft';
 let speechRecorder=null,speechStream=null,speechChunks=[],speechSession=null,speechState='idle',speechPermissionPending=false,speechCancelled=false,speechDraftActive=false,speechTimer=null,speechErrorTimer=null;
 let after=0, busy=true, transcribingVoice=false, stopping=false, stopped=false, typing=null, sending=false;
 let revealQueue=[], revealTimer=null, roundStartedAt=0, roundHasReply=false, previousMessage=null;
-let pendingApproval=null, activityEnabled=false, codexWatchEnabled=false, exiting=false;
+let pendingApproval=null, pendingApprovalItems=[], pendingApprovalAt=0, activityEnabled=false, codexWatchEnabled=false, exiting=false;
 let pollFailures=0;
 const recentErrors=new Map();
 const displayedErrorRequests=new Set();
@@ -1523,6 +1523,53 @@ function renderLiveContext(live){
       lines:[['note-text',note.text||''],['meta',[note.updated_at&&note.updated_at!==note.created_at?`更新 ${shortTime(note.updated_at)}`:'',fades||changed].filter(Boolean).join(' · ')]]}));
   }
 }
+
+async function loadPendingApprovals(force=false){
+  if(!force&&Date.now()-pendingApprovalAt<10000)return;
+  pendingApprovalAt=Date.now();
+  try{
+    const r=await api('/api/pending-approvals');
+    if(!r.ok)return;
+    const d=await r.json();
+    pendingApprovalItems=Array.isArray(d.items)?d.items:[];
+    renderPendingApprovals();
+    syncDesktopRail();
+  }catch(e){}
+}
+function renderPendingApprovals(){
+  const block=$('pending-approvals-block'),list=$('pending-approvals-list');
+  if(!block||!list)return;
+  const pending=pendingApprovalItems.filter(x=>x.status==='pending');
+  block.hidden=!pending.length;
+  $('pending-approvals-count').textContent=pending.length?pending.length+' 件待处理':'';
+  list.replaceChildren();
+  for(const item of pending){
+    const row=document.createElement('article');row.className='pending-approval';
+    const text=document.createElement('p');text.textContent=item.prompt;row.appendChild(text);
+    const meta=document.createElement('div');meta.className='pending-meta';
+    meta.textContent='请求于 '+String(item.created_at||'').replace('T',' ').slice(0,16)+' · 过期 '+String(item.expires_at||'').replace('T',' ').slice(0,16);
+    row.appendChild(meta);
+    const actions=document.createElement('div');actions.className='tool-row';
+    const yes=document.createElement('button');yes.type='button';yes.className='yes';yes.textContent='同意一次';
+    const no=document.createElement('button');no.type='button';no.textContent='拒绝';
+    yes.onclick=()=>decidePending(item.id,'approved',yes,no);
+    no.onclick=()=>decidePending(item.id,'denied',yes,no);
+    actions.append(yes,no);row.appendChild(actions);list.appendChild(row);
+  }
+}
+async function decidePending(id,decision,yes,no){
+  yes.disabled=no.disabled=true;
+  try{
+    const r=await api('/api/pending-approvals',{id,decision});
+    const d=await r.json();
+    if(!r.ok)throw new Error(d.error||'处理失败');
+    notify(decision==='approved'?'已同意，下一次醒来他会看到。':'已拒绝。','success');
+    await loadPendingApprovals(true);
+  }catch(e){
+    notify(e.message||'处理失败','error');
+    yes.disabled=no.disabled=false;
+  }
+}
 async function poll(){
   let pollPhase='fetch';
   try{
@@ -1561,6 +1608,7 @@ async function poll(){
     $('activity-state').textContent=state;
     $('activity-status').textContent='自主活动'+state;
     renderActivity(s.last_activity,s.activity_history||[],s.tool_activity||[],s.glance_activity||[]);
+    void loadPendingApprovals();
     renderLiveContext(s.live_context);
     renderModels(s.models);
     $('activity-toggle').textContent=activityEnabled?'暂停自主活动':'开启自主活动';
@@ -2114,10 +2162,14 @@ function syncDesktopRail(){
   syncText('rail-life-count',$('life-count').textContent);
   const dotClass='rail-dot '+$('activity-work-dot').className.replace('status-dot','').trim();if($('rail-activity-dot').className!==dotClass)$('rail-activity-dot').className=dotClass;
   const approval=[...document.querySelectorAll('.approval:not(.done)')].at(-1);
-  $('rail-approval').hidden=!approval;
+  const pending=Array.isArray(pendingApprovalItems)?pendingApprovalItems.filter(x=>x.status==='pending'):[];
+  $('rail-approval').hidden=!approval&&!pending.length;
+  if(pending.length){$('rail-approval').querySelector('b').textContent=pending.length+' 件需要你决定';$('rail-approval').querySelector('small').textContent='打开活动页处理';}
+  else {$('rail-approval').querySelector('b').textContent='Peter 想运行一个操作';$('rail-approval').querySelector('small').textContent='回聊天里确认';}
 }
 new MutationObserver(syncDesktopRail).observe(document.body,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['class']});
-$('rail-approval-open').onclick=()=>{setPage('chat');[...document.querySelectorAll('.approval:not(.done)')].at(-1)?.scrollIntoView({behavior:'smooth',block:'center'})};
+$('rail-approval-open').onclick=()=>{if(pendingApprovalItems.filter(x=>x.status==='pending').length){setPage('activity');return}setPage('chat');[...document.querySelectorAll('.approval:not(.done)')].at(-1)?.scrollIntoView({behavior:'smooth',block:'center'})};
+loadPendingApprovals(true);
 syncDesktopRail();
 let railDateTimer;
 function refreshRailDate(){const now=new Date();$('rail-date-label').textContent=`${now.getMonth()+1} 月 ${now.getDate()} 日`;$('rail-weekday').textContent='星期'+'日一二三四五六'[now.getDay()];clearTimeout(railDateTimer);railDateTimer=setTimeout(refreshRailDate,new Date(now.getFullYear(),now.getMonth(),now.getDate()+1).getTime()-now.getTime()+50)}

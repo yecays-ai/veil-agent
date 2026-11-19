@@ -216,7 +216,7 @@ body{isolation:isolate}
 
 /* Ticket 394: Peter page */
 #peter-view{overflow-y:auto;padding:0 4px 28px;display:flex;flex-direction:column;gap:12px}
-#peter-view .page-heading{position:sticky;top:0;z-index:2;padding:6px 0 2px;background:linear-gradient(var(--panel),transparent)}
+#peter-view .page-heading{position:static;top:auto;z-index:auto;padding:16px 0 4px;background:none}
 .peter-card{padding:14px 16px}
 .peter-card>header{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:8px}
 .peter-card h3{margin:0 0 2px;font-size:15px}.peter-card h4{margin:16px 0 4px;font-size:13px}
@@ -243,8 +243,9 @@ body{isolation:isolate}
 #peter-view{max-width:920px;margin:0 auto;padding:0 2px 40px}
 #peter-view .peter-card{background:transparent!important;border:0!important;border-top:1px solid var(--line)!important;border-radius:0!important;box-shadow:none!important;padding:18px 2px!important}
 #peter-view .peter-card:first-of-type{border-top:0!important;padding-top:4px!important}
-#peter-view .peter-card>header{align-items:baseline;margin-bottom:10px}
-#peter-view .peter-card h3{font-size:16px;letter-spacing:.01em}
+#peter-view .peter-card>header{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:8px}
+#peter-view .peter-card>header>.muted{font-size:11px;white-space:nowrap}
+#peter-view .peter-card h3{font-size:15px;letter-spacing:.01em;margin:0}
 #peter-view .peter-card h4{margin:20px 0 6px;font-size:13px}
 #peter-view .peter-textarea{background:var(--panel);border-color:var(--line)}
 #peter-view .peter-ongoing-item{background:transparent!important;border:0!important;border-bottom:1px solid var(--line)!important;border-radius:0!important;padding:10px 0!important}
@@ -255,3 +256,15 @@ body{isolation:isolate}
 #peter-view .peter-error{background:color-mix(in srgb,var(--danger) 8%,transparent);border-left:3px solid var(--danger);border-radius:0 8px 8px 0}
 #peter-view .peter-card>footer{border-top:1px solid var(--line);padding-top:10px}
 @media(max-width:760px){#peter-view{padding:0 10px 32px}}
+
+/* Ticket 397: approvals that survive an autonomous wake */
+.activity-pending{padding:12px 14px;border-color:var(--accent)}
+.activity-pending .section-heading{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:8px}
+.activity-pending h3{margin:0;font-size:14px}
+.pending-approval{padding:10px 0;border-top:1px solid var(--line)}
+.pending-approval:first-child{border-top:0}
+.pending-approval p{margin:0 0 4px;font-size:13px;line-height:1.5}
+.pending-meta{font-size:11px;color:var(--muted)}
+.pending-approval .tool-row{margin-top:8px;gap:8px}
+.pending-approval button{border:1px solid var(--line);border-radius:9px;background:var(--panel-2);padding:7px 12px;font-size:12px}
+.pending-approval button.yes{border-color:var(--accent);color:var(--accent)}
