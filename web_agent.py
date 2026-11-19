@@ -36,6 +36,7 @@ from veil_agent import (ROOT, AUTONOMY_WAKE, CODEX_WATCH_WAKE, GLANCE_WAKE, MAX_
                         background_cfg, load_character, memory_available, now, make_model, make_voice, run_chat,
                         safe_tool_activity_detail)
 import workbench_switch
+import persona_versions
 from autonomy import AutonomyController, GlanceController
 from hub_screen_pop import ScreenPopMixin
 from codex_watch import CodexWatchController
@@ -474,6 +475,149 @@ class Hub(ScreenPopMixin):
         return {'turns': turns, 'notes': notes, 'tool_inventory': self.tool_inventory(key),
                 'voice_style': voice_style.status(with_text=True) if voice_style is not None else None,
                 'work_checkpoint': checkpoint_view}
+
+
+    # ---------- Ticket 394: Peter page ----------
+
+    @staticmethod
+    def _estimate_tokens(text):
+        if not isinstance(text, str) or not text:
+            return 0
+        ascii_chars = sum(1 for char in text if ord(char) < 128)
+        return int((ascii_chars + 3) // 4 + (len(text) - ascii_chars))
+
+    @staticmethod
+    def _page_versions(path):
+        try:
+            return [{'name': item.name,
+                     'time': item.stat().st_mtime}
+                    for item in persona_versions.list_versions(path)[:20]]
+        except OSError:
+            return []
+
+    def _page_error(self, operation, path, exc):
+        try:
+            path = Path(path)
+            log = self.chat.store.root / self.chat.cfg.id / 'peter-page-errors.jsonl'
+            log.parent.mkdir(parents=True, exist_ok=True)
+            row = {'time': now(), 'operation': operation, 'path': str(path),
+                   'bytes': path.stat().st_size if path.exists() else 0,
+                   'error': type(exc).__name__, 'message': str(exc)}
+            with log.open('a', encoding='utf-8') as handle:
+                handle.write(json.dumps(row, ensure_ascii=False) + '\n')
+        except OSError:
+            pass
+
+    def _write_page_file(self, path, text):
+        path = Path(path)
+        if not isinstance(text, str):
+            raise UserError('内容必须是文字。')
+        path.parent.mkdir(parents=True, exist_ok=True)
+        persona_versions.snapshot(path)
+        temporary = path.with_name(path.name + f'.{secrets.token_hex(4)}.tmp')
+        try:
+            with temporary.open('w', encoding='utf-8', newline='\n') as handle:
+                handle.write(text.rstrip() + ('\n' if text.strip() else ''))
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, path)
+        except OSError as exc:
+            try:
+                temporary.unlink()
+            except OSError:
+                pass
+            raise UserError(f'写 {path.name} 失败：{exc}。修改没有保存；请重试。') from exc
+
+    def peter_page(self):
+        chat = self.chat
+        persona_path = Path(chat.cfg.persona_path) if getattr(chat.cfg, 'persona_path', None) else None
+        background_path = Path(chat.cfg.background) if getattr(chat.cfg, 'background', None) else None
+        persona_text = chat.cfg.persona or ''
+        try:
+            background_text = background_path.read_text(encoding='utf-8-sig') if background_path else ''
+        except OSError as exc:
+            self._page_error('read_background', background_path, exc)
+            background_text = ''
+        user = chat.user_persona.status() if getattr(chat, 'user_persona', None) else None
+        learned = chat.profile.status(with_text=True) if getattr(chat, 'profile', None) and hasattr(chat.profile, 'status') else None
+        if learned is not None:
+            learned['versions'] = self._page_versions(chat.profile.versions)
+        return {
+            'persona': {'text': persona_text, 'chars': len(persona_text),
+                        'bytes': len(persona_text.encode('utf-8')),
+                        'tokens': self._estimate_tokens(persona_text),
+                        'mtime': persona_path.stat().st_mtime if persona_path and persona_path.exists() else 0,
+                        'path': str(persona_path) if persona_path else '',
+                        'versions': self._page_versions(persona_path) if persona_path else []},
+            'background': {'text': background_text, 'chars': len(background_text),
+                           'bytes': len(background_text.encode('utf-8')),
+                           'tokens': self._estimate_tokens(background_text),
+                           'mtime': background_path.stat().st_mtime if background_path and background_path.exists() else 0,
+                           'path': str(background_path) if background_path else '',
+                           'versions': self._page_versions(background_path) if background_path else []},
+            'user_persona': user,
+            'learned': learned,
+            'error_log': str(chat.store.root / chat.cfg.id / 'peter-page-errors.jsonl'),
+        }
+
+    def save_peter_page(self, body):
+        action = body.get('action')
+        chat = self.chat
+        if action == 'load':
+            return self.peter_page()
+        if action == 'save_persona':
+            text = body.get('text')
+            if not isinstance(text, str) or not text.strip():
+                raise UserError('人设不能为空。')
+            if not getattr(chat.cfg, 'persona_path', None):
+                raise UserError('这个角色没有本机人设文件。')
+            path = Path(chat.cfg.persona_path)
+            self._write_page_file(path, text)
+            chat.reload_persona()
+            return self.peter_page()
+        if action == 'save_background':
+            text = body.get('text')
+            if not isinstance(text, str):
+                raise UserError('背景资料必须是文字。')
+            path = Path(chat.cfg.background)
+            self._write_page_file(path, text)
+            return self.peter_page()
+        if action == 'save_user_persona':
+            if not getattr(chat, 'user_persona', None):
+                raise UserError('这个角色没有配置关于你（Lan 的人设）。')
+            chat.user_persona.save(body.get('text'))
+            return self.peter_page()
+        if action == 'save_learned':
+            if not getattr(chat, 'profile', None) or not hasattr(chat.profile, 'save_section'):
+                raise UserError('这个角色没有启用已学习的上下文。')
+            section = body.get('section')
+            chat.profile.save_section(section, body.get('text'),
+                                      expected_updated_at=body.get('expected_updated_at'),
+                                      force=body.get('force') is True)
+            return self.peter_page()
+        if action == 'save_ongoing':
+            if not getattr(chat, 'profile', None) or not hasattr(chat.profile, 'save_ongoing'):
+                raise UserError('这个角色没有启用已学习的上下文。')
+            chat.profile.save_ongoing(body.get('items'),
+                                      expected_updated_at=body.get('expected_updated_at'),
+                                      force=body.get('force') is True)
+            return self.peter_page()
+        if action == 'restore':
+            section = body.get('section')
+            version = body.get('version')
+            if section not in ('persona', 'background', 'user_persona') or not isinstance(version, str):
+                raise UserError('只能恢复人设、背景或关于你的人设。')
+            target = Path(chat.cfg.persona_path) if section == 'persona' else (
+                Path(chat.cfg.background) if section == 'background' else chat.user_persona.path)
+            folder = persona_versions.versions_dir(target)
+            source = folder / Path(version).name
+            if not source.is_file() or not source.resolve().is_relative_to(folder.resolve()):
+                raise UserError('这个历史版本不存在。')
+            self._write_page_file(target, source.read_text(encoding='utf-8-sig'))
+            if section == 'persona':
+                chat.reload_persona()
+            return self.peter_page()
+        raise UserError('未知的保存操作。')
 
     TOOL_USE_ROWS = 6000
 
@@ -2174,6 +2318,8 @@ def make_handler(hub, token):
                 self._get_workbench()
             elif url.path == '/api/windows-apps':
                 self._get_windows_apps()
+            elif url.path == '/api/peter-page':
+                self._get_peter_page()
             elif url.path == '/api/screen-pop/next':
                 self._get_screen_pop_next(query)
             elif url.path == '/api/desktop-icons/snapshots':
@@ -2566,6 +2712,23 @@ def make_handler(hub, token):
             path, interaction = self._windows_apps_path()
             self._send(200, self._windows_apps_view(path, interaction))
 
+        def _get_peter_page(self):
+            try:
+                self._send(200, hub.peter_page())
+            except UserError as exc:
+                self._send(400, {'error': str(exc)})
+            except OSError as exc:
+                self._send(500, {'error': f'读取 Peter 页失败：{exc}'})
+
+        def _post_peter_page(self, body):
+            try:
+                self._send(200, hub.save_peter_page(body))
+            except UserError as exc:
+                text = str(exc)
+                self._send(409 if ('又改过' in text or '覆盖' in text) else 400, {'error': text})
+            except OSError as exc:
+                self._send(500, {'error': f'保存失败：{exc}'})
+
         def _post_windows_apps(self, body):
             """Lan adds an open app to Peter's list, or removes one she added (both take effect at once)."""
             if not self._guard(self.headers.get('X-Token')):
@@ -2932,6 +3095,8 @@ def make_handler(hub, token):
                 self._post_workbench(body)
             elif url.path == '/api/windows-apps':
                 self._post_windows_apps(body)
+            elif url.path == '/api/peter-page':
+                self._post_peter_page(body)
             elif url.path == '/api/codex-watch':
                 self._post_codex_watch(body)
             elif url.path == '/api/exit':

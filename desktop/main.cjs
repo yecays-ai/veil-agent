@@ -10,7 +10,7 @@ let pet, chat, menu, connecting = false, quitting = false, drag, petResize, agen
 const detachedWindows = new Map(), mergingViews = new Set();
 const screenPopWindows = new Map(), screenPopInFlight = new Set();
 let screenPopPollTimer = null, screenPopPolling = false, quitFlushStarted = false;
-const VIEW_NAMES = new Set(['chat', 'activity', 'context', 'memory', 'life', 'mcp', 'more']);
+const VIEW_NAMES = new Set(['chat', 'peter', 'activity', 'context', 'memory', 'life', 'mcp', 'more']);
 const settings = { size: 320, theme: 'light' };
 const petURL = pathToFileURL(path.join(__dirname, 'pet.html')).href;
 const chatURL = pathToFileURL(path.join(__dirname, 'chat.html')).href;

@@ -18,7 +18,7 @@ test('sticker grid keeps its image rows visible inside the scrolling panel', asy
 test('chat shell exposes appearance CSS, custom background, global and per-page opacity controls', async () => {
   const [html, css, js, main, preload] = await Promise.all([read('chat.html'), read('chat.css'), read('chat.js'), read('main.cjs'), read('desktop-preload.cjs')]);
   assert.deepEqual([...html.matchAll(/class="nav-item[^\"]*" data-page="([^"]+)"/g)].map(match => match[1]),
-    ['chat', 'activity', 'context', 'memory', 'life', 'mcp', 'more']);
+    ['chat', 'peter', 'activity', 'context', 'memory', 'life', 'mcp', 'more']);
   assert.match(html, /自主活动：<b id="header-autonomy-status">/);
   assert.match(html, /id="header-next-wake"/);
   assert.match(html, /id="service-status" hidden/);
@@ -135,7 +135,10 @@ test('desktop redesign keeps real pages in one shell with a collapsible draggabl
   assert.match(css, /\.veil-select-menu\.open\{display:block\}/);
   assert.match(js, /function enhanceVeilSelects\(root=document\)/);
   assert.match(js, /select\.dispatchEvent\(new Event\('change',\{bubbles:true\}\)\)/);
-  assert.equal([...html.matchAll(/<select\b/g)].length, 8, 'all static dropdowns are accounted for');
+  assert.equal([...html.matchAll(/<select\b/g)].length, 10, 'all static dropdowns are accounted for');
+  assert.match(html, /data-page-view="peter"/);
+  assert.match(html, /id="peter-persona"/);
+  assert.match(html, /id="peter-ongoing"/);
   // Ticket 385: the form has no owner or mood; who wrote it is automatic, and events may take a time.
   assert.match(js, /id="lf-kind"[\s\S]*?id="lf-time"[\s\S]*?id="lf-repeat"/);
   assert.doesNotMatch(js, /id="lf-owner"|id="lf-mood"/);

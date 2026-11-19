@@ -690,6 +690,10 @@ class Character:
     executor: dict = None
     # Ticket 390: ordinary-chat work checkpoint (see [context] in character.toml).
     context: dict = None
+    # Ticket 394: where the persona file is, for saving it from the Peter page.
+    persona_path: str = None
+    # Ticket 394: Lan's own persona, separate from Peter's notes about her.
+    user_persona: dict = None
 
 
 def positive_int(value):
@@ -1032,10 +1036,29 @@ def load_character(root, character_id):
         profile = cfg.get('profile')
         if profile is not None:
             profile_file = profile.get('file')
+            learned = profile.get('learned', False)
+            if type(learned) is not bool:
+                raise ValueError('profile.learned must be boolean')
+            allowed = ('.md', '.json') if learned else ('.md',)
             if (not isinstance(profile_file, str) or Path(profile_file).name != profile_file
-                    or profile_file in ('', '.', '..') or not profile_file.endswith('.md')):
-                raise ValueError('profile.file must be a .md filename')
+                    or profile_file in ('', '.', '..') or not profile_file.endswith(allowed)):
+                raise ValueError('profile.file has an invalid name')
             profile = {'file': profile_file, 'max_bytes': positive_int(profile.get('max_bytes', 3000))}
+            if learned:
+                profile['learned'] = True
+                legacy = profile.get('legacy_file', 'about-lan.md')
+                if (not isinstance(legacy, str) or Path(legacy).name != legacy
+                        or not legacy.endswith('.md')):
+                    raise ValueError('profile.legacy_file must be a .md filename')
+                profile['legacy_file'] = legacy
+        user_persona = cfg.get('user_persona')
+        if user_persona is not None:
+            user_file = user_persona.get('file')
+            if (not isinstance(user_file, str) or Path(user_file).name != user_file
+                    or user_file in ('', '.', '..') or not user_file.endswith('.md')):
+                raise ValueError('user_persona.file must be a .md filename')
+            user_persona = {'file': user_file,
+                            'max_bytes': positive_int(user_persona.get('max_bytes', 4000))}
         email = cfg.get('email')
         if email is not None:
             email = {'enabled': email.get('enabled', False) is True,
@@ -1103,12 +1126,14 @@ def load_character(root, character_id):
                          positive_int(cfg.get('max_output_tokens', 1024)), provider, provider_name,
                          memory, tools, autonomy, voice, profile, email, qq, web, windows_observation,
                          windows_interaction, desktop_file_read, screen_pop, glance,
+                         persona_path=str(persona_path),
                          background=str(background_path(persona_path)),
                          voice_style=str(voice_path(persona_path)),
                          short_term_notes=short_term_notes,
                          background_provider=background_provider, models=models,
                          tool_aliases=tool_aliases, executor=executor,
-                         context={'work_checkpoint': keep_checkpoint})
+                         context={'work_checkpoint': keep_checkpoint},
+                         user_persona=user_persona)
     except UserError:
         raise
     except SettingsError as exc:
@@ -2119,12 +2144,21 @@ class Chat:
                             if getattr(cfg, 'voice_style', None) else None)
         self.profile = None
         if getattr(cfg, 'profile', None):
-            from profile_notes import ProfileNotes
-            self.profile = ProfileNotes(store.root, cfg.id, cfg.profile)
+            if cfg.profile.get('learned'):
+                from learned_context import LearnedContext
+                self.profile = LearnedContext(store.root, cfg.id, cfg.profile)
+            else:
+                from profile_notes import ProfileNotes
+                self.profile = ProfileNotes(store.root, cfg.id, cfg.profile)
             if tools and hasattr(tools, 'announce_profile_notes'):
                 tools.announce_profile_notes(cfg.profile['max_bytes'])
                 self.pending_capability_event = tools.capability_event
                 self.pending_capability_event_model = capability_model_notice(tools)
+        self.user_persona = None
+        if getattr(cfg, 'user_persona', None) and getattr(cfg, 'persona_path', None):
+            from user_persona import UserPersona
+            self.user_persona = UserPersona(Path(cfg.persona_path).parent, cfg.user_persona)
+        self.persona_lock = threading.RLock()
         self.sent_messages = []
         self.send_message_count = 0
         self.reply_displayed = False
@@ -2227,8 +2261,12 @@ class Chat:
         wake_tools = [AUTONOMY_SET_NEXT_WAKE, AUTONOMY_SET_WAKE_RHYTHM] if self.autonomy_controller is not None else []
         profile = []
         if self.profile and history:
-            from profile_notes import PROFILE_APPEND, PROFILE_REPLACE
-            profile = [PROFILE_APPEND, PROFILE_REPLACE]
+            if (self.cfg.profile or {}).get('learned'):
+                from learned_tools import PROFILE_APPEND, PROFILE_REPLACE, ONGOING_TOOL
+                profile = [PROFILE_APPEND, PROFILE_REPLACE, ONGOING_TOOL]
+            else:
+                from profile_notes import PROFILE_APPEND, PROFILE_REPLACE
+                profile = [PROFILE_APPEND, PROFILE_REPLACE]
         from thoughts import THOUGHT_TOOL
         from life_records import LIFE_TOOL
         thought = [THOUGHT_TOOL] if history else []
@@ -3161,6 +3199,22 @@ class Chat:
         output = self.autonomy_message_output if self.autonomy_mode else None
         (output or self.output)(LifeNotice(f'Peter 改了你的{kind}：{change}', after.get('id')))
 
+    def reload_persona(self):
+        """Ticket 394: pick up persona edits on the next request instead of requiring a restart."""
+        path = getattr(self.cfg, 'persona_path', None)
+        if not path:
+            raise UserError('这个角色没有本机人设文件。')
+        with self.persona_lock:
+            try:
+                text = Path(path).read_text(encoding='utf-8-sig').strip()
+            except OSError as exc:
+                raise UserError(f'读不到人设：{exc}') from exc
+            if not text:
+                raise UserError('人设文件为空，没有保存。')
+            persona_versions.snapshot(Path(path))
+            self.cfg.persona = text
+            return len(text)
+
     def _capture_work_checkpoint(self, autonomy=False):
         """Ordinary chat only; autonomous work keeps its own activity record."""
         if autonomy or self.glance_mode or self.codex_watch_mode:
@@ -3911,6 +3965,10 @@ class Chat:
         # comes first, then the chat history, then what changes every request (recalled memories,
         # capability notice, time and ledger) right before the user's message.
         head = [{'role': 'system', 'content': self.cfg.persona}]
+        # Ticket 394: Lan's own persona sits next to Peter's; it is not his notes about her.
+        user_persona_message = self.user_persona.context() if getattr(self, 'user_persona', None) else None
+        if user_persona_message:
+            head.append(user_persona_message)
         # Ticket 355: how he talks sits right after the persona; it changes only when Lan edits it.
         voice_message = self.voice_style.context() if getattr(self, 'voice_style', None) else None
         if voice_message:
@@ -3997,6 +4055,10 @@ class Chat:
         mcp_problem = self.mcp_services.problem_note() if (self.cfg.tools or {}).get('enabled', True) else None
         if isinstance(mcp_problem, str) and mcp_problem:  # ticket 343: only while an MCP service is down or just recovered
             runtime_required.append({'role': 'system', 'content': mcp_problem})
+        if getattr(self, 'profile', None) and hasattr(self.profile, 'dynamic_context'):
+            ongoing_message = self.profile.dynamic_context()
+            if ongoing_message:
+                runtime_required.append({'role': 'system', 'content': ongoing_message})
         if reply_later_batch and extra_context:
             runtime_required.append({'role': 'system', 'content': extra_context})
         runtime_required.append({'role': 'system', 'content': changing})
@@ -4292,7 +4354,7 @@ class Chat:
                         args, request_id=request_id, call_id=f'{request_id}:{tool_call_id}',
                         autonomy_run_id=self.autonomy_run_id if autonomy else None,
                         handler=self.screen_pop_handler)
-            elif self.profile and call.function.name in ('profile_append', 'profile_replace'):
+            elif self.profile and call.function.name in ('profile_append', 'profile_replace', 'ongoing_update'):
                 args = json.loads(call.function.arguments or '{}')
                 if not isinstance(args, dict):
                     result, state, summary = 'arguments must be an object.', '被拒绝', call.function.name
