@@ -94,7 +94,7 @@ def gap_text(rows, stamp, exclude_ids=(), minimum=GAP_NOTE_MINUTES):
     text += (' Before this turn, no later message from her was recorded. Her activity or sleep after that message is unknown. '
              'Use the time naturally when relevant; '
              'you may state the duration, especially when asked, but need not mention it every turn. '
-             'Her not writing does not mean she was upset.')
+             'Her silence may mean busy, asleep, or upset.')
     return text
 
 
