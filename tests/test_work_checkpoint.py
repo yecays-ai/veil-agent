@@ -85,6 +85,7 @@ class WorkCheckpointTests(unittest.TestCase):
         self.checkpoint.capture()
         first = self.checkpoint.context('conversation:0', 0)
         self.assertIn('goal: build the page', first)
+        self.assertTrue(self.checkpoint.confirm_injection())
         self.assertEqual(self.checkpoint.context('conversation:0', 0), '')
         second = self.checkpoint.context('conversation:120', 0)
         self.assertIn('goal: build the page', second)
@@ -93,13 +94,14 @@ class WorkCheckpointTests(unittest.TestCase):
         self.make([evidence()])
         self.checkpoint.capture()
         self.assertNotEqual(self.checkpoint.context('conversation:0', 20), '')
+        self.checkpoint.confirm_injection()
         self.assertEqual(self.checkpoint.context('conversation:0', 20), '')
         self.assertNotEqual(self.checkpoint.context('conversation:0', 40), '')
 
     def test_lan_can_end_it_and_it_is_not_offered_again(self):
         self.make([evidence()])
-        self.checkpoint.capture()
-        self.checkpoint.close()
+        saved = self.checkpoint.capture()
+        self.checkpoint.close(saved['id'])
         self.assertEqual(self.checkpoint.view()['status'], 'closed')
         self.assertEqual(self.checkpoint.context('conversation:9', 0), '')
         self.checkpoint.capture()
@@ -143,6 +145,43 @@ class WorkCheckpointTests(unittest.TestCase):
         self.make([evidence(path='lab/b.html')], goal='')
         saved = self.checkpoint.capture()
         self.assertEqual(saved['goal'], 'build the page')
+
+    def test_an_offer_is_not_consumed_until_the_request_goes_out(self):
+        self.make([evidence()])
+        self.checkpoint.capture()
+        self.assertNotEqual(self.checkpoint.context('conversation:0', 0), '')
+        self.assertNotEqual(self.checkpoint.context('conversation:0', 0), '')  # still offered
+        self.assertTrue(self.checkpoint.confirm_injection())
+        self.assertEqual(self.checkpoint.context('conversation:0', 0), '')
+
+    def test_closing_requires_the_same_checkpoint(self):
+        self.make([evidence()])
+        saved = self.checkpoint.capture()
+        with self.assertRaises(Exception):
+            self.checkpoint.close('some-other-id')
+        self.assertEqual(self.checkpoint.view()['status'], 'open')
+        self.checkpoint.close(saved['id'])
+        self.assertEqual(self.checkpoint.view()['status'], 'closed')
+
+    def test_a_different_completed_task_does_not_close_this_work(self):
+        self.make([evidence()])
+        saved = self.checkpoint.capture()
+        saved['long_task_id'] = 'taskB'
+        self.checkpoint._save(saved)
+        self.long_tasks.task = {'task_id': 'taskA', 'title': 'Other', 'goal': 'x', 'status': 'completed',
+                                'next_step': '', 'updated_at': now()}
+        self.investigation.task = None
+        kept = self.checkpoint.capture()
+        self.assertEqual(kept['status'], 'open')
+        self.assertEqual(kept['id'], saved['id'])
+
+    def test_bad_injection_fields_are_reported_as_no_checkpoint(self):
+        self.make([evidence()])
+        saved = self.checkpoint.capture()
+        saved['injected_dropped'] = 'not-an-int'
+        self.checkpoint._save(saved)
+        self.assertIsNone(self.checkpoint.view())
+        self.assertEqual(self.checkpoint.context('conversation:0', 0), '')
 
     def test_peter_config_enables_the_checkpoint(self):
         import tomllib

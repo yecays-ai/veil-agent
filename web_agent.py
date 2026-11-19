@@ -2654,15 +2654,18 @@ def make_handler(hub, token):
 
         def _post_work_checkpoint(self, body):
             checkpoint = getattr(hub.chat, 'work_checkpoint', None)
+            checkpoint_id = body.get('id')
             if checkpoint is None:
                 self._send(409, {'error': 'unavailable'})
-            elif body.get('action') != 'close':
+            elif body.get('action') != 'close' or not isinstance(checkpoint_id, str) or not checkpoint_id:
                 self._send(400, {'error': 'action'})
             else:
                 try:
-                    checkpoint.close()
+                    checkpoint.close(checkpoint_id)
                     self._send(200, {'ok': True, 'work_checkpoint': checkpoint.view()})
-                except (OSError, UserError) as exc:
+                except UserError as exc:
+                    self._send(409, {'error': str(exc)})
+                except OSError as exc:
                     self._send(500, {'error': str(exc)})
 
         def _post_voice_style(self, body):

@@ -1424,7 +1424,7 @@ if($('work-checkpoint-close')){
     if(workCheckpointClosing)return;
     if(!confirm('结束这个工作断点？之后新对话不会再带它。'))return;
     workCheckpointClosing=true;renderWorkCheckpoint(liveCheckpoint);
-    try{const r=await api('/api/work-checkpoint',{action:'close'});const d=await r.json();
+    try{const r=await api('/api/work-checkpoint',{action:'close',id:liveCheckpoint&&liveCheckpoint.id});const d=await r.json();
       if(!r.ok)throw new Error(d.error||'没有结束成功');
       liveCheckpoint=d.work_checkpoint||liveCheckpoint;
     }catch(e){alert(e.message||'没有结束成功')}

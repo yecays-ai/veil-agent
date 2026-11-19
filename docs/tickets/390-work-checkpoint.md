@@ -34,6 +34,9 @@
 | 断点超过 48 小时 | `work_checkpoint.py` `KEEP_FOR` | 无 | 页面显示已失效、不注入 | `test_old_work_is_expired` |
 | 关闭功能 | `[context] work_checkpoint` | 无 | 不写、不注入；页面仍可结束旧断点 | `test_lan_can_switch_the_feature_off` |
 | 上下文页/接口 | `web_agent.live_context` | 只有轮次计数 | 增加工作断点卡片与结束按钮；不改变原有轮次显示 | 手工打开页面 + 现有 web 测试 |
+| 断点在页面打开后被新工作替换 | `POST /api/work-checkpoint` 带 `id`；`WorkCheckpoint.close(expected_id)` | 会关掉当前那一条 | id 不一致时保留当前断点并报错，页面仍显示进行中 | `test_closing_requires_the_same_checkpoint` |
+| 请求因预算/长度失败 | `context()` 只登记待注入，`confirm_injection()` 在请求真正发出后才落盘 | 可能标成已注入但模型没见过 | 失败时保留，下次还能带上 | `test_an_offer_is_not_consumed_until_the_request_goes_out` |
+| 自主活动里的工具调用 | `Chat._capture_work_checkpoint(autonomy)` | 可能把自主活动写进聊天断点 | 自主活动只用自己的活动记录，不建聊天断点 | 入口条件与配置开关一致 |
 
 ## 接入检查（新能力）
 

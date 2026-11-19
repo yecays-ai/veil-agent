@@ -47,7 +47,8 @@ output_cny_per_million = "8"
             'id': 'w1', 'goal': 'build the page', 'goal_source': 'request', 'status': 'open',
             'confirmed': [{'tool': 'write_file', 'path': 'lab/a.html', 'state': '成功', 'time': now()}],
             'unconfirmed': [], 'failed': [], 'next_step': '',
-            'injected_key': '', 'injected_dropped': 0, 'captured_at': now(), 'updated_at': now()})
+            'injected_key': '', 'injected_dropped': 0, 'long_task_id': '',
+            'captured_at': now(), 'updated_at': now()})
 
     def test_the_checkpoint_is_offered_on_the_first_request_and_not_again(self):
         self.chat.send('first')

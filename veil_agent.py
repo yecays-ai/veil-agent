@@ -3161,6 +3161,17 @@ class Chat:
         output = self.autonomy_message_output if self.autonomy_mode else None
         (output or self.output)(LifeNotice(f'Peter 改了你的{kind}：{change}', after.get('id')))
 
+    def _capture_work_checkpoint(self, autonomy=False):
+        """Ordinary chat only; autonomous work keeps its own activity record."""
+        if autonomy or self.glance_mode or self.codex_watch_mode:
+            return
+        if not (self.cfg.context or {}).get('work_checkpoint', True):
+            return
+        try:
+            self.work_checkpoint.capture()
+        except UserError:
+            pass
+
     def _conversation_key(self):
         """Changes only when Lan starts a new conversation; old messages stay on disk."""
         try:
@@ -3936,8 +3947,9 @@ class Chat:
 
         runtime_auxiliary = []
         work_context = None
-        if (not autonomy and not self.glance_mode and not self.codex_watch_mode
-                and (self.cfg.context or {}).get('work_checkpoint', True)):
+        offered = ''
+        if not autonomy and not self.glance_mode and not self.codex_watch_mode \
+                and (self.cfg.context or {}).get('work_checkpoint', True):
             try:
                 self.work_checkpoint.capture()
                 offered = self.work_checkpoint.context(
@@ -4110,10 +4122,7 @@ class Chat:
                                                         autonomy=autonomy,
                                                         checkpoint_goal=self.investigation.goal_for(text),
                                                         checkpoint_resuming=bool(resume_context))
-                try:
-                    self.work_checkpoint.capture()
-                except UserError:
-                    pass
+                self._capture_work_checkpoint(autonomy)
             else:
                 try:
                     sent_bytes = request_byte_size(messages)
@@ -4151,6 +4160,9 @@ class Chat:
             self._capability_request_active = False
             raise
         self._capability_request_active = False
+        if not autonomy:
+            # The request really went out; only now does this offered block count as seen.
+            self.work_checkpoint.confirm_injection()
         if autonomy and self.autonomy_should_yield and self.autonomy_should_yield():
             self.autonomy_interrupted = True
         with saving():

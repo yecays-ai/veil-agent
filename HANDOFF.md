@@ -6,6 +6,7 @@
 - 页面：`web_agent.live_context` 增加 `work_checkpoint`；`POST /api/work-checkpoint {action:"close"}`；`desktop/chat.html|js` 新增卡片与「结束这个断点」，每轮多显示「共 N 轮、未带 M 轮（最早 …）」和 `trim_note`。context-log 新增四个字段。
 - 配置：`[context] work_checkpoint = true`（`Character.context`）；false 时不写不注入，页面仍能结束旧断点。
 - 测试：`tests/test_work_checkpoint.py`（13 项，纯模块）与 `tests/test_work_checkpoint_chat.py`（5 项，Chat 端注入/新对话/关闭/日志）。本机 DSH 沙箱用 `.local-tmp/run_tests.py`（不提交）。相关回归见 PR。
+- 评审修正（CodeRabbit 9 条）：注入改为"先提供、请求成功后再确认"，预算/长度失败不消耗；`close` 必须带当前断点 id，避免页面停留时关错新断点；只有与断点绑定的那个长期任务完成才关闭，别的任务完成不影响；校验 `injected_key/injected_dropped/next_step/long_task_id`，文件坏了按无断点处理；自主活动不再调用聊天断点的 capture；注入不再刷新 `updated_at`（48 小时从最后一次实际工作变动算）。
 - 待真机：断点是否真的让她感觉"接着上次"；注入块是否过长/重复；页面卡片在 detached 窗口只读是否正常；48 小时阈值是否合适。
 - 风险/没做：目标来自当轮用户原话或长期任务，可能已经过时，注入文本明确说"可能过时、先核实"；没有给 Peter 一个主动"记下一步"的工具（避免新建工具和工具预算）；历史窗口没满时不会重复注入。
 - 回退：`[context] work_checkpoint = false` 重开；或删除 `data/<角色>/work-checkpoint.json`。无数据迁移。
