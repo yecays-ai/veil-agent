@@ -217,7 +217,9 @@ test('live context view shows request activity above short-term notes and can be
   assert.match(js, /renderLiveContext\(s\.live_context\)/);
   assert.match(main, /detachedView === 'context' && !body && pathname\?\.startsWith\('\/api\/events\?'\)/);
   assert.match(js, /api\('\/api\/voice-style'/);
-  assert.match(main, /'\/api\/voice-style'\]\.includes\(pathname\)/);
+  assert.match(main, /'\/api\/voice-style', '\/api\/peter-page'\]\.includes\(pathname\)/);
+  assert.match(main, /url\.pathname === '\/api\/peter-page'/);
+  assert.match(main, /detachedView === 'peter'/);
   assert.match(js, /if\(detachedView\)\{\$\('voice-style-toggle'\)\.hidden=\$\('voice-style-save'\)\.hidden=true/);
 });
 
