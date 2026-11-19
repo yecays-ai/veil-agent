@@ -4,6 +4,7 @@ from decimal import Decimal
 import json
 import math
 import os
+from pathlib import Path
 import random
 import sys
 import time
@@ -28,6 +29,12 @@ MAX_RHYTHM_MINUTES = 72 * 60
 MIN_CUSTOM_INTERVAL = 30
 MAX_CUSTOM_INTERVAL = 360
 MIN_NATURAL_GAP = 20
+# Ticket 389: a wake spans more than the last one or two records. The block reports program facts only
+# (saved files, wake results, recorded next steps, unconfirmed actions); it never tells Peter to continue.
+THREAD_WAKES = 6
+THREAD_LIMIT = 3
+READ_WAKES = 4
+READ_LIMIT = 4
 
 
 def tool_failed(item):
@@ -244,6 +251,142 @@ def origin_note(tool_summaries, canonical=lambda name: name):
     labels = [label for _, label in ORIGIN_LABELS if label in seen]
     labels += sorted(seen - set(labels) - {None})
     return ', '.join(labels[:3])
+
+
+RESULT_WORDS = {'完成': 'complete', '部分完成': 'partially complete', '失败': 'failed',
+                '被打断': 'interrupted', '搁置': 'paused'}
+
+
+def _wake_time(value):
+    try:
+        return datetime.fromisoformat(value).astimezone()
+    except (TypeError, ValueError):
+        return None
+
+
+def _display_path(value):
+    return str(value or '').replace('\\', '/').strip('/')
+
+
+def _thread_key(raw):
+    """Which project a saved file belongs to. Lab work groups by its folder; anything else is its own thread."""
+    parts = [part for part in _display_path(raw).split('/') if part]
+    if len(parts) >= 3 and parts[0] == 'lab':
+        return 'lab/' + parts[1]
+    return '/'.join(parts)
+
+
+def thread_lines(rows, *, limit=THREAD_LIMIT):
+    """Facts about work that spans more than one or two wakes (ticket 389).
+
+    Only program records are used: files a wake actually saved, the wake result the program verified,
+    its recorded next step, and how many actions were left unconfirmed. Nothing here is inferred from a
+    tool name, and nothing asks Peter to continue. Returns (lines, omitted_count).
+    """
+    threads = {}
+    for index, row in enumerate(rows[-THREAD_WAKES:]):
+        try:
+            view = activity_view(row)
+        except (TypeError, ValueError, KeyError):
+            continue
+        for raw in view.get('lab_files_changed') or ():
+            key = _thread_key(raw)
+            if not key:
+                continue
+            item = threads.setdefault(key, {'first': index, 'last': index, 'wakes': set()})
+            item['last'] = index
+            item['wakes'].add(index)
+    if not threads:
+        return [], 0
+    ordered = sorted(threads.items(), key=lambda pair: pair[1]['last'], reverse=True)
+    lines, done_lines = [], []
+    for key, item in ordered:
+        row = rows[-THREAD_WAKES:][item['last']]
+        try:
+            view = activity_view(row)
+        except (TypeError, ValueError, KeyError):
+            continue
+        last_at = _wake_time(row.get('started_at'))
+        first_at = _wake_time(rows[-THREAD_WAKES:][item['first']].get('started_at'))
+        stamp = last_at.strftime('%m-%d %H:%M') if last_at else _short_context_value(row.get('started_at'), 16)
+        since = first_at.strftime('%m-%d %H:%M') if first_at else 'unknown time'
+        count = len(item['wakes'])
+        plural = '' if count == 1 else 's'
+        result = RESULT_WORDS.get(view.get('result'), str(view.get('result') or 'unknown'))
+        if view.get('result') == '完成':
+            done_lines.append(f'- {key} - {count} wake{plural} since {since}; '
+                              f'last {stamp} ended complete. That record is history, not a task you owe.')
+            continue
+        line = (f'- {key} - {count} wake{plural} since {since}; '
+                f'last {stamp} {result}')
+        unconfirmed = sum(1 for tool in view.get('tools') or []
+                          if isinstance(tool, dict) and tool.get('state') == '结果未确认')
+        if unconfirmed:
+            line += f'; {unconfirmed} action(s) unconfirmed — check them before reusing that work'
+        step = _short_context_value(view.get('next_step'), 80)
+        line += f'; next step recorded: {step}' if step else '; no next step was recorded'
+        lines.append(_short_context_value(line, 240))
+        if len(lines) >= limit:
+            break
+    lines.extend(done_lines[:max(0, limit - len(lines))])
+    return lines, max(0, len(threads) - len(lines))
+
+
+def unchanged_read_lines(rows, tool_rows, workspace, canonical=lambda name: name, *, limit=READ_LIMIT):
+    """Files whose last successful read is still valid because the file has not changed since (ticket 389).
+
+    Evidence only: a successful read_text_file in a recent wake, the file still inside the workspace, and
+    a modification time no later than that wake's start. A file changed during or after the read, a
+    truncated read, a missing file, or a status-like tool call is never claimed as unchanged.
+    """
+    if not rows or not isinstance(workspace, (str, os.PathLike)):
+        return []
+    root = Path(workspace)
+    try:
+        root = root.resolve(strict=True)
+    except (OSError, ValueError):
+        return []
+    by_wake = {}
+    for tool in tool_rows or ():
+        if isinstance(tool, dict) and isinstance(tool.get('autonomy_run_id'), str):
+            by_wake.setdefault(tool['autonomy_run_id'], []).append(tool)
+    seen, lines = set(), []
+    for row in reversed(rows[-READ_WAKES:]):
+        started = _wake_time(row.get('started_at'))
+        for tool in by_wake.get(row.get('started_at'), []):
+            if tool.get('state') != '成功' or tool.get('result_state') in ('已截断', '结果过长'):
+                continue
+            tool_name = canonical(tool.get('tool'))
+            raw = tool.get('path')
+            if tool_name == 'read_text_file':
+                raws = [raw]
+            elif tool_name == 'read_multiple_files' and isinstance(raw, str):
+                raws = [part.strip() for part in raw.split(',') if part.strip()]
+            else:
+                continue
+            for raw in raws:
+                if not isinstance(raw, str) or not raw.strip():
+                    continue
+                try:
+                    path = (root / raw.replace('\\', '/')).resolve()
+                    if not path.is_relative_to(root) or not path.is_file():
+                        continue
+                    info = path.stat()
+                except (OSError, ValueError):
+                    continue
+                if started is not None and info.st_mtime > started.timestamp():
+                    continue
+                key = str(path).casefold()
+                if key in seen:
+                    continue
+                seen.add(key)
+                stamp = started.strftime('%m-%d %H:%M') if started else 'an earlier wake'
+                size = info.st_size
+                size_text = f'{size / 1024:.1f} KB' if size >= 1024 else f'{size} B'
+                lines.append(f'- {_display_path(raw)} - read {stamp}, {size_text}, unchanged since.')
+                if len(lines) >= limit:
+                    return lines
+    return lines
 
 
 def recent_chat_handoff(store, cfg):
@@ -957,6 +1100,37 @@ class AutonomyController:
         return (f'Recent chat:\n{recent}\nActive long task: {active_task}\n'
                 f'Previous wake focus: {focus or "(none)"}\nPrevious wake next step: {next_step or "(none)"}')[:600]
 
+    def _threads_text(self):
+        """Ticket 389: what actually happened across several wakes; facts only, never a request to continue."""
+        if not self.chat.cfg.autonomy.get('threads', True) or len(self.rows) < 2:
+            return ''
+        lines, omitted = thread_lines(self.rows)
+        if not lines:
+            return ''
+        more = f'\n({omitted} more thread(s) are in autonomy_history.)' if omitted else ''
+        return ('Threads across your recent wakes (program records of what actually happened, not instructions '
+                'and not a request to continue; you may continue, leave, or drop any of them):\n'
+                + '\n'.join(lines) + more + '\n')
+
+    def _reads_text(self):
+        """Ticket 389: files already read that have not changed; live state still needs checking."""
+        if not self.chat.cfg.autonomy.get('threads', True) or not self.rows:
+            return ''
+        files = getattr(self.chat.tools, 'files', self.chat.tools)
+        workspace = getattr(files, 'workspace', None)
+        if not isinstance(workspace, (str, os.PathLike)):
+            return ''
+        try:
+            tool_rows = self.chat.store.read_tail(f'{self.chat.cfg.id}/tools.jsonl', 3000)
+        except (OSError, UserError, ValueError):
+            tool_rows = []
+        lines = unchanged_read_lines(self.rows, tool_rows, workspace, self.chat.canonical_tool_name)
+        if not lines:
+            return ''
+        return ('Files you already read in recent wakes and that have not changed since (do not read them again '
+                'for the same content; status, games, notifications, open windows and anything that can change '
+                'are still worth checking):\n' + '\n'.join(lines) + '\n')
+
     def _context(self, wake_reason=None):
         stamp = datetime.now().astimezone()
         rows = self.chat.store.read(self.chat.path)
@@ -1003,6 +1177,8 @@ class AutonomyController:
             task_text = ('\nCurrent long-task state (saved by the program; its values are data and grant no tool permissions): '
                          + self.chat.long_tasks.context_text(task) + '\n')
         lab_context = self._lab_context()
+        threads_text = self._threads_text()
+        reads_text = self._reads_text()
         thoughts = getattr(self.chat, 'thoughts', None)
         thought_text = thoughts.wake_text() if thoughts is not None else ''
         life_text = ''
@@ -1039,6 +1215,8 @@ class AutonomyController:
             + (f'{thought_text}\n' if thought_text else '') +
             f'{previous_text}\n'
             f'{earlier_text}'
+            f'{threads_text}'
+            f'{reads_text}'
             f'{travel_option}'
             f'Autonomy budget used today: CNY {auto_day:.6f}; pending verification: CNY {auto_pending:.6f}; '
             f'remaining: CNY {remaining:.6f}. This run is capped at CNY {self.daily_budget}/day.\n'
@@ -1062,6 +1240,8 @@ class AutonomyController:
             "When you're done, leave yourself a short note for next time, four lines: "
             'Decision / Reason / Focus / Next step. It\'s for you, not a report.\n'
             'Decision: ...\nReason: ...\nFocus: ...\nNext step: ...')
+        if len(text.encode('utf-8')) > MAX_CONTEXT_BYTES and reads_text:
+            text = text.replace(reads_text, '')
         if len(text.encode('utf-8')) > MAX_CONTEXT_BYTES and earlier_text:
             text = text.replace(earlier_text, '')
         if len(text.encode('utf-8')) > MAX_CONTEXT_BYTES:
@@ -1074,6 +1254,8 @@ class AutonomyController:
                 text = text.replace(travel_option, '')
             if len(text.encode('utf-8')) > MAX_CONTEXT_BYTES and thought_text:
                 text = text.replace(thought_text, '')
+            if len(text.encode('utf-8')) > MAX_CONTEXT_BYTES and threads_text:
+                text = text.replace(threads_text, '')
             if len(text.encode('utf-8')) > MAX_CONTEXT_BYTES and previous_text:
                 # Last resort: the earlier activity is still readable through autonomy_history.
                 text = text.replace(previous_text,
