@@ -708,7 +708,7 @@ daily_budget_cny = "2"
         self.assertNotIn('Nobody is waiting on you', prompt)
         self.assertNotIn('only message if you actually want to share', prompt)
         self.assertIn('Never report waking.', prompt)
-        self.assertIn('After a fight, send one short message or leave a visible thing.', prompt)
+        self.assertIn('After a fight, you may message her, leave something visible, or do neither.', prompt)
         self.assertIn("It's for you, not a report.", prompt)
         self.assertNotIn('Choose a safe, useful task to continue', prompt)
         self.assertNotIn('Do not force activity just to produce output.', prompt)

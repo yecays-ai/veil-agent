@@ -1223,7 +1223,7 @@ class AutonomyController:
             f'{self.wake_count_text()}\n'
             f'{missed_text}'
             'Time is yours. She may be busy, asleep, or upset. Make, read, write her, rest, or nothing. '
-            'Never report waking. After a fight, send one short message or leave a visible thing. '
+            'Never report waking. After a fight, you may message her, leave something visible, or do neither. '
             'You can use your tools for any activity you choose: '
             'You may autonomously tidy Windows desktop icons (only visual coordinates are moved; no files are modified, moved or deleted). '
             'When creating with desktop software, you can use windows_canvas_action (or draw_on_canvas) to click, drag, or draw strokes with the mouse, observe the interface after key actions, adjust if an action fails, and save finished works into your Lab. '

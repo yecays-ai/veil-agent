@@ -1,7 +1,7 @@
 # HANDOFF
 
 ## 工单 393 交接（自主活动：吵架后可以主动靠近）
-- 代码：`autonomy._context` 指令段删掉 “Nobody is waiting on you”“only message if you actually want to share, otherwise stay quiet”；改成 “She may be busy, asleep, or still upset; you do not owe her a report… If the last exchange was a fight and she has gone quiet, silence is not a reason to disappear: you can send one short message or leave one visible thing, then continue your time.”
+- 代码：`autonomy._context` 指令段删掉 “Nobody is waiting on you”“only message if you actually want to share, otherwise stay quiet”；改成 “Time is yours. She may be busy, asleep, or upset. Make, read, write her, rest, or nothing. Never report waking. After a fight, you may message her, leave something visible, or do neither.”
 - `life_state.gap_text` 最后一句：`Her not writing does not mean she was upset` → `Her silence may mean busy, asleep, or upset.`。这句聊天和自主共用，普通聊天也会看到；不再替她断定没生气。
 - 测试：`tests/test_autonomy.py::test_english_summary_keeps_focus_and_next_step` 改断言；`tests/test_life_state.py::test_three_hours` 改断言。
 - 没做：没有强制每次醒来发消息；没有取消 01:00–06:00 静默时段；没有加“吵架检测”状态机；没有把 “I'm here/I'll be here” 做提示词禁令（留给程序拦截单）。
