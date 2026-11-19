@@ -1,5 +1,5 @@
 'use strict';
-const { app, BrowserWindow, ipcMain, dialog, screen, shell, clipboard } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, dialog, screen, shell, clipboard } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const { randomUUID } = require('node:crypto');
@@ -229,19 +229,13 @@ async function reconnectChat(event) {
 }
 function hideMenu() { if (menu && !menu.isDestroyed()) menu.hide(); }
 function showMenu() {
-  const point = screen.getCursorScreenPoint(); const area = workAreaAt(point.x, point.y);
-  const bounds = clampPosition(point.x, point.y, 254, 226, area);
-  if (!menu || menu.isDestroyed()) {
-    menu = new BrowserWindow({ ...bounds, width: 254, height: 226, frame: false, transparent: true,
-      resizable: false, show: false, skipTaskbar: true, alwaysOnTop: true,
-      webPreferences: { preload: path.join(__dirname, 'menu-preload.cjs'), contextIsolation: true,
-        nodeIntegration: false, sandbox: true } });
-    safeContents(menu, url => url === menuURL); menu.on('blur', hideMenu);
-    menu.on('closed', () => { menu = null; });
-    menu.once('ready-to-show', () => { if (menu && !menu.isDestroyed()) { menu.webContents.send('menu:theme', settings.theme); menu.show(); menu.focus(); } });
-    menu.loadURL(menuURL);
-  } else { menu.setBounds({ ...bounds, width: 254, height: 226 }); }
-  if (!menu.webContents.isLoading()) { menu.webContents.send('menu:theme', settings.theme); menu.show(); menu.focus(); }
+  Menu.buildFromTemplate([
+    { label: '展开 / 收起聊天', click: () => menuAction('chat') },
+    { label: '查看自主活动', click: () => menuAction('activity') },
+    { label: '外观设置', click: () => menuAction('appearance') },
+    { type: 'separator' },
+    { label: '完全退出（含后台 Agent）', click: () => menuAction('quit-agent') },
+  ]).popup({ window: pet });
 }
 async function endpointRequest(pathname, method = 'GET', body) {
   if (!agentEndpoint) throw new Error('Agent 尚未连接。');
@@ -748,6 +742,9 @@ ipcMain.on('pet:resize-end', event => { if (fromPet(event)) { petResize = null; 
 ipcMain.on('pet:hit', (event, opaque) => { if (fromPet(event) && !drag) pet.setIgnoreMouseEvents(!opaque, { forward: true }); });
 ipcMain.on('menu:action', async (event, action, value) => {
   if (!menu || event.sender !== menu.webContents) return;
+  await menuAction(action, value);
+});
+async function menuAction(action, value) {
   hideMenu();
   if (action === 'chat') toggleChat();
   else if (action === 'appearance') showAppearance();
@@ -773,7 +770,7 @@ ipcMain.on('menu:action', async (event, action, value) => {
       app.quit();
     }
   }
-});
+}
 
 if (!process.env.VEIL_DESKTOP_TEST && !app.requestSingleInstanceLock()) app.quit();
 else {

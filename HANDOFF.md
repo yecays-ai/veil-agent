@@ -1,5 +1,9 @@
 # HANDOFF
 
+## 工单 390：桌宠右键菜单
+- 用户实际运行时，右键产生的菜单窗口可见但用户看不到内容；改用系统菜单，保留原有操作和退出路径，角落缩放控件也能响应右键。
+- 已执行 JavaScript 语法检查与界面单元检查；仍需 Windows 实机检查菜单显示、每项操作及完全退出。
+
 ## 工单 389 交接（自主活动跨唤醒线索）
 - 代码：`autonomy.py` 新增 `THREAD_WAKES=6`、`THREAD_LIMIT=3`、`READ_WAKES=4`、`READ_LIMIT=4`；纯函数 `thread_lines()` 按 `lab/<项目>` 聚合 `lab_files_changed`，结果只取 `activity_view()` 纠正后的值，附未确认动作数与该次写下的下一步；`unchanged_read_lines()` 只认 `read_text_file` 成功、未截断、文件在 workspace 内、mtime ≤ 该次醒来开始时间，状态类工具与截断读取一律不列。
 - 接线：`AutonomyController._threads_text()` / `_reads_text()` 仅在 `cfg.autonomy['threads']`（默认 True）时生成；`_context()` 放在「上次活动 + 前 2 次」之后；32KB 裁剪时先丢「已读未变」，再走原有 earlier/life/lab/travel/thoughts，最后才丢线索和上次活动。

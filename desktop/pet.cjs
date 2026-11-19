@@ -38,7 +38,7 @@ button.addEventListener('pointercancel', () => { down = null; window.companion.d
 button.addEventListener('keydown', event => {
   if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); window.companion.toggle(); }
 });
-button.addEventListener('contextmenu', event => { event.preventDefault(); window.companion.menu(); });
+window.addEventListener('contextmenu', event => { event.preventDefault(); window.companion.menu(); });
 document.querySelectorAll('.resize').forEach(handle => {
   handle.addEventListener('pointerdown', event => {
     if (event.button !== 0) return;
