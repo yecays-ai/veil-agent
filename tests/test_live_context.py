@@ -97,6 +97,19 @@ class LiveContextTest(unittest.TestCase):
         self.assertEqual(turn['tools'], [{'tool': 'send_message', 'state': '成功'}])
         self.assertEqual(live['notes']['active'], [])
 
+    def test_hub_shows_where_each_memory_went(self):
+        self.store.append('peter/context-log.jsonl', {'kind': 'chat', 'request_id': 'r9', 'history_rounds': 3})
+        self.store.append('peter/recall-diagnostics.jsonl', {
+            'request_id': 'r9', 'ombre': ['a', 'b', 'c'], 'hidden': [{'id': 'b', 'reason': 'archived'}],
+            'vector': ['d'], 'judge': {'status': 'chosen', 'candidates': 3, 'picked': ['a']},
+            'dropped': [{'id': 'c', 'reason': 'cooldown'}], 'injected': ['a'], 'opening': [],
+            'budget_dropped': [], 'failure': ''})
+        hub = Hub.__new__(Hub)
+        hub.chat = self.chat
+        turn = hub.live_context([])['turns'][0]
+        self.assertEqual(turn['recall']['injected'], ['a'])
+        self.assertEqual(turn['recall']['hidden'], [{'id': 'b', 'reason': 'archived'}])
+
     def test_extractor_failure_settles_reservation_and_does_not_leak_pending(self):
         budget = Budget(self.store)
         cfg = Character(

@@ -19,6 +19,8 @@ import uuid
 from agent_types import UserError
 from recall_judge import JudgeFailed
 
+RECALL_DIAGNOSTICS_KEEP = 200
+
 
 def vault_path(root, character):
     if not re.fullmatch(r'[a-z0-9][a-z0-9_-]*', character):
@@ -991,6 +993,60 @@ class Memory:
                     self.retrieval_failure(failure_stage, exc)
         return self.visible(checked)
 
+    def visibility_reason(self, memory_id):
+        """Why a candidate may not be shown (ticket 391); returns a code, never content."""
+        raw = self.raw_content_for(memory_id)
+        if raw is None:
+            return 'missing'
+        lines = raw.splitlines()
+        end = next((index for index, line in enumerate(lines[1:], start=1) if line.strip() == '---'), None)
+        metadata = {}
+        if lines and lines[0].strip() == '---' and end is not None:
+            for line in lines[1:end]:
+                key, sep, value = line.partition(':')
+                if sep and not line[:1].isspace() and key.strip() in {
+                        'dont_surface', 'tombstone', 'deleted_at', 'type'}:
+                    metadata[key.strip()] = self._frontmatter_scalar(value).casefold()
+        if metadata.get('type') == 'archived':
+            return 'archived'
+        if metadata.get('tombstone') in ('true', 'yes', 'on', '1'):
+            return 'tombstone'
+        if metadata.get('dont_surface') in ('true', 'yes', 'on', '1'):
+            return 'dont_surface'
+        if metadata.get('deleted_at', '') not in ('', 'null', 'none', 'false'):
+            return 'deleted'
+        with self.mutex:
+            if memory_id in set(self.state['sources'].values()):
+                return 'source'
+            if memory_id in {key for key, row in self.state['entries'].items() if row.get('hidden')}:
+                return 'hidden'
+        return 'unavailable'
+
+    def note_budget_dropped(self, keys):
+        """Ticket 391: memories removed only because this request was too long."""
+        debug = getattr(self, 'last_recall_debug', None)
+        if isinstance(debug, dict):
+            debug['budget_dropped'] = [key for key in keys if isinstance(key, str)]
+
+    def save_recall_debug(self, request_id):
+        """Append one read-only diagnostics row for this turn; IDs and reasons only, never text."""
+        debug = getattr(self, 'last_recall_debug', None)
+        if not isinstance(debug, dict):
+            return
+        row = {'time': self.budget.clock(), 'request_id': request_id, **debug}
+        name = f'{self.cfg.id}/recall-diagnostics.jsonl'
+        try:
+            self.store.append(name, row)
+            path = self.store.root / name
+            with self.store.mutex:
+                lines = path.read_bytes().splitlines(keepends=True)
+                if len(lines) > RECALL_DIAGNOSTICS_KEEP + RECALL_DIAGNOSTICS_KEEP // 5:
+                    temporary = path.with_suffix('.tmp')
+                    temporary.write_bytes(b''.join(lines[-RECALL_DIAGNOSTICS_KEEP:]))
+                    os.replace(temporary, path)
+        except (OSError, UserError):
+            pass
+
     def is_hidden(self, memory_id):
         return memory_id in self.hidden_ids()
 
@@ -1281,6 +1337,11 @@ class Memory:
         self.last_assisted = None
         self.last_recall_skipped = {'cooldown': 0, 'same_event': 0, 'stage_cap': 0}
         self.last_recall_marks = None
+        # Ticket 391: one read-only record of where each candidate went. IDs and reasons only, never text.
+        self.last_recall_debug = {'query_chars': len(query or ''), 'query_hash': hashlib.sha256(
+            (query or '').encode('utf-8')).hexdigest()[:12], 'ombre': [], 'hidden': [], 'vector': [],
+            'judge': {'status': 'skipped', 'candidates': 0, 'picked': []}, 'dropped': [],
+            'injected': [], 'opening': [], 'budget_dropped': [], 'failure': ''}
         recall_cfg = self.recall_settings
         cooldown = 0 if asks_about_past(query) and not (rotate or wake) else recall_cfg['cooldown_turns']
         widen = (rotate or wake) and recall_cfg['rotation_candidates'] > 3
@@ -1305,18 +1366,24 @@ class Memory:
             raw = self.call('breath_search', {
                 'query': query, 'mode': 'automatic', 'with_ids': True, 'max_results': asked})
             normal = ordinary_hits(raw, limit=asked)
+            self.last_recall_debug['ombre'] = [key for key, _ in normal]
             pool = self.context_visible(normal, failure_stage='recall_visibility')
+            visible = {key for key, _ in pool}
+            self.last_recall_debug['hidden'] = [{'id': key, 'reason': self.visibility_reason(key)}
+                                                for key, _ in normal if key not in visible]
             if not widen:
                 normal = pool[:3]
             elif wake:
                 normal = pool
             drift = drift_hits(raw)
         except Exception as exc:
+            self.last_recall_debug['failure'] = 'breath_search'
             self.retrieval_failure('breath_search', exc)
         if not wake:
             try:
                 emotional = blocks(self.call('feel', {'query': query}))
             except Exception as exc:
+                self.last_recall_debug['failure'] = 'feel'
                 self.retrieval_failure('feel', exc)
         if prefetched is not None:
             try:
@@ -1325,11 +1392,15 @@ class Memory:
                 normal = judge.choose(query, pool, prefetched, wake=wake,
                                       max_picks=3 if wake else 2,
                                       candidate_limit=max(3, recall_cfg['rotation_candidates']) if wake else None)
+                self.last_recall_debug['judge'] = dict(getattr(judge, 'last_choice', {}) or {})
+                self.last_recall_debug['vector'] = list(self.last_recall_debug['judge'].get('vector') or [])
                 drift = []   # a recollection nobody judged would be a way around "none fits"
             except JudgeFailed:
+                self.last_recall_debug['judge'] = {'status': 'failed', 'candidates': 0, 'picked': []}
                 if wake:
                     normal, drift = pool[:3], []
             except Exception as exc:
+                self.last_recall_debug['judge'] = {'status': 'failed', 'candidates': 0, 'picked': []}
                 self.retrieval_failure('recall_judge', exc)
                 if wake:
                     normal, drift = pool[:3], []
@@ -1404,10 +1475,12 @@ class Memory:
                 break
             if self.rotation.cooled(key, cooldown):
                 self.last_recall_skipped['cooldown'] += 1
+                self.last_recall_debug['dropped'].append({'id': key, 'reason': 'cooldown'})
                 continue
             skipped = duplicate(key, kept)
             if skipped:
                 self.last_recall_skipped[skipped] += 1
+                self.last_recall_debug['dropped'].append({'id': key, 'reason': skipped})
                 continue
             kept.append((key, body))
             if wake:
@@ -1440,6 +1513,8 @@ class Memory:
             opening_shown = []
         for key, _ in opening_shown:
             kinds[key] = 'opening'
+        self.last_recall_debug['injected'] = [key for key, _ in kept]
+        self.last_recall_debug['opening'] = [key for key, _ in opening_shown]
         limit = recall_cfg['excerpt_chars']
         directories = (self._experience_directories(kept, metas, adjacency, recall_cfg['directory_members'])
                        if recall_cfg['directory'] else {})

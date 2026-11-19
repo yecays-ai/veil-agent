@@ -1431,6 +1431,26 @@ if($('work-checkpoint-close')){
     finally{workCheckpointClosing=false;if(liveCheckpoint)renderWorkCheckpoint(liveCheckpoint)}
   };
 }
+function recallText(r){
+  if(!r)return '';
+  const n=v=>Array.isArray(v)?v.length:0;
+  const parts=[];
+  parts.push(`Ombre ${n(r.ombre)} 条`);
+  if(n(r.hidden)){
+    const reasons=[...new Set((r.hidden||[]).map(x=>x&&x.reason).filter(Boolean))];
+    parts.push(`不可见 ${n(r.hidden)} 条${reasons.length?'（'+reasons.join('/')+'）':''}`);
+  }
+  const j=r.judge||{};
+  if(j.status==='failed')parts.push('判官失败，按普通检索');
+  else if(j.status==='empty')parts.push('判官看过，没有直接相关');
+  else if(j.status==='chosen')parts.push(`判官选 ${n(j.picked)} 条`);
+  else parts.push('没用判官');
+  parts.push(`注入 ${n(r.injected)} 条`);
+  if(n(r.dropped))parts.push(`去重/冷却 ${n(r.dropped)} 条`);
+  if(n(r.budget_dropped))parts.push(`字数裁掉 ${n(r.budget_dropped)} 条`);
+  if(r.failure)parts.push('检索故障：'+r.failure);
+  return '记忆：'+parts.join('；');
+}
 let liveCheckpoint=null;
 function renderLiveContext(live){
   live=live||{};liveCheckpoint=live.work_checkpoint||null;renderWorkCheckpoint(liveCheckpoint);const key=JSON.stringify(live);if(key===liveContextKey)return;liveContextKey=key;
@@ -1443,6 +1463,7 @@ function renderLiveContext(live){
     turnList.appendChild(contextRow({head:[['time','',shortTime(turn.time)],['strong','',CONTEXT_KINDS[turn.kind]||turn.kind||'请求']],
       lines:[[ 'meta',(turn.history_dropped_rounds>0?`原文 ${turn.history_rounds??0} 轮（共 ${turn.history_total_rounds??'?'} 轮，未带 ${turn.history_dropped_rounds} 轮${turn.history_dropped_since?'，最早 '+shortTime(turn.history_dropped_since):''}）`:`原文 ${turn.history_rounds??0} 轮`)+` · 背景 ${turn.background_count||0} 段 · 长期记忆 ${turn.memory_count||0} 条 · 便签 ${turn.notes_count||0} 条`+(turn.estimated_input_tokens?` · 约 ${turn.estimated_input_tokens} tokens`:'')],
         ['meta',turn.trim_note||''],
+        ['meta',recallText(turn.recall)],
         ['meta',toolText?'工具：'+toolText:'']]}));
   }
   renderToolInventory(live.tool_inventory);

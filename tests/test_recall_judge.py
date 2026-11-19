@@ -119,6 +119,9 @@ class RecallJudgeTests(unittest.TestCase):
         self.assertIn('mint needs a schedule', text)
         self.assertNotIn('weather', text)
         self.assertEqual('ok', memory.judge.last['kind'])
+        self.assertEqual('chosen', memory.judge.last_choice['status'])
+        self.assertIn('cactus', memory.judge.last_choice['picked'])
+        self.assertIn('cactus', memory.judge.last_choice['vector'])
 
     def test_without_the_judge_the_weak_ombre_hit_is_recalled_as_before(self):
         refs, _ = self.recall(self.memory(judge=False))
@@ -135,6 +138,8 @@ class RecallJudgeTests(unittest.TestCase):
         self.assertEqual([], refs)
         self.assertIn('No relevant memories were found', text)
         self.assertEqual('empty', memory.judge.last['kind'])
+        self.assertEqual('empty', memory.judge.last_choice['status'])
+        self.assertEqual([], memory.judge.last_choice['picked'])
         self.assertEqual(0, memory.judge.failures)
 
     def test_hidden_archived_digested_and_plan_memories_never_reach_the_judge(self):
