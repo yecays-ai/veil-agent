@@ -1395,8 +1395,45 @@ if($('voice-style-toggle')){
   $('voice-style-toggle').onclick=()=>postVoiceStyle({enabled:!voiceStyleEnabled},voiceStyleEnabled?'已关闭，下一句话起不再带。':'已开启。');
   $('voice-style-save').onclick=()=>postVoiceStyle({text:$('voice-style-text').value},'已保存，旧版本留在 persona/versions 里。');
 }
+let workCheckpointClosing=false;
+function renderWorkCheckpoint(cp){
+  const block=$('work-checkpoint-block'),list=$('work-checkpoint'),summary=$('work-checkpoint-summary'),close=$('work-checkpoint-close');
+  if(!block)return;
+  if(!cp){block.hidden=true;return}
+  block.hidden=false;
+  const state={open:'进行中',closed:'已结束',expired:'已失效'}[cp.status]||cp.status||'';
+  summary.textContent=state+(cp.status==='open'?'：结束或失效后不再带进新对话':'');
+  list.replaceChildren();
+  const rows=(items,label)=>Array.isArray(items)&&items.length?label+'：'+items.slice(0,4).map(r=>`${r.tool||'?'} ${r.path||''}${r.state?'（'+r.state+'）':''}`).join('；')+(items.length>4?`；另有 ${items.length-4} 条`:''):'';
+  const lines=[
+    ['meta',cp.goal?'目标：'+cp.goal:'目标：待确认（当时没有留下目标记录）'],
+    ['meta',rows(cp.confirmed,'已确认')],
+    ['meta',rows(cp.unconfirmed,'未确认（先核实再用）')],
+    ['meta',rows(cp.failed,'失败或被拒绝（不能说成已完成）')],
+    ['meta','下一步：'+(cp.next_step||'待确认（没有程序记录，需要自己判断）')],
+    ['meta','记录于 '+(shortTime(cp.updated_at)||'未知')+(cp.closed_at?'，结束于 '+shortTime(cp.closed_at):'')]
+  ];
+  list.appendChild(contextRow({head:[['strong','','工作断点'],['meta','',cp.goal?'':'目标待确认']],lines}));
+  if(close){
+    close.hidden=cp.status!=='open'||!!detachedView||workCheckpointClosing;
+    close.textContent=workCheckpointClosing?'正在结束…':'结束这个断点';
+  }
+}
+if($('work-checkpoint-close')){
+  $('work-checkpoint-close').onclick=async()=>{
+    if(workCheckpointClosing)return;
+    if(!confirm('结束这个工作断点？之后新对话不会再带它。'))return;
+    workCheckpointClosing=true;renderWorkCheckpoint(liveCheckpoint);
+    try{const r=await api('/api/work-checkpoint',{action:'close',id:liveCheckpoint&&liveCheckpoint.id});const d=await r.json();
+      if(!r.ok)throw new Error(d.error||'没有结束成功');
+      liveCheckpoint=d.work_checkpoint||liveCheckpoint;
+    }catch(e){alert(e.message||'没有结束成功')}
+    finally{workCheckpointClosing=false;if(liveCheckpoint)renderWorkCheckpoint(liveCheckpoint)}
+  };
+}
+let liveCheckpoint=null;
 function renderLiveContext(live){
-  live=live||{};const key=JSON.stringify(live);if(key===liveContextKey)return;liveContextKey=key;
+  live=live||{};liveCheckpoint=live.work_checkpoint||null;renderWorkCheckpoint(liveCheckpoint);const key=JSON.stringify(live);if(key===liveContextKey)return;liveContextKey=key;
   const turns=Array.isArray(live.turns)?live.turns:[],turnList=$('context-turns');turnList.replaceChildren();
   if(!turns.length){const p=document.createElement('p');p.className='muted';p.textContent='还没有记录。Peter 回复一次后这里就会出现。';turnList.appendChild(p)}
   for(const turn of turns){
@@ -1404,7 +1441,8 @@ function renderLiveContext(live){
     const counts={};for(const item of tools){const name=item.tool||'?';counts[name]=(counts[name]||0)+1}
     const toolText=Object.entries(counts).map(([name,count])=>count>1?`${name} ×${count}`:name).join('、');
     turnList.appendChild(contextRow({head:[['time','',shortTime(turn.time)],['strong','',CONTEXT_KINDS[turn.kind]||turn.kind||'请求']],
-      lines:[['meta',`原文 ${turn.history_rounds??0} 轮 · 背景 ${turn.background_count||0} 段 · 长期记忆 ${turn.memory_count||0} 条 · 便签 ${turn.notes_count||0} 条`+(turn.estimated_input_tokens?` · 约 ${turn.estimated_input_tokens} tokens`:'')],
+      lines:[[ 'meta',(turn.history_dropped_rounds>0?`原文 ${turn.history_rounds??0} 轮（共 ${turn.history_total_rounds??'?'} 轮，未带 ${turn.history_dropped_rounds} 轮${turn.history_dropped_since?'，最早 '+shortTime(turn.history_dropped_since):''}）`:`原文 ${turn.history_rounds??0} 轮`)+` · 背景 ${turn.background_count||0} 段 · 长期记忆 ${turn.memory_count||0} 条 · 便签 ${turn.notes_count||0} 条`+(turn.estimated_input_tokens?` · 约 ${turn.estimated_input_tokens} tokens`:'')],
+        ['meta',turn.trim_note||''],
         ['meta',toolText?'工具：'+toolText:'']]}));
   }
   renderToolInventory(live.tool_inventory);

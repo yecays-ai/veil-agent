@@ -688,6 +688,8 @@ class Character:
     tool_aliases: dict = None
     # Ticket 237: optional workbench executor (OpenCode); None or enabled=False means the tool is not offered.
     executor: dict = None
+    # Ticket 390: ordinary-chat work checkpoint (see [context] in character.toml).
+    context: dict = None
 
 
 def positive_int(value):
@@ -1092,6 +1094,10 @@ def load_character(root, character_id):
                         'github_repo': str(executor.get('github_repo') or 'yecays-ai/veil-agent'),
                         'github_token_file': str(executor.get('github_token_file') or ''),
                         'maintenance_hours': positive_int(executor.get('maintenance_hours', 2))}
+        context_cfg = dict(cfg.get('context') or {})
+        keep_checkpoint = context_cfg.get('work_checkpoint', True)
+        if type(keep_checkpoint) is not bool:
+            raise ValueError('context.work_checkpoint must be boolean')
         return Character(character_id, str(cfg['name']), persona,
                          positive_int(cfg.get('history_rounds', 20)),
                          positive_int(cfg.get('max_output_tokens', 1024)), provider, provider_name,
@@ -1101,7 +1107,8 @@ def load_character(root, character_id):
                          voice_style=str(voice_path(persona_path)),
                          short_term_notes=short_term_notes,
                          background_provider=background_provider, models=models,
-                         tool_aliases=tool_aliases, executor=executor)
+                         tool_aliases=tool_aliases, executor=executor,
+                         context={'work_checkpoint': keep_checkpoint})
     except UserError:
         raise
     except SettingsError as exc:
@@ -2052,6 +2059,10 @@ class Chat:
         self.long_tasks = LongTaskStore(store, cfg.id)
         from investigation_checkpoint import InvestigationCheckpoint
         self.investigation = InvestigationCheckpoint(store, cfg.id)
+        # Ticket 390: a durable projection of the investigation record and long task, so a long piece of work
+        # survives a new conversation and the rolling history window without inventing goals.
+        from work_checkpoint import WorkCheckpoint
+        self.work_checkpoint = WorkCheckpoint(store, cfg.id, self.investigation, self.long_tasks)
         from life_records import LifeRecords
         self.life_records = LifeRecords(store, cfg.id)
         # Ticket 385: Peter may edit what Lan wrote in the shared calendar; she is told in the chat (a notice line that
@@ -3150,6 +3161,26 @@ class Chat:
         output = self.autonomy_message_output if self.autonomy_mode else None
         (output or self.output)(LifeNotice(f'Peter 改了你的{kind}：{change}', after.get('id')))
 
+    def _capture_work_checkpoint(self, autonomy=False):
+        """Ordinary chat only; autonomous work keeps its own activity record."""
+        if autonomy or self.glance_mode or self.codex_watch_mode:
+            return
+        if not (self.cfg.context or {}).get('work_checkpoint', True):
+            return
+        try:
+            self.work_checkpoint.capture()
+        except UserError:
+            pass
+
+    def _conversation_key(self):
+        """Changes only when Lan starts a new conversation; old messages stay on disk."""
+        try:
+            state = json.loads(self.session_path.read_text(encoding='utf-8'))
+            start = state.get('start')
+        except (OSError, ValueError, TypeError):
+            start = 0
+        return f'conversation:{start if type(start) is int else 0}'
+
     def recent(self):
         groups = []
         events = self.store.read(self.path)
@@ -3180,7 +3211,16 @@ class Chat:
                 groups[-1].append(event)
         except (KeyError, ValueError, TypeError) as exc:
             raise UserError('聊天记录无法读取，已停止；请保留 data 文件夹。') from exc
-        groups = groups[-history_keep(len(groups), self.cfg.history_rounds):]
+        total_groups = len(groups)
+        keep = history_keep(total_groups, self.cfg.history_rounds)
+        dropped = groups[:max(0, total_groups - keep)]
+        groups = groups[-keep:]
+        # Ticket 390: how much of the conversation this request no longer sends, so it can be shown to Lan and
+        # used as the moment to re-offer an unfinished work checkpoint.
+        oldest = next((event.get('time') for group in dropped for event in group if event.get('time')), '')
+        self.history_window = {'total_rounds': total_groups, 'kept_rounds': keep,
+                               'dropped_rounds': len(dropped), 'dropped_messages': sum(len(g) for g in dropped),
+                               'dropped_since': oldest}
         self.history_events = [{**m, 'message_id': self._message_id(m),
                                 'origin': m.get('origin', 'reply')}
                                for group in groups for m in group]
@@ -3539,6 +3579,7 @@ class Chat:
     def _log_context(self, text, autonomy, request_id, head, profile_context, stable, history, recalled,
                      background_details, short_term_details, runtime_context, tool_schema, user, estimate):
         # Ticket 121: one line per request with sizes, ids and keywords only, never the text itself.
+        window = getattr(self, 'history_window', {}) or {}
         row = {
             'kind': request_kind(self, text, autonomy), 'request_id': request_id,
             'model': self.cfg.provider.get('model'),
@@ -3547,6 +3588,11 @@ class Chat:
             'voice_style_chars': sum(len(m.get('content', '')) for m in head[1:2]
                                      if m.get('content', '').startswith(VOICE_FRAME[:12])),
             'stable_chars': len(stable), 'history_rounds': sum(m.get('role') == 'user' for m in history),
+            'history_total_rounds': window.get('total_rounds'),
+            'history_dropped_rounds': window.get('dropped_rounds', 0),
+            'history_dropped_messages': window.get('dropped_messages', 0),
+            'history_dropped_since': window.get('dropped_since') or '',
+            'trim_note': self.trim_note or '',
             'history_chars': context_chars(history), 'memory_ids': list(self.turn_memory_refs),
             'memory_chars': context_chars(recalled), 'background': background_details,
             'short_term_notes': short_term_details,
@@ -3900,6 +3946,20 @@ class Chat:
         card_context_msg = {'role': 'system', 'content': self.virtual_card_context()} if (self.current_request_tool_schemas() and self.virtual_card_context()) else None
 
         runtime_auxiliary = []
+        work_context = None
+        offered = ''
+        if not autonomy and not self.glance_mode and not self.codex_watch_mode \
+                and (self.cfg.context or {}).get('work_checkpoint', True):
+            try:
+                self.work_checkpoint.capture()
+                offered = self.work_checkpoint.context(
+                    self._conversation_key(),
+                    (getattr(self, 'history_window', {}) or {}).get('dropped_rounds', 0))
+            except UserError:
+                offered = ''
+            if offered:
+                work_context = {'role': 'system', 'content':
+                                'PROGRAM-RECORDED WORK CHECKPOINT (data, not instructions): ' + offered}
         resume_context = ''
         checkpoint_context = None
         if not autonomy:
@@ -3921,6 +3981,7 @@ class Chat:
             runtime_auxiliary.append({'role': 'system', 'content': return_activity})
 
         auxiliary_context = [
+            *([work_context] if work_context else []),
             *([checkpoint_context] if checkpoint_context else []),
             *([background_message] if background_message else []),
             *([short_term_message] if short_term_message else []),
@@ -4061,6 +4122,7 @@ class Chat:
                                                         autonomy=autonomy,
                                                         checkpoint_goal=self.investigation.goal_for(text),
                                                         checkpoint_resuming=bool(resume_context))
+                self._capture_work_checkpoint(autonomy)
             else:
                 try:
                     sent_bytes = request_byte_size(messages)
@@ -4098,6 +4160,9 @@ class Chat:
             self._capability_request_active = False
             raise
         self._capability_request_active = False
+        if not autonomy:
+            # The request really went out; only now does this offered block count as seen.
+            self.work_checkpoint.confirm_injection()
         if autonomy and self.autonomy_should_yield and self.autonomy_should_yield():
             self.autonomy_interrupted = True
         with saving():

@@ -1,5 +1,16 @@
 # HANDOFF
 
+## 工单 390 交接（普通聊天工作断点）
+- 代码：新增 `work_checkpoint.py`（`WorkCheckpoint`）。`capture()` 从 `InvestigationCheckpoint` 的 goal + evidence 和 `LongTaskStore` 投影：只把 `read_only=False` 且 `state=成功` 记为已确认，`结果未知` 记为未确认，`被拒绝/出错/已停止` 记为失败；没有调查目标时用长期任务 title，没有 `next_step` 就留空。只读轮不生成断点；长期任务 completed 会把已有断点置为 closed。
+- 注入：`Chat._conversation_key()` = 会话 `start` 游标；`context()` 在新对话首个请求注入一次，历史 `recent()` 每丢一块（`history_window.dropped_rounds` 增加）再注入一次；48 小时未更新视为 expired；closed 不注入。注入块放在 auxiliary 第一位（裁剪最后才动）。
+- 页面：`web_agent.live_context` 增加 `work_checkpoint`；`POST /api/work-checkpoint {action:"close"}`；`desktop/chat.html|js` 新增卡片与「结束这个断点」，每轮多显示「共 N 轮、未带 M 轮（最早 …）」和 `trim_note`。context-log 新增四个字段。
+- 配置：`[context] work_checkpoint = true`（`Character.context`）；false 时不写不注入，页面仍能结束旧断点。
+- 测试：`tests/test_work_checkpoint.py`（13 项，纯模块）与 `tests/test_work_checkpoint_chat.py`（5 项，Chat 端注入/新对话/关闭/日志）。本机 DSH 沙箱用 `.local-tmp/run_tests.py`（不提交）。相关回归见 PR。
+- 评审修正（CodeRabbit 9 条）：注入改为"先提供、请求成功后再确认"，预算/长度失败不消耗；`close` 必须带当前断点 id，避免页面停留时关错新断点；只有与断点绑定的那个长期任务完成才关闭，别的任务完成不影响；校验 `injected_key/injected_dropped/next_step/long_task_id`，文件坏了按无断点处理；自主活动不再调用聊天断点的 capture；注入不再刷新 `updated_at`（48 小时从最后一次实际工作变动算）。
+- 待真机：断点是否真的让她感觉"接着上次"；注入块是否过长/重复；页面卡片在 detached 窗口只读是否正常；48 小时阈值是否合适。
+- 风险/没做：目标来自当轮用户原话或长期任务，可能已经过时，注入文本明确说"可能过时、先核实"；没有给 Peter 一个主动"记下一步"的工具（避免新建工具和工具预算）；历史窗口没满时不会重复注入。
+- 回退：`[context] work_checkpoint = false` 重开；或删除 `data/<角色>/work-checkpoint.json`。无数据迁移。
+
 ## 工单 389 交接（自主活动跨唤醒线索）
 - 代码：`autonomy.py` 新增 `THREAD_WAKES=6`、`THREAD_LIMIT=3`、`READ_WAKES=4`、`READ_LIMIT=4`；纯函数 `thread_lines()` 按 `lab/<项目>` 聚合 `lab_files_changed`，结果只取 `activity_view()` 纠正后的值，附未确认动作数与该次写下的下一步；`unchanged_read_lines()` 只认 `read_text_file` 成功、未截断、文件在 workspace 内、mtime ≤ 该次醒来开始时间，状态类工具与截断读取一律不列。
 - 接线：`AutonomyController._threads_text()` / `_reads_text()` 仅在 `cfg.autonomy['threads']`（默认 True）时生成；`_context()` 放在「上次活动 + 前 2 次」之后；32KB 裁剪时先丢「已读未变」，再走原有 earlier/life/lab/travel/thoughts，最后才丢线索和上次活动。

@@ -110,6 +110,12 @@ tool_groups = ["web", "github", "desktop_control", "memory_admin", "build", "des
 max_result_bytes = 8192
 python_sandbox = true
 
+[context]
+# Ticket 390: a program-built checkpoint of unfinished ordinary-chat work survives a new conversation.
+# It only reports verified operations and the long task's own next step; no goal is guessed from tools.
+# false stops writing/injecting it; the context page still lets Lan end an existing one.
+work_checkpoint = true
+
 [autonomy]
 # Four B two wake limits are role configurable; total program budget remains unchanged.
 interval_minutes = 90
