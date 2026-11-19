@@ -2159,6 +2159,8 @@ class Chat:
             from user_persona import UserPersona
             self.user_persona = UserPersona(Path(cfg.persona_path).parent, cfg.user_persona)
         self.persona_lock = threading.RLock()
+        from pending_approvals import PendingApprovals
+        self.pending_approvals = PendingApprovals(store.root, cfg.id)
         self.sent_messages = []
         self.send_message_count = 0
         self.reply_displayed = False

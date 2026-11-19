@@ -41,43 +41,41 @@
   <main id="log" class="page active" data-page-view="chat"><div class="col" id="col" aria-live="polite"></div></main>
 
   <section id="peter-view" class="page" data-page-view="peter" hidden>
-    <div class="page-heading"><div><h2>Peter 是谁</h2><p class="muted">改完保存，下一句生效；未保存离开会问你。</p></div><span id="peter-status" class="muted"></span></div>
+    <div class="page-heading"><div><h2>Peter 是谁</h2></div><span id="peter-status" class="muted"></span></div>
     <article class="surface peter-card" data-peter-card="persona">
-      <header><div><h3>个性</h3><p class="muted">决定 Peter 是谁、怎么说话；每次请求都带。</p></div><span id="peter-persona-count" class="muted"></span></header>
+      <header><h3 tabindex="0" title="Peter 的人设，每次请求都带">个性</h3><span id="peter-persona-count" class="muted"></span></header>
       <textarea id="peter-persona" class="peter-textarea" spellcheck="false" rows="12"></textarea>
-      <footer><span id="peter-persona-saved" class="muted"></span><div class="peter-actions"><select id="peter-persona-versions" aria-label="人设历史版本"><option value="">历史版本</option></select><button id="peter-persona-restore" type="button">恢复</button><button id="peter-persona-save" type="button">保存个性</button></div></footer>
+      <footer><span id="peter-persona-saved" class="muted"></span><div class="peter-actions"><select id="peter-persona-versions" aria-label="人设历史版本"><option value="">历史版本</option></select><button id="peter-persona-restore" type="button">恢复</button><button id="peter-persona-save" type="button">保存</button></div></footer>
     </article>
     <article class="surface peter-card" data-peter-card="background">
-      <header><div><h3>背景资料</h3><p class="muted">带关键词的段落，相关时才带；<b>[常驻]</b> 每次都带。最多 3 段、1,500 字符。</p></div><span id="peter-background-count" class="muted"></span></header>
+      <header><h3 tabindex="0" title="带关键词的段落；[常驻] 每次都带">背景资料</h3><span id="peter-background-count" class="muted"></span></header>
       <textarea id="peter-background" class="peter-textarea" spellcheck="false" rows="12"></textarea>
-      <footer><span id="peter-background-saved" class="muted"></span><div class="peter-actions"><select id="peter-background-versions" aria-label="背景历史版本"><option value="">历史版本</option></select><button id="peter-background-restore" type="button">恢复</button><button id="peter-background-save" type="button">保存背景</button></div></footer>
+      <footer><span id="peter-background-saved" class="muted"></span><div class="peter-actions"><select id="peter-background-versions" aria-label="背景历史版本"><option value="">历史版本</option></select><button id="peter-background-restore" type="button">恢复</button><button id="peter-background-save" type="button">保存</button></div></footer>
     </article>
     <article class="surface peter-card" data-peter-card="learned">
-      <header><div><h3>他记的你</h3><p class="muted">他实际经历后写下的；共用一个预算，不要求他每轮提及。</p></div><span id="peter-learned-total" class="muted"></span></header>
+      <header><h3 tabindex="0" title="Peter 自己记的；三块共用 4,000 字节">他记的你</h3><span id="peter-learned-total" class="muted"></span></header>
       <div class="peter-budget"><div id="peter-budget-bar"></div></div>
       <div id="peter-learned-error" class="peter-error" hidden></div>
-      <h4>正在进行 <span id="peter-ongoing-count" class="muted"></span></h4>
-      <p class="muted">现在还没过去的事：约定、承诺、没解决的争执、正在做的事。完成的不会进上下文。</p>
+      <h4 title="现在还没过去的事；完成后不再进上下文">正在进行 <span id="peter-ongoing-count" class="muted"></span></h4>
       <div id="peter-ongoing" class="peter-ongoing"></div>
-      <div class="peter-actions"><button id="peter-ongoing-add" type="button">新增一条</button><span id="peter-ongoing-saved" class="muted"></span><button id="peter-ongoing-save" type="button">保存正在进行</button></div>
-      <h4>关系成长 <span id="peter-growth-count" class="muted"></span></h4>
-      <p class="muted">他吵完架学到的：你怎么被哄好、什么话不能说、下次怎么修。不是命令栏。</p>
+      <div class="peter-actions"><button id="peter-ongoing-add" type="button">新增</button><span id="peter-ongoing-saved" class="muted"></span><button id="peter-ongoing-save" type="button">保存</button></div>
+      <h4 title="Peter 从真实经历里学到的">关系成长 <span id="peter-growth-count" class="muted"></span></h4>
       <textarea id="peter-growth" class="peter-textarea" spellcheck="false" rows="6"></textarea>
-      <div class="peter-actions"><span id="peter-growth-saved" class="muted"></span><button id="peter-growth-save" type="button">保存关系成长</button></div>
-      <h4>重要事实 <span id="peter-facts-count" class="muted"></span></h4>
-      <p class="muted">关于你的生日、喜好、身体、工作、家人、习惯。旧笔记已经完整迁到这里。</p>
+      <div class="peter-actions"><span id="peter-growth-saved" class="muted"></span><button id="peter-growth-save" type="button">保存</button></div>
+      <h4 title="他记下的关于你的事实">重要事实 <span id="peter-facts-count" class="muted"></span></h4>
       <textarea id="peter-facts" class="peter-textarea" spellcheck="false" rows="10"></textarea>
-      <div class="peter-actions"><span id="peter-facts-saved" class="muted"></span><button id="peter-facts-save" type="button">保存重要事实</button></div>
+      <div class="peter-actions"><span id="peter-facts-saved" class="muted"></span><button id="peter-facts-save" type="button">保存</button></div>
     </article>
     <article class="surface peter-card" data-peter-card="user">
-      <header><div><h3>关于你（Lan 的人设）</h3><p class="muted">你自己是谁；和 Peter 记的笔记分开。不填就不带。</p></div><span id="peter-user-count" class="muted"></span></header>
+      <header><h3 tabindex="0" title="你自己的人设，和 Peter 的笔记分开">关于你</h3><span id="peter-user-count" class="muted"></span></header>
       <textarea id="peter-user" class="peter-textarea" spellcheck="false" rows="8"></textarea>
-      <footer><span id="peter-user-saved" class="muted"></span><div class="peter-actions"><button id="peter-user-save" type="button">保存关于你</button></div></footer>
+      <footer><span id="peter-user-saved" class="muted"></span><div class="peter-actions"><button id="peter-user-save" type="button">保存</button></div></footer>
     </article>
   </section>
 
   <section id="activity-view" class="page" data-page-view="activity" hidden>
     <div class="page-heading activity-heading"><div><h2>Peter · 活动记录</h2></div><div class="activity-heading-actions"><span id="activity-state" class="state-pill">读取中…</span><button id="merge-activity" type="button" hidden>合并回主窗口</button></div></div>
+    <section id="pending-approvals-block" class="surface activity-pending" hidden><div class="section-heading"><div><h3>需要你决定</h3></div><span id="pending-approvals-count" class="muted"></span></div><div id="pending-approvals-list"></div></section>
     <article class="surface activity-overview"><div><span class="status-dot is-pending" id="activity-work-dot"></span><strong id="activity-work-status">等待工具调用</strong></div><span id="activity-count">0 条记录</span></article>
     <div class="activity-runtime"><div><span class="label">自主活动</span><strong id="activity-status">状态同步中</strong></div><div><span class="label">下次唤醒</span><strong id="next-wake">正在读取…</strong><span id="next-wake-reason" hidden></span></div><button id="activity-toggle" disabled>读取中…</button></div>
     <div class="activity-runtime"><div><span class="label">今天已醒</span><strong id="wakes-today">正在读取…</strong></div><div><span class="label">夜间安静</span><strong id="quiet-status">正在读取…</strong></div><button id="quiet-toggle" disabled>读取中…</button></div>

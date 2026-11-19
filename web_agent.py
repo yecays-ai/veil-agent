@@ -528,6 +528,15 @@ class Hub(ScreenPopMixin):
                 pass
             raise UserError(f'写 {path.name} 失败：{exc}。修改没有保存；请重试。') from exc
 
+    def pending_approvals(self):
+        return self.chat.pending_approvals.list()
+
+    def decide_pending(self, body):
+        item_id, decision = body.get('id'), body.get('decision')
+        if not isinstance(item_id, str) or not item_id:
+            raise UserError('缺少请求 id。')
+        return self.chat.pending_approvals.decide(item_id, decision)
+
     def peter_page(self):
         chat = self.chat
         persona_path = Path(chat.cfg.persona_path) if getattr(chat.cfg, 'persona_path', None) else None
@@ -2320,6 +2329,13 @@ def make_handler(hub, token):
                 self._get_windows_apps()
             elif url.path == '/api/peter-page':
                 self._get_peter_page()
+            elif url.path == '/api/pending-approvals':
+                if not self._guard(self.headers.get('X-Token')):
+                    return
+                try:
+                    self._send(200, hub.pending_approvals())
+                except UserError as exc:
+                    self._send(400, {'error': str(exc)})
             elif url.path == '/api/screen-pop/next':
                 self._get_screen_pop_next(query)
             elif url.path == '/api/desktop-icons/snapshots':
@@ -3097,6 +3113,11 @@ def make_handler(hub, token):
                 self._post_windows_apps(body)
             elif url.path == '/api/peter-page':
                 self._post_peter_page(body)
+            elif url.path == '/api/pending-approvals':
+                try:
+                    self._send(200, {'ok': True, 'item': hub.decide_pending(body)})
+                except UserError as exc:
+                    self._send(409 if '已经' in str(exc) or '不在了' in str(exc) else 400, {'error': str(exc)})
             elif url.path == '/api/codex-watch':
                 self._post_codex_watch(body)
             elif url.path == '/api/exit':

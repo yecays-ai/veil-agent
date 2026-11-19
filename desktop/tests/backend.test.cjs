@@ -125,5 +125,7 @@ test('Peter page API is allowed for the main and detached window', async () => {
   assert.equal(allowed('/api/peter-page', 'GET'), true);
   assert.equal(allowed('/api/peter-page', 'POST'), true);
   assert.equal(allowed('/api/peter-page?x=1', 'GET'), false);
+  assert.equal(allowed('/api/pending-approvals', 'GET'), true);
+  assert.equal(allowed('/api/pending-approvals', 'POST'), true);
   assert.equal(allowed('/api/not-peter', 'GET'), false);
 });

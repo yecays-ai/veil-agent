@@ -469,7 +469,7 @@ function allowedChatRequest(pathname, method) {
     try { url = new URL(pathname, 'http://127.0.0.1'); } catch { return false; }
     const keys = [...url.searchParams.keys()];
     if (url.pathname === '/api/events') return keys.length === 1 && keys[0] === 'after' && /^\d+$/.test(url.searchParams.get('after'));
-    if (url.pathname === '/api/life' || url.pathname === '/api/stickers' || url.pathname === '/api/workbench' || url.pathname === '/api/windows-apps' || url.pathname === '/api/peter-page') return keys.length === 0;
+    if (url.pathname === '/api/life' || url.pathname === '/api/stickers' || url.pathname === '/api/workbench' || url.pathname === '/api/windows-apps' || url.pathname === '/api/peter-page' || url.pathname === '/api/pending-approvals') return keys.length === 0;
     if (url.pathname === '/api/memory/panel') return keys.length === 0;
     if (url.pathname === '/api/mcp') return keys.length === 0 ||
       (keys.length === 1 && keys[0] === 'retry' && url.searchParams.get('retry') === '1');
@@ -487,12 +487,12 @@ function allowedChatRequest(pathname, method) {
     '/api/transcribe', '/api/approve', '/api/activity', '/api/glance', '/api/codex-watch', '/api/quiet-hours', '/api/exit',
     '/api/message/action', ...MEMORY_POSTS, '/api/models', '/api/models/use', '/api/stop',
     '/api/typing', '/api/request-reply', '/api/mcp', '/api/workbench', '/api/windows-apps', '/api/life', '/api/stickers', '/api/stickers/upload',
-    '/api/voice-style', '/api/peter-page'].includes(pathname);
+    '/api/voice-style', '/api/peter-page', '/api/pending-approvals'].includes(pathname);
 }
 ipcMain.handle('chat:request', async (event, pathname, body, timeoutMs) => {
   const detachedView = detachedViewFromEvent(event);
   const detachedAllowed = !detachedView || detachedView === 'chat' ||
-    (detachedView === 'activity' && ((!body && pathname?.startsWith('/api/events?')) || (body && ['/api/activity', '/api/glance', '/api/codex-watch', '/api/quiet-hours'].includes(pathname)))) ||
+    (detachedView === 'activity' && ((!body && (pathname?.startsWith('/api/events?') || pathname === '/api/pending-approvals')) || (body && ['/api/activity', '/api/glance', '/api/codex-watch', '/api/quiet-hours', '/api/pending-approvals'].includes(pathname)))) ||
     (detachedView === 'context' && !body && pathname?.startsWith('/api/events?')) ||
     (detachedView === 'mcp' && ((!body && pathname?.startsWith('/api/events?')) || pathname === '/api/mcp' || (!body && pathname === '/api/mcp?retry=1'))) ||
     (detachedView === 'memory' && ((!body && (pathname?.startsWith('/api/events?') || pathname?.startsWith('/api/memory/'))) ||

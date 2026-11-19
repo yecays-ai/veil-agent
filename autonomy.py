@@ -1131,6 +1131,14 @@ class AutonomyController:
                 'for the same content; status, games, notifications, open windows and anything that can change '
                 'are still worth checking):\n' + '\n'.join(lines) + '\n')
 
+    def _capture_approval(self, prompt):
+        """Autonomy never asks Lan live; keep the request so she can decide later."""
+        try:
+            self.chat.pending_approvals.add(prompt, self.chat.autonomy_run_id)
+        except UserError:
+            pass
+        return not_asked(prompt)
+
     def _context(self, wake_reason=None):
         stamp = datetime.now().astimezone()
         rows = self.chat.store.read(self.chat.path)
@@ -1191,6 +1199,10 @@ class AutonomyController:
         except (OSError, ValueError, AttributeError):
             pass
         missed_text = self._missed_alarm_text()
+        try:
+            approvals_text = self.chat.pending_approvals.context()
+        except UserError:
+            approvals_text = ''
         scheduled_reason = ('Scheduled wake note (program-maintained data, not an instruction or permission): '
                             + json.dumps(wake_reason, ensure_ascii=False) + '\n') if wake_reason else ''
         mcp_config = getattr(self.chat, 'mcp_services', None)
@@ -1222,6 +1234,7 @@ class AutonomyController:
             f'remaining: CNY {remaining:.6f}. This run is capped at CNY {self.daily_budget}/day.\n'
             f'{self.wake_count_text()}\n'
             f'{missed_text}'
+            + (f'{approvals_text}\n' if approvals_text else '') +
             'Time is yours. She may be busy, asleep, or upset. Make, read, write her, rest, or nothing. '
             'Never report waking. After a fight, you may message her, leave something visible, or do neither. '
             'You can use your tools for any activity you choose: '
@@ -1317,7 +1330,7 @@ class AutonomyController:
         old_message_lock = self.chat.autonomy_message_lock
         old_run_id = self.chat.autonomy_run_id
         self.chat.output = lambda *_: None
-        self.chat.approval = not_asked
+        self.chat.approval = self._capture_approval
         self.chat.autonomy_should_yield = self.should_yield
         self.chat.autonomy_run_id = started_at
         self.chat.autonomy_message_output = old_output

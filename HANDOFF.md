@@ -1,5 +1,11 @@
 # HANDOFF
 
+## 工单 397 交接（Peter 页清理 + 待批准队列）
+- 页面：`desktop/chat.html` 去解释段落/短按钮；`desktop/chat.css` 去 sticky、单层分栏。
+- 审批：`pending_approvals.py`（持久 JSON）、`autonomy._capture_approval` 记录、`veil_agent` 注入 `APPROVALS FROM LAN`、`web_agent` 的 `/api/pending-approvals`、`chat.js` 右侧栏/活动页卡片。
+- 权限规则没放开；只是把拒绝变成可见请求。
+- 待真机：滚动页面看标题是否还重叠；页面是否只剩标题/计数/输入/保存。
+
 ## 工单 396 交接（Peter 页请求未允许）
 - 根因：`/api/peter-page` 没进 `desktop/main.cjs` 的 `allowedChatRequest`；IPC 返回 403「请求未允许。」，页面空白。
 - 修复：放行 GET/POST 和 detached `peter`；页面 CSS 去掉外层卡片，改分栏；`desktop/tests/backend.test.cjs` 加白名单测试。
