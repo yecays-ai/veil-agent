@@ -987,13 +987,17 @@ def load_character(root, character_id):
         quiet_enabled = autonomy.get('quiet_hours_enabled', quiet_hours is not None)
         if type(quiet_enabled) is not bool:
             raise ValueError('autonomy.quiet_hours_enabled must be boolean')
+        threads = autonomy.get('threads', True)
+        if type(threads) is not bool:
+            raise ValueError('autonomy.threads must be boolean')
         autonomy_input = autonomy.get('max_input_tokens')
         run_budget = autonomy.get('run_budget_cny')
         max_tool_steps = autonomy.get('max_tool_steps')
         autonomy = {'interval_minutes': interval, 'daily_max_runs': daily_runs,
                     'daily_budget_cny': autonomy_daily,
                     'min_alarm_gap_minutes': min_alarm_gap,
-                    'quiet_hours': quiet_hours, 'quiet_hours_enabled': quiet_enabled}
+                    'quiet_hours': quiet_hours, 'quiet_hours_enabled': quiet_enabled,
+                    'threads': threads}
         if autonomy_input is not None:
             autonomy['max_input_tokens'] = positive_int(autonomy_input)
         # Ticket 217: a wake stops by what it has spent, with a step count only as a safety ceiling.

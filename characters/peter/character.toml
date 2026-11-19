@@ -124,6 +124,9 @@ max_input_tokens = 100000
 # Ticket 225: one wake stops after spending this much (or 60 tool steps, or 15 minutes); the daily pool is unchanged.
 run_budget_cny = "0.25"
 max_tool_steps = 60
+# Ticket 389: wake prompt keeps a short factual record of work spanning several wakes, plus files already
+# read and unchanged. It never asks Peter to continue. false removes both blocks.
+threads = true
 
 [glance]
 enabled = true

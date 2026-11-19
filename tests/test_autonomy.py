@@ -69,6 +69,7 @@ daily_budget_cny = "2"
         self.assertEqual(peter['autonomy']['quiet_hours'], '01:00-06:00')
         self.assertEqual(peter['autonomy']['max_input_tokens'], 100000)
         self.assertEqual(peter['autonomy']['min_alarm_gap_minutes'], 15)
+        self.assertTrue(peter['autonomy']['threads'])
         self.assertEqual(peter['tools']['max_steps'], 20)
 
     def test_wake_knows_how_long_user_was_away_despite_own_messages(self):
@@ -716,6 +717,134 @@ daily_budget_cny = "2"
         self.controller.run()
         self.assertEqual(self.controller.rows[-1]['current_focus'], 'fixture')
         self.assertEqual(self.controller.rows[-1]['next_step'], 'resume')
+
+
+    def activity_row(self, started, result, files, tools=(), focus='', next_step=''):
+        return {'started_at': started, 'finished_at': started, 'decision': 'continue work',
+                'reason': 'fixture', 'tools': list(tools), 'lab_files_changed': list(files),
+                'result': result, 'result_reason': 'fixture detail', 'current_focus': focus,
+                'next_step': next_step, 'cost_cny': '0'}
+
+    def test_threads_span_more_than_the_last_two_wakes(self):
+        base = datetime.now().astimezone() - timedelta(hours=4)
+        rows = [self.activity_row((base + timedelta(minutes=30 * i)).isoformat(), '部分完成',
+                                  ['lab/desktop-pet/companion/index.html'], next_step='fix the mouth')
+                for i in range(4)]
+        self.controller.rows = rows
+        prompt = self.controller._context()
+        self.assertIn('Threads across your recent wakes', prompt)
+        self.assertIn('lab/desktop-pet', prompt)
+        self.assertIn('4 wakes since', prompt)
+        self.assertIn('next step recorded: fix the mouth', prompt)
+        self.assertIn('not a request to continue', prompt)
+        # The two most recent records are already shown separately; the thread block is the only place
+        # that still names the first wake of this work.
+        first = base.strftime('%m-%d %H:%M')
+        self.assertIn(first, prompt)
+
+    def test_threads_never_report_an_unfinished_wake_as_complete(self):
+        base = datetime.now().astimezone() - timedelta(hours=2)
+        bad = [{'tool': 'append_file', 'path': 'lab/progress.md', 'state': '出错'}]
+        rows = [self.activity_row(base.isoformat(), '部分完成', ['lab/progress.md']),
+                self.activity_row((base + timedelta(minutes=30)).isoformat(), '完成',
+                                  ['lab/progress.md'], tools=bad)]
+        self.controller.rows = rows
+        prompt = self.controller._context()
+        self.assertIn('lab/progress.md', prompt)
+        self.assertNotIn('ended complete', prompt)
+        self.assertIn('failed', prompt)
+
+    def test_threads_show_unconfirmed_actions_instead_of_success(self):
+        base = datetime.now().astimezone() - timedelta(hours=2)
+        pending = [{'tool': 'append_file', 'path': 'lab/progress.md', 'state': '结果未确认'}]
+        rows = [self.activity_row(base.isoformat(), '部分完成', ['lab/progress.md']),
+                self.activity_row((base + timedelta(minutes=30)).isoformat(), '部分完成',
+                                  ['lab/progress.md'], tools=pending)]
+        self.controller.rows = rows
+        prompt = self.controller._context()
+        self.assertIn('1 action(s) unconfirmed', prompt)
+        self.assertIn('check them before reusing that work', prompt)
+
+    def test_one_wake_does_not_produce_a_threads_block(self):
+        base = datetime.now().astimezone() - timedelta(hours=1)
+        self.controller.rows = [self.activity_row(base.isoformat(), '部分完成', ['lab/redline/index.html'])]
+        prompt = self.controller._context()
+        self.assertNotIn('Threads across your recent wakes', prompt)
+
+    def test_threads_can_be_switched_off(self):
+        base = datetime.now().astimezone() - timedelta(hours=2)
+        rows = [self.activity_row(base.isoformat(), '部分完成', ['lab/redline/index.html']),
+                self.activity_row((base + timedelta(minutes=30)).isoformat(), '部分完成',
+                                  ['lab/redline/index.html'])]
+        self.controller.rows = rows
+        self.chat.cfg.autonomy['threads'] = False
+        prompt = self.controller._context()
+        self.assertNotIn('Threads across your recent wakes', prompt)
+        self.assertNotIn('Files you already read', prompt)
+
+    def test_unchanged_read_is_listed_only_while_the_file_is_unchanged(self):
+        from autonomy import unchanged_read_lines
+        workspace = self.root / 'workspace'
+        (workspace / 'lab').mkdir(parents=True)
+        note = workspace / 'lab' / 'notes.html'
+        note.write_text('<html></html>', encoding='utf-8')
+        started = datetime.now().astimezone() - timedelta(hours=1)
+        old = started.timestamp() - 3600
+        note.touch()
+        note.chmod(0o644)
+        import os
+        os.utime(note, (old, old))
+        row = {'started_at': started.isoformat()}
+        tools = [{'autonomy_run_id': started.isoformat(), 'tool': 'read_the_notes',
+                  'path': 'lab/notes.html', 'state': '成功'}]
+        canonical = lambda name: 'read_text_file' if name in ('read_the_notes', 'read_text_file') else name
+        listed = unchanged_read_lines([row], tools, workspace, canonical)
+        self.assertTrue(listed)
+        self.assertIn('lab/notes.html', listed[0])
+        self.assertIn('unchanged since', listed[0])
+        os.utime(note, (started.timestamp() + 60, started.timestamp() + 60))
+        self.assertEqual(unchanged_read_lines([row], tools, workspace, canonical), [])
+
+    def test_only_successful_untruncated_file_reads_are_listed(self):
+        from autonomy import unchanged_read_lines
+        workspace = self.root / 'workspace'
+        (workspace / 'lab').mkdir(parents=True)
+        note = workspace / 'lab' / 'notes.html'
+        note.write_text('body', encoding='utf-8')
+        started = datetime.now().astimezone() - timedelta(hours=1)
+        import os
+        os.utime(note, (started.timestamp() - 60, started.timestamp() - 60))
+        row = {'started_at': started.isoformat()}
+        canonical = lambda name: 'read_text_file' if name == 'read_the_notes' else name
+        truncated = [{'autonomy_run_id': started.isoformat(), 'tool': 'read_the_notes',
+                      'path': 'lab/notes.html', 'state': '成功', 'result_state': '已截断'}]
+        self.assertEqual(unchanged_read_lines([row], truncated, workspace, canonical), [])
+        status = [{'autonomy_run_id': started.isoformat(), 'tool': 'nostos_status',
+                   'path': 'nostos_status', 'state': '成功'}]
+        self.assertEqual(unchanged_read_lines([row], status, workspace, canonical), [])
+        outside = [{'autonomy_run_id': started.isoformat(), 'tool': 'read_the_notes',
+                    'path': '../outside.txt', 'state': '成功'}]
+        self.assertEqual(unchanged_read_lines([row], outside, workspace, canonical), [])
+
+    def test_a_multi_file_read_lists_each_unchanged_file(self):
+        from autonomy import unchanged_read_lines
+        workspace = self.root / 'workspace'
+        (workspace / 'lab').mkdir(parents=True)
+        for name in ('one.py', 'two.py'):
+            path = workspace / 'lab' / name
+            path.write_text('x', encoding='utf-8')
+        started = datetime.now().astimezone() - timedelta(hours=1)
+        import os
+        for name in ('one.py', 'two.py'):
+            os.utime(workspace / 'lab' / name, (started.timestamp() - 60, started.timestamp() - 60))
+        row = {'started_at': started.isoformat()}
+        tools = [{'autonomy_run_id': started.isoformat(), 'tool': 'binge_read',
+                  'path': 'lab/one.py, lab/two.py', 'state': '成功'}]
+        canonical = lambda name: 'read_multiple_files' if name == 'binge_read' else name
+        lines = unchanged_read_lines([row], tools, workspace, canonical)
+        self.assertEqual(len(lines), 2)
+        self.assertIn('lab/one.py', lines[0])
+        self.assertIn('lab/two.py', lines[1])
 
     def test_crash_recovery_restores_only_this_wakes_confirmed_tools_and_cost(self):
         run_id = self.budget.clock()
