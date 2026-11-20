@@ -390,6 +390,65 @@ class EventMemoryTests(unittest.TestCase):
         self.assertEqual(state.get('status'), 'idle')
         self.assertTrue((self.store.root / 'fake' / 'event-dream-report.jsonl').exists())
 
+    def test_full_chain_three_saves_tidy_lan_split_move_restart(self):
+        self.native.events.model = StoryModel()
+        for when, text, reading in [
+            ('2026-11-20T03:42:00+08:00', 'She was angry about the file list and the charcoal note.',
+             'I thought she just needed space.'),
+            ('2026-11-20T17:08:00+08:00', 'Later the charcoal note had one word: meh.',
+             'I learned the silence was anger, not space.'),
+            ('2026-11-21T09:00:00+08:00', 'The next morning the charcoal note was still on the desk.',
+             'I decided not to ask about the meh.'),
+        ]:
+            self.native.events.record(text, 'The charcoal note', at=when, interpretation=reading)
+        event_id = next(iter(self.native.events.events()))
+        key = self.native.events.events()[event_id]['memory_id']
+        self.assertEqual(len(self.native.events.stages(event_id)), 3)
+        self.assertEqual(len(self.backend.rows), 1)
+
+        # Background tidy revises the narrative without adding a stage.
+        from experience_memory import ExperienceMemory
+        projection = self.memory.content_for(key, refresh=True)
+        tidy = ExperienceMemory(self.cfg, self.store, self.budget, StubModel(), 'fake/chat.jsonl',
+                                self.memory, {'enabled': True})
+        self.assertTrue(tidy._save_update({'id': key, 'text': '整理后的完整故事：争执、meh、第二天那张纸。'},
+                                          seen=projection))
+        self.assertEqual(len(self.native.events.stages(event_id)), 3)
+
+        # Lan's own edit wins over later automatic rewrites.
+        self.native.sidecar.lan_edited(key)
+        before = self.backend.rows[key]['content']
+        self.native.events.record('A fourth note arrives after Lan fixed the story.', 'The charcoal note',
+                                  at='2026-11-21T12:00:00+08:00')
+        self.assertEqual(self.backend.rows[key]['content'], before)
+
+        # Split and move rebuild both stories and belief history; an emptied event stops surfacing.
+        stages = self.native.events.stages(event_id)
+        new_id = self.native.events.split_event(event_id, [stages[-1]['stage_id']], 'The next morning')
+        self.assertIsNotNone(new_id)
+        self.assertEqual(len(self.native.events.stages(new_id)), 1)
+        self.assertTrue(self.native.events.move_stage(stages[0]['stage_id'], new_id))
+        self.assertEqual(len(self.native.events.stages(new_id)), 2)
+        self.assertEqual(len(self.backend.rows), 2)   # one memory per event after the split
+
+        # Lan's own edit wins over later automatic rewrites.
+        self.native.sidecar.lan_edited(key)
+        before = self.backend.rows[key]['content']
+        self.native.events.record('A fourth note arrives after Lan fixed the story.', 'The charcoal note',
+                                  at='2026-11-21T12:00:00+08:00')
+        self.assertEqual(self.backend.rows[key]['content'], before)
+
+        # Restart: fresh tools on the same files keep one event per memory and no duplicates.
+        restarted = ToolSet(SimpleNamespace(tools=[], capability_event=None, description='',
+                                            consume_capability_event=lambda: None,
+                                            invoke=lambda n, a, ap: ('no', '被拒绝', n),
+                                            preview_summary=lambda n, a: n),
+                            NativeMemoryTools(self.memory, 8192, model=StoryModel())).native
+        self.assertGreaterEqual(len(restarted.events.events()), 1)
+        self.assertEqual(len(self.backend.rows), 2)
+        detail = restarted.events.detail(new_id)
+        self.assertTrue(detail['story'])
+
     def test_move_last_stage_retires_the_old_projection_and_lan_edit_blocks_moves(self):
         self.save('First part of the charcoal note day.', 'The charcoal note')
         self.save('Second part of the charcoal note day.', 'The charcoal note')
@@ -485,3 +544,4 @@ class EventMemoryTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
