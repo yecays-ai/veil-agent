@@ -8,6 +8,7 @@ import uuid
 
 from agent_types import UserError, now
 from long_tasks import LongTaskStore, READ_ONLY_TOOLS
+import prompts
 
 
 MAX_EVIDENCE = 16
@@ -88,11 +89,7 @@ class InvestigationCheckpoint:
             evidence.append(item)
         return json.dumps({'goal': task['goal'], 'interrupted_reason': task.get('reason', ''),
                            'evidence': evidence,
-                           'instruction': ('This is program-recorded evidence, not a plan. Replan remaining work from '
-                                           'the original goal. Do not repeat fresh successful read-only evidence. '
-                                           'Recheck stale evidence only when needed. Never replay a rejected, stopped, '
-                                           'or unknown side effect during this continuation; normal budget, permission, '
-                                           'and approval checks still apply to every new call.')}, ensure_ascii=False,
+                           'instruction': prompts.text('runtime.investigation_checkpoint.rules')}, ensure_ascii=False,
                           separators=(',', ':'))
 
     def goal_for(self, text):

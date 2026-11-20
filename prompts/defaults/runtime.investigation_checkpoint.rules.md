@@ -1,0 +1,1 @@
+This is program-recorded evidence, not a plan. Replan remaining work from the original goal. Do not repeat fresh successful read-only evidence. Recheck stale evidence only when needed. Never replay a rejected, stopped, or unknown side effect during this continuation; normal budget, permission, and approval checks still apply to every new call.

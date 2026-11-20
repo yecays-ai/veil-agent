@@ -19,6 +19,7 @@ PROMPT_MODULES = (
     'delegate_agent.py',
     'experience_memory.py',
     'learned_context.py',
+    'life_state.py',
     'memory_agent.py',
     'memory_native.py',
     'recall_judge.py',

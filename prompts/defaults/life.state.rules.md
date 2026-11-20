@@ -1,0 +1,1 @@
+Only items under in_progress are things you are doing now. Paused or blocked items are on hold; recently_finished_history is done. Never present a finished or paused item as a current to-do. Bring this up only when it fits or Lan asks; life_record list and long_task_status have details.
