@@ -54,6 +54,15 @@ class PromptStore:
             except OSError:
                 pass
 
+    def _ensure_base(self, entry_id):
+        """Baseline for an override saved before fingerprints existed; writes only the fingerprint file."""
+        try:
+            digest = self._digest(self.default(entry_id))
+        except (UserError, OSError, UnicodeError):
+            return None
+        self._remember_base(entry_id, digest)
+        return digest
+
     @staticmethod
     def _digest(text):
         return hashlib.sha1(text.encode('utf-8')).hexdigest()
@@ -98,8 +107,12 @@ class PromptStore:
         if overridden:
             try:
                 remembered = self._base().get(entry_id)
+                if not remembered:
+                    # Ticket 404: an override saved before fingerprints existed gets the current
+                    # default as its baseline. The override text is never touched.
+                    remembered = self._ensure_base(entry_id)
                 default_changed = bool(remembered) and remembered != self._digest(self.default(entry_id))
-            except UserError:
+            except (UserError, OSError, UnicodeError):
                 default_changed = False
         return {'id': entry_id, 'text': value, 'bytes': len(value.encode('utf-8')),
                 'overridden': overridden, 'default_changed': default_changed, 'mtime': mtime,
@@ -127,11 +140,15 @@ class PromptStore:
                     handle.flush()
                     os.fsync(handle.fileno())
                 os.replace(temporary, target)
-                self._remember_base(entry_id, self._digest(self.default(entry_id)))
             except OSError as exc:
                 try:
                     temporary.unlink()
                 except OSError:
                     pass
                 raise UserError('写 ' + target.name + ' 失败：' + str(exc) + '。') from exc
+            try:
+                # A fingerprint that cannot be computed must never turn a saved edit into a failure.
+                self._remember_base(entry_id, self._digest(self.default(entry_id)))
+            except (UserError, OSError, UnicodeError):
+                pass
         return self.status(entry_id)

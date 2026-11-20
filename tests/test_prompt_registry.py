@@ -154,6 +154,40 @@ class MaintenanceTests(unittest.TestCase):
             self.assertEqual(status['text'], 'Lan wrote this instead.')
             self.assertTrue(status['default_changed'])
 
+    def test_save_succeeds_when_the_default_fingerprint_cannot_be_read(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            defaults = Path(tmp) / 'defaults'
+            defaults.mkdir()
+            store = PromptStore(defaults, Path(tmp) / 'overrides')
+            # No default file for this entry: the override must still save, and status must not raise.
+            status = store.save('chat.stay_silent', 'Saved even without a baseline.')
+            self.assertEqual(status['text'], 'Saved even without a baseline.')
+            self.assertTrue((Path(tmp) / 'overrides' / 'chat.stay_silent.md').exists())
+            again = store.status('chat.stay_silent')
+            self.assertEqual(again['text'], 'Saved even without a baseline.')
+            self.assertFalse(again['default_changed'])
+
+    def test_existing_override_gets_a_baseline_without_rewriting_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            defaults = Path(tmp) / 'defaults'
+            overrides = Path(tmp) / 'overrides'
+            defaults.mkdir()
+            overrides.mkdir()
+            (defaults / 'chat.stay_silent.md').write_text('Default A.', encoding='utf-8')
+            original = overrides / 'chat.stay_silent.md'
+            original.write_text('Text Lan saved before fingerprints existed.\n', encoding='utf-8')
+            store = PromptStore(defaults, overrides)
+            status = store.status('chat.stay_silent')
+            self.assertEqual(status['text'], 'Text Lan saved before fingerprints existed.')
+            self.assertFalse(status['default_changed'])
+            self.assertTrue((overrides / '.base.json').exists())
+            self.assertEqual(original.read_text(encoding='utf-8').strip(),
+                             'Text Lan saved before fingerprints existed.')
+            (defaults / 'chat.stay_silent.md').write_text('Default B, shipped later.', encoding='utf-8')
+            later = store.status('chat.stay_silent')
+            self.assertTrue(later['default_changed'])
+            self.assertEqual(later['text'], 'Text Lan saved before fingerprints existed.')
+
     def test_overrides_live_outside_the_repository_work(self):
         root = Path(__file__).resolve().parents[1]
         ignore = (root / '.gitignore').read_text(encoding='utf-8')
