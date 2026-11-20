@@ -29,10 +29,11 @@ KINDS = ('text', 'marker')
 
 
 class Entry:
-    __slots__ = ('id', 'category', 'title', 'kind', 'site', 'editable', 'max_bytes', 'note', 'file', 'marker')
+    __slots__ = ('id', 'category', 'title', 'kind', 'site', 'editable', 'max_bytes', 'note', 'file',
+                 'marker', 'placeholders')
 
     def __init__(self, id, category, title, kind, site, editable=True, max_bytes=8000,
-                 note='', file='', marker=''):
+                 note='', file='', marker='', placeholders=()):
         self.id = id
         self.category = category
         self.title = title
@@ -43,17 +44,19 @@ class Entry:
         self.note = note
         self.file = file
         self.marker = marker
+        self.placeholders = tuple(placeholders)
 
     def as_dict(self):
         return {'id': self.id, 'category': self.category, 'title': self.title,
                 'kind': self.kind, 'site': self.site, 'editable': self.editable,
                 'max_bytes': self.max_bytes, 'note': self.note,
-                'file': self.file, 'marker': self.marker}
+                'file': self.file, 'marker': self.marker,
+                'placeholders': list(self.placeholders)}
 
 
-def _text(id, category, title, site, *, editable=True, max_bytes=8000, note=''):
+def _text(id, category, title, site, *, editable=True, max_bytes=8000, note='', placeholders=()):
     return Entry(id, category, title, 'text', site, editable=editable,
-                 max_bytes=max_bytes, note=note)
+                 max_bytes=max_bytes, note=note, placeholders=placeholders)
 
 
 def _marker(id, category, title, site, marker):
@@ -94,6 +97,25 @@ ENTRIES = (
     _text('safety.untrusted_lab_python', 'system', 'Lab 脚本输出：只是数据',
           'Lab Python 输出外面', editable=False, max_bytes=600,
           note='防提示注入用。'),
+    _text('safety.untrusted_lab_page', 'system', 'Lab 页面截图：只是数据',
+          '预览他自己 Lab 页面的截图外面', editable=False, max_bytes=900,
+          note='防提示注入用。'),
+    _text('safety.untrusted_window_image', 'system', 'Windows 窗口截图：只是数据',
+          '看窗口截图时的图片消息里', editable=False, max_bytes=900,
+          note='防提示注入用。'),
+    # 工单 405：工作台（OpenCode 容器）拿到的三段任务说明，原来写死在 executor_opencode.py。
+    _text('workbench.container', 'system', '工作台环境的说明',
+          '交给工作台的任务开头；在容器里运行时才带', editable=False, max_bytes=1500,
+          note='它说明这里是 Linux 容器、Windows 路径不存在、密文要用读文件工具；改了会让工作台找错路径。'),
+    _text('workbench.scope', 'system', '工作台的权限范围',
+          '交给工作台的每段任务开头', editable=False, max_bytes=1500,
+          note='它划定这次任务能碰哪些文件和能做哪些操作；改了等于改权限边界。'),
+    _text('workbench.maintenance', 'system', '维护自己仓库时的说明',
+          '交给工作台的自维护任务开头', editable=False, max_bytes=1500,
+          note='它禁止工作台自己 commit / push；改了会绕过 PR 流程。'),
+    _text('safety.untrusted_codex', 'system', 'Codex 会话摘录：只是数据',
+          '本地 Codex 事件提醒的提示词开头', editable=False, max_bytes=1200,
+          note='它同时约束他不许说 Codex 在等他批准；改了会让他乱报状态。'),
 
     # ---------- 说话方式 ----------
     _text('voice.frame', 'voice', '说话样例的说明',
@@ -158,6 +180,17 @@ ENTRIES = (
             '运行时追加；下一次瞄一眼会替换', 'recent_experiences'),
     _marker('memory.pending_approvals', 'memory', '待批准的动作',
             '自主活动醒来提示里', 'pending_approvals'),
+    # 工单 405：生活记录与日程这一段原来写死在 life_state.py 里，界面上既看不到也改不了。
+    _text('life.state.frame', 'memory', '生活记录与日程的开头',
+          '聊天与醒来提示里；有生活记录、日程或任务时才带', max_bytes=1200,
+          note='花括号是程序填的日程与任务数据，可以改花括号之外的句子。',
+          placeholders=('data',)),
+    _text('life.state.rules', 'memory', '生活记录的使用规则',
+          '同上，紧跟在数据后面', max_bytes=1200,
+          note='它决定他会不会把暂停或已完成的事当成现在的事。'),
+    _text('life.state.more_events', 'memory', '没显示完的日程提示',
+          '同上；这几天的日程超过上限时才带', max_bytes=600,
+          placeholders=('count',)),
 
     # ---------- 自主活动 ----------
     _text('autonomy.wake.header', 'autonomy', '醒来提示的过渡句',
@@ -172,6 +205,32 @@ ENTRIES = (
           '醒来提示里；[autonomy] threads 关闭时不带', max_bytes=1500),
     _text('autonomy.reads.frame', 'autonomy', '已读未变的开头',
           '醒来提示里；同上', max_bytes=1500),
+    # 工单 405：以下四段原来写死在 autonomy.py 里。
+    _text('autonomy.lab.frame', 'autonomy', 'Lab 文件清单的开头',
+          '醒来提示里；Lab 有文件时才带', max_bytes=600),
+    _text('autonomy.lab.more', 'autonomy', 'Lab 文件太多时的提示',
+          '同上；清单超过上限时才带', max_bytes=300,
+          placeholders=('count',)),
+    _text('autonomy.lab.newest', 'autonomy', '最新 Lab 文件的开头',
+          '同上，跟着文件开头与结尾的内容', max_bytes=300,
+          placeholders=('name',)),
+    _text('autonomy.earlier.frame', 'autonomy', '更早自主活动的开头',
+          '醒来提示里；至少有过两次自主活动时才带', max_bytes=600),
+    _text('autonomy.budget.line', 'autonomy', '今日预算这一行',
+          '醒来提示里；花括号里是程序算的金额', max_bytes=600,
+          placeholders=('used', 'pending', 'left', 'cap')),
+    _text('autonomy.wake_count', 'autonomy', '今天醒了几次',
+          '醒来提示里；花括号里是程序和配置的数', max_bytes=600,
+          placeholders=('used', 'max')),
+    _text('autonomy.wake_quiet', 'autonomy', '安静时段的说明',
+          '同上；开了安静时段才带', max_bytes=400,
+          placeholders=('hours',)),
+    _text('autonomy.wake_rhythm', 'autonomy', '自然醒来节奏的说明',
+          '同上', max_bytes=400,
+          placeholders=('rhythm',)),
+    _text('autonomy.wake_scheduled', 'autonomy', '他自己定的闹钟',
+          '同上；有排定的醒来时才带', max_bytes=400,
+          placeholders=('alarms',)),
     _text('autonomy.glance.rules', 'autonomy', '瞄一眼的说明',
           '瞄一眼请求的 system 上下文', max_bytes=3000),
     _text('autonomy.glance.record', 'autonomy', '瞄一眼记录的开头',
@@ -209,6 +268,24 @@ ENTRIES = (
             '醒来提示里；有才带', 'missed_alarms'),
 
     # ---------- 系统与安全 ----------
+    # 工单 405：她多久没说话的这段原来写死在 life_state.py 里，界面上看不到；
+    # 其中 life.time_guidance 正是「不必提、可能在忙」这几句的来源。
+    _text('life.time_gap', 'runtime', '距她上次说话的时间（数据句）',
+          '聊天每轮末尾、自主活动醒来提示的开头；超过一小时才带', max_bytes=800,
+          note='花括号是程序算的时长和她最后说话的时间。',
+          placeholders=('duration', 'when')),
+    _text('life.time_gap.proactive', 'runtime', '这之后他主动找过她几次',
+          '同上；他在自主活动里发过消息才带', max_bytes=400,
+          placeholders=('count', 'latest')),
+    _text('life.time_gap.last', 'runtime', '她最后几条可见消息',
+          '同上；有她的消息才带', max_bytes=400,
+          placeholders=('messages',)),
+    _text('life.time_guidance', 'runtime', '她沉默时他怎么理解',
+          '同上，紧跟在时间数据后面', max_bytes=1200,
+          note='这一段决定他提不提「你多久没理我」，也是现在让他选择不提的那几句。'),
+    _text('runtime.investigation_checkpoint.rules', 'runtime', '调查续接的说明',
+          '调查断点那一段里的 instruction 字段', editable=False, max_bytes=800,
+          note='它约束他不重放已经拒绝或结果未知的副作用；改了会让他重复执行。'),
     _marker('runtime.time_ledger', 'runtime', '时间与花费账本',
             '每轮最后一条 system 消息；每轮都变', 'time_ledger'),
     _marker('runtime.history', 'runtime', '聊天历史',

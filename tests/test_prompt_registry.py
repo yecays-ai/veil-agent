@@ -8,6 +8,107 @@ import prompts.inline as inline
 from prompts.store import PromptStore
 
 
+class ScanCoverageTests(unittest.TestCase):
+    """Ticket 405 review: a module that builds model text must never fall outside the scan."""
+
+    PROBE = (
+        'import prompts\n\n'
+        'PROSE = ("This sentence is written straight into a model module. It is long enough to look "\n'
+        '         "like prompt text, so the scanner has to catch it before it ships.")\n'
+    )
+
+    def test_every_module_that_imports_prompts_is_scanned(self):
+        importing = {path.name for path in Path(inline.ROOT).glob('*.py')
+                     if inline._imports_prompts(path)}
+        self.assertTrue(importing)
+        self.assertEqual(sorted(importing - set(inline.modules())), [])
+
+    def test_every_module_that_builds_requests_is_scanned(self):
+        builders = {path.name for path in Path(inline.ROOT).glob('*.py')
+                    if inline.builds_requests(path)}
+        self.assertTrue(builders)
+        self.assertEqual(sorted(builders - set(inline.modules())), [],
+                         'a module builds model messages but is not scanned')
+
+    def test_request_building_module_without_prompts_import_is_flagged(self):
+        probe_text = (
+            'PROSE = ("This text is written into a module that never imports prompts. It builds the "\n'
+            '         "request by hand, so only the request shape can reveal it to the scanner.")\n\n'
+            'def turn(user_text):\n'
+            '    return [{"role": "system", "content": PROSE},\n'
+            '            {"role": "user", "content": user_text}]\n'
+        )
+        with tempfile.TemporaryDirectory(dir=inline.ROOT) as tmp:
+            probe = Path(tmp) / 'probe_builder.py'
+            probe.write_text(probe_text, encoding='utf-8')
+            self.assertFalse(inline._imports_prompts(probe))
+            self.assertTrue(inline.builds_requests(probe))
+            name = probe.relative_to(inline.ROOT).as_posix()
+            self.assertNotIn(name, inline.modules(),
+                             'an unscanned request builder would slip through')
+
+    def test_new_prose_in_a_model_module_is_caught(self):
+        with tempfile.TemporaryDirectory(dir=inline.ROOT) as tmp:
+            probe = Path(tmp) / 'probe_module.py'
+            probe.write_text(self.PROBE, encoding='utf-8')
+            rows = inline.collect([probe.relative_to(inline.ROOT).as_posix()])
+        self.assertTrue(rows, 'scanner did not see the probe module')
+        self.assertTrue(all(row['hash'] not in inline.feedback() for row in rows))
+
+
+class PlaceholderTests(unittest.TestCase):
+    """Ticket 405 review: required placeholders carry real data into the request."""
+
+    def test_save_refuses_missing_required_placeholder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = PromptStore(prompts.DEFAULTS, tmp)
+            with self.assertRaises(Exception) as caught:
+                store.save('life.time_gap', 'It has been a long time since her last message.')
+            message = str(caught.exception)
+            self.assertIn('{duration}', message)
+            self.assertIn('{when}', message)
+            self.assertFalse(store.overridden('life.time_gap'))
+
+    def test_wording_change_keeping_placeholders_saves(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = PromptStore(prompts.DEFAULTS, tmp)
+            saved = store.save('life.time_gap', 'She last wrote {when}, about {duration} ago.')
+            self.assertTrue(saved['overridden'])
+            self.assertEqual(store.text('life.time_gap'), 'She last wrote {when}, about {duration} ago.')
+
+    def test_entry_without_placeholders_still_edits(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = PromptStore(prompts.DEFAULTS, tmp)
+            saved = store.save('life.time_guidance', 'Only one short line.')
+            self.assertEqual(saved['text'], 'Only one short line.')
+
+    def test_registry_exposes_placeholders(self):
+        self.assertEqual(prompts.entry('life.time_gap').placeholders, ('duration', 'when'))
+        self.assertEqual(prompts.entry('life.time_guidance').placeholders, ())
+        rows = {entry.id: entry.as_dict() for group in prompts.registry.by_category()
+                for entry in group['entries']}
+        self.assertEqual(rows['autonomy.budget.line']['placeholders'],
+                         ['used', 'pending', 'left', 'cap'])
+
+    def test_edited_guidance_reaches_the_next_gap_text(self):
+        from datetime import datetime, timedelta, timezone
+        import life_state
+        with tempfile.TemporaryDirectory() as tmp:
+            old = prompts._store
+            try:
+                prompts._store = PromptStore(prompts.DEFAULTS, tmp)
+                prompts._store.save('life.time_guidance', 'Edited guidance for the next request.')
+                stamp = datetime(2026, 11, 20, 17, 0, tzinfo=timezone(timedelta(hours=8)))
+                rows = [{'role': 'user', 'time': stamp - timedelta(hours=13),
+                         'content': 'hello', 'message_id': 'm1'}]
+                rows[0]['time'] = rows[0]['time'].isoformat()
+                text = life_state.gap_text(rows, stamp.isoformat(), minimum=0)
+                self.assertIn('Edited guidance for the next request.', text)
+                self.assertNotIn('Her silence may mean busy, asleep, or upset.', text)
+            finally:
+                prompts._store = old
+
+
 class RegistryTests(unittest.TestCase):
     def test_registry_is_valid(self):
         self.assertTrue(prompts.validate())

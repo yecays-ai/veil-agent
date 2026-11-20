@@ -19,12 +19,16 @@ PROMPT_MODULES = (
     'delegate_agent.py',
     'experience_memory.py',
     'learned_context.py',
+    'life_state.py',
     'memory_agent.py',
     'memory_native.py',
     'recall_judge.py',
     'short_term_notes.py',
     'user_persona.py',
     'voice_style.py',
+    'executor_opencode.py',
+    'ombre_entry.py',
+    'windows_observer.py',
 )
 
 MIN_CHARS = 100
@@ -35,7 +39,7 @@ CJK = re.compile('[\u3400-\u9fff]')
 SENTENCE = re.compile('[。！？]')
 FEEDBACK = Path(__file__).with_name('inline_feedback_allowlist.txt')
 REASONS = ('feedback:', 'tool-param:', 'git:', 'record:', 'ui-error:')
-BASELINE = 43
+BASELINE = 45
 
 
 def _docstrings(tree):
@@ -98,9 +102,69 @@ def _rows_from_tree(tree, name):
     return rows
 
 
+def _imports_prompts(path):
+    """A root module that imports prompts is building model text by definition."""
+    try:
+        tree = ast.parse(path.read_text(encoding='utf-8'))
+    except (OSError, SyntaxError, UnicodeDecodeError):
+        return False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            if any(alias.name == 'prompts' or alias.name.startswith('prompts.')
+                   for alias in node.names):
+                return True
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ''
+            if module == 'prompts' or module.startswith('prompts.'):
+                return True
+    return False
+
+
+def builds_requests(path):
+    """Does this module build a message that goes to a model?
+
+    Ticket 405 review: importing prompts is one way in, not the only one. A new module can
+    construct the request by hand and never touch the registry, so the request shape itself is
+    also checked: role/content message dicts, a messages list, or a tool schema call.
+    """
+    try:
+        tree = ast.parse(path.read_text(encoding='utf-8'))
+    except (OSError, SyntaxError, UnicodeDecodeError):
+        return False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Dict):
+            for key in node.keys:
+                if isinstance(key, ast.Constant) and key.value == 'role':
+                    return True
+        elif isinstance(node, ast.keyword) and node.arg == 'messages':
+            return True
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id in ('messages', 'MESSAGES'):
+                    return True
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+                and node.func.attr == 'tool_schemas':
+            return True
+    return False
+
+
+def modules():
+    """The fixed prompt modules plus every root module that imports prompts.
+
+    Ticket 405 review: a hand-maintained list is how life_state.py escaped scanning for three
+    tickets. Anything that imports prompts is building model text, so it is scanned without
+    anyone remembering to add it here.
+    """
+    found = set(PROMPT_MODULES)
+    for path in ROOT.glob('*.py'):
+        if _imports_prompts(path):
+            found.add(path.name)
+    return sorted(found)
+
+
 def collect(paths=None):
     rows = []
-    for name in (paths or PROMPT_MODULES):
+    for name in (paths or modules()):
         path = ROOT / name
         try:
             tree = ast.parse(path.read_text(encoding='utf-8'))

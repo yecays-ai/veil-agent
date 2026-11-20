@@ -1,5 +1,15 @@
 # HANDOFF
 
+## 工单 405 交接（剩下没登记的提示词全部上表）
+- 漏的原因两处：`prompts/inline.py` 的 `PROMPT_MODULES` 只有 12 个文件，`life_state.py` 不在里面；登记表里也没有 `gap_text` 那一段。所以「不必每轮提、她沉默可能是忙/在睡/不高兴」一直只存在于代码里，指令页看不到也改不了。
+- 评审后补的三处：①扫描范围改成自动发现——`inline.modules()` 收进所有 import `prompts` 的根目录模块；②`inline.builds_requests()` 按请求形状（role 消息 / messages= / tool_schemas）识别构造模型请求的模块，测试要求它们都在扫描集合里，这条当场抓到 executor_opencode / ombre_entry / windows_observer 三个漏网；③`registry.Entry.placeholders` + `store.save()` 必需占位符校验，删了不能保存并在页面说明原因。
+- 本轮顺带登记 4 条：`workbench.container` / `.scope` / `.maintenance`、`safety.untrusted_window_image`，全部只读；反馈清单加 2 条非提示词长句，`BASELINE` 43 → 45。
+- 本次登记 19 条：`life.time_gap` / `.proactive` / `.last` / `life.time_guidance`、`life.state.frame` / `.rules` / `.more_events`、`autonomy.lab.frame` / `.more` / `.newest`、`autonomy.earlier.frame`、`autonomy.budget.line`、`autonomy.wake_count` / `.wake_quiet` / `.wake_rhythm` / `.wake_scheduled`、`safety.untrusted_lab_page` / `.untrusted_codex`（只读）、`runtime.investigation_checkpoint.rules`（只读）。
+- 代码改成 `prompts.text()` / `prompts.fill()`；`life_state.py`、`autonomy.py`、`lab_preview.py`、`codex_watch.py`、`investigation_checkpoint.py`。扫描名单加 `life_state.py`，白名单没加、`BASELINE` 没抬。
+- 验证：`gap_text` / `state_text` 新旧实现逐字节比对 6 个场景全一致；`test_prompt_registry`、`test_life_state`、`test_autonomy`、`test_lab_preview`、`test_codex_watch`、`test_investigation_checkpoint`、`test_tool_budget`、`test_request_snapshots` 通过。
+- 待办：Lan 审阅 PR 后合并；她验收时改「她沉默时他怎么理解」看效果。
+- 边界：工具返回、报错、CLI 文案不是提示词，留在代码里，不进登记表。
+
 ## 工单 404 交接（自动检查与长期维护）
 - 默认指纹：`prompts/store.py` 保存覆盖时记 `persona/instructions/.base.json`；`status()` 返回 `default_changed`；页面标「默认已更新」+ 顶部「你改过 N 条」。
 - 守卫：`prompts/inline.py` 增加长中文提示词扫描（≥40 汉字且含句末标点），原因类型加 `ui-error:`；清单 43 条，只许减少。

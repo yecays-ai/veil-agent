@@ -32,6 +32,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import NamedTuple
 from windows_process import hidden_subprocess_kwargs
+import prompts
 
 TOOL_NAME = 'workbench'
 MILLION = Decimal(1_000_000)
@@ -40,30 +41,6 @@ DEFAULT_LIMITS = {'max_seconds': 600, 'repeat_limit': 3, 'run_budget_cny': '0.5'
 PROXY_MAX_REQUESTS = 600  # runaway guard for the API key, not a task limit
 RESULT_CHARS = 4000
 _WINDOWS = os.name == 'nt'
-
-
-CONTAINER_NOTE = (
-    'Environment: you run in a Linux container with bash. The project is the current directory (/work). '
-    'Any Windows path or Windows command (cmd, findstr, dir) in the request below refers to the owner\'s PC '
-    'and does not exist here: use the current directory and Linux commands, and do not search for it elsewhere. '
-    'Secret files such as .env, keys and credentials look empty in the shell. To read one, use the file read tool '
-    '(not cat/grep): that asks the owner, and once she approves the real content is there for this task.\n\n')
-
-MAINTENANCE_NOTE = (
-    'This is an isolated maintenance worktree for VEIL itself. Read AGENTS.md, STATUS.md and HANDOFF.md first. '
-    'Change only files under the current directory. '
-    'Do not run git commit, push, checkout, reset, merge or any other command that rewrites repository history: '
-    'VEIL commits, pushes and creates the pull request after your report. Run the project tests and report what '
-    'actually failed or passed. Host Git metadata is hidden. Git in this container uses a disposable snapshot: '
-    'status and diff reflect changes since this run started, while HEAD and history are synthetic. '
-    'Use the verified host Git facts below for the real branch and commit.\n\n')
-
-TASK_SCOPE_NOTE = (
-    'Task scope: the current directory and its children are the only project files for this task. '
-    'You may read, create and modify project files, and run ordinary local tests there. '
-    'Network, installation, publishing, credentials, project-external paths and destructive operations are decided by VEIL. '
-    'This scope ends when this task ends, is stopped, or reaches its budget or time limit.\n\n')
-
 
 
 TOOL_SCHEMA = {'type': 'function', 'function': {
@@ -1319,7 +1296,9 @@ def run(task, *, command, workdir, home, provider, key, limits, autonomy, ask, s
             f'http://127.0.0.1:{port}', password)
         if stopped():
             return ExecutorResult('[workbench=stopped; reason=user_stopped]', '出错', reason='user_stopped')
-        text = (CONTAINER_NOTE if container else '') + TASK_SCOPE_NOTE + (MAINTENANCE_NOTE if maintenance else '') + task
+        text = ((prompts.text('workbench.container') + '\n\n' if container else '')
+                + prompts.text('workbench.scope') + '\n\n'
+                + (prompts.text('workbench.maintenance') + '\n\n' if maintenance else '') + task)
         api.call('POST', f'/session/{session}/prompt_async', {
             'parts': [{'type': 'text', 'text': text}], 'model': {'providerID': 'relay', 'modelID': provider['model']}})
         started, idle, answered, approvals = clock(), 0, [], []

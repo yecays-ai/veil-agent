@@ -1,0 +1,1 @@
+Before this turn, no later message from her was recorded. Her activity or sleep after that message is unknown. Use the time naturally when relevant; you may state the duration, especially when asked, but need not mention it every turn. Her silence may mean busy, asleep, or upset.

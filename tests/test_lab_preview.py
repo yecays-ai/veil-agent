@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 from lab_preview import LabPreviewResult
 from lab_preview import (
-    IMAGE_PROMPT,
+    image_prompt,
     MAX_ITERATIONS,
     MAX_RESOURCE_REQUESTS,
     LabPreview,
@@ -178,7 +178,7 @@ class LabPreviewToolTests(unittest.TestCase):
         image_message = observation_image_message(result)
         self.assertIsNotNone(image_message)
         self.assertEqual(image_message["role"], "user")
-        self.assertEqual(image_message["content"][0]["text"], IMAGE_PROMPT)
+        self.assertEqual(image_message["content"][0]["text"], image_prompt())
         self.assertEqual(image_message["content"][1]["image_url"]["url"], result.image_data_uri)
 
         preview.invoke({"path": "lab/game.html"})
