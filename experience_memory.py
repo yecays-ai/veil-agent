@@ -170,7 +170,7 @@ class ExperienceMemory:
             from event_memory import EventMemory
             events = EventMemory(self.memory, settings, model=self.model, sidecar=self.sidecar)
             events.locked = self.sidecar.locked
-            return events.retry_dirty() + events.auto_correct()
+            return events.dream_pass('tidy')
         except Exception:
             return 0
 

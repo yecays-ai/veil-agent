@@ -47,6 +47,8 @@ HOLD = SimpleNamespace(name='hold', inputSchema={
         'link_to': {'type': 'string', 'description':
             'New memory only: ID of a shown memory this one continues (an earlier stage of the same experience).'},
         'why_remembered': {'type': 'string', 'description': 'Optional: why this matters to you, first person.'},
+        'interpretation': {'type': 'string', 'description':
+            'Optional: how you read it at the time; your own understanding, never a fact.'},
         'importance': {'type': 'integer', 'minimum': 1, 'maximum': 10, 'description':
             'Optional, new memory only: 1-10, default 5; decides what surfaces first when a conversation opens.'},
         'pinned': {'type': 'boolean', 'description':
@@ -310,8 +312,7 @@ class NativeMemoryTools:
             # Startup recovery: finish a stage/event write interrupted last run even when the chat-tidy
             # feature is not configured at all. Lock checks must already be bound.
             try:
-                self.events.retry_pending()
-                self.events.retry_dirty()
+                self.events.dream_pass('startup')
             except Exception:
                 pass
         self.tools = [HOLD, SEARCH, *model_tools, MEMORY_HISTORY, MEMORY_CATALOG, MEMORY_READ,
@@ -1228,7 +1229,8 @@ class NativeMemoryTools:
         if self.events is not None and target_id is None and link_to is None:
             try:
                 saved = self.events.record(content.strip(), title.strip(), why=why,
-                                           importance=args.get('importance'), pinned=args.get('pinned'))
+                                           importance=args.get('importance'), pinned=args.get('pinned'),
+                                           interpretation=str(args.get('interpretation') or '')[:300])
             except Exception:
                 return ('The event save failed before anything was written; nothing was saved.',
                         '出错', summary)

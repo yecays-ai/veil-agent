@@ -46,7 +46,8 @@ workbench_lock = threading.Lock()
 MAX_BODY = 200_000
 MEMORY_CHANGE_PATHS = ('/api/memory/edit', '/api/memory/delete', '/api/memory/versions',
                        '/api/memory/restore-version', '/api/memory/archived', '/api/memory/unarchive',
-                       '/api/memory/lock', '/api/memory/seen')
+                       '/api/memory/lock', '/api/memory/seen', '/api/memory/event/split',
+                       '/api/memory/event/move')
 MAX_MEDIA_BYTES = MAX_PHOTO_BYTES
 MAX_VOICE_UPLOAD_BYTES = 10 * 1024 * 1024
 MAX_ACTIVE_VOICE_TRANSCRIPTIONS = 4
@@ -2485,6 +2486,18 @@ def make_handler(hub, token):
                     ok, message = tools.panel_unarchive(body['id'])
                 elif url.path == '/api/memory/lock':
                     ok, message = tools.panel_lock(body['id'], body.get('locked') is True)
+                elif url.path == '/api/memory/event/split':
+                    events = getattr(tools, 'events', None)
+                    stage_ids = body.get('stage_ids')
+                    new_id = (events.split_event(body['id'], stage_ids, body.get('title') or '')
+                              if events is not None and isinstance(stage_ids, list) else None)
+                    ok, message, extra = bool(new_id), ('没有可拆出的阶段。' if not new_id else ''), (
+                        {'event_id': new_id} if new_id else {})
+                elif url.path == '/api/memory/event/move':
+                    events = getattr(tools, 'events', None)
+                    moved = (events.move_stage(body['id'], body.get('to'))
+                             if events is not None and isinstance(body.get('to'), str) else False)
+                    ok, message = bool(moved), ('这段经历被 Lan 改过或锁定，不能移动。' if not moved else '')
                 else:
                     ok, message = tools.panel_seen(body['id'])
             except Exception:

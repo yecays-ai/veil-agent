@@ -462,7 +462,8 @@ function detachedViewFromEvent(event) {
 const fromChatPage = event => fromChat(event) || detachedViewFromEvent(event) !== null;
 // Memory page actions the renderer may post (ticket 363 added versions, archive, lock and seen).
 const MEMORY_POSTS = ['/api/memory/edit', '/api/memory/delete', '/api/memory/versions', '/api/memory/restore-version',
-  '/api/memory/archived', '/api/memory/unarchive', '/api/memory/lock', '/api/memory/seen'];
+  '/api/memory/archived', '/api/memory/unarchive', '/api/memory/lock', '/api/memory/seen',
+  '/api/memory/event/split', '/api/memory/event/move'];
 function allowedChatRequest(pathname, method) {
   if (method === 'GET') {
     let url;

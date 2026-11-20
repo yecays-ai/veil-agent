@@ -15,6 +15,7 @@ import hashlib
 import json
 import re
 import threading
+import uuid
 from dataclasses import replace
 from datetime import datetime, timedelta
 
@@ -233,6 +234,11 @@ class EventMemory:
         return {'event_id': event_id, 'title': event.get('title'), 'status': event.get('status'),
                 'first_at': event.get('first_at'), 'last_at': event.get('last_at'),
                 'story': event.get('story') or self._story(event_id), 'confidence': event.get('confidence'),
+                'story_source': event.get('story_source'),
+                'belief_history': event.get('belief_history') or self._belief_history(event_id),
+                'related': [{'event_id': key, 'title': (self.events().get(key) or {}).get('title'),
+                             'last_at': (self.events().get(key) or {}).get('last_at')}
+                            for key in self._related_events(event_id)],
                 'stages': stages,
                 'versions': [{'at': row.get('at'), 'old_story': row.get('old_story'),
                               'old_content': row.get('old_content')} for row in versions]}
@@ -279,7 +285,8 @@ class EventMemory:
         text = ' '.join((text or '').split())
         if not text:
             raise ValueError('empty stage')
-        stage_id = 's-' + hashlib.sha1(f'{title or ""}|{text}'.encode('utf-8')).hexdigest()[:16]
+        stage_id = 's-' + hashlib.sha1(
+            f'{title or ""}|{text}|{when.strftime("%Y-%m-%d")}'.encode('utf-8')).hexdigest()[:16]
         existing = self._stage_rows().get(stage_id)
         if existing is not None and existing.get('state') == 'committed':
             event = self.events().get(existing.get('event_id')) or {}
@@ -306,7 +313,8 @@ class EventMemory:
         # with the same stage_id instead of creating a duplicate.
         self.store.append(self.stages_path, {**stage, 'state': 'pending', 'event_row': event})
         story = self._story(event['event_id'], extra=stage)
-        projection = self._projection(event['event_id'], story, extra=stage)
+        story, story_source = self._write_story(self.stages(event['event_id']) + [stage], story, event)
+        projection = self._projection(story)
         changed, locked = False, False
         memory_id = event.get('memory_id')
         old_story = event.get('story')
@@ -332,6 +340,10 @@ class EventMemory:
             'last_at': when.isoformat(),
             'stage_count': len(self.stages(event['event_id'])) + 1,
             'story': story,
+            'story_source': story_source,
+            'story_through': stage['at'],
+            'belief_history': self._belief_history(event['event_id'], extra=stage),
+            'related_to': sorted(set(event.get('related_to') or []) | set(self._related_events(event['event_id']))),
             'confidence': confidence,
             'dirty': not changed and not locked,
             'last_story_at': datetime.now().astimezone().isoformat(),
@@ -371,6 +383,11 @@ class EventMemory:
         text = ' '.join((text or '').split())
         if not text:
             return False
+        missing = self._missing_facts(self.stages(event_id), text)
+        if missing:
+            self._review(event_id, 'tidy revision dropped facts: ' + ', '.join(missing[:10]))
+            return False
+        revision_id = 'r-' + uuid.uuid4().hex[:12]
         stamp = datetime.now().astimezone().isoformat()
         if old_story and old_story != text:
             self.store.append(self.versions_path, {'event_id': event_id, 'memory_id': memory_id,
@@ -381,7 +398,7 @@ class EventMemory:
                 'why_remembered': '', 'old_content': old_projection})
         projection = text[:self.settings['summary_chars']]
         self.store.append(self.revisions_path, {'state': 'begin', 'event_id': event_id,
-                                                'story': text, 'at': stamp})
+                                                'revision_id': revision_id, 'story': text, 'at': stamp})
         if memory_id:
             try:
                 self.memory.call('trace', {'bucket_id': memory_id, 'content': projection})
@@ -395,9 +412,11 @@ class EventMemory:
             if written is not None and written.strip() != projection.strip():
                 return False
         event.update({'story': text, 'dirty': False, 'last_story_at': stamp,
+                      'story_source': 'tidy', 'revision_id': revision_id,
                       'title': (title or event.get('title'))[:100]})
         self.store.append(self.events_path, event)
-        self.store.append(self.revisions_path, {'state': 'done', 'event_id': event_id, 'at': stamp})
+        self.store.append(self.revisions_path, {'state': 'done', 'event_id': event_id,
+                                                'revision_id': revision_id, 'at': stamp})
         self.store.append(self.ops_path, {'at': stamp, 'op': 'revise', 'event_id': event_id,
                                           'why': why, 'before': old_story[:500], 'after': text[:500]})
         return True
@@ -622,13 +641,105 @@ class EventMemory:
             lines.append(line)
         return '\n\n'.join(lines)
 
-    def _projection(self, event_id, story, extra=None):
-        pieces = []
+    def _write_story(self, stages, fallback, event=None):
+        """A natural narrative from the stages, checked against every stage's dates/numbers/files.
+
+        Normally this merges only the stages after `story_through` into the existing story (Graphiti's
+        saga watermark). Every eighth stage it re-derives from all stages so an old omission can return.
+        """
+        if self.model is None or not stages:
+            return fallback, 'composed'
+        existing = str((event or {}).get('story') or '')
+        through = str((event or {}).get('story_through') or '')
+        fresh = [stage for stage in stages if not through or str(stage.get('at') or '') > through]
+        if not fresh:
+            fresh = stages
+        full_rederive = not existing or len(stages) % 8 == 0
+        attempts = []
+        if existing and not full_rederive:
+            attempts.append(('merge', fresh, existing))
+        attempts.append(('full', stages, ''))
+        story = ''
+        for mode, source, previous in attempts:
+            prompt_id = 'memory.event.story.merge' if mode == 'merge' else 'memory.event.story'
+            messages = [
+                {'role': 'system', 'content': prompts.text(prompt_id)},
+                {'role': 'user', 'content': json.dumps({
+                    'existing_story': previous,
+                    'stages': [{'at': stage.get('at'), 'text': stage.get('text'),
+                                 'his_reading': stage.get('interpretation')} for stage in source],
+                    'beliefs': [{'at': stage.get('at'), 'belief': stage.get('interpretation'),
+                                 'valid_from': stage.get('at'), 'invalid_at': stage.get('invalid_at')}
+                                for stage in stages if stage.get('interpretation')]},
+                    ensure_ascii=False)[:16000]},
+            ]
+            for _ in range(2):
+                try:
+                    request_cfg = replace(self.cfg, max_output_tokens=1200)
+                    reservation = amount = None
+                    if self.budget is not None and callable(getattr(self.budget, 'reserve', None)):
+                        reservation, amount = self.budget.reserve(request_cfg, accounting='event-story',
+                                                                  category='event-story')
+                    result = self.model(messages, max_tokens=1200, detail=True)
+                    output = result[0] if isinstance(result, tuple) else result
+                    if reservation is not None:
+                        try:
+                            prompt_tokens = int(result[1]) if isinstance(result, tuple) and len(result) > 1 else 0
+                            completion_tokens = int(result[2]) if isinstance(result, tuple) and len(result) > 2 else 0
+                            cached_tokens = int(result[3]) if isinstance(result, tuple) and len(result) > 3 else 0
+                            self.budget.settle(reservation, request_cfg, prompt_tokens, completion_tokens,
+                                               cached_tokens, accounting='event-story', category='event-story')
+                        except Exception:
+                            pass
+                    story = (output or '').strip() if isinstance(output, str) else ''
+                except Exception:
+                    story = ''
+                if not story:
+                    break
+                candidate = story[:6000]
+                missing = self._missing_facts(stages, candidate)
+                if not missing:
+                    return candidate, ('model+merge' if mode == 'merge' else 'model')
+                messages.append({'role': 'user', 'content': 'Keep every one of these exactly: ' + ', '.join(missing[:20])})
+        return fallback, 'composed'
+
+    @staticmethod
+    def _missing_facts(stages, story):
+        missing = []
+        for stage in stages:
+            extra = stage.get('facts') if isinstance(stage.get('facts'), dict) else {}
+            for value in (extra.get('dates') or []) + (extra.get('numbers') or []) + (extra.get('files') or []):
+                if str(value) and str(value) not in story:
+                    missing.append(str(value))
+        return list(dict.fromkeys(missing))
+
+    def _belief_history(self, event_id, extra=None):
+        history = []
         for stage in self.stages(event_id) + ([extra] if extra else []):
-            text = ' '.join((stage.get('text') or '').split())
-            if text:
-                pieces.append(text[:150].rstrip() + ('…' if len(text) > 150 else ''))
-        text = ' / '.join(pieces) or story
+            belief = stage.get('interpretation')
+            if not belief:
+                continue
+            if history and history[-1]['belief'] != belief:
+                history[-1]['invalid_at'] = stage.get('at')
+            history.append({'at': stage.get('at'), 'valid_from': stage.get('at'),
+                            'invalid_at': None, 'belief': belief, 'stage_id': stage.get('stage_id')})
+        return history
+
+    def _related_events(self, event_id):
+        event = self.events().get(event_id) or {}
+        mine = set(event.get('entities') or [])
+        scored = []
+        for other in self.events().values():
+            if other.get('event_id') == event_id or other.get('status') == 'merged' or not self._visible(other):
+                continue
+            shared = len(mine & set(other.get('entities') or []))
+            if shared:
+                scored.append((shared, other['event_id']))
+        scored.sort(reverse=True)
+        return [key for _, key in scored[:3]]
+
+    def _projection(self, story):
+        text = ' '.join((story or '').split())
         limit = max(120, self.settings['summary_chars'])
         if len(text) > limit:
             head = int(limit * 0.65)
@@ -712,8 +823,10 @@ class EventMemory:
             rows = self.store.read(self.revisions_path)
         except Exception:
             return 0
-        done = {row.get('event_id') for row in rows if row.get('state') == 'done'}
-        begins = [row for row in rows if row.get('state') == 'begin' and row.get('event_id') not in done]
+        done = {row.get('revision_id') for row in rows if row.get('state') == 'done'}
+        begins = [row for row in rows if row.get('state') == 'begin'
+                  and row.get('revision_id') not in done]
+        begins.sort(key=lambda row: str(row.get('at') or ''))
         fixed = 0
         for row in begins:
             event = self.events().get(row.get('event_id'))
@@ -735,6 +848,7 @@ class EventMemory:
                           'last_story_at': datetime.now().astimezone().isoformat()})
             self.store.append(self.events_path, event)
             self.store.append(self.revisions_path, {'state': 'done', 'event_id': event['event_id'],
+                                                    'revision_id': row.get('revision_id'),
                                                     'at': datetime.now().astimezone().isoformat()})
             fixed += 1
         return fixed
@@ -750,7 +864,7 @@ class EventMemory:
             try:
                 story = event.get('story') or self._story(event['event_id'])
                 memory_id, changed, locked = self._write_projection(
-                    event, self._projection(event['event_id'], story), event.get('title') or 'Event')
+                    event, self._projection(story), event.get('title') or 'Event')
                 if changed or locked:
                     event['memory_id'] = memory_id or event.get('memory_id')
                     event['dirty'] = False
@@ -759,6 +873,126 @@ class EventMemory:
             except Exception:
                 continue
         return fixed
+
+    def _lan_edited(self, event):
+        memory_id = event.get('memory_id')
+        if not memory_id or self.sidecar is None:
+            return False
+        note = self.sidecar.all().get(memory_id) or {}
+        edited = note.get('lan_edited')
+        return bool(edited and str(edited) > str(event.get('last_story_at') or ''))
+
+    def _refresh_event(self, event_id, *, close_empty=False):
+        event = self.events().get(event_id)
+        if not event:
+            return None
+        stages = self.stages(event_id)
+        if not stages and close_empty:
+            event.update({'story': '', 'stage_count': 0, 'status': 'closed',
+                          'belief_history': [], 'dirty': False,
+                          'last_story_at': datetime.now().astimezone().isoformat()})
+            memory_id = event.get('memory_id')
+            if memory_id:
+                try:
+                    self.memory.call('trace', {'bucket_id': memory_id,
+                                               'content': '这段经历已全部移到别处，不再从这里想起。'})
+                    self.memory.call('trace', {'bucket_id': memory_id, 'dont_surface': True})
+                except Exception:
+                    pass
+            self.store.append(self.events_path, event)
+            return event
+        event.update({'story': self._story(event_id), 'stage_count': len(stages),
+                      'belief_history': self._belief_history(event_id), 'dirty': True,
+                      'last_story_at': datetime.now().astimezone().isoformat()})
+        self.store.append(self.events_path, event)
+        return event
+
+    @_serialized
+    def move_stage(self, stage_id, to_event_id, why='纠正归组'):
+        stage = self._stage_rows().get(stage_id)
+        target = self.events().get(to_event_id)
+        if not stage or stage.get('state') != 'committed' or not target or target.get('status') == 'merged':
+            return False
+        source_id = stage.get('event_id')
+        if source_id == to_event_id:
+            return False
+        source = self.events().get(source_id) or {}
+        if self._lan_edited(source) or self._lan_edited(target):
+            self._review(source_id, 'Lan edited this event; a stage move was blocked')
+            return False
+        self.store.append(self.stages_path, {**stage, 'event_id': to_event_id, 'state': 'committed'})
+        self._refresh_event(source_id, close_empty=True)
+        self._refresh_event(to_event_id)
+        self.store.append(self.ops_path, {'at': datetime.now().astimezone().isoformat(), 'op': 'move',
+                                          'stage': stage_id, 'from': source_id, 'to': to_event_id, 'why': why})
+        self.retry_dirty()
+        return True
+
+    @_serialized
+    def split_event(self, event_id, stage_ids, title='', why='纠正归组'):
+        event = self.events().get(event_id)
+        if not event or not stage_ids or self._lan_edited(event):
+            return None
+        chosen = [self._stage_rows().get(stage_id) for stage_id in stage_ids]
+        chosen = [stage for stage in chosen if stage and stage.get('event_id') == event_id]
+        if not chosen or len(chosen) == len(self.stages(event_id)):
+            return None
+        when = _when(chosen[0].get('at')) or datetime.now().astimezone()
+        new_id = 'e-' + when.strftime('%Y%m%d') + '-' + hashlib.sha1(
+            f'{event_id}|{",".join(stage_ids)}'.encode('utf-8')).hexdigest()[:6]
+        new_event = {'event_id': new_id, 'title': (title or event.get('title') or 'Event')[:100],
+                     'status': 'open', 'first_at': chosen[0].get('at'), 'last_at': chosen[-1].get('at'),
+                     'entities': sorted({word for stage in chosen for word in stage.get('entities') or []})[:80],
+                     'stage_count': len(chosen), 'dirty': True, 'story': '',
+                     'belief_history': [], 'related_to': [event_id]}
+        self.store.append(self.events_path, new_event)
+        for stage in chosen:
+            self.store.append(self.stages_path, {**stage, 'event_id': new_id, 'state': 'committed'})
+        self._refresh_event(event_id)
+        self._refresh_event(new_id)
+        self.store.append(self.ops_path, {'at': datetime.now().astimezone().isoformat(), 'op': 'split',
+                                          'from': event_id, 'to': new_id,
+                                          'stages': list(stage_ids), 'why': why})
+        self.retry_dirty()
+        return new_id
+
+    @_serialized
+    def dream_pass(self, why='tick'):
+        """agent-memory style claim/lease/watermark around recovery, so two ticks never run together."""
+        state_path = f'{self.cfg.id}/event-dream.json'
+        report_path = f'{self.cfg.id}/event-dream-report.jsonl'
+        now = datetime.now().astimezone()
+        try:
+            state = json.loads((self.store.root / state_path).read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            state = {}
+        lease = _when(state.get('lease_until'))
+        if state.get('status') == 'running' and lease and now < lease:
+            return 0
+        state.update({'status': 'running', 'lease_until': (now + timedelta(minutes=5)).isoformat(),
+                      'attempt': int(state.get('attempt') or 0) + 1, 'started_at': now.isoformat()})
+        self.store.replace(state_path, state)
+        try:
+            fixed = self.retry_pending() + self.retry_dirty() + self.auto_correct()
+            outcome = 'succeeded'
+            error = ''
+        except Exception as exc:
+            fixed, outcome, error = 0, 'failed', type(exc).__name__
+        end = datetime.now().astimezone()
+        state.update({'status': 'idle', 'lease_until': None, 'last_run_at': end.isoformat(),
+                      'last_outcome': outcome, 'last_fixed': fixed, 'last_error': error,
+                      'covered_through': str((max((event.get('last_at') or '' for event in self.events().values()),
+                                                   default='')))})
+        self.store.replace(state_path, state)
+        self.store.append(report_path, {'at': end.isoformat(), 'why': why, 'outcome': outcome,
+                                        'fixed': fixed, 'error': error})
+        return fixed
+
+    def dream_state(self):
+        try:
+            return json.loads((self.store.root / f'{self.cfg.id}/event-dream.json').read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            return {}
 
     @_serialized
     def auto_correct(self):
