@@ -130,6 +130,15 @@ output_cny_per_million = "8"
 
 
 class InlineProseTests(unittest.TestCase):
+    BASELINE = 68  # ticket 400: entries still inline when the registry landed; this number may only shrink
+
+    def test_allowlist_only_shrinks(self):
+        allowed = inline.allowlist()
+        self.assertLessEqual(len(allowed), self.BASELINE, (
+            'prompts/inline_allowlist.txt may only shrink. Migrate the prompt into prompts/defaults and '
+            'reference its id instead of adding a line here. Ticket 402 empties this list; raising this '
+            'baseline needs a reviewed reason in the PR.'))
+
     def test_no_new_inline_prompt_text(self):
         allowed = inline.allowlist()
         found = inline.collect()
