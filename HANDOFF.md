@@ -1,4 +1,12 @@
-﻿# HANDOFF
+# HANDOFF
+
+## 工单 409 交接（Learned Context 保存被误报失败）
+- 现象：`jot_about_lan` / `edit_lan_notes` 大量「arguments are not a valid JSON object」，但参数合法。
+- 根因：`learned_context._invoke_profile` 成功分支的 return 写成了 `return (msg),` + 下一行 `'成功', name`，返回 1 元组；上层三值解包抛 `ValueError`，被 `_execute_tool_call` 最外层 `except (ValueError, TypeError)` 误报成 JSON 错。数据在 return 之前已经写入，所以「拒绝」的其实都存进去了。
+- 改法：返回正常 3 元组；删掉 `_invoke_ongoing` 里一句执行不到的重复 return；加回归测试（旧代码会抛 unpack 错）。
+- 验证：`test_learned_context` + `test_learned_context_chat` 11 个通过。
+- 待办：Lan 真机验收——让他写一条关于你的内容，结果应是 `Saved. …`。
+- 遗留：`_execute_tool_call` 仍把工具内部的 `ValueError` 报成「参数不是合法 JSON」，这次就是被它掩盖的；建议另开单把「解析失败」和「工具内部异常」分开报。
 
 ## 工单 407 交接（事件记忆第一版）
 - 范围：保存走事件层（默认关，`[memory.events] enabled`）。一个事件只保留一条 Ombre 记忆，正文是 400 字摘要；完整故事（`story`）落在 `events.jsonl`，阶段/证据/旧投影/复核在相邻文件。新增只读 `memory_timeline` 和「记忆 · 经历」页；召回按事件去重；`experience_memory` 每次整理重试 dirty 投影并合并可证明的重复。
