@@ -130,24 +130,104 @@ output_cny_per_million = "8"
 
 
 class InlineProseTests(unittest.TestCase):
-    BASELINE = 68  # ticket 400: entries still inline when the registry landed; this number may only shrink
-
-    def test_allowlist_only_shrinks(self):
-        allowed = inline.allowlist()
-        self.assertLessEqual(len(allowed), self.BASELINE, (
-            'prompts/inline_allowlist.txt may only shrink. Migrate the prompt into prompts/defaults and '
-            'reference its id instead of adding a line here. Ticket 402 empties this list; raising this '
-            'baseline needs a reviewed reason in the PR.'))
-
-    def test_no_new_inline_prompt_text(self):
-        allowed = inline.allowlist()
-        found = inline.collect()
-        unknown = [row for row in found if row['hash'] not in allowed]
+    def test_no_unreviewed_inline_prose(self):
+        allowed = inline.feedback()
+        unknown = [row for row in inline.collect() if row['hash'] not in allowed]
         self.assertEqual(unknown, [], (
-            'New prompt text was written directly into code. Move it to prompts/defaults and reference '
-            'its id (preferred), or, if it must stay, run "python -m prompts.inline --update" and explain '
-            'in the allowlist. Unregistered: '
+            'Prompt prose was written directly into code again. Move it to prompts/defaults and call '
+            'prompts.text(<id>), or give it a reason in prompts/inline_feedback_allowlist.txt. '
             + ', '.join(row['file'] + ':' + str(row['line']) + ' ' + row['preview'] for row in unknown)))
+
+    def test_feedback_list_is_reviewed_and_shrinks(self):
+        allowed = inline.feedback()
+        self.assertLessEqual(len(allowed), inline.BASELINE, (
+            'The feedback list may only shrink. Raising inline.BASELINE is a reviewed decision.'))
+        for digest, reason in allowed.items():
+            self.assertTrue(reason.startswith(inline.REASONS), digest + ' has no typed reason: ' + reason)
+        present = {row['hash'] for row in inline.collect()}
+        stale = [digest for digest in allowed if digest not in present]
+        self.assertEqual(stale, [], 'feedback list has stale entries; run python -m prompts.inline --update')
+
+
+class ToolRowTests(unittest.TestCase):
+    class FakeChat:
+        def __init__(self, description):
+            self.description = description
+
+        def tool_schemas(self, full=False):
+            return [{'type': 'function', 'function': {'name': 'windows_list', 'description': self.description}}]
+
+        def canonical_tool_name(self, name):
+            return name
+
+    def test_tool_rows_come_from_the_tool_list_and_are_editable(self):
+        import instructions
+        from prompts.tools import ToolText
+        with tempfile.TemporaryDirectory() as tmp:
+            old = prompts._tools
+            try:
+                prompts._tools = ToolText(tmp)
+                rows = instructions._tool_rows(self.FakeChat('Original tool text.'))
+                self.assertEqual(len(rows), 1)
+                row = rows[0]
+                self.assertEqual(row['id'], 'tool.windows_list')
+                self.assertEqual(row['kind_label'], '工具说明')
+                self.assertTrue(row['editable'])
+                self.assertFalse(row['overridden'])
+                prompts.save_tool('windows_list', 'Edited tool text.')
+                rows = instructions._tool_rows(self.FakeChat('Original tool text.'))
+                self.assertEqual(rows[0]['text'], 'Edited tool text.')
+                self.assertTrue(rows[0]['overridden'])
+            finally:
+                prompts._tools = old
+
+    def test_tool_override_cache_sees_edits_to_any_file(self):
+        from prompts.tools import ToolText
+        with tempfile.TemporaryDirectory() as tmp:
+            tools = ToolText(tmp)
+            tools.save('read_text_file', 'first read text')
+            tools.save('write_file', 'first write text')
+            tools.save('read_text_file', 'second read text')
+            self.assertEqual(tools.text('read_text_file', ''), 'second read text')
+            self.assertEqual(tools.text('write_file', ''), 'first write text')
+
+    def test_alias_tool_rows_use_the_name_the_model_sees(self):
+        import instructions
+        from prompts.tools import ToolText
+
+        class AliasChat(self.FakeChat):
+            def tool_schemas(self, full=False):
+                return [{'type': 'function', 'function': {'name': 'lookup', 'description': 'Search text.'}}]
+
+            def canonical_tool_name(self, name):
+                return 'mcp__service__search'
+
+        with tempfile.TemporaryDirectory() as tmp:
+            old = prompts._tools
+            try:
+                prompts._tools = ToolText(tmp)
+                rows = instructions._tool_rows(AliasChat('Search text.'))
+                self.assertEqual(rows[0]['id'], 'tool.lookup')
+                prompts.save_tool('lookup', 'Edited by Lan.')
+                rows = instructions._tool_rows(AliasChat('Search text.'))
+                self.assertEqual(rows[0]['text'], 'Edited by Lan.')
+                self.assertTrue(rows[0]['overridden'])
+            finally:
+                prompts._tools = old
+
+    def test_save_tool_does_not_touch_registered_text(self):
+        import instructions
+        from prompts.tools import ToolText
+        with tempfile.TemporaryDirectory() as tmp:
+            old = prompts._tools
+            try:
+                prompts._tools = ToolText(tmp)
+                self.assertIsNone(instructions.save('tool.windows_list', 'Changed.'))
+                self.assertEqual(prompts.tool_text('windows_list', 'default'), 'Changed.')
+                with self.assertRaises(Exception):
+                    instructions.save('tool.', 'x')
+            finally:
+                prompts._tools = old
 
 
 if __name__ == '__main__':

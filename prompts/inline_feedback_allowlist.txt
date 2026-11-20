@@ -1,0 +1,45 @@
+# Ticket 402: runtime feedback and tool-parameter text still written inline.
+# NOT preset prompts: these are short program messages. New prompt prose belongs in
+# prompts/defaults (call prompts.text) or in a tool description (managed by prompts/tools.py).
+# Format: <sha1-12> <reason:...> <file>:<line> <preview>
+4127627e9424 feedback:runtime memory_agent.py:982 unavailable content was not treated as memory. See memory/_agent/diagnostics.jso
+6496949b2d14 feedback:runtime memory_native.py:161 Your recent memories, for looking back. Anything you are done with can settle wi
+eec368d84360 feedback:runtime memory_native.py:306 . Deletion through trace requires explicit UI approval; requests made during aut
+1fdb5f8687a8 feedback:runtime memory_native.py:734 This tool is not authorized for the current role. Choose an available tool; perm
+819880ff86d9 feedback:runtime memory_native.py:771 This delete operation or argument combination is not available. Use the supporte
+5a5a5ef22d06 feedback:runtime memory_native.py:783 Lan locked this memory on the memory page, so you cannot change or delete it. Sa
+2887c0f920ed feedback:runtime memory_native.py:816  memories are already pinned. Unpin one first (trace pinned=0 with importance 1-
+f9e5aef21634 feedback:runtime memory_native.py:821 This memory is pinned. Unpin it first (trace pinned=0 with importance 1-10) befo
+99d7b27f3b9a feedback:runtime memory_native.py:844 This memory update is still unconfirmed after its earlier connection failure. It
+b8e963293f59 feedback:runtime memory_native.py:988 The deletion was not confirmed; this memory remains hidden. Check its state befo
+5769618de057 feedback:runtime memory_native.py:1119  on the memory page, so you cannot change, merge or archive it. Save what is new
+8b9f0aff0d51 feedback:runtime memory_native.py:1161 link_to must be a memory you were shown: an automatic recall, a breath_search re
+d38ed0950086 feedback:runtime memory_native.py:1172  Choose one: the same event -> hold with target_id=<ID> and the whole memory rew
+3a265e1d39cd feedback:runtime memory_native.py:1186 This save is still unconfirmed after its earlier connection failure. It was not 
+b4d5ca4417bc feedback:runtime memory_native.py:1192 The memory service was closed before this save was submitted. No memory was save
+f6ba72405a98 feedback:runtime memory_native.py:1194 The save result is unconfirmed. Do not claim the memory was saved; it was not se
+66d97036ada9 feedback:runtime memory_native.py:1202 The save was confirmed, but its local memory index could not be updated. Do not 
+b1441e1b4b44 feedback:runtime memory_native.py:1222 target_id must be a memory you were shown: an automatic recall or a breath_searc
+6b2eac58245e feedback:runtime memory_native.py:1229 merge_ids must be a list of distinct IDs of memories you were shown. Search agai
+df0562a45219 feedback:runtime memory_native.py:1232 Every merge_id must be a memory you were shown (automatic recall or breath_searc
+1acb926da4af feedback:runtime memory_native.py:1246 A source memory changed after search, so nothing was updated. Run breath_search 
+d4cca9895e89 feedback:runtime memory_native.py:1253 . If what happened then still matters, put it back. If leaving it out is right, 
+e3cc8b638e2b feedback:runtime memory_native.py:1272 The rewrite could not be verified. Check this memory before continuing; its prev
+6674dde40ca3 feedback:runtime veil_agent.py:253 true also sends this message to Lan by email, for when she is away from the comp
+d4196477b101 feedback:runtime veil_agent.py:2585 An autonomous wake may send at most three messages. A card with words is two mes
+8db5e44e5398 feedback:runtime veil_agent.py:2588 You may send at most 10 messages since Lan last wrote. A card with words is two 
+e7a01d0863ad feedback:runtime veil_agent.py:2607 You may send at most 10 messages since Lan last wrote. This card was not sent; i
+e8597b445fe9 feedback:runtime veil_agent.py:2658  That was your 10th message since Lan last wrote, so your turn ends here. Anythi
+6da7c45bbda9 feedback:runtime veil_agent.py:2821 An autonomous wake may send at most three messages. A sticker with words is two 
+9203788a7818 feedback:runtime veil_agent.py:2824 You may send at most 10 messages since Lan last wrote. A sticker with words is t
+c19f750bf1ac feedback:runtime veil_agent.py:2846 This email reply already has three attachments. This file was not sent; continue
+ba353725e8b9 feedback:runtime veil_agent.py:2859 You may send at most 10 messages since Lan last wrote. This message was not sent
+92403f59f44d feedback:runtime veil_agent.py:2889 The Lab file was rejected or could not be copied safely; nothing was sent. Use a
+f008b66a78f7 feedback:runtime veil_agent.py:3436 Internal recall candidates for your recall_message tool only. Never show these I
+46f9d438331d feedback:runtime veil_agent.py:4619 ; VEIL will commit, push and create/update the PR after your report. Do not run 
+eaff14068bdb feedback:runtime veil_agent.py:4621 . Host Git metadata is intentionally hidden; the container has a disposable snap
+a9bd2e73b885 feedback:runtime veil_agent.py:5296 VEIL runtime fact: the selected model rejected visual image input. Peter has not
+182c2bc0ba9a feedback:runtime veil_agent.py:5392 Your last response hit the output token limit. NONE of the tool calls in that re
+8be52f7c7a17 feedback:runtime veil_agent.py:5422 Your reply reached the output limit. Continue from the exact end of your previou
+070048339552 feedback:runtime veil_agent.py:5448 Lan pressed Request Reply. This one request must produce actual message text. re
+23de9ca6097f feedback:runtime veil_agent.py:5467 ]" in a reply does not send a sticker, and there is no such sticker in the libra
