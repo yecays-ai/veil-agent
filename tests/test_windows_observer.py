@@ -2,12 +2,13 @@ import base64
 import json
 import threading
 import tempfile
+import time
 import tomllib
 import unittest
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from desktop_access import desktop_access
 from tools_agent import tool_policy
@@ -207,8 +208,24 @@ class WindowsObserverTests(unittest.TestCase):
 
     def test_observation_does_not_run_while_qq_owns_shared_desktop_gate(self):
         backend = FakeBackend()
-        with desktop_access(timeout=0):
-            result, state, _ = self.make_tools(backend).invoke('windows_list', {})
+        holder = threading.Event()
+        release = threading.Event()
+
+        def hold():
+            with desktop_access(timeout=0):
+                holder.set()
+                release.wait(5)
+
+        thread = threading.Thread(target=hold)
+        thread.start()
+        self.assertTrue(holder.wait(2))
+        try:
+            result, state, _ = WindowsObservationTools(
+                True, backend=backend, platform_enabled=True, timeout_seconds=1
+            ).invoke('windows_list', {})
+        finally:
+            release.set()
+            thread.join(5)
 
         self.assertEqual(state, '搁置')
         self.assertIn('busy', str(result))
@@ -391,6 +408,150 @@ enabled = true
         self.assertIn('Notepad', completed['path'])
         self.assertNotIn(PNG_DATA_URI, str(activity))
         self.assertNotIn('A short note', str(activity))
+
+
+class Win32WindowDiscoveryTests(unittest.TestCase):
+    """Ticket 406: discovery is Win32 EnumWindows; UI Automation is only used by HWND after that."""
+
+    def backend(self, process_info):
+        from windows_observer import WindowsDesktopBackend
+        backend = WindowsDesktopBackend()
+        backend._process_info = lambda pid: process_info.get(pid)
+        return backend
+
+    def test_rows_become_window_records_with_the_existing_id_scheme(self):
+        rows = [
+            {'handle': 0x1001, 'pid': 11, 'title': 'notes.txt - Notepad', 'class_name': 'Notepad',
+             'minimized': False, 'width': 800, 'height': 600, 'cloaked': 0},
+            {'handle': 0x1002, 'pid': 12, 'title': 'ChatGPT', 'class_name': 'Chrome_WidgetWin_1',
+             'minimized': False, 'width': 1200, 'height': 900, 'cloaked': 0},
+        ]
+        info = {11: (r'C:\Windows\System32\notepad.exe', 100),
+                12: (r'C:\Apps\ChatGPT.exe', 200)}
+        backend = self.backend(info)
+
+        got = backend._windows_from_rows(rows, 0x1002, lambda: False)
+
+        self.assertEqual([item['title'] for item in got], ['notes.txt - Notepad', 'ChatGPT'])
+        self.assertTrue(got[1]['foreground'])
+        self.assertEqual(got[1]['state'], 'visible, foreground')
+        self.assertEqual(got[0]['id'],
+                         backend._window_id(11, 0x1001, r'C:\Windows\System32\notepad.exe', 100))
+        self.assertEqual(got[0]['process'], 'notepad.exe')
+
+    def test_shell_furniture_protected_and_tiny_windows_are_dropped(self):
+        rows = [
+            {'handle': 1, 'pid': 1, 'title': 'ChatGPT', 'class_name': 'Chrome_WidgetWin_1',
+             'minimized': False, 'width': 900, 'height': 700, 'cloaked': 2},
+            {'handle': 2, 'pid': 1, 'title': 'Program Manager', 'class_name': 'Progman',
+             'minimized': False, 'width': 900, 'height': 700, 'cloaked': 0},
+            {'handle': 3, 'pid': 1, 'title': '', 'class_name': 'TXNMiniSkin',
+             'minimized': False, 'width': 1920, 'height': 1080, 'cloaked': 0},
+            {'handle': 4, 'pid': 1, 'title': 'Windows Security password', 'class_name': 'X',
+             'minimized': False, 'width': 900, 'height': 700, 'cloaked': 0},
+            {'handle': 5, 'pid': 1, 'title': 'Credential UI', 'class_name': 'X',
+             'minimized': False, 'width': 900, 'height': 700, 'cloaked': 0},
+            {'handle': 6, 'pid': 1, 'title': 'Tiny tip', 'class_name': 'X',
+             'minimized': False, 'width': 100, 'height': 80, 'cloaked': 0},
+            {'handle': 7, 'pid': 1, 'title': 'Gone', 'class_name': 'X',
+             'minimized': False, 'width': 900, 'height': 700, 'cloaked': 0},
+        ]
+        info = {1: (r'C:\Apps\app.exe', 1)}
+        backend = self.backend(info)
+        # handle 5 belongs to a protected credential process, not this helper
+        backend._process_info = lambda pid: (r'C:\Windows\System32\credentialuibroker.exe', 1)
+        self.assertEqual(backend._windows_from_rows(rows, 0, lambda: False), [])
+
+    def test_a_bare_desktop_has_no_foreground_window(self):
+        rows = [
+            {'handle': 3, 'pid': 1, 'title': '', 'class_name': 'TXNMiniSkin',
+             'minimized': False, 'width': 1920, 'height': 1080, 'cloaked': 0},
+        ]
+        backend = self.backend({1: (r'C:\Program Files\DeskGo\DesktopMgr64.exe', 1)})
+
+        got = backend._windows_from_rows(rows, 3, lambda: False)
+
+        self.assertEqual(got, [])
+
+
+class StuckWindowReadTests(unittest.TestCase):
+    def test_unresponsive_window_is_abandoned_and_releases_the_desktop_gate(self):
+        started = threading.Event()
+        release = threading.Event()
+
+        class Wedged(FakeBackend):
+            def read_controls(self, selected, stopped):
+                started.set()
+                release.wait(10)
+                return []
+
+        backend = Wedged()
+        tools = WindowsObservationTools(True, backend=backend, platform_enabled=True,
+                                        timeout_seconds=1)
+        began = time.monotonic()
+        result, state, _ = tools.invoke('windows_observe', {'window_id': 'w-' + '1' * 24})
+        elapsed = time.monotonic() - began
+
+        self.assertEqual(state, '出错')
+        self.assertIn('timed out', str(result))
+        self.assertTrue(started.is_set())
+        self.assertLess(elapsed, 4)
+
+        # The wedged COM call no longer owns the shared desktop gate ...
+        with desktop_access(timeout=0):
+            pass
+        self.assertEqual(tools._stuck_read_count(), 1)
+
+        # ... and a plain window listing still works while it is stuck.
+        listing, list_state, _ = tools.invoke('windows_list', {})
+        self.assertEqual(list_state, '成功')
+        self.assertIn('Notepad', str(listing))
+
+        release.set()
+        for _ in range(200):
+            if tools._stuck_read_count() == 0:
+                break
+            time.sleep(0.02)
+        self.assertEqual(tools._stuck_read_count(), 0)
+
+    def test_too_many_abandoned_reads_back_off_instead_of_starting_more(self):
+        backend = FakeBackend()
+        tools = WindowsObservationTools(True, backend=backend, platform_enabled=True,
+                                        timeout_seconds=1)
+        tools._stuck_reads = {index: time.monotonic() for index in range(3)}
+
+        result, state, _ = tools.invoke('windows_observe', {'window_id': 'w-' + '1' * 24})
+
+        self.assertEqual(state, '搁置')
+        self.assertIn('unresponsive', str(result))
+        self.assertEqual(backend.read_calls, 0)
+
+
+class QQWindowDiscoveryTests(unittest.TestCase):
+    def test_chat_window_is_found_through_the_win32_adapter(self):
+        from qq_channel import QQWindow
+        handles = []
+
+        class FakeAuto:
+            @staticmethod
+            def ControlFromHandle(handle):
+                handles.append(handle)
+                return SimpleNamespace(Name='Lan')
+
+        class FakeBackend:
+            def list_windows(self, _stopped):
+                return [
+                    {'process': 'weixin.exe', 'title': 'Lan', 'width': 900, 'height': 700,
+                     'handle': 1},
+                    {'process': 'qq.exe', 'title': 'Lan', 'width': 900, 'height': 700,
+                     'handle': 2},
+                ]
+
+        with patch('windows_observer.WindowsDesktopBackend', FakeBackend):
+            window = QQWindow('Lan')._chat_window(FakeAuto)
+
+        self.assertEqual(window.Name, 'Lan')
+        self.assertEqual(handles, [2])
 
 
 if __name__ == '__main__':
