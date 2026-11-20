@@ -32,3 +32,13 @@ Peter 说了一句怪话时，从那条消息直接看到他那一轮**真正发
 ## 状态
 
 施工中，等 CodeRabbit 与 Lan 审阅。
+## 评审后的修正（Chat，2026-11-20）
+
+- 快照改为**每次真实模型请求一份**（`<request_id>.<step>.json`），同一轮的工具循环也记录；
+  按 request 分组保留最近 40 轮，一轮里的所有 step 一起保留或一起删除。
+- 消息定位改为先用 `chat.jsonl` 里的 `request_id` 关联，再取该 request 的全部 step；
+  Peter 的回复、`send_message` 产生的气泡都能定位到同一轮。
+- 记录工具定义（名称、说明、参数结构），超过上限时标 `tools_complete=false`；
+  正文截断逐段标记，整份记录带 `complete` 标志。
+- 正文写入前对常见密钥格式打码（sk-、ghp_、Bearer、api_key/password/密码 等），记录打码数量；
+  页面显示「记录范围」而不是声称逐字节原样。

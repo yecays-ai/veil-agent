@@ -1934,9 +1934,12 @@ def request_byte_size(messages, tools=None):
 
 def estimate_message_tokens(messages, calibration):
     ratio = max(0.15, min(1.0, calibration))
-    image_count = sum(1 for message in messages if isinstance(message, dict)
-                      for part in message.get('content', []) if isinstance(message.get('content'), list)
-                      and isinstance(part, dict) and part.get('type') == 'image_url')
+    image_count = 0
+    for message in messages:
+        content = message.get('content') if isinstance(message, dict) else None
+        if isinstance(content, list):
+            image_count += sum(1 for part in content
+                               if isinstance(part, dict) and part.get('type') == 'image_url')
     message_bytes = sum(message_request_bytes(message) for message in messages)
     text_bytes = max(0, message_bytes - image_count * 8192)
     return math.ceil(text_bytes * ratio + image_count * 4096)
@@ -4123,6 +4126,8 @@ class Chat:
             return estimate_request_tokens([*head, *h, *curr_tail, user], tool_schema, calibration)
 
         history = [dict(message) for message in self.history]
+        for message in history:
+            labels[id(message)] = 'history'
         from life_state import time_separator
         for index, row in enumerate(self.history_events[:len(history)]):
             if index and (separator := time_separator(self.history_events[index - 1].get('time'), row.get('time'))):
@@ -4242,19 +4247,43 @@ class Chat:
         self._log_context(text, autonomy, request_id, head, profile_context, stable, history, recalled_memories,
                           background_details, short_term_details, [*auxiliary_context, *runtime_required], tool_schema, user,
                           bound(history))
-        # Ticket 403: one file per turn with the exact blocks about to be sent. Never breaks the request.
-        try:
-            import request_snapshots
-            request_snapshots.save(self.store.root, self.cfg.id, request_snapshots.build(
-                messages, label_list, request_id=request_id,
-                kind=request_kind(self, text, autonomy),
-                model=self.cfg.provider.get('model'), message_ids=mids,
-                autonomy_run_id=getattr(self, 'autonomy_run_id', None),
-                estimated_tokens=bound(history), cache_prefix=len(head),
-                trim_note=self.trim_note or '', memory_ids=getattr(self, 'turn_memory_refs', []),
-                created_at=now()))
-        except Exception:
-            pass
+        # Ticket 403: one snapshot per real model request (a turn with tools has several). Writes never
+        # feed back into the request and never break it.
+        import request_snapshots
+        snapshot_kind = request_kind(self, text, autonomy)
+        system_labels = [label_list[index] for index, message in enumerate(messages)
+                         if message.get('role') == 'system' and label_list[index]]
+
+        def snapshot_labels(sent_messages):
+            result = []
+            seen_systems = 0
+            for message in sent_messages:
+                role = message.get('role')
+                label = labels.get(id(message))
+                if not label and role == 'system':
+                    label = system_labels[seen_systems] if seen_systems < len(system_labels) else 'runtime'
+                if not label:
+                    label = {'assistant': 'assistant', 'tool': 'tool_result',
+                             'user': 'user'}.get(role, '')
+                if role == 'system':
+                    seen_systems += 1
+                result.append(label or '')
+            return result
+
+        def snapshot_step(step, sent_messages, sent_tools):
+            try:
+                request_snapshots.save(self.store.root, self.cfg.id, request_snapshots.build(
+                    sent_messages, snapshot_labels(sent_messages), request_id=request_id, step=step,
+                    kind=snapshot_kind, model=self.cfg.provider.get('model'), message_ids=mids,
+                    autonomy_run_id=getattr(self, 'autonomy_run_id', None),
+                    estimated_tokens=estimate_request_tokens(sent_messages, sent_tools, calibration),
+                    cache_prefix=len(head), trim_note=self.trim_note or '',
+                    memory_ids=getattr(self, 'turn_memory_refs', []), tools=sent_tools,
+                    created_at=now()))
+            except Exception:
+                pass
+
+        snapshot_step(1, messages, tool_schema)
         save_debug = getattr(self.memory, 'save_recall_debug', None) if self.memory is not None else None
         if callable(save_debug) and not skip_recall:
             # Ticket 391: IDs only, no query or memory text; the panel reads this next to the context log.
@@ -4267,6 +4296,7 @@ class Chat:
             self.last_self = description
             if self.tool_mode:
                 reply, tool_summaries = self._tool_chat(messages, request_id, len(history), len(head),
+                                                        snapshot=snapshot_step,
                                                         autonomy=autonomy,
                                                         checkpoint_goal=self.investigation.goal_for(text),
                                                         checkpoint_resuming=bool(resume_context))
@@ -4872,7 +4902,7 @@ class Chat:
         log_tool(name, execution.summary, execution.state, **verified, **delivery)
 
     def _tool_chat(self, messages, request_id, history_count, history_start=None, autonomy=False,
-                   checkpoint_goal='', checkpoint_resuming=False):
+                   checkpoint_goal='', checkpoint_resuming=False, snapshot=None):
         from tools_agent import display_call, reasoning_text
         from windows_interaction import WINDOWS_DESKTOP_TOOL_NAMES
         from windows_observer import observation_image_message
@@ -4880,6 +4910,17 @@ class Chat:
         self.last_tool_summaries = summaries
         self._trace_request_id, self._trace_started = request_id, time.monotonic()
         loop_messages = list(messages)
+        snapshot_step_no = 1
+
+        def take_snapshot(sent_messages, sent_tools):
+            nonlocal snapshot_step_no
+            snapshot_step_no += 1
+            if snapshot:
+                try:
+                    snapshot(snapshot_step_no, sent_messages, sent_tools)
+                except Exception:
+                    pass
+
         pending_image_messages = []
         ephemeral_image_bindings = []
         if history_start is None:
@@ -5273,6 +5314,7 @@ class Chat:
             reservation = request_id if step == 0 else next_reservation
             sent_bytes = request_bytes(offered)
             model_messages = alias_system_messages(loop_messages, self.tool_aliases)
+            take_snapshot(model_messages, offered)
             self.budget.mark_dispatched(reservation)
             try:
                 response = self._model_call(model_messages, tools=offered, message_output=True,
@@ -5349,6 +5391,7 @@ class Chat:
                     })
                     sent_bytes = request_bytes(offered)
                     model_messages = alias_system_messages(loop_messages, self.tool_aliases)
+                    take_snapshot(model_messages, offered)
                     self.budget.mark_dispatched(reservation)
                     try:
                         response = self._model_call(model_messages, tools=offered, message_output=True,

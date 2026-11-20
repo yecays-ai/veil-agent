@@ -2781,17 +2781,24 @@ def make_handler(hub, token):
                 return
             request_id = (query.get('id') or [''])[0]
             message_id = (query.get('message_id') or [''])[0]
-            if request_id:
-                record = request_snapshots.get(chat.store.root, chat.cfg.id, request_id)
-            elif message_id:
-                record = request_snapshots.for_message(chat.store.root, chat.cfg.id, message_id)
-            else:
+            if message_id and not request_id:
+                request_id = ''
+                for row in reversed(chat.store.read(chat.path)):
+                    if (isinstance(row, dict) and row.get('message_id') == message_id
+                            and isinstance(row.get('request_id'), str) and row['request_id']):
+                        request_id = row['request_id']
+                        break
+                if not request_id:
+                    self._send(404, {'error': '这条消息没有关联的请求快照。'})
+                    return
+            elif not request_id:
                 self._send(400, {'error': '缺少 id 或 message_id。'})
                 return
-            if not record:
+            bundle = request_snapshots.for_request(chat.store.root, chat.cfg.id, request_id)
+            if not bundle:
                 self._send(404, {'error': '还没有这一轮的快照；更新后发一句话就会生成。'})
                 return
-            self._send(200, record)
+            self._send(200, bundle)
 
         def _post_instructions(self, body):
             try:
