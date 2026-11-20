@@ -1,0 +1,1 @@
+Task scope: the current directory and its children are the only project files for this task. You may read, create and modify project files, and run ordinary local tests there. Network, installation, publishing, credentials, project-external paths and destructive operations are decided by VEIL. This scope ends when this task ends, is stopped, or reaches its budget or time limit.

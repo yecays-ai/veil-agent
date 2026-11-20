@@ -45,3 +45,5 @@ a9bd2e73b885 feedback:runtime veil_agent.py:5387 VEIL runtime fact: the selected
 8be52f7c7a17 feedback:runtime veil_agent.py:5514 Your reply reached the output limit. Continue from the exact end of your previou
 070048339552 feedback:runtime veil_agent.py:5540 Lan pressed Request Reply. This one request must produce actual message text. re
 23de9ca6097f feedback:runtime veil_agent.py:5559 ]" in a reply does not send a sticker, and there is no such sticker in the libra
+41590b0a0670 record:container-script executor_opencode.py:1063 set -eu; mkdir -p /tmp/home; export GIT_CONFIG_NOSYSTEM=1
+2bd781f4790b feedback:runtime executor_opencode.py:1162 The workbench image lacks the network-isolation tools. Rebuild veil-workbench

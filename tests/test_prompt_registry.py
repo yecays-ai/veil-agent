@@ -23,6 +23,30 @@ class ScanCoverageTests(unittest.TestCase):
         self.assertTrue(importing)
         self.assertEqual(sorted(importing - set(inline.modules())), [])
 
+    def test_every_module_that_builds_requests_is_scanned(self):
+        builders = {path.name for path in Path(inline.ROOT).glob('*.py')
+                    if inline.builds_requests(path)}
+        self.assertTrue(builders)
+        self.assertEqual(sorted(builders - set(inline.modules())), [],
+                         'a module builds model messages but is not scanned')
+
+    def test_request_building_module_without_prompts_import_is_flagged(self):
+        probe_text = (
+            'PROSE = ("This text is written into a module that never imports prompts. It builds the "\n'
+            '         "request by hand, so only the request shape can reveal it to the scanner.")\n\n'
+            'def turn(user_text):\n'
+            '    return [{"role": "system", "content": PROSE},\n'
+            '            {"role": "user", "content": user_text}]\n'
+        )
+        with tempfile.TemporaryDirectory(dir=inline.ROOT) as tmp:
+            probe = Path(tmp) / 'probe_builder.py'
+            probe.write_text(probe_text, encoding='utf-8')
+            self.assertFalse(inline._imports_prompts(probe))
+            self.assertTrue(inline.builds_requests(probe))
+            name = probe.relative_to(inline.ROOT).as_posix()
+            self.assertNotIn(name, inline.modules(),
+                             'an unscanned request builder would slip through')
+
     def test_new_prose_in_a_model_module_is_caught(self):
         with tempfile.TemporaryDirectory(dir=inline.ROOT) as tmp:
             probe = Path(tmp) / 'probe_module.py'

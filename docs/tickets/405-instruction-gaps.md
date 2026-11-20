@@ -20,7 +20,7 @@
 
 ## 本次改动
 
-19 段程序拼进提示词的话登记成条目；代码改成 `prompts.text()` / `prompts.fill()`，默认输出逐字节不变。
+23 段程序拼进提示词的话登记成条目；代码改成 `prompts.text()` / `prompts.fill()`，默认输出逐字节不变。
 
 | 新条目 | 可改 | 原来写在哪 | 界面分组 |
 | --- | --- | --- | --- |
@@ -43,6 +43,10 @@
 | `autonomy.wake_scheduled` | 可改 | 同上，他自己定的闹钟 | 自主活动 |
 | `safety.untrusted_lab_page` | 只读 | `lab_preview.IMAGE_PROMPT` | 系统与安全 |
 | `safety.untrusted_codex` | 只读 | `codex_watch` 的提醒提示词 | 系统与安全 |
+| `safety.untrusted_window_image` | 只读 | `windows_observer` 看窗口截图的说明 | 系统与安全 |
+| `workbench.container` | 只读 | `executor_opencode.CONTAINER_NOTE` | 系统与安全 |
+| `workbench.scope` | 只读 | `executor_opencode.TASK_SCOPE_NOTE` | 系统与安全 |
+| `workbench.maintenance` | 只读 | `executor_opencode.MAINTENANCE_NOTE` | 系统与安全 |
 
 另外两处：
 
@@ -57,6 +61,14 @@
 2. **必需占位符不能删。** `registry.Entry` 有新字段 `placeholders`；`store.save()` 发现必需占位符被删就拒绝保存，并在页面显示原因（哪几个、为什么要留）。19 条里带数据的 11 条都登记了必需占位符，纯措辞的条目照旧随便改。回归测试四条，含「改完 `life.time_guidance` 下一次 `gap_text` 真的用新文本」。
 
 要求没变：只补功能与防漏，不加新功能。
+
+## 评审后补的第三处（自动扫描仍有漏洞）
+
+上一版 `modules()` 只收「import 了 `prompts` 的模块」和一个手写名单。问题：新建模块直接在代码里拼请求、忘了 import `prompts`，就仍然扫不到。
+
+补法：`prompts/inline.py` 加 `builds_requests()`，按**请求形状**识别——带 `role` 键的消息字典、`messages=` 参数、`messages` 赋值、`tool_schemas()` 调用。任何一种命中就算「会构造模型请求」。测试 `test_every_module_that_builds_requests_is_scanned` 要求所有这类模块都在扫描集合里；`test_request_building_module_without_prompts_import_is_flagged` 直接造一个「不 import prompts、只拼 role 消息」的模块，断言它会被认出来且不在扫描集合里（也就是会让上一条测试变红）。
+
+这条检查一上线就抓到 3 个漏网的：`executor_opencode.py`、`ombre_entry.py`、`windows_observer.py`。其中两段是真提示词，一并登记：工作台的三段任务说明（`workbench.container` / `.scope` / `.maintenance`）和看窗口截图时的防注入说明（`safety.untrusted_window_image`），都是只读。剩下 2 条不是提示词（一段容器初始化 shell、一句环境报错），进反馈清单，`BASELINE` 43 → 45。
 
 ## 验收步骤
 
