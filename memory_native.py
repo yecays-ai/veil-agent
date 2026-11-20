@@ -1178,7 +1178,10 @@ class NativeMemoryTools:
             return f'The title or why_remembered is too long. Shorten it and save again.', '被拒绝', summary
         # Ticket 407: pinned/importance limits must run before the event branch creates the projection.
         importance, pinned = args.get('importance'), args.get('pinned')
-        if importance is not None or pinned is not None:
+        if (importance is not None or pinned is not None) and target_id is not None:
+            return ('importance and pinned apply only to a new memory. Change an existing one with trace.',
+                    '被拒绝', summary)
+        if (importance is not None or pinned is not None) and target_id is None:
             if importance is not None and (type(importance) is not int or not 1 <= importance <= 10):
                 return 'importance must be a whole number from 1 to 10.', '被拒绝', summary
             if pinned is not None and type(pinned) is not bool:
