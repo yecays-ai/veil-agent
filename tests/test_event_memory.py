@@ -374,6 +374,22 @@ class EventMemoryTests(unittest.TestCase):
         self.assertEqual(len(restarted.events.stages(event_id)), 2)
         self.assertEqual(len(self.backend.rows), 1)
 
+    def test_fact_check_rejects_a_number_extended_by_another_digit(self):
+        stages = [{'facts': {'numbers': ['100'], 'dates': [], 'files': []}}]
+        self.assertEqual(self.native.events._missing_facts(stages, 'The count was 1000.'), ['100'])
+        self.assertEqual(self.native.events._missing_facts(stages, 'The count was 100.'), [])
+
+    def test_link_to_save_keeps_the_interpretation(self):
+        self.save('She wrote meh on the charcoal note after the file list argument.', 'The charcoal note')
+        event_id = next(iter(self.native.events.events()))
+        key = self.native.events.events()[event_id]['memory_id']
+        self.native.search_results[key] = self.memory.content_for(key, refresh=True) or ''
+        self.native.invoke('hold', {'content': 'Later that evening the note was still there.',
+                                    'title': 'The charcoal note', 'link_to': key,
+                                    'interpretation': 'I thought she had forgiven me.'})
+        stages = self.native.events.stages(event_id)
+        self.assertEqual(stages[-1].get('interpretation'), 'I thought she had forgiven me.')
+
     def test_belief_changes_get_validity_dates_and_dream_state_is_recorded(self):
         self.native.invoke('hold', {'content': 'She was quiet after the file list argument.',
                                     'title': 'The quiet', 'interpretation': 'I thought she wanted space.'})
