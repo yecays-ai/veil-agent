@@ -1,5 +1,11 @@
 # HANDOFF
 
+## 工单 404 交接（自动检查与长期维护）
+- 默认指纹：`prompts/store.py` 保存覆盖时记 `persona/instructions/.base.json`；`status()` 返回 `default_changed`；页面标「默认已更新」+ 顶部「你改过 N 条」。
+- 守卫：`prompts/inline.py` 增加长中文提示词扫描（≥40 汉字且含句末标点），原因类型加 `ui-error:`；清单 43 条，只许减少。
+- 测试：合成英文/中文提示词必须被拦；默认变更可见；覆盖目录被 git 忽略且 update-main 不碰。
+- 验证：相关 python 测试与桌面测试；页面截图核对「默认已更新」与维护行。
+
 ## 工单 403 交接（请求快照）
 - 新增 `request_snapshots.py`：每次真实模型请求一份 JSON（`<request_id>.<step>.json`），含来源标签、缓存前缀、估算 token、召回 id、工具定义、截断与打码计数；按 request 分组保留 40 轮；写失败静默。
 - 消息定位：先用 `chat.jsonl` 的 `request_id` 找轮次，再返回该轮全部 step；回复与 send_message 气泡都可定位。

@@ -1,12 +1,9 @@
-"""Ticket 402: keep prompt prose out of the model-facing modules.
+"""Tickets 402/404: keep prompt prose out of the model-facing modules.
 
 Two things reach the model: preset text (registered in prompts/registry.py or described per tool in
-prompts/tools.py) and runtime feedback (short program messages such as "you may send at most 10
-messages"). Tool descriptions are recognised structurally and exempted: they are managed as a class.
-
-This collector finds long English prose that is still a bare literal. The test fails when one is not
-in the reviewed feedback list, so a new prompt cannot quietly reappear in code. The feedback list is
-typed and may only shrink; adding a line is a deliberate, reviewable act.
+prompts/tools.py) and runtime feedback. Tool descriptions are recognised structurally and exempted.
+This collector finds long prose still written as a bare literal, in English or (long) Chinese, so a
+new prompt cannot quietly reappear in code. The reviewed feedback list is typed and may only shrink.
 """
 import ast
 import hashlib
@@ -33,9 +30,12 @@ PROMPT_MODULES = (
 MIN_CHARS = 100
 MIN_SPACES = 8
 MIN_ASCII_RATIO = 0.7
+MIN_CJK = 40
+CJK = re.compile('[\u3400-\u9fff]')
+SENTENCE = re.compile('[。！？]')
 FEEDBACK = Path(__file__).with_name('inline_feedback_allowlist.txt')
-REASONS = ('feedback:', 'tool-param:', 'git:', 'record:')
-BASELINE = 41
+REASONS = ('feedback:', 'tool-param:', 'git:', 'record:', 'ui-error:')
+BASELINE = 43
 
 
 def _docstrings(tree):
@@ -72,6 +72,32 @@ def _marked(tree):
     return marked
 
 
+def _is_prose(text):
+    spaces = text.count(' ')
+    if len(text) >= MIN_CHARS and spaces >= MIN_SPACES:
+        letters = sum(1 for char in text if char.isascii() and char.isalpha())
+        if len(text) and letters / len(text) >= MIN_ASCII_RATIO and text.count('.') >= 2:
+            return True
+    return len(CJK.findall(text)) >= MIN_CJK and bool(SENTENCE.search(text))
+
+
+def _rows_from_tree(tree, name):
+    rows = []
+    skip = _docstrings(tree) | _marked(tree)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+            continue
+        if id(node) in skip:
+            continue
+        text = node.value
+        if not _is_prose(text):
+            continue
+        digest = hashlib.sha1(text.encode('utf-8')).hexdigest()[:12]
+        rows.append({'file': name, 'line': getattr(node, 'lineno', 0), 'hash': digest,
+                     'preview': re.sub(r'\s+', ' ', text)[:80], 'text': text})
+    return rows
+
+
 def collect(paths=None):
     rows = []
     for name in (paths or PROMPT_MODULES):
@@ -80,25 +106,12 @@ def collect(paths=None):
             tree = ast.parse(path.read_text(encoding='utf-8'))
         except (OSError, SyntaxError):
             continue
-        skip = _docstrings(tree) | _marked(tree)
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
-                continue
-            if id(node) in skip:
-                continue
-            text = node.value
-            if len(text) < MIN_CHARS or text.count(' ') < MIN_SPACES:
-                continue
-            letters = sum(1 for char in text if char.isascii() and char.isalpha())
-            if letters / len(text) < MIN_ASCII_RATIO:
-                continue
-            if text.count('.') < 2:
-                continue
-            digest = hashlib.sha1(text.encode('utf-8')).hexdigest()[:12]
-            rows.append({'file': name, 'line': getattr(node, 'lineno', 0), 'hash': digest,
-                         'preview': re.sub(r'\s+', ' ', text)[:80],
-                         'text': text})
+        rows.extend(_rows_from_tree(tree, name))
     return rows
+
+
+def collect_text(source, name='inline-test.py'):
+    return _rows_from_tree(ast.parse(source), name)
 
 
 def feedback():
@@ -117,7 +130,7 @@ def feedback():
 
 
 def update_feedback():
-    lines = ['# Ticket 402: runtime feedback and tool-parameter text still written inline.',
+    lines = ['# Ticket 402/404: runtime feedback, tool-parameter text and user-facing errors still inline.',
              '# NOT preset prompts: these are short program messages. New prompt prose belongs in',
              '# prompts/defaults (call prompts.text) or in a tool description (managed by prompts/tools.py).',
              '# Format: <sha1-12> <reason:...> <file>:<line> <preview>']

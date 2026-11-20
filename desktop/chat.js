@@ -2132,6 +2132,17 @@ function renderInstructions(data){
   }
   if(!shown){const p=document.createElement('p');p.className='instr-meta';p.textContent=query?'没有匹配的指令':'没有登记任何指令';list.appendChild(p)}
   $('instructions-status').textContent=query?shown+' 条匹配 · 共 '+total+' 条':total+' 条 · 更新于 '+shortTime(data.generated_at);
+  const maintenance=$('instructions-maintenance');
+  const counts=data&&data.maintenance;
+  if(maintenance){
+    if(!counts){maintenance.hidden=true}
+    else{
+      maintenance.hidden=false;
+      maintenance.textContent='你改过 '+Number(counts.overridden||0)+' 条'
+        +(Number(counts.default_changed||0)?('；其中 '+Number(counts.default_changed)+' 条代码里的默认后来更新过，你的版本仍在用'):'')
+        +'。';
+    }
+  }
 }
 function instructionEntry(row){
   const details=document.createElement('details');details.className='instr-entry';
@@ -2146,6 +2157,7 @@ function instructionEntry(row){
   badge.textContent=(row.kind_label||'')+(row.kind==='text'&&!row.editable?' · 只读':'');
   line.append(chev,title,badge);
   if(row.overridden){const changed=document.createElement('span');changed.className='instr-badge changed';changed.textContent='你改过';line.appendChild(changed)}
+  if(row.default_changed){const stale=document.createElement('span');stale.className='instr-badge stale';stale.textContent='默认已更新';line.appendChild(stale)}
   summary.appendChild(line);
   const snippet=searching?instructionSnippet(row,instructionsQuery):'';
   if(snippet){const text=document.createElement('span');text.className='instr-snippet';text.textContent=snippet;summary.appendChild(text)}
@@ -2158,7 +2170,10 @@ function instructionEntry(row){
   details.appendChild(summary);
   if(details.open){
     const body=document.createElement('div');body.className='instr-body';
-    const meta=document.createElement('p');meta.className='instr-meta';meta.textContent=row.site+(row.note?'　'+row.note:'');body.appendChild(meta);
+    const meta=document.createElement('p');meta.className='instr-meta';
+    meta.textContent=row.site+(row.note?'　'+row.note:'')
+      +(row.default_changed?'　代码里的默认后来更新过，你这一版仍在用。':'');
+    body.appendChild(meta);
     const source=document.createElement('p');source.className='instr-source';source.textContent='来源：'+row.source;body.appendChild(source);
     if(row.kind==='text'&&row.editable&&instructionsEditing===row.id){
       body.appendChild(instructionEditor(row));
