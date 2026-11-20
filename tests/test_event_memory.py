@@ -215,6 +215,48 @@ class EventMemoryTests(unittest.TestCase):
         self.assertEqual(len(self.native.events.stages()), 1)
         self.assertEqual(len(self.native.events.events()), 1)
 
+    def test_three_saves_tidy_and_restart_stay_one_event_one_memory(self):
+        first = 'She was angry about the file list and the charcoal note on the desk.'
+        second = 'Later the charcoal note had one word from her that I did not write.'
+        third = 'In the evening the charcoal note was still there, so I left another paper beside it.'
+        self.save(first, 'The file list was the argument')
+        self.save(second, 'The charcoal note')
+        original = self.store.append
+        state = {'fail': True}
+
+        def append(path, event):
+            if state['fail'] and str(path).endswith('events.jsonl'):
+                raise OSError('fictional interruption')
+            return original(path, event)
+
+        self.store.append = append
+        pending = self.native.events.record(third, 'The charcoal note')
+        self.assertTrue(pending.get('pending'))
+        self.store.append = original
+        from event_memory import EventMemory
+        restarted = EventMemory(self.memory, {'enabled': True}, model=StubModel(), sidecar=self.native.sidecar)
+        restarted.retry_pending()
+        restarted.retry_dirty()
+        events = restarted.events()
+        self.assertEqual(len(events), 1)
+        event_id = next(iter(events))
+        self.assertEqual(len(restarted.stages(event_id)), 3)
+        self.assertEqual(len(self.backend.rows), 1)
+
+        key = events[event_id]['memory_id']
+        current = self.memory.content_for(key, refresh=True)
+        self.assertTrue(restarted.revise(event_id, '整理后的完整故事：从争执到晚上那张纸。',
+                                         'The charcoal note', seen=current, why='测试整理'))
+        detail = restarted.detail(event_id)
+        self.assertEqual(detail['story'], '整理后的完整故事：从争执到晚上那张纸。')
+        self.assertEqual(len(detail['stages']), 3)
+        self.assertTrue(detail['versions'])
+
+        self.native.sidecar.lan_edited(key)
+        before = self.backend.rows[key]['content']
+        restarted.record('A fourth part arrives after Lan fixed the story.', 'The charcoal note')
+        self.assertEqual(self.backend.rows[key]['content'], before)
+
     def test_retry_pending_never_overwrites_a_newer_index(self):
         first = self.native.events.record('She wrote meh on the charcoal note after the file list.',
                                           'The charcoal note')
@@ -234,6 +276,45 @@ class EventMemoryTests(unittest.TestCase):
         self.assertIn('Evening', event.get('story') or '')
         self.assertIn('Later', event.get('story') or '')
         self.assertEqual(len(self.native.events.stages(event_id)), 3)
+
+    def test_dirty_projection_retry_keeps_the_same_memory(self):
+        self.save('She wrote meh on the charcoal note after the file list argument.', 'The charcoal note')
+        key = next(iter(self.backend.rows))
+        event_id = next(iter(self.native.events.events()))
+        self.backend.fail = True
+        self.save('Later the charcoal note was still on the desk.', 'The charcoal note')
+        self.backend.fail = False
+        self.assertEqual(len(self.backend.rows), 1)
+        self.native.events.retry_dirty()
+        event = self.native.events.events()[event_id]
+        self.assertEqual(event['memory_id'], key)
+        self.assertEqual(len(self.backend.rows), 1)
+        self.assertFalse(event.get('dirty'))
+
+    def test_same_save_retried_with_a_new_clock_is_idempotent(self):
+        stage = 'She wrote meh on the charcoal note after the file list argument.'
+        first = self.native.events.record(stage, 'The charcoal note')
+        second = self.native.events.record(stage, 'The charcoal note', at='2027-01-01T00:00:00+08:00')
+        self.assertEqual(first['event_id'], second['event_id'])
+        self.assertTrue(second.get('duplicate'))
+        self.assertEqual(len(self.native.events.stages(first['event_id'])), 1)
+
+    def test_target_id_and_link_to_update_the_event_not_a_new_memory(self):
+        self.save('She wrote meh on the charcoal note after the file list argument.',
+                  'The charcoal note')
+        event_id = next(iter(self.native.events.events()))
+        key = self.native.events.events()[event_id]['memory_id']
+        original = self.backend.rows[key]['content']
+        result, state, _ = self.native.invoke('hold', {'content': 'A rewritten whole story about the note.',
+                                                       'title': 'The charcoal note', 'target_id': key})
+        self.assertEqual(state, '成功', result)
+        self.assertNotEqual(self.backend.rows[key]['content'], original)
+        result, state, _ = self.native.invoke('hold', {'content': 'A later part of the same note day.',
+                                                       'title': 'The charcoal note', 'link_to': key})
+        self.assertEqual(state, '成功', result)
+        self.assertEqual(len(self.native.events.events()), 1)
+        self.assertEqual(len(self.backend.rows), 1)
+        self.assertEqual(len(self.native.events.stages(event_id)), 2)
 
     def test_timeline_refuses_unknown_event(self):
         text, state, _ = self.native.invoke('memory_timeline', {'event_id': 'e-nope'})

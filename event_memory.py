@@ -28,6 +28,7 @@ DEFAULTS = {
     'investigate_rows': 400,
     'timeline_page': 20,
 }
+MIN_MERGE_CONFIDENCE = 0.6
 
 _TOKEN = re.compile(r'[0-9A-Za-z_\u4e00-\u9fff][0-9A-Za-z_\-.\u4e00-\u9fff]*')
 _CJK = re.compile(r'[\u4e00-\u9fff]+')
@@ -135,6 +136,7 @@ class EventMemory:
         self.versions_path = f'{self.cfg.id}/event-versions.jsonl'
         self.review_path = f'{self.cfg.id}/event-review.jsonl'
         self.ops_path = f'{self.cfg.id}/event-ops.jsonl'
+        self.projections_path = f'{self.cfg.id}/event-projections.jsonl'
         self.locked = None
 
     # --- read side -------------------------------------------------------------------------
@@ -203,14 +205,15 @@ class EventMemory:
         versions = []
         try:
             versions = [row for row in self.store.read(self.versions_path)
-                        if isinstance(row, dict) and row.get('event_id') == event_id][-20:]
+                        if isinstance(row, dict) and row.get('event_id') == event_id]
         except Exception:
             pass
         return {'event_id': event_id, 'title': event.get('title'), 'status': event.get('status'),
                 'first_at': event.get('first_at'), 'last_at': event.get('last_at'),
                 'story': event.get('story') or self._story(event_id), 'confidence': event.get('confidence'),
                 'stages': stages,
-                'versions': [{'at': row.get('at'), 'old_content': row.get('old_content')} for row in versions]}
+                'versions': [{'at': row.get('at'), 'old_story': row.get('old_story'),
+                              'old_content': row.get('old_content')} for row in versions]}
 
     def timeline(self, event_id, offset=0, limit=None, include_evidence=True):
         """The whole story plus one page of stages. offset is a stage index; next_offset is a cursor."""
@@ -249,7 +252,7 @@ class EventMemory:
         text = ' '.join((text or '').split())
         if not text:
             raise ValueError('empty stage')
-        stage_id = 's-' + hashlib.sha1(f'{when.isoformat()}|{text}'.encode('utf-8')).hexdigest()[:16]
+        stage_id = 's-' + hashlib.sha1(f'{title or ""}|{text}'.encode('utf-8')).hexdigest()[:16]
         existing = self._stage_rows().get(stage_id)
         if existing is not None and existing.get('state') == 'committed':
             event = self.events().get(existing.get('event_id')) or {}
@@ -279,12 +282,24 @@ class EventMemory:
         projection = self._projection(event['event_id'], story, extra=stage)
         changed, locked = False, False
         memory_id = event.get('memory_id')
+        old_story = event.get('story')
         try:
             memory_id, changed, locked = self._write_projection(
                 event, projection, title or event.get('title') or 'Event',
                 importance=importance, pinned=pinned)
         except Exception:
             changed, locked = False, False
+        if memory_id:
+            try:
+                self.store.append(self.projections_path,
+                                  {'stage_id': stage_id, 'event_id': event['event_id'], 'memory_id': memory_id})
+            except Exception:
+                pass
+        if old_story and old_story != story:
+            self.store.append(self.versions_path, {
+                'event_id': event['event_id'], 'memory_id': memory_id,
+                'old_story': old_story, 'old_content': None,
+                'at': datetime.now().astimezone().isoformat()})
         event.update({
             'memory_id': memory_id or event.get('memory_id'),
             'last_at': when.isoformat(),
@@ -311,14 +326,64 @@ class EventMemory:
                 'memory_id': event.get('memory_id'), 'updated': updated, 'changed': changed,
                 'locked': locked, 'confidence': confidence}
 
+    def revise(self, event_id, text, title='', seen=None, why='整理'):
+        """Replace the event's narrative without appending it as a new stage (tidy revisions)."""
+        event = self.events().get(event_id)
+        if event is None or not self._visible(event):
+            return False
+        memory_id = event.get('memory_id')
+        old_story = event.get('story') or ''
+        old_projection = None
+        if memory_id:
+            if callable(self.locked) and self.locked(memory_id):
+                return False
+            old_projection = self.memory.content_for(memory_id, refresh=True)
+            if seen is not None and old_projection is not None and old_projection.strip() != str(seen).strip():
+                return False
+        text = ' '.join((text or '').split())
+        if not text:
+            return False
+        stamp = datetime.now().astimezone().isoformat()
+        if old_story and old_story != text:
+            self.store.append(self.versions_path, {'event_id': event_id, 'memory_id': memory_id,
+                                                   'old_story': old_story, 'at': stamp, 'reason': why})
+        if memory_id and old_projection:
+            self.store.append(f'{self.cfg.id}/memory-versions.jsonl', {
+                'memory_id': memory_id, 'fields': ['content'], 'operation_reason': '事件故事修订',
+                'why_remembered': '', 'old_content': old_projection})
+        projection = text[:self.settings['summary_chars']]
+        if memory_id:
+            try:
+                self.memory.call('trace', {'bucket_id': memory_id, 'content': projection})
+            except Exception:
+                return False
+            try:
+                self.memory.bucket_details_cache.pop(memory_id, None)
+            except Exception:
+                pass
+        event.update({'story': text, 'dirty': False, 'last_story_at': stamp,
+                      'title': (title or event.get('title'))[:100]})
+        self.store.append(self.events_path, event)
+        self.store.append(self.ops_path, {'at': stamp, 'op': 'revise', 'event_id': event_id,
+                                          'why': why, 'before': old_story[:500], 'after': text[:500]})
+        return True
+
     def retry_pending(self, limit=10):
         fixed = 0
+        made = {}
+        try:
+            for row in self.store.read(self.projections_path):
+                if isinstance(row, dict) and row.get('stage_id') and row.get('memory_id'):
+                    made[row['stage_id']] = row['memory_id']
+        except Exception:
+            made = {}
         for stage in self.pending_stages()[:limit]:
             snapshot = stage.get('event_row')
             if not isinstance(snapshot, dict):
                 continue
             clean = {key: value for key, value in stage.items() if key != 'event_row'}
             event_id = clean.get('event_id')
+            projected = made.get(clean.get('stage_id'))
             current = self.events().get(event_id)
             if current:
                 # Never overwrite a newer index with the pending snapshot: keep its memory_id and latest
@@ -330,8 +395,12 @@ class EventMemory:
                          'dirty': True}
                 if not event.get('memory_id') and isinstance(snapshot.get('memory_id'), str):
                     event['memory_id'] = snapshot['memory_id']
+                if not event.get('memory_id') and projected:
+                    event['memory_id'] = projected
             else:
                 event = {**snapshot, 'story': self._story(event_id, extra=clean), 'dirty': True}
+                if not event.get('memory_id') and projected:
+                    event['memory_id'] = projected
             try:
                 self.store.append(self.events_path, event)
                 self.store.append(self.stages_path, {**clean, 'state': 'committed'})
@@ -464,7 +533,7 @@ class EventMemory:
         # Similar words/day only produce candidates. The merge itself must be an event-relationship decision;
         # a high score alone never merges (review of #407).
         decision = self._model_choose(stage, scores, title) if self.model is not None else None
-        if decision and decision['event_id']:
+        if decision and decision['event_id'] and decision['confidence'] >= MIN_MERGE_CONFIDENCE:
             event = self.events()[decision['event_id']]
             event = {**event, 'status': 'open', 'last_at': stage['at'],
                      'entities': sorted(set(event.get('entities') or []) | set(stage['entities']))[:80]}
@@ -599,19 +668,29 @@ class EventMemory:
             if len(group) < 2:
                 continue
             keep = max(group, key=lambda item: int(item.get('stage_count') or 0))
+            before = {'story': keep.get('story'), 'stage_count': keep.get('stage_count')}
+            moved = 0
             for other in group:
                 if other['event_id'] == keep['event_id']:
                     continue
                 for stage in self.stages(other['event_id']):
                     self.store.append(self.stages_path, {**stage, 'event_id': keep['event_id'],
                                                          'state': 'committed'})
-                    fixed += 1
+                    moved += 1
                 other['status'] = 'merged'
                 other['merged_from'] = keep['event_id']
                 self.store.append(self.events_path, other)
-            self.store.append(self.ops_path, {'at': datetime.now().astimezone().isoformat(),
-                                              'op': 'merge', 'into': keep['event_id'],
-                                              'memory_id': memory_id, 'stages': fixed})
+            story = self._story(keep['event_id'])
+            keep.update({'story': story, 'stage_count': len(self.stages(keep['event_id'])),
+                         'dirty': True})
+            self.store.append(self.events_path, keep)
+            self.store.append(self.ops_path, {
+                'at': datetime.now().astimezone().isoformat(), 'op': 'merge',
+                'into': keep['event_id'], 'memory_id': memory_id, 'stages': moved,
+                'before': before, 'after': {'story': story, 'stage_count': keep['stage_count']}})
+            fixed += moved
+        if fixed:
+            self.retry_dirty()
         return fixed
 
     def _review(self, event_id, reason):

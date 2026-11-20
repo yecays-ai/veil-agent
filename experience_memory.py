@@ -291,9 +291,13 @@ class ExperienceMemory:
     # --- one run ------------------------------------------------------------------------------
     def run_if_due(self, force=False):
         """Returns 'off', 'not_due', 'waiting', 'budget', 'skipped', or 'written'."""
-        if not self.enabled() or self.memory is None:
+        if self.memory is None:
             return 'off'
+        # Ticket 407: event recovery is independent of the chat-tidy switch; a closed tidy must not
+        # freeze a dirty or pending event forever.
         self._event_maintenance()
+        if not self.enabled():
+            return 'off'
         with self._lock:
             pending = self.pending()
             reason = 'forced' if force and pending else self.due(pending)
@@ -645,10 +649,9 @@ class ExperienceMemory:
         if self.events is not None:
             event_id = self.events.event_for_memory(memory_id)
             if event_id:
-                try:
-                    self.events.record(update['text'].strip(), self.memory.title_for(memory_id) or 'Event',
-                                       why='经历整理：按后来的变化重写', event_id=event_id, interpretation='')
-                except Exception:
+                if not self.events.revise(event_id, update['text'].strip(),
+                                          self.memory.title_for(memory_id) or 'Event',
+                                          seen=previous, why='经历整理：按后来的变化重写'):
                     return False
                 self.store.append(self.path, {'kind': 'update', 'memory_id': memory_id, 'text': update['text'],
                                               'time': self.budget.clock(), 'event_id': event_id})

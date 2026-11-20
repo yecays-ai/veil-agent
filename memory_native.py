@@ -1169,6 +1169,26 @@ class NativeMemoryTools:
                     'how it went and what you thought of it, without repeats. Nothing was saved.'), '被拒绝', summary
         if len(why) > WHY_LIMIT or (isinstance(title, str) and len(title) > TITLE_LIMIT):
             return f'The title or why_remembered is too long. Shorten it and save again.', '被拒绝', summary
+        # Ticket 407: manual target_id/link_to must land on the event, not create a parallel fragment.
+        if self.events is not None and target_id is not None:
+            event_id = self.events.event_for_memory(target_id)
+            if event_id:
+                previous = self.memory.content_for(target_id, refresh=True)
+                new_title = title.strip() if isinstance(title, str) else ''
+                if not self.events.revise(event_id, content.strip(), new_title, seen=previous,
+                                          why='hold(target_id)'):
+                    return ('This experience was changed by Lan or is locked; nothing was rewritten.',
+                            '被拒绝', summary)
+                return (f'Experience story rewritten (event {event_id}).'), '成功', summary
+        if self.events is not None and link_to is not None:
+            event_id = self.events.event_for_memory(link_to)
+            if event_id:
+                try:
+                    self.events.record(content.strip(), title.strip() if isinstance(title, str) else 'Event',
+                                       why=why, event_id=event_id)
+                except Exception:
+                    return 'The experience could not be updated; nothing was saved.', '出错', summary
+                return (f'Added to experience {event_id}.'), '成功', summary
         # Ticket 407: with the event layer on, a save is a stage of an event, not a memory of its own.
         # target_id/link_to keep the old manual path; a failed event save must NOT fall back to a second
         # hold (the stage may already be on disk), so the old path is never reached once events are on.

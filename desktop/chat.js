@@ -806,6 +806,17 @@ async function readEvent(item){
       stages.appendChild(box);
     }
     detail.replaceChildren(eyebrow,heading,facts,story,stages);
+    if((d.versions||[]).length){
+      const versions=document.createElement('details');versions.className='memory-raw';
+      const vsum=document.createElement('summary');vsum.textContent=`历史版本（${d.versions.length}）`;versions.appendChild(vsum);
+      for(const version of d.versions){
+        const box=document.createElement('div');box.className='memory-status';box.style.marginTop='10px';
+        const when=document.createElement('time');when.textContent=strTime(version.at);box.appendChild(when);
+        const old=document.createElement('pre');old.style.whiteSpace='pre-wrap';old.style.fontFamily='inherit';
+        old.textContent=version.old_story||version.old_content||'';box.appendChild(old);versions.appendChild(box);
+      }
+      detail.appendChild(versions);
+    }
   }catch(error){detail.textContent=error.message||'这段经历读不了'}
 }
 function strTime(value){const date=new Date(value);return Number.isNaN(date.getTime())?'':`${date.getFullYear()}.${date.getMonth()+1}.${date.getDate()} ${String(date.getHours()).padStart(2,'0')}:${String(date.getMinutes()).padStart(2,'0')}`}
