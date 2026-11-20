@@ -871,6 +871,18 @@ class Memory:
                 return value.strip().strip(chr(39) + chr(34)).casefold() not in ('', 'null', 'none', 'false')
         return False
 
+    def _event_map(self):
+        """Ticket 407: memory_id -> event_id, read from the event ledger; empty when the layer is off."""
+        try:
+            rows = self.store.read(f'{self.cfg.id}/events.jsonl')
+        except Exception:
+            return {}
+        owners = {}
+        for row in rows:
+            if isinstance(row, dict) and isinstance(row.get('memory_id'), str) and isinstance(row.get('event_id'), str):
+                owners[row['memory_id']] = row['event_id']
+        return owners
+
     def hidden_ids(self):
         with self.mutex:
             hidden = {key for key, row in self.state['entries'].items() if row.get('hidden')}
@@ -1465,6 +1477,12 @@ class Memory:
             # same experience is a different memory and may be recalled itself, up to stage_slots of them.
             if not recall_cfg['dedup']:
                 return None
+            # Ticket 407: one event is one recalled thing even if several of its stages are still separate memories.
+            event_of = getattr(self, '_event_map_cache', None)
+            if event_of is None:
+                event_of = self._event_map_cache = self._event_map()
+            if key in event_of and any(event_of.get(other) == event_of[key] for other, _ in kept):
+                return 'same_event'
             if any(same_event(key, other, metas, vectors, threshold, cosine) for other, _ in kept):
                 return 'same_event'
             if sum(same_experience(key, other) for other, _ in kept) >= recall_cfg['stage_slots']:

@@ -1,4 +1,13 @@
-# HANDOFF
+﻿# HANDOFF
+
+## 工单 407 交接（事件记忆第一版）
+- 范围：保存走事件层（默认关，`[memory.events] enabled`）。一个事件只保留一条 Ombre 记忆，正文是 400 字摘要；完整故事（`story`）落在 `events.jsonl`，阶段/证据/旧投影/复核在相邻文件。新增只读 `memory_timeline` 和「记忆 · 经历」页；召回按事件去重；`experience_memory` 每次整理重试 dirty 投影并合并可证明的重复。
+- 归组：Ombre 检索命中→反查事件、中文双/三字词与共享名字、同日、未关闭事件、聊天/自主/工具原始记录同实体提及；候选不确定或并列时由模型按同一因果/同一人/同一物件判断（只回 JSON）；不确定建「暂定事件」并进复核，不硬并。故事仍是确定性全文拼接，不调模型。
+- 接入：`memory_native._hold` 在开关打开且没有 target_id/link_to 时走 `event_memory.EventMemory.record`（pinned/importance 传给新事件的那条记忆），失败不会退回旧 hold（避免重复保存）；`memory_timeline` 只在开启时出现；页面用 `/api/memory/events` / `/api/memory/event`。
+- 数据：事件库在 `data/<角色>/`；Ombre 旧记忆不动。
+- 测试：`tests/test_event_memory.py` 19 条 + 既有 native/memory/363/chat/experience/prompt/budget/groups 全过，desktop 29 条全过。
+- 未做（后续迁移单 409）：现有 145 条旧记忆的重新归组、逐条去向清单、正式迁移。
+- 下一步：Lan 审 PR；她打开开关体验「三种说法只长一段」；旧记忆迁移另开 408，按她的要求逐条给她看。
 
 ## 工单 408 交接（工具参数容错）
 - 现象：`jot_about_lan`（`profile_append`）11-20 当天 11 次尝试 0 成功，全被「arguments are not a valid JSON object」拒绝；10-28 也有 5 次同类。
@@ -560,3 +569,4 @@
 - 改动：`veil_agent.py` 新增 `ModelStopped`（RequestFailed 子类）和 `Chat._model_call`：非自主活动时把模型请求放进后台线程等待，每 0.25 秒看 `user_stop`，置位即放弃（预留费用保留，重启按 `-recovered` 保守结算）。`make_model` 给 `call` 挂 `raw`（不取锁的 `_call`）：整个 `send()` 已持有 `models.env_lock/lock`（RLock，按线程），后台线程不能再取，所以直接调 raw；被放弃的线程最多再活到 HTTP 超时，不占锁。`web_agent.Hub.request_stop`（退出菜单）同时置位 `chat.user_stop`。`desktop/chat.js` 点停下后按钮改成「正在停…」。
 - 没做：不缩短 180 秒超时；自主活动的停止不动（`stop_turn` 在自主活动时仍返回 409）；`send()` 整轮持有模型设置锁的设计不变（设置页读取已用非阻塞获取）。
 - 未验证：真机慢模型下的实际体感。
+

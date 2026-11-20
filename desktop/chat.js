@@ -14,7 +14,8 @@ const displayedErrorRequests=new Set();
 const displayedEventIds=new Set();
 let memoryAvailable=false,memoryLoaded=false,memoryLoading=false,memoryCursor='',memoryItems=[],memoryGroup='recent',memoryShown=50;
 // Display-only groups over Ombre's own categories; Ombre's files keep their tags and categories.
-const MEMORY_GROUPS={recent:{label:'最近',domains:null},us:{label:'我们俩',domains:['恋爱','人际']},peter:{label:'他自己',domains:['内心','心理','兴趣','游戏']},system:{label:'系统和能力',domains:['数字','AI','编程','工作']},archived:{label:'已归档',domains:null,archived:true}};
+const MEMORY_GROUPS={recent:{label:'最近',domains:null},events:{label:'经历',domains:null,events:true},us:{label:'我们俩',domains:['恋爱','人际']},peter:{label:'他自己',domains:['内心','心理','兴趣','游戏']},system:{label:'系统和能力',domains:['数字','AI','编程','工作']},archived:{label:'已归档',domains:null,archived:true}};
+let eventItems=[];
 let pendingQuote=null;
 let quietEnabled=false;
 let activityFilter='all',toolActivity=[],autonomyActivity=[],glanceActivity=[],detachedViews=new Set();
@@ -761,7 +762,66 @@ function memoryMatches(item,query){
   const fields=[item.title,...item.domain,...item.tags,item.why,item.body];
   return fields.some(text=>String(text||'').toLocaleLowerCase().includes(query));
 }
+async function loadEvents(){
+  const list=$('memory-list');list.textContent='读取经历中…';
+  try{const r=await api('/api/memory/events');const d=await r.json();if(!r.ok)throw new Error(d.error||'读取失败');eventItems=d.items||[];renderEventList()}
+  catch(error){list.textContent=error.message||'经历暂时读不了'}
+}
+function renderEventList(){
+  const list=$('memory-list'),query=$('memory-search').value.trim().toLocaleLowerCase();list.replaceChildren();
+  $('memory-heading').textContent='经历';
+  const filtered=eventItems.filter(item=>!query||String(item.title||'').toLocaleLowerCase().includes(query));
+  if(!filtered.length){const empty=document.createElement('p');empty.className='muted';empty.textContent=query?'没有匹配的经历。':'还没有形成经历';list.appendChild(empty)}
+  let lastDay='';
+  for(const item of filtered){
+    const day=memoryDay(item.last_at);
+    if(day!==lastDay){const heading=document.createElement('h4');heading.className='memory-day';heading.textContent=day;list.appendChild(heading);lastDay=day}
+    const button=document.createElement('button');button.type='button';button.className='memory-entry';
+    const top=document.createElement('span');top.className='memory-entry-top';
+    const title=document.createElement('span');title.className='memory-entry-title';title.textContent=item.title||item.event_id;
+    const time=document.createElement('time');time.textContent=(item.status==='uncertain'?'未定 · ':'')+`${item.stage_count||0} 段 · `+memoryTime(item.last_at);top.append(title,time);
+    const preview=document.createElement('span');preview.className='memory-entry-preview';preview.textContent=`${memoryDay(item.first_at)} → ${memoryDay(item.last_at)}`;
+    button.append(top,preview);button.onclick=()=>readEvent(item);list.appendChild(button);
+  }
+  $('memory-count').textContent=`共 ${eventItems.length} 段经历`;
+}
+async function readEvent(item){
+  const detail=$('memory-detail');delete detail.dataset.memoryId;detail.textContent='读取经历中…';
+  try{
+    const r=await api('/api/memory/event?id='+encodeURIComponent(item.event_id));const d=await r.json();if(!r.ok)throw new Error(d.error||'读取失败');
+    const eyebrow=document.createElement('p');eyebrow.className='eyebrow';eyebrow.textContent='EVENT STORY';
+    const heading=document.createElement('h3');heading.textContent=d.title||d.event_id;
+    const facts=document.createElement('p');facts.className='memory-facts';
+    facts.textContent=[`${memoryDay(d.first_at)} → ${memoryDay(d.last_at)}`,d.status==='uncertain'?'未定':d.status,
+      d.stages.length?`${d.stages.length} 段`:'',typeof d.confidence==='number'?`置信度 ${Math.round(d.confidence*100)}%`:''].filter(Boolean).join('　');
+    const story=document.createElement('pre');story.style.whiteSpace='pre-wrap';story.style.fontFamily='inherit';story.textContent=d.story||'';
+    const stages=document.createElement('details');stages.className='memory-raw';
+    const summary=document.createElement('summary');summary.textContent=`阶段与证据（${d.stages.length}）`;stages.appendChild(summary);
+    for(const stage of d.stages){
+      const box=document.createElement('div');box.className='memory-status';box.style.marginTop='10px';
+      const time=document.createElement('time');time.textContent=strTime(stage.at);box.appendChild(time);
+      const text=document.createElement('p');text.textContent=stage.text;box.appendChild(text);
+      if(stage.interpretation){const read=document.createElement('p');read.className='muted';read.textContent='他当时理解：'+stage.interpretation;box.appendChild(read)}
+      for(const proof of stage.evidence||[]){const line=document.createElement('p');line.className='muted';line.textContent=`${proof.kind} · ${String(proof.text||'').slice(0,200)}`;box.appendChild(line)}
+      stages.appendChild(box);
+    }
+    detail.replaceChildren(eyebrow,heading,facts,story,stages);
+    if((d.versions||[]).length){
+      const versions=document.createElement('details');versions.className='memory-raw';
+      const vsum=document.createElement('summary');vsum.textContent=`历史版本（${d.versions.length}）`;versions.appendChild(vsum);
+      for(const version of d.versions){
+        const box=document.createElement('div');box.className='memory-status';box.style.marginTop='10px';
+        const when=document.createElement('time');when.textContent=strTime(version.at);box.appendChild(when);
+        const old=document.createElement('pre');old.style.whiteSpace='pre-wrap';old.style.fontFamily='inherit';
+        old.textContent=version.old_story||version.old_content||'';box.appendChild(old);versions.appendChild(box);
+      }
+      detail.appendChild(versions);
+    }
+  }catch(error){detail.textContent=error.message||'这段经历读不了'}
+}
+function strTime(value){const date=new Date(value);return Number.isNaN(date.getTime())?'':`${date.getFullYear()}.${date.getMonth()+1}.${date.getDate()} ${String(date.getHours()).padStart(2,'0')}:${String(date.getMinutes()).padStart(2,'0')}`}
 function renderMemoryList(){
+  if(MEMORY_GROUPS[memoryGroup].events){renderEventList();return}
   if(MEMORY_GROUPS[memoryGroup].archived){renderArchivedList();return}
   const list=$('memory-list'),query=$('memory-search').value.trim().toLocaleLowerCase(),group=MEMORY_GROUPS[memoryGroup];list.replaceChildren();
   $('memory-heading').textContent=group.label;
@@ -2370,7 +2430,9 @@ $('reset-appearance').onclick=async()=>{appearance={...appearanceDefaults,pageOp
 $('memory-search').addEventListener('input',()=>{memoryShown=50;renderMemoryList()});
 document.querySelectorAll('[data-memory-group]').forEach(button=>button.onclick=()=>{
   memoryGroup=button.dataset.memoryGroup;memoryShown=50;
-  document.querySelectorAll('[data-memory-group]').forEach(other=>other.classList.toggle('active',other===button));renderMemoryList();
+  document.querySelectorAll('[data-memory-group]').forEach(other=>other.classList.toggle('active',other===button));
+  if(MEMORY_GROUPS[memoryGroup].events){loadEvents();return}
+  renderMemoryList();
 });
 $('memory-reload').onclick=()=>{memoryItems=[];memoryCursor='';memoryLoaded=false;loadMemoryCatalog(true)};
 document.querySelectorAll('[data-page]').forEach(button=>button.onclick=async()=>{

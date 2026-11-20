@@ -470,6 +470,10 @@ function allowedChatRequest(pathname, method) {
     const keys = [...url.searchParams.keys()];
     if (url.pathname === '/api/events') return keys.length === 1 && keys[0] === 'after' && /^\d+$/.test(url.searchParams.get('after'));
     if (url.pathname === '/api/life' || url.pathname === '/api/stickers' || url.pathname === '/api/workbench' || url.pathname === '/api/windows-apps' || url.pathname === '/api/peter-page' || url.pathname === '/api/pending-approvals') return keys.length === 0;
+    if (url.pathname === '/api/memory/events') return keys.length === 0;
+    if (url.pathname === '/api/memory/event') {
+      return keys.length === 1 && keys[0] === 'id' && /^[A-Za-z0-9_-]{1,80}$/.test(url.searchParams.get('id') || '');
+    }
     if (url.pathname === '/api/memory/panel') return keys.length === 0;
     if (url.pathname === '/api/instructions') return keys.length === 0;
     if (url.pathname === '/api/request-snapshots')

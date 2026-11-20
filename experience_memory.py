@@ -116,6 +116,12 @@ class ExperienceMemory:
         self._thread = None
         self._context_cache = None
         self.sidecar = Sidecar(store, cfg.id, budget.clock)
+        # Ticket 407: automatic tidy writes go through the same event layer as Peter's own saves.
+        self.events = None
+        event_settings = (getattr(cfg, 'memory', None) or {}).get('events')
+        if isinstance(event_settings, dict) and event_settings.get('enabled'):
+            from event_memory import EventMemory
+            self.events = EventMemory(memory, event_settings, model=model, sidecar=self.sidecar)
         if getattr(self.budget, 'reconcile_unsettled', None):
             self.budget.reconcile_unsettled({COST_ACCOUNTING})
 
@@ -154,6 +160,19 @@ class ExperienceMemory:
             except Exception:
                 # A fallback memory writer must never take chat down with it; the ledger keeps the reason.
                 pass
+
+    def _event_maintenance(self):
+        """Ticket 407: the existing tidy also repairs event projections and merges provable duplicates."""
+        settings = (getattr(self.cfg, 'memory', None) or {}).get('events')
+        if not isinstance(settings, dict) or not settings.get('enabled'):
+            return 0
+        try:
+            from event_memory import EventMemory
+            events = EventMemory(self.memory, settings, model=self.model, sidecar=self.sidecar)
+            events.locked = self.sidecar.locked
+            return events.retry_dirty() + events.auto_correct()
+        except Exception:
+            return 0
 
     def _now(self):
         return _when(self.budget.clock()) or datetime.now().astimezone()
@@ -273,7 +292,12 @@ class ExperienceMemory:
     # --- one run ------------------------------------------------------------------------------
     def run_if_due(self, force=False):
         """Returns 'off', 'not_due', 'waiting', 'budget', 'skipped', or 'written'."""
-        if not self.enabled() or self.memory is None:
+        if self.memory is None:
+            return 'off'
+        # Ticket 407: event recovery is independent of the chat-tidy switch; a closed tidy must not
+        # freeze a dirty or pending event forever.
+        self._event_maintenance()
+        if not self.enabled():
             return 'off'
         with self._lock:
             pending = self.pending()
@@ -584,6 +608,26 @@ class ExperienceMemory:
     def _save_entry(self, entry, span):
         continues = entry.get('continues')
         args = {'content': entry['text'], 'title': entry['title']}
+        if self.events is not None:
+            target_event = self.events.event_for_memory(continues) if continues else None
+            try:
+                saved = self.events.record(entry['text'], entry['title'], why='经历整理',
+                                           event_id=target_event)
+            except Exception as exc:
+                raise UserError('经历整理的事件没有保存成功；这批消息会重试，不推进游标。') from exc
+            if not saved or saved.get('pending'):
+                raise UserError('经历整理的事件还在等待恢复，没有推进游标。')
+            memory_id = saved.get('memory_id')
+            if continues and not target_event and memory_id:
+                try:
+                    self.sidecar.link(memory_id, continues)
+                except Exception:
+                    pass
+            self.store.append(self.path, {'kind': 'entry', 'memory_id': memory_id, 'title': entry['title'],
+                                          'text': entry['text'], 'merged': False, 'covers': span,
+                                          'continues': continues, 'event_id': saved.get('event_id'),
+                                          'time': self.budget.clock()})
+            return memory_id
         operation, duplicate = self.memory.begin_write(args)
         if duplicate is not None:
             return None
@@ -609,11 +653,23 @@ class ExperienceMemory:
         if not self._alive(memory_id) or self.sidecar.locked(memory_id):
             return False
         previous = self.memory.content_for(memory_id, refresh=True)
-        document = self.memory.raw_content_for(memory_id)
-        if not previous or document is None or (seen is not None and previous.strip() != seen.strip()):
+        if not previous or (seen is not None and previous.strip() != seen.strip()):
             return False
+        if self.events is not None:
+            event_id = self.events.event_for_memory(memory_id)
+            if event_id:
+                if not self.events.revise(event_id, update['text'].strip(),
+                                          self.memory.title_for(memory_id) or 'Event',
+                                          seen=previous, why='经历整理：按后来的变化重写'):
+                    return False
+                self.store.append(self.path, {'kind': 'update', 'memory_id': memory_id, 'text': update['text'],
+                                              'time': self.budget.clock(), 'event_id': event_id})
+                return True
         text = update['text'].strip()
         if text == previous.strip():
+            return False
+        document = self.memory.raw_content_for(memory_id)
+        if document is None:
             return False
         # Same archive Peter's own edits use, so Lan can see and restore the earlier wording.
         self.store.append(f'{self.cfg.id}/memory-versions.jsonl', {

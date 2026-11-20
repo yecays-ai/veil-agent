@@ -2008,6 +2008,21 @@ def make_handler(hub, token):
             if hub.memory_tools is None:
                 self._send(404, {'error': 'Ombre memory is not available.'})
                 return
+            if url.path == '/api/memory/events':
+                events = getattr(hub.memory_tools, 'events', None)
+                items = []
+                if events is not None:
+                    items = [{key: event.get(key) for key in
+                              ('event_id', 'title', 'status', 'first_at', 'last_at', 'stage_count', 'confidence')}
+                             for event in events.visible_events()]
+                self._send(200, {'items': items, 'count': len(items)})
+                return
+            if url.path == '/api/memory/event':
+                events = getattr(hub.memory_tools, 'events', None)
+                event_id = query.get('id', [''])[0]
+                detail = events.detail(event_id) if events is not None and event_id else None
+                self._send(200, detail) if detail else self._send(404, {'error': '没有这段经历。'})
+                return
             if url.path == '/api/memory/catalog':
                 cursor = query.get('after', [''])[0]
                 rendered, state, _ = hub.memory_tools.invoke('memory_catalog', {'after': cursor})
@@ -3521,7 +3536,7 @@ def main(argv=None):
                                     memory.attach_recall_judge(background_cfg(cfg), background_model or model, warm=True)
                                     from memory_native import NativeMemoryTools, ToolSet
                                     tools = ToolSet(tools, NativeMemoryTools(
-                                        memory, cfg.tools['max_result_bytes']))
+                                        memory, cfg.tools['max_result_bytes'], model=model))
                                     hub.memory_tools = tools.native
                                     serve_chat(Chat(cfg, store, budget, model, memory, tools,
                                                     approval=hub.approval, output=hub.output,

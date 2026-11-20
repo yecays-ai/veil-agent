@@ -19,7 +19,8 @@ from memory_sidecar import Sidecar
 
 OMBRE_TOOLS = ('trace', 'dream', 'letter_write', 'letter_read', 'letter_lock_update',
                 'anchor', 'release', 'plan', 'pulse', 'I')
-NATIVE_TOOLS = ('hold', 'breath_search', *OMBRE_TOOLS, 'memory_history', 'memory_catalog', 'memory_read')
+NATIVE_TOOLS = ('hold', 'breath_search', *OMBRE_TOOLS, 'memory_history', 'memory_catalog', 'memory_read',
+                'memory_timeline')
 CONTENT_LIMIT, TITLE_LIMIT, WHY_LIMIT = 1500, 100, 500
 # Ticket 363: what Peter writes himself. Recall shows longer memories only up to their first 600 characters
 # (ticket 353), so a memory this size is always recalled whole. Lan can still write longer ones on the page.
@@ -92,6 +93,13 @@ MEMORY_CATALOG = SimpleNamespace(name='memory_catalog', description=(
             'order': {'type': 'string', 'enum': ['id', 'newest', 'oldest']},
             'created_from': {'type': 'string', 'description': 'YYYY-MM-DD, inclusive.'},
             'created_to': {'type': 'string', 'description': 'YYYY-MM-DD, inclusive.'}}})
+MEMORY_TIMELINE = SimpleNamespace(name='memory_timeline', description=(
+    'Read one experience: the whole story, then its stages with evidence, one page at a time. '
+    'Pass next_offset from the previous answer to continue; read only.'), inputSchema={
+    'type': 'object', 'required': ['event_id'], 'additionalProperties': False, 'properties': {
+        'event_id': {'type': 'string'},
+        'offset': {'type': 'integer', 'minimum': 0},
+        'limit': {'type': 'integer', 'minimum': 1, 'maximum': 60}}})
 MEMORY_READ = SimpleNamespace(name='memory_read', description=(
     'Read an exact slice of a current visible memory, including its metadata. '
     'Pass its memory_id from memory_catalog and next_offset as offset until next_offset is null. '
@@ -275,8 +283,9 @@ def dates_in(text):
 
 
 class NativeMemoryTools:
-    def __init__(self, memory, max_result_bytes=8192):
+    def __init__(self, memory, max_result_bytes=8192, model=None):
         self.memory, self.max_result_bytes = memory, max_result_bytes
+        self.model = model if callable(model) else None
         self.search_results = {}
         available = {tool.name: tool for tool in memory.backend.list_tools()} \
             if hasattr(memory.backend, 'list_tools') else {}
@@ -285,13 +294,28 @@ class NativeMemoryTools:
             raise UserError('Ombre 缺少本工单要求的工具：' + '、'.join(sorted(missing)))
         self.ombre_tools = {name: available[name] for name in OMBRE_TOOLS if name in available}
         model_tools = [ombre_tool_for_model(tool) for tool in self.ombre_tools.values()]
-        self.tools = [HOLD, SEARCH, *model_tools, MEMORY_HISTORY, MEMORY_CATALOG, MEMORY_READ]
         self.description = DESCRIPTION
         self.autonomy_mode = False
         # Ticket 363: VEIL's own notes on each memory (locks, links, sources, merges) and the save Peter
         # was last shown related memories or dropped dates for; sending that same save again confirms it.
         self.sidecar = Sidecar(memory.store, memory.cfg.id, memory.budget.clock)
         self.pending_confirm = []
+        # Ticket 407: one event, one memory. Off unless [memory.events] enabled = true.
+        self.events = None
+        event_settings = (getattr(memory.cfg, 'memory', None) or {}).get('events')
+        if isinstance(event_settings, dict) and event_settings.get('enabled'):
+            from event_memory import EventMemory
+            self.events = EventMemory(memory, event_settings, model=self.model, sidecar=self.sidecar)
+            self.events.locked = self.sidecar.locked
+            # Startup recovery: finish a stage/event write interrupted last run even when the chat-tidy
+            # feature is not configured at all. Lock checks must already be bound.
+            try:
+                self.events.retry_pending()
+                self.events.retry_dirty()
+            except Exception:
+                pass
+        self.tools = [HOLD, SEARCH, *model_tools, MEMORY_HISTORY, MEMORY_CATALOG, MEMORY_READ,
+                      *([MEMORY_TIMELINE] if self.events is not None else [])]
 
     def bind_capabilities(self, files):
         path = self.memory.store.root / self.memory.cfg.id / 'capabilities.json'
@@ -344,6 +368,8 @@ class NativeMemoryTools:
                 return self._read(args)
             if name == 'memory_history':
                 return self._history(args)
+            if name == 'memory_timeline':
+                return self._timeline(args)
             return self._ombre(name, args, approval)
         except MemoryToolError as exc:
             return str(exc), '出错', self.preview_summary(name, args)
@@ -696,6 +722,19 @@ class NativeMemoryTools:
             if end <= offset:
                 return 'The result limit is too small to return the requested memory content.', '出错', 'memory_read'
             end = offset + (end - offset) // 2
+
+    def _timeline(self, args):
+        event_id = args.get('event_id')
+        if self.events is None:
+            return 'The event timeline is not available for this role.', '被拒绝', 'memory_timeline'
+        if not isinstance(event_id, str) or not event_id.strip():
+            return 'event_id is required.', '被拒绝', 'memory_timeline'
+        text = self.events.timeline(event_id.strip(), offset=args.get('offset') or 0,
+                                    limit=args.get('limit'))
+        if not text:
+            return 'No experience with that id; nothing was read.', '被拒绝', event_id[:40]
+        rendered, next_offset, total = text
+        return rendered + f'\nnext_offset: {next_offset}' + ('' if next_offset is not None else f'\ntotal: {total}'), '成功', event_id[:40]
 
     def _history(self, args):
         memory_id = args.get('memory_id')
@@ -1137,6 +1176,71 @@ class NativeMemoryTools:
                     'how it went and what you thought of it, without repeats. Nothing was saved.'), '被拒绝', summary
         if len(why) > WHY_LIMIT or (isinstance(title, str) and len(title) > TITLE_LIMIT):
             return f'The title or why_remembered is too long. Shorten it and save again.', '被拒绝', summary
+        # Ticket 407: pinned/importance limits must run before the event branch creates the projection.
+        importance, pinned = args.get('importance'), args.get('pinned')
+        if (importance is not None or pinned is not None) and target_id is not None:
+            return ('importance and pinned apply only to a new memory. Change an existing one with trace.',
+                    '被拒绝', summary)
+        if (importance is not None or pinned is not None) and target_id is None:
+            if importance is not None and (type(importance) is not int or not 1 <= importance <= 10):
+                return 'importance must be a whole number from 1 to 10.', '被拒绝', summary
+            if pinned is not None and type(pinned) is not bool:
+                return 'pinned must be true or false.', '被拒绝', summary
+            if pinned:
+                if self.autonomy_mode:
+                    return 'Pinning is available only while chatting with Lan, not during autonomous activity.', '被拒绝', summary
+                if importance is not None:
+                    return 'A pinned memory always has importance 10; do not pass importance with pinned.', '被拒绝', summary
+                if not why.strip():
+                    return 'A pinned memory needs why_remembered: say why it must always surface first.', '被拒绝', summary
+                if len(self._pinned_ids()) >= PINNED_LIMIT:
+                    return (f'{PINNED_LIMIT} memories are already pinned. Unpin one with trace first, or save this '
+                            'one without pinned.'), '被拒绝', summary
+        # Ticket 407: manual target_id/link_to must land on the event, not create a parallel fragment.
+        if self.events is not None and target_id is not None:
+            event_id = self.events.event_for_memory(target_id)
+            if event_id:
+                if args.get('merge_ids'):
+                    return ('merge_ids cannot be combined with an event story; rewrite the story, then '
+                            'archive duplicates on the memory page.'), '被拒绝', summary
+                previous = self.memory.content_for(target_id, refresh=True)
+                seen = self.search_results.get(target_id) or previous
+                new_title = title.strip() if isinstance(title, str) else ''
+                if not self.events.revise(event_id, content.strip(), new_title, seen=seen,
+                                          why='hold(target_id)'):
+                    return ('This experience was changed by Lan or is locked; nothing was rewritten.',
+                            '被拒绝', summary)
+                return (f'Experience story rewritten (event {event_id}).'), '成功', summary
+        if self.events is not None and link_to is not None:
+            event_id = self.events.event_for_memory(link_to)
+            if event_id:
+                if not self._editable(link_to):
+                    return ('link_to must be a memory you were shown and can still see; nothing was saved.'), '被拒绝', summary
+                try:
+                    self.events.record(content.strip(), title.strip() if isinstance(title, str) else 'Event',
+                                       why=why, event_id=event_id)
+                except Exception:
+                    return 'The experience could not be updated; nothing was saved.', '出错', summary
+                return (f'Added to experience {event_id}.'), '成功', summary
+        # Ticket 407: with the event layer on, a save is a stage of an event, not a memory of its own.
+        # target_id/link_to keep the old manual path; a failed event save must NOT fall back to a second
+        # hold (the stage may already be on disk), so the old path is never reached once events are on.
+        if self.events is not None and target_id is None and link_to is None:
+            try:
+                saved = self.events.record(content.strip(), title.strip(), why=why,
+                                           importance=args.get('importance'), pinned=args.get('pinned'))
+            except Exception:
+                return ('The event save failed before anything was written; nothing was saved.',
+                        '出错', summary)
+            if saved:
+                if saved.get('locked'):
+                    return ('Lan locked this memory or it is hidden, so its story was not rewritten; '
+                            'the stage is saved.'), '成功', summary
+                if not saved.get('changed'):
+                    return ('The stage is saved; the story projection will be retried later.'), '出错', summary
+                return ('Saved into one story: 《' + str(saved['title']) + '》 (event ' + str(saved['event_id'])
+                        + '). Later parts of the same thing update this one; use memory_timeline to read it '
+                          'from the start.'), '成功', f"故事：{summary}"
         importance, pinned = args.get('importance'), args.get('pinned')
         if importance is not None or pinned is not None:
             if target_id is not None:
