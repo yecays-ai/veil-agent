@@ -19,7 +19,8 @@ from memory_sidecar import Sidecar
 
 OMBRE_TOOLS = ('trace', 'dream', 'letter_write', 'letter_read', 'letter_lock_update',
                 'anchor', 'release', 'plan', 'pulse', 'I')
-NATIVE_TOOLS = ('hold', 'breath_search', *OMBRE_TOOLS, 'memory_history', 'memory_catalog', 'memory_read')
+NATIVE_TOOLS = ('hold', 'breath_search', *OMBRE_TOOLS, 'memory_history', 'memory_catalog', 'memory_read',
+                'memory_timeline')
 CONTENT_LIMIT, TITLE_LIMIT, WHY_LIMIT = 1500, 100, 500
 # Ticket 363: what Peter writes himself. Recall shows longer memories only up to their first 600 characters
 # (ticket 353), so a memory this size is always recalled whole. Lan can still write longer ones on the page.
@@ -92,6 +93,11 @@ MEMORY_CATALOG = SimpleNamespace(name='memory_catalog', description=(
             'order': {'type': 'string', 'enum': ['id', 'newest', 'oldest']},
             'created_from': {'type': 'string', 'description': 'YYYY-MM-DD, inclusive.'},
             'created_to': {'type': 'string', 'description': 'YYYY-MM-DD, inclusive.'}}})
+MEMORY_TIMELINE = SimpleNamespace(name='memory_timeline', description=(
+    'Read one experience from start to end: its dates, every saved stage and the evidence behind it. '
+    'Use the event id from a saved-memory confirmation or from the related-events line; read only.'), inputSchema={
+    'type': 'object', 'required': ['event_id'], 'additionalProperties': False, 'properties': {
+        'event_id': {'type': 'string'}}})
 MEMORY_READ = SimpleNamespace(name='memory_read', description=(
     'Read an exact slice of a current visible memory, including its metadata. '
     'Pass its memory_id from memory_catalog and next_offset as offset until next_offset is null. '
@@ -285,13 +291,21 @@ class NativeMemoryTools:
             raise UserError('Ombre 缺少本工单要求的工具：' + '、'.join(sorted(missing)))
         self.ombre_tools = {name: available[name] for name in OMBRE_TOOLS if name in available}
         model_tools = [ombre_tool_for_model(tool) for tool in self.ombre_tools.values()]
-        self.tools = [HOLD, SEARCH, *model_tools, MEMORY_HISTORY, MEMORY_CATALOG, MEMORY_READ]
         self.description = DESCRIPTION
         self.autonomy_mode = False
         # Ticket 363: VEIL's own notes on each memory (locks, links, sources, merges) and the save Peter
         # was last shown related memories or dropped dates for; sending that same save again confirms it.
         self.sidecar = Sidecar(memory.store, memory.cfg.id, memory.budget.clock)
         self.pending_confirm = []
+        # Ticket 407: one event, one memory. Off unless [memory.events] enabled = true.
+        self.events = None
+        event_settings = (getattr(memory.cfg, 'memory', None) or {}).get('events')
+        if isinstance(event_settings, dict) and event_settings.get('enabled'):
+            from event_memory import EventMemory
+            self.events = EventMemory(memory, event_settings)
+            self.events.locked = self.sidecar.locked
+        self.tools = [HOLD, SEARCH, *model_tools, MEMORY_HISTORY, MEMORY_CATALOG, MEMORY_READ,
+                      *([MEMORY_TIMELINE] if self.events is not None else [])]
 
     def bind_capabilities(self, files):
         path = self.memory.store.root / self.memory.cfg.id / 'capabilities.json'
@@ -344,6 +358,8 @@ class NativeMemoryTools:
                 return self._read(args)
             if name == 'memory_history':
                 return self._history(args)
+            if name == 'memory_timeline':
+                return self._timeline(args)
             return self._ombre(name, args, approval)
         except MemoryToolError as exc:
             return str(exc), '出错', self.preview_summary(name, args)
@@ -696,6 +712,17 @@ class NativeMemoryTools:
             if end <= offset:
                 return 'The result limit is too small to return the requested memory content.', '出错', 'memory_read'
             end = offset + (end - offset) // 2
+
+    def _timeline(self, args):
+        event_id = args.get('event_id')
+        if self.events is None:
+            return 'The event timeline is not available for this role.', '被拒绝', 'memory_timeline'
+        if not isinstance(event_id, str) or not event_id.strip():
+            return 'event_id is required.', '被拒绝', 'memory_timeline'
+        text = self.events.timeline(event_id.strip())
+        if not text:
+            return 'No experience with that id; nothing was read.', '被拒绝', event_id[:40]
+        return text, '成功', event_id[:40]
 
     def _history(self, args):
         memory_id = args.get('memory_id')
@@ -1137,6 +1164,23 @@ class NativeMemoryTools:
                     'how it went and what you thought of it, without repeats. Nothing was saved.'), '被拒绝', summary
         if len(why) > WHY_LIMIT or (isinstance(title, str) and len(title) > TITLE_LIMIT):
             return f'The title or why_remembered is too long. Shorten it and save again.', '被拒绝', summary
+        # Ticket 407: with the event layer on, a save is a stage of an event, not a memory of its own.
+        # target_id/link_to and pinned/importance stay on the old path; manual edits are unchanged.
+        if (self.events is not None and target_id is None and link_to is None
+                and args.get('pinned') is None and args.get('importance') is None):
+            try:
+                saved = self.events.record(content.strip(), title.strip(), why=why, at=args.get('at'))
+            except Exception:
+                saved = None  # never lose the save: fall through to the old, proven path
+            if saved:
+                if saved.get('locked'):
+                    return ('Lan locked this memory or it is hidden, so its story was not rewritten; '
+                            'the stage is saved.'), '成功', summary
+                if not saved.get('changed'):
+                    return ('The stage is saved; the story projection will be retried later.'), '出错', summary
+                return ('Saved into one story: 《' + str(saved['title']) + '》 (event ' + str(saved['event_id'])
+                        + '). Later parts of the same thing update this one; use memory_timeline to read it '
+                          'from the start.'), '成功', f"故事：{summary}"
         importance, pinned = args.get('importance'), args.get('pinned')
         if importance is not None or pinned is not None:
             if target_id is not None:

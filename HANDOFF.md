@@ -1,5 +1,14 @@
 # HANDOFF
 
+## 工单 407 交接（事件记忆第一版）
+- 范围：保存走事件层（默认关，`[memory.events] enabled`）。一个事件只保留一条 Ombre 记忆，正文是按日期拼接的摘要（每段前 180 字，600 字上限）；完整故事 = 按时间排序的全部阶段，存在本地 `events.jsonl` / `event-stages.jsonl` / `stage-evidence.jsonl`。新增只读 `memory_timeline`。
+- 归组是确定性规则：共享实体 + 同日 + 未关闭事件；不确定时建「暂定事件」并记候选链接，不硬并。本版不调模型、不压缩细节。
+- 接入：`memory_native._hold` 在开关打开且没有 target_id/link_to/pinned/importance 时走 `event_memory.EventMemory.record`；否则原路径。`NativeMemoryTools` 构造时按配置创建，`memory_timeline` 只在开启时出现在工具清单，并登记在 `tool_groups.memory_admin`。
+- 数据：四个追加文件在 `data/<角色>/`；Ombre 旧记忆不动。
+- 测试：`tests/test_event_memory.py`（5 条）+ 既有 `test_native_memory` / `test_memory` / `test_memory_363` / `test_prompt_registry` / `test_tool_budget` / `test_tool_groups` / `test_chat` 全过；全量套件只差与本次无关的既有失败（维护/备份用例）。
+- 未做（工单 408）：事件页面、召回名额按事件、后台自动纠错、194 条迁移（含逐条核对）。本版故事不调用模型，后续可在同一事件库上接「模型润色」，不改数据结构。
+- 下一步：Lan 审 PR；她打开开关体验「同一天只长一条」；页面与迁移另开 408，按她的要求逐条给她看。
+
 ## 工单 405 交接（剩下没登记的提示词全部上表）
 - 漏的原因两处：`prompts/inline.py` 的 `PROMPT_MODULES` 只有 12 个文件，`life_state.py` 不在里面；登记表里也没有 `gap_text` 那一段。所以「不必每轮提、她沉默可能是忙/在睡/不高兴」一直只存在于代码里，指令页看不到也改不了。
 - 评审后补的三处：①扫描范围改成自动发现——`inline.modules()` 收进所有 import `prompts` 的根目录模块；②`inline.builds_requests()` 按请求形状（role 消息 / messages= / tool_schemas）识别构造模型请求的模块，测试要求它们都在扫描集合里，这条当场抓到 executor_opencode / ombre_entry / windows_observer 三个漏网；③`registry.Entry.placeholders` + `store.save()` 必需占位符校验，删了不能保存并在页面说明原因。
