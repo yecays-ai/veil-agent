@@ -219,7 +219,7 @@ test('live context view shows request activity above short-term notes and can be
   assert.match(js, /renderLiveContext\(s\.live_context\)/);
   assert.match(main, /detachedView === 'context' && !body && pathname\?\.startsWith\('\/api\/events\?'\)/);
   assert.match(js, /api\('\/api\/voice-style'/);
-  assert.match(main, /'\/api\/voice-style', '\/api\/peter-page', '\/api\/pending-approvals'\]\.includes\(pathname\)/);
+  assert.match(main, /'\/api\/voice-style', '\/api\/peter-page', '\/api\/pending-approvals', '\/api\/instructions'\]\.includes\(pathname\)/);
   assert.match(main, /url\.pathname === '\/api\/peter-page'/);
   assert.match(main, /url\.pathname === '\/api\/pending-approvals'/);
   assert.match(main, /detachedView === 'peter'/);

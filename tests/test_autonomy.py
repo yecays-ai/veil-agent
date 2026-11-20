@@ -90,8 +90,12 @@ daily_budget_cny = "2"
         import prompts
         text = self.controller._context()
         rules = prompts.text('autonomy.wake.rules')
-        self.assertTrue(text.endswith(rules), 'wake prompt must end with the registered rules text')
+        protocol = prompts.text('autonomy.wake.protocol')
+        self.assertTrue(text.endswith(rules + '\n' + protocol),
+                        'wake prompt must end with the registered rules and the program-owned record format')
         self.assertIn('Never report waking', rules)
+        self.assertIn('Next step:', protocol)
+        self.assertNotIn('Next step:', rules)
 
     @staticmethod
     def message_call(call_id, text):
