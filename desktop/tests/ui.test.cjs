@@ -18,7 +18,7 @@ test('sticker grid keeps its image rows visible inside the scrolling panel', asy
 test('chat shell exposes appearance CSS, custom background, global and per-page opacity controls', async () => {
   const [html, css, js, main, preload] = await Promise.all([read('chat.html'), read('chat.css'), read('chat.js'), read('main.cjs'), read('desktop-preload.cjs')]);
   assert.deepEqual([...html.matchAll(/class="nav-item[^\"]*" data-page="([^"]+)"/g)].map(match => match[1]),
-    ['chat', 'peter', 'activity', 'context', 'memory', 'life', 'mcp', 'more']);
+    ['chat', 'peter', 'activity', 'context', 'instructions', 'memory', 'life', 'mcp', 'more']);
   assert.match(html, /自主活动：<b id="header-autonomy-status">/);
   assert.match(html, /id="header-next-wake"/);
   assert.match(html, /id="service-status" hidden/);
@@ -30,6 +30,8 @@ test('chat shell exposes appearance CSS, custom background, global and per-page 
   assert.match(html, /id="choose-background"/);
   assert.match(html, /id="activity-history"/);
   assert.match(html, /data-page-view="life"/);
+  assert.match(html, /data-page-view="instructions"/);
+  assert.match(main, /\/api\/instructions/);
   assert.match(js, /api\('\/api\/life'/);
   assert.match(html, /id="memory-list"/);
   assert.match(css, /background:transparent/);
