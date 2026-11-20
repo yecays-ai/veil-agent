@@ -64,6 +64,18 @@ output_cny_per_million = "8"
         self.model = Mock(return_value=('A fictional reply', 100, 20, 10))
         self.chat = Chat(self.cfg, self.store, self.budget, self.model)
 
+    def test_send_writes_a_request_snapshot_with_labels(self):
+        import request_snapshots
+        self.chat.send('first message')
+        self.chat.send('hello snapshot')
+        items = request_snapshots.recent(self.store.root, 'test')
+        self.assertTrue(items)
+        record = request_snapshots.get(self.store.root, 'test', items[0]['request_id'])
+        self.assertEqual(record['blocks'][0]['label'], 'identity.persona')
+        self.assertEqual(record['blocks'][-1]['role'], 'user')
+        self.assertTrue(any(block['label'] == 'history' for block in record['blocks']))
+        self.assertGreaterEqual(record['cache_prefix'], 1)
+
     def test_saved_raw_text_and_reopened_context(self):
         self.chat.send('虚构的中文消息')
         reopened = Chat(self.cfg, self.store, self.budget, self.model)

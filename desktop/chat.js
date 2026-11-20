@@ -630,12 +630,12 @@ function showMessageActions(event,node){
   const actions=voice?[
     ['transcribe',transcript&&!transcript.hidden?'Hide text':'Transcribe','file-text',!transcript?.textContent.trim()],
     ['favorite',favorite?'Unfavorite':'Favorite','star',false],['download','Download','download',!node.dataset.mediaFilename],
-    ['delete','Delete','trash',false],...(user?[['recall','Recall','undo',!recallAllowed(node)]]:[])
+    ['request','This request','eye',false],['delete','Delete','trash',false],...(user?[['recall','Recall','undo',!recallAllowed(node)]]:[])
   ]:[
     ['copy','Copy','copy',!(node.dataset.messageText||'').trim()||!!node.dataset.mediaFilename],
     ['edit','Edit','pencil',node.classList.contains('virtual-card-message')||!((node.dataset.messageText||'').trim())||!!node.dataset.mediaFilename],
     ['quote','Quote','quote',!(node.dataset.messageText||'').trim()],
-    ['memory','Memory','brain',user],['select','Select','select',false],
+    ['memory','Memory','brain',user],['request','This request','eye',false],['select','Select','select',false],
     [user?'recall':'favorite',user?'Recall':(favorite?'Unfavorite':'Favorite'),user?'undo':'star',user&&!recallAllowed(node)],
     ['delete','Delete','trash',false],['regenerate','Regenerate','rotate-ccw',user||!canRegenerateMessage(node)]
   ];
@@ -661,6 +661,7 @@ function showMessageActions(event,node){
       }
       if(action==='quote'){closeMessageActions();quoteMessage(node);return}
       if(action==='memory'){closeMessageActions();showMessageMemory(node);return}
+      if(action==='request'){closeMessageActions();openSnapshotForMessage(node.dataset.messageId);return}
       if(action==='select'){closeMessageActions();multiSelect=true;selectedMessageIds.add(node.dataset.messageId);updateSelectionBar();refreshMessageSelection();return}
       if(action==='download'){
         const filename=node.dataset.mediaFilename;closeMessageActions();
@@ -2211,6 +2212,85 @@ async function loadInstructions(){
     renderInstructions(data);
   }catch(error){$('instructions-status').textContent='读取失败：'+error.message}
 }
+let instructionsTab='list';
+function setInstructionsTab(tab){
+  instructionsTab=tab==='snapshots'?'snapshots':'list';
+  const list=$('instructions-pane-list'),snaps=$('instructions-pane-snapshots');
+  if(list)list.hidden=instructionsTab!=='list';
+  if(snaps)snaps.hidden=instructionsTab!=='snapshots';
+  const listTab=$('instr-tab-list'),snapTab=$('instr-tab-snapshots');
+  if(listTab){listTab.classList.toggle('active',instructionsTab==='list');listTab.setAttribute('aria-selected',String(instructionsTab==='list'))}
+  if(snapTab){snapTab.classList.toggle('active',instructionsTab==='snapshots');snapTab.setAttribute('aria-selected',String(instructionsTab==='snapshots'))}
+  if(instructionsTab==='snapshots')loadSnapshots();
+}
+function snapshotKind(kind){return {chat:'聊天',autonomy:'自主活动',glance:'瞄一眼',qq:'QQ',codex:'Codex'}[kind]||kind||'请求'}
+async function loadSnapshots(){
+  const box=$('snapshot-list');if(!box)return;
+  try{
+    const response=await api('/api/request-snapshots?limit=12');const data=await response.json();
+    if(!response.ok){box.textContent='读取失败：'+((data&&data.error)||response.status);return}
+    box.replaceChildren();
+    const items=Array.isArray(data.items)?data.items:[];
+    if(!items.length){const p=document.createElement('p');p.className='muted';p.textContent='还没有快照；更新后发一句话就会生成。';box.appendChild(p);return}
+    for(const item of items){
+      const button=document.createElement('button');button.type='button';button.className='snapshot-row';
+      const kind=document.createElement('strong');kind.textContent=snapshotKind(item.kind);
+      const when=document.createElement('span');when.textContent=shortTime(item.created_at)||item.created_at||'';
+      const model=document.createElement('span');model.textContent=item.model||'';
+      const size=document.createElement('span');size.textContent='约 '+Number(item.estimated_tokens||0)+' token · '+Number(item.blocks||0)+' 段';
+      button.append(kind,when,model,size);
+      button.onclick=()=>openSnapshot(item.request_id);
+      box.appendChild(button);
+    }
+  }catch(error){box.textContent='读取失败：'+error.message}
+}
+async function openSnapshot(requestId,messageId){
+  const url=messageId?('/api/request-snapshot?message_id='+encodeURIComponent(messageId)):('/api/request-snapshot?id='+encodeURIComponent(requestId||''));
+  try{
+    const response=await api(url);const data=await response.json();
+    if(!response.ok){notify((data&&data.error)||'没有这一轮的快照','error');return false}
+    renderSnapshot(data);return true;
+  }catch(error){notify('读取快照失败：'+error.message,'error');return false}
+}
+function renderSnapshot(record){
+  const box=$('snapshot-detail');if(!box)return;
+  box.hidden=false;box.replaceChildren();
+  const head=document.createElement('article');head.className='surface snapshot-head';
+  const title=document.createElement('h3');title.textContent=snapshotKind(record.kind)+' · '+(shortTime(record.created_at)||record.created_at||'');
+  const meta=document.createElement('p');meta.className='muted';
+  meta.textContent=(record.model||'')+' · 约 '+Number(record.estimated_tokens||0)+' token · '+((record.blocks||[]).length)+' 段'+(record.trim_note?'　'+record.trim_note:'');
+  head.append(title,meta);
+  if((record.memory_ids||[]).length){
+    const ids=document.createElement('p');ids.className='muted';
+    ids.textContent='自动想起的记忆：'+record.memory_ids.length+' 条（'+record.memory_ids.slice(0,6).join('、')+'）';
+    head.appendChild(ids);
+  }
+  box.appendChild(head);
+  const blocks=Array.isArray(record.blocks)?record.blocks:[];
+  blocks.forEach((block,index)=>{
+    if(index===Number(record.cache_prefix||0)){
+      const line=document.createElement('p');line.className='snap-boundary';
+      line.textContent='── 以上是固定前缀（会命中缓存）；以下是这一轮的历史与临时内容 ──';
+      box.appendChild(line);
+    }
+    const details=document.createElement('details');details.className='snap-block';
+    const summary=document.createElement('summary');
+    const label=document.createElement('strong');label.textContent='#'+(index+1)+' '+block.title;
+    const meta2=document.createElement('span');meta2.className='muted';
+    meta2.textContent=' '+block.role+' · '+block.chars+' 字'+(block.label?' · '+block.label:'');
+    summary.append(label,meta2);details.appendChild(summary);
+    const pre=document.createElement('pre');pre.className='instr-text';pre.textContent=block.text||'（空）';details.appendChild(pre);
+    if(block.role==='user')details.open=true;
+    box.appendChild(details);
+  });
+}
+async function openSnapshotForMessage(messageId){
+  setPage('instructions');setInstructionsTab('snapshots');
+  await openSnapshot(null,messageId);
+}
+$('instr-tab-list').onclick=()=>setInstructionsTab('list');
+$('instr-tab-snapshots').onclick=()=>setInstructionsTab('snapshots');
+
 $('instructions-search').addEventListener('input',event=>{
   instructionsQuery=String(event.target.value||'').trim().toLocaleLowerCase();
   instructionsOpen='';instructionsEditing='';
