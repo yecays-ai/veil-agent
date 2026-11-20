@@ -42,6 +42,18 @@ class LowConfidenceModel(StubModel):
         return (json.dumps(payload), *rest)
 
 
+class StoryModel(StubModel):
+    """Grouping stays JSON; the story request gets a natural narrative that keeps every stage."""
+    def __call__(self, messages, **kwargs):
+        if 'Rewrite the dated notes' in messages[0]['content'] or 'natural, complete story' in messages[0]['content']:
+            payload = json.loads(messages[-1]['content'])
+            parts = [f"{stage['at'][:10]} {stage['text']}" for stage in payload['stages']]
+            for belief in payload.get('beliefs') or []:
+                parts.append(f"At the time I thought {belief['belief']} ({belief['at'][:10]}).")
+            return ('\n\n'.join(parts), 1, 1, 0, None)
+        return super().__call__(messages, **kwargs)
+
+
 class SearchBackend(Backend):
     """Fake Ombre search: only rows sharing a real word come back, so an unrelated save cannot ride the
     'memory search hit' path by accident."""
@@ -358,6 +370,34 @@ class EventMemoryTests(unittest.TestCase):
         self.assertEqual(len(restarted.events.events()), 1)
         self.assertEqual(len(restarted.events.stages(event_id)), 2)
         self.assertEqual(len(self.backend.rows), 1)
+
+    def test_split_and_move_rebuild_both_events(self):
+        for text in ('First part of the charcoal note day.',
+                     'Second part of the charcoal note day.',
+                     'Third part of the charcoal note day.'):
+            self.save(text, 'The charcoal note')
+        event_id = next(iter(self.native.events.events()))
+        stages = self.native.events.stages(event_id)
+        new_id = self.native.events.split_event(event_id, [stages[-1]['stage_id']], 'Later that day')
+        self.assertIsNotNone(new_id)
+        self.assertEqual(len(self.native.events.stages(event_id)), 2)
+        self.assertEqual(len(self.native.events.stages(new_id)), 1)
+        self.assertTrue(self.native.events.move_stage(stages[0]['stage_id'], new_id))
+        self.assertEqual(len(self.native.events.stages(event_id)), 1)
+        self.assertEqual(len(self.native.events.stages(new_id)), 2)
+        self.assertTrue(self.store.read('fake/event-ops.jsonl'))
+
+    def test_story_is_written_as_one_narrative_with_belief_history(self):
+        self.native.events.model = StoryModel()
+        self.save('Nov 20, 3:42 she was angry about the file list and the charcoal note.',
+                  'The file list was the argument')
+        self.save('Later the charcoal note had one word from her: meh.', 'The charcoal note')
+        event = next(iter(self.native.events.events().values()))
+        self.assertEqual(event.get('story_source'), 'model')
+        self.assertIn('3:42', event.get('story') or '')
+        self.assertIn('meh', event.get('story') or '')
+        detail = self.native.events.detail(event['event_id'])
+        self.assertEqual(detail['story'], event['story'])
 
     def test_low_confidence_model_does_not_merge(self):
         self.save('She was angry about the file list and the charcoal note on the desk.',

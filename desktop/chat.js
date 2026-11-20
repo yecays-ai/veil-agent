@@ -805,7 +805,25 @@ async function readEvent(item){
       for(const proof of stage.evidence||[]){const line=document.createElement('p');line.className='muted';line.textContent=`${proof.kind} · ${String(proof.text||'').slice(0,200)}`;box.appendChild(line)}
       stages.appendChild(box);
     }
-    detail.replaceChildren(eyebrow,heading,facts,story,stages);
+    detail.replaceChildren(eyebrow,heading,facts,story);
+    if((d.belief_history||[]).length){
+      const beliefs=document.createElement('details');beliefs.className='memory-raw';
+      const bsum=document.createElement('summary');bsum.textContent=`理解变化（${d.belief_history.length}）`;beliefs.appendChild(bsum);
+      for(const belief of d.belief_history){
+        const line=document.createElement('p');line.className='memory-status';
+        line.textContent=`${strTime(belief.at)}　${belief.belief}`;beliefs.appendChild(line);
+      }
+      detail.appendChild(beliefs);
+    }
+    if((d.related||[]).length){
+      const related=document.createElement('div');related.className='memory-status';
+      const label=document.createElement('p');label.className='muted';label.textContent='相关经历';related.appendChild(label);
+      for(const item of d.related){
+        const line=document.createElement('p');line.textContent=`${item.title} · ${memoryDay(item.last_at)}`;related.appendChild(line);
+      }
+      detail.appendChild(related);
+    }
+    detail.appendChild(stages);
     if((d.versions||[]).length){
       const versions=document.createElement('details');versions.className='memory-raw';
       const vsum=document.createElement('summary');vsum.textContent=`历史版本（${d.versions.length}）`;versions.appendChild(vsum);
