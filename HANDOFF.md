@@ -5,7 +5,9 @@
 - 登记表去掉 5 条 file 类（人设、关于你、背景、样例、记忆笔记）；只保留 text / marker。
 - 新增 `POST /api/instructions`（`instructions.save` → `prompts.store().save`），桌面白名单放行；页内编辑、搜索、命中摘要。
 - 覆盖文件仍在 `persona/instructions/<id>.md`，整条替换，不留版本。
+- 醒来提示拆成 `autonomy.wake.rules`（可改）和 `autonomy.wake.protocol`（只读四行），拼接结果与拆分前逐字节一致。
 - 验证：Playwright 截图核对展开与编辑态；python 160 个测试、desktop 21 个测试通过。
+- 已知未完成（工单 402）：`inline_allowlist.txt` 仍有 68 条长句未迁（memory_native 29、veil_agent 27、autonomy 4、delegate 2、experience 2、recall_judge 2、memory_agent 1、short_term_notes 1），防写死仍是「允许清单」而非「清空即通过」。
 
 ## 工单 400 交接（指令登记表·第一部分）
 - 新增 `prompts/`：`registry.py`（55 条登记）、`store.py`（默认 + `persona/instructions` 覆盖，整条替换）、

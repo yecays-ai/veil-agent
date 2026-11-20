@@ -1238,7 +1238,7 @@ class AutonomyController:
             f'{self.wake_count_text()}\n'
             f'{missed_text}'
             + (f'{approvals_text}\n' if approvals_text else '') +
-            prompts.text('autonomy.wake.rules'))
+            prompts.text('autonomy.wake.rules') + '\n' + prompts.text('autonomy.wake.protocol'))
         if len(text.encode('utf-8')) > MAX_CONTEXT_BYTES and reads_text:
             text = text.replace(reads_text, '')
         if len(text.encode('utf-8')) > MAX_CONTEXT_BYTES and earlier_text:

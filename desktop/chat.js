@@ -2141,7 +2141,8 @@ function instructionEntry(row){
   const line=document.createElement('span');line.className='instr-line';
   const chev=document.createElement('span');chev.className='instr-chev';chev.textContent=details.open?'▾':'▸';
   const title=document.createElement('span');title.className='instr-title';title.textContent=row.title;
-  const badge=document.createElement('span');badge.className='instr-badge';badge.textContent=row.kind_label||'';
+  const badge=document.createElement('span');badge.className='instr-badge';
+  badge.textContent=(row.kind_label||'')+(row.kind==='text'&&!row.editable?' · 只读':'');
   line.append(chev,title,badge);
   if(row.overridden){const changed=document.createElement('span');changed.className='instr-badge changed';changed.textContent='你改过';line.appendChild(changed)}
   summary.appendChild(line);
