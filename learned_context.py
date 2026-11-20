@@ -343,8 +343,8 @@ class LearnedContext:
                         f'Nothing was changed. Merge or shorten existing passages first.'), '被拒绝', name
             self._write(data)
             self._record(name, old_data, data)
-            return (f'Saved. {section} is now {total} of {self.max_bytes} bytes; it takes effect from the next request.'),
-            '成功', name
+            return (f'Saved. {section} is now {total} of {self.max_bytes} bytes; '
+                    f'it takes effect from the next request.'), '成功', name
 
     def _invoke_ongoing(self, args):
         action = args.get('action')
@@ -383,7 +383,6 @@ class LearnedContext:
                         item['status'] = args['status']
                     if text is None and not sources and not args.get('status'):
                         return 'Nothing to update: pass text, sources and/or status.', '被拒绝', 'ongoing_update'
-                        return 'Nothing to update: pass text and/or sources.', '被拒绝', 'ongoing_update'
                 elif action == 'complete':
                     item['status'] = 'completed'
                     item['completed_at'] = now
