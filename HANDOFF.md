@@ -1,13 +1,32 @@
-# HANDOFF
+﻿# HANDOFF
 
 ## 工单 407 交接（事件记忆第一版）
 - 范围：保存走事件层（默认关，`[memory.events] enabled`）。一个事件只保留一条 Ombre 记忆，正文是 400 字摘要；完整故事（`story`）落在 `events.jsonl`，阶段/证据/旧投影/复核在相邻文件。新增只读 `memory_timeline` 和「记忆 · 经历」页；召回按事件去重；`experience_memory` 每次整理重试 dirty 投影并合并可证明的重复。
 - 归组：Ombre 检索命中→反查事件、中文双/三字词与共享名字、同日、未关闭事件、聊天/自主/工具原始记录同实体提及；候选不确定或并列时由模型按同一因果/同一人/同一物件判断（只回 JSON）；不确定建「暂定事件」并进复核，不硬并。故事仍是确定性全文拼接，不调模型。
 - 接入：`memory_native._hold` 在开关打开且没有 target_id/link_to 时走 `event_memory.EventMemory.record`（pinned/importance 传给新事件的那条记忆），失败不会退回旧 hold（避免重复保存）；`memory_timeline` 只在开启时出现；页面用 `/api/memory/events` / `/api/memory/event`。
 - 数据：事件库在 `data/<角色>/`；Ombre 旧记忆不动。
-- 测试：`tests/test_event_memory.py` 9 条 + 既有 native/memory/363/chat/experience/prompt/budget/groups 全过，desktop 29 条全过。
-- 未做（工单 408）：现有 145 条旧记忆的重新归组、逐条去向清单、正式迁移。
+- 测试：`tests/test_event_memory.py` 19 条 + 既有 native/memory/363/chat/experience/prompt/budget/groups 全过，desktop 29 条全过。
+- 未做（后续迁移单 409）：现有 145 条旧记忆的重新归组、逐条去向清单、正式迁移。
 - 下一步：Lan 审 PR；她打开开关体验「三种说法只长一段」；旧记忆迁移另开 408，按她的要求逐条给她看。
+
+## 工单 408 交接（工具参数容错）
+- 现象：`jot_about_lan`（`profile_append`）11-20 当天 11 次尝试 0 成功，全被「arguments are not a valid JSON object」拒绝；10-28 也有 5 次同类。
+- 根因：模型把整段中文塞进 JSON 字符串，正文裸换行/智能引号/尾逗号没转义；工单 399 的兜底只收「不以 `{` 开头」的纯文本，所以这类调用一律被拒，且模型看不到自己发错在哪。
+- 改法：`_repair_tool_arguments` 做一次最小修复（字符串内裸换行/回车/制表符转义、无 ASCII 引号时把智能引号当分隔符、去掉结尾多余逗号），`Chat.tool_arguments` 在 JSON 与 `ast.literal_eval` 失败后调用；仍失败时拒绝消息附收到的前 160 字。
+- 不改：合法 JSON、Python 字典、纯文本的行为；权限、审批、日志、工具列表。
+- 验证：`tests.test_chat.ToolArgumentTests`（新增 4 个）、`tests.test_tools`（拒绝消息带原文）、`tests.test_chat` + `tests.test_tools` 175 个通过、`tests.test_prompt_registry` 通过。
+- 待办：Lan 真机验收——让他记一条关于你的内容，看是否写进 Learned Context；失败时看他能否按错误里的原文改对。
+- 注意：正文里有**没转义的英文双引号**时字符串边界不可判定，修复不了，仍会拒绝（但会带回原文）；这种要靠模型自己改。
+
+## 工单 406 交接（统一窗口枚举适配层）
+- 根因（只读诊断）：11-19 12:38 系统文件批量重写后，Python 的 UIA3 桌面根节点枚举（`CUIAutomation`/`CUIAutomation8` 都一样）只返回 0–1 个元素；同一时刻 .NET UIA2 返回 12 个、Win32 13 个、按 HWND 读正常。已排除权限、venv、comtypes 缓存、会话；是否由 `UIAutomationCore.dll` 版本错位引起未证实，本单不碰系统组件。
+- 改法：`windows_observer.WindowsDesktopBackend.list_windows` 用 `EnumWindows` 拿窗口与 HWND，`_windows_from_rows` 生成与原来完全相同的身份字段（`window_id` 公式没变）。读控件仍然只走 `ControlFromHandle(HWND)`，所以 `windows_observe`/`windows_control_action`/`windows_manage`/`windows_launch` 的代码一行没改就恢复了。
+- 卡死保护（评审后收紧）：桌面锁从 worker 移到调用线程；worker 超时被放弃后调用线程自己释放锁，并调用 `CancelSynchronousIo` 尽量让那个线程真的退出。放弃的线程按**是否还活着**计数（`_abandoned` 集合，最多 3 个），死掉的才移除；计数与熔断只作用于 `windows_observe`，`windows_list`/`windows_foreground` 是纯 Win32、永远不受影响；超时登记和 worker 的 finally 用同一把锁 + `done` 标记同步，避免“刚好在超时前结束”的竞态留下死记录；卡过的窗口按 `window_id` 熔断 600 秒，只跳这一个窗口。
+- POSIX：进程名改用 `PureWindowsPath(process_path).name`，否则 Ubuntu 的 CI 上 `Path('C:\\...\\notepad.exe').name` 会保留整条路径，受保护进程过滤失效。
+- QQ：`qq_channel._chat_window` 改用同一个适配层（按进程 + 标题 + 尺寸找 HWND，再 `ControlFromHandle`），不再碰桌面根节点。
+- 没动：权限分级、审批、日志、截图路径、系统组件；空标题窗口（桌面整理浮层、输入法助手）不再进列表，以前 UIA 也不列。
+- 验证：新增 6 个测试（Win32 行→身份、过滤、裸桌面、卡住释放、放弃上限、QQ 适配层）；`test_windows_observer`、`test_windows_interaction`、`test_qq_channel` 通过；全量套件见 PR 记录（已知既存失败：`test_reliability_closeout` 在 main 上同样失败）。
+- 待办：Lan 真机验收（ChatGPT/Chrome/QQ 可见、自主醒来能说前台、QQ 收发、已开软件不重复启动、卡住不卡死）。
 
 ## 工单 405 交接（剩下没登记的提示词全部上表）
 - 漏的原因两处：`prompts/inline.py` 的 `PROMPT_MODULES` 只有 12 个文件，`life_state.py` 不在里面；登记表里也没有 `gap_text` 那一段。所以「不必每轮提、她沉默可能是忙/在睡/不高兴」一直只存在于代码里，指令页看不到也改不了。
@@ -550,3 +569,4 @@
 - 改动：`veil_agent.py` 新增 `ModelStopped`（RequestFailed 子类）和 `Chat._model_call`：非自主活动时把模型请求放进后台线程等待，每 0.25 秒看 `user_stop`，置位即放弃（预留费用保留，重启按 `-recovered` 保守结算）。`make_model` 给 `call` 挂 `raw`（不取锁的 `_call`）：整个 `send()` 已持有 `models.env_lock/lock`（RLock，按线程），后台线程不能再取，所以直接调 raw；被放弃的线程最多再活到 HTTP 超时，不占锁。`web_agent.Hub.request_stop`（退出菜单）同时置位 `chat.user_stop`。`desktop/chat.js` 点停下后按钮改成「正在停…」。
 - 没做：不缩短 180 秒超时；自主活动的停止不动（`stop_turn` 在自主活动时仍返回 409）；`send()` 整轮持有模型设置锁的设计不变（设置页读取已用非阻塞获取）。
 - 未验证：真机慢模型下的实际体感。
+

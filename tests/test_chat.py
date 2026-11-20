@@ -35,6 +35,25 @@ class ToolArgumentTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             Chat.tool_arguments('{broken')
 
+    def test_literal_newlines_inside_a_string_are_repaired(self):
+        # Ticket 408: models send a passage verbatim, with real newlines instead of \n.
+        self.assertEqual(Chat.tool_arguments('{"text": "first line\nsecond line"}'),
+                         {'text': 'first line\nsecond line'})
+
+    def test_smart_quotes_used_as_delimiters_are_repaired(self):
+        self.assertEqual(Chat.tool_arguments('{“text”: “x”}'), {'text': 'x'})
+        # Curly quotes inside a value are what he wrote; they stay as they are.
+        self.assertEqual(Chat.tool_arguments('{"text": "“重要” facts"}'),
+                         {'text': '“重要” facts'})
+
+    def test_trailing_comma_is_repaired(self):
+        self.assertEqual(Chat.tool_arguments('{"section": "facts", "text": "x",}'),
+                         {'section': 'facts', 'text': 'x'})
+
+    def test_plain_text_that_merely_looks_like_a_brace_is_still_refused(self):
+        with self.assertRaises(ValueError):
+            Chat.tool_arguments('{用户随手写的一段话')
+
 
 class ChatTests(unittest.TestCase):
     def setUp(self):

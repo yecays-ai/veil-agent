@@ -5,6 +5,7 @@ fallback is a short-lived PrintWindow capture of the selected window (screen
 capture only when it is foreground); flat/blank captures are rejected.
 """
 import base64
+import ctypes
 import hashlib
 import json
 import os
@@ -12,7 +13,8 @@ import queue
 import re
 import tempfile
 import threading
-from pathlib import Path
+import time
+from pathlib import Path, PureWindowsPath
 from types import SimpleNamespace
 
 from desktop_access import DesktopBusy, desktop_access
@@ -34,6 +36,13 @@ MAX_SCREENSHOT_BYTES = 5 * 1024 * 1024
 MAX_CAPTURE_PIXELS = 8_000_000
 OBSERVATION_TIMEOUT_SECONDS = 8
 UIA_SEARCH_TIMEOUT_SECONDS = 2
+# Ticket 406: a window whose UI Automation provider never answers is abandoned instead of
+# pinning the shared desktop gate. The cap counts threads that are still alive, so abandoned
+# reads can never pile up; a window that wedged is remembered and skipped for a while so it
+# cannot make every later read pay the timeout again, while other windows stay readable.
+MAX_ABANDONED_READS = 3
+UNRESPONSIVE_WINDOW_SECONDS = 600
+DWMWA_CLOAKED = 14
 # QQ holds the shared desktop gate for a moment while it works with the foreground window or clipboard; waiting a
 # few seconds avoids bouncing Peter's observation, but never more than half of the observation's own time limit.
 DESKTOP_LOCK_WAIT_SECONDS = 3
@@ -140,6 +149,36 @@ def _text(value, maximum):
         return ''
     value = ' '.join(str(value).replace('\x00', '').split())
     return value if len(value) <= maximum else value[:maximum] + '…'
+
+
+def cancel_synchronous_io(thread):
+    """Best effort: cancel the synchronous call that is blocking `thread`, so it can unwind.
+
+    A UI Automation call that never returns leaves its thread inside a synchronous RPC.
+    `CancelSynchronousIo` is the supported way to make that call fail instead of hanging
+    forever; when it works the abandoned thread really exits and releases its slot. Failure is
+    harmless: the caller keeps the thread counted as alive and simply starts no new reads.
+    """
+    if os.name != 'nt':
+        return False
+    try:
+        kernel32 = ctypes.windll.kernel32
+        kernel32.OpenThread.argtypes = [ctypes.wintypes.DWORD, ctypes.wintypes.BOOL,
+                                        ctypes.wintypes.DWORD]
+        kernel32.OpenThread.restype = ctypes.wintypes.HANDLE
+        kernel32.CancelSynchronousIo.argtypes = [ctypes.wintypes.HANDLE]
+        kernel32.CancelSynchronousIo.restype = ctypes.wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [ctypes.wintypes.HANDLE]
+        kernel32.CloseHandle.restype = ctypes.wintypes.BOOL
+        handle = kernel32.OpenThread(0x0001, False, thread.native_id)  # THREAD_TERMINATE
+        if not handle:
+            return False
+        try:
+            return bool(kernel32.CancelSynchronousIo(handle))
+        finally:
+            kernel32.CloseHandle(handle)
+    except Exception:
+        return False
 
 
 def _is_protected_window(window):
@@ -275,6 +314,9 @@ class WindowsObservationTools:
         self._window_summaries = {}
         self._visual_lock = threading.Lock()
         self._visual_used = False
+        self._stuck_lock = threading.Lock()
+        self._abandoned = set()
+        self._unresponsive = {}
 
     def begin_request(self):
         with self._visual_lock:
@@ -324,7 +366,11 @@ class WindowsObservationTools:
                                          activity_detail='参数无效。'), '被拒绝', summary
 
         cancelled = threading.Event()
-        result_queue = queue.Queue(maxsize=1)
+        result_queue = queue.Queue()
+        # Only windows_observe starts a UI Automation read; listing and foreground are pure
+        # Win32, so an abandoned read must never make them wait or be refused.
+        uia_read = name == 'windows_observe'
+        window_key = args.get('window_id') if uia_read else None
 
         def stopped():
             if cancelled.is_set():
@@ -338,24 +384,65 @@ class WindowsObservationTools:
 
         def worker():
             try:
-                with desktop_access(timeout=self.lock_wait_seconds):
-                    if stopped():
-                        raise ObservationPaused('The autonomous activity was paused.')
-                    result, state, actual_summary = self._operate(name, args, stopped)
-                result_queue.put((result, state, actual_summary, None))
+                result, state, actual_summary = self._operate(name, args, stopped)
+                result_queue.put_nowait((result, state, actual_summary, None))
             except BaseException as exc:
-                result_queue.put((None, None, summary, exc))
+                try:
+                    result_queue.put_nowait((None, None, summary, exc))
+                except queue.Full:
+                    pass
+            finally:
+                with self._stuck_lock:
+                    # `done` closes the race with the caller's timeout registration below.
+                    thread.done = True
+                    self._abandoned.discard(thread)
 
-        thread = threading.Thread(target=worker, name='veil-windows-observation', daemon=True)
-        thread.start()
-        try:
-            result, state, summary, error = result_queue.get(timeout=self.timeout_seconds)
-        except queue.Empty:
-            cancelled.set()
+        if uia_read and window_key and self._is_unresponsive(window_key):
             return WindowsToolResult(
-                'Windows observation timed out and stopped. No further observation step was started.',
-                activity_detail='观察超时；已停止后续读取。',
-            ), '出错', summary
+                'That window did not answer before and is being skipped for now. Other windows can still be read.',
+                activity_detail='这个窗口之前无响应，暂时跳过；其它窗口仍可读取。',
+            ), '搁置', summary
+
+        if uia_read and self._live_abandoned_count() >= MAX_ABANDONED_READS:
+            return WindowsToolResult(
+                'Windows observation is still recovering from an unresponsive window; no read was started.',
+                activity_detail='上一个卡住的窗口读取还没返回；本次没有读取。',
+            ), '搁置', summary
+
+        # Ticket 406: the caller owns the shared desktop gate. If the worker wedges inside a
+        # UI Automation call, this thread still releases the gate and returns, so a stuck COM
+        # call can never pin the desktop for the rest of the process.
+        try:
+            with desktop_access(timeout=self.lock_wait_seconds):
+                if stopped():
+                    raise ObservationPaused('The autonomous activity was paused.')
+                thread = threading.Thread(target=worker, name='veil-windows-observation',
+                                          daemon=True)
+                thread.start()
+                try:
+                    result, state, actual_summary, error = result_queue.get(
+                        timeout=self.timeout_seconds)
+                except queue.Empty:
+                    cancelled.set()
+                    self._register_abandoned(thread)
+                    if window_key and not getattr(thread, 'done', False):
+                        with self._stuck_lock:
+                            self._unresponsive[window_key] = time.monotonic()
+                    cancel_synchronous_io(thread)
+                    return WindowsToolResult(
+                        'Windows observation timed out and stopped. No further observation step was started.',
+                        activity_detail='窗口无响应：已放弃这次读取、尝试取消并释放桌面锁。',
+                    ), '出错', summary
+        except DesktopBusy:
+            return WindowsToolResult(
+                'The Windows desktop is busy with another desktop operation. No observation was performed.',
+                activity_detail='桌面资源忙；本次未读取。',
+            ), '搁置', summary
+        except ObservationPaused:
+            return WindowsToolResult(
+                'The autonomous activity was paused. Windows observation stopped before another read step.',
+                activity_detail='自主活动暂停；已停止后续读取。',
+            ), '被拒绝', summary
         if error:
             if isinstance(error, DesktopBusy):
                 message, detail, state = (
@@ -385,7 +472,37 @@ class WindowsObservationTools:
                     '桌面读取失败；没有生成界面描述。', '出错',
                 )
             return WindowsToolResult(message, activity_detail=detail), state, summary
-        return result, state, summary
+        return result, state, actual_summary
+
+    def _register_abandoned(self, thread):
+        """Record a timed-out worker unless it already finished before we got here.
+
+        The worker marks itself `done` and discards itself under the same lock in its finally
+        block, so a worker that completes between the queue timeout and this call leaves no
+        record behind (the old code could leave a dead entry and, after three, pause reading).
+        """
+        with self._stuck_lock:
+            self._abandoned.add(thread)
+            if getattr(thread, 'done', False):
+                self._abandoned.discard(thread)
+
+    def _live_abandoned_count(self):
+        """Abandoned reads whose thread is still alive; dead ones are forgotten, live ones never are."""
+        with self._stuck_lock:
+            self._abandoned = {thread for thread in self._abandoned if thread.is_alive()}
+            return len(self._abandoned)
+
+    def _is_unresponsive(self, window_key):
+        """A window that already timed out is skipped for a while so other windows stay usable."""
+        now = time.monotonic()
+        with self._stuck_lock:
+            started = self._unresponsive.get(window_key)
+            if started is None:
+                return False
+            if now - started <= UNRESPONSIVE_WINDOW_SECONDS:
+                return True
+            self._unresponsive.pop(window_key, None)
+            return False
 
     def _operate(self, name, args, stopped):
         if stopped():
@@ -643,19 +760,6 @@ class WindowsDesktopBackend:
             kernel32.CloseHandle(handle)
 
     @staticmethod
-    def _window_rect(hwnd):
-        import ctypes.wintypes
-
-        user32 = ctypes.windll.user32
-        user32.GetWindowRect.argtypes = [ctypes.wintypes.HWND,
-                                         ctypes.POINTER(ctypes.wintypes.RECT)]
-        user32.GetWindowRect.restype = ctypes.wintypes.BOOL
-        rect = ctypes.wintypes.RECT()
-        if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
-            return (0, 0)
-        return max(0, rect.right - rect.left), max(0, rect.bottom - rect.top)
-
-    @staticmethod
     def _window_id(pid, hwnd, process_path, created):
         source = f'{pid}|{hwnd}|{process_path.casefold()}|{created}'.encode('utf-8')
         return 'w-' + hashlib.sha256(source).hexdigest()[:24]
@@ -676,77 +780,152 @@ class WindowsDesktopBackend:
         }
         return known.get(stem, stem.replace('-', ' ').replace('_', ' ').title() or 'Application')
 
-    def list_windows(self, stopped):
+    @staticmethod
+    def _enumerate_top_level_windows():
+        """Visible top-level windows in z-order (front to back), from Win32 only.
+
+        Ticket 406: the UIA3 desktop tree is unreliable on this machine (it returns zero or one
+        element), so window discovery no longer asks UI Automation for the desktop's children.
+        Every later step still reads the chosen window through UI Automation by its HWND.
+        """
         import ctypes.wintypes
 
-        auto = self._uia()
-        self._check_default_desktop()
         user32 = ctypes.windll.user32
-        user32.IsWindow.argtypes = [ctypes.wintypes.HWND]
-        user32.IsWindow.restype = ctypes.wintypes.BOOL
         user32.IsWindowVisible.argtypes = [ctypes.wintypes.HWND]
         user32.IsWindowVisible.restype = ctypes.wintypes.BOOL
         user32.IsIconic.argtypes = [ctypes.wintypes.HWND]
         user32.IsIconic.restype = ctypes.wintypes.BOOL
-        user32.GetForegroundWindow.argtypes = []
-        user32.GetForegroundWindow.restype = ctypes.wintypes.HWND
+        user32.GetWindowTextLengthW.argtypes = [ctypes.wintypes.HWND]
+        user32.GetWindowTextLengthW.restype = ctypes.c_int
+        user32.GetWindowTextW.argtypes = [ctypes.wintypes.HWND, ctypes.wintypes.LPWSTR,
+                                          ctypes.c_int]
+        user32.GetWindowTextW.restype = ctypes.c_int
+        user32.GetClassNameW.argtypes = [ctypes.wintypes.HWND, ctypes.wintypes.LPWSTR,
+                                         ctypes.c_int]
+        user32.GetClassNameW.restype = ctypes.c_int
         user32.GetWindowThreadProcessId.argtypes = [ctypes.wintypes.HWND,
                                                     ctypes.POINTER(ctypes.wintypes.DWORD)]
         user32.GetWindowThreadProcessId.restype = ctypes.wintypes.DWORD
-        result = []
-        with auto.UIAutomationInitializerInThread():
-            foreground = int(user32.GetForegroundWindow() or 0)
-            old_timeout = self._set_search_timeout(auto, UIA_SEARCH_TIMEOUT_SECONDS)
+        user32.GetWindowRect.argtypes = [ctypes.wintypes.HWND,
+                                         ctypes.POINTER(ctypes.wintypes.RECT)]
+        user32.GetWindowRect.restype = ctypes.wintypes.BOOL
+        user32.EnumWindows.argtypes = [ctypes.WINFUNCTYPE(ctypes.wintypes.BOOL,
+                                                          ctypes.wintypes.HWND,
+                                                          ctypes.wintypes.LPARAM),
+                                       ctypes.wintypes.LPARAM]
+        user32.EnumWindows.restype = ctypes.wintypes.BOOL
+        try:
+            dwmapi = ctypes.windll.dwmapi
+            dwmapi.DwmGetWindowAttribute.argtypes = [ctypes.wintypes.HWND,
+                                                     ctypes.wintypes.DWORD,
+                                                     ctypes.c_void_p,
+                                                     ctypes.wintypes.DWORD]
+            dwmapi.DwmGetWindowAttribute.restype = ctypes.c_long
+        except Exception:
+            dwmapi = None
+
+        rows = []
+
+        def visit(hwnd, _param):
             try:
-                for window in auto.GetRootControl().GetChildren():
-                    self._cancelled(stopped)
-                    try:
-                        hwnd = int(window.NativeWindowHandle or 0)
-                        if not hwnd or not user32.IsWindow(hwnd) or not user32.IsWindowVisible(hwnd):
-                            continue
-                        pid = ctypes.wintypes.DWORD()
-                        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-                        process_info = self._process_info(pid.value)
-                        if not process_info:
-                            continue
-                        process_path, created = process_info
-                        process = Path(process_path).name.casefold()
-                        if process in PROTECTED_PROCESSES:
-                            continue
-                        title = _text(window.Name, MAX_WINDOW_TITLE)
-                        if SENSITIVE_LABEL.search(title):
-                            continue
-                        class_name = _text(window.ClassName, 100)
-                        if class_name in ('Progman', 'Shell_TrayWnd', 'WorkerW'):
-                            continue
-                        minimized = bool(user32.IsIconic(hwnd))
-                        width, height = self._window_rect(hwnd)
-                        if not minimized and width <= 120 and height <= 100:
-                            continue
-                        result.append({
-                            'id': self._window_id(pid.value, hwnd, process_path, created),
-                            'app': self._friendly_app(process),
-                            'process': process,
-                            'title': title,
-                            'state': ', '.join(filter(None, (
-                                'minimized' if minimized else 'visible',
-                                'foreground' if hwnd == foreground else '',
-                            ))),
-                            'foreground': hwnd == foreground,
-                            'handle': hwnd,
-                            'pid': pid.value,
-                            'process_path': process_path,
-                            'created': created,
-                            'width': width,
-                            'height': height,
-                            'class_name': class_name,
-                        })
-                    except ProtectedWindow:
-                        continue
-                    except Exception:
-                        continue
-            finally:
-                self._restore_search_timeout(auto, old_timeout)
+                if not user32.IsWindowVisible(hwnd):
+                    return True
+                length = user32.GetWindowTextLengthW(hwnd)
+                title = ''
+                if length > 0:
+                    buffer = ctypes.create_unicode_buffer(length + 1)
+                    if user32.GetWindowTextW(hwnd, buffer, length + 1):
+                        title = buffer.value
+                class_buffer = ctypes.create_unicode_buffer(128)
+                user32.GetClassNameW(hwnd, class_buffer, 128)
+                pid = ctypes.wintypes.DWORD()
+                user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                rect = ctypes.wintypes.RECT()
+                user32.GetWindowRect(hwnd, ctypes.byref(rect))
+                cloaked = 0
+                if dwmapi is not None:
+                    value = ctypes.c_int(0)
+                    if dwmapi.DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, ctypes.byref(value),
+                                                    ctypes.sizeof(value)) == 0:
+                        cloaked = int(value.value)
+                rows.append({
+                    'handle': int(hwnd),
+                    'pid': int(pid.value),
+                    'title': title,
+                    'class_name': class_buffer.value,
+                    'minimized': bool(user32.IsIconic(hwnd)),
+                    'width': max(0, int(rect.right) - int(rect.left)),
+                    'height': max(0, int(rect.bottom) - int(rect.top)),
+                    'cloaked': cloaked,
+                })
+            except Exception:
+                return True
+            return True
+
+        user32.EnumWindows(ctypes.WINFUNCTYPE(ctypes.wintypes.BOOL, ctypes.wintypes.HWND,
+                                              ctypes.wintypes.LPARAM)(visit), 0)
+        return rows
+
+    def list_windows(self, stopped):
+        import ctypes.wintypes
+
+        self._check_default_desktop()
+        user32 = ctypes.windll.user32
+        user32.GetForegroundWindow.argtypes = []
+        user32.GetForegroundWindow.restype = ctypes.wintypes.HWND
+        foreground = int(user32.GetForegroundWindow() or 0)
+        return self._windows_from_rows(self._enumerate_top_level_windows(), foreground, stopped)
+
+    def _windows_from_rows(self, rows, foreground, stopped):
+        """Turn raw Win32 window rows into the identity records the rest of VEIL consumes."""
+        result = []
+        for row in rows:
+            self._cancelled(stopped)
+            # Cloaked windows belong to another virtual desktop or a hidden UWP shell; the old
+            # UIA tree never exposed them, so keep them out of Peter's view.
+            if row['cloaked']:
+                continue
+            class_name = _text(row['class_name'], 100)
+            if class_name in ('Progman', 'Shell_TrayWnd', 'WorkerW'):
+                continue
+            title = _text(row['title'], MAX_WINDOW_TITLE)
+            if not title:
+                # Untitled windows are desktop overlays, input-method helpers and other shell
+                # furniture that UIA never listed; a bare desktop must stay "no foreground window".
+                continue
+            if SENSITIVE_LABEL.search(title):
+                continue
+            minimized = row['minimized']
+            width, height = row['width'], row['height']
+            if not minimized and width <= 120 and height <= 100:
+                continue
+            process_info = self._process_info(row['pid'])
+            if not process_info:
+                continue
+            process_path, created = process_info
+            # PureWindowsPath, not Path: the observer also runs under the POSIX test suite,
+            # where Path('C:\\Apps\\x.exe').name would keep the whole string.
+            process = PureWindowsPath(process_path).name.casefold()
+            if process in PROTECTED_PROCESSES:
+                continue
+            result.append({
+                'id': self._window_id(row['pid'], row['handle'], process_path, created),
+                'app': self._friendly_app(process),
+                'process': process,
+                'title': title,
+                'state': ', '.join(filter(None, (
+                    'minimized' if minimized else 'visible',
+                    'foreground' if row['handle'] == foreground else '',
+                ))),
+                'foreground': row['handle'] == foreground,
+                'handle': row['handle'],
+                'pid': row['pid'],
+                'process_path': process_path,
+                'created': created,
+                'width': width,
+                'height': height,
+                'class_name': class_name,
+            })
         return result
 
     @staticmethod

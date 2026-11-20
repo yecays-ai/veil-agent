@@ -352,15 +352,20 @@ class QQWindow:
             return False
 
     def _chat_window(self, auto):
-        for window in auto.GetRootControl().GetChildren():
+        # Ticket 406: window discovery goes through the shared Win32 adapter, not the UIA
+        # desktop root (which returns no usable children on this machine).
+        from windows_observer import WindowsDesktopBackend
+        for item in WindowsDesktopBackend().list_windows(lambda: False):
             try:
-                if _process_name(window.ProcessId) != 'qq.exe':
+                if item.get('process') != 'qq.exe':
                     continue
-                rect = window.BoundingRectangle
-                if rect.width() < 60 or rect.height() < 60:
+                if item.get('width', 0) < 60 or item.get('height', 0) < 60:
                     continue
-                if window.Name == self.contact or self.contact in (window.Name or ''):
-                    return window
+                title = item.get('title') or ''
+                if title == self.contact or self.contact in title:
+                    window = auto.ControlFromHandle(item['handle'])
+                    if window:
+                        return window
             except Exception:
                 continue
         raise QQUnavailable(f'找不到和“{self.contact}”的 QQ 聊天窗口：请在 Peter 的 QQ 里把和你的聊天单独开成一个窗口，并保持打开。')

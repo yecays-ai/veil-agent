@@ -2034,6 +2034,44 @@ class ChatOutput(str):
         return value
 
 
+def _repair_tool_arguments(raw):
+    """Repair the usual model slips in a JSON tool-call payload (ticket 408).
+
+    Models often send a passage verbatim: smart quotes copied from chat, literal newlines inside
+    a JSON string, or a trailing comma. None of that changes what the model meant, so repair it
+    once before refusing the call. Payloads that are still broken afterwards are refused as before.
+    """
+    if not isinstance(raw, str) or not raw.lstrip().startswith(('{', '[')):
+        return None
+    text = raw
+    if '"' not in text:
+        # The model used curly quotes as the JSON delimiters; nothing else can be meant.
+        text = text.replace('\u201c', '"').replace('\u201d', '"')
+    out = []
+    in_string = False
+    escaped = False
+    for char in text:
+        if in_string:
+            if escaped:
+                out.append(char)
+                escaped = False
+            elif char == '\\':
+                out.append(char)
+                escaped = True
+            elif char == '"':
+                out.append(char)
+                in_string = False
+            elif char in '\r\n\t':
+                out.append({'\n': '\\n', '\r': '\\r', '\t': '\\t'}[char])
+            else:
+                out.append(char)
+        else:
+            if char == '"':
+                in_string = True
+            out.append(char)
+    return re.sub(r',(\s*[}\]])', r'\1', ''.join(out))
+
+
 class Chat:
     def __init__(self, cfg, store, budget, model, memory=None, tools=None, approval=input, output=print,
                  voice=None, runtime_monitor=None, background_model=None):
@@ -4398,17 +4436,25 @@ class Chat:
 
     @staticmethod
     def tool_arguments(raw):
-        """Ticket 399: accept JSON, Python-style dicts, or a plain string for profile_append."""
+        """Ticket 399/408: JSON, Python-style dicts, a repaired JSON object, or plain text."""
         raw = raw or '{}'
         try:
             return json.loads(raw)
         except (ValueError, TypeError):
+            pass
+        try:
+            return ast.literal_eval(raw)
+        except (ValueError, SyntaxError, TypeError):
+            pass
+        repaired = _repair_tool_arguments(raw)
+        if repaired is not None:
             try:
-                return ast.literal_eval(raw)
-            except (ValueError, SyntaxError, TypeError) as exc:
-                if isinstance(raw, str) and not raw.lstrip().startswith(('{', '[')):
-                    return raw
-                raise ValueError('invalid tool arguments') from exc
+                return json.loads(repaired)
+            except (ValueError, TypeError):
+                pass
+        if isinstance(raw, str) and not raw.lstrip().startswith(('{', '[')):
+            return raw
+        raise ValueError('invalid tool arguments')
 
     def _execute_tool_call(self, call, request_id, tool_call_id, autonomy,
                            offered=_UNSET_TOOL_SCHEMAS):
@@ -4618,7 +4664,11 @@ class Chat:
                 else:
                     result, state, summary = 'The program rejected this call because the tool is unavailable.', '被拒绝', call.function.name
         except (ValueError, TypeError):
-            result, state, summary = 'The program rejected this call because the arguments are not a valid JSON object.', '被拒绝', call.function.name
+            message = 'The program rejected this call because the arguments are not a valid JSON object.'
+            received = getattr(call.function, 'arguments', None)
+            if isinstance(received, str) and received.strip():
+                message += ' The tool received: ' + received.strip().replace('\n', ' ')[:160]
+            result, state, summary = message, '被拒绝', call.function.name
         return _ToolExecution(result, state, summary, checkpoint_verified, activity_detail)
 
     def workbench_ready(self):
