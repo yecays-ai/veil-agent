@@ -44,7 +44,7 @@ function notify(text,kind='notice'){
   setTimeout(()=>node.remove(),Math.min(15000,Math.max(2000,text.length*80)));
 }
 function setPage(name){
-  if(!['chat','activity','context','memory','mcp','more','life','peter'].includes(name))return;
+  if(!['chat','activity','context','instructions','memory','mcp','more','life','peter'].includes(name))return;
   if(detachedView&&name!==detachedView)return;
   document.body.dataset.currentPage=name;
   document.querySelectorAll('[data-page]').forEach(button=>{
@@ -2095,6 +2095,53 @@ function renderWindowsApps(data){
 }
 async function loadWindowsApps(){try{const r=await api('/api/windows-apps');const data=await r.json();if(r.ok)renderWindowsApps(data)}catch(error){}}
 loadWindowsApps();
+let instructionsLoaded=false,instructionsKey='';
+function instructionEntry(row){
+  const details=document.createElement('details');details.className='instruction-entry';
+  const summary=document.createElement('summary');
+  const name=document.createElement('strong');name.textContent=row.title;
+  const badge=document.createElement('span');badge.className='instruction-kind'+(row.editable?' editable':'');
+  badge.textContent=row.kind_label+(row.overridden?' · 你改过':'');
+  summary.append(name,badge);
+  const body=document.createElement('div');body.className='instruction-body';
+  const meta=document.createElement('p');meta.className='muted';
+  meta.textContent=row.site+(row.note?'　'+row.note:'');
+  const source=document.createElement('p');source.className='muted';source.textContent='来源：'+row.source;
+  const pre=document.createElement('pre');pre.className='instruction-text';
+  pre.textContent=row.text||'（这一条没有固定原文，每轮由程序生成）';
+  body.append(meta,source,pre);details.append(summary,body);
+  return details;
+}
+function renderInstructions(data){
+  const list=$('instructions-list');list.replaceChildren();
+  const categories=Array.isArray(data.categories)?data.categories:[];
+  let total=0;
+  for(const group of categories){
+    const entries=Array.isArray(group.entries)?group.entries:[];
+    if(!entries.length)continue;
+    total+=entries.length;
+    const section=document.createElement('section');section.className='surface context-block';
+    const heading=document.createElement('h3');heading.textContent=group.title;
+    const count=document.createElement('small');count.className='muted';
+    count.textContent=' '+entries.length+' 条'+(group.editable?' · '+group.editable+' 条可编辑':'');
+    heading.appendChild(count);section.appendChild(heading);
+    for(const row of entries)section.appendChild(instructionEntry(row));
+    list.appendChild(section);
+  }
+  if(!total){const p=document.createElement('p');p.className='muted';p.textContent='没有登记任何指令';list.appendChild(p)}
+  $('instructions-status').textContent=total+' 条 · 读取于 '+shortTime(data.generated_at);
+}
+async function loadInstructions(force=false){
+  try{
+    const response=await api('/api/instructions');
+    const data=await response.json();
+    if(!response.ok){$('instructions-status').textContent='读取失败：'+(data&&data.error||response.status);return}
+    const key=JSON.stringify(data.categories||[]);
+    if(!force&&key===instructionsKey&&instructionsLoaded)return;
+    instructionsKey=key;instructionsLoaded=true;renderInstructions(data);
+  }catch(error){$('instructions-status').textContent='读取失败：'+error.message}
+}
+
 function applyCustomCSS(value){
   const css=String(value||'');
   if(css.length>20000||/@import\b|url\s*\(|expression\s*\(|-moz-binding|behavior\s*:/i.test(css))throw new Error('CSS 不能加载外部资源或脚本');
@@ -2120,6 +2167,7 @@ document.querySelectorAll('[data-page]').forEach(button=>button.onclick=async()=
   if(button.dataset.page==='mcp')loadMCP();
   if(button.dataset.page==='life')loadLife();
   if(button.dataset.page==='peter'&&window.peterLoadPage)window.peterLoadPage();
+  if(button.dataset.page==='instructions')loadInstructions();
 });
 document.querySelectorAll('[data-rail-page]').forEach(button=>button.onclick=()=>{
   const page=button.dataset.railPage;

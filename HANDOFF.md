@@ -1,5 +1,15 @@
 # HANDOFF
 
+## 工单 400 交接（指令登记表·第一部分）
+- 新增 `prompts/`：`registry.py`（55 条登记）、`store.py`（默认 + `persona/instructions` 覆盖，整条替换）、
+  `defaults/*.md`（22 条文本）、`inline.py`（未迁移长句的棘轮检查，清单在 `inline_allowlist.txt`）。
+- 已迁移：系统事实、说话样例说明、发消息/沉默/稍后回/撤回四个工具说明、背景说明、记忆笔记三段、
+  自动想起/开场记忆、经历笔记开头、醒来提示（过渡句/行为段/跨线索/已读未变）、瞄一眼两段、关于你的说明。
+  其余先登记为 file/marker，页面可见。
+- `Chat.__init__` 启动校验登记表；新增只读接口 `GET /api/instructions`、桌面白名单、左侧「指令」页（只读）。
+- 验证：改造前后同一场景请求逐字节一致；`test_prompt_registry` 及其余 276 个测试通过。
+- 下一步（工单 401）：编辑界面、中文说明、搜索、工具说明逐条迁移。
+
 ## 工单 399 交接（自主活动预检与参数容错）
 - `Chat.tool_schemas`：自主模式下检测 Docker；不可用移除 `run_lab_python`。
 - `Chat.tool_arguments`：JSON → `ast.literal_eval`；`profile_append` 纯文本转 text。

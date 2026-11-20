@@ -21,6 +21,8 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 from decimal import Decimal
 
+import prompts
+
 from agent_types import RequestFailed, UserError
 from short_term_notes import _parse_json_object
 from memory_agent import SEARCH_SPARE_HITS, ordinary_hits
@@ -89,12 +91,8 @@ Return exactly one JSON object and nothing else: {{"fixes":[{{"ref":"the draft's
 SECRET = re.compile(r'\b(?:sk-[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9]{20,}|Bearer\s+\S+|'
                     r'(?:api[_ -]?key|password|access[_ -]?token|密码|密钥)\s*[:=：]\s*\S+)', re.I)
 
-CONTEXT_HEADING = ('[What you remember of the last few days] Your own notes, written by you earlier and saved in your '
-                   'memory. Background only: do not recite them or bring them up unprompted; use them the way a person '
-                   'simply knows what happened recently. Lan can read and delete each one on the memory page. For what was '
-                   'actually said on a given day, work out the date from the local time and use search_chat_history. '
-                   'These notes are incomplete: something missing from them may still have happened, so never say '
-                   'it was not talked about; say you do not remember, or look it up.')
+# Import-time copy for tests only; context() reads the live text.
+CONTEXT_HEADING = prompts.text('memory.experience.heading')
 
 
 def _when(value):
@@ -812,7 +810,7 @@ class ExperienceMemory:
                     break
                 lines.append(line)
                 used += len(line)
-            message = ({'role': 'system', 'content': CONTEXT_HEADING + '\n' + '\n'.join(reversed(lines))}
+            message = ({'role': 'system', 'content': prompts.text('memory.experience.heading') + '\n' + '\n'.join(reversed(lines))}
                        if lines else None)
             self._context_cache = (key, message)
             return message

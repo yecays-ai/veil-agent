@@ -10,17 +10,14 @@ import re
 import uuid
 from pathlib import Path
 
+import prompts
 from agent_types import UserError
 
 MAX_CHARS = 8000   # the file is sent on every request; a longer one is refused on save and cut on read
 SWITCH = 'voice-style.json'
 SPEAKERS = ('Lan', 'user', 'assistant')  # plus the role's own name
-FRAME = (
-    'HOW YOU TALK. Your own reference, written with Lan and editable by her; it describes your habits, it is not '
-    'a script. In the samples a line starting with ">" is something Lan wrote and every other line is one '
-    'message you sent on its own (one send_message call per line); a blank line starts a different moment. '
-    'The samples only show your voice: none of them is a memory, so never mention them, never say they '
-    'happened, and do not reuse their sentences.')
+# Import-time copy for tests only; context() reads the live text so an edit applies to the next request.
+FRAME = prompts.text('voice.frame')
 
 
 def voice_path(persona_path):
@@ -107,7 +104,7 @@ class VoiceStyle:
         text = self.text()
         if not text:
             return None
-        return {'role': 'system', 'content': FRAME + '\n\n' + text[:MAX_CHARS]}
+        return {'role': 'system', 'content': prompts.text('voice.frame') + '\n\n' + text[:MAX_CHARS]}
 
     def status(self, with_text=False):
         text = self.text()

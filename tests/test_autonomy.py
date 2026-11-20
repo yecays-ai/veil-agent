@@ -86,6 +86,13 @@ daily_budget_cny = "2"
         self.assertIn('sleep after that message is unknown', text)
         self.assertIn('on your own 1 time(s)', text)
 
+    def test_wake_rules_come_from_the_instruction_registry(self):
+        import prompts
+        text = self.controller._context()
+        rules = prompts.text('autonomy.wake.rules')
+        self.assertTrue(text.endswith(rules), 'wake prompt must end with the registered rules text')
+        self.assertIn('Never report waking', rules)
+
     @staticmethod
     def message_call(call_id, text):
         return SimpleNamespace(id=call_id, function=SimpleNamespace(

@@ -1,0 +1,1 @@
+Withdraw one of your own recently sent messages by its supplied message_id when you decide that you want to retract it. This is your own decision and does not require user approval. The withdrawal is saved only after this reply completes successfully.

@@ -31,6 +31,7 @@
     <button class="nav-item" data-page="peter" title="拖出成独立窗口"><span data-lucide="user"></span><span class="nav-label">Peter</span></button>
     <button id="activity-tab" class="nav-item" data-page="activity" title="拖出成独立窗口"><span data-lucide="activity"></span><span class="nav-label">自主活动</span></button>
     <button class="nav-item" data-page="context" title="拖出成独立窗口"><span data-lucide="layers"></span><span class="nav-label">上下文</span></button>
+    <button class="nav-item" data-page="instructions" title="拖出成独立窗口"><span data-lucide="list-tree"></span><span class="nav-label">指令</span></button>
     <button class="nav-item" data-page="memory" title="拖出成独立窗口"><span data-lucide="brain"></span><span class="nav-label">记忆</span></button>
     <button class="nav-item" data-page="life" title="拖出成独立窗口"><span data-lucide="calendar-heart"></span><span class="nav-label">生活记录</span></button>
     <button class="nav-item" data-page="mcp" title="拖出成独立窗口"><span data-lucide="plug"></span><span class="nav-label">MCP</span></button>
@@ -95,6 +96,11 @@
     <section class="surface context-block" id="voice-style-block" hidden><h3>他平时怎么说话 <small id="voice-style-summary" class="muted"></small></h3><p class="muted">「&gt;」是你，其余每行一个气泡，空行分段。改完保存，下一句生效。</p><textarea id="voice-style-text" class="voice-style-text" spellcheck="false" rows="14"></textarea><div class="memory-footer"><span id="voice-style-note" class="muted"></span><div><button id="voice-style-toggle" type="button"></button> <button id="voice-style-save" type="button">保存</button></div></div></section>
     <section class="surface context-block"><h3>工具清单 <small id="context-tools-summary" class="muted"></small></h3><div id="context-tools" class="context-list" aria-live="polite"><p class="muted">还没有记录。</p></div></section>
     <section class="surface context-block"><h3>短期便签 <small class="muted">进行中的会进上下文</small></h3><div id="context-notes" class="context-list" aria-live="polite"><p class="muted">还没有便签。</p></div></section>
+  </section>
+  <section id="instructions-view" class="page" data-page-view="instructions" hidden>
+    <div class="page-heading"><div><h2>指令</h2></div><span id="instructions-status" class="muted"></span></div>
+    <p class="muted">所有会影响 Peter 的文本。标「文本」的是可以改的提示词原文；「文件」在对应页面改；标「每轮生成」的是运行时数据，没有固定原文。</p>
+    <div id="instructions-list" class="instructions-list" aria-live="polite"><p class="muted">读取中…</p></div>
   </section>
   <section id="memory-view" class="page" data-page-view="memory" hidden>
     <div class="page-heading"><div><h2 id="memory-heading">最近</h2></div></div>

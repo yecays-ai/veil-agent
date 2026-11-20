@@ -471,6 +471,7 @@ function allowedChatRequest(pathname, method) {
     if (url.pathname === '/api/events') return keys.length === 1 && keys[0] === 'after' && /^\d+$/.test(url.searchParams.get('after'));
     if (url.pathname === '/api/life' || url.pathname === '/api/stickers' || url.pathname === '/api/workbench' || url.pathname === '/api/windows-apps' || url.pathname === '/api/peter-page' || url.pathname === '/api/pending-approvals') return keys.length === 0;
     if (url.pathname === '/api/memory/panel') return keys.length === 0;
+    if (url.pathname === '/api/instructions') return keys.length === 0;
     if (url.pathname === '/api/mcp') return keys.length === 0 ||
       (keys.length === 1 && keys[0] === 'retry' && url.searchParams.get('retry') === '1');
     if (url.pathname === '/api/memory/catalog')

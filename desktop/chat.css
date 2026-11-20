@@ -268,3 +268,11 @@ body{isolation:isolate}
 .pending-approval .tool-row{margin-top:8px;gap:8px}
 .pending-approval button{border:1px solid var(--line);border-radius:9px;background:var(--panel-2);padding:7px 12px;font-size:12px}
 .pending-approval button.yes{border-color:var(--accent);color:var(--accent)}
+.instructions-list{display:flex;flex-direction:column;gap:10px}
+.instruction-entry summary{display:flex;gap:10px;align-items:baseline;cursor:pointer;padding:6px 2px;list-style:none}
+.instruction-entry summary::-webkit-details-marker{display:none}
+.instruction-entry summary::before{content:'▸';opacity:.6;width:12px;flex:none}
+.instruction-entry[open] summary::before{content:'▾'}
+.instruction-kind{font-size:12px;opacity:.75}
+.instruction-kind.editable{color:#4cae74;opacity:1}
+.instruction-text{white-space:pre-wrap;word-break:break-word;max-height:420px;overflow:auto;background:rgba(0,0,0,.18);padding:10px;border-radius:8px;font-size:12.5px;line-height:1.55;margin:6px 0 0}

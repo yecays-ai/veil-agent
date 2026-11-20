@@ -21,6 +21,7 @@ from decimal import Decimal
 from pathlib import Path
 import ledger_recovery
 import persona_versions
+import prompts
 from voice_style import FRAME as VOICE_FRAME, VoiceStyle, voice_path
 from background import append_context_log, background_context, background_path, context_chars, request_kind
 from contextlib import contextmanager, nullcontext
@@ -39,6 +40,19 @@ MIN_TOKEN_CALIBRATION_BYTES = 16_384
 PHOTO_PLACEHOLDER = '[Lan sent a photo]'
 PHOTO_MIME_TYPES = {'image/png', 'image/jpeg', 'image/gif', 'image/webp'}
 MAX_PHOTO_BYTES = 5 * 1024 * 1024
+PLACEHOLDER = re.compile(r'\{([a-z_]+)\}')
+
+
+def fill(template, values):
+    """Fill named placeholders once. An unknown name stays visible instead of vanishing silently."""
+    return PLACEHOLDER.sub(lambda match: values.get(match.group(1), match.group(0)), template)
+
+
+def with_text(schema, entry_id):
+    """A tool definition whose description is read from the instructions registry on every request."""
+    function = dict(schema['function'])
+    function['description'] = prompts.text(entry_id)
+    return {**schema, 'function': function}
 
 
 def token_calibration_key(provider_name, provider):
@@ -220,12 +234,7 @@ class _ToolExecution:
 
 SEND_MESSAGE = {'type': 'function', 'function': {
     'name': 'send_message',
-    'description': ('Send one independent chat message to the user immediately. In any language, '
-                    'write like texting: one sentence or short thought per message; call this '
-                    'tool multiple times in the same step when you have more to say. You may '
-                    'send just one. Code or a long list may stay in one longer message. '
-                    'After they are sent you may send more. When you are done, end with no text: text written right after your messages is not shown. '
-                    'Or set done to true on your last message: your turn then ends right after it.'),
+    'description': '',  # ticket 400: filled from prompts/defaults/chat.send_message.md
     'parameters': {'type': 'object', 'properties': {
         'text': {'type': 'string'},
         # Ticket 138: some models never end a step with empty text; this lets Peter end his own turn.
@@ -235,16 +244,13 @@ SEND_MESSAGE = {'type': 'function', 'function': {
 
 STAY_SILENT = {'type': 'function', 'function': {
     'name': 'stay_silent',
-    'description': ('Leave Lan on read for now: your turn ends here and nothing is shown to her. Her messages stay '
-                    'in the conversation and you can answer any of them later.'),
+    'description': '',  # ticket 400: prompts/defaults/chat.stay_silent.md
     'parameters': {'type': 'object', 'properties': {}, 'additionalProperties': False},
 }}
 
 REPLY_LATER = {'type': 'function', 'function': {
     'name': 'reply_later',
-    'description': ('Persist a choice to reconsider this conversation later. Give either minutes from now or '
-                    'one future local ISO time, plus a short private note to your future self. '
-                    'Or pass only cancel: true to drop every pending reply_later you no longer need.'),
+    'description': '',  # ticket 400: prompts/defaults/chat.reply_later.md
     'parameters': {'type': 'object', 'properties': {
         'minutes': {'type': 'integer', 'minimum': 1},
         'at': {'type': 'string', 'maxLength': 64},
@@ -264,6 +270,7 @@ AWAY_CHANNEL_PARAMETERS = {
 
 def send_message_schema(voice=False, channels=(), files=False, stickers=False):
     schema = json.loads(json.dumps(SEND_MESSAGE))
+    schema['function']['description'] = prompts.text('chat.send_message')
     properties = schema['function']['parameters']['properties']
     properties['transfer'] = {
         'type': 'object',
@@ -303,9 +310,7 @@ def send_message_schema(voice=False, channels=(), files=False, stickers=False):
 
 RECALL_MESSAGE = {'type': 'function', 'function': {
     'name': 'recall_message',
-    'description': ('Withdraw one of your own recently sent messages by its supplied message_id when you decide '
-                    'that you want to retract it. This is your own decision and does not require user approval. '
-                    'The withdrawal is saved only after this reply completes successfully.'),
+    'description': '',  # ticket 400: prompts/defaults/chat.recall_message.md
     'parameters': {'type': 'object', 'properties': {
         'message_id': {'type': 'string', 'minLength': 1, 'maxLength': 100}},
         'required': ['message_id'], 'additionalProperties': False},
@@ -1868,34 +1873,34 @@ def self_facts(cfg, budget, memory=False, capabilities=None, voice=False, channe
     stamp = budget.clock()
     local_time = datetime.fromisoformat(stamp)
     weekday = ('Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday')[local_time.weekday()]
-    stable = (
-        'SYSTEM FACTS (program-generated each request, not user-authored). '
-        'Use these over conflicting persona/history; keep your character\'s voice.\n'
-        f'You are an AI companion: {json.dumps(cfg.name, ensure_ascii=False)}; '
-        f'provider {json.dumps(cfg.provider_name, ensure_ascii=False)}; '
-        f'model {json.dumps(cfg.provider["model"], ensure_ascii=False)}.\n'
-        'Lan talks with you in VEIL (desktop app or terminal)'
-        + (', and also on ' + ' and '.join(CHANNEL_NAMES.get(name, name) for name in channels)
-           + ' when she is away; those messages start with a source marker' if channels else '')
-        + f'. Up to {cfg.history_rounds} recent rounds are included verbatim per request; full chat logs are '
-        'saved locally.\n'
-        + ('Long-term memory: you decide what to save and call the hold tool yourself (the user need not say '
-           '"remember"); relevant memories are also recalled automatically each turn; '
-           'Lan can read, edit and delete them on the memory page. '
-           if memory else 'You have no long-term memory; after restart you know only restored recent rounds. ')
-        +
-        ((capabilities.description if isinstance(getattr(capabilities, 'description', None), str)
-          else 'Tools are currently unavailable. ') if capabilities else
-         ('You have no tools (cannot open files/folders or run scripts). '
-          if not cfg.tools or not cfg.tools.get('enabled', True)
-          else 'Tools are currently unavailable. '))
-        + ('You can speak in voice messages with send_message voice: true. '
-           if voice and capabilities else 'You have no voice. ')
-        + ('Your callable tools are the ones defined for this request; capability_history has the dated '
-           'record of changes. ' if capabilities else '')
-        + (maintenance + ' ' if maintenance else '')
-        + 'Do not invent memories, actions or tool results.'
-    )
+    memory_line = ('Long-term memory: you decide what to save and call the hold tool yourself (the user need not say '
+                   '"remember"); relevant memories are also recalled automatically each turn; '
+                   'Lan can read, edit and delete them on the memory page. '
+                   if memory else 'You have no long-term memory; after restart you know only restored recent rounds. ')
+    tools_line = ((capabilities.description if isinstance(getattr(capabilities, 'description', None), str)
+                   else 'Tools are currently unavailable. ') if capabilities else
+                  ('You have no tools (cannot open files/folders or run scripts). '
+                   if not cfg.tools or not cfg.tools.get('enabled', True)
+                   else 'Tools are currently unavailable. '))
+    voice_line = ('You can speak in voice messages with send_message voice: true. '
+                  if voice and capabilities else 'You have no voice. ')
+    capability_line = ('Your callable tools are the ones defined for this request; capability_history has the dated '
+                       'record of changes. ' if capabilities else '')
+    channels_line = (', and also on ' + ' and '.join(CHANNEL_NAMES.get(name, name) for name in channels)
+                     + ' when she is away; those messages start with a source marker') if channels else ''
+    # Ticket 400: the wording lives in prompts/defaults/system.facts.md; only the values are filled here.
+    stable = fill(prompts.text('system.facts'), {
+        'name': json.dumps(cfg.name, ensure_ascii=False),
+        'provider': json.dumps(cfg.provider_name, ensure_ascii=False),
+        'model': json.dumps(cfg.provider['model'], ensure_ascii=False),
+        'channels': channels_line,
+        'rounds': str(cfg.history_rounds),
+        'memory': memory_line,
+        'tools': tools_line,
+        'voice': voice_line,
+        'capabilities': capability_line,
+        'maintenance': maintenance + ' ' if maintenance else '',
+    })
     changing = (f'Local time: {stamp} ({weekday}).\n'
                 f'Pre-request ledger (CNY, excludes this reply): {budget.display(stamp, cfg.id)}\n'
                 'Quote its cutoff when asked about spending; /cost includes new usage after this reply.')
@@ -2040,6 +2045,7 @@ class ChatOutput(str):
 class Chat:
     def __init__(self, cfg, store, budget, model, memory=None, tools=None, approval=input, output=print,
                  voice=None, runtime_monitor=None, background_model=None):
+        prompts.validate()  # ticket 400: a missing or duplicate instruction entry must fail loudly here
         self.cfg, self.store, self.budget, self.model = cfg, store, budget, model
         self.pending_model = None
         self.model_lock = threading.Lock()
@@ -2257,14 +2263,15 @@ class Chat:
                                          files=callable(self.attachment_reader)
                                          and callable(self.attachment_saver),
                                          stickers=self.sticker_library is not None),
-                     RECALL_MESSAGE] if (
+                     with_text(RECALL_MESSAGE, 'chat.recall_message')] if (
             (self.cfg.tools and self.cfg.tools.get('enabled', True))
             or (self.tools and self.tools.tools)) else []
         if messaging:
             from virtual_cards import CARD_ACTION
             messaging.append(CARD_ACTION)
         if messaging and not self.force_reply:
-            messaging.extend([STAY_SILENT, REPLY_LATER])
+            messaging.extend([with_text(STAY_SILENT, 'chat.stay_silent'),
+                              with_text(REPLY_LATER, 'chat.reply_later')])
         if messaging and self.sticker_library is not None:
             import stickers
             messaging.append(stickers.tool_schema(self.sticker_library))

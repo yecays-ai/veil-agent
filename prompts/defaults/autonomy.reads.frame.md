@@ -1,0 +1,1 @@
+Files you already read in recent wakes and that have not changed since (do not read them again for the same content; status, games, notifications, open windows and anything that can change are still worth checking):
