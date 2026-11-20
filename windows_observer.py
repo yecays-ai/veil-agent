@@ -5,6 +5,7 @@ fallback is a short-lived PrintWindow capture of the selected window (screen
 capture only when it is foreground); flat/blank captures are rejected.
 """
 import base64
+import ctypes
 import hashlib
 import json
 import os
@@ -13,7 +14,7 @@ import re
 import tempfile
 import threading
 import time
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from types import SimpleNamespace
 
 from desktop_access import DesktopBusy, desktop_access
@@ -36,10 +37,11 @@ MAX_CAPTURE_PIXELS = 8_000_000
 OBSERVATION_TIMEOUT_SECONDS = 8
 UIA_SEARCH_TIMEOUT_SECONDS = 2
 # Ticket 406: a window whose UI Automation provider never answers is abandoned instead of
-# pinning the shared desktop gate. At most this many such reads may still be in flight; each
-# is forgotten after STUCK_READ_SECONDS so one wedged window cannot disable observation.
+# pinning the shared desktop gate. The cap counts threads that are still alive, so abandoned
+# reads can never pile up; a window that wedged is remembered and skipped for a while so it
+# cannot make every later read pay the timeout again, while other windows stay readable.
 MAX_ABANDONED_READS = 3
-STUCK_READ_SECONDS = 300
+UNRESPONSIVE_WINDOW_SECONDS = 600
 DWMWA_CLOAKED = 14
 # QQ holds the shared desktop gate for a moment while it works with the foreground window or clipboard; waiting a
 # few seconds avoids bouncing Peter's observation, but never more than half of the observation's own time limit.
@@ -147,6 +149,36 @@ def _text(value, maximum):
         return ''
     value = ' '.join(str(value).replace('\x00', '').split())
     return value if len(value) <= maximum else value[:maximum] + '…'
+
+
+def cancel_synchronous_io(thread):
+    """Best effort: cancel the synchronous call that is blocking `thread`, so it can unwind.
+
+    A UI Automation call that never returns leaves its thread inside a synchronous RPC.
+    `CancelSynchronousIo` is the supported way to make that call fail instead of hanging
+    forever; when it works the abandoned thread really exits and releases its slot. Failure is
+    harmless: the caller keeps the thread counted as alive and simply starts no new reads.
+    """
+    if os.name != 'nt':
+        return False
+    try:
+        kernel32 = ctypes.windll.kernel32
+        kernel32.OpenThread.argtypes = [ctypes.wintypes.DWORD, ctypes.wintypes.BOOL,
+                                        ctypes.wintypes.DWORD]
+        kernel32.OpenThread.restype = ctypes.wintypes.HANDLE
+        kernel32.CancelSynchronousIo.argtypes = [ctypes.wintypes.HANDLE]
+        kernel32.CancelSynchronousIo.restype = ctypes.wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [ctypes.wintypes.HANDLE]
+        kernel32.CloseHandle.restype = ctypes.wintypes.BOOL
+        handle = kernel32.OpenThread(0x0001, False, thread.native_id)  # THREAD_TERMINATE
+        if not handle:
+            return False
+        try:
+            return bool(kernel32.CancelSynchronousIo(handle))
+        finally:
+            kernel32.CloseHandle(handle)
+    except Exception:
+        return False
 
 
 def _is_protected_window(window):
@@ -283,7 +315,8 @@ class WindowsObservationTools:
         self._visual_lock = threading.Lock()
         self._visual_used = False
         self._stuck_lock = threading.Lock()
-        self._stuck_reads = {}
+        self._abandoned = {}
+        self._unresponsive = {}
 
     def begin_request(self):
         with self._visual_lock:
@@ -334,6 +367,7 @@ class WindowsObservationTools:
 
         cancelled = threading.Event()
         result_queue = queue.Queue()
+        window_key = args.get('window_id') if name == 'windows_observe' else None
 
         def stopped():
             if cancelled.is_set():
@@ -356,10 +390,15 @@ class WindowsObservationTools:
                     pass
             finally:
                 with self._stuck_lock:
-                    self._stuck_reads.pop(threading.get_ident(), None)
+                    self._abandoned.pop(threading.get_ident(), None)
 
-        stuck = self._stuck_read_count()
-        if stuck >= MAX_ABANDONED_READS:
+        if window_key and self._is_unresponsive(window_key):
+            return WindowsToolResult(
+                'That window did not answer before and is being skipped for now. Other windows can still be read.',
+                activity_detail='这个窗口之前无响应，暂时跳过；其它窗口仍可读取。',
+            ), '搁置', summary
+
+        if self._live_abandoned_count() >= MAX_ABANDONED_READS:
             return WindowsToolResult(
                 'Windows observation is still recovering from an unresponsive window; no read was started.',
                 activity_detail='上一个卡住的窗口读取还没返回；本次没有读取。',
@@ -381,10 +420,15 @@ class WindowsObservationTools:
                 except queue.Empty:
                     cancelled.set()
                     with self._stuck_lock:
-                        self._stuck_reads[thread.ident] = time.monotonic()
+                        # Kept until the thread really exits: a timed-out read must never be
+                        # counted as finished, or wedged threads would accumulate forever.
+                        self._abandoned[thread.ident] = thread
+                        if window_key:
+                            self._unresponsive[window_key] = time.monotonic()
+                    cancel_synchronous_io(thread)
                     return WindowsToolResult(
                         'Windows observation timed out and stopped. No further observation step was started.',
-                        activity_detail='窗口无响应：已放弃这次读取并释放桌面锁。',
+                        activity_detail='窗口无响应：已放弃这次读取、尝试取消并释放桌面锁。',
                     ), '出错', summary
         except DesktopBusy:
             return WindowsToolResult(
@@ -427,14 +471,25 @@ class WindowsObservationTools:
             return WindowsToolResult(message, activity_detail=detail), state, summary
         return result, state, actual_summary
 
-    def _stuck_read_count(self):
-        """Abandoned reads that are still wedged, forgetting ones older than the grace period."""
+    def _live_abandoned_count(self):
+        """Abandoned reads whose thread is still alive; dead ones are forgotten, live ones never are."""
+        with self._stuck_lock:
+            for ident, thread in list(self._abandoned.items()):
+                if not thread.is_alive():
+                    self._abandoned.pop(ident, None)
+            return len(self._abandoned)
+
+    def _is_unresponsive(self, window_key):
+        """A window that already timed out is skipped for a while so other windows stay usable."""
         now = time.monotonic()
         with self._stuck_lock:
-            for ident, started in list(self._stuck_reads.items()):
-                if now - started > STUCK_READ_SECONDS:
-                    self._stuck_reads.pop(ident, None)
-            return len(self._stuck_reads)
+            started = self._unresponsive.get(window_key)
+            if started is None:
+                return False
+            if now - started <= UNRESPONSIVE_WINDOW_SECONDS:
+                return True
+            self._unresponsive.pop(window_key, None)
+            return False
 
     def _operate(self, name, args, stopped):
         if stopped():
@@ -835,7 +890,9 @@ class WindowsDesktopBackend:
             if not process_info:
                 continue
             process_path, created = process_info
-            process = Path(process_path).name.casefold()
+            # PureWindowsPath, not Path: the observer also runs under the POSIX test suite,
+            # where Path('C:\\Apps\\x.exe').name would keep the whole string.
+            process = PureWindowsPath(process_path).name.casefold()
             if process in PROTECTED_PROCESSES:
                 continue
             result.append({

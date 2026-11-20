@@ -500,7 +500,7 @@ class StuckWindowReadTests(unittest.TestCase):
         # The wedged COM call no longer owns the shared desktop gate ...
         with desktop_access(timeout=0):
             pass
-        self.assertEqual(tools._stuck_read_count(), 1)
+        self.assertEqual(tools._live_abandoned_count(), 1)
 
         # ... and a plain window listing still works while it is stuck.
         listing, list_state, _ = tools.invoke('windows_list', {})
@@ -509,22 +509,78 @@ class StuckWindowReadTests(unittest.TestCase):
 
         release.set()
         for _ in range(200):
-            if tools._stuck_read_count() == 0:
+            if tools._live_abandoned_count() == 0:
                 break
             time.sleep(0.02)
-        self.assertEqual(tools._stuck_read_count(), 0)
+        self.assertEqual(tools._live_abandoned_count(), 0)
+
+    def test_a_window_that_wedged_is_skipped_while_other_windows_are_read(self):
+        started = threading.Event()
+        release = threading.Event()
+
+        class Wedges(FakeBackend):
+            def read_controls(self, selected, stopped):
+                self.read_calls += 1
+                started.set()
+                release.wait(10)
+                return []
+
+        backend = Wedges(windows=[
+            {'id': 'w-' + '1' * 24, 'app': 'Game', 'process': 'game.exe', 'title': 'Game',
+             'state': 'visible, foreground', 'foreground': True},
+            {'id': 'w-' + '2' * 24, 'app': 'Notepad', 'process': 'notepad.exe',
+             'title': 'notes.txt - Notepad', 'state': 'visible', 'foreground': False},
+        ])
+        tools = WindowsObservationTools(True, backend=backend, platform_enabled=True,
+                                        timeout_seconds=1)
+
+        first, first_state, _ = tools.invoke('windows_observe', {'window_id': 'w-' + '1' * 24})
+        self.assertEqual(first_state, '出错')
+        self.assertTrue(started.is_set())
+        self.assertEqual(backend.read_calls, 1)
+
+        # The same window is refused immediately instead of paying another timeout ...
+        second, second_state, _ = tools.invoke('windows_observe', {'window_id': 'w-' + '1' * 24})
+        self.assertEqual(second_state, '搁置')
+        self.assertIn('skipped', str(second))
+        self.assertEqual(backend.read_calls, 1)
+
+        # ... while a different window is still read.
+        third, third_state, _ = tools.invoke('windows_observe', {'window_id': 'w-' + '2' * 24})
+        self.assertEqual(backend.read_calls, 2)
+        self.assertEqual(third_state, '出错')  # this fake wedges for every window
+        release.set()
 
     def test_too_many_abandoned_reads_back_off_instead_of_starting_more(self):
+        class AliveThread:
+            @staticmethod
+            def is_alive():
+                return True
+
         backend = FakeBackend()
         tools = WindowsObservationTools(True, backend=backend, platform_enabled=True,
                                         timeout_seconds=1)
-        tools._stuck_reads = {index: time.monotonic() for index in range(3)}
+        tools._abandoned = {index: AliveThread() for index in range(3)}
 
         result, state, _ = tools.invoke('windows_observe', {'window_id': 'w-' + '1' * 24})
 
         self.assertEqual(state, '搁置')
         self.assertIn('unresponsive', str(result))
         self.assertEqual(backend.read_calls, 0)
+
+    def test_dead_abandoned_reads_are_forgotten(self):
+        class DeadThread:
+            @staticmethod
+            def is_alive():
+                return False
+
+        tools = WindowsObservationTools(True, backend=FakeBackend(), platform_enabled=True)
+        tools._abandoned = {index: DeadThread() for index in range(3)}
+
+        result, state, _ = tools.invoke('windows_list', {})
+
+        self.assertEqual(state, '成功')
+        self.assertEqual(tools._live_abandoned_count(), 0)
 
 
 class QQWindowDiscoveryTests(unittest.TestCase):

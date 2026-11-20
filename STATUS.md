@@ -5,7 +5,7 @@
 
 ## 当前目标
 
-- 工单 406（本 PR）：窗口发现改用 Win32 `EnumWindows`，再用 HWND 走 UIA 读控件，不再依赖 11-19 系统文件批量重写后失效的 UIA3 桌面根节点枚举。`window_id` 公式与审批/日志保持兼容；读窗口卡住时由调用线程释放桌面锁、最多放弃 3 个、300 秒自动解封；`qq_channel` 改用同一适配层；权限与截图流程不变。验收：Peter 能看见 ChatGPT/Chrome/QQ；自主醒来能说出前台窗口；QQ 收发；开已开着的软件不重复启动；卡住的窗口不会让他卡死。
+- 工单 406（本 PR）：窗口发现改用 Win32 `EnumWindows`，再用 HWND 走 UIA 读控件，不再依赖 11-19 系统文件批量重写后失效的 UIA3 桌面根节点枚举。`window_id` 公式与审批/日志保持兼容；读窗口卡住时由调用线程释放桌面锁，超时尝试 `CancelSynchronousIo`，放弃的线程按“是否还活着”计数（最多 3 个），卡过的窗口单独熔断 600 秒、其它窗口照常读；`qq_channel` 改用同一适配层；权限与截图流程不变。验收：Peter 能看见 ChatGPT/Chrome/QQ；自主醒来能说出前台窗口；QQ 收发；开已开着的软件不重复启动；卡住的窗口不会让他卡死。
 - 工单 405（已合并，PR #405）：把请求里剩下没登记的 23 段程序提示词全部上表。重点是 `life_state.gap_text` 的「不必每轮提、她沉默可能是忙/在睡/不高兴」——它在代码里，指令页看不到也改不了，所以她把自主活动行为段改干净了，他仍然不提。同批登记：生活记录规则、Lab 清单、更早自主活动、预算行、醒来次数、Lab 截图 / Codex 摘录 / 窗口截图的防注入包裹、工作台三段任务说明、调查续接说明；后六类只读。防写死扫描改成三层：所有 import prompts 的模块自动收进 + 按请求形状（role 消息 / messages / tool_schemas）识别构造请求的模块 + 带数据的条目校验必需占位符，删了不能保存。默认输出逐字节不变，普通聊天同样生效。验收：指令页改「她沉默时他怎么理解」→ 隔一小时聊天或等他醒来，看说法有没有变；删 `{duration}` 应保存失败并说明原因。
 - 工单 404（已合并，PR #404）：第四部分收尾。默认文本指纹：改了默认、你还留着覆盖时，页面标「默认已更新」并说明你的版本仍在用；页面顶部显示「你改过 N 条」。防写死扫描补上长的中文提示词；新增"合成一条新提示词必须被拦下"的测试；覆盖目录与 update-main 的隔离测试。Lan 已验收 ①②（她已实际修改指令）。
 - 工单 403（已合并，PR #403）：请求快照。每次真实模型请求（含工具循环的后续请求）发出前写一份到 `data/<角色>/request-snapshots/<request_id>.<step>.json`，含来源标签、缓存边界、估算 token、召回 id、工具定义、截断与打码计数；按轮保留 40 份。消息菜单 This request 用 chat.jsonl 的 request_id 定位整轮。只写不读、失败静默、图片占位、敏感串打码。
@@ -31,7 +31,7 @@ Peter 今天能稳定操作 Windows 软件（主聊天桌面动作）；工作�
 
 ## 现状
 
-- 工单 406（本 PR）：`windows_observer.py` 的 `list_windows` 改为 `EnumWindows` + `_windows_from_rows`（过滤、z 顺序、前台标记不变，id 公式不变）；`invoke` 的桌面锁改由调用线程持有，超时放弃并释放，`MAX_ABANDONED_READS=3`、`STUCK_READ_SECONDS=300`；`qq_channel._chat_window` 改用 `WindowsDesktopBackend`。新增测试 6 个；`test_windows_observer`、`test_windows_interaction`、`test_qq_channel` 通过。
+- 工单 406（本 PR）：`windows_observer.py` 的 `list_windows` 改为 `EnumWindows` + `_windows_from_rows`（过滤、z 顺序、前台标记不变，id 公式不变，进程名用 `PureWindowsPath` 解析）；`invoke` 的桌面锁改由调用线程持有，超时放弃、尝试 `CancelSynchronousIo` 并释放；`_abandoned` 只按存活线程计数（`MAX_ABANDONED_READS=3`），`_unresponsive` 按窗口熔断 600 秒；`qq_channel._chat_window` 改用 `WindowsDesktopBackend`。新增测试 7 个；`test_windows_observer`（25）、`test_windows_interaction`、`test_qq_channel` 通过。
 - 工单 405（已合并，PR #405）：`prompts/registry.py` 新增 19 条；`prompts/defaults/` 新增 19 个默认文本；`life_state.py`、`autonomy.py`、`lab_preview.py`、`codex_watch.py`、`investigation_checkpoint.py` 改成读登记文本；`prompts/inline.py` 扫描名单加 `life_state.py`。测试 `tests/test_prompt_registry.py`、`tests/test_life_state.py` 全绿，默认输出逐字节不变。
 - 工单 398（已合并，PR #398）：`autonomy.set_next_wake` 与 `veil_agent` 表情包错误提示；测试 `tests/test_autonomy.py`、`tests/test_chat.py`。
 - 工单 397（同批，PR #397）：局部改 `desktop/chat.html`、`desktop/chat.css`。

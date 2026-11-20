@@ -25,8 +25,9 @@
 2. 读窗口仍然只走 `ControlFromHandle(HWND)`；`windows_observe`、`windows_control_action`、`windows_manage`、`windows_launch` 的代码没有改，自动跟着恢复。
 3. 卡住保护（`WindowsObservationTools.invoke`）：
    - 桌面锁改由**调用线程**持有。worker 如果卡在 UIA 调用里，调用线程超时后自己释放锁，一次卡死的 COM 调用不会再永久占住桌面。
-   - 放弃的读取最多 3 个；每个 300 秒后自动失效，避免一个坏窗口把观察功能永久关掉。
-   - `windows_list` 只走 Win32，不碰 COM，卡住期间仍然可用。
+   - 超时后调用 `CancelSynchronousIo`，尽量让卡住的线程真正退出；线程没退出就记在 `_abandoned` 里，**按是否还活着计数**（最多 3 个），死掉的才移除——不会靠时间清计数把还卡着的线程当成已结束。
+   - 卡过的窗口按 `window_id` 熔断 600 秒，只跳过这一个窗口；其它窗口照常读。`windows_list` 只走 Win32，卡住期间仍可用。
+   - 进程名用 `PureWindowsPath(process_path).name` 解析，Ubuntu CI 上受保护进程过滤才不会失效。
 4. `qq_channel._chat_window` 改用同一个适配层，不再调用 `GetRootControl().GetChildren()`。
 5. 权限、审批、日志、截图流程都没动。
 
@@ -45,4 +46,4 @@
 ## 风险与回滚
 
 - 主要改动集中在 `windows_observer.py`，加 `qq_channel.py` 一处查找；失败可直接 revert 本 PR，不涉及数据迁移、不写系统组件。
-- 已知边界：卡住的窗口会被放弃而不是等它恢复；同一次卡住期间若连续 3 个读取都卡住，观察会短暂返回“正在恢复”，等 300 秒自动解封。
+- 已知边界：卡住的窗口会被放弃而不是等它恢复；同一个窗口 600 秒内不再重试（其它窗口不受影响）。如果同时有 3 个不同窗口都卡住且 `CancelSynchronousIo` 都没能让线程退出，观察会返回“正在恢复”，直到其中一个线程真正结束。
