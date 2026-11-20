@@ -306,6 +306,13 @@ class NativeMemoryTools:
         if isinstance(event_settings, dict) and event_settings.get('enabled'):
             from event_memory import EventMemory
             self.events = EventMemory(memory, event_settings, model=self.model, sidecar=self.sidecar)
+            # Startup recovery: finish a stage/event write interrupted last run even when the chat-tidy
+            # feature is not configured at all.
+            try:
+                self.events.retry_pending()
+                self.events.retry_dirty()
+            except Exception:
+                pass
             self.events.locked = self.sidecar.locked
         self.tools = [HOLD, SEARCH, *model_tools, MEMORY_HISTORY, MEMORY_CATALOG, MEMORY_READ,
                       *([MEMORY_TIMELINE] if self.events is not None else [])]

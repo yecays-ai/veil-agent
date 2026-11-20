@@ -34,6 +34,14 @@ class StubModel:
                 1, 1, 0, None)
 
 
+class LowConfidenceModel(StubModel):
+    def __call__(self, messages, **kwargs):
+        text, *rest = super().__call__(messages, **kwargs)
+        payload = json.loads(text)
+        payload['confidence'] = 0.2
+        return (json.dumps(payload), *rest)
+
+
 class SearchBackend(Backend):
     """Fake Ombre search: only rows sharing a real word come back, so an unrelated save cannot ride the
     'memory search hit' path by accident."""
@@ -109,6 +117,8 @@ class EventMemoryTests(unittest.TestCase):
         detail = self.native.events.detail(event['event_id'])
         self.assertIn('3:42', detail['story'])
         self.assertIn('meh', detail['story'])
+        detail = self.native.events.detail(event['event_id'])
+        self.assertTrue(detail['versions'])
         self.assertEqual(len(detail['stages']), 3)
 
     def test_a_different_thing_on_the_same_day_is_a_new_event(self):
@@ -315,6 +325,45 @@ class EventMemoryTests(unittest.TestCase):
         self.assertEqual(len(self.native.events.events()), 1)
         self.assertEqual(len(self.backend.rows), 1)
         self.assertEqual(len(self.native.events.stages(event_id)), 2)
+
+    def test_tidy_revise_and_restart_keep_one_complete_event(self):
+        self.save('She was angry about the file list and the charcoal note on the desk.',
+                  'The file list was the argument')
+        self.save('Later the charcoal note had one word from her that I did not write.',
+                  'The charcoal note')
+        event_id = next(iter(self.native.events.events()))
+        key = self.native.events.events()[event_id]['memory_id']
+        projection = self.memory.content_for(key, refresh=True)
+        from experience_memory import ExperienceMemory
+        tidy = ExperienceMemory(self.cfg, self.store, self.budget, StubModel(), 'fake/chat.jsonl',
+                                self.memory, {'enabled': True})
+        self.assertTrue(tidy._save_update({'id': key, 'text': '整理后的完整故事：争执、meh、那张纸。'},
+                                          seen=projection))
+        self.assertEqual(len(self.native.events.stages(event_id)), 2)
+        self.assertEqual(self.native.events.events()[event_id]['story'],
+                         '整理后的完整故事：争执、meh、那张纸。')
+        self.assertEqual(len(self.backend.rows), 1)
+
+        # A new process builds fresh tools on the same files; recovery must not add a second event/memory.
+        restarted = ToolSet(SimpleNamespace(tools=[], capability_event=None, description='',
+                                            consume_capability_event=lambda: None,
+                                            invoke=lambda n, a, ap: ('no', '被拒绝', n),
+                                            preview_summary=lambda n, a: n),
+                            NativeMemoryTools(self.memory, 8192, model=StubModel())).native
+        self.assertEqual(len(restarted.events.events()), 1)
+        self.assertEqual(len(restarted.events.stages(event_id)), 2)
+        self.assertEqual(len(self.backend.rows), 1)
+
+    def test_low_confidence_model_does_not_merge(self):
+        self.save('She was angry about the file list and the charcoal note on the desk.',
+                  'The file list was the argument')
+        self.native.events.model = LowConfidenceModel()
+        self.save('Later the charcoal note had one word from her.', 'The charcoal note')
+        events = self.native.events.events()
+        self.assertEqual(len(events), 2)
+        newest = max(events.values(), key=lambda event: str(event.get('last_at')))
+        self.assertEqual(newest.get('status'), 'uncertain')
+        self.assertTrue(self.store.read('fake/event-review.jsonl'))
 
     def test_timeline_refuses_unknown_event(self):
         text, state, _ = self.native.invoke('memory_timeline', {'event_id': 'e-nope'})
