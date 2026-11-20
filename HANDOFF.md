@@ -1,13 +1,13 @@
 # HANDOFF
 
 ## 工单 407 交接（事件记忆第一版）
-- 范围：保存走事件层（默认关，`[memory.events] enabled`）。一个事件只保留一条 Ombre 记忆，正文是按日期拼接的摘要（每段前 180 字，600 字上限）；完整故事 = 按时间排序的全部阶段，存在本地 `events.jsonl` / `event-stages.jsonl` / `stage-evidence.jsonl`。新增只读 `memory_timeline`。
-- 归组是确定性规则：共享实体 + 同日 + 未关闭事件；不确定时建「暂定事件」并记候选链接，不硬并。本版不调模型、不压缩细节。
-- 接入：`memory_native._hold` 在开关打开且没有 target_id/link_to/pinned/importance 时走 `event_memory.EventMemory.record`；否则原路径。`NativeMemoryTools` 构造时按配置创建，`memory_timeline` 只在开启时出现在工具清单，并登记在 `tool_groups.memory_admin`。
-- 数据：四个追加文件在 `data/<角色>/`；Ombre 旧记忆不动。
-- 测试：`tests/test_event_memory.py`（5 条）+ 既有 `test_native_memory` / `test_memory` / `test_memory_363` / `test_prompt_registry` / `test_tool_budget` / `test_tool_groups` / `test_chat` 全过；全量套件只差与本次无关的既有失败（维护/备份用例）。
-- 未做（工单 408）：事件页面、召回名额按事件、后台自动纠错、194 条迁移（含逐条核对）。本版故事不调用模型，后续可在同一事件库上接「模型润色」，不改数据结构。
-- 下一步：Lan 审 PR；她打开开关体验「同一天只长一条」；页面与迁移另开 408，按她的要求逐条给她看。
+- 范围：保存走事件层（默认关，`[memory.events] enabled`）。一个事件只保留一条 Ombre 记忆，正文是 400 字摘要；完整故事（`story`）落在 `events.jsonl`，阶段/证据/旧投影/复核在相邻文件。新增只读 `memory_timeline` 和「记忆 · 经历」页；召回按事件去重；`experience_memory` 每次整理重试 dirty 投影并合并可证明的重复。
+- 归组：Ombre 检索命中→反查事件、共享名字/物件、同日、未关闭事件、聊天/自主/工具原始记录同实体提及；不确定建「暂定事件」并进复核，不硬并。
+- 接入：`memory_native._hold` 在开关打开且没有 target_id/link_to 时走 `event_memory.EventMemory.record`（pinned/importance 传给新事件的那条记忆），失败不会退回旧 hold（避免重复保存）；`memory_timeline` 只在开启时出现；页面用 `/api/memory/events` / `/api/memory/event`。
+- 数据：事件库在 `data/<角色>/`；Ombre 旧记忆不动。
+- 测试：`tests/test_event_memory.py` 9 条 + 既有 native/memory/363/chat/experience/prompt/budget/groups 全过，desktop 29 条全过。
+- 未做（工单 408）：现有 145 条旧记忆的重新归组、逐条去向清单、正式迁移。
+- 下一步：Lan 审 PR；她打开开关体验「三种说法只长一段」；旧记忆迁移另开 408，按她的要求逐条给她看。
 
 ## 工单 405 交接（剩下没登记的提示词全部上表）
 - 漏的原因两处：`prompts/inline.py` 的 `PROMPT_MODULES` 只有 12 个文件，`life_state.py` 不在里面；登记表里也没有 `gap_text` 那一段。所以「不必每轮提、她沉默可能是忙/在睡/不高兴」一直只存在于代码里，指令页看不到也改不了。

@@ -14,6 +14,24 @@ from veil_agent import Budget, Character, Store
 from test_memory import Backend
 
 
+class SearchBackend(Backend):
+    """Fake Ombre search: only rows sharing a real word come back, so an unrelated save cannot ride the
+    'memory search hit' path by accident."""
+
+    def call(self, name, args):
+        if name == 'breath_search':
+            self.calls.append((name, args))
+            words = {word.strip('.,;:!?').lower() for word in str(args.get('query') or '').split()
+                     if len(word.strip('.,;:!?')) >= 4}
+            hits = []
+            for key, row in self.rows.items():
+                text = str(row.get('content') or '').lower()
+                if any(word in text for word in words):
+                    hits.append(f'[bucket_id:{key}]')
+            return '\n'.join(hits)
+        return super().call(name, args)
+
+
 class EventMemoryTests(unittest.TestCase):
     def setUp(self):
         base = os.environ.get('VEIL_TEST_TMP')
@@ -28,7 +46,7 @@ class EventMemoryTests(unittest.TestCase):
              'events': {'enabled': True}},
             {'enabled': False, 'folder': 'data/fake/workspace', 'max_steps': 4, 'max_result_bytes': 200})
         self.budget = Budget(self.store)
-        self.backend = Backend()
+        self.backend = SearchBackend()
         self.memory = Memory(self.cfg, self.store, self.budget, Mock(), self.backend)
         self.addCleanup(self.memory.__exit__, None, None, None)
         files = SimpleNamespace(tools=[], capability_event=None, description='No files. ',
@@ -68,6 +86,10 @@ class EventMemoryTests(unittest.TestCase):
         self.assertEqual(state, '成功')
         self.assertIn('meh', text)
         self.assertIn('18:24', text)
+        detail = self.native.events.detail(event['event_id'])
+        self.assertIn('3:42', detail['story'])
+        self.assertIn('meh', detail['story'])
+        self.assertEqual(len(detail['stages']), 3)
 
     def test_a_different_thing_on_the_same_day_is_a_new_event(self):
         self.save('Nov 20 3:42 she was angry about the file list and meh on the charcoal note.',
@@ -86,6 +108,45 @@ class EventMemoryTests(unittest.TestCase):
         rows = self.store.read('fake/stage-evidence.jsonl')
         self.assertTrue(rows)
         self.assertTrue(any('charcoal note' in str(row.get('text')) for row in rows))
+
+    def test_different_wording_with_one_shared_name_stays_one_event(self):
+        for text, title in [
+            ('She was angry about the file list and left the charcoal note on the desk. '
+             'I answered with 关于兰-001.html.', 'The file list was the argument'),
+            ('Later, the charcoal note had one word from her that I did not write.',
+             'The charcoal note'),
+        ]:
+            result, state, _ = self.save(text, title)
+            self.assertEqual(state, '成功', result)
+        self.assertEqual(len(self.native.events.events()), 1)
+
+    def test_failed_projection_never_saves_twice_and_is_retried(self):
+        self.backend.fail = True
+        text, state, _ = self.save('She wrote meh on the charcoal note after the file list argument.',
+                                   'The charcoal note')
+        self.assertEqual(state, '出错')
+        self.assertEqual(len(self.native.events.stages()), 1)
+        self.assertEqual(len(self.backend.rows), 0)
+        self.backend.fail = False
+        self.native.events.retry_dirty()
+        self.assertEqual(len(self.backend.rows), 1)
+        self.assertEqual(len(self.native.events.stages()), 1)
+
+    def test_hidden_event_cannot_be_read_through_the_timeline(self):
+        result, state, _ = self.save('She wrote meh on the charcoal note after the file list argument.',
+                                     'The charcoal note')
+        self.assertEqual(state, '成功', result)
+        event = next(iter(self.native.events.events().values()))
+        key = event['memory_id']
+        path = self.store.root / 'fake' / 'memory' / 'dynamic' / f'{key}.md'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f'---\nid: {key}\ntitle: hidden\ndont_surface: true\n---\nsecret',
+                        encoding='utf-8')
+        self.assertIsNone(self.native.events.timeline(event['event_id']))
+        self.assertIsNone(self.native.events.detail(event['event_id']))
+        self.assertEqual(self.native.events.visible_events(), [])
+        text, state, _ = self.native.invoke('memory_timeline', {'event_id': event['event_id']})
+        self.assertEqual(state, '被拒绝')
 
     def test_timeline_refuses_unknown_event(self):
         text, state, _ = self.native.invoke('memory_timeline', {'event_id': 'e-nope'})

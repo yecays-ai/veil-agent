@@ -281,8 +281,9 @@ def dates_in(text):
 
 
 class NativeMemoryTools:
-    def __init__(self, memory, max_result_bytes=8192):
+    def __init__(self, memory, max_result_bytes=8192, model=None):
         self.memory, self.max_result_bytes = memory, max_result_bytes
+        self.model = model if callable(model) else None
         self.search_results = {}
         available = {tool.name: tool for tool in memory.backend.list_tools()} \
             if hasattr(memory.backend, 'list_tools') else {}
@@ -302,7 +303,7 @@ class NativeMemoryTools:
         event_settings = (getattr(memory.cfg, 'memory', None) or {}).get('events')
         if isinstance(event_settings, dict) and event_settings.get('enabled'):
             from event_memory import EventMemory
-            self.events = EventMemory(memory, event_settings)
+            self.events = EventMemory(memory, event_settings, model=self.model)
             self.events.locked = self.sidecar.locked
         self.tools = [HOLD, SEARCH, *model_tools, MEMORY_HISTORY, MEMORY_CATALOG, MEMORY_READ,
                       *([MEMORY_TIMELINE] if self.events is not None else [])]
@@ -1165,13 +1166,15 @@ class NativeMemoryTools:
         if len(why) > WHY_LIMIT or (isinstance(title, str) and len(title) > TITLE_LIMIT):
             return f'The title or why_remembered is too long. Shorten it and save again.', '被拒绝', summary
         # Ticket 407: with the event layer on, a save is a stage of an event, not a memory of its own.
-        # target_id/link_to and pinned/importance stay on the old path; manual edits are unchanged.
-        if (self.events is not None and target_id is None and link_to is None
-                and args.get('pinned') is None and args.get('importance') is None):
+        # target_id/link_to keep the old manual path; a failed event save must NOT fall back to a second
+        # hold (the stage may already be on disk), so the old path is never reached once events are on.
+        if self.events is not None and target_id is None and link_to is None:
             try:
-                saved = self.events.record(content.strip(), title.strip(), why=why, at=args.get('at'))
+                saved = self.events.record(content.strip(), title.strip(), why=why,
+                                           importance=args.get('importance'), pinned=args.get('pinned'))
             except Exception:
-                saved = None  # never lose the save: fall through to the old, proven path
+                return ('The event save failed before anything was written; nothing was saved.',
+                        '出错', summary)
             if saved:
                 if saved.get('locked'):
                     return ('Lan locked this memory or it is hidden, so its story was not rewritten; '

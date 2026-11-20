@@ -155,6 +155,18 @@ class ExperienceMemory:
                 # A fallback memory writer must never take chat down with it; the ledger keeps the reason.
                 pass
 
+    def _event_maintenance(self):
+        """Ticket 407: the existing tidy also repairs event projections and merges provable duplicates."""
+        settings = (getattr(self.cfg, 'memory', None) or {}).get('events')
+        if not isinstance(settings, dict) or not settings.get('enabled'):
+            return 0
+        try:
+            from event_memory import EventMemory
+            events = EventMemory(self.memory, settings)
+            return events.retry_dirty() + events.auto_correct()
+        except Exception:
+            return 0
+
     def _now(self):
         return _when(self.budget.clock()) or datetime.now().astimezone()
 
@@ -275,6 +287,7 @@ class ExperienceMemory:
         """Returns 'off', 'not_due', 'waiting', 'budget', 'skipped', or 'written'."""
         if not self.enabled() or self.memory is None:
             return 'off'
+        self._event_maintenance()
         with self._lock:
             pending = self.pending()
             reason = 'forced' if force and pending else self.due(pending)

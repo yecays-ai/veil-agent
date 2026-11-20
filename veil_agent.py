@@ -6388,7 +6388,7 @@ def main():
                                 memory.attach_recall_judge(background_cfg(cfg), background_model or model, warm=True)
                                 from memory_native import NativeMemoryTools, ToolSet
                                 tools = ToolSet(tools, NativeMemoryTools(
-                                    memory, cfg.tools['max_result_bytes']))
+                                    memory, cfg.tools['max_result_bytes'], model=model))
                                 run_chat(Chat(cfg, store, budget, model, memory, tools, voice=voice,
                                               background_model=background_model))
                             for notice in memory.notices():
