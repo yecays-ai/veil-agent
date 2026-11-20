@@ -2314,15 +2314,6 @@ class Chat:
                     f'{(self.cfg.tools or {}).get("max_output_tokens", self.cfg.max_output_tokens)} tokens); '
                     'write long work in slices, never whole files.')
                 schema['function'] = function
-        # Ticket 402: a tool's description can be overridden by name; a new tool needs no registration.
-        overrides = prompts.tool_overrides()
-        if overrides:
-            for schema in schemas:
-                function = schema.get('function') or {}
-                name = function.get('name')
-                if (isinstance(name, str) and name not in prompts.registry.TEXT_TOOL_IDS
-                        and name in overrides):
-                    schema['function'] = {**function, 'description': overrides[name]}
         if inventory:
             from tool_groups import inventory as tool_inventory
             return tool_inventory(schemas, self.tool_groups, self.tool_aliases)
@@ -2353,9 +2344,20 @@ class Chat:
         if delegate_choice:
             for schema in schemas:
                 if self._resolve_tool_name(schema['function']['name'], schemas) == 'delegate':
-                    schema['function']['description'] += ' ' + self._delegate_cost_guidance(
-                        *delegate_choice, schemas)
+                    schema['function'] = {**schema['function'],
+                                          'description': schema['function']['description'] + ' ' + self._delegate_cost_guidance(
+                                              *delegate_choice, schemas)}
                     break
+        # Ticket 402: overrides are keyed by the name the model sees (after aliasing), and are applied
+        # to a copy so the module-level default schemas are never rewritten in place.
+        overrides = prompts.tool_overrides()
+        if overrides:
+            for index, schema in enumerate(schemas):
+                function = schema.get('function') or {}
+                name = function.get('name')
+                if (isinstance(name, str) and name not in prompts.registry.TEXT_TOOL_IDS
+                        and name in overrides):
+                    schemas[index] = {**schema, 'function': {**function, 'description': overrides[name]}}
         return schemas
 
     def _delegate_cost_guidance(self, provider_name, provider, schemas):

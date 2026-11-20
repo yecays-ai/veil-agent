@@ -49,10 +49,11 @@ def _tool_rows(chat):
             continue
         if canonical in registry.TEXT_TOOL_IDS:
             continue  # already listed as its own text entry
-        description = overrides.get(canonical) or function.get('description') or ''
-        overridden = canonical in overrides
+        key = label if isinstance(label, str) and label else canonical
+        description = overrides.get(key) or function.get('description') or ''
+        overridden = key in overrides
         rows.append({
-            'id': TOOL_ID_PREFIX + canonical,
+            'id': TOOL_ID_PREFIX + key,
             'category': 'tools',
             'title': label if label != canonical else canonical,
             'kind': 'text',
@@ -63,7 +64,7 @@ def _tool_rows(chat):
             'note': '保存后，下一次请求里的工具说明就是这一版。',
             'text': description,
             'bytes': len(description.encode('utf-8')),
-            'source': '工具定义（代码；可用 persona/instructions/' + TOOL_ID_PREFIX + canonical + '.md 覆盖）',
+            'source': '工具定义（代码；可用 persona/instructions/' + TOOL_ID_PREFIX + key + '.md 覆盖）',
         })
     rows.sort(key=lambda row: row['title'].lower())
     return rows

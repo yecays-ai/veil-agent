@@ -181,6 +181,40 @@ class ToolRowTests(unittest.TestCase):
             finally:
                 prompts._tools = old
 
+    def test_tool_override_cache_sees_edits_to_any_file(self):
+        from prompts.tools import ToolText
+        with tempfile.TemporaryDirectory() as tmp:
+            tools = ToolText(tmp)
+            tools.save('read_text_file', 'first read text')
+            tools.save('write_file', 'first write text')
+            tools.save('read_text_file', 'second read text')
+            self.assertEqual(tools.text('read_text_file', ''), 'second read text')
+            self.assertEqual(tools.text('write_file', ''), 'first write text')
+
+    def test_alias_tool_rows_use_the_name_the_model_sees(self):
+        import instructions
+        from prompts.tools import ToolText
+
+        class AliasChat(self.FakeChat):
+            def tool_schemas(self, full=False):
+                return [{'type': 'function', 'function': {'name': 'lookup', 'description': 'Search text.'}}]
+
+            def canonical_tool_name(self, name):
+                return 'mcp__service__search'
+
+        with tempfile.TemporaryDirectory() as tmp:
+            old = prompts._tools
+            try:
+                prompts._tools = ToolText(tmp)
+                rows = instructions._tool_rows(AliasChat('Search text.'))
+                self.assertEqual(rows[0]['id'], 'tool.lookup')
+                prompts.save_tool('lookup', 'Edited by Lan.')
+                rows = instructions._tool_rows(AliasChat('Search text.'))
+                self.assertEqual(rows[0]['text'], 'Edited by Lan.')
+                self.assertTrue(rows[0]['overridden'])
+            finally:
+                prompts._tools = old
+
     def test_save_tool_does_not_touch_registered_text(self):
         import instructions
         from prompts.tools import ToolText

@@ -26,10 +26,9 @@ class ToolText:
 
     def _stamp_now(self):
         try:
-            items = sorted((item.name, item.stat().st_mtime_ns) for item in self.dir.glob('tool.*.md'))
+            return tuple(sorted((item.name, item.stat().st_mtime_ns) for item in self.dir.glob('tool.*.md')))
         except OSError:
             return None
-        return (len(items), items[-1][1] if items else 0, tuple(name for name, _ in items))
 
     def all(self):
         stamp = self._stamp_now()
@@ -85,6 +84,7 @@ class ToolText:
                 except OSError:
                     pass
                 raise UserError('写工具说明失败：' + str(exc) + '。') from exc
+            self._stamp = None  # the directory changed; the next all() re-reads every file
         return {'name': name, 'text': self.text(name, ''), 'bytes': size}
 
     def status(self, name, default):
