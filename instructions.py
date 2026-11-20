@@ -18,12 +18,14 @@ def _row(entry):
     item = entry.as_dict()
     item['kind_label'] = KIND_LABELS.get(entry.kind, entry.kind)
     item['overridden'] = False
+    item['default_changed'] = False
     item['bytes'] = 0
     if entry.kind == 'text':
         status = prompts.store().status(entry.id)
         item['text'] = status['text']
         item['bytes'] = status['bytes']
         item['overridden'] = status['overridden']
+        item['default_changed'] = status.get('default_changed', False)
         item['source'] = 'prompts/defaults/' + entry.id + '.md'
     else:
         item['text'] = ''
@@ -61,6 +63,7 @@ def _tool_rows(chat):
             'site': '工具定义里；' + ('每轮都带' if canonical in _always_on() else '打开对应组时带'),
             'editable': True,
             'overridden': overridden,
+            'default_changed': False,
             'note': '保存后，下一次请求里的工具说明就是这一版。',
             'text': description,
             'bytes': len(description.encode('utf-8')),
@@ -87,7 +90,11 @@ def page(chat=None):
         groups.append({'id': group['id'], 'title': group['title'],
                        'editable': sum(1 for row in rows if row['editable']),
                        'entries': rows})
+    rows = [row for group in groups for row in group['entries']]
     return {'generated_at': datetime.now().astimezone().isoformat(timespec='seconds'),
+            'maintenance': {'overridden': sum(1 for row in rows if row.get('overridden')),
+                            'default_changed': sum(1 for row in rows if row.get('default_changed')),
+                            'entries': len(rows)},
             'categories': groups}
 
 

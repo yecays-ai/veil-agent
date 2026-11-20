@@ -111,9 +111,17 @@ output_cny_per_million = "8"
             (root / 'persona' / 'test.md').write_text('Fictional persona body', encoding='utf-8')
             (root / 'characters' / 'test' / 'character.toml').write_text(self.CONFIG, encoding='utf-8')
             cfg = load_character(root, 'test')
-            data = instructions.page()
+            old_store = prompts._store
+            prompts._store = PromptStore(prompts.DEFAULTS, root / 'instructions')
+            try:
+                data = instructions.page()
+            finally:
+                prompts._store = old_store
             groups = {group['id']: group for group in data['categories']}
             self.assertEqual(len(groups), 8)
+            self.assertEqual(data['maintenance']['overridden'], 0)
+            self.assertEqual(data['maintenance']['default_changed'], 0)
+            self.assertEqual(data['maintenance']['entries'], len(prompts.entries()))
             rows = {row['id']: row for group in data['categories'] for row in group['entries']}
             self.assertEqual(len(rows), len(prompts.entries()))
             # Persona, background, samples and notes have their own pages; never listed twice here.
@@ -129,7 +137,56 @@ output_cny_per_million = "8"
                     self.assertFalse(row['editable'])
 
 
+class MaintenanceTests(unittest.TestCase):
+    def test_default_change_is_visible_while_the_override_wins(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            defaults = Path(tmp) / 'defaults'
+            defaults.mkdir()
+            (defaults / 'chat.stay_silent.md').write_text('Old default wording.', encoding='utf-8')
+            store = PromptStore(defaults, Path(tmp) / 'overrides')
+            store.save('chat.stay_silent', 'Lan wrote this instead.')
+            status = store.status('chat.stay_silent')
+            self.assertEqual(status['text'], 'Lan wrote this instead.')
+            self.assertTrue(status['overridden'])
+            self.assertFalse(status['default_changed'])
+            (defaults / 'chat.stay_silent.md').write_text('A later default wording.', encoding='utf-8')
+            status = store.status('chat.stay_silent')
+            self.assertEqual(status['text'], 'Lan wrote this instead.')
+            self.assertTrue(status['default_changed'])
+
+    def test_overrides_live_outside_the_repository_work(self):
+        root = Path(__file__).resolve().parents[1]
+        ignore = (root / '.gitignore').read_text(encoding='utf-8')
+        self.assertIn('persona/instructions/', ignore)
+        updater = (root / 'update-main.cmd').read_text(encoding='utf-8', errors='replace')
+        self.assertNotIn('persona/instructions', updater)
+
+    def test_git_really_ignores_the_override_file(self):
+        import subprocess
+        root = Path(__file__).resolve().parents[1]
+        if not (root / '.git').exists() and not (root / '.git').is_file():
+            self.skipTest('not a git checkout')
+        result = subprocess.run(['git', '-C', str(root), 'check-ignore', 'persona/instructions/chat.send_message.md'],
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+
 class InlineProseTests(unittest.TestCase):
+    def test_synthetic_english_prompt_is_flagged(self):
+        source = (
+            'PROMPT = ("Write like texting and never explain yourself. "\n'
+            '          "Keep every answer short and always ask one question at the end.")\n'
+        )
+        rows = inline.collect_text(source)
+        self.assertTrue(rows)
+        self.assertNotIn(rows[0]['hash'], inline.feedback())
+
+    def test_synthetic_chinese_prompt_is_flagged(self):
+        source = 'PROMPT = "和他说话的时候，要记得先停一下，不要急着回答，也不要替他决定任何事情，除非他明确问你怎么做。"\n'
+        rows = inline.collect_text(source)
+        self.assertTrue(rows)
+        self.assertNotIn(rows[0]['hash'], inline.feedback())
+
     def test_no_unreviewed_inline_prose(self):
         allowed = inline.feedback()
         unknown = [row for row in inline.collect() if row['hash'] not in allowed]

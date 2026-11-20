@@ -327,3 +327,4 @@ body{isolation:isolate}
 .snap-tool{border-top:1px solid var(--line);padding:2px 0}
 .snap-tool>summary{cursor:pointer;padding:7px 0;font-size:12px}
 .snap-tool .instr-text{max-height:260px;overflow:auto}
+.instr-badge.stale{color:#8fb6e0;border-color:#3f5670}
