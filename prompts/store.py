@@ -130,6 +130,11 @@ class PromptStore:
         limit = min(entry.max_bytes, self.max_bytes)
         if size > limit:
             raise UserError('这一条最多 ' + str(limit) + ' 字节，现在 ' + str(size) + ' 字节。')
+        missing = [name for name in entry.placeholders if '{' + name + '}' not in data]
+        if missing:
+            raise UserError('保存失败：这一条要保留 ' + '、'.join('{' + name + '}' for name in missing)
+                            + '，那是程序填真实数据的位置。删掉它，Peter 收到的这一段就没有时间、'
+                              '金额或日程内容了。其他文字可以随便改。')
         with self.lock:
             self.overrides.mkdir(parents=True, exist_ok=True)
             target = self.override_path(entry_id)

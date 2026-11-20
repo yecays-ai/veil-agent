@@ -51,8 +51,16 @@
 
 **不做的**：工具返回、报错、命令说明这些不是提示词，是程序反馈，不进登记表。
 
+## 评审后补的两处
+
+1. **扫描范围改成自动发现。** 原来靠手写名单，`life_state.py` 就是这样漏了三张工单。现在 `prompts/inline.py` 的 `modules()` 会自动收进**所有 import 了 `prompts` 的根目录模块**；手写名单只当底。当前自动多收了 `codex_watch.py`、`instructions.py`、`investigation_checkpoint.py`、`lab_preview.py`、`request_snapshots.py`，收进来后新增未登记长句 0 条、白名单没加、`BASELINE` 没抬。回归测试两条：`test_every_module_that_imports_prompts_is_scanned`（漏一个模块就红）、`test_new_prose_in_a_model_module_is_caught`（临时写一个带长句的模块，必须被扫出来）。
+2. **必需占位符不能删。** `registry.Entry` 有新字段 `placeholders`；`store.save()` 发现必需占位符被删就拒绝保存，并在页面显示原因（哪几个、为什么要留）。19 条里带数据的 11 条都登记了必需占位符，纯措辞的条目照旧随便改。回归测试四条，含「改完 `life.time_guidance` 下一次 `gap_text` 真的用新文本」。
+
+要求没变：只补功能与防漏，不加新功能。
+
 ## 验收步骤
 
 1. 指令页 →「运行时」，找到「她沉默时他怎么理解」，按你想要的语气改一句，保存。
 2. 隔一小时以上再和他聊天，或等他下一次自主醒来，看他的话有没有按新写法走。
 3. 「自主活动」里确认 Lab 清单、预算、醒来次数三处都在且能点开编辑；「系统与安全」里 Lab 截图和 Codex 摘录两条是灰的（只读）。
+4. 把「距她上次说话的时间（数据句）」里的 `{duration}` 删掉再保存：应该保存不了，并告诉你这一条必须保留哪些占位符。

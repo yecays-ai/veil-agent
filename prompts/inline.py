@@ -99,9 +99,41 @@ def _rows_from_tree(tree, name):
     return rows
 
 
+def _imports_prompts(path):
+    """A root module that imports prompts is building model text by definition."""
+    try:
+        tree = ast.parse(path.read_text(encoding='utf-8'))
+    except (OSError, SyntaxError, UnicodeDecodeError):
+        return False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            if any(alias.name == 'prompts' or alias.name.startswith('prompts.')
+                   for alias in node.names):
+                return True
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ''
+            if module == 'prompts' or module.startswith('prompts.'):
+                return True
+    return False
+
+
+def modules():
+    """The fixed prompt modules plus every root module that imports prompts.
+
+    Ticket 405 review: a hand-maintained list is how life_state.py escaped scanning for three
+    tickets. Anything that imports prompts is building model text, so it is scanned without
+    anyone remembering to add it here.
+    """
+    found = set(PROMPT_MODULES)
+    for path in ROOT.glob('*.py'):
+        if _imports_prompts(path):
+            found.add(path.name)
+    return sorted(found)
+
+
 def collect(paths=None):
     rows = []
-    for name in (paths or PROMPT_MODULES):
+    for name in (paths or modules()):
         path = ROOT / name
         try:
             tree = ast.parse(path.read_text(encoding='utf-8'))

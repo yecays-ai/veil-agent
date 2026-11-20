@@ -2,6 +2,7 @@
 
 ## 工单 405 交接（剩下没登记的提示词全部上表）
 - 漏的原因两处：`prompts/inline.py` 的 `PROMPT_MODULES` 只有 12 个文件，`life_state.py` 不在里面；登记表里也没有 `gap_text` 那一段。所以「不必每轮提、她沉默可能是忙/在睡/不高兴」一直只存在于代码里，指令页看不到也改不了。
+- 评审后补的两处：①扫描范围改成自动发现——`inline.modules()` 收进所有 import `prompts` 的根目录模块（多收 codex_watch / instructions / investigation_checkpoint / lab_preview / request_snapshots，白名单 0 新增、`BASELINE` 没抬）；②`registry.Entry.placeholders` + `store.save()` 必需占位符校验，删了不能保存并在页面说明原因。
 - 本次登记 19 条：`life.time_gap` / `.proactive` / `.last` / `life.time_guidance`、`life.state.frame` / `.rules` / `.more_events`、`autonomy.lab.frame` / `.more` / `.newest`、`autonomy.earlier.frame`、`autonomy.budget.line`、`autonomy.wake_count` / `.wake_quiet` / `.wake_rhythm` / `.wake_scheduled`、`safety.untrusted_lab_page` / `.untrusted_codex`（只读）、`runtime.investigation_checkpoint.rules`（只读）。
 - 代码改成 `prompts.text()` / `prompts.fill()`；`life_state.py`、`autonomy.py`、`lab_preview.py`、`codex_watch.py`、`investigation_checkpoint.py`。扫描名单加 `life_state.py`，白名单没加、`BASELINE` 没抬。
 - 验证：`gap_text` / `state_text` 新旧实现逐字节比对 6 个场景全一致；`test_prompt_registry`、`test_life_state`、`test_autonomy`、`test_lab_preview`、`test_codex_watch`、`test_investigation_checkpoint`、`test_tool_budget`、`test_request_snapshots` 通过。
