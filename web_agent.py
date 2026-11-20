@@ -2756,6 +2756,8 @@ def make_handler(hub, token):
             self._send(200, self._windows_apps_view(path, interaction))
 
         def _get_instructions(self):
+            if not self._guard(self.headers.get('X-Token')):
+                return
             try:
                 self._send(200, hub.instructions_page())
             except UserError as exc:
@@ -2764,6 +2766,8 @@ def make_handler(hub, token):
                 self._send(500, {'error': f'读取指令清单失败：{exc}'})
 
         def _get_request_snapshots(self, query):
+            if not self._guard(self.headers.get('X-Token')):
+                return
             import request_snapshots
             chat = hub.chat
             if chat is None:
@@ -2774,6 +2778,8 @@ def make_handler(hub, token):
             self._send(200, {'items': request_snapshots.recent(chat.store.root, chat.cfg.id, limit)})
 
         def _get_request_snapshot(self, query):
+            if not self._guard(self.headers.get('X-Token')):
+                return
             import request_snapshots
             chat = hub.chat
             if chat is None:
@@ -2783,7 +2789,11 @@ def make_handler(hub, token):
             message_id = (query.get('message_id') or [''])[0]
             if message_id and not request_id:
                 request_id = ''
-                for row in reversed(chat.store.read(chat.path)):
+                try:
+                    rows = chat.store.read_tail(chat.path, 400)
+                except (OSError, UserError):
+                    rows = chat.store.read(chat.path)
+                for row in reversed(rows):
                     if (isinstance(row, dict) and row.get('message_id') == message_id
                             and isinstance(row.get('request_id'), str) and row['request_id']):
                         request_id = row['request_id']
