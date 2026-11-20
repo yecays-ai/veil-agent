@@ -3536,7 +3536,7 @@ def main(argv=None):
                                     memory.attach_recall_judge(background_cfg(cfg), background_model or model, warm=True)
                                     from memory_native import NativeMemoryTools, ToolSet
                                     tools = ToolSet(tools, NativeMemoryTools(
-                                        memory, cfg.tools['max_result_bytes']))
+                                        memory, cfg.tools['max_result_bytes'], model=model))
                                     hub.memory_tools = tools.native
                                     serve_chat(Chat(cfg, store, budget, model, memory, tools,
                                                     approval=hub.approval, output=hub.output,

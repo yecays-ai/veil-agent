@@ -639,6 +639,9 @@ class ExperienceMemory:
         memory_id = update['id']
         if not self._alive(memory_id) or self.sidecar.locked(memory_id):
             return False
+        previous = self.memory.content_for(memory_id, refresh=True)
+        if not previous or (seen is not None and previous.strip() != seen.strip()):
+            return False
         if self.events is not None:
             event_id = self.events.event_for_memory(memory_id)
             if event_id:
@@ -650,12 +653,11 @@ class ExperienceMemory:
                 self.store.append(self.path, {'kind': 'update', 'memory_id': memory_id, 'text': update['text'],
                                               'time': self.budget.clock(), 'event_id': event_id})
                 return True
-        previous = self.memory.content_for(memory_id, refresh=True)
-        document = self.memory.raw_content_for(memory_id)
-        if not previous or document is None or (seen is not None and previous.strip() != seen.strip()):
-            return False
         text = update['text'].strip()
         if text == previous.strip():
+            return False
+        document = self.memory.raw_content_for(memory_id)
+        if document is None:
             return False
         # Same archive Peter's own edits use, so Lan can see and restore the earlier wording.
         self.store.append(f'{self.cfg.id}/memory-versions.jsonl', {

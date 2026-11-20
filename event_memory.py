@@ -314,13 +314,27 @@ class EventMemory:
     def retry_pending(self, limit=10):
         fixed = 0
         for stage in self.pending_stages()[:limit]:
-            event = stage.get('event_row')
-            if not isinstance(event, dict):
+            snapshot = stage.get('event_row')
+            if not isinstance(snapshot, dict):
                 continue
+            clean = {key: value for key, value in stage.items() if key != 'event_row'}
+            event_id = clean.get('event_id')
+            current = self.events().get(event_id)
+            if current:
+                # Never overwrite a newer index with the pending snapshot: keep its memory_id and latest
+                # state, fold this stage into the story, and leave the projection for retry_dirty().
+                story = self._story(event_id, extra=clean)
+                event = {**current, 'story': story,
+                         'stage_count': len(self.stages(event_id)) + 1,
+                         'last_at': max(str(current.get('last_at') or ''), str(clean.get('at') or '')),
+                         'dirty': True}
+                if not event.get('memory_id') and isinstance(snapshot.get('memory_id'), str):
+                    event['memory_id'] = snapshot['memory_id']
+            else:
+                event = {**snapshot, 'story': self._story(event_id, extra=clean), 'dirty': True}
             try:
                 self.store.append(self.events_path, event)
-                self.store.append(self.stages_path, {**{key: value for key, value in stage.items()
-                                                        if key != 'event_row'}, 'state': 'committed'})
+                self.store.append(self.stages_path, {**clean, 'state': 'committed'})
                 fixed += 1
             except Exception:
                 continue
@@ -447,25 +461,17 @@ class EventMemory:
         if not scores:
             return self._new_event(stage, title, [], 'open'), False, 0.4
         ranked = sorted(scores.items(), key=lambda item: item[1]['score'], reverse=True)
-        best_id, best = ranked[0]
-        decision = None
-        if best['score'] < 6 or (len(ranked) > 1 and ranked[1][1]['score'] == best['score']):
-            decision = self._model_choose(stage, scores, title)
+        # Similar words/day only produce candidates. The merge itself must be an event-relationship decision;
+        # a high score alone never merges (review of #407).
+        decision = self._model_choose(stage, scores, title) if self.model is not None else None
         if decision and decision['event_id']:
             event = self.events()[decision['event_id']]
             event = {**event, 'status': 'open', 'last_at': stage['at'],
                      'entities': sorted(set(event.get('entities') or []) | set(stage['entities']))[:80]}
             return event, True, decision['confidence']
-        if decision and decision['event_id'] is None:
-            links = [event_id for event_id, _ in ranked[:3]]
-            return self._new_event(stage, title, links, 'uncertain'), False, decision['confidence']
-        if best['score'] < 4 or (len(ranked) > 1 and ranked[1][1]['score'] == best['score']):
-            links = [event_id for event_id, _ in ranked[:3]]
-            return self._new_event(stage, title, links, 'uncertain'), False, round(min(0.9, best['score'] / 8), 2)
-        event = self.events()[best_id]
-        event = {**event, 'status': 'open', 'last_at': stage['at'],
-                 'entities': sorted(set(event.get('entities') or []) | set(stage['entities']))[:80]}
-        return event, True, round(min(1.0, best['score'] / 8), 2)
+        links = [event_id for event_id, _ in ranked[:3]]
+        confidence = decision['confidence'] if decision else round(min(0.9, ranked[0][1]['score'] / 8), 2)
+        return self._new_event(stage, title, links, 'uncertain'), False, confidence
 
     def _new_event(self, stage, title, candidate_ids, status):
         when = _when(stage['at']) or datetime.now().astimezone()

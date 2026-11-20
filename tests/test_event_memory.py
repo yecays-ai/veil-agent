@@ -1,3 +1,4 @@
+import json
 import os
 import shutil
 import tempfile
@@ -12,6 +13,25 @@ from memory_agent import Memory
 from memory_native import NativeMemoryTools, ToolSet
 from veil_agent import Budget, Character, Store
 from test_memory import Backend
+
+
+class StubModel:
+    """Deterministic stand-in for the grouping model: same words -> first candidate, unrelated -> null."""
+    def __call__(self, messages, **kwargs):
+        payload = json.loads(messages[-1]['content'])
+        stage = payload['new_stage']['text'].lower()
+        candidates = payload.get('candidates') or []
+        if not candidates or any(word in stage for word in ('oslo', 'quantum', 'conference')):
+            choice = None
+        else:
+            choice = candidates[0]['event_id']
+            best = 0
+            for candidate in candidates:
+                score = len(set(stage.split()) & set(str(candidate).lower().split()))
+                if score > best:
+                    best, choice = score, candidate['event_id']
+        return (json.dumps({'event_id': choice, 'confidence': 0.9, 'reason': 'stub'}),
+                1, 1, 0, None)
 
 
 class SearchBackend(Backend):
@@ -53,7 +73,7 @@ class EventMemoryTests(unittest.TestCase):
                                 consume_capability_event=lambda: None,
                                 invoke=lambda n, a, ap: ('not authorized', '被拒绝', n),
                                 preview_summary=lambda n, a: n)
-        self.tools = ToolSet(files, NativeMemoryTools(self.memory, 8192))
+        self.tools = ToolSet(files, NativeMemoryTools(self.memory, 8192, model=StubModel()))
         self.native = self.tools.native
 
     def save(self, text, title):
@@ -194,6 +214,26 @@ class EventMemoryTests(unittest.TestCase):
         self.native.events.retry_pending()
         self.assertEqual(len(self.native.events.stages()), 1)
         self.assertEqual(len(self.native.events.events()), 1)
+
+    def test_retry_pending_never_overwrites_a_newer_index(self):
+        first = self.native.events.record('She wrote meh on the charcoal note after the file list.',
+                                          'The charcoal note')
+        event_id = first['event_id']
+        stale = {**self.native.events.events()[event_id], 'memory_id': 'stale-id', 'story': 'stale story',
+                 'stage_count': 0, 'dirty': False}
+        self.store.append('fake/event-stages.jsonl', {
+            'stage_id': 's-pending', 'event_id': event_id, 'at': '2026-11-20T17:00:00+08:00',
+            'text': 'Later the charcoal note still sat there.', 'entities': [], 'facts': {},
+            'state': 'pending', 'event_row': stale})
+        second = self.native.events.record('Evening: the charcoal note was still on the desk.',
+                                           'The charcoal note', event_id=event_id)
+        self.assertEqual(second['event_id'], event_id)
+        self.native.events.retry_pending()
+        event = self.native.events.events()[event_id]
+        self.assertNotEqual(event.get('memory_id'), 'stale-id')
+        self.assertIn('Evening', event.get('story') or '')
+        self.assertIn('Later', event.get('story') or '')
+        self.assertEqual(len(self.native.events.stages(event_id)), 3)
 
     def test_timeline_refuses_unknown_event(self):
         text, state, _ = self.native.invoke('memory_timeline', {'event_id': 'e-nope'})
