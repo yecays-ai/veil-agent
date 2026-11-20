@@ -2,7 +2,7 @@
 
 ## 工单 407 交接（事件记忆第一版）
 - 范围：保存走事件层（默认关，`[memory.events] enabled`）。一个事件只保留一条 Ombre 记忆，正文是 400 字摘要；完整故事（`story`）落在 `events.jsonl`，阶段/证据/旧投影/复核在相邻文件。新增只读 `memory_timeline` 和「记忆 · 经历」页；召回按事件去重；`experience_memory` 每次整理重试 dirty 投影并合并可证明的重复。
-- 归组：Ombre 检索命中→反查事件、共享名字/物件、同日、未关闭事件、聊天/自主/工具原始记录同实体提及；不确定建「暂定事件」并进复核，不硬并。
+- 归组：Ombre 检索命中→反查事件、中文双/三字词与共享名字、同日、未关闭事件、聊天/自主/工具原始记录同实体提及；候选不确定或并列时由模型按同一因果/同一人/同一物件判断（只回 JSON）；不确定建「暂定事件」并进复核，不硬并。故事仍是确定性全文拼接，不调模型。
 - 接入：`memory_native._hold` 在开关打开且没有 target_id/link_to 时走 `event_memory.EventMemory.record`（pinned/importance 传给新事件的那条记忆），失败不会退回旧 hold（避免重复保存）；`memory_timeline` 只在开启时出现；页面用 `/api/memory/events` / `/api/memory/event`。
 - 数据：事件库在 `data/<角色>/`；Ombre 旧记忆不动。
 - 测试：`tests/test_event_memory.py` 9 条 + 既有 native/memory/363/chat/experience/prompt/budget/groups 全过，desktop 29 条全过。

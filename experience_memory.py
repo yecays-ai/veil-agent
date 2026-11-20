@@ -116,6 +116,12 @@ class ExperienceMemory:
         self._thread = None
         self._context_cache = None
         self.sidecar = Sidecar(store, cfg.id, budget.clock)
+        # Ticket 407: automatic tidy writes go through the same event layer as Peter's own saves.
+        self.events = None
+        event_settings = (getattr(cfg, 'memory', None) or {}).get('events')
+        if isinstance(event_settings, dict) and event_settings.get('enabled'):
+            from event_memory import EventMemory
+            self.events = EventMemory(memory, event_settings, model=model, sidecar=self.sidecar)
         if getattr(self.budget, 'reconcile_unsettled', None):
             self.budget.reconcile_unsettled({COST_ACCOUNTING})
 
@@ -597,6 +603,18 @@ class ExperienceMemory:
     def _save_entry(self, entry, span):
         continues = entry.get('continues')
         args = {'content': entry['text'], 'title': entry['title']}
+        if self.events is not None:
+            try:
+                events = self.events.record(entry['text'], entry['title'], why='经历整理')
+            except Exception:
+                return None
+            if events:
+                memory_id = events.get('memory_id')
+                self.store.append(self.path, {'kind': 'entry', 'memory_id': memory_id, 'title': entry['title'],
+                                              'text': entry['text'], 'merged': False, 'covers': span,
+                                              'continues': continues, 'event_id': events.get('event_id'),
+                                              'time': self.budget.clock()})
+                return memory_id
         operation, duplicate = self.memory.begin_write(args)
         if duplicate is not None:
             return None
@@ -621,6 +639,17 @@ class ExperienceMemory:
         memory_id = update['id']
         if not self._alive(memory_id) or self.sidecar.locked(memory_id):
             return False
+        if self.events is not None:
+            event_id = self.events.event_for_memory(memory_id)
+            if event_id:
+                try:
+                    self.events.record(update['text'].strip(), self.memory.title_for(memory_id) or 'Event',
+                                       why='经历整理：按后来的变化重写', event_id=event_id, interpretation='')
+                except Exception:
+                    return False
+                self.store.append(self.path, {'kind': 'update', 'memory_id': memory_id, 'text': update['text'],
+                                              'time': self.budget.clock(), 'event_id': event_id})
+                return True
         previous = self.memory.content_for(memory_id, refresh=True)
         document = self.memory.raw_content_for(memory_id)
         if not previous or document is None or (seen is not None and previous.strip() != seen.strip()):

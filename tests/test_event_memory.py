@@ -46,7 +46,7 @@ class EventMemoryTests(unittest.TestCase):
              'events': {'enabled': True}},
             {'enabled': False, 'folder': 'data/fake/workspace', 'max_steps': 4, 'max_result_bytes': 200})
         self.budget = Budget(self.store)
-        self.backend = SearchBackend()
+        self.backend = SearchBackend(self.store.root / 'fake' / 'memory' / 'dynamic')
         self.memory = Memory(self.cfg, self.store, self.budget, Mock(), self.backend)
         self.addCleanup(self.memory.__exit__, None, None, None)
         files = SimpleNamespace(tools=[], capability_event=None, description='No files. ',
@@ -147,6 +147,53 @@ class EventMemoryTests(unittest.TestCase):
         self.assertEqual(self.native.events.visible_events(), [])
         text, state, _ = self.native.invoke('memory_timeline', {'event_id': event['event_id']})
         self.assertEqual(state, '被拒绝')
+
+    def test_rewrite_archives_memory_version_and_respects_lan_edit(self):
+        self.save('She wrote meh on the charcoal note after the file list argument.', 'The charcoal note')
+        key = next(iter(self.backend.rows))
+        self.save('Later the charcoal note still sat on the desk.', 'The charcoal note')
+        versions = self.store.read('fake/memory-versions.jsonl')
+        self.assertTrue(any(row.get('memory_id') == key for row in versions))
+        self.native.sidecar.lan_edited(key)
+        before = self.backend.rows[key]['content']
+        self.save('A third part of the charcoal note story.', 'The charcoal note')
+        self.assertEqual(self.backend.rows[key]['content'], before)
+        reviews = self.store.read('fake/event-review.jsonl')
+        self.assertTrue(any('Lan edited' in str(row.get('reason')) for row in reviews))
+
+    def test_timeline_pages_every_stage_and_shows_evidence(self):
+        for index in range(25):
+            self.native.events.record(f'Charcoal note part {index} on the desk, shared detail {index}.',
+                                      'The charcoal note', at=f'2026-11-20T{8 + index % 12:02d}:{index:02d}:00+08:00')
+        event_id = next(iter(self.native.events.events()))
+        first = self.native.events.timeline(event_id, offset=0, limit=10)
+        self.assertIsNotNone(first)
+        text, next_offset, total = first
+        self.assertEqual(total, 25)
+        self.assertEqual(next_offset, 10)
+        self.assertIn('stages 1-10 of 25', text)
+        last = self.native.events.timeline(event_id, offset=20, limit=10)
+        self.assertIsNone(last[1])
+        self.assertIn('stages 21-25 of 25', last[0])
+
+    def test_event_index_failure_leaves_a_resumable_pending_stage(self):
+        original = self.store.append
+        state = {'fail': True}
+
+        def append(path, event):
+            if state['fail'] and str(path).endswith('events.jsonl'):
+                raise OSError('fictional index failure')
+            return original(path, event)
+
+        self.store.append = append
+        result = self.native.events.record('She wrote meh on the charcoal note after the file list.',
+                                           'The charcoal note')
+        self.assertTrue(result.get('pending'))
+        self.assertEqual(len(self.native.events.stages()), 0)
+        state['fail'] = False
+        self.native.events.retry_pending()
+        self.assertEqual(len(self.native.events.stages()), 1)
+        self.assertEqual(len(self.native.events.events()), 1)
 
     def test_timeline_refuses_unknown_event(self):
         text, state, _ = self.native.invoke('memory_timeline', {'event_id': 'e-nope'})

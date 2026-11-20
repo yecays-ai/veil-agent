@@ -94,10 +94,12 @@ MEMORY_CATALOG = SimpleNamespace(name='memory_catalog', description=(
             'created_from': {'type': 'string', 'description': 'YYYY-MM-DD, inclusive.'},
             'created_to': {'type': 'string', 'description': 'YYYY-MM-DD, inclusive.'}}})
 MEMORY_TIMELINE = SimpleNamespace(name='memory_timeline', description=(
-    'Read one experience from start to end: its dates, every saved stage and the evidence behind it. '
-    'Use the event id from a saved-memory confirmation or from the related-events line; read only.'), inputSchema={
+    'Read one experience: the whole story, then its stages with evidence, one page at a time. '
+    'Pass next_offset from the previous answer to continue; read only.'), inputSchema={
     'type': 'object', 'required': ['event_id'], 'additionalProperties': False, 'properties': {
-        'event_id': {'type': 'string'}}})
+        'event_id': {'type': 'string'},
+        'offset': {'type': 'integer', 'minimum': 0},
+        'limit': {'type': 'integer', 'minimum': 1, 'maximum': 60}}})
 MEMORY_READ = SimpleNamespace(name='memory_read', description=(
     'Read an exact slice of a current visible memory, including its metadata. '
     'Pass its memory_id from memory_catalog and next_offset as offset until next_offset is null. '
@@ -303,7 +305,7 @@ class NativeMemoryTools:
         event_settings = (getattr(memory.cfg, 'memory', None) or {}).get('events')
         if isinstance(event_settings, dict) and event_settings.get('enabled'):
             from event_memory import EventMemory
-            self.events = EventMemory(memory, event_settings, model=self.model)
+            self.events = EventMemory(memory, event_settings, model=self.model, sidecar=self.sidecar)
             self.events.locked = self.sidecar.locked
         self.tools = [HOLD, SEARCH, *model_tools, MEMORY_HISTORY, MEMORY_CATALOG, MEMORY_READ,
                       *([MEMORY_TIMELINE] if self.events is not None else [])]
@@ -720,10 +722,12 @@ class NativeMemoryTools:
             return 'The event timeline is not available for this role.', '被拒绝', 'memory_timeline'
         if not isinstance(event_id, str) or not event_id.strip():
             return 'event_id is required.', '被拒绝', 'memory_timeline'
-        text = self.events.timeline(event_id.strip())
+        text = self.events.timeline(event_id.strip(), offset=args.get('offset') or 0,
+                                    limit=args.get('limit'))
         if not text:
             return 'No experience with that id; nothing was read.', '被拒绝', event_id[:40]
-        return text, '成功', event_id[:40]
+        rendered, next_offset, total = text
+        return rendered + f'\nnext_offset: {next_offset}' + ('' if next_offset is not None else f'\ntotal: {total}'), '成功', event_id[:40]
 
     def _history(self, args):
         memory_id = args.get('memory_id')
