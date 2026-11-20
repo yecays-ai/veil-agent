@@ -1,5 +1,15 @@
 # HANDOFF
 
+## 工单 406 交接（统一窗口枚举适配层）
+- 根因（只读诊断）：11-19 12:38 系统文件批量重写后，Python 的 UIA3 桌面根节点枚举（`CUIAutomation`/`CUIAutomation8` 都一样）只返回 0–1 个元素；同一时刻 .NET UIA2 返回 12 个、Win32 13 个、按 HWND 读正常。已排除权限、venv、comtypes 缓存、会话；是否由 `UIAutomationCore.dll` 版本错位引起未证实，本单不碰系统组件。
+- 改法：`windows_observer.WindowsDesktopBackend.list_windows` 用 `EnumWindows` 拿窗口与 HWND，`_windows_from_rows` 生成与原来完全相同的身份字段（`window_id` 公式没变）。读控件仍然只走 `ControlFromHandle(HWND)`，所以 `windows_observe`/`windows_control_action`/`windows_manage`/`windows_launch` 的代码一行没改就恢复了。
+- 卡死保护（评审后收紧）：桌面锁从 worker 移到调用线程；worker 超时被放弃后调用线程自己释放锁，并调用 `CancelSynchronousIo` 尽量让那个线程真的退出。放弃的线程按**是否还活着**计数（`_abandoned` 集合，最多 3 个），死掉的才移除；计数与熔断只作用于 `windows_observe`，`windows_list`/`windows_foreground` 是纯 Win32、永远不受影响；超时登记和 worker 的 finally 用同一把锁 + `done` 标记同步，避免“刚好在超时前结束”的竞态留下死记录；卡过的窗口按 `window_id` 熔断 600 秒，只跳这一个窗口。
+- POSIX：进程名改用 `PureWindowsPath(process_path).name`，否则 Ubuntu 的 CI 上 `Path('C:\\...\\notepad.exe').name` 会保留整条路径，受保护进程过滤失效。
+- QQ：`qq_channel._chat_window` 改用同一个适配层（按进程 + 标题 + 尺寸找 HWND，再 `ControlFromHandle`），不再碰桌面根节点。
+- 没动：权限分级、审批、日志、截图路径、系统组件；空标题窗口（桌面整理浮层、输入法助手）不再进列表，以前 UIA 也不列。
+- 验证：新增 6 个测试（Win32 行→身份、过滤、裸桌面、卡住释放、放弃上限、QQ 适配层）；`test_windows_observer`、`test_windows_interaction`、`test_qq_channel` 通过；全量套件见 PR 记录（已知既存失败：`test_reliability_closeout` 在 main 上同样失败）。
+- 待办：Lan 真机验收（ChatGPT/Chrome/QQ 可见、自主醒来能说前台、QQ 收发、已开软件不重复启动、卡住不卡死）。
+
 ## 工单 405 交接（剩下没登记的提示词全部上表）
 - 漏的原因两处：`prompts/inline.py` 的 `PROMPT_MODULES` 只有 12 个文件，`life_state.py` 不在里面；登记表里也没有 `gap_text` 那一段。所以「不必每轮提、她沉默可能是忙/在睡/不高兴」一直只存在于代码里，指令页看不到也改不了。
 - 评审后补的三处：①扫描范围改成自动发现——`inline.modules()` 收进所有 import `prompts` 的根目录模块；②`inline.builds_requests()` 按请求形状（role 消息 / messages= / tool_schemas）识别构造模型请求的模块，测试要求它们都在扫描集合里，这条当场抓到 executor_opencode / ombre_entry / windows_observer 三个漏网；③`registry.Entry.placeholders` + `store.save()` 必需占位符校验，删了不能保存并在页面说明原因。
