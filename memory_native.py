@@ -312,8 +312,7 @@ class NativeMemoryTools:
             # Startup recovery: finish a stage/event write interrupted last run even when the chat-tidy
             # feature is not configured at all. Lock checks must already be bound.
             try:
-                self.events.retry_pending()
-                self.events.retry_dirty()
+                self.events.dream_pass('startup')
             except Exception:
                 pass
         self.tools = [HOLD, SEARCH, *model_tools, MEMORY_HISTORY, MEMORY_CATALOG, MEMORY_READ,

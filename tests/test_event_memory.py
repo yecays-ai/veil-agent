@@ -371,6 +371,22 @@ class EventMemoryTests(unittest.TestCase):
         self.assertEqual(len(restarted.events.stages(event_id)), 2)
         self.assertEqual(len(self.backend.rows), 1)
 
+    def test_belief_changes_get_validity_dates_and_dream_state_is_recorded(self):
+        self.native.invoke('hold', {'content': 'She was quiet after the file list argument.',
+                                    'title': 'The quiet', 'interpretation': 'I thought she wanted space.'})
+        self.native.invoke('hold', {'content': 'Later she said the silence was not space but anger.',
+                                    'title': 'The quiet', 'interpretation': 'I learned it was anger, not space.'})
+        event = next(iter(self.native.events.events().values()))
+        beliefs = event.get('belief_history') or []
+        self.assertEqual(len(beliefs), 2)
+        self.assertTrue(beliefs[0].get('invalid_at'))
+        self.assertEqual(beliefs[0]['valid_from'], beliefs[0]['at'])
+        self.assertIsNone(beliefs[1].get('invalid_at'))
+        self.native.events.dream_pass('test')
+        state = self.native.events.dream_state()
+        self.assertEqual(state.get('status'), 'idle')
+        self.assertTrue((self.store.root / 'fake' / 'event-dream-report.jsonl').exists())
+
     def test_split_and_move_rebuild_both_events(self):
         for text in ('First part of the charcoal note day.',
                      'Second part of the charcoal note day.',

@@ -311,7 +311,7 @@ class EventMemory:
         # with the same stage_id instead of creating a duplicate.
         self.store.append(self.stages_path, {**stage, 'state': 'pending', 'event_row': event})
         story = self._story(event['event_id'], extra=stage)
-        story, story_source = self._write_story(self.stages(event['event_id']) + [stage], story)
+        story, story_source = self._write_story(self.stages(event['event_id']) + [stage], story, event)
         projection = self._projection(story)
         changed, locked = False, False
         memory_id = event.get('memory_id')
@@ -339,6 +339,7 @@ class EventMemory:
             'stage_count': len(self.stages(event['event_id'])) + 1,
             'story': story,
             'story_source': story_source,
+            'story_through': stage['at'],
             'belief_history': self._belief_history(event['event_id'], extra=stage),
             'related_to': self._related_events(event['event_id']),
             'confidence': confidence,
@@ -631,49 +632,65 @@ class EventMemory:
             lines.append(line)
         return '\n\n'.join(lines)
 
-    def _write_story(self, stages, fallback):
-        """A natural narrative from the stages, checked against their dates/numbers/files."""
+    def _write_story(self, stages, fallback, event=None):
+        """A natural narrative from the stages, checked against every stage's dates/numbers/files.
+
+        Normally this merges only the stages after `story_through` into the existing story (Graphiti's
+        saga watermark). Every eighth stage it re-derives from all stages so an old omission can return.
+        """
         if self.model is None or not stages:
             return fallback, 'composed'
-        beliefs = [{'at': stage.get('at'), 'belief': stage.get('interpretation')}
-                   for stage in stages if stage.get('interpretation')]
-        messages = [
-            {'role': 'system', 'content': prompts.text('memory.event.story')},
-            {'role': 'user', 'content': json.dumps({
-                'stages': [{'at': stage.get('at'), 'text': stage.get('text'),
-                             'his_reading': stage.get('interpretation')} for stage in stages],
-                'beliefs': beliefs}, ensure_ascii=False)[:16000]},
-        ]
+        existing = str((event or {}).get('story') or '')
+        through = str((event or {}).get('story_through') or '')
+        fresh = [stage for stage in stages if not through or str(stage.get('at') or '') > through]
+        if not fresh:
+            fresh = stages
+        full_rederive = not existing or len(stages) % 8 == 0
+        attempts = []
+        if existing and not full_rederive:
+            attempts.append(('merge', fresh, existing))
+        attempts.append(('full', stages, ''))
         story = ''
-        for attempt in range(2):
-            try:
-                request_cfg = replace(self.cfg, max_output_tokens=1200)
-                reservation = amount = None
-                if self.budget is not None and callable(getattr(self.budget, 'reserve', None)):
-                    reservation, amount = self.budget.reserve(request_cfg, accounting='event-story',
-                                                              category='event-story')
-                result = self.model(messages, max_tokens=1200, detail=True)
-                output = result[0] if isinstance(result, tuple) else result
-                if reservation is not None:
-                    try:
-                        prompt_tokens = int(result[1]) if isinstance(result, tuple) and len(result) > 1 else 0
-                        completion_tokens = int(result[2]) if isinstance(result, tuple) and len(result) > 2 else 0
-                        cached_tokens = int(result[3]) if isinstance(result, tuple) and len(result) > 3 else 0
-                        self.budget.settle(reservation, request_cfg, prompt_tokens, completion_tokens,
-                                           cached_tokens, accounting='event-story', category='event-story')
-                    except Exception:
-                        pass
-                story = (output or '').strip() if isinstance(output, str) else ''
-            except Exception:
-                story = ''
-            if not story:
-                break
-            missing = self._missing_facts(stages, story)
-            if not missing:
-                return story[:6000], 'model'
-            if attempt == 1:
-                break
-            messages.append({'role': 'user', 'content': 'Keep every one of these exactly: ' + ', '.join(missing[:20])})
+        for mode, source, previous in attempts:
+            prompt_id = 'memory.event.story.merge' if mode == 'merge' else 'memory.event.story'
+            messages = [
+                {'role': 'system', 'content': prompts.text(prompt_id)},
+                {'role': 'user', 'content': json.dumps({
+                    'existing_story': previous,
+                    'stages': [{'at': stage.get('at'), 'text': stage.get('text'),
+                                 'his_reading': stage.get('interpretation')} for stage in source],
+                    'beliefs': [{'at': stage.get('at'), 'belief': stage.get('interpretation'),
+                                 'valid_from': stage.get('at'), 'invalid_at': stage.get('invalid_at')}
+                                for stage in stages if stage.get('interpretation')]},
+                    ensure_ascii=False)[:16000]},
+            ]
+            for _ in range(2):
+                try:
+                    request_cfg = replace(self.cfg, max_output_tokens=1200)
+                    reservation = amount = None
+                    if self.budget is not None and callable(getattr(self.budget, 'reserve', None)):
+                        reservation, amount = self.budget.reserve(request_cfg, accounting='event-story',
+                                                                  category='event-story')
+                    result = self.model(messages, max_tokens=1200, detail=True)
+                    output = result[0] if isinstance(result, tuple) else result
+                    if reservation is not None:
+                        try:
+                            prompt_tokens = int(result[1]) if isinstance(result, tuple) and len(result) > 1 else 0
+                            completion_tokens = int(result[2]) if isinstance(result, tuple) and len(result) > 2 else 0
+                            cached_tokens = int(result[3]) if isinstance(result, tuple) and len(result) > 3 else 0
+                            self.budget.settle(reservation, request_cfg, prompt_tokens, completion_tokens,
+                                               cached_tokens, accounting='event-story', category='event-story')
+                        except Exception:
+                            pass
+                    story = (output or '').strip() if isinstance(output, str) else ''
+                except Exception:
+                    story = ''
+                if not story:
+                    break
+                missing = self._missing_facts(stages, story)
+                if not missing:
+                    return story[:6000], ('model+merge' if mode == 'merge' else 'model')
+                messages.append({'role': 'user', 'content': 'Keep every one of these exactly: ' + ', '.join(missing[:20])})
         return fallback, 'composed'
 
     @staticmethod
@@ -690,8 +707,12 @@ class EventMemory:
         history = []
         for stage in self.stages(event_id) + ([extra] if extra else []):
             belief = stage.get('interpretation')
-            if belief:
-                history.append({'at': stage.get('at'), 'belief': belief, 'stage_id': stage.get('stage_id')})
+            if not belief:
+                continue
+            if history and history[-1]['belief'] != belief:
+                history[-1]['invalid_at'] = stage.get('at')
+            history.append({'at': stage.get('at'), 'valid_from': stage.get('at'),
+                            'invalid_at': None, 'belief': belief, 'stage_id': stage.get('stage_id')})
         return history
 
     def _related_events(self, event_id):
@@ -892,6 +913,44 @@ class EventMemory:
                                           'stages': list(stage_ids), 'why': why})
         self.retry_dirty()
         return new_id
+
+    @_serialized
+    def dream_pass(self, why='tick'):
+        """agent-memory style claim/lease/watermark around recovery, so two ticks never run together."""
+        state_path = f'{self.cfg.id}/event-dream.json'
+        report_path = f'{self.cfg.id}/event-dream-report.jsonl'
+        now = datetime.now().astimezone()
+        try:
+            state = json.loads((self.store.root / state_path).read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            state = {}
+        lease = _when(state.get('lease_until'))
+        if state.get('status') == 'running' and lease and now < lease:
+            return 0
+        state.update({'status': 'running', 'lease_until': (now + timedelta(minutes=5)).isoformat(),
+                      'attempt': int(state.get('attempt') or 0) + 1, 'started_at': now.isoformat()})
+        self.store.replace(state_path, state)
+        try:
+            fixed = self.retry_pending() + self.retry_dirty() + self.auto_correct()
+            outcome = 'succeeded'
+            error = ''
+        except Exception as exc:
+            fixed, outcome, error = 0, 'failed', type(exc).__name__
+        end = datetime.now().astimezone()
+        state.update({'status': 'idle', 'lease_until': None, 'last_run_at': end.isoformat(),
+                      'last_outcome': outcome, 'last_fixed': fixed, 'last_error': error,
+                      'covered_through': str((max((event.get('last_at') or '' for event in self.events().values()),
+                                                   default='')))})
+        self.store.replace(state_path, state)
+        self.store.append(report_path, {'at': end.isoformat(), 'why': why, 'outcome': outcome,
+                                        'fixed': fixed, 'error': error})
+        return fixed
+
+    def dream_state(self):
+        try:
+            return json.loads((self.store.root / f'{self.cfg.id}/event-dream.json').read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            return {}
 
     @_serialized
     def auto_correct(self):
