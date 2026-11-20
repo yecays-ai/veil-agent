@@ -26,6 +26,22 @@ class LearnedContextTests(unittest.TestCase):
         self.assertEqual(data['ongoing']['items'], [])
         self.assertTrue((self.root / 'test' / 'learned-context.json').exists())
 
+    def test_append_and_replace_report_a_three_value_success(self):
+        # Ticket 409: the save path returned a 1-tuple, so the caller's three-value unpack
+        # raised and every successful save was reported as invalid JSON.
+        result, state, name = self.ctx.invoke(
+            'profile_append', {'text': 'She hates being managed.', 'section': 'growth'})
+        self.assertEqual((state, name), ('成功', 'profile_append'))
+        self.assertIn('Saved.', result)
+
+        result, state, name = self.ctx.invoke(
+            'profile_replace', {'old_text': 'She hates being managed.',
+                                'new_text': 'She hates being managed, not being cared for.',
+                                'section': 'growth'})
+        self.assertEqual((state, name), ('成功', 'profile_replace'))
+        self.assertIn('Saved.', result)
+        self.assertIn('not being cared for', self.ctx.read()['growth']['text'])
+
     def test_stable_and_dynamic_blocks(self):
         self.ctx.invoke('profile_append', {'text': 'When she is angry, do not explain like a report.',
                                            'section': 'growth'})
