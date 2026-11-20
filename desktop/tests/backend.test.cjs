@@ -130,5 +130,11 @@ test('Peter page API is allowed for the main and detached window', async () => {
   assert.equal(allowed('/api/instructions', 'GET'), true);
   assert.equal(allowed('/api/instructions', 'POST'), true);
   assert.equal(allowed('/api/instructions?x=1', 'GET'), false);
+  assert.equal(allowed('/api/request-snapshots', 'GET'), true);
+  assert.equal(allowed('/api/request-snapshots?limit=12', 'GET'), true);
+  assert.equal(allowed('/api/request-snapshots?x=1', 'GET'), false);
+  assert.equal(allowed('/api/request-snapshot?id=abc', 'GET'), true);
+  assert.equal(allowed('/api/request-snapshot?message_id=abc', 'GET'), true);
+  assert.equal(allowed('/api/request-snapshot?x=1', 'GET'), false);
   assert.equal(allowed('/api/not-peter', 'GET'), false);
 });

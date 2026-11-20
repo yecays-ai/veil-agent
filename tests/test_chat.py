@@ -64,6 +64,54 @@ output_cny_per_million = "8"
         self.model = Mock(return_value=('A fictional reply', 100, 20, 10))
         self.chat = Chat(self.cfg, self.store, self.budget, self.model)
 
+    def test_send_writes_a_request_snapshot_with_labels(self):
+        import request_snapshots
+        self.chat.send('first message')
+        self.chat.send('hello snapshot')
+        items = request_snapshots.recent(self.store.root, 'test')
+        self.assertTrue(items)
+        record = request_snapshots.get(self.store.root, 'test', items[0]['request_id'])
+        self.assertEqual(record['blocks'][0]['label'], 'identity.persona')
+        self.assertEqual(record['blocks'][-1]['role'], 'user')
+        self.assertTrue(any(block['label'] == 'history' for block in record['blocks']))
+        self.assertGreaterEqual(record['cache_prefix'], 1)
+
+    def test_tool_loop_snapshot_records_every_model_request(self):
+        import request_snapshots
+        tool_call = SimpleNamespace(id='digest-call', function=SimpleNamespace(
+            name='lab_file_digest', arguments='{"path":"lab/sample.txt"}'))
+        first = SimpleNamespace(content=None, tool_calls=[tool_call],
+            model_dump=lambda exclude_none=True: {'role': 'assistant', 'content': None,
+                'tool_calls': [{'id': 'digest-call', 'type': 'function', 'function': {
+                    'name': 'lab_file_digest', 'arguments': '{"path":"lab/sample.txt"}'}}]})
+        final = SimpleNamespace(content='Digest complete.', tool_calls=[],
+            model_dump=lambda exclude_none=True: {'role': 'assistant', 'content': 'Digest complete.'})
+        files = SimpleNamespace(tools=[SimpleNamespace(name='lab_file_digest',
+            description='Return byte length and SHA-256 metadata for one regular file inside lab only.',
+            inputSchema={'type': 'object', 'properties': {'path': {'type': 'string'}}})],
+            description='Fictional Lab tool.', startup_notice=None, enabled=True, client=object(),
+            capability_event=None, capability_event_model=None, capability_record=None,
+            consume_capability_event=Mock())
+        tools = SimpleNamespace(tools=files.tools, files=files, description=files.description,
+            capability_event=None, capability_event_model=None, capability_record=None,
+            consume_capability_event=Mock(), invoke=Mock(return_value=('digest metadata', '成功', 'lab/sample.txt')))
+        chat = Chat(replace(self.cfg, tools={'enabled': True, 'max_steps': 3}),
+                    self.store, self.budget, Mock(), tools=tools, output=lambda _: None)
+        chat.model.side_effect = [(first, 100, 20, 0), (final, 120, 5, 0)]
+        chat.send('Please calculate the fictional Lab file digest.')
+
+        rows = request_snapshots.recent(self.store.root, 'test')
+        self.assertTrue(rows)
+        bundle = request_snapshots.for_request(self.store.root, 'test', rows[0]['request_id'])
+        self.assertGreaterEqual(len(bundle['steps']), 2)
+        self.assertEqual(bundle['steps'][0]['step'], 1)
+        last = bundle['steps'][-1]
+        self.assertTrue(any(block['label'] == 'tool_result' for block in last['blocks']))
+        self.assertTrue(last['tools'])
+        reply = next(row for row in self.store.read(chat.path)
+                     if row.get('message_id') == chat.last_reply_message_id)
+        self.assertEqual(reply['request_id'], rows[0]['request_id'])
+
     def test_saved_raw_text_and_reopened_context(self):
         self.chat.send('虚构的中文消息')
         reopened = Chat(self.cfg, self.store, self.budget, self.model)

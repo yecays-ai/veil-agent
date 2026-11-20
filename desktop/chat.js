@@ -630,12 +630,12 @@ function showMessageActions(event,node){
   const actions=voice?[
     ['transcribe',transcript&&!transcript.hidden?'Hide text':'Transcribe','file-text',!transcript?.textContent.trim()],
     ['favorite',favorite?'Unfavorite':'Favorite','star',false],['download','Download','download',!node.dataset.mediaFilename],
-    ['delete','Delete','trash',false],...(user?[['recall','Recall','undo',!recallAllowed(node)]]:[])
+    ['request','This request','eye',false],['delete','Delete','trash',false],...(user?[['recall','Recall','undo',!recallAllowed(node)]]:[])
   ]:[
     ['copy','Copy','copy',!(node.dataset.messageText||'').trim()||!!node.dataset.mediaFilename],
     ['edit','Edit','pencil',node.classList.contains('virtual-card-message')||!((node.dataset.messageText||'').trim())||!!node.dataset.mediaFilename],
     ['quote','Quote','quote',!(node.dataset.messageText||'').trim()],
-    ['memory','Memory','brain',user],['select','Select','select',false],
+    ['memory','Memory','brain',user],['request','This request','eye',false],['select','Select','select',false],
     [user?'recall':'favorite',user?'Recall':(favorite?'Unfavorite':'Favorite'),user?'undo':'star',user&&!recallAllowed(node)],
     ['delete','Delete','trash',false],['regenerate','Regenerate','rotate-ccw',user||!canRegenerateMessage(node)]
   ];
@@ -661,6 +661,7 @@ function showMessageActions(event,node){
       }
       if(action==='quote'){closeMessageActions();quoteMessage(node);return}
       if(action==='memory'){closeMessageActions();showMessageMemory(node);return}
+      if(action==='request'){closeMessageActions();openSnapshotForMessage(node.dataset.messageId);return}
       if(action==='select'){closeMessageActions();multiSelect=true;selectedMessageIds.add(node.dataset.messageId);updateSelectionBar();refreshMessageSelection();return}
       if(action==='download'){
         const filename=node.dataset.mediaFilename;closeMessageActions();
@@ -2211,6 +2212,133 @@ async function loadInstructions(){
     renderInstructions(data);
   }catch(error){$('instructions-status').textContent='读取失败：'+error.message}
 }
+let instructionsTab='list',snapshotBundle=null,snapshotStepIndex=-1;
+function setInstructionsTab(tab){
+  instructionsTab=tab==='snapshots'?'snapshots':'list';
+  const list=$('instructions-pane-list'),snaps=$('instructions-pane-snapshots');
+  if(list)list.hidden=instructionsTab!=='list';
+  if(snaps)snaps.hidden=instructionsTab!=='snapshots';
+  const listTab=$('instr-tab-list'),snapTab=$('instr-tab-snapshots');
+  if(listTab){listTab.classList.toggle('active',instructionsTab==='list');listTab.setAttribute('aria-selected',String(instructionsTab==='list'))}
+  if(snapTab){snapTab.classList.toggle('active',instructionsTab==='snapshots');snapTab.setAttribute('aria-selected',String(instructionsTab==='snapshots'))}
+  if(instructionsTab==='snapshots')loadSnapshots();
+}
+function snapshotKind(kind){return {chat:'聊天',autonomy:'自主活动',glance:'瞄一眼',qq:'QQ',codex:'Codex'}[kind]||kind||'请求'}
+async function loadSnapshots(){
+  const box=$('snapshot-list');if(!box)return;
+  try{
+    const response=await api('/api/request-snapshots?limit=12');const data=await response.json();
+    if(!response.ok){box.textContent='读取失败：'+((data&&data.error)||response.status);return}
+    box.replaceChildren();
+    const items=Array.isArray(data.items)?data.items:[];
+    if(!items.length){const p=document.createElement('p');p.className='muted';p.textContent='还没有快照；更新后发一句话就会生成。';box.appendChild(p);return}
+    for(const item of items){
+      const button=document.createElement('button');button.type='button';button.className='snapshot-row';
+      const kind=document.createElement('strong');kind.textContent=snapshotKind(item.kind);
+      const when=document.createElement('span');when.textContent=shortTime(item.created_at)||item.created_at||'';
+      const model=document.createElement('span');model.textContent=item.model||'';
+      const extra=[];
+      extra.push(Number(item.steps||1)+' 次请求');
+      extra.push('约 '+Number(item.estimated_tokens||0)+' token');
+      if(item.truncated_blocks)extra.push('截断 '+item.truncated_blocks+' 段');
+      if(item.redacted)extra.push('打码 '+item.redacted+' 处');
+      const size=document.createElement('span');size.textContent=extra.join(' · ');
+      button.append(kind,when,model,size);
+      button.onclick=()=>openSnapshot(item.request_id);
+      box.appendChild(button);
+    }
+  }catch(error){box.textContent='读取失败：'+error.message}
+}
+async function openSnapshot(requestId,messageId){
+  const url=messageId?('/api/request-snapshot?message_id='+encodeURIComponent(messageId)):('/api/request-snapshot?id='+encodeURIComponent(requestId||''));
+  try{
+    const response=await api(url);const data=await response.json();
+    if(!response.ok){notify((data&&data.error)||'没有这一轮的快照','error');return false}
+    snapshotBundle=data;snapshotStepIndex=(data.steps||[]).length-1;
+    renderSnapshot();return true;
+  }catch(error){notify('读取快照失败：'+error.message,'error');return false}
+}
+function renderSnapshot(){
+  const box=$('snapshot-detail'),bundle=snapshotBundle;if(!box||!bundle)return;
+  box.hidden=false;box.replaceChildren();
+  const steps=Array.isArray(bundle.steps)?bundle.steps:[];
+  if(!steps.length){const p=document.createElement('p');p.className='muted';p.textContent='这一轮没有记录。';box.appendChild(p);return}
+  const index=Math.max(0,Math.min(snapshotStepIndex,steps.length-1));
+  const record=steps[index];
+  const head=document.createElement('article');head.className='surface snapshot-head';
+  const title=document.createElement('h3');title.textContent=snapshotKind(record.kind)+' · '+(shortTime(record.created_at)||record.created_at||'');
+  const meta=document.createElement('p');meta.className='muted';
+  meta.textContent=(record.model||'')+' · 约 '+Number(record.estimated_tokens||0)+' token · 第 '+(index+1)+'/'+steps.length+' 次请求'+(record.trim_note?'　'+record.trim_note:'');
+  head.append(title,meta);
+  if((record.memory_ids||[]).length){
+    const ids=document.createElement('p');ids.className='muted';
+    ids.textContent='自动想起的记忆：'+record.memory_ids.length+' 条（'+record.memory_ids.slice(0,6).join('、')+'）';
+    head.appendChild(ids);
+  }
+  const range=document.createElement('p');range.className='snap-range';
+  const cut=Number(record.truncated_blocks||0),hidden=Number(record.redacted||0);
+  const tools=Array.isArray(record.tools)?record.tools:[];
+  const parts=[];
+  parts.push(record.complete?'正文与工具定义都记录了':'有内容被截断或省略'+(cut?'（'+cut+' 段）':''));
+  parts.push(hidden?('敏感串打码 '+hidden+' 处（打码处不可还原）'):'没有发现需要打码的敏感串');
+  parts.push('工具定义 '+tools.length+' 个 · '+(Math.round(Number(record.tools_bytes||0)/1024*10)/10)+' KB'+(record.tools_complete?'':'（参数过大，已省略）'));
+  range.textContent='记录范围：'+parts.join('；');
+  head.appendChild(range);
+  box.appendChild(head);
+  if(steps.length>1){
+    const tabs=document.createElement('div');tabs.className='snapshot-steps';
+    steps.forEach((step,stepIndex)=>{
+      const button=document.createElement('button');button.type='button';
+      button.className=stepIndex===index?'active':'';
+      const calls=(step.blocks||[]).filter(block=>block.role==='tool').length;
+      button.textContent='第 '+(stepIndex+1)+' 次'+(stepIndex>0&&calls?' · '+calls+' 个工具返回':'');
+      button.onclick=()=>{snapshotStepIndex=stepIndex;renderSnapshot()};
+      tabs.appendChild(button);
+    });
+    box.appendChild(tabs);
+  }
+  if(tools.length){
+    const toolsBox=document.createElement('details');toolsBox.className='snap-tools';
+    const summary=document.createElement('summary');summary.textContent='这一轮发给模型的工具定义 · '+tools.length+' 个';
+    toolsBox.appendChild(summary);
+    for(const tool of tools){
+      const item=document.createElement('details');item.className='snap-tool';
+      const line=document.createElement('summary');line.textContent=tool.name||'';
+      item.appendChild(line);
+      const pre=document.createElement('pre');pre.className='instr-text';
+      pre.textContent='说明：'+(tool.description||'（空）')+'\n参数：'+JSON.stringify(tool.parameters||{},null,1);
+      item.appendChild(pre);toolsBox.appendChild(item);
+    }
+    box.appendChild(toolsBox);
+  }
+  if(index===0&&Array.isArray(record.blocks)&&record.blocks.length){
+    // step 1 carries the stable prefix; later steps repeat it, so the marker is shown once
+  }
+  const blocks=Array.isArray(record.blocks)?record.blocks:[];
+  blocks.forEach((block,blockIndex)=>{
+    if(blockIndex===Number(record.cache_prefix||0)){
+      const line=document.createElement('p');line.className='snap-boundary';
+      line.textContent='── 以上是固定前缀（会命中缓存）；以下是这一轮的历史与临时内容 ──';
+      box.appendChild(line);
+    }
+    const details=document.createElement('details');details.className='snap-block';
+    const summary=document.createElement('summary');
+    const label=document.createElement('strong');label.textContent='#'+(blockIndex+1)+' '+block.title;
+    const meta2=document.createElement('span');meta2.className='muted';
+    meta2.textContent=' '+block.role+' · '+block.chars+' 字'+(block.label?' · '+block.label:'')+(block.truncated?' · 已截断':'');
+    summary.append(label,meta2);details.appendChild(summary);
+    const pre=document.createElement('pre');pre.className='instr-text';pre.textContent=block.text||'（空）';details.appendChild(pre);
+    if(block.role==='user')details.open=true;
+    box.appendChild(details);
+  });
+}
+async function openSnapshotForMessage(messageId){
+  setPage('instructions');setInstructionsTab('snapshots');
+  await openSnapshot(null,messageId);
+}
+$('instr-tab-list').onclick=()=>setInstructionsTab('list');
+$('instr-tab-snapshots').onclick=()=>setInstructionsTab('snapshots');
+
 $('instructions-search').addEventListener('input',event=>{
   instructionsQuery=String(event.target.value||'').trim().toLocaleLowerCase();
   instructionsOpen='';instructionsEditing='';

@@ -31,6 +31,9 @@ test('chat shell exposes appearance CSS, custom background, global and per-page 
   assert.match(html, /id="activity-history"/);
   assert.match(html, /data-page-view="life"/);
   assert.match(html, /data-page-view="instructions"/);
+  assert.match(html, /id="instr-tab-snapshots"/);
+  assert.match(html, /id="instructions-pane-snapshots"/);
+  assert.match(js, /\/api\/request-snapshots\?limit=/);
   assert.match(main, /\/api\/instructions/);
   assert.match(js, /api\('\/api\/life'/);
   assert.match(html, /id="memory-list"/);

@@ -1934,9 +1934,12 @@ def request_byte_size(messages, tools=None):
 
 def estimate_message_tokens(messages, calibration):
     ratio = max(0.15, min(1.0, calibration))
-    image_count = sum(1 for message in messages if isinstance(message, dict)
-                      for part in message.get('content', []) if isinstance(message.get('content'), list)
-                      and isinstance(part, dict) and part.get('type') == 'image_url')
+    image_count = 0
+    for message in messages:
+        content = message.get('content') if isinstance(message, dict) else None
+        if isinstance(content, list):
+            image_count += sum(1 for part in content
+                               if isinstance(part, dict) and part.get('type') == 'image_url')
     message_bytes = sum(message_request_bytes(message) for message in messages)
     text_bytes = max(0, message_bytes - image_count * 8192)
     return math.ceil(text_bytes * ratio + image_count * 4096)
@@ -3992,26 +3995,34 @@ class Chat:
         # comes first, then the chat history, then what changes every request (recalled memories,
         # capability notice, time and ledger) right before the user's message.
         head = [{'role': 'system', 'content': self.cfg.persona}]
+        # Ticket 403: source labels for the request snapshot, kept by object identity so trimming can drop blocks.
+        labels = {}
+        labels[id(head[0])] = 'identity.persona'
         # Ticket 394: Lan's own persona sits next to Peter's; it is not his notes about her.
         user_persona_message = self.user_persona.context() if getattr(self, 'user_persona', None) else None
         if user_persona_message:
             head.append(user_persona_message)
+            labels[id(user_persona_message)] = 'identity.user'
         # Ticket 355: how he talks sits right after the persona; it changes only when Lan edits it.
         voice_message = self.voice_style.context() if getattr(self, 'voice_style', None) else None
         if voice_message:
             head.append(voice_message)
+            labels[id(voice_message)] = 'voice.frame'
         # Ticket 096: the role's own notes about the user sit right after the persona. They change
         # only when edited, so the cached prefix holds between edits.
         profile_context = self.profile.context() if self.profile else None
         if profile_context:
             head.append({'role': 'system', 'content': profile_context})
+            labels[id(head[-1])] = 'memory.learned'
         head.append({'role': 'system', 'content': stable})
+        labels[id(head[-1])] = 'system.facts'
         # Ticket 354: his own notes on the last few days sit after the cached prefix and before the
         # history. They change only when a new note is written (a few times a day at most).
         experience_message = (self.experience.context()
                               if getattr(self, 'experience', None) and not skip_recall else None)
         if experience_message:
             head.append(experience_message)
+            labels[id(experience_message)] = 'memory.experience'
         tool_schema = self.current_request_tool_schemas()
         self._active_capability_schemas = tool_schema
         # Tool definitions already tell the model what it can use. Peter gets the one-time update
@@ -4055,40 +4066,49 @@ class Chat:
         from recent_experiences import recent_experience_context
         experiences = recent_experience_context(self.store, self.cfg)
         if experiences:
-            runtime_auxiliary.append({'role': 'system', 'content': experiences})
+            runtime_auxiliary.append(('recent_experiences', {'role': 'system', 'content': experiences}))
         if extra_context and not reply_later_batch:
-            runtime_auxiliary.append({'role': 'system', 'content': extra_context})
+            runtime_auxiliary.append(('extra', {'role': 'system', 'content': extra_context}))
         from screen_pop import screen_pop_history_context
         screen_pop_context = screen_pop_history_context(self.store, self.cfg)
         if screen_pop_context:
-            runtime_auxiliary.append({'role': 'system', 'content': screen_pop_context})
+            runtime_auxiliary.append(('screen_pop', {'role': 'system', 'content': screen_pop_context}))
         if return_activity and not reply_later_batch:
-            runtime_auxiliary.append({'role': 'system', 'content': return_activity})
+            runtime_auxiliary.append(('return_activity', {'role': 'system', 'content': return_activity}))
 
-        auxiliary_context = [
-            *([work_context] if work_context else []),
-            *([checkpoint_context] if checkpoint_context else []),
-            *([background_message] if background_message else []),
-            *([short_term_message] if short_term_message else []),
-            *([recall_context_msg] if recall_context_msg else []),
-            *([card_context_msg] if card_context_msg else []),
+        auxiliary_pairs = [
+            *([('work_checkpoint', work_context)] if work_context else []),
+            *([('investigation_checkpoint', checkpoint_context)] if checkpoint_context else []),
+            *([('background', background_message)] if background_message else []),
+            *([('memory.short_notes', short_term_message)] if short_term_message else []),
+            *([('recall_candidates', recall_context_msg)] if recall_context_msg else []),
+            *([('virtual_cards', card_context_msg)] if card_context_msg else []),
             *runtime_auxiliary,
         ]
+        auxiliary_context = []
+        for label, message in auxiliary_pairs:
+            labels[id(message)] = label
+            auxiliary_context.append(message)
 
         runtime_required = []
         if isinstance(self.pending_capability_event_model, str) and self.pending_capability_event_model and not autonomy:
             runtime_required.append({'role': 'system', 'content':
                 'Program-generated capability update: ' + self.pending_capability_event_model})
+            labels[id(runtime_required[-1])] = 'capability_event'
         mcp_problem = self.mcp_services.problem_note() if (self.cfg.tools or {}).get('enabled', True) else None
         if isinstance(mcp_problem, str) and mcp_problem:  # ticket 343: only while an MCP service is down or just recovered
             runtime_required.append({'role': 'system', 'content': mcp_problem})
+            labels[id(runtime_required[-1])] = 'mcp_problem'
         if getattr(self, 'profile', None) and hasattr(self.profile, 'dynamic_context'):
             ongoing_message = self.profile.dynamic_context()
             if ongoing_message:
                 runtime_required.append({'role': 'system', 'content': ongoing_message})
+                labels[id(runtime_required[-1])] = 'memory.ongoing'
         if reply_later_batch and extra_context:
             runtime_required.append({'role': 'system', 'content': extra_context})
+            labels[id(runtime_required[-1])] = 'extra'
         runtime_required.append({'role': 'system', 'content': changing})
+        labels[id(runtime_required[-1])] = 'time_ledger'
 
         user = {'role': 'user', 'content': self._photo_content(text, media)}
         observed_ratio = self.budget.input_token_ratio(self.cfg)
@@ -4106,6 +4126,8 @@ class Chat:
             return estimate_request_tokens([*head, *h, *curr_tail, user], tool_schema, calibration)
 
         history = [dict(message) for message in self.history]
+        for message in history:
+            labels[id(message)] = 'history'
         from life_state import time_separator
         for index, row in enumerate(self.history_events[:len(history)]):
             if index and (separator := time_separator(self.history_events[index - 1].get('time'), row.get('time'))):
@@ -4174,8 +4196,25 @@ class Chat:
             self.trim_note = (f'（长度估算：本轮只带最近 {kept} 轮原文；分项 tokens：'
                               + '、'.join(usage) + f'；上限 {limit}。完整聊天仍保存在本机。）')
 
+        for message in recalled_memories:
+            content = message.get('content')
+            opening = isinstance(content, str) and content.startswith(prompts.text('memory.opening.head'))
+            labels[id(message)] = 'memory.opening' if opening else 'memory.recalled'
+        labels[id(user)] = 'user'
         tail = [*auxiliary_context, *recalled_memories, *runtime_required]
         messages = [*head, *history, *tail, user]
+        # Ticket 403: the source label of every block, for the request snapshot.
+        label_list = []
+        history_start = len(head)
+        history_end = history_start + len(history)
+        for index, message in enumerate(messages):
+            label = labels.get(id(message))
+            if not label:
+                if history_start <= index < history_end:
+                    label = 'history'
+                elif index == len(messages) - 1:
+                    label = 'user'
+            label_list.append(label or '')
         tool_summaries = []
         with saving():
             tool_cfg = (replace(self.cfg, max_output_tokens=(self.cfg.tools or {}).get(
@@ -4208,6 +4247,43 @@ class Chat:
         self._log_context(text, autonomy, request_id, head, profile_context, stable, history, recalled_memories,
                           background_details, short_term_details, [*auxiliary_context, *runtime_required], tool_schema, user,
                           bound(history))
+        # Ticket 403: one snapshot per real model request (a turn with tools has several). Writes never
+        # feed back into the request and never break it.
+        import request_snapshots
+        snapshot_kind = request_kind(self, text, autonomy)
+        system_labels = [label_list[index] for index, message in enumerate(messages)
+                         if message.get('role') == 'system' and label_list[index]]
+
+        def snapshot_labels(sent_messages):
+            result = []
+            seen_systems = 0
+            for message in sent_messages:
+                role = message.get('role')
+                label = labels.get(id(message))
+                if not label and role == 'system':
+                    label = system_labels[seen_systems] if seen_systems < len(system_labels) else 'runtime'
+                if not label:
+                    label = {'assistant': 'assistant', 'tool': 'tool_result',
+                             'user': 'user'}.get(role, '')
+                if role == 'system':
+                    seen_systems += 1
+                result.append(label or '')
+            return result
+
+        def snapshot_step(step, sent_messages, sent_tools):
+            try:
+                request_snapshots.save(self.store.root, self.cfg.id, request_snapshots.build(
+                    sent_messages, snapshot_labels(sent_messages), request_id=request_id, step=step,
+                    kind=snapshot_kind, model=self.cfg.provider.get('model'), message_ids=mids,
+                    autonomy_run_id=getattr(self, 'autonomy_run_id', None),
+                    estimated_tokens=estimate_request_tokens(sent_messages, sent_tools, calibration),
+                    cache_prefix=len(head), trim_note=self.trim_note or '',
+                    memory_ids=getattr(self, 'turn_memory_refs', []), tools=sent_tools,
+                    created_at=now()))
+            except Exception:
+                pass
+
+        snapshot_step(1, messages, tool_schema)
         save_debug = getattr(self.memory, 'save_recall_debug', None) if self.memory is not None else None
         if callable(save_debug) and not skip_recall:
             # Ticket 391: IDs only, no query or memory text; the panel reads this next to the context log.
@@ -4220,6 +4296,7 @@ class Chat:
             self.last_self = description
             if self.tool_mode:
                 reply, tool_summaries = self._tool_chat(messages, request_id, len(history), len(head),
+                                                        snapshot=snapshot_step,
                                                         autonomy=autonomy,
                                                         checkpoint_goal=self.investigation.goal_for(text),
                                                         checkpoint_resuming=bool(resume_context))
@@ -4825,7 +4902,7 @@ class Chat:
         log_tool(name, execution.summary, execution.state, **verified, **delivery)
 
     def _tool_chat(self, messages, request_id, history_count, history_start=None, autonomy=False,
-                   checkpoint_goal='', checkpoint_resuming=False):
+                   checkpoint_goal='', checkpoint_resuming=False, snapshot=None):
         from tools_agent import display_call, reasoning_text
         from windows_interaction import WINDOWS_DESKTOP_TOOL_NAMES
         from windows_observer import observation_image_message
@@ -4833,6 +4910,17 @@ class Chat:
         self.last_tool_summaries = summaries
         self._trace_request_id, self._trace_started = request_id, time.monotonic()
         loop_messages = list(messages)
+        snapshot_step_no = 1
+
+        def take_snapshot(sent_messages, sent_tools):
+            nonlocal snapshot_step_no
+            snapshot_step_no += 1
+            if snapshot:
+                try:
+                    snapshot(snapshot_step_no, sent_messages, sent_tools)
+                except Exception:
+                    pass
+
         pending_image_messages = []
         ephemeral_image_bindings = []
         if history_start is None:
@@ -5226,6 +5314,7 @@ class Chat:
             reservation = request_id if step == 0 else next_reservation
             sent_bytes = request_bytes(offered)
             model_messages = alias_system_messages(loop_messages, self.tool_aliases)
+            take_snapshot(model_messages, offered)
             self.budget.mark_dispatched(reservation)
             try:
                 response = self._model_call(model_messages, tools=offered, message_output=True,
@@ -5302,6 +5391,7 @@ class Chat:
                     })
                     sent_bytes = request_bytes(offered)
                     model_messages = alias_system_messages(loop_messages, self.tool_aliases)
+                    take_snapshot(model_messages, offered)
                     self.budget.mark_dispatched(reservation)
                     try:
                         response = self._model_call(model_messages, tools=offered, message_output=True,

@@ -1,5 +1,14 @@
 # HANDOFF
 
+## 工单 403 交接（请求快照）
+- 新增 `request_snapshots.py`：每次真实模型请求一份 JSON（`<request_id>.<step>.json`），含来源标签、缓存前缀、估算 token、召回 id、工具定义、截断与打码计数；按 request 分组保留 40 轮；写失败静默。
+- 消息定位：先用 `chat.jsonl` 的 `request_id` 找轮次，再返回该轮全部 step；回复与 send_message 气泡都可定位。
+- `Chat._send` 在组装完、发送前写快照；标签按对象身份记录，裁剪后仍对得上。
+- 接口 `GET /api/request-snapshots` / `GET /api/request-snapshot?id=|message_id=`；桌面白名单已放行。
+- 「指令」页新增「请求快照」页签；消息菜单新增 This request。
+- 验证：Playwright 截图核对；python 116 个相关测试、桌面 21 个通过。
+- 待办：Lan 审阅后合并；④ 自动检查与长期维护收尾。
+
 ## 工单 402 交接（指令全部归位，工具说明按类管理）
 - 新增 `prompts/tools.py`：`persona/instructions/tool.<名字>.md` 覆盖任意工具说明，按目录 mtime 缓存；
   `Chat.tool_schemas(full=True)` 返回全部工具（含隐藏组）供页面列出；保存走 `POST /api/instructions`（id=`tool.<名字>`）。

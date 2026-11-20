@@ -2352,6 +2352,10 @@ def make_handler(hub, token):
                 self._get_peter_page()
             elif url.path == '/api/instructions':
                 self._get_instructions()
+            elif url.path == '/api/request-snapshots':
+                self._get_request_snapshots(query)
+            elif url.path == '/api/request-snapshot':
+                self._get_request_snapshot(query)
             elif url.path == '/api/pending-approvals':
                 if not self._guard(self.headers.get('X-Token')):
                     return
@@ -2752,12 +2756,59 @@ def make_handler(hub, token):
             self._send(200, self._windows_apps_view(path, interaction))
 
         def _get_instructions(self):
+            if not self._guard(self.headers.get('X-Token')):
+                return
             try:
                 self._send(200, hub.instructions_page())
             except UserError as exc:
                 self._send(400, {'error': str(exc)})
             except OSError as exc:
                 self._send(500, {'error': f'读取指令清单失败：{exc}'})
+
+        def _get_request_snapshots(self, query):
+            if not self._guard(self.headers.get('X-Token')):
+                return
+            import request_snapshots
+            chat = hub.chat
+            if chat is None:
+                self._send(503, {'error': '服务还没准备好。'})
+                return
+            raw = (query.get('limit') or ['12'])[0]
+            limit = max(1, min(40, int(raw))) if str(raw).isdigit() else 12
+            self._send(200, {'items': request_snapshots.recent(chat.store.root, chat.cfg.id, limit)})
+
+        def _get_request_snapshot(self, query):
+            if not self._guard(self.headers.get('X-Token')):
+                return
+            import request_snapshots
+            chat = hub.chat
+            if chat is None:
+                self._send(503, {'error': '服务还没准备好。'})
+                return
+            request_id = (query.get('id') or [''])[0]
+            message_id = (query.get('message_id') or [''])[0]
+            if message_id and not request_id:
+                request_id = ''
+                try:
+                    rows = chat.store.read_tail(chat.path, 400)
+                except (OSError, UserError):
+                    rows = chat.store.read(chat.path)
+                for row in reversed(rows):
+                    if (isinstance(row, dict) and row.get('message_id') == message_id
+                            and isinstance(row.get('request_id'), str) and row['request_id']):
+                        request_id = row['request_id']
+                        break
+                if not request_id:
+                    self._send(404, {'error': '这条消息没有关联的请求快照。'})
+                    return
+            elif not request_id:
+                self._send(400, {'error': '缺少 id 或 message_id。'})
+                return
+            bundle = request_snapshots.for_request(chat.store.root, chat.cfg.id, request_id)
+            if not bundle:
+                self._send(404, {'error': '还没有这一轮的快照；更新后发一句话就会生成。'})
+                return
+            self._send(200, bundle)
 
         def _post_instructions(self, body):
             try:

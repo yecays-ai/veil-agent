@@ -308,7 +308,7 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   await wait(() => chat.webContents.executeJavaScript(`document.querySelector('${userVoiceText}').textContent === "fictional voice transcript"`), async () => 'background transcription status missing: ' + JSON.stringify(events) + await chat.webContents.executeJavaScript('document.body.textContent.slice(-700)'));
   await chat.webContents.executeJavaScript(`document.querySelector('${userVoiceWrap}').dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,clientX:80,clientY:80}))`);
   assert.deepEqual(await chat.webContents.executeJavaScript('[...document.querySelectorAll(".chat-message-actions .chat-action-item")].map(button=>button.textContent.trim())'),[
-    'Transcribe','Favorite','Download','Delete','Recall'
+    'Transcribe','Favorite','Download','This request','Delete','Recall'
   ]);
   await chat.webContents.executeJavaScript(`document.querySelector('.chat-message-actions .chat-action-item').click()`);
   assert.equal(await chat.webContents.executeJavaScript(`document.querySelector('${userVoiceText}').hidden`),false);

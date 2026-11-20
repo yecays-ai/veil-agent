@@ -472,6 +472,16 @@ function allowedChatRequest(pathname, method) {
     if (url.pathname === '/api/life' || url.pathname === '/api/stickers' || url.pathname === '/api/workbench' || url.pathname === '/api/windows-apps' || url.pathname === '/api/peter-page' || url.pathname === '/api/pending-approvals') return keys.length === 0;
     if (url.pathname === '/api/memory/panel') return keys.length === 0;
     if (url.pathname === '/api/instructions') return keys.length === 0;
+    if (url.pathname === '/api/request-snapshots')
+      return keys.length <= 1 && keys.every(key => key === 'limit') &&
+        (url.searchParams.get('limit') === null || /^\d{1,2}$/.test(url.searchParams.get('limit')));
+    if (url.pathname === '/api/request-snapshot') {
+      if (keys.length !== 1) return false;
+      const id = url.searchParams.get('id'), messageId = url.searchParams.get('message_id');
+      if (keys[0] === 'id') return /^[A-Za-z0-9_-]{1,80}$/.test(id || '');
+      if (keys[0] === 'message_id') return /^[A-Za-z0-9_-]{1,80}$/.test(messageId || '');
+      return false;
+    }
     if (url.pathname === '/api/mcp') return keys.length === 0 ||
       (keys.length === 1 && keys[0] === 'retry' && url.searchParams.get('retry') === '1');
     if (url.pathname === '/api/memory/catalog')
