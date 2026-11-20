@@ -683,6 +683,7 @@ max_result_bytes = 200
         self.assertEqual(chat.send('read it'), 'I could not read it.')
         tools.invoke.assert_not_called()
         self.assertIn('arguments are not a valid JSON object', model.call_args_list[1].args[0][-1]['content'])
+        self.assertIn('The tool received: {bad', model.call_args_list[1].args[0][-1]['content'])
         self.assertTrue(any('arguments are not a valid JSON object' in line for line in output))
 
     def test_empty_or_null_arguments_call_a_tool_without_parameters(self):

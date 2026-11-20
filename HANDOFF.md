@@ -1,5 +1,14 @@
 # HANDOFF
 
+## 工单 408 交接（工具参数容错）
+- 现象：`jot_about_lan`（`profile_append`）11-20 当天 11 次尝试 0 成功，全被「arguments are not a valid JSON object」拒绝；10-28 也有 5 次同类。
+- 根因：模型把整段中文塞进 JSON 字符串，正文裸换行/智能引号/尾逗号没转义；工单 399 的兜底只收「不以 `{` 开头」的纯文本，所以这类调用一律被拒，且模型看不到自己发错在哪。
+- 改法：`_repair_tool_arguments` 做一次最小修复（字符串内裸换行/回车/制表符转义、无 ASCII 引号时把智能引号当分隔符、去掉结尾多余逗号），`Chat.tool_arguments` 在 JSON 与 `ast.literal_eval` 失败后调用；仍失败时拒绝消息附收到的前 160 字。
+- 不改：合法 JSON、Python 字典、纯文本的行为；权限、审批、日志、工具列表。
+- 验证：`tests.test_chat.ToolArgumentTests`（新增 4 个）、`tests.test_tools`（拒绝消息带原文）、`tests.test_chat` + `tests.test_tools` 175 个通过、`tests.test_prompt_registry` 通过。
+- 待办：Lan 真机验收——让他记一条关于你的内容，看是否写进 Learned Context；失败时看他能否按错误里的原文改对。
+- 注意：正文里有**没转义的英文双引号**时字符串边界不可判定，修复不了，仍会拒绝（但会带回原文）；这种要靠模型自己改。
+
 ## 工单 406 交接（统一窗口枚举适配层）
 - 根因（只读诊断）：11-19 12:38 系统文件批量重写后，Python 的 UIA3 桌面根节点枚举（`CUIAutomation`/`CUIAutomation8` 都一样）只返回 0–1 个元素；同一时刻 .NET UIA2 返回 12 个、Win32 13 个、按 HWND 读正常。已排除权限、venv、comtypes 缓存、会话；是否由 `UIAutomationCore.dll` 版本错位引起未证实，本单不碰系统组件。
 - 改法：`windows_observer.WindowsDesktopBackend.list_windows` 用 `EnumWindows` 拿窗口与 HWND，`_windows_from_rows` 生成与原来完全相同的身份字段（`window_id` 公式没变）。读控件仍然只走 `ControlFromHandle(HWND)`，所以 `windows_observe`/`windows_control_action`/`windows_manage`/`windows_launch` 的代码一行没改就恢复了。
