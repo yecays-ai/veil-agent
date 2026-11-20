@@ -1,5 +1,14 @@
 # HANDOFF
 
+## 工单 402 交接（指令全部归位，工具说明按类管理）
+- 新增 `prompts/tools.py`：`persona/instructions/tool.<名字>.md` 覆盖任意工具说明，按目录 mtime 缓存；
+  `Chat.tool_schemas(full=True)` 返回全部工具（含隐藏组）供页面列出；保存走 `POST /api/instructions`（id=`tool.<名字>`）。
+- 迁移：判官两版、经历整理/修稿、短期便签提取、委派助手、6 条防注入包裹、4 条醒来框架句。
+- 防写死：`prompts/inline.py` 结构化豁免工具说明；旧 `inline_allowlist.txt` 删除，改为
+  `inline_feedback_allowlist.txt`（41 条，类型化原因，只许减少，基线 `inline.BASELINE`）。
+- 验证：逐字节对比一致；相关 python 测试与桌面 21 个测试通过。
+- 剩余：无未迁移提示词；反馈清单是运行时反馈，不是预设。
+
 ## 工单 401 交接（指令页可读性、去重与编辑）
 - 页面重写为文档式列表（不再用 `.context-block`，否则 `flex:1 1 0` 会把展开内容压扁），并用 `#instructions-view .instr-text{max-height:none}` 覆盖全局 `details pre` 的 130px 限制。
 - 登记表去掉 5 条 file 类（人设、关于你、背景、样例、记忆笔记）；只保留 text / marker。

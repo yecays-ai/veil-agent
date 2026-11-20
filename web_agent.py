@@ -543,7 +543,7 @@ class Hub(ScreenPopMixin):
         chat = self.chat
         if chat is None:
             return {'categories': [], 'generated_at': ''}
-        return instructions.page()
+        return instructions.page(chat)
 
     def save_instruction(self, body):
         """Ticket 401: replace one instruction's text whole, then return the refreshed page."""
@@ -556,7 +556,7 @@ class Hub(ScreenPopMixin):
         if not isinstance(text, str):
             raise UserError('内容必须是文字。')
         instructions.save(entry_id, text)
-        return {'page': instructions.page()}
+        return {'page': instructions.page(self.chat)}
 
     def peter_page(self):
         chat = self.chat

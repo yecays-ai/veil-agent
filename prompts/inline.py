@@ -1,10 +1,12 @@
-"""Ticket 400: find long prose still written inline in model-facing modules.
+"""Ticket 402: keep prompt prose out of the model-facing modules.
 
-The registry is only a real fix if new instructions cannot quietly reappear as string literals. This
-collector lists every long English-ish literal in the modules that build model messages. The test in
-tests/test_prompt_registry.py fails when a literal is not registered in prompts/inline_allowlist.txt,
-so adding a new prompt forces a decision: move it to prompts/defaults (preferred) or record it here
-with a reason. The allowlist may shrink, never grow without a reason.
+Two things reach the model: preset text (registered in prompts/registry.py or described per tool in
+prompts/tools.py) and runtime feedback (short program messages such as "you may send at most 10
+messages"). Tool descriptions are recognised structurally and exempted: they are managed as a class.
+
+This collector finds long English prose that is still a bare literal. The test fails when one is not
+in the reviewed feedback list, so a new prompt cannot quietly reappear in code. The feedback list is
+typed and may only shrink; adding a line is a deliberate, reviewable act.
 """
 import ast
 import hashlib
@@ -28,10 +30,12 @@ PROMPT_MODULES = (
     'voice_style.py',
 )
 
-MIN_CHARS = 120
-MIN_SPACES = 12
+MIN_CHARS = 100
+MIN_SPACES = 8
 MIN_ASCII_RATIO = 0.7
-ALLOWLIST = Path(__file__).with_name('inline_allowlist.txt')
+FEEDBACK = Path(__file__).with_name('inline_feedback_allowlist.txt')
+REASONS = ('feedback:', 'tool-param:', 'git:', 'record:')
+BASELINE = 41
 
 
 def _docstrings(tree):
@@ -45,6 +49,29 @@ def _docstrings(tree):
     return found
 
 
+def _marked(tree):
+    """Tool descriptions and per-tool description tables are managed by prompts/tools.py."""
+    marked = set()
+
+    def mark(node):
+        for item in ast.walk(node):
+            if isinstance(item, ast.Constant) and isinstance(item.value, str):
+                marked.add(id(item))
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.keyword) and node.arg == 'description':
+            mark(node.value)
+        elif isinstance(node, ast.Dict):
+            for key, value in zip(node.keys, node.values):
+                if isinstance(key, ast.Constant) and key.value == 'description':
+                    mark(value)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and 'DESCRIPTION' in target.id.upper():
+                    mark(node.value)
+    return marked
+
+
 def collect(paths=None):
     rows = []
     for name in (paths or PROMPT_MODULES):
@@ -53,7 +80,7 @@ def collect(paths=None):
             tree = ast.parse(path.read_text(encoding='utf-8'))
         except (OSError, SyntaxError):
             continue
-        skip = _docstrings(tree)
+        skip = _docstrings(tree) | _marked(tree)
         for node in ast.walk(tree):
             if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
                 continue
@@ -65,48 +92,49 @@ def collect(paths=None):
             letters = sum(1 for char in text if char.isascii() and char.isalpha())
             if letters / len(text) < MIN_ASCII_RATIO:
                 continue
-            if text.count('.') < 2:   # word lists and single clauses are not prose
+            if text.count('.') < 2:
                 continue
             digest = hashlib.sha1(text.encode('utf-8')).hexdigest()[:12]
             rows.append({'file': name, 'line': getattr(node, 'lineno', 0), 'hash': digest,
-                         'preview': re.sub(r'\s+', ' ', text)[:70]})
+                         'preview': re.sub(r'\s+', ' ', text)[:80],
+                         'text': text})
     return rows
 
 
-def allowlist():
+def feedback():
     try:
-        lines = ALLOWLIST.read_text(encoding='utf-8').splitlines()
+        lines = FEEDBACK.read_text(encoding='utf-8').splitlines()
     except OSError:
         return {}
-    result = {}
+    found = {}
     for line in lines:
         line = line.strip()
         if not line or line.startswith('#'):
             continue
         digest, _, note = line.partition(' ')
-        result[digest] = note.strip()
-    return result
+        found[digest] = note.strip()
+    return found
 
 
-def update_allowlist():
-    """Rewrite the allowlist from the current tree. Run only after a deliberate decision."""
-    lines = ['# Ticket 400: long English prose still written inline in model-facing modules.',
-             '# The test fails when a literal is missing here, so a new prompt cannot slip in silently.',
-             '# Format: <sha1-12> <file>:<line> <preview>']
+def update_feedback():
+    lines = ['# Ticket 402: runtime feedback and tool-parameter text still written inline.',
+             '# NOT preset prompts: these are short program messages. New prompt prose belongs in',
+             '# prompts/defaults (call prompts.text) or in a tool description (managed by prompts/tools.py).',
+             '# Format: <sha1-12> <reason:...> <file>:<line> <preview>']
     seen = set()
     for row in sorted(collect(), key=lambda item: (item['file'], item['line'])):
         if row['hash'] in seen:
             continue
         seen.add(row['hash'])
-        lines.append(row['hash'] + ' ' + row['file'] + ':' + str(row['line']) + ' ' + row['preview'])
-    ALLOWLIST.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+        lines.append(row['hash'] + ' feedback:runtime ' + row['file'] + ':' + str(row['line']) + ' ' + row['preview'])
+    FEEDBACK.write_text('\n'.join(lines) + '\n', encoding='utf-8')
     return len(seen)
 
 
 if __name__ == '__main__':
     import sys
     if '--update' in sys.argv[1:]:
-        print('allowlist now has', update_allowlist(), 'entries')
+        print('feedback list now has', update_feedback(), 'entries')
     else:
         for row in collect():
             print(row['hash'], row['file'] + ':' + str(row['line']), row['preview'])
