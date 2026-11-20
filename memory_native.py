@@ -1219,7 +1219,8 @@ class NativeMemoryTools:
                     return ('link_to must be a memory you were shown and can still see; nothing was saved.'), '被拒绝', summary
                 try:
                     self.events.record(content.strip(), title.strip() if isinstance(title, str) else 'Event',
-                                       why=why, event_id=event_id)
+                                       why=why, event_id=event_id,
+                                       interpretation=str(args.get('interpretation') or '')[:300])
                 except Exception:
                     return 'The experience could not be updated; nothing was saved.', '出错', summary
                 return (f'Added to experience {event_id}.'), '成功', summary

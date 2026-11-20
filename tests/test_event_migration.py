@@ -33,6 +33,9 @@ class MigrationPreviewTests(unittest.TestCase):
             self.assertEqual(summary['memories'], 3)
             for key, text in before.items():
                 self.assertEqual((vault / f'{key}.md').read_text(encoding='utf-8'), text)
+            with self.assertRaises(ValueError):
+                event_migration.write_manifest(rows, vault / 'preview.jsonl', protected=[vault])
+            self.assertFalse((vault / 'preview.jsonl').exists())
 
 
 if __name__ == '__main__':

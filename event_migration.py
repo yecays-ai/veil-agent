@@ -111,12 +111,19 @@ def propose(memories, gap_days=GAP_DAYS):
     return rows
 
 
-def write_manifest(rows, path):
-    path = Path(path)
+def write_manifest(rows, path, protected=()):
+    """Write the preview ledger, but never inside a protected memory vault."""
+    path = Path(path).resolve()
+    for root in protected:
+        root = Path(root).resolve()
+        if path == root or path.is_relative_to(root):
+            raise ValueError('refusing to write the migration manifest inside the memory vault')
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open('w', encoding='utf-8') as handle:
+    temp = path.with_name(path.name + '.tmp')
+    with temp.open('w', encoding='utf-8') as handle:
         for row in rows:
             handle.write(json.dumps(row, ensure_ascii=False) + '\n')
+    temp.replace(path)
     return {'memories': len(rows), 'events': len({row['proposed_event'] for row in rows}), 'path': str(path)}
 
 
@@ -127,7 +134,8 @@ def main():
     parser.add_argument('--out', default='event-migration-preview.jsonl')
     args = parser.parse_args()
     rows = propose(read_memories(args.root, args.role))
-    print(json.dumps(write_manifest(rows, args.out), ensure_ascii=False))
+    vault = Path(args.root) / 'data' / args.role / 'memory'
+    print(json.dumps(write_manifest(rows, args.out, protected=[vault]), ensure_ascii=False))
 
 
 if __name__ == '__main__':

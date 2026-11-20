@@ -708,8 +708,13 @@ class EventMemory:
         missing = []
         for stage in stages:
             extra = stage.get('facts') if isinstance(stage.get('facts'), dict) else {}
-            for value in (extra.get('dates') or []) + (extra.get('numbers') or []) + (extra.get('files') or []):
+            for value in (extra.get('dates') or []) + (extra.get('files') or []):
                 if str(value) and str(value) not in story:
+                    missing.append(str(value))
+            for value in extra.get('numbers') or []:
+                # Exact token: 100 must not be satisfied by 1000.
+                if str(value) and not re.search(
+                        rf'(?<![\d.]){re.escape(str(value))}(?!\d)(?!\.\d)', story):
                     missing.append(str(value))
         return list(dict.fromkeys(missing))
 
