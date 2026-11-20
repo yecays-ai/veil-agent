@@ -319,11 +319,14 @@ class EventMemoryTests(unittest.TestCase):
 
     def test_same_save_retried_with_a_new_clock_is_idempotent(self):
         stage = 'She wrote meh on the charcoal note after the file list argument.'
-        first = self.native.events.record(stage, 'The charcoal note')
-        second = self.native.events.record(stage, 'The charcoal note', at='2027-01-01T00:00:00+08:00')
+        first = self.native.events.record(stage, 'The charcoal note', at='2026-11-20T10:00:00+08:00')
+        second = self.native.events.record(stage, 'The charcoal note', at='2026-11-20T10:05:00+08:00')
         self.assertEqual(first['event_id'], second['event_id'])
         self.assertTrue(second.get('duplicate'))
         self.assertEqual(len(self.native.events.stages(first['event_id'])), 1)
+        # The same words on another day are a real, separate occurrence, not a retry.
+        self.native.events.record(stage, 'The charcoal note', at='2026-11-21T10:00:00+08:00')
+        self.assertEqual(len(self.native.events.stages(first['event_id'])), 2)
 
     def test_target_id_and_link_to_update_the_event_not_a_new_memory(self):
         self.save('She wrote meh on the charcoal note after the file list argument.',
@@ -386,6 +389,25 @@ class EventMemoryTests(unittest.TestCase):
         state = self.native.events.dream_state()
         self.assertEqual(state.get('status'), 'idle')
         self.assertTrue((self.store.root / 'fake' / 'event-dream-report.jsonl').exists())
+
+    def test_move_last_stage_retires_the_old_projection_and_lan_edit_blocks_moves(self):
+        self.save('First part of the charcoal note day.', 'The charcoal note')
+        self.save('Second part of the charcoal note day.', 'The charcoal note')
+        event_id = next(iter(self.native.events.events()))
+        key = self.native.events.events()[event_id]['memory_id']
+        stages = self.native.events.stages(event_id)
+        new_id = self.native.events.split_event(event_id, [stages[0]['stage_id']], 'Earlier')
+        self.native.sidecar.lan_edited(key)
+        self.assertFalse(self.native.events.move_stage(stages[1]['stage_id'], new_id))
+        # Clear Lan's edit mark and move the last stage out; the old projection must stop surfacing.
+        self.native.sidecar.all = lambda strict=False: {key: {'locked': False, 'lan_edited': None,
+                                                              'peter_after_lan': None, 'links': [],
+                                                              'sources': [], 'merged_into': None}}
+        self.assertTrue(self.native.events.move_stage(stages[1]['stage_id'], new_id))
+        old = self.native.events.events()[event_id]
+        self.assertEqual(old.get('status'), 'closed')
+        self.assertEqual(old.get('story'), '')
+        self.assertTrue(self.backend.rows[key].get('hidden'))
 
     def test_split_and_move_rebuild_both_events(self):
         for text in ('First part of the charcoal note day.',

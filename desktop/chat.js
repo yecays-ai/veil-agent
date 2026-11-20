@@ -797,8 +797,24 @@ async function readEvent(item){
     const story=document.createElement('pre');story.style.whiteSpace='pre-wrap';story.style.fontFamily='inherit';story.textContent=d.story||'';
     const stages=document.createElement('details');stages.className='memory-raw';
     const summary=document.createElement('summary');summary.textContent=`阶段与证据（${d.stages.length}）`;stages.appendChild(summary);
+    if(d.stages.length>1){
+      const editor=document.createElement('div');editor.className='memory-status';editor.style.marginTop='8px';
+      const pickEvent=document.createElement('select');pickEvent.setAttribute('aria-label','目标经历');
+      const blank=document.createElement('option');blank.value='';blank.textContent='移到…';pickEvent.appendChild(blank);
+      for(const other of eventItems){if(other.event_id!==d.event_id){const option=document.createElement('option');option.value=other.event_id;option.textContent=other.title;pickEvent.appendChild(option)}}
+      const split=document.createElement('button');split.type='button';split.textContent='拆出所选';
+      const move=document.createElement('button');move.type='button';move.textContent='移到所选经历';
+      const status=document.createElement('span');status.className='muted';
+      const chosen=()=>[...stages.querySelectorAll('input.event-stage-pick:checked')].map(box=>box.value);
+      split.onclick=async()=>{const ids=chosen();if(ids.length<1||ids.length>=d.stages.length){status.textContent='勾选要拆出的阶段（不能全部）';return}
+        try{const response=await api('/api/memory/event/split',{id:d.event_id,stage_ids:ids});if(!response.ok){const data=await response.json();throw new Error(data.error||'拆分失败')}status.textContent='已拆出';await loadEvents();await readEvent(item)}catch(error){status.textContent=error.message||'拆分失败'}};
+      move.onclick=async()=>{const ids=chosen();if(ids.length!==1||!pickEvent.value){status.textContent='勾选一个阶段并选目标经历';return}
+        try{const response=await api('/api/memory/event/move',{id:ids[0],to:pickEvent.value});if(!response.ok){const data=await response.json();throw new Error(data.error||'移动失败')}status.textContent='已移动';await loadEvents();await readEvent(item)}catch(error){status.textContent=error.message||'移动失败'}};
+      editor.append(pickEvent,split,move,status);stages.appendChild(editor);
+    }
     for(const stage of d.stages){
       const box=document.createElement('div');box.className='memory-status';box.style.marginTop='10px';
+      const pick=document.createElement('input');pick.type='checkbox';pick.className='event-stage-pick';pick.value=stage.stage_id;box.appendChild(pick);
       const time=document.createElement('time');time.textContent=strTime(stage.at);box.appendChild(time);
       const text=document.createElement('p');text.textContent=stage.text;box.appendChild(text);
       if(stage.interpretation){const read=document.createElement('p');read.className='muted';read.textContent='他当时理解：'+stage.interpretation;box.appendChild(read)}

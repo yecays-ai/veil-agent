@@ -15,6 +15,7 @@ import hashlib
 import json
 import re
 import threading
+import uuid
 from dataclasses import replace
 from datetime import datetime, timedelta
 
@@ -284,7 +285,8 @@ class EventMemory:
         text = ' '.join((text or '').split())
         if not text:
             raise ValueError('empty stage')
-        stage_id = 's-' + hashlib.sha1(f'{title or ""}|{text}'.encode('utf-8')).hexdigest()[:16]
+        stage_id = 's-' + hashlib.sha1(
+            f'{title or ""}|{text}|{when.strftime("%Y-%m-%d")}'.encode('utf-8')).hexdigest()[:16]
         existing = self._stage_rows().get(stage_id)
         if existing is not None and existing.get('state') == 'committed':
             event = self.events().get(existing.get('event_id')) or {}
@@ -341,7 +343,7 @@ class EventMemory:
             'story_source': story_source,
             'story_through': stage['at'],
             'belief_history': self._belief_history(event['event_id'], extra=stage),
-            'related_to': self._related_events(event['event_id']),
+            'related_to': sorted(set(event.get('related_to') or []) | set(self._related_events(event['event_id']))),
             'confidence': confidence,
             'dirty': not changed and not locked,
             'last_story_at': datetime.now().astimezone().isoformat(),
@@ -381,6 +383,11 @@ class EventMemory:
         text = ' '.join((text or '').split())
         if not text:
             return False
+        missing = self._missing_facts(self.stages(event_id), text)
+        if missing:
+            self._review(event_id, 'tidy revision dropped facts: ' + ', '.join(missing[:10]))
+            return False
+        revision_id = 'r-' + uuid.uuid4().hex[:12]
         stamp = datetime.now().astimezone().isoformat()
         if old_story and old_story != text:
             self.store.append(self.versions_path, {'event_id': event_id, 'memory_id': memory_id,
@@ -391,7 +398,7 @@ class EventMemory:
                 'why_remembered': '', 'old_content': old_projection})
         projection = text[:self.settings['summary_chars']]
         self.store.append(self.revisions_path, {'state': 'begin', 'event_id': event_id,
-                                                'story': text, 'at': stamp})
+                                                'revision_id': revision_id, 'story': text, 'at': stamp})
         if memory_id:
             try:
                 self.memory.call('trace', {'bucket_id': memory_id, 'content': projection})
@@ -405,9 +412,11 @@ class EventMemory:
             if written is not None and written.strip() != projection.strip():
                 return False
         event.update({'story': text, 'dirty': False, 'last_story_at': stamp,
-                      'story_source': 'tidy', 'title': (title or event.get('title'))[:100]})
+                      'story_source': 'tidy', 'revision_id': revision_id,
+                      'title': (title or event.get('title'))[:100]})
         self.store.append(self.events_path, event)
-        self.store.append(self.revisions_path, {'state': 'done', 'event_id': event_id, 'at': stamp})
+        self.store.append(self.revisions_path, {'state': 'done', 'event_id': event_id,
+                                                'revision_id': revision_id, 'at': stamp})
         self.store.append(self.ops_path, {'at': stamp, 'op': 'revise', 'event_id': event_id,
                                           'why': why, 'before': old_story[:500], 'after': text[:500]})
         return True
@@ -687,9 +696,10 @@ class EventMemory:
                     story = ''
                 if not story:
                     break
-                missing = self._missing_facts(stages, story)
+                candidate = story[:6000]
+                missing = self._missing_facts(stages, candidate)
                 if not missing:
-                    return story[:6000], ('model+merge' if mode == 'merge' else 'model')
+                    return candidate, ('model+merge' if mode == 'merge' else 'model')
                 messages.append({'role': 'user', 'content': 'Keep every one of these exactly: ' + ', '.join(missing[:20])})
         return fallback, 'composed'
 
@@ -813,8 +823,10 @@ class EventMemory:
             rows = self.store.read(self.revisions_path)
         except Exception:
             return 0
-        done = {row.get('event_id') for row in rows if row.get('state') == 'done'}
-        begins = [row for row in rows if row.get('state') == 'begin' and row.get('event_id') not in done]
+        done = {row.get('revision_id') for row in rows if row.get('state') == 'done'}
+        begins = [row for row in rows if row.get('state') == 'begin'
+                  and row.get('revision_id') not in done]
+        begins.sort(key=lambda row: str(row.get('at') or ''))
         fixed = 0
         for row in begins:
             event = self.events().get(row.get('event_id'))
@@ -836,6 +848,7 @@ class EventMemory:
                           'last_story_at': datetime.now().astimezone().isoformat()})
             self.store.append(self.events_path, event)
             self.store.append(self.revisions_path, {'state': 'done', 'event_id': event['event_id'],
+                                                    'revision_id': row.get('revision_id'),
                                                     'at': datetime.now().astimezone().isoformat()})
             fixed += 1
         return fixed
@@ -861,6 +874,39 @@ class EventMemory:
                 continue
         return fixed
 
+    def _lan_edited(self, event):
+        memory_id = event.get('memory_id')
+        if not memory_id or self.sidecar is None:
+            return False
+        note = self.sidecar.all().get(memory_id) or {}
+        edited = note.get('lan_edited')
+        return bool(edited and str(edited) > str(event.get('last_story_at') or ''))
+
+    def _refresh_event(self, event_id, *, close_empty=False):
+        event = self.events().get(event_id)
+        if not event:
+            return None
+        stages = self.stages(event_id)
+        if not stages and close_empty:
+            event.update({'story': '', 'stage_count': 0, 'status': 'closed',
+                          'belief_history': [], 'dirty': False,
+                          'last_story_at': datetime.now().astimezone().isoformat()})
+            memory_id = event.get('memory_id')
+            if memory_id:
+                try:
+                    self.memory.call('trace', {'bucket_id': memory_id,
+                                               'content': '这段经历已全部移到别处，不再从这里想起。'})
+                    self.memory.call('trace', {'bucket_id': memory_id, 'dont_surface': True})
+                except Exception:
+                    pass
+            self.store.append(self.events_path, event)
+            return event
+        event.update({'story': self._story(event_id), 'stage_count': len(stages),
+                      'belief_history': self._belief_history(event_id), 'dirty': True,
+                      'last_story_at': datetime.now().astimezone().isoformat()})
+        self.store.append(self.events_path, event)
+        return event
+
     @_serialized
     def move_stage(self, stage_id, to_event_id, why='纠正归组'):
         stage = self._stage_rows().get(stage_id)
@@ -870,24 +916,22 @@ class EventMemory:
         source_id = stage.get('event_id')
         if source_id == to_event_id:
             return False
+        source = self.events().get(source_id) or {}
+        if self._lan_edited(source) or self._lan_edited(target):
+            self._review(source_id, 'Lan edited this event; a stage move was blocked')
+            return False
         self.store.append(self.stages_path, {**stage, 'event_id': to_event_id, 'state': 'committed'})
-        now = datetime.now().astimezone().isoformat()
-        for event_id in (source_id, to_event_id):
-            event = self.events().get(event_id)
-            if not event:
-                continue
-            event.update({'story': self._story(event_id), 'stage_count': len(self.stages(event_id)),
-                          'dirty': True, 'last_story_at': now})
-            self.store.append(self.events_path, event)
-        self.store.append(self.ops_path, {'at': now, 'op': 'move', 'stage': stage_id,
-                                          'from': source_id, 'to': to_event_id, 'why': why})
+        self._refresh_event(source_id, close_empty=True)
+        self._refresh_event(to_event_id)
+        self.store.append(self.ops_path, {'at': datetime.now().astimezone().isoformat(), 'op': 'move',
+                                          'stage': stage_id, 'from': source_id, 'to': to_event_id, 'why': why})
         self.retry_dirty()
         return True
 
     @_serialized
     def split_event(self, event_id, stage_ids, title='', why='纠正归组'):
         event = self.events().get(event_id)
-        if not event or not stage_ids:
+        if not event or not stage_ids or self._lan_edited(event):
             return None
         chosen = [self._stage_rows().get(stage_id) for stage_id in stage_ids]
         chosen = [stage for stage in chosen if stage and stage.get('event_id') == event_id]
@@ -899,17 +943,15 @@ class EventMemory:
         new_event = {'event_id': new_id, 'title': (title or event.get('title') or 'Event')[:100],
                      'status': 'open', 'first_at': chosen[0].get('at'), 'last_at': chosen[-1].get('at'),
                      'entities': sorted({word for stage in chosen for word in stage.get('entities') or []})[:80],
-                     'stage_count': len(chosen), 'dirty': True, 'story': ''}
+                     'stage_count': len(chosen), 'dirty': True, 'story': '',
+                     'belief_history': [], 'related_to': [event_id]}
         self.store.append(self.events_path, new_event)
         for stage in chosen:
             self.store.append(self.stages_path, {**stage, 'event_id': new_id, 'state': 'committed'})
-        now = datetime.now().astimezone().isoformat()
-        for key in (event_id, new_id):
-            current = self.events().get(key)
-            current.update({'story': self._story(key), 'stage_count': len(self.stages(key)),
-                            'dirty': True, 'last_story_at': now})
-            self.store.append(self.events_path, current)
-        self.store.append(self.ops_path, {'at': now, 'op': 'split', 'from': event_id, 'to': new_id,
+        self._refresh_event(event_id)
+        self._refresh_event(new_id)
+        self.store.append(self.ops_path, {'at': datetime.now().astimezone().isoformat(), 'op': 'split',
+                                          'from': event_id, 'to': new_id,
                                           'stages': list(stage_ids), 'why': why})
         self.retry_dirty()
         return new_id
