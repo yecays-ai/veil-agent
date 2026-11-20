@@ -14,9 +14,27 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import threading
+from dataclasses import replace
 from datetime import datetime, timedelta
 
 import prompts
+
+_LOCKS = {}
+_LOCKS_GUARD = threading.Lock()
+
+
+def _lock_for(role_id):
+    with _LOCKS_GUARD:
+        return _LOCKS.setdefault(role_id, threading.RLock())
+
+
+def _serialized(method):
+    """One event write at a time per role: foreground appends, tidy revisions and recovery share it."""
+    def wrapper(self, *args, **kwargs):
+        with _lock_for(self.cfg.id):
+            return method(self, *args, **kwargs)
+    return wrapper
 
 DEFAULTS = {
     'enabled': False,
@@ -117,12 +135,13 @@ def _parse_json(text):
 
 
 class EventMemory:
-    def __init__(self, memory, settings=None, model=None, sidecar=None):
+    def __init__(self, memory, settings=None, model=None, sidecar=None, budget=None):
         self.memory = memory
         self.cfg = memory.cfg
         self.store = memory.store
         self.model = model if callable(model) else None
         self.sidecar = sidecar
+        self.budget = budget if budget is not None else getattr(memory, 'budget', None)
         raw = settings if isinstance(settings, dict) else {}
         self.settings = dict(DEFAULTS)
         for key, default in DEFAULTS.items():
@@ -137,6 +156,7 @@ class EventMemory:
         self.review_path = f'{self.cfg.id}/event-review.jsonl'
         self.ops_path = f'{self.cfg.id}/event-ops.jsonl'
         self.projections_path = f'{self.cfg.id}/event-projections.jsonl'
+        self.revisions_path = f'{self.cfg.id}/event-revisions.jsonl'
         self.locked = None
 
     # --- read side -------------------------------------------------------------------------
@@ -148,14 +168,16 @@ class EventMemory:
         return latest
 
     def event_for_memory(self, memory_id):
-        for event in self.events().values():
-            if event.get('memory_id') == memory_id:
-                return event['event_id']
-        return None
+        active = [event for event in self.events().values()
+                  if event.get('memory_id') == memory_id and event.get('status') != 'merged']
+        if not active:
+            return None
+        active.sort(key=lambda event: str(event.get('last_at') or ''), reverse=True)
+        return active[0]['event_id']
 
     def event_map(self):
         return {event['memory_id']: event['event_id'] for event in self.events().values()
-                if isinstance(event.get('memory_id'), str)}
+                if isinstance(event.get('memory_id'), str) and event.get('status') != 'merged'}
 
     def _stage_rows(self):
         latest = {}
@@ -230,7 +252,11 @@ class EventMemory:
         story = event.get('story') or self._story(event_id)
         lines = [f"{event.get('title') or event_id}",
                  f"{event.get('status')} · {str(event.get('first_at') or '')[:16]} → {str(event.get('last_at') or '')[:16]}",
-                 f"stages {offset + 1}-{offset + len(chunk)} of {len(stages)}", '', story, '', '— stages —']
+                 f"stages {offset + 1}-{offset + len(chunk)} of {len(stages)}", '']
+        if offset == 0:
+            lines += [story, '', '— stages —']
+        else:
+            lines += ['— stages —']
         for stage in chunk:
             lines.append(f"- [{stage.get('stage_id')}] {str(stage.get('at'))[:16]} {stage.get('text')}")
             if stage.get('interpretation'):
@@ -246,6 +272,7 @@ class EventMemory:
         return '\n'.join(lines), next_offset, len(stages)
 
     # --- write side ------------------------------------------------------------------------
+    @_serialized
     def record(self, text, title, *, why='', at=None, importance=None, pinned=None,
                interpretation='', event_id=None):
         when = _when(at) or datetime.now().astimezone()
@@ -326,6 +353,7 @@ class EventMemory:
                 'memory_id': event.get('memory_id'), 'updated': updated, 'changed': changed,
                 'locked': locked, 'confidence': confidence}
 
+    @_serialized
     def revise(self, event_id, text, title='', seen=None, why='整理'):
         """Replace the event's narrative without appending it as a new stage (tidy revisions)."""
         event = self.events().get(event_id)
@@ -352,6 +380,8 @@ class EventMemory:
                 'memory_id': memory_id, 'fields': ['content'], 'operation_reason': '事件故事修订',
                 'why_remembered': '', 'old_content': old_projection})
         projection = text[:self.settings['summary_chars']]
+        self.store.append(self.revisions_path, {'state': 'begin', 'event_id': event_id,
+                                                'story': text, 'at': stamp})
         if memory_id:
             try:
                 self.memory.call('trace', {'bucket_id': memory_id, 'content': projection})
@@ -361,13 +391,18 @@ class EventMemory:
                 self.memory.bucket_details_cache.pop(memory_id, None)
             except Exception:
                 pass
+            written = self.memory.content_for(memory_id, refresh=True)
+            if written is not None and written.strip() != projection.strip():
+                return False
         event.update({'story': text, 'dirty': False, 'last_story_at': stamp,
                       'title': (title or event.get('title'))[:100]})
         self.store.append(self.events_path, event)
+        self.store.append(self.revisions_path, {'state': 'done', 'event_id': event_id, 'at': stamp})
         self.store.append(self.ops_path, {'at': stamp, 'op': 'revise', 'event_id': event_id,
                                           'why': why, 'before': old_story[:500], 'after': text[:500]})
         return True
 
+    @_serialized
     def retry_pending(self, limit=10):
         fixed = 0
         made = {}
@@ -445,6 +480,8 @@ class EventMemory:
 
         if max([row['score'] for row in scores.values()] or [0]) < 4:
             for event in self.events().values():
+                if not self._visible(event):
+                    continue
                 if self._raw_mentions(event, stage_entities, now):
                     add(event['event_id'], 3, 'raw ledger mention')
         return scores
@@ -508,10 +545,32 @@ class EventMemory:
                                                      'candidates': candidates}, ensure_ascii=False)[:12000]},
         ]
         try:
+            request_cfg = replace(self.cfg, max_output_tokens=400)
+            reservation, amount = (None, None)
+            if self.budget is not None and callable(getattr(self.budget, 'reserve', None)):
+                reservation, amount = self.budget.reserve(request_cfg, accounting='event-group',
+                                                          category='event-group')
+        except Exception:
+            return None   # no budget: keep the provisional-event path
+        try:
             result = self.model(messages, max_tokens=400, detail=True)
             output = result[0] if isinstance(result, tuple) else result
             payload = _parse_json(output if isinstance(output, str) else '')
+            if reservation is not None:
+                try:
+                    prompt_tokens = int(result[1]) if isinstance(result, tuple) and len(result) > 1 else 0
+                    completion_tokens = int(result[2]) if isinstance(result, tuple) and len(result) > 2 else 0
+                    cached_tokens = int(result[3]) if isinstance(result, tuple) and len(result) > 3 else 0
+                    self.budget.settle(reservation, request_cfg, prompt_tokens, completion_tokens,
+                                       cached_tokens, accounting='event-group', category='event-group')
+                except Exception:
+                    pass
         except Exception:
+            if reservation is not None and callable(getattr(self.budget, 'settle_estimate', None)):
+                try:
+                    self.budget.settle_estimate((reservation, amount), accounting='event-group-failed')
+                except Exception:
+                    pass
             return None
         if not isinstance(payload, dict):
             return None
@@ -602,7 +661,14 @@ class EventMemory:
                 args['importance'] = importance
             if pinned is True:
                 args['pinned'] = True
-            result = self.memory.call('hold', args)
+            operation = duplicate = None
+            if callable(getattr(self.memory, 'begin_write', None)):
+                operation, duplicate = self.memory.begin_write(args)
+                if duplicate is not None:
+                    # The earlier hold may already exist; never send a second one with unknown result.
+                    return None, False, False
+            result = self.memory.call('hold', args, write_operation=operation) if operation else \
+                self.memory.call('hold', args)
             new_id = self.memory.created_id(result)
             try:
                 self.memory.record_native(args, result)
@@ -640,8 +706,43 @@ class EventMemory:
         return memory_id, now.strip() == text.strip(), False
 
     # --- background repair -----------------------------------------------------------------
+    def _recover_revisions(self):
+        """A revise whose trace succeeded but whose event row failed: finish it once, never re-apply blindly."""
+        try:
+            rows = self.store.read(self.revisions_path)
+        except Exception:
+            return 0
+        done = {row.get('event_id') for row in rows if row.get('state') == 'done'}
+        begins = [row for row in rows if row.get('state') == 'begin' and row.get('event_id') not in done]
+        fixed = 0
+        for row in begins:
+            event = self.events().get(row.get('event_id'))
+            if not event:
+                continue
+            memory_id = event.get('memory_id')
+            if memory_id and callable(self.locked) and self.locked(memory_id):
+                continue
+            story = str(row.get('story') or '')
+            projection = story[:self.settings['summary_chars']]
+            written = self.memory.content_for(memory_id, refresh=True) if memory_id else None
+            if written is None or written.strip() != projection.strip():
+                if memory_id:
+                    try:
+                        self.memory.call('trace', {'bucket_id': memory_id, 'content': projection})
+                    except Exception:
+                        continue
+            event.update({'story': story, 'dirty': False,
+                          'last_story_at': datetime.now().astimezone().isoformat()})
+            self.store.append(self.events_path, event)
+            self.store.append(self.revisions_path, {'state': 'done', 'event_id': event['event_id'],
+                                                    'at': datetime.now().astimezone().isoformat()})
+            fixed += 1
+        return fixed
+
+    @_serialized
     def retry_dirty(self, limit=10):
         fixed = 0
+        self._recover_revisions()
         self.retry_pending(limit)
         for event in list(self.events().values()):
             if not event.get('dirty') or fixed >= limit:
@@ -651,6 +752,7 @@ class EventMemory:
                 memory_id, changed, locked = self._write_projection(
                     event, self._projection(event['event_id'], story), event.get('title') or 'Event')
                 if changed or locked:
+                    event['memory_id'] = memory_id or event.get('memory_id')
                     event['dirty'] = False
                     self.store.append(self.events_path, event)
                     fixed += 1
@@ -658,10 +760,13 @@ class EventMemory:
                 continue
         return fixed
 
+    @_serialized
     def auto_correct(self):
         """Merge only events that provably share the same Ombre memory; never guess from topics."""
         by_memory, fixed = {}, 0
         for event in self.events().values():
+            if event.get('status') == 'merged':
+                continue
             if isinstance(event.get('memory_id'), str):
                 by_memory.setdefault(event['memory_id'], []).append(event)
         for memory_id, group in by_memory.items():

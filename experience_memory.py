@@ -168,7 +168,8 @@ class ExperienceMemory:
             return 0
         try:
             from event_memory import EventMemory
-            events = EventMemory(self.memory, settings)
+            events = EventMemory(self.memory, settings, model=self.model, sidecar=self.sidecar)
+            events.locked = self.sidecar.locked
             return events.retry_dirty() + events.auto_correct()
         except Exception:
             return 0
@@ -608,17 +609,25 @@ class ExperienceMemory:
         continues = entry.get('continues')
         args = {'content': entry['text'], 'title': entry['title']}
         if self.events is not None:
+            target_event = self.events.event_for_memory(continues) if continues else None
             try:
-                events = self.events.record(entry['text'], entry['title'], why='经历整理')
-            except Exception:
-                return None
-            if events:
-                memory_id = events.get('memory_id')
-                self.store.append(self.path, {'kind': 'entry', 'memory_id': memory_id, 'title': entry['title'],
-                                              'text': entry['text'], 'merged': False, 'covers': span,
-                                              'continues': continues, 'event_id': events.get('event_id'),
-                                              'time': self.budget.clock()})
-                return memory_id
+                saved = self.events.record(entry['text'], entry['title'], why='经历整理',
+                                           event_id=target_event)
+            except Exception as exc:
+                raise UserError('经历整理的事件没有保存成功；这批消息会重试，不推进游标。') from exc
+            if not saved or saved.get('pending'):
+                raise UserError('经历整理的事件还在等待恢复，没有推进游标。')
+            memory_id = saved.get('memory_id')
+            if continues and not target_event and memory_id:
+                try:
+                    self.sidecar.link(memory_id, continues)
+                except Exception:
+                    pass
+            self.store.append(self.path, {'kind': 'entry', 'memory_id': memory_id, 'title': entry['title'],
+                                          'text': entry['text'], 'merged': False, 'covers': span,
+                                          'continues': continues, 'event_id': saved.get('event_id'),
+                                          'time': self.budget.clock()})
+            return memory_id
         operation, duplicate = self.memory.begin_write(args)
         if duplicate is not None:
             return None

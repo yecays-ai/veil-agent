@@ -306,14 +306,14 @@ class NativeMemoryTools:
         if isinstance(event_settings, dict) and event_settings.get('enabled'):
             from event_memory import EventMemory
             self.events = EventMemory(memory, event_settings, model=self.model, sidecar=self.sidecar)
+            self.events.locked = self.sidecar.locked
             # Startup recovery: finish a stage/event write interrupted last run even when the chat-tidy
-            # feature is not configured at all.
+            # feature is not configured at all. Lock checks must already be bound.
             try:
                 self.events.retry_pending()
                 self.events.retry_dirty()
             except Exception:
                 pass
-            self.events.locked = self.sidecar.locked
         self.tools = [HOLD, SEARCH, *model_tools, MEMORY_HISTORY, MEMORY_CATALOG, MEMORY_READ,
                       *([MEMORY_TIMELINE] if self.events is not None else [])]
 
@@ -1176,13 +1176,34 @@ class NativeMemoryTools:
                     'how it went and what you thought of it, without repeats. Nothing was saved.'), '被拒绝', summary
         if len(why) > WHY_LIMIT or (isinstance(title, str) and len(title) > TITLE_LIMIT):
             return f'The title or why_remembered is too long. Shorten it and save again.', '被拒绝', summary
+        # Ticket 407: pinned/importance limits must run before the event branch creates the projection.
+        importance, pinned = args.get('importance'), args.get('pinned')
+        if importance is not None or pinned is not None:
+            if importance is not None and (type(importance) is not int or not 1 <= importance <= 10):
+                return 'importance must be a whole number from 1 to 10.', '被拒绝', summary
+            if pinned is not None and type(pinned) is not bool:
+                return 'pinned must be true or false.', '被拒绝', summary
+            if pinned:
+                if self.autonomy_mode:
+                    return 'Pinning is available only while chatting with Lan, not during autonomous activity.', '被拒绝', summary
+                if importance is not None:
+                    return 'A pinned memory always has importance 10; do not pass importance with pinned.', '被拒绝', summary
+                if not why.strip():
+                    return 'A pinned memory needs why_remembered: say why it must always surface first.', '被拒绝', summary
+                if len(self._pinned_ids()) >= PINNED_LIMIT:
+                    return (f'{PINNED_LIMIT} memories are already pinned. Unpin one with trace first, or save this '
+                            'one without pinned.'), '被拒绝', summary
         # Ticket 407: manual target_id/link_to must land on the event, not create a parallel fragment.
         if self.events is not None and target_id is not None:
             event_id = self.events.event_for_memory(target_id)
             if event_id:
+                if args.get('merge_ids'):
+                    return ('merge_ids cannot be combined with an event story; rewrite the story, then '
+                            'archive duplicates on the memory page.'), '被拒绝', summary
                 previous = self.memory.content_for(target_id, refresh=True)
+                seen = self.search_results.get(target_id) or previous
                 new_title = title.strip() if isinstance(title, str) else ''
-                if not self.events.revise(event_id, content.strip(), new_title, seen=previous,
+                if not self.events.revise(event_id, content.strip(), new_title, seen=seen,
                                           why='hold(target_id)'):
                     return ('This experience was changed by Lan or is locked; nothing was rewritten.',
                             '被拒绝', summary)
@@ -1190,6 +1211,8 @@ class NativeMemoryTools:
         if self.events is not None and link_to is not None:
             event_id = self.events.event_for_memory(link_to)
             if event_id:
+                if not self._editable(link_to):
+                    return ('link_to must be a memory you were shown and can still see; nothing was saved.'), '被拒绝', summary
                 try:
                     self.events.record(content.strip(), title.strip() if isinstance(title, str) else 'Event',
                                        why=why, event_id=event_id)

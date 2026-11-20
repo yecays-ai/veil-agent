@@ -158,9 +158,13 @@ class EventMemoryTests(unittest.TestCase):
         self.assertEqual(len(self.native.events.stages()), 1)
         self.assertEqual(len(self.backend.rows), 0)
         self.backend.fail = False
+        # An unknown-result hold is never resent; the next real save creates the one projection and folds
+        # the pending stage into it.
         self.native.events.retry_dirty()
+        self.assertEqual(len(self.backend.rows), 0)
+        self.save('A later part of the charcoal note day.', 'The charcoal note')
         self.assertEqual(len(self.backend.rows), 1)
-        self.assertEqual(len(self.native.events.stages()), 1)
+        self.assertEqual(len(self.native.events.stages()), 2)
 
     def test_hidden_event_cannot_be_read_through_the_timeline(self):
         result, state, _ = self.save('She wrote meh on the charcoal note after the file list argument.',
@@ -319,6 +323,7 @@ class EventMemoryTests(unittest.TestCase):
                                                        'title': 'The charcoal note', 'target_id': key})
         self.assertEqual(state, '成功', result)
         self.assertNotEqual(self.backend.rows[key]['content'], original)
+        self.native.search_results[key] = self.memory.content_for(key, refresh=True) or ''
         result, state, _ = self.native.invoke('hold', {'content': 'A later part of the same note day.',
                                                        'title': 'The charcoal note', 'link_to': key})
         self.assertEqual(state, '成功', result)
