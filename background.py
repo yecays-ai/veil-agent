@@ -11,10 +11,13 @@ import re
 import unicodedata
 from pathlib import Path
 
+import prompts
+
 LIMITS = {'items': 3, 'characters': 1500, 'chunk': 700, 'chunks_per_paragraph': 2,
           'keywords': 30, 'keyword_characters': 40}
 CONTEXT_LOG_KEEP = 500
-NOTE = 'Parts of my background that matter for this moment (the rest of my background still holds):'
+# Import-time copy for tests only; background_context() reads the live text on every request.
+NOTE = prompts.text('background.note')
 
 MARKER = re.compile(r'^\s*[\[【]\s*(?:常驻|core)\s*[\]】]\s*', re.I)
 KEYWORD_LINE = re.compile(r'^[ \t]*(?:关键词|关键字|keywords?)[ \t]*[:：][ \t]*(.*)$', re.I | re.M)
@@ -293,7 +296,7 @@ def background_context(path, current, history):
         details['skipped_oversize_characters'] = skipped
     if not entries:
         return None, details
-    content = '[background]\n' + NOTE + '\n' + '\n\n'.join(entries)
+    content = '[background]\n' + prompts.text('background.note') + '\n' + '\n\n'.join(entries)
     details['characters'] = len(content)
     return {'role': 'system', 'content': content}, details
 

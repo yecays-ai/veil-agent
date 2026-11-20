@@ -537,6 +537,14 @@ class Hub(ScreenPopMixin):
             raise UserError('缺少请求 id。')
         return self.chat.pending_approvals.decide(item_id, decision)
 
+    def instructions_page(self):
+        """Ticket 400: every registered instruction with the text that would reach the model."""
+        import instructions
+        chat = self.chat
+        if chat is None:
+            return {'categories': [], 'generated_at': ''}
+        return instructions.page(chat.cfg, getattr(chat, 'profile', None))
+
     def peter_page(self):
         chat = self.chat
         persona_path = Path(chat.cfg.persona_path) if getattr(chat.cfg, 'persona_path', None) else None
@@ -2329,6 +2337,8 @@ def make_handler(hub, token):
                 self._get_windows_apps()
             elif url.path == '/api/peter-page':
                 self._get_peter_page()
+            elif url.path == '/api/instructions':
+                self._get_instructions()
             elif url.path == '/api/pending-approvals':
                 if not self._guard(self.headers.get('X-Token')):
                     return
@@ -2727,6 +2737,14 @@ def make_handler(hub, token):
                 return
             path, interaction = self._windows_apps_path()
             self._send(200, self._windows_apps_view(path, interaction))
+
+        def _get_instructions(self):
+            try:
+                self._send(200, hub.instructions_page())
+            except UserError as exc:
+                self._send(400, {'error': str(exc)})
+            except OSError as exc:
+                self._send(500, {'error': f'读取指令清单失败：{exc}'})
 
         def _get_peter_page(self):
             try:

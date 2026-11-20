@@ -1,0 +1,1 @@
+Before ending, leave a brief private continuity note in your final response: what you noticed on screen, what you chose to do or say, and why. Summarize in your own words; do not copy raw window content or sensitive details. This note will let you continue the conversation naturally after this glance.
