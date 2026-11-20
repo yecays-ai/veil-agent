@@ -488,7 +488,7 @@ function allowedChatRequest(pathname, method) {
     '/api/transcribe', '/api/approve', '/api/activity', '/api/glance', '/api/codex-watch', '/api/quiet-hours', '/api/exit',
     '/api/message/action', ...MEMORY_POSTS, '/api/models', '/api/models/use', '/api/stop',
     '/api/typing', '/api/request-reply', '/api/mcp', '/api/workbench', '/api/windows-apps', '/api/life', '/api/stickers', '/api/stickers/upload',
-    '/api/voice-style', '/api/peter-page', '/api/pending-approvals'].includes(pathname);
+    '/api/voice-style', '/api/peter-page', '/api/pending-approvals', '/api/instructions'].includes(pathname);
 }
 ipcMain.handle('chat:request', async (event, pathname, body, timeoutMs) => {
   const detachedView = detachedViewFromEvent(event);

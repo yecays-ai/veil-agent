@@ -543,7 +543,20 @@ class Hub(ScreenPopMixin):
         chat = self.chat
         if chat is None:
             return {'categories': [], 'generated_at': ''}
-        return instructions.page(chat.cfg, getattr(chat, 'profile', None))
+        return instructions.page()
+
+    def save_instruction(self, body):
+        """Ticket 401: replace one instruction's text whole, then return the refreshed page."""
+        import instructions
+        if not isinstance(body, dict):
+            raise UserError('请求格式不对。')
+        entry_id, text = body.get('id'), body.get('text')
+        if not isinstance(entry_id, str) or not entry_id:
+            raise UserError('缺少条目编号。')
+        if not isinstance(text, str):
+            raise UserError('内容必须是文字。')
+        instructions.save(entry_id, text)
+        return {'page': instructions.page()}
 
     def peter_page(self):
         chat = self.chat
@@ -2746,6 +2759,14 @@ def make_handler(hub, token):
             except OSError as exc:
                 self._send(500, {'error': f'读取指令清单失败：{exc}'})
 
+        def _post_instructions(self, body):
+            try:
+                self._send(200, hub.save_instruction(body))
+            except UserError as exc:
+                self._send(400, {'error': str(exc)})
+            except OSError as exc:
+                self._send(500, {'error': f'保存指令失败：{exc}'})
+
         def _get_peter_page(self):
             try:
                 self._send(200, hub.peter_page())
@@ -3125,6 +3146,8 @@ def make_handler(hub, token):
                 self._post_work_checkpoint(body)
             elif url.path == '/api/voice-style':
                 self._post_voice_style(body)
+            elif url.path == '/api/instructions':
+                self._post_instructions(body)
             elif url.path == '/api/workbench':
                 self._post_workbench(body)
             elif url.path == '/api/windows-apps':

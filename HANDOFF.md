@@ -1,5 +1,12 @@
 # HANDOFF
 
+## 工单 401 交接（指令页可读性、去重与编辑）
+- 页面重写为文档式列表（不再用 `.context-block`，否则 `flex:1 1 0` 会把展开内容压扁），并用 `#instructions-view .instr-text{max-height:none}` 覆盖全局 `details pre` 的 130px 限制。
+- 登记表去掉 5 条 file 类（人设、关于你、背景、样例、记忆笔记）；只保留 text / marker。
+- 新增 `POST /api/instructions`（`instructions.save` → `prompts.store().save`），桌面白名单放行；页内编辑、搜索、命中摘要。
+- 覆盖文件仍在 `persona/instructions/<id>.md`，整条替换，不留版本。
+- 验证：Playwright 截图核对展开与编辑态；python 160 个测试、desktop 21 个测试通过。
+
 ## 工单 400 交接（指令登记表·第一部分）
 - 新增 `prompts/`：`registry.py`（55 条登记）、`store.py`（默认 + `persona/instructions` 覆盖，整条替换）、
   `defaults/*.md`（22 条文本）、`inline.py`（未迁移长句的棘轮检查，清单在 `inline_allowlist.txt`）。

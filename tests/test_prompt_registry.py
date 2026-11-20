@@ -50,6 +50,30 @@ class RegistryTests(unittest.TestCase):
             path.write_bytes(b'\xff\xfe broken')
             self.assertEqual(store.text('chat.send_message'), store.default('chat.send_message'))
 
+    def test_save_instruction_replaces_whole_text(self):
+        import instructions
+        with tempfile.TemporaryDirectory() as tmp:
+            old = prompts._store
+            try:
+                prompts._store = PromptStore(prompts.DEFAULTS, tmp)
+                row = instructions.save('chat.stay_silent', 'A much shorter line.')
+                self.assertEqual(row['text'], 'A much shorter line.')
+                self.assertTrue(row['overridden'])
+                self.assertEqual(instructions.page()['categories'][0]['entries'][0]['kind'], 'text')
+            finally:
+                prompts._store = old
+
+    def test_save_instruction_refuses_readonly_entry(self):
+        import instructions
+        with tempfile.TemporaryDirectory() as tmp:
+            old = prompts._store
+            try:
+                prompts._store = PromptStore(prompts.DEFAULTS, tmp)
+                with self.assertRaises(Exception):
+                    instructions.save('memory.recalled', 'x')
+            finally:
+                prompts._store = old
+
     def test_tool_description_is_read_per_request(self):
         import veil_agent
         with tempfile.TemporaryDirectory() as tmp:
@@ -87,12 +111,16 @@ output_cny_per_million = "8"
             (root / 'persona' / 'test.md').write_text('Fictional persona body', encoding='utf-8')
             (root / 'characters' / 'test' / 'character.toml').write_text(self.CONFIG, encoding='utf-8')
             cfg = load_character(root, 'test')
-            data = instructions.page(cfg)
+            data = instructions.page()
             groups = {group['id']: group for group in data['categories']}
             self.assertEqual(len(groups), 8)
             rows = {row['id']: row for group in data['categories'] for row in group['entries']}
             self.assertEqual(len(rows), len(prompts.entries()))
-            self.assertEqual(rows['identity.persona']['text'], 'Fictional persona body')
+            # Persona, background, samples and notes have their own pages; never listed twice here.
+            for absent in ('identity.persona', 'identity.user', 'background.library',
+                           'voice.samples', 'memory.notes'):
+                self.assertNotIn(absent, rows)
+            self.assertTrue(all(row['kind'] in ('text', 'marker') for row in rows.values()))
             for row in rows.values():
                 if row['kind'] == 'text':
                     self.assertTrue(row['text'].strip(), row['id'])

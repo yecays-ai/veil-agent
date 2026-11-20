@@ -2095,53 +2095,126 @@ function renderWindowsApps(data){
 }
 async function loadWindowsApps(){try{const r=await api('/api/windows-apps');const data=await r.json();if(r.ok)renderWindowsApps(data)}catch(error){}}
 loadWindowsApps();
-let instructionsLoaded=false,instructionsKey='';
-function instructionEntry(row){
-  const details=document.createElement('details');details.className='instruction-entry';
-  const summary=document.createElement('summary');
-  const name=document.createElement('strong');name.textContent=row.title;
-  const badge=document.createElement('span');badge.className='instruction-kind'+(row.editable?' editable':'');
-  badge.textContent=row.kind_label+(row.overridden?' · 你改过':'');
-  summary.append(name,badge);
-  const body=document.createElement('div');body.className='instruction-body';
-  const meta=document.createElement('p');meta.className='muted';
-  meta.textContent=row.site+(row.note?'　'+row.note:'');
-  const source=document.createElement('p');source.className='muted';source.textContent='来源：'+row.source;
-  const pre=document.createElement('pre');pre.className='instruction-text';
-  pre.textContent=row.text||'（这一条没有固定原文，每轮由程序生成）';
-  body.append(meta,source,pre);details.append(summary,body);
-  return details;
+let instructionsData=null,instructionsOpen='',instructionsEditing='',instructionsSaving=false,instructionsQuery='';
+function instructionMatches(row,query){
+  if(!query)return true;
+  const hay=[row.title,row.site,row.note,row.text].map(value=>String(value||'').toLocaleLowerCase());
+  return hay.some(value=>value.includes(query));
+}
+function instructionSnippet(row,query){
+  if(!query)return '';
+  const text=String(row.text||'').toLocaleLowerCase();
+  const at=text.indexOf(query);
+  if(at<0)return '';
+  const source=String(row.text||'');
+  const from=Math.max(0,at-28),to=Math.min(source.length,at+query.length+46);
+  return (from>0?'…':'')+source.slice(from,to)+(to<source.length?'…':'');
 }
 function renderInstructions(data){
+  instructionsData=data;
   const list=$('instructions-list');list.replaceChildren();
   const categories=Array.isArray(data.categories)?data.categories:[];
-  let total=0;
+  const query=String(instructionsQuery||'').toLocaleLowerCase();
+  let total=0,shown=0,matches=[];
   for(const group of categories){
-    const entries=Array.isArray(group.entries)?group.entries:[];
+    const entries=(Array.isArray(group.entries)?group.entries:[]).filter(row=>instructionMatches(row,query));
+    total+=Array.isArray(group.entries)?group.entries.length:0;
     if(!entries.length)continue;
-    total+=entries.length;
-    const section=document.createElement('section');section.className='surface context-block';
-    const heading=document.createElement('h3');heading.textContent=group.title;
-    const count=document.createElement('small');count.className='muted';
-    count.textContent=' '+entries.length+' 条'+(group.editable?' · '+group.editable+' 条可编辑':'');
+    shown+=entries.length;matches=matches.concat(entries);
+    const section=document.createElement('section');section.className='instr-section';
+    const heading=document.createElement('h3');heading.className='instr-heading';heading.textContent=group.title;
+    const count=document.createElement('small');
+    count.textContent=query?entries.length+' 条匹配':entries.length+' 条'+(group.editable?' · '+group.editable+' 条可改':'');
     heading.appendChild(count);section.appendChild(heading);
     for(const row of entries)section.appendChild(instructionEntry(row));
     list.appendChild(section);
   }
-  if(!total){const p=document.createElement('p');p.className='muted';p.textContent='没有登记任何指令';list.appendChild(p)}
-  $('instructions-status').textContent=total+' 条 · 读取于 '+shortTime(data.generated_at);
+  if(!shown){const p=document.createElement('p');p.className='instr-meta';p.textContent=query?'没有匹配的指令':'没有登记任何指令';list.appendChild(p)}
+  $('instructions-status').textContent=query?shown+' 条匹配 · 共 '+total+' 条':total+' 条 · 更新于 '+shortTime(data.generated_at);
 }
-async function loadInstructions(force=false){
+function instructionEntry(row){
+  const details=document.createElement('details');details.className='instr-entry';
+  const searching=!!instructionsQuery;
+  const autoOpen=searching&&(instructionsSnippet(row,instructionsQuery)||'').trim().length>0;
+  details.open=instructionsOpen===row.id||autoOpen;
+  const summary=document.createElement('summary');
+  const line=document.createElement('span');line.className='instr-line';
+  const chev=document.createElement('span');chev.className='instr-chev';chev.textContent=details.open?'▾':'▸';
+  const title=document.createElement('span');title.className='instr-title';title.textContent=row.title;
+  const badge=document.createElement('span');badge.className='instr-badge';badge.textContent=row.kind_label||'';
+  line.append(chev,title,badge);
+  if(row.overridden){const changed=document.createElement('span');changed.className='instr-badge changed';changed.textContent='你改过';line.appendChild(changed)}
+  summary.appendChild(line);
+  const snippet=searching?instructionSnippet(row,instructionsQuery):'';
+  if(snippet){const text=document.createElement('span');text.className='instr-snippet';text.textContent=snippet;summary.appendChild(text)}
+  summary.onclick=(event)=>{
+    event.preventDefault();
+    instructionsOpen=details.open?'':row.id;
+    if(instructionsOpen!==row.id)instructionsEditing='';
+    renderInstructions(instructionsData);
+  };
+  details.appendChild(summary);
+  if(details.open){
+    const body=document.createElement('div');body.className='instr-body';
+    const meta=document.createElement('p');meta.className='instr-meta';meta.textContent=row.site+(row.note?'　'+row.note:'');body.appendChild(meta);
+    const source=document.createElement('p');source.className='instr-source';source.textContent='来源：'+row.source;body.appendChild(source);
+    if(row.kind==='text'&&row.editable&&instructionsEditing===row.id){
+      body.appendChild(instructionEditor(row));
+    }else if(row.kind==='text'&&row.editable){
+      const pre=document.createElement('pre');pre.className='instr-text';pre.textContent=row.text||'（空）';body.appendChild(pre);
+      const actions=document.createElement('div');actions.className='instr-actions';
+      const edit=document.createElement('button');edit.type='button';edit.textContent='改这一条';
+      edit.onclick=()=>{instructionsEditing=row.id;instructionsOpen=row.id;renderInstructions(instructionsData)};
+      const hint=document.createElement('span');hint.className='instr-hint';
+      hint.textContent=row.category==='autonomy'?'保存后，下一次自主活动用新内容':'保存后，下一次请求用新内容';
+      actions.append(edit,hint);body.appendChild(actions);
+    }else{
+      const pre=document.createElement('pre');pre.className='instr-text';
+      pre.textContent=row.text||'（这一条每轮由程序生成，没有固定原文；上面写了它在请求里的位置）';
+      body.appendChild(pre);
+    }
+    details.appendChild(body);
+  }
+  return details;
+}
+function instructionEditor(row){
+  const box=document.createElement('div');box.className='instr-actions';box.style.flexDirection='column';box.style.alignItems='stretch';
+  const area=document.createElement('textarea');area.className='instr-editor';area.value=row.text;area.spellcheck=false;
+  const error=document.createElement('p');error.className='instr-error';error.hidden=true;
+  const row2=document.createElement('div');row2.className='instr-actions';
+  const save=document.createElement('button');save.type='button';save.textContent='保存';save.disabled=instructionsSaving;
+  const cancel=document.createElement('button');cancel.type='button';cancel.textContent='取消';
+  cancel.onclick=()=>{instructionsEditing='';renderInstructions(instructionsData)};
+  save.onclick=async()=>{
+    if(instructionsSaving)return;
+    instructionsSaving=true;save.disabled=true;save.textContent='保存中…';
+    try{
+      const response=await api('/api/instructions',{id:row.id,text:area.value});
+      const data=await response.json();
+      if(!response.ok){error.hidden=false;error.textContent='没有保存：'+((data&&data.error)||response.status);return}
+      instructionsData=data.page;instructionsEditing='';instructionsOpen=row.id;
+      renderInstructions(instructionsData);
+      notify(row.category==='autonomy'?'已保存，下一次自主活动用新内容。':'已保存，下一次请求用新内容。');
+    }catch(err){error.hidden=false;error.textContent='没有保存：'+err.message}
+    finally{instructionsSaving=false;save.textContent='保存';save.disabled=false}
+  };
+  row2.append(save,cancel);
+  box.append(area,error,row2);
+  return box;
+}
+async function loadInstructions(){
   try{
     const response=await api('/api/instructions');
     const data=await response.json();
-    if(!response.ok){$('instructions-status').textContent='读取失败：'+(data&&data.error||response.status);return}
-    const key=JSON.stringify(data.categories||[]);
-    if(!force&&key===instructionsKey&&instructionsLoaded)return;
-    instructionsKey=key;instructionsLoaded=true;renderInstructions(data);
+    if(!response.ok){$('instructions-status').textContent='读取失败：'+((data&&data.error)||response.status);return}
+    renderInstructions(data);
   }catch(error){$('instructions-status').textContent='读取失败：'+error.message}
 }
-
+$('instructions-search').addEventListener('input',event=>{
+  instructionsQuery=String(event.target.value||'').trim().toLocaleLowerCase();
+  instructionsOpen='';instructionsEditing='';
+  if(instructionsData)renderInstructions(instructionsData);
+});
 function applyCustomCSS(value){
   const css=String(value||'');
   if(css.length>20000||/@import\b|url\s*\(|expression\s*\(|-moz-binding|behavior\s*:/i.test(css))throw new Error('CSS 不能加载外部资源或脚本');

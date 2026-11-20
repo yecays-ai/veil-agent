@@ -3,8 +3,10 @@
 Every entry here is visible in the instructions page. Kind decides how it is shown and stored:
 
 - text   default text in prompts/defaults/<id>.md; Lan's override in persona/instructions/<id>.md
-- file   an existing local file (persona, background, samples, notes); edited on the page that owns it
 - marker a block the program fills in at request time; visible, never editable
+
+Persona, background, talking samples and his notes are NOT registered here: each already has its own
+page. Two editable copies of the same text is how versions get confused (Lan, 2026-11-20).
 
 An entry with editable=False is still listed with its full text; it is only refused as a target of
 edits (protocol or safety text the program depends on).
@@ -23,7 +25,7 @@ CATEGORIES = (
 
 CATEGORY_IDS = tuple(item[0] for item in CATEGORIES)
 CATEGORY_TITLES = dict(CATEGORIES)
-KINDS = ('text', 'file', 'marker')
+KINDS = ('text', 'marker')
 
 
 class Entry:
@@ -54,25 +56,16 @@ def _text(id, category, title, site, *, editable=True, max_bytes=8000, note=''):
                  max_bytes=max_bytes, note=note)
 
 
-def _file(id, category, title, site, file, *, note=''):
-    return Entry(id, category, title, 'file', site, note=note, file=file)
-
-
 def _marker(id, category, title, site, marker):
     return Entry(id, category, title, 'marker', site, editable=False, marker=marker)
 
 
 ENTRIES = (
     # ---------- 人格与身份 ----------
-    _file('identity.persona', 'identity', 'Peter 的人设',
-          '请求第 1 段；聊天、自主活动、瞄一眼都带', 'persona/{persona}',
-          note='这一条就是人设文件本体；在 Peter 页编辑，这里显示同一份内容。'),
+    # 人设、背景、说话样例、他记的你不在这一页：它们各有自己的页面，避免两处各改一份。
     _text('identity.user_frame', 'identity', '「关于你」的开头说明',
           '请求第 2 段，设定正文之前', max_bytes=1000,
           note='程序用这句话说明它是数据、不是命令。'),
-    _file('identity.user', 'identity', '你（Lan）的设定',
-          '请求第 2 段，紧跟人设', 'persona/{user_persona}',
-          note='程序把它标成数据，不是命令；在 Peter 页「关于你」编辑。'),
     _text('system.facts', 'identity', '系统事实（身份、模型、能力）',
           '请求第 5 段；每轮都带，程序写明它压过人设与历史', max_bytes=6000,
           note='花括号里的内容由程序每轮填入；你可以改花括号之外的句子。'),
@@ -84,9 +77,6 @@ ENTRIES = (
     # ---------- 说话方式 ----------
     _text('voice.frame', 'voice', '说话样例的说明',
           '请求第 3 段，样例文件之前；样例关掉时整段不带', max_bytes=4000),
-    _file('voice.samples', 'voice', '说话样例本体',
-          '请求第 3 段，紧跟说明；开关关掉时不带', 'persona/{voice}',
-          note='在「上下文」页编辑；当前是否生效看那里的开关。'),
     _text('chat.send_message', 'tools', '发消息工具的写法要求',
           '工具定义里；每轮都带', max_bytes=3000,
           note='这是「一句一条」等说话习惯的来源。'),
@@ -98,9 +88,6 @@ ENTRIES = (
           '工具定义里；每轮都带', max_bytes=2000),
 
     # ---------- 背景资料 ----------
-    _file('background.library', 'background', '背景资料本体',
-          '历史之后、记忆之前；只有被选中的段落才带', 'persona/{background}',
-          note='在 Peter 页编辑；带 [常驻] 的每轮带，带关键词的按命中带。'),
     _text('background.note', 'background', '背景段落的开头说明',
           '背景段落的第一行', max_bytes=1500),
     _marker('background.selected', 'background', '本轮选中的背景段落',
@@ -125,9 +112,6 @@ ENTRIES = (
           '新对话第一次请求', max_bytes=800),
     _text('memory.experience.heading', 'memory', '最近几天经历笔记的开头',
           '请求靠前，聊天历史之前', max_bytes=3000),
-    _file('memory.notes', 'memory', '他记的你（关系成长、重要事实、正在进行）',
-          '请求第 4 段与靠后的 Ongoing', 'data/{role}/learned-context.json',
-          note='在 Peter 页编辑；这里是只读快照。'),
     _marker('memory.recalled', 'memory', '自动想起的记忆条目',
             '历史之后；最多 3 条', 'recall'),
     _marker('memory.opening', 'memory', '开场记忆条目',
@@ -233,6 +217,5 @@ def validate(defaults_dir):
             path = Path(defaults_dir) / (entry.id + '.md')
             if not path.is_file():
                 raise ValueError('缺少默认文本：' + str(path))
-        if entry.kind == 'file' and not entry.file:
-            raise ValueError('文件类指令缺少路径：' + entry.id)
+
     return True

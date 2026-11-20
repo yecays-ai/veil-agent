@@ -99,7 +99,8 @@
   </section>
   <section id="instructions-view" class="page" data-page-view="instructions" hidden>
     <div class="page-heading"><div><h2>指令</h2></div><span id="instructions-status" class="muted"></span></div>
-    <p class="muted">所有会影响 Peter 的文本。标「文本」的是可以改的提示词原文；「文件」在对应页面改；标「每轮生成」的是运行时数据，没有固定原文。</p>
+    <p class="instructions-intro">他每次请求里由程序拼进去的指令原文都在这里，点开一条可以直接改。人设、背景、说话样例、他记的你、你的设置仍在 Peter 页和「上下文」页改，这里不重复列，避免两个地方各存一份、不知道哪份在生效。</p>
+    <div class="instructions-tools"><input id="instructions-search" type="search" placeholder="搜名称或原文，例如「醒来」「记住」「发消息」" aria-label="搜索指令"></div>
     <div id="instructions-list" class="instructions-list" aria-live="polite"><p class="muted">读取中…</p></div>
   </section>
   <section id="memory-view" class="page" data-page-view="memory" hidden>
