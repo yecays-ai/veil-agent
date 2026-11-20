@@ -315,7 +315,7 @@ class WindowsObservationTools:
         self._visual_lock = threading.Lock()
         self._visual_used = False
         self._stuck_lock = threading.Lock()
-        self._abandoned = {}
+        self._abandoned = set()
         self._unresponsive = {}
 
     def begin_request(self):
@@ -367,7 +367,10 @@ class WindowsObservationTools:
 
         cancelled = threading.Event()
         result_queue = queue.Queue()
-        window_key = args.get('window_id') if name == 'windows_observe' else None
+        # Only windows_observe starts a UI Automation read; listing and foreground are pure
+        # Win32, so an abandoned read must never make them wait or be refused.
+        uia_read = name == 'windows_observe'
+        window_key = args.get('window_id') if uia_read else None
 
         def stopped():
             if cancelled.is_set():
@@ -390,15 +393,17 @@ class WindowsObservationTools:
                     pass
             finally:
                 with self._stuck_lock:
-                    self._abandoned.pop(threading.get_ident(), None)
+                    # `done` closes the race with the caller's timeout registration below.
+                    thread.done = True
+                    self._abandoned.discard(thread)
 
-        if window_key and self._is_unresponsive(window_key):
+        if uia_read and window_key and self._is_unresponsive(window_key):
             return WindowsToolResult(
                 'That window did not answer before and is being skipped for now. Other windows can still be read.',
                 activity_detail='这个窗口之前无响应，暂时跳过；其它窗口仍可读取。',
             ), '搁置', summary
 
-        if self._live_abandoned_count() >= MAX_ABANDONED_READS:
+        if uia_read and self._live_abandoned_count() >= MAX_ABANDONED_READS:
             return WindowsToolResult(
                 'Windows observation is still recovering from an unresponsive window; no read was started.',
                 activity_detail='上一个卡住的窗口读取还没返回；本次没有读取。',
@@ -419,11 +424,9 @@ class WindowsObservationTools:
                         timeout=self.timeout_seconds)
                 except queue.Empty:
                     cancelled.set()
-                    with self._stuck_lock:
-                        # Kept until the thread really exits: a timed-out read must never be
-                        # counted as finished, or wedged threads would accumulate forever.
-                        self._abandoned[thread.ident] = thread
-                        if window_key:
+                    self._register_abandoned(thread)
+                    if window_key and not getattr(thread, 'done', False):
+                        with self._stuck_lock:
                             self._unresponsive[window_key] = time.monotonic()
                     cancel_synchronous_io(thread)
                     return WindowsToolResult(
@@ -471,12 +474,22 @@ class WindowsObservationTools:
             return WindowsToolResult(message, activity_detail=detail), state, summary
         return result, state, actual_summary
 
+    def _register_abandoned(self, thread):
+        """Record a timed-out worker unless it already finished before we got here.
+
+        The worker marks itself `done` and discards itself under the same lock in its finally
+        block, so a worker that completes between the queue timeout and this call leaves no
+        record behind (the old code could leave a dead entry and, after three, pause reading).
+        """
+        with self._stuck_lock:
+            self._abandoned.add(thread)
+            if getattr(thread, 'done', False):
+                self._abandoned.discard(thread)
+
     def _live_abandoned_count(self):
         """Abandoned reads whose thread is still alive; dead ones are forgotten, live ones never are."""
         with self._stuck_lock:
-            for ident, thread in list(self._abandoned.items()):
-                if not thread.is_alive():
-                    self._abandoned.pop(ident, None)
+            self._abandoned = {thread for thread in self._abandoned if thread.is_alive()}
             return len(self._abandoned)
 
     def _is_unresponsive(self, window_key):

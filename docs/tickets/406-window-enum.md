@@ -26,7 +26,9 @@
 3. 卡住保护（`WindowsObservationTools.invoke`）：
    - 桌面锁改由**调用线程**持有。worker 如果卡在 UIA 调用里，调用线程超时后自己释放锁，一次卡死的 COM 调用不会再永久占住桌面。
    - 超时后调用 `CancelSynchronousIo`，尽量让卡住的线程真正退出；线程没退出就记在 `_abandoned` 里，**按是否还活着计数**（最多 3 个），死掉的才移除——不会靠时间清计数把还卡着的线程当成已结束。
-   - 卡过的窗口按 `window_id` 熔断 600 秒，只跳过这一个窗口；其它窗口照常读。`windows_list` 只走 Win32，卡住期间仍可用。
+   - 计数和熔断只作用于 `windows_observe`（唯一启动 UIA 读取的工具）；`windows_list` / `windows_foreground` 是纯 Win32，任何时候都不受影响。
+   - 超时登记与 worker 完成用同一把锁加 `done` 标记同步，避免“worker 刚好在超时前结束、记录却留下来”的竞态。
+   - 卡过的窗口按 `window_id` 熔断 600 秒，只跳过这一个窗口；其它窗口照常读。
    - 进程名用 `PureWindowsPath(process_path).name` 解析，Ubuntu CI 上受保护进程过滤才不会失效。
 4. `qq_channel._chat_window` 改用同一个适配层，不再调用 `GetRootControl().GetChildren()`。
 5. 权限、审批、日志、截图流程都没动。

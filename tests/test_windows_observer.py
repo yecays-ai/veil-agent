@@ -560,13 +560,18 @@ class StuckWindowReadTests(unittest.TestCase):
         backend = FakeBackend()
         tools = WindowsObservationTools(True, backend=backend, platform_enabled=True,
                                         timeout_seconds=1)
-        tools._abandoned = {index: AliveThread() for index in range(3)}
+        tools._abandoned = {AliveThread(), AliveThread(), AliveThread()}
 
         result, state, _ = tools.invoke('windows_observe', {'window_id': 'w-' + '1' * 24})
 
         self.assertEqual(state, '搁置')
         self.assertIn('unresponsive', str(result))
         self.assertEqual(backend.read_calls, 0)
+
+        # Pure Win32 tools must keep working while UIA reads are backing off.
+        listing, list_state, _ = tools.invoke('windows_list', {})
+        self.assertEqual(list_state, '成功')
+        self.assertIn('Notepad', str(listing))
 
     def test_dead_abandoned_reads_are_forgotten(self):
         class DeadThread:
@@ -575,11 +580,25 @@ class StuckWindowReadTests(unittest.TestCase):
                 return False
 
         tools = WindowsObservationTools(True, backend=FakeBackend(), platform_enabled=True)
-        tools._abandoned = {index: DeadThread() for index in range(3)}
+        tools._abandoned = {DeadThread(), DeadThread(), DeadThread()}
 
         result, state, _ = tools.invoke('windows_list', {})
 
         self.assertEqual(state, '成功')
+        self.assertEqual(tools._live_abandoned_count(), 0)
+
+    def test_a_worker_that_finished_during_the_timeout_leaves_no_abandoned_record(self):
+        tools = WindowsObservationTools(True, backend=FakeBackend(), platform_enabled=True)
+
+        class Finished:
+            done = True
+
+            @staticmethod
+            def is_alive():
+                return False
+
+        tools._register_abandoned(Finished())
+
         self.assertEqual(tools._live_abandoned_count(), 0)
 
 

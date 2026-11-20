@@ -3,7 +3,7 @@
 ## 工单 406 交接（统一窗口枚举适配层）
 - 根因（只读诊断）：11-19 12:38 系统文件批量重写后，Python 的 UIA3 桌面根节点枚举（`CUIAutomation`/`CUIAutomation8` 都一样）只返回 0–1 个元素；同一时刻 .NET UIA2 返回 12 个、Win32 13 个、按 HWND 读正常。已排除权限、venv、comtypes 缓存、会话；是否由 `UIAutomationCore.dll` 版本错位引起未证实，本单不碰系统组件。
 - 改法：`windows_observer.WindowsDesktopBackend.list_windows` 用 `EnumWindows` 拿窗口与 HWND，`_windows_from_rows` 生成与原来完全相同的身份字段（`window_id` 公式没变）。读控件仍然只走 `ControlFromHandle(HWND)`，所以 `windows_observe`/`windows_control_action`/`windows_manage`/`windows_launch` 的代码一行没改就恢复了。
-- 卡死保护（评审后收紧）：桌面锁从 worker 移到调用线程；worker 超时被放弃后调用线程自己释放锁，并调用 `CancelSynchronousIo` 尽量让那个线程真的退出。放弃的线程按**是否还活着**计数（`_abandoned`，最多 3 个），死掉的才移除；卡过的窗口按 `window_id` 熔断 600 秒（`_unresponsive`），只跳这一个窗口，其它窗口照常读。`windows_list` 纯 Win32，卡住期间仍可用。
+- 卡死保护（评审后收紧）：桌面锁从 worker 移到调用线程；worker 超时被放弃后调用线程自己释放锁，并调用 `CancelSynchronousIo` 尽量让那个线程真的退出。放弃的线程按**是否还活着**计数（`_abandoned` 集合，最多 3 个），死掉的才移除；计数与熔断只作用于 `windows_observe`，`windows_list`/`windows_foreground` 是纯 Win32、永远不受影响；超时登记和 worker 的 finally 用同一把锁 + `done` 标记同步，避免“刚好在超时前结束”的竞态留下死记录；卡过的窗口按 `window_id` 熔断 600 秒，只跳这一个窗口。
 - POSIX：进程名改用 `PureWindowsPath(process_path).name`，否则 Ubuntu 的 CI 上 `Path('C:\\...\\notepad.exe').name` 会保留整条路径，受保护进程过滤失效。
 - QQ：`qq_channel._chat_window` 改用同一个适配层（按进程 + 标题 + 尺寸找 HWND，再 `ControlFromHandle`），不再碰桌面根节点。
 - 没动：权限分级、审批、日志、截图路径、系统组件；空标题窗口（桌面整理浮层、输入法助手）不再进列表，以前 UIA 也不列。
