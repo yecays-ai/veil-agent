@@ -38,6 +38,11 @@ from delegate_agent import TOOL_SCHEMA as DELEGATE_TOOL
 ROOT = Path(__file__).resolve().parent
 MILLION = Decimal(1_000_000)
 MIN_TOKEN_CALIBRATION_BYTES = 16_384
+# One JSON message already carries its own separators; this is only the tokenizer's
+# per-item framing allowance (about four tokens), not another 256-byte payload.
+MESSAGE_FRAMING_BYTES = 16
+MIN_PLAUSIBLE_USAGE_RATIO = 0.05
+MAX_PLAUSIBLE_USAGE_RATIO = 1.0
 PHOTO_PLACEHOLDER = '[Lan sent a photo]'
 PHOTO_MIME_TYPES = {'image/png', 'image/jpeg', 'image/gif', 'image/webp'}
 MAX_PHOTO_BYTES = 5 * 1024 * 1024
@@ -1701,13 +1706,15 @@ class Budget:
                     or reservation.get('provider_key') != provider_key
                     or type(row.get('prompt_tokens')) is not int or row['prompt_tokens'] <= 0):
                 continue
+            if row.get('usage_status') not in (None, 'reported'):
+                continue
             ratio = row['prompt_tokens'] / row['input_bytes']
             highest_ratio = ratio if highest_ratio is None else max(highest_ratio, ratio)
         return highest_ratio
 
     @synchronized
     def settle(self, request_id, cfg, prompt, completion, cached, *, input_bytes=None,
-               accounting=None, category=None, tolerate_over_bound=False):
+               accounting=None, category=None, tolerate_over_bound=False, usage_status=None):
         cache_status = 'reported' if cached is not None else 'unreported'
         cache_usage_field = None
         if isinstance(cached, CacheUsage):
@@ -1752,6 +1759,8 @@ class Budget:
                                     'max_output_tokens': cfg.max_output_tokens}
         if input_bytes is not None:
             settlement['input_bytes'] = input_bytes
+        if usage_status:
+            settlement['usage_status'] = usage_status
         self.store.append('costs.jsonl', settlement)
         return True
 
@@ -1926,7 +1935,7 @@ def message_request_bytes(message):
              if isinstance(part, dict) and part.get('type') == 'image_url' else part)
             for part in content
         ]}
-    return len(json.dumps(sized, ensure_ascii=False).encode('utf-8')) + 256
+    return len(json.dumps(sized, ensure_ascii=False).encode('utf-8')) + MESSAGE_FRAMING_BYTES
 
 
 def request_byte_size(messages, tools=None):
@@ -1962,13 +1971,93 @@ def conservative_token_ratio(observed_ratio):
     return min(1.0, max(0.15, observed_ratio * 1.2))
 
 
-def assistant_retry_turn(message, content):
+def usage_status_for(prompt_tokens, sent_bytes, *, previous_tokens=None, previous_bytes=None):
+    """Whether provider usage can calibrate the local input budget.
+
+    A relay may report only uncached/new prompt tokens (seen as a continuation claiming ~2k prompt
+    tokens for a 158KB request). Trusting that would make the context guard think a huge request is
+    small, so impossible ratios and sudden halving at a stable size are marked unreliable.
+    """
+    if type(prompt_tokens) is not int or prompt_tokens <= 0:
+        return 'missing'
+    if type(sent_bytes) is not int or sent_bytes <= 0:
+        return 'unreliable_ratio'
+    # A small request cannot put the context guard near its limit; its usage is not used
+    # for calibration (that already requires a much larger sample), so do not reject it.
+    if sent_bytes < MIN_TOKEN_CALIBRATION_BYTES:
+        return 'reported'
+    ratio = prompt_tokens / sent_bytes
+    if ratio < MIN_PLAUSIBLE_USAGE_RATIO or ratio > MAX_PLAUSIBLE_USAGE_RATIO:
+        return 'unreliable_ratio'
+    if (type(previous_tokens) is int and previous_tokens > 0
+            and type(previous_bytes) is int and previous_bytes > 0
+            and sent_bytes >= previous_bytes * 0.8
+            and prompt_tokens < previous_tokens * 0.5):
+        return 'unreliable_underreported'
+    return 'reported'
+
+
+def stable_hash(value):
+    """Stable hash for duplicate detection. Never store the raw value for this purpose."""
+    try:
+        text = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'), default=str)
+    except (TypeError, ValueError):
+        text = repr(value)
+    return hashlib.sha1(text.encode('utf-8')).hexdigest()
+
+
+def tool_arguments_hash(arguments):
+    """Hash parsed tool arguments; fall back to the raw text when the model sent invalid JSON."""
+    try:
+        return stable_hash(json.loads(arguments or '{}'))
+    except (TypeError, ValueError):
+        return stable_hash(arguments or '')
+
+
+def message_field(message, name):
+    """Read one message field, including provider extras kept outside the SDK's typed attributes."""
+    if not isinstance(name, str) or not name:
+        return None
+    value = getattr(message, name, None)
+    if value is None:
+        extra = getattr(message, 'model_extra', None)
+        if isinstance(extra, dict):
+            value = extra.get(name)
+    return value
+
+
+def reasoning_field_for(provider):
+    """The exact field this model uses for reasoning, never an implicit alias.
+
+    The legacy behavior is reasoning_content (DeepSeek and the Grok relay). A provider that uses
+    another field must say so in models.json; VEIL does not copy reasoning into a different field,
+    because that is a protocol claim the provider did not make.
+    """
+    field = (provider or {}).get('reasoning_field')
+    return field if field in ('reasoning_content', 'reasoning') else 'reasoning_content'
+
+
+def copy_reasoning(record, message, field='reasoning_content'):
+    """Copy reasoning under the provider's own field name. Returns the value, or None.
+
+    The other reasoning field is removed: sending an alias the provider did not ask for is exactly
+    the protocol guess this configuration exists to avoid."""
+    for other in ('reasoning_content', 'reasoning'):
+        if other != field:
+            record.pop(other, None)
+    value = message_field(message, field)
+    if isinstance(value, str) and value:
+        record[field] = value
+        return value
+    return None
+
+
+def assistant_retry_turn(message, content, reasoning_field='reasoning_content'):
     """His reply put back before the program asks him to try again. DeepSeek's thinking mode refuses the next
-    request unless the reasoning of that reply comes back with it, so it is kept when the provider gave one."""
+    request unless the reasoning of that reply comes back with it, so it is kept when the provider gave one.
+    The caller passes the field this model actually uses; no two fields are assumed equivalent."""
     turn = {'role': 'assistant', 'content': content}
-    reasoning = getattr(message, 'reasoning_content', None)
-    if reasoning is not None:
-        turn['reasoning_content'] = reasoning
+    copy_reasoning(turn, message, reasoning_field)
     return turn
 
 
@@ -3708,6 +3797,7 @@ class Chat:
         window = getattr(self, 'history_window', {}) or {}
         row = {
             'kind': request_kind(self, text, autonomy), 'request_id': request_id,
+            'sent': not self.tool_mode, 'usage_status': 'preflight',
             'model': self.cfg.provider.get('model'),
             'model_input_limit': self.cfg.provider.get('max_input_tokens'),
             'persona_chars': len(self.cfg.persona), 'about_lan_chars': len(profile_context or ''),
@@ -4312,11 +4402,11 @@ class Chat:
                 result.append(label or '')
             return result
 
-        def snapshot_step(step, sent_messages, sent_tools):
+        def snapshot_step(step, sent_messages, sent_tools, sent=True):
             try:
                 request_snapshots.save(self.store.root, self.cfg.id, request_snapshots.build(
                     sent_messages, snapshot_labels(sent_messages), request_id=request_id, step=step,
-                    kind=snapshot_kind, model=self.cfg.provider.get('model'), message_ids=mids,
+                    kind=snapshot_kind, model=self.cfg.provider.get('model'), message_ids=mids, sent=sent,
                     autonomy_run_id=getattr(self, 'autonomy_run_id', None),
                     estimated_tokens=estimate_request_tokens(sent_messages, sent_tools, calibration),
                     cache_prefix=len(head), trim_note=self.trim_note or '',
@@ -4325,7 +4415,7 @@ class Chat:
             except Exception:
                 pass
 
-        snapshot_step(1, messages, tool_schema)
+        snapshot_step(1, messages, tool_schema, sent=not self.tool_mode)
         save_debug = getattr(self.memory, 'save_recall_debug', None) if self.memory is not None else None
         if callable(save_debug) and not skip_recall:
             # Ticket 391: IDs only, no query or memory text; the panel reads this next to the context log.
@@ -4348,6 +4438,7 @@ class Chat:
                     sent_bytes = request_byte_size(messages)
                     self.budget.mark_dispatched(request_id)
                     reply, prompt, completion, cached = self._model_call(messages)
+                    usage_status = usage_status_for(prompt, sent_bytes)
                 except RequestNotSent:
                     self.budget.release_not_sent(request_id)
                     raise
@@ -4407,7 +4498,8 @@ class Chat:
                 self.store.append(self.path, event)
                 self.reply_row_saved = True
             if not self.tool_mode:
-                self.budget.settle(request_id, self.cfg, prompt, completion, cached, input_bytes=sent_bytes, tolerate_over_bound=True)
+                self.budget.settle(request_id, self.cfg, prompt, completion, cached, input_bytes=sent_bytes,
+                                   tolerate_over_bound=True, usage_status=usage_status)
             # The event was included in the successful normal-chat request above.
             # Do not mark it delivered before the provider returns usable text:
             # failed requests must leave the durable pending event for a retry.
@@ -5013,7 +5105,7 @@ class Chat:
 
     def _tool_chat(self, messages, request_id, history_count, history_start=None, autonomy=False,
                    checkpoint_goal='', checkpoint_resuming=False, snapshot=None):
-        from tools_agent import display_call, reasoning_text
+        from tools_agent import MAX_THOUGHT_CHARS, display_call
         from windows_interaction import WINDOWS_DESKTOP_TOOL_NAMES
         from windows_observer import observation_image_message
         summaries = []
@@ -5112,9 +5204,14 @@ class Chat:
 
         def log_context_estimate(offered, step, estimated_tokens, *, actual_tokens=None,
                                  actual_bytes=None, last_actual_tokens=None,
-                                 last_actual_bytes=None, local_limit_trigger=None):
+                                 last_actual_bytes=None, local_limit_trigger=None,
+                                 sent=True, usage_status='reported', completion_tokens=None,
+                                 cached_tokens=None, finish_reason='', latency_seconds=None):
             row = {
                 'kind': 'tool_step_context', 'request_id': request_id, 'step': step,
+                'sent': bool(sent), 'usage_status': usage_status,
+                'completion_tokens': completion_tokens, 'cached_tokens': cached_tokens,
+                'finish_reason': finish_reason or '', 'latency_seconds': latency_seconds,
                 'model': self.cfg.provider['model'],
                 'model_input_limit': self.cfg.provider['max_input_tokens'],
                 'estimated_input_tokens': estimated_tokens,
@@ -5401,7 +5498,8 @@ class Chat:
                            else 'local_preflight_after_tool_step')
                 log_context_estimate(offered, step, estimated_input_tokens,
                                      last_actual_tokens=measured_tokens, last_actual_bytes=measured_bytes,
-                                     local_limit_trigger=trigger)
+                                     local_limit_trigger=trigger, sent=False,
+                                     usage_status='preflight')
                 if step == 0:
                     self.budget.settle(request_id, step_cfg, 0, 0, 0)
                     raise TooLong('工具说明和本轮上下文超过长度上限，未调用工具；请缩短输入后再试。')
@@ -5426,6 +5524,7 @@ class Chat:
             model_messages = alias_system_messages(loop_messages, self.tool_aliases)
             take_snapshot(model_messages, offered)
             self.budget.mark_dispatched(reservation)
+            call_started = time.monotonic()
             try:
                 response = self._model_call(model_messages, tools=offered, message_output=True,
                                             max_tokens=step_cfg.max_output_tokens, detail=True)
@@ -5542,8 +5641,11 @@ class Chat:
                         break
                     raise self._request_failed(exc) from exc
             ephemeral_image_bindings.clear()
+            call_latency = round(time.monotonic() - call_started, 3)
             message, prompt, completion, cached, *finish = response
-            if isinstance(prompt, int) and prompt > 0:
+            usage_status = usage_status_for(prompt, sent_bytes,
+                                            previous_tokens=measured_tokens, previous_bytes=measured_bytes)
+            if usage_status == 'reported':
                 current_ratio = prompt / sent_bytes
                 measured_ratio = max(measured_ratio, current_ratio)
                 if calibrated:
@@ -5554,9 +5656,15 @@ class Chat:
                 measured_tokens, measured_bytes = prompt, sent_bytes
                 measured_message_bytes = request_message_bytes()
                 measured_schema_bytes = request_schema_bytes(offered)
-            self.budget.settle(reservation, step_cfg, prompt, completion, cached, input_bytes=sent_bytes, tolerate_over_bound=True)
+            # An implausible relay usage must not move the baseline used to protect the next request.
+            cached_value = getattr(cached, 'tokens', None) if not isinstance(cached, int) else cached
+            self.budget.settle(reservation, step_cfg, prompt, completion, cached, input_bytes=sent_bytes,
+                               tolerate_over_bound=True, usage_status=usage_status)
             log_context_estimate(offered, step, estimated_input_tokens,
-                                 actual_tokens=prompt, actual_bytes=sent_bytes)
+                                 actual_tokens=prompt, actual_bytes=sent_bytes,
+                                 completion_tokens=completion, cached_tokens=cached_value,
+                                 finish_reason=finish[0] if finish else '',
+                                 latency_seconds=call_latency, usage_status=usage_status)
             if not autonomy and self.user_stop.is_set():
                 # Lan pressed stop while this step was running: none of its tools run.
                 if continuation_prefix:
@@ -5570,7 +5678,9 @@ class Chat:
                 self.autonomy_interrupted = True
                 final = 'Autonomous activity yielded after the model request to let chat or a control action proceed.'
                 break
-            thought = reasoning_text(message)
+            reasoning = message_field(message, reasoning_field_for(self.cfg.provider))
+            thought = (reasoning.strip()[:MAX_THOUGHT_CHARS]
+                       if isinstance(reasoning, str) and reasoning.strip() else '')
             if thought:
                 self._trace(thought, 'thought')
             if finish and finish[0] == 'length':
@@ -5619,7 +5729,8 @@ class Chat:
                         output_recovered = True
                         continuation_prefix = content
                         self.tool_stop_reason = ''
-                        loop_messages.append(assistant_retry_turn(message, content))
+                        loop_messages.append(assistant_retry_turn(
+                            message, content, reasoning_field_for(self.cfg.provider)))
                         loop_messages.append({'role': 'system', 'content': (
                             'Your reply reached the output limit. Continue from the exact end of your previous '
                             'message without repeating its words. Finish the sentence and complete the reply; '
@@ -5645,7 +5756,8 @@ class Chat:
                     self.tool_stop_reason = ''
                 if (not autonomy and self.force_reply and not content.strip()
                         and not mixed_sent_messages and step + 1 < max_steps):
-                    loop_messages.append(assistant_retry_turn(message, content))
+                    loop_messages.append(assistant_retry_turn(
+                        message, content, reasoning_field_for(self.cfg.provider)))
                     loop_messages.append({'role': 'system', 'content': (
                         'Lan pressed Request Reply. This one request must produce actual message text. '
                         'reply_later is unavailable; use send_message with non-empty text before ending.')})
@@ -5664,7 +5776,8 @@ class Chat:
                         next_reservation = None
                     if next_reservation:
                         fake_sticker_retries += 1
-                        loop_messages.append(assistant_retry_turn(message, content))
+                        loop_messages.append(assistant_retry_turn(
+                            message, content, reasoning_field_for(self.cfg.provider)))
                         loop_messages.append({'role': 'system', 'content': (
                             'Typing "[表情包：' + fake_sticker[0] + '/' + fake_sticker[1] + ']" in a reply does not send '
                             'a sticker, and there is no such sticker in the library. Nothing was shown to Lan. To send '
@@ -5819,9 +5932,7 @@ class Chat:
                 break
             try:
                 assistant_record = message.model_dump(exclude_none=True)
-                reasoning = getattr(message, 'reasoning_content', None)
-                if reasoning is not None:
-                    assistant_record['reasoning_content'] = reasoning
+                copy_reasoning(assistant_record, message, reasoning_field_for(self.cfg.provider))
                 loop_messages.append(assistant_record)
                 next_offered = (None if step + 1 == max_steps - 1
                                 else self.tool_schemas())
@@ -5955,7 +6066,8 @@ class Chat:
                                    else call.function.name)
                     except (ValueError, TypeError, AttributeError):
                         summary = call.function.name
-                    log_tool(call.function.name, summary, '进行中', call_id=call_id)
+                    log_tool(call.function.name, summary, '进行中', call_id=call_id,
+                             arguments_hash=tool_arguments_hash(call.function.arguments))
                     replay_block = (self.investigation.resume_guard(call.function.name, args)
                                     if not autonomy and checkpoint_resuming else None)
                     if replay_block:
@@ -6015,8 +6127,10 @@ class Chat:
                     self._record_tool_result(call, execution, result_state, display_detail,
                                              summaries, lambda name, path, state, **metadata:
                                              log_tool(name, path, state, call_id=call_id,
-                                                      detail=log_detail, **metadata,
-                                                      **activity_metadata))
+                                                      detail=log_detail,
+                                                      arguments_hash=tool_arguments_hash(call.function.arguments),
+                                                      result_hash=stable_hash(execution.result),
+                                                      **metadata, **activity_metadata))
                     result_summaries[call.id] = summaries[-1]
                     result_call_ids[call.id] = call_id
                     if autonomy and self.autonomy_should_yield and self.autonomy_should_yield():
@@ -6155,9 +6269,7 @@ def make_model(root, cfg, provider=None, timeout=MODEL_TIMEOUT_SECONDS):
         choice = response.choices[0]
         if tools is not None or message_output:
             message = choice.message.model_dump(exclude_none=True)
-            reasoning = getattr(choice.message, 'reasoning_content', None)
-            if reasoning is not None:
-                message['reasoning_content'] = reasoning
+            copy_reasoning(message, choice.message, reasoning_field_for(p))
             # Keep raw OpenAI-shaped message object for the tool loop.
             result = (choice.message, usage.prompt_tokens, usage.completion_tokens, cached)
             return result + (choice.finish_reason,) if detail else result

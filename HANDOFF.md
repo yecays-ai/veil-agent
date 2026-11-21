@@ -1,5 +1,12 @@
 # HANDOFF
 
+## 工单 414 交接（PR1：观测口径与模型协议）
+- 范围：预检快照 sent=false 不计数；usage 合理性校验（不可信不校准、不推进上下文基线）；每条消息 framing 256→16 字节；真实调用记录 latency/completion/finish/usage_status；工具参数/结果哈希；模型按 reasoning_field 显式读取/回传，不做隐式别名。
+- 不碰：人设、记忆、自主活动权限、多气泡；未做 P1 无进展检测/工具去重（PR2）。
+- 与 PR #415 的交叉：已 rebase 到 #415 合并后的 main；本 PR 改模型调用/usage/推理/工具哈希，不碰 #415 的 _execute_tool_call/失败文案；未改 desktop/chat.js、tools_agent.py。
+- 测试：改动相关套件通过；全量既存失败集中在 test_maintenance / test_backup_restore / test_reliability_closeout / test_executor_opencode，已在 main 复现。
+- 下一步：Lan 审核 PR #416；通过后再做 PR2（无进展检测、工具去重、失败重试保护、首气泡可选提示）。
+
 ## 工单 415 交接（工具失败说清真实原因）
 - 工单：`docs/tickets/415-tool-failure-contract.md`；分支 `ticket/415-tool-failure-contract`，从 origin/main（f9c7931）开的独立 worktree，没动正式目录，也没碰 412/413/414 的工作区。
 - 根因：`_execute_tool_call` 把工具内部 `ValueError/TypeError` 一律报成「arguments are not a valid JSON object」（409 遗留）；`peek_screen`/`snooping_around` 收到任何参数只说一句 `This tool does not accept arguments.`，不回声收到的参数；`windows_interaction` 把内部异常说成参数错；`open_lab_game` 把参数错说成服务不可用；活动页把 `被拒绝` 一律写成「权限拒绝」。

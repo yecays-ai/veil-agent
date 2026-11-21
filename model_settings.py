@@ -427,6 +427,11 @@ class ModelSettings:
         if not 4096 <= max_input <= 2_000_000:
             raise SettingsError('最长输入要在 4096 到 2000000 tokens 之间。')
         model['max_input_tokens'] = max_input
+        reasoning_field = str(item.get('reasoning_field') or '').strip()
+        if reasoning_field and reasoning_field not in ('reasoning_content', 'reasoning'):
+            raise SettingsError('推理字段只能是 reasoning_content 或 reasoning。')
+        if reasoning_field:
+            model['reasoning_field'] = reasoning_field
         modalities = item.get('input_modalities')
         if modalities is not None:
             if (not isinstance(modalities, list) or not modalities or 'text' not in modalities
@@ -458,6 +463,8 @@ class ModelSettings:
                     'thinking': 'enabled' if model['thinking'] else 'disabled',
                     'max_input_tokens': model['max_input_tokens'],
                     'label': model['label'] or model['model'], 'endpoint_name': endpoint['name']}
+        if model.get('reasoning_field'):
+            provider['reasoning_field'] = model['reasoning_field']
         if model.get('input_modalities'):
             provider['input_modalities'] = model['input_modalities']
         if model['billing'] == 'call':

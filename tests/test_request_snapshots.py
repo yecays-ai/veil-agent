@@ -54,10 +54,10 @@ class SnapshotStoreTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
 
-    def save(self, request_id, step=1, kind='chat', message_ids=()):
+    def save(self, request_id, step=1, kind='chat', message_ids=(), sent=True):
         record = request_snapshots.build([{'role': 'user', 'content': request_id}], ['user'],
                                          request_id=request_id, step=step, kind=kind, model='fake',
-                                         message_ids=message_ids)
+                                         message_ids=message_ids, sent=sent)
         request_snapshots.save(self.root, 'role', record)
         return record
 
@@ -86,6 +86,31 @@ class SnapshotStoreTests(unittest.TestCase):
         self.assertEqual(len(names), request_snapshots.KEEP_REQUESTS * 2)
         self.assertIn('r%03d.01.json' % (request_snapshots.KEEP_REQUESTS + 4), names)
         self.assertNotIn('r000.01.json', names)
+
+    def test_preflight_snapshot_is_not_counted_as_a_model_call(self):
+        self.save('r1', 1, sent=False)
+        self.save('r1', 2, sent=True)
+        bundle = request_snapshots.for_request(self.root, 'role', 'r1')
+        self.assertEqual([row['step'] for row in bundle['steps']], [2])
+        full = request_snapshots.for_request(self.root, 'role', 'r1', include_unsent=True)
+        self.assertEqual([row['step'] for row in full['steps']], [1, 2])
+        self.assertFalse(full['steps'][0]['sent'])
+        self.assertIsNone(request_snapshots.get(self.root, 'role', 'r1', 1))
+        self.assertEqual(request_snapshots.get(self.root, 'role', 'r1', 1, include_unsent=True)['step'], 1)
+        rows = request_snapshots.recent(self.root, 'role')
+        self.assertEqual(rows[0]['steps'], 1)
+        self.assertEqual(rows[0]['unsent'], 1)
+
+    def test_legacy_record_without_sent_is_still_a_real_call(self):
+        record = request_snapshots.build([{'role': 'user', 'content': 'old'}], ['user'],
+                                         request_id='legacy', step=1, kind='chat', model='fake')
+        record.pop('sent', None)
+        request_snapshots.save(self.root, 'role', record)
+        rows = request_snapshots.recent(self.root, 'role')
+        self.assertEqual(rows[0]['steps'], 1)
+        self.assertEqual(rows[0]['unsent'], 0)
+        bundle = request_snapshots.for_request(self.root, 'role', 'legacy')
+        self.assertEqual(len(bundle['steps']), 1)
 
     def test_unsafe_request_id_is_refused(self):
         self.assertIsNone(request_snapshots.for_request(self.root, 'role', '../secret'))

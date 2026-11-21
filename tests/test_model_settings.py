@@ -72,6 +72,20 @@ class ModelSettingsTests(unittest.TestCase):
         self.assertEqual(view['endpoints'][0]['key_hint'], '…1234')
         self.assertEqual(view['endpoints'][0]['base_url'], 'https://relay.invalid/v1')
 
+    def test_reasoning_field_is_explicit_and_defaults_to_legacy(self):
+        cfg, model_id = self.add_relay()
+        cfg.models.use('peter', model_id)
+        _model_id, _name, provider = cfg.models.chosen('peter')
+        self.assertNotIn('reasoning_field', provider)
+        data = cfg.models.data
+        data['models'][0]['reasoning_field'] = 'reasoning'
+        cfg.models.save(data)
+        _model_id, _name, provider = cfg.models.chosen('peter')
+        self.assertEqual(provider['reasoning_field'], 'reasoning')
+        data['models'][0]['reasoning_field'] = 'guessed_alias'
+        with self.assertRaises(SettingsError):
+            cfg.models.save(data)
+
     def test_custom_model_keeps_explicit_image_input_capability(self):
         cfg, model_id = self.add_relay()
         data = cfg.models.data
