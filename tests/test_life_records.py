@@ -4,11 +4,200 @@ from types import SimpleNamespace
 
 import tempfile
 import unittest
+from datetime import datetime, timezone, timedelta
+from unittest.mock import patch
 from pathlib import Path
 from life_records import LifeRecords, effective, fold_completed
+from agent_types import now
 
 
 class LifeRecordsTest(unittest.TestCase):
+    def test_reminder_claims_once_and_skips_inactive_events(self):
+        temp_root=Path.cwd() / '.task-test-temp'
+        temp_root.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=temp_root) as directory:
+            store=SimpleNamespace(root=Path(directory),mutex=threading.RLock())
+            records=LifeRecords(store,'peter')
+            with patch('life_records.now',return_value='2026-11-23T19:00:00+08:00'):
+                event=records.write({'kind':'event','title':'Meet','date':'2026-11-23','time':'20:00',
+                                     'remind':True,'remind_before':15},'Lan')
+            at=datetime(2026,11,23,19,45,tzinfo=timezone(timedelta(hours=8)))
+            self.assertIsNone(records.claim_due_reminder(at-timedelta(minutes=1)))
+            due=records.claim_due_reminder(at)
+            self.assertEqual(due['id'],event['id'])
+            self.assertEqual(records.claim_due_reminder(at)['id'],event['id'])
+            records.complete_due_reminder(due)
+            self.assertIsNone(records.claim_due_reminder(at))
+            records.write({'id':event['id'],'state':'cancelled'},'Lan')
+            self.assertIsNone(records.claim_due_reminder(at+timedelta(minutes=1)))
+            with self.assertRaises(ValueError):
+                records.write({'kind':'event','title':'No time','remind':True},'Lan')
+
+    def test_title_edit_after_claim_uses_latest_event_and_can_complete(self):
+        temp_root=Path.cwd() / '.task-test-temp'
+        temp_root.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=temp_root) as directory:
+            store=SimpleNamespace(root=Path(directory),mutex=threading.RLock())
+            records=LifeRecords(store,'peter')
+            with patch('life_records.now',return_value='2026-11-23T19:00:00+08:00'):
+                event=records.write({'kind':'event','title':'Meet','date':'2026-11-23','time':'20:00',
+                                     'remind':True,'remind_before':15},'Lan')
+            due=records.claim_due_reminder(datetime(2026,11,23,19,45,5,
+                                                     tzinfo=timezone(timedelta(hours=8))))
+            self.assertEqual(due['title'],'Meet')
+            with patch('life_records.now',return_value='2026-11-23T19:45:06+08:00'):
+                records.write({'id':event['id'],'title':'Meet outside'},'Lan')
+            current=records.current_due_reminder(due)
+            self.assertEqual(current['title'],'Meet outside')
+            self.assertTrue(records.reminder_still_current(due))
+            records.complete_due_reminder(current)
+            self.assertIsNone(records.claim_due_reminder(datetime(2026,11,23,19,45,7,
+                                                                  tzinfo=timezone(timedelta(hours=8)))))
+
+    def test_cancel_invalidates_claim_and_reschedule_gets_new_claim(self):
+        temp_root=Path.cwd() / '.task-test-temp'
+        temp_root.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=temp_root) as directory:
+            store=SimpleNamespace(root=Path(directory),mutex=threading.RLock())
+            records=LifeRecords(store,'peter')
+            with patch('life_records.now',return_value='2026-11-23T19:00:00+08:00'):
+                event=records.write({'kind':'event','title':'Meet','date':'2026-11-23','time':'20:00',
+                                     'remind':True,'remind_before':15},'Lan')
+            at=datetime(2026,11,23,19,45,tzinfo=timezone(timedelta(hours=8)))
+            claimed=records.claim_due_reminder(at)
+            with patch('life_records.now',return_value='2026-11-23T19:45:01+08:00'):
+                records.write({'id':event['id'],'state':'cancelled'},'Lan')
+            self.assertIsNone(records.current_due_reminder(claimed))
+            self.assertIsNone(records.claim_due_reminder(at+timedelta(minutes=1)))
+
+            with patch('life_records.now',return_value='2026-11-23T19:45:02+08:00'):
+                records.write({'id':event['id'],'state':'active','date':'2026-11-23','time':'21:00'},'Lan')
+            self.assertIsNone(records.current_due_reminder(claimed))
+            new_due=records.claim_due_reminder(datetime(2026,11,23,20,45,
+                                                         tzinfo=timezone(timedelta(hours=8))))
+            self.assertEqual(new_due['id'],event['id'])
+            self.assertEqual(new_due['time'],'21:00')
+            records.complete_due_reminder(new_due)
+
+    def test_cancelled_claim_is_not_marked_processed(self):
+        temp_root=Path.cwd() / '.task-test-temp'
+        temp_root.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=temp_root) as directory:
+            store=SimpleNamespace(root=Path(directory),mutex=threading.RLock())
+            records=LifeRecords(store,'peter')
+            event=records.write({'kind':'event','title':'Meet','date':'2026-11-23','time':'20:00',
+                                 'remind':True,'remind_before':15},'Lan')
+            due=records.claim_due_reminder(datetime(2026,11,23,19,45,
+                                                    tzinfo=timezone(timedelta(hours=8))))
+            with patch('life_records.now',return_value='2026-11-23T19:45:06+08:00'):
+                records.write({'id':event['id'],'state':'cancelled'},'Lan')
+            self.assertIsNone(records.current_due_reminder(due))
+
+    def test_daily_reminder_uses_original_day(self):
+        temp_root=Path.cwd() / '.task-test-temp'
+        temp_root.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=temp_root) as directory:
+            store=SimpleNamespace(root=Path(directory),mutex=threading.RLock())
+            records=LifeRecords(store,'peter')
+            todo=records.write({'kind':'note','title':'Diary','repeat':'daily'},'Lan')
+            day=datetime.now().astimezone().replace(hour=23,minute=30,second=0,microsecond=0)
+            reminder=records.claim_daily_reminder(day)
+            self.assertEqual(reminder['ids'],[todo['id']])
+            self.assertIsNone(records.claim_daily_reminder(day))
+            after_midnight=(day+timedelta(minutes=72)).isoformat()
+            records.daily_reminder_path.unlink()
+            with patch('life_records.now',return_value=after_midnight):
+                result=records.write({'id':todo['id'],'state':'completed','date':day.date().isoformat()},'Peter')
+            self.assertEqual(result['completion_day'],day.date().isoformat())
+            self.assertEqual(result['today_state'],'active')
+            past=records.daily_checks()['days'][day.date().isoformat()][todo['id']]
+            self.assertEqual(past['state'],'completed')
+            self.assertEqual(past['at'][:10],(day+timedelta(days=1)).date().isoformat())
+            self.assertEqual(records.read()[0]['state'],'active')
+            with patch('life_records.now',return_value=(day+timedelta(minutes=73)).isoformat()):
+                records.write({'id':todo['id'],'title':'Diary updated'},'Lan')
+            self.assertEqual(records.daily_checks()['days'][day.date().isoformat()][todo['id']]['state'],'completed')
+
+    def test_automatic_change_can_be_undone_only_while_unedited(self):
+        temp_root=Path.cwd() / '.task-test-temp'
+        temp_root.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=temp_root) as directory:
+            store=SimpleNamespace(root=Path(directory),mutex=threading.RLock())
+            records=LifeRecords(store,'peter')
+            row=records.write({'kind':'event','title':'Walk','date':'2026-11-25'},'Peter',auto=True)
+            path=records.path.with_name('calendar-agreements.jsonl')
+            path.write_text(json.dumps({'at':now(),'undo_id':'a'*24,'before':None,'after':row})+'\n',encoding='utf-8')
+            self.assertIsNone(records.undo_auto('a'*24))
+            self.assertEqual(records.read(),[])
+            with self.assertRaises(ValueError): records.undo_auto('a'*24)
+
+    def test_undo_refuses_manual_reminder_change(self):
+        temp_root=Path.cwd() / '.task-test-temp'
+        temp_root.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=temp_root) as directory:
+            store=SimpleNamespace(root=Path(directory),mutex=threading.RLock())
+            records=LifeRecords(store,'peter')
+            before=records.write({'kind':'event','title':'Walk','date':'2026-11-25','time':'20:00'},'Peter')
+            after=records.write({'id':before['id'],'title':'Long walk'},'Peter',auto=True)
+            path=records.path.with_name('calendar-agreements.jsonl')
+            path.write_text(json.dumps({'at':now(),'undo_id':'b'*24,'before':before,'after':after})+'\n',encoding='utf-8')
+            records.write({'id':after['id'],'remind':True,'remind_before':15},'Lan')
+            with self.assertRaisesRegex(ValueError,'record changed'):
+                records.undo_auto('b'*24)
+
+    def test_revision_refuses_automatic_write_after_a_manual_change(self):
+        temp_root=Path.cwd() / '.task-test-temp'
+        temp_root.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=temp_root) as directory:
+            store=SimpleNamespace(root=Path(directory),mutex=threading.RLock())
+            records=LifeRecords(store,'peter')
+            # A coarse clock can give two writes the same updated_at. The revision must still catch the edit.
+            with patch('life_records.now',return_value='2026-11-25T20:00:00+08:00'):
+                before=records.write({'kind':'event','title':'Walk','date':'2026-11-25','time':'20:00'},'Peter')
+                manual=records.write({'id':before['id'],'time':'20:30'},'Lan')
+                self.assertEqual(manual['updated_at'],before['updated_at'])
+                self.assertEqual(manual['revision'],before['revision']+1)
+                with self.assertRaisesRegex(ValueError,'record changed'):
+                    records.write({'id':before['id'],'title':'Automatic title'},'Peter',auto=True,
+                                  expected_revision=before['revision'])
+
+    def test_undo_refuses_a_manual_change_with_the_same_timestamp(self):
+        temp_root=Path.cwd() / '.task-test-temp'
+        temp_root.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=temp_root) as directory:
+            store=SimpleNamespace(root=Path(directory),mutex=threading.RLock())
+            records=LifeRecords(store,'peter')
+            with patch('life_records.now',return_value='2026-11-25T20:00:00+08:00'):
+                before=records.write({'kind':'event','title':'Walk','date':'2026-11-25','time':'20:00'},'Peter')
+                after=records.write({'id':before['id'],'title':'Long walk'},'Peter',auto=True)
+                path=records.path.with_name('calendar-agreements.jsonl')
+                path.write_text(json.dumps({'at':'2026-11-25T20:00:00+08:00','undo_id':'c'*24,
+                                            'before':before,'after':after})+'\n',encoding='utf-8')
+                manual=records.write({'id':after['id'],'remind':True,'remind_before':15},'Lan')
+                self.assertEqual(manual['updated_at'],after['updated_at'])
+                with self.assertRaisesRegex(ValueError,'record changed'):
+                    records.undo_auto('c'*24)
+
+    def test_daily_hint_marks_the_previous_day_after_midnight(self):
+        temp_root=Path.cwd() / '.task-test-temp'
+        temp_root.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=temp_root) as directory:
+            store=SimpleNamespace(root=Path(directory),mutex=threading.RLock())
+            records=LifeRecords(store,'peter')
+            with patch('life_records.now',return_value='2026-11-20T23:30:00+08:00'):
+                todo=records.write({'kind':'note','title':'Diary','repeat':'daily'},'Lan')
+            with patch('life_records.now',return_value='2026-11-20T23:51:00+08:00'):
+                hint=records.claim_daily_hint()
+            self.assertIn('2026-11-20',hint)
+            with patch('life_records.now',return_value='2026-11-21T00:10:00+08:00'):
+                result=records.write({'id':todo['id'],'state':'completed'},'Peter')
+            self.assertEqual(result['completion_day'],'2026-11-20')
+            yesterday=records.daily_checks()['days']['2026-11-20'][todo['id']]
+            self.assertEqual(yesterday['state'],'completed')
+            self.assertEqual(yesterday['at'][:10],'2026-11-21')
+            self.assertNotIn('2026-11-21',records.daily_checks()['days'])
+            self.assertEqual(records.read()[0]['state'],'active')
+
     def test_shared_records_persist_status_and_protect_lan_owner(self):
         temp_root=Path.cwd() / '.task-test-temp'
         temp_root.mkdir(exist_ok=True)

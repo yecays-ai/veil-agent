@@ -1,5 +1,9 @@
 ﻿# HANDOFF
 
+## 工单 412 交接（日历第二步）
+独立工作区 ticket/412-calendar-step-two；已同步最新 main（d42a580）并解决 STATUS 冲突。本轮修：①自动写入/撤销改用单调 `revision` 防并发覆盖；②23:50 轻提示后跨午夜补勾归前一天；③中文数字时间、否定确认、取消后重新约定恢复；④提醒发送前二次复核取消与改动。本地 life_records+calendar 18、chat 101、web 72 通过。下一步：等 GitHub 四矩阵和 Cubic 复审；Lan 真机按原方案七项验收；不合并。
+
+
 ## 工单 409 交接（Learned Context 保存被误报失败）
 - 现象：`jot_about_lan` / `edit_lan_notes` 大量「arguments are not a valid JSON object」，但参数合法。
 - 根因：`learned_context._invoke_profile` 成功分支的 return 写成了 `return (msg),` + 下一行 `'成功', name`，返回 1 元组；上层三值解包抛 `ValueError`，被 `_execute_tool_call` 最外层 `except (ValueError, TypeError)` 误报成 JSON 错。数据在 return 之前已经写入，所以「拒绝」的其实都存进去了。

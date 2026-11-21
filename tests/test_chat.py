@@ -517,6 +517,28 @@ output_cny_per_million = "8"
         self.assertTrue(any('接口没有返回文字回复' in str(item) for item in outputs))
         self.assertTrue(any('normal reply' in str(item) for item in outputs))
 
+    def test_cancelled_calendar_reminder_is_not_sent_when_cancelled_during_generation(self):
+        outputs = []
+        store = Store(self.root / 'calendar-reminder-race')
+        chat = Chat(replace(self.cfg, tools=None), store, Budget(store), Mock(), output=outputs.append)
+        with patch('life_records.now', return_value='2026-11-25T19:00:00+08:00'):
+            event = chat.life_records.write({'kind': 'event', 'title': 'Movie', 'date': '2026-11-25',
+                                             'time': '20:00', 'remind': True}, 'Lan')
+        due = chat.life_records.claim_due_reminder(datetime(2026, 11, 25, 20, 0, tzinfo=timezone.utc))
+        self.assertIsNotNone(due)
+
+        def cancel_during_generation(*args, **kwargs):
+            chat.life_records.write({'id': event['id'], 'state': 'cancelled'}, 'Lan')
+            return 'fictional calendar reminder'
+
+        chat.send = Mock(side_effect=cancel_during_generation)
+        run_chat(chat, Mock(side_effect=[
+            SimpleNamespace(action='calendar_reminder_due', payload=due), '/quit']),
+            outputs.append, drop=lambda: None, start_notes=False)
+        self.assertEqual(chat.send.call_count, 1)
+        self.assertFalse(any('fictional calendar reminder' in str(item) or '日历提醒' in str(item)
+                             for item in outputs))
+
     def test_model_configuration_error_keeps_run_chat_alive(self):
         outputs = []
         self.chat.send = Mock(side_effect=RequestNotSent('还没有可用的聊天模型；请先在模型设置里选择。'))

@@ -215,6 +215,8 @@ class Hub(ScreenPopMixin):
             'state': 'healthy', 'classification': 'healthy', 'message': '运行正常。'}
         self.activity_transition = lambda enabled: self.activity.set(enabled)
         self.autonomy_busy = False
+        self.last_interaction = time.monotonic() - 1200
+        self.next_calendar_poll = 0.0
         self.autonomy_interrupted = threading.Event()
         self.away = []   # tickets 098/102: an AwayBridge per configured channel (email, QQ)
         self.media_root = Path(media_root) if media_root else None
@@ -1232,6 +1234,8 @@ class Hub(ScreenPopMixin):
         trace = getattr(text, 'trace', None)
         elapsed = getattr(text, 'elapsed', None)
         life_id = getattr(text, 'life_id', None)   # ticket 385: a notice about a calendar record
+        calendar_undo_id = getattr(text, 'calendar_undo_id', None)
+        calendar_can_remind = getattr(text, 'calendar_can_remind', False)
         text = str(text)
         prefix = f'{self.name}: '
         if trace in ('thought', 'tool'):
@@ -1270,7 +1274,9 @@ class Hub(ScreenPopMixin):
         elif text.startswith('接上了'):
             self.push('notice', text.split('。')[0] + '。')   # drop the terminal-only command hints
         else:
-            self.push('notice', text, **({'life_id': life_id} if isinstance(life_id, str) else {}))
+            self.push('notice', text, **({'life_id': life_id} if isinstance(life_id, str) else {}),
+                      **({'calendar_undo_id': calendar_undo_id} if isinstance(calendar_undo_id, str) else {}),
+                      **({'calendar_can_remind': True} if calendar_can_remind is True else {}))
 
     def output(self, text):
         with self.cond:
@@ -1328,6 +1334,7 @@ class Hub(ScreenPopMixin):
                     with self.cond:
                         self.busy = True
                     return text
+                self.last_interaction = time.monotonic()
                 if not self._is_command(text):
                     self._wait_while_lan_types()
                 with self.cond:
@@ -1338,7 +1345,22 @@ class Hub(ScreenPopMixin):
                 continue
             if self.stopping or self.stopped:
                 raise EOFError
-            if self.chat is not None:
+            if self.chat is not None and time.monotonic() >= self.next_calendar_poll:
+                self.next_calendar_poll = time.monotonic() + 5
+                try:
+                    due_daily = (self.chat.life_records.claim_daily_reminder()
+                                 if time.monotonic()-self.last_interaction>=1200 else None)
+                    due = self.chat.life_records.claim_due_reminder() if due_daily is None else None
+                except (OSError,ValueError,TypeError):
+                    due_daily = due = None
+                if due_daily is not None:
+                    with self.cond:
+                        self.busy = True
+                    return ChatAction('calendar_daily_due', due_daily)
+                if due is not None:
+                    with self.cond:
+                        self.busy = True
+                    return ChatAction('calendar_reminder_due', due)
                 due = self.chat.claim_due_reply_later()
                 if due is not None:
                     with self.cond:
@@ -1379,6 +1401,7 @@ class Hub(ScreenPopMixin):
                 with self.cond:
                     self.busy = True
                 return text
+            self.last_interaction = time.monotonic()
             if not self._is_command(text):
                 self._wait_while_lan_types()
             with self.cond:
@@ -2208,6 +2231,9 @@ def make_handler(hub, token):
                 if not isinstance(value, dict) or not isinstance(value.get('records'), list):
                     raise ValueError
                 rows = list(value['records'])
+                missed = hub.chat.life_records.missed_reminders()
+                rows = [{**row, 'reminder_missed': missed[(row.get('id'),row.get('updated_at'))]}
+                        if (row.get('id'),row.get('updated_at')) in missed else row for row in rows]
                 chat = hub.chat
                 if chat is not None:
                     task = chat.long_tasks.read()
@@ -2238,6 +2264,7 @@ def make_handler(hub, token):
                 # Ticket 385: the two daily moods and the daily to-do log travel with the records.
                 life = chat.life_records if chat is not None else None
                 self._send(200, {'records': rows, 'folded': folded,
+                                 'auto_record_enabled': life.auto_record_enabled(),
                                  'moods': life.moods() if life is not None else {},
                                  'daily_checks': life.daily_checks() if life is not None else {'started': None, 'days': {}}})
             except (OSError, ValueError, UnicodeError, UserError):
@@ -3041,6 +3068,22 @@ def make_handler(hub, token):
         def _save_life(self, body):
             if hub.chat is None:
                 self._send(409, {'error':'Peter 尚未就绪。'})
+                return
+            if 'auto_record' in body:
+                try:
+                    if set(body)!={'auto_record'}: raise ValueError('invalid calendar setting')
+                    hub.chat.life_records.set_auto_record_enabled(body['auto_record'])
+                    self._send(200,{'auto_record_enabled':body['auto_record']})
+                except (OSError,ValueError,UnicodeError) as exc:
+                    self._send(400,{'error':str(exc)})
+                return
+            if 'undo_auto' in body:
+                try:
+                    if set(body)!={'undo_auto'}: raise ValueError('invalid undo request')
+                    restored=hub.chat.life_records.undo_auto(body['undo_auto'])
+                    self._send(200,{'ok':True,'record':restored})
+                except (ValueError,OSError,UnicodeError) as exc:
+                    self._send(409,{'error':str(exc)})
                 return
             source_id=body.get('id')
             if 'find' in body:

@@ -105,6 +105,10 @@ output_cny_per_million = "8"
         self.assertEqual(body['moods'][today]['Lan']['emoji'], '🥰')
         self.assertEqual(body['daily_checks']['started'], today)
         self.assertEqual(body['records'][0]['time'], '09:30')
+        self.assertTrue(body['auto_record_enabled'])
+        self.assertEqual(self.call('/api/life', {'auto_record': False})[1]['auto_record_enabled'], False)
+        self.assertFalse(self.call('/api/life')[1]['auto_record_enabled'])
+        self.assertEqual(self.call('/api/life', {'auto_record': 'no'})[0], 400)
         chat.life_records.invoke({'action': 'update', 'id': hers['id'], 'time': '10:00'})
         notices = [e for e in self.hub.events if e['kind'] == 'notice' and e.get('life_id') == hers['id']]
         self.assertEqual(len(notices), 1)
