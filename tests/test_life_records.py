@@ -145,6 +145,59 @@ class LifeRecordsTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'record changed'):
                 records.undo_auto('b'*24)
 
+    def test_revision_refuses_automatic_write_after_a_manual_change(self):
+        temp_root=Path.cwd() / '.task-test-temp'
+        temp_root.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=temp_root) as directory:
+            store=SimpleNamespace(root=Path(directory),mutex=threading.RLock())
+            records=LifeRecords(store,'peter')
+            # A coarse clock can give two writes the same updated_at. The revision must still catch the edit.
+            with patch('life_records.now',return_value='2026-11-25T20:00:00+08:00'):
+                before=records.write({'kind':'event','title':'Walk','date':'2026-11-25','time':'20:00'},'Peter')
+                manual=records.write({'id':before['id'],'time':'20:30'},'Lan')
+                self.assertEqual(manual['updated_at'],before['updated_at'])
+                self.assertEqual(manual['revision'],before['revision']+1)
+                with self.assertRaisesRegex(ValueError,'record changed'):
+                    records.write({'id':before['id'],'title':'Automatic title'},'Peter',auto=True,
+                                  expected_revision=before['revision'])
+
+    def test_undo_refuses_a_manual_change_with_the_same_timestamp(self):
+        temp_root=Path.cwd() / '.task-test-temp'
+        temp_root.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=temp_root) as directory:
+            store=SimpleNamespace(root=Path(directory),mutex=threading.RLock())
+            records=LifeRecords(store,'peter')
+            with patch('life_records.now',return_value='2026-11-25T20:00:00+08:00'):
+                before=records.write({'kind':'event','title':'Walk','date':'2026-11-25','time':'20:00'},'Peter')
+                after=records.write({'id':before['id'],'title':'Long walk'},'Peter',auto=True)
+                path=records.path.with_name('calendar-agreements.jsonl')
+                path.write_text(json.dumps({'at':'2026-11-25T20:00:00+08:00','undo_id':'c'*24,
+                                            'before':before,'after':after})+'\n',encoding='utf-8')
+                manual=records.write({'id':after['id'],'remind':True,'remind_before':15},'Lan')
+                self.assertEqual(manual['updated_at'],after['updated_at'])
+                with self.assertRaisesRegex(ValueError,'record changed'):
+                    records.undo_auto('c'*24)
+
+    def test_daily_hint_marks_the_previous_day_after_midnight(self):
+        temp_root=Path.cwd() / '.task-test-temp'
+        temp_root.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=temp_root) as directory:
+            store=SimpleNamespace(root=Path(directory),mutex=threading.RLock())
+            records=LifeRecords(store,'peter')
+            with patch('life_records.now',return_value='2026-11-20T23:30:00+08:00'):
+                todo=records.write({'kind':'note','title':'Diary','repeat':'daily'},'Lan')
+            with patch('life_records.now',return_value='2026-11-20T23:51:00+08:00'):
+                hint=records.claim_daily_hint()
+            self.assertIn('2026-11-20',hint)
+            with patch('life_records.now',return_value='2026-11-21T00:10:00+08:00'):
+                result=records.write({'id':todo['id'],'state':'completed'},'Peter')
+            self.assertEqual(result['completion_day'],'2026-11-20')
+            yesterday=records.daily_checks()['days']['2026-11-20'][todo['id']]
+            self.assertEqual(yesterday['state'],'completed')
+            self.assertEqual(yesterday['at'][:10],'2026-11-21')
+            self.assertNotIn('2026-11-21',records.daily_checks()['days'])
+            self.assertEqual(records.read()[0]['state'],'active')
+
     def test_shared_records_persist_status_and_protect_lan_owner(self):
         temp_root=Path.cwd() / '.task-test-temp'
         temp_root.mkdir(exist_ok=True)

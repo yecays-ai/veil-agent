@@ -6289,6 +6289,14 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead, activity=N
                                                      f"remind {due['remind_before']} minutes before; "
                                                      f"late by {due['late_minutes']} minutes. "
                                                      'Send Lan a natural reminder now.'))
+                    try:
+                        current = chat.life_records.current_due_reminder(due)
+                    except (OSError,ValueError,UnicodeError):
+                        current = None
+                    if current is None:
+                        continue
+                    due = current
+                    label = f"{due['time']} {due['title']}"
                     if not reply or not str(reply).strip():
                         output(LifeNotice('⏰ ' + label + '（日历提醒）', due['id']))
                     elif not chat.reply_displayed:
@@ -6297,8 +6305,14 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead, activity=N
                                           memory_refs=chat.turn_memory_refs))
                     chat.life_records.complete_due_reminder(due)
                 except (TooLong, RequestFailed, UserError):
-                    output(LifeNotice('⏰ ' + label + '（日历提醒）', due['id']))
-                    chat.life_records.complete_due_reminder(due)
+                    try:
+                        current = chat.life_records.current_due_reminder(due)
+                    except (OSError,ValueError,UnicodeError):
+                        current = None
+                    if current is None:
+                        continue
+                    output(LifeNotice('⏰ ' + f"{current['time']} {current['title']}" + '（日历提醒）', current['id']))
+                    chat.life_records.complete_due_reminder(current)
                 continue
             if action == 'calendar_daily_due':
                 due = raw_text.payload

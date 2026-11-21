@@ -127,27 +127,31 @@ class LifeRecords:
             handle.write(json.dumps({'records':rows},ensure_ascii=False,indent=2)+'\n')
             handle.flush(); os.fsync(handle.fileno())
         os.replace(temp,self.path)
-    def write(self, body, actor, *, auto=False, expected_updated_at=None):
+    def write(self, body, actor, *, auto=False, expected_revision=None):
         with self.store.mutex:
             rows=self.read()
             key=body.get('id')
             prior=next((r for r in rows if r.get('id')==key),None) if key else None
             if key and not prior: raise ValueError('record not found')
-            if expected_updated_at is not None and prior.get('updated_at')!=expected_updated_at:
+            if expected_revision is not None and (not prior or prior.get('revision',0)!=expected_revision):
                 raise ValueError('record changed during automatic update')
             original=prior
             if prior: prior=effective(prior)
             current=datetime.fromisoformat(now())
+            today=current.date().isoformat()
             yesterday=(current.date()-timedelta(days=1)).isoformat()
+            hinted=(prior is not None and prior.get('repeat')=='daily' and body.get('date') in (None,today)
+                    and (self._daily_reminder_contains(yesterday,prior['id'])
+                         or self._daily_hint_contains(yesterday,prior['id'])))
             cross_day=(actor=='Peter' and prior and prior.get('repeat')=='daily'
                        and body.get('state')=='completed' and set(body)<= {'id','state','date'}
-                       and current.hour<6 and (body.get('date')==yesterday
-                                              or self._daily_reminder_contains(yesterday,prior['id'])))
+                       and current.hour<6 and (body.get('date')==yesterday or hinted))
             if cross_day:
                 stamp=now()
                 if self._logged_today(prior['id'],yesterday)!='completed':
                     self._log_check(prior,'completed',actor,stamp,day=yesterday)
                 saved={**original,'state':'active','completed_at':None,
+                       'revision':original.get('revision',0)+1,
                        'updated_at':stamp,'updated_by':actor,
                        'last_completed_at':stamp,'last_completion_day':yesterday}
                 rows[rows.index(original)]=saved
@@ -177,7 +181,9 @@ class LifeRecords:
             try: calendar_date.fromisoformat(date)
             except ValueError: raise ValueError('invalid record date') from None
             stamp=now()
-            row={'id':key or secrets.token_hex(12),'kind':kind,'title':title.strip(),
+            row={'id':key or secrets.token_hex(12),
+                'revision':(prior.get('revision',0) if prior else 0)+1,
+                'kind':kind,'title':title.strip(),
                 'content':content,'owner':owner,'date':date,'time':time,'state':state,'mood':mood,'repeat':repeat,
                 'remind':remind,'remind_before':remind_before,
                 'reminder_revision': (stamp if not prior or any(prior.get(k)!=v for k,v in
@@ -325,14 +331,14 @@ class LifeRecords:
                     if isinstance(entry,dict) and entry.get('day')==day: return None
             if self.daily_reminder_path.exists() and self._daily_reminder_claimed(day): return None
             checks=self.daily_checks()['days'].get(day,{})
-            pending=[r['title'] for r in self.read() if r.get('kind')=='note' and r.get('repeat')=='daily'
+            pending=[r for r in self.read() if r.get('kind')=='note' and r.get('repeat')=='daily'
                      and r.get('created_at','')[:10]<=day and checks.get(r['id'],{}).get('state')!='completed']
             if not pending: return None
             path.parent.mkdir(parents=True,exist_ok=True)
             with path.open('a',encoding='utf-8') as handle:
-                handle.write(json.dumps({'day':day,'at':now()},ensure_ascii=False)+'\n')
+                handle.write(json.dumps({'day':day,'ids':[r['id'] for r in pending],'at':now()},ensure_ascii=False)+'\n')
                 handle.flush(); os.fsync(handle.fileno())
-            return f'{day} 的每日待办还有 '+', '.join(pending)+'。如果自然，就在本轮回复末尾轻轻提一句；不要单独发消息。'
+            return f'{day} 的每日待办还有 '+', '.join(r['title'] for r in pending)+'。如果自然，就在本轮回复末尾轻轻提一句；不要单独发消息。'
 
     def _daily_reminder_claimed(self, day):
         for line in self.daily_reminder_path.read_bytes().splitlines():
@@ -344,6 +350,15 @@ class LifeRecords:
     def _daily_reminder_contains(self, day, key):
         if not self.daily_reminder_path.exists(): return False
         for line in self.daily_reminder_path.read_bytes().splitlines():
+            try: row=json.loads(line)
+            except (ValueError,UnicodeError): continue
+            if isinstance(row,dict) and row.get('day')==day and key in row.get('ids',[]): return True
+        return False
+
+    def _daily_hint_contains(self, day, key):
+        path=self.path.with_name('calendar-daily-hints.jsonl')
+        if not path.exists(): return False
+        for line in path.read_bytes().splitlines():
             try: row=json.loads(line)
             except (ValueError,UnicodeError): continue
             if isinstance(row,dict) and row.get('day')==day and key in row.get('ids',[]): return True
@@ -366,7 +381,7 @@ class LifeRecords:
                 raise ValueError('undo expired')
             after=entry['after']; before=entry['before']; rows=self.read()
             current=next((r for r in rows if r.get('id')==after.get('id')),None)
-            if not current or current.get('updated_at')!=after.get('updated_at'):
+            if not current or current.get('revision',0)!=after.get('revision',0):
                 raise ValueError('record changed since automatic update')
             if before: rows[rows.index(current)]=before
             else: rows.remove(current)

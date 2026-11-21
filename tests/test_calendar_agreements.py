@@ -7,7 +7,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
-from calendar_agreements import CalendarAgreements
+from calendar_agreements import ACCEPT, TIME_WORDS, CalendarAgreements
 from life_records import LifeRecords
 
 
@@ -18,6 +18,50 @@ class Config:
 
 
 class CalendarAgreementsTest(unittest.TestCase):
+    def test_prefilter_recognizes_chinese_times_and_rejects_negations(self):
+        for text in ('就八点吧','十点见','20:00'):
+            self.assertTrue(TIME_WORDS.search(text),text)
+        for text in ('不行','不好','不可以','不同意','not sure'):
+            self.assertFalse(ACCEPT.search(text),text)
+        for text in ('好，就这么定了','行吧','可以'):
+            self.assertTrue(ACCEPT.search(text),text)
+
+    def test_cancelled_agreement_is_revived_by_a_new_agreement(self):
+        root=Path.cwd()/'.task-test-temp'
+        root.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=root) as directory:
+            logs=[]
+            def append(path,event):
+                logs.append((path,event))
+                target=Path(directory)/path; target.parent.mkdir(parents=True,exist_ok=True)
+                with target.open('a',encoding='utf-8') as handle:
+                    handle.write(json.dumps(event,ensure_ascii=False)+'\n')
+            store=SimpleNamespace(root=Path(directory),mutex=threading.RLock(),
+                                  read=lambda path:[{'role':'user','content':'明天下午三点取快递'}],
+                                  append=append)
+            records=LifeRecords(store,'peter')
+            target=(date.today()+timedelta(days=1)).isoformat()
+            event=records.write({'kind':'event','title':'Package','date':target,'time':'15:00',
+                                 'state':'cancelled'},'Lan')
+            def model(*args,**kwargs):
+                return json.dumps({'action':'create','date':target,'time':'15:00',
+                                   'title':'Package','remind':False}),12,25,0
+            budget=SimpleNamespace(reserve=lambda *args,**kwargs:('reservation',1),
+                                   settle=lambda *args,**kwargs:None,
+                                   settle_estimate=lambda *args,**kwargs:None)
+            chat=SimpleNamespace(cfg=Config(),store=store,path='chat.jsonl',budget=budget,model=model,
+                                 life_records=records)
+            notices=[]
+            CalendarAgreements(chat,notices.append)._process('明天下午三点取快递','好')
+            rows=records.read()
+            self.assertEqual(len(rows),1)
+            self.assertEqual(rows[0]['id'],event['id'])
+            self.assertEqual(rows[0]['state'],'active')
+            self.assertEqual(logs[-1][1]['before']['state'],'cancelled')
+            self.assertTrue(notices and notices[0].calendar_undo_id)
+            records.undo_auto(logs[-1][1]['undo_id'])
+            self.assertEqual(records.read()[0]['state'],'cancelled')
+
     def test_clear_agreement_is_recorded_and_visible(self):
         root=Path.cwd()/'.task-test-temp'
         root.mkdir(exist_ok=True)
