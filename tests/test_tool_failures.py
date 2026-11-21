@@ -49,6 +49,25 @@ class FinalizeTests(unittest.TestCase):
             self.assertNotIn('sk-abcdef0123456789abcdef', surface)
             self.assertIn('lab/x.txt', surface)
 
+    def test_a_secret_with_spaces_or_commas_is_redacted_as_a_whole_value(self):
+        # Review: the regex stopped at spaces/commas and leaked the rest.
+        cases = ({'password': 'correct horse, battery staple'},
+                 {'authorization': 'Bearer abc def ghi'},
+                 {'api_key': 'sk-abc, def'},
+                 {'nested': {'client_secret': 'a b, c'}})
+        for received in cases:
+            text, ledger = finalize(refusal('no', received=received), '被拒绝', None)
+            for surface in (text, ledger):
+                for leaked in ('correct horse', 'battery staple', 'abc def',
+                               'sk-abc, def', 'a b, c'):
+                    self.assertNotIn(leaked, surface)
+                self.assertIn('已隐藏', surface)
+
+    def test_a_secret_in_malformed_json_is_redacted(self):
+        text, _ledger = finalize(refusal('no', received='{"token": "abc def, ghi"'),
+                                 '被拒绝', None)
+        self.assertNotIn('abc def', text)
+
     def test_a_long_opaque_value_is_redacted_too(self):
         token = 'AbCdEf0123456789AbCdEf0123456789AbCdEf01'
         text, _ledger = finalize(refusal('Bad call.', received={'value': token}), '被拒绝', None)

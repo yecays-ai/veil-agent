@@ -42,38 +42,75 @@ def refusal(reason, *, fix=None, received=None, detail=None):
     return Refusal(reason, fix=fix, received=received, detail=detail)
 
 
-CREDENTIAL = re.compile(
-    r'(?i)("?(?:api[_-]?key|access[_-]?token|token|secret|passw(?:or)?d|authorization|'
-    r'cookie|credential|private[_-]?key)"?\s*[:=]\s*)("?)[^",}\s]{4,}')
-BEARER = re.compile(r'(?i)(bearer\s+)[A-Za-z0-9._\-+/=]{8,}')
+SECRET_KEYS = ('token', 'secret', 'passw', 'api_key', 'apikey', 'access_key',
+               'private_key', 'authorization', 'cookie', 'credential', 'session_id',
+               'client_secret', 'refresh_token', 'id_token')
+# Values after a secret-looking key, quoted or not, including spaces and commas.
+QUOTED_SECRET = re.compile(
+    r'(?i)("?[a-z0-9_.\-]*(?:token|secret|passw(?:or)?d|api[_-]?key|access[_-]?key|'
+    r'private[_-]?key|authorization|cookie|credential|session[_-]?id)[a-z0-9_.\-]*"?\s*[:=]\s*)"[^"]*"')
+BARE_SECRET = re.compile(
+    r'(?i)("?[a-z0-9_.\-]*(?:token|secret|passw(?:or)?d|api[_-]?key|access[_-]?key|'
+    r'private[_-]?key|authorization|cookie|credential|session[_-]?id)[a-z0-9_.\-]*"?\s*[:=]\s*)'
+    r'(?!\[已隐藏\])([^\s,}"\]]{4,})')
+BEARER = re.compile(r'(?i)(bearer\s+)[^\s,;"\]]{8,}')
 LONG_OPAQUE = re.compile(r'\b[A-Za-z0-9_\-+/=]{40,}\b')
+
+
+def _secret_key(name):
+    lowered = str(name).casefold()
+    return any(marker in lowered for marker in SECRET_KEYS)
+
+
+def _redact_value(value):
+    """Structural pass: a secret-named key loses its whole value, spaces or not."""
+    if isinstance(value, dict):
+        return {key: ('[已隐藏]' if _secret_key(key) else _redact_value(item))
+                for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_value(item) for item in value]
+    if isinstance(value, tuple):
+        return [_redact_value(item) for item in value]
+    return value
+
+
+def _redact_text(text):
+    """Text pass for raw or malformed payloads the structure cannot parse."""
+    text = QUOTED_SECRET.sub(lambda m: m.group(1) + '"[已隐藏]"', text)
+    text = BARE_SECRET.sub(lambda m: m.group(1) + '[已隐藏]', text)
+    text = BEARER.sub(lambda m: m.group(1) + '[已隐藏]', text)
+    text = LONG_OPAQUE.sub('[已隐藏的凭据]', text)
+    return text
 
 
 def redact(value):
     """Strip credentials before arguments leave the program (ticket 415).
 
     Truncation is not redaction: a token, password or secret in the arguments must
-    never reach the model or the activity ledger.  Uses the shared activity
-    redactor when it is importable (one source of truth) and a conservative local
-    pass otherwise.
+    never reach the model or the activity ledger.  The structured pass runs first,
+    so a secret-named key loses its whole value even when that value contains
+    spaces, commas or quotes; the text pass covers raw/malformed payloads.
     """
     if value is None:
         return ''
     try:
+        parsed = json.loads(value) if isinstance(value, str) else value
+    except (TypeError, ValueError):
+        parsed = None
+    if parsed is not None:
+        text = json.dumps(_redact_value(parsed), ensure_ascii=False, default=str)
+    else:
+        text = value if isinstance(value, str) else str(value)
+    text = _redact_text(text)
+    try:
         from veil_agent import safe_tool_activity_detail
     except Exception:
         safe_tool_activity_detail = None
-    text = None
     if safe_tool_activity_detail is not None:
         try:
-            text = safe_tool_activity_detail(value, limit=1000)
+            text = safe_tool_activity_detail(text, limit=1000)
         except Exception:
-            text = None
-    if text is None:
-        text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
-    text = BEARER.sub(lambda m: m.group(1) + '[已隐藏]', text)
-    text = CREDENTIAL.sub(lambda m: m.group(1) + m.group(2) + '[已隐藏]', text)
-    text = LONG_OPAQUE.sub('[已隐藏的凭据]', text)
+            pass
     return text
 
 

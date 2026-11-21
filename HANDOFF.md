@@ -11,6 +11,7 @@
   - 参数脱敏：`tool_failures.redact()` 先复用 `safe_tool_activity_detail`，再打掉 Bearer、`api_key/token/secret/password/...` 键值和 40 位以上不透明串，最后才 160 字截断；模型文本和活动账本同一份。
   - `UserError`/`RequestFailed` 这类作者文案不再被当成「工具内部故障」。
   - 二次复查：JSON 解析失败那条消息原来直接截原始参数，现在也走 `redact()`；新增 `RealToolProbeTests` 用真实对象（`FilesystemTools` 路径校验 + `WindowsObservationTools` 参数校验）走同一条出口，防止 Mock 一路「成功」把探针架空。
+  - 三次复查：脱敏不再只靠正则——先按结构处理（键名含 token/secret/password/api_key/authorization/cookie/credential/session_id 等，整段值换成 `[已隐藏]`，值里有空格、逗号、引号也遮得住），文本正则只处理解析不了的原始片段；Bearer、40 位以上不透明串照旧。
 - 没做：没有逐条重写一百多个工具的失败文案；没有按 schema 生成纠错建议；没有回填历史账本；参数回显仍只在已改造的工具上（其余工具靠守门测试保证不说空话）。
 - 下一步：推 PR 后停，等 lan 审；合并后她按工单三条验收（只看修复后新产生的记录）。
 
