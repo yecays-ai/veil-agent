@@ -129,6 +129,9 @@ ENTRIES = (
           '工具定义里；每轮都带', max_bytes=1500),
     _text('chat.recall_message', 'tools', '撤回消息工具的说明',
           '工具定义里；每轮都带', max_bytes=2000),
+    _text('chat.loop.no_progress', 'system', '重复工具调用后的收束提示',
+          '普通聊天连续两批没有新信息时，作为系统消息追加', max_bytes=1200,
+          note='只提醒他收束或换行动，不关闭工具。'),
 
     # ---------- 背景资料 ----------
     _text('background.note', 'background', '背景段落的开头说明',
