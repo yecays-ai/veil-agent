@@ -459,6 +459,11 @@ class Hub(ScreenPopMixin):
                 'background_count': len(background.get('paragraphs') or []) + len(background.get('core') or []),
                 'notes_count': notes.get('count', 0),
                 'estimated_input_tokens': row.get('estimated_input_tokens'),
+                'actual_input_tokens': row.get('actual_input_tokens'),
+                'completion_tokens': row.get('completion_tokens'),
+                'latency_seconds': row.get('latency_seconds'),
+                'usage_status': row.get('usage_status'),
+                'sent': row.get('sent'),
                 'tools': by_request.get(row.get('request_id'), []),
                 'recall': diagnostics.get(row.get('request_id')),
             })

@@ -16,7 +16,8 @@ import tool_failures
 from tools_agent import (ALLOW, ASK, DENY, LAB_ONLY, OWN_WORK, FilesystemTools, checked_path,
                          permitted_tools, tool_policy)
 from veil_agent import (Budget, Chat, RequestFailed, Store, load_character,
-                        UserError, join_reply_continuation, model_tool_result, request_byte_size, run_chat)
+                        UserError, join_reply_continuation, model_tool_result, request_byte_size,
+                        run_chat, stable_hash)
 
 
 class FilesystemServerLaunchTests(unittest.TestCase):
@@ -559,6 +560,24 @@ max_result_bytes = 200
             with self.subTest(call_id=call_id):
                 self.assertEqual([event['state'] for event in events], ['进行中', '成功'])
 
+    def test_configured_reasoning_field_is_not_aliased(self):
+        first = self.message([self.tool_call('read_text_file', '{"path":"one.txt"}', 'one')])
+        first.reasoning = 'provider words'
+        final = self.message(content='Here is the summary.')
+        model = Mock(side_effect=[(first, 100, 20, 0), (final, 120, 20, 0)])
+        tools = Mock()
+        tools.tools = [SimpleNamespace(name='read_text_file', description='Read', inputSchema={})]
+        tools.capability_event = None
+        tools.invoke.return_value = ('one contents', '成功', 'one.txt')
+        self.cfg.provider['reasoning_field'] = 'reasoning'
+        chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=lambda _: None)
+        self.assertEqual(chat.send('read one'), 'Here is the summary.')
+        messages = model.call_args_list[1].args[0]
+        assistant = next(message for message in messages
+                         if message.get('role') == 'assistant' and message.get('tool_calls'))
+        self.assertEqual(assistant.get('reasoning'), 'provider words')
+        self.assertNotIn('reasoning_content', assistant)
+
     def test_chat_can_grant_then_append_without_second_terminal_prompt(self):
         self.cfg.tools['persistent_append_file'] = 'growth-journal.md'
         tools = FilesystemTools.__new__(FilesystemTools)
@@ -585,6 +604,55 @@ max_result_bytes = 200
         self.assertEqual(target.read_text(encoding='utf-8'), 'first\n## 2026-10-20\nsecond')
         approval.assert_called_once()
         self.assert_completed_tool_calls(self.store.read('test/tools.jsonl'), 2)
+
+    def test_tool_log_records_argument_and_result_hashes(self):
+        first = self.message([self.tool_call('read_text_file', '{"path":"one.txt"}', 'one')])
+        final = self.message(content='Here is the summary.')
+        model = Mock(side_effect=[(first, 100, 20, 0), (final, 150, 20, 0)])
+        tools = Mock()
+        tools.tools = [SimpleNamespace(name='read_text_file', description='Read', inputSchema={})]
+        tools.capability_event = None
+        tools.invoke.return_value = ('one contents', '成功', 'one.txt')
+        chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=lambda _: None)
+        self.assertEqual(chat.send('read one'), 'Here is the summary.')
+        rows = self.store.read('test/tools.jsonl')
+        started = next(row for row in rows if row.get('state') == '进行中')
+        finished = next(row for row in rows if row.get('state') == '成功')
+        self.assertEqual(started['arguments_hash'], stable_hash({'path': 'one.txt'}))
+        self.assertEqual(finished['arguments_hash'], stable_hash({'path': 'one.txt'}))
+        self.assertEqual(finished['result_hash'], stable_hash('one contents'))
+        self.assertEqual(len(finished['result_hash']), 40)
+
+    def test_context_log_marks_preflight_and_real_call_diagnostics(self):
+        first = self.message([self.tool_call('read_text_file', '{"path":"one.txt"}', 'one')])
+        final = self.message(content='Here is the summary.')
+        responses = [first, final]
+        seen = {'n': 0}
+
+        def respond(messages, **kwargs):
+            index = seen['n']
+            seen['n'] += 1
+            return responses[index], max(1, round(request_byte_size(messages, kwargs.get('tools')) * 0.2)), 20, 0, 'stop'
+
+        tools = Mock()
+        tools.tools = [SimpleNamespace(name='read_text_file', description='Read', inputSchema={})]
+        tools.capability_event = None
+        tools.invoke.return_value = ('one contents', '成功', 'one.txt')
+        chat = Chat(self.cfg, self.store, self.budget, Mock(side_effect=respond), tools=tools,
+                    output=lambda _: None)
+        self.assertEqual(chat.send('read one'), 'Here is the summary.')
+        rows = self.store.read('test/context-log.jsonl')
+        preflight = next(row for row in rows if row.get('kind') == 'chat')
+        self.assertFalse(preflight['sent'])
+        self.assertEqual(preflight['usage_status'], 'preflight')
+        calls = [row for row in rows if row.get('kind') == 'tool_step_context']
+        self.assertTrue(calls)
+        for row in calls:
+            self.assertTrue(row['sent'])
+            self.assertEqual(row['usage_status'], 'reported')
+            self.assertEqual(row['completion_tokens'], 20)
+            self.assertIsInstance(row['latency_seconds'], float)
+            self.assertEqual(row['finish_reason'], 'stop')
 
     def test_first_self_preview_shows_tools_and_capability_notice(self):
         tools = SimpleNamespace(
@@ -1049,7 +1117,15 @@ max_result_bytes = 200
     def test_measured_prompt_baseline_keeps_room_for_next_tool_record(self):
         first = self.message([self.tool_call('write_file',
             '{"path":"lab/new.md","content":"hello"}', 'write')], reasoning='x' * 8000)
-        model = Mock(side_effect=[(first, 200, 20, 0), (self.message(content='Saved.'), 2400, 20, 0)])
+        responses = [first, self.message(content='Saved.')]
+        seen = {'n': 0}
+
+        def respond(messages, **_kwargs):
+            index = seen['n']
+            seen['n'] += 1
+            return responses[index], max(1, round(request_byte_size(messages, _kwargs.get('tools')) * 0.1)), 20, 0
+
+        model = Mock(side_effect=respond)
         tools = Mock()
         tools.tools = [SimpleNamespace(name='write_file', description='Write', inputSchema={})]
         tools.capability_event = None
@@ -1229,8 +1305,9 @@ max_result_bytes = 200
         social_schema = {'type': 'function', 'function': {
             'name': 'mcp__galatea_garden__get_thread', 'description': 'x' * 100_000,
             'parameters': {'type': 'object', 'properties': {}}}}
-        model = Mock(return_value=(self.message([
-            self.tool_call('expand_capability', '{"groups":["social"]}', 'expand')]), 100, 20, 0))
+        model = Mock(side_effect=lambda messages, **_kwargs: (
+            self.message([self.tool_call('expand_capability', '{"groups":["social"]}', 'expand')]),
+            max(1, round(request_byte_size(messages, _kwargs.get('tools')) * 0.1)), 20, 0))
         output = []
         chat = Chat(self.cfg, self.store, self.budget, model, output=output.append)
         chat.mcp_services = Mock()
@@ -1251,7 +1328,8 @@ max_result_bytes = 200
                        if row.get('local_limit_trigger') == 'local_preflight_after_tool_step')
         self.assertGreater(stopped['estimated_input_tokens'], stopped['model_input_limit'])
         self.assertEqual(stopped['actual_input_tokens'], None)
-        self.assertEqual(stopped['last_actual_input_tokens'], 100)
+        self.assertEqual(stopped['last_actual_input_tokens'],
+                         round(stopped['last_actual_input_bytes'] * 0.1))
         self.assertGreater(stopped['tool_schema_bytes'], 100_000)
 
     def test_provider_input_limit_error_is_classified_without_retry(self):

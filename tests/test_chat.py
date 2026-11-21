@@ -12,7 +12,8 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from veil_agent import (Chat, Budget, Store, build_self_description, conservative_token_ratio,
-                        estimate_request_tokens,
+                        estimate_request_tokens, usage_status_for, reasoning_field_for,
+                        copy_reasoning, message_field, message_request_bytes, MESSAGE_FRAMING_BYTES,
                         load_character, make_model, model_tool_result, run_chat, UserError,
                         RequestFailed, RequestNotSent, TooLong, send_message_schema, toml_provider)
 
@@ -26,6 +27,44 @@ def recovered_spend(store):
     """A request that was sent but never settled is charged once, in full, after a restart."""
     return any(row.get('type') == 'settle' and row.get('accounting') == 'chat-recovered'
                and Decimal(row['amount']) > 0 for row in store.read('costs.jsonl'))
+
+
+class UsageAndProtocolTests(unittest.TestCase):
+    def test_implausible_usage_ratios_are_not_trusted(self):
+        self.assertEqual(usage_status_for(2131, 158154), 'unreliable_ratio')
+        self.assertEqual(usage_status_for(0, 158154), 'missing')
+        self.assertEqual(usage_status_for(17000, 0), 'unreliable_ratio')
+        self.assertEqual(usage_status_for(17000, 100000), 'reported')
+
+    def test_a_sudden_halving_at_a_stable_size_is_underreporting(self):
+        self.assertEqual(usage_status_for(6000, 100000, previous_tokens=20000, previous_bytes=100000),
+                         'unreliable_underreported')
+        self.assertEqual(usage_status_for(19000, 90000, previous_tokens=20000, previous_bytes=100000),
+                         'reported')
+
+    def test_message_framing_is_small_and_explicit(self):
+        message = {'role': 'user', 'content': 'x'}
+        expected = len(json.dumps(message, ensure_ascii=False).encode('utf-8')) + MESSAGE_FRAMING_BYTES
+        self.assertEqual(message_request_bytes(message), expected)
+
+    def test_reasoning_fields_are_not_treated_as_aliases(self):
+        self.assertEqual(reasoning_field_for({}), 'reasoning_content')
+        self.assertEqual(reasoning_field_for({'reasoning_field': 'reasoning'}), 'reasoning')
+        message = SimpleNamespace(reasoning='provider words')
+        record = {}
+        self.assertIsNone(copy_reasoning(record, message, 'reasoning_content'))
+        self.assertNotIn('reasoning_content', record)
+        self.assertEqual(copy_reasoning(record, message, 'reasoning'), 'provider words')
+        self.assertEqual(record, {'reasoning': 'provider words'})
+        self.assertIsNone(message_field(SimpleNamespace(), 'reasoning'))
+
+    def test_retry_turn_keeps_only_the_explicit_reasoning_field(self):
+        message = SimpleNamespace(content='x', reasoning_content='legacy', reasoning='other')
+        from veil_agent import assistant_retry_turn
+        self.assertEqual(assistant_retry_turn(message, 'again')['reasoning_content'], 'legacy')
+        self.assertNotIn('reasoning', assistant_retry_turn(message, 'again'))
+        self.assertEqual(assistant_retry_turn(message, 'again', 'reasoning')['reasoning'], 'other')
+        self.assertNotIn('reasoning_content', assistant_retry_turn(message, 'again', 'reasoning'))
 
 
 class ToolArgumentTests(unittest.TestCase):
@@ -123,7 +162,10 @@ output_cny_per_million = "8"
         self.assertTrue(rows)
         bundle = request_snapshots.for_request(self.store.root, 'test', rows[0]['request_id'])
         self.assertGreaterEqual(len(bundle['steps']), 2)
-        self.assertEqual(bundle['steps'][0]['step'], 1)
+        self.assertEqual(bundle['steps'][0]['step'], 2)
+        full = request_snapshots.for_request(self.store.root, 'test', rows[0]['request_id'], include_unsent=True)
+        self.assertEqual(full['steps'][0]['step'], 1)
+        self.assertFalse(full['steps'][0]['sent'])
         last = bundle['steps'][-1]
         self.assertTrue(any(block['label'] == 'tool_result' for block in last['blocks']))
         self.assertTrue(last['tools'])
@@ -1517,6 +1559,12 @@ output_cny_per_million = "8"
         other_provider = replace(self.cfg, provider={**self.cfg.provider,
                                                      'base_url': 'https://another.invalid/v1'})
         self.assertIsNone(self.budget.input_token_ratio(other_provider))
+
+    def test_unreliable_usage_rows_do_not_calibrate(self):
+        request_id, _ = self.budget.reserve(self.cfg)
+        self.budget.settle(request_id, self.cfg, 2131, 20, 0, input_bytes=158154,
+                           tolerate_over_bound=True, usage_status='unreliable_ratio')
+        self.assertIsNone(self.budget.input_token_ratio(self.cfg))
 
     def test_small_provider_sample_keeps_the_conservative_fallback(self):
         request_id, _ = self.budget.reserve(self.cfg)

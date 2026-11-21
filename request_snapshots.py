@@ -128,7 +128,7 @@ def _tools(schemas):
 
 def build(messages, labels, *, request_id, step=1, kind, model, message_ids=(), autonomy_run_id=None,
           estimated_tokens=0, cache_prefix=0, trim_note='', memory_ids=(), tools=None,
-          created_at=None):
+          created_at=None, sent=True):
     blocks = []
     total = 0
     redacted = 0
@@ -153,7 +153,8 @@ def build(messages, labels, *, request_id, step=1, kind, model, message_ids=(), 
                        'truncated': was_cut})
     tool_list, tools_complete, tools_bytes = _tools(tools)
     record = {
-        'version': 2,
+        'version': 3,
+        'sent': bool(sent),
         'request_id': str(request_id),
         'step': int(step),
         'kind': _safe(kind),
@@ -251,13 +252,18 @@ def _steps(root, role, request_id):
     return rows
 
 
-def for_request(root, role, request_id):
-    steps = _steps(root, role, request_id)
+def _sent(record):
+    # Old records predate the flag and were real requests.
+    return record.get('sent', True) is not False
+
+
+def for_request(root, role, request_id, *, include_unsent=False):
+    steps = [row for row in _steps(root, role, request_id) if include_unsent or _sent(row)]
     return {'request_id': str(request_id), 'steps': steps} if steps else None
 
 
-def get(root, role, request_id, step=None):
-    steps = _steps(root, role, request_id)
+def get(root, role, request_id, step=None, *, include_unsent=False):
+    steps = [row for row in _steps(root, role, request_id) if include_unsent or _sent(row)]
     if not steps:
         return None
     if step is None:
@@ -285,14 +291,18 @@ def recent(root, role, limit=12):
         if not records:
             continue
         records.sort(key=lambda item: item.get('step') or 0)
-        latest = records[-1]
+        sent = [item for item in records if _sent(item)]
+        if not sent:
+            continue
+        latest = sent[-1]
         rows.append({'request_id': request_id, 'kind': latest.get('kind'),
                      'model': latest.get('model'), 'created_at': latest.get('created_at'),
-                     'estimated_tokens': max(int(item.get('estimated_tokens') or 0) for item in records),
-                     'steps': len(records), 'blocks': len(latest.get('blocks') or []),
-                     'truncated_blocks': sum(int(item.get('truncated_blocks') or 0) for item in records),
-                     'redacted': sum(int(item.get('redacted') or 0) for item in records),
-                     'complete': all(item.get('complete') for item in records)})
+                     'estimated_tokens': max(int(item.get('estimated_tokens') or 0) for item in sent),
+                     'steps': len(sent), 'unsent': len(records) - len(sent),
+                     'blocks': len(latest.get('blocks') or []),
+                     'truncated_blocks': sum(int(item.get('truncated_blocks') or 0) for item in sent),
+                     'redacted': sum(int(item.get('redacted') or 0) for item in sent),
+                     'complete': all(item.get('complete') for item in sent)})
     return rows
 
 
