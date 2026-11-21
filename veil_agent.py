@@ -6121,7 +6121,8 @@ class Chat:
                     duplicate_result = bool(previous and previous.get('message') in loop_messages
                                             and '较早的工具结果已缩短' not in str(
                                                 previous['message'].get('content') or ''))
-                    same_failure = (execution.state != '成功'
+                    same_failure = (canonical_name in LOOP_DEDUP_TOOLS
+                                    and execution.state != '成功'
                                     and (duplicate_result or previous_failure == result_hash))
                     compact_duplicate = (duplicate_result and execution.state == '成功'
                                          and canonical_name in LOOP_DEDUP_TOOLS)
@@ -6150,6 +6151,10 @@ class Chat:
                             failure_detail=execution.failure_detail)
                     elif execution.state == '成功' and canonical_name in LOOP_MESSAGE_TOOLS:
                         batch_new_info = True
+                    elif canonical_name not in LOOP_DEDUP_TOOLS:
+                        # A dynamic observation or a side-effect tool is not a deterministic
+                        # repeat; do not nudge just because its text happens to match.
+                        batch_new_info = True
                     elif not duplicate_result and not same_failure:
                         batch_new_info = True
                     state = execution.state
@@ -6163,12 +6168,13 @@ class Chat:
                     if compact:
                         result_state = duplicate_state
                     elif not duplicate_result and not same_failure:
-                        loop_result_history.setdefault(result_key, []).append(
-                            {'hash': result_hash, 'step': step, 'message': loop_messages[-1]})
-                        if state == '成功':
-                            loop_failure_history.pop(result_key, None)
-                        else:
-                            loop_failure_history[result_key] = result_hash
+                        if result_state not in ('已截断', '结果过长'):
+                            loop_result_history.setdefault(result_key, []).append(
+                                {'hash': result_hash, 'step': step, 'message': loop_messages[-1]})
+                            if state == '成功':
+                                loop_failure_history.pop(result_key, None)
+                            else:
+                                loop_failure_history[result_key] = result_hash
                     log_detail = execution.result
                     if canonical_name in DESKTOP_FILE_READ_TOOL_NAMES:
                         log_detail = f'{canonical_name}: {execution.summary} ({state})'
@@ -6204,7 +6210,7 @@ class Chat:
                         self.budget.settle(next_reservation, next_cfg, 0, 0, 0)
                         final = 'Autonomous activity yielded after this step to let chat or a control action proceed.'
                         break
-                if sent_in_this_step or mixed_sent_messages or batch_new_info:
+                if batch_new_info:
                     no_progress_batches = 0
                 else:
                     no_progress_batches += 1

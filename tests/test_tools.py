@@ -697,6 +697,8 @@ max_result_bytes = 200
         third = chat.model.call_args_list[2].args[0]
         tool_text = [message.get('content') or '' for message in third if message.get('role') == 'tool']
         self.assertFalse(any('Same result as step' in text for text in tool_text))
+        self.assertFalse(any('No new information in the last two tool batches' in (message.get('content') or '')
+                             for message in third if message.get('role') == 'system'))
 
         write = self.tool_call('write_file', '{"path":"one.txt","content":"same"}', 'write')
         responses = [self.message([write]), self.message([write]), self.message(content='Done.')]
@@ -706,6 +708,28 @@ max_result_bytes = 200
         third = chat.model.call_args_list[2].args[0]
         tool_text = [message.get('content') or '' for message in third if message.get('role') == 'tool']
         self.assertEqual(sum('saved' in text for text in tool_text), 2)
+
+    def test_side_effect_failure_keeps_the_full_error(self):
+        write = self.tool_call('write_file', '{"path":"one.txt","content":"same"}', 'write')
+        responses = [self.message([write]), self.message([write]), self.message(content='Done.')]
+        chat, tools = self._tool_loop(responses, ('permission denied', '出错', 'one.txt'),
+                                      tool_names=('write_file',))
+        self.assertEqual(chat.send('write twice'), 'Done.')
+        self.assertEqual(tools.invoke.call_count, 2)
+        third = chat.model.call_args_list[2].args[0]
+        tool_text = [message.get('content') or '' for message in third if message.get('role') == 'tool']
+        self.assertEqual(sum('permission denied' in text for text in tool_text), 2)
+        self.assertFalse(any('Same failure as step' in text for text in tool_text))
+
+    def test_truncated_first_result_is_not_registered_for_dedup(self):
+        call = self.tool_call('read_text_file', '{"path":"big.txt"}', 'big')
+        responses = [self.message([call]), self.message([call]), self.message(content='Done.')]
+        chat, tools = self._tool_loop(responses, ('x' * 50000, '成功', 'big.txt'))
+        self.assertEqual(chat.send('read big twice'), 'Done.')
+        self.assertEqual(tools.invoke.call_count, 2)
+        third = chat.model.call_args_list[2].args[0]
+        tool_text = [message.get('content') or '' for message in third if message.get('role') == 'tool']
+        self.assertFalse(any('Same result as step' in text for text in tool_text))
 
     def test_no_progress_nudge_after_two_empty_batches(self):
         call = self.tool_call('read_text_file', '{"path":"one.txt"}', 'one')
