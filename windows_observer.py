@@ -373,10 +373,13 @@ class WindowsObservationTools:
                 return WindowsToolResult(
                     'Use an exact window_id returned by windows_list or windows_foreground.',
                     activity_detail='窗口 ID 或参数无效。',
+                    received=args,
                 ), '被拒绝', summary
             if 'visual_fallback' in args and not isinstance(args['visual_fallback'], str):
-                return WindowsToolResult('visual_fallback must be auto, force, or never.',
-                                         activity_detail='参数无效。'), '被拒绝', summary
+                return WindowsToolResult(
+                    'visual_fallback must be auto, force, or never.',
+                    activity_detail='参数无效：visual_fallback 只能是 auto、force 或 never。',
+                    received=args), '被拒绝', summary
 
         cancelled = threading.Event()
         result_queue = queue.Queue()

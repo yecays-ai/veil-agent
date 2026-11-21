@@ -5,7 +5,8 @@
 - 根因：`_execute_tool_call` 把工具内部 `ValueError/TypeError` 一律报成「arguments are not a valid JSON object」（409 遗留）；`peek_screen`/`snooping_around` 收到任何参数只说一句 `This tool does not accept arguments.`，不回声收到的参数；`windows_interaction` 把内部异常说成参数错；`open_lab_game` 把参数错说成服务不可用；活动页把 `被拒绝` 一律写成「权限拒绝」。
 - 改法：新增 `tool_failures.py`（失败契约：原话在前；`refusal(...)` 只带本来就确定的改法；`UNKNOWN` 明确表示「程序不知道该怎么改」；内部故障只给 `err-xxxx` + 异常类名，traceback 写本机 `data/<角色>/tool-errors.jsonl`）；`_execute_tool_call` 作为唯一出口统一渲染并区分「参数解析失败」和「工具内部异常」；上述五处文案改真实原因 + 改法；`desktop/chat.js` 状态改「被拒绝」，内部故障显示「工具内部故障」。
 - 验证：新增 `tests/test_tool_failures.py` 9 项 + `tests/test_tools.py` 2 项通过；tools/windows/chat/autonomy/long_tasks 全通过；全量 1825 项只剩 3 项既存失败（`test_backup_restore`、`test_reliability_closeout` 的 `desktop-data` 清单，在 main 上同样失败；`test_executor_opencode` 真实服务冒烟）。
-- 没做：没有逐条重写一百多个工具的失败文案；没有按 schema 生成纠错建议；没有回填历史账本。
+- 复查补修：`UserError`/`RequestFailed` 这类作者文案不再被外层异常处理器当成「工具内部故障」（会丢掉可读原因）；新增 `FailureSourceContractTests` 扫描工具模块，空原因或只写「参数无效。」这类空话直接红——这是「以后新工具」的守门测试。
+- 没做：没有逐条重写一百多个工具的失败文案；没有按 schema 生成纠错建议；没有回填历史账本；参数回显仍只在已改造的工具上（其余工具靠守门测试保证不说空话）。
 - 下一步：推 PR 后停，等 lan 审；合并后她按工单三条验收（只看修复后新产生的记录）。
 
 ## 工单 413 交接（ongoing 只留进行中/已完成）

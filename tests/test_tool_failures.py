@@ -1,3 +1,4 @@
+import ast
 import tempfile
 import unittest
 from pathlib import Path
@@ -51,6 +52,21 @@ class InternalFailureTests(unittest.TestCase):
         self.assertNotIn('secret.txt', ledger)
         self.assertIn(error_id, ledger)
 
+    def test_an_authored_user_error_keeps_its_own_words(self):
+        # UserError / RequestFailed / BudgetExceeded are meant to be read; they must
+        # not be relabelled as an internal fault or write a traceback row.
+        from agent_types import UserError
+        with tempfile.TemporaryDirectory() as temp:
+            store = Store(Path(temp) / 'data')
+            fake = SimpleNamespace(store=store, cfg=SimpleNamespace(id='test'))
+            note = Chat._internal_note(
+                fake, 'long_task_update',
+                UserError('Long-task state could not be saved safely; the previous version was preserved.'),
+                '{"a": 1}')
+            self.assertIn('could not be saved safely', note)
+            self.assertNotIn('err-', note)
+            self.assertEqual(store.read('test/tool-errors.jsonl'), [])
+
     def test_the_local_error_file_keeps_the_traceback_for_lookup(self):
         with tempfile.TemporaryDirectory() as temp:
             store = Store(Path(temp) / 'data')
@@ -99,6 +115,58 @@ class NoArgumentToolTests(unittest.TestCase):
         text, _ledger = finalize(result, state, result.activity_detail)
         self.assertIn('A JSON object of arguments is required.', text)
         self.assertIn('correction:', text)
+
+
+class FailureSourceContractTests(unittest.TestCase):
+    """Every authored failure return says something specific (ticket 415).
+
+    This is the guard for NEW tools: a refusal or an error that only says
+    "参数无效。" / "Error" (or nothing at all) turns CI red, so a future tool cannot
+    silently drop back to the one meaningless sentence lan complained about.
+    """
+
+    MODULES = ('veil_agent.py', 'tools_agent.py', 'windows_observer.py',
+               'windows_interaction.py', 'memory_agent.py', 'long_tasks.py')
+    BARE = {
+        '参数无效。', '参数无效', 'Error', 'Error.', 'Failed.', 'Failed',
+        'The tool failed.', 'Invalid arguments.', 'Invalid arguments',
+        'This tool does not accept arguments.',
+    }
+
+    @staticmethod
+    def _literals(node):
+        return ''.join(child.value for child in ast.walk(node)
+                       if isinstance(child, ast.Constant) and isinstance(child.value, str))
+
+    def test_no_failure_return_is_empty_or_a_bare_phrase(self):
+        root = Path(__file__).resolve().parents[1]
+        bad = []
+        for name in self.MODULES:
+            tree = ast.parse((root / name).read_text(encoding='utf-8'))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Return) or not isinstance(node.value, ast.Tuple):
+                    continue
+                if len(node.value.elts) < 2:
+                    continue
+                state = node.value.elts[1]
+                if not (isinstance(state, ast.Constant)
+                        and state.value in ('被拒绝', '出错')):
+                    continue
+                value = node.value.elts[0]
+                if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                    reason = value.value.strip()
+                elif (isinstance(value, ast.Call) and value.args
+                      and isinstance(value.args[0], ast.Constant)
+                      and isinstance(value.args[0].value, str)):
+                    reason = value.args[0].value.strip()
+                else:
+                    # Shared authored constants (e.g. NOT_ASKED_TEXT) are reviewed elsewhere.
+                    continue
+                if not reason:
+                    bad.append(f'{name}:{node.lineno} has no reason')
+                elif reason in self.BARE:
+                    bad.append(f'{name}:{node.lineno} only says {reason!r}')
+        self.assertEqual(bad, [], 'tool failures must explain themselves: ' + '; '.join(bad))
 
 
 if __name__ == '__main__':

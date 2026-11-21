@@ -4712,6 +4712,10 @@ class Chat:
 
     def _internal_note(self, tool, exc, arguments):
         """Safe one-line note for a failure that escaped the tool funnel."""
+        if isinstance(exc, UserError):
+            # UserError / RequestFailed / BudgetExceeded are authored program messages
+            # meant to be read; they carry no local paths, so keep their own wording.
+            return str(exc) or type(exc).__name__
         text, detail, error_id = tool_failures.internal_failure(tool, exc)
         self._record_internal_failure(tool, error_id, exc, arguments)
         return detail
