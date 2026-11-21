@@ -56,6 +56,9 @@ body:not(.detached-window) .composer #box{background:transparent}
 
 /* 气泡跟着背景走一点，但不做成玻璃：内容区要能读 */
 .msg.assistant{background:color-mix(in srgb, rgb(var(--bubble-rgb)) 78%, transparent)}
+/* Ticket 418: text sent with a sticker keeps a bubble, so it has to follow the same glass colour as other bubbles. */
+.msg.sticker-msg .msg-sticker-caption{background:color-mix(in srgb, rgb(var(--bubble-rgb)) 78%, transparent)}
+.msg.user.sticker-msg .msg-sticker-caption{background:color-mix(in srgb, rgb(var(--user-rgb)) 82%, transparent)}
 .msg.user{background:color-mix(in srgb, rgb(var(--user-rgb)) 82%, transparent)}
 
 /* 弹层、菜单这类临时浮层同样一份玻璃 */
