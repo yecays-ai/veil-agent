@@ -1,4 +1,12 @@
-﻿# HANDOFF
+# HANDOFF
+
+## 工单 415 交接（工具失败说清真实原因）
+- 工单：`docs/tickets/415-tool-failure-contract.md`；分支 `ticket/415-tool-failure-contract`，从 origin/main（f9c7931）开的独立 worktree，没动正式目录，也没碰 412/413/414 的工作区。
+- 根因：`_execute_tool_call` 把工具内部 `ValueError/TypeError` 一律报成「arguments are not a valid JSON object」（409 遗留）；`peek_screen`/`snooping_around` 收到任何参数只说一句 `This tool does not accept arguments.`，不回声收到的参数；`windows_interaction` 把内部异常说成参数错；`open_lab_game` 把参数错说成服务不可用；活动页把 `被拒绝` 一律写成「权限拒绝」。
+- 改法：新增 `tool_failures.py`（失败契约：原话在前；`refusal(...)` 只带本来就确定的改法；`UNKNOWN` 明确表示「程序不知道该怎么改」；内部故障只给 `err-xxxx` + 异常类名，traceback 写本机 `data/<角色>/tool-errors.jsonl`）；`_execute_tool_call` 作为唯一出口统一渲染并区分「参数解析失败」和「工具内部异常」；上述五处文案改真实原因 + 改法；`desktop/chat.js` 状态改「被拒绝」，内部故障显示「工具内部故障」。
+- 验证：新增 `tests/test_tool_failures.py` 9 项 + `tests/test_tools.py` 2 项通过；tools/windows/chat/autonomy/long_tasks 全通过；全量 1825 项只剩 3 项既存失败（`test_backup_restore`、`test_reliability_closeout` 的 `desktop-data` 清单，在 main 上同样失败；`test_executor_opencode` 真实服务冒烟）。
+- 没做：没有逐条重写一百多个工具的失败文案；没有按 schema 生成纠错建议；没有回填历史账本。
+- 下一步：推 PR 后停，等 lan 审；合并后她按工单三条验收（只看修复后新产生的记录）。
 
 ## 工单 412 交接（日历第二步）
 独立工作区 ticket/412-calendar-step-two；已同步最新 main（d42a580）并解决 STATUS 冲突。本轮修：①自动写入/撤销改用单调 `revision` 防并发覆盖；②23:50 轻提示后跨午夜补勾归前一天；③中文数字时间、否定确认、取消后重新约定恢复；④提醒发送前二次复核取消与改动。本地 life_records+calendar 18、chat 101、web 72 通过。下一步：等 GitHub 四矩阵和 Cubic 复审；Lan 真机按原方案七项验收；不合并。

@@ -1308,12 +1308,13 @@ function activityDetails(record){
 }
 const TOOL_LABELS={delegate:'委派研究',read_text_file:'读取文件',read_multiple_files:'读取多个文件',write_file:'写入文件',append_file:'追加文件',list_directory:'查看文件夹',directory_tree:'查看目录树',search_files:'查找文件',get_file_info:'查看文件信息',create_directory:'创建文件夹',move_lab_file:'移动 Lab 文件',lab_file_digest:'核对 Lab 文件',hold:'保存记忆',breath_search:'查找记忆',trace:'更新记忆',dream:'整理记忆',letter_write:'写记忆信件',letter_read:'读记忆信件',memory_history:'查看记忆历史',memory_catalog:'查看记忆目录',memory_read:'读取记忆',long_task_status:'查看长期任务',long_task_update:'更新长期任务',web_search:'联网搜索',web_fetch:'读取网页',send_message:'发送消息',screen_pop:'屏幕弹出'};
 const NOWHERE_TOOL_LABELS={say:'记录乌有乡语录',quotes:'查看旅程语录',bury:'埋藏纪念品'};
-function activityStatus(state){
+function activityStatus(state,detail){
   if(state==='进行中')return {text:'进行中',className:'running'};
   if(state==='成功')return {text:'成功',className:'success'};
-  if(state==='被拒绝')return {text:'权限拒绝',className:'failure'};
+  // 工单 415：拒绝的原因各不相同，状态只报「被拒绝」，真实原因在展开的「执行结果」里。
+  if(state==='被拒绝')return {text:'被拒绝',className:'failure'};
   if(state==='待选择')return {text:'待他选择',className:'running'};
-  if(state==='出错'||state==='失败')return {text:'失败',className:'failure'};
+  if(state==='出错'||state==='失败')return {text:String(detail||'').startsWith('工具内部故障')?'工具内部故障':'失败',className:'failure'};
   return {text:state||'未知',className:'failure'};
 }
 function activityTime(value){const date=value?new Date(value):null;return date&&Number.isFinite(date.getTime())?date.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'}):'--:--:--'}
@@ -1392,7 +1393,7 @@ function updateActivityRow(row,item){
   const screenPopOpen=['还开着','弹幕播放中'].includes(item.screen_pop_state);
   const state=item.screen_pop_state
     ? {text:item.screen_pop_state,className:screenPopOpen?'running':'success'}
-    : activityStatus(item.state);
+    : activityStatus(item.state,item.detail);
   row.status.className='activity-state '+state.className;row.status.textContent=state.text;
   row.code.textContent=nowhereKind?'乌有乡':item.tool;row.source.textContent='来源：'+(item.source||'聊天');
   row.values['操作对象'].textContent=nowhereKind?'乌有乡旅行记录':(item.path||'未提供');

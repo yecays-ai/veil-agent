@@ -22,6 +22,7 @@ from pathlib import Path
 import ledger_recovery
 import persona_versions
 import prompts
+import tool_failures
 from voice_style import FRAME as VOICE_FRAME, VoiceStyle, voice_path
 from background import append_context_log, background_context, background_path, context_chars, request_kind
 from contextlib import contextmanager, nullcontext
@@ -219,6 +220,7 @@ class _ToolExecution:
     summary: str
     checkpoint_verified: bool = False
     activity_detail: str = None
+    failure_detail: str = None
 
 
 SEND_MESSAGE = {'type': 'function', 'function': {
@@ -4456,7 +4458,7 @@ class Chat:
                 pass
         if isinstance(raw, str) and not raw.lstrip().startswith(('{', '[')):
             return raw
-        raise ValueError('invalid tool arguments')
+        raise tool_failures.ArgumentError('invalid tool arguments')
 
     def _execute_tool_call(self, call, request_id, tool_call_id, autonomy,
                            offered=_UNSET_TOOL_SCHEMAS):
@@ -4477,6 +4479,7 @@ class Chat:
         call = SimpleNamespace(id=getattr(call, 'id', None), function=SimpleNamespace(
             name=canonical_name, arguments=call.function.arguments))
         activity_detail = None
+        failure_detail = None
         try:
             checkpoint_verified = False
             if call.function.name == 'send_message':
@@ -4665,13 +4668,53 @@ class Chat:
                     self.long_tasks.observe_tool_result(call.function.name, result_target, state, result)
                 else:
                     result, state, summary = 'The program rejected this call because the tool is unavailable.', '被拒绝', call.function.name
-        except (ValueError, TypeError):
+        except (json.JSONDecodeError, tool_failures.ArgumentError):
             message = 'The program rejected this call because the arguments are not a valid JSON object.'
             received = getattr(call.function, 'arguments', None)
             if isinstance(received, str) and received.strip():
                 message += ' The tool received: ' + received.strip().replace('\n', ' ')[:160]
             result, state, summary = message, '被拒绝', call.function.name
-        return _ToolExecution(result, state, summary, checkpoint_verified, activity_detail)
+        except (ValueError, TypeError) as exc:
+            # Ticket 415: this used to be reported as "the arguments are not a valid
+            # JSON object" (409's leftover), which disguised program failures as
+            # Peter's mistake.  The exception text may hold local paths or file
+            # contents, so only the type name and a trackable id leave this block;
+            # the traceback goes to the local-only tool-errors.jsonl.
+            result, activity_detail, error_id = tool_failures.internal_failure(
+                call.function.name, exc)
+            state, summary = '出错', call.function.name
+            failure_detail = activity_detail
+            self._record_internal_failure(call.function.name, error_id, exc,
+                                          getattr(call.function, 'arguments', None))
+        text, ledger = tool_failures.finalize(result, state, activity_detail)
+        structured = (getattr(result, 'fix', None) is not None
+                      or getattr(result, 'received', None) is not None)
+        return _ToolExecution(text, state, summary, checkpoint_verified, activity_detail,
+                              failure_detail or (ledger if structured else None))
+
+    def _record_internal_failure(self, tool, error_id, exc, arguments):
+        """Keep the original program error locally; only its id leaves the machine.
+
+        Ticket 415: the exception text can contain local paths, file contents or
+        credentials, so it never reaches the model, the activity ledger or the
+        investigation checkpoint.  This file stays on this computer.
+        """
+        import traceback
+        try:
+            self.store.append(f'{self.cfg.id}/tool-errors.jsonl', {
+                'time': now(), 'error_id': error_id, 'tool': tool,
+                'type': type(exc).__name__,
+                'arguments': safe_tool_activity_detail(arguments) if arguments else None,
+                'traceback': safe_tool_activity_detail(traceback.format_exc(), limit=8000),
+            })
+        except Exception:
+            pass
+
+    def _internal_note(self, tool, exc, arguments):
+        """Safe one-line note for a failure that escaped the tool funnel."""
+        text, detail, error_id = tool_failures.internal_failure(tool, exc)
+        self._record_internal_failure(tool, error_id, exc, arguments)
+        return detail
 
     def workbench_ready(self):
         settings = getattr(self.cfg, 'executor', None) or {}
@@ -4945,8 +4988,10 @@ class Chat:
         # Ticket 143: a successful message is already its own bubble, and choosing silence or a later reply
         # should leave nothing in Lan's chat; the activity page still records every call.
         if canonical_name not in ('send_message', 'stay_silent', 'reply_later') or result_state != '成功':
-            self._trace(display_call(name, execution.summary, result_state,
-                                     (display_detail if result_state != '成功' else None)), 'tool')
+            # Ticket 415: the failure text can carry program lines; keep the trace
+            # one line so it stays readable in the chat's thinking block.
+            reason = ' '.join(str(display_detail).split()) if result_state != '成功' else None
+            self._trace(display_call(name, execution.summary, result_state, reason), 'tool')
         delivery = {'result_state': result_state} if result_state != execution.state else {}
         summaries.append({'tool': name, 'path': execution.summary,
                           'state': execution.state, **delivery})
@@ -5853,7 +5898,8 @@ class Chat:
                                 if not autonomy:
                                     self.investigation.record(checkpoint_goal, request_id, call.function.name, args,
                                                               '结果未知', summary,
-                                                              str(exc) or exc.__class__.__name__, checkpoint_resuming,
+                                                              self._internal_note(call.function.name, exc, args),
+                                                              checkpoint_resuming,
                                                               mcp_side_effect, checkpoint_name)
                                 raise
                             if not autonomy:
@@ -5912,11 +5958,12 @@ class Chat:
                                 call, request_id,
                                 f'{step}:{getattr(call, "id", None) or call_index}', autonomy, offered)
                         except BaseException as exc:
+                            note = self._internal_note(call.function.name, exc, args)
                             log_tool(call.function.name, summary, '出错', call_id=call_id,
-                                     detail=str(exc) or exc.__class__.__name__)
+                                     detail=note)
                             if not autonomy:
                                 self.investigation.record(checkpoint_goal, request_id, call.function.name, args,
-                                                          '结果未知', summary, str(exc) or exc.__class__.__name__,
+                                                          '结果未知', summary, note,
                                                           checkpoint_resuming, mcp_side_effect, checkpoint_name)
                             raise
                     if not autonomy and not replay_block:
@@ -5945,6 +5992,10 @@ class Chat:
                         # Keep the program's own failure text, so a refusal or error can be diagnosed
                         # from the log. Successful results stay out: they can hold page or window text.
                         log_detail = f'{log_detail} {str(execution.result)[:400]}'
+                    if state != '成功' and execution.failure_detail:
+                        # Ticket 415: the funnel already wrote the real reason, the
+                        # arguments received and, only when known, the correction.
+                        log_detail = execution.failure_detail
                     activity_metadata = nowhere_activity_metadata(
                         canonical_name or call.function.name, call.function.name,
                         args, execution.result, state)

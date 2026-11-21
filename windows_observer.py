@@ -131,10 +131,14 @@ class ObservationPaused(ObservationError):
 class WindowsToolResult(str):
     """Transient tool text plus optional image content for this model request."""
 
-    def __new__(cls, text, *, image_data_uri=None, activity_detail=None):
+    def __new__(cls, text, *, image_data_uri=None, activity_detail=None, fix=None, received=None):
         value = super().__new__(cls, text)
         value.image_data_uri = image_data_uri
         value.activity_detail = activity_detail
+        # Ticket 415: only a fact the refusing code already knows.  None means
+        # "no correction stated", UNKNOWN (tool_failures) means "none exists".
+        value.fix = fix
+        value.received = received
         return value
 
 
@@ -347,11 +351,20 @@ class WindowsObservationTools:
                 activity_detail='桌面观察工具当前不可用。',
             ), '被拒绝', summary
         if not isinstance(args, dict):
-            return WindowsToolResult('A JSON object of arguments is required.',
-                                     activity_detail='参数无效。'), '被拒绝', summary
+            no_arguments = name in ('windows_list', 'windows_foreground')
+            return WindowsToolResult(
+                'A JSON object of arguments is required.',
+                activity_detail='参数无效：参数必须是一个 JSON 对象。',
+                fix=('Call it again with {} — this tool takes no arguments.' if no_arguments
+                     else 'Call it again with one JSON object of arguments.'),
+                received=args), '被拒绝', summary
         if name in ('windows_list', 'windows_foreground') and args:
-            return WindowsToolResult('This tool does not accept arguments.',
-                                     activity_detail='参数无效。'), '被拒绝', summary
+            return WindowsToolResult(
+                'This tool takes no arguments.',
+                activity_detail='参数无效：这个工具不收参数，这次没有执行。',
+                fix=('Call it again with {} and no other keys; use windows_observe '
+                     'to read one window.'),
+                received=args), '被拒绝', summary
         if name == 'windows_observe':
             if (set(args) - {'window_id', 'visual_fallback'}
                     or not isinstance(args.get('window_id'), str)
