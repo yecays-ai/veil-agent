@@ -1,5 +1,6 @@
 import ast
 import tempfile
+import threading
 import unittest
 from unittest.mock import Mock
 from pathlib import Path
@@ -9,6 +10,7 @@ import tools_agent
 import tool_failures
 from tool_failures import UNKNOWN, finalize, internal_failure, refusal
 from veil_agent import Budget, Chat, Store, load_character
+from tools_agent import FilesystemTools
 from windows_observer import WindowsObservationTools
 
 
@@ -258,6 +260,18 @@ max_result_bytes = 200
         self.assertEqual(missing, [],
                          'failures that skip the program backstop: ' + ', '.join(missing))
 
+    def test_json_parse_failure_redacts_the_arguments(self):
+        # Review fix: this path used to echo the raw arguments into the message.
+        call = SimpleNamespace(id='json', function=SimpleNamespace(
+            name='read_text_file',
+            arguments='{"api_key": "sk-abcdef0123456789abcdef", bad'))
+        execution = self.chat._execute_tool_call(call, 'probe', 'step:0', False,
+                                                self.chat.tool_schemas())
+        text = str(execution.result)
+        self.assertIn('not a valid JSON object', text)
+        self.assertNotIn('sk-abcdef0123456789abcdef', text)
+        self.assertNotIn('sk-abcdef0123456789abcdef', str(execution.failure_detail))
+
     def test_every_offered_tool_survives_a_crashing_backend(self):
         # A tool that reaches the program and raises is the case that used to be
         # reported as "arguments are not valid JSON".  Every such call must still
@@ -277,6 +291,99 @@ max_result_bytes = 200
                 unexplained.append(name)
         self.assertEqual(unexplained, [],
                          'program failures left unexplained: ' + ', '.join(unexplained))
+
+
+
+class RealToolProbeTests(unittest.TestCase):
+    """Probe REAL tool objects, not a mock that always says ok.
+
+    A mock backend would prove only the funnel.  These are the real validator
+    paths (filesystem path checks, window argument checks) driven through the
+    same `_execute_tool_call` the model uses.
+    """
+
+    TOML = '''name = "Peter"
+provider = "fake"
+persona = "persona/test.md"
+max_output_tokens = 50
+
+[providers.fake]
+model = "fake"
+base_url = "https://example.invalid/v1"
+api_key_env = "FAKE_KEY"
+max_input_tokens = 6000
+input_cny_per_million = "2"
+cached_input_cny_per_million = "1"
+output_cny_per_million = "8"
+
+[tools]
+enabled = true
+max_steps = 3
+max_result_bytes = 200
+'''
+
+    NAMES = ('read_text_file', 'write_file', 'list_directory', 'directory_tree',
+             'lab_file_digest', 'windows_list', 'windows_foreground', 'windows_observe')
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        root = Path(self.temp.name)
+        (root / 'characters' / 'test').mkdir(parents=True)
+        (root / 'persona').mkdir()
+        (root / 'persona' / 'test.md').write_text('test persona', encoding='utf-8')
+        (root / 'characters' / 'test' / 'character.toml').write_text(self.TOML, encoding='utf-8')
+        self.cfg = load_character(root, 'test')
+        self.store = Store(root / 'data')
+        workspace = root / 'workspace'
+        workspace.mkdir()
+        backend = SimpleNamespace(
+            list_windows=lambda stopped: [],
+            read_controls=lambda window, stopped: [],
+            capture_window=lambda window, stopped: None)
+        manager = FilesystemTools.__new__(FilesystemTools)
+        manager.workspace = workspace
+        manager.cfg = self.cfg
+        manager.lab = None
+        manager.lab_max_write_bytes = 200000
+        manager.workspace_operation_lock = threading.RLock()
+        manager.store = self.store
+        manager.client = Mock()
+        manager.capability_event = None
+        manager.capability_event_model = None
+        manager.tools = [SimpleNamespace(name=name, description='tool', inputSchema={})
+                         for name in self.NAMES]
+        manager.windows_tools = WindowsObservationTools(True, platform_enabled=True,
+                                                        backend=backend)
+        self.chat = Chat(self.cfg, self.store, Budget(self.store), Mock(), tools=manager,
+                         output=lambda *_: None)
+
+    def probe(self, name, arguments):
+        offered = self.chat.tool_schemas()
+        call = SimpleNamespace(id='real-' + name,
+                               function=SimpleNamespace(name=name, arguments=arguments))
+        return self.chat._execute_tool_call(call, 'probe', 'step:0', False, offered)
+
+    def test_real_tools_explain_their_failures(self):
+        probes = {
+            'read_text_file': '{"path": "../../etc/passwd"}',
+            'write_file': '{"path": "../../etc/passwd", "content": "x"}',
+            'list_directory': '{"path": ".."}',
+            'directory_tree': '{"path": ".."}',
+            'lab_file_digest': '{"path": "../../etc/passwd"}',
+            'windows_list': '{"window_id": "w-1"}',
+            'windows_foreground': '{"app": "Chrome"}',
+            'windows_observe': '{"window_id": "nope"}',
+        }
+        unexplained = []
+        for name, arguments in probes.items():
+            execution = self.probe(name, arguments)
+            text = str(execution.result)
+            self.assertNotEqual(execution.state, '成功', f'{name} must refuse junk arguments')
+            if '[program]' not in text and 'failed inside the program' not in text:
+                unexplained.append(f'{name}: {text[:80]}')
+        self.assertEqual(unexplained, [],
+                         'real tools whose failures skip the contract: ' + '; '.join(unexplained))
 
 
 if __name__ == '__main__':

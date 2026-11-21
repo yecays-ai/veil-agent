@@ -4672,7 +4672,9 @@ class Chat:
             message = 'The program rejected this call because the arguments are not a valid JSON object.'
             received = getattr(call.function, 'arguments', None)
             if isinstance(received, str) and received.strip():
-                message += ' The tool received: ' + received.strip().replace('\n', ' ')[:160]
+                # Ticket 415 review: this path used to echo the raw arguments.  It
+                # goes through the same redaction as every other failure now.
+                message += ' The tool received: ' + tool_failures.redact(received).replace('\n', ' ')[:160]
             result, state, summary = message, '被拒绝', call.function.name
         except UserError:
             # Authored control-flow messages (UserError / RequestFailed /
