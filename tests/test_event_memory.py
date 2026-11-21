@@ -378,6 +378,27 @@ class EventMemoryTests(unittest.TestCase):
         stages = [{'facts': {'numbers': ['100'], 'dates': [], 'files': []}}]
         self.assertEqual(self.native.events._missing_facts(stages, 'The count was 1000.'), ['100'])
         self.assertEqual(self.native.events._missing_facts(stages, 'The count was 100.'), [])
+        self.assertEqual(self.native.events._missing_facts(stages, 'The count was 100.5.'), ['100'])
+
+    def test_version_number_extraction_and_check_use_the_same_boundary(self):
+        from event_memory import _NUMBER
+        text = 'Version 1.2.3.'
+        self.assertEqual(_NUMBER.findall(text), [])
+        stages = [{'facts': {'numbers': _NUMBER.findall(text), 'dates': [], 'files': []}}]
+        self.assertEqual(self.native.events._missing_facts(stages, text), [])
+
+    def test_duplicate_stage_can_add_a_new_interpretation(self):
+        when = '2026-11-20T10:00:00+08:00'
+        text = 'She wrote meh on the charcoal note.'
+        first = self.native.events.record(text, 'The charcoal note', at=when)
+        self.assertFalse(first.get('duplicate'))
+        again = self.native.events.record(text, 'The charcoal note', at='2026-11-20T10:05:00+08:00',
+                                          interpretation='I thought she was angry.')
+        self.assertTrue(again.get('duplicate'))
+        stage = self.native.events.stages(first['event_id'])[0]
+        self.assertEqual(stage.get('interpretation'), 'I thought she was angry.')
+        event = self.native.events.events()[first['event_id']]
+        self.assertEqual(event['belief_history'][0]['belief'], 'I thought she was angry.')
 
     def test_link_to_save_keeps_the_interpretation(self):
         self.save('She wrote meh on the charcoal note after the file list argument.', 'The charcoal note')

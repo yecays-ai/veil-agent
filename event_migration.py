@@ -9,7 +9,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -119,11 +121,18 @@ def write_manifest(rows, path, protected=()):
         if path == root or path.is_relative_to(root):
             raise ValueError('refusing to write the migration manifest inside the memory vault')
     path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_name(path.name + '.tmp')
-    with temp.open('w', encoding='utf-8') as handle:
-        for row in rows:
-            handle.write(json.dumps(row, ensure_ascii=False) + '\n')
-    temp.replace(path)
+    fd, temp_name = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + '.', suffix='.tmp')
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+            for row in rows:
+                handle.write(json.dumps(row, ensure_ascii=False) + '\n')
+        os.replace(temp_name, path)
+    except Exception:
+        try:
+            os.unlink(temp_name)
+        except OSError:
+            pass
+        raise
     return {'memories': len(rows), 'events': len({row['proposed_event'] for row in rows}), 'path': str(path)}
 
 
