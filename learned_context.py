@@ -20,7 +20,11 @@ import prompts
 from agent_types import UserError
 
 SECTIONS = ('facts', 'growth')
-ONGOING_STATUSES = ('active', 'uncertain', 'completed', 'archived')
+# Ticket 413: ongoing means "not finished yet". Finished items stay in the file as completed so Lan can
+# read, reopen or delete them, but only active/uncertain reach the model and count toward the byte budget.
+ONGOING_STATUSES = ('active', 'uncertain', 'completed')
+# Old files may still say archived; it is read as completed and the next save rewrites it.
+ONGOING_LEGACY = {'archived': 'completed'}
 DEFAULT_MAX_BYTES = 4000
 VERSION = 1
 
@@ -84,8 +88,24 @@ class LearnedContext:
             except json.JSONDecodeError as exc:
                 raise UserError(f'{self.path.name} 第 {exc.lineno} 行第 {exc.colno} 列不是合法 JSON：{exc.msg}。'
                                 f'请恢复到上一个版本；当前聊天会继续使用旧笔记。错误记录在 {self.error_path}。') from exc
+            self._upgrade_ongoing(data)
             self._validate(data)
             return data
+
+    @staticmethod
+    def _upgrade_ongoing(data):
+        """Ticket 413: archived is gone. Read old entries as completed so old files stay usable."""
+        ongoing = data.get('ongoing') if isinstance(data, dict) else None
+        items = ongoing.get('items') if isinstance(ongoing, dict) else None
+        if not isinstance(items, list):
+            return
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            if item.get('status') in ONGOING_LEGACY:
+                item['status'] = ONGOING_LEGACY[item['status']]
+            if item.get('status') == 'completed' and not isinstance(item.get('completed_at'), str):
+                item['completed_at'] = item.get('updated_at') or _now()
 
     def _validate(self, data):
         if not isinstance(data, dict) or data.get('version') != VERSION:
@@ -123,7 +143,9 @@ class LearnedContext:
         if data is None:
             data = self._load()
         total = _text_bytes(data['facts']['text']) + _text_bytes(data['growth']['text'])
-        total += sum(_text_bytes(item['text']) for item in data['ongoing']['items'])
+        # Ticket 413: finished items are not sent to the model, so they must not take budget either.
+        total += sum(_text_bytes(item['text']) for item in data['ongoing']['items']
+                     if item['status'] in ('active', 'uncertain'))
         return total
 
     def _check_budget(self, total, delta):
@@ -160,19 +182,28 @@ class LearnedContext:
         return '\n\n'.join(lines)
 
     def dynamic_context(self):
-        """Ongoing items, injected late so updates do not break the stable prefix."""
+        """Ongoing items, injected late so updates do not break the stable prefix.
+
+        Ticket 413: finished items are not injected. Only their count is, so he knows they exist and
+        can ask for them with ongoing_update list; Lan sees the same number on the Peter page.
+        """
         try:
             data = self._load()
         except UserError as exc:
             self._log_error('dynamic_context', exc)
             return None
         items = [item for item in data['ongoing']['items'] if item['status'] in ('active', 'uncertain')]
-        if not items:
+        done = [item for item in data['ongoing']['items'] if item['status'] == 'completed']
+        if not items and not done:
             return None
-        lines = [prompts.text('memory.ongoing.header')]
-        for item in items:
-            label = 'uncertain' if item['status'] == 'uncertain' else 'active'
-            lines.append(f'- [{label}] {item["text"].strip()}')
+        lines = []
+        if items:
+            lines.append(prompts.text('memory.ongoing.header'))
+            for item in items:
+                label = 'uncertain' if item['status'] == 'uncertain' else 'active'
+                lines.append(f'- [{label}] {item["text"].strip()}')
+        if done:
+            lines.append(prompts.text('memory.ongoing.done').format(count=len(done)))
         return '\n'.join(lines)
 
     # ---------- writing ----------
@@ -248,6 +279,11 @@ class LearnedContext:
             before = json.loads(json.dumps(data, ensure_ascii=False))
             data['ongoing']['items'] = items
             data['ongoing']['updated_at'] = _now()
+            # Ticket 413: completing from the page has to leave a completion time, same as the tool.
+            for item in data['ongoing']['items']:
+                if isinstance(item, dict) and item.get('status') == 'completed' \
+                        and not isinstance(item.get('completed_at'), str):
+                    item['completed_at'] = data['ongoing']['updated_at']
             self._validate_items(data['ongoing']['items'])
             self._check_budget(self._content_bytes(data), 0)
             self._write(data)
@@ -353,6 +389,8 @@ class LearnedContext:
         sources = args.get('sources', [])
         if not isinstance(sources, list) or not all(isinstance(s, str) for s in sources):
             return 'sources must be a list of strings.', '被拒绝', 'ongoing_update'
+        if action == 'list':
+            return self._list_ongoing(args)
         with self.lock:
             data = self._load()
             before = json.loads(json.dumps(data, ensure_ascii=False))
@@ -366,7 +404,7 @@ class LearnedContext:
                         'last_verified_at': now}
                 items.append(item)
                 message = f'Added ongoing {item["id"]}.'
-            elif action in ('update', 'complete', 'archive', 'reopen'):
+            elif action in ('update', 'complete', 'reopen'):
                 if not isinstance(item_id, str) or not item_id:
                     return 'id is required for this action.', '被拒绝', 'ongoing_update'
                 item = next((row for row in items if row['id'] == item_id), None)
@@ -386,15 +424,16 @@ class LearnedContext:
                 elif action == 'complete':
                     item['status'] = 'completed'
                     item['completed_at'] = now
-                elif action == 'archive':
-                    item['status'] = 'archived'
                 else:
                     item['status'] = 'active'
                     item.pop('completed_at', None)
                 item['updated_at'] = now
                 message = f'Ongoing {item_id} is now {item["status"]}.'
+            elif action == 'archive':
+                return ('Archive was removed; use complete when the thing is over.',
+                        '被拒绝', 'ongoing_update')
             else:
-                return 'action must be add, update, complete, archive or reopen.', '被拒绝', 'ongoing_update'
+                return 'action must be add, update, complete, reopen or list.', '被拒绝', 'ongoing_update'
             self._validate_items(items)
             total = self._content_bytes(data)
             if total > self.max_bytes:
@@ -405,3 +444,28 @@ class LearnedContext:
             self._write(data)
             self._record(f'ongoing_{action}', before, data)
             return message, '成功', 'ongoing_update'
+
+    def _list_ongoing(self, args, limit=20):
+        """Ticket 413: finished items are not injected, so he reads them on request, with the time."""
+        status = args.get('status') or 'completed'
+        if status not in ('completed', 'active', 'uncertain', 'all'):
+            return ('status must be completed, active, uncertain or all.',
+                    '被拒绝', 'ongoing_update')
+        try:
+            data = self._load()
+        except UserError as exc:
+            return str(exc), '被拒绝', 'ongoing_update'
+        rows = [item for item in data['ongoing']['items']
+                if status == 'all' or item['status'] == status]
+        if not rows:
+            return f'No {status} ongoing items.', '成功', 'ongoing_update'
+        lines = [f'{len(rows)} {status} ongoing item(s):']
+        for item in rows[:limit]:
+            stamp = ''
+            when = item.get('completed_at', '')
+            if item['status'] == 'completed' and isinstance(when, str) and when:
+                stamp = ' (completed ' + when[:16].replace('T', ' ') + ')'
+            lines.append(f'- {item["id"]}{stamp}: {item["text"].strip()}')
+        if len(rows) > limit:
+            lines.append(f'... {len(rows) - limit} more not shown.')
+        return '\n'.join(lines), '成功', 'ongoing_update'

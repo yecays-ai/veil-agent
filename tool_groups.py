@@ -15,6 +15,9 @@ ALWAYS_ON = frozenset({
     # memory he uses in most conversations
     'hold', 'breath_search', 'memory_read', 'search_chat_history', 'thought', 'life_record',
     'profile_append', 'profile_replace', 'capability_history', 'autonomy_history',
+    # ticket 413: Lan wants him to maintain "things not finished yet" himself, so it cannot sit in a
+    # group he has to open first (it had never been called once while hidden there).
+    'ongoing_update',
     # his own files (lab, notes)
     'list_directory', 'list_directory_with_sizes', 'directory_tree', 'search_files', 'get_file_info',
     'read_text_file', 'read_multiple_files', 'write_file', 'append_file', 'grant_append', 'create_directory',
