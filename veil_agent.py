@@ -1798,13 +1798,14 @@ class Budget:
         all_delegate, _ = self.category_totals(None, stamp, 'delegate')
         all_experience, _ = self.category_totals(None, stamp, 'experience_memory')
         all_judge, _ = self.category_totals(None, stamp, 'recall_judge')
+        all_calendar, _ = self.category_totals(None, stamp, 'calendar_agreements')
         autonomy = all_autonomy if character is None else self.category_totals(character, stamp)[0]
         glance = all_glance if character is None else self.category_totals(character, stamp, 'glance')[0]
         short_term = (all_short_term if character is None else
                       self.category_totals(character, stamp, 'short_term_notes')[0])
         delegate = (all_delegate if character is None else
                     self.category_totals(character, stamp, 'delegate')[0])
-        chat = day - all_autonomy - all_glance - all_short_term - all_delegate - all_experience - all_judge
+        chat = day - all_autonomy - all_glance - all_short_term - all_delegate - all_experience - all_judge - all_calendar
         warning = ('【费用账本有待核实的记录，已暂停所有付费请求；见 data_repair.py ledger-status】'
                    if ledger_recovery.is_unverified(self.store.root) else '')
         return (warning + f'今天 ¥{day:.6f} / {self.daily_limit()}；本月 ¥{month:.6f} / {self.monthly_limit()}；'
@@ -1812,7 +1813,8 @@ class Budget:
                 f'{self.autonomy_daily}/日（自主是上限，不是消费目标），瞄一眼 ¥{glance:.6f} / '
                 f'{self.glance_daily}/日，委派任务 ¥{delegate:.6f}，短期便签提取 ¥{short_term:.6f}'
                 + (f'，经历整理 ¥{all_experience:.6f}' if all_experience else '')
-                + (f'，想起判官 ¥{all_judge:.6f}' if all_judge else ''))
+                + (f'，想起判官 ¥{all_judge:.6f}' if all_judge else '')
+                + (f'，日历约定判断 ¥{all_calendar:.6f}' if all_calendar else ''))
 
     @synchronized
     def model_display(self, stamp=None):
@@ -6215,6 +6217,8 @@ def pending_deletion_context(chat):
 
 def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead, activity=None, autonomy=None,
              start_notes=True):
+    from calendar_agreements import CalendarAgreements
+    calendar_agreements = CalendarAgreements(chat, output)
     activity = activity or ActivityState(chat.store.root / chat.cfg.id / 'resident-state.json')
     chat.activity_enabled = activity.enabled
     if start_notes:
@@ -6259,6 +6263,44 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead, activity=N
                         extra_context=(f"Your reply_later reminder is due now. Your note: {due.get('note')}\n"
                                        + (later or '')))
                     if not chat.reply_displayed:
+                        output(ChatOutput(f'{chat.cfg.name}: {reply}', message_id=chat.last_reply_message_id,
+                                          request_id=chat.last_reply_request_id,
+                                          memory_refs=chat.turn_memory_refs))
+                except (TooLong, RequestFailed, UserError) as exc:
+                    output(str(exc))
+                continue
+            if action == 'calendar_reminder_due':
+                due = raw_text.payload
+                label = f"{due['time']} {due['title']}"
+                if due['outcome'] == 'missed':
+                    output(LifeNotice('错过的提醒：' + label, due['id']))
+                    continue
+                try:
+                    reply = chat.send('A calendar reminder became due.', persist_user=False, force_reply=True,
+                                      extra_context=(f"Calendar event: {due['title']}; date {due['date']}; "
+                                                     f"time {due['time']}; written by {due['created_by']}; "
+                                                     f"remind {due['remind_before']} minutes before; "
+                                                     f"late by {due['late_minutes']} minutes. "
+                                                     'Send Lan a natural reminder now.'))
+                    if not reply or not str(reply).strip():
+                        output(LifeNotice('⏰ ' + label + '（日历提醒）', due['id']))
+                    elif not chat.reply_displayed:
+                        output(ChatOutput(f'{chat.cfg.name}: {reply}', message_id=chat.last_reply_message_id,
+                                          request_id=chat.last_reply_request_id,
+                                          memory_refs=chat.turn_memory_refs))
+                except (TooLong, RequestFailed, UserError):
+                    output(LifeNotice('⏰ ' + label + '（日历提醒）', due['id']))
+                continue
+            if action == 'calendar_daily_due':
+                due = raw_text.payload
+                try:
+                    reply = chat.send('The calendar daily to-do reminder became due.', persist_user=False,
+                                      extra_context=(f"The unfinished daily to-dos belong to {due['day']}: "
+                                                     + '; '.join(due['pending']) + '. '
+                                                     + f"Diary for that day is diary/{due['day']}.md. "
+                                                     + 'Complete these for that date, even after midnight. '
+                                                     + 'You may decide whether to send Lan a message.'))
+                    if reply and not chat.reply_displayed:
                         output(ChatOutput(f'{chat.cfg.name}: {reply}', message_id=chat.last_reply_message_id,
                                           request_id=chat.last_reply_request_id,
                                           memory_refs=chat.turn_memory_refs))
@@ -6349,7 +6391,9 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead, activity=N
                     chat.last_send_persisted = False
                     try:
                         contexts = [pending_deletion_context(chat), getattr(raw_text, 'runtime_context', None),
-                                    chat.pending_reply_later_context()]
+                                    chat.pending_reply_later_context(), getattr(chat, 'pending_calendar_context', None),
+                                    chat.life_records.claim_daily_hint()]
+                        chat.pending_calendar_context = None
                         reply = chat.send(text, extra_context='\n\n'.join(x for x in contexts if x), media=media,
                                           message_id=message_id,
                                           user_events=getattr(raw_text, 'user_events', None))
@@ -6389,6 +6433,7 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead, activity=N
                     output(ChatOutput(f'{chat.cfg.name}: {reply}', message_id=chat.last_reply_message_id,
                                       request_id=chat.last_reply_request_id,
                                       memory_refs=chat.turn_memory_refs))
+                calendar_agreements.consider(text,str(reply))
                 notify_dropped()
     except (KeyboardInterrupt, EOFError):
         output('\n已退出，已保存的记录仍在；未完成请求的预留额可用 /cost 查看。')
