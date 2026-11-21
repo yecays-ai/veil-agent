@@ -59,7 +59,7 @@ _STOP = {
     '这个', '那个', '一个', '没有', '还是', '就是', '什么', '自己', '可以',
 }
 _DATE = re.compile(r'\b(?:\d{1,2}[-/月]\d{1,2}日?|\d{4}[-/]\d{2}[-/]\d{2})\b')
-_NUMBER = re.compile(r'\b\d+(?:\.\d+)?\b')
+_NUMBER = re.compile(r'(?<![\w.])\d+(?:\.\d+)?(?![\w])(?!\.\d)')
 _FILE = re.compile(r'[\w\-. \u4e00-\u9fff]{1,80}\.(?:txt|md|html|svg|png|jpg|json|csv|pdf|py|js|css|docx|xlsx)')
 
 
@@ -290,6 +290,19 @@ class EventMemory:
         existing = self._stage_rows().get(stage_id)
         if existing is not None and existing.get('state') == 'committed':
             event = self.events().get(existing.get('event_id')) or {}
+            if interpretation and existing.get('interpretation') != interpretation:
+                self.store.append(self.stages_path, {**existing, 'state': 'committed',
+                                                     'interpretation': ' '.join(interpretation.split())[:300]})
+                if event:
+                    stages = self.stages(event['event_id'])
+                    story, source = self._write_story(stages, event.get('story') or self._story(event['event_id']),
+                                                      event)
+                    event.update({'story': story, 'story_source': source,
+                                  'story_through': stages[-1].get('at') if stages else event.get('story_through'),
+                                  'belief_history': self._belief_history(event['event_id']),
+                                  'dirty': True})
+                    self.store.append(self.events_path, event)
+                    self.retry_dirty()
             return {'event_id': existing.get('event_id'), 'title': event.get('title') or title,
                     'memory_id': event.get('memory_id'), 'updated': True, 'changed': True,
                     'locked': False, 'confidence': event.get('confidence'), 'duplicate': True}
@@ -706,15 +719,14 @@ class EventMemory:
     @staticmethod
     def _missing_facts(stages, story):
         missing = []
+        story_numbers = set(_NUMBER.findall(story or ''))
         for stage in stages:
             extra = stage.get('facts') if isinstance(stage.get('facts'), dict) else {}
             for value in (extra.get('dates') or []) + (extra.get('files') or []):
                 if str(value) and str(value) not in story:
                     missing.append(str(value))
             for value in extra.get('numbers') or []:
-                # Exact token: 100 must not be satisfied by 1000.
-                if str(value) and not re.search(
-                        rf'(?<![\d.]){re.escape(str(value))}(?!\d)(?!\.\d)', story):
+                if str(value) not in story_numbers:
                     missing.append(str(value))
         return list(dict.fromkeys(missing))
 
