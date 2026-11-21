@@ -1,5 +1,19 @@
 # HANDOFF
 
+## 仍然开着的尾巴（2026-11-21 按代码现状核对过）
+- Electron 冒烟没有 Peter 页用例（工单 413 留下）：本机跑不了 `npm run test:windows`，当时没交没验过的测试。要补：假的 `/api/peter-page` + 点新增/归档/删除/保存，断言请求体和列表变化。
+- 工单 407 的旧记忆迁移仍未做：145 条旧记忆重新归组、逐条去向清单、正式迁移。（这一项要动正式库，先问 Lan。）
+- 记忆 `0e99e5` 的标题仍写「Claude Code bridge (RIP after 2 days)」，改标题要在 Peter 关闭时做；这次没复核它变没变。
+- `git -c … -C … push` 的批准规则已经写了（见下面 336 那一节），但真实 OpenCode 对 `*` 跨空格的匹配没有真机验证。
+- 下面两处已经解决、以前写着算遗留：409 的工具内部异常误报（工单 415 修掉，见该节）、401 的 68 条长句（402/405 已完成，见该节）。
+
+## 工单 418 交接（清过期遗留 + 表情包正文气泡）
+- 截图里那条尾巴（409 说 `_execute_tool_call` 把工具内部 ValueError 报成参数 JSON 错）**已经由工单 415 修了**，不是待办；HANDOFF 里那句过期的话本单改掉了。
+- 表情包 bug：以 `[表情包：…]` 开头的消息，正文继承了贴图的透明样式，和背景融为一体、没有气泡，删的时候连贴图一起删。改法：`stickerBubble()` 给正文加 `.msg-sticker-caption`，按普通气泡画；只有贴图仍是裸图；旧消息重开也按新样式，不改记录。
+- 测试：`desktop/tests/ui.test.cjs` 18 条通过（新增一条守卫），`node --check chat.js` 通过。没过冒烟（本机跑不了），也没在真窗口里重放——交 Lan 审。
+- 没做：两段文字拆成两个气泡（需补该路径的空行拆分）；贴图和正文拆成两条消息（现在仍是一条，删除连在一起）。
+- 代验（2026-11-21，Lan 授权）：A 组 7 条按本地使用记录改为已验收（396/391/390/385/381/357/354）；14 条按本机隔离测试改为“隔离测试已验收”（412/415/399/398/393/389/388/386/382/383/363/384/356/352）。证据和测试清单见 STATUS 的「验收（2026-11-21）」一节；隔离测试不等于她的真实体验。
+
 ## 工单 416 交接（PR2：重复工具结果与无进展循环）
 - 范围：只读工具同一轮内完全相同的返回压缩成短标记；相同参数重复失败压缩；普通聊天连续两批无新信息注入一次收束提示（最多两次）；自主活动不加提示。
 - 安全：每次工具仍真实执行并比较最新结果，不使用旧缓存；动态/有副作用工具不压缩。
@@ -46,7 +60,7 @@
 - 改法：返回正常 3 元组；删掉 `_invoke_ongoing` 里一句执行不到的重复 return；加回归测试（旧代码会抛 unpack 错）。
 - 验证：`test_learned_context` + `test_learned_context_chat` 11 个通过。
 - 待办：Lan 真机验收——让他写一条关于你的内容，结果应是 `Saved. …`。
-- 遗留：`_execute_tool_call` 仍把工具内部的 `ValueError` 报成「参数不是合法 JSON」，这次就是被它掩盖的；建议另开单把「解析失败」和「工具内部异常」分开报。
+- 遗留（已解决，2026-11-21 核对）：工单 415 已把两类错误分开——参数错仍走 `json.JSONDecodeError` / `tool_failures.ArgumentError`；工具内部异常走 `tool_failures.internal_failure()`，给一个 error id，异常原文只写本机 `tool-errors.jsonl`，不再说成「参数不是合法 JSON」。回归测试在 `tests/test_tool_failures.py`。
 
 ## 工单 407 交接（事件记忆第一版）
 - 范围：保存走事件层（默认关，`[memory.events] enabled`）。一个事件只保留一条 Ombre 记忆，正文是 400 字摘要；完整故事（`story`）落在 `events.jsonl`，阶段/证据/旧投影/复核在相邻文件。新增只读 `memory_timeline` 和「记忆 · 经历」页；召回按事件去重；`experience_memory` 每次整理重试 dirty 投影并合并可证明的重复。
@@ -54,7 +68,7 @@
 - 接入：`memory_native._hold` 在开关打开且没有 target_id/link_to 时走 `event_memory.EventMemory.record`（pinned/importance 传给新事件的那条记忆），失败不会退回旧 hold（避免重复保存）；`memory_timeline` 只在开启时出现；页面用 `/api/memory/events` / `/api/memory/event`。
 - 数据：事件库在 `data/<角色>/`；Ombre 旧记忆不动。
 - 测试：`tests/test_event_memory.py` 19 条 + 既有 native/memory/363/chat/experience/prompt/budget/groups 全过，desktop 29 条全过。
-- 未做（后续迁移单 409）：现有 145 条旧记忆的重新归组、逐条去向清单、正式迁移。
+- 未做（原写“后续迁移单 409”是笔误：409 是 Learned Context 保存那张单，没做这件事；至今仍未开单）：现有 145 条旧记忆的重新归组、逐条去向清单、正式迁移。动正式库要先征得 Lan 同意。
 - 下一步：Lan 审 PR；她打开开关体验「三种说法只长一段」；旧记忆迁移另开 408，按她的要求逐条给她看。
 
 ## 工单 408 交接（工具参数容错）
@@ -117,7 +131,7 @@
 - 覆盖文件仍在 `persona/instructions/<id>.md`，整条替换，不留版本。
 - 醒来提示拆成 `autonomy.wake.rules`（可改）和 `autonomy.wake.protocol`（只读四行），拼接结果与拆分前逐字节一致。
 - 验证：Playwright 截图核对展开与编辑态；python 160 个测试、desktop 21 个测试通过。
-- 已知未完成（工单 402）：`inline_allowlist.txt` 仍有 68 条长句未迁（memory_native 29、veil_agent 27、autonomy 4、delegate 2、experience 2、recall_judge 2、memory_agent 1、short_term_notes 1），防写死仍是「允许清单」而非「清空即通过」。
+- 已知未完成（工单 402）→ 已完成（2026-11-21 核对，402/405 之后没有未迁移的提示词）：`inline_allowlist.txt` 仍有 68 条长句未迁（memory_native 29、veil_agent 27、autonomy 4、delegate 2、experience 2、recall_judge 2、memory_agent 1、short_term_notes 1）。`inline_allowlist.txt` 已删除，改由 `prompts/inline_feedback_allowlist.txt`（49 条，类型化原因、只许减少）做棘轮检查。
 
 ## 工单 400 交接（指令登记表·第一部分）
 - 新增 `prompts/`：`registry.py`（55 条登记）、`store.py`（默认 + `persona/instructions` 覆盖，整条替换）、

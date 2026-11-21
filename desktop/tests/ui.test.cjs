@@ -319,3 +319,16 @@ test('Peter page separates finished items and counts only what the model sees', 
   assert.doesNotMatch(js, /'archived'/);
   assert.match(css, /\.peter-done\{/);
 });
+
+// Ticket 418: a message that starts with a sticker marker used to render all following text in the
+// sticker's bare-image style, so the text lost its bubble. The text now gets .msg-sticker-caption;
+// sticker-only messages stay bare images.
+test('text sent with a sticker keeps its own bubble (ticket 418)', async () => {
+  const [js, css, glass] = await Promise.all([read('chat.js'), read('chat.css'), read('glass.css')]);
+  assert.match(js, /c\.className='msg-sticker-caption'/);
+  assert.match(css, /\.msg\.sticker-msg \.msg-sticker-caption\{[^}]*border:1px solid var\(--line\)[^}]*border-radius:13px/);
+  assert.match(css, /\.msg\.sticker-msg \.msg-sticker-caption\{[^}]*white-space:pre-wrap/);
+  assert.match(css, /\.msg\.user\.sticker-msg \.msg-sticker-caption\{[^}]*background:var\(--user\)/);
+  assert.match(js, /if\(!stickerBubble\(d,text\)\)d\.innerHTML=render\(text\)/);
+  assert.match(glass, /\.msg\.sticker-msg \.msg-sticker-caption\{background:color-mix/);
+});

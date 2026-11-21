@@ -2883,7 +2883,10 @@ function stickerBubble(d,text){
   const holder=document.createElement('div');holder.className='msg-sticker-wrap';
   const label=document.createElement('span');label.className='msg-sticker-label';label.textContent=`表情包：${m[1]}/${m[2]}`;
   holder.appendChild(label);d.appendChild(holder);
-  const caption=m[3]&&m[3].trim();if(caption){const c=document.createElement('div');c.innerHTML=render(caption);d.appendChild(c)}
+  // Ticket 418: a sticker used to turn the whole message into a bare image, so any text after the
+  // marker inherited that transparent styling and lost its bubble. The text now gets its own bubble
+  // (.msg-sticker-caption); old messages re-render this way too, nothing to migrate.
+  const caption=m[3]&&m[3].trim();if(caption){const c=document.createElement('div');c.className='msg-sticker-caption';c.innerHTML=render(caption);d.appendChild(c)}
   const show=lib=>{
     const s=findSticker(lib,m[1],m[2]);if(!s)return;
     window.veilDesktop.stickerUrl(s.file).then(url=>{const img=document.createElement('img');img.className='msg-sticker';img.alt=`${m[1]}/${m[2]}`;img.loading='lazy';img.onload=()=>{label.remove()};img.src=url;holder.appendChild(img)}).catch(()=>{});
