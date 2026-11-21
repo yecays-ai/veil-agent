@@ -232,8 +232,8 @@ class LifeRecords:
                 for line in self.reminders_path.read_bytes().splitlines():
                     try: entry=json.loads(line)
                     except (ValueError,UnicodeError): continue
-                    if isinstance(entry,dict) and entry.get('id') and entry.get('revision'):
-                        seen.add((entry['id'],entry.get('schedule_revision',entry['revision'])))
+                    if isinstance(entry,dict) and entry.get('status')=='processed' and entry.get('id') and entry.get('schedule_revision'):
+                        seen.add((entry['id'],entry['schedule_revision']))
             for row in self.read():
                 if row.get('kind')!='event' or row.get('state')!='active' or not row.get('remind') or not row.get('time'):
                     continue
@@ -247,7 +247,7 @@ class LifeRecords:
                 if due>current or changed>due: continue
                 late=(current-due).total_seconds()
                 event={k:row.get(k) for k in ('id','title','date','time','created_by','remind_before')}
-                event.update({'revision':revision,'schedule_revision':schedule_revision,
+                event.update({'revision':revision,'schedule_revision':schedule_revision,'status':'claimed',
                               'due':due.isoformat(),'at':current.isoformat(),
                               'outcome':'missed' if late>3600 else 'due','late_minutes':int(late//60)})
                 self.reminders_path.parent.mkdir(parents=True,exist_ok=True)
@@ -263,15 +263,29 @@ class LifeRecords:
         for line in self.reminders_path.read_bytes().splitlines():
             try: entry=json.loads(line)
             except (ValueError,UnicodeError): continue
-            if isinstance(entry,dict) and entry.get('outcome')=='missed':
+            if isinstance(entry,dict) and entry.get('status')=='processed' and entry.get('outcome')=='missed':
                 missed[(entry.get('id'),entry.get('revision'))]=entry.get('time')
         return missed
 
-    def reminder_still_current(self, event):
-        if not isinstance(event,dict): return False
+    def current_due_reminder(self, event):
+        if not isinstance(event,dict): return None
         row=next((r for r in self.read() if r.get('id')==event.get('id')),None)
-        return bool(row and row.get('state')=='active'
-                    and row.get('updated_at')==event.get('revision'))
+        if (not row or row.get('state')!='active'
+                or row.get('reminder_revision',row.get('updated_at'))!=event.get('schedule_revision')):
+            return None
+        return {**event,**{k:row.get(k) for k in ('title','date','time','created_by','remind_before')},
+                'revision':row.get('updated_at')}
+
+    def reminder_still_current(self, event):
+        return self.current_due_reminder(event) is not None
+
+    def complete_due_reminder(self, event):
+        if not isinstance(event,dict): return
+        self.reminders_path.parent.mkdir(parents=True,exist_ok=True)
+        completed={**event,'status':'processed'}
+        with self.reminders_path.open('a',encoding='utf-8') as handle:
+            handle.write(json.dumps(completed,ensure_ascii=False)+'\n')
+            handle.flush(); os.fsync(handle.fileno())
 
     def claim_daily_reminder(self, at=None):
         current=at or datetime.fromisoformat(now())

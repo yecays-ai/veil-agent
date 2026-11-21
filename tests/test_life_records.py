@@ -23,14 +23,17 @@ class LifeRecordsTest(unittest.TestCase):
                                      'remind':True,'remind_before':15},'Lan')
             at=datetime(2026,11,23,19,45,tzinfo=timezone(timedelta(hours=8)))
             self.assertIsNone(records.claim_due_reminder(at-timedelta(minutes=1)))
+            due=records.claim_due_reminder(at)
+            self.assertEqual(due['id'],event['id'])
             self.assertEqual(records.claim_due_reminder(at)['id'],event['id'])
+            records.complete_due_reminder(due)
             self.assertIsNone(records.claim_due_reminder(at))
             records.write({'id':event['id'],'state':'cancelled'},'Lan')
             self.assertIsNone(records.claim_due_reminder(at+timedelta(minutes=1)))
             with self.assertRaises(ValueError):
                 records.write({'kind':'event','title':'No time','remind':True},'Lan')
 
-    def test_title_edit_keeps_due_reminder_and_stale_claim_is_rejected(self):
+    def test_title_edit_after_claim_uses_latest_event_and_can_complete(self):
         temp_root=Path.cwd() / '.task-test-temp'
         temp_root.mkdir(exist_ok=True)
         with tempfile.TemporaryDirectory(dir=temp_root) as directory:
@@ -39,15 +42,56 @@ class LifeRecordsTest(unittest.TestCase):
             with patch('life_records.now',return_value='2026-11-23T19:00:00+08:00'):
                 event=records.write({'kind':'event','title':'Meet','date':'2026-11-23','time':'20:00',
                                      'remind':True,'remind_before':15},'Lan')
-            with patch('life_records.now',return_value='2026-11-23T19:45:01+08:00'):
-                edited=records.write({'id':event['id'],'title':'Meet outside'},'Lan')
             due=records.claim_due_reminder(datetime(2026,11,23,19,45,5,
                                                      tzinfo=timezone(timedelta(hours=8))))
-            self.assertEqual(due['title'],'Meet outside')
+            self.assertEqual(due['title'],'Meet')
+            with patch('life_records.now',return_value='2026-11-23T19:45:06+08:00'):
+                records.write({'id':event['id'],'title':'Meet outside'},'Lan')
+            current=records.current_due_reminder(due)
+            self.assertEqual(current['title'],'Meet outside')
             self.assertTrue(records.reminder_still_current(due))
+            records.complete_due_reminder(current)
+            self.assertIsNone(records.claim_due_reminder(datetime(2026,11,23,19,45,7,
+                                                                  tzinfo=timezone(timedelta(hours=8)))))
+
+    def test_cancel_invalidates_claim_and_reschedule_gets_new_claim(self):
+        temp_root=Path.cwd() / '.task-test-temp'
+        temp_root.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=temp_root) as directory:
+            store=SimpleNamespace(root=Path(directory),mutex=threading.RLock())
+            records=LifeRecords(store,'peter')
+            with patch('life_records.now',return_value='2026-11-23T19:00:00+08:00'):
+                event=records.write({'kind':'event','title':'Meet','date':'2026-11-23','time':'20:00',
+                                     'remind':True,'remind_before':15},'Lan')
+            at=datetime(2026,11,23,19,45,tzinfo=timezone(timedelta(hours=8)))
+            claimed=records.claim_due_reminder(at)
+            with patch('life_records.now',return_value='2026-11-23T19:45:01+08:00'):
+                records.write({'id':event['id'],'state':'cancelled'},'Lan')
+            self.assertIsNone(records.current_due_reminder(claimed))
+            self.assertIsNone(records.claim_due_reminder(at+timedelta(minutes=1)))
+
+            with patch('life_records.now',return_value='2026-11-23T19:45:02+08:00'):
+                records.write({'id':event['id'],'state':'active','date':'2026-11-23','time':'21:00'},'Lan')
+            self.assertIsNone(records.current_due_reminder(claimed))
+            new_due=records.claim_due_reminder(datetime(2026,11,23,20,45,
+                                                         tzinfo=timezone(timedelta(hours=8))))
+            self.assertEqual(new_due['id'],event['id'])
+            self.assertEqual(new_due['time'],'21:00')
+            records.complete_due_reminder(new_due)
+
+    def test_cancelled_claim_is_not_marked_processed(self):
+        temp_root=Path.cwd() / '.task-test-temp'
+        temp_root.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=temp_root) as directory:
+            store=SimpleNamespace(root=Path(directory),mutex=threading.RLock())
+            records=LifeRecords(store,'peter')
+            event=records.write({'kind':'event','title':'Meet','date':'2026-11-23','time':'20:00',
+                                 'remind':True,'remind_before':15},'Lan')
+            due=records.claim_due_reminder(datetime(2026,11,23,19,45,
+                                                    tzinfo=timezone(timedelta(hours=8))))
             with patch('life_records.now',return_value='2026-11-23T19:45:06+08:00'):
                 records.write({'id':event['id'],'state':'cancelled'},'Lan')
-            self.assertFalse(records.reminder_still_current(due))
+            self.assertIsNone(records.current_due_reminder(due))
 
     def test_daily_reminder_uses_original_day(self):
         temp_root=Path.cwd() / '.task-test-temp'

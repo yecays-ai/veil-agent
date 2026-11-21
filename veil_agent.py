@@ -6272,13 +6272,15 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead, activity=N
             if action == 'calendar_reminder_due':
                 due = raw_text.payload
                 try:
-                    if not chat.life_records.reminder_still_current(due):
+                    due = chat.life_records.current_due_reminder(due)
+                    if due is None:
                         continue
                 except (OSError,ValueError,UnicodeError):
                     continue
                 label = f"{due['time']} {due['title']}"
                 if due['outcome'] == 'missed':
                     output(LifeNotice('错过的提醒：' + label, due['id']))
+                    chat.life_records.complete_due_reminder(due)
                     continue
                 try:
                     reply = chat.send('A calendar reminder became due.', persist_user=False, force_reply=True,
@@ -6293,8 +6295,10 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead, activity=N
                         output(ChatOutput(f'{chat.cfg.name}: {reply}', message_id=chat.last_reply_message_id,
                                           request_id=chat.last_reply_request_id,
                                           memory_refs=chat.turn_memory_refs))
+                    chat.life_records.complete_due_reminder(due)
                 except (TooLong, RequestFailed, UserError):
                     output(LifeNotice('⏰ ' + label + '（日历提醒）', due['id']))
+                    chat.life_records.complete_due_reminder(due)
                 continue
             if action == 'calendar_daily_due':
                 due = raw_text.payload
