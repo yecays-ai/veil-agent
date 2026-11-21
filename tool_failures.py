@@ -14,6 +14,7 @@ funnel, so the model text and the ledger detail are always built from the same
 facts.
 """
 import json
+import re
 import secrets
 
 # Sentinel for "the program knows it has no corrective step".  Distinct from
@@ -41,15 +42,43 @@ def refusal(reason, *, fix=None, received=None, detail=None):
     return Refusal(reason, fix=fix, received=received, detail=detail)
 
 
-def _short(value, limit=160):
-    if isinstance(value, str):
-        text = value
-    else:
+CREDENTIAL = re.compile(
+    r'(?i)("?(?:api[_-]?key|access[_-]?token|token|secret|passw(?:or)?d|authorization|'
+    r'cookie|credential|private[_-]?key)"?\s*[:=]\s*)("?)[^",}\s]{4,}')
+BEARER = re.compile(r'(?i)(bearer\s+)[A-Za-z0-9._\-+/=]{8,}')
+LONG_OPAQUE = re.compile(r'\b[A-Za-z0-9_\-+/=]{40,}\b')
+
+
+def redact(value):
+    """Strip credentials before arguments leave the program (ticket 415).
+
+    Truncation is not redaction: a token, password or secret in the arguments must
+    never reach the model or the activity ledger.  Uses the shared activity
+    redactor when it is importable (one source of truth) and a conservative local
+    pass otherwise.
+    """
+    if value is None:
+        return ''
+    try:
+        from veil_agent import safe_tool_activity_detail
+    except Exception:
+        safe_tool_activity_detail = None
+    text = None
+    if safe_tool_activity_detail is not None:
         try:
-            text = json.dumps(value, ensure_ascii=False, default=str)
-        except (TypeError, ValueError):
-            text = str(value)
-    text = ' '.join(text.split())
+            text = safe_tool_activity_detail(value, limit=1000)
+        except Exception:
+            text = None
+    if text is None:
+        text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
+    text = BEARER.sub(lambda m: m.group(1) + '[已隐藏]', text)
+    text = CREDENTIAL.sub(lambda m: m.group(1) + m.group(2) + '[已隐藏]', text)
+    text = LONG_OPAQUE.sub('[已隐藏的凭据]', text)
+    return text
+
+
+def _short(value, limit=160):
+    text = ' '.join(redact(value).split())
     return text if len(text) <= limit else text[:limit] + '…'
 
 
@@ -64,8 +93,6 @@ def finalize(result, state, detail=None):
         return result, detail
     fix = getattr(result, 'fix', None)
     received = getattr(result, 'received', None)
-    if fix is None and received is None:
-        return result, detail
     text = str(result)
     if received is not None:
         text += '\n[program] arguments received: ' + _short(received)
@@ -74,6 +101,12 @@ def finalize(result, state, detail=None):
                  'do not repeat the same call unchanged.')
     elif fix:
         text += '\n[program] correction: ' + str(fix)
+    else:
+        # Ticket 415: even a legacy tool that states nothing gets the same
+        # backstop, so no failure is left as a bare sentence.  This adds no
+        # invented fix - it only says none was given.
+        text += ('\n[program] No further guidance was added; use the reason above and do '
+                 'not repeat the same call unchanged.')
     ledger = (detail or str(result)).rstrip()
     if received is not None:
         ledger += '；收到参数：' + _short(received)
@@ -81,6 +114,8 @@ def finalize(result, state, detail=None):
         ledger += '；程序不知道该怎么改，别原样重试'
     elif fix:
         ledger += '；怎么改：' + str(fix)
+    else:
+        ledger += '；程序未给出改法；原因里没说怎么改就别原样重试' 
     return text, ledger
 
 

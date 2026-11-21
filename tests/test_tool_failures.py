@@ -1,20 +1,24 @@
 import ast
 import tempfile
 import unittest
+from unittest.mock import Mock
 from pathlib import Path
 from types import SimpleNamespace
 
+import tools_agent
 import tool_failures
 from tool_failures import UNKNOWN, finalize, internal_failure, refusal
-from veil_agent import Chat, Store
+from veil_agent import Budget, Chat, Store, load_character
 from windows_observer import WindowsObservationTools
 
 
 class FinalizeTests(unittest.TestCase):
-    def test_success_and_a_plain_failure_keep_their_own_text(self):
+    def test_success_is_untouched_and_a_plain_failure_gets_the_backstop(self):
         self.assertEqual(finalize('saved', '成功'), ('saved', None))
-        self.assertEqual(finalize('old_text appears 0 times', '被拒绝'),
-                         ('old_text appears 0 times', None))
+        text, ledger = finalize('old_text appears 0 times', '被拒绝')
+        self.assertTrue(text.startswith('old_text appears 0 times'))
+        self.assertIn('[program] No further guidance was added', text)
+        self.assertIn('程序未给出改法', ledger)
 
     def test_a_known_fix_and_the_received_arguments_are_added_after_the_reason(self):
         result = refusal('This tool takes no arguments.',
@@ -32,6 +36,21 @@ class FinalizeTests(unittest.TestCase):
                                  '被拒绝', None)
         self.assertIn('arguments received: {"a": 1}', text)
         self.assertNotIn('correction:', text)
+
+    def test_received_arguments_are_redacted_before_they_leave(self):
+        # Truncation is not redaction: a token in the arguments must not reach the
+        # model or the ledger.
+        result = refusal('Bad call.', received={'api_key': 'sk-abcdef0123456789abcdef',
+                                                'path': 'lab/x.txt'})
+        text, ledger = finalize(result, '被拒绝', None)
+        for surface in (text, ledger):
+            self.assertNotIn('sk-abcdef0123456789abcdef', surface)
+            self.assertIn('lab/x.txt', surface)
+
+    def test_a_long_opaque_value_is_redacted_too(self):
+        token = 'AbCdEf0123456789AbCdEf0123456789AbCdEf01'
+        text, _ledger = finalize(refusal('Bad call.', received={'value': token}), '被拒绝', None)
+        self.assertNotIn(token, text)
 
     def test_an_unknown_fix_says_so_instead_of_guessing(self):
         text, ledger = finalize(refusal('The window could not be read.', fix=UNKNOWN), '出错', None)
@@ -167,6 +186,97 @@ class FailureSourceContractTests(unittest.TestCase):
                 elif reason in self.BARE:
                     bad.append(f'{name}:{node.lineno} only says {reason!r}')
         self.assertEqual(bad, [], 'tool failures must explain themselves: ' + '; '.join(bad))
+
+
+class EveryOfferedToolContractTests(unittest.TestCase):
+    """Walk every tool the model can call and prove a failure is never a bare sentence.
+
+    This is the registry-wide guard the plan promised: a tool added later (in any
+    module, with any return style) still goes through `_execute_tool_call`, so the
+    probe fails CI if its failure skips the program backstop.
+    """
+
+    NAMES = sorted(
+        tools_agent.ALLOW | tools_agent.ASK | tools_agent.LAB_ONLY | tools_agent.OWN_WORK
+        | {'send_message', 'stay_silent', 'reply_later', 'expand_capability', 'hold',
+           'breath_search', 'memory_catalog', 'memory_read', 'windows_list',
+           'windows_foreground', 'windows_observe', 'desktop_icons_read', 'open_lab_game',
+           'browser', 'screen_pop', 'delegate', 'life_record', 'thought', 'set_my_alarm',
+           'what_did_i_do', 'search_chat_history', 'long_task_status', 'long_task_update',
+           'autonomy_history', 'mcp_status', 'recall_message', 'card_action'})
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        root = Path(self.temp.name)
+        (root / 'characters' / 'test').mkdir(parents=True)
+        (root / 'persona').mkdir()
+        (root / 'persona' / 'test.md').write_text('test persona', encoding='utf-8')
+        (root / 'characters' / 'test' / 'character.toml').write_text('''name = "Peter"
+provider = "fake"
+persona = "persona/test.md"
+max_output_tokens = 50
+
+[providers.fake]
+model = "fake"
+base_url = "https://example.invalid/v1"
+api_key_env = "FAKE_KEY"
+max_input_tokens = 6000
+input_cny_per_million = "2"
+cached_input_cny_per_million = "1"
+output_cny_per_million = "8"
+
+[tools]
+enabled = true
+max_steps = 3
+max_result_bytes = 200
+''', encoding='utf-8')
+        self.cfg = load_character(root, 'test')
+        self.store = Store(root / 'data')
+        tools = SimpleNamespace(
+            tools=[SimpleNamespace(name=name, description='tool', inputSchema={})
+                   for name in self.NAMES],
+            capability_event=None,
+            preview_summary=lambda name, args: name,
+            invoke=Mock(return_value=('ok', '成功', 'x')))
+        self.chat = Chat(self.cfg, self.store, Budget(self.store), Mock(), tools=tools,
+                         output=lambda *_: None)
+
+    def test_every_offered_tool_explains_its_failure(self):
+        offered = self.chat.tool_schemas()
+        names = [schema['function']['name'] for schema in offered]
+        self.assertGreater(len(names), 20)
+        missing = []
+        for name in names:
+            call = SimpleNamespace(id='probe-' + name,
+                                   function=SimpleNamespace(name=name, arguments='{}'))
+            execution = self.chat._execute_tool_call(call, 'probe', 'step:0', False, offered)
+            if execution.state == '成功':
+                continue
+            if '[program]' not in str(execution.result):
+                missing.append(name)
+        self.assertEqual(missing, [],
+                         'failures that skip the program backstop: ' + ', '.join(missing))
+
+    def test_every_offered_tool_survives_a_crashing_backend(self):
+        # A tool that reaches the program and raises is the case that used to be
+        # reported as "arguments are not valid JSON".  Every such call must still
+        # come back with a safe reason and a trackable id.
+        offered = self.chat.tool_schemas()
+        self.chat.tools.invoke.side_effect = ValueError('probe: backend exploded')
+        unexplained = []
+        for schema in offered:
+            name = schema['function']['name']
+            call = SimpleNamespace(id='probe-' + name,
+                                   function=SimpleNamespace(name=name, arguments='{}'))
+            execution = self.chat._execute_tool_call(call, 'probe', 'step:0', False, offered)
+            text = str(execution.result)
+            if execution.state == '成功':
+                continue
+            if '[program]' not in text and 'failed inside the program' not in text:
+                unexplained.append(name)
+        self.assertEqual(unexplained, [],
+                         'program failures left unexplained: ' + ', '.join(unexplained))
 
 
 if __name__ == '__main__':

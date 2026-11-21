@@ -4674,12 +4674,19 @@ class Chat:
             if isinstance(received, str) and received.strip():
                 message += ' The tool received: ' + received.strip().replace('\n', ' ')[:160]
             result, state, summary = message, '被拒绝', call.function.name
-        except (ValueError, TypeError) as exc:
+        except UserError:
+            # Authored control-flow messages (UserError / RequestFailed /
+            # BudgetExceeded) keep their own wording and their own handling.
+            raise
+        except Exception as exc:
             # Ticket 415: this used to be reported as "the arguments are not a valid
             # JSON object" (409's leftover), which disguised program failures as
-            # Peter's mistake.  The exception text may hold local paths or file
-            # contents, so only the type name and a trackable id leave this block;
-            # the traceback goes to the local-only tool-errors.jsonl.
+            # Peter's mistake.  Catching every ordinary exception gives all tools -
+            # including ones added later - the same safe backstop instead of letting
+            # an unexpected error escape with no explanation.  The exception text may
+            # hold local paths or file contents, so only the type name and a
+            # trackable id leave this block; the traceback goes to the local-only
+            # tool-errors.jsonl.
             result, activity_detail, error_id = tool_failures.internal_failure(
                 call.function.name, exc)
             state, summary = '出错', call.function.name

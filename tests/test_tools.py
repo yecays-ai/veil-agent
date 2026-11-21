@@ -655,8 +655,12 @@ max_result_bytes = 200
         self.assertEqual(chat.send('create a fictional report'), 'I will ask before trying again.')
         tool_result = model.call_args_list[1].args[0][-1]['content']
         expected = 'Lan did not approve this write, so the file was not changed; request approval before retrying.'
-        self.assertEqual(tool_result, expected)
-        self.assertTrue(any(tool_result in line for line in output))
+        # The tool's own sentence is never rewritten; the funnel only appends its
+        # backstop, and that backstop is English for the model.
+        self.assertTrue(tool_result.startswith(expected))
+        self.assertIn('[program] No further guidance was added', tool_result)
+        self.assertNotRegex(tool_result, r'[\u3400-\u9fff]')
+        self.assertTrue(any(expected in line for line in output))
 
     def test_memory_target_id_error_is_source_authored_english_and_passed_through(self):
         source = 'target_id must be an exact visible result from breath_search in this turn; search again and use its ID.'
