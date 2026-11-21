@@ -22,16 +22,20 @@ PROFILE_REPLACE = {'type': 'function', 'function': {
 ONGOING_TOOL = {'type': 'function', 'function': {
     'name': 'ongoing_update',
     'description': ('Track something that is not finished yet: a promise, a shared plan, an unresolved argument, '
-                    'or work you are in the middle of. Before add/update/complete, search recent chat and memory '
-                    'for the actual history; keep source ids; if evidence is insufficient use status uncertain. '
-                    'Never declare something resolved without evidence. Completed or archived items are not shown '
-                    'to you anymore.'),
+                    'or work you are in the middle of. Ongoing items reach you every turn, so keep the text '
+                    'short and current; you maintain them yourself and may edit or finish them when the chat '
+                    'shows the state changed. Before add/update/complete, search recent chat and memory for the '
+                    'actual history; keep source ids; if evidence is insufficient use status uncertain. When '
+                    'you complete something, say in sources what showed it was over (her tone counts as '
+                    'evidence). Finished items are no longer sent to you: you only see how many there are, and '
+                    'action list returns them with the completion time. Archive was removed; use complete.'),
     'parameters': {'type': 'object', 'properties': {
-        'action': {'type': 'string', 'enum': ['add', 'update', 'complete', 'archive', 'reopen']},
-        'id': {'type': 'string', 'description': 'Required for update/complete/archive/reopen.'},
+        'action': {'type': 'string', 'enum': ['add', 'update', 'complete', 'reopen', 'list']},
+        'id': {'type': 'string', 'description': 'Required for update/complete/reopen.'},
         'text': {'type': 'string', 'description': 'Short current state; required for add.'},
         'sources': {'type': 'array', 'items': {'type': 'string'},
                     'description': 'References such as chat:<message_id>, memory:<id>, long_task:<id>.'},
-        'status': {'type': 'string', 'enum': ['active', 'uncertain']},
+        'status': {'type': 'string', 'enum': ['active', 'uncertain', 'completed', 'all'],
+                   'description': 'For update: active or uncertain. For list: which items to show (default completed).'},
     }, 'required': ['action'], 'additionalProperties': False},
 }}
