@@ -1322,8 +1322,6 @@ class Hub(ScreenPopMixin):
 
     def _input_fn(self):
         with self.cond:
-            if self.ready:
-                self.last_interaction = time.monotonic()
             self.busy = False
             self.ready = True
         while True:
@@ -1336,6 +1334,7 @@ class Hub(ScreenPopMixin):
                     with self.cond:
                         self.busy = True
                     return text
+                self.last_interaction = time.monotonic()
                 if not self._is_command(text):
                     self._wait_while_lan_types()
                 with self.cond:
@@ -1402,6 +1401,7 @@ class Hub(ScreenPopMixin):
                 with self.cond:
                     self.busy = True
                 return text
+            self.last_interaction = time.monotonic()
             if not self._is_command(text):
                 self._wait_while_lan_types()
             with self.cond:

@@ -190,7 +190,7 @@ function showEvent(e){
   if(e.kind==='notice'&&typeof e.text==='string'){
     // 工单 392：后端每轮都发同一句（QQ 通道找不到窗口那类），这里只显示第一条。
     // 只拦来自事件的提示；本地点按钮产生的回执（取消录音等）仍走 add()，不受影响。
-    const key=e.text.trim(),seenAt=recentNotices.get(key);
+    const key=e.calendar_undo_id||e.text.trim(),seenAt=recentNotices.get(key);
     if(seenAt!==undefined&&Date.now()-seenAt<NOTICE_REPEAT_MS)return;
     if(recentNotices.size>=200)recentNotices.clear();
     recentNotices.set(key,Date.now());
@@ -1260,7 +1260,7 @@ async function openLifeRecord(id){
   if(row.date&&row.repeat!=='daily'){lifeDay=row.date;renderLife()}showLife(row)
 }
 window.veilDesktop.onOpenLifeRecord?.(id=>{if(typeof id==='string')openLifeRecord(id)});
-const lifeAutoToggle=document.createElement('button');lifeAutoToggle.id='life-auto-record';lifeAutoToggle.type='button';lifeAutoToggle.textContent='聊天约定自动记日历：开';lifeAutoToggle.onclick=async()=>{lifeAutoToggle.disabled=true;try{const r=await api('/api/life',{auto_record:!lifeAutoRecordEnabled});const d=await r.json();if(!r.ok)throw Error(d.error||'设置失败');lifeAutoRecordEnabled=d.auto_record_enabled;lifeAutoToggle.textContent='聊天约定自动记日历：'+(lifeAutoRecordEnabled?'开':'关')}catch(err){notify(err.message,'error')}finally{lifeAutoToggle.disabled=false}};$('life-new').after(lifeAutoToggle);
+const lifeAutoToggle=document.createElement('button');lifeAutoToggle.id='life-auto-record';lifeAutoToggle.type='button';lifeAutoToggle.textContent='聊天约定自动记日历：开';lifeAutoToggle.onclick=async()=>{lifeAutoToggle.disabled=true;try{const r=await api('/api/life',{auto_record:!lifeAutoRecordEnabled});const d=await r.json();if(!r.ok)throw Error(d.error||'设置失败');lifeAutoRecordEnabled=d.auto_record_enabled;lifeRevision++;lifeAutoToggle.textContent='聊天约定自动记日历：'+(lifeAutoRecordEnabled?'开':'关')}catch(err){notify(err.message,'error')}finally{lifeAutoToggle.disabled=false}};$('life-new').after(lifeAutoToggle);
 document.querySelectorAll('[data-life-kind]').forEach(b=>b.onclick=()=>{lifeKind=b.dataset.lifeKind;document.querySelectorAll('[data-life-kind]').forEach(x=>x.classList.toggle('active',x===b));renderLife()});document.querySelectorAll('[data-life-owner]').forEach(b=>b.onclick=()=>{lifeOwner=b.dataset.lifeOwner;document.querySelectorAll('[data-life-owner]').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));renderLife()});$('life-new').onclick=$('life-detail-new').onclick=()=>lifeForm();$('life-day').onchange=()=>{lifeDay=$('life-day').value;renderLife()};
 async function approve(card,status,answer,id){
   if(card.dataset.sending==='true'||card.classList.contains('done'))return;

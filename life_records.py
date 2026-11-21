@@ -127,25 +127,33 @@ class LifeRecords:
             handle.write(json.dumps({'records':rows},ensure_ascii=False,indent=2)+'\n')
             handle.flush(); os.fsync(handle.fileno())
         os.replace(temp,self.path)
-    def write(self, body, actor, *, auto=False):
+    def write(self, body, actor, *, auto=False, expected_updated_at=None):
         with self.store.mutex:
             rows=self.read()
             key=body.get('id')
             prior=next((r for r in rows if r.get('id')==key),None) if key else None
             if key and not prior: raise ValueError('record not found')
+            if expected_updated_at is not None and prior.get('updated_at')!=expected_updated_at:
+                raise ValueError('record changed during automatic update')
             original=prior
             if prior: prior=effective(prior)
-            if (actor=='Peter' and prior and prior.get('repeat')=='daily' and body.get('state')=='completed'
-                    and set(body)<= {'id','state','date'}
-                    and ('date' not in body or body['date']==(datetime.fromisoformat(now()).date()-timedelta(days=1)).isoformat())
-                    and datetime.fromisoformat(now()).hour<6 and self.daily_reminder_path.exists()):
-                yesterday=(datetime.fromisoformat(now()).date()-timedelta(days=1)).isoformat()
-                if self._daily_reminder_contains(yesterday,prior['id']):
-                    stamp=now()
-                    if self._logged_today(prior['id'],yesterday)!='completed':
-                        self._log_check(prior,'completed',actor,stamp,day=yesterday)
-                    return {**prior,'state':'completed','completion_day':yesterday,
-                            'completed_at':stamp,'today_state':prior['state']}
+            current=datetime.fromisoformat(now())
+            yesterday=(current.date()-timedelta(days=1)).isoformat()
+            cross_day=(actor=='Peter' and prior and prior.get('repeat')=='daily'
+                       and body.get('state')=='completed' and set(body)<= {'id','state','date'}
+                       and current.hour<6 and (body.get('date')==yesterday
+                                              or self._daily_reminder_contains(yesterday,prior['id'])))
+            if cross_day:
+                stamp=now()
+                if self._logged_today(prior['id'],yesterday)!='completed':
+                    self._log_check(prior,'completed',actor,stamp,day=yesterday)
+                saved={**original,'state':'active','completed_at':None,
+                       'updated_at':stamp,'updated_by':actor,
+                       'last_completed_at':stamp,'last_completion_day':yesterday}
+                rows[rows.index(original)]=saved
+                self._save(rows)
+                return {**saved,'state':'completed','completion_day':yesterday,
+                        'completed_at':stamp,'today_state':'active'}
             kind=body.get('kind',prior.get('kind') if prior else None)
             title=body.get('title',prior.get('title') if prior else None)
             content=body.get('content',prior.get('content','') if prior else '')
@@ -172,6 +180,9 @@ class LifeRecords:
             row={'id':key or secrets.token_hex(12),'kind':kind,'title':title.strip(),
                 'content':content,'owner':owner,'date':date,'time':time,'state':state,'mood':mood,'repeat':repeat,
                 'remind':remind,'remind_before':remind_before,
+                'reminder_revision': (stamp if not prior or any(prior.get(k)!=v for k,v in
+                    {'date':date,'time':time,'remind':remind,'remind_before':remind_before}.items())
+                    else prior.get('reminder_revision',prior.get('updated_at'))),
                 'auto_recorded':prior.get('auto_recorded',False) if prior else bool(auto),
                 'created_at':prior.get('created_at',stamp) if prior else stamp,
                 'created_by':prior.get('created_by',actor) if prior else actor,
@@ -222,20 +233,22 @@ class LifeRecords:
                     try: entry=json.loads(line)
                     except (ValueError,UnicodeError): continue
                     if isinstance(entry,dict) and entry.get('id') and entry.get('revision'):
-                        seen.add((entry['id'],entry['revision']))
+                        seen.add((entry['id'],entry.get('schedule_revision',entry['revision'])))
             for row in self.read():
                 if row.get('kind')!='event' or row.get('state')!='active' or not row.get('remind') or not row.get('time'):
                     continue
                 revision=row.get('updated_at')
-                if (row['id'],revision) in seen: continue
+                schedule_revision=row.get('reminder_revision',revision)
+                if (row['id'],schedule_revision) in seen: continue
                 try:
                     due=datetime.fromisoformat(row['date']+'T'+row['time']).replace(tzinfo=current.tzinfo)-timedelta(minutes=row.get('remind_before',0))
-                    changed=datetime.fromisoformat(revision)
+                    changed=datetime.fromisoformat(schedule_revision)
                 except (ValueError,TypeError,OverflowError): continue
                 if due>current or changed>due: continue
                 late=(current-due).total_seconds()
                 event={k:row.get(k) for k in ('id','title','date','time','created_by','remind_before')}
-                event.update({'revision':revision,'due':due.isoformat(),'at':current.isoformat(),
+                event.update({'revision':revision,'schedule_revision':schedule_revision,
+                              'due':due.isoformat(),'at':current.isoformat(),
                               'outcome':'missed' if late>3600 else 'due','late_minutes':int(late//60)})
                 self.reminders_path.parent.mkdir(parents=True,exist_ok=True)
                 with self.reminders_path.open('a',encoding='utf-8') as handle:
@@ -253,6 +266,12 @@ class LifeRecords:
             if isinstance(entry,dict) and entry.get('outcome')=='missed':
                 missed[(entry.get('id'),entry.get('revision'))]=entry.get('time')
         return missed
+
+    def reminder_still_current(self, event):
+        if not isinstance(event,dict): return False
+        row=next((r for r in self.read() if r.get('id')==event.get('id')),None)
+        return bool(row and row.get('state')=='active'
+                    and row.get('updated_at')==event.get('revision'))
 
     def claim_daily_reminder(self, at=None):
         current=at or datetime.fromisoformat(now())
@@ -333,8 +352,7 @@ class LifeRecords:
                 raise ValueError('undo expired')
             after=entry['after']; before=entry['before']; rows=self.read()
             current=next((r for r in rows if r.get('id')==after.get('id')),None)
-            if (not current or current.get('updated_at')!=after.get('updated_at')
-                    and any(current.get(k)!=after.get(k) for k in ('title','content','date','time','state','kind','repeat'))):
+            if not current or current.get('updated_at')!=after.get('updated_at'):
                 raise ValueError('record changed since automatic update')
             if before: rows[rows.index(current)]=before
             else: rows.remove(current)

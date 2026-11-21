@@ -149,6 +149,8 @@ test('desktop redesign keeps real pages in one shell with a collapsible draggabl
   assert.doesNotMatch(js, /id="lf-owner"|id="lf-mood"/);
   // Dots only for days someone wrote an event, a one-off todo or a mood; daily todos never add one.
   assert.match(js, /\(x\.kind==='event'\|\|lifeOneOffNote\(x\)\)&&x\.state!=='cancelled'&&x\.date===key\)\.length/);
+  assert.match(js, /const key=e\.calendar_undo_id\|\|e\.text\.trim\(\)/);
+  assert.match(js, /lifeAutoRecordEnabled=d\.auto_record_enabled;lifeRevision\+\+/);
   assert.match(visual, /\.life-records\.life-overview\{display:grid;grid-template-columns:minmax\(0,1fr\)[^}]*width:100%;max-width:none/);
   assert.match(css, /\.life-detail\{[^}]*background:rgb\(var\(--veil-canvas-rgb\)\/var\(--view-alpha,var\(--window-alpha\)\)\)!important/);
   assert.match(css, /#life-view \.life-sticky\{padding:18px 0 8px;[^}]*font:15px\/1\.5/);

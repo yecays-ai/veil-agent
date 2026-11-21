@@ -16,6 +16,7 @@ PROMPT_MODULES = (
     'veil_agent.py',
     'autonomy.py',
     'background.py',
+    'calendar_agreements.py',
     'delegate_agent.py',
     'experience_memory.py',
     'learned_context.py',

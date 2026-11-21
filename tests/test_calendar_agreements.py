@@ -24,7 +24,8 @@ class CalendarAgreementsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=root) as directory:
             logs=[]
             store=SimpleNamespace(root=Path(directory),mutex=threading.RLock(),
-                                  read=lambda path:[],append=lambda path,event:logs.append((path,event)))
+                                  read=lambda path:[{'role':'user','content':'明天下午三点取快递'}],
+                                  append=lambda path,event:logs.append((path,event)))
             target=(date.today()+timedelta(days=1)).isoformat()
             model=lambda *args,**kwargs:(json.dumps({'action':'create','date':target,'time':'15:00',
                                                        'title':'Get package','remind':False}),12,25,0)
@@ -35,7 +36,6 @@ class CalendarAgreementsTest(unittest.TestCase):
                                  life_records=LifeRecords(store,'peter'))
             notices=[]
             agent=CalendarAgreements(chat,notices.append)
-            agent.lock.acquire()
             agent._process('明天下午三点一起取快递','好，约定了')
             rows=chat.life_records.read()
             self.assertEqual(len(rows),1)
@@ -47,3 +47,58 @@ class CalendarAgreementsTest(unittest.TestCase):
             self.assertFalse(chat.life_records.auto_record_enabled())
             agent.consider('明天三点再去','好')
             self.assertEqual(len(chat.life_records.read()),1)
+
+    def test_confirm_and_cancel_turns_queue_in_order(self):
+        root=Path.cwd()/'.task-test-temp'
+        root.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=root) as directory:
+            logs=[]; first_started=threading.Event(); release=threading.Event(); calls=[]
+            store=SimpleNamespace(root=Path(directory),mutex=threading.RLock(),
+                                  read=lambda path:[{'role':'user','content':'明天下午三点取快递'}],
+                                  append=lambda path,event:logs.append((path,event)))
+            target=(date.today()+timedelta(days=1)).isoformat()
+            records=LifeRecords(store,'peter')
+            def model(*args,**kwargs):
+                calls.append(1)
+                if len(calls)==1:
+                    first_started.set(); release.wait(2)
+                    decision={'action':'create','date':target,'time':'15:00','title':'Package','remind':False}
+                else:
+                    decision={'action':'cancel','id':records.read()[0]['id']}
+                return json.dumps(decision),12,25,0
+            budget=SimpleNamespace(reserve=lambda *args,**kwargs:('reservation',1),
+                                   settle=lambda *args,**kwargs:None,
+                                   settle_estimate=lambda *args,**kwargs:None)
+            chat=SimpleNamespace(cfg=Config(),store=store,path='chat.jsonl',budget=budget,model=model,
+                                 life_records=records)
+            agent=CalendarAgreements(chat,lambda notice:None)
+            agent.consider('好，就这么定了','那就说好了')
+            self.assertTrue(first_started.wait(1))
+            agent.consider('取消刚才的约定','好，取消')
+            worker=agent.worker
+            release.set(); worker.join(3)
+            self.assertEqual(len(calls),2)
+            self.assertEqual(records.read()[0]['state'],'cancelled')
+
+    def test_auto_update_aborts_if_record_changed_during_model_call(self):
+        root=Path.cwd()/'.task-test-temp'
+        root.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=root) as directory:
+            logs=[]
+            store=SimpleNamespace(root=Path(directory),mutex=threading.RLock(),
+                                  read=lambda path:[],append=lambda path,event:logs.append((path,event)))
+            records=LifeRecords(store,'peter')
+            event=records.write({'kind':'event','title':'Movie','date':(date.today()+timedelta(days=1)).isoformat(),
+                                 'time':'15:00'},'Lan')
+            def model(*args,**kwargs):
+                records.write({'id':event['id'],'time':'16:00'},'Lan')
+                return json.dumps({'action':'update','id':event['id'],'title':'New movie'}),12,25,0
+            budget=SimpleNamespace(reserve=lambda *args,**kwargs:('reservation',1),
+                                   settle=lambda *args,**kwargs:None,
+                                   settle_estimate=lambda *args,**kwargs:None)
+            chat=SimpleNamespace(cfg=Config(),store=store,path='chat.jsonl',budget=budget,model=model,
+                                 life_records=records)
+            CalendarAgreements(chat,lambda notice:None)._process('明天电影改个名字','好')
+            current=records.read()[0]
+            self.assertEqual(current['time'],'16:00')
+            self.assertEqual(current['title'],'Movie')

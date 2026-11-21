@@ -6271,6 +6271,11 @@ def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead, activity=N
                 continue
             if action == 'calendar_reminder_due':
                 due = raw_text.payload
+                try:
+                    if not chat.life_records.reminder_still_current(due):
+                        continue
+                except (OSError,ValueError,UnicodeError):
+                    continue
                 label = f"{due['time']} {due['title']}"
                 if due['outcome'] == 'missed':
                     output(LifeNotice('错过的提醒：' + label, due['id']))

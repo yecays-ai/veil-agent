@@ -18,8 +18,9 @@ class LifeRecordsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=temp_root) as directory:
             store=SimpleNamespace(root=Path(directory),mutex=threading.RLock())
             records=LifeRecords(store,'peter')
-            event=records.write({'kind':'event','title':'Meet','date':'2026-11-23','time':'20:00',
-                                 'remind':True,'remind_before':15},'Lan')
+            with patch('life_records.now',return_value='2026-11-23T19:00:00+08:00'):
+                event=records.write({'kind':'event','title':'Meet','date':'2026-11-23','time':'20:00',
+                                     'remind':True,'remind_before':15},'Lan')
             at=datetime(2026,11,23,19,45,tzinfo=timezone(timedelta(hours=8)))
             self.assertIsNone(records.claim_due_reminder(at-timedelta(minutes=1)))
             self.assertEqual(records.claim_due_reminder(at)['id'],event['id'])
@@ -28,6 +29,25 @@ class LifeRecordsTest(unittest.TestCase):
             self.assertIsNone(records.claim_due_reminder(at+timedelta(minutes=1)))
             with self.assertRaises(ValueError):
                 records.write({'kind':'event','title':'No time','remind':True},'Lan')
+
+    def test_title_edit_keeps_due_reminder_and_stale_claim_is_rejected(self):
+        temp_root=Path.cwd() / '.task-test-temp'
+        temp_root.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=temp_root) as directory:
+            store=SimpleNamespace(root=Path(directory),mutex=threading.RLock())
+            records=LifeRecords(store,'peter')
+            with patch('life_records.now',return_value='2026-11-23T19:00:00+08:00'):
+                event=records.write({'kind':'event','title':'Meet','date':'2026-11-23','time':'20:00',
+                                     'remind':True,'remind_before':15},'Lan')
+            with patch('life_records.now',return_value='2026-11-23T19:45:01+08:00'):
+                edited=records.write({'id':event['id'],'title':'Meet outside'},'Lan')
+            due=records.claim_due_reminder(datetime(2026,11,23,19,45,5,
+                                                     tzinfo=timezone(timedelta(hours=8))))
+            self.assertEqual(due['title'],'Meet outside')
+            self.assertTrue(records.reminder_still_current(due))
+            with patch('life_records.now',return_value='2026-11-23T19:45:06+08:00'):
+                records.write({'id':event['id'],'state':'cancelled'},'Lan')
+            self.assertFalse(records.reminder_still_current(due))
 
     def test_daily_reminder_uses_original_day(self):
         temp_root=Path.cwd() / '.task-test-temp'
@@ -41,14 +61,18 @@ class LifeRecordsTest(unittest.TestCase):
             self.assertEqual(reminder['ids'],[todo['id']])
             self.assertIsNone(records.claim_daily_reminder(day))
             after_midnight=(day+timedelta(minutes=72)).isoformat()
+            records.daily_reminder_path.unlink()
             with patch('life_records.now',return_value=after_midnight):
-                result=records.write({'id':todo['id'],'state':'completed'},'Peter')
+                result=records.write({'id':todo['id'],'state':'completed','date':day.date().isoformat()},'Peter')
             self.assertEqual(result['completion_day'],day.date().isoformat())
             self.assertEqual(result['today_state'],'active')
             past=records.daily_checks()['days'][day.date().isoformat()][todo['id']]
             self.assertEqual(past['state'],'completed')
             self.assertEqual(past['at'][:10],(day+timedelta(days=1)).date().isoformat())
             self.assertEqual(records.read()[0]['state'],'active')
+            with patch('life_records.now',return_value=(day+timedelta(minutes=73)).isoformat()):
+                records.write({'id':todo['id'],'title':'Diary updated'},'Lan')
+            self.assertEqual(records.daily_checks()['days'][day.date().isoformat()][todo['id']]['state'],'completed')
 
     def test_automatic_change_can_be_undone_only_while_unedited(self):
         temp_root=Path.cwd() / '.task-test-temp'
@@ -62,6 +86,20 @@ class LifeRecordsTest(unittest.TestCase):
             self.assertIsNone(records.undo_auto('a'*24))
             self.assertEqual(records.read(),[])
             with self.assertRaises(ValueError): records.undo_auto('a'*24)
+
+    def test_undo_refuses_manual_reminder_change(self):
+        temp_root=Path.cwd() / '.task-test-temp'
+        temp_root.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=temp_root) as directory:
+            store=SimpleNamespace(root=Path(directory),mutex=threading.RLock())
+            records=LifeRecords(store,'peter')
+            before=records.write({'kind':'event','title':'Walk','date':'2026-11-25','time':'20:00'},'Peter')
+            after=records.write({'id':before['id'],'title':'Long walk'},'Peter',auto=True)
+            path=records.path.with_name('calendar-agreements.jsonl')
+            path.write_text(json.dumps({'at':now(),'undo_id':'b'*24,'before':before,'after':after})+'\n',encoding='utf-8')
+            records.write({'id':after['id'],'remind':True,'remind_before':15},'Lan')
+            with self.assertRaisesRegex(ValueError,'record changed'):
+                records.undo_auto('b'*24)
 
     def test_shared_records_persist_status_and_protect_lan_owner(self):
         temp_root=Path.cwd() / '.task-test-temp'
