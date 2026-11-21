@@ -101,6 +101,17 @@ class SnapshotStoreTests(unittest.TestCase):
         self.assertEqual(rows[0]['steps'], 1)
         self.assertEqual(rows[0]['unsent'], 1)
 
+    def test_legacy_record_without_sent_is_still_a_real_call(self):
+        record = request_snapshots.build([{'role': 'user', 'content': 'old'}], ['user'],
+                                         request_id='legacy', step=1, kind='chat', model='fake')
+        record.pop('sent', None)
+        request_snapshots.save(self.root, 'role', record)
+        rows = request_snapshots.recent(self.root, 'role')
+        self.assertEqual(rows[0]['steps'], 1)
+        self.assertEqual(rows[0]['unsent'], 0)
+        bundle = request_snapshots.for_request(self.root, 'role', 'legacy')
+        self.assertEqual(len(bundle['steps']), 1)
+
     def test_unsafe_request_id_is_refused(self):
         self.assertIsNone(request_snapshots.for_request(self.root, 'role', '../secret'))
         self.assertIsNone(request_snapshots.get(self.root, 'role', 'a/b'))
