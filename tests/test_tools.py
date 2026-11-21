@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import tools_agent
+import tool_failures
 from tools_agent import (ALLOW, ASK, DENY, LAB_ONLY, OWN_WORK, FilesystemTools, checked_path,
                          permitted_tools, tool_policy)
 from veil_agent import (Budget, Chat, RequestFailed, Store, load_character,
@@ -654,8 +655,12 @@ max_result_bytes = 200
         self.assertEqual(chat.send('create a fictional report'), 'I will ask before trying again.')
         tool_result = model.call_args_list[1].args[0][-1]['content']
         expected = 'Lan did not approve this write, so the file was not changed; request approval before retrying.'
-        self.assertEqual(tool_result, expected)
-        self.assertTrue(any(tool_result in line for line in output))
+        # The tool's own sentence is never rewritten; the funnel only appends its
+        # backstop, and that backstop is English for the model.
+        self.assertTrue(tool_result.startswith(expected))
+        self.assertIn('[program] No further guidance was added', tool_result)
+        self.assertNotRegex(tool_result, r'[\u3400-\u9fff]')
+        self.assertTrue(any(expected in line for line in output))
 
     def test_memory_target_id_error_is_source_authored_english_and_passed_through(self):
         source = 'target_id must be an exact visible result from breath_search in this turn; search again and use its ID.'
@@ -1310,6 +1315,60 @@ max_result_bytes = 200
         self.assertFalse(any((m.get('content') or '').startswith('old ') for m in second_request))
         self.assertEqual(second_request[-1]['content'], 'test data ' * 80)
         self.assertIsNotNone(chat.trim_note)
+
+    def test_internal_tool_failure_is_a_program_fault_with_a_trackable_id(self):
+        # 工单 415：工具内部异常不再被说成「参数不是合法 JSON」，也不能把异常原文
+        # （可能带本机路径）发给模型或写进活动账本；原文只留在本机 tool-errors.jsonl。
+        first = self.message([self.tool_call('read_text_file', '{"path": "lab/notes.txt"}', 'boom')])
+        final = self.message(content='It failed inside the program.')
+        model = Mock(side_effect=[(first, 100, 20, 0), (final, 120, 20, 0)])
+        tools = Mock()
+        tools.tools = [SimpleNamespace(name='read_text_file', description='Read', inputSchema={})]
+        tools.capability_event = None
+        tools.invoke.side_effect = ValueError(r'C:\Users\lan\Documents\secret.txt is locked')
+        output = []
+        chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=output.append)
+        self.assertEqual(chat.send('read it'), 'It failed inside the program.')
+        tool_message = model.call_args_list[1].args[0][-1]['content']
+        self.assertIn('failed inside the program', tool_message)
+        self.assertIn('err-', tool_message)
+        self.assertNotIn('secret.txt', tool_message)
+        self.assertNotIn('C:\\Users', tool_message)
+        self.assertNotIn('arguments are not a valid JSON object', tool_message)
+        rows = [row for row in self.store.read('test/tools.jsonl') if row.get('state') != '进行中']
+        self.assertEqual(rows[-1]['state'], '出错')
+        self.assertIn('工具内部故障', rows[-1]['detail'])
+        self.assertNotIn('secret.txt', rows[-1]['detail'])
+        self.assertNotIn('C:\\Users', rows[-1]['detail'])
+        errors = self.store.read('test/tool-errors.jsonl')
+        self.assertTrue(errors)
+        self.assertIn(errors[-1]['error_id'], tool_message)
+        self.assertIn('err-', errors[-1]['error_id'])
+        # 原始错误留在本机，仍是可追踪的。
+        self.assertIn('secret.txt', errors[-1]['traceback'])
+
+    def test_tool_refusal_carries_reason_received_arguments_and_known_fix(self):
+        # 工单 415：工具说得出原因和改法时，Peter 收到「原因 + 收到的参数 + 怎么改」；
+        # 活动账本同时写中文的原因、收到参数和改法。
+        result = tool_failures.refusal(
+            'read_text_file needs one path.', fix='Call it with {"path": "lab/notes.txt"}.',
+            received={'path': ''}, detail='参数无效：需要一个 path。')
+        first = self.message([self.tool_call('read_text_file', '{"path": ""}', 'nofile')])
+        final = self.message(content='I will read a real file.')
+        model = Mock(side_effect=[(first, 100, 20, 0), (final, 120, 20, 0)])
+        tools = Mock()
+        tools.tools = [SimpleNamespace(name='read_text_file', description='Read', inputSchema={})]
+        tools.capability_event = None
+        tools.invoke.return_value = (result, '被拒绝', 'notes.txt')
+        chat = Chat(self.cfg, self.store, self.budget, model, tools=tools, output=lambda *_: None)
+        self.assertEqual(chat.send('read it'), 'I will read a real file.')
+        tool_message = model.call_args_list[1].args[0][-1]['content']
+        self.assertTrue(tool_message.startswith('read_text_file needs one path.'))
+        self.assertIn('[program] arguments received: {"path": ""}', tool_message)
+        self.assertIn('[program] correction: Call it with {"path": "lab/notes.txt"}.', tool_message)
+        rows = [row for row in self.store.read('test/tools.jsonl') if row.get('state') != '进行中']
+        self.assertIn('收到参数：{"path": ""}', rows[-1]['detail'])
+        self.assertIn('怎么改：Call it with', rows[-1]['detail'])
 
 
 class MultiMessageTests(unittest.TestCase):

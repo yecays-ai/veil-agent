@@ -1364,13 +1364,15 @@ class WindowsInteractionTools:
                 'Windows interaction is unavailable for this character, platform, or allowlist.',
                 activity_detail=f'{summary} 桌面交互当前不可用。'), '被拒绝', summary
         if not isinstance(args, dict):
-            return WindowsToolResult('A JSON object of arguments is required.',
-                                     activity_detail=f'{summary} 参数无效。'), '被拒绝', summary
-        try:
-            result, state = self._invoke(name, args, approval, should_stop, summary)
-        except (ValueError, TypeError):
-            result, state = WindowsToolResult('The program rejected invalid interaction arguments.',
-                                              activity_detail=f'{summary} 参数无效。'), '被拒绝'
+            return WindowsToolResult(
+                'A JSON object of arguments is required.',
+                activity_detail=f'{summary} 参数无效：参数必须是一个 JSON 对象。',
+                fix='Call it again with one JSON object of arguments.',
+                received=args), '被拒绝', summary
+        # Ticket 415: an exception here is not evidence that the arguments were
+        # wrong (it used to be reported as "invalid interaction arguments").  Let
+        # the tool funnel report it as a program failure with a trackable id.
+        result, state = self._invoke(name, args, approval, should_stop, summary)
         if state is not None:
             return result, state, summary
         return result, '成功', summary
@@ -1412,7 +1414,11 @@ class WindowsInteractionTools:
 
         if name == 'desktop_icons_read':
             if args:
-                return WindowsToolResult('desktop_icons_read accepts no arguments.', activity_detail='参数无效。'), '被拒绝'
+                return WindowsToolResult(
+                    'desktop_icons_read takes no arguments.',
+                    activity_detail='参数无效：读取桌面图标不需要参数，这次没有执行。',
+                    fix='Call desktop_icons_read with {}.',
+                    received=args), '被拒绝'
 
             def read_icons(stopped):
                 if stopped():

@@ -1,5 +1,20 @@
 # HANDOFF
 
+## 工单 415 交接（工具失败说清真实原因）
+- 工单：`docs/tickets/415-tool-failure-contract.md`；分支 `ticket/415-tool-failure-contract`，从 origin/main（f9c7931）开的独立 worktree，没动正式目录，也没碰 412/413/414 的工作区。
+- 根因：`_execute_tool_call` 把工具内部 `ValueError/TypeError` 一律报成「arguments are not a valid JSON object」（409 遗留）；`peek_screen`/`snooping_around` 收到任何参数只说一句 `This tool does not accept arguments.`，不回声收到的参数；`windows_interaction` 把内部异常说成参数错；`open_lab_game` 把参数错说成服务不可用；活动页把 `被拒绝` 一律写成「权限拒绝」。
+- 改法：新增 `tool_failures.py`（失败契约：原话在前；`refusal(...)` 只带本来就确定的改法；`UNKNOWN` 明确表示「程序不知道该怎么改」；内部故障只给 `err-xxxx` + 异常类名，traceback 写本机 `data/<角色>/tool-errors.jsonl`）；`_execute_tool_call` 作为唯一出口统一渲染并区分「参数解析失败」和「工具内部异常」；上述五处文案改真实原因 + 改法；`desktop/chat.js` 状态改「被拒绝」，内部故障显示「工具内部故障」。
+- 验证：新增 `tests/test_tool_failures.py` 9 项 + `tests/test_tools.py` 2 项通过；tools/windows/chat/autonomy/long_tasks 全通过；全量 1825 项只剩 3 项既存失败（`test_backup_restore`、`test_reliability_closeout` 的 `desktop-data` 清单，在 main 上同样失败；`test_executor_opencode` 真实服务冒烟）。
+- 复查补修（lan 审 PR 后要求，仍在同 PR）：
+  - 统一出口真正兜底：`finalize()` 对所有失败都追加程序行；没有改法时只写「程序未给出改法，别原样重试」，不编造；`_execute_tool_call` 现在捕获所有普通异常（`UserError` 仍按原样上抛），所以任何工具（含以后新增）的内部失败都会得到安全说明 + `err-xxxx`。
+  - 逐工具探针：`EveryOfferedToolContractTests` 遍历全部 57 个 offered Schema（空参数）再跑一遍「后端崩溃」，任何失败没有 `[program]` / 内部故障说明就红。静态扫描（`FailureSourceContractTests`）保留作廉价补充。
+  - 参数脱敏：`tool_failures.redact()` 先复用 `safe_tool_activity_detail`，再打掉 Bearer、`api_key/token/secret/password/...` 键值和 40 位以上不透明串，最后才 160 字截断；模型文本和活动账本同一份。
+  - `UserError`/`RequestFailed` 这类作者文案不再被当成「工具内部故障」。
+  - 二次复查：JSON 解析失败那条消息原来直接截原始参数，现在也走 `redact()`；新增 `RealToolProbeTests` 用真实对象（`FilesystemTools` 路径校验 + `WindowsObservationTools` 参数校验）走同一条出口，防止 Mock 一路「成功」把探针架空。
+  - 三次复查：脱敏不再只靠正则——先按结构处理（键名含 token/secret/password/api_key/authorization/cookie/credential/session_id 等，整段值换成 `[已隐藏]`，值里有空格、逗号、引号也遮得住），文本正则只处理解析不了的原始片段；Bearer、40 位以上不透明串照旧。
+- 没做：没有逐条重写一百多个工具的失败文案；没有按 schema 生成纠错建议；没有回填历史账本；参数回显仍只在已改造的工具上（其余工具靠守门测试保证不说空话）。
+- 下一步：推 PR 后停，等 lan 审；合并后她按工单三条验收（只看修复后新产生的记录）。
+
 ## 工单 413 交接（ongoing 只留进行中/已完成）
 - 目标：删掉归档；已完成只报条数，他要看时用 `ongoing_update` 的 `list`；`ongoing_update` 常驻；修 Peter 页 5 个缺陷。
 - 改法：见 `docs/tickets/413-ongoing-completed.md`。

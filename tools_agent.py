@@ -32,6 +32,7 @@ from windows_interaction import (
     load_application_allowlist,
 )
 from screen_pop import SCREEN_POP_TOOL, SCREEN_POP_TOOL_NAMES, normalize_screen_pop_args, screen_state
+import tool_failures
 
 
 VERSION = 1
@@ -1149,8 +1150,13 @@ class FilesystemTools:
                 return 'Lab Python execution is unavailable because this character has no safe Lab folder.', '被拒绝', 'Lab Python sandbox'
             return self.lab_sandbox.invoke(args, should_stop=should_stop)
         if name == 'open_lab_game':
-            if getattr(self, 'game_manager', None) is None or not isinstance(args, dict) or set(args) != {'path'}:
-                return 'The playable Lab game service is unavailable.', '被拒绝', 'Lab game'
+            if getattr(self, 'game_manager', None) is None:
+                return 'The playable Lab game service is unavailable for this character.', '被拒绝', 'Lab game'
+            if not isinstance(args, dict) or set(args) != {'path'}:
+                return tool_failures.refusal(
+                    'open_lab_game needs exactly one argument, path.',
+                    fix='Call it with {"path": "lab/<folder>/index.html"} — the Lab page to open.',
+                    received=args), '被拒绝', 'Lab game'
             try:
                 url = self.game_manager.open(args['path'])
                 import webbrowser
@@ -1807,8 +1813,14 @@ class FilesystemTools:
             return 'screen_pop is not enabled for this character.', '被拒绝', summary
         try:
             command = normalize_screen_pop_args(args)
-        except (TypeError, ValueError):
-            return 'screen_pop arguments are invalid.', '被拒绝', summary
+        except (TypeError, ValueError) as exc:
+            # Ticket 415: these messages are authored here, never internal exception
+            # text, so the reason is safe to show; nothing was displayed.
+            return tool_failures.refusal(
+                f'screen_pop rejected the arguments: {exc}',
+                fix=('Send text plus optional style (popup/danmaku), count, color, '
+                     'animation, position and duration.'),
+                received=args), '被拒绝', summary
         safe, fullscreen, reason = screen_state()
         if reason == 'locked':
             return "Lan's screen is locked right now; nothing was shown.", '被拒绝', summary
