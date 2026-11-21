@@ -1,4 +1,11 @@
-﻿# HANDOFF
+# HANDOFF
+
+## 工单 413 交接（ongoing 只留进行中/已完成）
+- 目标：删掉归档；已完成只报条数，他要看时用 `ongoing_update` 的 `list`；`ongoing_update` 常驻；修 Peter 页 5 个缺陷。
+- 改法：见 `docs/tickets/413-ongoing-completed.md`。
+- 迁移：旧文件里的 archived 在读取时变成 completed（只在内存里），下一次保存才写回；没有单独迁移脚本，旧数据不会丢。
+- 验证：迁移/计数/list/预算用脚本逐条验过；`desktop/tests/ui.test.cjs` 17 个通过；`test_prompt_registry` 与 `test_tool_budget` 的静态部分通过（其余用例在本机沙箱里因临时目录被拒跑不了，CI 上会跑）。
+- 待办：Lan 真机验收 5 条（见工单）；Electron 冒烟仍没有 Peter 页用例——这次没加，因为本机跑不了冒烟，不交没验过的测试，建议单独一张补。
 
 ## 工单 412 交接（日历第二步）
 独立工作区 ticket/412-calendar-step-two；已同步最新 main（d42a580）并解决 STATUS 冲突。本轮修：①自动写入/撤销改用单调 `revision` 防并发覆盖；②23:50 轻提示后跨午夜补勾归前一天；③中文数字时间、否定确认、取消后重新约定恢复；④提醒发送前二次复核取消与改动。本地 life_records+calendar 18、chat 101、web 72 通过。下一步：等 GitHub 四矩阵和 Cubic 复审；Lan 真机按原方案七项验收；不合并。

@@ -2,11 +2,17 @@
 /* Ticket 394: Peter page. Loads and saves the persona, background, learned context and Lan's persona. */
 (function () {
   var $p = function (id) { return document.getElementById(id); };
-  var state = null, dirty = new Set(), busy = false;
+  var state = null, dirty = new Set(), revisions = {}, queue = Promise.resolve();
+  // The four cards on this page; facts, growth and ongoing all live in the "learned" card, so
+  // editing any of them has to light up that card (ticket 413: it never did before).
+  function cardNode(card) {
+    var name = (card === 'ongoing' || card === 'facts' || card === 'growth') ? 'learned' : card;
+    return document.querySelector('[data-peter-card="' + name + '"]');
+  }
   function token(text) {
     if (!text) return 0;
-    var ascii = 0, i;
-    for (i = 0; i < text.length; i++) if (text.charCodeAt(i) < 128) ascii++;
+    var ascii = 0;
+    for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) < 128) ascii++;
     return Math.ceil(ascii / 4 + (text.length - ascii));
   }
   function count(el, text, limit) {
@@ -29,13 +35,14 @@
   }
   function mark(card) {
     dirty.add(card);
-    var node = document.querySelector('[data-peter-card="' + card + '"]');
+    revisions[card] = (revisions[card] || 0) + 1;
+    var node = cardNode(card);
     if (node) node.classList.add('peter-dirty');
   }
-  function clearMarks() {
-    dirty.clear();
-    var nodes = document.querySelectorAll('.peter-card');
-    for (var i = 0; i < nodes.length; i++) nodes[i].classList.remove('peter-dirty');
+  function unmark(card) {
+    if (dirty.has(card)) return;
+    var node = cardNode(card);
+    if (node) node.classList.remove('peter-dirty');
   }
   async function request(body) {
     var result = await window.veilDesktop.request('/api/peter-page', body, 30000);
@@ -49,57 +56,129 @@
     if (!select) return;
     select.replaceChildren(new Option('历史版本', ''));
     var list = versions || [];
-    for (var i = 0; i < list.length; i++) select.append(new Option(shortTime(list[i].time), list[i].name));
+    for (let i = 0; i < list.length; i++) select.append(new Option(shortTime(list[i].time), list[i].name));
   }
+  function isOpen(item) { return item.status === 'active' || item.status === 'uncertain'; }
+  // Ticket 413: only unfinished items are "进行中". Finished ones are kept for Lan and listed in a
+  // closed block below; they never reach the model's context and do not use the shared byte budget.
   function renderOngoing(items) {
     var box = $p('peter-ongoing');
     if (!box || !state || !state.learned) return;
-    box.replaceChildren();
+    items = items || [];
     state.learned.ongoing.items = items;
-    for (var index = 0; index < items.length; index++) {
-      (function (item) {
-        var row = document.createElement('div');
-        row.className = 'peter-ongoing-item';
-        var text = document.createElement('textarea');
-        text.value = item.text || '';
-        text.placeholder = '现在还没过去的事…';
-        text.oninput = function () { item.text = text.value; mark('ongoing'); };
-        var meta = document.createElement('div');
-        meta.className = 'peter-ongoing-meta';
-        var status = document.createElement('select');
-        [['active', '进行中'], ['uncertain', '尚不确定'], ['completed', '已完成'], ['archived', '已归档']].forEach(function (value) {
-          status.append(new Option(value[1], value[0]));
-        });
-        status.value = item.status || 'active';
-        status.onchange = function () { item.status = status.value; mark('ongoing'); };
-        var sources = document.createElement('input');
-        sources.value = (item.sources || []).join(', ');
-        sources.placeholder = '来源 chat:…, memory:…';
-        sources.oninput = function () {
-          item.sources = sources.value.split(',').map(function (s) { return s.trim(); }).filter(Boolean);
-          mark('ongoing');
-        };
-        var remove = document.createElement('button');
-        remove.type = 'button';
-        remove.textContent = '删除';
-        remove.onclick = function () {
-          if (!confirm('删除这条进行中的记录？')) return;
-          state.learned.ongoing.items.splice(index, 1);
-          renderOngoing(state.learned.ongoing.items);
-          mark('ongoing');
-        };
-        meta.append(status, sources, remove);
-        row.append(text, meta);
-        box.append(row);
-      })(items[index]);
-    }
-    $p('peter-ongoing-count').textContent = items.length + ' 条';
-    if (!items.length) {
+    var open = items.filter(isOpen);
+    var done = items.filter(function (row) { return row.status === 'completed'; });
+    box.replaceChildren();
+    open.forEach(function (item) {
+      var row = document.createElement('div');
+      row.className = 'peter-ongoing-item';
+      var text = document.createElement('textarea');
+      text.value = item.text || '';
+      text.placeholder = '现在还没过去的事…';
+      text.oninput = function () { item.text = text.value; mark('ongoing'); };
+      row.append(text, ongoingMeta(item));
+      box.append(row);
+    });
+    if (!open.length) {
       var empty = document.createElement('p');
       empty.className = 'muted';
       empty.textContent = '还没有进行中的事。';
       box.append(empty);
     }
+    $p('peter-ongoing-count').textContent = open.length + ' 条';
+    renderDone(done);
+  }
+  function ongoingMeta(item) {
+    var meta = document.createElement('div');
+    meta.className = 'peter-ongoing-meta';
+    var status = document.createElement('select');
+    [['active', '进行中'], ['uncertain', '尚不确定'], ['completed', '已完成']].forEach(function (value) {
+      status.append(new Option(value[1], value[0]));
+    });
+    status.value = item.status || 'active';
+    status.onchange = function () { item.status = status.value; mark('ongoing'); };
+    var sources = document.createElement('input');
+    sources.value = (item.sources || []).join(', ');
+    sources.placeholder = '来源 chat:…, memory:…';
+    sources.oninput = function () {
+      item.sources = sources.value.split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+      mark('ongoing');
+    };
+    var remove = document.createElement('button');
+    remove.type = 'button';
+    remove.textContent = '删除';
+    remove.onclick = function () { removeOngoing(item, remove); };
+    meta.append(status, sources, remove);
+    return meta;
+  }
+  function renderDone(done) {
+    var details = $p('peter-ongoing-done');
+    var list = $p('peter-ongoing-done-list');
+    if (!details || !list) return;
+    details.hidden = !done.length;
+    if (!done.length) {
+      $p('peter-ongoing-done-count').textContent = '';
+      list.replaceChildren();
+      return;
+    }
+    $p('peter-ongoing-done-count').textContent = done.length + ' 条';
+    list.replaceChildren();
+    done.forEach(function (item) {
+      var row = document.createElement('div');
+      row.className = 'peter-ongoing-item peter-done-item';
+      var text = document.createElement('p');
+      text.className = 'peter-done-text';
+      text.textContent = item.text || '';
+      var meta = document.createElement('div');
+      meta.className = 'peter-ongoing-meta';
+      var stamp = document.createElement('span');
+      stamp.textContent = item.completed_at ? ('完成于 ' + shortTime(item.completed_at)) : '已完成';
+      var reopen = document.createElement('button');
+      reopen.type = 'button';
+      reopen.textContent = '重开';
+      reopen.onclick = function () { reopenOngoing(item, reopen); };
+      var remove = document.createElement('button');
+      remove.type = 'button';
+      remove.textContent = '删除';
+      remove.onclick = function () { removeOngoing(item, remove); };
+      meta.append(stamp, reopen, remove);
+      row.append(text, meta);
+      list.append(row);
+    });
+  }
+  async function removeOngoing(item, button) {
+    // Two clicks, like the memory page and the life page: no native confirm() to rely on.
+    if (!button.dataset.armed) {
+      button.dataset.armed = '1';
+      button.textContent = '再点一次删除';
+      setTimeout(function () {
+        if (!button.isConnected) return;
+        delete button.dataset.armed;
+        button.textContent = '删除';
+      }, 4000);
+      return;
+    }
+    delete button.dataset.armed;
+    button.disabled = true;
+    state.learned.ongoing.items = (state.learned.ongoing.items || []).filter(function (row) {
+      return row.id !== item.id;
+    });
+    renderOngoing(state.learned.ongoing.items);
+    renderCounts();
+    mark('ongoing');
+    if (!await save('ongoing')) {
+      await load();
+      showError('这条没有删掉（原因见上）。列表已按硬盘上的内容重新读取。');
+    }
+  }
+  async function reopenOngoing(item, button) {
+    button.disabled = true;
+    item.status = 'active';
+    delete item.completed_at;
+    renderOngoing(state.learned.ongoing.items);
+    renderCounts();
+    mark('ongoing');
+    if (!await save('ongoing')) await load();
   }
   function renderCounts() {
     var facts = $p('peter-facts'), growth = $p('peter-growth');
@@ -107,7 +186,7 @@
     count($p('peter-growth-count'), growth.value, null);
     var used = new TextEncoder().encode((facts.value || '') + (growth.value || '')).length;
     if (state && state.learned) {
-      state.learned.ongoing.items.forEach(function (item) {
+      state.learned.ongoing.items.filter(isOpen).forEach(function (item) {
         used += new TextEncoder().encode(item.text || '').length;
       });
     }
@@ -117,38 +196,56 @@
     if (bar) bar.style.width = Math.min(100, max ? used / max * 100 : 0) + '%';
   }
   function render(data) {
+    var pending = new Set(dirty);
+    var previous = state;
     state = data;
     var p = data.persona, b = data.background, u = data.user_persona, l = data.learned;
-    $p('peter-persona').value = p.text || '';
+    if (!pending.has('persona')) $p('peter-persona').value = p.text || '';
     count($p('peter-persona-count'), p.text || '', null);
     $p('peter-persona-saved').textContent = p.mtime ? ('保存于 ' + shortTime(p.mtime)) : '每次请求都带';
     fillVersions($p('peter-persona-versions'), p.versions);
-    $p('peter-background').value = b.text || '';
+    if (!pending.has('background')) $p('peter-background').value = b.text || '';
     count($p('peter-background-count'), b.text || '', null);
     $p('peter-background-saved').textContent = (b.mtime ? ('保存于 ' + shortTime(b.mtime) + ' · ') : '') + '本轮最多带 3 段 / 1,500 字符';
     fillVersions($p('peter-background-versions'), b.versions);
     if (u) {
-      $p('peter-user').value = u.text || '';
+      if (!pending.has('user')) $p('peter-user').value = u.text || '';
       count($p('peter-user-count'), u.text || '', u.max_bytes);
       $p('peter-user-saved').textContent = (u.mtime ? ('保存于 ' + shortTime(u.mtime) + ' · ') : '') + (u.bytes ? (u.bytes + ' / ' + u.max_bytes + ' 字节') : '');
     }
     if (l && l.available) {
       showError('');
-      $p('peter-facts').value = (l.sections.facts && l.sections.facts.text) || '';
-      $p('peter-growth').value = (l.sections.growth && l.sections.growth.text) || '';
+      if (!pending.has('facts')) $p('peter-facts').value = (l.sections.facts && l.sections.facts.text) || '';
+      if (!pending.has('growth')) $p('peter-growth').value = (l.sections.growth && l.sections.growth.text) || '';
       $p('peter-facts-saved').textContent = shortTime(l.sections.facts && l.sections.facts.updated_at);
       $p('peter-growth-saved').textContent = shortTime(l.sections.growth && l.sections.growth.updated_at);
       $p('peter-ongoing-saved').textContent = shortTime(l.ongoing && l.ongoing.updated_at);
-      renderOngoing((l.ongoing && l.ongoing.items) || []);
+      // A save that lands while Lan is still typing must not wipe the newer text off the screen.
+      if (pending.has('ongoing') && previous && previous.learned && previous.learned.ongoing) {
+        l.ongoing.items = previous.learned.ongoing.items;
+      } else {
+        renderOngoing((l.ongoing && l.ongoing.items) || []);
+      }
       renderCounts();
     } else {
       showError((l && l.error) || 'Learned Context 暂不可用。');
     }
-    clearMarks();
+    var nodes = document.querySelectorAll('.peter-card');
+    for (let i = 0; i < nodes.length; i++) nodes[i].classList.remove('peter-dirty');
+    dirty = pending;
+    pending.forEach(function (card) {
+      var node = cardNode(card);
+      if (node) node.classList.add('peter-dirty');
+    });
   }
-  async function load() {
-    if (busy) return false;
-    busy = true;
+  function enqueue(job) {
+    var next = queue.then(job, job);
+    queue = next.then(function () {}, function () {});
+    return next;
+  }
+  function load() { return enqueue(doLoad); }
+  function save(card, renderPage) { return enqueue(function () { return doSave(card, renderPage); }); }
+  async function doLoad() {
     $p('peter-status').textContent = '读取中…';
     try {
       var data = await request({ action: 'load' });
@@ -159,8 +256,6 @@
       $p('peter-status').textContent = '';
       showError(error.message);
       return false;
-    } finally {
-      busy = false;
     }
   }
   function payload(card) {
@@ -171,17 +266,24 @@
       expected_updated_at: state.learned.sections.growth.updated_at };
     if (card === 'facts') return { action: 'save_learned', section: 'facts', text: $p('peter-facts').value,
       expected_updated_at: state.learned.sections.facts.updated_at };
-    if (card === 'ongoing') return { action: 'save_ongoing', items: state.learned.ongoing.items,
+    if (card === 'ongoing') return { action: 'save_ongoing',
+      // A row added with 新增 and left empty would make the whole save fail ("正文为空").
+      items: state.learned.ongoing.items.filter(function (item) { return (item.text || '').trim(); }),
       expected_updated_at: state.learned.ongoing.updated_at };
     return null;
   }
-  async function save(card, renderPage) {
+  async function doSave(card, renderPage) {
     var body = payload(card);
-    if (!body || busy) return false;
-    busy = true;
+    if (!body) return false;
+    var revision = revisions[card] || 0;
     $p('peter-status').textContent = '保存中…';
     try {
       var data = await request(body);
+      // Only drop the "unsaved" mark if nothing changed while the request was in flight.
+      if ((revisions[card] || 0) === revision) {
+        dirty.delete(card);
+        unmark(card);
+      }
       state = data;
       if (renderPage !== false) render(data);
       $p('peter-status').textContent = '已保存 · ' + new Date().toLocaleTimeString();
@@ -190,13 +292,11 @@
       $p('peter-status').textContent = '';
       showError(error.message);
       return false;
-    } finally {
-      busy = false;
     }
   }
   async function saveAll() {
     var cards = Array.from(dirty);
-    for (var i = 0; i < cards.length; i++) {
+    for (let i = 0; i < cards.length; i++) {
       if (!await save(cards[i], false)) return false;
     }
     if (state) render(state);

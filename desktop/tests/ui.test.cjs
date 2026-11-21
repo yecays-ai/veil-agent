@@ -287,3 +287,35 @@ test('life calendar shares records, shows two moods a day, and keeps daily todos
   assert.match(css, /\.life-calendar-days \.calendar-day-line\{display:flex/);
   assert.match(css, /\.mood-choice\[aria-pressed="true"\]/);
 });
+
+// Ticket 413: the Peter page's delete button did nothing because `for (var index ...)` gave every
+// row's click handler the same, final index (splice(items.length, 1)). Banning for(var) in the
+// desktop scripts keeps that whole class out, and chat.js already uses let/const everywhere.
+test('desktop scripts never loop with var, so a click handler cannot capture a stale index', async () => {
+  for (const file of ['chat.js', 'peter-page.js', 'fold-settings.js', 'nowhere-activity.js', 'screen-pop.js']) {
+    const js = await read(file);
+    assert.doesNotMatch(js, /\bfor\s*\(\s*var\b/, `${file} uses for (var …)`);
+  }
+});
+
+// The other way a button quietly dies: it is bound to an id that the page does not have, which
+// throws at bind time and can leave every later binding in the same block unattached.
+test('every id the Peter page looks up exists in chat.html', async () => {
+  const [html, js] = await Promise.all([read('chat.html'), read('peter-page.js')]);
+  const defined = new Set([...html.matchAll(/id="([^"]+)"/g)].map(match => match[1]));
+  const referenced = new Set([...js.matchAll(/\$p\('([A-Za-z][\w-]*)'\)/g)].map(match => match[1]));
+  assert.deepEqual([...referenced].filter(id => !defined.has(id)), []);
+});
+
+// Ticket 413: finished items are not injected, so the page must not count them as 进行中 either,
+// and the shared byte budget must be the same number the model sees.
+test('Peter page separates finished items and counts only what the model sees', async () => {
+  const [html, js, css] = await Promise.all([read('chat.html'), read('peter-page.js'), read('chat.css')]);
+  assert.match(html, /id="peter-ongoing-done"/);
+  assert.match(html, /id="peter-ongoing-done-list"/);
+  assert.match(js, /function isOpen\(item\) \{ return item\.status === 'active' \|\| item\.status === 'uncertain'; \}/);
+  assert.match(js, /items\.filter\(isOpen\)/);
+  assert.match(js, /state\.learned\.ongoing\.items\.filter\(isOpen\)/);
+  assert.doesNotMatch(js, /'archived'/);
+  assert.match(css, /\.peter-done\{/);
+});

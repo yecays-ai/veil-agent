@@ -57,9 +57,13 @@
       <header><h3 tabindex="0" title="Peter 自己记的；三块共用 4,000 字节">他记的你</h3><span id="peter-learned-total" class="muted"></span></header>
       <div class="peter-budget"><div id="peter-budget-bar"></div></div>
       <div id="peter-learned-error" class="peter-error" hidden></div>
-      <h4 title="现在还没过去的事；完成后不再进上下文">正在进行 <span id="peter-ongoing-count" class="muted"></span></h4>
+      <h4 title="还没做完的事；每一轮都会带给他，他会自己改">正在进行 <span id="peter-ongoing-count" class="muted"></span></h4>
       <div id="peter-ongoing" class="peter-ongoing"></div>
       <div class="peter-actions"><button id="peter-ongoing-add" type="button">新增</button><span id="peter-ongoing-saved" class="muted"></span><button id="peter-ongoing-save" type="button">保存</button></div>
+      <details id="peter-ongoing-done" class="peter-done" hidden>
+        <summary>已完成 <span id="peter-ongoing-done-count" class="muted"></span></summary>
+        <div id="peter-ongoing-done-list" class="peter-ongoing"></div>
+      </details>
       <h4 title="Peter 从真实经历里学到的">关系成长 <span id="peter-growth-count" class="muted"></span></h4>
       <textarea id="peter-growth" class="peter-textarea" spellcheck="false" rows="6"></textarea>
       <div class="peter-actions"><span id="peter-growth-saved" class="muted"></span><button id="peter-growth-save" type="button">保存</button></div>
