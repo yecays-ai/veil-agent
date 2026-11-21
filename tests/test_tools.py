@@ -654,6 +654,80 @@ max_result_bytes = 200
             self.assertIsInstance(row['latency_seconds'], float)
             self.assertEqual(row['finish_reason'], 'stop')
 
+    def _respond_with_proportional_usage(self, responses):
+        seen = {'n': 0}
+
+        def respond(messages, **kwargs):
+            index = seen['n']
+            seen['n'] += 1
+            prompt = max(1, round(request_byte_size(messages, kwargs.get('tools')) * 0.1))
+            return responses[index], prompt, 20, 0, 'stop'
+
+        return Mock(side_effect=respond)
+
+    def _tool_loop(self, responses, invoke_result, tool_names=('read_text_file',)):
+        self.cfg.tools['max_steps'] = max(5, self.cfg.tools.get('max_steps', 3))
+        tools = Mock()
+        tools.tools = [SimpleNamespace(name=name, description=name, inputSchema={}) for name in tool_names]
+        tools.capability_event = None
+        tools.preview_summary = Mock(side_effect=lambda name, args: str(args.get('path') or name))
+        tools.invoke.return_value = invoke_result
+        chat = Chat(self.cfg, self.store, self.budget,
+                    self._respond_with_proportional_usage(responses), tools=tools, output=lambda _: None)
+        return chat, tools
+
+    def test_repeated_read_result_is_compacted(self):
+        call = self.tool_call('read_text_file', '{"path":"one.txt"}', 'one')
+        responses = [self.message([call]), self.message([call]), self.message(content='Done.')]
+        chat, tools = self._tool_loop(responses, ('one contents', '成功', 'one.txt'))
+        self.assertEqual(chat.send('read one twice'), 'Done.')
+        self.assertEqual(tools.invoke.call_count, 2)
+        third = chat.model.call_args_list[2].args[0]
+        tool_text = [message.get('content') or '' for message in third if message.get('role') == 'tool']
+        self.assertTrue(any('Same result as step 0' in text for text in tool_text))
+        self.assertEqual(sum('one contents' in text for text in tool_text), 1)
+
+    def test_dynamic_and_side_effect_results_are_not_compacted(self):
+        peek = self.tool_call('web_fetch', '{"url":"https://example.invalid"}', 'peek')
+        responses = [self.message([peek]), self.message([peek]), self.message(content='Done.')]
+        chat, tools = self._tool_loop(responses, ('window text', '成功', 'page'),
+                                      tool_names=('web_fetch',))
+        self.assertEqual(chat.send('look twice'), 'Done.')
+        self.assertEqual(tools.invoke.call_count, 2)
+        third = chat.model.call_args_list[2].args[0]
+        tool_text = [message.get('content') or '' for message in third if message.get('role') == 'tool']
+        self.assertFalse(any('Same result as step' in text for text in tool_text))
+
+        write = self.tool_call('write_file', '{"path":"one.txt","content":"same"}', 'write')
+        responses = [self.message([write]), self.message([write]), self.message(content='Done.')]
+        chat, tools = self._tool_loop(responses, ('saved', '成功', 'one.txt'),
+                                      tool_names=('write_file',))
+        self.assertEqual(chat.send('write twice'), 'Done.')
+        third = chat.model.call_args_list[2].args[0]
+        tool_text = [message.get('content') or '' for message in third if message.get('role') == 'tool']
+        self.assertEqual(sum('saved' in text for text in tool_text), 2)
+
+    def test_no_progress_nudge_after_two_empty_batches(self):
+        call = self.tool_call('read_text_file', '{"path":"one.txt"}', 'one')
+        responses = [self.message([call]), self.message([call]), self.message([call]),
+                     self.message(content='Done.')]
+        chat, tools = self._tool_loop(responses, ('one contents', '成功', 'one.txt'))
+        self.assertEqual(chat.send('keep reading'), 'Done.')
+        self.assertEqual(tools.invoke.call_count, 3)
+        fourth = chat.model.call_args_list[3].args[0]
+        self.assertTrue(any('No new information in the last two tool batches' in (message.get('content') or '')
+                            for message in fourth if message.get('role') == 'system'))
+
+    def test_same_failure_is_marked_instead_of_repeating_the_full_error(self):
+        call = self.tool_call('read_text_file', '{"path":"one.txt"}', 'one')
+        responses = [self.message([call]), self.message([call]), self.message(content='Done.')]
+        chat, tools = self._tool_loop(responses, ('boom', '出错', 'one.txt'))
+        self.assertEqual(chat.send('try the same read'), 'Done.')
+        self.assertEqual(tools.invoke.call_count, 2)
+        second = chat.model.call_args_list[2].args[0]
+        tool_text = [message.get('content') or '' for message in second if message.get('role') == 'tool']
+        self.assertTrue(any('Same failure as step 0' in text for text in tool_text))
+
     def test_first_self_preview_shows_tools_and_capability_notice(self):
         tools = SimpleNamespace(
             tools=[SimpleNamespace(name='read_text_file', description='Read', inputSchema={})],

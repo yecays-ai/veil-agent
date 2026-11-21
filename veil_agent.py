@@ -43,6 +43,16 @@ MIN_TOKEN_CALIBRATION_BYTES = 16_384
 MESSAGE_FRAMING_BYTES = 16
 MIN_PLAUSIBLE_USAGE_RATIO = 0.05
 MAX_PLAUSIBLE_USAGE_RATIO = 1.0
+# Only deterministic read-only tools are compacted when a repeat returns the exact same result.
+# Every call still executes, so a changed file/window/page is never hidden behind a stale cache.
+LOOP_DEDUP_TOOLS = frozenset({
+    'read_text_file', 'read_multiple_files', 'list_directory', 'list_directory_with_sizes',
+    'directory_tree', 'search_files', 'get_file_info', 'lab_file_digest', 'stickers',
+    'memory_read', 'memory_catalog', 'memory_history', 'autonomy_history', 'capability_history',
+    'long_task_status', 'check_the_quest', 'read_the_notes', 'search_chat_history',
+    'desktop_list', 'desktop_find_file', 'desktop_read_text_file', 'github_read',
+})
+LOOP_MESSAGE_TOOLS = frozenset({'send_message', 'stay_silent', 'reply_later'})
 PHOTO_PLACEHOLDER = '[Lan sent a photo]'
 PHOTO_MIME_TYPES = {'image/png', 'image/jpeg', 'image/gif', 'image/webp'}
 MAX_PHOTO_BYTES = 5 * 1024 * 1024
@@ -5141,6 +5151,10 @@ class Chat:
         result_summaries = {}
         result_call_ids = {}
         masked_tool_messages = set()
+        loop_result_history = {}
+        loop_failure_history = {}
+        no_progress_batches = 0
+        no_progress_nudges = 0
 
 
         def log_tool(name, path, state, call_id=None, detail=None, **metadata):
@@ -6043,6 +6057,8 @@ class Chat:
                         final = mixed_sent_messages[-1]
                         break
                     raise RequestFailed(refusal)
+                batch_new_info = False
+                sent_in_this_step = False
                 for call_index, call in enumerate(message.tool_calls):
                     if autonomy and autonomy_tool_steps >= autonomy_tool_limit:
                         self.autonomy_step_limited = True
@@ -6095,6 +6111,47 @@ class Chat:
                         self.investigation.record(checkpoint_goal, request_id, call.function.name, args,
                                                   execution.state, execution.summary, execution.result,
                                                   checkpoint_resuming, mcp_side_effect, checkpoint_name)
+                    args_hash = tool_arguments_hash(call.function.arguments)
+                    result_hash = stable_hash(execution.result)
+                    result_key = (canonical_name or call.function.name, args_hash)
+                    previous_results = loop_result_history.setdefault(result_key, [])
+                    previous = next((item for item in previous_results
+                                     if item.get('hash') == result_hash), None)
+                    previous_failure = loop_failure_history.get(result_key)
+                    duplicate_result = bool(previous and previous.get('message') in loop_messages
+                                            and '较早的工具结果已缩短' not in str(
+                                                previous['message'].get('content') or ''))
+                    same_failure = (execution.state != '成功'
+                                    and (duplicate_result or previous_failure == result_hash))
+                    compact_duplicate = (duplicate_result and execution.state == '成功'
+                                         and canonical_name in LOOP_DEDUP_TOOLS)
+                    compact = compact_duplicate or same_failure
+                    if canonical_name in LOOP_MESSAGE_TOOLS:
+                        compact = False
+                    dedup_metadata = {}
+                    log_result_hash = result_hash
+                    if compact:
+                        if compact_duplicate:
+                            marker = (f'Same result as step {previous["step"]}; no new information. '
+                                      'Do not repeat unless the state changes.')
+                            duplicate_state = '重复结果'
+                            dedup_metadata = {'deduplicated': True,
+                                              'duplicate_of_step': previous['step']}
+                        else:
+                            marker = (f'Same failure as step {previous.get("step") if previous else "earlier"}; '
+                                      'change the arguments or stop.')
+                            duplicate_state = '重复失败'
+                            dedup_metadata = {'deduplicated': True,
+                                              'duplicate_of_step': previous.get('step') if previous else None}
+                        execution = _ToolExecution(
+                            marker, execution.state, execution.summary,
+                            checkpoint_verified=execution.checkpoint_verified,
+                            activity_detail=execution.activity_detail,
+                            failure_detail=execution.failure_detail)
+                    elif execution.state == '成功' and canonical_name in LOOP_MESSAGE_TOOLS:
+                        batch_new_info = True
+                    elif not duplicate_result and not same_failure:
+                        batch_new_info = True
                     state = execution.state
                     if canonical_name == 'send_message' and state == '成功' and self.sent_messages:
                         mixed_sent_messages.append(self.sent_messages[-1])
@@ -6103,6 +6160,15 @@ class Chat:
                         work_since_message = True
                     display_detail, result_state = append_tool_result(
                         call, execution, next_offered)
+                    if compact:
+                        result_state = duplicate_state
+                    elif not duplicate_result and not same_failure:
+                        loop_result_history.setdefault(result_key, []).append(
+                            {'hash': result_hash, 'step': step, 'message': loop_messages[-1]})
+                        if state == '成功':
+                            loop_failure_history.pop(result_key, None)
+                        else:
+                            loop_failure_history[result_key] = result_hash
                     log_detail = execution.result
                     if canonical_name in DESKTOP_FILE_READ_TOOL_NAMES:
                         log_detail = f'{canonical_name}: {execution.summary} ({state})'
@@ -6129,8 +6195,8 @@ class Chat:
                                              log_tool(name, path, state, call_id=call_id,
                                                       detail=log_detail,
                                                       arguments_hash=tool_arguments_hash(call.function.arguments),
-                                                      result_hash=stable_hash(execution.result),
-                                                      **metadata, **activity_metadata))
+                                                      result_hash=log_result_hash,
+                                                      **dedup_metadata, **metadata, **activity_metadata))
                     result_summaries[call.id] = summaries[-1]
                     result_call_ids[call.id] = call_id
                     if autonomy and self.autonomy_should_yield and self.autonomy_should_yield():
@@ -6138,6 +6204,18 @@ class Chat:
                         self.budget.settle(next_reservation, next_cfg, 0, 0, 0)
                         final = 'Autonomous activity yielded after this step to let chat or a control action proceed.'
                         break
+                if sent_in_this_step or mixed_sent_messages or batch_new_info:
+                    no_progress_batches = 0
+                else:
+                    no_progress_batches += 1
+                if (not autonomy and no_progress_batches >= 2 and no_progress_nudges < 2
+                        and step + 1 < max_steps and not self.turn_done
+                        and not self.user_stop.is_set() and not self.autonomy_interrupted
+                        and not self.autonomy_step_limited):
+                    loop_messages.append({'role': 'system',
+                                          'content': prompts.text('chat.loop.no_progress')})
+                    no_progress_batches = 0
+                    no_progress_nudges += 1
                 if self.autonomy_interrupted or self.autonomy_step_limited:
                     pending_image_messages.clear()
                     break

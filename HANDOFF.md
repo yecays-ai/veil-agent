@@ -1,5 +1,12 @@
 # HANDOFF
 
+## 工单 416 交接（PR2：重复工具结果与无进展循环）
+- 范围：只读工具同一轮内完全相同的返回压缩成短标记；相同参数重复失败压缩；普通聊天连续两批无新信息注入一次收束提示（最多两次）；自主活动不加提示。
+- 安全：每次工具仍真实执行并比较最新结果，不使用旧缓存；动态/有副作用工具不压缩。
+- 未做：P2-1 首气泡提示、P2-2 工具文字 trace 仍延后。
+- 测试：test_tools 84、test_chat 107、test_autonomy 52、test_tool_failures 19、test_request_snapshots 9、test_model_settings 44 通过；全量见 PR。
+- 下一步：Lan 审核 PR；通过后再评估 P2-1/P2-2 或 PR3。
+
 ## 工单 414 交接（PR1：观测口径与模型协议）
 - 范围：预检快照 sent=false 不计数；usage 合理性校验（不可信不校准、不推进上下文基线）；每条消息 framing 256→16 字节；真实调用记录 latency/completion/finish/usage_status；工具参数/结果哈希；模型按 reasoning_field 显式读取/回传，不做隐式别名。
 - 不碰：人设、记忆、自主活动权限、多气泡；未做 P1 无进展检测/工具去重（PR2）。
