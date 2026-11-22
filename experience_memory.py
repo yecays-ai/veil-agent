@@ -952,7 +952,7 @@ class ExperienceMemory:
         message_ids = list(dict.fromkeys(item['id'] for item in batch
                                          if isinstance(item.get('id'), str) and item['id']))
         source = {'kind': 'chat', 'from': batch[0]['time'].isoformat(), 'to': last['time'].isoformat(),
-                  'message_ids': message_ids, 'count': len(batch)}
+                  'message_ids': message_ids, 'count': len(message_ids)}
         bits = [item['id'] if int(item.get('chunks') or 1) == 1
                 else f"{item['id']}#{int(item.get('chunk') or 0)}"
                 for item in batch if isinstance(item.get('id'), str) and item['id']]

@@ -793,6 +793,22 @@ class BackgroundFlowTests(Fixture):
         self.assertEqual(entries[0]['text'], stages[0]['text'])
 
 
+    def test_a_chunked_chat_message_reports_one_source_message(self):
+        clock = ['2026-11-20T09:00:00+08:00']
+        feature = self.make_feature(clock)
+        body = 'A fictional long message. ' + ('detail ' * 500) + 'TAIL-UNIQUE'
+        self.store.append('fake/chat.jsonl', {'message_id': 'u-long', 'role': 'user', 'content': body,
+                                              'time': '2026-11-20T10:00:00+08:00'})
+        self.store.append('fake/chat.jsonl', {'message_id': 'a-short', 'role': 'assistant',
+                                              'content': 'An answer.', 'time': '2026-11-20T10:01:00+08:00'})
+        clock[0] = '2026-11-20T11:00:00+08:00'
+        self.model.entries = [{'title': 'The long message',
+                               'text': '11月20日他说了一段很长的话，我记下了。'}]
+        self.assertEqual(feature.run_if_due(), 'written')
+        stage = self.events.stages()[0]
+        self.assertEqual(stage['source']['count'], 2)       # u-long is one message, not its chunks
+        self.assertEqual(stage['source']['message_ids'], ['u-long', 'a-short'])
+
     def test_a_closed_experience_cannot_block_the_batch_forever(self):
         clock = ['2026-11-20T09:00:00+08:00']
         feature = self.make_feature(clock)
