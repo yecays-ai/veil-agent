@@ -365,6 +365,10 @@ class EventMemory:
             f'{title or ""}|{text}|{key}'.encode('utf-8')).hexdigest()[:16]
         existing = self._stage_rows().get(stage_id)
         if existing is not None and existing.get('state') == 'committed':
+            if event_id and existing.get('event_id') != event_id:
+                # The same source batch was already recorded in another experience; never silently
+                # pretend the explicit target was used (ticket 421).
+                raise ValueError('stage already belongs to another event')
             event = self.events().get(existing.get('event_id')) or {}
             if interpretation and existing.get('interpretation') != interpretation:
                 self.store.append(self.stages_path, {**existing, 'state': 'committed',

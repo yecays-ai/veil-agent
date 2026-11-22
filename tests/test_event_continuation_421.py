@@ -264,6 +264,16 @@ class ContinuationTests(Fixture):
         self.assertEqual(len(self.events.stages(event_id)), 2)
         self.assertIn('desk', self.events.events()[event_id].get('story') or '')
 
+    def test_a_recorded_stage_cannot_be_repointed_to_another_experience(self):
+        self.events.model = None
+        first = self.events.record('A fictional stage.', 'One', source_key='chat:one')
+        other = self.events.record('A different fictional stage.', 'Two', source_key='chat:two')
+        self.assertNotEqual(first['event_id'], other['event_id'])
+        with self.assertRaises(ValueError):
+            self.events.record('A fictional stage.', 'One', event_id=other['event_id'], source_key='chat:one')
+        self.assertEqual(len(self.events.stages(first['event_id'])), 1)
+        self.assertEqual(len(self.events.stages(other['event_id'])), 1)
+
     def test_a_retry_of_the_same_source_batch_is_one_stage_even_across_midnight(self):
         source = {'kind': 'chat', 'from': '2026-11-20T10:00:00+08:00', 'to': '2026-11-20T10:05:00+08:00',
                   'message_ids': ['m-1', 'm-2'], 'count': 2}

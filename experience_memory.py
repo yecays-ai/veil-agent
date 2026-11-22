@@ -676,7 +676,8 @@ class ExperienceMemory:
         except Exception:
             pass
         self.store.append(self.path, {'kind': 'entry', 'memory_id': memory_id, 'title': entry['title'],
-                                      'text': entry['text'], 'merged': kind == '合并', 'covers': span, 'continues': continues,
+                                      'text': entry['text'], 'merged': kind == '合并', 'covers': span,
+                                      'continues': continues, 'source_key': source_key, 'source': source,
                                       'time': self.budget.clock()})
         return memory_id
 
