@@ -307,7 +307,7 @@ def build_plan(final, data_dir, role='peter'):
     withdrawn = final.get('withdrawn') or []
     preview = {
         'target': str(data_dir),
-        'role': role,
+        'character': role,
         'events': len(plan),
         'source_positions': sum(len(e.get('sources') or []) for e in events),
         'source_unique': len({i for e in events for i in _source_ids(e)}),
@@ -415,7 +415,7 @@ def apply_plan(plan, data_dir, role='peter'):
     manifest = {
         'version': IMPORT_VERSION, 'story_source': STORY_SOURCE,
         'imported_at': datetime.now().astimezone().isoformat(),
-        'final_sha256': plan['final_sha256'], 'role': role,
+        'final_sha256': plan['final_sha256'], 'character': role,
         'event_count': len(plan['items']),
         'source_positions': plan['preview']['source_positions'],
         'source_unique': plan['preview']['source_unique'],
