@@ -28,9 +28,9 @@ from recall_relevance import all_vectors, cosine
 
 COST_CATEGORY = 'recall_judge'
 COST_ACCOUNTING = 'recall-judge'
-MAX_OUTPUT_TOKENS = 120
+MAX_OUTPUT_TOKENS = 200
 QUERY_CHARS = 600
-CARD_CHARS = 240
+CARD_CHARS = 300
 SKIPPED_TYPES = ('feel', 'plan', 'letter')
 
 DEFAULTS = {'enabled': True, 'timeout_seconds': 4.0, 'ombre_candidates': 8, 'vector_candidates': 8,
@@ -86,17 +86,30 @@ def card_text(raw):
             else:
                 inside = False
     keywords = re.search(r'(?:关键词|检索词)[：:](.*)', body)
-    opening = ' '.join(body.split())[:160]
+    plain = ' '.join(body.split())
+    opening = plain[:150]
     closing = ''
-    if body.strip():
-        tail = ' '.join(body.split())[-120:]
+    if plain:
+        tail = plain[-130:]
         if len(tail) > 24 and tail not in opening:
             closing = '…ending: ' + tail
-    parts = [(title.group(1).strip().strip('\'"')[:70] if title else ''),
-             (keywords.group(1).strip()[:70] if keywords else ''),
-             closing[:110],
-             ' '.join(tags)[:40]]
+    parts = [(title.group(1).strip().strip('\'"')[:60] if title else ''),
+             (keywords.group(1).strip()[:60] if keywords else ''),
+             ('…opening: ' + opening[:90]) if opening else '',
+             closing[:130],
+             ' '.join(tags)[:30]]
     return ' | '.join(part for part in parts if part)[:CARD_CHARS]
+
+
+def labels_for(count):
+    """A..Z, then A2..Z2 etc. — always parseable, so 32 candidates never become punctuation."""
+    result = []
+    for index in range(max(0, int(count))):
+        if index < 26:
+            result.append(chr(65 + index))
+        else:
+            result.append(f'{chr(65 + (index - 26) % 26)}{(index - 26) // 26 + 2}')
+    return result
 
 
 def parse_choice(text, letters, max_picks=None):
@@ -326,7 +339,7 @@ class RecallJudge:
                 self._record('empty', started, candidates=0, picked=0)
                 return []
             order = sorted(candidates, key=lambda item: hashlib.md5((query + item[0]).encode()).hexdigest())
-            letters = {chr(65 + index): key for index, (key, _) in enumerate(order)}
+            letters = {label: key for label, (key, _) in zip(labels_for(len(order)), order)}
             lines = []
             for letter, key in letters.items():
                 lines.append(f'{letter}) {card_text(self._raw(key) or self.memory.raw_content_for(key))}')

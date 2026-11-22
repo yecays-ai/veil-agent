@@ -27,11 +27,21 @@ from veil_agent import Budget, Character, Store  # noqa: E402
 
 
 class ProbeBackend:
-    """A fake Ombre: one search returns the fixed hit ids; the rest of the pool is the directory."""
+    """A fake Ombre: one search returns the fixed hit ids with the bodies actually written to disk.
 
-    def __init__(self, hit_ids):
+    Reading the real files matters: a probe that returns short placeholders measures placeholder
+    budgets, not the long-story continuation the ticket is about."""
+
+    def __init__(self, vault, hit_ids):
+        self.vault = Path(vault)
         self.hit_ids = list(hit_ids)
         self.calls = 0
+
+    def _body(self, key):
+        for path in self.vault.glob(f'{key}*.md'):
+            raw = path.read_text(encoding='utf-8')
+            return raw.split('\n---\n', 1)[-1].strip()
+        return f'probe body for {key}'
 
     def call(self, name, args):
         self.calls += 1
@@ -40,7 +50,7 @@ class ProbeBackend:
         if name == 'feel':
             return ''
         if name == 'breath_search':
-            body = '\n'.join(f'[bucket_id:{key}]\nprobe body for {key}' for key in self.hit_ids)
+            body = '\n'.join(f'[bucket_id:{key}]\n{self._body(key)}' for key in self.hit_ids)
             ids = json.dumps({'bucket_ids': self.hit_ids})
             return body + '\n=== ombre:result-ids ===\n```json\n' + ids + '\n```'
         raise AssertionError(name)
@@ -55,7 +65,9 @@ def write_vault(vault, count, hit_ids):
         key = f'm{index:05d}'
         body = ' '.join(rng.choice(words) for _ in range(24))
         if key in hit_ids:
-            body = ('A long fictional story. ' * 40) + ' the unique ending fact is at the very end.'
+            body = ('\n\n'.join(
+                f'Paragraph {part} of the long fictional story about the little brass lamp. ' * 4
+                for part in range(4)) + '\n\nThe unique ending fact is at the very end of this story.')
         (vault / f'{key}.md').write_text(
             f"---\nid: {key}\ntitle: 'Probe {index}'\ncreated: '2026-10-{(index % 28) + 1:02d}T10:00:00'\n"
             f"importance: {rng.randint(1, 9)}\ntype: dynamic\n---\n{body}", encoding='utf-8')
@@ -74,7 +86,7 @@ def probe(count):
                       'base_url': 'https://example.invalid/v1',
                       'recall': {'cooldown_turns': 0, 'random_chance': 0}}
         cfg = Character('probe', 'Probe', 'fictional persona', 20, 1024, provider, 'fake', memory_cfg)
-        backend = ProbeBackend(hit_ids)
+        backend = ProbeBackend(vault, hit_ids)
         tracemalloc.start()
         started = time.perf_counter()
         memory = Memory(cfg, store, Budget(store), None, backend)

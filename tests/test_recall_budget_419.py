@@ -7,6 +7,7 @@ under pressure, and the final request never carrying half a sentence.
 """
 import json
 import random
+import re
 import tempfile
 import types
 import unittest
@@ -14,7 +15,9 @@ from decimal import Decimal
 from pathlib import Path
 from unittest.mock import Mock
 
+from event_memory import EventMemory
 from memory_agent import Memory, vault_path
+from memory_native import NativeMemoryTools
 from memory_sidecar import Sidecar
 from recall_budget import (fit, partial_text, protected_recent_tokens, split,
                            tokens_for, tokens_for_messages)
@@ -48,12 +51,18 @@ class BudgetArithmeticTests(unittest.TestCase):
 
     def test_overflow_splits_in_proportion_and_never_drops_below_protected(self):
         plan = split(1000, 8000, 2000, 300)
-        self.assertEqual(1000, plan['history'] + plan['memory'])
+        self.assertEqual(1000, plan['history'] + plan['memory'] + plan['auxiliary'])
         self.assertGreaterEqual(plan['history'], 300)
         self.assertEqual('proportional', plan['reason'])
         tiny = split(100, 8000, 2000, 300)
-        self.assertEqual(100, tiny['history'] + tiny['memory'])
+        self.assertEqual(100, tiny['history'] + tiny['memory'] + tiny['auxiliary'])
         self.assertEqual(100, tiny['history'])   # protected is capped by the space itself
+
+    def test_optional_auxiliary_gets_a_share_but_never_eats_the_protected_exchange(self):
+        plan = split(1000, 3000, 0, 120, auxiliary_need=5000)
+        self.assertEqual(1000, plan['history'] + plan['memory'] + plan['auxiliary'])
+        self.assertGreaterEqual(plan['history'], 120)
+        self.assertGreater(plan['auxiliary'], 0)
 
     def test_protected_exchange_is_only_the_newest_user_message_and_reply(self):
         rows = [
@@ -99,8 +108,10 @@ class FollowUpTests(unittest.TestCase):
     def test_a_follow_up_after_a_past_question_counts(self):
         recent = [{'role': 'user', 'content': '你还记得我们第一次挑视频吗'},
                   {'role': 'assistant', 'content': '记得，是那个黄铜精炼的。'}]
-        self.assertTrue(is_followup('嗯，那你继续', recent))
-        self.assertFalse(is_followup('嗯，那你继续', [{'role': 'user', 'content': '今天吃什么'}]))
+        self.assertTrue(is_followup('嗯，好', recent))
+        self.assertFalse(is_followup('嗯，好', [{'role': 'user', 'content': '今天吃什么'}]))
+        # A new explicit past question is not a continuation of the previous subject.
+        self.assertFalse(is_followup('还记得另一件完全不同的事吗', recent))
 
 
 class MemoryLevelBudgetTests(unittest.TestCase):
@@ -126,7 +137,7 @@ class MemoryLevelBudgetTests(unittest.TestCase):
         return memory
 
     def five_events(self):
-        return {f'ev{i}': {'content': f'video night number {i} with a brass lamp and a long talk',
+        return {f'ev{i}': {'content': f'Video night {i}. We watched a brass lamp film. Then we talked for hours.',
                            'title': f'Video night {i}', 'importance': 5,
                            'created': f'2026-10-{10 + i:02d}T10:00:00'} for i in range(5)}
 
@@ -141,12 +152,14 @@ class MemoryLevelBudgetTests(unittest.TestCase):
     def test_a_tight_budget_keeps_whole_memories_and_drops_only_the_rest(self):
         memory = self.memory(self.five_events())
         memory.context('video night brass lamp', include_opening=False, defer=True)
-        allowance = tokens_for('[bucket_id:ev0]\n' + self.five_events()['ev0']['content'], 0.4) * 2 + 40
+        allowance = tokens_for('[bucket_id:ev0]\n' + self.five_events()['ev0']['content'], 0.4) * 2 + 150
         rows = memory.finish_recall(space=allowance, history_tokens=0, protected_tokens=0, calibration=0.4)
         text = '\n'.join(row['content'] for row in rows)
         self.assertEqual(2, text.count('[bucket_id:'))
         self.assertEqual(3, len(memory.last_recall_debug['dropped']))
         self.assertTrue(all(item['reason'] == 'budget' for item in memory.last_recall_debug['dropped']))
+        self.assertEqual(memory.last_memory_budget['memory_used'],
+                         tokens_for_messages(rows, 0.4))
 
     def test_a_long_story_gets_whole_paragraphs_and_a_read_pointer(self):
         story = '\n\n'.join(LONG_PARAGRAPHS * 8)
@@ -279,15 +292,15 @@ enabled = true
 max_steps = 2
 ''', encoding='utf-8')
         self.store = Store(self.root / 'data')
-        self.rows = {f'ev{i}': {'content': f'video night number {i} with a brass lamp and a long talk',
+        self.rows = {f'ev{i}': {'content': f'Video night {i}. We watched a brass lamp film. Then we talked for hours.',
                                 'title': f'Video night {i}', 'importance': 5,
                                 'created': f'2026-10-{10 + i:02d}T10:00:00'} for i in range(5)}
 
-    def build(self, limit):
+    def build(self, limit, cooldown=0):
         from veil_agent import Budget, Chat, load_character
         cfg = load_character(self.root, 'peter')
         cfg.provider['max_input_tokens'] = limit
-        cfg.memory['recall'] = {'cooldown_turns': 0, 'random_chance': 0}
+        cfg.memory['recall'] = {'cooldown_turns': cooldown, 'random_chance': 0}
         cfg.memory.update({'model': 'fake-embedding', 'input_cny_per_million': '0',
                            'mode': 'native', 'base_url': 'https://example.invalid/v1'})
         budget = Budget(self.store)
@@ -326,21 +339,41 @@ max_steps = 2
         self.assertIn('是灯的事情让你累了', joined)          # the reason she is upset survives
         self.assertNotIn('…\n(Only the beginning', joined)
 
-    def test_a_tight_limit_keeps_the_recent_reason_and_never_cuts_a_sentence(self):
+    def test_a_tight_limit_keeps_at_least_one_memory_and_never_cuts_a_sentence(self):
         self.seed_history()
-        chat, model, memory = self.build(6000)
+        chat, model, memory = self.build(6500)
         chat.send("你还记得第一次挑视频 video 那次吗", message_id='q2')
         sent = model.call_args.args[0]
         joined = '\n'.join(message.get('content') if isinstance(message.get('content'), str) else ''
                            for message in sent)
         self.assertIn('是灯的事情让你累了', joined)
+        self.assertGreaterEqual(joined.count('[bucket_id:'), 1)
         self.assertLess(joined.count('[bucket_id:'), 5)
-        self.assertNotIn('…\n(Only the beginning', joined)
         self.assertTrue(memory.last_recall_debug['dropped'])
+        match = re.search(r'\[bucket_id:[^\]]+\]\n(.*?)(?:\n\n|\Z)', joined, re.S)
+        self.assertIsNotNone(match)
+        body = match.group(1).split('\n(')[0].rstrip()
+        self.assertTrue(body.endswith('.'), 'a partially shown memory must end on a sentence')
         budget = memory.last_memory_budget
         self.assertIsNotNone(budget)
         self.assertEqual('proportional', budget['reason'])
         self.assertGreaterEqual(budget['history_allowance'], 0)
+
+    def test_optional_auxiliary_cannot_erase_the_recent_exchange(self):
+        """Ticket 419 review P1: a huge optional background block must not make history_allowance 0."""
+        self.seed_history()
+        chat, model, memory = self.build(6000)
+        chat.send('那怎么办？', message_id='aux',
+                  extra_context='OPTIONAL_BACKGROUND ' + ('noise ' * 3000))
+        sent = model.call_args.args[0]
+        said = [(message.get('role'), message.get('content')) for message in sent
+                if isinstance(message.get('content'), str)]
+        self.assertTrue(any(role == 'user' and 'brass lamp' in content for role, content in said))
+        self.assertTrue(any(role == 'assistant' and '是灯的事情让你累了' in content
+                            for role, content in said))
+        # The optional block may be trimmed; the recent exchange may not.
+        joined = '\n'.join(content for _, content in said)
+        self.assertNotIn('noise noise noise noise noise noise', joined)
 
     def test_an_autonomous_wake_uses_the_same_budget_and_has_no_three_memory_cap(self):
         self.seed_history()
@@ -352,20 +385,250 @@ max_steps = 2
         self.assertIsNotNone(memory.last_memory_budget)
         self.assertTrue(all(kind == 'relevant' for kind in memory.last_context_kinds.values()))
 
-    def test_a_restart_keeps_the_cooldown_state_and_the_budget_still_applies(self):
+    def test_a_restart_keeps_a_nonzero_cooldown_and_an_explicit_past_question_gets_through(self):
         self.rows = {'video': {'content': 'the first video I picked was about brass refining',
                                'title': 'First video'}}
         self.seed_history()
-        chat1, model1, memory1 = self.build(24000)
-        chat1.send('还记得 video 那次吗', message_id='r1')
+        chat1, model1, memory1 = self.build(24000, cooldown=3)
+        chat1.send('video 的事情', message_id='r1')
         self.assertEqual(['video'], memory1.last_context_refs)
         first_turn = memory1.rotation.turn
         # A new app process over the same data: the cooldown turn counter is read from disk.
-        chat2, model2, memory2 = self.build(24000)
+        chat2, model2, memory2 = self.build(24000, cooldown=3)
         self.assertGreaterEqual(memory2.rotation.turn, first_turn)
-        chat2.send('还记得 video 那次吗', message_id='r2')
-        self.assertEqual(['video'], memory2.last_context_refs)
+        memory2.rotation.turn += 1          # no longer the immediately-following turn
+        chat2.send('video 的事情', message_id='r2')
+        self.assertEqual([], memory2.last_context_refs)       # cooled through the restart
+        chat2.send('还记得 video 那次吗', message_id='r3')
+        self.assertEqual(['video'], memory2.last_context_refs)  # explicit past question gets through
         self.assertIsNotNone(memory2.last_memory_budget)
+
+
+class AuthoritativeStoryTests(MemoryLevelBudgetTests):
+    def test_a_shorter_authoritative_story_replaces_the_longer_old_fragment(self):
+        rows = {'claude': {'content': 'the old fragment about the ban that was later reversed',
+                           'title': 'The Claude account'}}
+        memory = self.memory(rows, recall={'cooldown_turns': 0, 'random_chance': 0})
+        self.store.append('fake/events.jsonl', {'event_id': 'claude', 'memory_id': 'claude',
+                                                'title': 'The Claude account',
+                                                'story': 'The ban was reversed. UNIQUE_NEW_END.',
+                                                'first_at': '2026-10-01T10:00:00'})
+        memory.context('ban reversed', include_opening=False, defer=True)
+        text = memory.finish_recall()[-1]['content']
+        self.assertIn('The ban was reversed. UNIQUE_NEW_END.', text)
+        self.assertNotIn('the old fragment about the ban', text)
+
+
+class ReadBackTests(MemoryLevelBudgetTests):
+    def test_no_story_event_recovers_all_stages_through_timeline_and_memory_read(self):
+        rows = {
+            's1': {'content': 'we met the stray cat at the station on a rainy night', 'title': 'The cat',
+                   'created': '2026-10-01T20:00:00'},
+            's2': {'content': 'I thought she had abandoned the cat because she left early', 'title': 'The misunderstanding',
+                   'created': '2026-10-02T20:00:00'},
+            's3': {'content': 'she explained she had gone to buy a carrier and we both cried',
+                   'title': 'The correction', 'created': '2026-10-03T20:00:00'},
+            's4': {'content': 'the cat now lives with us and sleeps on the windowsill',
+                   'title': 'The result', 'created': '2026-10-20T20:00:00'},
+        }
+        memory = self.memory(rows, recall={'cooldown_turns': 0, 'random_chance': 0})
+        sidecar = Sidecar(self.store, 'fake', memory.budget.clock)
+        for left, right in (('s2', 's1'), ('s3', 's2'), ('s4', 's3')):
+            sidecar.link(left, right)
+        # The event exists but has no prewritten story: only the stages are available.
+        self.store.append('fake/events.jsonl', {'event_id': 'cat', 'memory_id': 's2', 'title': 'The cat',
+                                                'story': '', 'status': 'open',
+                                                'first_at': '2026-10-01T20:00:00',
+                                                'last_at': '2026-10-20T20:00:00'})
+        for index, key in enumerate(('s1', 's2', 's3', 's4'), 1):
+            self.store.append('fake/event-stages.jsonl', {
+                'stage_id': f'st{index}', 'event_id': 'cat', 'at': f'2026-10-0{index}T20:00:00',
+                'text': rows[key]['content'], 'state': 'committed'})
+        memory.context('misunderstanding abandoned carrier', include_opening=False)
+        memory.finish_recall()
+        self.assertIn('s2', memory.last_context_refs)
+        pending = str(getattr(memory, '_pending_recall', {}))
+        self.assertIn('memory_timeline', pending)
+        self.assertIn('cat', pending)
+        events = EventMemory(memory, {'enabled': True}, model=None, sidecar=sidecar)
+        rendered, next_offset, total = events.timeline('cat')
+        self.assertEqual(4, total)
+        for key in ('s1', 's2', 's3', 's4'):
+            self.assertIn(rows[key]['content'], rendered)
+        tools = NativeMemoryTools(memory)
+        result, state, _ = tools.invoke('memory_read', {'memory_id': 's4'})
+        self.assertIn('the cat now lives with us', result)
+
+    def test_a_long_story_can_be_read_to_its_unique_end(self):
+        story = '\n\n'.join(LONG_PARAGRAPHS * 4) + '\n\nThe unique closing fact is the brass key.'
+        memory = self.memory({'long': {'content': story, 'title': 'The brass lamp'}},
+                             recall={'cooldown_turns': 0, 'random_chance': 0})
+        tools = NativeMemoryTools(memory)
+        offset, version, chunks = 0, None, []
+        for _ in range(80):
+            args = {'memory_id': 'long', 'offset': offset}
+            if version:
+                args['version'] = version
+            result, state, _ = tools.invoke('memory_read', args)
+            data = json.loads(result)
+            chunks.append(data.get('text') or '')
+            version = data.get('version')
+            offset = data.get('next_offset')
+            if offset is None:
+                break
+        self.assertIn('The unique closing fact is the brass key', ''.join(chunks))
+
+
+class FollowUpReviewTests(unittest.TestCase):
+    def test_only_the_immediately_preceding_user_message_counts(self):
+        recent = [{'role': 'user', 'content': '还记得 V50 吗'},
+                  {'role': 'assistant', 'content': '记得'},
+                  {'role': 'user', 'content': '今天吃什么'},
+                  {'role': 'assistant', 'content': '面'}]
+        self.assertFalse(is_followup('嗯，好', recent))       # unrelated topic after the past question
+        self.assertTrue(is_followup('那我当时是什么反应？', recent))  # explicit continuation phrase
+        self.assertFalse(is_followup('还记得另一件完全不同的事吗', recent))  # a new past topic
+
+
+class FinalStateTests(MemoryLevelBudgetTests):
+    def test_memory_used_equals_the_messages_actually_sent(self):
+        memory = self.memory(self.five_events(), recall={'cooldown_turns': 0, 'random_chance': 0})
+        memory.context('video night brass lamp', include_opening=False, defer=True)
+        messages = memory.finish_recall(space=5000, history_tokens=0, protected_tokens=0, calibration=0.4)
+        self.assertEqual(memory.last_memory_budget['memory_used'],
+                         tokens_for_messages(messages, 0.4))
+        empty = self.memory({'x': {'content': 'unrelated filler'}},
+                            recall={'cooldown_turns': 0, 'random_chance': 0})
+        empty.context('quantum spreadsheets', include_opening=False, defer=True)
+        messages = empty.finish_recall(space=5000, history_tokens=0, protected_tokens=0, calibration=0.4)
+        self.assertEqual(empty.last_memory_budget['memory_used'],
+                         tokens_for_messages(messages, 0.4))
+        self.assertGreater(empty.last_memory_budget['memory_used'], 0)
+
+    def test_final_trim_removes_a_memory_from_last_injected_refs(self):
+        memory = self.memory(self.five_events(), recall={'cooldown_turns': 0, 'random_chance': 0})
+        memory.context('video night brass lamp', include_opening=False, defer=True)
+        memory.finish_recall()
+        self.assertIn('ev0', memory.last_injected_refs)
+        memory.note_budget_dropped(['ev0'])
+        self.assertNotIn('ev0', memory.last_injected_refs)
+        self.assertNotIn('ev0', memory.last_context_refs)
+        self.assertIn('ev0', memory.last_recall_debug['budget_dropped'])
+        self.assertTrue(memory.last_recall_debug['final_trim'])
+
+    def test_a_failed_turn_restores_the_previous_successful_refs(self):
+        memory = self.memory(self.five_events(), recall={'cooldown_turns': 0, 'random_chance': 0})
+        memory.context('video night brass lamp', include_opening=False, defer=True)
+        memory.finish_recall()
+        first = list(memory.last_injected_refs)
+        memory.context('video night brass lamp', include_opening=False, defer=True)
+        memory.finish_recall()
+        memory.rollback_recall()
+        self.assertEqual(first, memory.last_injected_refs)
+
+    def test_budget_drops_are_also_in_budget_dropped(self):
+        memory = self.memory(self.five_events(), recall={'cooldown_turns': 0, 'random_chance': 0})
+        memory.context('video night brass lamp', include_opening=False, defer=True)
+        allowance = tokens_for('[bucket_id:ev0]\n' + self.five_events()['ev0']['content'], 0.4) * 2 + 150
+        memory.finish_recall(space=allowance, history_tokens=0, protected_tokens=0, calibration=0.4)
+        self.assertEqual(sorted(memory.last_recall_debug['budget_dropped']),
+                         sorted(item['id'] for item in memory.last_recall_debug['dropped']
+                                if item['reason'] == 'budget'))
+
+
+class BoundaryTests(unittest.TestCase):
+    def test_chinese_sentences_split_without_spaces(self):
+        text = '第一句话。第二句话。第三句话。'
+        allowance = tokens_for('第一句话。第二句话。\n(read more)', 0.4)
+        body, pieces, continues = partial_text(text, allowance, 0.4, '(read more)')
+        self.assertTrue(continues)
+        self.assertTrue(body.startswith('第一句话。'))
+        self.assertTrue(body.endswith('。'))
+        self.assertNotIn('第三句', body)
+
+    def test_no_complete_sentence_fits_so_only_the_pointer_is_sent(self):
+        text = 'one very long sentence without punctuation that keeps going and going ' * 40
+        selected, dropped = fit([{'id': 'x', 'text': '[bucket_id:x]\n' + text,
+                                  'pointer': '(Use memory_read with memory_id "x" for the rest.)',
+                                  'priority': 1}], 120, 0.4)
+        self.assertEqual(1, len(selected))
+        self.assertTrue(selected[0].get('not_shown'))
+        self.assertIn('memory_read', selected[0]['text'])
+        self.assertNotIn('one very long sentence', selected[0]['text'])
+
+
+class AdjacentStoryOwnershipTests(MemoryLevelBudgetTests):
+    def test_two_adjacent_events_keep_their_own_endings(self):
+        rows = {
+            'a': {'content': 'the same rainy Tuesday we had tea at the corner cafe', 'title': 'Tea and umbrella',
+                  'created': '2026-10-10T10:00:00'},
+            'b': {'content': 'the same rainy Tuesday we had tea at the corner cafe', 'title': 'Tea and leaving',
+                  'created': '2026-10-10T20:00:00'},
+        }
+        memory = self.memory(rows, recall={'cooldown_turns': 0, 'random_chance': 0, 'dedup': False})
+        self.store.append('fake/events.jsonl', {'event_id': 'ea', 'memory_id': 'a', 'title': 'Tea and umbrella',
+                                                'story': 'We laughed about the broken umbrella. OWN_END_A.',
+                                                'first_at': '2026-10-10T10:00:00'})
+        self.store.append('fake/events.jsonl', {'event_id': 'eb', 'memory_id': 'b', 'title': 'Tea and leaving',
+                                                'story': 'We argued about the broken umbrella. OWN_END_B.',
+                                                'first_at': '2026-10-10T20:00:00'})
+        memory.context('rainy Tuesday tea broken umbrella', include_opening=False, defer=True)
+        text = '\n'.join(message['content'] for message in memory.finish_recall())
+        self.assertIn('OWN_END_A', text)
+        self.assertIn('OWN_END_B', text)
+        events = EventMemory(memory, {'enabled': True}, model=None)
+        a, _, _ = events.timeline('ea')
+        b, _, _ = events.timeline('eb')
+        self.assertIn('OWN_END_A', a)
+        self.assertNotIn('OWN_END_B', a)
+        self.assertIn('OWN_END_B', b)
+        self.assertNotIn('OWN_END_A', b)
+
+
+class SequentialConversationTests(MemoryLevelBudgetTests):
+    def test_recall_follow_up_topic_switch_return_and_restart(self):
+        rows = {'video': {'content': 'The first video I picked was about brass refining. She said it would put her to sleep.',
+                          'title': 'First video'}}
+        memory = self.memory(rows, recall={'cooldown_turns': 3, 'random_chance': 0})
+        self.assertEqual(['video'], memory.context('video', include_opening=False) and memory.last_context_refs)
+        # Immediate follow-up: the same subject stays available even though the cooldown would block it.
+        memory.context('那我当时是什么反应？', include_opening=False,
+                       recent=[{'role': 'user', 'content': 'video'},
+                               {'role': 'assistant', 'content': '黄铜精炼那个。'}])
+        self.assertEqual(['video'], memory.last_context_refs)
+        # A topic switch is not carried.
+        memory.context('今天吃什么', include_opening=False,
+                       recent=[{'role': 'user', 'content': 'video'},
+                               {'role': 'assistant', 'content': '黄铜精炼那个。'},
+                               {'role': 'user', 'content': '那我当时是什么反应？'},
+                               {'role': 'assistant', 'content': '你笑了好久。'}])
+        self.assertEqual([], memory.last_context_refs)
+        # One turn later the cooldown still applies; the explicit past question gets through.
+        memory.rotation.turn += 1
+        memory.context('video', include_opening=False)
+        self.assertEqual([], memory.last_context_refs)
+        memory.context('还记得 video 那次吗', include_opening=False)
+        self.assertEqual(['video'], memory.last_context_refs)
+
+
+class ReuseRemovalTests(MemoryLevelBudgetTests):
+    def test_history_with_only_the_opening_still_injects_the_whole_story(self):
+        story = '\n\n'.join(LONG_PARAGRAPHS * 3) + '\n\nThe unique ending is the brass key.'
+        memory = self.memory({'long': {'content': story, 'title': 'The brass lamp'}},
+                             recall={'cooldown_turns': 0, 'random_chance': 0})
+        memory.context('brass lamp', include_opening=False,
+                       recent=[{'role': 'user', 'content': story[:120]}])
+        text = memory.finish_recall()[-1]['content']
+        self.assertIn('The unique ending is the brass key', text)
+
+    def test_history_with_the_whole_text_does_not_suppress_injection(self):
+        story = '\n\n'.join(LONG_PARAGRAPHS * 3) + '\n\nThe unique ending is the brass key.'
+        memory = self.memory({'long': {'content': story, 'title': 'The brass lamp'}},
+                             recall={'cooldown_turns': 0, 'random_chance': 0})
+        memory.context('brass lamp', include_opening=False,
+                       recent=[{'role': 'assistant', 'content': story}])
+        text = memory.finish_recall()[-1]['content']
+        self.assertIn('The unique ending is the brass key', text)
 
 
 if __name__ == '__main__':

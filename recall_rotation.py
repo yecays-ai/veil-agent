@@ -80,8 +80,10 @@ _PAST = re.compile(
 
 # Ticket 419: a sentence that continues the thing just discussed. These are not queries on their
 # own ("那我呢", "后来呢"), so the previous turn's judged memories stay in play for this turn.
+# A bare "结果" / "那次" / "那时候" is an explicit past question, not a continuation, so it is not
+# here; only clear continuation phrases may carry the previous turn's memories.
 _FOLLOWUP = re.compile(
-    r'后来|然后|接着|之后|结果呢|结果|还有呢|那我|她的反应|我的反应|你当时|那时候|那次|'
+    r'后来|然后|接着|之后|继续|结果呢|还有呢|那我|她的反应|我的反应|'
     r'what happened next|and then|after that|how did (she|you) react|what about', re.I)
 
 
@@ -93,21 +95,46 @@ def asks_about_past(text):
     return bool(isinstance(text, str) and _PAST.search(text))
 
 
+def _last_user_message(recent):
+    for row in reversed(list(recent or [])):
+        if isinstance(row, dict) and row.get('role') == 'user':
+            return row.get('content') if isinstance(row.get('content'), str) else ''
+    return ''
+
+
+_ACK_CLEAN = re.compile(r'[，,。.!！…~\s]')
+_ACK_WORDS = frozenset({'嗯', '哦', '对', '是', '好', '行', '可以', '继续', '然后', '还有',
+                        '呢', '啊', '呀', '吧', '嘛', '真的', '这样', '那样', '嗯好', '嗯嗯',
+                        '对对', '对啊', '是的', '好呀', '然后呢', '还有呢'})
+
+
+def _is_ack(text):
+    cleaned = _ACK_CLEAN.sub('', str(text or ''))
+    return bool(cleaned) and (cleaned in _ACK_WORDS
+                              or all(part in _ACK_WORDS for part in cleaned))
+
+
 def is_followup(query, recent=None):
-    """A short continuation of the previous turn, or a past question right after one.
+    """A short continuation of the previous turn, or a bare acknowledgement right after a past question.
 
     Ticket 419: "同一对话连续问 V50，再问「那我当时是什么反应？」" used to lose V50 because the
     follow-up sentence had no word Ombre could search for and the cooldown dropped the memory the
     previous turn had just shown. Following up on the thing just discussed is the opposite of
-    unrelated chat, so it keeps that turn's context available."""
-    if asks_about_past(query):
+    unrelated chat, so it keeps that turn's context available.
+
+    Ticket 419 review: only the *immediately* preceding user message counts. A past question three
+    turns ago must not carry memories across an unrelated topic, and an explicit new past question
+    ("还记得 V78 吗") is not a continuation of the previous subject. A short new-topic sentence
+    ("今天吃什么") is not an acknowledgement either; only a plain "嗯/对/继续" may carry.
+    """
+    if not isinstance(query, str):
+        return False
+    if _FOLLOWUP.search(query):
         return True
-    if isinstance(query, str) and _FOLLOWUP.search(query):
-        return True
-    for row in reversed(list(recent or [])[-4:]):
-        if row.get('role') == 'user' and asks_about_past(row.get('content')):
-            return True
-    return False
+    previous = _last_user_message(recent)
+    return bool(previous and asks_about_past(previous) and _is_ack(query)
+                and not asks_about_past(query))
+
 
 
 
@@ -248,7 +275,8 @@ def rotate(candidates, metas, history):
 
 def _cut_on_boundary(text, limit):
     """The longest run of whole paragraphs (or, when the first paragraph is too long, whole
-    sentences) that is not over ``limit`` characters. Never cuts mid-sentence."""
+    sentences) that is not over ``limit`` characters. Never cuts mid-sentence. Chinese sentence
+    punctuation splits on its own; English punctuation still needs the following whitespace."""
     if limit <= 0:
         return ''
     kept = []
@@ -262,7 +290,7 @@ def _cut_on_boundary(text, limit):
             used += cost
             continue
         if not kept:
-            for sentence in re.split(r'(?<=[.!?。！？])\s+', paragraph):
+            for sentence in re.split(r'(?<=[.!?])\s+|(?<=[。！？])|\n', paragraph):
                 if not sentence.strip():
                     continue
                 cost = len(sentence) + (1 if kept else 0)
@@ -275,11 +303,13 @@ def _cut_on_boundary(text, limit):
 
 
 def excerpt(key, body, meta, limit, event_id=''):
-    """The whole memory by default; a legacy character limit still cuts, but on a boundary.
+    """The whole memory by default; a legacy character limit still cuts, but only on a boundary.
 
     ``limit`` 0 means no per-memory cap. When a number is set (an old config), the opening is kept
     only up to that many characters, at a paragraph or sentence boundary, followed by a pointer to
-    the read tools so the rest is never lost."""
+    the read tools so the rest is never lost. If not even one whole sentence fits, no original text
+    is sent: the block carries only the header, a plain "not shown" note and the exact read pointer.
+    """
     if not limit or len(body) <= limit:
         return body
     header, _, text = body.partition('\n')
@@ -287,12 +317,14 @@ def excerpt(key, body, meta, limit, event_id=''):
     created = (meta.get('created') or '')[:10]
     label = ' · '.join(part for part in (title, created) if part)
     cut = _cut_on_boundary(text, max(1, limit - len(header) - len(label) - 1))
-    if not cut:
-        cut = text[:max(1, limit)].rstrip()
     where = 'memory_read with memory_id "%s"' % key
     if event_id:
         where += ' (or memory_timeline with event_id "%s" for the whole experience)' % event_id
-    return (f'{header}{(" " + label) if label else ""}\n{cut}…\n'
+    label_line = f'{header}{(" " + label) if label else ""}'
+    if not cut:
+        return (f'{label_line}\n(The full text was not shown: even one complete sentence does not '
+                f'fit the configured character limit. Use {where} to read it.)')
+    return (f'{label_line}\n{cut}\n'
             f'(Only the beginning is shown because of the configured character limit. Use {where} '
             'for the rest.)')
 

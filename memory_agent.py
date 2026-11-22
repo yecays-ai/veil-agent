@@ -528,6 +528,7 @@ class Memory:
         # Ticket 419: the memories the previous turn actually injected (for an immediate follow-up)
         # and the budget report of the last finished recall.
         self.last_injected_refs = []
+        self._previous_injected_refs = []
         self.last_memory_budget = None
         self._pending_recall = None
         self.bucket_details_cache = {}
@@ -1079,11 +1080,19 @@ class Memory:
         """Ticket 391: memories removed only because this request was too long.
 
         Ticket 419: also marks that the final assembled request had to cut an already-budgeted
-        memory (``final_trim``), so the panel can tell a budget decision from a downstream clip."""
+        memory (``final_trim``), removes it from the injected refs so the next turn cannot carry a
+        memory that was never sent, and keeps ``budget_dropped`` in step with ``dropped``."""
+        gone = [key for key in keys if isinstance(key, str)]
         debug = getattr(self, 'last_recall_debug', None)
         if isinstance(debug, dict):
-            debug['budget_dropped'] = [key for key in keys if isinstance(key, str)]
+            debug['budget_dropped'] = list(dict.fromkeys(
+                list(debug.get('budget_dropped') or []) + gone))
             debug['final_trim'] = reason
+        dropped = set(gone)
+        self.last_context_refs = [key for key in self.last_context_refs if key not in dropped]
+        self.last_context_kinds = {key: value for key, value in self.last_context_kinds.items()
+                                   if key not in dropped}
+        self.last_injected_refs = [key for key in self.last_injected_refs if key not in dropped]
 
     def save_recall_debug(self, request_id):
         """Append one read-only diagnostics row for this turn; IDs and reasons only, never text."""
@@ -1223,10 +1232,13 @@ class Memory:
             self._save_rotation()
 
     def rollback_recall(self):
-        """Ticket 379: the last recall's cooldown marks are undone, because that turn delivered no reply."""
+        """Ticket 379: the last recall's cooldown marks are undone, because that turn delivered no reply.
+
+        Ticket 419: a failed/retried turn keeps the last *successfully injected* context available,
+        so an immediate follow-up or a retry can still use it."""
         with self.mutex:
             marks, self.last_recall_marks = self.last_recall_marks, None
-            self.last_injected_refs = []
+            self.last_injected_refs = list(getattr(self, '_previous_injected_refs', []) or [])
             if not marks:
                 return
             for key, previous in marks.items():
@@ -1539,16 +1551,20 @@ class Memory:
         def same_experience(key, other):
             return key == other or other in experience_chain(key, neighbours)
 
+        event_of = getattr(self, '_event_map_cache', None)
+        if event_of is None:
+            event_of = self._event_map_cache = self._event_map()
+        stories = self._event_stories()
+
         def duplicate(key, kept):
             # Ticket 407: one event is one recalled thing even if several of its stages are still separate memories.
             # Ticket 419: the stage count is no longer capped; a different stage of the same experience is a
-            # different memory and the budget decides how many fit. Only a genuine repeat is dropped.
+            # different memory and the budget decides how many fit. Event-level folding only happens when the
+            # event actually has a complete story to replace the stages; without one, every stage stays readable.
             if not recall_cfg['dedup']:
                 return None
-            event_of = getattr(self, '_event_map_cache', None)
-            if event_of is None:
-                event_of = self._event_map_cache = self._event_map()
-            if key in event_of and any(event_of.get(other) == event_of[key] for other, _ in kept):
+            if (key in event_of and (stories.get(event_of[key]) or {}).get('story')
+                    and any(event_of.get(other) == event_of[key] for other, _ in kept)):
                 return 'same_event'
             if any(same_event(key, other, metas, vectors, threshold, cosine) for other, _ in kept):
                 return 'same_event'
@@ -1616,10 +1632,6 @@ class Memory:
         pinned_keys = {key for key, _ in pinned}
         for key, _ in opening_shown:
             kinds[key] = 'opening'
-        event_of = getattr(self, '_event_map_cache', None)
-        if event_of is None:
-            event_of = self._event_map_cache = self._event_map()
-        stories = self._event_stories()
         directories = (self._experience_directories(kept, metas, adjacency, recall_cfg['directory_members'],
                                                     event_of)
                        if recall_cfg['directory'] else {})
@@ -1630,9 +1642,10 @@ class Memory:
             text = body
             if event_id:
                 story = (stories.get(event_id) or {}).get('story') or ''
-                # Ticket 419: an event that already has a complete reviewed story is preferred over
-                # the single fragment; that is how a later stage / ending is not lost.
-                if story and len(story) > len(body):
+                # Ticket 419 review: the event's current authoritative story wins whenever it exists.
+                # Completeness is not a length comparison: a merged story can be shorter and still
+                # contain a later correction the old fragment does not have.
+                if story:
                     text = f'[bucket_id:{key}]\n{story}'
             if limit:
                 text = excerpt(key, text, metas.get(key, {}), limit, event_id)
@@ -1644,23 +1657,9 @@ class Memory:
                 where += ' (or memory_timeline with event_id "%s" for the whole experience)' % event_id
             return ('(This story is longer than this request can carry in full. Use %s to read the rest.)' % where)
 
-        history_text = ' '.join(str(row.get('content') or '') for row in (recent or [])
-                                if isinstance(row, dict))
-        history_text = ' '.join(history_text.split())
-
-        def already_in_history(text):
-            probe = ' '.join(text.split())[:120]
-            return bool(probe) and probe in history_text
-
         blocks_out = []
-        reused = []
         for index, (key, body) in enumerate(kept):
             text, event_id = resolved(key, body)
-            if already_in_history(text):
-                # Ticket 419: the same story is still in this conversation's effective context
-                # (e.g. a memory_read result); do not paste it twice.
-                reused.append(key)
-                continue
             directory = directories.get(key, '')
             pointer_text = pointer(key, event_id) + ((' ' + directory) if directory else '')
             if directory:
@@ -1680,7 +1679,7 @@ class Memory:
                                'priority': 0 if key in pinned_keys else 500 + index,
                                'source': 'opening', 'event_id': event_id, 'pointer': pointer_text,
                                'kind': 'opening'})
-        self.last_recall_debug['reused'] = reused
+        self.last_recall_debug['reused'] = []   # ticket 419 review: no prefix-only reuse claims
         self._pending_recall = {'blocks': blocks_out, 'include_opening': include_opening}
         if defer:
             return []
@@ -1695,42 +1694,94 @@ class Memory:
         body = front_matter(raw).get('body') or ''
         return f'[bucket_id:{key}]\n{body.strip()}'
 
-    def finish_recall(self, *, space=None, history_tokens=0, protected_tokens=0, calibration=0.4):
+    def finish_recall(self, *, space=None, history_tokens=0, protected_tokens=0, auxiliary_tokens=0,
+                      calibration=0.4):
         """Apply the whole-round budget and build this turn's memory messages.
 
-        ``space`` is the tokens left after the required request blocks. When it is None the call is
-        unbudgeted (tests, readiness probe). Returns the messages and records the budget and every
-        drop that happened, so the request builder can use the returned ``history_allowance`` and the
-        panel can show why a candidate was not injected.
+        ``space`` is the tokens left after the required request blocks; it is split between the
+        conversation, the memories and optional auxiliary context. When ``space`` is None the call
+        is unbudgeted (tests, readiness probe). The recorded ``memory_used`` is measured on the
+        messages that are actually returned, including the recall/opening headers, empty-group
+        text, pointers and JSON escaping — not on the bare memory bodies. Returns the messages and
+        records the budget and every drop, so the request builder can use ``history_allowance`` /
+        ``auxiliary_allowance`` and the panel can show why a candidate was not injected.
         """
         import recall_budget
         pending = self._pending_recall or {'blocks': [], 'include_opening': True}
         blocks_out = pending.get('blocks') or []
         include_opening = pending.get('include_opening', True)
         debug = self.last_recall_debug
+        recall_head = prompts.text('memory.recall.head')
+        opening_head = prompts.text('memory.opening.head')
+        recall_empty = prompts.text('memory.recall.empty')
+        opening_empty = prompts.text('memory.opening.empty')
+
+        def messages_for(recall, opening):
+            recalled = [{'role': 'system', 'content':
+                         recall_head + '\n' + ('\n'.join(recall) or recall_empty)}]
+            if not include_opening:
+                return recalled
+            return [{'role': 'system', 'content':
+                     opening_head + '\n' + ('\n'.join(opening) or opening_empty)}, *recalled]
+
+        overhead = recall_budget.tokens_for_messages(messages_for([], []), calibration)
         if space is None:
             selected = [dict(block, tokens=recall_budget.tokens_for(block.get('text') or '', calibration),
                              complete=True) for block in blocks_out]
             dropped = []
             plan = {'reason': 'unbudgeted'}
-            used = sum(item['tokens'] for item in selected)
+            memory_allowance = None
             history_allowance = None
+            auxiliary_allowance = None
         else:
-            memory_need = sum(recall_budget.tokens_for(block.get('text') or '', calibration)
-                              for block in blocks_out)
-            plan = recall_budget.split(space, history_tokens, memory_need, protected_tokens)
+            block_need = sum(recall_budget.tokens_for(block.get('text') or '', calibration)
+                             for block in blocks_out)
+            # The memory share must pay for the recall/opening headers and empty-group text too,
+            # otherwise the first memory always looks free and gets dropped after the overhead.
+            memory_need = block_need + overhead
+            plan = recall_budget.split(space, history_tokens, memory_need, protected_tokens,
+                                       auxiliary_tokens)
             plan['memory_need'] = memory_need
-            selected, dropped = recall_budget.fit(blocks_out, plan['memory'], calibration)
-            used = sum(item['tokens'] for item in selected)
-            history_allowance = max(0, int(space) - used)
+            memory_allowance = plan['memory']
+            fit_allowance = max(0, memory_allowance - overhead)
+            selected, dropped = recall_budget.fit(blocks_out, fit_allowance, calibration)
+            # Measure the real messages and refit until the measured size fits the memory share.
+            for _ in range(3):
+                recall_items = [item for item in selected if item.get('group') == 'recall']
+                opening_items = [item for item in selected if item.get('group') == 'opening']
+                messages = messages_for([item['text'] for item in recall_items],
+                                        [item['text'] for item in opening_items])
+                actual = recall_budget.tokens_for_messages(messages, calibration)
+                if actual <= memory_allowance:
+                    break
+                fit_allowance = max(0, fit_allowance - (actual - memory_allowance) - 1)
+                selected, dropped = recall_budget.fit(blocks_out, fit_allowance, calibration)
+            # Last resort: drop the lowest-priority recall block, never cut text.
+            while actual > memory_allowance:
+                recall_items = [item for item in selected if item.get('group') == 'recall']
+                opening_items = [item for item in selected if item.get('group') == 'opening']
+                if recall_items:
+                    dropped_item = recall_items[-1]
+                    selected = [item for item in selected if item is not dropped_item]
+                    dropped = list(dropped) + [{'id': dropped_item['id'], 'reason': 'budget',
+                                                'tokens': dropped_item.get('tokens')}]
+                    messages = messages_for([item['text'] for item in recall_items[:-1]],
+                                            [item['text'] for item in opening_items])
+                    actual = recall_budget.tokens_for_messages(messages, calibration)
+                else:
+                    break
+            auxiliary_allowance = min(max(0, int(auxiliary_tokens)), plan['auxiliary'])
+            history_allowance = max(0, int(space) - actual - auxiliary_allowance)
         recall_items = [item for item in selected if item.get('group') == 'recall']
         opening_items = [item for item in selected if item.get('group') == 'opening']
         for item in selected:
             if item.get('event_id'):
                 item['story'] = True
-        recall = [item['text'] for item in recall_items]
-        opening = [item['text'] for item in opening_items]
+        messages = messages_for([item['text'] for item in recall_items],
+                                [item['text'] for item in opening_items])
+        memory_used = recall_budget.tokens_for_messages(messages, calibration)
         refs = ([item['id'] for item in opening_items] + [item['id'] for item in recall_items])
+        self._previous_injected_refs = list(self.last_injected_refs)
         self.last_context_refs = list(dict.fromkeys(refs))
         self.last_context_kinds = {item['id']: item.get('kind', 'search')
                                    for item in opening_items + recall_items}
@@ -1746,22 +1797,18 @@ class Memory:
         debug['injected'] = [item['id'] for item in recall_items]
         debug['opening'] = [item['id'] for item in opening_items]
         debug['dropped'] = list(debug.get('dropped') or []) + dropped
+        debug['budget_dropped'] = [item['id'] for item in dropped if item.get('reason') == 'budget']
         debug['items'] = [{'id': item['id'], 'source': item.get('source'),
                            'tokens': item.get('tokens'), 'complete': item.get('complete'),
-                           'event': item.get('event_id') or '', 'story': bool(item.get('story'))}
+                           'paragraphs': item.get('paragraphs'), 'not_shown': bool(item.get('not_shown')),
+                           'read_id': item['id'], 'event': item.get('event_id') or '',
+                           'story': bool(item.get('story'))}
                           for item in opening_items + recall_items]
-        debug['budget'] = {**plan, 'memory_allowance': plan.get('memory'),
-                           'memory_used': used, 'history_allowance': history_allowance}
+        debug['budget'] = {**plan, 'memory_allowance': memory_allowance,
+                           'memory_used': memory_used, 'history_allowance': history_allowance,
+                           'auxiliary_allowance': auxiliary_allowance}
         self.last_memory_budget = dict(debug['budget'])
-        recalled = [{'role': 'system', 'content':
-                 prompts.text('memory.recall.head') + '\n'
-                 + ('\n'.join(recall) or prompts.text('memory.recall.empty'))}]
-        if not include_opening:
-            # After the opening turn, saying "no opening memories" every turn would read as having none.
-            return recalled
-        return [{'role': 'system', 'content':
-                 prompts.text('memory.opening.head') + '\n'
-                 + ('\n'.join(opening) or prompts.text('memory.opening.empty'))}, *recalled]
+        return messages
 
     SURFACED_LIMIT = 40
 

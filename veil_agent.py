@@ -4290,41 +4290,50 @@ class Chat:
         # the memories that fit (complete bodies, whole paragraphs for an over-long one) and reports
         # how much history may keep. This is the only place the memory budget is applied, so every
         # chat entry (desktop, QQ, tool follow-up, autonomy, restart) shares it.
+        # Ticket 419: one whole-round memory budget. Required blocks, the conversation and optional
+        # auxiliary context are measured first; ``finish_recall`` splits what is left between them
+        # (protecting the newest complete exchange), selects the memories that fit (complete bodies,
+        # whole paragraphs for an over-long one) and reports both allowances. This is the only place
+        # the memory budget is applied, so every chat entry (desktop, QQ, tool follow-up, autonomy,
+        # restart) shares it.
         history_allowance = None
+        auxiliary_allowance = None
         if defer_recall and self.memory:
             from recall_budget import protected_recent_tokens
-            # Auxiliary context (background, short notes, work checkpoint, internal recall candidates)
-            # is part of what this request carries, so it is measured as required instead of letting
-            # the memory budget silently eat it.
-            required = estimate_request_tokens([*head, *runtime_required, *auxiliary_context, user],
-                                               tool_schema, calibration)
+            required = estimate_request_tokens([*head, *runtime_required, user], tool_schema, calibration)
             space = max(0, limit - required)
             history_tokens = estimate_message_tokens(history, calibration)
             protected = protected_recent_tokens(self.history_events[:len(history)], calibration)
+            auxiliary_tokens = estimate_message_tokens(auxiliary_context, calibration)
             recalled_memories = self.memory.finish_recall(
                 space=space, history_tokens=history_tokens, protected_tokens=protected,
-                calibration=calibration)
+                auxiliary_tokens=auxiliary_tokens, calibration=calibration)
             budget_used = getattr(self.memory, 'last_memory_budget', {}) or {}
             history_allowance = budget_used.get('history_allowance')
+            auxiliary_allowance = budget_used.get('auxiliary_allowance')
             recalled_memory_refs = list(getattr(self.memory, 'last_context_refs', []) or [])
             self.turn_memory_refs = list(recalled_memory_refs)
             self.turn_memory_kinds = dict(getattr(self.memory, 'last_context_kinds', {}) or {})
             recalled = list(recalled_memories)
         else:
             recalled_memories = list(recalled)
+        budgeted_messages = list(recalled_memories)
 
-        # Progressively prune croppable context: history (to its budgeted share) -> auxiliary
-        # context -> memories (a safety net; a normal turn never reaches it).
-        if return_activity and bound(history, recalled_memories, auxiliary_context) > limit:
-            auxiliary_context = [item for item in auxiliary_context if item.get('content') != return_activity]
+        # Ticket 419 review: apply the measured shares before any optional block yields. History is
+        # trimmed from its oldest end (the newest exchange is protected by the split); optional
+        # auxiliary context is trimmed to its own share, so it cannot silently erase the recent
+        # exchange. Only then do the safety loops step in.
         if history_allowance is not None:
             while history and estimate_message_tokens(history, calibration) > history_allowance:
                 history.pop(0)
                 while history and history[0]['role'] != 'user':
                     history.pop(0)
-        # Ticket 419: optional auxiliary context yields before the conversation does. Otherwise a
-        # long internal recall list or background note would silently erase the recent exchange the
-        # current message depends on, which is the exact failure this ticket is fixing.
+        if auxiliary_allowance is not None:
+            while (auxiliary_context
+                   and estimate_message_tokens(auxiliary_context, calibration) > auxiliary_allowance):
+                auxiliary_context.pop()
+        if return_activity and bound(history, recalled_memories, auxiliary_context) > limit:
+            auxiliary_context = [item for item in auxiliary_context if item.get('content') != return_activity]
         while auxiliary_context and bound(history, recalled_memories, auxiliary_context) > limit:
             auxiliary_context.pop()
         while history and bound(history, recalled_memories, auxiliary_context) > limit:
@@ -4336,18 +4345,20 @@ class Chat:
             recalled_memories.pop()
         surviving_text = '\n'.join(message.get('content') for message in recalled_memories
                                    if isinstance(message.get('content'), str))
-        if len(recalled_memories) != len(recalled) and self.memory is not None:
+        if len(recalled_memories) != len(budgeted_messages) and self.memory is not None:
             # Ticket 391/419: say plainly that these were dropped only for length, not because they
-            # were irrelevant. Name only what the final request no longer carries.
-            dropped_keys = [key for key in recalled_memory_refs if key not in surviving_text]
+            # were irrelevant. Name only what the final request no longer carries, remove it from
+            # last_injected_refs (so a follow-up cannot carry an unsent story) and release its cooldown.
+            dropped_keys = [key for key in recalled_memory_refs
+                            if key not in set(re.findall(r'\[bucket_id:([\w-]+)\]', surviving_text))]
             note = getattr(self.memory, 'note_budget_dropped', None)
             if callable(note):
                 note(dropped_keys)
-            # Not shown, so not cooled down; a later turn may bring it back.
             self.memory.release_recall(dropped_keys)
-        self.turn_memory_refs = (recalled_memory_refs if len(recalled_memories) == len(recalled)
-                                 else [])
-
+            recalled_memory_refs = list(getattr(self.memory, 'last_context_refs', []) or [])
+            self.turn_memory_refs = list(recalled_memory_refs)
+        self.turn_memory_refs = (recalled_memory_refs if len(recalled_memories) == len(budgeted_messages)
+                                 else list(getattr(self.memory, 'last_context_refs', []) or []))
         if bound(history, recalled_memories, auxiliary_context) > limit:
             if not autonomy and persist_user and mids:
                 self.fail_incoming(mids, reason='too_long')
