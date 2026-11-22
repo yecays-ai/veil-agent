@@ -920,12 +920,13 @@ function renderExperience(x){
       if(x.retry_at){const r=new Date(x.retry_at);if(!Number.isNaN(r.getTime()))again=(r.getDate()!==new Date().getDate()?'明天':memoryTime(x.retry_at))+' 再试'}
       last=when+' 没整理成：'+why+'，'+again;}
     else if(x.last.written||x.last.updated)last=when+' 记了 '+(x.last.written||0)+' 条'+(x.last.updated?'，补充了 '+x.last.updated+' 条':'');
+    else if(x.last.rejected)last=when+' 有 '+x.last.rejected+' 条更新被拒绝，草稿已留存';
     else if(!x.last.unfixed)last=when+' 他觉得没什么可记';
     else last=when+' 看过了';
     if(x.last.kind==='checkpoint'&&x.last.retried_without_thinking)last+='（关掉思考后重试成功）';
     if(x.last.kind==='checkpoint'&&x.last.unfixed)last+='；有 '+x.last.unfixed+' 条草稿没存上，原文已留存';
     if(x.last.kind==='checkpoint'&&x.last.deferred)last+='；有 '+x.last.deferred+' 条想改的被锁定的记忆，已存下待你处理';
-    if(x.last.kind==='checkpoint'&&x.last.rejected)last+='；有 '+x.last.rejected+' 条更新被拒绝（事件已关闭），草稿已留存';
+    if(x.last.kind==='checkpoint'&&x.last.rejected)last+='；有 '+x.last.rejected+' 条更新被拒绝（经历已关闭或合并），草稿已留存';
     if(x.last.kind==='checkpoint'&&x.last.covers&&x.last.covers.from){const a=new Date(x.last.covers.from),b=new Date(x.last.covers.to);
       if(!Number.isNaN(a.getTime())&&!Number.isNaN(b.getTime()))last+='；覆盖 '+strTime(x.last.covers.from)+' → '+strTime(x.last.covers.to);}}
   $('experience-status').textContent=experienceEnabled
