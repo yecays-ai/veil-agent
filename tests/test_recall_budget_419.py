@@ -316,9 +316,9 @@ max_steps = 2
         chat.memory = memory
         return chat, model, memory
 
-    def seed_history(self):
+    def seed_history(self, rounds=8):
         # An older block of rounds plus the exchange that explains why she is upset now.
-        for i in range(8):
+        for i in range(rounds):
             self.store.append('peter/chat.jsonl', {'role': 'user', 'content': f'older round {i} ' + 'x' * 400,
                                                    'message_id': f'u{i}'})
             self.store.append('peter/chat.jsonl', {'role': 'assistant', 'content': f'older reply {i} ' + 'y' * 400,
