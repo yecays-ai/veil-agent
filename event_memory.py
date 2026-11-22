@@ -1,9 +1,9 @@
 """Ticket 407: one event, one memory.
 
 A save is a *stage* of an event, not a memory of its own. Stages commit atomically (pending row ->
-event row -> committed row); the event has exactly one Ombre memory whose body is a 400-character
-summary, while the full story and every stage/evidence stay in the local ledger and are readable
-with `memory_timeline`.
+event row -> committed row); the event has exactly one Ombre memory whose body is the complete
+searchable story, while every stage/evidence also stays in the local ledger and is readable with
+`memory_timeline`. Chat injection remains bounded separately by the request token budget.
 
 Grouping pairs deterministic signals with a model decision over the candidate events and the raw
 chat/autonomy/tool evidence; anything uncertain becomes a provisional, recallable event and is
@@ -18,6 +18,7 @@ import threading
 import uuid
 from dataclasses import replace
 from datetime import datetime, timedelta
+from decimal import Decimal
 
 import prompts
 
@@ -42,7 +43,7 @@ DEFAULTS = {
     'evidence_minutes': 30,
     'evidence_items': 8,
     'evidence_chars': 400,
-    'summary_chars': 400,        # the Ombre projection only: a finding aid, never the whole story
+    'summary_chars': 0,          # 0 indexes the whole story; recall_budget still limits chat context
     'stage_chars': 0,            # ticket 421: 0 keeps the whole stage; the real request budget is the limit
     'story_batch_chars': 12000,  # ticket 421: stages are merged into the story in batches this size
     'search_query_chars': 2000,  # the embedding query may be shorter than the stage; grouping sees it all
@@ -138,13 +139,17 @@ def _parse_json(text):
 
 
 class EventMemory:
-    def __init__(self, memory, settings=None, model=None, sidecar=None, budget=None):
+    def __init__(self, memory, settings=None, model=None, sidecar=None, budget=None,
+                 cost_category=None, daily_cap=None):
         self.memory = memory
         self.cfg = memory.cfg
         self.store = memory.store
         self.model = model if callable(model) else None
         self.sidecar = sidecar
         self.budget = budget if budget is not None else getattr(memory, 'budget', None)
+        self.cost_category = cost_category
+        self.daily_cap = Decimal(str(daily_cap)) if daily_cap is not None else None
+        self._model_budget_blocked = False
         raw = settings if isinstance(settings, dict) else {}
         self.settings = dict(DEFAULTS)
         for key, default in DEFAULTS.items():
@@ -272,7 +277,7 @@ class EventMemory:
     def visible_events(self):
         rows = [event for event in self.events().values()
                 if event.get('status') not in ('merged', 'closed') and self._visible(event)]
-        rows.sort(key=lambda event: str(event.get('last_at') or ''), reverse=True)
+        rows.sort(key=lambda event: str(event.get('last_at') or event.get('last_saved_at') or ''), reverse=True)
         return rows
 
     def detail(self, event_id):
@@ -292,6 +297,7 @@ class EventMemory:
                 'story': event.get('story') or self._story(event_id), 'confidence': event.get('confidence'),
                 'story_source': event.get('story_source'),
                 'story_through': event.get('story_through'),
+                'story_coverage': event.get('story_coverage') or [],
                 'story_pending': bool(event.get('story_pending')),
                 'dirty': bool(event.get('dirty')),
                 'first_at_known': event.get('first_at_known', True),
@@ -310,7 +316,7 @@ class EventMemory:
     def timeline(self, event_id, offset=0, limit=None, include_evidence=True):
         """The whole story plus one page of stages. offset is a stage index; next_offset is a cursor."""
         event = self.events().get(event_id)
-        if event is None or not self._visible(event):
+        if event is None or event.get('status') in ('merged', 'closed') or not self._visible(event):
             return None
         stages = self.stages(event_id)
         try:
@@ -362,11 +368,11 @@ class EventMemory:
         # When the caller knows when it happened (the tidy batch), use that. Peter's own save during a
         # conversation happened around the latest message, not at whatever time the tidy job runs.
         occurred = _when(at) or self._infer_at(saved_at)
-        when = occurred or saved_at
+        order_at = occurred or saved_at
         text = ' '.join((text or '').split())
         if not text:
             raise ValueError('empty stage')
-        key = source_key or when.strftime('%Y-%m-%d')
+        key = source_key or order_at.strftime('%Y-%m-%d')
         stage_id = 's-' + hashlib.sha1(
             f'{title or ""}|{text}|{key}'.encode('utf-8')).hexdigest()[:16]
         existing = self._stage_rows().get(stage_id)
@@ -408,17 +414,20 @@ class EventMemory:
                     or not self._visible(event)):
                 raise ValueError('unknown event')
             seen_revision = int(event.get('revision') or 0)
-            event = {**event, 'status': 'open', 'last_at': when.isoformat()}
+            event = {**event, 'status': 'open'}
+            if occurred is not None:
+                event['last_at'] = occurred.isoformat()
             confidence = event.get('confidence') or 0.5
             updated = True
         else:
-            probe = {'at': when.isoformat(), 'entities': sorted(entities(text))[:80],
+            probe = {'at': occurred.isoformat() if occurred else None,
+                     'saved_at': saved_at.isoformat(), 'entities': sorted(entities(text))[:80],
                      'stage_id': stage_id, 'text': text}
             event, updated, confidence = self._attach(probe, title)
             seen_revision = int(event.get('revision') or 0) if event.get('event_id') in self.events() else None
         limit = self.settings.get('stage_chars') or 0
         stage = {
-            'stage_id': stage_id, 'at': when.isoformat(),
+            'stage_id': stage_id, 'at': occurred.isoformat() if occurred else None,
             'occurred_at': occurred.isoformat() if occurred else None,
             'at_known': bool(occurred), 'saved_at': saved_at.isoformat(),
             'text': text[:limit] if limit > 0 else text,
@@ -439,11 +448,16 @@ class EventMemory:
         story, story_source, through, story_pending = self._write_story(
             self.stages(event['event_id']) + [stage], self._story(event['event_id'], extra=stage), event)
         if story_pending:
-            # The model narrative is unfinished. Use the complete stage composition (all stages, no
-            # cutting), never a partial narrative; the source says so, and nothing is lost (ticket 421).
-            story, story_source = self._story(event['event_id'], extra=stage), 'composed'
-            through = stage['at']
-            story_pending = False
+            if self._model_budget_blocked:
+                # A paid rewrite that cannot start must remain pending and must not replace a good draft.
+                story = old_story or self._story(event['event_id'], extra=stage)
+                story_source = event.get('story_source') or 'composed'
+                through = event.get('story_through')
+            else:
+                # A broken/unavailable story model degrades to the complete stages, never a partial answer.
+                story, story_source = self._story(event['event_id'], extra=stage), 'composed'
+                through = stage.get('at') or stage.get('saved_at')
+                story_pending = False
         projection = self._projection(story)
         fresh = self.events().get(event['event_id'])
         if seen_revision is not None and fresh is not None and int(fresh.get('revision') or 0) != seen_revision:
@@ -471,14 +485,20 @@ class EventMemory:
                 'event_id': event['event_id'], 'memory_id': memory_id,
                 'old_story': old_story, 'old_content': None,
                 'at': datetime.now().astimezone().isoformat()})
+        reviewed = {key: event.get(key) for key in
+                    ('story_source', 'story_through', 'story_through_id', 'story_coverage')}
         event.update({
             'memory_id': memory_id or event.get('memory_id'),
-            'last_at': when.isoformat(),
+            'last_at': occurred.isoformat() if occurred else event.get('last_at'),
+            'last_saved_at': saved_at.isoformat(),
             'stage_count': len(self.stages(event['event_id'])) + 1,
             'story': story,
             'story_source': story_source,
             'story_through': through or event.get('story_through'),
             'story_through_id': stage['stage_id'],
+            'story_coverage': ((event.get('story_coverage') or []) if story_pending and old_story else
+                               [row.get('stage_id') for row in self.stages(event['event_id']) + [stage]
+                                if row.get('stage_id')]),
             'story_pending': story_pending,
             'belief_history': self._belief_history(event['event_id'], extra=stage),
             'related_to': sorted(set(event.get('related_to') or []) | set(self._related_events(event['event_id']))),
@@ -490,12 +510,19 @@ class EventMemory:
         if 'first_at_known' not in event:
             # A brand-new event starts with this stage; an existing (possibly legacy) event keeps its
             # earlier assumption rather than rewriting the first stage's date from the newest one.
-            event['first_at_known'] = stage['at_known'] if not updated else True
+            event['first_at_known'] = stage['at_known'] if not updated else event.get('first_at_known', True)
         event['last_at_known'] = stage['at_known']
         if locked:
+            event.update({'story': old_story or event.get('story') or '',
+                          'story_source': reviewed['story_source'],
+                          'story_through': reviewed['story_through'],
+                          'story_through_id': reviewed['story_through_id'],
+                          'story_coverage': reviewed['story_coverage'] or [],
+                          'story_pending': True, 'dirty': True})
+            story_pending = True
             event['pending_review'] = True
-            self._review(event['event_id'], 'locked event got a new stage; story kept in the ledger, '
-                                            'the reviewed projection was not overwritten')
+            self._review(event['event_id'], 'locked event got a new stage; the stage was saved and the reviewed '
+                                            'story waits for unlock')
         try:
             self.store.append(self.events_path, event)
             self.store.append(self.stages_path, {**stage, 'state': 'committed'})
@@ -525,7 +552,7 @@ class EventMemory:
     def revise(self, event_id, text, title='', seen=None, why='整理'):
         """Replace the event's narrative without appending it as a new stage (tidy revisions)."""
         event = self.events().get(event_id)
-        if event is None or not self._visible(event):
+        if event is None or event.get('status') in ('merged', 'closed') or not self._visible(event):
             return False
         memory_id = event.get('memory_id')
         old_story = event.get('story') or ''
@@ -552,7 +579,7 @@ class EventMemory:
             self.store.append(f'{self.cfg.id}/memory-versions.jsonl', {
                 'memory_id': memory_id, 'fields': ['content'], 'operation_reason': '事件故事修订',
                 'why_remembered': '', 'old_content': old_projection})
-        projection = text[:self.settings['summary_chars']]
+        projection = self._projection(text)
         self.store.append(self.revisions_path, {'state': 'begin', 'event_id': event_id,
                                                 'revision_id': revision_id, 'story': text, 'at': stamp})
         if memory_id:
@@ -621,7 +648,7 @@ class EventMemory:
 
     def _candidate_scores(self, stage, title, evidence):
         scores = {}
-        now = _when(stage['at']) or datetime.now().astimezone()
+        now = _when(stage.get('at')) or _when(stage.get('saved_at')) or datetime.now().astimezone()
         stage_entities = set(stage['entities'])
 
         def add(event_id, points, reason):
@@ -705,6 +732,26 @@ class EventMemory:
                     out.append(' '.join(text.split())[:300])
         return out[-self.settings['evidence_items']:]
 
+    def _reserve_model(self, request_cfg, accounting):
+        if self.budget is None or not callable(getattr(self.budget, 'reserve', None)):
+            return None, None
+        category = self.cost_category or accounting
+        if self.daily_cap is not None:
+            provider = request_cfg.provider or {}
+            amount = provider.get('cny_per_call') or (
+                Decimal(str(provider['max_input_tokens'])) * Decimal(str(provider['input_cny_per_million']))
+                + Decimal(request_cfg.max_output_tokens)
+                * Decimal(str(provider['output_cny_per_million']))) / Decimal(1_000_000)
+            spent, pending = self.budget.category_totals(self.cfg.id, category=category)
+            if spent + pending + amount > self.daily_cap:
+                self._model_budget_blocked = True
+                raise ValueError('experience memory daily budget reached')
+        try:
+            return self.budget.reserve(request_cfg, accounting=accounting, category=category)
+        except Exception:
+            self._model_budget_blocked = True
+            raise
+
     def _model_choose(self, stage, scores, title):
         """One structured decision over the candidate events and the raw evidence. None on any failure."""
         if self.model is None or not scores:
@@ -733,7 +780,8 @@ class EventMemory:
                                  **({'text_truncated': True, 'full_chars': len(new_text)}
                                     if len(new_text) > 4000 else {}),
                                  'at': stage['at']},
-                   'evidence': self._evidence_preview(_when(stage['at'])),
+                   'evidence': self._evidence_preview(_when(stage.get('at')) or _when(stage.get('saved_at'))
+                                                      or datetime.now().astimezone()),
                    'candidates': candidates}
         content = json.dumps(payload, ensure_ascii=False)
         while len(content) > 24000 and candidates:
@@ -747,10 +795,7 @@ class EventMemory:
         ]
         try:
             request_cfg = replace(self.cfg, max_output_tokens=400)
-            reservation, amount = (None, None)
-            if self.budget is not None and callable(getattr(self.budget, 'reserve', None)):
-                reservation, amount = self.budget.reserve(request_cfg, accounting='event-group',
-                                                          category='event-group')
+            reservation, amount = self._reserve_model(request_cfg, 'event-group')
         except Exception:
             return None   # no budget: keep the provisional-event path
         try:
@@ -763,7 +808,8 @@ class EventMemory:
                     completion_tokens = int(result[2]) if isinstance(result, tuple) and len(result) > 2 else 0
                     cached_tokens = int(result[3]) if isinstance(result, tuple) and len(result) > 3 else 0
                     self.budget.settle(reservation, request_cfg, prompt_tokens, completion_tokens,
-                                       cached_tokens, accounting='event-group', category='event-group')
+                                       cached_tokens, accounting='event-group',
+                                       category=self.cost_category or 'event-group')
                 except Exception:
                     pass
         except Exception:
@@ -785,7 +831,7 @@ class EventMemory:
         return {'event_id': chosen, 'confidence': confidence, 'reason': str(payload.get('reason') or '')[:200]}
 
     def _attach(self, stage, title, evidence=None):
-        now = _when(stage['at']) or datetime.now().astimezone()
+        now = _when(stage.get('at')) or _when(stage.get('saved_at')) or datetime.now().astimezone()
         scores = self._candidate_scores(stage, title, evidence or [])
         if not scores:
             return self._new_event(stage, title, [], 'open'), False, 0.4
@@ -805,11 +851,12 @@ class EventMemory:
         return self._new_event(stage, title, links, 'uncertain'), False, confidence
 
     def _new_event(self, stage, title, candidate_ids, status):
-        when = _when(stage['at']) or datetime.now().astimezone()
+        when = _when(stage.get('at')) or _when(stage.get('saved_at')) or datetime.now().astimezone()
         event_id = 'e-' + when.strftime('%Y%m%d') + '-' + hashlib.sha1(
             f'{stage["stage_id"]}|{title}'.encode('utf-8')).hexdigest()[:6]
         return {'event_id': event_id, 'title': (title or _first_sentence(stage['text'], 60) or 'Event')[:100],
                 'status': status, 'first_at': stage['at'], 'last_at': stage['at'],
+                'first_saved_at': stage.get('saved_at'), 'last_saved_at': stage.get('saved_at'),
                 'entities': stage['entities'], 'stage_count': 0, 'dirty': False,
                 'candidate_links': candidate_ids}
 
@@ -837,6 +884,7 @@ class EventMemory:
         cannot lose its second half. Returns (story, source, through, pending): `pending` means the
         narrative is not finished and must be rebuilt later; the stages are already safe on disk.
         """
+        self._model_budget_blocked = False
         if self.model is None or not stages:
             return fallback, 'composed', None, False
         existing = str((event or {}).get('story') or '')
@@ -862,7 +910,7 @@ class EventMemory:
             # from the stages instead of sending an oversized request (ticket 421).
             if max_input - len(existing) - 4000 < 2000:
                 merge = False
-        budget = self._story_budget(len(existing) if merge else 0)
+        budget = self._story_budget()
         if merge:
             merged, pending, last_through = self._merge_many(fresh, existing, budget)
             if merged and not pending:
@@ -888,18 +936,19 @@ class EventMemory:
         return max(1000, budget)
 
     def _merge_many(self, stages, previous, budget=None):
-        """Merge every batch in order. Returns (story, pending, through); pending means a batch failed."""
+        """Write every batch independently, then join them so the request never grows with the story."""
         story, through = previous, None
         progressed = pending = False
         for chunk in self._story_batches(stages, budget):
             if not chunk:
                 continue
-            merged = self._merge_story_chunk(story, chunk)
+            merged = self._merge_story_chunk('', chunk)
             if merged is None:
                 pending = True
                 break
-            story, progressed = merged, True
-            through = chunk[-1].get('at') or through
+            story = '\n\n'.join(part for part in (story, merged) if part)
+            progressed = True
+            through = chunk[-1].get('at') or chunk[-1].get('saved_at') or through
         return (story if progressed else ''), pending, through
 
     def _story_batches(self, stages, budget=None):
@@ -1001,9 +1050,7 @@ class EventMemory:
         try:
             request_cfg = replace(self.cfg, max_output_tokens=max_tokens)
             reservation = amount = None
-            if self.budget is not None and callable(getattr(self.budget, 'reserve', None)):
-                reservation, amount = self.budget.reserve(request_cfg, accounting='event-story',
-                                                          category='event-story')
+            reservation, amount = self._reserve_model(request_cfg, 'event-story')
             result = self.model(messages, max_tokens=max_tokens, detail=True)
             output = result[0] if isinstance(result, tuple) else result
             finish = result[4] if isinstance(result, tuple) and len(result) > 4 else None
@@ -1013,7 +1060,8 @@ class EventMemory:
                     completion_tokens = int(result[2]) if isinstance(result, tuple) and len(result) > 2 else 0
                     cached_tokens = int(result[3]) if isinstance(result, tuple) and len(result) > 3 else 0
                     self.budget.settle(reservation, request_cfg, prompt_tokens, completion_tokens,
-                                       cached_tokens, accounting='event-story', category='event-story')
+                                       cached_tokens, accounting='event-story',
+                                       category=self.cost_category or 'event-story')
                 except Exception:
                     pass
             return ((output or '').strip() if isinstance(output, str) else ''), finish
@@ -1041,8 +1089,8 @@ class EventMemory:
             if not belief:
                 continue
             if history and history[-1]['belief'] != belief:
-                history[-1]['invalid_at'] = stage.get('at')
-            history.append({'at': stage.get('at'), 'valid_from': stage.get('at'),
+                history[-1]['invalid_at'] = stage.get('at') or stage.get('saved_at')
+            history.append({'at': stage.get('at'), 'valid_from': stage.get('at') or stage.get('saved_at'),
                             'invalid_at': None, 'belief': belief, 'stage_id': stage.get('stage_id')})
         return history
 
@@ -1061,7 +1109,10 @@ class EventMemory:
 
     def _projection(self, story):
         text = ' '.join((story or '').split())
-        limit = max(120, self.settings['summary_chars'])
+        limit = int(self.settings.get('summary_chars') or 0)
+        if limit <= 0:
+            return text
+        limit = max(120, limit)
         if len(text) > limit:
             head = int(limit * 0.65)
             text = text[:head].rstrip() + ' … ' + text[-(limit - head - 3):].lstrip()
@@ -1157,7 +1208,7 @@ class EventMemory:
             if memory_id and callable(self.locked) and self.locked(memory_id):
                 continue
             story = str(row.get('story') or '')
-            projection = story[:self.settings['summary_chars']]
+            projection = self._projection(story)
             written = self.memory.content_for(memory_id, refresh=True) if memory_id else None
             if written is None or written.strip() != projection.strip():
                 if memory_id:
@@ -1190,10 +1241,16 @@ class EventMemory:
                     rebuilt, source_name, through, pending = self._write_story(
                         self.stages(event['event_id']), story, event)
                     if pending:
-                        continue
+                        if self._model_budget_blocked:
+                            continue
+                        rebuilt, source_name = self._story(event['event_id']), 'composed'
+                        through = (self.stages(event['event_id'])[-1].get('at')
+                                   or self.stages(event['event_id'])[-1].get('saved_at'))
                     story, event = rebuilt, dict(event)
                     event.update({'story': story, 'story_source': source_name,
                                   'story_through': through, 'story_pending': False,
+                                  'story_coverage': [row.get('stage_id') for row in self.stages(event['event_id'])
+                                                     if row.get('stage_id')],
                                   'belief_history': self._belief_history(event['event_id'])})
                 memory_id, changed, locked = self._write_projection(
                     event, self._projection(story), event.get('title') or 'Event')
@@ -1236,6 +1293,7 @@ class EventMemory:
             self.store.append(self.events_path, event)
             return event
         event.update({'story': self._story(event_id), 'stage_count': len(stages),
+                      'story_coverage': [stage.get('stage_id') for stage in stages if stage.get('stage_id')],
                       'belief_history': self._belief_history(event_id), 'dirty': True,
                       'last_story_at': datetime.now().astimezone().isoformat()})
         self.store.append(self.events_path, event)
@@ -1375,7 +1433,7 @@ class EventMemory:
 
     # --- evidence --------------------------------------------------------------------------
     def _capture_evidence(self, stage):
-        now = _when(stage['at']) or datetime.now().astimezone()
+        now = _when(stage.get('at')) or _when(stage.get('saved_at')) or datetime.now().astimezone()
         cutoff = now - timedelta(minutes=max(1, self.settings['evidence_minutes']))
         collected = []
         for kind, path in (('chat', f'{self.cfg.id}/chat.jsonl'),

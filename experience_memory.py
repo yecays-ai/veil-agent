@@ -122,7 +122,9 @@ class ExperienceMemory:
         event_settings = (getattr(cfg, 'memory', None) or {}).get('events')
         if isinstance(event_settings, dict) and event_settings.get('enabled'):
             from event_memory import EventMemory
-            self.events = EventMemory(memory, event_settings, model=model, sidecar=self.sidecar)
+            self.events = EventMemory(memory, event_settings, model=model, sidecar=self.sidecar,
+                                      budget=budget, cost_category=COST_CATEGORY,
+                                      daily_cap=self.settings.get('daily_budget_cny', DEFAULTS['daily_budget_cny']))
         if getattr(self.budget, 'reconcile_unsettled', None):
             self.budget.reconcile_unsettled({COST_ACCOUNTING})
 
@@ -169,7 +171,9 @@ class ExperienceMemory:
             return 0
         try:
             from event_memory import EventMemory
-            events = EventMemory(self.memory, settings, model=self.model, sidecar=self.sidecar)
+            events = EventMemory(self.memory, settings, model=self.model, sidecar=self.sidecar,
+                                 budget=self.budget, cost_category=COST_CATEGORY,
+                                 daily_cap=self.settings.get('daily_budget_cny', DEFAULTS['daily_budget_cny']))
             events.locked = self.sidecar.locked
             return events.dream_pass('tidy')
         except Exception:
@@ -449,7 +453,7 @@ class ExperienceMemory:
                 item['whole'] = False
                 item['text_truncated'] = True
             used += len(item.get('text') or '')
-        return candidates
+        return [item for item in candidates if item.get('text')]
 
     def _candidates(self, events):
         """His latest entries that still exist and are not hidden, newest first."""
@@ -636,8 +640,12 @@ class ExperienceMemory:
         """Ticket 421 review: apply updates that were kept while the memory was locked, once it is free.
         The draft is only applied if the memory still holds the text the model rewrote from."""
         applied = 0
-        seen_keys = set()
-        for row in reversed(self._events()):
+        rows = self._events()
+        finished = {str(row.get('deferred_key')) for row in rows
+                    if row.get('kind') in ('deferred-applied', 'deferred-conflict')
+                    and row.get('deferred_key')}
+        seen_keys = set(finished)
+        for row in reversed(rows):
             if row.get('kind') != 'deferred-update':
                 continue
             key = str(row.get('deferred_key') or row.get('memory_id') or '')
@@ -648,10 +656,25 @@ class ExperienceMemory:
             if (not isinstance(memory_id, str) or self.sidecar.locked(memory_id)
                     or not self._alive(memory_id)):
                 continue
-            if self._save_update({'id': memory_id, 'text': str(row.get('text') or '')}, row.get('seen')):
-                self.store.append(self.path, {'kind': 'deferred-applied', 'memory_id': memory_id,
-                                              'deferred_key': key, 'time': self.budget.clock()})
-                applied += 1
+            if not isinstance(row.get('seen'), str):
+                self.store.append(self.path, {'kind': 'deferred-conflict', 'memory_id': memory_id,
+                                              'deferred_key': key, 'reason': 'missing source version',
+                                              'time': self.budget.clock()})
+                continue
+            try:
+                current = self.memory.content_for(memory_id, refresh=True)
+                if current is not None and current.strip() == str(row.get('text') or '').strip():
+                    saved = True
+                else:
+                    saved = self._save_update({'id': memory_id, 'text': str(row.get('text') or '')},
+                                              row.get('seen'), source_key=key)
+                if saved:
+                    self.store.append(self.path, {'kind': 'deferred-applied', 'memory_id': memory_id,
+                                                  'deferred_key': key, 'time': self.budget.clock()})
+                    applied += 1
+            except Exception as exc:
+                self._record_failure('deferred', 'apply_failed', memory_id=memory_id,
+                                     error=type(exc).__name__)
         return applied
 
     def _save_entry(self, entry, span, source=None, source_key='', index=0):
@@ -708,10 +731,13 @@ class ExperienceMemory:
                                       'time': self.budget.clock()})
         return memory_id
 
-    def _save_update(self, update, seen=None):
+    def _save_update(self, update, seen=None, source_key=''):
         """Ticket 363: the entry is rewritten whole; the old version goes to the version record. `seen` is the
         text the model rewrote from: if Lan changed the entry meanwhile, her text wins and this rewrite is dropped."""
         memory_id = update['id']
+        if source_key and any(row.get('kind') == 'update' and row.get('source_key') == source_key
+                              and row.get('memory_id') == memory_id for row in self._events()):
+            return True
         if not self._alive(memory_id) or self.sidecar.locked(memory_id):
             return False
         previous = self.memory.content_for(memory_id, refresh=True)
@@ -725,7 +751,8 @@ class ExperienceMemory:
                                           seen=previous, why='经历整理：按后来的变化重写'):
                     return False
                 self.store.append(self.path, {'kind': 'update', 'memory_id': memory_id, 'text': update['text'],
-                                              'time': self.budget.clock(), 'event_id': event_id})
+                                              'time': self.budget.clock(), 'event_id': event_id,
+                                              **({'source_key': source_key} if source_key else {})})
                 return True
         text = update['text'].strip()
         if text == previous.strip():
@@ -749,7 +776,8 @@ class ExperienceMemory:
         except Exception:
             pass
         self.store.append(self.path, {'kind': 'update', 'memory_id': memory_id, 'text': text,
-                                      'time': self.budget.clock()})
+                                      'time': self.budget.clock(),
+                                      **({'source_key': source_key} if source_key else {})})
         return True
 
     def _digest(self, batch, reason):
@@ -868,7 +896,8 @@ class ExperienceMemory:
                                                       'time': self.budget.clock()})
                     continue
                 updated += bool(self._save_update(update, next(
-                    (c['text'] for c in candidates if c['id'] == update['id']), None)))
+                    (c['text'] for c in candidates if c['id'] == update['id']), None),
+                    source_key=f'{source_key}:{update["id"]}'))
             for number, entry in enumerate(entries):
                 written += self._save_entry(entry, span, source, source_key, number) is not None
         except Exception as exc:

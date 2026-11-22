@@ -316,6 +316,52 @@ class WritingTests(Fixture):
         self.assertTrue(any(row.get('kind') == 'deferred-applied'
                             for row in self.store.read('fake/experience-memory.jsonl')))
 
+    def test_a_successful_update_retry_does_not_rewrite_the_same_memory(self):
+        self.ombre.items['m1'] = {'title': 'lamp', 'content': 'old'}
+        self.assertTrue(self.feature._save_update({'id': 'm1', 'text': 'new'}, 'old', 'chat:batch:m1'))
+        calls = len(self.ombre.calls)
+        self.assertTrue(self.feature._save_update({'id': 'm1', 'text': 'new'}, 'old', 'chat:batch:m1'))
+        self.assertEqual(len(self.ombre.calls), calls)
+
+    def test_one_broken_deferred_update_does_not_block_the_next_one(self):
+        self.ombre.items.update({'m1': {'title': 'one', 'content': 'old one'},
+                                 'm2': {'title': 'two', 'content': 'old two'}})
+        for memory_id, old, new in (('m1', 'old one', 'new one'), ('m2', 'old two', 'new two')):
+            self.store.append('fake/experience-memory.jsonl', {
+                'kind': 'deferred-update', 'memory_id': memory_id, 'seen': old, 'text': new,
+                'deferred_key': f'chat:batch:{memory_id}', 'time': self.clock[0]})
+        original = self.feature._save_update
+
+        def fail_first(update, seen=None, source_key=''):
+            if update['id'] == 'm1':
+                raise UserError('fictional failure')
+            return original(update, seen, source_key)
+
+        with mock.patch.object(self.feature, '_save_update', side_effect=fail_first):
+            self.assertEqual(self.feature._apply_deferred(), 1)
+        self.assertEqual(self.ombre.items['m1']['content'], 'old one')
+        self.assertEqual(self.ombre.items['m2']['content'], 'new two')
+
+    def test_an_applied_deferred_update_is_not_applied_again(self):
+        self.ombre.items['m1'] = {'title': 'lamp', 'content': 'old'}
+        self.store.append('fake/experience-memory.jsonl', {
+            'kind': 'deferred-update', 'memory_id': 'm1', 'seen': 'old', 'text': 'new',
+            'deferred_key': 'chat:batch:m1', 'time': self.clock[0]})
+        self.assertEqual(self.feature._apply_deferred(), 1)
+        calls = len(self.ombre.calls)
+        self.assertEqual(self.feature._apply_deferred(), 0)
+        self.assertEqual(len(self.ombre.calls), calls)
+
+    def test_a_legacy_deferred_draft_without_its_source_version_never_overwrites(self):
+        self.ombre.items['m1'] = {'title': 'lamp', 'content': 'Lan edited this'}
+        self.store.append('fake/experience-memory.jsonl', {
+            'kind': 'deferred-update', 'memory_id': 'm1', 'text': 'old automatic draft',
+            'deferred_key': 'legacy:m1', 'time': self.clock[0]})
+        self.assertEqual(self.feature._apply_deferred(), 0)
+        self.assertEqual(self.ombre.items['m1']['content'], 'Lan edited this')
+        self.assertTrue(any(row.get('kind') == 'deferred-conflict'
+                            for row in self.store.read('fake/experience-memory.jsonl')))
+
     def test_locked_memories_are_not_offered_and_overlong_ones_only_to_continue(self):
         # Ticket 368: a memory too long to be read whole may be continued but never rewritten from a clipped view.
         self.ombre.items['locked'] = {'title': 'a', 'content': '她改过并锁定的一条。'}

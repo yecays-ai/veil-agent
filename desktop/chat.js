@@ -777,13 +777,13 @@ function renderEventList(){
   if(!filtered.length){const empty=document.createElement('p');empty.className='muted';empty.textContent=query?'没有匹配的经历。':'还没有形成经历';list.appendChild(empty)}
   let lastDay='';
   for(const item of filtered){
-    const day=memoryDay(item.last_at);
+    const day=item.last_at_known===false?'日期未知':memoryDay(item.last_at);
     if(day!==lastDay){const heading=document.createElement('h4');heading.className='memory-day';heading.textContent=day;list.appendChild(heading);lastDay=day}
     const button=document.createElement('button');button.type='button';button.className='memory-entry';
     const top=document.createElement('span');top.className='memory-entry-top';
     const title=document.createElement('span');title.className='memory-entry-title';title.textContent=item.title||item.event_id;
     const flags=[item.story_pending?'故事待整理':(item.dirty?'投影待重试':''),item.pending_review?'已锁新发展':''].filter(Boolean).join(' · ');
-    const time=document.createElement('time');time.textContent=(item.status==='uncertain'?'未定 · ':'')+`${item.stage_count||0} 段 · `+memoryTime(item.last_at)+(flags?' · '+flags:'');top.append(title,time);
+    const time=document.createElement('time');time.textContent=(item.status==='uncertain'?'未定 · ':'')+`${item.stage_count||0} 段 · `+(item.last_at_known===false?'日期未知':memoryTime(item.last_at))+(flags?' · '+flags:'');top.append(title,time);
     const preview=document.createElement('span');preview.className='memory-entry-preview';preview.textContent=`${item.first_at_known===false?'日期未知':memoryDay(item.first_at)} → ${item.last_at_known===false?'日期未知':memoryDay(item.last_at)}`;
     button.append(top,preview);button.onclick=()=>readEvent(item);list.appendChild(button);
   }

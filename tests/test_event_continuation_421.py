@@ -136,6 +136,28 @@ class Fixture(unittest.TestCase):
 
 
 class ContinuationTests(Fixture):
+    def test_background_event_model_calls_share_the_experience_daily_cap(self):
+        model = RouterModel()
+        guarded = EventMemory(self.memory, {'enabled': True}, model=model,
+                              sidecar=self.native.native.sidecar, budget=self.budget,
+                              cost_category='experience_memory', daily_cap=Decimal('0'))
+        saved = guarded.record('A fictional lamp stage.', 'The lamp', source_key='chat:budget')
+        self.assertIsNotNone(saved['event_id'])
+        self.assertTrue(saved['story_pending'])
+        self.assertEqual(model.requests, [])
+        spent, pending = self.budget.category_totals('fake', category='experience_memory')
+        self.assertEqual(spent + pending, Decimal('0'))
+
+    def test_peter_hold_uses_the_same_experience_daily_cap(self):
+        self.memory.cfg.memory['experience'] = {'daily_budget_cny': Decimal('0')}
+        guarded = self.open_tools()
+        result, state, _ = guarded.invoke('hold', {
+            'title': 'A capped save', 'content': 'A fictional stage saved under the daily cap.'})
+        self.assertEqual(state, '成功', result)
+        self.assertEqual(self.model.requests, [])
+        event = next(iter(guarded.native.events.events().values()))
+        self.assertTrue(event['story_pending'])
+
     def test_three_developments_become_one_experience_with_both_first_times(self):
         first = ('Nov 20 15:25. She asked me to test whether I could see she had read a message and not '
                  'answered. I reported the read receipt back to her.')
@@ -180,7 +202,7 @@ class ContinuationTests(Fixture):
         self.assertEqual(len(events), 2)
         # The first save had no candidate at all, so it starts open; the second one has a candidate but no
         # confirmed relationship, so it stays uncertain with the candidate link kept.
-        newest = max(events.values(), key=lambda event: str(event.get('last_at')))
+        newest = max(events.values(), key=lambda event: str(event.get('last_at') or event.get('last_saved_at')))
         self.assertEqual(newest.get('status'), 'uncertain')
         self.assertTrue(any(event.get('candidate_links') for event in events.values()))
 
@@ -199,7 +221,7 @@ class ContinuationTests(Fixture):
         self.save('Later we tested the memory budget on a phone.', 'The memory budget test')
         events = self.events.events()
         self.assertEqual(len(events), 2)
-        newest = max(events.values(), key=lambda event: str(event.get('last_at')))
+        newest = max(events.values(), key=lambda event: str(event.get('last_at') or event.get('last_saved_at')))
         self.assertEqual(newest.get('status'), 'uncertain')
         self.assertTrue(newest.get('candidate_links'))
         self.assertEqual(len(self.events.stages(newest['event_id'])), 1)
@@ -231,7 +253,9 @@ class ContinuationTests(Fixture):
         self.assertIn('locked', result)
         event = self.events.events()[event_id]
         self.assertEqual(len(self.events.stages(event_id)), 2)
-        self.assertIn('desk', event.get('story') or '')
+        self.assertNotIn('desk', event.get('story') or '')
+        self.assertIn('desk', self.events.stages(event_id)[-1]['text'])
+        self.assertTrue(event.get('story_pending'))
         self.assertEqual(self.backend.rows[key]['content'], before, 'the reviewed projection was not rewritten')
         self.assertTrue(event.get('pending_review'))
         self.assertTrue(self.store.read('fake/event-review.jsonl'))
@@ -311,12 +335,18 @@ class ContinuationTests(Fixture):
         saved = self.events.record('Something whose day I cannot place.', 'An unclear day')
         stage = self.events.stages(saved['event_id'])[0]
         self.assertFalse(stage['at_known'])
+        self.assertIsNone(stage['at'])
         self.assertIsNone(stage['occurred_at'])
+        event = self.events.events()[saved['event_id']]
+        self.assertIsNone(event['first_at'])
+        self.assertIsNone(event['last_at'])
         rendered, _, _ = self.events.timeline(saved['event_id'])
         self.assertIn('日期未知', rendered)
 
     def test_a_long_stage_is_stored_whole_and_its_ending_can_be_read(self):
-        body = 'A fictional long day. ' + ('The lamp and the desk and the rain. ' * 80) + 'ZEBRA-UNIQUE-END.'
+        body = ('A fictional long day. ' + ('The lamp and the desk and the rain. ' * 40)
+                + 'MIDDLE-SEARCH-CUE. ' + ('The lamp and the desk and the rain. ' * 40)
+                + 'ZEBRA-UNIQUE-END.')
         self.assertGreater(len(body), 2500)
         result, state, _ = self.save(body, 'The long day')
         self.assertEqual(state, '成功', result)
@@ -325,6 +355,8 @@ class ContinuationTests(Fixture):
         self.assertEqual(stage['text'], body)
         detail = self.events.detail(event_id)
         self.assertIn('ZEBRA-UNIQUE-END', detail['story'])
+        memory_id = self.events.events()[event_id]['memory_id']
+        self.assertIn('MIDDLE-SEARCH-CUE', self.memory.content_for(memory_id, refresh=True) or '')
         rendered, _, _ = self.events.timeline(event_id)
         self.assertIn('ZEBRA-UNIQUE-END', rendered)
 
@@ -341,6 +373,33 @@ class ContinuationTests(Fixture):
         self.assertIn('OLD-END-MARK', event.get('story') or '')
         self.assertIn('NEW-END-MARK', event.get('story') or '')
         self.assertEqual(len(self.events.stages(event_id)), 2)
+        self.assertEqual(set(event.get('story_coverage') or []),
+                         {stage['stage_id'] for stage in self.events.stages(event_id)})
+
+    def test_a_wrong_group_can_be_split_with_stories_indexes_and_sources_rebuilt(self):
+        source = {'kind': 'chat', 'from': '2026-11-20T10:00:00+08:00',
+                  'to': '2026-11-20T10:05:00+08:00', 'message_ids': ['u1', 'a1'], 'count': 2}
+        first = self.events.record('The lamp was by the bed. BED-ONLY.', 'The lamp',
+                                   at=source['to'], source=source, source_key='chat:u1|a1')
+        event_id = first['event_id']
+        second = self.events.record('A separate account argument happened. ACCOUNT-ONLY.', 'The lamp',
+                                    event_id=event_id, at='2026-11-21T11:00:00+08:00',
+                                    source={**source, 'from': '2026-11-21T10:55:00+08:00',
+                                            'to': '2026-11-21T11:00:00+08:00',
+                                            'message_ids': ['u2', 'a2']}, source_key='chat:u2|a2')
+        new_id = self.events.split_event(event_id, [second['stage_id']], 'The account argument')
+        self.assertIsNotNone(new_id)
+        old, new = self.events.events()[event_id], self.events.events()[new_id]
+        self.assertIn('BED-ONLY', old['story'])
+        self.assertNotIn('ACCOUNT-ONLY', old['story'])
+        self.assertIn('ACCOUNT-ONLY', new['story'])
+        self.assertNotIn('BED-ONLY', new['story'])
+        self.assertEqual(old['story_coverage'], [first['stage_id']])
+        self.assertEqual(new['story_coverage'], [second['stage_id']])
+        self.assertIn('BED-ONLY', self.memory.content_for(old['memory_id'], refresh=True))
+        self.assertIn('ACCOUNT-ONLY', self.memory.content_for(new['memory_id'], refresh=True))
+        reopened = self.open_tools().native.events
+        self.assertEqual(reopened.stages(new_id)[0]['source']['message_ids'], ['u2', 'a2'])
 
     def test_a_failed_story_rebuild_uses_the_complete_stage_text_not_a_partial_one(self):
         self.save('She asked me to keep the lamp by the bed. OLD-FACT.', 'The blue lamp')
@@ -359,6 +418,7 @@ class ContinuationTests(Fixture):
         event = next(iter(self.events.events().values()))
         self.assertIn('OLD-FACT', event.get('story') or '')
         self.assertIn('NEW-FACT', event.get('story') or '')
+        self.assertFalse(event.get('story_pending'))
         self.assertEqual(event.get('story_source'), 'composed')
 
     def test_a_restart_continues_the_same_experience(self):
@@ -385,7 +445,7 @@ class ContinuationTests(Fixture):
         detail = self.events.detail(event_id)
         beliefs = detail['belief_history']
         self.assertEqual(len(beliefs), 2)
-        self.assertEqual(beliefs[0]['invalid_at'], stages[1]['at'])
+        self.assertEqual(beliefs[0]['invalid_at'], stages[1]['saved_at'])
         self.assertIsNone(beliefs[1]['invalid_at'])
         self.assertIn('angry', detail['story'])
         self.assertIn('tired', detail['story'])
@@ -424,7 +484,9 @@ class ContinuationTests(Fixture):
         self.assertEqual(state, '成功', result)
         self.assertEqual(self.backend.rows[key]['content'], 'Lan rewrote this memory herself.')
         event = self.events.events()[event_id]
-        self.assertIn('desk', event.get('story') or '')
+        self.assertNotIn('desk', event.get('story') or '')
+        self.assertIn('desk', self.events.stages(event_id)[-1]['text'])
+        self.assertTrue(event.get('story_pending'))
         self.assertTrue(event.get('pending_review'))
 
     def test_an_autonomous_save_continues_the_same_experience(self):

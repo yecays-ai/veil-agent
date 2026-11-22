@@ -17,6 +17,15 @@ from veil_agent import Budget, Character, Store
 
 class MovingBackend(Backend):
     """Like Ombre, restoring moves the file back out of archive/."""
+    def call(self, name, args):
+        if name == 'trace' and isinstance(args.get('old_str'), str):
+            self.calls.append((name, args))
+            row = self.rows[args['bucket_id']]
+            row['content'] = row['content'].replace(args['old_str'], str(args.get('new_str') or ''), 1)
+            self.write_row(args['bucket_id'])
+            return 'updated'
+        return super().call(name, args)
+
     def write_row(self, key):
         if not self.rows[key].get('deleted'):
             (self.vault.parent / 'archive' / f'{key}.md').unlink(missing_ok=True)
@@ -182,7 +191,7 @@ class RewriteTests(Fixture):
         # old_str/new_str branch covered instead of switching to a whole-content rewrite.
         result, state, _ = self.native._trace(
             {'bucket_id': self.a, 'old_str': 'fog tide', 'new_str': 'z' * 2000}, None)
-        self.assertNotEqual(state, '被拒绝', result)
+        self.assertEqual(state, '成功', result)
 
     def test_peter_changing_what_lan_corrected_is_flagged_until_she_looks(self):
         self.native.panel_edit(self.a, {'content': 'Lan fixed this: on 11-06 fog tide.'})

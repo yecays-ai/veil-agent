@@ -309,7 +309,11 @@ class NativeMemoryTools:
         event_settings = (getattr(memory.cfg, 'memory', None) or {}).get('events')
         if isinstance(event_settings, dict) and event_settings.get('enabled'):
             from event_memory import EventMemory
-            self.events = EventMemory(memory, event_settings, model=self.model, sidecar=self.sidecar)
+            experience = (getattr(memory.cfg, 'memory', None) or {}).get('experience') or {}
+            daily_cap = experience.get('daily_budget_cny') if isinstance(experience, dict) else None
+            self.events = EventMemory(memory, event_settings, model=self.model, sidecar=self.sidecar,
+                                      budget=memory.budget, cost_category='experience_memory',
+                                      daily_cap=daily_cap)
             self.events.locked = self.sidecar.locked
             # Startup recovery: finish a stage/event write interrupted last run even when the chat-tidy
             # feature is not configured at all. Lock checks must already be bound.

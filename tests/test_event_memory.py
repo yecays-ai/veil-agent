@@ -47,9 +47,9 @@ class StoryModel(StubModel):
     def __call__(self, messages, **kwargs):
         if 'Rewrite the dated notes' in messages[0]['content'] or 'natural, complete story' in messages[0]['content']:
             payload = json.loads(messages[-1]['content'])
-            parts = [f"{stage['at'][:10]} {stage['text']}" for stage in payload['stages']]
+            parts = [f"{str(stage.get('at'))[:10]} {stage['text']}" for stage in payload['stages']]
             for belief in payload.get('beliefs') or []:
-                parts.append(f"At the time I thought {belief['belief']} ({belief['at'][:10]}).")
+                parts.append(f"At the time I thought {belief['belief']} ({str(belief.get('at'))[:10]}).")
             return ('\n\n'.join(parts), 1, 1, 0, None)
         return super().__call__(messages, **kwargs)
 
@@ -417,10 +417,11 @@ class EventMemoryTests(unittest.TestCase):
         self.native.invoke('hold', {'content': 'Later she said the silence was not space but anger.',
                                     'title': 'The quiet', 'interpretation': 'I learned it was anger, not space.'})
         event = next(iter(self.native.events.events().values()))
+        stages = self.native.events.stages(event['event_id'])
         beliefs = event.get('belief_history') or []
         self.assertEqual(len(beliefs), 2)
         self.assertTrue(beliefs[0].get('invalid_at'))
-        self.assertEqual(beliefs[0]['valid_from'], beliefs[0]['at'])
+        self.assertEqual(beliefs[0]['valid_from'], stages[0]['saved_at'])
         self.assertIsNone(beliefs[1].get('invalid_at'))
         self.native.events.dream_pass('test')
         state = self.native.events.dream_state()
@@ -527,7 +528,7 @@ class EventMemoryTests(unittest.TestCase):
                   'The file list was the argument')
         self.save('Later the charcoal note had one word from her: meh.', 'The charcoal note')
         event = next(iter(self.native.events.events().values()))
-        self.assertEqual(event.get('story_source'), 'model')
+        self.assertIn(event.get('story_source'), ('model', 'model+merge'))
         self.assertIn('3:42', event.get('story') or '')
         self.assertIn('meh', event.get('story') or '')
         detail = self.native.events.detail(event['event_id'])
@@ -540,7 +541,7 @@ class EventMemoryTests(unittest.TestCase):
         self.save('Later the charcoal note had one word from her.', 'The charcoal note')
         events = self.native.events.events()
         self.assertEqual(len(events), 2)
-        newest = max(events.values(), key=lambda event: str(event.get('last_at')))
+        newest = max(events.values(), key=lambda event: str(event.get('last_at') or event.get('last_saved_at')))
         self.assertEqual(newest.get('status'), 'uncertain')
         self.assertTrue(self.store.read('fake/event-review.jsonl'))
 
@@ -558,6 +559,14 @@ class EventMemoryTests(unittest.TestCase):
         self.assertEqual(state, '成功', result)
         self.assertEqual(self.backend.rows[key]['content'], before)
         self.assertEqual(len(self.native.events.stages()), 2)
+        event_id = next(iter(self.native.events.events()))
+        self.assertTrue(self.native.events.events()[event_id]['story_pending'])
+        self.native.events.locked = lambda memory_id: False
+        self.native.events.retry_dirty()
+        event = self.native.events.events()[event_id]
+        self.assertFalse(event['story_pending'])
+        self.assertIn('still on the desktop', event['story'])
+        self.assertIn('still on the desktop', self.backend.rows[key]['content'])
 
     def test_events_off_keeps_the_old_save_path(self):
         cfg = Character('fake', 'Example', 'fictional persona', 20, 1024,
