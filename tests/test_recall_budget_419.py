@@ -6,6 +6,7 @@ behaviour: several independent memories injected together, the recent conversati
 under pressure, and the final request never carrying half a sentence.
 """
 import json
+import prompts
 import random
 import re
 import tempfile
@@ -375,6 +376,23 @@ max_steps = 2
         joined = '\n'.join(content for _, content in said)
         self.assertNotIn('noise noise noise noise noise noise', joined)
 
+    def test_full_memory_in_retained_history_is_not_sent_twice(self):
+        self.rows = {'video': {'content': 'A brass lamp film. The ending is a fictional blue key.',
+                               'title': 'Video night'}}
+        block = '[bucket_id:video]\n' + self.rows['video']['content']
+        self.store.append('peter/chat.jsonl', {'role': 'user', 'content': 'video night brass lamp',
+                                             'message_id': 'old-u'})
+        self.store.append('peter/chat.jsonl', {'role': 'assistant', 'content': block,
+                                             'message_id': 'old-a'})
+        chat, model, memory = self.build(9000)
+        chat.send('还记得 brass lamp video night 吗', message_id='reuse-q')
+        sent = model.call_args.args[0]
+        self.assertTrue(any(row['role'] == 'assistant' and row.get('content') == block for row in sent))
+        recall_head = prompts.text('memory.recall.head')
+        self.assertFalse(any(str(row.get('content')).startswith(recall_head)
+                             and block in str(row.get('content')) for row in sent))
+        self.assertEqual(['video'], memory.last_recall_debug['reused'])
+
     def test_empty_memory_headers_cannot_displace_recent_history(self):
         self.seed_history()
         chat, model, memory = self.build(6000)
@@ -557,6 +575,26 @@ class FinalStateTests(MemoryLevelBudgetTests):
         self.assertEqual(sorted(memory.last_recall_debug['budget_dropped']),
                          sorted(item['id'] for item in memory.last_recall_debug['dropped']
                                 if item['reason'] == 'budget'))
+
+
+class EffectiveHistoryReuseTests(MemoryLevelBudgetTests):
+    def test_only_a_full_current_block_in_retained_history_is_reused(self):
+        story = 'The first brass lamp.\n\n' + 'A long middle. ' * 20 + 'UNIQUE_END.'
+        memory = self.memory({'long': {'content': story, 'title': 'The brass lamp'}})
+        memory.context('brass lamp', include_opening=False, defer=True)
+        messages = memory.finish_recall(space=3000)
+        block = memory._pending_recall['blocks'][0]['text']
+        for history in ([], [{'role': 'assistant', 'content': block[:120]}],
+                        [{'role': 'assistant', 'content': block.replace('UNIQUE_END.', 'OLD_END.')}]):
+            out = memory.reuse_recall(history, messages, 0.4)
+            self.assertIn(block, out[-1]['content'])
+            self.assertEqual([], memory.last_recall_debug['reused'])
+        out = memory.reuse_recall([{'role': 'assistant', 'content': block}], messages, 0.4)
+        self.assertNotIn(block, out[-1]['content'])
+        self.assertEqual(['long'], memory.last_recall_debug['reused'])
+        self.assertEqual([], memory.last_recall_debug['injected'])
+        self.assertEqual(['long'], memory.last_injected_refs)
+        self.assertEqual(estimate_message_tokens(out, 0.4), memory.last_memory_budget['memory_used'])
 
 
 class BoundaryTests(unittest.TestCase):

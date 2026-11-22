@@ -1821,6 +1821,38 @@ class Memory:
         self.last_memory_budget = dict(debug['budget'])
         return messages
 
+    def reuse_recall(self, history, messages, calibration):
+        """Omit exact current blocks only after their history copies survived request trimming."""
+        import recall_budget
+        contents = [row.get('content') for row in history if isinstance(row.get('content'), str)]
+        complete = {item['id'] for item in self.last_recall_debug.get('items', [])
+                    if item.get('complete')}
+        reused = []
+        result = [dict(message) for message in messages]
+        for block in (self._pending_recall or {}).get('blocks', []):
+            key, text = block['id'], block.get('text') or ''
+            if (key not in complete or not text or not any(text.strip() in content for content in contents)):
+                continue
+            for message in result:
+                content = message.get('content')
+                if isinstance(content, str) and text in content:
+                    message['content'] = content.replace(text, '', 1)
+                    reused.append(key)
+                    break
+        if reused:
+            debug = self.last_recall_debug
+            debug['reused'] = reused
+            debug['injected'] = [key for key in debug.get('injected', []) if key not in reused]
+            debug['opening'] = [key for key in debug.get('opening', []) if key not in reused]
+            for item in debug.get('items', []):
+                if item['id'] in reused:
+                    item.update({'source': 'history', 'tokens': 0, 'reused': True})
+            self.last_memory_budget['memory_used'] = recall_budget.tokens_for_messages(result, calibration)
+            debug['budget'] = dict(self.last_memory_budget)
+            # Keep the effective-context references for follow-ups and rollback: these full stories
+            # are still supplied to the model, in the retained history instead of a second copy.
+        return result
+
     SURFACED_LIMIT = 40
 
     def mark_surfaced(self, memory_ids):
