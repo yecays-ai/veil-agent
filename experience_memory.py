@@ -15,6 +15,7 @@ a summary the model keeps regenerating drifts; Lan chose rewriting anyway (2026-
 keeps the old version and she can lock a memory.
 """
 import json
+import hashlib
 import re
 import threading
 from dataclasses import replace
@@ -36,9 +37,9 @@ TICK_SECONDS = 300
 MAX_ENTRIES = 2           # 2026-11-15 Lan: small things may simply be forgotten
 MAX_UPDATES = 3
 TITLE_CHARS = 60
-ENTRY_CHARS = 600         # ticket 368: one cap for Peter's own saves and this tidying (was 500 here)
-UPDATE_CHARS = 600       # ticket 363: an update is the whole memory rewritten, same cap as Peter's own hold
-MESSAGE_CHARS = 1500      # one pasted wall of text is clipped, not allowed to crowd out the rest
+ENTRY_CHARS = 0           # ticket 421: no fixed cap; the model's output budget is the real limit
+UPDATE_CHARS = 0          # ticket 421: an update rewrites the whole memory, however long it is
+MESSAGE_CHARS = 1500      # one chunk of a pasted wall; long messages are split, never clipped
 REQUEST_CHARS = 12000     # visible chat text per model call; the rest waits for the next tick
 MAX_OUTPUT_TOKENS = 8000  # ticket 386: a thinking model's reasoning counts here too; at 3000 deepseek-flash often
                           # thought until the limit and never wrote the entries (7 failures in a row on 11-16)
@@ -54,7 +55,8 @@ LIBRARY_HITS = 6          # at most this many library memories are added to the 
 LOOKS = 2                # ticket 368: at most this many more asks after the first answer (the 2nd shows the exact problem again)
 STAGE_HITS = 4            # ticket 368: and this many more, the other stages of an experience a hit belongs to
 OWN_SAVES = 3             # ticket 368: and the memories Peter saved or rewrote himself most recently
-CANDIDATE_CHARS = 1200    # ticket 363: he rewrites an entry, so he sees it whole (older appended ones are clipped)
+CANDIDATE_CHARS = 6000    # ticket 421: the model must see the whole old memory before rewriting it; longer
+                          # ones are marked "too long to rewrite" (it may still continue them as a stage)
 FIX_MARGIN = 100          # ticket 386: an overlong draft is asked for about this much under the cap
 VERBATIM_RUN = 24         # an entry repeating this many characters of a message in a row is a quote, not a memory
 BACKFILL = timedelta(days=3)
@@ -121,7 +123,9 @@ class ExperienceMemory:
         event_settings = (getattr(cfg, 'memory', None) or {}).get('events')
         if isinstance(event_settings, dict) and event_settings.get('enabled'):
             from event_memory import EventMemory
-            self.events = EventMemory(memory, event_settings, model=model, sidecar=self.sidecar)
+            self.events = EventMemory(memory, event_settings, model=model, sidecar=self.sidecar,
+                                      budget=budget, cost_category=COST_CATEGORY,
+                                      daily_cap=self.settings.get('daily_budget_cny', DEFAULTS['daily_budget_cny']))
         if getattr(self.budget, 'reconcile_unsettled', None):
             self.budget.reconcile_unsettled({COST_ACCOUNTING})
 
@@ -168,7 +172,9 @@ class ExperienceMemory:
             return 0
         try:
             from event_memory import EventMemory
-            events = EventMemory(self.memory, settings, model=self.model, sidecar=self.sidecar)
+            events = EventMemory(self.memory, settings, model=self.model, sidecar=self.sidecar,
+                                 budget=self.budget, cost_category=COST_CATEGORY,
+                                 daily_cap=self.settings.get('daily_budget_cny', DEFAULTS['daily_budget_cny']))
             events.locked = self.sidecar.locked
             return events.dream_pass('tidy')
         except Exception:
@@ -225,8 +231,58 @@ class ExperienceMemory:
 
     def pending(self):
         rows = self.store.read(self.chat_path)
-        start = self._cursor(rows, self._events())
-        return [item for item in self._visible(rows) if item['position'] >= start]
+        events = self._events()
+        start = self._cursor(rows, events)
+        progress = self._chunk_progress(events)
+        out = []
+        for item in self._visible(rows):
+            if item['position'] < start:
+                continue
+            chunks = self._message_chunks(item)
+            skip = 0
+            if (progress and progress.get('message_id') == item.get('id')
+                    and progress.get('position') == item.get('position')):
+                skip = max(0, int(progress.get('next_chunk') or 0))
+            out.extend(chunks[skip:])
+        return out
+
+    def _chunk_progress(self, events):
+        """A partially processed long message, only when no later checkpoint has passed it."""
+        for event in reversed(events):
+            if event.get('kind') == 'chunk-progress':
+                return event
+            if event.get('kind') in ('checkpoint', 'start'):
+                return None
+        return None
+
+    @staticmethod
+    def _split_message(text, limit):
+        """Split at paragraphs/sentences; hard-cut only when there is no boundary. Never drops text."""
+        text = str(text or '')
+        if len(text) <= limit:
+            return [text]
+        pieces, rest = [], text
+        while len(rest) > limit:
+            cut = rest.rfind('\n', 0, limit + 1)
+            for mark in '。！？.!?':
+                pos = rest.rfind(mark, 0, limit + 1)
+                if pos + 1 > cut:
+                    cut = pos + 1
+            if cut < limit // 3:
+                cut = limit
+            pieces.append(rest[:cut].rstrip() or rest[:cut])
+            rest = rest[cut:].lstrip('\n')
+        if rest:
+            pieces.append(rest)
+        return pieces or [text]
+
+    def _message_chunks(self, item):
+        limit = max(200, MESSAGE_CHARS)
+        parts = self._split_message(item['text'], limit)
+        if len(parts) == 1 and len(item['text']) <= limit:
+            return [dict(item, chunk=0, chunks=1)]
+        return [{**item, 'text': part, 'chunk': index, 'chunks': len(parts)}
+                for index, part in enumerate(parts)]
 
     def due(self, pending=None):
         """Volume first, then time. Returns a reason or ''."""
@@ -299,6 +355,10 @@ class ExperienceMemory:
         self._event_maintenance()
         if not self.enabled():
             return 'off'
+        try:
+            self._apply_deferred()
+        except Exception:
+            pass
         with self._lock:
             pending = self.pending()
             reason = 'forced' if force and pending else self.due(pending)
@@ -310,7 +370,7 @@ class ExperienceMemory:
                 return 'waiting'
             batch, used = [], 0
             for item in pending:
-                text = item['text'] if len(item['text']) <= MESSAGE_CHARS else item['text'][:MESSAGE_CHARS] + ' …'
+                text = item['text']          # already a bounded chunk; never clip a message
                 if batch and used + len(text) > REQUEST_CHARS:
                     break
                 batch.append({**item, 'text': text})
@@ -321,12 +381,26 @@ class ExperienceMemory:
         """Still stored and not hidden, archived or deleted (a memory Lan deleted is simply gone)."""
         return self.memory.raw_content_for(memory_id) is not None and self.memory.refresh_visibility(memory_id)
 
+    def _event_status(self, memory_id):
+        """Ticket 421 review: a closed or merged experience must not be offered for a rewrite."""
+        events = getattr(self, 'events', None)
+        if events is None:
+            return ''
+        try:
+            event_id = events.event_for_memory(memory_id)
+            event = (events.events() or {}).get(event_id) if event_id else None
+            return str((event or {}).get('status') or '')
+        except Exception:
+            return ''
+
     def _offer(self, memory_id):
         """One candidate as the model sees it, read fresh from the library: its text, how often it was rewritten and
         the other stages it is linked to. None for what is gone, hidden, archived or locked by Lan. A memory too long
         to rewrite whole is shown clipped and marked: it can be continued but not rewritten."""
         try:
             if not self._alive(memory_id) or self.sidecar.locked(memory_id):
+                return None
+            if self._event_status(memory_id) in ('merged', 'closed'):
                 return None
             body = self.memory.content_for(memory_id, refresh=True)
             if not body:
@@ -339,6 +413,8 @@ class ExperienceMemory:
         stages = getattr(self.memory, 'experience_stages', None)
         item = {'id': memory_id, 'title': (titled(memory_id) if titled else '') or '', 'written': '',
                 'text': body[:CANDIDATE_CHARS], 'whole': len(body) <= CANDIDATE_CHARS, 'versions': versions,
+                'full_chars': len(body),
+                **({'text_truncated': True} if len(body) > CANDIDATE_CHARS else {}),
                 'stages': [{'id': other, 'title': (titled(other) if titled else '') or ''}
                            for other in (stages(memory_id) if stages else [])][:4]}
         return item
@@ -424,6 +500,25 @@ class ExperienceMemory:
             if own >= OWN_SAVES:
                 break
         return out
+
+    def _fit_candidates(self, candidates):
+        """Keep the whole old text when it fits the real request budget; clip only with an explicit marker,
+        never silently (ticket 421)."""
+        try:
+            total = int((self.cfg.provider or {}).get('max_input_tokens') or 0)
+        except (TypeError, ValueError):
+            total = 0
+        room = max(2000, (total or 30000) - REQUEST_CHARS - 4000)
+        used = 0
+        for item in candidates:
+            left = max(0, room - used)
+            text = str(item.get('text') or '')
+            if len(text) > left:
+                item['text'] = text[:left]
+                item['whole'] = False
+                item['text_truncated'] = True
+            used += len(item.get('text') or '')
+        return [item for item in candidates if item.get('text')]
 
     def _candidates(self, events):
         """His latest entries that still exist and are not hidden, newest first."""
@@ -538,9 +633,10 @@ class ExperienceMemory:
         """What is wrong with a text that cannot be written as it is, or None. Never shows a secret back."""
         if SECRET.search(text):
             return None
-        if len(text) > limit:
+        if limit and len(text) > limit:
             # Ticket 386: "shorten it" alone left 4 of 6 drafts still 8 to 99 characters over after two tries
-            # (11-17 to 11-18); aiming well under the cap leaves room for miscounting. The cap itself is unchanged.
+            # (11-17 to 11-18); aiming well under the cap leaves room for miscounting. Ticket 421 removes the
+            # fixed cap entirely; this branch only runs when a caller still passes a real budget.
             return (f'{len(text)} characters; the most is {limit}. Rewrite it to about {limit - FIX_MARGIN} characters '
                     '(well under the limit, since counting is easy to get wrong), keeping the facts and the attitude; '
                     'what belongs to a later stage is not part of this one.')
@@ -605,14 +701,75 @@ class ExperienceMemory:
             updates.append({'id': memory_id, 'text': text})
         return entries, updates, dropped, flagged
 
-    def _save_entry(self, entry, span):
+    def _apply_deferred(self):
+        """Ticket 421 review: apply updates that were kept while the memory was locked, once it is free.
+        The draft is only applied if the memory still holds the text the model rewrote from."""
+        applied = 0
+        rows = self._events()
+        finished = {str(row.get('deferred_key')) for row in rows
+                    if row.get('kind') in ('deferred-applied', 'deferred-conflict')
+                    and row.get('deferred_key')}
+        seen_keys = set(finished)
+        for row in reversed(rows):
+            if row.get('kind') != 'deferred-update':
+                continue
+            key = str(row.get('deferred_key') or row.get('memory_id') or '')
+            if not key or key in seen_keys:
+                continue
+            seen_keys.add(key)
+            memory_id = row.get('memory_id')
+            if (not isinstance(memory_id, str) or self.sidecar.locked(memory_id)
+                    or not self._alive(memory_id)):
+                continue
+            if not isinstance(row.get('seen'), str):
+                self.store.append(self.path, {'kind': 'deferred-conflict', 'memory_id': memory_id,
+                                              'deferred_key': key, 'reason': 'missing source version',
+                                              'time': self.budget.clock()})
+                continue
+            try:
+                current = self.memory.content_for(memory_id, refresh=True)
+                if current is not None and current.strip() == str(row.get('text') or '').strip():
+                    saved = True
+                else:
+                    saved = self._save_update({'id': memory_id, 'text': str(row.get('text') or '')},
+                                              row.get('seen'), source_key=key)
+                if saved == 'closed':
+                    self.store.append(self.path, {'kind': 'deferred-conflict', 'memory_id': memory_id,
+                                                  'deferred_key': key, 'reason': 'target event closed',
+                                                  'time': self.budget.clock()})
+                    continue
+                if saved:
+                    self.store.append(self.path, {'kind': 'deferred-applied', 'memory_id': memory_id,
+                                                  'deferred_key': key, 'time': self.budget.clock()})
+                    applied += 1
+                else:
+                    self.store.append(self.path, {'kind': 'deferred-conflict', 'memory_id': memory_id,
+                                                  'deferred_key': key, 'reason': 'source version changed',
+                                                  'time': self.budget.clock()})
+            except Exception as exc:
+                self._record_failure('deferred', 'apply_failed', memory_id=memory_id,
+                                     error=type(exc).__name__)
+        return applied
+
+    def _save_entry(self, entry, span, source=None, source_key='', index=0):
         continues = entry.get('continues')
         args = {'content': entry['text'], 'title': entry['title']}
+        if source_key:
+            # Ticket 421: a retry of the same source batch must not add the stage twice, even if the model
+            # worded it (or its title) differently this time. The position in the batch is the stable key.
+            for row in self._events():
+                if (row.get('kind') == 'entry' and row.get('source_key') == source_key
+                        and row.get('entry_index', 0) == index):
+                    return row.get('memory_id')
         if self.events is not None:
             target_event = self.events.event_for_memory(continues) if continues else None
+            event_source_key = f'{source_key}:entry:{index}' if source_key else ''
             try:
+                # Ticket 421: the stage carries when the conversation happened and which messages it came
+                # from; the same batch is idempotent even when a retry crosses midnight.
                 saved = self.events.record(entry['text'], entry['title'], why='经历整理',
-                                           event_id=target_event)
+                                           event_id=target_event, at=(source or {}).get('to'),
+                                           source=source, source_key=event_source_key)
             except Exception as exc:
                 raise UserError('经历整理的事件没有保存成功；这批消息会重试，不推进游标。') from exc
             if not saved or saved.get('pending'):
@@ -623,10 +780,16 @@ class ExperienceMemory:
                     self.sidecar.link(memory_id, continues)
                 except Exception:
                     pass
-            self.store.append(self.path, {'kind': 'entry', 'memory_id': memory_id, 'title': entry['title'],
-                                          'text': entry['text'], 'merged': False, 'covers': span,
+            stored = next((row for row in self.events.stages(saved.get('event_id'))
+                           if row.get('source_key') == event_source_key), None)
+            self.store.append(self.path, {'kind': 'entry', 'memory_id': memory_id,
+                                          'title': (saved.get('title') if saved.get('duplicate') else entry['title']),
+                                          'text': (((stored or {}).get('text') or entry['text'])
+                                                   if saved.get('duplicate') else entry['text']),
+                                          'merged': False, 'covers': span,
                                           'continues': continues, 'event_id': saved.get('event_id'),
-                                          'time': self.budget.clock()})
+                                          'source_key': source_key, 'entry_index': index,
+                                          'source': source, 'time': self.budget.clock()})
             return memory_id
         operation, duplicate = self.memory.begin_write(args)
         if duplicate is not None:
@@ -642,16 +805,41 @@ class ExperienceMemory:
         except Exception:
             pass
         self.store.append(self.path, {'kind': 'entry', 'memory_id': memory_id, 'title': entry['title'],
-                                      'text': entry['text'], 'merged': kind == '合并', 'covers': span, 'continues': continues,
+                                      'text': entry['text'], 'merged': kind == '合并', 'covers': span,
+                                      'continues': continues, 'source_key': source_key,
+                                      'entry_index': index, 'source': source,
                                       'time': self.budget.clock()})
         return memory_id
 
-    def _save_update(self, update, seen=None):
+    def _preserve_rejected_update(self, update, seen, source_key, reason):
+        """Keep a draft that can never be applied (for example a closed experience) where Lan can see it,
+        without putting the batch back into an endless retry."""
+        key = source_key or f'rejected:{update["id"]}:{hashlib.sha1(str(update.get("text") or "").encode("utf-8")).hexdigest()[:10]}'
+        for row in self._events():
+            if (row.get('kind') == 'update-rejected' and row.get('source_key') == key
+                    and row.get('memory_id') == update['id']):
+                return
+        self.store.append(self.path, {'kind': 'update-rejected', 'memory_id': update['id'],
+                                      'text': str(update.get('text') or ''),
+                                      'seen': seen if isinstance(seen, str) else None,
+                                      'source_key': key, 'reason': reason,
+                                      'time': self.budget.clock()})
+
+    def _save_update(self, update, seen=None, source_key=''):
         """Ticket 363: the entry is rewritten whole; the old version goes to the version record. `seen` is the
         text the model rewrote from: if Lan changed the entry meanwhile, her text wins and this rewrite is dropped."""
         memory_id = update['id']
+        if source_key and any(row.get('kind') == 'update' and row.get('source_key') == source_key
+                              and row.get('memory_id') == memory_id for row in self._events()):
+            return True
         if not self._alive(memory_id) or self.sidecar.locked(memory_id):
             return False
+        status = self._event_status(memory_id)
+        if status in ('merged', 'closed'):
+            # Ticket 421 review: revise() refuses a closed experience. Do not raise (that would keep the
+            # whole batch uncommitted and buy the same model answer again); keep the draft and move on.
+            self._preserve_rejected_update(update, seen, source_key, f'event {status}')
+            return 'closed'
         previous = self.memory.content_for(memory_id, refresh=True)
         if not previous or (seen is not None and previous.strip() != seen.strip()):
             return False
@@ -663,11 +851,12 @@ class ExperienceMemory:
                                           seen=previous, why='经历整理：按后来的变化重写'):
                     return False
                 self.store.append(self.path, {'kind': 'update', 'memory_id': memory_id, 'text': update['text'],
-                                              'time': self.budget.clock(), 'event_id': event_id})
+                                              'time': self.budget.clock(), 'event_id': event_id,
+                                              **({'source_key': source_key} if source_key else {})})
                 return True
         text = update['text'].strip()
         if text == previous.strip():
-            return False
+            return True
         document = self.memory.raw_content_for(memory_id)
         if document is None:
             return False
@@ -687,7 +876,8 @@ class ExperienceMemory:
         except Exception:
             pass
         self.store.append(self.path, {'kind': 'update', 'memory_id': memory_id, 'text': text,
-                                      'time': self.budget.clock()})
+                                      'time': self.budget.clock(),
+                                      **({'source_key': source_key} if source_key else {})})
         return True
 
     def _digest(self, batch, reason):
@@ -697,14 +887,19 @@ class ExperienceMemory:
         if Decimal(str(self.settings['daily_budget_cny'])) > self.spent_today():
             # Searching costs a little embedding money: not once the day's ceiling is reached.
             candidates += self._library(batch, {candidate['id'] for candidate in candidates})
+        candidates = self._fit_candidates(candidates)
         zone = last['time'].tzinfo
 
         def shown(c):
-            item = {'id': c['id'], 'title': c['title'], 'written': c['written'], 'text': c['text'][:CANDIDATE_CHARS]}
+            item = {'id': c['id'], 'title': c['title'], 'written': c['written'], 'text': c['text']}
             if c.get('versions'):
                 item['rewritten_times'] = c['versions']
             if c.get('stages'):
                 item['stages'] = c['stages']
+            if c.get('full_chars') is not None:
+                item['full_chars'] = c['full_chars']
+            if c.get('text_truncated'):
+                item['text_truncated'] = True
             if not c.get('whole', True):
                 item['too_long_to_rewrite'] = True   # can be continued, not rewritten
             return item
@@ -735,12 +930,36 @@ class ExperienceMemory:
             if not any(e.get('kind') == 'budget' and str(e.get('time', ''))[:10] == today for e in events):
                 self.store.append(self.path, {'kind': 'budget', 'time': self.budget.clock(), 'cap': str(cap)})
             return 'budget'
-        mark = {'through_message_id': last['id'], 'through_position': last['position'] + 1,
-                'messages': len(batch), 'chars': sum(len(item['text']) for item in batch), 'reason': reason}
+        complete = [item for item in batch
+                    if int(item.get('chunk') or 0) == int(item.get('chunks') or 1) - 1]
+        if complete:
+            mark = {'through_message_id': complete[-1]['id'],
+                    'through_position': complete[-1]['position'] + 1}
+        else:
+            # Only part of one long message fits: keep the cursor at that message and remember the chunk.
+            mark = {'through_message_id': None, 'through_position': batch[0]['position']}
+        mark.update({'messages': len(batch), 'chars': sum(len(item['text']) for item in batch),
+                     'reason': reason,
+                     'covers': {'from': batch[0]['time'].isoformat(), 'to': last['time'].isoformat()}})
+        tail = batch[-1]
+        progress = ({'kind': 'chunk-progress', 'message_id': tail['id'], 'position': tail['position'],
+                     'next_chunk': int(tail.get('chunk') or 0) + 1, 'chunks': int(tail.get('chunks') or 1)}
+                    if int(tail.get('chunks') or 1) > 1
+                    and int(tail.get('chunk') or 0) < int(tail.get('chunks') or 1) - 1 else None)
         self.store.append(self.path, {'kind': 'attempt', **mark, 'time': self.budget.clock()})
         span = [batch[0]['time'].isoformat(timespec='minutes'), last['time'].isoformat(timespec='minutes')]
+        deferred = []
+        message_ids = list(dict.fromkeys(item['id'] for item in batch
+                                         if isinstance(item.get('id'), str) and item['id']))
+        source = {'kind': 'chat', 'from': batch[0]['time'].isoformat(), 'to': last['time'].isoformat(),
+                  'message_ids': message_ids, 'count': len(message_ids)}
+        bits = [item['id'] if int(item.get('chunks') or 1) == 1
+                else f"{item['id']}#{int(item.get('chunk') or 0)}"
+                for item in batch if isinstance(item.get('id'), str) and item['id']]
+        source_key = ('chat:' + '|'.join(bits)) if bits else ('chat:' + ':'.join(span))
         written = updated = 0
         failed = []
+        rejected = []
         try:
             entries, updates, dropped, flagged = self._validated(
                 self._call_model(messages), batch, candidates, final=False)
@@ -779,10 +998,39 @@ class ExperienceMemory:
                                      draft=item['text'], **({'title': item['title']} if item['kind'] == 'entry'
                                                              else {'id': item['id']}))
             for update in updates:
-                updated += bool(self._save_update(update, next(
-                    (c['text'] for c in candidates if c['id'] == update['id']), None)))
-            for entry in entries:
-                written += self._save_entry(entry, span) is not None
+                if self.sidecar.locked(update['id']):
+                    # Ticket 421: Lan locked the reviewed story; the new development is not dropped.
+                    # It is written down once per batch and applied on a later run after she unlocks it.
+                    seen = next((c['text'] for c in candidates if c['id'] == update['id']), None)
+                    key = f'{source_key}:{update["id"]}'
+                    known = {row.get('deferred_key') for row in self._events()
+                             if row.get('kind') == 'deferred-update'}
+                    if key not in known:
+                        deferred.append({'memory_id': update['id'], 'text': update['text'],
+                                         'reason': 'locked; kept for review'})
+                        self.store.append(self.path, {'kind': 'deferred-update', 'memory_id': update['id'],
+                                                      'text': update['text'], 'seen': seen,
+                                                      'deferred_key': key, 'covers': span,
+                                                      'time': self.budget.clock()})
+                    continue
+                update_key = f'{source_key}:{update["id"]}'
+                saved = self._save_update(update, next(
+                    (c['text'] for c in candidates if c['id'] == update['id']), None),
+                    source_key=update_key)
+                if saved == 'closed':
+                    # Ticket 421 review: a closed experience is a terminal rejection, not a transient
+                    # failure. The draft is preserved by _save_update; advance the cursor and keep going.
+                    rejected.append({'memory_id': update['id'], 'reason': 'event closed'})
+                    continue
+                if not saved:
+                    self.store.append(self.path, {'kind': 'update-conflict', 'memory_id': update['id'],
+                                                  'source_key': update_key,
+                                                  'reason': 'target changed, disappeared, locked, or rejected',
+                                                  'time': self.budget.clock()})
+                    raise UserError('经历整理的更新没有保存；保留当前记忆并等待重试，没有推进游标。')
+                updated += 1
+            for number, entry in enumerate(entries):
+                written += self._save_entry(entry, span, source, source_key, number) is not None
         except Exception as exc:
             self.store.append(self.path, {'kind': 'error', 'reason': type(exc).__name__,
                                           'detail': str(exc)[:300] if isinstance(exc, UserError) else '',
@@ -790,14 +1038,18 @@ class ExperienceMemory:
                                           **({'retried_without_thinking': self._retried} if self._retried else {})})
             if not isinstance(exc, UserError):
                 self._record_failure('save', 'error', error=type(exc).__name__, detail=str(exc)[:300])
-            if not (written or updated):
-                raise
-            # Something was already saved: move on rather than write the same thing twice next time.
-            dropped = 0
+            # Ticket 421: the cursor must not advance unless every draft of this batch is safely stored.
+            # A retry is idempotent because stages are keyed by the source batch.
+            raise
         self.store.append(self.path, {'kind': 'checkpoint', **mark, 'written': written, 'updated': updated,
                                       'dropped': dropped, 'time': self.budget.clock(),
                                       **({'unfixed': failed} if failed else {}),
+                                      **({'rejected': rejected} if rejected else {}),
+                                      **({'deferred': deferred} if deferred else {}),
                                       **({'retried_without_thinking': self._retried} if self._retried else {})})
+        if progress:
+            # The last message in this batch was only partly handled; the next run resumes inside it.
+            self.store.append(self.path, {**progress, 'time': self.budget.clock()})
         self._context_cache = None
         return 'written' if written or updated else 'skipped'
 
@@ -864,8 +1116,11 @@ class ExperienceMemory:
         return {'enabled': self.enabled(), 'available': self.memory is not None,
                 'last': ({'kind': last['kind'], 'time': last.get('time'), 'written': last.get('written', 0),
                           'updated': last.get('updated', 0), 'detail': last.get('detail', ''),
+                          'covers': last.get('covers'),
                           'retried_without_thinking': last.get('retried_without_thinking', 0),
-                          'unfixed': len(last.get('unfixed') or [])} if last else None),
+                          'unfixed': len(last.get('unfixed') or []),
+                          'rejected': len(last.get('rejected') or []),
+                          'deferred': len(last.get('deferred') or [])} if last else None),
                 'retry_at': (lambda at: at.isoformat(timespec='minutes') if at else None)(self.retry_at(events)),
                 'failures_kept': len(self.failures()),
                 'pending_chars': sum(len(item['text']) for item in pending),

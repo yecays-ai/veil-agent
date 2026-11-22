@@ -443,6 +443,8 @@ def _apply_plan_unlocked(plan, data_dir, role='peter'):
     manifest_path = role_dir / 'event-import-manifest.json'
     stamp = datetime.now().astimezone().strftime('%Y%m%dT%H%M%S%f%z')
     backup = role_dir / f'.event-import-backup-{stamp}'
+    # An empty snapshot is still required to recover a first import.
+    backup.mkdir(parents=True, exist_ok=False)
     write_items = [item for item in plan['items'] if item['action'] in ('create', 'update')]
     keep_items = [item for item in plan['items'] if item['action'] in ('unchanged', 'preserved')]
     touched = [events_path, stages_path, review_path, withdrawn_path, manifest_path]
@@ -450,7 +452,6 @@ def _apply_plan_unlocked(plan, data_dir, role='peter'):
     touched += [path for item in write_items for path in item['old_files'] if path not in touched]
     for path in touched:
         if path.exists():
-            backup.mkdir(parents=True, exist_ok=True)
             target = backup / path.relative_to(role_dir)
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(path, target)

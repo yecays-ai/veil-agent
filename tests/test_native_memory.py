@@ -220,11 +220,17 @@ class NativeMemoryTests(unittest.TestCase):
         self.assertTrue(any('合并：Blue lamp' in line for line in self.output))
 
     def test_invalid_or_oversized_save_never_reaches_ombre(self):
+        limit = self.tools.native._memory_limit()
+        before = len([1 for name, _ in self.backend.calls if name == 'hold'])
+        # A fixed boundary: the old 600-character ceiling must not come back.
+        result, state, _ = self.tools.invoke('hold', {'title': 'x', 'content': 'a' * 601})
+        self.assertEqual(state, '成功', result)
         for args in ({'title': 'x', 'content': '  '}, {'title': '', 'content': 'a'},
-                     {'title': 'x', 'content': 'a' * 1501}, {'content': 'no title'}):
+                     {'title': 'x', 'content': 'a' * (limit + 1)}, {'content': 'no title'}):
             result, state, _ = self.tools.invoke('hold', args)
             self.assertEqual(state, '被拒绝', args)
-        self.assertNotIn('hold', [n for n, _ in self.backend.calls])
+        after = len([1 for name, _ in self.backend.calls if name == 'hold'])
+        self.assertEqual(after, before + 1)
 
     def test_feel_is_not_offered_because_ombre_needs_a_source_bucket_for_it(self):
         self.assertNotIn('feel', HOLD.inputSchema['properties'])

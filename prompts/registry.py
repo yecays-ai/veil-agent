@@ -168,7 +168,7 @@ ENTRIES = (
           note='同上。'),
     _text('memory.experience.prompt', 'memory', '经历记忆整理的提示词',
           '旁路请求：攒够聊天后写「他会记得的事」', max_bytes=6000, editable=False,
-          note='花括号是字数与条数参数，由程序填；它必须只回 JSON。'),
+          note='花括号是条数和日期参数，由程序填；它必须只回 JSON。'),
     _text('memory.experience.fix', 'memory', '经历记忆的修稿提示词',
           '旁路请求：草稿不合格时只改正文', max_bytes=2500, editable=False,
           note='同上。'),

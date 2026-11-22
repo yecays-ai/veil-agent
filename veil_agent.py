@@ -1514,7 +1514,7 @@ class Budget:
             raise UserError(self._LEDGER_UNREADABLE) from exc
 
     @synchronized
-    def reserve(self, cfg, *, accounting=None, category=None):
+    def reserve(self, cfg, *, accounting=None, category=None, category_daily=None):
         p = cfg.provider
         amount = p['cny_per_call'] if p.get('cny_per_call') else (
             p['max_input_tokens'] * p['input_cny_per_million']
@@ -1524,6 +1524,11 @@ class Budget:
         active_category, character = self._reserve_category(amount)
         category = category or active_category
         self._enforce_category_budget(category, character, amount)
+        if category_daily is not None:
+            cap = Decimal(str(category_daily))
+            used, category_pending = self.category_totals(cfg.id, category=category)
+            if used + category_pending + amount > cap:
+                raise BudgetExceeded(f'{category} 已达到 ¥{cap}/日上限，未发送。')
         if day + pending + amount > self.daily_limit() or month + pending + amount > self.monthly_limit():
             raise BudgetExceeded(f'本次费用上限会超过 ¥{self.daily_limit()}/天或 ¥{self.monthly_limit()}/月，未发送。输入 /cost 查看。')
         request_id = uuid.uuid4().hex

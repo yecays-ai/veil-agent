@@ -195,6 +195,43 @@ class FinalImportTests(unittest.TestCase):
             self.assertFalse((role / 'event-stages.jsonl').exists())
             self.assertFalse(list((role / 'memory' / 'dynamic' / '事件').glob('*.md')))
 
+    def test_first_import_write_failure_clears_marker_and_can_retry(self):
+        with workspace_temp() as temp:
+            final = fixture()
+            plan = event_import.build_plan(final, temp)
+            original = event_import._write_atomic
+            def fail(path, text):
+                if Path(path).name == 'events.jsonl':
+                    raise OSError('injected first import failure')
+                return original(path, text)
+            with unittest.mock.patch.object(event_import, '_write_atomic', side_effect=fail):
+                with self.assertRaisesRegex(OSError, 'injected first import failure'):
+                    event_import.apply_plan(plan, temp)
+            role = Path(temp) / 'peter'
+            self.assertFalse((role / event_import.PENDING_NAME).exists())
+            self.assertFalse(list((role / 'memory').rglob('*.md')))
+            event_import.apply_plan(event_import.build_plan(final, temp), temp)
+            self.assertEqual(3, len((role / 'events.jsonl').read_text(encoding='utf8').splitlines()))
+
+    def test_interrupted_first_import_recovers_empty_snapshot_on_retry(self):
+        with workspace_temp() as temp:
+            final = fixture()
+            plan = event_import.build_plan(final, temp)
+            original = event_import._write_atomic
+            def interrupt(path, text):
+                if Path(path).name == 'events.jsonl':
+                    raise KeyboardInterrupt('simulated process interruption')
+                return original(path, text)
+            with unittest.mock.patch.object(event_import, '_write_atomic', side_effect=interrupt):
+                with self.assertRaises(KeyboardInterrupt):
+                    event_import.apply_plan(plan, temp)
+            role = Path(temp) / 'peter'
+            self.assertTrue((role / event_import.PENDING_NAME).exists())
+            self.assertTrue(list((role / 'memory').rglob('*.md')))
+            event_import.apply_plan(event_import.build_plan(final, temp), temp)
+            self.assertFalse((role / event_import.PENDING_NAME).exists())
+            self.assertEqual(3, len((role / 'events.jsonl').read_text(encoding='utf8').splitlines()))
+
     def test_update_failure_restores_the_old_event_stage_and_memory(self):
         with workspace_temp() as temp:
             final = fixture()

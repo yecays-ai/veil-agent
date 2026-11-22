@@ -332,3 +332,11 @@ test('text sent with a sticker keeps its own bubble (ticket 418)', async () => {
   assert.match(js, /if\(!stickerBubble\(d,text\)\)d\.innerHTML=render\(text\)/);
   assert.match(glass, /\.msg\.sticker-msg \.msg-sticker-caption\{background:color-mix/);
 });
+
+test('event memories distinguish unknown occurrence dates from save times (ticket 421)', async () => {
+  const js = await read('chat.js');
+  assert.match(js, /last_at_known===false\?'日期未知'/);
+  assert.match(js, /stage\.at_known===true\?`发生 /);
+  assert.match(js, /stage\.at_known===true\?`发生 [\s\S]*?:`日期未知（记于 \$\{strTime\(stage\.saved_at\|\|stage\.at\)\}）`/);
+  assert.match(js, /story_pending\?'故事待整理':\(item\.dirty\?'投影待重试':''\)/);
+});

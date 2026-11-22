@@ -17,6 +17,20 @@ from veil_agent import Budget, Character, Store
 
 class MovingBackend(Backend):
     """Like Ombre, restoring moves the file back out of archive/."""
+    def call(self, name, args):
+        if name == 'trace' and isinstance(args.get('old_str'), str):
+            self.calls.append((name, args))
+            if self.fail:
+                raise RuntimeError('fictional failure')
+            row = self.rows[args['bucket_id']]
+            if (not args['old_str'] or not isinstance(args.get('new_str'), str)
+                    or row['content'].count(args['old_str']) != 1):
+                raise RuntimeError('old_str/new_str must match one unique passage')
+            row['content'] = row['content'].replace(args['old_str'], args['new_str'], 1)
+            self.write_row(args['bucket_id'])
+            return 'updated'
+        return super().call(name, args)
+
     def write_row(self, key):
         if not self.rows[key].get('deleted'):
             (self.vault.parent / 'archive' / f'{key}.md').unlink(missing_ok=True)
@@ -95,11 +109,12 @@ class NewSaveTests(Fixture):
     def test_link_to_an_unseen_memory_is_refused(self):
         self.assertEqual(self.hold(title='t', content='c', link_to='nope')[1], '被拒绝')
 
-    def test_a_memory_longer_than_the_limit_is_refused_and_nothing_saved(self):
-        result, state, _ = self.hold(title='Long', content='x' * (MEMORY_CHARS + 1))
-        self.assertEqual(state, '被拒绝')
-        self.assertIn(str(MEMORY_CHARS), result)
-        self.assertEqual(self.holds(), [])
+    def test_a_memory_longer_than_the_old_cap_is_saved_whole(self):
+        # Ticket 421: the fixed 600-character cap is gone; long memories are kept, not cut into fragments.
+        text = 'x' * 2000
+        result, state, _ = self.hold(title='Long', content=text)
+        self.assertEqual(state, '成功', result)
+        self.assertEqual(self.holds()[-1]['content'], text)
 
     def test_every_save_records_when_it_happened(self):
         key = self.saved('Lamp', 'the blue lamp.')
@@ -176,11 +191,22 @@ class RewriteTests(Fixture):
             self.native._trace({'bucket_id': self.a, 'content': 'changed'}, None)
         self.assertNotEqual(self.backend.rows[self.a]['content'], 'changed')
 
-    def test_a_replacement_cannot_grow_a_memory_past_the_limit(self):
+    def test_a_replacement_may_grow_a_memory(self):
+        # Ticket 421: the old 600-character ceiling no longer blocks a real update; this keeps the
+        # old_str/new_str branch covered instead of switching to a whole-content rewrite.
         result, state, _ = self.native._trace(
-            {'bucket_id': self.a, 'old_str': 'fog tide', 'new_str': 'z' * MEMORY_CHARS}, None)
-        self.assertEqual(state, '被拒绝', result)
-        self.assertIn(str(MEMORY_CHARS), result)
+            {'bucket_id': self.a, 'old_str': 'fog tide', 'new_str': 'z' * 2000}, None)
+        self.assertEqual(state, '成功', result)
+        self.assertEqual(self.backend.rows[self.a]['content'],
+                         'on 11-06 i bet her a week on ' + 'z' * 2000 + '.')
+
+    def test_a_failed_replacement_does_not_modify_the_memory(self):
+        before = self.backend.rows[self.a]['content']
+        self.backend.fail = True
+        result, state, _ = self.native._trace(
+            {'bucket_id': self.a, 'old_str': 'fog tide', 'new_str': 'z' * 2000}, None)
+        self.assertEqual(state, '出错', result)
+        self.assertEqual(self.backend.rows[self.a]['content'], before)
 
     def test_peter_changing_what_lan_corrected_is_flagged_until_she_looks(self):
         self.native.panel_edit(self.a, {'content': 'Lan fixed this: on 11-06 fog tide.'})
@@ -210,7 +236,7 @@ class RewriteTests(Fixture):
         ok, message = self.native.panel_restore_version(self.a, versions[0]['index'])
         self.assertTrue(ok, message)
         self.assertEqual(self.backend.rows[self.a]['content'].strip(), long_text)
-        self.assertIn('memory_read', message)
+        self.assertNotIn('memory_read', message)   # ticket 421: recall reads the whole story now
 
     def test_a_version_ombre_itself_would_refuse_is_not_restored(self):
         self.hold(target_id=self.a, content='on 11-06 something else entirely.')
@@ -221,9 +247,11 @@ class RewriteTests(Fixture):
         self.assertFalse(ok)
         self.assertIn('没有恢复', message)
 
-    def test_peters_trace_cannot_grow_a_memory_past_the_limit(self):
-        result, state, _ = self.native._trace({'bucket_id': self.a, 'content': 'y' * (MEMORY_CHARS + 1)}, None)
-        self.assertEqual(state, '被拒绝')
+    def test_peters_trace_may_grow_a_memory(self):
+        # Ticket 421: trace can rewrite a long memory whole; recall already reads full stories (ticket 419).
+        result, state, _ = self.native._trace({'bucket_id': self.a, 'content': 'y' * 2000}, None)
+        self.assertNotEqual(state, '被拒绝', result)
+        self.assertEqual(self.backend.rows[self.a]['content'], 'y' * 2000)
 
 
 class SmallPieces(unittest.TestCase):
