@@ -66,7 +66,7 @@ def card_text(raw):
     if not isinstance(raw, str):
         return ''
     head, _, body = raw.partition('\n---\n')
-    title = re.search(r'^title:\s*(.*)$', head, re.M)
+    title = re.search(r'^title:\s*(.*)$', head, re.M) or re.search(r'^name:\s*(.*)$', head, re.M)
     tags, inside = [], False
     for line in head.splitlines():
         if line.startswith('tags:'):
