@@ -452,14 +452,73 @@ def apply_plan(plan, data_dir, role='peter'):
 
 
 
-def wait_ready(app_root, data_dir, role, event_ids, timeout=600, query='第一次让你给我找个你觉得有趣的视频，你找了什么？'):
-    """Start the role's memory backend and wait for the actual imported index.
 
-    Ombre's decay self-heal fills at most 50 missing vectors per process cycle. A fresh
-    68-event import therefore needs a second start to finish the remaining 18. This
-    function runs whole Ombre/Memory sessions in cycles: it waits for a cycle to stop
-    making progress, closes it, opens the next, and only reports ready after every id
-    has an embeddings.db row and the real Chinese query returns V50.
+def _body_hash(path):
+    try:
+        body = path.read_text(encoding='utf-8').split('\n---\n', 1)[1].strip()
+    except (OSError, IndexError):
+        return ''
+    return hashlib.sha256(body.encode('utf-8')).hexdigest()
+
+
+def expected_hashes(vault, event_ids):
+    wanted = set(str(item) for item in event_ids)
+    found = {}
+    for path in vault.rglob('*.md'):
+        try:
+            head = path.read_text(encoding='utf-8').split('\n---\n', 1)[0]
+        except OSError:
+            continue
+        match = re.search(r'^id:\s*(\S+)\s*$', head, re.M)
+        if match and match.group(1).strip("'\"") in wanted:
+            event_id = match.group(1).strip("'\"")
+            found[event_id] = _body_hash(path)
+    return {event_id: found.get(event_id, '') for event_id in wanted}
+
+
+def index_status(vault, db_path, event_ids):
+    expected = expected_hashes(vault, event_ids)
+    rows = {}
+    try:
+        connection = sqlite3.connect(str(db_path), timeout=2)
+        try:
+            ids = tuple(expected)
+            if ids:
+                rows = {row[0]: (row[1] or '') for row in connection.execute(
+                    'SELECT bucket_id, content_hash FROM embeddings WHERE bucket_id IN (%s)' %
+                    ','.join('?' * len(ids)), ids)}
+        finally:
+            connection.close()
+    except (OSError, sqlite3.Error):
+        pass
+    missing = [event_id for event_id in expected if event_id not in rows]
+    stale = [event_id for event_id in expected if event_id in rows and rows[event_id] != expected[event_id]]
+    matched = [event_id for event_id in expected if event_id in rows and rows[event_id] == expected[event_id]]
+    return {'ready': len(matched) == len(expected), 'expected': len(expected),
+            'matched': len(matched), 'missing': len(missing), 'stale': len(stale),
+            'missing_ids': sorted(missing), 'stale_ids': sorted(stale)}
+
+
+def drop_stale_embeddings(db_path, event_ids):
+    ids = tuple(str(item) for item in event_ids)
+    if not ids:
+        return 0
+    connection = sqlite3.connect(str(db_path), timeout=5)
+    try:
+        cursor = connection.execute(
+            'DELETE FROM embeddings WHERE bucket_id IN (%s)' % ','.join('?' * len(ids)), ids)
+        connection.commit()
+        return cursor.rowcount if cursor.rowcount > 0 else 0
+    finally:
+        connection.close()
+
+def wait_ready(app_root, data_dir, role, event_ids, timeout=600, query='第一次让你给我找个你觉得有趣的视频，你找了什么？'):
+    """Start Ombre in cycles until every imported memory has the current content hash.
+
+    A vector row alone is not enough: after reimporting a changed memory, the old row
+    still exists with the old hash. Ombre's own content hash is sha256(body.strip()).
+    Stale rows are deleted here so the next decay cycle (up to 50 per process) rebuilds
+    them; readiness requires matching hashes, not just bucket ids.
     """
     from veil_agent import Budget, Store, load_character
     from memory_agent import Memory, open_ombre
@@ -470,10 +529,11 @@ def wait_ready(app_root, data_dir, role, event_ids, timeout=600, query='第一�
     budget = Budget(store)
     vault = data_root / role / 'memory'
     db_path = vault / 'embeddings.db'
-    ids = set(str(item) for item in event_ids)
+    ids = [str(item) for item in event_ids]
     started = time.monotonic()
     deadline = started + max(1, int(timeout))
-    last = {'indexed': 0, 'missing': len(ids), 'candidates': [], 'query': query}
+    last = {'ready': False, 'indexed': 0, 'missing': len(ids), 'stale': 0,
+            'candidates': [], 'query': query}
     cycle = 0
     while time.monotonic() < deadline:
         cycle += 1
@@ -483,39 +543,31 @@ def wait_ready(app_root, data_dir, role, event_ids, timeout=600, query='第一�
                     previous = -1
                     stagnant = 0.0
                     while time.monotonic() < deadline:
-                        indexed = set()
-                        try:
-                            connection = sqlite3.connect(str(db_path), timeout=2)
-                            try:
-                                if ids:
-                                    indexed = {row[0] for row in connection.execute(
-                                        'SELECT bucket_id FROM embeddings WHERE bucket_id IN (%s)' %
-                                        ','.join('?' * len(ids)), tuple(ids))}
-                            finally:
-                                connection.close()
-                        except (OSError, sqlite3.Error):
-                            pass
-                        last['indexed'] = len(indexed)
-                        last['missing'] = len(ids - indexed)
-                        if ids <= indexed:
+                        status = index_status(vault, db_path, ids)
+                        last.update({'indexed': status['matched'], 'missing': status['missing'],
+                                     'stale': status['stale']})
+                        if status['stale_ids']:
+                            drop_stale_embeddings(db_path, status['stale_ids'])
+                            status = index_status(vault, db_path, ids)
+                            last.update({'indexed': status['matched'], 'missing': status['missing'],
+                                         'stale': status['stale']})
+                        if status['ready']:
                             memory.context(query, include_opening=False)
                             candidates = list(memory.last_recall_debug.get('ombre') or [])
                             last['candidates'] = candidates
                             memory.rollback_recall()
                             if 'V50' in candidates:
                                 return {'ready': True, 'elapsed_seconds': round(time.monotonic() - started, 1),
-                                        'cycles': cycle, 'indexed': len(indexed), 'missing': 0,
+                                        'cycles': cycle, 'indexed': status['matched'], **status,
                                         'candidates': candidates, 'query': query}
-                        if len(indexed) <= previous:
+                        if status['matched'] <= previous:
                             stagnant += 5
                         else:
                             stagnant = 0
-                            previous = len(indexed)
-                        if stagnant >= 45 and len(indexed) < len(ids):
+                            previous = status['matched']
+                        if stagnant >= 45 and not status['ready']:
                             break
                         time.sleep(5)
-        # Closing a cycle is what lets Ombre's next process run another 50-row self-heal.
-    last['ready'] = False
     last['elapsed_seconds'] = round(time.monotonic() - started, 1)
     last['cycles'] = cycle
     return last
@@ -535,11 +587,18 @@ def main():
     parser.add_argument('--role', default='peter')
     parser.add_argument('--apply', action='store_true')
     parser.add_argument('--wait-ready', action='store_true')
+    parser.add_argument('--check-index', action='store_true')
     parser.add_argument('--app-root', default='.')
     parser.add_argument('--timeout', type=int, default=600)
     args = parser.parse_args()
     final = load_final(args.final)
     plan = build_plan(final, args.data_dir, args.role)
+    if args.check_index:
+        vault = Path(args.data_dir) / args.role / 'memory'
+        status = index_status(vault, vault / 'embeddings.db',
+                              [item['event_id'] for item in plan['items']])
+        print(json.dumps(status, ensure_ascii=False, indent=2))
+        return 0 if status['ready'] else 2
     if not args.apply:
         print(json.dumps(plan['preview'], ensure_ascii=False, indent=2))
         return 0

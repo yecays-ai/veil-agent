@@ -1,7 +1,12 @@
+import hashlib
 import json
 import shutil
+import sqlite3
+import sys
+import types
 import unittest
 import unittest.mock
+from contextlib import contextmanager
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
@@ -212,6 +217,115 @@ class FinalImportTests(unittest.TestCase):
             self.assertEqual(old_events, (role / 'events.jsonl').read_text(encoding='utf-8'))
             self.assertEqual(old_stages, (role / 'event-stages.jsonl').read_text(encoding='utf-8'))
             self.assertEqual(old_md, next((role / 'memory' / 'dynamic' / '事件').glob('V50*.md')).read_text(encoding='utf-8'))
+
+
+    def test_index_status_uses_ombre_content_hash(self):
+        with workspace_temp() as temp:
+            final = fixture()
+            event_import.apply_plan(event_import.build_plan(final, temp), temp)
+            role = Path(temp) / 'peter'
+            vault = role / 'memory'
+            db = vault / 'embeddings.db'
+            ids = [event['id'] for event in final['events']]
+            expected = event_import.expected_hashes(vault, ids)
+            db.parent.mkdir(parents=True, exist_ok=True)
+            connection = sqlite3.connect(db)
+            connection.execute('CREATE TABLE embeddings (bucket_id TEXT PRIMARY KEY, embedding TEXT, updated_at TEXT, content_hash TEXT)')
+            connection.execute('INSERT INTO embeddings VALUES (?,?,?,?)', ('V50', 'x', 'now', 'old-hash'))
+            connection.commit(); connection.close()
+            status = event_import.index_status(vault, db, ids)
+            self.assertFalse(status['ready'])
+            self.assertEqual(1, status['stale'])
+            self.assertIn('V50', status['stale_ids'])
+            event_import.drop_stale_embeddings(db, ['V50'])
+            status = event_import.index_status(vault, db, ids)
+            self.assertIn('V50', status['missing_ids'])
+
+    def test_wait_ready_requires_current_hash_and_rolls_back_probe(self):
+        with workspace_temp() as temp:
+            final = fixture()
+            event_import.apply_plan(event_import.build_plan(final, temp), temp)
+            role = Path(temp) / 'peter'
+            vault = role / 'memory'
+            db = vault / 'embeddings.db'
+            ids = [event['id'] for event in final['events']]
+            expected = event_import.expected_hashes(vault, ids)
+            connection = sqlite3.connect(db)
+            connection.execute('CREATE TABLE embeddings (bucket_id TEXT PRIMARY KEY, embedding TEXT, updated_at TEXT, content_hash TEXT)')
+            for event_id, digest in expected.items():
+                connection.execute('INSERT INTO embeddings VALUES (?,?,?,?)', (event_id, 'x', 'now', digest))
+            connection.commit(); connection.close()
+
+            calls = {'context': 0, 'rollback': 0}
+            class FakeStore:
+                def __init__(self, root): self.root = root
+                @contextmanager
+                def lock(self): yield
+            class FakeBudget:
+                def __init__(self, store): pass
+            class FakeMemory:
+                def __init__(self, *args): self.last_recall_debug = {}
+                def __enter__(self): return self
+                def __exit__(self, *args): return False
+                def context(self, *args, **kwargs):
+                    calls['context'] += 1
+                    self.last_recall_debug = {'ombre': ['V50']}
+                def rollback_recall(self): calls['rollback'] += 1
+            @contextmanager
+            def fake_open(*args, **kwargs):
+                yield object()
+            fake_veil = types.ModuleType('veil_agent')
+            fake_veil.Store = FakeStore
+            fake_veil.Budget = FakeBudget
+            fake_veil.load_character = lambda root, role: object()
+            fake_memory = types.ModuleType('memory_agent')
+            fake_memory.open_ombre = fake_open
+            fake_memory.Memory = FakeMemory
+            with unittest.mock.patch.dict(sys.modules, {'veil_agent': fake_veil, 'memory_agent': fake_memory}):
+                result = event_import.wait_ready(temp, temp, 'peter', ids, timeout=5)
+            self.assertTrue(result['ready'])
+            self.assertEqual(3, result['indexed'])
+            self.assertEqual(1, calls['context'])
+            self.assertEqual(1, calls['rollback'])
+
+    def test_wait_ready_with_stale_hash_drops_the_old_vector(self):
+        with workspace_temp() as temp:
+            final = fixture()
+            event_import.apply_plan(event_import.build_plan(final, temp), temp)
+            role = Path(temp) / 'peter'
+            vault = role / 'memory'
+            db = vault / 'embeddings.db'
+            ids = [event['id'] for event in final['events']]
+            connection = sqlite3.connect(db)
+            connection.execute('CREATE TABLE embeddings (bucket_id TEXT PRIMARY KEY, embedding TEXT, updated_at TEXT, content_hash TEXT)')
+            for event_id in ids:
+                connection.execute('INSERT INTO embeddings VALUES (?,?,?,?)', (event_id, 'x', 'now', 'old-hash'))
+            connection.commit(); connection.close()
+            class FakeStore:
+                def __init__(self, root): pass
+                @contextmanager
+                def lock(self): yield
+            class FakeBudget:
+                def __init__(self, store): pass
+            class FakeMemory:
+                def __init__(self, *args): self.last_recall_debug = {}
+                def __enter__(self): return self
+                def __exit__(self, *args): return False
+                def context(self, *args, **kwargs): self.last_recall_debug = {'ombre': []}
+                def rollback_recall(self): pass
+            @contextmanager
+            def fake_open(*args, **kwargs): yield object()
+            fake_veil = types.ModuleType('veil_agent')
+            fake_veil.Store = FakeStore; fake_veil.Budget = FakeBudget
+            fake_veil.load_character = lambda root, role: object()
+            fake_memory = types.ModuleType('memory_agent')
+            fake_memory.open_ombre = fake_open; fake_memory.Memory = FakeMemory
+            with unittest.mock.patch.dict(sys.modules, {'veil_agent': fake_veil, 'memory_agent': fake_memory}), \
+                 unittest.mock.patch.object(event_import.time, 'sleep', lambda seconds: None):
+                result = event_import.wait_ready(temp, temp, 'peter', ids, timeout=1)
+            self.assertFalse(result['ready'])
+            status = event_import.index_status(vault, db, ids)
+            self.assertEqual(3, status['missing'])
 
 
 if __name__ == '__main__':
