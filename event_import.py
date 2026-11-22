@@ -259,6 +259,8 @@ def build_plan(final, data_dir, role='peter'):
         raise ValueError('event ids are not unique')
     if any(not re.fullmatch(r'[0-9A-Za-z][0-9A-Za-z_-]{0,99}', event_id) for event_id in ids):
         raise ValueError('event id contains unsafe path characters')
+    if not re.fullmatch(r'[0-9A-Za-z][0-9A-Za-z_-]{0,99}', str(role)):
+        raise ValueError('role contains unsafe path characters')
     data_dir = Path(data_dir)
     role_dir = data_dir / role
     vault = role_dir / 'memory'
@@ -269,6 +271,8 @@ def build_plan(final, data_dir, role='peter'):
     for event in events:
         if not isinstance(event, dict) or not str(event.get('english') or '').strip():
             raise ValueError(f'{event.get("id")} has no English body')
+        if not re.search(r'[A-Za-z]{2}', str(event.get('english') or '')):
+            raise ValueError(f'{event.get("id")} body is not English')
         event_id = event['id']
         signature = event_signature(event)
         expected_story = str(event.get('english') or '').strip()
@@ -544,8 +548,15 @@ def index_status(vault, db_path, event_ids):
                     ','.join('?' * len(ids)), ids)}
         finally:
             connection.close()
-    except (OSError, sqlite3.Error):
-        pass
+    except sqlite3.Error as exc:
+        if 'no such table' not in str(exc).lower():
+            return {'ready': False, 'expected': len(expected), 'matched': 0,
+                    'missing': len(expected), 'stale': 0, 'missing_ids': sorted(expected),
+                    'stale_ids': [], 'error': str(exc)}
+    except OSError as exc:
+        return {'ready': False, 'expected': len(expected), 'matched': 0,
+                'missing': len(expected), 'stale': 0, 'missing_ids': sorted(expected),
+                'stale_ids': [], 'error': str(exc)}
     missing = [event_id for event_id in expected if event_id not in rows]
     stale = [event_id for event_id in expected if event_id in rows and rows[event_id] != expected[event_id]]
     matched = [event_id for event_id in expected if event_id in rows and rows[event_id] == expected[event_id]]
@@ -564,6 +575,8 @@ def drop_stale_embeddings(db_path, event_ids):
             'DELETE FROM embeddings WHERE bucket_id IN (%s)' % ','.join('?' * len(ids)), ids)
         connection.commit()
         return cursor.rowcount if cursor.rowcount > 0 else 0
+    except sqlite3.Error:
+        return 0
     finally:
         connection.close()
 

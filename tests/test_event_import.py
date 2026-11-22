@@ -161,7 +161,8 @@ class FinalImportTests(unittest.TestCase):
             self.assertEqual('conflict', plan['items'][0]['action'])
             with self.assertRaises(ValueError):
                 event_import.apply_plan(plan, temp)
-            self.assertIn('A local edit.', v50['story'])
+            persisted = [json.loads(line) for line in (role / 'events.jsonl').read_text(encoding='utf-8').splitlines()]
+            self.assertIn('A local edit.', [row for row in persisted if row['event_id'] == 'V50'][-1]['story'])
 
     def test_initial_stage_keeps_the_full_story(self):
         with workspace_temp() as temp:
@@ -331,6 +332,14 @@ class FinalImportTests(unittest.TestCase):
             self.assertFalse(result['ready'])
             status = event_import.index_status(vault, db, ids)
             self.assertEqual(3, status['missing'])
+
+
+    def test_body_must_contain_english(self):
+        with workspace_temp() as temp:
+            final = fixture()
+            final['events'][0]['english'] = '这是一段只有中文的正文。'
+            with self.assertRaises(ValueError):
+                event_import.build_plan(final, temp)
 
 
 if __name__ == '__main__':
