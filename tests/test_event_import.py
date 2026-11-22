@@ -1,11 +1,13 @@
 import json
 import shutil
 import unittest
+import unittest.mock
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
 import event_import
+from event_memory import EventMemory
 from recall_judge import card_text
 
 
@@ -111,6 +113,105 @@ class FinalImportTests(unittest.TestCase):
                 'story_source': 'hold'}) + '\n', encoding='utf-8')
             with self.assertRaises(ValueError):
                 event_import.build_plan(fixture(), temp)
+
+
+    def test_reimport_preserves_a_later_experience(self):
+        with workspace_temp() as temp:
+            final = fixture()
+            event_import.apply_plan(event_import.build_plan(final, temp), temp)
+            role = Path(temp) / 'peter'
+            events = [json.loads(line) for line in (role / 'events.jsonl').read_text(encoding='utf-8').splitlines()]
+            v50 = next(row for row in events if row['event_id'] == 'V50')
+            v50['story'] += '\n\nLater, Lan added a second stage that must survive.'
+            with (role / 'events.jsonl').open('a', encoding='utf-8') as handle:
+                handle.write(json.dumps(v50, ensure_ascii=False) + '\n')
+            with (role / 'event-stages.jsonl').open('a', encoding='utf-8') as handle:
+                handle.write(json.dumps({'stage_id': 's-V50-2', 'event_id': 'V50', 'at': '2026-11-22T00:00:00+08:00',
+                                         'text': 'A later stage.', 'state': 'committed'}, ensure_ascii=False) + '\n')
+            before_md = next((role / 'memory' / 'dynamic' / '事件').glob('V50*.md')).read_text(encoding='utf-8')
+            plan = event_import.build_plan(final, temp)
+            self.assertEqual('preserved', plan['items'][0]['action'])
+            event_import.apply_plan(plan, temp)
+            latest = [json.loads(line) for line in (role / 'events.jsonl').read_text(encoding='utf-8').splitlines()]
+            v50_latest = [row for row in latest if row['event_id'] == 'V50'][-1]
+            self.assertIn('second stage that must survive', v50_latest['story'])
+            stages = [json.loads(line) for line in (role / 'event-stages.jsonl').read_text(encoding='utf-8').splitlines()]
+            self.assertEqual(2, len([row for row in stages if row['event_id'] == 'V50']))
+            self.assertEqual(before_md, next((role / 'memory' / 'dynamic' / '事件').glob('V50*.md')).read_text(encoding='utf-8'))
+
+    def test_changed_final_after_local_edit_is_a_conflict(self):
+        with workspace_temp() as temp:
+            final = fixture()
+            event_import.apply_plan(event_import.build_plan(final, temp), temp)
+            role = Path(temp) / 'peter'
+            events = [json.loads(line) for line in (role / 'events.jsonl').read_text(encoding='utf-8').splitlines()]
+            v50 = next(row for row in events if row['event_id'] == 'V50')
+            v50['story'] += '\n\nA local edit.'
+            with (role / 'events.jsonl').open('a', encoding='utf-8') as handle:
+                handle.write(json.dumps(v50, ensure_ascii=False) + '\n')
+            changed = fixture()
+            changed['events'][0]['english'] += '\n\nA changed source final.'
+            plan = event_import.build_plan(changed, temp)
+            self.assertEqual(['V50'], plan['preview']['conflicts'])
+            self.assertEqual('conflict', plan['items'][0]['action'])
+            with self.assertRaises(ValueError):
+                event_import.apply_plan(plan, temp)
+            self.assertIn('A local edit.', v50['story'])
+
+    def test_initial_stage_keeps_the_full_story(self):
+        with workspace_temp() as temp:
+            final = fixture()
+            long_story = ('Oct 29, 2026. ' + ('The brass was warm. ' * 70)).strip() + ' UNIQUE_END_FACT.'
+            final['events'][0]['english'] = long_story
+            event_import.apply_plan(event_import.build_plan(final, temp), temp)
+            role = Path(temp) / 'peter'
+            stages = [json.loads(line) for line in (role / 'event-stages.jsonl').read_text(encoding='utf-8').splitlines()]
+            stage = next(row for row in stages if row['event_id'] == 'V50')
+            self.assertGreater(len(long_story), 600)
+            self.assertEqual(long_story, stage['text'])
+            self.assertTrue(EventMemory._story(type('Fake', (), {'stages': lambda self, event_id: [stage]})(), 'V50').endswith('UNIQUE_END_FACT.'))
+
+    def test_first_import_failure_leaves_no_half_import(self):
+        with workspace_temp() as temp:
+            plan = event_import.build_plan(fixture(), temp)
+            original = event_import._write_atomic
+            calls = {'n': 0}
+            def fail(path, text):
+                calls['n'] += 1
+                if calls['n'] >= 2:
+                    raise OSError('injected')
+                return original(path, text)
+            with unittest.mock.patch.object(event_import, '_write_atomic', side_effect=fail):
+                with self.assertRaises(OSError):
+                    event_import.apply_plan(plan, temp)
+            role = Path(temp) / 'peter'
+            self.assertFalse((role / 'events.jsonl').exists())
+            self.assertFalse((role / 'event-stages.jsonl').exists())
+            self.assertFalse(list((role / 'memory' / 'dynamic' / '事件').glob('*.md')))
+
+    def test_update_failure_restores_the_old_event_stage_and_memory(self):
+        with workspace_temp() as temp:
+            final = fixture()
+            event_import.apply_plan(event_import.build_plan(final, temp), temp)
+            role = Path(temp) / 'peter'
+            old_events = (role / 'events.jsonl').read_text(encoding='utf-8')
+            old_stages = (role / 'event-stages.jsonl').read_text(encoding='utf-8')
+            old_md = next((role / 'memory' / 'dynamic' / '事件').glob('V50*.md')).read_text(encoding='utf-8')
+            changed = fixture()
+            changed['events'][0]['english'] += '\n\nA changed source final.'
+            plan = event_import.build_plan(changed, temp)
+            self.assertEqual('update', plan['items'][0]['action'])
+            original = event_import._write_atomic
+            def fail(path, text):
+                if str(path).endswith('event-import-manifest.json'):
+                    raise OSError('injected')
+                return original(path, text)
+            with unittest.mock.patch.object(event_import, '_write_atomic', side_effect=fail):
+                with self.assertRaises(OSError):
+                    event_import.apply_plan(plan, temp)
+            self.assertEqual(old_events, (role / 'events.jsonl').read_text(encoding='utf-8'))
+            self.assertEqual(old_stages, (role / 'event-stages.jsonl').read_text(encoding='utf-8'))
+            self.assertEqual(old_md, next((role / 'memory' / 'dynamic' / '事件').glob('V50*.md')).read_text(encoding='utf-8'))
 
 
 if __name__ == '__main__':

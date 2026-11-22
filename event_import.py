@@ -13,6 +13,7 @@ import os
 import re
 import shutil
 import tempfile
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -103,15 +104,25 @@ def event_signature(event):
     return _sha(json.dumps(payload, ensure_ascii=False, sort_keys=True))
 
 
-def event_row(event, signature):
+def event_row(event, signature, memory_text, imported_at):
     first, last = _source_dates(event.get('sources') or [])
+    story = str(event.get('english') or '').strip()
+    stage = stage_row(event)
     return {
         'event_id': event['id'], 'memory_id': event['id'],
         'title': event.get('title') or event['id'],
-        'story': str(event.get('english') or '').strip(),
+        'story': story,
         'first_at': first, 'last_at': last,
         'status': 'open', 'confidence': 1.0, 'story_source': STORY_SOURCE,
         'import_signature': signature,
+        'import_baseline': {
+            'signature': signature,
+            'story_sha256': _sha(story),
+            'stage_id': stage['stage_id'],
+            'stage_text_sha256': _sha(stage['text']),
+            'memory_sha256': _sha(memory_text),
+            'imported_at': imported_at,
+        },
         'source_memory_ids': _source_ids(event),
         'source_parts': [{'memory_id': s.get('memory_id'), 'part': s.get('part', '')}
                          for s in event.get('sources') or [] if isinstance(s, dict)],
@@ -127,10 +138,9 @@ def stage_row(event):
     first, _ = _source_dates(event.get('sources') or [])
     return {
         'stage_id': f's-{event["id"]}-1', 'event_id': event['id'],
-        'at': first, 'text': str(event.get('english') or '')[:600],
+        'at': first, 'text': str(event.get('english') or '').strip(),
         'state': 'committed', 'facts': {},
     }
-
 
 def _read_rows(path):
     rows = []
@@ -181,7 +191,53 @@ def _memory_is_import(path):
     return bool(re.search(r'^import_marker:\s*final-import\s*$', head, re.M))
 
 
-def build_plan(final, data_dir, role='peter', force=False):
+def _stages_for(stages_path, event_id):
+    rows = _latest(_read_rows(stages_path), 'stage_id')
+    return [row for row in rows.values() if row.get('event_id') == event_id]
+
+
+def _memory_content(vault, event_id):
+    files = _memory_files(vault, event_id)
+    if not files:
+        return None
+    try:
+        return files[0].read_text(encoding='utf-8')
+    except OSError:
+        return None
+
+
+def _local_changed(existing, stages, memory, baseline, expected_story, expected_memory):
+    if existing is None:
+        return False
+    if existing.get('status') not in (None, 'open'):
+        return True
+    if baseline:
+        if _sha(str(existing.get('story') or '')) != baseline.get('story_sha256'):
+            return True
+        if len(stages) != 1:
+            return True
+        stage = stages[0]
+        if stage.get('stage_id') != baseline.get('stage_id'):
+            return True
+        if _sha(str(stage.get('text') or '')) != baseline.get('stage_text_sha256'):
+            return True
+        if memory is None or _sha(memory) != baseline.get('memory_sha256'):
+            return True
+        return False
+    # Imports made before the baseline field existed: only a single initial stage that still
+    # matches the imported story and memory is safe to treat as untouched.
+    if len(stages) != 1:
+        return True
+    if str(existing.get('story') or '').strip() != expected_story.strip():
+        return True
+    if memory is not None and _sha(memory) != _sha(expected_memory):
+        return True
+    if stages and _sha(str(stages[0].get('text') or '')) != _sha(expected_story):
+        return True
+    return False
+
+
+def build_plan(final, data_dir, role='peter'):
     events = final.get('events')
     if not isinstance(events, list):
         raise ValueError('final file has no events list')
@@ -191,31 +247,60 @@ def build_plan(final, data_dir, role='peter', force=False):
     if len(set(ids)) != len(ids):
         raise ValueError('event ids are not unique')
     data_dir = Path(data_dir)
-    vault = data_dir / role / 'memory'
-    existing_events = _latest(_read_rows(data_dir / role / 'events.jsonl'), 'event_id')
+    role_dir = data_dir / role
+    vault = role_dir / 'memory'
+    existing_events = _latest(_read_rows(role_dir / 'events.jsonl'), 'event_id')
     plan = []
     unknown = []
+    conflicts = []
     for event in events:
         if not isinstance(event, dict) or not str(event.get('english') or '').strip():
             raise ValueError(f'{event.get("id")} has no English body')
         event_id = event['id']
         signature = event_signature(event)
+        expected_story = str(event.get('english') or '').strip()
+        text = memory_text(event)
+        stage = stage_row(event)
         old = existing_events.get(event_id)
-        if old is not None and not _is_import_row(old) and not force:
+        if old is not None and not _is_import_row(old):
             raise ValueError(f'target already has a non-import event {event_id}; refusing to overwrite')
         old_files = _memory_files(vault, event_id)
         for path in old_files:
-            if not _memory_is_import(path) and not force:
+            if not _memory_is_import(path):
                 raise ValueError(f'target already has a non-import memory {path.name}; refusing to overwrite')
         first, _ = _source_dates(event.get('sources') or [])
         if not first:
             unknown.append(event_id)
-        action = 'unchanged' if old and old.get('import_signature') == signature else ('update' if old else 'create')
+        memory = _memory_content(vault, event_id)
+        stages = _stages_for(role_dir / 'event-stages.jsonl', event_id) if old else []
+        baseline = (old or {}).get('import_baseline') or {}
+        old_signature = (old or {}).get('import_signature')
+        if old is None:
+            source_changed = False
+        elif old_signature:
+            source_changed = old_signature != signature
+        else:
+            source_changed = (str(old.get('story') or '').strip() != expected_story
+                              or old.get('title') != (event.get('title') or event_id))
+        local = _local_changed(old, stages, memory, baseline, expected_story, text)
+        if old is None:
+            action = 'create'
+        elif source_changed and local:
+            action = 'conflict'
+            conflicts.append(event_id)
+        elif source_changed:
+            action = 'update'
+        elif local:
+            action = 'preserved'
+        else:
+            action = 'unchanged'
         plan.append({
             'event': event, 'event_id': event_id, 'signature': signature,
-            'event_row': event_row(event, signature), 'stage_row': stage_row(event),
+            'event_row': event_row(event, signature, text,
+                                   datetime.now().astimezone().isoformat()),
+            'stage_row': stage,
             'memory_path': vault / 'dynamic' / FOLDER / f'{event_id} {_slug(event.get("title"), event_id)}.md',
-            'memory_text': memory_text(event), 'action': action,
+            'memory_text': text, 'action': action,
             'old_files': old_files,
         })
     withdrawn = final.get('withdrawn') or []
@@ -227,8 +312,9 @@ def build_plan(final, data_dir, role='peter', force=False):
         'source_unique': len({i for e in events for i in _source_ids(e)}),
         'withdrawn': len(withdrawn),
         'unknown_dates': unknown,
+        'conflicts': conflicts,
         'actions': {name: sum(1 for item in plan if item['action'] == name)
-                    for name in ('create', 'update', 'unchanged')},
+                    for name in ('create', 'update', 'unchanged', 'preserved', 'conflict')},
         'memory_dir': str(vault / 'dynamic' / FOLDER),
         'event_ids': [item['event_id'] for item in plan],
     }
@@ -240,7 +326,6 @@ def build_plan(final, data_dir, role='peter', force=False):
         preview['judge_cards'] = {}
     return {'preview': preview, 'items': plan, 'withdrawn': withdrawn,
             'final_sha256': _sha(json.dumps(final, ensure_ascii=False, sort_keys=True))}
-
 
 def _write_atomic(path, text):
     path = Path(path)
@@ -263,6 +348,9 @@ def _rows_text(rows):
 
 
 def apply_plan(plan, data_dir, role='peter'):
+    conflicts = plan['preview'].get('conflicts') or []
+    if conflicts:
+        raise ValueError('source final changed after local edits; refusing to overwrite: ' + ', '.join(conflicts))
     data_dir = Path(data_dir)
     role_dir = data_dir / role
     vault = role_dir / 'memory'
@@ -273,9 +361,11 @@ def apply_plan(plan, data_dir, role='peter'):
     manifest_path = role_dir / 'event-import-manifest.json'
     stamp = datetime.now().astimezone().strftime('%Y%m%dT%H%M%S%f%z')
     backup = role_dir / f'.event-import-backup-{stamp}'
+    write_items = [item for item in plan['items'] if item['action'] in ('create', 'update')]
+    keep_items = [item for item in plan['items'] if item['action'] in ('unchanged', 'preserved')]
     touched = [events_path, stages_path, review_path, withdrawn_path, manifest_path]
-    touched += [item['memory_path'] for item in plan['items']]
-    touched += [path for item in plan['items'] for path in item['old_files'] if path not in touched]
+    touched += [item['memory_path'] for item in write_items]
+    touched += [path for item in write_items for path in item['old_files'] if path not in touched]
     for path in touched:
         if path.exists():
             backup.mkdir(parents=True, exist_ok=True)
@@ -285,23 +375,27 @@ def apply_plan(plan, data_dir, role='peter'):
 
     old_events = _read_rows(events_path)
     old_stages = _read_rows(stages_path)
-    import_ids = {item['event_id'] for item in plan['items']}
-    row_by_id = {item['event_id']: item['event_row'] for item in plan['items']}
+    write_ids = {item['event_id'] for item in write_items}
+    keep_ids = {item['event_id'] for item in keep_items}
+    row_by_id = {item['event_id']: item['event_row'] for item in write_items}
     merged_events = []
     seen = set()
     for row in old_events:
         event_id = row.get('event_id')
-        if event_id in import_ids:
+        if event_id in write_ids:
             if event_id not in seen:
                 merged_events.append(row_by_id[event_id])
                 seen.add(event_id)
+        elif event_id in keep_ids:
+            merged_events.append(row)
+            seen.add(event_id)
         else:
             merged_events.append(row)
-    for item in plan['items']:
+    for item in write_items:
         if item['event_id'] not in seen:
             merged_events.append(item['event_row'])
-    merged_stages = [row for row in old_stages if row.get('event_id') not in import_ids]
-    merged_stages += [item['stage_row'] for item in plan['items']]
+    merged_stages = [row for row in old_stages if row.get('event_id') not in write_ids]
+    merged_stages += [item['stage_row'] for item in write_items]
 
     review = []
     for item in plan['items']:
@@ -326,16 +420,18 @@ def apply_plan(plan, data_dir, role='peter'):
         'source_unique': plan['preview']['source_unique'],
         'withdrawn_count': len(plan['withdrawn']),
         'unknown_dates': plan['preview']['unknown_dates'],
+        'actions': plan['preview']['actions'],
         'memory_dir': str(vault / 'dynamic' / FOLDER),
     }
     try:
-        for item in plan['items']:
+        for item in write_items:
             for path in item['old_files']:
                 if path != item['memory_path'] and _memory_is_import(path):
                     path.unlink()
             _write_atomic(item['memory_path'], item['memory_text'])
-        _write_atomic(events_path, _rows_text(merged_events))
-        _write_atomic(stages_path, _rows_text(merged_stages))
+        if write_items:
+            _write_atomic(events_path, _rows_text(merged_events))
+            _write_atomic(stages_path, _rows_text(merged_stages))
         _write_atomic(review_path, _rows_text(review))
         _write_atomic(withdrawn_path, _rows_text(plan['withdrawn']))
         _write_atomic(manifest_path, json.dumps(manifest, ensure_ascii=False, indent=2) + '\n')
@@ -353,6 +449,37 @@ def apply_plan(plan, data_dir, role='peter'):
     return manifest
 
 
+
+def wait_ready(app_root, data_dir, role='peter', timeout=240, query='ancient brass refining'):
+    """Start the role's existing memory backend and wait until V50 is searchable.
+
+    This is the executable "can I chat with recall yet" check. It does not build or
+    repair the index; it only waits for Ombre to expose the imported V50 memory.
+    """
+    from veil_agent import Budget, Store, load_character
+    from memory_agent import Memory, open_ombre
+    root = Path(app_root).resolve()
+    data_root = Path(data_dir).resolve()
+    cfg = load_character(root, role)
+    store = Store(data_root)
+    budget = Budget(store)
+    started = time.monotonic()
+    deadline = started + max(1, int(timeout))
+    last = []
+    with store.lock():
+        with open_ombre(root, cfg, data_root=data_root) as backend:
+            with Memory(cfg, store, budget, None, backend) as memory:
+                while True:
+                    memory.context(query, include_opening=False)
+                    last = list(memory.last_recall_debug.get('ombre') or [])
+                    if 'V50' in last:
+                        return {'ready': True, 'elapsed_seconds': round(time.monotonic() - started, 1),
+                                'candidates': last, 'query': query}
+                    if time.monotonic() >= deadline:
+                        return {'ready': False, 'elapsed_seconds': round(time.monotonic() - started, 1), 'candidates': last,
+                                'query': query}
+                    time.sleep(10)
+
 def load_final(path):
     with Path(path).open(encoding='utf-8') as handle:
         data = json.load(handle)
@@ -367,14 +494,20 @@ def main():
     parser.add_argument('--data-dir', required=True)
     parser.add_argument('--role', default='peter')
     parser.add_argument('--apply', action='store_true')
-    parser.add_argument('--force', action='store_true')
+    parser.add_argument('--wait-ready', action='store_true')
+    parser.add_argument('--app-root', default='.')
+    parser.add_argument('--timeout', type=int, default=240)
     args = parser.parse_args()
     final = load_final(args.final)
-    plan = build_plan(final, args.data_dir, args.role, force=args.force)
+    plan = build_plan(final, args.data_dir, args.role)
     if not args.apply:
         print(json.dumps(plan['preview'], ensure_ascii=False, indent=2))
         return 0
     print(json.dumps(apply_plan(plan, args.data_dir, args.role), ensure_ascii=False, indent=2))
+    if args.wait_ready:
+        ready = wait_ready(args.app_root, args.data_dir, args.role, timeout=args.timeout)
+        print(json.dumps(ready, ensure_ascii=False, indent=2))
+        return 0 if ready['ready'] else 2
     return 0
 
 
