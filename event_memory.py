@@ -213,7 +213,7 @@ class EventMemory:
         except Exception:
             return []
         return [{'kind': row.get('kind'), 'at': row.get('at'), 'saved_at': row.get('saved_at'),
-                 'text': row.get('text')}
+                 'message_id': row.get('message_id'), 'text': row.get('text')}
                 for row in rows if isinstance(row, dict) and row.get('stage_id') == stage_id]
 
     def _infer_at(self, now):
@@ -263,9 +263,11 @@ class EventMemory:
         if not rows:
             return None
         stamps = sorted(str(row.get('at')) for row in rows if row.get('at'))
+        ids = [str(row.get('message_id')) for row in rows if row.get('message_id')]
         return {'kinds': sorted({str(row.get('kind')) for row in rows if row.get('kind')}),
                 'from': stamps[0] if stamps else None, 'to': stamps[-1] if stamps else None,
-                'count': len(rows)}
+                'count': len(rows),
+                **({'message_ids': list(dict.fromkeys(ids))[:40]} if ids else {})}
 
     def visible_events(self):
         rows = [event for event in self.events().values()
@@ -292,6 +294,8 @@ class EventMemory:
                 'story_through': event.get('story_through'),
                 'story_pending': bool(event.get('story_pending')),
                 'dirty': bool(event.get('dirty')),
+                'first_at_known': event.get('first_at_known', True),
+                'last_at_known': event.get('last_at_known', True),
                 'pending_review': bool(event.get('pending_review')),
                 'pending_stages': len([row for row in self.pending_stages()
                                        if row.get('event_id') == event_id]),
@@ -317,7 +321,9 @@ class EventMemory:
         chunk = stages[offset:offset + page]
         story = event.get('story') or self._story(event_id)
         lines = [f"{event.get('title') or event_id}",
-                 f"{event.get('status')} · {str(event.get('first_at') or '')[:16]} → {str(event.get('last_at') or '')[:16]}",
+                 f"{event.get('status')} · {str(event.get('first_at') or '')[:16]} → {str(event.get('last_at') or '')[:16]}"
+                 + ('' if event.get('first_at_known', True) and event.get('last_at_known', True)
+                    else '（有日期未知的段）'),
                  f"stages {offset + 1}-{offset + len(chunk)} of {len(stages)}", '']
         if event.get('story_pending'):
             lines += ['（故事还在整理；阶段已经完整保存，稍后会重试。）', '']
@@ -383,6 +389,8 @@ class EventMemory:
                         pending = False
                     event.update({'story': story, 'story_source': source_name,
                                   'story_through': through or event.get('story_through'),
+                                  'story_through_id': (stages[-1].get('stage_id') if stages
+                                                       else event.get('story_through_id')),
                                   'story_pending': pending,
                                   'belief_history': self._belief_history(event['event_id']),
                                   'dirty': pending})
@@ -470,6 +478,7 @@ class EventMemory:
             'story': story,
             'story_source': story_source,
             'story_through': through or event.get('story_through'),
+            'story_through_id': stage['stage_id'],
             'story_pending': story_pending,
             'belief_history': self._belief_history(event['event_id'], extra=stage),
             'related_to': sorted(set(event.get('related_to') or []) | set(self._related_events(event['event_id']))),
@@ -478,6 +487,11 @@ class EventMemory:
             'last_story_at': datetime.now().astimezone().isoformat(),
             'revision': int(event.get('revision') or 0) + 1,
         })
+        if 'first_at_known' not in event:
+            # A brand-new event starts with this stage; an existing (possibly legacy) event keeps its
+            # earlier assumption rather than rewriting the first stage's date from the newest one.
+            event['first_at_known'] = stage['at_known'] if not updated else True
+        event['last_at_known'] = stage['at_known']
         if locked:
             event['pending_review'] = True
             self._review(event['event_id'], 'locked event got a new stage; story kept in the ledger, '
@@ -709,8 +723,15 @@ class EventMemory:
                                'span': [event.get('first_at'), event.get('last_at')],
                                'story': story, 'recent': recent, 'signals': info['reasons']})
         new_text = str(stage.get('text') or '')
-        payload = {'new_stage': {'title': title, 'text': new_text[:4000],
-                                 **({'text_truncated': True} if len(new_text) > 4000 else {}),
+        grouping_text = new_text
+        if len(new_text) > 4000:
+            # Ticket 421 review: a long stage's ending can be the part that says what it continues.
+            # Send head and tail instead of silently dropping everything after the opening.
+            head, tail = 2600, 1400
+            grouping_text = new_text[:head] + ' …[middle omitted]… ' + new_text[-tail:]
+        payload = {'new_stage': {'title': title, 'text': grouping_text,
+                                 **({'text_truncated': True, 'full_chars': len(new_text)}
+                                    if len(new_text) > 4000 else {}),
                                  'at': stage['at']},
                    'evidence': self._evidence_preview(_when(stage['at'])),
                    'candidates': candidates}
@@ -797,7 +818,10 @@ class EventMemory:
         lines = []
         for stage in self.stages(event_id) + ([extra] if extra else []):
             when = _when(stage.get('at'))
-            stamp = when.strftime('%m-%d %H:%M') if when else ''
+            if stage.get('at_known') is False:
+                stamp = '（日期未知）'
+            else:
+                stamp = when.strftime('%m-%d %H:%M') if when else ''
             line = f'{stamp} {stage.get("text")}'.strip()
             if stage.get('interpretation'):
                 line += f'（他当时理解：{stage["interpretation"]}）'
@@ -817,7 +841,14 @@ class EventMemory:
             return fallback, 'composed', None, False
         existing = str((event or {}).get('story') or '')
         through = str((event or {}).get('story_through') or '')
-        fresh = [stage for stage in stages if not through or str(stage.get('at') or '') > through]
+        through_id = str((event or {}).get('story_through_id') or '')
+        ids = [str(stage.get('stage_id') or '') for stage in stages]
+        if through_id and through_id in ids:
+            # Ticket 421 review: the watermark follows stage identity, so two stages saved in the same
+            # minute still advance it (timestamps can be equal).
+            fresh = stages[ids.index(through_id) + 1:]
+        else:
+            fresh = [stage for stage in stages if not through or str(stage.get('at') or '') > through]
         if not fresh:
             fresh = stages
         full_rederive = not existing or len(stages) % 8 == 0
@@ -1364,6 +1395,7 @@ class EventMemory:
                     continue
                 collected.append({'kind': kind, 'at': stamp.isoformat(),
                                   'saved_at': datetime.now().astimezone().isoformat(),
+                                  'message_id': row.get('message_id') or row.get('call_id') or row.get('id'),
                                   'text': ' '.join(text.split())[:self.settings['evidence_chars']]})
         for item in collected[-max(1, self.settings['evidence_items']):]:
             item.update({'stage_id': stage['stage_id'], 'event_id': stage['event_id']})

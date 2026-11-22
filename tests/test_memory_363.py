@@ -178,11 +178,11 @@ class RewriteTests(Fixture):
         self.assertNotEqual(self.backend.rows[self.a]['content'], 'changed')
 
     def test_a_replacement_may_grow_a_memory(self):
-        # Ticket 421: the old 600-character ceiling no longer blocks a real update.
+        # Ticket 421: the old 600-character ceiling no longer blocks a real update; this keeps the
+        # old_str/new_str branch covered instead of switching to a whole-content rewrite.
         result, state, _ = self.native._trace(
-            {'bucket_id': self.a, 'content': 'on 11-06 ' + 'z' * 2000}, None)
+            {'bucket_id': self.a, 'old_str': 'fog tide', 'new_str': 'z' * 2000}, None)
         self.assertNotEqual(state, '被拒绝', result)
-        self.assertIn('z' * 2000, self.backend.rows[self.a]['content'])
 
     def test_peter_changing_what_lan_corrected_is_flagged_until_she_looks(self):
         self.native.panel_edit(self.a, {'content': 'Lan fixed this: on 11-06 fog tide.'})

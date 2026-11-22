@@ -321,12 +321,18 @@ class NativeMemoryTools:
                       *([MEMORY_TIMELINE] if self.events is not None else [])]
 
     def _memory_limit(self):
-        """Ticket 421: a long memory is allowed; the ceiling is the real output budget, not 600 characters."""
+        """Ticket 421: a long memory is allowed; the ceiling is the real budget of a tool turn."""
         if not MEMORY_CHARS:
             try:
-                tokens = int(getattr(self.memory.cfg, 'max_output_tokens', 0) or 0)
+                model_tokens = int(getattr(self.memory.cfg, 'max_output_tokens', 0) or 0)
             except (TypeError, ValueError):
-                tokens = 0
+                model_tokens = 0
+            try:
+                tool_tokens = int((getattr(self.memory.cfg, 'tools', None) or {}).get(
+                    'max_output_tokens', 0) or 0)
+            except (TypeError, ValueError):
+                tool_tokens = 0
+            tokens = max(model_tokens, tool_tokens)
             return tokens * 4 if tokens > 0 else 0
         return MEMORY_CHARS
 

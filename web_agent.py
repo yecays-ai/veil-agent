@@ -2047,7 +2047,8 @@ def make_handler(hub, token):
                 if events is not None:
                     items = [{key: event.get(key) for key in
                               ('event_id', 'title', 'status', 'first_at', 'last_at', 'stage_count', 'confidence',
-                               'story_pending', 'dirty', 'pending_review', 'story_source')}
+                               'story_pending', 'dirty', 'pending_review', 'story_source',
+                               'first_at_known', 'last_at_known')}
                              for event in events.visible_events()]
                 self._send(200, {'items': items, 'count': len(items)})
                 return

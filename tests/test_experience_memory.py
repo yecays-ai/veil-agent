@@ -293,6 +293,29 @@ class WritingTests(Fixture):
         self.assertEqual(self.ombre.items['long']['content'], updated)
         self.assertIn('新结尾事实', self.ombre.items['long']['content'])
 
+    def test_an_update_blocked_by_a_lock_is_applied_after_unlock(self):
+        # Cubic review of 421: a draft kept because Lan locked the memory must not become unreachable.
+        self.ombre.items['m1'] = {'title': 'lamp', 'content': '11月12日的旧正文。'}
+        self.ombre.found = ['m1']
+        self.add(long_talk(DAY1))
+        self.clock[0] = f'{DAY1}T12:00:00+08:00'
+
+        def locking_model(messages, **kwargs):
+            self.feature.sidecar.set_locked('m1', True)   # she locks it while the model is thinking
+            return (json.dumps({'entries': [], 'updates': [{'id': 'm1', 'text': '11月12日的新正文，灯还在床边。'}]},
+                               ensure_ascii=False), 1800, 150, 0)
+        self.feature.model = locking_model
+        self.assertIn(self.feature.run_if_due(), ('written', 'skipped'))
+        self.assertEqual(self.ombre.items['m1']['content'], '11月12日的旧正文。')
+        deferred = [row for row in self.store.read('fake/experience-memory.jsonl')
+                    if row.get('kind') == 'deferred-update']
+        self.assertEqual(len(deferred), 1)
+        self.feature.sidecar.set_locked('m1', False)
+        self.feature.run_if_due()
+        self.assertEqual(self.ombre.items['m1']['content'], '11月12日的新正文，灯还在床边。')
+        self.assertTrue(any(row.get('kind') == 'deferred-applied'
+                            for row in self.store.read('fake/experience-memory.jsonl')))
+
     def test_locked_memories_are_not_offered_and_overlong_ones_only_to_continue(self):
         # Ticket 368: a memory too long to be read whole may be continued but never rewritten from a clipped view.
         self.ombre.items['locked'] = {'title': 'a', 'content': '她改过并锁定的一条。'}

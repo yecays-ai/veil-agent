@@ -2,11 +2,11 @@
 
 ## 工单 421 交接（新经历接回旧故事、完整保存、可恢复）
 
-- 工单：`docs/tickets/421-memory-continuation.md`；分支 `ticket/421-memory-continuation`，从 `origin/main` d0bc837 开的独立 worktree `E:\Peter-Agent\VEIL\worktrees\421-memory-continuation`。正式目录 `E:\Peter-Agent\VEIL\veil-agent` 保持 main，没改源码、没动正式库和定稿。
+- 工单：`docs/tickets/421-memory-continuation.md`；分支 `ticket/421-memory-continuation`，从 `origin/main` d0bc837 开的独立 worktree（`worktrees/421-memory-continuation`）。正式运行目录保持 main，没改源码、没动正式库和定稿。
 - 打开事件层：`characters/peter/character.toml` 增加 `[memory.events] enabled = true`。关掉即回一条保存一条记忆的旧路径；已写的事件/阶段留在本机，可再开。
 - 改法：`event_memory.py` 的 stage 保存全文、发生时间/保存时间/来源、`source_key` 幂等、`revision` 提交前比对、显式目标可见性、锁定/手改不覆盖、长故事按 `story_batch_chars` 分批合并（不再 `[:16000]` 切 JSON），失败用完整阶段拼接。`experience_memory.py` 取消 600 字上限、候选最多 6000 字且超长显式标记、后台阶段带聊天时间和来源、同批次重试幂等、锁定更新进 `deferred-update`、游标只在整批可靠保存后推进。`memory_native.py` 上限改按模型输出预算，`hold` 说清新手经历/续写/待恢复。`desktop/chat.js`、`web_agent.py` 显示待整理、待恢复、来源范围和已锁新发展。
-- 已验证：新增 `tests/test_event_continuation_421.py` 26 条全过；核心与工具 618 + 251 项通过（跳过 2），桌面 18 条守卫和 `node --check` 通过。68 篇定稿在 `tmp/veil-421-e2e/data` 装载 68/68，重导 67 unchanged + 1 preserved，运行后新增阶段/事件保留。授权 DeepSeek 真实复测 5 次调用（约 ¥0.008）得到一段三阶段故事，能分清「按要求测试」和「第一次主动逗她」。
-- 没做/未验证：Lan 的 Windows 桌面体验；正式 68 篇迁移（要她同意）；真实 QQ、桌面真机、语音；事件层长期费用（每次保存最多两次额外模型调用，受现有预算上限约束）；旧 193 条未转事件（仍是独立记忆，新建的发展会另起事件，等迁移单）。
+- 已验证：新增回归 28 条全过（含锁定延迟更新 1 条）；核心与工具 618 + 251 项通过（跳过 2），桌面 18 条守卫和 `node --check` 通过。68 篇定稿在隔离目录 `tmp/veil-421-e2e/data` 装载 68/68，重导 67 unchanged + 1 preserved，运行后新增阶段/事件保留。授权 DeepSeek 真实复测 5 次调用（约 ¥0.008）得到一段三阶段故事，能分清「按要求测试」和「第一次主动逗她」。
+- 没做/未验证：Lan 的 Windows 桌面体验；正式 68 篇迁移（要她同意）；真实 QQ、桌面真机、语音；事件层长期费用（候选判断一次 + 每个故事批次最多两次尝试，批次随内容增长，受现有预算上限约束）；旧记忆迁移范围 145 条（审计过 193 条，含重复/非迁移项）未转事件，新建的发展会另起事件，等迁移单。
 - 下一步：等 GitHub 检查和 Cubic，只修实质问题；合并后请 Lan 按工单三条验收。她验收发现问题就开新单，不在本单继续加。
 
 ## 仍然开着的尾巴（2026-11-21 按代码现状核对过）

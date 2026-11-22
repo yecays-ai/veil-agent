@@ -300,6 +300,10 @@ class ExperienceMemory:
         self._event_maintenance()
         if not self.enabled():
             return 'off'
+        try:
+            self._apply_deferred()
+        except Exception:
+            pass
         with self._lock:
             pending = self.pending()
             reason = 'forced' if force and pending else self.due(pending)
@@ -628,15 +632,37 @@ class ExperienceMemory:
             updates.append({'id': memory_id, 'text': text})
         return entries, updates, dropped, flagged
 
-    def _save_entry(self, entry, span, source=None, source_key=''):
+    def _apply_deferred(self):
+        """Ticket 421 review: apply updates that were kept while the memory was locked, once it is free.
+        The draft is only applied if the memory still holds the text the model rewrote from."""
+        applied = 0
+        seen_keys = set()
+        for row in reversed(self._events()):
+            if row.get('kind') != 'deferred-update':
+                continue
+            key = str(row.get('deferred_key') or row.get('memory_id') or '')
+            if not key or key in seen_keys:
+                continue
+            seen_keys.add(key)
+            memory_id = row.get('memory_id')
+            if (not isinstance(memory_id, str) or self.sidecar.locked(memory_id)
+                    or not self._alive(memory_id)):
+                continue
+            if self._save_update({'id': memory_id, 'text': str(row.get('text') or '')}, row.get('seen')):
+                self.store.append(self.path, {'kind': 'deferred-applied', 'memory_id': memory_id,
+                                              'deferred_key': key, 'time': self.budget.clock()})
+                applied += 1
+        return applied
+
+    def _save_entry(self, entry, span, source=None, source_key='', index=0):
         continues = entry.get('continues')
         args = {'content': entry['text'], 'title': entry['title']}
         if source_key:
             # Ticket 421: a retry of the same source batch must not add the stage twice, even if the model
-            # worded it differently this time.
+            # worded it (or its title) differently this time. The position in the batch is the stable key.
             for row in self._events():
                 if (row.get('kind') == 'entry' and row.get('source_key') == source_key
-                        and row.get('title') == entry['title']):
+                        and row.get('entry_index', 0) == index):
                     return row.get('memory_id')
         if self.events is not None:
             target_event = self.events.event_for_memory(continues) if continues else None
@@ -659,8 +685,8 @@ class ExperienceMemory:
             self.store.append(self.path, {'kind': 'entry', 'memory_id': memory_id, 'title': entry['title'],
                                           'text': entry['text'], 'merged': False, 'covers': span,
                                           'continues': continues, 'event_id': saved.get('event_id'),
-                                          'source_key': source_key, 'source': source,
-                                          'time': self.budget.clock()})
+                                          'source_key': source_key, 'entry_index': index,
+                                          'source': source, 'time': self.budget.clock()})
             return memory_id
         operation, duplicate = self.memory.begin_write(args)
         if duplicate is not None:
@@ -677,7 +703,8 @@ class ExperienceMemory:
             pass
         self.store.append(self.path, {'kind': 'entry', 'memory_id': memory_id, 'title': entry['title'],
                                       'text': entry['text'], 'merged': kind == '合并', 'covers': span,
-                                      'continues': continues, 'source_key': source_key, 'source': source,
+                                      'continues': continues, 'source_key': source_key,
+                                      'entry_index': index, 'source': source,
                                       'time': self.budget.clock()})
         return memory_id
 
@@ -826,18 +853,24 @@ class ExperienceMemory:
                                                              else {'id': item['id']}))
             for update in updates:
                 if self.sidecar.locked(update['id']):
-                    # Ticket 421: Lan locked the reviewed story; the new development is not dropped. Keep
-                    # the draft in the ledger where she can see it, and do not overwrite her version.
-                    deferred.append({'memory_id': update['id'], 'text': update['text'],
-                                     'reason': 'locked; kept for review'})
-                    self.store.append(self.path, {'kind': 'deferred-update', 'memory_id': update['id'],
-                                                  'text': update['text'], 'covers': span,
-                                                  'time': self.budget.clock()})
+                    # Ticket 421: Lan locked the reviewed story; the new development is not dropped.
+                    # It is written down once per batch and applied on a later run after she unlocks it.
+                    seen = next((c['text'] for c in candidates if c['id'] == update['id']), None)
+                    key = f'{source_key}:{update["id"]}'
+                    known = {row.get('deferred_key') for row in self._events()
+                             if row.get('kind') == 'deferred-update'}
+                    if key not in known:
+                        deferred.append({'memory_id': update['id'], 'text': update['text'],
+                                         'reason': 'locked; kept for review'})
+                        self.store.append(self.path, {'kind': 'deferred-update', 'memory_id': update['id'],
+                                                      'text': update['text'], 'seen': seen,
+                                                      'deferred_key': key, 'covers': span,
+                                                      'time': self.budget.clock()})
                     continue
                 updated += bool(self._save_update(update, next(
                     (c['text'] for c in candidates if c['id'] == update['id']), None)))
-            for entry in entries:
-                written += self._save_entry(entry, span, source, source_key) is not None
+            for number, entry in enumerate(entries):
+                written += self._save_entry(entry, span, source, source_key, number) is not None
         except Exception as exc:
             self.store.append(self.path, {'kind': 'error', 'reason': type(exc).__name__,
                                           'detail': str(exc)[:300] if isinstance(exc, UserError) else '',
