@@ -12,7 +12,9 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import tempfile
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -449,6 +451,75 @@ def apply_plan(plan, data_dir, role='peter'):
 
 
 
+
+def wait_ready(app_root, data_dir, role, event_ids, timeout=600, query='第一次让你给我找个你觉得有趣的视频，你找了什么？'):
+    """Start the role's memory backend and wait for the actual imported index.
+
+    Ombre's decay self-heal fills at most 50 missing vectors per process cycle. A fresh
+    68-event import therefore needs a second start to finish the remaining 18. This
+    function runs whole Ombre/Memory sessions in cycles: it waits for a cycle to stop
+    making progress, closes it, opens the next, and only reports ready after every id
+    has an embeddings.db row and the real Chinese query returns V50.
+    """
+    from veil_agent import Budget, Store, load_character
+    from memory_agent import Memory, open_ombre
+    root = Path(app_root).resolve()
+    data_root = Path(data_dir).resolve()
+    cfg = load_character(root, role)
+    store = Store(data_root)
+    budget = Budget(store)
+    vault = data_root / role / 'memory'
+    db_path = vault / 'embeddings.db'
+    ids = set(str(item) for item in event_ids)
+    started = time.monotonic()
+    deadline = started + max(1, int(timeout))
+    last = {'indexed': 0, 'missing': len(ids), 'candidates': [], 'query': query}
+    cycle = 0
+    while time.monotonic() < deadline:
+        cycle += 1
+        with store.lock():
+            with open_ombre(root, cfg, data_root=data_root) as backend:
+                with Memory(cfg, store, budget, None, backend) as memory:
+                    previous = -1
+                    stagnant = 0.0
+                    while time.monotonic() < deadline:
+                        indexed = set()
+                        try:
+                            connection = sqlite3.connect(str(db_path), timeout=2)
+                            try:
+                                if ids:
+                                    indexed = {row[0] for row in connection.execute(
+                                        'SELECT bucket_id FROM embeddings WHERE bucket_id IN (%s)' %
+                                        ','.join('?' * len(ids)), tuple(ids))}
+                            finally:
+                                connection.close()
+                        except (OSError, sqlite3.Error):
+                            pass
+                        last['indexed'] = len(indexed)
+                        last['missing'] = len(ids - indexed)
+                        if ids <= indexed:
+                            memory.context(query, include_opening=False)
+                            candidates = list(memory.last_recall_debug.get('ombre') or [])
+                            last['candidates'] = candidates
+                            memory.rollback_recall()
+                            if 'V50' in candidates:
+                                return {'ready': True, 'elapsed_seconds': round(time.monotonic() - started, 1),
+                                        'cycles': cycle, 'indexed': len(indexed), 'missing': 0,
+                                        'candidates': candidates, 'query': query}
+                        if len(indexed) <= previous:
+                            stagnant += 5
+                        else:
+                            stagnant = 0
+                            previous = len(indexed)
+                        if stagnant >= 45 and len(indexed) < len(ids):
+                            break
+                        time.sleep(5)
+        # Closing a cycle is what lets Ombre's next process run another 50-row self-heal.
+    last['ready'] = False
+    last['elapsed_seconds'] = round(time.monotonic() - started, 1)
+    last['cycles'] = cycle
+    return last
+
 def load_final(path):
     with Path(path).open(encoding='utf-8') as handle:
         data = json.load(handle)
@@ -463,6 +534,9 @@ def main():
     parser.add_argument('--data-dir', required=True)
     parser.add_argument('--role', default='peter')
     parser.add_argument('--apply', action='store_true')
+    parser.add_argument('--wait-ready', action='store_true')
+    parser.add_argument('--app-root', default='.')
+    parser.add_argument('--timeout', type=int, default=600)
     args = parser.parse_args()
     final = load_final(args.final)
     plan = build_plan(final, args.data_dir, args.role)
@@ -470,6 +544,11 @@ def main():
         print(json.dumps(plan['preview'], ensure_ascii=False, indent=2))
         return 0
     print(json.dumps(apply_plan(plan, args.data_dir, args.role), ensure_ascii=False, indent=2))
+    if args.wait_ready:
+        ready = wait_ready(args.app_root, args.data_dir, args.role,
+                           [item['event_id'] for item in plan['items']], timeout=args.timeout)
+        print(json.dumps(ready, ensure_ascii=False, indent=2))
+        return 0 if ready['ready'] else 2
     return 0
 
 
