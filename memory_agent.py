@@ -1777,20 +1777,16 @@ class Memory:
                     break
                 fit_allowance = max(0, fit_allowance - (actual - memory_allowance) - 1)
                 selected, dropped = recall_budget.fit(blocks_out, fit_allowance, calibration)
-            # Last resort: drop the lowest-priority recall block, never cut text.
-            while actual > memory_allowance:
-                recall_items = [item for item in selected if item.get('group') == 'recall']
-                opening_items = [item for item in selected if item.get('group') == 'opening']
-                if recall_items:
-                    dropped_item = recall_items[-1]
-                    selected = [item for item in selected if item is not dropped_item]
-                    dropped = list(dropped) + [{'id': dropped_item['id'], 'reason': 'budget',
-                                                'tokens': dropped_item.get('tokens')}]
-                    messages = messages_for([item['text'] for item in recall_items[:-1]],
-                                            [item['text'] for item in opening_items])
-                    actual = recall_budget.tokens_for_messages(messages, calibration)
-                else:
-                    break
+            # Last resort: every optional block obeys the same final budget.
+            while actual > memory_allowance and selected:
+                dropped_item = max(selected, key=lambda item: item.get('priority', 0))
+                selected = [item for item in selected if item is not dropped_item]
+                dropped = list(dropped) + [{'id': dropped_item['id'], 'reason': 'budget',
+                                            'tokens': dropped_item.get('tokens')}]
+                messages = messages_for(
+                    [item['text'] for item in selected if item.get('group') == 'recall'],
+                    [item['text'] for item in selected if item.get('group') == 'opening'])
+                actual = recall_budget.tokens_for_messages(messages, calibration)
             auxiliary_allowance = min(max(0, int(auxiliary_tokens)), plan['auxiliary'])
             history_allowance = max(0, int(space) - actual - auxiliary_allowance)
         recall_items = [item for item in selected if item.get('group') == 'recall']

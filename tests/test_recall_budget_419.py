@@ -545,6 +545,21 @@ class FinalStateTests(MemoryLevelBudgetTests):
         self.assertGreaterEqual(memory.last_memory_budget['history_allowance'], 86)
         self.assertLessEqual(memory.last_memory_budget['memory_used'], allowance)
 
+    def test_final_budget_guard_can_drop_an_oversized_opening_block(self):
+        memory = self.memory({})
+        memory.context('unmatched', include_opening=True, defer=True)
+        block = {'id': 'opening', 'group': 'opening', 'priority': 500,
+                 'text': '[bucket_id:opening]\n' + 'A long complete sentence. ' * 100,
+                 'tokens': 10000, 'complete': True}
+        memory._pending_recall['blocks'] = [block]
+        with unittest.mock.patch('recall_budget.fit', return_value=([block], [])):
+            out = memory.finish_recall(space=300, history_tokens=250,
+                                        protected_tokens=100, auxiliary_tokens=0)
+        self.assertNotIn('opening', memory.last_context_refs)
+        self.assertLessEqual(estimate_message_tokens(out, 0.4),
+                             memory.last_memory_budget['memory_allowance'])
+        self.assertGreaterEqual(memory.last_memory_budget['history_allowance'], 100)
+
     def test_memory_used_equals_the_messages_actually_sent(self):
         memory = self.memory(self.five_events(), recall={'cooldown_turns': 0, 'random_chance': 0})
         memory.context('video night brass lamp', include_opening=False, defer=True)
