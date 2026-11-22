@@ -264,13 +264,18 @@ class FinalImportTests(unittest.TestCase):
             class FakeBudget:
                 def __init__(self, store): pass
             class FakeMemory:
-                def __init__(self, *args): self.last_recall_debug = {}
+                def __init__(self, *args):
+                    self.last_recall_debug = {}
+                    self.rotation = type('Rotation', (), {'turn': 0})()
+                    self.mutex = contextmanager(lambda: (yield))()
                 def __enter__(self): return self
                 def __exit__(self, *args): return False
                 def context(self, *args, **kwargs):
                     calls['context'] += 1
+                    self.rotation.turn += 1
                     self.last_recall_debug = {'ombre': ['V50']}
                 def rollback_recall(self): calls['rollback'] += 1
+                def _save_rotation(self): pass
             @contextmanager
             def fake_open(*args, **kwargs):
                 yield object()

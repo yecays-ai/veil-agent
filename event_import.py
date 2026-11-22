@@ -31,6 +31,11 @@ def _sha(text):
     return hashlib.sha256(text.encode('utf-8')).hexdigest()
 
 
+def _body_hash_text(text):
+    parts = str(text or '').split('\n---\n', 1)
+    return _sha(parts[1].strip() if len(parts) == 2 else str(text or '').strip())
+
+
 def _source_dates(sources):
     dates = [str(s.get('recorded_at') or '') for s in sources if isinstance(s, dict)]
     dates = [d for d in dates if d]
@@ -118,10 +123,12 @@ def event_row(event, signature, memory_text, imported_at):
         'import_signature': signature,
         'import_baseline': {
             'signature': signature,
+            'title': event.get('title') or event['id'],
             'story_sha256': _sha(story),
             'stage_id': stage['stage_id'],
             'stage_text_sha256': _sha(stage['text']),
             'memory_sha256': _sha(memory_text),
+            'memory_body_sha256': _body_hash_text(memory_text),
             'imported_at': imported_at,
         },
         'source_memory_ids': _source_ids(event),
@@ -150,8 +157,8 @@ def _read_rows(path):
             for line in handle:
                 try:
                     row = json.loads(line)
-                except ValueError:
-                    continue
+                except ValueError as exc:
+                    raise ValueError(f'cannot parse {path}: {exc}') from exc
                 if isinstance(row, dict):
                     rows.append(row)
     except OSError:
@@ -213,6 +220,8 @@ def _local_changed(existing, stages, memory, baseline, expected_story, expected_
     if existing.get('status') not in (None, 'open'):
         return True
     if baseline:
+        if baseline.get('title') and existing.get('title') != baseline.get('title'):
+            return True
         if _sha(str(existing.get('story') or '')) != baseline.get('story_sha256'):
             return True
         if len(stages) != 1:
@@ -222,16 +231,17 @@ def _local_changed(existing, stages, memory, baseline, expected_story, expected_
             return True
         if _sha(str(stage.get('text') or '')) != baseline.get('stage_text_sha256'):
             return True
-        if memory is None or _sha(memory) != baseline.get('memory_sha256'):
-            return True
+        if baseline.get('memory_body_sha256'):
+            if memory is None or _body_hash_text(memory) != baseline.get('memory_body_sha256'):
+                return True
+        # Older baselines only kept the full-file hash; frontmatter activation fields
+        # change during normal recall, so that legacy value cannot prove a local edit.
         return False
     # Imports made before the baseline field existed: only a single initial stage that still
     # matches the imported story and memory is safe to treat as untouched.
     if len(stages) != 1:
         return True
     if str(existing.get('story') or '').strip() != expected_story.strip():
-        return True
-    if memory is not None and _sha(memory) != _sha(expected_memory):
         return True
     if stages and _sha(str(stages[0].get('text') or '')) != _sha(expected_story):
         return True
@@ -247,6 +257,8 @@ def build_plan(final, data_dir, role='peter'):
         raise ValueError('every event needs a non-empty id')
     if len(set(ids)) != len(ids):
         raise ValueError('event ids are not unique')
+    if any(not re.fullmatch(r'[0-9A-Za-z][0-9A-Za-z_-]{0,99}', event_id) for event_id in ids):
+        raise ValueError('event id contains unsafe path characters')
     data_dir = Path(data_dir)
     role_dir = data_dir / role
     vault = role_dir / 'memory'
@@ -325,7 +337,7 @@ def build_plan(final, data_dir, role='peter'):
                                   for item in plan if item['event_id'] in ('V50', 'V78')}
     except Exception:
         preview['judge_cards'] = {}
-    return {'preview': preview, 'items': plan, 'withdrawn': withdrawn,
+    return {'preview': preview, 'items': plan, 'withdrawn': withdrawn, 'final': final,
             'final_sha256': _sha(json.dumps(final, ensure_ascii=False, sort_keys=True))}
 
 def _write_atomic(path, text):
@@ -348,7 +360,46 @@ def _rows_text(rows):
     return ''.join(json.dumps(row, ensure_ascii=False) + '\n' for row in rows)
 
 
+PENDING_NAME = 'event-import-pending.json'
+
+
+def _restore_backup(role_dir, backup):
+    if not backup.exists():
+        return
+    for source in backup.rglob('*'):
+        if source.is_file():
+            target = role_dir / source.relative_to(backup)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+
+
+def _recover_pending(role_dir):
+    marker = role_dir / PENDING_NAME
+    if not marker.exists():
+        return False
+    try:
+        data = json.loads(marker.read_text(encoding='utf-8'))
+        _restore_backup(role_dir, Path(data.get('backup') or ''))
+    finally:
+        marker.unlink(missing_ok=True)
+    return True
+
+
 def apply_plan(plan, data_dir, role='peter'):
+    """Take the data lock, revalidate the preview, then write the same plan."""
+    from veil_agent import Store
+    data_dir = Path(data_dir)
+    with Store(data_dir).lock():
+        _recover_pending(data_dir / role)
+        fresh = build_plan(plan['final'], data_dir, role)
+        old = [(item['event_id'], item['action']) for item in plan['items']]
+        new = [(item['event_id'], item['action']) for item in fresh['items']]
+        if old != new:
+            raise ValueError('target changed after preview; refusing to use a stale import plan')
+        return _apply_plan_unlocked(fresh, data_dir, role)
+
+
+def _apply_plan_unlocked(plan, data_dir, role='peter'):
     conflicts = plan['preview'].get('conflicts') or []
     if conflicts:
         raise ValueError('source final changed after local edits; refusing to overwrite: ' + ', '.join(conflicts))
@@ -374,6 +425,9 @@ def apply_plan(plan, data_dir, role='peter'):
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(path, target)
 
+    marker = role_dir / PENDING_NAME
+    _write_atomic(marker, json.dumps({'backup': str(backup), 'at': datetime.now().astimezone().isoformat()},
+                                    ensure_ascii=False))
     old_events = _read_rows(events_path)
     old_stages = _read_rows(stages_path)
     write_ids = {item['event_id'] for item in write_items}
@@ -436,16 +490,13 @@ def apply_plan(plan, data_dir, role='peter'):
         _write_atomic(review_path, _rows_text(review))
         _write_atomic(withdrawn_path, _rows_text(plan['withdrawn']))
         _write_atomic(manifest_path, json.dumps(manifest, ensure_ascii=False, indent=2) + '\n')
+        marker.unlink(missing_ok=True)
     except Exception:
         for path in touched:
             if path.exists():
                 path.unlink()
-        if backup.exists():
-            for source in backup.rglob('*'):
-                if source.is_file():
-                    target = role_dir / source.relative_to(backup)
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(source, target)
+        _restore_backup(role_dir, backup)
+        marker.unlink(missing_ok=True)
         raise
     return manifest
 
@@ -479,8 +530,12 @@ def expected_hashes(vault, event_ids):
 def index_status(vault, db_path, event_ids):
     expected = expected_hashes(vault, event_ids)
     rows = {}
+    if not Path(db_path).exists():
+        missing = sorted(expected)
+        return {'ready': False, 'expected': len(expected), 'matched': 0,
+                'missing': len(missing), 'stale': 0, 'missing_ids': missing, 'stale_ids': []}
     try:
-        connection = sqlite3.connect(str(db_path), timeout=2)
+        connection = sqlite3.connect(Path(db_path).resolve().as_uri() + '?mode=ro', uri=True, timeout=2)
         try:
             ids = tuple(expected)
             if ids:
@@ -526,7 +581,6 @@ def wait_ready(app_root, data_dir, role, event_ids, timeout=600, query='第一�
     data_root = Path(data_dir).resolve()
     cfg = load_character(root, role)
     store = Store(data_root)
-    budget = Budget(store)
     vault = data_root / role / 'memory'
     db_path = vault / 'embeddings.db'
     ids = [str(item) for item in event_ids]
@@ -538,6 +592,7 @@ def wait_ready(app_root, data_dir, role, event_ids, timeout=600, query='第一�
     while time.monotonic() < deadline:
         cycle += 1
         with store.lock():
+            budget = Budget(store)
             with open_ombre(root, cfg, data_root=data_root) as backend:
                 with Memory(cfg, store, budget, None, backend) as memory:
                     previous = -1
@@ -552,10 +607,18 @@ def wait_ready(app_root, data_dir, role, event_ids, timeout=600, query='第一�
                             last.update({'indexed': status['matched'], 'missing': status['missing'],
                                          'stale': status['stale']})
                         if status['ready']:
+                            if 'V50' not in ids:
+                                return {'ready': True, 'elapsed_seconds': round(time.monotonic() - started, 1),
+                                        'cycles': cycle, 'indexed': status['matched'], **status,
+                                        'candidates': [], 'query': ''}
+                            turn_before = memory.rotation.turn
                             memory.context(query, include_opening=False)
                             candidates = list(memory.last_recall_debug.get('ombre') or [])
                             last['candidates'] = candidates
                             memory.rollback_recall()
+                            with memory.mutex:
+                                memory.rotation.turn = turn_before
+                            memory._save_rotation()
                             if 'V50' in candidates:
                                 return {'ready': True, 'elapsed_seconds': round(time.monotonic() - started, 1),
                                         'cycles': cycle, 'indexed': status['matched'], **status,
