@@ -13,6 +13,7 @@ import threading
 import time
 import unittest
 import uuid
+from unittest import mock
 from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -652,14 +653,56 @@ class BackgroundFlowTests(Fixture):
         stage_ids = {stage['stage_id'] for stage in self.events.stages()}
         entry = [row for row in first if row.get('kind') == 'entry'][0]
         # A retry of the same batch (even after the clock crossed a day) must not add a second stage.
+        stage_source_key = self.events.stages()[0]['source_key']
         saved = self.events.record(entry['text'], entry['title'], at=entry['covers'][1],
                                    source={'kind': 'chat', 'from': entry['covers'][0], 'to': entry['covers'][1],
                                            'message_ids': [f'u{i}' for i in range(4)], 'count': 8},
-                                   source_key=entry['source_key'])
+                                   source_key=stage_source_key)
         self.assertTrue(saved.get('duplicate'))
         self.assertEqual({stage['stage_id'] for stage in self.events.stages()}, stage_ids)
         self.assertEqual(len([row for row in self.store.read('fake/experience-memory.jsonl')
                               if row.get('kind') == 'entry']), 1)
+
+    def test_retry_after_stage_commit_uses_source_identity_even_when_model_rewords_it(self):
+        clock = ['2026-11-20T09:00:00+08:00']
+        feature = self.make_feature(clock)
+        for index in range(4):
+            self.store.append('fake/chat.jsonl', {'message_id': f'u{index}', 'role': 'user',
+                                                  'content': 'A fictional lamp discussion. ' + 'detail ' * 300,
+                                                  'time': f'2026-11-20T10:{index * 2:02d}:00+08:00'})
+            self.store.append('fake/chat.jsonl', {'message_id': f'a{index}', 'role': 'assistant',
+                                                  'content': 'A fictional answer about the lamp. ' + 'reply ' * 300,
+                                                  'time': f'2026-11-20T10:{index * 2 + 1:02d}:00+08:00'})
+        clock[0] = '2026-11-20T11:00:00+08:00'
+        original_text = 'The first wording of the fictional lamp story.'
+        self.model.entries = [{'title': 'First lamp title', 'text': original_text}]
+        append = self.store.append
+        failed = {'done': False}
+
+        def interrupt_after_stage(name, row):
+            if (name == 'fake/experience-memory.jsonl' and row.get('kind') == 'entry'
+                    and not failed['done']):
+                failed['done'] = True
+                raise OSError('fictional interruption after stage commit')
+            return append(name, row)
+
+        with mock.patch.object(self.store, 'append', side_effect=interrupt_after_stage):
+            with self.assertRaises(OSError):
+                feature.run_if_due()
+        self.assertEqual(len(self.events.stages()), 1)
+        self.assertFalse(any(row.get('kind') == 'entry'
+                             for row in self.store.read('fake/experience-memory.jsonl')))
+
+        self.model.entries = [{'title': 'Reworded lamp title',
+                               'text': 'A different model wording for the same source batch.'}]
+        self.assertEqual(feature.run_if_due(force=True), 'written')
+        stages = self.events.stages()
+        self.assertEqual(len(stages), 1)
+        self.assertEqual(stages[0]['text'], original_text)
+        entries = [row for row in self.store.read('fake/experience-memory.jsonl')
+                   if row.get('kind') == 'entry']
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]['text'], original_text)
 
 
 class ScaleTests(Fixture):

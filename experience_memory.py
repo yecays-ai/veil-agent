@@ -693,12 +693,13 @@ class ExperienceMemory:
                     return row.get('memory_id')
         if self.events is not None:
             target_event = self.events.event_for_memory(continues) if continues else None
+            event_source_key = f'{source_key}:entry:{index}' if source_key else ''
             try:
                 # Ticket 421: the stage carries when the conversation happened and which messages it came
                 # from; the same batch is idempotent even when a retry crosses midnight.
                 saved = self.events.record(entry['text'], entry['title'], why='经历整理',
                                            event_id=target_event, at=(source or {}).get('to'),
-                                           source=source, source_key=source_key)
+                                           source=source, source_key=event_source_key)
             except Exception as exc:
                 raise UserError('经历整理的事件没有保存成功；这批消息会重试，不推进游标。') from exc
             if not saved or saved.get('pending'):
@@ -709,8 +710,13 @@ class ExperienceMemory:
                     self.sidecar.link(memory_id, continues)
                 except Exception:
                     pass
-            self.store.append(self.path, {'kind': 'entry', 'memory_id': memory_id, 'title': entry['title'],
-                                          'text': entry['text'], 'merged': False, 'covers': span,
+            stored = next((row for row in self.events.stages(saved.get('event_id'))
+                           if row.get('source_key') == event_source_key), None)
+            self.store.append(self.path, {'kind': 'entry', 'memory_id': memory_id,
+                                          'title': (saved.get('title') if saved.get('duplicate') else entry['title']),
+                                          'text': (((stored or {}).get('text') or entry['text'])
+                                                   if saved.get('duplicate') else entry['text']),
+                                          'merged': False, 'covers': span,
                                           'continues': continues, 'event_id': saved.get('event_id'),
                                           'source_key': source_key, 'entry_index': index,
                                           'source': source, 'time': self.budget.clock()})
@@ -760,7 +766,7 @@ class ExperienceMemory:
                 return True
         text = update['text'].strip()
         if text == previous.strip():
-            return False
+            return True
         document = self.memory.raw_content_for(memory_id)
         if document is None:
             return False
@@ -899,9 +905,17 @@ class ExperienceMemory:
                                                       'deferred_key': key, 'covers': span,
                                                       'time': self.budget.clock()})
                     continue
-                updated += bool(self._save_update(update, next(
+                update_key = f'{source_key}:{update["id"]}'
+                saved = self._save_update(update, next(
                     (c['text'] for c in candidates if c['id'] == update['id']), None),
-                    source_key=f'{source_key}:{update["id"]}'))
+                    source_key=update_key)
+                if not saved:
+                    self.store.append(self.path, {'kind': 'update-conflict', 'memory_id': update['id'],
+                                                  'source_key': update_key,
+                                                  'reason': 'target changed, disappeared, locked, or rejected',
+                                                  'time': self.budget.clock()})
+                    raise UserError('经历整理的更新没有保存；保留当前记忆并等待重试，没有推进游标。')
+                updated += 1
             for number, entry in enumerate(entries):
                 written += self._save_entry(entry, span, source, source_key, number) is not None
         except Exception as exc:

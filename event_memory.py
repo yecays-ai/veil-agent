@@ -375,7 +375,12 @@ class EventMemory:
         key = source_key or order_at.strftime('%Y-%m-%d')
         stage_id = 's-' + hashlib.sha1(
             f'{title or ""}|{text}|{key}'.encode('utf-8')).hexdigest()[:16]
-        existing = self._stage_rows().get(stage_id)
+        stage_rows = self._stage_rows()
+        existing = stage_rows.get(stage_id)
+        if source_key:
+            existing = next((row for row in stage_rows.values()
+                             if row.get('state') == 'committed' and row.get('source_key') == source_key),
+                            existing)
         if existing is not None and existing.get('state') == 'committed':
             if event_id and existing.get('event_id') != event_id:
                 # The same source batch was already recorded in another experience; never silently

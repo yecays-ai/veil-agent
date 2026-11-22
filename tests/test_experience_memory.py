@@ -258,8 +258,15 @@ class WritingTests(Fixture):
                 ombre.items['m1']['content'] = 'Lan 改的：11月18日的事。'
                 return replies.pop(index)
         self.replies = EditFirst()
-        self.assertNotEqual(self.feature.run_if_due(), 'error')
+        checkpoints_before = sum(row.get('kind') == 'checkpoint'
+                                 for row in self.store.read('fake/experience-memory.jsonl'))
+        with self.assertRaises(UserError):
+            self.feature.run_if_due()
         self.assertEqual(self.ombre.items['m1']['content'], 'Lan 改的：11月18日的事。')
+        ledger = self.store.read('fake/experience-memory.jsonl')
+        self.assertEqual(sum(row.get('kind') == 'checkpoint' for row in ledger), checkpoints_before)
+        self.assertTrue(any(row.get('kind') == 'update-conflict' for row in ledger))
+        self.assertTrue(self.feature.pending())
 
     def test_a_memory_he_saved_himself_is_found_and_rewritten_instead_of_saving_a_new_one(self):
         # 2026-11-15 Lan: the KYC story already had a memory, so the next part goes into it, not beside it.
