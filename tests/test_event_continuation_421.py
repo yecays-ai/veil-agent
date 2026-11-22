@@ -20,7 +20,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from agent_types import BudgetExceeded
+from agent_types import BudgetExceeded, UserError
 from event_memory import EventMemory, entities
 from experience_memory import ExperienceMemory, load_settings
 from memory_agent import Memory
@@ -52,6 +52,7 @@ class RouterModel:
 
     def __init__(self, entries=None, merge=True):
         self.entries = entries or []
+        self.updates = []
         self.merge = merge
         self.requests = []
         self.group_decisions = []
@@ -90,9 +91,9 @@ class RouterModel:
                 parts.append(f"At the time I thought {belief['belief']} ({str(belief['at'])[:10]}).")
             return ('\n\n'.join(parts), 1, 1, 0, None)
         if isinstance(payload, dict) and ('entries' in payload or 'updates' in payload):
-            return (json.dumps({'entries': self.entries, 'updates': []}, ensure_ascii=False), 1, 1, 0, None)
+            return (json.dumps({'entries': self.entries, 'updates': self.updates}, ensure_ascii=False), 1, 1, 0, None)
         if isinstance(payload, dict) and 'messages' in payload and 'earlier_entries' in payload:
-            return (json.dumps({'entries': self.entries, 'updates': []}, ensure_ascii=False), 1, 1, 0, None)
+            return (json.dumps({'entries': self.entries, 'updates': self.updates}, ensure_ascii=False), 1, 1, 0, None)
         return (json.dumps({'entries': [], 'updates': []}), 1, 1, 0, None)
 
 
@@ -351,6 +352,48 @@ class ContinuationTests(Fixture):
         self.assertEqual(first['event_id'], second['event_id'])
         self.assertTrue(second.get('duplicate'))
         self.assertEqual(len(self.events.stages(first['event_id'])), 1)
+
+    def test_a_pending_stage_is_resumed_when_the_same_batch_is_reworded(self):
+        original = self.events._write_story
+
+        def interrupted(*args, **kwargs):
+            raise KeyboardInterrupt
+        self.events._write_story = interrupted
+        with self.assertRaises(KeyboardInterrupt):
+            self.events.record('First wording of the fictional lamp.', 'The lamp', source_key='chat:entry:0')
+        self.events._write_story = original
+        pending = self.events.pending_stages()
+        self.assertEqual(len(pending), 1)
+        identity, event_id = pending[0]['stage_id'], pending[0]['event_id']
+        saved = self.events.record('Second wording of the fictional lamp, with a new detail.', 'The lamp',
+                                   source_key='chat:entry:0')
+        self.assertFalse(saved.get('pending'))
+        self.assertEqual(saved['event_id'], event_id)
+        stages = self.events.stages(event_id)
+        self.assertEqual(len(stages), 1)
+        self.assertEqual(stages[0]['stage_id'], identity)
+        self.assertIn('Second wording', stages[0]['text'])
+        self.assertEqual(self.events.pending_stages(), [])
+
+    def test_recovery_keeps_one_committed_stage_for_two_journal_rows_of_one_batch(self):
+        snapshot = {'event_id': 'e-20261120-test', 'title': 'The batch', 'status': 'open',
+                    'first_at': '2026-11-20T10:00:00+08:00', 'last_at': '2026-11-20T10:00:00+08:00',
+                    'stage_count': 0, 'entities': ['lamp'], 'dirty': False}
+        base = {'event_id': 'e-20261120-test', 'source_key': 'chat:entry:0', 'state': 'pending',
+                'entities': ['lamp'], 'facts': {'dates': [], 'numbers': [], 'files': []},
+                'event_row': snapshot, 'at': '2026-11-20T10:00:00+08:00', 'occurred_at': None,
+                'at_known': False, 'saved_at': '2026-11-20T10:00:00+08:00'}
+        self.store.append('fake/event-stages.jsonl',
+                          {**base, 'stage_id': 's-older', 'text': 'The older wording.', 'saved_at': '2026-11-20T10:00:00+08:00'})
+        self.store.append('fake/event-stages.jsonl',
+                          {**base, 'stage_id': 's-newer', 'text': 'The newer wording.', 'saved_at': '2026-11-20T11:00:00+08:00'})
+        self.assertEqual(self.events.retry_pending(), 1)
+        stages = self.events.stages('e-20261120-test')
+        self.assertEqual(len(stages), 1)
+        self.assertEqual(stages[0]['text'], 'The newer wording.')
+        states = {row['stage_id']: row['state'] for row in self.events._stage_rows().values()}
+        self.assertEqual(states['s-older'], 'superseded')
+        self.assertEqual(states['s-newer'], 'committed')
 
     def test_a_different_real_occurrence_with_the_same_words_is_not_deduped(self):
         one = self.events.record('We watched the rain from the window.', 'The rain',
@@ -703,6 +746,97 @@ class BackgroundFlowTests(Fixture):
                    if row.get('kind') == 'entry']
         self.assertEqual(len(entries), 1)
         self.assertEqual(entries[0]['text'], original_text)
+
+
+    def test_a_pending_stage_from_an_interrupted_batch_is_resumed_on_retry(self):
+        clock = ['2026-11-20T09:00:00+08:00']
+        feature = self.make_feature(clock)
+        for index in range(4):
+            self.store.append('fake/chat.jsonl', {'message_id': f'u{index}', 'role': 'user',
+                                                  'content': 'A fictional lamp discussion. ' + 'detail ' * 300,
+                                                  'time': f'2026-11-20T10:{index * 2:02d}:00+08:00'})
+            self.store.append('fake/chat.jsonl', {'message_id': f'a{index}', 'role': 'assistant',
+                                                  'content': 'A fictional answer about the lamp. ' + 'reply ' * 300,
+                                                  'time': f'2026-11-20T10:{index * 2 + 1:02d}:00+08:00'})
+        clock[0] = '2026-11-20T11:00:00+08:00'
+        self.model.entries = [{'title': 'First lamp title', 'text': 'The first wording of the lamp story.'}]
+        append = self.store.append
+        failed = {'done': False}
+
+        def interrupt_before_commit(name, row):
+            if (name == 'fake/event-stages.jsonl' and row.get('state') == 'committed'
+                    and not failed['done']):
+                failed['done'] = True
+                raise OSError('fictional interruption before the stage commit')
+            return append(name, row)
+
+        with mock.patch.object(self.store, 'append', side_effect=interrupt_before_commit):
+            with self.assertRaises(UserError):
+                feature.run_if_due()
+        pending = self.events.pending_stages()
+        self.assertEqual(len(pending), 1)
+        identity = pending[0]['stage_id']
+        self.assertEqual(len(self.events.stages()), 0)
+
+        self.model.entries = [{'title': 'Reworded lamp title', 'text': 'The reworded lamp story.'}]
+        self.assertEqual(feature.run_if_due(force=True), 'written')
+        stages = self.events.stages()
+        self.assertEqual(len(stages), 1)
+        self.assertEqual(stages[0]['stage_id'], identity)
+        # The startup/tidy recovery may commit the journaled wording before the model rewords it; either
+        # way there is exactly one stage, it keeps its identity, and the ledger records that same text.
+        self.assertEqual(stages[0]['text'], 'The first wording of the lamp story.')
+        self.assertEqual(self.events.pending_stages(), [])
+        entries = [row for row in self.store.read('fake/experience-memory.jsonl')
+                   if row.get('kind') == 'entry']
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]['text'], stages[0]['text'])
+
+
+    def test_a_closed_experience_cannot_block_the_batch_forever(self):
+        clock = ['2026-11-20T09:00:00+08:00']
+        feature = self.make_feature(clock)
+        saved = self.events.record('A fictional closed experience about the lamp.', 'Closed lamp',
+                                   at='2026-11-20T09:00:00+08:00')
+        event_id, memory_id = saved['event_id'], saved['memory_id']
+        self.store.append('fake/events.jsonl', {**self.events.events()[event_id], 'status': 'closed'})
+        self.store.append('fake/experience-memory.jsonl', {
+            'kind': 'entry', 'memory_id': memory_id, 'title': 'Closed lamp',
+            'text': self.events.events()[event_id].get('story'), 'time': '2026-11-20T09:00:00+08:00'})
+        for index in range(4):
+            self.store.append('fake/chat.jsonl', {'message_id': f'u{index}', 'role': 'user',
+                                                  'content': 'A fictional update about the closed lamp. ' + 'detail ' * 100,
+                                                  'time': f'2026-11-20T10:{index * 2:02d}:00+08:00'})
+            self.store.append('fake/chat.jsonl', {'message_id': f'a{index}', 'role': 'assistant',
+                                                  'content': 'A fictional reply about the closed lamp. ' + 'reply ' * 100,
+                                                  'time': f'2026-11-20T10:{index * 2 + 1:02d}:00+08:00'})
+        clock[0] = '2026-11-20T11:00:00+08:00'
+        self.assertEqual(feature._offer(memory_id), None)      # closed is never offered
+        self.store.append('fake/events.jsonl', {**self.events.events()[event_id], 'status': 'open'})
+        original = feature._offer
+
+        def race(mid):
+            item = original(mid)
+            if mid == memory_id and item is not None:
+                self.store.append('fake/events.jsonl', {**self.events.events()[event_id], 'status': 'closed'})
+            return item
+
+        feature._offer = race
+        before = self.backend.rows[memory_id]['content']
+        self.model.updates = [{'id': memory_id, 'text': 'A draft for a closed experience.'}]
+        self.assertEqual(feature.run_if_due(), 'skipped')
+        self.assertEqual(self.backend.rows[memory_id]['content'], before)
+        rejected = [row for row in self.store.read('fake/experience-memory.jsonl')
+                    if row.get('kind') == 'update-rejected']
+        self.assertEqual(len(rejected), 1)
+        self.assertEqual(rejected[0]['text'], 'A draft for a closed experience.')
+        self.assertEqual(rejected[0]['reason'], 'event closed')
+        checkpoint = [row for row in self.store.read('fake/experience-memory.jsonl')
+                      if row.get('kind') == 'checkpoint'][-1]
+        self.assertEqual(checkpoint['rejected'][0]['reason'], 'event closed')
+        requests = len(self.model.requests)
+        self.assertEqual(feature.run_if_due(force=True), 'not_due')   # cursor advanced; no repeated model call
+        self.assertEqual(len(self.model.requests), requests)
 
 
 class ScaleTests(Fixture):

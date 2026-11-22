@@ -925,6 +925,7 @@ function renderExperience(x){
     if(x.last.kind==='checkpoint'&&x.last.retried_without_thinking)last+='（关掉思考后重试成功）';
     if(x.last.kind==='checkpoint'&&x.last.unfixed)last+='；有 '+x.last.unfixed+' 条草稿没存上，原文已留存';
     if(x.last.kind==='checkpoint'&&x.last.deferred)last+='；有 '+x.last.deferred+' 条想改的被锁定的记忆，已存下待你处理';
+    if(x.last.kind==='checkpoint'&&x.last.rejected)last+='；有 '+x.last.rejected+' 条更新被拒绝（事件已关闭），草稿已留存';
     if(x.last.kind==='checkpoint'&&x.last.covers&&x.last.covers.from){const a=new Date(x.last.covers.from),b=new Date(x.last.covers.to);
       if(!Number.isNaN(a.getTime())&&!Number.isNaN(b.getTime()))last+='；覆盖 '+strTime(x.last.covers.from)+' → '+strTime(x.last.covers.to);}}
   $('experience-status').textContent=experienceEnabled

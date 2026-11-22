@@ -15,6 +15,7 @@ a summary the model keeps regenerating drifts; Lan chose rewriting anyway (2026-
 keeps the old version and she can lock a memory.
 """
 import json
+import hashlib
 import re
 import threading
 from dataclasses import replace
@@ -330,12 +331,26 @@ class ExperienceMemory:
         """Still stored and not hidden, archived or deleted (a memory Lan deleted is simply gone)."""
         return self.memory.raw_content_for(memory_id) is not None and self.memory.refresh_visibility(memory_id)
 
+    def _event_status(self, memory_id):
+        """Ticket 421 review: a closed or merged experience must not be offered for a rewrite."""
+        events = getattr(self, 'events', None)
+        if events is None:
+            return ''
+        try:
+            event_id = events.event_for_memory(memory_id)
+            event = (events.events() or {}).get(event_id) if event_id else None
+            return str((event or {}).get('status') or '')
+        except Exception:
+            return ''
+
     def _offer(self, memory_id):
         """One candidate as the model sees it, read fresh from the library: its text, how often it was rewritten and
         the other stages it is linked to. None for what is gone, hidden, archived or locked by Lan. A memory too long
         to rewrite whole is shown clipped and marked: it can be continued but not rewritten."""
         try:
             if not self._alive(memory_id) or self.sidecar.locked(memory_id):
+                return None
+            if self._event_status(memory_id) in ('merged', 'closed'):
                 return None
             body = self.memory.content_for(memory_id, refresh=True)
             if not body:
@@ -668,6 +683,11 @@ class ExperienceMemory:
                 else:
                     saved = self._save_update({'id': memory_id, 'text': str(row.get('text') or '')},
                                               row.get('seen'), source_key=key)
+                if saved == 'closed':
+                    self.store.append(self.path, {'kind': 'deferred-conflict', 'memory_id': memory_id,
+                                                  'deferred_key': key, 'reason': 'target event closed',
+                                                  'time': self.budget.clock()})
+                    continue
                 if saved:
                     self.store.append(self.path, {'kind': 'deferred-applied', 'memory_id': memory_id,
                                                   'deferred_key': key, 'time': self.budget.clock()})
@@ -741,6 +761,20 @@ class ExperienceMemory:
                                       'time': self.budget.clock()})
         return memory_id
 
+    def _preserve_rejected_update(self, update, seen, source_key, reason):
+        """Keep a draft that can never be applied (for example a closed experience) where Lan can see it,
+        without putting the batch back into an endless retry."""
+        key = source_key or f'rejected:{update["id"]}:{hashlib.sha1(str(update.get("text") or "").encode("utf-8")).hexdigest()[:10]}'
+        for row in self._events():
+            if (row.get('kind') == 'update-rejected' and row.get('source_key') == key
+                    and row.get('memory_id') == update['id']):
+                return
+        self.store.append(self.path, {'kind': 'update-rejected', 'memory_id': update['id'],
+                                      'text': str(update.get('text') or ''),
+                                      'seen': seen if isinstance(seen, str) else None,
+                                      'source_key': key, 'reason': reason,
+                                      'time': self.budget.clock()})
+
     def _save_update(self, update, seen=None, source_key=''):
         """Ticket 363: the entry is rewritten whole; the old version goes to the version record. `seen` is the
         text the model rewrote from: if Lan changed the entry meanwhile, her text wins and this rewrite is dropped."""
@@ -750,6 +784,12 @@ class ExperienceMemory:
             return True
         if not self._alive(memory_id) or self.sidecar.locked(memory_id):
             return False
+        status = self._event_status(memory_id)
+        if status in ('merged', 'closed'):
+            # Ticket 421 review: revise() refuses a closed experience. Do not raise (that would keep the
+            # whole batch uncommitted and buy the same model answer again); keep the draft and move on.
+            self._preserve_rejected_update(update, seen, source_key, f'event {status}')
+            return 'closed'
         previous = self.memory.content_for(memory_id, refresh=True)
         if not previous or (seen is not None and previous.strip() != seen.strip()):
             return False
@@ -852,6 +892,7 @@ class ExperienceMemory:
         source_key = ('chat:' + '|'.join(message_ids)) if message_ids else ('chat:' + ':'.join(span))
         written = updated = 0
         failed = []
+        rejected = []
         try:
             entries, updates, dropped, flagged = self._validated(
                 self._call_model(messages), batch, candidates, final=False)
@@ -909,6 +950,11 @@ class ExperienceMemory:
                 saved = self._save_update(update, next(
                     (c['text'] for c in candidates if c['id'] == update['id']), None),
                     source_key=update_key)
+                if saved == 'closed':
+                    # Ticket 421 review: a closed experience is a terminal rejection, not a transient
+                    # failure. The draft is preserved by _save_update; advance the cursor and keep going.
+                    rejected.append({'memory_id': update['id'], 'reason': 'event closed'})
+                    continue
                 if not saved:
                     self.store.append(self.path, {'kind': 'update-conflict', 'memory_id': update['id'],
                                                   'source_key': update_key,
@@ -931,6 +977,7 @@ class ExperienceMemory:
         self.store.append(self.path, {'kind': 'checkpoint', **mark, 'written': written, 'updated': updated,
                                       'dropped': dropped, 'time': self.budget.clock(),
                                       **({'unfixed': failed} if failed else {}),
+                                      **({'rejected': rejected} if rejected else {}),
                                       **({'deferred': deferred} if deferred else {}),
                                       **({'retried_without_thinking': self._retried} if self._retried else {})})
         self._context_cache = None
@@ -1002,6 +1049,7 @@ class ExperienceMemory:
                           'covers': last.get('covers'),
                           'retried_without_thinking': last.get('retried_without_thinking', 0),
                           'unfixed': len(last.get('unfixed') or []),
+                          'rejected': len(last.get('rejected') or []),
                           'deferred': len(last.get('deferred') or [])} if last else None),
                 'retry_at': (lambda at: at.isoformat(timespec='minutes') if at else None)(self.retry_at(events)),
                 'failures_kept': len(self.failures()),

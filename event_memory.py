@@ -195,7 +195,19 @@ class EventMemory:
         return latest
 
     def pending_stages(self):
-        return [row for row in self._stage_rows().values() if row.get('state') != 'committed']
+        return [row for row in self._stage_rows().values()
+                if row.get('state') not in ('committed', 'superseded')]
+
+    def _supersede_pending(self, source_key, keep_stage_id):
+        """Ticket 421 review: one source entry has one journal row. Older duplicate pending rows from a
+        reworded retry are retired so recovery cannot commit the same batch twice."""
+        if not source_key:
+            return
+        for row in self._stage_rows().values():
+            if (row.get('state') == 'pending' and row.get('source_key') == source_key
+                    and row.get('stage_id') != keep_stage_id):
+                clean = {key: value for key, value in row.items() if key != 'event_row'}
+                self.store.append(self.stages_path, {**clean, 'state': 'superseded'})
 
     def stages(self, event_id=None):
         rows = [row for row in self._stage_rows().values()
@@ -377,10 +389,26 @@ class EventMemory:
             f'{title or ""}|{text}|{key}'.encode('utf-8')).hexdigest()[:16]
         stage_rows = self._stage_rows()
         existing = stage_rows.get(stage_id)
+        pending_reuse = None
         if source_key:
-            existing = next((row for row in stage_rows.values()
-                             if row.get('state') == 'committed' and row.get('source_key') == source_key),
-                            existing)
+            committed = next((row for row in stage_rows.values()
+                              if row.get('state') == 'committed' and row.get('source_key') == source_key),
+                             None)
+            if committed is not None:
+                existing = committed
+            else:
+                pending_rows = [row for row in stage_rows.values()
+                                if row.get('state') == 'pending' and row.get('source_key') == source_key
+                                and isinstance(row.get('event_id'), str)]
+                if pending_rows:
+                    # Ticket 421 review: a crash after the journal write leaves the stage pending. A retry
+                    # of the same source batch must resume that row, not create a second stage that may
+                    # later be grouped elsewhere. The newest wording wins, the identity does not change.
+                    pending_reuse = max(pending_rows, key=lambda row: str(row.get('saved_at') or row.get('at') or ''))
+                    stage_id = str(pending_reuse.get('stage_id') or stage_id)
+        if pending_reuse is None and existing is not None and existing.get('state') == 'pending':
+            pending_reuse = existing
+            stage_id = str(existing.get('stage_id') or stage_id)
         if existing is not None and existing.get('state') == 'committed':
             if event_id and existing.get('event_id') != event_id:
                 # The same source batch was already recorded in another experience; never silently
@@ -411,7 +439,30 @@ class EventMemory:
                     'memory_id': event.get('memory_id'), 'updated': True, 'changed': True,
                     'locked': False, 'confidence': event.get('confidence'), 'duplicate': True}
         seen_revision = None
-        if event_id:
+        if pending_reuse is not None:
+            reused_event_id = str(pending_reuse.get('event_id') or '')
+            if event_id and event_id != reused_event_id:
+                self._review(reused_event_id, 'retry target differed from the journaled pending stage; '
+                                              'kept the journaled experience to avoid a duplicate')
+            event_id = reused_event_id
+            event = self.events().get(event_id) if event_id else None
+            if event is not None:
+                if (event.get('status') in ('merged', 'closed') or not self._visible(event)):
+                    raise ValueError('unknown event')
+                seen_revision = int(event.get('revision') or 0)
+                event = {**event, 'status': 'open'}
+                if occurred is not None:
+                    event['last_at'] = occurred.isoformat()
+            else:
+                snapshot = pending_reuse.get('event_row')
+                if not isinstance(snapshot, dict) or not snapshot.get('event_id'):
+                    raise ValueError('unknown event')
+                if snapshot.get('status') in ('merged', 'closed'):
+                    raise ValueError('unknown event')
+                event = dict(snapshot)
+            confidence = event.get('confidence') or 0.5
+            updated = True
+        elif event_id:
             event = self.events().get(event_id)
             # An explicit target must still be a real, visible experience; a stale or hidden one is
             # refused instead of silently overwriting it (ticket 421).
@@ -449,6 +500,10 @@ class EventMemory:
         # Journal first: a pending row carries the event snapshot, so a later write failure can be resumed
         # with the same stage_id instead of creating a duplicate.
         self.store.append(self.stages_path, {**stage, 'state': 'pending', 'event_row': event})
+        if pending_reuse is not None and source_key:
+            # Retire older duplicate journal rows only after the replacement journal row is safely written;
+            # a refused or failed retry must leave the original pending stage recoverable.
+            self._supersede_pending(source_key, stage_id)
         old_story = event.get('story')
         story, story_source, through, story_pending = self._write_story(
             self.stages(event['event_id']) + [stage], self._story(event['event_id'], extra=stage), event)
@@ -619,7 +674,21 @@ class EventMemory:
                     made[row['stage_id']] = row['memory_id']
         except Exception:
             made = {}
-        for stage in self.pending_stages()[:limit]:
+        pending = sorted(self.pending_stages(),
+                         key=lambda row: str(row.get('saved_at') or row.get('at') or ''))
+        chosen, older = {}, []
+        for stage in pending:
+            source = stage.get('source_key')
+            key = ('source', source) if source else ('stage', stage.get('stage_id'))
+            if key in chosen:
+                older.append(chosen[key])
+            chosen[key] = stage
+        for stage in older:
+            # Ticket 421 review: a reworded retry can leave two journal rows for one source entry.
+            # Keep the newest wording and retire the old row instead of committing both.
+            clean = {key: value for key, value in stage.items() if key != 'event_row'}
+            self.store.append(self.stages_path, {**clean, 'state': 'superseded'})
+        for stage in list(chosen.values())[:limit]:
             snapshot = stage.get('event_row')
             if not isinstance(snapshot, dict):
                 continue
