@@ -273,7 +273,7 @@ def rotate(candidates, metas, history):
     return sorted(candidates, key=lambda item: (-importance(item[0]), history.get(item[0], -1), order[item[0]]))
 
 
-_SENTENCE_END = re.compile(r'''[.!?]["’”'»）)\]}」』]*(?=\s|$)|[。！？]["’”'»）)\]}」』]*''')
+_SENTENCE_END = re.compile(r'''[.!?](?:["’”'»）)\]}」』】〕］〉》]+|(?=\s|$))|[。！？]["’”'»）)\]}」』】〕］〉》]*''')
 
 
 def sentence_parts(text):

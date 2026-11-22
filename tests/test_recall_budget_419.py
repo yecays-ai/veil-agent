@@ -532,6 +532,19 @@ class FinalStateTests(MemoryLevelBudgetTests):
         self.assertEqual(0, memory.last_memory_budget['memory_used'])
         self.assertEqual(86, memory.last_memory_budget['history_allowance'])
 
+    def test_short_real_memory_fits_when_empty_notices_do_not(self):
+        memory = self.memory({'short': {'content': 'Tiny fact.', 'title': 'Short'}})
+        memory.context('Tiny', include_opening=True, defer=True)
+        import prompts
+        actual = [{'role': 'system', 'content':
+                   prompts.text('memory.recall.head') + '\n'
+                   + memory._pending_recall['blocks'][0]['text']}]
+        allowance = estimate_message_tokens(actual, 0.4)
+        out = memory.finish_recall(space=86 + allowance, history_tokens=86, protected_tokens=86)
+        self.assertIn('Tiny fact.', '\n'.join(row['content'] for row in out))
+        self.assertGreaterEqual(memory.last_memory_budget['history_allowance'], 86)
+        self.assertLessEqual(memory.last_memory_budget['memory_used'], allowance)
+
     def test_memory_used_equals_the_messages_actually_sent(self):
         memory = self.memory(self.five_events(), recall={'cooldown_turns': 0, 'random_chance': 0})
         memory.context('video night brass lamp', include_opening=False, defer=True)
@@ -600,11 +613,12 @@ class EffectiveHistoryReuseTests(MemoryLevelBudgetTests):
 class BoundaryTests(unittest.TestCase):
     def test_partial_sentence_keeps_closing_quotes(self):
         from recall_rotation import _cut_on_boundary
-        for sentence in ('“我会回来。”', '「我会回来。」', '“I will return.”', '（我会回来。）'):
+        for sentence in ('“我会回来。”', '「我会回来。」', '“I will return.”', '（我会回来。）', 'First sentence.】'):
             text = sentence + ' ' + '后续还有很多内容。' * 20
             body, _, _ = partial_text(text, tokens_for(sentence, 0.4), 0.4)
             self.assertEqual(sentence, body)
             self.assertEqual('', _cut_on_boundary(sentence + '后续。', len(sentence) - 1))
+            self.assertEqual(sentence, _cut_on_boundary(sentence + '后续。', len(sentence)))
 
     def test_wrapped_line_is_not_a_sentence_boundary(self):
         from recall_rotation import _cut_on_boundary

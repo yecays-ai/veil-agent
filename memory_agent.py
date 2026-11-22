@@ -1721,12 +1721,15 @@ class Memory:
         def messages_for(recall, opening):
             if not emit_empty and not recall and not opening:
                 return []
-            recalled = [{'role': 'system', 'content':
+            recalled = ([{'role': 'system', 'content':
                          recall_head + '\n' + ('\n'.join(recall) or recall_empty)}]
+                        if recall or emit_empty else [])
             if not include_opening:
                 return recalled
-            return [{'role': 'system', 'content':
-                     opening_head + '\n' + ('\n'.join(opening) or opening_empty)}, *recalled]
+            opening_messages = ([{'role': 'system', 'content':
+                                 opening_head + '\n' + ('\n'.join(opening) or opening_empty)}]
+                                if opening or emit_empty else [])
+            return [*opening_messages, *recalled]
 
         overhead = recall_budget.tokens_for_messages(messages_for([], []), calibration)
         if space is not None and space < protected_tokens + overhead:
@@ -1742,11 +1745,13 @@ class Memory:
             history_allowance = None
             auxiliary_allowance = None
         else:
-            block_need = sum(recall_budget.tokens_for(block.get('text') or '', calibration)
-                             for block in blocks_out)
-            # The memory share must pay for the recall/opening headers and empty-group text too,
-            # otherwise the first memory always looks free and gets dropped after the overhead.
-            memory_need = block_need if emit_empty else 0
+            full_messages = messages_for(
+                [item['text'] for item in blocks_out if item.get('group') == 'recall'],
+                [item['text'] for item in blocks_out if item.get('group') == 'opening'])
+            full_need = recall_budget.tokens_for_messages(full_messages, calibration)
+            # Reserve empty notices only when they fit alongside the protected exchange.
+            # Nonempty messages are measured separately, since they can be cheaper than a notice.
+            memory_need = max(0, full_need - overhead)
             plan = recall_budget.split(max(0, space - overhead), history_tokens, memory_need,
                                        protected_tokens, auxiliary_tokens)
             plan['space'] = space
@@ -1755,7 +1760,12 @@ class Memory:
             plan['fixed_overhead'] = overhead
             memory_allowance = plan['memory']
             fit_allowance = max(0, memory_allowance - overhead)
-            selected, dropped = recall_budget.fit(blocks_out, fit_allowance, calibration)
+            if full_need <= memory_allowance:
+                selected = [dict(block, tokens=recall_budget.tokens_for(block['text'], calibration),
+                                 complete=True) for block in blocks_out]
+                dropped = []
+            else:
+                selected, dropped = recall_budget.fit(blocks_out, fit_allowance, calibration)
             # Measure the real messages and refit until the measured size fits the memory share.
             for _ in range(3):
                 recall_items = [item for item in selected if item.get('group') == 'recall']
