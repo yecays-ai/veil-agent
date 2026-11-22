@@ -127,10 +127,12 @@ class RecallJudgeTests(unittest.TestCase):
         refs, _ = self.recall(self.memory(judge=False))
         self.assertEqual(['junk'], refs)
 
-    def test_it_may_pick_two_and_no_more(self):
-        memory = self.memory(model=FakeJudgeModel(pick=['Kills plants', 'Mint schedule', 'Small earthquake', 'Weather']))
+    def test_it_may_pick_every_candidate_it_judges_relevant(self):
+        """Ticket 419: no hard cap of two; the whole-round budget decides how many fit."""
+        memory = self.memory(model=FakeJudgeModel(pick=['Kills plants', 'Mint schedule', 'Small earthquake', 'Weather']),
+                             recall={'cooldown_turns': 0, 'random_chance': 0, 'dedup': False})
         refs, _ = self.recall(memory)
-        self.assertEqual(2, len(refs))
+        self.assertEqual(4, len(refs))
 
     def test_none_is_an_answer_nothing_is_filled_back_from_ombre(self):
         memory = self.memory(model=FakeJudgeModel(pick=[]))
@@ -151,20 +153,34 @@ class RecallJudgeTests(unittest.TestCase):
         self.assertIn('Kills plants', sent)
 
     def test_the_judge_reads_only_the_card_and_the_prompt_does_not_ask_him_to_talk_about_the_past(self):
-        memory = self.memory()
+        rows = {**ROWS, 'cactus': {**ROWS['cactus'],
+                'content': 'OPENING_DETAIL succulent care. ' + 'A long fictional middle. ' * 15
+                           + 'MIDDLE_ONLY_PRIVATE_MARKER ' + 'A long fictional middle. ' * 15
+                           + 'CLOSING_DETAIL about cactus soil.'}}
+        memory = self.memory(rows=rows)
         self.recall(memory)
         system = self.model.calls[0][0][0]['content']
         user = self.model.calls[0][0][1]['content']
         self.assertNotIn('mention', system.lower())
         self.assertNotIn('remember', system.lower())
-        self.assertNotIn('instead of hope', user)   # the body is not sent, only title / tags / keyword line
-        self.assertEqual({'json_output': True, 'max_tokens': 60, 'thinking': 'disabled', 'request_timeout': 0.4},
+        self.assertIn('…opening: OPENING_DETAIL', user)
+        self.assertIn('…ending:', user)
+        self.assertIn('CLOSING_DETAIL', user)  # both ends survive the card budget
+        self.assertNotIn('MIDDLE_ONLY_PRIVATE_MARKER', user)
+        self.assertIn('…opening:', user)   # ticket 419 review: opening and ending are both on the card
+        self.assertEqual({'json_output': True, 'max_tokens': 200, 'thinking': 'disabled', 'request_timeout': 0.4},
                          {key: value for key, value in self.model.calls[0][1].items()})
 
-    def test_cooldown_and_dedup_still_apply_to_what_the_judge_picks(self):
+    def test_an_immediate_follow_up_keeps_what_the_judge_just_picked_and_a_gap_still_cools_it(self):
+        """Ticket 419 review: the second turn is a real follow-up and the judge returns none; the
+        previous pick is carried. One turn later the cooldown applies again."""
         memory = self.memory(recall={'cooldown_turns': 3, 'random_chance': 0})
         self.assertEqual(['cactus'], self.recall(memory)[0])
-        self.assertEqual([], self.recall(memory)[0])   # the cooled memory leaves its slot empty
+        self.model.answer = '{"ids": []}'
+        self.assertEqual(['cactus'], self.recall(memory, '那我当时是什么反应？')[0])
+        memory.rotation.turn += 1
+        self.model.answer = None
+        self.assertEqual([], self.recall(memory)[0])
 
     # --- failures keep ticket 381's recall, quickly ---------------------------------------------------------------
     def assert_falls_back(self, memory, reason, limit=1.5):
@@ -369,15 +385,25 @@ class RecallJudgeTests(unittest.TestCase):
     def test_parse_choice_and_card_text(self):
         letters = {'A': 'one', 'B': 'two', 'C': 'three'}
         self.assertEqual([], parse_choice('{"ids": []}', letters))
-        self.assertEqual(['two', 'one'], parse_choice('{"ids": ["B", "A", "C"]}', letters))
+        self.assertEqual(['two', 'one', 'three'], parse_choice('{"ids": ["B", "A", "C"]}', letters))
         self.assertEqual(['one'], parse_choice('{"ids": ["A", "A"]}', letters))
         for bad in ('', 'null', '[]', '{"ids": null}', '{"ids": [1]}', '{"ids": ["Q"]}', None):
             with self.assertRaises(JudgeFailed):
                 parse_choice(bad, letters)
         raw = "---\nid: x\ntitle: 'A title'\ntags:\n- one\n- 'two words'\n---\nbody\n\n关键词：甲、乙"
-        self.assertEqual('A title | one two words | 甲、乙', card_text(raw))
+        self.assertEqual('A title | 甲、乙 | …opening: body 关键词：甲、乙 | one two words', card_text(raw))
         old = "---\nid: old\nname: 'Old name'\ntags:\n- self\n---\nbody"
-        self.assertEqual('Old name | self', card_text(old))
+        self.assertEqual('Old name | …opening: body | self', card_text(old))
+
+    def test_labels_stay_parseable_past_twenty_six_candidates(self):
+        from recall_judge import labels_for
+        labels = labels_for(32)
+        self.assertEqual(32, len(set(labels)))
+        self.assertEqual('A', labels[0])
+        self.assertEqual('Z', labels[25])
+        self.assertTrue(all(label.isalnum() for label in labels))
+        letters = {label: f'm{index}' for index, label in enumerate(labels)}
+        self.assertEqual(['m26', 'm27'], parse_choice('{"ids": ["A2", "B2"]}', letters))
 
 
 if __name__ == '__main__':

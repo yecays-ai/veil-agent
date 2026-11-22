@@ -3,8 +3,12 @@
 Ombre's automatic search is a keyword search with a vector side channel that almost never opens (docs/tickets/382). Lan's
 everyday sentences rarely repeat the words a memory was written with, so memories that fit are missed while weakly related
 ones fill the three slots. The judge looks at a short list (Ombre's visible hits plus the nearest memories by vector) and says
-which of them bear directly on what she just said, at most two, or none. It only chooses memories; it never writes, edits or
+which of them bear directly on what she just said, best first, or none. It only chooses memories; it never writes, edits or
 hides one, and it says nothing about how Peter should answer.
+
+Ticket 419: the judge is no longer capped at two (three for autonomous wakes). It may name every
+candidate that directly bears on the message; the whole-round memory budget in ``recall_budget``
+decides how many of them actually fit in the request.
 
 Failure rule (Lan, 2026-11-17): the judge answering "none" means no memory this turn, nothing is filled back from Ombre.
 Only a technical failure (timeout, request error, broken JSON, no embedding, budget) falls back to today's recall (ticket 381).
@@ -24,13 +28,12 @@ from recall_relevance import all_vectors, cosine
 
 COST_CATEGORY = 'recall_judge'
 COST_ACCOUNTING = 'recall-judge'
-MAX_OUTPUT_TOKENS = 60
+MAX_OUTPUT_TOKENS = 200
 QUERY_CHARS = 600
-CARD_CHARS = 200
-MAX_PICKS = 2
+CARD_CHARS = 300
 SKIPPED_TYPES = ('feel', 'plan', 'letter')
 
-DEFAULTS = {'enabled': True, 'timeout_seconds': 4.0, 'ombre_candidates': 5, 'vector_candidates': 5,
+DEFAULTS = {'enabled': True, 'timeout_seconds': 4.0, 'ombre_candidates': 8, 'vector_candidates': 8,
             'breaker_failures': 3, 'breaker_seconds': 300}
 
 
@@ -45,7 +48,7 @@ def load_settings(raw):
     value = raw.get('timeout_seconds')
     if type(value) in (int, float) and 0.5 <= value <= 10:
         settings['timeout_seconds'] = float(value)
-    for key, low, high in (('ombre_candidates', 0, 8), ('vector_candidates', 0, 8), ('breaker_failures', 1, 20),
+    for key, low, high in (('ombre_candidates', 0, 16), ('vector_candidates', 0, 16), ('breaker_failures', 1, 20),
                            ('breaker_seconds', 5, 3600)):
         value = raw.get(key)
         if type(value) is int and low <= value <= high:
@@ -62,7 +65,12 @@ class JudgeFailed(Exception):
 
 
 def card_text(raw):
-    """Title, tags and the Chinese keyword line of one memory file: all the judge reads of it."""
+    """Title, keywords and both ends of one memory file: all the judge reads of it.
+
+    Ticket 419: an ending-only question ("what was the last thing that happened?") used to be
+    invisible to the judge because the card was only the opening. The card now also carries a short
+    closing line, so the judge can recognise a memory whose relevant detail comes at its end without
+    reading the whole body."""
     if not isinstance(raw, str):
         return ''
     head, _, body = raw.partition('\n---\n')
@@ -78,13 +86,37 @@ def card_text(raw):
             else:
                 inside = False
     keywords = re.search(r'(?:关键词|检索词)[：:](.*)', body)
-    parts = [(title.group(1).strip().strip('\'"') if title else ''), ' '.join(tags),
-             keywords.group(1).strip() if keywords else '']
+    plain = ' '.join(body.split())
+    opening = plain[:150]
+    closing = ''
+    if plain:
+        tail = plain[-130:]
+        if len(tail) > 24 and tail not in opening:
+            closing = '…ending: ' + tail
+    parts = [(title.group(1).strip().strip('\'"')[:60] if title else ''),
+             (keywords.group(1).strip()[:60] if keywords else ''),
+             ('…opening: ' + opening[:90]) if opening else '',
+             closing[:130],
+             ' '.join(tags)[:30]]
     return ' | '.join(part for part in parts if part)[:CARD_CHARS]
 
 
-def parse_choice(text, letters, max_picks=MAX_PICKS):
-    """The picked ids, or JudgeFailed when the answer is not what was asked for. [] is a valid answer."""
+def labels_for(count):
+    """A..Z, then A2..Z2 etc. — always parseable, so 32 candidates never become punctuation."""
+    result = []
+    for index in range(max(0, int(count))):
+        if index < 26:
+            result.append(chr(65 + index))
+        else:
+            result.append(f'{chr(65 + (index - 26) % 26)}{(index - 26) // 26 + 2}')
+    return result
+
+
+def parse_choice(text, letters, max_picks=None):
+    """The picked ids, or JudgeFailed when the answer is not what was asked for. [] is a valid answer.
+
+    Ticket 419: no default cap. The judge may name every memory it was offered; the request budget
+    decides how many of them are actually injected."""
     try:
         data = json.loads(text)
     except (TypeError, ValueError) as exc:
@@ -92,7 +124,9 @@ def parse_choice(text, letters, max_picks=MAX_PICKS):
     ids = data.get('ids') if isinstance(data, dict) else None
     if not isinstance(ids, list) or any(not isinstance(item, str) for item in ids):
         raise JudgeFailed('bad_format')
-    picked = [letters[item] for item in dict.fromkeys(ids) if item in letters][:max_picks]
+    picked = [letters[item] for item in dict.fromkeys(ids) if item in letters]
+    if max_picks is not None:
+        picked = picked[:max_picks]
     if ids and not picked:
         raise JudgeFailed('bad_format', 'none of the letters was offered')
     return picked
@@ -274,7 +308,7 @@ class RecallJudge:
             budget.settle_estimate((reservation, amount), accounting=f'{COST_ACCOUNTING}-usage-invalid')
         return output
 
-    def choose(self, query, pool, prefetched, *, wake=False, max_picks=MAX_PICKS, candidate_limit=None):
+    def choose(self, query, pool, prefetched, *, wake=False, max_picks=None, candidate_limit=None):
         """(key, body) pairs the judge picked, best first; [] when it says none. Raises JudgeFailed on a technical failure."""
         started = self.clock()
         deadline = started + self.settings['timeout_seconds'] + 0.5
@@ -305,7 +339,7 @@ class RecallJudge:
                 self._record('empty', started, candidates=0, picked=0)
                 return []
             order = sorted(candidates, key=lambda item: hashlib.md5((query + item[0]).encode()).hexdigest())
-            letters = {chr(65 + index): key for index, (key, _) in enumerate(order)}
+            letters = {label: key for label, (key, _) in zip(labels_for(len(order)), order)}
             lines = []
             for letter, key in letters.items():
                 lines.append(f'{letter}) {card_text(self._raw(key) or self.memory.raw_content_for(key))}')

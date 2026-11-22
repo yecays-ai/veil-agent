@@ -12,8 +12,9 @@ decides which of the candidates Ombre already returned are shown this turn, and 
   experience takes at most `stage_slots` of the recalled memories (the rest stay in the directory line).
 - Rotation (opening and autonomous wakes, whose query does not name a topic): candidates are
   ordered by importance, and among equal importance the one shown longest ago comes first.
-- Long memories: only the title, date and opening of the body are shown, with a pointer to
-  `memory_read` for the whole text.
+- Long memories: the whole body is shown by default. ``excerpt_chars`` is 0 (no per-memory cap);
+  an old config that still sets a number keeps that limit, but the cut now lands on a paragraph or
+  sentence boundary and always says how to read the rest.
 - Random recall: Ombre's own "忽然想起来" section, which its search adds when it found fewer than
   three hits, may contribute one memory, labelled as random.
 """
@@ -24,7 +25,7 @@ DEFAULTS = {
     'cooldown_turns': 3,
     'dedup': True,
     'dedup_similarity': 0.88,
-    'excerpt_chars': 600,
+    'excerpt_chars': 0,
     'random_chance': 0.1,
     'rotation_candidates': 8,
     'directory': True,
@@ -74,8 +75,16 @@ def settings(memory_cfg):
 
 
 _PAST = re.compile(
-    r'记得|还记不记得|想起来|上次|上回|那次|那天|那晚|那时|当时|去年|前年|以前|之前|刚才说|'
+    r'记得|还记不记得|想起|想起来|上次|上回|那次|那天|那晚|那时|当时|去年|前年|以前|之前|刚才说|'
     r'remember|recall|last time|that time|back when|earlier|you said|we talked', re.I)
+
+# Ticket 419: a sentence that continues the thing just discussed. These are not queries on their
+# own ("那我呢", "后来呢"), so the previous turn's judged memories stay in play for this turn.
+# A bare "结果" / "那次" / "那时候" is an explicit past question, not a continuation, so it is not
+# here; only clear continuation phrases may carry the previous turn's memories.
+_FOLLOWUP = re.compile(
+    r'后来|然后|接着|之后|继续|结果呢|还有呢|那我|她的反应|我的反应|'
+    r'what happened next|and then|after that|how did (she|you) react|what about', re.I)
 
 
 def asks_about_past(text):
@@ -84,6 +93,49 @@ def asks_about_past(text):
     Cooldown only exists so unrelated old memories do not keep coming back unasked; when she asks
     about the past herself, hiding the memory she means is the worse failure, so it is let through."""
     return bool(isinstance(text, str) and _PAST.search(text))
+
+
+def _last_user_message(recent):
+    for row in reversed(list(recent or [])):
+        if isinstance(row, dict) and row.get('role') == 'user':
+            return row.get('content') if isinstance(row.get('content'), str) else ''
+    return ''
+
+
+_ACK_CLEAN = re.compile(r'[，,。.!！…~\s]')
+_ACK_WORDS = frozenset({'嗯', '哦', '对', '是', '好', '行', '可以', '继续', '然后', '还有',
+                        '呢', '啊', '呀', '吧', '嘛', '真的', '这样', '那样', '嗯好', '嗯嗯',
+                        '对对', '对啊', '是的', '好呀', '然后呢', '还有呢'})
+
+
+def _is_ack(text):
+    cleaned = _ACK_CLEAN.sub('', str(text or ''))
+    return bool(cleaned) and (cleaned in _ACK_WORDS
+                              or all(part in _ACK_WORDS for part in cleaned))
+
+
+def is_followup(query, recent=None):
+    """A short continuation of the previous turn, or a bare acknowledgement right after a past question.
+
+    Ticket 419: "同一对话连续问 V50，再问「那我当时是什么反应？」" used to lose V50 because the
+    follow-up sentence had no word Ombre could search for and the cooldown dropped the memory the
+    previous turn had just shown. Following up on the thing just discussed is the opposite of
+    unrelated chat, so it keeps that turn's context available.
+
+    Ticket 419 review: only the *immediately* preceding user message counts. A past question three
+    turns ago must not carry memories across an unrelated topic, and an explicit new past question
+    ("还记得 V78 吗") is not a continuation of the previous subject. A short new-topic sentence
+    ("今天吃什么") is not an acknowledgement either; only a plain "嗯/对/继续" may carry.
+    """
+    if not isinstance(query, str):
+        return False
+    if _FOLLOWUP.search(query):
+        return True
+    previous = _last_user_message(recent)
+    return bool(previous and asks_about_past(previous) and _is_ack(query)
+                and not asks_about_past(query))
+
+
 
 
 def drift_hits(text):
@@ -185,9 +237,12 @@ def created_key(created):
     return (0, moment.timestamp(), '')
 
 
-def directory_line(key, entries, size):
+def directory_line(key, entries, size, event_id=''):
     """One line listing the other memories of the experience `key` belongs to: date and title only, oldest first,
-    at most `size` of them around `key`. `entries` are (memory_id, created, title). Empty when `key` stands alone."""
+    at most `size` of them around `key`. `entries` are (memory_id, created, title). Empty when `key` stands alone.
+
+    Ticket 419: when the memory is part of an event, the line also names the event id and says how to
+    read the whole experience, so a story glimpsed through one stage can be recovered on demand."""
     if len(entries) < 2:
         return ''
     year = next((created[:4] for memory_id, created, _ in entries if memory_id == key and created), '')
@@ -201,8 +256,12 @@ def directory_line(key, entries, size):
         parts.append(f'{label} (this one)' if memory_id == key else f'{label} [{memory_id}]')
     more = '…' if start else ''
     after = ' → …' if start + size < len(ordered) else ''
-    return ('(This memory is one stage of a longer experience, oldest first: ' + more
-            + ' → '.join(parts) + after + '. Titles and dates only; memory_read an ID to read that stage.)')
+    line = ('(This memory is one stage of a longer experience, oldest first: ' + more
+            + ' → '.join(parts) + after + '. Titles and dates only; memory_read an ID to read that stage.')
+    if event_id:
+        line += (f' The whole experience can be read with memory_timeline, event_id "{event_id}";'
+                 ' read it before answering about what came later.')
+    return line + ')'
 
 
 def rotate(candidates, metas, history):
@@ -214,18 +273,76 @@ def rotate(candidates, metas, history):
     return sorted(candidates, key=lambda item: (-importance(item[0]), history.get(item[0], -1), order[item[0]]))
 
 
-def excerpt(key, body, meta, limit):
-    """Title, date and the opening of a long memory; short ones pass through unchanged."""
+_SENTENCE_END = re.compile(r'''[.!?](?:["’”'»）)\]}」』】〕］〉》]+|(?=\s|$))|[。！？]["’”'»）)\]}」』】〕］〉》]*''')
+
+
+def sentence_parts(text):
+    """Complete sentences keep closing quotes; a wrapped line is not an ending."""
+    start = 0
+    for match in _SENTENCE_END.finditer(text):
+        piece = text[start:match.end()].strip()
+        if piece:
+            yield piece
+        start = match.end()
+    tail = text[start:].strip()
+    if tail:
+        yield tail
+
+
+def _cut_on_boundary(text, limit):
+    """The longest run of whole paragraphs (or, when the first paragraph is too long, whole
+    sentences) that is not over ``limit`` characters. Never cuts mid-sentence. Chinese sentence
+    punctuation splits on its own; English punctuation still needs the following whitespace."""
+    if limit <= 0:
+        return ''
+    kept = []
+    used = 0
+    for paragraph in re.split(r'\n\s*\n', text):
+        if not paragraph.strip():
+            continue
+        cost = len(paragraph) + (2 if kept else 0)
+        if used + cost <= limit:
+            kept.append(paragraph)
+            used += cost
+            continue
+        if not kept:
+            for sentence in sentence_parts(paragraph):
+                if not sentence.strip():
+                    continue
+                cost = len(sentence) + (1 if kept else 0)
+                if used + cost > limit:
+                    break
+                kept.append(sentence)
+                used += cost
+        break
+    return '\n\n'.join(kept).rstrip()
+
+
+def excerpt(key, body, meta, limit, event_id=''):
+    """The whole memory by default; a legacy character limit still cuts, but only on a boundary.
+
+    ``limit`` 0 means no per-memory cap. When a number is set (an old config), the opening is kept
+    only up to that many characters, at a paragraph or sentence boundary, followed by a pointer to
+    the read tools so the rest is never lost. If not even one whole sentence fits, no original text
+    is sent: the block carries only the header, a plain "not shown" note and the exact read pointer.
+    """
     if not limit or len(body) <= limit:
         return body
     header, _, text = body.partition('\n')
     title = meta.get('title') or meta.get('name') or ''
     created = (meta.get('created') or '')[:10]
     label = ' · '.join(part for part in (title, created) if part)
-    cut = text[:limit].rstrip()
-    return (f'{header}{(" " + label) if label else ""}\n{cut}…\n'
-            f'(Long memory: only its beginning is shown. Use memory_read with memory_id "{key}" '
-            'if you need the rest.)')
+    cut = _cut_on_boundary(text, max(1, limit - len(header) - len(label) - 1))
+    where = 'memory_read with memory_id "%s"' % key
+    if event_id:
+        where += ' (or memory_timeline with event_id "%s" for the whole experience)' % event_id
+    label_line = f'{header}{(" " + label) if label else ""}'
+    if not cut:
+        return (f'{label_line}\n(The full text was not shown: even one complete sentence does not '
+                f'fit the configured character limit. Use {where} to read it.)')
+    return (f'{label_line}\n{cut}\n'
+            f'(Only the beginning is shown because of the configured character limit. Use {where} '
+            'for the rest.)')
 
 
 class Cooldown:

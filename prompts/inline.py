@@ -23,6 +23,7 @@ PROMPT_MODULES = (
     'life_state.py',
     'memory_agent.py',
     'memory_native.py',
+    'recall_budget.py',   # ticket 419: builds one request-shaped message to measure its tokens
     'recall_judge.py',
     'short_term_notes.py',
     'user_persona.py',
