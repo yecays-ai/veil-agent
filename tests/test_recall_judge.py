@@ -376,6 +376,8 @@ class RecallJudgeTests(unittest.TestCase):
                 parse_choice(bad, letters)
         raw = "---\nid: x\ntitle: 'A title'\ntags:\n- one\n- 'two words'\n---\nbody\n\n关键词：甲、乙"
         self.assertEqual('A title | one two words | 甲、乙', card_text(raw))
+        old = "---\nid: old\nname: 'Old name'\ntags:\n- self\n---\nbody"
+        self.assertEqual('Old name | self', card_text(old))
 
 
 if __name__ == '__main__':
