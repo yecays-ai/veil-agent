@@ -39,7 +39,7 @@ MAX_UPDATES = 3
 TITLE_CHARS = 60
 ENTRY_CHARS = 0           # ticket 421: no fixed cap; the model's output budget is the real limit
 UPDATE_CHARS = 0          # ticket 421: an update rewrites the whole memory, however long it is
-MESSAGE_CHARS = 1500      # one pasted wall of text is clipped, not allowed to crowd out the rest
+MESSAGE_CHARS = 1500      # one chunk of a pasted wall; long messages are split, never clipped
 REQUEST_CHARS = 12000     # visible chat text per model call; the rest waits for the next tick
 MAX_OUTPUT_TOKENS = 8000  # ticket 386: a thinking model's reasoning counts here too; at 3000 deepseek-flash often
                           # thought until the limit and never wrote the entries (7 failures in a row on 11-16)
@@ -231,8 +231,58 @@ class ExperienceMemory:
 
     def pending(self):
         rows = self.store.read(self.chat_path)
-        start = self._cursor(rows, self._events())
-        return [item for item in self._visible(rows) if item['position'] >= start]
+        events = self._events()
+        start = self._cursor(rows, events)
+        progress = self._chunk_progress(events)
+        out = []
+        for item in self._visible(rows):
+            if item['position'] < start:
+                continue
+            chunks = self._message_chunks(item)
+            skip = 0
+            if (progress and progress.get('message_id') == item.get('id')
+                    and progress.get('position') == item.get('position')):
+                skip = max(0, int(progress.get('next_chunk') or 0))
+            out.extend(chunks[skip:])
+        return out
+
+    def _chunk_progress(self, events):
+        """A partially processed long message, only when no later checkpoint has passed it."""
+        for event in reversed(events):
+            if event.get('kind') == 'chunk-progress':
+                return event
+            if event.get('kind') in ('checkpoint', 'start'):
+                return None
+        return None
+
+    @staticmethod
+    def _split_message(text, limit):
+        """Split at paragraphs/sentences; hard-cut only when there is no boundary. Never drops text."""
+        text = str(text or '')
+        if len(text) <= limit:
+            return [text]
+        pieces, rest = [], text
+        while len(rest) > limit:
+            cut = rest.rfind('\n', 0, limit + 1)
+            for mark in '。！？.!?':
+                pos = rest.rfind(mark, 0, limit + 1)
+                if pos + 1 > cut:
+                    cut = pos + 1
+            if cut < limit // 3:
+                cut = limit
+            pieces.append(rest[:cut].rstrip() or rest[:cut])
+            rest = rest[cut:].lstrip('\n')
+        if rest:
+            pieces.append(rest)
+        return pieces or [text]
+
+    def _message_chunks(self, item):
+        limit = max(200, MESSAGE_CHARS)
+        parts = self._split_message(item['text'], limit)
+        if len(parts) == 1 and len(item['text']) <= limit:
+            return [dict(item, chunk=0, chunks=1)]
+        return [{**item, 'text': part, 'chunk': index, 'chunks': len(parts)}
+                for index, part in enumerate(parts)]
 
     def due(self, pending=None):
         """Volume first, then time. Returns a reason or ''."""
@@ -320,7 +370,7 @@ class ExperienceMemory:
                 return 'waiting'
             batch, used = [], 0
             for item in pending:
-                text = item['text'] if len(item['text']) <= MESSAGE_CHARS else item['text'][:MESSAGE_CHARS] + ' …'
+                text = item['text']          # already a bounded chunk; never clip a message
                 if batch and used + len(text) > REQUEST_CHARS:
                     break
                 batch.append({**item, 'text': text})
@@ -880,16 +930,33 @@ class ExperienceMemory:
             if not any(e.get('kind') == 'budget' and str(e.get('time', ''))[:10] == today for e in events):
                 self.store.append(self.path, {'kind': 'budget', 'time': self.budget.clock(), 'cap': str(cap)})
             return 'budget'
-        mark = {'through_message_id': last['id'], 'through_position': last['position'] + 1,
-                'messages': len(batch), 'chars': sum(len(item['text']) for item in batch), 'reason': reason,
-                'covers': {'from': batch[0]['time'].isoformat(), 'to': last['time'].isoformat()}}
+        complete = [item for item in batch
+                    if int(item.get('chunk') or 0) == int(item.get('chunks') or 1) - 1]
+        if complete:
+            mark = {'through_message_id': complete[-1]['id'],
+                    'through_position': complete[-1]['position'] + 1}
+        else:
+            # Only part of one long message fits: keep the cursor at that message and remember the chunk.
+            mark = {'through_message_id': None, 'through_position': batch[0]['position']}
+        mark.update({'messages': len(batch), 'chars': sum(len(item['text']) for item in batch),
+                     'reason': reason,
+                     'covers': {'from': batch[0]['time'].isoformat(), 'to': last['time'].isoformat()}})
+        tail = batch[-1]
+        progress = ({'kind': 'chunk-progress', 'message_id': tail['id'], 'position': tail['position'],
+                     'next_chunk': int(tail.get('chunk') or 0) + 1, 'chunks': int(tail.get('chunks') or 1)}
+                    if int(tail.get('chunks') or 1) > 1
+                    and int(tail.get('chunk') or 0) < int(tail.get('chunks') or 1) - 1 else None)
         self.store.append(self.path, {'kind': 'attempt', **mark, 'time': self.budget.clock()})
         span = [batch[0]['time'].isoformat(timespec='minutes'), last['time'].isoformat(timespec='minutes')]
         deferred = []
-        message_ids = [item['id'] for item in batch if isinstance(item.get('id'), str) and item['id']]
+        message_ids = list(dict.fromkeys(item['id'] for item in batch
+                                         if isinstance(item.get('id'), str) and item['id']))
         source = {'kind': 'chat', 'from': batch[0]['time'].isoformat(), 'to': last['time'].isoformat(),
                   'message_ids': message_ids, 'count': len(batch)}
-        source_key = ('chat:' + '|'.join(message_ids)) if message_ids else ('chat:' + ':'.join(span))
+        bits = [item['id'] if int(item.get('chunks') or 1) == 1
+                else f"{item['id']}#{int(item.get('chunk') or 0)}"
+                for item in batch if isinstance(item.get('id'), str) and item['id']]
+        source_key = ('chat:' + '|'.join(bits)) if bits else ('chat:' + ':'.join(span))
         written = updated = 0
         failed = []
         rejected = []
@@ -980,6 +1047,9 @@ class ExperienceMemory:
                                       **({'rejected': rejected} if rejected else {}),
                                       **({'deferred': deferred} if deferred else {}),
                                       **({'retried_without_thinking': self._retried} if self._retried else {})})
+        if progress:
+            # The last message in this batch was only partly handled; the next run resumes inside it.
+            self.store.append(self.path, {**progress, 'time': self.budget.clock()})
         self._context_cache = None
         return 'written' if written or updated else 'skipped'
 

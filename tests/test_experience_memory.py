@@ -217,6 +217,25 @@ class InputTests(Fixture):
         self.feature.run_if_due()
         self.assertTrue(all(m['time'].startswith(DAY1) for m in self.sent()['messages']))
 
+    def test_a_single_long_message_is_split_and_not_marked_done_early(self):
+        body = 'A fictional long message. ' + ('细节 ' * 6000) + 'TAIL-UNIQUE'
+        self.add([row(DAY1, '10:00', 'user', body, 'u-long')])
+        self.clock[0] = f'{DAY1}T12:00:00+08:00'
+        runs = 0
+        while runs < 8 and self.feature.due():
+            self.reply()
+            self.feature.run_if_due()
+            runs += 1
+        self.assertLess(runs, 8)
+        self.assertEqual(self.feature.pending(), [])
+        sent_text = ''.join(message['text'] for request in self.requests
+                            for message in json.loads(request[-1]['content'])['messages'])
+        self.assertEqual(sent_text.count('细节'), 6000)          # every chunk reached the model
+        self.assertIn('TAIL-UNIQUE', sent_text)
+        checkpoints = [row for row in self.store.read('fake/experience-memory.jsonl')
+                       if row.get('kind') == 'checkpoint']
+        self.assertEqual(checkpoints[-1]['through_message_id'], '12-u-long')
+
     def test_a_long_backlog_is_taken_in_bounded_pieces(self):
         self.add(long_talk(DAY1) * 5)
         self.clock[0] = f'{DAY1}T12:00:00+08:00'

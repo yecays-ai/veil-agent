@@ -11,7 +11,7 @@ Peter 主动保存和后台自动整理，写入前先找已有经历：明确�
 ## 当前状态
 
 - 事件层（工单 407/410）已有归组、阶段、故事、证据、版本、锁定和恢复；本单已对 Peter 打开事件层。
-- 写入结果不再按 600／1200 字截断：`memory_native.MEMORY_CHARS` 改为按模型输出预算；`experience_memory.ENTRY_CHARS/UPDATE_CHARS = 0`、`CANDIDATE_CHARS = 6000`；`event_memory.stage_chars = 0`；故事按批次合并，不再截 16000 字 JSON。输入消息（`MESSAGE_CHARS = 1500`）和后台候选正文（6000）仍保留独立边界，不把它们送进整库或无限长的请求。
+- 写入结果不再按 600／1200 字截断：`memory_native.MEMORY_CHARS` 改为按模型输出预算；`experience_memory.ENTRY_CHARS/UPDATE_CHARS = 0`、`CANDIDATE_CHARS = 6000`；`event_memory.stage_chars = 0`；故事按批次合并，不再截 16000 字 JSON。输入消息按 `MESSAGE_CHARS = 1500` 切块而不是截断，后台候选正文 6000 仍是独立边界；checkpoint 只在一条消息的所有块处理完后推进。
 - 恢复：写入中断留下的 pending 阶段按 `source_key` 复用原事件与原 `stage_id`，重词重试不新增阶段；同一来源的旧重复 pending 在恢复时标 `superseded`，只提交最新一条。关闭/合并的事件不再进入后台更新候选；竞态下被拒绝的更新写入 `update-rejected` 并推进游标，不再整批反复调用模型。
 - 阶段记录发生时间、保存时间、来源范围和消息 ID；后台整理用聊天批次的时间与 `covers`，不再用整理时间冒充发生时间。
 - 主要文件：`event_memory.py`、`experience_memory.py`、`memory_native.py`、`characters/peter/character.toml`、`prompts/defaults/memory.event.*`、`desktop/chat.js`、`web_agent.py`。
