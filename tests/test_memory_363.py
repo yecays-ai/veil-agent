@@ -20,6 +20,8 @@ class MovingBackend(Backend):
     def call(self, name, args):
         if name == 'trace' and isinstance(args.get('old_str'), str):
             self.calls.append((name, args))
+            if self.fail:
+                raise RuntimeError('fictional failure')
             row = self.rows[args['bucket_id']]
             if (not args['old_str'] or not isinstance(args.get('new_str'), str)
                     or row['content'].count(args['old_str']) != 1):
@@ -197,6 +199,14 @@ class RewriteTests(Fixture):
         self.assertEqual(state, '成功', result)
         self.assertEqual(self.backend.rows[self.a]['content'],
                          'on 11-06 i bet her a week on ' + 'z' * 2000 + '.')
+
+    def test_a_failed_replacement_does_not_modify_the_memory(self):
+        before = self.backend.rows[self.a]['content']
+        self.backend.fail = True
+        result, state, _ = self.native._trace(
+            {'bucket_id': self.a, 'old_str': 'fog tide', 'new_str': 'z' * 2000}, None)
+        self.assertEqual(state, '出错', result)
+        self.assertEqual(self.backend.rows[self.a]['content'], before)
 
     def test_peter_changing_what_lan_corrected_is_flagged_until_she_looks(self):
         self.native.panel_edit(self.a, {'content': 'Lan fixed this: on 11-06 fog tide.'})
