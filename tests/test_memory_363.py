@@ -21,7 +21,10 @@ class MovingBackend(Backend):
         if name == 'trace' and isinstance(args.get('old_str'), str):
             self.calls.append((name, args))
             row = self.rows[args['bucket_id']]
-            row['content'] = row['content'].replace(args['old_str'], str(args.get('new_str') or ''), 1)
+            if (not args['old_str'] or not isinstance(args.get('new_str'), str)
+                    or row['content'].count(args['old_str']) != 1):
+                raise RuntimeError('old_str/new_str must match one unique passage')
+            row['content'] = row['content'].replace(args['old_str'], args['new_str'], 1)
             self.write_row(args['bucket_id'])
             return 'updated'
         return super().call(name, args)
@@ -192,6 +195,8 @@ class RewriteTests(Fixture):
         result, state, _ = self.native._trace(
             {'bucket_id': self.a, 'old_str': 'fog tide', 'new_str': 'z' * 2000}, None)
         self.assertEqual(state, '成功', result)
+        self.assertEqual(self.backend.rows[self.a]['content'],
+                         'on 11-06 i bet her a week on ' + 'z' * 2000 + '.')
 
     def test_peter_changing_what_lan_corrected_is_flagged_until_she_looks(self):
         self.native.panel_edit(self.a, {'content': 'Lan fixed this: on 11-06 fog tide.'})

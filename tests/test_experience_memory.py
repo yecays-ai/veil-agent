@@ -362,6 +362,18 @@ class WritingTests(Fixture):
         self.assertTrue(any(row.get('kind') == 'deferred-conflict'
                             for row in self.store.read('fake/experience-memory.jsonl')))
 
+    def test_a_deferred_version_conflict_is_recorded_and_not_retried(self):
+        self.ombre.items['m1'] = {'title': 'lamp', 'content': 'Lan edited this'}
+        self.store.append('fake/experience-memory.jsonl', {
+            'kind': 'deferred-update', 'memory_id': 'm1', 'seen': 'old text', 'text': 'automatic draft',
+            'deferred_key': 'chat:changed:m1', 'time': self.clock[0]})
+        self.assertEqual(self.feature._apply_deferred(), 0)
+        self.assertEqual(self.feature._apply_deferred(), 0)
+        self.assertEqual(self.ombre.items['m1']['content'], 'Lan edited this')
+        conflicts = [row for row in self.store.read('fake/experience-memory.jsonl')
+                     if row.get('kind') == 'deferred-conflict']
+        self.assertEqual(len(conflicts), 1)
+
     def test_locked_memories_are_not_offered_and_overlong_ones_only_to_continue(self):
         # Ticket 368: a memory too long to be read whole may be continued but never rewritten from a clipped view.
         self.ombre.items['locked'] = {'title': 'a', 'content': '她改过并锁定的一条。'}

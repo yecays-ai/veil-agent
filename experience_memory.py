@@ -672,6 +672,10 @@ class ExperienceMemory:
                     self.store.append(self.path, {'kind': 'deferred-applied', 'memory_id': memory_id,
                                                   'deferred_key': key, 'time': self.budget.clock()})
                     applied += 1
+                else:
+                    self.store.append(self.path, {'kind': 'deferred-conflict', 'memory_id': memory_id,
+                                                  'deferred_key': key, 'reason': 'source version changed',
+                                                  'time': self.budget.clock()})
             except Exception as exc:
                 self._record_failure('deferred', 'apply_failed', memory_id=memory_id,
                                      error=type(exc).__name__)

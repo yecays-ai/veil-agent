@@ -200,7 +200,7 @@ class EventMemory:
     def stages(self, event_id=None):
         rows = [row for row in self._stage_rows().values()
                 if row.get('state') == 'committed' and (event_id is None or row.get('event_id') == event_id)]
-        rows.sort(key=lambda row: str(row.get('at') or ''))
+        rows.sort(key=lambda row: str(row.get('at') or row.get('saved_at') or ''))
         return rows
 
     def _visible(self, event):
@@ -495,7 +495,7 @@ class EventMemory:
             'story': story,
             'story_source': story_source,
             'story_through': through or event.get('story_through'),
-            'story_through_id': stage['stage_id'],
+            'story_through_id': (event.get('story_through_id') if story_pending else stage['stage_id']),
             'story_coverage': ((event.get('story_coverage') or []) if story_pending and old_story else
                                [row.get('stage_id') for row in self.stages(event['event_id']) + [stage]
                                 if row.get('stage_id')]),
@@ -736,18 +736,9 @@ class EventMemory:
         if self.budget is None or not callable(getattr(self.budget, 'reserve', None)):
             return None, None
         category = self.cost_category or accounting
-        if self.daily_cap is not None:
-            provider = request_cfg.provider or {}
-            amount = provider.get('cny_per_call') or (
-                Decimal(str(provider['max_input_tokens'])) * Decimal(str(provider['input_cny_per_million']))
-                + Decimal(request_cfg.max_output_tokens)
-                * Decimal(str(provider['output_cny_per_million']))) / Decimal(1_000_000)
-            spent, pending = self.budget.category_totals(self.cfg.id, category=category)
-            if spent + pending + amount > self.daily_cap:
-                self._model_budget_blocked = True
-                raise ValueError('experience memory daily budget reached')
         try:
-            return self.budget.reserve(request_cfg, accounting=accounting, category=category)
+            return self.budget.reserve(request_cfg, accounting=accounting, category=category,
+                                       category_daily=self.daily_cap)
         except Exception:
             self._model_budget_blocked = True
             raise
@@ -899,7 +890,7 @@ class EventMemory:
             fresh = [stage for stage in stages if not through or str(stage.get('at') or '') > through]
         if not fresh:
             fresh = stages
-        full_rederive = not existing or len(stages) % 8 == 0
+        full_rederive = bool((event or {}).get('story_pending')) or not existing or len(stages) % 8 == 0
         merge = bool(existing) and not full_rederive
         try:
             max_input = int((self.cfg.provider or {}).get('max_input_tokens') or 0)

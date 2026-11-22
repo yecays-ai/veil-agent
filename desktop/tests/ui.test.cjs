@@ -337,5 +337,6 @@ test('event memories distinguish unknown occurrence dates from save times (ticke
   const js = await read('chat.js');
   assert.match(js, /last_at_known===false\?'日期未知'/);
   assert.match(js, /stage\.at_known===true\?`发生 /);
+  assert.match(js, /stage\.at_known===true\?`发生 [\s\S]*?:`日期未知（记于 \$\{strTime\(stage\.saved_at\|\|stage\.at\)\}）`/);
   assert.match(js, /story_pending\?'故事待整理':\(item\.dirty\?'投影待重试':''\)/);
 });

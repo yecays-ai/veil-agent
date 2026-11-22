@@ -19,6 +19,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+from agent_types import BudgetExceeded
 from event_memory import EventMemory, entities
 from experience_memory import ExperienceMemory, load_settings
 from memory_agent import Memory
@@ -136,6 +137,29 @@ class Fixture(unittest.TestCase):
 
 
 class ContinuationTests(Fixture):
+    def test_the_shared_experience_cap_is_atomic(self):
+        provider = self.cfg.provider
+        cap = (provider['max_input_tokens'] * provider['input_cny_per_million']
+               + self.cfg.max_output_tokens * provider['output_cny_per_million']) / Decimal(1_000_000)
+        barrier = threading.Barrier(2)
+        outcomes = []
+
+        def reserve():
+            barrier.wait()
+            try:
+                self.budget.reserve(self.cfg, accounting='event-story', category='experience_memory',
+                                    category_daily=cap)
+                outcomes.append('reserved')
+            except BudgetExceeded:
+                outcomes.append('blocked')
+
+        threads = [threading.Thread(target=reserve) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertCountEqual(outcomes, ['reserved', 'blocked'])
+
     def test_background_event_model_calls_share_the_experience_daily_cap(self):
         model = RouterModel()
         guarded = EventMemory(self.memory, {'enabled': True}, model=model,
@@ -157,6 +181,23 @@ class ContinuationTests(Fixture):
         self.assertEqual(self.model.requests, [])
         event = next(iter(guarded.native.events.events().values()))
         self.assertTrue(event['story_pending'])
+
+    def test_a_budget_blocked_story_rebuild_does_not_duplicate_old_stages(self):
+        first = self.events.record('OLD-STAGE-MARK.', 'The lamp', at='2026-11-20T10:00:00+08:00')
+        before = self.events.events()[first['event_id']]['story_through_id']
+        guarded = EventMemory(self.memory, {'enabled': True}, model=RouterModel(),
+                              sidecar=self.native.native.sidecar, budget=self.budget,
+                              cost_category='experience_memory', daily_cap=Decimal('0'))
+        guarded.locked = self.native.native.sidecar.locked
+        guarded.record('NEW-STAGE-MARK.', 'The lamp', event_id=first['event_id'],
+                       at='2026-11-21T10:00:00+08:00')
+        pending = guarded.events()[first['event_id']]
+        self.assertTrue(pending['story_pending'])
+        self.assertEqual(pending['story_through_id'], before)
+        self.events.retry_dirty()
+        rebuilt = self.events.events()[first['event_id']]['story']
+        self.assertEqual(rebuilt.count('OLD-STAGE-MARK'), 1)
+        self.assertEqual(rebuilt.count('NEW-STAGE-MARK'), 1)
 
     def test_three_developments_become_one_experience_with_both_first_times(self):
         first = ('Nov 20 15:25. She asked me to test whether I could see she had read a message and not '
@@ -342,6 +383,15 @@ class ContinuationTests(Fixture):
         self.assertIsNone(event['last_at'])
         rendered, _, _ = self.events.timeline(saved['event_id'])
         self.assertIn('日期未知', rendered)
+
+    def test_an_unknown_date_keeps_save_order_without_claiming_an_occurrence_date(self):
+        first = self.events.record('The dated beginning.', 'A timeline',
+                                   at='2026-11-20T10:00:00+08:00')
+        second = self.events.record('The later save with an unknown day.', 'A timeline',
+                                    event_id=first['event_id'])
+        ordered = self.events.stages(first['event_id'])
+        self.assertEqual([row['stage_id'] for row in ordered], [first['stage_id'], second['stage_id']])
+        self.assertIsNone(ordered[1]['at'])
 
     def test_a_long_stage_is_stored_whole_and_its_ending_can_be_read(self):
         body = ('A fictional long day. ' + ('The lamp and the desk and the rain. ' * 40)
