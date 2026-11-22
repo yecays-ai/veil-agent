@@ -266,7 +266,7 @@ class MemoryTests(unittest.TestCase):
             self.memory.call('hold', {'content': 'x'})
         self.assertEqual(len(self.backend.calls), before)
 
-    def test_top_three_provenance_and_nohit(self):
+    def test_every_visible_hit_is_provenanced_and_nohit(self):
         empty = self.memory.context('something new')
         self.assertIn('do not claim to remember', empty[-1]['content'])
         self.assertIn('not newly said by the user', empty[-1]['content'])
@@ -275,8 +275,9 @@ class MemoryTests(unittest.TestCase):
             self.backend.rows[str(i)] = {'content': f'body {i}'}
             self.backend.write_row(str(i))
         text = self.memory.context('plan')[-1]['content']
-        self.assertEqual(text.count('[bucket_id:'), 3)
-        self.assertNotIn('body 4', text)
+        # Ticket 419: the old "top three only" cut is gone; the request budget decides how many fit.
+        self.assertEqual(text.count('[bucket_id:'), 5)
+        self.assertIn('body 4', text)
 
     def test_later_turn_still_recalls_relevant_memories_without_opening(self):
         self.backend.rows['fictional'] = {'content': 'relevant remembered event'}

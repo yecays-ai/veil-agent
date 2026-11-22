@@ -106,14 +106,15 @@ class RecallRotationTests(unittest.TestCase):
         rows = memory.context(query, include_opening=False, **kwargs)
         return rows[-1]['content'], list(memory.last_context_refs)
 
-    def test_an_archived_hit_does_not_use_up_one_of_the_three_slots(self):
-        """Ticket 381: Ombre returns archived memories too; they must be dropped BEFORE the first three are chosen."""
+    def test_an_archived_hit_does_not_take_a_visible_slot(self):
+        """Ticket 381: Ombre returns archived memories too; they must be dropped before the visible hits are chosen.
+        Ticket 419: there is no three-slot cap any more, so every visible hit is a candidate."""
         rows = {'gone': {'content': 'alpha beta gamma delta epsilon', 'type': 'archived'},
                 'a1': {'content': 'alpha beta gamma delta'}, 'a2': {'content': 'alpha beta gamma'},
                 'a3': {'content': 'alpha beta'}, 'a4': {'content': 'alpha'}}
         memory = self.memory(rows, recall={'cooldown_turns': 0, 'random_chance': 0})
         _, refs = self.recall(memory, 'alpha beta gamma delta epsilon')
-        self.assertEqual(['a1', 'a2', 'a3'], refs)
+        self.assertEqual(['a1', 'a2', 'a3', 'a4'], refs)
         asked = [args['max_results'] for name, args in self.backend.calls if name == 'breath_search']
         self.assertEqual([3 + SEARCH_SPARE_HITS], asked)
 
@@ -202,13 +203,20 @@ class RecallRotationTests(unittest.TestCase):
         memory = self.memory(recall={'dedup': False, 'random_chance': 0})
         self.assertEqual(self.recall(memory, 'garden roses')[1], ['garden', 'garden_again'])
 
-    def test_long_memory_is_cut_to_its_opening_with_a_pointer(self):
+    def test_long_memory_is_sent_whole_by_default_and_only_a_legacy_limit_cuts(self):
+        """Ticket 419: the 600-character opening cut is gone; a memory is read by the request budget, not a
+        per-memory character cap. An old config that still sets excerpt_chars keeps cutting, but on a boundary."""
         memory = self.memory(recall={'random_chance': 0})
         text, refs = self.recall(memory, 'lake letter')
         self.assertEqual(refs, ['long'])
-        self.assertIn('Lake letter · 2026-10-21', text)
-        self.assertIn('memory_read with memory_id "long"', text)
-        self.assertLess(len(text), len(ROWS['long']['content']))
+        self.assertIn(ROWS['long']['content'], text)           # the whole body, not its opening
+        self.assertNotIn('only its beginning is shown', text)
+        limit = len(ROWS['long']['content']) // 2
+        legacy = self.memory(recall={'random_chance': 0, 'cooldown_turns': 0, 'excerpt_chars': limit})
+        cut, refs = self.recall(legacy, 'lake letter')
+        self.assertEqual(refs, ['long'])
+        self.assertIn('memory_read with memory_id "long"', cut)
+        self.assertLess(len(cut), len(ROWS['long']['content']) + 300)
         stored = (vault_path(self.store.root, 'fake') / 'dynamic' / 'long.md').read_text(encoding='utf-8')
         self.assertIn(ROWS['long']['content'], stored)  # the memory itself is untouched
 
@@ -232,15 +240,16 @@ class RecallRotationTests(unittest.TestCase):
         off = self.memory(drift=['old'], recall={'random_chance': 0, 'cooldown_turns': 0})
         self.assertEqual(self.recall(off, 'movie night')[1], ['movie'])
 
-    def test_autonomous_wakes_rotate_instead_of_repeating(self):
+    def test_autonomous_wakes_no_longer_cap_at_three(self):
+        """Ticket 419: a wake sees every candidate the pool offers, ordered by rotation, not the first three."""
         rows = {f'm{i}': {'content': f'wake note {i}'} for i in range(6)}
         memory = self.memory(rows, recall={'cooldown_turns': 0, 'random_chance': 0})
         seen = [tuple(self.recall(memory, 'wake note', rotate=True)[1]) for _ in range(4)]
-        self.assertEqual(len(set(seen)), 2)  # six candidates, three per wake: two alternating sets
-        self.assertEqual(set(seen[0]) | set(seen[1]), set(rows))
+        self.assertTrue(all(set(item) == set(rows) for item in seen))
         self.assertTrue(all(kind == 'rotation' for kind in memory.last_context_kinds.values()))
 
-    def test_opening_rotates_among_equal_importance_and_keeps_higher_importance_first(self):
+    def test_opening_keeps_higher_importance_first_and_shows_all_equal_ones(self):
+        """Ticket 419: the opening group is budgeted, not capped at three."""
         rows = {'top': {'content': 'top', 'importance': 9},
                 **{f'e{i}': {'content': f'equal {i}', 'importance': 5} for i in range(4)}}
         memory = self.memory(rows, recall={'random_chance': 0})
@@ -251,7 +260,8 @@ class RecallRotationTests(unittest.TestCase):
         second_refs = list(memory.last_context_refs)
         self.assertEqual(first_refs[0], 'top')
         self.assertEqual(second_refs[0], 'top')
-        self.assertTrue(set(first_refs[1:]).isdisjoint(second_refs[1:]))
+        self.assertEqual(set(first_refs[1:]), {f'e{i}' for i in range(4)})
+        self.assertEqual(set(second_refs[1:]), {f'e{i}' for i in range(4)})
         self.assertIn('Opening memories', first[0]['content'])
 
     def test_all_off_restores_todays_selection(self):
@@ -324,7 +334,7 @@ class RecallRotationTests(unittest.TestCase):
         sidecar.link('aa_third', 'mm_second')
         text, refs = self.recall(memory, 'crane rainy morning started')
         self.assertEqual(refs[0], 'zz_first')                   # ticket 369: other stages that are hits may join
-        self.assertLessEqual(len(refs), 2)
+        self.assertEqual(len(refs), 3)                          # ticket 419: no stage-count cap
         self.assertIn('Crane begins (this one) → 11-04 Crane wing tears [mm_second] → 11-04 Crane stands [aa_third]', text)
 
     def test_the_stage_dedup_blocks_still_shows_up_in_the_directory(self):
@@ -335,17 +345,17 @@ class RecallRotationTests(unittest.TestCase):
         self.assertIn('The letter', text)
         self.assertIn('Domino night', text)
 
-    def test_stage_slots_cap_one_experience(self):
-        """Ticket 369: linked stages are not repeats, yet one experience does not fill every recalled slot."""
+    def test_one_experience_can_supply_all_its_hit_stages(self):
+        """Ticket 419: linked stages are not repeats; the budget, not a stage-slot count, decides how many fit."""
         memory = self.story(recall={'random_chance': 0, 'stage_slots': 1})
         text, refs = self.recall(memory, 'tiles domino letter fell')
-        self.assertEqual(len(refs), 1)
-        self.assertEqual(memory.last_recall_skipped['stage_cap'], 1)
-        self.assertIn('Domino night', text)                     # the blocked stage is still in the directory line
+        self.assertEqual(len(refs), 2)
+        self.assertEqual(memory.last_recall_skipped['stage_cap'], 0)
+        self.assertIn('Domino night', text)
 
-    def test_stage_cap_follows_ombre_continuation_links_through_a_chain(self):
+    def test_continuation_chain_keeps_every_hit_stage(self):
         """Ticket 369 review: A <- B <- C joined only by Ombre continuation links is one experience of three
-        stages; with two slots the third hit is held back, not recalled because it only touches B directly."""
+        stages; ticket 419 keeps all three when they are all hits."""
         rows = {
             'ca': {'content': 'kite flying first attempt windy hill', 'title': 'Kite one', 'created': '2026-11-01T08:00:00'},
             'cb': {'content': 'kite flying second attempt string snapped', 'title': 'Kite two',
@@ -355,8 +365,8 @@ class RecallRotationTests(unittest.TestCase):
         }
         memory = self.memory(rows=rows, recall={'random_chance': 0})
         text, refs = self.recall(memory, 'kite flying attempt')
-        self.assertEqual(len(refs), 2)
-        self.assertEqual(memory.last_recall_skipped['stage_cap'], 1)
+        self.assertEqual(len(refs), 3)
+        self.assertEqual(memory.last_recall_skipped['stage_cap'], 0)
         self.assertEqual(memory.last_recall_skipped['same_event'], 0)
 
     def test_ombre_event_links_make_a_directory_too_and_a_lone_memory_gets_none(self):

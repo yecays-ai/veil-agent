@@ -1,8 +1,10 @@
 # 当前状态
 
-- 工单 416（本 PR，待 Lan 审核）：重复工具结果压缩、相同失败收束、普通聊天连续无新信息提示。工具仍真实执行后比较，动态/副作用工具不压缩；自主活动不加提示，沿用原 step/预算上限。
+- 工单 419（本 PR，待 Lan 审核）：完整故事召回、整轮记忆预算与追问冷却。取消自动召回的固定 600 字符截取和每轮 2／3 条上限；改为按请求实测空间分配：最近一整轮对话优先保护，余下由 `recall_budget.py` 在历史与记忆之间按实测需求分配；一篇太长时给完整自然段 + `memory_read`／`memory_timeline` 续读 ID，不再半句腰斩；明确回忆和紧接着的追问不受冷却误挡；已有完整事件故事优先于单个旧碎片。隔离测试已过，真实 V50／V78 的 68 篇复测见报告。
 
-- 工单 414（本 PR #416，待 Lan 审核）：模型调用口径、上下文保护、usage 校验、工具参数/结果哈希、推理字段显式配置。只改观测和模型协议，不改人设/记忆/自主活动/多气泡；P1 无进展检测与工具去重留给 PR2。
+- 工单 416（PR #417 已合并，待 Lan 真机复核）：重复工具结果压缩、相同失败收束、普通聊天连续无新信息提示。工具仍真实执行后比较，动态/副作用工具不压缩；自主活动不加提示，沿用原 step/预算上限。
+
+- 工单 414（PR #416 已合并，待 Lan 真机复核）：模型调用口径、上下文保护、usage 校验、工具参数/结果哈希、推理字段显式配置。只改观测和模型协议，不改人设/记忆/自主活动/多气泡；P1 无进展检测与工具去重留给 PR2。
 
 工单 415（工具失败说清真实原因，PR #415 已合并，隔离测试已验收 2026-11-21）：建立统一失败契约——每条失败保留工具原话；只有拒绝它的代码本来就知道怎么改时才追一句改法，不知道就明说「程序不知道该怎么改、别原样重试」；参数类失败附上程序实际收到的参数；程序内部故障带 `err-xxxx` 编号、不冒充参数错误，异常原文只写本机 `tool-errors.jsonl`。`_execute_tool_call`（主聊天/自主/delegate/MCP 四条路径的唯一出口）统一渲染；`ValueError/TypeError` 不再被报成「参数不是合法 JSON」；`peek_screen`/`snooping_around`/`desktop_icons_read`/`open_lab_game`/`screen_pop` 的文案改为真实原因 + 改法；活动页不再把 `被拒绝` 一律写成「权限拒绝」。按 lan 的复查补齐三处：①统一出口现在对**所有**失败兜底（没有改法的普通失败也会追一句「程序未给出改法，别原样重试」，不编造改法）；②新增遍历全部 57 个工具 Schema 的探针测试，外加「后端崩溃」探针，任何工具（包括以后新加的）失败没走契约就红；③参数回显先脱敏再截断（凭据、长令牌、Bearer 一律打码）。另修：`UserError`/`RequestFailed` 保留作者原文、不再被记成内部故障。JSON 解析失败的参数回显也改走 `redact()`；脱敏改为结构优先（按敏感键名整值打码，含空格/逗号/引号），文本正则只作兜底；探针增加真实对象（文件路径校验、窗口参数校验）一组。本地相关 383 项 + 桌面 30 项通过，剩 3 项是 main 上也存在的既存失败（备份清单 `desktop-data`、真实 OpenCode 冒烟）。等 GitHub 四矩阵和 Cubic 复审，当前不合并。
 
@@ -17,10 +19,17 @@
 - 隔离测试已验收：412、415、399、398、393、389、388、386、382、383、363、384、356、352。2026-11-21 在本机用假模型/假数据跑相关测试模块全过：`test_life_calendar_385` 19、`test_life_records` 13、`test_calendar_agreements` 5、`test_tool_failures` 19、`test_autonomy` 52、`test_experience_memory`、`test_recall_diagnostics`、`test_recall_judge`、`test_request_snapshots` 9、`test_work_checkpoint` 18、`test_work_checkpoint_chat` 5、`test_prompt_registry` 32、`test_tool_groups` 10、`test_tool_budget` 15、`test_life_state` 33、`test_native_memory`、`test_chat`、`test_tools`。隔离测试只证明程序按设计跑，不等于 Lan 的真实体验。
 - 仍未验收：413 的新行为（等 Lan 复核删除/归档/已完成）；415/414/416 的真机表现（隔离测试已过，但她的目录还没更新到这三张）；397 待批准队列；387 时间连续性；346/337 等更老的条目。
 
+## 验收（工单 419，本 PR）
+
+- 隔离测试：`tests/test_recall_budget_419.py` 20 条（预算算术与请求估算一致、最近一轮保护、整篇优先、长文按完整段落续读、5 篇独立记忆、跨阶段事件故事、只问结尾、相邻两条不同结局、追问承接、自主醒来、重启保留冷却）；`test_recall_rotation` 42、`test_recall_judge` 30、`test_recall_diagnostics` 5、`test_chat`、`test_memory`、`test_memory_live`、`test_hidden_memory_context`、`test_live_context`、`test_request_snapshots`、`test_image_recovery_and_context`、`test_regeneration` 全部通过。命令见报告。
+- 规模：`python scripts/recall_scale_probe.py --sizes 300,3000,10000`；结果和与 main 的基线对比见报告（10k 条时既有全库链接扫描约 7–9 秒，本单未新增数据库，列为后续建议）。
+- 待 Lan 真机验收：68 篇隔离库的真实 V50／V78 请求、连续追问、对话变长后的预算表现；正式库未动。
+
 
 ## 当前目标
 
-- 工单 415（本 PR）：工具失败说清真实原因。任何工具失败都给真实原因；只在本就知道改法时给改法，不知道就说不知道；参数问题附上他实际传的参数；程序内部故障用 `err-xxxx` 编号、原文只留本机；活动页不再一律写「权限拒绝」。验收：让他把窗口 id 传给 peek_screen，看回复/活动页是否给出原因、参数和改法；看他下次能不能自己改对；只看修复后新产生的账本行。
+- 工单 419（本 PR）：让 Peter 按需要想起完整经历，而不是固定开头 600 字。验收：桌面聊天用两种自然说法问第一次挑视频、问 Claude 后来怎么了，看是否读到结局；再连续追问同一件事，看他是否还接得住；上下文页能看本轮记忆预算和每篇被舍弃的原因。`docs/tickets/419-full-recall-budget.md`。
+- 工单 415（PR #415 已合并）：工具失败说清真实原因。任何工具失败都给真实原因；只在本就知道改法时给改法，不知道就说不知道；参数问题附上他实际传的参数；程序内部故障用 `err-xxxx` 编号、原文只留本机；活动页不再一律写「权限拒绝」。验收：让他把窗口 id 传给 peek_screen，看回复/活动页是否给出原因、参数和改法；看他下次能不能自己改对；只看修复后新产生的账本行。
 - 工单 413（已合并，PR #414）：ongoing 只留「进行中 / 已完成」。归档状态删掉（旧文件里的 archived 读成 completed，补完成时间，不丢数据）；已完成的条目不再进上下文、不占 4,000 字节，每轮只带一行「已完成 N 条」，他要用 `ongoing_update` 的 `list` 才看得到正文和完成时间；`ongoing_update` 放常驻（它原来在 `other` 组，工具日志里 0 次调用，「由 Peter 维护」从未发生）。同时修 Peter 页五个缺陷：删除按钮的 `for (var index)` 闭包、列表/条数不过滤状态、字节条算了已完成、`mark()` 找错卡片名、保存被静默丢弃和响应覆盖输入。验收见 `docs/tickets/413-ongoing-completed.md`。
 - 工单 410（已合并，PR #410）：完整事件故事、理解变化、事件关联与迁移预览。故事由模型按 saga 水位增量合并并做事实校验；`hold` 可带 `interpretation`，事件存 `belief_history`（valid_from/invalid_at）；独立事件 `related_to` 只关联不合并；`move_stage`/`split_event` 重建两边；`event_migration.py` 只读预览旧记忆，不写正式库。验收：详情是连贯故事、有理解变化和相关经历；拆/移后两边重建；迁移预览每条有去向。
 - 工单 409（本 PR）：`learned_context._invoke_profile` 保存成功后返回的是 1 元组（return 的括号和逗号写错），上层 `result, state, summary = ...` 解包抛 `ValueError`，被 `_execute_tool_call` 最外层的 `except (ValueError, TypeError)` 误报成「参数不是合法 JSON」。数据其实已经写进去了，但 Peter 被告知失败并反复重试。改为返回正常的 3 元组；删掉一句永远执行不到的重复 return。验收：让他写一条关于你的内容，工具结果应是 Saved，不再报 JSON 错。
@@ -52,7 +61,8 @@ Peter 今天能稳定操作 Windows 软件（主聊天桌面动作）；工作�
 
 ## 现状
 
-- 工单 418（本 PR）：①清 HANDOFF。两处“遗留”其实已解决：409 的工具内部异常被报成参数 JSON 错，工单 415 已分开（`tool_failures.internal_failure`，带 error id，原文只进本机日志，19 条测试）；401 的 68 条长句，402/405 已完成（`inline_allowlist.txt` 已删）。真正还开着的写到 HANDOFF 顶部。②修表情包渲染：以 `[表情包：…]` 开头的消息，后面的正文以前继承贴图的透明样式、没有气泡；现在正文单独用 `.msg-sticker-caption` 按普通气泡画，只有贴图时仍是裸图，旧消息重开也一样，不改记录。`desktop/chat.js` + `desktop/chat.css` + `desktop/tests/ui.test.cjs` 守卫（18 条通过）。
+- 工单 419（本 PR）：新增 `recall_budget.py`（与 `estimate_message_tokens` 同一套估算；按实测需求在历史与记忆间分配，最近一整轮为保护下限；整篇优先，放不下时按完整段落/句子截取并附续读 ID）。`Memory.context` 改为可延迟结算，`finish_recall` 是唯一的记忆预算出口；`veil_agent` 先量必需块、记忆预算、再按 `history_allowance` 从最旧裁历史，辅助上下文先让位；诊断新增 `budget`、`items`、`reused`、`final_trim`。取消 `[:3]`／`kept>=3`／`max_picks=2`；`excerpt_chars` 默认 0（全文），旧显式值仍生效但按自然段边界截。判官可选全部相关候选，卡片增加结尾片段。冷却只对普通检索/轮换/随机生效；判官选中且上一轮刚注入的记忆视为追问延续；`is_followup` + 上一轮注入承接“那我当时是什么反应”。事件层有完整 `story` 时优先注入整篇故事，目录行带事件 ID 与 `memory_timeline` 提示。
+- 工单 418（已合并，PR #418）：①清 HANDOFF。两处“遗留”其实已解决：409 的工具内部异常被报成参数 JSON 错，工单 415 已分开（`tool_failures.internal_failure`，带 error id，原文只进本机日志，19 条测试）；401 的 68 条长句，402/405 已完成（`inline_allowlist.txt` 已删）。真正还开着的写到 HANDOFF 顶部。②修表情包渲染：以 `[表情包：…]` 开头的消息，后面的正文以前继承贴图的透明样式、没有气泡；现在正文单独用 `.msg-sticker-caption` 按普通气泡画，只有贴图时仍是裸图，旧消息重开也一样，不改记录。`desktop/chat.js` + `desktop/chat.css` + `desktop/tests/ui.test.cjs` 守卫（18 条通过）。
 - 工单 413（已合并，PR #414）：`learned_context.py` 的 `ONGOING_STATUSES` 去掉 archived，`_upgrade_ongoing()` 在读取时把旧 archived 读成 completed 并补完成时间；`_content_bytes` 与 `dynamic_context` 只算 active/uncertain，已完成改为一行计数（登记文本 `memory.ongoing.done`）；`_invoke_ongoing` 去掉 archive、新增 `list`（返回正文和完成时间）；页面保存时给新完成的条目补完成时间。`learned_tools.py` 工具说明重写；`tool_groups.py` 把 `ongoing_update` 放进 `ALWAYS_ON`。`desktop/peter-page.js`：三种状态、已完成折叠区（重开/删除）、计数与字节只算进行中、删除/重开立即落盘失败即重读、保存改为串行队列、保存响应不覆盖仍在编辑的内容、`mark` 映射到 `learned` 卡片、空行不发送、删除改成两次点击（不依赖原生 confirm）。测试：迁移/计数/list/预算用脚本逐条验过；`desktop/tests/ui.test.cjs` 17 个通过，新增「禁 for(var)」「页面 id 必须存在」「已完成与进行中分开计数」三条护栏。
 - 工单 409（本 PR）：`learned_context.py` 的成功返回改为 `(message, '成功', name)`；新增回归测试 `test_append_and_replace_report_a_three_value_success`（旧代码上会抛 `not enough values to unpack`，已验证）。`test_learned_context` + `test_learned_context_chat` 11 个通过。
 - 工单 408（已合并，PR #408）：`veil_agent._repair_tool_arguments`（裸换行/制表符转义、无 ASCII 引号时把智能引号当分隔符、去掉结尾多余逗号）+ `Chat.tool_arguments` 在 JSON 与 `ast.literal_eval` 都失败后调用它；拒绝消息附收到的前 160 字。新增 4 个参数解析测试，`test_chat` + `test_tools` 175 个通过，`test_prompt_registry` 通过。

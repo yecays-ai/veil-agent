@@ -127,10 +127,12 @@ class RecallJudgeTests(unittest.TestCase):
         refs, _ = self.recall(self.memory(judge=False))
         self.assertEqual(['junk'], refs)
 
-    def test_it_may_pick_two_and_no_more(self):
-        memory = self.memory(model=FakeJudgeModel(pick=['Kills plants', 'Mint schedule', 'Small earthquake', 'Weather']))
+    def test_it_may_pick_every_candidate_it_judges_relevant(self):
+        """Ticket 419: no hard cap of two; the whole-round budget decides how many fit."""
+        memory = self.memory(model=FakeJudgeModel(pick=['Kills plants', 'Mint schedule', 'Small earthquake', 'Weather']),
+                             recall={'cooldown_turns': 0, 'random_chance': 0, 'dedup': False})
         refs, _ = self.recall(memory)
-        self.assertEqual(2, len(refs))
+        self.assertEqual(4, len(refs))
 
     def test_none_is_an_answer_nothing_is_filled_back_from_ombre(self):
         memory = self.memory(model=FakeJudgeModel(pick=[]))
@@ -158,13 +160,17 @@ class RecallJudgeTests(unittest.TestCase):
         self.assertNotIn('mention', system.lower())
         self.assertNotIn('remember', system.lower())
         self.assertNotIn('instead of hope', user)   # the body is not sent, only title / tags / keyword line
-        self.assertEqual({'json_output': True, 'max_tokens': 60, 'thinking': 'disabled', 'request_timeout': 0.4},
+        self.assertEqual({'json_output': True, 'max_tokens': 120, 'thinking': 'disabled', 'request_timeout': 0.4},
                          {key: value for key, value in self.model.calls[0][1].items()})
 
-    def test_cooldown_and_dedup_still_apply_to_what_the_judge_picks(self):
+    def test_an_immediate_follow_up_keeps_what_the_judge_just_picked_and_a_gap_still_cools_it(self):
+        """Ticket 419: the turn right after the judge picked a memory is a follow-up, not unrelated chat.
+        Once the cooldown gap has passed without another follow-up, the old cooldown still applies."""
         memory = self.memory(recall={'cooldown_turns': 3, 'random_chance': 0})
         self.assertEqual(['cactus'], self.recall(memory)[0])
-        self.assertEqual([], self.recall(memory)[0])   # the cooled memory leaves its slot empty
+        self.assertEqual(['cactus'], self.recall(memory)[0])   # immediately after: still the same subject
+        memory.rotation.turn += 1                              # one turn later is no longer "immediately"
+        self.assertEqual([], self.recall(memory)[0])           # the cooldown is still real
 
     # --- failures keep ticket 381's recall, quickly ---------------------------------------------------------------
     def assert_falls_back(self, memory, reason, limit=1.5):
@@ -369,13 +375,13 @@ class RecallJudgeTests(unittest.TestCase):
     def test_parse_choice_and_card_text(self):
         letters = {'A': 'one', 'B': 'two', 'C': 'three'}
         self.assertEqual([], parse_choice('{"ids": []}', letters))
-        self.assertEqual(['two', 'one'], parse_choice('{"ids": ["B", "A", "C"]}', letters))
+        self.assertEqual(['two', 'one', 'three'], parse_choice('{"ids": ["B", "A", "C"]}', letters))
         self.assertEqual(['one'], parse_choice('{"ids": ["A", "A"]}', letters))
         for bad in ('', 'null', '[]', '{"ids": null}', '{"ids": [1]}', '{"ids": ["Q"]}', None):
             with self.assertRaises(JudgeFailed):
                 parse_choice(bad, letters)
         raw = "---\nid: x\ntitle: 'A title'\ntags:\n- one\n- 'two words'\n---\nbody\n\n关键词：甲、乙"
-        self.assertEqual('A title | one two words | 甲、乙', card_text(raw))
+        self.assertEqual('A title | 甲、乙 | one two words', card_text(raw))
         old = "---\nid: old\nname: 'Old name'\ntags:\n- self\n---\nbody"
         self.assertEqual('Old name | self', card_text(old))
 

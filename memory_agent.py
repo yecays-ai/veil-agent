@@ -452,6 +452,11 @@ ERASE_NOTE = '记忆文件和程序保存的旧版本都已从硬盘抹掉。'
 
 
 class Memory:
+    # Ticket 419: the request builder may defer the memory budget to finish_recall. Explicit marker
+    # so test doubles (SimpleNamespace/Mock) keep the old one-call path instead of being treated as
+    # a real budgeter just because getattr creates an attribute.
+    budgets_recall = True
+
     def __init__(self, cfg, store, budget, model, backend, runtime_monitor=None):
         self.cfg, self.store, self.budget, self.model, self.backend = cfg, store, budget, model, backend
         self.runtime_monitor = runtime_monitor
@@ -518,8 +523,13 @@ class Memory:
         self.rotation = Cooldown(saved[-1] if saved else None)
         self.rng = random.Random()
         self.last_context_kinds = {}
-        self.last_recall_skipped = {'cooldown': 0, 'same_event': 0, 'stage_cap': 0}
+        self.last_recall_skipped = {'cooldown': 0, 'same_event': 0, 'stage_cap': 0, 'budget': 0}
         self.last_recall_marks = None
+        # Ticket 419: the memories the previous turn actually injected (for an immediate follow-up)
+        # and the budget report of the last finished recall.
+        self.last_injected_refs = []
+        self.last_memory_budget = None
+        self._pending_recall = None
         self.bucket_details_cache = {}
         self.native_hidden = set()
         self.judge = None   # ticket 382: attached by the running app only (attach_recall_judge)
@@ -883,6 +893,35 @@ class Memory:
                 owners[row['memory_id']] = row['event_id']
         return owners
 
+    def _event_stories(self):
+        """Ticket 419: event_id -> {story, title, first_at} from the event ledger.
+
+        The complete reviewed story is what automatic recall should prefer over one old fragment;
+        an absent or damaged ledger only means no upgrade, never a failed recall."""
+        path = self.store.root / f'{self.cfg.id}/events.jsonl'
+        try:
+            stat = path.stat()
+            signature = (stat.st_mtime_ns, stat.st_size)
+        except OSError:
+            return {}
+        cached = getattr(self, '_event_stories_cache', None)
+        if cached and cached[0] == signature:
+            return cached[1]
+        stories = {}
+        try:
+            for row in self.store.read(f'{self.cfg.id}/events.jsonl'):
+                if not isinstance(row, dict) or not isinstance(row.get('event_id'), str):
+                    continue
+                story = row.get('story')
+                if isinstance(story, str) and story.strip():
+                    stories[row['event_id']] = {'story': story.strip(),
+                                                'title': row.get('title') or '',
+                                                'first_at': row.get('first_at') or ''}
+        except Exception:
+            return {}
+        self._event_stories_cache = (signature, stories)
+        return stories
+
     def hidden_ids(self):
         with self.mutex:
             hidden = {key for key, row in self.state['entries'].items() if row.get('hidden')}
@@ -1036,11 +1075,15 @@ class Memory:
                 return 'hidden'
         return 'unavailable'
 
-    def note_budget_dropped(self, keys):
-        """Ticket 391: memories removed only because this request was too long."""
+    def note_budget_dropped(self, keys, reason='final_trim'):
+        """Ticket 391: memories removed only because this request was too long.
+
+        Ticket 419: also marks that the final assembled request had to cut an already-budgeted
+        memory (``final_trim``), so the panel can tell a budget decision from a downstream clip."""
         debug = getattr(self, 'last_recall_debug', None)
         if isinstance(debug, dict):
             debug['budget_dropped'] = [key for key in keys if isinstance(key, str)]
+            debug['final_trim'] = reason
 
     def save_recall_debug(self, request_id):
         """Append one read-only diagnostics row for this turn; IDs and reasons only, never text."""
@@ -1183,6 +1226,7 @@ class Memory:
         """Ticket 379: the last recall's cooldown marks are undone, because that turn delivered no reply."""
         with self.mutex:
             marks, self.last_recall_marks = self.last_recall_marks, None
+            self.last_injected_refs = []
             if not marks:
                 return
             for key, previous in marks.items():
@@ -1292,12 +1336,13 @@ class Memory:
             self.retrieval_failure('experience_stages', exc)
             return []
 
-    def _experience_directories(self, kept, metas, adjacency, size):
+    def _experience_directories(self, kept, metas, adjacency, size, event_of=None):
         """Ticket 365: {memory_id: one line} for each recalled memory that is one stage of a longer experience: the
         others' dates and titles, so Peter sees the whole thing instead of one slice. Hidden, archived or deleted
         stages are left out; any failure just means no line for that memory."""
         from recall_rotation import EVENT_LINKS, directory_line, experience_chain, front_matter
         cache = {}
+        event_of = event_of or {}
         inbound = self._ombre_event_sources()
 
         def meta_of(key):
@@ -1333,31 +1378,44 @@ class Memory:
                     meta = meta_of(key if member == key else member)
                     entries.append((member, meta.get('created') or '',
                                     meta.get('title') or meta.get('name') or ''))
-                line = directory_line(key, entries, size)
+                line = directory_line(key, entries, size, event_of.get(key, ''))
                 if line:
                     lines[key] = line
             except Exception as exc:
                 self.retrieval_failure('experience_directory', exc)
         return lines
 
-    def context(self, query, *, include_opening=True, recent=None, rotate=False, wake=False):
-        """This turn's automatic memories. `wake` selects related context for an autonomous activity."""
+    def context(self, query, *, include_opening=True, recent=None, rotate=False, wake=False, defer=False):
+        """This turn's automatic memories. `wake` selects related context for an autonomous activity.
+
+        Ticket 419: retrieval, dedup and cooldown run here; how many memories are sent and how much
+        of each is decided by ``finish_recall`` against the request's whole-round budget. With
+        ``defer=True`` the request builder calls ``finish_recall`` later, once it knows how much
+        space the required blocks leave. Without it this call finishes at once with no budget,
+        which is what tests and the readiness probe want.
+        """
         from recall_relevance import cosine
         from recall_rotation import (EVENT_LINKS, asks_about_past, drift_hits, excerpt, experience_chain,
-                                     front_matter, rotate as rotated, same_event)
+                                     front_matter, is_followup, rotate as rotated, same_event)
         self._turn_notice_local.seen = set()
         self.last_context_refs = []
         self.last_context_kinds = {}
         self.last_assisted = None
-        self.last_recall_skipped = {'cooldown': 0, 'same_event': 0, 'stage_cap': 0}
+        self.last_recall_skipped = {'cooldown': 0, 'same_event': 0, 'stage_cap': 0, 'budget': 0}
         self.last_recall_marks = None
+        self.last_memory_budget = None
+        self._pending_recall = None
         # Ticket 391: one read-only record of where each candidate went. IDs and reasons only, never text.
         self.last_recall_debug = {'query_chars': len(query or ''), 'query_hash': hashlib.sha256(
             (query or '').encode('utf-8')).hexdigest()[:12], 'ombre': [], 'hidden': [], 'vector': [],
             'judge': {'status': 'skipped', 'candidates': 0, 'picked': []}, 'dropped': [],
-            'injected': [], 'opening': [], 'budget_dropped': [], 'failure': ''}
+            'injected': [], 'opening': [], 'budget_dropped': [], 'failure': '',
+            'followup': False, 'reused': [], 'items': [], 'budget': {}}
         recall_cfg = self.recall_settings
-        cooldown = 0 if asks_about_past(query) and not (rotate or wake) else recall_cfg['cooldown_turns']
+        explicit = asks_about_past(query) and not (rotate or wake)
+        cooldown = 0 if explicit else recall_cfg['cooldown_turns']
+        followup = bool(not (rotate or wake) and is_followup(query, recent))
+        self.last_recall_debug['followup'] = followup
         widen = (rotate or wake) and recall_cfg['rotation_candidates'] > 3
         with self.mutex:
             self.rotation.turn += 1
@@ -1366,6 +1424,7 @@ class Memory:
         emotional = []
         drift = []
         pool = []
+        judged = False
         settings = self.assisted_settings(query, recent) if not (rotate or wake) else None
         judge = (self.judge if self.judge is not None and (wake or not rotate and not widen and not settings)
                  and query.strip() else None)
@@ -1375,7 +1434,7 @@ class Memory:
         try:
             # Ticket 381: Ombre also returns archived memories, and its top three are cut before we look at
             # visibility, so an archived hit used up a slot and was then dropped. Ask for a few spare hits,
-            # drop what Peter may not see, and only then keep the first three.
+            # drop what Peter may not see, and only then keep the visible pool.
             asked = recall_cfg['rotation_candidates'] if widen else 3 + SEARCH_SPARE_HITS
             raw = self.call('breath_search', {
                 'query': query, 'mode': 'automatic', 'with_ids': True, 'max_results': asked})
@@ -1385,10 +1444,9 @@ class Memory:
             visible = {key for key, _ in pool}
             self.last_recall_debug['hidden'] = [{'id': key, 'reason': self.visibility_reason(key)}
                                                 for key, _ in normal if key not in visible]
-            if not widen:
-                normal = pool[:3]
-            elif wake:
-                normal = pool
+            # Ticket 419: the candidate pool stays finite (search cost), but its size is the
+            # configured pool, not a hidden "at most three shown".
+            normal = pool
             drift = drift_hits(raw)
         except Exception as exc:
             self.last_recall_debug['failure'] = 'breath_search'
@@ -1404,20 +1462,20 @@ class Memory:
                 # "None fits" is an answer: nothing is filled back from Ombre. Only a technical failure
                 # (JudgeFailed) keeps today's recall for this turn.
                 normal = judge.choose(query, pool, prefetched, wake=wake,
-                                      max_picks=3 if wake else 2,
                                       candidate_limit=max(3, recall_cfg['rotation_candidates']) if wake else None)
+                judged = True
                 self.last_recall_debug['judge'] = dict(getattr(judge, 'last_choice', {}) or {})
                 self.last_recall_debug['vector'] = list(self.last_recall_debug['judge'].get('vector') or [])
                 drift = []   # a recollection nobody judged would be a way around "none fits"
             except JudgeFailed:
                 self.last_recall_debug['judge'] = {'status': 'failed', 'candidates': 0, 'picked': []}
                 if wake:
-                    normal, drift = pool[:3], []
+                    normal, drift = list(pool), []
             except Exception as exc:
                 self.last_recall_debug['judge'] = {'status': 'failed', 'candidates': 0, 'picked': []}
                 self.retrieval_failure('recall_judge', exc)
                 if wake:
-                    normal, drift = pool[:3], []
+                    normal, drift = list(pool), []
         kinds = {key: 'search' for key, _ in normal}
         kinds.update({key: 'feel' for key, _ in emotional if key not in kinds})
         if settings:
@@ -1438,12 +1496,21 @@ class Memory:
         opening_visible = self.context_visible(opening_candidates, failure_stage='opening_visibility')
         metas = self._recall_meta([key for key, _ in combined + opening_visible + drift])
         if wake:
-            candidates = list(dict(combined).items())[:3]
+            candidates = list(dict(combined).items())
         elif widen:
             candidates = rotated(list(dict(combined).items()), metas, self.rotation.last)
         else:
-            # Only today's first three candidates: a cooled one leaves its slot empty.
-            candidates = list(dict(combined).items())[:3]
+            candidates = list(dict(combined).items())
+        # Ticket 419: a follow-up keeps the memories the previous turn judged relevant. She is still
+        # on the same subject ("那我当时是什么反应？"), so neither a fresh keyword search nor the
+        # cooldown may hide what the last turn already decided mattered.
+        carry = []
+        if followup and not (rotate or wake):
+            seen = {key for key, _ in candidates}
+            carry = [(key, self._block_body(key)) for key in (self.last_injected_refs or [])
+                     if key not in seen]
+            carry = [(key, body) for key, body in self.context_visible(carry, failure_stage='followup_visibility')
+                     if body.strip()]
         vectors = (self._recall_vectors([key for key, _ in combined + drift])
                    if recall_cfg['dedup'] else {})
         threshold = recall_cfg['dedup_similarity']
@@ -1473,11 +1540,11 @@ class Memory:
             return key == other or other in experience_chain(key, neighbours)
 
         def duplicate(key, kept):
-            # Ticket 369: only a repeat (Ombre's same_event, near-identical text) is dropped. Another stage of the
-            # same experience is a different memory and may be recalled itself, up to stage_slots of them.
+            # Ticket 407: one event is one recalled thing even if several of its stages are still separate memories.
+            # Ticket 419: the stage count is no longer capped; a different stage of the same experience is a
+            # different memory and the budget decides how many fit. Only a genuine repeat is dropped.
             if not recall_cfg['dedup']:
                 return None
-            # Ticket 407: one event is one recalled thing even if several of its stages are still separate memories.
             event_of = getattr(self, '_event_map_cache', None)
             if event_of is None:
                 event_of = self._event_map_cache = self._event_map()
@@ -1485,24 +1552,40 @@ class Memory:
                 return 'same_event'
             if any(same_event(key, other, metas, vectors, threshold, cosine) for other, _ in kept):
                 return 'same_event'
-            if sum(same_experience(key, other) for other, _ in kept) >= recall_cfg['stage_slots']:
-                return 'stage_cap'
             return None
 
+        carry_keys = {key for key, _ in carry}
+
+        def cooled(key):
+            if not cooldown:
+                return False
+            if key in carry_keys:
+                return False
+            # Ticket 419: the judge just said this memory bears directly on what she said, and the
+            # previous turn already showed it. Immediately following up on the same thing is the one
+            # case the cooldown must not win.
+            if judged and self.rotation.last.get(key) == self.rotation.turn - 1:
+                return False
+            return self.rotation.cooled(key, cooldown)
+
         kept = []
+        sources = {}
+        for key, body in carry:
+            kept.append((key, body))
+            sources[key] = 'followup'
+            kinds[key] = 'followup'
         for key, body in candidates:
-            if len(kept) >= 3:
-                break
-            if self.rotation.cooled(key, cooldown):
+            if cooled(key):
                 self.last_recall_skipped['cooldown'] += 1
                 self.last_recall_debug['dropped'].append({'id': key, 'reason': 'cooldown'})
                 continue
-            skipped = duplicate(key, kept)
-            if skipped:
-                self.last_recall_skipped[skipped] += 1
-                self.last_recall_debug['dropped'].append({'id': key, 'reason': skipped})
+            reason = duplicate(key, kept)
+            if reason:
+                self.last_recall_skipped[reason] += 1
+                self.last_recall_debug['dropped'].append({'id': key, 'reason': reason})
                 continue
             kept.append((key, body))
+            sources[key] = 'relevant' if wake else ('rotation' if widen else 'search')
             if wake:
                 kinds[key] = 'relevant'
             elif widen:
@@ -1511,10 +1594,10 @@ class Memory:
                 and self.rng.random() < recall_cfg['random_chance']):
             for key, body in self.context_visible(drift, failure_stage='recall_visibility'):
                 shown = {other for other, _ in kept}
-                if (key not in shown and not self.rotation.cooled(key, cooldown)
-                        and not duplicate(key, kept)):
+                if key not in shown and not cooled(key) and not duplicate(key, kept):
                     kept.append((key, '(Random recollection, not a search hit: an old memory that surfaced '
                                       'on its own.)\n' + body))
+                    sources[key] = 'random'
                     kinds[key] = 'random'
                     break
         if opening_visible:
@@ -1524,32 +1607,152 @@ class Memory:
             recalled_keys = {other for other, _ in kept}
             opening_shown = []
             for key, body in pinned + rotated(rest, metas, self.rotation.last):
-                if len(opening_shown) >= 3:
-                    break
                 # A memory also recalled this turn is shown once, as the (fresher) recall.
                 if key not in recalled_keys and not duplicate(key, kept + opening_shown):
                     opening_shown.append((key, body))
         else:
+            pinned = []
             opening_shown = []
+        pinned_keys = {key for key, _ in pinned}
         for key, _ in opening_shown:
             kinds[key] = 'opening'
-        self.last_recall_debug['injected'] = [key for key, _ in kept]
-        self.last_recall_debug['opening'] = [key for key, _ in opening_shown]
-        limit = recall_cfg['excerpt_chars']
-        directories = (self._experience_directories(kept, metas, adjacency, recall_cfg['directory_members'])
+        event_of = getattr(self, '_event_map_cache', None)
+        if event_of is None:
+            event_of = self._event_map_cache = self._event_map()
+        stories = self._event_stories()
+        directories = (self._experience_directories(kept, metas, adjacency, recall_cfg['directory_members'],
+                                                    event_of)
                        if recall_cfg['directory'] else {})
-        recall = [excerpt(key, body, metas.get(key, {}), limit)
-                  + (('\n' + directories[key]) if key in directories else '') for key, body in kept]
-        opening = [excerpt(key, body, metas.get(key, {}), limit) for key, body in opening_shown]
-        self.last_context_refs = list(dict.fromkeys(
-            [key for key, _ in opening_shown] + [key for key, _ in kept]))
-        self.last_context_kinds = {key: kinds.get(key, 'search') for key in self.last_context_refs}
+        limit = recall_cfg['excerpt_chars']
+
+        def resolved(key, body):
+            event_id = event_of.get(key) or ''
+            text = body
+            if event_id:
+                story = (stories.get(event_id) or {}).get('story') or ''
+                # Ticket 419: an event that already has a complete reviewed story is preferred over
+                # the single fragment; that is how a later stage / ending is not lost.
+                if story and len(story) > len(body):
+                    text = f'[bucket_id:{key}]\n{story}'
+            if limit:
+                text = excerpt(key, text, metas.get(key, {}), limit, event_id)
+            return text, event_id
+
+        def pointer(key, event_id):
+            where = 'memory_read with memory_id "%s"' % key
+            if event_id:
+                where += ' (or memory_timeline with event_id "%s" for the whole experience)' % event_id
+            return ('(This story is longer than this request can carry in full. Use %s to read the rest.)' % where)
+
+        history_text = ' '.join(str(row.get('content') or '') for row in (recent or [])
+                                if isinstance(row, dict))
+        history_text = ' '.join(history_text.split())
+
+        def already_in_history(text):
+            probe = ' '.join(text.split())[:120]
+            return bool(probe) and probe in history_text
+
+        blocks_out = []
+        reused = []
+        for index, (key, body) in enumerate(kept):
+            text, event_id = resolved(key, body)
+            if already_in_history(text):
+                # Ticket 419: the same story is still in this conversation's effective context
+                # (e.g. a memory_read result); do not paste it twice.
+                reused.append(key)
+                continue
+            directory = directories.get(key, '')
+            pointer_text = pointer(key, event_id) + ((' ' + directory) if directory else '')
+            if directory:
+                text = text + '\n' + directory
+            source = sources.get(key, 'search')
+            blocks_out.append({'id': key, 'group': 'recall', 'text': text,
+                               'priority': 900 if source == 'random' else 10 + index,
+                               'source': source, 'event_id': event_id, 'pointer': pointer_text,
+                               'kind': kinds.get(key, 'search')})
+        for index, (key, body) in enumerate(opening_shown):
+            text, event_id = resolved(key, body)
+            directory = directories.get(key, '')
+            pointer_text = pointer(key, event_id) + ((' ' + directory) if directory else '')
+            if directory:
+                text = text + '\n' + directory
+            blocks_out.append({'id': key, 'group': 'opening', 'text': text,
+                               'priority': 0 if key in pinned_keys else 500 + index,
+                               'source': 'opening', 'event_id': event_id, 'pointer': pointer_text,
+                               'kind': 'opening'})
+        self.last_recall_debug['reused'] = reused
+        self._pending_recall = {'blocks': blocks_out, 'include_opening': include_opening}
+        if defer:
+            return []
+        return self.finish_recall()
+
+    def _block_body(self, key):
+        """The same `[bucket_id:key]` block shape Ombre returns, from the current file."""
+        from recall_rotation import front_matter
+        raw = self.raw_content_for(key)
+        if raw is None:
+            return ''
+        body = front_matter(raw).get('body') or ''
+        return f'[bucket_id:{key}]\n{body.strip()}'
+
+    def finish_recall(self, *, space=None, history_tokens=0, protected_tokens=0, calibration=0.4):
+        """Apply the whole-round budget and build this turn's memory messages.
+
+        ``space`` is the tokens left after the required request blocks. When it is None the call is
+        unbudgeted (tests, readiness probe). Returns the messages and records the budget and every
+        drop that happened, so the request builder can use the returned ``history_allowance`` and the
+        panel can show why a candidate was not injected.
+        """
+        import recall_budget
+        pending = self._pending_recall or {'blocks': [], 'include_opening': True}
+        blocks_out = pending.get('blocks') or []
+        include_opening = pending.get('include_opening', True)
+        debug = self.last_recall_debug
+        if space is None:
+            selected = [dict(block, tokens=recall_budget.tokens_for(block.get('text') or '', calibration),
+                             complete=True) for block in blocks_out]
+            dropped = []
+            plan = {'reason': 'unbudgeted'}
+            used = sum(item['tokens'] for item in selected)
+            history_allowance = None
+        else:
+            memory_need = sum(recall_budget.tokens_for(block.get('text') or '', calibration)
+                              for block in blocks_out)
+            plan = recall_budget.split(space, history_tokens, memory_need, protected_tokens)
+            plan['memory_need'] = memory_need
+            selected, dropped = recall_budget.fit(blocks_out, plan['memory'], calibration)
+            used = sum(item['tokens'] for item in selected)
+            history_allowance = max(0, int(space) - used)
+        recall_items = [item for item in selected if item.get('group') == 'recall']
+        opening_items = [item for item in selected if item.get('group') == 'opening']
+        for item in selected:
+            if item.get('event_id'):
+                item['story'] = True
+        recall = [item['text'] for item in recall_items]
+        opening = [item['text'] for item in opening_items]
+        refs = ([item['id'] for item in opening_items] + [item['id'] for item in recall_items])
+        self.last_context_refs = list(dict.fromkeys(refs))
+        self.last_context_kinds = {item['id']: item.get('kind', 'search')
+                                   for item in opening_items + recall_items}
+        self.last_injected_refs = [item['id'] for item in recall_items]
         self.mark_surfaced(self.last_context_refs)
         with self.mutex:
             # Ticket 379: remember what each mark replaced, so a turn that delivers nothing can take it back.
             self.last_recall_marks = {key: self.rotation.last.get(key) for key in self.last_context_refs}
             self.rotation.mark(self.last_context_refs)
         self._save_rotation()
+        if dropped:
+            self.last_recall_skipped['budget'] = len(dropped)
+        debug['injected'] = [item['id'] for item in recall_items]
+        debug['opening'] = [item['id'] for item in opening_items]
+        debug['dropped'] = list(debug.get('dropped') or []) + dropped
+        debug['items'] = [{'id': item['id'], 'source': item.get('source'),
+                           'tokens': item.get('tokens'), 'complete': item.get('complete'),
+                           'event': item.get('event_id') or '', 'story': bool(item.get('story'))}
+                          for item in opening_items + recall_items]
+        debug['budget'] = {**plan, 'memory_allowance': plan.get('memory'),
+                           'memory_used': used, 'history_allowance': history_allowance}
+        self.last_memory_budget = dict(debug['budget'])
         recalled = [{'role': 'system', 'content':
                  prompts.text('memory.recall.head') + '\n'
                  + ('\n'.join(recall) or prompts.text('memory.recall.empty'))}]

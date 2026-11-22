@@ -1563,7 +1563,12 @@ function recallDetails(r){
   if(n(r.dropped))lines.push('去重/冷却：'+r.dropped.map(x=>`${x.id}（${x.reason||'?'}）`).join('；'));
   if(n(r.injected))lines.push(`注入：${ids(r.injected)}`);
   if(n(r.opening))lines.push(`开场：${ids(r.opening)}`);
-  if(n(r.budget_dropped))lines.push(`字数裁掉：${ids(r.budget_dropped)}`);
+  const b=r.budget||{};
+  if(b.space!==undefined)lines.push(`本轮记忆预算：可用 ${b.space} tokens，记忆 ${b.memory_allowance??'?'}，实际 ${b.memory_used??'?'}（${b.reason==='proportional'?'与历史按需分配':'全部放得下'}）；历史保留 ${b.history_allowance??'?'}，最近一轮保护 ${b.protected??'?'}`);
+  if(n(r.items))lines.push('注入明细：'+r.items.map(x=>`${x.id}（${x.source||'?'}${x.tokens?`，${x.tokens} tokens`:''}${x.complete===false?'，只给完整段落':''}${x.event?`，事件 ${x.event}`:''}）`).join('；'));
+  if(n(r.reused))lines.push(`已在历史里、未重复粘贴：${ids(r.reused)}`);
+  if(n(r.budget_dropped))lines.push(`预算舍弃：${ids(r.budget_dropped)}`);
+  if(r.final_trim)lines.push('最终请求又被裁（已预算但仍超长）：'+r.final_trim);
   if(r.failure)lines.push('检索故障：'+r.failure);
   return lines.join('\n')||'这轮没有诊断';
 }
@@ -1583,7 +1588,8 @@ function recallText(r){
   else parts.push('没用判官');
   parts.push(`注入 ${n(r.injected)} 条`);
   if(n(r.dropped))parts.push(`去重/冷却 ${n(r.dropped)} 条`);
-  if(n(r.budget_dropped))parts.push(`字数裁掉 ${n(r.budget_dropped)} 条`);
+  if(n(r.budget_dropped))parts.push(`预算舍弃 ${n(r.budget_dropped)} 条`);
+  if(r.final_trim)parts.push('最终请求又裁掉记忆');
   if(r.failure)parts.push('检索故障：'+r.failure);
   return '记忆：'+parts.join('；');
 }

@@ -50,25 +50,26 @@ dimensions = 1024
 # Official price checked 2026-10-19: https://siliconflow.cn/pricing
 # This is the free model, NOT Pro/BAAI/bge-m3. Update together when switching.
 input_cny_per_million = "0"
-# Ticket 353: automatic recall rotation. On by default with these values; to change one, add the table
+# Ticket 353 / 419: automatic recall. On by default with these values; to change one, add the table
 # right here, after the [memory] keys and before the next section. enabled = false restores the old behaviour.
 # [memory.recall]
-# cooldown_turns = 3        # a memory shown automatically skips the next 3 turns unless Lan asks about the past (0 = off); kept across restarts
+# cooldown_turns = 3        # a memory shown automatically skips the next 3 turns unless Lan asks about the past or follows up on it (0 = off); kept across restarts
 # dedup = true              # one memory per event: Ombre same_event/continuation links or stored vectors >= dedup_similarity
 # dedup_similarity = 0.88
-# excerpt_chars = 600       # longer memories show title, date and the first 600 characters (0 = full text)
+# excerpt_chars = 0         # 0 = whole story; the request budget decides how many fit. An old positive value still limits each memory, cut at a paragraph/sentence boundary
 # random_chance = 0.1       # when the search found fewer than 3, chance to add one of Ombre's random recollections (0 = off)
-# rotation_candidates = 8   # autonomous wakes pick 3 of this many, least recently shown first
-# Ticket 382: a small relevance judge for automatic recall. ON by default. Lan's switch on the memory page ("想起判官")
+# rotation_candidates = 8   # candidate pool for autonomous wakes; there is no fixed number shown
+# Ticket 382 / 419: a small relevance judge for automatic recall. ON by default. Lan's switch on the memory page ("想起判官")
 # overrides `enabled` and acts at once; turning it off restores ticket 381's recall and changes no memory.
-# The judge looks at Ombre's hits plus the five nearest memories by vector and picks at most two that bear directly on her
-# sentence (or none: then nothing is recalled). Any technical failure (timeout, request error, bad answer) keeps ticket 381's
-# recall for that turn; three in a row pause the judge for breaker_seconds. To change a value, add this table right here:
+# The judge looks at Ombre's hits plus the nearest memories by vector and may pick every candidate that bears directly on her
+# sentence (or none: then nothing is recalled); the request budget decides how many fit. Cards include the opening and the
+# ending, so a question about the end of a story can still be judged. Any technical failure (timeout, request error, bad answer)
+# keeps ticket 381's recall for that turn; three in a row pause the judge for breaker_seconds. To change a value, add this table:
 # [memory.recall_judge]
 # enabled = true
 # timeout_seconds = 4.0     # longest the judge may add to one message when it fails (normal: about 1.1-1.5 s; the first message after start up to ~3 s)
-# ombre_candidates = 5
-# vector_candidates = 5
+# ombre_candidates = 8
+# vector_candidates = 8
 # breaker_failures = 3
 # breaker_seconds = 300
 # Ticket 354: the program's fallback memory. When enough new chat has piled up and you two have gone quiet,
