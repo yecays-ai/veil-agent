@@ -13,7 +13,6 @@ import os
 import re
 import shutil
 import tempfile
-import time
 from datetime import datetime
 from pathlib import Path
 
@@ -450,36 +449,6 @@ def apply_plan(plan, data_dir, role='peter'):
 
 
 
-def wait_ready(app_root, data_dir, role='peter', timeout=240, query='ancient brass refining'):
-    """Start the role's existing memory backend and wait until V50 is searchable.
-
-    This is the executable "can I chat with recall yet" check. It does not build or
-    repair the index; it only waits for Ombre to expose the imported V50 memory.
-    """
-    from veil_agent import Budget, Store, load_character
-    from memory_agent import Memory, open_ombre
-    root = Path(app_root).resolve()
-    data_root = Path(data_dir).resolve()
-    cfg = load_character(root, role)
-    store = Store(data_root)
-    budget = Budget(store)
-    started = time.monotonic()
-    deadline = started + max(1, int(timeout))
-    last = []
-    with store.lock():
-        with open_ombre(root, cfg, data_root=data_root) as backend:
-            with Memory(cfg, store, budget, None, backend) as memory:
-                while True:
-                    memory.context(query, include_opening=False)
-                    last = list(memory.last_recall_debug.get('ombre') or [])
-                    if 'V50' in last:
-                        return {'ready': True, 'elapsed_seconds': round(time.monotonic() - started, 1),
-                                'candidates': last, 'query': query}
-                    if time.monotonic() >= deadline:
-                        return {'ready': False, 'elapsed_seconds': round(time.monotonic() - started, 1), 'candidates': last,
-                                'query': query}
-                    time.sleep(10)
-
 def load_final(path):
     with Path(path).open(encoding='utf-8') as handle:
         data = json.load(handle)
@@ -494,9 +463,6 @@ def main():
     parser.add_argument('--data-dir', required=True)
     parser.add_argument('--role', default='peter')
     parser.add_argument('--apply', action='store_true')
-    parser.add_argument('--wait-ready', action='store_true')
-    parser.add_argument('--app-root', default='.')
-    parser.add_argument('--timeout', type=int, default=240)
     args = parser.parse_args()
     final = load_final(args.final)
     plan = build_plan(final, args.data_dir, args.role)
@@ -504,10 +470,6 @@ def main():
         print(json.dumps(plan['preview'], ensure_ascii=False, indent=2))
         return 0
     print(json.dumps(apply_plan(plan, args.data_dir, args.role), ensure_ascii=False, indent=2))
-    if args.wait_ready:
-        ready = wait_ready(args.app_root, args.data_dir, args.role, timeout=args.timeout)
-        print(json.dumps(ready, ensure_ascii=False, indent=2))
-        return 0 if ready['ready'] else 2
     return 0
 
 
