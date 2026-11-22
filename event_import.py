@@ -245,6 +245,17 @@ def _local_changed(existing, stages, memory, baseline, expected_story, expected_
         return True
     if stages and _sha(str(stages[0].get('text') or '')) != _sha(expected_story):
         return True
+    if memory is None:
+        return True
+    legacy = memory_text({
+        'id': existing.get('event_id') or existing.get('memory_id'),
+        'title': existing.get('title') or '',
+        'english': existing.get('story') or '',
+        'sources': existing.get('sources') or [],
+        'recall_cues': [],
+    })
+    if _body_hash_text(memory) != _body_hash_text(legacy):
+        return True
     return False
 
 
@@ -369,7 +380,7 @@ PENDING_NAME = 'event-import-pending.json'
 
 def _restore_backup(role_dir, backup):
     if not backup.exists():
-        return
+        raise FileNotFoundError('import backup is missing')
     for source in backup.rglob('*'):
         if source.is_file():
             target = role_dir / source.relative_to(backup)
@@ -383,22 +394,37 @@ def _recover_pending(role_dir):
         return False
     try:
         data = json.loads(marker.read_text(encoding='utf-8'))
-        _restore_backup(role_dir, Path(data.get('backup') or ''))
-    finally:
-        marker.unlink(missing_ok=True)
+        raw = str(data.get('backup') or '')
+        if not raw:
+            raise ValueError('import marker has no backup path')
+        backup = Path(raw).resolve()
+        role = role_dir.resolve()
+        if not backup.exists() or not backup.is_relative_to(role):
+            raise ValueError('import marker points outside the role directory')
+        for raw_path in data.get('paths') or []:
+            path = Path(raw_path)
+            if path.exists() and path.is_file():
+                relative = path.relative_to(role_dir)
+                if not (backup / relative).exists():
+                    path.unlink()
+        _restore_backup(role_dir, backup)
+    except Exception:
+        raise
+    marker.unlink(missing_ok=True)
     return True
-
 
 def apply_plan(plan, data_dir, role='peter'):
     """Take the data lock, revalidate the preview, then write the same plan."""
     from veil_agent import Store
+    if not re.fullmatch(r'[0-9A-Za-z][0-9A-Za-z_-]{0,99}', str(role)):
+        raise ValueError('role contains unsafe path characters')
     data_dir = Path(data_dir)
     with Store(data_dir).lock():
-        _recover_pending(data_dir / role)
+        recovered = _recover_pending(data_dir / role)
         fresh = build_plan(plan['final'], data_dir, role)
         old = [(item['event_id'], item['action']) for item in plan['items']]
         new = [(item['event_id'], item['action']) for item in fresh['items']]
-        if old != new:
+        if not recovered and old != new:
             raise ValueError('target changed after preview; refusing to use a stale import plan')
         return _apply_plan_unlocked(fresh, data_dir, role)
 
@@ -430,7 +456,8 @@ def _apply_plan_unlocked(plan, data_dir, role='peter'):
             shutil.copy2(path, target)
 
     marker = role_dir / PENDING_NAME
-    _write_atomic(marker, json.dumps({'backup': str(backup), 'at': datetime.now().astimezone().isoformat()},
+    _write_atomic(marker, json.dumps({'backup': str(backup), 'paths': [str(path) for path in touched],
+                                     'at': datetime.now().astimezone().isoformat()},
                                     ensure_ascii=False))
     old_events = _read_rows(events_path)
     old_stages = _read_rows(stages_path)
