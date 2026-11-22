@@ -375,6 +375,20 @@ max_steps = 2
         joined = '\n'.join(content for _, content in said)
         self.assertNotIn('noise noise noise noise noise noise', joined)
 
+    def test_empty_memory_headers_cannot_displace_recent_history(self):
+        self.seed_history()
+        chat, model, memory = self.build(6000)
+        chat.send('那怎么办？', message_id='huge-aux',
+                  extra_context='OPTIONAL_BACKGROUND ' + 'noise ' * 300000)
+        sent = model.call_args.args[0]
+        self.assertTrue(any(row['role'] == 'user' and '我今天真的很烦' in str(row.get('content'))
+                            for row in sent))
+        self.assertTrue(any(row['role'] == 'assistant' and '是灯的事情' in str(row.get('content'))
+                            for row in sent))
+        budget = memory.last_memory_budget
+        self.assertGreaterEqual(budget['history_allowance'], budget['protected'])
+        self.assertLessEqual(budget['memory_used'], budget['memory_allowance'])
+
     def test_an_autonomous_wake_uses_the_same_budget_and_has_no_three_memory_cap(self):
         self.seed_history()
         chat, model, memory = self.build(24000)
@@ -491,6 +505,15 @@ class FollowUpReviewTests(unittest.TestCase):
 
 
 class FinalStateTests(MemoryLevelBudgetTests):
+    def test_empty_groups_are_omitted_when_only_recent_history_fits(self):
+        memory = self.memory({})
+        memory.context('unmatched', include_opening=True, defer=True)
+        messages = memory.finish_recall(space=86, history_tokens=100,
+                                        protected_tokens=86, auxiliary_tokens=5000)
+        self.assertEqual([], messages)
+        self.assertEqual(0, memory.last_memory_budget['memory_used'])
+        self.assertEqual(86, memory.last_memory_budget['history_allowance'])
+
     def test_memory_used_equals_the_messages_actually_sent(self):
         memory = self.memory(self.five_events(), recall={'cooldown_turns': 0, 'random_chance': 0})
         memory.context('video night brass lamp', include_opening=False, defer=True)
@@ -537,6 +560,21 @@ class FinalStateTests(MemoryLevelBudgetTests):
 
 
 class BoundaryTests(unittest.TestCase):
+    def test_partial_sentence_keeps_closing_quotes(self):
+        from recall_rotation import _cut_on_boundary
+        for sentence in ('“我会回来。”', '「我会回来。」', '“I will return.”', '（我会回来。）'):
+            text = sentence + ' ' + '后续还有很多内容。' * 20
+            body, _, _ = partial_text(text, tokens_for(sentence, 0.4), 0.4)
+            self.assertEqual(sentence, body)
+            self.assertEqual('', _cut_on_boundary(sentence + '后续。', len(sentence) - 1))
+
+    def test_wrapped_line_is_not_a_sentence_boundary(self):
+        from recall_rotation import _cut_on_boundary
+        text = '这句话写到这里\n才接着说完。'
+        self.assertEqual('', _cut_on_boundary(text, len('这句话写到这里')))
+        self.assertEqual((None, 0, False),
+                         partial_text(text, tokens_for('这句话写到这里', 0.4), 0.4))
+
     def test_chinese_sentences_split_without_spaces(self):
         text = '第一句话。第二句话。第三句话。'
         allowance = tokens_for('第一句话。第二句话。\n(read more)', 0.4)
@@ -617,18 +655,22 @@ class ReuseRemovalTests(MemoryLevelBudgetTests):
         memory = self.memory({'long': {'content': story, 'title': 'The brass lamp'}},
                              recall={'cooldown_turns': 0, 'random_chance': 0})
         memory.context('brass lamp', include_opening=False,
-                       recent=[{'role': 'user', 'content': story[:120]}])
+                       recent=[{'role': 'user', 'content': ('[bucket_id:long]\n' + story)[:120]}])
         text = memory.finish_recall()[-1]['content']
-        self.assertIn('The unique ending is the brass key', text)
+        self.assertIn('[bucket_id:long]\n' + story, text)
+        self.assertEqual(['long'], memory.last_context_refs)
+        self.assertEqual([], memory.last_recall_debug['reused'])
 
     def test_history_with_the_whole_text_does_not_suppress_injection(self):
         story = '\n\n'.join(LONG_PARAGRAPHS * 3) + '\n\nThe unique ending is the brass key.'
         memory = self.memory({'long': {'content': story, 'title': 'The brass lamp'}},
                              recall={'cooldown_turns': 0, 'random_chance': 0})
         memory.context('brass lamp', include_opening=False,
-                       recent=[{'role': 'assistant', 'content': story}])
+                       recent=[{'role': 'assistant', 'content': '[bucket_id:long]\n' + story}])
         text = memory.finish_recall()[-1]['content']
-        self.assertIn('The unique ending is the brass key', text)
+        self.assertIn('[bucket_id:long]\n' + story, text)
+        self.assertEqual(['long'], memory.last_context_refs)
+        self.assertEqual([], memory.last_recall_debug['reused'])
 
 
 if __name__ == '__main__':

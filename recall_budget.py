@@ -29,6 +29,8 @@ step so a later change to one estimator cannot silently drift from the other.
 import json
 import re
 
+from recall_rotation import sentence_parts
+
 # Same framing reserve as veil_agent.message_request_bytes.
 MESSAGE_FRAMING_BYTES = 16
 
@@ -122,8 +124,6 @@ def split(space, history_need, memory_need, protected, auxiliary_need=0):
 
 
 _PARAGRAPH = re.compile(r'\n\s*\n')
-# Chinese full stops do not need a following space; English ones do.
-_SENTENCE = re.compile(r'(?<=[.!?])\s+|(?<=[。！？])|\n')
 
 
 def _paragraphs(text):
@@ -131,7 +131,7 @@ def _paragraphs(text):
 
 
 def _sentences(paragraph):
-    return [part.strip() for part in _SENTENCE.split(paragraph) if part.strip()]
+    return list(sentence_parts(paragraph))
 
 
 def partial_text(text, allowance_tokens, calibration, pointer=''):

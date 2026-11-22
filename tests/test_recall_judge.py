@@ -153,12 +153,18 @@ class RecallJudgeTests(unittest.TestCase):
         self.assertIn('Kills plants', sent)
 
     def test_the_judge_reads_only_the_card_and_the_prompt_does_not_ask_him_to_talk_about_the_past(self):
-        memory = self.memory()
+        rows = {**ROWS, 'cactus': {**ROWS['cactus'],
+                'content': 'OPENING_DETAIL succulent care. ' + 'A long fictional middle. ' * 30
+                           + 'CLOSING_DETAIL about cactus soil.'}}
+        memory = self.memory(rows=rows)
         self.recall(memory)
         system = self.model.calls[0][0][0]['content']
         user = self.model.calls[0][0][1]['content']
         self.assertNotIn('mention', system.lower())
         self.assertNotIn('remember', system.lower())
+        self.assertIn('…opening: OPENING_DETAIL', user)
+        self.assertIn('…ending:', user)
+        self.assertIn('CLOSING_DETAIL', user) # both ends survive the card budget
         self.assertIn('…opening:', user)   # ticket 419 review: opening and ending are both on the card
         self.assertEqual({'json_output': True, 'max_tokens': 200, 'thinking': 'disabled', 'request_timeout': 0.4},
                          {key: value for key, value in self.model.calls[0][1].items()})

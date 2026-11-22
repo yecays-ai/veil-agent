@@ -1716,7 +1716,11 @@ class Memory:
         recall_empty = prompts.text('memory.recall.empty')
         opening_empty = prompts.text('memory.opening.empty')
 
+        emit_empty = True
+
         def messages_for(recall, opening):
+            if not emit_empty and not recall and not opening:
+                return []
             recalled = [{'role': 'system', 'content':
                          recall_head + '\n' + ('\n'.join(recall) or recall_empty)}]
             if not include_opening:
@@ -1725,6 +1729,10 @@ class Memory:
                      opening_head + '\n' + ('\n'.join(opening) or opening_empty)}, *recalled]
 
         overhead = recall_budget.tokens_for_messages(messages_for([], []), calibration)
+        if space is not None and space < protected_tokens + overhead:
+            # An empty memory notice must not displace the latest conversation.
+            emit_empty = False
+            overhead = 0
         if space is None:
             selected = [dict(block, tokens=recall_budget.tokens_for(block.get('text') or '', calibration),
                              complete=True) for block in blocks_out]
@@ -1738,10 +1746,13 @@ class Memory:
                              for block in blocks_out)
             # The memory share must pay for the recall/opening headers and empty-group text too,
             # otherwise the first memory always looks free and gets dropped after the overhead.
-            memory_need = block_need + overhead
-            plan = recall_budget.split(space, history_tokens, memory_need, protected_tokens,
-                                       auxiliary_tokens)
-            plan['memory_need'] = memory_need
+            memory_need = block_need if emit_empty else 0
+            plan = recall_budget.split(max(0, space - overhead), history_tokens, memory_need,
+                                       protected_tokens, auxiliary_tokens)
+            plan['space'] = space
+            plan['memory_need'] = memory_need + overhead
+            plan['memory'] += overhead
+            plan['fixed_overhead'] = overhead
             memory_allowance = plan['memory']
             fit_allowance = max(0, memory_allowance - overhead)
             selected, dropped = recall_budget.fit(blocks_out, fit_allowance, calibration)

@@ -4,6 +4,7 @@ The tool path uses the real Chat/Memory assembly with a fake model and a fake to
 path uses a fake channel/hub pair around the real AwayBridge and the real Chat.send. No network,
 no real QQ message and no paid call.
 """
+import copy
 import queue
 import threading
 import unittest
@@ -164,6 +165,17 @@ class ToolReadThroughChatTests(ChatAssemblyBudgetTests):
             self.store.append('peter/event-stages.jsonl', {
                 'stage_id': f'st{index}', 'event_id': 'cat', 'at': f'2026-10-0{index}T20:00:00',
                 'text': self.rows[key]['content'], 'state': 'committed'})
+        # Only the middle stage is a search hit. The ending must arrive through the tool.
+        memory.judge = None
+        original_call = memory.call
+
+        def search_middle(name, args):
+            if name == 'breath_search':
+                return ('[bucket_id:s2]\n' + self.rows['s2']['content']
+                        + '\n=== ombre:result-ids ===\n```json\n{"bucket_ids": ["s2"]}\n```')
+            return original_call(name, args)
+
+        memory.call = search_middle
         memory.cfg.memory['events'] = {'enabled': True}
         native = NativeMemoryTools(memory)
         tool_call = SimpleNamespace(id='timeline-1', function=SimpleNamespace(
@@ -176,21 +188,39 @@ class ToolReadThroughChatTests(ChatAssemblyBudgetTests):
             tool_calls=[],
             model_dump=lambda exclude_none=True: {'role': 'assistant',
                                                   'content': 'It ended with the cat living with us.'})
-        model.side_effect = [(first, 100, 20, 0), (final, 120, 5, 0)]
+        requests = []
+
+        def reply(messages, **kwargs):
+            requests.append(copy.deepcopy(messages))
+            if len(requests) == 1:
+                offered = {item['function']['name'] for item in kwargs.get('tools') or []}
+                self.assertIn('memory_timeline', offered)
+                return first, 100, 20, 0
+            return final, 120, 5, 0
+
+        model.side_effect = reply
         chat.tools = SimpleNamespace(
-            tools=native.tools, invoke=native.invoke, description='Native memory tools.',
+            tools=native.tools, invoke=Mock(wraps=native.invoke), description='Native memory tools.',
             capability_event=None, capability_event_model=None, capability_record=None,
             consume_capability_event=Mock())
         chat.send('I thought she had abandoned the cat', message_id='read-through')
         self.assertGreaterEqual(len(model.call_args_list), 2)
         first_request = '\n'.join(
             message.get('content') if isinstance(message.get('content'), str) else ''
-            for message in model.call_args_list[0].args[0])
+            for message in requests[0])
         self.assertIn('memory_timeline', first_request)
         self.assertIn('cat', first_request)
+        self.assertNotIn(self.rows['s4']['content'], first_request)
+        chat.tools.invoke.assert_called_once()
+        self.assertEqual(('memory_timeline', {'event_id': 'cat'}), chat.tools.invoke.call_args.args[:2])
+        tool_results = [message['content'] for message in requests[-1] if message['role'] == 'tool']
+        self.assertEqual(1, len(tool_results))
+        self.assertNotIn('unavailable', tool_results[0])
+        for row in self.rows.values():
+            self.assertIn(row['content'], tool_results[0])
         second_request = '\n'.join(
             message.get('content') if isinstance(message.get('content'), str) else ''
-            for message in model.call_args_list[-1].args[0])
+            for message in requests[-1])
         self.assertIn('the cat now lives with us and sleeps on the windowsill', second_request)
         self.assertIn('she explained she had gone to buy a carrier', second_request)
 

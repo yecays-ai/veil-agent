@@ -273,6 +273,22 @@ def rotate(candidates, metas, history):
     return sorted(candidates, key=lambda item: (-importance(item[0]), history.get(item[0], -1), order[item[0]]))
 
 
+_SENTENCE_END = re.compile(r'''[.!?]["’”'»）)\]}」』]*(?=\s|$)|[。！？]["’”'»）)\]}」』]*''')
+
+
+def sentence_parts(text):
+    """Complete sentences keep closing quotes; a wrapped line is not an ending."""
+    start = 0
+    for match in _SENTENCE_END.finditer(text):
+        piece = text[start:match.end()].strip()
+        if piece:
+            yield piece
+        start = match.end()
+    tail = text[start:].strip()
+    if tail:
+        yield tail
+
+
 def _cut_on_boundary(text, limit):
     """The longest run of whole paragraphs (or, when the first paragraph is too long, whole
     sentences) that is not over ``limit`` characters. Never cuts mid-sentence. Chinese sentence
@@ -290,7 +306,7 @@ def _cut_on_boundary(text, limit):
             used += cost
             continue
         if not kept:
-            for sentence in re.split(r'(?<=[.!?])\s+|(?<=[。！？])|\n', paragraph):
+            for sentence in sentence_parts(paragraph):
                 if not sentence.strip():
                     continue
                 cost = len(sentence) + (1 if kept else 0)
