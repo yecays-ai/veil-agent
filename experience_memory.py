@@ -36,8 +36,8 @@ TICK_SECONDS = 300
 MAX_ENTRIES = 2           # 2026-11-15 Lan: small things may simply be forgotten
 MAX_UPDATES = 3
 TITLE_CHARS = 60
-ENTRY_CHARS = 600         # ticket 368: one cap for Peter's own saves and this tidying (was 500 here)
-UPDATE_CHARS = 600       # ticket 363: an update is the whole memory rewritten, same cap as Peter's own hold
+ENTRY_CHARS = 0           # ticket 421: no fixed cap; the model's output budget is the real limit
+UPDATE_CHARS = 0          # ticket 421: an update rewrites the whole memory, however long it is
 MESSAGE_CHARS = 1500      # one pasted wall of text is clipped, not allowed to crowd out the rest
 REQUEST_CHARS = 12000     # visible chat text per model call; the rest waits for the next tick
 MAX_OUTPUT_TOKENS = 8000  # ticket 386: a thinking model's reasoning counts here too; at 3000 deepseek-flash often
@@ -54,7 +54,8 @@ LIBRARY_HITS = 6          # at most this many library memories are added to the 
 LOOKS = 2                # ticket 368: at most this many more asks after the first answer (the 2nd shows the exact problem again)
 STAGE_HITS = 4            # ticket 368: and this many more, the other stages of an experience a hit belongs to
 OWN_SAVES = 3             # ticket 368: and the memories Peter saved or rewrote himself most recently
-CANDIDATE_CHARS = 1200    # ticket 363: he rewrites an entry, so he sees it whole (older appended ones are clipped)
+CANDIDATE_CHARS = 6000    # ticket 421: the model must see the whole old memory before rewriting it; longer
+                          # ones are marked "too long to rewrite" (it may still continue them as a stage)
 FIX_MARGIN = 100          # ticket 386: an overlong draft is asked for about this much under the cap
 VERBATIM_RUN = 24         # an entry repeating this many characters of a message in a row is a quote, not a memory
 BACKFILL = timedelta(days=3)
@@ -339,6 +340,8 @@ class ExperienceMemory:
         stages = getattr(self.memory, 'experience_stages', None)
         item = {'id': memory_id, 'title': (titled(memory_id) if titled else '') or '', 'written': '',
                 'text': body[:CANDIDATE_CHARS], 'whole': len(body) <= CANDIDATE_CHARS, 'versions': versions,
+                'full_chars': len(body),
+                **({'text_truncated': True} if len(body) > CANDIDATE_CHARS else {}),
                 'stages': [{'id': other, 'title': (titled(other) if titled else '') or ''}
                            for other in (stages(memory_id) if stages else [])][:4]}
         return item
@@ -424,6 +427,25 @@ class ExperienceMemory:
             if own >= OWN_SAVES:
                 break
         return out
+
+    def _fit_candidates(self, candidates):
+        """Keep the whole old text when it fits the real request budget; clip only with an explicit marker,
+        never silently (ticket 421)."""
+        try:
+            total = int((self.cfg.provider or {}).get('max_input_tokens') or 0)
+        except (TypeError, ValueError):
+            total = 0
+        room = max(2000, (total or 30000) - REQUEST_CHARS - 4000)
+        used = 0
+        for item in candidates:
+            left = max(0, room - used)
+            text = str(item.get('text') or '')
+            if len(text) > left:
+                item['text'] = text[:left]
+                item['whole'] = False
+                item['text_truncated'] = True
+            used += len(item.get('text') or '')
+        return candidates
 
     def _candidates(self, events):
         """His latest entries that still exist and are not hidden, newest first."""
@@ -538,9 +560,10 @@ class ExperienceMemory:
         """What is wrong with a text that cannot be written as it is, or None. Never shows a secret back."""
         if SECRET.search(text):
             return None
-        if len(text) > limit:
+        if limit and len(text) > limit:
             # Ticket 386: "shorten it" alone left 4 of 6 drafts still 8 to 99 characters over after two tries
-            # (11-17 to 11-18); aiming well under the cap leaves room for miscounting. The cap itself is unchanged.
+            # (11-17 to 11-18); aiming well under the cap leaves room for miscounting. Ticket 421 removes the
+            # fixed cap entirely; this branch only runs when a caller still passes a real budget.
             return (f'{len(text)} characters; the most is {limit}. Rewrite it to about {limit - FIX_MARGIN} characters '
                     '(well under the limit, since counting is easy to get wrong), keeping the facts and the attitude; '
                     'what belongs to a later stage is not part of this one.')
@@ -605,14 +628,24 @@ class ExperienceMemory:
             updates.append({'id': memory_id, 'text': text})
         return entries, updates, dropped, flagged
 
-    def _save_entry(self, entry, span):
+    def _save_entry(self, entry, span, source=None, source_key=''):
         continues = entry.get('continues')
         args = {'content': entry['text'], 'title': entry['title']}
+        if source_key:
+            # Ticket 421: a retry of the same source batch must not add the stage twice, even if the model
+            # worded it differently this time.
+            for row in self._events():
+                if (row.get('kind') == 'entry' and row.get('source_key') == source_key
+                        and row.get('title') == entry['title']):
+                    return row.get('memory_id')
         if self.events is not None:
             target_event = self.events.event_for_memory(continues) if continues else None
             try:
+                # Ticket 421: the stage carries when the conversation happened and which messages it came
+                # from; the same batch is idempotent even when a retry crosses midnight.
                 saved = self.events.record(entry['text'], entry['title'], why='经历整理',
-                                           event_id=target_event)
+                                           event_id=target_event, at=(source or {}).get('to'),
+                                           source=source, source_key=source_key)
             except Exception as exc:
                 raise UserError('经历整理的事件没有保存成功；这批消息会重试，不推进游标。') from exc
             if not saved or saved.get('pending'):
@@ -626,6 +659,7 @@ class ExperienceMemory:
             self.store.append(self.path, {'kind': 'entry', 'memory_id': memory_id, 'title': entry['title'],
                                           'text': entry['text'], 'merged': False, 'covers': span,
                                           'continues': continues, 'event_id': saved.get('event_id'),
+                                          'source_key': source_key, 'source': source,
                                           'time': self.budget.clock()})
             return memory_id
         operation, duplicate = self.memory.begin_write(args)
@@ -697,14 +731,19 @@ class ExperienceMemory:
         if Decimal(str(self.settings['daily_budget_cny'])) > self.spent_today():
             # Searching costs a little embedding money: not once the day's ceiling is reached.
             candidates += self._library(batch, {candidate['id'] for candidate in candidates})
+        candidates = self._fit_candidates(candidates)
         zone = last['time'].tzinfo
 
         def shown(c):
-            item = {'id': c['id'], 'title': c['title'], 'written': c['written'], 'text': c['text'][:CANDIDATE_CHARS]}
+            item = {'id': c['id'], 'title': c['title'], 'written': c['written'], 'text': c['text']}
             if c.get('versions'):
                 item['rewritten_times'] = c['versions']
             if c.get('stages'):
                 item['stages'] = c['stages']
+            if c.get('full_chars') is not None:
+                item['full_chars'] = c['full_chars']
+            if c.get('text_truncated'):
+                item['text_truncated'] = True
             if not c.get('whole', True):
                 item['too_long_to_rewrite'] = True   # can be continued, not rewritten
             return item
@@ -736,9 +775,15 @@ class ExperienceMemory:
                 self.store.append(self.path, {'kind': 'budget', 'time': self.budget.clock(), 'cap': str(cap)})
             return 'budget'
         mark = {'through_message_id': last['id'], 'through_position': last['position'] + 1,
-                'messages': len(batch), 'chars': sum(len(item['text']) for item in batch), 'reason': reason}
+                'messages': len(batch), 'chars': sum(len(item['text']) for item in batch), 'reason': reason,
+                'covers': {'from': batch[0]['time'].isoformat(), 'to': last['time'].isoformat()}}
         self.store.append(self.path, {'kind': 'attempt', **mark, 'time': self.budget.clock()})
         span = [batch[0]['time'].isoformat(timespec='minutes'), last['time'].isoformat(timespec='minutes')]
+        deferred = []
+        message_ids = [item['id'] for item in batch if isinstance(item.get('id'), str) and item['id']]
+        source = {'kind': 'chat', 'from': batch[0]['time'].isoformat(), 'to': last['time'].isoformat(),
+                  'message_ids': message_ids, 'count': len(batch)}
+        source_key = ('chat:' + '|'.join(message_ids)) if message_ids else ('chat:' + ':'.join(span))
         written = updated = 0
         failed = []
         try:
@@ -779,10 +824,19 @@ class ExperienceMemory:
                                      draft=item['text'], **({'title': item['title']} if item['kind'] == 'entry'
                                                              else {'id': item['id']}))
             for update in updates:
+                if self.sidecar.locked(update['id']):
+                    # Ticket 421: Lan locked the reviewed story; the new development is not dropped. Keep
+                    # the draft in the ledger where she can see it, and do not overwrite her version.
+                    deferred.append({'memory_id': update['id'], 'text': update['text'],
+                                     'reason': 'locked; kept for review'})
+                    self.store.append(self.path, {'kind': 'deferred-update', 'memory_id': update['id'],
+                                                  'text': update['text'], 'covers': span,
+                                                  'time': self.budget.clock()})
+                    continue
                 updated += bool(self._save_update(update, next(
                     (c['text'] for c in candidates if c['id'] == update['id']), None)))
             for entry in entries:
-                written += self._save_entry(entry, span) is not None
+                written += self._save_entry(entry, span, source, source_key) is not None
         except Exception as exc:
             self.store.append(self.path, {'kind': 'error', 'reason': type(exc).__name__,
                                           'detail': str(exc)[:300] if isinstance(exc, UserError) else '',
@@ -790,13 +844,13 @@ class ExperienceMemory:
                                           **({'retried_without_thinking': self._retried} if self._retried else {})})
             if not isinstance(exc, UserError):
                 self._record_failure('save', 'error', error=type(exc).__name__, detail=str(exc)[:300])
-            if not (written or updated):
-                raise
-            # Something was already saved: move on rather than write the same thing twice next time.
-            dropped = 0
+            # Ticket 421: the cursor must not advance unless every draft of this batch is safely stored.
+            # A retry is idempotent because stages are keyed by the source batch.
+            raise
         self.store.append(self.path, {'kind': 'checkpoint', **mark, 'written': written, 'updated': updated,
                                       'dropped': dropped, 'time': self.budget.clock(),
                                       **({'unfixed': failed} if failed else {}),
+                                      **({'deferred': deferred} if deferred else {}),
                                       **({'retried_without_thinking': self._retried} if self._retried else {})})
         self._context_cache = None
         return 'written' if written or updated else 'skipped'
@@ -864,8 +918,10 @@ class ExperienceMemory:
         return {'enabled': self.enabled(), 'available': self.memory is not None,
                 'last': ({'kind': last['kind'], 'time': last.get('time'), 'written': last.get('written', 0),
                           'updated': last.get('updated', 0), 'detail': last.get('detail', ''),
+                          'covers': last.get('covers'),
                           'retried_without_thinking': last.get('retried_without_thinking', 0),
-                          'unfixed': len(last.get('unfixed') or [])} if last else None),
+                          'unfixed': len(last.get('unfixed') or []),
+                          'deferred': len(last.get('deferred') or [])} if last else None),
                 'retry_at': (lambda at: at.isoformat(timespec='minutes') if at else None)(self.retry_at(events)),
                 'failures_kept': len(self.failures()),
                 'pending_chars': sum(len(item['text']) for item in pending),

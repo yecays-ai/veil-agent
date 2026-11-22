@@ -220,8 +220,9 @@ class NativeMemoryTests(unittest.TestCase):
         self.assertTrue(any('合并：Blue lamp' in line for line in self.output))
 
     def test_invalid_or_oversized_save_never_reaches_ombre(self):
+        limit = self.tools.native._memory_limit()
         for args in ({'title': 'x', 'content': '  '}, {'title': '', 'content': 'a'},
-                     {'title': 'x', 'content': 'a' * 1501}, {'content': 'no title'}):
+                     {'title': 'x', 'content': 'a' * (limit + 1)}, {'content': 'no title'}):
             result, state, _ = self.tools.invoke('hold', args)
             self.assertEqual(state, '被拒绝', args)
         self.assertNotIn('hold', [n for n, _ in self.backend.calls])

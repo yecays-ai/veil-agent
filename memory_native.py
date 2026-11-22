@@ -22,9 +22,10 @@ OMBRE_TOOLS = ('trace', 'dream', 'letter_write', 'letter_read', 'letter_lock_upd
 NATIVE_TOOLS = ('hold', 'breath_search', *OMBRE_TOOLS, 'memory_history', 'memory_catalog', 'memory_read',
                 'memory_timeline')
 CONTENT_LIMIT, TITLE_LIMIT, WHY_LIMIT = 1500, 100, 500
-# Ticket 363: what Peter writes himself. Recall shows longer memories only up to their first 600 characters
-# (ticket 353), so a memory this size is always recalled whole. Lan can still write longer ones on the page.
-MEMORY_CHARS = 600
+# Ticket 421: Peter's own save is no longer capped at 600 characters. The real ceiling is the model's
+# output budget (a tool call cannot be longer than the answer it came in), so the program only guards
+# against a payload the model could not have written. 0 means no fixed character cap.
+MEMORY_CHARS = 0
 # Ombre allows 20 pinned memories; VEIL keeps the permanent front row much smaller (ticket 184).
 PINNED_LIMIT = 8
 CATALOG_PAGE = 5
@@ -35,8 +36,9 @@ HOLD = SimpleNamespace(name='hold', inputSchema={
     'type': 'object', 'required': ['content'], 'additionalProperties': False,
     'properties': {
         'content': {'type': 'string', 'description':
-            'The whole memory in your own words, at most ' + str(MEMORY_CHARS) + ' characters; say when it happened '
-            '(e.g. 11-16). With target_id it replaces the old text entirely: keep what still matters, drop repeats.'},
+            'The whole memory in your own words; say when it happened (e.g. 11-16). Write it as long as it '
+            'needs to be: the program keeps every stage and can read it back. With target_id it replaces the '
+            'old text entirely: keep what still matters, drop repeats.'},
         'title': {'type': 'string', 'description':
             'Short title; required for a new memory. With target_id a new title replaces the old one.'},
         'target_id': {'type': 'string', 'description':
@@ -318,6 +320,20 @@ class NativeMemoryTools:
         self.tools = [HOLD, SEARCH, *model_tools, MEMORY_HISTORY, MEMORY_CATALOG, MEMORY_READ,
                       *([MEMORY_TIMELINE] if self.events is not None else [])]
 
+    def _memory_limit(self):
+        """Ticket 421: a long memory is allowed; the ceiling is the real output budget, not 600 characters."""
+        if not MEMORY_CHARS:
+            try:
+                tokens = int(getattr(self.memory.cfg, 'max_output_tokens', 0) or 0)
+            except (TypeError, ValueError):
+                tokens = 0
+            return tokens * 4 if tokens > 0 else 0
+        return MEMORY_CHARS
+
+    def _too_long(self, text):
+        limit = self._memory_limit()
+        return (len(text), limit) if limit and len(text) > limit else None
+
     def bind_capabilities(self, files):
         path = self.memory.store.root / self.memory.cfg.id / 'capabilities.json'
         with capability_lock(path):
@@ -536,8 +552,6 @@ class NativeMemoryTools:
         if state != '成功':
             return False, result
         note = '已恢复，恢复前的样子也留了一份。'
-        if len(chosen['body']) > MEMORY_CHARS:
-            note += f'这条超过 {MEMORY_CHARS} 字，自动想起时只显示开头，想看全文要让他用 memory_read。'
         return True, note
 
     def panel_archived(self):
@@ -823,9 +837,10 @@ class NativeMemoryTools:
                 return ('Lan locked this memory on the memory page, so you cannot change or delete it. '
                         'Save anything new as a separate memory with hold and link_to.'), '被拒绝', summary
             body = args.get('content')
-            if isinstance(body, str) and len(body.strip()) > MEMORY_CHARS:
-                return (f'content would be {len(body.strip())} characters; keep a memory within {MEMORY_CHARS}. '
-                        'Nothing was changed.'), '被拒绝', summary
+            too_long = self._too_long(body.strip()) if isinstance(body, str) else None
+            if too_long:
+                return (f'content would be {too_long[0]} characters; the most this model can write in one answer '
+                        f'is about {too_long[1]}. Nothing was changed.'), '被拒绝', summary
         edit_reason = args.get('edit_reason', '')
         if not isinstance(edit_reason, str) or len(edit_reason) > WHY_LIMIT:
             return f'edit_reason must be text within the {WHY_LIMIT}-character limit.', '被拒绝', summary
@@ -838,9 +853,10 @@ class NativeMemoryTools:
         old_str, new_str = args.get('old_str'), args.get('new_str')
         if not by_lan and isinstance(old_str, str) and old_str and isinstance(new_str, str):
             body = (self.memory.content_for(memory_id) or '').replace(old_str, new_str, 1).strip()
-            if len(body) > MEMORY_CHARS:
-                return (f'After that replacement the memory would be {len(body)} characters; keep it within '
-                        f'{MEMORY_CHARS}, or rewrite it whole with content. Nothing was changed.'), '被拒绝', summary
+            too_long = self._too_long(body)
+            if too_long:
+                return (f'After that replacement the memory would be {too_long[0]} characters; the most this '
+                        f'model can write in one answer is about {too_long[1]}. Nothing was changed.'), '被拒绝', summary
         pin = args.get('pinned')
         if isinstance(pin, str):
             pin = pin.strip().casefold() in ('1', 'true', 'yes')
@@ -1172,9 +1188,11 @@ class NativeMemoryTools:
             return 'Retrieved memories can be merged only when target_id is explicitly specified.', '被拒绝', summary
         if target_id is not None and link_to is not None:
             return 'Use target_id to rewrite the same event, or link_to for a new memory that continues one; not both.', '被拒绝', summary
-        if len(content.strip()) > MEMORY_CHARS:
-            return (f'The memory is {len(content.strip())} characters; keep it within {MEMORY_CHARS}: what happened, '
-                    'how it went and what you thought of it, without repeats. Nothing was saved.'), '被拒绝', summary
+        too_long = self._too_long(content.strip())
+        if too_long:
+            return (f'The memory is {too_long[0]} characters; the most this model can write in one answer is about '
+                    f'{too_long[1]}. Save it as a shorter whole memory, or split it into stages with link_to. '
+                    'Nothing was saved.'), '被拒绝', summary
         if len(why) > WHY_LIMIT or (isinstance(title, str) and len(title) > TITLE_LIMIT):
             return f'The title or why_remembered is too long. Shorten it and save again.', '被拒绝', summary
         # Ticket 407: pinned/importance limits must run before the event branch creates the projection.
@@ -1236,14 +1254,20 @@ class NativeMemoryTools:
                 return ('The event save failed before anything was written; nothing was saved.',
                         '出错', summary)
             if saved:
+                if saved.get('pending'):
+                    return ('The stage is saved but not yet committed; the program will finish it. '
+                            'Do not save it again.'), '出错', summary
                 if saved.get('locked'):
                     return ('Lan locked this memory or it is hidden, so its story was not rewritten; '
                             'the stage is saved.'), '成功', summary
                 if not saved.get('changed'):
                     return ('The stage is saved; the story projection will be retried later.'), '出错', summary
-                return ('Saved into one story: 《' + str(saved['title']) + '》 (event ' + str(saved['event_id'])
+                head = ('Continued the same experience' if saved.get('updated') else 'New experience')
+                note = ('' if saved.get('story_source') != 'composed'
+                        else ' The story is the full stage text for now; the narrative is tidied on a later save.')
+                return (head + ': 《' + str(saved['title']) + '》 (event ' + str(saved['event_id'])
                         + '). Later parts of the same thing update this one; use memory_timeline to read it '
-                          'from the start.'), '成功', f"故事：{summary}"
+                          'from the start.' + note), '成功', f"故事：{summary}"
         importance, pinned = args.get('importance'), args.get('pinned')
         if importance is not None or pinned is not None:
             if target_id is not None:

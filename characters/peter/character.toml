@@ -96,6 +96,17 @@ daily_budget_cny = "1"      # Lan 2026-11-14: chat model, at most ¥1 a day
 recent_days = 3             # entries this new are placed before the chat history; 0 = only normal recall
 recent_chars = 1500
 
+[memory.events]
+# Ticket 421: one experience, one memory. Peter's own saves and the background tidy first look for the
+# experience a new part belongs to; a real development continues it, an unrelated thing starts a new one.
+# `enabled = false` restores the old one-memory-per-save path; the event ledger stays on disk.
+enabled = true
+# stage_chars = 0            # 0 keeps the whole stage; the model's real output budget is the limit
+# summary_chars = 400       # only the Ombre projection the search sees; the full story is in the local ledger
+# story_batch_chars = 12000 # long events are merged in batches, never by cutting the request JSON
+# timeline_page = 20
+# evidence_minutes = 30
+
 [tools]
 max_output_tokens = 4096
 persistent_append_file = "growth-journal.md"

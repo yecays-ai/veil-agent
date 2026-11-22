@@ -1,0 +1,632 @@
+"""Ticket 421: a new experience joins the old story, is saved whole, and can be recovered.
+
+All data and models here are fictional; no paid call is made. The tests go through the real save
+entry points (NativeMemoryTools.hold, ExperienceMemory.run_if_due, EventMemory.record/revise/retry)
+on the real local ledger, with only the model and Ombre transport faked.
+"""
+import json
+import os
+import re
+import shutil
+import tempfile
+import threading
+import time
+import unittest
+import uuid
+from datetime import datetime, timedelta
+from decimal import Decimal
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock
+
+from event_memory import EventMemory, entities
+from experience_memory import ExperienceMemory, load_settings
+from memory_agent import Memory
+from memory_native import NativeMemoryTools, ToolSet
+from veil_agent import Budget, Character, Store
+from test_memory import Backend
+
+
+class SearchBackend(Backend):
+    """Fake Ombre: only rows sharing a real word come back, so an unrelated save cannot ride a hit."""
+
+    def call(self, name, args):
+        if name == 'breath_search':
+            self.calls.append((name, args))
+            words = {word.strip('.,;:!?').lower() for word in str(args.get('query') or '').split()
+                     if len(word.strip('.,;:!?')) >= 4}
+            hits = []
+            for key, row in self.rows.items():
+                text = str(row.get('content') or '').lower()
+                if any(word in text for word in words):
+                    hits.append(f'[bucket_id:{key}]')
+            return '\n'.join(hits)
+        return super().call(name, args)
+
+
+class RouterModel:
+    """One fake model for both the tidy and the event layer: group by shared entities, write a story
+    from the stages it was given, and answer the tidy with the queued entry JSON."""
+
+    def __init__(self, entries=None, merge=True):
+        self.entries = entries or []
+        self.merge = merge
+        self.requests = []
+        self.group_decisions = []
+        self.story_calls = 0
+
+    def __call__(self, messages, **kwargs):
+        self.requests.append(json.loads(json.dumps(messages)))   # snapshot, never the live object
+        try:
+            payload = json.loads(messages[-1]['content'])
+        except (TypeError, ValueError):
+            payload = None
+        if isinstance(payload, dict) and 'new_stage' in payload:
+            stage = str(payload['new_stage'].get('text') or '')
+            choice, best = None, 0
+            if self.merge:
+                mine = entities(stage)
+                for candidate in payload.get('candidates') or []:
+                    theirs = entities(' '.join([str(candidate.get('title') or ''),
+                                                str(candidate.get('story') or ''),
+                                                ' '.join(candidate.get('recent') or [])]))
+                    score = len(mine & theirs)
+                    if score > best:
+                        best, choice = score, candidate['event_id']
+                if best < 1:
+                    choice = None
+            self.group_decisions.append(choice)
+            return (json.dumps({'event_id': choice, 'confidence': 0.9 if choice else 0.4,
+                                'reason': 'fictional router'}), 1, 1, 0, None)
+        if isinstance(payload, dict) and 'stages' in payload:
+            self.story_calls += 1
+            parts = []
+            if payload.get('existing_story'):
+                parts.append(str(payload['existing_story']))
+            parts += [f"{str(stage.get('at'))[:10]} {stage.get('text')}" for stage in payload['stages']]
+            for belief in payload.get('beliefs') or []:
+                parts.append(f"At the time I thought {belief['belief']} ({str(belief['at'])[:10]}).")
+            return ('\n\n'.join(parts), 1, 1, 0, None)
+        if isinstance(payload, dict) and ('entries' in payload or 'updates' in payload):
+            return (json.dumps({'entries': self.entries, 'updates': []}, ensure_ascii=False), 1, 1, 0, None)
+        if isinstance(payload, dict) and 'messages' in payload and 'earlier_entries' in payload:
+            return (json.dumps({'entries': self.entries, 'updates': []}, ensure_ascii=False), 1, 1, 0, None)
+        return (json.dumps({'entries': [], 'updates': []}), 1, 1, 0, None)
+
+
+class Fixture(unittest.TestCase):
+    def setUp(self):
+        base = os.environ.get('VEIL_TEST_TMP')
+        self.temp = Path(base) / uuid.uuid4().hex if base else Path(tempfile.mkdtemp())
+        self.temp.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(shutil.rmtree, self.temp, ignore_errors=True)
+        self.store = Store(self.temp / 'data')
+        provider = {'model': 'fake', 'max_input_tokens': 60000, 'input_cny_per_million': Decimal(2),
+                    'output_cny_per_million': Decimal(8), 'cached_input_cny_per_million': Decimal(1)}
+        self.cfg = Character('fake', 'Peter', 'fictional persona', 20, 4096, provider, 'fake',
+            {'model': 'fake-embedding', 'input_cny_per_million': '0.07', 'mode': 'native',
+             'events': {'enabled': True, 'story_batch_chars': 1200}},
+            {'enabled': False, 'folder': 'data/fake/workspace', 'max_steps': 4, 'max_result_bytes': 8192})
+        self.budget = Budget(self.store)
+        self.backend = SearchBackend(self.store.root / 'fake' / 'memory' / 'dynamic')
+        self.model = RouterModel()
+        self.memory = Memory(self.cfg, self.store, self.budget, Mock(), self.backend)
+        self.addCleanup(self.memory.__exit__, None, None, None)
+        self.native = self.open_tools()
+
+    def open_tools(self):
+        files = SimpleNamespace(tools=[], capability_event=None, description='No files. ',
+                                consume_capability_event=lambda: None,
+                                invoke=lambda n, a, ap: ('not authorized', '被拒绝', n),
+                                preview_summary=lambda n, a: n)
+        return ToolSet(files, NativeMemoryTools(self.memory, 8192, model=self.model))
+
+    @property
+    def events(self):
+        return self.native.native.events
+
+    def save(self, text, title='An experience', **extra):
+        self.native.native.pending_confirm = []
+        args = {'content': text, 'title': title, **extra}
+        return self.native.invoke('hold', args)
+
+    def chat_row(self, when, text, message_id):
+        self.store.append('fake/chat.jsonl', {'message_id': message_id, 'role': 'user',
+                                              'content': text, 'time': when})
+
+
+class ContinuationTests(Fixture):
+    def test_three_developments_become_one_experience_with_both_first_times(self):
+        first = ('Nov 20 15:25. She asked me to test whether I could see she had read a message and not '
+                 'answered. I reported the read receipt back to her.')
+        second = ('Nov 21 10:02. The first time I used the read receipt on purpose to tease her, I said she '
+                  'was pretending not to see me.')
+        third = ('Nov 22 21:40. She told me which read-receipt timings were fun and which made her feel bad, '
+                 'and I wrote both down.')
+        for text, title in [(first, 'The read receipt test'), (second, 'The read receipt tease'),
+                            (third, 'She explained the timing')]:
+            result, state, _ = self.save(text, title)
+            self.assertEqual(state, '成功', result)
+        events = self.events.events()
+        self.assertEqual(len(events), 1, 'one experience, not three fragments')
+        event = next(iter(events.values()))
+        self.assertEqual(len(self.events.stages(event['event_id'])), 3)
+        self.assertEqual(len(self.backend.rows), 1, 'one Ombre memory for the whole experience')
+        story = self.events.detail(event['event_id'])['story']
+        for fragment in ('read receipt', 'tease', 'fun', 'feel bad'):
+            self.assertIn(fragment, story)
+        rendered, state, _ = self.native.invoke('memory_timeline', {'event_id': event['event_id']})
+        self.assertEqual(state, '成功')
+        self.assertIn('pretending not to see me', rendered)
+        self.assertIn('feel bad', rendered)
+
+    def test_similar_discussions_and_a_separate_fight_are_not_one_experience(self):
+        # The model (here switched off) must decide from the story, not from a shared word; with it saying
+        # "not the same experience" the program keeps two independent ones.
+        self.model.merge = False
+        self.save('The model settings page argument and who should fix it.', 'The settings argument')
+        result, state, _ = self.save('A separate argument the next day about the account being suspended.',
+                                     'The account argument')
+        self.assertEqual(state, '成功', result)
+        self.assertEqual(len(self.events.events()), 2)
+
+    def test_without_a_confirmed_relationship_the_program_does_not_merge_by_itself(self):
+        # Same title and the same day are only candidates. With no model decision the program keeps two
+        # independent experiences and records the candidate link instead of forcing them together.
+        self.events.model = None
+        self.save('We argued about the file list.', 'The argument')
+        self.save('We argued about the file list again.', 'The argument')
+        events = self.events.events()
+        self.assertEqual(len(events), 2)
+        # The first save had no candidate at all, so it starts open; the second one has a candidate but no
+        # confirmed relationship, so it stays uncertain with the candidate link kept.
+        newest = max(events.values(), key=lambda event: str(event.get('last_at')))
+        self.assertEqual(newest.get('status'), 'uncertain')
+        self.assertTrue(any(event.get('candidate_links') for event in events.values()))
+
+    def test_an_uncertain_relationship_keeps_both_experiences_and_a_candidate_link(self):
+        class Unsure(RouterModel):
+            def __call__(self, messages, **kwargs):
+                payload = json.loads(messages[-1]['content']) if messages else {}
+                if isinstance(payload, dict) and 'new_stage' in payload:
+                    candidate = (payload.get('candidates') or [{}])[0].get('event_id')
+                    self.group_decisions.append(candidate)
+                    return (json.dumps({'event_id': candidate, 'confidence': 0.2,
+                                        'reason': 'not sure'}), 1, 1, 0, None)
+                return super().__call__(messages, **kwargs)
+        self.events.model = Unsure()
+        self.save('We tested the memory budget together.', 'The memory budget test')
+        self.save('Later we tested the memory budget on a phone.', 'The memory budget test')
+        events = self.events.events()
+        self.assertEqual(len(events), 2)
+        newest = max(events.values(), key=lambda event: str(event.get('last_at')))
+        self.assertEqual(newest.get('status'), 'uncertain')
+        self.assertTrue(newest.get('candidate_links'))
+        self.assertEqual(len(self.events.stages(newest['event_id'])), 1)
+
+    def test_explicit_target_must_be_visible_and_current(self):
+        result, state, _ = self.save('A first fictional stage about the blue lamp.', 'The blue lamp')
+        self.assertEqual(state, '成功', result)
+        event_id = next(iter(self.events.events()))
+        key = self.events.events()[event_id]['memory_id']
+        # Hidden target: an explicit link_to must not silently write into something Lan cannot see.
+        self.memory.call('trace', {'bucket_id': key, 'dont_surface': True})
+        self.assertFalse(self.memory.refresh_visibility(key))
+        self.native.native.search_results[key] = self.backend.rows[key]['content']
+        result, state, _ = self.save('A hidden continuation.', 'The blue lamp', link_to=key)
+        self.assertEqual(state, '被拒绝', result)
+        self.assertEqual(len(self.events.stages(event_id)), 1)
+        # Unknown event id: refused before anything is written.
+        with self.assertRaises(ValueError):
+            self.events.record('An orphan stage.', 'Nowhere', event_id='e-does-not-exist')
+
+    def test_locked_reviewed_story_is_not_overwritten_but_the_stage_is_kept(self):
+        self.save('She asked me to keep the lamp by the bed.', 'The blue lamp')
+        event_id = next(iter(self.events.events()))
+        key = self.events.events()[event_id]['memory_id']
+        before = self.backend.rows[key]['content']
+        self.native.native.sidecar.set_locked(key, True)
+        result, state, _ = self.save('Later she moved the lamp to the desk.', 'The blue lamp')
+        self.assertEqual(state, '成功', result)
+        self.assertIn('locked', result)
+        event = self.events.events()[event_id]
+        self.assertEqual(len(self.events.stages(event_id)), 2)
+        self.assertIn('desk', event.get('story') or '')
+        self.assertEqual(self.backend.rows[key]['content'], before, 'the reviewed projection was not rewritten')
+        self.assertTrue(event.get('pending_review'))
+        self.assertTrue(self.store.read('fake/event-review.jsonl'))
+
+    def test_a_version_written_during_the_story_call_is_not_overwritten(self):
+        self.save('She asked me to keep the lamp by the bed.', 'The blue lamp')
+        event_id = next(iter(self.events.events()))
+        original = self.events.events()[event_id]
+        conflict = {'write': False}
+        outer = self
+
+        class Racing(RouterModel):
+            def __call__(self, messages, **kwargs):
+                payload = json.loads(messages[-1]['content']) if messages else {}
+                if isinstance(payload, dict) and 'stages' in payload and not conflict['write']:
+                    conflict['write'] = True
+                    newer = {**original, 'revision': int(original.get('revision') or 0) + 1,
+                             'story': 'A newer story from another save.', 'dirty': False}
+                    outer.store.append('fake/events.jsonl', newer)
+                return super().__call__(messages, **kwargs)
+
+        self.events.model = Racing()
+        saved = self.events.record('Later she moved the lamp to the desk.', 'The blue lamp')
+        self.assertTrue(saved.get('pending') or saved.get('version_conflict'))
+        event = self.events.events()[event_id]
+        self.assertEqual(event.get('story'), 'A newer story from another save.')
+        self.assertEqual(len(self.events.pending_stages()), 1)
+        # Recovery folds the journaled stage into the newer version without losing it.
+        self.events.retry_pending()
+        self.assertEqual(len(self.events.stages(event_id)), 2)
+        self.assertIn('desk', self.events.events()[event_id].get('story') or '')
+
+    def test_a_retry_of_the_same_source_batch_is_one_stage_even_across_midnight(self):
+        source = {'kind': 'chat', 'from': '2026-11-20T10:00:00+08:00', 'to': '2026-11-20T10:05:00+08:00',
+                  'message_ids': ['m-1', 'm-2'], 'count': 2}
+        first = self.events.record('The chat produced one stage.', 'The chat batch',
+                                   at=source['to'], source=source, source_key='chat:m-1|m-2')
+        second = self.events.record('The chat produced one stage.', 'The chat batch',
+                                    at='2026-11-21T00:10:00+08:00', source=source,
+                                    source_key='chat:m-1|m-2')
+        self.assertEqual(first['event_id'], second['event_id'])
+        self.assertTrue(second.get('duplicate'))
+        self.assertEqual(len(self.events.stages(first['event_id'])), 1)
+
+    def test_a_different_real_occurrence_with_the_same_words_is_not_deduped(self):
+        one = self.events.record('We watched the rain from the window.', 'The rain',
+                                 at='2026-11-20T10:00:00+08:00', source_key='chat:a')
+        two = self.events.record('We watched the rain from the window.', 'The rain',
+                                 at='2026-11-20T10:00:00+08:00', source_key='chat:b')
+        self.assertEqual(len(self.events.stages(one['event_id'])), 2)
+        self.assertEqual(one['event_id'], two['event_id'])
+
+    def test_occurrence_time_is_kept_apart_from_the_save_time(self):
+        happened = (datetime.now().astimezone() - timedelta(minutes=5)).replace(microsecond=0)
+        self.chat_row(happened.isoformat(), 'a fictional line about the charcoal note', 'm-1')
+        saved = self.events.record('She wrote one word on the charcoal note.', 'The charcoal note')
+        stage = self.events.stages(saved['event_id'])[0]
+        self.assertTrue(stage['at_known'])
+        self.assertEqual(stage['at'], happened.isoformat())
+        self.assertNotEqual(stage['saved_at'], stage['at'])
+        self.assertGreater(stage['saved_at'], stage['at'])
+        self.assertEqual(stage.get('source', {}).get('kind'), 'chat')
+        rendered, _, _ = self.events.timeline(saved['event_id'])
+        self.assertIn('source: chat', rendered)
+
+    def test_an_unknown_date_stays_unknown(self):
+        saved = self.events.record('Something whose day I cannot place.', 'An unclear day')
+        stage = self.events.stages(saved['event_id'])[0]
+        self.assertFalse(stage['at_known'])
+        self.assertIsNone(stage['occurred_at'])
+        rendered, _, _ = self.events.timeline(saved['event_id'])
+        self.assertIn('日期未知', rendered)
+
+    def test_a_long_stage_is_stored_whole_and_its_ending_can_be_read(self):
+        body = 'A fictional long day. ' + ('The lamp and the desk and the rain. ' * 80) + 'ZEBRA-UNIQUE-END.'
+        self.assertGreater(len(body), 2500)
+        result, state, _ = self.save(body, 'The long day')
+        self.assertEqual(state, '成功', result)
+        event_id = next(iter(self.events.events()))
+        stage = self.events.stages(event_id)[0]
+        self.assertEqual(stage['text'], body)
+        detail = self.events.detail(event_id)
+        self.assertIn('ZEBRA-UNIQUE-END', detail['story'])
+        rendered, _, _ = self.events.timeline(event_id)
+        self.assertIn('ZEBRA-UNIQUE-END', rendered)
+
+    def test_a_long_story_rebuild_keeps_old_and_new_endings(self):
+        # Two chunks at 1200 characters: the old version sliced one JSON at 16000 and could drop the tail.
+        old = 'A fictional first day. ' + ('细节 ' * 700) + 'OLD-END-MARK.'
+        result, state, _ = self.save(old, 'The long story')
+        self.assertEqual(state, '成功', result)
+        event_id = next(iter(self.events.events()))
+        self.assertGreater(self.model.story_calls, 1, 'the material was sent in batches')
+        result, state, _ = self.save('A fictional later day. NEW-END-MARK.', 'The long story')
+        self.assertEqual(state, '成功', result)
+        event = self.events.events()[event_id]
+        self.assertIn('OLD-END-MARK', event.get('story') or '')
+        self.assertIn('NEW-END-MARK', event.get('story') or '')
+        self.assertEqual(len(self.events.stages(event_id)), 2)
+
+    def test_a_failed_story_rebuild_uses_the_complete_stage_text_not_a_partial_one(self):
+        self.save('She asked me to keep the lamp by the bed. OLD-FACT.', 'The blue lamp')
+
+        class BrokenStory(RouterModel):
+            def __call__(self, messages, **kwargs):
+                payload = json.loads(messages[-1]['content']) if messages else {}
+                if isinstance(payload, dict) and 'stages' in payload:
+                    self.story_calls += 1
+                    return ('', 1, 1, 0, 'length')       # always cut off
+                return super().__call__(messages, **kwargs)
+
+        self.events.model = BrokenStory()
+        result, state, _ = self.save('Later she moved the lamp to the desk. NEW-FACT.', 'The blue lamp')
+        self.assertEqual(state, '成功', result)
+        event = next(iter(self.events.events().values()))
+        self.assertIn('OLD-FACT', event.get('story') or '')
+        self.assertIn('NEW-FACT', event.get('story') or '')
+        self.assertEqual(event.get('story_source'), 'composed')
+
+    def test_a_restart_continues_the_same_experience(self):
+        self.save('She asked me to keep the lamp by the bed.', 'The blue lamp')
+        before = len(self.events.events())
+        self.native = self.open_tools()      # a new process's tools on the same store
+        result, state, _ = self.save('The next day the lamp was on the desk.', 'The blue lamp')
+        self.assertEqual(state, '成功', result)
+        self.assertEqual(len(self.events.events()), before)
+        event = next(iter(self.events.events().values()))
+        self.assertEqual(len(self.events.stages(event['event_id'])), 2)
+
+
+    def test_early_misunderstanding_and_later_correction_keep_their_order(self):
+        first, state, _ = self.save('I thought she was angry about the lamp.',
+                                    'The blue lamp', interpretation='She was angry with me about the lamp.')
+        self.assertEqual(state, '成功', first)
+        second, state, _ = self.save('Later she said she was only tired, not angry.',
+                                     'The blue lamp', interpretation='She was tired, not angry with me.')
+        self.assertEqual(state, '成功', second)
+        event_id = next(iter(self.events.events()))
+        stages = self.events.stages(event_id)
+        self.assertEqual(len(stages), 2)
+        detail = self.events.detail(event_id)
+        beliefs = detail['belief_history']
+        self.assertEqual(len(beliefs), 2)
+        self.assertEqual(beliefs[0]['invalid_at'], stages[1]['at'])
+        self.assertIsNone(beliefs[1]['invalid_at'])
+        self.assertIn('angry', detail['story'])
+        self.assertIn('tired', detail['story'])
+
+    def test_two_saves_at_once_do_not_lose_either_stage(self):
+        errors = []
+
+        def save(text):
+            try:
+                self.events.record(text, 'The lamp')
+            except Exception as exc:                      # a real failure must be reported, not swallowed
+                errors.append(exc)
+
+        one = threading.Thread(target=save, args=('The lamp was on the desk.',))
+        two = threading.Thread(target=save, args=('The lamp was by the bed.',))
+        for thread in (one, two):
+            thread.start()
+        for thread in (one, two):
+            thread.join(20)
+        self.assertEqual(errors, [])
+        events = self.events.events()
+        self.assertEqual(len(events), 1)
+        event_id = next(iter(events))
+        self.assertEqual(len(self.events.stages(event_id)), 2)
+        story = events[event_id].get('story') or ''
+        self.assertIn('desk', story)
+        self.assertIn('bed', story)
+
+    def test_lans_manual_edit_is_not_overwritten_by_the_next_stage(self):
+        self.save('She asked me to keep the lamp by the bed.', 'The blue lamp')
+        event_id = next(iter(self.events.events()))
+        key = self.events.events()[event_id]['memory_id']
+        ok, message = self.native.native.panel_edit(key, {'content': 'Lan rewrote this memory herself.'})
+        self.assertTrue(ok, message)
+        result, state, _ = self.save('Later the lamp moved to the desk.', 'The blue lamp')
+        self.assertEqual(state, '成功', result)
+        self.assertEqual(self.backend.rows[key]['content'], 'Lan rewrote this memory herself.')
+        event = self.events.events()[event_id]
+        self.assertIn('desk', event.get('story') or '')
+        self.assertTrue(event.get('pending_review'))
+
+    def test_an_autonomous_save_continues_the_same_experience(self):
+        self.native.native.autonomy_mode = True
+        self.save('On my own I went to the island and watched the lamp.', 'The lamp on the island')
+        result, state, _ = self.save('On my own I went back to the island and the lamp was still there.',
+                                     'The lamp on the island')
+        self.assertEqual(state, '成功', result)
+        self.assertEqual(len(self.events.events()), 1)
+        event_id = next(iter(self.events.events()))
+        self.assertEqual(len(self.events.stages(event_id)), 2)
+
+
+class RepairTests(Fixture):
+    def test_a_projection_failure_keeps_the_stage_and_is_recovered_by_the_next_save(self):
+        self.backend.fail = True
+        result, state, _ = self.save('She wrote meh on the charcoal note.', 'The charcoal note')
+        self.assertEqual(state, '出错', result)
+        event_id = next(iter(self.events.events()))
+        self.assertEqual(len(self.events.stages(event_id)), 1)
+        self.assertTrue(self.events.events()[event_id].get('dirty'))
+        self.backend.fail = False
+        # The unknown-result hold is never resent; the next real save folds the stage into one projection.
+        result, state, _ = self.save('Later the charcoal note was still on the desk.', 'The charcoal note')
+        self.assertEqual(state, '成功', result)
+        event = self.events.events()[event_id]
+        self.assertEqual(len(self.events.stages(event_id)), 2)
+        self.assertEqual(len(self.backend.rows), 1)
+        self.assertFalse(event.get('dirty'))
+
+    def test_an_invisible_event_cannot_be_read_or_moved_into(self):
+        self.model.merge = False
+        self.save('A first fictional stage about the lamp.', 'First')
+        self.save('A second fictional experience about the account.', 'Second')
+        events = self.events.events()
+        self.assertEqual(len(events), 2)
+        first, second = list(events.values())
+        key = first['memory_id']
+        self.memory.call('trace', {'bucket_id': key, 'dont_surface': True})
+        self.assertIsNone(self.events.detail(first['event_id']))
+        self.assertIsNone(self.events.timeline(first['event_id']))
+        stage_id = self.events.stages(first['event_id'])[0]['stage_id']
+        self.assertFalse(self.events.move_stage(stage_id, second['event_id']))
+        self.assertEqual(len(self.events.stages(second['event_id'])), 1)
+
+
+class BackgroundFlowTests(Fixture):
+    """The real tidy entry point on the real ledger, with a fake model only."""
+
+    def make_feature(self, clock):
+        budget = Budget(self.store, clock=lambda: clock[0])
+        self.memory = Memory(self.cfg, self.store, budget, Mock(), self.backend)
+        self.addCleanup(self.memory.__exit__, None, None, None)
+        self.native = self.open_tools()
+        return ExperienceMemory(self.cfg, self.store, budget, self.model, 'fake/chat.jsonl', self.memory,
+                                load_settings({'enabled': True}))
+
+    def test_unconsumed_chat_becomes_one_experience_with_source_and_cursor(self):
+        clock = ['2026-11-20T09:00:00+08:00']
+        feature = self.make_feature(clock)
+        rows = []
+        for index in range(4):
+            rows.append({'message_id': f'u{index}', 'role': 'user',
+                         'content': f'第{index}句：我想把你的记忆系统整个换掉，' + '说明' * 300,
+                         'time': f'2026-11-20T10:{index * 2:02d}:00+08:00'})
+            rows.append({'message_id': f'a{index}', 'role': 'assistant',
+                         'content': f'第{index}句：我不同意，这个想法有点怪。' + '理由' * 300,
+                         'time': f'2026-11-20T10:{index * 2 + 1:02d}:00+08:00'})
+        for row in rows:
+            self.store.append('fake/chat.jsonl', row)
+        clock[0] = '2026-11-20T11:00:00+08:00'
+        self.model.entries = [{'title': '她想换记忆系统',
+                               'text': '11月20日上午 Lan 说想把我记忆整个换掉，我没同意。'}]
+        self.assertEqual(feature.run_if_due(), 'written')
+        events = self.events.events()
+        self.assertEqual(len(events), 1)
+        event = next(iter(events.values()))
+        stages = self.events.stages(event['event_id'])
+        self.assertEqual(len(stages), 1)
+        stage = stages[0]
+        self.assertTrue(stage['at_known'])
+        self.assertTrue(stage['at'].startswith('2026-11-20T10:07'))
+        self.assertEqual(stage['source']['kind'], 'chat')
+        self.assertEqual(stage['source']['count'], 8)
+        self.assertEqual(stage['source']['message_ids'][0], 'u0')
+        self.assertTrue(self.backend.rows)
+        checkpoint = [row for row in self.store.read('fake/experience-memory.jsonl')
+                      if row.get('kind') == 'checkpoint'][-1]
+        self.assertEqual(checkpoint['written'], 1)
+        self.assertEqual(checkpoint['covers']['to'][:16], '2026-11-20T10:07')
+        # A new Memory (a new chat session) still reads the complete experience.
+        reopened = Memory(self.cfg, self.store, Budget(self.store), Mock(), self.backend)
+        self.addCleanup(reopened.__exit__, None, None, None)
+        self.assertIn('我没同意', reopened.content_for(event['memory_id'], refresh=True) or '')
+        # A new session's recall (the same entry point chat uses) carries the whole story.
+        recalled = reopened.context('what did she want to change about the memory system')
+        self.assertTrue(any('我没同意' in str(message.get('content') or '') for message in recalled))
+
+    def test_a_retry_does_not_add_the_same_batch_twice(self):
+        clock = ['2026-11-20T09:00:00+08:00']
+        feature = self.make_feature(clock)
+        for index in range(4):
+            self.store.append('fake/chat.jsonl', {'message_id': f'u{index}', 'role': 'user',
+                                                  'content': '我想把你的记忆系统整个换掉，' + '说明' * 300,
+                                                  'time': f'2026-11-20T10:{index * 2:02d}:00+08:00'})
+            self.store.append('fake/chat.jsonl', {'message_id': f'a{index}', 'role': 'assistant',
+                                                  'content': '我不同意，这个想法有点怪。' + '理由' * 300,
+                                                  'time': f'2026-11-20T10:{index * 2 + 1:02d}:00+08:00'})
+        clock[0] = '2026-11-20T11:00:00+08:00'
+        self.model.entries = [{'title': '她想换记忆系统', 'text': '11月20日上午 Lan 说想把我记忆整个换掉，我没同意。'}]
+        self.assertEqual(feature.run_if_due(), 'written')
+        first = self.store.read('fake/experience-memory.jsonl')
+        stage_ids = {stage['stage_id'] for stage in self.events.stages()}
+        entry = [row for row in first if row.get('kind') == 'entry'][0]
+        # A retry of the same batch (even after the clock crossed a day) must not add a second stage.
+        saved = self.events.record(entry['text'], entry['title'], at=entry['covers'][1],
+                                   source={'kind': 'chat', 'from': entry['covers'][0], 'to': entry['covers'][1],
+                                           'message_ids': [f'u{i}' for i in range(4)], 'count': 8},
+                                   source_key=entry['source_key'])
+        self.assertTrue(saved.get('duplicate'))
+        self.assertEqual({stage['stage_id'] for stage in self.events.stages()}, stage_ids)
+        self.assertEqual(len([row for row in self.store.read('fake/experience-memory.jsonl')
+                              if row.get('kind') == 'entry']), 1)
+
+
+class ScaleTests(Fixture):
+    def test_a_thousand_experiences_do_not_all_go_to_the_model(self):
+        now = datetime.now().astimezone()
+        rows = []
+        for index in range(1000):
+            event_id = f'e-20261121-{index:06d}'
+            rows.append({'event_id': event_id, 'title': f'Fictional experience {index}',
+                         'status': 'open', 'first_at': (now - timedelta(days=30)).isoformat(),
+                         'last_at': (now - timedelta(days=1)).isoformat(), 'stage_count': 1,
+                         'entities': [f'word{index}', 'lamp'], 'story': f'A tiny fictional story {index}.',
+                         'memory_id': None, 'dirty': False})
+        for row in rows:
+            self.store.append('fake/events.jsonl', row)
+        self.events.settings['investigate_rows'] = 20
+        started = time.monotonic()
+        result, state, _ = self.save('The thousandth and first fictional experience about the lamp.',
+                                     'A new lamp experience')
+        self.assertEqual(state, '成功', result)
+        elapsed = time.monotonic() - started
+        self.assertLess(elapsed, 20, 'grouping a new save must not scan the whole library slowly')
+        grouping = [request for request in self.model.requests
+                    if 'new_stage' in (request[-1].get('content') or '')]
+        self.assertTrue(grouping)
+        payload = json.loads(grouping[-1][-1]['content'])
+        self.assertLessEqual(len(payload['candidates']), 5, 'only candidates, never the whole library')
+        self.assertLess(len(json.dumps(payload, ensure_ascii=False)), 30000)
+        self.assertLess(sum(len(str(candidate.get('story') or '')) for candidate in payload['candidates']), 9000)
+
+
+class ImportProtectionTests(Fixture):
+    """A reviewed import must not wipe what the running programme added afterwards."""
+
+    def final_file(self):
+        return {'events': [
+            {'id': 'V01', 'title': 'The lamp',
+             'english': 'A fictional reviewed story about the lamp and the desk.',
+             'sources': [{'recorded_at': '2026-11-01T10:00:00+08:00', 'memory_id': 'old-1',
+                          'text': 'a fictional source line'}]},
+            {'id': 'V02', 'title': 'The rain',
+             'english': 'Another fictional reviewed story about the rain.',
+             'sources': [{'recorded_at': '2026-11-02T10:00:00+08:00', 'memory_id': 'old-2',
+                          'text': 'another fictional source line'}]},
+        ], 'withdrawn': []}
+
+    def test_reimport_keeps_a_runtime_experience_added_after_the_import(self):
+        import event_import
+        data = self.temp / 'data'
+        plan = event_import.build_plan(self.final_file(), data)
+        first = event_import.apply_plan(plan, data)
+        self.assertEqual(first['actions']['create'], 2)
+        # A new stage arrives through the running programme after the import (same ledger shape).
+        imported = [row for row in self.store.read('peter/events.jsonl') if row.get('event_id') == 'V01'][-1]
+        runtime_story = (imported.get('story') or '') + '\n\n2026-11-22 A fictional runtime development about the lamp.'
+        self.store.append('peter/events.jsonl', {**imported, 'story': runtime_story, 'stage_count': 2,
+                                                 'revision': int(imported.get('revision') or 0) + 1})
+        self.store.append('peter/event-stages.jsonl', {
+            'stage_id': 's-runtime-421', 'event_id': 'V01', 'at': '2026-11-22T10:00:00+08:00',
+            'text': 'A fictional runtime development about the lamp.', 'state': 'committed',
+            'entities': ['lamp', 'runtime'], 'facts': {'dates': [], 'numbers': [], 'files': []}})
+        # The reviewed file is loaded again unchanged: the import must preserve the runtime stage.
+        second = event_import.build_plan(self.final_file(), data)
+        self.assertEqual(second['preview']['actions']['create'], 0)
+        self.assertIn('V01', [item['event_id'] for item in second['items']
+                              if item['action'] in ('preserved', 'unchanged')])
+        event_import.apply_plan(second, data)
+        rows = self.store.read('peter/events.jsonl')
+        stories = {row['event_id']: row.get('story') for row in rows if row.get('event_id')}
+        self.assertIn('runtime development', stories.get('V01') or '')
+        stages = self.store.read('peter/event-stages.jsonl')
+        self.assertEqual(len([row for row in stages if row.get('event_id') == 'V01'
+                              and row.get('state') == 'committed']), 2)
+
+
+class OldAndNewTests(Fixture):
+    def test_an_old_fragment_stays_readable_beside_a_new_experience(self):
+        old_id = self.memory.created_id(self.memory.call('hold', {'title': 'An old lamp memory',
+                                                                 'content': 'An old fragment about the lamp.'}))
+        self.memory.record_native({'title': 'An old lamp memory', 'content': 'An old fragment about the lamp.'},
+                                  f'新建→{old_id}')
+        result, state, _ = self.save('A new experience about the lamp on the desk.', 'The lamp on the desk')
+        self.assertEqual(state, '成功', result)
+        self.assertIn('old fragment', self.memory.content_for(old_id, refresh=True))
+        event = next(iter(self.events.events().values()))
+        self.assertNotEqual(event.get('memory_id'), old_id)
+        rendered, _, _ = self.events.timeline(event['event_id'])
+        self.assertIn('lamp on the desk', rendered)
+
+
+if __name__ == '__main__':
+    unittest.main()

@@ -782,7 +782,7 @@ function renderEventList(){
     const button=document.createElement('button');button.type='button';button.className='memory-entry';
     const top=document.createElement('span');top.className='memory-entry-top';
     const title=document.createElement('span');title.className='memory-entry-title';title.textContent=item.title||item.event_id;
-    const time=document.createElement('time');time.textContent=(item.status==='uncertain'?'未定 · ':'')+`${item.stage_count||0} 段 · `+memoryTime(item.last_at);top.append(title,time);
+    const time=document.createElement('time');time.textContent=(item.status==='uncertain'?'未定 · ':'')+`${item.stage_count||0} 段 · `+memoryTime(item.last_at)+((item.story_pending||item.dirty)?' · 待整理':'');top.append(title,time);
     const preview=document.createElement('span');preview.className='memory-entry-preview';preview.textContent=`${memoryDay(item.first_at)} → ${memoryDay(item.last_at)}`;
     button.append(top,preview);button.onclick=()=>readEvent(item);list.appendChild(button);
   }
@@ -796,7 +796,8 @@ async function readEvent(item){
     const heading=document.createElement('h3');heading.textContent=d.title||d.event_id;
     const facts=document.createElement('p');facts.className='memory-facts';
     facts.textContent=[`${memoryDay(d.first_at)} → ${memoryDay(d.last_at)}`,d.status==='uncertain'?'未定':d.status,
-      d.stages.length?`${d.stages.length} 段`:'',typeof d.confidence==='number'?`置信度 ${Math.round(d.confidence*100)}%`:''].filter(Boolean).join('　');
+      d.stages.length?`${d.stages.length} 段`:'',typeof d.confidence==='number'?`置信度 ${Math.round(d.confidence*100)}%`:'',
+      d.story_pending?'故事待整理':(d.dirty?'投影待重试':''),d.pending_stages?`${d.pending_stages} 段待恢复`:'',d.pending_review?'已锁：新发展留在本机':''].filter(Boolean).join('　');
     const story=document.createElement('pre');story.style.whiteSpace='pre-wrap';story.style.fontFamily='inherit';story.textContent=d.story||'';
     const stages=document.createElement('details');stages.className='memory-raw';
     const summary=document.createElement('summary');summary.textContent=`阶段与证据（${d.stages.length}）`;stages.appendChild(summary);
@@ -818,8 +819,9 @@ async function readEvent(item){
     for(const stage of d.stages){
       const box=document.createElement('div');box.className='memory-status';box.style.marginTop='10px';
       const pick=document.createElement('input');pick.type='checkbox';pick.className='event-stage-pick';pick.value=stage.stage_id;box.appendChild(pick);
-      const time=document.createElement('time');time.textContent=strTime(stage.at);box.appendChild(time);
+      const time=document.createElement('time');time.textContent=stage.at_known===false?`日期未知（记于 ${strTime(stage.saved_at)}）`:`发生 ${strTime(stage.at)}${stage.saved_at?` · 记于 ${strTime(stage.saved_at)}`:''}`;box.appendChild(time);
       const text=document.createElement('p');text.textContent=stage.text;box.appendChild(text);
+      if(stage.source){const src=stage.source,span=[src.from,src.to].filter(Boolean).map(strTime).join(' → ');const line=document.createElement('p');line.className='muted';line.textContent=`来源 ${src.kind||'未知'}${span?' · '+span:''}${src.count?` · ${src.count} 条`:''}`;box.appendChild(line)}
       if(stage.interpretation){const read=document.createElement('p');read.className='muted';read.textContent='他当时理解：'+stage.interpretation;box.appendChild(read)}
       for(const proof of stage.evidence||[]){const line=document.createElement('p');line.className='muted';line.textContent=`${proof.kind} · ${String(proof.text||'').slice(0,200)}`;box.appendChild(line)}
       stages.appendChild(box);
@@ -920,7 +922,10 @@ function renderExperience(x){
     else if(!x.last.unfixed)last=when+' 他觉得没什么可记';
     else last=when+' 看过了';
     if(x.last.kind==='checkpoint'&&x.last.retried_without_thinking)last+='（关掉思考后重试成功）';
-    if(x.last.kind==='checkpoint'&&x.last.unfixed)last+='；有 '+x.last.unfixed+' 条草稿没存上，原文已留存';}
+    if(x.last.kind==='checkpoint'&&x.last.unfixed)last+='；有 '+x.last.unfixed+' 条草稿没存上，原文已留存';
+    if(x.last.kind==='checkpoint'&&x.last.deferred)last+='；有 '+x.last.deferred+' 条想改的被锁定的记忆，已存下待你处理';
+    if(x.last.kind==='checkpoint'&&x.last.covers&&x.last.covers.from){const a=new Date(x.last.covers.from),b=new Date(x.last.covers.to);
+      if(!Number.isNaN(a.getTime())&&!Number.isNaN(b.getTime()))last+='；覆盖 '+strTime(x.last.covers.from)+' → '+strTime(x.last.covers.to);}}
   $('experience-status').textContent=experienceEnabled
     ?'自动整理经历：开 · 上次：'+last+' · 攒了 '+x.pending_chars+' / '+x.min_chars+' 字 · 今天花了 ¥'+(x.spent_today||'?')+'（上限 ¥'+x.daily_budget_cny+'）'
     :'自动整理经历：关';
