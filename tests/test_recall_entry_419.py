@@ -48,7 +48,12 @@ class ToolFollowUpTests(ChatAssemblyBudgetTests):
                            for message in second)
         self.assertIn('[bucket_id:', joined)                 # memory still in the follow-up request
         self.assertIn('是灯的事情让你累了', joined)            # recent exchange still present
-        self.assertLess(joined.count('Z'), 30000)             # the huge tool result was trimmed
+        tool_results = [message.get('content') or '' for message in second
+                        if message['role'] == 'tool']
+        self.assertEqual(1, len(tool_results))
+        self.assertIn('BIG-RESULT', tool_results[0])
+        self.assertGreater(tool_results[0].count('Z'), 0)
+        self.assertLess(tool_results[0].count('Z'), 30000)     # real result survived, trimmed
         self.assertTrue(memory.last_memory_budget)
 
 
