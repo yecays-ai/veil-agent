@@ -420,6 +420,22 @@ class ShadowSyncTests(unittest.TestCase):
             connection.close()
         self.assertEqual(count, 0)
 
+    def test_compare_detects_shadow_vector_missing_from_source(self):
+        sync = self.shadow()
+        sync.reconcile()
+        connection = sqlite3.connect(str(self.role / 'memory' / 'embeddings.db'))
+        try:
+            connection.execute("DELETE FROM embeddings WHERE bucket_id='m1'")
+            connection.commit()
+        finally:
+            connection.close()
+        connection = sqlite3.connect(str(self.role / 'brain.db'))
+        try:
+            comparison = sync.compare(connection, sync._scan_source())
+        finally:
+            connection.close()
+        self.assertIn('m1', comparison['vector_mismatches'])
+
     def test_missing_bucket_is_not_a_deletion(self):
         sync = self.shadow()
         sync.reconcile()

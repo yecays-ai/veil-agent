@@ -894,11 +894,17 @@ class ShadowSync:
                 state_mismatch.append(memory_id)
         vector_expected = self._source_vectors()
         vector_mismatch = []
-        for memory_id, expected in vector_expected.items():
-            row = connection.execute(
-                'SELECT dim, vector_sha256, meaning_dim, meaning_sha256 FROM vectors '
-                'WHERE memory_id=?', (memory_id,)).fetchone()
-            if row is None or tuple(row) != expected:
+        if vector_expected is not None:
+            for memory_id, expected in vector_expected.items():
+                row = connection.execute(
+                    'SELECT dim, vector_sha256, meaning_dim, meaning_sha256 FROM vectors '
+                    'WHERE memory_id=?', (memory_id,)).fetchone()
+                if row is None or tuple(row) != expected:
+                    vector_mismatch.append(memory_id)
+            # The reverse direction matters too: a shadow vector the source no longer has is
+            # drift (and, after an erase, a privacy leak) even before the delete pass runs.
+            shadow_ids = {row[0] for row in connection.execute('SELECT memory_id FROM vectors')}
+            for memory_id in sorted(shadow_ids - set(vector_expected)):
                 vector_mismatch.append(memory_id)
         expected_events = {}
         for line in self._jsonlines(self.paths['events']):
@@ -931,7 +937,8 @@ class ShadowSync:
             'memories': len(found), 'memory_mismatches': memory_mismatch,
             'versions': len(version_expected), 'version_mismatches': version_mismatch,
             'states': len(state), 'state_mismatches': state_mismatch,
-            'vectors': len(vector_expected), 'vector_mismatches': vector_mismatch,
+            'vectors': 0 if vector_expected is None else len(vector_expected),
+            'vector_mismatches': vector_mismatch,
             'events': {'expected': len(expected_events), 'actual': actual_events,
                        'expected_sources': sum(len(item[1]) for item in expected_events.values()),
                        'actual_sources': actual_sources,
@@ -941,7 +948,8 @@ class ShadowSync:
         db = self.paths['memory'] / 'embeddings.db'
         expected = {}
         if not db.is_file():
-            return expected
+            # No source vectors to compare against; callers must not read this as "all deleted".
+            return None
         try:
             connection = sqlite3.connect('file:%s?mode=ro' % db, uri=True)
             try:
