@@ -173,13 +173,19 @@ function memoriesTab() {
         this.nextCursor = data.next_cursor || null;
         this.hasMoreOnServer = !!data.has_more;
         const deepLink = new URLSearchParams(window.location.search).get('memory');
-        if (!append && deepLink) {
+        if (!append && deepLink && !this.deepLinkHandled) {
+          this.deepLinkHandled = true;
           const target = this.memories.find((item) => item.id === deepLink);
           if (target) {
             this.openDetail(target).then(() => {
               const requested = new URLSearchParams(window.location.search).get('detail');
               if (['history', 'links'].includes(requested)) this.selectDetailTab(requested);
             });
+          } else {
+            MnemoryAPI.getMemoriesByIds([deepLink]).then((data) => {
+              const item = (data.results || [])[0];
+              if (item) this.openDetail(item);
+            }).catch(() => {});
           }
         }
       } catch (err) {

@@ -43,7 +43,7 @@ app.whenReady().then(async () => {
   if (denied) { console.error('server rejected the token or host'); app.exit(3); return; }
   if (evaluate) {
     const result = await win.webContents.executeJavaScript(evaluate, true);
-    if (result !== undefined) console.log('eval:', JSON.stringify(result).slice(0, 500));
+    console.log('eval completed:', result === undefined ? 'no value' : typeof result);
     await sleep(1200);
   }
   const image = await win.webContents.capturePage();

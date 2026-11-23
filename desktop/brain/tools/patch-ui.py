@@ -17,6 +17,7 @@ INDEX = ROOT / 'ui' / 'index.html'
 APP_JS = ROOT / 'ui' / 'js' / 'app.js'
 MEMORIES_JS = ROOT / 'ui' / 'js' / 'memories.js'
 FSCK_JS = ROOT / 'ui' / 'js' / 'fsck.js'
+GRAPH_JS = ROOT / 'ui' / 'js' / 'graph.js'
 
 
 def replace_once(text: str, old: str, new: str) -> str:
@@ -292,17 +293,41 @@ def patch_memories_js() -> None:
         """        this.nextCursor = data.next_cursor || null;
         this.hasMoreOnServer = !!data.has_more;
         const deepLink = new URLSearchParams(window.location.search).get('memory');
-        if (!append && deepLink) {
+        if (!append && deepLink && !this.deepLinkHandled) {
+          this.deepLinkHandled = true;
           const target = this.memories.find((item) => item.id === deepLink);
           if (target) {
             this.openDetail(target).then(() => {
               const requested = new URLSearchParams(window.location.search).get('detail');
               if (['history', 'links'].includes(requested)) this.selectDetailTab(requested);
             });
+          } else {
+            MnemoryAPI.getMemoriesByIds([deepLink]).then((data) => {
+              const item = (data.results || [])[0];
+              if (item) this.openDetail(item);
+            }).catch(() => {});
           }
         }""",
     )
     MEMORIES_JS.write_text(script, encoding='utf-8')
+
+
+def patch_graph_js() -> None:
+    """brain.db importance is numeric and categories are user text."""
+    script = GRAPH_JS.read_text(encoding='utf-8')
+    script = replace_once(
+        script,
+        "      const typeLabel = d.type.charAt(0).toUpperCase() + d.type.slice(1);\n"
+        "      const importanceLabel = d.importance.charAt(0).toUpperCase() + d.importance.slice(1);",
+        "      const typeLabel = this._escapeHtml(String(d.type || ''));\n"
+        "      const importanceLabel = this._escapeHtml(String(d.importance ?? ''));",
+    )
+    script = replace_once(
+        script,
+        "        ? `<div style=\"color:#94A3B8;margin-top:4px\">${d.categories.join(', ')}</div>`",
+        "        ? `<div style=\"color:#94A3B8;margin-top:4px\">${d.categories.map((c) => this._escapeHtml(String(c))).join(', ')}</div>`",
+    )
+    GRAPH_JS.write_text(script, encoding='utf-8')
 
 
 def main() -> None:
@@ -310,6 +335,7 @@ def main() -> None:
     patch_app_js()
     patch_memories_js()
     patch_fsck_js()
+    patch_graph_js()
     print('patched all vendored UI files')
 
 

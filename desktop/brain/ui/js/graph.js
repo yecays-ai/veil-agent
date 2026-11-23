@@ -395,11 +395,11 @@ function graphTab() {
     _showTooltip(event, d) {
       if (!this._tooltip) return;
 
-      const typeLabel = d.type.charAt(0).toUpperCase() + d.type.slice(1);
-      const importanceLabel = d.importance.charAt(0).toUpperCase() + d.importance.slice(1);
+      const typeLabel = this._escapeHtml(String(d.type || ''));
+      const importanceLabel = this._escapeHtml(String(d.importance ?? ''));
       const pinnedBadge = d.pinned ? ' &middot; <span style="color:#22D3EE">Pinned</span>' : '';
       const cats = d.categories.length > 0
-        ? `<div style="color:#94A3B8;margin-top:4px">${d.categories.join(', ')}</div>`
+        ? `<div style="color:#94A3B8;margin-top:4px">${d.categories.map((c) => this._escapeHtml(String(c))).join(', ')}</div>`
         : '';
 
       this._tooltip.innerHTML = `

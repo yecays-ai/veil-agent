@@ -242,13 +242,13 @@ function brainDbFile() {
  * the live agent's memory API, so Peter's chat and saves keep running.
  */
 async function openBrainWindow() {
-  if (brainWindow && !brainWindow.isDestroyed()) { brainWindow.show(); brainWindow.focus(); return; }
+  if (brainWindow && !brainWindow.isDestroyed()) { brainWindow.show(); brainWindow.focus(); return true; }
   if (!brainRuntime) {
     const dbPath = brainDbFile();
     try { await fs.access(dbPath); }
     catch {
       dialog.showErrorBox('VEIL Brain 还没有数据', `没有找到 brain.db：\n${dbPath}\n\n先按工单 428 导入隔离副本，再打开记忆中心。`);
-      return;
+      return false;
     }
     const token = randomUUID().replace(/-/g, '');
     try {
@@ -259,7 +259,7 @@ async function openBrainWindow() {
       brainRuntime = { ...runtime, token };
     } catch (error) {
       dialog.showErrorBox('记忆中心启动失败', error.message || '未知错误');
-      return;
+      return false;
     }
   }
   const { url, token, server } = brainRuntime;
@@ -291,7 +291,9 @@ async function openBrainWindow() {
   } catch (error) {
     if (!current.isDestroyed()) current.destroy();
     dialog.showErrorBox('记忆中心打不开', error.message || '未知错误');
+    return false;
   }
+  return true;
 }
 
 function showMenu() {
@@ -882,7 +884,7 @@ else {
     // Prototype smoke hook: lets the verification run open the read-only
     // memory window without simulating a right-click on the pet.
     if (process.env.VEIL_BRAIN_AUTOOPEN === '1') {
-      openBrainWindow().then(() => console.log('[p4] brain window opened'))
+      openBrainWindow().then((opened) => { if (opened) console.log('[p4] brain window opened'); })
         .catch((error) => console.error('[p4] brain window failed:', error.message));
     }
   });

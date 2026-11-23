@@ -46,13 +46,13 @@ function makeBrain() {
      frontmatter_raw, frontmatter_json, created, last_active, type, importance, domain_json,
      source_tool, is_hidden, is_tombstone, is_deleted, pinned, protected, dont_surface,
      digested, resolved, first_of_kind)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 0, 0, 0, 0, 0, 0)`);
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, 0, 0)`);
   insert.run('a1', 'dynamic', 'dynamic/a1.md', '第一段', '第一段', '正文一', 'h1', '# 一', 'r1',
     '', '{}', '2026-11-20T10:00:00+08:00', '2026-11-20T10:00:00+08:00', 'dynamic', 5,
-    '["工作"]', 'hold', 0, 0);
+    '["工作"]', 'hold', 0, 0, 0);
   insert.run('b2', 'archive', 'archive/b2.md', '第二段', '第二段', '正文二', 'h2', '# 二', 'r2',
     '', '{}', '2026-11-19T09:00:00+08:00', '2026-11-19T09:00:00+08:00', 'archive', 3,
-    '["生活"]', 'save', 1, 0);
+    '["生活"]', 'save', 1, 0, 0);
   db.prepare('INSERT INTO versions VALUES (1, ?, ?, ?, NULL, ?, ?, ?, NULL)')
     .run('a1', '2026-11-20T09:00:00+08:00', '首次写入', '一', '---\nid: a1\n---\n旧正文', 'h0');
   db.prepare('INSERT INTO sidecar_state VALUES (?, 0, NULL, NULL, ?, ?, NULL)')

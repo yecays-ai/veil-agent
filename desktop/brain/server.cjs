@@ -559,7 +559,12 @@ function search(brain, body = {}) {
 }
 
 function serveStatic(req, res, pathname) {
-  let relative = decodeURIComponent(pathname.replace(/^\/ui\/?/, ''));
+  let relative;
+  try {
+    relative = decodeURIComponent(pathname.replace(/^\/ui\/?/, ''));
+  } catch {
+    res.writeHead(400); res.end('bad path'); return;
+  }
   if (!relative || relative.endsWith('/')) relative += 'index.html';
   const target = path.resolve(UI_ROOT, relative);
   if (!target.startsWith(UI_ROOT + path.sep) && target !== UI_ROOT) {
@@ -598,8 +603,9 @@ function createServer({ dbPath, token = '' }) {
     const pathname = url.pathname;
 
     if (pathname === '/') {
-      const suffix = token ? `?t=${encodeURIComponent(token)}` : '';
-      res.writeHead(302, { Location: `/ui/${suffix}` }); res.end(); return;
+      // Never redirect with the bearer token: any local process could read it
+      // from a plain GET. The app opens /ui/?t=<token> directly instead.
+      res.writeHead(404); res.end('not found'); return;
     }
     if (pathname.startsWith('/ui/')) {
       if (token) {
@@ -659,7 +665,8 @@ function createServer({ dbPath, token = '' }) {
       }
       if (req.method === 'POST' && pathname === '/api/memories/by-ids') {
         const body = await readJsonBody(req);
-        const results = (body.ids || []).map((id) => brain.byId.get(id)).filter(Boolean).map(toItem);
+        const results = (body.ids || []).map((id) => brain.byId.get(id)).filter(Boolean)
+          .filter((memory) => !memory.deleted).map(toItem);
         sendJson(res, 200, { results }); return;
       }
       const history = pathname.match(/^\/api\/memories\/([^/]+)\/history$/);
