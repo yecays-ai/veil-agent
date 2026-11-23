@@ -11,6 +11,7 @@ frequent update does not invalidate the provider's prefix cache. The user's edit
 """
 import json
 import os
+import re
 import threading
 import uuid
 from datetime import datetime
@@ -27,6 +28,9 @@ RELATIONSHIP_STATUSES = ('confirmed', 'uncertain', 'outdated')
 # Who says so. Lan's own words outrank repeated evidence, evidence outranks Peter's reading.
 RELATIONSHIP_SOURCES = ('lan', 'evidence', 'peter')
 SOURCE_RANK = {'lan': 3, 'evidence': 2, 'peter': 1}
+# Ticket 422 review: a relationship item keeps the smallest evidence a program can check.
+# The event ledger owns event/memory ids; the chat log owns message ids.
+SOURCE_REF = re.compile(r'^(chat|memory|event|long_task):[A-Za-z0-9_-]{1,100}$')
 # Ticket 413: ongoing means "not finished yet". Finished items stay in the file as completed so Lan can
 # read, reopen or delete them, but only active/uncertain reach the model and count toward the byte budget.
 ONGOING_STATUSES = ('active', 'uncertain', 'completed')
@@ -188,6 +192,77 @@ class LearnedContext:
             for key in ('created_at', 'updated_at', 'superseded_by'):
                 if key in item and not isinstance(item[key], str):
                     raise UserError(f'relationship 第 {index + 1} 条 {key} 无效。')
+            sources = item.get('sources', [])
+            if not isinstance(sources, list) or not all(isinstance(s, str) for s in sources):
+                raise UserError(f'relationship 第 {index + 1} 条 sources 无效。')
+            if not all(SOURCE_REF.fullmatch(source) for source in sources):
+                raise UserError(f'relationship 第 {index + 1} 条 sources 里有不认识的引用：'
+                                f'只接受 chat:/memory:/event:/long_task: 加编号。')
+
+    # ---------- evidence ----------
+
+    def _known_chat_ids(self, limit=600, max_bytes=512 * 1024):
+        """Message ids from the tail of this role's chat log, for checking a `chat:` evidence reference.
+
+        Bounded on purpose: evidence is checked against what was actually said recently, never by
+        scanning the whole history. An unreadable log means "cannot verify", which never upgrades a
+        claim."""
+        path = self.root / 'chat.jsonl'
+        try:
+            with path.open('rb') as handle:
+                handle.seek(0, os.SEEK_END)
+                size = handle.tell()
+                handle.seek(max(0, size - max_bytes))
+                raw = handle.read().decode('utf-8', 'replace')
+        except OSError:
+            return set()
+        ids = set()
+        for line in raw.splitlines()[-limit:]:
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            message_id = row.get('message_id') if isinstance(row, dict) else None
+            if isinstance(message_id, str) and message_id:
+                ids.add(message_id)
+        return ids
+
+    def _verified_sources(self, sources):
+        """Keep only evidence references this program can check; report what was dropped.
+
+        A `chat:` reference must name a real message in this role's own chat log. Memory/event
+        references are kept as pointers (the event ledger owns them); they are only accepted as
+        supporting evidence together with a verified chat reference."""
+        valid, dropped = [], []
+        chat_ids = None
+        for source in sources or []:
+            if not isinstance(source, str) or not SOURCE_REF.fullmatch(source):
+                dropped.append(str(source))
+                continue
+            kind, _, value = source.partition(':')
+            if kind == 'chat':
+                if chat_ids is None:
+                    chat_ids = self._known_chat_ids()
+                if value not in chat_ids:
+                    dropped.append(source)
+                    continue
+            valid.append(source)
+        return list(dict.fromkeys(valid)), dropped
+
+    def _relationship_provenance(self, status, sources):
+        """Ticket 422 review: a claim is only consensus when the program can point at why.
+
+        - with at least one verified source: `confirmed` is accepted as evidence-backed;
+        - without one: whatever the model asked for, the item is Peter's own reading (`uncertain`,
+          `peter`). Nothing is silently upgraded, and the tool result says why.
+        """
+        verified, dropped = self._verified_sources(sources)
+        if verified:
+            return {'status': 'confirmed' if status == 'confirmed' else 'uncertain',
+                    'source': 'evidence', 'sources': verified,
+                    'dropped_sources': dropped, 'downgraded': False}
+        return {'status': 'uncertain', 'source': 'peter', 'sources': [],
+                'dropped_sources': dropped, 'downgraded': status == 'confirmed'}
 
     def _content_bytes(self, data=None):
         if data is None:
@@ -363,7 +438,11 @@ class LearnedContext:
             return data
 
     def save_relationship(self, items, expected_updated_at=None, force=False):
-        """Ticket 422: Lan's own edits to the stable relationship base. Her text always wins."""
+        """Ticket 422: Lan's own edits to the stable relationship base. Her text always wins.
+
+        Review fix: saving the page must not relabel what Lan did not touch. Items are compared by
+        their stable id; only a new item, or one whose text/status she actually changed, becomes
+        hers (`source=lan`). Everything else keeps its own source, creation time and evidence."""
         if not isinstance(items, list):
             raise UserError('relationship 必须是条目列表。')
         with self.lock:
@@ -372,17 +451,39 @@ class LearnedContext:
             if not force and expected_updated_at and block.get('updated_at') != expected_updated_at:
                 raise UserError('你打开之后这一块又改过；请先刷新，或用“覆盖他的版本”保存。')
             before = json.loads(json.dumps(data, ensure_ascii=False))
+            stored = {item['id']: item for item in block.get('items') or []
+                      if isinstance(item, dict) and isinstance(item.get('id'), str)}
             now = _now()
             cleaned = []
             for item in items:
-                if not isinstance(item, dict):
-                    raise UserError('relationship 必须是条目列表。')
-                row = dict(item)
-                row['text'] = row['text'].strip() if isinstance(row.get('text'), str) else ''
-                row.setdefault('created_at', now)
-                row['updated_at'] = now
-                # A manual edit is Lan's own word, so the source is hers.
+                if not isinstance(item, dict) or not isinstance(item.get('id'), str) or not item['id']:
+                    raise UserError('relationship 每条都要有 id。')
+                previous = stored.get(item['id'])
+                text = item.get('text').strip() if isinstance(item.get('text'), str) else ''
+                status = item.get('status')
+                if status not in RELATIONSHIP_STATUSES:
+                    raise UserError('relationship 第 %s 条状态无效。' % item['id'])
+                row = {'id': item['id'], 'text': text, 'status': status}
+                if previous is not None and text == previous.get('text') and status == previous.get('status'):
+                    # Untouched: keep source, created time, evidence and superseded pointer as they were.
+                    row['source'] = previous.get('source', 'peter')
+                    row['created_at'] = previous.get('created_at', now)
+                    row['updated_at'] = previous.get('updated_at', now)
+                    for key in ('sources', 'superseded_by'):
+                        if key in previous:
+                            row[key] = previous[key]
+                    cleaned.append(row)
+                    continue
+                # New, or actually edited by Lan: her word becomes the source, her edit the time.
                 row['source'] = 'lan'
+                row['created_at'] = (previous or {}).get('created_at') or now
+                row['updated_at'] = now
+                sources = item.get('sources')
+                if sources is None:
+                    sources = (previous or {}).get('sources', [])
+                row['sources'] = sources if isinstance(sources, list) else []
+                if previous and previous.get('superseded_by'):
+                    row['superseded_by'] = previous['superseded_by']
                 cleaned.append(row)
             self._validate_relationship_items(cleaned)
             data.setdefault('relationship', {})['items'] = cleaned
@@ -500,24 +601,45 @@ class LearnedContext:
         A new item is what he now understands. Replacing one keeps the old item as history
         (`outdated`, pointing at the new one), so "I used to think X, then she confirmed Y" is still
         there for a recollection, while the current base only carries Y. An empty new_text retires
-        the item without adding anything: that is how a rule stops being current."""
-        status = args.get('status') or 'confirmed'
-        if status not in ('confirmed', 'uncertain'):
+        the item without adding anything: that is how a rule stops being current.
+
+        Review: `confirmed` is not something the model can simply assert. It becomes consensus only
+        when the program can verify an evidence reference (a real message id, or an event/memory
+        pointer supplied alongside it). Otherwise the item stays Peter's own reading."""
+        requested = args.get('status') or 'confirmed'
+        if requested not in ('confirmed', 'uncertain'):
             return 'status must be confirmed or uncertain (outdated is kept for history only).', '被拒绝', name
+        raw_sources = args.get('sources') or []
+        if not isinstance(raw_sources, list) or not all(isinstance(s, str) for s in raw_sources):
+            return 'sources must be a list of strings.', '被拒绝', name
         with self.lock:
             data = self._load()
             before = json.loads(json.dumps(data, ensure_ascii=False))
             block = data.setdefault('relationship', {'items': [], 'updated_at': ''})
             items = block.setdefault('items', [])
             now = _now()
+            provenance = self._relationship_provenance(requested, raw_sources)
+            notes = []
+            if provenance['downgraded']:
+                notes.append(prompts.text('memory.relationship.no_source'))
+            elif provenance['dropped_sources']:
+                notes.append('Ignored source references the program could not verify: '
+                             + ', '.join(provenance['dropped_sources'][:5]) + '.')
+            elif provenance['source'] != 'evidence':
+                notes.append('Kept as uncertain; no evidence reference was supplied.')
+            if provenance['dropped_sources'] and provenance['downgraded']:
+                notes.append('Uncheckable references: '
+                             + ', '.join(provenance['dropped_sources'][:5]) + '.')
             if name == 'profile_append':
                 text = args.get('text')
                 if not isinstance(text, str) or not text.strip():
                     return 'text must be a non-empty string.', '被拒绝', name
-                items.append({'id': uuid.uuid4().hex[:12], 'text': text.strip(), 'status': status,
-                              'source': 'peter', 'created_at': now, 'updated_at': now})
-                message = ('Saved as a current relationship note (%s). It applies from the next request.'
-                           % status)
+                items.append({'id': uuid.uuid4().hex[:12], 'text': text.strip(),
+                              'status': provenance['status'], 'source': provenance['source'],
+                              'sources': provenance['sources'],
+                              'created_at': now, 'updated_at': now})
+                message = ('Saved as a current relationship note (%s, %s). It applies from the next request.'
+                           % (provenance['status'], provenance['source']))
             else:
                 old, new = args.get('old_text'), args.get('new_text')
                 if not isinstance(old, str) or not old or not isinstance(new, str):
@@ -531,8 +653,10 @@ class LearnedContext:
                 previous = matches[0]
                 replacement = None
                 if new.strip():
-                    replacement = {'id': uuid.uuid4().hex[:12], 'text': new.strip(), 'status': status,
-                                   'source': 'peter', 'created_at': now, 'updated_at': now}
+                    replacement = {'id': uuid.uuid4().hex[:12], 'text': new.strip(),
+                                   'status': provenance['status'], 'source': provenance['source'],
+                                   'sources': provenance['sources'],
+                                   'created_at': now, 'updated_at': now}
                     items.append(replacement)
                 previous['status'] = 'outdated'
                 previous['updated_at'] = now
@@ -551,7 +675,8 @@ class LearnedContext:
                         '被拒绝', name)
             self._write(data)
             self._record(name, before, data)
-            return f'{message} {total} of {self.max_bytes} bytes used.', '成功', name
+            return ' '.join([message, *notes,
+                             f'{total} of {self.max_bytes} bytes used.']), '成功', name
 
     def _invoke_ongoing(self, args):
         action = args.get('action')

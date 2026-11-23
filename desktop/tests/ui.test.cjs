@@ -353,4 +353,7 @@ test('context diagnostics separate the relationship base, related recall and nat
   assert.match(html, /id="peter-relationship-save"/);
   assert.match(page, /action: 'save_relationship'/);
   assert.match(page, /'不再适用'/);
+  // Review fix: an item's evidence stays visible on the page, and her own edit is the only one relabelled.
+  assert.match(page, /有来源可查/);
+  assert.match(page, /item\.sources\.join/);
 });

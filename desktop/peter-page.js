@@ -157,7 +157,9 @@
     status.value = item.status || 'confirmed';
     status.onchange = function () { item.status = status.value; mark('relationship'); renderRelationship(state.learned.relationship.items); };
     var source = document.createElement('span');
-    source.textContent = ({ lan: '你确认的', evidence: '经历反复证明', peter: '他自己理解的' })[item.source] || '';
+    source.textContent = ({ lan: '你确认的', evidence: '有来源可查', peter: '他自己的理解（未确认）' })[item.source] || '';
+    // Review fix: the smallest evidence a relationship item keeps is visible, not implicit.
+    if (item.sources && item.sources.length) source.title = '来源：' + item.sources.join('、');
     var remove = document.createElement('button');
     remove.type = 'button';
     remove.textContent = '删除';

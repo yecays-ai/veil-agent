@@ -14,8 +14,14 @@
 - 诊断：`relationship_base`（chars/tokens/items/statuses/dropped/degraded/reason/space_tokens）、
   `relevant_recall`、`natural_association`、`association`（候选数/被选/舍弃原因）、`reused`（追问承接）。
   上下文页和 Peter 页都已接。
-- 验证：`tests/test_relationship_422.py` 15 条、全部 `test_recall_*` 233 条、learned context 与 prompt／
-  tool budget／live context 75 条、桌面 20 条通过。规模与 token 数字见 STATUS「已验证」。
+- 复审返工（2026-11-23）：判官成功不再清空 `drift`（只去重）；联想候选池改为 Ombre 重要度序列
+  `breath()`（会话内缓存）+ 低优先随机浮现，随机项固定扣 20 分；`save_relationship` 按 id 逐条比较，
+  只把 Lan 改过的条目记成 `lan`；关系条目新增 `sources` 证据引用，`confirmed` 必须有可校验来源
+  （`chat:<id>` 反查本角色聊天记录），否则降级成 `uncertain`/`peter` 并在结果里说明。`random_chance`
+  完全不读了，关联想只用 `association_enabled = false`。
+- 验证：`tests/test_relationship_422.py` 26 条、`test_recall_judge.py` 32 条（含两条新回归）、全部
+  `test_recall_*` 234 条、learned context 与 prompt／tool budget／live context 75 条、chat 107、
+  autonomy 52、桌面 20 条通过。规模与 token 数字见 STATUS「已验证」。
 - 没做：真实模型抽查（本单 0 次额外调用、0 费用）；QQ、手机端、正式 68 篇迁移（第五步）。
 - 下一步：等 CI 和 Lan 审核；她按工单六步在 Windows 本体体验。本单不合并、不提前做第五步。
 

@@ -1441,6 +1441,15 @@ class Memory:
         drift = []
         pool = []
         judged = False
+        # Ticket 422 review: weak association needs a candidate pool that is not only Ombre's random
+        # "忽然想起来". Ombre's `breath` (its own importance-ordered list, already fetched for the
+        # opening and cached for this conversation) is that pool; the random drift stays available as
+        # a lower-priority extra. No extra model call, no whole-library scan by us.
+        try:
+            breath_blocks = blocks(self.opening)
+        except Exception as exc:
+            self.retrieval_failure('association_pool', exc)
+            breath_blocks = []
         settings = self.assisted_settings(query, recent) if not (rotate or wake) else None
         judge = (self.judge if self.judge is not None and (wake or not rotate and not widen and not settings)
                  and query.strip() else None)
@@ -1482,7 +1491,8 @@ class Memory:
                 judged = True
                 self.last_recall_debug['judge'] = dict(getattr(judge, 'last_choice', {}) or {})
                 self.last_recall_debug['vector'] = list(self.last_recall_debug['judge'].get('vector') or [])
-                drift = []   # a recollection nobody judged would be a way around "none fits"
+                # Review fix: "nothing relevant to her sentence" is an answer about related recall only.
+                # It no longer vetoes a memory that surfaces on its own; the two paths are deduped below.
             except JudgeFailed:
                 self.last_recall_debug['judge'] = {'status': 'failed', 'candidates': 0, 'picked': []}
                 if wake:
@@ -1505,12 +1515,12 @@ class Memory:
             normal[:1] + emotional[:1] + normal[1:] + emotional[1:],
             failure_stage='recall_visibility')
         try:
-            opening_candidates = blocks(self.opening) if include_opening else []
+            opening_candidates = breath_blocks if include_opening else []
         except Exception as exc:
             self.retrieval_failure('opening', exc)
             opening_candidates = []
         opening_visible = self.context_visible(opening_candidates, failure_stage='opening_visibility')
-        metas = self._recall_meta([key for key, _ in combined + opening_visible + drift])
+        metas = self._recall_meta([key for key, _ in combined + opening_visible + breath_blocks + drift])
         if wake:
             candidates = list(dict(combined).items())
         elif widen:
@@ -1610,16 +1620,26 @@ class Memory:
                 kinds[key] = 'relevant'
             elif widen:
                 kinds[key] = 'rotation'
-        if not wake and not widen and drift and len(kept) < 2:
-            # Ticket 422: weak natural association. Ombre's own "surfaced by itself" hits are the only
-            # candidates; which one (or none) comes from importance, time since it last surfaced, the
-            # cooldown, the room this moment leaves, and what this request already carries. No dice.
+        if not wake and not widen and len(kept) < 2:
+            # Ticket 422: weak natural association. Candidates come from Ombre's own importance-ordered
+            # list (its `breath`, already cached for this conversation) plus the random "忽然想起来"
+            # hits as a lower-priority extra; which one, or none, comes from importance, time since it
+            # last surfaced, the cooldown, the room this moment leaves and what this request already
+            # carries. No dice, and no dependence on the judge's relevance verdict.
             from natural_association import choose as choose_association
             shown = {other for other, _ in kept}
-            visible_drift = self.context_visible(drift, failure_stage='recall_visibility')
+            origin = {}
+            pool_rows = []
+            for key, body in breath_blocks:
+                origin.setdefault(key, 'importance')
+                pool_rows.append((key, body))
+            for key, body in drift:
+                origin.setdefault(key, 'drift')
+                pool_rows.append((key, body))
+            visible_pool = self.context_visible(pool_rows, failure_stage='recall_visibility')
             considered = []
             association_dropped = []
-            for key, body in visible_drift:
+            for key, body in visible_pool:
                 if key in shown:
                     association_dropped.append({'id': key, 'reason': 'duplicate'})
                 elif cooled(key):
@@ -1629,10 +1649,13 @@ class Memory:
                 else:
                     considered.append((key, body))
             choice = choose_association(query, considered, metas, self.rotation.last,
-                                       self.rotation.turn, shown, recall_cfg)
+                                       self.rotation.turn, shown, recall_cfg, origin=origin)
             association_dropped.extend(choice['dropped'])
             self.last_recall_debug['association'] = {
-                'candidates': len(visible_drift), 'picked': [choice['key']] if choice['key'] else [],
+                'candidates': len(visible_pool),
+                'from_importance': len({key for key, _ in breath_blocks}),
+                'from_drift': len({key for key, _ in drift}),
+                'picked': [choice['key']] if choice['key'] else [],
                 'dropped': association_dropped, 'reason': choice['reason'] or ''}
             if choice['key']:
                 kept.append((choice['key'],
@@ -1641,8 +1664,9 @@ class Memory:
                 kinds[choice['key']] = 'association'
         if not self.last_recall_debug.get('association'):
             self.last_recall_debug['association'] = {
-                'candidates': 0, 'picked': [], 'dropped': [],
-                'reason': 'no_candidates' if not drift else 'not_applicable'}
+                'candidates': 0, 'from_importance': len({key for key, _ in breath_blocks}),
+                'from_drift': len({key for key, _ in drift}), 'picked': [], 'dropped': [],
+                'reason': 'no_candidates' if not (breath_blocks or drift) else 'not_applicable'}
         if opening_visible:
             pinned = [item for item in opening_visible if '核心准则' in item[1].split('\n', 1)[0]
                       or str(metas.get(item[0], {}).get('pinned', '')).lower() == 'true']

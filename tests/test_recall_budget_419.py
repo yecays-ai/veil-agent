@@ -130,7 +130,7 @@ class MemoryLevelBudgetTests(unittest.TestCase):
                     'output_cny_per_million': Decimal(8), 'cached_input_cny_per_million': Decimal(1)}
         memory_cfg = {'model': 'fake-embedding', 'input_cny_per_million': '0', 'mode': 'native',
                       'base_url': 'https://example.invalid/v1',
-                      'recall': recall or {'cooldown_turns': 0, 'random_chance': 0}}
+                      'recall': recall or {'cooldown_turns': 0, 'association_enabled': False}}
         cfg = Character('fake', 'Example', 'fictional persona', 20, 1024, provider, 'fake', memory_cfg)
         memory = Memory(cfg, self.store, Budget(self.store), None, self.backend)
         memory.rng = random.Random(7)
@@ -202,7 +202,7 @@ class MemoryLevelBudgetTests(unittest.TestCase):
             's4': {'content': 'the cat now lives with us and sleeps on the windowsill',
                    'title': 'The result', 'created': '2026-10-20T20:00:00'},
         }
-        memory = self.memory(rows, recall={'cooldown_turns': 0, 'random_chance': 0})
+        memory = self.memory(rows, recall={'cooldown_turns': 0, 'association_enabled': False})
         sidecar = Sidecar(self.store, 'fake', memory.budget.clock)
         for left, right in (('s2', 's1'), ('s3', 's2'), ('s4', 's3')):
             sidecar.link(left, right)
@@ -225,7 +225,7 @@ class MemoryLevelBudgetTests(unittest.TestCase):
                                        'suspended without any notice.'),
                            'title': 'The Claude account',
                            'created': '2026-10-10T10:00:00'}}
-        memory = self.memory(rows, recall={'cooldown_turns': 0, 'random_chance': 0})
+        memory = self.memory(rows, recall={'cooldown_turns': 0, 'association_enabled': False})
         memory.attach_recall_judge(memory.cfg, FakeJudgeModel(pick=['suspended']),
                                    {**JUDGE_DEFAULTS, 'timeout_seconds': 2.0})
         memory.judge.make_embedder = lambda: FakeEmbedder()
@@ -240,7 +240,7 @@ class MemoryLevelBudgetTests(unittest.TestCase):
             'b': {'content': 'the same rainy Tuesday we had tea at the corner cafe, but that evening we '
                              'argued about the broken umbrella and she left', 'title': 'Tea and leaving'},
         }
-        memory = self.memory(rows, recall={'cooldown_turns': 0, 'random_chance': 0})
+        memory = self.memory(rows, recall={'cooldown_turns': 0, 'association_enabled': False})
         memory.context('rainy Tuesday tea broken umbrella', include_opening=False)
         text = memory.context('rainy Tuesday tea broken umbrella', include_opening=False)[-1]['content']
         self.assertIn('laughed about the broken umbrella', text)
@@ -249,7 +249,7 @@ class MemoryLevelBudgetTests(unittest.TestCase):
 
     def test_an_immediate_follow_up_re_injects_what_was_just_shown(self):
         rows = {'video': {'content': 'the first video I picked was about brass refining', 'title': 'First video'}}
-        memory = self.memory(rows, recall={'cooldown_turns': 3, 'random_chance': 0})
+        memory = self.memory(rows, recall={'cooldown_turns': 3, 'association_enabled': False})
         first = memory.context('还记得 video 那次吗', include_opening=False)
         self.assertEqual(['video'], memory.last_context_refs)
         # The follow-up sentence contains no searchable word for the memory, and the cooldown would
@@ -301,7 +301,7 @@ max_steps = 2
         from veil_agent import Budget, Chat, load_character
         cfg = load_character(self.root, 'peter')
         cfg.provider['max_input_tokens'] = limit
-        cfg.memory['recall'] = {'cooldown_turns': cooldown, 'random_chance': 0}
+        cfg.memory['recall'] = {'cooldown_turns': cooldown, 'association_enabled': False}
         cfg.memory.update({'model': 'fake-embedding', 'input_cny_per_million': '0',
                            'mode': 'native', 'base_url': 'https://example.invalid/v1'})
         budget = Budget(self.store)
@@ -440,7 +440,7 @@ class AuthoritativeStoryTests(MemoryLevelBudgetTests):
     def test_a_shorter_authoritative_story_replaces_the_longer_old_fragment(self):
         rows = {'claude': {'content': 'the old fragment about the ban that was later reversed',
                            'title': 'The Claude account'}}
-        memory = self.memory(rows, recall={'cooldown_turns': 0, 'random_chance': 0})
+        memory = self.memory(rows, recall={'cooldown_turns': 0, 'association_enabled': False})
         self.store.append('fake/events.jsonl', {'event_id': 'claude', 'memory_id': 'claude',
                                                 'title': 'The Claude account',
                                                 'story': 'The ban was reversed. UNIQUE_NEW_END.',
@@ -463,7 +463,7 @@ class ReadBackTests(MemoryLevelBudgetTests):
             's4': {'content': 'the cat now lives with us and sleeps on the windowsill',
                    'title': 'The result', 'created': '2026-10-20T20:00:00'},
         }
-        memory = self.memory(rows, recall={'cooldown_turns': 0, 'random_chance': 0})
+        memory = self.memory(rows, recall={'cooldown_turns': 0, 'association_enabled': False})
         sidecar = Sidecar(self.store, 'fake', memory.budget.clock)
         for left, right in (('s2', 's1'), ('s3', 's2'), ('s4', 's3')):
             sidecar.link(left, right)
@@ -494,7 +494,7 @@ class ReadBackTests(MemoryLevelBudgetTests):
     def test_a_long_story_can_be_read_to_its_unique_end(self):
         story = '\n\n'.join(LONG_PARAGRAPHS * 4) + '\n\nThe unique closing fact is the brass key.'
         memory = self.memory({'long': {'content': story, 'title': 'The brass lamp'}},
-                             recall={'cooldown_turns': 0, 'random_chance': 0})
+                             recall={'cooldown_turns': 0, 'association_enabled': False})
         tools = NativeMemoryTools(memory)
         offset, version, chunks = 0, None, []
         for _ in range(80):
@@ -561,13 +561,13 @@ class FinalStateTests(MemoryLevelBudgetTests):
         self.assertGreaterEqual(memory.last_memory_budget['history_allowance'], 100)
 
     def test_memory_used_equals_the_messages_actually_sent(self):
-        memory = self.memory(self.five_events(), recall={'cooldown_turns': 0, 'random_chance': 0})
+        memory = self.memory(self.five_events(), recall={'cooldown_turns': 0, 'association_enabled': False})
         memory.context('video night brass lamp', include_opening=False, defer=True)
         messages = memory.finish_recall(space=5000, history_tokens=0, protected_tokens=0, calibration=0.4)
         self.assertEqual(memory.last_memory_budget['memory_used'],
                          tokens_for_messages(messages, 0.4))
         empty = self.memory({'x': {'content': 'unrelated filler'}},
-                            recall={'cooldown_turns': 0, 'random_chance': 0})
+                            recall={'cooldown_turns': 0, 'association_enabled': False})
         empty.context('quantum spreadsheets', include_opening=False, defer=True)
         messages = empty.finish_recall(space=5000, history_tokens=0, protected_tokens=0, calibration=0.4)
         self.assertEqual(empty.last_memory_budget['memory_used'],
@@ -575,7 +575,7 @@ class FinalStateTests(MemoryLevelBudgetTests):
         self.assertGreater(empty.last_memory_budget['memory_used'], 0)
 
     def test_final_trim_removes_a_memory_from_last_injected_refs(self):
-        memory = self.memory(self.five_events(), recall={'cooldown_turns': 0, 'random_chance': 0})
+        memory = self.memory(self.five_events(), recall={'cooldown_turns': 0, 'association_enabled': False})
         memory.context('video night brass lamp', include_opening=False, defer=True)
         memory.finish_recall()
         self.assertIn('ev0', memory.last_injected_refs)
@@ -586,7 +586,7 @@ class FinalStateTests(MemoryLevelBudgetTests):
         self.assertTrue(memory.last_recall_debug['final_trim'])
 
     def test_a_failed_turn_restores_the_previous_successful_refs(self):
-        memory = self.memory(self.five_events(), recall={'cooldown_turns': 0, 'random_chance': 0})
+        memory = self.memory(self.five_events(), recall={'cooldown_turns': 0, 'association_enabled': False})
         memory.context('video night brass lamp', include_opening=False, defer=True)
         memory.finish_recall()
         first = list(memory.last_injected_refs)
@@ -596,7 +596,7 @@ class FinalStateTests(MemoryLevelBudgetTests):
         self.assertEqual(first, memory.last_injected_refs)
 
     def test_budget_drops_are_also_in_budget_dropped(self):
-        memory = self.memory(self.five_events(), recall={'cooldown_turns': 0, 'random_chance': 0})
+        memory = self.memory(self.five_events(), recall={'cooldown_turns': 0, 'association_enabled': False})
         memory.context('video night brass lamp', include_opening=False, defer=True)
         allowance = tokens_for('[bucket_id:ev0]\n' + self.five_events()['ev0']['content'], 0.4) * 2 + 150
         memory.finish_recall(space=allowance, history_tokens=0, protected_tokens=0, calibration=0.4)
@@ -670,7 +670,7 @@ class AdjacentStoryOwnershipTests(MemoryLevelBudgetTests):
             'b': {'content': 'the same rainy Tuesday we had tea at the corner cafe', 'title': 'Tea and leaving',
                   'created': '2026-10-10T20:00:00'},
         }
-        memory = self.memory(rows, recall={'cooldown_turns': 0, 'random_chance': 0, 'dedup': False})
+        memory = self.memory(rows, recall={'cooldown_turns': 0, 'association_enabled': False, 'dedup': False})
         self.store.append('fake/events.jsonl', {'event_id': 'ea', 'memory_id': 'a', 'title': 'Tea and umbrella',
                                                 'story': 'We laughed about the broken umbrella. OWN_END_A.',
                                                 'first_at': '2026-10-10T10:00:00'})
@@ -694,7 +694,7 @@ class SequentialConversationTests(MemoryLevelBudgetTests):
     def test_recall_follow_up_topic_switch_return_and_restart(self):
         rows = {'video': {'content': 'The first video I picked was about brass refining. She said it would put her to sleep.',
                           'title': 'First video'}}
-        memory = self.memory(rows, recall={'cooldown_turns': 3, 'random_chance': 0})
+        memory = self.memory(rows, recall={'cooldown_turns': 3, 'association_enabled': False})
         self.assertEqual(['video'], memory.context('video', include_opening=False) and memory.last_context_refs)
         # Immediate follow-up: the same subject stays available even though the cooldown would block it.
         memory.context('那我当时是什么反应？', include_opening=False,
@@ -720,7 +720,7 @@ class ReuseRemovalTests(MemoryLevelBudgetTests):
     def test_history_with_only_the_opening_still_injects_the_whole_story(self):
         story = '\n\n'.join(LONG_PARAGRAPHS * 3) + '\n\nThe unique ending is the brass key.'
         memory = self.memory({'long': {'content': story, 'title': 'The brass lamp'}},
-                             recall={'cooldown_turns': 0, 'random_chance': 0})
+                             recall={'cooldown_turns': 0, 'association_enabled': False})
         memory.context('brass lamp', include_opening=False,
                        recent=[{'role': 'user', 'content': ('[bucket_id:long]\n' + story)[:120]}])
         text = memory.finish_recall()[-1]['content']
@@ -731,7 +731,7 @@ class ReuseRemovalTests(MemoryLevelBudgetTests):
     def test_history_with_the_whole_text_does_not_suppress_injection(self):
         story = '\n\n'.join(LONG_PARAGRAPHS * 3) + '\n\nThe unique ending is the brass key.'
         memory = self.memory({'long': {'content': story, 'title': 'The brass lamp'}},
-                             recall={'cooldown_turns': 0, 'random_chance': 0})
+                             recall={'cooldown_turns': 0, 'association_enabled': False})
         memory.context('brass lamp', include_opening=False,
                        recent=[{'role': 'assistant', 'content': '[bucket_id:long]\n' + story}])
         text = memory.finish_recall()[-1]['content']

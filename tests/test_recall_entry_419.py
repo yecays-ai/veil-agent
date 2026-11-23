@@ -307,7 +307,7 @@ class RealChatRestartSequenceTests(ChatAssemblyBudgetTests):
         # A new Chat/Memory over the same data (the real restart path).
         cfg = load_character(self.root, 'peter')
         cfg.provider['max_input_tokens'] = 9000
-        cfg.memory['recall'] = {'cooldown_turns': 3, 'random_chance': 0}
+        cfg.memory['recall'] = {'cooldown_turns': 3, 'association_enabled': False}
         cfg.memory.update({'model': 'fake-embedding', 'input_cny_per_million': '0',
                            'mode': 'native', 'base_url': 'https://example.invalid/v1'})
         from veil_agent import Budget

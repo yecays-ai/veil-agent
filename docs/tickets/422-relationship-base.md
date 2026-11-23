@@ -76,7 +76,30 @@
 | `prompts/registry.py`, `prompts/defaults/memory.relationship_base.header.md`, `prompts/defaults/memory.association.label.md` | 两段新文字登记（可在「指令」页改） |
 | `desktop/chat.js`, `desktop/chat.html`, `desktop/peter-page.js` | 诊断显示四个分类；Peter 页「当前关系」卡片 |
 | `characters/peter/character.toml` | 新配置项注释（默认值不变） |
-| `tests/test_relationship_422.py` | 新验收测试 15 项 |
+| `tests/test_relationship_422.py` | 新验收测试 26 项（含复审四项） |
+| `tests/test_recall_judge.py` | 判官与联想互不否决、不重复注入的两条回归 |
+
+## 首次复审返工（2026-11-23）
+
+Lan 的审核意见指出四个根因，本 PR 已按项修复（未重写整体）：
+
+1. **判官会清空自然联想候选**：删掉「判官成功即 `drift = []`」。判官只回答「哪些旧事和这句话直接
+   相关」，不再顺便否决弱自然浮现；两条路径共用可见性、冷却、事件去重和总预算，判官已选中的条目
+   不会作为联想重复进入。`test_recall_judge.py` 的历史断言改为区分旧随机路径与受控联想。
+2. **候选上游只有 Ombre 的随机浮现**：候选池改为 Ombre 自己的重要度序列（`breath()`，会话内已缓存，
+   不新增调用、不扫全库）加随机浮现（低优先、固定扣分）。高重要且久未浮现的条目能参与；随机低意义
+   条目不能因为恰好是唯一漂移就获胜；隐藏／归档仍被过滤；同库同轮结果稳定。
+3. **页面保存把所有来源改成 Lan**：`save_relationship()` 按稳定 id 与保存前逐条比较，只有 Lan 新增、
+   改正文或改状态的条目才记 `source=lan`；未变条目保留原来源、创建时间、更新时间与证据。
+4. **`evidence` 没有写入路径**：关系条目新增最小 `sources` 证据引用（`chat:`/`memory:`/`event:`/
+   `long_task:` + 编号，程序校验形状）。Peter 写 `confirmed` 时必须有可校验来源：`chat:<id>` 必须
+   真的出现在本角色聊天记录里，否则自动降级为 `uncertain`/`peter` 并在工具结果里说明原因；有可查
+   来源时记为 `evidence`。页面保存的条目来源是 `lan`，并保留证据。`random_chance` 不再被读取（不是
+   隐藏开关）；要关掉联想只有 `association_enabled = false`。
+
+返工新增回归：`tests/test_recall_judge.py` 两条（判官空选择后联想仍可进入；判官选中的条目不会重复），
+`tests/test_relationship_422.py` 从 15 条增到 26 条（判官路径、候选池来源与稳定性、页面逐条来源、
+证据降级/伪造来源拒绝、改正后的历史与事件故事不被覆盖、经真实工具循环写入的条目带消息来源）。
 
 ## 验收（Lan 的 Windows 本体体验）
 
@@ -95,5 +118,6 @@
 
 - 没有新增固定付费模型调用，也没有做真实模型抽查（本单只有隔离自动化；真实回复体验要 Lan 按上面
   六步验收，费用为 0 次额外调用）。
+- `memory:`/`event:` 证据引用只校验形状、保留为指针，本单没有反查事件库；反查留给第五步迁移一起看。
 - 正式 68 篇迁移、QQ 适配、手机端连接不在本单。
 - 旧 `about-lan.md` 迁移逻辑未改；`relationship` 段一开始是空的，Peter 或 Lan 写第一条后才出现。

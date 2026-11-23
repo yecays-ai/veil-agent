@@ -25,6 +25,8 @@ DEFAULTS = {'enabled': True, 'min_importance': 4, 'cooldown_turns': 8, 'light_ch
 # Name at most this many passed-over candidates in diagnostics; the rest are counted only, so a big
 # candidate pool cannot make every request record a thousand reasons.
 DROP_LIST_LIMIT = 40
+# How much a candidate loses for coming only from Ombre's random "忽然想起来" draw.
+DRIFT_PENALTY = 20
 
 # A short light sentence, or one about work and technical trouble, is not the moment to bring up an
 # old personal memory. This is a coarse gate on purpose: it can only suppress an association, never
@@ -41,9 +43,8 @@ def settings(recall_cfg):
     result = dict(DEFAULTS)
     if raw.get('association_enabled') is False:
         result['enabled'] = False
-    # Backwards compatibility: a config that switched the old random recall off with 0 keeps it off.
-    if raw.get('random_chance') == 0:
-        result['enabled'] = False
+    # The old `random_chance` key is ignored on purpose: it was a per-turn probability and there is
+    # no probability any more. A config that still sets it changes nothing here.
     value = raw.get('association_min_importance')
     if type(value) is int and 0 <= value <= 10:
         result['min_importance'] = value
@@ -73,12 +74,14 @@ def _importance(item, metas_key):
     return importance
 
 
-def choose(query, candidates, metas, last_shown, turn, already, recall_cfg=None):
+def choose(query, candidates, metas, last_shown, turn, already, recall_cfg=None, origin=None):
     """Pick at most one weak association.
 
-    ``candidates`` are (memory_id, body) pairs Ombre surfaced by itself; ``metas`` is the per-id
-    metadata already read for this turn; ``last_shown`` maps id -> turn it was last shown;
-    ``already`` is the set of ids this request already carries. Returns
+    ``candidates`` are (memory_id, body) pairs from a finite pool: Ombre's importance-ordered list
+    and/or its random "忽然想起来" hits; ``metas`` is the per-id metadata already read for this turn;
+    ``last_shown`` maps id -> turn it was last shown; ``already`` is the set of ids this request
+    already carries; ``origin`` says where each candidate came from ('importance' or 'drift'), so a
+    random hit cannot win merely because it happened to be the only one. Returns
     ``{'key', 'body', 'score'}`` (key/body empty when nothing fits) and every candidate's reason.
     """
     options = settings(recall_cfg)
@@ -123,7 +126,12 @@ def choose(query, candidates, metas, last_shown, turn, already, recall_cfg=None)
             drop(result, key, 'association_cooldown')
             continue
         silence = 50 if type(last) is not int else min(max(0, turn - last), 50)
-        scored.append((importance * 10 + silence, key, body))
+        weight = importance * 10 + silence
+        # A memory that came up by Ombre's random draw may still surface, but only if it is clearly
+        # strong on its own terms: the importance-ordered pool wins ties against a lucky hit.
+        if isinstance(origin, dict) and origin.get(key) == 'drift':
+            weight -= DRIFT_PENALTY
+        scored.append((weight, key, body))
     if not scored:
         result['reason'] = 'nothing_suitable'
         return finish(result)

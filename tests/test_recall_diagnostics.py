@@ -29,7 +29,8 @@ class RecallDiagnosticsTests(unittest.TestCase):
         provider = {'model': 'fake', 'max_input_tokens': 20000, 'input_cny_per_million': Decimal(2),
                     'output_cny_per_million': Decimal(8), 'cached_input_cny_per_million': Decimal(1)}
         memory_cfg = {'model': 'fake-embedding', 'input_cny_per_million': '0', 'mode': 'native',
-                      'base_url': 'https://example.invalid/v1'}
+                      'base_url': 'https://example.invalid/v1',
+                      'recall': {'association_enabled': False}}
         cfg = Character('fake', 'Example', 'fictional persona', 20, 1024, provider, 'fake', memory_cfg)
         self.memory = Memory(cfg, self.store, Budget(self.store), Mock(), self.backend)
         self.memory.rng = random.Random(7)

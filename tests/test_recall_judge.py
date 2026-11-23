@@ -94,7 +94,7 @@ class RecallJudgeTests(unittest.TestCase):
         provider = {'model': 'fake', 'max_input_tokens': 20000, 'input_cny_per_million': Decimal(2),
                     'output_cny_per_million': Decimal(8), 'cached_input_cny_per_million': Decimal(1)}
         memory_cfg = {'model': 'fake-embedding', 'input_cny_per_million': '0', 'mode': 'native',
-                      'base_url': 'https://example.invalid/v1', 'recall': recall or {'cooldown_turns': 0, 'random_chance': 0}}
+                      'base_url': 'https://example.invalid/v1', 'recall': recall or {'cooldown_turns': 0, 'association_enabled': False}}
         cfg = Character('fake', 'Example', 'fictional persona', 20, 1024, provider, 'fake', memory_cfg)
         memory = Memory(cfg, self.store, Budget(self.store), Mock(), self.backend)
         memory.rng = random.Random(7)
@@ -130,7 +130,7 @@ class RecallJudgeTests(unittest.TestCase):
     def test_it_may_pick_every_candidate_it_judges_relevant(self):
         """Ticket 419: no hard cap of two; the whole-round budget decides how many fit."""
         memory = self.memory(model=FakeJudgeModel(pick=['Kills plants', 'Mint schedule', 'Small earthquake', 'Weather']),
-                             recall={'cooldown_turns': 0, 'random_chance': 0, 'dedup': False})
+                             recall={'cooldown_turns': 0, 'association_enabled': False, 'dedup': False})
         refs, _ = self.recall(memory)
         self.assertEqual(4, len(refs))
 
@@ -174,7 +174,7 @@ class RecallJudgeTests(unittest.TestCase):
     def test_an_immediate_follow_up_keeps_what_the_judge_just_picked_and_a_gap_still_cools_it(self):
         """Ticket 419 review: the second turn is a real follow-up and the judge returns none; the
         previous pick is carried. One turn later the cooldown applies again."""
-        memory = self.memory(recall={'cooldown_turns': 3, 'random_chance': 0})
+        memory = self.memory(recall={'cooldown_turns': 3, 'association_enabled': False})
         self.assertEqual(['cactus'], self.recall(memory)[0])
         self.model.answer = '{"ids": []}'
         self.assertEqual(['cactus'], self.recall(memory, '那我当时是什么反应？')[0])
@@ -341,26 +341,47 @@ class RecallJudgeTests(unittest.TestCase):
         reserve = next(event for event in events if event['type'] == 'reserve' and event.get('category') == 'recall_judge')
         self.assertIn({'type': 'dispatch', 'id': reserve['id']}, [{'type': e['type'], 'id': e.get('id')} for e in events])
 
-    def test_a_random_recollection_is_not_added_after_the_judge_has_answered(self):
+    def test_the_judge_answering_none_does_not_switch_off_natural_association(self):
+        """Ticket 422 review: the related-recall judge says "nothing bears on her sentence"; that is a
+        verdict about related recall, not about a memory surfacing on its own. The old random path is
+        gone; a scored association may still enter, and it never duplicates what the judge picked."""
         rows = {key: ROWS[key] for key in ('cactus', 'junk', 'quake', 'second')}
-        rows['wander'] = {'content': 'an old wandering memory about nothing', 'title': 'Wander'}
-        recall = {'cooldown_turns': 0, 'random_chance': 1}
-        empty = self.memory(rows, model=FakeJudgeModel(pick=[]), recall=recall, drift=['wander'])
-        self.assertEqual([], self.recall(empty)[0])                  # "none fits" stays none
+        rows['wander'] = {'content': 'an old wandering memory about our first rainy evening outside',
+                          'title': 'Wander', 'importance': 9}
+        recall = {'cooldown_turns': 0}
+        empty = self.memory(rows, model=FakeJudgeModel(pick=[]), recall=recall)
+        refs, text = self.recall(empty)
+        self.assertEqual(['wander'], refs)                     # "none relevant" did not veto the association
+        self.assertEqual('empty', empty.last_recall_debug['judge'].get('status'))  # judge answered: nothing fits
+        self.assertEqual([], empty.last_recall_debug['relevant_recall'])
+        self.assertEqual(['wander'], empty.last_recall_debug['natural_association'])
         self.setUp()
-        picked = self.memory(rows, recall=recall, drift=['wander'])
-        self.assertEqual(['cactus'], self.recall(picked)[0])          # nothing unjudged is added to what it picked
+        picked = self.memory(rows, recall=recall)
+        refs, text = self.recall(picked)
+        self.assertEqual('cactus', refs[0])                    # the judged memory still comes first
+        self.assertEqual(1, refs.count('cactus'))              # and is not injected twice
+        self.assertEqual(['cactus'], picked.last_recall_debug['relevant_recall'])
+        self.assertEqual(['wander'], picked.last_recall_debug['natural_association'])
         self.setUp()
-        failed = self.memory(rows, model=FakeJudgeModel(error=ConnectionError('down')), recall=recall, drift=['wander'])
-        self.assertIn('wander', self.recall(failed)[0])               # a technical failure keeps today's recall, random one included
+        failed = self.memory(rows, model=FakeJudgeModel(error=ConnectionError('down')), recall=recall)
+        self.assertIn('wander', self.recall(failed)[1])        # a technical failure keeps recall working
+
+    def test_a_memory_the_judge_picked_is_not_added_a_second_time_as_an_association(self):
+        rows = {'cactus': ROWS['cactus']}
+        recall = {'cooldown_turns': 0}
+        memory = self.memory(rows, recall=recall)
+        refs, text = self.recall(memory)
+        self.assertEqual(['cactus'], refs)
+        self.assertEqual([], memory.last_recall_debug['natural_association'])
+        self.assertIn({'id': 'cactus', 'reason': 'duplicate'}, memory.last_recall_debug['association']['dropped'])
 
     def test_a_wake_with_three_or_fewer_candidates_does_not_use_the_judge_either(self):
-        memory = self.memory(recall={'cooldown_turns': 0, 'random_chance': 0, 'rotation_candidates': 3})
+        memory = self.memory(recall={'cooldown_turns': 0, 'association_enabled': False, 'rotation_candidates': 3})
         memory.context('a wake text that names a topic', include_opening=False, rotate=True)
         self.assertEqual([], self.model.calls)
 
     def test_wakes_and_the_short_context_path_do_not_use_the_judge(self):
-        memory = self.memory(recall={'cooldown_turns': 0, 'random_chance': 0, 'rotation_candidates': 8})
+        memory = self.memory(recall={'cooldown_turns': 0, 'association_enabled': False, 'rotation_candidates': 8})
         memory.context('', include_opening=False, rotate=True)
         self.assertEqual([], self.model.calls)
         memory.assisted_settings = lambda query, recent: {'threshold': 0.99, 'rounds': 2}

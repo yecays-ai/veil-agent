@@ -16,6 +16,8 @@ from unittest.mock import Mock
 import natural_association
 import relationship_base
 from memory_agent import Memory, vault_path
+from recall_judge import DEFAULTS as JUDGE_DEFAULTS
+from test_recall_judge import FakeEmbedder, FakeJudgeModel
 from test_recall_rotation import FictionalOmbre
 from veil_agent import Budget, Chat, Store, load_character, estimate_request_tokens
 
@@ -62,7 +64,7 @@ max_bytes = 4000
         self.store = Store(self.root / 'data')
         self.rows = {}
 
-    def build(self, limit=32768, recall=None):
+    def build(self, limit=32768, recall=None, judge_pick=None):
         cfg = load_character(self.root, 'peter')
         cfg.provider['max_input_tokens'] = limit
         cfg.memory['recall'] = recall or {'cooldown_turns': 0}
@@ -75,13 +77,33 @@ max_bytes = 4000
         backend = FictionalOmbre(vault_path(self.store.root, 'peter') / 'dynamic', self.rows,
                                  drift=list(getattr(self, 'drift', ())))
         memory = Memory(cfg, self.store, budget, self.model, backend)
+        if judge_pick is not None:
+            # The judge reads the vault's vector table; an empty but readable one is enough here.
+            import array
+            import sqlite3
+            vault = vault_path(self.store.root, 'peter')
+            vault.mkdir(parents=True, exist_ok=True)
+            conn = sqlite3.connect(vault / 'embeddings.db')
+            conn.execute('CREATE TABLE IF NOT EXISTS embeddings (bucket_id TEXT PRIMARY KEY, '
+                         'embedding TEXT NOT NULL, updated_at TEXT NOT NULL, '
+                         'content_hash TEXT NOT NULL DEFAULT "")')
+            conn.commit()
+            conn.close()
+            # The real default configuration runs the related-recall judge; tests must opt in explicitly.
+            memory.attach_recall_judge(cfg, FakeJudgeModel(pick=judge_pick),
+                                       {**JUDGE_DEFAULTS, 'timeout_seconds': 2.0})
+            memory.judge.make_embedder = lambda: FakeEmbedder()
         chat.memory = memory
         self.chat, self.memory, self.backend = chat, memory, backend
         return chat, memory
 
     def seed_relationship(self, chat):
+        # A confirmed item needs a checkable source: here, a real message in this role's chat log.
+        self.store.append('peter/chat.jsonl', {'role': 'user', 'message_id': 'm-quiet',
+                                               'content': 'a hard day should get a quiet evening'})
         chat.profile._invoke_profile('profile_append', {'section': 'relationship',
-                                                        'text': CONFIRMED, 'status': 'confirmed'})
+                                                        'text': CONFIRMED, 'status': 'confirmed',
+                                                        'sources': ['chat:m-quiet']})
         chat.profile._invoke_profile('profile_append', {'section': 'relationship',
                                                         'text': GUESS, 'status': 'uncertain'})
         chat.profile._invoke_profile('profile_append', {'section': 'relationship',
@@ -153,11 +175,14 @@ class RelationshipBaseChangeTests(unittest.TestCase):
                                        'max_bytes': 4000})
 
     def test_a_correction_replaces_the_live_item_and_keeps_the_old_one_as_history(self):
+        self.store.append('fake/chat.jsonl', {'role': 'user', 'message_id': 'm-she',
+                                              'content': 'small surprises are fine, public ones are not'})
         self.profile._invoke_profile('profile_append', {'section': 'relationship',
                                                         'text': 'I thought she hated surprises.'})
         self.profile._invoke_profile('profile_replace', {'section': 'relationship',
                                                          'old_text': 'I thought she hated surprises.',
-                                                         'new_text': 'She likes small surprises, not public ones.'})
+                                                         'new_text': 'She likes small surprises, not public ones.',
+                                                         'sources': ['chat:m-she']})
         items = self.profile.relationship_items()
         current = [item for item in items if item['status'] != 'outdated']
         old = [item for item in items if item['status'] == 'outdated']
@@ -342,3 +367,245 @@ class BudgetTests(ProfileFixture):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class JudgeAndAssociationRequestTests(ProfileFixture):
+    """Review 1: a working judge that says "nothing fits" must not switch natural association off."""
+
+    def test_the_judge_answering_none_still_lets_a_weak_association_into_the_final_request(self):
+        self.rows = {
+            'lamp': {'content': 'We fixed the brass lamp together and it finally worked.',
+                     'title': 'Brass lamp', 'importance': 9},
+            'filler': {'content': 'weather talk about the week', 'title': 'Filler', 'importance': 1},
+        }
+        chat, memory = self.build(judge_pick=[])
+        call = self.send(chat, '外面阴阴的 weather。')
+        joined = self.joined(call)
+        self.assertIn('brass lamp', joined)
+        self.assertEqual([], memory.last_recall_debug['relevant_recall'])
+        self.assertEqual(['lamp'], memory.last_recall_debug['natural_association'])
+        self.assertEqual('empty', memory.last_recall_debug['judge']['status'])
+        stored = self.store.read('peter/recall-diagnostics.jsonl')[-1]
+        self.assertEqual(['lamp'], stored['natural_association'])
+        self.assertEqual([], stored['relevant_recall'])
+
+    def test_the_judged_memory_and_the_association_do_not_inject_the_same_event_twice(self):
+        self.rows = {'lamp': {'content': 'We fixed the brass lamp together and it finally worked.',
+                              'title': 'Brass lamp', 'importance': 9}}
+        chat, memory = self.build(judge_pick=['Brass lamp'])
+        call = self.send(chat, '你还记得 brass lamp 那次吗')
+        joined = self.joined(call)
+        self.assertEqual(1, joined.count('[bucket_id:lamp]'))
+        self.assertEqual(['lamp'], memory.last_recall_debug['relevant_recall'])
+        self.assertEqual([], memory.last_recall_debug['natural_association'])
+
+
+class CandidatePoolTests(ProfileFixture):
+    """Review 2: the pool is Ombre's importance-ordered list, not only its random draw."""
+
+    def test_a_meaningful_memory_from_the_importance_list_beats_a_trivial_random_draw(self):
+        self.rows = {
+            'important': {'content': 'The evening we decided quiet is better than plans.', 'title': 'Quiet',
+                          'importance': 9, 'created': '2026-09-01T10:00:00'},
+            'trivial': {'content': 'a passing note about the weather', 'title': 'Weather', 'importance': 1},
+            'archived_big': {'content': 'archived memory with high importance', 'title': 'Archived',
+                             'importance': 10, 'type': 'archived'},
+        }
+        self.drift = ['trivial']
+        chat, memory = self.build()
+        chat.opening_pending = False
+        self.send(chat, '外面阴阴的。', message_id='pool1')
+        debug = memory.last_recall_debug
+        self.assertEqual(['important'], debug['natural_association'])
+        self.assertNotIn('trivial', debug['natural_association'])
+        self.assertNotIn('archived_big', debug['natural_association'])
+        self.assertGreaterEqual(debug['association']['from_importance'], 2)
+        self.assertIn({'id': 'trivial', 'reason': 'not_meaningful'}, debug['association']['dropped'])
+
+    def test_the_same_library_and_turn_give_the_same_candidate(self):
+        self.rows = {
+            'a': {'content': 'memory one about the balcony', 'title': 'Balcony', 'importance': 6},
+            'b': {'content': 'memory two about the market', 'title': 'Market', 'importance': 6},
+        }
+        picks = []
+        for message_id in ('same1', 'same2'):
+            self.setUp()   # a fresh store, so the two turns see exactly the same library and history
+            self.rows = {
+                'a': {'content': 'memory one about the balcony', 'title': 'Balcony', 'importance': 6},
+                'b': {'content': 'memory two about the market', 'title': 'Market', 'importance': 6},
+            }
+            chat, memory = self.build()
+            chat.opening_pending = False
+            self.send(chat, '今天吃什么呀', message_id=message_id)
+            picks.append(memory.last_recall_debug['natural_association'])
+        self.assertEqual(picks[0], picks[1])
+        self.assertEqual(1, len(picks[0]))
+
+
+class PageSaveProvenanceTests(unittest.TestCase):
+    """Review 3: saving the page only relabels what Lan actually edited."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        from learned_context import LearnedContext
+        self.store = Store(Path(self.temp.name) / 'data')
+        self.profile = LearnedContext(self.store.root, 'fake',
+                                      {'learned': True, 'file': 'learned-context.json',
+                                       'max_bytes': 4000})
+        self.profile.save_relationship([{'id': 'lan-1', 'text': 'She comes home after seven.',
+                                         'status': 'confirmed'}])
+        self.store.append('fake/chat.jsonl', {'role': 'user', 'message_id': 'm-e',
+                                              'content': 'I like small surprises'})
+        self.profile._invoke_profile('profile_append', {'section': 'relationship',
+                                                        'text': 'She said small surprises are fine.',
+                                                        'status': 'confirmed', 'sources': ['chat:m-e']})
+        self.profile._invoke_profile('profile_append', {'section': 'relationship',
+                                                        'text': 'Maybe she prefers mornings.',
+                                                        'status': 'uncertain'})
+
+    def test_only_the_edited_item_becomes_lans_word(self):
+        before = {item['id']: dict(item) for item in self.profile.relationship_items()}
+        evidence = next(item for item in before.values() if item['source'] == 'evidence')
+        guess = next(item for item in before.values() if item['source'] == 'peter')
+        items = [dict(item) for item in before.values()]
+        edited = next(item for item in items if item['id'] == 'lan-1')
+        edited['text'] = 'She comes home after eight now.'
+        self.profile.save_relationship(items)
+        after = {item['id']: item for item in self.profile.relationship_items()}
+        self.assertEqual('lan', after['lan-1']['source'])
+        self.assertEqual('She comes home after eight now.', after['lan-1']['text'])
+        self.assertEqual('evidence', after[evidence['id']]['source'])
+        self.assertEqual(evidence['sources'], after[evidence['id']]['sources'])
+        self.assertEqual(evidence['created_at'], after[evidence['id']]['created_at'])
+        self.assertEqual(evidence['updated_at'], after[evidence['id']]['updated_at'])
+        self.assertEqual('peter', after[guess['id']]['source'])
+        self.assertEqual(before[guess['id']]['created_at'], after[guess['id']]['created_at'])
+
+    def test_a_status_change_lan_makes_is_hers_and_a_new_row_is_hers(self):
+        items = [dict(item) for item in self.profile.relationship_items()]
+        items.append({'id': 'lan-2', 'text': 'No plans on Sundays.', 'status': 'confirmed'})
+        self.profile.save_relationship(items)
+        after = {item['id']: item for item in self.profile.relationship_items()}
+        self.assertEqual('lan', after['lan-2']['source'])
+        self.assertEqual('lan', after['lan-1']['source'])
+
+
+class EvidencePathTests(unittest.TestCase):
+    """Review 4: `confirmed` needs checkable evidence; a model claim alone stays a guess."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        from learned_context import LearnedContext
+        self.store = Store(Path(self.temp.name) / 'data')
+        self.profile = LearnedContext(self.store.root, 'fake',
+                                      {'learned': True, 'file': 'learned-context.json',
+                                       'max_bytes': 4000})
+
+    def test_confirmed_without_a_source_is_downgraded_to_peters_own_reading(self):
+        result, state, _ = self.profile._invoke_profile(
+            'profile_append', {'section': 'relationship', 'text': 'She loves early mornings.',
+                               'status': 'confirmed'})
+        self.assertEqual('成功', state)
+        item = self.profile.relationship_items()[0]
+        self.assertEqual('uncertain', item['status'])
+        self.assertEqual('peter', item['source'])
+        self.assertEqual([], item['sources'])
+        self.assertIn('own reading', result)
+        self.assertIn('uncertain', result)
+
+    def test_a_real_message_reference_makes_it_evidence(self):
+        self.store.append('fake/chat.jsonl', {'role': 'user', 'message_id': 'm-kind',
+                                              'content': 'I do love early mornings actually'})
+        result, state, _ = self.profile._invoke_profile(
+            'profile_append', {'section': 'relationship', 'text': 'She loves early mornings.',
+                               'status': 'confirmed', 'sources': ['chat:m-kind']})
+        self.assertEqual('成功', state)
+        item = self.profile.relationship_items()[0]
+        self.assertEqual('confirmed', item['status'])
+        self.assertEqual('evidence', item['source'])
+        self.assertEqual(['chat:m-kind'], item['sources'])
+        self.assertIn('evidence', result)
+
+    def test_a_fabricated_message_reference_cannot_make_it_current(self):
+        result, state, _ = self.profile._invoke_profile(
+            'profile_append', {'section': 'relationship', 'text': 'She loves early mornings.',
+                               'status': 'confirmed', 'sources': ['chat:no-such-message']})
+        self.assertEqual('成功', state)
+        item = self.profile.relationship_items()[0]
+        self.assertEqual('uncertain', item['status'])
+        self.assertEqual('peter', item['source'])
+        self.assertIn('no-such-message', result)
+
+    def test_a_correction_with_evidence_keeps_the_old_reading_as_history_and_the_event_story_untouched(self):
+        events = self.store.root / 'fake' / 'events.jsonl'
+        events.parent.mkdir(parents=True, exist_ok=True)
+        events.write_text('{"event_id":"e1","story":"The old fictional story."}\n', encoding='utf-8')
+        self.store.append('fake/chat.jsonl', {'role': 'user', 'message_id': 'm-fix',
+                                              'content': 'no, it is not mornings, it is the evenings'})
+        self.profile._invoke_profile('profile_append',
+                                     {'section': 'relationship', 'text': 'She loves early mornings.'})
+        self.profile._invoke_profile('profile_replace',
+                                     {'section': 'relationship',
+                                      'old_text': 'She loves early mornings.',
+                                      'new_text': 'She loves quiet evenings, not mornings.',
+                                      'sources': ['chat:m-fix']})
+        items = self.profile.relationship_items()
+        current = [item for item in items if item['status'] != 'outdated']
+        old = [item for item in items if item['status'] == 'outdated']
+        self.assertEqual('evidence', current[0]['source'])
+        self.assertEqual(['chat:m-fix'], current[0]['sources'])
+        self.assertEqual('She loves early mornings.', old[0]['text'])
+        self.assertEqual(current[0]['id'], old[0]['superseded_by'])
+        self.assertEqual('{"event_id":"e1","story":"The old fictional story."}\n',
+                         events.read_text(encoding='utf-8'))
+
+
+class ToolLoopEvidenceTests(ProfileFixture):
+    """Review 4 end-to-end: a note written through Peter's real tool loop keeps its message source."""
+
+    def install_tools(self, chat):
+        from unittest.mock import Mock as _Mock
+        files = types.SimpleNamespace(
+            tools=[types.SimpleNamespace(name='lab_file_digest', description='Read one lab file.',
+                                         inputSchema={'type': 'object',
+                                                      'properties': {'path': {'type': 'string'}}})],
+            description='Fictional Lab tool.', startup_notice=None, enabled=True, client=object(),
+            capability_event=None, capability_event_model=None, capability_record=None,
+            consume_capability_event=_Mock())
+        chat.tool_mode = True
+        chat.cfg.tools = {**(chat.cfg.tools or {}), 'enabled': True, 'max_steps': 2}
+        chat.tools = types.SimpleNamespace(
+            tools=files.tools, files=files, description=files.description,
+            capability_event=None, capability_event_model=None, capability_record=None,
+            consume_capability_event=_Mock(),
+            invoke=_Mock(return_value=('ok', '成功', 'lab/x.txt')))
+
+    def test_a_note_from_the_tool_loop_is_in_the_next_base_with_its_source(self):
+        chat, memory = self.build()
+        self.install_tools(chat)
+        arguments = json.dumps({'section': 'relationship',
+                                'text': 'She said a hard day wants a quiet evening, not a plan.',
+                                'status': 'confirmed', 'sources': ['chat:m-now']})
+        tool_call = types.SimpleNamespace(id='call-1', function=types.SimpleNamespace(
+            name='profile_append', arguments=arguments))
+        first = types.SimpleNamespace(
+            content=None, tool_calls=[tool_call],
+            model_dump=lambda exclude_none=True: {
+                'role': 'assistant', 'content': None,
+                'tool_calls': [{'id': 'call-1', 'type': 'function',
+                                'function': {'name': 'profile_append', 'arguments': arguments}}]})
+        final = types.SimpleNamespace(content='Fictional reply', tool_calls=[],
+                                      model_dump=lambda exclude_none=True: {
+                                          'role': 'assistant', 'content': 'Fictional reply'})
+        self.model.side_effect = [(first, 100, 20, 0), (final, 120, 5, 0)]
+        chat.send('今天好累', message_id='m-now')
+        item = chat.profile.relationship_items()[0]
+        self.assertEqual('confirmed', item['status'])
+        self.assertEqual('evidence', item['source'])
+        self.assertEqual(['chat:m-now'], item['sources'])
+        self.model.side_effect = None
+        self.model.return_value = (final, 100, 20, 0)
+        second = self.send(chat, '嗯，那我今晚早点睡。', message_id='m-next')
+        self.assertIn('quiet evening, not a plan', self.joined(second))
