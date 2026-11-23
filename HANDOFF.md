@@ -1,5 +1,24 @@
 # HANDOFF
 
+## 工单 422 交接（稳定关系底色 + 自然联想）
+
+- 工单：`docs/tickets/422-relationship-base.md`；分支 `ticket/422-relationship-base`，从 `origin/main`
+  `59e6594`（#421 合并提交）开的独立 worktree（`worktrees/422-relationship-base`）。正式运行目录保持
+  main，没改正式库、没动 68 篇定稿。
+- 改法：`learned-context.json` 新增可选 `relationship` 段（`confirmed` / `uncertain` / `outdated` +
+  来源）；`relationship_base.py` 只渲染仍然有效的整条，默认 480 字 / 8 条，作为独立 system 块
+  （标签 `relationship_base`）进请求必需块；`outdated` 只在文件里当历史。
+- 弱联想：`natural_association.py` 用确定性打分替换了原来的 `random_chance` 抽签（重要度、距上次浮现、
+  冷却、是否已在请求里、句子是否轻松）。`random_chance = 0` 仍可关掉弱联想；概率值不再使用。
+  `memory_agent.context()` 里 `kind: random` 改为 `kind: association`，诊断字段 `natural_association`。
+- 诊断：`relationship_base`（chars/tokens/items/statuses/dropped/degraded/reason/space_tokens）、
+  `relevant_recall`、`natural_association`、`association`（候选数/被选/舍弃原因）、`reused`（追问承接）。
+  上下文页和 Peter 页都已接。
+- 验证：`tests/test_relationship_422.py` 15 条、全部 `test_recall_*` 233 条、learned context 与 prompt／
+  tool budget／live context 75 条、桌面 20 条通过。规模与 token 数字见 STATUS「已验证」。
+- 没做：真实模型抽查（本单 0 次额外调用、0 费用）；QQ、手机端、正式 68 篇迁移（第五步）。
+- 下一步：等 CI 和 Lan 审核；她按工单六步在 Windows 本体体验。本单不合并、不提前做第五步。
+
 ## 工单 421 交接（新经历接回旧故事、完整保存、可恢复）
 
 - 工单：`docs/tickets/421-memory-continuation.md`；分支 `ticket/421-memory-continuation`，从 `origin/main` d0bc837 开的独立 worktree（`worktrees/421-memory-continuation`）。正式运行目录保持 main，没改源码、没动正式库和定稿。

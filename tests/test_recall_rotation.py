@@ -231,13 +231,16 @@ class RecallRotationTests(unittest.TestCase):
         self.assertEqual(self.recall(memory, 'yes that', recent=recent)[1], ['train'])
         self.assertEqual(memory.last_context_kinds, {'train': 'context'})
 
-    def test_random_recall_is_labelled_and_can_be_turned_off(self):
-        memory = self.memory(drift=['old'], recall={'random_chance': 1})
+    def test_a_weak_association_is_labelled_and_can_be_turned_off(self):
+        """Ticket 422: Ombre's own surfaced memory may still reach a light turn, but it is scored
+        (importance, time since it last surfaced, room in this moment) rather than drawn by chance."""
+        memory = self.memory(drift=['old'], recall={'association_enabled': True, 'cooldown_turns': 0})
         text, refs = self.recall(memory, 'movie night')
         self.assertEqual(refs, ['movie', 'old'])
-        self.assertEqual(memory.last_context_kinds, {'movie': 'search', 'old': 'random'})
-        self.assertIn('Random recollection, not a search hit', text)
-        off = self.memory(drift=['old'], recall={'random_chance': 0, 'cooldown_turns': 0})
+        self.assertEqual(memory.last_context_kinds, {'movie': 'search', 'old': 'association'})
+        self.assertIn('came back to you by itself', text)
+        self.assertEqual(memory.last_recall_debug['natural_association'], ['old'])
+        off = self.memory(drift=['old'], recall={'association_enabled': False, 'cooldown_turns': 0})
         self.assertEqual(self.recall(off, 'movie night')[1], ['movie'])
 
     def test_autonomous_wakes_no_longer_cap_at_three(self):

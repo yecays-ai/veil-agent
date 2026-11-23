@@ -4166,6 +4166,19 @@ class Chat:
         if profile_context:
             head.append({'role': 'system', 'content': profile_context})
             labels[id(head[-1])] = 'memory.learned'
+        # Ticket 422: the small relationship base, from the same Learned Context file. It is its own
+        # request block with its own hard budget, so a turn with no recall at all still knows who the
+        # two of them are right now. Empty when nothing is currently confirmed: no cost, no text.
+        relationship = {}
+        relationship_base_message = None
+        if getattr(self, 'profile', None) and hasattr(self.profile, 'relationship_items'):
+            from relationship_base import build as build_relationship_base
+            from relationship_base import message as relationship_message
+            relationship = build_relationship_base(self.profile, getattr(self.cfg, 'profile', None))
+            relationship_base_message = relationship_message(relationship)
+            if relationship_base_message:
+                head.append(relationship_base_message)
+                labels[id(relationship_base_message)] = 'relationship_base'
         head.append({'role': 'system', 'content': stable})
         labels[id(head[-1])] = 'system.facts'
         # Ticket 354: his own notes on the last few days sit after the cached prefix and before the
@@ -4303,10 +4316,12 @@ class Chat:
         # restart) shares it.
         history_allowance = None
         auxiliary_allowance = None
+        memory_space = None
         if defer_recall and self.memory:
             from recall_budget import protected_recent_tokens
             required = estimate_request_tokens([*head, *runtime_required, user], tool_schema, calibration)
             space = max(0, limit - required)
+            memory_space = space
             history_tokens = estimate_message_tokens(history, calibration)
             protected = protected_recent_tokens(self.history_events[:len(history)], calibration)
             auxiliary_tokens = estimate_message_tokens(auxiliary_context, calibration)
@@ -4488,6 +4503,25 @@ class Chat:
         snapshot_step(1, messages, tool_schema, sent=not self.tool_mode)
         save_debug = getattr(self.memory, 'save_recall_debug', None) if self.memory is not None else None
         if callable(save_debug) and not skip_recall:
+            # Ticket 422: say what the relationship base actually contributed, even when no event was
+            # recalled. `space` is what the required blocks left memory this turn; a base that no longer
+            # fits its own small budget is reported as degraded instead of silently vanishing.
+            debug = getattr(self.memory, 'last_recall_debug', None)
+            if isinstance(debug, dict):
+                try:
+                    base_tokens = (estimate_message_tokens([relationship_base_message], calibration)
+                                   if relationship_base_message is not None else 0)
+                except Exception:
+                    base_tokens = 0
+                debug['relationship_base'] = {
+                    'chars': relationship.get('chars', 0), 'tokens': base_tokens,
+                    'items': [item.get('id') for item in relationship.get('items', [])],
+                    'statuses': {item.get('id'): item.get('status') for item in relationship.get('items', [])},
+                    'dropped': list(relationship.get('dropped') or []),
+                    'degraded': bool(relationship.get('degraded')),
+                    'reason': relationship.get('reason') or '',
+                    'space_tokens': memory_space,
+                }
             # Ticket 391: IDs only, no query or memory text; the panel reads this next to the context log.
             try:
                 save_debug(request_id)

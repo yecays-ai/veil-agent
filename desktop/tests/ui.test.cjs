@@ -340,3 +340,17 @@ test('event memories distinguish unknown occurrence dates from save times (ticke
   assert.match(js, /stage\.at_known===true\?`发生 [\s\S]*?:`日期未知（记于 \$\{strTime\(stage\.saved_at\|\|stage\.at\)\}）`/);
   assert.match(js, /story_pending\?'故事待整理':\(item\.dirty\?'投影待重试':''\)/);
 });
+
+// Ticket 422: one "recall = 0" must not read as "no relationship background this turn", and the
+// stable base has to be editable from the Peter page (confirm, guess, no longer true).
+test('context diagnostics separate the relationship base, related recall and natural association (ticket 422)', async () => {
+  const [js, html, page] = await Promise.all([read('chat.js'), read('chat.html'), read('peter-page.js')]);
+  assert.match(js, /关系底色/);
+  assert.match(js, /相关召回/);
+  assert.match(js, /自然联想/);
+  assert.match(js, /没有自然浮现/);
+  assert.match(html, /id="peter-relationship"/);
+  assert.match(html, /id="peter-relationship-save"/);
+  assert.match(page, /action: 'save_relationship'/);
+  assert.match(page, /'不再适用'/);
+});

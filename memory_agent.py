@@ -1422,7 +1422,11 @@ class Memory:
             (query or '').encode('utf-8')).hexdigest()[:12], 'ombre': [], 'hidden': [], 'vector': [],
             'judge': {'status': 'skipped', 'candidates': 0, 'picked': []}, 'dropped': [],
             'injected': [], 'opening': [], 'budget_dropped': [], 'failure': '',
-            'followup': False, 'reused': [], 'items': [], 'budget': {}}
+            'followup': False, 'reused': [], 'items': [], 'budget': {},
+            # Ticket 422: three separate paths plus the base that is always carried, and the reason
+            # each natural-association candidate was passed over.
+            'relationship_base': {}, 'relevant_recall': [], 'natural_association': [],
+            'association': {}}
         recall_cfg = self.recall_settings
         explicit = asks_about_past(query) and not (rotate or wake)
         cooldown = 0 if explicit else recall_cfg['cooldown_turns']
@@ -1606,16 +1610,39 @@ class Memory:
                 kinds[key] = 'relevant'
             elif widen:
                 kinds[key] = 'rotation'
-        if (not wake and drift and len(kept) < 3 and recall_cfg['random_chance']
-                and self.rng.random() < recall_cfg['random_chance']):
-            for key, body in self.context_visible(drift, failure_stage='recall_visibility'):
-                shown = {other for other, _ in kept}
-                if key not in shown and not cooled(key) and not duplicate(key, kept):
-                    kept.append((key, '(Random recollection, not a search hit: an old memory that surfaced '
-                                      'on its own.)\n' + body))
-                    sources[key] = 'random'
-                    kinds[key] = 'random'
-                    break
+        if not wake and not widen and drift and len(kept) < 2:
+            # Ticket 422: weak natural association. Ombre's own "surfaced by itself" hits are the only
+            # candidates; which one (or none) comes from importance, time since it last surfaced, the
+            # cooldown, the room this moment leaves, and what this request already carries. No dice.
+            from natural_association import choose as choose_association
+            shown = {other for other, _ in kept}
+            visible_drift = self.context_visible(drift, failure_stage='recall_visibility')
+            considered = []
+            association_dropped = []
+            for key, body in visible_drift:
+                if key in shown:
+                    association_dropped.append({'id': key, 'reason': 'duplicate'})
+                elif cooled(key):
+                    association_dropped.append({'id': key, 'reason': 'cooldown'})
+                elif duplicate(key, kept):
+                    association_dropped.append({'id': key, 'reason': 'same_event'})
+                else:
+                    considered.append((key, body))
+            choice = choose_association(query, considered, metas, self.rotation.last,
+                                       self.rotation.turn, shown, recall_cfg)
+            association_dropped.extend(choice['dropped'])
+            self.last_recall_debug['association'] = {
+                'candidates': len(visible_drift), 'picked': [choice['key']] if choice['key'] else [],
+                'dropped': association_dropped, 'reason': choice['reason'] or ''}
+            if choice['key']:
+                kept.append((choice['key'],
+                             prompts.text('memory.association.label') + '\n' + choice['body']))
+                sources[choice['key']] = 'association'
+                kinds[choice['key']] = 'association'
+        if not self.last_recall_debug.get('association'):
+            self.last_recall_debug['association'] = {
+                'candidates': 0, 'picked': [], 'dropped': [],
+                'reason': 'no_candidates' if not drift else 'not_applicable'}
         if opening_visible:
             pinned = [item for item in opening_visible if '核心准则' in item[1].split('\n', 1)[0]
                       or str(metas.get(item[0], {}).get('pinned', '')).lower() == 'true']
@@ -1666,7 +1693,7 @@ class Memory:
                 text = text + '\n' + directory
             source = sources.get(key, 'search')
             blocks_out.append({'id': key, 'group': 'recall', 'text': text,
-                               'priority': 900 if source == 'random' else 10 + index,
+                               'priority': 900 if source in ('random', 'association') else 10 + index,
                                'source': source, 'event_id': event_id, 'pointer': pointer_text,
                                'kind': kinds.get(key, 'search')})
         for index, (key, body) in enumerate(opening_shown):
@@ -1821,6 +1848,16 @@ class Memory:
                            'read_id': item['id'], 'event': item.get('event_id') or '',
                            'story': bool(item.get('story'))}
                           for item in opening_items + recall_items]
+        # Ticket 422: the four things a recall summary has to keep apart, so one "recall = 0" can never
+        # again read as "he has no relationship background this turn".
+        debug['relevant_recall'] = [item['id'] for item in recall_items
+                                    if item.get('kind') in ('search', 'feel', 'context', 'relevant',
+                                                            'rotation')]
+        debug['natural_association'] = [item['id'] for item in recall_items
+                                        if item.get('kind') == 'association']
+        carried = [item['id'] for item in recall_items if item.get('source') == 'followup']
+        if carried:
+            debug['reused'] = list(dict.fromkeys([*(debug.get('reused') or []), *carried]))
         debug['budget'] = {**plan, 'memory_allowance': memory_allowance,
                            'memory_used': memory_used, 'history_allowance': history_allowance,
                            'auxiliary_allowance': auxiliary_allowance}

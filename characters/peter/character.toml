@@ -57,8 +57,16 @@ input_cny_per_million = "0"
 # dedup = true              # one memory per event: Ombre same_event/continuation links or stored vectors >= dedup_similarity
 # dedup_similarity = 0.88
 # excerpt_chars = 0         # 0 = whole story; the request budget decides how many fit. An old positive value still limits each memory, cut at a paragraph/sentence boundary
-# random_chance = 0.1       # when the search found fewer than 3, chance to add one of Ombre's random recollections (0 = off)
+# random_chance = 0.1       # deprecated by ticket 422: a config with 0 still switches weak association off; the value is no longer used as a probability
 # rotation_candidates = 8   # candidate pool for autonomous wakes; there is no fixed number shown
+# Ticket 422: weak natural association (Ombre's own "忽然想起来" hits). It is scored, not drawn:
+# importance, turns since it last surfaced, cooldown, and whether this moment is light enough.
+# There is no every-N-turns rule; "nothing suitable" is a normal result.
+# [memory.recall]
+# association_enabled = true
+# association_min_importance = 4   # below this stored importance a memory is not personal enough to surface unasked
+# association_cooldown_turns = 8    # a memory that just surfaced stays out this many turns
+# association_light_chars = 40      # longer messages (or work/bug/log topics) get no association
 # Ticket 382 / 419: a small relevance judge for automatic recall. ON by default. Lan's switch on the memory page ("想起判官")
 # overrides `enabled` and acts at once; turning it off restores ticket 381's recall and changes no memory.
 # The judge looks at Ombre's hits plus the nearest memories by vector and may pick every candidate that bears directly on her
@@ -156,11 +164,19 @@ daily_budget_cny = "1"
 
 [profile]
 # Ticket 394: Learned Context replaces the single about-lan.md blob. The old file is kept as the
-# migration source; facts, growth and ongoing share one 4,000-byte budget.
+# migration source; facts, growth, ongoing and the relationship items share one 4,000-byte budget.
 file = "learned-context.json"
 learned = true
 legacy_file = "about-lan.md"
 max_bytes = 4000
+# Ticket 422: the small stable relationship base carried into every normal request. It is built from
+# the relationship items (confirmed / uncertain / retired) in the same file, whole items only, and it
+# is never dropped silently: a part that no longer fits is recorded as degraded. To change these
+# values, add this table right here (before the next section):
+# [profile.relationship_base]
+# enabled = true
+# max_chars = 480
+# max_items = 8
 
 [user_persona]
 # Ticket 394: Lan's own persona, separate from Peter's notes about her.

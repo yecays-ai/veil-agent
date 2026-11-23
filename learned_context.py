@@ -20,6 +20,13 @@ import prompts
 from agent_types import UserError
 
 SECTIONS = ('facts', 'growth')
+# Ticket 422: the stable relationship base. Each item is one thing Peter currently understands about the
+# two of them. `confirmed` and `uncertain` reach the model (the uncertain ones labelled as his guess);
+# `outdated` is kept only as history and never sent, so a stale rule cannot pass as current consensus.
+RELATIONSHIP_STATUSES = ('confirmed', 'uncertain', 'outdated')
+# Who says so. Lan's own words outrank repeated evidence, evidence outranks Peter's reading.
+RELATIONSHIP_SOURCES = ('lan', 'evidence', 'peter')
+SOURCE_RANK = {'lan': 3, 'evidence': 2, 'peter': 1}
 # Ticket 413: ongoing means "not finished yet". Finished items stay in the file as completed so Lan can
 # read, reopen or delete them, but only active/uncertain reach the model and count toward the byte budget.
 ONGOING_STATUSES = ('active', 'uncertain', 'completed')
@@ -63,6 +70,7 @@ class LearnedContext:
             'version': VERSION,
             'facts': {'text': facts, 'updated_at': _now() if facts else ''},
             'growth': {'text': '', 'updated_at': ''},
+            'relationship': {'items': [], 'updated_at': ''},
             'ongoing': {'items': [], 'updated_at': ''},
             'updated_at': _now(),
         }
@@ -89,8 +97,26 @@ class LearnedContext:
                 raise UserError(f'{self.path.name} 第 {exc.lineno} 行第 {exc.colno} 列不是合法 JSON：{exc.msg}。'
                                 f'请恢复到上一个版本；当前聊天会继续使用旧笔记。错误记录在 {self.error_path}。') from exc
             self._upgrade_ongoing(data)
+            self._upgrade_relationship(data)
             self._validate(data)
             return data
+
+    @staticmethod
+    def _upgrade_relationship(data):
+        """Ticket 422: files written before this ticket have no relationship block; read it as empty.
+
+        Nothing is written here: an untouched file stays byte-for-byte the same until Peter or Lan
+        actually changes the stable relationship base."""
+        if not isinstance(data, dict):
+            return
+        block = data.get('relationship')
+        if not isinstance(block, dict):
+            data['relationship'] = {'items': [], 'updated_at': ''}
+            return
+        if not isinstance(block.get('items'), list):
+            block['items'] = []
+        if not isinstance(block.get('updated_at'), str):
+            block['updated_at'] = ''
 
     @staticmethod
     def _upgrade_ongoing(data):
@@ -137,7 +163,31 @@ class LearnedContext:
             for key in ('created_at', 'updated_at', 'last_verified_at'):
                 if key in item and not isinstance(item[key], str):
                     raise UserError(f'{self.path.name} 的 ongoing.items[{index}].{key} 无效。')
+        block = data.get('relationship') or {}
+        if not isinstance(block, dict) or not isinstance(block.get('items'), list):
+            raise UserError(f'{self.path.name} 的 relationship 块不完整。请恢复上一个版本。')
+        self._validate_relationship_items(block['items'])
         self._check_budget(self._content_bytes(data), 0)
+
+    def _validate_relationship_items(self, items):
+        seen = set()
+        for index, item in enumerate(items):
+            if not isinstance(item, dict):
+                raise UserError(f'relationship 第 {index + 1} 条不是对象。')
+            if not isinstance(item.get('id'), str) or not item['id']:
+                raise UserError(f'relationship 第 {index + 1} 条缺少 id。')
+            if item['id'] in seen:
+                raise UserError(f'relationship id 重复：{item["id"]}。')
+            seen.add(item['id'])
+            if not isinstance(item.get('text'), str) or not item['text'].strip():
+                raise UserError(f'relationship 第 {index + 1} 条正文为空。')
+            if item.get('status') not in RELATIONSHIP_STATUSES:
+                raise UserError(f'relationship 第 {index + 1} 条状态无效。')
+            if item.get('source') not in RELATIONSHIP_SOURCES:
+                raise UserError(f'relationship 第 {index + 1} 条来源无效。')
+            for key in ('created_at', 'updated_at', 'superseded_by'):
+                if key in item and not isinstance(item[key], str):
+                    raise UserError(f'relationship 第 {index + 1} 条 {key} 无效。')
 
     def _content_bytes(self, data=None):
         if data is None:
@@ -146,6 +196,10 @@ class LearnedContext:
         # Ticket 413: finished items are not sent to the model, so they must not take budget either.
         total += sum(_text_bytes(item['text']) for item in data['ongoing']['items']
                      if item['status'] in ('active', 'uncertain'))
+        # Ticket 422: an outdated rule is history, not current state, so it is not sent and not counted.
+        relationship = data.get('relationship') or {}
+        total += sum(_text_bytes(item['text']) for item in relationship.get('items') or []
+                     if isinstance(item, dict) and item.get('status') in ('confirmed', 'uncertain'))
         return total
 
     def _check_budget(self, total, delta):
@@ -180,6 +234,24 @@ class LearnedContext:
         if facts:
             lines.append(prompts.text('memory.learned.facts') + '\n' + facts)
         return '\n\n'.join(lines)
+
+    def relationship_items(self):
+        """Ticket 422: the stable relationship items, as stored. Never raises; a broken file means none."""
+        try:
+            data = self._load()
+        except UserError as exc:
+            self._log_error('relationship_items', exc)
+            return []
+        block = data.get('relationship') or {}
+        return [dict(item) for item in block.get('items') or [] if isinstance(item, dict)]
+
+    def notes_text(self):
+        """facts + growth as one string, for de-duplicating the relationship base against them."""
+        try:
+            data = self._load()
+        except UserError:
+            return self._legacy_text()
+        return data['facts']['text'] + '\n' + data['growth']['text']
 
     def dynamic_context(self):
         """Ongoing items, injected late so updates do not break the stable prefix.
@@ -290,6 +362,36 @@ class LearnedContext:
             self._record('save_ongoing', before, data)
             return data
 
+    def save_relationship(self, items, expected_updated_at=None, force=False):
+        """Ticket 422: Lan's own edits to the stable relationship base. Her text always wins."""
+        if not isinstance(items, list):
+            raise UserError('relationship 必须是条目列表。')
+        with self.lock:
+            data = self._load()
+            block = data.get('relationship') or {}
+            if not force and expected_updated_at and block.get('updated_at') != expected_updated_at:
+                raise UserError('你打开之后这一块又改过；请先刷新，或用“覆盖他的版本”保存。')
+            before = json.loads(json.dumps(data, ensure_ascii=False))
+            now = _now()
+            cleaned = []
+            for item in items:
+                if not isinstance(item, dict):
+                    raise UserError('relationship 必须是条目列表。')
+                row = dict(item)
+                row['text'] = row['text'].strip() if isinstance(row.get('text'), str) else ''
+                row.setdefault('created_at', now)
+                row['updated_at'] = now
+                # A manual edit is Lan's own word, so the source is hers.
+                row['source'] = 'lan'
+                cleaned.append(row)
+            self._validate_relationship_items(cleaned)
+            data.setdefault('relationship', {})['items'] = cleaned
+            data['relationship']['updated_at'] = now
+            self._check_budget(self._content_bytes(data), 0)
+            self._write(data)
+            self._record('save_relationship', before, data)
+            return data
+
     def _validate_items(self, items):
         seen = set()
         for index, item in enumerate(items):
@@ -319,7 +421,15 @@ class LearnedContext:
                     'error_log': str(self.error_path), 'max_bytes': self.max_bytes}
         result = {'available': True, 'error': '', 'path': str(self.path), 'max_bytes': self.max_bytes,
                   'used_bytes': self._content_bytes(data), 'updated_at': data.get('updated_at', ''),
-                  'sections': {}, 'ongoing': {'items': [], 'updated_at': data['ongoing'].get('updated_at', '')}}
+                  'sections': {}, 'ongoing': {'items': [], 'updated_at': data['ongoing'].get('updated_at', '')},
+                  'relationship': {'items': [],
+                                   'updated_at': (data.get('relationship') or {}).get('updated_at', '')}}
+        block = data.get('relationship') or {}
+        for item in block.get('items') or []:
+            copy = dict(item)
+            if not with_text:
+                copy['text'] = ''
+            result['relationship']['items'].append(copy)
         for section in SECTIONS:
             value = data[section]
             result['sections'][section] = {
@@ -351,8 +461,10 @@ class LearnedContext:
 
     def _invoke_profile(self, name, args):
         section = args.get('section') or 'facts'
+        if section == 'relationship':
+            return self._invoke_relationship(name, args)
         if section not in SECTIONS:
-            return 'section must be facts or growth.', '被拒绝', name
+            return 'section must be facts, growth or relationship.', '被拒绝', name
         with self.lock:
             data = self._load()
             before = data[section]['text']
@@ -381,6 +493,65 @@ class LearnedContext:
             self._record(name, old_data, data)
             return (f'Saved. {section} is now {total} of {self.max_bytes} bytes; '
                     f'it takes effect from the next request.'), '成功', name
+
+    def _invoke_relationship(self, name, args):
+        """Ticket 422: Peter keeps the stable relationship base himself.
+
+        A new item is what he now understands. Replacing one keeps the old item as history
+        (`outdated`, pointing at the new one), so "I used to think X, then she confirmed Y" is still
+        there for a recollection, while the current base only carries Y. An empty new_text retires
+        the item without adding anything: that is how a rule stops being current."""
+        status = args.get('status') or 'confirmed'
+        if status not in ('confirmed', 'uncertain'):
+            return 'status must be confirmed or uncertain (outdated is kept for history only).', '被拒绝', name
+        with self.lock:
+            data = self._load()
+            before = json.loads(json.dumps(data, ensure_ascii=False))
+            block = data.setdefault('relationship', {'items': [], 'updated_at': ''})
+            items = block.setdefault('items', [])
+            now = _now()
+            if name == 'profile_append':
+                text = args.get('text')
+                if not isinstance(text, str) or not text.strip():
+                    return 'text must be a non-empty string.', '被拒绝', name
+                items.append({'id': uuid.uuid4().hex[:12], 'text': text.strip(), 'status': status,
+                              'source': 'peter', 'created_at': now, 'updated_at': now})
+                message = ('Saved as a current relationship note (%s). It applies from the next request.'
+                           % status)
+            else:
+                old, new = args.get('old_text'), args.get('new_text')
+                if not isinstance(old, str) or not old or not isinstance(new, str):
+                    return ('old_text must be a non-empty string and new_text a string.',
+                            '被拒绝', name)
+                matches = [item for item in items if item['text'].strip() == old.strip()
+                           and item['status'] != 'outdated']
+                if len(matches) != 1:
+                    return (f'old_text matches {len(matches)} current relationship items; it must match '
+                            f'exactly one. Nothing was changed.', '被拒绝', name)
+                previous = matches[0]
+                replacement = None
+                if new.strip():
+                    replacement = {'id': uuid.uuid4().hex[:12], 'text': new.strip(), 'status': status,
+                                   'source': 'peter', 'created_at': now, 'updated_at': now}
+                    items.append(replacement)
+                previous['status'] = 'outdated'
+                previous['updated_at'] = now
+                if replacement:
+                    previous['superseded_by'] = replacement['id']
+                message = ('Updated. The old note is kept as history and is no longer sent as current.'
+                           if replacement else
+                           'That relationship note is no longer current. Nothing was added.')
+            self._validate_relationship_items(items)
+            block['updated_at'] = now
+            total = self._content_bytes(data)
+            if total > self.max_bytes:
+                over = total - self.max_bytes
+                return (f'Your notes would be {total} bytes; the shared limit is {self.max_bytes} '
+                        f'({over} over). Nothing was changed. Merge or shorten existing passages first.',
+                        '被拒绝', name)
+            self._write(data)
+            self._record(name, before, data)
+            return f'{message} {total} of {self.max_bytes} bytes used.', '成功', name
 
     def _invoke_ongoing(self, args):
         action = args.get('action')

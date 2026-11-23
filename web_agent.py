@@ -436,6 +436,13 @@ class Hub(ScreenPopMixin):
                         'budget': item.get('budget') if isinstance(item.get('budget'), dict) else {},
                         'items': list(item.get('items') or []),
                         'reused': list(item.get('reused') or []),
+                        # Ticket 422: the three recall paths and the base that is carried every turn.
+                        'relationship_base': item.get('relationship_base')
+                        if isinstance(item.get('relationship_base'), dict) else {},
+                        'relevant_recall': list(item.get('relevant_recall') or []),
+                        'natural_association': list(item.get('natural_association') or []),
+                        'association': item.get('association')
+                        if isinstance(item.get('association'), dict) else {},
                         'final_trim': item.get('final_trim') or '',
                         'failure': item.get('failure') or '',
                     }
@@ -643,6 +650,14 @@ class Hub(ScreenPopMixin):
             chat.profile.save_ongoing(body.get('items'),
                                       expected_updated_at=body.get('expected_updated_at'),
                                       force=body.get('force') is True)
+            return self.peter_page()
+        if action == 'save_relationship':
+            # Ticket 422: Lan edits the stable relationship base herself; her text always wins.
+            if not getattr(chat, 'profile', None) or not hasattr(chat.profile, 'save_relationship'):
+                raise UserError('这个角色没有启用已学习的上下文。')
+            chat.profile.save_relationship(body.get('items'),
+                                           expected_updated_at=body.get('expected_updated_at'),
+                                           force=body.get('force') is True)
             return self.peter_page()
         if action == 'restore':
             section = body.get('section')
@@ -1735,7 +1750,7 @@ class Hub(ScreenPopMixin):
 
     MEMORY_KIND_LABELS = {'search': '搜索命中', 'feel': '情绪相关', 'context': '借上文命中',
                           'opening': '开场', 'rotation': '轮换选出', 'random': '随机想起',
-                          'relevant': '相关记忆', 'followup': '追问延续'}
+                          'association': '自然浮现', 'relevant': '相关记忆', 'followup': '追问延续'}
 
     def message_memory_kinds(self, message_id, items):
         """Ticket 353: how each recalled memory was chosen, as a short Chinese label; may be empty."""

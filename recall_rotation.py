@@ -31,6 +31,12 @@ DEFAULTS = {
     'directory': True,
     'directory_members': 6,
     'stage_slots': 2,
+    # Ticket 422: weak natural association. It is scored (importance, time since it last surfaced,
+    # cooldown, room in this moment), not drawn: no fixed frequency and no per-turn probability.
+    'association_enabled': True,
+    'association_min_importance': 4,
+    'association_cooldown_turns': 8,
+    'association_light_chars': 40,
 }
 EVENT_LINKS = frozenset({'same_event', 'continuation_of', 'continues'})   # everything that joins an experience
 REPEAT_LINKS = frozenset({'same_event'})                                # the same thing twice: shown once
@@ -51,7 +57,8 @@ def settings(memory_cfg):
     result = dict(DEFAULTS)
     if raw.get('enabled') is False:
         return {**result, 'cooldown_turns': 0, 'dedup': False, 'excerpt_chars': 0,
-                'random_chance': 0.0, 'rotation_candidates': 0, 'directory': False}
+                'random_chance': 0.0, 'rotation_candidates': 0, 'directory': False,
+                'association_enabled': False}
     for key in ('cooldown_turns', 'excerpt_chars', 'rotation_candidates'):
         value = raw.get(key)
         if type(value) is int and 0 <= value <= 10_000:
@@ -69,6 +76,14 @@ def settings(memory_cfg):
         value = raw.get(key)
         if type(value) in (int, float) and 0 <= value <= 1:
             result[key] = float(value)
+    if type(raw.get('association_enabled')) is bool:
+        result['association_enabled'] = raw['association_enabled']
+    for key, low, high in (('association_min_importance', 0, 10),
+                           ('association_cooldown_turns', 0, 200),
+                           ('association_light_chars', 8, 400)):
+        value = raw.get(key)
+        if type(value) is int and low <= value <= high:
+            result[key] = value
     if result['excerpt_chars'] and result['excerpt_chars'] < 120:
         result['excerpt_chars'] = 120  # shorter than this cannot carry a recognisable opening
     return result
