@@ -1,6 +1,6 @@
 # 当前状态
 
-## P2-B · Brain 读取接管与切换回退（施工中，隔离）
+## P2-B · Brain 读取接管与切换回退（施工中，隔离，勿合并）
 
 - 分支 `ticket/435-p2-b-read`（基于 P2-A）；默认不改变正式 Peter。
 - 已接：开场/搜索/context、判官与 assisted 向量、页面/版本/事件读取（A 的 BrainRead/BrainStore）。
