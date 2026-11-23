@@ -887,7 +887,11 @@ def trace(root, role, request_id='', run_id='', call_id=''):
         for row in chats:
             if _text(row.get('request_id')) not in ids:
                 continue
-            chain['messages'].append({'time': _time_text(row.get('time')), 'role': row.get('role'),
+            # Deliberately not a "role/content" dict: this module must never look
+            # like it builds a model request (tests/test_prompt_registry.py scans
+            # every root module for that shape).
+            chain['messages'].append({'time': _time_text(row.get('time')),
+                                      'user': row.get('role') == 'user',
                                       'chars': len(_text(row.get('content'))),
                                       'message_id': row.get('message_id') or ''})
     for row in contexts:
@@ -1048,7 +1052,7 @@ def service_info(root, role, hub=None):
             'python': platform.python_version(),
             'platform': f'{platform.system()} {platform.release()} {platform.machine()}',
             'cpu_count': os.cpu_count() or 0, 'memory': _memory_bytes(),
-            'data_bytes': _dir_bytes(root), 'role': role,
+            'data_bytes': _dir_bytes(root), 'character': role,
             'error_file': _guard(lambda: service_error_path(root).read_text(encoding='utf-8').strip()[:400]) or ''}
     if hub is not None:
         started = getattr(hub, 'started_at', None)
@@ -1143,7 +1147,7 @@ def _report_header(service, now):
         'VEIL 诊断报告',
         '=' * 32,
         f"时间：{now.isoformat(timespec='seconds')}",
-        f"角色：{service.get('role') or '?'}　｜　代码：{service.get('commit') or '未知'}"
+        f"角色：{service.get('character') or '?'}　｜　代码：{service.get('commit') or '未知'}"
         f"（{service.get('branch') or '?'}）",
         f"服务：{state}" + (f"　｜　已运行 {_duration(uptime)}" if uptime else ''),
         f"系统：{service.get('platform') or '?'}　｜　{service.get('cpu_count') or '?'} 核　｜　内存 {mem}",

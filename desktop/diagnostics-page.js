@@ -276,7 +276,7 @@
 
     var steps = [];
     if (chain.messages && chain.messages.length) {
-      steps.push('你这条消息：' + chain.messages.filter(function (m) { return m.role === 'user'; }).length +
+      steps.push('你这条消息：' + chain.messages.filter(function (m) { return m.user === true; }).length +
         ' 条（只显示字数，正文不进诊断页）');
     } else if (chain.note) {
       steps.push(chain.note);

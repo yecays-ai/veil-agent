@@ -7,7 +7,7 @@
 - **关联规则（Lan 定的）**：只认 `request_id` / `call_id` / `autonomy_run_id`；旧记录没有 id 一律标「可能关联，未经确认」，不靠时间推断。自主活动的 run id 就是 `autonomy.jsonl` 的 `started_at`，没加新字段。
 - 拒绝分类：`pending-approvals.json` 的 run_id 相同才算精确（waiting/expired/denied）；其余按文案规则并写清依据。实测 607 条里 20.1% 是「未分类」（51 条没有原因文本、31 条详情被活动摘要覆盖、40 条没有规则命中）——**没有为了达标强行归类**，页面和报告会给出这三档数字。
 - 审查后定点修复 9 项（Cubic + Lan）：见工单「审查后定点修复」一节；未扩大范围，未重构。
-- 已验证：`tests/test_diagnostics.py` 34 条、桌面 `ui.test.cjs` 23 条、回归 `test_tools/test_chat/test_autonomy/test_request_snapshots/test_tool_budget` 共 303 条通过（3 跳过）。**未做**：Lan 的 Windows 体验（8 步在工单里）；本机沙箱拒绝 0700 目录（`tempfile.mkdtemp`），仓库既有的 `TemporaryDirectory` 用例在 main 上同样报错（已用 main 复现，不是本单引入；CI 正常）。
+- 已验证：`tests/test_diagnostics.py` 34 条、桌面 `ui.test.cjs` 23 条、相关回归 432 条通过（3 跳过）。**未做**：Lan 的 Windows 体验（8 步在工单里）；本机沙箱拒绝 0700 目录（`tempfile.mkdtemp`），仓库既有的 `TemporaryDirectory` 用例在 main 上同样报错（已用 main 复现，不是本单引入；CI 正常）。
 - 下一个窗口第一步：等 Lan 的 Windows 验收；她通过后再合并。合并前 rebase 一次 `origin/main` 并重跑上面三组检查。若她要改分类口径，只改 `diagnostics.py` 的规则表与 `test_diagnostics.py`，页面不用动。
 - 已知边界：MCP 错误、桌面连接、崩溃只有"本次运行内"的信息；「到点没醒」是推断不是记录；记忆维护只是链接槽位（等记忆组给 URL）；不做自动修复/重启/告警/图表/导出。
 
