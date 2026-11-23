@@ -339,3 +339,16 @@ body{isolation:isolate}
 .snap-tool>summary{cursor:pointer;padding:7px 0;font-size:12px}
 .snap-tool .instr-text{max-height:260px;overflow:auto}
 .instr-badge.stale{color:#8fb6e0;border-color:#3f5670}
+
+/* Ticket 432: developer diagnostics page (read-only maintenance view). */
+.diag-shell{display:grid;gap:10px;padding:2px 2px 14px}
+.diag-block{flex:none;min-height:0}
+.diag-block .context-list{gap:0}
+.diag-system .context-row{grid-template-columns:72px 1fr;align-items:baseline}
+.diag-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.diag-actions .muted{font-size:11px}
+.diag-actions button{white-space:nowrap}
+.diag-copy{border-color:color-mix(in srgb,var(--accent) 55%,var(--line))}
+#diag-detail[hidden]{display:none}
+#diag-detail .context-list{margin:6px 0}
+#diagnostics-view .context-row .head button{font-size:11px;padding:2px 8px}

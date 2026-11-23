@@ -37,6 +37,7 @@ from veil_agent import (ROOT, AUTONOMY_WAKE, CODEX_WATCH_WAKE, GLANCE_WAKE, MAX_
                         safe_tool_activity_detail)
 import workbench_switch
 import persona_versions
+import diagnostics
 from autonomy import AutonomyController, GlanceController
 from hub_screen_pop import ScreenPopMixin
 from codex_watch import CodexWatchController
@@ -171,7 +172,9 @@ class Hub(ScreenPopMixin):
 
     def __init__(self, name, activity, memory_port=None, media_root=None, data_root=None, config_root=None):
         self.name = name
-        self.life_path = (Path(data_root) if data_root else ROOT / 'data') / 'life-records.json'
+        self.data_root = Path(data_root) if data_root else ROOT / 'data'
+        self.started_at = time.time()          # ticket 432: the diagnostics page shows real uptime
+        self.life_path = self.data_root / 'life-records.json'
         self.config_root = Path(config_root) if config_root else ROOT
         self.acceptance_limits = None
         self.chat = None
@@ -2434,6 +2437,16 @@ def make_handler(hub, token):
                     self._send(200, hub.pending_approvals())
                 except UserError as exc:
                     self._send(400, {'error': str(exc)})
+            elif url.path == '/api/diagnostics/overview':
+                self._get_diagnostics_overview()
+            elif url.path == '/api/diagnostics/issues':
+                self._get_diagnostics_issues(query)
+            elif url.path == '/api/diagnostics/trace':
+                self._get_diagnostics_trace(query)
+            elif url.path == '/api/diagnostics/report':
+                self._get_diagnostics_report(query)
+            elif url.path == '/api/diagnostics/links':
+                self._get_diagnostics_links()
             elif url.path == '/api/screen-pop/next':
                 self._get_screen_pop_next(query)
             elif url.path == '/api/desktop-icons/snapshots':
@@ -2892,6 +2905,123 @@ def make_handler(hub, token):
                 self._send(404, {'error': '还没有这一轮的快照；更新后发一句话就会生成。'})
                 return
             self._send(200, bundle)
+
+        # ---- ticket 432: read-only developer diagnostics ----
+
+        DIAGNOSTIC_HOURS = 72
+
+
+        def _diagnostic_context(self):
+            chat = hub.chat
+            if chat is None:
+                return None, None, None
+            try:
+                stat = (chat.store.root / f'{chat.cfg.id}/tools.jsonl').stat()
+                key = (chat.cfg.id, stat.st_size, stat.st_mtime_ns, 240)
+            except OSError:
+                key = None
+            return chat, chat.cfg.id, hub.tool_inventory(key)
+
+        @staticmethod
+        def _hours(query):
+            raw = (query.get('hours') or [''])[0]
+            return max(1, min(24 * 30, int(raw))) if str(raw).isdigit() else 72
+
+        def _get_diagnostics_overview(self):
+            if not self._guard(self.headers.get('X-Token')):
+                return
+            chat, role, inventory = self._diagnostic_context()
+            if chat is None:
+                self._send(503, {'error': '服务还没准备好。'})
+                return
+            try:
+                data = diagnostics.overview(hub.data_root, role, hub=hub, inventory=inventory)
+                diagnostics.snapshot_if_stale(hub.data_root, role, data)
+            except Exception:
+                logger.exception('diagnostics overview failed')
+                self._send(503, {'error': '诊断数据暂时读不到。'})
+                return
+            self._send(200, data)
+
+        def _get_diagnostics_issues(self, query):
+            if not self._guard(self.headers.get('X-Token')):
+                return
+            chat, role, _inventory = self._diagnostic_context()
+            if chat is None:
+                self._send(503, {'error': '服务还没准备好。'})
+                return
+            module = (query.get('module') or [''])[0]
+            limit = (query.get('limit') or ['120'])[0]
+            limit = max(1, min(200, int(limit))) if str(limit).isdigit() else 120
+            try:
+                rows = diagnostics.recent_issues(hub.data_root, role, hours=self._hours(query))
+            except Exception:
+                logger.exception('diagnostics issues failed')
+                self._send(503, {'error': '诊断数据暂时读不到。'})
+                return
+            if module:
+                rows = [row for row in rows if row.get('module') == module]
+            self._send(200, {'items': rows[:limit], 'total': len(rows)})
+
+        def _get_diagnostics_trace(self, query):
+            if not self._guard(self.headers.get('X-Token')):
+                return
+            chat, role, _inventory = self._diagnostic_context()
+            if chat is None:
+                self._send(503, {'error': '服务还没准备好。'})
+                return
+            values = {}
+            for name in ('request_id', 'run_id', 'call_id'):
+                value = (query.get(name) or [''])[0]
+                if value and not diagnostics.valid_id(value):
+                    self._send(400, {'error': '参数不对。'})
+                    return
+                values[name] = value
+            if not any(values.values()):
+                self._send(400, {'error': '需要 request_id、run_id 或 call_id 之一。'})
+                return
+            try:
+                chain = diagnostics.trace(hub.data_root, role, **values)
+                # A wake id resolves to its own request ids; the snapshot list must
+                # come from the resolved turn, not from the (empty) parameter.
+                steps = diagnostics.snapshots(hub.data_root, role,
+                                              (chain or {}).get('request_id') or '')
+            except Exception:
+                logger.exception('diagnostics trace failed')
+                self._send(503, {'error': '这一轮的诊断暂时读不到。'})
+                return
+            self._send(200, {'chain': chain, 'snapshots': steps})
+
+        def _get_diagnostics_report(self, query):
+            if not self._guard(self.headers.get('X-Token')):
+                return
+            chat, role, inventory = self._diagnostic_context()
+            if chat is None:
+                self._send(503, {'error': '服务还没准备好。'})
+                return
+            scope = (query.get('scope') or ['overview'])[0]
+            issue_id = (query.get('id') or [''])[0]
+            if issue_id and not diagnostics.valid_id(issue_id):
+                self._send(400, {'error': '参数不对。'})
+                return
+            try:
+                text = diagnostics.report_text(hub.data_root, role, hub=hub, inventory=inventory,
+                                               hours=self._hours(query),
+                                               issue_id=issue_id if scope == 'issue' else '')
+            except Exception:
+                logger.exception('diagnostics report failed')
+                self._send(503, {'error': '报告暂时生成不了。'})
+                return
+            self._send(200, {'text': text, 'characters': len(text)})
+
+        def _get_diagnostics_links(self):
+            if not self._guard(self.headers.get('X-Token')):
+                return
+            chat, role, _inventory = self._diagnostic_context()
+            if chat is None:
+                self._send(503, {'error': '服务还没准备好。'})
+                return
+            self._send(200, {'items': diagnostics.links(hub.data_root, role, chat.cfg)})
 
         def _post_instructions(self, body):
             try:

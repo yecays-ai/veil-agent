@@ -45,7 +45,7 @@ function notify(text,kind='notice'){
   setTimeout(()=>node.remove(),Math.min(15000,Math.max(2000,text.length*80)));
 }
 function setPage(name){
-  if(!['chat','activity','context','instructions','memory','mcp','more','life','peter'].includes(name))return;
+  if(!['chat','activity','context','instructions','memory','mcp','more','life','peter','diagnostics'].includes(name))return;
   if(detachedView&&name!==detachedView)return;
   document.body.dataset.currentPage=name;
   document.querySelectorAll('[data-page]').forEach(button=>{
@@ -2524,6 +2524,7 @@ document.querySelectorAll('[data-page]').forEach(button=>button.onclick=async()=
   if(button.dataset.page==='life')loadLife();
   if(button.dataset.page==='peter'&&window.peterLoadPage)window.peterLoadPage();
   if(button.dataset.page==='instructions')loadInstructions();
+  if(button.dataset.page==='diagnostics'&&window.diagnosticsLoad)window.diagnosticsLoad();
 });
 document.querySelectorAll('[data-rail-page]').forEach(button=>button.onclick=()=>{
   const page=button.dataset.railPage;

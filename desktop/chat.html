@@ -35,6 +35,7 @@
     <button class="nav-item" data-page="memory" title="拖出成独立窗口"><span data-lucide="brain"></span><span class="nav-label">记忆</span></button>
     <button class="nav-item" data-page="life" title="拖出成独立窗口"><span data-lucide="calendar-heart"></span><span class="nav-label">生活记录</span></button>
     <button class="nav-item" data-page="mcp" title="拖出成独立窗口"><span data-lucide="plug"></span><span class="nav-label">MCP</span></button>
+    <button class="nav-item" data-page="diagnostics" title="维护用：版本、模块状态、最近异常"><span data-lucide="stethoscope"></span><span class="nav-label">诊断</span></button>
     <button class="nav-item" data-page="more" title="拖出成独立窗口"><span data-lucide="more-horizontal"></span><span class="nav-label">设置</span></button>
     <div class="sidebar-foot"><span>下次唤醒</span><b id="sidebar-next-wake">读取中…</b></div>
   </nav>
@@ -149,6 +150,36 @@
       <p class="muted">全部工具含改文件、发数据</p>
       <div class="tool-row"><button type="submit">保存服务</button><button id="mcp-cancel" type="button">取消</button></div>
     </form>
+  </section>
+
+  <section id="diagnostics-view" class="page" data-page-view="diagnostics" hidden>
+    <div class="page-heading">
+      <div><h2>调试与系统信息</h2></div>
+      <div class="diag-actions"><span id="diag-state" class="muted"></span><button id="diag-refresh" type="button">刷新</button><button id="diag-copy" type="button" class="diag-copy">复制诊断报告</button></div>
+    </div>
+    <div class="diag-shell">
+      <section class="surface context-block diag-block">
+        <h3>版本与系统 <small id="diag-version" class="muted"></small></h3>
+        <div id="diag-system" class="context-list diag-system"><p class="muted">读取中…</p></div>
+      </section>
+      <section class="surface context-block diag-block">
+        <h3>模块状态 <small id="diag-modules-summary" class="muted"></small></h3>
+        <div id="diag-modules" class="context-list"></div>
+      </section>
+      <section class="surface context-block diag-block">
+        <h3>配置校验 <small id="diag-config-summary" class="muted"></small></h3>
+        <div id="diag-config" class="context-list"></div>
+      </section>
+      <section class="surface context-block diag-block">
+        <h3>最近异常 <small id="diag-issues-summary" class="muted"></small></h3>
+        <div id="diag-issues" class="context-list"></div>
+      </section>
+      <section class="surface context-block diag-block">
+        <h3>维护入口 <small class="muted">记忆自己做维护，这里只放链接</small></h3>
+        <div id="diag-links" class="context-list"></div>
+      </section>
+      <section id="diag-detail" class="surface context-block diag-block" hidden></section>
+    </div>
   </section>
   <section id="more-view" class="page" data-page-view="more" hidden>
     <div class="page-heading"><div><h2>设置</h2></div></div>
@@ -282,6 +313,7 @@
   <script src="emoji-data.js"></script>
   <script src="chat.js"></script>
   <script src="peter-page.js"></script>
+  <script src="diagnostics-page.js"></script>
   <script src="fold-settings.js"></script>
 </body>
 </html>

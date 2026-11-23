@@ -18,7 +18,7 @@ test('sticker grid keeps its image rows visible inside the scrolling panel', asy
 test('chat shell exposes appearance CSS, custom background, global and per-page opacity controls', async () => {
   const [html, css, js, main, preload] = await Promise.all([read('chat.html'), read('chat.css'), read('chat.js'), read('main.cjs'), read('desktop-preload.cjs')]);
   assert.deepEqual([...html.matchAll(/class="nav-item[^\"]*" data-page="([^"]+)"/g)].map(match => match[1]),
-    ['chat', 'peter', 'activity', 'context', 'instructions', 'memory', 'life', 'mcp', 'more']);
+    ['chat', 'peter', 'activity', 'context', 'instructions', 'memory', 'life', 'mcp', 'diagnostics', 'more']);
   assert.match(html, /自主活动：<b id="header-autonomy-status">/);
   assert.match(html, /id="header-next-wake"/);
   assert.match(html, /id="service-status" hidden/);
@@ -385,3 +385,46 @@ test('the recall summary keeps base, recall and association apart (ticket 422)',
   assert.match(details({ carried: ['u1'] }), /追问承接/);
   assert.match(details({}), /关系底色：未记录/);
 });
+
+// Ticket 432: the diagnostics page is its own read-only view; it must not grow a
+// second copy of the activity/context pages and must never inject ledger text as HTML.
+test('development diagnostics page reads only, labels unconfirmed links and copies a server report (ticket 432)', async () => {
+  const [html, js, page, main, preload] = await Promise.all([
+    read('chat.html'), read('chat.js'), read('diagnostics-page.js'), read('main.cjs'), read('desktop-preload.cjs')]);
+  assert.match(html, /data-page-view="diagnostics"/);
+  for (const id of ['diag-copy', 'diag-refresh', 'diag-modules', 'diag-config', 'diag-issues', 'diag-links', 'diag-detail'])
+    assert.match(html, new RegExp('id="' + id + '"'), id);
+  assert.match(html, /<script src="diagnostics-page\.js"><\/script>/);
+  assert.ok(html.indexOf('chat.js') < html.indexOf('diagnostics-page.js'));
+  assert.match(js, /\['chat','activity','context','instructions','memory','mcp','more','life','peter','diagnostics'\]/);
+  assert.match(js, /window\.diagnosticsLoad\(\)/);
+  assert.match(page, /fetchJson\('\/api\/diagnostics\/overview'\)/);
+  assert.match(page, /fetchJson\('\/api\/diagnostics\/report\?scope=overview&hours=72'\)/);
+  assert.match(page, /scope=issue&id=/);
+  assert.match(page, /可能关联，未经确认/);
+  assert.match(page, /veilDesktop\.copyText/);
+  assert.doesNotMatch(page, /\.innerHTML\s*=/);
+  assert.match(main, /\/api\/diagnostics\/overview/);
+  assert.match(main, /\/api\/diagnostics\/report/);
+  assert.match(main, /chat:open-maintenance/);
+  assert.match(main, /url\.hostname !== '127\.0\.0\.1' && url\.hostname !== 'localhost'/);
+  assert.match(preload, /openMaintenance: url => ipcRenderer\.invoke\('chat:open-maintenance'/);
+});
+
+
+test('diagnostics reads fail loudly and only configured maintenance links open (ticket 432 review)', async () => {
+  const [page, main] = await Promise.all([read('diagnostics-page.js'), read('main.cjs')]);
+  assert.match(page, /response\.ok !== true/);
+  assert.match(page, /function renderFailure/);
+  assert.match(page, /诊断读取失败/);
+  assert.match(page, /renderFailure\(error/);
+  assert.match(page, /openMaintenance\(item\.id\)/);
+  assert.doesNotMatch(page, /openMaintenance\(item\.url\)/);
+  assert.match(page, /chain\.request_ids/);
+  // The renderer may only name a configured entry; the destination is looked up server-side.
+  assert.match(main, /chat:open-maintenance'[\s\S]{0,600}\/api\/diagnostics\/links/);
+  assert.match(main, /chat:open-maintenance', async \(event, id\)/);
+  // Wake ids carry a plus sign, so the trace allowlist must accept it.
+  assert.ok(main.includes('A-Za-z0-9_:.+'), 'trace id pattern must allow the wake format');
+});
+

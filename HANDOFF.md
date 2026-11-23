@@ -1,5 +1,16 @@
 # HANDOFF
 
+## 工单 432 交接（开发者诊断：异常来源清单 + 只读诊断页；2026-11-24）
+
+- 工单：`docs/tickets/432-dev-diagnostics.md`；分支 `ticket/432-dev-diagnostics`。**独立目录 `E:\Peter-Agent\VEIL\veil-agent-432`**（从 `b1e51f1` 的 clone）：施工沙箱里正式目录的 `.git` 不可写，所以用独立 clone，等价隔离；正式目录与其他人（#430 等）的目录一个字没动。
+- 做了什么：新增 `diagnostics.py`（只读聚合、模块状态、异常时间线、单轮链路、配置校验、拒绝分类、报告文本、快照；服务停止后仍可 `python diagnostics.py --data-root data --role peter` 出报告）、`desktop/diagnostics-page.js`、`tests/test_diagnostics.py`（27 条）；`web_agent` 加 5 个只读 GET 与 `Hub.data_root/started_at`；`veil_agent` 给 `provider-errors` 加 `request_id/kind/run_id`、给 `context-log` 加 `autonomy_run_id`（各 1–2 行）；桌面加导航项与页面、`main.cjs` 白名单与 `chat:open-maintenance`（只允许 127.0.0.1）。
+- **关联规则（Lan 定的）**：只认 `request_id` / `call_id` / `autonomy_run_id`；旧记录没有 id 一律标「可能关联，未经确认」，不靠时间推断。自主活动的 run id 就是 `autonomy.jsonl` 的 `started_at`，没加新字段。
+- 拒绝分类：`pending-approvals.json` 的 run_id 相同才算精确（waiting/expired/denied）；其余按文案规则并写清依据。实测 607 条里 20.1% 是「未分类」（51 条没有原因文本、31 条详情被活动摘要覆盖、40 条没有规则命中）——**没有为了达标强行归类**，页面和报告会给出这三档数字。
+- 审查后定点修复 9 项（Cubic + Lan）：见工单「审查后定点修复」一节；未扩大范围，未重构。
+- 已验证：`tests/test_diagnostics.py` 34 条、桌面 `ui.test.cjs` 23 条、回归 `test_tools/test_chat/test_autonomy/test_request_snapshots/test_tool_budget` 共 303 条通过（3 跳过）。**未做**：Lan 的 Windows 体验（8 步在工单里）；本机沙箱拒绝 0700 目录（`tempfile.mkdtemp`），仓库既有的 `TemporaryDirectory` 用例在 main 上同样报错（已用 main 复现，不是本单引入；CI 正常）。
+- 下一个窗口第一步：等 Lan 的 Windows 验收；她通过后再合并。合并前 rebase 一次 `origin/main` 并重跑上面三组检查。若她要改分类口径，只改 `diagnostics.py` 的规则表与 `test_diagnostics.py`，页面不用动。
+- 已知边界：MCP 错误、桌面连接、崩溃只有"本次运行内"的信息；「到点没醒」是推断不是记录；记忆维护只是链接槽位（等记忆组给 URL）；不做自动修复/重启/告警/图表/导出。
+
 ## 工单 433 交接（P1 试运行：Brain 召回；2026-11-24）
 
 - 工单：`docs/tickets/433-p1-brain-trial.md`；分支 `ticket/431-p1-brain-backend`，从 `main` `f2f68c7` 开。

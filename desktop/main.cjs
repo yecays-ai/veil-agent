@@ -487,6 +487,27 @@ function allowedChatRequest(pathname, method) {
       if (keys[0] === 'message_id') return /^[A-Za-z0-9_-]{1,80}$/.test(messageId || '');
       return false;
     }
+    if (url.pathname === '/api/diagnostics/overview' || url.pathname === '/api/diagnostics/links')
+      return keys.length === 0;
+    if (url.pathname === '/api/diagnostics/issues') {
+      const module = url.searchParams.get('module');
+      return keys.every(key => ['hours', 'module', 'limit'].includes(key)) &&
+        (url.searchParams.get('hours') === null || /^\d{1,3}$/.test(url.searchParams.get('hours') || '')) &&
+        (module === null || /^[a-z_]{1,24}$/.test(module)) &&
+        (url.searchParams.get('limit') === null || /^\d{1,3}$/.test(url.searchParams.get('limit') || ''));
+    }
+    if (url.pathname === '/api/diagnostics/trace') {
+      const id = url.searchParams.get('request_id') || url.searchParams.get('run_id') || url.searchParams.get('call_id');
+      return keys.length === 1 && ['request_id', 'run_id', 'call_id'].includes(keys[0]) &&
+        /^[A-Za-z0-9_:.+-]{1,120}$/.test(id || '');
+    }
+    if (url.pathname === '/api/diagnostics/report') {
+      const scope = url.searchParams.get('scope');
+      const id = url.searchParams.get('id');
+      return keys.every(key => ['scope', 'id', 'hours'].includes(key)) &&
+        (scope === 'overview' ? id === null : scope === 'issue' && /^[A-Za-z0-9_.-]{1,120}$/.test(id || '')) &&
+        (url.searchParams.get('hours') === null || /^\d{1,3}$/.test(url.searchParams.get('hours') || ''));
+    }
     if (url.pathname === '/api/mcp') return keys.length === 0 ||
       (keys.length === 1 && keys[0] === 'retry' && url.searchParams.get('retry') === '1');
     if (url.pathname === '/api/memory/catalog')
@@ -681,6 +702,23 @@ ipcMain.handle('chat:open-nowhere', async (event, address) => {
     && new URL(item.observer_url).origin === url.origin);
   if (!service) return false;
   await shell.openExternal(url.href); return true;
+});
+ipcMain.handle('chat:open-maintenance', async (event, id) => {
+  // Ticket 432 review: the renderer may only name an entry, never a URL. The
+  // destination comes from the service's own configured list, so a page cannot
+  // open an arbitrary local port or path.
+  if (!fromChatPage(event) || typeof id !== 'string' || !/^[a-z_]{1,24}$/.test(id)) return false;
+  const state = await endpointRequest('/api/diagnostics/links');
+  const item = (state.items || []).find(entry => entry && entry.id === id &&
+    entry.state === 'ready' && typeof entry.url === 'string');
+  if (!item) return false;
+  let url;
+  try { url = new URL(item.url); } catch { return false; }
+  if (!['http:', 'https:'].includes(url.protocol)) return false;
+  if (url.hostname !== '127.0.0.1' && url.hostname !== 'localhost') return false;
+  if (url.username || url.password) return false;
+  await shell.openExternal(url.href);
+  return true;
 });
 ipcMain.handle('view:detach', async (event, view, point) => {
   if (!fromChat(event) || !VIEW_NAMES.has(view) || !point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return false;
