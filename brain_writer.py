@@ -193,6 +193,10 @@ def set_state(connection, memory_id, *, hidden=None, locked=None, archived=None,
                                 'archived' if archived else 'dynamic', memory_id))
             _sidecar(connection, memory_id, 'archived' if archived else 'unarchived')
         if locked is not None:
+            connection.execute(
+                "INSERT INTO sidecar_state(memory_id,locked,links_json,sources_json) VALUES(?,?, '[]','[]') "
+                'ON CONFLICT(memory_id) DO UPDATE SET locked=excluded.locked',
+                (memory_id, int(bool(locked))))
             _sidecar(connection, memory_id, 'locked' if locked else 'unlocked', raw={'locked': bool(locked)})
         _journal(connection, 'state', memory_id, {'hidden': hidden, 'locked': locked,
                                                    'archived': archived, 'deleted': deleted,
