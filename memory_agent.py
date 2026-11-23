@@ -461,6 +461,10 @@ class Memory:
 
     def __init__(self, cfg, store, budget, model, backend, runtime_monitor=None):
         self.cfg, self.store, self.budget, self.model, self.backend = cfg, store, budget, model, backend
+        brain_settings = (cfg.memory or {}).get('brain') or {}
+        if isinstance(brain_settings, dict) and brain_settings.get('write_authority') is True \
+                and brain_settings.get('shadow') is True:
+            raise UserError('记忆写入权威与影子同步不能同时开启；请先关闭 [memory.brain] shadow。')
         self.runtime_monitor = runtime_monitor
         vault_path(store.root, cfg.id)
         self.path = f'{cfg.id}/memory/_agent/state.jsonl'

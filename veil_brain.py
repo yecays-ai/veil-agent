@@ -699,6 +699,11 @@ def run_import(source, db_path, snapshot=None, report=None):
         return importer
     connection = sqlite3.connect(str(importer.db_path))
     try:
+        events_path = importer.source / 'events.jsonl'
+        stages_path = importer.source / 'event-stages.jsonl'
+        if events_path.is_file() and stages_path.is_file():
+            import brain_events
+            brain_events.import_events(connection, events_path, stages_path)
         importer.verify(connection, before)
     finally:
         connection.close()

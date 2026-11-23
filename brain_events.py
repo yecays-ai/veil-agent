@@ -96,7 +96,6 @@ def import_events(connection, events_path, stages_path):
 
 def read_event(connection, event_id):
     """Full story plus stages, used by the export and by P2-B's read adapter."""
-    ensure_schema(connection)
     row = connection.execute(
         'SELECT event_id, memory_id, source_count, story, title, status, first_at, last_at, '
         'story_source, confidence, approved, created_at, updated_at, related_events_json, '
@@ -121,7 +120,6 @@ def read_event(connection, event_id):
 
 def export_jsonl(connection, out_dir):
     """Write Ombre-compatible events.jsonl / event-stages.jsonl for rollback."""
-    ensure_schema(connection)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     events, stages = [], []
