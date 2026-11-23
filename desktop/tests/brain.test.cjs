@@ -73,6 +73,9 @@ test('brain read-only adapter serves browse, detail, health and rejects writes',
   const base = runtime.url;
   const headers = { 'X-Brain-Token': 'test-token', 'Content-Type': 'application/json' };
   try {
+    const unauthorized = await fetch(`${base}/api/stats`);
+    assert.equal(unauthorized.status, 401);
+
     const who = await (await fetch(`${base}/api/whoami`, { headers })).json();
     assert.equal(who.user_id, 'lan');
 
@@ -93,6 +96,12 @@ test('brain read-only adapter serves browse, detail, health and rejects writes',
     const health = await (await fetch(`${base}/api/fsck/local`, { headers })).json();
     assert.equal(health.status, 'completed');
     assert.ok(health.issues.some((issue) => issue.reasoning.includes('gone')));
+
+    const search = await (await fetch(`${base}/api/memories/search`, {
+      method: 'POST', headers, body: JSON.stringify({ query: '正文一' }),
+    })).json();
+    assert.equal(search.results.length, 1);
+    assert.equal(search.results[0].id, 'a1');
 
     const write = await fetch(`${base}/api/memories/a1`, {
       method: 'POST', headers, body: '{}',
