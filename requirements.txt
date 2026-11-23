@@ -6,3 +6,6 @@ ddgs==9.16.1
 uiautomation==2.0.29; sys_platform == "win32"
 python-docx==1.2.0
 pypdf==6.21.4
+jieba==0.42.1
+rank-bm25==0.2.2
+numpy==2.4.6
