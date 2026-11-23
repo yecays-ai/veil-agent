@@ -2402,7 +2402,10 @@ def make_handler(hub, token):
                 self._get_game(url)
             elif url.path == '/api/memory/panel':
                 self._get_memory_panel()
-            elif url.path in ('/api/memory/catalog', '/api/memory/read'):
+            elif url.path in ('/api/memory/catalog', '/api/memory/read',
+                              '/api/memory/events', '/api/memory/event'):
+                # Ticket 425: the event timeline and one event's detail were handled by _get_memory
+                # but never routed here, so the memory page's 经历 tab always got a 404.
                 self._get_memory(url, query)
             elif url.path in ('/api/attachment', '/api/attachment-text'):
                 self._get_attachment(url, query)
