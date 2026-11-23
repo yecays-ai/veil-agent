@@ -10,8 +10,8 @@
 | 向量 pending/重试 | 完成 | 重试测试与隔离检查 retried=1 saved=1 |
 | 硬删除只留最小 tombstone | 完成 | 测试断言 tombstone 不含正文 |
 | 可见性保持 hidden/locked/archived | 完成（存储层） | 状态测试；未接页面 |
-| 所有写入入口接管 | **未完成** | 仅存储层；`Memory.call`/sidecar/versions/事件写入尚未接线 |
-| 隔离 Peter 端到端 | **未完成** | 仅脚本级隔离检查，未启动独立 Peter |
+| 所有写入入口接管 | **部分** | hold/trace 已接；sidecar/versions 经 BrainStore 已接；删除请求/事件 JSONL/面板直写未接 |
+| 隔离 Peter 端到端 | **部分** | 真实 Memory 实例 hold 已验；未跑完整聊天/删除/事件流程 |
 | 同 ID 导出 | 完成（导出物） | 回导 285 记忆 / 282 版本 / 172 sidecar / 0 problems |
 | Ombre 实际启动回退 | 归 P2-B | 未做 |
 | authority/shadow 互斥 | 完成 | attach 抛错测试 + Memory 初始化校验 |

@@ -469,6 +469,8 @@ class Memory:
                 self.brain_authority = attach_authority(cfg, store)
             except Exception as exc:
                 raise UserError('Brain 写入权威启动失败：%s' % exc) from exc
+            from brain_store import BrainStore
+            self.store = BrainStore(store, cfg.id, self.brain_authority.db_path)
         if isinstance(brain_settings, dict) and brain_settings.get('write_authority') is True \
                 and brain_settings.get('shadow') is True:
             raise UserError('记忆写入权威与影子同步不能同时开启；请先关闭 [memory.brain] shadow。')
