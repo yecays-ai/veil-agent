@@ -2266,14 +2266,23 @@ class Memory:
 
         Only runs after Ombre confirmed the delete: a file still outside archive/
         means the delete did not land, so nothing is erased."""
-        files = list(self._bucket_files(memory_id))
-        if any(not in_archive for _, in_archive in files):
-            return False
-        for path, _ in files:
-            path.unlink()
-        self._purge_rows(f'{self.cfg.id}/memory-versions.jsonl', memory_id, lambda row: None)
-        self._purge_rows(f'{self.cfg.id}/delete-requests.jsonl', memory_id,
-                         lambda row: {**row, 'title': '', 'reason': ''})
+        if getattr(self, 'brain_authority', None) is not None:
+            import sqlite3
+            import brain_writer
+            connection = sqlite3.connect(str(self.brain_authority.db_path), timeout=30)
+            try:
+                brain_writer.hard_delete(connection, memory_id, 'erase after confirmed delete')
+            finally:
+                connection.close()
+        else:
+            files = list(self._bucket_files(memory_id))
+            if any(not in_archive for _, in_archive in files):
+                return False
+            for path, _ in files:
+                path.unlink()
+            self._purge_rows(f'{self.cfg.id}/memory-versions.jsonl', memory_id, lambda row: None)
+            self._purge_rows(f'{self.cfg.id}/delete-requests.jsonl', memory_id,
+                             lambda row: {**row, 'title': '', 'reason': ''})
         with self.mutex:
             previous = self.state['entries'].get(memory_id, {})
             self.state['entries'][memory_id] = {

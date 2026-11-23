@@ -69,6 +69,17 @@ class NativeHoldAuthorityTests(unittest.TestCase):
         self.assertEqual(bodies, ['a new linked memory'])
         self.assertIsNone(links)
 
+    def test_erase_removes_brain_content_and_keeps_a_tombstone(self):
+        self.assertTrue(self.memory.erase(self.target))
+        connection = sqlite3.connect(str(self.db))
+        try:
+            self.assertIsNone(connection.execute('SELECT 1 FROM memories WHERE id=?',
+                                                 (self.target,)).fetchone())
+            self.assertIsNotNone(connection.execute('SELECT 1 FROM tombstones WHERE memory_id=?',
+                                                    (self.target,)).fetchone())
+        finally:
+            connection.close()
+
     def test_native_trace_updates_brain_and_keeps_a_version(self):
         result = self.tools._trace({'bucket_id': self.target, 'content': 'changed body'}, None)
         self.assertIn('成功', result[1])

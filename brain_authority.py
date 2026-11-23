@@ -95,6 +95,10 @@ class BrainAuthority:
                                        why_remembered=args.get('why_remembered') or '')
         if args.get('dont_surface') in (1, True):
             brain_writer.set_state(connection, memory_id, hidden=True)
+        if args.get('dont_surface') in (0, False) and 'dont_surface' in args:
+            brain_writer.set_state(connection, memory_id, hidden=False)
+        if args.get('restore') in (1, True):
+            brain_writer.set_state(connection, memory_id, archived=False, hidden=False, deleted=False)
         return '已更新→%s' % memory_id
 
 
