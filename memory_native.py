@@ -372,6 +372,21 @@ class NativeMemoryTools:
             return 'The memory tool failed. Check the current memory state before retrying.', '出错', self.preview_summary(name, args)
 
     def _visible_records(self, include_hidden=False):
+        if getattr(self.memory, 'brain_authority', None) is not None:
+            from brain_read import BrainRead
+            try:
+                with BrainRead(self.memory.brain_authority.db_path) as reader:
+                    entries = reader.panel_entries(limit=10000)
+                    records = {}
+                    for entry in entries:
+                        if entry['hidden'] and not include_hidden:
+                            continue
+                        if entry['bucket'] not in ('dynamic', 'permanent'):
+                            continue
+                        records[entry['memory_id']] = (entry['title'], reader.raw(entry['memory_id']) or '')
+                    return records
+            except Exception:
+                return {}
         # Read only actual bucket folders, never letters, plans, sources or private files.
         vault_path = role_vault_path(self.memory.store.root, self.memory.cfg.id)
         hidden = self.memory.hidden_ids()

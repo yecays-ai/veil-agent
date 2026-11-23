@@ -10,8 +10,8 @@
 | 向量 pending/重试 | 完成 | 重试测试与隔离检查 retried=1 saved=1 |
 | 硬删除只留最小 tombstone | 完成 | 测试断言 tombstone 不含正文 |
 | 可见性保持 hidden/locked/archived | 完成（存储层） | 状态测试；未接页面 |
-| 所有写入入口接管 | **基本完成（待事件投影端到端）** | hold/trace/erase 走 authority；sidecar/versions/events JSONL/delete-requests 走 BrainStore；原生 hold/trace/erase 测试通过；event_memory 端到端未跑 |
-| 隔离 Peter 端到端 | **部分** | 真实 Memory/NativeMemoryTools 的 hold/trace/erase 已验；未跑完整聊天/事件/页面流程 |
+| 所有写入入口接管 | **完成（隔离）** | hold/trace/erase/panel lock-edit-delete 走 authority；sidecar/versions/events/delete-requests 走 BrainStore；event_memory record 端到端通过 |
+| 隔离 Peter 端到端 | **部分** | 真实 Memory/NativeMemoryTools 的 hold/trace/erase/panel/event 已验；未跑真实聊天循环与备份恢复 |
 | 同 ID 导出 | 完成（导出物） | 回导 285 记忆 / 282 版本 / 172 sidecar / 0 problems |
 | Ombre 实际启动回退 | 归 P2-B | 未做 |
 | authority/shadow 互斥 | 完成 | attach 抛错测试 + Memory 初始化校验 |

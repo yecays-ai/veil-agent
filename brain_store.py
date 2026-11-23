@@ -27,6 +27,7 @@ class BrainStore:
     def _connect(self):
         connection = sqlite3.connect(str(self.db_path), timeout=30)
         brain_writer.ensure_schema(connection)
+        brain_events.ensure_schema(connection)
         return connection
 
     def append(self, path, row):

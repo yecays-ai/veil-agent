@@ -8,6 +8,7 @@ from unittest.mock import Mock
 import brain_writer
 import veil_brain
 from memory_agent import Memory
+from event_memory import EventMemory
 from memory_native import NativeMemoryTools
 from veil_agent import Budget, Character, Store
 
@@ -68,6 +69,30 @@ class NativeHoldAuthorityTests(unittest.TestCase):
             connection.close()
         self.assertEqual(bodies, ['a new linked memory'])
         self.assertIsNone(links)
+
+    def test_event_record_writes_brain_story_and_projection(self):
+        events = EventMemory(self.memory, settings={'enabled': True})
+        events.record('we walked to the old harbour and talked about the ferry', 'Old harbour')
+        rows = events.events()
+        self.assertTrue(rows)
+        event_id = next(iter(rows))
+        detail = events.detail(event_id)
+        self.assertTrue(detail and detail.get('story'))
+
+    def test_panel_lock_edit_and_delete_work_against_brain(self):
+        self.assertIn(self.target, self.tools._visible_records())
+        ok, _ = self.tools.panel_lock(self.target, True)
+        self.assertTrue(ok)
+        ok, _ = self.tools.panel_edit(self.target, {'content': 'edited on page'})
+        self.assertTrue(ok)
+        ok, _ = self.tools.panel_delete(self.target)
+        self.assertTrue(ok)
+        connection = sqlite3.connect(str(self.db))
+        try:
+            self.assertIsNone(connection.execute('SELECT 1 FROM memories WHERE id=?',
+                                                 (self.target,)).fetchone())
+        finally:
+            connection.close()
 
     def test_erase_removes_brain_content_and_keeps_a_tombstone(self):
         self.assertTrue(self.memory.erase(self.target))
