@@ -266,7 +266,12 @@ class RecallJudge:
     def _vector_candidates(self, query_vector, taken):
         from pathlib import Path
         from memory_agent import vault_path
-        vectors = all_vectors(vault_path(self.memory.store.root, self.memory.cfg.id) / 'embeddings.db')
+        if getattr(self.memory, 'brain_authority', None) is not None:
+            from brain_read import BrainRead
+            with BrainRead(self.memory.brain_authority.db_path) as reader:
+                vectors = reader.all_vectors()
+        else:
+            vectors = all_vectors(vault_path(self.memory.store.root, self.memory.cfg.id) / 'embeddings.db')
         ranked = sorted(((cosine(query_vector, vector), key) for key, vector in vectors.items()), reverse=True)
         found, checked = [], 0
         for _, key in ranked:

@@ -1398,7 +1398,13 @@ class Memory:
         finally:
             self.budget.settle_estimate(reservation, accounting=accounting,
                                         settled_amount=settled_amount, usage_tokens=usage_tokens)
-        vectors = load_vectors(vault_path(self.store.root, self.cfg.id) / 'embeddings.db', list(candidates))
+        if getattr(self, 'brain_authority', None) is not None:
+            from brain_read import BrainRead
+            with BrainRead(self.brain_authority.db_path) as reader:
+                all_vectors = reader.all_vectors()
+            vectors = {key: all_vectors[key] for key in candidates if key in all_vectors}
+        else:
+            vectors = load_vectors(vault_path(self.store.root, self.cfg.id) / 'embeddings.db', list(candidates))
         scored = sorted(((cosine(query_vector, vectors[key]), key) for key in candidates if key in vectors),
                         reverse=True)
         kept = [(key, candidates[key]) for sim, key in scored if sim >= settings['threshold']][:3]
@@ -1428,6 +1434,11 @@ class Memory:
         """Stored content vectors, read-only; none when Ombre has no vector database yet."""
         from recall_relevance import load_vectors
         try:
+            if getattr(self, 'brain_authority', None) is not None:
+                from brain_read import BrainRead
+                with BrainRead(self.brain_authority.db_path) as reader:
+                    all_vectors = reader.all_vectors()
+                return {key: all_vectors[key] for key in keys if key in all_vectors}
             return load_vectors(vault_path(self.store.root, self.cfg.id) / 'embeddings.db', list(keys))
         except Exception:
             return {}
