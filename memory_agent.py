@@ -884,47 +884,80 @@ class Memory:
                 return value.strip().strip(chr(39) + chr(34)).casefold() not in ('', 'null', 'none', 'false')
         return False
 
-    def _event_map(self):
-        """Ticket 407: memory_id -> event_id, read from the event ledger; empty when the layer is off.
+    def _event_ledger(self):
+        """Ticket 407/424: ownership read from the event ledger, rebuilt whenever the file changes.
 
-        Ticket 424: an imported event also owns the old memories it was built from (`source_memory_ids`),
-        so a recalled old fragment can be shown as its complete event instead of being injected next to it.
-        One old memory may have fed more than one event; the first owner in the ledger is the one that
-        supplies the story, and `_event_owners` keeps every owner for the duplicate check."""
+        `unique` maps a memory to the single event that owns it, and an event's own `memory_id` always
+        belongs to itself. A memory claimed by two events is deliberately absent from `unique`: without
+        evidence of which story covers it, a shared old fragment keeps its own text instead of borrowing
+        one arbitrary event's story. `owners` keeps every claim, for the duplicate check only.
+
+        The ledger is a long-lived data boundary: `source_memory_ids` is accepted only as a list of
+        non-empty strings, other shapes are ignored row-locally so one bad row cannot disable recall.
+        A failed read is never cached as an empty ledger — it fails closed for this turn and is retried."""
         try:
             stat = (self.store.root / f'{self.cfg.id}/events.jsonl').stat()
             signature = (stat.st_mtime_ns, stat.st_size)
         except OSError:
             signature = None
-        if getattr(self, '_event_map_signature', object()) == signature \
-                and hasattr(self, '_event_map_cache'):
-            return self._event_map_cache
+        cached = getattr(self, '_event_ledger_cache', None)
+        if cached is not None and getattr(self, '_event_ledger_signature', object()) == signature:
+            return cached
         try:
             rows = self.store.read(f'{self.cfg.id}/events.jsonl')
         except Exception:
-            self._event_map_cache, self._event_owners_cache = {}, {}
-            self._event_map_signature = signature
-            return {}
-        owned = {}
+            self._event_ledger_cache = None
+            self._event_ledger_signature = object()
+            return {'unique': {}, 'owners': {}, 'own': frozenset()}
+        claims, own = {}, {}
         for row in rows:
-            if not isinstance(row, dict) or not isinstance(row.get('event_id'), str):
+            if not isinstance(row, dict):
                 continue
-            event_id = row['event_id']
-            for memory_id in [row.get('memory_id')] + list(row.get('source_memory_ids') or []):
-                if isinstance(memory_id, str) and memory_id:
-                    event_ids = owned.setdefault(memory_id, [])
+            event_id = row.get('event_id')
+            if not isinstance(event_id, str) or not event_id:
+                continue
+            memory_id = row.get('memory_id')
+            if isinstance(memory_id, str) and memory_id:
+                own[memory_id] = event_id
+                event_ids = claims.setdefault(memory_id, [])
+                if event_id not in event_ids:
+                    event_ids.append(event_id)
+            sources = row.get('source_memory_ids')
+            if not isinstance(sources, list):
+                continue
+            for source in sources:
+                if isinstance(source, str) and source:
+                    event_ids = claims.setdefault(source, [])
                     if event_id not in event_ids:
                         event_ids.append(event_id)
-        self._event_map_cache = {memory_id: event_ids[0] for memory_id, event_ids in owned.items()}
-        self._event_owners_cache = {memory_id: frozenset(event_ids) for memory_id, event_ids in owned.items()}
-        self._event_map_signature = signature
-        return self._event_map_cache
+        unique = {memory_id: event_ids[0] for memory_id, event_ids in claims.items()
+                  if len(event_ids) == 1}
+        unique.update(own)
+        ledger = {'unique': unique,
+                  'owners': {memory_id: frozenset(event_ids)
+                             for memory_id, event_ids in claims.items()},
+                  'own': frozenset(own)}
+        self._event_ledger_cache = ledger
+        self._event_ledger_signature = signature
+        return ledger
+
+    def _event_map(self):
+        """Ticket 407: memory_id -> event_id for the memories whose story may replace their own text."""
+        return self._event_ledger()['unique']
 
     def _event_owners(self):
         """Ticket 424: memory_id -> every event that owns it (its own row or an imported source)."""
-        if not hasattr(self, '_event_owners_cache'):
-            self._event_map()
-        return getattr(self, '_event_owners_cache', {})
+        return self._event_ledger()['owners']
+
+    @staticmethod
+    def _imported_story_source():
+        """Ticket 424: a story written by the reviewed import is the whole of its sources. A later
+        model-composed story may be shorter in qualitative detail, so it never replaces a fragment."""
+        try:
+            from event_import import STORY_SOURCE
+            return STORY_SOURCE
+        except Exception:
+            return 'final-import'
 
     def _event_stories(self):
         """Ticket 419: event_id -> {story, title, first_at} from the event ledger.
@@ -941,6 +974,7 @@ class Memory:
         if cached and cached[0] == signature:
             return cached[1]
         stories = {}
+        imported = self._imported_story_source()
         try:
             for row in self.store.read(f'{self.cfg.id}/events.jsonl'):
                 if not isinstance(row, dict) or not isinstance(row.get('event_id'), str):
@@ -949,7 +983,9 @@ class Memory:
                 if isinstance(story, str) and story.strip():
                     stories[row['event_id']] = {'story': story.strip(),
                                                 'title': row.get('title') or '',
-                                                'first_at': row.get('first_at') or ''}
+                                                'first_at': row.get('first_at') or '',
+                                                'source': row.get('story_source') or '',
+                                                'authoritative': (row.get('story_source') or '') == imported}
         except Exception:
             return {}
         self._event_stories_cache = (signature, stories)
@@ -1607,8 +1643,8 @@ class Memory:
         def same_experience(key, other):
             return key == other or other in experience_chain(key, neighbours)
 
-        event_of = self._event_map()
-        owners = self._event_owners()
+        ledger = self._event_ledger()
+        event_of, owners, own_ids = ledger['unique'], ledger['owners'], ledger['own']
         stories = self._event_stories()
 
         def duplicate(key, kept):
@@ -1616,14 +1652,22 @@ class Memory:
             # Ticket 419: the stage count is no longer capped; a different stage of the same experience is a
             # different memory and the budget decides how many fit. Event-level folding only happens when the
             # event actually has a complete story to replace the stages; without one, every stage stays readable.
-            # Ticket 424: an old memory that an imported event was built from is one of its stages too.
+            # Ticket 424: an old source only folds into an event through a shared owner whose reviewed import
+            # story covers it — one owner's story never hides another owner's stage, and a later model-composed
+            # story never replaces a fragment (it could be shorter in qualitative detail).
             if not recall_cfg['dedup']:
                 return None
+            if key in own_ids:
+                event_id = event_of.get(key) or ''
+                if (stories.get(event_id) or {}).get('story') and any(
+                        other in own_ids and event_of.get(other) == event_id for other, _ in kept):
+                    return 'same_event'
             mine = owners.get(key) or frozenset()
-            if mine and any((stories.get(owner_id) or {}).get('story')
-                            and (owners.get(other) or frozenset()) & mine
-                            for other, _ in kept for owner_id in (owners.get(other) or ())):
-                return 'same_event'
+            for other, _ in kept:
+                shared = mine & (owners.get(other) or frozenset())
+                if shared and any((stories.get(owner_id) or {}).get('authoritative')
+                                  for owner_id in shared):
+                    return 'same_event'
             if any(same_event(key, other, metas, vectors, threshold, cosine) for other, _ in kept):
                 return 'same_event'
             return None
@@ -1747,22 +1791,18 @@ class Memory:
                        if recall_cfg['directory'] else {})
         limit = recall_cfg['excerpt_chars']
 
-        kept_events = [event_id for key, _ in kept
-                       for event_id in sorted(owners.get(key) or ())]
-
         def resolved(key, body):
-            # Ticket 424: show the story of the event this turn actually kept, so an old fragment that fed
-            # two events cannot borrow the story of the one that was folded away.
-            candidates = owners.get(key) or frozenset()
-            event_id = (next((item for item in kept_events if item in candidates), '')
-                        or event_of.get(key) or '')
+            event_id = event_of.get(key) or ''
             text = body
             if event_id:
-                story = (stories.get(event_id) or {}).get('story') or ''
+                story_row = stories.get(event_id) or {}
+                story = story_row.get('story') or ''
                 # Ticket 419 review: the event's current authoritative story wins whenever it exists.
                 # Completeness is not a length comparison: a merged story can be shorter and still
                 # contain a later correction the old fragment does not have.
-                if story:
+                # Ticket 424: for an old source that is true only of the reviewed import story, and only
+                # when exactly one event owns it — a shared fragment keeps its own text.
+                if story and (key in own_ids or story_row.get('authoritative')):
                     text = f'[bucket_id:{key}]\n{story}'
             if limit:
                 text = excerpt(key, text, metas.get(key, {}), limit, event_id)
