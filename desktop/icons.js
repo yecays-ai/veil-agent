@@ -12,6 +12,7 @@
     'panel-right-open': '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18m-6-12 3 3-3 3"/>',
     'chevron-right': '<path d="m9 18 6-6-6-6"/>',
     activity: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
+    stethoscope: '<path d="M11 2v2"/><path d="M5 2v2"/><path d="M5 3H4a2 2 0 0 0-2 2v4a6 6 0 0 0 12 0V5a2 2 0 0 0-2-2h-1"/><path d="M8 15a6 6 0 0 0 12 0v-3"/><circle cx="20" cy="10" r="2"/>',
     'arrow-up': '<path d="m5 12 7-7 7 7"/><path d="M12 19V5"/>',
     layers: '<path d="m12 2 10 5-10 5L2 7z"/><path d="m2 12 10 5 10-5M2 17l10 5 10-5"/>',
     wallet: '<rect x="3" y="5" width="18" height="15" rx="2"/><path d="M3 8h14a2 2 0 0 1 2 2v2m-4 0h6v4h-6a2 2 0 0 1 0-4z"/>',

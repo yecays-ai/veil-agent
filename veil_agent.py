@@ -3829,6 +3829,7 @@ class Chat:
         window = getattr(self, 'history_window', {}) or {}
         row = {
             'kind': request_kind(self, text, autonomy), 'request_id': request_id,
+            'autonomy_run_id': str(getattr(self, 'autonomy_run_id', '') or '') if autonomy else '',
             'sent': not self.tool_mode, 'usage_status': 'preflight',
             'model': self.cfg.provider.get('model'),
             'model_input_limit': self.cfg.provider.get('max_input_tokens'),
@@ -3885,9 +3886,14 @@ class Chat:
             raise box['error']
         return box['result']
 
-    def _request_failed(self, exc):
+    def _request_failed(self, exc, request_id='', autonomy=False):
         """Ticket 135: say which kind of provider failure it was and keep the provider's own words
-        in a local file (keys redacted) so a wrong relay setting can be diagnosed."""
+        in a local file (keys redacted) so a wrong relay setting can be diagnosed.
+
+        Ticket 432: also record the request id and the wake id, so a failure can be
+        joined to the turn that caused it instead of being guessed from its time.
+        The wake id is taken only from a request that really is autonomous: a chat
+        request must never inherit the run id that happens to be set right now."""
         status = getattr(exc, 'status_code', None)
         kind = (f'接口返回 HTTP {status}' if isinstance(status, int)
                 else '超时' if 'Timeout' in type(exc).__name__
@@ -3901,12 +3907,17 @@ class Chat:
         if input_limit:
             kind = '模型输入上下文上限'
         detail = re.sub(r'(sk-|Bearer\s+)[A-Za-z0-9._-]+', r'\1***', detail)[:2000]
+        run_id = str(getattr(self, 'autonomy_run_id', '') or '') if autonomy else ''
+        source = ('glance' if run_id.startswith('glance:') else
+                  'codex' if autonomy and getattr(self, 'codex_watch_mode', False) else
+                  'autonomy' if run_id else 'chat')
         try:
             self.store.append(f'{self.cfg.id}/provider-errors.jsonl', {
                 'time': now(), 'model': self.cfg.provider.get('model'),
                 'base_url': self.cfg.provider.get('base_url'), 'status': status,
                 'input_context_limit': input_limit,
-                'type': type(exc).__name__, 'detail': detail})
+                'type': type(exc).__name__, 'detail': detail,
+                'request_id': str(request_id or ''), 'kind': source, 'run_id': run_id})
             if input_limit:
                 self.store.append(f'{self.cfg.id}/memory/_agent/diagnostics.jsonl', {
                     'time': now(), 'code': 'provider_input_context_limit',
@@ -4593,7 +4604,7 @@ class Chat:
                 except Exception as exc:
                     # Keep the reservation pending: the provider may have received
                     # the request even when its response was lost.
-                    raise self._request_failed(exc) from exc
+                    raise self._request_failed(exc, request_id, autonomy=autonomy) from exc
         except (KeyboardInterrupt, EOFError):
             self._capability_request_active = False
             raise
@@ -5782,17 +5793,17 @@ class Chat:
                     except UserError:
                         raise
                     except Exception as retry_exc:
-                        raise self._request_failed(retry_exc) from retry_exc
+                        raise self._request_failed(retry_exc, request_id, autonomy=autonomy) from retry_exc
                 else:
                     # Only the provider call is recoverable. Ledger, storage and tool
                     # integrity failures below must still stop the session.
                     if continuation_prefix:
-                        failure = self._request_failed(exc)
+                        failure = self._request_failed(exc, request_id, autonomy=autonomy)
                         self.tool_stop_reason = str(failure)
                         self.output(ChatOutput(self.tool_stop_reason, request_id=request_id, is_error=True))
                         final = continuation_prefix
                         break
-                    raise self._request_failed(exc) from exc
+                    raise self._request_failed(exc, request_id, autonomy=autonomy) from exc
             ephemeral_image_bindings.clear()
             call_latency = round(time.monotonic() - call_started, 3)
             message, prompt, completion, cached, *finish = response
