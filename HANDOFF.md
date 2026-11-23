@@ -1,5 +1,22 @@
 # HANDOFF
 
+## 工单 428 交接（VEIL Brain P0-A 隔离导入；2026-11-23）
+
+- 工单：`docs/tickets/428-veil-brain-p0a.md`；分支 `ticket/428-veil-brain-p0a`，从 `main` `54eb4df` 开，
+  worktree `worktrees/428-veil-brain-p0a`。正式运行目录仍是 main，P0-A 没有改正式库、没有挂写入链。
+- 做了什么：新增 `veil_brain.py`（import/check/inspect）与 6 条 unittest。隔离副本 → 单文件 `brain.db`
+  + Markdown 快照 + 对账报告。表覆盖 memories/versions/sidecar_events/sidecar_state/relations/sources/
+  quotes/vectors/events/event_sources，另留空表 `event_stages` 给以后用。
+- 本机实测（隔离目录 `.local-tmp/brain-p0a/`，已在 .gitignore）：283 条记忆、281 条版本（旧正文与哈希全存）、
+  168 条 sidecar 事件（折叠出 109 条状态）、244 条 1024 维向量（原始字节 + SHA）、69 篇事件映射
+  （157 个来源，7 个是被 #426 删掉的 feel，记为悬空）；内容摘要 `676f47fa…`。
+- 已验证：重新导入摘要一致；`brain.db` 拷到另一个目录仍能 check/inspect；正式库导入前后哈希清单一致
+  （310 个文件，`7418ef30…`）。
+- 下一个窗口第一步：等 Lan 按工单验收（快照可读、三类抽查、重导、跨目录打开、正式库校验和）。
+  验收通过后再开 P0-B（安全影子同步）；P0-B 之前不要改 `veil_brain.py` 的 schema 语义。
+- 已知边界：事件正文没有进库；7 个已删除 feel 来源是悬空映射；`memory/_agent/` 与 `.locks/` 属于运行时
+  私有目录，已在 `manifest()` 里排除，不参与源清单校验。
+
 ## 工单 425 交接（经历页两个 GET 路由没接上；2026-11-23 第五步冒烟发现）
 
 - 工单：`docs/tickets/425-event-timeline-endpoints.md`；分支 `ticket/425-event-timeline-endpoints`，
