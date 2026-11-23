@@ -357,3 +357,27 @@ test('context diagnostics separate the relationship base, related recall and nat
   assert.match(page, /有来源可查/);
   assert.match(page, /item\.sources\.join/);
 });
+
+// Ticket 422 review: assert the actual summary strings, not just that a word exists in the file.
+// An old diagnostic row that has no relationship_base field must not read as "0 items".
+test('the recall summary keeps base, recall and association apart (ticket 422)', async () => {
+  const src = await read('chat.js');
+  const extract = name => {
+    const match = src.match(new RegExp('function ' + name + '\\(r\\)\\{[\\s\\S]*?\\n\\}'));
+    assert.ok(match, name + ' not found');
+    return new Function(match[0] + '; return ' + name + ';')();
+  };
+  const recallText = extract('recallText');
+  assert.match(recallText({ relationship_base: { items: ['r1', 'r2'], chars: 20 }, ombre: [], dropped: [] }),
+    /关系底色 2 条/);
+  assert.match(recallText({ relationship_base: { items: [], reason: 'no_items' }, ombre: [], dropped: [] }),
+    /关系底色 0 条（no_items）/);
+  const old = recallText({ ombre: [], dropped: [] });
+  assert.match(old, /关系底色未记录/);
+  assert.doesNotMatch(old, /关系底色 0 条/);
+  const details = extract('recallDetails');
+  assert.match(details({ relationship_base: { items: ['r1'], chars: 5, tokens: 2 } }),
+    /关系底色：1 条/);
+  assert.match(details({ carried: ['u1'] }), /追问承接/);
+  assert.match(details({}), /关系底色：未记录/);
+});

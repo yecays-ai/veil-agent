@@ -1047,6 +1047,7 @@ def load_character(root, character_id):
             memory['ombre_port'] = memory_port
         profile = cfg.get('profile')
         if profile is not None:
+            raw_profile = profile
             profile_file = profile.get('file')
             learned = profile.get('learned', False)
             if type(learned) is not bool:
@@ -1063,6 +1064,10 @@ def load_character(root, character_id):
                         or not legacy.endswith('.md')):
                     raise ValueError('profile.legacy_file must be a .md filename')
                 profile['legacy_file'] = legacy
+                nested = raw_profile.get('relationship_base')
+                if isinstance(nested, dict):
+                    from relationship_base import settings as relationship_settings
+                    profile['relationship_base'] = relationship_settings({'relationship_base': nested})
         user_persona = cfg.get('user_persona')
         if user_persona is not None:
             user_file = user_persona.get('file')
@@ -4279,6 +4284,31 @@ class Chat:
         observed_ratio = self.budget.input_token_ratio(self.cfg)
         calibration = conservative_token_ratio(observed_ratio)
         limit = self.cfg.provider['max_input_tokens']
+        # Ticket 422 review: the relationship base is a required block, so it must not be what makes a
+        # turn exceed the provider limit. Whole entries are dropped (lowest priority first) and the
+        # diagnostic says so; the recent exchange and the user's own message are never touched here.
+        while relationship_base_message is not None and relationship.get('items'):
+            if estimate_request_tokens([*head, *runtime_required, user], tool_schema,
+                                       calibration) <= limit:
+                break
+            removed = relationship['items'].pop()
+            relationship.setdefault('dropped', []).append(
+                {'id': removed.get('id'), 'reason': 'budget'})
+            relationship['degraded'] = True
+            relationship['reason'] = 'budget'
+            relationship['chars'] = sum(item.get('chars') or 0 for item in relationship['items'])
+            if relationship['items']:
+                relationship_base_message['content'] = (
+                    relationship['header'] + '\n'
+                    + '\n'.join(item['line'] for item in relationship['items']))
+            else:
+                relationship['text'] = ''
+                try:
+                    head.remove(relationship_base_message)
+                except ValueError:
+                    pass
+                labels.pop(id(relationship_base_message), None)
+                relationship_base_message = None
 
         rows = user_events if isinstance(user_events, list) and user_events else [
             {'content': text, 'message_id': message_id, 'media': media}]

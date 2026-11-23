@@ -32,7 +32,8 @@ DRIFT_PENALTY = 20
 # old personal memory. This is a coarse gate on purpose: it can only suppress an association, never
 # invent one, and it makes the "CI failure walks into dinner" case impossible.
 _NOT_LIGHT = re.compile(
-    r'报错|错误|日志|崩溃|卡死|部署|提交|合并|测试|代码|接口|工单|仓库|编译|安装|配置|权限|bug|crash|'
+    r'报错|错误|日志|崩溃|卡死|部署|提交|合并|测试|代码|接口|工单|仓库|编译|安装|配置|权限|加班|故障|'
+    r'开会|上班|下班|加班|值班|客户|线上|紧急|上线|需求|排期|会议|bug|crash|deadline|meeting|shift|'
     r'\bci\b|deploy|commit|merge|build|error|stack|traceback|log|test|repo|ticket|install|config',
     re.I)
 
@@ -41,7 +42,7 @@ def settings(recall_cfg):
     """`[memory.recall]` association keys with defaults; bad values fall back, never raise."""
     raw = recall_cfg if isinstance(recall_cfg, dict) else {}
     result = dict(DEFAULTS)
-    if raw.get('association_enabled') is False:
+    if raw.get('association_enabled') is False or raw.get('enabled') is False:
         result['enabled'] = False
     # The old `random_chance` key is ignored on purpose: it was a per-turn probability and there is
     # no probability any more. A config that still sets it changes nothing here.
@@ -74,7 +75,8 @@ def _importance(item, metas_key):
     return importance
 
 
-def choose(query, candidates, metas, last_shown, turn, already, recall_cfg=None, origin=None):
+def choose(query, candidates, metas, last_shown, turn, already, recall_cfg=None, origin=None,
+           previous=None):
     """Pick at most one weak association.
 
     ``candidates`` are (memory_id, body) pairs from a finite pool: Ombre's importance-ordered list
@@ -100,6 +102,8 @@ def choose(query, candidates, metas, last_shown, turn, already, recall_cfg=None,
 
     if not options['enabled']:
         result['reason'] = 'disabled'
+        for key, _ in candidates:
+            drop(result, key, 'disabled')
         return finish(result)
     if not candidates:
         result['reason'] = 'no_candidates'
@@ -121,8 +125,16 @@ def choose(query, candidates, metas, last_shown, turn, already, recall_cfg=None,
         if importance < options['min_importance']:
             drop(result, key, 'not_meaningful')
             continue
+        if _NOT_LIGHT.search(str(body or '')[:600]):
+            drop(result, key, 'work_topic')
+            continue
         last = last_shown.get(key) if isinstance(last_shown, dict) else None
-        if type(last) is int and options['cooldown_turns'] and turn - last <= options['cooldown_turns']:
+        gap = options['cooldown_turns']
+        if isinstance(previous, dict) and previous.get('key') == key:
+            streak = previous.get('repeat')
+            streak = streak if type(streak) is int and 0 <= streak <= 8 else 0
+            gap = gap * (2 ** min(streak, 3))
+        if type(last) is int and gap and turn - last <= gap:
             drop(result, key, 'association_cooldown')
             continue
         silence = 50 if type(last) is not int else min(max(0, turn - last), 50)

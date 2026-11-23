@@ -129,7 +129,7 @@
       var text = document.createElement('textarea');
       text.value = item.text || '';
       text.placeholder = '现在成立的关系共识、边界或习惯…';
-      text.oninput = function () { item.text = text.value; mark('relationship'); };
+      text.oninput = function () { item.text = text.value; mark('relationship'); renderCounts(); };
       row.append(text, relationshipMeta(item));
       box.append(row);
     });
@@ -139,6 +139,16 @@
       empty.textContent = '还没有当前有效的记录。';
       box.append(empty);
     }
+    // Review: an outdated row is history, but Lan can still read it, put it back or delete it.
+    old.forEach(function (item) {
+      var row = document.createElement('div');
+      row.className = 'peter-ongoing-item peter-done-item';
+      var stale = document.createElement('p');
+      stale.className = 'peter-done-text';
+      stale.textContent = item.text || '';
+      row.append(stale, relationshipMeta(item));
+      box.append(row);
+    });
     if (old.length) {
       var note = document.createElement('p');
       note.className = 'muted';
@@ -155,7 +165,12 @@
       status.append(new Option(value[1], value[0]));
     });
     status.value = item.status || 'confirmed';
-    status.onchange = function () { item.status = status.value; mark('relationship'); renderRelationship(state.learned.relationship.items); };
+    status.onchange = function () {
+      item.status = status.value;
+      mark('relationship');
+      renderRelationship(state.learned.relationship.items);
+      renderCounts();
+    };
     var source = document.createElement('span');
     source.textContent = ({ lan: '你确认的', evidence: '有来源可查', peter: '他自己的理解（未确认）' })[item.source] || '';
     // Review fix: the smallest evidence a relationship item keeps is visible, not implicit.
@@ -187,6 +202,8 @@
     renderCounts();
     mark('relationship');
     if (!await save('relationship')) {
+      dirty.delete('relationship');
+      unmark('relationship');
       await load();
       showError('这条没有删掉（原因见上）。列表已按硬盘上的内容重新读取。');
     }
@@ -196,12 +213,15 @@
     state.learned.relationship = state.learned.relationship || { updated_at: '' };
     state.learned.relationship.items = state.learned.relationship.items || [];
     state.learned.relationship.items.push({
-      id: 'new-' + Date.now().toString(36),
+      id: 'new-' + (window.crypto && window.crypto.randomUUID
+        ? window.crypto.randomUUID()
+        : Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10)),
       text: '',
       status: 'confirmed',
       source: 'lan'
     });
     renderRelationship(state.learned.relationship.items);
+    renderCounts();
     mark('relationship');
   }
   function renderDone(done) {
@@ -383,6 +403,13 @@
     var body = payload(card);
     if (!body) return false;
     var revision = revisions[card] || 0;
+    // Review: while another card's save is in flight, Lan may still be editing the relationship rows.
+    // Keep that local state instead of letting the server response become what a queued save reads.
+    var keepRelationship = card !== 'relationship' && dirty.has('relationship')
+      && state && state.learned && state.learned.relationship;
+    var keptItems = keepRelationship
+      ? state.learned.relationship.items.map(function (row) { return Object.assign({}, row); })
+      : null;
     $p('peter-status').textContent = '保存中…';
     try {
       var data = await request(body);
@@ -391,8 +418,12 @@
         dirty.delete(card);
         unmark(card);
       }
-      state = data;
+      if (keptItems && data.learned && data.learned.relationship) {
+        data.learned.relationship.items = keptItems;
+      }
+      // render() remembers the pre-request state as "previous", so pending edits are not overwritten.
       if (renderPage !== false) render(data);
+      else state = data;
       $p('peter-status').textContent = '已保存 · ' + new Date().toLocaleTimeString();
       return true;
     } catch (error) {

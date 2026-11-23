@@ -59,10 +59,10 @@ input_cny_per_million = "0"
 # excerpt_chars = 0         # 0 = whole story; the request budget decides how many fit. An old positive value still limits each memory, cut at a paragraph/sentence boundary
 # random_chance = 0.1       # deprecated by ticket 422 and no longer read at all; weak association is not a probability
 # rotation_candidates = 8   # candidate pool for autonomous wakes; there is no fixed number shown
-# Ticket 422: weak natural association (Ombre's own "忽然想起来" hits). It is scored, not drawn:
-# importance, turns since it last surfaced, cooldown, and whether this moment is light enough.
-# There is no every-N-turns rule; "nothing suitable" is a normal result.
-# [memory.recall]
+# Ticket 422 weak natural association. It is scored, not drawn: importance, turns since it last
+# surfaced, cooldown, and whether this moment is light enough. There is no every-N-turns rule;
+# "nothing suitable" is a normal result. Put these keys inside the [memory.recall] table above
+# (one table only), for example by adding these lines after rotation_candidates:
 # association_enabled = true
 # association_min_importance = 4   # below this stored importance a memory is not personal enough to surface unasked
 # association_cooldown_turns = 8    # a memory that just surfaced stays out this many turns

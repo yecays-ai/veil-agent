@@ -370,6 +370,15 @@ class Cooldown:
         last = state.get('last')
         self.last = {key: value for key, value in (last.items() if isinstance(last, dict) else [])
                      if isinstance(key, str) and type(value) is int and 0 <= value <= self.turn}
+        # Ticket 422 review: the last weak association and how many times in a row it was the one that
+        # surfaced. A memory that keeps being the only candidate gets a growing gap instead of a cadence.
+        association = state.get('association')
+        association = association if isinstance(association, dict) else {}
+        self.association = {
+            'key': association.get('key') if isinstance(association.get('key'), str) else '',
+            'turn': association.get('turn') if type(association.get('turn')) is int else -1,
+            'repeat': association.get('repeat')
+            if type(association.get('repeat')) is int and 0 <= association.get('repeat') <= 8 else 0}
 
     def cooled(self, key, turns):
         return bool(turns) and key in self.last and self.turn - self.last[key] <= turns
@@ -384,5 +393,17 @@ class Cooldown:
     def forget(self, key):
         self.last.pop(key, None)
 
+    def previous_association(self):
+        return dict(self.association)
+
+    def mark_association(self, key, turn):
+        """Remember which memory surfaced by itself, and for how many turns in a row."""
+        if key and key == self.association.get('key'):
+            self.association['repeat'] = min(self.association['repeat'] + 1, 8)
+        else:
+            self.association['repeat'] = 1 if key else 0
+        self.association['key'] = key or ''
+        self.association['turn'] = turn
+
     def snapshot(self):
-        return {'turn': self.turn, 'last': dict(self.last)}
+        return {'turn': self.turn, 'last': dict(self.last), 'association': dict(self.association)}

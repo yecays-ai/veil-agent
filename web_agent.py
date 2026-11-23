@@ -436,6 +436,9 @@ class Hub(ScreenPopMixin):
                         'budget': item.get('budget') if isinstance(item.get('budget'), dict) else {},
                         'items': list(item.get('items') or []),
                         'reused': list(item.get('reused') or []),
+                        # Review: a follow-up carry is pasted this turn; only a block dropped because
+                        # the history already had it is "reused".
+                        'carried': list(item.get('carried') or []),
                         # Ticket 422: the three recall paths and the base that is carried every turn.
                         'relationship_base': item.get('relationship_base')
                         if isinstance(item.get('relationship_base'), dict) else {},

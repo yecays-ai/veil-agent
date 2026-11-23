@@ -46,6 +46,11 @@ def _normal(text):
     return ' '.join(str(text or '').split())
 
 
+def _note_line(line):
+    """One note line, normalized, without a markdown bullet."""
+    return _normal(str(line).lstrip('-*• ').strip())
+
+
 def _line(item):
     text = _normal(item.get('text'))
     if item.get('status') == 'uncertain':
@@ -54,12 +59,13 @@ def _line(item):
 
 
 def _order(items):
-    def key(item):
-        return (_STATUS_RANK.get(item.get('status'), 9),
-                -_SOURCE_RANK.get(item.get('source'), 0),
-                str(item.get('updated_at') or ''),
-                str(item.get('id') or ''))
-    return sorted(items, key=key)
+    # Priority: confirmed before a guess, Lan's word before evidence before Peter's reading; inside one
+    # rank the newest item wins, so fresh understanding is not squeezed out by older rows.
+    ordered = sorted(items, key=lambda item: str(item.get('id') or ''))
+    ordered.sort(key=lambda item: str(item.get('updated_at') or ''), reverse=True)
+    ordered.sort(key=lambda item: (_STATUS_RANK.get(item.get('status'), 9),
+                                   -_SOURCE_RANK.get(item.get('source'), 0)))
+    return ordered
 
 
 def select(items, *, notes='', max_chars=480, max_items=8):
@@ -67,8 +73,9 @@ def select(items, *, notes='', max_chars=480, max_items=8):
 
     Whole items only. `notes` is the facts + growth text already sent; an item whose text is already
     there verbatim is not repeated."""
-    notes_text = _normal(notes)
+    notes_lines = {_note_line(line) for line in str(notes or '').splitlines() if line.strip()}
     kept = []
+    seen_text = set()
     dropped = []
     dropped_total = 0
     space_drops = 0
@@ -93,11 +100,14 @@ def select(items, *, notes='', max_chars=480, max_items=8):
         if not text:
             note(item_id, 'empty')
             continue
-        if notes_text and text in notes_text:
+        if text in notes_lines:
             note(item_id, 'duplicate')
             continue
         if slots >= max_items:
             note(item_id, 'item_cap', space=True)
+            continue
+        if text in seen_text:
+            note(item_id, 'duplicate')
             continue
         line = _line(item)
         cost = len(line) + (1 if kept else 0)
@@ -106,6 +116,7 @@ def select(items, *, notes='', max_chars=480, max_items=8):
             continue
         kept.append({'id': item_id, 'status': status, 'source': item.get('source'),
                      'chars': len(line), 'line': line})
+        seen_text.add(text)
         used += cost
         slots += 1
     reason = ''

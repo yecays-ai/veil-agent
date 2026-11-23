@@ -113,14 +113,10 @@ class LearnedContext:
         actually changes the stable relationship base."""
         if not isinstance(data, dict):
             return
-        block = data.get('relationship')
-        if not isinstance(block, dict):
+        # Only synthesize the block when the key is absent. An existing but malformed block is left
+        # exactly as it is: `_validate` refuses it, instead of any other save silently emptying it.
+        if 'relationship' not in data:
             data['relationship'] = {'items': [], 'updated_at': ''}
-            return
-        if not isinstance(block.get('items'), list):
-            block['items'] = []
-        if not isinstance(block.get('updated_at'), str):
-            block['updated_at'] = ''
 
     @staticmethod
     def _upgrade_ongoing(data):
@@ -448,7 +444,8 @@ class LearnedContext:
         with self.lock:
             data = self._load()
             block = data.get('relationship') or {}
-            if not force and expected_updated_at and block.get('updated_at') != expected_updated_at:
+            if not force and expected_updated_at is not None \
+                    and block.get('updated_at') != expected_updated_at:
                 raise UserError('你打开之后这一块又改过；请先刷新，或用“覆盖他的版本”保存。')
             before = json.loads(json.dumps(data, ensure_ascii=False))
             stored = {item['id']: item for item in block.get('items') or []
@@ -606,7 +603,8 @@ class LearnedContext:
         Review: `confirmed` is not something the model can simply assert. It becomes consensus only
         when the program can verify an evidence reference (a real message id, or an event/memory
         pointer supplied alongside it). Otherwise the item stays Peter's own reading."""
-        requested = args.get('status') or 'confirmed'
+        # Review: only an explicit `confirmed` can ever be consensus. A missing field is a guess.
+        requested = args.get('status') or 'uncertain'
         if requested not in ('confirmed', 'uncertain'):
             return 'status must be confirmed or uncertain (outdated is kept for history only).', '被拒绝', name
         raw_sources = args.get('sources') or []
@@ -645,6 +643,9 @@ class LearnedContext:
                 if not isinstance(old, str) or not old or not isinstance(new, str):
                     return ('old_text must be a non-empty string and new_text a string.',
                             '被拒绝', name)
+                if new != '' and not new.strip():
+                    return ('new_text is only whitespace. Pass empty text to retire the note, or the '
+                            'replacement text.', '被拒绝', name)
                 matches = [item for item in items if item['text'].strip() == old.strip()
                            and item['status'] != 'outdated']
                 if len(matches) != 1:

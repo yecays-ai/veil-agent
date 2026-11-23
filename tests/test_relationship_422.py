@@ -146,6 +146,20 @@ class RelationshipBaseRequestTests(ProfileFixture):
 
     def test_the_base_is_data_and_does_not_change_tools_or_permissions(self):
         chat, _ = self.build()
+        chat.tool_mode = True
+        chat.cfg.tools = {**(chat.cfg.tools or {}), 'enabled': True, 'max_steps': 2}
+        files = types.SimpleNamespace(
+            tools=[types.SimpleNamespace(name='lab_file_digest', description='Read one lab file.',
+                                         inputSchema={'type': 'object',
+                                                      'properties': {'path': {'type': 'string'}}})],
+            description='Fictional Lab tool.', startup_notice=None, enabled=True, client=object(),
+            capability_event=None, capability_event_model=None, capability_record=None,
+            consume_capability_event=Mock())
+        chat.tools = types.SimpleNamespace(
+            tools=files.tools, files=files, description=files.description,
+            capability_event=None, capability_event_model=None, capability_record=None,
+            consume_capability_event=Mock(), invoke=Mock(return_value=('ok', '成功', 'x')))
+        before_tools = chat.current_request_tool_schemas()
         self.seed_relationship(chat)
         before = repr(sorted((chat.cfg.provider or {}).items(), key=lambda row: row[0]))
         call = self.send(chat, '随便聊聊。')
@@ -156,10 +170,14 @@ class RelationshipBaseRequestTests(ProfileFixture):
         for message in base_messages:
             self.assertEqual('system', message['role'])
         self.assertEqual(before, repr(sorted((chat.cfg.provider or {}).items(), key=lambda row: row[0])))
-        tools = call.kwargs.get('tools') or []
-        names = {item.get('function', {}).get('name') or item.get('name') for item in tools
-                 if isinstance(item, dict)}
-        self.assertFalse({name for name in names if name and 'relationship' in name})
+        after_tools = chat.current_request_tool_schemas()
+        self.assertEqual(before_tools, after_tools)          # same tools, same order, same permissions
+        sent = call.kwargs.get('tools') or call.args[1] if len(call.args) > 1 else call.kwargs.get('tools')
+        sent_names = {(item.get('function') or {}).get('name') or item.get('name')
+                      for item in (sent or []) if isinstance(item, dict)}
+        before_names = {(item.get('function') or {}).get('name') or item.get('name')
+                        for item in before_tools if isinstance(item, dict)}
+        self.assertEqual(before_names, sent_names)
 
 
 class RelationshipBaseChangeTests(unittest.TestCase):
@@ -312,10 +330,11 @@ class ContinuationTests(ProfileFixture):
         self.assertIn('[bucket_id:umbrella]', self.joined(first))
         self.assertEqual(['umbrella'], memory.last_recall_debug['natural_association'])
         second = self.send(chat, '后来呢', message_id='t2')
-        self.assertEqual(['umbrella'], memory.last_recall_debug['reused'])
+        self.assertEqual(['umbrella'], memory.last_recall_debug['carried'])
+        self.assertEqual([], memory.last_recall_debug['reused'])   # it is pasted, not "already in history"
         self.assertIn('got soaked anyway', self.joined(second))
         third = self.send(chat, '对了，今天吃什么？', message_id='t3')
-        self.assertEqual([], memory.last_recall_debug['reused'])
+        self.assertEqual([], memory.last_recall_debug['carried'])
         self.assertNotIn('[bucket_id:umbrella]', self.joined(third))
         self.assertEqual([], memory.last_recall_debug['natural_association'])
         # A restart or a new conversation does not turn last turn's association into a live rule.
@@ -343,6 +362,11 @@ class BudgetTests(ProfileFixture):
         joined = self.joined(call)
         self.assertIn('quiet evening together', joined)
         self.assertLessEqual(estimate_request_tokens(call.args[0], None, 0.4), 6000)
+        # The long memory cannot be pasted whole here; the diagnostic must show the constraint.
+        debug = memory.last_recall_debug
+        self.assertTrue(any(item.get('complete') is False for item in debug['items'])
+                        or debug['budget_dropped'])
+        self.assertTrue(debug['budget']['reason'] in ('proportional', 'budget'))
         base = memory.last_recall_debug['relationship_base']
         self.assertIsNotNone(base.get('space_tokens'))
         self.assertGreaterEqual(base['space_tokens'], 0)
@@ -609,3 +633,210 @@ class ToolLoopEvidenceTests(ProfileFixture):
         self.model.return_value = (final, 100, 20, 0)
         second = self.send(chat, '嗯，那我今晚早点睡。', message_id='m-next')
         self.assertIn('quiet evening, not a plan', self.joined(second))
+
+
+class DataSafetyTests(unittest.TestCase):
+    """Review 3/4/25/24: a broken block is refused, provenance is not bypassed, edits are explicit."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        from learned_context import LearnedContext
+        self.store = Store(Path(self.temp.name) / 'data')
+        self.profile = LearnedContext(self.store.root, 'fake',
+                                      {'learned': True, 'file': 'learned-context.json',
+                                       'max_bytes': 4000})
+
+    def test_a_malformed_relationship_block_is_refused_not_emptied(self):
+        from agent_types import UserError
+        self.profile.save_relationship([{'id': 'r1', 'text': 'She comes home after seven.',
+                                         'status': 'confirmed'}])
+        path = self.store.root / 'fake' / 'learned-context.json'
+        data = json.loads(path.read_text(encoding='utf-8'))
+        data['relationship'] = {'items': 'not-a-list', 'updated_at': ''}
+        path.write_text(json.dumps(data, ensure_ascii=False), encoding='utf-8')
+        with self.assertRaises(UserError):
+            self.profile.read()
+        status = self.profile.status()
+        self.assertFalse(status['available'])
+        # The bad data is still on disk, not silently replaced with an empty block.
+        self.assertEqual('not-a-list',
+                         json.loads(path.read_text(encoding='utf-8'))['relationship']['items'])
+
+    def test_an_empty_expected_updated_at_does_not_bypass_the_concurrency_check(self):
+        from agent_types import UserError
+        self.profile.save_relationship([{'id': 'r1', 'text': 'She comes home after seven.',
+                                         'status': 'confirmed'}])
+        with self.assertRaises(UserError):
+            self.profile.save_relationship([{'id': 'r1', 'text': 'Changed while away.',
+                                             'status': 'confirmed'}], expected_updated_at='')
+
+    def test_whitespace_only_new_text_is_rejected_not_treated_as_removal(self):
+        self.profile._invoke_profile('profile_append', {'section': 'relationship',
+                                                        'text': 'She comes home after seven.'})
+        result, state, _ = self.profile._invoke_profile(
+            'profile_replace', {'section': 'relationship', 'old_text': 'She comes home after seven.',
+                                'new_text': '   '})
+        self.assertEqual('被拒绝', state)
+        items = self.profile.relationship_items()
+        self.assertEqual('She comes home after seven.', items[0]['text'])
+        self.assertNotEqual('outdated', items[0]['status'])
+
+    def test_only_a_whole_matching_note_line_counts_as_a_duplicate(self):
+        self.profile.save_section('facts', '- She comes home after seven.\n- She likes the balcony.')
+        self.profile.save_relationship([
+            {'id': 'same', 'text': 'She comes home after seven.', 'status': 'confirmed'},
+            {'id': 'part', 'text': 'likes the balcony', 'status': 'confirmed'}])
+        base = relationship_base.build(self.profile, {'max_chars': 480})
+        self.assertEqual(['part'], [item['id'] for item in base['items']])
+        self.assertIn({'id': 'same', 'reason': 'duplicate'}, base['dropped'])
+
+    def test_the_same_sentence_under_two_ids_is_rendered_once(self):
+        chosen = relationship_base.select([
+            {'id': 'a', 'text': 'She comes home after seven.', 'status': 'confirmed', 'source': 'lan'},
+            {'id': 'b', 'text': '  She comes home after seven. ', 'status': 'confirmed',
+             'source': 'peter'}], notes='')
+        self.assertEqual(1, len(chosen['items']))
+        self.assertIn({'id': 'b', 'reason': 'duplicate'}, chosen['dropped'])
+
+
+class ConfigReachTests(unittest.TestCase):
+    """Review 7: the documented [profile.relationship_base] table really reaches the request."""
+
+    def test_nested_limits_survive_load_character(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / 'persona').mkdir()
+            (root / 'persona' / 'peter.md').write_text('Peter is a fictional test companion.',
+                                                        encoding='utf-8')
+            (root / 'characters' / 'peter').mkdir(parents=True)
+            (root / 'characters' / 'peter' / 'character.toml').write_text('''
+name = "Peter"
+provider = "fake"
+persona = "persona/peter.md"
+
+[providers.fake]
+model = "fake-model"
+base_url = "https://fake.local/v1"
+api_key_env = "FAKE_KEY"
+max_input_tokens = 4096
+input_cny_per_million = "2"
+cached_input_cny_per_million = "1"
+output_cny_per_million = "8"
+
+[profile]
+learned = true
+file = "learned-context.json"
+max_bytes = 4000
+[profile.relationship_base]
+enabled = false
+max_chars = 120
+max_items = 3
+''', encoding='utf-8')
+            cfg = load_character(root, 'peter')
+            nested = cfg.profile['relationship_base']
+            self.assertFalse(nested['enabled'])
+            self.assertEqual(120, nested['max_chars'])
+            self.assertEqual(3, nested['max_items'])
+
+
+class PageRoundTripTests(PageSaveProvenanceTests):
+    """Review 14: a status change and a removal reach disk and the rendered base."""
+
+    def test_status_change_and_removal_reach_disk_and_the_base(self):
+        items = [dict(item) for item in self.profile.relationship_items()]
+        for item in items:
+            if item['source'] == 'evidence':
+                item['status'] = 'outdated'
+        items = [item for item in items if item['id'] != 'lan-1']
+        self.profile.save_relationship(items)
+        after = self.profile.relationship_items()
+        self.assertNotIn('lan-1', [item['id'] for item in after])
+        evidence = next(item for item in after if 'small surprises' in item['text'])
+        # Lan moving it to "no longer true" is her own edit, so the source becomes hers; the evidence
+        # that once supported it stays attached for the history.
+        self.assertEqual('outdated', evidence['status'])
+        self.assertEqual('lan', evidence['source'])
+        self.assertEqual(['chat:m-e'], evidence['sources'])
+        base = relationship_base.build(self.profile, {'max_chars': 480})
+        self.assertNotIn('small surprises', base['text'])
+        self.assertIn('Maybe she prefers mornings.', base['text'])
+
+
+class AssociationPolicyTests(unittest.TestCase):
+    """Review 16/21/28: a work memory cannot surface in a light moment; repeats slow down; off is explained."""
+
+    def metas(self, importance):
+        return {'importance': importance, 'pinned': 'false'}
+
+    def options(self, **overrides):
+        return {'association_enabled': True, 'association_min_importance': 4,
+                'association_cooldown_turns': 4, 'association_light_chars': 40, **overrides}
+
+    def test_a_work_or_log_memory_is_rejected_by_its_body(self):
+        choice = natural_association.choose(
+            '今天吃什么呀', [('ci', '今天的 CI 日志又报错，线上故障还没修完')], {'ci': self.metas(9)},
+            {}, 10, set(), self.options())
+        self.assertFalse(choice['key'])
+        self.assertIn({'id': 'ci', 'reason': 'work_topic'}, choice['dropped'])
+
+    def test_a_memory_that_keeps_surfacing_gets_a_growing_gap(self):
+        candidates = [('sole', 'the quiet evening we decided on')]
+        metas = {'sole': self.metas(9)}
+        first = natural_association.choose('今天吃什么呀', candidates, metas, {}, 1, set(), self.options())
+        self.assertEqual('sole', first['key'])
+        still_cooled = natural_association.choose(
+            '今天吃什么呀', candidates, metas, {'sole': 1}, 6, set(), self.options(),
+            previous={'key': 'sole', 'turn': 1, 'repeat': 1})
+        self.assertFalse(still_cooled['key'])      # gap doubled to 8, so 5 turns is not enough
+        normal_gap = natural_association.choose(
+            '今天吃什么呀', candidates, metas, {'sole': 1}, 6, set(), self.options(),
+            previous={'key': 'other', 'turn': 3, 'repeat': 3})
+        self.assertEqual('sole', normal_gap['key'])
+
+    def test_switching_it_off_names_every_candidate(self):
+        choice = natural_association.choose('今天吃什么呀', [('a', 'x'), ('b', 'y')],
+                                            {'a': self.metas(9), 'b': self.metas(9)}, {}, 3, set(),
+                                            self.options(association_enabled=False))
+        self.assertEqual('disabled', choice['reason'])
+        self.assertEqual([{'id': 'a', 'reason': 'disabled'}, {'id': 'b', 'reason': 'disabled'}],
+                         choice['dropped'])
+
+
+class BudgetTrimTests(ProfileFixture):
+    """Review 23: the required base is trimmed against the real provider limit, not only its own cap."""
+
+    def test_the_base_yields_whole_entries_when_the_limit_is_already_tight(self):
+        chat, memory = self.build()
+        chat.profile.save_relationship([
+            {'id': f'r{i}', 'text': f'Agreement {i}: ' + 'we keep this quiet ' * 3,
+             'status': 'confirmed', 'source': 'lan'} for i in range(6)])
+        first = self.send(chat, '随便聊聊。', message_id='b1')
+        base = memory.last_recall_debug['relationship_base']
+        self.assertFalse(base['degraded'])
+        full_items = len(base['items'])
+        required = 32768 - base['space_tokens']
+        chat.cfg.provider['max_input_tokens'] = required - 40
+        call = self.send(chat, '嗯。', message_id='b2')
+        trimmed = memory.last_recall_debug['relationship_base']
+        self.assertEqual('budget', trimmed['reason'])
+        self.assertTrue(trimmed['degraded'])
+        self.assertLess(len(trimmed['items']), full_items)
+        self.assertTrue(any(row['reason'] == 'budget' for row in trimmed['dropped']))
+        self.assertLessEqual(estimate_request_tokens(call.args[0], None, 0.4),
+                             chat.cfg.provider['max_input_tokens'])
+
+
+class AssociationDiagnosticsTests(ProfileFixture):
+    """Review 31: diagnostics stay bounded and keep the count of what they did not name."""
+
+    def test_a_large_candidate_pool_is_capped_and_counted(self):
+        self.rows = {f'm{i}': {'content': f'fictional memory {i} about an evening', 'title': f'Memory {i}',
+                               'importance': 9} for i in range(60)}
+        chat, memory = self.build()
+        chat.opening_pending = False
+        self.send(chat, '外面阴阴的。', message_id='cap1')
+        association = memory.last_recall_debug['association']
+        self.assertLessEqual(len(association['dropped']), 40)
+        self.assertGreater(association['dropped_more'], 0)
+        self.assertEqual(60, association['from_importance'])

@@ -1426,7 +1426,7 @@ class Memory:
             # Ticket 422: three separate paths plus the base that is always carried, and the reason
             # each natural-association candidate was passed over.
             'relationship_base': {}, 'relevant_recall': [], 'natural_association': [],
-            'association': {}}
+            'association': {}, 'carried': []}
         recall_cfg = self.recall_settings
         explicit = asks_about_past(query) and not (rotate or wake)
         cooldown = 0 if explicit else recall_cfg['cooldown_turns']
@@ -1620,7 +1620,7 @@ class Memory:
                 kinds[key] = 'relevant'
             elif widen:
                 kinds[key] = 'rotation'
-        if not wake and not widen and len(kept) < 2:
+        if not wake and not widen and not explicit and not followup:
             # Ticket 422: weak natural association. Candidates come from Ombre's own importance-ordered
             # list (its `breath`, already cached for this conversation) plus the random "忽然想起来"
             # hits as a lower-priority extra; which one, or none, comes from importance, time since it
@@ -1648,20 +1648,31 @@ class Memory:
                     association_dropped.append({'id': key, 'reason': 'same_event'})
                 else:
                     considered.append((key, body))
+            previous = (self.rotation.previous_association()
+                        if hasattr(self.rotation, 'previous_association') else None)
             choice = choose_association(query, considered, metas, self.rotation.last,
-                                       self.rotation.turn, shown, recall_cfg, origin=origin)
+                                       self.rotation.turn, shown, recall_cfg, origin=origin,
+                                       previous=previous)
             association_dropped.extend(choice['dropped'])
+            listed = association_dropped[:40]
             self.last_recall_debug['association'] = {
                 'candidates': len(visible_pool),
                 'from_importance': len({key for key, _ in breath_blocks}),
                 'from_drift': len({key for key, _ in drift}),
                 'picked': [choice['key']] if choice['key'] else [],
-                'dropped': association_dropped, 'reason': choice['reason'] or ''}
+                'dropped': listed,
+                'dropped_more': (max(0, len(association_dropped) - len(listed))
+                                 + int(choice.get('dropped_more') or 0)),
+                'reason': choice['reason'] or ''}
             if choice['key']:
                 kept.append((choice['key'],
                              prompts.text('memory.association.label') + '\n' + choice['body']))
                 sources[choice['key']] = 'association'
                 kinds[choice['key']] = 'association'
+                if hasattr(self.rotation, 'mark_association'):
+                    with self.mutex:
+                        self.rotation.mark_association(choice['key'], self.rotation.turn)
+                    self._save_rotation()
         if not self.last_recall_debug.get('association'):
             self.last_recall_debug['association'] = {
                 'candidates': 0, 'from_importance': len({key for key, _ in breath_blocks}),
@@ -1879,9 +1890,8 @@ class Memory:
                                                             'rotation')]
         debug['natural_association'] = [item['id'] for item in recall_items
                                         if item.get('kind') == 'association']
-        carried = [item['id'] for item in recall_items if item.get('source') == 'followup']
-        if carried:
-            debug['reused'] = list(dict.fromkeys([*(debug.get('reused') or []), *carried]))
+        debug['carried'] = [item['id'] for item in recall_items
+                            if item.get('source') == 'followup']
         debug['budget'] = {**plan, 'memory_allowance': memory_allowance,
                            'memory_used': memory_used, 'history_allowance': history_allowance,
                            'auxiliary_allowance': auxiliary_allowance}

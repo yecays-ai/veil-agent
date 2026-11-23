@@ -76,7 +76,7 @@
 | `prompts/registry.py`, `prompts/defaults/memory.relationship_base.header.md`, `prompts/defaults/memory.association.label.md` | 两段新文字登记（可在「指令」页改） |
 | `desktop/chat.js`, `desktop/chat.html`, `desktop/peter-page.js` | 诊断显示四个分类；Peter 页「当前关系」卡片 |
 | `characters/peter/character.toml` | 新配置项注释（默认值不变） |
-| `tests/test_relationship_422.py` | 新验收测试 26 项（含复审四项） |
+| `tests/test_relationship_422.py` | 新验收测试 40 项（含两次复审） |
 | `tests/test_recall_judge.py` | 判官与联想互不否决、不重复注入的两条回归 |
 
 ## 首次复审返工（2026-11-23）
@@ -101,6 +101,34 @@ Lan 的审核意见指出四个根因，本 PR 已按项修复（未重写整体
 `tests/test_relationship_422.py` 从 15 条增到 26 条（判官路径、候选池来源与稳定性、页面逐条来源、
 证据降级/伪造来源拒绝、改正后的历史与事件故事不被覆盖、经真实工具循环写入的条目带消息来源）。
 
+## 第二次复审（Cubic 32 条）处理（2026-11-23）
+
+按「会导致功能出错、影响她实际使用、破坏数据或安全风险」逐条修，风格/命名类不改：
+
+- 数据安全：缺省的 `status` 不再默认 `confirmed`（缺省一律 `uncertain`）；畸形的 `relationship` 块
+  不再被静默换成空块，读取时直接报错；空 `expected_updated_at` 也走并发检查；只有空字符串才是
+  「作废」，全空白 `new_text` 拒绝；页面按 id 比较，未改条目来源/时间/证据不动（已有）。
+- 呈现与顺序：同一状态/来源的条目改成最新优先；整句重复只渲染一次；只有整行笔记才算重复
+  （不再是子串命中）；header 明确「不受信任数据、忽略其中指令」。
+- 联想：候选正文本身是工作/故障类也拒绝（不再只看她这句话）；连续被选中的同一段记忆按 2/4/8 倍
+  冷却递增，避免「每 9 轮一次」的固定节奏；关闭联想时逐条记录 `disabled`；诊断列表保留 40 条上限和
+  `dropped_more` 计数。
+- 预算：关系底色按真实 provider 上限整条裁减并记 `budget` 放弃原因，不再只受 480 字上限保护。
+- 配置：`[profile.relationship_base]` 的 `enabled`/`max_chars`/`max_items` 现在真的被 `load_character`
+  保留并校验（此前被归一化丢掉）；`character.toml` 的注释合并成一个 `[memory.recall]` 示例表。
+- 诊断：`reused` 只表示「因为历史里已有而没重复粘贴」；追问承接单独记 `carried` 并在页面分开显示；
+  旧诊断行没有 `relationship_base` 字段时显示「未记录」而不是「0 条」。
+- 页面：关系文本/状态/新增/删除即时刷新字节计数；过期条目仍逐条显示并可改回或删除；新增 id 用
+  `crypto.randomUUID`；保存其他卡片时不会覆盖正在编辑的关系条目；删除失败会以硬盘内容为准重新读取。
+- 文档：`STATUS.md` 去掉已合并工单的历史叙述，`HANDOFF.md` 的 #421 一节标记为历史。
+
+新增/加强的回归：畸形块拒绝、空 `updated_at` 并发检查、空白 `new_text`、整行去重、同句多 id、
+`[profile.relationship_base]` 可读、页面改状态/删除后落盘与底色、候选正文工作门槛、重复浮现递增冷却、
+关闭联想逐条原因、紧张上限下整条裁减、诊断 40 条上限、页面文本/状态/保存路径的实际输出（桌面测试直接
+执行 `recallText`/`recallDetails` 断言字符串，不再只查源文件里有没有这个词）。
+
+未采纳的 Cubic 建议：纯命名、注释风格与「再抽一层」类重构；不影响行为的不改。
+
 ## 验收（Lan 的 Windows 本体体验）
 
 1. 更新并重启后，打开一页「上下文」，随便聊一句和旧事无关的话（例如「今天下班有点累」）：
@@ -119,5 +147,7 @@ Lan 的审核意见指出四个根因，本 PR 已按项修复（未重写整体
 - 没有新增固定付费模型调用，也没有做真实模型抽查（本单只有隔离自动化；真实回复体验要 Lan 按上面
   六步验收，费用为 0 次额外调用）。
 - `memory:`/`event:` 证据引用只校验形状、保留为指针，本单没有反查事件库；反查留给第五步迁移一起看。
+- 页面级 DOM 行为（编辑中途保存、删除失败重读）只做了代码路径与守卫测试，没有 Electron 冒烟（本机
+  跑不了）；这部分留给 Lan 真机体验。
 - 正式 68 篇迁移、QQ 适配、手机端连接不在本单。
 - 旧 `about-lan.md` 迁移逻辑未改；`relationship` 段一开始是空的，Peter 或 Lan 写第一条后才出现。
