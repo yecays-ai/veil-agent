@@ -416,6 +416,17 @@ class ReviewFixTests(Base):
         self.assertIn('角色：peter', text)
 
 
+    def test_mcp_rows_do_not_pretend_the_refresh_time_is_the_event_time(self):
+        rows = diagnostics.recent_issues(self.root, self.role,
+                                         mcp_errors={'galatea': 'start timeout'})
+        row = [item for item in rows if item['kind'] == 'mcp_error'][0]
+        self.assertEqual(row['time'], '')
+        self.assertTrue(row['observed_at'])
+        line = diagnostics._issue_line(row)
+        self.assertIn('时间未知', line)
+        self.assertIn('本次运行内', line)
+
+
 class SyncTests(unittest.TestCase):
     def test_group_labels_cover_every_registered_group(self):
         import tool_groups

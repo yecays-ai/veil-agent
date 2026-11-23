@@ -142,4 +142,4 @@ GET /api/diagnostics/links                        维护入口（记忆组给 UR
 
 ## 状态
 
-代码完成，本机自动检查：`tests/test_diagnostics.py` 37 条、桌面 23 条、相关回归 435 条（`test_tools` 86、`test_chat` 107、`test_autonomy` 52、`test_request_snapshots` 9、`test_tool_budget` 15、`test_prompt_registry` 32、`test_tool_failures` 19、`test_web` 73、`test_recall_diagnostics` 5；`test_diagnostics` 37 已计入），3 条跳过。**待 Lan 的 Windows 体验验收**；未在正式目录启用，未改记忆。
+代码完成，本机自动检查：`tests/test_diagnostics.py` 38 条、桌面 23 条、相关回归 436 条（`test_tools` 86、`test_chat` 107、`test_autonomy` 52、`test_request_snapshots` 9、`test_tool_budget` 15、`test_prompt_registry` 32、`test_tool_failures` 19、`test_web` 73、`test_recall_diagnostics` 5；`test_diagnostics` 38 已计入），3 条跳过。**待 Lan 的 Windows 体验验收**；未在正式目录启用，未改记忆。

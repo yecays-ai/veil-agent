@@ -783,13 +783,18 @@ def collect_issues(root, role, hours=72, mcp_errors=None, now=None, limit=ISSUE_
 
     if isinstance(mcp_errors, dict):
         for service_id, message in mcp_errors.items():
-            issues.append(_issue(now, 'mcp', 'mcp_error', 'error',
+            # MCP errors carry no timestamp of their own. The refresh time is not
+            # when the error happened, so it is kept separate and never shown as
+            # the event time.
+            issues.append(_issue('', 'mcp', 'mcp_error', 'error',
                                  f'MCP 服务 {service_id} 出错', detail=message, confirmed=False,
                                  stable_key=f'mcp|{service_id}|{_text(message)}',
                                  extra={'note': '只在本次运行内有效，重启后这条就没有了',
-                                        'observed_at': '本次刷新'}))
+                                        'observed_at': now.isoformat(timespec='seconds')}))
 
-    issues.sort(key=lambda row: row.get('time') or '', reverse=True)
+    # Rows without their own time (MCP) still belong at the top: sort by when we
+    # observed them, while the row keeps saying "time unknown".
+    issues.sort(key=lambda row: row.get('time') or row.get('observed_at') or '', reverse=True)
     return issues[:limit]
 
 
@@ -1189,6 +1194,9 @@ def _module_line(module):
 
 def _issue_line(issue):
     when = _text(issue.get('time')).replace('T', ' ')[:19]
+    if not when:
+        observed = _text(issue.get('observed_at')).replace('T', ' ')[:19]
+        when = ('时间未知 · 本次运行内 ' + observed[11:] + ' 看到') if observed else '时间未知'
     badge = ('未确认关联' if not issue.get('confirmed')
              else '已恢复' if issue.get('recovery') == 'confirmed' else '恢复未知')
     ids = ' '.join(part for part in (

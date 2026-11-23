@@ -434,6 +434,7 @@ test('diagnostics reads fail loudly and only configured maintenance links open (
   // The page needs its own background, like every other page, so the transparent
   // window does not show through.
   assert.match(css, /#diagnostics-view\{background:rgb\(var\(--surface-2-rgb\)\/var\(--view-alpha,var\(--window-alpha\)\)\)\}/);
+  assert.match(css, /#diagnostics-view\{padding:17px\}/);
   // The system rows put label and value in .head, so the grid belongs there.
   assert.match(css, /#diagnostics-view \.diag-system \.context-row \.head\{display:grid;grid-template-columns:76px 1fr/);
 });

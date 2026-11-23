@@ -204,7 +204,10 @@
     }
     items.forEach(function (issue) {
       var box = row();
-      box.head.appendChild(node('time', '', shortTime(issue.time)));
+      var when = shortTime(issue.time);
+      if (!when) when = issue.observed_at
+        ? ('时间未知 · 本次运行内 ' + shortTime(issue.observed_at) + ' 看到') : '时间未知';
+      box.head.appendChild(node('time', '', when));
       box.head.appendChild(node('span', 'note-status ' + (issue.severity === 'error' ? 'expired' :
         issue.severity === 'attention' ? 'active' : ''), issue.module_label || ''));
       box.head.appendChild(node('strong', '', issue.title || ''));
