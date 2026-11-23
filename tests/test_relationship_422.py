@@ -870,6 +870,47 @@ class AssociationDiagnosticsTests(ProfileFixture):
         self.assertEqual(60, association['from_importance'])
 
 
+class DamagedChatLogTests(EvidencePathTests):
+    """Second review: a damaged chat line must be skipped as unverifiable, never crash a save."""
+
+    def test_damaged_message_ids_are_ignored_and_a_real_source_still_verifies(self):
+        path = self.store.root / 'fake' / 'chat.jsonl'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        rows = [
+            {'role': 'user', 'message_id': ['not', 'a', 'string'], 'content': 'broken one'},
+            {'role': 'user', 'message_id': {'nested': 'object'}, 'content': 'broken two'},
+            {'role': 'user', 'message_id': None, 'content': 'broken three'},
+            {'role': 'user', 'message_id': '', 'content': 'broken four'},
+            {'role': 'assistant', 'message_id': 'm-assistant', 'content': 'his own reply'},
+            {'role': 'user', 'message_id': 'm-real', 'content': 'I do love early mornings'},
+        ]
+        with path.open('w', encoding='utf-8') as handle:
+            for row in rows:
+                handle.write(json.dumps(row) + '\n')
+            handle.write('{not json at all}\n')
+        result, state, _ = self.profile._invoke_profile(
+            'profile_append', {'section': 'relationship', 'text': 'She loves early mornings.',
+                               'status': 'confirmed', 'sources': ['chat:m-real']})
+        self.assertEqual('成功', state)
+        item = self.profile.relationship_items()[0]
+        self.assertEqual('confirmed', item['status'])
+        self.assertEqual('evidence', item['source'])
+        self.assertEqual(['chat:m-real'], item['sources'])
+
+    def test_damaged_lines_alone_never_promote_a_claim(self):
+        path = self.store.root / 'fake' / 'chat.jsonl'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open('w', encoding='utf-8') as handle:
+            handle.write(json.dumps({'role': 'user', 'message_id': ['x'], 'content': 'damaged'}) + '\n')
+        result, state, _ = self.profile._invoke_profile(
+            'profile_append', {'section': 'relationship', 'text': 'She loves early mornings.',
+                               'status': 'confirmed', 'sources': ['chat:m-real']})
+        self.assertEqual('成功', state)
+        item = self.profile.relationship_items()[0]
+        self.assertEqual('uncertain', item['status'])
+        self.assertEqual('peter', item['source'])
+
+
 if __name__ == '__main__':
     unittest.main()
 

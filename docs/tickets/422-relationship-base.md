@@ -32,10 +32,12 @@
 - 三条路径分开：
   - 明确回忆：沿用现有相关召回（`asks_about_past`）。
   - 话题相关联想：沿用现有检索 + 判官（`relevant_recall`）。
-  - 弱自然浮现：只用 Ombre 自己的「忽然想起来（非检索命中）」候选，新增
-    `natural_association.py` 做**确定性打分**——存储重要度（pinned 视为 9）、距上次浮现的轮数、
-    冷却、这条是否已在本次请求里、以及「这句话是不是轻松闲聊」。**不再用 `random_chance` 摇概率**，
-    也没有「每 N 轮」规则；没有合适的就是 0 条。
+  - 弱自然浮现：候选来自 Ombre 自己的**重要度序列**（`breath()`，本会话已缓存，不新增调用、不扫全库），
+    以及它的「忽然想起来（非检索命中）」随机浮现作为低优先补充（固定扣分，不能只因恰好是唯一候选就
+    获胜）。`natural_association.py` 做**确定性打分**——存储重要度（pinned 视为 9）、距上次浮现的轮数、
+    冷却、这条是否已在本次请求里、候选正文是否属于工作/故障话题、以及「这句话是不是轻松闲聊」。
+    **不再用 `random_chance` 摇概率**（该键只为旧配置的「0 = 关」保留），也没有「每 N 轮」规则；
+    没有合适的就是 0 条。
 - 轻松闲聊门槛：超过 `association_light_chars`（默认 40 字）或带工作／报错／日志／部署等词的句子
   不会联想，低重要度的技术琐事也不会闯进吃饭闲聊。
 - 承接：沿用第二步／#419 已有的追问承接（`is_followup` + `last_injected_refs`）。上一轮出现的联想在
@@ -77,7 +79,7 @@
 | `prompts/registry.py`, `prompts/defaults/memory.relationship_base.header.md`, `prompts/defaults/memory.association.label.md` | 两段新文字登记（可在「指令」页改） |
 | `desktop/chat.js`, `desktop/chat.html`, `desktop/peter-page.js` | 诊断显示四个分类；Peter 页「当前关系」卡片 |
 | `characters/peter/character.toml` | 新配置项注释（默认值不变） |
-| `tests/test_relationship_422.py` | 56 条用例（45 个测试方法，部分被子类继承） |
+| `tests/test_relationship_422.py` | 62 条用例（47 个测试方法，部分被子类继承） |
 | `tests/test_recall_judge.py` | 判官与联想互不否决、不重复注入的两条回归 |
 
 ## 首次复审返工（2026-11-23）
@@ -143,6 +145,13 @@ Lan 的审核意见指出四个根因，本 PR 已按项修复（未重写整体
 - 页面：保存别的卡片时保留关系条目的**旧时间戳**，并发改动仍会触发保存冲突而不是被静默覆盖。
 - 文档/行尾：修正测试条数、`random_chance` 描述、`retired`→`outdated`、`reused`/`carried` 的说法，
   并把本 PR 触及的文件恢复成仓库使用的 LF 行尾（`git diff --check` 干净）。
+
+## 第二次复审收尾（2026-11-23）
+
+- 损坏聊天数据：`chat.jsonl` 里 `message_id` 是数组/对象/空值等坏行，现在按「不可验证证据」跳过，
+  不会让保存关系理解崩溃（此前 `TypeError: unhashable type: 'list'`）。坏行也永远不能升级共识。
+- 回归：混入数组、对象、`null`、空字符串、一条 assistant 回复和一条正常用户消息，外加一行坏 JSON；
+  正常的 `chat:` 来源仍能验证，坏行被忽略。
 
 ## 验收（Lan 的 Windows 本体体验）
 

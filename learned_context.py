@@ -220,6 +220,10 @@ class LearnedContext:
                     if not isinstance(row, dict) or row.get('role') != 'user':
                         continue
                     message_id = row.get('message_id')
+                    # A damaged row can carry a list or object here; it is not evidence of anything.
+                    # The log is long-lived user data, so a bad line is skipped, never raised.
+                    if not isinstance(message_id, str) or not message_id:
+                        continue
                     if message_id in wanted:
                         found.add(message_id)
                         wanted.discard(message_id)

@@ -177,9 +177,10 @@ max_bytes = 4000
 # enabled = true
 # max_chars = 480
 # max_items = 8
-# A relationship item only counts as current ("confirmed") when it cites a message Lan actually sent
-# (chat:<message_id>, verified against this role's chat log). A memory/event pointer alone is kept as
-# a trace but does not make it consensus. Peter's own reading stays "uncertain"; Lan's page edits are hers.
+# A relationship item Peter saves only counts as current ("confirmed") when it cites a message Lan
+# actually sent (chat:<message_id>, verified against this role's chat log). A memory/event pointer alone
+# is kept as a trace but does not make it consensus; his own reading stays "uncertain". The exception is
+# Lan's own edit on this page: she is the source, so what she marks confirmed is current.
 
 [user_persona]
 # Ticket 394: Lan's own persona, separate from Peter's notes about her.
