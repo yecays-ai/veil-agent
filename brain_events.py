@@ -52,6 +52,63 @@ def read_jsonl(path):
     return rows
 
 
+def upsert_event(connection, row):
+    ensure_schema(connection)
+    event_id = str(row.get('event_id') or '').strip()
+    if not event_id:
+        return
+    sources = row.get('sources') or []
+    connection.execute(
+        'INSERT INTO events(event_id, memory_id, source_count) VALUES(?,?,?) '
+        'ON CONFLICT(event_id) DO UPDATE SET memory_id=excluded.memory_id, '
+        'source_count=excluded.source_count',
+        (event_id, row.get('memory_id'), len(sources) if isinstance(sources, list) else 0))
+    connection.execute(
+        'UPDATE events SET story=?, title=?, status=?, first_at=?, last_at=?, story_source=?, '
+        'confidence=?, approved=?, created_at=?, updated_at=?, related_events_json=?, '
+        'previous_events_json=?, source_parts_json=?, sources_json=?, payload_json=?, '
+        'import_baseline=?, import_signature=? WHERE event_id=?',
+        (row.get('story'), row.get('title'), row.get('status'), row.get('first_at'),
+         row.get('last_at'), row.get('story_source'), row.get('confidence'),
+         int(bool(row.get('approved'))), row.get('created_at'), row.get('updated_at'),
+         _as_json(row.get('related_events')), _as_json(row.get('previous_events')),
+         _as_json(row.get('source_parts')), _as_json(sources), _as_json(row),
+         int(bool(row.get('import_baseline'))), row.get('import_signature'), event_id))
+    connection.commit()
+
+
+def upsert_stage(connection, row, index=0):
+    ensure_schema(connection)
+    stage_id = str(row.get('stage_id') or '').strip()
+    event_id = str(row.get('event_id') or '').strip()
+    if not stage_id or not event_id:
+        return
+    connection.execute(
+        'INSERT INTO event_stages(stage_id, event_id, at, state, text, facts_json, ord) '
+        'VALUES(?,?,?,?,?,?,?) ON CONFLICT(stage_id) DO UPDATE SET event_id=excluded.event_id, '
+        'at=excluded.at, state=excluded.state, text=excluded.text, '
+        'facts_json=excluded.facts_json, ord=excluded.ord',
+        (stage_id, event_id, row.get('at'), row.get('state'), row.get('text'),
+         _as_json(row.get('facts')), index))
+    connection.commit()
+
+
+def read_rows(connection, table):
+    """JSONL-shaped rows, merging the lossless payload with the extracted columns."""
+    rows = []
+    if table == 'events':
+        for item in connection.execute('SELECT payload_json FROM events ORDER BY event_id'):
+            payload = json.loads(item[0]) if item[0] else {}
+            rows.append(payload)
+    elif table == 'event-stages':
+        for item in connection.execute('SELECT text, facts_json, at, state, stage_id, event_id '
+                                       'FROM event_stages ORDER BY ord, stage_id'):
+            rows.append({'stage_id': item[4], 'event_id': item[5], 'at': item[2],
+                         'state': item[3], 'text': item[0],
+                         'facts': json.loads(item[1]) if item[1] else None})
+    return rows
+
+
 def import_events(connection, events_path, stages_path):
     """Upsert every event/stage, keeping the unknown fields in payload_json."""
     events = read_jsonl(events_path)

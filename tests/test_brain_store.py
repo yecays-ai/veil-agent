@@ -48,6 +48,19 @@ class BrainStoreTests(unittest.TestCase):
         self.assertEqual(rows[0]['fields'], ['content'])
         self.assertEqual(self.base.appended, [])
 
+    def test_event_ledgers_round_trip(self):
+        event = {'event_id': 'V01', 'memory_id': 'V01', 'title': 'T', 'story': 'full',
+                 'sources': [{'memory_id': 'm1'}], 'approved': True}
+        self.store.append('fake/events.jsonl', event)
+        self.store.append('fake/event-stages.jsonl',
+                          {'stage_id': 'S1', 'event_id': 'V01', 'text': 'stage', 'facts': ['f']})
+        events = self.store.read('fake/events.jsonl')
+        stages = self.store.read('fake/event-stages.jsonl')
+        self.assertEqual(events[0]['story'], 'full')
+        self.assertEqual(stages[0]['text'], 'stage')
+        self.assertEqual(stages[0]['facts'], ['f'])
+        self.assertEqual(self.base.appended, [])
+
     def test_sidecar_link_and_lock_are_folded(self):
         self.store.append('fake/memory-sidecar.jsonl', {'memory_id': 'm1', 'kind': 'link', 'to': 'm2'})
         self.store.append('fake/memory-sidecar.jsonl', {'memory_id': 'm1', 'kind': 'locked'})

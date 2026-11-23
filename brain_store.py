@@ -10,6 +10,7 @@ import json
 import sqlite3
 from pathlib import Path
 
+import brain_events
 import brain_writer
 
 
@@ -34,6 +35,20 @@ class BrainStore:
             return self._append_version(row)
         if name == '%s/memory-sidecar.jsonl' % self.role:
             return self._append_sidecar(row)
+        if name == '%s/events.jsonl' % self.role:
+            connection = self._connect()
+            try:
+                brain_events.upsert_event(connection, dict(row))
+            finally:
+                connection.close()
+            return None
+        if name == '%s/event-stages.jsonl' % self.role:
+            connection = self._connect()
+            try:
+                brain_events.upsert_stage(connection, dict(row))
+            finally:
+                connection.close()
+            return None
         return self.base.append(path, row)
 
     def read(self, path):
@@ -42,6 +57,18 @@ class BrainStore:
             return self._read_versions()
         if name == '%s/memory-sidecar.jsonl' % self.role:
             return self._read_sidecar()
+        if name == '%s/events.jsonl' % self.role:
+            connection = self._connect()
+            try:
+                return brain_events.read_rows(connection, 'events')
+            finally:
+                connection.close()
+        if name == '%s/event-stages.jsonl' % self.role:
+            connection = self._connect()
+            try:
+                return brain_events.read_rows(connection, 'event-stages')
+            finally:
+                connection.close()
         return self.base.read(path)
 
     def read_tail(self, path, limit):
