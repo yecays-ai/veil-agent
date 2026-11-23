@@ -1,5 +1,14 @@
 # 当前状态
 
+## 工单 426 · 四个 Ombre 功能的数据迁移（本 PR，待 Lan 审核）
+
+- 现状：迁移脚本 `simplify_memory.py` 与 7 个用例已完成，正式库**尚未执行**；脚本默认 dry-run，
+  `--apply` 前先做完整备份，并要求 VEIL 与 Ombre 都不在运行。
+- 下一步：本 PR 合并后，先在正式库跑 dry-run 对账（预期 4 封信、5 条计划、7 条 feel、3 条 I），
+  再跑 `--apply --skip-plan ef34e23f2dc5`（跳过已被 growth 收下的花园桌游规则）。
+- 验收：`docs/tickets/426-memory-simplify.md` 第 4 步——生命记录出现 5 条已完成计划、
+  `workspace/lab/letters/` 有 4 封信、记忆页不再有 feel/I；原信件与原计划文件仍在。
+
 ## 工单 425 · 经历页的两个 GET 路由没有接上（本 PR，待 Lan 审核）
 
 - `/api/memory/events`、`/api/memory/event` 从 #407 起就没被 `do_GET` 转发，桌面「记忆 · 经历」页
