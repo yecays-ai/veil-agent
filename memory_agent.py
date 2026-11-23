@@ -816,7 +816,7 @@ class Memory:
         if getattr(self, 'brain_authority', None) is not None:
             from brain_read import BrainRead
             try:
-                with BrainRead(self.cfg.id and self.brain_authority.db_path) as reader:
+                with BrainRead(self.brain_authority.db_path) as reader:
                     row = reader.memory(memory_id)
             except Exception:
                 row = None
