@@ -35,6 +35,19 @@ class BrainStore:
             return self._append_version(row)
         if name == '%s/memory-sidecar.jsonl' % self.role:
             return self._append_sidecar(row)
+        if name == '%s/delete-requests.jsonl' % self.role:
+            connection = self._connect()
+            try:
+                raw = json.dumps(dict(row), ensure_ascii=False, sort_keys=True)
+                connection.execute('INSERT INTO delete_requests(request_id,memory_id,reason,status,created_at,raw_json) '
+                                   'VALUES(?,?,?,?,?,?) ON CONFLICT(request_id) DO UPDATE SET status=excluded.status, '
+                                   'raw_json=excluded.raw_json',
+                                   (row.get('request_id'), row.get('memory_id'), row.get('reason'),
+                                    row.get('status'), row.get('created_at'), raw))
+                connection.commit()
+            finally:
+                connection.close()
+            return None
         if name == '%s/events.jsonl' % self.role:
             connection = self._connect()
             try:
@@ -57,6 +70,18 @@ class BrainStore:
             return self._read_versions()
         if name == '%s/memory-sidecar.jsonl' % self.role:
             return self._read_sidecar()
+        if name == '%s/delete-requests.jsonl' % self.role:
+            connection = self._connect()
+            try:
+                rows = []
+                for item in connection.execute('SELECT raw_json FROM delete_requests ORDER BY created_at'):
+                    try:
+                        rows.append(json.loads(item[0]))
+                    except ValueError:
+                        continue
+                return rows
+            finally:
+                connection.close()
         if name == '%s/events.jsonl' % self.role:
             connection = self._connect()
             try:

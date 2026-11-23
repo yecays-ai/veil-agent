@@ -61,6 +61,14 @@ class BrainStoreTests(unittest.TestCase):
         self.assertEqual(stages[0]['facts'], ['f'])
         self.assertEqual(self.base.appended, [])
 
+    def test_delete_requests_are_durable_in_brain(self):
+        self.store.append('fake/delete-requests.jsonl', {
+            'request_id': 'r1', 'memory_id': 'm1', 'reason': 'test', 'status': 'pending',
+            'created_at': 'now'})
+        rows = self.store.read('fake/delete-requests.jsonl')
+        self.assertEqual(rows[0]['request_id'], 'r1')
+        self.assertEqual(self.base.appended, [])
+
     def test_sidecar_link_and_lock_are_folded(self):
         self.store.append('fake/memory-sidecar.jsonl', {'memory_id': 'm1', 'kind': 'link', 'to': 'm2'})
         self.store.append('fake/memory-sidecar.jsonl', {'memory_id': 'm1', 'kind': 'locked'})
