@@ -1,6 +1,32 @@
 # HANDOFF
 
-## 工单 422 交接（稳定关系底色 + 自然联想）
+## 工单 424 交接（导入事件与旧碎片只算一次回忆；2026-11-23 首次审核后返工）
+
+- 工单：`docs/tickets/424-event-source-recall.md`；分支 `ticket/424-event-source-recall`，从 `main`
+  `8504250`（#423 合并提交）开。正式运行目录保持 main，没改正式库、没停 VEIL、没动 69 篇定稿。
+- 改法（产品代码只动 `memory_agent.py`）：`_event_ledger()` 读一次归属并按 `events.jsonl` 的
+  mtime/size 失效；`unique` 只收唯一归属（事件自己的 `memory_id` 永远归自己），共享来源故意不收；
+  `owners` 只给去重；`duplicate()` 只按双方 owner 交集折叠且交集事件必须有定稿导入的故事；
+  `resolved()` 只有唯一归属 + 定稿故事才替换碎片正文。`source_memory_ids` 非字符串列表整段忽略，
+  读盘失败不缓存成空账本。
+- 首次审核指出的问题已在这一版处理：共享来源不再任取第一篇故事（保留原文）、无故事事件不被别人的
+  故事折叠、坏账本不弄崩召回、临时读盘失败下一轮重读、断言直接看注入正文、去掉 `sorted(event_id)`
+  选故事的顺序依赖。
+- 验证：`tests/test_event_source_recall_424.py` 10 条（main 上 3 条断言失败 + 1 条接口不存在）；
+  同一组 17 个模块 + 本工单测试 723 条通过，main 同组 713 条通过。
+- 隔离库（`tmp/step5/app`，数据是备份副本，Ombre 18019）：第一版实测 39/67 个事件与旧碎片同时注入，
+  改后 0；共享来源 9 条逐项结果与 V36 三条决定见实施报告与 `第五步-evidence/`。
+- 第五步状态：只读审计、完整备份（`tmp/step5/backup-20261123`，3852 文件 / 100,696,910 字节；
+  `memory/_agent/ombre.lock`、`session.lock` 两个运行期锁文件被进程锁住没复制，恢复时重建；恢复演练
+  逐文件哈希一致）、隔离预演（69 篇 create / 0 conflict / 索引 matched 69、missing 0、stale 0、ready）
+  都已完成；按工单停在「旧碎片重复注入」这关，没有写正式库。
+- Lan 2026-11-23 对 V36 三条的决定（只在隔离副本执行）：`f8c23ac29f8d` 转归 V09；`c13e3ebd3a84`
+  独立保留；`2fd52c0b984b` 设 `dont_surface`、文件与按 id 追查保留。迁移用的定稿副本是
+  `tmp/step5/final-prepared.json`，原定稿未改。
+- 下一个窗口第一步：等 CI 与复审 → 合并后 `update-main.cmd` → 用新 main 重跑第五步 C 复演 → D 真实
+  模型自然聊天验收 → E 正式迁移 + 独立索引检查 + 重启。证据与报告在 `tmp/step5/`。
+
+## 工单 422 交接（稳定关系底色 + 自然联想；已于 2026-11-23 合并 #423 `8504250`）
 
 - 工单：`docs/tickets/422-relationship-base.md`；分支 `ticket/422-relationship-base`，从 `origin/main`
   `59e6594`（#421 合并提交）开的独立 worktree（`worktrees/422-relationship-base`）。正式运行目录保持
