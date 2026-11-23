@@ -59,7 +59,6 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
     if (url.pathname === '/api/events') {
       json(res, { name: 'Fictional Agent', events: events.filter(e => e.id > Number(url.searchParams.get('after') || 0)),
         busy: false, ready: true, stopped: false, stopping: false, pending,
-        memory_panel_url: 'http://127.0.0.1:1/dashboard', activity_enabled: false,
         live_context: { turns: [{ time: new Date().toISOString(), kind: 'chat', history_rounds: 20, memory_count: 1, background_count: 2,
           notes_count: 1, estimated_input_tokens: 9000, tools: [{ tool: 'send_message', state: '成功' }, { tool: 'send_message', state: '成功' }] }],
         notes: { active: [{ status: '进行中', text: 'Fictional user ordered takeout.', created_at: new Date().toISOString(),
@@ -330,7 +329,8 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   await fs.writeFile(path.join(__dirname, '../test-output/context.png'), (await chat.webContents.capturePage()).toPNG());
   await chat.webContents.executeJavaScript('document.querySelector("[data-page=memory]").click()');
   await wait(() => chat.webContents.executeJavaScript('!document.querySelector("#memory-view").hidden'), 'memory page did not open');
-  assert.equal(await chat.webContents.executeJavaScript('document.querySelector("#memory-panel").hidden'), false, 'real Memory entry should appear when available');
+  // Ticket 427: Ombre's own dashboard entry is gone from the memory page.
+  assert.equal(await chat.webContents.executeJavaScript('document.querySelector("#memory-panel") === null'), true, 'Ombre dashboard entry must not exist');
   await wait(() => chat.webContents.executeJavaScript('document.querySelector(".msg-image").complete && document.querySelector(".msg-image").naturalWidth > 0'), 'compressed image did not decode');
   await wait(() => chat.webContents.executeJavaScript('[...document.querySelectorAll(".msg-voice audio")].some(a=>a.readyState>=2)'), 'voice media did not load');
   const historyReloaded = new Promise(resolve => chat.webContents.once('did-finish-load', resolve));

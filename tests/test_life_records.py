@@ -215,11 +215,12 @@ class LifeRecordsTest(unittest.TestCase):
             # Ticket 385: the calendar is shared; Peter may edit what Lan wrote (she is told) but not delete it.
             self.assertEqual(records.write({'id':private['id'],'title':'Lan diary'},'Peter')['created_by'],'Lan')
             with self.assertRaises(ValueError): records.delete(private['id'],'Peter')
-            with self.assertRaises(ValueError): records.write({'kind':'plan','title':'Duplicate plan'},'Peter')
-            with self.assertRaises(ValueError): records.write({'id':private['id'],'kind':'plan'},'Peter')
+            # Ticket 427: plans are calendar records now; Peter creates and converts them here.
+            self.assertEqual(records.write({'kind':'plan','title':'Duplicate plan'},'Peter')['kind'],'plan')
+            self.assertEqual(records.write({'id':private['id'],'kind':'plan'},'Peter')['kind'],'plan')
             with self.assertRaises(ValueError): records.write({'kind':'event','title':'Bad date','date':'2026-02-31'},'Lan')
             peter_note=records.write({'kind':'note','title':'Peter note'},'Peter')
-            with self.assertRaises(ValueError): records.write({'id':peter_note['id'],'kind':'plan'},'Peter')
+            self.assertEqual(records.write({'id':peter_note['id'],'kind':'plan'},'Peter')['kind'],'plan')
             self.assertEqual(records.read()[1]['title'],'Lan diary')
 
     def test_daily_todo_resets_at_midnight_and_one_off_notes_fold(self):

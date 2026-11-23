@@ -18,7 +18,6 @@ contextBridge.exposeInMainWorld('veilDesktop', {
   clearBackground: () => ipcRenderer.invoke('chat:clear-background'),
   collapse: () => ipcRenderer.send('desktop:collapse'),
   expand: () => ipcRenderer.send('desktop:expand'),
-  openMemory: () => ipcRenderer.invoke('chat:open-memory'),
   openNowhere: url => ipcRenderer.invoke('chat:open-nowhere', url),
   detachView: (view, point) => ipcRenderer.invoke('view:detach', view, point),
   mergeView: view => ipcRenderer.invoke('view:merge', view),

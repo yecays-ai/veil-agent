@@ -9,7 +9,6 @@ and in each tool.
 """
 
 TOOL_ACCESS = {
-    'anchor': 'w',
     'append_file': 'w',
     'breath_search': 'rd',
     'create_directory': 'w',
@@ -22,9 +21,6 @@ TOOL_ACCESS = {
     'grant_append': 'w',
     'hold': 'w',
     'lab_file_digest': 'r',
-    'letter_lock_update': 'w',
-    'letter_read': 'r',
-    'letter_write': 'w',
     'list_directory': 'rd',
     'list_directory_with_sizes': 'rd',
     'mcp__galatea_garden__get_chat_messages': 'd',
@@ -42,11 +38,8 @@ TOOL_ACCESS = {
     'memory_history': 'rd',
     'memory_read': 'rd',
     'move_lab_file': 'w',
-    'plan': 'w',
-    'pulse': 'r',
     'read_multiple_files': 'rd',
     'read_text_file': 'rd',
-    'release': 'w',
     'run_lab_python': 'w',
     'search_chat_history': 'd',
     'search_files': 'rd',

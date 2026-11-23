@@ -69,7 +69,8 @@ test('daily memory view reads Ombre catalog and exact records without the legacy
   assert.match(web, /memory_read/);
   assert.match(native, /def _visible_records\(/);
   assert.doesNotMatch(html, /data-cmd="\/memory"/);
-  assert.match(html, /高级管理 · Ombre Dashboard/);
+  // Ticket 427: Ombre's own dashboard entry is removed from the memory page.
+  assert.doesNotMatch(html, /高级管理 · Ombre Dashboard/);
 });
 
 test('pet provides four continuous corner resize handles and preserves its square bounds', async () => {

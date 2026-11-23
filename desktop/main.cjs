@@ -671,13 +671,6 @@ ipcMain.handle('chat:set-pet-size', (event, value) => {
   saveSoon();
   return true;
 });
-ipcMain.handle('chat:open-memory', async event => {
-  if (!(fromChat(event) || ['memory', 'more'].includes(detachedViewFromEvent(event)))) return false;
-  const state = await endpointRequest('/api/events?after=0'); if (!state.memory_panel_url) return false;
-  const url = new URL(state.memory_panel_url);
-  if (!['127.0.0.1', 'localhost'].includes(url.hostname)) return false;
-  await shell.openExternal(url.href); return true;
-});
 ipcMain.handle('chat:open-nowhere', async (event, address) => {
   if (!(fromChat(event) || detachedViewFromEvent(event) === 'mcp') || typeof address !== 'string') return false;
   let url;

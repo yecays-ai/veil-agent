@@ -1776,9 +1776,6 @@ async function poll(){
     if($('capability-record-text').textContent!==capabilityText)$('capability-record-text').textContent=capabilityText;
     const currentCapabilities=s.current_capabilities||'Current capabilities are not available.';
     if($('current-capabilities-text').textContent!==currentCapabilities)$('current-capabilities-text').textContent=currentCapabilities;
-    const memoryPanel=$('memory-panel');
-    memoryPanel.hidden=!s.memory_panel_url;
-    memoryPanel.onclick=()=>window.veilDesktop.openMemory();
     memoryAvailable=s.memory_available===true;
     $('memory-unavailable').hidden=memoryAvailable;
     if(memoryAvailable&&!memoryLoaded&&!memoryLoading)loadMemoryCatalog(true);
@@ -2626,9 +2623,7 @@ virtualForm.onsubmit=async event=>{
   }catch(error){add('error',error.message||'卡片发送失败，重试')}
   finally{submit.disabled=false}
 };
-$('memory-panel').onclick=()=>window.veilDesktop.openMemory();
 document.querySelectorAll('[data-cmd="/cost"]').forEach(button=>button.onclick=()=>{setPage('chat');send('/cost')});
-$('memory-panel').title='打开 Ombre 高级记忆';
 col.addEventListener('click',event=>{
   if(multiSelect){
     const message=event.target.closest('.msg[data-message-id]');

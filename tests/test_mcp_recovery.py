@@ -56,21 +56,21 @@ class MCPRecoveryTests(unittest.TestCase):
         diagnostics = []
         client.diagnostic = diagnostics.append
         self.assertEqual(client.active, 0)
-        self.assertEqual(client.call('pulse', {}), 'catalog')
+        self.assertEqual(client.call('dream', {}), 'catalog')
         self.assertEqual(client.active, 0)
-        self.assertEqual(client.call('pulse', {}), 'again')
+        self.assertEqual(client.call('dream', {}), 'again')
         self.assertEqual(client.sessions, 4)  # discovery + two attempts + next call
-        self.assertEqual(client.calls, ['pulse'] * 3)
+        self.assertEqual(client.calls, ['dream'] * 3)
         self.assertIn('ConnectionError', diagnostics[0]['error_types'])
         self.assertNotIn('fixture secret', json.dumps(diagnostics))
 
     def test_bounded_read_failure_does_not_poison_next_call(self):
         client = self.backend([ConnectionError(), ConnectionError(), 'recovered'])
         with self.assertRaises(MemoryToolError) as failed:
-            client.call('pulse', {})
+            client.call('dream', {})
         self.assertEqual(failed.exception.code, 'connection')
         self.assertEqual(len(client.calls), 2)
-        self.assertEqual(client.call('pulse', {}), 'recovered')
+        self.assertEqual(client.call('dream', {}), 'recovered')
 
     def test_runtime_recovery_is_single_flight_and_mutation_is_not_replayed(self):
         recovered = []
@@ -82,7 +82,7 @@ class MCPRecoveryTests(unittest.TestCase):
         self.assertEqual(failed.exception.stage, 'mcp_tool')
         self.assertEqual(client.calls, ['hold'])
         self.assertEqual(recovered, ['verified'])
-        self.assertEqual(client.call('pulse', {}), 'later read')
+        self.assertEqual(client.call('dream', {}), 'later read')
 
     def test_tool_execution_failure_keeps_a_safe_stage_after_unknown_result(self):
         client = self.backend([ConnectionError('fixture secret')])
@@ -100,7 +100,7 @@ class MCPRecoveryTests(unittest.TestCase):
         client = self.backend([ConnectionError(), 'one', 'two'])
         client.recovery = lambda: recovered.append('verified')
         with ThreadPoolExecutor(2) as pool:
-            results = list(pool.map(lambda _: client.call('pulse', {}), range(2)))
+            results = list(pool.map(lambda _: client.call('dream', {}), range(2)))
         self.assertEqual(set(results), {'one', 'two'})
         self.assertEqual(len(recovered), 1)
         self.assertEqual(client.peak, 1)
@@ -131,7 +131,7 @@ class MCPRecoveryTests(unittest.TestCase):
         client.recovery = fail_recovery
         for _ in range(3):
             with self.assertRaises(MemoryToolError):
-                client.call('pulse', {})
+                client.call('dream', {})
         self.assertEqual(len(attempts), 2)
         self.assertEqual(client.recovery_count, 2)
 
@@ -171,7 +171,7 @@ class MCPRecoveryTests(unittest.TestCase):
         self.assertEqual(client.calls, ['hold'])
 
     def test_uncertain_mutation_is_never_replayed(self):
-        for name in ('hold', 'trace', 'dream', 'plan', 'letter_write', 'breath_search'):
+        for name in ('hold', 'trace', 'breath_search'):
             with self.subTest(name=name):
                 client = self.backend([ConnectionError('lost reply')])
                 with self.assertRaises(MemoryToolError) as failed:
@@ -182,11 +182,11 @@ class MCPRecoveryTests(unittest.TestCase):
     def test_service_refusal_is_not_a_transport_retry(self):
         client = self.backend([SimpleNamespace(isError=True, content=[SimpleNamespace(text='private')])])
         with self.assertRaises(MemoryToolError) as failed:
-            client.call('pulse', {})
+            client.call('dream', {})
         self.assertEqual(failed.exception.code, 'tool')
         self.assertEqual(failed.exception.stage, 'mcp_tool')
         self.assertNotIn('private', str(failed.exception))
-        self.assertEqual(client.calls, ['pulse'])
+        self.assertEqual(client.calls, ['dream'])
 
     def test_confirmed_write_survives_transport_cleanup_failure_without_replay(self):
         client = self.backend(['saved'])
@@ -198,20 +198,20 @@ class MCPRecoveryTests(unittest.TestCase):
         client = self.backend([SimpleNamespace(isError=True, content=[])])
         client.exit_error = ConnectionError('fixture cleanup failure')
         with self.assertRaises(MemoryToolError) as failed:
-            client.call('pulse', {})
+            client.call('dream', {})
         self.assertEqual(failed.exception.code, 'tool')
-        self.assertEqual(client.calls, ['pulse'])
+        self.assertEqual(client.calls, ['dream'])
 
     def test_concurrent_callers_share_one_owner_and_shutdown_rejects_new_calls(self):
         client = self.backend(['one', 'two'])
         with ThreadPoolExecutor(2) as pool:
-            results = list(pool.map(lambda _: client.call('pulse', {}), range(2)))
+            results = list(pool.map(lambda _: client.call('dream', {}), range(2)))
         self.assertEqual(set(results), {'one', 'two'})
         self.assertEqual(client.peak, 1)
         client.close()
         self.assertFalse(client.thread.is_alive())
         with self.assertRaises(MemoryToolError):
-            client.call('pulse', {})
+            client.call('dream', {})
 
     def test_queued_call_wait_includes_jobs_ahead(self):
         from concurrent.futures import Future
@@ -227,7 +227,7 @@ class MCPRecoveryTests(unittest.TestCase):
 
         with mock.patch.object(client.requests, 'qsize', return_value=3), \
              mock.patch.object(Future, 'result', new=record_timeout):
-            self.assertEqual(client.call('pulse', {}), 'queued result')
+            self.assertEqual(client.call('dream', {}), 'queued result')
         self.assertEqual(timeouts, [1050])
 
 

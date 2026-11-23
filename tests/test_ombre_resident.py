@@ -274,11 +274,11 @@ ombre_port = 18913
             with self.assertRaises(UserError):
                 load_character(root, 'fixture')
 
-    def test_chat_snapshot_exposes_role_panel_url_without_auth_token(self):
+    def test_chat_snapshot_no_longer_offers_ombre_dashboard(self):
+        # Ticket 427: Lan never used Ombre's own dashboard; the entry and its URL are gone from the UI.
         hub = Hub('Fixture', SimpleNamespace(enabled=lambda: False), 18913)
         state = hub.snapshot(0)
-        self.assertEqual(state['memory_panel_url'], 'http://127.0.0.1:18913/dashboard')
-        self.assertNotIn('token', state['memory_panel_url'])
+        self.assertNotIn('memory_panel_url', state)
 
     def test_session_errors_keep_their_own_message(self):
         from unittest import mock

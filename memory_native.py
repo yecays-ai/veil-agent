@@ -17,8 +17,9 @@ from capability_state import capability_lock, save_capabilities
 from memory_agent import ordinary_hits, MemoryToolError, SEARCH_SPARE_HITS, vault_path as role_vault_path
 from memory_sidecar import Sidecar
 
-OMBRE_TOOLS = ('trace', 'dream', 'letter_write', 'letter_read', 'letter_lock_update',
-                'anchor', 'release', 'plan', 'pulse', 'I')
+# Ticket 427: Ombre's feature tools (letters, plans, pulse, I, anchor/release) are gone; VEIL keeps
+# the two that still carry value: editing a memory and reviewing the recent ones.
+OMBRE_TOOLS = ('trace', 'dream')
 NATIVE_TOOLS = ('hold', 'breath_search', *OMBRE_TOOLS, 'memory_history', 'memory_catalog', 'memory_read',
                 'memory_timeline')
 CONTENT_LIMIT, TITLE_LIMIT, WHY_LIMIT = 1500, 100, 500
@@ -59,7 +60,7 @@ HOLD = SimpleNamespace(name='hold', inputSchema={
     }}, description=(
         'Save a long-term memory when YOU judge it worth keeping; Lan need not say "remember". Keep shared '
         'experiences, decisions and why, the relationship, your own changes of mind, and talk about your memory, '
-        'abilities or upgrades. Not memories: small talk, game ledgers, to-dos (use plan), status reports, '
+        'abilities or upgrades. Not memories: small talk, game ledgers, to-dos (use life_record), status reports, '
         'transcripts. Write it as you would recall it: first person, what happened and what you thought of it. '
         'Before a new memory is saved the program shows related ones; then choose: the same event or more of it '
         '(new details, or a part of it not yet written) -> target_id, rewriting that memory whole; what happened '
@@ -75,7 +76,7 @@ SEARCH = SimpleNamespace(name='breath_search', inputSchema={
 
 DESCRIPTION = ('Memory tools are separate from file access. Use hold to save lasting experience and '
                'breath_search to find a known memory; use the listed Ombre tools for edits, reflection, '
-               'letters, anchors, plans and library status. Every hidden memory is blocked by the program. ')
+               'and library status. Every hidden memory is blocked by the program. ')
 MEMORY_HISTORY = SimpleNamespace(name='memory_history', inputSchema={
     'type': 'object', 'required': ['memory_id'], 'additionalProperties': False,
     'properties': {'memory_id': {'type': 'string', 'description':
@@ -119,14 +120,14 @@ OMBRE_DESCRIPTIONS = {
     'trace': (
         'Edit one existing memory by its exact bucket_id; never guess an ID. Pass only the fields you change '
         '(-1 or empty means unchanged). content replaces the whole body; or old_str/new_str replaces one exact, '
-        'unique passage (empty new_str removes it); not both. title is the memory\'s (or letter\'s) own title; '
+        'unique passage (empty new_str removes it); not both. title is the memory\'s own title; '
         'name is only its bucket name. resolved=1 lets it settle, 0 reactivates it; pinned=1 makes it a permanent '
         'core memory (needs edit_reason saying why; very few may exist); protected=1 stops decay without '
         'forcing it up; digested=1 hides it from passive recall and '
         'dream; dont_surface=1 keeps it out of daily recall. Removing the last pinned/protected needs importance '
         '1-10 in the same call. Metadata: importance 1-10, domain and tags comma-separated, valence/arousal 0-1, '
         'why_remembered, meaning_append/meaning_replace, media_append/media_replace (replace drops the old value; '
-        'prefer append). status (active/resolved/abandoned) and weight belong to plan items. '
+        'prefer append). '
         'Each of these goes in its own call: reinforce=true when, after reading it, this memory truly matters '
         '(search hits do not reinforce); quotes_replace corrects or removes its original quotes (never adds); '
         'unlink=<id> removes a wrong link; relink=<id> with relation_type (caused_by, causes, continuation_of, '
@@ -135,40 +136,7 @@ OMBRE_DESCRIPTIONS = {
         'answers on the memory page. edit_reason says why you change it now (kept in VEIL history only).'),
     'dream': (
         'Read every memory that changed in the last window_hours (default 48), in full, to look back and digest. '
-        'What you have let go of can settle with trace(resolved=1). Active plans are listed at the end.'),
-    'letter_write': (
-        'Write a letter to Lan or to your future self. Letters are kept word for word forever, never compressed, '
-        'merged or faded; put words meant to last here rather than in a memory. author: "ai" for you, "user" for '
-        'Lan. title, date and user_name are optional. lock_type: "none" (default), "timed" with a future '
-        'unlock_date (2027-01-01 or a full ISO time) opens on that date, "permanent" seals it unread forever. '
-        'Only the writer can change a lock later with letter_lock_update, and only if ai_name (your name) was '
-        'given when writing.'),
-    'I': (
-        'Slowly build what you know about yourself. content="I think ..." (one short sentence, optional aspect: '
-        'nature, values, patterns, limits, becoming, uncertainty or stance) saves a candidate: it is an ordinary '
-        'memory that surfaces and fades like any other. Each dream shows candidates beside related memories; a '
-        'candidate seen by dream on 3 different days can become a lasting entry with promote=<candidate id>. '
-        'supersedes=<id of a lasting entry> in the same aspect replaces an old understanding (the old one is kept, '
-        'only set aside). read=true (or no arguments) reads lasting entries and waiting candidates. '
-        'Nothing is written for you and nothing is injected at the start of a chat; read it when you want to.'),
-    'letter_read': (
-        'Find letters: optional query (meaning search), author ("ai", "user" or a signature), date_from/date_to '
-        '(ISO dates). Without query, the newest limit letters. Returns full text.'),
-    'letter_lock_update': (
-        'Change only the lock of an existing letter you wrote; letter_id is the bracketed ID from letter_read. '
-        'lock_type "none", "timed" (with a future unlock_date) or "permanent". Lan\'s letters are not yours to lock.'),
-    'anchor': (
-        'Mark a memory as an anchor: a cold reference that stays out of default recall but still answers matching '
-        'searches. At most 24; release one first when full.'),
-    'release': 'Remove the anchor mark from a memory; it returns to default recall. pinned stays as it was.',
-    'plan': (
-        'Record a to-do, promise or open loop. status active (default), resolved or abandoned; related_bucket '
-        'optionally links a memory; weight 0-1 is how heavy the promise is (not how important); why_remembered is '
-        'optional. Plans never fade and appear only at the end of dream; close one with '
-        'trace(bucket_id, status="resolved").'),
-    'pulse': (
-        'Memory library status: counts, storage, decay engine state and a one-line summary of every memory; '
-        'anchors are marked. include_archive=true also lists archived ones.'),
+        'What you have let go of can settle with trace(resolved=1).'),
 }
 DREAM_NOTE = ('Your recent memories, for looking back. Anything you are done with can settle with '
               'trace(bucket_id, resolved=1); nothing needs to be written.')
@@ -452,38 +420,6 @@ class NativeMemoryTools:
                 records[key] = (meta.get('title') or meta.get('name') or key, raw)
         return records
 
-    def plan_entries(self):
-        """Read Peter's existing Ombre plan files without copying them into life records."""
-        from tools_agent import _redirected
-        vault = role_vault_path(self.memory.store.root, self.memory.cfg.id)
-        if not vault.exists():
-            return []
-        if _redirected(vault):
-            raise ValueError('redirected vault')
-        root = vault.resolve()
-        hidden = self.memory.hidden_ids()
-        rows = []
-        for path in (root / 'plan').rglob('*.md'):
-            if _redirected(path) or not path.resolve().is_relative_to(root):
-                continue
-            raw = path.read_text(encoding='utf-8')
-            meta, body = parse_frontmatter(raw)
-            key = str(meta.get('id') or '')
-            if not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', key) or key in hidden:
-                continue
-            status = str(meta.get('status') or 'active').lower()
-            if status not in ('active', 'resolved', 'abandoned'):
-                continue
-            created = str(meta.get('created') or '')
-            updated = str(meta.get('updated') or created)
-            rows.append({'id':'ombre-plan:'+key,'kind':'plan','title':str(meta.get('title') or key),
-                         'content':body.strip(),'owner':'Peter','date':created[:10],
-                         'state':'completed' if status=='resolved' else 'paused' if status=='abandoned' else 'active',
-                         'created_by':'Peter','created_at':created,'updated_by':'Peter',
-                         'updated_at':updated,'completed_at':updated if status=='resolved' else None,
-                         'source':'Ombre plan','memory_id':key,'read_only':True})
-        return rows
-
     def panel_entries(self, recent_requests=100):
         """Readable memory list for Lan's memory page; never sent to the model."""
         recalled = {}
@@ -674,6 +610,46 @@ class NativeMemoryTools:
                 pinned.add(key)
         return pinned
 
+    def library_stats(self, records=None):
+        """Ticket 427: one status line Peter can ask for, replacing Ombre's pulse.
+
+        Counts what Lan may see plus how much is archived and hidden, the newest write and the
+        on-disk size. It reads the vault directly, so it costs no model call and no Ombre round trip.
+        """
+        records = self._visible_records() if records is None else records
+        events = sum(1 for _, raw in records.values() if 'import_marker:' in raw[:600])
+        stamps = []
+        for _, raw in records.values():
+            stamp = self._created_of(raw)
+            if stamp is not None:
+                stamps.append(stamp)
+        archived = 0
+        vault = role_vault_path(self.memory.store.root, self.memory.cfg.id)
+        try:
+            for path in (vault / 'archive').rglob('*.md'):
+                if path.is_file() and not path.is_symlink():
+                    archived += 1
+        except OSError:
+            pass
+        try:
+            hidden = len(self.memory.hidden_ids())
+        except Exception:
+            hidden = 0
+        size = sum(len(raw.encode('utf-8')) for _, raw in records.values())
+        newest = max(stamps).strftime('%Y-%m-%d') if stamps else ''
+        parts = [f'{len(records)} memories']
+        if events:
+            parts.append(f'{events} events')
+        if archived:
+            parts.append(f'{archived} archived')
+        if hidden:
+            parts.append(f'{hidden} hidden')
+        if newest:
+            parts.append(f'newest {newest}')
+        if size:
+            parts.append(f'{max(1, round(size / 1024 / 1024))} MB')
+        return ', '.join(parts)
+
     def _catalog(self, args):
         after = args.get('after', '')
         if not isinstance(after, str) or (after and not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', after)):
@@ -689,6 +665,7 @@ class NativeMemoryTools:
         if created_from and created_to and created_from > created_to:
             return 'created_from cannot be later than created_to.', '被拒绝', 'memory_catalog'
         records = self._visible_records()
+        stats = self.library_stats(records)
         stamps = {key: self._created_of(raw) for key, (_, raw) in records.items()}
         if created_from or created_to:
             # A memory whose creation time cannot be read cannot prove it is inside the period: leave it out.
@@ -711,7 +688,7 @@ class NativeMemoryTools:
             stamp = stamps[key]
             item = {'memory_id': key, 'title': records[key][0][:80], 'created': stamp.strftime('%Y-%m-%d') if stamp else ''}
             candidate = page + [item]
-            result = json.dumps({'total': len(matching), 'items': candidate,
+            result = json.dumps({'stats': stats, 'total': len(matching), 'items': candidate,
                                  'next_after': key if len(keys) > len(candidate) else ''}, ensure_ascii=False)
             if len(result.encode('utf-8')) > self.max_result_bytes:
                 break
@@ -719,7 +696,7 @@ class NativeMemoryTools:
         if keys and not page:
             return 'The result limit is too small to return one complete catalog entry.', '出错', 'memory_catalog'
         cursor = page[-1]['memory_id'] if len(keys) > len(page) else ''
-        return json.dumps({'total': len(matching), 'items': page, 'next_after': cursor}, ensure_ascii=False), '成功', '记忆目录'
+        return json.dumps({'stats': stats, 'total': len(matching), 'items': page, 'next_after': cursor}, ensure_ascii=False), '成功', '记忆目录'
 
     def _read(self, args):
         key, offset = args.get('memory_id'), args.get('offset', 0)
@@ -800,28 +777,13 @@ class NativeMemoryTools:
             return 'Tool arguments must be a JSON object.', '被拒绝', summary
         if name == 'trace':
             return self._trace(args, approval)
-        if name in ('anchor', 'release'):
-            memory_id = args.get('bucket_id')
-            if not isinstance(memory_id, str) or self.memory.is_hidden(memory_id):
-                return 'The target memory does not exist or is hidden.', '被拒绝', summary
-        if name == 'I':
-            for key in ('promote', 'supersedes'):
-                target = args.get(key)
-                if target not in (None, '') and (not isinstance(target, str) or self.memory.is_hidden(target)):
-                    return 'The target of this self-knowledge change does not exist or is hidden.', '被拒绝', summary
-        if name == 'plan':
-            related = args.get('related_bucket')
-            if related and self.memory.is_hidden(related):
-                return 'The linked target memory is hidden.', '被拒绝', summary
         try:
             result = self.memory.call(name, args)
         except MemoryToolError as exc:
             return str(exc), '出错', summary
         except Exception:
             return 'The memory tool failed. Check the current memory state before retrying.', '出错', summary
-        if name == 'I':
-            result = self._filter_hidden_i(result)
-        if name in ('dream', 'pulse'):
+        if name == 'dream':
             result = self._filter_hidden_result(result, name)
         if name == 'dream':
             result = neutral_dream_header(result)
@@ -1057,39 +1019,13 @@ class NativeMemoryTools:
         self.memory.erase(memory_id)
         return None
 
-    def _filter_hidden_i(self, result):
-        """Drop each hidden self-knowledge entry or candidate as a whole block.
-
-        Ombre prints an entry as a header line holding its ID followed by free text over any number of
-        lines, so filtering line by line would leak the text of a hidden entry. A block starts at a
-        header line naming a hidden ID (or its title) and ends at the next header line (any 12-hex ID)
-        or section line (===)."""
-        hidden = self.memory.hidden_ids()
-        if not hidden:
-            return result
-        # Ombre prints no title for these entries, so only a hidden ID (as a whole word) marks one.
-        kept, skipping = [], False
-        for line in result.splitlines():
-            if line.startswith('==='):
-                skipping = False
-            elif any(re.search(r'(?<![A-Za-z0-9_-])' + re.escape(key) + r'(?![A-Za-z0-9_-])', line)
-                     for key in hidden):
-                skipping = True
-                continue
-            elif re.search(r'\b[0-9a-f]{12}\b', line):
-                skipping = False
-            if not skipping:
-                kept.append(line)
-        return '\n'.join(kept)
-
     def _filter_hidden_result(self, result, name):
         hidden = self.memory.hidden_ids()
         if not hidden:
             return result
         hidden_titles = {title for key in hidden if (title := self.memory.title_for(key))}
-        # Ombre emits each dream record as a separate block and each pulse entry
-        # as a line containing its stable ID. Remove those records and aggregate
-        # counts before the result reaches the chat model.
+        # Ombre emits each dream record as a separate block whose first line holds its stable ID.
+        # Remove the records Lan may not see before the result reaches the chat model.
         pieces = result.split('\n---\n')
         if name == 'dream':
             first, *blocks = pieces
@@ -1113,17 +1049,8 @@ class NativeMemoryTools:
                     visible_count += 1
             first = re.sub(r'（\d+ 个桶）', f'（{visible_count} 个桶）', first, count=1)
             result = '\n---\n'.join([first, *visible])
-        lines = result.splitlines()
-        if name == 'pulse':
-            aggregate = ('固化桶:', '动态桶:', '归档桶:', 'feel 桶:', 'plan 桶:', 'letter 桶:',
-                         '总占用:', '向量索引队列:', '⚠️ 索引漂移:')
-            lines = [line for line in lines if not line.startswith(aggregate)
-                     and not re.match(r'^=== (计划|feel|信件)（\d+', line)]
-        result = '\n'.join(line for line in lines if not any(key in line for key in hidden)
-                            and not any(title in line for title in hidden_titles))
-        if name == 'pulse':
-            result += '\n\n（包含隐藏记忆的统计与条目已隐藏。）'
-        return result
+        return '\n'.join(line for line in result.splitlines() if not any(key in line for key in hidden)
+                         and not any(title in line for title in hidden_titles))
 
     SEARCH_RESULTS_LIMIT = 20
 

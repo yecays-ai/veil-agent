@@ -176,7 +176,6 @@ class Hub(ScreenPopMixin):
         self.acceptance_limits = None
         self.chat = None
         self.activity = activity
-        self.memory_url = f'http://127.0.0.1:{memory_port}/dashboard' if memory_port else None
         self.memory_tools = None
         self.events = []          # newest MAX_LIVE_EVENTS or so; ids keep counting, see push()
         self.last_event_id = 0
@@ -1915,7 +1914,6 @@ class Hub(ScreenPopMixin):
                     'runtime_status': runtime_status,
                     'tool_activity': tool_activity,
                     'live_context': live_context,
-                    'memory_panel_url': self.memory_url,
                     'memory_available': self.memory_tools is not None,
                     'models': self.models_view, **autonomy, **glance, **codex_watch}
 
@@ -2287,8 +2285,6 @@ def make_handler(hub, token):
                             'updated_by':'Peter','updated_at':old.get('updated_at',''),
                             'source':'long_task_update','progress':old.get('progress',[]),
                             'read_only':True})
-                if hub.memory_tools is not None:
-                    rows.extend(hub.memory_tools.plan_entries())
                 rows, folded = fold_completed(rows)
                 # Ticket 385: the two daily moods and the daily to-do log travel with the records.
                 life = chat.life_records if chat is not None else None
@@ -3189,20 +3185,6 @@ def make_handler(hub, token):
                         'source':'short_term_notes'}})
                 except (ValueError,AttributeError) as exc:
                     self._send(400,{'error':str(exc)})
-                return
-            if isinstance(source_id,str) and source_id.startswith('ombre-plan:'):
-                if set(body)-{'id','state'} or body.get('state') not in ('active','completed','paused'):
-                    self._send(400, {'error':'此计划只能在这里修改状态；正文请在记忆页编辑。'})
-                    return
-                if hub.memory_tools is None:
-                    self._send(503, {'error':'Ombre 暂不可用。'})
-                    return
-                desired={'active':'active','completed':'resolved','paused':'abandoned'}[body['state']]
-                result,state,_=hub.memory_tools.invoke('trace',{'bucket_id':source_id.split(':',1)[1],
-                                                                   'status':desired})
-                self._send(200 if state=='成功' else 409, {'ok':state=='成功','message':result,
-                                                          'record':next((r for r in hub.memory_tools.plan_entries()
-                                                              if r['id']==source_id),None)})
                 return
             if body.get('delete') is True:
                 try:

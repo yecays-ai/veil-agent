@@ -58,8 +58,9 @@ class MCPStageError(RuntimeError):
 
 class MCP:
     """One async owner; each operation gets a fresh, bounded HTTP connection."""
-    # Search can invoke a metered embedding provider; do not replay it.
-    RETRYABLE_READS = frozenset({'pulse'})
+    # Ticket 427: only a read-only review may be replayed after a transport failure;
+    # search can invoke a metered embedding provider and must never be replayed.
+    RETRYABLE_READS = frozenset({'dream'})
 
     def __init__(self, url, token, *, recovery=None):
         self.url, self.token = url, token
@@ -665,15 +666,10 @@ class Memory:
         normal_embedding_amount = None
         normal_model_amount = None
         try:
-            if (name in {'hold', 'breath_search', 'feel', 'dream', 'pulse', 'anchor',
-                         'release', 'letter_read', 'letter_write'}
+            if (name in {'hold', 'breath_search', 'dream'}
                     or (name == 'trace' and args.get('content') not in (None, ''))
                     or (name == 'trace' and any(args.get(key) for key in
-                        ('old_str', 'new_str', 'meaning_append', 'meaning_replace')))
-                    or (name == 'plan' and args.get('content'))
-                    or (name == 'I' and (args.get('content') or args.get('promote') or args.get('supersedes')))
-                    or (name == 'letter_write' and args.get('content'))
-                    or (name == 'letter_read' and args.get('query'))):
+                        ('old_str', 'new_str', 'meaning_append', 'meaning_replace')))):
                 normal_tokens = max(
                     8192, len(json.dumps(args, ensure_ascii=False).encode('utf-8')) + 2048)
                 reserve_tokens = 12 * normal_tokens
@@ -1224,7 +1220,7 @@ class Memory:
             self._embedder = QueryEmbedder(self.cfg.memory['base_url'], self.cfg.memory['model'], key.strip())
         return self._embedder
 
-    def assisted_recall(self, query, recent, settings, normal, emotional):
+    def assisted_recall(self, query, recent, settings, normal):
         """Search again with the last rounds, keep only candidates close to that text; may keep none."""
         from recall_relevance import context_text, cosine, load_vectors
         text = context_text(recent, query, settings['rounds'])
@@ -1232,7 +1228,7 @@ class Memory:
         extra = self.context_visible(ordinary_hits(self.call('breath_search', {
             'query': text, 'mode': 'automatic', 'with_ids': True, 'max_results': 3 + SEARCH_SPARE_HITS}),
             limit=3 + SEARCH_SPARE_HITS))[:3]
-        candidates = dict(normal + extra + emotional)
+        candidates = dict(normal + extra)
         tokens = max(512, len(text.encode('utf-8')))
         rate = Decimal(str(self.cfg.memory['input_cny_per_million']))
         reservation = self.budget.estimate(self.cfg.id, self.cfg.memory['model'], tokens, rate)
@@ -1515,7 +1511,6 @@ class Memory:
             self.rotation.turn += 1
         opening = []
         normal = []
-        emotional = []
         drift = []
         pool = []
         judged = False
@@ -1554,12 +1549,8 @@ class Memory:
         except Exception as exc:
             self.last_recall_debug['failure'] = 'breath_search'
             self.retrieval_failure('breath_search', exc)
-        if not wake:
-            try:
-                emotional = blocks(self.call('feel', {'query': query}))
-            except Exception as exc:
-                self.last_recall_debug['failure'] = 'feel'
-                self.retrieval_failure('feel', exc)
+        # Ticket 427: Ombre's feel channel is gone. Every memory Peter writes is already first person and
+        # carries its feeling, so a second emotional index no longer adds anything (and it bypassed the judge).
         if prefetched is not None:
             try:
                 # "None fits" is an answer: nothing is filled back from Ombre. Only a technical failure
@@ -1581,17 +1572,14 @@ class Memory:
                 if wake:
                     normal, drift = list(pool), []
         kinds = {key: 'search' for key, _ in normal}
-        kinds.update({key: 'feel' for key, _ in emotional if key not in kinds})
         if settings:
             try:
-                normal, emotional = self.assisted_recall(query, recent, settings, normal, emotional), []
+                normal = self.assisted_recall(query, recent, settings, normal)
                 kinds.update({key: 'context' for key, _ in normal})
             except Exception as exc:
                 # Any failure keeps today's recall for this turn.
                 self.retrieval_failure('assisted_recall', exc)
-        combined = self.context_visible(
-            normal[:1] + emotional[:1] + normal[1:] + emotional[1:],
-            failure_stage='recall_visibility')
+        combined = self.context_visible(normal, failure_stage='recall_visibility')
         try:
             opening_candidates = breath_blocks if include_opening else []
         except Exception as exc:
@@ -1981,8 +1969,7 @@ class Memory:
         # Ticket 422: the four things a recall summary has to keep apart, so one "recall = 0" can never
         # again read as "he has no relationship background this turn".
         debug['relevant_recall'] = [item['id'] for item in recall_items
-                                    if item.get('kind') in ('search', 'feel', 'context', 'relevant',
-                                                            'rotation')]
+                                    if item.get('kind') in ('search', 'context', 'relevant', 'rotation')]
         debug['natural_association'] = [item['id'] for item in recall_items
                                         if item.get('kind') == 'association']
         debug['carried'] = [item['id'] for item in recall_items

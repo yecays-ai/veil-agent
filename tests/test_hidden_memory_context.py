@@ -132,37 +132,11 @@ class HiddenMemoryContextTests(unittest.TestCase):
         self.backend.write_row('secret')
         self.assertNotIn('FICTIONAL_HIDDEN_MARKER', self.context())
 
-    def test_one_retrieval_branch_failure_keeps_other_verified_memory_and_is_safe_to_diagnose(self):
-        self.backend.rows['secret']['hidden'] = True
-        self.backend.write_row('secret')
-        self.backend.rows['feeling'] = {'content': 'FICTIONAL_FEEL_VISIBLE_MARKER', 'feel': True}
-        self.backend.write_row('feeling')
-        original = self.backend.call
-
-        def fail_feel(name, args):
-            if name == 'feel':
-                raise RuntimeError('FICTIONAL_QUERY_MUST_NOT_APPEAR')
-            return original(name, args)
-
-        self.backend.call = fail_feel
-        sent = '\n'.join(row['content'] for row in self.memory.context('FICTIONAL_QUERY_MUST_NOT_APPEAR'))
-        notice = self.memory.notices()
-        diagnostic = (self.store.root / 'fake' / 'memory' / '_agent' / 'diagnostics.jsonl').read_text(encoding='utf-8')
-        self.assertIn('FICTIONAL_VISIBLE_MARKER', sent)
-        self.assertNotIn('FICTIONAL_HIDDEN_MARKER', sent)
-        self.assertEqual(notice, [
-            'Memory retrieval partly failed at feel (RuntimeError); unavailable content was not treated as memory. '
-            'See memory/_agent/diagnostics.jsonl; it contains no chat content or keys.'])
-        self.assertIn('"stage": "feel"', diagnostic)
-        self.assertIn('"error_type": "RuntimeError"', diagnostic)
-        self.assertNotIn('FICTIONAL_QUERY_MUST_NOT_APPEAR', diagnostic)
-        self.assertNotIn('FICTIONAL_HIDDEN_MARKER', diagnostic)
-
     def test_failed_visibility_check_withholds_only_that_candidate(self):
         self.backend.rows['secret']['hidden'] = True
         self.backend.write_row('secret')
-        self.backend.rows['feeling'] = {'content': 'FICTIONAL_FEEL_VISIBLE_MARKER', 'feel': True}
-        self.backend.write_row('feeling')
+        self.backend.rows['other'] = {'content': 'FICTIONAL_OTHER_VISIBLE_MARKER'}
+        self.backend.write_row('other')
         original = self.memory.raw_content_for
 
         def fail_one_check(memory_id):
@@ -172,7 +146,7 @@ class HiddenMemoryContextTests(unittest.TestCase):
 
         with patch.object(self.memory, 'raw_content_for', side_effect=fail_one_check):
             sent = '\n'.join(row['content'] for row in self.memory.context('fictional query'))
-        self.assertIn('FICTIONAL_FEEL_VISIBLE_MARKER', sent)
+        self.assertIn('FICTIONAL_OTHER_VISIBLE_MARKER', sent)
         self.assertNotIn('FICTIONAL_VISIBLE_MARKER', sent)
         self.assertNotIn('FICTIONAL_HIDDEN_MARKER', sent)
         self.assertIn('recall_visibility', ' '.join(self.memory.notices()))

@@ -394,7 +394,7 @@ class LongTaskStore:
         if name.startswith('mcp__') and isinstance(args, dict):
             encoded = json.dumps(args, sort_keys=True, separators=(',', ':')).encode('utf-8')
             return name + ':' + hashlib.sha256(encoded).hexdigest()
-        if name in {'hold', 'trace', 'anchor', 'release'} and isinstance(args, dict):
+        if name in {'hold', 'trace'} and isinstance(args, dict):
             memory_id = args.get('bucket_id') or args.get('target_id')
             if isinstance(memory_id, str) and memory_id.strip():
                 return memory_id
@@ -447,7 +447,7 @@ class LongTaskStore:
                 proposed = self._normalized_target(target)
                 same_target = bool(expected and expected == proposed)
                 if autonomy or same_target:
-                    if pending['tool'] in {'hold', 'trace', 'anchor', 'release'}:
+                    if pending['tool'] in {'hold', 'trace'}:
                         how = f"Read memory {pending['target']} with memory_read"
                     elif pending['tool'] in {'write_file', 'append_file'}:
                         how = 'Read the target with read_text_file'
