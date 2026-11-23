@@ -4,13 +4,13 @@
 
 - 工单：`docs/tickets/429-veil-brain-p0b.md`；分支 `ticket/429-veil-brain-p0b`，从 `main` `d9406e7` 开，
   worktree `worktrees/429-veil-brain-p0b`。**未合并、未在正式库启用**；Lan 审核后再合并。
-- 做了什么：新增 `brain_sync.py` 与 24 条 unittest；`memory_agent.Memory` 在确认写入后只入队，
+- 做了什么：新增 `brain_sync.py` 与 26 条 unittest；`memory_agent.Memory` 在确认写入后只入队，
   worker 独立线程、异常全部落到 `brain-sync-log.jsonl`；周期对账按内容哈希/状态/版本/向量/事件逐项比较，
   报告写 `data/<role>/brain-sync-report.md`。记录按 id/source_index/行号/event_id 幂等，软删除只标 removed_at；确认擦除时清内容只留空墓碑。
 - 关键行为：硬删除会清掉影子库里的正文、版本与向量，只留空墓碑；扫描不完整时不做删除推断；版本账本被擦除后整体重建；meaning 向量与事件最新修订都参与比较。
 - 已核实：P0-A 的 7 个悬空事件来源 = #426 删除的 7 条 feel（备份有对应文件、正式库无相近 id）；
   8 条 sidecar 链接也指向这 7 个 id，源记忆健在。对账从 #426 日志读取 known_removed 并单独分类。
-- 已验证：24 条用例（新增/修改+隐藏/删除/归档+合并+版本+向量/关闭时不写+关时不 reconcile/异常隔离/漏同步/源文件不被改/已知引用/db 可校验/队列满/缺库静默/硬删除擦除/账本重写重建/meaning 向量/事件修订/不可读文件不误删/bucket 缺失不误删/向量双向差异/sidecar 重写重建/事件差异进报告）。
+- 已验证：26 条用例（新增/修改+隐藏/删除/归档+合并+版本+向量/关闭时不写+关时不 reconcile/异常隔离/漏同步/源文件不被改/已知引用/db 可校验/队列满/缺库静默/硬删除擦除/账本重写重建/meaning 向量/事件修订/不可读文件不误删/bucket 缺失不误删/向量双向差异/sidecar 重写重建/事件差异进报告/sidecar 同长度重写/向量源缺失不报零）。
 - 合并后第一步：`python brain_sync.py init --source <隔离副本>` 建 `data/peter/brain.db`，重启 VEIL，
   确认 `shadow status` 正常；然后开始 7 天观察，期间不改 schema 语义、不启动 P1。
 - 边界：影子库只读源、不反向写、不自动修复；故障演练只在隔离副本做。

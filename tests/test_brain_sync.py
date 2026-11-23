@@ -464,6 +464,32 @@ class ShadowSyncTests(unittest.TestCase):
             connection.close()
         self.assertEqual(count, 0)
 
+    def test_sidecar_same_length_rewrite_rebuilds_state(self):
+        sync = self.shadow()
+        sync.reconcile()
+        path = self.role / 'memory-sidecar.jsonl'
+        text = path.read_text(encoding='utf-8')
+        write(path, text.replace('"kind": "lock"', '"kind": "seen"'))
+        summary = sync.reconcile()
+        self.assertEqual(summary['comparison']['state_mismatches'], [])
+        connection = self.db()
+        try:
+            locked = connection.execute(
+                "SELECT locked FROM sidecar_state WHERE memory_id='m1'").fetchone()[0]
+        finally:
+            connection.close()
+        self.assertEqual(locked, 0)
+
+    def test_unavailable_vectors_are_reported_not_zero_differences(self):
+        sync = self.shadow()
+        sync.reconcile()
+        (self.role / 'memory' / 'embeddings.db').rename(self.role / 'memory' / 'embeddings.db-away')
+        summary = sync.reconcile()
+        report = (self.role / 'brain-sync-report.md').read_text(encoding='utf-8')
+        self.assertFalse(summary['comparison'].get('vectors_checked', True))
+        self.assertIn('未核对', report)
+        self.assertNotIn('意外差异：无', report)
+
     def test_event_mismatch_cannot_report_no_unexpected(self):
         sync = self.shadow()
         sync.reconcile()

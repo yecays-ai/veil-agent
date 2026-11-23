@@ -643,15 +643,18 @@ class ShadowSync:
     def _sync_sidecar_rows(self, connection):
         lines = self._jsonlines(self.paths['sidecar'])
         done = int(self._state(connection, 'sidecar_rows', '0') or 0)
+        prefix = base.sha256_text(''.join(lines[:done])) if done else None
+        stored_prefix = self._state(connection, 'sidecar_prefix_sha')
         rebuilt = False
-        if done and len(lines) < done:
-            # A shortened log was rewritten; every folded state is now stale.
+        if done and stored_prefix and prefix != stored_prefix:
+            # The log was rewritten (same length, shorter or repaired): every folded state is stale.
             connection.execute('DELETE FROM sidecar_events')
             connection.execute('DELETE FROM sidecar_state')
             done = 0
             rebuilt = True
             self._set_state(connection, 'sidecar_rows', 0)
         if len(lines) <= done:
+            self._set_state(connection, 'sidecar_prefix_sha', base.sha256_text(''.join(lines)))
             return 0
         touched = set()
         for index in range(done, len(lines)):
@@ -672,6 +675,7 @@ class ShadowSync:
             if row.get('kind') in ('link', 'unlink') and isinstance(row.get('to'), str):
                 touched.add(row['to'])
         self._set_state(connection, 'sidecar_rows', len(lines))
+        self._set_state(connection, 'sidecar_prefix_sha', base.sha256_text(''.join(lines)))
         if rebuilt:
             self._sync_sidecar_state(connection)
         elif touched:
@@ -803,6 +807,9 @@ class ShadowSync:
             self.write_report(connection, summary)
             return summary
         except Exception as exc:
+            # Do not retry in a tight loop: wait for the next interval before trying again.
+            self._need_reconcile = False
+            self._last_reconcile = time.monotonic()
             self.record_issue('reconcile', type(exc).__name__, str(exc))
             return None
         finally:
@@ -934,6 +941,7 @@ class ShadowSync:
         actual_events = connection.execute('SELECT COUNT(*) FROM events').fetchone()[0]
         actual_sources = connection.execute('SELECT COUNT(*) FROM event_sources').fetchone()[0]
         return {
+            'vectors_checked': vector_expected is not None,
             'memories': len(found), 'memory_mismatches': memory_mismatch,
             'versions': len(version_expected), 'version_mismatches': version_mismatch,
             'states': len(state), 'state_mismatches': state_mismatch,
@@ -967,6 +975,7 @@ class ShadowSync:
                 connection.close()
         except sqlite3.Error as exc:
             self.record_issue('vectors', type(exc).__name__)
+            return None
         return expected
     def write_report(self, connection, summary):
         comparison = summary['comparison']
@@ -982,6 +991,9 @@ class ShadowSync:
                       comparison['state_mismatches'] + comparison['vector_mismatches'] +
                       references['unexpected_event_refs'] + references['unexpected_link_refs'] +
                       event_drift)
+        if not comparison.get('vectors_checked', True) and not summary.get('scan_incomplete'):
+            # Missing embeddings.db means vectors were NOT verified; never report "0 differences".
+            unexpected.append(('vectors', 'source-unavailable'))
         counts = {table: connection.execute('SELECT COUNT(*) FROM %s' % table).fetchone()[0]
                   for table in ('memories', 'versions', 'sidecar_events', 'sidecar_state',
                                 'vectors', 'events', 'event_sources')}
@@ -1007,8 +1019,10 @@ class ShadowSync:
                                                   len(comparison['version_mismatches'])),
                   '- sidecar 状态：比较 %d，差异 %d' % (comparison['states'],
                                                      len(comparison['state_mismatches'])),
-                  '- 向量：比较 %d，差异 %d' % (comparison['vectors'],
-                                             len(comparison['vector_mismatches'])),
+                  ('- 向量：比较 %d，差异 %d' % (comparison['vectors'],
+                                               len(comparison['vector_mismatches'])))
+                  if comparison.get('vectors_checked', True)
+                  else '- 向量：未核对（源 embeddings.db 不可用）',
                   '- 事件：%d 篇 / %d 个来源（源 %d / %d）' % (
                       counts['events'], counts['event_sources'],
                       comparison['events']['expected'], comparison['events']['expected_sources']),
