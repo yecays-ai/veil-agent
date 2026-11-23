@@ -403,7 +403,7 @@ test('development diagnostics page reads only, labels unconfirmed links and copi
   assert.match(page, /scope=issue&id=/);
   assert.match(page, /可能关联，未经确认/);
   assert.match(page, /veilDesktop\.copyText/);
-  assert.doesNotMatch(page, /\.innerHTML\s*=/);
+  assert.doesNotMatch(page, /innerHTML\s*\+?=|insertAdjacentHTML|outerHTML\s*=/);
   assert.match(main, /\/api\/diagnostics\/overview/);
   assert.match(main, /\/api\/diagnostics\/report/);
   assert.match(main, /chat:open-maintenance/);
@@ -413,7 +413,8 @@ test('development diagnostics page reads only, labels unconfirmed links and copi
 
 
 test('diagnostics reads fail loudly and only configured maintenance links open (ticket 432 review)', async () => {
-  const [page, main] = await Promise.all([read('diagnostics-page.js'), read('main.cjs')]);
+  const [page, main, icons, css] = await Promise.all([
+    read('diagnostics-page.js'), read('main.cjs'), read('icons.js'), read('chat.css')]);
   assert.match(page, /response\.ok !== true/);
   assert.match(page, /function renderFailure/);
   assert.match(page, /诊断读取失败/);
@@ -426,5 +427,14 @@ test('diagnostics reads fail loudly and only configured maintenance links open (
   assert.match(main, /chat:open-maintenance', async \(event, id\)/);
   // Wake ids carry a plus sign, so the trace allowlist must accept it.
   assert.ok(main.includes('A-Za-z0-9_:.+'), 'trace id pattern must allow the wake format');
+  // A single record may never copy empty text and then claim success.
+  assert.match(page, /if \(!body\.text\) throw/);
+  // The nav icon must exist, otherwise it silently becomes "more-horizontal".
+  assert.match(icons, /stethoscope:/);
+  // The page needs its own background, like every other page, so the transparent
+  // window does not show through.
+  assert.match(css, /#diagnostics-view\{background:rgb\(var\(--surface-2-rgb\)\/var\(--view-alpha,var\(--window-alpha\)\)\)\}/);
+  // The system rows put label and value in .head, so the grid belongs there.
+  assert.match(css, /#diagnostics-view \.diag-system \.context-row \.head\{display:grid;grid-template-columns:76px 1fr/);
 });
 

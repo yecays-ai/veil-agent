@@ -90,7 +90,8 @@ class DenialTests(Base):
                    {'version': 1, 'items': [{'id': 'a1', 'run_id': 'other-wake',
                                              'status': 'pending', 'prompt': 'x',
                                              'created_at': iso(5)}]})
-        result = classify_denial(self.tool_row(autonomy_run_id='wake-2', detail=''), [])
+        result = classify_denial(self.tool_row(autonomy_run_id='wake-2', detail=''),
+                                 diagnostics._approvals(self.root, self.role))
         self.assertEqual(result['code'], 'unknown')
 
     def test_replay_guard_and_arguments_are_told_apart(self):
@@ -376,6 +377,43 @@ class ReviewFixTests(Base):
         self.assertEqual([tool['tool'] for tool in chain['tools']], ['tool-a'])
         self.assertEqual(chain['context'], [])
         self.assertEqual(chain['messages'], [])
+
+
+    def test_mcp_issue_ids_do_not_change_between_refreshes(self):
+        first = diagnostics.recent_issues(self.root, self.role,
+                                          mcp_errors={'galatea': 'start timeout'})
+        second = diagnostics.recent_issues(self.root, self.role,
+                                           mcp_errors={'galatea': 'start timeout'})
+        mcp_first = [row for row in first if row['kind'] == 'mcp_error']
+        mcp_second = [row for row in second if row['kind'] == 'mcp_error']
+        self.assertEqual(len(mcp_first), 1)
+        self.assertEqual(mcp_first[0]['id'], mcp_second[0]['id'])
+        # the same message on another service is a different record
+        other = diagnostics.recent_issues(self.root, self.role,
+                                         mcp_errors={'nowhere': 'start timeout'})
+        self.assertNotEqual(mcp_first[0]['id'],
+                            [row for row in other if row['kind'] == 'mcp_error'][0]['id'])
+
+    def test_a_partial_data_size_is_not_reported_as_the_total(self):
+        folder = self.root / self.role
+        folder.mkdir(parents=True, exist_ok=True)
+        for index in range(3):
+            (folder / ('f' + str(index))).write_bytes(b'x' * 10)
+        total, complete = diagnostics._dir_size(folder, limit=2)
+        self.assertFalse(complete)
+        self.assertEqual(total, 20)
+        service = diagnostics.service_info(folder, self.role)
+        self.assertFalse(service['data_bytes_complete'])
+        text = diagnostics.report_text(folder, self.role, hours=24)
+        self.assertIn('至少', text)
+
+    def test_an_old_snapshot_with_only_role_still_shows_the_character(self):
+        write_json(diagnostics.snapshot_path(self.root, self.role), {
+            'generated_at': iso(5),
+            'service': {'role': 'peter', 'commit': 'abc'},
+            'modules': [], 'config': [], 'issues': []})
+        text = diagnostics.report_text(self.root, self.role, hours=24)
+        self.assertIn('角色：peter', text)
 
 
 class SyncTests(unittest.TestCase):

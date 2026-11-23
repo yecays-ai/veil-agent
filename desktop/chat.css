@@ -341,10 +341,13 @@ body{isolation:isolate}
 .instr-badge.stale{color:#8fb6e0;border-color:#3f5670}
 
 /* Ticket 432: developer diagnostics page (read-only maintenance view). */
+#diagnostics-view{background:rgb(var(--surface-2-rgb)/var(--view-alpha,var(--window-alpha)))}
 .diag-shell{display:grid;gap:10px;padding:2px 2px 14px}
 .diag-block{flex:none;min-height:0}
 .diag-block .context-list{gap:0}
-.diag-system .context-row{grid-template-columns:72px 1fr;align-items:baseline}
+/* Each row has one child (.head) holding label+value, so the grid belongs there. */
+#diagnostics-view .diag-system .context-row{display:block}
+#diagnostics-view .diag-system .context-row .head{display:grid;grid-template-columns:76px 1fr;gap:8px;align-items:baseline}
 .diag-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .diag-actions .muted{font-size:11px}
 .diag-actions button{white-space:nowrap}

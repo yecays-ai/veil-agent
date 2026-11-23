@@ -636,14 +636,19 @@ def _issue_id(*parts):
 
 
 def _issue(time_value, module, kind, severity, title, detail='', request_id='', run_id='',
-           call_id='', confirmed=True, extra=None):
+           call_id='', confirmed=True, extra=None, stable_key=''):
     detail = _redact(detail)[:1200]
     request_id, run_id, call_id = _text(request_id), _text(run_id), _text(call_id)
     # Ticket 432 review: a row with no structured id can only mean "happened
     # nearby", never "this exact turn"; the caller cannot override that.
     if not (request_id or run_id or call_id):
         confirmed = False
-    row = {'id': _issue_id(time_value, module, kind, title, request_id, run_id, call_id, detail[:120]),
+    # Some sources (MCP) have no timestamp of their own; hashing "now" would give
+    # a new id on every refresh, so a copied record could not be looked up again.
+    row_id = (hashlib.sha1(('stable|' + _text(stable_key)).encode('utf-8', 'ignore')).hexdigest()[:12]
+              if stable_key else _issue_id(time_value, module, kind, title, request_id, run_id,
+                                           call_id, detail[:120]))
+    row = {'id': row_id,
            'time': _time_text(time_value), 'module': module,
            'module_label': MODULE_LABELS.get(module, module), 'kind': kind,
            'severity': severity, 'title': title, 'detail': detail,
@@ -780,7 +785,9 @@ def collect_issues(root, role, hours=72, mcp_errors=None, now=None, limit=ISSUE_
         for service_id, message in mcp_errors.items():
             issues.append(_issue(now, 'mcp', 'mcp_error', 'error',
                                  f'MCP 服务 {service_id} 出错', detail=message, confirmed=False,
-                                 extra={'note': '只在本次运行内有效，重启后这条就没有了'}))
+                                 stable_key=f'mcp|{service_id}|{_text(message)}',
+                                 extra={'note': '只在本次运行内有效，重启后这条就没有了',
+                                        'observed_at': '本次刷新'}))
 
     issues.sort(key=lambda row: row.get('time') or '', reverse=True)
     return issues[:limit]
@@ -1011,14 +1018,19 @@ def _memory_bytes():
 _DIR_CACHE = {}
 
 
-def _dir_bytes(root, limit=4000):
-    """Folder size, cached for five minutes: the page must stay responsive."""
+def _dir_size(root, limit=4000):
+    """(bytes, complete) for the data folder, cached for five minutes.
+
+    Ticket 432 review: stopping at the scan limit must be visible. A partial sum
+    shown as the total would understate how much disk the agent uses.
+    """
     key = str(root)
     cached = _DIR_CACHE.get(key)
     if cached and time.time() - cached[0] < 300:
-        return cached[1]
+        return cached[1], cached[2]
     total = 0
     seen = 0
+    complete = True
     try:
         for base, _dirs, files in os.walk(root):
             for name in files:
@@ -1028,13 +1040,14 @@ def _dir_bytes(root, limit=4000):
                     continue
                 seen += 1
                 if seen >= limit:
-                    _DIR_CACHE[key] = (time.time(), total)
-                    return total
+                    complete = False
+                    break
+            if not complete:
+                break
     except OSError:
-        _DIR_CACHE[key] = (time.time(), total)
-        return total
-    _DIR_CACHE[key] = (time.time(), total)
-    return total
+        complete = False
+    _DIR_CACHE[key] = (time.time(), total, complete)
+    return total, complete
 
 
 def service_info(root, role, hub=None):
@@ -1048,11 +1061,12 @@ def service_info(root, role, hub=None):
         head = head[:12]
     except (OSError, ValueError):
         head = ''
+    data_bytes, data_complete = _dir_size(root)
     news = {'commit': head, 'branch': _branch(git_dir), 'remote_commit': _remote_commit(git_dir),
             'python': platform.python_version(),
             'platform': f'{platform.system()} {platform.release()} {platform.machine()}',
             'cpu_count': os.cpu_count() or 0, 'memory': _memory_bytes(),
-            'data_bytes': _dir_bytes(root), 'character': role,
+            'data_bytes': data_bytes, 'data_bytes_complete': data_complete, 'character': role,
             'error_file': _guard(lambda: service_error_path(root).read_text(encoding='utf-8').strip()[:400]) or ''}
     if hub is not None:
         started = getattr(hub, 'started_at', None)
@@ -1147,11 +1161,15 @@ def _report_header(service, now):
         'VEIL 诊断报告',
         '=' * 32,
         f"时间：{now.isoformat(timespec='seconds')}",
-        f"角色：{service.get('character') or '?'}　｜　代码：{service.get('commit') or '未知'}"
+        # Old offline snapshots only have "role"; keep them readable.
+        f"角色：{service.get('character') or service.get('role') or '?'}"
+        f"　｜　代码：{service.get('commit') or '未知'}"
         f"（{service.get('branch') or '?'}）",
         f"服务：{state}" + (f"　｜　已运行 {_duration(uptime)}" if uptime else ''),
         f"系统：{service.get('platform') or '?'}　｜　{service.get('cpu_count') or '?'} 核　｜　内存 {mem}",
-        f"数据：{_gb(service.get('data_bytes'))}　｜　模型：{service.get('model') or '未配置'}",
+        f"数据：{_gb(service.get('data_bytes'))}"
+        + ('（至少；只统计到扫描上限）' if service.get('data_bytes_complete') is False else '')
+        + f"　｜　模型：{service.get('model') or '未配置'}",
         f"上一次崩溃：{crash[0][:160] if crash else '无记录'}",
     ]
     return '\n'.join(lines)

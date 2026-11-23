@@ -7,7 +7,7 @@
 - 三个重点已覆盖：花园组超预算（实测 15,911 / 12,000，页面 + 报告可复制）、自主活动 API 失败（带 run_id，可点开这次唤醒的链路）、权限拒绝 6 类（结构字段精确 + 文案启发式，每条带依据）。
 - 不做：自动修复/重启、告警、图表、导出、清理、多角色聚合、"到点该醒"的 expected 记录。复制报告**不含**聊天正文与记忆正文。
 - 审查后定点修复 9 项（见工单）：读取失败不再显示"正常"、唤醒 id 的 `+` 放行、脱敏补键值与 URL 凭据、聊天失败不再继承自主活动 run_id、维护入口只认配置项、run_id/call_id 正确解析 request_id 再取快照、只有 run_id 不再带无关消息、无 id 强制标未确认、过期批准单独归类。
-- 未验证：Lan 的 Windows 体验（8 步见工单）；本机沙箱拒绝 0700 目录，仓库既有的 `TemporaryDirectory` 用例在 main 上同样报错（CI 不受影响），本单新测试改用普通 mkdir；相关回归 432 条通过。
+- 未验证：Lan 的 Windows 体验（8 步见工单）；本机沙箱拒绝 0700 目录，仓库既有的 `TemporaryDirectory` 用例在 main 上同样报错（CI 不受影响），本单新测试改用普通 mkdir；相关回归 435 条（`test_tools` 86、`test_chat` 107、`test_autonomy` 52、`test_request_snapshots` 9、`test_tool_budget` 15、`test_prompt_registry` 32、`test_tool_failures` 19、`test_web` 73、`test_recall_diagnostics` 5；`test_diagnostics` 37 已计入），3 条跳过。
 - 验收步骤见 `docs/tickets/432-dev-diagnostics.md`。
 
 ## 工单 433 · P1 试运行：Peter 自动召回切到 Brain（本 PR）

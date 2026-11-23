@@ -2,8 +2,8 @@
 
 - 归属：**维护类，不占 A–V 五条线的格子**（Lan 2026-11-23 确认）
 - 基线：`main` = `b1e51f1`（工单 429 合并后）
-- 分支：`ticket/432-dev-diagnostics`；独立目录 `E:\Peter-Agent\VEIL\veil-agent-432`
-  （正式运行目录的 `.git` 在施工沙箱里不可写，因此用独立 clone，等价隔离；不动正式目录和其他工单的目录）
+- 分支：`ticket/432-dev-diagnostics`；开发用独立 clone（放在 VEIL 根目录旁边，不写正式目录的 `.git`）
+  （施工沙箱里正式目录的 `.git` 不可写，因此用独立 clone，等价隔离；不动正式目录和其他工单的目录）
 - 编号说明：431 被空分支 `ticket/431-brain-ui-reuse` 占着（留给记忆组的 Brain UI），本单用 432
 
 ## 目标
@@ -35,7 +35,7 @@ Lan 出问题时打开一个页面，30 秒内知道"哪儿不对、最近出了
 
 | 权限被拒绝 | 实际 |
 |---|---|
-| `state=被拒绝` | **605 条**（自主活动 184 条） |
+| `state=被拒绝` | **607 条**（自主活动 184 条；2026-11-24 00:55 读取，数据还会继续增长） |
 | 带原因 / 完全没有原因 | 554 / **51** |
 | 原因文案种类 | ≥20 种 |
 | `pending-approvals.json` | **不存在** → 那 184 条不是"等你批准" |
@@ -68,7 +68,7 @@ Lan 出问题时打开一个页面，30 秒内知道"哪儿不对、最近出了
 | `web_agent.py` | 5 个只读接口；`Hub.data_root` / `Hub.started_at`（2 行） |
 | `desktop/chat.html` | 导航项 + 页面骨架 + 脚本引用 |
 | `desktop/chat.js` | `setPage` 白名单 + 点击钩子（3 行） |
-| `desktop/main.cjs` | GET 白名单 5 条 + `chat:open-maintenance`（只允许 127.0.0.1） |
+| `desktop/main.cjs` | GET 白名单 5 条 + `chat:open-maintenance`（只接受入口 id，只开服务端配置的 127.0.0.1/localhost 地址） |
 | `desktop/desktop-preload.cjs` | `openMaintenance` |
 | `desktop/chat.css` | 诊断页样式（`.diag-*`，不影响其他页） |
 | `desktop/tests/ui.test.cjs` | 导航断言更新 + 诊断页守卫 |
@@ -94,7 +94,7 @@ GET /api/diagnostics/links                        维护入口（记忆组给 UR
 
 - `pending-approvals.json` 里 run_id 相同 → 精确（exact），分别给出 waiting / expired / denied。
 - 其余按文案规则（replay 护栏、参数错误、路径/权限、状态冲突、次数限制、功能不可用），每条都带"文案：xxx"作为依据。
-- **不为凑指标强行归类**：实测 607 条拒绝中 20.1% 仍是「未分类」，分三档可解释：51 条没有原因文本、31 条详情被活动摘要覆盖（旧记录）、40 条没有匹配规则。页面与报告必须给出这三档数字。
+- **不为凑指标强行归类**：实测 607 条拒绝中 20.1%（122 条）仍是「未分类」，分三档可解释：51 条没有原因文本、31 条详情被活动摘要覆盖（旧记录）、40 条没有匹配规则。页面与报告必须给出这三档数字。
 
 ## 边界（写死）
 
@@ -128,8 +128,18 @@ GET /api/diagnostics/links                        维护入口（记忆组给 UR
 8. 旧记录没有任何结构化 id 时，`_issue` 强制 `confirmed=false`，页面与报告都写「可能关联，未经确认」。
 9. 待批准过期按截止时间判定，单独归类为「批准已过期」，不再显示「等你批准」。
 
+最后一轮收尾（同日）：
+- MCP 异常改用稳定 id（服务 + 文案哈希），刷新后同一条仍能单条复制；补了刷新前后 id 一致的回归。
+- 单条报告为空时不再提示"复制成功"。
+- 数据目录统计到上限时显示「至少 X（只统计到扫描上限）」，不再把部分当总量。
+- 系统信息两列布局改到 @@.head@@ 上（原来整行只有 @@.head@@ 一个子元素，值被挤进 76px），并给诊断页补上与其他页一致的页面背景。
+- 导航图标 @@stethoscope@@ 在 @@icons.js@@ 里是回退成 more-horizontal 的（看起来和「设置」一样），已补路径。
+- 拒绝总数统一为 607（2026-11-24 00:55 快照），并写明差额来源是后续新增。
+- 旧版离线快照只写 @@service.role@@，报告回退读取，不再显示 @@?@@。
+- 工单与交接文档去掉本机绝对路径；@@chat:open-maintenance@@ 的说明改成 127.0.0.1/localhost。
+
 回归了三个用户场景：花园组超预算（配置校验里可复制）、自主活动 API 失败（run_id → request_ids → 快照链路完整）、权限拒绝分类（含过期与未分类三档原因）。
 
 ## 状态
 
-代码完成，本机自动检查：`tests/test_diagnostics.py` 34 条、桌面 23 条、相关回归 432 条通过（3 条跳过）。**待 Lan 的 Windows 体验验收**；未在正式目录启用，未改记忆。
+代码完成，本机自动检查：`tests/test_diagnostics.py` 37 条、桌面 23 条、相关回归 435 条（`test_tools` 86、`test_chat` 107、`test_autonomy` 52、`test_request_snapshots` 9、`test_tool_budget` 15、`test_prompt_registry` 32、`test_tool_failures` 19、`test_web` 73、`test_recall_diagnostics` 5；`test_diagnostics` 37 已计入），3 条跳过。**待 Lan 的 Windows 体验验收**；未在正式目录启用，未改记忆。

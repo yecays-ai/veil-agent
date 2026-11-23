@@ -109,7 +109,8 @@
         + (service.uptime_seconds ? ' · 已运行 ' + Math.floor(service.uptime_seconds / 60) + ' 分' : '')
         + (service.started_at ? ' · 上次启动 ' + shortTime(service.started_at) : '')],
       ['系统', (service.platform || '?') + ' · ' + (service.cpu_count || '?') + ' 核 · 内存 ' + memoryText],
-      ['数据', kb(service.data_bytes) + ' · 模型 ' + (service.model || '未配置') + ' · Python ' + (service.python || '?')],
+      ['数据', (service.data_bytes_complete === false ? '至少 ' : '') + kb(service.data_bytes)
+        + ' · 模型 ' + (service.model || '未配置') + ' · Python ' + (service.python || '?')],
       ['崩溃', service.error_file || '无记录']
     ];
     rows.forEach(function (pair) {
@@ -211,7 +212,10 @@
       copyButton.type = 'button';
       copyButton.onclick = function () {
         fetchJson('/api/diagnostics/report?scope=issue&id=' + encodeURIComponent(issue.id))
-          .then(function (body) { copy(body.text || '', '这条异常已复制。'); })
+          .then(function (body) {
+            if (!body.text) throw new Error('empty');
+            copy(body.text, '这条异常已复制。');
+          })
           .catch(function () { notify('这条暂时复制不了。', 'error'); });
       };
       box.head.appendChild(copyButton);
