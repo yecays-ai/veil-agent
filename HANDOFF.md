@@ -1,5 +1,21 @@
 # HANDOFF
 
+## 工单 425 交接（经历页两个 GET 路由没接上；2026-11-23 第五步冒烟发现）
+
+- 工单：`docs/tickets/425-event-timeline-endpoints.md`；分支 `ticket/425-event-timeline-endpoints`，
+  从 `main` `d8eacc2` 开（#424 合并提交），worktree `worktrees/425-event-timeline-endpoints`。
+- 根因：`_get_memory()` 从 #407 起就处理 `/api/memory/events`（列表）和 `/api/memory/event`（详情），
+  但 `do_GET` 只把 `/api/memory/catalog`、`/api/memory/read` 转给它；事件层默认关闭时没人打开过这个
+  页面，第五步迁完 69 篇后点开「记忆 · 经历」才发现一直 404。
+- 改法：`web_agent.py` 的 GET 分支把这两个路径一起转给 `_get_memory`；`tests/test_web.py` 新增一条
+  路由、鉴权与 404 回归。返回结构、页面、事件数据都不动。
+- 验证：`python -m unittest tests.test_web` 73 条通过（新增 1 条）。
+- 第五步状态（在同一台机器上已发生）：正式库已迁入 69 篇（`tmp/step5/final-prepared.json`），独立索引
+  matched 69 / missing 0 / stale 0 / ready；备份 `tmp/step5/backup-preapply-*`（3853 文件，恢复演练
+  哈希一致）。正式迁移由 #424 放行后执行，本 PR 只补页面入口。
+- 下一个窗口第一步：合并后 `update-main.cmd`、重启 VEIL，Lan 打开「记忆 · 经历」验收列表与详情；
+  然后按第五步报告继续自然聊天观察项。
+
 ## 工单 424 交接（导入事件与旧碎片只算一次回忆；2026-11-23 首次审核后返工）
 
 - 工单：`docs/tickets/424-event-source-recall.md`；分支 `ticket/424-event-source-recall`，从 `main`

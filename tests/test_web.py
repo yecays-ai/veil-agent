@@ -408,6 +408,34 @@ output_cny_per_million = "8"
                                  ('memory_read', {'memory_id': 'fixture-id', 'offset': 0,
                                                   'version': 'a' * 64})])
 
+    def test_event_timeline_endpoints_are_routed_and_authenticated(self):
+        """Ticket 425: the memory page's 经历 tab calls these two GET routes; they must reach _get_memory."""
+        class FixtureEvents:
+            def visible_events(self):
+                return [{'event_id': 'V01', 'title': 'Fictional event', 'status': 'open',
+                         'first_at': '', 'last_at': '', 'stage_count': 1, 'confidence': 1.0,
+                         'story_pending': False, 'dirty': False, 'pending_review': False,
+                         'story_source': 'final-import', 'first_at_known': False,
+                         'last_at_known': False}]
+
+            def detail(self, event_id):
+                if event_id != 'V01':
+                    return None
+                return {'event_id': 'V01', 'title': 'Fictional event', 'story': 'Fictional story.'}
+
+        class FixtureMemoryTools:
+            events = FixtureEvents()
+
+        self.hub.memory_tools = FixtureMemoryTools()
+        self.assertEqual(self.call('/api/memory/events', token='wrong')[0], 403)
+        status, listing = self.call('/api/memory/events')
+        self.assertEqual(status, 200)
+        self.assertEqual((listing['count'], listing['items'][0]['event_id']), (1, 'V01'))
+        status, detail = self.call('/api/memory/event?id=V01')
+        self.assertEqual(status, 200)
+        self.assertEqual(detail['story'], 'Fictional story.')
+        self.assertEqual(self.call('/api/memory/event?id=V99')[0], 404)
+
     def test_memory_page_list_edit_and_delete_endpoints(self):
         calls = []
 
