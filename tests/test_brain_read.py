@@ -34,7 +34,8 @@ class BrainReadTests(unittest.TestCase):
 
     def test_panel_versions_state_and_vectors(self):
         with brain_read.BrainRead(self.db) as reader:
-            entry = reader.panel_entries()[0]
+            entry = next(item for item in reader.panel_entries()
+                         if item['memory_id'] == self.created['memory_id'])
             self.assertEqual(entry['memory_id'], self.created['memory_id'])
             self.assertTrue(entry['hidden'])
             self.assertTrue(entry['locked'])

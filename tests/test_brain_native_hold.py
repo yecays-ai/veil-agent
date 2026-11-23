@@ -70,8 +70,8 @@ class NativeHoldAuthorityTests(unittest.TestCase):
             connection.close()
         self.assertEqual(bodies, ['a new linked memory'])
         self.assertIsNone(links)
-        recalled = '\n'.join(row.get('content') or '' for row in self.memory.context(
-            'a new linked memory', include_opening=False))
+        self.memory.last_recall_debug = {}
+        recalled = self.memory.search_candidates('a new linked memory', 8)
         self.assertIn('a new linked memory', recalled)
 
     def test_event_record_writes_brain_story_and_projection(self):
