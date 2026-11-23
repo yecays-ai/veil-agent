@@ -1,6 +1,25 @@
 # HANDOFF
 
-## 工单 422 交接（稳定关系底色 + 自然联想）
+## 工单 424 交接（导入事件与旧碎片只算一次回忆）
+
+- 工单：`docs/tickets/424-event-source-recall.md`；分支 `ticket/424-event-source-recall`，从 `main`
+  `8504250`（#423 合并提交）开。正式运行目录保持 main，没改正式库、没停 VEIL。
+- 改法：`memory_agent.py` 的 `_event_map()` 把事件账本的 `source_memory_ids` 一起映射，新增
+  `_event_owners()`；`duplicate()` 用归属集合折叠同一次回忆；`resolved()` 按本轮真正保留的事件取故事；
+  映射随 `events.jsonl` 的 mtime/size 失效。产品代码只动这一个文件。
+- 验证：`tests/test_event_source_recall_424.py` 6 条（在 main 上 4 条失败，修复后全过）；同一组 17 个
+  模块 713 条在 main 与修复后都通过。隔离库实测：修前 39/67 个事件与旧碎片同时注入，修后 0；只召回
+  碎片时注入的是完整故事。
+- 第五步状态：只读审计、完整备份（`tmp/step5/backup-20261123`，3852 文件 / 100,696,910 字节；
+  `memory/_agent/ombre.lock` 与 `session.lock` 两个运行期锁文件被进程锁住没复制，恢复时重建；
+  恢复演练逐文件哈希一致）、隔离预演（69 篇 create / 0 conflict / 索引 matched 69、missing 0、
+  stale 0、ready）都已完成；按工单在「旧碎片重复注入」这关停下，没有写正式库。
+- 没做／待定：V36 撤下账本里 3 条旧来源的可见性（其中 `2fd52c0b984b` 的 `previous_event` 是 V51，
+  不是 V36），正式迁移那次再定；第五步阶段 D/E/F 等本 PR 合并后再跑。
+- 下一个窗口第一步：等本 PR 合并 → `update-main.cmd` → 用新 main 重跑第五步 C 复演（应为 0 重复）→
+  D 真实模型自然聊天验收 → E 正式迁移 + 独立索引检查 + 重启。证据与报告在 `tmp/step5/`。
+
+## 工单 422 交接（稳定关系底色 + 自然联想；已于 2026-11-23 合并 #423 `8504250`）
 
 - 工单：`docs/tickets/422-relationship-base.md`；分支 `ticket/422-relationship-base`，从 `origin/main`
   `59e6594`（#421 合并提交）开的独立 worktree（`worktrees/422-relationship-base`）。正式运行目录保持

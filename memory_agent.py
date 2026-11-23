@@ -885,16 +885,46 @@ class Memory:
         return False
 
     def _event_map(self):
-        """Ticket 407: memory_id -> event_id, read from the event ledger; empty when the layer is off."""
+        """Ticket 407: memory_id -> event_id, read from the event ledger; empty when the layer is off.
+
+        Ticket 424: an imported event also owns the old memories it was built from (`source_memory_ids`),
+        so a recalled old fragment can be shown as its complete event instead of being injected next to it.
+        One old memory may have fed more than one event; the first owner in the ledger is the one that
+        supplies the story, and `_event_owners` keeps every owner for the duplicate check."""
+        try:
+            stat = (self.store.root / f'{self.cfg.id}/events.jsonl').stat()
+            signature = (stat.st_mtime_ns, stat.st_size)
+        except OSError:
+            signature = None
+        if getattr(self, '_event_map_signature', object()) == signature \
+                and hasattr(self, '_event_map_cache'):
+            return self._event_map_cache
         try:
             rows = self.store.read(f'{self.cfg.id}/events.jsonl')
         except Exception:
+            self._event_map_cache, self._event_owners_cache = {}, {}
+            self._event_map_signature = signature
             return {}
-        owners = {}
+        owned = {}
         for row in rows:
-            if isinstance(row, dict) and isinstance(row.get('memory_id'), str) and isinstance(row.get('event_id'), str):
-                owners[row['memory_id']] = row['event_id']
-        return owners
+            if not isinstance(row, dict) or not isinstance(row.get('event_id'), str):
+                continue
+            event_id = row['event_id']
+            for memory_id in [row.get('memory_id')] + list(row.get('source_memory_ids') or []):
+                if isinstance(memory_id, str) and memory_id:
+                    event_ids = owned.setdefault(memory_id, [])
+                    if event_id not in event_ids:
+                        event_ids.append(event_id)
+        self._event_map_cache = {memory_id: event_ids[0] for memory_id, event_ids in owned.items()}
+        self._event_owners_cache = {memory_id: frozenset(event_ids) for memory_id, event_ids in owned.items()}
+        self._event_map_signature = signature
+        return self._event_map_cache
+
+    def _event_owners(self):
+        """Ticket 424: memory_id -> every event that owns it (its own row or an imported source)."""
+        if not hasattr(self, '_event_owners_cache'):
+            self._event_map()
+        return getattr(self, '_event_owners_cache', {})
 
     def _event_stories(self):
         """Ticket 419: event_id -> {story, title, first_at} from the event ledger.
@@ -1577,9 +1607,8 @@ class Memory:
         def same_experience(key, other):
             return key == other or other in experience_chain(key, neighbours)
 
-        event_of = getattr(self, '_event_map_cache', None)
-        if event_of is None:
-            event_of = self._event_map_cache = self._event_map()
+        event_of = self._event_map()
+        owners = self._event_owners()
         stories = self._event_stories()
 
         def duplicate(key, kept):
@@ -1587,10 +1616,13 @@ class Memory:
             # Ticket 419: the stage count is no longer capped; a different stage of the same experience is a
             # different memory and the budget decides how many fit. Event-level folding only happens when the
             # event actually has a complete story to replace the stages; without one, every stage stays readable.
+            # Ticket 424: an old memory that an imported event was built from is one of its stages too.
             if not recall_cfg['dedup']:
                 return None
-            if (key in event_of and (stories.get(event_of[key]) or {}).get('story')
-                    and any(event_of.get(other) == event_of[key] for other, _ in kept)):
+            mine = owners.get(key) or frozenset()
+            if mine and any((stories.get(owner_id) or {}).get('story')
+                            and (owners.get(other) or frozenset()) & mine
+                            for other, _ in kept for owner_id in (owners.get(other) or ())):
                 return 'same_event'
             if any(same_event(key, other, metas, vectors, threshold, cosine) for other, _ in kept):
                 return 'same_event'
@@ -1715,8 +1747,15 @@ class Memory:
                        if recall_cfg['directory'] else {})
         limit = recall_cfg['excerpt_chars']
 
+        kept_events = [event_id for key, _ in kept
+                       for event_id in sorted(owners.get(key) or ())]
+
         def resolved(key, body):
-            event_id = event_of.get(key) or ''
+            # Ticket 424: show the story of the event this turn actually kept, so an old fragment that fed
+            # two events cannot borrow the story of the one that was folded away.
+            candidates = owners.get(key) or frozenset()
+            event_id = (next((item for item in kept_events if item in candidates), '')
+                        or event_of.get(key) or '')
             text = body
             if event_id:
                 story = (stories.get(event_id) or {}).get('story') or ''
