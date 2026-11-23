@@ -27,6 +27,8 @@ class BrainAuthority:
         return connection
 
     def call(self, name, args, embedder=None):
+        if embedder is not None and hasattr(embedder, 'embed'):
+            embedder = embedder.embed
         with self.mutex:
             connection = self._connect()
             try:
