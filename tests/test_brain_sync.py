@@ -401,5 +401,73 @@ class ShadowSyncTests(unittest.TestCase):
             connection.close()
         self.assertIsNone(removed)
 
+    def test_vector_removed_from_source_is_deleted(self):
+        sync = self.shadow()
+        sync.reconcile()
+        connection = sqlite3.connect(str(self.role / 'memory' / 'embeddings.db'))
+        try:
+            connection.execute("DELETE FROM embeddings WHERE bucket_id='m1'")
+            connection.commit()
+        finally:
+            connection.close()
+        summary = sync.reconcile()
+        self.assertEqual(summary['comparison']['vector_mismatches'], [])
+        connection = self.db()
+        try:
+            count = connection.execute("SELECT COUNT(*) FROM vectors WHERE memory_id='m1'"
+                                       ).fetchone()[0]
+        finally:
+            connection.close()
+        self.assertEqual(count, 0)
+
+    def test_missing_bucket_is_not_a_deletion(self):
+        sync = self.shadow()
+        sync.reconcile()
+        (self.role / 'memory' / 'dynamic').rename(self.role / 'memory' / 'dynamic-away')
+        summary = sync.reconcile()
+        self.assertTrue(summary['scan_incomplete'])
+        connection = self.db()
+        try:
+            removed = connection.execute(
+                "SELECT removed_at FROM memories WHERE id='m1'").fetchone()[0]
+        finally:
+            connection.close()
+        self.assertIsNone(removed)
+
+    def test_sidecar_rewrite_rebuilds_folded_state(self):
+        sync = self.shadow()
+        sync.reconcile()
+        write(self.role / 'memory-sidecar.jsonl', '')
+        summary = sync.reconcile()
+        self.assertEqual(summary['comparison']['state_mismatches'], [])
+        connection = self.db()
+        try:
+            count = connection.execute(
+                "SELECT COUNT(*) FROM sidecar_state WHERE memory_id='m1'").fetchone()[0]
+        finally:
+            connection.close()
+        self.assertEqual(count, 0)
+
+    def test_event_mismatch_cannot_report_no_unexpected(self):
+        sync = self.shadow()
+        sync.reconcile()
+        connection = sqlite3.connect(str(self.role / 'brain.db'))
+        try:
+            connection.execute("DELETE FROM event_sources WHERE event_id='E1'")
+            connection.commit()
+            found = sync._scan_source()
+            comparison = sync.compare(connection, found)
+            references = sync._reference_check(
+                connection, found, {FEEL: 'ticket 426'})
+            summary = {'time': brain_sync.now(), 'changed': 0, 'source': len(found),
+                       'known_removed': [FEEL], 'references': references,
+                       'comparison': comparison, 'scan_incomplete': []}
+            sync.write_report(connection, summary)
+        finally:
+            connection.close()
+        report = (self.role / 'brain-sync-report.md').read_text(encoding='utf-8')
+        self.assertIn('E1', report)
+        self.assertNotIn('意外差异：无', report)
+
 if __name__ == '__main__':
     unittest.main()

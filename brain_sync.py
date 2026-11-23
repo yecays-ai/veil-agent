@@ -520,6 +520,8 @@ class ShadowSync:
         current = {row[0]: tuple(row[1:]) for row in connection.execute(
             'SELECT memory_id, vector_sha256, meaning_sha256, dim, meaning_dim FROM vectors')}
         changed = 0
+        source_ids = set()
+        complete = False
         try:
             source = sqlite3.connect('file:%s?mode=ro' % db, uri=True)
             try:
@@ -529,6 +531,7 @@ class ShadowSync:
                         'SELECT bucket_id, embedding, updated_at, content_hash, %s FROM embeddings'
                         % meaning):
                     memory_id, vector, updated_at, content_hash, meaning_vector = row
+                    source_ids.add(memory_id)
                     vector = vector.encode('latin-1') if isinstance(vector, str) else (vector or b'')
                     meaning_vector = (meaning_vector.encode('latin-1')
                                       if isinstance(meaning_vector, str) else meaning_vector)
@@ -541,10 +544,17 @@ class ShadowSync:
                     self._write_vector(connection, memory_id, vector, updated_at, content_hash,
                                        meaning_vector)
                     changed += 1
+                complete = True
             finally:
                 source.close()
         except sqlite3.Error as exc:
             self.record_issue('vectors', type(exc).__name__)
+        if complete:
+            # The source embeddings DB is the authority: a vector it no longer has must not
+            # survive in the shadow either.
+            for memory_id in set(current) - source_ids:
+                connection.execute('DELETE FROM vectors WHERE memory_id=?', (memory_id,))
+                changed += 1
         return changed
     def _sidecar_fold(self):
         rows = []
@@ -633,9 +643,13 @@ class ShadowSync:
     def _sync_sidecar_rows(self, connection):
         lines = self._jsonlines(self.paths['sidecar'])
         done = int(self._state(connection, 'sidecar_rows', '0') or 0)
+        rebuilt = False
         if done and len(lines) < done:
+            # A shortened log was rewritten; every folded state is now stale.
             connection.execute('DELETE FROM sidecar_events')
+            connection.execute('DELETE FROM sidecar_state')
             done = 0
+            rebuilt = True
             self._set_state(connection, 'sidecar_rows', 0)
         if len(lines) <= done:
             return 0
@@ -658,7 +672,9 @@ class ShadowSync:
             if row.get('kind') in ('link', 'unlink') and isinstance(row.get('to'), str):
                 touched.add(row['to'])
         self._set_state(connection, 'sidecar_rows', len(lines))
-        if touched:
+        if rebuilt:
+            self._sync_sidecar_state(connection)
+        elif touched:
             self._sync_sidecar_state(connection, sorted(touched))
         return len(touched)
     def _sync_events(self, connection):
@@ -701,7 +717,7 @@ class ShadowSync:
         return added
 
     # --- reconcile --------------------------------------------------------
-    def _scan_source(self):
+    def _scan_source(self, expected_buckets=()):
         """id -> parsed source record; an unreadable file makes the scan incomplete, not empty."""
         memory_root = self.paths['memory']
         self._scan_errors = []
@@ -717,6 +733,11 @@ class ShadowSync:
         for bucket in base.BUCKETS:
             folder = memory_root / bucket
             if not folder.is_dir():
+                if bucket in expected_buckets:
+                    # A bucket that still holds shadow rows disappearing is an incomplete scan,
+                    # never evidence that all of its memories were deleted.
+                    self._scan_errors.append('bucket missing: %s' % folder)
+                    self.record_issue('scan', 'missing-bucket', str(folder))
                 continue
             for path in folder.rglob('*.md'):
                 try:
@@ -742,7 +763,9 @@ class ShadowSync:
             self._sync_versions(connection)
             self._sync_sidecar_rows(connection)
             self._sync_events(connection)
-            found = self._scan_source()
+            expected_buckets = {row[0] for row in connection.execute(
+                'SELECT DISTINCT bucket FROM memories WHERE removed_at IS NULL')}
+            found = self._scan_source(expected_buckets)
             rows = {row[0]: (row[1], row[2], row[3], row[4]) for row in connection.execute(
                 'SELECT id, bucket, file_rel, raw_sha256, removed_at FROM memories')}
             timestamp = now()
@@ -940,9 +963,17 @@ class ShadowSync:
     def write_report(self, connection, summary):
         comparison = summary['comparison']
         references = summary['references']
+        events = comparison['events']
+        event_drift = list(events.get('event_mismatches', []))
+        if events['expected'] != events['actual']:
+            event_drift.append('events:count %d!=%d' % (events['expected'], events['actual']))
+        if events['expected_sources'] != events['actual_sources']:
+            event_drift.append('event_sources:count %d!=%d'
+                               % (events['expected_sources'], events['actual_sources']))
         unexpected = (comparison['memory_mismatches'] + comparison['version_mismatches'] +
                       comparison['state_mismatches'] + comparison['vector_mismatches'] +
-                      references['unexpected_event_refs'] + references['unexpected_link_refs'])
+                      references['unexpected_event_refs'] + references['unexpected_link_refs'] +
+                      event_drift)
         counts = {table: connection.execute('SELECT COUNT(*) FROM %s' % table).fetchone()[0]
                   for table in ('memories', 'versions', 'sidecar_events', 'sidecar_state',
                                 'vectors', 'events', 'event_sources')}
