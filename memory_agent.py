@@ -461,6 +461,19 @@ class Memory:
 
     def __init__(self, cfg, store, budget, model, backend, runtime_monitor=None):
         self.cfg, self.store, self.budget, self.model, self.backend = cfg, store, budget, model, backend
+        brain_settings = (cfg.memory or {}).get('brain') or {}
+        self.brain_authority = None
+        if isinstance(brain_settings, dict) and brain_settings.get('write_authority') is True:
+            from brain_authority import attach_authority
+            try:
+                self.brain_authority = attach_authority(cfg, store)
+            except Exception as exc:
+                raise UserError('Brain 写入权威启动失败：%s' % exc) from exc
+            from brain_store import BrainStore
+            self.store = BrainStore(store, cfg.id, self.brain_authority.db_path)
+        if isinstance(brain_settings, dict) and brain_settings.get('write_authority') is True \
+                and brain_settings.get('shadow') is True:
+            raise UserError('记忆写入权威与影子同步不能同时开启；请先关闭 [memory.brain] shadow。')
         self.runtime_monitor = runtime_monitor
         vault_path(store.root, cfg.id)
         self.path = f'{cfg.id}/memory/_agent/state.jsonl'
@@ -679,6 +692,13 @@ class Memory:
         return status
 
     def call(self, name, args, *, write_operation=None):
+        authority = getattr(self, 'brain_authority', None)
+        if authority is not None and name in ('hold', 'trace'):
+            try:
+                embedder = self.embedder()
+            except Exception:
+                embedder = None
+            return authority.call(name, args, embedder=embedder)
         reservation = None
         model_reservation = None
         normal_embedding_amount = None
@@ -793,6 +813,16 @@ class Memory:
         """Resolve an Ombre title and exact body from its role-local Markdown record."""
         if not refresh and memory_id in self.bucket_details_cache:
             return self.bucket_details_cache[memory_id]
+        if getattr(self, 'brain_authority', None) is not None:
+            from brain_read import BrainRead
+            try:
+                with BrainRead(self.brain_authority.db_path) as reader:
+                    row = reader.memory(memory_id)
+            except Exception:
+                row = None
+            details = ((row.get('title') or row.get('name'), row.get('body')) if row else (None, None))
+            self.bucket_details_cache[memory_id] = details
+            return details
         vault = self.store.root / self.cfg.id / 'memory'
         try:
             paths = list(vault.rglob('*.md'))
@@ -842,6 +872,13 @@ class Memory:
         """Return the complete role-local Markdown file for an exact memory ID."""
         if not isinstance(memory_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', memory_id):
             return None
+        if getattr(self, 'brain_authority', None) is not None:
+            from brain_read import BrainRead
+            try:
+                with BrainRead(self.brain_authority.db_path) as reader:
+                    return reader.raw(memory_id)
+            except Exception:
+                return None
         vault = (self.store.root / self.cfg.id / 'memory').resolve()
         try:
             candidates = sorted(vault.rglob('*.md'), key=lambda path: (
@@ -1036,6 +1073,24 @@ class Memory:
         """Check current Ombre lifecycle metadata, never the cached body/details."""
         raw = self.raw_content_for(memory_id)
         allowed = None
+        if getattr(self, 'brain_authority', None) is not None:
+            from brain_read import BrainRead
+            try:
+                with BrainRead(self.brain_authority.db_path) as reader:
+                    row = reader.memory(memory_id)
+                    state = reader.state(memory_id)
+                allowed = bool(row and not row.get('is_hidden') and not row.get('is_tombstone')
+                               and not row.get('is_deleted') and row.get('type') != 'archived')
+            except Exception:
+                allowed = None
+        if allowed is not None:
+            with self.mutex:
+                if allowed:
+                    self.native_hidden.discard(memory_id)
+                else:
+                    self.native_hidden.add(memory_id)
+                    self.bucket_details_cache.pop(memory_id, None)
+            return allowed
         if raw is not None:
             lines = raw.splitlines()
             end = next((i for i, line in enumerate(lines[1:], 1)
@@ -1210,6 +1265,15 @@ class Memory:
             pass
 
     def is_hidden(self, memory_id):
+        if getattr(self, 'brain_authority', None) is not None:
+            from brain_read import BrainRead
+            try:
+                with BrainRead(self.brain_authority.db_path) as reader:
+                    row = reader.memory(memory_id)
+                return bool(not row or row.get('is_hidden') or row.get('is_tombstone')
+                            or row.get('is_deleted') or row.get('type') == 'archived')
+            except Exception:
+                return True
         return memory_id in self.hidden_ids()
 
     def record_native_update(self, memory_id, content):
@@ -2202,14 +2266,23 @@ class Memory:
 
         Only runs after Ombre confirmed the delete: a file still outside archive/
         means the delete did not land, so nothing is erased."""
-        files = list(self._bucket_files(memory_id))
-        if any(not in_archive for _, in_archive in files):
-            return False
-        for path, _ in files:
-            path.unlink()
-        self._purge_rows(f'{self.cfg.id}/memory-versions.jsonl', memory_id, lambda row: None)
-        self._purge_rows(f'{self.cfg.id}/delete-requests.jsonl', memory_id,
-                         lambda row: {**row, 'title': '', 'reason': ''})
+        if getattr(self, 'brain_authority', None) is not None:
+            import sqlite3
+            import brain_writer
+            connection = sqlite3.connect(str(self.brain_authority.db_path), timeout=30)
+            try:
+                brain_writer.hard_delete(connection, memory_id, 'erase after confirmed delete')
+            finally:
+                connection.close()
+        else:
+            files = list(self._bucket_files(memory_id))
+            if any(not in_archive for _, in_archive in files):
+                return False
+            for path, _ in files:
+                path.unlink()
+            self._purge_rows(f'{self.cfg.id}/memory-versions.jsonl', memory_id, lambda row: None)
+            self._purge_rows(f'{self.cfg.id}/delete-requests.jsonl', memory_id,
+                             lambda row: {**row, 'title': '', 'reason': ''})
         with self.mutex:
             previous = self.state['entries'].get(memory_id, {})
             self.state['entries'][memory_id] = {

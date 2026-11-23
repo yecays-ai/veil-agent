@@ -1066,7 +1066,13 @@ class ShadowSync:
 def attach(cfg, store):
     """Build the shadow worker when the role enabled it; never raise into Memory."""
     settings = (getattr(cfg, 'memory', {}) or {}).get('brain') or {}
-    if not isinstance(settings, dict) or settings.get('shadow') is not True:
+    if not isinstance(settings, dict):
+        return None
+    if settings.get('write_authority') is True:
+        if settings.get('shadow') is True:
+            raise ValueError('write_authority=brain and shadow=true are mutually exclusive')
+        return None
+    if settings.get('shadow') is not True:
         return None
     if not (Path(store.root) / cfg.id / 'brain.db').is_file():
         # The database is seeded explicitly (brain_sync.py init). While it is missing the shadow
