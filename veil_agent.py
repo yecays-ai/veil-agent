@@ -35,6 +35,21 @@ from tool_aliases import alias_system_messages, alias_tool_schemas, resolve_tool
 from model_settings import SettingsError
 from delegate_agent import TOOL_SCHEMA as DELEGATE_TOOL
 
+# Ticket 427: the abilities Ombre used to provide through its own tools, and where each one lives now.
+REMOVED_TOOL_HINTS = {
+    'letter_write': 'Writing to Lan is a file now: write_file or append_file in your lab, or desktop_create_file '
+                    'for her desktop.',
+    'letter_read': 'Letters are ordinary files now: list_directory or read_text_file in your lab.',
+    'letter_lock_update': 'Letters are ordinary files now; there is no lock to change.',
+    'plan': 'Plans live in the shared calendar now: use life_record (kind "plan").',
+    'pulse': 'Use memory_catalog; its first line is the library status.',
+    'I': 'Self-notes are gone. Save what you know about yourself with hold, or one line with thought.',
+    'anchor': 'Pin a memory only while saving it: hold(pinned=true).',
+    'release': 'Pinning is changed on the memory page.',
+    'feel': 'Every memory already carries how it felt; save it with hold.',
+}
+
+
 ROOT = Path(__file__).resolve().parent
 MILLION = Decimal(1_000_000)
 MIN_TOKEN_CALIBRATION_BYTES = 16_384
@@ -3345,15 +3360,12 @@ class Chat:
             parts.append(gap_text(rows, stamp, exclude_ids))
         except (OSError, UserError, AttributeError):
             pass
-        try:
-            native = getattr(self.tools, 'native', None)
-            plans = native.plan_entries() if callable(getattr(native, 'plan_entries', None)) else []
-        except (OSError, ValueError, UnicodeError, UserError):
-            plans = []
+        # Ticket 427: plans live in the shared calendar now (kind "plan"), so life_state reads them from
+        # life_records directly. Ombre's plan buckets were migrated and their tool is gone.
         try:
             parts.append(state_text(self.long_tasks.read(),
                                     self.store.read(f'{self.cfg.id}/long-task-history.jsonl')[-MAX_FINISHED:],
-                                    self.life_records.read(), plans, stamp[:10], moods=self.life_records.moods()))
+                                    self.life_records.read(), (), stamp[:10], moods=self.life_records.moods()))
         except (OSError, ValueError, UnicodeError, UserError, KeyError, TypeError):
             pass
         return '\n'.join(part for part in parts if part)
@@ -4699,8 +4711,11 @@ class Chat:
                 '被拒绝', model_name)
         canonical_name = self._resolve_tool_name(model_name, offered)
         if canonical_name is None:
+            # Ticket 427: a tool that used to exist gets one sentence saying where the ability lives now,
+            # so a model still following old chat history is not left guessing.
+            hint = REMOVED_TOOL_HINTS.get(self.canonical_tool_name(model_name))
             return _ToolExecution(
-                'The program rejected this call because the tool is unavailable for the current role.',
+                hint or 'The program rejected this call because the tool is unavailable for the current role.',
                 '被拒绝', model_name)
         call = SimpleNamespace(id=getattr(call, 'id', None), function=SimpleNamespace(
             name=canonical_name, arguments=call.function.arguments))

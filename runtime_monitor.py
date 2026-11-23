@@ -10,7 +10,7 @@ class RuntimeMonitor:
 
     _VALID_STATES = {'healthy', 'recovered', 'attention', 'paused'}
     _VALID_CLASSIFICATIONS = {'healthy', 'safe_recovery', 'safe_to_retry', 'unknown'}
-    _MEMORY_MUTATIONS = {'hold', 'trace', 'plan', 'letter_write', 'anchor', 'release'}
+    _MEMORY_MUTATIONS = {'hold', 'trace'}
 
     def __init__(self, store, character_id, activity):
         self.store = store

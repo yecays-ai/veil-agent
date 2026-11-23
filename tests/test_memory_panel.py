@@ -52,15 +52,17 @@ class MemoryPanelTests(unittest.TestCase):
             f"---\nid: {key}\ncreated: '{created}'\ntitle: {title}\ntags: {tags}\n{extra}---\nbody of {key}\n",
             encoding='utf-8')
 
-    def test_existing_ombre_plan_is_visible_without_copying_memory(self):
-        plans=self.vault.parent / 'plan'
-        plans.mkdir()
-        (plans / 'promise.md').write_text("---\nid: plan001\ntitle: Play together\ncreated: '2026-11-01T10:00:00+08:00'\nstatus: resolved\n---\nTry the game together.\n",encoding='utf-8')
-        rows=self.native().plan_entries()
-        self.assertEqual(len(rows),1)
-        self.assertEqual(rows[0]['state'],'completed')
-        self.assertEqual(rows[0]['content'],'Try the game together.')
-        self.assertNotIn('plan001',[x['memory_id'] for x in self.native().panel_entries()['items']])
+    def test_catalog_reports_a_status_line_instead_of_pulse(self):
+        # Ticket 427: Ombre's pulse is gone; one status line rides along with the catalog instead.
+        self.write('stat001', '2026-10-20T10:00:00+08:00', 'First')
+        self.write('stat002', '2026-10-21T10:00:00+08:00', 'Second',
+                   extra='import_marker: final-import\n')
+        text, state, _ = self.native().invoke('memory_catalog', {})
+        self.assertEqual(state, '成功')
+        data = json.loads(text)
+        self.assertIn('stats', data)
+        self.assertIn('memories', data['stats'])
+        self.assertIn('events', data['stats'])
 
     def test_entries_are_newest_first_with_recall_counts(self):
         self.write('older', '2026-10-20T10:00:00+08:00', 'Older')

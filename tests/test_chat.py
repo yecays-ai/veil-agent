@@ -1606,7 +1606,7 @@ output_cny_per_million = "8"
         self.cfg.tools = {'enabled': True, 'max_steps': 6, 'max_output_tokens': 50}
         names = ['list_directory', 'directory_tree', 'read_text_file', 'read_multiple_files',
                  'get_file_info', 'search_files', 'list_directory_with_sizes', 'hold',
-                 'breath_search', 'trace', 'dream', 'letter_write', 'letter_read', 'plan']
+                 'breath_search', 'trace', 'dream', 'memory_read']
         schema = {'type': 'object', 'properties': {'query': {'type': 'string'}}}
         tools = SimpleNamespace(
             tools=[SimpleNamespace(name=name, description='Search the selected memory and return useful results.',

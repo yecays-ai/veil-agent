@@ -1,13 +1,20 @@
 # 当前状态
 
-## 工单 426 · 四个 Ombre 功能的数据迁移（本 PR，待 Lan 审核）
+## 工单 427 · 下线 Ombre 的功能层（本 PR，待 Lan 审核）
 
-- 现状：迁移脚本 `simplify_memory.py` 与 7 个用例已完成，正式库**尚未执行**；脚本默认 dry-run，
-  `--apply` 前先做完整备份，并要求 VEIL 与 Ombre 都不在运行。
-- 下一步：本 PR 合并后，先在正式库跑 dry-run 对账（预期 4 封信、5 条计划、7 条 feel、3 条 I），
-  再跑 `--apply --skip-plan ef34e23f2dc5`（跳过已被 growth 收下的花园桌游规则）。
-- 验收：`docs/tickets/426-memory-simplify.md` 第 4 步——生命记录出现 5 条已完成计划、
-  `workspace/lab/letters/` 有 4 封信、记忆页不再有 feel/I；原信件与原计划文件仍在。
+- 删掉 8 个没人用或已被取代的工具（信件三件套、plan、pulse、I、anchor、release）和 feel 召回通道；
+  保留 hold / breath_search / trace / dream 与四个本地只读工具。
+- 计划改由共享日历承担（`life_record` 可建 plan，每轮上下文从日历读）；`memory_catalog` 第一行
+  返回库状态，替代 pulse；桌面端去掉 Ombre Dashboard 入口。
+- 迁移数据在工单 426 的脚本里做（信件导出 lab、5 条计划进日历、feel/I 删除）；本 PR 只改代码。
+- 下一步：本 PR 合并后执行工单 426 的迁移，再按 `docs/tickets/427-ombre-feature-subtraction.md` 验收。
+
+## 工单 426 · 四个 Ombre 功能的数据迁移（已合并，PR #426 / `237db8a`）
+
+- 迁移脚本与 7 个用例已合并；正式库**尚未执行**。
+- 下一步：关闭 VEIL、等 Ombre 退出，先 dry-run 对账（预期 4 封信、5 条计划、7 条 feel、3 条 I），
+  再跑 `python simplify_memory.py --apply --skip-plan ef34e23f2dc5`。
+- 验收：生命记录出现 5 条已完成计划、`workspace/lab/letters/` 有 4 封信、记忆页不再有 feel/I。
 
 ## 工单 425 · 经历页的两个 GET 路由没有接上（本 PR，待 Lan 审核）
 

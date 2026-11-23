@@ -52,7 +52,7 @@ class OmbreRuntimeRecoveryLive(unittest.TestCase):
                 backend.diagnostic = diagnostics.append
                 with ThreadPoolExecutor(2) as pool:
                     try:
-                        results = list(pool.map(lambda _: backend.call('pulse', {}), range(2)))
+                        results = list(pool.map(lambda _: backend.call('dream', {}), range(2)))
                     except MemoryToolError as exc:
                         self.fail(f'{exc.code}: {json.dumps(diagnostics, ensure_ascii=False)}')
                 current = json.loads(state_path.read_text(encoding='utf-8'))
@@ -61,7 +61,7 @@ class OmbreRuntimeRecoveryLive(unittest.TestCase):
                 self.assertTrue(_pid_alive(current['host_pid']))
                 self.assertTrue(_pid_alive(current['server_pid']))
                 self.assertTrue(_lock_held(private / 'ombre.lock'))
-                self.assertTrue(all('=== 我现在的记忆 ===' in result for result in results))
+                self.assertTrue(all('Fictional lighthouse checklist' in result for result in results))
                 search = backend.call('breath_search', {'query': 'fictional lighthouse checklist'})
                 self.assertIn('Fictional lighthouse checklist for Thursday.', search)
 
