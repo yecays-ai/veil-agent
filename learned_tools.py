@@ -1,22 +1,36 @@
 
-SECTION_PARAM = {'type': 'string', 'enum': ['facts', 'growth'],
-                 'description': 'facts = important facts about Lan; growth = what you learned from real experience.'}
+SECTION_PARAM = {'type': 'string', 'enum': ['facts', 'growth', 'relationship'],
+                 'description': ('facts = important facts about Lan; growth = what you learned from real '
+                                 'experience; relationship = what is currently true between you two '
+                                 '(see status and sources).')}
+RELATIONSHIP_STATUS = {'type': 'string', 'enum': ['confirmed', 'uncertain'],
+                       'description': ('relationship only: confirmed when she said it or real events keep '
+                                       'showing it; uncertain when it is still your own guess. confirmed '
+                                       'only takes effect with a source the program can check.')}
+RELATIONSHIP_SOURCES = {'type': 'array', 'items': {'type': 'string'},
+                        'description': ('relationship only: evidence references, e.g. chat:<message_id> '
+                                        'from her actual words, memory:<id> or event:<id>. Without one, '
+                                        'the item is saved as your own uncertain reading.')}
 PROFILE_APPEND = {'type': 'function', 'function': {
     'name': 'profile_append',
     'description': ('Add a passage to your Learned Context. facts holds what you know about Lan; growth holds '
-                    'what you learned from real experience, especially after conflicts. Shown every request. '
-                    'Direct use; no approval.'),
+                    'what you learned from real experience, especially after conflicts. relationship holds '
+                    'what is currently true between you two: habits, boundaries, agreements. Shown every '
+                    'request. Direct use; no approval.'),
     'parameters': {'type': 'object', 'properties': {
-        'text': {'type': 'string', 'minLength': 1}, 'section': SECTION_PARAM},
+        'text': {'type': 'string', 'minLength': 1}, 'section': SECTION_PARAM,
+        'status': RELATIONSHIP_STATUS, 'sources': RELATIONSHIP_SOURCES},
         'required': ['text'], 'additionalProperties': False},
 }}
 PROFILE_REPLACE = {'type': 'function', 'function': {
     'name': 'profile_replace',
     'description': ('Replace one passage in your Learned Context with new text, or remove it with an empty '
-                    'new_text. old_text must appear exactly once in that section. Direct use; no approval.'),
+                    'new_text. old_text must appear exactly once in that section. In relationship the old '
+                    'note is kept as history (no longer current), so a change of understanding is visible '
+                    'without the old rule still applying. Direct use; no approval.'),
     'parameters': {'type': 'object', 'properties': {
         'old_text': {'type': 'string', 'minLength': 1}, 'new_text': {'type': 'string'},
-        'section': SECTION_PARAM},
+        'section': SECTION_PARAM, 'status': RELATIONSHIP_STATUS, 'sources': RELATIONSHIP_SOURCES},
         'required': ['old_text', 'new_text'], 'additionalProperties': False},
 }}
 ONGOING_TOOL = {'type': 'function', 'function': {

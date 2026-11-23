@@ -1563,6 +1563,22 @@ function recallDetails(r){
   const ids=v=>Array.isArray(v)?v.join(', '):'';
   const lines=[];
   if(r.query_chars)lines.push(`这句 ${r.query_chars} 字符（hash ${r.query_hash||'?'}）`);
+  const hasBase=Object.prototype.hasOwnProperty.call(r,'relationship_base');
+  const base=r.relationship_base||{},baseItems=Array.isArray(base.items)?base.items:[];
+  const baseState=!hasBase?'未记录（这条诊断早于关系底色功能）'
+    :baseItems.length
+      ?`${baseItems.length} 条（${base.chars||0} 字，${base.tokens||0} tokens）：${baseItems.join(', ')}`
+      :`0 条${base.reason?`（${base.reason}）`:''}`;
+  lines.push(`关系底色：${baseState}`);
+  if(base.degraded)lines.push(`关系底色没全放进去：${base.reason||'空间不足'}`+(n(base.dropped)?`；舍弃 ${base.dropped.map(x=>`${x.id}（${x.reason||'?'}）`).join('；')}`:''));
+  if(base.space_tokens!==null&&base.space_tokens!==undefined)lines.push(`本轮必需块之后剩 ${base.space_tokens} tokens 给记忆`);
+  if(n(r.relevant_recall))lines.push('相关召回：'+ids(r.relevant_recall));
+  // Review: a follow-up carry is still pasted into this request; only a block dropped because the
+  // history already had it counts as "reused".
+  if(n(r.carried))lines.push('追问承接（本轮仍带入，未重复检索）：'+ids(r.carried));
+  if(n(r.natural_association))lines.push('自然联想：'+ids(r.natural_association));
+  const a=r.association||{};
+  if(a.candidates!==undefined)lines.push(`自然联想候选 ${a.candidates} 条`+(a.reason?`（${a.reason}）`:'')+(n(a.dropped)?'；没选：'+a.dropped.map(x=>`${x.id}（${x.reason||'?'}）`).join('；'):''));
   if(n(r.ombre))lines.push(`Ombre 返回：${ids(r.ombre)}`);
   if(n(r.hidden))lines.push('不可见：'+r.hidden.map(x=>`${x.id}（${x.reason||'?'}）`).join('；'));
   if(n(r.vector))lines.push(`向量候选：${ids(r.vector)}`);
@@ -1584,6 +1600,16 @@ function recallText(r){
   if(!r)return '';
   const n=v=>Array.isArray(v)?v.length:0;
   const parts=[];
+  // Ticket 422: a row with "recall = 0" must never again read as "he has no relationship background".
+  const hasBase=Object.prototype.hasOwnProperty.call(r,'relationship_base');
+  const base=r.relationship_base||{},baseItems=Array.isArray(base.items)?base.items:[];
+  parts.push(!hasBase?'关系底色未记录'
+    :baseItems.length?`关系底色 ${baseItems.length} 条${base.degraded?'（没全放下）':''}`
+    :`关系底色 0 条${base.reason?`（${base.reason}）`:''}`);
+  const relevant=n(r.relevant_recall),natural=n(r.natural_association);
+  parts.push(`相关 ${relevant} 条`);
+  parts.push(natural?`自然浮现 ${natural} 条`:'没有自然浮现');
+  if(n(r.opening))parts.push(`开场 ${n(r.opening)} 条`);
   parts.push(`Ombre ${n(r.ombre)} 条`);
   if(n(r.hidden)){
     const reasons=[...new Set((r.hidden||[]).map(x=>x&&x.reason).filter(Boolean))];

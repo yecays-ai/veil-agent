@@ -112,7 +112,7 @@ class RecallRotationTests(unittest.TestCase):
         rows = {'gone': {'content': 'alpha beta gamma delta epsilon', 'type': 'archived'},
                 'a1': {'content': 'alpha beta gamma delta'}, 'a2': {'content': 'alpha beta gamma'},
                 'a3': {'content': 'alpha beta'}, 'a4': {'content': 'alpha'}}
-        memory = self.memory(rows, recall={'cooldown_turns': 0, 'random_chance': 0})
+        memory = self.memory(rows, recall={'cooldown_turns': 0, 'association_enabled': False})
         _, refs = self.recall(memory, 'alpha beta gamma delta epsilon')
         self.assertEqual(['a1', 'a2', 'a3', 'a4'], refs)
         asked = [args['max_results'] for name, args in self.backend.calls if name == 'breath_search']
@@ -122,57 +122,58 @@ class RecallRotationTests(unittest.TestCase):
         rows = {'gone': {'content': 'alpha beta gamma', 'type': 'archived'},
                 'gone2': {'content': 'alpha beta', 'type': 'archived'},
                 'a1': {'content': 'alpha'}, 'other': {'content': 'unrelated words only'}}
-        memory = self.memory(rows, recall={'cooldown_turns': 0, 'random_chance': 0})
+        memory = self.memory(rows, recall={'cooldown_turns': 0, 'association_enabled': False})
         _, refs = self.recall(memory, 'alpha beta gamma')
         self.assertEqual(['a1'], refs)
 
     def test_a_search_that_only_finds_archived_memories_recalls_nothing(self):
         rows = {'gone': {'content': 'alpha beta gamma', 'type': 'archived'}, 'other': {'content': 'unrelated words only'}}
-        memory = self.memory(rows, recall={'cooldown_turns': 0, 'random_chance': 0})
+        memory = self.memory(rows, recall={'cooldown_turns': 0, 'association_enabled': False})
         _, refs = self.recall(memory, 'alpha beta gamma')
         self.assertEqual([], refs)
 
     def test_a_memory_is_not_shown_again_during_its_cooldown_and_the_slot_stays_empty(self):
-        memory = self.memory(recall={'cooldown_turns': 2, 'random_chance': 0})
+        memory = self.memory(recall={'cooldown_turns': 2, 'association_enabled': False})
         self.assertEqual(self.recall(memory, 'train trip')[1], ['train'])
         self.assertEqual(self.recall(memory, 'train window')[1], [])
         self.assertEqual(self.recall(memory, 'train coast')[1], [])
         self.assertEqual(self.recall(memory, 'train again')[1], ['train'])
 
     def test_asking_about_the_past_gets_through_the_cooldown(self):
-        memory = self.memory(recall={'cooldown_turns': 5, 'random_chance': 0})
+        memory = self.memory(recall={'cooldown_turns': 5, 'association_enabled': False})
         self.assertEqual(self.recall(memory, 'train trip')[1], ['train'])
         self.assertEqual(self.recall(memory, 'train window')[1], [])           # unprompted: cooled
         self.assertEqual(self.recall(memory, '还记得 train 那次吗')[1], ['train'])  # she asks: shown
         self.assertEqual(self.recall(memory, 'remember train trip')[1], ['train'])
 
     def test_no_relevant_memory_returns_none(self):
-        memory = self.memory(recall={'random_chance': 0})
+        memory = self.memory(recall={'association_enabled': False})
         text, refs = self.recall(memory, 'quantum spreadsheets')
         self.assertEqual(refs, [])
         self.assertIn('No relevant memories', text)
 
     def test_cooldown_survives_a_restart(self):
-        memory = self.memory(recall={'cooldown_turns': 3, 'random_chance': 0})
+        memory = self.memory(recall={'cooldown_turns': 3, 'association_enabled': False})
         self.recall(memory, 'cooking dumplings')
-        restarted = self.memory(recall={'cooldown_turns': 3, 'random_chance': 0})
+        restarted = self.memory(recall={'cooldown_turns': 3, 'association_enabled': False})
         self.assertEqual(self.recall(restarted, 'cooking dumplings')[1], [])
         saved = self.store.read('fake/memory/_agent/recall-rotation.jsonl')[-1]
-        self.assertLessEqual(set(saved), {'turn', 'last', 'time'})  # IDs and turn numbers only, no memory text
+        # IDs and turn numbers only, no memory text (ticket 422 adds which association surfaced last).
+        self.assertLessEqual(set(saved), {'turn', 'last', 'time', 'association'})
         self.assertNotIn('dumplings', json.dumps(saved))
 
     def test_rollback_gives_back_the_cooldown_of_a_turn_that_delivered_nothing(self):
-        memory = self.memory(recall={'cooldown_turns': 3, 'random_chance': 0})
+        memory = self.memory(recall={'cooldown_turns': 3, 'association_enabled': False})
         self.assertEqual(self.recall(memory, 'cooking dumplings')[1], ['cooking'])
         memory.rollback_recall()  # ticket 380: that turn produced no reply
         self.assertEqual(self.recall(memory, 'cooking dumplings')[1], ['cooking'])
-        restarted = self.memory(recall={'cooldown_turns': 3, 'random_chance': 0})
+        restarted = self.memory(recall={'cooldown_turns': 3, 'association_enabled': False})
         memory.rollback_recall()
         memory.rollback_recall()  # nothing left to undo: harmless
         self.assertEqual(self.recall(restarted, 'cooking dumplings')[1], [])  # the delivered turn still counts
 
     def test_rollback_restores_the_earlier_mark_not_nothing(self):
-        memory = self.memory(recall={'cooldown_turns': 1, 'random_chance': 0})
+        memory = self.memory(recall={'cooldown_turns': 1, 'association_enabled': False})
         self.recall(memory, 'cooking dumplings')
         first = dict(memory.rotation.last)
         self.recall(memory, 'remember cooking dumplings')  # she asks: shown again, mark moves forward
@@ -180,14 +181,14 @@ class RecallRotationTests(unittest.TestCase):
         self.assertEqual(memory.rotation.last, first)
 
     def test_release_lets_a_regenerated_turn_recall_again(self):
-        memory = self.memory(recall={'cooldown_turns': 3, 'random_chance': 0})
+        memory = self.memory(recall={'cooldown_turns': 3, 'association_enabled': False})
         self.recall(memory, 'cooking dumplings')
         self.assertEqual(self.recall(memory, 'cooking dumplings')[1], [])
         memory.release_recall(['cooking'])
         self.assertEqual(self.recall(memory, 'cooking dumplings')[1], ['cooking'])
 
     def test_same_event_by_link_shows_only_one(self):
-        memory = self.memory(recall={'random_chance': 0})
+        memory = self.memory(recall={'association_enabled': False})
         refs = self.recall(memory, 'garden roses')[1]
         self.assertEqual(refs, ['garden'])
         self.assertEqual(memory.last_recall_skipped['same_event'], 1)
@@ -195,24 +196,24 @@ class RecallRotationTests(unittest.TestCase):
     def test_same_event_by_stored_vector_similarity(self):
         rows = {'a': {'content': 'picnic by the river'}, 'b': {'content': 'picnic by the river again'},
                 'c': {'content': 'picnic in the rain'}}
-        memory = self.memory(rows, recall={'random_chance': 0},
+        memory = self.memory(rows, recall={'association_enabled': False},
                              vectors={'a': [1, 0, 0], 'b': [0.99, 0.05, 0], 'c': [0, 1, 0]})
         self.assertEqual(self.recall(memory, 'picnic river')[1], ['a', 'c'])
 
     def test_dedup_can_be_turned_off(self):
-        memory = self.memory(recall={'dedup': False, 'random_chance': 0})
+        memory = self.memory(recall={'dedup': False, 'association_enabled': False})
         self.assertEqual(self.recall(memory, 'garden roses')[1], ['garden', 'garden_again'])
 
     def test_long_memory_is_sent_whole_by_default_and_only_a_legacy_limit_cuts(self):
         """Ticket 419: the 600-character opening cut is gone; a memory is read by the request budget, not a
         per-memory character cap. An old config that still sets excerpt_chars keeps cutting, but on a boundary."""
-        memory = self.memory(recall={'random_chance': 0})
+        memory = self.memory(recall={'association_enabled': False})
         text, refs = self.recall(memory, 'lake letter')
         self.assertEqual(refs, ['long'])
         self.assertIn(ROWS['long']['content'], text)           # the whole body, not its opening
         self.assertNotIn('only its beginning is shown', text)
         limit = len(ROWS['long']['content']) // 2
-        legacy = self.memory(recall={'random_chance': 0, 'cooldown_turns': 0, 'excerpt_chars': limit})
+        legacy = self.memory(recall={'association_enabled': False, 'cooldown_turns': 0, 'excerpt_chars': limit})
         cut, refs = self.recall(legacy, 'lake letter')
         self.assertEqual(refs, ['long'])
         self.assertIn('memory_read with memory_id "long"', cut)
@@ -223,7 +224,7 @@ class RecallRotationTests(unittest.TestCase):
     def test_short_context_assisted_message_still_finds_its_topic(self):
         # A two-word reply finds nothing alone; with the last rounds it reaches the train memory.
         from test_recall_relevance import FakeEmbedder
-        memory = self.memory(recall={'random_chance': 0}, vectors={'train': [1, 0], 'movie': [0, 1]})
+        memory = self.memory(recall={'association_enabled': False}, vectors={'train': [1, 0], 'movie': [0, 1]})
         memory.cfg.memory['recall_context'] = {'enabled': True, 'min_similarity': 0.5}
         memory._embedder = FakeEmbedder((1.0, 0.0))
         recent = [{'role': 'user', 'content': 'remember the train trip'},
@@ -231,19 +232,26 @@ class RecallRotationTests(unittest.TestCase):
         self.assertEqual(self.recall(memory, 'yes that', recent=recent)[1], ['train'])
         self.assertEqual(memory.last_context_kinds, {'train': 'context'})
 
-    def test_random_recall_is_labelled_and_can_be_turned_off(self):
-        memory = self.memory(drift=['old'], recall={'random_chance': 1})
+    def test_a_weak_association_is_labelled_and_can_be_turned_off(self):
+        """Ticket 422: a meaningful old memory may still reach a light turn, but it is scored
+        (importance, time since it last surfaced, room in this moment) rather than drawn by chance."""
+        rows = dict(ROWS)
+        rows['old'] = {'content': 'old fictional memory about a lost umbrella', 'importance': 9}
+        memory = self.memory(rows, drift=['old'],
+                             recall={'association_enabled': True, 'cooldown_turns': 0})
         text, refs = self.recall(memory, 'movie night')
         self.assertEqual(refs, ['movie', 'old'])
-        self.assertEqual(memory.last_context_kinds, {'movie': 'search', 'old': 'random'})
-        self.assertIn('Random recollection, not a search hit', text)
-        off = self.memory(drift=['old'], recall={'random_chance': 0, 'cooldown_turns': 0})
+        self.assertEqual(memory.last_context_kinds, {'movie': 'search', 'old': 'association'})
+        self.assertIn('came back to you by itself', text)
+        self.assertEqual(memory.last_recall_debug['natural_association'], ['old'])
+        off = self.memory(rows, drift=['old'],
+                          recall={'association_enabled': False, 'cooldown_turns': 0})
         self.assertEqual(self.recall(off, 'movie night')[1], ['movie'])
 
     def test_autonomous_wakes_no_longer_cap_at_three(self):
         """Ticket 419: a wake sees every candidate the pool offers, ordered by rotation, not the first three."""
         rows = {f'm{i}': {'content': f'wake note {i}'} for i in range(6)}
-        memory = self.memory(rows, recall={'cooldown_turns': 0, 'random_chance': 0})
+        memory = self.memory(rows, recall={'cooldown_turns': 0, 'association_enabled': False})
         seen = [tuple(self.recall(memory, 'wake note', rotate=True)[1]) for _ in range(4)]
         self.assertTrue(all(set(item) == set(rows) for item in seen))
         self.assertTrue(all(kind == 'rotation' for kind in memory.last_context_kinds.values()))
@@ -252,7 +260,7 @@ class RecallRotationTests(unittest.TestCase):
         """Ticket 419: the opening group is budgeted, not capped at three."""
         rows = {'top': {'content': 'top', 'importance': 9},
                 **{f'e{i}': {'content': f'equal {i}', 'importance': 5} for i in range(4)}}
-        memory = self.memory(rows, recall={'random_chance': 0})
+        memory = self.memory(rows, recall={'association_enabled': False})
         first = memory.context('nothing', include_opening=True)
         first_refs = list(memory.last_context_refs)
         memory.refresh_opening()
@@ -286,7 +294,8 @@ class RecallRotationTests(unittest.TestCase):
 
         before, before_chars = run({'enabled': False})
         # Ticket 365's experience directory adds a line to linked memories, which is not what this compares.
-        after, after_chars = run({'directory': False})
+        # Ticket 422's weak association is measured by its own tests; keep this comparison about rotation.
+        after, after_chars = run({'directory': False, 'association_enabled': False})
         top_before = max(before.values()) / sum(before.values())
         top_after = max(after.values()) / sum(after.values())
         self.assertLess(top_after, top_before + 1e-9)
@@ -311,7 +320,7 @@ class RecallRotationTests(unittest.TestCase):
 
     def test_a_stage_of_a_longer_experience_comes_with_the_others_dates_and_titles(self):
         """Ticket 365: Peter's own link_to chain (sidecar) is listed, oldest first, with this stage marked."""
-        memory = self.story(recall={'random_chance': 0})
+        memory = self.story(recall={'association_enabled': False})
         text, refs = self.recall(memory, 'domino stacked')
         self.assertEqual(refs, ['story_a'])
         self.assertIn('10-25 Domino night (this one) → 10-28 The letter [story_b] → '
@@ -328,7 +337,7 @@ class RecallRotationTests(unittest.TestCase):
             'aa_third': {'content': 'the crane finally stood on the shelf', 'title': 'Crane stands',
                          'created': '2026-11-04T08:20:58+08:00'},
         }
-        memory = self.memory(rows=rows, recall={'random_chance': 0})
+        memory = self.memory(rows=rows, recall={'association_enabled': False})
         sidecar = Sidecar(self.store, 'fake', memory.budget.clock)
         sidecar.link('mm_second', 'zz_first')
         sidecar.link('aa_third', 'mm_second')
@@ -338,7 +347,7 @@ class RecallRotationTests(unittest.TestCase):
         self.assertIn('Crane begins (this one) → 11-04 Crane wing tears [mm_second] → 11-04 Crane stands [aa_third]', text)
 
     def test_the_stage_dedup_blocks_still_shows_up_in_the_directory(self):
-        memory = self.story(recall={'random_chance': 0})
+        memory = self.story(recall={'association_enabled': False})
         text, refs = self.recall(memory, 'tiles domino letter fell')
         self.assertEqual(len(refs), 2)                          # ticket 369: both stages that were hits come
         self.assertEqual(memory.last_recall_skipped['same_event'], 0)
@@ -347,7 +356,7 @@ class RecallRotationTests(unittest.TestCase):
 
     def test_one_experience_can_supply_all_its_hit_stages(self):
         """Ticket 419: linked stages are not repeats; the budget, not a stage-slot count, decides how many fit."""
-        memory = self.story(recall={'random_chance': 0, 'stage_slots': 1})
+        memory = self.story(recall={'association_enabled': False, 'stage_slots': 1})
         text, refs = self.recall(memory, 'tiles domino letter fell')
         self.assertEqual(len(refs), 2)
         self.assertEqual(memory.last_recall_skipped['stage_cap'], 0)
@@ -363,23 +372,23 @@ class RecallRotationTests(unittest.TestCase):
             'cc': {'content': 'kite flying third attempt finally soared', 'title': 'Kite three',
                    'created': '2026-11-03T08:00:00', 'links': [('cb', 'continuation_of')]},
         }
-        memory = self.memory(rows=rows, recall={'random_chance': 0})
+        memory = self.memory(rows=rows, recall={'association_enabled': False})
         text, refs = self.recall(memory, 'kite flying attempt')
         self.assertEqual(len(refs), 3)
         self.assertEqual(memory.last_recall_skipped['stage_cap'], 0)
         self.assertEqual(memory.last_recall_skipped['same_event'], 0)
 
     def test_ombre_event_links_make_a_directory_too_and_a_lone_memory_gets_none(self):
-        memory = self.memory(recall={'random_chance': 0})
+        memory = self.memory(recall={'association_enabled': False})
         text, refs = self.recall(memory, 'garden roses planted spring')
         self.assertEqual(refs, ['garden'])
         self.assertIn('(this one)', text)
-        self.assertNotIn('one stage of a longer experience', self.recall(self.story(recall={'random_chance': 0}),
+        self.assertNotIn('one stage of a longer experience', self.recall(self.story(recall={'association_enabled': False}),
                                                                           'teapots lone')[0])
 
     def test_experience_stages_gives_the_other_stages_both_ways_and_skips_hidden_ones(self):
         """Ticket 368: the tidying asks for the same chain the recall directory uses."""
-        memory = self.story(recall={'random_chance': 0})
+        memory = self.story(recall={'association_enabled': False})
         self.assertEqual(sorted(memory.experience_stages('story_a')), ['story_b', 'story_c'])
         self.assertEqual(sorted(memory.experience_stages('story_c')), ['story_a', 'story_b'])
         memory.state['entries']['story_b'] = {'title': 'The letter', 'time': 'x', 'hidden': True, 'text': ''}
@@ -389,13 +398,13 @@ class RecallRotationTests(unittest.TestCase):
     def test_recently_created_finds_memories_by_their_creation_time_newest_first(self):
         """Ticket 368: the tidying finds what Peter saved lately even where the sidecar has no note of it."""
         from datetime import datetime, timezone
-        memory = self.story(recall={'random_chance': 0})
+        memory = self.story(recall={'association_enabled': False})
         found = memory.recently_created(datetime(2026, 10, 27, tzinfo=timezone.utc))
         self.assertEqual(found, ['story_c', 'story_b'])           # 10-31 then 10-28; 10-25 is before the cut
         self.assertEqual(memory.recently_created(datetime(2027, 1, 1, tzinfo=timezone.utc)), [])
 
     def test_archived_or_missing_stages_are_not_listed(self):
-        memory = self.story(recall={'random_chance': 0})
+        memory = self.story(recall={'association_enabled': False})
         path = self.backend.vault / 'story_b.md'
         path.write_text(path.read_text(encoding='utf-8').replace('type: dynamic', 'type: archived'), encoding='utf-8')
         (self.backend.vault / 'story_c.md').unlink()
@@ -405,21 +414,21 @@ class RecallRotationTests(unittest.TestCase):
         self.assertNotIn('one stage of a longer experience', text)   # nothing left to list
 
     def test_a_stage_hidden_on_the_memory_page_is_not_listed(self):
-        memory = self.story(recall={'random_chance': 0})
+        memory = self.story(recall={'association_enabled': False})
         memory.state['entries']['story_b'] = {'title': 'The letter', 'time': 'x', 'hidden': True, 'text': ''}
         text, _ = self.recall(memory, 'domino stacked')
         self.assertNotIn('The letter', text)
         self.assertIn('Waking up to the spiral', text)     # the other stage is still there
 
     def test_the_directory_can_be_turned_off(self):
-        memory = self.story(recall={'random_chance': 0, 'directory': False})
+        memory = self.story(recall={'association_enabled': False, 'directory': False})
         text, refs = self.recall(memory, 'domino stacked')
         self.assertEqual(refs, ['story_a'])
         self.assertNotIn('one stage of a longer experience', text)
         self.assertFalse(settings({'recall': {'enabled': False}})['directory'])
 
     def test_a_damaged_sidecar_only_means_no_directory(self):
-        memory = self.story(recall={'random_chance': 0})
+        memory = self.story(recall={'association_enabled': False})
         (self.store.root / 'fake' / 'memory-sidecar.jsonl').write_text('{not json', encoding='utf-8')
         text, refs = self.recall(memory, 'domino stacked')
         self.assertEqual(refs, ['story_a'])
@@ -483,7 +492,8 @@ class HelperTests(unittest.TestCase):
 
     def test_cooldown_ignores_damaged_state(self):
         state = Cooldown({'turn': 'x', 'last': {'a': 99, 'b': 'y'}})
-        self.assertEqual(state.snapshot(), {'turn': 0, 'last': {}})
+        self.assertEqual(state.snapshot(), {'turn': 0, 'last': {},
+                                            'association': {'key': '', 'turn': -1, 'repeat': 0}})
 
     def test_reply_row_carries_kinds_only_for_its_refs(self):
         chat = Mock(turn_memory_refs=['a'], turn_memory_kinds={'a': 'random', 'b': 'search'})

@@ -6,7 +6,8 @@
   // The four cards on this page; facts, growth and ongoing all live in the "learned" card, so
   // editing any of them has to light up that card (ticket 413: it never did before).
   function cardNode(card) {
-    var name = (card === 'ongoing' || card === 'facts' || card === 'growth') ? 'learned' : card;
+    var name = (card === 'ongoing' || card === 'facts' || card === 'growth' || card === 'relationship')
+      ? 'learned' : card;
     return document.querySelector('[data-peter-card="' + name + '"]');
   }
   function token(text) {
@@ -111,6 +112,118 @@
     meta.append(status, sources, remove);
     return meta;
   }
+  // Ticket 422: the stable relationship base. Each row is one thing that is true right now.
+  // "不再适用" keeps the row for history but stops it from reaching the model.
+  function renderRelationship(items) {
+    var box = $p('peter-relationship');
+    if (!box || !state || !state.learned) return;
+    items = items || [];
+    state.learned.relationship = state.learned.relationship || { updated_at: '' };
+    state.learned.relationship.items = items;
+    var current = items.filter(function (row) { return row.status !== 'outdated'; });
+    var old = items.filter(function (row) { return row.status === 'outdated'; });
+    box.replaceChildren();
+    current.forEach(function (item) {
+      var row = document.createElement('div');
+      row.className = 'peter-ongoing-item';
+      var text = document.createElement('textarea');
+      text.value = item.text || '';
+      text.placeholder = '现在成立的关系共识、边界或习惯…';
+      text.oninput = function () { item.text = text.value; mark('relationship'); renderCounts(); };
+      row.append(text, relationshipMeta(item));
+      box.append(row);
+    });
+    if (!current.length) {
+      var empty = document.createElement('p');
+      empty.className = 'muted';
+      empty.textContent = '还没有当前有效的记录。';
+      box.append(empty);
+    }
+    // Review: an outdated row is history, but Lan can still read it, put it back or delete it.
+    old.forEach(function (item) {
+      var row = document.createElement('div');
+      row.className = 'peter-ongoing-item peter-done-item';
+      var stale = document.createElement('p');
+      stale.className = 'peter-done-text';
+      stale.textContent = item.text || '';
+      row.append(stale, relationshipMeta(item));
+      box.append(row);
+    });
+    if (old.length) {
+      var note = document.createElement('p');
+      note.className = 'muted';
+      note.textContent = '以前成立、现在不再适用 ' + old.length + ' 条（只留作经过，不再带给他）';
+      box.append(note);
+    }
+    $p('peter-relationship-count').textContent = current.length + ' 条';
+  }
+  function relationshipMeta(item) {
+    var meta = document.createElement('div');
+    meta.className = 'peter-ongoing-meta';
+    var status = document.createElement('select');
+    [['confirmed', '已确认'], ['uncertain', '还没确认'], ['outdated', '不再适用']].forEach(function (value) {
+      status.append(new Option(value[1], value[0]));
+    });
+    status.value = item.status || 'confirmed';
+    status.onchange = function () {
+      item.status = status.value;
+      mark('relationship');
+      renderRelationship(state.learned.relationship.items);
+      renderCounts();
+    };
+    var source = document.createElement('span');
+    source.textContent = ({ lan: '你确认的', evidence: '有来源可查', peter: '他自己的理解（未确认）' })[item.source] || '';
+    // Review fix: the smallest evidence a relationship item keeps is visible, not implicit.
+    if (item.sources && item.sources.length) source.title = '来源：' + item.sources.join('、');
+    var remove = document.createElement('button');
+    remove.type = 'button';
+    remove.textContent = '删除';
+    remove.onclick = function () { removeRelationship(item, remove); };
+    meta.append(status, source, remove);
+    return meta;
+  }
+  async function removeRelationship(item, button) {
+    if (!button.dataset.armed) {
+      button.dataset.armed = '1';
+      button.textContent = '再点一次删除';
+      setTimeout(function () {
+        if (!button.isConnected) return;
+        delete button.dataset.armed;
+        button.textContent = '删除';
+      }, 4000);
+      return;
+    }
+    delete button.dataset.armed;
+    button.disabled = true;
+    state.learned.relationship.items = (state.learned.relationship.items || []).filter(function (row) {
+      return row.id !== item.id;
+    });
+    renderRelationship(state.learned.relationship.items);
+    renderCounts();
+    mark('relationship');
+    if (!await save('relationship')) {
+      dirty.delete('relationship');
+      unmark('relationship');
+      await load();
+      showError('这条没有删掉（原因见上）。列表已按硬盘上的内容重新读取。');
+    }
+  }
+  function addRelationship() {
+    if (!state || !state.learned) return;
+    state.learned.relationship = state.learned.relationship || { updated_at: '' };
+    state.learned.relationship.items = state.learned.relationship.items || [];
+    state.learned.relationship.items.push({
+      id: 'new-' + (window.crypto && window.crypto.randomUUID
+        ? window.crypto.randomUUID()
+        : Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10)),
+      text: '',
+      status: 'confirmed',
+      source: 'lan'
+    });
+    renderRelationship(state.learned.relationship.items);
+    renderCounts();
+    mark('relationship');
+  }
   function renderDone(done) {
     var details = $p('peter-ongoing-done');
     var list = $p('peter-ongoing-done-list');
@@ -189,6 +302,10 @@
       state.learned.ongoing.items.filter(isOpen).forEach(function (item) {
         used += new TextEncoder().encode(item.text || '').length;
       });
+      // Ticket 422: outdated relationship rows are history; only current ones take the budget.
+      ((state.learned.relationship && state.learned.relationship.items) || []).forEach(function (item) {
+        if (item.status !== 'outdated') used += new TextEncoder().encode(item.text || '').length;
+      });
     }
     var max = state && state.learned ? state.learned.max_bytes : 4000;
     $p('peter-learned-total').textContent = used + ' / ' + max + ' 字节';
@@ -225,6 +342,13 @@
         l.ongoing.items = previous.learned.ongoing.items;
       } else {
         renderOngoing((l.ongoing && l.ongoing.items) || []);
+      }
+      $p('peter-relationship-saved').textContent = shortTime(l.relationship && l.relationship.updated_at);
+      if (pending.has('relationship') && previous && previous.learned && previous.learned.relationship) {
+        l.relationship = l.relationship || {};
+        l.relationship.items = previous.learned.relationship.items;
+      } else {
+        renderRelationship((l.relationship && l.relationship.items) || []);
       }
       renderCounts();
     } else {
@@ -270,12 +394,25 @@
       // A row added with 新增 and left empty would make the whole save fail ("正文为空").
       items: state.learned.ongoing.items.filter(function (item) { return (item.text || '').trim(); }),
       expected_updated_at: state.learned.ongoing.updated_at };
+    if (card === 'relationship') return { action: 'save_relationship',
+      items: (state.learned.relationship.items || []).filter(function (item) { return (item.text || '').trim(); }),
+      expected_updated_at: state.learned.relationship.updated_at };
     return null;
   }
   async function doSave(card, renderPage) {
     var body = payload(card);
     if (!body) return false;
     var revision = revisions[card] || 0;
+    // Review: while another card's save is in flight, Lan may still be editing the relationship rows.
+    // Keep that local state instead of letting the server response become what a queued save reads.
+    var keepRelationship = card !== 'relationship' && dirty.has('relationship')
+      && state && state.learned && state.learned.relationship;
+    var keptItems = keepRelationship
+      ? state.learned.relationship.items.map(function (row) { return Object.assign({}, row); })
+      : null;
+    // Review: keep the timestamp paired with those rows. If the chat changed this block meanwhile,
+    // the next save still fails its concurrency check instead of silently overwriting that change.
+    var keptUpdatedAt = keepRelationship ? state.learned.relationship.updated_at : null;
     $p('peter-status').textContent = '保存中…';
     try {
       var data = await request(body);
@@ -284,8 +421,13 @@
         dirty.delete(card);
         unmark(card);
       }
-      state = data;
+      if (keptItems && data.learned && data.learned.relationship) {
+        data.learned.relationship.items = keptItems;
+        data.learned.relationship.updated_at = keptUpdatedAt;
+      }
+      // render() remembers the pre-request state as "previous", so pending edits are not overwritten.
       if (renderPage !== false) render(data);
+      else state = data;
       $p('peter-status').textContent = '已保存 · ' + new Date().toLocaleTimeString();
       return true;
     } catch (error) {
@@ -350,6 +492,8 @@
       renderOngoing(state.learned.ongoing.items);
       mark('ongoing');
     };
+    $p('peter-relationship-save').onclick = function () { save('relationship'); };
+    $p('peter-relationship-add').onclick = addRelationship;
     $p('peter-persona-restore').onclick = function () { restore('persona', 'peter-persona-versions'); };
     $p('peter-background-restore').onclick = function () { restore('background', 'peter-background-versions'); };
     window.addEventListener('beforeunload', function (event) {

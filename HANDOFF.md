@@ -1,6 +1,34 @@
 # HANDOFF
 
-## 工单 421 交接（新经历接回旧故事、完整保存、可恢复）
+## 工单 422 交接（稳定关系底色 + 自然联想）
+
+- 工单：`docs/tickets/422-relationship-base.md`；分支 `ticket/422-relationship-base`，从 `origin/main`
+  `59e6594`（#421 合并提交）开的独立 worktree（`worktrees/422-relationship-base`）。正式运行目录保持
+  main，没改正式库、没动 68 篇定稿。
+- 改法：`learned-context.json` 新增可选 `relationship` 段（`confirmed` / `uncertain` / `outdated` +
+  来源）；`relationship_base.py` 只渲染仍然有效的整条，默认 480 字 / 8 条，作为独立 system 块
+  （标签 `relationship_base`）进请求必需块；`outdated` 只在文件里当历史。
+- 弱联想：`natural_association.py` 用确定性打分替换了原来的 `random_chance` 抽签（重要度、距上次浮现、
+  冷却、是否已在请求里、句子是否轻松）。`random_chance = 0` 仍可关掉弱联想；概率值不再使用。
+  `memory_agent.context()` 里 `kind: random` 改为 `kind: association`，诊断字段 `natural_association`。
+- 诊断：`relationship_base`（chars/tokens/items/statuses/dropped/degraded/reason/space_tokens）、
+  `relevant_recall`、`natural_association`、`association`（候选数/被选/舍弃原因）、`reused`（追问承接）。
+  上下文页和 Peter 页都已接。
+- 复审返工（2026-11-23）：判官成功不再清空 `drift`（只去重）；联想候选池改为 Ombre 重要度序列
+  `breath()`（会话内缓存）+ 低优先随机浮现，随机项固定扣 20 分；`save_relationship` 按 id 逐条比较，
+  只把 Lan 改过的条目记成 `lan`；关系条目新增 `sources` 证据引用，`confirmed` 必须有可校验来源
+  （`chat:<id>` 反查本角色聊天记录），否则降级成 `uncertain`/`peter` 并在结果里说明。`random_chance`
+  完全不读了，关联想只用 `association_enabled = false`。
+- 验证：`tests/test_relationship_422.py` 26 条、`test_recall_judge.py` 32 条（含两条新回归）、全部
+  `test_recall_*` 234 条、learned context 与 prompt／tool budget／live context 75 条、chat 107、
+  autonomy 52、桌面 20 条通过。规模与 token 数字见 STATUS「已验证」。
+- 没做：真实模型抽查（本单 0 次额外调用、0 费用）；QQ、手机端、正式 68 篇迁移（第五步）。
+- 复审返工（2026-11-23 第一次）：判官空选择不再清空联想；候选池改为 Ombre 重要度序列 + 低优先随机；
+  页面按 id 保留来源；关系条目带证据引用，confirmed 需可校验来源。Cubic 32 条已按「实质问题修、
+  风格类说明」处理，详见本 PR 评论与 `docs/tickets/422-relationship-base.md`「复审返工」。
+- 下一步：等 CI 和 Lan 复审；她按工单六步在 Windows 本体体验。本单不合并、不提前做第五步。
+
+## 工单 421 交接（历史；已于 2026-11-22 合并 `59e6594`）
 
 - 工单：`docs/tickets/421-memory-continuation.md`；分支 `ticket/421-memory-continuation`，从 `origin/main` d0bc837 开的独立 worktree（`worktrees/421-memory-continuation`）。正式运行目录保持 main，没改源码、没动正式库和定稿。
 - 打开事件层：`characters/peter/character.toml` 增加 `[memory.events] enabled = true`。关掉即回一条保存一条记忆的旧路径；已写的事件/阶段留在本机，可再开。
@@ -10,7 +38,7 @@
 - 同 PR 带上 419 导入回滚修复：首次导入即使目标为空也创建空快照；写入异常或进程中断后可恢复并重试，不留下卡死 marker。
 - 已验证：记忆、后台整理、召回、聊天、预算账本和导入恢复核心回归 799 条通过（跳过 1）；桌面 UI 守卫 19 条通过。补测确认：pending 中断后重词重试仍是一个阶段；两个 journal 行只提交最新一条；关闭事件不会反复触发模型；后台更新冲突不写 checkpoint。68 篇定稿的原隔离装载和真实模型证据仍保留。正式库和正式运行目录未动。
 - 没做/未验证：Lan 的 Windows 桌面体验；正式 68 篇迁移；真实 QQ 收发、桌面真机、语音。旧记忆尚未正式转成事件，因此迁移前的新发展可能另起事件。
-- 下一步：本轮两项定点修复已提交，PR #421 保持 open，等待 CI 与 Lan 审核；本轮不合并。
+- 下一步（已完成）：PR #421 已合并（`59e6594`）；正式 68 篇迁移与 Lan 的 Windows 真机体验另行安排。
 
 ## 仍然开着的尾巴（2026-11-21 按代码现状核对过）
 - Electron 冒烟没有 Peter 页用例（工单 413 留下）：本机跑不了 `npm run test:windows`，当时没交没验过的测试。要补：假的 `/api/peter-page` + 点新增/归档/删除/保存，断言请求体和列表变化。

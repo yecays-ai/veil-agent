@@ -340,3 +340,47 @@ test('event memories distinguish unknown occurrence dates from save times (ticke
   assert.match(js, /stage\.at_known===true\?`发生 [\s\S]*?:`日期未知（记于 \$\{strTime\(stage\.saved_at\|\|stage\.at\)\}）`/);
   assert.match(js, /story_pending\?'故事待整理':\(item\.dirty\?'投影待重试':''\)/);
 });
+
+// Ticket 422: one "recall = 0" must not read as "no relationship background this turn", and the
+// stable base has to be editable from the Peter page (confirm, guess, no longer true).
+test('context diagnostics separate the relationship base, related recall and natural association (ticket 422)', async () => {
+  const [js, html, page] = await Promise.all([read('chat.js'), read('chat.html'), read('peter-page.js')]);
+  assert.match(js, /关系底色/);
+  assert.match(js, /相关召回/);
+  assert.match(js, /自然联想/);
+  assert.match(js, /没有自然浮现/);
+  assert.match(html, /id="peter-relationship"/);
+  assert.match(html, /id="peter-relationship-save"/);
+  assert.match(page, /action: 'save_relationship'/);
+  assert.match(page, /'不再适用'/);
+  // Review fix: an item's evidence stays visible on the page, and her own edit is the only one relabelled.
+  assert.match(page, /有来源可查/);
+  assert.match(page, /item\.sources\.join/);
+  // Review: a preserved relationship row keeps its old timestamp, so a concurrent chat change is
+  // still caught by the concurrency check instead of being overwritten.
+  assert.match(page, /data\.learned\.relationship\.updated_at = keptUpdatedAt/);
+});
+
+// Ticket 422 review: assert the actual summary strings, not just that a word exists in the file.
+// An old diagnostic row that has no relationship_base field must not read as "0 items".
+test('the recall summary keeps base, recall and association apart (ticket 422)', async () => {
+  const src = await read('chat.js');
+  const extract = name => {
+    const match = src.match(new RegExp('function ' + name + '\\(r\\)\\{[\\s\\S]*?\\n\\}'));
+    assert.ok(match, name + ' not found');
+    return new Function(match[0] + '; return ' + name + ';')();
+  };
+  const recallText = extract('recallText');
+  assert.match(recallText({ relationship_base: { items: ['r1', 'r2'], chars: 20 }, ombre: [], dropped: [] }),
+    /关系底色 2 条/);
+  assert.match(recallText({ relationship_base: { items: [], reason: 'no_items' }, ombre: [], dropped: [] }),
+    /关系底色 0 条（no_items）/);
+  const old = recallText({ ombre: [], dropped: [] });
+  assert.match(old, /关系底色未记录/);
+  assert.doesNotMatch(old, /关系底色 0 条/);
+  const details = extract('recallDetails');
+  assert.match(details({ relationship_base: { items: ['r1'], chars: 5, tokens: 2 } }),
+    /关系底色：1 条/);
+  assert.match(details({ carried: ['u1'] }), /追问承接/);
+  assert.match(details({}), /关系底色：未记录/);
+});

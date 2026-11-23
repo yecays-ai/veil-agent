@@ -31,6 +31,12 @@ DEFAULTS = {
     'directory': True,
     'directory_members': 6,
     'stage_slots': 2,
+    # Ticket 422: weak natural association. It is scored (importance, time since it last surfaced,
+    # cooldown, room in this moment), not drawn: no fixed frequency and no per-turn probability.
+    'association_enabled': True,
+    'association_min_importance': 4,
+    'association_cooldown_turns': 8,
+    'association_light_chars': 40,
 }
 EVENT_LINKS = frozenset({'same_event', 'continuation_of', 'continues'})   # everything that joins an experience
 REPEAT_LINKS = frozenset({'same_event'})                                # the same thing twice: shown once
@@ -51,7 +57,8 @@ def settings(memory_cfg):
     result = dict(DEFAULTS)
     if raw.get('enabled') is False:
         return {**result, 'cooldown_turns': 0, 'dedup': False, 'excerpt_chars': 0,
-                'random_chance': 0.0, 'rotation_candidates': 0, 'directory': False}
+                'random_chance': 0.0, 'rotation_candidates': 0, 'directory': False,
+                'association_enabled': False}
     for key in ('cooldown_turns', 'excerpt_chars', 'rotation_candidates'):
         value = raw.get(key)
         if type(value) is int and 0 <= value <= 10_000:
@@ -69,6 +76,14 @@ def settings(memory_cfg):
         value = raw.get(key)
         if type(value) in (int, float) and 0 <= value <= 1:
             result[key] = float(value)
+    if type(raw.get('association_enabled')) is bool:
+        result['association_enabled'] = raw['association_enabled']
+    for key, low, high in (('association_min_importance', 0, 10),
+                           ('association_cooldown_turns', 0, 200),
+                           ('association_light_chars', 8, 400)):
+        value = raw.get(key)
+        if type(value) is int and low <= value <= high:
+            result[key] = value
     if result['excerpt_chars'] and result['excerpt_chars'] < 120:
         result['excerpt_chars'] = 120  # shorter than this cannot carry a recognisable opening
     return result
@@ -355,6 +370,15 @@ class Cooldown:
         last = state.get('last')
         self.last = {key: value for key, value in (last.items() if isinstance(last, dict) else [])
                      if isinstance(key, str) and type(value) is int and 0 <= value <= self.turn}
+        # Ticket 422 review: the last weak association and how many times in a row it was the one that
+        # surfaced. A memory that keeps being the only candidate gets a growing gap instead of a cadence.
+        association = state.get('association')
+        association = association if isinstance(association, dict) else {}
+        self.association = {
+            'key': association.get('key') if isinstance(association.get('key'), str) else '',
+            'turn': association.get('turn') if type(association.get('turn')) is int else -1,
+            'repeat': association.get('repeat')
+            if type(association.get('repeat')) is int and 0 <= association.get('repeat') <= 8 else 0}
 
     def cooled(self, key, turns):
         return bool(turns) and key in self.last and self.turn - self.last[key] <= turns
@@ -369,5 +393,26 @@ class Cooldown:
     def forget(self, key):
         self.last.pop(key, None)
 
+    def previous_association(self):
+        return dict(self.association)
+
+    def restore_association(self, state):
+        """Put the association streak back after a turn that delivered nothing."""
+        state = state if isinstance(state, dict) else {}
+        self.association = {
+            'key': state.get('key') if isinstance(state.get('key'), str) else '',
+            'turn': state.get('turn') if type(state.get('turn')) is int else -1,
+            'repeat': state.get('repeat')
+            if type(state.get('repeat')) is int and 0 <= state.get('repeat') <= 8 else 0}
+
+    def mark_association(self, key, turn):
+        """Remember which memory surfaced by itself, and for how many turns in a row."""
+        if key and key == self.association.get('key'):
+            self.association['repeat'] = min(self.association['repeat'] + 1, 8)
+        else:
+            self.association['repeat'] = 1 if key else 0
+        self.association['key'] = key or ''
+        self.association['turn'] = turn
+
     def snapshot(self):
-        return {'turn': self.turn, 'last': dict(self.last)}
+        return {'turn': self.turn, 'last': dict(self.last), 'association': dict(self.association)}

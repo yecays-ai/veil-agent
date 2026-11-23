@@ -525,6 +525,8 @@ class Memory:
         self.last_context_kinds = {}
         self.last_recall_skipped = {'cooldown': 0, 'same_event': 0, 'stage_cap': 0, 'budget': 0}
         self.last_recall_marks = None
+        # Ticket 422 review: the association streak is only committed once this turn really delivers.
+        self.last_association_marks = None
         # Ticket 419: the memories the previous turn actually injected (for an immediate follow-up)
         # and the budget report of the last finished recall.
         self.last_injected_refs = []
@@ -1238,8 +1240,16 @@ class Memory:
         so an immediate follow-up or a retry can still use it."""
         with self.mutex:
             marks, self.last_recall_marks = self.last_recall_marks, None
+            association = getattr(self, 'last_association_marks', None)
+            self.last_association_marks = None
+            if association is not None and hasattr(self.rotation, 'restore_association'):
+                # The association never reached her (error, stop, empty answer), so its cooldown
+                # streak must not grow as if it had been shown.
+                self.rotation.restore_association(association)
             self.last_injected_refs = list(getattr(self, '_previous_injected_refs', []) or [])
             if not marks:
+                if association is not None:
+                    self._save_rotation()
                 return
             for key, previous in marks.items():
                 if previous is None:
@@ -1415,6 +1425,8 @@ class Memory:
         self.last_assisted = None
         self.last_recall_skipped = {'cooldown': 0, 'same_event': 0, 'stage_cap': 0, 'budget': 0}
         self.last_recall_marks = None
+        # Ticket 422 review: the association streak is only committed once this turn really delivers.
+        self.last_association_marks = None
         self.last_memory_budget = None
         self._pending_recall = None
         # Ticket 391: one read-only record of where each candidate went. IDs and reasons only, never text.
@@ -1422,7 +1434,11 @@ class Memory:
             (query or '').encode('utf-8')).hexdigest()[:12], 'ombre': [], 'hidden': [], 'vector': [],
             'judge': {'status': 'skipped', 'candidates': 0, 'picked': []}, 'dropped': [],
             'injected': [], 'opening': [], 'budget_dropped': [], 'failure': '',
-            'followup': False, 'reused': [], 'items': [], 'budget': {}}
+            'followup': False, 'reused': [], 'items': [], 'budget': {},
+            # Ticket 422: three separate paths plus the base that is always carried, and the reason
+            # each natural-association candidate was passed over.
+            'relationship_base': {}, 'relevant_recall': [], 'natural_association': [],
+            'association': {}, 'carried': []}
         recall_cfg = self.recall_settings
         explicit = asks_about_past(query) and not (rotate or wake)
         cooldown = 0 if explicit else recall_cfg['cooldown_turns']
@@ -1437,6 +1453,15 @@ class Memory:
         drift = []
         pool = []
         judged = False
+        # Ticket 422 review: weak association needs a candidate pool that is not only Ombre's random
+        # "忽然想起来". Ombre's `breath` (its own importance-ordered list, already fetched for the
+        # opening and cached for this conversation) is that pool; the random drift stays available as
+        # a lower-priority extra. No extra model call, no whole-library scan by us.
+        try:
+            breath_blocks = blocks(self.opening)
+        except Exception as exc:
+            self.retrieval_failure('association_pool', exc)
+            breath_blocks = []
         settings = self.assisted_settings(query, recent) if not (rotate or wake) else None
         judge = (self.judge if self.judge is not None and (wake or not rotate and not widen and not settings)
                  and query.strip() else None)
@@ -1478,7 +1503,8 @@ class Memory:
                 judged = True
                 self.last_recall_debug['judge'] = dict(getattr(judge, 'last_choice', {}) or {})
                 self.last_recall_debug['vector'] = list(self.last_recall_debug['judge'].get('vector') or [])
-                drift = []   # a recollection nobody judged would be a way around "none fits"
+                # Review fix: "nothing relevant to her sentence" is an answer about related recall only.
+                # It no longer vetoes a memory that surfaces on its own; the two paths are deduped below.
             except JudgeFailed:
                 self.last_recall_debug['judge'] = {'status': 'failed', 'candidates': 0, 'picked': []}
                 if wake:
@@ -1501,12 +1527,12 @@ class Memory:
             normal[:1] + emotional[:1] + normal[1:] + emotional[1:],
             failure_stage='recall_visibility')
         try:
-            opening_candidates = blocks(self.opening) if include_opening else []
+            opening_candidates = breath_blocks if include_opening else []
         except Exception as exc:
             self.retrieval_failure('opening', exc)
             opening_candidates = []
         opening_visible = self.context_visible(opening_candidates, failure_stage='opening_visibility')
-        metas = self._recall_meta([key for key, _ in combined + opening_visible + drift])
+        metas = self._recall_meta([key for key, _ in combined + opening_visible + breath_blocks + drift])
         if wake:
             candidates = list(dict(combined).items())
         elif widen:
@@ -1606,16 +1632,68 @@ class Memory:
                 kinds[key] = 'relevant'
             elif widen:
                 kinds[key] = 'rotation'
-        if (not wake and drift and len(kept) < 3 and recall_cfg['random_chance']
-                and self.rng.random() < recall_cfg['random_chance']):
-            for key, body in self.context_visible(drift, failure_stage='recall_visibility'):
-                shown = {other for other, _ in kept}
-                if key not in shown and not cooled(key) and not duplicate(key, kept):
-                    kept.append((key, '(Random recollection, not a search hit: an old memory that surfaced '
-                                      'on its own.)\n' + body))
-                    sources[key] = 'random'
-                    kinds[key] = 'random'
-                    break
+        if not wake and not widen and not explicit and not followup:
+            # Ticket 422: weak natural association. Candidates come from Ombre's own importance-ordered
+            # list (its `breath`, already cached for this conversation) plus the random "忽然想起来"
+            # hits as a lower-priority extra; which one, or none, comes from importance, time since it
+            # last surfaced, the cooldown, the room this moment leaves and what this request already
+            # carries. No dice, and no dependence on the judge's relevance verdict.
+            from natural_association import choose as choose_association
+            shown = {other for other, _ in kept}
+            origin = {}
+            pool_rows = []
+            for key, body in breath_blocks:
+                origin.setdefault(key, 'importance')
+                pool_rows.append((key, body))
+            for key, body in drift:
+                origin.setdefault(key, 'drift')
+                pool_rows.append((key, body))
+            visible_pool = self.context_visible(pool_rows, failure_stage='recall_visibility')
+            considered = []
+            association_dropped = []
+            for key, body in visible_pool:
+                if key in shown:
+                    association_dropped.append({'id': key, 'reason': 'duplicate'})
+                elif cooled(key):
+                    association_dropped.append({'id': key, 'reason': 'cooldown'})
+                elif duplicate(key, kept):
+                    association_dropped.append({'id': key, 'reason': 'same_event'})
+                else:
+                    considered.append((key, body))
+            previous = (self.rotation.previous_association()
+                        if hasattr(self.rotation, 'previous_association') else None)
+            choice = choose_association(query, considered, metas, self.rotation.last,
+                                       self.rotation.turn, shown, recall_cfg, origin=origin,
+                                       previous=previous)
+            association_dropped.extend(choice['dropped'])
+            listed = association_dropped[:40]
+            self.last_recall_debug['association'] = {
+                'candidates': len(visible_pool),
+                'from_importance': len({key for key, _ in breath_blocks}),
+                'from_drift': len({key for key, _ in drift}),
+                'picked': [choice['key']] if choice['key'] else [],
+                'dropped': listed,
+                'dropped_more': (max(0, len(association_dropped) - len(listed))
+                                 + int(choice.get('dropped_more') or 0)),
+                'reason': choice['reason'] or ''}
+            if choice['key']:
+                kept.append((choice['key'],
+                             prompts.text('memory.association.label') + '\n' + choice['body']))
+                sources[choice['key']] = 'association'
+                kinds[choice['key']] = 'association'
+                if hasattr(self.rotation, 'mark_association'):
+                    with self.mutex:
+                        # Keep what it was, so a turn that delivers nothing can take the streak back.
+                        self.last_association_marks = (
+                            self.rotation.previous_association()
+                            if hasattr(self.rotation, 'previous_association') else None)
+                        self.rotation.mark_association(choice['key'], self.rotation.turn)
+                    self._save_rotation()
+        if not self.last_recall_debug.get('association'):
+            self.last_recall_debug['association'] = {
+                'candidates': 0, 'from_importance': len({key for key, _ in breath_blocks}),
+                'from_drift': len({key for key, _ in drift}), 'picked': [], 'dropped': [],
+                'reason': 'no_candidates' if not (breath_blocks or drift) else 'not_applicable'}
         if opening_visible:
             pinned = [item for item in opening_visible if '核心准则' in item[1].split('\n', 1)[0]
                       or str(metas.get(item[0], {}).get('pinned', '')).lower() == 'true']
@@ -1666,7 +1744,7 @@ class Memory:
                 text = text + '\n' + directory
             source = sources.get(key, 'search')
             blocks_out.append({'id': key, 'group': 'recall', 'text': text,
-                               'priority': 900 if source == 'random' else 10 + index,
+                               'priority': 900 if source in ('random', 'association') else 10 + index,
                                'source': source, 'event_id': event_id, 'pointer': pointer_text,
                                'kind': kinds.get(key, 'search')})
         for index, (key, body) in enumerate(opening_shown):
@@ -1821,6 +1899,15 @@ class Memory:
                            'read_id': item['id'], 'event': item.get('event_id') or '',
                            'story': bool(item.get('story'))}
                           for item in opening_items + recall_items]
+        # Ticket 422: the four things a recall summary has to keep apart, so one "recall = 0" can never
+        # again read as "he has no relationship background this turn".
+        debug['relevant_recall'] = [item['id'] for item in recall_items
+                                    if item.get('kind') in ('search', 'feel', 'context', 'relevant',
+                                                            'rotation')]
+        debug['natural_association'] = [item['id'] for item in recall_items
+                                        if item.get('kind') == 'association']
+        debug['carried'] = [item['id'] for item in recall_items
+                            if item.get('source') == 'followup']
         debug['budget'] = {**plan, 'memory_allowance': memory_allowance,
                            'memory_used': memory_used, 'history_allowance': history_allowance,
                            'auxiliary_allowance': auxiliary_allowance}
