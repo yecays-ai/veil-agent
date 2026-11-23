@@ -197,53 +197,57 @@ class LearnedContext:
 
     # ---------- evidence ----------
 
-    def _known_chat_ids(self, limit=600, max_bytes=512 * 1024):
-        """Message ids from the tail of this role's chat log, for checking a `chat:` evidence reference.
+    def _chat_user_messages(self, ids):
+        """Which of these ids are real messages Lan sent, checked against the whole chat log.
 
-        Bounded on purpose: evidence is checked against what was actually said recently, never by
-        scanning the whole history. An unreadable log means "cannot verify", which never upgrades a
-        claim."""
+        Streams the file (bounded memory, stops early once every id is found) instead of reading only
+        the tail, so an old `chat:` reference stays real evidence. Only `role == "user"` counts:
+        Peter's own reply cannot confirm his guess."""
+        wanted = {value for value in ids if isinstance(value, str) and value}
+        found = set()
+        if not wanted:
+            return found
         path = self.root / 'chat.jsonl'
         try:
-            with path.open('rb') as handle:
-                handle.seek(0, os.SEEK_END)
-                size = handle.tell()
-                handle.seek(max(0, size - max_bytes))
-                raw = handle.read().decode('utf-8', 'replace')
+            with path.open('r', encoding='utf-8', errors='replace') as handle:
+                for line in handle:
+                    if not wanted:
+                        break
+                    try:
+                        row = json.loads(line)
+                    except ValueError:
+                        continue
+                    if not isinstance(row, dict) or row.get('role') != 'user':
+                        continue
+                    message_id = row.get('message_id')
+                    if message_id in wanted:
+                        found.add(message_id)
+                        wanted.discard(message_id)
         except OSError:
             return set()
-        ids = set()
-        for line in raw.splitlines()[-limit:]:
-            try:
-                row = json.loads(line)
-            except ValueError:
-                continue
-            message_id = row.get('message_id') if isinstance(row, dict) else None
-            if isinstance(message_id, str) and message_id:
-                ids.add(message_id)
-        return ids
+        return found
 
     def _verified_sources(self, sources):
-        """Keep only evidence references this program can check; report what was dropped.
+        """Split evidence references into what this program can check and what it cannot.
 
-        A `chat:` reference must name a real message in this role's own chat log. Memory/event
-        references are kept as pointers (the event ledger owns them); they are only accepted as
-        supporting evidence together with a verified chat reference."""
-        valid, dropped = [], []
-        chat_ids = None
+        - `chat:` must name a real message Lan sent; that is the only reference that can promote a
+          claim to `confirmed`.
+        - `memory:`/`event:`/`long_task:` are kept as pointers for traceability, but they do not
+          promote anything on their own: the ledger that owns them is not verified here."""
+        chat_ids, pointers, dropped = [], [], []
         for source in sources or []:
             if not isinstance(source, str) or not SOURCE_REF.fullmatch(source):
                 dropped.append(str(source))
                 continue
             kind, _, value = source.partition(':')
             if kind == 'chat':
-                if chat_ids is None:
-                    chat_ids = self._known_chat_ids()
-                if value not in chat_ids:
-                    dropped.append(source)
-                    continue
-            valid.append(source)
-        return list(dict.fromkeys(valid)), dropped
+                chat_ids.append(value)
+            else:
+                pointers.append(source)
+        verified = self._chat_user_messages(chat_ids)
+        kept_chat = [f'chat:{value}' for value in chat_ids if value in verified]
+        dropped.extend(f'chat:{value}' for value in chat_ids if value not in verified)
+        return list(dict.fromkeys(kept_chat)), list(dict.fromkeys(pointers)), dropped
 
     def _relationship_provenance(self, status, sources):
         """Ticket 422 review: a claim is only consensus when the program can point at why.
@@ -252,12 +256,15 @@ class LearnedContext:
         - without one: whatever the model asked for, the item is Peter's own reading (`uncertain`,
           `peter`). Nothing is silently upgraded, and the tool result says why.
         """
-        verified, dropped = self._verified_sources(sources)
+        verified, pointers, dropped = self._verified_sources(sources)
+        kept = [*verified, *pointers]
         if verified:
             return {'status': 'confirmed' if status == 'confirmed' else 'uncertain',
-                    'source': 'evidence', 'sources': verified,
+                    'source': 'evidence', 'sources': kept,
                     'dropped_sources': dropped, 'downgraded': False}
-        return {'status': 'uncertain', 'source': 'peter', 'sources': [],
+        # No message of hers backs it: a memory/event pointer alone is not enough, so it stays his
+        # reading. Pointers are still kept so the note can be traced back later.
+        return {'status': 'uncertain', 'source': 'peter', 'sources': kept,
                 'dropped_sources': dropped, 'downgraded': status == 'confirmed'}
 
     def _content_bytes(self, data=None):

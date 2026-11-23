@@ -389,9 +389,6 @@ class BudgetTests(ProfileFixture):
         self.assertIn('Current agreement number 0', self.joined(call))
 
 
-if __name__ == '__main__':
-    unittest.main()
-
 
 class JudgeAndAssociationRequestTests(ProfileFixture):
     """Review 1: a working judge that says "nothing fits" must not switch natural association off."""
@@ -700,6 +697,37 @@ class DataSafetyTests(unittest.TestCase):
         self.assertIn({'id': 'b', 'reason': 'duplicate'}, chosen['dropped'])
 
 
+class NoteLineTests(DataSafetyTests):
+    """Third review: list markers are normalized without eating a negative sign."""
+
+    def test_a_negative_number_is_not_mistaken_for_a_bullet(self):
+        self.profile.save_section('facts', '-5°C mornings are hard for her.')
+        self.profile.save_relationship([
+            {'id': 'neg', 'text': '-5°C mornings are hard for her.', 'status': 'confirmed'},
+            {'id': 'plus', 'text': '5°C mornings are hard for her.', 'status': 'confirmed'}])
+        base = relationship_base.build(self.profile, {'max_chars': 480})
+        self.assertEqual(['plus'], [item['id'] for item in base['items']])
+        self.assertIn({'id': 'neg', 'reason': 'duplicate'}, base['dropped'])
+
+    def test_plus_and_numbered_note_lines_are_recognised(self):
+        self.profile.save_section('facts', '+ She keeps the balcony warm.\n2. She likes the market.')
+        self.profile.save_relationship([
+            {'id': 'balcony', 'text': 'She keeps the balcony warm.', 'status': 'confirmed'},
+            {'id': 'market', 'text': 'She likes the market.', 'status': 'confirmed'},
+            {'id': 'other', 'text': 'She comes home after seven.', 'status': 'confirmed'}])
+        base = relationship_base.build(self.profile, {'max_chars': 480})
+        self.assertEqual(['other'], [item['id'] for item in base['items']])
+
+
+class LegacyOptOutTests(unittest.TestCase):
+    """Third review: an existing random_chance = 0 configuration keeps associations off."""
+
+    def test_zero_still_switches_associations_off(self):
+        self.assertFalse(natural_association.settings({'random_chance': 0})['enabled'])
+        self.assertTrue(natural_association.settings({'random_chance': 0.1})['enabled'])
+        self.assertFalse(natural_association.settings({'association_enabled': False})['enabled'])
+
+
 class ConfigReachTests(unittest.TestCase):
     """Review 7: the documented [profile.relationship_base] table really reaches the request."""
 
@@ -840,3 +868,68 @@ class AssociationDiagnosticsTests(ProfileFixture):
         self.assertLessEqual(len(association['dropped']), 40)
         self.assertGreater(association['dropped_more'], 0)
         self.assertEqual(60, association['from_importance'])
+
+
+if __name__ == '__main__':
+    unittest.main()
+
+
+class EvidenceVerificationTests(EvidencePathTests):
+    """Third review: only Lan's own message can promote a claim; pointers alone cannot; old ids count."""
+
+    def test_peters_own_reply_is_not_evidence(self):
+        self.store.append('fake/chat.jsonl', {'role': 'assistant', 'message_id': 'm-peter',
+                                              'content': 'I think she loves mornings'})
+        result, state, _ = self.profile._invoke_profile(
+            'profile_append', {'section': 'relationship', 'text': 'She loves early mornings.',
+                               'status': 'confirmed', 'sources': ['chat:m-peter']})
+        self.assertEqual('成功', state)
+        item = self.profile.relationship_items()[0]
+        self.assertEqual('uncertain', item['status'])
+        self.assertEqual('peter', item['source'])
+        self.assertIn('m-peter', result)
+
+    def test_a_memory_or_event_pointer_alone_cannot_confirm(self):
+        result, state, _ = self.profile._invoke_profile(
+            'profile_append', {'section': 'relationship', 'text': 'She loves early mornings.',
+                               'status': 'confirmed',
+                               'sources': ['memory:abc123', 'event:ev-9']})
+        item = self.profile.relationship_items()[0]
+        self.assertEqual('uncertain', item['status'])
+        self.assertEqual('peter', item['source'])
+        # The pointers are kept for traceability, but the tool result says why it did not become current.
+        self.assertEqual(['memory:abc123', 'event:ev-9'], item['sources'])
+        self.assertIn('own reading', result)
+
+    def test_an_old_message_beyond_the_tail_still_counts(self):
+        path = self.store.root / 'fake' / 'chat.jsonl'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open('w', encoding='utf-8') as handle:
+            handle.write(json.dumps({'role': 'user', 'message_id': 'm-old',
+                                     'content': 'I really do love early mornings'}) + '\n')
+            for index in range(1200):
+                handle.write(json.dumps({'role': 'user', 'message_id': f'filler{index}',
+                                         'content': 'fictional chatter ' * 40}) + '\n')
+        self.profile._invoke_profile('profile_append',
+                                     {'section': 'relationship', 'text': 'She loves early mornings.',
+                                      'status': 'confirmed', 'sources': ['chat:m-old']})
+        item = self.profile.relationship_items()[0]
+        self.assertEqual('confirmed', item['status'])
+        self.assertEqual('evidence', item['source'])
+        self.assertEqual(['chat:m-old'], item['sources'])
+
+
+class AssociationRollbackTests(ProfileFixture):
+    """Third review: an association that never reached her must not keep its cooldown streak."""
+
+    def test_a_turn_that_delivered_nothing_restores_the_association_state(self):
+        self.rows = {'lamp': {'content': 'We fixed the brass lamp together and it finally worked.',
+                              'title': 'Brass lamp', 'importance': 9}}
+        chat, memory = self.build()
+        chat.opening_pending = False
+        before = memory.rotation.previous_association()
+        self.send(chat, '外面阴阴的。', message_id='roll1')
+        self.assertEqual(['lamp'], memory.last_recall_debug['natural_association'])
+        self.assertNotEqual(before, memory.rotation.previous_association())
+        memory.rollback_recall()                  # what a stopped/errored turn does
+        self.assertEqual(before, memory.rotation.previous_association())

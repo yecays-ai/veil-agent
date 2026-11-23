@@ -44,8 +44,10 @@ def settings(recall_cfg):
     result = dict(DEFAULTS)
     if raw.get('association_enabled') is False or raw.get('enabled') is False:
         result['enabled'] = False
-    # The old `random_chance` key is ignored on purpose: it was a per-turn probability and there is
-    # no probability any more. A config that still sets it changes nothing here.
+    # Legacy opt-out: an install that switched the old random recall off with 0 keeps associations
+    # off after upgrading. The value is still not used as a probability.
+    if raw.get('random_chance') == 0:
+        result['enabled'] = False
     value = raw.get('association_min_importance')
     if type(value) is int and 0 <= value <= 10:
         result['min_importance'] = value

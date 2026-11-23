@@ -410,6 +410,9 @@
     var keptItems = keepRelationship
       ? state.learned.relationship.items.map(function (row) { return Object.assign({}, row); })
       : null;
+    // Review: keep the timestamp paired with those rows. If the chat changed this block meanwhile,
+    // the next save still fails its concurrency check instead of silently overwriting that change.
+    var keptUpdatedAt = keepRelationship ? state.learned.relationship.updated_at : null;
     $p('peter-status').textContent = '保存中…';
     try {
       var data = await request(body);
@@ -420,6 +423,7 @@
       }
       if (keptItems && data.learned && data.learned.relationship) {
         data.learned.relationship.items = keptItems;
+        data.learned.relationship.updated_at = keptUpdatedAt;
       }
       // render() remembers the pre-request state as "previous", so pending edits are not overwritten.
       if (renderPage !== false) render(data);

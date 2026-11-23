@@ -396,6 +396,15 @@ class Cooldown:
     def previous_association(self):
         return dict(self.association)
 
+    def restore_association(self, state):
+        """Put the association streak back after a turn that delivered nothing."""
+        state = state if isinstance(state, dict) else {}
+        self.association = {
+            'key': state.get('key') if isinstance(state.get('key'), str) else '',
+            'turn': state.get('turn') if type(state.get('turn')) is int else -1,
+            'repeat': state.get('repeat')
+            if type(state.get('repeat')) is int and 0 <= state.get('repeat') <= 8 else 0}
+
     def mark_association(self, key, turn):
         """Remember which memory surfaced by itself, and for how many turns in a row."""
         if key and key == self.association.get('key'):

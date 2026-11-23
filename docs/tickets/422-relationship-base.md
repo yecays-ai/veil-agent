@@ -39,7 +39,8 @@
 - 轻松闲聊门槛：超过 `association_light_chars`（默认 40 字）或带工作／报错／日志／部署等词的句子
   不会联想，低重要度的技术琐事也不会闯进吃饭闲聊。
 - 承接：沿用第二步／#419 已有的追问承接（`is_followup` + `last_injected_refs`）。上一轮出现的联想在
-  「后来呢／那我呢」这类追问里以 `followup` 复用（诊断记为 `reused`），不再重新检索；明显换话题时
+  「后来呢／那我呢」这类追问里仍会带入本轮（诊断记为 `carried`；`reused` 只表示「历史里已有、本轮
+  没重复粘贴」），不再重新检索；明显换话题时
   追问判定不成立，联想随之释放，回来按正常检索重新判断。没有新的会话状态机。
 - 联想不要求说出口：#422 只决定它是否进入视野，措辞由现有人设和回复模型决定。
 
@@ -70,13 +71,13 @@
 | `relationship_base.py` | 新增：稳定关系底色的选择与渲染、自身小预算、降级原因 |
 | `natural_association.py` | 新增：弱自然联想的确定性打分与门槛 |
 | `memory_agent.py` | 用打分替换随机抽取；诊断新增 `relationship_base` / `relevant_recall` / `natural_association` / `association` |
-| `recall_rotation.py` | `[memory.recall]` 新增联想配置项；`random_chance` 只作兼容开关 |
+| `recall_rotation.py` | `[memory.recall]` 新增联想配置项；`random_chance` 仅为了旧配置的“0 = 关”保留，不作概率使用 |
 | `veil_agent.py` | 请求组装里注入 `relationship_base` 块并记录诊断 |
 | `web_agent.py` | 上下文页透传新诊断；Peter 页 `save_relationship` |
 | `prompts/registry.py`, `prompts/defaults/memory.relationship_base.header.md`, `prompts/defaults/memory.association.label.md` | 两段新文字登记（可在「指令」页改） |
 | `desktop/chat.js`, `desktop/chat.html`, `desktop/peter-page.js` | 诊断显示四个分类；Peter 页「当前关系」卡片 |
 | `characters/peter/character.toml` | 新配置项注释（默认值不变） |
-| `tests/test_relationship_422.py` | 新验收测试 40 项（含两次复审） |
+| `tests/test_relationship_422.py` | 56 条用例（45 个测试方法，部分被子类继承） |
 | `tests/test_recall_judge.py` | 判官与联想互不否决、不重复注入的两条回归 |
 
 ## 首次复审返工（2026-11-23）
@@ -129,6 +130,20 @@ Lan 的审核意见指出四个根因，本 PR 已按项修复（未重写整体
 
 未采纳的 Cubic 建议：纯命名、注释风格与「再抽一层」类重构；不影响行为的不改。
 
+## 第三次复审（Cubic 17 条）处理（2026-11-23）
+
+- 证据：`chat:` 只认 `role == "user"`（Peter 自己的回复不能确认他的猜测），并且核对**整份**聊天记录
+  （流式读取，不再只看尾巴），旧消息也有效；`memory:`/`event:`/`long_task:` 只作为可追查指针保留，
+  **不能单独**把条目升级为 `confirmed`——没有她本人的消息引用就仍是 `uncertain`/`peter`。
+- 联想：`mark_association` 的状态随未送达的回合一起回滚（`rollback_association`），重试不会被当成
+  已经浮现过而错误延长 2/4/8 倍冷却。
+- 去重：只有「标记 + 空白」才算列表符号，`-5°C` 与 `5°C` 不再误判重复；`+` 和 `1.`/`1)` 编号行
+  也能正确归一化。
+- 旧配置：`random_chance = 0` 仍然关闭联想（升级后不会突然开始注入旧事）；该值仍不当概率使用。
+- 页面：保存别的卡片时保留关系条目的**旧时间戳**，并发改动仍会触发保存冲突而不是被静默覆盖。
+- 文档/行尾：修正测试条数、`random_chance` 描述、`retired`→`outdated`、`reused`/`carried` 的说法，
+  并把本 PR 触及的文件恢复成仓库使用的 LF 行尾（`git diff --check` 干净）。
+
 ## 验收（Lan 的 Windows 本体体验）
 
 1. 更新并重启后，打开一页「上下文」，随便聊一句和旧事无关的话（例如「今天下班有点累」）：
@@ -138,7 +153,7 @@ Lan 的审核意见指出四个根因，本 PR 已按项修复（未重写整体
 3. 把一条改成「不再适用」再保存：下一轮不再出现，但它还留在文件／版本记录里。
 4. 聊一件和旧事有真实联系的事（不说「还记得吗」），看他能不能自然接上完整经过；
    再聊一件完全无关的轻松小事，允许他这轮一条旧事都不提。
-5. 让一条联想出现后连续追问两轮（「后来呢」「那我呢」），看上下文页的「复用」；再明显换话题，
+5. 让一条联想出现后连续追问两轮（「后来呢」「那我呢」），看上下文页的「追问承接」；再明显换话题，
    确认它不再跟着；回到原话题时按正常检索重新判断。
 6. 观察几天：不应出现「每几轮必翻旧账」，也不应在你说工作报错时突然跳到无关旧事。
 

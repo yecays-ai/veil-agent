@@ -525,6 +525,8 @@ class Memory:
         self.last_context_kinds = {}
         self.last_recall_skipped = {'cooldown': 0, 'same_event': 0, 'stage_cap': 0, 'budget': 0}
         self.last_recall_marks = None
+        # Ticket 422 review: the association streak is only committed once this turn really delivers.
+        self.last_association_marks = None
         # Ticket 419: the memories the previous turn actually injected (for an immediate follow-up)
         # and the budget report of the last finished recall.
         self.last_injected_refs = []
@@ -1238,8 +1240,16 @@ class Memory:
         so an immediate follow-up or a retry can still use it."""
         with self.mutex:
             marks, self.last_recall_marks = self.last_recall_marks, None
+            association = getattr(self, 'last_association_marks', None)
+            self.last_association_marks = None
+            if association is not None and hasattr(self.rotation, 'restore_association'):
+                # The association never reached her (error, stop, empty answer), so its cooldown
+                # streak must not grow as if it had been shown.
+                self.rotation.restore_association(association)
             self.last_injected_refs = list(getattr(self, '_previous_injected_refs', []) or [])
             if not marks:
+                if association is not None:
+                    self._save_rotation()
                 return
             for key, previous in marks.items():
                 if previous is None:
@@ -1415,6 +1425,8 @@ class Memory:
         self.last_assisted = None
         self.last_recall_skipped = {'cooldown': 0, 'same_event': 0, 'stage_cap': 0, 'budget': 0}
         self.last_recall_marks = None
+        # Ticket 422 review: the association streak is only committed once this turn really delivers.
+        self.last_association_marks = None
         self.last_memory_budget = None
         self._pending_recall = None
         # Ticket 391: one read-only record of where each candidate went. IDs and reasons only, never text.
@@ -1671,6 +1683,10 @@ class Memory:
                 kinds[choice['key']] = 'association'
                 if hasattr(self.rotation, 'mark_association'):
                     with self.mutex:
+                        # Keep what it was, so a turn that delivers nothing can take the streak back.
+                        self.last_association_marks = (
+                            self.rotation.previous_association()
+                            if hasattr(self.rotation, 'previous_association') else None)
                         self.rotation.mark_association(choice['key'], self.rotation.turn)
                     self._save_rotation()
         if not self.last_recall_debug.get('association'):

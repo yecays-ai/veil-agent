@@ -57,7 +57,7 @@ input_cny_per_million = "0"
 # dedup = true              # one memory per event: Ombre same_event/continuation links or stored vectors >= dedup_similarity
 # dedup_similarity = 0.88
 # excerpt_chars = 0         # 0 = whole story; the request budget decides how many fit. An old positive value still limits each memory, cut at a paragraph/sentence boundary
-# random_chance = 0.1       # deprecated by ticket 422 and no longer read at all; weak association is not a probability
+# random_chance = 0.1       # legacy: still parsed, never used as a probability by ticket 422; 0 keeps association off for old configs
 # rotation_candidates = 8   # candidate pool for autonomous wakes; there is no fixed number shown
 # Ticket 422 weak natural association. It is scored, not drawn: importance, turns since it last
 # surfaced, cooldown, and whether this moment is light enough. There is no every-N-turns rule;
@@ -170,16 +170,16 @@ learned = true
 legacy_file = "about-lan.md"
 max_bytes = 4000
 # Ticket 422: the small stable relationship base carried into every normal request. It is built from
-# the relationship items (confirmed / uncertain / retired) in the same file, whole items only, and it
+# the relationship items (confirmed / uncertain / outdated) in the same file, whole items only, and it
 # is never dropped silently: a part that no longer fits is recorded as degraded. To change these
 # values, add this table right here (before the next section):
 # [profile.relationship_base]
 # enabled = true
 # max_chars = 480
 # max_items = 8
-# A relationship item only counts as current ("confirmed") when it carries a source the program can
-# check: chat:<message_id> from the chat log, or a memory/event pointer written alongside it. Peter's
-# own reading stays "uncertain"; Lan's edits on this page are always hers.
+# A relationship item only counts as current ("confirmed") when it cites a message Lan actually sent
+# (chat:<message_id>, verified against this role's chat log). A memory/event pointer alone is kept as
+# a trace but does not make it consensus. Peter's own reading stays "uncertain"; Lan's page edits are hers.
 
 [user_persona]
 # Ticket 394: Lan's own persona, separate from Peter's notes about her.

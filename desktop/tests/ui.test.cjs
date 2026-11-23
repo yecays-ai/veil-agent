@@ -356,6 +356,9 @@ test('context diagnostics separate the relationship base, related recall and nat
   // Review fix: an item's evidence stays visible on the page, and her own edit is the only one relabelled.
   assert.match(page, /有来源可查/);
   assert.match(page, /item\.sources\.join/);
+  // Review: a preserved relationship row keeps its old timestamp, so a concurrent chat change is
+  // still caught by the concurrency check instead of being overwritten.
+  assert.match(page, /data\.learned\.relationship\.updated_at = keptUpdatedAt/);
 });
 
 // Ticket 422 review: assert the actual summary strings, not just that a word exists in the file.

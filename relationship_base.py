@@ -17,6 +17,8 @@ existing store: no second memory engine, no new database.
   When anything is left out for space the result records `degraded` and why.
 - Notes already carried verbatim by facts/growth are not rendered twice.
 """
+import re
+
 import prompts
 
 DEFAULTS = {'enabled': True, 'max_chars': 480, 'max_items': 8}
@@ -46,9 +48,15 @@ def _normal(text):
     return ' '.join(str(text or '').split())
 
 
+_NOTE_MARKER = re.compile(r'^(?:[-*+•]\s+|\d{1,3}[.)]\s+)')
+
+
 def _note_line(line):
-    """One note line, normalized, without a markdown bullet."""
-    return _normal(str(line).lstrip('-*• ').strip())
+    """One note line, normalized, without one markdown list marker.
+
+    Only a marker followed by whitespace is removed, so a value such as ``-5°C`` keeps its sign and
+    is not treated as the same note as ``5°C``."""
+    return _normal(_NOTE_MARKER.sub('', str(line).strip(), count=1))
 
 
 def _line(item):

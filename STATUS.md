@@ -25,7 +25,7 @@
 
 ## 已验证
 
-- 隔离假数据、假模型下 `tests/test_relationship_422.py` 40 条通过：关系底色进入真实组装请求（召回为 0
+- 隔离假数据、假模型下 `tests/test_relationship_422.py` 56 条通过：关系底色进入真实组装请求（召回为 0
   时仍在）、猜测与过时规则不冒充当前、X→Y 只按 Y 行动、话题相关仍给完整经过、无关闲聊只有底色、弱联想
   可空且确定性、工作话题不闯入、承接与换话题释放、紧张预算下底色保留且降级可见；复审四项另有回归：
   判官空选择后联想仍进最终请求、判官选中的事件不重复、候选池来源与稳定性、页面逐条来源保留、
@@ -34,9 +34,13 @@
 - 第二次复审（Cubic 32 条）后补：畸形关系块拒绝、空 `updated_at` 并发检查、空白 `new_text` 拒绝、
   整行去重、`[profile.relationship_base]` 配置可达、页面改状态/删除落盘、候选正文工作门槛、重复浮现
   递增冷却、关闭联想逐条原因、紧张上限整条裁减、诊断 40 条上限、桌面测试直接断言诊断输出。
-- 桌面 UI 守卫 21 条通过（新增一条真正调用 `recallText`/`recallDetails` 断言输出的行为测试）。
-- 相关回归：全部 `test_recall_*` 233 条、`test_learned_context*` 15 条、`test_prompt_registry`／
-  `test_tool_budget`／`test_live_context` 60 条通过；桌面 UI 守卫 20 条通过（含「Peter 页用到的 id 都存在」）。
+- 桌面 UI 守卫 21 条通过（含一条真正调用 `recallText`/`recallDetails` 断言输出的行为测试）。
+- 第三次复审（Cubic 17 条）后补：`chat:` 证据只认 Lan 本人消息并核对全量聊天记录（不再只看尾部）、
+  `memory:`/`event:` 指针不能单独升级成 `confirmed`、联想状态随未送达的回合回滚、`-5°C` 与 `5°C`
+  不再误判重复、`+`/编号列表行也能去重、页面保留旧时间戳以免覆盖并发更新、`random_chance = 0`
+  的旧配置仍然关闭联想；本 PR 触及的文件统一恢复 LF 行尾（`git diff --check` 干净）。
+- 相关回归：全部 `test_recall_*` 234 条、`test_learned_context*` 15 条、`test_prompt_registry`／
+  `test_tool_budget`／`test_live_context` 75 条、chat 107、autonomy 52 通过。
 - 规模与成本（隔离测量）：关系底色 300／3000／10000 条时约 2.6／27／91 ms、峰值 34／286／878 KiB；
   弱联想 300／3000／10000 个候选约 0.6／5.6／18 ms、峰值 38／290／820 KiB。最坏情况（8 条、约 500 字符）
   的关系底色块约 226 tokens；没有当前条目时为 0。新增模型调用 0 次、额外费用 0。
