@@ -654,6 +654,16 @@ document.addEventListener('alpine:init', () => {
 });
 
 
+// The token in the first URL is only there to establish the HttpOnly cookie.
+try {
+  const clean = new URL(window.location.href);
+  if (clean.searchParams.has('t')) {
+    clean.searchParams.delete('t');
+    window.history.replaceState({}, '', clean.pathname + clean.search + clean.hash);
+  }
+} catch { /* keep the window usable even if history is unavailable */ }
+
+
 // Deep links land on a tab without the click that normally emits this event.
 document.addEventListener('alpine:initialized', () => {
   const tab = Alpine.store('nav')?.activeTab;

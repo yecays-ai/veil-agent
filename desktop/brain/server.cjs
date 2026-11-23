@@ -105,10 +105,6 @@ function loadBrain(dbPath) {
            pinned, protected, dont_surface, digested, resolved
     FROM memories
   `).all();
-  const versionCounts = new Map();
-  for (const row of db.prepare('SELECT memory_id, COUNT(*) AS n FROM versions GROUP BY memory_id').all()) {
-    versionCounts.set(row.memory_id, Number(row.n));
-  }
   const versionRows = db.prepare(`
     SELECT memory_id, seq, time, operation_reason, old_content
     FROM versions ORDER BY memory_id, seq
@@ -142,7 +138,7 @@ function loadBrain(dbPath) {
     FROM event_sources es
     LEFT JOIN memories m ON m.id = es.memory_id
     LEFT JOIN events e ON e.event_id = es.event_id
-    WHERE es.memory_id IS NOT NULL AND m.id IS NULL
+    WHERE es.memory_id IS NOT NULL AND (m.id IS NULL OR m.is_deleted = 1)
   `).all();
 
   const memories = memoryRows.map((row) => {
@@ -205,7 +201,7 @@ function toItem(memory) {
       agent_id: 'peter',
       created_at_utc: iso(memory.created),
       last_accessed_at: iso(memory.lastActive),
-      memory_layer: '已整理',
+      memory_layer: 'consolidated',
       revision: memory.revision,
       revision_state: memory.statusLabel,
       validation_state: memory.protected ? '受保护' : '未校验',
@@ -522,12 +518,18 @@ function browse(brain, url) {
   let rows = brain.memories.filter((memory) => !memory.deleted);
   if (type) rows = rows.filter((memory) => memory.bucket === type);
   if (categories.length) rows = rows.filter((memory) => categories.every((name) => memory.domains.includes(name)));
+  const role = url.searchParams.get('role') || '';
+  const agent = url.searchParams.get('agent_id') || '';
+  if (role && role !== 'user') rows = [];
+  if (agent && agent !== 'peter') rows = [];
+  if (url.searchParams.get('has_artifacts') === 'true') rows = [];
+  if (url.searchParams.get('decayed_only') === 'true') rows = [];
   if (start) rows = rows.filter((memory) => memory.created && new Date(memory.created) >= new Date(start));
   if (end) rows = rows.filter((memory) => memory.created && new Date(memory.created) <= new Date(end));
   rows.sort((a, b) => {
-    const left = a.created || '';
-    const right = b.created || '';
-    return sort === 'oldest' ? left.localeCompare(right) : right.localeCompare(left);
+    const left = new Date(a.created || 0).getTime() || 0;
+    const right = new Date(b.created || 0).getTime() || 0;
+    return sort === 'oldest' ? left - right : right - left;
   });
   const page = rows.slice(offset, offset + limit);
   const nextOffset = offset + page.length;
@@ -538,14 +540,21 @@ function browse(brain, url) {
   };
 }
 
-function search(brain, query) {
-  const needle = String(query || '').trim().toLocaleLowerCase();
+function search(brain, body = {}) {
+  const needle = String(body.query || '').trim().toLocaleLowerCase();
   if (!needle) return [];
+  const limit = Math.min(50, Math.max(1, Number(body.limit) || 10));
+  const type = body.memory_type || '';
+  const categories = parseList(body.categories);
+  const role = body.role || '';
   return brain.memories
     .filter((memory) => !memory.deleted)
+    .filter((memory) => !type || memory.bucket === type)
+    .filter((memory) => !categories.length || categories.every((name) => memory.domains.includes(name)))
+    .filter((memory) => !role || role === 'user')
     .filter((memory) => memory.content.toLocaleLowerCase().includes(needle))
-    .sort((a, b) => (b.created || '').localeCompare(a.created || ''))
-    .slice(0, 50)
+    .sort((a, b) => (new Date(b.created || 0).getTime() || 0) - (new Date(a.created || 0).getTime() || 0))
+    .slice(0, limit)
     .map((memory) => ({ ...toItem(memory), score: 1 }));
 }
 
@@ -580,6 +589,11 @@ function sendJson(res, status, body) {
 function createServer({ dbPath, token = '' }) {
   const brain = loadBrain(dbPath);
   const server = http.createServer(async (req, res) => {
+    const localPort = req.socket.localPort;
+    const host = req.headers.host || '';
+    if (host !== `127.0.0.1:${localPort}` && host !== `localhost:${localPort}`) {
+      res.writeHead(403); res.end('forbidden host'); return;
+    }
     const url = new URL(req.url, 'http://127.0.0.1');
     const pathname = url.pathname;
 
@@ -626,19 +640,21 @@ function createServer({ dbPath, token = '' }) {
             .map(([name, count]) => ({ name, description: `${count} 条记忆`, count })),
         }); return;
       }
-      if (req.method === 'GET' && pathname === '/api/memories/browse') {
-        sendJson(res, 200, browse(brain, url)); return;
+      if (req.method === 'GET' && (pathname === '/api/memories' || pathname === '/api/memories/browse')) {
+        const page = browse(brain, url);
+        if (pathname === '/api/memories') page.results = page.results.slice(0, 500);
+        sendJson(res, 200, page); return;
       }
       if (req.method === 'POST' && pathname === '/api/memories/search') {
         const body = await readJsonBody(req);
-        sendJson(res, 200, { results: search(brain, body.query) }); return;
+        sendJson(res, 200, { results: search(brain, body) }); return;
       }
-      if (req.method === 'POST' && pathname === '/api/memories/find') {
+      if (req.method === 'POST' && (pathname === '/api/memories/find' || pathname === '/api/memories/ask')) {
         const body = await readJsonBody(req);
-        const results = search(brain, body.question);
+        const results = search(brain, body);
         sendJson(res, 200, {
           answer: `本地只读原型：按关键词找到 ${results.length} 条记忆。语义检索属于 P1，尚未接入。`,
-          results, count: results.length, queries: [String(body.question || '')], stats: {},
+          results, count: results.length, queries: [String(body.question || body.query || '')], stats: {},
         }); return;
       }
       if (req.method === 'POST' && pathname === '/api/memories/by-ids') {

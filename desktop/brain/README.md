@@ -8,7 +8,7 @@
 ```bash
 # 1) 单独跑服务（不启动桌面 App）
 node desktop/brain/server.cjs \
-  --db E:/Peter-Agent/VEIL/veil-agent/.local-tmp/brain-p0a/brain.db \
+  --db <agent root>/.local-tmp/brain-p0a/brain.db \
   --port 8799
 
 # 2) 桌面 App 内打开
@@ -39,7 +39,7 @@ node desktop/brain/server.cjs \
 - `GET /api/memories/:id/history`、`GET /api/memories/:id/links`
 - `POST /api/memories/search`、`POST /api/memories/find`（本地关键词，不是 P1 语义检索）
 - `POST /api/fsck`、`POST /api/fsck/auto-run`、`GET /api/fsck/:id`（本地确定性检查）
-- 其他路径一律 `403`，不会写入 brain.db。
+- 未带 token 的 `/api/` 请求返回 `401`；已认证的未知 `/api/` 路径和所有写操作返回 `403`；非 `/api/`、非 `/ui/` 路径返回 `404`。
 
 ## 数据映射
 
@@ -52,7 +52,7 @@ node desktop/brain/server.cjs \
 
 ## 安全
 
-- 服务只绑 `127.0.0.1`，端口随机；`/ui/` 与 `/api/` 需要一次性 token（URL → HttpOnly cookie）。
+- 服务只绑 `127.0.0.1`，端口随机；`/ui/` 与 `/api/` 需要进程级随机 token（首次 URL → HttpOnly cookie，随后从地址栏移除）。
 - 窗口只允许导航到该本地服务 origin；`nodeIntegration` 关闭，`sandbox` 打开。
 - 所有写接口返回 `403`；前端把编辑/删除/修复按钮隐藏（`ui/js/veil-readonly.js`）。
 - 不读取正式记忆 API，不改 `brain.db`，不影响 Peter 聊天和保存。

@@ -108,6 +108,18 @@ def patch_index() -> None:
         '  </style>\n</head>',
     )
 
+    # The read-only adapter always scans the whole brain; hide the scope
+    # controls instead of showing filters that cannot change the result.
+    text = replace_once(
+        text,
+        """        <!-- Filters -->
+        <div class="flex flex-wrap items-end gap-3 mb-6">
+          <!-- Agent filter -->""",
+        """        <!-- Filters -->
+        <div class="flex flex-wrap items-end gap-3 mb-6" x-show="false">
+          <!-- Agent filter -->""",
+    )
+
     labels = {
         '>Dashboard<': '>概览<',
         '>Auto-refresh<': '>自动刷新<',
@@ -201,6 +213,17 @@ def patch_app_js() -> None:
     )
     app = ("// VEIL: the desktop prototype renders charts without a fade-in animation.\n"
            "if (window.Chart) window.Chart.defaults.animation = false;\n\n") + app
+    app += """
+
+// The token in the first URL is only there to establish the HttpOnly cookie.
+try {
+  const clean = new URL(window.location.href);
+  if (clean.searchParams.has('t')) {
+    clean.searchParams.delete('t');
+    window.history.replaceState({}, '', clean.pathname + clean.search + clean.hash);
+  }
+} catch { /* keep the window usable even if history is unavailable */ }
+"""
     app += """
 
 // Deep links land on a tab without the click that normally emits this event.

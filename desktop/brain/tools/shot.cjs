@@ -4,7 +4,7 @@
  *
  *   electron desktop/brain/tools/shot.cjs \
  *     --url "http://127.0.0.1:8799/ui/?tab=memories&t=..." \
- *     --out artifacts/memories.png [--eval "document.querySelector('.memory-card').click()"]
+ *     --out <repo>/.local-tmp/p4-artifacts/memories.png [--eval "document.querySelector('.memory-card').click()"]
  *
  * Runs in Electron (the desktop app's own engine), not in an external browser,
  * so layout, fonts and CSP match what the app will show.
@@ -21,7 +21,7 @@ function arg(name, fallback = '') {
 }
 
 const url = arg('url');
-const out = path.resolve(arg('out', 'artifacts/shot.png'));
+const out = path.resolve(arg('out', path.join(__dirname, '..', '..', '..', '.local-tmp', 'p4-artifacts', 'shot.png')));
 const evaluate = arg('eval');
 const waitMs = Number(arg('wait', '2500'));
 
@@ -38,6 +38,9 @@ app.whenReady().then(async () => {
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   await win.loadURL(url);
   await sleep(waitMs);
+  const denied = await win.webContents.executeJavaScript(
+    "document.body && /token required|forbidden host/i.test(document.body.innerText) && document.body.innerText.length < 200", true);
+  if (denied) { console.error('server rejected the token or host'); app.exit(3); return; }
   if (evaluate) {
     const result = await win.webContents.executeJavaScript(evaluate, true);
     if (result !== undefined) console.log('eval:', JSON.stringify(result).slice(0, 500));
