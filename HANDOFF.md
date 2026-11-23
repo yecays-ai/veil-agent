@@ -1,5 +1,14 @@
 # HANDOFF
 
+## 工单 433 交接（P1 试运行：Brain 召回；2026-11-24）
+
+- 工单：`docs/tickets/433-p1-brain-trial.md`；分支 `ticket/431-p1-brain-backend`，从 `main` `f2f68c7` 开。
+- 只改 `characters/peter/character.toml` 的 `[memory.retrieval] backend = "brain"`；写入权威仍是
+  Ombre，影子同步继续跑。
+- 回退：改回 `backend = "ombre"` 并重启 VEIL，不动 `brain.db` 与 Ombre 数据。
+- 下一步：真实使用观察漏召回/错召回/延迟/费用；收尾后开发 P2 读写接管，回退必须补齐切换期间
+  Ombre 新增或修改的记忆。
+
 ## 工单 430 交接（VEIL Brain P1 自有检索；2026-11-23）
 
 - 工单：`docs/tickets/430-veil-brain-p1-retrieval.md`；分支 `ticket/430-veil-brain-p1`，从 `main`

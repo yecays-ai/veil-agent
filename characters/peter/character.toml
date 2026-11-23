@@ -129,7 +129,9 @@ reconcile_seconds = 600
 # VEIL Brain's own vector + jieba/BM25 index (brain.db). Brain is opt-in in the shipped config and
 # the recall judge, dedup, cooldown, budget and write path are unchanged either way.
 [memory.retrieval]
-backend = "ombre"
+# 2026-11-24 Lan approved the real-use trial: Brain retrieval for automatic recall only.
+# Writes and the authority stay with Ombre; rollback is this one line back to "ombre" + restart.
+backend = "brain"
 # weight_vector = 0.65
 # weight_keyword = 0.35
 
