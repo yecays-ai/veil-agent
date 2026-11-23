@@ -481,6 +481,7 @@ class Memory:
                     except Exception:
                         pass  # Safety state is independent from best-effort diagnostics.
             backend.diagnostic = diagnostic
+        self.shadow = None
         self.delete_asked = None  # number shown by /delete, waiting for its 确认
         states = store.read(self.path)
         budget.reconcile_unsettled({'ombre-model-estimate', 'embedding-estimate',
@@ -546,10 +547,24 @@ class Memory:
         if erased:
             self.messages.put(f'已彻底抹掉 {len(erased)} 条之前删除的记忆。')
 
+        # Ticket 429: attach the shadow worker only after everything else in __init__ succeeded, so
+        # a constructor failure cannot leave a daemon thread behind (Python will not call __exit__).
+        try:
+            from brain_sync import attach as attach_shadow
+            self.shadow = attach_shadow(cfg, store)
+        except Exception:
+            self.shadow = None
+
     def __enter__(self):
         return self
 
     def __exit__(self, *_):
+        shadow = getattr(self, 'shadow', None)
+        if shadow is not None:
+            try:
+                shadow.close()
+            except Exception:
+                pass
         if getattr(self, 'judge', None) is not None:
             self.judge.close()
         embedder = getattr(self, '_embedder', None)
@@ -736,7 +751,21 @@ class Memory:
         # Only Ombre's own notice counts, and Ombre always puts it on the first line, ahead of any memory text.
         if result.lstrip().startswith(DEGRADED_NOTICE):
             self._notice_once('degraded-search', f'Memory search is using keyword fallback ({name}); see memory/_agent/server.log for the cause.')
+        self._shadow_note(name, args, result)
         return result
+
+    def _shadow_note(self, name, args, result):
+        """Ticket 429: hand a confirmed write to the shadow worker. Never raises, never waits."""
+        shadow = getattr(self, 'shadow', None)
+        if shadow is None:
+            return
+        try:
+            shadow.note_write(name, args, result)
+        except Exception:
+            try:
+                shadow.record_issue('note_write', 'exception')
+            except Exception:
+                pass
 
     def visible(self, candidates):
         with self.mutex:
