@@ -298,3 +298,25 @@ def get_memory(connection, memory_id):
         return dict(row) if row else None
     finally:
         connection.row_factory = None
+
+
+def link(connection, memory_id, target_id):
+    """Record a 'this continues that' link in Brain's sidecar state."""
+    ensure_schema(connection)
+    row = connection.execute('SELECT links_json FROM sidecar_state WHERE memory_id=?',
+                             (memory_id,)).fetchone()
+    links = []
+    if row and row[0]:
+        try:
+            links = json.loads(row[0])
+        except ValueError:
+            links = []
+    if target_id not in links:
+        links.append(target_id)
+    connection.execute(
+        "INSERT INTO sidecar_state(memory_id,locked,links_json,sources_json) VALUES(?,0,?,'[]') "
+        'ON CONFLICT(memory_id) DO UPDATE SET links_json=excluded.links_json',
+        (memory_id, json.dumps(links, ensure_ascii=False)))
+    _sidecar(connection, memory_id, 'link', raw={'memory_id': memory_id, 'kind': 'link',
+                                                'to': target_id})
+    connection.commit()

@@ -462,6 +462,13 @@ class Memory:
     def __init__(self, cfg, store, budget, model, backend, runtime_monitor=None):
         self.cfg, self.store, self.budget, self.model, self.backend = cfg, store, budget, model, backend
         brain_settings = (cfg.memory or {}).get('brain') or {}
+        self.brain_authority = None
+        if isinstance(brain_settings, dict) and brain_settings.get('write_authority') is True:
+            from brain_authority import attach_authority
+            try:
+                self.brain_authority = attach_authority(cfg, store)
+            except Exception as exc:
+                raise UserError('Brain 写入权威启动失败：%s' % exc) from exc
         if isinstance(brain_settings, dict) and brain_settings.get('write_authority') is True \
                 and brain_settings.get('shadow') is True:
             raise UserError('记忆写入权威与影子同步不能同时开启；请先关闭 [memory.brain] shadow。')
@@ -683,6 +690,13 @@ class Memory:
         return status
 
     def call(self, name, args, *, write_operation=None):
+        authority = getattr(self, 'brain_authority', None)
+        if authority is not None and name in ('hold', 'trace'):
+            try:
+                embedder = self.embedder()
+            except Exception:
+                embedder = None
+            return authority.call(name, args, embedder=embedder)
         reservation = None
         model_reservation = None
         normal_embedding_amount = None
