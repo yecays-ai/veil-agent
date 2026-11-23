@@ -66,10 +66,9 @@ def patch_index() -> None:
         text,
         '    </nav>\n\n    <!-- ── Tab Content',
         '    </nav>\n\n'
-        '    <div class="border-b border-amber-500/30 bg-amber-500/10 px-4 py-1.5 text-center text-xs text-amber-300">\n'
+        '    <div id="veil-brain-banner" class="border-b border-amber-500/30 bg-amber-500/10 px-4 py-1.5 text-center text-xs text-amber-300">\n'
         '      VEIL Brain 只读原型 · 数据来自 brain.db 隔离副本 · 编辑、删除与修复尚未接入\n'
-        '    </div>\n\n'
-        '    <!-- ── Tab Content',
+        '    </div>\n\n'        '    <!-- ── Tab Content',
     )
 
     text = replace_once(

@@ -47,6 +47,15 @@
   const start = () => {
     sweep();
     new MutationObserver(() => sweep()).observe(document.body, { childList: true, subtree: true });
+    const banner = document.getElementById('veil-brain-banner');
+    if (banner) {
+      fetch('/api/stats').then((response) => response.ok ? response.json() : null).then((data) => {
+        if (!data?.brain) return;
+        banner.textContent = `VEIL Brain 只读原型 · brain.db 共 ${data.brain.memories} 条记忆`
+          + `（${data.totals.memories} 条可浏览、${data.brain.tombstone} 条墓碑）`
+          + ' · 编辑、删除与修复尚未接入';
+      }).catch(() => {});
+    }
   };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
   else start();
