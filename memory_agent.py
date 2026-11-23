@@ -813,6 +813,16 @@ class Memory:
         """Resolve an Ombre title and exact body from its role-local Markdown record."""
         if not refresh and memory_id in self.bucket_details_cache:
             return self.bucket_details_cache[memory_id]
+        if getattr(self, 'brain_authority', None) is not None:
+            from brain_read import BrainRead
+            try:
+                with BrainRead(self.cfg.id and self.brain_authority.db_path) as reader:
+                    row = reader.memory(memory_id)
+            except Exception:
+                row = None
+            details = ((row.get('title') or row.get('name'), row.get('body')) if row else (None, None))
+            self.bucket_details_cache[memory_id] = details
+            return details
         vault = self.store.root / self.cfg.id / 'memory'
         try:
             paths = list(vault.rglob('*.md'))
@@ -862,6 +872,13 @@ class Memory:
         """Return the complete role-local Markdown file for an exact memory ID."""
         if not isinstance(memory_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', memory_id):
             return None
+        if getattr(self, 'brain_authority', None) is not None:
+            from brain_read import BrainRead
+            try:
+                with BrainRead(self.brain_authority.db_path) as reader:
+                    return reader.raw(memory_id)
+            except Exception:
+                return None
         vault = (self.store.root / self.cfg.id / 'memory').resolve()
         try:
             candidates = sorted(vault.rglob('*.md'), key=lambda path: (
@@ -1056,6 +1073,24 @@ class Memory:
         """Check current Ombre lifecycle metadata, never the cached body/details."""
         raw = self.raw_content_for(memory_id)
         allowed = None
+        if getattr(self, 'brain_authority', None) is not None:
+            from brain_read import BrainRead
+            try:
+                with BrainRead(self.brain_authority.db_path) as reader:
+                    row = reader.memory(memory_id)
+                    state = reader.state(memory_id)
+                allowed = bool(row and not row.get('is_hidden') and not row.get('is_tombstone')
+                               and not row.get('is_deleted') and row.get('type') != 'archived')
+            except Exception:
+                allowed = None
+        if allowed is not None:
+            with self.mutex:
+                if allowed:
+                    self.native_hidden.discard(memory_id)
+                else:
+                    self.native_hidden.add(memory_id)
+                    self.bucket_details_cache.pop(memory_id, None)
+            return allowed
         if raw is not None:
             lines = raw.splitlines()
             end = next((i for i, line in enumerate(lines[1:], 1)
@@ -1230,6 +1265,15 @@ class Memory:
             pass
 
     def is_hidden(self, memory_id):
+        if getattr(self, 'brain_authority', None) is not None:
+            from brain_read import BrainRead
+            try:
+                with BrainRead(self.brain_authority.db_path) as reader:
+                    row = reader.memory(memory_id)
+                return bool(not row or row.get('is_hidden') or row.get('is_tombstone')
+                            or row.get('is_deleted') or row.get('type') == 'archived')
+            except Exception:
+                return True
         return memory_id in self.hidden_ids()
 
     def record_native_update(self, memory_id, content):
