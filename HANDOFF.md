@@ -1,19 +1,27 @@
 # HANDOFF
 
-## 工单 429 交接（VEIL Brain P0-B 安全影子同步；2026-11-23）
+## 工单 430 交接（VEIL Brain P1 自有检索；2026-11-23）
 
-- 工单：`docs/tickets/429-veil-brain-p0b.md`；分支 `ticket/429-veil-brain-p0b`，从 `main` `d9406e7` 开，
-  worktree `worktrees/429-veil-brain-p0b`。**未合并、未在正式库启用**；Lan 审核后再合并。
-- 做了什么：新增 `brain_sync.py` 与 26 条 unittest；`memory_agent.Memory` 在确认写入后只入队，
-  worker 独立线程、异常全部落到 `brain-sync-log.jsonl`；周期对账按内容哈希/状态/版本/向量/事件逐项比较，
-  报告写 `data/<role>/brain-sync-report.md`。记录按 id/source_index/行号/event_id 幂等，软删除只标 removed_at；确认擦除时清内容只留空墓碑。
-- 关键行为：硬删除会清掉影子库里的正文、版本与向量，只留空墓碑；扫描不完整时不做删除推断；版本账本被擦除后整体重建；meaning 向量与事件最新修订都参与比较。
-- 已核实：P0-A 的 7 个悬空事件来源 = #426 删除的 7 条 feel（备份有对应文件、正式库无相近 id）；
-  8 条 sidecar 链接也指向这 7 个 id，源记忆健在。对账从 #426 日志读取 known_removed 并单独分类。
-- 已验证：26 条用例（新增/修改+隐藏/删除/归档+合并+版本+向量/关闭时不写+关时不 reconcile/异常隔离/漏同步/源文件不被改/已知引用/db 可校验/队列满/缺库静默/硬删除擦除/账本重写重建/meaning 向量/事件修订/不可读文件不误删/bucket 缺失不误删/向量双向差异/sidecar 重写重建/事件差异进报告/sidecar 同长度重写/向量源缺失不报零）。
-- 合并后第一步：`python brain_sync.py init --source <隔离副本>` 建 `data/peter/brain.db`，重启 VEIL，
-  确认 `shadow status` 正常；然后开始 7 天观察，期间不改 schema 语义、不启动 P1。
-- 边界：影子库只读源、不反向写、不自动修复；故障演练只在隔离副本做。
+- 工单：`docs/tickets/430-veil-brain-p1-retrieval.md`；分支 `ticket/430-veil-brain-p1`，从 `main`
+  `d9406e7` 开，worktree `worktrees/430-veil-brain-p1`。默认 `backend = "ombre"`，未改正式检索。
+- 做了什么：`brain_retrieval.py`（向量 + jieba/BM25，Ombre 文本契约，含 drift 段）、
+  `Memory.search_candidates()` 与 `[memory.retrieval]` 配置、embedding 预算生命周期、回放脚本、
+  7 条 unittest、依赖锁新增 jieba/rank-bm25/numpy 2.4.6。
+- 未完成：回放与 11 题盲测的实测结论。需要先 seed `data/peter/brain.db`，用
+  `scripts/brain_retrieval_replay.py` 跑一遍，把差异样本给 Lan 看；只有她确认 Brain 不低于 Ombre
+  才把 `backend` 改成 `brain`。
+- 下一个窗口第一步：确认 #429（`b1e51f1`）已进正式目录；初始化影子库并跑回放；不要在没有回放
+  结论前切 backend。
+- 已知边界：向量通道要 `--embed` 且需要 `EMBED_API_KEY`；缺失时只测关键词通道。
+
+## 工单 429 交接（VEIL Brain P0-B 影子同步；已合并 `b1e51f1`）
+
+- 工单：`docs/tickets/429-veil-brain-p0b.md`；分支已合并，worktree 可清理。
+- 交付：`brain_sync.py`（outbox + worker + 周期对账）、`[memory.brain] shadow = true`、
+  已知删除分类与报告；正式 `data/peter/brain.db` 尚未 seed，影子还未真正挂载。
+- 下一个窗口第一步：确认正式目录已快进到 `b1e51f1`，再执行
+  `python brain_sync.py init --source <.local-tmp/brain-p0a/source 的隔离副本>`，重启 VEIL 后看
+  `data/peter/brain-sync-report.md`。
 
 ## 工单 428 交接（VEIL Brain P0-A 隔离导入；2026-11-23）
 
@@ -27,8 +35,7 @@
   （157 个来源，7 个是被 #426 删掉的 feel，记为悬空）；内容摘要 `676f47fa…`。
 - 已验证：重新导入摘要一致；`brain.db` 拷到另一个目录仍能 check/inspect；正式库导入前后哈希清单一致
   （310 个文件，`7418ef30…`）。
-- 下一个窗口第一步：等 Lan 按工单验收（快照可读、三类抽查、重导、跨目录打开、正式库校验和）。
-  验收通过后再开 P0-B（安全影子同步）；P0-B 之前不要改 `veil_brain.py` 的 schema 语义。
+- Lan 已确认 P0-A 验收通过；P0-B 已合并（`b1e51f1`）。影子库仍未在正式数据目录初始化。
 - 已知边界：事件正文没有进库；7 个已删除 feel 来源是悬空映射；`memory/_agent/` 与 `.locks/` 属于运行时
   私有目录，已在 `manifest()` 里排除，不参与源清单校验。
 

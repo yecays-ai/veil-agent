@@ -125,6 +125,14 @@ enabled = true
 shadow = true
 reconcile_seconds = 600
 
+# Ticket 430 / P1: automatic-recall candidate source. "ombre" keeps today's search; "brain" uses
+# VEIL Brain's own vector + jieba/BM25 index (brain.db). Brain is opt-in in the shipped config and
+# the recall judge, dedup, cooldown, budget and write path are unchanged either way.
+[memory.retrieval]
+backend = "ombre"
+# weight_vector = 0.65
+# weight_keyword = 0.35
+
 [tools]
 max_output_tokens = 4096
 persistent_append_file = "growth-journal.md"

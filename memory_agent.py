@@ -19,6 +19,7 @@ import uuid
 import prompts
 
 from agent_types import UserError
+from brain_retrieval import load_settings as retrieval_settings, search_text as brain_retrieval_search
 from recall_judge import JudgeFailed
 
 RECALL_DIAGNOSTICS_KEEP = 200
@@ -517,6 +518,8 @@ class Memory:
         # Ticket 353: automatic-recall cooldown and rotation, by memory ID only; survives restarts.
         from recall_rotation import Cooldown, settings as recall_settings
         self.recall_settings = recall_settings(cfg.memory)
+        # Ticket 430: candidate source for automatic recall; Brain is opt-in and falls back to Ombre.
+        self.retrieval_settings = retrieval_settings(cfg.memory.get('retrieval'))
         self.rotation_path = f'{cfg.id}/memory/_agent/recall-rotation.jsonl'
         try:
             saved = store.read(self.rotation_path)
@@ -1249,14 +1252,67 @@ class Memory:
             self._embedder = QueryEmbedder(self.cfg.memory['base_url'], self.cfg.memory['model'], key.strip())
         return self._embedder
 
+    def search_candidates(self, query, asked, *, mode='automatic'):
+        """Ticket 430: same Ombre-shaped search text, from Brain when configured.
+
+        A failure here never changes the answer by hiding it: the caller gets Ombre's result and
+        the diagnostic keeps the reason. The authoritative read/write path is untouched.
+        """
+        settings = getattr(self, 'retrieval_settings', None) or {'backend': 'ombre'}
+        brain_db = self.store.root / self.cfg.id / 'brain.db'
+        if settings['backend'] == 'brain' and not brain_db.is_file():
+            self.last_recall_debug['retrieval'] = {'backend': 'brain',
+                                                   'fallback': 'FileNotFoundError'}
+        if settings['backend'] == 'brain' and brain_db.is_file():
+            reservation = None
+            settled_amount = Decimal(0)
+            usage_tokens = None
+            accounting = 'embedding-estimate'
+            try:
+                embedder = self.embedder()
+                tokens = max(512, len(query.encode('utf-8')))
+                rate = Decimal(str(self.cfg.memory['input_cny_per_million']))
+                reservation = self.budget.estimate(
+                    self.cfg.id, self.cfg.memory['model'], tokens, rate)
+                settled_amount = Decimal(tokens) * rate / Decimal(1_000_000)
+                try:
+                    text, meta = brain_retrieval_search(
+                        brain_db, query, limit=asked, embedder=embedder,
+                        settings=settings)
+                    reported = getattr(embedder, 'usage_tokens', None)
+                    if type(reported) is int and reported > 0:
+                        amount = Decimal(reported) * rate / Decimal(1_000_000)
+                        if amount <= reservation[1]:
+                            usage_tokens, settled_amount = reported, amount
+                            accounting = 'embedding-usage'
+                finally:
+                    # Same lifecycle as assisted_recall: a real embedding call is charged even when
+                    # the retrieval behind it fails, and a missing key never reserves anything.
+                    if reservation is not None:
+                        self.budget.settle_estimate(
+                            reservation, accounting=accounting,
+                            settled_amount=settled_amount, usage_tokens=usage_tokens)
+                self.last_recall_debug['retrieval'] = {'backend': 'brain', **meta}
+                return text
+            except Exception as exc:
+                self.last_recall_debug['retrieval'] = {'backend': 'brain',
+                                                       'fallback': type(exc).__name__}
+                try:
+                    self.store.append(self.diagnostics, {
+                        'time': self.budget.clock(), 'code': 'brain_retrieval_fallback',
+                        'error_type': type(exc).__name__})
+                except Exception:
+                    pass
+        return self.call('breath_search', {
+            'query': query, 'mode': mode, 'with_ids': True, 'max_results': asked})
+
     def assisted_recall(self, query, recent, settings, normal):
         """Search again with the last rounds, keep only candidates close to that text; may keep none."""
         from recall_relevance import context_text, cosine, load_vectors
         text = context_text(recent, query, settings['rounds'])
         embedder = self.embedder()  # a missing key fails here, before any extra search, reservation or request
-        extra = self.context_visible(ordinary_hits(self.call('breath_search', {
-            'query': text, 'mode': 'automatic', 'with_ids': True, 'max_results': 3 + SEARCH_SPARE_HITS}),
-            limit=3 + SEARCH_SPARE_HITS))[:3]
+        extra = self.context_visible(ordinary_hits(
+            self.search_candidates(text, 3 + SEARCH_SPARE_HITS), limit=3 + SEARCH_SPARE_HITS))[:3]
         candidates = dict(normal + extra)
         tokens = max(512, len(text.encode('utf-8')))
         rate = Decimal(str(self.cfg.memory['input_cny_per_million']))
@@ -1529,7 +1585,7 @@ class Memory:
             # Ticket 422: three separate paths plus the base that is always carried, and the reason
             # each natural-association candidate was passed over.
             'relationship_base': {}, 'relevant_recall': [], 'natural_association': [],
-            'association': {}, 'carried': []}
+            'association': {}, 'carried': [], 'retrieval': {}}
         recall_cfg = self.recall_settings
         explicit = asks_about_past(query) and not (rotate or wake)
         cooldown = 0 if explicit else recall_cfg['cooldown_turns']
@@ -1563,8 +1619,7 @@ class Memory:
             # visibility, so an archived hit used up a slot and was then dropped. Ask for a few spare hits,
             # drop what Peter may not see, and only then keep the visible pool.
             asked = recall_cfg['rotation_candidates'] if widen else 3 + SEARCH_SPARE_HITS
-            raw = self.call('breath_search', {
-                'query': query, 'mode': 'automatic', 'with_ids': True, 'max_results': asked})
+            raw = self.search_candidates(query, asked)
             normal = ordinary_hits(raw, limit=asked)
             self.last_recall_debug['ombre'] = [key for key, _ in normal]
             pool = self.context_visible(normal, failure_stage='recall_visibility')

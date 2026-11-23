@@ -46,3 +46,6 @@ typing-inspection==0.4.4
 typing_extensions==4.16.0
 uiautomation==2.0.29; sys_platform == "win32"
 uvicorn==0.54.0
+jieba==0.42.1
+rank-bm25==0.2.2
+numpy==2.4.6
