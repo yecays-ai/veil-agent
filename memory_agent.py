@@ -693,7 +693,7 @@ class Memory:
 
     def call(self, name, args, *, write_operation=None):
         authority = getattr(self, 'brain_authority', None)
-        if authority is not None and name in ('hold', 'trace'):
+        if authority is not None and name in ('hold', 'trace', 'breath', 'breath_search', 'dream'):
             try:
                 embedder = self.embedder()
             except Exception:

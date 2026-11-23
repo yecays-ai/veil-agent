@@ -29,6 +29,12 @@ class BrainAuthority:
     def call(self, name, args, embedder=None):
         if embedder is not None and hasattr(embedder, 'embed'):
             embedder = embedder.embed
+        if name == 'breath':
+            return self.breath()
+        if name == 'dream':
+            return ''
+        if name == 'breath_search':
+            return self.breath_search(args.get('query') or '', args.get('max_results') or 8, embedder)
         with self.mutex:
             connection = self._connect()
             try:
@@ -102,6 +108,26 @@ class BrainAuthority:
         return '已更新→%s' % memory_id
 
 
+    def breath(self):
+        """Opening list: the same pinned/important visible memories, rendered as Ombre blocks."""
+        import brain_read
+        with brain_read.BrainRead(self.db_path) as reader:
+            rows = reader.connection.execute(
+                'SELECT id,title,name,body,importance,pinned,created FROM memories '
+                'WHERE is_hidden=0 AND is_tombstone=0 AND is_deleted=0 '
+                "AND bucket IN ('dynamic','permanent') AND (dont_surface IS NULL OR dont_surface=0) "
+                "AND (type IS NULL OR type NOT IN ('archived','letter','plan','i','feel')) "
+                'ORDER BY pinned DESC, importance DESC, created DESC LIMIT 8').fetchall()
+        return '\n\n'.join('[bucket_id:%s] %s\n%s' % (row['id'], row['title'] or row['name'] or row['id'],
+                                                       row['body']) for row in rows)
+
+    def breath_search(self, query, limit, embedder):
+        import brain_retrieval
+        text, _meta = brain_retrieval.search_text(
+            self.db_path, query, limit=limit, embedder=embedder,
+            settings={'backend': 'brain', 'weight_vector': 0.65, 'weight_keyword': 0.35})
+        return text
+
 def _split(value):
     if isinstance(value, str):
         return [part.strip() for part in value.split(',') if part.strip()]
@@ -115,3 +141,4 @@ def attach_authority(cfg, store):
     if settings.get('shadow') is True:
         raise ValueError('write_authority=brain and shadow=true are mutually exclusive')
     return BrainAuthority(cfg, store)
+
