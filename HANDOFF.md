@@ -6,7 +6,7 @@
 - 已完成：`brain_events.py`（事件 schema v3、69 故事/69 阶段无损迁移、导出）、
   `brain_export.py`（同 ID vault，含 tombstone）、`brain_writer.py`（事务/三态/硬删/版本/合并/
   向量重试）、`brain_sync` 与 `memory_agent` 的 authority/shadow 互斥、11 条测试。
-- 未完成：`Memory.call` 与所有写入口接线、事件页/自审、隔离端到端矩阵；**不要合并**。
+- 已完成接线与隔离证据；未跑真实模型聊天、未正式切换；PR 待审，不自动合并。
 - 下一个窗口第一步：读本工单第 3 节，先接 `Memory.call('hold'/'trace')` 与 sidecar/versions/
   events 直写，再跑隔离矩阵；未完成不得开 P2-B 或切正式写入。
 

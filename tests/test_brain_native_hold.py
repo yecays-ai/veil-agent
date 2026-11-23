@@ -41,7 +41,8 @@ class NativeHoldAuthorityTests(unittest.TestCase):
                     'output_cny_per_million': 2, 'cached_input_cny_per_million': 1}
         settings = {'model': 'fake-embedding', 'input_cny_per_million': '0', 'mode': 'native',
                     'base_url': 'https://example.invalid/v1',
-                    'brain': {'write_authority': True, 'shadow': False}}
+                    'brain': {'write_authority': True, 'shadow': False},
+                    'retrieval': {'backend': 'brain'}}
         cfg = Character('fake', 'Example', 'persona', 20, 1024, provider, 'fake', settings)
         class Backend:
             def list_tools(self):
@@ -69,6 +70,9 @@ class NativeHoldAuthorityTests(unittest.TestCase):
             connection.close()
         self.assertEqual(bodies, ['a new linked memory'])
         self.assertIsNone(links)
+        recalled = '\n'.join(row.get('content') or '' for row in self.memory.context(
+            'a new linked memory', include_opening=False))
+        self.assertIn('a new linked memory', recalled)
 
     def test_event_record_writes_brain_story_and_projection(self):
         events = EventMemory(self.memory, settings={'enabled': True})

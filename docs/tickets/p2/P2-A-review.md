@@ -15,8 +15,8 @@
 | 同 ID 导出 | 完成（导出物） | 回导 285 记忆 / 282 版本 / 172 sidecar / 0 problems |
 | Ombre 实际启动回退 | 归 P2-B | 未做 |
 | authority/shadow 互斥 | 完成 | attach 抛错测试 + Memory 初始化校验 |
-| 备份恢复 | 未完成 | 仅导出回导，未做完整备份恢复 |
-| 自审/PR | **未完成** | 本文件即自审；未开 PR |
+| 备份恢复 | 完成（组件） | `brain_backup.py` 备份/恢复测试，digest/ integrity/count 一致 |
+| 自审/PR | **进行中** | 本文件；将开 PR 供审 |
 
-结论：P2-A **未完成，不得合并、不得进入 P2-B**。下一步必须先接 `Memory.call('hold'/'trace')`
+结论：P2-A 的隔离存储/写入/事件/导出/备份已通过；完整模型聊天循环未跑，正式切换未做。**可以开 PR 供审，不自动合并、不进入 P2-B。**下一步必须先接 `Memory.call('hold'/'trace')`
 与所有 sidecar/versions/events 直写，再跑隔离 Peter 端到端与完整写入矩阵。

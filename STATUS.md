@@ -1,11 +1,13 @@
 # 当前状态
 
-## P2-A · Brain 独立写入与完整事件数据（施工中，隔离）
+## P2-A · Brain 独立写入与完整事件数据（本 PR，默认关闭）
 
 - 分支 `ticket/434-p2-a-brain-writes`；默认关闭，正式 Peter 行为未变。
 - 已交付：三单工单、事件 schema v3/69 故事+69 阶段迁移、同 ID 导出、事务写入核心
   （三态/墓碑/版本/合并/向量重试）、shadow 互斥、11 条隔离测试。
-- 未完成：`Memory.call` 全入口接线、完整写入矩阵、隔离 Peter 端到端、PR/自审。
+- 已接：hold/trace/erase/面板/事件记录、sidecar/versions/events/delete-requests、同 ID 导出、备份恢复；
+  P2-A 测试 26 条通过。
+- 未做：真实模型聊天循环、正式切换；默认关闭，不影响 Peter。
 - 未通过 P2-A 验收前不进入 P2-B，不切正式写入。
 
 ## 工单 433 · P1 试运行：Peter 自动召回切到 Brain（本 PR）
