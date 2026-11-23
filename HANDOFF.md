@@ -1,5 +1,21 @@
 # HANDOFF
 
+## 工单 431 交接（P4 开源记忆界面复用；2026-11-23）
+
+- 工单：`docs/tickets/431-brain-ui-reuse.md`；分支 `ticket/431-brain-ui-reuse`，
+  worktree `E:\Peter-Agent\VEIL\worktrees\431-brain-ui-reuse`，从 main `d9406e7` 开。
+- 做了什么：vendored mnemory UI（Apache-2.0，固定提交 `0ff5a8d`）+ `desktop/brain/server.cjs`
+  只读兼容 API；`desktop/main.cjs` 新增 `openBrainWindow()`，菜单新增「记忆中心（原型）」；
+  `desktop/tests/brain.test.cjs` 用合成 brain.db 做端到端只读测试。没有改 Peter 的聊天/写入链。
+- 实测：真实 brain.db 244 条非删除记忆 + 39 条墓碑；窗口浏览、搜索、详情、版本、健康检查均可用。
+  健康检查查出 5 个真实问题（4 个事件来源断链、1 条隐藏记忆）。写入返回 403，前端隐藏写按钮。
+- 验证：`cd desktop && npm test` → 38 条全过；Electron 用 `VEIL_BRAIN_AUTOOPEN=1` 实测窗口能打开
+  （截图在 `E:\Peter-Agent\VEIL\tmp\p4-artifacts\`，含真实记忆，未提交仓库）。
+- 开机第一件事：等 Lan 验收。她若觉得界面可用，再开下一单做「召回诊断」和细节适配（版本顺序、中文、浅色主题）；
+  若觉得不可用，按工单里的开源结论换 sqlite-viewer 或改自研最小范围，先问她。
+- 边界：只读；`brain.db` 路径默认 `<agent root>/.local-tmp/brain-p0a/brain.db`，可用 `VEIL_BRAIN_DB` 覆盖；
+  没有该文件时只弹提示。不要在本单上接 P0-B/P1。
+
 ## 工单 429 交接（VEIL Brain P0-B 安全影子同步；2026-11-23）
 
 - 工单：`docs/tickets/429-veil-brain-p0b.md`；分支 `ticket/429-veil-brain-p0b`，从 `main` `d9406e7` 开，

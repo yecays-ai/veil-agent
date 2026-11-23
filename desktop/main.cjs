@@ -7,6 +7,7 @@ const { pathToFileURL } = require('node:url');
 const { connect, validRoot, readEndpoint } = require('./backend.cjs');
 
 let pet, chat, menu, connecting = false, quitting = false, drag, petResize, agentEndpoint, saveTimer, saveChain = Promise.resolve();
+let brainWindow = null, brainRuntime = null;
 const detachedWindows = new Map(), mergingViews = new Set();
 const screenPopWindows = new Map(), screenPopInFlight = new Set();
 let screenPopPollTimer = null, screenPopPolling = false, quitFlushStarted = false;
@@ -228,11 +229,76 @@ async function reconnectChat(event) {
   return !!chat && !chat.isDestroyed();
 }
 function hideMenu() { if (menu && !menu.isDestroyed()) menu.hide(); }
+
+function brainDbFile() {
+  const root = agentRoot() || (app.isPackaged
+    ? path.resolve(path.dirname(process.execPath), '..', '..', '..')
+    : path.resolve(__dirname, '..'));
+  return process.env.VEIL_BRAIN_DB || path.join(root, '.local-tmp', 'brain-p0a', 'brain.db');
+}
+
+/**
+ * P4 prototype: a separate read-only window over brain.db. It never touches
+ * the live agent's memory API, so Peter's chat and saves keep running.
+ */
+async function openBrainWindow() {
+  if (brainWindow && !brainWindow.isDestroyed()) { brainWindow.show(); brainWindow.focus(); return; }
+  if (!brainRuntime) {
+    const dbPath = brainDbFile();
+    try { await fs.access(dbPath); }
+    catch {
+      dialog.showErrorBox('VEIL Brain 还没有数据', `没有找到 brain.db：\n${dbPath}\n\n先按工单 428 导入隔离副本，再打开记忆中心。`);
+      return;
+    }
+    const token = randomUUID().replace(/-/g, '');
+    try {
+      // Loaded lazily so a broken optional brain module can never stop the
+      // desktop shell or Peter's chat from starting.
+      const brainServer = require('./brain/server.cjs');
+      const runtime = await brainServer.start({ dbPath, port: 0, token });
+      brainRuntime = { ...runtime, token };
+    } catch (error) {
+      dialog.showErrorBox('记忆中心启动失败', error.message || '未知错误');
+      return;
+    }
+  }
+  const { url, token, server } = brainRuntime;
+  const current = new BrowserWindow({
+    width: 1380, height: 900, minWidth: 900, minHeight: 600,
+    backgroundColor: '#0b0e14', title: 'VEIL Brain · 记忆中心', show: false,
+    autoHideMenuBar: true,
+    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
+  });
+  brainWindow = current;
+  safeContents(current, target => target.startsWith(`${url}/`));
+  current.on('closed', () => {
+    if (brainWindow === current) brainWindow = null;
+    if (brainRuntime) {
+      const runtime = brainRuntime;
+      brainRuntime = null;
+      runtime.server.close();
+    }
+  });
+  try {
+    await current.loadURL(`${url}/ui/?t=${token}`);
+    current.show();
+    if (process.env.VEIL_BRAIN_SHOT) {
+      await new Promise(resolve => setTimeout(resolve, 1800));
+      const image = await current.webContents.capturePage();
+      await fs.writeFile(process.env.VEIL_BRAIN_SHOT, image.toPNG());
+      console.log('[p4] brain screenshot', process.env.VEIL_BRAIN_SHOT);
+    }
+  } catch (error) {
+    if (!current.isDestroyed()) current.destroy();
+    dialog.showErrorBox('记忆中心打不开', error.message || '未知错误');
+  }
+}
+
 function showMenu() {
   const point = screen.getCursorScreenPoint(); const area = workAreaAt(point.x, point.y);
-  const bounds = clampPosition(point.x, point.y, 254, 226, area);
+  const bounds = clampPosition(point.x, point.y, 254, 270, area);
   if (!menu || menu.isDestroyed()) {
-    menu = new BrowserWindow({ ...bounds, width: 254, height: 226, frame: false, transparent: true,
+    menu = new BrowserWindow({ ...bounds, width: 254, height: 270, frame: false, transparent: true,
       resizable: false, show: false, skipTaskbar: true, alwaysOnTop: true,
       webPreferences: { preload: path.join(__dirname, 'menu-preload.cjs'), contextIsolation: true,
         nodeIntegration: false, sandbox: true } });
@@ -240,7 +306,7 @@ function showMenu() {
     menu.on('closed', () => { menu = null; });
     menu.once('ready-to-show', () => { if (menu && !menu.isDestroyed()) { menu.webContents.send('menu:theme', settings.theme); menu.show(); menu.focus(); } });
     menu.loadURL(menuURL);
-  } else { menu.setBounds({ ...bounds, width: 254, height: 226 }); }
+  } else { menu.setBounds({ ...bounds, width: 254, height: 270 }); }
   if (!menu.webContents.isLoading()) { menu.webContents.send('menu:theme', settings.theme); menu.show(); menu.focus(); }
 }
 async function endpointRequest(pathname, method = 'GET', body) {
@@ -760,6 +826,7 @@ ipcMain.on('menu:action', async (event, action, value) => {
   if (!menu || event.sender !== menu.webContents) return;
   hideMenu();
   if (action === 'chat') toggleChat();
+  else if (action === 'brain') openBrainWindow();
   else if (action === 'appearance') showAppearance();
   else if (action === 'size' && Number.isFinite(value)) { createPet(Math.max(160, Math.min(720, Math.round(value)))); save().catch(() => {}); }
   else if (action === 'activity') showActivity();
@@ -812,6 +879,12 @@ else {
       canCheckChatMedia(contents, permission, details));
     createPet();
     startScreenPopPolling();
+    // Prototype smoke hook: lets the verification run open the read-only
+    // memory window without simulating a right-click on the pet.
+    if (process.env.VEIL_BRAIN_AUTOOPEN === '1') {
+      openBrainWindow().then(() => console.log('[p4] brain window opened'))
+        .catch((error) => console.error('[p4] brain window failed:', error.message));
+    }
   });
   app.on('before-quit', event => {
     quitting = true;

@@ -1,0 +1,2615 @@
+<!DOCTYPE html>
+<html lang="en" class="overflow-x-hidden">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VEIL Brain · 记忆中心</title>
+  <link rel="stylesheet" href="/ui/css/app.css">
+  <!-- Vendored libraries (no external requests) -->
+  <script src="/ui/vendor/chart.umd.min.js"></script>
+  <script src="/ui/vendor/d3.min.js"></script>
+  <script src="/ui/js/api.js"></script>
+  <script src="/ui/js/app.js"></script>
+  <script src="/ui/js/metrics.js"></script>
+  <script src="/ui/js/search.js"></script>
+  <script src="/ui/js/memories.js"></script>
+  <script src="/ui/js/graph.js"></script>
+  <script src="/ui/js/user.js"></script>
+  <script src="/ui/js/fsck.js"></script>
+  <script src="/ui/js/sessions.js"></script>
+  <script src="/ui/vendor/alpine.min.js" defer></script>
+  <script src="/ui/js/veil-readonly.js" defer></script>
+  <style>/* VEIL prototype: no fade ghosts in screenshots or the app window. */
+    .modal-overlay, .modal-overlay * { transition: none !important; }
+  </style>
+</head>
+<body class="min-h-screen overflow-x-hidden" x-data x-init="$store.auth.init()">
+
+  <!-- ── Loading Splash ──────────────────────────────────────── -->
+  <div x-show="$store.auth.loading" class="fixed inset-0 flex items-center justify-center bg-brand-bg z-50">
+    <div class="text-center">
+      <div class="text-3xl font-bold text-brand-accent mb-3">VEIL Brain</div>
+      <div class="text-sm text-secondary">Loading...</div>
+    </div>
+  </div>
+
+  <!-- ── Login Screen ────────────────────────────────────────── -->
+  <div x-show="!$store.auth.loading && !$store.auth.authenticated" x-cloak
+       x-transition:enter="transition ease-out duration-300"
+       x-transition:enter-start="opacity-0"
+       x-transition:enter-end="opacity-100"
+       class="fixed inset-0 flex items-center justify-center bg-brand-bg z-40">
+    <div class="card w-full max-w-sm mx-4" x-data="{ key: '' }">
+      <div class="text-center mb-8">
+        <h1 class="text-3xl font-bold text-brand-accent mb-1">mnemory</h1>
+        <p class="text-sm text-secondary">Management UI</p>
+      </div>
+
+      <form @submit.prevent="$store.auth.login(key)" class="space-y-4">
+        <div>
+          <label class="block text-sm text-secondary mb-1.5">API Key</label>
+          <input type="password" x-model="key" placeholder="Enter your API key"
+                 class="input" autofocus required>
+        </div>
+
+        <div x-show="$store.auth.error" x-text="$store.auth.error"
+             class="text-sm text-red-400 bg-red-500/10 rounded-lg px-3 py-2"></div>
+
+        <button type="submit" class="btn-primary w-full"
+                :disabled="!key || $store.auth.loading">
+          <span x-show="!$store.auth.loading">Sign In</span>
+          <span x-show="$store.auth.loading">Authenticating...</span>
+        </button>
+      </form>
+
+      <p class="text-xs text-muted text-center mt-6">
+        Authenticate with your MCP API key
+      </p>
+    </div>
+  </div>
+
+  <!-- ── Main Application ────────────────────────────────────── -->
+  <div x-show="!$store.auth.loading && $store.auth.authenticated" x-cloak
+       class="min-h-screen flex flex-col">
+
+    <!-- ── Top Navigation ──────────────────────────────────── -->
+    <nav class="bg-brand-surface border-b border-brand-border sticky top-0 z-30" x-data="{ accountOpen: false }">
+      <div class="max-w-[1600px] mx-auto px-4 sm:px-6 py-2 space-y-2 min-w-0 xl:flex xl:items-center xl:gap-4 xl:space-y-0">
+        <div class="flex items-center justify-between gap-3 min-w-0 xl:contents">
+          <!-- Brand -->
+          <div class="flex items-center gap-2 shrink-0 xl:order-1">
+            <span class="text-xl font-bold text-brand-accent">VEIL Brain</span>
+          </div>
+
+          <!-- Account menu -->
+          <div class="relative shrink-0 xl:order-3" @keydown.escape.window="accountOpen = false" @click.outside="accountOpen = false">
+            <button @click="accountOpen = !accountOpen"
+                    class="flex items-center rounded-full border border-brand-border bg-brand-elevated/80 p-1 text-sm text-secondary transition-all duration-200 hover:border-brand-accent/50 hover:text-[#E6EDF3] focus:outline-none focus:border-brand-accent focus:ring-1 focus:ring-brand-accent/30"
+                    :aria-expanded="accountOpen.toString()"
+                    aria-label="Account menu">
+              <span class="flex h-8 w-8 items-center justify-center rounded-full bg-brand-accent/15 text-sm font-semibold text-brand-accent"
+                    x-text="($store.auth.selectedUser || $store.auth.identity?.user_id || '?').slice(0, 1).toUpperCase()"></span>
+            </button>
+
+            <div x-show="accountOpen"
+                 x-cloak
+                 x-transition.origin.top.right
+                 class="absolute right-0 mt-2 w-80 max-w-[calc(100vw-2rem)] rounded-xl border border-brand-border bg-brand-surface p-3 shadow-2xl shadow-black/30">
+              <div class="mb-3 min-w-0 border-b border-brand-border pb-3">
+                <div class="text-xs uppercase tracking-wide text-muted">Signed in as</div>
+                <div class="truncate text-sm font-medium text-[#E6EDF3]"
+                     x-text="$store.auth.selectedUser || $store.auth.identity?.user_id || 'Unknown user'"></div>
+              </div>
+
+              <div class="space-y-3">
+                <!-- User Switcher (only for wildcard keys) -->
+                <template x-if="$store.auth.identity?.can_switch_user && $store.auth.users.length > 1">
+                  <label class="block">
+                    <span class="mb-1 block text-xs font-medium text-secondary">User</span>
+                    <select class="select w-full text-sm py-1.5"
+                            :value="$store.auth.selectedUser"
+                            @change="$store.auth.switchUser($event.target.value)">
+                      <template x-for="u in $store.auth.users" :key="u">
+                        <option :value="u" x-text="u" :selected="u === $store.auth.selectedUser"></option>
+                      </template>
+                    </select>
+                  </label>
+                </template>
+
+                <button @click="$store.auth.logout()" class="btn-ghost flex w-full justify-center text-sm">Logout</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab Navigation -->
+        <div class="min-w-0 max-w-full overflow-x-auto scrollbar-none xl:order-2 xl:flex-1">
+          <div class="flex min-w-max items-center gap-1">
+            <template x-for="tab in [
+              { id: 'dashboard', label: '概览' },
+              { id: 'memories', label: '记忆' },
+              { id: 'search', label: '搜索' },
+              { id: 'check', label: '健康检查' },
+            ]">
+              <button @click="$store.nav.setTab(tab.id)"
+                      :class="$store.nav.activeTab === tab.id ? 'tab-btn tab-btn-active' : 'tab-btn'"
+                      x-text="tab.label"></button>
+            </template>
+          </div>
+        </div>
+      </div>
+    </nav>
+
+    <div class="border-b border-amber-500/30 bg-amber-500/10 px-4 py-1.5 text-center text-xs text-amber-300">
+      VEIL Brain 只读原型 · 数据来自 brain.db 隔离副本 · 编辑、删除与修复尚未接入
+    </div>
+
+    <!-- ── Tab Content ─────────────────────────────────────── -->
+    <main class="flex-1 max-w-[1600px] mx-auto w-full px-4 sm:px-6 py-6">
+
+      <!-- Dashboard Tab -->
+      <div x-show="$store.nav.activeTab === 'dashboard'" x-data="metricsTab()" x-init="init()">
+
+        <!-- Header -->
+        <div class="flex items-center justify-between mb-6">
+          <div class="flex items-center gap-3">
+            <h2 class="text-xl font-semibold text-[#E6EDF3]">概览</h2>
+            <!-- Per-user filter indicator -->
+            <template x-if="$store.auth.selectedUser && data?.by_user?.[$store.auth.selectedUser]">
+              <span class="badge badge-normal text-xs">
+                当前用户：<span x-text="$store.auth.selectedUser"></span>
+              </span>
+            </template>
+            <template x-if="$store.auth.selectedUser && !data?.by_user?.[$store.auth.selectedUser] && data">
+              <span class="badge badge-context text-xs">Global (no data for selected user)</span>
+            </template>
+          </div>
+          <div class="flex items-center gap-3">
+            <label class="flex items-center gap-2 text-sm text-secondary cursor-pointer">
+              <input type="checkbox" :checked="autoRefresh" @change="toggleAutoRefresh()"
+                     class="rounded border-brand-border bg-brand-elevated text-brand-accent focus:ring-brand-accent/30">
+              自动刷新
+            </label>
+            <button @click="loadData()" class="btn-secondary text-sm" :disabled="loading">
+              <span x-show="!loading">刷新</span>
+              <span x-show="loading">Loading...</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Stat Cards -->
+        <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-8 gap-4 mb-8" x-show="data">
+          <div class="stat-card border-l-4 border-l-brand-accent">
+            <div class="stat-value" x-text="displayTotals?.memories ?? '-'"></div>
+            <div class="stat-label">记忆总数</div>
+          </div>
+          <div class="stat-card border-l-4 border-l-amber-500">
+            <div class="stat-value" x-text="displayTotals?.raw ?? '-' "></div>
+            <div class="stat-label">原始</div>
+          </div>
+          <div class="stat-card border-l-4 border-l-emerald-500">
+            <div class="stat-value" x-text="displayTotals?.consolidated ?? '-'"></div>
+            <div class="stat-label">已整理</div>
+          </div>
+          <div class="stat-card border-l-4 border-l-blue-500">
+            <div class="stat-value" x-text="displayTotals?.pinned ?? '-'"></div>
+            <div class="stat-label">置顶</div>
+          </div>
+          <div class="stat-card border-l-4 border-l-amber-500">
+            <div class="stat-value" x-text="displayTotals?.decayed ?? '-'"></div>
+            <div class="stat-label">已衰减</div>
+          </div>
+          <div class="stat-card border-l-4 border-l-violet-500">
+            <div class="stat-value" x-text="displayTotals?.with_artifacts ?? '-'"></div>
+            <div class="stat-label">带附件</div>
+          </div>
+          <div class="stat-card border-l-4 border-l-orange-500">
+            <div class="stat-value" x-text="data?.active_sessions ?? '-'"></div>
+            <div class="stat-label">活跃会话</div>
+          </div>
+          <div class="stat-card border-l-4 border-l-slate-500">
+            <div class="stat-value text-lg" x-text="data?.version ?? '-'"></div>
+            <div class="stat-label">版本</div>
+          </div>
+          <template x-if="data?.autofsck?.enabled">
+            <div class="stat-card border-l-4 border-l-teal-500">
+              <div class="stat-value text-base" x-text="autofsckLastRunAge ?? '-'"></div>
+              <div class="stat-label">Last Auto-Check</div>
+            </div>
+          </template>
+        </div>
+
+        <!-- Charts Row -->
+        <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6 mb-8" x-show="data">
+          <div class="card">
+            <h3 class="text-sm font-medium text-secondary mb-4">按类型</h3>
+            <div class="relative" style="height: 220px;">
+              <canvas id="chart-by-type"></canvas>
+            </div>
+          </div>
+          <div class="card">
+            <h3 class="text-sm font-medium text-secondary mb-4">按分类</h3>
+            <div class="flex gap-4" style="height: 240px;">
+              <div class="relative flex-1 min-w-0">
+                <canvas id="chart-by-category"></canvas>
+              </div>
+              <div id="chart-by-category-legend"
+                   class="w-44 shrink-0 overflow-y-auto pr-2 border-l border-brand-border/50 pl-3"></div>
+            </div>
+          </div>
+          <div class="card">
+            <h3 class="text-sm font-medium text-secondary mb-4">按层</h3>
+            <div class="relative" style="height: 220px;">
+              <canvas id="chart-by-layer"></canvas>
+            </div>
+          </div>
+          <div class="card">
+            <h3 class="text-sm font-medium text-secondary mb-4">按角色</h3>
+            <div class="relative" style="height: 220px;">
+              <canvas id="chart-by-role"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <!-- Operations Table -->
+        <div class="card" x-show="data && data.operations && Object.keys(data.operations).length > 0">
+          <h3 class="text-sm font-medium text-secondary mb-4">Operations</h3>
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead>
+                <tr class="border-b border-brand-border">
+                  <th class="text-left py-2 px-3 text-secondary font-medium">Operation</th>
+                  <th class="text-right py-2 px-3 text-secondary font-medium">Count</th>
+                </tr>
+              </thead>
+              <tbody>
+                <template x-for="[op, info] in Object.entries(data?.operations || {})" :key="op">
+                  <tr class="border-b border-brand-border/50 hover:bg-brand-elevated/50">
+                    <td class="py-2 px-3 font-mono text-[#E6EDF3]" x-text="op"></td>
+                    <td class="py-2 px-3 text-right text-brand-accent font-mono" x-text="info.total"></td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Empty State -->
+        <div x-show="!loading && !data" class="text-center py-16 text-secondary">
+          <p>No metrics data available.</p>
+          <p class="text-sm text-muted mt-1">Make sure metrics are enabled on the server.</p>
+        </div>
+      </div>
+
+      <!-- Search Tab -->
+      <div x-show="$store.nav.activeTab === 'search'" x-data="searchTab()" x-init="init()">
+
+        <!-- Search Bar -->
+        <div class="mb-6">
+          <form @submit.prevent="search()" class="flex gap-2">
+            <div class="flex-1 relative">
+              <input type="text" x-model="query" placeholder="Search memories..."
+                     class="input pr-4" @keydown.enter="search()">
+            </div>
+            <div class="flex rounded-lg overflow-hidden border border-brand-border">
+              <button type="button" @click="mode = 'search'"
+                      :class="mode === 'search' ? 'bg-brand-accent text-brand-bg px-4 py-2 text-sm font-medium' : 'bg-brand-elevated text-secondary px-4 py-2 text-sm font-medium hover:text-[#E6EDF3]'">
+                Search
+              </button>
+              <button type="button" @click="mode = 'find'"
+                      :class="mode === 'find' ? 'bg-brand-accent text-brand-bg px-4 py-2 text-sm font-medium' : 'bg-brand-elevated text-secondary px-4 py-2 text-sm font-medium hover:text-[#E6EDF3]'">
+                Find
+              </button>
+              <button type="button" @click="mode = 'ask'"
+                      :class="mode === 'ask' ? 'bg-brand-accent text-brand-bg px-4 py-2 text-sm font-medium' : 'bg-brand-elevated text-secondary px-4 py-2 text-sm font-medium hover:text-[#E6EDF3]'">
+                Ask
+              </button>
+            </div>
+            <button type="submit" class="btn-primary" :disabled="loading || !query.trim()">
+              <span x-show="!loading">Go</span>
+              <span x-show="loading">...</span>
+            </button>
+          </form>
+          <div x-show="mode === 'find'" class="mt-2 text-xs text-secondary">
+            AI-powered multi-query search with LLM reranking
+          </div>
+          <div x-show="mode === 'ask'" class="mt-2 text-xs text-secondary">
+            Ask a question and get a human-readable answer based on stored memories
+          </div>
+        </div>
+
+        <!-- Filters -->
+        <div class="mb-4">
+          <button @click="showFilters = !showFilters" class="btn-ghost text-sm">
+            <span x-text="showFilters ? 'Hide Filters' : 'Show Filters'"></span>
+          </button>
+          <div x-show="showFilters" x-transition class="mt-3 card-elevated flex flex-wrap gap-4 items-end">
+            <div>
+              <label class="block text-xs text-secondary mb-1">类型</label>
+              <select x-model="filters.memory_type" class="select text-sm">
+                <option value="">All</option>
+                <option value="fact">fact</option>
+                <option value="preference">preference</option>
+                <option value="episodic">episodic</option>
+                <option value="procedural">procedural</option>
+                <option value="context">context</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-xs text-secondary mb-1">角色</label>
+              <select x-model="filters.role" class="select text-sm">
+                <option value="">All</option>
+                <option value="user">user</option>
+                <option value="assistant">assistant</option>
+              </select>
+            </div>
+            <div x-show="availableAgentIds.length > 0">
+              <label class="block text-xs text-secondary mb-1">角色实例</label>
+              <select x-model="filterAgentId" class="select text-sm">
+                <option value="">All</option>
+                <option value="_none_">— no agent —</option>
+                <template x-for="aid in availableAgentIds" :key="aid">
+                  <option :value="aid" x-text="aid"></option>
+                </template>
+              </select>
+            </div>
+            <!-- Categories multi-select dropdown -->
+            <div x-show="availableCategories.length > 0" x-data="{ catOpen: false }" class="relative">
+              <label class="block text-xs text-secondary mb-1">分类</label>
+              <button type="button" @click="catOpen = !catOpen" @click.outside="catOpen = false"
+                      class="select text-sm text-left min-w-[160px] flex items-center justify-between gap-2">
+                <span x-text="filters.categories.length > 0
+                  ? filters.categories.length + ' selected'
+                  : 'All'" class="truncate"></span>
+                <svg class="w-3 h-3 shrink-0 text-secondary" :class="catOpen && 'rotate-180'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg>
+              </button>
+              <div x-show="catOpen" x-transition
+                   class="absolute z-20 mt-1 w-56 max-h-64 overflow-y-auto bg-brand-surface border border-brand-border rounded-lg shadow-xl py-1">
+                <button type="button" x-show="filters.categories.length > 0"
+                        @click="filters.categories = []"
+                        class="w-full text-left px-3 py-1.5 text-xs text-red-400 hover:bg-brand-elevated">
+                  Clear all
+                </button>
+                <template x-for="cat in availableCategories" :key="cat">
+                  <label class="flex items-center gap-2 px-3 py-1.5 text-sm text-secondary hover:bg-brand-elevated hover:text-[#E6EDF3] cursor-pointer">
+                    <input type="checkbox"
+                           :checked="filters.categories.includes(cat)"
+                           @change="filters.categories.includes(cat)
+                             ? filters.categories.splice(filters.categories.indexOf(cat), 1)
+                             : filters.categories.push(cat)"
+                           class="rounded border-brand-border bg-brand-bg text-brand-accent focus:ring-brand-accent/30 w-3.5 h-3.5">
+                    <span x-text="cat"></span>
+                  </label>
+                </template>
+              </div>
+            </div>
+            <div>
+              <label class="block text-xs text-secondary mb-1">Limit</label>
+              <input type="number" x-model.number="filters.limit" min="1" max="100"
+                     class="input text-sm w-20">
+            </div>
+            <div class="flex items-center gap-2">
+              <input type="checkbox" x-model="filterDecayedOnly" id="search-decayed"
+                     class="rounded border-brand-border bg-brand-elevated text-brand-accent focus:ring-brand-accent/30">
+              <label for="search-decayed" class="text-sm text-secondary cursor-pointer">只看已衰减</label>
+            </div>
+            <div class="flex items-center gap-2">
+              <input type="checkbox" x-model="filterArtifactsOnly" id="search-artifacts"
+                     class="rounded border-brand-border bg-brand-elevated text-brand-accent focus:ring-brand-accent/30">
+              <label for="search-artifacts" class="text-sm text-secondary cursor-pointer">只看带附件</label>
+            </div>
+            <div>
+              <label class="block text-xs text-secondary mb-1">层</label>
+              <select x-model="filterMemoryLayer" class="select text-sm">
+                <option value="">All</option>
+                <option value="raw">原始</option>
+                <option value="consolidated">已整理</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-xs text-muted mb-1">Labels (JSON)</label>
+              <input type="text" x-model="filters.labels_json" class="input text-sm"
+                     placeholder='{"project": "myapp"}'>
+            </div>
+            <div>
+              <label class="block text-xs text-secondary mb-1">Sort</label>
+              <select x-model="sortBy" class="select text-sm">
+                <option value="relevance">Relevance</option>
+                <option value="newest">最新优先</option>
+                <option value="oldest">最早优先</option>
+                <option value="importance">Importance (high→low)</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <!-- Answer (Ask mode) -->
+        <div x-show="mode === 'ask' && answer" class="mb-6">
+          <div class="card-elevated">
+            <div class="flex items-center gap-2 mb-3">
+              <svg class="w-4 h-4 text-brand-accent" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8.625 12a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 01-2.555-.337A5.972 5.972 0 015.41 20.97a5.969 5.969 0 01-.474-.065 4.48 4.48 0 00.978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25z"/></svg>
+              <h3 class="text-sm font-semibold text-[#E6EDF3]">Answer</h3>
+            </div>
+            <div class="text-sm text-secondary whitespace-pre-wrap leading-relaxed" x-text="answer"></div>
+          </div>
+        </div>
+
+        <!-- Supporting Memories label (Ask mode) -->
+        <div x-show="mode === 'ask' && answer && results.length > 0" class="mb-2">
+          <h3 class="text-xs font-semibold text-muted uppercase tracking-wide">Supporting Memories</h3>
+        </div>
+
+        <!-- Results -->
+        <div class="space-y-3">
+          <template x-for="result in sortedResults" :key="result.id">
+            <div class="memory-card" :class="expandedId === result.id && 'memory-card-expanded'"
+                 @click="toggleExpand(result.id)">
+              <div class="flex items-start gap-3">
+                <!-- Score Badge -->
+                <div x-show="result.score != null" class="badge badge-score shrink-0"
+                     x-text="result.score?.toFixed(2)"></div>
+                <!-- Content -->
+                <div class="flex-1 min-w-0">
+                  <p class="text-[#E6EDF3] text-sm" x-text="expandedId === result.id ? result.memory : truncate(result.memory, 200)"></p>
+                  <!-- Badge row: left = type + importance + categories, right = agent + status -->
+                   <div class="flex flex-wrap items-center gap-1.5 mt-2 min-w-0">
+                    <!-- Left group: type, importance, categories -->
+                    <span class="badge" :class="typeBadgeClass(result.metadata?.memory_type)"
+                          x-text="result.metadata?.memory_type"></span>
+                    <span x-show="result.metadata?.importance && result.metadata.importance !== 'normal'"
+                          class="badge" :class="importanceBadgeClass(result.metadata?.importance)"
+                          x-text="result.metadata?.importance"></span>
+                    <template x-for="cat in (result.metadata?.categories || [])" :key="cat">
+                      <span class="badge badge-category" x-text="'#' + cat"></span>
+                    </template>
+                    <template x-for="[k, v] in Object.entries(result.metadata?.labels || {})" :key="'lbl-'+k">
+                      <span class="badge bg-teal-500/15 text-teal-400 text-xs" x-text="k + '=' + (typeof v === 'object' ? JSON.stringify(v) : v)"></span>
+                    </template>
+                    <!-- Right group: agent, pinned, assistant, artifacts -->
+                     <span class="flex-1 min-w-2"></span>
+                    <span x-show="result.metadata?.agent_id" class="badge bg-indigo-500/15 text-indigo-400 inline-flex items-center gap-1">
+                      <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23-.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5"/></svg>
+                      <span x-text="result.metadata?.agent_id"></span>
+                    </span>
+                    <span x-show="result.metadata?.memory_layer === 'raw'" class="badge bg-amber-500/15 text-amber-400">raw</span>
+                    <span x-show="result.metadata?.superseded_by" class="badge bg-gray-500/20 text-gray-400">superseded</span>
+                    <span x-show="result.has_artifacts" class="badge bg-violet-500/15 text-violet-400">artifacts</span>
+                    <span x-show="result.metadata?.role === 'assistant'" class="badge bg-sky-500/15 text-sky-400 inline-flex items-center gap-1">
+                      <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8.25 3v1.5M4.5 8.25H3m18 0h-1.5M4.5 12H3m18 0h-1.5m-15 3.75H3m18 0h-1.5M8.25 19.5V21M12 3v1.5m0 15V21m3.75-18v1.5m0 15V21m-9-1.5h9a2.25 2.25 0 002.25-2.25v-9a2.25 2.25 0 00-2.25-2.25h-9A2.25 2.25 0 004.5 8.25v9a2.25 2.25 0 002.25 2.25z"/></svg>
+                      assistant
+                    </span>
+                    <span x-show="result.metadata?.pinned" class="badge badge-pinned inline-flex items-center gap-1">
+                      <svg class="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/></svg>
+                      pinned
+                     </span>
+                   </div>
+                   <div class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
+                     <span x-text="'Accessed ' + (formatDate(result.metadata?.last_accessed_at) || 'never')"></span>
+                     <span x-text="'Validated ' + (formatDate(result.metadata?.last_validated_at || result.metadata?.checked_at) || 'never')"></span>
+                     <span x-text="'Expires ' + (formatDate(result.metadata?.expires_at) || 'never')"></span>
+                   </div>
+                 </div>
+              </div>
+
+              <!-- Expanded Details -->
+              <div x-show="expandedId === result.id" x-transition @click.stop class="mt-4 pt-4 border-t border-brand-border">
+                <div class="grid grid-cols-2 gap-x-6 gap-y-2 text-sm mb-4">
+                  <div><span class="text-muted">ID:</span> <span class="font-mono text-xs text-secondary" x-text="result.id"></span></div>
+                  <div><span class="text-muted">Role:</span> <span class="text-secondary" x-text="result.metadata?.role"></span></div>
+                  <div><span class="text-muted">Agent:</span> <span class="text-secondary" x-text="result.metadata?.agent_id || '—'"></span></div>
+                  <div><span class="text-muted">Created:</span> <span class="text-secondary" x-text="formatDate(result.metadata?.created_at_utc)"></span></div>
+                  <div><span class="text-muted">Event Date:</span> <span class="text-secondary" x-text="result.metadata?.event_date || '—'"></span></div>
+                  <div><span class="text-muted">TTL:</span> <span class="text-secondary" x-text="result.metadata?.ttl_days ? result.metadata.ttl_days + ' days' : 'permanent'"></span></div>
+                  <div><span class="text-muted">Expires:</span> <span class="text-secondary" x-text="formatDate(result.metadata?.expires_at) || '—'"></span></div>
+                  <div><span class="text-muted">Accessed:</span> <span class="text-secondary" x-text="(result.metadata?.access_count ?? 0) + ' times'"></span></div>
+                  <div class="col-span-2"><span class="text-muted">Labels:</span> <span class="text-secondary font-mono text-xs" x-text="JSON.stringify(result.metadata?.labels || {})"></span></div>
+                </div>
+                <div class="flex gap-2 flex-wrap">
+                  <button @click.stop="copyId(result.id)" class="btn-ghost text-xs">Copy ID</button>
+                  <button @click.stop="openEdit(result)" class="btn-ghost text-xs">Edit</button>
+                  <button @click.stop="openArtifacts(result)" class="btn-ghost text-xs">
+                    Artifacts<template x-if="result.has_artifacts"><span class="ml-1 text-violet-400" x-text="'(' + (result.metadata?.artifacts?.length || '…') + ')'"></span></template>
+                  </button>
+                  <template x-if="deleteConfirm !== result.id">
+                    <button @click.stop="deleteConfirm = result.id" class="btn-ghost text-xs text-red-400">Delete</button>
+                  </template>
+                  <template x-if="deleteConfirm === result.id">
+                    <div class="flex gap-2">
+                      <button @click.stop="deleteMemory(result.id)" class="btn-danger text-xs">Confirm Delete</button>
+                      <button @click.stop="deleteConfirm = null" class="btn-ghost text-xs">Cancel</button>
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </div>
+          </template>
+        </div>
+
+        <!-- Empty States -->
+        <div x-show="searched && !loading && results.length === 0 && !answer" class="text-center py-16 text-secondary">
+          <p>No results found.</p>
+          <p class="text-sm text-muted mt-1" x-show="mode === 'search'">Try using "Find" or "Ask" mode for AI-powered search.</p>
+        </div>
+        <div x-show="!searched && !loading" class="text-center py-16 text-muted">
+          Enter a query to search memories.
+        </div>
+      </div>
+
+      <!-- Memories Browse Tab -->
+      <div x-show="$store.nav.activeTab === 'memories'" x-data="memoriesTab()" x-init="init()">
+
+        <!-- Filters + Add button -->
+        <div class="flex flex-wrap items-end gap-4 mb-6">
+          <div>
+            <label class="block text-xs text-secondary mb-1">类型</label>
+            <select x-model="filters.memory_type" @change="applyFilters()" class="select text-sm">
+              <option value="">All</option>
+              <option value="fact">fact</option>
+              <option value="preference">preference</option>
+              <option value="episodic">episodic</option>
+              <option value="procedural">procedural</option>
+              <option value="context">context</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs text-secondary mb-1">角色</label>
+            <select x-model="filters.role" @change="applyFilters()" class="select text-sm">
+              <option value="">All</option>
+              <option value="user">user</option>
+              <option value="assistant">assistant</option>
+            </select>
+          </div>
+          <div x-show="availableAgentIds.length > 0">
+            <label class="block text-xs text-secondary mb-1">角色实例</label>
+            <select x-model="filterAgentId" @change="applyFilters()" class="select text-sm">
+              <option value="">All</option>
+              <option value="_none_">— no agent —</option>
+              <template x-for="aid in availableAgentIds" :key="aid">
+                <option :value="aid" x-text="aid"></option>
+              </template>
+            </select>
+          </div>
+          <!-- Categories multi-select dropdown -->
+          <div x-show="availableCategories.length > 0" x-data="{ catOpen: false }" class="relative">
+            <label class="block text-xs text-secondary mb-1">分类</label>
+            <button type="button" @click="catOpen = !catOpen" @click.outside="catOpen = false"
+                    class="select text-sm text-left min-w-[160px] flex items-center justify-between gap-2">
+              <span x-text="filters.categories.length > 0
+                ? filters.categories.length + ' selected'
+                : 'All'" class="truncate"></span>
+              <svg class="w-3 h-3 shrink-0 text-secondary" :class="catOpen && 'rotate-180'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg>
+            </button>
+            <div x-show="catOpen" x-transition
+                 class="absolute z-20 mt-1 w-56 max-h-64 overflow-y-auto bg-brand-surface border border-brand-border rounded-lg shadow-xl py-1">
+              <!-- Clear all -->
+              <button type="button" x-show="filters.categories.length > 0"
+                      @click="filters.categories = []; applyFilters()"
+                      class="w-full text-left px-3 py-1.5 text-xs text-red-400 hover:bg-brand-elevated">
+                Clear all
+              </button>
+              <template x-for="cat in availableCategories" :key="cat">
+                <label class="flex items-center gap-2 px-3 py-1.5 text-sm text-secondary hover:bg-brand-elevated hover:text-[#E6EDF3] cursor-pointer">
+                  <input type="checkbox"
+                         :checked="filters.categories.includes(cat)"
+                         @change="filters.categories.includes(cat)
+                           ? filters.categories.splice(filters.categories.indexOf(cat), 1)
+                           : filters.categories.push(cat); applyFilters()"
+                         class="rounded border-brand-border bg-brand-bg text-brand-accent focus:ring-brand-accent/30 w-3.5 h-3.5">
+                  <span x-text="cat"></span>
+                </label>
+              </template>
+            </div>
+          </div>
+          <div>
+            <label class="block text-xs text-secondary mb-1">层</label>
+            <select x-model="filterMemoryLayer" @change="applyFilters()" class="select text-sm">
+              <option value="">全部层</option>
+              <option value="raw">原始</option>
+              <option value="consolidated">已整理</option>
+            </select>
+          </div>
+          <div>
+            <label for="mem-sort" class="block text-xs text-secondary mb-1">创建排序</label>
+            <select id="mem-sort" x-model="sortBy" @change="onSortChange()" class="select text-sm">
+              <option value="newest">最新优先</option>
+              <option value="oldest">最早优先</option>
+              <option value="storage">Storage order</option>
+            </select>
+          </div>
+          <div>
+            <label for="mem-date" class="block text-xs text-secondary mb-1">Created</label>
+            <select id="mem-date" x-model="dateFilter" @change="applyFilters()" class="select text-sm">
+              <option value="all">全部时间</option>
+              <option value="today">Today</option>
+              <option value="hour">Last hour</option>
+              <option value="custom">Custom range</option>
+            </select>
+          </div>
+          <div x-show="dateFilter === 'custom'">
+            <label for="mem-start" class="block text-xs text-secondary mb-1">From (inclusive)</label>
+            <input id="mem-start" type="datetime-local" x-model="customStart" @change="applyFilters()" class="input text-sm">
+          </div>
+          <div x-show="dateFilter === 'custom'">
+            <label for="mem-end" class="block text-xs text-secondary mb-1">Until (exclusive)</label>
+            <input id="mem-end" type="datetime-local" x-model="customEnd" @change="applyFilters()" class="input text-sm">
+          </div>
+          <div class="flex items-center gap-2">
+            <input type="checkbox" x-model="filterDecayedOnly" @change="applyFilters()" id="mem-decayed"
+                   class="rounded border-brand-border bg-brand-elevated text-brand-accent focus:ring-brand-accent/30">
+            <label for="mem-decayed" class="text-sm text-secondary cursor-pointer">只看已衰减</label>
+          </div>
+          <div class="flex items-center gap-2">
+            <input type="checkbox" x-model="filterArtifactsOnly" @change="applyFilters()" id="mem-artifacts"
+                   class="rounded border-brand-border bg-brand-elevated text-brand-accent focus:ring-brand-accent/30">
+            <label for="mem-artifacts" class="text-sm text-secondary cursor-pointer">只看带附件</label>
+          </div>
+          <div>
+            <label class="block text-xs text-muted mb-1">Labels (JSON)</label>
+            <input type="text" x-model="filters.labels_json" @change="applyFilters()" class="input text-sm"
+                   placeholder='{"project": "myapp"}'>
+          </div>
+          <div class="ml-auto flex items-center gap-3">
+            <span class="text-sm text-muted">已加载 <span class="text-secondary" x-text="sortedMemories.length"></span><span x-show="hasMoreOnServer">+</span> 条记忆</span>
+            <button @click="loadMemories(false)" class="btn-secondary text-sm" :disabled="loading">
+              <span x-show="!loading">刷新</span>
+              <span x-show="loading">Loading...</span>
+            </button>
+            <button @click="toggleBulkMode()" class="btn-secondary text-sm"
+                    :class="bulkMode && 'ring-1 ring-brand-accent/50'"
+                    x-text="bulkMode ? 'Cancel Select' : 'Select'"></button>
+            <button x-show="!bulkMode" @click="openAdd()" class="btn-primary text-sm">+ Add Memory</button>
+          </div>
+        </div>
+
+        <!-- Bulk Action Bar -->
+        <div x-show="bulkMode" x-transition class="flex items-center gap-3 mb-4 px-4 py-3 rounded-lg bg-brand-elevated border border-brand-border">
+          <button @click="allSelected ? deselectAll() : selectAll()" class="btn-secondary text-sm"
+                  x-text="allSelected ? 'Deselect All' : 'Select All'"></button>
+          <span class="text-sm text-secondary"><span class="text-[#E6EDF3] font-medium" x-text="selectedCount"></span> selected</span>
+          <span class="flex-1"></span>
+          <template x-if="!bulkDeleteConfirm">
+            <button @click="bulkDeleteConfirm = true" class="btn-danger text-sm" :disabled="selectedCount === 0">
+              Retract Selected
+            </button>
+          </template>
+          <template x-if="bulkDeleteConfirm">
+            <div class="flex items-center gap-2">
+              <span class="text-sm text-red-400">Retract <span x-text="selectedCount"></span> memories?</span>
+              <button @click="bulkDelete()" class="btn-danger text-sm" :disabled="bulkDeleting">
+                <span x-show="!bulkDeleting">Confirm</span>
+                <span x-show="bulkDeleting">Deleting...</span>
+              </button>
+              <button @click="bulkDeleteConfirm = false" class="btn-ghost text-sm">Cancel</button>
+            </div>
+          </template>
+        </div>
+
+        <!-- Memory List -->
+        <div class="space-y-3">
+          <template x-for="mem in sortedMemories" :key="mem.id">
+             <div class="memory-card" :class="{
+                    'ring-1 ring-brand-accent/40': bulkMode && isSelected(mem.id),
+                  }"
+                  :role="bulkMode ? null : 'button'" :tabindex="bulkMode ? null : 0"
+                  @keydown.enter.prevent="bulkMode ? toggleSelect(mem.id) : openDetail(mem)"
+                  @keydown.space.prevent="bulkMode ? toggleSelect(mem.id) : openDetail(mem)"
+                  @click="bulkMode ? toggleSelect(mem.id) : openDetail(mem)">
+              <div class="flex items-start gap-3">
+                <div x-show="bulkMode" class="pt-0.5 shrink-0" @click.stop>
+                  <input type="checkbox" :checked="isSelected(mem.id)"
+                         @change="toggleSelect(mem.id)"
+                         class="rounded border-brand-border bg-brand-elevated text-brand-accent focus:ring-brand-accent/30">
+                </div>
+                <div class="flex-1 min-w-0">
+                   <p class="text-[#E6EDF3] text-sm" x-text="truncate(mem.memory, 200)"></p>
+                  <!-- Badge row: left = type + importance + categories, right = agent + status -->
+                   <div class="flex flex-wrap items-center gap-1.5 mt-2 min-w-0">
+                    <!-- Left group: type, importance, categories -->
+                    <span class="badge" :class="typeBadgeClass(mem.metadata?.memory_type)"
+                          x-text="mem.metadata?.memory_type"></span>
+                    <span x-show="mem.metadata?.importance && mem.metadata.importance !== 'normal'"
+                          class="badge" :class="importanceBadgeClass(mem.metadata?.importance)"
+                          x-text="mem.metadata?.importance"></span>
+                    <template x-for="cat in (mem.metadata?.categories || [])" :key="cat">
+                      <span class="badge badge-category" x-text="'#' + cat"></span>
+                    </template>
+                    <template x-for="[k, v] in Object.entries(mem.metadata?.labels || {})" :key="'lbl-'+k">
+                      <span x-show="k === 'session_id'"
+                            class="badge bg-teal-500/15 text-teal-400 text-xs cursor-pointer hover:bg-teal-500/25 transition-colors"
+                            @click.stop="$store.sessionDetail.show(v)"
+                            x-text="k + '=' + (typeof v === 'object' ? JSON.stringify(v) : String(v).substring(0, 12) + '...')"></span>
+                      <span x-show="k !== 'session_id'"
+                            class="badge bg-teal-500/15 text-teal-400 text-xs"
+                            x-text="k + '=' + (typeof v === 'object' ? JSON.stringify(v) : v)"></span>
+                    </template>
+                    <!-- Right group: agent, pinned, assistant, artifacts, layer -->
+                     <span class="flex-1 min-w-2"></span>
+                     <span x-show="mem.metadata?.memory_layer === 'raw'" class="badge bg-amber-500/15 text-amber-400">raw</span>
+                     <span class="badge bg-brand-elevated text-secondary" x-text="'rev ' + (mem.metadata?.revision || 1)"></span>
+                     <span class="badge bg-teal-500/15 text-teal-300" x-text="mem.metadata?.revision_state || 'active'"></span>
+                     <span class="badge bg-sky-500/15 text-sky-300"
+                           x-text="(mem.metadata?.validation_state || 'unverified') + ' · ' + (mem.metadata?.validation_count || 0)"></span>
+                    <span x-show="mem.metadata?.agent_id" class="badge bg-indigo-500/15 text-indigo-400 inline-flex items-center gap-1">
+                      <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23-.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5"/></svg>
+                      <span x-text="mem.metadata?.agent_id"></span>
+                    </span>
+                    <span x-show="mem.has_artifacts" class="badge bg-violet-500/15 text-violet-400">artifacts</span>
+                    <span x-show="mem.metadata?.role === 'assistant'" class="badge bg-sky-500/15 text-sky-400 inline-flex items-center gap-1">
+                      <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8.25 3v1.5M4.5 8.25H3m18 0h-1.5M4.5 12H3m18 0h-1.5m-15 3.75H3m18 0h-1.5M8.25 19.5V21M12 3v1.5m0 15V21m3.75-18v1.5m0 15V21m-9-1.5h9a2.25 2.25 0 002.25-2.25v-9a2.25 2.25 0 00-2.25-2.25h-9A2.25 2.25 0 004.5 8.25v9a2.25 2.25 0 002.25 2.25z"/></svg>
+                      assistant
+                    </span>
+                    <span x-show="mem.metadata?.pinned" class="badge badge-pinned inline-flex items-center gap-1">
+                      <svg class="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/></svg>
+                      pinned
+                     </span>
+                   </div>
+                    <div class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
+                      <span x-text="'Created ' + (formatDate(mem.metadata?.created_at_utc) || 'unknown')"></span>
+                      <span x-text="'Accessed ' + (formatDate(mem.metadata?.last_accessed_at) || 'never')"></span>
+                     <span x-text="'Validated ' + (formatDate(mem.metadata?.last_validated_at || mem.metadata?.checked_at) || 'never')"></span>
+                     <span x-text="'Expires ' + (formatDate(mem.metadata?.expires_at) || 'never')"></span>
+                   </div>
+                 </div>
+              </div>
+
+            </div>
+          </template>
+        </div>
+
+        <!-- Load More -->
+        <div class="text-center mt-6" x-show="canLoadMore">
+          <button @click="loadMore()" class="btn-secondary" :disabled="loading">
+            <span x-show="!loading">Load More</span>
+            <span x-show="loading">Loading...</span>
+          </button>
+        </div>
+
+        <div x-show="loadError" class="danger-panel mt-6" role="alert">
+          <p>Memories could not be loaded. The previous results remain available.</p>
+          <button @click="loadMemories(false)" class="btn-secondary text-sm mt-3">Retry</button>
+        </div>
+
+        <!-- Empty State -->
+        <div x-show="!loading && !loadError && initialized && memories.length === 0" class="text-center py-16 text-secondary">
+          <p>No memories found.</p>
+          <p class="text-sm text-muted mt-1">Try adjusting the filters or adding memories via the API.</p>
+        </div>
+
+        <!-- Revision detail -->
+        <div x-show="detail.open" x-cloak class="modal-overlay" @keydown.escape.window="closeDetail()" x-transition>
+          <section class="modal-content max-w-5xl p-0 overflow-hidden" role="dialog" aria-modal="true"
+                   aria-labelledby="memory-detail-title" @click.stop @keydown.tab="trapDetailFocus($event)">
+            <header class="flex items-start gap-4 border-b border-brand-border p-4 sm:p-6">
+              <div class="min-w-0 flex-1">
+                <h2 id="memory-detail-title" class="text-lg font-semibold">记忆详情</h2>
+                <p class="mt-1 font-mono text-xs text-muted break-all" x-text="detail.memory?.id"></p>
+              </div>
+              <button x-ref="memoryDetailClose" @click="closeDetail()" class="btn-ghost" aria-label="关闭记忆详情">关闭</button>
+            </header>
+            <div class="flex border-b border-brand-border px-4 sm:px-6 overflow-x-auto" role="tablist" aria-label="Memory details">
+              <template x-for="tab in [{id:'current',label:'正文'},{id:'history',label:'版本'},{id:'links',label:'来源与关联'}]" :key="tab.id">
+                <button class="detail-tab" :class="detail.tab === tab.id && 'detail-tab-active'"
+                        :id="'memory-tab-' + tab.id" role="tab"
+                        :aria-controls="'memory-panel-' + tab.id"
+                        :tabindex="detail.tab === tab.id ? 0 : -1"
+                        :aria-selected="detail.tab === tab.id"
+                        @keydown.arrow-right.prevent="handleDetailTabKey($event)"
+                        @keydown.arrow-left.prevent="handleDetailTabKey($event)"
+                        @click="selectDetailTab(tab.id)" x-text="tab.label"></button>
+              </template>
+            </div>
+            <div class="p-4 sm:p-6 overflow-y-auto max-h-[70vh]" aria-live="polite">
+              <div id="memory-panel-current" role="tabpanel" aria-labelledby="memory-tab-current"
+                   x-show="detail.tab === 'current'" class="space-y-5">
+                <p class="whitespace-pre-wrap break-words text-sm" x-text="detail.memory?.memory"></p>
+                <dl class="detail-grid">
+                  <div><dt>版本</dt><dd x-text="detail.memory?.metadata?.revision || 1"></dd></div>
+                  <div><dt>状态</dt><dd x-text="detail.memory?.metadata?.revision_state || 'active'"></dd></div>
+                  <div><dt>校验</dt><dd x-text="(detail.memory?.metadata?.validation_state || 'unverified') + ' (' + (detail.memory?.metadata?.validation_count || 0) + ')'"></dd></div>
+                  <div><dt>类型 / 层</dt><dd x-text="(detail.memory?.metadata?.memory_type || '—') + ' / ' + (detail.memory?.metadata?.memory_layer || 'consolidated')"></dd></div>
+                  <div><dt>来源</dt><dd x-text="detail.memory?.metadata?.labels?.来源 || '—'"></dd></div>
+                  <div><dt>事件</dt><dd x-text="detail.memory?.metadata?.labels?.事件 || '—'"></dd></div>
+                  <div><dt>版本</dt><dd x-text="detail.memory?.metadata?.labels?.版本 || '—'"></dd></div>
+                  <div><dt>最近访问</dt><dd x-text="formatDate(detail.memory?.metadata?.last_accessed_at) || '从未'"></dd></div>
+                  <div><dt>最近校验</dt><dd x-text="formatDate(detail.memory?.metadata?.last_validated_at || detail.memory?.metadata?.checked_at) || '从未'"></dd></div>
+                  <div><dt>过期</dt><dd x-text="formatDate(detail.memory?.metadata?.expires_at) || '永久'"></dd></div>
+                  <div><dt>创建</dt><dd x-text="formatDate(detail.memory?.metadata?.created_at_utc) || '—'"></dd></div>
+                </dl>
+                <div class="flex flex-wrap gap-2" x-show="!detail.memory?._projectionOnly">
+                  <template x-if="(detail.memory?.metadata?.revision_state || 'active') === 'active'">
+                    <button @click="openEdit(detail.memory)" class="btn-secondary text-sm">Edit into successor</button>
+                  </template>
+                  <button @click="openArtifacts(detail.memory)" class="btn-secondary text-sm">Artifacts</button>
+                  <template x-if="(detail.memory?.metadata?.revision_state || 'active') === 'active'">
+                    <button @click="detail.retractConfirm = !detail.retractConfirm" class="btn-danger text-sm">Retract</button>
+                  </template>
+                </div>
+                <div x-show="detail.retractConfirm" class="danger-panel">
+                  <p>Retraction removes this assertion from normal recall. History and artifacts remain available.</p>
+                  <button @click="deleteMemory(detail.memory.id)" class="btn-danger text-sm mt-3">Confirm retraction</button>
+                </div>
+                <div class="danger-panel" x-show="!detail.memory?._projectionOnly && (detail.memory?.metadata?.revision_state || 'active') === 'active'">
+                  <button @click="detail.eraseConfirm = !detail.eraseConfirm" class="text-sm text-red-300 underline">Privacy erase</button>
+                  <div x-show="detail.eraseConfirm" class="mt-3 space-y-3">
+                    <p>This permanently removes the full lineage and unreferenced artifacts. This action cannot be undone.</p>
+                    <label class="block text-sm">Type <strong>ERASE</strong> to continue.</label>
+                    <input x-model="detail.eraseText" class="input" autocomplete="off">
+                    <button @click="privacyErase()" :disabled="detail.eraseText !== 'ERASE'" class="btn-danger text-sm">Permanently erase lineage</button>
+                  </div>
+                </div>
+              </div>
+
+              <div id="memory-panel-history" role="tabpanel" aria-labelledby="memory-tab-history"
+                   x-show="detail.tab === 'history'">
+                <div x-show="detail.loading" class="text-secondary">正在读取版本…</div>
+                <div x-show="detail.error" class="danger-panel" x-text="detail.error"></div>
+                <div x-show="detail.history && historyEntries().length === 0" class="text-secondary">没有可显示的版本。</div>
+                <ol class="timeline">
+                  <template x-for="(entry, index) in historyEntries()" :key="entry.kind + '-' + index">
+                    <li>
+                      <div class="flex flex-wrap items-center gap-2">
+                        <strong x-text="entry.kind === 'revision' ? '版本 ' + entry.value.metadata.revision : entry.value.operation_kind"></strong>
+                        <span class="badge bg-brand-elevated text-secondary" x-text="entry.kind === 'revision' ? entry.value.metadata.revision_state : entry.value.status"></span>
+                        <span x-show="entry.kind === 'revision' && entry.value.id === detail.history.current_revision_id" class="badge bg-teal-500/15 text-teal-300">当前</span>
+                        <time class="text-xs text-muted" x-text="formatDate(entry.timestamp)"></time>
+                      </div>
+                      <p x-show="entry.kind === 'revision'" class="mt-2 whitespace-pre-wrap break-words text-sm" x-text="entry.value.memory"></p>
+                      <p x-show="entry.kind === 'operation'" class="mt-1 text-sm text-secondary"
+                         x-text="(entry.value.actor_kind || 'system') + (entry.value.source_kind ? ' · ' + entry.value.source_kind : '') + (entry.value.reason ? ' · ' + entry.value.reason : '')"></p>
+                      <p x-show="entry.kind === 'revision' && (entry.value.predecessor_id || entry.value.successor_id)"
+                         class="mt-1 text-xs font-mono text-muted"
+                         x-text="(entry.value.predecessor_id ? '上一版：' + entry.value.predecessor_id : '') + (entry.value.successor_id ? ' 下一版：' + entry.value.successor_id : '')"></p>
+                      <div x-show="entry.kind === 'revision' && diffForRevision(entry.value.id).length" class="mt-3 space-y-2">
+                        <template x-for="change in diffForRevision(entry.value.id)" :key="change.field">
+                          <div class="rounded border border-brand-border p-2 text-xs">
+                            <strong class="text-secondary" x-text="change.field"></strong>
+                            <div class="mt-1 grid grid-cols-1 sm:grid-cols-2 gap-2 font-mono break-words">
+                              <span class="text-red-300 whitespace-pre-wrap" x-text="change.before"></span>
+                              <span class="text-teal-300 whitespace-pre-wrap" x-text="change.after"></span>
+                            </div>
+                          </div>
+                        </template>
+                      </div>
+                    </li>
+                  </template>
+                </ol>
+                <div class="mt-4 flex flex-wrap gap-2">
+                  <button x-show="detail.history?.next_revision_cursor" @click="loadMoreHistory('revision')" class="btn-secondary text-sm">Load older revisions</button>
+                  <button x-show="detail.history?.next_operation_cursor" @click="loadMoreHistory('operation')" class="btn-secondary text-sm">Load older operations</button>
+                </div>
+              </div>
+
+              <div id="memory-panel-links" role="tabpanel" aria-labelledby="memory-tab-links"
+                   x-show="detail.tab === 'links'" class="space-y-5">
+                <div x-show="detail.loading" class="text-secondary">Loading evidence…</div>
+                <div x-show="detail.error" class="danger-panel" x-text="detail.error"></div>
+                <div x-show="detail.links?.provenance_quality === 'legacy_batch'" class="warning-panel">
+                  Legacy batch provenance is approximate. The listed sources can include unrelated batch members.
+                </div>
+                <template x-for="group in [{key:'derived_from',label:'Sources'},{key:'derived_outputs',label:'Derived outputs'}]" :key="group.key">
+                  <section>
+                    <h3 class="font-medium" x-text="group.label"></h3>
+                    <p x-show="detail.links && !detail.links[group.key]?.length" class="text-sm text-muted mt-2">No authorized links.</p>
+                    <div class="space-y-2 mt-2">
+                      <template x-for="link in (detail.links?.[group.key] || [])" :key="link.id">
+                        <button @click="openDetail(link)" class="link-card">
+                          <span class="block text-left text-sm" x-text="truncate(link.memory, 180)"></span>
+                          <span class="block text-left text-xs text-muted mt-1" x-text="'版本 ' + link.revision + ' · ' + link.revision_state + (link.has_artifacts ? ' · artifacts' : '')"></span>
+                        </button>
+                      </template>
+                    </div>
+                  </section>
+                </template>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <!-- Add Memory Modal -->
+        <div x-show="addModal.open" class="modal-overlay" @click="addModal.open = false" x-transition>
+          <div class="modal-content max-w-2xl" @click.stop>
+            <h3 class="text-lg font-semibold text-[#E6EDF3] mb-4">Add Memory</h3>
+            <div class="space-y-4">
+              <!-- Required: content -->
+              <div>
+                <label class="block text-sm text-secondary mb-1">
+                  Content <span class="text-red-400">*</span>
+                  <span class="text-xs text-muted ml-1">— what to remember</span>
+                </label>
+                <textarea x-model="addModal.form.content" rows="5" class="input resize-y"
+                          placeholder="e.g. User prefers dark mode and uses VS Code for development"></textarea>
+              </div>
+
+              <!-- Advanced toggle -->
+              <div>
+                <button type="button" @click="addModal.showAdvanced = !addModal.showAdvanced"
+                        class="flex items-center gap-2 text-sm text-secondary hover:text-[#E6EDF3] transition-colors">
+                  <svg class="w-4 h-4 transition-transform" :class="addModal.showAdvanced ? 'rotate-90' : ''"
+                       fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>
+                  </svg>
+                  Advanced options
+                  <span class="text-xs text-muted">(type, categories, importance, role, TTL…)</span>
+                </button>
+              </div>
+
+              <!-- Advanced fields -->
+              <div x-show="addModal.showAdvanced" x-transition class="space-y-4 border-t border-brand-border pt-4">
+                <!-- Infer toggle — prominent -->
+                <div class="flex items-start gap-3 p-3 rounded-lg bg-brand-elevated border border-brand-border">
+                  <input type="checkbox" x-model="addModal.form.infer" id="add-infer"
+                         class="mt-0.5 rounded border-brand-border bg-brand-bg text-brand-accent focus:ring-brand-accent/30">
+                  <div>
+                    <label for="add-infer" class="text-sm text-[#E6EDF3] cursor-pointer font-medium">AI extraction (infer)</label>
+                    <p class="text-xs text-muted mt-0.5">Use AI to extract key facts, auto-classify, and deduplicate against existing memories. Recommended. Disable to store content as-is (faster).</p>
+                  </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-4">
+                  <div>
+                    <label class="block text-sm text-secondary mb-1">Type <span class="text-xs text-muted">(auto if blank)</span></label>
+                    <select x-model="addModal.form.memory_type" class="select text-sm w-full">
+                      <option value="">Auto-classify</option>
+                      <option value="fact">fact</option>
+                      <option value="preference">preference</option>
+                      <option value="episodic">episodic</option>
+                      <option value="procedural">procedural</option>
+                      <option value="context">context</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label class="block text-sm text-secondary mb-1">Importance <span class="text-xs text-muted">(auto if blank)</span></label>
+                    <select x-model="addModal.form.importance" class="select text-sm w-full">
+                      <option value="">Auto-classify</option>
+                      <option value="low">low</option>
+                      <option value="normal">normal</option>
+                      <option value="high">high</option>
+                      <option value="critical">critical</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div>
+                  <label class="block text-sm text-secondary mb-1">Categories <span class="text-xs text-muted">(comma-separated, auto if blank)</span></label>
+                  <input type="text" x-model="addModal.form.categories" class="input text-sm"
+                         placeholder="personal, work, technical">
+                  <!-- Category pills for quick selection -->
+                  <div class="flex flex-wrap gap-1 mt-2" x-show="availableCategories.length > 0">
+                    <template x-for="cat in availableCategories" :key="cat">
+                      <button type="button"
+                              @click="addModal.form.categories = addModal.form.categories
+                                ? (addModal.form.categories.split(',').map(c=>c.trim()).includes(cat)
+                                    ? addModal.form.categories.split(',').map(c=>c.trim()).filter(c=>c!==cat).join(', ')
+                                    : addModal.form.categories + ', ' + cat)
+                                : cat"
+                              :class="addModal.form.categories.split(',').map(c=>c.trim()).includes(cat)
+                                ? 'badge badge-fact cursor-pointer'
+                                : 'badge bg-brand-elevated text-secondary cursor-pointer hover:text-[#E6EDF3]'"
+                              x-text="cat">
+                      </button>
+                    </template>
+                  </div>
+                </div>
+
+                <div>
+                  <label class="block text-sm text-secondary mb-1">Labels <span class="text-xs text-muted">(JSON, e.g. {"project": "myapp"})</span></label>
+                  <input type="text" x-model="addModal.form.labels" class="input text-sm"
+                         placeholder='{"project": "myapp", "topic": "auth"}'>
+                </div>
+
+                <div class="grid grid-cols-2 gap-4">
+                  <div>
+                    <label class="block text-sm text-secondary mb-1">Role</label>
+                    <select x-model="addModal.form.role" class="select text-sm w-full">
+                      <option value="user">user — about the user</option>
+                      <option value="assistant">assistant — about the agent</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label class="block text-sm text-secondary mb-1">Agent ID <span class="text-xs text-muted">(optional)</span></label>
+                    <input type="text" x-model="addModal.form.agent_id" class="input text-sm"
+                           placeholder="e.g. claude-code">
+                  </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-4">
+                  <div>
+                    <label class="block text-sm text-secondary mb-1">TTL (days) <span class="text-xs text-muted">(empty = type default)</span></label>
+                    <input type="number" x-model="addModal.form.ttl_days" class="input text-sm"
+                           placeholder="e.g. 30">
+                  </div>
+                  <div>
+                    <label class="block text-sm text-secondary mb-1">Event Date <span class="text-xs text-muted">(ISO 8601, optional)</span></label>
+                    <input type="text" x-model="addModal.form.event_date" class="input text-sm"
+                           placeholder="2024-01-15T10:00:00">
+                  </div>
+                </div>
+
+                <div class="flex items-center gap-2">
+                  <input type="checkbox" x-model="addModal.form.pinned" id="add-pinned"
+                         class="rounded border-brand-border bg-brand-elevated text-brand-accent focus:ring-brand-accent/30">
+                  <label for="add-pinned" class="text-sm text-secondary cursor-pointer">
+                    Pinned — load at every conversation start
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <div class="flex justify-end gap-3 mt-6">
+              <button @click="addModal.open = false" class="btn-secondary">Cancel</button>
+              <button @click="saveAdd()" class="btn-primary" :disabled="addModal.saving || !addModal.form.content.trim()">
+                <span x-show="!addModal.saving">Save Memory</span>
+                <span x-show="addModal.saving">Saving...</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Sessions Tab ──────────────────────────────────── -->
+      <div x-show="$store.nav.activeTab === 'sessions'" x-cloak>
+        <div x-data="sessionsPanel()" x-init="init()">
+          <!-- Header -->
+          <div class="flex flex-col gap-4 mb-6">
+            <div class="flex items-center justify-between gap-4">
+              <div>
+                <h2 class="text-xl font-semibold text-primary">Session Summaries</h2>
+                <p class="text-sm text-secondary mt-1">
+                  Conversation summaries persisted by the remember endpoint
+                </p>
+              </div>
+              <div class="flex items-center gap-2">
+                <button @click="load()" class="btn-secondary text-sm">
+                  Refresh
+                </button>
+              </div>
+            </div>
+
+            <div class="card-elevated flex flex-wrap items-end gap-3">
+              <div class="min-w-[220px] flex-1">
+                <label class="block text-xs text-secondary mb-1">Search summaries</label>
+                <div class="flex gap-2">
+                  <input type="text"
+                         x-model="queryInput"
+                         @keydown.enter.prevent="applySearch()"
+                         class="input text-sm"
+                         placeholder="Search session summary text or ID">
+                  <button @click="applySearch()" class="btn-primary text-sm">Search</button>
+                  <button x-show="query" @click="clearSearch()" class="btn-ghost text-sm">Clear</button>
+                </div>
+              </div>
+              <div>
+                <label class="block text-xs text-secondary mb-1">角色实例</label>
+                <select class="select text-sm" x-model="agentFilter">
+                  <option value="">All agents</option>
+                  <template x-for="agent in uniqueAgents" :key="agent">
+                    <option :value="agent" x-text="agent"></option>
+                  </template>
+                </select>
+              </div>
+              <div>
+                <label class="block text-xs text-secondary mb-1">State</label>
+                <select class="select text-sm" x-model="stateFilter" @change="resetPaging(); load()">
+                  <option value="">All states</option>
+                  <option value="idle">Idle</option>
+                  <option value="consolidating">Consolidating</option>
+                  <option value="consolidated">已整理</option>
+                  <option value="failed">Failed</option>
+                </select>
+              </div>
+              <div>
+                <label class="block text-xs text-secondary mb-1">Sort by</label>
+                <select class="select text-sm" x-model="sortBy" @change="updateSort($event.target.value)">
+                  <option value="updated_at">Last activity</option>
+                  <option value="created_at">Created</option>
+                </select>
+              </div>
+              <div>
+                <label class="block text-xs text-secondary mb-1">Direction</label>
+                <button @click="toggleSortDir()" class="btn-secondary text-sm min-w-[72px]" x-text="sortDir === 'desc' ? 'Desc' : 'Asc'"></button>
+              </div>
+              <div>
+                <label class="block text-xs text-secondary mb-1">Page size</label>
+                <select class="select text-sm" x-model.number="pageSize" @change="updatePageSize()">
+                  <option :value="10">10</option>
+                  <option :value="25">25</option>
+                  <option :value="50">50</option>
+                </select>
+              </div>
+            </div>
+
+            <div>
+              <p class="text-sm text-secondary">
+                <span x-text="filteredSessions.length > 0 ? `Showing ${rangeStart}-${rangeEnd}` : 'Showing 0'"></span>
+                <span> of </span>
+                <span x-text="total"></span>
+                <span> sessions</span>
+                <span x-show="query" class="text-muted">for “<span x-text="query"></span>”</span>
+              </p>
+              <p x-show="totalTruncated" class="text-xs text-amber-400 mt-1">
+                Results were truncated after scanning 5000 session summaries.
+              </p>
+            </div>
+          </div>
+
+          <!-- Loading -->
+          <div x-show="loading" class="text-center py-12">
+            <div class="text-secondary">Loading sessions...</div>
+          </div>
+
+          <!-- Error -->
+          <div x-show="error" class="card border-red-500/30 mb-4">
+            <p class="text-red-400 text-sm" x-text="error"></p>
+          </div>
+
+          <!-- Empty state -->
+          <div x-show="!loading && !error && filteredSessions.length === 0"
+               class="text-center py-12">
+            <p class="text-secondary">No session summaries found</p>
+            <p class="text-xs text-muted mt-1">
+              Session summaries are created by the remember endpoint
+            </p>
+          </div>
+
+          <!-- Sessions list -->
+          <div x-show="!loading && filteredSessions.length > 0" class="space-y-2">
+            <template x-for="(session, idx) in filteredSessions" :key="session.session_id || ('s-' + idx)">
+              <div class="card cursor-pointer hover:border-brand-accent/30 transition-colors"
+                   @click="toggleSession(session)">
+                <div class="flex items-start justify-between gap-4">
+                  <div class="flex-1 min-w-0">
+                    <div class="flex flex-wrap items-center gap-1.5 mb-1 min-w-0">
+                      <span class="text-xs font-mono text-muted"
+                            x-text="session.session_id?.substring(0, 16) + '...'"></span>
+                      <span class="badge" :class="stateBadgeClass(session.consolidation_state || 'idle')"
+                            x-text="session.consolidation_state || 'idle'"></span>
+                      <span x-show="session.agent_id" class="badge bg-indigo-500/15 text-indigo-400 inline-flex items-center gap-1">
+                        <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23-.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5"/></svg>
+                        <span x-text="session.agent_id"></span>
+                      </span>
+                      <span class="badge bg-brand-elevated text-muted"
+                            x-text="(session.memory_ids?.length || 0) + ' memories'"></span>
+                      <span class="badge bg-brand-elevated text-muted"
+                            x-text="'Turn ' + (session.turn_count || 0)"></span>
+                      <span class="flex-1 min-w-2"></span>
+                      <span class="text-xs text-muted whitespace-nowrap"
+                            x-text="formatDate(session.updated_at)"></span>
+                    </div>
+                    <p class="text-sm text-primary line-clamp-2"
+                       x-text="session.summary?.substring(0, 200) + (session.summary?.length > 200 ? '...' : '')"></p>
+                  </div>
+                  <div class="text-muted pt-1">
+                    <svg x-show="!session._expanded" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+                    <svg x-show="session._expanded" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7"></path></svg>
+                  </div>
+                </div>
+
+                <!-- Expanded details -->
+                <div x-show="session._expanded" x-cloak @click.stop class="mt-3 pt-3 border-t border-brand-border">
+                  <div class="space-y-3">
+                    <!-- Full Summary -->
+                    <div>
+                      <div class="text-xs font-semibold text-secondary mb-1">Full Summary</div>
+                      <div class="text-sm text-primary whitespace-pre-wrap bg-brand-bg rounded-lg p-2.5"
+                           x-text="session.summary || 'No summary'"></div>
+                    </div>
+
+                    <!-- Metadata grid -->
+                    <div class="grid grid-cols-2 gap-x-6 gap-y-1.5 text-sm">
+                      <div><span class="text-muted">Session ID:</span> <span class="font-mono text-xs text-secondary" x-text="session.session_id"></span></div>
+                      <div><span class="text-muted">Agent:</span> <span class="text-secondary" x-text="session.agent_id || '—'"></span></div>
+                      <div><span class="text-muted">Created:</span> <span class="text-secondary" x-text="formatDate(session.created_at)"></span></div>
+                      <div><span class="text-muted">Updated:</span> <span class="text-secondary" x-text="formatDate(session.updated_at)"></span></div>
+                      <div x-show="session.consolidated_at">
+                        <span class="text-muted">Consolidated:</span>
+                        <span class="text-secondary" x-text="formatDate(session.consolidated_at)"></span>
+                        <span class="text-muted text-xs"
+                              x-text="'(' + (session.consolidated_memory_ids?.length || 0) + ' consolidated out of ' + (session.memory_ids?.length || 0) + ' raw)'"></span>
+                      </div>
+                      <div><span class="text-muted">Turns:</span> <span class="text-secondary" x-text="session.turn_count || 0"></span></div>
+                    </div>
+
+                    <!-- Consolidation actions -->
+                    <div class="flex items-center gap-2">
+                      <button x-show="!session.consolidation_state || session.consolidation_state === 'idle' || session.consolidation_state === 'failed'"
+                              @click.stop="consolidateSession(session)"
+                              :disabled="isConsolidating(session.session_id)"
+                              class="btn-primary text-xs">
+                        <span x-show="!consolidating[session.session_id]">Consolidate Now</span>
+                        <span x-show="consolidating[session.session_id]">Consolidating...</span>
+                      </button>
+                      <span x-show="session.consolidation_state === 'consolidated'" class="text-xs text-green-400">
+                        Consolidated <span x-text="session.consolidated_at ? formatDate(session.consolidated_at) : ''"></span>
+                        <span class="text-muted" x-text="'(' + (session.consolidated_memory_ids?.length || 0) + '/' + (session.memory_ids?.length || 0) + ')'"></span>
+                      </span>
+                      <span class="flex-1"></span>
+                      <button @click.stop="confirmDeleteSession(session)"
+                              class="btn-ghost text-xs text-red-400 hover:text-red-300">
+                        Delete Session
+                      </button>
+                    </div>
+
+                    <!-- Linked Memories -->
+                    <div x-show="session.memory_ids?.length > 0">
+                      <div class="text-xs font-semibold text-secondary mb-1.5"
+                           x-text="'Linked Memories (' + getSessionMemories(session.session_id).length + '/' + (session.memory_ids?.length || 0) + ')'"></div>
+
+                      <!-- Loading state -->
+                      <div x-show="isMemLoading(session.session_id)" class="text-xs text-muted py-2">Loading memories...</div>
+
+                      <!-- Memory cards (paginated) -->
+                      <div x-show="!isMemLoading(session.session_id)" class="space-y-1">
+                        <template x-for="mem in getPagedSessionMemories(session.session_id)" :key="mem.id">
+                          <div class="memory-card" :class="{ 'memory-card-expanded': expandedMemId === mem.id }"
+                               @click.stop="toggleMemExpand(mem.id)">
+                            <div class="flex-1 min-w-0">
+                              <p class="text-[#E6EDF3] text-sm" x-text="expandedMemId === mem.id ? mem.memory : truncate(mem.memory)"></p>
+                              <!-- Badge row -->
+                               <div class="flex flex-wrap items-center gap-1.5 mt-1.5 min-w-0">
+                                <span class="badge" :class="typeBadgeClass(mem.metadata?.memory_type)"
+                                      x-text="mem.metadata?.memory_type"></span>
+                                <span x-show="mem.metadata?.importance && mem.metadata.importance !== 'normal'"
+                                      class="badge" :class="importanceBadgeClass(mem.metadata?.importance)"
+                                      x-text="mem.metadata?.importance"></span>
+                                <template x-for="cat in (mem.metadata?.categories || [])" :key="cat">
+                                  <span class="badge badge-category" x-text="'#' + cat"></span>
+                                </template>
+                                 <span class="flex-1 min-w-2"></span>
+                                <span x-show="mem.metadata?.agent_id" class="badge bg-indigo-500/15 text-indigo-400 inline-flex items-center gap-1">
+                                  <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23-.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5"/></svg>
+                                  <span x-text="mem.metadata?.agent_id"></span>
+                                </span>
+                                <span x-show="mem.has_artifacts" class="badge bg-violet-500/15 text-violet-400">artifacts</span>
+                                <span x-show="mem.metadata?.role === 'assistant'" class="badge bg-sky-500/15 text-sky-400">assistant</span>
+                                <span x-show="mem.metadata?.pinned" class="badge badge-pinned">pinned</span>
+                                <span x-show="mem.metadata?.memory_layer === 'raw'" class="badge bg-amber-500/15 text-amber-400">raw</span>
+                                <span x-show="mem.metadata?.superseded_by" class="badge bg-gray-500/20 text-gray-400">superseded</span>
+                              </div>
+                            </div>
+
+                            <!-- Expanded memory details -->
+                            <div x-show="expandedMemId === mem.id" x-transition @click.stop class="mt-3 pt-3 border-t border-brand-border">
+                              <div class="grid grid-cols-2 gap-x-6 gap-y-1.5 text-sm mb-3">
+                                <div><span class="text-muted">ID:</span> <span class="font-mono text-xs text-secondary" x-text="mem.id"></span></div>
+                                <div><span class="text-muted">Role:</span> <span class="text-secondary" x-text="mem.metadata?.role"></span></div>
+                                <div><span class="text-muted">Agent:</span> <span class="text-secondary" x-text="mem.metadata?.agent_id || '—'"></span></div>
+                                <div><span class="text-muted">Created:</span> <span class="text-secondary" x-text="formatDate(mem.metadata?.created_at_utc)"></span></div>
+                                <div><span class="text-muted">Layer:</span> <span class="text-secondary" x-text="mem.metadata?.memory_layer || 'consolidated'"></span></div>
+                                <div><span class="text-muted">TTL:</span> <span class="text-secondary" x-text="mem.metadata?.ttl_days ? mem.metadata.ttl_days + ' days' : 'permanent'"></span></div>
+                              </div>
+                              <div class="flex gap-2 flex-wrap">
+                                <button @click.stop="copyId(mem.id)" class="btn-ghost text-xs">Copy ID</button>
+                                <button @click.stop="openEdit(mem, session.session_id)" class="btn-ghost text-xs">Edit</button>
+                                <button @click.stop="openArtifacts(mem)" class="btn-ghost text-xs">
+                                  Artifacts<template x-if="mem.has_artifacts"><span class="ml-1 text-violet-400" x-text="'(' + (mem.metadata?.artifacts?.length || '…') + ')'"></span></template>
+                                </button>
+                                <template x-if="deleteConfirm !== mem.id">
+                                  <button @click.stop="deleteConfirm = mem.id" class="btn-ghost text-xs text-red-400">Delete</button>
+                                </template>
+                                <template x-if="deleteConfirm === mem.id">
+                                  <div class="flex gap-2">
+                                    <button @click.stop="deleteMemory(mem.id, session.session_id)" class="btn-danger text-xs">Confirm Delete</button>
+                                    <button @click.stop="deleteConfirm = null" class="btn-ghost text-xs">Cancel</button>
+                                  </div>
+                                </template>
+                              </div>
+                            </div>
+                          </div>
+                        </template>
+
+                        <!-- Pagination controls -->
+                        <div x-show="canShowMoreMems(session.session_id) || canShowLessMems(session.session_id)"
+                             class="flex items-center justify-center gap-3 pt-1.5">
+                          <button x-show="canShowMoreMems(session.session_id)"
+                                  @click.stop="showMoreMems(session.session_id)"
+                                  class="btn-ghost text-xs">
+                            Show More (<span x-text="remainingMemCount(session.session_id)"></span> more)
+                          </button>
+                          <button x-show="canShowLessMems(session.session_id)"
+                                  @click.stop="showLessMems(session.session_id)"
+                                  class="btn-ghost text-xs text-muted">
+                            Show Less
+                          </button>
+                        </div>
+
+                        <!-- No memories loaded -->
+                        <div x-show="getSessionMemories(session.session_id).length === 0 && !isMemLoading(session.session_id)"
+                             class="text-xs text-muted py-2">
+                          No memories found (may have been deleted or superseded)
+                        </div>
+                      </div>
+                    </div>
+
+                    <!-- Consolidated Memories (produced by consolidation) -->
+                    <div x-show="session.consolidated_memory_ids?.length > 0">
+                      <div class="text-xs font-semibold text-secondary mb-1.5"
+                           x-text="'Consolidated Memories (' + getConsolidatedMemories(session.session_id).length + '/' + (session.consolidated_memory_ids?.length || 0) + ')'"></div>
+
+                      <div x-show="isConsolidatedLoading(session.session_id)" class="text-xs text-muted py-2">Loading consolidated memories...</div>
+
+                      <div x-show="!isConsolidatedLoading(session.session_id)" class="space-y-1">
+                        <template x-for="mem in getPagedConsolidatedMemories(session.session_id)" :key="mem.id">
+                          <div class="memory-card border-green-500/20" :class="{ 'memory-card-expanded': expandedMemId === mem.id }"
+                               @click.stop="toggleMemExpand(mem.id)">
+                            <div class="flex-1 min-w-0">
+                              <p class="text-[#E6EDF3] text-sm" x-text="expandedMemId === mem.id ? mem.memory : truncate(mem.memory)"></p>
+                               <div class="flex flex-wrap items-center gap-1.5 mt-1.5 min-w-0">
+                                <span class="badge" :class="typeBadgeClass(mem.metadata?.memory_type)"
+                                      x-text="mem.metadata?.memory_type"></span>
+                                <span x-show="mem.metadata?.importance && mem.metadata.importance !== 'normal'"
+                                      class="badge" :class="importanceBadgeClass(mem.metadata?.importance)"
+                                      x-text="mem.metadata?.importance"></span>
+                                <template x-for="cat in (mem.metadata?.categories || [])" :key="cat">
+                                  <span class="badge badge-category" x-text="'#' + cat"></span>
+                                </template>
+                                 <span class="flex-1 min-w-2"></span>
+                                <span class="badge bg-green-500/15 text-green-400">consolidated</span>
+                              </div>
+                            </div>
+                            <div x-show="expandedMemId === mem.id" x-transition @click.stop class="mt-3 pt-3 border-t border-brand-border">
+                              <div class="grid grid-cols-2 gap-x-6 gap-y-1.5 text-sm mb-3">
+                                <div><span class="text-muted">ID:</span> <span class="font-mono text-xs text-secondary" x-text="mem.id"></span></div>
+                                <div><span class="text-muted">Role:</span> <span class="text-secondary" x-text="mem.metadata?.role"></span></div>
+                                <div><span class="text-muted">Created:</span> <span class="text-secondary" x-text="formatDate(mem.metadata?.created_at_utc)"></span></div>
+                                <div><span class="text-muted">Importance:</span> <span class="text-secondary" x-text="mem.metadata?.importance"></span></div>
+                                <div x-show="mem.metadata?.derived_from?.length" class="col-span-2">
+                                  <span class="text-muted">Derived from:</span>
+                                  <span class="text-secondary font-mono text-xs" x-text="(mem.metadata?.derived_from || []).length + ' raw memories'"></span>
+                                </div>
+                              </div>
+                              <div class="flex gap-2 flex-wrap">
+                                <button @click.stop="copyId(mem.id)" class="btn-ghost text-xs">Copy ID</button>
+                                <button @click.stop="openEdit(mem, session.session_id)" class="btn-ghost text-xs">Edit</button>
+                                <button @click.stop="openArtifacts(mem)" class="btn-ghost text-xs">Artifacts</button>
+                              </div>
+                            </div>
+                          </div>
+                        </template>
+
+                        <!-- Pagination controls -->
+                        <div x-show="canShowMoreConsolidated(session.session_id) || canShowLessConsolidated(session.session_id)"
+                             class="flex items-center justify-center gap-3 pt-1.5">
+                          <button x-show="canShowMoreConsolidated(session.session_id)"
+                                  @click.stop="showMoreConsolidated(session.session_id)"
+                                  class="btn-ghost text-xs">
+                            Show More (<span x-text="remainingConsolidatedCount(session.session_id)"></span> more)
+                          </button>
+                          <button x-show="canShowLessConsolidated(session.session_id)"
+                                  @click.stop="showLessConsolidated(session.session_id)"
+                                  class="btn-ghost text-xs text-muted">
+                            Show Less
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </template>
+
+            <div class="card-elevated flex flex-wrap items-center justify-between gap-3 mt-4">
+              <div class="text-sm text-secondary">
+                Page <span x-text="page"></span> of <span x-text="totalPages"></span>
+              </div>
+              <div class="flex items-center gap-2">
+                <button @click="prevPage()" class="btn-secondary text-sm" :disabled="page <= 1 || loading">Previous</button>
+                <button @click="nextPage()" class="btn-secondary text-sm" :disabled="!hasMore || loading">Next</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div><!-- closes sessions tab x-show -->
+
+      <!-- User Tab -->
+      <div x-show="$store.nav.activeTab === 'user'" x-data="userTab()" x-init="init()">
+
+        <!-- Header -->
+        <div class="flex flex-col gap-4 mb-6">
+          <div class="flex items-center justify-between gap-4">
+            <div>
+              <h2 class="text-xl font-semibold text-[#E6EDF3]">Default Core Context Preview</h2>
+              <p class="text-sm text-secondary mt-1" x-text="scopeDescription"></p>
+            </div>
+            <div class="flex items-center gap-3 flex-wrap justify-end">
+              <div x-show="availableAgentIds.length > 0" class="flex items-center gap-2">
+                <label class="text-sm text-secondary">Agent:</label>
+                <select x-model="filterAgentId" @change="onAgentChange()" class="select text-sm">
+                  <option value="">Shared only</option>
+                  <template x-for="aid in availableAgentIds" :key="aid">
+                    <option :value="aid" x-text="aid"></option>
+                  </template>
+                </select>
+              </div>
+              <div class="flex items-center gap-2">
+                <label class="text-sm text-secondary">Recent days:</label>
+                <input type="number" x-model.number="recentDays" min="1" max="90"
+                       @change="loadData()"
+                       class="input text-sm w-16">
+              </div>
+              <button @click="loadData()" class="btn-secondary text-sm" :disabled="loading">
+                <span x-show="!loading">刷新</span>
+                <span x-show="loading">Loading...</span>
+              </button>
+              <button @click="toggleAdvancedMode()" class="btn-secondary text-sm" :class="advancedMode && 'ring-1 ring-brand-accent/50'" :disabled="loading">
+                <span x-text="advancedMode ? 'Advanced on' : 'Advanced off'"></span>
+              </button>
+            </div>
+          </div>
+
+          <div class="card-elevated">
+            <p class="text-sm text-secondary">
+              This tab shows the same core context text the server returns from <span class="font-mono text-xs text-[#E6EDF3]">get_core_memories</span>.
+              Advanced mode lets you inspect and clean the exact memories that currently back this default context.
+            </p>
+            <p x-show="agentSourceNote" class="text-xs text-muted mt-2" x-text="agentSourceNote"></p>
+          </div>
+
+          <div x-show="hasStats" class="card-elevated">
+            <div x-show="statsEmpty" class="text-sm text-secondary">
+              No consolidated core memories yet — start a conversation or wait for raw memories to consolidate.
+            </div>
+            <div x-show="!statsEmpty" class="space-y-3">
+              <div class="flex flex-wrap items-center gap-2 text-sm">
+                <span class="badge bg-brand-accent/15 text-brand-accent">~<span x-text="stats?.estimated_tokens ?? 0"></span> tokens (est.)</span>
+                <span class="badge bg-brand-elevated text-secondary"><span x-text="stats?.memory_count ?? 0"></span> memories</span>
+                <span class="badge bg-brand-elevated text-secondary"><span x-text="stats?.char_count ?? 0"></span> chars</span>
+              </div>
+              <div class="grid grid-cols-1 xl:grid-cols-3 gap-3 text-sm">
+                <div>
+                  <div class="text-xs uppercase tracking-wider text-muted mb-1">按类型</div>
+                  <div class="flex flex-wrap gap-1.5">
+                    <template x-for="[key, count] in typeStats" :key="'type-' + key">
+                      <span class="badge" :class="typeBadgeClass(key)" x-text="`${key}: ${count}`"></span>
+                    </template>
+                  </div>
+                </div>
+                <div>
+                  <div class="text-xs uppercase tracking-wider text-muted mb-1">按角色</div>
+                  <div class="flex flex-wrap gap-1.5">
+                    <template x-for="[key, count] in roleStats" :key="'role-' + key">
+                      <span class="badge bg-brand-elevated text-secondary" x-text="`${key}: ${count}`"></span>
+                    </template>
+                  </div>
+                </div>
+                <div>
+                  <div class="text-xs uppercase tracking-wider text-muted mb-1">By Section</div>
+                  <div class="flex flex-wrap gap-1.5">
+                    <template x-for="item in sectionStats" :key="'section-' + item.key">
+                      <span class="badge bg-brand-elevated text-secondary" x-text="`${item.label}: ${item.count}`"></span>
+                    </template>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Loading -->
+        <div x-show="loading" class="text-center py-16 text-secondary">Loading...</div>
+
+        <!-- Text Mode -->
+        <div x-show="!loading && !advancedMode && hasContent" class="space-y-6">
+          <div x-show="parsedCore.preamble.length > 0" class="card-elevated">
+            <h3 class="text-sm font-semibold text-secondary uppercase tracking-wider mb-3">System Preamble</h3>
+            <div class="space-y-2 text-sm text-secondary">
+              <template x-for="(line, index) in parsedCore.preamble" :key="'pre-' + index">
+                <p x-text="line.text"></p>
+              </template>
+            </div>
+          </div>
+
+          <template x-for="section in parsedCore.sections" :key="section.title">
+            <div class="card-elevated">
+              <h3 class="text-sm font-semibold text-brand-accent uppercase tracking-wider mb-3 flex items-center gap-2">
+                <span x-text="sectionIcon(section.title)"></span>
+                <span x-text="section.title"></span>
+              </h3>
+
+              <div x-show="section.lines.length > 0" class="space-y-2 mb-4">
+                <template x-for="(line, index) in section.lines" :key="section.title + '-line-' + index">
+                  <div class="flex items-start gap-2 text-sm text-[#E6EDF3]">
+                    <span x-show="line.bullet" class="text-brand-accent mt-0.5">•</span>
+                    <span class="whitespace-pre-wrap" x-text="line.text"></span>
+                  </div>
+                </template>
+              </div>
+
+              <div x-show="section.subsections.length > 0" class="space-y-4">
+                <template x-for="subsection in section.subsections" :key="section.title + '-' + subsection.title">
+                  <div>
+                    <h4 class="text-xs font-semibold text-secondary uppercase tracking-wider mb-2" x-text="subsection.title"></h4>
+                    <div class="space-y-2">
+                      <template x-for="(line, index) in subsection.lines" :key="subsection.title + '-line-' + index">
+                        <div class="flex items-start gap-2 text-sm text-[#E6EDF3]">
+                          <span x-show="line.bullet" class="text-brand-accent mt-0.5">•</span>
+                          <span class="whitespace-pre-wrap" x-text="line.text"></span>
+                        </div>
+                      </template>
+                    </div>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </template>
+        </div>
+
+        <!-- Advanced Mode -->
+        <div x-show="!loading && advancedMode" class="space-y-6">
+          <div x-show="parsedCore.preamble.length > 0" class="card-elevated">
+            <h3 class="text-sm font-semibold text-secondary uppercase tracking-wider mb-3">System Preamble</h3>
+            <div class="space-y-2 text-sm text-secondary">
+              <template x-for="(line, index) in parsedCore.preamble" :key="'adv-pre-' + index">
+                <p x-text="line.text"></p>
+              </template>
+            </div>
+          </div>
+
+          <div x-show="advancedLoading" class="text-center py-12 text-secondary">Loading core memory details...</div>
+
+          <div x-show="advancedMissingNote" class="card-elevated text-sm text-amber-400" x-text="advancedMissingNote"></div>
+
+          <div x-show="!advancedLoading && !hasAdvancedContent" class="card-elevated text-sm text-secondary">
+            No detailed core memories to show in advanced mode.
+          </div>
+
+          <!-- TODO: extract shared memory-card component when Alpine template reuse pattern is established -->
+          <template x-for="section in advancedSections" :key="'advanced-' + section.key">
+            <div class="space-y-3">
+              <h3 class="text-sm font-semibold text-brand-accent uppercase tracking-wider flex items-center gap-2">
+                <span x-text="sectionIcon(section.label)"></span>
+                <span x-text="section.label"></span>
+                <span class="text-xs text-muted font-normal" x-text="`(${section.memories.length})`"></span>
+              </h3>
+
+              <div class="space-y-3">
+                <template x-for="mem in section.memories" :key="mem.id">
+                  <div class="memory-card" :class="expandedId === mem.id && 'memory-card-expanded'" @click="toggleExpand(mem.id)">
+                    <div class="flex items-start gap-3">
+                      <div class="flex-1 min-w-0">
+                        <p class="text-[#E6EDF3] text-sm" x-text="expandedId === mem.id ? mem.memory : truncate(mem.memory, 200)"></p>
+                         <div class="flex flex-wrap items-center gap-1.5 mt-2 min-w-0">
+                          <span class="badge" :class="typeBadgeClass(mem.metadata?.memory_type)" x-text="mem.metadata?.memory_type"></span>
+                          <span x-show="mem.metadata?.importance && mem.metadata.importance !== 'normal'" class="badge" :class="importanceBadgeClass(mem.metadata?.importance)" x-text="mem.metadata?.importance"></span>
+                          <template x-for="cat in (mem.metadata?.categories || [])" :key="cat">
+                            <span class="badge badge-category" x-text="'#' + cat"></span>
+                          </template>
+                          <template x-for="[k, v] in Object.entries(mem.metadata?.labels || {})" :key="'adv-lbl-'+k">
+                            <span class="badge bg-teal-500/15 text-teal-400 text-xs" x-text="k + '=' + (typeof v === 'object' ? JSON.stringify(v) : v)"></span>
+                          </template>
+                           <span class="flex-1 min-w-2"></span>
+                          <span x-show="mem.metadata?.memory_layer === 'raw'" class="badge bg-amber-500/15 text-amber-400">raw</span>
+                          <span x-show="mem.metadata?.agent_id" class="badge bg-indigo-500/15 text-indigo-400 inline-flex items-center gap-1">
+                            <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23-.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5"/></svg>
+                            <span x-text="mem.metadata?.agent_id"></span>
+                          </span>
+                          <span x-show="mem.has_artifacts" class="badge bg-violet-500/15 text-violet-400">artifacts</span>
+                          <span x-show="mem.metadata?.role === 'assistant'" class="badge bg-sky-500/15 text-sky-400 inline-flex items-center gap-1">
+                            <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8.25 3v1.5M4.5 8.25H3m18 0h-1.5M4.5 12H3m18 0h-1.5m-15 3.75H3m18 0h-1.5M8.25 19.5V21M12 3v1.5m0 15V21m3.75-18v1.5m0 15V21m-9-1.5h9a2.25 2.25 0 002.25-2.25v-9a2.25 2.25 0 00-2.25-2.25h-9A2.25 2.25 0 004.5 8.25v9a2.25 2.25 0 002.25 2.25z"/></svg>
+                            assistant
+                          </span>
+                          <span x-show="mem.metadata?.pinned" class="badge badge-pinned inline-flex items-center gap-1">
+                            <svg class="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/></svg>
+                            pinned
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div x-show="expandedId === mem.id" x-transition @click.stop class="mt-4 pt-4 border-t border-brand-border">
+                      <div class="grid grid-cols-2 gap-x-6 gap-y-2 text-sm mb-4">
+                        <div><span class="text-muted">ID:</span> <span class="font-mono text-xs text-secondary" x-text="mem.id"></span></div>
+                        <div><span class="text-muted">Role:</span> <span class="text-secondary" x-text="mem.metadata?.role"></span></div>
+                        <div><span class="text-muted">Agent:</span> <span class="text-secondary" x-text="mem.metadata?.agent_id || '—'"></span></div>
+                        <div><span class="text-muted">Created:</span> <span class="text-secondary" x-text="formatDate(mem.metadata?.created_at_utc)"></span></div>
+                        <div><span class="text-muted">Event Date:</span> <span class="text-secondary" x-text="mem.metadata?.event_date || '—'"></span></div>
+                        <div><span class="text-muted">TTL:</span> <span class="text-secondary" x-text="mem.metadata?.ttl_days ? mem.metadata.ttl_days + ' days' : 'permanent'"></span></div>
+                        <div><span class="text-muted">Accessed:</span> <span class="text-secondary" x-text="(mem.metadata?.access_count ?? 0) + ' times'"></span></div>
+                        <div><span class="text-muted">Importance:</span> <span class="text-secondary" x-text="mem.metadata?.importance"></span></div>
+                        <div class="col-span-2"><span class="text-muted">Labels:</span> <span class="text-secondary font-mono text-xs" x-text="JSON.stringify(mem.metadata?.labels || {})"></span></div>
+                        <div><span class="text-muted">Layer:</span> <span class="text-secondary" x-text="mem.metadata?.memory_layer || 'consolidated'"></span></div>
+                        <div x-show="mem.metadata?.superseded_by"><span class="text-muted">Superseded by:</span> <span class="font-mono text-xs text-secondary" x-text="mem.metadata?.superseded_by"></span></div>
+                        <div x-show="mem.metadata?.derived_from?.length"><span class="text-muted">Derived from:</span> <span class="text-secondary" x-text="(mem.metadata?.derived_from || []).length + ' raw memories'"></span></div>
+                      </div>
+                      <div class="flex gap-2 flex-wrap">
+                        <button @click.stop="copyId(mem.id)" class="btn-ghost text-xs">Copy ID</button>
+                        <button @click.stop="openEdit(mem)" class="btn-ghost text-xs">Edit</button>
+                        <button @click.stop="openArtifacts(mem)" class="btn-ghost text-xs">
+                          Artifacts<template x-if="mem.has_artifacts"><span class="ml-1 text-violet-400" x-text="'(' + (mem.metadata?.artifacts?.length || '…') + ')'"></span></template>
+                        </button>
+                        <template x-if="deleteConfirm !== mem.id">
+                          <button @click.stop="deleteConfirm = mem.id" class="btn-ghost text-xs text-red-400">Delete</button>
+                        </template>
+                        <template x-if="deleteConfirm === mem.id">
+                          <div class="flex gap-2">
+                            <button @click.stop="deleteMemory(mem.id)" class="btn-danger text-xs">Confirm Delete</button>
+                            <button @click.stop="deleteConfirm = null" class="btn-ghost text-xs">Cancel</button>
+                          </div>
+                        </template>
+                      </div>
+                    </div>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </template>
+        </div>
+
+        <!-- Parser fallback -->
+        <div x-show="!loading && !advancedMode && fallbackRawText" class="card-elevated">
+          <h3 class="text-sm font-semibold text-secondary uppercase tracking-wider mb-3">Raw Core Context</h3>
+          <pre class="text-sm text-secondary whitespace-pre-wrap font-sans" x-text="fallbackRawText"></pre>
+        </div>
+
+        <!-- Empty State -->
+        <div x-show="!loading && initialized && !advancedMode && !hasContent && !fallbackRawText" class="text-center py-16 text-secondary">
+          <p x-text="emptyState"></p>
+          <p class="text-sm text-muted mt-1">Choose an agent to preview agent-specific default context, or use the Memories tab for the full memory browser.</p>
+        </div>
+      </div>
+
+      <!-- Graph Tab -->
+      <div x-show="$store.nav.activeTab === 'graph'" x-data="graphTab()" x-init="init()">
+
+        <!-- Controls -->
+        <div class="flex flex-wrap items-center gap-4 mb-4">
+          <div class="flex items-center gap-3">
+            <template x-for="[type, enabled] in Object.entries(typeFilters)" :key="type">
+              <label class="flex items-center gap-1.5 text-sm cursor-pointer">
+                <input type="checkbox" :checked="enabled" @change="typeFilters[type] = !typeFilters[type]; updateFilters()"
+                       class="rounded border-brand-border bg-brand-elevated text-brand-accent focus:ring-brand-accent/30">
+                <span class="badge" :class="{
+                  'badge-fact': type === 'fact',
+                  'badge-preference': type === 'preference',
+                  'badge-episodic': type === 'episodic',
+                  'badge-procedural': type === 'procedural',
+                  'badge-context': type === 'context',
+                }" x-text="type"></span>
+              </label>
+            </template>
+          </div>
+          <div>
+            <label class="block text-xs text-secondary mb-1">层</label>
+            <select x-model="filterMemoryLayer" @change="updateServerFilters()" class="select text-sm">
+              <option value="">全部层</option>
+              <option value="raw">原始</option>
+              <option value="consolidated">已整理</option>
+            </select>
+          </div>
+          <div x-show="availableCategories.length > 0" x-data="{ catOpen: false }" class="relative">
+            <label class="block text-xs text-secondary mb-1">分类</label>
+            <button type="button" @click="catOpen = !catOpen" @click.outside="catOpen = false"
+                    class="select text-sm text-left min-w-[180px] flex items-center justify-between gap-2">
+              <span x-text="selectedCategories.length > 0 ? selectedCategories.length + ' selected' : 'All categories'" class="truncate"></span>
+              <svg class="w-3 h-3 shrink-0 text-secondary" :class="catOpen && 'rotate-180'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg>
+            </button>
+            <div x-show="catOpen" x-transition
+                 class="absolute z-20 mt-1 w-56 max-h-64 overflow-y-auto bg-brand-surface border border-brand-border rounded-lg shadow-xl py-1">
+              <button type="button" x-show="selectedCategories.length > 0"
+                      @click="selectedCategories = []; updateServerFilters()"
+                      class="w-full text-left px-3 py-1.5 text-xs text-red-400 hover:bg-brand-elevated">
+                Clear all
+              </button>
+              <template x-for="cat in availableCategories" :key="cat">
+                <label class="flex items-center gap-2 px-3 py-1.5 text-sm text-secondary hover:bg-brand-elevated hover:text-[#E6EDF3] cursor-pointer">
+                  <input type="checkbox"
+                         :checked="selectedCategories.includes(cat)"
+                         @change="selectedCategories.includes(cat)
+                           ? selectedCategories.splice(selectedCategories.indexOf(cat), 1)
+                           : selectedCategories.push(cat); updateServerFilters()"
+                         class="rounded border-brand-border bg-brand-bg text-brand-accent focus:ring-brand-accent/30 w-3.5 h-3.5">
+                  <span x-text="cat"></span>
+                </label>
+              </template>
+            </div>
+          </div>
+          <div class="flex items-center gap-2">
+            <label class="text-sm text-secondary">Nodes:</label>
+            <input type="range" x-model.number="nodeLimit" min="25" max="300" step="25"
+                   @change="loadAndRender()"
+                   class="w-32 accent-brand-accent">
+            <span class="text-sm text-muted w-8" x-text="nodeLimit"></span>
+          </div>
+          <button @click="resetZoom()" class="btn-ghost text-sm">Reset Zoom</button>
+          <div x-show="loading" class="text-sm text-secondary">Loading...</div>
+        </div>
+
+        <!-- Graph Container + Detail Panel -->
+        <div class="flex gap-4">
+          <div class="flex-1">
+            <div id="graph-container" class="card p-0 overflow-hidden" style="height: calc(100vh - 220px);"></div>
+          </div>
+
+          <!-- Node Detail Panel -->
+          <div x-show="selectedNode" x-transition
+               class="w-80 shrink-0 card overflow-y-auto" style="max-height: calc(100vh - 220px);">
+            <div class="flex items-center justify-between mb-3">
+              <h3 class="text-sm font-semibold text-[#E6EDF3]">Memory Detail</h3>
+              <button @click="selectedNode = null" class="btn-ghost text-xs">Close</button>
+            </div>
+            <template x-if="selectedNode">
+              <div class="space-y-3 text-sm">
+                <p class="text-[#E6EDF3]" x-text="selectedNode.memory"></p>
+                <div class="flex flex-wrap gap-1.5">
+                  <span class="badge" :class="{
+                    'badge-fact': selectedNode.metadata?.memory_type === 'fact',
+                    'badge-preference': selectedNode.metadata?.memory_type === 'preference',
+                    'badge-episodic': selectedNode.metadata?.memory_type === 'episodic',
+                    'badge-procedural': selectedNode.metadata?.memory_type === 'procedural',
+                    'badge-context': selectedNode.metadata?.memory_type === 'context',
+                  }" x-text="selectedNode.metadata?.memory_type"></span>
+                  <template x-for="cat in (selectedNode.metadata?.categories || [])" :key="cat">
+                    <span class="badge bg-brand-elevated text-secondary" x-text="cat"></span>
+                  </template>
+                  <span class="badge bg-emerald-500/15 text-emerald-400" x-text="selectedNode.metadata?.memory_layer || 'consolidated'"></span>
+                  <span x-show="selectedNode.metadata?.pinned" class="badge badge-pinned">pinned</span>
+                </div>
+                <div class="space-y-1 text-xs">
+                  <div><span class="text-muted">ID:</span> <span class="font-mono text-secondary" x-text="selectedNode.id"></span></div>
+                  <div><span class="text-muted">Importance:</span> <span class="text-secondary" x-text="selectedNode.metadata?.importance"></span></div>
+                  <div><span class="text-muted">Role:</span> <span class="text-secondary" x-text="selectedNode.metadata?.role"></span></div>
+                </div>
+                <button @click="searchRelated(selectedNode)" class="btn-secondary text-xs w-full">
+                  Search Related
+                </button>
+              </div>
+            </template>
+          </div>
+        </div>
+
+        <!-- Legend -->
+        <div class="flex items-center gap-4 mt-3 text-xs text-muted">
+          <span>Legend:</span>
+          <span class="flex items-center gap-1"><span class="w-3 h-3 rounded-full bg-mem-fact inline-block"></span> fact</span>
+          <span class="flex items-center gap-1"><span class="w-3 h-3 rounded-full bg-mem-preference inline-block"></span> preference</span>
+          <span class="flex items-center gap-1"><span class="w-3 h-3 rounded-full bg-mem-episodic inline-block"></span> episodic</span>
+          <span class="flex items-center gap-1"><span class="w-3 h-3 rounded-full bg-mem-procedural inline-block"></span> procedural</span>
+          <span class="flex items-center gap-1"><span class="w-3 h-3 rounded-full bg-mem-context inline-block"></span> context</span>
+          <span class="ml-2">Size = importance</span>
+          <span>Ring = pinned</span>
+        </div>
+      </div>
+
+      <!-- Check (fsck) Tab -->
+      <div x-show="$store.nav.activeTab === 'check'" x-data="fsckTab()" x-init="init()">
+
+        <!-- Header -->
+        <div class="flex items-center justify-between mb-6">
+          <h2 class="text-xl font-semibold text-[#E6EDF3]">记忆健康检查</h2>
+          <div class="flex items-center gap-2">
+            <template x-if="expiresAt && status === 'completed'">
+              <span class="text-xs text-secondary" x-text="expiresIn"></span>
+            </template>
+            <button @click="startCheck()" :disabled="loading || applying"
+                    class="btn btn-primary text-sm"
+                    x-text="loading ? '检查中…' : '开始检查'"></button>
+          </div>
+        </div>
+
+        <!-- Filters -->
+        <div class="flex flex-wrap items-end gap-3 mb-6">
+          <!-- Agent filter -->
+          <template x-if="availableAgentIds.length > 0">
+            <div>
+              <label class="block text-xs text-secondary mb-1">角色实例</label>
+              <select class="select text-sm" x-model="filters.agent_id">
+                <option value="">All agents</option>
+                <template x-for="aid in availableAgentIds" :key="aid">
+                  <option :value="aid" x-text="aid"></option>
+                </template>
+              </select>
+            </div>
+          </template>
+
+          <!-- Type filter -->
+          <div>
+            <label class="block text-xs text-secondary mb-1">类型</label>
+            <select class="select text-sm" x-model="filters.memory_type">
+              <option value="">All types</option>
+              <option value="fact">fact</option>
+              <option value="preference">preference</option>
+              <option value="episodic">episodic</option>
+              <option value="procedural">procedural</option>
+              <option value="context">context</option>
+            </select>
+          </div>
+
+          <!-- Categories multi-select dropdown -->
+          <div x-show="availableCategories.length > 0" x-data="{ catOpen: false }" class="relative">
+            <label class="block text-xs text-secondary mb-1">分类</label>
+            <button type="button" @click="catOpen = !catOpen" @click.outside="catOpen = false"
+                    class="select text-sm text-left min-w-[160px] flex items-center justify-between gap-2">
+              <span x-text="filters.categories.length > 0
+                ? filters.categories.length + ' selected'
+                : 'All categories'" class="truncate"></span>
+              <svg class="w-3 h-3 shrink-0 text-secondary" :class="catOpen && 'rotate-180'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg>
+            </button>
+            <div x-show="catOpen" x-transition
+                 class="absolute z-20 mt-1 w-56 max-h-64 overflow-y-auto bg-brand-surface border border-brand-border rounded-lg shadow-xl py-1">
+              <button type="button"
+                      @click="selectAllCategories()"
+                      class="w-full text-left px-3 py-1.5 text-xs text-brand-accent hover:bg-brand-elevated">
+                Select all
+              </button>
+              <button type="button" x-show="filters.categories.length > 0"
+                      @click="filters.categories = []"
+                      class="w-full text-left px-3 py-1.5 text-xs text-red-400 hover:bg-brand-elevated">
+                Clear all
+              </button>
+              <template x-for="cat in availableCategories" :key="cat">
+                <label class="flex items-center gap-2 px-3 py-1.5 text-sm text-secondary hover:bg-brand-elevated hover:text-[#E6EDF3] cursor-pointer">
+                  <input type="checkbox"
+                         :checked="filters.categories.includes(cat)"
+                         @change="filters.categories.includes(cat)
+                           ? filters.categories.splice(filters.categories.indexOf(cat), 1)
+                           : filters.categories.push(cat)"
+                         class="rounded border-brand-border bg-brand-bg text-brand-accent focus:ring-brand-accent/30 w-3.5 h-3.5">
+                  <span x-text="cat"></span>
+                </label>
+              </template>
+            </div>
+          </div>
+        </div>
+
+        <!-- Auto-fsck status banner (self-contained x-data, independent of fsckTab scope) -->
+        <template x-if="$store.metrics?.autofsck?.enabled">
+          <div x-data="autoFsckBanner()" x-init="_startCountdown()" class="mb-6 border-l-4 border-l-teal-500 bg-brand-elevated rounded-r-lg px-4 py-3 text-sm">
+            <div class="flex flex-wrap items-center gap-x-6 gap-y-2">
+              <span class="font-medium text-teal-400">Auto-Check Active</span>
+              <span class="text-secondary">
+                Every <span class="text-[#E6EDF3]" x-text="$store.metrics.autofsck.interval_hours"></span>h
+                &middot; min confidence <span class="text-[#E6EDF3]" x-text="($store.metrics.autofsck.min_confidence * 100).toFixed(0) + '%'"></span>
+                &middot; min severity <span class="text-[#E6EDF3]" x-text="$store.metrics.autofsck.min_severity"></span>
+              </span>
+              <template x-if="lastRunAge">
+                <span class="text-secondary">
+                  Last run: <span class="text-[#E6EDF3]" x-text="lastRunAge"></span>
+                  <template x-if="lastRunApplied > 0">
+                    <span class="ml-1 text-teal-400">(<span x-text="lastRunApplied"></span> fix<span x-show="lastRunApplied !== 1">es</span> applied)</span>
+                  </template>
+                </span>
+              </template>
+              <template x-if="!lastRunAge">
+                <span class="text-secondary italic">No runs yet this session</span>
+              </template>
+              <!-- Next run countdown -->
+              <template x-if="countdown">
+                <span class="text-secondary">
+                  Next run: <span class="text-[#E6EDF3]" x-text="countdown"></span>
+                </span>
+              </template>
+              <!-- Action buttons -->
+              <span class="ml-auto flex items-center gap-2">
+                <button @click="runNow()"
+                        class="px-2.5 py-1 rounded-lg text-xs font-medium transition-all duration-200 bg-teal-500/20 text-teal-300 border border-teal-500/40 hover:bg-teal-500/30 hover:border-teal-500/50 disabled:opacity-50 disabled:cursor-not-allowed"
+                        :disabled="runLoading">
+                  <span x-show="!runLoading">Run Now</span>
+                  <span x-show="runLoading">Running...</span>
+                </button>
+                <template x-if="hasLastResults && !runLoading">
+                  <button @click="viewLastResults()"
+                          class="px-2.5 py-1 rounded-lg text-xs font-medium transition-all duration-200 text-teal-400 hover:text-teal-300 hover:bg-teal-500/10">
+                    View Last Results
+                  </button>
+                </template>
+              </span>
+            </div>
+          </div>
+        </template>
+
+        <!-- Progress Bar -->
+        <template x-if="(status === 'running' || status === 'applying') && progress">
+          <div class="mb-6">
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-sm text-secondary" x-text="status === 'applying' ? 'Applying fixes...' : phaseLabel"></span>
+              <span class="text-sm text-secondary">
+                <span x-text="progress.processed"></span> / <span x-text="progress.total_memories"></span> memories
+              </span>
+            </div>
+            <div class="w-full bg-brand-border rounded-full h-2.5">
+              <div class="h-2.5 rounded-full transition-all duration-500"
+                   :class="status === 'applying' ? 'bg-teal-500' : 'bg-brand-accent'"
+                   :style="'width: ' + progressPercent + '%'"></div>
+            </div>
+            <div class="flex items-center justify-between mt-2">
+              <span class="text-xs text-secondary">
+                <template x-if="progress.issues_found > 0">
+                  <span>
+                    <span x-text="progress.issues_found"></span> issue<span x-show="progress.issues_found !== 1">s</span> found
+                  </span>
+                </template>
+              </span>
+              <span class="text-xs text-secondary" x-text="progressPercent + '%'"></span>
+            </div>
+          </div>
+        </template>
+
+        <!-- Error -->
+        <template x-if="status === 'failed'">
+          <div class="mb-6 p-4 rounded-lg border border-red-500/30 bg-red-500/10">
+            <div class="text-red-400 font-medium mb-1">Check failed</div>
+            <div class="text-sm text-secondary" x-text="error"></div>
+            <button @click="reset()" class="btn btn-ghost text-sm mt-2">Dismiss</button>
+          </div>
+        </template>
+
+        <!-- Summary Cards -->
+        <template x-if="status === 'completed' && summary">
+          <div class="mb-6">
+            <template x-if="summary.total === 0">
+              <div class="p-6 rounded-lg border border-green-500/30 bg-green-500/10 text-center">
+                <div class="text-green-400 text-lg font-medium mb-1">All clear</div>
+                <div class="text-sm text-secondary">No issues found in your memories.</div>
+              </div>
+            </template>
+            <template x-if="summary.total > 0">
+              <div>
+                <div class="flex flex-wrap gap-3 mb-4">
+                   <template x-for="card in summaryCards()" :key="card.type">
+                    <div class="rounded-lg border px-4 py-3 min-w-[120px] cursor-pointer hover:brightness-125 transition"
+                         :class="card.cls"
+                         @click="scrollToGroup(card.type)">
+                      <div class="text-2xl font-bold" x-text="card.count"></div>
+                      <div class="text-xs text-secondary" x-text="card.label"></div>
+                    </div>
+                  </template>
+                  <div class="rounded-lg border border-brand-border bg-brand-surface px-4 py-3 min-w-[120px]">
+                    <div class="text-2xl font-bold text-[#E6EDF3]" x-text="summary.total"></div>
+                    <div class="text-xs text-secondary">问题总数</div>
+                  </div>
+                </div>
+
+                <!-- Action Bar -->
+                <div class="flex items-center gap-3 mb-4 p-3 rounded-lg bg-brand-surface border border-brand-border">
+                  <button @click="selectAll()" class="btn btn-ghost text-xs">Select all</button>
+                  <button @click="deselectAll()" class="btn btn-ghost text-xs">Deselect all</button>
+                  <span class="text-xs text-secondary" x-text="selectedCount + ' of ' + issues.length + ' selected'"></span>
+                  <div class="flex-1"></div>
+                  <!-- Severity threshold filter -->
+                  <select class="select text-xs py-1" x-model="severityFilter">
+                    <option value="all">All severities</option>
+                    <option value="medium">Medium+</option>
+                    <option value="high">High only</option>
+                  </select>
+                  <!-- Confidence threshold filter -->
+                  <select class="select text-xs py-1" x-model.number="confidenceFilter">
+                    <option value="0">All confidence</option>
+                    <option value="0.5">50%+</option>
+                    <option value="0.7">70%+</option>
+                    <option value="0.9">90%+</option>
+                    <option value="0.95">95%+</option>
+                  </select>
+                  <button @click="applySelected()" :disabled="applying || selectedCount === 0"
+                          class="btn btn-primary text-sm"
+                          x-text="applying ? 'Applying...' : 'Apply Selected (' + selectedCount + ')'"></button>
+                  <button @click="applyAll()" :disabled="applying || issues.length === 0"
+                          class="btn btn-ghost text-sm border border-brand-border"
+                          x-text="applying ? 'Applying...' : 'Apply All'"></button>
+                </div>
+              </div>
+            </template>
+          </div>
+        </template>
+
+        <!-- Issues List — Grouped by Type -->
+        <template x-if="status === 'completed' && issues.length > 0">
+          <div class="space-y-6">
+            <template x-for="group in groupedIssues" :key="group.type">
+              <div :id="'fsck-group-' + group.type">
+                <!-- Group Header (collapsible + group select checkbox) -->
+                <div class="w-full flex items-center gap-3 mb-3">
+                  <input type="checkbox"
+                         class="accent-brand-accent shrink-0 cursor-pointer w-3.5 h-3.5"
+                         :checked="isGroupFullySelected(group.type)"
+                         x-effect="$el.indeterminate = isGroupPartiallySelected(group.type)"
+                         @click.stop="toggleGroupAll(group.type)">
+                  <button @click="toggleGroup(group.type)"
+                          class="flex-1 flex items-center gap-3 cursor-pointer">
+                    <span class="text-lg" :class="group.headerCls" x-text="group.icon"></span>
+                    <span class="text-sm font-semibold uppercase tracking-wider" :class="group.headerCls"
+                          x-text="group.label + ' (' + group.issues.length + ')'"></span>
+                    <span class="flex-1 border-t border-brand-border/50"></span>
+                    <span class="text-xs text-muted"
+                          x-text="groupSelectedCount(group.type) + '/' + group.issues.length + ' selected'"></span>
+                    <span class="text-xs text-secondary transition-transform"
+                          :class="isGroupCollapsed(group.type) ? '' : 'rotate-180'"
+                          x-text="'\u25BC'"></span>
+                  </button>
+                </div>
+
+                <!-- Group Issues -->
+                <div x-show="!isGroupCollapsed(group.type)" x-transition class="space-y-4">
+                  <template x-for="issue in group.issues" :key="issue.issue_id">
+                    <div class="rounded-xl border bg-brand-surface overflow-hidden" :class="group.borderCls">
+
+                      <!-- Issue Header: checkbox + badges + reasoning -->
+                      <div class="p-5">
+                        <div class="flex items-start gap-3">
+                          <input type="checkbox" class="mt-0.5 accent-brand-accent shrink-0"
+                                 :checked="selectedIssues[issue.issue_id]"
+                                 @click.stop="toggleIssue(issue.issue_id)">
+                          <div class="flex-1 min-w-0">
+                            <!-- Badge row -->
+                            <div class="flex items-center gap-2 mb-2">
+                              <span class="badge text-xs" :class="issueTypeBadgeClass(issue.type)" x-text="issue.type"></span>
+                              <span class="badge text-xs" :class="severityBadgeClass(issue.severity)" x-text="issue.severity"></span>
+                              <template x-if="issue.confidence !== null && issue.confidence !== undefined">
+                                <span class="badge text-xs bg-slate-500/20 text-slate-300"
+                                      x-text="Math.round(issue.confidence * 100) + '% 置信度'"></span>
+                              </template>
+                              <span class="text-xs text-muted"
+                                    x-text="issue.affected_memories.length + ' 条记忆' + (issue.affected_memories.length === 1 ? '' : '')"></span>
+                            </div>
+                            <!-- Full reasoning (not truncated) -->
+                            <p class="text-sm text-[#E6EDF3] leading-relaxed" x-text="issue.reasoning"></p>
+                          </div>
+                        </div>
+                      </div>
+
+                      <!-- 影响的记忆 -->
+                      <div class="border-t border-brand-border/50 px-5 py-4">
+                        <div class="text-xs font-medium text-muted mb-3 uppercase tracking-wider">影响的记忆</div>
+                        <div class="space-y-2">
+                          <template x-for="mem in issue.affected_memories" :key="mem.id">
+                            <div class="memory-card" :class="isMemoryExpanded(mem.id) && 'memory-card-expanded'"
+                                 @click="toggleMemoryDetail(mem.id)">
+                              <div class="flex items-start gap-3">
+                                <div class="flex-1 min-w-0">
+                                  <!-- Memory content -->
+                                  <p class="text-[#E6EDF3] text-sm" x-text="mem.content"></p>
+                                  <!-- Badge row (matching Browse tab) -->
+                                  <div class="flex items-center gap-1.5 mt-2 flex-wrap">
+                                    <!-- Left: type + importance + categories -->
+                                    <template x-if="mem.metadata?.memory_type">
+                                      <span class="badge" :class="memoryTypeBadgeClass(mem.metadata.memory_type)"
+                                            x-text="mem.metadata.memory_type"></span>
+                                    </template>
+                                    <template x-if="mem.metadata?.importance && mem.metadata.importance !== 'normal'">
+                                      <span class="badge" :class="memoryImportanceBadgeClass(mem.metadata.importance)"
+                                            x-text="mem.metadata.importance"></span>
+                                    </template>
+                                    <template x-for="cat in (mem.metadata?.categories || [])" :key="cat">
+                                      <span class="badge badge-category" x-text="'#' + cat"></span>
+                                    </template>
+                                    <template x-for="[k, v] in Object.entries(mem.metadata?.labels || {})" :key="'lbl-'+k">
+                                      <span class="badge bg-teal-500/15 text-teal-400 text-xs" x-text="k + '=' + (typeof v === 'object' ? JSON.stringify(v) : v)"></span>
+                                    </template>
+                                    <!-- Right: agent, artifacts, assistant, pinned -->
+                                    <span class="flex-1"></span>
+                                     <template x-if="mem.agent_id || mem.metadata?.agent_id">
+                                       <span class="badge bg-indigo-500/15 text-indigo-400 inline-flex items-center gap-1">
+                                         <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23-.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5"/></svg>
+                                         <span x-text="mem.agent_id || mem.metadata?.agent_id"></span>
+                                       </span>
+                                     </template>
+                                    <template x-if="mem.metadata?.role === 'assistant'">
+                                      <span class="badge bg-sky-500/15 text-sky-400 inline-flex items-center gap-1">
+                                        <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8.25 3v1.5M4.5 8.25H3m18 0h-1.5M4.5 12H3m18 0h-1.5m-15 3.75H3m18 0h-1.5M8.25 19.5V21M12 3v1.5m0 15V21m3.75-18v1.5m0 15V21m-9-1.5h9a2.25 2.25 0 002.25-2.25v-9a2.25 2.25 0 00-2.25-2.25h-9A2.25 2.25 0 004.5 8.25v9a2.25 2.25 0 002.25 2.25z"/></svg>
+                                        assistant
+                                      </span>
+                                    </template>
+                                    <template x-if="mem.metadata?.pinned">
+                                      <span class="badge badge-pinned inline-flex items-center gap-1">
+                                        <svg class="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/></svg>
+                                        pinned
+                                      </span>
+                                    </template>
+                                   </div>
+                                </div>
+                                <!-- Per-memory action buttons (edit / delete) -->
+                                <div class="flex items-center gap-1 shrink-0" @click.stop>
+                                  <button @click="openEditMemory(mem, issue)"
+                                          class="p-1.5 rounded-md text-muted hover:text-blue-400 hover:bg-blue-500/10 transition-colors"
+                                          title="Edit memory">
+                                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125"/></svg>
+                                  </button>
+                                  <button @click="deleteAffectedMemory(mem.id, issue.issue_id)"
+                                          class="p-1.5 rounded-md text-muted hover:text-red-400 hover:bg-red-500/10 transition-colors"
+                                          title="Delete memory">
+                                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/></svg>
+                                  </button>
+                                </div>
+                              </div>
+                              <!-- Expandable metadata detail grid -->
+                              <div x-show="isMemoryExpanded(mem.id)" x-transition @click.stop
+                                   class="mt-3 pt-3 border-t border-brand-border">
+                                <div class="grid grid-cols-2 gap-x-6 gap-y-1.5 text-sm">
+                                  <div><span class="text-muted">ID:</span> <span class="font-mono text-xs text-secondary" x-text="mem.id"></span></div>
+                                  <div><span class="text-muted">Role:</span> <span class="text-secondary" x-text="mem.metadata?.role || '\u2014'"></span></div>
+                                   <div><span class="text-muted">Agent:</span> <span class="text-secondary" x-text="mem.agent_id || mem.metadata?.agent_id || '\u2014'"></span></div>
+                                  <div><span class="text-muted">Created:</span> <span class="text-secondary" x-text="formatDate(mem.metadata?.created_at_utc)"></span></div>
+                                  <div><span class="text-muted">Event Date:</span> <span class="text-secondary" x-text="mem.metadata?.event_date || '\u2014'"></span></div>
+                                  <div><span class="text-muted">TTL:</span> <span class="text-secondary" x-text="mem.metadata?.ttl_days ? mem.metadata.ttl_days + ' days' : 'permanent'"></span></div>
+                  <div><span class="text-muted">Accessed:</span> <span class="text-secondary" x-text="(mem.metadata?.access_count ?? 0) + ' times'"></span></div>
+                  <div><span class="text-muted">Layer:</span> <span class="text-secondary" x-text="mem.metadata?.memory_layer || 'consolidated'"></span></div>
+                                  <div><span class="text-muted">Importance:</span> <span class="text-secondary" x-text="mem.metadata?.importance || '\u2014'"></span></div>
+                                  <div class="col-span-2"><span class="text-muted">Labels:</span> <span class="text-secondary font-mono text-xs" x-text="JSON.stringify(mem.metadata?.labels || {})"></span></div>
+                                </div>
+                              </div>
+                            </div>
+                          </template>
+                        </div>
+                      </div>
+
+                      <!-- 建议修复（只读） (no-ops filtered out) -->
+                      <template x-if="filteredActions(issue).length > 0">
+                        <div class="border-t border-brand-border/50 px-5 py-4">
+                          <div class="text-xs font-medium text-muted mb-3 uppercase tracking-wider">建议修复（只读）</div>
+                          <div class="space-y-2">
+                            <template x-for="(action, idx) in filteredActions(issue)" :key="idx">
+                              <div class="rounded-lg border border-brand-border bg-brand-bg overflow-hidden"
+                                   :class="actionBorderClass(action.action)">
+                                <div class="px-4 py-3">
+                                  <!-- Action header: label + memory ID -->
+                                  <div class="flex items-center gap-2 mb-1">
+                                    <span class="text-xs font-bold tracking-wide"
+                                          :class="actionLabelClass(action.action)"
+                                          x-text="actionLabelText(action.action)"></span>
+                                    <template x-if="action.memory_id">
+                                      <span class="text-xs font-mono text-muted" x-text="action.memory_id.substring(0, 12) + '...'"></span>
+                                    </template>
+                                  </div>
+                                  <!-- New content (for update/add) -->
+                                  <template x-if="action.new_content">
+                                    <div class="mt-2 rounded border border-brand-border bg-brand-surface p-3 text-sm text-[#E6EDF3] leading-relaxed"
+                                         x-text="action.new_content"></div>
+                                  </template>
+                                  <!-- Metadata changes (as individual badges, not raw JSON) -->
+                                  <template x-if="metadataChanges(action.new_metadata).length > 0">
+                                    <div class="mt-2 flex flex-wrap items-center gap-2">
+                                      <template x-for="change in metadataChanges(action.new_metadata)" :key="change.field">
+                                        <span class="inline-flex items-center gap-1.5 text-xs">
+                                          <span class="text-muted" x-text="change.label + ':'"></span>
+                                          <!-- Type badge -->
+                                          <template x-if="change.type === 'badge-type'">
+                                            <span class="badge" :class="memoryTypeBadgeClass(change.value)" x-text="change.value"></span>
+                                          </template>
+                                          <!-- Importance badge -->
+                                          <template x-if="change.type === 'badge-importance'">
+                                            <span class="badge" :class="memoryImportanceBadgeClass(change.value)" x-text="change.value"></span>
+                                          </template>
+                                          <!-- Categories -->
+                                          <template x-if="change.type === 'categories'">
+                                            <span class="inline-flex gap-1">
+                                              <template x-for="cat in change.value" :key="cat">
+                                                <span class="badge badge-category" x-text="'#' + cat"></span>
+                                              </template>
+                                            </span>
+                                          </template>
+                                          <!-- Boolean (pinned) -->
+                                          <template x-if="change.type === 'boolean'">
+                                            <span class="text-secondary" x-text="change.value ? 'yes' : 'no'"></span>
+                                          </template>
+                                        </span>
+                                      </template>
+                                    </div>
+                                  </template>
+                                </div>
+                              </div>
+                            </template>
+                          </div>
+                        </div>
+                      </template>
+
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </template>
+          </div>
+        </template>
+
+        <!-- Applied Issues Log (auto-applied fixes, read-only) -->
+        <template x-if="status === 'completed' && appliedIssueCount > 0">
+          <div class="mt-6">
+            <button @click="showAppliedIssues = !showAppliedIssues"
+                    class="flex items-center gap-2 text-sm text-secondary hover:text-[#E6EDF3] transition-colors mb-3">
+              <svg class="w-3 h-3 transition-transform" :class="showAppliedIssues && 'rotate-90'"
+                   fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>
+              </svg>
+              <span class="text-teal-400 font-medium" x-text="appliedIssueCount"></span>
+              <span>fix<span x-show="appliedIssueCount !== 1">es</span> auto-applied</span>
+            </button>
+
+            <div x-show="showAppliedIssues" x-transition class="space-y-2 opacity-70">
+              <template x-for="issue in appliedIssues" :key="issue.issue_id">
+                <div class="flex items-start gap-3 px-4 py-2.5 rounded-lg bg-brand-surface border border-brand-border/50">
+                  <!-- Action icon -->
+                  <template x-if="issue.actions && issue.actions.length > 0">
+                    <span class="mt-0.5 text-sm shrink-0"
+                          :class="issue.actions[0].action === 'delete' ? 'text-red-400' : issue.actions[0].action === 'update' ? 'text-blue-400' : 'text-green-400'"
+                          x-text="issue.actions[0].action === 'delete' ? '\u2716' : issue.actions[0].action === 'update' ? '\u270E' : '\u002B'">
+                    </span>
+                  </template>
+                  <!-- Issue info -->
+                  <div class="flex-1 min-w-0">
+                    <div class="flex items-center gap-2 mb-1">
+                      <span class="badge text-xs" :class="issueTypeBadgeClass(issue.type)" x-text="issue.type"></span>
+                      <span class="badge text-xs" :class="severityBadgeClass(issue.severity)" x-text="issue.severity"></span>
+                      <template x-if="issue.confidence != null">
+                        <span class="text-xs text-muted" x-text="(issue.confidence * 100).toFixed(0) + '%'"></span>
+                      </template>
+                    </div>
+                    <p class="text-sm text-secondary leading-relaxed" x-text="issue.reasoning"></p>
+                    <!-- Affected memory IDs -->
+                    <div class="flex flex-wrap gap-1 mt-1.5">
+                      <template x-for="mem in issue.affected_memories" :key="mem.id">
+                        <span class="text-xs font-mono text-muted bg-brand-bg px-1.5 py-0.5 rounded" x-text="mem.id.slice(0, 8) + '...'"></span>
+                      </template>
+                      <!-- Action summary -->
+                      <template x-for="action in issue.actions" :key="action.memory_id || Math.random()">
+                        <span class="text-xs px-1.5 py-0.5 rounded"
+                              :class="action.action === 'delete' ? 'bg-red-500/10 text-red-400' : action.action === 'update' ? 'bg-blue-500/10 text-blue-400' : 'bg-green-500/10 text-green-400'"
+                              x-text="action.action.toUpperCase()">
+                        </span>
+                      </template>
+                    </div>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </div>
+        </template>
+
+        <!-- Empty state (no check run yet) -->
+        <template x-if="!status">
+          <div class="text-center py-16">
+            <div class="text-4xl mb-4 opacity-30">🔍</div>
+            <div class="text-secondary mb-2">Run a memory consistency check to find issues</div>
+            <div class="text-xs text-secondary max-w-md mx-auto">
+              Checks for duplicates, spelling/grammar errors, meaningless memories,
+              prompt injection attempts, memories that should be split, and metadata misclassification.
+            </div>
+          </div>
+        </template>
+
+      </div>
+
+    </main>
+  </div>
+
+  <!-- ── Toast Notifications ─────────────────────────────────── -->
+  <div class="fixed top-4 right-4 z-50 space-y-2 pointer-events-none" style="max-width: 400px;">
+    <template x-for="toast in $store.notify.toasts" :key="toast.id">
+      <div x-show="toast.visible"
+           x-transition:enter="transition ease-out duration-300"
+           x-transition:enter-start="opacity-0 translate-x-4"
+           x-transition:enter-end="opacity-100 translate-x-0"
+           x-transition:leave="transition ease-in duration-200"
+           x-transition:leave-start="opacity-100"
+           x-transition:leave-end="opacity-0"
+           class="toast pointer-events-auto cursor-pointer"
+           :class="{
+             'toast-success': toast.type === 'success',
+             'toast-error': toast.type === 'error',
+             'toast-info': toast.type === 'info',
+             'toast-warning': toast.type === 'warning',
+           }"
+           @click="$store.notify.dismiss(toast.id)"
+           x-text="toast.message">
+      </div>
+    </template>
+  </div>
+
+  <!-- ── Global Edit Memory Modal ────────────────────────────── -->
+  <div x-show="$store.memoryEdit.open" class="modal-overlay" @click="$store.memoryEdit.close()"
+       @keydown.escape.window="$store.memoryEdit.close()" x-transition x-cloak>
+    <div data-memory-edit-modal class="modal-content" role="dialog" aria-modal="true"
+         aria-labelledby="memory-edit-title" @click.stop @keydown.tab="$store.memoryEdit.trapFocus($event)">
+      <h3 id="memory-edit-title" class="text-lg font-semibold text-[#E6EDF3] mb-4">Edit Memory</h3>
+      <div class="space-y-4">
+        <div>
+          <label class="block text-sm text-secondary mb-1">Content</label>
+          <textarea x-model="$store.memoryEdit.form.content" rows="4" class="input resize-y"></textarea>
+        </div>
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-sm text-secondary mb-1">Type</label>
+            <select x-model="$store.memoryEdit.form.memory_type" class="select text-sm w-full">
+              <option value="">— unchanged —</option>
+              <option value="fact">fact</option>
+              <option value="preference">preference</option>
+              <option value="episodic">episodic</option>
+              <option value="procedural">procedural</option>
+              <option value="context">context</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-sm text-secondary mb-1">Importance</label>
+            <select x-model="$store.memoryEdit.form.importance" class="select text-sm w-full">
+              <option value="low">low</option>
+              <option value="normal">normal</option>
+              <option value="high">high</option>
+              <option value="critical">critical</option>
+            </select>
+          </div>
+        </div>
+        <div>
+          <label class="block text-sm text-secondary mb-1">Categories <span class="text-xs text-muted">(comma-separated)</span></label>
+          <input type="text" x-model="$store.memoryEdit.form.categories" class="input text-sm"
+                 placeholder="personal, work, technical">
+        </div>
+        <div>
+          <label class="block text-sm text-secondary mb-1">Labels <span class="text-xs text-muted">(JSON, e.g. {"project": "myapp"})</span></label>
+          <input type="text" x-model="$store.memoryEdit.form.labels" class="input text-sm"
+                 placeholder='{"project": "myapp", "topic": "auth"}'>
+        </div>
+        <div class="grid grid-cols-2 gap-4">
+          <div class="flex items-center gap-2">
+            <input type="checkbox" x-model="$store.memoryEdit.form.pinned" id="global-edit-pinned"
+                   class="rounded border-brand-border bg-brand-elevated text-brand-accent focus:ring-brand-accent/30">
+            <label for="global-edit-pinned" class="text-sm text-secondary cursor-pointer">置顶</label>
+          </div>
+          <div>
+            <label class="block text-sm text-secondary mb-1">TTL (days) <span class="text-xs text-muted">(empty = no change)</span></label>
+            <input type="number" x-model.number="$store.memoryEdit.form.ttl_days" class="input text-sm"
+                   placeholder="empty = permanent">
+          </div>
+        </div>
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-sm text-secondary mb-1">Event Date <span class="text-xs text-muted">(empty = clear)</span></label>
+            <input type="date" x-model="$store.memoryEdit.form.event_date" class="input text-sm">
+          </div>
+          <div>
+            <label class="block text-sm text-secondary mb-1">Agent ID <span class="text-xs text-muted">(empty = clear)</span></label>
+            <input type="text" x-model="$store.memoryEdit.form.agent_id" class="input text-sm"
+                   placeholder="e.g. claude-code">
+          </div>
+        </div>
+      </div>
+      <div class="flex justify-end gap-3 mt-6">
+        <button @click="$store.memoryEdit.close()" class="btn-secondary">Cancel</button>
+        <button @click="$store.memoryEdit.save()" class="btn-primary">Save Changes</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Global Artifact Manager Modal ───────────────────────── -->
+  <div x-show="$store.artifactMgr.open" class="modal-overlay" @click="$store.artifactMgr.close()"
+       @keydown.escape.window="$store.artifactMgr.close()" x-transition x-cloak>
+    <div data-artifact-modal class="modal-content max-w-3xl" role="dialog" aria-modal="true"
+         aria-labelledby="artifact-modal-title" @click.stop @keydown.tab="$store.artifactMgr.trapFocus($event)">
+      <!-- Header -->
+      <div class="flex items-start justify-between mb-4">
+        <div class="flex-1 min-w-0 mr-4">
+          <h3 id="artifact-modal-title" class="text-lg font-semibold text-[#E6EDF3]">Artifacts</h3>
+          <p class="text-xs text-muted mt-0.5 truncate" x-text="$store.artifactMgr.memoryText"></p>
+        </div>
+        <button @click="$store.artifactMgr.close()" class="btn-ghost text-sm shrink-0">Close</button>
+      </div>
+
+      <!-- Loading -->
+      <div x-show="$store.artifactMgr.loading" class="text-center py-8 text-secondary text-sm">Loading artifacts...</div>
+
+      <!-- Artifact list -->
+      <div x-show="!$store.artifactMgr.loading">
+        <div x-show="$store.artifactMgr.artifacts.length === 0 && !$store.artifactMgr.addForm.open"
+             class="text-center py-8 text-muted text-sm">No artifacts attached to this memory.</div>
+
+        <div class="space-y-2 mb-4">
+          <template x-for="artifact in $store.artifactMgr.artifacts" :key="artifact.id">
+            <div class="card-elevated rounded-lg p-3">
+              <div class="flex items-center justify-between gap-3">
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center gap-2">
+                    <span class="text-sm font-medium text-[#E6EDF3]" x-text="artifact.filename"></span>
+                    <span class="badge bg-brand-elevated text-secondary text-xs" x-text="artifact.content_type"></span>
+                    <span class="text-xs text-muted" x-text="$store.artifactMgr.formatSize(artifact.size)"></span>
+                  </div>
+                  <div class="text-xs text-muted mt-0.5" x-text="$store.artifactMgr.formatDate(artifact.created_at)"></div>
+                </div>
+                <div class="flex gap-2 shrink-0">
+                  <button @click="$store.artifactMgr.viewArtifact(artifact)" class="btn-ghost text-xs">View</button>
+                  <template x-if="$store.artifactMgr.deleteConfirm !== artifact.id">
+                    <button @click="$store.artifactMgr.deleteConfirm = artifact.id" class="btn-ghost text-xs text-red-400">Delete</button>
+                  </template>
+                  <template x-if="$store.artifactMgr.deleteConfirm === artifact.id">
+                    <div class="flex gap-1">
+                      <button @click="$store.artifactMgr.deleteArtifact(artifact.id)" class="btn-danger text-xs">Confirm</button>
+                      <button @click="$store.artifactMgr.deleteConfirm = null" class="btn-ghost text-xs">Cancel</button>
+                    </div>
+                  </template>
+                </div>
+              </div>
+
+              <!-- Inline content viewer -->
+              <div x-show="$store.artifactMgr.view.open && $store.artifactMgr.view.artifact?.id === artifact.id"
+                   x-transition class="mt-3 pt-3 border-t border-brand-border">
+                <div x-show="$store.artifactMgr.view.loading" class="text-xs text-muted py-2">Loading content...</div>
+
+                <!-- Text content -->
+                <template x-if="$store.artifactMgr.view.isText && !$store.artifactMgr.view.loading">
+                  <div>
+                    <pre class="text-xs text-[#E6EDF3] bg-brand-bg rounded p-3 overflow-auto max-h-64 whitespace-pre-wrap break-words"
+                         x-text="$store.artifactMgr.view.content"></pre>
+                    <div x-show="$store.artifactMgr.view.hasMore" class="mt-2">
+                      <button @click="$store.artifactMgr.loadMoreContent()" class="btn-ghost text-xs">Load more…</button>
+                    </div>
+                  </div>
+                </template>
+
+                <!-- Binary: image preview -->
+                <template x-if="!$store.artifactMgr.view.isText && $store.artifactMgr.isImage(artifact.content_type) && !$store.artifactMgr.view.loading">
+                  <div>
+                    <img :src="$store.artifactMgr.view.rawUrl"
+                         :alt="artifact.filename"
+                         class="max-w-full max-h-80 rounded border border-brand-border" />
+                    <a :href="$store.artifactMgr.view.rawUrl" :download="artifact.filename"
+                       class="btn-ghost text-xs mt-2 inline-block">Download</a>
+                  </div>
+                </template>
+
+                <!-- Binary: non-image (download link) -->
+                <template x-if="!$store.artifactMgr.view.isText && !$store.artifactMgr.isImage(artifact.content_type) && !$store.artifactMgr.view.loading">
+                  <div class="text-sm text-secondary py-4">
+                    <p>Binary file (<span x-text="artifact.content_type"></span>, <span x-text="$store.artifactMgr.formatSize(artifact.size)"></span>)</p>
+                    <a :href="$store.artifactMgr.view.rawUrl" :download="artifact.filename"
+                       class="btn-secondary text-xs mt-2 inline-block">Download <span x-text="artifact.filename"></span></a>
+                  </div>
+                </template>
+
+                <button @click="$store.artifactMgr.view.open = false" class="btn-ghost text-xs mt-2">Hide content</button>
+              </div>
+            </div>
+          </template>
+        </div>
+
+        <!-- Add artifact form -->
+        <div x-show="!$store.artifactMgr.addForm.open" class="mt-2">
+          <button @click="$store.artifactMgr.addForm.open = true" class="btn-secondary text-sm">+ Add Artifact</button>
+        </div>
+
+        <div x-show="$store.artifactMgr.addForm.open" x-transition class="border-t border-brand-border pt-4 mt-2 space-y-3">
+          <h4 class="text-sm font-medium text-[#E6EDF3]">New Artifact</h4>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-xs text-secondary mb-1">Filename</label>
+              <input type="text" x-model="$store.artifactMgr.addForm.filename" class="input text-sm"
+                     placeholder="note.md">
+            </div>
+            <div>
+              <label class="block text-xs text-secondary mb-1">Content Type</label>
+              <select x-model="$store.artifactMgr.addForm.content_type" class="select text-sm w-full">
+                <option value="text/markdown">text/markdown</option>
+                <option value="text/plain">text/plain</option>
+                <option value="application/json">application/json</option>
+                <option value="text/html">text/html</option>
+                <option value="text/csv">text/csv</option>
+                <option value="text/x-python">text/x-python</option>
+                <option value="text/x-yaml">text/x-yaml</option>
+              </select>
+            </div>
+          </div>
+          <div>
+            <label class="block text-xs text-secondary mb-1">Content</label>
+            <textarea x-model="$store.artifactMgr.addForm.content" rows="6" class="input resize-y text-sm font-mono"
+                      placeholder="Paste or type artifact content here…"></textarea>
+          </div>
+          <div class="flex gap-2">
+            <button @click="$store.artifactMgr.saveArtifact()" class="btn-primary text-sm"
+                    :disabled="$store.artifactMgr.addForm.saving || !$store.artifactMgr.addForm.content.trim()">
+              <span x-show="!$store.artifactMgr.addForm.saving">Save Artifact</span>
+              <span x-show="$store.artifactMgr.addForm.saving">Saving...</span>
+            </button>
+            <button @click="$store.artifactMgr.addForm.open = false" class="btn-secondary text-sm">Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Session Detail Modal (opened from Memories tab session_id label) ── -->
+  <div x-show="$store.sessionDetail.open" class="modal-overlay" @click="$store.sessionDetail.close()" x-transition>
+    <div class="modal-content max-w-2xl" @click.stop>
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="text-lg font-semibold text-[#E6EDF3]">Session Details</h3>
+        <button @click="$store.sessionDetail.close()" class="text-muted hover:text-secondary">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+        </button>
+      </div>
+
+      <!-- Loading -->
+      <div x-show="$store.sessionDetail.loading" class="text-center py-8">
+        <div class="text-secondary">Loading session...</div>
+      </div>
+
+      <!-- Content -->
+      <template x-if="$store.sessionDetail.session && !$store.sessionDetail.loading">
+        <div class="space-y-4">
+          <!-- Status + Agent pills -->
+          <div class="flex items-center gap-2">
+            <span class="badge" :class="$store.sessionDetail.stateBadgeClass($store.sessionDetail.session.consolidation_state || 'idle')"
+                  x-text="$store.sessionDetail.session.consolidation_state || 'idle'"></span>
+            <span x-show="$store.sessionDetail.session.agent_id" class="badge bg-indigo-500/15 text-indigo-400 inline-flex items-center gap-1">
+              <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23-.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5"/></svg>
+              <span x-text="$store.sessionDetail.session.agent_id"></span>
+            </span>
+            <span class="badge bg-brand-elevated text-muted"
+                  x-text="($store.sessionDetail.session.memory_ids?.length || 0) + ' memories'"></span>
+            <span class="badge bg-brand-elevated text-muted"
+                  x-text="'Turn ' + ($store.sessionDetail.session.turn_count || 0)"></span>
+          </div>
+
+          <!-- Summary -->
+          <div>
+            <div class="text-xs font-semibold text-secondary mb-1">Summary</div>
+            <div class="text-sm text-primary whitespace-pre-wrap bg-brand-bg rounded-lg p-3"
+                 x-text="$store.sessionDetail.session.summary || 'No summary'"></div>
+          </div>
+
+          <!-- Metadata -->
+          <div class="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
+            <div><span class="text-muted">Session ID:</span> <span class="font-mono text-xs text-secondary" x-text="$store.sessionDetail.session.session_id"></span></div>
+            <div><span class="text-muted">Agent:</span> <span class="text-secondary" x-text="$store.sessionDetail.session.agent_id || '—'"></span></div>
+            <div><span class="text-muted">Created:</span> <span class="text-secondary" x-text="$store.sessionDetail.formatDate($store.sessionDetail.session.created_at)"></span></div>
+            <div><span class="text-muted">Updated:</span> <span class="text-secondary" x-text="$store.sessionDetail.formatDate($store.sessionDetail.session.updated_at)"></span></div>
+            <div x-show="$store.sessionDetail.session.consolidated_at">
+              <span class="text-muted">Consolidated:</span>
+              <span class="text-secondary" x-text="$store.sessionDetail.formatDate($store.sessionDetail.session.consolidated_at)"></span>
+            </div>
+            <div><span class="text-muted">Turns:</span> <span class="text-secondary" x-text="$store.sessionDetail.session.turn_count || 0"></span></div>
+          </div>
+
+          <!-- View in Sessions tab link -->
+          <div class="pt-2 border-t border-brand-border">
+            <button @click="$store.sessionDetail.close(); $store.nav.setTab('sessions')"
+                    class="btn-ghost text-xs">
+              View in Sessions tab
+            </button>
+          </div>
+        </div>
+      </template>
+    </div>
+  </div>
+
+  <!-- ── Delete Session Modal (global store) ────────────────────── -->
+  <div x-show="$store.sessionDelete.open" class="modal-overlay" @click="$store.sessionDelete.close()" x-transition>
+    <div class="modal-content max-w-lg" @click.stop>
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="text-lg font-semibold text-red-400">Delete Session</h3>
+        <button @click="$store.sessionDelete.close()" class="text-muted hover:text-secondary">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+        </button>
+      </div>
+
+      <template x-if="$store.sessionDelete.session">
+        <div class="space-y-4">
+          <div>
+            <div class="text-xs text-muted mb-1">Session ID</div>
+            <div class="text-sm font-mono text-secondary" x-text="$store.sessionDelete.session.session_id"></div>
+          </div>
+          <div>
+            <div class="text-xs text-muted mb-1">Summary preview</div>
+            <div class="text-sm text-primary bg-brand-bg rounded-lg p-2 max-h-24 overflow-y-auto"
+                 x-text="$store.sessionDelete.truncate($store.sessionDelete.session.summary)"></div>
+          </div>
+
+          <label class="flex items-start gap-3 p-3 rounded-lg border border-brand-border hover:border-red-500/30 cursor-pointer transition-colors">
+            <input type="checkbox" x-model="$store.sessionDelete.deleteLinkedMemories" class="mt-0.5 rounded border-brand-border">
+            <div>
+              <div class="text-sm text-primary">Also delete linked raw memories</div>
+              <div class="text-xs text-muted mt-0.5"
+                   x-text="($store.sessionDelete.session.memory_ids?.length || 0) + ' raw memories will be permanently deleted (consolidated memories are kept)'"></div>
+            </div>
+          </label>
+
+          <div x-show="$store.sessionDelete.deleteLinkedMemories" class="text-xs text-red-400 bg-red-500/10 rounded-lg p-2">
+            Warning: Deleted memories cannot be recovered. Artifacts attached to deleted memories will also be removed.
+          </div>
+
+          <div class="flex justify-end gap-2 pt-2 border-t border-brand-border">
+            <button @click="$store.sessionDelete.close()" class="btn-ghost text-sm">Cancel</button>
+            <button @click="$store.sessionDelete.execute()" :disabled="$store.sessionDelete.deleting" class="btn-danger text-sm">
+              <span x-show="!$store.sessionDelete.deleting">Delete Session</span>
+              <span x-show="$store.sessionDelete.deleting">Deleting...</span>
+            </button>
+          </div>
+        </div>
+      </template>
+    </div>
+  </div>
+
+</body>
+</html>
