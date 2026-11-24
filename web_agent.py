@@ -1964,12 +1964,18 @@ def make_handler(hub, token):
             self.wfile.write(data)
 
         def _drain_body(self):
+            """Read and discard a bounded body so a rejected client cannot wedge this worker."""
             try:
                 length = int(self.headers.get('Content-Length') or 0)
                 if 0 < length <= 10 * 1024 * 1024:
-                    self.rfile.read(length)
-            except Exception:
-                pass
+                    self.connection.settimeout(2.0)
+                    try:
+                        self.rfile.read(length)
+                    finally:
+                        self.connection.settimeout(None)
+            except (OSError, ValueError):
+                # A client that promises a body and then stalls must not hold the thread.
+                self.close_connection = True
 
         def _guard(self, supplied):
             port = self.server.server_address[1]
@@ -2027,6 +2033,7 @@ def make_handler(hub, token):
                 return
             manager = getattr(hub, 'game_manager', None)
             if manager is None:
+                self._drain_body()
                 self._send(404, {'error': 'game unavailable'})
                 return
             try:
@@ -2474,6 +2481,7 @@ def make_handler(hub, token):
         def _post_game_score(self, url):
             parts = url.path.split('/')
             if len(parts) != 4 or parts[3] != 'score':
+                self._drain_body()
                 self._send(404, {'error': 'game endpoint unavailable'})
                 return
             if not self._game_origin_guard(post=True):

@@ -71,6 +71,10 @@ class WriterTests(unittest.TestCase):
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM memories').fetchone()[0], 0)
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM vectors').fetchone()[0], 0)
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM versions').fetchone()[0], 0)
+            self.assertEqual(connection.execute('SELECT COUNT(*) FROM sidecar_events').fetchone()[0], 0)
+            self.assertEqual(connection.execute('SELECT COUNT(*) FROM event_sources').fetchone()[0], 0)
+            self.assertEqual(connection.execute('SELECT COUNT(*) FROM events').fetchone()[0], 0)
+            self.assertEqual(connection.execute('SELECT COUNT(*) FROM event_stages').fetchone()[0], 0)
             # P2-A review: sidecar_events must also be cleared.
             self.assertEqual(
                 connection.execute('SELECT COUNT(*) FROM sidecar_events').fetchone()[0], 0,

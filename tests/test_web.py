@@ -84,8 +84,7 @@ output_cny_per_million = "8"
                 return r.status, json.loads(r.read() or b'{}')
         except urllib.error.HTTPError as exc:
             return exc.code, json.loads(exc.read() or b'{}')
-        except (ConnectionResetError, ConnectionAbortedError):
-            return 403, {'error': 'connection aborted'}
+
 
     def test_life_page_reports_service_not_ready_instead_of_empty_records(self):
         status, body = self.call('/api/life')
